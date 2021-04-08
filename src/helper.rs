@@ -29,7 +29,7 @@ macro_rules! try_twice {
 macro_rules! unique_path {
     () => {
         format!(
-            "{}/.cache/{}/{}_{}_{}_{}",
+            "{}/.bnc/{}/{}_{}_{}_{}",
             *$crate::helper::CACHE_DIR,
             ts!(),
             file!(),
@@ -43,14 +43,17 @@ macro_rules! unique_path {
 /// A helper for creating Vecx.
 #[macro_export]
 macro_rules! new_vecx {
-    ($ty: ty, $in_mem_cnt: expr) => {
+    (@$ty: ty, $in_mem_cnt: expr) => {
         $crate::new_vecx_custom!($ty, $in_mem_cnt, false)
     };
-    ($ty: ty) => {
-        $crate::new_vecx_custom!($ty, None, false)
+    (@$ty: ty) => {
+        $crate::new_vecx_custom!($ty, false)
     };
-    ($in_mem_cnt: expr) => {
-        $crate::new_vecx_custom!($in_mem_cnt, false)
+    ($path:expr) => {
+        $crate::new_vecx_custom!($path, false)
+    };
+    ($path:expr, $in_mem_cnt: expr) => {
+        $crate::new_vecx_custom!($path, $in_mem_cnt, false)
     };
     () => {
         $crate::new_vecx_custom!(false)
@@ -60,38 +63,54 @@ macro_rules! new_vecx {
 /// A helper for creating Vecx.
 #[macro_export]
 macro_rules! new_vecx_custom {
-    ($ty: ty, $in_mem_cnt: expr, $is_tmp: expr) => {{
+    (@$ty: ty, $in_mem_cnt: expr, $is_tmp: expr) => {{
         let obj: $crate::Vecx<$ty> = $crate::try_twice!($crate::Vecx::new(
-            $crate::unique_path!(),
-            Some($in_mem_cnt)
+            &$crate::unique_path!(),
+            Some($in_mem_cnt),
             $is_tmp,
         ));
         obj
     }};
-    ($ty: ty, $is_tmp: expr) => {{
-        let obj: $crate::Vecx<$ty> =
-            $crate::try_twice!($crate::Vecx::new($crate::unique_path!(), None, $is_tmp));
+    (@$ty: ty, $is_tmp: expr) => {{
+        let obj: $crate::Vecx<$ty> = $crate::try_twice!($crate::Vecx::new(
+            &$crate::unique_path!(),
+            None,
+            $is_tmp
+        ));
         obj
     }};
-    ($in_mem_cnt: expr, $is_tmp: expr) => {
-        $crate::try_twice!($crate::Vecx::new($crate::unique_path!(), Some($in_mem_cnt), $is_tmp))
+    ($path: expr, $in_mem_cnt: expr, $is_tmp: expr) => {
+        $crate::try_twice!($crate::Vecx::new($path, Some($in_mem_cnt), $is_tmp,))
+    };
+    ($path: expr, $is_tmp: expr) => {
+        $crate::try_twice!($crate::Vecx::new($path, None, $is_tmp,))
+    };
+    (%$in_mem_cnt: expr, $is_tmp: expr) => {
+        $crate::try_twice!($crate::Vecx::new(
+            &$crate::unique_path!(),
+            Some($in_mem_cnt),
+            $is_tmp
+        ))
     };
     ($is_tmp: expr) => {
-        $crate::try_twice!($crate::Vecx::new($crate::unique_path!(), None, $is_tmp))
+        $crate::try_twice!($crate::Vecx::new(&$crate::unique_path!(), None, $is_tmp))
     };
 }
 
 /// A helper for creating Mapx.
 #[macro_export]
 macro_rules! new_mapx {
-    ($ty: ty, $in_mem_cnt: expr) => {
+    (@$ty: ty, $in_mem_cnt: expr) => {
         $crate::new_mapx_custom!($ty, $in_mem_cnt, false)
     };
-    ($ty: ty) => {
-        $crate::new_mapx_custom!($ty, None, false)
+    (@$ty: ty) => {
+        $crate::new_mapx_custom!($ty, false)
     };
-    ($in_mem_cnt: expr) => {
-        $crate::new_mapx_custom!($in_mem_cnt, false)
+    ($path:expr, $in_mem_cnt: expr) => {
+        $crate::new_mapx_custom!($path, $in_mem_cnt, false)
+    };
+    ($path:expr) => {
+        $crate::new_mapx_custom!($path, false)
     };
     () => {
         $crate::new_mapx_custom!(false)
@@ -101,30 +120,37 @@ macro_rules! new_mapx {
 /// A helper for creating Mapx.
 #[macro_export]
 macro_rules! new_mapx_custom {
-    ($ty: ty, $in_mem_cnt: expr, $is_tmp: expr) => {{
+    (@$ty: ty, $in_mem_cnt: expr, $is_tmp: expr) => {{
         let obj: $crate::Mapx<$ty> = $crate::try_twice!($crate::Mapx::new(
-            $crate::unique_path!(),
+            &$crate::unique_path!(),
             $in_mem_cnt,
             $is_tmp,
         ));
         obj
     }};
-    ($ty: ty, $is_tmp: expr) => {{
-        let obj: $crate::Mapx<$ty> =
-            $crate::try_twice!(
-                $crate::Mapx::new($crate::unique_path!(), None, $is_tmp,)
-            );
+    (@$ty: ty, $is_tmp: expr) => {{
+        let obj: $crate::Mapx<$ty> = $crate::try_twice!($crate::Mapx::new(
+            &$crate::unique_path!(),
+            None,
+            $is_tmp,
+        ));
         obj
     }};
-    ($in_mem_cnt: expr, $is_tmp: expr) => {
+    ($path: expr, $in_mem_cnt: expr, $is_tmp: expr) => {
+        $crate::try_twice!($crate::Mapx::new(&*$path, $in_mem_cnt, $is_tmp,))
+    };
+    ($path: expr, $is_tmp: expr) => {
+        $crate::try_twice!($crate::Mapx::new(&*$path, None, $is_tmp,))
+    };
+    (&$in_mem_cnt: expr, $is_tmp: expr) => {
         $crate::try_twice!($crate::Mapx::new(
-            $crate::unique_path!(),
+            &$crate::unique_path!(),
             $in_mem_cnt,
             $is_tmp
         ))
     };
     ($is_tmp: expr) => {
-        $crate::try_twice!($crate::Mapx::new($crate::unique_path!(), None, $is_tmp,))
+        $crate::try_twice!($crate::Mapx::new(&$crate::unique_path!(), None, $is_tmp,))
     };
 }
 
@@ -133,17 +159,17 @@ macro_rules! new_mapx_custom {
 /******************************************************************************/
 
 /// Returned by `.get(...)`
-#[derive(Eq, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct Value<'a, V>
 where
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     value: Cow<'a, V>,
 }
 
 impl<'a, V> Value<'a, V>
 where
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     pub(crate) fn new(value: Cow<'a, V>) -> Self {
         Value { value }
@@ -157,7 +183,7 @@ where
 
 impl<'a, V> Deref for Value<'a, V>
 where
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     type Target = V;
 
@@ -168,7 +194,7 @@ where
 
 impl<'a, V> PartialEq for Value<'a, V>
 where
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn eq(&self, other: &Value<'a, V>) -> bool {
         self.value == other.value
@@ -177,7 +203,7 @@ where
 
 impl<'a, V> PartialEq<V> for Value<'a, V>
 where
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn eq(&self, other: &V) -> bool {
         self.value.as_ref() == other
@@ -186,14 +212,7 @@ where
 
 impl<'a, V> PartialOrd<V> for Value<'a, V>
 where
-    V: fmt::Debug
-        + Clone
-        + Eq
-        + PartialEq
-        + Ord
-        + PartialOrd
-        + Serialize
-        + DeserializeOwned,
+    V: fmt::Debug + Clone + PartialEq + Ord + PartialOrd + Serialize + DeserializeOwned,
 {
     fn partial_cmp(&self, other: &V) -> Option<Ordering> {
         self.value.as_ref().partial_cmp(other)
@@ -202,7 +221,7 @@ where
 
 impl<'a, V> From<V> for Value<'a, V>
 where
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn from(v: V) -> Self {
         Value::new(Cow::Owned(v))
@@ -211,7 +230,7 @@ where
 
 impl<'a, V> From<Cow<'a, V>> for Value<'a, V>
 where
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn from(v: Cow<'a, V>) -> Self {
         Value::new(v)
@@ -220,7 +239,7 @@ where
 
 impl<'a, V> From<Value<'a, V>> for Cow<'a, V>
 where
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn from(v: Value<'a, V>) -> Self {
         v.into_inner()
@@ -229,7 +248,7 @@ where
 
 impl<'a, V> From<&V> for Value<'a, V>
 where
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn from(v: &V) -> Self {
         Value::new(Cow::Owned(v.clone()))
@@ -245,7 +264,8 @@ pub(crate) fn sled_open(path: &str, is_tmp: bool) -> Result<sled::Db> {
     let mut cfg = sled::Config::default()
         .path(path)
         .mode(sled::Mode::HighThroughput)
-        .use_compression(false);
+        .compression_factor(15)
+        .use_compression(true);
 
     if is_tmp {
         cfg = cfg.temporary(true);

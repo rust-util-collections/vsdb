@@ -19,7 +19,7 @@ use std::{
 pub(super) struct Mapx<K, V>
 where
     K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     db: sled::Db,
     data_path: String,
@@ -36,15 +36,15 @@ where
 impl<K, V> Mapx<K, V>
 where
     K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     // If an old database exists,
     // it will use it directly;
     // Or it will create a new one.
     #[inline(always)]
-    pub(super) fn load_or_create(path: String, is_tmp: bool) -> Result<Self> {
-        let db = sled_open(&path, is_tmp).c(d!())?;
-        let cnter_path = format!("{}/____cnter____", &path);
+    pub(super) fn load_or_create(path: &str, is_tmp: bool) -> Result<Self> {
+        let db = sled_open(path, is_tmp).c(d!())?;
+        let cnter_path = format!("{}/____cnter____", path);
 
         let cnter = if db.iter().next().is_none() {
             fs::File::create(&cnter_path)
@@ -57,7 +57,7 @@ where
 
         Ok(Mapx {
             db,
-            data_path: path,
+            data_path: path.to_owned(),
             cnter_path,
             cnter,
             _pd0: PhantomData,
@@ -167,7 +167,7 @@ where
 pub(super) struct MapxIter<K, V>
 where
     K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     pub(super) iter: sled::Iter,
     _pd0: PhantomData<K>,
@@ -177,7 +177,7 @@ where
 impl<K, V> Iterator for MapxIter<K, V>
 where
     K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
@@ -193,7 +193,7 @@ where
 impl<K, V> DoubleEndedIterator for MapxIter<K, V>
 where
     K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter
@@ -212,7 +212,7 @@ where
 impl<K, V> ExactSizeIterator for MapxIter<K, V>
 where
     K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
 }
 
@@ -227,7 +227,7 @@ where
 impl<K, V> PartialEq for Mapx<K, V>
 where
     K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn eq(&self, other: &Mapx<K, V>) -> bool {
         !self.iter().zip(other.iter()).any(|(i, j)| i != j)
@@ -237,7 +237,7 @@ where
 impl<K, V> Eq for Mapx<K, V>
 where
     K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
 }
 

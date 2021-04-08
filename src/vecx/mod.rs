@@ -25,9 +25,12 @@ use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     borrow::Cow,
+    cmp::Ordering,
     collections::{btree_map, BTreeMap},
     fmt,
     iter::Iterator,
+    mem::ManuallyDrop,
+    ops::{Deref, DerefMut},
 };
 
 /// To solve the problem of unlimited memory usage,
@@ -35,10 +38,10 @@ use std::{
 ///
 /// - Each time the program is started, a new database is created
 /// - Can ONLY be used in append-only scenes like the block storage
-#[derive(Eq, PartialEq, Debug, Clone)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Vecx<T>
 where
-    T: Eq + PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
     in_mem: BTreeMap<usize, T>,
     in_mem_cnt: usize,
@@ -51,11 +54,11 @@ where
 
 impl<T> Vecx<T>
 where
-    T: Eq + PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
     /// Create an instance.
     #[inline(always)]
-    pub fn new(path: String, imc: Option<usize>, is_tmp: bool) -> Result<Self> {
+    pub fn new(path: &str, imc: Option<usize>, is_tmp: bool) -> Result<Self> {
         let in_disk = backend::Vecx::load_or_create(path, is_tmp).c(d!())?;
         let mut in_mem = BTreeMap::new();
 
@@ -95,6 +98,16 @@ where
             .or_else(|| self.in_disk.get(idx).map(|v| Value::new(Cow::Owned(v))))
     }
 
+    /// Imitate the behavior of 'Vec<_>.get_mut(...)'
+    #[inline(always)]
+    pub fn get_mut(&mut self, idx: usize) -> Option<ValueMut<T>> {
+        self.in_mem
+            .get(&idx)
+            .cloned()
+            .or_else(|| self.in_disk.get(idx))
+            .map(move |v| ValueMut::new(self, idx, v))
+    }
+
     /// Imitate the behavior of 'Vec<_>.last()'
     pub fn last(&self) -> Option<Value<T>> {
         self.in_mem
@@ -128,6 +141,19 @@ where
         self.in_disk.push(b);
     }
 
+    /// Imitate the behavior of 'Vec<_>.insert(idx, value)',
+    /// but we do not return the previous value, like `Vecx<_, _>.set_value`.
+    #[inline(always)]
+    pub fn set_value(&mut self, idx: usize, b: T) {
+        if self.in_mem.len() > IN_MEM_CNT {
+            // Will get the oldest key since we use BTreeMap
+            let k = pnk!(self.in_mem.keys().next().cloned());
+            self.in_mem.remove(&k);
+        }
+        self.in_mem.insert(idx, b.clone());
+        self.in_disk.insert(idx, b);
+    }
+
     /// Imitate the behavior of '.iter()'
     #[inline(always)]
     pub fn iter(&self) -> Box<dyn Iterator<Item = T> + '_> {
@@ -154,6 +180,105 @@ where
 // End of the self-implementation for Vecx //
 /////////////////////////////////////////////
 
+//////////////////////////////////////////////////////////////////////////////////
+// Begin of the implementation of ValueMut(returned by `self.get_mut`) for Vecx //
+/********************************************************************************/
+
+/// Returned by `<Vecx>.get_mut(...)`
+#[derive(Debug)]
+pub struct ValueMut<'a, T>
+where
+    T: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+{
+    mapx: &'a mut Vecx<T>,
+    idx: usize,
+    value: ManuallyDrop<T>,
+}
+
+impl<'a, T> ValueMut<'a, T>
+where
+    T: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+{
+    fn new(mapx: &'a mut Vecx<T>, idx: usize, value: T) -> Self {
+        ValueMut {
+            mapx,
+            idx,
+            value: ManuallyDrop::new(value),
+        }
+    }
+
+    /// Clone the inner value.
+    pub fn clone_inner(self) -> T {
+        ManuallyDrop::into_inner(self.value.clone())
+    }
+}
+
+///
+/// **NOTE**: VERY IMPORTANT !!!
+///
+impl<'a, T> Drop for ValueMut<'a, T>
+where
+    T: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+{
+    fn drop(&mut self) {
+        // This operation is safe within a `drop()`.
+        // SEE: [**ManuallyDrop::take**](std::mem::ManuallyDrop::take)
+        let v = unsafe { ManuallyDrop::take(&mut self.value) };
+        self.mapx.set_value(self.idx, v);
+    }
+}
+
+impl<'a, T> Deref for ValueMut<'a, T>
+where
+    T: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+{
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<'a, T> DerefMut for ValueMut<'a, T>
+where
+    T: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
+    }
+}
+
+impl<'a, T> PartialEq for ValueMut<'a, T>
+where
+    T: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+{
+    fn eq(&self, other: &ValueMut<'a, T>) -> bool {
+        self.value == other.value
+    }
+}
+
+impl<'a, T> PartialEq<T> for ValueMut<'a, T>
+where
+    T: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+{
+    fn eq(&self, other: &T) -> bool {
+        self.value.deref() == other
+    }
+}
+
+impl<'a, T> PartialOrd<T> for ValueMut<'a, T>
+where
+    T: Clone + PartialEq + Ord + PartialOrd + Serialize + DeserializeOwned + fmt::Debug,
+{
+    fn partial_cmp(&self, other: &T) -> Option<Ordering> {
+        self.value.deref().partial_cmp(other)
+    }
+}
+
+/******************************************************************************/
+// End of the implementation of ValueMut(returned by `self.get_mut`) for Vecx //
+////////////////////////////////////////////////////////////////////////////////
+
 //////////////////////////////////////////////////
 // Begin of the implementation of Iter for Vecx //
 /************************************************/
@@ -161,14 +286,14 @@ where
 /// Iter over [Vecx](self::Vecx).
 pub struct VecxIter<T>
 where
-    T: Eq + PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
     iter: backend::VecxIter<T>,
 }
 
 impl<T> Iterator for VecxIter<T>
 where
-    T: Eq + PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
     type Item = T;
     fn next(&mut self) -> Option<Self::Item> {
@@ -179,15 +304,14 @@ where
 /// Iter over [Vecx](self::Vecx).
 pub struct VecxIterMem<'a, K, T>
 where
-    K: 'a,
-    T: 'a + Eq + PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+    T: 'a + PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
     iter: btree_map::Iter<'a, K, T>,
 }
 
 impl<'a, T> Iterator for VecxIterMem<'a, usize, T>
 where
-    T: Eq + PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
     type Item = T;
     fn next(&mut self) -> Option<Self::Item> {
@@ -205,7 +329,7 @@ where
 
 impl<T> serde::Serialize for Vecx<T>
 where
-    T: Eq + PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
@@ -223,7 +347,7 @@ where
 
 impl<'de, T> serde::Deserialize<'de> for Vecx<T>
 where
-    T: Eq + PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -231,11 +355,7 @@ where
     {
         deserializer.deserialize_str(CacheVisitor).map(|meta| {
             let meta = pnk!(serde_json::from_str::<CacheMeta>(&meta));
-            pnk!(Vecx::new(
-                meta.data_path.to_owned(),
-                Some(meta.in_mem_cnt),
-                false
-            ))
+            pnk!(Vecx::new(meta.data_path, Some(meta.in_mem_cnt), false))
         })
     }
 }

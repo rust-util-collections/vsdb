@@ -9,27 +9,22 @@ Its value is to improve the stability and security of online services, at the co
 ## Code Structure
 
 ```shell
-# zsh % tree -F .
+# zsh % tree -F src
 
-.
-├── README.md
-├── Cargo.toml
-├── benches/
-│   └── cache.rs
-└── src/
-    ├── helper.rs
-    ├── lib.rs
-    ├── mapx/
-    │   ├── backend.rs
-    │   ├── mod.rs
-    │   └── test.rs
-    ├── serde.rs
-    └── vecx/
-        ├── backend.rs
-        ├── mod.rs
-        └── test.rs
+src
+├── helper.rs
+├── lib.rs
+├── mapx/
+│   ├── backend.rs
+│   ├── mod.rs
+│   └── test.rs
+├── serde.rs
+└── vecx/
+    ├── backend.rs
+    ├── mod.rs
+    └── test.rs
 
-4 directories, 12 files
+2 directories, 9 files
 ```
 
 ```shell
@@ -38,17 +33,18 @@ Its value is to improve the stability and security of online services, at the co
 ===============================================================================
  Language            Files        Lines         Code     Comments       Blanks
 ===============================================================================
- TOML                    1           25           21            0            4
+ Makefile                1           21           15            0            6
+ TOML                    2           29           22            3            4
 -------------------------------------------------------------------------------
- Markdown                1           20            0           12            8
+ Markdown                1           22            0           13            9
  |- Shell                1           66           61            2            3
- (Total)                             86           61           14           11
+ (Total)                             88           61           15           12
 -------------------------------------------------------------------------------
- Rust                   10         1409         1156           71          182
- |- Markdown             9          124            0          115            9
- (Total)                           1533         1156          186          191
+ Rust                   10         1490         1227           73          190
+ |- Markdown             9          127            0          118            9
+ (Total)                           1617         1227          191          199
 ===============================================================================
- Total                   0         1454         1177           83          194
+ Total                   0         1562         1264           89          209
 ===============================================================================
 ```
 

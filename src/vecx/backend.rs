@@ -36,9 +36,9 @@ where
     /// it will use it directly;
     /// Or it will create a new one.
     #[inline(always)]
-    pub(super) fn load_or_create(path: String, is_tmp: bool) -> Result<Self> {
-        let db = sled_open(&path, is_tmp).c(d!())?;
-        let cnter_path = format!("{}/____cnter____", &path);
+    pub(super) fn load_or_create(path: &str, is_tmp: bool) -> Result<Self> {
+        let db = sled_open(path, is_tmp).c(d!())?;
+        let cnter_path = format!("{}/____cnter____", path);
         let cnter = if db.iter().next().is_none() {
             fs::File::create(&cnter_path)
                 .c(d!())
@@ -50,7 +50,7 @@ where
 
         Ok(Vecx {
             db,
-            data_path: path,
+            data_path: path.to_owned(),
             cnter_path,
             cnter,
             _pd: PhantomData,
@@ -105,6 +105,21 @@ where
         self.cnter += 1;
 
         pnk!(write_db_len(&self.cnter_path, self.cnter));
+    }
+
+    /// Imitate the behavior of 'Vec<_>.insert(idx, value)'
+    #[inline(always)]
+    pub(super) fn insert(&mut self, idx: usize, b: T) {
+        let value = pnk!(serde_json::to_vec(&b));
+        pnk!(self.db.insert(idx.to_le_bytes(), value));
+
+        if idx >= self.cnter {
+            // There is no `remove` like methods provided,
+            // so we can increase this value directly.
+            self.cnter += 1;
+
+            pnk!(write_db_len(&self.cnter_path, self.cnter));
+        }
     }
 
     /// Imitate the behavior of '.iter()'

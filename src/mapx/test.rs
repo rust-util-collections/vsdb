@@ -23,7 +23,7 @@ fn t_mapx() {
     let cnt = 200;
 
     let db = {
-        let mut db = crate::new_mapx!();
+        let mut db = crate::new_mapx!("/tmp/bnc_test/0001", Some(300));
 
         assert_eq!(0, db.len());
         (0..cnt).for_each(|i| {

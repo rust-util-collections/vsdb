@@ -36,11 +36,11 @@ pub const IN_MEM_CNT: usize = 1;
 
 /// To solve the problem of unlimited memory usage,
 /// use this to replace the original in-memory `HashMap<_, _>`.
-#[derive(Eq, PartialEq, Debug, Clone)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Mapx<K, V>
 where
-    K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     in_mem: HashMap<K, V>,
     in_mem_cnt: usize,
@@ -53,12 +53,12 @@ where
 
 impl<K, V> Mapx<K, V>
 where
-    K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     /// Create an instance.
     #[inline(always)]
-    pub fn new(path: String, imc: Option<usize>, is_tmp: bool) -> Result<Self> {
+    pub fn new(path: &str, imc: Option<usize>, is_tmp: bool) -> Result<Self> {
         let in_disk = backend::Mapx::load_or_create(path, is_tmp).c(d!())?;
 
         let mut in_mem = HashMap::with_capacity(IN_MEM_CNT);
@@ -98,8 +98,6 @@ where
     }
 
     /// Imitate the behavior of 'HashMap<_>.get_mut(...)'
-    ///
-    /// Any faster/better choice other than JSON ?
     #[inline(always)]
     pub fn get_mut(&mut self, key: &K) -> Option<ValueMut<K, V>> {
         self.in_mem
@@ -219,11 +217,11 @@ where
 /********************************************************************************/
 
 /// Returned by `<Mapx>.get_mut(...)`
-#[derive(Eq, Debug)]
+#[derive(Debug)]
 pub struct ValueMut<'a, K, V>
 where
-    K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     mapx: &'a mut Mapx<K, V>,
     key: ManuallyDrop<K>,
@@ -232,8 +230,8 @@ where
 
 impl<'a, K, V> ValueMut<'a, K, V>
 where
-    K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn new(mapx: &'a mut Mapx<K, V>, key: K, value: V) -> Self {
         ValueMut {
@@ -254,8 +252,8 @@ where
 ///
 impl<'a, K, V> Drop for ValueMut<'a, K, V>
 where
-    K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn drop(&mut self) {
         // This operation is safe within a `drop()`.
@@ -272,8 +270,8 @@ where
 
 impl<'a, K, V> Deref for ValueMut<'a, K, V>
 where
-    K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     type Target = V;
 
@@ -284,8 +282,8 @@ where
 
 impl<'a, K, V> DerefMut for ValueMut<'a, K, V>
 where
-    K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.value
@@ -294,8 +292,8 @@ where
 
 impl<'a, K, V> PartialEq for ValueMut<'a, K, V>
 where
-    K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn eq(&self, other: &ValueMut<'a, K, V>) -> bool {
         self.value == other.value
@@ -304,8 +302,8 @@ where
 
 impl<'a, K, V> PartialEq<V> for ValueMut<'a, K, V>
 where
-    K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn eq(&self, other: &V) -> bool {
         self.value.deref() == other
@@ -314,15 +312,8 @@ where
 
 impl<'a, K, V> PartialOrd<V> for ValueMut<'a, K, V>
 where
-    K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone
-        + Eq
-        + PartialEq
-        + Ord
-        + PartialOrd
-        + Serialize
-        + DeserializeOwned
-        + fmt::Debug,
+    K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Ord + PartialOrd + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn partial_cmp(&self, other: &V) -> Option<Ordering> {
         self.value.deref().partial_cmp(other)
@@ -340,8 +331,8 @@ where
 /// Imitate the `btree_map/hash_map::Entry`.
 pub struct Entry<'a, K, V>
 where
-    K: fmt::Debug + Clone + 'a + Eq + PartialEq + Hash + Serialize + DeserializeOwned,
-    V: fmt::Debug + Clone + 'a + Eq + PartialEq + Serialize + DeserializeOwned,
+    K: fmt::Debug + Clone + Eq + 'a + PartialEq + Hash + Serialize + DeserializeOwned,
+    V: fmt::Debug + Clone + 'a + PartialEq + Serialize + DeserializeOwned,
 {
     key: K,
     db: &'a mut Mapx<K, V>,
@@ -349,8 +340,8 @@ where
 
 impl<'a, K, V> Entry<'a, K, V>
 where
-    K: fmt::Debug + Clone + 'a + Eq + PartialEq + Hash + Serialize + DeserializeOwned,
-    V: fmt::Debug + Clone + 'a + Eq + PartialEq + Serialize + DeserializeOwned,
+    K: fmt::Debug + Clone + Eq + 'a + PartialEq + Hash + Serialize + DeserializeOwned,
+    V: fmt::Debug + Clone + 'a + PartialEq + Serialize + DeserializeOwned,
 {
     /// Imitate the `btree_map/hash_map::Entry.or_insert(...)`.
     pub fn or_insert(self, default: V) -> ValueMut<'a, K, V> {
@@ -383,16 +374,16 @@ where
 /// Iter over [Mapx](self::Mapx).
 pub struct MapxIter<K, V>
 where
-    K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     iter: backend::MapxIter<K, V>,
 }
 
 impl<K, V> Iterator for MapxIter<K, V>
 where
-    K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
@@ -404,7 +395,7 @@ where
 pub struct MapxIterMem<'a, K, V>
 where
     K: 'a + Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: 'a + Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: 'a + Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     iter: hash_map::Iter<'a, K, V>,
 }
@@ -412,7 +403,7 @@ where
 impl<'a, K, V> Iterator for MapxIterMem<'a, K, V>
 where
     K: 'a + Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: 'a + Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: 'a + Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
@@ -431,7 +422,7 @@ where
 impl<K, V> serde::Serialize for Mapx<K, V>
 where
     K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
@@ -450,7 +441,7 @@ where
 impl<'de, K, V> serde::Deserialize<'de> for Mapx<K, V>
 where
     K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + Eq + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -458,11 +449,7 @@ where
     {
         deserializer.deserialize_str(CacheVisitor).map(|meta| {
             let meta = pnk!(serde_json::from_str::<CacheMeta>(&meta));
-            pnk!(Mapx::new(
-                meta.data_path.to_owned(),
-                Some(meta.in_mem_cnt),
-                false
-            ))
+            pnk!(Mapx::new(meta.data_path, Some(meta.in_mem_cnt), false))
         })
     }
 }
