@@ -24,8 +24,8 @@ fn t_mapx() {
     let cnt = 200;
 
     let db = {
-        omit!(fs::remove_dir_all("/tmp/bnc_test/0001"));
-        let mut dbi = crate::new_mapx!("/tmp/bnc_test/0001", Some(300));
+        omit!(fs::remove_dir_all("/tmp/bnc_test/Mapx"));
+        let mut dbi = crate::new_mapx!("/tmp/bnc_test/Mapx", 300);
 
         assert_eq!(0, dbi.len());
         (0..cnt).for_each(|i| {

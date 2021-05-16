@@ -3,11 +3,11 @@
 //!
 
 use crate::helper::*;
-use rocksdb::{DBIterator, IteratorMode, DB};
+use rocksdb::{DBIterator, Direction, IteratorMode};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
-    convert::TryInto, fmt, fs, iter::Iterator, marker::PhantomData, mem, sync::Arc,
+    convert::TryInto, fmt, fs, iter::Iterator, marker::PhantomData, mem::size_of,
 };
 
 /// To solve the problem of unlimited memory usage,
@@ -20,10 +20,10 @@ pub(super) struct Vecx<T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
-    db: Arc<DB>,
-    data_path: String,
+    root_path: String,
     cnter_path: String,
     cnter: usize,
+    prefix: Vec<u8>,
     _pd: PhantomData<T>,
 }
 
@@ -40,9 +40,10 @@ where
     /// Or it will create a new one.
     #[inline(always)]
     pub(super) fn load_or_create(path: &str) -> Result<Self> {
-        let db = rocksdb_open(path).c(d!())?;
-        let cnter_path = format!("{}/____cnter____", path);
-        let cnter = if db.iterator(IteratorMode::Start).next().is_none() {
+        meta_check(path).c(d!())?;
+        let cnter_path = format!("{}/{}", path, CNTER);
+        let prefix = read_prefix_bytes(&format!("{}/{}", path, PREFIX)).c(d!())?;
+        let cnter = if BNC.prefix_iterator(&prefix).next().is_none() {
             fs::File::create(&cnter_path)
                 .c(d!())
                 .and_then(|_| write_db_len(&cnter_path, 0).c(d!()))
@@ -52,17 +53,17 @@ where
         };
 
         Ok(Vecx {
-            db: Arc::new(db),
-            data_path: path.to_owned(),
+            root_path: path.to_owned(),
             cnter_path,
             cnter,
+            prefix,
             _pd: PhantomData,
         })
     }
 
     /// Get the storage path
-    pub(super) fn get_data_path(&self) -> &str {
-        self.data_path.as_str()
+    pub(super) fn get_root_path(&self) -> &str {
+        self.root_path.as_str()
     }
 
     /// Imitate the behavior of 'Vec<_>.get(...)'
@@ -70,8 +71,9 @@ where
     /// Any faster/better choice other than JSON ?
     #[inline(always)]
     pub(super) fn get(&self, idx: usize) -> Option<T> {
-        self.db
-            .get(&usize::to_le_bytes(idx)[..])
+        let mut k = self.prefix.clone();
+        k.extend_from_slice(&usize::to_le_bytes(idx)[..]);
+        BNC.get(k)
             .ok()
             .flatten()
             .map(|bytes| pnk!(serde_json::from_slice(&bytes)))
@@ -79,32 +81,35 @@ where
 
     /// Imitate the behavior of 'Vec<_>.last()'
     pub(super) fn last(&self) -> Option<T> {
-        self.db
-            .iterator(IteratorMode::End)
-            .next()
-            .map(|(_, v)| pnk!(serde_json::from_slice(&v)))
+        let mut i = BNC.prefix_iterator(&self.prefix);
+        i.set_mode(IteratorMode::From(&self.prefix, Direction::Reverse));
+        i.next().map(|(_, v)| pnk!(serde_json::from_slice(&v)))
     }
 
     /// Imitate the behavior of 'Vec<_>.len()'
     #[inline(always)]
     pub(super) fn len(&self) -> usize {
         debug_assert_eq!(pnk!(read_db_len(&self.cnter_path)), self.cnter);
-        debug_assert_eq!(self.db.iterator(IteratorMode::Start).count(), self.cnter);
+        debug_assert_eq!(BNC.prefix_iterator(&self.prefix).count(), self.cnter);
         self.cnter
     }
 
     /// A helper func
     #[inline(always)]
     pub(super) fn is_empty(&self) -> bool {
-        self.db.iterator(IteratorMode::Start).next().is_none()
+        BNC.prefix_iterator(&self.prefix).next().is_none()
     }
 
     /// Imitate the behavior of 'Vec<_>.push(...)'
     #[inline(always)]
     pub(super) fn push(&mut self, b: T) {
         let idx = self.cnter;
+
+        let mut k = self.prefix.clone();
+        k.extend_from_slice(&idx.to_le_bytes()[..]);
         let value = pnk!(serde_json::to_vec(&b));
-        pnk!(self.db.put(idx.to_le_bytes(), value));
+
+        pnk!(BNC.put(k, value));
 
         // There has no `remove`-like methods provided,
         // so we can increase this value directly.
@@ -116,8 +121,10 @@ where
     /// Imitate the behavior of 'Vec<_>.insert(idx, value)'
     #[inline(always)]
     pub(super) fn insert(&mut self, idx: usize, b: T) {
+        let mut k = self.prefix.clone();
+        k.extend_from_slice(&idx.to_le_bytes()[..]);
         let value = pnk!(serde_json::to_vec(&b));
-        pnk!(self.db.put(idx.to_le_bytes(), value));
+        pnk!(BNC.put(k, value));
 
         if idx >= self.cnter {
             // There has no `remove` like methods provided,
@@ -131,9 +138,13 @@ where
     /// Imitate the behavior of '.iter()'
     #[inline(always)]
     pub(super) fn iter(&self) -> VecxIter<'_, T> {
+        let i = BNC.prefix_iterator(&self.prefix);
+        let mut i_rev = BNC.prefix_iterator(&self.prefix);
+        i_rev.set_mode(IteratorMode::From(&self.prefix, Direction::Reverse));
+
         VecxIter {
-            iter: self.db.iterator(IteratorMode::Start),
-            iter_rev: self.db.iterator(IteratorMode::End),
+            iter: i,
+            iter_rev: i_rev,
             _pd: PhantomData,
         }
     }
@@ -141,7 +152,7 @@ where
     /// Flush data to disk
     #[inline(always)]
     pub fn flush(&self) {
-        pnk!(self.db.flush());
+        pnk!(BNC.flush());
     }
 }
 
@@ -171,7 +182,7 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().map(|(idx, v)| {
             (
-                usize::from_le_bytes(idx[..mem::size_of::<usize>()].try_into().unwrap()),
+                usize::from_le_bytes(idx[..size_of::<usize>()].try_into().unwrap()),
                 pnk!(serde_json::from_slice(&v)),
             )
         })
@@ -185,7 +196,7 @@ where
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter_rev.next().map(|(idx, v)| {
             (
-                usize::from_le_bytes(idx[..mem::size_of::<usize>()].try_into().unwrap()),
+                usize::from_le_bytes(idx[..size_of::<usize>()].try_into().unwrap()),
                 pnk!(serde_json::from_slice(&v)),
             )
         })

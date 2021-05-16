@@ -3,7 +3,7 @@
 //!
 
 use crate::helper::*;
-use rocksdb::{DBIterator, DBPinnableSlice, IteratorMode, DB};
+use rocksdb::{DBIterator, DBPinnableSlice, Direction, IteratorMode};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
@@ -11,7 +11,6 @@ use std::{
     hash::Hash,
     iter::{DoubleEndedIterator, Iterator},
     marker::PhantomData,
-    sync::Arc,
 };
 
 // To solve the problem of unlimited memory usage,
@@ -22,10 +21,10 @@ where
     K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    db: Arc<DB>,
-    data_path: String,
+    root_path: String,
     cnter_path: String,
     cnter: usize,
+    prefix: Vec<u8>,
     _pd0: PhantomData<K>,
     _pd1: PhantomData<V>,
 }
@@ -44,10 +43,10 @@ where
     // Or it will create a new one.
     #[inline(always)]
     pub(super) fn load_or_create(path: &str) -> Result<Self> {
-        let db = rocksdb_open(path).c(d!())?;
-        let cnter_path = format!("{}/____cnter____", path);
-
-        let cnter = if db.iterator(IteratorMode::Start).next().is_none() {
+        meta_check(path).c(d!())?;
+        let cnter_path = format!("{}/{}", path, CNTER);
+        let prefix = read_prefix_bytes(&format!("{}/{}", path, PREFIX)).c(d!())?;
+        let cnter = if BNC.prefix_iterator(&prefix).next().is_none() {
             fs::File::create(&cnter_path)
                 .c(d!())
                 .and_then(|_| write_db_len(&cnter_path, 0).c(d!()))
@@ -57,25 +56,26 @@ where
         };
 
         Ok(Mapx {
-            db: Arc::new(db),
-            data_path: path.to_owned(),
+            root_path: path.to_owned(),
             cnter_path,
             cnter,
+            prefix,
             _pd0: PhantomData,
             _pd1: PhantomData,
         })
     }
 
     // Get the storage path
-    pub(super) fn get_data_path(&self) -> &str {
-        self.data_path.as_str()
+    pub(super) fn get_root_path(&self) -> &str {
+        self.root_path.as_str()
     }
 
     // Imitate the behavior of 'HashMap<_>.get(...)'
     #[inline(always)]
     pub(super) fn get(&self, key: &K) -> Option<V> {
-        self.db
-            .get(&pnk!(bincode::serialize(key)))
+        let mut k = self.prefix.clone();
+        k.append(&mut pnk!(bincode::serialize(key)));
+        BNC.get(k)
             .ok()
             .flatten()
             .map(|bytes| pnk!(serde_json::from_slice(&bytes)))
@@ -85,14 +85,14 @@ where
     #[inline(always)]
     pub(super) fn len(&self) -> usize {
         debug_assert_eq!(pnk!(read_db_len(&self.cnter_path)), self.cnter);
-        debug_assert_eq!(self.db.iterator(IteratorMode::Start).count(), self.cnter);
+        debug_assert_eq!(BNC.prefix_iterator(&self.prefix).count(), self.cnter);
         self.cnter
     }
 
     // A helper func
     #[inline(always)]
     pub(super) fn is_empty(&self) -> bool {
-        self.db.iterator(IteratorMode::Start).next().is_none()
+        BNC.prefix_iterator(&self.prefix).next().is_none()
     }
 
     // Imitate the behavior of 'HashMap<_>.insert(...)'.
@@ -105,11 +105,12 @@ where
     // Similar with `insert`, but ignore if the old value is exist.
     #[inline(always)]
     pub(super) fn set_value(&mut self, key: K, value: V) -> Option<DBPinnableSlice> {
-        let k = pnk!(bincode::serialize(&key));
+        let mut k = self.prefix.clone();
+        k.append(&mut pnk!(bincode::serialize(&key)));
         let v = pnk!(serde_json::to_vec(&value));
-        let old_v = pnk!(self.db.get_pinned(&k));
+        let old_v = pnk!(BNC.get_pinned(&k));
 
-        pnk!(self.db.put(k, v));
+        pnk!(BNC.put(k, v));
 
         if old_v.is_none() {
             self.cnter += 1;
@@ -122,16 +123,22 @@ where
     // Imitate the behavior of '.iter()'
     #[inline(always)]
     pub(super) fn iter(&self) -> MapxIter<'_, K, V> {
+        let i = BNC.prefix_iterator(&self.prefix);
+        let mut i_rev = BNC.prefix_iterator(&self.prefix);
+        i_rev.set_mode(IteratorMode::From(&self.prefix, Direction::Reverse));
+
         MapxIter {
-            iter: self.db.iterator(IteratorMode::Start),
-            iter_rev: self.db.iterator(IteratorMode::End),
+            iter: i,
+            iter_rev: i_rev,
             _pd0: PhantomData,
             _pd1: PhantomData,
         }
     }
 
     pub(super) fn contains_key(&self, key: &K) -> bool {
-        pnk!(self.db.get_pinned(pnk!(bincode::serialize(key)))).is_some()
+        let mut k = self.prefix.clone();
+        k.append(&mut pnk!(bincode::serialize(key)));
+        pnk!(BNC.get_pinned(k)).is_some()
     }
 
     pub(super) fn remove(&mut self, key: &K) -> Option<V> {
@@ -140,10 +147,11 @@ where
     }
 
     pub(super) fn unset_value(&mut self, key: &K) -> Option<DBPinnableSlice> {
-        let k = pnk!(bincode::serialize(&key));
-        let old_v = pnk!(self.db.get_pinned(&k));
+        let mut k = self.prefix.clone();
+        k.append(&mut pnk!(bincode::serialize(&key)));
+        let old_v = pnk!(BNC.get_pinned(&k));
 
-        pnk!(self.db.delete(k));
+        pnk!(BNC.delete(k));
 
         if old_v.is_some() {
             self.cnter -= 1;
@@ -156,7 +164,7 @@ where
     /// Flush data to disk
     #[inline(always)]
     pub fn flush(&self) {
-        pnk!(self.db.flush());
+        pnk!(BNC.flush());
     }
 }
 

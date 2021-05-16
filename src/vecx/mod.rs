@@ -8,14 +8,8 @@ mod backend;
 #[cfg(test)]
 mod test;
 
-/// Max number of entries stored in memory.
-#[cfg(not(feature = "debug_env"))]
-pub const IN_MEM_CNT: usize = 1_0000;
-
-/// To make the 'mix storage' to be triggered during tests,
-/// set it to 1 with the debug_env feature.
-#[cfg(feature = "debug_env")]
-pub const IN_MEM_CNT: usize = 1;
+/// In-memory cache size in the number of items
+pub const IN_MEM_CNT: usize = 2;
 
 use crate::{
     helper::*,
@@ -69,8 +63,8 @@ where
     }
 
     /// Get the storage path
-    pub fn get_data_path(&self) -> &str {
-        self.in_disk.get_data_path()
+    pub fn get_root_path(&self) -> &str {
+        self.in_disk.get_root_path()
     }
 
     /// Imitate the behavior of 'Vec<_>.get(...)'
@@ -320,6 +314,19 @@ where
 // End of the implementation of Iter for Vecx //
 ////////////////////////////////////////////////
 
+////////////////////////////////////////////////
+// Begin of the implementation of Eq for Vecx //
+/**********************************************/
+
+impl<T> Eq for Vecx<T> where
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug
+{
+}
+
+/********************************************/
+// End of the implementation of Eq for Vecx //
+//////////////////////////////////////////////
+
 ///////////////////////////////////////////////////////////////////
 // Begin of the implementation of Serialize/Deserialize for Vecx //
 /*****************************************************************/
@@ -334,7 +341,7 @@ where
     {
         let v = pnk!(serde_json::to_string(&CacheMeta {
             in_mem_cnt: self.in_mem_cnt,
-            data_path: self.get_data_path(),
+            root_path: self.get_root_path(),
         }));
 
         self.flush_data();
@@ -352,7 +359,7 @@ where
     {
         deserializer.deserialize_str(CacheVisitor).map(|meta| {
             let meta = pnk!(serde_json::from_str::<CacheMeta>(&meta));
-            pnk!(Vecx::new(meta.data_path, Some(meta.in_mem_cnt)))
+            pnk!(Vecx::new(meta.root_path, Some(meta.in_mem_cnt)))
         })
     }
 }
