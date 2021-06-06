@@ -1,5 +1,5 @@
 //!
-//! # A mem+disk replacement for the pure in-memory BTreeMap
+//! # A disk-storage replacement for the pure in-memory BTreeMap
 //!
 //! This module is non-invasive to external code except the `new` method.
 //!
@@ -8,25 +8,17 @@ mod backend;
 #[cfg(test)]
 mod test;
 
-use crate::{
-    helper::*,
-    serde::{CacheMeta, CacheVisitor},
-};
+use crate::serde::{CacheMeta, CacheVisitor};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
-    borrow::Cow,
     cmp::Ordering,
-    collections::{btree_map, BTreeMap},
     fmt,
     hash::Hash,
-    iter::{DoubleEndedIterator, Iterator},
+    iter::Iterator,
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
 };
-
-/// In-memory cache size in the number of items
-pub const IN_MEM_CNT: usize = 2;
 
 /// To solve the problem of unlimited memory usage,
 /// use this to replace the original in-memory `BTreeMap<_, _>`.
@@ -44,8 +36,6 @@ where
         + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    in_mem: BTreeMap<K, V>,
-    in_mem_cnt: usize,
     in_disk: backend::Mapx<K, V>,
 }
 
@@ -68,40 +58,29 @@ where
 {
     /// Create an instance.
     #[inline(always)]
-    pub fn new(path: &str, imc: Option<usize>) -> Result<Self> {
+    pub fn new(path: &str) -> Result<Self> {
         let in_disk = backend::Mapx::load_or_create(path).c(d!())?;
-        let in_mem_cnt = imc.unwrap_or(IN_MEM_CNT);
-        Ok(Mapx {
-            in_mem: in_disk.iter().rev().take(in_mem_cnt).collect(),
-            in_mem_cnt,
-            in_disk,
-        })
+        Ok(Mapx { in_disk })
     }
 
     /// Get the database storage path
-    pub fn get_root_path(&self) -> &str {
-        self.in_disk.get_root_path()
+    pub fn get_path(&self) -> &str {
+        self.in_disk.get_path()
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get(...)'
     ///
     /// Any faster/better choice other than JSON ?
     #[inline(always)]
-    pub fn get(&self, key: &K) -> Option<Value<V>> {
-        self.in_mem
-            .get(key)
-            .map(Cow::Borrowed)
-            .or_else(|| self.in_disk.get(key).map(Cow::Owned))
-            .map(Value::new)
+    pub fn get(&self, key: &K) -> Option<V> {
+        self.in_disk.get(key)
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get_mut(...)'
     #[inline(always)]
     pub fn get_mut(&mut self, key: &K) -> Option<ValueMut<'_, K, V>> {
-        self.in_mem
+        self.in_disk
             .get(key)
-            .cloned()
-            .or_else(|| self.in_disk.get(key))
             .map(move |v| ValueMut::new(self, key.clone(), v))
     }
 
@@ -120,33 +99,13 @@ where
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
-        self.mgmt_memory();
-        if let Some(v) = self.in_mem.insert(key.clone(), value.clone()) {
-            self.in_disk.set_value(key, value);
-            Some(v)
-        } else {
-            self.in_disk.insert(key, value)
-        }
+        self.in_disk.insert(key, value)
     }
 
-    /// Similar with `insert`, but ignore if the old value is exist.
+    /// Similar with `insert`, but ignore the old value.
     #[inline(always)]
     pub fn set_value(&mut self, key: K, value: V) {
-        self.mgmt_memory();
-        self.in_disk.set_value(key.clone(), value.clone());
-        self.in_mem.insert(key, value);
-    }
-
-    // Will get a random key since we use BTreeMap
-    fn mgmt_memory(&mut self) {
-        if self.in_mem.len() > IN_MEM_CNT {
-            pnk!(self
-                .in_mem
-                .keys()
-                .next()
-                .cloned()
-                .and_then(|k| self.in_mem.remove(&k)));
-        }
+        self.in_disk.set_value(key, value);
     }
 
     /// Imitate the behavior of '.entry(...).or_insert(...)'
@@ -158,51 +117,27 @@ where
     /// Imitate the behavior of '.iter()'
     #[inline(always)]
     pub fn iter(&self) -> Box<dyn Iterator<Item = (K, V)> + '_> {
-        debug_assert!(self.in_mem.len() <= self.in_disk.len());
-        if self.in_mem.len() == self.in_disk.len() {
-            Box::new(MapxIterMem {
-                iter: self.in_mem.iter(),
-            })
-        } else {
-            Box::new(MapxIter {
-                iter: self.in_disk.iter(),
-            })
-        }
+        Box::new(MapxIter {
+            iter: self.in_disk.iter(),
+        })
     }
 
     /// Check if a key is exists.
     #[inline(always)]
     pub fn contains_key(&self, key: &K) -> bool {
-        let at_mem = self.in_mem.contains_key(key);
-        if at_mem {
-            at_mem
-        } else {
-            self.in_disk.contains_key(key)
-        }
+        self.in_disk.contains_key(key)
     }
 
     /// Remove a <K, V> from mem and disk.
     #[inline(always)]
     pub fn remove(&mut self, key: &K) -> Option<V> {
-        if let Some(v) = self.in_mem.remove(key) {
-            self.in_disk.unset_value(key);
-            Some(v)
-        } else {
-            self.in_disk.remove(key)
-        }
+        self.in_disk.remove(key)
     }
 
     /// Remove a <K, V> from mem and disk.
     #[inline(always)]
     pub fn unset_value(&mut self, key: &K) {
-        self.in_mem.remove(key);
         self.in_disk.unset_value(key);
-    }
-
-    /// Flush data to disk
-    #[inline(always)]
-    pub fn flush_data(&self) {
-        self.in_disk.flush();
     }
 }
 
@@ -470,36 +405,6 @@ where
     }
 }
 
-impl<'a, K, V> DoubleEndedIterator for MapxIter<'a, K, V>
-where
-    K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
-{
-    fn next_back(&mut self) -> Option<Self::Item> {
-        self.iter.next_back()
-    }
-}
-
-/// Iter over [Mapx](self::Mapx).
-pub struct MapxIterMem<'a, K, V>
-where
-    K: 'a + Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: 'a + Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
-{
-    iter: btree_map::Iter<'a, K, V>,
-}
-
-impl<'a, K, V> Iterator for MapxIterMem<'a, K, V>
-where
-    K: 'a + Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: 'a + Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
-{
-    type Item = (K, V);
-    fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next().map(|(k, v)| (k.clone(), v.clone()))
-    }
-}
-
 /**********************************************/
 // End of the implementation of Iter for Mapx //
 ////////////////////////////////////////////////
@@ -549,11 +454,9 @@ where
         S: serde::Serializer,
     {
         let v = pnk!(serde_json::to_string(&CacheMeta {
-            in_mem_cnt: self.in_mem_cnt,
-            root_path: self.get_root_path(),
+            path: self.get_path(),
         }));
 
-        self.flush_data();
         serializer.serialize_str(&v)
     }
 }
@@ -577,7 +480,7 @@ where
     {
         deserializer.deserialize_str(CacheVisitor).map(|meta| {
             let meta = pnk!(serde_json::from_str::<CacheMeta>(&meta));
-            pnk!(Mapx::new(meta.root_path, Some(meta.in_mem_cnt)))
+            pnk!(Mapx::new(meta.path))
         })
     }
 }

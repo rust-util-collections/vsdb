@@ -25,6 +25,5 @@ impl<'de> serde::de::Visitor<'de> for CacheVisitor {
 
 #[derive(Deserialize, Serialize)]
 pub(crate) struct CacheMeta<'a> {
-    pub in_mem_cnt: usize,
-    pub root_path: &'a str,
+    pub path: &'a str,
 }

@@ -2,16 +2,11 @@
 //! # Disk Storage Implementation
 //!
 
-use crate::helper::*;
-use rocksdb::{DBIterator, DBPinnableSlice, Direction, IteratorMode};
+use crate::{helper::*, DB_NUM};
+use rocksdb::{DBIterator, DBPinnableSlice};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
-use std::{
-    fmt, fs,
-    hash::Hash,
-    iter::{DoubleEndedIterator, Iterator},
-    marker::PhantomData,
-};
+use std::{fmt, hash::Hash, iter::Iterator, marker::PhantomData};
 
 // To solve the problem of unlimited memory usage,
 // use this to replace the original in-memory `HashMap<_, _>`.
@@ -21,10 +16,10 @@ where
     K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    root_path: String,
-    cnter_path: String,
+    path: String,
     cnter: usize,
     prefix: Vec<u8>,
+    idx: usize,
     _pd0: PhantomData<K>,
     _pd1: PhantomData<V>,
 }
@@ -44,30 +39,22 @@ where
     #[inline(always)]
     pub(super) fn load_or_create(path: &str) -> Result<Self> {
         meta_check(path).c(d!())?;
-        let cnter_path = format!("{}/{}", path, CNTER);
         let prefix = read_prefix_bytes(&format!("{}/{}", path, PREFIX)).c(d!())?;
-        let cnter = if BNC.prefix_iterator(&prefix).next().is_none() {
-            fs::File::create(&cnter_path)
-                .c(d!())
-                .and_then(|_| write_db_len(&cnter_path, 0).c(d!()))
-                .map(|_| 0)?
-        } else {
-            read_db_len(&cnter_path).c(d!())?
-        };
+        let idx = hash(&path) % DB_NUM;
 
         Ok(Mapx {
-            root_path: path.to_owned(),
-            cnter_path,
-            cnter,
+            path: path.to_owned(),
+            cnter: BNC[idx].prefix_iterator(&prefix).count(),
             prefix,
+            idx,
             _pd0: PhantomData,
             _pd1: PhantomData,
         })
     }
 
     // Get the storage path
-    pub(super) fn get_root_path(&self) -> &str {
-        self.root_path.as_str()
+    pub(super) fn get_path(&self) -> &str {
+        self.path.as_str()
     }
 
     // Imitate the behavior of 'HashMap<_>.get(...)'
@@ -75,7 +62,8 @@ where
     pub(super) fn get(&self, key: &K) -> Option<V> {
         let mut k = self.prefix.clone();
         k.append(&mut pnk!(bincode::serialize(key)));
-        BNC.get(k)
+        BNC[self.idx]
+            .get(k)
             .ok()
             .flatten()
             .map(|bytes| pnk!(serde_json::from_slice(&bytes)))
@@ -84,15 +72,17 @@ where
     // Imitate the behavior of 'HashMap<_>.len()'.
     #[inline(always)]
     pub(super) fn len(&self) -> usize {
-        debug_assert_eq!(pnk!(read_db_len(&self.cnter_path)), self.cnter);
-        debug_assert_eq!(BNC.prefix_iterator(&self.prefix).count(), self.cnter);
+        debug_assert_eq!(
+            BNC[self.idx].prefix_iterator(&self.prefix).count(),
+            self.cnter
+        );
         self.cnter
     }
 
     // A helper func
     #[inline(always)]
     pub(super) fn is_empty(&self) -> bool {
-        BNC.prefix_iterator(&self.prefix).next().is_none()
+        BNC[self.idx].prefix_iterator(&self.prefix).next().is_none()
     }
 
     // Imitate the behavior of 'HashMap<_>.insert(...)'.
@@ -108,13 +98,12 @@ where
         let mut k = self.prefix.clone();
         k.append(&mut pnk!(bincode::serialize(&key)));
         let v = pnk!(serde_json::to_vec(&value));
-        let old_v = pnk!(BNC.get_pinned(&k));
+        let old_v = pnk!(BNC[self.idx].get_pinned(&k));
 
-        pnk!(BNC.put(k, v));
+        pnk!(BNC[self.idx].put(k, v));
 
         if old_v.is_none() {
             self.cnter += 1;
-            pnk!(write_db_len(&self.cnter_path, self.cnter));
         }
 
         old_v
@@ -123,13 +112,10 @@ where
     // Imitate the behavior of '.iter()'
     #[inline(always)]
     pub(super) fn iter(&self) -> MapxIter<'_, K, V> {
-        let i = BNC.prefix_iterator(&self.prefix);
-        let mut i_rev = BNC.prefix_iterator(&self.prefix);
-        i_rev.set_mode(IteratorMode::From(&self.prefix, Direction::Reverse));
+        let i = BNC[self.idx].prefix_iterator(&self.prefix);
 
         MapxIter {
             iter: i,
-            iter_rev: i_rev,
             _pd0: PhantomData,
             _pd1: PhantomData,
         }
@@ -138,7 +124,7 @@ where
     pub(super) fn contains_key(&self, key: &K) -> bool {
         let mut k = self.prefix.clone();
         k.append(&mut pnk!(bincode::serialize(key)));
-        pnk!(BNC.get_pinned(k)).is_some()
+        pnk!(BNC[self.idx].get_pinned(k)).is_some()
     }
 
     pub(super) fn remove(&mut self, key: &K) -> Option<V> {
@@ -149,22 +135,15 @@ where
     pub(super) fn unset_value(&mut self, key: &K) -> Option<DBPinnableSlice> {
         let mut k = self.prefix.clone();
         k.append(&mut pnk!(bincode::serialize(&key)));
-        let old_v = pnk!(BNC.get_pinned(&k));
+        let old_v = pnk!(BNC[self.idx].get_pinned(&k));
 
-        pnk!(BNC.delete(k));
+        pnk!(BNC[self.idx].delete(k));
 
         if old_v.is_some() {
             self.cnter -= 1;
-            pnk!(write_db_len(&self.cnter_path, self.cnter));
         }
 
         old_v
-    }
-
-    /// Flush data to disk
-    #[inline(always)]
-    pub fn flush(&self) {
-        pnk!(BNC.flush());
     }
 }
 
@@ -183,7 +162,6 @@ where
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     pub(super) iter: DBIterator<'a>,
-    pub(super) iter_rev: DBIterator<'a>,
     _pd0: PhantomData<K>,
     _pd1: PhantomData<V>,
 }
@@ -196,21 +174,6 @@ where
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().map(|(k, v)| {
-            (
-                pnk!(bincode::deserialize(&k)),
-                pnk!(serde_json::from_slice(&v)),
-            )
-        })
-    }
-}
-
-impl<'a, K, V> DoubleEndedIterator for MapxIter<'a, K, V>
-where
-    K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
-{
-    fn next_back(&mut self) -> Option<Self::Item> {
-        self.iter_rev.next().map(|(k, v)| {
             (
                 pnk!(bincode::deserialize(&k)),
                 pnk!(serde_json::from_slice(&v)),
