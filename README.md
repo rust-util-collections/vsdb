@@ -1,10 +1,13 @@
-![](https://tokei.rs/b1/github/FindoraNetwork/BNC)
+![](https://tokei.rs/b1/github/FindoraNetwork/fbnc)
+![GitHub top language](https://img.shields.io/github/languages/top/FindoraNetwork/fbnc)
+![GitHub issues](https://img.shields.io/github/issues-raw/FindoraNetwork/fbnc)
+![GitHub pull requests](https://img.shields.io/github/issues-pr-raw/FindoraNetwork/fbnc)
 
-# BNC
+# fBNC
 
-BNC, Blockchain Native Cache.
+fBNC, Blockchain Native Cache.
 
-A native mix-storage('memory + disk') library for block chain.
+A native stateless storage library for block chain.
 
 Its value is to improve the stability and security of online services, at the cost of some single-node performance losses.
 
@@ -36,16 +39,16 @@ src
  Language            Files        Lines         Code     Comments       Blanks
 ===============================================================================
  Makefile                1           29           21            0            8
- TOML                    2           31           22            3            6
+ TOML                    2           37           29            3            5
 -------------------------------------------------------------------------------
  Markdown                1           17            0           10            7
  |- Shell                1           34           29            2            3
  (Total)                             51           29           12           10
 -------------------------------------------------------------------------------
- Rust                   10         1833         1520           89          224
- |- Markdown             9          133            0          125            8
- (Total)                           1966         1520          214          232
+ Rust                   12         1729         1406           84          239
+ |- Markdown            11          129            0          121            8
+ (Total)                           1858         1406          205          247
 ===============================================================================
- Total                  14         1910         1563          102          245
+ Total                  16         1812         1456           97          259
 ===============================================================================
 ```
