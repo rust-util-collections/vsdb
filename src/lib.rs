@@ -1,190 +1,193 @@
 //!
-//! # An mixed(mem&disk) cache implementation
+//! # vsdb
 //!
 
 #![deny(warnings)]
 #![deny(missing_docs)]
+#![recursion_limit = "512"]
 
-///////////////////////////////////////
-
-#[cfg(feature = "diskcache")]
-mod helper;
-#[cfg(feature = "diskcache")]
 pub mod mapx;
-#[cfg(feature = "diskcache")]
-mod serde;
-#[cfg(feature = "diskcache")]
+pub mod mapx_oc;
+pub mod mapx_raw;
 pub mod vecx;
 
-#[cfg(feature = "diskcache")]
 pub use mapx::Mapx;
-#[cfg(feature = "diskcache")]
+pub use mapx_oc::{MapxOC, OrderConsistKey};
+pub use mapx_raw::MapxRaw;
 pub use vecx::Vecx;
 
-///////////////////////////////////////
-
-#[cfg(not(feature = "diskcache"))]
-pub mod mapi;
-#[cfg(not(feature = "diskcache"))]
-pub mod veci;
-
-#[cfg(not(feature = "diskcache"))]
-pub use mapi::Mapi as Mapx;
-#[cfg(not(feature = "diskcache"))]
-pub use veci::Veci as Vecx;
-
-///////////////////////////////////////
-
-use lazy_static::lazy_static;
-use ruc::*;
-use std::{
-    env, ptr,
-    sync::atomic::{AtomicBool, Ordering},
+use {
+    core::{fmt, result::Result as CoreResult},
+    lazy_static::lazy_static,
+    ruc::*,
+    serde::{de, Deserialize, Serialize},
+    sled::{Config, Db as DB, Mode, Tree},
+    std::{
+        env, fs,
+        mem::size_of,
+        sync::atomic::{AtomicBool, Ordering},
+        sync::{Arc, Mutex},
+    },
 };
 
+//////////////////////////////////////////////////////////////////////////
+
 lazy_static! {
-    static ref BNC_DATA_DIR: String = gen_data_dir();
-    #[allow(missing_docs)]
-    pub static ref BNC_DATA_LIST: Vec<String> =
-        (0..DB_NUM).map(|i| format!("{}/{}", &*BNC_DATA_DIR, i)).collect();
+    static ref VSDB_DATA_DIR: Arc<Mutex<String>> = Arc::new(Mutex::new(gen_data_dir()));
+    static ref VSDB: VsDB = pnk!(VsDB::new());
 }
 
-const DB_NUM: usize = 8;
+macro_rules! parse_int {
+    ($bytes: expr, $ty: ty) => {{
+        let array: [u8; size_of::<$ty>()] = $bytes.try_into().unwrap();
+        <$ty>::from_be_bytes(array)
+    }};
+}
 
-/// meta of each instance, Vecx/Mapx, etc.
-pub const BNC_META_NAME: &str = "__extra_meta__";
+const PREFIX_ID_SIZ: usize = size_of::<u64>();
 
-static DATA_DIR: String = String::new();
+struct VsDB {
+    root: DB,
+    trees: Vec<Tree>,
+    next_prefix_id: [u8; PREFIX_ID_SIZ],
+}
 
-#[inline(always)]
+impl VsDB {
+    fn new() -> Result<Self> {
+        const TREE_NUM: u64 = 4;
+
+        let root = sled_open().c(d!())?;
+        let trees = (0..TREE_NUM)
+            .map(|idx| root.open_tree(idx.to_be_bytes()).c(d!()))
+            .collect::<Result<Vec<_>>>()?;
+        let next_prefix_id = u64::MAX.to_be_bytes();
+
+        if root.get(next_prefix_id).c(d!())?.is_none() {
+            root.insert(next_prefix_id, u64::MIN.to_be_bytes().as_slice())
+                .c(d!())?;
+        }
+
+        Ok(Self {
+            root,
+            trees,
+            next_prefix_id,
+        })
+    }
+
+    fn alloc_id(&self) -> u64 {
+        let incr = |id_base: Option<&[u8]>| -> Option<Vec<u8>> {
+            id_base.map(|bytes| (parse_int!(bytes, u64) + 1).to_be_bytes().to_vec())
+        };
+
+        parse_int!(
+            self.root
+                .update_and_fetch(self.next_prefix_id, incr)
+                .unwrap()
+                .unwrap()
+                .as_ref(),
+            u64
+        )
+    }
+
+    fn flush_data(&self) {
+        (0..self.trees.len()).for_each(|i| {
+            self.trees[i].flush().unwrap();
+        });
+    }
+
+    fn clear_data(&self) {
+        for i in 0..self.trees.len() {
+            self.trees[i].clear().unwrap();
+        }
+    }
+
+    // // Delete all TREEs except the base one
+    // fn destory_trees(&self) {
+    //     for i in 0..self.trees.len() {
+    //         info_omit!(self.root.drop_tree(i.to_be_bytes()));
+    //     }
+    // }
+}
+
+fn sled_open() -> Result<DB> {
+    let db = Config::new()
+        .path(VSDB_DATA_DIR.lock().unwrap().clone())
+        .mode(Mode::HighThroughput)
+        .use_compression(true)
+        .open()
+        .c(d!())?;
+
+    // avoid setting DB after it has been opened
+    info_omit!(set_data_dir(gen_data_dir()));
+
+    Ok(db)
+}
+
 fn gen_data_dir() -> String {
-    let d = if DATA_DIR.is_empty() {
-        // Is it necessary to be compatible with Windows OS?
-        env::var("BNC_DATA_DIR").unwrap_or_else(|_| "/tmp/.bnc".to_owned())
-    } else {
-        DATA_DIR.clone()
-    };
-    std::fs::create_dir_all(&d).unwrap();
+    // Is it necessary to be compatible with Windows OS?
+    let d = env::var("VSDB_DATA_DIR")
+        .or_else(|_| env::var("HOME").map(|h| format!("{}/.vsdb", h)))
+        .unwrap_or_else(|_| "/tmp/.vsdb".to_owned());
+    fs::create_dir_all(&d).unwrap();
     d
 }
 
-/// Set ${BNC_DATA_DIR} manually
-pub fn set_data_dir(dir: &str) -> Result<()> {
+/// Set ${VSDB_DATA_DIR} manually
+pub fn set_data_dir(dir: String) -> Result<()> {
     lazy_static! {
         static ref HAS_INITED: AtomicBool = AtomicBool::new(false);
     }
 
     if HAS_INITED.swap(true, Ordering::Relaxed) {
-        Err(eg!("BNC has been initialized !!"))
+        Err(eg!("VSDB has been initialized !!"))
     } else {
-        unsafe {
-            ptr::swap(DATA_DIR.as_ptr() as *mut u8, dir.to_owned().as_mut_ptr());
-        }
+        *VSDB_DATA_DIR.lock().unwrap() = dir;
         Ok(())
     }
 }
 
-/// Delete all KVs
+/// Flush data to disk.
+///
+/// NOTE:
+/// This operation may take a long long time.
+pub fn flush() {
+    VSDB.flush_data();
+}
+
+/// Delete all KVs and meta,
+/// mostly used in testing scene.
+///
+/// NOTE:
+/// this operation may take a very long long time
+/// if a large number of KVs have been stored in this DB.
 pub fn clear() {
-    #[cfg(feature = "diskcache")]
-    helper::rocksdb_clear();
+    VSDB.clear_data();
 }
 
-/// Flush data to disk
-#[inline(always)]
-pub fn flush_data() {
-    #[cfg(feature = "diskcache")]
-    (0..DB_NUM).for_each(|i| {
-        helper::BNC[i].flush().unwrap();
-    });
+//////////////////////////////////////////////////////////////////////////
+
+#[derive(Deserialize, Serialize)]
+struct MetaInfo {
+    obj_id: u64,
+    item_cnt: u64,
+    tree_idx: usize,
 }
 
-/// Try once more when we fail to open a db.
-#[macro_export]
-macro_rules! try_twice {
-    ($ops: expr) => {
-        pnk!($ops.c(d!()).or_else(|e| {
-            e.print(None);
-            $ops.c(d!())
-        }))
-    };
-}
+//////////////////////////////////////////////////////////////////////////
 
-/// Generate a unique path for each instance.
-#[macro_export]
-macro_rules! unique_path {
-    () => {
-        format!(
-            "{}/{}/{}_{}_{}_{}",
-            $crate::BNC_META_NAME,
-            ts!(),
-            file!(),
-            line!(),
-            column!(),
-            rand::random::<u32>()
-        )
-    };
-}
+struct SimpleVisitor;
 
-/// A helper for creating Vecx.
-#[macro_export]
-macro_rules! new_vecx {
-    (@$ty: ty) => {
-        $crate::new_vecx_custom!($ty)
-    };
-    ($path:expr) => {
-        $crate::new_vecx_custom!($path)
-    };
-    () => {
-        $crate::new_vecx_custom!()
-    };
-}
+impl<'de> de::Visitor<'de> for SimpleVisitor {
+    type Value = Vec<u8>;
 
-/// A helper for creating Vecx.
-#[macro_export]
-macro_rules! new_vecx_custom {
-    (@$ty: ty) => {{
-            let obj: $crate::Vecx<$ty> = $crate::try_twice!($crate::Vecx::new(&$crate::unique_path!()))
-            obj
-    }};
-    ($path: expr) => {{
-            $crate::try_twice!($crate::Vecx::new(&format!("{}/{}", $crate::BNC_META_NAME, &*$path)))
-    }};
-    () => {{
-            $crate::try_twice!($crate::Vecx::new(&$crate::unique_path!()))
-    }};
-}
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("Fatal !!")
+    }
 
-/// A helper for creating Mapx.
-#[macro_export]
-macro_rules! new_mapx {
-    (@$ty: ty) => {
-        $crate::new_mapx_custom!($ty)
-    };
-    ($path:expr) => {
-        $crate::new_mapx_custom!($path)
-    };
-    () => {
-        $crate::new_mapx_custom!()
-    };
-}
-
-/// A helper for creating Mapx.
-#[macro_export]
-macro_rules! new_mapx_custom {
-    (@$ty: ty) => {{
-        let obj: $crate::Mapx<$ty> =
-            $crate::try_twice!($crate::Mapx::new(&$crate::unique_path!()));
-        obj
-    }};
-    ($path: expr) => {{
-        $crate::try_twice!($crate::Mapx::new(&format!(
-            "{}/{}",
-            $crate::BNC_META_NAME,
-            &*$path
-        )))
-    }};
-    () => {{
-        $crate::try_twice!($crate::Mapx::new(&$crate::unique_path!()))
-    }};
+    fn visit_bytes<E>(self, v: &[u8]) -> CoreResult<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(v.to_vec())
+    }
 }

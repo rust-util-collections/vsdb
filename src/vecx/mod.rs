@@ -4,18 +4,19 @@
 //! This module is non-invasive to external code except the `new` method.
 //!
 
-mod backend;
-
 #[cfg(test)]
 mod test;
 
-use crate::serde::{CacheMeta, CacheVisitor};
+use crate::{
+    mapx_oc::{MapxOC, MapxOCIter},
+    MetaInfo, SimpleVisitor,
+};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     cmp::Ordering,
     fmt,
-    iter::Iterator,
+    iter::{DoubleEndedIterator, Iterator},
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
 };
@@ -25,12 +26,32 @@ use std::{
 ///
 /// - Each time the program is started, a new database is created
 /// - Can ONLY be used in append-only scenes like the block storage
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone)]
 pub struct Vecx<T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
-    in_disk: backend::Vecx<T>,
+    inner: MapxOC<usize, T>,
+}
+
+impl<T> From<MetaInfo> for Vecx<T>
+where
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+{
+    fn from(mi: MetaInfo) -> Self {
+        Self {
+            inner: MapxOC::from(mi),
+        }
+    }
+}
+
+impl<T> Default for Vecx<T>
+where
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+{
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 ///////////////////////////////////////////////
@@ -43,14 +64,15 @@ where
 {
     /// Create an instance.
     #[inline(always)]
-    pub fn new(path: &str) -> Result<Self> {
-        let in_disk = backend::Vecx::load_or_create(path).c(d!())?;
-        Ok(Vecx { in_disk })
+    pub fn new() -> Self {
+        Vecx {
+            inner: MapxOC::new(),
+        }
     }
 
-    /// Get the meta-storage path
-    pub fn get_path(&self) -> &str {
-        self.in_disk.get_path()
+    // Get the meta-storage path
+    fn get_meta(&self) -> MetaInfo {
+        self.inner.get_meta()
     }
 
     /// Imitate the behavior of 'Vec<_>.get(...)'
@@ -58,54 +80,76 @@ where
     /// Any faster/better choice other than JSON ?
     #[inline(always)]
     pub fn get(&self, idx: usize) -> Option<T> {
-        self.in_disk.get(idx)
+        self.inner.get(&idx)
     }
 
     /// Imitate the behavior of 'Vec<_>.get_mut(...)'
     #[inline(always)]
     pub fn get_mut(&mut self, idx: usize) -> Option<ValueMut<'_, T>> {
-        self.in_disk
-            .get(idx)
+        self.inner
+            .get(&idx)
             .map(move |v| ValueMut::new(self, idx, v))
     }
 
     /// Imitate the behavior of 'Vec<_>.last()'
     #[inline(always)]
     pub fn last(&self) -> Option<T> {
-        self.in_disk.last()
+        alt!(self.is_empty(), return None);
+        // must exist
+        Some(self.inner.get(&(self.len() - 1)).unwrap())
     }
 
     /// Imitate the behavior of 'Vec<_>.len()'
     #[inline(always)]
     pub fn len(&self) -> usize {
-        self.in_disk.len()
+        self.inner.len()
     }
 
     /// A helper func
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        self.in_disk.is_empty()
+        self.inner.is_empty()
+    }
+
+    ///
+    /// # Safety
+    ///
+    /// Only make sense after a 'DataBase clear',
+    /// do NOT use this function except testing.
+    ///
+    #[inline(always)]
+    pub unsafe fn set_len(&mut self, len: u64) {
+        self.inner.set_len(len);
     }
 
     /// Imitate the behavior of 'Vec<_>.push(...)'
     #[inline(always)]
     pub fn push(&mut self, b: T) {
-        self.in_disk.push(b);
+        self.inner.insert(self.len(), b);
+    }
+
+    /// Imitate the behavior of 'Vec<_>.pop()'
+    #[inline(always)]
+    pub fn pop(&mut self) {
+        alt!(self.is_empty(), return);
+        self.inner.remove(&(self.len() - 1));
     }
 
     /// Imitate the behavior of 'Vec<_>.insert(idx, value)',
-    /// but we do not return the previous value, like `Vecx<_, _>.set_value`.
+    /// but we do not return the previous value, like `Vecx<_, _>.update_value`.
     #[inline(always)]
-    pub fn set_value(&mut self, idx: usize, b: T) {
-        self.in_disk.insert(idx, b);
+    pub fn update_value(&mut self, idx: usize, b: T) -> Result<()> {
+        alt!(idx + 1 > self.len(), return Err(eg!("out of index")));
+        self.inner.insert(idx, b);
+        Ok(())
     }
 
     /// Imitate the behavior of '.iter()'
     #[inline(always)]
-    pub fn iter(&self) -> Box<dyn Iterator<Item = T> + '_> {
-        Box::new(VecxIter {
-            iter: self.in_disk.iter(),
-        })
+    pub fn iter(&self) -> VecxIter<T> {
+        VecxIter {
+            iter: self.inner.iter(),
+        }
     }
 }
 
@@ -158,7 +202,8 @@ where
         // SEE: [**ManuallyDrop::take**](std::mem::ManuallyDrop::take)
         unsafe {
             self.mapx
-                .set_value(self.idx, ManuallyDrop::take(&mut self.value));
+                .update_value(self.idx, ManuallyDrop::take(&mut self.value))
+                .unwrap();
         };
     }
 }
@@ -226,14 +271,14 @@ where
 /************************************************/
 
 /// Iter over [Vecx](self::Vecx).
-pub struct VecxIter<'a, T>
+pub struct VecxIter<T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
-    iter: backend::VecxIter<'a, T>,
+    iter: MapxOCIter<usize, T>,
 }
 
-impl<'a, T> Iterator for VecxIter<'a, T>
+impl<T> Iterator for VecxIter<T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
@@ -243,22 +288,18 @@ where
     }
 }
 
+impl<T> DoubleEndedIterator for VecxIter<T>
+where
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.iter.next_back().map(|v| v.1)
+    }
+}
+
 /**********************************************/
 // End of the implementation of Iter for Vecx //
 ////////////////////////////////////////////////
-
-////////////////////////////////////////////////
-// Begin of the implementation of Eq for Vecx //
-/**********************************************/
-
-impl<T> Eq for Vecx<T> where
-    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug
-{
-}
-
-/********************************************/
-// End of the implementation of Eq for Vecx //
-//////////////////////////////////////////////
 
 ///////////////////////////////////////////////////////////////////
 // Begin of the implementation of Serialize/Deserialize for Vecx //
@@ -272,11 +313,8 @@ where
     where
         S: serde::Serializer,
     {
-        let v = pnk!(serde_json::to_string(&CacheMeta {
-            path: self.get_path(),
-        }));
-
-        serializer.serialize_str(&v)
+        let v = pnk!(bincode::serialize(&self.get_meta()));
+        serializer.serialize_bytes(&v)
     }
 }
 
@@ -288,9 +326,9 @@ where
     where
         D: serde::Deserializer<'de>,
     {
-        deserializer.deserialize_str(CacheVisitor).map(|meta| {
-            let meta = pnk!(serde_json::from_str::<CacheMeta>(&meta));
-            pnk!(Vecx::new(meta.path))
+        deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
+            let meta = pnk!(bincode::deserialize::<MetaInfo>(&meta));
+            Vecx::from(meta)
         })
     }
 }

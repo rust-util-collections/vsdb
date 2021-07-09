@@ -4,6 +4,7 @@
 
 use super::*;
 use serde::{Deserialize, Serialize};
+use std::ops::Bound;
 
 #[derive(Serialize, Deserialize, Default, Debug, Eq, PartialEq, Clone)]
 struct SampleBlock {
@@ -19,13 +20,13 @@ fn gen_sample(idx: usize) -> SampleBlock {
 }
 
 #[test]
-fn t_mapx() {
+fn t_mapx_oc() {
     crate::clear();
 
     let cnt = 200;
 
     let db = {
-        let mut dbi = crate::Mapx::new();
+        let mut dbi = crate::MapxOC::new();
 
         assert_eq!(0, dbi.len());
         (0..cnt).for_each(|i| {
@@ -48,7 +49,7 @@ fn t_mapx() {
         pnk!(bincode::serialize(&dbi))
     };
 
-    let mut db_restore = pnk!(bincode::deserialize::<Mapx<usize, SampleBlock>>(&db));
+    let mut db_restore = pnk!(bincode::deserialize::<MapxOC<usize, SampleBlock>>(&db));
 
     assert_eq!(cnt, db_restore.len());
 
@@ -68,4 +69,25 @@ fn t_mapx() {
     crate::clear();
     unsafe { db_restore.set_len(0) };
     assert!(db_restore.is_empty());
+
+    db_restore.insert(1, gen_sample(1));
+    db_restore.insert(10, gen_sample(10));
+    db_restore.insert(100, gen_sample(100));
+    db_restore.insert(1000, gen_sample(1000));
+
+    assert!(db_restore.range(0..1).next().is_none());
+
+    assert_eq!(100, db_restore.range(12..999).next().unwrap().1.idx);
+    assert_eq!(100, db_restore.range(12..=999).next().unwrap().1.idx);
+
+    assert_eq!(100, db_restore.range(100..=999).next().unwrap().1.idx);
+    assert!(db_restore
+        .range((Bound::Excluded(100), Bound::Included(999)))
+        .next()
+        .is_none());
+
+    assert_eq!(100, db_restore.get_ge(&99).unwrap().1.idx);
+    assert_eq!(100, db_restore.get_ge(&100).unwrap().1.idx);
+    assert_eq!(100, db_restore.get_le(&100).unwrap().1.idx);
+    assert_eq!(100, db_restore.get_le(&101).unwrap().1.idx);
 }
