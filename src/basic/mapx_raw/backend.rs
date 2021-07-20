@@ -2,7 +2,7 @@
 //! # Disk Storage Implementation
 //!
 
-use crate::{MetaInfo, PREFIX_ID_SIZ, VSDB};
+use crate::common::{InstanceCfg, Prefix, PREFIX_SIZ, VSDB};
 use ruc::*;
 use sled::{IVec, Iter};
 use std::{
@@ -15,26 +15,27 @@ use std::{
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct MapxRaw {
     cnter: u64,
-    id: u64,
+    // the unique ID of each instance
+    prefix: Vec<u8>,
     idx: usize,
 }
 
-impl From<MetaInfo> for MapxRaw {
-    fn from(mi: MetaInfo) -> Self {
+impl From<InstanceCfg> for MapxRaw {
+    fn from(cfg: InstanceCfg) -> Self {
         Self {
-            cnter: mi.item_cnt,
-            id: mi.obj_id,
-            idx: mi.tree_idx,
+            cnter: cfg.item_cnt,
+            prefix: cfg.prefix,
+            idx: cfg.data_set_idx,
         }
     }
 }
 
-impl From<&MapxRaw> for MetaInfo {
+impl From<&MapxRaw> for InstanceCfg {
     fn from(x: &MapxRaw) -> Self {
         Self {
             item_cnt: x.cnter,
-            obj_id: x.id,
-            tree_idx: x.idx,
+            prefix: x.prefix.clone(),
+            data_set_idx: x.idx,
         }
     }
 }
@@ -46,62 +47,73 @@ impl From<&MapxRaw> for MetaInfo {
 impl MapxRaw {
     // create a new instance
     #[inline(always)]
-    pub(super) fn must_new(id: u64) -> Self {
-        let idx = id as usize % VSDB.trees.len();
+    pub(super) fn must_new(prefix: Prefix) -> Self {
+        // NOTE: this is NOT equal to
+        // `prefix as usize % VSDB.data_set.len()`, the MAX value of
+        // the type used by `len()` of almost all known OS-platforms
+        // can be considered to be always less than Prefix::MAX(u64::MAX),
+        // but the reverse logic can NOT be guaranteed.
+        let idx = (prefix % VSDB.data_set.len() as Prefix) as usize;
 
-        assert!(VSDB.trees[idx]
-            .scan_prefix(id.to_be_bytes())
+        let prefix = prefix.to_be_bytes().to_vec();
+
+        assert!(VSDB.data_set[idx]
+            .scan_prefix(prefix.as_slice())
             .next()
             .is_none());
 
-        MapxRaw { cnter: 0, id, idx }
+        MapxRaw {
+            cnter: 0,
+            prefix,
+            idx,
+        }
     }
 
     // Get the storage path
-    pub(super) fn get_meta(&self) -> MetaInfo {
-        MetaInfo::from(self)
+    pub(super) fn get_instance_cfg(&self) -> InstanceCfg {
+        InstanceCfg::from(self)
     }
 
     // Imitate the behavior of 'BTreeMap<_>.get(...)'
     #[inline(always)]
     pub(super) fn get(&self, key: &[u8]) -> Option<IVec> {
-        let mut k = self.id.to_be_bytes().to_vec();
+        let mut k = self.prefix.clone();
         k.extend_from_slice(key);
-        VSDB.trees[self.idx].get(k).unwrap()
+        VSDB.data_set[self.idx].get(k).unwrap()
     }
 
     // less or equal
     #[inline(always)]
     pub(super) fn get_le(&self, key: &[u8]) -> Option<(IVec, IVec)> {
-        let mut k = self.id.to_be_bytes().to_vec();
+        let mut k = self.prefix.clone();
         k.extend_from_slice(key);
 
-        VSDB.trees[self.idx]
+        VSDB.data_set[self.idx]
             .range(..=k)
             .next_back()
             .map(|i| i.unwrap())
-            .map(|(k, v)| (k.subslice(PREFIX_ID_SIZ, k.len() - PREFIX_ID_SIZ), v))
+            .map(|(k, v)| (k.subslice(PREFIX_SIZ, k.len() - PREFIX_SIZ), v))
     }
 
     // ge: great or equal
     #[inline(always)]
     pub(super) fn get_ge(&self, key: &[u8]) -> Option<(IVec, IVec)> {
-        let mut k = self.id.to_be_bytes().to_vec();
+        let mut k = self.prefix.clone();
         k.extend_from_slice(key);
 
-        VSDB.trees[self.idx]
+        VSDB.data_set[self.idx]
             .range(k..)
             .next()
             .map(|i| i.unwrap())
-            .map(|(k, v)| (k.subslice(PREFIX_ID_SIZ, k.len() - PREFIX_ID_SIZ), v))
+            .map(|(k, v)| (k.subslice(PREFIX_SIZ, k.len() - PREFIX_SIZ), v))
     }
 
     // Imitate the behavior of 'BTreeMap<_>.len()'.
     #[inline(always)]
     pub(super) fn len(&self) -> usize {
         debug_assert_eq!(
-            VSDB.trees[self.idx]
-                .scan_prefix(self.id.to_be_bytes())
+            VSDB.data_set[self.idx]
+                .scan_prefix(self.prefix.as_slice())
                 .count(),
             self.cnter as usize
         );
@@ -113,18 +125,13 @@ impl MapxRaw {
         0 == self.cnter
     }
 
-    #[inline(always)]
-    pub(super) unsafe fn set_len(&mut self, len: u64) {
-        self.cnter = len;
-    }
-
     // Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
     pub(super) fn insert(&mut self, key: &[u8], value: &[u8]) -> Option<IVec> {
-        let mut k = self.id.to_be_bytes().to_vec();
+        let mut k = self.prefix.clone();
         k.extend_from_slice(key);
 
-        match VSDB.trees[self.idx].insert(k, value).unwrap() {
+        match VSDB.data_set[self.idx].insert(k, value).unwrap() {
             None => {
                 self.cnter += 1;
                 None
@@ -136,14 +143,14 @@ impl MapxRaw {
     // Imitate the behavior of '.iter()'
     #[inline(always)]
     pub(super) fn iter(&self) -> MapxRawIter {
-        let i = VSDB.trees[self.idx].scan_prefix(self.id.to_be_bytes());
+        let i = VSDB.data_set[self.idx].scan_prefix(self.prefix.as_slice());
         MapxRawIter { iter: i }
     }
 
     /// range(start..end)
     #[inline(always)]
     pub fn range<'a, R: RangeBounds<&'a [u8]>>(&'a self, bounds: R) -> MapxRawIter {
-        let mut b_lo = self.id.to_be_bytes().to_vec();
+        let mut b_lo = self.prefix.clone();
         let l = match bounds.start_bound() {
             Bound::Included(lo) => {
                 b_lo.extend_from_slice(lo);
@@ -156,7 +163,7 @@ impl MapxRaw {
             Bound::Unbounded => Bound::Unbounded,
         };
 
-        let mut b_hi = self.id.to_be_bytes().to_vec();
+        let mut b_hi = self.prefix.clone();
         let h = match bounds.end_bound() {
             Bound::Included(hi) => {
                 b_hi.extend_from_slice(hi);
@@ -170,27 +177,38 @@ impl MapxRaw {
         };
 
         MapxRawIter {
-            iter: VSDB.trees[self.idx].range((l, h)),
+            iter: VSDB.data_set[self.idx].range((l, h)),
         }
     }
 
     pub(super) fn contains_key(&self, key: &[u8]) -> bool {
-        let mut k = self.id.to_be_bytes().to_vec();
+        let mut k = self.prefix.clone();
         k.extend_from_slice(key);
-        pnk!(VSDB.trees[self.idx].contains_key(k))
+        pnk!(VSDB.data_set[self.idx].contains_key(k))
     }
 
     pub(super) fn remove(&mut self, key: &[u8]) -> Option<IVec> {
-        let mut k = self.id.to_be_bytes().to_vec();
+        let mut k = self.prefix.clone();
         k.extend_from_slice(key);
 
-        match VSDB.trees[self.idx].remove(k).unwrap() {
+        match VSDB.data_set[self.idx].remove(k).unwrap() {
             None => None,
             old_v => {
                 self.cnter -= 1;
                 old_v
             }
         }
+    }
+
+    pub(super) fn clear(&mut self) {
+        VSDB.data_set[self.idx]
+            .scan_prefix(self.prefix.as_slice())
+            .keys()
+            .map(|k| k.unwrap())
+            .for_each(|k| {
+                VSDB.data_set[self.idx].remove(k).unwrap();
+                self.cnter -= 1;
+            });
     }
 }
 
@@ -213,7 +231,7 @@ impl Iterator for MapxRawIter {
         self.iter
             .next()
             .map(|i| i.unwrap())
-            .map(|(k, v)| (k.subslice(PREFIX_ID_SIZ, k.len() - PREFIX_ID_SIZ), v))
+            .map(|(k, v)| (k.subslice(PREFIX_SIZ, k.len() - PREFIX_SIZ), v))
     }
 }
 
@@ -222,7 +240,7 @@ impl DoubleEndedIterator for MapxRawIter {
         self.iter
             .next_back()
             .map(|i| i.unwrap())
-            .map(|(k, v)| (k.subslice(PREFIX_ID_SIZ, k.len() - PREFIX_ID_SIZ), v))
+            .map(|(k, v)| (k.subslice(PREFIX_SIZ, k.len() - PREFIX_SIZ), v))
     }
 }
 

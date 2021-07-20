@@ -8,8 +8,8 @@
 mod test;
 
 use crate::{
-    mapx_oc::{MapxOC, MapxOCIter},
-    MetaInfo, SimpleVisitor,
+    basic::mapx_oc::{MapxOC, MapxOCIter},
+    common::{InstanceCfg, SimpleVisitor},
 };
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
@@ -22,10 +22,9 @@ use std::{
 };
 
 /// To solve the problem of unlimited memory usage,
-/// use this to replace the original in-memory `Vec<_>`.
+/// use this to replace the original in-memory 'Vec'.
 ///
 /// - Each time the program is started, a new database is created
-/// - Can ONLY be used in append-only scenes like the block storage
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone)]
 pub struct Vecx<T>
 where
@@ -34,13 +33,13 @@ where
     inner: MapxOC<usize, T>,
 }
 
-impl<T> From<MetaInfo> for Vecx<T>
+impl<T> From<InstanceCfg> for Vecx<T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
-    fn from(mi: MetaInfo) -> Self {
+    fn from(cfg: InstanceCfg) -> Self {
         Self {
-            inner: MapxOC::from(mi),
+            inner: MapxOC::from(cfg),
         }
     }
 }
@@ -71,8 +70,8 @@ where
     }
 
     // Get the meta-storage path
-    fn get_meta(&self) -> MetaInfo {
-        self.inner.get_meta()
+    fn get_instance_cfg(&self) -> InstanceCfg {
+        self.inner.get_instance_cfg()
     }
 
     /// Imitate the behavior of 'Vec<_>.get(...)'
@@ -111,37 +110,74 @@ where
         self.inner.is_empty()
     }
 
-    ///
-    /// # Safety
-    ///
-    /// Only make sense after a 'DataBase clear',
-    /// do NOT use this function except testing.
-    ///
-    #[inline(always)]
-    pub unsafe fn set_len(&mut self, len: u64) {
-        self.inner.set_len(len);
-    }
-
     /// Imitate the behavior of 'Vec<_>.push(...)'
     #[inline(always)]
     pub fn push(&mut self, b: T) {
         self.inner.insert(self.len(), b);
     }
 
-    /// Imitate the behavior of 'Vec<_>.pop()'
+    /// Imitate the behavior of 'Vec<_>.insert()'
     #[inline(always)]
-    pub fn pop(&mut self) {
-        alt!(self.is_empty(), return);
-        self.inner.remove(&(self.len() - 1));
+    pub fn insert(&mut self, idx: usize, v: T) {
+        match self.len().cmp(&idx) {
+            Ordering::Greater => {
+                self.inner.range(idx..self.len()).for_each(|(i, v)| {
+                    self.inner.insert(i + 1, v);
+                });
+                self.inner.insert(idx, v);
+            }
+            Ordering::Equal => {
+                self.push(v);
+            }
+            Ordering::Less => {
+                panic!("out of index");
+            }
+        }
     }
 
-    /// Imitate the behavior of 'Vec<_>.insert(idx, value)',
-    /// but we do not return the previous value, like `Vecx<_, _>.update_value`.
+    /// Imitate the behavior of 'Vec<_>.pop()'
     #[inline(always)]
-    pub fn update_value(&mut self, idx: usize, b: T) -> Result<()> {
-        alt!(idx + 1 > self.len(), return Err(eg!("out of index")));
-        self.inner.insert(idx, b);
-        Ok(())
+    pub fn pop(&mut self) -> Option<T> {
+        alt!(self.is_empty(), return None);
+        self.inner.remove(&(self.len() - 1))
+    }
+
+    /// Imitate the behavior of 'Vec<_>.remove()'
+    #[inline(always)]
+    pub fn remove(&mut self, idx: usize) -> T {
+        if !self.is_empty() && idx < self.len() {
+            let last_idx = self.len() - 1;
+            let ret = self.inner.remove(&idx).unwrap();
+            self.inner.range((1 + idx)..).for_each(|(i, v)| {
+                self.inner.insert(i - 1, v);
+            });
+            self.inner.remove(&last_idx);
+            return ret;
+        }
+        panic!("out of index");
+    }
+
+    /// Imitate the behavior of 'Vec<_>.swap_remove()'
+    #[inline(always)]
+    pub fn swap_remove(&mut self, idx: usize) -> T {
+        if !self.is_empty() && idx < self.len() {
+            let last_idx = self.len() - 1;
+            let ret = self.inner.remove(&idx).unwrap();
+            if let Some(v) = self.inner.remove(&last_idx) {
+                self.inner.insert(idx, v);
+            }
+            return ret;
+        }
+        panic!("out of index");
+    }
+
+    /// Imitate the behavior of 'Vec<_>.update(idx, value)'
+    #[inline(always)]
+    pub fn update(&mut self, idx: usize, b: T) -> Option<T> {
+        if idx < self.len() {
+            return self.inner.insert(idx, b);
+        }
+        panic!("out of index");
     }
 
     /// Imitate the behavior of '.iter()'
@@ -150,6 +186,12 @@ where
         VecxIter {
             iter: self.inner.iter(),
         }
+    }
+
+    /// Clear all data.
+    #[inline(always)]
+    pub fn clear(&mut self) {
+        self.inner.clear();
     }
 }
 
@@ -167,7 +209,7 @@ pub struct ValueMut<'a, T>
 where
     T: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    mapx: &'a mut Vecx<T>,
+    hdr: &'a mut Vecx<T>,
     idx: usize,
     value: ManuallyDrop<T>,
 }
@@ -176,9 +218,9 @@ impl<'a, T> ValueMut<'a, T>
 where
     T: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    fn new(mapx: &'a mut Vecx<T>, idx: usize, value: T) -> Self {
+    fn new(hdr: &'a mut Vecx<T>, idx: usize, value: T) -> Self {
         ValueMut {
-            mapx,
+            hdr,
             idx,
             value: ManuallyDrop::new(value),
         }
@@ -201,8 +243,8 @@ where
         // This operation is safe within a `drop()`.
         // SEE: [**ManuallyDrop::take**](std::mem::ManuallyDrop::take)
         unsafe {
-            self.mapx
-                .update_value(self.idx, ManuallyDrop::take(&mut self.value))
+            self.hdr
+                .update(self.idx, ManuallyDrop::take(&mut self.value))
                 .unwrap();
         };
     }
@@ -313,7 +355,7 @@ where
     where
         S: serde::Serializer,
     {
-        let v = pnk!(bincode::serialize(&self.get_meta()));
+        let v = pnk!(bincode::serialize(&self.get_instance_cfg()));
         serializer.serialize_bytes(&v)
     }
 }
@@ -327,7 +369,7 @@ where
         D: serde::Deserializer<'de>,
     {
         deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
-            let meta = pnk!(bincode::deserialize::<MetaInfo>(&meta));
+            let meta = pnk!(bincode::deserialize::<InstanceCfg>(&meta));
             Vecx::from(meta)
         })
     }

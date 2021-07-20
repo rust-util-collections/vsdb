@@ -8,15 +8,14 @@
 mod test;
 
 use crate::{
-    mapx_oc::{self, MapxOC, MapxOCIter},
-    MetaInfo, SimpleVisitor,
+    basic::mapx_oc::{self, MapxOC, MapxOCIter},
+    common::{InstanceCfg, SimpleVisitor},
 };
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     cmp::Ordering,
     fmt,
-    hash::Hash,
     iter::{DoubleEndedIterator, Iterator},
     marker::PhantomData,
     mem::ManuallyDrop,
@@ -33,7 +32,6 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
@@ -50,7 +48,6 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
@@ -81,7 +78,6 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
@@ -97,8 +93,8 @@ where
     }
 
     // Get the database storage path
-    fn get_meta(&self) -> MetaInfo {
-        self.inner.get_meta()
+    fn get_instance_cfg(&self) -> InstanceCfg {
+        self.inner.get_instance_cfg()
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get(...)'
@@ -128,17 +124,6 @@ where
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
-    }
-
-    ///
-    /// # Safety
-    ///
-    /// Only make sense after a 'DataBase clear',
-    /// do NOT use this function except testing.
-    ///
-    #[inline(always)]
-    pub unsafe fn set_len(&mut self, len: u64) {
-        self.inner.set_len(len);
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
@@ -191,6 +176,12 @@ where
         let key = convert!(key);
         self.inner.unset_value(&key);
     }
+
+    /// Clear all data.
+    #[inline(always)]
+    pub fn clear(&mut self) {
+        self.inner.clear();
+    }
 }
 
 /*******************************************/
@@ -210,13 +201,12 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    mapx: &'a mut Mapx<K, V>,
+    hdr: &'a mut Mapx<K, V>,
     key: ManuallyDrop<K>,
     value: ManuallyDrop<V>,
 }
@@ -228,15 +218,14 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    fn new(mapx: &'a mut Mapx<K, V>, key: K, value: V) -> Self {
+    fn new(hdr: &'a mut Mapx<K, V>, key: K, value: V) -> Self {
         ValueMut {
-            mapx,
+            hdr,
             key: ManuallyDrop::new(key),
             value: ManuallyDrop::new(value),
         }
@@ -258,7 +247,6 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
@@ -268,7 +256,7 @@ where
         // This operation is safe within a `drop()`.
         // SEE: [**ManuallyDrop::take**](std::mem::ManuallyDrop::take)
         unsafe {
-            self.mapx.set_value(
+            self.hdr.set_value(
                 ManuallyDrop::take(&mut self.key),
                 ManuallyDrop::take(&mut self.value),
             );
@@ -283,7 +271,6 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
@@ -303,7 +290,6 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
@@ -321,7 +307,6 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
@@ -339,7 +324,6 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
@@ -357,7 +341,6 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
@@ -379,7 +362,7 @@ where
 /// Iter over [Mapx](self::Mapx).
 pub struct MapxIter<K, V>
 where
-    K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
+    K: Clone + PartialEq + Eq + Serialize + DeserializeOwned + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     iter: MapxOCIter<Vec<u8>, V>,
@@ -388,7 +371,7 @@ where
 
 impl<K, V> Iterator for MapxIter<K, V>
 where
-    K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
+    K: Clone + PartialEq + Eq + Serialize + DeserializeOwned + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     type Item = (K, V);
@@ -399,7 +382,7 @@ where
 
 impl<K, V> DoubleEndedIterator for MapxIter<K, V>
 where
-    K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
+    K: Clone + PartialEq + Eq + Serialize + DeserializeOwned + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
@@ -422,7 +405,6 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
@@ -432,7 +414,7 @@ where
     where
         S: serde::Serializer,
     {
-        let v = pnk!(bincode::serialize(&self.get_meta()));
+        let v = pnk!(bincode::serialize(&self.get_instance_cfg()));
         serializer.serialize_bytes(&v)
     }
 }
@@ -444,7 +426,6 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
@@ -455,7 +436,7 @@ where
         D: serde::Deserializer<'de>,
     {
         deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
-            let meta = pnk!(bincode::deserialize::<MetaInfo>(&meta));
+            let meta = pnk!(bincode::deserialize::<InstanceCfg>(&meta));
             Mapx {
                 inner: MapxOC::from(meta),
                 _pd: PhantomData,

@@ -8,7 +8,7 @@ mod backend;
 #[cfg(test)]
 mod test;
 
-use crate::{MetaInfo, SimpleVisitor, VSDB};
+use crate::common::{InstanceCfg, SimpleVisitor, VSDB};
 use ruc::*;
 use sled::IVec;
 use std::{
@@ -24,10 +24,10 @@ pub struct MapxRaw {
     in_disk: backend::MapxRaw,
 }
 
-impl From<MetaInfo> for MapxRaw {
-    fn from(mi: MetaInfo) -> Self {
+impl From<InstanceCfg> for MapxRaw {
+    fn from(cfg: InstanceCfg) -> Self {
         Self {
-            in_disk: backend::MapxRaw::from(mi),
+            in_disk: backend::MapxRaw::from(cfg),
         }
     }
 }
@@ -47,13 +47,13 @@ impl MapxRaw {
     #[inline(always)]
     pub fn new() -> Self {
         MapxRaw {
-            in_disk: backend::MapxRaw::must_new(VSDB.alloc_id()),
+            in_disk: backend::MapxRaw::must_new(VSDB.alloc_prefix()),
         }
     }
 
     // Get the database storage path
-    pub(crate) fn get_meta(&self) -> MetaInfo {
-        self.in_disk.get_meta()
+    pub(crate) fn get_instance_cfg(&self) -> InstanceCfg {
+        self.in_disk.get_instance_cfg()
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get(...)'
@@ -96,17 +96,6 @@ impl MapxRaw {
         self.in_disk.is_empty()
     }
 
-    ///
-    /// # Safety
-    ///
-    /// Only make sense after a 'DataBase clear',
-    /// do NOT use this function except testing.
-    ///
-    #[inline(always)]
-    pub unsafe fn set_len(&mut self, len: u64) {
-        self.in_disk.set_len(len);
-    }
-
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
     pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Option<IVec> {
@@ -146,6 +135,12 @@ impl MapxRaw {
     pub fn remove(&mut self, key: &[u8]) -> Option<IVec> {
         self.in_disk.remove(key)
     }
+
+    /// Clear all data.
+    #[inline(always)]
+    pub fn clear(&mut self) {
+        self.in_disk.clear();
+    }
 }
 
 /*******************************************/
@@ -159,15 +154,15 @@ impl MapxRaw {
 /// Returned by `<MapxRaw>.get_mut(...)`
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct ValueMut<'a> {
-    mapx_raw: &'a mut MapxRaw,
+    hdr: &'a mut MapxRaw,
     key: ManuallyDrop<IVec>,
     value: ManuallyDrop<IVec>,
 }
 
 impl<'a> ValueMut<'a> {
-    fn new(mapx_raw: &'a mut MapxRaw, key: IVec, value: IVec) -> Self {
+    fn new(hdr: &'a mut MapxRaw, key: IVec, value: IVec) -> Self {
         ValueMut {
-            mapx_raw,
+            hdr,
             key: ManuallyDrop::new(key),
             value: ManuallyDrop::new(value),
         }
@@ -187,7 +182,7 @@ impl<'a> Drop for ValueMut<'a> {
         // This operation is safe within a `drop()`.
         // SEE: [**ManuallyDrop::take**](std::mem::ManuallyDrop::take)
         unsafe {
-            self.mapx_raw.insert(
+            self.hdr.insert(
                 &ManuallyDrop::take(&mut self.key),
                 &ManuallyDrop::take(&mut self.value),
             );
@@ -252,7 +247,7 @@ impl<'a> Entry<'a> {
 // Begin of the implementation of Iter for MapxRaw //
 /************************************************/
 
-/// Iter over [MapxRaw](self::Mapxnk).
+/// Iter over [MapxRaw](self::MapxRaw).
 pub struct MapxRawIter {
     iter: backend::MapxRawIter,
 }
@@ -283,7 +278,7 @@ impl serde::Serialize for MapxRaw {
     where
         S: serde::Serializer,
     {
-        let v = pnk!(bincode::serialize(&self.get_meta()));
+        let v = pnk!(bincode::serialize(&self.get_instance_cfg()));
         serializer.serialize_bytes(&v)
     }
 }
@@ -294,7 +289,7 @@ impl<'de> serde::Deserialize<'de> for MapxRaw {
         D: serde::Deserializer<'de>,
     {
         deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
-            let meta = pnk!(bincode::deserialize::<MetaInfo>(&meta));
+            let meta = pnk!(bincode::deserialize::<InstanceCfg>(&meta));
             MapxRaw::from(meta)
         })
     }

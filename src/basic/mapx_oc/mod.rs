@@ -8,7 +8,7 @@ mod backend;
 #[cfg(test)]
 mod test;
 
-use crate::{MetaInfo, SimpleVisitor};
+use crate::common::{InstanceCfg, SimpleVisitor};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
@@ -30,14 +30,14 @@ where
     in_disk: backend::MapxOC<K, V>,
 }
 
-impl<K, V> From<MetaInfo> for MapxOC<K, V>
+impl<K, V> From<InstanceCfg> for MapxOC<K, V>
 where
     K: OrderConsistKey,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    fn from(mi: MetaInfo) -> Self {
+    fn from(cfg: InstanceCfg) -> Self {
         Self {
-            in_disk: backend::MapxOC::from(mi),
+            in_disk: backend::MapxOC::from(cfg),
         }
     }
 }
@@ -70,8 +70,8 @@ where
     }
 
     // Get the database storage path
-    pub(crate) fn get_meta(&self) -> MetaInfo {
-        self.in_disk.get_meta()
+    pub(crate) fn get_instance_cfg(&self) -> InstanceCfg {
+        self.in_disk.get_instance_cfg()
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get(...)'
@@ -114,17 +114,6 @@ where
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.in_disk.is_empty()
-    }
-
-    ///
-    /// # Safety
-    ///
-    /// Only make sense after a 'DataBase clear',
-    /// do NOT use this function except testing.
-    ///
-    #[inline(always)]
-    pub unsafe fn set_len(&mut self, len: u64) {
-        self.in_disk.set_len(len);
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
@@ -178,6 +167,12 @@ where
     pub fn unset_value(&mut self, key: &K) {
         self.in_disk.unset_value(key);
     }
+
+    /// Clear all data.
+    #[inline(always)]
+    pub fn clear(&mut self) {
+        self.in_disk.clear();
+    }
 }
 
 /*******************************************/
@@ -195,7 +190,7 @@ where
     K: OrderConsistKey,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    mapx_oc: &'a mut MapxOC<K, V>,
+    hdr: &'a mut MapxOC<K, V>,
     key: ManuallyDrop<K>,
     value: ManuallyDrop<V>,
 }
@@ -205,9 +200,9 @@ where
     K: OrderConsistKey,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    fn new(mapx_oc: &'a mut MapxOC<K, V>, key: K, value: V) -> Self {
+    fn new(hdr: &'a mut MapxOC<K, V>, key: K, value: V) -> Self {
         ValueMut {
-            mapx_oc,
+            hdr,
             key: ManuallyDrop::new(key),
             value: ManuallyDrop::new(value),
         }
@@ -231,7 +226,7 @@ where
         // This operation is safe within a `drop()`.
         // SEE: [**ManuallyDrop::take**](std::mem::ManuallyDrop::take)
         unsafe {
-            self.mapx_oc.set_value(
+            self.hdr.set_value(
                 ManuallyDrop::take(&mut self.key),
                 ManuallyDrop::take(&mut self.value),
             );
@@ -342,7 +337,7 @@ where
 // Begin of the implementation of Iter for MapxOC //
 /************************************************/
 
-/// Iter over [MapxOC](self::Mapxnk).
+/// Iter over [MapxOC](self::MapxOC).
 pub struct MapxOCIter<K, V>
 where
     K: OrderConsistKey,
@@ -389,7 +384,7 @@ where
     where
         S: serde::Serializer,
     {
-        let v = pnk!(bincode::serialize(&self.get_meta()));
+        let v = pnk!(bincode::serialize(&self.get_instance_cfg()));
         serializer.serialize_bytes(&v)
     }
 }
@@ -404,7 +399,7 @@ where
         D: serde::Deserializer<'de>,
     {
         deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
-            let meta = pnk!(bincode::deserialize::<MetaInfo>(&meta));
+            let meta = pnk!(bincode::deserialize::<InstanceCfg>(&meta));
             MapxOC::from(meta)
         })
     }
@@ -562,8 +557,5 @@ macro_rules! impl_repeat {
 
 impl_repeat!(
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-    24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
-    45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65,
-    66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86,
-    87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100
+    24, 25, 26, 27, 28, 29, 30, 31, 32
 );
