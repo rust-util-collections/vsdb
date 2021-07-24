@@ -19,7 +19,7 @@ fn gen_sample(idx: usize) -> SampleBlock {
 }
 
 #[test]
-fn t_mapx() {
+fn basic_cases() {
     let cnt = 200;
 
     let hdr = {
@@ -43,10 +43,10 @@ fn t_mapx() {
 
         assert_eq!(cnt, hdr_i.len());
 
-        pnk!(bincode::serialize(&hdr_i))
+        pnk!(bcs::to_bytes(&hdr_i))
     };
 
-    let mut reloaded = pnk!(bincode::deserialize::<Mapx<usize, SampleBlock>>(&hdr));
+    let mut reloaded = pnk!(bcs::from_bytes::<Mapx<usize, SampleBlock>>(&hdr));
 
     assert_eq!(cnt, reloaded.len());
 

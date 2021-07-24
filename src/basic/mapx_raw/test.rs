@@ -5,7 +5,7 @@
 use super::*;
 
 #[test]
-fn t_mapx_raw() {
+fn basic_cases() {
     let cnt = 200;
 
     let hdr = {
@@ -29,10 +29,10 @@ fn t_mapx_raw() {
 
         assert_eq!(cnt, hdr_i.len());
 
-        pnk!(bincode::serialize(&hdr_i))
+        pnk!(bcs::to_bytes(&hdr_i))
     };
 
-    let mut reloaded = pnk!(bincode::deserialize::<MapxRaw>(&hdr));
+    let mut reloaded = pnk!(bcs::from_bytes::<MapxRaw>(&hdr));
 
     assert_eq!(cnt, reloaded.len());
 

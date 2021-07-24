@@ -2,7 +2,7 @@
 //! # Disk Storage Implementation
 //!
 
-use crate::common::{InstanceCfg, Prefix, PREFIX_SIZ, VSDB};
+use crate::common::{InstanceCfg, Prefix, PrefixBytes, PREFIX_SIZ, VSDB};
 use ruc::*;
 use sled::{IVec, Iter};
 use std::{
@@ -12,19 +12,29 @@ use std::{
 
 // To solve the problem of unlimited memory usage,
 // use this to replace the original in-memory `BTreeMap<_, _>`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Eq, Debug)]
 pub(super) struct MapxRaw {
-    cnter: u64,
     // the unique ID of each instance
-    prefix: Vec<u8>,
+    prefix: PrefixBytes,
+    cnter: u64,
     idx: usize,
+}
+
+impl PartialEq for MapxRaw {
+    fn eq(&self, other: &MapxRaw) -> bool {
+        self.cnter == other.cnter
+            && self
+                .iter()
+                .zip(other.iter())
+                .all(|((k, v), (ko, vo))| k == ko && v == vo)
+    }
 }
 
 impl From<InstanceCfg> for MapxRaw {
     fn from(cfg: InstanceCfg) -> Self {
         Self {
-            cnter: cfg.item_cnt,
             prefix: cfg.prefix,
+            cnter: cfg.item_cnt,
             idx: cfg.data_set_idx,
         }
     }
@@ -33,8 +43,8 @@ impl From<InstanceCfg> for MapxRaw {
 impl From<&MapxRaw> for InstanceCfg {
     fn from(x: &MapxRaw) -> Self {
         Self {
+            prefix: x.prefix,
             item_cnt: x.cnter,
-            prefix: x.prefix.clone(),
             data_set_idx: x.idx,
         }
     }
@@ -55,7 +65,7 @@ impl MapxRaw {
         // but the reverse logic can NOT be guaranteed.
         let idx = (prefix % VSDB.data_set.len() as Prefix) as usize;
 
-        let prefix = prefix.to_be_bytes().to_vec();
+        let prefix = prefix.to_be_bytes();
 
         assert!(VSDB.data_set[idx]
             .scan_prefix(prefix.as_slice())
@@ -63,8 +73,8 @@ impl MapxRaw {
             .is_none());
 
         MapxRaw {
-            cnter: 0,
             prefix,
+            cnter: 0,
             idx,
         }
     }
@@ -74,10 +84,9 @@ impl MapxRaw {
         InstanceCfg::from(self)
     }
 
-    // Imitate the behavior of 'BTreeMap<_>.get(...)'
     #[inline(always)]
     pub(super) fn get(&self, key: &[u8]) -> Option<IVec> {
-        let mut k = self.prefix.clone();
+        let mut k = self.prefix.to_vec();
         k.extend_from_slice(key);
         VSDB.data_set[self.idx].get(k).unwrap()
     }
@@ -85,7 +94,7 @@ impl MapxRaw {
     // less or equal
     #[inline(always)]
     pub(super) fn get_le(&self, key: &[u8]) -> Option<(IVec, IVec)> {
-        let mut k = self.prefix.clone();
+        let mut k = self.prefix.to_vec();
         k.extend_from_slice(key);
 
         VSDB.data_set[self.idx]
@@ -98,7 +107,7 @@ impl MapxRaw {
     // ge: great or equal
     #[inline(always)]
     pub(super) fn get_ge(&self, key: &[u8]) -> Option<(IVec, IVec)> {
-        let mut k = self.prefix.clone();
+        let mut k = self.prefix.to_vec();
         k.extend_from_slice(key);
 
         VSDB.data_set[self.idx]
@@ -108,7 +117,6 @@ impl MapxRaw {
             .map(|(k, v)| (k.subslice(PREFIX_SIZ, k.len() - PREFIX_SIZ), v))
     }
 
-    // Imitate the behavior of 'BTreeMap<_>.len()'.
     #[inline(always)]
     pub(super) fn len(&self) -> usize {
         debug_assert_eq!(
@@ -125,10 +133,9 @@ impl MapxRaw {
         0 == self.cnter
     }
 
-    // Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
     pub(super) fn insert(&mut self, key: &[u8], value: &[u8]) -> Option<IVec> {
-        let mut k = self.prefix.clone();
+        let mut k = self.prefix.to_vec();
         k.extend_from_slice(key);
 
         match VSDB.data_set[self.idx].insert(k, value).unwrap() {
@@ -140,7 +147,6 @@ impl MapxRaw {
         }
     }
 
-    // Imitate the behavior of '.iter()'
     #[inline(always)]
     pub(super) fn iter(&self) -> MapxRawIter {
         let i = VSDB.data_set[self.idx].scan_prefix(self.prefix.as_slice());
@@ -150,7 +156,7 @@ impl MapxRaw {
     /// range(start..end)
     #[inline(always)]
     pub fn range<'a, R: RangeBounds<&'a [u8]>>(&'a self, bounds: R) -> MapxRawIter {
-        let mut b_lo = self.prefix.clone();
+        let mut b_lo = self.prefix.to_vec();
         let l = match bounds.start_bound() {
             Bound::Included(lo) => {
                 b_lo.extend_from_slice(lo);
@@ -163,7 +169,7 @@ impl MapxRaw {
             Bound::Unbounded => Bound::Unbounded,
         };
 
-        let mut b_hi = self.prefix.clone();
+        let mut b_hi = self.prefix.to_vec();
         let h = match bounds.end_bound() {
             Bound::Included(hi) => {
                 b_hi.extend_from_slice(hi);
@@ -182,13 +188,13 @@ impl MapxRaw {
     }
 
     pub(super) fn contains_key(&self, key: &[u8]) -> bool {
-        let mut k = self.prefix.clone();
+        let mut k = self.prefix.to_vec();
         k.extend_from_slice(key);
         pnk!(VSDB.data_set[self.idx].contains_key(k))
     }
 
     pub(super) fn remove(&mut self, key: &[u8]) -> Option<IVec> {
-        let mut k = self.prefix.clone();
+        let mut k = self.prefix.to_vec();
         k.extend_from_slice(key);
 
         match VSDB.data_set[self.idx].remove(k).unwrap() {

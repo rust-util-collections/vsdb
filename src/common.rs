@@ -1,3 +1,7 @@
+//!
+//! # Common components
+//!
+
 use {
     core::{fmt, result::Result as CoreResult},
     lazy_static::lazy_static,
@@ -30,19 +34,19 @@ macro_rules! parse_int {
 }
 
 pub(crate) type Prefix = u64;
+pub(crate) type PrefixBytes = [u8; PREFIX_SIZ];
 pub(crate) const PREFIX_SIZ: usize = size_of::<Prefix>();
 
 pub(crate) struct VsDB {
     meta: DB,
     pub(crate) data_set: Vec<Tree>,
     // key of the prefix allocator in the 'meta'
-    prefix_allocator: [u8; 1],
+    prefix_allocator: PrefixAllocator,
 }
 
 impl VsDB {
     fn new() -> Result<Self> {
         const DATA_SET_NUM: u64 = 4;
-        const PREFIX_ALLOCATOR: [u8; 1] = 0_u8.to_be_bytes();
 
         let meta = sled_open().c(d!())?;
 
@@ -50,26 +54,23 @@ impl VsDB {
             .map(|idx| meta.open_tree(idx.to_be_bytes()).c(d!()))
             .collect::<Result<Vec<_>>>()?;
 
-        if meta.get(PREFIX_ALLOCATOR).c(d!())?.is_none() {
-            meta.insert(PREFIX_ALLOCATOR, Prefix::MIN.to_be_bytes().as_slice())
-                .c(d!())?;
+        let (prefix_allocator, initial_value) = PrefixAllocator::init();
+
+        if meta.get(prefix_allocator.key).c(d!())?.is_none() {
+            meta.insert(prefix_allocator.key, initial_value).c(d!())?;
         }
 
         Ok(VsDB {
             meta,
             data_set,
-            prefix_allocator: PREFIX_ALLOCATOR,
+            prefix_allocator,
         })
     }
 
     pub(crate) fn alloc_prefix(&self) -> Prefix {
-        let incr = |id_base: Option<&[u8]>| -> Option<Vec<u8>> {
-            id_base.map(|bytes| (parse_int!(bytes) + 1).to_be_bytes().to_vec())
-        };
-
         parse_int!(self
             .meta
-            .update_and_fetch(self.prefix_allocator, incr)
+            .update_and_fetch(self.prefix_allocator.key, PrefixAllocator::next)
             .unwrap()
             .unwrap()
             .as_ref())
@@ -79,6 +80,25 @@ impl VsDB {
         (0..self.data_set.len()).for_each(|i| {
             self.data_set[i].flush().unwrap();
         });
+    }
+}
+
+struct PrefixAllocator {
+    key: [u8; 1],
+}
+
+impl PrefixAllocator {
+    const fn init() -> (Self, PrefixBytes) {
+        (
+            Self {
+                key: 0_u8.to_be_bytes(),
+            },
+            Prefix::MIN.to_be_bytes(),
+        )
+    }
+
+    fn next(base: Option<&[u8]>) -> Option<[u8; PREFIX_SIZ]> {
+        base.map(|bytes| (parse_int!(bytes) + 1).to_be_bytes())
     }
 }
 
@@ -131,7 +151,7 @@ pub fn vsdb_flush() {
 
 #[derive(Deserialize, Serialize)]
 pub(crate) struct InstanceCfg {
-    pub(crate) prefix: Vec<u8>,
+    pub(crate) prefix: PrefixBytes,
     pub(crate) item_cnt: u64,
     pub(crate) data_set_idx: usize,
 }

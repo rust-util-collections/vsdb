@@ -25,17 +25,17 @@ use std::{
 /// use this to replace the original in-memory 'Vec'.
 ///
 /// - Each time the program is started, a new database is created
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug)]
 pub struct Vecx<T>
 where
-    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+    T: Serialize + DeserializeOwned + fmt::Debug,
 {
     inner: MapxOC<usize, T>,
 }
 
 impl<T> From<InstanceCfg> for Vecx<T>
 where
-    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+    T: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn from(cfg: InstanceCfg) -> Self {
         Self {
@@ -46,7 +46,7 @@ where
 
 impl<T> Default for Vecx<T>
 where
-    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+    T: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn default() -> Self {
         Self::new()
@@ -59,7 +59,7 @@ where
 
 impl<T> Vecx<T>
 where
-    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+    T: Serialize + DeserializeOwned + fmt::Debug,
 {
     /// Create an instance.
     #[inline(always)]
@@ -75,8 +75,6 @@ where
     }
 
     /// Imitate the behavior of 'Vec<_>.get(...)'
-    ///
-    /// Any faster/better choice other than JSON ?
     #[inline(always)]
     pub fn get(&self, idx: usize) -> Option<T> {
         self.inner.get(&idx)
@@ -207,7 +205,7 @@ where
 #[derive(Debug)]
 pub struct ValueMut<'a, T>
 where
-    T: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    T: Serialize + DeserializeOwned + fmt::Debug,
 {
     hdr: &'a mut Vecx<T>,
     idx: usize,
@@ -216,7 +214,7 @@ where
 
 impl<'a, T> ValueMut<'a, T>
 where
-    T: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    T: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn new(hdr: &'a mut Vecx<T>, idx: usize, value: T) -> Self {
         ValueMut {
@@ -225,11 +223,6 @@ where
             value: ManuallyDrop::new(value),
         }
     }
-
-    /// Clone the inner value.
-    pub fn clone_inner(self) -> T {
-        ManuallyDrop::into_inner(self.value.clone())
-    }
 }
 
 ///
@@ -237,7 +230,7 @@ where
 ///
 impl<'a, T> Drop for ValueMut<'a, T>
 where
-    T: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    T: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn drop(&mut self) {
         // This operation is safe within a `drop()`.
@@ -252,7 +245,7 @@ where
 
 impl<'a, T> Deref for ValueMut<'a, T>
 where
-    T: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    T: Serialize + DeserializeOwned + fmt::Debug,
 {
     type Target = T;
 
@@ -263,44 +256,10 @@ where
 
 impl<'a, T> DerefMut for ValueMut<'a, T>
 where
-    T: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    T: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.value
-    }
-}
-
-impl<'a, T> PartialEq for ValueMut<'a, T>
-where
-    T: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
-{
-    fn eq(&self, other: &ValueMut<'a, T>) -> bool {
-        self.value == other.value
-    }
-}
-
-impl<'a, T> PartialEq<T> for ValueMut<'a, T>
-where
-    T: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
-{
-    fn eq(&self, other: &T) -> bool {
-        self.value.deref() == other
-    }
-}
-
-impl<'a, T> PartialOrd<T> for ValueMut<'a, T>
-where
-    T: Default
-        + Clone
-        + PartialEq
-        + Ord
-        + PartialOrd
-        + Serialize
-        + DeserializeOwned
-        + fmt::Debug,
-{
-    fn partial_cmp(&self, other: &T) -> Option<Ordering> {
-        self.value.deref().partial_cmp(other)
     }
 }
 
@@ -315,14 +274,14 @@ where
 /// Iter over [Vecx](self::Vecx).
 pub struct VecxIter<T>
 where
-    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+    T: Serialize + DeserializeOwned + fmt::Debug,
 {
     iter: MapxOCIter<usize, T>,
 }
 
 impl<T> Iterator for VecxIter<T>
 where
-    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+    T: Serialize + DeserializeOwned + fmt::Debug,
 {
     type Item = T;
     fn next(&mut self) -> Option<Self::Item> {
@@ -332,7 +291,7 @@ where
 
 impl<T> DoubleEndedIterator for VecxIter<T>
 where
-    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+    T: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back().map(|v| v.1)
@@ -349,27 +308,27 @@ where
 
 impl<'a, T> serde::Serialize for Vecx<T>
 where
-    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+    T: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        let v = pnk!(bincode::serialize(&self.get_instance_cfg()));
+        let v = pnk!(bcs::to_bytes(&self.get_instance_cfg()));
         serializer.serialize_bytes(&v)
     }
 }
 
 impl<'de, T> serde::Deserialize<'de> for Vecx<T>
 where
-    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+    T: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
-            let meta = pnk!(bincode::deserialize::<InstanceCfg>(&meta));
+            let meta = pnk!(bcs::from_bytes::<InstanceCfg>(&meta));
             Vecx::from(meta)
         })
     }

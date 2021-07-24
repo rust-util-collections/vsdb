@@ -21,7 +21,7 @@ fn gen_sample(idx: usize) -> SampleBlock {
 }
 
 #[test]
-fn t_vecx() {
+fn basic_cases() {
     let cnt = 200;
 
     let hdr = {
@@ -41,10 +41,10 @@ fn t_vecx() {
 
         assert_eq!(cnt, hdr.len());
 
-        pnk!(bincode::serialize(&hdr))
+        pnk!(bcs::to_bytes(&hdr))
     };
 
-    let mut reloaded = pnk!(bincode::deserialize::<Vecx<SampleBlock>>(&hdr));
+    let mut reloaded = pnk!(bcs::from_bytes::<Vecx<SampleBlock>>(&hdr));
 
     (0..cnt).for_each(|i| {
         assert_eq!(i, reloaded.get(i).unwrap().idx);
