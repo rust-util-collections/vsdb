@@ -274,17 +274,17 @@ pub(crate) fn sled_open(path: &str, is_tmp: bool) -> Result<sled::Db> {
     #[cfg(feature = "compress")]
     let cfg = cfg.use_compression(true).compression_factor(15);
 
-    cfg.open().c(d!())
+    cfg.open().c(d!(path.to_owned()))
 }
 
 #[inline(always)]
 pub(crate) fn read_db_len(path: &str) -> Result<usize> {
-    fs::read(path).c(d!()).map(|bytes| {
+    fs::read(path).c(d!(path.to_owned())).map(|bytes| {
         usize::from_le_bytes(bytes[..mem::size_of::<usize>()].try_into().unwrap())
     })
 }
 
 #[inline(always)]
 pub(crate) fn write_db_len(path: &str, len: usize) -> Result<()> {
-    fs::write(path, usize::to_le_bytes(len)).c(d!())
+    fs::write(path, usize::to_le_bytes(len)).c(d!(path.to_owned()))
 }

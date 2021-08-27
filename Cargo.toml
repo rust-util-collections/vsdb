@@ -15,7 +15,7 @@ lazy_static = { version = "1.4.0" }
 sled = { git = "https://github.com/FindoraNetwork/sled.git", branch = "main" }
 
 [dev-dependencies]
-criterion = "0.3"
+criterion = "0.3.5"
 
 [features]
 default = []
