@@ -12,7 +12,7 @@ serde = { version = "1.0.124", features = ["derive"] }
 ruc = { git = "https://github.com/FindoraNetwork/RUC.git", branch = "master" }
 lazy_static = { version = "1.4.0" }
 
-sled = "0.34.6"
+sled = { git = "https://github.com/FindoraNetwork/sled.git", branch = "main" }
 
 [dev-dependencies]
 criterion = "0.3"

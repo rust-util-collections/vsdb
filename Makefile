@@ -1,5 +1,7 @@
 all: lint
 
+export CARGO_NET_GIT_FETCH_WITH_CLI = true
+
 build:
 	cargo build
 
@@ -23,3 +25,6 @@ bench:
 
 fmt:
 	@ cargo fmt
+
+update:
+	cargo update
