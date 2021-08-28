@@ -264,7 +264,7 @@ pub(crate) fn sled_open(path: &str, is_tmp: bool) -> Result<sled::Db> {
     let mut cfg = sled::Config::default()
         .path(path)
         .mode(sled::Mode::HighThroughput)
-        .cache_capacity(200_000_000)
+        .cache_capacity(20_000_000)
         .flush_every_ms(Some(3000));
 
     if is_tmp {
