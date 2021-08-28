@@ -3,9 +3,10 @@
 //!
 
 use crate::helper::*;
+use rocksdb::{DBIterator, IteratorMode, DB};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
-use std::{convert::TryInto, fs, iter::Iterator, marker::PhantomData, mem};
+use std::{convert::TryInto, fs, iter::Iterator, marker::PhantomData, mem, sync::Arc};
 
 /// To solve the problem of unlimited memory usage,
 /// use this to replace the original in-memory `Vec<_>`.
@@ -17,7 +18,7 @@ pub(super) struct Vecx<T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + std::fmt::Debug,
 {
-    db: sled::Db,
+    db: Arc<DB>,
     data_path: String,
     cnter_path: String,
     cnter: usize,
@@ -36,10 +37,10 @@ where
     /// it will use it directly;
     /// Or it will create a new one.
     #[inline(always)]
-    pub(super) fn load_or_create(path: &str, is_tmp: bool) -> Result<Self> {
-        let db = sled_open(path, is_tmp).c(d!())?;
+    pub(super) fn load_or_create(path: &str) -> Result<Self> {
+        let db = rocksdb_open(path).c(d!())?;
         let cnter_path = format!("{}/____cnter____", path);
-        let cnter = if db.iter().next().is_none() {
+        let cnter = if db.iterator(IteratorMode::Start).next().is_none() {
             fs::File::create(&cnter_path)
                 .c(d!())
                 .and_then(|_| write_db_len(&cnter_path, 0).c(d!()))
@@ -49,7 +50,7 @@ where
         };
 
         Ok(Vecx {
-            db,
+            db: Arc::new(db),
             data_path: path.to_owned(),
             cnter_path,
             cnter,
@@ -76,21 +77,24 @@ where
 
     /// Imitate the behavior of 'Vec<_>.last()'
     pub(super) fn last(&self) -> Option<T> {
-        pnk!(self.db.last()).map(|(_, v)| pnk!(serde_json::from_slice(&v)))
+        self.db
+            .iterator(IteratorMode::End)
+            .next()
+            .map(|(_, v)| pnk!(serde_json::from_slice(&v)))
     }
 
     /// Imitate the behavior of 'Vec<_>.len()'
     #[inline(always)]
     pub(super) fn len(&self) -> usize {
-        debug_assert_eq!(self.db.len(), self.cnter);
         debug_assert_eq!(pnk!(read_db_len(&self.cnter_path)), self.cnter);
+        debug_assert_eq!(self.db.iterator(IteratorMode::Start).count(), self.cnter);
         self.cnter
     }
 
     /// A helper func
     #[inline(always)]
     pub(super) fn is_empty(&self) -> bool {
-        self.iter().next().is_none()
+        self.db.iterator(IteratorMode::Start).next().is_none()
     }
 
     /// Imitate the behavior of 'Vec<_>.push(...)'
@@ -98,9 +102,9 @@ where
     pub(super) fn push(&mut self, b: T) {
         let idx = self.cnter;
         let value = pnk!(serde_json::to_vec(&b));
-        pnk!(self.db.insert(idx.to_le_bytes(), value));
+        pnk!(self.db.put(idx.to_le_bytes(), value));
 
-        // There is no `remove` like methods provided,
+        // There has no `remove`-like methods provided,
         // so we can increase this value directly.
         self.cnter += 1;
 
@@ -111,10 +115,10 @@ where
     #[inline(always)]
     pub(super) fn insert(&mut self, idx: usize, b: T) {
         let value = pnk!(serde_json::to_vec(&b));
-        pnk!(self.db.insert(idx.to_le_bytes(), value));
+        pnk!(self.db.put(idx.to_le_bytes(), value));
 
         if idx >= self.cnter {
-            // There is no `remove` like methods provided,
+            // There has no `remove` like methods provided,
             // so we can increase this value directly.
             self.cnter += 1;
 
@@ -124,9 +128,10 @@ where
 
     /// Imitate the behavior of '.iter()'
     #[inline(always)]
-    pub(super) fn iter(&self) -> VecxIter<T> {
+    pub(super) fn iter(&self) -> VecxIter<'_, T> {
         VecxIter {
-            iter: self.db.iter(),
+            iter: self.db.iterator(IteratorMode::Start),
+            iter_rev: self.db.iterator(IteratorMode::End),
             _pd: PhantomData,
         }
     }
@@ -147,21 +152,22 @@ where
 /************************************************/
 
 /// Iter over [Vecx](self::Vecx).
-pub(super) struct VecxIter<T>
+pub(super) struct VecxIter<'a, T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + std::fmt::Debug,
 {
-    pub(super) iter: sled::Iter,
+    pub(super) iter: DBIterator<'a>,
+    pub(super) iter_rev: DBIterator<'a>,
     _pd: PhantomData<T>,
 }
 
-impl<T> Iterator for VecxIter<T>
+impl<'a, T> Iterator for VecxIter<'a, T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + std::fmt::Debug,
 {
     type Item = (usize, T);
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next().map(|v| v.ok()).flatten().map(|(idx, v)| {
+        self.iter.next().map(|(idx, v)| {
             (
                 usize::from_le_bytes(idx[..mem::size_of::<usize>()].try_into().unwrap()),
                 pnk!(serde_json::from_slice(&v)),
@@ -170,27 +176,21 @@ where
     }
 }
 
-impl<T> DoubleEndedIterator for VecxIter<T>
+impl<'a, T> DoubleEndedIterator for VecxIter<'a, T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + std::fmt::Debug,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.iter
-            .next_back()
-            .map(|v| v.ok())
-            .flatten()
-            .map(|(idx, v)| {
-                (
-                    usize::from_le_bytes(
-                        idx[..mem::size_of::<usize>()].try_into().unwrap(),
-                    ),
-                    pnk!(serde_json::from_slice(&v)),
-                )
-            })
+        self.iter_rev.next().map(|(idx, v)| {
+            (
+                usize::from_le_bytes(idx[..mem::size_of::<usize>()].try_into().unwrap()),
+                pnk!(serde_json::from_slice(&v)),
+            )
+        })
     }
 }
 
-impl<T> ExactSizeIterator for VecxIter<T> where
+impl<'a, T> ExactSizeIterator for VecxIter<'a, T> where
     T: PartialEq + Clone + Serialize + DeserializeOwned + std::fmt::Debug
 {
 }

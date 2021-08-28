@@ -12,7 +12,7 @@ serde = { version = "1.0.124", features = ["derive"] }
 ruc = { git = "https://github.com/FindoraNetwork/RUC.git", branch = "master" }
 lazy_static = { version = "1.4.0" }
 
-sled = { git = "https://github.com/FindoraNetwork/sled.git", branch = "main" }
+rocksdb = "0.17.0"
 
 [dev-dependencies]
 criterion = "0.3.5"
@@ -20,7 +20,7 @@ criterion = "0.3.5"
 [features]
 default = []
 debug_env = []
-compress = ["sled/compression"]
+compress = ["rocksdb/lz4"]
 
 [[bench]]
 name = "cache"

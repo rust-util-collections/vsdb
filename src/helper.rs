@@ -3,6 +3,7 @@
 //!
 
 use lazy_static::lazy_static;
+use rocksdb::{DBCompressionType, Options, DB};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{borrow::Cow, cmp::Ordering, convert::TryInto, env, fmt, fs, mem, ops::Deref};
@@ -44,56 +45,51 @@ macro_rules! unique_path {
 #[macro_export]
 macro_rules! new_vecx {
     (@$ty: ty, $in_mem_cnt: expr) => {
-        $crate::new_vecx_custom!($ty, $in_mem_cnt, false)
+        $crate::new_vecx_custom!($ty, $in_mem_cnt)
     };
     (@$ty: ty) => {
-        $crate::new_vecx_custom!($ty, false)
+        $crate::new_vecx_custom!($ty)
     };
     ($path:expr) => {
-        $crate::new_vecx_custom!($path, false)
+        $crate::new_vecx_custom!($path)
     };
     ($path:expr, $in_mem_cnt: expr) => {
-        $crate::new_vecx_custom!($path, $in_mem_cnt, false)
+        $crate::new_vecx_custom!($path, $in_mem_cnt)
     };
     () => {
-        $crate::new_vecx_custom!(false)
+        $crate::new_vecx_custom!()
     };
 }
 
 /// A helper for creating Vecx.
 #[macro_export]
 macro_rules! new_vecx_custom {
-    (@$ty: ty, $in_mem_cnt: expr, $is_tmp: expr) => {{
+    (@$ty: ty, $in_mem_cnt: expr) => {{
         let obj: $crate::Vecx<$ty> = $crate::try_twice!($crate::Vecx::new(
             &$crate::unique_path!(),
             Some($in_mem_cnt),
-            $is_tmp,
         ));
         obj
     }};
-    (@$ty: ty, $is_tmp: expr) => {{
-        let obj: $crate::Vecx<$ty> = $crate::try_twice!($crate::Vecx::new(
-            &$crate::unique_path!(),
-            None,
-            $is_tmp
-        ));
+    (@$ty: ty) => {{
+        let obj: $crate::Vecx<$ty> =
+            $crate::try_twice!($crate::Vecx::new(&$crate::unique_path!(), None,));
         obj
     }};
-    ($path: expr, $in_mem_cnt: expr, $is_tmp: expr) => {
-        $crate::try_twice!($crate::Vecx::new($path, Some($in_mem_cnt), $is_tmp,))
+    ($path: expr, $in_mem_cnt: expr) => {
+        $crate::try_twice!($crate::Vecx::new($path, Some($in_mem_cnt)))
     };
-    ($path: expr, $is_tmp: expr) => {
-        $crate::try_twice!($crate::Vecx::new($path, None, $is_tmp,))
+    ($path: expr) => {
+        $crate::try_twice!($crate::Vecx::new($path, None))
     };
-    (%$in_mem_cnt: expr, $is_tmp: expr) => {
+    (%$in_mem_cnt: expr) => {
         $crate::try_twice!($crate::Vecx::new(
             &$crate::unique_path!(),
             Some($in_mem_cnt),
-            $is_tmp
         ))
     };
-    ($is_tmp: expr) => {
-        $crate::try_twice!($crate::Vecx::new(&$crate::unique_path!(), None, $is_tmp))
+    () => {
+        $crate::try_twice!($crate::Vecx::new(&$crate::unique_path!(), None))
     };
 }
 
@@ -101,56 +97,46 @@ macro_rules! new_vecx_custom {
 #[macro_export]
 macro_rules! new_mapx {
     (@$ty: ty, $in_mem_cnt: expr) => {
-        $crate::new_mapx_custom!($ty, $in_mem_cnt, false)
+        $crate::new_mapx_custom!($ty, $in_mem_cnt)
     };
     (@$ty: ty) => {
-        $crate::new_mapx_custom!($ty, false)
+        $crate::new_mapx_custom!($ty)
     };
     ($path:expr, $in_mem_cnt: expr) => {
-        $crate::new_mapx_custom!($path, $in_mem_cnt, false)
+        $crate::new_mapx_custom!($path, $in_mem_cnt)
     };
     ($path:expr) => {
-        $crate::new_mapx_custom!($path, false)
+        $crate::new_mapx_custom!($path)
     };
     () => {
-        $crate::new_mapx_custom!(false)
+        $crate::new_mapx_custom!()
     };
 }
 
 /// A helper for creating Mapx.
 #[macro_export]
 macro_rules! new_mapx_custom {
-    (@$ty: ty, $in_mem_cnt: expr, $is_tmp: expr) => {{
-        let obj: $crate::Mapx<$ty> = $crate::try_twice!($crate::Mapx::new(
-            &$crate::unique_path!(),
-            $in_mem_cnt,
-            $is_tmp,
-        ));
+    (@$ty: ty, $in_mem_cnt: expr) => {{
+        let obj: $crate::Mapx<$ty> =
+            $crate::try_twice!($crate::Mapx::new(&$crate::unique_path!(), $in_mem_cnt));
         obj
     }};
-    (@$ty: ty, $is_tmp: expr) => {{
-        let obj: $crate::Mapx<$ty> = $crate::try_twice!($crate::Mapx::new(
-            &$crate::unique_path!(),
-            None,
-            $is_tmp,
-        ));
+    (@$ty: ty) => {{
+        let obj: $crate::Mapx<$ty> =
+            $crate::try_twice!($crate::Mapx::new(&$crate::unique_path!(), None));
         obj
     }};
-    ($path: expr, $in_mem_cnt: expr, $is_tmp: expr) => {
-        $crate::try_twice!($crate::Mapx::new(&*$path, $in_mem_cnt, $is_tmp,))
+    ($path: expr, $in_mem_cnt: expr) => {
+        $crate::try_twice!($crate::Mapx::new(&*$path, $in_mem_cnt))
     };
-    ($path: expr, $is_tmp: expr) => {
-        $crate::try_twice!($crate::Mapx::new(&*$path, None, $is_tmp,))
+    ($path: expr) => {
+        $crate::try_twice!($crate::Mapx::new(&*$path, None))
     };
-    (&$in_mem_cnt: expr, $is_tmp: expr) => {
-        $crate::try_twice!($crate::Mapx::new(
-            &$crate::unique_path!(),
-            $in_mem_cnt,
-            $is_tmp
-        ))
+    (&$in_mem_cnt: expr) => {
+        $crate::try_twice!($crate::Mapx::new(&$crate::unique_path!(), $in_mem_cnt))
     };
-    ($is_tmp: expr) => {
-        $crate::try_twice!($crate::Mapx::new(&$crate::unique_path!(), None, $is_tmp,))
+    () => {
+        $crate::try_twice!($crate::Mapx::new(&$crate::unique_path!(), None))
     };
 }
 
@@ -260,21 +246,12 @@ where
 //////////////////////////////////////////////////////////////////////////////
 
 #[inline(always)]
-pub(crate) fn sled_open(path: &str, is_tmp: bool) -> Result<sled::Db> {
-    let mut cfg = sled::Config::default()
-        .path(path)
-        .mode(sled::Mode::HighThroughput)
-        .cache_capacity(20_000_000)
-        .flush_every_ms(Some(3000));
+pub(crate) fn rocksdb_open(path: &str) -> Result<DB> {
+    let mut cfg = Options::default();
+    cfg.create_if_missing(true);
+    cfg.set_compression_type(DBCompressionType::Lz4);
 
-    if is_tmp {
-        cfg = cfg.temporary(true);
-    }
-
-    #[cfg(feature = "compress")]
-    let cfg = cfg.use_compression(true).compression_factor(15);
-
-    cfg.open().c(d!(path.to_owned()))
+    DB::open(&cfg, path).c(d!())
 }
 
 #[inline(always)]

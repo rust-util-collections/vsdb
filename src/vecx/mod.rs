@@ -58,26 +58,12 @@ where
 {
     /// Create an instance.
     #[inline(always)]
-    pub fn new(path: &str, imc: Option<usize>, is_tmp: bool) -> Result<Self> {
-        let in_disk = backend::Vecx::load_or_create(path, is_tmp).c(d!())?;
-        let mut in_mem = BTreeMap::new();
-
-        if !in_disk.is_empty() {
-            let mut lefter = IN_MEM_CNT;
-            let mut data = in_disk.iter().rev();
-            while lefter > 0 {
-                if let Some((idx, v)) = data.next() {
-                    in_mem.insert(idx, v);
-                } else {
-                    break;
-                }
-                lefter -= 1;
-            }
-        }
-
+    pub fn new(path: &str, imc: Option<usize>) -> Result<Self> {
+        let in_disk = backend::Vecx::load_or_create(path).c(d!())?;
+        let in_mem_cnt = imc.unwrap_or(IN_MEM_CNT);
         Ok(Vecx {
-            in_mem,
-            in_mem_cnt: imc.unwrap_or(IN_MEM_CNT),
+            in_mem: in_disk.iter().rev().take(in_mem_cnt).collect(),
+            in_mem_cnt,
             in_disk,
         })
     }
@@ -100,7 +86,7 @@ where
 
     /// Imitate the behavior of 'Vec<_>.get_mut(...)'
     #[inline(always)]
-    pub fn get_mut(&mut self, idx: usize) -> Option<ValueMut<T>> {
+    pub fn get_mut(&mut self, idx: usize) -> Option<ValueMut<'_, T>> {
         self.in_mem
             .get(&idx)
             .cloned()
@@ -223,8 +209,10 @@ where
     fn drop(&mut self) {
         // This operation is safe within a `drop()`.
         // SEE: [**ManuallyDrop::take**](std::mem::ManuallyDrop::take)
-        let v = unsafe { ManuallyDrop::take(&mut self.value) };
-        self.mapx.set_value(self.idx, v);
+        unsafe {
+            self.mapx
+                .set_value(self.idx, ManuallyDrop::take(&mut self.value));
+        };
     }
 }
 
@@ -284,14 +272,14 @@ where
 /************************************************/
 
 /// Iter over [Vecx](self::Vecx).
-pub struct VecxIter<T>
+pub struct VecxIter<'a, T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
-    iter: backend::VecxIter<T>,
+    iter: backend::VecxIter<'a, T>,
 }
 
-impl<T> Iterator for VecxIter<T>
+impl<'a, T> Iterator for VecxIter<'a, T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
@@ -327,7 +315,7 @@ where
 // Begin of the implementation of Serialize/Deserialize for Vecx //
 /*****************************************************************/
 
-impl<T> serde::Serialize for Vecx<T>
+impl<'a, T> serde::Serialize for Vecx<T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
@@ -355,7 +343,7 @@ where
     {
         deserializer.deserialize_str(CacheVisitor).map(|meta| {
             let meta = pnk!(serde_json::from_str::<CacheMeta>(&meta));
-            pnk!(Vecx::new(meta.data_path, Some(meta.in_mem_cnt), false))
+            pnk!(Vecx::new(meta.data_path, Some(meta.in_mem_cnt)))
         })
     }
 }

@@ -27,7 +27,7 @@ use std::{
 
 /// Max number of entries stored in memory.
 #[cfg(not(feature = "debug_env"))]
-pub const IN_MEM_CNT: usize = 2_0000;
+pub const IN_MEM_CNT: usize = 1_000;
 
 /// To make the 'mix storage' to be triggered during tests,
 /// set it to 1 with the debug_env feature.
@@ -58,24 +58,12 @@ where
 {
     /// Create an instance.
     #[inline(always)]
-    pub fn new(path: &str, imc: Option<usize>, is_tmp: bool) -> Result<Self> {
-        let in_disk = backend::Mapx::load_or_create(path, is_tmp).c(d!())?;
-
-        let mut in_mem = HashMap::with_capacity(IN_MEM_CNT);
-        let mut cnter = IN_MEM_CNT;
-        let mut data = in_disk.iter().rev();
-        while cnter > 0 {
-            if let Some((k, v)) = data.next() {
-                in_mem.insert(k, v);
-            } else {
-                break;
-            }
-            cnter -= 1;
-        }
-
+    pub fn new(path: &str, imc: Option<usize>) -> Result<Self> {
+        let in_disk = backend::Mapx::load_or_create(path).c(d!())?;
+        let in_mem_cnt = imc.unwrap_or(IN_MEM_CNT);
         Ok(Mapx {
-            in_mem,
-            in_mem_cnt: imc.unwrap_or(IN_MEM_CNT),
+            in_mem: in_disk.iter().rev().take(in_mem_cnt).collect(),
+            in_mem_cnt,
             in_disk,
         })
     }
@@ -99,7 +87,7 @@ where
 
     /// Imitate the behavior of 'HashMap<_>.get_mut(...)'
     #[inline(always)]
-    pub fn get_mut(&mut self, key: &K) -> Option<ValueMut<K, V>> {
+    pub fn get_mut(&mut self, key: &K) -> Option<ValueMut<'_, K, V>> {
         self.in_mem
             .get(key)
             .cloned()
@@ -258,13 +246,12 @@ where
     fn drop(&mut self) {
         // This operation is safe within a `drop()`.
         // SEE: [**ManuallyDrop::take**](std::mem::ManuallyDrop::take)
-        let (k, v) = unsafe {
-            (
+        unsafe {
+            self.mapx.set_value(
                 ManuallyDrop::take(&mut self.key),
                 ManuallyDrop::take(&mut self.value),
-            )
+            );
         };
-        self.mapx.set_value(k, v);
     }
 }
 
@@ -372,15 +359,15 @@ where
 /************************************************/
 
 /// Iter over [Mapx](self::Mapx).
-pub struct MapxIter<K, V>
+pub struct MapxIter<'a, K, V>
 where
     K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    iter: backend::MapxIter<K, V>,
+    iter: backend::MapxIter<'a, K, V>,
 }
 
-impl<K, V> Iterator for MapxIter<K, V>
+impl<'a, K, V> Iterator for MapxIter<'a, K, V>
 where
     K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
@@ -449,7 +436,7 @@ where
     {
         deserializer.deserialize_str(CacheVisitor).map(|meta| {
             let meta = pnk!(serde_json::from_str::<CacheMeta>(&meta));
-            pnk!(Mapx::new(meta.data_path, Some(meta.in_mem_cnt), false))
+            pnk!(Mapx::new(meta.data_path, Some(meta.in_mem_cnt)))
         })
     }
 }

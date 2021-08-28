@@ -3,14 +3,15 @@
 //!
 
 use crate::helper::*;
+use rocksdb::{DBIterator, DBPinnableSlice, IteratorMode, DB};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
-use sled::IVec;
 use std::{
     fmt, fs,
     hash::Hash,
     iter::{DoubleEndedIterator, Iterator},
     marker::PhantomData,
+    sync::Arc,
 };
 
 // To solve the problem of unlimited memory usage,
@@ -21,7 +22,7 @@ where
     K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    db: sled::Db,
+    db: Arc<DB>,
     data_path: String,
     cnter_path: String,
     cnter: usize,
@@ -42,11 +43,11 @@ where
     // it will use it directly;
     // Or it will create a new one.
     #[inline(always)]
-    pub(super) fn load_or_create(path: &str, is_tmp: bool) -> Result<Self> {
-        let db = sled_open(path, is_tmp).c(d!())?;
+    pub(super) fn load_or_create(path: &str) -> Result<Self> {
+        let db = rocksdb_open(path).c(d!())?;
         let cnter_path = format!("{}/____cnter____", path);
 
-        let cnter = if db.iter().next().is_none() {
+        let cnter = if db.iterator(IteratorMode::Start).next().is_none() {
             fs::File::create(&cnter_path)
                 .c(d!())
                 .and_then(|_| write_db_len(&cnter_path, 0).c(d!()))
@@ -56,7 +57,7 @@ where
         };
 
         Ok(Mapx {
-            db,
+            db: Arc::new(db),
             data_path: path.to_owned(),
             cnter_path,
             cnter,
@@ -84,14 +85,14 @@ where
     #[inline(always)]
     pub(super) fn len(&self) -> usize {
         debug_assert_eq!(pnk!(read_db_len(&self.cnter_path)), self.cnter);
-        debug_assert_eq!(self.db.len(), self.cnter);
+        debug_assert_eq!(self.db.iterator(IteratorMode::Start).count(), self.cnter);
         self.cnter
     }
 
     // A helper func
     #[inline(always)]
     pub(super) fn is_empty(&self) -> bool {
-        self.iter().next().is_none()
+        self.db.iterator(IteratorMode::Start).next().is_none()
     }
 
     // Imitate the behavior of 'HashMap<_>.insert(...)'.
@@ -103,34 +104,34 @@ where
 
     // Similar with `insert`, but ignore if the old value is exist.
     #[inline(always)]
-    pub(super) fn set_value(&mut self, key: K, value: V) -> Option<IVec> {
-        pnk!(self
-            .db
-            .insert(
-                pnk!(bincode::serialize(&key)),
-                pnk!(serde_json::to_vec(&value))
-            )
-            .map(|v| {
-                if v.is_none() {
-                    self.cnter += 1;
-                    pnk!(write_db_len(&self.cnter_path, self.cnter));
-                }
-                v
-            }))
+    pub(super) fn set_value(&mut self, key: K, value: V) -> Option<DBPinnableSlice> {
+        let k = pnk!(bincode::serialize(&key));
+        let v = pnk!(serde_json::to_vec(&value));
+        let old_v = pnk!(self.db.get_pinned(&k));
+
+        pnk!(self.db.put(k, v));
+
+        if old_v.is_none() {
+            self.cnter += 1;
+            pnk!(write_db_len(&self.cnter_path, self.cnter));
+        }
+
+        old_v
     }
 
     // Imitate the behavior of '.iter()'
     #[inline(always)]
-    pub(super) fn iter(&self) -> MapxIter<K, V> {
+    pub(super) fn iter(&self) -> MapxIter<'_, K, V> {
         MapxIter {
-            iter: self.db.iter(),
+            iter: self.db.iterator(IteratorMode::Start),
+            iter_rev: self.db.iterator(IteratorMode::End),
             _pd0: PhantomData,
             _pd1: PhantomData,
         }
     }
 
     pub(super) fn contains_key(&self, key: &K) -> bool {
-        pnk!(self.db.contains_key(pnk!(bincode::serialize(key))))
+        pnk!(self.db.get_pinned(pnk!(bincode::serialize(key)))).is_some()
     }
 
     pub(super) fn remove(&mut self, key: &K) -> Option<V> {
@@ -138,14 +139,18 @@ where
             .map(|v| pnk!(serde_json::from_slice(&v)))
     }
 
-    pub(super) fn unset_value(&mut self, key: &K) -> Option<IVec> {
-        pnk!(self.db.remove(pnk!(bincode::serialize(&key))).map(|v| {
-            if v.is_some() {
-                self.cnter -= 1;
-                pnk!(write_db_len(&self.cnter_path, self.cnter));
-            }
-            v
-        }))
+    pub(super) fn unset_value(&mut self, key: &K) -> Option<DBPinnableSlice> {
+        let k = pnk!(bincode::serialize(&key));
+        let old_v = pnk!(self.db.get_pinned(&k));
+
+        pnk!(self.db.delete(k));
+
+        if old_v.is_some() {
+            self.cnter -= 1;
+            pnk!(write_db_len(&self.cnter_path, self.cnter));
+        }
+
+        old_v
     }
 
     /// Flush data to disk
@@ -164,24 +169,25 @@ where
 /*********************************************************/
 
 // Iter over [Mapx](self::Mapx).
-pub(super) struct MapxIter<K, V>
+pub(super) struct MapxIter<'a, K, V>
 where
     K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    pub(super) iter: sled::Iter,
+    pub(super) iter: DBIterator<'a>,
+    pub(super) iter_rev: DBIterator<'a>,
     _pd0: PhantomData<K>,
     _pd1: PhantomData<V>,
 }
 
-impl<K, V> Iterator for MapxIter<K, V>
+impl<'a, K, V> Iterator for MapxIter<'a, K, V>
 where
     K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next().map(|v| v.ok()).flatten().map(|(k, v)| {
+        self.iter.next().map(|(k, v)| {
             (
                 pnk!(bincode::deserialize(&k)),
                 pnk!(serde_json::from_slice(&v)),
@@ -190,26 +196,22 @@ where
     }
 }
 
-impl<K, V> DoubleEndedIterator for MapxIter<K, V>
+impl<'a, K, V> DoubleEndedIterator for MapxIter<'a, K, V>
 where
     K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.iter
-            .next_back()
-            .map(|v| v.ok())
-            .flatten()
-            .map(|(k, v)| {
-                (
-                    pnk!(bincode::deserialize(&k)),
-                    pnk!(serde_json::from_slice(&v)),
-                )
-            })
+        self.iter_rev.next().map(|(k, v)| {
+            (
+                pnk!(bincode::deserialize(&k)),
+                pnk!(serde_json::from_slice(&v)),
+            )
+        })
     }
 }
 
-impl<K, V> ExactSizeIterator for MapxIter<K, V>
+impl<'a, K, V> ExactSizeIterator for MapxIter<'a, K, V>
 where
     K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
