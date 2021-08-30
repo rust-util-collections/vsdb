@@ -6,7 +6,9 @@ use crate::helper::*;
 use rocksdb::{DBIterator, IteratorMode, DB};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
-use std::{convert::TryInto, fs, iter::Iterator, marker::PhantomData, mem, sync::Arc};
+use std::{
+    convert::TryInto, fmt, fs, iter::Iterator, marker::PhantomData, mem, sync::Arc,
+};
 
 /// To solve the problem of unlimited memory usage,
 /// use this to replace the original in-memory `Vec<_>`.
@@ -16,7 +18,7 @@ use std::{convert::TryInto, fs, iter::Iterator, marker::PhantomData, mem, sync::
 #[derive(Debug, Clone)]
 pub(super) struct Vecx<T>
 where
-    T: PartialEq + Clone + Serialize + DeserializeOwned + std::fmt::Debug,
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
     db: Arc<DB>,
     data_path: String,
@@ -31,7 +33,7 @@ where
 
 impl<T> Vecx<T>
 where
-    T: PartialEq + Clone + Serialize + DeserializeOwned + std::fmt::Debug,
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
     /// If an old database exists,
     /// it will use it directly;
@@ -154,7 +156,7 @@ where
 /// Iter over [Vecx](self::Vecx).
 pub(super) struct VecxIter<'a, T>
 where
-    T: PartialEq + Clone + Serialize + DeserializeOwned + std::fmt::Debug,
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
     pub(super) iter: DBIterator<'a>,
     pub(super) iter_rev: DBIterator<'a>,
@@ -163,7 +165,7 @@ where
 
 impl<'a, T> Iterator for VecxIter<'a, T>
 where
-    T: PartialEq + Clone + Serialize + DeserializeOwned + std::fmt::Debug,
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
     type Item = (usize, T);
     fn next(&mut self) -> Option<Self::Item> {
@@ -178,7 +180,7 @@ where
 
 impl<'a, T> DoubleEndedIterator for VecxIter<'a, T>
 where
-    T: PartialEq + Clone + Serialize + DeserializeOwned + std::fmt::Debug,
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter_rev.next().map(|(idx, v)| {
@@ -191,7 +193,7 @@ where
 }
 
 impl<'a, T> ExactSizeIterator for VecxIter<'a, T> where
-    T: PartialEq + Clone + Serialize + DeserializeOwned + std::fmt::Debug
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug
 {
 }
 
@@ -205,7 +207,7 @@ impl<'a, T> ExactSizeIterator for VecxIter<'a, T> where
 
 impl<T> PartialEq for Vecx<T>
 where
-    T: PartialEq + Clone + Serialize + DeserializeOwned + std::fmt::Debug,
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn eq(&self, other: &Vecx<T>) -> bool {
         !self.iter().zip(other.iter()).any(|(i, j)| i != j)
@@ -213,7 +215,7 @@ where
 }
 
 impl<T> Eq for Vecx<T> where
-    T: PartialEq + Clone + Serialize + DeserializeOwned + std::fmt::Debug
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug
 {
 }
 

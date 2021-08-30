@@ -20,7 +20,7 @@ use std::{
     collections::{hash_map, HashMap},
     fmt,
     hash::Hash,
-    iter::Iterator,
+    iter::{DoubleEndedIterator, Iterator},
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
 };
@@ -375,6 +375,16 @@ where
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next()
+    }
+}
+
+impl<'a, K, V> DoubleEndedIterator for MapxIter<'a, K, V>
+where
+    K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.iter.next_back()
     }
 }
 

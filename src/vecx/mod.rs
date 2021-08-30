@@ -28,7 +28,7 @@ use std::{
     cmp::Ordering,
     collections::{btree_map, BTreeMap},
     fmt,
-    iter::Iterator,
+    iter::{DoubleEndedIterator, Iterator},
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
 };
@@ -286,6 +286,15 @@ where
     type Item = T;
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().map(|v| v.1)
+    }
+}
+
+impl<'a, T> DoubleEndedIterator for VecxIter<'a, T>
+where
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.iter.next_back().map(|v| v.1)
     }
 }
 
