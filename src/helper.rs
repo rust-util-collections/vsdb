@@ -250,6 +250,7 @@ pub(crate) fn rocksdb_open(path: &str) -> Result<DB> {
     let mut cfg = Options::default();
     cfg.create_if_missing(true);
     cfg.set_compression_type(DBCompressionType::Lz4);
+    cfg.set_max_open_files(4096);
 
     DB::open(&cfg, path).c(d!())
 }
