@@ -19,7 +19,6 @@ criterion = "0.3.5"
 
 [features]
 default = []
-debug_env = []
 compress = ["rocksdb/lz4"]
 
 [[bench]]

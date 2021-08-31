@@ -8,14 +8,8 @@ mod backend;
 #[cfg(test)]
 mod test;
 
-/// Max number of entries stored in memory.
-#[cfg(not(feature = "debug_env"))]
-pub const IN_MEM_CNT: usize = 1_0000;
-
-/// To make the 'mix storage' to be triggered during tests,
-/// set it to 1 with the debug_env feature.
-#[cfg(feature = "debug_env")]
-pub const IN_MEM_CNT: usize = 1;
+/// In-memory cache size in the number of items
+pub const IN_MEM_CNT: usize = 2;
 
 use crate::{
     helper::*,
