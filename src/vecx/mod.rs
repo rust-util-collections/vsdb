@@ -152,7 +152,7 @@ where
     /// Flush data to disk
     #[inline(always)]
     pub fn flush_data(&self) {
-        // self.in_disk.flush();
+        self.in_disk.flush();
     }
 }
 

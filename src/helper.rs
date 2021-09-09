@@ -19,7 +19,7 @@ lazy_static! {
 macro_rules! try_twice {
     ($ops: expr) => {
         ruc::pnk!($ops.c(d!()).or_else(|e| {
-            e.print();
+            e.print(None);
             $ops.c(d!())
         }))
     };
