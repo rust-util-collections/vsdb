@@ -15,8 +15,8 @@ lint:
 	cargo clippy --tests --features=compress
 
 test:
-	cargo test --release -- --test-threads=1
-	cargo test --features=compress -- --test-threads=1
+	cargo test --release -- --test-threads=1 --nocapture
+	cargo test --features=compress -- --test-threads=1 --nocapture
 
 bench:
 	cargo bench

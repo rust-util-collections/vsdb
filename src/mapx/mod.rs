@@ -79,8 +79,8 @@ where
     }
 
     /// Get the database storage path
-    pub fn get_data_path(&self) -> &str {
-        self.in_disk.get_data_path()
+    pub fn get_root_path(&self) -> &str {
+        self.in_disk.get_root_path()
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get(...)'
@@ -103,16 +103,6 @@ where
             .cloned()
             .or_else(|| self.in_disk.get(key))
             .map(move |v| ValueMut::new(self, key.clone(), v))
-    }
-
-    /// Get the last <K, V> pair
-    pub fn last_at(&self, key: &K) -> Option<Value<V>> {
-        self.in_mem
-            .range(..key)
-            .rev()
-            .next()
-            .map(|(_, v)| Value::new(Cow::Borrowed(v)))
-            .or_else(|| self.in_disk.last_at(key).map(|v| Value::new(Cow::Owned(v))))
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.len()'.
@@ -560,7 +550,7 @@ where
     {
         let v = pnk!(serde_json::to_string(&CacheMeta {
             in_mem_cnt: self.in_mem_cnt,
-            data_path: self.get_data_path(),
+            root_path: self.get_root_path(),
         }));
 
         self.flush_data();
@@ -587,7 +577,7 @@ where
     {
         deserializer.deserialize_str(CacheVisitor).map(|meta| {
             let meta = pnk!(serde_json::from_str::<CacheMeta>(&meta));
-            pnk!(Mapx::new(meta.data_path, Some(meta.in_mem_cnt)))
+            pnk!(Mapx::new(meta.root_path, Some(meta.in_mem_cnt)))
         })
     }
 }

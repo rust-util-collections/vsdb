@@ -25,8 +25,8 @@ fn t_vecx() {
     let cnt = 200;
 
     let db = {
-        omit!(fs::remove_dir_all("/tmp/bnc_test/0003"));
-        let mut db = crate::new_vecx!("/tmp/bnc_test/0003", 300);
+        omit!(fs::remove_dir_all("/tmp/bnc_test/Vecx"));
+        let mut db = crate::new_vecx!("/tmp/bnc_test/Vecx", 300);
 
         assert_eq!(0, db.len());
         (0..cnt).for_each(|i| {
