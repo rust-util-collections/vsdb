@@ -24,28 +24,28 @@ fn t_mapx() {
     let cnt = 200;
 
     let db = {
-        omit!(fs::remove_dir_all("/tmp/bnc_test/0001"));
-        let mut db = crate::new_mapx!("/tmp/bnc_test/0001", Some(300));
+        omit!(fs::remove_dir_all("/tmp/bnc_test/Mapx"));
+        let mut dbi = crate::new_mapx!("/tmp/bnc_test/Mapx", 300);
 
-        assert_eq!(0, db.len());
+        assert_eq!(0, dbi.len());
         (0..cnt).for_each(|i| {
-            assert!(db.get(&i).is_none());
+            assert!(dbi.get(&i).is_none());
         });
 
         (0..cnt).map(|i| (i, gen_sample(i))).for_each(|(i, b)| {
-            db.entry(i).or_insert(b.clone());
-            assert_eq!(1 + i as usize, db.len());
-            assert_eq!(pnk!(db.get(&i)).idx, i);
-            assert_eq!(db.remove(&i), Some(b.clone()));
-            assert_eq!(i as usize, db.len());
-            assert!(db.get(&i).is_none());
-            assert!(db.insert(i, b.clone()).is_none());
-            assert!(db.insert(i, b).is_some());
+            dbi.entry(i).or_insert(b.clone());
+            assert_eq!(1 + i as usize, dbi.len());
+            assert_eq!(pnk!(dbi.get(&i)).idx, i);
+            assert_eq!(dbi.remove(&i), Some(b.clone()));
+            assert_eq!(i as usize, dbi.len());
+            assert!(dbi.get(&i).is_none());
+            assert!(dbi.insert(i, b.clone()).is_none());
+            assert!(dbi.insert(i, b).is_some());
         });
 
-        assert_eq!(cnt, db.len());
+        assert_eq!(cnt, dbi.len());
 
-        pnk!(serde_json::to_vec(&db))
+        pnk!(serde_json::to_vec(&dbi))
     };
 
     let mut db_restore = pnk!(serde_json::from_slice::<Mapx<usize, SampleBlock>>(&db));

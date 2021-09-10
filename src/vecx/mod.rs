@@ -8,14 +8,8 @@ mod backend;
 #[cfg(test)]
 mod test;
 
-/// Max number of entries stored in memory.
-#[cfg(not(feature = "debug_env"))]
-pub const IN_MEM_CNT: usize = 1_0000;
-
-/// To make the 'mix storage' to be triggered during tests,
-/// set it to 1 with the debug_env feature.
-#[cfg(feature = "debug_env")]
-pub const IN_MEM_CNT: usize = 1;
+/// In-memory cache size in the number of items
+pub const IN_MEM_CNT: usize = 2;
 
 use crate::{
     helper::*,
@@ -28,7 +22,7 @@ use std::{
     cmp::Ordering,
     collections::{btree_map, BTreeMap},
     fmt,
-    iter::Iterator,
+    iter::{DoubleEndedIterator, Iterator},
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
 };
@@ -58,33 +52,19 @@ where
 {
     /// Create an instance.
     #[inline(always)]
-    pub fn new(path: &str, imc: Option<usize>, is_tmp: bool) -> Result<Self> {
-        let in_disk = backend::Vecx::load_or_create(path, is_tmp).c(d!())?;
-        let mut in_mem = BTreeMap::new();
-
-        if !in_disk.is_empty() {
-            let mut lefter = IN_MEM_CNT;
-            let mut data = in_disk.iter().rev();
-            while lefter > 0 {
-                if let Some((idx, v)) = data.next() {
-                    in_mem.insert(idx, v);
-                } else {
-                    break;
-                }
-                lefter -= 1;
-            }
-        }
-
+    pub fn new(path: &str, imc: Option<usize>) -> Result<Self> {
+        let in_disk = backend::Vecx::load_or_create(path).c(d!())?;
+        let in_mem_cnt = imc.unwrap_or(IN_MEM_CNT);
         Ok(Vecx {
-            in_mem,
-            in_mem_cnt: imc.unwrap_or(IN_MEM_CNT),
+            in_mem: in_disk.iter().rev().take(in_mem_cnt).collect(),
+            in_mem_cnt,
             in_disk,
         })
     }
 
     /// Get the storage path
-    pub fn get_data_path(&self) -> &str {
-        self.in_disk.get_data_path()
+    pub fn get_root_path(&self) -> &str {
+        self.in_disk.get_root_path()
     }
 
     /// Imitate the behavior of 'Vec<_>.get(...)'
@@ -100,7 +80,7 @@ where
 
     /// Imitate the behavior of 'Vec<_>.get_mut(...)'
     #[inline(always)]
-    pub fn get_mut(&mut self, idx: usize) -> Option<ValueMut<T>> {
+    pub fn get_mut(&mut self, idx: usize) -> Option<ValueMut<'_, T>> {
         self.in_mem
             .get(&idx)
             .cloned()
@@ -223,8 +203,10 @@ where
     fn drop(&mut self) {
         // This operation is safe within a `drop()`.
         // SEE: [**ManuallyDrop::take**](std::mem::ManuallyDrop::take)
-        let v = unsafe { ManuallyDrop::take(&mut self.value) };
-        self.mapx.set_value(self.idx, v);
+        unsafe {
+            self.mapx
+                .set_value(self.idx, ManuallyDrop::take(&mut self.value));
+        };
     }
 }
 
@@ -284,20 +266,29 @@ where
 /************************************************/
 
 /// Iter over [Vecx](self::Vecx).
-pub struct VecxIter<T>
+pub struct VecxIter<'a, T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
-    iter: backend::VecxIter<T>,
+    iter: backend::VecxIter<'a, T>,
 }
 
-impl<T> Iterator for VecxIter<T>
+impl<'a, T> Iterator for VecxIter<'a, T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
     type Item = T;
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().map(|v| v.1)
+    }
+}
+
+impl<'a, T> DoubleEndedIterator for VecxIter<'a, T>
+where
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.iter.next_back().map(|v| v.1)
     }
 }
 
@@ -323,11 +314,24 @@ where
 // End of the implementation of Iter for Vecx //
 ////////////////////////////////////////////////
 
+////////////////////////////////////////////////
+// Begin of the implementation of Eq for Vecx //
+/**********************************************/
+
+impl<T> Eq for Vecx<T> where
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug
+{
+}
+
+/********************************************/
+// End of the implementation of Eq for Vecx //
+//////////////////////////////////////////////
+
 ///////////////////////////////////////////////////////////////////
 // Begin of the implementation of Serialize/Deserialize for Vecx //
 /*****************************************************************/
 
-impl<T> serde::Serialize for Vecx<T>
+impl<'a, T> serde::Serialize for Vecx<T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
@@ -337,7 +341,7 @@ where
     {
         let v = pnk!(serde_json::to_string(&CacheMeta {
             in_mem_cnt: self.in_mem_cnt,
-            data_path: self.get_data_path(),
+            root_path: self.get_root_path(),
         }));
 
         self.flush_data();
@@ -355,7 +359,7 @@ where
     {
         deserializer.deserialize_str(CacheVisitor).map(|meta| {
             let meta = pnk!(serde_json::from_str::<CacheMeta>(&meta));
-            pnk!(Vecx::new(meta.data_path, Some(meta.in_mem_cnt), false))
+            pnk!(Vecx::new(meta.root_path, Some(meta.in_mem_cnt)))
         })
     }
 }
