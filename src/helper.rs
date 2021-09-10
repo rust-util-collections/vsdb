@@ -18,7 +18,7 @@ use std::{
 
 pub(crate) const CNTER: &str = "____cnter____";
 pub(crate) const PREFIX: &str = "____prefix____";
-const IDX_KEY: [u8; size_of::<u16>()] = u16::MAX.to_le_bytes();
+const IDX_KEY: [u8; size_of::<u32>()] = u32::MAX.to_le_bytes();
 
 lazy_static! {
     pub(crate) static ref BNC: DB = pnk!(rocksdb_open());
@@ -274,12 +274,12 @@ fn rocksdb_open() -> Result<DB> {
     cfg.set_allow_mmap_reads(true);
     cfg.create_missing_column_families(true);
     cfg.set_atomic_flush(true);
-    cfg.set_prefix_extractor(SliceTransform::create_fixed_prefix(size_of::<u16>()));
+    cfg.set_prefix_extractor(SliceTransform::create_fixed_prefix(size_of::<u32>()));
 
     let db = DB::open(&cfg, &*DATA_DIR).c(d!())?;
 
     if db.get(IDX_KEY).c(d!())?.is_none() {
-        db.put(IDX_KEY, u16::MAX.to_le_bytes()).c(d!())?;
+        db.put(IDX_KEY, u32::MAX.to_le_bytes()).c(d!())?;
     }
 
     Ok(db)
@@ -295,18 +295,18 @@ pub(crate) fn meta_check(path: &str) -> Result<()> {
         .read(true)
         .open(format!("{}/{}", path, PREFIX))
         .c(d!())?;
-    let mut buf = [0u8; size_of::<u16>()];
+    let mut buf = [0u8; size_of::<u32>()];
     let nbytes = f.read(&mut buf).c(d!())?;
     if 0 == nbytes {
         let cur_idx = BNC.get(IDX_KEY).c(d!())?.c(d!())?;
         let cur_idx =
-            u16::from_le_bytes(cur_idx[..size_of::<u16>()].try_into().unwrap());
-        let new_idx = (cur_idx - 1).to_le_bytes();
+            u32::from_le_bytes(cur_idx[..size_of::<u32>()].try_into().unwrap());
+        let new_idx = cur_idx.overflowing_sub(1).0.to_le_bytes();
         BNC.put(IDX_KEY, new_idx)
             .c(d!())
             .and_then(|_| f.write(&new_idx[..]).c(d!()))?;
         BNC.flush().c(d!())?;
-    } else if size_of::<u16>() != nbytes {
+    } else if size_of::<u32>() != nbytes {
         return Err(eg!("Fatal !!"));
     }
 
