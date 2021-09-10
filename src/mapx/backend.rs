@@ -3,7 +3,7 @@
 //!
 
 use crate::helper::*;
-use rocksdb::{DBIterator, DBPinnableSlice, IteratorMode, DB};
+use rocksdb::{DBIterator, DBPinnableSlice, Direction, IteratorMode, DB};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
@@ -79,6 +79,14 @@ where
             .ok()
             .flatten()
             .map(|bytes| pnk!(serde_json::from_slice(&bytes)))
+    }
+
+    pub(super) fn last_at(&self, key: &K) -> Option<V> {
+        let k = pnk!(bincode::serialize(key));
+        self.db
+            .iterator(IteratorMode::From(&k, Direction::Reverse))
+            .next()
+            .map(|(_, v)| pnk!(serde_json::from_slice(&v)))
     }
 
     // Imitate the behavior of 'HashMap<_>.len()'.

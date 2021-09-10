@@ -314,6 +314,19 @@ where
 // End of the implementation of Iter for Vecx //
 ////////////////////////////////////////////////
 
+////////////////////////////////////////////////
+// Begin of the implementation of Eq for Vecx //
+/**********************************************/
+
+impl<T> Eq for Vecx<T> where
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug
+{
+}
+
+/********************************************/
+// End of the implementation of Eq for Vecx //
+//////////////////////////////////////////////
+
 ///////////////////////////////////////////////////////////////////
 // Begin of the implementation of Serialize/Deserialize for Vecx //
 /*****************************************************************/
