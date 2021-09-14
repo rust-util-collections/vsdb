@@ -113,13 +113,7 @@ where
     /// Imitate the behavior of 'Vec<_>.push(...)'
     #[inline(always)]
     pub fn push(&mut self, b: T) {
-        let hdr = Arc::as_ptr(&self.memref) as *mut HashMap<usize, T>;
-        unsafe {
-            if !(*hdr).is_empty() {
-                *hdr = map! {};
-            }
-        }
-
+        self.clean_cache();
         self.in_disk.push(b);
     }
 
@@ -127,14 +121,20 @@ where
     /// but we do not return the previous value, like `Vecx<_, _>.set_value`.
     #[inline(always)]
     pub fn set_value(&mut self, idx: usize, b: T) {
+        self.clean_cache();
+        self.in_disk.insert(idx, b);
+    }
+
+    /// Trigger the cache clean process
+    /// **NOTE**: use `mut self` to make sure an unique access
+    #[inline(always)]
+    pub fn clean_cache(&mut self) {
         let hdr = Arc::as_ptr(&self.memref) as *mut HashMap<usize, T>;
         unsafe {
             if !(*hdr).is_empty() {
                 *hdr = map! {};
             }
         }
-
-        self.in_disk.insert(idx, b);
     }
 
     /// Imitate the behavior of '.iter()'

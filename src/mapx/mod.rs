@@ -119,27 +119,27 @@ where
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
-        let hdr = Arc::as_ptr(&self.memref) as *mut HashMap<K, V>;
-        unsafe {
-            if !(*hdr).is_empty() {
-                *hdr = map! {};
-            }
-        }
-
+        self.clean_cache();
         self.in_disk.insert(key, value)
     }
 
     /// Similar with `insert`, but ignore if the old value is exist.
     #[inline(always)]
     pub fn set_value(&mut self, key: K, value: V) {
+        self.clean_cache();
+        self.in_disk.set_value(key, value);
+    }
+
+    /// Trigger the cache clean process
+    /// **NOTE**: use `mut self` to make sure an unique access
+    #[inline(always)]
+    pub fn clean_cache(&self) {
         let hdr = Arc::as_ptr(&self.memref) as *mut HashMap<K, V>;
         unsafe {
             if !(*hdr).is_empty() {
                 *hdr = map! {};
             }
         }
-
-        self.in_disk.set_value(key, value);
     }
 
     /// Imitate the behavior of '.entry(...).or_insert(...)'
