@@ -80,10 +80,15 @@ where
     }
 
     /// Imitate the behavior of 'Vec<_>.last()'
-    pub(super) fn last(&self) -> Option<T> {
-        let mut i = BNC.prefix_iterator(&self.prefix);
-        i.set_mode(IteratorMode::From(&self.prefix, Direction::Reverse));
-        i.next().map(|(_, v)| pnk!(serde_json::from_slice(&v)))
+    pub(super) fn last(&self) -> Option<(usize, T)> {
+        // Method 1:
+        let idx = self.len().saturating_sub(1);
+        self.get(idx).map(|v| (idx, v))
+
+        // // Method 2:
+        // let mut i = BNC.prefix_iterator(&self.prefix);
+        // i.set_mode(IteratorMode::From(&self.prefix, Direction::Reverse));
+        // i.next().map(|(_, v)| pnk!(serde_json::from_slice(&v)))
     }
 
     /// Imitate the behavior of 'Vec<_>.len()'

@@ -6,7 +6,7 @@ use super::*;
 use serde::{Deserialize, Serialize};
 use std::fs;
 
-#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Default, Debug, Eq, PartialEq, Clone)]
 struct SampleBlock {
     idx: usize,
     data: Vec<usize>,
@@ -25,7 +25,7 @@ fn t_mapx() {
 
     let db = {
         omit!(fs::remove_dir_all("/tmp/bnc_test/Mapx"));
-        let mut dbi = crate::new_mapx!("/tmp/bnc_test/Mapx", 300);
+        let mut dbi = crate::new_mapx!("/tmp/bnc_test/Mapx");
 
         assert_eq!(0, dbi.len());
         (0..cnt).for_each(|i| {

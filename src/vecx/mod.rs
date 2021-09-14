@@ -1,30 +1,25 @@
 //!
-//! # A mem+disk replacement for the pure in-memory Vec
+//! # A disk-storage replacement for the pure in-memory Vec
 //!
 //! This module is non-invasive to external code except the `new` method.
 //!
 
 mod backend;
+
 #[cfg(test)]
 mod test;
 
-/// In-memory cache size in the number of items
-pub const IN_MEM_CNT: usize = 2;
-
-use crate::{
-    helper::*,
-    serde::{CacheMeta, CacheVisitor},
-};
+use crate::serde::{CacheMeta, CacheVisitor};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
-    borrow::Cow,
     cmp::Ordering,
-    collections::{btree_map, BTreeMap},
+    collections::HashMap,
     fmt,
     iter::{DoubleEndedIterator, Iterator},
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
+    sync::Arc,
 };
 
 /// To solve the problem of unlimited memory usage,
@@ -37,8 +32,7 @@ pub struct Vecx<T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
-    in_mem: BTreeMap<usize, T>,
-    in_mem_cnt: usize,
+    memref: Arc<HashMap<usize, T>>,
     in_disk: backend::Vecx<T>,
 }
 
@@ -52,17 +46,15 @@ where
 {
     /// Create an instance.
     #[inline(always)]
-    pub fn new(path: &str, imc: Option<usize>) -> Result<Self> {
+    pub fn new(path: &str) -> Result<Self> {
         let in_disk = backend::Vecx::load_or_create(path).c(d!())?;
-        let in_mem_cnt = imc.unwrap_or(IN_MEM_CNT);
         Ok(Vecx {
-            in_mem: in_disk.iter().rev().take(in_mem_cnt).collect(),
-            in_mem_cnt,
+            memref: Arc::new(map! {}),
             in_disk,
         })
     }
 
-    /// Get the storage path
+    /// Get the meta-storage path
     pub fn get_root_path(&self) -> &str {
         self.in_disk.get_root_path()
     }
@@ -71,30 +63,39 @@ where
     ///
     /// Any faster/better choice other than JSON ?
     #[inline(always)]
-    pub fn get(&self, idx: usize) -> Option<Value<T>> {
-        self.in_mem
-            .get(&idx)
-            .map(|v| Value::new(Cow::Borrowed(v)))
-            .or_else(|| self.in_disk.get(idx).map(|v| Value::new(Cow::Owned(v))))
+    pub fn get(&self, idx: usize) -> Option<&T> {
+        let hdr = Arc::as_ptr(&self.memref) as *mut HashMap<usize, T>;
+        unsafe {
+            let r = (*hdr).get(&idx);
+            if r.is_some() {
+                return r;
+            }
+        }
+
+        self.in_disk.get(idx).map(|v| unsafe {
+            (*hdr).insert(idx, v);
+            (*hdr).get(&idx).unwrap()
+        })
     }
 
     /// Imitate the behavior of 'Vec<_>.get_mut(...)'
     #[inline(always)]
     pub fn get_mut(&mut self, idx: usize) -> Option<ValueMut<'_, T>> {
-        self.in_mem
-            .get(&idx)
-            .cloned()
-            .or_else(|| self.in_disk.get(idx))
+        self.in_disk
+            .get(idx)
             .map(move |v| ValueMut::new(self, idx, v))
     }
 
     /// Imitate the behavior of 'Vec<_>.last()'
-    pub fn last(&self) -> Option<Value<T>> {
-        self.in_mem
-            .values()
+    pub fn last(&self) -> Option<&T> {
+        let hdr = Arc::as_ptr(&self.memref) as *mut HashMap<usize, T>;
+        self.in_disk
             .last()
-            .map(|v| Value::new(Cow::Borrowed(v)))
-            .or_else(|| self.in_disk.last().map(|v| Value::new(Cow::Owned(v))))
+            .map(|(idx, v)| unsafe {
+                (*hdr).insert(idx, v);
+                (*hdr).get(&idx)
+            })
+            .flatten()
     }
 
     /// Imitate the behavior of 'Vec<_>.len()'
@@ -112,12 +113,13 @@ where
     /// Imitate the behavior of 'Vec<_>.push(...)'
     #[inline(always)]
     pub fn push(&mut self, b: T) {
-        if self.in_mem.len() > IN_MEM_CNT {
-            // Will get the oldest key since we use BTreeMap
-            let k = pnk!(self.in_mem.keys().next().cloned());
-            self.in_mem.remove(&k);
+        let hdr = Arc::as_ptr(&self.memref) as *mut HashMap<usize, T>;
+        unsafe {
+            if !(*hdr).is_empty() {
+                *hdr = map! {};
+            }
         }
-        self.in_mem.insert(self.in_disk.len(), b.clone());
+
         self.in_disk.push(b);
     }
 
@@ -125,28 +127,22 @@ where
     /// but we do not return the previous value, like `Vecx<_, _>.set_value`.
     #[inline(always)]
     pub fn set_value(&mut self, idx: usize, b: T) {
-        if self.in_mem.len() > IN_MEM_CNT {
-            // Will get the oldest key since we use BTreeMap
-            let k = pnk!(self.in_mem.keys().next().cloned());
-            self.in_mem.remove(&k);
+        let hdr = Arc::as_ptr(&self.memref) as *mut HashMap<usize, T>;
+        unsafe {
+            if !(*hdr).is_empty() {
+                *hdr = map! {};
+            }
         }
-        self.in_mem.insert(idx, b.clone());
+
         self.in_disk.insert(idx, b);
     }
 
     /// Imitate the behavior of '.iter()'
     #[inline(always)]
     pub fn iter(&self) -> Box<dyn Iterator<Item = T> + '_> {
-        debug_assert!(self.in_mem.len() <= self.in_disk.len());
-        if self.in_mem.len() == self.in_disk.len() {
-            Box::new(VecxIterMem {
-                iter: self.in_mem.iter(),
-            })
-        } else {
-            Box::new(VecxIter {
-                iter: self.in_disk.iter(),
-            })
-        }
+        Box::new(VecxIter {
+            iter: self.in_disk.iter(),
+        })
     }
 
     /// Flush data to disk
@@ -250,7 +246,14 @@ where
 
 impl<'a, T> PartialOrd<T> for ValueMut<'a, T>
 where
-    T: Clone + PartialEq + Ord + PartialOrd + Serialize + DeserializeOwned + fmt::Debug,
+    T: Default
+        + Clone
+        + PartialEq
+        + Ord
+        + PartialOrd
+        + Serialize
+        + DeserializeOwned
+        + fmt::Debug,
 {
     fn partial_cmp(&self, other: &T) -> Option<Ordering> {
         self.value.deref().partial_cmp(other)
@@ -292,24 +295,6 @@ where
     }
 }
 
-/// Iter over [Vecx](self::Vecx).
-pub struct VecxIterMem<'a, K, T>
-where
-    T: 'a + PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
-{
-    iter: btree_map::Iter<'a, K, T>,
-}
-
-impl<'a, T> Iterator for VecxIterMem<'a, usize, T>
-where
-    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
-{
-    type Item = T;
-    fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next().map(|v| v.1.clone())
-    }
-}
-
 /**********************************************/
 // End of the implementation of Iter for Vecx //
 ////////////////////////////////////////////////
@@ -340,7 +325,6 @@ where
         S: serde::Serializer,
     {
         let v = pnk!(serde_json::to_string(&CacheMeta {
-            in_mem_cnt: self.in_mem_cnt,
             root_path: self.get_root_path(),
         }));
 
@@ -359,7 +343,7 @@ where
     {
         deserializer.deserialize_str(CacheVisitor).map(|meta| {
             let meta = pnk!(serde_json::from_str::<CacheMeta>(&meta));
-            pnk!(Vecx::new(meta.root_path, Some(meta.in_mem_cnt)))
+            pnk!(Vecx::new(meta.root_path))
         })
     }
 }

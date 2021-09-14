@@ -7,7 +7,7 @@ use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::fs;
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 struct SampleBlock {
     idx: usize,
     data: Vec<usize>,
@@ -26,7 +26,7 @@ fn t_vecx() {
 
     let db = {
         omit!(fs::remove_dir_all("/tmp/bnc_test/Vecx"));
-        let mut db = crate::new_vecx!("/tmp/bnc_test/Vecx", 300);
+        let mut db = crate::new_vecx!("/tmp/bnc_test/Vecx");
 
         assert_eq!(0, db.len());
         (0..cnt).for_each(|i| {
@@ -36,8 +36,8 @@ fn t_vecx() {
         (0..cnt).map(|i| (i, gen_sample(i))).for_each(|(i, b)| {
             db.push(b.clone());
             assert_eq!(1 + i as usize, db.len());
-            assert_eq!(pnk!(db.get(i as usize)).into_inner().into_owned(), b);
-            assert_eq!(pnk!(db.last()).into_inner().into_owned(), b);
+            assert_eq!(*pnk!(db.get(i as usize)), b);
+            assert_eq!(*pnk!(db.last()), b);
         });
 
         assert_eq!(cnt, db.len());
@@ -59,7 +59,7 @@ fn t_vecx() {
     db_restore.set_value(2 * cnt, gen_sample(1000 * cnt));
     assert_eq!(1 + cnt, db_restore.len());
 
-    assert_eq!(db_restore.get(2 * cnt).unwrap(), gen_sample(1000 * cnt));
+    assert_eq!(*db_restore.get(2 * cnt).unwrap(), gen_sample(1000 * cnt));
     *db_restore.get_mut(2 * cnt).unwrap() = gen_sample(999 * cnt);
-    assert_eq!(db_restore.get(2 * cnt).unwrap(), gen_sample(999 * cnt))
+    assert_eq!(*db_restore.get(2 * cnt).unwrap(), gen_sample(999 * cnt));
 }
