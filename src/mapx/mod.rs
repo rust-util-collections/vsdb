@@ -19,6 +19,7 @@ use std::{
     iter::{DoubleEndedIterator, Iterator},
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
+    ptr,
     sync::Arc,
 };
 
@@ -137,7 +138,7 @@ where
         let hdr = Arc::as_ptr(&self.memref) as *mut HashMap<K, V>;
         unsafe {
             if !(*hdr).is_empty() {
-                *hdr = map! {};
+                ptr::replace(hdr, map! {});
             }
         }
     }
