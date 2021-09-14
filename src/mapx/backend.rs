@@ -164,7 +164,7 @@ where
     /// Flush data to disk
     #[inline(always)]
     pub fn flush(&self) {
-        pnk!(BNC.flush());
+        // pnk!(BNC.flush());
     }
 }
 

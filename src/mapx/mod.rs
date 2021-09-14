@@ -124,7 +124,7 @@ where
         self.in_disk.insert(key, value)
     }
 
-    /// Similar with `insert`, but ignore if the old value is exist.
+    /// Similar with `insert`, but ignore the old value.
     #[inline(always)]
     pub fn set_value(&mut self, key: K, value: V) {
         self.clean_cache();
@@ -166,16 +166,14 @@ where
     /// Remove a <K, V> from mem and disk.
     #[inline(always)]
     pub fn remove(&mut self, key: &K) -> Option<V> {
-        unsafe {
-            (*(Arc::as_ptr(&self.memref) as *mut HashMap<K, V>)).remove(key);
-        }
-
+        self.clean_cache();
         self.in_disk.remove(key)
     }
 
     /// Remove a <K, V> from mem and disk.
     #[inline(always)]
     pub fn unset_value(&mut self, key: &K) {
+        self.clean_cache();
         self.in_disk.unset_value(key);
     }
 
