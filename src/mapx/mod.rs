@@ -180,8 +180,9 @@ where
 
     /// Flush data to disk
     #[inline(always)]
-    pub fn flush_data(&self) {
+    pub fn flush_data(&mut self) {
         self.in_disk.flush();
+        self.clean_cache();
     }
 }
 
@@ -511,7 +512,7 @@ where
             root_path: self.get_root_path(),
         }));
 
-        self.flush_data();
+        self.in_disk.flush();
         serializer.serialize_str(&v)
     }
 }
