@@ -66,7 +66,7 @@ macro_rules! try_twice {
 macro_rules! unique_path {
     () => {
         format!(
-            "{}/__extra_meta/{}/{}_{}_{}_{}",
+            "{}/__extra_meta__/{}/{}_{}_{}_{}",
             *$crate::DATA_DIR,
             ts!(),
             file!(),
@@ -99,7 +99,7 @@ macro_rules! new_vecx_custom {
             obj
     }};
     ($path: expr) => {{
-            $crate::try_twice!($crate::Vecx::new($path))
+            $crate::try_twice!($crate::Vecx::new(&format!("{}/__extra_meta__/{}", &*$crate::DATA_DIR, &*$path)))
     }};
     () => {{
             $crate::try_twice!($crate::Vecx::new(&$crate::unique_path!()))
@@ -129,7 +129,11 @@ macro_rules! new_mapx_custom {
         obj
     }};
     ($path: expr) => {{
-        $crate::try_twice!($crate::Mapx::new(&*$path))
+        $crate::try_twice!($crate::Mapx::new(&format!(
+            "{}/__extra_meta__/{}",
+            &*$crate::DATA_DIR,
+            &*$path
+        )))
     }};
     () => {{
         $crate::try_twice!($crate::Mapx::new(&$crate::unique_path!()))
