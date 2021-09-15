@@ -139,12 +139,6 @@ where
     pub fn unset_value(&mut self, key: &K) {
         self.in_disk.unset_value(key);
     }
-
-    /// Flush data to disk
-    #[inline(always)]
-    pub fn flush_data(&mut self) {
-        self.in_disk.flush();
-    }
 }
 
 /*******************************************/
@@ -473,7 +467,6 @@ where
             root_path: self.get_root_path(),
         }));
 
-        self.in_disk.flush();
         serializer.serialize_str(&v)
     }
 }

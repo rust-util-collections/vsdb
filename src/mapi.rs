@@ -104,7 +104,4 @@ where
     pub fn unset_value(&mut self, key: &K) {
         self.inner.remove(key);
     }
-
-    #[inline(always)]
-    pub fn flush_data(&mut self) {}
 }

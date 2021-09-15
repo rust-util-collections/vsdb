@@ -153,12 +153,6 @@ where
             _pd: PhantomData,
         }
     }
-
-    /// Flush data to disk
-    #[inline(always)]
-    pub fn flush(&self) {
-        // pnk!(BNC.flush());
-    }
 }
 
 /*******************************************/

@@ -38,6 +38,12 @@ pub use veci::Veci as Vecx;
 use lazy_static::lazy_static;
 use std::env;
 
+/// Flush data to disk
+pub fn flush_data() {
+    #[cfg(feature = "diskcache")]
+    helper::BNC.flush().unwrap();
+}
+
 lazy_static! {
     /// Is it necessary to be compatible with Windows OS?
     pub static ref DATA_DIR: String = env::var("BNC_DATA_DIR")

@@ -60,7 +60,4 @@ where
     pub fn iter(&self) -> Iter<'_, T> {
         self.inner.iter()
     }
-
-    #[inline(always)]
-    pub fn flush_data(&mut self) {}
 }
