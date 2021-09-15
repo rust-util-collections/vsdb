@@ -36,8 +36,8 @@ fn t_vecx() {
         (0..cnt).map(|i| (i, gen_sample(i))).for_each(|(i, b)| {
             db.push(b.clone());
             assert_eq!(1 + i as usize, db.len());
-            assert_eq!(*pnk!(db.get(i as usize)), b);
-            assert_eq!(*pnk!(db.last()), b);
+            assert_eq!(pnk!(db.get(i as usize)), b);
+            assert_eq!(pnk!(db.last()), b);
         });
 
         assert_eq!(cnt, db.len());
@@ -59,7 +59,7 @@ fn t_vecx() {
     db_restore.set_value(2 * cnt, gen_sample(1000 * cnt));
     assert_eq!(1 + cnt, db_restore.len());
 
-    assert_eq!(*db_restore.get(2 * cnt).unwrap(), gen_sample(1000 * cnt));
+    assert_eq!(db_restore.get(2 * cnt).unwrap(), gen_sample(1000 * cnt));
     *db_restore.get_mut(2 * cnt).unwrap() = gen_sample(999 * cnt);
-    assert_eq!(*db_restore.get(2 * cnt).unwrap(), gen_sample(999 * cnt));
+    assert_eq!(db_restore.get(2 * cnt).unwrap(), gen_sample(999 * cnt));
 }

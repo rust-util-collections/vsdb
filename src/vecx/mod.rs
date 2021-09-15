@@ -14,13 +14,10 @@ use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     cmp::Ordering,
-    collections::HashMap,
     fmt,
     iter::{DoubleEndedIterator, Iterator},
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
-    ptr,
-    sync::Arc,
 };
 
 /// To solve the problem of unlimited memory usage,
@@ -33,7 +30,6 @@ pub struct Vecx<T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
-    memref: Arc<HashMap<usize, T>>,
     in_disk: backend::Vecx<T>,
 }
 
@@ -49,10 +45,7 @@ where
     #[inline(always)]
     pub fn new(path: &str) -> Result<Self> {
         let in_disk = backend::Vecx::load_or_create(path).c(d!())?;
-        Ok(Vecx {
-            memref: Arc::new(map! {}),
-            in_disk,
-        })
+        Ok(Vecx { in_disk })
     }
 
     /// Get the meta-storage path
@@ -64,19 +57,8 @@ where
     ///
     /// Any faster/better choice other than JSON ?
     #[inline(always)]
-    pub fn get(&self, idx: usize) -> Option<&T> {
-        let hdr = Arc::as_ptr(&self.memref) as *mut HashMap<usize, T>;
-        unsafe {
-            let r = (*hdr).get(&idx);
-            if r.is_some() {
-                return r;
-            }
-        }
-
-        self.in_disk.get(idx).map(|v| unsafe {
-            (*hdr).insert(idx, v);
-            (*hdr).get(&idx).unwrap()
-        })
+    pub fn get(&self, idx: usize) -> Option<T> {
+        self.in_disk.get(idx)
     }
 
     /// Imitate the behavior of 'Vec<_>.get_mut(...)'
@@ -88,15 +70,9 @@ where
     }
 
     /// Imitate the behavior of 'Vec<_>.last()'
-    pub fn last(&self) -> Option<&T> {
-        let hdr = Arc::as_ptr(&self.memref) as *mut HashMap<usize, T>;
-        self.in_disk
-            .last()
-            .map(|(idx, v)| unsafe {
-                (*hdr).insert(idx, v);
-                (*hdr).get(&idx)
-            })
-            .flatten()
+    #[inline(always)]
+    pub fn last(&self) -> Option<T> {
+        self.in_disk.last().map(|(_, v)| v)
     }
 
     /// Imitate the behavior of 'Vec<_>.len()'
@@ -114,7 +90,6 @@ where
     /// Imitate the behavior of 'Vec<_>.push(...)'
     #[inline(always)]
     pub fn push(&mut self, b: T) {
-        self.clean_cache();
         self.in_disk.push(b);
     }
 
@@ -122,20 +97,7 @@ where
     /// but we do not return the previous value, like `Vecx<_, _>.set_value`.
     #[inline(always)]
     pub fn set_value(&mut self, idx: usize, b: T) {
-        self.clean_cache();
         self.in_disk.insert(idx, b);
-    }
-
-    /// Trigger the cache clean process
-    /// **NOTE**: use `mut self` to make sure an unique access
-    #[inline(always)]
-    pub fn clean_cache(&mut self) {
-        let hdr = Arc::as_ptr(&self.memref) as *mut HashMap<usize, T>;
-        unsafe {
-            if !(*hdr).is_empty() {
-                ptr::replace(hdr, map! {});
-            }
-        }
     }
 
     /// Imitate the behavior of '.iter()'
@@ -146,11 +108,10 @@ where
         })
     }
 
-    /// Flush data to disk
+    /// Flush to disk
     #[inline(always)]
     pub fn flush_data(&mut self) {
         self.in_disk.flush();
-        self.clean_cache();
     }
 }
 

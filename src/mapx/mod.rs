@@ -13,14 +13,11 @@ use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     cmp::Ordering,
-    collections::HashMap,
     fmt,
     hash::Hash,
     iter::{DoubleEndedIterator, Iterator},
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
-    ptr,
-    sync::Arc,
 };
 
 /// In-memory cache size in the number of items
@@ -42,7 +39,6 @@ where
         + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    memref: Arc<HashMap<K, V>>,
     in_disk: backend::Mapx<K, V>,
 }
 
@@ -67,10 +63,7 @@ where
     #[inline(always)]
     pub fn new(path: &str) -> Result<Self> {
         let in_disk = backend::Mapx::load_or_create(path).c(d!())?;
-        Ok(Mapx {
-            memref: Arc::new(map! {}),
-            in_disk,
-        })
+        Ok(Mapx { in_disk })
     }
 
     /// Get the database storage path
@@ -82,19 +75,8 @@ where
     ///
     /// Any faster/better choice other than JSON ?
     #[inline(always)]
-    pub fn get(&self, key: &K) -> Option<&V> {
-        let hdr = Arc::as_ptr(&self.memref) as *mut HashMap<K, V>;
-        unsafe {
-            let r = (*hdr).get(key);
-            if r.is_some() {
-                return r;
-            }
-        }
-
-        self.in_disk.get(key).map(|v| unsafe {
-            (*hdr).insert(key.clone(), v);
-            (*hdr).get(key).unwrap()
-        })
+    pub fn get(&self, key: &K) -> Option<V> {
+        self.in_disk.get(key)
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get_mut(...)'
@@ -120,27 +102,13 @@ where
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
-        self.clean_cache();
         self.in_disk.insert(key, value)
     }
 
     /// Similar with `insert`, but ignore the old value.
     #[inline(always)]
     pub fn set_value(&mut self, key: K, value: V) {
-        self.clean_cache();
         self.in_disk.set_value(key, value);
-    }
-
-    /// Trigger the cache clean process
-    /// **NOTE**: use `mut self` to make sure an unique access
-    #[inline(always)]
-    pub fn clean_cache(&self) {
-        let hdr = Arc::as_ptr(&self.memref) as *mut HashMap<K, V>;
-        unsafe {
-            if !(*hdr).is_empty() {
-                ptr::replace(hdr, map! {});
-            }
-        }
     }
 
     /// Imitate the behavior of '.entry(...).or_insert(...)'
@@ -166,14 +134,12 @@ where
     /// Remove a <K, V> from mem and disk.
     #[inline(always)]
     pub fn remove(&mut self, key: &K) -> Option<V> {
-        self.clean_cache();
         self.in_disk.remove(key)
     }
 
     /// Remove a <K, V> from mem and disk.
     #[inline(always)]
     pub fn unset_value(&mut self, key: &K) {
-        self.clean_cache();
         self.in_disk.unset_value(key);
     }
 
@@ -181,7 +147,6 @@ where
     #[inline(always)]
     pub fn flush_data(&mut self) {
         self.in_disk.flush();
-        self.clean_cache();
     }
 }
 
