@@ -2,12 +2,13 @@
 //! # Common Types and Macros
 //!
 
+use crate::DATA_DIR;
 use lazy_static::lazy_static;
 use rocksdb::{DBCompressionType, Options, SliceTransform, DB};
 use ruc::*;
 use std::{
     convert::TryInto,
-    env, fs,
+    fs,
     io::{Read, Write},
     mem::size_of,
 };
@@ -18,10 +19,6 @@ const IDX_KEY: [u8; size_of::<u32>()] = u32::MAX.to_le_bytes();
 
 lazy_static! {
     pub(crate) static ref BNC: DB = pnk!(rocksdb_open());
-
-    /// Is it necessary to be compatible with Windows OS?
-    pub static ref DATA_DIR: String = env::var("BNC_DATA_DIR")
-        .unwrap_or_else(|_|"/tmp/.bnc".to_owned());
 }
 
 #[inline(always)]

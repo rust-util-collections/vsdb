@@ -16,7 +16,7 @@ lint:
 
 test:
 	cargo test --release -- --test-threads=1 --nocapture
-	# cargo test --release --no-default-features -- --test-threads=1 --nocapture
+	cargo test --release --no-default-features -- --test-threads=1 --nocapture
 
 bench:
 	cargo bench

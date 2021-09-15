@@ -5,6 +5,8 @@
 #![deny(warnings)]
 #![deny(missing_docs)]
 
+///////////////////////////////////////
+
 #[cfg(feature = "diskcache")]
 pub mod helper;
 #[cfg(feature = "diskcache")]
@@ -16,15 +18,31 @@ pub mod vecx;
 
 #[cfg(feature = "diskcache")]
 pub use mapx::Mapx;
-/// Alias for compatible purpose
-#[cfg(not(feature = "diskcache"))]
-pub type Mapx<K, V> = std::collections::HashMap<K, V>;
-
 #[cfg(feature = "diskcache")]
 pub use vecx::Vecx;
-/// Alias for compatible purpose
+
+///////////////////////////////////////
+
 #[cfg(not(feature = "diskcache"))]
-pub type Vecx<T> = Vec<T>;
+pub mod mapi;
+#[cfg(not(feature = "diskcache"))]
+pub mod veci;
+
+#[cfg(not(feature = "diskcache"))]
+pub use mapi::Mapi as Mapx;
+#[cfg(not(feature = "diskcache"))]
+pub use veci::Veci as Vecx;
+
+///////////////////////////////////////
+
+use lazy_static::lazy_static;
+use std::env;
+
+lazy_static! {
+    /// Is it necessary to be compatible with Windows OS?
+    pub static ref DATA_DIR: String = env::var("BNC_DATA_DIR")
+        .unwrap_or_else(|_|"/tmp/.bnc".to_owned());
+}
 
 /// Try once more when we fail to open a db.
 #[macro_export]
@@ -43,7 +61,7 @@ macro_rules! unique_path {
     () => {
         format!(
             "{}/__extra_meta/{}/{}_{}_{}_{}",
-            *$crate::helper::DATA_DIR,
+            *$crate::DATA_DIR,
             ts!(),
             file!(),
             line!(),
@@ -71,36 +89,14 @@ macro_rules! new_vecx {
 #[macro_export]
 macro_rules! new_vecx_custom {
     (@$ty: ty) => {{
-        #[cfg(feature = "diskcache")]
-        {
             let obj: $crate::Vecx<$ty> = $crate::try_twice!($crate::Vecx::new(&$crate::unique_path!()))
             obj
-        }
-        #[cfg(not(feature = "diskcache"))]
-        {
-            Vec::new()
-        }
     }};
     ($path: expr) => {{
-        #[cfg(feature = "diskcache")]
-        {
             $crate::try_twice!($crate::Vecx::new($path))
-        }
-        #[cfg(not(feature = "diskcache"))]
-        {
-            let _ = $path;
-            Vec::new()
-        }
     }};
     () => {{
-        #[cfg(feature = "diskcache")]
-        {
             $crate::try_twice!($crate::Vecx::new(&$crate::unique_path!()))
-        }
-        #[cfg(not(feature = "diskcache"))]
-        {
-            Vec::new()
-        }
     }};
 }
 
@@ -122,36 +118,14 @@ macro_rules! new_mapx {
 #[macro_export]
 macro_rules! new_mapx_custom {
     (@$ty: ty) => {{
-        #[cfg(feature = "diskcache")]
-        {
-            let obj: $crate::Mapx<$ty> =
-                $crate::try_twice!($crate::Mapx::new(&$crate::unique_path!()));
-            obj
-        }
-        #[cfg(not(feature = "diskcache"))]
-        {
-            std::collections::HashMap::new()
-        }
+        let obj: $crate::Mapx<$ty> =
+            $crate::try_twice!($crate::Mapx::new(&$crate::unique_path!()));
+        obj
     }};
     ($path: expr) => {{
-        #[cfg(feature = "diskcache")]
-        {
-            $crate::try_twice!($crate::Mapx::new(&*$path))
-        }
-        #[cfg(not(feature = "diskcache"))]
-        {
-            let _ = $path;
-            std::collections::HashMap::new()
-        }
+        $crate::try_twice!($crate::Mapx::new(&*$path))
     }};
     () => {{
-        #[cfg(feature = "diskcache")]
-        {
-            $crate::try_twice!($crate::Mapx::new(&$crate::unique_path!()))
-        }
-        #[cfg(not(feature = "diskcache"))]
-        {
-            std::collections::HashMap::new()
-        }
+        $crate::try_twice!($crate::Mapx::new(&$crate::unique_path!()))
     }};
 }

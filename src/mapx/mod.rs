@@ -20,9 +20,6 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-/// In-memory cache size in the number of items
-pub const IN_MEM_CNT: usize = 2;
-
 /// To solve the problem of unlimited memory usage,
 /// use this to replace the original in-memory `BTreeMap<_, _>`.
 #[derive(PartialEq, Debug, Clone)]
