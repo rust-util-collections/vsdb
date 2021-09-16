@@ -6,9 +6,7 @@ use crate::helper::*;
 use rocksdb::{DBIterator, Direction, IteratorMode};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
-use std::{
-    convert::TryInto, fmt, fs, iter::Iterator, marker::PhantomData, mem::size_of,
-};
+use std::{convert::TryInto, fmt, iter::Iterator, marker::PhantomData, mem::size_of};
 
 /// To solve the problem of unlimited memory usage,
 /// use this to replace the original in-memory `Vec<_>`.
@@ -21,7 +19,6 @@ where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
     root_path: String,
-    cnter_path: String,
     cnter: usize,
     prefix: Vec<u8>,
     _pd: PhantomData<T>,
@@ -41,21 +38,11 @@ where
     #[inline(always)]
     pub(super) fn load_or_create(path: &str) -> Result<Self> {
         meta_check(path).c(d!())?;
-        let cnter_path = format!("{}/{}", path, CNTER);
         let prefix = read_prefix_bytes(&format!("{}/{}", path, PREFIX)).c(d!())?;
-        let cnter = if BNC.prefix_iterator(&prefix).next().is_none() {
-            fs::File::create(&cnter_path)
-                .c(d!())
-                .and_then(|_| write_db_len(&cnter_path, 0).c(d!()))
-                .map(|_| 0)?
-        } else {
-            read_db_len(&cnter_path).c(d!())?
-        };
 
         Ok(Vecx {
             root_path: path.to_owned(),
-            cnter_path,
-            cnter,
+            cnter: BNC.prefix_iterator(&prefix).count(),
             prefix,
             _pd: PhantomData,
         })
@@ -94,7 +81,6 @@ where
     /// Imitate the behavior of 'Vec<_>.len()'
     #[inline(always)]
     pub(super) fn len(&self) -> usize {
-        debug_assert_eq!(pnk!(read_db_len(&self.cnter_path)), self.cnter);
         debug_assert_eq!(BNC.prefix_iterator(&self.prefix).count(), self.cnter);
         self.cnter
     }
@@ -119,8 +105,6 @@ where
         // There has no `remove`-like methods provided,
         // so we can increase this value directly.
         self.cnter += 1;
-
-        pnk!(write_db_len(&self.cnter_path, self.cnter));
     }
 
     /// Imitate the behavior of 'Vec<_>.insert(idx, value)'
@@ -135,8 +119,6 @@ where
             // There has no `remove` like methods provided,
             // so we can increase this value directly.
             self.cnter += 1;
-
-            pnk!(write_db_len(&self.cnter_path, self.cnter));
         }
     }
 

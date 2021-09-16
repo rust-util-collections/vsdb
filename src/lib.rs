@@ -39,16 +39,33 @@ use lazy_static::lazy_static;
 use std::env;
 
 /// Flush data to disk
+#[inline(always)]
 pub fn flush_data() {
     #[cfg(feature = "diskcache")]
     helper::BNC.flush().unwrap();
 }
 
-lazy_static! {
-    /// Is it necessary to be compatible with Windows OS?
-    pub static ref DATA_DIR: String = env::var("BNC_DATA_DIR")
-        .unwrap_or_else(|_|"/tmp/.bnc".to_owned());
+/// Delete all KVs
+pub fn clear() {
+    #[cfg(feature = "diskcache")]
+    helper::rocksdb_clear();
 }
+
+#[inline(always)]
+fn gen_data_dir() -> String {
+    // Is it necessary to be compatible with Windows OS?
+    let d = env::var("BNC_DATA_DIR").unwrap_or_else(|_| "/tmp/.bnc".to_owned());
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+lazy_static! {
+    #[allow(missing_docs)]
+    pub static ref DATA_DIR: String = gen_data_dir();
+}
+
+/// meta of each instance, Vecx/Mapx, etc.
+pub const BNC_META_NAME: &str = "__extra_meta__";
 
 /// Try once more when we fail to open a db.
 #[macro_export]
@@ -66,8 +83,9 @@ macro_rules! try_twice {
 macro_rules! unique_path {
     () => {
         format!(
-            "{}/__extra_meta__/{}/{}_{}_{}_{}",
+            "{}/{}/{}/{}_{}_{}_{}",
             *$crate::DATA_DIR,
+            $crate::BNC_META_NAME,
             ts!(),
             file!(),
             line!(),
@@ -99,7 +117,7 @@ macro_rules! new_vecx_custom {
             obj
     }};
     ($path: expr) => {{
-            $crate::try_twice!($crate::Vecx::new(&format!("{}/__extra_meta__/{}", &*$crate::DATA_DIR, &*$path)))
+            $crate::try_twice!($crate::Vecx::new(&format!("{}/{}/{}", *$crate::DATA_DIR, $crate::BNC_META_NAME, &*$path)))
     }};
     () => {{
             $crate::try_twice!($crate::Vecx::new(&$crate::unique_path!()))
@@ -130,8 +148,9 @@ macro_rules! new_mapx_custom {
     }};
     ($path: expr) => {{
         $crate::try_twice!($crate::Mapx::new(&format!(
-            "{}/__extra_meta__/{}",
-            &*$crate::DATA_DIR,
+            "{}/{}/{}",
+            *$crate::DATA_DIR,
+            $crate::BNC_META_NAME,
             &*$path
         )))
     }};

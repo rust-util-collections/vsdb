@@ -22,6 +22,8 @@ fn gen_sample(idx: usize) -> SampleBlock {
 
 #[test]
 fn t_vecx() {
+    crate::clear();
+
     let cnt = 200;
 
     let db = {
@@ -62,4 +64,7 @@ fn t_vecx() {
     assert_eq!(db_restore.get(2 * cnt).unwrap(), gen_sample(1000 * cnt));
     *db_restore.get_mut(2 * cnt).unwrap() = gen_sample(999 * cnt);
     assert_eq!(db_restore.get(2 * cnt).unwrap(), gen_sample(999 * cnt));
+
+    crate::clear();
+    assert!(db_restore.is_empty());
 }

@@ -21,6 +21,8 @@ fn gen_sample(idx: usize) -> SampleBlock {
 
 #[test]
 fn t_mapx() {
+    crate::clear();
+
     let cnt = 200;
 
     let db = {
@@ -56,11 +58,15 @@ fn t_mapx() {
         assert_eq!(i, db_restore.get(&i).unwrap().idx);
     });
 
-    (0..cnt).for_each(|i| {
+    (1..cnt).for_each(|i| {
         pnk!(db_restore.get_mut(&i)).idx = 1 + i;
         assert_eq!(pnk!(db_restore.get(&i)).idx, 1 + i);
         assert!(db_restore.contains_key(&i));
         assert!(db_restore.remove(&i).is_some());
         assert!(!db_restore.contains_key(&i));
     });
+
+    assert_eq!(1, db_restore.len());
+    crate::clear();
+    assert!(db_restore.is_empty());
 }

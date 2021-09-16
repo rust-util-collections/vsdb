@@ -2,7 +2,7 @@
 //! # Common Types and Macros
 //!
 
-use crate::DATA_DIR;
+use crate::{BNC_META_NAME, DATA_DIR};
 use lazy_static::lazy_static;
 use rocksdb::{DBCompressionType, Options, SliceTransform, DB};
 use ruc::*;
@@ -13,7 +13,6 @@ use std::{
     mem::size_of,
 };
 
-pub(crate) const CNTER: &str = "____cnter____";
 pub(crate) const PREFIX: &str = "____prefix____";
 const IDX_KEY: [u8; size_of::<u32>()] = u32::MAX.to_le_bytes();
 
@@ -33,13 +32,28 @@ fn rocksdb_open() -> Result<DB> {
     cfg.set_atomic_flush(true);
     cfg.set_prefix_extractor(SliceTransform::create_fixed_prefix(size_of::<u32>()));
 
-    let db = DB::open(&cfg, &*DATA_DIR).c(d!())?;
+    let db = DB::open(&cfg, crate::DATA_DIR.as_str()).c(d!())?;
 
     if db.get(IDX_KEY).c(d!())?.is_none() {
         db.put(IDX_KEY, u32::MAX.to_le_bytes()).c(d!())?;
     }
 
     Ok(db)
+}
+
+#[inline(always)]
+pub(crate) fn rocksdb_clear() {
+    BNC.iterator(rocksdb::IteratorMode::Start)
+        .for_each(|(k, _)| {
+            pnk!(BNC.delete(k));
+        });
+    pnk!(BNC.put(IDX_KEY, u32::MAX.to_le_bytes()));
+    pnk!(BNC.flush());
+    omit!(fs::remove_dir_all(format!(
+        "{}/{}",
+        DATA_DIR.as_str(),
+        BNC_META_NAME
+    )));
 }
 
 #[inline(always)]
@@ -73,16 +87,4 @@ pub(crate) fn meta_check(path: &str) -> Result<()> {
 #[inline(always)]
 pub(crate) fn read_prefix_bytes(path: &str) -> Result<Vec<u8>> {
     fs::read(path).c(d!(path.to_owned()))
-}
-
-#[inline(always)]
-pub(crate) fn read_db_len(path: &str) -> Result<usize> {
-    fs::read(path).c(d!(path.to_owned())).map(|bytes| {
-        usize::from_le_bytes(bytes[..size_of::<usize>()].try_into().unwrap())
-    })
-}
-
-#[inline(always)]
-pub(crate) fn write_db_len(path: &str, len: usize) -> Result<()> {
-    fs::write(path, usize::to_le_bytes(len)).c(d!(path.to_owned()))
 }

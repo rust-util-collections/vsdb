@@ -1,6 +1,6 @@
 [package]
 name = "bnc"
-version = "0.1.1"
+version = "0.2.0"
 authors = ["FindoraNetwork"]
 edition = "2018"
 
