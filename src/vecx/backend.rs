@@ -3,7 +3,7 @@
 //!
 
 use crate::helper::*;
-use rocksdb::{DBIterator, Direction, IteratorMode};
+use rocksdb::DBIterator;
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{convert::TryInto, fmt, iter::Iterator, marker::PhantomData, mem::size_of};
@@ -67,15 +67,9 @@ where
     }
 
     /// Imitate the behavior of 'Vec<_>.last()'
-    pub(super) fn last(&self) -> Option<(usize, T)> {
-        // Method 1:
-        let idx = self.len().saturating_sub(1);
-        self.get(idx).map(|v| (idx, v))
-
-        // // Method 2:
-        // let mut i = BNC.prefix_iterator(&self.prefix);
-        // i.set_mode(IteratorMode::From(&self.prefix, Direction::Reverse));
-        // i.next().map(|(_, v)| pnk!(serde_json::from_slice(&v)))
+    #[inline(always)]
+    pub(super) fn last(&self) -> Option<T> {
+        self.get(self.len().saturating_sub(1))
     }
 
     /// Imitate the behavior of 'Vec<_>.len()'
@@ -126,12 +120,9 @@ where
     #[inline(always)]
     pub(super) fn iter(&self) -> VecxIter<'_, T> {
         let i = BNC.prefix_iterator(&self.prefix);
-        let mut i_rev = BNC.prefix_iterator(&self.prefix);
-        i_rev.set_mode(IteratorMode::From(&self.prefix, Direction::Reverse));
 
         VecxIter {
             iter: i,
-            iter_rev: i_rev,
             _pd: PhantomData,
         }
     }
@@ -151,7 +142,6 @@ where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
     pub(super) iter: DBIterator<'a>,
-    pub(super) iter_rev: DBIterator<'a>,
     _pd: PhantomData<T>,
 }
 
@@ -162,20 +152,6 @@ where
     type Item = (usize, T);
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().map(|(idx, v)| {
-            (
-                usize::from_le_bytes(idx[..size_of::<usize>()].try_into().unwrap()),
-                pnk!(serde_json::from_slice(&v)),
-            )
-        })
-    }
-}
-
-impl<'a, T> DoubleEndedIterator for VecxIter<'a, T>
-where
-    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
-{
-    fn next_back(&mut self) -> Option<Self::Item> {
-        self.iter_rev.next().map(|(idx, v)| {
             (
                 usize::from_le_bytes(idx[..size_of::<usize>()].try_into().unwrap()),
                 pnk!(serde_json::from_slice(&v)),

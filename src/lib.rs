@@ -36,13 +36,48 @@ pub use veci::Veci as Vecx;
 ///////////////////////////////////////
 
 use lazy_static::lazy_static;
-use std::env;
+use ruc::*;
+use std::{
+    env, ptr,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
-/// Flush data to disk
+lazy_static! {
+    #[allow(missing_docs)]
+    pub static ref BNC_DATA_DIR: String = gen_data_dir();
+}
+
+/// meta of each instance, Vecx/Mapx, etc.
+pub const BNC_META_NAME: &str = "__extra_meta__";
+
+static DATA_DIR: String = String::new();
+
 #[inline(always)]
-pub fn flush_data() {
-    #[cfg(feature = "diskcache")]
-    helper::BNC.flush().unwrap();
+fn gen_data_dir() -> String {
+    let d = if DATA_DIR.is_empty() {
+        // Is it necessary to be compatible with Windows OS?
+        env::var("BNC_DATA_DIR").unwrap_or_else(|_| "/tmp/.bnc".to_owned())
+    } else {
+        DATA_DIR.clone()
+    };
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+/// Set ${BNC_DATA_DIR} manually
+pub fn set_data_dir(dir: &str) -> Result<()> {
+    lazy_static! {
+        static ref HAS_INITED: AtomicBool = AtomicBool::new(false);
+    }
+
+    if HAS_INITED.swap(true, Ordering::Relaxed) {
+        Err(eg!("BNC has been initialized !!"))
+    } else {
+        unsafe {
+            ptr::swap(DATA_DIR.as_ptr() as *mut u8, dir.to_owned().as_mut_ptr());
+        }
+        Ok(())
+    }
 }
 
 /// Delete all KVs
@@ -51,27 +86,18 @@ pub fn clear() {
     helper::rocksdb_clear();
 }
 
+/// Flush data to disk
 #[inline(always)]
-fn gen_data_dir() -> String {
-    // Is it necessary to be compatible with Windows OS?
-    let d = env::var("BNC_DATA_DIR").unwrap_or_else(|_| "/tmp/.bnc".to_owned());
-    std::fs::create_dir_all(&d).unwrap();
-    d
+pub fn flush_data() {
+    #[cfg(feature = "diskcache")]
+    helper::BNC.flush().unwrap();
 }
-
-lazy_static! {
-    #[allow(missing_docs)]
-    pub static ref DATA_DIR: String = gen_data_dir();
-}
-
-/// meta of each instance, Vecx/Mapx, etc.
-pub const BNC_META_NAME: &str = "__extra_meta__";
 
 /// Try once more when we fail to open a db.
 #[macro_export]
 macro_rules! try_twice {
     ($ops: expr) => {
-        ruc::pnk!($ops.c(d!()).or_else(|e| {
+        pnk!($ops.c(d!()).or_else(|e| {
             e.print(None);
             $ops.c(d!())
         }))
@@ -83,8 +109,7 @@ macro_rules! try_twice {
 macro_rules! unique_path {
     () => {
         format!(
-            "{}/{}/{}/{}_{}_{}_{}",
-            *$crate::DATA_DIR,
+            "{}/{}/{}_{}_{}_{}",
             $crate::BNC_META_NAME,
             ts!(),
             file!(),
@@ -117,7 +142,7 @@ macro_rules! new_vecx_custom {
             obj
     }};
     ($path: expr) => {{
-            $crate::try_twice!($crate::Vecx::new(&format!("{}/{}/{}", *$crate::DATA_DIR, $crate::BNC_META_NAME, &*$path)))
+            $crate::try_twice!($crate::Vecx::new(&format!("{}/{}", $crate::BNC_META_NAME, &*$path)))
     }};
     () => {{
             $crate::try_twice!($crate::Vecx::new(&$crate::unique_path!()))
@@ -148,8 +173,7 @@ macro_rules! new_mapx_custom {
     }};
     ($path: expr) => {{
         $crate::try_twice!($crate::Mapx::new(&format!(
-            "{}/{}/{}",
-            *$crate::DATA_DIR,
+            "{}/{}",
             $crate::BNC_META_NAME,
             &*$path
         )))

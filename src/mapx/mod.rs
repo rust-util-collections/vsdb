@@ -15,7 +15,7 @@ use std::{
     cmp::Ordering,
     fmt,
     hash::Hash,
-    iter::{DoubleEndedIterator, Iterator},
+    iter::Iterator,
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
 };
@@ -402,16 +402,6 @@ where
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next()
-    }
-}
-
-impl<'a, K, V> DoubleEndedIterator for MapxIter<'a, K, V>
-where
-    K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
-{
-    fn next_back(&mut self) -> Option<Self::Item> {
-        self.iter.next_back()
     }
 }
 

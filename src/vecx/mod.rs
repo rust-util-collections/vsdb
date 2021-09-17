@@ -15,7 +15,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::{
     cmp::Ordering,
     fmt,
-    iter::{DoubleEndedIterator, Iterator},
+    iter::Iterator,
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
 };
@@ -72,7 +72,7 @@ where
     /// Imitate the behavior of 'Vec<_>.last()'
     #[inline(always)]
     pub fn last(&self) -> Option<T> {
-        self.in_disk.last().map(|(_, v)| v)
+        self.in_disk.last()
     }
 
     /// Imitate the behavior of 'Vec<_>.len()'
@@ -240,15 +240,6 @@ where
     type Item = T;
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().map(|v| v.1)
-    }
-}
-
-impl<'a, T> DoubleEndedIterator for VecxIter<'a, T>
-where
-    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
-{
-    fn next_back(&mut self) -> Option<Self::Item> {
-        self.iter.next_back().map(|v| v.1)
     }
 }
 

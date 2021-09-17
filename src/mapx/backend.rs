@@ -3,15 +3,10 @@
 //!
 
 use crate::helper::*;
-use rocksdb::{DBIterator, DBPinnableSlice, Direction, IteratorMode};
+use rocksdb::{DBIterator, DBPinnableSlice};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
-use std::{
-    fmt,
-    hash::Hash,
-    iter::{DoubleEndedIterator, Iterator},
-    marker::PhantomData,
-};
+use std::{fmt, hash::Hash, iter::Iterator, marker::PhantomData};
 
 // To solve the problem of unlimited memory usage,
 // use this to replace the original in-memory `HashMap<_, _>`.
@@ -111,12 +106,9 @@ where
     #[inline(always)]
     pub(super) fn iter(&self) -> MapxIter<'_, K, V> {
         let i = BNC.prefix_iterator(&self.prefix);
-        let mut i_rev = BNC.prefix_iterator(&self.prefix);
-        i_rev.set_mode(IteratorMode::From(&self.prefix, Direction::Reverse));
 
         MapxIter {
             iter: i,
-            iter_rev: i_rev,
             _pd0: PhantomData,
             _pd1: PhantomData,
         }
@@ -163,7 +155,6 @@ where
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     pub(super) iter: DBIterator<'a>,
-    pub(super) iter_rev: DBIterator<'a>,
     _pd0: PhantomData<K>,
     _pd1: PhantomData<V>,
 }
@@ -176,21 +167,6 @@ where
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().map(|(k, v)| {
-            (
-                pnk!(bincode::deserialize(&k)),
-                pnk!(serde_json::from_slice(&v)),
-            )
-        })
-    }
-}
-
-impl<'a, K, V> DoubleEndedIterator for MapxIter<'a, K, V>
-where
-    K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
-{
-    fn next_back(&mut self) -> Option<Self::Item> {
-        self.iter_rev.next().map(|(k, v)| {
             (
                 pnk!(bincode::deserialize(&k)),
                 pnk!(serde_json::from_slice(&v)),
