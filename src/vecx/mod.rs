@@ -49,8 +49,8 @@ where
     }
 
     /// Get the meta-storage path
-    pub fn get_root_path(&self) -> &str {
-        self.in_disk.get_root_path()
+    pub fn get_path(&self) -> &str {
+        self.in_disk.get_path()
     }
 
     /// Imitate the behavior of 'Vec<_>.get(...)'
@@ -273,7 +273,7 @@ where
         S: serde::Serializer,
     {
         let v = pnk!(serde_json::to_string(&CacheMeta {
-            root_path: self.get_root_path(),
+            path: self.get_path(),
         }));
 
         serializer.serialize_str(&v)
@@ -290,7 +290,7 @@ where
     {
         deserializer.deserialize_str(CacheVisitor).map(|meta| {
             let meta = pnk!(serde_json::from_str::<CacheMeta>(&meta));
-            pnk!(Vecx::new(meta.root_path))
+            pnk!(Vecx::new(meta.path))
         })
     }
 }

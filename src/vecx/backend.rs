@@ -2,7 +2,7 @@
 //! # Disk Storage Implementation
 //!
 
-use crate::helper::*;
+use crate::{helper::*, DB_NUM};
 use rocksdb::DBIterator;
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
@@ -18,9 +18,10 @@ pub(super) struct Vecx<T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
-    root_path: String,
+    path: String,
     cnter: usize,
     prefix: Vec<u8>,
+    idx: usize,
     _pd: PhantomData<T>,
 }
 
@@ -39,18 +40,20 @@ where
     pub(super) fn load_or_create(path: &str) -> Result<Self> {
         meta_check(path).c(d!())?;
         let prefix = read_prefix_bytes(&format!("{}/{}", path, PREFIX)).c(d!())?;
+        let idx = hash(&path) % DB_NUM;
 
         Ok(Vecx {
-            root_path: path.to_owned(),
-            cnter: BNC.prefix_iterator(&prefix).count(),
+            path: path.to_owned(),
+            cnter: BNC[idx].prefix_iterator(&prefix).count(),
             prefix,
+            idx,
             _pd: PhantomData,
         })
     }
 
     /// Get the storage path
-    pub(super) fn get_root_path(&self) -> &str {
-        self.root_path.as_str()
+    pub(super) fn get_path(&self) -> &str {
+        self.path.as_str()
     }
 
     /// Imitate the behavior of 'Vec<_>.get(...)'
@@ -60,7 +63,8 @@ where
     pub(super) fn get(&self, idx: usize) -> Option<T> {
         let mut k = self.prefix.clone();
         k.extend_from_slice(&usize::to_le_bytes(idx)[..]);
-        BNC.get(k)
+        BNC[self.idx]
+            .get(k)
             .ok()
             .flatten()
             .map(|bytes| pnk!(serde_json::from_slice(&bytes)))
@@ -75,14 +79,17 @@ where
     /// Imitate the behavior of 'Vec<_>.len()'
     #[inline(always)]
     pub(super) fn len(&self) -> usize {
-        debug_assert_eq!(BNC.prefix_iterator(&self.prefix).count(), self.cnter);
+        debug_assert_eq!(
+            BNC[self.idx].prefix_iterator(&self.prefix).count(),
+            self.cnter
+        );
         self.cnter
     }
 
     /// A helper func
     #[inline(always)]
     pub(super) fn is_empty(&self) -> bool {
-        BNC.prefix_iterator(&self.prefix).next().is_none()
+        BNC[self.idx].prefix_iterator(&self.prefix).next().is_none()
     }
 
     /// Imitate the behavior of 'Vec<_>.push(...)'
@@ -94,7 +101,7 @@ where
         k.extend_from_slice(&idx.to_le_bytes()[..]);
         let value = pnk!(serde_json::to_vec(&b));
 
-        pnk!(BNC.put(k, value));
+        pnk!(BNC[self.idx].put(k, value));
 
         // There has no `remove`-like methods provided,
         // so we can increase this value directly.
@@ -107,7 +114,7 @@ where
         let mut k = self.prefix.clone();
         k.extend_from_slice(&idx.to_le_bytes()[..]);
         let value = pnk!(serde_json::to_vec(&b));
-        pnk!(BNC.put(k, value));
+        pnk!(BNC[self.idx].put(k, value));
 
         if idx >= self.cnter {
             // There has no `remove` like methods provided,
@@ -119,7 +126,7 @@ where
     /// Imitate the behavior of '.iter()'
     #[inline(always)]
     pub(super) fn iter(&self) -> VecxIter<'_, T> {
-        let i = BNC.prefix_iterator(&self.prefix);
+        let i = BNC[self.idx].prefix_iterator(&self.prefix);
 
         VecxIter {
             iter: i,

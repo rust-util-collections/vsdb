@@ -2,7 +2,7 @@
 //! # Disk Storage Implementation
 //!
 
-use crate::helper::*;
+use crate::{helper::*, DB_NUM};
 use rocksdb::{DBIterator, DBPinnableSlice};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
@@ -16,9 +16,10 @@ where
     K: Clone + Eq + PartialEq + Hash + Serialize + DeserializeOwned + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    root_path: String,
+    path: String,
     cnter: usize,
     prefix: Vec<u8>,
+    idx: usize,
     _pd0: PhantomData<K>,
     _pd1: PhantomData<V>,
 }
@@ -39,19 +40,21 @@ where
     pub(super) fn load_or_create(path: &str) -> Result<Self> {
         meta_check(path).c(d!())?;
         let prefix = read_prefix_bytes(&format!("{}/{}", path, PREFIX)).c(d!())?;
+        let idx = hash(&path) % DB_NUM;
 
         Ok(Mapx {
-            root_path: path.to_owned(),
-            cnter: BNC.prefix_iterator(&prefix).count(),
+            path: path.to_owned(),
+            cnter: BNC[idx].prefix_iterator(&prefix).count(),
             prefix,
+            idx,
             _pd0: PhantomData,
             _pd1: PhantomData,
         })
     }
 
     // Get the storage path
-    pub(super) fn get_root_path(&self) -> &str {
-        self.root_path.as_str()
+    pub(super) fn get_path(&self) -> &str {
+        self.path.as_str()
     }
 
     // Imitate the behavior of 'HashMap<_>.get(...)'
@@ -59,7 +62,8 @@ where
     pub(super) fn get(&self, key: &K) -> Option<V> {
         let mut k = self.prefix.clone();
         k.append(&mut pnk!(bincode::serialize(key)));
-        BNC.get(k)
+        BNC[self.idx]
+            .get(k)
             .ok()
             .flatten()
             .map(|bytes| pnk!(serde_json::from_slice(&bytes)))
@@ -68,14 +72,17 @@ where
     // Imitate the behavior of 'HashMap<_>.len()'.
     #[inline(always)]
     pub(super) fn len(&self) -> usize {
-        debug_assert_eq!(BNC.prefix_iterator(&self.prefix).count(), self.cnter);
+        debug_assert_eq!(
+            BNC[self.idx].prefix_iterator(&self.prefix).count(),
+            self.cnter
+        );
         self.cnter
     }
 
     // A helper func
     #[inline(always)]
     pub(super) fn is_empty(&self) -> bool {
-        BNC.prefix_iterator(&self.prefix).next().is_none()
+        BNC[self.idx].prefix_iterator(&self.prefix).next().is_none()
     }
 
     // Imitate the behavior of 'HashMap<_>.insert(...)'.
@@ -91,9 +98,9 @@ where
         let mut k = self.prefix.clone();
         k.append(&mut pnk!(bincode::serialize(&key)));
         let v = pnk!(serde_json::to_vec(&value));
-        let old_v = pnk!(BNC.get_pinned(&k));
+        let old_v = pnk!(BNC[self.idx].get_pinned(&k));
 
-        pnk!(BNC.put(k, v));
+        pnk!(BNC[self.idx].put(k, v));
 
         if old_v.is_none() {
             self.cnter += 1;
@@ -105,7 +112,7 @@ where
     // Imitate the behavior of '.iter()'
     #[inline(always)]
     pub(super) fn iter(&self) -> MapxIter<'_, K, V> {
-        let i = BNC.prefix_iterator(&self.prefix);
+        let i = BNC[self.idx].prefix_iterator(&self.prefix);
 
         MapxIter {
             iter: i,
@@ -117,7 +124,7 @@ where
     pub(super) fn contains_key(&self, key: &K) -> bool {
         let mut k = self.prefix.clone();
         k.append(&mut pnk!(bincode::serialize(key)));
-        pnk!(BNC.get_pinned(k)).is_some()
+        pnk!(BNC[self.idx].get_pinned(k)).is_some()
     }
 
     pub(super) fn remove(&mut self, key: &K) -> Option<V> {
@@ -128,9 +135,9 @@ where
     pub(super) fn unset_value(&mut self, key: &K) -> Option<DBPinnableSlice> {
         let mut k = self.prefix.clone();
         k.append(&mut pnk!(bincode::serialize(&key)));
-        let old_v = pnk!(BNC.get_pinned(&k));
+        let old_v = pnk!(BNC[self.idx].get_pinned(&k));
 
-        pnk!(BNC.delete(k));
+        pnk!(BNC[self.idx].delete(k));
 
         if old_v.is_some() {
             self.cnter -= 1;

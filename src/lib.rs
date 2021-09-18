@@ -43,9 +43,12 @@ use std::{
 };
 
 lazy_static! {
+    static ref BNC_ROOT_DIR: String = gen_root_dir();
     #[allow(missing_docs)]
-    pub static ref BNC_DATA_DIR: String = gen_data_dir();
+    pub static ref BNC_DATA_DIR: Vec<String> = (0..DB_NUM).map(|i| format!("{}/{}", &*BNC_ROOT_DIR, i)).collect();
 }
+
+const DB_NUM: usize = 8;
 
 /// meta of each instance, Vecx/Mapx, etc.
 pub const BNC_META_NAME: &str = "__extra_meta__";
@@ -53,7 +56,7 @@ pub const BNC_META_NAME: &str = "__extra_meta__";
 static DATA_DIR: String = String::new();
 
 #[inline(always)]
-fn gen_data_dir() -> String {
+fn gen_root_dir() -> String {
     let d = if DATA_DIR.is_empty() {
         // Is it necessary to be compatible with Windows OS?
         env::var("BNC_DATA_DIR").unwrap_or_else(|_| "/tmp/.bnc".to_owned())
@@ -90,7 +93,9 @@ pub fn clear() {
 #[inline(always)]
 pub fn flush_data() {
     #[cfg(feature = "diskcache")]
-    helper::BNC.flush().unwrap();
+    (0..DB_NUM).for_each(|i| {
+        helper::BNC[i].flush().unwrap();
+    });
 }
 
 /// Try once more when we fail to open a db.
