@@ -2,7 +2,7 @@
 //! # Common Types and Macros
 //!
 
-use crate::{BNC_DATA_DIR, BNC_META_NAME, BNC_ROOT_DIR, DB_NUM};
+use crate::{BNC_DATA_DIR, BNC_DATA_LIST, BNC_META_NAME, DB_NUM};
 use lazy_static::lazy_static;
 use rocksdb::{DBCompressionType, Options, SliceTransform, DB};
 use ruc::*;
@@ -36,7 +36,7 @@ fn rocksdb_open(idx: usize) -> Result<DB> {
     cfg.set_atomic_flush(true);
     cfg.set_prefix_extractor(SliceTransform::create_fixed_prefix(size_of::<u32>()));
 
-    let db = DB::open(&cfg, crate::BNC_DATA_DIR[idx].as_str()).c(d!())?;
+    let db = DB::open(&cfg, crate::BNC_DATA_LIST[idx].as_str()).c(d!())?;
 
     if db.get(IDX_KEY).c(d!())?.is_none() {
         db.put(IDX_KEY, u32::MAX.to_le_bytes()).c(d!())?;
@@ -57,7 +57,7 @@ pub(crate) fn rocksdb_clear() {
         pnk!(BNC[i].flush());
         omit!(fs::remove_dir_all(format!(
             "{}/{}",
-            BNC_DATA_DIR[i].as_str(),
+            BNC_DATA_LIST[i].as_str(),
             BNC_META_NAME
         )));
     }
@@ -66,7 +66,7 @@ pub(crate) fn rocksdb_clear() {
 #[inline(always)]
 pub(crate) fn meta_check(path: &str) -> Result<()> {
     let idx = hash(&path) % DB_NUM;
-    let path = format!("{}/{}", BNC_ROOT_DIR.as_str(), path);
+    let path = format!("{}/{}", BNC_DATA_DIR.as_str(), path);
     fs::create_dir_all(&path).c(d!(path.clone()))?;
 
     let mut f = fs::OpenOptions::new()
@@ -96,7 +96,7 @@ pub(crate) fn meta_check(path: &str) -> Result<()> {
 
 #[inline(always)]
 pub(crate) fn read_prefix_bytes(path: &str) -> Result<Vec<u8>> {
-    let path = format!("{}/{}", BNC_ROOT_DIR.as_str(), path);
+    let path = format!("{}/{}", BNC_DATA_DIR.as_str(), path);
     fs::read(&path).c(d!(path))
 }
 
