@@ -1,14 +1,14 @@
 [package]
-name = "bnc"
-version = "0.2.0"
+name = "fbnc"
+version = "0.2.1"
 authors = ["FindoraNetwork"]
 edition = "2018"
-description = "A native cache for blockchain."
+description = "Findora BNC, a native cache implementation for blockchain."
 keywords = ["cache", "database"]
 categories = ["database"]
 license = "MIT"
-homepage = "https://github.com/FindoraNetwork/BNC"
-repository = "https://github.com/FindoraNetwork/BNC.git"
+homepage = "https://github.com/FindoraNetwork/fbnc"
+repository = "https://github.com/FindoraNetwork/fbnc.git"
 
 [dependencies]
 rand = "0.8.3"
