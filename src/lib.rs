@@ -8,7 +8,7 @@
 ///////////////////////////////////////
 
 #[cfg(feature = "diskcache")]
-pub mod helper;
+mod helper;
 #[cfg(feature = "diskcache")]
 pub mod mapx;
 #[cfg(feature = "diskcache")]
