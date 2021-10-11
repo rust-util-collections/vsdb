@@ -1,8 +1,11 @@
-![](https://tokei.rs/b1/github/FindoraNetwork/BNC)
+![](https://tokei.rs/b1/github/FindoraNetwork/fbnc)
+![GitHub top language](https://img.shields.io/github/languages/top/FindoraNetwork/fbnc)
+![GitHub issues](https://img.shields.io/github/issues-raw/FindoraNetwork/fbnc)
+![GitHub pull requests](https://img.shields.io/github/issues-pr-raw/FindoraNetwork/fbnc)
 
-# BNC
+# fBNC
 
-BNC, Blockchain Native Cache.
+fBNC, Blockchain Native Cache.
 
 A native stateless storage library for block chain.
 
