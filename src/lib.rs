@@ -12,6 +12,8 @@ mod helper;
 #[cfg(feature = "diskcache")]
 pub mod mapx;
 #[cfg(feature = "diskcache")]
+pub mod mapxnk;
+#[cfg(feature = "diskcache")]
 mod serde;
 #[cfg(feature = "diskcache")]
 pub mod vecx;
@@ -186,5 +188,39 @@ macro_rules! new_mapx_custom {
     }};
     () => {{
         $crate::try_twice!($crate::Mapx::new(&$crate::unique_path!()))
+    }};
+}
+
+/// A helper for creating Mapxnk.
+#[macro_export]
+macro_rules! new_mapxnk {
+    (@$ty: ty) => {
+        $crate::new_mapxnk_custom!($ty)
+    };
+    ($path:expr) => {
+        $crate::new_mapxnk_custom!($path)
+    };
+    () => {
+        $crate::new_mapxnk_custom!()
+    };
+}
+
+/// A helper for creating Mapxnk.
+#[macro_export]
+macro_rules! new_mapxnk_custom {
+    (@$ty: ty) => {{
+        let obj: $crate::mapxnk::Mapxnk<$ty> =
+            $crate::try_twice!($crate::mapxnk::Mapxnk::new(&$crate::unique_path!()));
+        obj
+    }};
+    ($path: expr) => {{
+        $crate::try_twice!($crate::mapxnk::Mapxnk::new(&format!(
+            "{}/{}",
+            $crate::BNC_META_NAME,
+            &*$path
+        )))
+    }};
+    () => {{
+        $crate::try_twice!($crate::mapxnk::Mapxnk::new(&$crate::unique_path!()))
     }};
 }
