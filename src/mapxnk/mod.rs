@@ -8,53 +8,19 @@ mod backend;
 #[cfg(test)]
 mod test;
 
-use crate::serde::{CacheMeta, CacheVisitor};
+use crate::{
+    serde::{CacheMeta, CacheVisitor},
+    NumKey,
+};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     cmp::Ordering,
-    convert::TryFrom,
     fmt,
     iter::Iterator,
-    mem::{size_of, ManuallyDrop},
+    mem::ManuallyDrop,
     ops::{Deref, DerefMut},
 };
-
-/// numberic key
-pub trait NumKey: Clone + PartialEq + Eq + PartialOrd + Ord + fmt::Debug {
-    /// key => bytes
-    fn to_bytes(&self) -> Vec<u8>;
-    /// bytes => key
-    fn from_bytes(b: &[u8]) -> Result<Self>;
-}
-
-macro_rules! impl_nk_trait {
-    ($t: ty) => {
-        impl NumKey for $t {
-            fn to_bytes(&self) -> Vec<u8> {
-                self.to_ne_bytes().to_vec()
-            }
-            fn from_bytes(b: &[u8]) -> Result<Self> {
-                <[u8; size_of::<$t>()]>::try_from(b)
-                    .c(d!())
-                    .map(<$t>::from_ne_bytes)
-            }
-        }
-    };
-}
-
-impl_nk_trait!(i8);
-impl_nk_trait!(i16);
-impl_nk_trait!(i32);
-impl_nk_trait!(i64);
-impl_nk_trait!(i128);
-impl_nk_trait!(isize);
-impl_nk_trait!(u8);
-impl_nk_trait!(u16);
-impl_nk_trait!(u32);
-impl_nk_trait!(u64);
-impl_nk_trait!(u128);
-impl_nk_trait!(usize);
 
 /// To solve the problem of unlimited memory usage,
 /// use this to replace the original in-memory `BTreeMap<_, _>`.

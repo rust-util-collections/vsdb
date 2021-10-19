@@ -2,8 +2,7 @@
 //! # Disk Storage Implementation
 //!
 
-use super::NumKey;
-use crate::{helper::*, DB_NUM};
+use crate::{helper::*, NumKey, DB_NUM};
 use rocksdb::{DBIterator, DBPinnableSlice, Direction, IteratorMode};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
