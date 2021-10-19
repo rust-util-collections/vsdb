@@ -21,6 +21,8 @@ pub mod vecx;
 #[cfg(feature = "diskcache")]
 pub use mapx::Mapx;
 #[cfg(feature = "diskcache")]
+pub use mapxnk::Mapxnk;
+#[cfg(feature = "diskcache")]
 pub use vecx::Vecx;
 
 ///////////////////////////////////////
@@ -32,6 +34,8 @@ pub mod veci;
 
 #[cfg(not(feature = "diskcache"))]
 pub use mapi::Mapi as Mapx;
+#[cfg(not(feature = "diskcache"))]
+pub use mapi::Mapi as Mapxnk;
 #[cfg(not(feature = "diskcache"))]
 pub use veci::Veci as Vecx;
 
@@ -209,18 +213,18 @@ macro_rules! new_mapxnk {
 #[macro_export]
 macro_rules! new_mapxnk_custom {
     (@$ty: ty) => {{
-        let obj: $crate::mapxnk::Mapxnk<$ty> =
-            $crate::try_twice!($crate::mapxnk::Mapxnk::new(&$crate::unique_path!()));
+        let obj: $crate::Mapxnk<$ty> =
+            $crate::try_twice!($crate::Mapxnk::new(&$crate::unique_path!()));
         obj
     }};
     ($path: expr) => {{
-        $crate::try_twice!($crate::mapxnk::Mapxnk::new(&format!(
+        $crate::try_twice!($crate::Mapxnk::new(&format!(
             "{}/{}",
             $crate::BNC_META_NAME,
             &*$path
         )))
     }};
     () => {{
-        $crate::try_twice!($crate::mapxnk::Mapxnk::new(&$crate::unique_path!()))
+        $crate::try_twice!($crate::Mapxnk::new(&$crate::unique_path!()))
     }};
 }
