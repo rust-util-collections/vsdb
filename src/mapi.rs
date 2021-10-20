@@ -8,10 +8,11 @@ use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{
-        btree_map::{Entry, Iter},
+        btree_map::{Entry, IntoIter, Iter},
         BTreeMap,
     },
     fmt,
+    ops::RangeBounds,
 };
 
 #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +54,32 @@ where
     #[inline(always)]
     pub fn get(&self, key: &K) -> Option<V> {
         self.inner.get(key).cloned()
+    }
+
+    #[inline(always)]
+    pub fn get_closest_smaller(&self, key: &K) -> Option<(K, V)> {
+        self.inner
+            .range(..key)
+            .rev()
+            .next()
+            .map(|(k, v)| (k.clone(), v.clone()))
+    }
+
+    #[inline(always)]
+    pub fn get_closest_larger(&self, key: &K) -> Option<(K, V)> {
+        self.inner
+            .range(key..)
+            .next()
+            .map(|(k, v)| (k.clone(), v.clone()))
+    }
+
+    #[inline(always)]
+    pub fn range<R: RangeBounds<K>>(&self, range: R) -> IntoIter<K, V> {
+        self.inner
+            .range(range)
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<BTreeMap<_, _>>()
+            .into_iter()
     }
 
     #[inline(always)]
