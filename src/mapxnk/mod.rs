@@ -19,6 +19,7 @@ use std::{
     fmt,
     iter::Iterator,
     mem::ManuallyDrop,
+    ops::{Bound, RangeBounds},
     ops::{Deref, DerefMut},
 };
 
@@ -79,7 +80,7 @@ where
     pub fn get_mut(&mut self, key: &K) -> Option<ValueMut<'_, K, V>> {
         self.in_disk
             .get(key)
-            .map(move |v| ValueMut::new(self, key.clone(), v))
+            .map(move |v| ValueMut::new(self, *key, v))
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.len()'.
@@ -114,10 +115,26 @@ where
 
     /// Imitate the behavior of '.iter()'
     #[inline(always)]
-    pub fn iter(&self) -> Box<dyn Iterator<Item = (K, V)> + '_> {
-        Box::new(MapxnkIter {
+    pub fn iter(&self) -> MapxnkIter<'_, K, V> {
+        MapxnkIter {
+            hi: Bound::Unbounded,
+            lo: Bound::Unbounded,
             iter: self.in_disk.iter(),
-        })
+        }
+    }
+
+    /// range(start..end)
+    pub fn range<R: RangeBounds<K>>(&self, range: R) -> MapxnkIter<'_, K, V> {
+        let hi = range.end_bound().cloned();
+        let lo = range.start_bound().cloned();
+
+        let iter = match lo {
+            Bound::Unbounded => self.in_disk.iter(),
+            Bound::Included(k) => self.in_disk.iter_from(&k),
+            Bound::Excluded(k) => self.in_disk.iter_from(&k),
+        };
+
+        MapxnkIter { hi, lo, iter }
     }
 
     /// Check if a key is exists.
@@ -276,7 +293,7 @@ where
     /// Imitate the `btree_map/btree_map::Entry.or_insert(...)`.
     pub fn or_insert(self, default: V) -> ValueMut<'a, K, V> {
         if !self.db.contains_key(&self.key) {
-            self.db.set_value(self.key.clone(), default);
+            self.db.set_value(self.key, default);
         }
         pnk!(self.db.get_mut(&self.key))
     }
@@ -287,7 +304,7 @@ where
         F: FnOnce() -> V,
     {
         if !self.db.contains_key(&self.key) {
-            self.db.set_value(self.key.clone(), default());
+            self.db.set_value(self.key, default());
         }
         pnk!(self.db.get_mut(&self.key))
     }
@@ -307,6 +324,8 @@ where
     K: NumKey,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
+    hi: Bound<K>,
+    lo: Bound<K>,
     iter: backend::MapxnkIter<'a, K, V>,
 }
 
@@ -317,7 +336,17 @@ where
 {
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next()
+        self.iter.next().and_then(|(k, v)| {
+            if let Bound::Excluded(lo) = self.lo {
+                alt!(k == lo, return self.next());
+            }
+            match self.hi {
+                Bound::Unbounded => {}
+                Bound::Included(hi) => alt!(hi < k, return None),
+                Bound::Excluded(hi) => alt!(hi <= k, return None),
+            }
+            Some((k, v))
+        })
     }
 }
 

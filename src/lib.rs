@@ -109,7 +109,7 @@ pub fn flush_data() {
 }
 
 /// numberic key
-pub trait NumKey: Clone + PartialEq + Eq + PartialOrd + Ord + fmt::Debug {
+pub trait NumKey: Clone + Copy + PartialEq + Eq + PartialOrd + Ord + fmt::Debug {
     /// key => bytes
     fn to_bytes(&self) -> Vec<u8>;
     /// bytes => key
@@ -120,12 +120,12 @@ macro_rules! impl_nk_trait {
     ($t: ty) => {
         impl NumKey for $t {
             fn to_bytes(&self) -> Vec<u8> {
-                self.to_ne_bytes().to_vec()
+                self.to_le_bytes().to_vec()
             }
             fn from_bytes(b: &[u8]) -> Result<Self> {
                 <[u8; size_of::<$t>()]>::try_from(b)
                     .c(d!())
-                    .map(<$t>::from_ne_bytes)
+                    .map(<$t>::from_le_bytes)
             }
         }
     };

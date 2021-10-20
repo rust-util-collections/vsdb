@@ -81,17 +81,7 @@ where
 
     #[inline(always)]
     fn get_closest(&self, key: &K, direction: Direction) -> Option<(K, V)> {
-        let mut k = self.prefix.clone();
-        k.append(&mut key.to_bytes());
-        BNC[self.idx]
-            .iterator(IteratorMode::From(&k, direction))
-            .next()
-            .map(|(k, v)| {
-                (
-                    pnk!(K::from_bytes(&k[self.prefix.len()..])),
-                    pnk!(serde_json::from_slice(&v)),
-                )
-            })
+        self.iter_from_with_direction(key, direction).next()
     }
 
     // Imitate the behavior of 'HashMap<_>.len()'.
@@ -138,6 +128,31 @@ where
     #[inline(always)]
     pub(super) fn iter(&self) -> MapxnkIter<'_, K, V> {
         let i = BNC[self.idx].prefix_iterator(&self.prefix);
+
+        MapxnkIter {
+            iter: i,
+            hdr: self,
+            _pd0: PhantomData,
+            _pd1: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub(super) fn iter_from(&self, start_k: &K) -> MapxnkIter<'_, K, V> {
+        self.iter_from_with_direction(start_k, Direction::Forward)
+    }
+
+    #[inline(always)]
+    pub(super) fn iter_from_with_direction(
+        &self,
+        start_k: &K,
+        direction: Direction,
+    ) -> MapxnkIter<'_, K, V> {
+        let mut k = self.prefix.clone();
+        k.append(&mut start_k.to_bytes());
+
+        let mut i = BNC[self.idx].prefix_iterator(&self.prefix);
+        i.set_mode(IteratorMode::From(&k, direction));
 
         MapxnkIter {
             iter: i,

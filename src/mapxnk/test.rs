@@ -4,7 +4,7 @@
 
 use super::*;
 use serde::{Deserialize, Serialize};
-use std::fs;
+use std::{fs, ops::Bound};
 
 #[derive(Serialize, Deserialize, Default, Debug, Eq, PartialEq, Clone)]
 struct SampleBlock {
@@ -69,4 +69,25 @@ fn t_mapxnk() {
     assert_eq!(1, db_restore.len());
     crate::clear();
     assert!(db_restore.is_empty());
+
+    db_restore.insert(1, gen_sample(1));
+    db_restore.insert(10, gen_sample(10));
+    db_restore.insert(100, gen_sample(100));
+    db_restore.insert(1000, gen_sample(1000));
+
+    assert!(db_restore.range(0..1).next().is_none());
+
+    assert_eq!(100, db_restore.range(12..999).next().unwrap().1.idx);
+    assert_eq!(100, db_restore.range(12..=999).next().unwrap().1.idx);
+
+    assert_eq!(100, db_restore.range(100..=999).next().unwrap().1.idx);
+    assert!(db_restore
+        .range((Bound::Excluded(100), Bound::Included(999)))
+        .next()
+        .is_none());
+
+    assert_eq!(100, db_restore.get_closest_larger(&99).unwrap().1.idx);
+    assert_eq!(100, db_restore.get_closest_larger(&100).unwrap().1.idx);
+    assert_eq!(100, db_restore.get_closest_smaller(&100).unwrap().1.idx);
+    assert_eq!(100, db_restore.get_closest_smaller(&101).unwrap().1.idx);
 }
