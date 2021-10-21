@@ -8,7 +8,7 @@ use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{
-        btree_map::{Entry, IntoIter, Iter},
+        btree_map::{Entry, IntoIter},
         BTreeMap,
     },
     fmt,
@@ -113,8 +113,12 @@ where
     }
 
     #[inline(always)]
-    pub fn iter(&self) -> Iter<'_, K, V> {
-        self.inner.iter()
+    pub fn iter(&self) -> IntoIter<K, V> {
+        self.inner
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<BTreeMap<_, _>>()
+            .into_iter()
     }
 
     #[inline(always)]
