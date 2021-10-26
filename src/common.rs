@@ -7,6 +7,7 @@ use {
     lazy_static::lazy_static,
     ruc::*,
     serde::{de, Deserialize, Serialize},
+    sha3::{Digest, Sha3_256},
     sled::{Config, Db as DB, Mode, Tree},
     std::{
         env, fs,
@@ -36,6 +37,12 @@ macro_rules! parse_int {
 pub(crate) type Prefix = u64;
 pub(crate) type PrefixBytes = [u8; PREFIX_SIZ];
 pub(crate) const PREFIX_SIZ: usize = size_of::<Prefix>();
+
+const RESERVED_ID_CNT: Prefix = 4096;
+pub(crate) const BIGGEST_RESERVED_ID: Prefix = RESERVED_ID_CNT - 1;
+
+pub(crate) type BranchID = u64;
+pub(crate) type VersionID = u64;
 
 pub(crate) struct VsDB {
     meta: DB,
@@ -68,12 +75,21 @@ impl VsDB {
     }
 
     pub(crate) fn alloc_prefix(&self) -> Prefix {
-        parse_int!(self
-            .meta
-            .update_and_fetch(self.prefix_allocator.key, PrefixAllocator::next)
-            .unwrap()
-            .unwrap()
-            .as_ref())
+        parse_int!(
+            self.meta
+                .update_and_fetch(self.prefix_allocator.key, PrefixAllocator::next)
+                .unwrap()
+                .unwrap()
+                .as_ref()
+        )
+    }
+
+    pub(crate) fn alloc_branch_id(&self) -> BranchID {
+        self.alloc_prefix() as BranchID
+    }
+
+    pub(crate) fn alloc_version_id(&self) -> VersionID {
+        self.alloc_prefix() as VersionID
     }
 
     fn flush_data(&self) {
@@ -93,7 +109,7 @@ impl PrefixAllocator {
             Self {
                 key: 0_u8.to_be_bytes(),
             },
-            Prefix::MIN.to_be_bytes(),
+            (RESERVED_ID_CNT + Prefix::MIN).to_be_bytes(),
         )
     }
 
@@ -173,4 +189,12 @@ impl<'de> de::Visitor<'de> for SimpleVisitor {
     {
         Ok(v.to_vec())
     }
+}
+
+pub(crate) fn compute_sig(ivec: &[&[u8]]) -> Vec<u8> {
+    let mut hasher = Sha3_256::new();
+    for bytes in ivec {
+        hasher.update(bytes);
+    }
+    hasher.finalize().as_slice().to_vec()
 }

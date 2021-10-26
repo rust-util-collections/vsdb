@@ -8,18 +8,12 @@
 mod test;
 
 use crate::{
-    basic::mapx_oc::{self, MapxOC, MapxOCIter},
+    basic::mapx_oc::{Entry, MapxOC, MapxOCIter, ValueMut},
     common::{InstanceCfg, SimpleVisitor},
 };
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
-use std::{
-    fmt,
-    iter::{DoubleEndedIterator, Iterator},
-    marker::PhantomData,
-    mem::ManuallyDrop,
-    ops::{Deref, DerefMut},
-};
+use std::{fmt, marker::PhantomData};
 
 /// To solve the problem of unlimited memory usage,
 /// use this to replace the original in-memory `BTreeMap<_, _>`.
@@ -58,12 +52,8 @@ where
 }
 
 macro_rules! convert {
-    ($as_param: expr) => {{
-        bcs::to_bytes::<K>($as_param).unwrap()
-    }};
-    (@$as_ret: expr) => {{
-        bcs::from_bytes::<K>(&$as_ret).unwrap()
-    }};
+    ($as_param: expr) => {{ bcs::to_bytes::<K>($as_param).unwrap() }};
+    (@$as_ret: expr) => {{ bcs::from_bytes::<K>(&$as_ret).unwrap() }};
 }
 
 ///////////////////////////////////////////////
@@ -104,11 +94,11 @@ where
 
     /// Imitate the behavior of 'BTreeMap<_>.get_mut(...)'
     #[inline(always)]
-    pub fn get_mut(&mut self, key: &K) -> Option<ValueMut<'_, K, V>> {
+    pub fn get_mut(&mut self, key: &K) -> Option<ValueMut<'_, Vec<u8>, V>> {
         let k = convert!(key);
         self.inner
             .get(&k)
-            .map(move |v| ValueMut::new(self, key.clone(), v))
+            .map(move |v| ValueMut::new(&mut self.inner, k, v))
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.len()'.
@@ -139,7 +129,7 @@ where
 
     /// Imitate the behavior of '.entry(...).or_insert(...)'
     #[inline(always)]
-    pub fn entry(&mut self, key: K) -> mapx_oc::Entry<'_, Vec<u8>, V> {
+    pub fn entry(&mut self, key: K) -> Entry<'_, Vec<u8>, V> {
         let key = convert!(&key);
         self.inner.entry(key)
     }
@@ -184,117 +174,6 @@ where
 /*******************************************/
 // End of the self-implementation for Mapx //
 /////////////////////////////////////////////
-
-//////////////////////////////////////////////////////////////////////////////////
-// Begin of the implementation of ValueMut(returned by `self.get_mut`) for Mapx //
-/********************************************************************************/
-
-/// Returned by `<Mapx>.get_mut(...)`
-#[derive(Debug)]
-pub struct ValueMut<'a, K, V>
-where
-    K: Clone
-        + PartialEq
-        + Eq
-        + PartialOrd
-        + Ord
-        + Serialize
-        + DeserializeOwned
-        + fmt::Debug,
-    V: Serialize + DeserializeOwned + fmt::Debug,
-{
-    hdr: &'a mut Mapx<K, V>,
-    key: ManuallyDrop<K>,
-    value: ManuallyDrop<V>,
-}
-
-impl<'a, K, V> ValueMut<'a, K, V>
-where
-    K: Clone
-        + PartialEq
-        + Eq
-        + PartialOrd
-        + Ord
-        + Serialize
-        + DeserializeOwned
-        + fmt::Debug,
-    V: Serialize + DeserializeOwned + fmt::Debug,
-{
-    fn new(hdr: &'a mut Mapx<K, V>, key: K, value: V) -> Self {
-        ValueMut {
-            hdr,
-            key: ManuallyDrop::new(key),
-            value: ManuallyDrop::new(value),
-        }
-    }
-}
-
-///
-/// **NOTE**: VERY IMPORTANT !!!
-///
-impl<'a, K, V> Drop for ValueMut<'a, K, V>
-where
-    K: Clone
-        + PartialEq
-        + Eq
-        + PartialOrd
-        + Ord
-        + Serialize
-        + DeserializeOwned
-        + fmt::Debug,
-    V: Serialize + DeserializeOwned + fmt::Debug,
-{
-    fn drop(&mut self) {
-        // This operation is safe within a `drop()`.
-        // SEE: [**ManuallyDrop::take**](std::mem::ManuallyDrop::take)
-        unsafe {
-            self.hdr.set_value(
-                ManuallyDrop::take(&mut self.key),
-                ManuallyDrop::take(&mut self.value),
-            );
-        };
-    }
-}
-
-impl<'a, K, V> Deref for ValueMut<'a, K, V>
-where
-    K: Clone
-        + PartialEq
-        + Eq
-        + PartialOrd
-        + Ord
-        + Serialize
-        + DeserializeOwned
-        + fmt::Debug,
-    V: Serialize + DeserializeOwned + fmt::Debug,
-{
-    type Target = V;
-
-    fn deref(&self) -> &Self::Target {
-        &self.value
-    }
-}
-
-impl<'a, K, V> DerefMut for ValueMut<'a, K, V>
-where
-    K: Clone
-        + PartialEq
-        + Eq
-        + PartialOrd
-        + Ord
-        + Serialize
-        + DeserializeOwned
-        + fmt::Debug,
-    V: Serialize + DeserializeOwned + fmt::Debug,
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.value
-    }
-}
-
-/******************************************************************************/
-// End of the implementation of ValueMut(returned by `self.get_mut`) for Mapx //
-////////////////////////////////////////////////////////////////////////////////
 
 //////////////////////////////////////////////////
 // Begin of the implementation of Iter for Mapx //

@@ -10,9 +10,7 @@ mod test;
 
 use crate::common::{InstanceCfg, SimpleVisitor, VSDB};
 use ruc::*;
-use sled::IVec;
 use std::{
-    iter::Iterator,
     mem::ManuallyDrop,
     ops::{Deref, DerefMut, RangeBounds},
 };
@@ -21,13 +19,13 @@ use std::{
 /// use this to replace the original in-memory `BTreeMap<_, _>`.
 #[derive(PartialEq, Eq, Debug)]
 pub struct MapxRaw {
-    in_disk: backend::MapxRaw,
+    inner: backend::MapxRaw,
 }
 
 impl From<InstanceCfg> for MapxRaw {
     fn from(cfg: InstanceCfg) -> Self {
         Self {
-            in_disk: backend::MapxRaw::from(cfg),
+            inner: backend::MapxRaw::from(cfg),
         }
     }
 }
@@ -47,70 +45,74 @@ impl MapxRaw {
     #[inline(always)]
     pub fn new() -> Self {
         MapxRaw {
-            in_disk: backend::MapxRaw::must_new(VSDB.alloc_prefix()),
+            inner: backend::MapxRaw::must_new(VSDB.alloc_prefix()),
         }
     }
 
     // Get the database storage path
     pub(crate) fn get_instance_cfg(&self) -> InstanceCfg {
-        self.in_disk.get_instance_cfg()
+        self.inner.get_instance_cfg()
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get(...)'
     #[inline(always)]
-    pub fn get(&self, key: &[u8]) -> Option<IVec> {
-        self.in_disk.get(key)
+    pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
+        self.inner.get(key).map(|iv| iv.to_vec())
     }
 
     /// less or equal value
     #[inline(always)]
-    pub fn get_le(&self, key: &[u8]) -> Option<(IVec, IVec)> {
-        self.in_disk.get_le(key)
+    pub fn get_le(&self, key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+        self.inner
+            .get_le(key)
+            .map(|(ik, iv)| (ik.to_vec(), iv.to_vec()))
     }
 
     /// great or equal value
     #[inline(always)]
-    pub fn get_ge(&self, key: &[u8]) -> Option<(IVec, IVec)> {
-        self.in_disk.get_ge(key)
+    pub fn get_ge(&self, key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+        self.inner
+            .get_ge(key)
+            .map(|(ik, iv)| (ik.to_vec(), iv.to_vec()))
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get_mut(...)'
     #[inline(always)]
     pub fn get_mut(&mut self, key: &[u8]) -> Option<ValueMut<'_>> {
-        self.in_disk
+        self.inner
             .get(key)
-            .map(move |v| ValueMut::new(self, IVec::from(key), v))
+            .map(move |v| ValueMut::new(self, key.to_owned(), v.to_vec()))
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.len()'.
     #[inline(always)]
     pub fn len(&self) -> usize {
-        self.in_disk.len()
+        self.inner.len()
     }
 
     /// A helper func
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        self.in_disk.is_empty()
+        self.inner.is_empty()
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
-    pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Option<IVec> {
-        self.in_disk.insert(key, value)
+    pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Option<Vec<u8>> {
+        self.inner.insert(key, value).map(|iv| iv.to_vec())
     }
 
     /// Imitate the behavior of '.entry(...).or_insert(...)'
     #[inline(always)]
     pub fn entry<'a>(&'a mut self, key: &'a [u8]) -> Entry<'a> {
-        Entry { key, db: self }
+        Entry { key, hdr: self }
     }
 
     /// Imitate the behavior of '.iter()'
     #[inline(always)]
     pub fn iter(&self) -> MapxRawIter {
         MapxRawIter {
-            iter: self.in_disk.iter(),
+            iter: self.inner.iter(),
         }
     }
 
@@ -118,26 +120,26 @@ impl MapxRaw {
     #[inline(always)]
     pub fn range<'a, R: RangeBounds<&'a [u8]>>(&'a self, bounds: R) -> MapxRawIter {
         MapxRawIter {
-            iter: self.in_disk.range(bounds),
+            iter: self.inner.range(bounds),
         }
     }
 
     /// Check if a key is exists.
     #[inline(always)]
     pub fn contains_key(&self, key: &[u8]) -> bool {
-        self.in_disk.contains_key(key)
+        self.inner.contains_key(key)
     }
 
     /// Try to remove an entry
     #[inline(always)]
-    pub fn remove(&mut self, key: &[u8]) -> Option<IVec> {
-        self.in_disk.remove(key)
+    pub fn remove(&mut self, key: &[u8]) -> Option<Vec<u8>> {
+        self.inner.remove(key).map(|iv| iv.to_vec())
     }
 
     /// Clear all data.
     #[inline(always)]
     pub fn clear(&mut self) {
-        self.in_disk.clear();
+        self.inner.clear();
     }
 }
 
@@ -153,12 +155,12 @@ impl MapxRaw {
 #[derive(PartialEq, Eq, Debug)]
 pub struct ValueMut<'a> {
     hdr: &'a mut MapxRaw,
-    key: ManuallyDrop<IVec>,
-    value: ManuallyDrop<IVec>,
+    key: ManuallyDrop<Vec<u8>>,
+    value: ManuallyDrop<Vec<u8>>,
 }
 
 impl<'a> ValueMut<'a> {
-    fn new(hdr: &'a mut MapxRaw, key: IVec, value: IVec) -> Self {
+    fn new(hdr: &'a mut MapxRaw, key: Vec<u8>, value: Vec<u8>) -> Self {
         ValueMut {
             hdr,
             key: ManuallyDrop::new(key),
@@ -167,9 +169,7 @@ impl<'a> ValueMut<'a> {
     }
 }
 
-///
-/// **NOTE**: &[u8]ERY IMPORTANT !!!
-///
+/// NOTE: Very Important !!!
 impl<'a> Drop for ValueMut<'a> {
     fn drop(&mut self) {
         // This operation is safe within a `drop()`.
@@ -184,7 +184,7 @@ impl<'a> Drop for ValueMut<'a> {
 }
 
 impl<'a> Deref for ValueMut<'a> {
-    type Target = IVec;
+    type Target = Vec<u8>;
 
     fn deref(&self) -> &Self::Target {
         &self.value
@@ -208,27 +208,16 @@ impl<'a> DerefMut for ValueMut<'a> {
 /// Imitate the `btree_map/btree_map::Entry`.
 pub struct Entry<'a> {
     key: &'a [u8],
-    db: &'a mut MapxRaw,
+    hdr: &'a mut MapxRaw,
 }
 
 impl<'a> Entry<'a> {
     /// Imitate the `btree_map/btree_map::Entry.or_insert(...)`.
     pub fn or_insert(self, default: &'a [u8]) -> ValueMut<'a> {
-        if !self.db.contains_key(self.key) {
-            self.db.insert(self.key, default);
+        if !self.hdr.contains_key(self.key) {
+            self.hdr.insert(self.key, default);
         }
-        pnk!(self.db.get_mut(self.key))
-    }
-
-    /// Imitate the `btree_map/btree_map::Entry.or_insert_with(...)`.
-    pub fn or_insert_with<F>(self, default: F) -> ValueMut<'a>
-    where
-        F: FnOnce() -> Vec<u8>,
-    {
-        if !self.db.contains_key(self.key) {
-            self.db.insert(self.key, &default());
-        }
-        pnk!(self.db.get_mut(self.key))
+        pnk!(self.hdr.get_mut(self.key))
     }
 }
 
@@ -246,15 +235,17 @@ pub struct MapxRawIter {
 }
 
 impl Iterator for MapxRawIter {
-    type Item = (IVec, IVec);
+    type Item = (Vec<u8>, Vec<u8>);
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next()
+        self.iter.next().map(|(ik, iv)| (ik.to_vec(), iv.to_vec()))
     }
 }
 
 impl DoubleEndedIterator for MapxRawIter {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.iter.next_back()
+        self.iter
+            .next_back()
+            .map(|(ik, iv)| (ik.to_vec(), iv.to_vec()))
     }
 }
 
