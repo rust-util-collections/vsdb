@@ -1,10 +1,9 @@
 //!
-//! # A disk-storage replacement for the pure in-memory BTreeMap
-//!
-//! This module is non-invasive to external code except the `new` method.
+//! A disk-storage replacement for the pure in-memory BTreeMap.
 //!
 
 mod backend;
+
 #[cfg(test)]
 mod test;
 
@@ -20,27 +19,27 @@ use std::{
 /// To solve the problem of unlimited memory usage,
 /// use this to replace the original in-memory `BTreeMap<_, _>`.
 #[derive(PartialEq, Eq, Debug)]
-pub struct MapxOC<K, V>
+pub struct MapxOrd<K, V>
 where
     K: OrderConsistKey,
     V: Serialize + DeserializeOwned + fmt::Debug,
 {
-    inner: backend::MapxOC<K, V>,
+    inner: backend::MapxOrd<K, V>,
 }
 
-impl<K, V> From<InstanceCfg> for MapxOC<K, V>
+impl<K, V> From<InstanceCfg> for MapxOrd<K, V>
 where
     K: OrderConsistKey,
     V: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn from(cfg: InstanceCfg) -> Self {
         Self {
-            inner: backend::MapxOC::from(cfg),
+            inner: backend::MapxOrd::from(cfg),
         }
     }
 }
 
-impl<K, V> Default for MapxOC<K, V>
+impl<K, V> Default for MapxOrd<K, V>
 where
     K: OrderConsistKey,
     V: Serialize + DeserializeOwned + fmt::Debug,
@@ -51,10 +50,10 @@ where
 }
 
 ///////////////////////////////////////////////
-// Begin of the self-implementation for MapxOC //
+// Begin of the self-implementation for MapxOrd //
 /*********************************************/
 
-impl<K, V> MapxOC<K, V>
+impl<K, V> MapxOrd<K, V>
 where
     K: OrderConsistKey,
     V: Serialize + DeserializeOwned + fmt::Debug,
@@ -62,8 +61,8 @@ where
     /// Create an instance.
     #[inline(always)]
     pub fn new() -> Self {
-        MapxOC {
-            inner: backend::MapxOC::must_new(),
+        MapxOrd {
+            inner: backend::MapxOrd::must_new(),
         }
     }
 
@@ -80,8 +79,8 @@ where
 
     /// same as the funtion without the '_' prefix, but use bytes key
     #[inline(always)]
-    pub fn _get(&self, key: &[u8]) -> Option<V> {
-        self.inner._get(key)
+    pub fn get_ref_bytes_k(&self, key: &[u8]) -> Option<V> {
+        self.inner.get_ref_bytes_k(key)
     }
 
     /// Get the closest smaller value, include itself.
@@ -92,8 +91,8 @@ where
 
     /// same as the funtion without the '_' prefix, but use bytes key
     #[inline(always)]
-    pub fn _get_le(&self, key: &[u8]) -> Option<(K, V)> {
-        self.inner._get_le(key)
+    pub fn get_le_ref_bytes_k(&self, key: &[u8]) -> Option<(K, V)> {
+        self.inner.get_le_ref_bytes_k(key)
     }
 
     /// Get the closest larger value, include itself.
@@ -104,8 +103,8 @@ where
 
     /// same as the funtion without the '_' prefix, but use bytes key
     #[inline(always)]
-    pub fn _get_ge(&self, key: &[u8]) -> Option<(K, V)> {
-        self.inner._get_ge(key)
+    pub fn get_ge_ref_bytes_k(&self, key: &[u8]) -> Option<(K, V)> {
+        self.inner.get_ge_ref_bytes_k(key)
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get_mut(...)'
@@ -118,9 +117,9 @@ where
 
     /// same as the funtion without the '_' prefix, but use bytes key
     #[inline(always)]
-    pub fn _get_mut(&mut self, key: &[u8]) -> Option<ValueMut<'_, K, V>> {
+    pub fn get_mut_ref_bytes_k(&mut self, key: &[u8]) -> Option<ValueMut<'_, K, V>> {
         self.inner
-            ._get(key)
+            .get_ref_bytes_k(key)
             .and_then(|v| K::from_slice(key).ok().map(|k| ValueMut::new(self, k, v)))
     }
 
@@ -138,38 +137,38 @@ where
 
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
-    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+    pub fn insert(&mut self, key: K, value: &V) -> Option<V> {
         self.inner.insert(key, value)
     }
 
     /// same as the funtion without the '_' prefix, but use bytes key
     #[inline(always)]
-    pub fn _insert(&mut self, key: &[u8], value: V) -> Option<V> {
-        self.inner._insert(key, value)
+    pub fn insert_ref_bytes_k(&mut self, key: &[u8], value: &V) -> Option<V> {
+        self.inner.insert_ref_bytes_k(key, value)
     }
 
     /// same as the funtion without the '_' prefix, but use bytes key&value
     #[inline(always)]
-    pub fn __insert(&mut self, key: &[u8], value: &[u8]) -> Option<V> {
-        self.inner.__insert(key, value)
+    pub fn insert_ref_bytes_kv(&mut self, key: &[u8], value: &[u8]) -> Option<V> {
+        self.inner.insert_ref_bytes_kv(key, value)
     }
 
     /// Similar with `insert`, but ignore the old value.
     #[inline(always)]
-    pub fn set_value(&mut self, key: K, value: V) {
+    pub fn set_value(&mut self, key: K, value: &V) {
         self.inner.set_value(key, value);
     }
 
     /// same as the funtion without the '_' prefix, but use bytes key
     #[inline(always)]
-    pub fn _set_value(&mut self, key: &[u8], value: V) {
-        self.inner._set_value(key, value);
+    pub fn set_value_ref_bytes_k(&mut self, key: &[u8], value: &V) {
+        self.inner.set_value_ref_bytes_k(key, value);
     }
 
     /// same as the funtion without the '_' prefix, but use bytes key&value
     #[inline(always)]
-    pub fn __set_value(&mut self, key: &[u8], value: &[u8]) {
-        self.inner.__set_value(key, value);
+    pub fn set_value_ref_bytes_kv(&mut self, key: &[u8], value: &[u8]) {
+        self.inner.set_value_ref_bytes_kv(key, value);
     }
 
     /// Imitate the behavior of '.entry(...).or_insert(...)'
@@ -180,16 +179,16 @@ where
 
     /// Imitate the behavior of '.iter()'
     #[inline(always)]
-    pub fn iter(&self) -> MapxOCIter<K, V> {
-        MapxOCIter {
+    pub fn iter(&self) -> MapxOrdIter<K, V> {
+        MapxOrdIter {
             iter: self.inner.iter(),
         }
     }
 
     /// range(start..end)
     #[inline(always)]
-    pub fn range<R: RangeBounds<K>>(&self, bounds: R) -> MapxOCIter<K, V> {
-        MapxOCIter {
+    pub fn range<R: RangeBounds<K>>(&self, bounds: R) -> MapxOrdIter<K, V> {
+        MapxOrdIter {
             iter: self.inner.range(bounds),
         }
     }
@@ -214,8 +213,8 @@ where
 
     /// same as the funtion without the '_' prefix, but use bytes key
     #[inline(always)]
-    pub fn _contains_key(&self, key: &[u8]) -> bool {
-        self.inner._contains_key(key)
+    pub fn contains_key_ref_bytes_k(&self, key: &[u8]) -> bool {
+        self.inner.contains_key_ref_bytes_k(key)
     }
 
     /// Remove a <K, V> from mem and disk.
@@ -226,8 +225,8 @@ where
 
     /// same as the funtion without the '_' prefix, but use bytes key
     #[inline(always)]
-    pub fn _remove(&mut self, key: &[u8]) -> Option<V> {
-        self.inner._remove(key)
+    pub fn remove_ref_bytes_k(&mut self, key: &[u8]) -> Option<V> {
+        self.inner.remove_ref_bytes_k(key)
     }
 
     /// Remove a <K, V> from mem and disk.
@@ -238,8 +237,8 @@ where
 
     /// same as the funtion without the '_' prefix, but use bytes key
     #[inline(always)]
-    pub fn _unset_value(&mut self, key: &[u8]) {
-        self.inner._unset_value(key);
+    pub fn unset_value_ref_bytes_k(&mut self, key: &[u8]) {
+        self.inner.unset_value_ref_bytes_k(key);
     }
 
     /// Clear all data.
@@ -250,21 +249,21 @@ where
 }
 
 /*******************************************/
-// End of the self-implementation for MapxOC //
+// End of the self-implementation for MapxOrd //
 /////////////////////////////////////////////
 
 //////////////////////////////////////////////////////////////////////////////////
-// Begin of the implementation of ValueMut(returned by `self.get_mut`) for MapxOC //
+// Begin of the implementation of ValueMut(returned by `self.get_mut`) for MapxOrd //
 /********************************************************************************/
 
-/// Returned by `<MapxOC>.get_mut(...)`
+/// Returned by `<MapxOrd>.get_mut(...)`
 #[derive(Debug)]
 pub struct ValueMut<'a, K, V>
 where
     K: OrderConsistKey,
     V: Serialize + DeserializeOwned + fmt::Debug,
 {
-    hdr: &'a mut MapxOC<K, V>,
+    hdr: &'a mut MapxOrd<K, V>,
     key: ManuallyDrop<K>,
     value: ManuallyDrop<V>,
 }
@@ -274,7 +273,7 @@ where
     K: OrderConsistKey,
     V: Serialize + DeserializeOwned + fmt::Debug,
 {
-    pub(crate) fn new(hdr: &'a mut MapxOC<K, V>, key: K, value: V) -> Self {
+    pub(crate) fn new(hdr: &'a mut MapxOrd<K, V>, key: K, value: V) -> Self {
         ValueMut {
             hdr,
             key: ManuallyDrop::new(key),
@@ -295,7 +294,7 @@ where
         unsafe {
             self.hdr.set_value(
                 ManuallyDrop::take(&mut self.key),
-                ManuallyDrop::take(&mut self.value),
+                &ManuallyDrop::take(&mut self.value),
             );
         };
     }
@@ -324,11 +323,11 @@ where
 }
 
 /******************************************************************************/
-// End of the implementation of ValueMut(returned by `self.get_mut`) for MapxOC //
+// End of the implementation of ValueMut(returned by `self.get_mut`) for MapxOrd //
 ////////////////////////////////////////////////////////////////////////////////
 
 ///////////////////////////////////////////////////
-// Begin of the implementation of Entry for MapxOC //
+// Begin of the implementation of Entry for MapxOrd //
 /*************************************************/
 
 /// Imitate the `btree_map/btree_map::Entry`.
@@ -338,7 +337,7 @@ where
     V: 'a + fmt::Debug + Serialize + DeserializeOwned,
 {
     key: K,
-    hdr: &'a mut MapxOC<K, V>,
+    hdr: &'a mut MapxOrd<K, V>,
 }
 
 impl<'a, K, V> Entry<'a, K, V>
@@ -347,7 +346,7 @@ where
     V: 'a + fmt::Debug + Serialize + DeserializeOwned,
 {
     /// Imitate the `btree_map/btree_map::Entry.or_insert(...)`.
-    pub fn or_insert(self, default: V) -> ValueMut<'a, K, V> {
+    pub fn or_insert(self, default: &V) -> ValueMut<'a, K, V> {
         if !self.hdr.contains_key(&self.key) {
             self.hdr.set_value(self.key.clone(), default);
         }
@@ -356,23 +355,23 @@ where
 }
 
 /***********************************************/
-// End of the implementation of Entry for MapxOC //
+// End of the implementation of Entry for MapxOrd //
 /////////////////////////////////////////////////
 
 //////////////////////////////////////////////////
-// Begin of the implementation of Iter for MapxOC //
+// Begin of the implementation of Iter for MapxOrd //
 /************************************************/
 
-/// Iter over [MapxOC](self::MapxOC).
-pub struct MapxOCIter<K, V>
+/// Iter over [MapxOrd](self::MapxOrd).
+pub struct MapxOrdIter<K, V>
 where
     K: OrderConsistKey,
     V: Serialize + DeserializeOwned + fmt::Debug,
 {
-    iter: backend::MapxOCIter<K, V>,
+    iter: backend::MapxOrdIter<K, V>,
 }
 
-impl<K, V> Iterator for MapxOCIter<K, V>
+impl<K, V> Iterator for MapxOrdIter<K, V>
 where
     K: OrderConsistKey,
     V: Serialize + DeserializeOwned + fmt::Debug,
@@ -383,7 +382,7 @@ where
     }
 }
 
-impl<K, V> DoubleEndedIterator for MapxOCIter<K, V>
+impl<K, V> DoubleEndedIterator for MapxOrdIter<K, V>
 where
     K: OrderConsistKey,
     V: Serialize + DeserializeOwned + fmt::Debug,
@@ -394,14 +393,14 @@ where
 }
 
 /**********************************************/
-// End of the implementation of Iter for MapxOC //
+// End of the implementation of Iter for MapxOrd //
 ////////////////////////////////////////////////
 
 ///////////////////////////////////////////////////////////////////
-// Begin of the implementation of Serialize/Deserialize for MapxOC //
+// Begin of the implementation of Serialize/Deserialize for MapxOrd //
 /*****************************************************************/
 
-impl<K, V> serde::Serialize for MapxOC<K, V>
+impl<K, V> serde::Serialize for MapxOrd<K, V>
 where
     K: OrderConsistKey,
     V: Serialize + DeserializeOwned + fmt::Debug,
@@ -415,7 +414,7 @@ where
     }
 }
 
-impl<'de, K, V> serde::Deserialize<'de> for MapxOC<K, V>
+impl<'de, K, V> serde::Deserialize<'de> for MapxOrd<K, V>
 where
     K: OrderConsistKey,
     V: Serialize + DeserializeOwned + fmt::Debug,
@@ -426,13 +425,13 @@ where
     {
         deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
             let meta = pnk!(bcs::from_bytes::<InstanceCfg>(&meta));
-            MapxOC::from(meta)
+            MapxOrd::from(meta)
         })
     }
 }
 
 /***************************************************************/
-// End of the implementation of Serialize/Deserialize for MapxOC //
+// End of the implementation of Serialize/Deserialize for MapxOrd //
 /////////////////////////////////////////////////////////////////
 
 //////////////////////////////////////////////////////////////////////////
@@ -502,7 +501,7 @@ impl OrderConsistKey for String {
     }
 }
 
-macro_rules! impl_ock {
+macro_rules! impl_ordk {
     ($int: ty) => {
         impl OrderConsistKey for $int {
             #[inline(always)]
@@ -593,46 +592,46 @@ macro_rules! impl_ock {
     };
 }
 
-impl_ock!(i8);
-impl_ock!(i16);
-impl_ock!(i32);
-impl_ock!(i64);
-impl_ock!(i128);
-impl_ock!(isize);
-impl_ock!(u8);
-impl_ock!(u16);
-impl_ock!(u32);
-impl_ock!(u64);
-impl_ock!(u128);
-impl_ock!(usize);
+impl_ordk!(i8);
+impl_ordk!(i16);
+impl_ordk!(i32);
+impl_ordk!(i64);
+impl_ordk!(i128);
+impl_ordk!(isize);
+impl_ordk!(u8);
+impl_ordk!(u16);
+impl_ordk!(u32);
+impl_ordk!(u64);
+impl_ordk!(u128);
+impl_ordk!(usize);
 
-impl_ock!(@i8);
-impl_ock!(@i16);
-impl_ock!(@i32);
-impl_ock!(@i64);
-impl_ock!(@i128);
-impl_ock!(@isize);
-// impl_ock!(@u8);
-impl_ock!(@u16);
-impl_ock!(@u32);
-impl_ock!(@u64);
-impl_ock!(@u128);
-impl_ock!(@usize);
+impl_ordk!(@i8);
+impl_ordk!(@i16);
+impl_ordk!(@i32);
+impl_ordk!(@i64);
+impl_ordk!(@i128);
+impl_ordk!(@isize);
+// impl_ordk!(@u8);
+impl_ordk!(@u16);
+impl_ordk!(@u32);
+impl_ordk!(@u64);
+impl_ordk!(@u128);
+impl_ordk!(@usize);
 
 macro_rules! impl_repeat {
     ($i: expr) => {
-        impl_ock!(i8, $i);
-        impl_ock!(i16, $i);
-        impl_ock!(i32, $i);
-        impl_ock!(i64, $i);
-        impl_ock!(i128, $i);
-        impl_ock!(isize, $i);
-        impl_ock!(u8, $i);
-        impl_ock!(u16, $i);
-        impl_ock!(u32, $i);
-        impl_ock!(u64, $i);
-        impl_ock!(u128, $i);
-        impl_ock!(usize, $i);
+        impl_ordk!(i8, $i);
+        impl_ordk!(i16, $i);
+        impl_ordk!(i32, $i);
+        impl_ordk!(i64, $i);
+        impl_ordk!(i128, $i);
+        impl_ordk!(isize, $i);
+        impl_ordk!(u8, $i);
+        impl_ordk!(u16, $i);
+        impl_ordk!(u32, $i);
+        impl_ordk!(u64, $i);
+        impl_ordk!(u128, $i);
+        impl_ordk!(usize, $i);
     };
     ($i: expr, $($ii: expr),+) => {
         impl_repeat!($i);

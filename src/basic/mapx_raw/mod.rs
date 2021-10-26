@@ -1,14 +1,11 @@
 //!
-//! # A disk-storage replacement for the pure in-memory BTreeMap
-//!
-//! This module is non-invasive to external code except the `new` method.
+//! A disk-storage replacement for the pure in-memory BTreeMap.
 //!
 
-mod backend;
 #[cfg(test)]
 mod test;
 
-use crate::common::{InstanceCfg, SimpleVisitor, VSDB};
+use crate::common::{engines, InstanceCfg, SimpleVisitor};
 use ruc::*;
 use std::{
     mem::ManuallyDrop,
@@ -19,13 +16,13 @@ use std::{
 /// use this to replace the original in-memory `BTreeMap<_, _>`.
 #[derive(PartialEq, Eq, Debug)]
 pub struct MapxRaw {
-    inner: backend::MapxRaw,
+    inner: engines::Mapx,
 }
 
 impl From<InstanceCfg> for MapxRaw {
     fn from(cfg: InstanceCfg) -> Self {
         Self {
-            inner: backend::MapxRaw::from(cfg),
+            inner: engines::Mapx::from(cfg),
         }
     }
 }
@@ -45,7 +42,7 @@ impl MapxRaw {
     #[inline(always)]
     pub fn new() -> Self {
         MapxRaw {
-            inner: backend::MapxRaw::must_new(VSDB.alloc_prefix()),
+            inner: engines::Mapx::new(),
         }
     }
 
@@ -60,20 +57,22 @@ impl MapxRaw {
         self.inner.get(key).map(|iv| iv.to_vec())
     }
 
+    /// Check if a key is exists.
+    #[inline(always)]
+    pub fn contains_key(&self, key: &[u8]) -> bool {
+        self.get(key).is_some()
+    }
+
     /// less or equal value
     #[inline(always)]
     pub fn get_le(&self, key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
-        self.inner
-            .get_le(key)
-            .map(|(ik, iv)| (ik.to_vec(), iv.to_vec()))
+        self.range(..=key).next_back()
     }
 
     /// great or equal value
     #[inline(always)]
     pub fn get_ge(&self, key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
-        self.inner
-            .get_ge(key)
-            .map(|(ik, iv)| (ik.to_vec(), iv.to_vec()))
+        self.range(key..).next()
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get_mut(...)'
@@ -94,12 +93,6 @@ impl MapxRaw {
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
-    }
-
-    /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
-    #[inline(always)]
-    pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Option<Vec<u8>> {
-        self.inner.insert(key, value).map(|iv| iv.to_vec())
     }
 
     /// Imitate the behavior of '.entry(...).or_insert(...)'
@@ -124,10 +117,10 @@ impl MapxRaw {
         }
     }
 
-    /// Check if a key is exists.
+    /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
-    pub fn contains_key(&self, key: &[u8]) -> bool {
-        self.inner.contains_key(key)
+    pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Option<Vec<u8>> {
+        self.inner.insert(key, value).map(|iv| iv.to_vec())
     }
 
     /// Try to remove an entry
@@ -231,7 +224,7 @@ impl<'a> Entry<'a> {
 
 /// Iter over [MapxRaw](self::MapxRaw).
 pub struct MapxRawIter {
-    iter: backend::MapxRawIter,
+    iter: engines::MapxIter,
 }
 
 impl Iterator for MapxRawIter {

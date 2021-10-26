@@ -1,14 +1,12 @@
 //!
-//! # A disk-storage replacement for the pure in-memory BTreeMap
-//!
-//! This module is non-invasive to external code except the `new` method.
+//! A disk-storage replacement for the pure in-memory BTreeMap.
 //!
 
 #[cfg(test)]
 mod test;
 
 use crate::{
-    basic::mapx_oc::{Entry, MapxOC, MapxOCIter, ValueMut},
+    basic::mapx_ord::{Entry, MapxOrd, MapxOrdIter, ValueMut},
     common::{InstanceCfg, SimpleVisitor},
 };
 use ruc::*;
@@ -30,7 +28,7 @@ where
         + fmt::Debug,
     V: Serialize + DeserializeOwned + fmt::Debug,
 {
-    inner: MapxOC<Vec<u8>, V>,
+    inner: MapxOrd<Vec<u8>, V>,
     _pd: PhantomData<K>,
 }
 
@@ -76,7 +74,7 @@ where
     #[inline(always)]
     pub fn new() -> Self {
         Mapx {
-            inner: MapxOC::new(),
+            inner: MapxOrd::new(),
             _pd: PhantomData,
         }
     }
@@ -115,14 +113,14 @@ where
 
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
-    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+    pub fn insert(&mut self, key: K, value: &V) -> Option<V> {
         let key = convert!(&key);
         self.inner.insert(key, value)
     }
 
     /// Similar with `insert`, but ignore the old value.
     #[inline(always)]
-    pub fn set_value(&mut self, key: K, value: V) {
+    pub fn set_value(&mut self, key: K, value: &V) {
         let key = convert!(&key);
         self.inner.set_value(key, value);
     }
@@ -185,7 +183,7 @@ where
     K: PartialEq + Eq + Serialize + DeserializeOwned + fmt::Debug,
     V: Serialize + DeserializeOwned + fmt::Debug,
 {
-    iter: MapxOCIter<Vec<u8>, V>,
+    iter: MapxOrdIter<Vec<u8>, V>,
     _pd: PhantomData<K>,
 }
 
@@ -258,7 +256,7 @@ where
         deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
             let meta = pnk!(bcs::from_bytes::<InstanceCfg>(&meta));
             Mapx {
-                inner: MapxOC::from(meta),
+                inner: MapxOrd::from(meta),
                 _pd: PhantomData,
             }
         })

@@ -64,3 +64,15 @@ fn basic_cases() {
     assert_eq!(vec![80], reloaded.get_le(&[80]).unwrap().1);
     assert_eq!(vec![80], reloaded.get_le(&[100]).unwrap().1);
 }
+
+// create branch
+//
+#[test]
+fn branch_verison_mgmt() {
+    //
+}
+
+#[test]
+fn prune_outdated_data() {
+    //
+}

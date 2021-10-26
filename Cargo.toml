@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "0.9.4"
+version = "0.9.5"
 authors = ["fanhui.x@gmail.com"]
 edition = "2021"
 description = "Versioned Stateful DataBase, mainly used in blockchain scene."
@@ -17,17 +17,25 @@ lazy_static = "1.4"
 sha3 = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 
+rocksdb = { version = "0.17.0", optional = true }
+num-traits = { version = "0.2.14", optional = true }
+num-bigint = { version = "0.4.3", optional = true }
+num_cpus = { version = "1.13", optional = true }
+
 [target.'cfg(target_os = "linux")'.dependencies]
-sled = { package = "vsdbsled", version = "0.34.7-patched", features = ["compression", "io_uring"] }
+sled = { package = "vsdbsled", version = "0.34.7-patched", features = ["compression", "io_uring"], optional = true }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
-sled = { package = "vsdbsled", version = "0.34.7-patched", features = ["compression"] }
+sled = { package = "vsdbsled", version = "0.34.7-patched", features = ["compression"], optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.3", features = ["html_reports"]}
 
 [features]
-default = []
+default = ["sled_engine"]
+
+sled_engine = ["sled"]
+rocks_engine = ["rocksdb", "num-bigint", "num-traits", "num_cpus"]
 
 [[bench]]
 name = "basic"

@@ -39,13 +39,13 @@ mod common;
 pub mod versioned;
 
 pub use basic::mapx::Mapx;
-pub use basic::mapx_oc::{MapxOC, OrderConsistKey};
+pub use basic::mapx_ord::{MapxOrd, OrderConsistKey};
 pub use basic::mapx_raw::MapxRaw;
 pub use basic::vecx::Vecx;
 
 pub use versioned::mapx_raw::MapxRawVersioned;
 // pub use versioned::mapx::MapxVersioned;
-// pub use versioned::mapx_oc::MapxOCVersioned;
+// pub use versioned::mapx_ord::MapxOrdVersioned;
 // pub use versioned::vecx::VecxVersioned;
 
 pub use common::{vsdb_flush, vsdb_set_base_dir};
