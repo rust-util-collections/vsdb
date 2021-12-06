@@ -40,12 +40,12 @@ pub mod versioned;
 
 pub use basic::mapx::Mapx;
 pub use basic::mapx_ord::MapxOrd;
-pub use basic::mapx_raw::MapxRaw;
+pub use basic::orphan::Orphan;
 pub use basic::vecx::Vecx;
 
-pub use versioned::mapx_raw::MapxRawVersioned;
 // pub use versioned::mapx::MapxVersioned;
 // pub use versioned::mapx_ord::MapxOrdVersioned;
+// pub use versioned::orphan::OrphanVersioned;
 // pub use versioned::vecx::VecxVersioned;
 
 pub use common::{

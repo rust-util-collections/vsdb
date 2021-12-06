@@ -1,5 +1,5 @@
-//////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
 
 #[cfg(all(feature = "rocks_engine", not(feature = "sled_engine")))]
 mod rocks_db;
@@ -7,8 +7,8 @@ mod rocks_db;
 #[cfg(all(feature = "sled_engine", not(feature = "rocks_engine")))]
 mod sled_db;
 
-//////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
 
 #[cfg(all(feature = "rocks_engine", not(feature = "sled_engine")))]
 pub(crate) use rocks_db::RocksEngine as RocksDB;
@@ -22,16 +22,18 @@ pub type MapxIter = sled_db::SledIter;
 #[cfg(all(feature = "rocks_engine", not(feature = "sled_engine")))]
 pub type MapxIter = rocks_db::RocksIter;
 
-//////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
 
-use crate::common::{BranchID, InstanceCfg, Prefix, PrefixBytes, VersionID, VSDB};
+use crate::common::{
+    BranchID, InstanceCfg, Prefix, PrefixBytes, RawValue, VersionID, VSDB,
+};
 use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::ops::RangeBounds;
 
-//////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
 
 /// Low-level database interface.
 pub trait Engine: Sized {
@@ -56,7 +58,7 @@ pub trait Engine: Sized {
         area_idx: usize,
         meta_prefix: PrefixBytes,
         key: &[u8],
-    ) -> Option<Vec<u8>>;
+    ) -> Option<RawValue>;
 
     fn insert(
         &self,
@@ -64,18 +66,18 @@ pub trait Engine: Sized {
         meta_prefix: PrefixBytes,
         key: &[u8],
         value: &[u8],
-    ) -> Option<Vec<u8>>;
+    ) -> Option<RawValue>;
 
     fn remove(
         &self,
         area_idx: usize,
         meta_prefix: PrefixBytes,
         key: &[u8],
-    ) -> Option<Vec<u8>>;
+    ) -> Option<RawValue>;
 }
 
-//////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
 
 #[derive(Eq, Debug, Serialize, Deserialize)]
 pub(crate) struct Mapx {
@@ -113,7 +115,7 @@ impl Mapx {
     }
 
     #[inline(always)]
-    pub(crate) fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
+    pub(crate) fn get(&self, key: &[u8]) -> Option<RawValue> {
         VSDB.db.get(self.area_idx, self.prefix, key)
     }
 
@@ -138,7 +140,7 @@ impl Mapx {
     }
 
     #[inline(always)]
-    pub(crate) fn insert(&mut self, key: &[u8], value: &[u8]) -> Option<Vec<u8>> {
+    pub(crate) fn insert(&mut self, key: &[u8], value: &[u8]) -> Option<RawValue> {
         let ret = VSDB.db.insert(self.area_idx, self.prefix, key, value);
         if ret.is_none() {
             self.item_cnt += 1;
@@ -147,7 +149,7 @@ impl Mapx {
     }
 
     #[inline(always)]
-    pub(crate) fn remove(&mut self, key: &[u8]) -> Option<Vec<u8>> {
+    pub(crate) fn remove(&mut self, key: &[u8]) -> Option<RawValue> {
         let ret = VSDB.db.remove(self.area_idx, self.prefix, key);
         if ret.is_some() {
             self.item_cnt -= 1;

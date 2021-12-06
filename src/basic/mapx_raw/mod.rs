@@ -1,5 +1,30 @@
 //!
-//! A disk-storage replacement for the pure in-memory BTreeMap.
+//! A `Map`-like structure but storing data in disk.
+//!
+//! NOTE:
+//! - Both keys and values will **NOT** be encoded in this structure
+//!
+//! # Examples
+//!
+//! ```
+//! use vsdb::basic::mapx_raw::MapxRaw;
+//!
+//! let mut l = MapxRaw::new();
+//!
+//! l.insert(&[1], &[0]);
+//! l.insert(&[1], &[0]);
+//! l.insert(&[2], &[0]);
+//!
+//! l.iter().for_each(|(_, v)| {
+//!     assert_eq!(&v[..], &[0]);
+//! });
+//!
+//! l.remove(&[2]);
+//! assert_eq!(l.len(), 1);
+//!
+//! l.clear();
+//! assert_eq!(l.len(), 0);
+//! ```
 //!
 
 #[cfg(test)]
@@ -7,12 +32,11 @@ mod test;
 
 use crate::common::{
     ende::{SimpleVisitor, ValueEnDe},
-    engines, InstanceCfg,
+    engines, InstanceCfg, RawKey, RawValue,
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{
-    mem::ManuallyDrop,
     ops::{Deref, DerefMut, RangeBounds},
     result::Result as StdResult,
 };
@@ -38,9 +62,8 @@ impl Default for MapxRaw {
     }
 }
 
-///////////////////////////////////////////////
-// Begin of the self-implementation for MapxRaw //
-/*********************************************/
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
 
 impl MapxRaw {
     /// Create an instance.
@@ -58,8 +81,8 @@ impl MapxRaw {
 
     /// Imitate the behavior of 'BTreeMap<_>.get(...)'
     #[inline(always)]
-    pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
-        self.inner.get(key).map(|iv| iv.to_vec())
+    pub fn get(&self, key: &[u8]) -> Option<RawValue> {
+        self.inner.get(key)
     }
 
     /// Check if a key is exists.
@@ -70,13 +93,13 @@ impl MapxRaw {
 
     /// less or equal value
     #[inline(always)]
-    pub fn get_le(&self, key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    pub fn get_le(&self, key: &[u8]) -> Option<(RawKey, RawValue)> {
         self.range(..=key).next_back()
     }
 
     /// great or equal value
     #[inline(always)]
-    pub fn get_ge(&self, key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    pub fn get_ge(&self, key: &[u8]) -> Option<(RawKey, RawValue)> {
         self.range(key..).next()
     }
 
@@ -85,7 +108,7 @@ impl MapxRaw {
     pub fn get_mut(&mut self, key: &[u8]) -> Option<ValueMut<'_>> {
         self.inner
             .get(key)
-            .map(move |v| ValueMut::new(self, key.to_owned(), v.to_vec()))
+            .map(move |v| ValueMut::new(self, key.to_owned().into_boxed_slice(), v))
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.len()'.
@@ -124,13 +147,13 @@ impl MapxRaw {
 
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
-    pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Option<Vec<u8>> {
+    pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Option<RawValue> {
         self.inner.insert(key, value)
     }
 
     /// Try to remove an entry
     #[inline(always)]
-    pub fn remove(&mut self, key: &[u8]) -> Option<Vec<u8>> {
+    pub fn remove(&mut self, key: &[u8]) -> Option<RawValue> {
         self.inner.remove(key)
     }
 
@@ -141,48 +164,32 @@ impl MapxRaw {
     }
 }
 
-/*******************************************/
-// End of the self-implementation for MapxRaw //
-/////////////////////////////////////////////
-
-//////////////////////////////////////////////////////////////////////////////////
-// Begin of the implementation of ValueMut(returned by `self.get_mut`) for MapxRaw //
-/********************************************************************************/
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
 
 /// Returned by `<MapxRaw>.get_mut(...)`
 #[derive(PartialEq, Eq, Debug)]
 pub struct ValueMut<'a> {
     hdr: &'a mut MapxRaw,
-    key: ManuallyDrop<Vec<u8>>,
-    value: ManuallyDrop<Vec<u8>>,
+    key: RawKey,
+    value: RawValue,
 }
 
 impl<'a> ValueMut<'a> {
-    fn new(hdr: &'a mut MapxRaw, key: Vec<u8>, value: Vec<u8>) -> Self {
-        ValueMut {
-            hdr,
-            key: ManuallyDrop::new(key),
-            value: ManuallyDrop::new(value),
-        }
+    fn new(hdr: &'a mut MapxRaw, key: RawKey, value: RawValue) -> Self {
+        ValueMut { hdr, key, value }
     }
 }
 
 /// NOTE: Very Important !!!
 impl<'a> Drop for ValueMut<'a> {
     fn drop(&mut self) {
-        // This operation is safe within a `drop()`.
-        // SEE: [**ManuallyDrop::take**](std::mem::ManuallyDrop::take)
-        unsafe {
-            self.hdr.insert(
-                &ManuallyDrop::take(&mut self.key),
-                &ManuallyDrop::take(&mut self.value),
-            );
-        };
+        self.hdr.insert(&self.key, &self.value);
     }
 }
 
 impl<'a> Deref for ValueMut<'a> {
-    type Target = Vec<u8>;
+    type Target = RawValue;
 
     fn deref(&self) -> &Self::Target {
         &self.value
@@ -195,13 +202,8 @@ impl<'a> DerefMut for ValueMut<'a> {
     }
 }
 
-/******************************************************************************/
-// End of the implementation of ValueMut(returned by `self.get_mut`) for MapxRaw //
-////////////////////////////////////////////////////////////////////////////////
-
-///////////////////////////////////////////////////
-// Begin of the implementation of Entry for MapxRaw //
-/*************************************************/
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
 
 /// Imitate the `btree_map/btree_map::Entry`.
 pub struct Entry<'a> {
@@ -219,41 +221,29 @@ impl<'a> Entry<'a> {
     }
 }
 
-/***********************************************/
-// End of the implementation of Entry for MapxRaw //
-/////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
 
-//////////////////////////////////////////////////
-// Begin of the implementation of Iter for MapxRaw //
-/************************************************/
-
-/// Iter over [MapxRaw](self::MapxRaw).
+#[allow(missing_docs)]
 pub struct MapxRawIter {
     iter: engines::MapxIter,
 }
 
 impl Iterator for MapxRawIter {
-    type Item = (Vec<u8>, Vec<u8>);
+    type Item = (RawKey, RawValue);
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next().map(|(ik, iv)| (ik.to_vec(), iv.to_vec()))
+        self.iter.next()
     }
 }
 
 impl DoubleEndedIterator for MapxRawIter {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.iter
-            .next_back()
-            .map(|(ik, iv)| (ik.to_vec(), iv.to_vec()))
+        self.iter.next_back()
     }
 }
 
-/**********************************************/
-// End of the implementation of Iter for MapxRaw //
-////////////////////////////////////////////////
-
-///////////////////////////////////////////////////////////////////
-// Begin of the implementation of Serialize/Deserialize for MapxRaw //
-/*****************************************************************/
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
 
 impl Serialize for MapxRaw {
     fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
@@ -278,6 +268,5 @@ impl<'de> Deserialize<'de> for MapxRaw {
     }
 }
 
-/***************************************************************/
-// End of the implementation of Serialize/Deserialize for MapxRaw //
-/////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////

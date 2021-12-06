@@ -1,27 +1,29 @@
 //!
-//! # Core logic of version management
+//! Core logic of the version management.
 //!
 
 use crate::{
-    basic::mapx_ord::{MapxOrd, MapxOrdIter},
+    basic::{
+        mapx_ord::MapxOrd,
+        mapx_ord_rawkey::{MapxOrdRawKey, MapxOrdRawKeyIter},
+        mapx_ord_rawvalue::MapxOrdRawValue,
+        mapx_raw::MapxRaw,
+    },
     common::{
-        compute_sig, ende::KeyEnDeOrdered, BranchID, VersionID, BIGGEST_RESERVED_ID,
-        VSDB,
+        compute_sig,
+        ende::{encode_optioned_bytes, KeyEnDeOrdered},
+        BranchID, RawKey, RawValue, VersionID, BIGGEST_RESERVED_ID, VSDB,
     },
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
-    mem::ManuallyDrop,
     ops::{Deref, DerefMut, RangeBounds},
 };
 
 // hash of a version
-pub(super) type VerSig = Vec<u8>;
-
-pub(super) type BytesKey = Vec<u8>;
-pub(super) type BytesValue = Vec<u8>;
+pub(super) type VerSig = RawValue;
 
 type BranchPath = BTreeMap<BranchID, VersionID>;
 
@@ -35,30 +37,29 @@ const BRANCH_CNT_LIMIT: usize = 1024;
 // default value for reserved number when pruning branches
 const RESERVED_VERSION_NUM_DEFAULT: usize = 10;
 
-/////////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct MapxRawVersioned {
-    pub(super) branch_name_to_branch_id: MapxOrd<BytesKey, BranchID>,
-    pub(super) version_name_to_version_id: MapxOrd<BytesKey, VersionID>,
+    pub(super) branch_name_to_branch_id: MapxOrdRawKey<BranchID>,
+    pub(super) version_name_to_version_id: MapxOrdRawKey<VersionID>,
 
     // which version the branch is forked from
     branch_to_parent: MapxOrd<BranchID, Option<BasePoint>>,
 
     // versions directly created by this branch
-    branch_to_created_versions: MapxOrd<BranchID, MapxOrd<VersionID, VerSig>>,
+    branch_to_created_versions: MapxOrd<BranchID, MapxOrdRawValue<VersionID>>,
 
     // globally ever changed keys within each version
-    version_to_change_set: MapxOrd<VersionID, MapxOrd<BytesKey, bool>>,
+    version_to_change_set: MapxOrd<VersionID, MapxRaw>,
 
     // key -> multi-branch -> multi-version -> multi-value
-    layered_kv:
-        MapxOrd<BytesKey, MapxOrd<BranchID, MapxOrd<VersionID, Option<BytesValue>>>>,
+    layered_kv: MapxOrdRawKey<MapxOrd<BranchID, MapxOrd<VersionID, Option<RawValue>>>>,
 }
 
-/////////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
 
 impl MapxRawVersioned {
     #[inline(always)]
@@ -71,10 +72,10 @@ impl MapxRawVersioned {
     #[inline(always)]
     pub(super) fn init(&mut self) {
         self.branch_name_to_branch_id
-            .insert_ref_bytes_k(INITIAL_BRANCH_NAME, &INITIAL_BRANCH_ID);
+            .insert_ref(&INITIAL_BRANCH_NAME.to_vec(), &INITIAL_BRANCH_ID);
         self.branch_to_parent.insert(INITIAL_BRANCH_ID, None);
         self.branch_to_created_versions
-            .insert(INITIAL_BRANCH_ID, MapxOrd::new());
+            .insert(INITIAL_BRANCH_ID, MapxOrdRawValue::new());
     }
 
     #[inline(always)]
@@ -82,7 +83,7 @@ impl MapxRawVersioned {
         &mut self,
         key: &[u8],
         value: &[u8],
-    ) -> Result<Option<BytesValue>> {
+    ) -> Result<Option<RawValue>> {
         self.insert_by_branch(key, value, INITIAL_BRANCH_ID).c(d!())
     }
 
@@ -92,7 +93,7 @@ impl MapxRawVersioned {
         key: &[u8],
         value: &[u8],
         branch_id: BranchID,
-    ) -> Result<Option<BytesValue>> {
+    ) -> Result<Option<RawValue>> {
         self.branch_to_created_versions
             .get(&branch_id)
             .c(d!("branch not found"))?
@@ -115,13 +116,13 @@ impl MapxRawVersioned {
         value: &[u8],
         branch_id: BranchID,
         version_id: VersionID,
-    ) -> Result<Option<BytesValue>> {
-        self.write_by_branch_version(key, Some(value.to_vec()), branch_id, version_id)
+    ) -> Result<Option<RawValue>> {
+        self.write_by_branch_version(key, Some(value), branch_id, version_id)
             .c(d!())
     }
 
     #[inline(always)]
-    pub(super) fn remove(&mut self, key: &[u8]) -> Result<Option<BytesValue>> {
+    pub(super) fn remove(&mut self, key: &[u8]) -> Result<Option<RawValue>> {
         self.remove_by_branch(key, INITIAL_BRANCH_ID).c(d!())
     }
 
@@ -130,7 +131,7 @@ impl MapxRawVersioned {
         &mut self,
         key: &[u8],
         branch_id: BranchID,
-    ) -> Result<Option<BytesValue>> {
+    ) -> Result<Option<RawValue>> {
         self.branch_to_created_versions
             .get(&branch_id)
             .c(d!("branch not found"))?
@@ -153,7 +154,7 @@ impl MapxRawVersioned {
         key: &[u8],
         branch_id: BranchID,
         version_id: VersionID,
-    ) -> Result<Option<BytesValue>> {
+    ) -> Result<Option<RawValue>> {
         self.write_by_branch_version(key, None, branch_id, version_id)
             .c(d!())
     }
@@ -165,43 +166,39 @@ impl MapxRawVersioned {
     fn write_by_branch_version(
         &mut self,
         key: &[u8],
-        value: Option<BytesValue>,
+        value: Option<&[u8]>,
         branch_id: BranchID,
         version_id: VersionID,
-    ) -> Result<Option<BytesValue>> {
+    ) -> Result<Option<RawValue>> {
         self.version_to_change_set
             .get_mut(&version_id)
             .c(d!("BUG: version not found"))?
-            .insert_ref_bytes_k(key, &true);
+            .insert(key, &[]);
 
         let res = self
             .layered_kv
-            .entry_ref_bytes_key(key)
+            .entry_ref(key)
             .or_insert_ref(&MapxOrd::new())
             .entry(branch_id)
             .or_insert(MapxOrd::new())
-            .insert_ref(&version_id, &value)
+            .insert_ref_encoded_value(&version_id, &encode_optioned_bytes(&value)[..])
             .flatten();
 
         // value changed, then re-calculate sig
-        if res != value {
+        if res.as_deref() != value {
             let mut vers = self
                 .branch_to_created_versions
                 .get(&branch_id)
                 .c(d!("BUG: branch not found"))?;
             let mut sig = vers.get_mut(&version_id).c(d!("BUG: version not found"))?;
-            *sig = compute_sig(&[
-                sig.as_slice(),
-                key,
-                value.as_deref().unwrap_or_default(),
-            ]);
+            *sig = compute_sig(&[&sig[..], key, value.unwrap_or_default()]);
         }
 
         Ok(res)
     }
 
     #[inline(always)]
-    pub(super) fn get(&self, key: &[u8]) -> Option<BytesValue> {
+    pub(super) fn get(&self, key: &[u8]) -> Option<RawValue> {
         self.get_by_branch(key, INITIAL_BRANCH_ID)
     }
 
@@ -210,7 +207,7 @@ impl MapxRawVersioned {
         &self,
         key: &[u8],
         branch_id: BranchID,
-    ) -> Option<BytesValue> {
+    ) -> Option<RawValue> {
         if let Some(vers) = self.branch_to_created_versions.get(&branch_id) {
             if let Some((version_id, _)) = vers.last() {
                 return self.get_by_branch_version(key, branch_id, version_id);
@@ -224,14 +221,14 @@ impl MapxRawVersioned {
         key: &[u8],
         branch_id: BranchID,
         version_id: VersionID,
-    ) -> Option<BytesValue> {
+    ) -> Option<RawValue> {
         let fp = self.branch_get_full_path(branch_id);
 
         if !Self::version_id_is_in_bounds(&fp, version_id) {
             return None;
         }
 
-        if let Some(brs) = self.layered_kv.get_ref_bytes_k(key) {
+        if let Some(brs) = self.layered_kv.get(key) {
             // they are all monotonically increasing
             for (br, ver) in fp.iter().rev() {
                 if let Some(vers) = brs.get(br) {
@@ -275,13 +272,11 @@ impl MapxRawVersioned {
         version_id: VersionID,
     ) -> Option<ValueMut<'_>> {
         self.get_by_branch_version(key, branch_id, version_id)
-            .map(|v| {
-                ValueMut::new(self, BytesKey::from_slice(key).unwrap(), v, branch_id)
-            })
+            .map(|v| ValueMut::new(self, RawKey::from_slice(key).unwrap(), v, branch_id))
     }
 
     #[inline(always)]
-    pub(super) fn get_ge(&self, key: &[u8]) -> Option<(BytesKey, BytesValue)> {
+    pub(super) fn get_ge(&self, key: &[u8]) -> Option<(RawKey, RawValue)> {
         self.range(key..).next()
     }
 
@@ -290,7 +285,7 @@ impl MapxRawVersioned {
         &self,
         key: &[u8],
         branch_id: BranchID,
-    ) -> Option<(BytesKey, BytesValue)> {
+    ) -> Option<(RawKey, RawValue)> {
         self.range_by_branch(branch_id, key..).next()
     }
 
@@ -300,13 +295,13 @@ impl MapxRawVersioned {
         key: &[u8],
         branch_id: BranchID,
         version_id: VersionID,
-    ) -> Option<(BytesKey, BytesValue)> {
+    ) -> Option<(RawKey, RawValue)> {
         self.range_by_branch_version(branch_id, version_id, key..)
             .next()
     }
 
     #[inline(always)]
-    pub(super) fn get_le(&self, key: &[u8]) -> Option<(BytesKey, BytesValue)> {
+    pub(super) fn get_le(&self, key: &[u8]) -> Option<(RawKey, RawValue)> {
         self.range(..=key).next_back()
     }
 
@@ -315,7 +310,7 @@ impl MapxRawVersioned {
         &self,
         key: &[u8],
         branch_id: BranchID,
-    ) -> Option<(BytesKey, BytesValue)> {
+    ) -> Option<(RawKey, RawValue)> {
         self.range_by_branch(branch_id, ..=key).next_back()
     }
 
@@ -325,7 +320,7 @@ impl MapxRawVersioned {
         key: &[u8],
         branch_id: BranchID,
         version_id: VersionID,
-    ) -> Option<(BytesKey, BytesValue)> {
+    ) -> Option<(RawKey, RawValue)> {
         self.range_by_branch_version(branch_id, version_id, ..=key)
             .next_back()
     }
@@ -402,7 +397,7 @@ impl MapxRawVersioned {
     ) -> MapxRawVersionedIter<'a> {
         MapxRawVersionedIter {
             hdr: self,
-            iter: self.layered_kv.range_ref_bytes_k(bounds),
+            iter: self.layered_kv.range_ref(bounds),
             branch_id,
             version_id,
         }
@@ -451,11 +446,7 @@ impl MapxRawVersioned {
         version_name: &[u8],
         branch_id: BranchID,
     ) -> Result<()> {
-        if self
-            .version_name_to_version_id
-            .get_ref_bytes_k(version_name)
-            .is_some()
-        {
+        if self.version_name_to_version_id.get(version_name).is_some() {
             return Err(eg!("version already exists"));
         }
 
@@ -474,9 +465,9 @@ impl MapxRawVersioned {
         vers.insert(version_id, new_sig);
 
         self.version_name_to_version_id
-            .insert(version_name.to_owned(), version_id);
+            .insert(version_name.to_owned().into_boxed_slice(), version_id);
         self.version_to_change_set
-            .insert(version_id, MapxOrd::new());
+            .insert(version_id, MapxRaw::new());
 
         Ok(())
     }
@@ -656,10 +647,7 @@ impl MapxRawVersioned {
             return Err(eg!("too many branches"));
         }
 
-        if self
-            .branch_name_to_branch_id
-            .contains_key_ref_bytes_k(branch_name)
-        {
+        if self.branch_name_to_branch_id.contains_key(branch_name) {
             return Err(eg!("branch already exists"));
         }
 
@@ -670,7 +658,7 @@ impl MapxRawVersioned {
         let branch_id = VSDB.alloc_branch_id();
 
         self.branch_name_to_branch_id
-            .insert(branch_name.to_owned(), branch_id);
+            .insert(branch_name.to_owned().into_boxed_slice(), branch_id);
 
         // All new branches will have a base point,
         // the only exception is the initial branch created by system
@@ -683,7 +671,7 @@ impl MapxRawVersioned {
         );
 
         self.branch_to_created_versions
-            .insert(branch_id, MapxOrd::new());
+            .insert(branch_id, MapxOrdRawValue::new());
 
         Ok(())
     }
@@ -1012,8 +1000,8 @@ impl MapxRawVersioned {
     }
 }
 
-/////////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
 
 // used mark where a new branch are forked from
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1024,19 +1012,18 @@ struct BasePoint {
     version_id: VersionID,
 }
 
-/////////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
 
 pub struct MapxRawVersionedIter<'a> {
     hdr: &'a MapxRawVersioned,
-    iter:
-        MapxOrdIter<BytesKey, MapxOrd<BranchID, MapxOrd<VersionID, Option<BytesValue>>>>,
+    iter: MapxOrdRawKeyIter<MapxOrd<BranchID, MapxOrd<VersionID, Option<RawValue>>>>,
     branch_id: BranchID,
     version_id: VersionID,
 }
 
 impl<'a> Iterator for MapxRawVersionedIter<'a> {
-    type Item = (BytesKey, BytesValue);
+    type Item = (RawKey, RawValue);
 
     #[allow(clippy::while_let_on_iterator)]
     fn next(&mut self) -> Option<Self::Item> {
@@ -1049,7 +1036,7 @@ impl<'a> Iterator for MapxRawVersionedIter<'a> {
                 self.hdr
                     .get_by_branch_version(&k, self.branch_id, self.version_id)
             {
-                return Some((k.to_owned(), v));
+                return Some((k, v));
             }
         }
 
@@ -1069,7 +1056,7 @@ impl DoubleEndedIterator for MapxRawVersionedIter<'_> {
                 self.hdr
                     .get_by_branch_version(&k, self.branch_id, self.version_id)
             {
-                return Some((k.to_owned(), v));
+                return Some((k, v));
             }
         }
 
@@ -1079,29 +1066,29 @@ impl DoubleEndedIterator for MapxRawVersionedIter<'_> {
 
 impl ExactSizeIterator for MapxRawVersionedIter<'_> {}
 
-/////////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
 
 #[allow(missing_docs)]
 #[derive(PartialEq, Eq, Debug)]
 pub struct ValueMut<'a> {
     hdr: &'a mut MapxRawVersioned,
-    key: ManuallyDrop<BytesKey>,
-    value: ManuallyDrop<BytesValue>,
+    key: RawKey,
+    value: RawValue,
     branch_id: BranchID,
 }
 
 impl<'a> ValueMut<'a> {
     fn new(
         hdr: &'a mut MapxRawVersioned,
-        key: BytesKey,
-        value: BytesValue,
+        key: RawKey,
+        value: RawValue,
         branch_id: BranchID,
     ) -> Self {
         ValueMut {
             hdr,
-            key: ManuallyDrop::new(key),
-            value: ManuallyDrop::new(value),
+            key,
+            value,
             branch_id,
         }
     }
@@ -1110,20 +1097,15 @@ impl<'a> ValueMut<'a> {
 // NOTE: Very Important !!!
 impl<'a> Drop for ValueMut<'a> {
     fn drop(&mut self) {
-        // This operation is safe within a `drop()`.
-        // SEE: [**ManuallyDrop::take**](std::mem::ManuallyDrop::take)
-        unsafe {
-            pnk!(self.hdr.insert_by_branch(
-                &ManuallyDrop::take(&mut self.key),
-                &ManuallyDrop::take(&mut self.value),
-                self.branch_id,
-            ));
-        };
+        pnk!(
+            self.hdr
+                .insert_by_branch(&self.key, &self.value, self.branch_id)
+        );
     }
 }
 
 impl<'a> Deref for ValueMut<'a> {
-    type Target = BytesValue;
+    type Target = RawValue;
     fn deref(&self) -> &Self::Target {
         &self.value
     }
@@ -1135,5 +1117,5 @@ impl<'a> DerefMut for ValueMut<'a> {
     }
 }
 
-/////////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////

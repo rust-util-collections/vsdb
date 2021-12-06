@@ -11,16 +11,16 @@ fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("** VSDB **");
     group
         .measurement_time(Duration::from_secs(30))
-        .sample_size(100);
+        .sample_size(90);
 
-    group.bench_function("  Vecx write", |b| {
+    group.bench_function(" Vecx write", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
             db.push(vec![n; 128]);
         })
     });
 
-    group.bench_function("  Vecx read_write", |b| {
+    group.bench_function(" Vecx read_write", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
             db.push(vec![n; 128]);
@@ -31,14 +31,14 @@ fn bench(c: &mut Criterion) {
     let i = AtomicUsize::new(0);
     let mut db = vsdb::Mapx::new();
 
-    group.bench_function("  Mapx write", |b| {
+    group.bench_function(" Mapx write", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
             db.set_value([n; 2], vec![n; 128]);
         })
     });
 
-    group.bench_function("  Mapx read_write", |b| {
+    group.bench_function(" Mapx read_write", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
             db.set_value([n; 2], vec![n; 128]);
@@ -47,20 +47,20 @@ fn bench(c: &mut Criterion) {
     });
 
     let i = AtomicU8::new(0);
-    let mut db = vsdb::MapxRawVersioned::new();
+    let mut db = vsdb::versioned::mapx_raw::MapxRawVersioned::new();
     db.version_create(b"benchmark").unwrap();
 
-    group.bench_function("  VERSIONED Mapx write", |b| {
+    group.bench_function(" VERSIONED Mapx write", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
-            db.insert_ref(&[n; 2], &[n; 128]).unwrap();
+            db.insert(&[n; 2], &[n; 128]).unwrap();
         })
     });
 
-    group.bench_function("  VERSIONED Mapx read_write", |b| {
+    group.bench_function(" VERSIONED Mapx read_write", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
-            db.insert_ref(&[n; 2], &[n; 128]).unwrap();
+            db.insert(&[n; 2], &[n; 128]).unwrap();
             db.get(&[n; 2]);
         })
     });

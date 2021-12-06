@@ -6,7 +6,7 @@ fn basic_cases() {
     let cnt = 200;
 
     let hdr = {
-        let mut hdr_i = crate::MapxRawVersioned::new();
+        let mut hdr_i = MapxRawVersioned::new();
         hdr_i.version_create(b"test1").unwrap();
 
         assert_eq!(0, hdr_i.len());
@@ -17,12 +17,12 @@ fn basic_cases() {
         (0..cnt)
             .map(|i: usize| (i.to_be_bytes(), i.to_be_bytes()))
             .for_each(|(i, b)| {
-                hdr_i.insert_ref(&i, &b).unwrap();
-                assert_eq!(&hdr_i.get(&i).unwrap(), &i);
-                assert_eq!(&hdr_i.remove(&i).unwrap().unwrap(), &b);
+                hdr_i.insert(&i, &b).unwrap();
+                assert_eq!(&hdr_i.get(&i).unwrap()[..], &i);
+                assert_eq!(&hdr_i.remove(&i).unwrap().unwrap()[..], &b);
                 assert!(hdr_i.get(&i).is_none());
-                assert!(hdr_i.insert_ref(&i, &b).unwrap().is_none());
-                assert!(hdr_i.insert_ref(&i, &b).unwrap().is_some());
+                assert!(hdr_i.insert(&i, &b).unwrap().is_none());
+                assert!(hdr_i.insert(&i, &b).unwrap().is_some());
             });
 
         assert_eq!(cnt, hdr_i.len());
@@ -35,12 +35,12 @@ fn basic_cases() {
     assert_eq!(cnt, reloaded.len());
 
     (0..cnt).map(|i: usize| i.to_be_bytes()).for_each(|i| {
-        assert_eq!(i.to_vec(), reloaded.get(&i).unwrap());
+        assert_eq!(i.to_vec().into_boxed_slice(), reloaded.get(&i).unwrap());
     });
 
     (1..cnt).map(|i: usize| i.to_be_bytes()).for_each(|i| {
-        *pnk!(reloaded.get_mut(&i)) = i.to_vec();
-        assert_eq!(&reloaded.get(&i).unwrap(), &i);
+        *pnk!(reloaded.get_mut(&i)) = i.to_vec().into_boxed_slice();
+        assert_eq!(&reloaded.get(&i).unwrap()[..], &i);
         assert!(reloaded.contains_key(&i));
         assert!(reloaded.remove(&i).unwrap().is_some());
         assert!(!reloaded.contains_key(&i));
@@ -52,21 +52,21 @@ fn basic_cases() {
 
     reloaded.version_create(b"test2").unwrap();
 
-    reloaded.insert_ref(&[1], &[1]).unwrap();
-    reloaded.insert_ref(&[4], &[4]).unwrap();
-    reloaded.insert_ref(&[6], &[6]).unwrap();
-    reloaded.insert_ref(&[80], &[80]).unwrap();
+    reloaded.insert(&[1], &[1]).unwrap();
+    reloaded.insert(&[4], &[4]).unwrap();
+    reloaded.insert(&[6], &[6]).unwrap();
+    reloaded.insert(&[80], &[80]).unwrap();
 
     assert!(reloaded.range(&[][..]..&[1][..]).next().is_none());
     assert_eq!(
-        vec![4],
-        reloaded.range(&[2][..]..&[10][..]).next().unwrap().1
+        &[4],
+        &reloaded.range(&[2][..]..&[10][..]).next().unwrap().1[..]
     );
 
-    assert_eq!(vec![80], reloaded.get_ge(&[79]).unwrap().1);
-    assert_eq!(vec![80], reloaded.get_ge(&[80]).unwrap().1);
-    assert_eq!(vec![80], reloaded.get_le(&[80]).unwrap().1);
-    assert_eq!(vec![80], reloaded.get_le(&[100]).unwrap().1);
+    assert_eq!(&[80], &reloaded.get_ge(&[79]).unwrap().1[..]);
+    assert_eq!(&[80], &reloaded.get_ge(&[80]).unwrap().1[..]);
+    assert_eq!(&[80], &reloaded.get_le(&[80]).unwrap().1[..]);
+    assert_eq!(&[80], &reloaded.get_le(&[100]).unwrap().1[..]);
 }
 
 // # VCS(version control system) scene
@@ -79,8 +79,8 @@ fn basic_cases() {
 // - can not read data created by newer versions from an older version
 // - can not remove a version except it is the HEAD version
 // - data created by a version will disappear after the version has been removed
-// - insert_ref different values for a same key within one version will change the version sig
-// - insert_ref same values for a same key within one version will not change the version sig
+// - insert different values for a same key within one version will change the version sig
+// - insert same values for a same key within one version will not change the version sig
 //
 // create branch:
 // - use existing branch name will fail
@@ -113,10 +113,10 @@ fn basic_cases() {
 #[test]
 #[allow(non_snake_case)]
 fn VCS_operations() {
-    let mut hdr = crate::MapxRawVersioned::new();
+    let mut hdr = MapxRawVersioned::new();
 
     // haven't create any version yet
-    assert!(hdr.insert_ref(b"key", b"value").is_err());
+    assert!(hdr.insert(b"key", b"value").is_err());
 
     hdr.version_create(b"001").unwrap();
 
@@ -132,33 +132,25 @@ fn VCS_operations() {
     assert!(hdr.is_empty_by_branch_version(b"main", b"002"));
 
     assert!(
-        hdr.insert_ref(b"version-002/key-01", b"version-002/value-01")
+        hdr.insert(b"version-002/key-01", b"version-002/value-01")
             .is_ok()
     );
     assert!(
-        hdr.insert_ref(b"version-002/key-02", b"version-002/value-02")
+        hdr.insert(b"version-002/key-02", b"version-002/value-02")
             .is_ok()
     );
 
-    dbg!(&hdr);
-
     assert_eq!(
         hdr.get(b"version-002/key-01"),
-        Some(b"version-002/value-01".to_vec())
+        Some(b"version-002/value-01".to_vec().into_boxed_slice())
     );
-    dbg!("-------------");
     assert_eq!(
         hdr.get(b"version-002/key-02"),
-        Some(b"version-002/value-02".to_vec())
+        Some(b"version-002/value-02".to_vec().into_boxed_slice())
     );
-    dbg!("-------------");
 
     assert!(!hdr.is_empty());
-    dbg!("-------------");
     assert!(!hdr.is_empty_by_branch(b"main"));
-    dbg!("-------------");
     assert!(hdr.is_empty_by_branch_version(b"main", b"001"));
-    dbg!("-------------");
     assert!(!hdr.is_empty_by_branch_version(b"main", b"002"));
-    dbg!("-------------");
 }
