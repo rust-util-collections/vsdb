@@ -1,4 +1,6 @@
 use super::*;
+use crate::ValueEnDe;
+use ruc::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Default, Debug, Eq, PartialEq, Clone)]
@@ -27,22 +29,22 @@ fn basic_cases() {
         });
 
         (0..cnt).map(|i| (i, gen_sample(i))).for_each(|(i, b)| {
-            hdr_i.entry(i).or_insert(&b);
+            hdr_i.entry(i).or_insert(b.clone());
             assert_eq!(1 + i as usize, hdr_i.len());
             assert_eq!(pnk!(hdr_i.get(&i)).idx, i);
             assert_eq!(hdr_i.remove(&i), Some(b.clone()));
             assert_eq!(i as usize, hdr_i.len());
             assert!(hdr_i.get(&i).is_none());
-            assert!(hdr_i.insert(i, &b).is_none());
-            assert!(hdr_i.insert(i, &b).is_some());
+            assert!(hdr_i.insert_ref(&i, &b).is_none());
+            assert!(hdr_i.insert(i, b).is_some());
         });
 
         assert_eq!(cnt, hdr_i.len());
 
-        pnk!(bcs::to_bytes(&hdr_i))
+        <Mapx<usize, SampleBlock> as ValueEnDe>::encode(&hdr_i)
     };
 
-    let mut reloaded = pnk!(bcs::from_bytes::<Mapx<usize, SampleBlock>>(&hdr));
+    let mut reloaded = pnk!(<Mapx<usize, SampleBlock> as ValueEnDe>::decode(&hdr));
 
     assert_eq!(cnt, reloaded.len());
 

@@ -27,6 +27,7 @@ pub type MapxIter = rocks_db::RocksIter;
 
 use crate::common::{BranchID, InstanceCfg, Prefix, PrefixBytes, VersionID, VSDB};
 use ruc::*;
+use serde::{Deserialize, Serialize};
 use std::ops::RangeBounds;
 
 //////////////////////////////////////////////////////////////////////////
@@ -38,7 +39,7 @@ pub trait Engine: Sized {
     fn alloc_prefix(&self) -> Prefix;
     fn alloc_branch_id(&self) -> BranchID;
     fn alloc_version_id(&self) -> VersionID;
-    fn area_count(&self) -> u8;
+    fn area_count(&self) -> usize;
     fn flush(&self);
 
     fn iter(&self, area_idx: usize, meta_prefix: PrefixBytes) -> MapxIter;
@@ -76,7 +77,7 @@ pub trait Engine: Sized {
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-#[derive(Eq, Debug)]
+#[derive(Eq, Debug, Serialize, Deserialize)]
 pub(crate) struct Mapx {
     item_cnt: u64,
     area_idx: usize,

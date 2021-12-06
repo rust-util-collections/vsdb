@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 use std::ops::RangeBounds;
 
 use backend::{
-    MapxRawVersionedIter, RawKey, RawValue, ValueMut, VerSig, INITIAL_BRANCH_NAME, NULL,
+    BytesKey, BytesValue, MapxRawVersionedIter, ValueMut, VerSig, INITIAL_BRANCH_NAME,
+    NULL,
 };
 
 /// Advanced `MapxRaw`, with versioned feature.
@@ -39,24 +40,28 @@ impl MapxRawVersioned {
 
     /// Insert a KV to the head version of the default branch.
     #[inline(always)]
-    pub fn insert(&mut self, key: RawKey, value: RawValue) -> Result<Option<RawValue>> {
+    pub fn insert_ref(
+        &mut self,
+        key: &[u8],
+        value: &[u8],
+    ) -> Result<Option<BytesValue>> {
         self.inner.insert(key, value).c(d!())
     }
 
     /// Insert a KV to the head version of a specified branch.
     #[inline(always)]
-    pub fn insert_by_branch(
+    pub fn insert_ref_by_branch(
         &mut self,
-        key: RawKey,
-        value: RawValue,
+        key: &[u8],
+        value: &[u8],
         branch_id: BranchID,
-    ) -> Result<Option<RawValue>> {
+    ) -> Result<Option<BytesValue>> {
         self.inner.insert_by_branch(key, value, branch_id).c(d!())
     }
 
     /// Remove a KV from the head version of the default branch.
     #[inline(always)]
-    pub fn remove(&mut self, key: &[u8]) -> Result<Option<RawValue>> {
+    pub fn remove(&mut self, key: &[u8]) -> Result<Option<BytesValue>> {
         self.inner.remove(key).c(d!())
     }
 
@@ -66,19 +71,19 @@ impl MapxRawVersioned {
         &mut self,
         key: &[u8],
         branch_id: BranchID,
-    ) -> Result<Option<RawValue>> {
+    ) -> Result<Option<BytesValue>> {
         self.inner.remove_by_branch(key, branch_id).c(d!())
     }
 
     /// Get the value of a key from the default branch.
     #[inline(always)]
-    pub fn get(&self, key: &[u8]) -> Option<RawValue> {
+    pub fn get(&self, key: &[u8]) -> Option<BytesValue> {
         self.inner.get(key)
     }
 
     /// Get the value of a key from the head of a specified branch.
     #[inline(always)]
-    pub fn get_by_branch(&self, key: &[u8], branch_name: &[u8]) -> Option<RawValue> {
+    pub fn get_by_branch(&self, key: &[u8], branch_name: &[u8]) -> Option<BytesValue> {
         let branch_id = self
             .inner
             .branch_name_to_branch_id
@@ -93,7 +98,7 @@ impl MapxRawVersioned {
         key: &[u8],
         branch_name: &[u8],
         version_name: &[u8],
-    ) -> Option<RawValue> {
+    ) -> Option<BytesValue> {
         let branch_id = self
             .inner
             .branch_name_to_branch_id
@@ -129,7 +134,7 @@ impl MapxRawVersioned {
     /// if the target key does not exist, will try to
     /// search a closest value bigger than the target key.
     #[inline(always)]
-    pub fn get_ge(&self, key: &[u8]) -> Option<(RawKey, RawValue)> {
+    pub fn get_ge(&self, key: &[u8]) -> Option<(BytesKey, BytesValue)> {
         self.inner.get_ge(key)
     }
 
@@ -141,7 +146,7 @@ impl MapxRawVersioned {
         &self,
         key: &[u8],
         branch_name: &[u8],
-    ) -> Option<(RawKey, RawValue)> {
+    ) -> Option<(BytesKey, BytesValue)> {
         let branch_id = self
             .inner
             .branch_name_to_branch_id
@@ -158,7 +163,7 @@ impl MapxRawVersioned {
         key: &[u8],
         branch_name: &[u8],
         version_name: &[u8],
-    ) -> Option<(RawKey, RawValue)> {
+    ) -> Option<(BytesKey, BytesValue)> {
         let branch_id = self
             .inner
             .branch_name_to_branch_id
@@ -175,7 +180,7 @@ impl MapxRawVersioned {
     /// if the target key does not exist, will try to
     /// search a closest value less than the target key.
     #[inline(always)]
-    pub fn get_le(&self, key: &[u8]) -> Option<(RawKey, RawValue)> {
+    pub fn get_le(&self, key: &[u8]) -> Option<(BytesKey, BytesValue)> {
         self.inner.get_le(key)
     }
 
@@ -187,7 +192,7 @@ impl MapxRawVersioned {
         &self,
         key: &[u8],
         branch_name: &[u8],
-    ) -> Option<(RawKey, RawValue)> {
+    ) -> Option<(BytesKey, BytesValue)> {
         let branch_id = self
             .inner
             .branch_name_to_branch_id
@@ -204,7 +209,7 @@ impl MapxRawVersioned {
         key: &[u8],
         branch_name: &[u8],
         version_name: &[u8],
-    ) -> Option<(RawKey, RawValue)> {
+    ) -> Option<(BytesKey, BytesValue)> {
         let branch_id = self
             .inner
             .branch_name_to_branch_id
@@ -258,17 +263,20 @@ impl MapxRawVersioned {
 
     /// Create a range iterator over the default branch.
     #[inline(always)]
-    pub fn range<R: RangeBounds<RawKey>>(&self, bounds: R) -> MapxRawVersionedIter {
+    pub fn range<'a, R: RangeBounds<&'a [u8]>>(
+        &'a self,
+        bounds: R,
+    ) -> MapxRawVersionedIter<'a> {
         self.inner.range(bounds)
     }
 
     /// Create a range iterator over a specified branch.
     #[inline(always)]
-    pub fn range_by_branch<R: RangeBounds<RawKey>>(
-        &self,
+    pub fn range_by_branch<'a, R: RangeBounds<&'a [u8]>>(
+        &'a self,
         branch_name: &[u8],
         bounds: R,
-    ) -> MapxRawVersionedIter {
+    ) -> MapxRawVersionedIter<'a> {
         let branch_id = self
             .inner
             .branch_name_to_branch_id
@@ -280,12 +288,12 @@ impl MapxRawVersioned {
 
     /// Create a range iterator over a specified version of a specified branch.
     #[inline(always)]
-    pub fn range_by_branch_version<R: RangeBounds<RawKey>>(
-        &self,
+    pub fn range_by_branch_version<'a, R: RangeBounds<&'a [u8]>>(
+        &'a self,
         branch_name: &[u8],
         version_name: &[u8],
         bounds: R,
-    ) -> MapxRawVersionedIter {
+    ) -> MapxRawVersionedIter<'a> {
         let branch_id = self
             .inner
             .branch_name_to_branch_id
@@ -344,6 +352,7 @@ impl MapxRawVersioned {
         } else {
             return 0;
         };
+
         self.inner.len_by_branch(branch_id)
     }
 
@@ -363,6 +372,7 @@ impl MapxRawVersioned {
         } else {
             return 0;
         };
+
         let version_id = if let Some(id) = self
             .inner
             .version_name_to_version_id
@@ -372,6 +382,7 @@ impl MapxRawVersioned {
         } else {
             return 0;
         };
+
         self.inner.len_by_branch_version(branch_id, version_id)
     }
 

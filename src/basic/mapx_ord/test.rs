@@ -1,4 +1,5 @@
 use super::*;
+use crate::ValueEnDe;
 use serde::{Deserialize, Serialize};
 use std::ops::Bound;
 
@@ -28,22 +29,22 @@ fn basic_cases() {
         });
 
         (0..cnt).map(|i| (i, gen_sample(i))).for_each(|(i, b)| {
-            hdr_i.entry(i).or_insert(&b);
+            hdr_i.entry_ref(&i).or_insert_ref(&b);
             assert_eq!(1 + i as usize, hdr_i.len());
             assert_eq!(pnk!(hdr_i.get(&i)).idx, i);
             assert_eq!(hdr_i.remove(&i), Some(b.clone()));
             assert_eq!(i as usize, hdr_i.len());
             assert!(hdr_i.get(&i).is_none());
-            assert!(hdr_i.insert(i, &b).is_none());
-            assert!(hdr_i.insert(i, &b).is_some());
+            assert!(hdr_i.insert_ref(&i, &b).is_none());
+            assert!(hdr_i.insert(i, b).is_some());
         });
 
         assert_eq!(cnt, hdr_i.len());
 
-        pnk!(bcs::to_bytes(&hdr_i))
+        <MapxOrd<usize, SampleBlock> as ValueEnDe>::encode(&hdr_i)
     };
 
-    let mut reloaded = pnk!(bcs::from_bytes::<MapxOrd<usize, SampleBlock>>(&hdr));
+    let mut reloaded = pnk!(<MapxOrd<usize, SampleBlock> as ValueEnDe>::decode(&hdr));
 
     assert_eq!(cnt, reloaded.len());
 
@@ -63,10 +64,10 @@ fn basic_cases() {
     reloaded.clear();
     assert!(reloaded.is_empty());
 
-    reloaded.insert(1, &gen_sample(1));
-    reloaded.insert(10, &gen_sample(10));
-    reloaded.insert(100, &gen_sample(100));
-    reloaded.insert(1000, &gen_sample(1000));
+    reloaded.insert_ref(&1, &gen_sample(1));
+    reloaded.insert_ref(&10, &gen_sample(10));
+    reloaded.insert_ref(&100, &gen_sample(100));
+    reloaded.insert_ref(&1000, &gen_sample(1000));
 
     assert!(reloaded.range(0..1).next().is_none());
 

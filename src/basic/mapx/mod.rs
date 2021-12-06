@@ -7,26 +7,20 @@ mod test;
 
 use crate::{
     basic::mapx_ord::{Entry, MapxOrd, MapxOrdIter, ValueMut},
-    common::{InstanceCfg, SimpleVisitor},
+    common::{
+        ende::{KeyEnDe, SimpleVisitor, ValueEnDe},
+        InstanceCfg,
+    },
 };
-use ruc::*;
-use serde::{de::DeserializeOwned, Serialize};
-use std::{fmt, marker::PhantomData};
+use std::{marker::PhantomData, result::Result as StdResult};
 
 /// To solve the problem of unlimited memory usage,
 /// use this to replace the original in-memory `BTreeMap<_, _>`.
 #[derive(PartialEq, Eq, Debug)]
 pub struct Mapx<K, V>
 where
-    K: Clone
-        + PartialEq
-        + Eq
-        + PartialOrd
-        + Ord
-        + Serialize
-        + DeserializeOwned
-        + fmt::Debug,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: KeyEnDe,
+    V: ValueEnDe,
 {
     inner: MapxOrd<Vec<u8>, V>,
     _pd: PhantomData<K>,
@@ -34,24 +28,25 @@ where
 
 impl<K, V> Default for Mapx<K, V>
 where
-    K: Clone
-        + PartialEq
-        + Eq
-        + PartialOrd
-        + Ord
-        + Serialize
-        + DeserializeOwned
-        + fmt::Debug,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: KeyEnDe,
+    V: ValueEnDe,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-macro_rules! convert {
-    ($as_param: expr) => {{ bcs::to_bytes::<K>($as_param).unwrap() }};
-    (@$as_ret: expr) => {{ bcs::from_bytes::<K>(&$as_ret).unwrap() }};
+impl<K, V> From<InstanceCfg> for Mapx<K, V>
+where
+    K: KeyEnDe,
+    V: ValueEnDe,
+{
+    fn from(cfg: InstanceCfg) -> Self {
+        Self {
+            inner: MapxOrd::from(cfg),
+            _pd: PhantomData,
+        }
+    }
 }
 
 ///////////////////////////////////////////////
@@ -60,15 +55,8 @@ macro_rules! convert {
 
 impl<K, V> Mapx<K, V>
 where
-    K: Clone
-        + PartialEq
-        + Eq
-        + PartialOrd
-        + Ord
-        + Serialize
-        + DeserializeOwned
-        + fmt::Debug,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: KeyEnDe,
+    V: ValueEnDe,
 {
     /// Create an instance.
     #[inline(always)]
@@ -87,13 +75,13 @@ where
     /// Imitate the behavior of 'BTreeMap<_>.get(...)'
     #[inline(always)]
     pub fn get(&self, key: &K) -> Option<V> {
-        self.inner.get(&convert!(key))
+        self.inner.get(&key.encode())
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get_mut(...)'
     #[inline(always)]
     pub fn get_mut(&mut self, key: &K) -> Option<ValueMut<'_, Vec<u8>, V>> {
-        let k = convert!(key);
+        let k = key.encode();
         self.inner
             .get(&k)
             .map(move |v| ValueMut::new(&mut self.inner, k, v))
@@ -113,23 +101,32 @@ where
 
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
-    pub fn insert(&mut self, key: K, value: &V) -> Option<V> {
-        let key = convert!(&key);
-        self.inner.insert(key, value)
+    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+        self.insert_ref(&key, &value)
+    }
+
+    #[inline(always)]
+    #[allow(missing_docs)]
+    pub fn insert_ref(&mut self, key: &K, value: &V) -> Option<V> {
+        self.inner.insert_ref(&key.encode(), value)
     }
 
     /// Similar with `insert`, but ignore the old value.
     #[inline(always)]
-    pub fn set_value(&mut self, key: K, value: &V) {
-        let key = convert!(&key);
-        self.inner.set_value(key, value);
+    pub fn set_value(&mut self, key: K, value: V) {
+        self.set_value_ref(&key, &value)
+    }
+
+    #[inline(always)]
+    #[allow(missing_docs)]
+    pub fn set_value_ref(&mut self, key: &K, value: &V) {
+        self.inner.set_value_ref(&key.encode(), value);
     }
 
     /// Imitate the behavior of '.entry(...).or_insert(...)'
     #[inline(always)]
     pub fn entry(&mut self, key: K) -> Entry<'_, Vec<u8>, V> {
-        let key = convert!(&key);
-        self.inner.entry(key)
+        self.inner.entry(key.encode())
     }
 
     /// Imitate the behavior of '.iter()'
@@ -144,22 +141,19 @@ where
     /// Check if a key is exists.
     #[inline(always)]
     pub fn contains_key(&self, key: &K) -> bool {
-        let key = convert!(key);
-        self.inner.contains_key(&key)
+        self.inner.contains_key(&key.encode())
     }
 
     /// Remove a <K, V> from mem and disk.
     #[inline(always)]
     pub fn remove(&mut self, key: &K) -> Option<V> {
-        let key = convert!(key);
-        self.inner.remove(&key)
+        self.inner.remove(&key.encode())
     }
 
     /// Remove a <K, V> from mem and disk.
     #[inline(always)]
     pub fn unset_value(&mut self, key: &K) {
-        let key = convert!(key);
-        self.inner.unset_value(&key);
+        self.inner.unset_value(&key.encode());
     }
 
     /// Clear all data.
@@ -180,8 +174,8 @@ where
 /// Iter over [Mapx](self::Mapx).
 pub struct MapxIter<K, V>
 where
-    K: PartialEq + Eq + Serialize + DeserializeOwned + fmt::Debug,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: KeyEnDe,
+    V: ValueEnDe,
 {
     iter: MapxOrdIter<Vec<u8>, V>,
     _pd: PhantomData<K>,
@@ -189,22 +183,26 @@ where
 
 impl<K, V> Iterator for MapxIter<K, V>
 where
-    K: PartialEq + Eq + Serialize + DeserializeOwned + fmt::Debug,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: KeyEnDe,
+    V: ValueEnDe,
 {
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next().map(|(k, v)| (convert!(@k), v))
+        self.iter
+            .next()
+            .map(|(k, v)| (<K as KeyEnDe>::decode(&k).unwrap(), v))
     }
 }
 
 impl<K, V> DoubleEndedIterator for MapxIter<K, V>
 where
-    K: PartialEq + Eq + Serialize + DeserializeOwned + fmt::Debug,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: KeyEnDe,
+    V: ValueEnDe,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.iter.next_back().map(|(k, v)| (convert!(@k), v))
+        self.iter
+            .next_back()
+            .map(|(k, v)| (<K as KeyEnDe>::decode(&k).unwrap(), v))
     }
 }
 
@@ -218,48 +216,31 @@ where
 
 impl<K, V> serde::Serialize for Mapx<K, V>
 where
-    K: Clone
-        + PartialEq
-        + Eq
-        + PartialOrd
-        + Ord
-        + Serialize
-        + DeserializeOwned
-        + fmt::Debug,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: KeyEnDe,
+    V: ValueEnDe,
 {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        let v = pnk!(bcs::to_bytes(&self.get_instance_cfg()));
-        serializer.serialize_bytes(&v)
+        serializer.serialize_bytes(&<InstanceCfg as ValueEnDe>::encode(
+            &self.get_instance_cfg(),
+        ))
     }
 }
 
 impl<'de, K, V> serde::Deserialize<'de> for Mapx<K, V>
 where
-    K: Clone
-        + PartialEq
-        + Eq
-        + PartialOrd
-        + Ord
-        + Serialize
-        + DeserializeOwned
-        + fmt::Debug,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: KeyEnDe,
+    V: ValueEnDe,
 {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
-            let meta = pnk!(bcs::from_bytes::<InstanceCfg>(&meta));
-            Mapx {
-                inner: MapxOrd::from(meta),
-                _pd: PhantomData,
-            }
-        })
+        deserializer
+            .deserialize_bytes(SimpleVisitor)
+            .map(|cfg| Mapx::from(<InstanceCfg as ValueEnDe>::decode(&cfg).unwrap()))
     }
 }
 

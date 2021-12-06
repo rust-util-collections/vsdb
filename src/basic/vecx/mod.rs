@@ -7,11 +7,13 @@ mod test;
 
 use crate::{
     basic::mapx_ord::{MapxOrd, MapxOrdIter, ValueMut},
-    common::{InstanceCfg, SimpleVisitor},
+    common::{
+        ende::{SimpleVisitor, ValueEnDe},
+        InstanceCfg,
+    },
 };
 use ruc::*;
-use serde::{de::DeserializeOwned, Serialize};
-use std::{cmp::Ordering, fmt};
+use std::{cmp::Ordering, result::Result as StdResult};
 
 /// To solve the problem of unlimited memory usage,
 /// use this to replace the original in-memory 'Vec'.
@@ -20,14 +22,14 @@ use std::{cmp::Ordering, fmt};
 #[derive(PartialEq, Eq, Debug)]
 pub struct Vecx<T>
 where
-    T: Serialize + DeserializeOwned + fmt::Debug,
+    T: ValueEnDe,
 {
     inner: MapxOrd<usize, T>,
 }
 
 impl<T> From<InstanceCfg> for Vecx<T>
 where
-    T: Serialize + DeserializeOwned + fmt::Debug,
+    T: ValueEnDe,
 {
     fn from(cfg: InstanceCfg) -> Self {
         Self {
@@ -38,7 +40,7 @@ where
 
 impl<T> Default for Vecx<T>
 where
-    T: Serialize + DeserializeOwned + fmt::Debug,
+    T: ValueEnDe,
 {
     fn default() -> Self {
         Self::new()
@@ -51,7 +53,7 @@ where
 
 impl<T> Vecx<T>
 where
-    T: Serialize + DeserializeOwned + fmt::Debug,
+    T: ValueEnDe,
 {
     /// Create an instance.
     #[inline(always)]
@@ -102,22 +104,34 @@ where
 
     /// Imitate the behavior of 'Vec<_>.push(...)'
     #[inline(always)]
-    pub fn push(&mut self, b: &T) {
-        self.inner.insert(self.len(), b);
+    pub fn push(&mut self, v: T) {
+        self.push_ref(&v)
+    }
+
+    #[inline(always)]
+    #[allow(missing_docs)]
+    pub fn push_ref(&mut self, v: &T) {
+        self.inner.insert_ref(&self.len(), v);
     }
 
     /// Imitate the behavior of 'Vec<_>.insert()'
     #[inline(always)]
-    pub fn insert(&mut self, idx: usize, v: &T) {
+    pub fn insert(&mut self, idx: usize, v: T) {
+        self.insert_ref(idx, &v)
+    }
+
+    #[inline(always)]
+    #[allow(missing_docs)]
+    pub fn insert_ref(&mut self, idx: usize, v: &T) {
         match self.len().cmp(&idx) {
             Ordering::Greater => {
-                self.inner.range(idx..self.len()).for_each(|(i, v)| {
-                    self.inner.insert(i + 1, &v);
+                self.inner.range(idx..self.len()).for_each(|(i, iv)| {
+                    self.inner.insert(i + 1, iv);
                 });
-                self.inner.insert(idx, v);
+                self.inner.insert_ref(&idx, v);
             }
             Ordering::Equal => {
-                self.push(v);
+                self.push_ref(v);
             }
             Ordering::Less => {
                 panic!("out of index");
@@ -139,7 +153,7 @@ where
             let last_idx = self.len() - 1;
             let ret = self.inner.remove(&idx).unwrap();
             self.inner.range((1 + idx)..).for_each(|(i, v)| {
-                self.inner.insert(i - 1, &v);
+                self.inner.insert(i - 1, v);
             });
             self.inner.remove(&last_idx);
             return ret;
@@ -154,7 +168,7 @@ where
             let last_idx = self.len() - 1;
             let ret = self.inner.remove(&idx).unwrap();
             if let Some(v) = self.inner.remove(&last_idx) {
-                self.inner.insert(idx, &v);
+                self.inner.insert(idx, v);
             }
             return ret;
         }
@@ -162,10 +176,15 @@ where
     }
 
     /// Imitate the behavior of 'Vec<_>.update(idx, value)'
+    pub fn update(&mut self, idx: usize, v: T) -> Option<T> {
+        self.update_ref(idx, &v)
+    }
+
     #[inline(always)]
-    pub fn update(&mut self, idx: usize, b: &T) -> Option<T> {
+    #[allow(missing_docs)]
+    pub fn update_ref(&mut self, idx: usize, v: &T) -> Option<T> {
         if idx < self.len() {
-            return self.inner.insert(idx, b);
+            return self.inner.insert_ref(&idx, v);
         }
         panic!("out of index");
     }
@@ -196,14 +215,14 @@ where
 /// Iter over [Vecx](self::Vecx).
 pub struct VecxIter<T>
 where
-    T: Serialize + DeserializeOwned + fmt::Debug,
+    T: ValueEnDe,
 {
     iter: MapxOrdIter<usize, T>,
 }
 
 impl<T> Iterator for VecxIter<T>
 where
-    T: Serialize + DeserializeOwned + fmt::Debug,
+    T: ValueEnDe,
 {
     type Item = T;
     fn next(&mut self) -> Option<Self::Item> {
@@ -213,7 +232,7 @@ where
 
 impl<T> DoubleEndedIterator for VecxIter<T>
 where
-    T: Serialize + DeserializeOwned + fmt::Debug,
+    T: ValueEnDe,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back().map(|v| v.1)
@@ -230,29 +249,29 @@ where
 
 impl<'a, T> serde::Serialize for Vecx<T>
 where
-    T: Serialize + DeserializeOwned + fmt::Debug,
+    T: ValueEnDe,
 {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        let v = pnk!(bcs::to_bytes(&self.get_instance_cfg()));
-        serializer.serialize_bytes(&v)
+        serializer.serialize_bytes(&<InstanceCfg as ValueEnDe>::encode(
+            &self.get_instance_cfg(),
+        ))
     }
 }
 
 impl<'de, T> serde::Deserialize<'de> for Vecx<T>
 where
-    T: Serialize + DeserializeOwned + fmt::Debug,
+    T: ValueEnDe,
 {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
-            let meta = pnk!(bcs::from_bytes::<InstanceCfg>(&meta));
-            Vecx::from(meta)
-        })
+        deserializer
+            .deserialize_bytes(SimpleVisitor)
+            .map(|cfg| Vecx::from(<InstanceCfg as ValueEnDe>::decode(&cfg).unwrap()))
     }
 }
 

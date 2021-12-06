@@ -1,23 +1,21 @@
 use crate::{
     basic::mapx_raw::{MapxRaw, MapxRawIter},
-    common::InstanceCfg,
-    OrderConsistKey,
+    common::{
+        ende::{KeyEnDeOrdered, ValueEnDe},
+        InstanceCfg,
+    },
 };
 use ruc::*;
-use serde::{de::DeserializeOwned, Serialize};
-use std::{
-    fmt,
-    marker::PhantomData,
-    ops::{Bound, RangeBounds},
-};
+use serde::{Deserialize, Serialize};
+use std::{marker::PhantomData, ops::RangeBounds};
 
 // To solve the problem of unlimited memory usage,
 // use this to replace the original in-memory `BTreeMap<_, _>`.
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub(super) struct MapxOrd<K, V>
 where
-    K: OrderConsistKey,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
 {
     inner: MapxRaw,
     _pd0: PhantomData<K>,
@@ -26,8 +24,8 @@ where
 
 impl<K, V> From<InstanceCfg> for MapxOrd<K, V>
 where
-    K: OrderConsistKey,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
 {
     fn from(cfg: InstanceCfg) -> Self {
         Self {
@@ -40,8 +38,8 @@ where
 
 impl<K, V> From<&MapxOrd<K, V>> for InstanceCfg
 where
-    K: OrderConsistKey,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
 {
     fn from(x: &MapxOrd<K, V>) -> Self {
         let cfg = x.inner.get_instance_cfg();
@@ -59,8 +57,8 @@ where
 
 impl<K, V> MapxOrd<K, V>
 where
-    K: OrderConsistKey,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
 {
     // create a new instance
     #[inline(always)]
@@ -81,42 +79,54 @@ where
     pub(super) fn get(&self, key: &K) -> Option<V> {
         self.inner
             .get(&key.to_bytes())
-            .map(|bytes| pnk!(bcs::from_bytes(&bytes)))
+            .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
     }
 
     #[inline(always)]
     pub(super) fn get_ref_bytes_k(&self, key: &[u8]) -> Option<V> {
         self.inner
             .get(key)
-            .map(|bytes| pnk!(bcs::from_bytes(&bytes)))
+            .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
     }
 
     #[inline(always)]
     pub(super) fn get_le(&self, key: &K) -> Option<(K, V)> {
-        self.inner
-            .get_le(&key.to_bytes())
-            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(bcs::from_bytes(&v))))
+        self.inner.get_le(&key.to_bytes()).map(|(k, v)| {
+            (
+                pnk!(K::from_bytes(k)),
+                <V as ValueEnDe>::decode(&v).unwrap(),
+            )
+        })
     }
 
     #[inline(always)]
     pub(super) fn get_le_ref_bytes_k(&self, key: &[u8]) -> Option<(K, V)> {
-        self.inner
-            .get_le(key)
-            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(bcs::from_bytes(&v))))
+        self.inner.get_le(key).map(|(k, v)| {
+            (
+                pnk!(K::from_bytes(k)),
+                <V as ValueEnDe>::decode(&v).unwrap(),
+            )
+        })
     }
 
     #[inline(always)]
     pub(super) fn get_ge(&self, key: &K) -> Option<(K, V)> {
-        self.inner
-            .get_ge(&key.to_bytes())
-            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(bcs::from_bytes(&v))))
+        self.inner.get_ge(&key.to_bytes()).map(|(k, v)| {
+            (
+                pnk!(K::from_bytes(k)),
+                <V as ValueEnDe>::decode(&v).unwrap(),
+            )
+        })
     }
 
     #[inline(always)]
     pub(super) fn get_ge_ref_bytes_k(&self, key: &[u8]) -> Option<(K, V)> {
-        self.inner
-            .get_ge(key)
-            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(bcs::from_bytes(&v))))
+        self.inner.get_ge(key).map(|(k, v)| {
+            (
+                pnk!(K::from_bytes(k)),
+                <V as ValueEnDe>::decode(&v).unwrap(),
+            )
+        })
     }
 
     #[inline(always)]
@@ -130,27 +140,26 @@ where
     }
 
     #[inline(always)]
-    pub(super) fn insert(&mut self, key: K, value: &V) -> Option<V> {
-        self.set_value(key, value)
-            .map(|v| pnk!(bcs::from_bytes(&v)))
+    pub(super) fn insert_ref(&mut self, key: &K, value: &V) -> Option<V> {
+        self.set_value_ref(key, value)
+            .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
     }
 
     #[inline(always)]
     pub(super) fn insert_ref_bytes_k(&mut self, key: &[u8], value: &V) -> Option<V> {
         self.set_value_ref_bytes_k(key, value)
-            .map(|v| pnk!(bcs::from_bytes(&v)))
+            .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
     }
 
     #[inline(always)]
     pub(super) fn insert_ref_bytes_kv(&mut self, key: &[u8], value: &[u8]) -> Option<V> {
         self.set_value_ref_bytes_kv(key, value)
-            .map(|v| pnk!(bcs::from_bytes(&v)))
+            .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
     }
 
     #[inline(always)]
-    pub(super) fn set_value(&mut self, key: K, value: &V) -> Option<Vec<u8>> {
-        self.inner
-            .insert(&key.into_bytes(), &pnk!(bcs::to_bytes(value)))
+    pub(super) fn set_value_ref(&mut self, key: &K, value: &V) -> Option<Vec<u8>> {
+        self.inner.insert(&key.to_bytes(), &value.encode())
     }
 
     #[inline(always)]
@@ -159,7 +168,7 @@ where
         key: &[u8],
         value: &V,
     ) -> Option<Vec<u8>> {
-        self.inner.insert(key, &pnk!(bcs::to_bytes(value)))
+        self.inner.insert(key, &value.encode())
     }
 
     #[inline(always)]
@@ -182,35 +191,12 @@ where
 
     /// range(start..end)
     #[inline(always)]
-    pub fn range<R: RangeBounds<K>>(&self, bounds: R) -> MapxOrdIter<K, V> {
-        let ll;
-        let l = match bounds.start_bound() {
-            Bound::Included(lo) => {
-                ll = lo.to_bytes();
-                Bound::Included(ll.as_slice())
-            }
-            Bound::Excluded(lo) => {
-                ll = lo.to_bytes();
-                Bound::Excluded(ll.as_slice())
-            }
-            Bound::Unbounded => Bound::Unbounded,
-        };
-
-        let hh;
-        let h = match bounds.end_bound() {
-            Bound::Included(hi) => {
-                hh = hi.to_bytes();
-                Bound::Included(hh.as_slice())
-            }
-            Bound::Excluded(hi) => {
-                hh = hi.to_bytes();
-                Bound::Excluded(hh.as_slice())
-            }
-            Bound::Unbounded => Bound::Unbounded,
-        };
-
+    pub(super) fn range<'a, R: RangeBounds<&'a [u8]>>(
+        &'a self,
+        bounds: R,
+    ) -> MapxOrdIter<K, V> {
         MapxOrdIter {
-            iter: self.inner.range((l, h)),
+            iter: self.inner.range(bounds),
             _pd0: PhantomData,
             _pd1: PhantomData,
         }
@@ -228,13 +214,14 @@ where
 
     #[inline(always)]
     pub(super) fn remove(&mut self, key: &K) -> Option<V> {
-        self.unset_value(key).map(|v| pnk!(bcs::from_bytes(&v)))
+        self.unset_value(key)
+            .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
     }
 
     #[inline(always)]
     pub(super) fn remove_ref_bytes_k(&mut self, key: &[u8]) -> Option<V> {
         self.unset_value_ref_bytes_k(key)
-            .map(|v| pnk!(bcs::from_bytes(&v)))
+            .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
     }
 
     #[inline(always)]
@@ -264,8 +251,8 @@ where
 // Iter over [MapxOrd](self::Mapxnk).
 pub(super) struct MapxOrdIter<K, V>
 where
-    K: OrderConsistKey,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
 {
     pub(super) iter: MapxRawIter,
     _pd0: PhantomData<K>,
@@ -274,33 +261,39 @@ where
 
 impl<K, V> Iterator for MapxOrdIter<K, V>
 where
-    K: OrderConsistKey,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
 {
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter
-            .next()
-            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(bcs::from_bytes(&v))))
+        self.iter.next().map(|(k, v)| {
+            (
+                pnk!(K::from_bytes(k)),
+                <V as ValueEnDe>::decode(&v).unwrap(),
+            )
+        })
     }
 }
 
 impl<K, V> DoubleEndedIterator for MapxOrdIter<K, V>
 where
-    K: OrderConsistKey,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.iter
-            .next_back()
-            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(bcs::from_bytes(&v))))
+        self.iter.next_back().map(|(k, v)| {
+            (
+                pnk!(K::from_bytes(k)),
+                <V as ValueEnDe>::decode(&v).unwrap(),
+            )
+        })
     }
 }
 
 impl<K, V> ExactSizeIterator for MapxOrdIter<K, V>
 where
-    K: OrderConsistKey,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
 {
 }
 
