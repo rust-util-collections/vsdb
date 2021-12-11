@@ -42,11 +42,25 @@ impl<'de> de::Visitor<'de> for SimpleVisitor {
 /// Methods used to encode and decode the KEY.
 pub trait KeyEnDe: Serialize + DeserializeOwned {
     /// Encode original key type to bytes.
+    #[cfg(all(feature = "cbor_ende", not(feature = "bcs_ende")))]
+    fn encode(&self) -> RawBytes {
+        serde_cbor::to_vec(self).unwrap().into_boxed_slice()
+    }
+
+    /// Encode original key type to bytes.
+    #[cfg(all(feature = "bcs_ende", not(feature = "cbor_ende")))]
     fn encode(&self) -> RawBytes {
         bcs::to_bytes(self).unwrap().into_boxed_slice()
     }
 
     /// Decode from bytes to the original key type.
+    #[cfg(all(feature = "cbor_ende", not(feature = "bcs_ende")))]
+    fn decode(bytes: &[u8]) -> Result<Self> {
+        serde_cbor::from_slice(bytes).c(d!())
+    }
+
+    /// Decode from bytes to the original key type.
+    #[cfg(all(feature = "bcs_ende", not(feature = "cbor_ende")))]
     fn decode(bytes: &[u8]) -> Result<Self> {
         bcs::from_bytes(bytes).c(d!())
     }
@@ -54,12 +68,26 @@ pub trait KeyEnDe: Serialize + DeserializeOwned {
 
 /// Methods used to encode and decode the VALUE.
 pub trait ValueEnDe: Serialize + DeserializeOwned {
-    /// Encode original value type to bytes.
+    /// Encode original key type to bytes.
+    #[cfg(all(feature = "cbor_ende", not(feature = "bcs_ende")))]
+    fn encode(&self) -> RawBytes {
+        serde_cbor::to_vec(self).unwrap().into_boxed_slice()
+    }
+
+    /// Encode original key type to bytes.
+    #[cfg(all(feature = "bcs_ende", not(feature = "cbor_ende")))]
     fn encode(&self) -> RawBytes {
         bcs::to_bytes(self).unwrap().into_boxed_slice()
     }
 
-    /// Decode from bytes to the original value type.
+    /// Decode from bytes to the original key type.
+    #[cfg(all(feature = "cbor_ende", not(feature = "bcs_ende")))]
+    fn decode(bytes: &[u8]) -> Result<Self> {
+        serde_cbor::from_slice(bytes).c(d!())
+    }
+
+    /// Decode from bytes to the original key type.
+    #[cfg(all(feature = "bcs_ende", not(feature = "cbor_ende")))]
     fn decode(bytes: &[u8]) -> Result<Self> {
         bcs::from_bytes(bytes).c(d!())
     }
@@ -69,8 +97,14 @@ impl<T: Serialize + DeserializeOwned> KeyEnDe for T {}
 impl<T: Serialize + DeserializeOwned> ValueEnDe for T {}
 
 // used to encode the deref value of `Option<Box<[u8]>>`
-pub(crate) fn encode_optioned_bytes(b: &Option<&[u8]>) -> RawBytes {
-    bcs::to_bytes(b).unwrap().into_boxed_slice()
+#[cfg(all(feature = "cbor_ende", not(feature = "bcs_ende")))]
+pub(crate) fn encode_optioned_bytes(v: &Option<&[u8]>) -> RawBytes {
+    serde_cbor::to_vec(v).unwrap().into_boxed_slice()
+}
+
+#[cfg(all(feature = "bcs_ende", not(feature = "cbor_ende")))]
+pub(crate) fn encode_optioned_bytes(v: &Option<&[u8]>) -> RawBytes {
+    bcs::to_bytes(v).unwrap().into_boxed_slice()
 }
 
 /////////////////////////////////////////////////////////////////////////////

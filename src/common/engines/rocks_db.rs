@@ -1,8 +1,9 @@
 use crate::common::{
     get_data_dir, vsdb_set_base_dir, BranchID, Engine, Prefix, PrefixBytes, RawBytes,
-    RawKey, RawValue, VersionID, PREFIX_SIZ, RESERVED_ID_CNT,
+    RawKey, RawValue, VersionID, INITIAL_BRANCH_ID, PREFIX_SIZ, RESERVED_ID_CNT,
 };
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
+use parking_lot::Mutex;
 use rocksdb::{
     ColumnFamily, ColumnFamilyDescriptor, DBCompressionType, DBIterator, Direction,
     IteratorMode, Options, ReadOptions, SliceTransform, DB,
@@ -21,9 +22,7 @@ const META_KEY_BRANCH_ID: [u8; 1] = [u8::MAX - 1];
 const META_KEY_VERSION_ID: [u8; 1] = [u8::MAX - 2];
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 
-lazy_static! {
-    static ref HDR: (DB, Vec<String>) = rocksdb_open().unwrap();
-}
+static HDR: Lazy<(DB, Vec<String>)> = Lazy::new(|| rocksdb_open().unwrap());
 
 pub(crate) struct RocksEngine {
     meta: &'static DB,
@@ -53,9 +52,7 @@ impl RocksEngine {
 
     #[inline(always)]
     fn get_upper_bound_value(&self, meta_prefix: PrefixBytes) -> Vec<u8> {
-        lazy_static! {
-            static ref BUF: RawBytes = vec![u8::MAX; 512].into_boxed_slice();
-        }
+        static BUF: Lazy<RawBytes> = Lazy::new(|| vec![u8::MAX; 512].into_boxed_slice());
 
         let mut max_guard = meta_prefix.to_vec();
 
@@ -83,8 +80,11 @@ impl Engine for RocksEngine {
         }
 
         if meta.get(&META_KEY_BRANCH_ID).c(d!())?.is_none() {
-            meta.put(META_KEY_BRANCH_ID, 0_usize.to_be_bytes())
-                .c(d!())?;
+            meta.put(
+                META_KEY_BRANCH_ID,
+                (1 + INITIAL_BRANCH_ID as usize).to_be_bytes(),
+            )
+            .c(d!())?;
         }
 
         if meta.get(&META_KEY_VERSION_ID).c(d!())?.is_none() {
@@ -110,33 +110,75 @@ impl Engine for RocksEngine {
         })
     }
 
+    // 'step 1' and 'step 2' is not atomic in multi-threads scene,
+    // so we use a `Mutex` lock for thread safe.
     fn alloc_prefix(&self) -> Prefix {
-        let ret = self.meta.get(self.prefix_allocator.key).unwrap().unwrap();
+        static LK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
+
+        let mut z = LK.lock();
+
+        // step 1
+        let ret = crate::parse_int!(
+            self.meta.get(self.prefix_allocator.key).unwrap().unwrap(),
+            BranchID
+        );
+
+        // step 2
         self.meta
-            .put(self.prefix_allocator.key, PrefixAllocator::next(&ret))
+            .put(self.prefix_allocator.key, (1 + ret).to_be_bytes())
             .unwrap();
-        crate::parse_prefix!(ret)
+
+        // meaningless but keep the lock
+        *z = false;
+
+        ret
     }
 
+    // 'step 1' and 'step 2' is not atomic in multi-threads scene,
+    // so we use a `Mutex` lock for thread safe.
     fn alloc_branch_id(&self) -> BranchID {
+        static LK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
+
+        let mut z = LK.lock();
+
+        // step 1
         let ret = crate::parse_int!(
             self.meta.get(META_KEY_BRANCH_ID).unwrap().unwrap(),
             BranchID
         );
+
+        // step 2
         self.meta
             .put(META_KEY_BRANCH_ID, (1 + ret).to_be_bytes())
             .unwrap();
+
+        // meaningless but keep the lock
+        *z = false;
+
         ret
     }
 
+    // 'step 1' and 'step 2' is not atomic in multi-threads scene,
+    // so we use a `Mutex` lock for thread safe.
     fn alloc_version_id(&self) -> VersionID {
+        static LK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
+
+        let mut z = LK.lock();
+
+        // step 1
         let ret = crate::parse_int!(
             self.meta.get(META_KEY_VERSION_ID).unwrap().unwrap(),
             VersionID
         );
+
+        // step 2
         self.meta
             .put(META_KEY_VERSION_ID, (1 + ret).to_be_bytes())
             .unwrap();
+
+        // meaningless but keep the lock
+        *z = false;
+
         ret
     }
 
@@ -278,6 +320,16 @@ impl Engine for RocksEngine {
         let old_v = self.meta.get_cf(self.cf_hdr(area_idx), &k).unwrap();
         self.meta.delete_cf(self.cf_hdr(area_idx), k).unwrap();
         old_v.map(|v| v.into_boxed_slice())
+    }
+
+    fn get_instance_len(&self, instance_prefix: PrefixBytes) -> u64 {
+        crate::parse_int!(self.meta.get(instance_prefix).unwrap().unwrap(), u64)
+    }
+
+    fn set_instance_len(&self, instance_prefix: PrefixBytes, new_len: u64) {
+        self.meta
+            .put(instance_prefix, new_len.to_be_bytes())
+            .unwrap();
     }
 }
 

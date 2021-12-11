@@ -1,7 +1,9 @@
 use crate::common::{
     get_data_dir, vsdb_set_base_dir, BranchID, Engine, Prefix, PrefixBytes, RawKey,
-    RawValue, VersionID, PREFIX_SIZ, RESERVED_ID_CNT,
+    RawValue, VersionID, INITIAL_BRANCH_ID, PREFIX_SIZ, RESERVED_ID_CNT,
 };
+use once_cell::sync::Lazy;
+use parking_lot::Mutex;
 use ruc::*;
 use sled::{Config, Db, IVec, Iter, Mode, Tree};
 use std::ops::{Bound, RangeBounds};
@@ -31,8 +33,11 @@ impl Engine for SledEngine {
         let (prefix_allocator, initial_value) = PrefixAllocator::init();
 
         if meta.get(&META_KEY_BRANCH_ID).c(d!())?.is_none() {
-            meta.insert(META_KEY_BRANCH_ID, 0_usize.to_be_bytes())
-                .c(d!())?;
+            meta.insert(
+                META_KEY_BRANCH_ID,
+                (1 + INITIAL_BRANCH_ID as usize).to_be_bytes(),
+            )
+            .c(d!())?;
         }
 
         if meta.get(&META_KEY_VERSION_ID).c(d!())?.is_none() {
@@ -51,39 +56,82 @@ impl Engine for SledEngine {
         })
     }
 
+    // 'step 1' and 'step 2' is not atomic in multi-threads scene,
+    // so we use a `Mutex` lock for thread safe.
     fn alloc_prefix(&self) -> Prefix {
-        crate::parse_prefix!(
+        static LK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
+
+        let mut z = LK.lock();
+
+        // step 1
+        let ret = crate::parse_prefix!(
             self.meta
-                .update_and_fetch(self.prefix_allocator.key, PrefixAllocator::next)
+                .get(self.prefix_allocator.key)
                 .unwrap()
                 .unwrap()
                 .as_ref()
-        )
-    }
-
-    fn alloc_branch_id(&self) -> BranchID {
-        let ret = crate::parse_int!(
-            self.meta.get(META_KEY_BRANCH_ID).unwrap().unwrap().to_vec(),
-            BranchID
         );
+
+        // step 2
         self.meta
-            .insert(META_KEY_BRANCH_ID, (1 + ret).to_be_bytes())
+            .insert(self.prefix_allocator.key, (1 + ret).to_be_bytes())
             .unwrap();
+
+        // meaningless but keep the lock
+        *z = false;
+
         ret
     }
 
+    // 'step 1' and 'step 2' is not atomic in multi-threads scene,
+    // so we use a `Mutex` lock for thread safe.
+    fn alloc_branch_id(&self) -> BranchID {
+        static LK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
+
+        let mut z = LK.lock();
+
+        // step 1
+        let ret = crate::parse_int!(
+            self.meta.get(META_KEY_BRANCH_ID).unwrap().unwrap().as_ref(),
+            BranchID
+        );
+
+        // step 2
+        self.meta
+            .insert(META_KEY_BRANCH_ID, (1 + ret).to_be_bytes())
+            .unwrap();
+
+        // meaningless but keep the lock
+        *z = false;
+
+        ret
+    }
+
+    // 'step 1' and 'step 2' is not atomic in multi-threads scene,
+    // so we use a `Mutex` lock for thread safe.
     fn alloc_version_id(&self) -> VersionID {
+        static LK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
+
+        let mut z = LK.lock();
+
+        // step 1
         let ret = crate::parse_int!(
             self.meta
                 .get(META_KEY_VERSION_ID)
                 .unwrap()
                 .unwrap()
-                .to_vec(),
+                .as_ref(),
             VersionID
         );
+
+        // step 2
         self.meta
             .insert(META_KEY_VERSION_ID, (1 + ret).to_be_bytes())
             .unwrap();
+
+        // meaningless but keep the lock
+        *z = false;
+
         ret
     }
 
@@ -184,6 +232,16 @@ impl Engine for SledEngine {
             .unwrap()
             .map(|iv| iv.to_vec().into_boxed_slice())
     }
+
+    fn get_instance_len(&self, instance_prefix: PrefixBytes) -> u64 {
+        crate::parse_int!(self.meta.get(instance_prefix).unwrap().unwrap(), u64)
+    }
+
+    fn set_instance_len(&self, instance_prefix: PrefixBytes, new_len: u64) {
+        self.meta
+            .insert(instance_prefix, new_len.to_be_bytes())
+            .unwrap();
+    }
 }
 
 pub struct SledIter {
@@ -233,10 +291,6 @@ impl PrefixAllocator {
             },
             (RESERVED_ID_CNT + Prefix::MIN).to_be_bytes(),
         )
-    }
-
-    fn next(base: Option<&[u8]>) -> Option<[u8; PREFIX_SIZ]> {
-        base.map(|bytes| (crate::parse_prefix!(bytes) + 1).to_be_bytes())
     }
 }
 
