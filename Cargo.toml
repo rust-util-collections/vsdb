@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "0.0.1"
+version = "0.9.0"
 authors = ["fanhui.x@gmail.com"]
 edition = "2021"
 description = "A versioned state database, mainly used to keep versioned blockchain state."
