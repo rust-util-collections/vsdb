@@ -9,13 +9,13 @@ mod backend;
 #[cfg(test)]
 mod test;
 
-use crate::serde::{CacheMeta, CacheVisitor};
+use crate::{alloc_id, MetaInfo, SimpleVisitor};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     cmp::Ordering,
     fmt,
-    iter::Iterator,
+    iter::{DoubleEndedIterator, Iterator},
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
 };
@@ -33,6 +33,26 @@ where
     in_disk: backend::Vecx<T>,
 }
 
+impl<T> From<MetaInfo> for Vecx<T>
+where
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+{
+    fn from(mi: MetaInfo) -> Self {
+        Self {
+            in_disk: backend::Vecx::from(mi),
+        }
+    }
+}
+
+impl<T> Default for Vecx<T>
+where
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 ///////////////////////////////////////////////
 // Begin of the self-implementation for Vecx //
 /*********************************************/
@@ -43,14 +63,15 @@ where
 {
     /// Create an instance.
     #[inline(always)]
-    pub fn new(path: &str) -> Result<Self> {
-        let in_disk = backend::Vecx::load_or_create(path).c(d!())?;
-        Ok(Vecx { in_disk })
+    pub fn new() -> Self {
+        Vecx {
+            in_disk: backend::Vecx::load_or_create(alloc_id()),
+        }
     }
 
-    /// Get the meta-storage path
-    pub fn get_path(&self) -> &str {
-        self.in_disk.get_path()
+    // Get the meta-storage path
+    fn get_meta(&self) -> MetaInfo {
+        self.in_disk.get_meta()
     }
 
     /// Imitate the behavior of 'Vec<_>.get(...)'
@@ -226,20 +247,29 @@ where
 /************************************************/
 
 /// Iter over [Vecx](self::Vecx).
-pub struct VecxIter<'a, T>
+pub struct VecxIter<T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
-    iter: backend::VecxIter<'a, T>,
+    iter: backend::VecxIter<T>,
 }
 
-impl<'a, T> Iterator for VecxIter<'a, T>
+impl<T> Iterator for VecxIter<T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
     type Item = T;
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().map(|v| v.1)
+    }
+}
+
+impl<T> DoubleEndedIterator for VecxIter<T>
+where
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.iter.next_back().map(|v| v.1)
     }
 }
 
@@ -272,11 +302,8 @@ where
     where
         S: serde::Serializer,
     {
-        let v = pnk!(serde_json::to_string(&CacheMeta {
-            path: self.get_path(),
-        }));
-
-        serializer.serialize_str(&v)
+        let v = pnk!(bincode::serialize(&self.get_meta()));
+        serializer.serialize_bytes(&v)
     }
 }
 
@@ -288,9 +315,9 @@ where
     where
         D: serde::Deserializer<'de>,
     {
-        deserializer.deserialize_str(CacheVisitor).map(|meta| {
-            let meta = pnk!(serde_json::from_str::<CacheMeta>(&meta));
-            pnk!(Vecx::new(meta.path))
+        deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
+            let meta = pnk!(bincode::deserialize::<MetaInfo>(&meta));
+            Vecx::from(meta)
         })
     }
 }

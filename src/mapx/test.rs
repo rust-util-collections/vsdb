@@ -4,7 +4,6 @@
 
 use super::*;
 use serde::{Deserialize, Serialize};
-use std::fs;
 
 #[derive(Serialize, Deserialize, Default, Debug, Eq, PartialEq, Clone)]
 struct SampleBlock {
@@ -21,13 +20,12 @@ fn gen_sample(idx: usize) -> SampleBlock {
 
 #[test]
 fn t_mapx() {
-    crate::clear();
+    crate::reset_db();
 
     let cnt = 200;
 
     let db = {
-        omit!(fs::remove_dir_all("/tmp/bnc_test/Mapx"));
-        let mut dbi = crate::new_mapx!("/tmp/bnc_test/Mapx");
+        let mut dbi = crate::Mapx::new();
 
         assert_eq!(0, dbi.len());
         (0..cnt).for_each(|i| {
@@ -47,10 +45,10 @@ fn t_mapx() {
 
         assert_eq!(cnt, dbi.len());
 
-        pnk!(serde_json::to_vec(&dbi))
+        pnk!(bincode::serialize(&dbi))
     };
 
-    let mut db_restore = pnk!(serde_json::from_slice::<Mapx<usize, SampleBlock>>(&db));
+    let mut db_restore = pnk!(bincode::deserialize::<Mapx<usize, SampleBlock>>(&db));
 
     assert_eq!(cnt, db_restore.len());
 
@@ -67,6 +65,6 @@ fn t_mapx() {
     });
 
     assert_eq!(1, db_restore.len());
-    crate::clear();
+    crate::reset_db();
     assert!(db_restore.is_empty());
 }

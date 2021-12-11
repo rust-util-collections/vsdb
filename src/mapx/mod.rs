@@ -4,18 +4,21 @@
 //! This module is non-invasive to external code except the `new` method.
 //!
 
-mod backend;
 #[cfg(test)]
 mod test;
 
-use crate::serde::{CacheMeta, CacheVisitor};
+use crate::{
+    mapx_oc::{self, MapxOC, MapxOCIter},
+    MetaInfo, SimpleVisitor,
+};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     cmp::Ordering,
     fmt,
     hash::Hash,
-    iter::Iterator,
+    iter::{DoubleEndedIterator, Iterator},
+    marker::PhantomData,
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
 };
@@ -36,7 +39,35 @@ where
         + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    in_disk: backend::Mapx<K, V>,
+    inner: MapxOC<Vec<u8>, V>,
+    _pd: PhantomData<K>,
+}
+
+impl<K, V> Default for Mapx<K, V>
+where
+    K: Clone
+        + PartialEq
+        + Eq
+        + PartialOrd
+        + Ord
+        + Hash
+        + Serialize
+        + DeserializeOwned
+        + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+macro_rules! convert {
+    ($as_param: expr) => {{
+        bincode::serialize::<K>($as_param).unwrap()
+    }};
+    (@$as_ret: expr) => {{
+        bincode::deserialize::<K>(&$as_ret).unwrap()
+    }};
 }
 
 ///////////////////////////////////////////////
@@ -58,14 +89,16 @@ where
 {
     /// Create an instance.
     #[inline(always)]
-    pub fn new(path: &str) -> Result<Self> {
-        let in_disk = backend::Mapx::load_or_create(path).c(d!())?;
-        Ok(Mapx { in_disk })
+    pub fn new() -> Self {
+        Mapx {
+            inner: MapxOC::new(),
+            _pd: PhantomData,
+        }
     }
 
-    /// Get the database storage path
-    pub fn get_path(&self) -> &str {
-        self.in_disk.get_path()
+    // Get the database storage path
+    fn get_meta(&self) -> MetaInfo {
+        self.inner.get_meta()
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get(...)'
@@ -73,71 +106,79 @@ where
     /// Any faster/better choice other than JSON ?
     #[inline(always)]
     pub fn get(&self, key: &K) -> Option<V> {
-        self.in_disk.get(key)
+        self.inner.get(&convert!(key))
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get_mut(...)'
     #[inline(always)]
     pub fn get_mut(&mut self, key: &K) -> Option<ValueMut<'_, K, V>> {
-        self.in_disk
-            .get(key)
+        let k = convert!(key);
+        self.inner
+            .get(&k)
             .map(move |v| ValueMut::new(self, key.clone(), v))
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.len()'.
     #[inline(always)]
     pub fn len(&self) -> usize {
-        self.in_disk.len()
+        self.inner.len()
     }
 
     /// A helper func
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        self.in_disk.is_empty()
+        self.inner.is_empty()
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
-        self.in_disk.insert(key, value)
+        let key = convert!(&key);
+        self.inner.insert(key, value)
     }
 
     /// Similar with `insert`, but ignore the old value.
     #[inline(always)]
     pub fn set_value(&mut self, key: K, value: V) {
-        self.in_disk.set_value(key, value);
+        let key = convert!(&key);
+        self.inner.set_value(key, value);
     }
 
     /// Imitate the behavior of '.entry(...).or_insert(...)'
     #[inline(always)]
-    pub fn entry(&mut self, key: K) -> Entry<'_, K, V> {
-        Entry { key, db: self }
+    pub fn entry(&mut self, key: K) -> mapx_oc::Entry<'_, Vec<u8>, V> {
+        let key = convert!(&key);
+        self.inner.entry(key)
     }
 
     /// Imitate the behavior of '.iter()'
     #[inline(always)]
-    pub fn iter(&self) -> Box<dyn Iterator<Item = (K, V)> + '_> {
-        Box::new(MapxIter {
-            iter: self.in_disk.iter(),
-        })
+    pub fn iter(&self) -> MapxIter<K, V> {
+        MapxIter {
+            iter: self.inner.iter(),
+            _pd: PhantomData,
+        }
     }
 
     /// Check if a key is exists.
     #[inline(always)]
     pub fn contains_key(&self, key: &K) -> bool {
-        self.in_disk.contains_key(key)
+        let key = convert!(key);
+        self.inner.contains_key(&key)
     }
 
     /// Remove a <K, V> from mem and disk.
     #[inline(always)]
     pub fn remove(&mut self, key: &K) -> Option<V> {
-        self.in_disk.remove(key)
+        let key = convert!(key);
+        self.inner.remove(&key)
     }
 
     /// Remove a <K, V> from mem and disk.
     #[inline(always)]
     pub fn unset_value(&mut self, key: &K) {
-        self.in_disk.unset_value(key);
+        let key = convert!(key);
+        self.inner.unset_value(&key);
     }
 }
 
@@ -320,88 +361,38 @@ where
 // End of the implementation of ValueMut(returned by `self.get_mut`) for Mapx //
 ////////////////////////////////////////////////////////////////////////////////
 
-///////////////////////////////////////////////////
-// Begin of the implementation of Entry for Mapx //
-/*************************************************/
-
-/// Imitate the `btree_map/btree_map::Entry`.
-pub struct Entry<'a, K, V>
-where
-    K: 'a
-        + fmt::Debug
-        + Clone
-        + PartialEq
-        + Eq
-        + PartialOrd
-        + Ord
-        + Hash
-        + Serialize
-        + DeserializeOwned,
-    V: 'a + fmt::Debug + Clone + PartialEq + Serialize + DeserializeOwned,
-{
-    key: K,
-    db: &'a mut Mapx<K, V>,
-}
-
-impl<'a, K, V> Entry<'a, K, V>
-where
-    K: 'a
-        + fmt::Debug
-        + Clone
-        + PartialEq
-        + Eq
-        + PartialOrd
-        + Ord
-        + Hash
-        + Serialize
-        + DeserializeOwned,
-    V: 'a + fmt::Debug + Clone + PartialEq + Serialize + DeserializeOwned,
-{
-    /// Imitate the `btree_map/btree_map::Entry.or_insert(...)`.
-    pub fn or_insert(self, default: V) -> ValueMut<'a, K, V> {
-        if !self.db.contains_key(&self.key) {
-            self.db.set_value(self.key.clone(), default);
-        }
-        pnk!(self.db.get_mut(&self.key))
-    }
-
-    /// Imitate the `btree_map/btree_map::Entry.or_insert_with(...)`.
-    pub fn or_insert_with<F>(self, default: F) -> ValueMut<'a, K, V>
-    where
-        F: FnOnce() -> V,
-    {
-        if !self.db.contains_key(&self.key) {
-            self.db.set_value(self.key.clone(), default());
-        }
-        pnk!(self.db.get_mut(&self.key))
-    }
-}
-
-/***********************************************/
-// End of the implementation of Entry for Mapx //
-/////////////////////////////////////////////////
-
 //////////////////////////////////////////////////
 // Begin of the implementation of Iter for Mapx //
 /************************************************/
 
 /// Iter over [Mapx](self::Mapx).
-pub struct MapxIter<'a, K, V>
+pub struct MapxIter<K, V>
 where
     K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    iter: backend::MapxIter<'a, K, V>,
+    iter: MapxOCIter<Vec<u8>, V>,
+    _pd: PhantomData<K>,
 }
 
-impl<'a, K, V> Iterator for MapxIter<'a, K, V>
+impl<K, V> Iterator for MapxIter<K, V>
 where
     K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next()
+        self.iter.next().map(|(k, v)| (convert!(@k), v))
+    }
+}
+
+impl<K, V> DoubleEndedIterator for MapxIter<K, V>
+where
+    K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
+    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.iter.next_back().map(|(k, v)| (convert!(@k), v))
     }
 }
 
@@ -453,11 +444,8 @@ where
     where
         S: serde::Serializer,
     {
-        let v = pnk!(serde_json::to_string(&CacheMeta {
-            path: self.get_path(),
-        }));
-
-        serializer.serialize_str(&v)
+        let v = pnk!(bincode::serialize(&self.get_meta()));
+        serializer.serialize_bytes(&v)
     }
 }
 
@@ -478,9 +466,12 @@ where
     where
         D: serde::Deserializer<'de>,
     {
-        deserializer.deserialize_str(CacheVisitor).map(|meta| {
-            let meta = pnk!(serde_json::from_str::<CacheMeta>(&meta));
-            pnk!(Mapx::new(meta.path))
+        deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
+            let meta = pnk!(bincode::deserialize::<MetaInfo>(&meta));
+            Mapx {
+                inner: MapxOC::from(meta),
+                _pd: PhantomData,
+            }
         })
     }
 }

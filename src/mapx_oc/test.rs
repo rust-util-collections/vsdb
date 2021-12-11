@@ -4,7 +4,7 @@
 
 use super::*;
 use serde::{Deserialize, Serialize};
-use std::{fs, ops::Bound};
+use std::ops::Bound;
 
 #[derive(Serialize, Deserialize, Default, Debug, Eq, PartialEq, Clone)]
 struct SampleBlock {
@@ -20,14 +20,13 @@ fn gen_sample(idx: usize) -> SampleBlock {
 }
 
 #[test]
-fn t_mapxnk() {
-    crate::clear();
+fn t_mapx_oc() {
+    crate::reset_db();
 
     let cnt = 200;
 
     let db = {
-        omit!(fs::remove_dir_all("/tmp/bnc_test/Mapxnk"));
-        let mut dbi = crate::new_mapxnk!("/tmp/bnc_test/Mapxnk");
+        let mut dbi = crate::MapxOC::new();
 
         assert_eq!(0, dbi.len());
         (0..cnt).for_each(|i| {
@@ -47,10 +46,10 @@ fn t_mapxnk() {
 
         assert_eq!(cnt, dbi.len());
 
-        pnk!(serde_json::to_vec(&dbi))
+        pnk!(bincode::serialize(&dbi))
     };
 
-    let mut db_restore = pnk!(serde_json::from_slice::<Mapxnk<usize, SampleBlock>>(&db));
+    let mut db_restore = pnk!(bincode::deserialize::<MapxOC<usize, SampleBlock>>(&db));
 
     assert_eq!(cnt, db_restore.len());
 
@@ -67,7 +66,7 @@ fn t_mapxnk() {
     });
 
     assert_eq!(1, db_restore.len());
-    crate::clear();
+    crate::reset_db();
     assert!(db_restore.is_empty());
 
     db_restore.insert(1, gen_sample(1));

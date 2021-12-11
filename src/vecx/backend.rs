@@ -2,11 +2,15 @@
 //! # Disk Storage Implementation
 //!
 
-use crate::{helper::*, DB_NUM};
-use rocksdb::DBIterator;
+use crate::{MetaInfo, TREE_NUM, VSDB};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
-use std::{convert::TryInto, fmt, iter::Iterator, marker::PhantomData, mem::size_of};
+use std::{
+    fmt,
+    iter::{DoubleEndedIterator, Iterator},
+    marker::PhantomData,
+    mem::size_of,
+};
 
 /// To solve the problem of unlimited memory usage,
 /// use this to replace the original in-memory `Vec<_>`.
@@ -18,11 +22,37 @@ pub(super) struct Vecx<T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
-    path: String,
     cnter: usize,
-    prefix: Vec<u8>,
+    id: usize,
     idx: usize,
     _pd: PhantomData<T>,
+}
+
+impl<T> From<MetaInfo> for Vecx<T>
+where
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+{
+    fn from(mi: MetaInfo) -> Self {
+        Self {
+            cnter: mi.item_cnt,
+            id: mi.obj_id,
+            idx: mi.tree_idx,
+            _pd: PhantomData,
+        }
+    }
+}
+
+impl<T> From<&Vecx<T>> for MetaInfo
+where
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+{
+    fn from(x: &Vecx<T>) -> Self {
+        Self {
+            item_cnt: x.cnter,
+            obj_id: x.id,
+            tree_idx: x.idx,
+        }
+    }
 }
 
 ///////////////////////////////////////////////
@@ -37,23 +67,19 @@ where
     /// it will use it directly;
     /// Or it will create a new one.
     #[inline(always)]
-    pub(super) fn load_or_create(path: &str) -> Result<Self> {
-        meta_check(path).c(d!())?;
-        let prefix = read_prefix_bytes(&format!("{}/{}", path, PREFIX)).c(d!())?;
-        let idx = hash(&path) % DB_NUM;
-
-        Ok(Vecx {
-            path: path.to_owned(),
-            cnter: BNC[idx].prefix_iterator(&prefix).count(),
-            prefix,
+    pub(super) fn load_or_create(id: usize) -> Self {
+        let idx = id % TREE_NUM;
+        Vecx {
+            cnter: VSDB[idx].scan_prefix(id.to_be_bytes()).count(),
+            id,
             idx,
             _pd: PhantomData,
-        })
+        }
     }
 
     /// Get the storage path
-    pub(super) fn get_path(&self) -> &str {
-        self.path.as_str()
+    pub(super) fn get_meta(&self) -> MetaInfo {
+        self.into()
     }
 
     /// Imitate the behavior of 'Vec<_>.get(...)'
@@ -61,13 +87,13 @@ where
     /// Any faster/better choice other than JSON ?
     #[inline(always)]
     pub(super) fn get(&self, idx: usize) -> Option<T> {
-        let mut k = self.prefix.clone();
-        k.extend_from_slice(&usize::to_le_bytes(idx)[..]);
-        BNC[self.idx]
+        let mut k = self.id.to_be_bytes().to_vec();
+        k.extend_from_slice(&usize::to_be_bytes(idx)[..]);
+        VSDB[self.idx]
             .get(k)
             .ok()
             .flatten()
-            .map(|bytes| pnk!(serde_json::from_slice(&bytes)))
+            .map(|bytes| pnk!(bincode::deserialize(&bytes)))
     }
 
     /// Imitate the behavior of 'Vec<_>.last()'
@@ -80,7 +106,7 @@ where
     #[inline(always)]
     pub(super) fn len(&self) -> usize {
         debug_assert_eq!(
-            BNC[self.idx].prefix_iterator(&self.prefix).count(),
+            VSDB[self.idx].scan_prefix(self.id.to_be_bytes()).count(),
             self.cnter
         );
         self.cnter
@@ -89,7 +115,10 @@ where
     /// A helper func
     #[inline(always)]
     pub(super) fn is_empty(&self) -> bool {
-        BNC[self.idx].prefix_iterator(&self.prefix).next().is_none()
+        VSDB[self.idx]
+            .scan_prefix(self.id.to_be_bytes())
+            .next()
+            .is_none()
     }
 
     /// Imitate the behavior of 'Vec<_>.push(...)'
@@ -97,11 +126,11 @@ where
     pub(super) fn push(&mut self, b: T) {
         let idx = self.cnter;
 
-        let mut k = self.prefix.clone();
-        k.extend_from_slice(&idx.to_le_bytes()[..]);
-        let value = pnk!(serde_json::to_vec(&b));
+        let mut k = self.id.to_be_bytes().to_vec();
+        k.extend_from_slice(&idx.to_be_bytes()[..]);
+        let value = pnk!(bincode::serialize(&b));
 
-        pnk!(BNC[self.idx].put(k, value));
+        pnk!(VSDB[self.idx].insert(k, value));
 
         // There has no `remove`-like methods provided,
         // so we can increase this value directly.
@@ -111,10 +140,10 @@ where
     /// Imitate the behavior of 'Vec<_>.insert(idx, value)'
     #[inline(always)]
     pub(super) fn insert(&mut self, idx: usize, b: T) {
-        let mut k = self.prefix.clone();
-        k.extend_from_slice(&idx.to_le_bytes()[..]);
-        let value = pnk!(serde_json::to_vec(&b));
-        pnk!(BNC[self.idx].put(k, value));
+        let mut k = self.id.to_be_bytes().to_vec();
+        k.extend_from_slice(&idx.to_be_bytes()[..]);
+        let value = pnk!(bincode::serialize(&b));
+        pnk!(VSDB[self.idx].insert(k, value));
 
         if idx >= self.cnter {
             // There has no `remove` like methods provided,
@@ -125,8 +154,8 @@ where
 
     /// Imitate the behavior of '.iter()'
     #[inline(always)]
-    pub(super) fn iter(&self) -> VecxIter<'_, T> {
-        let i = BNC[self.idx].prefix_iterator(&self.prefix);
+    pub(super) fn iter(&self) -> VecxIter<T> {
+        let i = VSDB[self.idx].scan_prefix(self.id.to_be_bytes());
 
         VecxIter {
             iter: i,
@@ -144,32 +173,46 @@ where
 /************************************************/
 
 /// Iter over [Vecx](self::Vecx).
-pub(super) struct VecxIter<'a, T>
+pub(super) struct VecxIter<T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
-    pub(super) iter: DBIterator<'a>,
+    pub(super) iter: sled::Iter,
     _pd: PhantomData<T>,
 }
 
-impl<'a, T> Iterator for VecxIter<'a, T>
+impl<T> Iterator for VecxIter<T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
     type Item = (usize, T);
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next().map(|(idx, v)| {
+        self.iter.next().map(|i| i.unwrap()).map(|(idx, v)| {
             (
                 usize::from_le_bytes(idx[..size_of::<usize>()].try_into().unwrap()),
-                pnk!(serde_json::from_slice(&v)),
+                pnk!(bincode::deserialize(&v)),
             )
         })
     }
 }
 
-impl<'a, T> ExactSizeIterator for VecxIter<'a, T> where
+impl<T> ExactSizeIterator for VecxIter<T> where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug
 {
+}
+
+impl<T> DoubleEndedIterator for VecxIter<T>
+where
+    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.iter.next_back().map(|i| i.unwrap()).map(|(idx, v)| {
+            (
+                usize::from_le_bytes(idx[..size_of::<usize>()].try_into().unwrap()),
+                pnk!(bincode::deserialize(&v)),
+            )
+        })
+    }
 }
 
 /**********************************************/

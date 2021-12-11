@@ -7,7 +7,7 @@ use std::{
 
 fn bench(c: &mut Criterion) {
     let i = AtomicUsize::new(0);
-    let mut db = bnc::new_vecx!();
+    let mut db = vsdb::Vecx::new();
 
     let mut group = c.benchmark_group("** Cache DB Benchmark **");
     group
@@ -30,7 +30,7 @@ fn bench(c: &mut Criterion) {
     });
 
     let i = AtomicUsize::new(0);
-    let mut db = bnc::new_mapx!();
+    let mut db = vsdb::Mapx::new();
 
     group.bench_function("mapx_write", |b| {
         b.iter(|| {

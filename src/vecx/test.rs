@@ -5,7 +5,6 @@
 use super::*;
 use ruc::*;
 use serde::{Deserialize, Serialize};
-use std::fs;
 
 #[derive(Default, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 struct SampleBlock {
@@ -22,13 +21,12 @@ fn gen_sample(idx: usize) -> SampleBlock {
 
 #[test]
 fn t_vecx() {
-    crate::clear();
+    crate::reset_db();
 
     let cnt = 200;
 
     let db = {
-        omit!(fs::remove_dir_all("/tmp/bnc_test/Vecx"));
-        let mut db = crate::new_vecx!("/tmp/bnc_test/Vecx");
+        let mut db = crate::Vecx::new();
 
         assert_eq!(0, db.len());
         (0..cnt).for_each(|i| {
@@ -44,10 +42,10 @@ fn t_vecx() {
 
         assert_eq!(cnt, db.len());
 
-        pnk!(serde_json::to_vec(&db))
+        pnk!(bincode::serialize(&db))
     };
 
-    let mut db_restore = pnk!(serde_json::from_slice::<Vecx<SampleBlock>>(&db));
+    let mut db_restore = pnk!(bincode::deserialize::<Vecx<SampleBlock>>(&db));
 
     (0..cnt).for_each(|i| {
         assert_eq!(i, db_restore.get(i).unwrap().idx);
@@ -65,6 +63,6 @@ fn t_vecx() {
     *db_restore.get_mut(2 * cnt).unwrap() = gen_sample(999 * cnt);
     assert_eq!(db_restore.get(2 * cnt).unwrap(), gen_sample(999 * cnt));
 
-    crate::clear();
+    crate::reset_db();
     assert!(db_restore.is_empty());
 }
