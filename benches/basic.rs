@@ -1,5 +1,4 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use ruc::*;
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
