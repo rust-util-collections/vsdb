@@ -26,7 +26,7 @@ use std::{
 ///
 /// - Each time the program is started, a new database is created
 /// - Can ONLY be used in append-only scenes like the block storage
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone)]
 pub struct Vecx<T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
@@ -109,6 +109,17 @@ where
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+
+    ///
+    /// # Safety
+    ///
+    /// Only make sense after a 'DataBase clear',
+    /// do NOT use this function except testing.
+    ///
+    #[inline(always)]
+    pub unsafe fn set_len(&mut self, len: u64) {
+        self.inner.set_len(len);
     }
 
     /// Imitate the behavior of 'Vec<_>.push(...)'
@@ -289,19 +300,6 @@ where
 /**********************************************/
 // End of the implementation of Iter for Vecx //
 ////////////////////////////////////////////////
-
-////////////////////////////////////////////////
-// Begin of the implementation of Eq for Vecx //
-/**********************************************/
-
-impl<T> Eq for Vecx<T> where
-    T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug
-{
-}
-
-/********************************************/
-// End of the implementation of Eq for Vecx //
-//////////////////////////////////////////////
 
 ///////////////////////////////////////////////////////////////////
 // Begin of the implementation of Serialize/Deserialize for Vecx //

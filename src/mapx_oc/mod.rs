@@ -8,7 +8,7 @@ mod backend;
 #[cfg(test)]
 mod test;
 
-use crate::{MetaInfo, SimpleVisitor, VSDB};
+use crate::{MetaInfo, SimpleVisitor};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
@@ -16,13 +16,12 @@ use std::{
     fmt,
     iter::Iterator,
     mem::{size_of, ManuallyDrop},
-    ops::RangeBounds,
-    ops::{Deref, DerefMut},
+    ops::{Deref, DerefMut, RangeBounds},
 };
 
 /// To solve the problem of unlimited memory usage,
 /// use this to replace the original in-memory `BTreeMap<_, _>`.
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone)]
 pub struct MapxOC<K, V>
 where
     K: OrderConsistKey,
@@ -66,7 +65,7 @@ where
     #[inline(always)]
     pub fn new() -> Self {
         MapxOC {
-            in_disk: backend::MapxOC::must_new(VSDB.alloc_id()),
+            in_disk: backend::MapxOC::must_new(),
         }
     }
 
@@ -86,15 +85,15 @@ where
     /// Get the closest smaller value,
     /// NOTE: include itself!
     #[inline(always)]
-    pub fn get_closest_smaller(&self, key: &K) -> Option<(K, V)> {
-        self.in_disk.get_closest_smaller(key)
+    pub fn get_le(&self, key: &K) -> Option<(K, V)> {
+        self.in_disk.get_le(key)
     }
 
     /// Get the closest larger value,
     /// NOTE: include itself!
     #[inline(always)]
-    pub fn get_closest_larger(&self, key: &K) -> Option<(K, V)> {
-        self.in_disk.get_closest_larger(key)
+    pub fn get_ge(&self, key: &K) -> Option<(K, V)> {
+        self.in_disk.get_ge(key)
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get_mut(...)'
@@ -115,6 +114,17 @@ where
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.in_disk.is_empty()
+    }
+
+    ///
+    /// # Safety
+    ///
+    /// Only make sense after a 'DataBase clear',
+    /// do NOT use this function except testing.
+    ///
+    #[inline(always)]
+    pub unsafe fn set_len(&mut self, len: u64) {
+        self.in_disk.set_len(len);
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
@@ -365,21 +375,6 @@ where
 /**********************************************/
 // End of the implementation of Iter for MapxOC //
 ////////////////////////////////////////////////
-
-/////////////////////////////////////////////////////////
-// Begin of the implementation of Eq for MapxOC //
-/*******************************************************/
-
-impl<K, V> Eq for MapxOC<K, V>
-where
-    K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
-{
-}
-
-/*****************************************************/
-// End of the implementation of Eq for MapxOC //
-///////////////////////////////////////////////////////
 
 ///////////////////////////////////////////////////////////////////
 // Begin of the implementation of Serialize/Deserialize for MapxOC //

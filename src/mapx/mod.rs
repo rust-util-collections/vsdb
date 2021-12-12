@@ -25,7 +25,7 @@ use std::{
 
 /// To solve the problem of unlimited memory usage,
 /// use this to replace the original in-memory `BTreeMap<_, _>`.
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone)]
 pub struct Mapx<K, V>
 where
     K: Clone
@@ -128,6 +128,17 @@ where
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+
+    ///
+    /// # Safety
+    ///
+    /// Only make sense after a 'DataBase clear',
+    /// do NOT use this function except testing.
+    ///
+    #[inline(always)]
+    pub unsafe fn set_len(&mut self, len: u64) {
+        self.inner.set_len(len);
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
@@ -399,29 +410,6 @@ where
 /**********************************************/
 // End of the implementation of Iter for Mapx //
 ////////////////////////////////////////////////
-
-/////////////////////////////////////////////////////////
-// Begin of the implementation of Eq for Mapx //
-/*******************************************************/
-
-impl<K, V> Eq for Mapx<K, V>
-where
-    K: Clone
-        + PartialEq
-        + Eq
-        + PartialOrd
-        + Ord
-        + Hash
-        + Serialize
-        + DeserializeOwned
-        + fmt::Debug,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
-{
-}
-
-/*****************************************************/
-// End of the implementation of Eq for Mapx //
-///////////////////////////////////////////////////////
 
 ///////////////////////////////////////////////////////////////////
 // Begin of the implementation of Serialize/Deserialize for Mapx //

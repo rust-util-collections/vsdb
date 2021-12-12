@@ -67,5 +67,6 @@ fn t_vecx() {
     assert_eq!(cnt - 1, db_restore.len());
 
     crate::clear();
+    unsafe { db_restore.set_len(0) };
     assert!(db_restore.is_empty());
 }

@@ -66,5 +66,6 @@ fn t_mapx() {
 
     assert_eq!(1, db_restore.len());
     crate::clear();
+    unsafe { db_restore.set_len(0) };
     assert!(db_restore.is_empty());
 }

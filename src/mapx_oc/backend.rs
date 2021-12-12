@@ -2,29 +2,29 @@
 //! # Disk Storage Implementation
 //!
 
-use crate::{MetaInfo, OrderConsistKey, VSDB};
+use crate::{
+    mapx_raw::{MapxRaw, MapxRawIter},
+    MetaInfo, OrderConsistKey,
+};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
-use sled::{IVec, Iter};
+use sled::IVec;
 use std::{
     fmt,
     iter::{DoubleEndedIterator, Iterator},
     marker::PhantomData,
-    mem::size_of,
     ops::{Bound, RangeBounds},
 };
 
 // To solve the problem of unlimited memory usage,
-// use this to replace the original in-memory `HashMap<_, _>`.
-#[derive(Debug, Clone)]
+// use this to replace the original in-memory `BTreeMap<_, _>`.
+#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
 pub(super) struct MapxOC<K, V>
 where
     K: OrderConsistKey,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    cnter: u64,
-    id: u64,
-    idx: usize,
+    inner: MapxRaw,
     _pd0: PhantomData<K>,
     _pd1: PhantomData<V>,
 }
@@ -36,9 +36,7 @@ where
 {
     fn from(mi: MetaInfo) -> Self {
         Self {
-            cnter: mi.item_cnt,
-            id: mi.obj_id,
-            idx: mi.tree_idx,
+            inner: MapxRaw::from(mi),
             _pd0: PhantomData,
             _pd1: PhantomData,
         }
@@ -51,10 +49,11 @@ where
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn from(x: &MapxOC<K, V>) -> Self {
+        let mi = x.inner.get_meta();
         Self {
-            item_cnt: x.cnter,
-            obj_id: x.id,
-            tree_idx: x.idx,
+            item_cnt: mi.item_cnt,
+            obj_id: mi.obj_id,
+            tree_idx: mi.tree_idx,
         }
     }
 }
@@ -70,18 +69,9 @@ where
 {
     // create a new instance
     #[inline(always)]
-    pub(super) fn must_new(id: u64) -> Self {
-        let idx = id as usize % VSDB.trees.len();
-
-        assert!(VSDB.trees[idx]
-            .scan_prefix(id.to_be_bytes())
-            .next()
-            .is_none());
-
+    pub(super) fn must_new() -> Self {
         MapxOC {
-            cnter: 0,
-            id,
-            idx,
+            inner: MapxRaw::new(),
             _pd0: PhantomData,
             _pd1: PhantomData,
         }
@@ -92,74 +82,45 @@ where
         MetaInfo::from(self)
     }
 
-    // Imitate the behavior of 'HashMap<_>.get(...)'
+    // Imitate the behavior of 'BTreeMap<_>.get(...)'
     #[inline(always)]
     pub(super) fn get(&self, key: &K) -> Option<V> {
-        let mut k = self.id.to_be_bytes().to_vec();
-        k.append(&mut key.to_bytes());
-        VSDB.trees[self.idx]
-            .get(k)
-            .ok()
-            .flatten()
+        self.inner
+            .get(&key.to_bytes())
             .map(|bytes| pnk!(bincode::deserialize(&bytes)))
     }
 
     #[inline(always)]
-    pub(super) fn get_closest_smaller(&self, key: &K) -> Option<(K, V)> {
-        let mut k = self.id.to_be_bytes().to_vec();
-        k.append(&mut key.to_bytes());
-
-        VSDB.trees[self.idx]
-            .range(..=k)
-            .next_back()
-            .map(|i| i.unwrap())
-            .map(|(k, v)| {
-                (
-                    pnk!(K::from_bytes(&k[size_of::<u64>()..])),
-                    pnk!(bincode::deserialize(&v)),
-                )
-            })
+    pub(super) fn get_le(&self, key: &K) -> Option<(K, V)> {
+        self.inner
+            .get_le(&key.to_bytes())
+            .map(|(k, v)| (pnk!(K::from_bytes(&k)), pnk!(bincode::deserialize(&v))))
     }
 
     #[inline(always)]
-    pub(super) fn get_closest_larger(&self, key: &K) -> Option<(K, V)> {
-        let mut k = self.id.to_be_bytes().to_vec();
-        k.append(&mut key.to_bytes());
-
-        VSDB.trees[self.idx]
-            .range(k..)
-            .next()
-            .map(|i| i.unwrap())
-            .map(|(k, v)| {
-                (
-                    pnk!(K::from_bytes(&k[size_of::<u64>()..])),
-                    pnk!(bincode::deserialize(&v)),
-                )
-            })
+    pub(super) fn get_ge(&self, key: &K) -> Option<(K, V)> {
+        self.inner
+            .get_ge(&key.to_bytes())
+            .map(|(k, v)| (pnk!(K::from_bytes(&k)), pnk!(bincode::deserialize(&v))))
     }
 
-    // Imitate the behavior of 'HashMap<_>.len()'.
+    // Imitate the behavior of 'BTreeMap<_>.len()'.
     #[inline(always)]
     pub(super) fn len(&self) -> usize {
-        debug_assert_eq!(
-            VSDB.trees[self.idx]
-                .scan_prefix(self.id.to_be_bytes())
-                .count(),
-            self.cnter as usize
-        );
-        self.cnter as usize
+        self.inner.len()
     }
 
-    // A helper func
     #[inline(always)]
     pub(super) fn is_empty(&self) -> bool {
-        VSDB.trees[self.idx]
-            .scan_prefix(self.id.to_be_bytes())
-            .next()
-            .is_none()
+        self.inner.is_empty()
     }
 
-    // Imitate the behavior of 'HashMap<_>.insert(...)'.
+    #[inline(always)]
+    pub(super) unsafe fn set_len(&mut self, len: u64) {
+        self.inner.set_len(len)
+    }
+
+    // Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
     pub(super) fn insert(&mut self, key: K, value: V) -> Option<V> {
         self.set_value(key, value)
@@ -169,26 +130,15 @@ where
     // Similar with `insert`, but ignore if the old value is exist.
     #[inline(always)]
     pub(super) fn set_value(&mut self, key: K, value: V) -> Option<IVec> {
-        let mut k = self.id.to_be_bytes().to_vec();
-        k.append(&mut key.to_bytes());
-        let v = pnk!(bincode::serialize(&value));
-        let old_v = pnk!(VSDB.trees[self.idx].get(&k));
-
-        pnk!(VSDB.trees[self.idx].insert(k, v));
-
-        if old_v.is_none() {
-            self.cnter += 1;
-        }
-
-        old_v
+        self.inner
+            .insert(&key.to_bytes(), &pnk!(bincode::serialize(&value)))
     }
 
     // Imitate the behavior of '.iter()'
     #[inline(always)]
     pub(super) fn iter(&self) -> MapxOCIter<K, V> {
-        let i = VSDB.trees[self.idx].scan_prefix(self.id.to_be_bytes());
         MapxOCIter {
-            iter: i,
+            iter: self.inner.iter(),
             _pd0: PhantomData,
             _pd1: PhantomData,
         }
@@ -197,62 +147,53 @@ where
     /// range(start..end)
     #[inline(always)]
     pub fn range<R: RangeBounds<K>>(&self, bounds: R) -> MapxOCIter<K, V> {
-        let mut b_lo = self.id.to_be_bytes().to_vec();
+        let ll;
         let l = match bounds.start_bound() {
             Bound::Included(lo) => {
-                b_lo.append(&mut lo.to_bytes());
-                Bound::Included(b_lo)
+                ll = lo.to_bytes();
+                Bound::Included(ll.as_slice())
             }
             Bound::Excluded(lo) => {
-                b_lo.append(&mut lo.to_bytes());
-                Bound::Excluded(b_lo)
+                ll = lo.to_bytes();
+                Bound::Excluded(ll.as_slice())
             }
             Bound::Unbounded => Bound::Unbounded,
         };
 
-        let mut b_hi = self.id.to_be_bytes().to_vec();
+        let hh;
         let h = match bounds.end_bound() {
             Bound::Included(hi) => {
-                b_hi.append(&mut hi.to_bytes());
-                Bound::Included(b_hi)
+                hh = hi.to_bytes();
+                Bound::Included(hh.as_slice())
             }
             Bound::Excluded(hi) => {
-                b_hi.append(&mut hi.to_bytes());
-                Bound::Excluded(b_hi)
+                hh = hi.to_bytes();
+                Bound::Excluded(hh.as_slice())
             }
             Bound::Unbounded => Bound::Unbounded,
         };
 
         MapxOCIter {
-            iter: VSDB.trees[self.idx].range((l, h)),
+            iter: self.inner.range((l, h)),
             _pd0: PhantomData,
             _pd1: PhantomData,
         }
     }
 
+    #[inline(always)]
     pub(super) fn contains_key(&self, key: &K) -> bool {
-        let mut k = self.id.to_be_bytes().to_vec();
-        k.append(&mut key.to_bytes());
-        pnk!(VSDB.trees[self.idx].contains_key(k))
+        self.inner.contains_key(&key.to_bytes())
     }
 
+    #[inline(always)]
     pub(super) fn remove(&mut self, key: &K) -> Option<V> {
         self.unset_value(key)
             .map(|v| pnk!(bincode::deserialize(&v)))
     }
 
+    #[inline(always)]
     pub(super) fn unset_value(&mut self, key: &K) -> Option<IVec> {
-        let mut k = self.id.to_be_bytes().to_vec();
-        k.append(&mut key.to_bytes());
-        let old_v = pnk!(VSDB.trees[self.idx].get(&k));
-
-        pnk!(VSDB.trees[self.idx].remove(k));
-
-        if old_v.is_some() {
-            self.cnter -= 1;
-        }
-
-        old_v
+        self.inner.remove(&key.to_bytes())
     }
 }
 
@@ -270,7 +211,7 @@ where
     K: OrderConsistKey,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    pub(super) iter: Iter,
+    pub(super) iter: MapxRawIter,
     _pd0: PhantomData<K>,
     _pd1: PhantomData<V>,
 }
@@ -282,12 +223,9 @@ where
 {
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next().map(|i| i.unwrap()).map(|(k, v)| {
-            (
-                pnk!(K::from_bytes(&k[size_of::<u64>()..])),
-                pnk!(bincode::deserialize(&v)),
-            )
-        })
+        self.iter
+            .next()
+            .map(|(k, v)| (pnk!(K::from_bytes(&k)), pnk!(bincode::deserialize(&v))))
     }
 }
 
@@ -297,12 +235,9 @@ where
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.iter.next_back().map(|i| i.unwrap()).map(|(k, v)| {
-            (
-                pnk!(K::from_bytes(&k[size_of::<u64>()..])),
-                pnk!(bincode::deserialize(&v)),
-            )
-        })
+        self.iter
+            .next_back()
+            .map(|(k, v)| (pnk!(K::from_bytes(&k)), pnk!(bincode::deserialize(&v))))
     }
 }
 
@@ -316,28 +251,3 @@ where
 /*******************************************************/
 // End of the implementation of Iter for backend::MapxOC //
 /////////////////////////////////////////////////////////
-
-/////////////////////////////////////////////////////////
-// Begin of the implementation of Eq for backend::MapxOC //
-/*******************************************************/
-
-impl<K, V> PartialEq for MapxOC<K, V>
-where
-    K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
-{
-    fn eq(&self, other: &MapxOC<K, V>) -> bool {
-        !self.iter().zip(other.iter()).any(|(i, j)| i != j)
-    }
-}
-
-impl<K, V> Eq for MapxOC<K, V>
-where
-    K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
-{
-}
-
-/*****************************************************/
-// End of the implementation of Eq for backend::MapxOC //
-///////////////////////////////////////////////////////

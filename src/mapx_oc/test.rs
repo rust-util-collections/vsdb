@@ -67,6 +67,7 @@ fn t_mapx_oc() {
 
     assert_eq!(1, db_restore.len());
     crate::clear();
+    unsafe { db_restore.set_len(0) };
     assert!(db_restore.is_empty());
 
     db_restore.insert(1, gen_sample(1));
@@ -85,8 +86,8 @@ fn t_mapx_oc() {
         .next()
         .is_none());
 
-    assert_eq!(100, db_restore.get_closest_larger(&99).unwrap().1.idx);
-    assert_eq!(100, db_restore.get_closest_larger(&100).unwrap().1.idx);
-    assert_eq!(100, db_restore.get_closest_smaller(&100).unwrap().1.idx);
-    assert_eq!(100, db_restore.get_closest_smaller(&101).unwrap().1.idx);
+    assert_eq!(100, db_restore.get_ge(&99).unwrap().1.idx);
+    assert_eq!(100, db_restore.get_ge(&100).unwrap().1.idx);
+    assert_eq!(100, db_restore.get_le(&100).unwrap().1.idx);
+    assert_eq!(100, db_restore.get_le(&101).unwrap().1.idx);
 }

@@ -4,14 +4,16 @@
 
 #![deny(warnings)]
 #![deny(missing_docs)]
-#![recursion_limit = "1024"]
+#![recursion_limit = "512"]
 
 pub mod mapx;
 pub mod mapx_oc;
+pub mod mapx_raw;
 pub mod vecx;
 
 pub use mapx::Mapx;
 pub use mapx_oc::{MapxOC, OrderConsistKey};
+pub use mapx_raw::MapxRaw;
 pub use vecx::Vecx;
 
 use {
@@ -42,10 +44,12 @@ macro_rules! parse_int {
     }};
 }
 
+const PREFIX_ID_SIZ: usize = size_of::<u64>();
+
 struct VsDB {
     root: DB,
     trees: Vec<Tree>,
-    next_prefix_id: [u8; size_of::<u64>()],
+    next_prefix_id: [u8; PREFIX_ID_SIZ],
 }
 
 impl VsDB {
@@ -93,7 +97,7 @@ impl VsDB {
 
     fn clear_data(&self) {
         for i in 0..self.trees.len() {
-            info_omit!(self.trees[i].clear());
+            self.trees[i].clear().unwrap();
         }
     }
 
