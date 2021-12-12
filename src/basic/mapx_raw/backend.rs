@@ -113,11 +113,6 @@ impl MapxRaw {
         0 == self.cnter
     }
 
-    #[inline(always)]
-    pub(super) unsafe fn set_len(&mut self, len: u64) {
-        self.cnter = len;
-    }
-
     // Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
     pub(super) fn insert(&mut self, key: &[u8], value: &[u8]) -> Option<IVec> {
@@ -191,6 +186,17 @@ impl MapxRaw {
                 old_v
             }
         }
+    }
+
+    pub(super) fn clear(&mut self) {
+        VSDB.trees[self.idx]
+            .scan_prefix(self.id.to_be_bytes())
+            .keys()
+            .map(|k| k.unwrap())
+            .for_each(|k| {
+                VSDB.trees[self.idx].remove(k).unwrap();
+                self.cnter -= 1;
+            });
     }
 }
 

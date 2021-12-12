@@ -116,17 +116,6 @@ where
         self.in_disk.is_empty()
     }
 
-    ///
-    /// # Safety
-    ///
-    /// Only make sense after a 'DataBase clear',
-    /// do NOT use this function except testing.
-    ///
-    #[inline(always)]
-    pub unsafe fn set_len(&mut self, len: u64) {
-        self.in_disk.set_len(len);
-    }
-
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
@@ -177,6 +166,12 @@ where
     #[inline(always)]
     pub fn unset_value(&mut self, key: &K) {
         self.in_disk.unset_value(key);
+    }
+
+    /// Clear all data.
+    #[inline(always)]
+    pub fn clear(&mut self) {
+        self.in_disk.clear();
     }
 }
 

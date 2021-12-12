@@ -76,19 +76,6 @@ impl VsDB {
             self.trees[i].flush().unwrap();
         });
     }
-
-    fn clear_data(&self) {
-        for i in 0..self.trees.len() {
-            self.trees[i].clear().unwrap();
-        }
-    }
-
-    // // Delete all TREEs except the base one
-    // fn destory_trees(&self) {
-    //     for i in 0..self.trees.len() {
-    //         info_omit!(self.root.drop_tree(i.to_be_bytes()));
-    //     }
-    // }
 }
 
 fn sled_open() -> Result<DB> {
@@ -134,16 +121,6 @@ pub fn vsdb_set_base_dir(dir: String) -> Result<()> {
 /// This operation may take a long long time.
 pub fn vsdb_flush() {
     VSDB.flush_data();
-}
-
-/// Delete all KVs and meta,
-/// mostly used in testing scene.
-///
-/// NOTE:
-/// this operation may take a very long long time
-/// if a large number of KVs have been stored in this DB.
-pub fn vsdb_clear() {
-    VSDB.clear_data();
 }
 
 //////////////////////////////////////////////////////////////////////////

@@ -20,8 +20,6 @@ fn gen_sample(idx: usize) -> SampleBlock {
 
 #[test]
 fn t_mapx() {
-    crate::vsdb_clear();
-
     let cnt = 200;
 
     let db = {
@@ -65,7 +63,6 @@ fn t_mapx() {
     });
 
     assert_eq!(1, reloaded.len());
-    crate::vsdb_clear();
-    unsafe { reloaded.set_len(0) };
+    reloaded.clear();
     assert!(reloaded.is_empty());
 }

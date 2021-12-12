@@ -111,17 +111,6 @@ where
         self.inner.is_empty()
     }
 
-    ///
-    /// # Safety
-    ///
-    /// Only make sense after a 'DataBase clear',
-    /// do NOT use this function except testing.
-    ///
-    #[inline(always)]
-    pub unsafe fn set_len(&mut self, len: u64) {
-        self.inner.set_len(len);
-    }
-
     /// Imitate the behavior of 'Vec<_>.push(...)'
     #[inline(always)]
     pub fn push(&mut self, b: T) {
@@ -150,6 +139,12 @@ where
         VecxIter {
             iter: self.inner.iter(),
         }
+    }
+
+    /// Clear all data.
+    #[inline(always)]
+    pub fn clear(&mut self) {
+        self.inner.clear();
     }
 }
 

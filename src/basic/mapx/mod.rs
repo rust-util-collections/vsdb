@@ -126,17 +126,6 @@ where
         self.inner.is_empty()
     }
 
-    ///
-    /// # Safety
-    ///
-    /// Only make sense after a 'DataBase clear',
-    /// do NOT use this function except testing.
-    ///
-    #[inline(always)]
-    pub unsafe fn set_len(&mut self, len: u64) {
-        self.inner.set_len(len);
-    }
-
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
@@ -186,6 +175,12 @@ where
     pub fn unset_value(&mut self, key: &K) {
         let key = convert!(key);
         self.inner.unset_value(&key);
+    }
+
+    /// Clear all data.
+    #[inline(always)]
+    pub fn clear(&mut self) {
+        self.inner.clear();
     }
 }
 

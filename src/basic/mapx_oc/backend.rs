@@ -116,11 +116,6 @@ where
         self.inner.is_empty()
     }
 
-    #[inline(always)]
-    pub(super) unsafe fn set_len(&mut self, len: u64) {
-        self.inner.set_len(len)
-    }
-
     // Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
     pub(super) fn insert(&mut self, key: K, value: V) -> Option<V> {
@@ -195,6 +190,11 @@ where
     #[inline(always)]
     pub(super) fn unset_value(&mut self, key: &K) -> Option<IVec> {
         self.inner.remove(&key.to_bytes())
+    }
+
+    #[inline(always)]
+    pub(super) fn clear(&mut self) {
+        self.inner.clear();
     }
 }
 

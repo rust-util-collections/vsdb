@@ -15,4 +15,4 @@ pub use basic::mapx_oc::{MapxOC, OrderConsistKey};
 pub use basic::mapx_raw::MapxRaw;
 pub use basic::vecx::Vecx;
 
-pub use common::{vsdb_clear, vsdb_flush, vsdb_set_base_dir};
+pub use common::{vsdb_flush, vsdb_set_base_dir};
