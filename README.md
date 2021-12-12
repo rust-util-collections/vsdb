@@ -5,7 +5,7 @@
 
 # vsdb
 
-vsdb, a Versioned State DataBase, mainly used to store versioned state for blockchain.
+vsdb, Versioned Stateful DataBase, mainly used in blockchain scene.
 
 support some GIT-like operations, such as:
 
