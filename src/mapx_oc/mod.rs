@@ -8,7 +8,7 @@ mod backend;
 #[cfg(test)]
 mod test;
 
-use crate::{alloc_id, MetaInfo, SimpleVisitor};
+use crate::{MetaInfo, SimpleVisitor, VSDB};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
@@ -66,7 +66,7 @@ where
     #[inline(always)]
     pub fn new() -> Self {
         MapxOC {
-            in_disk: backend::MapxOC::load_or_create(alloc_id()),
+            in_disk: backend::MapxOC::must_new(VSDB.alloc_id()),
         }
     }
 

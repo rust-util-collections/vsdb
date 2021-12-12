@@ -21,7 +21,7 @@ fn gen_sample(idx: usize) -> SampleBlock {
 
 #[test]
 fn t_vecx() {
-    crate::reset_db();
+    crate::clear();
 
     let cnt = 200;
 
@@ -53,16 +53,19 @@ fn t_vecx() {
 
     assert_eq!(cnt, db_restore.len());
 
-    db_restore.set_value(0, gen_sample(100 * cnt));
+    db_restore.update_value(0, gen_sample(100 * cnt)).unwrap();
     assert_eq!(cnt, db_restore.len());
+    *db_restore.get_mut(0).unwrap() = gen_sample(999 * cnt);
+    assert_eq!(db_restore.get(0).unwrap(), gen_sample(999 * cnt));
 
-    db_restore.set_value(2 * cnt, gen_sample(1000 * cnt));
-    assert_eq!(1 + cnt, db_restore.len());
+    // out of index
+    assert!(db_restore
+        .update_value(2 * cnt, gen_sample(1000 * cnt))
+        .is_err());
 
-    assert_eq!(db_restore.get(2 * cnt).unwrap(), gen_sample(1000 * cnt));
-    *db_restore.get_mut(2 * cnt).unwrap() = gen_sample(999 * cnt);
-    assert_eq!(db_restore.get(2 * cnt).unwrap(), gen_sample(999 * cnt));
+    db_restore.pop();
+    assert_eq!(cnt - 1, db_restore.len());
 
-    crate::reset_db();
+    crate::clear();
     assert!(db_restore.is_empty());
 }

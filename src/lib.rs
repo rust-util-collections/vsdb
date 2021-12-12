@@ -4,6 +4,7 @@
 
 #![deny(warnings)]
 #![deny(missing_docs)]
+#![recursion_limit = "1024"]
 
 pub mod mapx;
 pub mod mapx_oc;
@@ -29,15 +30,9 @@ use {
 
 //////////////////////////////////////////////////////////////////////////
 
-const TREE_NUM: usize = 4;
-const ID_KEY: [u8; size_of::<u32>()] = u32::MAX.to_be_bytes();
-static DATA_DIR: String = String::new();
-
 lazy_static! {
     static ref VSDB_DATA_DIR: Arc<Mutex<String>> = Arc::new(Mutex::new(gen_data_dir()));
-    static ref ROOT_DB: DB = pnk!(sled_open());
-    static ref VSDB: Vec<Tree> =
-        (0..TREE_NUM).map(|i| pnk!(sled_open_tree(i))).collect();
+    static ref VSDB: VsDB = pnk!(VsDB::new());
 }
 
 macro_rules! parse_int {
@@ -47,7 +42,69 @@ macro_rules! parse_int {
     }};
 }
 
-#[inline(always)]
+struct VsDB {
+    root: DB,
+    trees: Vec<Tree>,
+    next_prefix_id: [u8; size_of::<u64>()],
+}
+
+impl VsDB {
+    fn new() -> Result<Self> {
+        const TREE_NUM: u64 = 4;
+
+        let root = sled_open().c(d!())?;
+        let trees = (0..TREE_NUM)
+            .map(|idx| root.open_tree(idx.to_be_bytes()).c(d!()))
+            .collect::<Result<Vec<_>>>()?;
+        let next_prefix_id = u64::MAX.to_be_bytes();
+
+        if root.get(next_prefix_id).c(d!())?.is_none() {
+            root.insert(next_prefix_id, u64::MIN.to_be_bytes().as_slice())
+                .c(d!())?;
+        }
+
+        Ok(Self {
+            root,
+            trees,
+            next_prefix_id,
+        })
+    }
+
+    fn alloc_id(&self) -> u64 {
+        let incr = |id_base: Option<&[u8]>| -> Option<Vec<u8>> {
+            id_base.map(|bytes| (parse_int!(bytes, u64) + 1).to_be_bytes().to_vec())
+        };
+
+        parse_int!(
+            self.root
+                .update_and_fetch(self.next_prefix_id, incr)
+                .unwrap()
+                .unwrap()
+                .as_ref(),
+            u64
+        )
+    }
+
+    fn flush_data(&self) {
+        (0..self.trees.len()).for_each(|i| {
+            self.trees[i].flush().unwrap();
+        });
+    }
+
+    fn clear_data(&self) {
+        for i in 0..self.trees.len() {
+            info_omit!(self.trees[i].clear());
+        }
+    }
+
+    // // Delete all TREEs except the base one
+    // fn destory_trees(&self) {
+    //     for i in 0..self.trees.len() {
+    //         info_omit!(self.root.drop_tree(i.to_be_bytes()));
+    //     }
+    // }
+}
+
 fn sled_open() -> Result<DB> {
     let db = Config::new()
         .path(VSDB_DATA_DIR.lock().unwrap().clone())
@@ -56,47 +113,17 @@ fn sled_open() -> Result<DB> {
         .open()
         .c(d!())?;
 
-    if db.get(ID_KEY).c(d!())?.is_none() {
-        db.insert(ID_KEY, usize::MIN.to_be_bytes().as_slice())
-            .c(d!())?;
-    }
-
     // avoid setting DB after it has been opened
     info_omit!(set_data_dir(gen_data_dir()));
 
     Ok(db)
 }
 
-#[inline(always)]
-fn sled_open_tree(idx: usize) -> Result<Tree> {
-    ROOT_DB.open_tree(idx.to_string()).c(d!())
-}
-
-fn alloc_id() -> usize {
-    let incr = |id_base: Option<&[u8]>| -> Option<Vec<u8>> {
-        id_base.map(|bytes| (parse_int!(bytes, usize) + 1).to_be_bytes().to_vec())
-    };
-
-    parse_int!(
-        ROOT_DB
-            .update_and_fetch(ID_KEY, incr)
-            .unwrap()
-            .unwrap()
-            .as_ref(),
-        usize
-    )
-}
-
-#[inline(always)]
 fn gen_data_dir() -> String {
-    let d = if DATA_DIR.is_empty() {
-        // Is it necessary to be compatible with Windows OS?
-        env::var("VSDB_DATA_DIR")
-            .or_else(|_| env::var("HOME").map(|h| format!("{}/.vsdb", h)))
-            .unwrap_or_else(|_| "/tmp/.vsdb".to_owned())
-    } else {
-        DATA_DIR.clone()
-    };
+    // Is it necessary to be compatible with Windows OS?
+    let d = env::var("VSDB_DATA_DIR")
+        .or_else(|_| env::var("HOME").map(|h| format!("{}/.vsdb", h)))
+        .unwrap_or_else(|_| "/tmp/.vsdb".to_owned());
     fs::create_dir_all(&d).unwrap();
     d
 }
@@ -115,30 +142,30 @@ pub fn set_data_dir(dir: String) -> Result<()> {
     }
 }
 
-/// Flush data to disk
-#[inline(always)]
-pub fn flush_data() {
-    (0..TREE_NUM).for_each(|i| {
-        VSDB[i].flush().unwrap();
-    });
+/// Flush data to disk.
+///
+/// NOTE:
+/// This operation may take a long long time.
+pub fn flush() {
+    VSDB.flush_data();
 }
 
-/// Delete all KVs and meta
-pub fn reset_db() {
-    for i in 0..TREE_NUM {
-        VSDB[i].iter().keys().map(|k| k.unwrap()).for_each(|k| {
-            pnk!(VSDB[i].remove(k));
-        });
-        pnk!(VSDB[i].flush());
-    }
+/// Delete all KVs and meta,
+/// mostly used in testing scene.
+///
+/// NOTE:
+/// this operation may take a very long long time
+/// if a large number of KVs have been stored in this DB.
+pub fn clear() {
+    VSDB.clear_data();
 }
 
 //////////////////////////////////////////////////////////////////////////
 
 #[derive(Deserialize, Serialize)]
 struct MetaInfo {
-    obj_id: usize,
-    item_cnt: usize,
+    obj_id: u64,
+    item_cnt: u64,
     tree_idx: usize,
 }
 

@@ -4,12 +4,13 @@
 //! This module is non-invasive to external code except the `new` method.
 //!
 
-mod backend;
-
 #[cfg(test)]
 mod test;
 
-use crate::{alloc_id, MetaInfo, SimpleVisitor};
+use crate::{
+    mapx_oc::{MapxOC, MapxOCIter},
+    MetaInfo, SimpleVisitor,
+};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
@@ -30,7 +31,7 @@ pub struct Vecx<T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
-    in_disk: backend::Vecx<T>,
+    inner: MapxOC<usize, T>,
 }
 
 impl<T> From<MetaInfo> for Vecx<T>
@@ -39,7 +40,7 @@ where
 {
     fn from(mi: MetaInfo) -> Self {
         Self {
-            in_disk: backend::Vecx::from(mi),
+            inner: MapxOC::from(mi),
         }
     }
 }
@@ -65,13 +66,13 @@ where
     #[inline(always)]
     pub fn new() -> Self {
         Vecx {
-            in_disk: backend::Vecx::load_or_create(alloc_id()),
+            inner: MapxOC::new(),
         }
     }
 
     // Get the meta-storage path
     fn get_meta(&self) -> MetaInfo {
-        self.in_disk.get_meta()
+        self.inner.get_meta()
     }
 
     /// Imitate the behavior of 'Vec<_>.get(...)'
@@ -79,54 +80,65 @@ where
     /// Any faster/better choice other than JSON ?
     #[inline(always)]
     pub fn get(&self, idx: usize) -> Option<T> {
-        self.in_disk.get(idx)
+        self.inner.get(&idx)
     }
 
     /// Imitate the behavior of 'Vec<_>.get_mut(...)'
     #[inline(always)]
     pub fn get_mut(&mut self, idx: usize) -> Option<ValueMut<'_, T>> {
-        self.in_disk
-            .get(idx)
+        self.inner
+            .get(&idx)
             .map(move |v| ValueMut::new(self, idx, v))
     }
 
     /// Imitate the behavior of 'Vec<_>.last()'
     #[inline(always)]
     pub fn last(&self) -> Option<T> {
-        self.in_disk.last()
+        alt!(self.is_empty(), return None);
+        // must exist
+        Some(self.inner.get(&(self.len() - 1)).unwrap())
     }
 
     /// Imitate the behavior of 'Vec<_>.len()'
     #[inline(always)]
     pub fn len(&self) -> usize {
-        self.in_disk.len()
+        self.inner.len()
     }
 
     /// A helper func
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        self.in_disk.is_empty()
+        self.inner.is_empty()
     }
 
     /// Imitate the behavior of 'Vec<_>.push(...)'
     #[inline(always)]
     pub fn push(&mut self, b: T) {
-        self.in_disk.push(b);
+        self.inner.insert(self.len(), b);
+    }
+
+    /// Imitate the behavior of 'Vec<_>.pop()'
+    #[inline(always)]
+    pub fn pop(&mut self) {
+        alt!(self.is_empty(), return);
+        self.inner.remove(&(self.len() - 1));
     }
 
     /// Imitate the behavior of 'Vec<_>.insert(idx, value)',
-    /// but we do not return the previous value, like `Vecx<_, _>.set_value`.
+    /// but we do not return the previous value, like `Vecx<_, _>.update_value`.
     #[inline(always)]
-    pub fn set_value(&mut self, idx: usize, b: T) {
-        self.in_disk.insert(idx, b);
+    pub fn update_value(&mut self, idx: usize, b: T) -> Result<()> {
+        alt!(idx + 1 > self.len(), return Err(eg!("out of index")));
+        self.inner.insert(idx, b);
+        Ok(())
     }
 
     /// Imitate the behavior of '.iter()'
     #[inline(always)]
-    pub fn iter(&self) -> Box<dyn Iterator<Item = T> + '_> {
-        Box::new(VecxIter {
-            iter: self.in_disk.iter(),
-        })
+    pub fn iter(&self) -> VecxIter<T> {
+        VecxIter {
+            iter: self.inner.iter(),
+        }
     }
 }
 
@@ -179,7 +191,8 @@ where
         // SEE: [**ManuallyDrop::take**](std::mem::ManuallyDrop::take)
         unsafe {
             self.mapx
-                .set_value(self.idx, ManuallyDrop::take(&mut self.value));
+                .update_value(self.idx, ManuallyDrop::take(&mut self.value))
+                .unwrap();
         };
     }
 }
@@ -251,7 +264,7 @@ pub struct VecxIter<T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
-    iter: backend::VecxIter<T>,
+    iter: MapxOCIter<usize, T>,
 }
 
 impl<T> Iterator for VecxIter<T>

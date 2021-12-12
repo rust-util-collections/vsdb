@@ -2,7 +2,7 @@
 //! # Disk Storage Implementation
 //!
 
-use crate::{MetaInfo, OrderConsistKey, TREE_NUM, VSDB};
+use crate::{MetaInfo, OrderConsistKey, VSDB};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use sled::{IVec, Iter};
@@ -22,8 +22,8 @@ where
     K: OrderConsistKey,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    cnter: usize,
-    id: usize,
+    cnter: u64,
+    id: u64,
     idx: usize,
     _pd0: PhantomData<K>,
     _pd1: PhantomData<V>,
@@ -68,14 +68,18 @@ where
     K: OrderConsistKey,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    // If an old database exists,
-    // it will use it directly;
-    // Or it will create a new one.
+    // create a new instance
     #[inline(always)]
-    pub(super) fn load_or_create(id: usize) -> Self {
-        let idx = id % TREE_NUM;
+    pub(super) fn must_new(id: u64) -> Self {
+        let idx = id as usize % VSDB.trees.len();
+
+        assert!(VSDB.trees[idx]
+            .scan_prefix(id.to_be_bytes())
+            .next()
+            .is_none());
+
         MapxOC {
-            cnter: VSDB[idx].scan_prefix(id.to_be_bytes()).count(),
+            cnter: 0,
             id,
             idx,
             _pd0: PhantomData,
@@ -93,7 +97,7 @@ where
     pub(super) fn get(&self, key: &K) -> Option<V> {
         let mut k = self.id.to_be_bytes().to_vec();
         k.append(&mut key.to_bytes());
-        VSDB[self.idx]
+        VSDB.trees[self.idx]
             .get(k)
             .ok()
             .flatten()
@@ -105,13 +109,13 @@ where
         let mut k = self.id.to_be_bytes().to_vec();
         k.append(&mut key.to_bytes());
 
-        VSDB[self.idx]
+        VSDB.trees[self.idx]
             .range(..=k)
             .next_back()
             .map(|i| i.unwrap())
             .map(|(k, v)| {
                 (
-                    pnk!(K::from_bytes(&k[size_of::<usize>()..])),
+                    pnk!(K::from_bytes(&k[size_of::<u64>()..])),
                     pnk!(bincode::deserialize(&v)),
                 )
             })
@@ -122,13 +126,13 @@ where
         let mut k = self.id.to_be_bytes().to_vec();
         k.append(&mut key.to_bytes());
 
-        VSDB[self.idx]
+        VSDB.trees[self.idx]
             .range(k..)
             .next()
             .map(|i| i.unwrap())
             .map(|(k, v)| {
                 (
-                    pnk!(K::from_bytes(&k[size_of::<usize>()..])),
+                    pnk!(K::from_bytes(&k[size_of::<u64>()..])),
                     pnk!(bincode::deserialize(&v)),
                 )
             })
@@ -138,16 +142,18 @@ where
     #[inline(always)]
     pub(super) fn len(&self) -> usize {
         debug_assert_eq!(
-            VSDB[self.idx].scan_prefix(self.id.to_be_bytes()).count(),
-            self.cnter
+            VSDB.trees[self.idx]
+                .scan_prefix(self.id.to_be_bytes())
+                .count(),
+            self.cnter as usize
         );
-        self.cnter
+        self.cnter as usize
     }
 
     // A helper func
     #[inline(always)]
     pub(super) fn is_empty(&self) -> bool {
-        VSDB[self.idx]
+        VSDB.trees[self.idx]
             .scan_prefix(self.id.to_be_bytes())
             .next()
             .is_none()
@@ -166,9 +172,9 @@ where
         let mut k = self.id.to_be_bytes().to_vec();
         k.append(&mut key.to_bytes());
         let v = pnk!(bincode::serialize(&value));
-        let old_v = pnk!(VSDB[self.idx].get(&k));
+        let old_v = pnk!(VSDB.trees[self.idx].get(&k));
 
-        pnk!(VSDB[self.idx].insert(k, v));
+        pnk!(VSDB.trees[self.idx].insert(k, v));
 
         if old_v.is_none() {
             self.cnter += 1;
@@ -180,7 +186,7 @@ where
     // Imitate the behavior of '.iter()'
     #[inline(always)]
     pub(super) fn iter(&self) -> MapxOCIter<K, V> {
-        let i = VSDB[self.idx].scan_prefix(self.id.to_be_bytes());
+        let i = VSDB.trees[self.idx].scan_prefix(self.id.to_be_bytes());
         MapxOCIter {
             iter: i,
             _pd0: PhantomData,
@@ -218,7 +224,7 @@ where
         };
 
         MapxOCIter {
-            iter: VSDB[self.idx].range((l, h)),
+            iter: VSDB.trees[self.idx].range((l, h)),
             _pd0: PhantomData,
             _pd1: PhantomData,
         }
@@ -227,7 +233,7 @@ where
     pub(super) fn contains_key(&self, key: &K) -> bool {
         let mut k = self.id.to_be_bytes().to_vec();
         k.append(&mut key.to_bytes());
-        pnk!(VSDB[self.idx].contains_key(k))
+        pnk!(VSDB.trees[self.idx].contains_key(k))
     }
 
     pub(super) fn remove(&mut self, key: &K) -> Option<V> {
@@ -238,9 +244,9 @@ where
     pub(super) fn unset_value(&mut self, key: &K) -> Option<IVec> {
         let mut k = self.id.to_be_bytes().to_vec();
         k.append(&mut key.to_bytes());
-        let old_v = pnk!(VSDB[self.idx].get(&k));
+        let old_v = pnk!(VSDB.trees[self.idx].get(&k));
 
-        pnk!(VSDB[self.idx].remove(k));
+        pnk!(VSDB.trees[self.idx].remove(k));
 
         if old_v.is_some() {
             self.cnter -= 1;
@@ -278,7 +284,7 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().map(|i| i.unwrap()).map(|(k, v)| {
             (
-                pnk!(K::from_bytes(&k[size_of::<usize>()..])),
+                pnk!(K::from_bytes(&k[size_of::<u64>()..])),
                 pnk!(bincode::deserialize(&v)),
             )
         })
@@ -293,7 +299,7 @@ where
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back().map(|i| i.unwrap()).map(|(k, v)| {
             (
-                pnk!(K::from_bytes(&k[size_of::<usize>()..])),
+                pnk!(K::from_bytes(&k[size_of::<u64>()..])),
                 pnk!(bincode::deserialize(&v)),
             )
         })

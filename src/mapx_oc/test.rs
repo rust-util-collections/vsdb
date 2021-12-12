@@ -21,7 +21,7 @@ fn gen_sample(idx: usize) -> SampleBlock {
 
 #[test]
 fn t_mapx_oc() {
-    crate::reset_db();
+    crate::clear();
 
     let cnt = 200;
 
@@ -66,7 +66,7 @@ fn t_mapx_oc() {
     });
 
     assert_eq!(1, db_restore.len());
-    crate::reset_db();
+    crate::clear();
     assert!(db_restore.is_empty());
 
     db_restore.insert(1, gen_sample(1));
