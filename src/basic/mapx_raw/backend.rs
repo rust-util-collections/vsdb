@@ -2,7 +2,7 @@
 //! # Disk Storage Implementation
 //!
 
-use crate::{MetaInfo, PREFIX_ID_SIZ, VSDB};
+use crate::common::{MetaInfo, PREFIX_ID_SIZ, VSDB};
 use ruc::*;
 use sled::{IVec, Iter};
 use std::{

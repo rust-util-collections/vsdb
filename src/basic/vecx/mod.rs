@@ -8,8 +8,8 @@
 mod test;
 
 use crate::{
-    mapx_oc::{MapxOC, MapxOCIter},
-    MetaInfo, SimpleVisitor,
+    basic::mapx_oc::{MapxOC, MapxOCIter},
+    common::{MetaInfo, SimpleVisitor},
 };
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
@@ -136,9 +136,9 @@ where
     }
 
     /// Imitate the behavior of 'Vec<_>.insert(idx, value)',
-    /// but we do not return the previous value, like `Vecx<_, _>.update_value`.
+    /// but we do not return the previous value, like `Vecx<_, _>.update`.
     #[inline(always)]
-    pub fn update_value(&mut self, idx: usize, b: T) -> Result<()> {
+    pub fn update(&mut self, idx: usize, b: T) -> Result<()> {
         alt!(idx + 1 > self.len(), return Err(eg!("out of index")));
         self.inner.insert(idx, b);
         Ok(())
@@ -167,7 +167,7 @@ pub struct ValueMut<'a, T>
 where
     T: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    mapx: &'a mut Vecx<T>,
+    hdr: &'a mut Vecx<T>,
     idx: usize,
     value: ManuallyDrop<T>,
 }
@@ -176,9 +176,9 @@ impl<'a, T> ValueMut<'a, T>
 where
     T: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    fn new(mapx: &'a mut Vecx<T>, idx: usize, value: T) -> Self {
+    fn new(hdr: &'a mut Vecx<T>, idx: usize, value: T) -> Self {
         ValueMut {
-            mapx,
+            hdr,
             idx,
             value: ManuallyDrop::new(value),
         }
@@ -201,8 +201,8 @@ where
         // This operation is safe within a `drop()`.
         // SEE: [**ManuallyDrop::take**](std::mem::ManuallyDrop::take)
         unsafe {
-            self.mapx
-                .update_value(self.idx, ManuallyDrop::take(&mut self.value))
+            self.hdr
+                .update(self.idx, ManuallyDrop::take(&mut self.value))
                 .unwrap();
         };
     }

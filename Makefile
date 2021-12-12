@@ -11,16 +11,12 @@ release:
 lint:
 	cargo clippy
 	cargo clippy --tests
-	cargo clippy --no-default-features
-	cargo clippy --no-default-features --tests
 
 test:
 	cargo test --release -- --test-threads=1 --nocapture
-	cargo test --release --no-default-features -- --test-threads=1 --nocapture
 
 bench:
 	cargo bench
-	cargo bench --no-default-features
 
 fmt:
 	@ cargo fmt
@@ -32,3 +28,6 @@ clean:
 	cargo clean
 	git stash
 	git clean -fdx
+
+doc:
+	cargo doc --open

@@ -21,7 +21,7 @@ fn gen_sample(idx: usize) -> SampleBlock {
 
 #[test]
 fn t_vecx() {
-    crate::clear();
+    crate::vsdb_clear();
 
     let cnt = 200;
 
@@ -45,28 +45,26 @@ fn t_vecx() {
         pnk!(bincode::serialize(&db))
     };
 
-    let mut db_restore = pnk!(bincode::deserialize::<Vecx<SampleBlock>>(&db));
+    let mut reloaded = pnk!(bincode::deserialize::<Vecx<SampleBlock>>(&db));
 
     (0..cnt).for_each(|i| {
-        assert_eq!(i, db_restore.get(i).unwrap().idx);
+        assert_eq!(i, reloaded.get(i).unwrap().idx);
     });
 
-    assert_eq!(cnt, db_restore.len());
+    assert_eq!(cnt, reloaded.len());
 
-    db_restore.update_value(0, gen_sample(100 * cnt)).unwrap();
-    assert_eq!(cnt, db_restore.len());
-    *db_restore.get_mut(0).unwrap() = gen_sample(999 * cnt);
-    assert_eq!(db_restore.get(0).unwrap(), gen_sample(999 * cnt));
+    reloaded.update(0, gen_sample(100 * cnt)).unwrap();
+    assert_eq!(cnt, reloaded.len());
+    *reloaded.get_mut(0).unwrap() = gen_sample(999 * cnt);
+    assert_eq!(reloaded.get(0).unwrap(), gen_sample(999 * cnt));
 
     // out of index
-    assert!(db_restore
-        .update_value(2 * cnt, gen_sample(1000 * cnt))
-        .is_err());
+    assert!(reloaded.update(2 * cnt, gen_sample(1000 * cnt)).is_err());
 
-    db_restore.pop();
-    assert_eq!(cnt - 1, db_restore.len());
+    reloaded.pop();
+    assert_eq!(cnt - 1, reloaded.len());
 
-    crate::clear();
-    unsafe { db_restore.set_len(0) };
-    assert!(db_restore.is_empty());
+    crate::vsdb_clear();
+    unsafe { reloaded.set_len(0) };
+    assert!(reloaded.is_empty());
 }

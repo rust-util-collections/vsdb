@@ -8,15 +8,14 @@
 mod test;
 
 use crate::{
-    mapx_oc::{self, MapxOC, MapxOCIter},
-    MetaInfo, SimpleVisitor,
+    basic::mapx_oc::{self, MapxOC, MapxOCIter},
+    common::{MetaInfo, SimpleVisitor},
 };
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     cmp::Ordering,
     fmt,
-    hash::Hash,
     iter::{DoubleEndedIterator, Iterator},
     marker::PhantomData,
     mem::ManuallyDrop,
@@ -33,7 +32,6 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
@@ -50,7 +48,6 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
@@ -81,7 +78,6 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
@@ -210,13 +206,12 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    mapx: &'a mut Mapx<K, V>,
+    hdr: &'a mut Mapx<K, V>,
     key: ManuallyDrop<K>,
     value: ManuallyDrop<V>,
 }
@@ -228,15 +223,14 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    fn new(mapx: &'a mut Mapx<K, V>, key: K, value: V) -> Self {
+    fn new(hdr: &'a mut Mapx<K, V>, key: K, value: V) -> Self {
         ValueMut {
-            mapx,
+            hdr,
             key: ManuallyDrop::new(key),
             value: ManuallyDrop::new(value),
         }
@@ -258,7 +252,6 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
@@ -268,7 +261,7 @@ where
         // This operation is safe within a `drop()`.
         // SEE: [**ManuallyDrop::take**](std::mem::ManuallyDrop::take)
         unsafe {
-            self.mapx.set_value(
+            self.hdr.set_value(
                 ManuallyDrop::take(&mut self.key),
                 ManuallyDrop::take(&mut self.value),
             );
@@ -283,7 +276,6 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
@@ -303,7 +295,6 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
@@ -321,7 +312,6 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
@@ -339,7 +329,6 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
@@ -357,7 +346,6 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
@@ -379,7 +367,7 @@ where
 /// Iter over [Mapx](self::Mapx).
 pub struct MapxIter<K, V>
 where
-    K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
+    K: Clone + PartialEq + Eq + Serialize + DeserializeOwned + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     iter: MapxOCIter<Vec<u8>, V>,
@@ -388,7 +376,7 @@ where
 
 impl<K, V> Iterator for MapxIter<K, V>
 where
-    K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
+    K: Clone + PartialEq + Eq + Serialize + DeserializeOwned + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     type Item = (K, V);
@@ -399,7 +387,7 @@ where
 
 impl<K, V> DoubleEndedIterator for MapxIter<K, V>
 where
-    K: Clone + PartialEq + Eq + Hash + Serialize + DeserializeOwned + fmt::Debug,
+    K: Clone + PartialEq + Eq + Serialize + DeserializeOwned + fmt::Debug,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
@@ -422,7 +410,6 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
@@ -444,7 +431,6 @@ where
         + Eq
         + PartialOrd
         + Ord
-        + Hash
         + Serialize
         + DeserializeOwned
         + fmt::Debug,

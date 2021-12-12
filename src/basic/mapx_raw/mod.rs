@@ -8,7 +8,7 @@ mod backend;
 #[cfg(test)]
 mod test;
 
-use crate::{MetaInfo, SimpleVisitor, VSDB};
+use crate::common::{MetaInfo, SimpleVisitor, VSDB};
 use ruc::*;
 use sled::IVec;
 use std::{
@@ -159,15 +159,15 @@ impl MapxRaw {
 /// Returned by `<MapxRaw>.get_mut(...)`
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct ValueMut<'a> {
-    mapx_raw: &'a mut MapxRaw,
+    hdr: &'a mut MapxRaw,
     key: ManuallyDrop<IVec>,
     value: ManuallyDrop<IVec>,
 }
 
 impl<'a> ValueMut<'a> {
-    fn new(mapx_raw: &'a mut MapxRaw, key: IVec, value: IVec) -> Self {
+    fn new(hdr: &'a mut MapxRaw, key: IVec, value: IVec) -> Self {
         ValueMut {
-            mapx_raw,
+            hdr,
             key: ManuallyDrop::new(key),
             value: ManuallyDrop::new(value),
         }
@@ -187,7 +187,7 @@ impl<'a> Drop for ValueMut<'a> {
         // This operation is safe within a `drop()`.
         // SEE: [**ManuallyDrop::take**](std::mem::ManuallyDrop::take)
         unsafe {
-            self.mapx_raw.insert(
+            self.hdr.insert(
                 &ManuallyDrop::take(&mut self.key),
                 &ManuallyDrop::take(&mut self.value),
             );
@@ -252,7 +252,7 @@ impl<'a> Entry<'a> {
 // Begin of the implementation of Iter for MapxRaw //
 /************************************************/
 
-/// Iter over [MapxRaw](self::Mapxnk).
+/// Iter over [MapxRaw](self::MapxRaw).
 pub struct MapxRawIter {
     iter: backend::MapxRawIter,
 }
