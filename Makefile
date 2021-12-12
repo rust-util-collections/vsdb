@@ -27,3 +27,8 @@ fmt:
 
 update:
 	cargo update
+
+clean:
+	cargo clean
+	git stash
+	git clean -fdx
