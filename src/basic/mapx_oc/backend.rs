@@ -4,7 +4,7 @@
 
 use crate::{
     basic::mapx_raw::{MapxRaw, MapxRawIter},
-    common::MetaInfo,
+    common::InstanceCfg,
     OrderConsistKey,
 };
 use ruc::*;
@@ -30,31 +30,31 @@ where
     _pd1: PhantomData<V>,
 }
 
-impl<K, V> From<MetaInfo> for MapxOC<K, V>
+impl<K, V> From<InstanceCfg> for MapxOC<K, V>
 where
     K: OrderConsistKey,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    fn from(mi: MetaInfo) -> Self {
+    fn from(cfg: InstanceCfg) -> Self {
         Self {
-            inner: MapxRaw::from(mi),
+            inner: MapxRaw::from(cfg),
             _pd0: PhantomData,
             _pd1: PhantomData,
         }
     }
 }
 
-impl<K, V> From<&MapxOC<K, V>> for MetaInfo
+impl<K, V> From<&MapxOC<K, V>> for InstanceCfg
 where
     K: OrderConsistKey,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
     fn from(x: &MapxOC<K, V>) -> Self {
-        let mi = x.inner.get_meta();
+        let cfg = x.inner.get_instance_cfg();
         Self {
-            item_cnt: mi.item_cnt,
-            obj_id: mi.obj_id,
-            tree_idx: mi.tree_idx,
+            prefix: cfg.prefix,
+            item_cnt: cfg.item_cnt,
+            data_set_idx: cfg.data_set_idx,
         }
     }
 }
@@ -79,8 +79,8 @@ where
     }
 
     // Get the storage path
-    pub(super) fn get_meta(&self) -> MetaInfo {
-        MetaInfo::from(self)
+    pub(super) fn get_instance_cfg(&self) -> InstanceCfg {
+        InstanceCfg::from(self)
     }
 
     // Imitate the behavior of 'BTreeMap<_>.get(...)'

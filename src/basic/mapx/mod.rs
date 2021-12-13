@@ -9,7 +9,7 @@ mod test;
 
 use crate::{
     basic::mapx_oc::{self, MapxOC, MapxOCIter},
-    common::{MetaInfo, SimpleVisitor},
+    common::{InstanceCfg, SimpleVisitor},
 };
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
@@ -93,8 +93,8 @@ where
     }
 
     // Get the database storage path
-    fn get_meta(&self) -> MetaInfo {
-        self.inner.get_meta()
+    fn get_instance_cfg(&self) -> InstanceCfg {
+        self.inner.get_instance_cfg()
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get(...)'
@@ -414,7 +414,7 @@ where
     where
         S: serde::Serializer,
     {
-        let v = pnk!(bincode::serialize(&self.get_meta()));
+        let v = pnk!(bincode::serialize(&self.get_instance_cfg()));
         serializer.serialize_bytes(&v)
     }
 }
@@ -436,7 +436,7 @@ where
         D: serde::Deserializer<'de>,
     {
         deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
-            let meta = pnk!(bincode::deserialize::<MetaInfo>(&meta));
+            let meta = pnk!(bincode::deserialize::<InstanceCfg>(&meta));
             Mapx {
                 inner: MapxOC::from(meta),
                 _pd: PhantomData,

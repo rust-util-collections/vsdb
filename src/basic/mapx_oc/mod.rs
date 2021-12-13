@@ -8,7 +8,7 @@ mod backend;
 #[cfg(test)]
 mod test;
 
-use crate::common::{MetaInfo, SimpleVisitor};
+use crate::common::{InstanceCfg, SimpleVisitor};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
@@ -30,14 +30,14 @@ where
     in_disk: backend::MapxOC<K, V>,
 }
 
-impl<K, V> From<MetaInfo> for MapxOC<K, V>
+impl<K, V> From<InstanceCfg> for MapxOC<K, V>
 where
     K: OrderConsistKey,
     V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
 {
-    fn from(mi: MetaInfo) -> Self {
+    fn from(cfg: InstanceCfg) -> Self {
         Self {
-            in_disk: backend::MapxOC::from(mi),
+            in_disk: backend::MapxOC::from(cfg),
         }
     }
 }
@@ -70,8 +70,8 @@ where
     }
 
     // Get the database storage path
-    pub(crate) fn get_meta(&self) -> MetaInfo {
-        self.in_disk.get_meta()
+    pub(crate) fn get_instance_cfg(&self) -> InstanceCfg {
+        self.in_disk.get_instance_cfg()
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get(...)'
@@ -384,7 +384,7 @@ where
     where
         S: serde::Serializer,
     {
-        let v = pnk!(bincode::serialize(&self.get_meta()));
+        let v = pnk!(bincode::serialize(&self.get_instance_cfg()));
         serializer.serialize_bytes(&v)
     }
 }
@@ -399,7 +399,7 @@ where
         D: serde::Deserializer<'de>,
     {
         deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
-            let meta = pnk!(bincode::deserialize::<MetaInfo>(&meta));
+            let meta = pnk!(bincode::deserialize::<InstanceCfg>(&meta));
             MapxOC::from(meta)
         })
     }

@@ -24,56 +24,60 @@ macro_rules! parse_int {
         let array: [u8; size_of::<$ty>()] = $bytes.try_into().unwrap();
         <$ty>::from_be_bytes(array)
     }};
+    ($bytes: expr) => {
+        parse_int!($bytes, Prefix)
+    };
 }
 
-pub(crate) const PREFIX_ID_SIZ: usize = size_of::<u64>();
+pub(crate) type Prefix = u64;
+pub(crate) const PREFIX_SIZ: usize = size_of::<Prefix>();
 
 pub(crate) struct VsDB {
-    root: DB,
-    pub(crate) trees: Vec<Tree>,
-    next_prefix_id: [u8; PREFIX_ID_SIZ],
+    meta: DB,
+    pub(crate) data_set: Vec<Tree>,
+    // key of the prefix allocator in the 'meta'
+    prefix_allocator: [u8; 1],
 }
 
 impl VsDB {
     fn new() -> Result<Self> {
-        const TREE_NUM: u64 = 4;
+        const DATA_SET_NUM: u64 = 4;
+        const PREFIX_ALLOCATOR: [u8; 1] = 0_u8.to_be_bytes();
 
-        let root = sled_open().c(d!())?;
-        let trees = (0..TREE_NUM)
-            .map(|idx| root.open_tree(idx.to_be_bytes()).c(d!()))
+        let meta = sled_open().c(d!())?;
+
+        let data_set = (0..DATA_SET_NUM)
+            .map(|idx| meta.open_tree(idx.to_be_bytes()).c(d!()))
             .collect::<Result<Vec<_>>>()?;
-        let next_prefix_id = u64::MAX.to_be_bytes();
 
-        if root.get(next_prefix_id).c(d!())?.is_none() {
-            root.insert(next_prefix_id, u64::MIN.to_be_bytes().as_slice())
+        if meta.get(PREFIX_ALLOCATOR).c(d!())?.is_none() {
+            meta.insert(PREFIX_ALLOCATOR, Prefix::MIN.to_be_bytes().as_slice())
                 .c(d!())?;
         }
 
-        Ok(Self {
-            root,
-            trees,
-            next_prefix_id,
+        Ok(VsDB {
+            meta,
+            data_set,
+            prefix_allocator: PREFIX_ALLOCATOR,
         })
     }
 
-    pub(crate) fn alloc_id(&self) -> u64 {
+    pub(crate) fn alloc_prefix(&self) -> Prefix {
         let incr = |id_base: Option<&[u8]>| -> Option<Vec<u8>> {
-            id_base.map(|bytes| (parse_int!(bytes, u64) + 1).to_be_bytes().to_vec())
+            id_base.map(|bytes| (parse_int!(bytes) + 1).to_be_bytes().to_vec())
         };
 
-        parse_int!(
-            self.root
-                .update_and_fetch(self.next_prefix_id, incr)
-                .unwrap()
-                .unwrap()
-                .as_ref(),
-            u64
-        )
+        parse_int!(self
+            .meta
+            .update_and_fetch(self.prefix_allocator, incr)
+            .unwrap()
+            .unwrap()
+            .as_ref())
     }
 
     fn flush_data(&self) {
-        (0..self.trees.len()).for_each(|i| {
-            self.trees[i].flush().unwrap();
+        (0..self.data_set.len()).for_each(|i| {
+            self.data_set[i].flush().unwrap();
         });
     }
 }
@@ -126,10 +130,10 @@ pub fn vsdb_flush() {
 //////////////////////////////////////////////////////////////////////////
 
 #[derive(Deserialize, Serialize)]
-pub(crate) struct MetaInfo {
-    pub(crate) obj_id: u64,
+pub(crate) struct InstanceCfg {
+    pub(crate) prefix: Vec<u8>,
     pub(crate) item_cnt: u64,
-    pub(crate) tree_idx: usize,
+    pub(crate) data_set_idx: usize,
 }
 
 //////////////////////////////////////////////////////////////////////////

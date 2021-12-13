@@ -9,7 +9,7 @@ mod test;
 
 use crate::{
     basic::mapx_oc::{MapxOC, MapxOCIter},
-    common::{MetaInfo, SimpleVisitor},
+    common::{InstanceCfg, SimpleVisitor},
 };
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
@@ -34,13 +34,13 @@ where
     inner: MapxOC<usize, T>,
 }
 
-impl<T> From<MetaInfo> for Vecx<T>
+impl<T> From<InstanceCfg> for Vecx<T>
 where
     T: PartialEq + Clone + Serialize + DeserializeOwned + fmt::Debug,
 {
-    fn from(mi: MetaInfo) -> Self {
+    fn from(cfg: InstanceCfg) -> Self {
         Self {
-            inner: MapxOC::from(mi),
+            inner: MapxOC::from(cfg),
         }
     }
 }
@@ -71,8 +71,8 @@ where
     }
 
     // Get the meta-storage path
-    fn get_meta(&self) -> MetaInfo {
-        self.inner.get_meta()
+    fn get_instance_cfg(&self) -> InstanceCfg {
+        self.inner.get_instance_cfg()
     }
 
     /// Imitate the behavior of 'Vec<_>.get(...)'
@@ -308,7 +308,7 @@ where
     where
         S: serde::Serializer,
     {
-        let v = pnk!(bincode::serialize(&self.get_meta()));
+        let v = pnk!(bincode::serialize(&self.get_instance_cfg()));
         serializer.serialize_bytes(&v)
     }
 }
@@ -322,7 +322,7 @@ where
         D: serde::Deserializer<'de>,
     {
         deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
-            let meta = pnk!(bincode::deserialize::<MetaInfo>(&meta));
+            let meta = pnk!(bincode::deserialize::<InstanceCfg>(&meta));
             Vecx::from(meta)
         })
     }

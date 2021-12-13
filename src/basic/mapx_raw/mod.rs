@@ -8,7 +8,7 @@ mod backend;
 #[cfg(test)]
 mod test;
 
-use crate::common::{MetaInfo, SimpleVisitor, VSDB};
+use crate::common::{InstanceCfg, SimpleVisitor, VSDB};
 use ruc::*;
 use sled::IVec;
 use std::{
@@ -24,10 +24,10 @@ pub struct MapxRaw {
     in_disk: backend::MapxRaw,
 }
 
-impl From<MetaInfo> for MapxRaw {
-    fn from(mi: MetaInfo) -> Self {
+impl From<InstanceCfg> for MapxRaw {
+    fn from(cfg: InstanceCfg) -> Self {
         Self {
-            in_disk: backend::MapxRaw::from(mi),
+            in_disk: backend::MapxRaw::from(cfg),
         }
     }
 }
@@ -47,13 +47,13 @@ impl MapxRaw {
     #[inline(always)]
     pub fn new() -> Self {
         MapxRaw {
-            in_disk: backend::MapxRaw::must_new(VSDB.alloc_id()),
+            in_disk: backend::MapxRaw::must_new(VSDB.alloc_prefix()),
         }
     }
 
     // Get the database storage path
-    pub(crate) fn get_meta(&self) -> MetaInfo {
-        self.in_disk.get_meta()
+    pub(crate) fn get_instance_cfg(&self) -> InstanceCfg {
+        self.in_disk.get_instance_cfg()
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get(...)'
@@ -278,7 +278,7 @@ impl serde::Serialize for MapxRaw {
     where
         S: serde::Serializer,
     {
-        let v = pnk!(bincode::serialize(&self.get_meta()));
+        let v = pnk!(bincode::serialize(&self.get_instance_cfg()));
         serializer.serialize_bytes(&v)
     }
 }
@@ -289,7 +289,7 @@ impl<'de> serde::Deserialize<'de> for MapxRaw {
         D: serde::Deserializer<'de>,
     {
         deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
-            let meta = pnk!(bincode::deserialize::<MetaInfo>(&meta));
+            let meta = pnk!(bincode::deserialize::<InstanceCfg>(&meta));
             MapxRaw::from(meta)
         })
     }
