@@ -8,7 +8,7 @@ fn bench(c: &mut Criterion) {
     let i = AtomicUsize::new(0);
     let mut db = vsdb::Vecx::new();
 
-    let mut group = c.benchmark_group("** Cache DB Benchmark **");
+    let mut group = c.benchmark_group("** VsDB Benchmark **");
     group
         .measurement_time(Duration::from_secs(8))
         .sample_size(12);
@@ -16,14 +16,14 @@ fn bench(c: &mut Criterion) {
     group.bench_function("vecx_write", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
-            db.push(vec![n; 512]);
+            db.push(vec![n; 128]);
         })
     });
 
     group.bench_function("vecx_rw", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
-            db.push(vec![n; 512]);
+            db.push(vec![n; 128]);
             db.get(n);
         })
     });
@@ -34,14 +34,14 @@ fn bench(c: &mut Criterion) {
     group.bench_function("mapx_write", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
-            db.set_value(n, vec![n; 512]);
+            db.set_value(n, vec![n; 128]);
         })
     });
 
     group.bench_function("mapx_rw", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
-            db.set_value(n, vec![n; 512]);
+            db.set_value(n, vec![n; 128]);
             db.get(&n);
         })
     });
@@ -49,8 +49,8 @@ fn bench(c: &mut Criterion) {
     group.bench_function("mapx_mut_back", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
-            db.set_value(n, vec![n; 512]);
-            db.get_mut(&n);
+            db.set_value(n, vec![n; 128]);
+            *db.get_mut(&n).unwrap() = vec![n; 1];
         })
     });
 
