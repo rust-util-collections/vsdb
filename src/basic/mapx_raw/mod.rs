@@ -278,7 +278,7 @@ impl serde::Serialize for MapxRaw {
     where
         S: serde::Serializer,
     {
-        let v = pnk!(bincode::serialize(&self.get_instance_cfg()));
+        let v = pnk!(bcs::to_bytes(&self.get_instance_cfg()));
         serializer.serialize_bytes(&v)
     }
 }
@@ -289,7 +289,7 @@ impl<'de> serde::Deserialize<'de> for MapxRaw {
         D: serde::Deserializer<'de>,
     {
         deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
-            let meta = pnk!(bincode::deserialize::<InstanceCfg>(&meta));
+            let meta = pnk!(bcs::from_bytes::<InstanceCfg>(&meta));
             MapxRaw::from(meta)
         })
     }

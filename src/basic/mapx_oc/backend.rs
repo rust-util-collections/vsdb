@@ -88,21 +88,21 @@ where
     pub(super) fn get(&self, key: &K) -> Option<V> {
         self.inner
             .get(&key.to_bytes())
-            .map(|bytes| pnk!(bincode::deserialize(&bytes)))
+            .map(|bytes| pnk!(bcs::from_bytes(&bytes)))
     }
 
     #[inline(always)]
     pub(super) fn get_le(&self, key: &K) -> Option<(K, V)> {
         self.inner
             .get_le(&key.to_bytes())
-            .map(|(k, v)| (pnk!(K::from_bytes(&k)), pnk!(bincode::deserialize(&v))))
+            .map(|(k, v)| (pnk!(K::from_bytes(&k)), pnk!(bcs::from_bytes(&v))))
     }
 
     #[inline(always)]
     pub(super) fn get_ge(&self, key: &K) -> Option<(K, V)> {
         self.inner
             .get_ge(&key.to_bytes())
-            .map(|(k, v)| (pnk!(K::from_bytes(&k)), pnk!(bincode::deserialize(&v))))
+            .map(|(k, v)| (pnk!(K::from_bytes(&k)), pnk!(bcs::from_bytes(&v))))
     }
 
     // Imitate the behavior of 'BTreeMap<_>.len()'.
@@ -120,14 +120,14 @@ where
     #[inline(always)]
     pub(super) fn insert(&mut self, key: K, value: V) -> Option<V> {
         self.set_value(key, value)
-            .map(|v| pnk!(bincode::deserialize(&v)))
+            .map(|v| pnk!(bcs::from_bytes(&v)))
     }
 
     // Similar with `insert`, but ignore if the old value is exist.
     #[inline(always)]
     pub(super) fn set_value(&mut self, key: K, value: V) -> Option<IVec> {
         self.inner
-            .insert(&key.to_bytes(), &pnk!(bincode::serialize(&value)))
+            .insert(&key.to_bytes(), &pnk!(bcs::to_bytes(&value)))
     }
 
     // Imitate the behavior of '.iter()'
@@ -183,8 +183,7 @@ where
 
     #[inline(always)]
     pub(super) fn remove(&mut self, key: &K) -> Option<V> {
-        self.unset_value(key)
-            .map(|v| pnk!(bincode::deserialize(&v)))
+        self.unset_value(key).map(|v| pnk!(bcs::from_bytes(&v)))
     }
 
     #[inline(always)]
@@ -226,7 +225,7 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         self.iter
             .next()
-            .map(|(k, v)| (pnk!(K::from_bytes(&k)), pnk!(bincode::deserialize(&v))))
+            .map(|(k, v)| (pnk!(K::from_bytes(&k)), pnk!(bcs::from_bytes(&v))))
     }
 }
 
@@ -238,7 +237,7 @@ where
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter
             .next_back()
-            .map(|(k, v)| (pnk!(K::from_bytes(&k)), pnk!(bincode::deserialize(&v))))
+            .map(|(k, v)| (pnk!(K::from_bytes(&k)), pnk!(bcs::from_bytes(&v))))
     }
 }
 

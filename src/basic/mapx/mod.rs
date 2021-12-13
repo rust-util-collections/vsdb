@@ -60,10 +60,10 @@ where
 
 macro_rules! convert {
     ($as_param: expr) => {{
-        bincode::serialize::<K>($as_param).unwrap()
+        bcs::to_bytes::<K>($as_param).unwrap()
     }};
     (@$as_ret: expr) => {{
-        bincode::deserialize::<K>(&$as_ret).unwrap()
+        bcs::from_bytes::<K>(&$as_ret).unwrap()
     }};
 }
 
@@ -414,7 +414,7 @@ where
     where
         S: serde::Serializer,
     {
-        let v = pnk!(bincode::serialize(&self.get_instance_cfg()));
+        let v = pnk!(bcs::to_bytes(&self.get_instance_cfg()));
         serializer.serialize_bytes(&v)
     }
 }
@@ -436,7 +436,7 @@ where
         D: serde::Deserializer<'de>,
     {
         deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
-            let meta = pnk!(bincode::deserialize::<InstanceCfg>(&meta));
+            let meta = pnk!(bcs::from_bytes::<InstanceCfg>(&meta));
             Mapx {
                 inner: MapxOC::from(meta),
                 _pd: PhantomData,

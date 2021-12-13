@@ -44,10 +44,10 @@ fn t_mapx_oc() {
 
         assert_eq!(cnt, hdr_i.len());
 
-        pnk!(bincode::serialize(&hdr_i))
+        pnk!(bcs::to_bytes(&hdr_i))
     };
 
-    let mut reloaded = pnk!(bincode::deserialize::<MapxOC<usize, SampleBlock>>(&hdr));
+    let mut reloaded = pnk!(bcs::from_bytes::<MapxOC<usize, SampleBlock>>(&hdr));
 
     assert_eq!(cnt, reloaded.len());
 
