@@ -95,14 +95,14 @@ where
     pub(super) fn get_le(&self, key: &K) -> Option<(K, V)> {
         self.inner
             .get_le(&key.to_bytes())
-            .map(|(k, v)| (pnk!(K::from_bytes(&k)), pnk!(bcs::from_bytes(&v))))
+            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(bcs::from_bytes(&v))))
     }
 
     #[inline(always)]
     pub(super) fn get_ge(&self, key: &K) -> Option<(K, V)> {
         self.inner
             .get_ge(&key.to_bytes())
-            .map(|(k, v)| (pnk!(K::from_bytes(&k)), pnk!(bcs::from_bytes(&v))))
+            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(bcs::from_bytes(&v))))
     }
 
     // Imitate the behavior of 'BTreeMap<_>.len()'.
@@ -127,7 +127,7 @@ where
     #[inline(always)]
     pub(super) fn set_value(&mut self, key: K, value: V) -> Option<IVec> {
         self.inner
-            .insert(&key.to_bytes(), &pnk!(bcs::to_bytes(&value)))
+            .insert(&key.into_bytes(), &pnk!(bcs::to_bytes(&value)))
     }
 
     // Imitate the behavior of '.iter()'
@@ -225,7 +225,7 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         self.iter
             .next()
-            .map(|(k, v)| (pnk!(K::from_bytes(&k)), pnk!(bcs::from_bytes(&v))))
+            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(bcs::from_bytes(&v))))
     }
 }
 
@@ -237,7 +237,7 @@ where
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter
             .next_back()
-            .map(|(k, v)| (pnk!(K::from_bytes(&k)), pnk!(bcs::from_bytes(&v))))
+            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(bcs::from_bytes(&v))))
     }
 }
 

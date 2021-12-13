@@ -34,23 +34,23 @@ fn bench(c: &mut Criterion) {
     group.bench_function("mapx_write", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
-            db.set_value(n, vec![n; 128]);
+            db.set_value([n; 32], vec![n; 128]);
         })
     });
 
     group.bench_function("mapx_rw", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
-            db.set_value(n, vec![n; 128]);
-            db.get(&n);
+            db.set_value([n; 32], vec![n; 128]);
+            db.get(&[n; 32]);
         })
     });
 
     group.bench_function("mapx_rw_write_back", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
-            db.set_value(n, vec![n; 128]);
-            *db.get_mut(&n).unwrap() = vec![n; 1];
+            db.set_value([n; 32], vec![n; 128]);
+            *db.get_mut(&[n; 32]).unwrap() = vec![n; 1];
         })
     });
 

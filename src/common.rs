@@ -1,3 +1,7 @@
+//!
+//! # Common components
+//!
+
 use {
     core::{fmt, result::Result as CoreResult},
     lazy_static::lazy_static,
