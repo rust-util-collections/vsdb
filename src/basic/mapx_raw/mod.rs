@@ -19,7 +19,7 @@ use std::{
 
 /// To solve the problem of unlimited memory usage,
 /// use this to replace the original in-memory `BTreeMap<_, _>`.
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug)]
 pub struct MapxRaw {
     in_disk: backend::MapxRaw,
 }
@@ -57,8 +57,6 @@ impl MapxRaw {
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get(...)'
-    ///
-    /// Any faster/better choice other than JSON ?
     #[inline(always)]
     pub fn get(&self, key: &[u8]) -> Option<IVec> {
         self.in_disk.get(key)
@@ -152,7 +150,7 @@ impl MapxRaw {
 /********************************************************************************/
 
 /// Returned by `<MapxRaw>.get_mut(...)`
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub struct ValueMut<'a> {
     hdr: &'a mut MapxRaw,
     key: ManuallyDrop<IVec>,
@@ -166,11 +164,6 @@ impl<'a> ValueMut<'a> {
             key: ManuallyDrop::new(key),
             value: ManuallyDrop::new(value),
         }
-    }
-
-    /// Take the inner value.
-    pub fn clone_inner(self) -> IVec {
-        ManuallyDrop::into_inner(self.value.clone())
     }
 }
 

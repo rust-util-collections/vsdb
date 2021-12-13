@@ -5,7 +5,7 @@
 use super::*;
 
 #[test]
-fn t_mapx_raw() {
+fn basic_cases() {
     let cnt = 200;
 
     let hdr = {

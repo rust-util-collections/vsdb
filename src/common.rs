@@ -151,7 +151,7 @@ pub fn vsdb_flush() {
 
 #[derive(Deserialize, Serialize)]
 pub(crate) struct InstanceCfg {
-    pub(crate) prefix: Vec<u8>,
+    pub(crate) prefix: PrefixBytes,
     pub(crate) item_cnt: u64,
     pub(crate) data_set_idx: usize,
 }

@@ -11,6 +11,7 @@ release:
 lint:
 	cargo clippy
 	cargo clippy --tests
+	cargo clippy --benches
 
 test:
 	cargo test --release -- --test-threads=1 --nocapture

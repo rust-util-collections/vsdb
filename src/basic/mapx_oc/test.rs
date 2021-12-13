@@ -20,7 +20,7 @@ fn gen_sample(idx: usize) -> SampleBlock {
 }
 
 #[test]
-fn t_mapx_oc() {
+fn basic_cases() {
     let cnt = 200;
 
     let hdr = {

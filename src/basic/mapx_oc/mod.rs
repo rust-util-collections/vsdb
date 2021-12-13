@@ -12,7 +12,6 @@ use crate::common::{InstanceCfg, SimpleVisitor};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
-    cmp::Ordering,
     fmt,
     iter::Iterator,
     mem::{size_of, transmute, ManuallyDrop},
@@ -21,11 +20,11 @@ use std::{
 
 /// To solve the problem of unlimited memory usage,
 /// use this to replace the original in-memory `BTreeMap<_, _>`.
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug)]
 pub struct MapxOC<K, V>
 where
     K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     in_disk: backend::MapxOC<K, V>,
 }
@@ -33,7 +32,7 @@ where
 impl<K, V> From<InstanceCfg> for MapxOC<K, V>
 where
     K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn from(cfg: InstanceCfg) -> Self {
         Self {
@@ -45,7 +44,7 @@ where
 impl<K, V> Default for MapxOC<K, V>
 where
     K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn default() -> Self {
         Self::new()
@@ -59,7 +58,7 @@ where
 impl<K, V> MapxOC<K, V>
 where
     K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     /// Create an instance.
     #[inline(always)]
@@ -75,25 +74,39 @@ where
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get(...)'
-    ///
-    /// Any faster/better choice other than JSON ?
     #[inline(always)]
     pub fn get(&self, key: &K) -> Option<V> {
         self.in_disk.get(key)
     }
 
-    /// Get the closest smaller value,
-    /// NOTE: include itself!
+    /// same as the funtion without the '_' prefix, but use bytes key
+    #[inline(always)]
+    pub fn _get(&self, key: &[u8]) -> Option<V> {
+        self.in_disk._get(key)
+    }
+
+    /// Get the closest smaller value, include itself.
     #[inline(always)]
     pub fn get_le(&self, key: &K) -> Option<(K, V)> {
         self.in_disk.get_le(key)
     }
 
-    /// Get the closest larger value,
-    /// NOTE: include itself!
+    /// same as the funtion without the '_' prefix, but use bytes key
+    #[inline(always)]
+    pub fn _get_le(&self, key: &[u8]) -> Option<(K, V)> {
+        self.in_disk._get_le(key)
+    }
+
+    /// Get the closest larger value, include itself.
     #[inline(always)]
     pub fn get_ge(&self, key: &K) -> Option<(K, V)> {
         self.in_disk.get_ge(key)
+    }
+
+    /// same as the funtion without the '_' prefix, but use bytes key
+    #[inline(always)]
+    pub fn _get_ge(&self, key: &[u8]) -> Option<(K, V)> {
+        self.in_disk._get_ge(key)
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get_mut(...)'
@@ -102,6 +115,14 @@ where
         self.in_disk
             .get(key)
             .map(move |v| ValueMut::new(self, key.clone(), v))
+    }
+
+    /// same as the funtion without the '_' prefix, but use bytes key
+    #[inline(always)]
+    pub fn _get_mut(&mut self, key: &[u8]) -> Option<ValueMut<'_, K, V>> {
+        self.in_disk
+            ._get(key)
+            .and_then(|v| K::from_slice(key).ok().map(|k| ValueMut::new(self, k, v)))
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.len()'.
@@ -156,16 +177,34 @@ where
         self.in_disk.contains_key(key)
     }
 
+    /// same as the funtion without the '_' prefix, but use bytes key
+    #[inline(always)]
+    pub fn _contains_key(&self, key: &[u8]) -> bool {
+        self.in_disk._contains_key(key)
+    }
+
     /// Remove a <K, V> from mem and disk.
     #[inline(always)]
     pub fn remove(&mut self, key: &K) -> Option<V> {
         self.in_disk.remove(key)
     }
 
+    /// same as the funtion without the '_' prefix, but use bytes key
+    #[inline(always)]
+    pub fn _remove(&mut self, key: &[u8]) -> Option<V> {
+        self.in_disk._remove(key)
+    }
+
     /// Remove a <K, V> from mem and disk.
     #[inline(always)]
     pub fn unset_value(&mut self, key: &K) {
         self.in_disk.unset_value(key);
+    }
+
+    /// same as the funtion without the '_' prefix, but use bytes key
+    #[inline(always)]
+    pub fn _unset_value(&mut self, key: &[u8]) {
+        self.in_disk._unset_value(key);
     }
 
     /// Clear all data.
@@ -188,7 +227,7 @@ where
 pub struct ValueMut<'a, K, V>
 where
     K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     hdr: &'a mut MapxOC<K, V>,
     key: ManuallyDrop<K>,
@@ -198,7 +237,7 @@ where
 impl<'a, K, V> ValueMut<'a, K, V>
 where
     K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn new(hdr: &'a mut MapxOC<K, V>, key: K, value: V) -> Self {
         ValueMut {
@@ -206,11 +245,6 @@ where
             key: ManuallyDrop::new(key),
             value: ManuallyDrop::new(value),
         }
-    }
-
-    /// Clone the inner value.
-    pub fn clone_inner(self) -> V {
-        ManuallyDrop::into_inner(self.value.clone())
     }
 }
 
@@ -220,7 +254,7 @@ where
 impl<'a, K, V> Drop for ValueMut<'a, K, V>
 where
     K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn drop(&mut self) {
         // This operation is safe within a `drop()`.
@@ -237,7 +271,7 @@ where
 impl<'a, K, V> Deref for ValueMut<'a, K, V>
 where
     K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     type Target = V;
 
@@ -249,40 +283,10 @@ where
 impl<'a, K, V> DerefMut for ValueMut<'a, K, V>
 where
     K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.value
-    }
-}
-
-impl<'a, K, V> PartialEq for ValueMut<'a, K, V>
-where
-    K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
-{
-    fn eq(&self, other: &ValueMut<'a, K, V>) -> bool {
-        self.value == other.value
-    }
-}
-
-impl<'a, K, V> PartialEq<V> for ValueMut<'a, K, V>
-where
-    K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
-{
-    fn eq(&self, other: &V) -> bool {
-        self.value.deref() == other
-    }
-}
-
-impl<'a, K, V> PartialOrd<V> for ValueMut<'a, K, V>
-where
-    K: OrderConsistKey,
-    V: Clone + PartialEq + Ord + PartialOrd + Serialize + DeserializeOwned + fmt::Debug,
-{
-    fn partial_cmp(&self, other: &V) -> Option<Ordering> {
-        self.value.deref().partial_cmp(other)
     }
 }
 
@@ -298,7 +302,7 @@ where
 pub struct Entry<'a, K, V>
 where
     K: OrderConsistKey,
-    V: 'a + fmt::Debug + Clone + PartialEq + Serialize + DeserializeOwned,
+    V: 'a + fmt::Debug + Serialize + DeserializeOwned,
 {
     key: K,
     db: &'a mut MapxOC<K, V>,
@@ -307,7 +311,7 @@ where
 impl<'a, K, V> Entry<'a, K, V>
 where
     K: OrderConsistKey,
-    V: 'a + fmt::Debug + Clone + PartialEq + Serialize + DeserializeOwned,
+    V: 'a + fmt::Debug + Serialize + DeserializeOwned,
 {
     /// Imitate the `btree_map/btree_map::Entry.or_insert(...)`.
     pub fn or_insert(self, default: V) -> ValueMut<'a, K, V> {
@@ -341,7 +345,7 @@ where
 pub struct MapxOCIter<K, V>
 where
     K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     iter: backend::MapxOCIter<K, V>,
 }
@@ -349,7 +353,7 @@ where
 impl<K, V> Iterator for MapxOCIter<K, V>
 where
     K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
@@ -360,7 +364,7 @@ where
 impl<K, V> DoubleEndedIterator for MapxOCIter<K, V>
 where
     K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back()
@@ -378,7 +382,7 @@ where
 impl<K, V> serde::Serialize for MapxOC<K, V>
 where
     K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
@@ -392,7 +396,7 @@ where
 impl<'de, K, V> serde::Deserialize<'de> for MapxOC<K, V>
 where
     K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -451,6 +455,45 @@ impl OrderConsistKey for Vec<u8> {
     #[inline(always)]
     fn from_bytes(b: Vec<u8>) -> Result<Self> {
         Ok(b)
+    }
+}
+
+impl OrderConsistKey for String {
+    #[inline(always)]
+    fn to_bytes(&self) -> Vec<u8> {
+        self.as_bytes().to_vec()
+    }
+
+    #[inline(always)]
+    fn into_bytes(self) -> Vec<u8> {
+        self.into_bytes()
+    }
+
+    #[inline(always)]
+    fn from_slice(b: &[u8]) -> Result<Self> {
+        String::from_utf8(b.to_owned()).c(d!())
+    }
+
+    #[inline(always)]
+    fn from_bytes(b: Vec<u8>) -> Result<Self> {
+        String::from_utf8(b).c(d!())
+    }
+}
+
+impl<'a> OrderConsistKey for &'a [u8] {
+    #[inline(always)]
+    fn to_bytes(&self) -> Vec<u8> {
+        self.to_vec()
+    }
+
+    #[inline(always)]
+    fn from_slice(_: &[u8]) -> Result<Self> {
+        unreachable!()
+    }
+
+    #[inline(always)]
+    fn from_bytes(_: Vec<u8>) -> Result<Self> {
+        unreachable!()
     }
 }
 
@@ -587,19 +630,7 @@ macro_rules! impl_repeat {
         impl_ock!(usize, $i);
     };
     ($i: expr, $($ii: expr),+) => {
-        impl_ock!(i8, $i);
-        impl_ock!(i16, $i);
-        impl_ock!(i32, $i);
-        impl_ock!(i64, $i);
-        impl_ock!(i128, $i);
-        impl_ock!(isize, $i);
-        impl_ock!(u8, $i);
-        impl_ock!(u16, $i);
-        impl_ock!(u32, $i);
-        impl_ock!(u64, $i);
-        impl_ock!(u128, $i);
-        impl_ock!(usize, $i);
-
+        impl_repeat!($i);
         impl_repeat!($($ii), +);
     };
 }

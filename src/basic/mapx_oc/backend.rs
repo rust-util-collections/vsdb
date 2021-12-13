@@ -19,11 +19,11 @@ use std::{
 
 // To solve the problem of unlimited memory usage,
 // use this to replace the original in-memory `BTreeMap<_, _>`.
-#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
+#[derive(PartialEq, Eq, Debug)]
 pub(super) struct MapxOC<K, V>
 where
     K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     inner: MapxRaw,
     _pd0: PhantomData<K>,
@@ -33,7 +33,7 @@ where
 impl<K, V> From<InstanceCfg> for MapxOC<K, V>
 where
     K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn from(cfg: InstanceCfg) -> Self {
         Self {
@@ -47,7 +47,7 @@ where
 impl<K, V> From<&MapxOC<K, V>> for InstanceCfg
 where
     K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn from(x: &MapxOC<K, V>) -> Self {
         let cfg = x.inner.get_instance_cfg();
@@ -66,7 +66,7 @@ where
 impl<K, V> MapxOC<K, V>
 where
     K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     // create a new instance
     #[inline(always)]
@@ -83,11 +83,17 @@ where
         InstanceCfg::from(self)
     }
 
-    // Imitate the behavior of 'BTreeMap<_>.get(...)'
     #[inline(always)]
     pub(super) fn get(&self, key: &K) -> Option<V> {
         self.inner
             .get(&key.to_bytes())
+            .map(|bytes| pnk!(bcs::from_bytes(&bytes)))
+    }
+
+    #[inline(always)]
+    pub(super) fn _get(&self, key: &[u8]) -> Option<V> {
+        self.inner
+            .get(key)
             .map(|bytes| pnk!(bcs::from_bytes(&bytes)))
     }
 
@@ -99,13 +105,26 @@ where
     }
 
     #[inline(always)]
+    pub(super) fn _get_le(&self, key: &[u8]) -> Option<(K, V)> {
+        self.inner
+            .get_le(key)
+            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(bcs::from_bytes(&v))))
+    }
+
+    #[inline(always)]
     pub(super) fn get_ge(&self, key: &K) -> Option<(K, V)> {
         self.inner
             .get_ge(&key.to_bytes())
             .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(bcs::from_bytes(&v))))
     }
 
-    // Imitate the behavior of 'BTreeMap<_>.len()'.
+    #[inline(always)]
+    pub(super) fn _get_ge(&self, key: &[u8]) -> Option<(K, V)> {
+        self.inner
+            .get_ge(key)
+            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(bcs::from_bytes(&v))))
+    }
+
     #[inline(always)]
     pub(super) fn len(&self) -> usize {
         self.inner.len()
@@ -116,7 +135,6 @@ where
         self.inner.is_empty()
     }
 
-    // Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
     pub(super) fn insert(&mut self, key: K, value: V) -> Option<V> {
         self.set_value(key, value)
@@ -130,7 +148,6 @@ where
             .insert(&key.into_bytes(), &pnk!(bcs::to_bytes(&value)))
     }
 
-    // Imitate the behavior of '.iter()'
     #[inline(always)]
     pub(super) fn iter(&self) -> MapxOCIter<K, V> {
         MapxOCIter {
@@ -182,13 +199,28 @@ where
     }
 
     #[inline(always)]
+    pub(super) fn _contains_key(&self, key: &[u8]) -> bool {
+        self.inner.contains_key(key)
+    }
+
+    #[inline(always)]
     pub(super) fn remove(&mut self, key: &K) -> Option<V> {
         self.unset_value(key).map(|v| pnk!(bcs::from_bytes(&v)))
     }
 
     #[inline(always)]
+    pub(super) fn _remove(&mut self, key: &[u8]) -> Option<V> {
+        self._unset_value(key).map(|v| pnk!(bcs::from_bytes(&v)))
+    }
+
+    #[inline(always)]
     pub(super) fn unset_value(&mut self, key: &K) -> Option<IVec> {
         self.inner.remove(&key.to_bytes())
+    }
+
+    #[inline(always)]
+    pub(super) fn _unset_value(&mut self, key: &[u8]) -> Option<IVec> {
+        self.inner.remove(key)
     }
 
     #[inline(always)]
@@ -209,7 +241,7 @@ where
 pub(super) struct MapxOCIter<K, V>
 where
     K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     pub(super) iter: MapxRawIter,
     _pd0: PhantomData<K>,
@@ -219,7 +251,7 @@ where
 impl<K, V> Iterator for MapxOCIter<K, V>
 where
     K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
@@ -232,7 +264,7 @@ where
 impl<K, V> DoubleEndedIterator for MapxOCIter<K, V>
 where
     K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter
@@ -244,7 +276,7 @@ where
 impl<K, V> ExactSizeIterator for MapxOCIter<K, V>
 where
     K: OrderConsistKey,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
 }
 

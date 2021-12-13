@@ -14,7 +14,6 @@ use crate::{
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
-    cmp::Ordering,
     fmt,
     iter::{DoubleEndedIterator, Iterator},
     marker::PhantomData,
@@ -24,7 +23,7 @@ use std::{
 
 /// To solve the problem of unlimited memory usage,
 /// use this to replace the original in-memory `BTreeMap<_, _>`.
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug)]
 pub struct Mapx<K, V>
 where
     K: Clone
@@ -35,7 +34,7 @@ where
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     inner: MapxOC<Vec<u8>, V>,
     _pd: PhantomData<K>,
@@ -51,7 +50,7 @@ where
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn default() -> Self {
         Self::new()
@@ -81,7 +80,7 @@ where
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     /// Create an instance.
     #[inline(always)]
@@ -98,8 +97,6 @@ where
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get(...)'
-    ///
-    /// Any faster/better choice other than JSON ?
     #[inline(always)]
     pub fn get(&self, key: &K) -> Option<V> {
         self.inner.get(&convert!(key))
@@ -204,7 +201,7 @@ where
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     hdr: &'a mut Mapx<K, V>,
     key: ManuallyDrop<K>,
@@ -221,7 +218,7 @@ where
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn new(hdr: &'a mut Mapx<K, V>, key: K, value: V) -> Self {
         ValueMut {
@@ -229,11 +226,6 @@ where
             key: ManuallyDrop::new(key),
             value: ManuallyDrop::new(value),
         }
-    }
-
-    /// Clone the inner value.
-    pub fn clone_inner(self) -> V {
-        ManuallyDrop::into_inner(self.value.clone())
     }
 }
 
@@ -250,7 +242,7 @@ where
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn drop(&mut self) {
         // This operation is safe within a `drop()`.
@@ -274,7 +266,7 @@ where
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     type Target = V;
 
@@ -293,61 +285,10 @@ where
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.value
-    }
-}
-
-impl<'a, K, V> PartialEq for ValueMut<'a, K, V>
-where
-    K: Clone
-        + PartialEq
-        + Eq
-        + PartialOrd
-        + Ord
-        + Serialize
-        + DeserializeOwned
-        + fmt::Debug,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
-{
-    fn eq(&self, other: &ValueMut<'a, K, V>) -> bool {
-        self.value == other.value
-    }
-}
-
-impl<'a, K, V> PartialEq<V> for ValueMut<'a, K, V>
-where
-    K: Clone
-        + PartialEq
-        + Eq
-        + PartialOrd
-        + Ord
-        + Serialize
-        + DeserializeOwned
-        + fmt::Debug,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
-{
-    fn eq(&self, other: &V) -> bool {
-        self.value.deref() == other
-    }
-}
-
-impl<'a, K, V> PartialOrd<V> for ValueMut<'a, K, V>
-where
-    K: Clone
-        + PartialEq
-        + Eq
-        + PartialOrd
-        + Ord
-        + Serialize
-        + DeserializeOwned
-        + fmt::Debug,
-    V: Clone + PartialEq + Ord + PartialOrd + Serialize + DeserializeOwned + fmt::Debug,
-{
-    fn partial_cmp(&self, other: &V) -> Option<Ordering> {
-        self.value.deref().partial_cmp(other)
     }
 }
 
@@ -362,8 +303,8 @@ where
 /// Iter over [Mapx](self::Mapx).
 pub struct MapxIter<K, V>
 where
-    K: Clone + PartialEq + Eq + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    K: PartialEq + Eq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     iter: MapxOCIter<Vec<u8>, V>,
     _pd: PhantomData<K>,
@@ -371,8 +312,8 @@ where
 
 impl<K, V> Iterator for MapxIter<K, V>
 where
-    K: Clone + PartialEq + Eq + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    K: PartialEq + Eq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
@@ -382,8 +323,8 @@ where
 
 impl<K, V> DoubleEndedIterator for MapxIter<K, V>
 where
-    K: Clone + PartialEq + Eq + Serialize + DeserializeOwned + fmt::Debug,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    K: PartialEq + Eq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back().map(|(k, v)| (convert!(@k), v))
@@ -408,7 +349,7 @@ where
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
@@ -429,7 +370,7 @@ where
         + Serialize
         + DeserializeOwned
         + fmt::Debug,
-    V: Clone + PartialEq + Serialize + DeserializeOwned + fmt::Debug,
+    V: Serialize + DeserializeOwned + fmt::Debug,
 {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
