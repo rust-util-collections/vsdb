@@ -46,7 +46,7 @@ fn bench(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("mapx_mut_back", |b| {
+    group.bench_function("mapx_rw_write_back", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
             db.set_value(n, vec![n; 128]);
