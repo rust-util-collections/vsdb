@@ -8,31 +8,31 @@ use super::*;
 fn t_mapx_raw() {
     let cnt = 200;
 
-    let db = {
-        let mut dbi = crate::MapxRaw::new();
+    let hdr = {
+        let mut hdr_i = crate::MapxRaw::new();
 
-        assert_eq!(0, dbi.len());
+        assert_eq!(0, hdr_i.len());
         (0..cnt).for_each(|i: usize| {
-            assert!(dbi.get(&i.to_be_bytes()).is_none());
+            assert!(hdr_i.get(&i.to_be_bytes()).is_none());
         });
 
         (0..cnt)
             .map(|i: usize| (i.to_be_bytes(), i.to_be_bytes()))
             .for_each(|(i, b)| {
-                dbi.entry(&i).or_insert(&b);
-                assert_eq!(pnk!(dbi.get(&i)).as_ref(), &i);
-                assert_eq!(dbi.remove(&i).unwrap().as_ref(), &b);
-                assert!(dbi.get(&i).is_none());
-                assert!(dbi.insert(&i, &b).is_none());
-                assert!(dbi.insert(&i, &b).is_some());
+                hdr_i.entry(&i).or_insert(&b);
+                assert_eq!(pnk!(hdr_i.get(&i)).as_ref(), &i);
+                assert_eq!(hdr_i.remove(&i).unwrap().as_ref(), &b);
+                assert!(hdr_i.get(&i).is_none());
+                assert!(hdr_i.insert(&i, &b).is_none());
+                assert!(hdr_i.insert(&i, &b).is_some());
             });
 
-        assert_eq!(cnt, dbi.len());
+        assert_eq!(cnt, hdr_i.len());
 
-        pnk!(bincode::serialize(&dbi))
+        pnk!(bincode::serialize(&hdr_i))
     };
 
-    let mut reloaded = pnk!(bincode::deserialize::<MapxRaw>(&db));
+    let mut reloaded = pnk!(bincode::deserialize::<MapxRaw>(&hdr));
 
     assert_eq!(cnt, reloaded.len());
 

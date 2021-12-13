@@ -22,10 +22,9 @@ use std::{
 };
 
 /// To solve the problem of unlimited memory usage,
-/// use this to replace the original in-memory `Vec<_>`.
+/// use this to replace the original in-memory 'Vec'.
 ///
 /// - Each time the program is started, a new database is created
-/// - Can ONLY be used in append-only scenes like the block storage
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone)]
 pub struct Vecx<T>
 where
@@ -117,20 +116,68 @@ where
         self.inner.insert(self.len(), b);
     }
 
-    /// Imitate the behavior of 'Vec<_>.pop()'
+    /// Imitate the behavior of 'Vec<_>.insert()'
     #[inline(always)]
-    pub fn pop(&mut self) {
-        alt!(self.is_empty(), return);
-        self.inner.remove(&(self.len() - 1));
+    pub fn insert(&mut self, idx: usize, v: T) {
+        match self.len().cmp(&idx) {
+            Ordering::Greater => {
+                self.inner.range(idx..self.len()).for_each(|(i, v)| {
+                    self.inner.insert(i + 1, v);
+                });
+                self.inner.insert(idx, v);
+            }
+            Ordering::Equal => {
+                self.push(v);
+            }
+            Ordering::Less => {
+                panic!("out of index");
+            }
+        }
     }
 
-    /// Imitate the behavior of 'Vec<_>.insert(idx, value)',
-    /// but we do not return the previous value, like `Vecx<_, _>.update`.
+    /// Imitate the behavior of 'Vec<_>.pop()'
     #[inline(always)]
-    pub fn update(&mut self, idx: usize, b: T) -> Result<()> {
-        alt!(idx + 1 > self.len(), return Err(eg!("out of index")));
-        self.inner.insert(idx, b);
-        Ok(())
+    pub fn pop(&mut self) -> Option<T> {
+        alt!(self.is_empty(), return None);
+        self.inner.remove(&(self.len() - 1))
+    }
+
+    /// Imitate the behavior of 'Vec<_>.remove()'
+    #[inline(always)]
+    pub fn remove(&mut self, idx: usize) -> T {
+        if !self.is_empty() && idx < self.len() {
+            let last_idx = self.len() - 1;
+            let ret = self.inner.remove(&idx).unwrap();
+            self.inner.range((1 + idx)..).for_each(|(i, v)| {
+                self.inner.insert(i - 1, v);
+            });
+            self.inner.remove(&last_idx);
+            return ret;
+        }
+        panic!("out of index");
+    }
+
+    /// Imitate the behavior of 'Vec<_>.swap_remove()'
+    #[inline(always)]
+    pub fn swap_remove(&mut self, idx: usize) -> T {
+        if !self.is_empty() && idx < self.len() {
+            let last_idx = self.len() - 1;
+            let ret = self.inner.remove(&idx).unwrap();
+            if let Some(v) = self.inner.remove(&last_idx) {
+                self.inner.insert(idx, v);
+            }
+            return ret;
+        }
+        panic!("out of index");
+    }
+
+    /// Imitate the behavior of 'Vec<_>.update(idx, value)'
+    #[inline(always)]
+    pub fn update(&mut self, idx: usize, b: T) -> Option<T> {
+        if idx < self.len() {
+            return self.inner.insert(idx, b);
+        }
+        panic!("out of index");
     }
 
     /// Imitate the behavior of '.iter()'

@@ -1,6 +1,4 @@
 //!
-//! # VSDB
-//!
 //! VSDB, **V**ersioned **S**tateful **D**ata**B**ase, mainly used in blockchain scene.
 //!
 //! Support some GIT-like operations, such as:

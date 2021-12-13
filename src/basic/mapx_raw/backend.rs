@@ -15,6 +15,7 @@ use std::{
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct MapxRaw {
     cnter: u64,
+    // the unique ID of each instance
     prefix: Vec<u8>,
     idx: usize,
 }

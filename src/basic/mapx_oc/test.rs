@@ -23,31 +23,31 @@ fn gen_sample(idx: usize) -> SampleBlock {
 fn t_mapx_oc() {
     let cnt = 200;
 
-    let db = {
-        let mut dbi = crate::MapxOC::new();
+    let hdr = {
+        let mut hdr_i = crate::MapxOC::new();
 
-        assert_eq!(0, dbi.len());
+        assert_eq!(0, hdr_i.len());
         (0..cnt).for_each(|i| {
-            assert!(dbi.get(&i).is_none());
+            assert!(hdr_i.get(&i).is_none());
         });
 
         (0..cnt).map(|i| (i, gen_sample(i))).for_each(|(i, b)| {
-            dbi.entry(i).or_insert(b.clone());
-            assert_eq!(1 + i as usize, dbi.len());
-            assert_eq!(pnk!(dbi.get(&i)).idx, i);
-            assert_eq!(dbi.remove(&i), Some(b.clone()));
-            assert_eq!(i as usize, dbi.len());
-            assert!(dbi.get(&i).is_none());
-            assert!(dbi.insert(i, b.clone()).is_none());
-            assert!(dbi.insert(i, b).is_some());
+            hdr_i.entry(i).or_insert(b.clone());
+            assert_eq!(1 + i as usize, hdr_i.len());
+            assert_eq!(pnk!(hdr_i.get(&i)).idx, i);
+            assert_eq!(hdr_i.remove(&i), Some(b.clone()));
+            assert_eq!(i as usize, hdr_i.len());
+            assert!(hdr_i.get(&i).is_none());
+            assert!(hdr_i.insert(i, b.clone()).is_none());
+            assert!(hdr_i.insert(i, b).is_some());
         });
 
-        assert_eq!(cnt, dbi.len());
+        assert_eq!(cnt, hdr_i.len());
 
-        pnk!(bincode::serialize(&dbi))
+        pnk!(bincode::serialize(&hdr_i))
     };
 
-    let mut reloaded = pnk!(bincode::deserialize::<MapxOC<usize, SampleBlock>>(&db));
+    let mut reloaded = pnk!(bincode::deserialize::<MapxOC<usize, SampleBlock>>(&hdr));
 
     assert_eq!(cnt, reloaded.len());
 
