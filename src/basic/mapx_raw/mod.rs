@@ -12,7 +12,6 @@ use crate::common::{InstanceCfg, SimpleVisitor, VSDB};
 use ruc::*;
 use sled::IVec;
 use std::{
-    iter::Iterator,
     mem::ManuallyDrop,
     ops::{Deref, DerefMut, RangeBounds},
 };
@@ -103,7 +102,7 @@ impl MapxRaw {
     /// Imitate the behavior of '.entry(...).or_insert(...)'
     #[inline(always)]
     pub fn entry<'a>(&'a mut self, key: &'a [u8]) -> Entry<'a> {
-        Entry { key, db: self }
+        Entry { key, hdr: self }
     }
 
     /// Imitate the behavior of '.iter()'
@@ -167,9 +166,7 @@ impl<'a> ValueMut<'a> {
     }
 }
 
-///
-/// **NOTE**: &[u8]ERY IMPORTANT !!!
-///
+/// NOTE: Very Important !!!
 impl<'a> Drop for ValueMut<'a> {
     fn drop(&mut self) {
         // This operation is safe within a `drop()`.
@@ -208,16 +205,16 @@ impl<'a> DerefMut for ValueMut<'a> {
 /// Imitate the `btree_map/btree_map::Entry`.
 pub struct Entry<'a> {
     key: &'a [u8],
-    db: &'a mut MapxRaw,
+    hdr: &'a mut MapxRaw,
 }
 
 impl<'a> Entry<'a> {
     /// Imitate the `btree_map/btree_map::Entry.or_insert(...)`.
     pub fn or_insert(self, default: &'a [u8]) -> ValueMut<'a> {
-        if !self.db.contains_key(self.key) {
-            self.db.insert(self.key, default);
+        if !self.hdr.contains_key(self.key) {
+            self.hdr.insert(self.key, default);
         }
-        pnk!(self.db.get_mut(self.key))
+        pnk!(self.hdr.get_mut(self.key))
     }
 
     /// Imitate the `btree_map/btree_map::Entry.or_insert_with(...)`.
@@ -225,10 +222,10 @@ impl<'a> Entry<'a> {
     where
         F: FnOnce() -> Vec<u8>,
     {
-        if !self.db.contains_key(self.key) {
-            self.db.insert(self.key, &default());
+        if !self.hdr.contains_key(self.key) {
+            self.hdr.insert(self.key, &default());
         }
-        pnk!(self.db.get_mut(self.key))
+        pnk!(self.hdr.get_mut(self.key))
     }
 }
 

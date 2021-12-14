@@ -12,7 +12,6 @@ use serde::{de::DeserializeOwned, Serialize};
 use sled::IVec;
 use std::{
     fmt,
-    iter::{DoubleEndedIterator, Iterator},
     marker::PhantomData,
     ops::{Bound, RangeBounds},
 };

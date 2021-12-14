@@ -2,7 +2,6 @@
 //! # Test Cases
 //!
 
-use super::*;
 use crate::Vecx;
 use ruc::*;
 use serde::{Deserialize, Serialize};

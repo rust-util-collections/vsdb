@@ -15,7 +15,6 @@ use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     fmt,
-    iter::{DoubleEndedIterator, Iterator},
     marker::PhantomData,
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
@@ -58,12 +57,8 @@ where
 }
 
 macro_rules! convert {
-    ($as_param: expr) => {{
-        bcs::to_bytes::<K>($as_param).unwrap()
-    }};
-    (@$as_ret: expr) => {{
-        bcs::from_bytes::<K>(&$as_ret).unwrap()
-    }};
+    ($as_param: expr) => {{ bcs::to_bytes::<K>($as_param).unwrap() }};
+    (@$as_ret: expr) => {{ bcs::from_bytes::<K>(&$as_ret).unwrap() }};
 }
 
 ///////////////////////////////////////////////
@@ -229,9 +224,7 @@ where
     }
 }
 
-///
-/// **NOTE**: VERY IMPORTANT !!!
-///
+/// NOTE: Very Important !!!
 impl<'a, K, V> Drop for ValueMut<'a, K, V>
 where
     K: Clone

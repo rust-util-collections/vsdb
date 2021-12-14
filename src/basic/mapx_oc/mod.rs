@@ -11,9 +11,9 @@ mod test;
 use crate::common::{InstanceCfg, SimpleVisitor};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
+use sled::IVec;
 use std::{
     fmt,
-    iter::Iterator,
     mem::{size_of, transmute, ManuallyDrop},
     ops::{Deref, DerefMut, RangeBounds},
 };
@@ -152,7 +152,7 @@ where
     /// Imitate the behavior of '.entry(...).or_insert(...)'
     #[inline(always)]
     pub fn entry(&mut self, key: K) -> Entry<'_, K, V> {
-        Entry { key, db: self }
+        Entry { key, hdr: self }
     }
 
     /// Imitate the behavior of '.iter()'
@@ -169,6 +169,18 @@ where
         MapxOCIter {
             iter: self.in_disk.range(bounds),
         }
+    }
+
+    /// First item
+    #[inline(always)]
+    pub fn first(&self) -> Option<(K, V)> {
+        self.iter().next()
+    }
+
+    /// Last item
+    #[inline(always)]
+    pub fn last(&self) -> Option<(K, V)> {
+        self.iter().next_back()
     }
 
     /// Check if a key is exists.
@@ -248,9 +260,7 @@ where
     }
 }
 
-///
-/// **NOTE**: VERY IMPORTANT !!!
-///
+/// NOTE: Very Important !!!
 impl<'a, K, V> Drop for ValueMut<'a, K, V>
 where
     K: OrderConsistKey,
@@ -305,7 +315,7 @@ where
     V: 'a + fmt::Debug + Serialize + DeserializeOwned,
 {
     key: K,
-    db: &'a mut MapxOC<K, V>,
+    hdr: &'a mut MapxOC<K, V>,
 }
 
 impl<'a, K, V> Entry<'a, K, V>
@@ -315,10 +325,10 @@ where
 {
     /// Imitate the `btree_map/btree_map::Entry.or_insert(...)`.
     pub fn or_insert(self, default: V) -> ValueMut<'a, K, V> {
-        if !self.db.contains_key(&self.key) {
-            self.db.set_value(self.key.clone(), default);
+        if !self.hdr.contains_key(&self.key) {
+            self.hdr.set_value(self.key.clone(), default);
         }
-        pnk!(self.db.get_mut(&self.key))
+        pnk!(self.hdr.get_mut(&self.key))
     }
 
     /// Imitate the `btree_map/btree_map::Entry.or_insert_with(...)`.
@@ -326,10 +336,10 @@ where
     where
         F: FnOnce() -> V,
     {
-        if !self.db.contains_key(&self.key) {
-            self.db.set_value(self.key.clone(), default());
+        if !self.hdr.contains_key(&self.key) {
+            self.hdr.set_value(self.key.clone(), default());
         }
-        pnk!(self.db.get_mut(&self.key))
+        pnk!(self.hdr.get_mut(&self.key))
     }
 }
 
@@ -436,6 +446,18 @@ pub trait OrderConsistKey:
     }
 }
 
+impl OrderConsistKey for IVec {
+    #[inline(always)]
+    fn to_bytes(&self) -> Vec<u8> {
+        self.to_vec()
+    }
+
+    #[inline(always)]
+    fn from_slice(b: &[u8]) -> Result<Self> {
+        Ok(IVec::from(b))
+    }
+}
+
 impl OrderConsistKey for Vec<u8> {
     #[inline(always)]
     fn to_bytes(&self) -> Vec<u8> {
@@ -477,23 +499,6 @@ impl OrderConsistKey for String {
     #[inline(always)]
     fn from_bytes(b: Vec<u8>) -> Result<Self> {
         String::from_utf8(b).c(d!())
-    }
-}
-
-impl<'a> OrderConsistKey for &'a [u8] {
-    #[inline(always)]
-    fn to_bytes(&self) -> Vec<u8> {
-        self.to_vec()
-    }
-
-    #[inline(always)]
-    fn from_slice(_: &[u8]) -> Result<Self> {
-        unreachable!()
-    }
-
-    #[inline(always)]
-    fn from_bytes(_: Vec<u8>) -> Result<Self> {
-        unreachable!()
     }
 }
 

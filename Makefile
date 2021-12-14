@@ -20,7 +20,7 @@ bench:
 	cargo bench
 
 fmt:
-	@ cargo fmt
+	bash tools/fmt.sh
 
 update:
 	cargo update

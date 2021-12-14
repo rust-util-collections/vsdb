@@ -5,10 +5,7 @@
 use crate::common::{InstanceCfg, Prefix, PrefixBytes, PREFIX_SIZ, VSDB};
 use ruc::*;
 use sled::{IVec, Iter};
-use std::{
-    iter::{DoubleEndedIterator, Iterator},
-    ops::{Bound, RangeBounds},
-};
+use std::ops::{Bound, RangeBounds};
 
 // To solve the problem of unlimited memory usage,
 // use this to replace the original in-memory `BTreeMap<_, _>`.
@@ -67,10 +64,12 @@ impl MapxRaw {
 
         let prefix = prefix.to_be_bytes();
 
-        assert!(VSDB.data_set[idx]
-            .scan_prefix(prefix.as_slice())
-            .next()
-            .is_none());
+        assert!(
+            VSDB.data_set[idx]
+                .scan_prefix(prefix.as_slice())
+                .next()
+                .is_none()
+        );
 
         MapxRaw {
             prefix,

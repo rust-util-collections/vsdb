@@ -16,7 +16,6 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::{
     cmp::Ordering,
     fmt,
-    iter::{DoubleEndedIterator, Iterator},
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
 };
@@ -225,9 +224,7 @@ where
     }
 }
 
-///
-/// **NOTE**: VERY IMPORTANT !!!
-///
+/// NOTE: Very Important !!!
 impl<'a, T> Drop for ValueMut<'a, T>
 where
     T: Serialize + DeserializeOwned + fmt::Debug,
