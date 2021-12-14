@@ -7,7 +7,7 @@ description = "Versioned Stateful DataBase, mainly used in blockchain scene."
 homepage = "https://github.com/ccmlm/vsdb"
 repository = "https://github.com/ccmlm/vsdb"
 keywords = ["version", "blockchain", "database"]
-categories = ["DataBase"]
+categories = ["database"]
 license = "MIT"
 
 [dependencies]
@@ -17,10 +17,10 @@ lazy_static = "1.4"
 serde = { version = "1.0", features = ["derive"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-sled = { git = "https://gitee.com/kt10/sled.git", branch = "v0.34.7-patched", features = ["compression", "io_uring"] }
+sled = { package = "vsdbsled", version = "0.34.7-patched", features = ["compression", "io_uring"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
-sled = { git = "https://gitee.com/kt10/sled.git", branch = "v0.34.7-patched", features = ["compression"] }
+sled = { package = "vsdbsled", version = "0.34.7-patched", features = ["compression"] }
 
 [dev-dependencies]
 criterion = { version = "0.3", features = ["html_reports"]}
