@@ -457,14 +457,12 @@ impl MapxRawVersioned {
             .c(d!("branch not found"))?;
 
         let version_id = VSDB.alloc_version_id();
-        let version_id_bytes = version_id.to_be_bytes();
 
         // hash(<version id> + <previous sig> + <every kv writes>)
-        let new_sig = if let Some((_, sig)) = vers.last() {
-            compute_sig(&[&version_id_bytes, &sig])
-        } else {
-            compute_sig(&[&version_id_bytes])
-        };
+        let new_sig = compute_sig(&[
+            version_name,
+            &vers.last().map(|(_, s)| s).unwrap_or_default(),
+        ]);
         vers.insert(version_id, new_sig);
 
         self.version_name_to_version_id
