@@ -789,21 +789,32 @@ impl MapxRawVersioned {
         self.version_pop_by_branch(branch_id).c(d!())
     }
 
-    pub fn branch_merge_to_parent(&mut self, from: BranchID) -> Result<()> {
-        let fp = self.branch_get_recurive_path(from, 2);
+    pub fn branch_merge_to_parent(&mut self, branch_id: BranchID) -> Result<()> {
+        if self.branch_has_children(branch_id) {
+            return Err(eg!("can not merge branches with children"));
+        }
 
+        let fp = self.branch_get_recurive_path(branch_id, 2);
         if fp.is_empty() {
             return Err(eg!("branch not found"));
         } else if 1 == fp.len() {
             // no parents, means 'merge itself to itself'
             return Ok(());
         }
-
         let (parent_id, _) = fp.iter().nth(1).unwrap();
 
-        let vers_created = self.branch_to_created_versions.remove(&from).unwrap();
+        let mut vers_created =
+            self.branch_to_created_versions.remove(&branch_id).unwrap();
+        if vers_created.is_empty() {
+            // merge an empty branch
+            return Ok(());
+        }
+        let (last_ver, last_sig) = vers_created.last().unwrap();
+
         let mut vers_created_parent =
             self.branch_to_created_versions.get_mut(parent_id).unwrap();
+        let (last_ver_parent, last_sig_parent) = vers_created_parent.last().unwrap();
+
         for (ver, sig) in vers_created.iter() {
             vers_created_parent.insert(ver, sig);
 
@@ -817,13 +828,13 @@ impl MapxRawVersioned {
                 let mut key_hdr = self.layered_kv.get_mut(&k).unwrap();
 
                 let (value, empty) = {
-                    let mut from_hdr = key_hdr.get_mut(&from).unwrap();
-                    let v = from_hdr.remove(&ver).unwrap();
-                    (v, from_hdr.is_empty())
+                    let mut br_hdr = key_hdr.get_mut(&branch_id).unwrap();
+                    let v = br_hdr.remove(&ver).unwrap();
+                    (v, br_hdr.is_empty())
                 };
 
                 if empty {
-                    key_hdr.remove(&from);
+                    key_hdr.remove(&branch_id);
                 }
 
                 key_hdr
@@ -833,7 +844,24 @@ impl MapxRawVersioned {
             }
         }
 
-        self.branch_to_parent.remove(&from);
+        // re-calcute sig, the old parent sig should be set in the first place
+        let new_sig = compute_sig(&[last_sig_parent.as_slice(), last_sig.as_slice()]);
+        vers_created_parent.insert(max!(last_ver_parent, last_ver), new_sig);
+
+        // remove outdated values
+        vers_created.iter().for_each(|(k, _)| {
+            vers_created.remove(&k);
+        });
+
+        // remove user-registered infomation
+        let (br_name, _) = self
+            .branch_name_to_branch_id
+            .iter()
+            .find(|(_, br)| *br == branch_id)
+            .unwrap();
+        self.branch_name_to_branch_id.remove(&br_name);
+
+        self.branch_to_parent.remove(&branch_id);
 
         Ok(())
     }
