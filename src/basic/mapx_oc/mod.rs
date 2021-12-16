@@ -26,7 +26,7 @@ where
     K: OrderConsistKey,
     V: Serialize + DeserializeOwned + fmt::Debug,
 {
-    in_disk: backend::MapxOC<K, V>,
+    inner: backend::MapxOC<K, V>,
 }
 
 impl<K, V> From<InstanceCfg> for MapxOC<K, V>
@@ -36,7 +36,7 @@ where
 {
     fn from(cfg: InstanceCfg) -> Self {
         Self {
-            in_disk: backend::MapxOC::from(cfg),
+            inner: backend::MapxOC::from(cfg),
         }
     }
 }
@@ -64,55 +64,55 @@ where
     #[inline(always)]
     pub fn new() -> Self {
         MapxOC {
-            in_disk: backend::MapxOC::must_new(),
+            inner: backend::MapxOC::must_new(),
         }
     }
 
     // Get the database storage path
     pub(crate) fn get_instance_cfg(&self) -> InstanceCfg {
-        self.in_disk.get_instance_cfg()
+        self.inner.get_instance_cfg()
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get(...)'
     #[inline(always)]
     pub fn get(&self, key: &K) -> Option<V> {
-        self.in_disk.get(key)
+        self.inner.get(key)
     }
 
     /// same as the funtion without the '_' prefix, but use bytes key
     #[inline(always)]
     pub fn _get(&self, key: &[u8]) -> Option<V> {
-        self.in_disk._get(key)
+        self.inner._get(key)
     }
 
     /// Get the closest smaller value, include itself.
     #[inline(always)]
     pub fn get_le(&self, key: &K) -> Option<(K, V)> {
-        self.in_disk.get_le(key)
+        self.inner.get_le(key)
     }
 
     /// same as the funtion without the '_' prefix, but use bytes key
     #[inline(always)]
     pub fn _get_le(&self, key: &[u8]) -> Option<(K, V)> {
-        self.in_disk._get_le(key)
+        self.inner._get_le(key)
     }
 
     /// Get the closest larger value, include itself.
     #[inline(always)]
     pub fn get_ge(&self, key: &K) -> Option<(K, V)> {
-        self.in_disk.get_ge(key)
+        self.inner.get_ge(key)
     }
 
     /// same as the funtion without the '_' prefix, but use bytes key
     #[inline(always)]
     pub fn _get_ge(&self, key: &[u8]) -> Option<(K, V)> {
-        self.in_disk._get_ge(key)
+        self.inner._get_ge(key)
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get_mut(...)'
     #[inline(always)]
     pub fn get_mut(&mut self, key: &K) -> Option<ValueMut<'_, K, V>> {
-        self.in_disk
+        self.inner
             .get(key)
             .map(move |v| ValueMut::new(self, key.clone(), v))
     }
@@ -120,7 +120,7 @@ where
     /// same as the funtion without the '_' prefix, but use bytes key
     #[inline(always)]
     pub fn _get_mut(&mut self, key: &[u8]) -> Option<ValueMut<'_, K, V>> {
-        self.in_disk
+        self.inner
             ._get(key)
             .and_then(|v| K::from_slice(key).ok().map(|k| ValueMut::new(self, k, v)))
     }
@@ -128,25 +128,25 @@ where
     /// Imitate the behavior of 'BTreeMap<_>.len()'.
     #[inline(always)]
     pub fn len(&self) -> usize {
-        self.in_disk.len()
+        self.inner.len()
     }
 
     /// A helper func
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        self.in_disk.is_empty()
+        self.inner.is_empty()
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
-        self.in_disk.insert(key, value)
+        self.inner.insert(key, value)
     }
 
     /// Similar with `insert`, but ignore the old value.
     #[inline(always)]
     pub fn set_value(&mut self, key: K, value: V) {
-        self.in_disk.set_value(key, value);
+        self.inner.set_value(key, value);
     }
 
     /// Imitate the behavior of '.entry(...).or_insert(...)'
@@ -159,7 +159,7 @@ where
     #[inline(always)]
     pub fn iter(&self) -> MapxOCIter<K, V> {
         MapxOCIter {
-            iter: self.in_disk.iter(),
+            iter: self.inner.iter(),
         }
     }
 
@@ -167,7 +167,7 @@ where
     #[inline(always)]
     pub fn range<R: RangeBounds<K>>(&self, bounds: R) -> MapxOCIter<K, V> {
         MapxOCIter {
-            iter: self.in_disk.range(bounds),
+            iter: self.inner.range(bounds),
         }
     }
 
@@ -186,43 +186,43 @@ where
     /// Check if a key is exists.
     #[inline(always)]
     pub fn contains_key(&self, key: &K) -> bool {
-        self.in_disk.contains_key(key)
+        self.inner.contains_key(key)
     }
 
     /// same as the funtion without the '_' prefix, but use bytes key
     #[inline(always)]
     pub fn _contains_key(&self, key: &[u8]) -> bool {
-        self.in_disk._contains_key(key)
+        self.inner._contains_key(key)
     }
 
     /// Remove a <K, V> from mem and disk.
     #[inline(always)]
     pub fn remove(&mut self, key: &K) -> Option<V> {
-        self.in_disk.remove(key)
+        self.inner.remove(key)
     }
 
     /// same as the funtion without the '_' prefix, but use bytes key
     #[inline(always)]
     pub fn _remove(&mut self, key: &[u8]) -> Option<V> {
-        self.in_disk._remove(key)
+        self.inner._remove(key)
     }
 
     /// Remove a <K, V> from mem and disk.
     #[inline(always)]
     pub fn unset_value(&mut self, key: &K) {
-        self.in_disk.unset_value(key);
+        self.inner.unset_value(key);
     }
 
     /// same as the funtion without the '_' prefix, but use bytes key
     #[inline(always)]
     pub fn _unset_value(&mut self, key: &[u8]) {
-        self.in_disk._unset_value(key);
+        self.inner._unset_value(key);
     }
 
     /// Clear all data.
     #[inline(always)]
     pub fn clear(&mut self) {
-        self.in_disk.clear();
+        self.inner.clear();
     }
 }
 

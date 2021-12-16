@@ -20,13 +20,13 @@ use std::{
 /// use this to replace the original in-memory `BTreeMap<_, _>`.
 #[derive(PartialEq, Eq, Debug)]
 pub struct MapxRaw {
-    in_disk: backend::MapxRaw,
+    inner: backend::MapxRaw,
 }
 
 impl From<InstanceCfg> for MapxRaw {
     fn from(cfg: InstanceCfg) -> Self {
         Self {
-            in_disk: backend::MapxRaw::from(cfg),
+            inner: backend::MapxRaw::from(cfg),
         }
     }
 }
@@ -46,37 +46,37 @@ impl MapxRaw {
     #[inline(always)]
     pub fn new() -> Self {
         MapxRaw {
-            in_disk: backend::MapxRaw::must_new(VSDB.alloc_prefix()),
+            inner: backend::MapxRaw::must_new(VSDB.alloc_prefix()),
         }
     }
 
     // Get the database storage path
     pub(crate) fn get_instance_cfg(&self) -> InstanceCfg {
-        self.in_disk.get_instance_cfg()
+        self.inner.get_instance_cfg()
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get(...)'
     #[inline(always)]
     pub fn get(&self, key: &[u8]) -> Option<IVec> {
-        self.in_disk.get(key)
+        self.inner.get(key)
     }
 
     /// less or equal value
     #[inline(always)]
     pub fn get_le(&self, key: &[u8]) -> Option<(IVec, IVec)> {
-        self.in_disk.get_le(key)
+        self.inner.get_le(key)
     }
 
     /// great or equal value
     #[inline(always)]
     pub fn get_ge(&self, key: &[u8]) -> Option<(IVec, IVec)> {
-        self.in_disk.get_ge(key)
+        self.inner.get_ge(key)
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get_mut(...)'
     #[inline(always)]
     pub fn get_mut(&mut self, key: &[u8]) -> Option<ValueMut<'_>> {
-        self.in_disk
+        self.inner
             .get(key)
             .map(move |v| ValueMut::new(self, IVec::from(key), v))
     }
@@ -84,19 +84,19 @@ impl MapxRaw {
     /// Imitate the behavior of 'BTreeMap<_>.len()'.
     #[inline(always)]
     pub fn len(&self) -> usize {
-        self.in_disk.len()
+        self.inner.len()
     }
 
     /// A helper func
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        self.in_disk.is_empty()
+        self.inner.is_empty()
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
     pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Option<IVec> {
-        self.in_disk.insert(key, value)
+        self.inner.insert(key, value)
     }
 
     /// Imitate the behavior of '.entry(...).or_insert(...)'
@@ -109,7 +109,7 @@ impl MapxRaw {
     #[inline(always)]
     pub fn iter(&self) -> MapxRawIter {
         MapxRawIter {
-            iter: self.in_disk.iter(),
+            iter: self.inner.iter(),
         }
     }
 
@@ -117,26 +117,26 @@ impl MapxRaw {
     #[inline(always)]
     pub fn range<'a, R: RangeBounds<&'a [u8]>>(&'a self, bounds: R) -> MapxRawIter {
         MapxRawIter {
-            iter: self.in_disk.range(bounds),
+            iter: self.inner.range(bounds),
         }
     }
 
     /// Check if a key is exists.
     #[inline(always)]
     pub fn contains_key(&self, key: &[u8]) -> bool {
-        self.in_disk.contains_key(key)
+        self.inner.contains_key(key)
     }
 
     /// Try to remove an entry
     #[inline(always)]
     pub fn remove(&mut self, key: &[u8]) -> Option<IVec> {
-        self.in_disk.remove(key)
+        self.inner.remove(key)
     }
 
     /// Clear all data.
     #[inline(always)]
     pub fn clear(&mut self) {
-        self.in_disk.clear();
+        self.inner.clear();
     }
 }
 
