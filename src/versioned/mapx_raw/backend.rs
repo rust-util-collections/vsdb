@@ -60,14 +60,17 @@ impl MapxRawVersioned {
     #[inline(always)]
     pub(super) fn new() -> Self {
         let mut ret = Self::default();
-
-        ret.branch_name_to_branch_id
-            .insert(INITIAL_BRANCH_NAME.to_vec(), INITIAL_BRANCH_ID);
-        ret.branch_to_parent.insert(INITIAL_BRANCH_ID, None);
-        ret.branch_to_created_versions
-            .insert(INITIAL_BRANCH_ID, MapxOC::new());
-
+        ret.init();
         ret
+    }
+
+    #[inline(always)]
+    pub(super) fn init(&mut self) {
+        self.branch_name_to_branch_id
+            .insert(INITIAL_BRANCH_NAME.to_vec(), INITIAL_BRANCH_ID);
+        self.branch_to_parent.insert(INITIAL_BRANCH_ID, None);
+        self.branch_to_created_versions
+            .insert(INITIAL_BRANCH_ID, MapxOC::new());
     }
 
     #[inline(always)]
@@ -430,12 +433,7 @@ impl MapxRawVersioned {
         self.version_to_change_set.clear();
         self.layered_kv.clear();
 
-        // re-init
-        self.branch_name_to_branch_id
-            .insert(INITIAL_BRANCH_NAME.to_vec(), INITIAL_BRANCH_ID);
-        self.branch_to_parent.insert(INITIAL_BRANCH_ID, None);
-        self.branch_to_created_versions
-            .insert(INITIAL_BRANCH_ID, MapxOC::new());
+        self.init();
     }
 
     #[inline(always)]

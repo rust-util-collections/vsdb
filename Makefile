@@ -14,7 +14,7 @@ lint:
 	cargo clippy --benches
 
 test:
-	cargo test --release -- --test-threads=1 --nocapture
+	cargo test --release -- --test-threads=1
 
 bench:
 	cargo bench
