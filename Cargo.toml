@@ -6,8 +6,8 @@ edition = "2021"
 description = "Versioned Stateful DataBase, mainly used in blockchain scene."
 homepage = "https://github.com/ccmlm/vsdb"
 repository = "https://github.com/ccmlm/vsdb"
-keywords = ["vcs", "version management", "blockchain", "database"]
-categories = ["database"]
+keywords = ["git", "leveldb", "rocksdb", "version", "vcs"]
+categories = ["database-implementations", "data-structures", "algorithms", "caching"]
 license = "MIT"
 
 [dependencies]

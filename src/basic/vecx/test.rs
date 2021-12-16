@@ -1,7 +1,3 @@
-//!
-//! # Test Cases
-//!
-
 use crate::Vecx;
 use ruc::*;
 use serde::{Deserialize, Serialize};

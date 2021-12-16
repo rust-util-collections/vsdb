@@ -4,6 +4,9 @@
 
 mod backend;
 
+#[cfg(test)]
+mod test;
+
 use crate::common::BranchID;
 use ruc::*;
 use serde::{Deserialize, Serialize};

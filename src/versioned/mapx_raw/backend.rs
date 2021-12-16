@@ -429,6 +429,13 @@ impl MapxRawVersioned {
         self.branch_to_created_versions.clear();
         self.version_to_change_set.clear();
         self.layered_kv.clear();
+
+        // re-init
+        self.branch_name_to_branch_id
+            .insert(INITIAL_BRANCH_NAME.to_vec(), INITIAL_BRANCH_ID);
+        self.branch_to_parent.insert(INITIAL_BRANCH_ID, None);
+        self.branch_to_created_versions
+            .insert(INITIAL_BRANCH_ID, MapxOC::new());
     }
 
     #[inline(always)]
@@ -881,6 +888,8 @@ impl MapxRawVersioned {
                     depth_limit -= 1;
                     ret.insert(bp.branch_id, bp.version_id);
                     branch_id = bp.branch_id;
+                } else {
+                    break;
                 }
             }
         }

@@ -1,7 +1,3 @@
-//!
-//! # Test Cases
-//!
-
 use super::*;
 
 #[test]
