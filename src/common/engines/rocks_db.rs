@@ -307,6 +307,7 @@ fn rocksdb_open() -> Result<(DB, Vec<String>)> {
 
     let mut cfg = Options::default();
     cfg.create_if_missing(true);
+    cfg.increase_parallelism(num_cpus::get() as i32);
     cfg.set_compression_type(DBCompressionType::Lz4);
     cfg.set_max_open_files(4096);
     cfg.set_allow_mmap_writes(true);
