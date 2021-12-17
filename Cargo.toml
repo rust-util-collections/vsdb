@@ -35,7 +35,7 @@ criterion = { version = "0.3", features = ["html_reports"]}
 default = ["sled_engine"]
 
 sled_engine = ["sled"]
-rocks_engine = ["rocksdb", "num-bigint", "num-traits"]
+rocks_engine = ["rocksdb", "num-bigint", "num-traits", "num_cpus"]
 
 [[bench]]
 name = "basic"
