@@ -6,6 +6,8 @@ use ruc::*;
 use sled::{Config, Db, Iter, Mode, Tree};
 use std::ops::{Bound, RangeBounds};
 
+const DATA_SET_NUM: u8 = 8;
+
 pub(crate) struct SledEngine {
     meta: Db,
     areas: Vec<Tree>,
@@ -14,8 +16,6 @@ pub(crate) struct SledEngine {
 
 impl Engine for SledEngine {
     fn new() -> Result<Self> {
-        const DATA_SET_NUM: u8 = 4;
-
         let meta = sled_open().c(d!())?;
 
         let areas = (0..DATA_SET_NUM)

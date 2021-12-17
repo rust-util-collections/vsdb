@@ -137,13 +137,13 @@ where
 
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
-    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+    pub fn insert(&mut self, key: K, value: &V) -> Option<V> {
         self.inner.insert(key, value)
     }
 
     /// same as the funtion without the '_' prefix, but use bytes key
     #[inline(always)]
-    pub fn _insert(&mut self, key: &[u8], value: V) -> Option<V> {
+    pub fn _insert(&mut self, key: &[u8], value: &V) -> Option<V> {
         self.inner._insert(key, value)
     }
 
@@ -155,13 +155,13 @@ where
 
     /// Similar with `insert`, but ignore the old value.
     #[inline(always)]
-    pub fn set_value(&mut self, key: K, value: V) {
+    pub fn set_value(&mut self, key: K, value: &V) {
         self.inner.set_value(key, value);
     }
 
     /// same as the funtion without the '_' prefix, but use bytes key
     #[inline(always)]
-    pub fn _set_value(&mut self, key: &[u8], value: V) {
+    pub fn _set_value(&mut self, key: &[u8], value: &V) {
         self.inner._set_value(key, value);
     }
 
@@ -294,7 +294,7 @@ where
         unsafe {
             self.hdr.set_value(
                 ManuallyDrop::take(&mut self.key),
-                ManuallyDrop::take(&mut self.value),
+                &ManuallyDrop::take(&mut self.value),
             );
         };
     }
@@ -346,7 +346,7 @@ where
     V: 'a + fmt::Debug + Serialize + DeserializeOwned,
 {
     /// Imitate the `btree_map/btree_map::Entry.or_insert(...)`.
-    pub fn or_insert(self, default: V) -> ValueMut<'a, K, V> {
+    pub fn or_insert(self, default: &V) -> ValueMut<'a, K, V> {
         if !self.hdr.contains_key(&self.key) {
             self.hdr.set_value(self.key.clone(), default);
         }

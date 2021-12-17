@@ -113,14 +113,14 @@ where
 
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
-    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+    pub fn insert(&mut self, key: K, value: &V) -> Option<V> {
         let key = convert!(&key);
         self.inner.insert(key, value)
     }
 
     /// Similar with `insert`, but ignore the old value.
     #[inline(always)]
-    pub fn set_value(&mut self, key: K, value: V) {
+    pub fn set_value(&mut self, key: K, value: &V) {
         let key = convert!(&key);
         self.inner.set_value(key, value);
     }

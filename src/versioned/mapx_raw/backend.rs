@@ -67,10 +67,10 @@ impl MapxRawVersioned {
     #[inline(always)]
     pub(super) fn init(&mut self) {
         self.branch_name_to_branch_id
-            .insert(INITIAL_BRANCH_NAME.to_vec(), INITIAL_BRANCH_ID);
-        self.branch_to_parent.insert(INITIAL_BRANCH_ID, None);
+            ._insert(INITIAL_BRANCH_NAME, &INITIAL_BRANCH_ID);
+        self.branch_to_parent.insert(INITIAL_BRANCH_ID, &None);
         self.branch_to_created_versions
-            .insert(INITIAL_BRANCH_ID, MapxOC::new());
+            .insert(INITIAL_BRANCH_ID, &MapxOC::new());
     }
 
     #[inline(always)]
@@ -165,34 +165,33 @@ impl MapxRawVersioned {
         branch_id: BranchID,
         version_id: VersionID,
     ) -> Result<Option<RawValue>> {
-        if let Some(mut changeset) = self.version_to_change_set.get_mut(&version_id) {
-            changeset.insert(key.clone(), true);
-        } else {
-            return Err(eg!("BUG: version not found"));
-        }
-
-        if let Some(mut vers) = self.branch_to_created_versions.get(&branch_id) {
-            if let Some(mut sig) = vers.get_mut(&version_id) {
-                *sig = compute_sig(&[
-                    sig.as_slice(),
-                    key.as_slice(),
-                    value.as_deref().unwrap_or_default(),
-                ]);
-            } else {
-                return Err(eg!("BUG: version not found"));
-            }
-        } else {
-            return Err(eg!("BUG: branch not found"));
-        }
+        self.version_to_change_set
+            .get_mut(&version_id)
+            .c(d!("BUG: version not found"))?
+            ._insert(&key, &true);
 
         let res = self
             .layered_kv
-            .entry(key)
-            .or_insert(MapxOC::new())
+            .entry(key.clone())
+            .or_insert(&MapxOC::new())
             .entry(branch_id)
-            .or_insert(MapxOC::new())
-            .insert(version_id, value)
+            .or_insert(&MapxOC::new())
+            .insert(version_id, &value)
             .flatten();
+
+        // value changed, then re-calculate sig
+        if res != value {
+            let mut vers = self
+                .branch_to_created_versions
+                .get(&branch_id)
+                .c(d!("BUG: branch not found"))?;
+            let mut sig = vers.get_mut(&version_id).c(d!("BUG: version not found"))?;
+            *sig = compute_sig(&[
+                sig.as_slice(),
+                key.as_slice(),
+                value.as_deref().unwrap_or_default(),
+            ]);
+        }
 
         Ok(res)
     }
@@ -463,11 +462,12 @@ impl MapxRawVersioned {
             version_name,
             &vers.last().map(|(_, s)| s).unwrap_or_default(),
         ]);
-        vers.insert(version_id, new_sig);
+        vers.insert(version_id, &new_sig);
 
         self.version_name_to_version_id
-            .insert(version_name.to_owned(), version_id);
-        self.version_to_change_set.insert(version_id, MapxOC::new());
+            .insert(version_name.to_owned(), &version_id);
+        self.version_to_change_set
+            .insert(version_id, &MapxOC::new());
 
         Ok(())
     }
@@ -658,20 +658,20 @@ impl MapxRawVersioned {
         let branch_id = VSDB.alloc_branch_id();
 
         self.branch_name_to_branch_id
-            .insert(branch_name.to_owned(), branch_id);
+            .insert(branch_name.to_owned(), &branch_id);
 
         // All new branches will have a base point,
         // the only exception is the initial branch created by system
         self.branch_to_parent.insert(
             branch_id,
-            Some(BasePoint {
+            &Some(BasePoint {
                 branch_id: base_branch_id,
                 version_id: base_version_id,
             }),
         );
 
         self.branch_to_created_versions
-            .insert(branch_id, MapxOC::new());
+            .insert(branch_id, &MapxOC::new());
 
         Ok(())
     }
@@ -796,7 +796,7 @@ impl MapxRawVersioned {
         let (last_ver_parent, last_sig_parent) = vers_created_parent.last().unwrap();
 
         for (ver, sig) in vers_created.iter() {
-            vers_created_parent.insert(ver, sig);
+            vers_created_parent.insert(ver, &sig);
 
             // `unwrap`s here should be safe
             for k in self
@@ -820,14 +820,14 @@ impl MapxRawVersioned {
 
                 key_hdr
                     .entry(*parent_id)
-                    .or_insert(MapxOC::new())
-                    .insert(ver, value);
+                    .or_insert(&MapxOC::new())
+                    .insert(ver, &value);
             }
         }
 
         // re-calcute sig, the old parent sig should be set in the first place
         let new_sig = compute_sig(&[&last_sig_parent, &last_sig]);
-        vers_created_parent.insert(max!(last_ver_parent, last_ver), new_sig);
+        vers_created_parent.insert(max!(last_ver_parent, last_ver), &new_sig);
 
         // remove outdated values
         vers_created.iter().for_each(|(k, _)| {

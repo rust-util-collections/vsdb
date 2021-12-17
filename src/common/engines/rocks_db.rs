@@ -16,7 +16,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-const DATA_SET_NUM: u8 = 4;
+const DATA_SET_NUM: u8 = 8;
 
 lazy_static! {
     static ref HDR: (DB, Vec<String>) = rocksdb_open().unwrap();
@@ -50,13 +50,20 @@ impl RocksEngine {
 
     #[inline(always)]
     fn get_upper_bound_value(&self, meta_prefix: PrefixBytes) -> Vec<u8> {
-        let mut maxvalue = meta_prefix.to_vec();
-        if self.get_max_keylen() < 32 {
-            maxvalue.extend_from_slice(&[u8::MAX; 32]);
-        } else {
-            maxvalue.extend_from_slice(&vec![u8::MAX; self.get_max_keylen()]);
+        lazy_static! {
+            static ref BUF: Vec<u8> = vec![u8::MAX; 512];
         }
-        maxvalue
+
+        let mut max_guard = meta_prefix.to_vec();
+
+        let l = self.get_max_keylen();
+        if l < 513 {
+            max_guard.extend_from_slice(&BUF[..l]);
+        } else {
+            max_guard.extend_from_slice(&vec![u8::MAX; l]);
+        }
+
+        max_guard
     }
 }
 

@@ -102,17 +102,17 @@ where
 
     /// Imitate the behavior of 'Vec<_>.push(...)'
     #[inline(always)]
-    pub fn push(&mut self, b: T) {
+    pub fn push(&mut self, b: &T) {
         self.inner.insert(self.len(), b);
     }
 
     /// Imitate the behavior of 'Vec<_>.insert()'
     #[inline(always)]
-    pub fn insert(&mut self, idx: usize, v: T) {
+    pub fn insert(&mut self, idx: usize, v: &T) {
         match self.len().cmp(&idx) {
             Ordering::Greater => {
                 self.inner.range(idx..self.len()).for_each(|(i, v)| {
-                    self.inner.insert(i + 1, v);
+                    self.inner.insert(i + 1, &v);
                 });
                 self.inner.insert(idx, v);
             }
@@ -139,7 +139,7 @@ where
             let last_idx = self.len() - 1;
             let ret = self.inner.remove(&idx).unwrap();
             self.inner.range((1 + idx)..).for_each(|(i, v)| {
-                self.inner.insert(i - 1, v);
+                self.inner.insert(i - 1, &v);
             });
             self.inner.remove(&last_idx);
             return ret;
@@ -154,7 +154,7 @@ where
             let last_idx = self.len() - 1;
             let ret = self.inner.remove(&idx).unwrap();
             if let Some(v) = self.inner.remove(&last_idx) {
-                self.inner.insert(idx, v);
+                self.inner.insert(idx, &v);
             }
             return ret;
         }
@@ -163,7 +163,7 @@ where
 
     /// Imitate the behavior of 'Vec<_>.update(idx, value)'
     #[inline(always)]
-    pub fn update(&mut self, idx: usize, b: T) -> Option<T> {
+    pub fn update(&mut self, idx: usize, b: &T) -> Option<T> {
         if idx < self.len() {
             return self.inner.insert(idx, b);
         }
