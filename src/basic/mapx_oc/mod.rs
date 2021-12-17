@@ -142,10 +142,34 @@ where
         self.inner.insert(key, value)
     }
 
+    /// same as the funtion without the '_' prefix, but use bytes key
+    #[inline(always)]
+    pub fn _insert(&mut self, key: &[u8], value: V) -> Option<V> {
+        self.inner._insert(key, value)
+    }
+
+    /// same as the funtion without the '_' prefix, but use bytes key&value
+    #[inline(always)]
+    pub fn __insert(&mut self, key: &[u8], value: &[u8]) -> Option<V> {
+        self.inner.__insert(key, value)
+    }
+
     /// Similar with `insert`, but ignore the old value.
     #[inline(always)]
     pub fn set_value(&mut self, key: K, value: V) {
         self.inner.set_value(key, value);
+    }
+
+    /// same as the funtion without the '_' prefix, but use bytes key
+    #[inline(always)]
+    pub fn _set_value(&mut self, key: &[u8], value: V) {
+        self.inner._set_value(key, value);
+    }
+
+    /// same as the funtion without the '_' prefix, but use bytes key&value
+    #[inline(always)]
+    pub fn __set_value(&mut self, key: &[u8], value: &[u8]) {
+        self.inner.__set_value(key, value);
     }
 
     /// Imitate the behavior of '.entry(...).or_insert(...)'
@@ -250,7 +274,7 @@ where
     K: OrderConsistKey,
     V: Serialize + DeserializeOwned + fmt::Debug,
 {
-    fn new(hdr: &'a mut MapxOC<K, V>, key: K, value: V) -> Self {
+    pub(crate) fn new(hdr: &'a mut MapxOC<K, V>, key: K, value: V) -> Self {
         ValueMut {
             hdr,
             key: ManuallyDrop::new(key),
@@ -326,17 +350,6 @@ where
     pub fn or_insert(self, default: V) -> ValueMut<'a, K, V> {
         if !self.hdr.contains_key(&self.key) {
             self.hdr.set_value(self.key.clone(), default);
-        }
-        pnk!(self.hdr.get_mut(&self.key))
-    }
-
-    /// Imitate the `btree_map/btree_map::Entry.or_insert_with(...)`.
-    pub fn or_insert_with<F>(self, default: F) -> ValueMut<'a, K, V>
-    where
-        F: FnOnce() -> V,
-    {
-        if !self.hdr.contains_key(&self.key) {
-            self.hdr.set_value(self.key.clone(), default());
         }
         pnk!(self.hdr.get_mut(&self.key))
     }

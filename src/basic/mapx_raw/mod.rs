@@ -219,17 +219,6 @@ impl<'a> Entry<'a> {
         }
         pnk!(self.hdr.get_mut(self.key))
     }
-
-    /// Imitate the `btree_map/btree_map::Entry.or_insert_with(...)`.
-    pub fn or_insert_with<F>(self, default: F) -> ValueMut<'a>
-    where
-        F: FnOnce() -> Vec<u8>,
-    {
-        if !self.hdr.contains_key(self.key) {
-            self.hdr.insert(self.key, &default());
-        }
-        pnk!(self.hdr.get_mut(self.key))
-    }
 }
 
 /***********************************************/

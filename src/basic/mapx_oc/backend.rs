@@ -139,11 +139,32 @@ where
             .map(|v| pnk!(bcs::from_bytes(&v)))
     }
 
-    // Similar with `insert`, but ignore if the old value is exist.
+    #[inline(always)]
+    pub(super) fn _insert(&mut self, key: &[u8], value: V) -> Option<V> {
+        self._set_value(key, value)
+            .map(|v| pnk!(bcs::from_bytes(&v)))
+    }
+
+    #[inline(always)]
+    pub(super) fn __insert(&mut self, key: &[u8], value: &[u8]) -> Option<V> {
+        self.__set_value(key, value)
+            .map(|v| pnk!(bcs::from_bytes(&v)))
+    }
+
     #[inline(always)]
     pub(super) fn set_value(&mut self, key: K, value: V) -> Option<Vec<u8>> {
         self.inner
             .insert(&key.into_bytes(), &pnk!(bcs::to_bytes(&value)))
+    }
+
+    #[inline(always)]
+    pub(super) fn _set_value(&mut self, key: &[u8], value: V) -> Option<Vec<u8>> {
+        self.inner.insert(key, &pnk!(bcs::to_bytes(&value)))
+    }
+
+    #[inline(always)]
+    pub(super) fn __set_value(&mut self, key: &[u8], value: &[u8]) -> Option<Vec<u8>> {
+        self.inner.insert(key, value)
     }
 
     #[inline(always)]

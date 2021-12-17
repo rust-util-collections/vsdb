@@ -8,17 +8,12 @@
 mod test;
 
 use crate::{
-    basic::mapx_oc::{MapxOC, MapxOCIter},
+    basic::mapx_oc::{MapxOC, MapxOCIter, ValueMut},
     common::{InstanceCfg, SimpleVisitor},
 };
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
-use std::{
-    cmp::Ordering,
-    fmt,
-    mem::ManuallyDrop,
-    ops::{Deref, DerefMut},
-};
+use std::{cmp::Ordering, fmt};
 
 /// To solve the problem of unlimited memory usage,
 /// use this to replace the original in-memory 'Vec'.
@@ -81,10 +76,10 @@ where
 
     /// Imitate the behavior of 'Vec<_>.get_mut(...)'
     #[inline(always)]
-    pub fn get_mut(&mut self, idx: usize) -> Option<ValueMut<'_, T>> {
+    pub fn get_mut(&mut self, idx: usize) -> Option<ValueMut<'_, usize, T>> {
         self.inner
             .get(&idx)
-            .map(move |v| ValueMut::new(self, idx, v))
+            .map(move |v| ValueMut::new(&mut self.inner, idx, v))
     }
 
     /// Imitate the behavior of 'Vec<_>.last()'
@@ -195,74 +190,6 @@ where
 /*******************************************/
 // End of the self-implementation for Vecx //
 /////////////////////////////////////////////
-
-//////////////////////////////////////////////////////////////////////////////////
-// Begin of the implementation of ValueMut(returned by `self.get_mut`) for Vecx //
-/********************************************************************************/
-
-/// Returned by `<Vecx>.get_mut(...)`
-#[derive(Debug)]
-pub struct ValueMut<'a, T>
-where
-    T: Serialize + DeserializeOwned + fmt::Debug,
-{
-    hdr: &'a mut Vecx<T>,
-    idx: usize,
-    value: ManuallyDrop<T>,
-}
-
-impl<'a, T> ValueMut<'a, T>
-where
-    T: Serialize + DeserializeOwned + fmt::Debug,
-{
-    fn new(hdr: &'a mut Vecx<T>, idx: usize, value: T) -> Self {
-        ValueMut {
-            hdr,
-            idx,
-            value: ManuallyDrop::new(value),
-        }
-    }
-}
-
-/// NOTE: Very Important !!!
-impl<'a, T> Drop for ValueMut<'a, T>
-where
-    T: Serialize + DeserializeOwned + fmt::Debug,
-{
-    fn drop(&mut self) {
-        // This operation is safe within a `drop()`.
-        // SEE: [**ManuallyDrop::take**](std::mem::ManuallyDrop::take)
-        unsafe {
-            self.hdr
-                .update(self.idx, ManuallyDrop::take(&mut self.value))
-                .unwrap();
-        };
-    }
-}
-
-impl<'a, T> Deref for ValueMut<'a, T>
-where
-    T: Serialize + DeserializeOwned + fmt::Debug,
-{
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.value
-    }
-}
-
-impl<'a, T> DerefMut for ValueMut<'a, T>
-where
-    T: Serialize + DeserializeOwned + fmt::Debug,
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.value
-    }
-}
-
-/******************************************************************************/
-// End of the implementation of ValueMut(returned by `self.get_mut`) for Vecx //
-////////////////////////////////////////////////////////////////////////////////
 
 //////////////////////////////////////////////////
 // Begin of the implementation of Iter for Vecx //
