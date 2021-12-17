@@ -9,7 +9,6 @@ use crate::{
 };
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
-use sled::IVec;
 use std::{
     fmt,
     marker::PhantomData,
@@ -142,7 +141,7 @@ where
 
     // Similar with `insert`, but ignore if the old value is exist.
     #[inline(always)]
-    pub(super) fn set_value(&mut self, key: K, value: V) -> Option<IVec> {
+    pub(super) fn set_value(&mut self, key: K, value: V) -> Option<Vec<u8>> {
         self.inner
             .insert(&key.into_bytes(), &pnk!(bcs::to_bytes(&value)))
     }
@@ -213,12 +212,12 @@ where
     }
 
     #[inline(always)]
-    pub(super) fn unset_value(&mut self, key: &K) -> Option<IVec> {
+    pub(super) fn unset_value(&mut self, key: &K) -> Option<Vec<u8>> {
         self.inner.remove(&key.to_bytes())
     }
 
     #[inline(always)]
-    pub(super) fn _unset_value(&mut self, key: &[u8]) -> Option<IVec> {
+    pub(super) fn _unset_value(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         self.inner.remove(key)
     }
 

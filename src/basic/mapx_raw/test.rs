@@ -16,8 +16,8 @@ fn basic_cases() {
             .map(|i: usize| (i.to_be_bytes(), i.to_be_bytes()))
             .for_each(|(i, b)| {
                 hdr_i.entry(&i).or_insert(&b);
-                assert_eq!(pnk!(hdr_i.get(&i)).as_ref(), &i);
-                assert_eq!(hdr_i.remove(&i).unwrap().as_ref(), &b);
+                assert_eq!(&hdr_i.get(&i).unwrap(), &i);
+                assert_eq!(&hdr_i.remove(&i).unwrap(), &b);
                 assert!(hdr_i.get(&i).is_none());
                 assert!(hdr_i.insert(&i, &b).is_none());
                 assert!(hdr_i.insert(&i, &b).is_some());
@@ -33,12 +33,12 @@ fn basic_cases() {
     assert_eq!(cnt, reloaded.len());
 
     (0..cnt).map(|i: usize| i.to_be_bytes()).for_each(|i| {
-        assert_eq!(&i, reloaded.get(&i).unwrap().as_ref());
+        assert_eq!(i.to_vec(), reloaded.get(&i).unwrap());
     });
 
     (1..cnt).map(|i: usize| i.to_be_bytes()).for_each(|i| {
-        *pnk!(reloaded.get_mut(&i)) = IVec::from(&i);
-        assert_eq!(pnk!(reloaded.get(&i)).as_ref(), &i);
+        *pnk!(reloaded.get_mut(&i)) = i.to_vec();
+        assert_eq!(&reloaded.get(&i).unwrap(), &i);
         assert!(reloaded.contains_key(&i));
         assert!(reloaded.remove(&i).is_some());
         assert!(!reloaded.contains_key(&i));
@@ -55,17 +55,12 @@ fn basic_cases() {
 
     assert!(reloaded.range(&[][..]..&[1][..]).next().is_none());
     assert_eq!(
-        &[4],
-        reloaded
-            .range(&[2][..]..&[10][..])
-            .next()
-            .unwrap()
-            .1
-            .as_ref()
+        vec![4],
+        reloaded.range(&[2][..]..&[10][..]).next().unwrap().1
     );
 
-    assert_eq!(&[80], reloaded.get_ge(&[79]).unwrap().1.as_ref());
-    assert_eq!(&[80], reloaded.get_ge(&[80]).unwrap().1.as_ref());
-    assert_eq!(&[80], reloaded.get_le(&[80]).unwrap().1.as_ref());
-    assert_eq!(&[80], reloaded.get_le(&[100]).unwrap().1.as_ref());
+    assert_eq!(vec![80], reloaded.get_ge(&[79]).unwrap().1);
+    assert_eq!(vec![80], reloaded.get_ge(&[80]).unwrap().1);
+    assert_eq!(vec![80], reloaded.get_le(&[80]).unwrap().1);
+    assert_eq!(vec![80], reloaded.get_le(&[100]).unwrap().1);
 }

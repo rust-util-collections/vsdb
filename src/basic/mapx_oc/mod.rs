@@ -11,7 +11,6 @@ mod test;
 use crate::common::{InstanceCfg, SimpleVisitor};
 use ruc::*;
 use serde::{de::DeserializeOwned, Serialize};
-use sled::IVec;
 use std::{
     fmt,
     mem::{size_of, transmute, ManuallyDrop},
@@ -443,18 +442,6 @@ pub trait OrderConsistKey:
     /// bytes => key
     fn from_bytes(b: Vec<u8>) -> Result<Self> {
         Self::from_slice(&b)
-    }
-}
-
-impl OrderConsistKey for IVec {
-    #[inline(always)]
-    fn to_bytes(&self) -> Vec<u8> {
-        self.to_vec()
-    }
-
-    #[inline(always)]
-    fn from_slice(b: &[u8]) -> Result<Self> {
-        Ok(IVec::from(b))
     }
 }
 

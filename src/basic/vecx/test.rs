@@ -60,7 +60,7 @@ fn basic_cases() {
 }
 
 #[test]
-fn t_alter() {
+fn write() {
     let mut hdr = Vecx::new();
 
     hdr.insert(0, 0);
@@ -86,14 +86,14 @@ fn t_alter() {
 
 #[test]
 #[should_panic]
-fn t_alter_out_of_index_0() {
+fn write_out_of_index_0() {
     let mut hdr = Vecx::new();
     hdr.insert(100, 0);
 }
 
 #[test]
 #[should_panic]
-fn t_alter_out_of_index_1() {
+fn write_out_of_index_1() {
     let mut hdr = Vecx::new();
     hdr.insert(0, 0);
     hdr.insert(100, 0);
@@ -101,7 +101,7 @@ fn t_alter_out_of_index_1() {
 
 #[test]
 #[should_panic]
-fn t_alter_out_of_index_2() {
+fn write_out_of_index_2() {
     let mut hdr = Vecx::new();
     hdr.update(100, 0);
     hdr.insert(0, 0);
@@ -109,7 +109,7 @@ fn t_alter_out_of_index_2() {
 
 #[test]
 #[should_panic]
-fn t_alter_out_of_index_3() {
+fn write_out_of_index_3() {
     let mut hdr = Vecx::new();
     hdr.insert(0, 0);
     hdr.update(100, 0);
@@ -117,7 +117,7 @@ fn t_alter_out_of_index_3() {
 
 #[test]
 #[should_panic]
-fn t_alter_out_of_index_4() {
+fn write_out_of_index_4() {
     let mut hdr = Vecx::new();
     hdr.remove(100);
     hdr.insert(0, 0);
@@ -125,7 +125,7 @@ fn t_alter_out_of_index_4() {
 
 #[test]
 #[should_panic]
-fn t_alter_out_of_index_5() {
+fn write_out_of_index_5() {
     let mut hdr = Vecx::new();
     hdr.insert(0, 0);
     hdr.remove(100);
@@ -133,7 +133,7 @@ fn t_alter_out_of_index_5() {
 
 #[test]
 #[should_panic]
-fn t_alter_out_of_index_6() {
+fn write_out_of_index_6() {
     let mut hdr = Vecx::new();
     hdr.swap_remove(100);
     hdr.insert(0, 0);
@@ -141,7 +141,7 @@ fn t_alter_out_of_index_6() {
 
 #[test]
 #[should_panic]
-fn t_alter_out_of_index_7() {
+fn write_out_of_index_7() {
     let mut hdr = Vecx::new();
     hdr.insert(0, 0);
     hdr.swap_remove(100);
