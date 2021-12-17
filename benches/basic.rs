@@ -29,7 +29,7 @@ fn bench(c: &mut Criterion) {
     });
 
     let i = AtomicUsize::new(0);
-    let mut db = vsdb::MapxOC::new();
+    let mut db = vsdb::Mapx::new();
 
     group.bench_function("mapx_write", |b| {
         b.iter(|| {

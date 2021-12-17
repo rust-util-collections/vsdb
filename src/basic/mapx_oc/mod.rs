@@ -1,10 +1,9 @@
 //!
-//! # A disk-storage replacement for the pure in-memory BTreeMap
-//!
-//! This module is non-invasive to external code except the `new` method.
+//! A disk-storage replacement for the pure in-memory BTreeMap.
 //!
 
 mod backend;
+
 #[cfg(test)]
 mod test;
 

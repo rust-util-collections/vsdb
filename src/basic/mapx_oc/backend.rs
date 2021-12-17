@@ -1,7 +1,3 @@
-//!
-//! # Disk Storage Implementation
-//!
-
 use crate::{
     basic::mapx_raw::{MapxRaw, MapxRawIter},
     common::InstanceCfg,
@@ -52,7 +48,7 @@ where
         Self {
             prefix: cfg.prefix,
             item_cnt: cfg.item_cnt,
-            data_set_idx: cfg.data_set_idx,
+            area_idx: cfg.area_idx,
         }
     }
 }
