@@ -2,14 +2,14 @@
 //! # Common components
 //!
 
+pub(crate) mod ende;
 pub(crate) mod engines;
 
 use {
-    core::{fmt, result::Result as CoreResult},
     engines::Engine,
     lazy_static::lazy_static,
     ruc::*,
-    serde::{de, Deserialize, Serialize},
+    serde::{Deserialize, Serialize},
     sha3::{Digest, Sha3_256},
     std::{
         env, fs,
@@ -134,31 +134,11 @@ pub fn vsdb_flush() {
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct InstanceCfg {
     pub(crate) prefix: PrefixBytes,
     pub(crate) item_cnt: u64,
     pub(crate) area_idx: usize,
-}
-
-//////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////
-
-pub(crate) struct SimpleVisitor;
-
-impl<'de> de::Visitor<'de> for SimpleVisitor {
-    type Value = Vec<u8>;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("Fatal !!")
-    }
-
-    fn visit_bytes<E>(self, v: &[u8]) -> CoreResult<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Ok(v.to_vec())
-    }
 }
 
 //////////////////////////////////////////////////////////////////////////

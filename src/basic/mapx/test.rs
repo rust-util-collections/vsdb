@@ -1,4 +1,6 @@
 use super::*;
+use crate::ValueEnDe;
+use ruc::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Default, Debug, Eq, PartialEq, Clone)]
@@ -39,10 +41,10 @@ fn basic_cases() {
 
         assert_eq!(cnt, hdr_i.len());
 
-        pnk!(bcs::to_bytes(&hdr_i))
+        <Mapx<usize, SampleBlock> as ValueEnDe>::encode(&hdr_i)
     };
 
-    let mut reloaded = pnk!(bcs::from_bytes::<Mapx<usize, SampleBlock>>(&hdr));
+    let mut reloaded = pnk!(<Mapx<usize, SampleBlock> as ValueEnDe>::decode(&hdr));
 
     assert_eq!(cnt, reloaded.len());
 

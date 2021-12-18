@@ -5,11 +5,16 @@
 #[cfg(test)]
 mod test;
 
-use crate::common::{engines, InstanceCfg, SimpleVisitor};
+use crate::common::{
+    ende::{SimpleVisitor, ValueEnDe},
+    engines, InstanceCfg,
+};
 use ruc::*;
+use serde::{Deserialize, Serialize};
 use std::{
     mem::ManuallyDrop,
     ops::{Deref, DerefMut, RangeBounds},
+    result::Result as StdResult,
 };
 
 /// To solve the problem of unlimited memory usage,
@@ -120,13 +125,13 @@ impl MapxRaw {
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
     pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Option<Vec<u8>> {
-        self.inner.insert(key, value).map(|iv| iv.to_vec())
+        self.inner.insert(key, value)
     }
 
     /// Try to remove an entry
     #[inline(always)]
     pub fn remove(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        self.inner.remove(key).map(|iv| iv.to_vec())
+        self.inner.remove(key)
     }
 
     /// Clear all data.
@@ -250,23 +255,23 @@ impl DoubleEndedIterator for MapxRawIter {
 // Begin of the implementation of Serialize/Deserialize for MapxRaw //
 /*****************************************************************/
 
-impl serde::Serialize for MapxRaw {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+impl Serialize for MapxRaw {
+    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        let v = pnk!(bcs::to_bytes(&self.get_instance_cfg()));
+        let v = <InstanceCfg as ValueEnDe>::encode(&self.get_instance_cfg());
         serializer.serialize_bytes(&v)
     }
 }
 
-impl<'de> serde::Deserialize<'de> for MapxRaw {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+impl<'de> Deserialize<'de> for MapxRaw {
+    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
-            let meta = pnk!(bcs::from_bytes::<InstanceCfg>(&meta));
+            let meta = pnk!(<InstanceCfg as ValueEnDe>::decode(&meta));
             MapxRaw::from(meta)
         })
     }

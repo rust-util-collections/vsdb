@@ -1,4 +1,5 @@
 use super::*;
+use crate::ValueEnDe;
 
 #[test]
 fn basic_cases() {
@@ -25,10 +26,10 @@ fn basic_cases() {
 
         assert_eq!(cnt, hdr_i.len());
 
-        pnk!(bcs::to_bytes(&hdr_i))
+        <MapxRaw as ValueEnDe>::encode(&hdr_i)
     };
 
-    let mut reloaded = pnk!(bcs::from_bytes::<MapxRaw>(&hdr));
+    let mut reloaded = pnk!(<MapxRaw as ValueEnDe>::decode(&hdr));
 
     assert_eq!(cnt, reloaded.len());
 

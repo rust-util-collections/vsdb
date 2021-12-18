@@ -7,11 +7,13 @@ mod test;
 
 use crate::{
     basic::mapx_ord::{MapxOrd, MapxOrdIter, ValueMut},
-    common::{InstanceCfg, SimpleVisitor},
+    common::{
+        ende::{SimpleVisitor, ValueEnDe},
+        InstanceCfg,
+    },
 };
 use ruc::*;
-use serde::{de::DeserializeOwned, Serialize};
-use std::{cmp::Ordering, fmt};
+use std::cmp::Ordering;
 
 /// To solve the problem of unlimited memory usage,
 /// use this to replace the original in-memory 'Vec'.
@@ -20,14 +22,14 @@ use std::{cmp::Ordering, fmt};
 #[derive(PartialEq, Eq, Debug)]
 pub struct Vecx<T>
 where
-    T: Serialize + DeserializeOwned + fmt::Debug,
+    T: ValueEnDe,
 {
     inner: MapxOrd<usize, T>,
 }
 
 impl<T> From<InstanceCfg> for Vecx<T>
 where
-    T: Serialize + DeserializeOwned + fmt::Debug,
+    T: ValueEnDe,
 {
     fn from(cfg: InstanceCfg) -> Self {
         Self {
@@ -38,7 +40,7 @@ where
 
 impl<T> Default for Vecx<T>
 where
-    T: Serialize + DeserializeOwned + fmt::Debug,
+    T: ValueEnDe,
 {
     fn default() -> Self {
         Self::new()
@@ -51,7 +53,7 @@ where
 
 impl<T> Vecx<T>
 where
-    T: Serialize + DeserializeOwned + fmt::Debug,
+    T: ValueEnDe,
 {
     /// Create an instance.
     #[inline(always)]
@@ -213,14 +215,14 @@ where
 /// Iter over [Vecx](self::Vecx).
 pub struct VecxIter<T>
 where
-    T: Serialize + DeserializeOwned + fmt::Debug,
+    T: ValueEnDe,
 {
     iter: MapxOrdIter<usize, T>,
 }
 
 impl<T> Iterator for VecxIter<T>
 where
-    T: Serialize + DeserializeOwned + fmt::Debug,
+    T: ValueEnDe,
 {
     type Item = T;
     fn next(&mut self) -> Option<Self::Item> {
@@ -230,7 +232,7 @@ where
 
 impl<T> DoubleEndedIterator for VecxIter<T>
 where
-    T: Serialize + DeserializeOwned + fmt::Debug,
+    T: ValueEnDe,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back().map(|v| v.1)
@@ -247,27 +249,27 @@ where
 
 impl<'a, T> serde::Serialize for Vecx<T>
 where
-    T: Serialize + DeserializeOwned + fmt::Debug,
+    T: ValueEnDe,
 {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        let v = pnk!(bcs::to_bytes(&self.get_instance_cfg()));
+        let v = <InstanceCfg as ValueEnDe>::encode(&self.get_instance_cfg());
         serializer.serialize_bytes(&v)
     }
 }
 
 impl<'de, T> serde::Deserialize<'de> for Vecx<T>
 where
-    T: Serialize + DeserializeOwned + fmt::Debug,
+    T: ValueEnDe,
 {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
-            let meta = pnk!(bcs::from_bytes::<InstanceCfg>(&meta));
+            let meta = pnk!(<InstanceCfg as ValueEnDe>::decode(&meta));
             Vecx::from(meta)
         })
     }

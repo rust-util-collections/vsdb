@@ -61,14 +61,14 @@ fn bench(c: &mut Criterion) {
     group.bench_function("Versioned_Mapx_write", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
-            db.insert(vec![n; 2], vec![n; 128]).unwrap();
+            db.insert_ref(&[n; 2], &[n; 128]).unwrap();
         })
     });
 
     group.bench_function("Versioned_Mapx_rw", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
-            db.insert(vec![n; 2], vec![n; 128]).unwrap();
+            db.insert_ref(&[n; 2], &[n; 128]).unwrap();
             db.get(&[n; 2]);
         })
     });
@@ -76,7 +76,7 @@ fn bench(c: &mut Criterion) {
     group.bench_function("Versioned_Mapx_rw_write_back", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
-            db.insert(vec![n; 2], vec![n; 128]).unwrap();
+            db.insert_ref(&[n; 2], &[n; 128]).unwrap();
             *db.get_mut(&[n; 2]).unwrap() = vec![n; 1];
         })
     });

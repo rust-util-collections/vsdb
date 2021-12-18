@@ -1,4 +1,5 @@
 use super::*;
+use crate::ValueEnDe;
 
 #[test]
 fn basic_cases() {
@@ -16,20 +17,20 @@ fn basic_cases() {
         (0..cnt)
             .map(|i: usize| (i.to_be_bytes(), i.to_be_bytes()))
             .for_each(|(i, b)| {
-                hdr_i.insert(i.to_vec(), b.to_vec()).unwrap();
+                hdr_i.insert_ref(&i, &b).unwrap();
                 assert_eq!(&hdr_i.get(&i).unwrap(), &i);
                 assert_eq!(&hdr_i.remove(&i).unwrap().unwrap(), &b);
                 assert!(hdr_i.get(&i).is_none());
-                assert!(hdr_i.insert(i.to_vec(), b.to_vec()).unwrap().is_none());
-                assert!(hdr_i.insert(i.to_vec(), b.to_vec()).unwrap().is_some());
+                assert!(hdr_i.insert_ref(&i, &b).unwrap().is_none());
+                assert!(hdr_i.insert_ref(&i, &b).unwrap().is_some());
             });
 
         assert_eq!(cnt, hdr_i.len());
 
-        pnk!(bcs::to_bytes(&hdr_i))
+        <MapxRawVersioned as ValueEnDe>::encode(&hdr_i)
     };
 
-    let mut reloaded = pnk!(bcs::from_bytes::<MapxRawVersioned>(&hdr));
+    let mut reloaded = pnk!(<MapxRawVersioned as ValueEnDe>::decode(&hdr));
 
     assert_eq!(cnt, reloaded.len());
 
@@ -51,13 +52,16 @@ fn basic_cases() {
 
     reloaded.version_create(b"test2").unwrap();
 
-    reloaded.insert(vec![1], vec![1]).unwrap();
-    reloaded.insert(vec![4], vec![4]).unwrap();
-    reloaded.insert(vec![6], vec![6]).unwrap();
-    reloaded.insert(vec![80], vec![80]).unwrap();
+    reloaded.insert_ref(&[1], &[1]).unwrap();
+    reloaded.insert_ref(&[4], &[4]).unwrap();
+    reloaded.insert_ref(&[6], &[6]).unwrap();
+    reloaded.insert_ref(&[80], &[80]).unwrap();
 
-    assert!(reloaded.range(vec![]..vec![1]).next().is_none());
-    assert_eq!(vec![4], reloaded.range(vec![2]..vec![10]).next().unwrap().1);
+    assert!(reloaded.range(&[][..]..&[1][..]).next().is_none());
+    assert_eq!(
+        vec![4],
+        reloaded.range(&[2][..]..&[10][..]).next().unwrap().1
+    );
 
     assert_eq!(vec![80], reloaded.get_ge(&[79]).unwrap().1);
     assert_eq!(vec![80], reloaded.get_ge(&[80]).unwrap().1);

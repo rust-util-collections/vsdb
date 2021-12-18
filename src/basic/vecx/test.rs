@@ -1,3 +1,4 @@
+use crate::ValueEnDe;
 use crate::Vecx;
 use ruc::*;
 use serde::{Deserialize, Serialize};
@@ -36,10 +37,10 @@ fn basic_cases() {
 
         assert_eq!(cnt, hdr.len());
 
-        pnk!(bcs::to_bytes(&hdr))
+        <Vecx<SampleBlock> as ValueEnDe>::encode(&hdr)
     };
 
-    let mut reloaded = pnk!(bcs::from_bytes::<Vecx<SampleBlock>>(&hdr));
+    let mut reloaded = pnk!(<Vecx<SampleBlock> as ValueEnDe>::decode(&hdr));
 
     (0..cnt).for_each(|i| {
         assert_eq!(i, reloaded.get(i).unwrap().idx);

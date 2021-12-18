@@ -1,4 +1,5 @@
 use super::*;
+use crate::ValueEnDe;
 use serde::{Deserialize, Serialize};
 use std::ops::Bound;
 
@@ -40,10 +41,10 @@ fn basic_cases() {
 
         assert_eq!(cnt, hdr_i.len());
 
-        pnk!(bcs::to_bytes(&hdr_i))
+        <MapxOrd<usize, SampleBlock> as ValueEnDe>::encode(&hdr_i)
     };
 
-    let mut reloaded = pnk!(bcs::from_bytes::<MapxOrd<usize, SampleBlock>>(&hdr));
+    let mut reloaded = pnk!(<MapxOrd<usize, SampleBlock> as ValueEnDe>::decode(&hdr));
 
     assert_eq!(cnt, reloaded.len());
 

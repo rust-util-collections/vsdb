@@ -7,13 +7,16 @@ mod backend;
 #[cfg(test)]
 mod test;
 
-use crate::common::{InstanceCfg, SimpleVisitor};
+use crate::common::{
+    ende::{OrderedKeyEnDe, SimpleVisitor, ValueEnDe},
+    InstanceCfg,
+};
 use ruc::*;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Deserialize, Serialize};
 use std::{
-    fmt,
-    mem::{size_of, transmute, ManuallyDrop},
-    ops::{Deref, DerefMut, RangeBounds},
+    mem::ManuallyDrop,
+    ops::{Bound, Deref, DerefMut, RangeBounds},
+    result::Result as StdResult,
 };
 
 /// To solve the problem of unlimited memory usage,
@@ -21,16 +24,16 @@ use std::{
 #[derive(PartialEq, Eq, Debug)]
 pub struct MapxOrd<K, V>
 where
-    K: OrderConsistKey,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: OrderedKeyEnDe,
+    V: ValueEnDe,
 {
     inner: backend::MapxOrd<K, V>,
 }
 
 impl<K, V> From<InstanceCfg> for MapxOrd<K, V>
 where
-    K: OrderConsistKey,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: OrderedKeyEnDe,
+    V: ValueEnDe,
 {
     fn from(cfg: InstanceCfg) -> Self {
         Self {
@@ -41,8 +44,8 @@ where
 
 impl<K, V> Default for MapxOrd<K, V>
 where
-    K: OrderConsistKey,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: OrderedKeyEnDe,
+    V: ValueEnDe,
 {
     fn default() -> Self {
         Self::new()
@@ -55,8 +58,8 @@ where
 
 impl<K, V> MapxOrd<K, V>
 where
-    K: OrderConsistKey,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: OrderedKeyEnDe,
+    V: ValueEnDe,
 {
     /// Create an instance.
     #[inline(always)]
@@ -162,7 +165,7 @@ where
     /// Similar with `insert`, but ignore the old value.
     #[inline(always)]
     pub fn set_value(&mut self, key: K, value: V) {
-        self.set_value_ref(&key, &value)
+        self.set_value_ref(&key, &value);
     }
 
     #[inline(always)]
@@ -195,6 +198,15 @@ where
         EntryRef { key, hdr: self }
     }
 
+    #[inline(always)]
+    #[allow(missing_docs)]
+    pub fn entry_ref_bytes_key<'a>(
+        &'a mut self,
+        key: &'a [u8],
+    ) -> EntryRefBytesKey<'a, K, V> {
+        EntryRefBytesKey { key, hdr: self }
+    }
+
     /// Imitate the behavior of '.iter()'
     #[inline(always)]
     pub fn iter(&self) -> MapxOrdIter<K, V> {
@@ -206,6 +218,52 @@ where
     /// range(start..end)
     #[inline(always)]
     pub fn range<R: RangeBounds<K>>(&self, bounds: R) -> MapxOrdIter<K, V> {
+        self.range_ref((bounds.start_bound(), bounds.end_bound()))
+    }
+
+    /// range(start..end)
+    #[inline(always)]
+    pub fn range_ref<'a, R: RangeBounds<&'a K>>(
+        &'a self,
+        bounds: R,
+    ) -> MapxOrdIter<K, V> {
+        let ll;
+        let l = match bounds.start_bound() {
+            Bound::Included(lo) => {
+                ll = lo.to_bytes();
+                Bound::Included(ll.as_slice())
+            }
+            Bound::Excluded(lo) => {
+                ll = lo.to_bytes();
+                Bound::Excluded(ll.as_slice())
+            }
+            Bound::Unbounded => Bound::Unbounded,
+        };
+
+        let hh;
+        let h = match bounds.end_bound() {
+            Bound::Included(hi) => {
+                hh = hi.to_bytes();
+                Bound::Included(hh.as_slice())
+            }
+            Bound::Excluded(hi) => {
+                hh = hi.to_bytes();
+                Bound::Excluded(hh.as_slice())
+            }
+            Bound::Unbounded => Bound::Unbounded,
+        };
+
+        MapxOrdIter {
+            iter: self.inner.range((l, h)),
+        }
+    }
+
+    /// range(start..end)
+    #[inline(always)]
+    pub fn range_ref_bytes_k<'a, R: RangeBounds<&'a [u8]>>(
+        &'a self,
+        bounds: R,
+    ) -> MapxOrdIter<K, V> {
         MapxOrdIter {
             iter: self.inner.range(bounds),
         }
@@ -278,8 +336,8 @@ where
 #[derive(Debug)]
 pub struct ValueMut<'a, K, V>
 where
-    K: OrderConsistKey,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: OrderedKeyEnDe,
+    V: ValueEnDe,
 {
     hdr: &'a mut MapxOrd<K, V>,
     key: ManuallyDrop<K>,
@@ -288,8 +346,8 @@ where
 
 impl<'a, K, V> ValueMut<'a, K, V>
 where
-    K: OrderConsistKey,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: OrderedKeyEnDe,
+    V: ValueEnDe,
 {
     pub(crate) fn new(hdr: &'a mut MapxOrd<K, V>, key: K, value: V) -> Self {
         ValueMut {
@@ -303,8 +361,8 @@ where
 /// NOTE: Very Important !!!
 impl<'a, K, V> Drop for ValueMut<'a, K, V>
 where
-    K: OrderConsistKey,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: OrderedKeyEnDe,
+    V: ValueEnDe,
 {
     fn drop(&mut self) {
         // This operation is safe within a `drop()`.
@@ -320,8 +378,8 @@ where
 
 impl<'a, K, V> Deref for ValueMut<'a, K, V>
 where
-    K: OrderConsistKey,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: OrderedKeyEnDe,
+    V: ValueEnDe,
 {
     type Target = V;
 
@@ -332,8 +390,8 @@ where
 
 impl<'a, K, V> DerefMut for ValueMut<'a, K, V>
 where
-    K: OrderConsistKey,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: OrderedKeyEnDe,
+    V: ValueEnDe,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.value
@@ -351,8 +409,8 @@ where
 /// Imitate the `btree_map/btree_map::Entry`.
 pub struct Entry<'a, K, V>
 where
-    K: OrderConsistKey,
-    V: 'a + fmt::Debug + Serialize + DeserializeOwned,
+    K: OrderedKeyEnDe,
+    V: 'a + ValueEnDe,
 {
     key: K,
     hdr: &'a mut MapxOrd<K, V>,
@@ -360,8 +418,8 @@ where
 
 impl<'a, K, V> Entry<'a, K, V>
 where
-    K: OrderConsistKey,
-    V: fmt::Debug + Serialize + DeserializeOwned,
+    K: OrderedKeyEnDe,
+    V: ValueEnDe,
 {
     /// Imitate the `btree_map/btree_map::Entry.or_insert(...)`.
     pub fn or_insert(self, default: V) -> ValueMut<'a, K, V> {
@@ -372,11 +430,11 @@ where
     }
 }
 
-/// Imitate the `btree_map/btree_map::Entry`.
+#[allow(missing_docs)]
 pub struct EntryRef<'a, K, V>
 where
-    K: OrderConsistKey,
-    V: fmt::Debug + Serialize + DeserializeOwned,
+    K: OrderedKeyEnDe,
+    V: ValueEnDe,
 {
     key: &'a K,
     hdr: &'a mut MapxOrd<K, V>,
@@ -384,8 +442,8 @@ where
 
 impl<'a, K, V> EntryRef<'a, K, V>
 where
-    K: OrderConsistKey,
-    V: fmt::Debug + Serialize + DeserializeOwned,
+    K: OrderedKeyEnDe,
+    V: ValueEnDe,
 {
     /// Imitate the `btree_map/btree_map::Entry.or_insert(...)`.
     pub fn or_insert_ref(self, default: &V) -> ValueMut<'a, K, V> {
@@ -393,6 +451,30 @@ where
             self.hdr.set_value_ref(self.key, default);
         }
         pnk!(self.hdr.get_mut(self.key))
+    }
+}
+
+#[allow(missing_docs)]
+pub struct EntryRefBytesKey<'a, K, V>
+where
+    K: OrderedKeyEnDe,
+    V: ValueEnDe,
+{
+    key: &'a [u8],
+    hdr: &'a mut MapxOrd<K, V>,
+}
+
+impl<'a, K, V> EntryRefBytesKey<'a, K, V>
+where
+    K: OrderedKeyEnDe,
+    V: ValueEnDe,
+{
+    /// Imitate the `btree_map/btree_map::Entry.or_insert(...)`.
+    pub fn or_insert_ref(self, default: &V) -> ValueMut<'a, K, V> {
+        if !self.hdr.contains_key_ref_bytes_k(self.key) {
+            self.hdr.set_value_ref_bytes_k(self.key, default);
+        }
+        pnk!(self.hdr.get_mut_ref_bytes_k(self.key))
     }
 }
 
@@ -407,16 +489,16 @@ where
 /// Iter over [MapxOrd](self::MapxOrd).
 pub struct MapxOrdIter<K, V>
 where
-    K: OrderConsistKey,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: OrderedKeyEnDe,
+    V: ValueEnDe,
 {
     iter: backend::MapxOrdIter<K, V>,
 }
 
 impl<K, V> Iterator for MapxOrdIter<K, V>
 where
-    K: OrderConsistKey,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: OrderedKeyEnDe,
+    V: ValueEnDe,
 {
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
@@ -426,8 +508,8 @@ where
 
 impl<K, V> DoubleEndedIterator for MapxOrdIter<K, V>
 where
-    K: OrderConsistKey,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: OrderedKeyEnDe,
+    V: ValueEnDe,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back()
@@ -442,31 +524,30 @@ where
 // Begin of the implementation of Serialize/Deserialize for MapxOrd //
 /*****************************************************************/
 
-impl<K, V> serde::Serialize for MapxOrd<K, V>
+impl<K, V> Serialize for MapxOrd<K, V>
 where
-    K: OrderConsistKey,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: OrderedKeyEnDe,
+    V: ValueEnDe,
 {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        let v = pnk!(bcs::to_bytes(&self.get_instance_cfg()));
-        serializer.serialize_bytes(&v)
+        serializer.serialize_bytes(&self.get_instance_cfg().encode())
     }
 }
 
-impl<'de, K, V> serde::Deserialize<'de> for MapxOrd<K, V>
+impl<'de, K, V> Deserialize<'de> for MapxOrd<K, V>
 where
-    K: OrderConsistKey,
-    V: Serialize + DeserializeOwned + fmt::Debug,
+    K: OrderedKeyEnDe,
+    V: ValueEnDe,
 {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
-            let meta = pnk!(bcs::from_bytes::<InstanceCfg>(&meta));
+            let meta = pnk!(<InstanceCfg as ValueEnDe>::decode(&meta));
             MapxOrd::from(meta)
         })
     }
@@ -475,218 +556,3 @@ where
 /***************************************************************/
 // End of the implementation of Serialize/Deserialize for MapxOrd //
 /////////////////////////////////////////////////////////////////
-
-//////////////////////////////////////////////////////////////////////////
-
-/// Key's order in bytes format is consistent with the original data format
-pub trait OrderConsistKey:
-    Clone + PartialEq + Eq + PartialOrd + Ord + fmt::Debug
-{
-    /// &key => bytes
-    fn to_bytes(&self) -> Vec<u8>;
-
-    /// key => bytes
-    fn into_bytes(self) -> Vec<u8> {
-        self.to_bytes()
-    }
-
-    /// &bytes => key
-    fn from_slice(b: &[u8]) -> Result<Self>;
-
-    /// bytes => key
-    fn from_bytes(b: Vec<u8>) -> Result<Self> {
-        Self::from_slice(&b)
-    }
-}
-
-impl OrderConsistKey for Vec<u8> {
-    #[inline(always)]
-    fn to_bytes(&self) -> Vec<u8> {
-        self.clone()
-    }
-
-    #[inline(always)]
-    fn into_bytes(self) -> Vec<u8> {
-        self
-    }
-
-    #[inline(always)]
-    fn from_slice(b: &[u8]) -> Result<Self> {
-        Ok(b.to_vec())
-    }
-
-    #[inline(always)]
-    fn from_bytes(b: Vec<u8>) -> Result<Self> {
-        Ok(b)
-    }
-}
-
-impl OrderConsistKey for String {
-    #[inline(always)]
-    fn to_bytes(&self) -> Vec<u8> {
-        self.as_bytes().to_vec()
-    }
-
-    #[inline(always)]
-    fn into_bytes(self) -> Vec<u8> {
-        self.into_bytes()
-    }
-
-    #[inline(always)]
-    fn from_slice(b: &[u8]) -> Result<Self> {
-        String::from_utf8(b.to_owned()).c(d!())
-    }
-
-    #[inline(always)]
-    fn from_bytes(b: Vec<u8>) -> Result<Self> {
-        String::from_utf8(b).c(d!())
-    }
-}
-
-macro_rules! impl_type {
-    ($int: ty) => {
-        impl OrderConsistKey for $int {
-            #[inline(always)]
-            fn to_bytes(&self) -> Vec<u8> {
-                self.to_be_bytes().to_vec()
-            }
-            #[inline(always)]
-            fn from_slice(b: &[u8]) -> Result<Self> {
-                <[u8; size_of::<$int>()]>::try_from(b)
-                    .c(d!())
-                    .map(<$int>::from_be_bytes)
-            }
-        }
-    };
-    (@$int: ty) => {
-        #[allow(clippy::unsound_collection_transmute)]
-        impl OrderConsistKey for Vec<$int> {
-            #[inline(always)]
-            fn to_bytes(&self) -> Vec<u8> {
-                self.iter().map(|i| i.to_be_bytes()).flatten().collect()
-            }
-            #[inline(always)]
-            fn into_bytes(mut self) -> Vec<u8> {
-                for i in 0..self.len() {
-                    self[i] = self[i].to_be();
-                }
-                unsafe {
-                    let mut v = transmute::<Vec<$int>, Vec<u8>>(self);
-                    v.set_len(v.len() * size_of::<$int>());
-                    v
-                }
-            }
-            #[inline(always)]
-            fn from_slice(b: &[u8]) -> Result<Self> {
-                if 0 != b.len() % size_of::<$int>() {
-                    return Err(eg!("invalid bytes"));
-                }
-                b.chunks(size_of::<$int>())
-                    .map(|i| {
-                        <[u8; size_of::<$int>()]>::try_from(i)
-                            .c(d!())
-                            .map(<$int>::from_be_bytes)
-                    })
-                    .collect()
-            }
-            #[inline(always)]
-            fn from_bytes(b: Vec<u8>) -> Result<Self> {
-                if 0 != b.len() % size_of::<$int>() {
-                    return Err(eg!("invalid bytes"));
-                }
-                let mut ret = unsafe {
-                    let mut v = transmute::<Vec<u8>, Vec<$int>>(b);
-                    v.set_len(v.len() / size_of::<$int>());
-                    v
-                };
-                for i in 0..ret.len() {
-                    ret[i] = <$int>::from_be(ret[i]);
-                }
-                Ok(ret)
-            }
-        }
-    };
-    ($int: ty, $siz: expr) => {
-        impl OrderConsistKey for [$int; $siz] {
-            #[inline(always)]
-            fn to_bytes(&self) -> Vec<u8> {
-                self.iter().map(|i| i.to_be_bytes()).flatten().collect()
-            }
-            #[inline(always)]
-            fn from_slice(b: &[u8]) -> Result<Self> {
-                if 0 != b.len() % size_of::<$int>() {
-                    return Err(eg!("invalid bytes"));
-                }
-                if $siz != b.len() / size_of::<$int>() {
-                    return Err(eg!("invalid bytes"));
-                }
-                let mut res = [0; $siz];
-                b.chunks(size_of::<$int>())
-                    .enumerate()
-                    .for_each(|(idx, i)| {
-                        res[idx] = <[u8; size_of::<$int>()]>::try_from(i)
-                            .map(<$int>::from_be_bytes)
-                            .unwrap();
-                    });
-                Ok(res)
-            }
-        }
-    };
-}
-
-impl_type!(i8);
-impl_type!(i16);
-impl_type!(i32);
-impl_type!(i64);
-impl_type!(i128);
-impl_type!(isize);
-impl_type!(u8);
-impl_type!(u16);
-impl_type!(u32);
-impl_type!(u64);
-impl_type!(u128);
-impl_type!(usize);
-
-impl_type!(@i8);
-impl_type!(@i16);
-impl_type!(@i32);
-impl_type!(@i64);
-impl_type!(@i128);
-impl_type!(@isize);
-// impl_type!(@u8);
-impl_type!(@u16);
-impl_type!(@u32);
-impl_type!(@u64);
-impl_type!(@u128);
-impl_type!(@usize);
-
-macro_rules! impl_repeat {
-    ($i: expr) => {
-        impl_type!(i8, $i);
-        impl_type!(i16, $i);
-        impl_type!(i32, $i);
-        impl_type!(i64, $i);
-        impl_type!(i128, $i);
-        impl_type!(isize, $i);
-        impl_type!(u8, $i);
-        impl_type!(u16, $i);
-        impl_type!(u32, $i);
-        impl_type!(u64, $i);
-        impl_type!(u128, $i);
-        impl_type!(usize, $i);
-    };
-    ($i: expr, $($ii: expr),+) => {
-        impl_repeat!($i);
-        impl_repeat!($($ii), +);
-    };
-}
-
-impl_repeat!(
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-    24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
-    45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65,
-    66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86,
-    87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105,
-    106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122,
-    123, 124, 125, 126, 127, 128
-);
