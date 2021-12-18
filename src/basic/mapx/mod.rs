@@ -113,16 +113,28 @@ where
 
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
-    pub fn insert(&mut self, key: K, value: &V) -> Option<V> {
-        let key = convert!(&key);
-        self.inner.insert(key, value)
+    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+        self.insert_ref(&key, &value)
+    }
+
+    #[inline(always)]
+    #[allow(missing_docs)]
+    pub fn insert_ref(&mut self, key: &K, value: &V) -> Option<V> {
+        let key = convert!(key);
+        self.inner.insert_ref(&key, value)
     }
 
     /// Similar with `insert`, but ignore the old value.
     #[inline(always)]
-    pub fn set_value(&mut self, key: K, value: &V) {
-        let key = convert!(&key);
-        self.inner.set_value(key, value);
+    pub fn set_value(&mut self, key: K, value: V) {
+        self.set_value_ref(&key, &value)
+    }
+
+    #[inline(always)]
+    #[allow(missing_docs)]
+    pub fn set_value_ref(&mut self, key: &K, value: &V) {
+        let key = convert!(key);
+        self.inner.set_value_ref(&key, value);
     }
 
     /// Imitate the behavior of '.entry(...).or_insert(...)'

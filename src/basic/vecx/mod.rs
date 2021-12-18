@@ -102,22 +102,34 @@ where
 
     /// Imitate the behavior of 'Vec<_>.push(...)'
     #[inline(always)]
-    pub fn push(&mut self, b: &T) {
-        self.inner.insert(self.len(), b);
+    pub fn push(&mut self, v: T) {
+        self.push_ref(&v)
+    }
+
+    #[inline(always)]
+    #[allow(missing_docs)]
+    pub fn push_ref(&mut self, v: &T) {
+        self.inner.insert_ref(&self.len(), v);
     }
 
     /// Imitate the behavior of 'Vec<_>.insert()'
     #[inline(always)]
-    pub fn insert(&mut self, idx: usize, v: &T) {
+    pub fn insert(&mut self, idx: usize, v: T) {
+        self.insert_ref(idx, &v)
+    }
+
+    #[inline(always)]
+    #[allow(missing_docs)]
+    pub fn insert_ref(&mut self, idx: usize, v: &T) {
         match self.len().cmp(&idx) {
             Ordering::Greater => {
-                self.inner.range(idx..self.len()).for_each(|(i, v)| {
-                    self.inner.insert(i + 1, &v);
+                self.inner.range(idx..self.len()).for_each(|(i, iv)| {
+                    self.inner.insert(i + 1, iv);
                 });
-                self.inner.insert(idx, v);
+                self.inner.insert_ref(&idx, v);
             }
             Ordering::Equal => {
-                self.push(v);
+                self.push_ref(v);
             }
             Ordering::Less => {
                 panic!("out of index");
@@ -139,7 +151,7 @@ where
             let last_idx = self.len() - 1;
             let ret = self.inner.remove(&idx).unwrap();
             self.inner.range((1 + idx)..).for_each(|(i, v)| {
-                self.inner.insert(i - 1, &v);
+                self.inner.insert(i - 1, v);
             });
             self.inner.remove(&last_idx);
             return ret;
@@ -154,7 +166,7 @@ where
             let last_idx = self.len() - 1;
             let ret = self.inner.remove(&idx).unwrap();
             if let Some(v) = self.inner.remove(&last_idx) {
-                self.inner.insert(idx, &v);
+                self.inner.insert(idx, v);
             }
             return ret;
         }
@@ -162,10 +174,15 @@ where
     }
 
     /// Imitate the behavior of 'Vec<_>.update(idx, value)'
+    pub fn update(&mut self, idx: usize, v: T) -> Option<T> {
+        self.update_ref(idx, &v)
+    }
+
     #[inline(always)]
-    pub fn update(&mut self, idx: usize, b: &T) -> Option<T> {
+    #[allow(missing_docs)]
+    pub fn update_ref(&mut self, idx: usize, v: &T) -> Option<T> {
         if idx < self.len() {
-            return self.inner.insert(idx, b);
+            return self.inner.insert_ref(&idx, v);
         }
         panic!("out of index");
     }

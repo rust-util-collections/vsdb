@@ -95,28 +95,28 @@ where
     pub(super) fn get_le(&self, key: &K) -> Option<(K, V)> {
         self.inner
             .get_le(&key.to_bytes())
-            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(bcs::from_bytes(&v))))
+            .map(|(k, v)| (pnk!(K::from_bytes(k)), pnk!(bcs::from_bytes(&v))))
     }
 
     #[inline(always)]
     pub(super) fn get_le_ref_bytes_k(&self, key: &[u8]) -> Option<(K, V)> {
         self.inner
             .get_le(key)
-            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(bcs::from_bytes(&v))))
+            .map(|(k, v)| (pnk!(K::from_bytes(k)), pnk!(bcs::from_bytes(&v))))
     }
 
     #[inline(always)]
     pub(super) fn get_ge(&self, key: &K) -> Option<(K, V)> {
         self.inner
             .get_ge(&key.to_bytes())
-            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(bcs::from_bytes(&v))))
+            .map(|(k, v)| (pnk!(K::from_bytes(k)), pnk!(bcs::from_bytes(&v))))
     }
 
     #[inline(always)]
     pub(super) fn get_ge_ref_bytes_k(&self, key: &[u8]) -> Option<(K, V)> {
         self.inner
             .get_ge(key)
-            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(bcs::from_bytes(&v))))
+            .map(|(k, v)| (pnk!(K::from_bytes(k)), pnk!(bcs::from_bytes(&v))))
     }
 
     #[inline(always)]
@@ -130,8 +130,8 @@ where
     }
 
     #[inline(always)]
-    pub(super) fn insert(&mut self, key: K, value: &V) -> Option<V> {
-        self.set_value(key, value)
+    pub(super) fn insert_ref(&mut self, key: &K, value: &V) -> Option<V> {
+        self.set_value_ref(key, value)
             .map(|v| pnk!(bcs::from_bytes(&v)))
     }
 
@@ -148,9 +148,9 @@ where
     }
 
     #[inline(always)]
-    pub(super) fn set_value(&mut self, key: K, value: &V) -> Option<Vec<u8>> {
+    pub(super) fn set_value_ref(&mut self, key: &K, value: &V) -> Option<Vec<u8>> {
         self.inner
-            .insert(&key.into_bytes(), &pnk!(bcs::to_bytes(value)))
+            .insert(&key.to_bytes(), &pnk!(bcs::to_bytes(value)))
     }
 
     #[inline(always)]
@@ -281,7 +281,7 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         self.iter
             .next()
-            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(bcs::from_bytes(&v))))
+            .map(|(k, v)| (pnk!(K::from_bytes(k)), pnk!(bcs::from_bytes(&v))))
     }
 }
 
@@ -293,7 +293,7 @@ where
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter
             .next_back()
-            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(bcs::from_bytes(&v))))
+            .map(|(k, v)| (pnk!(K::from_bytes(k)), pnk!(bcs::from_bytes(&v))))
     }
 }
 

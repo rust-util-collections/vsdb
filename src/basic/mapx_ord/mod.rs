@@ -137,8 +137,14 @@ where
 
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
-    pub fn insert(&mut self, key: K, value: &V) -> Option<V> {
-        self.inner.insert(key, value)
+    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+        self.insert_ref(&key, &value)
+    }
+
+    #[inline(always)]
+    #[allow(missing_docs)]
+    pub fn insert_ref(&mut self, key: &K, value: &V) -> Option<V> {
+        self.inner.insert_ref(key, value)
     }
 
     /// same as the funtion without the '_' prefix, but use bytes key
@@ -155,8 +161,14 @@ where
 
     /// Similar with `insert`, but ignore the old value.
     #[inline(always)]
-    pub fn set_value(&mut self, key: K, value: &V) {
-        self.inner.set_value(key, value);
+    pub fn set_value(&mut self, key: K, value: V) {
+        self.set_value_ref(&key, &value)
+    }
+
+    #[inline(always)]
+    #[allow(missing_docs)]
+    pub fn set_value_ref(&mut self, key: &K, value: &V) {
+        self.inner.set_value_ref(key, value);
     }
 
     /// same as the funtion without the '_' prefix, but use bytes key
@@ -175,6 +187,12 @@ where
     #[inline(always)]
     pub fn entry(&mut self, key: K) -> Entry<'_, K, V> {
         Entry { key, hdr: self }
+    }
+
+    #[inline(always)]
+    #[allow(missing_docs)]
+    pub fn entry_ref<'a>(&'a mut self, key: &'a K) -> EntryRef<'a, K, V> {
+        EntryRef { key, hdr: self }
     }
 
     /// Imitate the behavior of '.iter()'
@@ -294,7 +312,7 @@ where
         unsafe {
             self.hdr.set_value(
                 ManuallyDrop::take(&mut self.key),
-                &ManuallyDrop::take(&mut self.value),
+                ManuallyDrop::take(&mut self.value),
             );
         };
     }
@@ -343,14 +361,38 @@ where
 impl<'a, K, V> Entry<'a, K, V>
 where
     K: OrderConsistKey,
-    V: 'a + fmt::Debug + Serialize + DeserializeOwned,
+    V: fmt::Debug + Serialize + DeserializeOwned,
 {
     /// Imitate the `btree_map/btree_map::Entry.or_insert(...)`.
-    pub fn or_insert(self, default: &V) -> ValueMut<'a, K, V> {
+    pub fn or_insert(self, default: V) -> ValueMut<'a, K, V> {
         if !self.hdr.contains_key(&self.key) {
-            self.hdr.set_value(self.key.clone(), default);
+            self.hdr.set_value_ref(&self.key, &default);
         }
         pnk!(self.hdr.get_mut(&self.key))
+    }
+}
+
+/// Imitate the `btree_map/btree_map::Entry`.
+pub struct EntryRef<'a, K, V>
+where
+    K: OrderConsistKey,
+    V: fmt::Debug + Serialize + DeserializeOwned,
+{
+    key: &'a K,
+    hdr: &'a mut MapxOrd<K, V>,
+}
+
+impl<'a, K, V> EntryRef<'a, K, V>
+where
+    K: OrderConsistKey,
+    V: fmt::Debug + Serialize + DeserializeOwned,
+{
+    /// Imitate the `btree_map/btree_map::Entry.or_insert(...)`.
+    pub fn or_insert_ref(self, default: &V) -> ValueMut<'a, K, V> {
+        if !self.hdr.contains_key(self.key) {
+            self.hdr.set_value_ref(self.key, default);
+        }
+        pnk!(self.hdr.get_mut(self.key))
     }
 }
 
@@ -501,7 +543,7 @@ impl OrderConsistKey for String {
     }
 }
 
-macro_rules! impl_ordk {
+macro_rules! impl_type {
     ($int: ty) => {
         impl OrderConsistKey for $int {
             #[inline(always)]
@@ -592,46 +634,46 @@ macro_rules! impl_ordk {
     };
 }
 
-impl_ordk!(i8);
-impl_ordk!(i16);
-impl_ordk!(i32);
-impl_ordk!(i64);
-impl_ordk!(i128);
-impl_ordk!(isize);
-impl_ordk!(u8);
-impl_ordk!(u16);
-impl_ordk!(u32);
-impl_ordk!(u64);
-impl_ordk!(u128);
-impl_ordk!(usize);
+impl_type!(i8);
+impl_type!(i16);
+impl_type!(i32);
+impl_type!(i64);
+impl_type!(i128);
+impl_type!(isize);
+impl_type!(u8);
+impl_type!(u16);
+impl_type!(u32);
+impl_type!(u64);
+impl_type!(u128);
+impl_type!(usize);
 
-impl_ordk!(@i8);
-impl_ordk!(@i16);
-impl_ordk!(@i32);
-impl_ordk!(@i64);
-impl_ordk!(@i128);
-impl_ordk!(@isize);
-// impl_ordk!(@u8);
-impl_ordk!(@u16);
-impl_ordk!(@u32);
-impl_ordk!(@u64);
-impl_ordk!(@u128);
-impl_ordk!(@usize);
+impl_type!(@i8);
+impl_type!(@i16);
+impl_type!(@i32);
+impl_type!(@i64);
+impl_type!(@i128);
+impl_type!(@isize);
+// impl_type!(@u8);
+impl_type!(@u16);
+impl_type!(@u32);
+impl_type!(@u64);
+impl_type!(@u128);
+impl_type!(@usize);
 
 macro_rules! impl_repeat {
     ($i: expr) => {
-        impl_ordk!(i8, $i);
-        impl_ordk!(i16, $i);
-        impl_ordk!(i32, $i);
-        impl_ordk!(i64, $i);
-        impl_ordk!(i128, $i);
-        impl_ordk!(isize, $i);
-        impl_ordk!(u8, $i);
-        impl_ordk!(u16, $i);
-        impl_ordk!(u32, $i);
-        impl_ordk!(u64, $i);
-        impl_ordk!(u128, $i);
-        impl_ordk!(usize, $i);
+        impl_type!(i8, $i);
+        impl_type!(i16, $i);
+        impl_type!(i32, $i);
+        impl_type!(i64, $i);
+        impl_type!(i128, $i);
+        impl_type!(isize, $i);
+        impl_type!(u8, $i);
+        impl_type!(u16, $i);
+        impl_type!(u32, $i);
+        impl_type!(u64, $i);
+        impl_type!(u128, $i);
+        impl_type!(usize, $i);
     };
     ($i: expr, $($ii: expr),+) => {
         impl_repeat!($i);

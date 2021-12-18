@@ -13,17 +13,17 @@ fn bench(c: &mut Criterion) {
         .measurement_time(Duration::from_secs(8))
         .sample_size(12);
 
-    group.bench_function("vecx_write", |b| {
+    group.bench_function("Vecx_write", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
-            db.push(&vec![n; 128]);
+            db.push(vec![n; 128]);
         })
     });
 
-    group.bench_function("vecx_rw", |b| {
+    group.bench_function("Vecx_rw", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
-            db.push(&vec![n; 128]);
+            db.push(vec![n; 128]);
             db.get(n);
         })
     });
@@ -31,25 +31,25 @@ fn bench(c: &mut Criterion) {
     let i = AtomicUsize::new(0);
     let mut db = vsdb::Mapx::new();
 
-    group.bench_function("mapx_write", |b| {
+    group.bench_function("Mapx_write", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
-            db.set_value([n; 2], &vec![n; 128]);
+            db.set_value([n; 2], vec![n; 128]);
         })
     });
 
-    group.bench_function("mapx_rw", |b| {
+    group.bench_function("Mapx_rw", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
-            db.set_value([n; 2], &vec![n; 128]);
+            db.set_value([n; 2], vec![n; 128]);
             db.get(&[n; 2]);
         })
     });
 
-    group.bench_function("mapx_rw_write_back", |b| {
+    group.bench_function("Mapx_rw_write_back", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
-            db.set_value([n; 2], &vec![n; 128]);
+            db.set_value([n; 2], vec![n; 128]);
             *db.get_mut(&[n; 2]).unwrap() = vec![n; 1];
         })
     });
@@ -58,14 +58,14 @@ fn bench(c: &mut Criterion) {
     let mut db = vsdb::MapxRawVersioned::new();
     db.version_create(b"benchmark").unwrap();
 
-    group.bench_function("versioned_mapx_write", |b| {
+    group.bench_function("Versioned_Mapx_write", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
             db.insert(vec![n; 2], vec![n; 128]).unwrap();
         })
     });
 
-    group.bench_function("versioned_mapx_rw", |b| {
+    group.bench_function("Versioned_Mapx_rw", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
             db.insert(vec![n; 2], vec![n; 128]).unwrap();
@@ -73,7 +73,7 @@ fn bench(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("versioned_mapx_rw_write_back", |b| {
+    group.bench_function("Versioned_Mapx_rw_write_back", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
             db.insert(vec![n; 2], vec![n; 128]).unwrap();
