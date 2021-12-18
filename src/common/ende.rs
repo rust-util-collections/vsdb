@@ -80,7 +80,7 @@ impl<T: Serialize + DeserializeOwned + fmt::Debug> ValueEnDe for T {}
 /// is consistent with the original data format.
 ///
 /// We can get correct results from `get_le/get_be ...` on this kind of keys.
-pub trait OrderedKeyEnDe: Clone + Eq + Ord + fmt::Debug {
+pub trait KeyEnDeOrdered: Clone + Eq + Ord + fmt::Debug {
     /// &key => bytes
     fn to_bytes(&self) -> Vec<u8>;
 
@@ -98,7 +98,7 @@ pub trait OrderedKeyEnDe: Clone + Eq + Ord + fmt::Debug {
     }
 }
 
-impl OrderedKeyEnDe for Vec<u8> {
+impl KeyEnDeOrdered for Vec<u8> {
     #[inline(always)]
     fn to_bytes(&self) -> Vec<u8> {
         self.clone()
@@ -120,7 +120,7 @@ impl OrderedKeyEnDe for Vec<u8> {
     }
 }
 
-impl OrderedKeyEnDe for String {
+impl KeyEnDeOrdered for String {
     #[inline(always)]
     fn to_bytes(&self) -> Vec<u8> {
         self.as_bytes().to_vec()
@@ -144,7 +144,7 @@ impl OrderedKeyEnDe for String {
 
 macro_rules! impl_type {
     ($int: ty) => {
-        impl OrderedKeyEnDe for $int {
+        impl KeyEnDeOrdered for $int {
             #[inline(always)]
             fn to_bytes(&self) -> Vec<u8> {
                 self.to_be_bytes().to_vec()
@@ -159,7 +159,7 @@ macro_rules! impl_type {
     };
     (@$int: ty) => {
         #[allow(clippy::unsound_collection_transmute)]
-        impl OrderedKeyEnDe for Vec<$int> {
+        impl KeyEnDeOrdered for Vec<$int> {
             #[inline(always)]
             fn to_bytes(&self) -> Vec<u8> {
                 self.iter().map(|i| i.to_be_bytes()).flatten().collect()
@@ -206,7 +206,7 @@ macro_rules! impl_type {
         }
     };
     ($int: ty, $siz: expr) => {
-        impl OrderedKeyEnDe for [$int; $siz] {
+        impl KeyEnDeOrdered for [$int; $siz] {
             #[inline(always)]
             fn to_bytes(&self) -> Vec<u8> {
                 self.iter().map(|i| i.to_be_bytes()).flatten().collect()

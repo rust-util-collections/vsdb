@@ -1,7 +1,7 @@
 use crate::{
     basic::mapx_raw::{MapxRaw, MapxRawIter},
     common::{
-        ende::{OrderedKeyEnDe, ValueEnDe},
+        ende::{KeyEnDeOrdered, ValueEnDe},
         InstanceCfg,
     },
 };
@@ -14,7 +14,7 @@ use std::{marker::PhantomData, ops::RangeBounds};
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub(super) struct MapxOrd<K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     inner: MapxRaw,
@@ -24,7 +24,7 @@ where
 
 impl<K, V> From<InstanceCfg> for MapxOrd<K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     fn from(cfg: InstanceCfg) -> Self {
@@ -38,7 +38,7 @@ where
 
 impl<K, V> From<&MapxOrd<K, V>> for InstanceCfg
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     fn from(x: &MapxOrd<K, V>) -> Self {
@@ -57,7 +57,7 @@ where
 
 impl<K, V> MapxOrd<K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     // create a new instance
@@ -251,7 +251,7 @@ where
 // Iter over [MapxOrd](self::Mapxnk).
 pub(super) struct MapxOrdIter<K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     pub(super) iter: MapxRawIter,
@@ -261,7 +261,7 @@ where
 
 impl<K, V> Iterator for MapxOrdIter<K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     type Item = (K, V);
@@ -277,7 +277,7 @@ where
 
 impl<K, V> DoubleEndedIterator for MapxOrdIter<K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
@@ -292,7 +292,7 @@ where
 
 impl<K, V> ExactSizeIterator for MapxOrdIter<K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
 }

@@ -49,6 +49,6 @@ pub use versioned::mapx_raw::MapxRawVersioned;
 // pub use versioned::vecx::VecxVersioned;
 
 pub use common::{
-    ende::{KeyEnDe, OrderedKeyEnDe, ValueEnDe},
+    ende::{KeyEnDe, KeyEnDeOrdered, ValueEnDe},
     vsdb_flush, vsdb_set_base_dir,
 };

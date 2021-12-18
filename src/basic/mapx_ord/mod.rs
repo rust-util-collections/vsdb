@@ -8,7 +8,7 @@ mod backend;
 mod test;
 
 use crate::common::{
-    ende::{OrderedKeyEnDe, SimpleVisitor, ValueEnDe},
+    ende::{KeyEnDeOrdered, SimpleVisitor, ValueEnDe},
     InstanceCfg,
 };
 use ruc::*;
@@ -24,7 +24,7 @@ use std::{
 #[derive(PartialEq, Eq, Debug)]
 pub struct MapxOrd<K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     inner: backend::MapxOrd<K, V>,
@@ -32,7 +32,7 @@ where
 
 impl<K, V> From<InstanceCfg> for MapxOrd<K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     fn from(cfg: InstanceCfg) -> Self {
@@ -44,7 +44,7 @@ where
 
 impl<K, V> Default for MapxOrd<K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     fn default() -> Self {
@@ -58,7 +58,7 @@ where
 
 impl<K, V> MapxOrd<K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     /// Create an instance.
@@ -336,7 +336,7 @@ where
 #[derive(Debug)]
 pub struct ValueMut<'a, K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     hdr: &'a mut MapxOrd<K, V>,
@@ -346,7 +346,7 @@ where
 
 impl<'a, K, V> ValueMut<'a, K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     pub(crate) fn new(hdr: &'a mut MapxOrd<K, V>, key: K, value: V) -> Self {
@@ -361,7 +361,7 @@ where
 /// NOTE: Very Important !!!
 impl<'a, K, V> Drop for ValueMut<'a, K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     fn drop(&mut self) {
@@ -378,7 +378,7 @@ where
 
 impl<'a, K, V> Deref for ValueMut<'a, K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     type Target = V;
@@ -390,7 +390,7 @@ where
 
 impl<'a, K, V> DerefMut for ValueMut<'a, K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
@@ -409,7 +409,7 @@ where
 /// Imitate the `btree_map/btree_map::Entry`.
 pub struct Entry<'a, K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: 'a + ValueEnDe,
 {
     key: K,
@@ -418,7 +418,7 @@ where
 
 impl<'a, K, V> Entry<'a, K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     /// Imitate the `btree_map/btree_map::Entry.or_insert(...)`.
@@ -433,7 +433,7 @@ where
 #[allow(missing_docs)]
 pub struct EntryRef<'a, K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     key: &'a K,
@@ -442,7 +442,7 @@ where
 
 impl<'a, K, V> EntryRef<'a, K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     /// Imitate the `btree_map/btree_map::Entry.or_insert(...)`.
@@ -457,7 +457,7 @@ where
 #[allow(missing_docs)]
 pub struct EntryRefBytesKey<'a, K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     key: &'a [u8],
@@ -466,7 +466,7 @@ where
 
 impl<'a, K, V> EntryRefBytesKey<'a, K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     /// Imitate the `btree_map/btree_map::Entry.or_insert(...)`.
@@ -489,7 +489,7 @@ where
 /// Iter over [MapxOrd](self::MapxOrd).
 pub struct MapxOrdIter<K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     iter: backend::MapxOrdIter<K, V>,
@@ -497,7 +497,7 @@ where
 
 impl<K, V> Iterator for MapxOrdIter<K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     type Item = (K, V);
@@ -508,7 +508,7 @@ where
 
 impl<K, V> DoubleEndedIterator for MapxOrdIter<K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
@@ -526,7 +526,7 @@ where
 
 impl<K, V> Serialize for MapxOrd<K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
@@ -539,7 +539,7 @@ where
 
 impl<'de, K, V> Deserialize<'de> for MapxOrd<K, V>
 where
-    K: OrderedKeyEnDe,
+    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>

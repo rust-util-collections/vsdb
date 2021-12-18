@@ -6,7 +6,7 @@ use crate::{
     basic::mapx_ord::{MapxOrd, MapxOrdIter},
     common::{
         compute_sig,
-        ende::{OrderedKeyEnDe, ValueEnDe},
+        ende::{KeyEnDeOrdered, ValueEnDe},
         BranchID, VersionID, BIGGEST_RESERVED_ID, VSDB,
     },
 };
