@@ -8,6 +8,10 @@ use std::ops::{Bound, RangeBounds};
 
 const DATA_SET_NUM: u8 = 8;
 
+const META_KEY_BRANCH_ID: [u8; 1] = [u8::MAX - 1];
+const META_KEY_VERSION_ID: [u8; 1] = [u8::MAX - 2];
+const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
+
 pub(crate) struct SledEngine {
     meta: Db,
     areas: Vec<Tree>,
@@ -23,6 +27,16 @@ impl Engine for SledEngine {
             .collect::<Result<Vec<_>>>()?;
 
         let (prefix_allocator, initial_value) = PrefixAllocator::init();
+
+        if meta.get(&META_KEY_BRANCH_ID).c(d!())?.is_none() {
+            meta.insert(META_KEY_BRANCH_ID, 0_usize.to_be_bytes())
+                .c(d!())?;
+        }
+
+        if meta.get(&META_KEY_VERSION_ID).c(d!())?.is_none() {
+            meta.insert(META_KEY_VERSION_ID, 0_usize.to_be_bytes())
+                .c(d!())?;
+        }
 
         if meta.get(prefix_allocator.key).c(d!())?.is_none() {
             meta.insert(prefix_allocator.key, initial_value).c(d!())?;
@@ -46,11 +60,25 @@ impl Engine for SledEngine {
     }
 
     fn alloc_branch_id(&self) -> BranchID {
-        self.alloc_prefix() as BranchID
+        let ret = crate::parse_int!(
+            self.meta.get(META_KEY_BRANCH_ID).unwrap().unwrap().to_vec(),
+            BranchID
+        );
+        self.meta
+            .insert(META_KEY_BRANCH_ID, (1 + ret).to_be_bytes())
+            .unwrap();
+        ret
     }
 
     fn alloc_version_id(&self) -> VersionID {
-        self.alloc_prefix() as VersionID
+        let ret = crate::parse_int!(
+            self.meta.get(META_KEY_BRANCH_ID).unwrap().unwrap().to_vec(),
+            VersionID
+        );
+        self.meta
+            .insert(META_KEY_VERSION_ID, (1 + ret).to_be_bytes())
+            .unwrap();
+        ret
     }
 
     fn area_count(&self) -> u8 {
@@ -179,7 +207,7 @@ impl PrefixAllocator {
     const fn init() -> (Self, PrefixBytes) {
         (
             Self {
-                key: 0_u8.to_be_bytes(),
+                key: META_KEY_PREFIX_ALLOCATOR,
             },
             (RESERVED_ID_CNT + Prefix::MIN).to_be_bytes(),
         )

@@ -3,7 +3,7 @@
 //!
 
 use crate::{
-    basic::mapx_oc::{MapxOC, MapxOCIter},
+    basic::mapx_ord::{MapxOrd, MapxOrdIter},
     common::{compute_sig, BranchID, VersionID, BIGGEST_RESERVED_ID, VSDB},
 };
 use ruc::*;
@@ -37,20 +37,20 @@ const RESERVED_VERSION_NUM_DEFAULT: usize = 10;
 
 #[derive(Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct MapxRawVersioned {
-    pub(super) branch_name_to_branch_id: MapxOC<RawKey, BranchID>,
-    pub(super) version_name_to_version_id: MapxOC<RawKey, VersionID>,
+    pub(super) branch_name_to_branch_id: MapxOrd<RawKey, BranchID>,
+    pub(super) version_name_to_version_id: MapxOrd<RawKey, VersionID>,
 
     // which version the branch is forked from
-    branch_to_parent: MapxOC<BranchID, Option<BasePoint>>,
+    branch_to_parent: MapxOrd<BranchID, Option<BasePoint>>,
 
     // versions directly created by this branch
-    branch_to_created_versions: MapxOC<BranchID, MapxOC<VersionID, VerSig>>,
+    branch_to_created_versions: MapxOrd<BranchID, MapxOrd<VersionID, VerSig>>,
 
     // globally ever changed keys within each version
-    version_to_change_set: MapxOC<VersionID, MapxOC<RawKey, bool>>,
+    version_to_change_set: MapxOrd<VersionID, MapxOrd<RawKey, bool>>,
 
     // key -> multi-branch -> multi-version -> multi-value
-    layered_kv: MapxOC<RawKey, MapxOC<BranchID, MapxOC<VersionID, Option<RawValue>>>>,
+    layered_kv: MapxOrd<RawKey, MapxOrd<BranchID, MapxOrd<VersionID, Option<RawValue>>>>,
 }
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -67,10 +67,10 @@ impl MapxRawVersioned {
     #[inline(always)]
     pub(super) fn init(&mut self) {
         self.branch_name_to_branch_id
-            ._insert(INITIAL_BRANCH_NAME, &INITIAL_BRANCH_ID);
+            .insert_ref_bytes_k(INITIAL_BRANCH_NAME, &INITIAL_BRANCH_ID);
         self.branch_to_parent.insert(INITIAL_BRANCH_ID, &None);
         self.branch_to_created_versions
-            .insert(INITIAL_BRANCH_ID, &MapxOC::new());
+            .insert(INITIAL_BRANCH_ID, &MapxOrd::new());
     }
 
     #[inline(always)]
@@ -168,14 +168,14 @@ impl MapxRawVersioned {
         self.version_to_change_set
             .get_mut(&version_id)
             .c(d!("BUG: version not found"))?
-            ._insert(&key, &true);
+            .insert_ref_bytes_k(&key, &true);
 
         let res = self
             .layered_kv
             .entry(key.clone())
-            .or_insert(&MapxOC::new())
+            .or_insert(&MapxOrd::new())
             .entry(branch_id)
-            .or_insert(&MapxOC::new())
+            .or_insert(&MapxOrd::new())
             .insert(version_id, &value)
             .flatten();
 
@@ -227,7 +227,7 @@ impl MapxRawVersioned {
             return None;
         }
 
-        if let Some(brs) = self.layered_kv._get(key) {
+        if let Some(brs) = self.layered_kv.get_ref_bytes_k(key) {
             // they are all monotonically increasing
             for (br, ver) in fp.iter().rev() {
                 if let Some(vers) = brs.get(br) {
@@ -446,7 +446,11 @@ impl MapxRawVersioned {
         version_name: &[u8],
         branch_id: BranchID,
     ) -> Result<()> {
-        if self.version_name_to_version_id._get(version_name).is_some() {
+        if self
+            .version_name_to_version_id
+            .get_ref_bytes_k(version_name)
+            .is_some()
+        {
             return Err(eg!("version already exists"));
         }
 
@@ -467,7 +471,7 @@ impl MapxRawVersioned {
         self.version_name_to_version_id
             .insert(version_name.to_owned(), &version_id);
         self.version_to_change_set
-            .insert(version_id, &MapxOC::new());
+            .insert(version_id, &MapxOrd::new());
 
         Ok(())
     }
@@ -647,7 +651,10 @@ impl MapxRawVersioned {
             return Err(eg!("too many branches"));
         }
 
-        if self.branch_name_to_branch_id._contains_key(branch_name) {
+        if self
+            .branch_name_to_branch_id
+            .contains_key_ref_bytes_k(branch_name)
+        {
             return Err(eg!("branch already exists"));
         }
 
@@ -671,7 +678,7 @@ impl MapxRawVersioned {
         );
 
         self.branch_to_created_versions
-            .insert(branch_id, &MapxOC::new());
+            .insert(branch_id, &MapxOrd::new());
 
         Ok(())
     }
@@ -820,7 +827,7 @@ impl MapxRawVersioned {
 
                 key_hdr
                     .entry(*parent_id)
-                    .or_insert(&MapxOC::new())
+                    .or_insert(&MapxOrd::new())
                     .insert(ver, &value);
             }
         }
@@ -1017,7 +1024,7 @@ struct BasePoint {
 
 pub struct MapxRawVersionedIter<'a> {
     hdr: &'a MapxRawVersioned,
-    iter: MapxOCIter<RawKey, MapxOC<BranchID, MapxOC<VersionID, Option<RawValue>>>>,
+    iter: MapxOrdIter<RawKey, MapxOrd<BranchID, MapxOrd<VersionID, Option<RawValue>>>>,
     branch_id: BranchID,
     version_id: VersionID,
 }

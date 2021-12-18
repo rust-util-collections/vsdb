@@ -22,15 +22,15 @@ use {
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-pub(crate) type Prefix = u128;
+pub(crate) type Prefix = u64;
 pub(crate) type PrefixBytes = [u8; PREFIX_SIZ];
 pub(crate) const PREFIX_SIZ: usize = size_of::<Prefix>();
 
 const RESERVED_ID_CNT: Prefix = 4096;
 pub(crate) const BIGGEST_RESERVED_ID: Prefix = RESERVED_ID_CNT - 1;
 
-pub(crate) type BranchID = Prefix;
-pub(crate) type VersionID = Prefix;
+pub(crate) type BranchID = u64;
+pub(crate) type VersionID = u64;
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////

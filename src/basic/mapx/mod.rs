@@ -6,7 +6,7 @@
 mod test;
 
 use crate::{
-    basic::mapx_oc::{Entry, MapxOC, MapxOCIter, ValueMut},
+    basic::mapx_ord::{Entry, MapxOrd, MapxOrdIter, ValueMut},
     common::{InstanceCfg, SimpleVisitor},
 };
 use ruc::*;
@@ -28,7 +28,7 @@ where
         + fmt::Debug,
     V: Serialize + DeserializeOwned + fmt::Debug,
 {
-    inner: MapxOC<Vec<u8>, V>,
+    inner: MapxOrd<Vec<u8>, V>,
     _pd: PhantomData<K>,
 }
 
@@ -74,7 +74,7 @@ where
     #[inline(always)]
     pub fn new() -> Self {
         Mapx {
-            inner: MapxOC::new(),
+            inner: MapxOrd::new(),
             _pd: PhantomData,
         }
     }
@@ -183,7 +183,7 @@ where
     K: PartialEq + Eq + Serialize + DeserializeOwned + fmt::Debug,
     V: Serialize + DeserializeOwned + fmt::Debug,
 {
-    iter: MapxOCIter<Vec<u8>, V>,
+    iter: MapxOrdIter<Vec<u8>, V>,
     _pd: PhantomData<K>,
 }
 
@@ -256,7 +256,7 @@ where
         deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
             let meta = pnk!(bcs::from_bytes::<InstanceCfg>(&meta));
             Mapx {
-                inner: MapxOC::from(meta),
+                inner: MapxOrd::from(meta),
                 _pd: PhantomData,
             }
         })

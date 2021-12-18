@@ -14,7 +14,7 @@ use std::{
 // To solve the problem of unlimited memory usage,
 // use this to replace the original in-memory `BTreeMap<_, _>`.
 #[derive(PartialEq, Eq, Debug)]
-pub(super) struct MapxOC<K, V>
+pub(super) struct MapxOrd<K, V>
 where
     K: OrderConsistKey,
     V: Serialize + DeserializeOwned + fmt::Debug,
@@ -24,7 +24,7 @@ where
     _pd1: PhantomData<V>,
 }
 
-impl<K, V> From<InstanceCfg> for MapxOC<K, V>
+impl<K, V> From<InstanceCfg> for MapxOrd<K, V>
 where
     K: OrderConsistKey,
     V: Serialize + DeserializeOwned + fmt::Debug,
@@ -38,12 +38,12 @@ where
     }
 }
 
-impl<K, V> From<&MapxOC<K, V>> for InstanceCfg
+impl<K, V> From<&MapxOrd<K, V>> for InstanceCfg
 where
     K: OrderConsistKey,
     V: Serialize + DeserializeOwned + fmt::Debug,
 {
-    fn from(x: &MapxOC<K, V>) -> Self {
+    fn from(x: &MapxOrd<K, V>) -> Self {
         let cfg = x.inner.get_instance_cfg();
         Self {
             prefix: cfg.prefix,
@@ -54,10 +54,10 @@ where
 }
 
 ///////////////////////////////////////////////////////
-// Begin of the self-implementation of backend::MapxOC //
+// Begin of the self-implementation of backend::MapxOrd //
 /*****************************************************/
 
-impl<K, V> MapxOC<K, V>
+impl<K, V> MapxOrd<K, V>
 where
     K: OrderConsistKey,
     V: Serialize + DeserializeOwned + fmt::Debug,
@@ -65,7 +65,7 @@ where
     // create a new instance
     #[inline(always)]
     pub(super) fn must_new() -> Self {
-        MapxOC {
+        MapxOrd {
             inner: MapxRaw::new(),
             _pd0: PhantomData,
             _pd1: PhantomData,
@@ -85,7 +85,7 @@ where
     }
 
     #[inline(always)]
-    pub(super) fn _get(&self, key: &[u8]) -> Option<V> {
+    pub(super) fn get_ref_bytes_k(&self, key: &[u8]) -> Option<V> {
         self.inner
             .get(key)
             .map(|bytes| pnk!(bcs::from_bytes(&bytes)))
@@ -99,7 +99,7 @@ where
     }
 
     #[inline(always)]
-    pub(super) fn _get_le(&self, key: &[u8]) -> Option<(K, V)> {
+    pub(super) fn get_le_ref_bytes_k(&self, key: &[u8]) -> Option<(K, V)> {
         self.inner
             .get_le(key)
             .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(bcs::from_bytes(&v))))
@@ -113,7 +113,7 @@ where
     }
 
     #[inline(always)]
-    pub(super) fn _get_ge(&self, key: &[u8]) -> Option<(K, V)> {
+    pub(super) fn get_ge_ref_bytes_k(&self, key: &[u8]) -> Option<(K, V)> {
         self.inner
             .get_ge(key)
             .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(bcs::from_bytes(&v))))
@@ -136,14 +136,14 @@ where
     }
 
     #[inline(always)]
-    pub(super) fn _insert(&mut self, key: &[u8], value: &V) -> Option<V> {
-        self._set_value(key, value)
+    pub(super) fn insert_ref_bytes_k(&mut self, key: &[u8], value: &V) -> Option<V> {
+        self.set_value_ref_bytes_k(key, value)
             .map(|v| pnk!(bcs::from_bytes(&v)))
     }
 
     #[inline(always)]
-    pub(super) fn __insert(&mut self, key: &[u8], value: &[u8]) -> Option<V> {
-        self.__set_value(key, value)
+    pub(super) fn insert_ref_bytes_kv(&mut self, key: &[u8], value: &[u8]) -> Option<V> {
+        self.set_value_ref_bytes_kv(key, value)
             .map(|v| pnk!(bcs::from_bytes(&v)))
     }
 
@@ -154,18 +154,26 @@ where
     }
 
     #[inline(always)]
-    pub(super) fn _set_value(&mut self, key: &[u8], value: &V) -> Option<Vec<u8>> {
+    pub(super) fn set_value_ref_bytes_k(
+        &mut self,
+        key: &[u8],
+        value: &V,
+    ) -> Option<Vec<u8>> {
         self.inner.insert(key, &pnk!(bcs::to_bytes(value)))
     }
 
     #[inline(always)]
-    pub(super) fn __set_value(&mut self, key: &[u8], value: &[u8]) -> Option<Vec<u8>> {
+    pub(super) fn set_value_ref_bytes_kv(
+        &mut self,
+        key: &[u8],
+        value: &[u8],
+    ) -> Option<Vec<u8>> {
         self.inner.insert(key, value)
     }
 
     #[inline(always)]
-    pub(super) fn iter(&self) -> MapxOCIter<K, V> {
-        MapxOCIter {
+    pub(super) fn iter(&self) -> MapxOrdIter<K, V> {
+        MapxOrdIter {
             iter: self.inner.iter(),
             _pd0: PhantomData,
             _pd1: PhantomData,
@@ -174,7 +182,7 @@ where
 
     /// range(start..end)
     #[inline(always)]
-    pub fn range<R: RangeBounds<K>>(&self, bounds: R) -> MapxOCIter<K, V> {
+    pub fn range<R: RangeBounds<K>>(&self, bounds: R) -> MapxOrdIter<K, V> {
         let ll;
         let l = match bounds.start_bound() {
             Bound::Included(lo) => {
@@ -201,7 +209,7 @@ where
             Bound::Unbounded => Bound::Unbounded,
         };
 
-        MapxOCIter {
+        MapxOrdIter {
             iter: self.inner.range((l, h)),
             _pd0: PhantomData,
             _pd1: PhantomData,
@@ -214,7 +222,7 @@ where
     }
 
     #[inline(always)]
-    pub(super) fn _contains_key(&self, key: &[u8]) -> bool {
+    pub(super) fn contains_key_ref_bytes_k(&self, key: &[u8]) -> bool {
         self.inner.contains_key(key)
     }
 
@@ -224,8 +232,9 @@ where
     }
 
     #[inline(always)]
-    pub(super) fn _remove(&mut self, key: &[u8]) -> Option<V> {
-        self._unset_value(key).map(|v| pnk!(bcs::from_bytes(&v)))
+    pub(super) fn remove_ref_bytes_k(&mut self, key: &[u8]) -> Option<V> {
+        self.unset_value_ref_bytes_k(key)
+            .map(|v| pnk!(bcs::from_bytes(&v)))
     }
 
     #[inline(always)]
@@ -234,7 +243,7 @@ where
     }
 
     #[inline(always)]
-    pub(super) fn _unset_value(&mut self, key: &[u8]) -> Option<Vec<u8>> {
+    pub(super) fn unset_value_ref_bytes_k(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         self.inner.remove(key)
     }
 
@@ -245,15 +254,15 @@ where
 }
 
 /***************************************************/
-// End of the self-implementation of backend::MapxOC //
+// End of the self-implementation of backend::MapxOrd //
 /////////////////////////////////////////////////////
 
 ///////////////////////////////////////////////////////////
-// Begin of the implementation of Iter for backend::MapxOC //
+// Begin of the implementation of Iter for backend::MapxOrd //
 /*********************************************************/
 
-// Iter over [MapxOC](self::Mapxnk).
-pub(super) struct MapxOCIter<K, V>
+// Iter over [MapxOrd](self::Mapxnk).
+pub(super) struct MapxOrdIter<K, V>
 where
     K: OrderConsistKey,
     V: Serialize + DeserializeOwned + fmt::Debug,
@@ -263,7 +272,7 @@ where
     _pd1: PhantomData<V>,
 }
 
-impl<K, V> Iterator for MapxOCIter<K, V>
+impl<K, V> Iterator for MapxOrdIter<K, V>
 where
     K: OrderConsistKey,
     V: Serialize + DeserializeOwned + fmt::Debug,
@@ -276,7 +285,7 @@ where
     }
 }
 
-impl<K, V> DoubleEndedIterator for MapxOCIter<K, V>
+impl<K, V> DoubleEndedIterator for MapxOrdIter<K, V>
 where
     K: OrderConsistKey,
     V: Serialize + DeserializeOwned + fmt::Debug,
@@ -288,7 +297,7 @@ where
     }
 }
 
-impl<K, V> ExactSizeIterator for MapxOCIter<K, V>
+impl<K, V> ExactSizeIterator for MapxOrdIter<K, V>
 where
     K: OrderConsistKey,
     V: Serialize + DeserializeOwned + fmt::Debug,
@@ -296,5 +305,5 @@ where
 }
 
 /*******************************************************/
-// End of the implementation of Iter for backend::MapxOC //
+// End of the implementation of Iter for backend::MapxOrd //
 /////////////////////////////////////////////////////////

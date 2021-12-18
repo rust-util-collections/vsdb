@@ -16,7 +16,12 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-const DATA_SET_NUM: u8 = 8;
+const DATA_SET_NUM: u8 = 4;
+
+const META_KEY_MAX_KEYLEN: [u8; 1] = [u8::MAX];
+const META_KEY_BRANCH_ID: [u8; 1] = [u8::MAX - 1];
+const META_KEY_VERSION_ID: [u8; 1] = [u8::MAX - 2];
+const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 
 lazy_static! {
     static ref HDR: (DB, Vec<String>) = rocksdb_open().unwrap();
@@ -67,9 +72,6 @@ impl RocksEngine {
     }
 }
 
-const META_KEY_MAX_KEYLEN: [u8; 1] = [u8::MAX];
-const META_KEY_PREFIX_ALLOCTOR: [u8; 1] = [u8::MIN];
-
 impl Engine for RocksEngine {
     fn new() -> Result<Self> {
         let (meta, areas) =
@@ -79,6 +81,16 @@ impl Engine for RocksEngine {
 
         if meta.get(&META_KEY_MAX_KEYLEN).c(d!())?.is_none() {
             meta.put(META_KEY_MAX_KEYLEN, 0_usize.to_be_bytes())
+                .c(d!())?;
+        }
+
+        if meta.get(&META_KEY_BRANCH_ID).c(d!())?.is_none() {
+            meta.put(META_KEY_BRANCH_ID, 0_usize.to_be_bytes())
+                .c(d!())?;
+        }
+
+        if meta.get(&META_KEY_VERSION_ID).c(d!())?.is_none() {
+            meta.put(META_KEY_VERSION_ID, 0_usize.to_be_bytes())
                 .c(d!())?;
         }
 
@@ -109,11 +121,25 @@ impl Engine for RocksEngine {
     }
 
     fn alloc_branch_id(&self) -> BranchID {
-        self.alloc_prefix() as BranchID
+        let ret = crate::parse_int!(
+            self.meta.get(META_KEY_BRANCH_ID).unwrap().unwrap(),
+            BranchID
+        );
+        self.meta
+            .put(META_KEY_BRANCH_ID, (1 + ret).to_be_bytes())
+            .unwrap();
+        ret
     }
 
     fn alloc_version_id(&self) -> VersionID {
-        self.alloc_prefix() as VersionID
+        let ret = crate::parse_int!(
+            self.meta.get(META_KEY_BRANCH_ID).unwrap().unwrap(),
+            VersionID
+        );
+        self.meta
+            .put(META_KEY_VERSION_ID, (1 + ret).to_be_bytes())
+            .unwrap();
+        ret
     }
 
     fn area_count(&self) -> u8 {
@@ -291,7 +317,7 @@ impl PrefixAllocator {
     const fn init() -> (Self, PrefixBytes) {
         (
             Self {
-                key: META_KEY_PREFIX_ALLOCTOR,
+                key: META_KEY_PREFIX_ALLOCATOR,
             },
             (RESERVED_ID_CNT + Prefix::MIN).to_be_bytes(),
         )

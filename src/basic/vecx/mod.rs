@@ -6,7 +6,7 @@
 mod test;
 
 use crate::{
-    basic::mapx_oc::{MapxOC, MapxOCIter, ValueMut},
+    basic::mapx_ord::{MapxOrd, MapxOrdIter, ValueMut},
     common::{InstanceCfg, SimpleVisitor},
 };
 use ruc::*;
@@ -22,7 +22,7 @@ pub struct Vecx<T>
 where
     T: Serialize + DeserializeOwned + fmt::Debug,
 {
-    inner: MapxOC<usize, T>,
+    inner: MapxOrd<usize, T>,
 }
 
 impl<T> From<InstanceCfg> for Vecx<T>
@@ -31,7 +31,7 @@ where
 {
     fn from(cfg: InstanceCfg) -> Self {
         Self {
-            inner: MapxOC::from(cfg),
+            inner: MapxOrd::from(cfg),
         }
     }
 }
@@ -57,7 +57,7 @@ where
     #[inline(always)]
     pub fn new() -> Self {
         Vecx {
-            inner: MapxOC::new(),
+            inner: MapxOrd::new(),
         }
     }
 
@@ -198,7 +198,7 @@ pub struct VecxIter<T>
 where
     T: Serialize + DeserializeOwned + fmt::Debug,
 {
-    iter: MapxOCIter<usize, T>,
+    iter: MapxOrdIter<usize, T>,
 }
 
 impl<T> Iterator for VecxIter<T>

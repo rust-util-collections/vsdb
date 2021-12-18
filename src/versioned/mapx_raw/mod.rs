@@ -79,7 +79,10 @@ impl MapxRawVersioned {
     /// Get the value of a key from the head of a specified branch.
     #[inline(always)]
     pub fn get_by_branch(&self, key: &[u8], branch_name: &[u8]) -> Option<RawValue> {
-        let branch_id = self.inner.branch_name_to_branch_id._get(branch_name)?;
+        let branch_id = self
+            .inner
+            .branch_name_to_branch_id
+            .get_ref_bytes_k(branch_name)?;
         self.inner.get_by_branch(key, branch_id)
     }
 
@@ -91,8 +94,14 @@ impl MapxRawVersioned {
         branch_name: &[u8],
         version_name: &[u8],
     ) -> Option<RawValue> {
-        let branch_id = self.inner.branch_name_to_branch_id._get(branch_name)?;
-        let version_id = self.inner.version_name_to_version_id._get(version_name)?;
+        let branch_id = self
+            .inner
+            .branch_name_to_branch_id
+            .get_ref_bytes_k(branch_name)?;
+        let version_id = self
+            .inner
+            .version_name_to_version_id
+            .get_ref_bytes_k(version_name)?;
         self.inner.get_by_branch_version(key, branch_id, version_id)
     }
 
@@ -109,7 +118,10 @@ impl MapxRawVersioned {
         key: &[u8],
         branch_name: &[u8],
     ) -> Option<ValueMut<'_>> {
-        let branch_id = self.inner.branch_name_to_branch_id._get(branch_name)?;
+        let branch_id = self
+            .inner
+            .branch_name_to_branch_id
+            .get_ref_bytes_k(branch_name)?;
         self.inner.get_mut_by_branch(key, branch_id)
     }
 
@@ -130,7 +142,10 @@ impl MapxRawVersioned {
         key: &[u8],
         branch_name: &[u8],
     ) -> Option<(RawKey, RawValue)> {
-        let branch_id = self.inner.branch_name_to_branch_id._get(branch_name)?;
+        let branch_id = self
+            .inner
+            .branch_name_to_branch_id
+            .get_ref_bytes_k(branch_name)?;
         self.inner.get_ge_by_branch(key, branch_id)
     }
 
@@ -144,8 +159,14 @@ impl MapxRawVersioned {
         branch_name: &[u8],
         version_name: &[u8],
     ) -> Option<(RawKey, RawValue)> {
-        let branch_id = self.inner.branch_name_to_branch_id._get(branch_name)?;
-        let version_id = self.inner.version_name_to_version_id._get(version_name)?;
+        let branch_id = self
+            .inner
+            .branch_name_to_branch_id
+            .get_ref_bytes_k(branch_name)?;
+        let version_id = self
+            .inner
+            .version_name_to_version_id
+            .get_ref_bytes_k(version_name)?;
         self.inner
             .get_ge_by_branch_version(key, branch_id, version_id)
     }
@@ -167,7 +188,10 @@ impl MapxRawVersioned {
         key: &[u8],
         branch_name: &[u8],
     ) -> Option<(RawKey, RawValue)> {
-        let branch_id = self.inner.branch_name_to_branch_id._get(branch_name)?;
+        let branch_id = self
+            .inner
+            .branch_name_to_branch_id
+            .get_ref_bytes_k(branch_name)?;
         self.inner.get_le_by_branch(key, branch_id)
     }
 
@@ -181,8 +205,14 @@ impl MapxRawVersioned {
         branch_name: &[u8],
         version_name: &[u8],
     ) -> Option<(RawKey, RawValue)> {
-        let branch_id = self.inner.branch_name_to_branch_id._get(branch_name)?;
-        let version_id = self.inner.version_name_to_version_id._get(version_name)?;
+        let branch_id = self
+            .inner
+            .branch_name_to_branch_id
+            .get_ref_bytes_k(branch_name)?;
+        let version_id = self
+            .inner
+            .version_name_to_version_id
+            .get_ref_bytes_k(version_name)?;
         self.inner
             .get_le_by_branch_version(key, branch_id, version_id)
     }
@@ -199,7 +229,7 @@ impl MapxRawVersioned {
         let branch_id = self
             .inner
             .branch_name_to_branch_id
-            ._get(branch_name)
+            .get_ref_bytes_k(branch_name)
             .unwrap_or(NULL);
         self.inner.iter_by_branch(branch_id)
     }
@@ -214,13 +244,13 @@ impl MapxRawVersioned {
         let branch_id = self
             .inner
             .branch_name_to_branch_id
-            ._get(branch_name)
+            .get_ref_bytes_k(branch_name)
             .unwrap_or(NULL);
 
         let version_id = self
             .inner
             .version_name_to_version_id
-            ._get(version_name)
+            .get_ref_bytes_k(version_name)
             .unwrap_or(NULL);
 
         self.inner.iter_by_branch_version(branch_id, version_id)
@@ -242,7 +272,7 @@ impl MapxRawVersioned {
         let branch_id = self
             .inner
             .branch_name_to_branch_id
-            ._get(branch_name)
+            .get_ref_bytes_k(branch_name)
             .unwrap_or(NULL);
 
         self.inner.range_by_branch(branch_id, bounds)
@@ -259,13 +289,13 @@ impl MapxRawVersioned {
         let branch_id = self
             .inner
             .branch_name_to_branch_id
-            ._get(branch_name)
+            .get_ref_bytes_k(branch_name)
             .unwrap_or(NULL);
 
         let version_id = self
             .inner
             .version_name_to_version_id
-            ._get(version_name)
+            .get_ref_bytes_k(version_name)
             .unwrap_or(NULL);
 
         self.inner
@@ -305,12 +335,15 @@ impl MapxRawVersioned {
     /// Get the total number of items of the head of a specified branch.
     #[inline(always)]
     pub fn len_by_branch(&self, branch_name: &[u8]) -> usize {
-        let branch_id =
-            if let Some(id) = self.inner.branch_name_to_branch_id._get(branch_name) {
-                id
-            } else {
-                return 0;
-            };
+        let branch_id = if let Some(id) = self
+            .inner
+            .branch_name_to_branch_id
+            .get_ref_bytes_k(branch_name)
+        {
+            id
+        } else {
+            return 0;
+        };
         self.inner.len_by_branch(branch_id)
     }
 
@@ -321,18 +354,24 @@ impl MapxRawVersioned {
         branch_name: &[u8],
         version_name: &[u8],
     ) -> usize {
-        let branch_id =
-            if let Some(id) = self.inner.branch_name_to_branch_id._get(branch_name) {
-                id
-            } else {
-                return 0;
-            };
-        let version_id =
-            if let Some(id) = self.inner.version_name_to_version_id._get(version_name) {
-                id
-            } else {
-                return 0;
-            };
+        let branch_id = if let Some(id) = self
+            .inner
+            .branch_name_to_branch_id
+            .get_ref_bytes_k(branch_name)
+        {
+            id
+        } else {
+            return 0;
+        };
+        let version_id = if let Some(id) = self
+            .inner
+            .version_name_to_version_id
+            .get_ref_bytes_k(version_name)
+        {
+            id
+        } else {
+            return 0;
+        };
         self.inner.len_by_branch_version(branch_id, version_id)
     }
 
@@ -381,7 +420,7 @@ impl MapxRawVersioned {
         let branch_id = self
             .inner
             .branch_name_to_branch_id
-            ._get(branch_name)
+            .get_ref_bytes_k(branch_name)
             .c(d!("branch not found"))?;
 
         self.inner
@@ -392,12 +431,15 @@ impl MapxRawVersioned {
     /// Check if a verison exists on default branch.
     #[inline(always)]
     pub fn version_exists(&self, version_name: &[u8]) -> bool {
-        let version_id =
-            if let Some(id) = self.inner.version_name_to_version_id._get(version_name) {
-                id
-            } else {
-                return false;
-            };
+        let version_id = if let Some(id) = self
+            .inner
+            .version_name_to_version_id
+            .get_ref_bytes_k(version_name)
+        {
+            id
+        } else {
+            return false;
+        };
 
         self.inner.version_exists(version_id)
     }
@@ -409,19 +451,25 @@ impl MapxRawVersioned {
         version_name: &[u8],
         branch_name: &[u8],
     ) -> bool {
-        let version_id =
-            if let Some(id) = self.inner.version_name_to_version_id._get(version_name) {
-                id
-            } else {
-                return false;
-            };
+        let version_id = if let Some(id) = self
+            .inner
+            .version_name_to_version_id
+            .get_ref_bytes_k(version_name)
+        {
+            id
+        } else {
+            return false;
+        };
 
-        let branch_id =
-            if let Some(id) = self.inner.branch_name_to_branch_id._get(branch_name) {
-                id
-            } else {
-                return false;
-            };
+        let branch_id = if let Some(id) = self
+            .inner
+            .branch_name_to_branch_id
+            .get_ref_bytes_k(branch_name)
+        {
+            id
+        } else {
+            return false;
+        };
 
         self.inner.version_exists_on_branch(version_id, branch_id)
     }
@@ -439,19 +487,25 @@ impl MapxRawVersioned {
         version_name: &[u8],
         branch_name: &[u8],
     ) -> bool {
-        let version_id =
-            if let Some(id) = self.inner.version_name_to_version_id._get(version_name) {
-                id
-            } else {
-                return false;
-            };
+        let version_id = if let Some(id) = self
+            .inner
+            .version_name_to_version_id
+            .get_ref_bytes_k(version_name)
+        {
+            id
+        } else {
+            return false;
+        };
 
-        let branch_id =
-            if let Some(id) = self.inner.branch_name_to_branch_id._get(branch_name) {
-                id
-            } else {
-                return false;
-            };
+        let branch_id = if let Some(id) = self
+            .inner
+            .branch_name_to_branch_id
+            .get_ref_bytes_k(branch_name)
+        {
+            id
+        } else {
+            return false;
+        };
 
         self.inner.version_created_on_branch(version_id, branch_id)
     }
@@ -480,7 +534,7 @@ impl MapxRawVersioned {
         let branch_id = self
             .inner
             .branch_name_to_branch_id
-            ._get(branch_name)
+            .get_ref_bytes_k(branch_name)
             .c(d!("branch not found"))?;
 
         self.inner.version_pop_by_branch(branch_id).c(d!())
@@ -502,7 +556,7 @@ impl MapxRawVersioned {
         let base_branch_id = self
             .inner
             .branch_name_to_branch_id
-            ._get(base_branch_name)
+            .get_ref_bytes_k(base_branch_name)
             .c(d!("base branch not found"))?;
 
         self.inner
@@ -513,7 +567,11 @@ impl MapxRawVersioned {
     /// Check if a branch exists or not.
     #[inline(always)]
     pub fn branch_exists(&self, branch_name: &[u8]) -> bool {
-        if let Some(branch_id) = self.inner.branch_name_to_branch_id._get(branch_name) {
+        if let Some(branch_id) = self
+            .inner
+            .branch_name_to_branch_id
+            .get_ref_bytes_k(branch_name)
+        {
             self.inner.branch_exists(branch_id)
         } else {
             false
@@ -529,7 +587,11 @@ impl MapxRawVersioned {
     /// and should not do any tracing.
     #[inline(always)]
     pub fn branch_remove(&mut self, branch_name: &[u8]) -> Result<()> {
-        if let Some(branch_id) = self.inner.branch_name_to_branch_id._get(branch_name) {
+        if let Some(branch_id) = self
+            .inner
+            .branch_name_to_branch_id
+            .get_ref_bytes_k(branch_name)
+        {
             self.inner.branch_remove(branch_id).c(d!())
         } else {
             Err(eg!("branch not found"))
@@ -548,7 +610,7 @@ impl MapxRawVersioned {
         let branch_id = self
             .inner
             .branch_name_to_branch_id
-            ._get(branch_name)
+            .get_ref_bytes_k(branch_name)
             .c(d!("branch not found"))?;
         self.inner.branch_truncate(branch_id).c(d!())
     }
@@ -569,12 +631,12 @@ impl MapxRawVersioned {
         let branch_id = self
             .inner
             .branch_name_to_branch_id
-            ._get(branch_name)
+            .get_ref_bytes_k(branch_name)
             .c(d!("branch not found"))?;
         let last_version_id = self
             .inner
             .version_name_to_version_id
-            ._get(last_version_name)
+            .get_ref_bytes_k(last_version_name)
             .c(d!("version not found"))?;
         self.inner
             .branch_truncate_to(branch_id, last_version_id)
@@ -593,7 +655,7 @@ impl MapxRawVersioned {
         let branch_id = self
             .inner
             .branch_name_to_branch_id
-            ._get(branch_name)
+            .get_ref_bytes_k(branch_name)
             .c(d!("branch not found"))?;
         self.inner.branch_pop_version(branch_id).c(d!())
     }
@@ -604,7 +666,7 @@ impl MapxRawVersioned {
         let branch_id = self
             .inner
             .branch_name_to_branch_id
-            ._get(branch_name)
+            .get_ref_bytes_k(branch_name)
             .c(d!("branch not found"))?;
         self.inner.branch_merge_to_parent(branch_id).c(d!())
     }
@@ -612,7 +674,11 @@ impl MapxRawVersioned {
     /// Check if a branch has children branches.
     #[inline(always)]
     pub fn branch_has_children(&self, branch_name: &[u8]) -> bool {
-        if let Some(id) = self.inner.branch_name_to_branch_id._get(branch_name) {
+        if let Some(id) = self
+            .inner
+            .branch_name_to_branch_id
+            .get_ref_bytes_k(branch_name)
+        {
             self.inner.branch_has_children(id)
         } else {
             false
@@ -628,7 +694,10 @@ impl MapxRawVersioned {
     /// Get the signature of the head of a specified branch.
     #[inline(always)]
     pub fn sig_get_by_branch(&self, branch_name: &[u8]) -> Option<VerSig> {
-        let branch_id = self.inner.branch_name_to_branch_id._get(branch_name)?;
+        let branch_id = self
+            .inner
+            .branch_name_to_branch_id
+            .get_ref_bytes_k(branch_name)?;
         self.inner.sig_get_by_branch(branch_id)
     }
 
@@ -639,8 +708,14 @@ impl MapxRawVersioned {
         branch_name: &[u8],
         version_name: &[u8],
     ) -> Option<VerSig> {
-        let branch_id = self.inner.branch_name_to_branch_id._get(branch_name)?;
-        let version_id = self.inner.version_name_to_version_id._get(version_name)?;
+        let branch_id = self
+            .inner
+            .branch_name_to_branch_id
+            .get_ref_bytes_k(branch_name)?;
+        let version_id = self
+            .inner
+            .version_name_to_version_id
+            .get_ref_bytes_k(version_name)?;
         self.inner
             .sig_get_by_branch_version(branch_id, Some(version_id))
     }
@@ -661,7 +736,7 @@ impl MapxRawVersioned {
         let branch_id = self
             .inner
             .branch_name_to_branch_id
-            ._get(branch_name)
+            .get_ref_bytes_k(branch_name)
             .c(d!())?;
         self.inner
             .prune_by_branch(branch_id, reserved_ver_num)
