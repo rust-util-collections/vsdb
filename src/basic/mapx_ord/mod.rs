@@ -533,7 +533,9 @@ where
     where
         S: serde::Serializer,
     {
-        serializer.serialize_bytes(&self.get_instance_cfg().encode())
+        serializer.serialize_bytes(&<InstanceCfg as ValueEnDe>::encode(
+            &self.get_instance_cfg(),
+        ))
     }
 }
 
@@ -546,10 +548,9 @@ where
     where
         D: serde::Deserializer<'de>,
     {
-        deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
-            let meta = pnk!(<InstanceCfg as ValueEnDe>::decode(&meta));
-            MapxOrd::from(meta)
-        })
+        deserializer
+            .deserialize_bytes(SimpleVisitor)
+            .map(|cfg| MapxOrd::from(<InstanceCfg as ValueEnDe>::decode(&cfg).unwrap()))
     }
 }
 

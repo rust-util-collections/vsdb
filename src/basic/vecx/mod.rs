@@ -13,7 +13,7 @@ use crate::{
     },
 };
 use ruc::*;
-use std::cmp::Ordering;
+use std::{cmp::Ordering, result::Result as StdResult};
 
 /// To solve the problem of unlimited memory usage,
 /// use this to replace the original in-memory 'Vec'.
@@ -251,12 +251,13 @@ impl<'a, T> serde::Serialize for Vecx<T>
 where
     T: ValueEnDe,
 {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        let v = <InstanceCfg as ValueEnDe>::encode(&self.get_instance_cfg());
-        serializer.serialize_bytes(&v)
+        serializer.serialize_bytes(&<InstanceCfg as ValueEnDe>::encode(
+            &self.get_instance_cfg(),
+        ))
     }
 }
 
@@ -264,14 +265,13 @@ impl<'de, T> serde::Deserialize<'de> for Vecx<T>
 where
     T: ValueEnDe,
 {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
-            let meta = pnk!(<InstanceCfg as ValueEnDe>::decode(&meta));
-            Vecx::from(meta)
-        })
+        deserializer
+            .deserialize_bytes(SimpleVisitor)
+            .map(|cfg| Vecx::from(<InstanceCfg as ValueEnDe>::decode(&cfg).unwrap()))
     }
 }
 

@@ -36,6 +36,19 @@ where
     }
 }
 
+impl<K, V> From<InstanceCfg> for Mapx<K, V>
+where
+    K: KeyEnDe,
+    V: ValueEnDe,
+{
+    fn from(cfg: InstanceCfg) -> Self {
+        Self {
+            inner: MapxOrd::from(cfg),
+            _pd: PhantomData,
+        }
+    }
+}
+
 ///////////////////////////////////////////////
 // Begin of the self-implementation for Mapx //
 /*********************************************/
@@ -225,13 +238,9 @@ where
     where
         D: serde::Deserializer<'de>,
     {
-        deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
-            let meta = <InstanceCfg as ValueEnDe>::decode(&meta).unwrap();
-            Mapx {
-                inner: MapxOrd::from(meta),
-                _pd: PhantomData,
-            }
-        })
+        deserializer
+            .deserialize_bytes(SimpleVisitor)
+            .map(|cfg| Mapx::from(<InstanceCfg as ValueEnDe>::decode(&cfg).unwrap()))
     }
 }
 

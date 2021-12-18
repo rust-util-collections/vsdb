@@ -260,8 +260,9 @@ impl Serialize for MapxRaw {
     where
         S: serde::Serializer,
     {
-        let v = <InstanceCfg as ValueEnDe>::encode(&self.get_instance_cfg());
-        serializer.serialize_bytes(&v)
+        serializer.serialize_bytes(&<InstanceCfg as ValueEnDe>::encode(
+            &self.get_instance_cfg(),
+        ))
     }
 }
 
