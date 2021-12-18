@@ -133,7 +133,7 @@ impl Engine for RocksEngine {
 
     fn alloc_version_id(&self) -> VersionID {
         let ret = crate::parse_int!(
-            self.meta.get(META_KEY_BRANCH_ID).unwrap().unwrap(),
+            self.meta.get(META_KEY_VERSION_ID).unwrap().unwrap(),
             VersionID
         );
         self.meta

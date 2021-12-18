@@ -38,33 +38,27 @@ impl<'de> de::Visitor<'de> for SimpleVisitor {
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-/// methods used to encode and decode the KEY
+/// Methods used to encode and decode the KEY.
 pub trait KeyEnDe: Serialize + DeserializeOwned + fmt::Debug {
-    /// encode original type to bytes
+    /// Encode original key type to bytes.
     fn encode(&self) -> Vec<u8> {
         bcs::to_bytes(self).unwrap()
     }
 
-    /// decode from bytes to the original type
+    /// Decode from bytes to the original key type.
     fn decode(bytes: &[u8]) -> Result<Self> {
         bcs::from_bytes(bytes).c(d!())
     }
 }
 
-/// methods used to encode and decode the VALUE
+/// Methods used to encode and decode the VALUE.
 pub trait ValueEnDe: Serialize + DeserializeOwned + fmt::Debug {
-    /// encode original type to bytes
+    /// Encode original value type to bytes.
     fn encode(&self) -> Vec<u8> {
         bcs::to_bytes(self).unwrap()
     }
 
-    /// Special implementation for Option<&[u8]>,
-    /// use Option<Vec<u8>> to trigger a correct serialization.
-    fn encode_option_slice(o: Option<&[u8]>) -> Vec<u8> {
-        bcs::to_bytes::<Option<&[u8]>>(&o).unwrap()
-    }
-
-    /// decode from bytes to the original type
+    /// Decode from bytes to the original value type.
     fn decode(bytes: &[u8]) -> Result<Self> {
         bcs::from_bytes(bytes).c(d!())
     }
@@ -76,10 +70,8 @@ impl<T: Serialize + DeserializeOwned + fmt::Debug> ValueEnDe for T {}
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 
-/// For those keys that their order in bytes format
-/// is consistent with the original data format.
-///
-/// We can get correct results from `get_le/get_be ...` on this kind of keys.
+/// For keys that their serialized order keep consistent with their original format.
+/// When using this kind of keys, we can do some ordered operations, such as: `get_le/get_be ...`
 pub trait KeyEnDeOrdered: Clone + Eq + Ord + fmt::Debug {
     /// &key => bytes
     fn to_bytes(&self) -> Vec<u8>;

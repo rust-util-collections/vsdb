@@ -3,7 +3,7 @@ use crate::common::{
     PREFIX_SIZ, RESERVED_ID_CNT,
 };
 use ruc::*;
-use sled::{Config, Db, Iter, Mode, Tree};
+use sled::{Config, Db, IVec, Iter, Mode, Tree};
 use std::ops::{Bound, RangeBounds};
 
 const DATA_SET_NUM: u8 = 8;
@@ -72,7 +72,11 @@ impl Engine for SledEngine {
 
     fn alloc_version_id(&self) -> VersionID {
         let ret = crate::parse_int!(
-            self.meta.get(META_KEY_BRANCH_ID).unwrap().unwrap().to_vec(),
+            self.meta
+                .get(META_KEY_VERSION_ID)
+                .unwrap()
+                .unwrap()
+                .to_vec(),
             VersionID
         );
         self.meta
@@ -94,6 +98,7 @@ impl Engine for SledEngine {
     fn iter(&self, area_idx: usize, meta_prefix: PrefixBytes) -> SledIter {
         SledIter {
             inner: self.areas[area_idx].scan_prefix(meta_prefix.as_slice()),
+            bounds: (Bound::Unbounded, Bound::Unbounded),
         }
     }
 
@@ -107,11 +112,11 @@ impl Engine for SledEngine {
         let l = match bounds.start_bound() {
             Bound::Included(lo) => {
                 b_lo.extend_from_slice(lo);
-                Bound::Included(b_lo)
+                Bound::Included(IVec::from(b_lo))
             }
             Bound::Excluded(lo) => {
                 b_lo.extend_from_slice(lo);
-                Bound::Excluded(b_lo)
+                Bound::Excluded(IVec::from(b_lo))
             }
             Bound::Unbounded => Bound::Unbounded,
         };
@@ -120,17 +125,18 @@ impl Engine for SledEngine {
         let h = match bounds.end_bound() {
             Bound::Included(hi) => {
                 b_hi.extend_from_slice(hi);
-                Bound::Included(b_hi)
+                Bound::Included(IVec::from(b_hi))
             }
             Bound::Excluded(hi) => {
                 b_hi.extend_from_slice(hi);
-                Bound::Excluded(b_hi)
+                Bound::Excluded(IVec::from(b_hi))
             }
             Bound::Unbounded => Bound::Unbounded,
         };
 
         SledIter {
-            inner: self.areas[area_idx].range((l, h)),
+            inner: self.areas[area_idx].scan_prefix(meta_prefix.as_slice()),
+            bounds: (l, h),
         }
     }
 
@@ -177,24 +183,29 @@ impl Engine for SledEngine {
 
 pub struct SledIter {
     inner: Iter,
+    bounds: (Bound<IVec>, Bound<IVec>),
 }
 
 impl Iterator for SledIter {
     type Item = (Vec<u8>, Vec<u8>);
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner
-            .next()
-            .map(|v| v.unwrap())
-            .map(|(ik, iv)| (ik[PREFIX_SIZ..].to_vec(), iv.to_vec()))
+        while let Some(Ok((k, v))) = self.inner.next() {
+            if self.bounds.contains(&k) {
+                return Some((k[PREFIX_SIZ..].to_vec(), v.to_vec()));
+            }
+        }
+        None
     }
 }
 
 impl DoubleEndedIterator for SledIter {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.inner
-            .next_back()
-            .map(|v| v.unwrap())
-            .map(|(ik, iv)| (ik[PREFIX_SIZ..].to_vec(), iv.to_vec()))
+        while let Some(Ok((k, v))) = self.inner.next_back() {
+            if self.bounds.contains(&k) {
+                return Some((k[PREFIX_SIZ..].to_vec(), v.to_vec()));
+            }
+        }
+        None
     }
 }
 

@@ -352,6 +352,7 @@ impl MapxRawVersioned {
         } else {
             return 0;
         };
+
         self.inner.len_by_branch(branch_id)
     }
 
@@ -371,6 +372,7 @@ impl MapxRawVersioned {
         } else {
             return 0;
         };
+
         let version_id = if let Some(id) = self
             .inner
             .version_name_to_version_id
@@ -380,6 +382,7 @@ impl MapxRawVersioned {
         } else {
             return 0;
         };
+
         self.inner.len_by_branch_version(branch_id, version_id)
     }
 

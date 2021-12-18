@@ -5,9 +5,8 @@
 use crate::{
     basic::mapx_ord::{MapxOrd, MapxOrdIter},
     common::{
-        compute_sig,
-        ende::{KeyEnDeOrdered, ValueEnDe},
-        BranchID, VersionID, BIGGEST_RESERVED_ID, VSDB,
+        compute_sig, ende::KeyEnDeOrdered, BranchID, VersionID, BIGGEST_RESERVED_ID,
+        VSDB,
     },
 };
 use ruc::*;
@@ -117,7 +116,7 @@ impl MapxRawVersioned {
         branch_id: BranchID,
         version_id: VersionID,
     ) -> Result<Option<BytesValue>> {
-        self.write_by_branch_version(key, Some(value), branch_id, version_id)
+        self.write_by_branch_version(key, Some(value.to_vec()), branch_id, version_id)
             .c(d!())
     }
 
@@ -166,7 +165,7 @@ impl MapxRawVersioned {
     fn write_by_branch_version(
         &mut self,
         key: &[u8],
-        value: Option<&[u8]>,
+        value: Option<BytesValue>,
         branch_id: BranchID,
         version_id: VersionID,
     ) -> Result<Option<BytesValue>> {
@@ -181,20 +180,21 @@ impl MapxRawVersioned {
             .or_insert_ref(&MapxOrd::new())
             .entry(branch_id)
             .or_insert(MapxOrd::new())
-            .insert_ref_bytes_kv(
-                &version_id.to_bytes(),
-                &<Option<Vec<u8>> as ValueEnDe>::encode_option_slice(value),
-            )
+            .insert_ref(&version_id, &value)
             .flatten();
 
         // value changed, then re-calculate sig
-        if res.as_deref() != value {
+        if res != value {
             let mut vers = self
                 .branch_to_created_versions
                 .get(&branch_id)
                 .c(d!("BUG: branch not found"))?;
             let mut sig = vers.get_mut(&version_id).c(d!("BUG: version not found"))?;
-            *sig = compute_sig(&[sig.as_slice(), key, value.unwrap_or_default()]);
+            *sig = compute_sig(&[
+                sig.as_slice(),
+                key,
+                value.as_deref().unwrap_or_default(),
+            ]);
         }
 
         Ok(res)

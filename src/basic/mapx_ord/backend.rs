@@ -79,14 +79,14 @@ where
     pub(super) fn get(&self, key: &K) -> Option<V> {
         self.inner
             .get(&key.to_bytes())
-            .map(|bytes| <V as ValueEnDe>::decode(&bytes).unwrap())
+            .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
     }
 
     #[inline(always)]
     pub(super) fn get_ref_bytes_k(&self, key: &[u8]) -> Option<V> {
         self.inner
             .get(key)
-            .map(|bytes| <V as ValueEnDe>::decode(&bytes).unwrap())
+            .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
     }
 
     #[inline(always)]
