@@ -8,11 +8,11 @@ pub(crate) mod ende;
 pub(crate) mod engines;
 
 use {
+    crc32fast::Hasher,
     engines::Engine,
     lazy_static::lazy_static,
     ruc::*,
     serde::{Deserialize, Serialize},
-    sha3::{Digest, Sha3_256},
     std::{
         env, fs,
         mem::size_of,
@@ -27,6 +27,9 @@ use {
 pub(crate) type RawBytes = Box<[u8]>;
 pub(crate) type RawKey = RawBytes;
 pub(crate) type RawValue = RawBytes;
+
+// Checksum of a version
+pub(crate) type VerChecksum = [u8; size_of::<u32>()];
 
 pub(crate) type Prefix = u64;
 pub(crate) type PrefixBytes = [u8; PREFIX_SIZ];
@@ -83,20 +86,24 @@ pub(crate) struct VsDB<T: Engine> {
 }
 
 impl<T: Engine> VsDB<T> {
+    #[inline(always)]
     fn new() -> Result<Self> {
         Ok(Self {
             db: T::new().c(d!())?,
         })
     }
 
+    #[inline(always)]
     pub(crate) fn alloc_branch_id(&self) -> BranchID {
         self.db.alloc_branch_id()
     }
 
+    #[inline(always)]
     pub(crate) fn alloc_version_id(&self) -> VersionID {
         self.db.alloc_version_id()
     }
 
+    #[inline(always)]
     fn flush(&self) {
         self.db.flush()
     }
@@ -150,12 +157,13 @@ pub(crate) struct InstanceCfg {
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
-pub(crate) fn compute_sig(ivec: &[&[u8]]) -> RawBytes {
-    let mut hasher = Sha3_256::new();
+#[inline(always)]
+pub(crate) fn compute_checksum(ivec: &[&[u8]]) -> VerChecksum {
+    let mut hasher = Hasher::new();
     for bytes in ivec {
         hasher.update(bytes);
     }
-    hasher.finalize().as_slice().to_vec().into_boxed_slice()
+    hasher.finalize().to_be_bytes()
 }
 
 /////////////////////////////////////////////////////////////////////////////

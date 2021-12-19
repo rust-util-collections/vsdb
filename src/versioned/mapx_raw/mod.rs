@@ -41,12 +41,12 @@ mod backend;
 #[cfg(test)]
 mod test;
 
-use crate::common::{BranchID, RawKey, RawValue};
+use crate::common::{BranchID, RawKey, RawValue, VerChecksum};
 use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::ops::RangeBounds;
 
-use backend::{MapxRawVersionedIter, ValueMut, VerSig, INITIAL_BRANCH_NAME, NULL};
+use backend::{MapxRawVersionedIter, ValueMut, INITIAL_BRANCH_NAME, NULL};
 
 /// Advanced `MapxRaw`, with versioned feature.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -661,28 +661,28 @@ impl MapxRawVersioned {
 
     /// Get the signature of the head of the default branch.
     #[inline(always)]
-    pub fn sig_get(&self) -> Option<VerSig> {
-        self.inner.sig_get()
+    pub fn checksum_get(&self) -> Option<VerChecksum> {
+        self.inner.checksum_get()
     }
 
     /// Get the signature of the head of a specified branch.
     #[inline(always)]
-    pub fn sig_get_by_branch(&self, branch_name: &[u8]) -> Option<VerSig> {
+    pub fn checksum_get_by_branch(&self, branch_name: &[u8]) -> Option<VerChecksum> {
         let branch_id = self.inner.branch_name_to_branch_id.get(branch_name)?;
-        self.inner.sig_get_by_branch(branch_id)
+        self.inner.checksum_get_by_branch(branch_id)
     }
 
     /// Get the signature of a specified version of a specified branch.
     #[inline(always)]
-    pub fn sig_get_by_branch_version(
+    pub fn checksum_get_by_branch_version(
         &self,
         branch_name: &[u8],
         version_name: &[u8],
-    ) -> Option<VerSig> {
+    ) -> Option<VerChecksum> {
         let branch_id = self.inner.branch_name_to_branch_id.get(branch_name)?;
         let version_id = self.inner.version_name_to_version_id.get(version_name)?;
         self.inner
-            .sig_get_by_branch_version(branch_id, Some(version_id))
+            .checksum_get_by_branch_version(branch_id, Some(version_id))
     }
 
     /// Clean outdated versions out of the default reserved number.

@@ -15,8 +15,9 @@ VSDB, **V**ersioned **S**tateful **D**ata**B**ase, mainly used in blockchain sce
     - Merge branches(different data versions) just like 'git merge BRANCH'
     - ...
 - The definition of most APIs is same as the coresponding data structures of the standard library
-    - Use `Vecx` just like `Vec`, but data will be automatically stored in disk instead of memory
-    - Use `Mapx` just like `BTreeMap`, but data will be automatically stored in disk instead of memory
+    - Use `Vecx` just like `Vec`, but data will be automatically stored in disk
+    - Use `Mapx` just like `HashMap`, but data will be automatically stored in disk
+    - Use `MapxOrd` just like `BTreeMap`, but data will be automatically stored in disk
     - ...
 
 ## Design concept

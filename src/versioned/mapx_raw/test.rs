@@ -78,6 +78,7 @@ fn basic_cases() {
 //     - assume they have not been re-writed by the newer branch
 // - can not read data created by newer versions from an older version
 // - can not remove a version except it is the HEAD version
+// - can not remove a KV except its version is the HEAD version
 // - data created by a version will disappear after the version has been removed
 // - insert different values for a same key within one version will change the version sig
 // - insert same values for a same key within one version will not change the version sig
