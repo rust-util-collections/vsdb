@@ -6,7 +6,9 @@ use ruc::*;
 use sled::{Config, Db, IVec, Iter, Mode, Tree};
 use std::ops::{Bound, RangeBounds};
 
-const DATA_SET_NUM: u8 = 8;
+// the 'prefix search' in sled is just a global scaning,
+// use a relative larger number to sharding the `Tree` pressure.
+const DATA_SET_NUM: usize = 512;
 
 const META_KEY_BRANCH_ID: [u8; 1] = [u8::MAX - 1];
 const META_KEY_VERSION_ID: [u8; 1] = [u8::MAX - 2];
@@ -85,8 +87,8 @@ impl Engine for SledEngine {
         ret
     }
 
-    fn area_count(&self) -> u8 {
-        self.areas.len() as u8
+    fn area_count(&self) -> usize {
+        self.areas.len()
     }
 
     fn flush(&self) {
@@ -189,7 +191,7 @@ pub struct SledIter {
 impl Iterator for SledIter {
     type Item = (Vec<u8>, Vec<u8>);
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(Ok((k, v))) = self.inner.next() {
+        while let Some((k, v)) = self.inner.next().map(|i| i.unwrap()) {
             if self.bounds.contains(&k) {
                 return Some((k[PREFIX_SIZ..].to_vec(), v.to_vec()));
             }
@@ -200,7 +202,7 @@ impl Iterator for SledIter {
 
 impl DoubleEndedIterator for SledIter {
     fn next_back(&mut self) -> Option<Self::Item> {
-        while let Some(Ok((k, v))) = self.inner.next_back() {
+        while let Some((k, v)) = self.inner.next_back().map(|i| i.unwrap()) {
             if self.bounds.contains(&k) {
                 return Some((k[PREFIX_SIZ..].to_vec(), v.to_vec()));
             }

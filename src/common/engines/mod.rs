@@ -39,7 +39,7 @@ pub trait Engine: Sized {
     fn alloc_prefix(&self) -> Prefix;
     fn alloc_branch_id(&self) -> BranchID;
     fn alloc_version_id(&self) -> VersionID;
-    fn area_count(&self) -> u8;
+    fn area_count(&self) -> usize;
     fn flush(&self);
 
     fn iter(&self, area_idx: usize, meta_prefix: PrefixBytes) -> MapxIter;

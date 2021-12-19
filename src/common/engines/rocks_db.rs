@@ -16,7 +16,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-const DATA_SET_NUM: u8 = 4;
+const DATA_SET_NUM: usize = 4;
 
 const META_KEY_MAX_KEYLEN: [u8; 1] = [u8::MAX];
 const META_KEY_BRANCH_ID: [u8; 1] = [u8::MAX - 1];
@@ -142,14 +142,14 @@ impl Engine for RocksEngine {
         ret
     }
 
-    fn area_count(&self) -> u8 {
+    fn area_count(&self) -> usize {
         DATA_SET_NUM
     }
 
     fn flush(&self) {
         self.meta.flush().unwrap();
         (0..DATA_SET_NUM).for_each(|i| {
-            self.meta.flush_cf(self.cf_hdr(i as usize)).unwrap();
+            self.meta.flush_cf(self.cf_hdr(i)).unwrap();
         });
     }
 

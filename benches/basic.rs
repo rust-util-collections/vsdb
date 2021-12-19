@@ -8,10 +8,10 @@ fn bench(c: &mut Criterion) {
     let i = AtomicUsize::new(0);
     let mut db = vsdb::Vecx::new();
 
-    let mut group = c.benchmark_group("** VsDB Benchmark **");
+    let mut group = c.benchmark_group("** VSDB **");
     group
-        .measurement_time(Duration::from_secs(8))
-        .sample_size(12);
+        .measurement_time(Duration::from_secs(30))
+        .sample_size(100);
 
     group.bench_function("  Vecx write", |b| {
         b.iter(|| {
