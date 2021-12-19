@@ -4,6 +4,28 @@
 //! NOTE:
 //! - Both keys and values will **NOT** be encoded in this structure
 //!
+//! # Examples
+//!
+//! ```
+//! use vsdb::MapxRaw;
+//!
+//! let mut l = MapxRaw::new();
+//!
+//! l.insert(&[1], &[0]);
+//! l.insert(&[1], &[0]);
+//! l.insert(&[2], &[0]);
+//!
+//! l.iter().for_each(|(_, v)| {
+//!     assert_eq!(&v[..], &[0]);
+//! });
+//!
+//! l.remove(&[2]);
+//! assert_eq!(l.len(), 1);
+//!
+//! l.clear();
+//! assert_eq!(l.len(), 0);
+//! ```
+//!
 
 #[cfg(test)]
 mod test;

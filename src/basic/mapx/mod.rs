@@ -5,6 +5,29 @@
 //! - Both keys and values will be encoded(serde) in this structure
 //!     - Both of them will be encoded by some `serde`-like methods
 //!
+//! # Examples
+//!
+//! ```
+//! use vsdb::Mapx;
+//!
+//! let mut l = Mapx::new();
+//!
+//! l.insert(1, 0);
+//! l.insert_ref(&1, &0);
+//! l.insert(2, 0);
+//!
+//! l.iter().for_each(|(k, v)| {
+//!     assert!(k >= 1);
+//!     assert_eq!(v, 0);
+//! });
+//!
+//! l.remove(&2);
+//! assert_eq!(l.len(), 1);
+//!
+//! l.clear();
+//! assert_eq!(l.len(), 0);
+//! ```
+//!
 
 #[cfg(test)]
 mod test;

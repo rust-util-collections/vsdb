@@ -4,6 +4,27 @@
 //! NOTE:
 //! - Values will be encoded by some `serde`-like methods
 //!
+//! # Examples
+//!
+//! ```
+//! use vsdb::Vecx;
+//!
+//! let mut l = Vecx::new();
+//!
+//! l.push(1);
+//! for i in l.iter() {
+//!     assert_eq!(1, i);
+//! }
+//!
+//! l.pop();
+//! assert_eq!(l.len(), 0);
+//!
+//! l.insert(0, 1);
+//! assert_eq!(l.len(), 1);
+//!
+//! l.clear();
+//! assert_eq!(l.len(), 0);
+//! ```
 
 #[cfg(test)]
 mod test;

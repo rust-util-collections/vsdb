@@ -53,14 +53,14 @@ fn bench(c: &mut Criterion) {
     group.bench_function(" VERSIONED Mapx write", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
-            db.insert_ref(&[n; 2], &[n; 128]).unwrap();
+            db.insert(&[n; 2], &[n; 128]).unwrap();
         })
     });
 
     group.bench_function(" VERSIONED Mapx read_write", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
-            db.insert_ref(&[n; 2], &[n; 128]).unwrap();
+            db.insert(&[n; 2], &[n; 128]).unwrap();
             db.get(&[n; 2]);
         })
     });

@@ -17,12 +17,12 @@ fn basic_cases() {
         (0..cnt)
             .map(|i: usize| (i.to_be_bytes(), i.to_be_bytes()))
             .for_each(|(i, b)| {
-                hdr_i.insert_ref(&i, &b).unwrap();
+                hdr_i.insert(&i, &b).unwrap();
                 assert_eq!(&hdr_i.get(&i).unwrap()[..], &i);
                 assert_eq!(&hdr_i.remove(&i).unwrap().unwrap()[..], &b);
                 assert!(hdr_i.get(&i).is_none());
-                assert!(hdr_i.insert_ref(&i, &b).unwrap().is_none());
-                assert!(hdr_i.insert_ref(&i, &b).unwrap().is_some());
+                assert!(hdr_i.insert(&i, &b).unwrap().is_none());
+                assert!(hdr_i.insert(&i, &b).unwrap().is_some());
             });
 
         assert_eq!(cnt, hdr_i.len());
@@ -52,10 +52,10 @@ fn basic_cases() {
 
     reloaded.version_create(b"test2").unwrap();
 
-    reloaded.insert_ref(&[1], &[1]).unwrap();
-    reloaded.insert_ref(&[4], &[4]).unwrap();
-    reloaded.insert_ref(&[6], &[6]).unwrap();
-    reloaded.insert_ref(&[80], &[80]).unwrap();
+    reloaded.insert(&[1], &[1]).unwrap();
+    reloaded.insert(&[4], &[4]).unwrap();
+    reloaded.insert(&[6], &[6]).unwrap();
+    reloaded.insert(&[80], &[80]).unwrap();
 
     assert!(reloaded.range(&[][..]..&[1][..]).next().is_none());
     assert_eq!(
@@ -79,8 +79,8 @@ fn basic_cases() {
 // - can not read data created by newer versions from an older version
 // - can not remove a version except it is the HEAD version
 // - data created by a version will disappear after the version has been removed
-// - insert_ref different values for a same key within one version will change the version sig
-// - insert_ref same values for a same key within one version will not change the version sig
+// - insert different values for a same key within one version will change the version sig
+// - insert same values for a same key within one version will not change the version sig
 //
 // create branch:
 // - use existing branch name will fail
@@ -116,7 +116,7 @@ fn VCS_operations() {
     let mut hdr = crate::MapxRawVersioned::new();
 
     // haven't create any version yet
-    assert!(hdr.insert_ref(b"key", b"value").is_err());
+    assert!(hdr.insert(b"key", b"value").is_err());
 
     hdr.version_create(b"001").unwrap();
 
@@ -132,11 +132,11 @@ fn VCS_operations() {
     assert!(hdr.is_empty_by_branch_version(b"main", b"002"));
 
     assert!(
-        hdr.insert_ref(b"version-002/key-01", b"version-002/value-01")
+        hdr.insert(b"version-002/key-01", b"version-002/value-01")
             .is_ok()
     );
     assert!(
-        hdr.insert_ref(b"version-002/key-02", b"version-002/value-02")
+        hdr.insert(b"version-002/key-02", b"version-002/value-02")
             .is_ok()
     );
 

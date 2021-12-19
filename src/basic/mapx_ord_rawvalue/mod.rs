@@ -6,6 +6,29 @@
 //!     - Keys will be encoded by `KeyEnDeOrdered`
 //! - It's your duty to ensure that the encoded key keeps a same order with the original key
 //!
+//! # Examples
+//!
+//! ```
+//! use vsdb::MapxOrdRawValue;
+//!
+//! let mut l = MapxOrdRawValue::new();
+//!
+//! l.insert_ref(&1, &[0]);
+//! l.insert(1, Box::new([0]));
+//! l.insert_ref(&2, &[0]);
+//!
+//! l.iter().for_each(|(k, v)| {
+//!     assert!(k >= 1);
+//!     assert_eq!(&v[..], &[0]);
+//! });
+//!
+//! l.remove(&2);
+//! assert_eq!(l.len(), 1);
+//!
+//! l.clear();
+//! assert_eq!(l.len(), 0);
+//! ```
+//!
 
 #[cfg(test)]
 mod test;

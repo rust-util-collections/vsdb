@@ -1,6 +1,40 @@
 //!
 //! # Versioned functions
 //!
+//! # Examples
+//!
+//! Used as version-ful:
+//!
+//! ```
+//! use vsdb::MapxRawVersioned;
+//!
+//! // TODO
+//! let _l = MapxRawVersioned::new();
+//! ```
+//!
+//! Used as version-less:
+//!
+//! ```
+//! use vsdb::MapxRawVersioned;
+//!
+//! let mut l = MapxRawVersioned::new();
+//! l.version_create(b"test").unwrap();
+//!
+//! l.insert(&[1], &[0]);
+//! l.insert(&[1], &[0]);
+//! l.insert(&[2], &[0]);
+//!
+//! l.iter().for_each(|(_, v)| {
+//!     assert_eq!(&v[..], &[0]);
+//! });
+//!
+//! l.remove(&[2]);
+//! assert_eq!(l.len(), 1);
+//!
+//! l.clear();
+//! assert_eq!(l.len(), 0);
+//! ```
+//!
 
 mod backend;
 
@@ -37,13 +71,13 @@ impl MapxRawVersioned {
 
     /// Insert a KV to the head version of the default branch.
     #[inline(always)]
-    pub fn insert_ref(&mut self, key: &[u8], value: &[u8]) -> Result<Option<RawValue>> {
+    pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<Option<RawValue>> {
         self.inner.insert(key, value).c(d!())
     }
 
     /// Insert a KV to the head version of a specified branch.
     #[inline(always)]
-    pub fn insert_ref_by_branch(
+    pub fn insert_by_branch(
         &mut self,
         key: &[u8],
         value: &[u8],

@@ -4,32 +4,32 @@ use serde::{Deserialize, Serialize};
 #[test]
 fn basic_cases() {
     assert_eq!(SingleValue::new(0), 0);
-    assert!(SingleValue::new(1) > 0);
-    assert!(SingleValue::new(1) >= 0);
-    assert!(SingleValue::new(0) < 1);
-    assert!(SingleValue::new(0) <= 1);
+    assert!(SingleValue::new(111) > 0);
+    assert!(SingleValue::new(111) >= 0);
+    assert!(SingleValue::new(0) < 111);
+    assert!(SingleValue::new(0) <= 111);
 
     assert_eq!(SingleValue::new(0), SingleValue::new(0));
-    assert!(SingleValue::new(1) > SingleValue::new(0));
-    assert!(SingleValue::new(1) >= SingleValue::new(1));
-    assert!(SingleValue::new(0) < SingleValue::new(1));
-    assert!(SingleValue::new(1) <= SingleValue::new(1));
+    assert!(SingleValue::new(111) > SingleValue::new(0));
+    assert!(SingleValue::new(111) >= SingleValue::new(111));
+    assert!(SingleValue::new(0) < SingleValue::new(111));
+    assert!(SingleValue::new(111) <= SingleValue::new(111));
 
-    assert_eq!(SingleValue::new(1) + 1, 2);
-    assert_eq!(SingleValue::new(1) - 1, 0);
-    assert_eq!(SingleValue::new(1) * 1, 1);
-    assert_eq!(SingleValue::new(1) / 2, 0);
-    assert_eq!(SingleValue::new(1) % 2, 1);
+    assert_eq!(SingleValue::new(111) + 111, 222);
+    assert_eq!(SingleValue::new(111) - 111, 0);
+    assert_eq!(SingleValue::new(111) * 111, 111 * 111);
+    assert_eq!(SingleValue::new(111) / 2, 55);
+    assert_eq!(SingleValue::new(111) % 2, 1);
 
-    assert_eq!(-SingleValue::new(1), -1);
-    assert_eq!(!SingleValue::new(1), !1);
+    assert_eq!(-SingleValue::new(111), -111);
+    assert_eq!(!SingleValue::new(111), !111);
 
-    assert_eq!(SingleValue::new(1) >> 2, 1 >> 2);
-    assert_eq!(SingleValue::new(1) << 2, 1 << 2);
+    assert_eq!(SingleValue::new(111) >> 2, 111 >> 2);
+    assert_eq!(SingleValue::new(111) << 2, 111 << 2);
 
-    assert_eq!(SingleValue::new(1) | 2, 1 | 2);
-    assert_eq!(SingleValue::new(1) & 2, 1 & 2);
-    assert_eq!(SingleValue::new(1) ^ 2, 1 ^ 2);
+    assert_eq!(SingleValue::new(111) | 2, 111 | 2);
+    assert_eq!(SingleValue::new(111) & 2, 111 & 2);
+    assert_eq!(SingleValue::new(111) ^ 2, 111 ^ 2);
 
     let mut v = SingleValue::new(1);
     v += 1;
@@ -49,25 +49,25 @@ fn basic_cases() {
     *v.get_mut() = !v.clone_inner();
     assert_eq!(v, !-9);
 
-    *v.get_mut() = 0;
+    *v.get_mut() = 732;
     v >>= 2;
-    assert_eq!(v, 0 >> 2);
+    assert_eq!(v, 732 >> 2);
 
-    *v.get_mut() = 0;
+    *v.get_mut() = 732;
     v <<= 2;
-    assert_eq!(v, 0 << 2);
+    assert_eq!(v, 732 << 2);
 
-    *v.get_mut() = 0;
+    *v.get_mut() = 732;
     v |= 2;
-    assert_eq!(v, 0 | 2);
+    assert_eq!(v, 732 | 2);
 
-    *v.get_mut() = 0;
+    *v.get_mut() = 732;
     v &= 2;
-    assert_eq!(v, 0 & 2);
+    assert_eq!(v, 732 & 2);
 
-    *v.get_mut() = 0;
+    *v.get_mut() = 732;
     v ^= 2;
-    assert_eq!(v, 0 ^ 2);
+    assert_eq!(v, 732 ^ 2);
 }
 
 #[test]
