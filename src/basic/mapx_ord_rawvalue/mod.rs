@@ -44,7 +44,6 @@ use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{
     marker::PhantomData,
-    mem::ManuallyDrop,
     ops::{Bound, Deref, DerefMut, RangeBounds},
     result::Result as StdResult,
 };
@@ -280,8 +279,8 @@ where
     K: KeyEnDeOrdered,
 {
     hdr: &'a mut MapxOrdRawValue<K>,
-    key: ManuallyDrop<K>,
-    value: ManuallyDrop<RawValue>,
+    key: K,
+    value: RawValue,
 }
 
 impl<'a, K> ValueMut<'a, K>
@@ -289,11 +288,7 @@ where
     K: KeyEnDeOrdered,
 {
     pub(crate) fn new(hdr: &'a mut MapxOrdRawValue<K>, key: K, value: RawValue) -> Self {
-        ValueMut {
-            hdr,
-            key: ManuallyDrop::new(key),
-            value: ManuallyDrop::new(value),
-        }
+        ValueMut { hdr, key, value }
     }
 }
 
@@ -303,14 +298,7 @@ where
     K: KeyEnDeOrdered,
 {
     fn drop(&mut self) {
-        // This operation is safe within a `drop()`.
-        // SEE: [**ManuallyDrop::take**](std::mem::ManuallyDrop::take)
-        unsafe {
-            self.hdr.set_value(
-                ManuallyDrop::take(&mut self.key),
-                ManuallyDrop::take(&mut self.value),
-            );
-        };
+        self.hdr.set_value_ref(&self.key, &self.value);
     }
 }
 

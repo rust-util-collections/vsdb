@@ -3,8 +3,6 @@ use crate::common::{
     RawKey, RawValue, VersionID, PREFIX_SIZ, RESERVED_ID_CNT,
 };
 use lazy_static::lazy_static;
-use num_bigint::BigUint;
-use num_traits::CheckedSub;
 use rocksdb::{
     ColumnFamily, ColumnFamilyDescriptor, DBCompressionType, DBIterator, Direction,
     IteratorMode, Options, ReadOptions, SliceTransform, DB,
@@ -12,7 +10,7 @@ use rocksdb::{
 use ruc::*;
 use std::{
     mem::size_of,
-    ops::{Add, Bound, RangeBounds},
+    ops::{Bound, RangeBounds},
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -192,12 +190,9 @@ impl Engine for RocksEngine {
             }
             Bound::Excluded(lo) => {
                 b_lo.extend_from_slice(lo);
-                if let Some(i) = BigUint::from_bytes_be(&b_lo)
-                    .checked_sub(&BigUint::from_bytes_le(&1_u8.to_le_bytes()))
-                {
-                    opt.set_iterate_lower_bound(i.to_bytes_be());
-                    opt_rev.set_iterate_lower_bound(i.to_bytes_be());
-                }
+                b_lo.push(0u8);
+                opt.set_iterate_lower_bound(b_lo.as_slice());
+                opt_rev.set_iterate_lower_bound(b_lo.as_slice());
                 b_lo.as_slice()
             }
             _ => meta_prefix.as_slice(),
@@ -207,12 +202,9 @@ impl Engine for RocksEngine {
         let h = match bounds.end_bound() {
             Bound::Included(hi) => {
                 b_hi.extend_from_slice(hi);
-                opt.set_iterate_upper_bound(
-                    BigUint::from_bytes_be(&b_hi).add(&1_u8).to_bytes_be(),
-                );
-                opt_rev.set_iterate_upper_bound(
-                    BigUint::from_bytes_be(&b_hi).add(&1_u8).to_bytes_be(),
-                );
+                b_hi.push(0u8);
+                opt.set_iterate_upper_bound(b_hi.as_slice());
+                opt_rev.set_iterate_upper_bound(b_hi.as_slice());
                 b_hi
             }
             Bound::Excluded(hi) => {

@@ -37,7 +37,6 @@ use crate::common::{
 use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{
-    mem::ManuallyDrop,
     ops::{Deref, DerefMut, RangeBounds},
     result::Result as StdResult,
 };
@@ -172,31 +171,20 @@ impl MapxRaw {
 #[derive(PartialEq, Eq, Debug)]
 pub struct ValueMut<'a> {
     hdr: &'a mut MapxRaw,
-    key: ManuallyDrop<RawKey>,
-    value: ManuallyDrop<RawValue>,
+    key: RawKey,
+    value: RawValue,
 }
 
 impl<'a> ValueMut<'a> {
     fn new(hdr: &'a mut MapxRaw, key: RawKey, value: RawValue) -> Self {
-        ValueMut {
-            hdr,
-            key: ManuallyDrop::new(key),
-            value: ManuallyDrop::new(value),
-        }
+        ValueMut { hdr, key, value }
     }
 }
 
 /// NOTE: Very Important !!!
 impl<'a> Drop for ValueMut<'a> {
     fn drop(&mut self) {
-        // This operation is safe within a `drop()`.
-        // SEE: [**ManuallyDrop::take**](std::mem::ManuallyDrop::take)
-        unsafe {
-            self.hdr.insert(
-                &ManuallyDrop::take(&mut self.key),
-                &ManuallyDrop::take(&mut self.value),
-            );
-        };
+        self.hdr.insert(&self.key, &self.value);
     }
 }
 

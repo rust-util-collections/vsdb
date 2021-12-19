@@ -19,7 +19,6 @@ use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
-    mem::ManuallyDrop,
     ops::{Deref, DerefMut, RangeBounds},
 };
 
@@ -1074,8 +1073,8 @@ impl ExactSizeIterator for MapxRawVersionedIter<'_> {}
 #[derive(PartialEq, Eq, Debug)]
 pub struct ValueMut<'a> {
     hdr: &'a mut MapxRawVersioned,
-    key: ManuallyDrop<RawKey>,
-    value: ManuallyDrop<RawValue>,
+    key: RawKey,
+    value: RawValue,
     branch_id: BranchID,
 }
 
@@ -1088,8 +1087,8 @@ impl<'a> ValueMut<'a> {
     ) -> Self {
         ValueMut {
             hdr,
-            key: ManuallyDrop::new(key),
-            value: ManuallyDrop::new(value),
+            key,
+            value,
             branch_id,
         }
     }
@@ -1098,15 +1097,10 @@ impl<'a> ValueMut<'a> {
 // NOTE: Very Important !!!
 impl<'a> Drop for ValueMut<'a> {
     fn drop(&mut self) {
-        // This operation is safe within a `drop()`.
-        // SEE: [**ManuallyDrop::take**](std::mem::ManuallyDrop::take)
-        unsafe {
-            pnk!(self.hdr.insert_by_branch(
-                &ManuallyDrop::take(&mut self.key),
-                &ManuallyDrop::take(&mut self.value),
-                self.branch_id,
-            ));
-        };
+        pnk!(
+            self.hdr
+                .insert_by_branch(&self.key, &self.value, self.branch_id)
+        );
     }
 }
 

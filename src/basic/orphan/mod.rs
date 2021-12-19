@@ -79,11 +79,10 @@
 #[cfg(test)]
 mod test;
 
-use crate::{ValueEnDe, Vecx};
+use crate::{basic::mapx_ord_rawkey::MapxOrdRawKey, ValueEnDe};
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
-    mem::ManuallyDrop,
     ops::{
         Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign,
         Deref, DerefMut, Div, DivAssign, Mul, MulAssign, Neg, Not, Rem, RemAssign, Shl,
@@ -102,7 +101,7 @@ pub struct Orphan<T>
 where
     T: ValueEnDe,
 {
-    inner: Vecx<T>,
+    inner: MapxOrdRawKey<T>,
 }
 
 ////////////////////////////////////////////////////////////////////
@@ -114,8 +113,8 @@ where
 {
     #[allow(missing_docs)]
     pub fn new(v: T) -> Self {
-        let mut hdr = Vecx::new();
-        hdr.insert(0, v);
+        let mut hdr = MapxOrdRawKey::new();
+        hdr.insert_ref(&[], &v);
         Self { inner: hdr }
     }
 
@@ -125,11 +124,11 @@ where
     }
 
     fn get_value(&self) -> T {
-        self.inner.get(0).unwrap()
+        self.inner.get(&[]).unwrap()
     }
 
-    fn set_value(&mut self, v: T) {
-        self.inner.update(0, v);
+    fn set_value_ref(&mut self, v: &T) {
+        self.inner.set_value_ref(&[], v);
     }
 
     /// Get the mutable handler of the value.
@@ -141,7 +140,7 @@ where
     ///     - `*(&mut <Orphan>) = Orphan::new(...)`
     ///     - OR you will loss the 'versioned' ability of this object
     pub fn get_mut(&mut self) -> OrphanMut<'_, T> {
-        let value = ManuallyDrop::new(self.get_value());
+        let value = self.get_value();
         OrphanMut { hdr: self, value }
     }
 }
@@ -280,7 +279,7 @@ where
     T: ValueEnDe,
 {
     hdr: &'a mut Orphan<T>,
-    value: ManuallyDrop<T>,
+    value: T,
 }
 
 impl<'a, T> Drop for OrphanMut<'a, T>
@@ -288,11 +287,7 @@ where
     T: ValueEnDe,
 {
     fn drop(&mut self) {
-        // This operation is safe within a `drop()`.
-        // SEE: [**ManuallyDrop::take**](std::mem::ManuallyDrop::take)
-        unsafe {
-            self.hdr.set_value(ManuallyDrop::take(&mut self.value));
-        };
+        self.hdr.set_value_ref(&self.value);
     }
 }
 

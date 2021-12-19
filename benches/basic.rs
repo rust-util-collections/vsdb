@@ -11,7 +11,7 @@ fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("** VSDB **");
     group
         .measurement_time(Duration::from_secs(30))
-        .sample_size(100);
+        .sample_size(90);
 
     group.bench_function(" Vecx write", |b| {
         b.iter(|| {
