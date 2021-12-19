@@ -23,17 +23,11 @@ use std::{cmp::Ordering, result::Result as StdResult};
 ///
 /// - Each time the program is started, a new database is created
 #[derive(PartialEq, Eq, Debug)]
-pub struct Vecx<T>
-where
-    T: ValueEnDe,
-{
+pub struct Vecx<T: ValueEnDe> {
     inner: MapxOrd<usize, T>,
 }
 
-impl<T> From<InstanceCfg> for Vecx<T>
-where
-    T: ValueEnDe,
-{
+impl<T: ValueEnDe> From<InstanceCfg> for Vecx<T> {
     fn from(cfg: InstanceCfg) -> Self {
         Self {
             inner: MapxOrd::from(cfg),
@@ -41,10 +35,7 @@ where
     }
 }
 
-impl<T> Default for Vecx<T>
-where
-    T: ValueEnDe,
-{
+impl<T: ValueEnDe> Default for Vecx<T> {
     fn default() -> Self {
         Self::new()
     }
@@ -53,10 +44,7 @@ where
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
-impl<T> Vecx<T>
-where
-    T: ValueEnDe,
-{
+impl<T: ValueEnDe> Vecx<T> {
     /// Create an instance.
     #[inline(always)]
     pub fn new() -> Self {
@@ -210,27 +198,18 @@ where
 ////////////////////////////////////////////////////////////////////
 
 #[allow(missing_docs)]
-pub struct VecxIter<T>
-where
-    T: ValueEnDe,
-{
+pub struct VecxIter<T: ValueEnDe> {
     iter: MapxOrdIter<usize, T>,
 }
 
-impl<T> Iterator for VecxIter<T>
-where
-    T: ValueEnDe,
-{
+impl<T: ValueEnDe> Iterator for VecxIter<T> {
     type Item = T;
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().map(|v| v.1)
     }
 }
 
-impl<T> DoubleEndedIterator for VecxIter<T>
-where
-    T: ValueEnDe,
-{
+impl<T: ValueEnDe> DoubleEndedIterator for VecxIter<T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back().map(|v| v.1)
     }
@@ -239,10 +218,7 @@ where
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
-impl<'a, T> serde::Serialize for Vecx<T>
-where
-    T: ValueEnDe,
-{
+impl<'a, T: ValueEnDe> serde::Serialize for Vecx<T> {
     fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
     where
         S: serde::Serializer,

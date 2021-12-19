@@ -10,8 +10,9 @@ use crate::{
         mapx_raw::MapxRaw,
     },
     common::{
-        compute_sig, ende::KeyEnDeOrdered, BranchID, RawKey, RawValue, VersionID,
-        BIGGEST_RESERVED_ID, VSDB,
+        compute_sig,
+        ende::{encode_optioned_bytes, KeyEnDeOrdered},
+        BranchID, RawKey, RawValue, VersionID, BIGGEST_RESERVED_ID, VSDB,
     },
 };
 use ruc::*;
@@ -181,7 +182,7 @@ impl MapxRawVersioned {
             .or_insert_ref(&MapxOrd::new())
             .entry(branch_id)
             .or_insert(MapxOrd::new())
-            .insert_ref_encoded_value(&version_id, &bcs::to_bytes(&value).unwrap())
+            .insert_ref_encoded_value(&version_id, &encode_optioned_bytes(&value)[..])
             .flatten();
 
         // value changed, then re-calculate sig

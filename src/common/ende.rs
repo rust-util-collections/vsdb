@@ -40,7 +40,7 @@ impl<'de> de::Visitor<'de> for SimpleVisitor {
 /////////////////////////////////////////////////////////////////////////////
 
 /// Methods used to encode and decode the KEY.
-pub trait KeyEnDe: Serialize + DeserializeOwned + fmt::Debug {
+pub trait KeyEnDe: Serialize + DeserializeOwned {
     /// Encode original key type to bytes.
     fn encode(&self) -> RawBytes {
         bcs::to_bytes(self).unwrap().into_boxed_slice()
@@ -53,7 +53,7 @@ pub trait KeyEnDe: Serialize + DeserializeOwned + fmt::Debug {
 }
 
 /// Methods used to encode and decode the VALUE.
-pub trait ValueEnDe: Serialize + DeserializeOwned + fmt::Debug {
+pub trait ValueEnDe: Serialize + DeserializeOwned {
     /// Encode original value type to bytes.
     fn encode(&self) -> RawBytes {
         bcs::to_bytes(self).unwrap().into_boxed_slice()
@@ -65,8 +65,13 @@ pub trait ValueEnDe: Serialize + DeserializeOwned + fmt::Debug {
     }
 }
 
-impl<T: Serialize + DeserializeOwned + fmt::Debug> KeyEnDe for T {}
-impl<T: Serialize + DeserializeOwned + fmt::Debug> ValueEnDe for T {}
+impl<T: Serialize + DeserializeOwned> KeyEnDe for T {}
+impl<T: Serialize + DeserializeOwned> ValueEnDe for T {}
+
+// used to encode the deref value of `Option<Box<[u8]>>`
+pub(crate) fn encode_optioned_bytes(b: &Option<&[u8]>) -> RawBytes {
+    bcs::to_bytes(b).unwrap().into_boxed_slice()
+}
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
