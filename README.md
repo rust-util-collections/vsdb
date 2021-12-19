@@ -7,7 +7,7 @@
 
 VSDB, **V**ersioned **S**tateful **D**ata**B**ase, mainly used in blockchain scene.
 
-## Highlights(Features)
+## Highlights
 
 - Support GIT-like verison operations, such as:
     - Rolling back a 'branch' to a specified historical 'version'
@@ -19,7 +19,7 @@ VSDB, **V**ersioned **S**tateful **D**ata**B**ase, mainly used in blockchain sce
     - Use `Mapx` just like `BTreeMap`, but data will be automatically stored in disk instead of memory
     - ...
 
-## Implementation ideas
+## Design concept
 
 Based on the underlying one-dimensional linear storage structure (native kv-database, such as sled/rocksdb, etc.), multiple different namespaces are divided, and then abstract each dimension in the multi-dimensional logical structure based on these divided namespaces.
 
@@ -33,3 +33,10 @@ In the internal implementation, each stateful function is implemented based on i
 all stateful data has two additional identification dimensions ('branch' and 'version'), somewhat like the logic in GIT.
 
 Stateless functions do not have the feature of 'version' management, but they have higher performance.
+
+## Compilation features
+
+- [**default**] `sled_engine`, use sled as the backend database
+- `rocks_engine`, use rocksdb as the backedn database
+- [**default**] `cbor_ende`, use cbor as the `en/de`coder
+- `bcs_ende`, use bcs(created by the facebook libre project) as the `en/de`coder
