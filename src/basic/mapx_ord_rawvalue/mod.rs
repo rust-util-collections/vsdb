@@ -9,7 +9,7 @@
 //! # Examples
 //!
 //! ```
-//! use vsdb::MapxOrdRawValue;
+//! use vsdb::basic::mapx_ord_rawvalue::MapxOrdRawValue;
 //!
 //! let mut l = MapxOrdRawValue::new();
 //!

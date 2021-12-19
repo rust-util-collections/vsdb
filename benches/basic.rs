@@ -47,7 +47,7 @@ fn bench(c: &mut Criterion) {
     });
 
     let i = AtomicU8::new(0);
-    let mut db = vsdb::MapxRawVersioned::new();
+    let mut db = vsdb::versioned::mapx_raw::MapxRawVersioned::new();
     db.version_create(b"benchmark").unwrap();
 
     group.bench_function(" VERSIONED Mapx write", |b| {

@@ -7,7 +7,7 @@
 //! # Examples
 //!
 //! ```
-//! use vsdb::MapxRaw;
+//! use vsdb::basic::mapx_raw::MapxRaw;
 //!
 //! let mut l = MapxRaw::new();
 //!

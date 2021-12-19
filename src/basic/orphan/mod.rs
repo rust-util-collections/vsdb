@@ -1,5 +1,5 @@
 //!
-//! An in-disk storage type for single value.
+//! A storage type for various kinds of single value.
 //!
 //! NOTE:
 //! - Values will be encoded by some `serde`-like methods
@@ -7,38 +7,38 @@
 //! # Examples
 //!
 //! ```
-//! use vsdb::SingleValue;
+//! use vsdb::Orphan;
 //! use serde::{Deserialize, Serialize};
 //!
-//! assert_eq!(SingleValue::new(0), 0);
-//! assert!(SingleValue::new(1) > 0);
-//! assert!(SingleValue::new(1) >= 0);
-//! assert!(SingleValue::new(0) < 1);
-//! assert!(SingleValue::new(0) <= 1);
+//! assert_eq!(Orphan::new(0), 0);
+//! assert!(Orphan::new(1) > 0);
+//! assert!(Orphan::new(1) >= 0);
+//! assert!(Orphan::new(0) < 1);
+//! assert!(Orphan::new(0) <= 1);
 //!
-//! assert_eq!(SingleValue::new(0), SingleValue::new(0));
-//! assert!(SingleValue::new(1) > SingleValue::new(0));
-//! assert!(SingleValue::new(1) >= SingleValue::new(1));
-//! assert!(SingleValue::new(0) < SingleValue::new(1));
-//! assert!(SingleValue::new(1) <= SingleValue::new(1));
+//! assert_eq!(Orphan::new(0), Orphan::new(0));
+//! assert!(Orphan::new(1) > Orphan::new(0));
+//! assert!(Orphan::new(1) >= Orphan::new(1));
+//! assert!(Orphan::new(0) < Orphan::new(1));
+//! assert!(Orphan::new(1) <= Orphan::new(1));
 //!
-//! assert_eq!(SingleValue::new(1) + 1, 2);
-//! assert_eq!(SingleValue::new(1) - 1, 0);
-//! assert_eq!(SingleValue::new(1) * 1, 1);
-//! assert_eq!(SingleValue::new(1) / 2, 0);
-//! assert_eq!(SingleValue::new(1) % 2, 1);
+//! assert_eq!(Orphan::new(1) + 1, 2);
+//! assert_eq!(Orphan::new(1) - 1, 0);
+//! assert_eq!(Orphan::new(1) * 1, 1);
+//! assert_eq!(Orphan::new(1) / 2, 0);
+//! assert_eq!(Orphan::new(1) % 2, 1);
 //!
-//! assert_eq!(-SingleValue::new(1), -1);
-//! assert_eq!(!SingleValue::new(1), !1);
+//! assert_eq!(-Orphan::new(1), -1);
+//! assert_eq!(!Orphan::new(1), !1);
 //!
-//! assert_eq!(SingleValue::new(1) >> 2, 1 >> 2);
-//! assert_eq!(SingleValue::new(1) << 2, 1 << 2);
+//! assert_eq!(Orphan::new(1) >> 2, 1 >> 2);
+//! assert_eq!(Orphan::new(1) << 2, 1 << 2);
 //!
-//! assert_eq!(SingleValue::new(1) | 2, 1 | 2);
-//! assert_eq!(SingleValue::new(1) & 2, 1 & 2);
-//! assert_eq!(SingleValue::new(1) ^ 2, 1 ^ 2);
+//! assert_eq!(Orphan::new(1) | 2, 1 | 2);
+//! assert_eq!(Orphan::new(1) & 2, 1 & 2);
+//! assert_eq!(Orphan::new(1) ^ 2, 1 ^ 2);
 //!
-//! let mut v = SingleValue::new(1);
+//! let mut v = Orphan::new(1);
 //! v += 1;
 //! assert_eq!(v, 2);
 //! v *= 100;
@@ -99,7 +99,7 @@ use std::{
 /// such as any type of integer, an enum value, etc..
 #[derive(Serialize, Deserialize, Debug, Eq)]
 #[serde(bound = "")]
-pub struct SingleValue<T>
+pub struct Orphan<T>
 where
     T: ValueEnDe,
 {
@@ -109,7 +109,7 @@ where
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
-impl<T> SingleValue<T>
+impl<T> Orphan<T>
 where
     T: ValueEnDe,
 {
@@ -137,20 +137,20 @@ where
     ///
     /// NOTE:
     /// - Always use this method to change value
-    ///     - `*(<SingleValue>).get_mut() = ...`
+    ///     - `*(<Orphan>).get_mut() = ...`
     /// - **NEVER** do this:
-    ///     - `*(&mut <SingleValue>) = SingleValue::new(...)`
+    ///     - `*(&mut <Orphan>) = Orphan::new(...)`
     ///     - OR you will loss the 'versioned' ability of this object
-    pub fn get_mut(&mut self) -> SingleValueMut<'_, T> {
+    pub fn get_mut(&mut self) -> OrphanMut<'_, T> {
         let value = ManuallyDrop::new(self.get_value());
-        SingleValueMut { hdr: self, value }
+        OrphanMut { hdr: self, value }
     }
 }
 
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
-impl<T> PartialEq for SingleValue<T>
+impl<T> PartialEq for Orphan<T>
 where
     T: ValueEnDe + PartialEq,
 {
@@ -159,7 +159,7 @@ where
     }
 }
 
-impl<T> PartialEq<T> for SingleValue<T>
+impl<T> PartialEq<T> for Orphan<T>
 where
     T: ValueEnDe + PartialEq,
 {
@@ -171,7 +171,7 @@ where
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
-impl<T> Ord for SingleValue<T>
+impl<T> Ord for Orphan<T>
 where
     T: ValueEnDe + Ord,
 {
@@ -180,7 +180,7 @@ where
     }
 }
 
-impl<T> PartialOrd for SingleValue<T>
+impl<T> PartialOrd for Orphan<T>
 where
     T: ValueEnDe + Ord,
 {
@@ -189,7 +189,7 @@ where
     }
 }
 
-impl<T> PartialOrd<T> for SingleValue<T>
+impl<T> PartialOrd<T> for Orphan<T>
 where
     T: ValueEnDe + Ord,
 {
@@ -203,7 +203,7 @@ where
 
 macro_rules! impl_ops {
     ($ops: tt, $fn: tt, $op: tt) => {
-        impl<T> $ops for SingleValue<T>
+        impl<T> $ops for Orphan<T>
         where
             T: ValueEnDe + Ord + Eq + $ops<Output = T>,
         {
@@ -213,7 +213,7 @@ macro_rules! impl_ops {
             }
         }
 
-        impl<T> $ops<T> for SingleValue<T>
+        impl<T> $ops<T> for Orphan<T>
         where
             T: ValueEnDe + Ord + Eq + $ops<Output = T>,
         {
@@ -226,7 +226,7 @@ macro_rules! impl_ops {
     ($ops: tt, $fn: tt, $op: tt, $ops_assign: tt, $fn_assign: tt, $op_assign: tt) => {
         impl_ops!($ops, $fn, $op);
 
-        impl<T> $ops_assign for SingleValue<T>
+        impl<T> $ops_assign for Orphan<T>
         where
             T: ValueEnDe + Ord + Eq + $ops_assign,
         {
@@ -235,7 +235,7 @@ macro_rules! impl_ops {
             }
         }
 
-        impl<T> $ops_assign<T> for SingleValue<T>
+        impl<T> $ops_assign<T> for Orphan<T>
         where
             T: ValueEnDe + Ord + Eq + $ops_assign,
         {
@@ -245,7 +245,7 @@ macro_rules! impl_ops {
         }
     };
     (@$ops: tt, $fn: tt, $op: tt) => {
-        impl<T> $ops for SingleValue<T>
+        impl<T> $ops for Orphan<T>
         where
             T: ValueEnDe + Ord + Eq + $ops<Output = T>,
         {
@@ -276,15 +276,15 @@ impl_ops!(@Neg, neg, -);
 ////////////////////////////////////////////////////////////////////
 
 /// A type returned by `get_mut()`.
-pub struct SingleValueMut<'a, T>
+pub struct OrphanMut<'a, T>
 where
     T: ValueEnDe,
 {
-    hdr: &'a mut SingleValue<T>,
+    hdr: &'a mut Orphan<T>,
     value: ManuallyDrop<T>,
 }
 
-impl<'a, T> Drop for SingleValueMut<'a, T>
+impl<'a, T> Drop for OrphanMut<'a, T>
 where
     T: ValueEnDe,
 {
@@ -297,7 +297,7 @@ where
     }
 }
 
-impl<'a, T> Deref for SingleValueMut<'a, T>
+impl<'a, T> Deref for OrphanMut<'a, T>
 where
     T: ValueEnDe,
 {
@@ -307,7 +307,7 @@ where
     }
 }
 
-impl<'a, T> DerefMut for SingleValueMut<'a, T>
+impl<'a, T> DerefMut for OrphanMut<'a, T>
 where
     T: ValueEnDe,
 {
@@ -319,7 +319,7 @@ where
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
-impl<T> Iterator for SingleValue<T>
+impl<T> Iterator for Orphan<T>
 where
     T: ValueEnDe + Eq,
 {

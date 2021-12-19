@@ -10,7 +10,7 @@
 //! # Examples
 //!
 //! ```
-//! use vsdb::MapxOrd;
+//! use vsdb::basic::mapx_ord::MapxOrd;
 //!
 //! let mut l = MapxOrd::new();
 //!

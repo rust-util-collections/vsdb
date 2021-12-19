@@ -6,7 +6,7 @@ fn basic_cases() {
     let cnt = 200;
 
     let hdr = {
-        let mut hdr_i = crate::MapxRawVersioned::new();
+        let mut hdr_i = MapxRawVersioned::new();
         hdr_i.version_create(b"test1").unwrap();
 
         assert_eq!(0, hdr_i.len());
@@ -113,7 +113,7 @@ fn basic_cases() {
 #[test]
 #[allow(non_snake_case)]
 fn VCS_operations() {
-    let mut hdr = crate::MapxRawVersioned::new();
+    let mut hdr = MapxRawVersioned::new();
 
     // haven't create any version yet
     assert!(hdr.insert(b"key", b"value").is_err());

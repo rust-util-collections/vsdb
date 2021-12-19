@@ -9,7 +9,7 @@
 //! # Examples
 //!
 //! ```
-//! use vsdb::MapxOrdRawKey;
+//! use vsdb::basic::mapx_ord_rawkey::MapxOrdRawKey;
 //!
 //! let mut l = MapxOrdRawKey::new();
 //!

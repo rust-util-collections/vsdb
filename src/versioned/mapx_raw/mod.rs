@@ -6,7 +6,7 @@
 //! Used as version-ful:
 //!
 //! ```
-//! use vsdb::MapxRawVersioned;
+//! use vsdb::versioned::mapx_raw::MapxRawVersioned;
 //!
 //! // TODO
 //! let _l = MapxRawVersioned::new();
@@ -15,7 +15,7 @@
 //! Used as version-less:
 //!
 //! ```
-//! use vsdb::MapxRawVersioned;
+//! use vsdb::versioned::mapx_raw::MapxRawVersioned;
 //!
 //! let mut l = MapxRawVersioned::new();
 //! l.version_create(b"test").unwrap();
