@@ -404,19 +404,16 @@ impl MapxRawVersioned {
         }
     }
 
-    // TODO: use iter.next().is_none()
     #[inline(always)]
     pub(super) fn len(&self) -> usize {
         self.iter().count()
     }
 
-    // TODO: use iter.next().is_none()
     #[inline(always)]
     pub(super) fn len_by_branch(&self, branch_id: BranchID) -> usize {
         self.iter_by_branch(branch_id).count()
     }
 
-    // TODO: use iter.next().is_none()
     #[inline(always)]
     pub(super) fn len_by_branch_version(
         &self,

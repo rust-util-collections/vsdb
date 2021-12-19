@@ -377,13 +377,13 @@ impl MapxRawVersioned {
     #[inline(always)]
     #[allow(missing_docs)]
     pub fn is_empty(&self) -> bool {
-        0 == self.len()
+        self.iter().next().is_none()
     }
 
     #[inline(always)]
     #[allow(missing_docs)]
     pub fn is_empty_by_branch(&self, branch_name: &[u8]) -> bool {
-        0 == self.len_by_branch(branch_name)
+        self.iter_by_branch(branch_name).next().is_none()
     }
 
     #[inline(always)]
@@ -393,7 +393,9 @@ impl MapxRawVersioned {
         branch_name: &[u8],
         version_name: &[u8],
     ) -> bool {
-        0 == self.len_by_branch_version(branch_name, version_name)
+        self.iter_by_branch_version(branch_name, version_name)
+            .next()
+            .is_none()
     }
 
     /// Clear all data, mainly for testing purpose.

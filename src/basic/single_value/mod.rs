@@ -1,5 +1,5 @@
 //!
-//! Single Value
+//! An in-disk storage type for single value.
 //!
 //! NOTE:
 //! - Values will be encoded by some `serde`-like methods
