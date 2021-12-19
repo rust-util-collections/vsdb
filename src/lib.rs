@@ -40,6 +40,8 @@ pub mod versioned;
 
 pub use basic::mapx::Mapx;
 pub use basic::mapx_ord::MapxOrd;
+pub use basic::mapx_ord_rawkey::MapxOrdRawKey;
+pub use basic::mapx_ord_rawvalue::MapxOrdRawValue;
 pub use basic::mapx_raw::MapxRaw;
 pub use basic::vecx::Vecx;
 

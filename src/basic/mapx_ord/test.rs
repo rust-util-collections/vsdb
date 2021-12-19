@@ -21,7 +21,7 @@ fn basic_cases() {
     let cnt = 200;
 
     let hdr = {
-        let mut hdr_i = crate::MapxOrd::new();
+        let mut hdr_i = super::MapxOrd::new();
 
         assert_eq!(0, hdr_i.len());
         (0..cnt).for_each(|i| {

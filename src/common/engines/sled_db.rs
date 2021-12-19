@@ -1,6 +1,6 @@
 use crate::common::{
-    get_data_dir, vsdb_set_base_dir, BranchID, Engine, Prefix, PrefixBytes, VersionID,
-    PREFIX_SIZ, RESERVED_ID_CNT,
+    get_data_dir, vsdb_set_base_dir, BranchID, Engine, Prefix, PrefixBytes, RawKey,
+    RawValue, VersionID, PREFIX_SIZ, RESERVED_ID_CNT,
 };
 use ruc::*;
 use sled::{Config, Db, IVec, Iter, Mode, Tree};
@@ -147,10 +147,13 @@ impl Engine for SledEngine {
         area_idx: usize,
         meta_prefix: PrefixBytes,
         key: &[u8],
-    ) -> Option<Vec<u8>> {
+    ) -> Option<RawValue> {
         let mut k = meta_prefix.to_vec();
         k.extend_from_slice(key);
-        self.areas[area_idx].get(k).unwrap().map(|iv| iv.to_vec())
+        self.areas[area_idx]
+            .get(k)
+            .unwrap()
+            .map(|iv| iv.to_vec().into_boxed_slice())
     }
 
     fn insert(
@@ -159,13 +162,13 @@ impl Engine for SledEngine {
         meta_prefix: PrefixBytes,
         key: &[u8],
         value: &[u8],
-    ) -> Option<Vec<u8>> {
+    ) -> Option<RawValue> {
         let mut k = meta_prefix.to_vec();
         k.extend_from_slice(key);
         self.areas[area_idx]
             .insert(k, value)
             .unwrap()
-            .map(|iv| iv.to_vec())
+            .map(|iv| iv.to_vec().into_boxed_slice())
     }
 
     fn remove(
@@ -173,13 +176,13 @@ impl Engine for SledEngine {
         area_idx: usize,
         meta_prefix: PrefixBytes,
         key: &[u8],
-    ) -> Option<Vec<u8>> {
+    ) -> Option<RawValue> {
         let mut k = meta_prefix.to_vec();
         k.extend_from_slice(key);
         self.areas[area_idx]
             .remove(k)
             .unwrap()
-            .map(|iv| iv.to_vec())
+            .map(|iv| iv.to_vec().into_boxed_slice())
     }
 }
 
@@ -189,11 +192,14 @@ pub struct SledIter {
 }
 
 impl Iterator for SledIter {
-    type Item = (Vec<u8>, Vec<u8>);
+    type Item = (RawKey, RawValue);
     fn next(&mut self) -> Option<Self::Item> {
         while let Some((k, v)) = self.inner.next().map(|i| i.unwrap()) {
             if self.bounds.contains(&k) {
-                return Some((k[PREFIX_SIZ..].to_vec(), v.to_vec()));
+                return Some((
+                    k[PREFIX_SIZ..].to_vec().into_boxed_slice(),
+                    v.to_vec().into_boxed_slice(),
+                ));
             }
         }
         None
@@ -204,7 +210,10 @@ impl DoubleEndedIterator for SledIter {
     fn next_back(&mut self) -> Option<Self::Item> {
         while let Some((k, v)) = self.inner.next_back().map(|i| i.unwrap()) {
             if self.bounds.contains(&k) {
-                return Some((k[PREFIX_SIZ..].to_vec(), v.to_vec()));
+                return Some((
+                    k[PREFIX_SIZ..].to_vec().into_boxed_slice(),
+                    v.to_vec().into_boxed_slice(),
+                ));
             }
         }
         None

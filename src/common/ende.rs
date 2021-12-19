@@ -4,6 +4,7 @@
 //! (en)Encode and (de)Decode
 //!
 
+use super::RawBytes;
 use ruc::*;
 use serde::{
     de::{self, DeserializeOwned},
@@ -15,8 +16,8 @@ use std::{
     result::Result as StdResult,
 };
 
-//////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
 
 pub(crate) struct SimpleVisitor;
 
@@ -35,14 +36,14 @@ impl<'de> de::Visitor<'de> for SimpleVisitor {
     }
 }
 
-//////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
 
 /// Methods used to encode and decode the KEY.
 pub trait KeyEnDe: Serialize + DeserializeOwned + fmt::Debug {
     /// Encode original key type to bytes.
-    fn encode(&self) -> Vec<u8> {
-        bcs::to_bytes(self).unwrap()
+    fn encode(&self) -> RawBytes {
+        bcs::to_bytes(self).unwrap().into_boxed_slice()
     }
 
     /// Decode from bytes to the original key type.
@@ -54,8 +55,8 @@ pub trait KeyEnDe: Serialize + DeserializeOwned + fmt::Debug {
 /// Methods used to encode and decode the VALUE.
 pub trait ValueEnDe: Serialize + DeserializeOwned + fmt::Debug {
     /// Encode original value type to bytes.
-    fn encode(&self) -> Vec<u8> {
-        bcs::to_bytes(self).unwrap()
+    fn encode(&self) -> RawBytes {
+        bcs::to_bytes(self).unwrap().into_boxed_slice()
     }
 
     /// Decode from bytes to the original value type.
@@ -67,17 +68,17 @@ pub trait ValueEnDe: Serialize + DeserializeOwned + fmt::Debug {
 impl<T: Serialize + DeserializeOwned + fmt::Debug> KeyEnDe for T {}
 impl<T: Serialize + DeserializeOwned + fmt::Debug> ValueEnDe for T {}
 
-//////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
 
 /// For keys that their serialized order keep consistent with their original format.
 /// When using this kind of keys, we can do some ordered operations, such as: `get_le/get_be ...`
 pub trait KeyEnDeOrdered: Clone + Eq + Ord + fmt::Debug {
     /// &key => bytes
-    fn to_bytes(&self) -> Vec<u8>;
+    fn to_bytes(&self) -> RawBytes;
 
     /// key => bytes
-    fn into_bytes(self) -> Vec<u8> {
+    fn into_bytes(self) -> RawBytes {
         self.to_bytes()
     }
 
@@ -85,20 +86,20 @@ pub trait KeyEnDeOrdered: Clone + Eq + Ord + fmt::Debug {
     fn from_slice(b: &[u8]) -> Result<Self>;
 
     /// bytes => key
-    fn from_bytes(b: Vec<u8>) -> Result<Self> {
+    fn from_bytes(b: RawBytes) -> Result<Self> {
         Self::from_slice(&b)
     }
 }
 
 impl KeyEnDeOrdered for Vec<u8> {
     #[inline(always)]
-    fn to_bytes(&self) -> Vec<u8> {
-        self.clone()
+    fn to_bytes(&self) -> RawBytes {
+        self.clone().into_boxed_slice()
     }
 
     #[inline(always)]
-    fn into_bytes(self) -> Vec<u8> {
-        self
+    fn into_bytes(self) -> RawBytes {
+        self.into_boxed_slice()
     }
 
     #[inline(always)]
@@ -107,20 +108,42 @@ impl KeyEnDeOrdered for Vec<u8> {
     }
 
     #[inline(always)]
-    fn from_bytes(b: Vec<u8>) -> Result<Self> {
+    fn from_bytes(b: RawBytes) -> Result<Self> {
+        Ok(b.to_vec())
+    }
+}
+
+impl KeyEnDeOrdered for RawBytes {
+    #[inline(always)]
+    fn to_bytes(&self) -> RawBytes {
+        self.clone()
+    }
+
+    #[inline(always)]
+    fn into_bytes(self) -> RawBytes {
+        self
+    }
+
+    #[inline(always)]
+    fn from_slice(b: &[u8]) -> Result<Self> {
+        Ok(b.to_vec().into_boxed_slice())
+    }
+
+    #[inline(always)]
+    fn from_bytes(b: RawBytes) -> Result<Self> {
         Ok(b)
     }
 }
 
 impl KeyEnDeOrdered for String {
     #[inline(always)]
-    fn to_bytes(&self) -> Vec<u8> {
-        self.as_bytes().to_vec()
+    fn to_bytes(&self) -> RawBytes {
+        self.as_bytes().to_vec().into_boxed_slice()
     }
 
     #[inline(always)]
-    fn into_bytes(self) -> Vec<u8> {
-        self.into_bytes()
+    fn into_bytes(self) -> RawBytes {
+        self.into_bytes().into_boxed_slice()
     }
 
     #[inline(always)]
@@ -129,8 +152,8 @@ impl KeyEnDeOrdered for String {
     }
 
     #[inline(always)]
-    fn from_bytes(b: Vec<u8>) -> Result<Self> {
-        String::from_utf8(b).c(d!())
+    fn from_bytes(b: RawBytes) -> Result<Self> {
+        String::from_utf8(b.into()).c(d!())
     }
 }
 
@@ -138,8 +161,8 @@ macro_rules! impl_type {
     ($int: ty) => {
         impl KeyEnDeOrdered for $int {
             #[inline(always)]
-            fn to_bytes(&self) -> Vec<u8> {
-                self.to_be_bytes().to_vec()
+            fn to_bytes(&self) -> RawBytes {
+                Box::new(self.to_be_bytes())
             }
             #[inline(always)]
             fn from_slice(b: &[u8]) -> Result<Self> {
@@ -153,17 +176,20 @@ macro_rules! impl_type {
         #[allow(clippy::unsound_collection_transmute)]
         impl KeyEnDeOrdered for Vec<$int> {
             #[inline(always)]
-            fn to_bytes(&self) -> Vec<u8> {
-                self.iter().map(|i| i.to_be_bytes()).flatten().collect()
+            fn to_bytes(&self) -> RawBytes {
+                self.iter()
+                    .map(|i| i.to_be_bytes())
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice()
             }
             #[inline(always)]
-            fn into_bytes(mut self) -> Vec<u8> {
+            fn into_bytes(mut self) -> RawBytes {
                 for i in 0..self.len() {
                     self[i] = self[i].to_be();
                 }
                 unsafe {
-                    let mut v = transmute::<Vec<$int>, Vec<u8>>(self);
-                    v.set_len(v.len() * size_of::<$int>());
+                    let v = transmute::<Box<[$int]>, RawBytes>(self.into_boxed_slice());
                     v
                 }
             }
@@ -181,12 +207,12 @@ macro_rules! impl_type {
                     .collect()
             }
             #[inline(always)]
-            fn from_bytes(b: Vec<u8>) -> Result<Self> {
+            fn from_bytes(b: RawBytes) -> Result<Self> {
                 if 0 != b.len() % size_of::<$int>() {
                     return Err(eg!("invalid bytes"));
                 }
                 let mut ret = unsafe {
-                    let mut v = transmute::<Vec<u8>, Vec<$int>>(b);
+                    let mut v = transmute::<Vec<u8>, Vec<$int>>(b.into());
                     v.set_len(v.len() / size_of::<$int>());
                     v
                 };
@@ -200,8 +226,12 @@ macro_rules! impl_type {
     ($int: ty, $siz: expr) => {
         impl KeyEnDeOrdered for [$int; $siz] {
             #[inline(always)]
-            fn to_bytes(&self) -> Vec<u8> {
-                self.iter().map(|i| i.to_be_bytes()).flatten().collect()
+            fn to_bytes(&self) -> RawBytes {
+                self.iter()
+                    .map(|i| i.to_be_bytes())
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice()
             }
             #[inline(always)]
             fn from_slice(b: &[u8]) -> Result<Self> {
@@ -282,5 +312,5 @@ impl_type!(@usize);
 //     123, 124, 125, 126, 127, 128
 // );
 
-//////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////

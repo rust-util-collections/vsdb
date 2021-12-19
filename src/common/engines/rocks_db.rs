@@ -1,6 +1,6 @@
 use crate::common::{
-    get_data_dir, vsdb_set_base_dir, BranchID, Engine, Prefix, PrefixBytes, VersionID,
-    PREFIX_SIZ, RESERVED_ID_CNT,
+    get_data_dir, vsdb_set_base_dir, BranchID, Engine, Prefix, PrefixBytes, RawBytes,
+    RawKey, RawValue, VersionID, PREFIX_SIZ, RESERVED_ID_CNT,
 };
 use lazy_static::lazy_static;
 use num_bigint::BigUint;
@@ -56,7 +56,7 @@ impl RocksEngine {
     #[inline(always)]
     fn get_upper_bound_value(&self, meta_prefix: PrefixBytes) -> Vec<u8> {
         lazy_static! {
-            static ref BUF: Vec<u8> = vec![u8::MAX; 512];
+            static ref BUF: RawBytes = vec![u8::MAX; 512].into_boxed_slice();
         }
 
         let mut max_guard = meta_prefix.to_vec();
@@ -247,10 +247,13 @@ impl Engine for RocksEngine {
         area_idx: usize,
         meta_prefix: PrefixBytes,
         key: &[u8],
-    ) -> Option<Vec<u8>> {
+    ) -> Option<RawValue> {
         let mut k = meta_prefix.to_vec();
         k.extend_from_slice(key);
-        self.meta.get_cf(self.cf_hdr(area_idx), k).unwrap()
+        self.meta
+            .get_cf(self.cf_hdr(area_idx), k)
+            .unwrap()
+            .map(|v| v.into_boxed_slice())
     }
 
     fn insert(
@@ -259,7 +262,7 @@ impl Engine for RocksEngine {
         meta_prefix: PrefixBytes,
         key: &[u8],
         value: &[u8],
-    ) -> Option<Vec<u8>> {
+    ) -> Option<RawValue> {
         let mut k = meta_prefix.to_vec();
         k.extend_from_slice(key);
 
@@ -269,7 +272,7 @@ impl Engine for RocksEngine {
 
         let old_v = self.meta.get_cf(self.cf_hdr(area_idx), &k).unwrap();
         self.meta.put_cf(self.cf_hdr(area_idx), k, value).unwrap();
-        old_v
+        old_v.map(|v| v.into_boxed_slice())
     }
 
     fn remove(
@@ -277,12 +280,12 @@ impl Engine for RocksEngine {
         area_idx: usize,
         meta_prefix: PrefixBytes,
         key: &[u8],
-    ) -> Option<Vec<u8>> {
+    ) -> Option<RawValue> {
         let mut k = meta_prefix.to_vec();
         k.extend_from_slice(key);
         let old_v = self.meta.get_cf(self.cf_hdr(area_idx), &k).unwrap();
         self.meta.delete_cf(self.cf_hdr(area_idx), k).unwrap();
-        old_v
+        old_v.map(|v| v.into_boxed_slice())
     }
 }
 
@@ -292,19 +295,25 @@ pub struct RocksIter {
 }
 
 impl Iterator for RocksIter {
-    type Item = (Vec<u8>, Vec<u8>);
+    type Item = (RawKey, RawValue);
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner
-            .next()
-            .map(|(ik, iv)| (ik[PREFIX_SIZ..].to_vec(), iv.to_vec()))
+        self.inner.next().map(|(ik, iv)| {
+            (
+                ik[PREFIX_SIZ..].to_vec().into_boxed_slice(),
+                iv.to_vec().into_boxed_slice(),
+            )
+        })
     }
 }
 
 impl DoubleEndedIterator for RocksIter {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.inner_rev
-            .next()
-            .map(|(ik, iv)| (ik[PREFIX_SIZ..].to_vec(), iv.to_vec()))
+        self.inner_rev.next().map(|(ik, iv)| {
+            (
+                ik[PREFIX_SIZ..].to_vec().into_boxed_slice(),
+                iv.to_vec().into_boxed_slice(),
+            )
+        })
     }
 }
 

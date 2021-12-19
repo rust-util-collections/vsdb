@@ -1,5 +1,9 @@
 //!
-//! A disk-storage replacement for the pure in-memory BTreeMap.
+//! A `HashMap`-like structure but storing data in disk.
+//!
+//! NOTE:
+//! - Both keys and values will be encoded(serde) in this structure
+//!     - Both of them will be encoded by some `serde`-like methods
 //!
 
 #[cfg(test)]
@@ -9,20 +13,20 @@ use crate::{
     basic::mapx_ord::{Entry, MapxOrd, MapxOrdIter, ValueMut},
     common::{
         ende::{KeyEnDe, SimpleVisitor, ValueEnDe},
-        InstanceCfg,
+        InstanceCfg, RawKey,
     },
 };
 use std::{marker::PhantomData, result::Result as StdResult};
 
 /// To solve the problem of unlimited memory usage,
-/// use this to replace the original in-memory `BTreeMap<_, _>`.
+/// use this to replace the original in-memory `HashMap<_, _>`.
 #[derive(PartialEq, Eq, Debug)]
 pub struct Mapx<K, V>
 where
     K: KeyEnDe,
     V: ValueEnDe,
 {
-    inner: MapxOrd<Vec<u8>, V>,
+    inner: MapxOrd<RawKey, V>,
     _pd: PhantomData<K>,
 }
 
@@ -49,9 +53,8 @@ where
     }
 }
 
-///////////////////////////////////////////////
-// Begin of the self-implementation for Mapx //
-/*********************************************/
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
 
 impl<K, V> Mapx<K, V>
 where
@@ -72,22 +75,22 @@ where
         self.inner.get_instance_cfg()
     }
 
-    /// Imitate the behavior of 'BTreeMap<_>.get(...)'
+    /// Imitate the behavior of 'HashMap<_>.get(...)'
     #[inline(always)]
     pub fn get(&self, key: &K) -> Option<V> {
         self.inner.get(&key.encode())
     }
 
-    /// Imitate the behavior of 'BTreeMap<_>.get_mut(...)'
+    /// Imitate the behavior of 'HashMap<_>.get_mut(...)'
     #[inline(always)]
-    pub fn get_mut(&mut self, key: &K) -> Option<ValueMut<'_, Vec<u8>, V>> {
+    pub fn get_mut(&mut self, key: &K) -> Option<ValueMut<'_, RawKey, V>> {
         let k = key.encode();
         self.inner
             .get(&k)
             .map(move |v| ValueMut::new(&mut self.inner, k, v))
     }
 
-    /// Imitate the behavior of 'BTreeMap<_>.len()'.
+    /// Imitate the behavior of 'HashMap<_>.len()'.
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.inner.len()
@@ -99,7 +102,7 @@ where
         self.inner.is_empty()
     }
 
-    /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
+    /// Imitate the behavior of 'HashMap<_>.insert(...)'.
     #[inline(always)]
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         self.insert_ref(&key, &value)
@@ -125,7 +128,7 @@ where
 
     /// Imitate the behavior of '.entry(...).or_insert(...)'
     #[inline(always)]
-    pub fn entry(&mut self, key: K) -> Entry<'_, Vec<u8>, V> {
+    pub fn entry(&mut self, key: K) -> Entry<'_, RawKey, V> {
         self.inner.entry(key.encode())
     }
 
@@ -163,21 +166,16 @@ where
     }
 }
 
-/*******************************************/
-// End of the self-implementation for Mapx //
-/////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
 
-//////////////////////////////////////////////////
-// Begin of the implementation of Iter for Mapx //
-/************************************************/
-
-/// Iter over [Mapx](self::Mapx).
+#[allow(missing_docs)]
 pub struct MapxIter<K, V>
 where
     K: KeyEnDe,
     V: ValueEnDe,
 {
-    iter: MapxOrdIter<Vec<u8>, V>,
+    iter: MapxOrdIter<RawKey, V>,
     _pd: PhantomData<K>,
 }
 
@@ -206,13 +204,8 @@ where
     }
 }
 
-/**********************************************/
-// End of the implementation of Iter for Mapx //
-////////////////////////////////////////////////
-
-///////////////////////////////////////////////////////////////////
-// Begin of the implementation of Serialize/Deserialize for Mapx //
-/*****************************************************************/
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
 
 impl<K, V> serde::Serialize for Mapx<K, V>
 where
@@ -244,6 +237,5 @@ where
     }
 }
 
-/***************************************************************/
-// End of the implementation of Serialize/Deserialize for Mapx //
-/////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////

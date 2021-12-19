@@ -2,8 +2,7 @@
 //! A `BTreeMap`-like structure but storing data in disk.
 //!
 //! NOTE:
-//! - Both keys and values will be encoded in this structure
-//!     - Keys will be encoded by `KeyEnDeOrdered`
+//! - Keys will **NOT** be encoded in this structure, but values will be
 //!     - Values will be encoded by some `serde`-like methods
 //! - It's your duty to ensure that the encoded key keeps a same order with the original key
 //!
@@ -14,8 +13,8 @@ mod test;
 use crate::{
     basic::mapx_raw::{MapxRaw, MapxRawIter},
     common::{
-        ende::{KeyEnDeOrdered, SimpleVisitor, ValueEnDe},
-        InstanceCfg,
+        ende::{SimpleVisitor, ValueEnDe},
+        InstanceCfg, RawKey,
     },
 };
 use ruc::*;
@@ -30,33 +29,28 @@ use std::{
 /// To solve the problem of unlimited memory usage,
 /// use this to replace the original in-memory `BTreeMap<_, _>`.
 #[derive(PartialEq, Eq, Debug)]
-pub struct MapxOrd<K, V>
+pub struct MapxOrdRawKey<V>
 where
-    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     inner: MapxRaw,
-    _pd0: PhantomData<K>,
-    _pd1: PhantomData<V>,
+    pd: PhantomData<V>,
 }
 
-impl<K, V> From<InstanceCfg> for MapxOrd<K, V>
+impl<V> From<InstanceCfg> for MapxOrdRawKey<V>
 where
-    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     fn from(cfg: InstanceCfg) -> Self {
         Self {
             inner: MapxRaw::from(cfg),
-            _pd0: PhantomData,
-            _pd1: PhantomData,
+            pd: PhantomData,
         }
     }
 }
 
-impl<K, V> Default for MapxOrd<K, V>
+impl<V> Default for MapxOrdRawKey<V>
 where
-    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     fn default() -> Self {
@@ -67,18 +61,16 @@ where
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
-impl<K, V> MapxOrd<K, V>
+impl<V> MapxOrdRawKey<V>
 where
-    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     /// Create an instance.
     #[inline(always)]
     pub fn new() -> Self {
-        MapxOrd {
+        MapxOrdRawKey {
             inner: MapxRaw::new(),
-            _pd0: PhantomData,
-            _pd1: PhantomData,
+            pd: PhantomData,
         }
     }
 
@@ -89,39 +81,37 @@ where
 
     /// Imitate the behavior of 'BTreeMap<_>.get(...)'
     #[inline(always)]
-    pub fn get(&self, key: &K) -> Option<V> {
+    pub fn get(&self, key: &[u8]) -> Option<V> {
         self.inner
-            .get(&key.to_bytes())
+            .get(key)
             .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
     }
 
     /// Get the closest smaller value, include itself.
     #[inline(always)]
-    pub fn get_le(&self, key: &K) -> Option<(K, V)> {
-        self.inner.get_le(&key.to_bytes()).map(|(k, v)| {
-            (
-                pnk!(K::from_bytes(k)),
-                <V as ValueEnDe>::decode(&v).unwrap(),
-            )
-        })
+    pub fn get_le(&self, key: &[u8]) -> Option<(RawKey, V)> {
+        self.inner
+            .get_le(key)
+            .map(|(k, v)| (k, <V as ValueEnDe>::decode(&v).unwrap()))
     }
 
     /// Get the closest larger value, include itself.
     #[inline(always)]
-    pub fn get_ge(&self, key: &K) -> Option<(K, V)> {
-        self.inner.get_ge(&key.to_bytes()).map(|(k, v)| {
-            (
-                pnk!(K::from_bytes(k)),
-                <V as ValueEnDe>::decode(&v).unwrap(),
-            )
-        })
+    pub fn get_ge(&self, key: &[u8]) -> Option<(RawKey, V)> {
+        self.inner
+            .get_ge(key)
+            .map(|(k, v)| (k, <V as ValueEnDe>::decode(&v).unwrap()))
     }
 
     /// Imitate the behavior of 'BTreeMap<_>.get_mut(...)'
     #[inline(always)]
-    pub fn get_mut(&mut self, key: &K) -> Option<ValueMut<'_, K, V>> {
-        self.inner.get(&key.to_bytes()).map(|v| {
-            ValueMut::new(self, key.clone(), <V as ValueEnDe>::decode(&v).unwrap())
+    pub fn get_mut(&mut self, key: &[u8]) -> Option<ValueMut<'_, V>> {
+        self.inner.get(key).map(|v| {
+            ValueMut::new(
+                self,
+                key.to_vec().into_boxed_slice(),
+                <V as ValueEnDe>::decode(&v).unwrap(),
+            )
         })
     }
 
@@ -139,139 +129,111 @@ where
 
     /// Imitate the behavior of 'BTreeMap<_>.insert(...)'.
     #[inline(always)]
-    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+    pub fn insert(&mut self, key: RawKey, value: V) -> Option<V> {
         self.insert_ref(&key, &value)
     }
 
     #[inline(always)]
     #[allow(missing_docs)]
-    pub fn insert_ref(&mut self, key: &K, value: &V) -> Option<V> {
+    pub fn insert_ref(&mut self, key: &[u8], value: &V) -> Option<V> {
         self.inner
-            .insert(&key.to_bytes(), &value.encode())
-            .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
-    }
-
-    // used to support efficient versioned-implementations
-    #[inline(always)]
-    pub(crate) fn insert_ref_encoded_value(
-        &mut self,
-        key: &K,
-        value: &[u8],
-    ) -> Option<V> {
-        self.inner
-            .insert(&key.to_bytes(), value)
+            .insert(key, &value.encode())
             .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
     }
 
     /// Similar with `insert`, but ignore the old value.
     #[inline(always)]
-    pub fn set_value(&mut self, key: K, value: V) {
+    pub fn set_value(&mut self, key: RawKey, value: V) {
         self.set_value_ref(&key, &value);
     }
 
     #[inline(always)]
     #[allow(missing_docs)]
-    pub fn set_value_ref(&mut self, key: &K, value: &V) {
-        self.inner.insert(&key.to_bytes(), &value.encode());
+    pub fn set_value_ref(&mut self, key: &[u8], value: &V) {
+        self.inner.insert(key, &value.encode());
     }
 
     /// Imitate the behavior of '.entry(...).or_insert(...)'
     #[inline(always)]
-    pub fn entry(&mut self, key: K) -> Entry<'_, K, V> {
+    pub fn entry(&mut self, key: RawKey) -> Entry<'_, V> {
         Entry { key, hdr: self }
     }
 
     #[inline(always)]
     #[allow(missing_docs)]
-    pub fn entry_ref<'a>(&'a mut self, key: &'a K) -> EntryRef<'a, K, V> {
+    pub fn entry_ref<'a>(&'a mut self, key: &'a [u8]) -> EntryRef<'a, V> {
         EntryRef { key, hdr: self }
     }
 
     /// Imitate the behavior of '.iter()'
     #[inline(always)]
-    pub fn iter(&self) -> MapxOrdIter<K, V> {
-        MapxOrdIter {
+    pub fn iter(&self) -> MapxOrdRawKeyIter<V> {
+        MapxOrdRawKeyIter {
             iter: self.inner.iter(),
-            _pd0: PhantomData,
-            _pd1: PhantomData,
+            pd: PhantomData,
         }
     }
 
     /// range(start..end)
     #[inline(always)]
-    pub fn range<R: RangeBounds<K>>(&self, bounds: R) -> MapxOrdIter<K, V> {
-        self.range_ref((bounds.start_bound(), bounds.end_bound()))
+    pub fn range<R: RangeBounds<RawKey>>(&self, bounds: R) -> MapxOrdRawKeyIter<V> {
+        let start = match bounds.start_bound() {
+            Bound::Included(s) => Bound::Included(&s[..]),
+            Bound::Excluded(s) => Bound::Excluded(&s[..]),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+
+        let end = match bounds.end_bound() {
+            Bound::Included(e) => Bound::Included(&e[..]),
+            Bound::Excluded(e) => Bound::Excluded(&e[..]),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+
+        self.range_ref((start, end))
     }
 
     /// range(start..end)
     #[inline(always)]
-    pub fn range_ref<'a, R: RangeBounds<&'a K>>(
+    pub fn range_ref<'a, R: RangeBounds<&'a [u8]>>(
         &'a self,
         bounds: R,
-    ) -> MapxOrdIter<K, V> {
-        let ll;
-        let l = match bounds.start_bound() {
-            Bound::Included(lo) => {
-                ll = lo.to_bytes();
-                Bound::Included(&ll[..])
-            }
-            Bound::Excluded(lo) => {
-                ll = lo.to_bytes();
-                Bound::Excluded(&ll[..])
-            }
-            Bound::Unbounded => Bound::Unbounded,
-        };
-
-        let hh;
-        let h = match bounds.end_bound() {
-            Bound::Included(hi) => {
-                hh = hi.to_bytes();
-                Bound::Included(&hh[..])
-            }
-            Bound::Excluded(hi) => {
-                hh = hi.to_bytes();
-                Bound::Excluded(&hh[..])
-            }
-            Bound::Unbounded => Bound::Unbounded,
-        };
-
-        MapxOrdIter {
-            iter: self.inner.range((l, h)),
-            _pd0: PhantomData,
-            _pd1: PhantomData,
+    ) -> MapxOrdRawKeyIter<V> {
+        MapxOrdRawKeyIter {
+            iter: self.inner.range(bounds),
+            pd: PhantomData,
         }
     }
 
     /// First item
     #[inline(always)]
-    pub fn first(&self) -> Option<(K, V)> {
+    pub fn first(&self) -> Option<(RawKey, V)> {
         self.iter().next()
     }
 
     /// Last item
     #[inline(always)]
-    pub fn last(&self) -> Option<(K, V)> {
+    pub fn last(&self) -> Option<(RawKey, V)> {
         self.iter().next_back()
     }
 
     /// Check if a key is exists.
     #[inline(always)]
-    pub fn contains_key(&self, key: &K) -> bool {
-        self.inner.contains_key(&key.to_bytes())
+    pub fn contains_key(&self, key: &[u8]) -> bool {
+        self.inner.contains_key(key)
     }
 
-    /// Remove a <K, V> from mem and disk.
+    /// Remove a <V> from mem and disk.
     #[inline(always)]
-    pub fn remove(&mut self, key: &K) -> Option<V> {
+    pub fn remove(&mut self, key: &[u8]) -> Option<V> {
         self.inner
-            .remove(&key.to_bytes())
+            .remove(key)
             .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
     }
 
-    /// Remove a <K, V> from mem and disk.
+    /// Remove a <V> from mem and disk.
     #[inline(always)]
-    pub fn unset_value(&mut self, key: &K) {
-        self.inner.remove(&key.to_bytes());
+    pub fn unset_value(&mut self, key: &[u8]) {
+        self.inner.remove(key);
     }
 
     /// Clear all data.
@@ -284,24 +246,22 @@ where
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
-/// Returned by `<MapxOrd>.get_mut(...)`
+/// Returned by `<MapxOrdRawKey>.get_mut(...)`
 #[derive(Debug)]
-pub struct ValueMut<'a, K, V>
+pub struct ValueMut<'a, V>
 where
-    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
-    hdr: &'a mut MapxOrd<K, V>,
-    key: ManuallyDrop<K>,
+    hdr: &'a mut MapxOrdRawKey<V>,
+    key: ManuallyDrop<RawKey>,
     value: ManuallyDrop<V>,
 }
 
-impl<'a, K, V> ValueMut<'a, K, V>
+impl<'a, V> ValueMut<'a, V>
 where
-    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
-    pub(crate) fn new(hdr: &'a mut MapxOrd<K, V>, key: K, value: V) -> Self {
+    pub(crate) fn new(hdr: &'a mut MapxOrdRawKey<V>, key: RawKey, value: V) -> Self {
         ValueMut {
             hdr,
             key: ManuallyDrop::new(key),
@@ -311,9 +271,8 @@ where
 }
 
 /// NOTE: Very Important !!!
-impl<'a, K, V> Drop for ValueMut<'a, K, V>
+impl<'a, V> Drop for ValueMut<'a, V>
 where
-    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     fn drop(&mut self) {
@@ -328,9 +287,8 @@ where
     }
 }
 
-impl<'a, K, V> Deref for ValueMut<'a, K, V>
+impl<'a, V> Deref for ValueMut<'a, V>
 where
-    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     type Target = V;
@@ -340,9 +298,8 @@ where
     }
 }
 
-impl<'a, K, V> DerefMut for ValueMut<'a, K, V>
+impl<'a, V> DerefMut for ValueMut<'a, V>
 where
-    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
@@ -354,22 +311,20 @@ where
 ////////////////////////////////////////////////////////////////////
 
 /// Imitate the `btree_map/btree_map::Entry`.
-pub struct Entry<'a, K, V>
+pub struct Entry<'a, V>
 where
-    K: KeyEnDeOrdered,
     V: 'a + ValueEnDe,
 {
-    key: K,
-    hdr: &'a mut MapxOrd<K, V>,
+    key: RawKey,
+    hdr: &'a mut MapxOrdRawKey<V>,
 }
 
-impl<'a, K, V> Entry<'a, K, V>
+impl<'a, V> Entry<'a, V>
 where
-    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     /// Imitate the `btree_map/btree_map::Entry.or_insert(...)`.
-    pub fn or_insert(self, default: V) -> ValueMut<'a, K, V> {
+    pub fn or_insert(self, default: V) -> ValueMut<'a, V> {
         if !self.hdr.contains_key(&self.key) {
             self.hdr.set_value_ref(&self.key, &default);
         }
@@ -378,22 +333,20 @@ where
 }
 
 #[allow(missing_docs)]
-pub struct EntryRef<'a, K, V>
+pub struct EntryRef<'a, V>
 where
-    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
-    key: &'a K,
-    hdr: &'a mut MapxOrd<K, V>,
+    key: &'a [u8],
+    hdr: &'a mut MapxOrdRawKey<V>,
 }
 
-impl<'a, K, V> EntryRef<'a, K, V>
+impl<'a, V> EntryRef<'a, V>
 where
-    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     /// Imitate the `btree_map/btree_map::Entry.or_insert(...)`.
-    pub fn or_insert_ref(self, default: &V) -> ValueMut<'a, K, V> {
+    pub fn or_insert_ref(self, default: &V) -> ValueMut<'a, V> {
         if !self.hdr.contains_key(self.key) {
             self.hdr.set_value_ref(self.key, default);
         }
@@ -405,60 +358,44 @@ where
 ////////////////////////////////////////////////////////////////////
 
 #[allow(missing_docs)]
-pub struct MapxOrdIter<K, V>
+pub struct MapxOrdRawKeyIter<V>
 where
-    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     iter: MapxRawIter,
-    _pd0: PhantomData<K>,
-    _pd1: PhantomData<V>,
+    pd: PhantomData<V>,
 }
 
-impl<K, V> Iterator for MapxOrdIter<K, V>
+impl<V> Iterator for MapxOrdRawKeyIter<V>
 where
-    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
-    type Item = (K, V);
+    type Item = (RawKey, V);
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next().map(|(k, v)| {
-            (
-                pnk!(K::from_bytes(k)),
-                <V as ValueEnDe>::decode(&v).unwrap(),
-            )
-        })
+        self.iter
+            .next()
+            .map(|(k, v)| (k, <V as ValueEnDe>::decode(&v).unwrap()))
     }
 }
 
-impl<K, V> DoubleEndedIterator for MapxOrdIter<K, V>
+impl<V> DoubleEndedIterator for MapxOrdRawKeyIter<V>
 where
-    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.iter.next_back().map(|(k, v)| {
-            (
-                pnk!(K::from_bytes(k)),
-                <V as ValueEnDe>::decode(&v).unwrap(),
-            )
-        })
+        self.iter
+            .next_back()
+            .map(|(k, v)| (k, <V as ValueEnDe>::decode(&v).unwrap()))
     }
 }
 
-impl<K, V> ExactSizeIterator for MapxOrdIter<K, V>
-where
-    K: KeyEnDeOrdered,
-    V: ValueEnDe,
-{
-}
+impl<V> ExactSizeIterator for MapxOrdRawKeyIter<V> where V: ValueEnDe {}
 
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
-impl<K, V> Serialize for MapxOrd<K, V>
+impl<V> Serialize for MapxOrdRawKey<V>
 where
-    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
@@ -471,18 +408,17 @@ where
     }
 }
 
-impl<'de, K, V> Deserialize<'de> for MapxOrd<K, V>
+impl<'de, V> Deserialize<'de> for MapxOrdRawKey<V>
 where
-    K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
     fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        deserializer
-            .deserialize_bytes(SimpleVisitor)
-            .map(|cfg| MapxOrd::from(<InstanceCfg as ValueEnDe>::decode(&cfg).unwrap()))
+        deserializer.deserialize_bytes(SimpleVisitor).map(|cfg| {
+            MapxOrdRawKey::from(<InstanceCfg as ValueEnDe>::decode(&cfg).unwrap())
+        })
     }
 }
 
