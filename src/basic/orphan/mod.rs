@@ -8,7 +8,6 @@
 //!
 //! ```
 //! use vsdb::Orphan;
-//! use serde::{Deserialize, Serialize};
 //!
 //! assert_eq!(Orphan::new(0), 0);
 //! assert!(Orphan::new(1) > 0);
