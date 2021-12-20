@@ -26,11 +26,12 @@ pub type MapxIter = rocks_db::RocksIter;
 /////////////////////////////////////////////////////////////////////////////
 
 use crate::common::{
-    BranchID, InstanceCfg, Prefix, PrefixBytes, RawValue, VersionID, VSDB,
+    ende::{SimpleVisitor, ValueEnDe},
+    BranchID, Prefix, PrefixBytes, RawValue, VersionID, VSDB,
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
-use std::ops::RangeBounds;
+use std::{ops::RangeBounds, result::Result as StdResult};
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -74,14 +75,31 @@ pub trait Engine: Sized {
         meta_prefix: PrefixBytes,
         key: &[u8],
     ) -> Option<RawValue>;
+
+    fn get_instance_len(&self, instance_prefix: PrefixBytes) -> u64;
+
+    fn set_instance_len(&self, instance_prefix: PrefixBytes, new_len: u64);
+
+    fn increase_instance_len(&self, instance_prefix: PrefixBytes) {
+        self.set_instance_len(
+            instance_prefix,
+            self.get_instance_len(instance_prefix) + 1,
+        )
+    }
+
+    fn decrease_instance_len(&self, instance_prefix: PrefixBytes) {
+        self.set_instance_len(
+            instance_prefix,
+            self.get_instance_len(instance_prefix) - 1,
+        )
+    }
 }
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
-#[derive(Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Eq, Debug)]
 pub(crate) struct Mapx {
-    item_cnt: u64,
     area_idx: usize,
     // the unique ID of each instance
     prefix: PrefixBytes,
@@ -103,14 +121,15 @@ impl Mapx {
 
         assert!(VSDB.db.iter(area_idx, prefix_bytes).next().is_none());
 
+        VSDB.db.set_instance_len(prefix_bytes, 0);
+
         Mapx {
-            item_cnt: 0,
             area_idx,
             prefix: prefix_bytes,
         }
     }
 
-    pub(crate) fn get_instance_cfg(&self) -> InstanceCfg {
+    fn get_instance_cfg(&self) -> InstanceCfg {
         InstanceCfg::from(self)
     }
 
@@ -121,12 +140,12 @@ impl Mapx {
 
     #[inline(always)]
     pub(crate) fn len(&self) -> usize {
-        self.item_cnt as usize
+        VSDB.db.get_instance_len(self.prefix) as usize
     }
 
     #[inline(always)]
     pub(crate) fn is_empty(&self) -> bool {
-        0 == self.item_cnt
+        0 == self.len()
     }
 
     #[inline(always)]
@@ -143,7 +162,7 @@ impl Mapx {
     pub(crate) fn insert(&mut self, key: &[u8], value: &[u8]) -> Option<RawValue> {
         let ret = VSDB.db.insert(self.area_idx, self.prefix, key, value);
         if ret.is_none() {
-            self.item_cnt += 1;
+            VSDB.db.increase_instance_len(self.prefix);
         }
         ret
     }
@@ -152,7 +171,7 @@ impl Mapx {
     pub(crate) fn remove(&mut self, key: &[u8]) -> Option<RawValue> {
         let ret = VSDB.db.remove(self.area_idx, self.prefix, key);
         if ret.is_some() {
-            self.item_cnt -= 1;
+            VSDB.db.decrease_instance_len(self.prefix);
         }
         ret
     }
@@ -161,14 +180,14 @@ impl Mapx {
     pub(crate) fn clear(&mut self) {
         VSDB.db.iter(self.area_idx, self.prefix).for_each(|(k, _)| {
             VSDB.db.remove(self.area_idx, self.prefix, &k);
-            self.item_cnt -= 1;
+            VSDB.db.decrease_instance_len(self.prefix);
         });
     }
 }
 
 impl PartialEq for Mapx {
     fn eq(&self, other: &Mapx) -> bool {
-        self.item_cnt == other.item_cnt
+        self.len() == other.len()
             && self
                 .iter()
                 .zip(other.iter())
@@ -176,11 +195,16 @@ impl PartialEq for Mapx {
     }
 }
 
+#[derive(Deserialize, Serialize, Debug)]
+struct InstanceCfg {
+    prefix: PrefixBytes,
+    area_idx: usize,
+}
+
 impl From<InstanceCfg> for Mapx {
     fn from(cfg: InstanceCfg) -> Self {
         Self {
             prefix: cfg.prefix,
-            item_cnt: cfg.item_cnt,
             area_idx: cfg.area_idx,
         }
     }
@@ -190,8 +214,36 @@ impl From<&Mapx> for InstanceCfg {
     fn from(x: &Mapx) -> Self {
         Self {
             prefix: x.prefix,
-            item_cnt: x.item_cnt,
             area_idx: x.area_idx,
         }
     }
 }
+
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
+
+impl Serialize for Mapx {
+    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_bytes(&<InstanceCfg as ValueEnDe>::encode(
+            &self.get_instance_cfg(),
+        ))
+    }
+}
+
+impl<'de> Deserialize<'de> for Mapx {
+    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
+            let meta = pnk!(<InstanceCfg as ValueEnDe>::decode(&meta));
+            Mapx::from(meta)
+        })
+    }
+}
+
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////

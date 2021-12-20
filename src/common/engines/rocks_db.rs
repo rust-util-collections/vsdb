@@ -114,11 +114,14 @@ impl Engine for RocksEngine {
     }
 
     fn alloc_prefix(&self) -> Prefix {
-        let ret = self.meta.get(self.prefix_allocator.key).unwrap().unwrap();
+        let ret = crate::parse_int!(
+            self.meta.get(self.prefix_allocator.key).unwrap().unwrap(),
+            BranchID
+        );
         self.meta
-            .put(self.prefix_allocator.key, PrefixAllocator::next(&ret))
+            .put(self.prefix_allocator.key, (1 + ret).to_be_bytes())
             .unwrap();
-        crate::parse_prefix!(ret)
+        ret
     }
 
     fn alloc_branch_id(&self) -> BranchID {
@@ -281,6 +284,16 @@ impl Engine for RocksEngine {
         let old_v = self.meta.get_cf(self.cf_hdr(area_idx), &k).unwrap();
         self.meta.delete_cf(self.cf_hdr(area_idx), k).unwrap();
         old_v.map(|v| v.into_boxed_slice())
+    }
+
+    fn get_instance_len(&self, instance_prefix: PrefixBytes) -> u64 {
+        crate::parse_int!(self.meta.get(instance_prefix).unwrap().unwrap(), u64)
+    }
+
+    fn set_instance_len(&self, instance_prefix: PrefixBytes, new_len: u64) {
+        self.meta
+            .put(instance_prefix, new_len.to_be_bytes())
+            .unwrap();
     }
 }
 

@@ -30,7 +30,7 @@ pub(super) const RESERVED_VERSION_NUM_DEFAULT: usize = 10;
 ////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////
 
-#[derive(Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct MapxRawVersioned {
     pub(super) branch_name_to_branch_id: MapxOrdRawKey<BranchID>,
     pub(super) version_name_to_version_id: MapxOrdRawKey<VersionID>,
@@ -279,7 +279,7 @@ impl MapxRawVersioned {
 
     #[inline(always)]
     pub(super) fn get_ge(&self, key: &[u8]) -> Option<(RawKey, RawValue)> {
-        self.range(key..).next()
+        self.range_ref(key..).next()
     }
 
     #[inline(always)]
@@ -288,7 +288,7 @@ impl MapxRawVersioned {
         key: &[u8],
         branch_id: BranchID,
     ) -> Option<(RawKey, RawValue)> {
-        self.range_by_branch(branch_id, key..).next()
+        self.range_ref_by_branch(branch_id, key..).next()
     }
 
     #[inline(always)]
@@ -298,13 +298,13 @@ impl MapxRawVersioned {
         branch_id: BranchID,
         version_id: VersionID,
     ) -> Option<(RawKey, RawValue)> {
-        self.range_by_branch_version(branch_id, version_id, key..)
+        self.range_ref_by_branch_version(branch_id, version_id, key..)
             .next()
     }
 
     #[inline(always)]
     pub(super) fn get_le(&self, key: &[u8]) -> Option<(RawKey, RawValue)> {
-        self.range(..=key).next_back()
+        self.range_ref(..=key).next_back()
     }
 
     #[inline(always)]
@@ -313,7 +313,7 @@ impl MapxRawVersioned {
         key: &[u8],
         branch_id: BranchID,
     ) -> Option<(RawKey, RawValue)> {
-        self.range_by_branch(branch_id, ..=key).next_back()
+        self.range_ref_by_branch(branch_id, ..=key).next_back()
     }
 
     #[inline(always)]
@@ -323,7 +323,7 @@ impl MapxRawVersioned {
         branch_id: BranchID,
         version_id: VersionID,
     ) -> Option<(RawKey, RawValue)> {
-        self.range_by_branch_version(branch_id, version_id, ..=key)
+        self.range_ref_by_branch_version(branch_id, version_id, ..=key)
             .next_back()
     }
 
@@ -363,7 +363,7 @@ impl MapxRawVersioned {
     }
 
     #[inline(always)]
-    pub(super) fn range<'a, R: RangeBounds<&'a [u8]>>(
+    pub(super) fn range<'a, R: 'a + RangeBounds<RawKey>>(
         &'a self,
         bounds: R,
     ) -> MapxRawVersionedIter<'a> {
@@ -371,7 +371,7 @@ impl MapxRawVersioned {
     }
 
     #[inline(always)]
-    pub(super) fn range_by_branch<'a, R: RangeBounds<&'a [u8]>>(
+    pub(super) fn range_by_branch<'a, R: 'a + RangeBounds<RawKey>>(
         &'a self,
         branch_id: BranchID,
         bounds: R,
@@ -391,7 +391,50 @@ impl MapxRawVersioned {
     }
 
     #[inline(always)]
-    pub(super) fn range_by_branch_version<'a, R: RangeBounds<&'a [u8]>>(
+    pub(super) fn range_by_branch_version<'a, R: 'a + RangeBounds<RawKey>>(
+        &'a self,
+        branch_id: BranchID,
+        version_id: VersionID,
+        bounds: R,
+    ) -> MapxRawVersionedIter<'a> {
+        MapxRawVersionedIter {
+            hdr: self,
+            iter: self.layered_kv.range(bounds),
+            branch_id,
+            version_id,
+        }
+    }
+
+    #[inline(always)]
+    pub(super) fn range_ref<'a, R: RangeBounds<&'a [u8]>>(
+        &'a self,
+        bounds: R,
+    ) -> MapxRawVersionedIter<'a> {
+        self.range_ref_by_branch(INITIAL_BRANCH_ID, bounds)
+    }
+
+    #[inline(always)]
+    pub(super) fn range_ref_by_branch<'a, R: RangeBounds<&'a [u8]>>(
+        &'a self,
+        branch_id: BranchID,
+        bounds: R,
+    ) -> MapxRawVersionedIter<'a> {
+        if let Some(vers) = self.branch_to_created_versions.get(&branch_id) {
+            if let Some((version_id, _)) = vers.last() {
+                return self.range_ref_by_branch_version(branch_id, version_id, bounds);
+            }
+        }
+
+        MapxRawVersionedIter {
+            hdr: self,
+            iter: self.layered_kv.iter(),
+            branch_id: NULL,
+            version_id: NULL,
+        }
+    }
+
+    #[inline(always)]
+    pub(super) fn range_ref_by_branch_version<'a, R: RangeBounds<&'a [u8]>>(
         &'a self,
         branch_id: BranchID,
         version_id: VersionID,

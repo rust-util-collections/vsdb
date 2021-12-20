@@ -12,7 +12,7 @@
 //! let _l = MapxRawVersioned::new();
 //! ```
 //!
-//! Used as version-less:
+//! Used as version-less(do not recommand, use `MapxRaw` instead):
 //!
 //! ```
 //! use vsdb::{VersionName, versioned::mapx_raw::MapxRawVersioned};
@@ -49,10 +49,10 @@ use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::ops::RangeBounds;
 
-use backend::{MapxRawVersionedIter, ValueMut};
+pub(crate) use backend::{MapxRawVersionedIter, ValueMut};
 
 /// Advanced `MapxRaw`, with versioned feature.
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MapxRawVersioned {
     inner: backend::MapxRawVersioned,
 }
@@ -277,7 +277,7 @@ impl MapxRawVersioned {
 
     /// Create a range iterator over the default branch.
     #[inline(always)]
-    pub fn range<'a, R: RangeBounds<&'a [u8]>>(
+    pub fn range<'a, R: 'a + RangeBounds<RawKey>>(
         &'a self,
         bounds: R,
     ) -> MapxRawVersionedIter<'a> {
@@ -286,7 +286,7 @@ impl MapxRawVersioned {
 
     /// Create a range iterator over a specified branch.
     #[inline(always)]
-    pub fn range_by_branch<'a, R: RangeBounds<&'a [u8]>>(
+    pub fn range_by_branch<'a, R: 'a + RangeBounds<RawKey>>(
         &'a self,
         branch_name: BranchName,
         bounds: R,
@@ -302,7 +302,7 @@ impl MapxRawVersioned {
 
     /// Create a range iterator over a specified version of a specified branch.
     #[inline(always)]
-    pub fn range_by_branch_version<'a, R: RangeBounds<&'a [u8]>>(
+    pub fn range_by_branch_version<'a, R: 'a + RangeBounds<RawKey>>(
         &'a self,
         branch_name: BranchName,
         version_name: VersionName,
@@ -322,6 +322,55 @@ impl MapxRawVersioned {
 
         self.inner
             .range_by_branch_version(branch_id, version_id, bounds)
+    }
+
+    /// Create a range iterator over the default branch.
+    #[inline(always)]
+    pub fn range_ref<'a, R: RangeBounds<&'a [u8]>>(
+        &'a self,
+        bounds: R,
+    ) -> MapxRawVersionedIter<'a> {
+        self.inner.range_ref(bounds)
+    }
+
+    /// Create a range iterator over a specified branch.
+    #[inline(always)]
+    pub fn range_ref_by_branch<'a, R: RangeBounds<&'a [u8]>>(
+        &'a self,
+        branch_name: BranchName,
+        bounds: R,
+    ) -> MapxRawVersionedIter<'a> {
+        let branch_id = self
+            .inner
+            .branch_name_to_branch_id
+            .get(branch_name.0)
+            .unwrap_or(NULL);
+
+        self.inner.range_ref_by_branch(branch_id, bounds)
+    }
+
+    /// Create a range iterator over a specified version of a specified branch.
+    #[inline(always)]
+    pub fn range_ref_by_branch_version<'a, R: RangeBounds<&'a [u8]>>(
+        &'a self,
+        branch_name: BranchName,
+        version_name: VersionName,
+        bounds: R,
+    ) -> MapxRawVersionedIter<'a> {
+        let branch_id = self
+            .inner
+            .branch_name_to_branch_id
+            .get(branch_name.0)
+            .unwrap_or(NULL);
+
+        let version_id = self
+            .inner
+            .version_name_to_version_id
+            .get(version_name.0)
+            .unwrap_or(NULL);
+
+        self.inner
+            .range_ref_by_branch_version(branch_id, version_id, bounds)
     }
 
     /// Check if a key exist on the default branch.

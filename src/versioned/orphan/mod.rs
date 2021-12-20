@@ -1,85 +1,14 @@
 //!
-//! A storage type for various kinds of single value.
+//! NOTE: Documents => [MapxRaw](crate::versioned::mapx_raw)
 //!
-//! NOTE:
-//! - Values will be encoded by some `serde`-like methods
-//!
-//! # Examples
-//!
-//! ```
-//! use vsdb::Orphan;
-//!
-//! assert_eq!(Orphan::new(0), 0);
-//! assert!(Orphan::new(1) > 0);
-//! assert!(Orphan::new(1) >= 0);
-//! assert!(Orphan::new(0) < 1);
-//! assert!(Orphan::new(0) <= 1);
-//!
-//! assert_eq!(Orphan::new(0), Orphan::new(0));
-//! assert!(Orphan::new(1) > Orphan::new(0));
-//! assert!(Orphan::new(1) >= Orphan::new(1));
-//! assert!(Orphan::new(0) < Orphan::new(1));
-//! assert!(Orphan::new(1) <= Orphan::new(1));
-//!
-//! assert_eq!(Orphan::new(1) + 1, 2);
-//! assert_eq!(Orphan::new(1) - 1, 0);
-//! assert_eq!(Orphan::new(1) * 1, 1);
-//! assert_eq!(Orphan::new(1) / 2, 0);
-//! assert_eq!(Orphan::new(1) % 2, 1);
-//!
-//! assert_eq!(-Orphan::new(1), -1);
-//! assert_eq!(!Orphan::new(1), !1);
-//!
-//! assert_eq!(Orphan::new(1) >> 2, 1 >> 2);
-//! assert_eq!(Orphan::new(1) << 2, 1 << 2);
-//!
-//! assert_eq!(Orphan::new(1) | 2, 1 | 2);
-//! assert_eq!(Orphan::new(1) & 2, 1 & 2);
-//! assert_eq!(Orphan::new(1) ^ 2, 1 ^ 2);
-//!
-//! let mut v = Orphan::new(1);
-//! v += 1;
-//! assert_eq!(v, 2);
-//! v *= 100;
-//! assert_eq!(v, 200);
-//! v -= 1;
-//! assert_eq!(v, 199);
-//! v /= 10;
-//! assert_eq!(v, 19);
-//! v %= 10;
-//! assert_eq!(v, 9);
-//!
-//! *v.get_mut() = -v.clone_inner();
-//! assert_eq!(v, -9);
-//!
-//! *v.get_mut() = !v.clone_inner();
-//! assert_eq!(v, !-9);
-//!
-//! *v.get_mut() = 0;
-//! v >>= 2;
-//! assert_eq!(v, 0 >> 2);
-//!
-//! *v.get_mut() = 0;
-//! v <<= 2;
-//! assert_eq!(v, 0 << 2);
-//!
-//! *v.get_mut() = 0;
-//! v |= 2;
-//! assert_eq!(v, 0 | 2);
-//!
-//! *v.get_mut() = 0;
-//! v &= 2;
-//! assert_eq!(v, 0 & 2);
-//!
-//! *v.get_mut() = 0;
-//! v ^= 2;
-//! assert_eq!(v, 0 ^ 2);
-//! ```
 
-#[cfg(test)]
-mod test;
+// TODO
 
-use crate::{basic::mapx_ord_rawkey::MapxOrdRawKey, ValueEnDe};
+use crate::{
+    versioned::mapx_ord_rawkey::MapxOrdRawKeyVersioned, BranchName, ParentBranchName,
+    ValueEnDe, VerChecksum, VersionName,
+};
+use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
@@ -95,25 +24,26 @@ use std::{
 
 /// Used to express some 'non-collection' types,
 /// such as any type of integer, an enum value, etc..
-#[derive(Clone, Copy, Serialize, Deserialize, Debug, Eq)]
+#[derive(Clone, Serialize, Deserialize, Debug, Eq)]
 #[serde(bound = "")]
-pub struct Orphan<T>
+pub struct OrphanVersioned<T>
 where
     T: ValueEnDe,
 {
-    inner: MapxOrdRawKey<T>,
+    inner: MapxOrdRawKeyVersioned<T>,
 }
 
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
-impl<T> Orphan<T>
+impl<T> OrphanVersioned<T>
 where
     T: ValueEnDe,
 {
-    pub fn new(v: T) -> Self {
-        let mut hdr = MapxOrdRawKey::new();
-        hdr.insert_ref(&[], &v);
+    pub fn new(v: T, version_name: VersionName) -> Self {
+        let mut hdr = MapxOrdRawKeyVersioned::new();
+        pnk!(hdr.version_create(version_name));
+        pnk!(hdr.insert_ref(&[], &v));
         Self { inner: hdr }
     }
 
@@ -126,28 +56,30 @@ where
         self.inner.get(&[]).unwrap()
     }
 
-    fn set_value_ref(&mut self, v: &T) {
-        self.inner.set_value_ref(&[], v);
+    fn set_value_ref(&mut self, v: &T) -> Result<Option<T>> {
+        self.inner.insert_ref(&[], v).c(d!())
     }
 
     /// Get the mutable handler of the value.
     ///
     /// NOTE:
     /// - Always use this method to change value
-    ///     - `*(<Orphan>).get_mut() = ...`
+    ///     - `*(<OrphanVersioned>).get_mut() = ...`
     /// - **NEVER** do this:
-    ///     - `*(&mut <Orphan>) = Orphan::new(...)`
+    ///     - `*(&mut <OrphanVersioned>) = OrphanVersioned::new(...)`
     ///     - OR you will loss the 'versioned' ability of this object
-    pub fn get_mut(&mut self) -> OrphanMut<'_, T> {
+    pub fn get_mut(&mut self) -> OrphanVersionedMut<'_, T> {
         let value = self.get_value();
-        OrphanMut { hdr: self, value }
+        OrphanVersionedMut { hdr: self, value }
     }
+
+    crate::impl_vcs_methods!();
 }
 
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
-impl<T> PartialEq for Orphan<T>
+impl<T> PartialEq for OrphanVersioned<T>
 where
     T: ValueEnDe + PartialEq,
 {
@@ -156,7 +88,7 @@ where
     }
 }
 
-impl<T> PartialEq<T> for Orphan<T>
+impl<T> PartialEq<T> for OrphanVersioned<T>
 where
     T: ValueEnDe + PartialEq,
 {
@@ -168,7 +100,7 @@ where
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
-impl<T> Ord for Orphan<T>
+impl<T> Ord for OrphanVersioned<T>
 where
     T: ValueEnDe + Ord,
 {
@@ -177,7 +109,7 @@ where
     }
 }
 
-impl<T> PartialOrd for Orphan<T>
+impl<T> PartialOrd for OrphanVersioned<T>
 where
     T: ValueEnDe + Ord,
 {
@@ -186,7 +118,7 @@ where
     }
 }
 
-impl<T> PartialOrd<T> for Orphan<T>
+impl<T> PartialOrd<T> for OrphanVersioned<T>
 where
     T: ValueEnDe + Ord,
 {
@@ -200,7 +132,7 @@ where
 
 macro_rules! impl_ops {
     ($ops: tt, $fn: tt, $op: tt) => {
-        impl<T> $ops for Orphan<T>
+        impl<T> $ops for OrphanVersioned<T>
         where
             T: ValueEnDe + Ord + Eq + $ops<Output = T>,
         {
@@ -210,7 +142,7 @@ macro_rules! impl_ops {
             }
         }
 
-        impl<T> $ops<T> for Orphan<T>
+        impl<T> $ops<T> for OrphanVersioned<T>
         where
             T: ValueEnDe + Ord + Eq + $ops<Output = T>,
         {
@@ -223,7 +155,7 @@ macro_rules! impl_ops {
     ($ops: tt, $fn: tt, $op: tt, $ops_assign: tt, $fn_assign: tt, $op_assign: tt) => {
         impl_ops!($ops, $fn, $op);
 
-        impl<T> $ops_assign for Orphan<T>
+        impl<T> $ops_assign for OrphanVersioned<T>
         where
             T: ValueEnDe + Ord + Eq + $ops_assign,
         {
@@ -232,7 +164,7 @@ macro_rules! impl_ops {
             }
         }
 
-        impl<T> $ops_assign<T> for Orphan<T>
+        impl<T> $ops_assign<T> for OrphanVersioned<T>
         where
             T: ValueEnDe + Ord + Eq + $ops_assign,
         {
@@ -242,7 +174,7 @@ macro_rules! impl_ops {
         }
     };
     (@$ops: tt, $fn: tt, $op: tt) => {
-        impl<T> $ops for Orphan<T>
+        impl<T> $ops for OrphanVersioned<T>
         where
             T: ValueEnDe + Ord + Eq + $ops<Output = T>,
         {
@@ -273,24 +205,24 @@ impl_ops!(@Neg, neg, -);
 ////////////////////////////////////////////////////////////////////
 
 /// A type returned by `get_mut()`.
-pub struct OrphanMut<'a, T>
+pub struct OrphanVersionedMut<'a, T>
 where
     T: ValueEnDe,
 {
-    hdr: &'a mut Orphan<T>,
+    hdr: &'a mut OrphanVersioned<T>,
     value: T,
 }
 
-impl<'a, T> Drop for OrphanMut<'a, T>
+impl<'a, T> Drop for OrphanVersionedMut<'a, T>
 where
     T: ValueEnDe,
 {
     fn drop(&mut self) {
-        self.hdr.set_value_ref(&self.value);
+        pnk!(self.hdr.set_value_ref(&self.value));
     }
 }
 
-impl<'a, T> Deref for OrphanMut<'a, T>
+impl<'a, T> Deref for OrphanVersionedMut<'a, T>
 where
     T: ValueEnDe,
 {
@@ -300,7 +232,7 @@ where
     }
 }
 
-impl<'a, T> DerefMut for OrphanMut<'a, T>
+impl<'a, T> DerefMut for OrphanVersionedMut<'a, T>
 where
     T: ValueEnDe,
 {
@@ -312,7 +244,7 @@ where
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
-impl<T> Iterator for Orphan<T>
+impl<T> Iterator for OrphanVersioned<T>
 where
     T: ValueEnDe + Eq,
 {

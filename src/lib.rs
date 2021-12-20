@@ -31,7 +31,6 @@
 //! Stateless functions do not have the feature of 'version' management, but they have higher performance.
 
 #![deny(warnings)]
-#![deny(missing_docs)]
 #![recursion_limit = "512"]
 
 pub mod basic;
@@ -43,12 +42,13 @@ pub use basic::mapx_ord::MapxOrd;
 pub use basic::orphan::Orphan;
 pub use basic::vecx::Vecx;
 
-// pub use versioned::mapx::MapxVersioned;
-// pub use versioned::mapx_ord::MapxOrdVersioned;
-// pub use versioned::orphan::OrphanVersioned;
-// pub use versioned::vecx::VecxVersioned;
+pub use versioned::mapx::MapxVersioned;
+pub use versioned::mapx_ord::MapxOrdVersioned;
+pub use versioned::orphan::OrphanVersioned;
+pub use versioned::vecx::VecxVersioned;
 
 pub use common::{
     ende::{KeyEnDe, KeyEnDeOrdered, ValueEnDe},
-    vsdb_flush, vsdb_set_base_dir, BranchName, ParentBranchName, VersionName,
+    vsdb_flush, vsdb_set_base_dir, BranchName, ParentBranchName, VerChecksum,
+    VersionName,
 };

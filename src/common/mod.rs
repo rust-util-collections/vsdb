@@ -12,7 +12,6 @@ use {
     engines::Engine,
     lazy_static::lazy_static,
     ruc::*,
-    serde::{Deserialize, Serialize},
     std::{
         env, fs,
         mem::size_of,
@@ -28,8 +27,8 @@ pub(crate) type RawBytes = Box<[u8]>;
 pub(crate) type RawKey = RawBytes;
 pub(crate) type RawValue = RawBytes;
 
-// Checksum of a version
-pub(crate) type VerChecksum = [u8; size_of::<u32>()];
+/// Checksum of a version
+pub type VerChecksum = [u8; size_of::<u32>()];
 
 pub(crate) type Prefix = u64;
 pub(crate) type PrefixBytes = [u8; PREFIX_SIZ];
@@ -40,12 +39,12 @@ pub(crate) type VersionID = u64;
 
 /// avoid making mistakes between branch name and version name
 pub struct BranchName<'a>(pub &'a [u8]);
-/// +1 above
+/// +1
 pub struct ParentBranchName<'a>(pub &'a [u8]);
-/// +1 above
+/// +1
 pub struct VersionName<'a>(pub &'a [u8]);
 
-const RESERVED_ID_CNT: Prefix = 4096;
+const RESERVED_ID_CNT: Prefix = 4096_0000;
 pub(crate) const BIGGEST_RESERVED_ID: Prefix = RESERVED_ID_CNT - 1;
 pub(crate) const NULL: BranchID = BIGGEST_RESERVED_ID;
 
@@ -82,7 +81,7 @@ lazy_static! {
 #[macro_export(crate)]
 macro_rules! parse_int {
     ($bytes: expr, $ty: ty) => {{
-        let array: [u8; std::mem::size_of::<$ty>()] = $bytes.try_into().unwrap();
+        let array: [u8; std::mem::size_of::<$ty>()] = $bytes[..].try_into().unwrap();
         <$ty>::from_be_bytes(array)
     }};
 }
@@ -159,16 +158,6 @@ pub fn vsdb_set_base_dir(dir: String) -> Result<()> {
 /// Flush data to disk, may take a long time.
 pub fn vsdb_flush() {
     VSDB.flush();
-}
-
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////
-
-#[derive(Deserialize, Serialize, Debug)]
-pub(crate) struct InstanceCfg {
-    pub(crate) prefix: PrefixBytes,
-    pub(crate) item_cnt: u64,
-    pub(crate) area_idx: usize,
 }
 
 /////////////////////////////////////////////////////////////////////////////

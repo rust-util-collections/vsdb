@@ -55,18 +55,22 @@ impl Engine for SledEngine {
     }
 
     fn alloc_prefix(&self) -> Prefix {
-        crate::parse_prefix!(
+        let ret = crate::parse_prefix!(
             self.meta
-                .update_and_fetch(self.prefix_allocator.key, PrefixAllocator::next)
+                .get(self.prefix_allocator.key)
                 .unwrap()
                 .unwrap()
                 .as_ref()
-        )
+        );
+        self.meta
+            .insert(self.prefix_allocator.key, (1 + ret).to_be_bytes())
+            .unwrap();
+        ret
     }
 
     fn alloc_branch_id(&self) -> BranchID {
         let ret = crate::parse_int!(
-            self.meta.get(META_KEY_BRANCH_ID).unwrap().unwrap().to_vec(),
+            self.meta.get(META_KEY_BRANCH_ID).unwrap().unwrap().as_ref(),
             BranchID
         );
         self.meta
@@ -81,7 +85,7 @@ impl Engine for SledEngine {
                 .get(META_KEY_VERSION_ID)
                 .unwrap()
                 .unwrap()
-                .to_vec(),
+                .as_ref(),
             VersionID
         );
         self.meta
@@ -187,6 +191,16 @@ impl Engine for SledEngine {
             .unwrap()
             .map(|iv| iv.to_vec().into_boxed_slice())
     }
+
+    fn get_instance_len(&self, instance_prefix: PrefixBytes) -> u64 {
+        crate::parse_int!(self.meta.get(instance_prefix).unwrap().unwrap(), u64)
+    }
+
+    fn set_instance_len(&self, instance_prefix: PrefixBytes, new_len: u64) {
+        self.meta
+            .insert(instance_prefix, new_len.to_be_bytes())
+            .unwrap();
+    }
 }
 
 pub struct SledIter {
@@ -236,10 +250,6 @@ impl PrefixAllocator {
             },
             (RESERVED_ID_CNT + Prefix::MIN).to_be_bytes(),
         )
-    }
-
-    fn next(base: Option<&[u8]>) -> Option<[u8; PREFIX_SIZ]> {
-        base.map(|bytes| (crate::parse_prefix!(bytes) + 1).to_be_bytes())
     }
 }
 

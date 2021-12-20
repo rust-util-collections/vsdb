@@ -60,10 +60,10 @@ fn basic_cases() {
     reloaded.insert(&[6], &[6]).unwrap();
     reloaded.insert(&[80], &[80]).unwrap();
 
-    assert!(reloaded.range(&[][..]..&[1][..]).next().is_none());
+    assert!(reloaded.range_ref(&[][..]..&[1][..]).next().is_none());
     assert_eq!(
         &[4],
-        &reloaded.range(&[2][..]..&[10][..]).next().unwrap().1[..]
+        &reloaded.range_ref(&[2][..]..&[10][..]).next().unwrap().1[..]
     );
 
     assert_eq!(&[80], &reloaded.get_ge(&[79]).unwrap().1[..]);
