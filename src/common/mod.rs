@@ -35,11 +35,28 @@ pub(crate) type Prefix = u64;
 pub(crate) type PrefixBytes = [u8; PREFIX_SIZ];
 pub(crate) const PREFIX_SIZ: usize = size_of::<Prefix>();
 
-const RESERVED_ID_CNT: Prefix = 4096;
-pub(crate) const BIGGEST_RESERVED_ID: Prefix = RESERVED_ID_CNT - 1;
-
 pub(crate) type BranchID = u64;
 pub(crate) type VersionID = u64;
+
+/// avoid making mistakes between branch name and version name
+pub struct BranchName<'a>(pub &'a [u8]);
+/// +1 above
+pub struct ParentBranchName<'a>(pub &'a [u8]);
+/// +1 above
+pub struct VersionName<'a>(pub &'a [u8]);
+
+const RESERVED_ID_CNT: Prefix = 4096;
+pub(crate) const BIGGEST_RESERVED_ID: Prefix = RESERVED_ID_CNT - 1;
+pub(crate) const NULL: BranchID = BIGGEST_RESERVED_ID;
+
+pub(crate) const INITIAL_BRANCH_ID: BranchID = 0;
+pub(crate) const INITIAL_BRANCH_NAME: &[u8] = b"main";
+
+/// how many branches in one instance can be created
+pub const BRANCH_CNT_LIMIT: usize = 1024;
+
+// default value for reserved number when pruning old data
+pub(crate) const RESERVED_VERSION_NUM_DEFAULT: usize = 10;
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////

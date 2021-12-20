@@ -11,7 +11,8 @@ use crate::{
     common::{
         compute_checksum,
         ende::{encode_optioned_bytes, KeyEnDeOrdered},
-        BranchID, RawKey, RawValue, VerChecksum, VersionID, BIGGEST_RESERVED_ID, VSDB,
+        BranchID, RawKey, RawValue, VerChecksum, VersionID, BRANCH_CNT_LIMIT,
+        INITIAL_BRANCH_ID, INITIAL_BRANCH_NAME, NULL, VSDB,
     },
 };
 use ruc::*;
@@ -23,15 +24,8 @@ use std::{
 
 type BranchPath = BTreeMap<BranchID, VersionID>;
 
-pub(super) const INITIAL_BRANCH_ID: BranchID = 0;
-pub(super) const INITIAL_BRANCH_NAME: &[u8] = b"main";
-
-pub(super) const NULL: BranchID = BIGGEST_RESERVED_ID;
-
-const BRANCH_CNT_LIMIT: usize = 1024;
-
 // default value for reserved number when pruning branches
-const RESERVED_VERSION_NUM_DEFAULT: usize = 10;
+pub(super) const RESERVED_VERSION_NUM_DEFAULT: usize = 10;
 
 ////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////
@@ -166,22 +160,27 @@ impl MapxRawVersioned {
         branch_id: BranchID,
         version_id: VersionID,
     ) -> Result<Option<RawValue>> {
+        let ret = self.get_by_branch_version(key, branch_id, version_id);
+
+        // remove a non-existing value
+        if value.is_none() && ret.is_none() {
+            return Ok(None);
+        }
+
         self.version_to_change_set
             .get_mut(&version_id)
             .c(d!("BUG: version not found"))?
             .insert(key, &[]);
 
-        let res = self
-            .layered_kv
+        self.layered_kv
             .entry_ref(key)
             .or_insert_ref(&MapxOrd::new())
             .entry(branch_id)
             .or_insert(MapxOrd::new())
-            .insert_ref_encoded_value(&version_id, &encode_optioned_bytes(&value)[..])
-            .flatten();
+            .insert_ref_encoded_value(&version_id, &encode_optioned_bytes(&value)[..]);
 
         // value changed, then re-calculate checksum
-        if res.as_deref() != value {
+        if ret.as_deref() != value {
             let mut vers = self
                 .branch_to_created_versions
                 .get(&branch_id)
@@ -192,7 +191,7 @@ impl MapxRawVersioned {
                 compute_checksum(&[&checksum[..], key, value.unwrap_or_default()]);
         }
 
-        Ok(res)
+        Ok(ret)
     }
 
     #[inline(always)]
@@ -207,7 +206,12 @@ impl MapxRawVersioned {
         branch_id: BranchID,
     ) -> Option<RawValue> {
         if let Some(vers) = self.branch_to_created_versions.get(&branch_id) {
-            if let Some((version_id, _)) = vers.last() {
+            if let Some(version_id) = vers.last().map(|(id, _)| id).or_else(|| {
+                self.branch_to_parent
+                    .get(&branch_id)
+                    .unwrap()
+                    .map(|bi| bi.version_id)
+            }) {
                 return self.get_by_branch_version(key, branch_id, version_id);
             }
         }
@@ -535,7 +539,13 @@ impl MapxRawVersioned {
     // and should not do any tracing.
     #[inline(always)]
     pub(super) fn version_pop_by_branch(&mut self, branch_id: BranchID) -> Result<()> {
-        if let Some((version_id, _)) = self.branch_to_created_versions.iter().last() {
+        if let Some((version_id, _)) = self
+            .branch_to_created_versions
+            .get(&branch_id)
+            .c(d!("branch not found"))?
+            .iter()
+            .last()
+        {
             self.version_remove_by_branch(version_id, branch_id).c(d!())
         } else {
             Ok(())
@@ -588,7 +598,9 @@ impl MapxRawVersioned {
             .find(|(_, id)| *id == version_id)
             .map(|(name, _)| name)
             .unwrap();
-        self.version_name_to_version_id.remove(&version_name);
+        self.version_name_to_version_id
+            .remove(&version_name)
+            .unwrap();
 
         Ok(())
     }
@@ -773,24 +785,32 @@ impl MapxRawVersioned {
         }
 
         let fp = self.branch_get_recurive_path(branch_id, 2);
+
         if fp.is_empty() {
             return Err(eg!("branch not found"));
-        } else if 1 == fp.len() {
-            // no parents, aka 'merge itself to itself'
+        } else if branch_id != *fp.keys().rev().next().unwrap() || 1 == fp.len() {
+            // no new versions yet, nothing to merge
             return Ok(());
         }
-        let (parent_id, _) = fp.iter().nth(1).unwrap();
+
+        let parent_id = fp.keys().rev().find(|&id| *id != branch_id).unwrap();
 
         let mut vers_created =
             self.branch_to_created_versions.remove(&branch_id).unwrap();
-        if vers_created.is_empty() {
-            // merge an empty branch
-            return Ok(());
-        }
-        let (last_ver, last_checksum) = vers_created.last().unwrap();
 
         let mut vers_created_parent =
             self.branch_to_created_versions.get_mut(parent_id).unwrap();
+
+        // // merge an empty branch,
+        // // this check is not necessary because this scene has been checked
+        // if vers_created.is_empty() {
+        //     return Ok(());
+        // }
+
+        // used to calculate new checksum
+        let (last_ver, last_checksum) = vers_created.last().unwrap();
+
+        // used to calculate new checksum
         let (last_ver_parent, last_checksum_parent) =
             vers_created_parent.last().unwrap();
 
@@ -826,7 +846,9 @@ impl MapxRawVersioned {
 
         // re-calcute checksum, the old parent checksum should be set in the first place
         let new_checksum = compute_checksum(&[&last_checksum_parent, &last_checksum]);
-        vers_created_parent.insert(max!(last_ver_parent, last_ver), new_checksum);
+        vers_created_parent
+            .insert(max!(last_ver_parent, last_ver), new_checksum)
+            .unwrap();
 
         // remove outdated values
         vers_created.iter().for_each(|(k, _)| {
@@ -868,13 +890,11 @@ impl MapxRawVersioned {
 
         // Both 'branch id' and 'version id'
         // are globally monotonically increasing.
-        if let Some(version_id) = self
-            .branch_to_created_versions
-            .get(&branch_id)
-            .and_then(|vers| vers.last().map(|(id, _)| id))
-        {
-            ret.insert(branch_id, version_id);
-            depth_limit = depth_limit.saturating_sub(1);
+        if let Some(vers) = self.branch_to_created_versions.get(&branch_id) {
+            if let Some(version_id) = vers.last().map(|(id, _)| id) {
+                ret.insert(branch_id, version_id);
+                depth_limit = depth_limit.saturating_sub(1);
+            }
             loop {
                 if 0 == depth_limit {
                     break;
@@ -935,15 +955,16 @@ impl MapxRawVersioned {
     }
 
     #[inline(always)]
-    pub(super) fn prune(&mut self) -> Result<()> {
-        self.prune_by_branch(INITIAL_BRANCH_ID, RESERVED_VERSION_NUM_DEFAULT)
+    pub(super) fn prune(&mut self, reserved_ver_num: Option<usize>) -> Result<()> {
+        self.prune_by_branch(INITIAL_BRANCH_ID, reserved_ver_num)
     }
 
     pub(super) fn prune_by_branch(
         &mut self,
         branch_id: BranchID,
-        reserved_ver_num: usize,
+        reserved_ver_num: Option<usize>,
     ) -> Result<()> {
+        let reserved_ver_num = reserved_ver_num.unwrap_or(RESERVED_VERSION_NUM_DEFAULT);
         if 0 == reserved_ver_num {
             return Err(eg!("reserved version number should NOT be zero"));
         }

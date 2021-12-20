@@ -1,6 +1,6 @@
 use crate::common::{
     get_data_dir, vsdb_set_base_dir, BranchID, Engine, Prefix, PrefixBytes, RawKey,
-    RawValue, VersionID, PREFIX_SIZ, RESERVED_ID_CNT,
+    RawValue, VersionID, INITIAL_BRANCH_ID, PREFIX_SIZ, RESERVED_ID_CNT,
 };
 use ruc::*;
 use sled::{Config, Db, IVec, Iter, Mode, Tree};
@@ -31,8 +31,11 @@ impl Engine for SledEngine {
         let (prefix_allocator, initial_value) = PrefixAllocator::init();
 
         if meta.get(&META_KEY_BRANCH_ID).c(d!())?.is_none() {
-            meta.insert(META_KEY_BRANCH_ID, 0_usize.to_be_bytes())
-                .c(d!())?;
+            meta.insert(
+                META_KEY_BRANCH_ID,
+                (1 + INITIAL_BRANCH_ID as usize).to_be_bytes(),
+            )
+            .c(d!())?;
         }
 
         if meta.get(&META_KEY_VERSION_ID).c(d!())?.is_none() {

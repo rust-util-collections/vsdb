@@ -1,6 +1,6 @@
 use crate::common::{
     get_data_dir, vsdb_set_base_dir, BranchID, Engine, Prefix, PrefixBytes, RawBytes,
-    RawKey, RawValue, VersionID, PREFIX_SIZ, RESERVED_ID_CNT,
+    RawKey, RawValue, VersionID, INITIAL_BRANCH_ID, PREFIX_SIZ, RESERVED_ID_CNT,
 };
 use lazy_static::lazy_static;
 use rocksdb::{
@@ -83,8 +83,11 @@ impl Engine for RocksEngine {
         }
 
         if meta.get(&META_KEY_BRANCH_ID).c(d!())?.is_none() {
-            meta.put(META_KEY_BRANCH_ID, 0_usize.to_be_bytes())
-                .c(d!())?;
+            meta.put(
+                META_KEY_BRANCH_ID,
+                (1 + INITIAL_BRANCH_ID as usize).to_be_bytes(),
+            )
+            .c(d!())?;
         }
 
         if meta.get(&META_KEY_VERSION_ID).c(d!())?.is_none() {

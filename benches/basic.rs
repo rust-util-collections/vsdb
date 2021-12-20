@@ -3,15 +3,16 @@ use std::{
     sync::atomic::{AtomicU8, AtomicUsize, Ordering},
     time::Duration,
 };
+use vsdb::{versioned, Mapx, Vecx, VersionName};
 
 fn bench(c: &mut Criterion) {
     let i = AtomicUsize::new(0);
-    let mut db = vsdb::Vecx::new();
+    let mut db = Vecx::new();
 
     let mut group = c.benchmark_group("** VSDB **");
     group
-        .measurement_time(Duration::from_secs(30))
-        .sample_size(90);
+        .measurement_time(Duration::from_secs(8))
+        .sample_size(12);
 
     group.bench_function(" Vecx write", |b| {
         b.iter(|| {
@@ -29,7 +30,7 @@ fn bench(c: &mut Criterion) {
     });
 
     let i = AtomicUsize::new(0);
-    let mut db = vsdb::Mapx::new();
+    let mut db = Mapx::new();
 
     group.bench_function(" Mapx write", |b| {
         b.iter(|| {
@@ -47,12 +48,12 @@ fn bench(c: &mut Criterion) {
     });
 
     let i = AtomicU8::new(0);
-    let mut db = vsdb::versioned::mapx_raw::MapxRawVersioned::new();
-    db.version_create(b"benchmark").unwrap();
+    let mut db = versioned::mapx_raw::MapxRawVersioned::new();
 
     group.bench_function(" VERSIONED Mapx write", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
+            db.version_create(VersionName(&n.to_be_bytes())).unwrap();
             db.insert(&[n; 2], &[n; 128]).unwrap();
         })
     });
@@ -60,6 +61,7 @@ fn bench(c: &mut Criterion) {
     group.bench_function(" VERSIONED Mapx read_write", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::Relaxed);
+            db.version_create(VersionName(&n.to_be_bytes())).unwrap();
             db.insert(&[n; 2], &[n; 128]).unwrap();
             db.get(&[n; 2]);
         })

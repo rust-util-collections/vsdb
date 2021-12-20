@@ -50,5 +50,5 @@ pub use basic::vecx::Vecx;
 
 pub use common::{
     ende::{KeyEnDe, KeyEnDeOrdered, ValueEnDe},
-    vsdb_flush, vsdb_set_base_dir,
+    vsdb_flush, vsdb_set_base_dir, BranchName, ParentBranchName, VersionName,
 };
