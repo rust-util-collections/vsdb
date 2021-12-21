@@ -343,10 +343,13 @@ fn branch_operations(hdr: &mut MapxRawVersioned) {
             .is_err()
     );
 
-    // not unique in globally view: "v-001" exist on "main" branch
+    // Version ID can not be repeated within the branch view, but can be repeated globally.
+    //
+    // Although "v-001" is not unique globally("v-001" exists on "main" branch),
+    // but it is unique in the "b-1" branch, so we can use it.
     assert!(
         hdr.version_create_by_branch(VersionName(b"v-001"), BranchName(b"b-1"))
-            .is_err()
+            .is_ok()
     );
 
     hdr.version_create_by_branch(VersionName(b"v-004"), BranchName(b"b-1"))

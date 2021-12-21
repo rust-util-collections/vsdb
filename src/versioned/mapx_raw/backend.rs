@@ -11,8 +11,8 @@ use crate::{
     common::{
         compute_checksum,
         ende::{encode_optioned_bytes, KeyEnDeOrdered},
-        BranchID, RawKey, RawValue, VerChecksum, VersionID, BRANCH_CNT_LIMIT,
-        INITIAL_BRANCH_ID, INITIAL_BRANCH_NAME, NULL, VSDB,
+        BranchID, BranchName, RawKey, RawValue, VerChecksum, VersionID, VersionName,
+        BRANCH_CNT_LIMIT, INITIAL_BRANCH_ID, INITIAL_BRANCH_NAME, NULL, VSDB,
     },
 };
 use ruc::*;
@@ -30,10 +30,12 @@ pub(super) const RESERVED_VERSION_NUM_DEFAULT: usize = 10;
 ////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////
 
-#[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct MapxRawVersioned {
-    pub(super) branch_name_to_branch_id: MapxOrdRawKey<BranchID>,
-    pub(super) version_name_to_version_id: MapxOrdRawKey<VersionID>,
+    default_branch: BranchID,
+
+    branch_name_to_branch_id: MapxOrdRawKey<BranchID>,
+    version_name_to_version_id: MapxOrdRawKey<VersionID>,
 
     // which version the branch is forked from
     branch_to_parent: MapxOrd<BranchID, Option<BasePoint>>,
@@ -60,7 +62,8 @@ impl MapxRawVersioned {
     }
 
     #[inline(always)]
-    pub(super) fn init(&mut self) {
+    fn init(&mut self) {
+        self.default_branch = INITIAL_BRANCH_ID;
         self.branch_name_to_branch_id
             .insert_ref(&INITIAL_BRANCH_NAME.to_vec(), &INITIAL_BRANCH_ID);
         self.branch_to_parent.insert(INITIAL_BRANCH_ID, None);
@@ -74,7 +77,8 @@ impl MapxRawVersioned {
         key: &[u8],
         value: &[u8],
     ) -> Result<Option<RawValue>> {
-        self.insert_by_branch(key, value, INITIAL_BRANCH_ID).c(d!())
+        self.insert_by_branch(key, value, self.branch_get_default())
+            .c(d!())
     }
 
     #[inline(always)]
@@ -113,7 +117,8 @@ impl MapxRawVersioned {
 
     #[inline(always)]
     pub(super) fn remove(&mut self, key: &[u8]) -> Result<Option<RawValue>> {
-        self.remove_by_branch(key, INITIAL_BRANCH_ID).c(d!())
+        self.remove_by_branch(key, self.branch_get_default())
+            .c(d!())
     }
 
     #[inline(always)]
@@ -196,7 +201,7 @@ impl MapxRawVersioned {
 
     #[inline(always)]
     pub(super) fn get(&self, key: &[u8]) -> Option<RawValue> {
-        self.get_by_branch(key, INITIAL_BRANCH_ID)
+        self.get_by_branch(key, self.branch_get_default())
     }
 
     #[inline(always)]
@@ -246,7 +251,7 @@ impl MapxRawVersioned {
 
     #[inline(always)]
     pub(super) fn get_mut(&mut self, key: &[u8]) -> Option<ValueMut<'_>> {
-        self.get_mut_by_branch(key, INITIAL_BRANCH_ID)
+        self.get_mut_by_branch(key, self.branch_get_default())
     }
 
     #[inline(always)]
@@ -329,7 +334,7 @@ impl MapxRawVersioned {
 
     #[inline(always)]
     pub(super) fn iter(&self) -> MapxRawVersionedIter {
-        self.iter_by_branch(INITIAL_BRANCH_ID)
+        self.iter_by_branch(self.branch_get_default())
     }
 
     #[inline(always)]
@@ -367,7 +372,7 @@ impl MapxRawVersioned {
         &'a self,
         bounds: R,
     ) -> MapxRawVersionedIter<'a> {
-        self.range_by_branch(INITIAL_BRANCH_ID, bounds)
+        self.range_by_branch(self.branch_get_default(), bounds)
     }
 
     #[inline(always)]
@@ -410,7 +415,7 @@ impl MapxRawVersioned {
         &'a self,
         bounds: R,
     ) -> MapxRawVersionedIter<'a> {
-        self.range_ref_by_branch(INITIAL_BRANCH_ID, bounds)
+        self.range_ref_by_branch(self.branch_get_default(), bounds)
     }
 
     #[inline(always)]
@@ -482,7 +487,7 @@ impl MapxRawVersioned {
 
     #[inline(always)]
     pub(super) fn version_create(&mut self, version_name: &[u8]) -> Result<()> {
-        self.version_create_by_branch(version_name, INITIAL_BRANCH_ID)
+        self.version_create_by_branch(version_name, self.branch_get_default())
             .c(d!())
     }
 
@@ -491,7 +496,10 @@ impl MapxRawVersioned {
         version_name: &[u8],
         branch_id: BranchID,
     ) -> Result<()> {
-        if self.version_name_to_version_id.get(version_name).is_some() {
+        let mut vername = branch_id.to_be_bytes().to_vec();
+        vername.extend_from_slice(version_name);
+
+        if self.version_name_to_version_id.get(&vername).is_some() {
             return Err(eg!("version already exists"));
         }
 
@@ -500,17 +508,17 @@ impl MapxRawVersioned {
             .get_mut(&branch_id)
             .c(d!("branch not found"))?;
 
-        let version_id = VSDB.alloc_version_id();
-
-        // hash(<version id> + <previous checksum> + <every kv writes>)
+        // hash(<previous checksum> + <version name> + <every kv writes>)
         let new_checksum = compute_checksum(&[
-            version_name,
             &vers.last().map(|(_, s)| s).unwrap_or_default(),
+            &vername,
         ]);
+
+        let version_id = VSDB.alloc_version_id();
         vers.insert(version_id, new_checksum);
 
         self.version_name_to_version_id
-            .insert(version_name.to_owned().into_boxed_slice(), version_id);
+            .insert(vername.into_boxed_slice(), version_id);
         self.version_to_change_set
             .insert(version_id, MapxRaw::new());
 
@@ -520,7 +528,7 @@ impl MapxRawVersioned {
     // Check if a verison exists on the initial branch
     #[inline(always)]
     pub(super) fn version_exists(&self, version_id: BranchID) -> bool {
-        self.version_exists_on_branch(version_id, INITIAL_BRANCH_ID)
+        self.version_exists_on_branch(version_id, self.branch_get_default())
     }
 
     // Check if a version exists on a specified branch(include its parents)
@@ -572,7 +580,8 @@ impl MapxRawVersioned {
     // and should not do any tracing.
     #[inline(always)]
     pub(super) fn version_pop(&mut self) -> Result<()> {
-        self.version_pop_by_branch(INITIAL_BRANCH_ID).c(d!())
+        self.version_pop_by_branch(self.branch_get_default())
+            .c(d!())
     }
 
     // 'Write'-like operations on branches and versions are different from operations on data.
@@ -664,7 +673,7 @@ impl MapxRawVersioned {
 
     #[inline(always)]
     pub(super) fn branch_create(&mut self, branch_name: &[u8]) -> Result<()> {
-        self.branch_create_by_base_branch(branch_name, INITIAL_BRANCH_ID)
+        self.branch_create_by_base_branch(branch_name, self.branch_get_default())
             .c(d!())
     }
 
@@ -748,8 +757,8 @@ impl MapxRawVersioned {
             return Err(eg!("can not remove branches with children"));
         }
 
-        if INITIAL_BRANCH_ID == branch_id {
-            return Err(eg!("the initial branch can NOT be removed"));
+        if self.branch_get_default() == branch_id {
+            return Err(eg!("the default branch can NOT be removed"));
         }
 
         self.branch_truncate(branch_id).c(d!())?;
@@ -836,13 +845,15 @@ impl MapxRawVersioned {
             return Ok(());
         }
 
-        let parent_id = fp.keys().rev().find(|&id| *id != branch_id).unwrap();
+        let parent_branch_id = fp.keys().rev().find(|&id| *id != branch_id).unwrap();
 
         let mut vers_created =
             self.branch_to_created_versions.remove(&branch_id).unwrap();
 
-        let mut vers_created_parent =
-            self.branch_to_created_versions.get_mut(parent_id).unwrap();
+        let mut vers_created_parent = self
+            .branch_to_created_versions
+            .get_mut(parent_branch_id)
+            .unwrap();
 
         // // merge an empty branch,
         // // this check is not necessary because this scene has been checked
@@ -881,7 +892,7 @@ impl MapxRawVersioned {
                 }
 
                 key_hdr
-                    .entry(*parent_id)
+                    .entry(*parent_branch_id)
                     .or_insert(MapxOrd::new())
                     .insert(ver, value);
             }
@@ -907,6 +918,21 @@ impl MapxRawVersioned {
         self.branch_name_to_branch_id.remove(&br_name);
 
         self.branch_to_parent.remove(&branch_id);
+
+        // change the prefix of version names to the id of parent branch
+        let brbytes = branch_id.to_be_bytes();
+        let parent_brbytes = parent_branch_id.to_be_bytes();
+        self.version_name_to_version_id
+            .iter()
+            .for_each(|(vername, verid)| {
+                if vername.starts_with(&brbytes) {
+                    let mut new_vername = vername.to_vec();
+                    new_vername[..brbytes.len()].copy_from_slice(&parent_brbytes);
+                    self.version_name_to_version_id.remove(&vername).unwrap();
+                    self.version_name_to_version_id
+                        .insert(new_vername.into_boxed_slice(), verid);
+                }
+            });
 
         Ok(())
     }
@@ -955,8 +981,22 @@ impl MapxRawVersioned {
     }
 
     #[inline(always)]
+    pub(super) fn branch_set_default(&mut self, branch_id: BranchID) -> Result<()> {
+        if !self.branch_to_parent.contains_key(&branch_id) {
+            return Err(eg!("branch not found"));
+        }
+        self.default_branch = branch_id;
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub(super) fn branch_get_default(&self) -> BranchID {
+        self.default_branch
+    }
+
+    #[inline(always)]
     pub(super) fn checksum_get(&self) -> Option<VerChecksum> {
-        self.checksum_get_by_branch(INITIAL_BRANCH_ID)
+        self.checksum_get_by_branch(self.branch_get_default())
     }
 
     #[inline(always)]
@@ -999,7 +1039,7 @@ impl MapxRawVersioned {
 
     #[inline(always)]
     pub(super) fn prune(&mut self, reserved_ver_num: Option<usize>) -> Result<()> {
-        self.prune_by_branch(INITIAL_BRANCH_ID, reserved_ver_num)
+        self.prune_by_branch(self.branch_get_default(), reserved_ver_num)
     }
 
     pub(super) fn prune_by_branch(
@@ -1054,15 +1094,31 @@ impl MapxRawVersioned {
 
             // one version belong(directly) to one branch only,
             // so we can remove these created versions safely.
-            let (ver_name, _) = self
+            let (vername, _) = self
                 .version_name_to_version_id
                 .iter()
                 .find(|(_, v)| *v == ver)
                 .unwrap();
-            self.version_name_to_version_id.remove(&ver_name);
+            self.version_name_to_version_id.remove(&vername);
         }
 
         Ok(())
+    }
+
+    #[inline(always)]
+    pub(super) fn get_branch_id(&self, branch_name: BranchName) -> Option<BranchID> {
+        self.branch_name_to_branch_id.get(branch_name.0)
+    }
+
+    #[inline(always)]
+    pub(super) fn get_version_id(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> Option<VersionID> {
+        let mut vername = self.get_branch_id(branch_name)?.to_be_bytes().to_vec();
+        vername.extend_from_slice(version_name.0);
+        self.version_name_to_version_id.get(&vername)
     }
 }
 

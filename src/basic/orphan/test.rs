@@ -43,10 +43,10 @@ fn basic_cases() {
     v %= 10;
     assert_eq!(v, 9);
 
-    *v.get_mut() = -v.clone_inner();
+    *v.get_mut() = -v.get_value();
     assert_eq!(v, -9);
 
-    *v.get_mut() = !v.clone_inner();
+    *v.get_mut() = !v.get_value();
     assert_eq!(v, !-9);
 
     *v.get_mut() = 732;

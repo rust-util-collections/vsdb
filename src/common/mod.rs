@@ -38,10 +38,13 @@ pub(crate) type BranchID = u64;
 pub(crate) type VersionID = u64;
 
 /// avoid making mistakes between branch name and version name
+#[derive(Clone, Copy)]
 pub struct BranchName<'a>(pub &'a [u8]);
 /// +1
+#[derive(Clone, Copy)]
 pub struct ParentBranchName<'a>(pub &'a [u8]);
 /// +1
+#[derive(Clone, Copy)]
 pub struct VersionName<'a>(pub &'a [u8]);
 
 const RESERVED_ID_CNT: Prefix = 4096_0000;

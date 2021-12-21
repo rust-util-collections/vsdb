@@ -49,10 +49,10 @@
 //! v %= 10;
 //! assert_eq!(v, 9);
 //!
-//! *v.get_mut() = -v.clone_inner();
+//! *v.get_mut() = -v.get_value();
 //! assert_eq!(v, -9);
 //!
-//! *v.get_mut() = !v.clone_inner();
+//! *v.get_mut() = !v.get_value();
 //! assert_eq!(v, !-9);
 //!
 //! *v.get_mut() = 0;
@@ -117,12 +117,8 @@ where
         Self { inner: hdr }
     }
 
-    /// Clone the inner value.
-    pub fn clone_inner(&self) -> T {
-        self.get_value()
-    }
-
-    fn get_value(&self) -> T {
+    /// Get the inner cloned value.
+    pub fn get_value(&self) -> T {
         self.inner.get(&[]).unwrap()
     }
 
