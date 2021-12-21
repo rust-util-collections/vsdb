@@ -2,13 +2,9 @@
 //! NOTE: Documents => [MapxRawVs](crate::versioned::mapx_raw)
 //!
 
-// TODO
-
 use crate::{
     common::ende::{KeyEnDe, ValueEnDe},
-    versioned::mapx_ord_rawkey::{
-        Entry, MapxOrdRawKeyVs, MapxOrdRawKeyVsIter, ValueMut,
-    },
+    versioned::mapx_ord_rawkey::{MapxOrdRawKeyVs, MapxOrdRawKeyVsIter},
     BranchName, ParentBranchName, VerChecksum, VersionName,
 };
 use ruc::*;
@@ -72,14 +68,6 @@ where
     }
 
     #[inline(always)]
-    pub fn get_mut(&mut self, key: &K) -> Option<ValueMut<'_, V>> {
-        let k = key.encode();
-        self.inner
-            .get(&k)
-            .map(|v| ValueMut::new(&mut self.inner, k, v))
-    }
-
-    #[inline(always)]
     pub fn len(&self) -> usize {
         self.inner.len()
     }
@@ -97,14 +85,6 @@ where
     #[inline(always)]
     pub fn insert_ref(&mut self, key: &K, value: &V) -> Result<Option<V>> {
         self.inner.insert_ref(&key.encode(), value).c(d!())
-    }
-
-    #[inline(always)]
-    pub fn entry(&mut self, key: K) -> Entry<'_, V> {
-        Entry {
-            key: key.encode(),
-            hdr: &mut self.inner,
-        }
     }
 
     #[inline(always)]
@@ -160,6 +140,241 @@ where
     #[inline(always)]
     pub fn clear(&mut self) {
         self.inner.clear();
+    }
+
+    #[inline(always)]
+    pub fn get_by_branch(&self, key: &K, branch_name: BranchName) -> Option<V> {
+        self.inner.get_by_branch(&key.encode(), branch_name)
+    }
+
+    #[inline(always)]
+    pub fn get_le_by_branch(&self, key: &K, branch_name: BranchName) -> Option<(K, V)> {
+        self.inner
+            .get_le_by_branch(&key.encode(), branch_name)
+            .map(|(k, v)| (pnk!(<K as KeyEnDe>::decode(&k)), v))
+    }
+
+    #[inline(always)]
+    pub fn get_ge_by_branch(&self, key: &K, branch_name: BranchName) -> Option<(K, V)> {
+        self.inner
+            .get_ge_by_branch(&key.encode(), branch_name)
+            .map(|(k, v)| (pnk!(<K as KeyEnDe>::decode(&k)), v))
+    }
+
+    #[inline(always)]
+    pub fn len_by_branch(&self, branch_name: BranchName) -> usize {
+        self.inner.len_by_branch(branch_name)
+    }
+
+    #[inline(always)]
+    pub fn is_empty_by_branch(&self, branch_name: BranchName) -> bool {
+        self.inner.is_empty_by_branch(branch_name)
+    }
+
+    #[inline(always)]
+    pub fn insert_by_branch(
+        &mut self,
+        key: K,
+        value: V,
+        branch_name: BranchName,
+    ) -> Result<Option<V>> {
+        self.insert_ref_by_branch(&key, &value, branch_name).c(d!())
+    }
+
+    #[inline(always)]
+    pub fn insert_ref_by_branch(
+        &mut self,
+        key: &K,
+        value: &V,
+        branch_name: BranchName,
+    ) -> Result<Option<V>> {
+        self.inner
+            .insert_ref_by_branch(&key.encode(), value, branch_name)
+            .c(d!())
+    }
+
+    #[inline(always)]
+    pub fn iter_by_branch(&self, branch_name: BranchName) -> MapxVsIter<K, V> {
+        MapxVsIter {
+            iter: self.inner.iter_by_branch(branch_name),
+            pk: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub fn range_by_branch<'a, R: 'a + RangeBounds<K>>(
+        &'a self,
+        bounds: R,
+        branch_name: BranchName,
+    ) -> MapxVsIter<'a, K, V> {
+        let l = match bounds.start_bound() {
+            Bound::Included(i) => Bound::Included(i.encode()),
+            Bound::Excluded(i) => Bound::Excluded(i.encode()),
+            _ => Bound::Unbounded,
+        };
+        let h = match bounds.end_bound() {
+            Bound::Included(i) => Bound::Included(i.encode()),
+            Bound::Excluded(i) => Bound::Excluded(i.encode()),
+            _ => Bound::Unbounded,
+        };
+
+        MapxVsIter {
+            iter: self.inner.range_by_branch(branch_name, (l, h)),
+            pk: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub fn first_by_branch(&self, branch_name: BranchName) -> Option<(K, V)> {
+        self.iter_by_branch(branch_name).next()
+    }
+
+    #[inline(always)]
+    pub fn last_by_branch(&self, branch_name: BranchName) -> Option<(K, V)> {
+        self.iter_by_branch(branch_name).next_back()
+    }
+
+    #[inline(always)]
+    pub fn contains_key_by_branch(&self, key: &K, branch_name: BranchName) -> bool {
+        self.inner
+            .contains_key_by_branch(&key.encode(), branch_name)
+    }
+
+    #[inline(always)]
+    pub fn remove_by_branch(
+        &mut self,
+        key: &K,
+        branch_name: BranchName,
+    ) -> Result<Option<V>> {
+        self.inner
+            .remove_by_branch(&key.encode(), branch_name)
+            .c(d!())
+    }
+
+    #[inline(always)]
+    pub fn get_by_branch_version(
+        &self,
+        key: &K,
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> Option<V> {
+        self.inner
+            .get_by_branch_version(&key.encode(), branch_name, version_name)
+    }
+
+    #[inline(always)]
+    pub fn get_le_by_branch_version(
+        &self,
+        key: &K,
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> Option<(K, V)> {
+        self.inner
+            .get_le_by_branch_version(&key.encode(), branch_name, version_name)
+            .map(|(k, v)| (pnk!(<K as KeyEnDe>::decode(&k)), v))
+    }
+
+    #[inline(always)]
+    pub fn get_ge_by_branch_version(
+        &self,
+        key: &K,
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> Option<(K, V)> {
+        self.inner
+            .get_ge_by_branch_version(&key.encode(), branch_name, version_name)
+            .map(|(k, v)| (pnk!(<K as KeyEnDe>::decode(&k)), v))
+    }
+
+    #[inline(always)]
+    pub fn len_by_branch_version(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> usize {
+        self.inner.len_by_branch_version(branch_name, version_name)
+    }
+
+    #[inline(always)]
+    pub fn is_empty_by_branch_version(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> bool {
+        self.inner
+            .is_empty_by_branch_version(branch_name, version_name)
+    }
+
+    #[inline(always)]
+    pub fn iter_by_branch_version(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> MapxVsIter<K, V> {
+        MapxVsIter {
+            iter: self.inner.iter_by_branch_version(branch_name, version_name),
+            pk: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub fn range_by_branch_version<'a, R: 'a + RangeBounds<K>>(
+        &'a self,
+        bounds: R,
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> MapxVsIter<'a, K, V> {
+        let l = match bounds.start_bound() {
+            Bound::Included(i) => Bound::Included(i.encode()),
+            Bound::Excluded(i) => Bound::Excluded(i.encode()),
+            _ => Bound::Unbounded,
+        };
+        let h = match bounds.end_bound() {
+            Bound::Included(i) => Bound::Included(i.encode()),
+            Bound::Excluded(i) => Bound::Excluded(i.encode()),
+            _ => Bound::Unbounded,
+        };
+
+        MapxVsIter {
+            iter: self
+                .inner
+                .range_by_branch_version(branch_name, version_name, (l, h)),
+            pk: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub fn first_by_branch_version(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> Option<(K, V)> {
+        self.iter_by_branch_version(branch_name, version_name)
+            .next()
+    }
+
+    #[inline(always)]
+    pub fn last_by_branch_version(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> Option<(K, V)> {
+        self.iter_by_branch_version(branch_name, version_name)
+            .next_back()
+    }
+
+    #[inline(always)]
+    pub fn contains_key_by_branch_version(
+        &self,
+        key: &K,
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> bool {
+        self.inner.contains_key_by_branch_version(
+            &key.encode(),
+            branch_name,
+            version_name,
+        )
     }
 
     crate::impl_vcs_methods!();

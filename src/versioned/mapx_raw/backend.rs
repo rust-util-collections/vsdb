@@ -9,18 +9,14 @@ use crate::{
         mapx_raw::MapxRaw,
     },
     common::{
-        compute_checksum,
-        ende::{encode_optioned_bytes, KeyEnDeOrdered},
-        BranchID, BranchName, RawKey, RawValue, VerChecksum, VersionID, VersionName,
-        BRANCH_CNT_LIMIT, INITIAL_BRANCH_ID, INITIAL_BRANCH_NAME, NULL, VSDB,
+        compute_checksum, ende::encode_optioned_bytes, BranchID, BranchName, RawKey,
+        RawValue, VerChecksum, VersionID, VersionName, BRANCH_CNT_LIMIT,
+        INITIAL_BRANCH_ID, INITIAL_BRANCH_NAME, NULL, VSDB,
     },
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::BTreeMap,
-    ops::{Deref, DerefMut, RangeBounds},
-};
+use std::{collections::BTreeMap, ops::RangeBounds};
 
 type BranchPath = BTreeMap<BranchID, VersionID>;
 
@@ -247,39 +243,6 @@ impl MapxRawVs {
         }
 
         None
-    }
-
-    #[inline(always)]
-    pub(super) fn get_mut(&mut self, key: &[u8]) -> Option<ValueMut<'_>> {
-        self.get_mut_by_branch(key, self.branch_get_default())
-    }
-
-    #[inline(always)]
-    pub(super) fn get_mut_by_branch(
-        &mut self,
-        key: &[u8],
-        branch_id: BranchID,
-    ) -> Option<ValueMut<'_>> {
-        self.branch_to_created_versions
-            .get(&branch_id)?
-            .last()
-            .and_then(|(version_id, _)| {
-                self.get_mut_by_branch_version(key, branch_id, version_id)
-            })
-    }
-
-    // This function should NOT be public,
-    // `write`-like operations should only be applied
-    // on the latest version of every branch,
-    // historical data version should be immutable in the user view.
-    fn get_mut_by_branch_version(
-        &mut self,
-        key: &[u8],
-        branch_id: BranchID,
-        version_id: VersionID,
-    ) -> Option<ValueMut<'_>> {
-        self.get_by_branch_version(key, branch_id, version_id)
-            .map(|v| ValueMut::new(self, RawKey::from_slice(key).unwrap(), v, branch_id))
     }
 
     #[inline(always)]
@@ -1187,57 +1150,6 @@ impl DoubleEndedIterator for MapxRawVsIter<'_> {
 }
 
 impl ExactSizeIterator for MapxRawVsIter<'_> {}
-
-////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////
-
-#[allow(missing_docs)]
-#[derive(PartialEq, Eq, Debug)]
-pub struct ValueMut<'a> {
-    hdr: &'a mut MapxRawVs,
-    key: RawKey,
-    value: RawValue,
-    branch_id: BranchID,
-}
-
-impl<'a> ValueMut<'a> {
-    fn new(
-        hdr: &'a mut MapxRawVs,
-        key: RawKey,
-        value: RawValue,
-        branch_id: BranchID,
-    ) -> Self {
-        ValueMut {
-            hdr,
-            key,
-            value,
-            branch_id,
-        }
-    }
-}
-
-// NOTE: Very Important !!!
-impl<'a> Drop for ValueMut<'a> {
-    fn drop(&mut self) {
-        pnk!(
-            self.hdr
-                .insert_by_branch(&self.key, &self.value, self.branch_id)
-        );
-    }
-}
-
-impl<'a> Deref for ValueMut<'a> {
-    type Target = RawValue;
-    fn deref(&self) -> &Self::Target {
-        &self.value
-    }
-}
-
-impl<'a> DerefMut for ValueMut<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.value
-    }
-}
 
 ////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////

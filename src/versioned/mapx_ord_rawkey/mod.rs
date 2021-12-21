@@ -2,8 +2,6 @@
 //! NOTE: Documents => [MapxRawVs](crate::versioned::mapx_raw)
 //!
 
-// TODO
-
 use crate::{
     common::{
         ende::ValueEnDe, BranchName, ParentBranchName, RawKey, VerChecksum, VersionName,
@@ -12,10 +10,7 @@ use crate::{
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
-use std::{
-    marker::PhantomData,
-    ops::{Deref, DerefMut, RangeBounds},
-};
+use std::{marker::PhantomData, ops::RangeBounds};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
@@ -56,9 +51,51 @@ where
     }
 
     #[inline(always)]
+    pub fn get_by_branch(&self, key: &[u8], branch_name: BranchName) -> Option<V> {
+        self.inner
+            .get_by_branch(key, branch_name)
+            .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
+    }
+
+    #[inline(always)]
+    pub fn get_by_branch_version(
+        &self,
+        key: &[u8],
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> Option<V> {
+        self.inner
+            .get_by_branch_version(key, branch_name, version_name)
+            .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
+    }
+
+    #[inline(always)]
     pub fn get_le(&self, key: &[u8]) -> Option<(RawKey, V)> {
         self.inner
             .get_le(key)
+            .map(|(k, v)| (k, <V as ValueEnDe>::decode(&v).unwrap()))
+    }
+
+    #[inline(always)]
+    pub fn get_le_by_branch(
+        &self,
+        key: &[u8],
+        branch_name: BranchName,
+    ) -> Option<(RawKey, V)> {
+        self.inner
+            .get_le_by_branch(key, branch_name)
+            .map(|(k, v)| (k, <V as ValueEnDe>::decode(&v).unwrap()))
+    }
+
+    #[inline(always)]
+    pub fn get_le_by_branch_version(
+        &self,
+        key: &[u8],
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> Option<(RawKey, V)> {
+        self.inner
+            .get_le_by_branch_version(key, branch_name, version_name)
             .map(|(k, v)| (k, <V as ValueEnDe>::decode(&v).unwrap()))
     }
 
@@ -70,14 +107,26 @@ where
     }
 
     #[inline(always)]
-    pub fn get_mut(&mut self, key: &[u8]) -> Option<ValueMut<'_, V>> {
-        self.inner.get(key).map(|v| {
-            ValueMut::new(
-                self,
-                key.to_vec().into_boxed_slice(),
-                <V as ValueEnDe>::decode(&v).unwrap(),
-            )
-        })
+    pub fn get_ge_by_branch(
+        &self,
+        key: &[u8],
+        branch_name: BranchName,
+    ) -> Option<(RawKey, V)> {
+        self.inner
+            .get_ge_by_branch(key, branch_name)
+            .map(|(k, v)| (k, <V as ValueEnDe>::decode(&v).unwrap()))
+    }
+
+    #[inline(always)]
+    pub fn get_ge_by_branch_version(
+        &self,
+        key: &[u8],
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> Option<(RawKey, V)> {
+        self.inner
+            .get_ge_by_branch_version(key, branch_name, version_name)
+            .map(|(k, v)| (k, <V as ValueEnDe>::decode(&v).unwrap()))
     }
 
     #[inline(always)]
@@ -86,13 +135,52 @@ where
     }
 
     #[inline(always)]
+    pub fn len_by_branch(&self, branch_name: BranchName) -> usize {
+        self.inner.len_by_branch(branch_name)
+    }
+
+    #[inline(always)]
+    pub fn len_by_branch_version(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> usize {
+        self.inner.len_by_branch_version(branch_name, version_name)
+    }
+
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
     #[inline(always)]
+    pub fn is_empty_by_branch(&self, branch_name: BranchName) -> bool {
+        self.inner.is_empty_by_branch(branch_name)
+    }
+
+    #[inline(always)]
+    pub fn is_empty_by_branch_version(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> bool {
+        self.inner
+            .is_empty_by_branch_version(branch_name, version_name)
+    }
+
+    #[inline(always)]
     pub fn insert(&mut self, key: RawKey, value: V) -> Result<Option<V>> {
         self.insert_ref(&key, &value)
+    }
+
+    #[inline(always)]
+    pub fn insert_by_branch(
+        &mut self,
+        key: RawKey,
+        value: V,
+        branch_name: BranchName,
+    ) -> Result<Option<V>> {
+        self.insert_ref_by_branch(&key, &value, branch_name)
     }
 
     #[inline(always)]
@@ -103,19 +191,41 @@ where
     }
 
     #[inline(always)]
-    pub fn entry(&mut self, key: RawKey) -> Entry<'_, V> {
-        Entry { key, hdr: self }
-    }
-
-    #[inline(always)]
-    pub fn entry_ref<'a>(&'a mut self, key: &'a [u8]) -> EntryRef<'a, V> {
-        EntryRef { key, hdr: self }
+    pub fn insert_ref_by_branch(
+        &mut self,
+        key: &[u8],
+        value: &V,
+        branch_name: BranchName,
+    ) -> Result<Option<V>> {
+        self.inner
+            .insert_by_branch(key, &value.encode(), branch_name)
+            .map(|v| v.map(|v| <V as ValueEnDe>::decode(&v).unwrap()))
     }
 
     #[inline(always)]
     pub fn iter(&self) -> MapxOrdRawKeyVsIter<'_, V> {
         MapxOrdRawKeyVsIter {
             iter: self.inner.iter(),
+            p: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub fn iter_by_branch(&self, branch_name: BranchName) -> MapxOrdRawKeyVsIter<'_, V> {
+        MapxOrdRawKeyVsIter {
+            iter: self.inner.iter_by_branch(branch_name),
+            p: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub fn iter_by_branch_version(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> MapxOrdRawKeyVsIter<'_, V> {
+        MapxOrdRawKeyVsIter {
+            iter: self.inner.iter_by_branch_version(branch_name, version_name),
             p: PhantomData,
         }
     }
@@ -132,6 +242,33 @@ where
     }
 
     #[inline(always)]
+    pub fn range_by_branch<'a, R: 'a + RangeBounds<RawKey>>(
+        &'a self,
+        branch_name: BranchName,
+        bounds: R,
+    ) -> MapxOrdRawKeyVsIter<'a, V> {
+        MapxOrdRawKeyVsIter {
+            iter: self.inner.range_by_branch(branch_name, bounds),
+            p: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub fn range_by_branch_version<'a, R: 'a + RangeBounds<RawKey>>(
+        &'a self,
+        branch_name: BranchName,
+        version_name: VersionName,
+        bounds: R,
+    ) -> MapxOrdRawKeyVsIter<'a, V> {
+        MapxOrdRawKeyVsIter {
+            iter: self
+                .inner
+                .range_by_branch_version(branch_name, version_name, bounds),
+            p: PhantomData,
+        }
+    }
+
+    #[inline(always)]
     pub fn range_ref<'a, R: RangeBounds<&'a [u8]>>(
         &'a self,
         bounds: R,
@@ -143,8 +280,52 @@ where
     }
 
     #[inline(always)]
+    pub fn range_ref_by_branch<'a, R: RangeBounds<&'a [u8]>>(
+        &'a self,
+        branch_name: BranchName,
+        bounds: R,
+    ) -> MapxOrdRawKeyVsIter<'a, V> {
+        MapxOrdRawKeyVsIter {
+            iter: self.inner.range_ref_by_branch(branch_name, bounds),
+            p: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub fn range_ref_by_branch_version<'a, R: RangeBounds<&'a [u8]>>(
+        &'a self,
+        branch_name: BranchName,
+        version_name: VersionName,
+        bounds: R,
+    ) -> MapxOrdRawKeyVsIter<'a, V> {
+        MapxOrdRawKeyVsIter {
+            iter: self.inner.range_ref_by_branch_version(
+                branch_name,
+                version_name,
+                bounds,
+            ),
+            p: PhantomData,
+        }
+    }
+
+    #[inline(always)]
     pub fn first(&self) -> Option<(RawKey, V)> {
         self.iter().next()
+    }
+
+    #[inline(always)]
+    pub fn first_by_branch(&self, branch_name: BranchName) -> Option<(RawKey, V)> {
+        self.iter_by_branch(branch_name).next()
+    }
+
+    #[inline(always)]
+    pub fn first_by_branch_version(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> Option<(RawKey, V)> {
+        self.iter_by_branch_version(branch_name, version_name)
+            .next()
     }
 
     #[inline(always)]
@@ -153,8 +334,39 @@ where
     }
 
     #[inline(always)]
+    pub fn last_by_branch(&self, branch_name: BranchName) -> Option<(RawKey, V)> {
+        self.iter_by_branch(branch_name).next_back()
+    }
+
+    #[inline(always)]
+    pub fn last_by_branch_version(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> Option<(RawKey, V)> {
+        self.iter_by_branch_version(branch_name, version_name)
+            .next_back()
+    }
+
+    #[inline(always)]
     pub fn contains_key(&self, key: &[u8]) -> bool {
         self.inner.contains_key(key)
+    }
+
+    #[inline(always)]
+    pub fn contains_key_by_branch(&self, key: &[u8], branch_name: BranchName) -> bool {
+        self.inner.contains_key_by_branch(key, branch_name)
+    }
+
+    #[inline(always)]
+    pub fn contains_key_by_branch_version(
+        &self,
+        key: &[u8],
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> bool {
+        self.inner
+            .contains_key_by_branch_version(key, branch_name, version_name)
     }
 
     #[inline(always)]
@@ -165,99 +377,22 @@ where
     }
 
     #[inline(always)]
+    pub fn remove_by_branch(
+        &mut self,
+        key: &[u8],
+        branch_name: BranchName,
+    ) -> Result<Option<V>> {
+        self.inner
+            .remove_by_branch(key, branch_name)
+            .map(|v| v.map(|v| <V as ValueEnDe>::decode(&v).unwrap()))
+    }
+
+    #[inline(always)]
     pub fn clear(&mut self) {
         self.inner.clear();
     }
 
     crate::impl_vcs_methods!();
-}
-
-#[derive(Debug)]
-pub struct ValueMut<'a, V>
-where
-    V: ValueEnDe,
-{
-    hdr: &'a mut MapxOrdRawKeyVs<V>,
-    key: RawKey,
-    value: V,
-}
-
-impl<'a, V> ValueMut<'a, V>
-where
-    V: ValueEnDe,
-{
-    pub(crate) fn new(hdr: &'a mut MapxOrdRawKeyVs<V>, key: RawKey, value: V) -> Self {
-        ValueMut { hdr, key, value }
-    }
-}
-
-impl<'a, V> Drop for ValueMut<'a, V>
-where
-    V: ValueEnDe,
-{
-    fn drop(&mut self) {
-        pnk!(self.hdr.insert_ref(&self.key, &self.value));
-    }
-}
-
-impl<'a, V> Deref for ValueMut<'a, V>
-where
-    V: ValueEnDe,
-{
-    type Target = V;
-
-    fn deref(&self) -> &Self::Target {
-        &self.value
-    }
-}
-
-impl<'a, V> DerefMut for ValueMut<'a, V>
-where
-    V: ValueEnDe,
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.value
-    }
-}
-
-pub struct Entry<'a, V>
-where
-    V: 'a + ValueEnDe,
-{
-    pub(crate) key: RawKey,
-    pub(crate) hdr: &'a mut MapxOrdRawKeyVs<V>,
-}
-
-impl<'a, V> Entry<'a, V>
-where
-    V: ValueEnDe,
-{
-    pub fn or_insert(self, default: V) -> ValueMut<'a, V> {
-        if !self.hdr.contains_key(&self.key) {
-            pnk!(self.hdr.insert_ref(&self.key, &default));
-        }
-        pnk!(self.hdr.get_mut(&self.key))
-    }
-}
-
-pub struct EntryRef<'a, V>
-where
-    V: ValueEnDe,
-{
-    key: &'a [u8],
-    hdr: &'a mut MapxOrdRawKeyVs<V>,
-}
-
-impl<'a, V> EntryRef<'a, V>
-where
-    V: ValueEnDe,
-{
-    pub fn or_insert_ref(self, default: &V) -> ValueMut<'a, V> {
-        if !self.hdr.contains_key(self.key) {
-            pnk!(self.hdr.insert_ref(self.key, default));
-        }
-        pnk!(self.hdr.get_mut(self.key))
-    }
 }
 
 pub struct MapxOrdRawKeyVsIter<'a, V>
@@ -407,6 +542,11 @@ macro_rules! impl_vcs_methods {
         #[inline(always)]
         pub fn branch_has_children(&self, branch_name: BranchName) -> bool {
             self.inner.branch_has_children(branch_name)
+        }
+
+        #[inline(always)]
+        pub fn branch_set_default(&mut self, branch_name: BranchName) -> Result<()> {
+            self.inner.branch_set_default(branch_name).c(d!())
         }
 
         #[inline(always)]

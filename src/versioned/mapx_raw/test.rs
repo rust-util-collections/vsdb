@@ -43,7 +43,7 @@ fn basic_cases() {
     });
 
     (1..cnt).map(|i: usize| i.to_be_bytes()).for_each(|i| {
-        *pnk!(reloaded.get_mut(&i)) = i.to_vec().into_boxed_slice();
+        reloaded.insert(&i, &i).unwrap();
         assert_eq!(&reloaded.get(&i).unwrap()[..], &i);
         assert!(reloaded.contains_key(&i));
         assert!(reloaded.remove(&i).unwrap().is_some());

@@ -2,15 +2,12 @@
 //! NOTE: Documents => [MapxRaw](crate::versioned::mapx_raw)
 //!
 
-// TODO
-
 use crate::{
-    common::ende::ValueEnDe,
-    versioned::mapx_ord_rawkey::{MapxOrdRawKeyVs, MapxOrdRawKeyVsIter, ValueMut},
+    versioned::mapx_ord_rawkey::{MapxOrdRawKeyVs, MapxOrdRawKeyVsIter},
+    BranchName, ParentBranchName, ValueEnDe, VerChecksum, VersionName,
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
-// use std::cmp::Ordering;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
@@ -35,14 +32,6 @@ impl<T: ValueEnDe> VecxVs<T> {
     #[inline(always)]
     pub fn get(&self, idx: usize) -> Option<T> {
         self.inner.get(&(idx as u64).to_be_bytes())
-    }
-
-    #[inline(always)]
-    pub fn get_mut(&mut self, idx: usize) -> Option<ValueMut<'_, T>> {
-        let idx_bytes = (idx as u64).to_be_bytes();
-        self.inner.get(&idx_bytes).map(|v| {
-            ValueMut::new(&mut self.inner, idx_bytes.to_vec().into_boxed_slice(), v)
-        })
     }
 
     #[inline(always)]
@@ -77,74 +66,11 @@ impl<T: ValueEnDe> VecxVs<T> {
             .unwrap();
     }
 
-    // #[inline(always)]
-    // pub fn insert(&mut self, idx: usize, v: T) {
-    //     self.insert_ref(idx, &v)
-    // }
-
-    // #[inline(always)]
-    // pub fn insert_ref(&mut self, idx: usize, v: &T) {
-    //     let idx = idx as u64;
-    //     match (self.len() as u64).cmp(&idx) {
-    //         Ordering::Greater => {
-    //             self.inner
-    //                 .range_ref(
-    //                     &idx.to_be_bytes()[..]..&(self.len() as u64).to_be_bytes()[..],
-    //                 )
-    //                 .for_each(|(i, iv)| {
-    //                     self.inner.insert_ref(
-    //                         &(crate::parse_int!(i, u64) + 1).to_be_bytes(),
-    //                         &iv,
-    //                     );
-    //                 });
-    //             self.inner.insert_ref(&idx.to_be_bytes(), v);
-    //         }
-    //         Ordering::Equal => {
-    //             self.push_ref(v);
-    //         }
-    //         Ordering::Less => {
-    //             panic!("out of index");
-    //         }
-    //     }
-    // }
-
     #[inline(always)]
     pub fn pop(&mut self) -> Result<Option<T>> {
         alt!(self.is_empty(), return Ok(None));
         self.inner.remove(&(self.len() - 1).to_be_bytes()).c(d!())
     }
-
-    // #[inline(always)]
-    // pub fn remove(&mut self, idx: usize) -> T {
-    //     let idx = idx as u64;
-    //     if !self.is_empty() && idx < self.len() as u64 {
-    //         let last_idx = self.len() as u64 - 1;
-    //         let ret = self.inner.remove(&idx.to_be_bytes()).unwrap().unwrap();
-    //         self.inner
-    //             .range_ref(&(1 + idx).to_be_bytes()[..]..)
-    //             .for_each(|(i, v)| {
-    //                 self.inner
-    //                     .insert_ref(&(crate::parse_int!(i, u64) - 1).to_be_bytes(), &v);
-    //             });
-    //         pnk!(self.inner.remove(&last_idx.to_be_bytes()));
-    //         return ret;
-    //     }
-    //     panic!("out of index");
-    // }
-
-    // #[inline(always)]
-    // pub fn swap_remove(&mut self, idx: usize) -> T {
-    //     let idx = idx as u64;
-    //     if !self.is_empty() && idx < self.len() as u64 {
-    //         let last_idx = self.len() as u64 - 1;
-    //         let ret = self.inner.remove(&idx.to_be_bytes()).unwrap().unwrap();
-    //         if let Some(v) = self.inner.remove(&last_idx.to_be_bytes()).unwrap() {
-    //             self.inner.insert_ref(&idx.to_be_bytes(), &v).unwrap();
-    //         }
-    //         return ret;
-    //     }
-    //     panic!("out of index");
-    // }
 
     pub fn update(&mut self, idx: usize, v: T) -> Result<Option<T>> {
         self.update_ref(idx, &v).c(d!())
@@ -153,12 +79,12 @@ impl<T: ValueEnDe> VecxVs<T> {
     #[inline(always)]
     pub fn update_ref(&mut self, idx: usize, v: &T) -> Result<Option<T>> {
         if idx < self.len() {
-            return self
-                .inner
+            self.inner
                 .insert_ref(&(idx as u64).to_be_bytes(), v)
-                .c(d!());
+                .c(d!())
+        } else {
+            Err(eg!("out of index"))
         }
-        panic!("out of index");
     }
 
     #[inline(always)]
@@ -172,6 +98,148 @@ impl<T: ValueEnDe> VecxVs<T> {
     pub fn clear(&mut self) {
         self.inner.clear();
     }
+
+    #[inline(always)]
+    pub fn get_by_branch(&self, idx: usize, branch_name: BranchName) -> Option<T> {
+        self.inner
+            .get_by_branch(&(idx as u64).to_be_bytes(), branch_name)
+    }
+
+    #[inline(always)]
+    pub fn last_by_branch(&self, branch_name: BranchName) -> Option<T> {
+        alt!(self.is_empty(), return None);
+        Some(
+            self.inner
+                .get_by_branch(&(self.len() as u64 - 1).to_be_bytes(), branch_name)
+                .unwrap(),
+        )
+    }
+
+    #[inline(always)]
+    pub fn len_by_branch(&self, branch_name: BranchName) -> usize {
+        self.inner.len_by_branch(branch_name)
+    }
+
+    #[inline(always)]
+    pub fn is_empty_by_branch(&self, branch_name: BranchName) -> bool {
+        self.inner.is_empty_by_branch(branch_name)
+    }
+
+    #[inline(always)]
+    pub fn push_by_branch(&mut self, v: T, branch_name: BranchName) {
+        self.push_ref_by_branch(&v, branch_name)
+    }
+
+    #[inline(always)]
+    pub fn push_ref_by_branch(&mut self, v: &T, branch_name: BranchName) {
+        self.inner
+            .insert_ref_by_branch(&(self.len() as u64).to_be_bytes(), v, branch_name)
+            .unwrap();
+    }
+
+    #[inline(always)]
+    pub fn pop_by_branch(&mut self, branch_name: BranchName) -> Result<Option<T>> {
+        alt!(self.is_empty(), return Ok(None));
+        self.inner
+            .remove_by_branch(&(self.len() - 1).to_be_bytes(), branch_name)
+            .c(d!())
+    }
+
+    pub fn update_by_branch(
+        &mut self,
+        idx: usize,
+        v: T,
+        branch_name: BranchName,
+    ) -> Result<Option<T>> {
+        self.update_ref_by_branch(idx, &v, branch_name).c(d!())
+    }
+
+    #[inline(always)]
+    pub fn update_ref_by_branch(
+        &mut self,
+        idx: usize,
+        v: &T,
+        branch_name: BranchName,
+    ) -> Result<Option<T>> {
+        if idx < self.len() {
+            self.inner
+                .insert_ref_by_branch(&(idx as u64).to_be_bytes(), v, branch_name)
+                .c(d!())
+        } else {
+            Err(eg!("out of index"))
+        }
+    }
+
+    #[inline(always)]
+    pub fn iter_by_branch(&self, branch_name: BranchName) -> VecxVsIter<'_, T> {
+        VecxVsIter {
+            iter: self.inner.iter_by_branch(branch_name),
+        }
+    }
+
+    #[inline(always)]
+    pub fn get_by_branch_version(
+        &self,
+        idx: usize,
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> Option<T> {
+        self.inner.get_by_branch_version(
+            &(idx as u64).to_be_bytes(),
+            branch_name,
+            version_name,
+        )
+    }
+
+    #[inline(always)]
+    pub fn last_by_branch_version(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> Option<T> {
+        alt!(self.is_empty(), return None);
+        Some(
+            self.inner
+                .get_by_branch_version(
+                    &(self.len() as u64 - 1).to_be_bytes(),
+                    branch_name,
+                    version_name,
+                )
+                .unwrap(),
+        )
+    }
+
+    #[inline(always)]
+    pub fn len_by_branch_version(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> usize {
+        self.inner.len_by_branch_version(branch_name, version_name)
+    }
+
+    #[inline(always)]
+    pub fn is_empty_by_branch_version(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> bool {
+        self.inner
+            .is_empty_by_branch_version(branch_name, version_name)
+    }
+
+    #[inline(always)]
+    pub fn iter_by_branch_version(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> VecxVsIter<'_, T> {
+        VecxVsIter {
+            iter: self.inner.iter_by_branch_version(branch_name, version_name),
+        }
+    }
+
+    crate::impl_vcs_methods!();
 }
 
 pub struct VecxVsIter<'a, T: ValueEnDe> {
