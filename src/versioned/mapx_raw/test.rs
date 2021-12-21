@@ -666,11 +666,11 @@ fn default_branch(hdr: &mut MapxRawVs) {
         let ss = s.clone();
         let mut h = hdr.clone();
         thread::spawn(move || {
-            h.branch_create(BranchName(&i.to_be_bytes())).unwrap();
-            h.branch_set_default(BranchName(&i.to_be_bytes())).unwrap();
-            h.version_create(VersionName(b"ver-on-fork")).unwrap();
-            h.insert(b"key", &i.to_be_bytes()).unwrap();
-            ss.send("").unwrap();
+            pnk!(h.branch_create(BranchName(&i.to_be_bytes())));
+            pnk!(h.branch_set_default(BranchName(&i.to_be_bytes())));
+            pnk!(h.version_create(VersionName(b"ver-on-fork")));
+            pnk!(h.insert(b"key", &i.to_be_bytes()));
+            ss.send("done").unwrap();
         });
     }
 
