@@ -1,5 +1,5 @@
 //!
-//! NOTE: Documents => [MapxRawVs](crate::versioned::mapx_raw)
+//! Documents => [MapxRawVs](crate::versioned::mapx_raw)
 //!
 
 use crate::{
@@ -12,6 +12,7 @@ use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{marker::PhantomData, ops::RangeBounds};
 
+/// Documents => [MapxRawVs](crate::versioned::mapx_raw::MapxRawVs)
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct MapxOrdRawKeyVs<V>
@@ -392,7 +393,7 @@ where
         self.inner.clear();
     }
 
-    crate::impl_vcs_methods!();
+    crate::impl_vs_methods!();
 }
 
 pub struct MapxOrdRawKeyVsIter<'a, V>
@@ -429,7 +430,7 @@ where
 impl<'a, V> ExactSizeIterator for MapxOrdRawKeyVsIter<'a, V> where V: ValueEnDe {}
 
 #[macro_export(crate)]
-macro_rules! impl_vcs_methods {
+macro_rules! impl_vs_methods {
     () => {
         #[inline(always)]
         pub fn version_create(&mut self, version_name: VersionName) -> Result<()> {

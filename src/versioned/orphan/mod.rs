@@ -1,5 +1,5 @@
 //!
-//! NOTE: Documents => [MapxRaw](crate::versioned::mapx_raw)
+//! Documents => [MapxRawVs](crate::versioned::mapx_raw)
 //!
 
 use crate::{
@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 
 /// Used to express some 'non-collection' types,
 /// such as any type of integer, an enum value, etc..
+///
+/// Documents => [MapxRawVs](crate::versioned::mapx_raw::MapxRawVs)
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(bound = "")]
 pub struct OrphanVs<T>
@@ -80,5 +82,5 @@ where
             .get_by_branch_version(&[], branch_name, version_name)
     }
 
-    crate::impl_vcs_methods!();
+    crate::impl_vs_methods!();
 }

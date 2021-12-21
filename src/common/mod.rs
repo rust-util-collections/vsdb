@@ -27,7 +27,7 @@ pub(crate) type RawBytes = Box<[u8]>;
 pub(crate) type RawKey = RawBytes;
 pub(crate) type RawValue = RawBytes;
 
-/// Checksum of a version
+/// Checksum of a version.
 pub type VerChecksum = [u8; size_of::<u32>()];
 
 pub(crate) type Prefix = u64;
@@ -37,13 +37,13 @@ pub(crate) const PREFIX_SIZ: usize = size_of::<Prefix>();
 pub(crate) type BranchID = u64;
 pub(crate) type VersionID = u64;
 
-/// avoid making mistakes between branch name and version name
+/// Avoid making mistakes between branch name and version name.
 #[derive(Clone, Copy)]
 pub struct BranchName<'a>(pub &'a [u8]);
-/// +1
+/// Avoid making mistakes between branch name and version name.
 #[derive(Clone, Copy)]
 pub struct ParentBranchName<'a>(pub &'a [u8]);
-/// +1
+/// Avoid making mistakes between branch name and version name.
 #[derive(Clone, Copy)]
 pub struct VersionName<'a>(pub &'a [u8]);
 
@@ -54,7 +54,7 @@ pub(crate) const NULL: BranchID = BIGGEST_RESERVED_ID;
 pub(crate) const INITIAL_BRANCH_ID: BranchID = 0;
 pub(crate) const INITIAL_BRANCH_NAME: &[u8] = b"main";
 
-/// how many branches in one instance can be created
+/// How many branches in one instance can be created.
 pub const BRANCH_CNT_LIMIT: usize = 1024;
 
 // default value for reserved number when pruning old data
@@ -83,7 +83,7 @@ macro_rules! parse_int {
     }};
 }
 
-/// Parse bytes to Prefix
+/// Parse bytes to a `Prefix` type.
 #[macro_export(crate)]
 macro_rules! parse_prefix {
     ($bytes: expr) => {
@@ -138,7 +138,7 @@ fn get_data_dir() -> String {
     VSDB_BASE_DIR.lock().clone()
 }
 
-/// Set ${VSDB_BASE_DIR} manually
+/// Set ${VSDB_BASE_DIR} manually.
 pub fn vsdb_set_base_dir(dir: String) -> Result<()> {
     static HAS_INITED: AtomicBool = AtomicBool::new(false);
 

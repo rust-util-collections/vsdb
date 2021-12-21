@@ -1,5 +1,5 @@
 //!
-//! NOTE: Documents => [MapxRaw](crate::versioned::mapx_raw)
+//! Documents => [MapxRawVs](crate::versioned::mapx_raw)
 //!
 
 use crate::{
@@ -9,6 +9,7 @@ use crate::{
 use ruc::*;
 use serde::{Deserialize, Serialize};
 
+/// Documents => [MapxRawVs](crate::versioned::mapx_raw::MapxRawVs)
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct VecxVs<T: ValueEnDe> {
@@ -239,7 +240,7 @@ impl<T: ValueEnDe> VecxVs<T> {
         }
     }
 
-    crate::impl_vcs_methods!();
+    crate::impl_vs_methods!();
 }
 
 pub struct VecxVsIter<'a, T: ValueEnDe> {

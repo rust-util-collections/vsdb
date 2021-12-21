@@ -1,5 +1,5 @@
 //!
-//! NOTE: Documents => [MapxRaw](crate::versioned::mapx_raw)
+//! Documents => [MapxRawVs](crate::versioned::mapx_raw)
 //!
 
 use crate::{
@@ -14,6 +14,7 @@ use std::{
     ops::{Bound, RangeBounds},
 };
 
+/// Documents => [MapxRawVs](crate::versioned::mapx_raw::MapxRawVs)
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct MapxOrdVs<K, V>
@@ -377,7 +378,7 @@ where
         )
     }
 
-    crate::impl_vcs_methods!();
+    crate::impl_vs_methods!();
 }
 
 pub struct MapxOrdVsIter<'a, K, V>
