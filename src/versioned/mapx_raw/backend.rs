@@ -31,7 +31,7 @@ pub(super) const RESERVED_VERSION_NUM_DEFAULT: usize = 10;
 ////////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Default, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) struct MapxRawVersioned {
+pub(super) struct MapxRawVs {
     default_branch: BranchID,
 
     branch_name_to_branch_id: MapxOrdRawKey<BranchID>,
@@ -53,7 +53,7 @@ pub(super) struct MapxRawVersioned {
 ////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////
 
-impl MapxRawVersioned {
+impl MapxRawVs {
     #[inline(always)]
     pub(super) fn new() -> Self {
         let mut ret = Self::default();
@@ -333,19 +333,19 @@ impl MapxRawVersioned {
     }
 
     #[inline(always)]
-    pub(super) fn iter(&self) -> MapxRawVersionedIter {
+    pub(super) fn iter(&self) -> MapxRawVsIter {
         self.iter_by_branch(self.branch_get_default())
     }
 
     #[inline(always)]
-    pub(super) fn iter_by_branch(&self, branch_id: BranchID) -> MapxRawVersionedIter {
+    pub(super) fn iter_by_branch(&self, branch_id: BranchID) -> MapxRawVsIter {
         if let Some(vers) = self.branch_to_created_versions.get(&branch_id) {
             if let Some((version_id, _)) = vers.last() {
                 return self.iter_by_branch_version(branch_id, version_id);
             }
         }
 
-        MapxRawVersionedIter {
+        MapxRawVsIter {
             hdr: self,
             iter: self.layered_kv.iter(),
             branch_id: NULL,
@@ -358,8 +358,8 @@ impl MapxRawVersioned {
         &self,
         branch_id: BranchID,
         version_id: VersionID,
-    ) -> MapxRawVersionedIter {
-        MapxRawVersionedIter {
+    ) -> MapxRawVsIter {
+        MapxRawVsIter {
             hdr: self,
             iter: self.layered_kv.iter(),
             branch_id,
@@ -371,7 +371,7 @@ impl MapxRawVersioned {
     pub(super) fn range<'a, R: 'a + RangeBounds<RawKey>>(
         &'a self,
         bounds: R,
-    ) -> MapxRawVersionedIter<'a> {
+    ) -> MapxRawVsIter<'a> {
         self.range_by_branch(self.branch_get_default(), bounds)
     }
 
@@ -380,14 +380,14 @@ impl MapxRawVersioned {
         &'a self,
         branch_id: BranchID,
         bounds: R,
-    ) -> MapxRawVersionedIter<'a> {
+    ) -> MapxRawVsIter<'a> {
         if let Some(vers) = self.branch_to_created_versions.get(&branch_id) {
             if let Some((version_id, _)) = vers.last() {
                 return self.range_by_branch_version(branch_id, version_id, bounds);
             }
         }
 
-        MapxRawVersionedIter {
+        MapxRawVsIter {
             hdr: self,
             iter: self.layered_kv.iter(),
             branch_id: NULL,
@@ -401,8 +401,8 @@ impl MapxRawVersioned {
         branch_id: BranchID,
         version_id: VersionID,
         bounds: R,
-    ) -> MapxRawVersionedIter<'a> {
-        MapxRawVersionedIter {
+    ) -> MapxRawVsIter<'a> {
+        MapxRawVsIter {
             hdr: self,
             iter: self.layered_kv.range(bounds),
             branch_id,
@@ -414,7 +414,7 @@ impl MapxRawVersioned {
     pub(super) fn range_ref<'a, R: RangeBounds<&'a [u8]>>(
         &'a self,
         bounds: R,
-    ) -> MapxRawVersionedIter<'a> {
+    ) -> MapxRawVsIter<'a> {
         self.range_ref_by_branch(self.branch_get_default(), bounds)
     }
 
@@ -423,14 +423,14 @@ impl MapxRawVersioned {
         &'a self,
         branch_id: BranchID,
         bounds: R,
-    ) -> MapxRawVersionedIter<'a> {
+    ) -> MapxRawVsIter<'a> {
         if let Some(vers) = self.branch_to_created_versions.get(&branch_id) {
             if let Some((version_id, _)) = vers.last() {
                 return self.range_ref_by_branch_version(branch_id, version_id, bounds);
             }
         }
 
-        MapxRawVersionedIter {
+        MapxRawVsIter {
             hdr: self,
             iter: self.layered_kv.iter(),
             branch_id: NULL,
@@ -444,8 +444,8 @@ impl MapxRawVersioned {
         branch_id: BranchID,
         version_id: VersionID,
         bounds: R,
-    ) -> MapxRawVersionedIter<'a> {
-        MapxRawVersionedIter {
+    ) -> MapxRawVsIter<'a> {
+        MapxRawVsIter {
             hdr: self,
             iter: self.layered_kv.range_ref(bounds),
             branch_id,
@@ -1137,14 +1137,14 @@ struct BasePoint {
 ////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////
 
-pub struct MapxRawVersionedIter<'a> {
-    hdr: &'a MapxRawVersioned,
+pub struct MapxRawVsIter<'a> {
+    hdr: &'a MapxRawVs,
     iter: MapxOrdRawKeyIter<MapxOrd<BranchID, MapxOrd<VersionID, Option<RawValue>>>>,
     branch_id: BranchID,
     version_id: VersionID,
 }
 
-impl<'a> Iterator for MapxRawVersionedIter<'a> {
+impl<'a> Iterator for MapxRawVsIter<'a> {
     type Item = (RawKey, RawValue);
 
     #[allow(clippy::while_let_on_iterator)]
@@ -1166,7 +1166,7 @@ impl<'a> Iterator for MapxRawVersionedIter<'a> {
     }
 }
 
-impl DoubleEndedIterator for MapxRawVersionedIter<'_> {
+impl DoubleEndedIterator for MapxRawVsIter<'_> {
     #[allow(clippy::while_let_on_iterator)]
     fn next_back(&mut self) -> Option<Self::Item> {
         if NULL == self.branch_id || NULL == self.version_id {
@@ -1186,7 +1186,7 @@ impl DoubleEndedIterator for MapxRawVersionedIter<'_> {
     }
 }
 
-impl ExactSizeIterator for MapxRawVersionedIter<'_> {}
+impl ExactSizeIterator for MapxRawVsIter<'_> {}
 
 ////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////
@@ -1194,7 +1194,7 @@ impl ExactSizeIterator for MapxRawVersionedIter<'_> {}
 #[allow(missing_docs)]
 #[derive(PartialEq, Eq, Debug)]
 pub struct ValueMut<'a> {
-    hdr: &'a mut MapxRawVersioned,
+    hdr: &'a mut MapxRawVs,
     key: RawKey,
     value: RawValue,
     branch_id: BranchID,
@@ -1202,7 +1202,7 @@ pub struct ValueMut<'a> {
 
 impl<'a> ValueMut<'a> {
     fn new(
-        hdr: &'a mut MapxRawVersioned,
+        hdr: &'a mut MapxRawVs,
         key: RawKey,
         value: RawValue,
         branch_id: BranchID,

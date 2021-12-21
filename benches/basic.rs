@@ -48,7 +48,7 @@ fn bench(c: &mut Criterion) {
     });
 
     let i = AtomicUsize::new(0);
-    let mut db = versioned::mapx_raw::MapxRawVersioned::new();
+    let mut db = versioned::mapx_raw::MapxRawVs::new();
 
     group.bench_function(" VERSIONED Mapx write", |b| {
         b.iter(|| {

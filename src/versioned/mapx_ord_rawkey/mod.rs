@@ -1,5 +1,5 @@
 //!
-//! NOTE: Documents => [MapxRawVersioned](crate::versioned::mapx_raw)
+//! NOTE: Documents => [MapxRawVs](crate::versioned::mapx_raw)
 //!
 
 // TODO
@@ -8,7 +8,7 @@ use crate::{
     common::{
         ende::ValueEnDe, BranchName, ParentBranchName, RawKey, VerChecksum, VersionName,
     },
-    versioned::mapx_raw::{MapxRawVersioned, MapxRawVersionedIter},
+    versioned::mapx_raw::{MapxRawVs, MapxRawVsIter},
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
@@ -19,15 +19,15 @@ use std::{
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
-pub struct MapxOrdRawKeyVersioned<V>
+pub struct MapxOrdRawKeyVs<V>
 where
     V: ValueEnDe,
 {
-    inner: MapxRawVersioned,
+    inner: MapxRawVs,
     p: PhantomData<V>,
 }
 
-impl<V> Default for MapxOrdRawKeyVersioned<V>
+impl<V> Default for MapxOrdRawKeyVs<V>
 where
     V: ValueEnDe,
 {
@@ -36,14 +36,14 @@ where
     }
 }
 
-impl<V> MapxOrdRawKeyVersioned<V>
+impl<V> MapxOrdRawKeyVs<V>
 where
     V: ValueEnDe,
 {
     #[inline(always)]
     pub fn new() -> Self {
-        MapxOrdRawKeyVersioned {
-            inner: MapxRawVersioned::new(),
+        MapxOrdRawKeyVs {
+            inner: MapxRawVs::new(),
             p: PhantomData,
         }
     }
@@ -113,8 +113,8 @@ where
     }
 
     #[inline(always)]
-    pub fn iter(&self) -> MapxOrdRawKeyVersionedIter<'_, V> {
-        MapxOrdRawKeyVersionedIter {
+    pub fn iter(&self) -> MapxOrdRawKeyVsIter<'_, V> {
+        MapxOrdRawKeyVsIter {
             iter: self.inner.iter(),
             p: PhantomData,
         }
@@ -124,8 +124,8 @@ where
     pub fn range<'a, R: 'a + RangeBounds<RawKey>>(
         &'a self,
         bounds: R,
-    ) -> MapxOrdRawKeyVersionedIter<'a, V> {
-        MapxOrdRawKeyVersionedIter {
+    ) -> MapxOrdRawKeyVsIter<'a, V> {
+        MapxOrdRawKeyVsIter {
             iter: self.inner.range(bounds),
             p: PhantomData,
         }
@@ -135,8 +135,8 @@ where
     pub fn range_ref<'a, R: RangeBounds<&'a [u8]>>(
         &'a self,
         bounds: R,
-    ) -> MapxOrdRawKeyVersionedIter<'a, V> {
-        MapxOrdRawKeyVersionedIter {
+    ) -> MapxOrdRawKeyVsIter<'a, V> {
+        MapxOrdRawKeyVsIter {
             iter: self.inner.range_ref(bounds),
             p: PhantomData,
         }
@@ -177,7 +177,7 @@ pub struct ValueMut<'a, V>
 where
     V: ValueEnDe,
 {
-    hdr: &'a mut MapxOrdRawKeyVersioned<V>,
+    hdr: &'a mut MapxOrdRawKeyVs<V>,
     key: RawKey,
     value: V,
 }
@@ -186,11 +186,7 @@ impl<'a, V> ValueMut<'a, V>
 where
     V: ValueEnDe,
 {
-    pub(crate) fn new(
-        hdr: &'a mut MapxOrdRawKeyVersioned<V>,
-        key: RawKey,
-        value: V,
-    ) -> Self {
+    pub(crate) fn new(hdr: &'a mut MapxOrdRawKeyVs<V>, key: RawKey, value: V) -> Self {
         ValueMut { hdr, key, value }
     }
 }
@@ -229,7 +225,7 @@ where
     V: 'a + ValueEnDe,
 {
     pub(crate) key: RawKey,
-    pub(crate) hdr: &'a mut MapxOrdRawKeyVersioned<V>,
+    pub(crate) hdr: &'a mut MapxOrdRawKeyVs<V>,
 }
 
 impl<'a, V> Entry<'a, V>
@@ -249,7 +245,7 @@ where
     V: ValueEnDe,
 {
     key: &'a [u8],
-    hdr: &'a mut MapxOrdRawKeyVersioned<V>,
+    hdr: &'a mut MapxOrdRawKeyVs<V>,
 }
 
 impl<'a, V> EntryRef<'a, V>
@@ -264,15 +260,15 @@ where
     }
 }
 
-pub struct MapxOrdRawKeyVersionedIter<'a, V>
+pub struct MapxOrdRawKeyVsIter<'a, V>
 where
     V: ValueEnDe,
 {
-    iter: MapxRawVersionedIter<'a>,
+    iter: MapxRawVsIter<'a>,
     p: PhantomData<V>,
 }
 
-impl<'a, V> Iterator for MapxOrdRawKeyVersionedIter<'a, V>
+impl<'a, V> Iterator for MapxOrdRawKeyVsIter<'a, V>
 where
     V: ValueEnDe,
 {
@@ -284,7 +280,7 @@ where
     }
 }
 
-impl<'a, V> DoubleEndedIterator for MapxOrdRawKeyVersionedIter<'a, V>
+impl<'a, V> DoubleEndedIterator for MapxOrdRawKeyVsIter<'a, V>
 where
     V: ValueEnDe,
 {
@@ -295,7 +291,7 @@ where
     }
 }
 
-impl<'a, V> ExactSizeIterator for MapxOrdRawKeyVersionedIter<'a, V> where V: ValueEnDe {}
+impl<'a, V> ExactSizeIterator for MapxOrdRawKeyVsIter<'a, V> where V: ValueEnDe {}
 
 #[macro_export(crate)]
 macro_rules! impl_vcs_methods {

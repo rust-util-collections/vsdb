@@ -1,23 +1,23 @@
 //!
-//! # Versioned functions
+//! # Vs functions
 //!
 //! # Examples
 //!
 //! Used as version-ful:
 //!
 //! ```
-//! use vsdb::versioned::mapx_raw::MapxRawVersioned;
+//! use vsdb::versioned::mapx_raw::MapxRawVs;
 //!
 //! // TODO
-//! let _l = MapxRawVersioned::new();
+//! let _l = MapxRawVs::new();
 //! ```
 //!
 //! Used as version-less(do not recommand, use `MapxRaw` instead):
 //!
 //! ```
-//! use vsdb::{VersionName, versioned::mapx_raw::MapxRawVersioned};
+//! use vsdb::{VersionName, versioned::mapx_raw::MapxRawVs};
 //!
-//! let mut l = MapxRawVersioned::new();
+//! let mut l = MapxRawVs::new();
 //! l.version_create(VersionName(b"test")).unwrap();
 //!
 //! l.insert(&[1], &[0]);
@@ -49,26 +49,26 @@ use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::ops::RangeBounds;
 
-pub(crate) use backend::{MapxRawVersionedIter, ValueMut};
+pub(crate) use backend::{MapxRawVsIter, ValueMut};
 
 /// Advanced `MapxRaw`, with versioned feature.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MapxRawVersioned {
-    inner: backend::MapxRawVersioned,
+pub struct MapxRawVs {
+    inner: backend::MapxRawVs,
 }
 
-impl Default for MapxRawVersioned {
+impl Default for MapxRawVs {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl MapxRawVersioned {
+impl MapxRawVs {
     #[inline(always)]
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {
-            inner: backend::MapxRawVersioned::new(),
+            inner: backend::MapxRawVs::new(),
         }
     }
 
@@ -230,13 +230,13 @@ impl MapxRawVersioned {
 
     /// Create an iterator over the default branch.
     #[inline(always)]
-    pub fn iter(&self) -> MapxRawVersionedIter {
+    pub fn iter(&self) -> MapxRawVsIter {
         self.inner.iter()
     }
 
     /// Create an iterator over a specified branch.
     #[inline(always)]
-    pub fn iter_by_branch(&self, branch_name: BranchName) -> MapxRawVersionedIter {
+    pub fn iter_by_branch(&self, branch_name: BranchName) -> MapxRawVsIter {
         let branch_id = self.inner.get_branch_id(branch_name).unwrap_or(NULL);
         self.inner.iter_by_branch(branch_id)
     }
@@ -247,7 +247,7 @@ impl MapxRawVersioned {
         &self,
         branch_name: BranchName,
         version_name: VersionName,
-    ) -> MapxRawVersionedIter {
+    ) -> MapxRawVsIter {
         let branch_id = self.inner.get_branch_id(branch_name).unwrap_or(NULL);
 
         let version_id = self
@@ -263,7 +263,7 @@ impl MapxRawVersioned {
     pub fn range<'a, R: 'a + RangeBounds<RawKey>>(
         &'a self,
         bounds: R,
-    ) -> MapxRawVersionedIter<'a> {
+    ) -> MapxRawVsIter<'a> {
         self.inner.range(bounds)
     }
 
@@ -273,7 +273,7 @@ impl MapxRawVersioned {
         &'a self,
         branch_name: BranchName,
         bounds: R,
-    ) -> MapxRawVersionedIter<'a> {
+    ) -> MapxRawVsIter<'a> {
         let branch_id = self.inner.get_branch_id(branch_name).unwrap_or(NULL);
 
         self.inner.range_by_branch(branch_id, bounds)
@@ -286,7 +286,7 @@ impl MapxRawVersioned {
         branch_name: BranchName,
         version_name: VersionName,
         bounds: R,
-    ) -> MapxRawVersionedIter<'a> {
+    ) -> MapxRawVsIter<'a> {
         let branch_id = self.inner.get_branch_id(branch_name).unwrap_or(NULL);
 
         let version_id = self
@@ -303,7 +303,7 @@ impl MapxRawVersioned {
     pub fn range_ref<'a, R: RangeBounds<&'a [u8]>>(
         &'a self,
         bounds: R,
-    ) -> MapxRawVersionedIter<'a> {
+    ) -> MapxRawVsIter<'a> {
         self.inner.range_ref(bounds)
     }
 
@@ -313,7 +313,7 @@ impl MapxRawVersioned {
         &'a self,
         branch_name: BranchName,
         bounds: R,
-    ) -> MapxRawVersionedIter<'a> {
+    ) -> MapxRawVsIter<'a> {
         let branch_id = self.inner.get_branch_id(branch_name).unwrap_or(NULL);
 
         self.inner.range_ref_by_branch(branch_id, bounds)
@@ -326,7 +326,7 @@ impl MapxRawVersioned {
         branch_name: BranchName,
         version_name: VersionName,
         bounds: R,
-    ) -> MapxRawVersionedIter<'a> {
+    ) -> MapxRawVsIter<'a> {
         let branch_id = self.inner.get_branch_id(branch_name).unwrap_or(NULL);
 
         let version_id = self

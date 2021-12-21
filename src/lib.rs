@@ -42,10 +42,10 @@ pub use basic::mapx_ord::MapxOrd;
 pub use basic::orphan::Orphan;
 pub use basic::vecx::Vecx;
 
-pub use versioned::mapx::MapxVersioned;
-pub use versioned::mapx_ord::MapxOrdVersioned;
-pub use versioned::orphan::OrphanVersioned;
-pub use versioned::vecx::VecxVersioned;
+pub use versioned::mapx::MapxVs;
+pub use versioned::mapx_ord::MapxOrdVs;
+pub use versioned::orphan::OrphanVs;
+pub use versioned::vecx::VecxVs;
 
 pub use common::{
     ende::{KeyEnDe, KeyEnDeOrdered, ValueEnDe},

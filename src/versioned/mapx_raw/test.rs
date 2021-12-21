@@ -3,13 +3,14 @@ use crate::{
     common::{BranchName, ParentBranchName, VersionName, BRANCH_CNT_LIMIT},
     ValueEnDe,
 };
+use std::{sync::mpsc::channel, thread};
 
 #[test]
 fn basic_cases() {
     let cnt = 200;
 
     let hdr = {
-        let mut hdr_i = MapxRawVersioned::new();
+        let mut hdr_i = MapxRawVs::new();
         hdr_i.version_create(VersionName(b"test")).unwrap();
 
         assert_eq!(0, hdr_i.len());
@@ -30,10 +31,10 @@ fn basic_cases() {
 
         assert_eq!(cnt, hdr_i.len());
 
-        <MapxRawVersioned as ValueEnDe>::encode(&hdr_i)
+        <MapxRawVs as ValueEnDe>::encode(&hdr_i)
     };
 
-    let mut reloaded = pnk!(<MapxRawVersioned as ValueEnDe>::decode(&hdr));
+    let mut reloaded = pnk!(<MapxRawVs as ValueEnDe>::decode(&hdr));
 
     assert_eq!(cnt, reloaded.len());
 
@@ -76,10 +77,11 @@ fn basic_cases() {
 #[test]
 #[allow(non_snake_case)]
 fn VCS_mgmt() {
-    let mut hdr = MapxRawVersioned::new();
+    let mut hdr = MapxRawVs::new();
     version_operations(&mut hdr);
     branch_operations(&mut hdr);
     prune_operations(&mut hdr);
+    default_branch(&mut hdr);
 }
 
 // version:
@@ -96,7 +98,7 @@ fn VCS_mgmt() {
 // - can not remove a version except it is the HEAD version(no public functions privided)
 // - can not remove a KV except its version is the HEAD version(no public functions privided)
 // - can not write data to a version except it is the HEAD version(no public functions privided)
-fn version_operations(hdr: &mut MapxRawVersioned) {
+fn version_operations(hdr: &mut MapxRawVs) {
     // haven't create any version yet
     assert!(hdr.insert(b"key", b"value").is_err());
 
@@ -318,7 +320,7 @@ fn version_operations(hdr: &mut MapxRawVersioned) {
 // - every branch with a same parent can be merged to their parent branch
 //     - all verisons will be ordered by the inner-defined version id
 // - version checksums except the latest version will not be changed
-fn branch_operations(hdr: &mut MapxRawVersioned) {
+fn branch_operations(hdr: &mut MapxRawVs) {
     hdr.branch_create(BranchName(b"b-1")).unwrap();
     hdr.branch_create(BranchName(b"b-2")).unwrap();
 
@@ -580,7 +582,7 @@ fn branch_operations(hdr: &mut MapxRawVersioned) {
 //
 // - versions(with all changes created directly by them) older than the guard version will deleted
 // - non-changed value creatd by an old version will prevent that old version from being deleted
-fn prune_operations(hdr: &mut MapxRawVersioned) {
+fn prune_operations(hdr: &mut MapxRawVs) {
     // prune "nain",
     // have not enought versions, nothing to be pruned
     hdr.prune(None).unwrap();
@@ -641,4 +643,50 @@ fn prune_operations(hdr: &mut MapxRawVersioned) {
             );
         });
     });
+}
+
+fn default_branch(hdr: &mut MapxRawVs) {
+    hdr.branch_create(BranchName(b"fork")).unwrap();
+
+    hdr.branch_set_default(BranchName(b"fork")).unwrap();
+    hdr.version_create(VersionName(b"ver-on-fork")).unwrap();
+    hdr.insert(b"key", b"value").unwrap();
+    assert_eq!(&hdr.get(b"key").unwrap()[..], b"value");
+    assert!(hdr.get_by_branch(b"key", BranchName(b"main")).is_none());
+
+    hdr.branch_set_default(BranchName(b"main")).unwrap();
+    assert!(hdr.get(b"key").is_none());
+    assert_eq!(
+        &hdr.get_by_branch(b"key", BranchName(b"fork")).unwrap()[..],
+        b"value"
+    );
+
+    let (s, r) = channel();
+    for i in (u64::MAX - 10)..u64::MAX {
+        let ss = s.clone();
+        let mut h = hdr.clone();
+        thread::spawn(move || {
+            h.branch_create(BranchName(&i.to_be_bytes())).unwrap();
+            h.branch_set_default(BranchName(&i.to_be_bytes())).unwrap();
+            h.version_create(VersionName(b"ver-on-fork")).unwrap();
+            h.insert(b"key", &i.to_be_bytes()).unwrap();
+            ss.send("").unwrap();
+        });
+    }
+
+    for _ in 0..10 {
+        r.recv().unwrap();
+    }
+
+    for i in (u64::MAX - 10)..u64::MAX {
+        assert_eq!(
+            &hdr.get_by_branch_version(
+                b"key",
+                BranchName(&i.to_be_bytes()),
+                VersionName(b"ver-on-fork")
+            )
+            .unwrap()[..],
+            &i.to_be_bytes()
+        );
+    }
 }

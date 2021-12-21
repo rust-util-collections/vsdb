@@ -1,5 +1,5 @@
 //!
-//! NOTE: Documents => [MapxVersionedRaw](crate::versioned::mapx_raw)
+//! NOTE: Documents => [MapxRawVs](crate::versioned::mapx_raw)
 //!
 
 // TODO
@@ -7,7 +7,7 @@
 use crate::{
     common::ende::{KeyEnDe, ValueEnDe},
     versioned::mapx_ord_rawkey::{
-        Entry, MapxOrdRawKeyVersioned, MapxOrdRawKeyVersionedIter, ValueMut,
+        Entry, MapxOrdRawKeyVs, MapxOrdRawKeyVsIter, ValueMut,
     },
     BranchName, ParentBranchName, VerChecksum, VersionName,
 };
@@ -20,16 +20,16 @@ use std::{
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
-pub struct MapxVersioned<K, V>
+pub struct MapxVs<K, V>
 where
     K: KeyEnDe,
     V: ValueEnDe,
 {
-    inner: MapxOrdRawKeyVersioned<V>,
+    inner: MapxOrdRawKeyVs<V>,
     pk: PhantomData<K>,
 }
 
-impl<K, V> Default for MapxVersioned<K, V>
+impl<K, V> Default for MapxVs<K, V>
 where
     K: KeyEnDe,
     V: ValueEnDe,
@@ -39,15 +39,15 @@ where
     }
 }
 
-impl<K, V> MapxVersioned<K, V>
+impl<K, V> MapxVs<K, V>
 where
     K: KeyEnDe,
     V: ValueEnDe,
 {
     #[inline(always)]
     pub fn new() -> Self {
-        MapxVersioned {
-            inner: MapxOrdRawKeyVersioned::new(),
+        MapxVs {
+            inner: MapxOrdRawKeyVs::new(),
             pk: PhantomData,
         }
     }
@@ -108,8 +108,8 @@ where
     }
 
     #[inline(always)]
-    pub fn iter(&self) -> MapxVersionedIter<K, V> {
-        MapxVersionedIter {
+    pub fn iter(&self) -> MapxVsIter<K, V> {
+        MapxVsIter {
             iter: self.inner.iter(),
             pk: PhantomData,
         }
@@ -119,7 +119,7 @@ where
     pub fn range<'a, R: 'a + RangeBounds<K>>(
         &'a self,
         bounds: R,
-    ) -> MapxVersionedIter<'a, K, V> {
+    ) -> MapxVsIter<'a, K, V> {
         let l = match bounds.start_bound() {
             Bound::Included(i) => Bound::Included(i.encode()),
             Bound::Excluded(i) => Bound::Excluded(i.encode()),
@@ -131,7 +131,7 @@ where
             _ => Bound::Unbounded,
         };
 
-        MapxVersionedIter {
+        MapxVsIter {
             iter: self.inner.range((l, h)),
             pk: PhantomData,
         }
@@ -165,16 +165,16 @@ where
     crate::impl_vcs_methods!();
 }
 
-pub struct MapxVersionedIter<'a, K, V>
+pub struct MapxVsIter<'a, K, V>
 where
     K: KeyEnDe,
     V: ValueEnDe,
 {
-    iter: MapxOrdRawKeyVersionedIter<'a, V>,
+    iter: MapxOrdRawKeyVsIter<'a, V>,
     pk: PhantomData<K>,
 }
 
-impl<'a, K, V> Iterator for MapxVersionedIter<'a, K, V>
+impl<'a, K, V> Iterator for MapxVsIter<'a, K, V>
 where
     K: KeyEnDe,
     V: ValueEnDe,
@@ -187,7 +187,7 @@ where
     }
 }
 
-impl<'a, K, V> DoubleEndedIterator for MapxVersionedIter<'a, K, V>
+impl<'a, K, V> DoubleEndedIterator for MapxVsIter<'a, K, V>
 where
     K: KeyEnDe,
     V: ValueEnDe,
@@ -199,7 +199,7 @@ where
     }
 }
 
-impl<'a, K, V> ExactSizeIterator for MapxVersionedIter<'a, K, V>
+impl<'a, K, V> ExactSizeIterator for MapxVsIter<'a, K, V>
 where
     K: KeyEnDe,
     V: ValueEnDe,

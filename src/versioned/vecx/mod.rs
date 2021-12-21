@@ -6,9 +6,7 @@
 
 use crate::{
     common::ende::ValueEnDe,
-    versioned::mapx_ord_rawkey::{
-        MapxOrdRawKeyVersioned, MapxOrdRawKeyVersionedIter, ValueMut,
-    },
+    versioned::mapx_ord_rawkey::{MapxOrdRawKeyVs, MapxOrdRawKeyVsIter, ValueMut},
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
@@ -16,21 +14,21 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
-pub struct VecxVersioned<T: ValueEnDe> {
-    inner: MapxOrdRawKeyVersioned<T>,
+pub struct VecxVs<T: ValueEnDe> {
+    inner: MapxOrdRawKeyVs<T>,
 }
 
-impl<T: ValueEnDe> Default for VecxVersioned<T> {
+impl<T: ValueEnDe> Default for VecxVs<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: ValueEnDe> VecxVersioned<T> {
+impl<T: ValueEnDe> VecxVs<T> {
     #[inline(always)]
     pub fn new() -> Self {
-        VecxVersioned {
-            inner: MapxOrdRawKeyVersioned::new(),
+        VecxVs {
+            inner: MapxOrdRawKeyVs::new(),
         }
     }
 
@@ -164,8 +162,8 @@ impl<T: ValueEnDe> VecxVersioned<T> {
     }
 
     #[inline(always)]
-    pub fn iter(&self) -> VecxVersionedIter<'_, T> {
-        VecxVersionedIter {
+    pub fn iter(&self) -> VecxVsIter<'_, T> {
+        VecxVsIter {
             iter: self.inner.iter(),
         }
     }
@@ -176,18 +174,18 @@ impl<T: ValueEnDe> VecxVersioned<T> {
     }
 }
 
-pub struct VecxVersionedIter<'a, T: ValueEnDe> {
-    iter: MapxOrdRawKeyVersionedIter<'a, T>,
+pub struct VecxVsIter<'a, T: ValueEnDe> {
+    iter: MapxOrdRawKeyVsIter<'a, T>,
 }
 
-impl<'a, T: ValueEnDe> Iterator for VecxVersionedIter<'a, T> {
+impl<'a, T: ValueEnDe> Iterator for VecxVsIter<'a, T> {
     type Item = T;
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().map(|v| v.1)
     }
 }
 
-impl<'a, T: ValueEnDe> DoubleEndedIterator for VecxVersionedIter<'a, T> {
+impl<'a, T: ValueEnDe> DoubleEndedIterator for VecxVsIter<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back().map(|v| v.1)
     }
