@@ -2,6 +2,8 @@ use crate::common::{
     get_data_dir, vsdb_set_base_dir, BranchID, Engine, Prefix, PrefixBytes, RawKey,
     RawValue, VersionID, INITIAL_BRANCH_ID, PREFIX_SIZ, RESERVED_ID_CNT,
 };
+use once_cell::sync::Lazy;
+use parking_lot::Mutex;
 use ruc::*;
 use sled::{Config, Db, IVec, Iter, Mode, Tree};
 use std::ops::{Bound, RangeBounds};
@@ -54,7 +56,14 @@ impl Engine for SledEngine {
         })
     }
 
+    // 'step 1' and 'step 2' is not atomic in multi-threads scene,
+    // so we use a `Mutex` lock for thread safe.
     fn alloc_prefix(&self) -> Prefix {
+        static LK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
+
+        let mut z = LK.lock();
+
+        // step 1
         let ret = crate::parse_prefix!(
             self.meta
                 .get(self.prefix_allocator.key)
@@ -62,24 +71,50 @@ impl Engine for SledEngine {
                 .unwrap()
                 .as_ref()
         );
+
+        // step 2
         self.meta
             .insert(self.prefix_allocator.key, (1 + ret).to_be_bytes())
             .unwrap();
+
+        // meaningless but keep the lock
+        *z = false;
+
         ret
     }
 
+    // 'step 1' and 'step 2' is not atomic in multi-threads scene,
+    // so we use a `Mutex` lock for thread safe.
     fn alloc_branch_id(&self) -> BranchID {
+        static LK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
+
+        let mut z = LK.lock();
+
+        // step 1
         let ret = crate::parse_int!(
             self.meta.get(META_KEY_BRANCH_ID).unwrap().unwrap().as_ref(),
             BranchID
         );
+
+        // step 2
         self.meta
             .insert(META_KEY_BRANCH_ID, (1 + ret).to_be_bytes())
             .unwrap();
+
+        // meaningless but keep the lock
+        *z = false;
+
         ret
     }
 
+    // 'step 1' and 'step 2' is not atomic in multi-threads scene,
+    // so we use a `Mutex` lock for thread safe.
     fn alloc_version_id(&self) -> VersionID {
+        static LK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
+
+        let mut z = LK.lock();
+
+        // step 1
         let ret = crate::parse_int!(
             self.meta
                 .get(META_KEY_VERSION_ID)
@@ -88,9 +123,15 @@ impl Engine for SledEngine {
                 .as_ref(),
             VersionID
         );
+
+        // step 2
         self.meta
             .insert(META_KEY_VERSION_ID, (1 + ret).to_be_bytes())
             .unwrap();
+
+        // meaningless but keep the lock
+        *z = false;
+
         ret
     }
 

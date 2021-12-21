@@ -2,7 +2,8 @@ use crate::common::{
     get_data_dir, vsdb_set_base_dir, BranchID, Engine, Prefix, PrefixBytes, RawBytes,
     RawKey, RawValue, VersionID, INITIAL_BRANCH_ID, PREFIX_SIZ, RESERVED_ID_CNT,
 };
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
+use parking_lot::Mutex;
 use rocksdb::{
     ColumnFamily, ColumnFamilyDescriptor, DBCompressionType, DBIterator, Direction,
     IteratorMode, Options, ReadOptions, SliceTransform, DB,
@@ -21,9 +22,7 @@ const META_KEY_BRANCH_ID: [u8; 1] = [u8::MAX - 1];
 const META_KEY_VERSION_ID: [u8; 1] = [u8::MAX - 2];
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 
-lazy_static! {
-    static ref HDR: (DB, Vec<String>) = rocksdb_open().unwrap();
-}
+static HDR: Lazy<(DB, Vec<String>)> = Lazy::new(|| rocksdb_open().unwrap());
 
 pub(crate) struct RocksEngine {
     meta: &'static DB,
@@ -53,9 +52,7 @@ impl RocksEngine {
 
     #[inline(always)]
     fn get_upper_bound_value(&self, meta_prefix: PrefixBytes) -> Vec<u8> {
-        lazy_static! {
-            static ref BUF: RawBytes = vec![u8::MAX; 512].into_boxed_slice();
-        }
+        static BUF: Lazy<RawBytes> = Lazy::new(|| vec![u8::MAX; 512].into_boxed_slice());
 
         let mut max_guard = meta_prefix.to_vec();
 
@@ -113,36 +110,75 @@ impl Engine for RocksEngine {
         })
     }
 
+    // 'step 1' and 'step 2' is not atomic in multi-threads scene,
+    // so we use a `Mutex` lock for thread safe.
     fn alloc_prefix(&self) -> Prefix {
+        static LK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
+
+        let mut z = LK.lock();
+
+        // step 1
         let ret = crate::parse_int!(
             self.meta.get(self.prefix_allocator.key).unwrap().unwrap(),
             BranchID
         );
+
+        // step 2
         self.meta
             .put(self.prefix_allocator.key, (1 + ret).to_be_bytes())
             .unwrap();
+
+        // meaningless but keep the lock
+        *z = false;
+
         ret
     }
 
+    // 'step 1' and 'step 2' is not atomic in multi-threads scene,
+    // so we use a `Mutex` lock for thread safe.
     fn alloc_branch_id(&self) -> BranchID {
+        static LK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
+
+        let mut z = LK.lock();
+
+        // step 1
         let ret = crate::parse_int!(
             self.meta.get(META_KEY_BRANCH_ID).unwrap().unwrap(),
             BranchID
         );
+
+        // step 2
         self.meta
             .put(META_KEY_BRANCH_ID, (1 + ret).to_be_bytes())
             .unwrap();
+
+        // meaningless but keep the lock
+        *z = false;
+
         ret
     }
 
+    // 'step 1' and 'step 2' is not atomic in multi-threads scene,
+    // so we use a `Mutex` lock for thread safe.
     fn alloc_version_id(&self) -> VersionID {
+        static LK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
+
+        let mut z = LK.lock();
+
+        // step 1
         let ret = crate::parse_int!(
             self.meta.get(META_KEY_VERSION_ID).unwrap().unwrap(),
             VersionID
         );
+
+        // step 2
         self.meta
             .put(META_KEY_VERSION_ID, (1 + ret).to_be_bytes())
             .unwrap();
+
+        // meaningless but keep the lock
+        *z = false;
+
         ret
     }
 

@@ -10,13 +10,13 @@ pub(crate) mod engines;
 use {
     crc32fast::Hasher,
     engines::Engine,
-    lazy_static::lazy_static,
+    once_cell::sync::Lazy,
+    parking_lot::Mutex,
     ruc::*,
     std::{
         env, fs,
         mem::size_of,
         sync::atomic::{AtomicBool, Ordering},
-        sync::{Arc, Mutex},
     },
 };
 
@@ -63,19 +63,13 @@ pub(crate) const RESERVED_VERSION_NUM_DEFAULT: usize = 10;
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
-lazy_static! {
-    static ref VSDB_BASE_DIR: Arc<Mutex<String>> = Arc::new(Mutex::new(gen_data_dir()));
-}
+static VSDB_BASE_DIR: Lazy<Mutex<String>> = Lazy::new(|| Mutex::new(gen_data_dir()));
 
 #[cfg(all(feature = "sled_engine", not(feature = "rocks_engine")))]
-lazy_static! {
-    pub(crate) static ref VSDB: VsDB<engines::Sled> = pnk!(VsDB::new());
-}
+pub(crate) static VSDB: Lazy<VsDB<engines::Sled>> = Lazy::new(|| pnk!(VsDB::new()));
 
 #[cfg(all(feature = "rocks_engine", not(feature = "sled_engine")))]
-lazy_static! {
-    pub(crate) static ref VSDB: VsDB<engines::RocksDB> = pnk!(VsDB::new());
-}
+pub(crate) static VSDB: Lazy<VsDB<engines::RocksDB>> = Lazy::new(|| pnk!(VsDB::new()));
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -141,19 +135,17 @@ fn gen_data_dir() -> String {
 }
 
 fn get_data_dir() -> String {
-    VSDB_BASE_DIR.lock().unwrap().clone()
+    VSDB_BASE_DIR.lock().clone()
 }
 
 /// Set ${VSDB_BASE_DIR} manually
 pub fn vsdb_set_base_dir(dir: String) -> Result<()> {
-    lazy_static! {
-        static ref HAS_INITED: AtomicBool = AtomicBool::new(false);
-    }
+    static HAS_INITED: AtomicBool = AtomicBool::new(false);
 
     if HAS_INITED.swap(true, Ordering::Relaxed) {
         Err(eg!("VSDB has been initialized !!"))
     } else {
-        *VSDB_BASE_DIR.lock().unwrap() = dir;
+        *VSDB_BASE_DIR.lock() = dir;
         Ok(())
     }
 }
