@@ -54,8 +54,8 @@ pub(crate) const NULL: BranchID = BIGGEST_RESERVED_ID;
 pub(crate) const INITIAL_BRANCH_ID: BranchID = 0;
 pub(crate) const INITIAL_BRANCH_NAME: &[u8] = b"main";
 
-/// How many branches in one instance can be created.
-pub const BRANCH_CNT_LIMIT: usize = 1024;
+/// How many ancestral branches at most one new branch can have.
+pub const BRANCH_ANCESTORS_LIMIT: usize = 128;
 
 // default value for reserved number when pruning old data
 pub(crate) const RESERVED_VERSION_NUM_DEFAULT: usize = 10;

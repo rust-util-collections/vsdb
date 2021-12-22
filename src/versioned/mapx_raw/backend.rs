@@ -10,7 +10,7 @@ use crate::{
     },
     common::{
         compute_checksum, ende::encode_optioned_bytes, BranchID, BranchName, RawKey,
-        RawValue, VerChecksum, VersionID, VersionName, BRANCH_CNT_LIMIT,
+        RawValue, VerChecksum, VersionID, VersionName, BRANCH_ANCESTORS_LIMIT,
         INITIAL_BRANCH_ID, INITIAL_BRANCH_NAME, NULL, VSDB,
     },
 };
@@ -492,6 +492,7 @@ impl MapxRawVs {
     #[inline(always)]
     pub(super) fn version_exists(&self, version_id: BranchID) -> bool {
         self.version_exists_on_branch(version_id, self.branch_get_default())
+            .0
     }
 
     // Check if a version exists on a specified branch(include its parents)
@@ -500,11 +501,11 @@ impl MapxRawVs {
         &self,
         version_id: VersionID,
         branch_id: BranchID,
-    ) -> bool {
+    ) -> (bool, BranchPath) {
         let fp = self.branch_get_full_path(branch_id);
 
         if !Self::version_id_is_in_bounds(&fp, version_id) {
-            return false;
+            return (false, fp);
         }
 
         for (br, ver) in fp.iter().rev() {
@@ -515,11 +516,11 @@ impl MapxRawVs {
                 .get_le(&min!(*ver, version_id))
                 .is_some()
             {
-                return true;
+                return (true, fp);
             }
         }
 
-        false
+        (false, fp)
     }
 
     // Check if a version is directly created on a specified branch(exclude its parents)
@@ -662,22 +663,22 @@ impl MapxRawVs {
         .c(d!())
     }
 
-    fn branch_create_by_base_branch_version(
+    pub(super) fn branch_create_by_base_branch_version(
         &mut self,
         branch_name: &[u8],
         base_branch_id: BranchID,
         base_version_id: VersionID,
     ) -> Result<()> {
-        if (BRANCH_CNT_LIMIT - 1) < self.branch_to_parent.len() {
-            return Err(eg!("too many branches"));
-        }
-
         if self.branch_name_to_branch_id.contains_key(branch_name) {
             return Err(eg!("branch already exists"));
         }
 
-        if !self.version_exists_on_branch(base_version_id, base_branch_id) {
-            return Err(eg!("BUG: version is not on branch"));
+        let (exist, fp) = self.version_exists_on_branch(base_version_id, base_branch_id);
+        if !exist {
+            return Err(eg!("version is not on the base branch"));
+        }
+        if BRANCH_ANCESTORS_LIMIT < fp.len() {
+            return Err(eg!("the base branch has too many ancestors"));
         }
 
         let branch_id = VSDB.alloc_branch_id();
@@ -804,7 +805,7 @@ impl MapxRawVs {
         if fp.is_empty() {
             return Err(eg!("branch not found"));
         } else if branch_id != *fp.keys().rev().next().unwrap() || 1 == fp.len() {
-            // no new versions yet, nothing to merge
+            // no new versions or no ancestors, nothing need to be merged
             return Ok(());
         }
 
@@ -824,10 +825,10 @@ impl MapxRawVs {
         //     return Ok(());
         // }
 
-        // used to calculate new checksum
+        // will be used to calculate new checksum
         let (last_ver, last_checksum) = vers_created.last().unwrap();
 
-        // used to calculate new checksum
+        // will be used to calculate new checksum
         let (last_ver_parent, last_checksum_parent) =
             vers_created_parent.last().unwrap();
 
@@ -867,18 +868,10 @@ impl MapxRawVs {
             .insert(max!(last_ver_parent, last_ver), new_checksum)
             .unwrap();
 
-        // remove outdated values
+        // remove data on the original branch
         vers_created.iter().for_each(|(k, _)| {
             vers_created.remove(&k);
         });
-
-        // remove user-registered infomation
-        let (br_name, _) = self
-            .branch_name_to_branch_id
-            .iter()
-            .find(|(_, br)| *br == branch_id)
-            .unwrap();
-        self.branch_name_to_branch_id.remove(&br_name);
 
         self.branch_to_parent.remove(&branch_id);
 
@@ -897,6 +890,14 @@ impl MapxRawVs {
                 }
             });
 
+        // remove user-registered infomation
+        let (br_name, _) = self
+            .branch_name_to_branch_id
+            .iter()
+            .find(|(_, br)| *br == branch_id)
+            .unwrap();
+        self.branch_name_to_branch_id.remove(&br_name);
+
         Ok(())
     }
 
@@ -910,7 +911,7 @@ impl MapxRawVs {
     // Get itself and all its ancestral branches with the base point it born on.
     #[inline(always)]
     fn branch_get_full_path(&self, branch_id: BranchID) -> BranchPath {
-        self.branch_get_recurive_path(branch_id, BRANCH_CNT_LIMIT)
+        self.branch_get_recurive_path(branch_id, BRANCH_ANCESTORS_LIMIT)
     }
 
     fn branch_get_recurive_path(

@@ -444,7 +444,7 @@ impl MapxRawVs {
             .and_then(|br_id| {
                 self.inner
                     .get_version_id(branch_name, version_name)
-                    .map(|ver_id| self.inner.version_exists_on_branch(ver_id, br_id))
+                    .map(|ver_id| self.inner.version_exists_on_branch(ver_id, br_id).0)
             })
             .unwrap_or(false)
     }
@@ -520,6 +520,27 @@ impl MapxRawVs {
                     .branch_create_by_base_branch(branch_name.0, base_br_id)
                     .c(d!())
             })
+    }
+
+    /// Create a new branch based on a specified version of a specified branch.
+    #[inline(always)]
+    pub fn branch_create_by_base_branch_version(
+        &mut self,
+        branch_name: BranchName,
+        base_branch_name: ParentBranchName,
+        base_version_name: VersionName,
+    ) -> Result<()> {
+        let base_br_id = self
+            .inner
+            .get_branch_id(BranchName(base_branch_name.0))
+            .c(d!("base branch not found"))?;
+        let base_ver_id = self
+            .inner
+            .get_version_id(BranchName(base_branch_name.0), base_version_name)
+            .c(d!("base vesion not found"))?;
+        self.inner
+            .branch_create_by_base_branch_version(branch_name.0, base_br_id, base_ver_id)
+            .c(d!())
     }
 
     /// Check if a branch exists or not.
