@@ -7,7 +7,7 @@
 //! # Examples
 //!
 //! ```
-//! use vsdb::Orphan;
+//! use vsdb::basic::orphan::Orphan;
 //!
 //! assert_eq!(Orphan::new(0), 0);
 //! assert!(Orphan::new(1) > 0);

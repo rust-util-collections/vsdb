@@ -27,9 +27,9 @@ where
     T: ValueEnDe,
 {
     #[inline(always)]
-    pub fn new(v: T, version_name: VersionName) -> Self {
+    pub fn new(v: T) -> Self {
         let mut hdr = MapxOrdRawKeyVs::new();
-        pnk!(hdr.version_create(version_name));
+        pnk!(hdr.version_create(VersionName(&[])));
         pnk!(hdr.insert_ref(&[], &v));
         Self { inner: hdr }
     }
