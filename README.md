@@ -41,7 +41,7 @@ and your algorithm get the powerful version control ability at once!
 struct GreatAlgo {
     a: VecxVs<...>,
     b: MapxOrdVs<...>,
-    c: Orphan<u128>,
+    c: OrphanVs<u128>,
     d: MapxVs<...>,
     e: ...
 }
