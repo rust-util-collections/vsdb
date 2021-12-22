@@ -9,9 +9,9 @@ use crate::{
         mapx_raw::MapxRaw,
     },
     common::{
-        compute_checksum, ende::encode_optioned_bytes, BranchID, BranchName, RawKey,
-        RawValue, VerChecksum, VersionID, VersionName, BRANCH_ANCESTORS_LIMIT,
-        INITIAL_BRANCH_ID, INITIAL_BRANCH_NAME, NULL, VSDB,
+        ende::encode_optioned_bytes, BranchID, BranchName, RawKey, RawValue, VersionID,
+        VersionName, BRANCH_ANCESTORS_LIMIT, INITIAL_BRANCH_ID, INITIAL_BRANCH_NAME,
+        NULL, VSDB,
     },
 };
 use ruc::*;
@@ -37,7 +37,7 @@ pub(super) struct MapxRawVs {
     branch_to_parent: MapxOrd<BranchID, Option<BasePoint>>,
 
     // versions directly created by this branch
-    branch_to_created_versions: MapxOrd<BranchID, MapxOrd<VersionID, VerChecksum>>,
+    branch_to_created_versions: MapxOrd<BranchID, MapxOrd<VersionID, ()>>,
 
     // globally ever changed keys within each version
     version_to_change_set: MapxOrd<VersionID, MapxRaw>,
@@ -139,7 +139,7 @@ impl MapxRawVs {
     // on the latest version of every branch,
     // historical data version should be immutable in the user view.
     //
-    // The `remove` is essentially aschecksumning a `None` value to the key.
+    // The `remove` is essentially assign a `None` value to the key.
     fn remove_by_branch_version(
         &mut self,
         key: &[u8],
@@ -179,18 +179,6 @@ impl MapxRawVs {
             .entry(branch_id)
             .or_insert(MapxOrd::new())
             .insert_ref_encoded_value(&version_id, &encode_optioned_bytes(&value)[..]);
-
-        // value changed, then re-calculate checksum
-        if ret.as_deref() != value {
-            let mut vers = self
-                .branch_to_created_versions
-                .get(&branch_id)
-                .c(d!("BUG: branch not found"))?;
-            let mut checksum =
-                vers.get_mut(&version_id).c(d!("BUG: version not found"))?;
-            *checksum =
-                compute_checksum(&[&checksum[..], key, value.unwrap_or_default()]);
-        }
 
         Ok(ret)
     }
@@ -471,14 +459,8 @@ impl MapxRawVs {
             .get_mut(&branch_id)
             .c(d!("branch not found"))?;
 
-        // hash(<previous checksum> + <version name> + <every kv writes>)
-        let new_checksum = compute_checksum(&[
-            &vers.last().map(|(_, s)| s).unwrap_or_default(),
-            &vername,
-        ]);
-
         let version_id = VSDB.alloc_version_id();
-        vers.insert(version_id, new_checksum);
+        vers.insert(version_id, ());
 
         self.version_name_to_version_id
             .insert(vername.into_boxed_slice(), version_id);
@@ -825,15 +807,8 @@ impl MapxRawVs {
         //     return Ok(());
         // }
 
-        // will be used to calculate new checksum
-        let (last_ver, last_checksum) = vers_created.last().unwrap();
-
-        // will be used to calculate new checksum
-        let (last_ver_parent, last_checksum_parent) =
-            vers_created_parent.last().unwrap();
-
-        for (ver, checksum) in vers_created.iter() {
-            vers_created_parent.insert(ver, checksum);
+        for (ver, _) in vers_created.iter() {
+            vers_created_parent.insert(ver, ());
 
             // `unwrap`s here should be safe
             for k in self
@@ -861,12 +836,6 @@ impl MapxRawVs {
                     .insert(ver, value);
             }
         }
-
-        // re-calcute checksum, the old parent checksum should be set in the first place
-        let new_checksum = compute_checksum(&[&last_checksum_parent, &last_checksum]);
-        vers_created_parent
-            .insert(max!(last_ver_parent, last_ver), new_checksum)
-            .unwrap();
 
         // remove data on the original branch
         vers_created.iter().for_each(|(k, _)| {
@@ -956,49 +925,6 @@ impl MapxRawVs {
     #[inline(always)]
     pub(super) fn branch_get_default(&self) -> BranchID {
         self.default_branch
-    }
-
-    #[inline(always)]
-    pub(super) fn checksum_get(&self) -> Option<VerChecksum> {
-        self.checksum_get_by_branch(self.branch_get_default())
-    }
-
-    #[inline(always)]
-    pub(super) fn checksum_get_by_branch(
-        &self,
-        branch_id: BranchID,
-    ) -> Option<VerChecksum> {
-        self.checksum_get_by_branch_version(branch_id, None)
-    }
-
-    pub(super) fn checksum_get_by_branch_version(
-        &self,
-        branch_id: BranchID,
-        version_id: Option<VersionID>,
-    ) -> Option<VerChecksum> {
-        let fp = self.branch_get_full_path(branch_id);
-
-        let version_id = if let Some(id) = version_id {
-            if !Self::version_id_is_in_bounds(&fp, id) {
-                return None;
-            }
-            id
-        } else {
-            VersionID::MAX
-        };
-
-        for (br, ver) in fp.iter().rev() {
-            if let Some((_, checksum)) = self
-                .branch_to_created_versions
-                .get(br)
-                .unwrap()
-                .get_le(&min!(*ver, version_id))
-            {
-                return Some(checksum);
-            }
-        }
-
-        None
     }
 
     #[inline(always)]

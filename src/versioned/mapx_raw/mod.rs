@@ -42,8 +42,8 @@ mod backend;
 mod test;
 
 use crate::common::{
-    BranchName, ParentBranchName, RawKey, RawValue, VerChecksum, VersionName,
-    INITIAL_BRANCH_NAME, NULL,
+    BranchName, ParentBranchName, RawKey, RawValue, VersionName, INITIAL_BRANCH_NAME,
+    NULL,
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
@@ -650,36 +650,6 @@ impl MapxRawVs {
             .get_branch_id(branch_name)
             .c(d!("branch not found"))
             .and_then(|brid| self.inner.branch_set_default(brid).c(d!()))
-    }
-
-    /// Get the signature of the head of the default branch.
-    #[inline(always)]
-    pub fn checksum_get(&self) -> Option<VerChecksum> {
-        self.inner.checksum_get()
-    }
-
-    /// Get the signature of the head of a specified branch.
-    #[inline(always)]
-    pub fn checksum_get_by_branch(
-        &self,
-        branch_name: BranchName,
-    ) -> Option<VerChecksum> {
-        self.inner
-            .get_branch_id(branch_name)
-            .and_then(|id| self.inner.checksum_get_by_branch(id))
-    }
-
-    /// Get the signature of a specified version of a specified branch.
-    #[inline(always)]
-    pub fn checksum_get_by_branch_version(
-        &self,
-        branch_name: BranchName,
-        version_name: VersionName,
-    ) -> Option<VerChecksum> {
-        let br_id = self.inner.get_branch_id(branch_name)?;
-        let ver_id = self.inner.get_version_id(branch_name, version_name)?;
-        self.inner
-            .checksum_get_by_branch_version(br_id, Some(ver_id))
     }
 
     /// Clean outdated versions out of the default reserved number.

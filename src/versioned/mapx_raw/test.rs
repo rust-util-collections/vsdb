@@ -93,8 +93,6 @@ fn VCS_mgmt() {
 // - can not read data created by newer versions from an older version
 // - remove a non-existing key will sucess
 // - data created by a version will disappear after the version has been removed
-// - insert same values for a same key within one version will not change the version checksum
-// - insert different values for a same key within one version will change the version checksum
 // - can not remove a version except it is the HEAD version(no public functions privided)
 // - can not remove a KV except its version is the HEAD version(no public functions privided)
 // - can not write data to a version except it is the HEAD version(no public functions privided)
@@ -103,23 +101,13 @@ fn version_operations(hdr: &mut MapxRawVs) {
     assert!(hdr.insert(b"key", b"value").is_err());
 
     hdr.version_create(VersionName(b"v-001")).unwrap();
-    let checksum_v_001_initial = hdr.checksum_get().unwrap();
 
     // use existing version name
     assert!(hdr.version_create(VersionName(b"v-001")).is_err());
-    assert_eq!(checksum_v_001_initial, hdr.checksum_get().unwrap());
 
     assert!(hdr.is_empty());
 
     hdr.version_create(VersionName(b"v-002")).unwrap();
-
-    let checksum_v_002 = hdr.checksum_get().unwrap();
-    assert!(checksum_v_001_initial != checksum_v_002);
-    assert_eq!(
-        checksum_v_001_initial,
-        hdr.checksum_get_by_branch_version(BranchName(b"main"), VersionName(b"v-001"))
-            .unwrap()
-    );
 
     assert!(hdr.is_empty());
     assert!(hdr.is_empty_by_branch(BranchName(b"main")));
@@ -127,16 +115,8 @@ fn version_operations(hdr: &mut MapxRawVs) {
     assert!(hdr.is_empty_by_branch_version(BranchName(b"main"), VersionName(b"v-002")));
 
     pnk!(hdr.insert(b"v-002/key-01", b"v-002/value-01"));
-    let checksum_v_002_01 = hdr.checksum_get().unwrap();
-    assert!(checksum_v_002 != checksum_v_002_01);
-
     pnk!(hdr.insert(b"v-002/key-02", b"v-002/value-02"));
-    let checksum_v_002_02 = hdr.checksum_get().unwrap();
-    assert!(checksum_v_002_01 != checksum_v_002_02);
-
-    // insert a same key-value will not change the checksum value
     pnk!(hdr.insert(b"v-002/key-02", b"v-002/value-02"));
-    assert_eq!(checksum_v_002_02, hdr.checksum_get().unwrap());
 
     assert_eq!(
         hdr.get(b"v-002/key-01"),
@@ -319,7 +299,6 @@ fn version_operations(hdr: &mut MapxRawVs) {
 // - a branch can only be merged to its parent branch
 // - every branch with a same parent can be merged to their parent branch
 //     - all verisons will be ordered by the inner-defined version id
-// - version checksums except the latest version will not be changed
 fn branch_operations(hdr: &mut MapxRawVs) {
     hdr.branch_create(BranchName(b"b-1")).unwrap();
     hdr.branch_create(BranchName(b"b-2")).unwrap();
@@ -519,7 +498,6 @@ fn branch_operations(hdr: &mut MapxRawVs) {
         .unwrap();
 
     // created data to be merged
-    let mut checksums = vec![];
     (0..10u64).for_each(|i| {
         hdr.branch_create_by_base_branch(
             BranchName(&i.to_be_bytes()),
@@ -537,10 +515,6 @@ fn branch_operations(hdr: &mut MapxRawVs) {
                 &((1 + i) * j).to_be_bytes(),
                 BranchName(&i.to_be_bytes())
             ));
-            checksums.push(
-                hdr.checksum_get_by_branch(BranchName(&i.to_be_bytes()))
-                    .unwrap(),
-            );
         });
     });
 
@@ -549,7 +523,6 @@ fn branch_operations(hdr: &mut MapxRawVs) {
     });
 
     // All versions and their chanegs are belong to the base branch now
-    let mut checksums_after_merge = vec![];
     (0..10u64).for_each(|i| {
         (1000..1010u64).for_each(|j| {
             // children branches have been removed
@@ -571,30 +544,8 @@ fn branch_operations(hdr: &mut MapxRawVs) {
                 .unwrap()[..],
                 &((1 + i) * j).to_be_bytes()
             );
-            checksums_after_merge.push(
-                hdr.checksum_get_by_branch_version(
-                    BranchName(b"b-2"),
-                    VersionName(&((1 + i) * j).to_be_bytes()),
-                )
-                .unwrap(),
-            );
         });
     });
-
-    // the checksum of the latest version will be changed,
-    // all other versions will keep their original checksum
-    let latest_checksum = *checksums_after_merge.last().unwrap();
-    assert_eq!(checksums.len(), checksums_after_merge.len());
-    // merged 10 times
-    assert_eq!(
-        10,
-        checksums
-            .iter()
-            .zip(checksums_after_merge.iter())
-            .filter(|(a, b)| a != b)
-            .count()
-    );
-    assert!(checksums.binary_search(&latest_checksum).is_err());
 }
 
 // prune version:

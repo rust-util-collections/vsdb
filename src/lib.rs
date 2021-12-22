@@ -49,6 +49,5 @@ pub use versioned::vecx::VecxVs;
 
 pub use common::{
     ende::{KeyEnDe, KeyEnDeOrdered, ValueEnDe},
-    vsdb_flush, vsdb_set_base_dir, BranchName, ParentBranchName, VerChecksum,
-    VersionName,
+    vsdb_flush, vsdb_set_base_dir, BranchName, ParentBranchName, VersionName,
 };

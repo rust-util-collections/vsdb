@@ -3,9 +3,7 @@
 //!
 
 use crate::{
-    common::{
-        ende::ValueEnDe, BranchName, ParentBranchName, RawKey, VerChecksum, VersionName,
-    },
+    common::{ende::ValueEnDe, BranchName, ParentBranchName, RawKey, VersionName},
     versioned::mapx_raw::{MapxRawVs, MapxRawVsIter},
 };
 use ruc::*;
@@ -621,32 +619,6 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         pub fn branch_set_default(&mut self, branch_name: BranchName) -> Result<()> {
             self.inner.branch_set_default(branch_name).c(d!())
-        }
-
-        /// Get the signature of the head of the default branch.
-        #[inline(always)]
-        pub fn checksum_get(&self) -> Option<VerChecksum> {
-            self.inner.checksum_get()
-        }
-
-        /// Get the signature of the head of a specified branch.
-        #[inline(always)]
-        pub fn checksum_get_by_branch(
-            &self,
-            branch_name: BranchName,
-        ) -> Option<VerChecksum> {
-            self.inner.checksum_get_by_branch(branch_name)
-        }
-
-        /// Get the signature of a specified version of a specified branch.
-        #[inline(always)]
-        pub fn checksum_get_by_branch_version(
-            &self,
-            branch_name: BranchName,
-            version_name: VersionName,
-        ) -> Option<VerChecksum> {
-            self.inner
-                .checksum_get_by_branch_version(branch_name, version_name)
         }
 
         /// Clean outdated versions out of the default reserved number.

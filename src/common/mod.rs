@@ -8,7 +8,6 @@ pub(crate) mod ende;
 pub(crate) mod engines;
 
 use {
-    crc32fast::Hasher,
     engines::Engine,
     once_cell::sync::Lazy,
     parking_lot::Mutex,
@@ -26,9 +25,6 @@ use {
 pub(crate) type RawBytes = Box<[u8]>;
 pub(crate) type RawKey = RawBytes;
 pub(crate) type RawValue = RawBytes;
-
-/// Checksum of a version.
-pub type VerChecksum = [u8; size_of::<u32>()];
 
 pub(crate) type Prefix = u64;
 pub(crate) type PrefixBytes = [u8; PREFIX_SIZ];
@@ -154,18 +150,3 @@ pub fn vsdb_set_base_dir(dir: String) -> Result<()> {
 pub fn vsdb_flush() {
     VSDB.flush();
 }
-
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////
-
-#[inline(always)]
-pub(crate) fn compute_checksum(ivec: &[&[u8]]) -> VerChecksum {
-    let mut hasher = Hasher::new();
-    for bytes in ivec {
-        hasher.update(bytes);
-    }
-    hasher.finalize().to_be_bytes()
-}
-
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////
