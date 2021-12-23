@@ -11,12 +11,10 @@ env:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v2
     - name: Build
-      run: cargo build --verbose
+      run: make build
     - name: Run tests
-      run: cargo test --verbose
+      run: make test
