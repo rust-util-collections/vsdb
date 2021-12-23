@@ -838,9 +838,7 @@ impl MapxRawVs {
         }
 
         // remove data on the original branch
-        vers_created.iter().for_each(|(k, _)| {
-            vers_created.remove(&k);
-        });
+        vers_created.clear();
 
         self.branch_to_parent.remove(&branch_id);
 

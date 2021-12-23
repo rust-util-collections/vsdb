@@ -80,7 +80,7 @@
 //! - \[**default**] `cbor_ende`, use cbor as the `en/de`coder
 //!     - Faster running speed
 //! - `bcs_ende`, use bcs as the `en/de`coder
-//!     - Created by the libre project of facebook
+//!     - Created by the libre project of Facebook
 //!     - Security reinforcement for blockchain scenarios
 //!
 //! ## Low-level design
