@@ -99,6 +99,7 @@
 
 pub mod basic;
 mod common;
+pub mod merkle;
 pub mod versioned;
 
 pub use basic::mapx::Mapx;
@@ -109,6 +110,8 @@ pub use versioned::mapx::MapxVs;
 pub use versioned::mapx_ord::MapxOrdVs;
 pub use versioned::orphan::OrphanVs;
 pub use versioned::vecx::VecxVs;
+
+pub use merkle::MerkleTree;
 
 pub use common::{
     ende::{KeyEnDe, KeyEnDeOrdered, ValueEnDe},
