@@ -50,10 +50,10 @@ struct GreatAlgo {
 
 let algo = GreatAlgo.default();
 
+algo.get_by_branch_version(...);
 algo.branch_create(...);
 algo.branch_create_by_base_branch(...);
 algo.branch_create_by_base_branch_version(...);
-algo.branch_remove(...);
 algo.branch_remove(...);
 algo.version_pop(...);
 algo.prune();
@@ -61,7 +61,7 @@ algo.prune();
 
 **NOTE !!**
 
-the `#[derive(Vs)]` macro can only be applied to structures
+the `#[derive(Vs)]` macro can be applied to structures
 whose internal fields all are types defined in VSDB,
 but can not be applied to nesting wrapper among VSDB-types,
 you should implement the `VsMgmt` trait(or a part of it) manually.
