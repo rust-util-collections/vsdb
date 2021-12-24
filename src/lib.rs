@@ -58,54 +58,54 @@
 //! algo.prune();
 //! ```
 //!
-//! > **NOTE !!**
-//! >
-//! > the `#[derive(Vs)]` macro can only be applied to structures
-//! > whose internal fields all are types defined in VSDB,
-//! > but can not be applied to nesting wrapper among VSDB types,
-//! > you should implement the `VsMgmt` trait manually if you are in this style.
-//! >
-//! > This data structure can be handled correctly by `#[derive(Vs)]`:
-//! >
-//! > ```compile_fail
-//! > #[derive(Vs)]
-//! > struct GoodCase {
-//! >     a: VecxVs<u8>,
-//! >     b: SubItem-0,
-//! >     c: SubItem-1
-//! > }
-//! >
-//! > struct SubItem-0(MapxVs<u8, u8>, VecxVs<u8>);
-//! >
-//! > struct SubItem-1 {
-//! >     a: OrphanVs<i16>,
-//! >     b: MapxOrdVs<String, u8>
-//! > }
-//! > ```
-//! >
-//! > **But** this one can NOT be handled correctly by `#[derive(Vs)]`:
-//! >
-//! > ```compile_fail
-//! > // It can be compiled, but the result of its work is wrong !
-//! > // The version-management methods of the 'MapxVs<u8, u8>' will not be generated !
-//! > // You should imple the 'VsMgmt' trait manually for this kind of data structure !
-//! > #[derive(Vs)]
-//! > struct BadCase {
-//! >     a: VecxVs<MapxVs<u8, u8>>,
-//! > }
-//! > ```
-//! >
-//! > This one is also bad!
-//! >
-//! > ```compile_fail
-//! > // The compiling will fail because the 'b' field is not a VSDB type.
-//! > // You should implement the 'VsMgmt' trait manually for this kind of data structure !
-//! > #[derive(Vs)]
-//! > struct BadCase {
-//! >     a: VecxVs<MapxVs<u8, u8>>,
-//! >     b: u8
-//! > }
-//! > ```
+//! **NOTE !!**
+//!
+//! the `#[derive(Vs)]` macro can only be applied to structures
+//! whose internal fields all are types defined in VSDB,
+//! but can not be applied to nesting wrapper among VSDB types,
+//! you should implement the `VsMgmt` trait(or a part of it) manually.
+//!
+//! This data structure can be handled correctly by `#[derive(Vs)]`:
+//!
+//! ```compile_fail
+//! #[derive(Vs)]
+//! struct GoodCase {
+//!     a: VecxVs<u8>,
+//!     b: SubItem-0,
+//!     c: SubItem-1
+//! }
+//!
+//! struct SubItem-0(MapxVs<u8, u8>, VecxVs<u8>);
+//!
+//! struct SubItem-1 {
+//!     a: OrphanVs<i16>,
+//!     b: MapxOrdVs<String, u8>
+//! }
+//! ```
+//!
+//! **But** this one can NOT be handled correctly by `#[derive(Vs)]`:
+//!
+//! ```compile_fail
+//! // It can be compiled, but the result is wrong !
+//! // The version-management methods of the 'MapxVs<u8, u8>' will missing,
+//! // you should implement the 'VsMgmt' trait(or a part of it) manually.
+//! #[derive(Vs)]
+//! struct BadCase {
+//!     a: VecxVs<MapxVs<u8, u8>>,
+//! }
+//! ```
+//!
+//! This one is also bad!
+//!
+//! ```compile_fail
+//! // The compilation will fail because the 'b' field is not a VSDB-type.
+//! // You should implement the 'VsMgmt' trait(or a part of it) manually.
+//! #[derive(Vs)]
+//! struct BadCase {
+//!     a: VecxVs<MapxVs<u8, u8>>,
+//!     b: u8
+//! }
+//! ```
 //!
 //! Some complete examples:
 //! - [**Versioned examples**](versioned/index.html)

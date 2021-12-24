@@ -1,4 +1,6 @@
 //!
+//! Versioned functions.
+//!
 //! # Examples
 //!
 //! ```rust

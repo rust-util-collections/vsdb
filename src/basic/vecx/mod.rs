@@ -134,7 +134,7 @@ impl<T: ValueEnDe> Vecx<T> {
     #[inline(always)]
     pub fn pop(&self) -> Option<T> {
         alt!(self.is_empty(), return None);
-        self.inner.remove(&(self.len() - 1).to_be_bytes())
+        self.inner.remove(&(self.len() as u64 - 1).to_be_bytes())
     }
 
     #[inline(always)]

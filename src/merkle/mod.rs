@@ -1,8 +1,11 @@
 //!
-//! This is a simple merkle-tree implementation ported from solana project.
+//! A simple 'Merkle-Tree' ported from solana project.
 //!
 
-use crate::{basic::vecx::Vecx, common::RawBytes};
+use crate::{
+    basic::{mapx_ord_rawkey::MapxOrdRawKey, vecx_raw::VecxRaw},
+    common::RawBytes,
+};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 
@@ -30,7 +33,7 @@ macro_rules! hash_leaf {
 
 macro_rules! hash_intermediate {
     {$l:ident, $r:ident} => {
-        hashv(&[INTERMEDIATE_PREFIX, $l.as_ref(), $r.as_ref()])
+        hashv(&[INTERMEDIATE_PREFIX, $l, $r])
     }
 }
 
@@ -38,16 +41,17 @@ macro_rules! hash_intermediate {
 pub struct MerkleTree {
     leaf_count: usize,
     nodes: Vec<Hash>,
+    hash_to_idx: MapxOrdRawKey<u64>,
 }
 
 #[derive(Debug, PartialEq)]
-pub struct ProofEntry<'a>(&'a Hash, Option<&'a Hash>, Option<&'a Hash>);
+pub struct ProofEntry<'a>(&'a [u8], Option<&'a [u8]>, Option<&'a [u8]>);
 
 impl<'a> ProofEntry<'a> {
     pub fn new(
         target: &'a Hash,
-        left_sibling: Option<&'a Hash>,
-        right_sibling: Option<&'a Hash>,
+        left_sibling: Option<&'a [u8]>,
+        right_sibling: Option<&'a [u8]>,
     ) -> Self {
         assert!((None == left_sibling) ^ (None == right_sibling));
         Self(target, left_sibling, right_sibling)
@@ -62,20 +66,25 @@ impl<'a> Proof<'a> {
         self.0.push(entry)
     }
 
-    pub fn verify(&self, candidate: Hash) -> bool {
-        let result = self.0.iter().try_fold(candidate, |candidate, pe| {
-            let lsib = pe.1.unwrap_or(&candidate);
-            let rsib = pe.2.unwrap_or(&candidate);
+    pub fn verify(&self, target: &[u8]) -> bool {
+        let hash = hash_leaf!(target);
+        self.verify_by_hash(hash)
+    }
+
+    pub fn verify_by_hash(&self, target_hash: Hash) -> bool {
+        let result = self.0.iter().try_fold(target_hash, |target_hash, pe| {
+            let lsib = pe.1.unwrap_or(&target_hash);
+            let rsib = pe.2.unwrap_or(&target_hash);
             let hash = hash_intermediate!(lsib, rsib);
 
-            if hash == *pe.0 { Some(hash) } else { None }
+            if &hash[..] == pe.0 { Some(hash) } else { None }
         });
         matches!(result, Some(_))
     }
 }
 
 impl MerkleTree {
-    #[inline]
+    #[inline(always)]
     fn next_level_len(level_len: usize) -> usize {
         if level_len == 1 {
             0
@@ -84,6 +93,7 @@ impl MerkleTree {
         }
     }
 
+    #[inline(always)]
     fn calculate_vec_capacity(leaf_count: usize) -> usize {
         // the most nodes consuming case is when n-1 is full balanced binary tree
         // then n will cause the previous tree add a left only path to the root
@@ -107,16 +117,17 @@ impl MerkleTree {
         }
     }
 
-    pub fn new<T: AsRef<[u8]>>(items: &[T]) -> Self {
+    pub fn new(items: &[&[u8]]) -> Self {
         let cap = MerkleTree::calculate_vec_capacity(items.len());
         let mut mt = MerkleTree {
             leaf_count: items.len(),
             nodes: Vec::with_capacity(cap),
+            hash_to_idx: MapxOrdRawKey::new(),
         };
 
-        for item in items {
-            let item = item.as_ref();
+        for (idx, item) in items.iter().enumerate() {
             let hash = hash_leaf!(item);
+            mt.hash_to_idx.insert_ref(&hash, &(idx as u64));
             mt.nodes.push(hash);
         }
 
@@ -147,11 +158,24 @@ impl MerkleTree {
         mt
     }
 
+    #[inline(always)]
     pub fn get_root(&self) -> Option<&Hash> {
         self.nodes.iter().last()
     }
 
-    pub fn find_path(&self, index: usize) -> Option<Proof> {
+    #[inline(always)]
+    pub fn get_proof_path(&self, target: &[u8]) -> Option<Proof> {
+        let hash = hash_leaf!(target);
+        self.get_proof_path_by_hash(hash)
+    }
+
+    #[inline(always)]
+    pub fn get_proof_path_by_hash(&self, target_hash: Hash) -> Option<Proof> {
+        let idx = self.hash_to_idx.get(&target_hash)? as usize;
+        self.get_proof_path_by_index(idx)
+    }
+
+    pub fn get_proof_path_by_index(&self, index: usize) -> Option<Proof> {
         if index >= self.leaf_count {
             return None;
         }
@@ -192,27 +216,32 @@ impl MerkleTree {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct MerkleTreeStore {
     leaf_count: usize,
-    nodes: Vecx<Hash>,
+    nodes: VecxRaw,
+    hash_to_idx: MapxOrdRawKey<u64>,
 }
 
 impl From<&MerkleTree> for MerkleTreeStore {
+    #[inline(always)]
     fn from(mt: &MerkleTree) -> Self {
-        let nodes = Vecx::new();
+        let nodes = VecxRaw::new();
         mt.nodes.iter().for_each(|h| {
             nodes.push_ref(h);
         });
         Self {
             leaf_count: mt.leaf_count,
             nodes,
+            hash_to_idx: mt.hash_to_idx,
         }
     }
 }
 
 impl From<&MerkleTreeStore> for MerkleTree {
+    #[inline(always)]
     fn from(mts: &MerkleTreeStore) -> Self {
         Self {
             leaf_count: mts.leaf_count,
             nodes: mts.nodes.iter().collect(),
+            hash_to_idx: mts.hash_to_idx,
         }
     }
 }
@@ -229,7 +258,7 @@ mod tests {
 
     #[test]
     fn test_tree_from_empty() {
-        let mt = MerkleTree::new::<[u8; 0]>(&[]);
+        let mt = MerkleTree::new(&[]);
         assert_eq!(mt.get_root(), None);
     }
 
@@ -245,33 +274,44 @@ mod tests {
     fn test_path_creation() {
         let mt = MerkleTree::new(TEST);
         for (i, _s) in TEST.iter().enumerate() {
-            let _path = mt.find_path(i).unwrap();
+            let _path = mt.get_proof_path_by_index(i).unwrap();
         }
     }
 
     #[test]
     fn test_path_creation_bad_index() {
         let mt = MerkleTree::new(TEST);
-        assert_eq!(mt.find_path(TEST.len()), None);
+        assert_eq!(mt.get_proof_path_by_index(TEST.len()), None);
     }
 
     #[test]
-    fn test_path_verify_good() {
+    fn test_path_verify_by_hash_good() {
         let mt = MerkleTree::new(TEST);
+
+        for s in TEST.iter() {
+            let path = mt.get_proof_path(s).unwrap();
+            assert!(path.verify(s));
+        }
+
         for (i, s) in TEST.iter().enumerate() {
             let hash = hash_leaf!(s);
-            let path = mt.find_path(i).unwrap();
-            assert!(path.verify(hash));
+            let path = mt.get_proof_path_by_index(i).unwrap();
+            assert!(path.verify_by_hash(hash));
         }
     }
 
     #[test]
-    fn test_path_verify_bad() {
+    fn test_path_verify_by_hash_bad() {
         let mt = MerkleTree::new(TEST);
+
+        for s in BAD.iter() {
+            assert!(mt.get_proof_path(s).is_none());
+        }
+
         for (i, s) in BAD.iter().enumerate() {
             let hash = hash_leaf!(s);
-            let path = mt.find_path(i).unwrap();
-            assert!(!path.verify(hash));
+            let path = mt.get_proof_path_by_index(i).unwrap();
+            assert!(!path.verify_by_hash(hash));
         }
     }
 

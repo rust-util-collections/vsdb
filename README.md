@@ -64,7 +64,7 @@ algo.prune();
 the `#[derive(Vs)]` macro can only be applied to structures
 whose internal fields all are types defined in VSDB,
 but can not be applied to nesting wrapper among VSDB-types,
-you should implement the `VsMgmt` trait manually if you are in this style.
+you should implement the `VsMgmt` trait(or a part of it) manually.
 
 This data structure can be handled correctly by `#[derive(Vs)]`:
 
@@ -89,7 +89,7 @@ struct SubItem-1 {
 ```rust
 // It can be compiled, but the result is wrong !
 // The version-management methods of the 'MapxVs<u8, u8>' will missing,
-// you should implement the 'VsMgmt' trait manually.
+// you should implement the 'VsMgmt' trait(or a part of it) manually.
 #[derive(Vs)]
 struct BadCase {
     a: VecxVs<MapxVs<u8, u8>>,
@@ -100,7 +100,7 @@ This one is also bad!
 
 ```rust
 // The compilation will fail because the 'b' field is not a VSDB-type.
-// You should implement the 'VsMgmt' trait manually.
+// You should implement the 'VsMgmt' trait(or a part of it) manually.
 #[derive(Vs)]
 struct BadCase {
     a: VecxVs<MapxVs<u8, u8>>,
