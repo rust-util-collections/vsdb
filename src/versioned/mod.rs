@@ -10,13 +10,13 @@
 //!     sync::{mpsc::channel, Mutex},
 //!     thread,
 //! };
-//! use vsdb::{BranchName, MapxVs, OrphanVs, VecxVs, VersionName, VsMgmt};
+//! use vsdb::{BranchName, MapxVs, OrphanVs, VecxVs, VersionName, Vs, VsMgmt};
 //!
 //! type Amount = u64;
 //! type Address = Vec<u8>;
 //! type ConsensusInt = i128;
 //!
-//! #[derive(Clone, Debug, Serialize, Deserialize)]
+//! #[derive(Vs, Clone, Debug, Serialize, Deserialize)]
 //! struct WorldState {
 //!     transactions: VecxVs<Transaction>,
 //!     balances: MapxVs<Address, Amount>,
@@ -50,7 +50,7 @@
 //!     if snap0.apply_transaction(&tx).is_ok() {
 //!         MEM_POOL.lock().unwrap().push(tx);
 //!     } else {
-//!         snap0.pop_version().unwrap();
+//!         snap0.version_pop().unwrap();
 //!     }
 //! }
 //!
@@ -66,7 +66,7 @@
 //!     for tx in mem::take(&mut *MEM_POOL.lock().unwrap()).into_iter() {
 //!         snap1.push_version(&tx.hash()).unwrap();
 //!         if snap1.apply_transaction(&tx).is_err() {
-//!             snap1.pop_version().unwrap();
+//!             snap1.version_pop().unwrap();
 //!         }
 //!     }
 //! }
@@ -85,7 +85,7 @@
 //!             a_consensus_int: OrphanVs::new(0),
 //!         };
 //!
-//!         if !ws.branch_exists(MASTER_BRANCH) {
+//!         if !ws.branch_is_found(MASTER_BRANCH) {
 //!             ws.push_version(b"init version").c(d!())?;
 //!             ws.new_branch(MASTER_BRANCH).c(d!())?;
 //!         }
@@ -98,13 +98,13 @@
 //!         Ok(ws)
 //!     }
 //!
-//!     fn apply_transaction(&self, tx: &Transaction) -> Result<()> {
+//!     fn apply_transaction(&mut self, tx: &Transaction) -> Result<()> {
 //!         self.a_very_complex_function_will_change_state(tx).c(d!())
 //!     }
 //!
 //!     // sample code
 //!     fn a_very_complex_function_will_change_state(
-//!         &self,
+//!         &mut self,
 //!         tx: &Transaction,
 //!     ) -> Result<()> {
 //!         if tx.from.get(0).is_some() {
@@ -115,50 +115,32 @@
 //!         }
 //!     }
 //!
-//!     fn branch_exists(&self, branch: &str) -> bool {
+//!     fn branch_is_found(&self, branch: &str) -> bool {
 //!         let br = BranchName(branch.as_bytes());
-//!         self.transactions.branch_exists(br)
-//!             && self.balances.branch_exists(br)
-//!             && self.a_consensus_int.branch_exists(br)
+//!         self.branch_exists(br)
 //!     }
 //!
-//!     fn new_branch(&self, branch: &str) -> Result<()> {
+//!     fn new_branch(&mut self, branch: &str) -> Result<()> {
 //!         let br = BranchName(branch.as_bytes());
-//!         self.transactions
-//!             .branch_create(br)
-//!             .c(d!())
-//!             .and_then(|_| self.balances.branch_create(br).c(d!()))
-//!             .and_then(|_| self.a_consensus_int.branch_create(br).c(d!()))
+//!         self.branch_create(br).c(d!())
 //!     }
 //!
-//!     fn delete_branch(&self, branch: &str) -> Result<()> {
+//!     fn delete_branch(&mut self, branch: &str) -> Result<()> {
 //!         let br = BranchName(branch.as_bytes());
-//!         self.transactions
-//!             .branch_remove(br)
-//!             .c(d!())
-//!             .and_then(|_| self.balances.branch_remove(br).c(d!()))
-//!             .and_then(|_| self.a_consensus_int.branch_remove(br).c(d!()))
+//!         self.branch_remove(br).c(d!())
 //!     }
 //!
-//!     fn merge_branch(&self, branch: &str) -> Result<()> {
+//!     fn merge_branch(&mut self, branch: &str) -> Result<()> {
 //!         let br = BranchName(branch.as_bytes());
-//!         self.transactions
-//!             .branch_merge_to_parent(br)
-//!             .c(d!())
-//!             .and_then(|_| self.balances.branch_merge_to_parent(br).c(d!()))
-//!             .and_then(|_| self.a_consensus_int.branch_merge_to_parent(br).c(d!()))
+//!         self.branch_merge_to_parent(br).c(d!())
 //!     }
 //!
-//!     fn set_default_branch(&self, branch: &str) -> Result<()> {
+//!     fn set_default_branch(&mut self, branch: &str) -> Result<()> {
 //!         let br = BranchName(branch.as_bytes());
-//!         self.transactions
-//!             .branch_set_default(br)
-//!             .c(d!())
-//!             .and_then(|_| self.balances.branch_set_default(br).c(d!()))
-//!             .and_then(|_| self.a_consensus_int.branch_set_default(br).c(d!()))
+//!         self.branch_set_default(br).c(d!())
 //!     }
 //!
-//!     fn reset_branch(&self, branch: &str) -> Result<()> {
+//!     fn reset_branch(&mut self, branch: &str) -> Result<()> {
 //!         self.set_default_branch(MASTER_BRANCH)
 //!             .c(d!())
 //!             .and_then(|_| self.delete_branch(branch).c(d!()))
@@ -166,21 +148,9 @@
 //!             .and_then(|_| self.set_default_branch(branch).c(d!()))
 //!     }
 //!
-//!     fn push_version(&self, version: &[u8]) -> Result<()> {
+//!     fn push_version(&mut self, version: &[u8]) -> Result<()> {
 //!         let ver = VersionName(version);
-//!         self.transactions
-//!             .version_create(ver)
-//!             .c(d!())
-//!             .and_then(|_| self.balances.version_create(ver).c(d!()))
-//!             .and_then(|_| self.a_consensus_int.version_create(ver).c(d!()))
-//!     }
-//!
-//!     fn pop_version(&self) -> Result<()> {
-//!         self.transactions
-//!             .version_pop()
-//!             .c(d!())
-//!             .and_then(|_| self.balances.version_pop().c(d!()))
-//!             .and_then(|_| self.a_consensus_int.version_pop().c(d!()))
+//!         self.version_create(ver).c(d!())
 //!     }
 //! }
 //!
@@ -220,7 +190,7 @@
 //!
 //! (0..10).for_each(|i| sender.send(Transaction::new(i)).unwrap());
 //!
-//! sleep_ms!(200);
+//! sleep_ms!(60);
 //!
 //! begin_block();
 //! transaction_formal_check_all();

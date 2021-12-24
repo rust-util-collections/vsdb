@@ -3,19 +3,12 @@
 //!
 //! # Examples
 //!
-//! Used as version-ful:
-//!
-//! ```
-//! use vsdb::versioned::mapx_raw::MapxRawVs;
-//!
-//! // TODO
-//! let _l = MapxRawVs::new();
-//! ```
+//! Used as version-ful: [**moduler level documents**](super::mod.rs)
 //!
 //! Used as version-less(not recommand, use `MapxRaw` instead):
 //!
 //! ```
-//! use vsdb::{VersionName, versioned::mapx_raw::MapxRawVs};
+//! use vsdb::{VersionName, versioned::mapx_raw::MapxRawVs, VsMgmt};
 //!
 //! let mut l = MapxRawVs::new();
 //! l.version_create(VersionName(b"test")).unwrap();
