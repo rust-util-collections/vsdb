@@ -104,6 +104,14 @@ where
     inner: MapxOrdRawKey<T>,
 }
 
+impl<T: Default + ValueEnDe> Default for Orphan<T> {
+    fn default() -> Self {
+        let hdr = MapxOrdRawKey::new();
+        hdr.insert_ref(&[], &T::default());
+        Self { inner: hdr }
+    }
+}
+
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 

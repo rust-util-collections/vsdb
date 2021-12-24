@@ -129,6 +129,11 @@ where
     }
 
     #[inline(always)]
+    pub fn values(&self) -> MapxValues<K, V> {
+        MapxValues { iter: self.iter() }
+    }
+
+    #[inline(always)]
     pub fn contains_key(&self, key: &K) -> bool {
         self.inner.contains_key(&key.encode())
     }
@@ -181,4 +186,40 @@ where
             .next_back()
             .map(|(k, v)| (<K as KeyEnDe>::decode(&k).unwrap(), v))
     }
+}
+
+pub struct MapxValues<K, V>
+where
+    K: KeyEnDe,
+    V: ValueEnDe,
+{
+    iter: MapxIter<K, V>,
+}
+
+impl<K, V> Iterator for MapxValues<K, V>
+where
+    K: KeyEnDe,
+    V: ValueEnDe,
+{
+    type Item = V;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next().map(|(_, v)| v)
+    }
+}
+
+impl<K, V> DoubleEndedIterator for MapxValues<K, V>
+where
+    K: KeyEnDe,
+    V: ValueEnDe,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.iter.next_back().map(|(_, v)| v)
+    }
+}
+
+impl<K, V> ExactSizeIterator for MapxValues<K, V>
+where
+    K: KeyEnDe,
+    V: ValueEnDe,
+{
 }

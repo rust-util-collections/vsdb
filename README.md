@@ -62,7 +62,8 @@ algo.prune();
 **NOTE !!**
 
 the `#[derive(Vs)]` macro can be applied to structures
-whose internal fields all are types defined in VSDB,
+whose internal fields are all types defined in VSDB
+(primitive types and their collections are also supported),
 but can not be applied to nesting wrapper among VSDB-types,
 you should implement the `VsMgmt` trait(or a part of it) manually.
 
@@ -70,17 +71,40 @@ This data structure can be handled correctly by `#[derive(Vs)]`:
 
 ```rust
 #[derive(Vs)]
-struct GoodCase {
-    a: VecxVs<u8>,
-    b: SubItem-0,
-    c: SubItem-1
+struct GoodCase<K, T> {
+    a: VecxVs<i64>,
+    b: SubItem0,
+    c: SubItem1,
+    d: SubItem2,
+    e: u8,
+    f: Vec<i16>,
+    g: VecDeque<i64>,
+    h: BTreeSet<u16>,
+    i: HashMap<K, AtomicU64>,
+    j: HashSet<i32>,
+    k: LinkedList<()>,
+    l: Box<dyn AsRef<bool>,
+    m: Box<dyn AsRef<[Vec<u128>]>>,
+    n: PhantomData<T>,
 }
 
-struct SubItem-0(MapxVs<u8, u8>, VecxVs<u8>);
+#[derive(Vs)]
+struct SubItem0(MapxVs<u8, u8>, VecxVs<u8>);
 
-struct SubItem-1 {
+#[derive(Vs)]
+struct SubItem1 {
     a: OrphanVs<i16>,
     b: MapxOrdVs<String, u8>
+}
+
+struct SubItem2 {
+    a: i8,
+    b: u128
+}
+
+// A nope implementation of `VsMgmt` for custom stateless types.
+impl VsMgmt for SubItem2 {
+    impl_vs_methods_nope!();
 }
 ```
 
@@ -88,23 +112,11 @@ struct SubItem-1 {
 
 ```rust
 // It can be compiled, but the result is wrong !
-// The version-management methods of the 'MapxVs<u8, u8>' will missing,
+// The versioned methods of the inner 'MapxVs<u8, u8>' will missing,
 // you should implement the 'VsMgmt' trait(or a part of it) manually.
 #[derive(Vs)]
 struct BadCase {
     a: VecxVs<MapxVs<u8, u8>>,
-}
-```
-
-This one is also bad!
-
-```rust
-// The compilation will fail because the 'b' field is not a VSDB-type.
-// You should implement the 'VsMgmt' trait(or a part of it) manually.
-#[derive(Vs)]
-struct BadCase {
-    a: VecxVs<MapxVs<u8, u8>>,
-    b: u8
 }
 ```
 

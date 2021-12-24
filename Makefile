@@ -20,9 +20,9 @@ lint:
 
 test:
 	- rm -rf ~/.vsdb
-	cargo test --release -- --test-threads=1
+	cargo test -- --test-threads=1
 	- rm -rf ~/.vsdb
-	cargo test --release --no-default-features --features "rocks_engine,cbor_ende" -- --test-threads=1
+	cargo test --no-default-features --features "rocks_engine,cbor_ende" -- --test-threads=1
 
 bench:
 	- rm -rf ~/.vsdb

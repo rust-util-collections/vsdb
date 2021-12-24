@@ -158,6 +158,11 @@ where
     }
 
     #[inline(always)]
+    pub fn values(&self) -> MapxOrdValues<K, V> {
+        MapxOrdValues { iter: self.iter() }
+    }
+
+    #[inline(always)]
     pub fn range<R: RangeBounds<K>>(&self, bounds: R) -> MapxOrdIter<K, V> {
         self.range_ref((bounds.start_bound(), bounds.end_bound()))
     }
@@ -263,6 +268,42 @@ where
 }
 
 impl<K, V> ExactSizeIterator for MapxOrdIter<K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+}
+
+pub struct MapxOrdValues<K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    iter: MapxOrdIter<K, V>,
+}
+
+impl<K, V> Iterator for MapxOrdValues<K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    type Item = V;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next().map(|(_, v)| v)
+    }
+}
+
+impl<K, V> DoubleEndedIterator for MapxOrdValues<K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.iter.next_back().map(|(_, v)| v)
+    }
+}
+
+impl<K, V> ExactSizeIterator for MapxOrdValues<K, V>
 where
     K: KeyEnDeOrdered,
     V: ValueEnDe,

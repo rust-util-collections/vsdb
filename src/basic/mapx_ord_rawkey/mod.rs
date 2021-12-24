@@ -165,6 +165,11 @@ where
     }
 
     #[inline(always)]
+    pub fn values(&self) -> MapxOrdRawKeyValues<V> {
+        MapxOrdRawKeyValues { iter: self.iter() }
+    }
+
+    #[inline(always)]
     pub fn range<R: RangeBounds<RawKey>>(&self, bounds: R) -> MapxOrdRawKeyIter<V> {
         let start = match bounds.start_bound() {
             Bound::Included(s) => Bound::Included(&s[..]),
@@ -345,3 +350,31 @@ where
 }
 
 impl<V> ExactSizeIterator for MapxOrdRawKeyIter<V> where V: ValueEnDe {}
+
+pub struct MapxOrdRawKeyValues<V>
+where
+    V: ValueEnDe,
+{
+    iter: MapxOrdRawKeyIter<V>,
+}
+
+impl<V> Iterator for MapxOrdRawKeyValues<V>
+where
+    V: ValueEnDe,
+{
+    type Item = V;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next().map(|(_, v)| v)
+    }
+}
+
+impl<V> DoubleEndedIterator for MapxOrdRawKeyValues<V>
+where
+    V: ValueEnDe,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.iter.next_back().map(|(_, v)| v)
+    }
+}
+
+impl<V> ExactSizeIterator for MapxOrdRawKeyValues<V> where V: ValueEnDe {}
