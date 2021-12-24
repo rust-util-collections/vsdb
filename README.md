@@ -111,10 +111,10 @@ algo.prune();
 Some complete examples:
 
 - Versioned examples:
-    - [**Simple blockchain**](tests/blockchain_state.rs)
+    - [**Simple blockchain**](examples/blockchain_state.rs)
     - [**Operations one by one**](src/versioned/mapx_raw/test.rs)
 - Unversioned examples:
-    - [**Simple web server**](tests/web_server.rs)
+    - [**Simple web server**](examples/web_server.rs)
     - [**Operations one by one**](src/basic/mapx/test.rs)
 
 ## Compilation features

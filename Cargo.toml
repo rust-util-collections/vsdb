@@ -63,3 +63,9 @@ overflow-checks = false
 codegen-units = 1
 incremental = false
 overflow-checks = false
+
+[[example]]
+name = "blockchain_state"
+
+[[example]]
+name = "web_server"

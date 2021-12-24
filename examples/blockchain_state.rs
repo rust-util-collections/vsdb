@@ -178,8 +178,7 @@ impl Transaction {
     }
 }
 
-#[test]
-fn stateful_scene() {
+fn main() {
     let (sender, reveiver) = channel();
 
     thread::spawn(move || {

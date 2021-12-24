@@ -77,8 +77,7 @@ impl AnimalHospital {
     }
 }
 
-#[test]
-fn stateless_scene() {
+fn main() {
     let (sender, receiver) = channel();
 
     thread::spawn(move || {
