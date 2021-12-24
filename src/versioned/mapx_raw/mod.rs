@@ -3,7 +3,7 @@
 //!
 //! # Examples
 //!
-//! Used as version-ful: [**moduler level documents**](super::mod.rs)
+//! Used as version-ful: [**moduler level documents**](super)
 //!
 //! Used as version-less(not recommand, use `MapxRaw` instead):
 //!
