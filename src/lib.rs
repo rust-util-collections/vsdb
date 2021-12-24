@@ -38,6 +38,7 @@
 //! and your algorithm get the powerful version control ability at once!
 //!
 //! ```compile_fail
+//! #[dervive(Vs, Default)]
 //! struct GreatAlgo {
 //!     a: VecxVs<...>,
 //!     b: MapxOrdVs<...>,
@@ -46,24 +47,65 @@
 //!     e: ...
 //! }
 //!
-//! impl GreatAlgo {
-//!     fn version_create(&self, name: &str) {
-//!         self.a.version_create(VersionName(name)).unwrap();
-//!         self.b.version_create(VersionName(name)).unwrap();
-//!         self.c.version_create(VersionName(name)).unwrap();
-//!         self.d.version_create(VersionName(name)).unwrap();
-//!         ...
-//!     }
-//!     fn branch_create(&self, name: &str) {
-//!         self.a.branch_create(BranchName(name)).unwrap();
-//!         self.b.branch_create(BranchName(name)).unwrap();
-//!         self.c.branch_create(BranchName(name)).unwrap();
-//!         self.d.branch_create(BranchName(name)).unwrap();
-//!         ...
-//!     }
-//!     ...
-//! }
+//! let algo = GreatAlgo.default();
+//!
+//! algo.branch_create(...);
+//! algo.branch_create_by_base_branch(...);
+//! algo.branch_create_by_base_branch_version(...);
+//! algo.branch_remove(...);
+//! algo.branch_remove(...);
+//! algo.version_pop(...);
+//! algo.prune();
 //! ```
+//!
+//! > **NOTE !!**
+//! >
+//! > the `#[derive(Vs)]` macro can only be applied to structures
+//! > whose internal fields all are types defined in VSDB,
+//! > but can not be applied to nesting wrapper among VSDB types,
+//! > you should implement the `VsMgmt` trait manually if you are in this style.
+//! >
+//! > This data structure can be handled correctly by `#[derive(Vs)]`:
+//! >
+//! > ```compile_fail
+//! > #[derive(Vs)]
+//! > struct GoodCase {
+//! >     a: VecxVs<u8>,
+//! >     b: SubItem-0,
+//! >     c: SubItem-1
+//! > }
+//! >
+//! > struct SubItem-0(MapxVs<u8, u8>, VecxVs<u8>);
+//! >
+//! > struct SubItem-1 {
+//! >     a: OrphanVs<i16>,
+//! >     b: MapxOrdVs<String, u8>
+//! > }
+//! > ```
+//! >
+//! > **But** this one can NOT be handled correctly by `#[derive(Vs)]`:
+//! >
+//! > ```compile_fail
+//! > // It can be compiled, but the result of its work is wrong !
+//! > // The version-management methods of the 'MapxVs<u8, u8>' will not be generated !
+//! > // You should imple the 'VsMgmt' trait manually for this kind of data structure !
+//! > #[derive(Vs)]
+//! > struct BadCase {
+//! >     a: VecxVs<MapxVs<u8, u8>>,
+//! > }
+//! > ```
+//! >
+//! > This one is also bad!
+//! >
+//! > ```compile_fail
+//! > // The compiling will fail because the 'b' field is not a VSDB type.
+//! > // You should implement the 'VsMgmt' trait manually for this kind of data structure !
+//! > #[derive(Vs)]
+//! > struct BadCase {
+//! >     a: VecxVs<MapxVs<u8, u8>>,
+//! >     b: u8
+//! > }
+//! > ```
 //!
 //! Some complete examples:
 //! - [**Versioned examples**](versioned/index.html)
@@ -112,6 +154,7 @@ pub use versioned::orphan::OrphanVs;
 pub use versioned::vecx::VecxVs;
 
 pub use versioned::VsMgmt;
+pub use vsmgmt_derive::Vs;
 
 pub use merkle::MerkleTree;
 
