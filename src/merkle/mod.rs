@@ -197,7 +197,7 @@ pub struct MerkleTreeStore {
 
 impl From<&MerkleTree> for MerkleTreeStore {
     fn from(mt: &MerkleTree) -> Self {
-        let mut nodes = Vecx::new();
+        let nodes = Vecx::new();
         mt.nodes.iter().for_each(|h| {
             nodes.push_ref(h);
         });

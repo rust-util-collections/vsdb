@@ -21,7 +21,7 @@ fn basic_cases() {
     let cnt = 200;
 
     let hdr = {
-        let mut hdr = Vecx::new();
+        let hdr = Vecx::new();
 
         assert_eq!(0, hdr.len());
         (0..cnt).for_each(|i| {
@@ -40,7 +40,7 @@ fn basic_cases() {
         <Vecx<SampleBlock> as ValueEnDe>::encode(&hdr)
     };
 
-    let mut reloaded = pnk!(<Vecx<SampleBlock> as ValueEnDe>::decode(&hdr));
+    let reloaded = pnk!(<Vecx<SampleBlock> as ValueEnDe>::decode(&hdr));
 
     (0..cnt).for_each(|i| {
         assert_eq!(i, reloaded.get(i).unwrap().idx);
@@ -62,7 +62,7 @@ fn basic_cases() {
 
 #[test]
 fn write() {
-    let mut hdr = Vecx::new();
+    let hdr = Vecx::new();
 
     hdr.insert(0, 0);
     assert_eq!(1, hdr.len());
@@ -88,14 +88,14 @@ fn write() {
 #[test]
 #[should_panic]
 fn write_out_of_index_0() {
-    let mut hdr = Vecx::new();
+    let hdr = Vecx::new();
     hdr.insert_ref(100, &0);
 }
 
 #[test]
 #[should_panic]
 fn write_out_of_index_1() {
-    let mut hdr = Vecx::new();
+    let hdr = Vecx::new();
     hdr.insert(0, 0);
     hdr.insert_ref(100, &0);
 }
@@ -103,7 +103,7 @@ fn write_out_of_index_1() {
 #[test]
 #[should_panic]
 fn write_out_of_index_2() {
-    let mut hdr = Vecx::new();
+    let hdr = Vecx::new();
     hdr.update_ref(100, &0);
     hdr.insert(0, 0);
 }
@@ -111,7 +111,7 @@ fn write_out_of_index_2() {
 #[test]
 #[should_panic]
 fn write_out_of_index_3() {
-    let mut hdr = Vecx::new();
+    let hdr = Vecx::new();
     hdr.insert(0, 0);
     hdr.update_ref(100, &0);
 }
@@ -119,7 +119,7 @@ fn write_out_of_index_3() {
 #[test]
 #[should_panic]
 fn write_out_of_index_4() {
-    let mut hdr = Vecx::new();
+    let hdr = Vecx::new();
     hdr.remove(100);
     hdr.insert(0, 0);
 }
@@ -127,7 +127,7 @@ fn write_out_of_index_4() {
 #[test]
 #[should_panic]
 fn write_out_of_index_5() {
-    let mut hdr = Vecx::new();
+    let hdr = Vecx::new();
     hdr.insert(0, 0);
     hdr.remove(100);
 }
@@ -135,7 +135,7 @@ fn write_out_of_index_5() {
 #[test]
 #[should_panic]
 fn write_out_of_index_6() {
-    let mut hdr = Vecx::new();
+    let hdr = Vecx::new();
     hdr.swap_remove(100);
     hdr.insert(0, 0);
 }
@@ -143,7 +143,7 @@ fn write_out_of_index_6() {
 #[test]
 #[should_panic]
 fn write_out_of_index_7() {
-    let mut hdr = Vecx::new();
+    let hdr = Vecx::new();
     hdr.insert(0, 0);
     hdr.swap_remove(100);
 }

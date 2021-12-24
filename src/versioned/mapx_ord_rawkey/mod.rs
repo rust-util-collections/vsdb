@@ -169,13 +169,13 @@ where
     }
 
     #[inline(always)]
-    pub fn insert(&mut self, key: RawKey, value: V) -> Result<Option<V>> {
+    pub fn insert(&self, key: RawKey, value: V) -> Result<Option<V>> {
         self.insert_ref(&key, &value)
     }
 
     #[inline(always)]
     pub fn insert_by_branch(
-        &mut self,
+        &self,
         key: RawKey,
         value: V,
         branch_name: BranchName,
@@ -184,7 +184,7 @@ where
     }
 
     #[inline(always)]
-    pub fn insert_ref(&mut self, key: &[u8], value: &V) -> Result<Option<V>> {
+    pub fn insert_ref(&self, key: &[u8], value: &V) -> Result<Option<V>> {
         self.inner
             .insert(key, &value.encode())
             .map(|v| v.map(|v| <V as ValueEnDe>::decode(&v).unwrap()))
@@ -192,7 +192,7 @@ where
 
     #[inline(always)]
     pub fn insert_ref_by_branch(
-        &mut self,
+        &self,
         key: &[u8],
         value: &V,
         branch_name: BranchName,
@@ -370,7 +370,7 @@ where
     }
 
     #[inline(always)]
-    pub fn remove(&mut self, key: &[u8]) -> Result<Option<V>> {
+    pub fn remove(&self, key: &[u8]) -> Result<Option<V>> {
         self.inner
             .remove(key)
             .map(|v| v.map(|v| <V as ValueEnDe>::decode(&v).unwrap()))
@@ -378,7 +378,7 @@ where
 
     #[inline(always)]
     pub fn remove_by_branch(
-        &mut self,
+        &self,
         key: &[u8],
         branch_name: BranchName,
     ) -> Result<Option<V>> {
@@ -438,7 +438,7 @@ macro_rules! impl_vs_methods {
     () => {
         /// Create a new version on the default branch.
         #[inline(always)]
-        fn version_create(&mut self, version_name: VersionName) -> Result<()> {
+        fn version_create(&self, version_name: VersionName) -> Result<()> {
             self.inner.version_create(version_name).c(d!())
         }
 
@@ -446,7 +446,7 @@ macro_rules! impl_vs_methods {
         /// NOTE: the branch must has been created.
         #[inline(always)]
         fn version_create_by_branch(
-            &mut self,
+            &self,
             version_name: VersionName,
             branch_name: BranchName,
         ) -> Result<()> {
@@ -497,7 +497,7 @@ macro_rules! impl_vs_methods {
         /// while operations on branches and versions are limited to their own perspective,
         /// and should not do any tracing.
         #[inline(always)]
-        fn version_pop(&mut self) -> Result<()> {
+        fn version_pop(&self) -> Result<()> {
             self.inner.version_pop().c(d!())
         }
 
@@ -509,20 +509,20 @@ macro_rules! impl_vs_methods {
         /// while operations on branches and versions are limited to their own perspective,
         /// and should not do any tracing.
         #[inline(always)]
-        fn version_pop_by_branch(&mut self, branch_name: BranchName) -> Result<()> {
+        fn version_pop_by_branch(&self, branch_name: BranchName) -> Result<()> {
             self.inner.version_pop_by_branch(branch_name).c(d!())
         }
 
         /// Create a new branch based on the head of the default branch.
         #[inline(always)]
-        fn branch_create(&mut self, branch_name: BranchName) -> Result<()> {
+        fn branch_create(&self, branch_name: BranchName) -> Result<()> {
             self.inner.branch_create(branch_name).c(d!())
         }
 
         /// Create a new branch based on the head of a specified branch.
         #[inline(always)]
         fn branch_create_by_base_branch(
-            &mut self,
+            &self,
             branch_name: BranchName,
             base_branch_name: ParentBranchName,
         ) -> Result<()> {
@@ -534,7 +534,7 @@ macro_rules! impl_vs_methods {
         /// Create a new branch based on a specified version of a specified branch.
         #[inline(always)]
         fn branch_create_by_base_branch_version(
-            &mut self,
+            &self,
             branch_name: BranchName,
             base_branch_name: ParentBranchName,
             base_version_name: VersionName,
@@ -562,7 +562,7 @@ macro_rules! impl_vs_methods {
         /// while operations on branches and versions are limited to their own perspective,
         /// and should not do any tracing.
         #[inline(always)]
-        fn branch_remove(&mut self, branch_name: BranchName) -> Result<()> {
+        fn branch_remove(&self, branch_name: BranchName) -> Result<()> {
             self.inner.branch_remove(branch_name).c(d!())
         }
 
@@ -574,7 +574,7 @@ macro_rules! impl_vs_methods {
         /// while operations on branches and versions are limited to their own perspective,
         /// and should not do any tracing.
         #[inline(always)]
-        fn branch_truncate(&mut self, branch_name: BranchName) -> Result<()> {
+        fn branch_truncate(&self, branch_name: BranchName) -> Result<()> {
             self.inner.branch_truncate(branch_name).c(d!())
         }
 
@@ -587,7 +587,7 @@ macro_rules! impl_vs_methods {
         /// and should not do any tracing.
         #[inline(always)]
         fn branch_truncate_to(
-            &mut self,
+            &self,
             branch_name: BranchName,
             last_version_name: VersionName,
         ) -> Result<()> {
@@ -604,13 +604,13 @@ macro_rules! impl_vs_methods {
         /// while operations on branches and versions are limited to their own perspective,
         /// and should not do any tracing.
         #[inline(always)]
-        fn branch_pop_version(&mut self, branch_name: BranchName) -> Result<()> {
+        fn branch_pop_version(&self, branch_name: BranchName) -> Result<()> {
             self.inner.branch_pop_version(branch_name).c(d!())
         }
 
         /// Merge a branch to its parent branch.
         #[inline(always)]
-        fn branch_merge_to_parent(&mut self, branch_name: BranchName) -> Result<()> {
+        fn branch_merge_to_parent(&self, branch_name: BranchName) -> Result<()> {
             self.inner.branch_merge_to_parent(branch_name).c(d!())
         }
 
@@ -629,14 +629,14 @@ macro_rules! impl_vs_methods {
 
         /// Clean outdated versions out of the default reserved number.
         #[inline(always)]
-        fn prune(&mut self, reserved_ver_num: Option<usize>) -> Result<()> {
+        fn prune(&self, reserved_ver_num: Option<usize>) -> Result<()> {
             self.inner.prune(reserved_ver_num).c(d!())
         }
 
         /// Clean outdated versions out of a specified reserved number.
         #[inline(always)]
         fn prune_by_branch(
-            &mut self,
+            &self,
             branch_name: BranchName,
             reserved_ver_num: Option<usize>,
         ) -> Result<()> {

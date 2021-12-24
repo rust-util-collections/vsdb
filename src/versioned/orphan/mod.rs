@@ -28,7 +28,7 @@ where
 {
     #[inline(always)]
     pub fn new(v: T) -> Self {
-        let mut hdr = MapxOrdRawKeyVs::new();
+        let hdr = MapxOrdRawKeyVs::new();
         pnk!(hdr.version_create(VersionName(&[])));
         pnk!(hdr.insert_ref(&[], &v));
         Self { inner: hdr }
@@ -40,12 +40,12 @@ where
     }
 
     #[inline(always)]
-    pub fn set_value(&mut self, v: T) -> Result<Option<T>> {
+    pub fn set_value(&self, v: T) -> Result<Option<T>> {
         self.set_value_ref(&v).c(d!())
     }
 
     #[inline(always)]
-    pub fn set_value_ref(&mut self, v: &T) -> Result<Option<T>> {
+    pub fn set_value_ref(&self, v: &T) -> Result<Option<T>> {
         self.inner.insert_ref(&[], v).c(d!())
     }
 
@@ -56,7 +56,7 @@ where
 
     #[inline(always)]
     pub fn set_value_by_branch(
-        &mut self,
+        &self,
         v: T,
         branch_name: BranchName,
     ) -> Result<Option<T>> {
@@ -65,7 +65,7 @@ where
 
     #[inline(always)]
     pub fn set_value_ref_by_branch(
-        &mut self,
+        &self,
         v: &T,
         branch_name: BranchName,
     ) -> Result<Option<T>> {

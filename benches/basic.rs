@@ -7,7 +7,7 @@ use vsdb::{versioned, Mapx, Vecx, VersionName, VsMgmt};
 
 fn bench(c: &mut Criterion) {
     let i = AtomicUsize::new(0);
-    let mut db = Vecx::new();
+    let db = Vecx::new();
 
     let mut group = c.benchmark_group("** VSDB **");
     group
@@ -30,7 +30,7 @@ fn bench(c: &mut Criterion) {
     });
 
     let i = AtomicUsize::new(0);
-    let mut db = Mapx::new();
+    let db = Mapx::new();
 
     group.bench_function(" Mapx write", |b| {
         b.iter(|| {
@@ -48,7 +48,7 @@ fn bench(c: &mut Criterion) {
     });
 
     let i = AtomicUsize::new(0);
-    let mut db = versioned::mapx_raw::MapxRawVs::new();
+    let db = versioned::mapx_raw::MapxRawVs::new();
 
     group.bench_function(" VERSIONED Mapx write", |b| {
         b.iter(|| {

@@ -7,7 +7,7 @@ fn basic_cases() {
     let cnt = 200;
 
     let hdr = {
-        let mut hdr_i = super::MapxOrdRawValue::new();
+        let hdr_i = super::MapxOrdRawValue::new();
 
         assert_eq!(0, hdr_i.len());
         (0usize..cnt).for_each(|i| {
@@ -32,7 +32,7 @@ fn basic_cases() {
         <MapxOrdRawValue<usize> as ValueEnDe>::encode(&hdr_i)
     };
 
-    let mut reloaded = pnk!(<MapxOrdRawValue<usize> as ValueEnDe>::decode(&hdr));
+    let reloaded = pnk!(<MapxOrdRawValue<usize> as ValueEnDe>::decode(&hdr));
 
     assert_eq!(cnt, reloaded.len());
 

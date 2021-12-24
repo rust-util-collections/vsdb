@@ -77,14 +77,14 @@ impl MapxRawVs {
 
     /// Insert a KV to the head version of the default branch.
     #[inline(always)]
-    pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<Option<RawValue>> {
+    pub fn insert(&self, key: &[u8], value: &[u8]) -> Result<Option<RawValue>> {
         self.inner.insert(key, value).c(d!())
     }
 
     /// Insert a KV to the head version of a specified branch.
     #[inline(always)]
     pub fn insert_by_branch(
-        &mut self,
+        &self,
         key: &[u8],
         value: &[u8],
         branch_name: BranchName,
@@ -95,14 +95,14 @@ impl MapxRawVs {
 
     /// Remove a KV from the head version of the default branch.
     #[inline(always)]
-    pub fn remove(&mut self, key: &[u8]) -> Result<Option<RawValue>> {
+    pub fn remove(&self, key: &[u8]) -> Result<Option<RawValue>> {
         self.inner.remove(key).c(d!())
     }
 
     /// Remove a KV from the head version of a specified branch.
     #[inline(always)]
     pub fn remove_by_branch(
-        &mut self,
+        &self,
         key: &[u8],
         branch_name: BranchName,
     ) -> Result<Option<RawValue>> {
@@ -406,7 +406,7 @@ impl MapxRawVs {
 impl VsMgmt for MapxRawVs {
     /// Create a new version on the default branch.
     #[inline(always)]
-    fn version_create(&mut self, version_name: VersionName) -> Result<()> {
+    fn version_create(&self, version_name: VersionName) -> Result<()> {
         self.inner.version_create(version_name.0).c(d!())
     }
 
@@ -414,7 +414,7 @@ impl VsMgmt for MapxRawVs {
     /// NOTE: the branch must has been created.
     #[inline(always)]
     fn version_create_by_branch(
-        &mut self,
+        &self,
         version_name: VersionName,
         branch_name: BranchName,
     ) -> Result<()> {
@@ -485,7 +485,7 @@ impl VsMgmt for MapxRawVs {
     /// while operations on branches and versions are limited to their own perspective,
     /// and should not do any tracing.
     #[inline(always)]
-    fn version_pop(&mut self) -> Result<()> {
+    fn version_pop(&self) -> Result<()> {
         self.inner.version_pop().c(d!())
     }
 
@@ -497,7 +497,7 @@ impl VsMgmt for MapxRawVs {
     /// while operations on branches and versions are limited to their own perspective,
     /// and should not do any tracing.
     #[inline(always)]
-    fn version_pop_by_branch(&mut self, branch_name: BranchName) -> Result<()> {
+    fn version_pop_by_branch(&self, branch_name: BranchName) -> Result<()> {
         self.inner
             .get_branch_id(branch_name)
             .c(d!("branch not found"))
@@ -506,14 +506,14 @@ impl VsMgmt for MapxRawVs {
 
     /// Create a new branch based on the head of the default branch.
     #[inline(always)]
-    fn branch_create(&mut self, branch_name: BranchName) -> Result<()> {
+    fn branch_create(&self, branch_name: BranchName) -> Result<()> {
         self.inner.branch_create(branch_name.0).c(d!())
     }
 
     /// Create a new branch based on the head of a specified branch.
     #[inline(always)]
     fn branch_create_by_base_branch(
-        &mut self,
+        &self,
         branch_name: BranchName,
         base_branch_name: ParentBranchName,
     ) -> Result<()> {
@@ -530,7 +530,7 @@ impl VsMgmt for MapxRawVs {
     /// Create a new branch based on a specified version of a specified branch.
     #[inline(always)]
     fn branch_create_by_base_branch_version(
-        &mut self,
+        &self,
         branch_name: BranchName,
         base_branch_name: ParentBranchName,
         base_version_name: VersionName,
@@ -565,7 +565,7 @@ impl VsMgmt for MapxRawVs {
     /// while operations on branches and versions are limited to their own perspective,
     /// and should not do any tracing.
     #[inline(always)]
-    fn branch_remove(&mut self, branch_name: BranchName) -> Result<()> {
+    fn branch_remove(&self, branch_name: BranchName) -> Result<()> {
         if let Some(branch_id) = self.inner.get_branch_id(branch_name) {
             self.inner.branch_remove(branch_id).c(d!())
         } else {
@@ -581,7 +581,7 @@ impl VsMgmt for MapxRawVs {
     /// while operations on branches and versions are limited to their own perspective,
     /// and should not do any tracing.
     #[inline(always)]
-    fn branch_truncate(&mut self, branch_name: BranchName) -> Result<()> {
+    fn branch_truncate(&self, branch_name: BranchName) -> Result<()> {
         self.inner
             .get_branch_id(branch_name)
             .c(d!("branch not found"))
@@ -597,7 +597,7 @@ impl VsMgmt for MapxRawVs {
     /// and should not do any tracing.
     #[inline(always)]
     fn branch_truncate_to(
-        &mut self,
+        &self,
         branch_name: BranchName,
         last_version_name: VersionName,
     ) -> Result<()> {
@@ -622,7 +622,7 @@ impl VsMgmt for MapxRawVs {
     /// while operations on branches and versions are limited to their own perspective,
     /// and should not do any tracing.
     #[inline(always)]
-    fn branch_pop_version(&mut self, branch_name: BranchName) -> Result<()> {
+    fn branch_pop_version(&self, branch_name: BranchName) -> Result<()> {
         self.inner
             .get_branch_id(branch_name)
             .c(d!("branch not found"))
@@ -631,7 +631,7 @@ impl VsMgmt for MapxRawVs {
 
     /// Merge a branch to its parent branch.
     #[inline(always)]
-    fn branch_merge_to_parent(&mut self, branch_name: BranchName) -> Result<()> {
+    fn branch_merge_to_parent(&self, branch_name: BranchName) -> Result<()> {
         self.inner
             .get_branch_id(branch_name)
             .c(d!("branch not found"))
@@ -659,14 +659,14 @@ impl VsMgmt for MapxRawVs {
 
     /// Clean outdated versions out of the default reserved number.
     #[inline(always)]
-    fn prune(&mut self, reserved_ver_num: Option<usize>) -> Result<()> {
+    fn prune(&self, reserved_ver_num: Option<usize>) -> Result<()> {
         self.inner.prune(reserved_ver_num).c(d!())
     }
 
     /// Clean outdated versions out of a specified reserved number.
     #[inline(always)]
     fn prune_by_branch(
-        &mut self,
+        &self,
         branch_name: BranchName,
         reserved_ver_num: Option<usize>,
     ) -> Result<()> {
