@@ -5,7 +5,7 @@
 use crate::{
     common::ende::{KeyEnDe, ValueEnDe},
     versioned::mapx_ord_rawkey::{MapxOrdRawKeyVs, MapxOrdRawKeyVsIter},
-    BranchName, ParentBranchName, VersionName,
+    BranchName, ParentBranchName, VersionName, VsMgmt,
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
@@ -377,7 +377,13 @@ where
             version_name,
         )
     }
+}
 
+impl<K, V> VsMgmt for MapxVs<K, V>
+where
+    K: KeyEnDe,
+    V: ValueEnDe,
+{
     crate::impl_vs_methods!();
 }
 

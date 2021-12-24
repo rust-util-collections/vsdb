@@ -233,3 +233,139 @@ pub mod mapx_ord_rawkey;
 pub mod mapx_raw;
 pub mod orphan;
 pub mod vecx;
+
+use crate::{BranchName, ParentBranchName, VersionName};
+use ruc::*;
+
+/// Methods collection of version management.
+pub trait VsMgmt {
+    /// Create a new version on the default branch.
+    fn version_create(&mut self, version_name: VersionName) -> Result<()>;
+
+    /// Create a new version on a specified branch,
+    /// NOTE: the branch must has been created.
+    fn version_create_by_branch(
+        &mut self,
+        version_name: VersionName,
+        branch_name: BranchName,
+    ) -> Result<()>;
+
+    /// Check if a verison exists on default branch.
+    fn version_exists(&self, version_name: VersionName) -> bool;
+
+    /// Check if a version exists on a specified branch(include its parents).
+    fn version_exists_on_branch(
+        &self,
+        version_name: VersionName,
+        branch_name: BranchName,
+    ) -> bool;
+
+    /// Check if a version is directly created on the default branch.
+    fn version_created(&self, version_name: VersionName) -> bool;
+
+    /// Check if a version is directly created on a specified branch(exclude its parents).
+    fn version_created_on_branch(
+        &self,
+        version_name: VersionName,
+        branch_name: BranchName,
+    ) -> bool;
+
+    /// Remove the newest version on the default branch.
+    ///
+    /// 'Write'-like operations on branches and versions are different from operations on data.
+    ///
+    /// 'Write'-like operations on data require recursive tracing of all parent nodes,
+    /// while operations on branches and versions are limited to their own perspective,
+    /// and should not do any tracing.
+    fn version_pop(&mut self) -> Result<()>;
+
+    /// Remove the newest version on a specified branch.
+    ///
+    /// 'Write'-like operations on branches and versions are different from operations on data.
+    ///
+    /// 'Write'-like operations on data require recursive tracing of all parent nodes,
+    /// while operations on branches and versions are limited to their own perspective,
+    /// and should not do any tracing.
+    fn version_pop_by_branch(&mut self, branch_name: BranchName) -> Result<()>;
+
+    /// Create a new branch based on the head of the default branch.
+    fn branch_create(&mut self, branch_name: BranchName) -> Result<()>;
+
+    /// Create a new branch based on the head of a specified branch.
+    fn branch_create_by_base_branch(
+        &mut self,
+        branch_name: BranchName,
+        base_branch_name: ParentBranchName,
+    ) -> Result<()>;
+
+    /// Create a new branch based on a specified version of a specified branch.
+    fn branch_create_by_base_branch_version(
+        &mut self,
+        branch_name: BranchName,
+        base_branch_name: ParentBranchName,
+        base_version_name: VersionName,
+    ) -> Result<()>;
+
+    /// Check if a branch exists or not.
+    fn branch_exists(&self, branch_name: BranchName) -> bool;
+
+    /// Remove a branch, remove all changes directly made by this branch.
+    ///
+    /// 'Write'-like operations on branches and versions are different from operations on data.
+    ///
+    /// 'Write'-like operations on data require recursive tracing of all parent nodes,
+    /// while operations on branches and versions are limited to their own perspective,
+    /// and should not do any tracing.
+    fn branch_remove(&mut self, branch_name: BranchName) -> Result<()>;
+
+    /// Remove all changes directly made by versions(bigger than `last_version_id`) of this branch.
+    ///
+    /// 'Write'-like operations on branches and versions are different from operations on data.
+    ///
+    /// 'Write'-like operations on data require recursive tracing of all parent nodes,
+    /// while operations on branches and versions are limited to their own perspective,
+    /// and should not do any tracing.
+    fn branch_truncate(&mut self, branch_name: BranchName) -> Result<()>;
+
+    /// Remove all changes directly made by versions(bigger than `last_version_id`) of this branch.
+    ///
+    /// 'Write'-like operations on branches and versions are different from operations on data.
+    ///
+    /// 'Write'-like operations on data require recursive tracing of all parent nodes,
+    /// while operations on branches and versions are limited to their own perspective,
+    /// and should not do any tracing.
+    fn branch_truncate_to(
+        &mut self,
+        branch_name: BranchName,
+        last_version_name: VersionName,
+    ) -> Result<()>;
+
+    /// Remove the newest version on a specified branch.
+    ///
+    /// 'Write'-like operations on branches and versions are different from operations on data.
+    ///
+    /// 'Write'-like operations on data require recursive tracing of all parent nodes,
+    /// while operations on branches and versions are limited to their own perspective,
+    /// and should not do any tracing.
+    fn branch_pop_version(&mut self, branch_name: BranchName) -> Result<()>;
+
+    /// Merge a branch to its parent branch.
+    fn branch_merge_to_parent(&mut self, branch_name: BranchName) -> Result<()>;
+
+    /// Check if a branch has children branches.
+    fn branch_has_children(&self, branch_name: BranchName) -> bool;
+
+    /// Make a branch to be default,
+    /// all default operations will be applied to it.
+    fn branch_set_default(&mut self, branch_name: BranchName) -> Result<()>;
+
+    /// Clean outdated versions out of the default reserved number.
+    fn prune(&mut self, reserved_ver_num: Option<usize>) -> Result<()>;
+
+    /// Clean outdated versions out of a specified reserved number.
+    fn prune_by_branch(
+        &mut self,
+        branch_name: BranchName,
+        reserved_ver_num: Option<usize>,
+    ) -> Result<()>;
+}

@@ -5,6 +5,7 @@
 use crate::{
     common::{ende::ValueEnDe, BranchName, ParentBranchName, RawKey, VersionName},
     versioned::mapx_raw::{MapxRawVs, MapxRawVsIter},
+    VsMgmt,
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
@@ -390,7 +391,12 @@ where
     pub fn clear(&mut self) {
         self.inner.clear();
     }
+}
 
+impl<V> VsMgmt for MapxOrdRawKeyVs<V>
+where
+    V: ValueEnDe,
+{
     crate::impl_vs_methods!();
 }
 
@@ -432,14 +438,14 @@ macro_rules! impl_vs_methods {
     () => {
         /// Create a new version on the default branch.
         #[inline(always)]
-        pub fn version_create(&mut self, version_name: VersionName) -> Result<()> {
+        fn version_create(&mut self, version_name: VersionName) -> Result<()> {
             self.inner.version_create(version_name).c(d!())
         }
 
         /// Create a new version on a specified branch,
         /// NOTE: the branch must has been created.
         #[inline(always)]
-        pub fn version_create_by_branch(
+        fn version_create_by_branch(
             &mut self,
             version_name: VersionName,
             branch_name: BranchName,
@@ -451,13 +457,13 @@ macro_rules! impl_vs_methods {
 
         /// Check if a verison exists on default branch.
         #[inline(always)]
-        pub fn version_exists(&self, version_name: VersionName) -> bool {
+        fn version_exists(&self, version_name: VersionName) -> bool {
             self.inner.version_exists(version_name)
         }
 
         /// Check if a version exists on a specified branch(include its parents).
         #[inline(always)]
-        pub fn version_exists_on_branch(
+        fn version_exists_on_branch(
             &self,
             version_name: VersionName,
             branch_name: BranchName,
@@ -468,13 +474,13 @@ macro_rules! impl_vs_methods {
 
         /// Check if a version is directly created on the default branch.
         #[inline(always)]
-        pub fn version_created(&self, version_name: VersionName) -> bool {
+        fn version_created(&self, version_name: VersionName) -> bool {
             self.inner.version_created(version_name)
         }
 
         /// Check if a version is directly created on a specified branch(exclude its parents).
         #[inline(always)]
-        pub fn version_created_on_branch(
+        fn version_created_on_branch(
             &self,
             version_name: VersionName,
             branch_name: BranchName,
@@ -491,7 +497,7 @@ macro_rules! impl_vs_methods {
         /// while operations on branches and versions are limited to their own perspective,
         /// and should not do any tracing.
         #[inline(always)]
-        pub fn version_pop(&mut self) -> Result<()> {
+        fn version_pop(&mut self) -> Result<()> {
             self.inner.version_pop().c(d!())
         }
 
@@ -503,19 +509,19 @@ macro_rules! impl_vs_methods {
         /// while operations on branches and versions are limited to their own perspective,
         /// and should not do any tracing.
         #[inline(always)]
-        pub fn version_pop_by_branch(&mut self, branch_name: BranchName) -> Result<()> {
+        fn version_pop_by_branch(&mut self, branch_name: BranchName) -> Result<()> {
             self.inner.version_pop_by_branch(branch_name).c(d!())
         }
 
         /// Create a new branch based on the head of the default branch.
         #[inline(always)]
-        pub fn branch_create(&mut self, branch_name: BranchName) -> Result<()> {
+        fn branch_create(&mut self, branch_name: BranchName) -> Result<()> {
             self.inner.branch_create(branch_name).c(d!())
         }
 
         /// Create a new branch based on the head of a specified branch.
         #[inline(always)]
-        pub fn branch_create_by_base_branch(
+        fn branch_create_by_base_branch(
             &mut self,
             branch_name: BranchName,
             base_branch_name: ParentBranchName,
@@ -527,7 +533,7 @@ macro_rules! impl_vs_methods {
 
         /// Create a new branch based on a specified version of a specified branch.
         #[inline(always)]
-        pub fn branch_create_by_base_branch_version(
+        fn branch_create_by_base_branch_version(
             &mut self,
             branch_name: BranchName,
             base_branch_name: ParentBranchName,
@@ -544,7 +550,7 @@ macro_rules! impl_vs_methods {
 
         /// Check if a branch exists or not.
         #[inline(always)]
-        pub fn branch_exists(&self, branch_name: BranchName) -> bool {
+        fn branch_exists(&self, branch_name: BranchName) -> bool {
             self.inner.branch_exists(branch_name)
         }
 
@@ -556,7 +562,7 @@ macro_rules! impl_vs_methods {
         /// while operations on branches and versions are limited to their own perspective,
         /// and should not do any tracing.
         #[inline(always)]
-        pub fn branch_remove(&mut self, branch_name: BranchName) -> Result<()> {
+        fn branch_remove(&mut self, branch_name: BranchName) -> Result<()> {
             self.inner.branch_remove(branch_name).c(d!())
         }
 
@@ -568,7 +574,7 @@ macro_rules! impl_vs_methods {
         /// while operations on branches and versions are limited to their own perspective,
         /// and should not do any tracing.
         #[inline(always)]
-        pub fn branch_truncate(&mut self, branch_name: BranchName) -> Result<()> {
+        fn branch_truncate(&mut self, branch_name: BranchName) -> Result<()> {
             self.inner.branch_truncate(branch_name).c(d!())
         }
 
@@ -580,7 +586,7 @@ macro_rules! impl_vs_methods {
         /// while operations on branches and versions are limited to their own perspective,
         /// and should not do any tracing.
         #[inline(always)]
-        pub fn branch_truncate_to(
+        fn branch_truncate_to(
             &mut self,
             branch_name: BranchName,
             last_version_name: VersionName,
@@ -598,38 +604,38 @@ macro_rules! impl_vs_methods {
         /// while operations on branches and versions are limited to their own perspective,
         /// and should not do any tracing.
         #[inline(always)]
-        pub fn branch_pop_version(&mut self, branch_name: BranchName) -> Result<()> {
+        fn branch_pop_version(&mut self, branch_name: BranchName) -> Result<()> {
             self.inner.branch_pop_version(branch_name).c(d!())
         }
 
         /// Merge a branch to its parent branch.
         #[inline(always)]
-        pub fn branch_merge_to_parent(&mut self, branch_name: BranchName) -> Result<()> {
+        fn branch_merge_to_parent(&mut self, branch_name: BranchName) -> Result<()> {
             self.inner.branch_merge_to_parent(branch_name).c(d!())
         }
 
         /// Check if a branch has children branches.
         #[inline(always)]
-        pub fn branch_has_children(&self, branch_name: BranchName) -> bool {
+        fn branch_has_children(&self, branch_name: BranchName) -> bool {
             self.inner.branch_has_children(branch_name)
         }
 
         /// Make a branch to be default,
         /// all default operations will be applied to it.
         #[inline(always)]
-        pub fn branch_set_default(&mut self, branch_name: BranchName) -> Result<()> {
+        fn branch_set_default(&mut self, branch_name: BranchName) -> Result<()> {
             self.inner.branch_set_default(branch_name).c(d!())
         }
 
         /// Clean outdated versions out of the default reserved number.
         #[inline(always)]
-        pub fn prune(&mut self, reserved_ver_num: Option<usize>) -> Result<()> {
+        fn prune(&mut self, reserved_ver_num: Option<usize>) -> Result<()> {
             self.inner.prune(reserved_ver_num).c(d!())
         }
 
         /// Clean outdated versions out of a specified reserved number.
         #[inline(always)]
-        pub fn prune_by_branch(
+        fn prune_by_branch(
             &mut self,
             branch_name: BranchName,
             reserved_ver_num: Option<usize>,

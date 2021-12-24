@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     common::{BranchName, ParentBranchName, VersionName, BRANCH_ANCESTORS_LIMIT},
-    ValueEnDe,
+    ValueEnDe, VsMgmt,
 };
 use std::{sync::mpsc::channel, thread};
 

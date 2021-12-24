@@ -4,7 +4,7 @@
 
 use crate::{
     versioned::mapx_ord_rawkey::MapxOrdRawKeyVs, BranchName, ParentBranchName,
-    ValueEnDe, VersionName,
+    ValueEnDe, VersionName, VsMgmt,
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
@@ -81,6 +81,11 @@ where
         self.inner
             .get_by_branch_version(&[], branch_name, version_name)
     }
+}
 
+impl<T> VsMgmt for OrphanVs<T>
+where
+    T: ValueEnDe,
+{
     crate::impl_vs_methods!();
 }

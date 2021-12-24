@@ -10,7 +10,7 @@ use std::{
     sync::{mpsc::channel, Mutex},
     thread,
 };
-use vsdb::{BranchName, MapxVs, OrphanVs, VecxVs, VersionName};
+use vsdb::{BranchName, MapxVs, OrphanVs, VecxVs, VersionName, VsMgmt};
 
 type Amount = u64;
 type Address = Vec<u8>;

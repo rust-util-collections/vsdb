@@ -3,7 +3,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
 };
-use vsdb::{versioned, Mapx, Vecx, VersionName};
+use vsdb::{versioned, Mapx, Vecx, VersionName, VsMgmt};
 
 fn bench(c: &mut Criterion) {
     let i = AtomicUsize::new(0);

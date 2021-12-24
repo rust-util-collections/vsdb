@@ -111,6 +111,8 @@ pub use versioned::mapx_ord::MapxOrdVs;
 pub use versioned::orphan::OrphanVs;
 pub use versioned::vecx::VecxVs;
 
+pub use versioned::VsMgmt;
+
 pub use merkle::MerkleTree;
 
 pub use common::{
