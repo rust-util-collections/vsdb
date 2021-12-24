@@ -154,7 +154,7 @@ pub use versioned::orphan::OrphanVs;
 pub use versioned::vecx::VecxVs;
 
 pub use versioned::VsMgmt;
-pub use vsmgmt_derive::Vs;
+pub use vsdb_derive::Vs;
 
 pub use merkle::MerkleTree;
 
