@@ -352,7 +352,7 @@ pub trait VsMgmt {
     ) -> Result<()>;
 }
 
-#[macro_export(crate)]
+#[macro_export(super)]
 macro_rules! impl_vs_methods {
     () => {
         /// Create a new version on the default branch.
@@ -566,7 +566,9 @@ macro_rules! impl_vs_methods {
     };
 }
 
-#[macro_export(crate)]
+/// Add nope implementations of `VsMgmt`
+/// for types that are not defined in VSDB.
+#[macro_export]
 macro_rules! impl_vs_methods_nope {
     () => {
         #[inline(always)]
