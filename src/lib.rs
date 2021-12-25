@@ -108,15 +108,17 @@
 //!     b: MapxOrdVs<String, u8>
 //! }
 //!
+//! #[derive(Vs)]
 //! struct SubItem2 {
 //!     a: i8,
 //!     b: u128
 //! }
 //!
-//! // A nope implementation of `VsMgmt` for custom stateless types.
-//! impl VsMgmt for SubItem2 {
-//!     impl_vs_methods_nope!();
-//! }
+//! // // A nope implementation of `VsMgmt` for custom stateless types.
+//! // // the `#[derive(Vs)]` on 'SubItem2' is same as this implementation.
+//! // impl VsMgmt for SubItem2 {
+//! //     impl_vs_methods_nope!();
+//! // }
 //! ```
 //!
 //! **But** this one can NOT be handled correctly by `#[derive(Vs)]`:
