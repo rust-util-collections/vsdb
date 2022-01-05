@@ -1,9 +1,12 @@
-![](https://tokei.rs/b1/github/ccmlm/vsdb)
-![GitHub top language](https://img.shields.io/github/languages/top/ccmlm/vsdb)
+![](https://tokei.rs/b1/github/ccmlm/VSDB)
+![GitHub top language](https://img.shields.io/github/languages/top/ccmlm/VSDB)
+![GitHub Workflow Status](https://img.shields.io/github/workflow/status/ccmlm/VSDB/Rust)
+![GitHub issues](https://img.shields.io/github/issues-raw/ccmlm/VSDB)
+![GitHub pull requests](https://img.shields.io/github/issues-pr-raw/ccmlm/VSDB)
 
 # VSDB
 
-VSDB is a 'Git' in the form of a KV database.
+VSDB is a 'Git' in the form of KV-database.
 
 Based on the powerful version control function of VSDB, you can easily give your data structure the ability to version management.
 
