@@ -118,9 +118,8 @@ impl Engine for RocksEngine {
         let mut z = LK.lock();
 
         // step 1
-        let ret = crate::parse_int!(
-            self.meta.get(self.prefix_allocator.key).unwrap().unwrap(),
-            BranchID
+        let ret = crate::parse_prefix!(
+            self.meta.get(self.prefix_allocator.key).unwrap().unwrap()
         );
 
         // step 2

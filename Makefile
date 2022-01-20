@@ -27,8 +27,10 @@ test:
 bench:
 	- rm -rf ~/.vsdb
 	cargo bench
+	du -sh ~/.vsdb
 	- rm -rf ~/.vsdb
 	cargo bench --no-default-features --features "rocks_engine,cbor_ende"
+	du -sh ~/.vsdb
 
 fmt:
 	bash tools/fmt.sh

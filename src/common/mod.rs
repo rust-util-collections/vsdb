@@ -45,7 +45,7 @@ pub struct VersionName<'a>(pub &'a [u8]);
 
 const RESERVED_ID_CNT: Prefix = 4096_0000;
 pub(crate) const BIGGEST_RESERVED_ID: Prefix = RESERVED_ID_CNT - 1;
-pub(crate) const NULL: BranchID = BIGGEST_RESERVED_ID;
+pub(crate) const NULL: BranchID = BIGGEST_RESERVED_ID as BranchID;
 
 pub(crate) const INITIAL_BRANCH_ID: BranchID = 0;
 pub(crate) const INITIAL_BRANCH_NAME: &[u8] = b"main";
