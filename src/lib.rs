@@ -145,13 +145,13 @@
 //! - \[**default**] `sled_engine`, use sled as the backend database
 //!     - Faster compilation speed
 //!     - Support for compiling into a statically linked binary
-//! - `rocks_engine`, use rocksdb as the backedn database
+//! - `rocks_engine`, use rocksdb as the backend database
 //!     - Faster running speed
 //!     - Can not be compiled into a statically linked binary
-//! - \[**default**] `cbor_ende`, use cbor as the `en/de`coder
+//! - \[**default**] `cbor_codec`, use cbor as the codec
 //!     - Faster running speed
-//! - `bcs_ende`, use bcs as the `en/de`coder
-//!     - Created by the libre project of Facebook
+//! - `bcs_codec`, use bcs as the codec
+//!     - Created by the 'Libre' project of Facebook
 //!     - Security reinforcement for blockchain scenarios
 //!
 //! ## Low-level design
