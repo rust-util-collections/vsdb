@@ -81,6 +81,18 @@ where
     }
 
     #[inline(always)]
+    pub fn get_mut(&self, key: &K) -> Option<ValueMut<'_, K>> {
+        self.inner
+            .get(&key.to_bytes())
+            .map(|v| ValueMut::new(self, key.clone(), v))
+    }
+
+    #[inline(always)]
+    pub fn contains_key(&self, key: &K) -> bool {
+        self.inner.contains_key(&key.to_bytes())
+    }
+
+    #[inline(always)]
     pub fn get_le(&self, key: &K) -> Option<(K, RawValue)> {
         self.inner
             .get_le(&key.to_bytes())
@@ -92,13 +104,6 @@ where
         self.inner
             .get_ge(&key.to_bytes())
             .map(|(k, v)| (pnk!(K::from_bytes(k)), v))
-    }
-
-    #[inline(always)]
-    pub fn get_mut(&self, key: &K) -> Option<ValueMut<'_, K>> {
-        self.inner
-            .get(&key.to_bytes())
-            .map(|v| ValueMut::new(self, key.clone(), v))
     }
 
     #[inline(always)]
@@ -199,11 +204,6 @@ where
     #[inline(always)]
     pub fn last(&self) -> Option<(K, RawValue)> {
         self.iter().next_back()
-    }
-
-    #[inline(always)]
-    pub fn contains_key(&self, key: &K) -> bool {
-        self.inner.contains_key(&key.to_bytes())
     }
 
     #[inline(always)]

@@ -8,6 +8,7 @@ use crate::{
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
+use std::ops::{Deref, DerefMut};
 
 /// Used to express some 'non-collection' types,
 /// such as any type of integer, an enum value, etc..
@@ -27,16 +28,30 @@ where
     T: ValueEnDe,
 {
     #[inline(always)]
-    pub fn new(v: T) -> Self {
+    pub fn new(version: VersionName, v: T) -> Self {
         let hdr = MapxOrdRawKeyVs::new();
-        pnk!(hdr.version_create(VersionName(&[])));
+        pnk!(hdr.version_create(version));
         pnk!(hdr.insert_ref(&[], &v));
         Self { inner: hdr }
     }
 
     #[inline(always)]
-    pub fn get_value(&self) -> Option<T> {
-        self.inner.get(&[])
+    pub fn get_value(&self) -> T {
+        // value of the default branch must exists
+        self.inner.get(&[]).unwrap()
+    }
+
+    /// Get the mutable handler of the value.
+    ///
+    /// NOTE:
+    /// - Always use this method to change value
+    ///     - `*(<Orphan>).get_mut() = ...`
+    /// - **NEVER** do this:
+    ///     - `*(&mut <Orphan>) = Orphan::new(...)`
+    ///     - OR you will loss the 'versioned' ability of this object
+    pub fn get_mut(&self) -> ValueMut<'_, T> {
+        let value = self.get_value();
+        ValueMut { hdr: self, value }
     }
 
     #[inline(always)]
@@ -88,4 +103,41 @@ where
     T: ValueEnDe,
 {
     crate::impl_vs_methods!();
+}
+
+/// A type returned by `get_mut()`.
+pub struct ValueMut<'a, T>
+where
+    T: ValueEnDe,
+{
+    hdr: &'a OrphanVs<T>,
+    value: T,
+}
+
+impl<'a, T> Drop for ValueMut<'a, T>
+where
+    T: ValueEnDe,
+{
+    fn drop(&mut self) {
+        pnk!(self.hdr.set_value_ref(&self.value));
+    }
+}
+
+impl<'a, T> Deref for ValueMut<'a, T>
+where
+    T: ValueEnDe,
+{
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<'a, T> DerefMut for ValueMut<'a, T>
+where
+    T: ValueEnDe,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
+    }
 }

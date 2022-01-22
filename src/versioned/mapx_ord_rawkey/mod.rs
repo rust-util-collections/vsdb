@@ -9,7 +9,10 @@ use crate::{
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
-use std::{marker::PhantomData, ops::RangeBounds};
+use std::{
+    marker::PhantomData,
+    ops::{Deref, DerefMut, RangeBounds},
+};
 
 /// Documents => [MapxRawVs](crate::versioned::mapx_raw::MapxRawVs)
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -48,6 +51,16 @@ where
         self.inner
             .get(key)
             .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
+    }
+
+    #[inline(always)]
+    pub fn get_mut<'a>(&'a self, key: &'a [u8]) -> Option<ValueMut<'_, V>> {
+        self.get(key).map(move |v| ValueMut::new(self, key, v))
+    }
+
+    #[inline(always)]
+    pub fn entry_ref<'a>(&'a self, key: &'a [u8]) -> Entry<'a, V> {
+        Entry { key, hdr: self }
     }
 
     #[inline(always)]
@@ -432,3 +445,64 @@ where
 }
 
 impl<'a, V> ExactSizeIterator for MapxOrdRawKeyVsIter<'a, V> where V: ValueEnDe {}
+
+#[derive(PartialEq, Eq, Debug)]
+pub struct ValueMut<'a, V: ValueEnDe> {
+    hdr: &'a MapxOrdRawKeyVs<V>,
+    key: &'a [u8],
+    value: V,
+}
+
+impl<'a, V> ValueMut<'a, V>
+where
+    V: ValueEnDe,
+{
+    fn new(hdr: &'a MapxOrdRawKeyVs<V>, key: &'a [u8], value: V) -> Self {
+        ValueMut { hdr, key, value }
+    }
+}
+
+impl<'a, V> Drop for ValueMut<'a, V>
+where
+    V: ValueEnDe,
+{
+    fn drop(&mut self) {
+        pnk!(self.hdr.insert_ref(self.key, &self.value));
+    }
+}
+
+impl<'a, V> Deref for ValueMut<'a, V>
+where
+    V: ValueEnDe,
+{
+    type Target = V;
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<'a, V> DerefMut for ValueMut<'a, V>
+where
+    V: ValueEnDe,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
+    }
+}
+
+pub struct Entry<'a, V: ValueEnDe> {
+    key: &'a [u8],
+    hdr: &'a MapxOrdRawKeyVs<V>,
+}
+
+impl<'a, V> Entry<'a, V>
+where
+    V: ValueEnDe,
+{
+    pub fn or_insert(self, default: &V) -> ValueMut<'a, V> {
+        if !self.hdr.contains_key(self.key) {
+            pnk!(self.hdr.insert_ref(self.key, default));
+        }
+        pnk!(self.hdr.get_mut(self.key))
+    }
+}

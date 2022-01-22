@@ -82,6 +82,22 @@ where
     }
 
     #[inline(always)]
+    pub fn get_mut(&self, key: &[u8]) -> Option<ValueMut<'_, V>> {
+        self.inner.get(key).map(|v| {
+            ValueMut::new(
+                self,
+                key.to_vec().into_boxed_slice(),
+                <V as ValueEnDe>::decode(&v).unwrap(),
+            )
+        })
+    }
+
+    #[inline(always)]
+    pub fn contains_key(&self, key: &[u8]) -> bool {
+        self.inner.contains_key(key)
+    }
+
+    #[inline(always)]
     pub fn get_le(&self, key: &[u8]) -> Option<(RawKey, V)> {
         self.inner
             .get_le(key)
@@ -93,17 +109,6 @@ where
         self.inner
             .get_ge(key)
             .map(|(k, v)| (k, <V as ValueEnDe>::decode(&v).unwrap()))
-    }
-
-    #[inline(always)]
-    pub fn get_mut(&self, key: &[u8]) -> Option<ValueMut<'_, V>> {
-        self.inner.get(key).map(|v| {
-            ValueMut::new(
-                self,
-                key.to_vec().into_boxed_slice(),
-                <V as ValueEnDe>::decode(&v).unwrap(),
-            )
-        })
     }
 
     #[inline(always)]
@@ -130,7 +135,11 @@ where
 
     // used to support efficient versioned-implementations
     #[inline(always)]
-    pub fn insert_ref_encoded_value(&self, key: &[u8], value: &[u8]) -> Option<V> {
+    pub(crate) fn insert_ref_encoded_value(
+        &self,
+        key: &[u8],
+        value: &[u8],
+    ) -> Option<V> {
         self.inner
             .insert(key, value)
             .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
@@ -208,11 +217,6 @@ where
     }
 
     #[inline(always)]
-    pub fn contains_key(&self, key: &[u8]) -> bool {
-        self.inner.contains_key(key)
-    }
-
-    #[inline(always)]
     pub fn remove(&self, key: &[u8]) -> Option<V> {
         self.inner
             .remove(key)
@@ -263,7 +267,6 @@ where
     V: ValueEnDe,
 {
     type Target = V;
-
     fn deref(&self) -> &Self::Target {
         &self.value
     }

@@ -86,6 +86,11 @@ where
     }
 
     #[inline(always)]
+    pub fn contains_key(&self, key: &K) -> bool {
+        self.inner.contains_key(&key.encode())
+    }
+
+    #[inline(always)]
     pub fn len(&self) -> usize {
         self.inner.len()
     }
@@ -131,11 +136,6 @@ where
     #[inline(always)]
     pub fn values(&self) -> MapxValues<K, V> {
         MapxValues { iter: self.iter() }
-    }
-
-    #[inline(always)]
-    pub fn contains_key(&self, key: &K) -> bool {
-        self.inner.contains_key(&key.encode())
     }
 
     #[inline(always)]

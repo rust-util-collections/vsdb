@@ -43,7 +43,7 @@ use crate::{
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
-use std::ops::RangeBounds;
+use std::ops::{Deref, DerefMut, RangeBounds};
 
 pub(crate) use backend::MapxRawVsIter;
 
@@ -107,6 +107,16 @@ impl MapxRawVs {
     #[inline(always)]
     pub fn get(&self, key: &[u8]) -> Option<RawValue> {
         self.inner.get(key)
+    }
+
+    #[inline(always)]
+    pub fn get_mut<'a>(&'a self, key: &'a [u8]) -> Option<ValueMut<'a>> {
+        self.get(key).map(move |v| ValueMut::new(self, key, v))
+    }
+
+    #[inline(always)]
+    pub fn entry_ref<'a>(&'a self, key: &'a [u8]) -> Entry<'a> {
+        Entry { key, hdr: self }
     }
 
     /// Get the value of a key from the head of a specified branch.
@@ -669,5 +679,52 @@ impl VsMgmt for MapxRawVs {
             .and_then(|br_id| {
                 self.inner.prune_by_branch(br_id, reserved_ver_num).c(d!())
             })
+    }
+}
+
+#[derive(PartialEq, Eq, Debug)]
+pub struct ValueMut<'a> {
+    hdr: &'a MapxRawVs,
+    key: &'a [u8],
+    value: RawValue,
+}
+
+impl<'a> ValueMut<'a> {
+    fn new(hdr: &'a MapxRawVs, key: &'a [u8], value: RawValue) -> Self {
+        ValueMut { hdr, key, value }
+    }
+}
+
+impl<'a> Drop for ValueMut<'a> {
+    fn drop(&mut self) {
+        pnk!(self.hdr.insert(self.key, &self.value));
+    }
+}
+
+impl<'a> Deref for ValueMut<'a> {
+    type Target = RawValue;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<'a> DerefMut for ValueMut<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
+    }
+}
+
+pub struct Entry<'a> {
+    key: &'a [u8],
+    hdr: &'a MapxRawVs,
+}
+
+impl<'a> Entry<'a> {
+    pub fn or_insert(self, default: &'a [u8]) -> ValueMut<'a> {
+        if !self.hdr.contains_key(self.key) {
+            pnk!(self.hdr.insert(self.key, default));
+        }
+        pnk!(self.hdr.get_mut(self.key))
     }
 }
