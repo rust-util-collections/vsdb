@@ -214,6 +214,7 @@ use crate::{
     },
     BranchName, ParentBranchName, VersionName,
 };
+use primitive_types::{H128, H160, H256, H512, U128, U256, U512};
 use ruc::*;
 use std::{
     collections::{
@@ -793,7 +794,14 @@ impl_for_primitives!(
     AtomicU16,
     AtomicU32,
     AtomicU64,
-    AtomicU8
+    AtomicU8,
+    U128,
+    U256,
+    U512,
+    H128,
+    H160,
+    H256,
+    H512
 );
 
 /// A helper for implementing `VsMgmt` for collection types,
