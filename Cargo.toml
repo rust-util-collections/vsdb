@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "0.13.1"
+version = "0.13.2"
 authors = ["fanhui.x@gmail.com"]
 edition = "2021"
 description = "Versioned Stateful DataBase, mainly used in blockchain scene."
@@ -17,7 +17,7 @@ serde = { version = "1.0", features = ["derive"] }
 parking_lot = "0.11.2"
 fast-math = "0.1"
 sha3 = "0.10"
-vsdb_derive = "0.1"
+vsdb_derive = "0.2.0"
 
 serde_cbor = { version = "0.11", optional = true }
 bcs = { version = "0.1.3", optional = true }
