@@ -504,7 +504,7 @@ where
     K: KeyEnDe,
     V: ValueEnDe,
 {
-    pub fn or_insert(self, default: &V) -> ValueMut<'a, K, V> {
+    pub fn or_insert_ref(self, default: &V) -> ValueMut<'a, K, V> {
         if !self.hdr.contains_key(self.key) {
             pnk!(self.hdr.insert_ref(self.key, default));
         }

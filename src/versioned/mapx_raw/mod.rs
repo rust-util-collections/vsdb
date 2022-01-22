@@ -721,7 +721,7 @@ pub struct Entry<'a> {
 }
 
 impl<'a> Entry<'a> {
-    pub fn or_insert(self, default: &'a [u8]) -> ValueMut<'a> {
+    pub fn or_insert_ref(self, default: &'a [u8]) -> ValueMut<'a> {
         if !self.hdr.contains_key(self.key) {
             pnk!(self.hdr.insert(self.key, default));
         }

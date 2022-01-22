@@ -499,7 +499,7 @@ impl<'a, V> Entry<'a, V>
 where
     V: ValueEnDe,
 {
-    pub fn or_insert(self, default: &V) -> ValueMut<'a, V> {
+    pub fn or_insert_ref(self, default: &V) -> ValueMut<'a, V> {
         if !self.hdr.contains_key(self.key) {
             pnk!(self.hdr.insert_ref(self.key, default));
         }
