@@ -95,12 +95,9 @@ use std::{
 
 /// Used to express some 'non-collection' types,
 /// such as any type of integer, an enum value, etc..
-#[derive(Clone, Copy, Serialize, Deserialize, Debug, Eq)]
+#[derive(Clone, Copy, Serialize, Deserialize, Debug)]
 #[serde(bound = "")]
-pub struct Orphan<T>
-where
-    T: ValueEnDe,
-{
+pub struct Orphan<T> {
     inner: MapxOrdRawKey<T>,
 }
 
@@ -149,6 +146,8 @@ where
 
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
+
+impl<T> Eq for Orphan<T> where T: ValueEnDe + PartialEq {}
 
 impl<T> PartialEq for Orphan<T>
 where

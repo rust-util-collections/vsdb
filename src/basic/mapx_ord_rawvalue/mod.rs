@@ -46,10 +46,7 @@ use std::{
 
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
-pub struct MapxOrdRawValue<K>
-where
-    K: KeyEnDeOrdered,
-{
+pub struct MapxOrdRawValue<K> {
     inner: MapxRaw,
     p: PhantomData<K>,
 }

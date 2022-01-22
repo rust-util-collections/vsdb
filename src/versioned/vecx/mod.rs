@@ -13,7 +13,7 @@ use std::ops::{Deref, DerefMut};
 /// Documents => [MapxRawVs](crate::versioned::mapx_raw::MapxRawVs)
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
-pub struct VecxVs<T: ValueEnDe> {
+pub struct VecxVs<T> {
     inner: MapxOrdRawKeyVs<T>,
 }
 

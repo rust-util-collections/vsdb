@@ -16,10 +16,7 @@ use std::ops::{Deref, DerefMut};
 /// Documents => [MapxRawVs](crate::versioned::mapx_raw::MapxRawVs)
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(bound = "")]
-pub struct OrphanVs<T>
-where
-    T: ValueEnDe,
-{
+pub struct OrphanVs<T> {
     inner: MapxOrdRawKeyVs<T>,
 }
 
