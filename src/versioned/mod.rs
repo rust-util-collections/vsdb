@@ -206,7 +206,14 @@ pub mod mapx_raw;
 pub mod orphan;
 pub mod vecx;
 
-use crate::{BranchName, ParentBranchName, VersionName};
+use crate::{
+    basic::{
+        mapx::Mapx, mapx_ord::MapxOrd, mapx_ord_rawkey::MapxOrdRawKey,
+        mapx_ord_rawvalue::MapxOrdRawValue, mapx_raw::MapxRaw, orphan::Orphan,
+        vecx::Vecx, vecx_raw::VecxRaw,
+    },
+    BranchName, ParentBranchName, VersionName,
+};
 use ruc::*;
 use std::{
     collections::{
@@ -691,6 +698,38 @@ macro_rules! impl_vs_methods_nope {
 }
 
 impl<T: ?Sized> VsMgmt for PhantomData<T> {
+    impl_vs_methods_nope!();
+}
+
+impl<K, V> VsMgmt for Mapx<K, V> {
+    impl_vs_methods_nope!();
+}
+
+impl<K, V> VsMgmt for MapxOrd<K, V> {
+    impl_vs_methods_nope!();
+}
+
+impl<V> VsMgmt for MapxOrdRawKey<V> {
+    impl_vs_methods_nope!();
+}
+
+impl<K> VsMgmt for MapxOrdRawValue<K> {
+    impl_vs_methods_nope!();
+}
+
+impl VsMgmt for MapxRaw {
+    impl_vs_methods_nope!();
+}
+
+impl<T> VsMgmt for Orphan<T> {
+    impl_vs_methods_nope!();
+}
+
+impl<V> VsMgmt for Vecx<V> {
+    impl_vs_methods_nope!();
+}
+
+impl VsMgmt for VecxRaw {
     impl_vs_methods_nope!();
 }
 

@@ -42,11 +42,7 @@ use std::marker::PhantomData;
 
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
-pub struct Mapx<K, V>
-where
-    K: KeyEnDe,
-    V: ValueEnDe,
-{
+pub struct Mapx<K, V> {
     inner: MapxOrdRawKey<V>,
     pk: PhantomData<K>,
 }

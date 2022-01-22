@@ -150,3 +150,34 @@ pub fn vsdb_set_base_dir(dir: String) -> Result<()> {
 pub fn vsdb_flush() {
     VSDB.flush();
 }
+
+macro_rules! impl_from_for_name {
+    ($target: tt) => {
+        impl<'a> From<&'a [u8]> for $target<'a> {
+            fn from(t: &'a [u8]) -> Self {
+                $target(t)
+            }
+        }
+        impl<'a> From<&'a Vec<u8>> for $target<'a> {
+            fn from(t: &'a Vec<u8>) -> Self {
+                $target(t.as_slice())
+            }
+        }
+        impl<'a> From<&'a str> for $target<'a> {
+            fn from(t: &'a str) -> Self {
+                $target(t.as_bytes())
+            }
+        }
+        impl<'a> From<&'a String> for $target<'a> {
+            fn from(t: &'a String) -> Self {
+                $target(t.as_bytes())
+            }
+        }
+    };
+    ($target: tt, $($t: tt),+) => {
+        impl_from_for_name!($target);
+        impl_from_for_name!($($t), +);
+    };
+}
+
+impl_from_for_name!(BranchName, ParentBranchName, VersionName);

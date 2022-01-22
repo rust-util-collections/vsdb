@@ -17,10 +17,7 @@ use std::{
 /// Documents => [MapxRawVs](crate::versioned::mapx_raw::MapxRawVs)
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
-pub struct MapxOrdRawKeyVs<V>
-where
-    V: ValueEnDe,
-{
+pub struct MapxOrdRawKeyVs<V> {
     inner: MapxRawVs,
     p: PhantomData<V>,
 }
