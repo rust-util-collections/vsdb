@@ -15,17 +15,20 @@ EXEC_PATH=$(echo ${EXEC_PATH} | sed 's@/\./@/@g' | sed 's@/\.*$@@')
 cd $EXEC_PATH || exit 1
 #################################################
 
-for file in $(find .. -type f \
-    -name "*.rs" \
+for file in $(find .. -path "../target" -a -prune \
+    -o -type f \
+    -o -name "*.rs" \
     -o -name "*.c" \
     -o -name "*.h" \
     -o -name "*.sh" \
     -o -name "*.toml" \
     -o -name "*.json" \
-    -o -name "*.md"\
-    -o -name "rc.local"\
+    -o -name "*.md" \
+    -o -name "rc.local" \
+    -print \
     | grep -v "$(basename $0)" \
-    | grep -v 'target/' \
+    | grep -v '\.git' \
+    | grep -iv 'Makefile' \
     | grep -v 'tendermint'); do
 
     perl -pi -e 's/　/ /g' $file

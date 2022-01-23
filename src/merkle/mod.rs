@@ -37,14 +37,14 @@ macro_rules! hash_intermediate {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct MerkleTree {
     leaf_count: usize,
     nodes: Vec<Hash>,
     hash_to_idx: MapxOrdRawKey<u64>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub struct ProofEntry<'a>(&'a [u8], Option<&'a [u8]>, Option<&'a [u8]>);
 
 impl<'a> ProofEntry<'a> {
@@ -213,7 +213,7 @@ impl MerkleTree {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct MerkleTreeStore {
     leaf_count: usize,
     nodes: VecxRaw,

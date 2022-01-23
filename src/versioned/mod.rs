@@ -821,6 +821,218 @@ impl_for_primitives!(
     H512
 );
 
+impl<T: VsMgmt> VsMgmt for Option<T> {
+    fn version_create(&self, version_name: VersionName) -> Result<()> {
+        if let Some(i) = self.as_ref() {
+            i.version_create(version_name).c(d!())?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn version_create_by_branch(
+        &self,
+        version_name: VersionName,
+        branch_name: BranchName,
+    ) -> Result<()> {
+        if let Some(i) = self.as_ref() {
+            i.version_create_by_branch(version_name, branch_name)
+                .c(d!())?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn version_exists(&self, version_name: VersionName) -> bool {
+        if let Some(i) = self.as_ref() {
+            alt!(!i.version_exists(version_name), return false);
+        }
+        true
+    }
+
+    #[inline(always)]
+    fn version_exists_on_branch(
+        &self,
+        version_name: VersionName,
+        branch_name: BranchName,
+    ) -> bool {
+        if let Some(i) = self.as_ref() {
+            alt!(
+                !i.version_exists_on_branch(version_name, branch_name),
+                return false
+            );
+        }
+        true
+    }
+
+    #[inline(always)]
+    fn version_created(&self, version_name: VersionName) -> bool {
+        if let Some(i) = self.as_ref() {
+            alt!(!i.version_created(version_name), return false);
+        }
+        true
+    }
+
+    #[inline(always)]
+    fn version_created_on_branch(
+        &self,
+        version_name: VersionName,
+        branch_name: BranchName,
+    ) -> bool {
+        if let Some(i) = self.as_ref() {
+            alt!(
+                !i.version_created_on_branch(version_name, branch_name),
+                return false
+            );
+        }
+        true
+    }
+
+    #[inline(always)]
+    fn version_pop(&self) -> Result<()> {
+        if let Some(i) = self.as_ref() {
+            i.version_pop().c(d!())?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn version_pop_by_branch(&self, branch_name: BranchName) -> Result<()> {
+        if let Some(i) = self.as_ref() {
+            i.version_pop_by_branch(branch_name).c(d!())?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn branch_create(&self, branch_name: BranchName) -> Result<()> {
+        if let Some(i) = self.as_ref() {
+            i.branch_create(branch_name).c(d!())?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn branch_create_by_base_branch(
+        &self,
+        branch_name: BranchName,
+        base_branch_name: ParentBranchName,
+    ) -> Result<()> {
+        if let Some(i) = self.as_ref() {
+            i.branch_create_by_base_branch(branch_name, base_branch_name)
+                .c(d!())?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn branch_create_by_base_branch_version(
+        &self,
+        branch_name: BranchName,
+        base_branch_name: ParentBranchName,
+        base_version_name: VersionName,
+    ) -> Result<()> {
+        if let Some(i) = self.as_ref() {
+            i.branch_create_by_base_branch_version(
+                branch_name,
+                base_branch_name,
+                base_version_name,
+            )
+            .c(d!())?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn branch_exists(&self, branch_name: BranchName) -> bool {
+        if let Some(i) = self.as_ref() {
+            alt!(!i.branch_exists(branch_name), return false);
+        }
+        true
+    }
+
+    #[inline(always)]
+    fn branch_remove(&self, branch_name: BranchName) -> Result<()> {
+        if let Some(i) = self.as_ref() {
+            i.branch_remove(branch_name).c(d!())?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn branch_truncate(&self, branch_name: BranchName) -> Result<()> {
+        if let Some(i) = self.as_ref() {
+            i.branch_truncate(branch_name).c(d!())?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn branch_truncate_to(
+        &self,
+        branch_name: BranchName,
+        last_version_name: VersionName,
+    ) -> Result<()> {
+        if let Some(i) = self.as_ref() {
+            i.branch_truncate_to(branch_name, last_version_name)
+                .c(d!())?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn branch_pop_version(&self, branch_name: BranchName) -> Result<()> {
+        if let Some(i) = self.as_ref() {
+            i.branch_pop_version(branch_name).c(d!())?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn branch_merge_to_parent(&self, branch_name: BranchName) -> Result<()> {
+        if let Some(i) = self.as_ref() {
+            i.branch_merge_to_parent(branch_name).c(d!())?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn branch_has_children(&self, branch_name: BranchName) -> bool {
+        if let Some(i) = self.as_ref() {
+            alt!(!i.branch_has_children(branch_name), return false);
+        }
+        true
+    }
+
+    #[inline(always)]
+    fn branch_set_default(&mut self, branch_name: BranchName) -> Result<()> {
+        if let Some(i) = self.as_mut() {
+            i.branch_set_default(branch_name).c(d!())?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn prune(&self, reserved_ver_num: Option<usize>) -> Result<()> {
+        if let Some(i) = self.as_ref() {
+            i.prune(reserved_ver_num).c(d!())?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn prune_by_branch(
+        &self,
+        branch_name: BranchName,
+        reserved_ver_num: Option<usize>,
+    ) -> Result<()> {
+        if let Some(i) = self.as_ref() {
+            i.prune_by_branch(branch_name, reserved_ver_num).c(d!())?;
+        }
+        Ok(())
+    }
+}
+
 /// A helper for implementing `VsMgmt` for collection types,
 /// `struct NewType(HashMap)`, `struct NewType(BTreeMap)`, etc.
 #[macro_export]
