@@ -34,13 +34,13 @@ pub(crate) type BranchID = u64;
 pub(crate) type VersionID = u64;
 
 /// Avoid making mistakes between branch name and version name.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct BranchName<'a>(pub &'a [u8]);
 /// Avoid making mistakes between branch name and version name.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct ParentBranchName<'a>(pub &'a [u8]);
 /// Avoid making mistakes between branch name and version name.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct VersionName<'a>(pub &'a [u8]);
 
 const RESERVED_ID_CNT: Prefix = 4096_0000;
@@ -181,3 +181,9 @@ macro_rules! impl_from_for_name {
 }
 
 impl_from_for_name!(BranchName, ParentBranchName, VersionName);
+
+impl Default for BranchName<'static> {
+    fn default() -> Self {
+        BranchName(INITIAL_BRANCH_NAME)
+    }
+}
