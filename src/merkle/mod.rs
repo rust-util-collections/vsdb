@@ -246,6 +246,32 @@ impl From<&MerkleTreeStore> for MerkleTree {
     }
 }
 
+impl From<MerkleTree> for MerkleTreeStore {
+    #[inline(always)]
+    fn from(mt: MerkleTree) -> Self {
+        let nodes = VecxRaw::new();
+        mt.nodes.iter().for_each(|h| {
+            nodes.push_ref(h);
+        });
+        Self {
+            leaf_count: mt.leaf_count,
+            nodes,
+            hash_to_idx: mt.hash_to_idx,
+        }
+    }
+}
+
+impl From<MerkleTreeStore> for MerkleTree {
+    #[inline(always)]
+    fn from(mts: MerkleTreeStore) -> Self {
+        Self {
+            leaf_count: mts.leaf_count,
+            nodes: mts.nodes.iter().collect(),
+            hash_to_idx: mts.hash_to_idx,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
