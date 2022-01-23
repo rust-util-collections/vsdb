@@ -212,6 +212,7 @@ use crate::{
         mapx_ord_rawvalue::MapxOrdRawValue, mapx_raw::MapxRaw, orphan::Orphan,
         vecx::Vecx, vecx_raw::VecxRaw,
     },
+    merkle::{MerkleTree, MerkleTreeStore, Proof, ProofEntry},
     BranchName, ParentBranchName, VersionName,
 };
 use primitive_types::{H128, H160, H256, H512, U128, U256, U512};
@@ -731,6 +732,22 @@ impl<V> VsMgmt for Vecx<V> {
 }
 
 impl VsMgmt for VecxRaw {
+    impl_vs_methods_nope!();
+}
+
+impl VsMgmt for MerkleTree {
+    impl_vs_methods_nope!();
+}
+
+impl VsMgmt for MerkleTreeStore {
+    impl_vs_methods_nope!();
+}
+
+impl<'a> VsMgmt for Proof<'a> {
+    impl_vs_methods_nope!();
+}
+
+impl<'a> VsMgmt for ProofEntry<'a> {
     impl_vs_methods_nope!();
 }
 
