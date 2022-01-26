@@ -95,6 +95,15 @@ where
     }
 }
 
+impl<T> Default for OrphanVs<T>
+where
+    T: ValueEnDe + Default,
+{
+    fn default() -> Self {
+        Self::new((&[0u8; 0][..]).into(), T::default())
+    }
+}
+
 impl<T> VsMgmt for OrphanVs<T>
 where
     T: ValueEnDe,
