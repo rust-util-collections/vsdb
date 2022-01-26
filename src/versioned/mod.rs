@@ -341,6 +341,8 @@ pub trait VsMgmt {
     fn branch_pop_version(&self, branch_name: BranchName) -> Result<()>;
 
     /// Merge a branch to its parent branch.
+    ///
+    /// NOTE: the original branch will be deleted.
     fn branch_merge_to_parent(&self, branch_name: BranchName) -> Result<()>;
 
     /// Check if a branch has children branches.
