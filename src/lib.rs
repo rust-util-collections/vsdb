@@ -189,5 +189,6 @@ pub use merkle::MerkleTree;
 
 pub use common::{
     ende::{KeyDe, KeyEn, KeyEnDe, KeyEnDeOrdered, ValueDe, ValueEn, ValueEnDe},
-    vsdb_flush, vsdb_set_base_dir, BranchName, ParentBranchName, VersionName,
+    vsdb_flush, vsdb_get_base_dir, vsdb_get_custom_dir, vsdb_set_base_dir, BranchName,
+    ParentBranchName, VersionName,
 };

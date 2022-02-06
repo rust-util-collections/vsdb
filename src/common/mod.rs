@@ -59,7 +59,14 @@ pub(crate) const RESERVED_VERSION_NUM_DEFAULT: usize = 10;
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
+const BASE_DIR_VAR: &str = "VSDB_BASE_DIR";
+
 static VSDB_BASE_DIR: Lazy<Mutex<String>> = Lazy::new(|| Mutex::new(gen_data_dir()));
+static VSDB_CUSTOM_DIR: Lazy<String> = Lazy::new(|| {
+    let r = VSDB_BASE_DIR.lock().clone() + "__CUSTOM__";
+    env::set_var("VSDB_CUSTOM_DIR", &r);
+    r
+});
 
 #[cfg(all(feature = "sled_engine", not(feature = "rocks_engine")))]
 pub(crate) static VSDB: Lazy<VsDB<engines::Sled>> = Lazy::new(|| pnk!(VsDB::new()));
@@ -121,32 +128,44 @@ impl<T: Engine> VsDB<T> {
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
+#[inline(always)]
 fn gen_data_dir() -> String {
     // Compatible with Windows OS?
-    let d = env::var("VSDB_BASE_DIR")
+    let d = env::var(BASE_DIR_VAR)
         .or_else(|_| env::var("HOME").map(|h| format!("{}/.vsdb", h)))
         .unwrap_or_else(|_| "/tmp/.vsdb".to_owned());
     fs::create_dir_all(&d).unwrap();
     d
 }
 
-fn get_data_dir() -> String {
+/// ${VSDB_CUSTOM_DIR}
+#[inline(always)]
+pub fn vsdb_get_custom_dir() -> String {
+    VSDB_CUSTOM_DIR.clone()
+}
+
+/// ${VSDB_BASE_DIR}
+#[inline(always)]
+pub fn vsdb_get_base_dir() -> String {
     VSDB_BASE_DIR.lock().clone()
 }
 
 /// Set ${VSDB_BASE_DIR} manually.
+#[inline(always)]
 pub fn vsdb_set_base_dir(dir: String) -> Result<()> {
     static HAS_INITED: AtomicBool = AtomicBool::new(false);
 
     if HAS_INITED.swap(true, Ordering::Relaxed) {
         Err(eg!("VSDB has been initialized !!"))
     } else {
+        env::set_var(BASE_DIR_VAR, &dir);
         *VSDB_BASE_DIR.lock() = dir;
         Ok(())
     }
 }
 
 /// Flush data to disk, may take a long time.
+#[inline(always)]
 pub fn vsdb_flush() {
     VSDB.flush();
 }
