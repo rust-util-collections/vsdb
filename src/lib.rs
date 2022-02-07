@@ -1,5 +1,4 @@
 //!
-//! ![](https://tokei.rs/b1/github/ccmlm/vsdb)
 //! ![GitHub top language](https://img.shields.io/github/languages/top/ccmlm/vsdb)
 //!
 //! VSDB is a 'Git' in the form of a KV database.

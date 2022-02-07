@@ -1,4 +1,3 @@
-![](https://tokei.rs/b1/github/ccmlm/VSDB)
 ![GitHub top language](https://img.shields.io/github/languages/top/ccmlm/VSDB)
 ![GitHub Workflow Status](https://img.shields.io/github/workflow/status/ccmlm/VSDB/Rust)
 ![GitHub issues](https://img.shields.io/github/issues-raw/ccmlm/VSDB)

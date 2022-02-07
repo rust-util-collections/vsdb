@@ -1,5 +1,5 @@
 //!
-//! # Vs functions
+//! # VS functions
 //!
 //! # Examples
 //!
