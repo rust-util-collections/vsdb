@@ -11,7 +11,7 @@ use crate::{
     common::{
         ende::encode_optioned_bytes, BranchID, BranchName, RawKey, RawValue, VersionID,
         VersionName, BRANCH_ANCESTORS_LIMIT, INITIAL_BRANCH_ID, INITIAL_BRANCH_NAME,
-        NULL, VSDB,
+        INITIAL_VERSION, NULL, VSDB,
     },
 };
 use ruc::*;
@@ -26,7 +26,7 @@ pub(super) const RESERVED_VERSION_NUM_DEFAULT: usize = 10;
 ////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////
 
-#[derive(Default, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct MapxRawVs {
     default_branch: BranchID,
 
@@ -52,7 +52,15 @@ pub(super) struct MapxRawVs {
 impl MapxRawVs {
     #[inline(always)]
     pub(super) fn new() -> Self {
-        let mut ret = Self::default();
+        let mut ret = Self {
+            default_branch: BranchID::default(),
+            branch_name_to_branch_id: MapxOrdRawKey::new(),
+            version_name_to_version_id: MapxOrdRawKey::new(),
+            branch_to_parent: MapxOrd::new(),
+            branch_to_created_versions: MapxOrd::new(),
+            version_to_change_set: MapxOrd::new(),
+            layered_kv: MapxOrdRawKey::new(),
+        };
         ret.init();
         ret
     }
@@ -65,6 +73,7 @@ impl MapxRawVs {
         self.branch_to_parent.insert(INITIAL_BRANCH_ID, None);
         self.branch_to_created_versions
             .insert(INITIAL_BRANCH_ID, MapxOrd::new());
+        self.version_create(INITIAL_VERSION.0).unwrap();
     }
 
     #[inline(always)]
@@ -1002,6 +1011,12 @@ impl MapxRawVs {
         let mut vername = self.get_branch_id(branch_name)?.to_be_bytes().to_vec();
         vername.extend_from_slice(version_name.0);
         self.version_name_to_version_id.get(&vername)
+    }
+}
+
+impl Default for MapxRawVs {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

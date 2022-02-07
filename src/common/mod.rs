@@ -50,6 +50,9 @@ pub(crate) const NULL: BranchID = BIGGEST_RESERVED_ID as BranchID;
 pub(crate) const INITIAL_BRANCH_ID: BranchID = 0;
 pub(crate) const INITIAL_BRANCH_NAME: &[u8] = b"main";
 
+/// The initial verison along with each new instance.
+pub const INITIAL_VERSION: VersionName<'static> = VersionName([0u8; 0].as_slice());
+
 /// How many ancestral branches at most one new branch can have.
 pub const BRANCH_ANCESTORS_LIMIT: usize = 128;
 
@@ -62,10 +65,12 @@ pub(crate) const RESERVED_VERSION_NUM_DEFAULT: usize = 10;
 const BASE_DIR_VAR: &str = "VSDB_BASE_DIR";
 
 static VSDB_BASE_DIR: Lazy<Mutex<String>> = Lazy::new(|| Mutex::new(gen_data_dir()));
+
 static VSDB_CUSTOM_DIR: Lazy<String> = Lazy::new(|| {
-    let r = VSDB_BASE_DIR.lock().clone() + "__CUSTOM__";
-    env::set_var("VSDB_CUSTOM_DIR", &r);
-    r
+    let d = VSDB_BASE_DIR.lock().clone() + "/__CUSTOM__";
+    fs::create_dir_all(&d).unwrap();
+    env::set_var("VSDB_CUSTOM_DIR", &d);
+    d
 });
 
 #[cfg(all(feature = "sled_engine", not(feature = "rocks_engine")))]

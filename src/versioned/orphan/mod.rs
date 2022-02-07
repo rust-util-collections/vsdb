@@ -25,9 +25,8 @@ where
     T: ValueEnDe,
 {
     #[inline(always)]
-    pub fn new(version: VersionName, v: T) -> Self {
+    pub fn new(v: T) -> Self {
         let hdr = MapxOrdRawKeyVs::new();
-        pnk!(hdr.version_create(version));
         pnk!(hdr.insert_ref(&[], &v));
         Self { inner: hdr }
     }
@@ -100,7 +99,7 @@ where
     T: ValueEnDe + Default,
 {
     fn default() -> Self {
-        Self::new((&[0u8; 0][..]).into(), T::default())
+        Self::new(T::default())
     }
 }
 
