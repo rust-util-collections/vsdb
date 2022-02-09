@@ -8,7 +8,6 @@ pub(crate) mod ende;
 pub(crate) mod engines;
 
 use {
-    crc32fast::Hasher,
     engines::Engine,
     once_cell::sync::Lazy,
     parking_lot::Mutex,
@@ -27,9 +26,6 @@ pub(crate) type RawBytes = Box<[u8]>;
 pub(crate) type RawKey = RawBytes;
 pub(crate) type RawValue = RawBytes;
 
-/// Checksum of a version
-pub type VerChecksum = [u8; size_of::<u32>()];
-
 pub(crate) type Prefix = u64;
 pub(crate) type PrefixBytes = [u8; PREFIX_SIZ];
 pub(crate) const PREFIX_SIZ: usize = size_of::<Prefix>();
@@ -37,13 +33,13 @@ pub(crate) const PREFIX_SIZ: usize = size_of::<Prefix>();
 pub(crate) type BranchID = u64;
 pub(crate) type VersionID = u64;
 
-/// avoid making mistakes between branch name and version name
+/// Avoid making mistakes between branch name and version name.
 #[derive(Clone, Copy)]
 pub struct BranchName<'a>(pub &'a [u8]);
-/// +1
+/// Avoid making mistakes between branch name and version name.
 #[derive(Clone, Copy)]
 pub struct ParentBranchName<'a>(pub &'a [u8]);
-/// +1
+/// Avoid making mistakes between branch name and version name.
 #[derive(Clone, Copy)]
 pub struct VersionName<'a>(pub &'a [u8]);
 
@@ -54,8 +50,8 @@ pub(crate) const NULL: BranchID = BIGGEST_RESERVED_ID;
 pub(crate) const INITIAL_BRANCH_ID: BranchID = 0;
 pub(crate) const INITIAL_BRANCH_NAME: &[u8] = b"main";
 
-/// how many branches in one instance can be created
-pub const BRANCH_CNT_LIMIT: usize = 1024;
+/// How many ancestral branches at most one new branch can have.
+pub const BRANCH_ANCESTORS_LIMIT: usize = 128;
 
 // default value for reserved number when pruning old data
 pub(crate) const RESERVED_VERSION_NUM_DEFAULT: usize = 10;
@@ -83,7 +79,7 @@ macro_rules! parse_int {
     }};
 }
 
-/// Parse bytes to Prefix
+/// Parse bytes to a `Prefix` type.
 #[macro_export(crate)]
 macro_rules! parse_prefix {
     ($bytes: expr) => {
@@ -138,7 +134,7 @@ fn get_data_dir() -> String {
     VSDB_BASE_DIR.lock().clone()
 }
 
-/// Set ${VSDB_BASE_DIR} manually
+/// Set ${VSDB_BASE_DIR} manually.
 pub fn vsdb_set_base_dir(dir: String) -> Result<()> {
     static HAS_INITED: AtomicBool = AtomicBool::new(false);
 
@@ -154,18 +150,3 @@ pub fn vsdb_set_base_dir(dir: String) -> Result<()> {
 pub fn vsdb_flush() {
     VSDB.flush();
 }
-
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////
-
-#[inline(always)]
-pub(crate) fn compute_checksum(ivec: &[&[u8]]) -> VerChecksum {
-    let mut hasher = Hasher::new();
-    for bytes in ivec {
-        hasher.update(bytes);
-    }
-    hasher.finalize().to_be_bytes()
-}
-
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////

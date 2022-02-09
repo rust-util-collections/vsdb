@@ -9,18 +9,14 @@ use crate::{
         mapx_raw::MapxRaw,
     },
     common::{
-        compute_checksum,
-        ende::{encode_optioned_bytes, KeyEnDeOrdered},
-        BranchID, BranchName, RawKey, RawValue, VerChecksum, VersionID, VersionName,
-        BRANCH_CNT_LIMIT, INITIAL_BRANCH_ID, INITIAL_BRANCH_NAME, NULL, VSDB,
+        ende::encode_optioned_bytes, BranchID, BranchName, RawKey, RawValue, VersionID,
+        VersionName, BRANCH_ANCESTORS_LIMIT, INITIAL_BRANCH_ID, INITIAL_BRANCH_NAME,
+        NULL, VSDB,
     },
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::BTreeMap,
-    ops::{Deref, DerefMut, RangeBounds},
-};
+use std::{collections::BTreeMap, ops::RangeBounds};
 
 type BranchPath = BTreeMap<BranchID, VersionID>;
 
@@ -41,7 +37,7 @@ pub(super) struct MapxRawVs {
     branch_to_parent: MapxOrd<BranchID, Option<BasePoint>>,
 
     // versions directly created by this branch
-    branch_to_created_versions: MapxOrd<BranchID, MapxOrd<VersionID, VerChecksum>>,
+    branch_to_created_versions: MapxOrd<BranchID, MapxOrd<VersionID, ()>>,
 
     // globally ever changed keys within each version
     version_to_change_set: MapxOrd<VersionID, MapxRaw>,
@@ -143,7 +139,7 @@ impl MapxRawVs {
     // on the latest version of every branch,
     // historical data version should be immutable in the user view.
     //
-    // The `remove` is essentially aschecksumning a `None` value to the key.
+    // The `remove` is essentially assign a `None` value to the key.
     fn remove_by_branch_version(
         &mut self,
         key: &[u8],
@@ -183,18 +179,6 @@ impl MapxRawVs {
             .entry(branch_id)
             .or_insert(MapxOrd::new())
             .insert_ref_encoded_value(&version_id, &encode_optioned_bytes(&value)[..]);
-
-        // value changed, then re-calculate checksum
-        if ret.as_deref() != value {
-            let mut vers = self
-                .branch_to_created_versions
-                .get(&branch_id)
-                .c(d!("BUG: branch not found"))?;
-            let mut checksum =
-                vers.get_mut(&version_id).c(d!("BUG: version not found"))?;
-            *checksum =
-                compute_checksum(&[&checksum[..], key, value.unwrap_or_default()]);
-        }
 
         Ok(ret)
     }
@@ -247,39 +231,6 @@ impl MapxRawVs {
         }
 
         None
-    }
-
-    #[inline(always)]
-    pub(super) fn get_mut(&mut self, key: &[u8]) -> Option<ValueMut<'_>> {
-        self.get_mut_by_branch(key, self.branch_get_default())
-    }
-
-    #[inline(always)]
-    pub(super) fn get_mut_by_branch(
-        &mut self,
-        key: &[u8],
-        branch_id: BranchID,
-    ) -> Option<ValueMut<'_>> {
-        self.branch_to_created_versions
-            .get(&branch_id)?
-            .last()
-            .and_then(|(version_id, _)| {
-                self.get_mut_by_branch_version(key, branch_id, version_id)
-            })
-    }
-
-    // This function should NOT be public,
-    // `write`-like operations should only be applied
-    // on the latest version of every branch,
-    // historical data version should be immutable in the user view.
-    fn get_mut_by_branch_version(
-        &mut self,
-        key: &[u8],
-        branch_id: BranchID,
-        version_id: VersionID,
-    ) -> Option<ValueMut<'_>> {
-        self.get_by_branch_version(key, branch_id, version_id)
-            .map(|v| ValueMut::new(self, RawKey::from_slice(key).unwrap(), v, branch_id))
     }
 
     #[inline(always)]
@@ -508,14 +459,8 @@ impl MapxRawVs {
             .get_mut(&branch_id)
             .c(d!("branch not found"))?;
 
-        // hash(<previous checksum> + <version name> + <every kv writes>)
-        let new_checksum = compute_checksum(&[
-            &vers.last().map(|(_, s)| s).unwrap_or_default(),
-            &vername,
-        ]);
-
         let version_id = VSDB.alloc_version_id();
-        vers.insert(version_id, new_checksum);
+        vers.insert(version_id, ());
 
         self.version_name_to_version_id
             .insert(vername.into_boxed_slice(), version_id);
@@ -529,6 +474,7 @@ impl MapxRawVs {
     #[inline(always)]
     pub(super) fn version_exists(&self, version_id: BranchID) -> bool {
         self.version_exists_on_branch(version_id, self.branch_get_default())
+            .0
     }
 
     // Check if a version exists on a specified branch(include its parents)
@@ -537,11 +483,11 @@ impl MapxRawVs {
         &self,
         version_id: VersionID,
         branch_id: BranchID,
-    ) -> bool {
+    ) -> (bool, BranchPath) {
         let fp = self.branch_get_full_path(branch_id);
 
         if !Self::version_id_is_in_bounds(&fp, version_id) {
-            return false;
+            return (false, fp);
         }
 
         for (br, ver) in fp.iter().rev() {
@@ -552,11 +498,11 @@ impl MapxRawVs {
                 .get_le(&min!(*ver, version_id))
                 .is_some()
             {
-                return true;
+                return (true, fp);
             }
         }
 
-        false
+        (false, fp)
     }
 
     // Check if a version is directly created on a specified branch(exclude its parents)
@@ -699,22 +645,22 @@ impl MapxRawVs {
         .c(d!())
     }
 
-    fn branch_create_by_base_branch_version(
+    pub(super) fn branch_create_by_base_branch_version(
         &mut self,
         branch_name: &[u8],
         base_branch_id: BranchID,
         base_version_id: VersionID,
     ) -> Result<()> {
-        if (BRANCH_CNT_LIMIT - 1) < self.branch_to_parent.len() {
-            return Err(eg!("too many branches"));
-        }
-
         if self.branch_name_to_branch_id.contains_key(branch_name) {
             return Err(eg!("branch already exists"));
         }
 
-        if !self.version_exists_on_branch(base_version_id, base_branch_id) {
-            return Err(eg!("BUG: version is not on branch"));
+        let (exist, fp) = self.version_exists_on_branch(base_version_id, base_branch_id);
+        if !exist {
+            return Err(eg!("version is not on the base branch"));
+        }
+        if BRANCH_ANCESTORS_LIMIT < fp.len() {
+            return Err(eg!("the base branch has too many ancestors"));
         }
 
         let branch_id = VSDB.alloc_branch_id();
@@ -841,7 +787,7 @@ impl MapxRawVs {
         if fp.is_empty() {
             return Err(eg!("branch not found"));
         } else if branch_id != *fp.keys().rev().next().unwrap() || 1 == fp.len() {
-            // no new versions yet, nothing to merge
+            // no new versions or no ancestors, nothing need to be merged
             return Ok(());
         }
 
@@ -861,15 +807,8 @@ impl MapxRawVs {
         //     return Ok(());
         // }
 
-        // used to calculate new checksum
-        let (last_ver, last_checksum) = vers_created.last().unwrap();
-
-        // used to calculate new checksum
-        let (last_ver_parent, last_checksum_parent) =
-            vers_created_parent.last().unwrap();
-
-        for (ver, checksum) in vers_created.iter() {
-            vers_created_parent.insert(ver, checksum);
+        for (ver, _) in vers_created.iter() {
+            vers_created_parent.insert(ver, ());
 
             // `unwrap`s here should be safe
             for k in self
@@ -898,24 +837,8 @@ impl MapxRawVs {
             }
         }
 
-        // re-calcute checksum, the old parent checksum should be set in the first place
-        let new_checksum = compute_checksum(&[&last_checksum_parent, &last_checksum]);
-        vers_created_parent
-            .insert(max!(last_ver_parent, last_ver), new_checksum)
-            .unwrap();
-
-        // remove outdated values
-        vers_created.iter().for_each(|(k, _)| {
-            vers_created.remove(&k);
-        });
-
-        // remove user-registered infomation
-        let (br_name, _) = self
-            .branch_name_to_branch_id
-            .iter()
-            .find(|(_, br)| *br == branch_id)
-            .unwrap();
-        self.branch_name_to_branch_id.remove(&br_name);
+        // remove data on the original branch
+        vers_created.clear();
 
         self.branch_to_parent.remove(&branch_id);
 
@@ -934,6 +857,14 @@ impl MapxRawVs {
                 }
             });
 
+        // remove user-registered infomation
+        let (br_name, _) = self
+            .branch_name_to_branch_id
+            .iter()
+            .find(|(_, br)| *br == branch_id)
+            .unwrap();
+        self.branch_name_to_branch_id.remove(&br_name);
+
         Ok(())
     }
 
@@ -947,7 +878,7 @@ impl MapxRawVs {
     // Get itself and all its ancestral branches with the base point it born on.
     #[inline(always)]
     fn branch_get_full_path(&self, branch_id: BranchID) -> BranchPath {
-        self.branch_get_recurive_path(branch_id, BRANCH_CNT_LIMIT)
+        self.branch_get_recurive_path(branch_id, BRANCH_ANCESTORS_LIMIT)
     }
 
     fn branch_get_recurive_path(
@@ -992,49 +923,6 @@ impl MapxRawVs {
     #[inline(always)]
     pub(super) fn branch_get_default(&self) -> BranchID {
         self.default_branch
-    }
-
-    #[inline(always)]
-    pub(super) fn checksum_get(&self) -> Option<VerChecksum> {
-        self.checksum_get_by_branch(self.branch_get_default())
-    }
-
-    #[inline(always)]
-    pub(super) fn checksum_get_by_branch(
-        &self,
-        branch_id: BranchID,
-    ) -> Option<VerChecksum> {
-        self.checksum_get_by_branch_version(branch_id, None)
-    }
-
-    pub(super) fn checksum_get_by_branch_version(
-        &self,
-        branch_id: BranchID,
-        version_id: Option<VersionID>,
-    ) -> Option<VerChecksum> {
-        let fp = self.branch_get_full_path(branch_id);
-
-        let version_id = if let Some(id) = version_id {
-            if !Self::version_id_is_in_bounds(&fp, id) {
-                return None;
-            }
-            id
-        } else {
-            VersionID::MAX
-        };
-
-        for (br, ver) in fp.iter().rev() {
-            if let Some((_, checksum)) = self
-                .branch_to_created_versions
-                .get(br)
-                .unwrap()
-                .get_le(&min!(*ver, version_id))
-            {
-                return Some(checksum);
-            }
-        }
-
-        None
     }
 
     #[inline(always)]
@@ -1187,57 +1075,6 @@ impl DoubleEndedIterator for MapxRawVsIter<'_> {
 }
 
 impl ExactSizeIterator for MapxRawVsIter<'_> {}
-
-////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////
-
-#[allow(missing_docs)]
-#[derive(PartialEq, Eq, Debug)]
-pub struct ValueMut<'a> {
-    hdr: &'a mut MapxRawVs,
-    key: RawKey,
-    value: RawValue,
-    branch_id: BranchID,
-}
-
-impl<'a> ValueMut<'a> {
-    fn new(
-        hdr: &'a mut MapxRawVs,
-        key: RawKey,
-        value: RawValue,
-        branch_id: BranchID,
-    ) -> Self {
-        ValueMut {
-            hdr,
-            key,
-            value,
-            branch_id,
-        }
-    }
-}
-
-// NOTE: Very Important !!!
-impl<'a> Drop for ValueMut<'a> {
-    fn drop(&mut self) {
-        pnk!(
-            self.hdr
-                .insert_by_branch(&self.key, &self.value, self.branch_id)
-        );
-    }
-}
-
-impl<'a> Deref for ValueMut<'a> {
-    type Target = RawValue;
-    fn deref(&self) -> &Self::Target {
-        &self.value
-    }
-}
-
-impl<'a> DerefMut for ValueMut<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.value
-    }
-}
 
 ////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////

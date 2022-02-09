@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "0.9.10"
+version = "0.10.0"
 authors = ["fanhui.x@gmail.com"]
 edition = "2021"
 description = "Versioned Stateful DataBase, mainly used in blockchain scene."
@@ -13,7 +13,6 @@ license = "MIT"
 [dependencies]
 ruc = "0.6"
 once_cell = "1.9.0"
-crc32fast = "1.3.0"
 serde = { version = "1.0", features = ["derive"] }
 parking_lot = "0.11.2"
 
@@ -35,6 +34,8 @@ num_cpus = { version = "1.13", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.3", features = ["html_reports"]}
+once_cell = "1.9.0"
+bcs = "0.1.3"
 
 [features]
 default = ["sled_engine", "cbor_ende"]
