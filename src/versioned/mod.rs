@@ -352,10 +352,10 @@ pub trait VsMgmt {
     /// all default operations will be applied to it.
     fn branch_set_default(&mut self, branch_name: BranchName) -> Result<()>;
 
-    /// Clean outdated versions out of the default reserved number.
+    /// Clean outdated versions out of the default branch.
     fn prune(&self, reserved_ver_num: Option<usize>) -> Result<()>;
 
-    /// Clean outdated versions out of a specified reserved number.
+    /// Clean outdated versions out of a specified branch.
     fn prune_by_branch(
         &self,
         branch_name: BranchName,
