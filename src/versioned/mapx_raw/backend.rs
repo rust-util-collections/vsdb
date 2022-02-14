@@ -704,12 +704,12 @@ impl MapxRawVs {
     // and should not do any tracing.
     #[inline(always)]
     pub(super) fn branch_remove(&self, branch_id: BranchID) -> Result<()> {
+        // if self.branch_get_default() == branch_id {
+        //     return Err(eg!("the default branch can NOT be removed"));
+        // }
+
         if self.branch_has_children(branch_id) {
             return Err(eg!("can not remove branches with children"));
-        }
-
-        if self.branch_get_default() == branch_id {
-            return Err(eg!("the default branch can NOT be removed"));
         }
 
         self.branch_truncate(branch_id).c(d!())?;
@@ -783,6 +783,10 @@ impl MapxRawVs {
 
     // Merge a branch back to its parent branch
     pub(super) fn branch_merge_to_parent(&self, branch_id: BranchID) -> Result<()> {
+        // if self.branch_get_default() == branch_id {
+        //     return Err(eg!("the default branch can NOT be merged"));
+        // }
+
         if self.branch_has_children(branch_id) {
             return Err(eg!("can not merge branches with children"));
         }
@@ -793,7 +797,7 @@ impl MapxRawVs {
             return Err(eg!("branch not found"));
         } else if branch_id != *fp.keys().rev().next().unwrap() || 1 == fp.len() {
             // no new versions or no ancestors, nothing need to be merged
-            return Ok(());
+            return self.branch_remove(branch_id).c(d!());
         }
 
         let parent_branch_id = fp.keys().rev().find(|&id| *id != branch_id).unwrap();
