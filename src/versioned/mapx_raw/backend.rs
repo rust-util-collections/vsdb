@@ -795,8 +795,11 @@ impl MapxRawVs {
 
         if fp.is_empty() {
             return Err(eg!("branch not found"));
-        } else if branch_id != *fp.keys().rev().next().unwrap() || 1 == fp.len() {
-            // no new versions or no ancestors, nothing need to be merged
+        } else if 1 == fp.len() {
+            // no ancestors, aka try to merge the root branch to sky!
+            return Err(eg!("parent branch not found"));
+        } else if branch_id != *fp.keys().rev().next().unwrap() {
+            // no new versions on the target branch, delete it
             return self.branch_remove(branch_id).c(d!());
         }
 
