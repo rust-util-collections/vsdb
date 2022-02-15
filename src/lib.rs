@@ -46,7 +46,7 @@
 //!     e: ...
 //! }
 //!
-//! let algo = GreatAlgo.default();
+//! let algo = GreatAlgo::default();
 //!
 //! algo.get_by_branch_version(...);
 //! algo.branch_create(...);
