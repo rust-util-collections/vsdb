@@ -168,9 +168,11 @@
 #![recursion_limit = "512"]
 
 pub mod basic;
+pub mod basic_multi_key;
 mod common;
 pub mod merkle;
 pub mod versioned;
+pub mod versioned_multi_key;
 
 pub use basic::mapx::Mapx;
 pub use basic::mapx_ord::MapxOrd;

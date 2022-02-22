@@ -138,6 +138,12 @@ impl<'a> ValueMut<'a> {
     fn new(hdr: &'a MapxRaw, key: &'a [u8], value: RawValue) -> Self {
         ValueMut { hdr, key, value }
     }
+
+    /// Get the data handler.
+    #[inline(always)]
+    pub fn get_hdr(&self) -> MapxRaw {
+        *self.hdr
+    }
 }
 
 impl<'a> Drop for ValueMut<'a> {
