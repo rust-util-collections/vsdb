@@ -147,6 +147,96 @@ impl MapxRawMk {
     pub fn clear(&self) {
         self.inner.clear();
     }
+
+    #[inline(always)]
+    pub fn iter_op<F>(&self, f: &mut F) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], &[u8]) -> Result<()>,
+    {
+        let mut key_buf = Vec::with_capacity(self.key_size());
+        self.recursive_walk(self.inner, &mut key_buf, self.key_size(), f)
+            .c(d!())
+    }
+
+    fn recursive_walk<F>(
+        &self,
+        hdr: MapxRaw,
+        key_buf: &mut [RawValue],
+        depth: usize,
+        f: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], &[u8]) -> Result<()>,
+    {
+        let idx = self.key_size() - depth;
+        if 1 == depth {
+            for (k, v) in hdr.iter() {
+                key_buf[idx] = k;
+                let key = key_buf
+                    .iter()
+                    .map(|sub_k| sub_k.as_ref())
+                    .collect::<Vec<_>>();
+                f(key.as_slice(), &v[..]).c(d!())?;
+            }
+        } else {
+            for (k, v) in hdr.iter() {
+                key_buf[idx] = k;
+                let hdr = pnk!(ValueEnDe::decode(&v));
+                self.recursive_walk(hdr, key_buf, depth - 1, f).c(d!())?;
+            }
+        }
+
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub(super) fn iter_op_typed_value<V, F>(&self, f: &mut F) -> Result<()>
+    where
+        V: ValueEnDe,
+        F: FnMut(&[&[u8]], &V) -> Result<()>,
+    {
+        let mut key_buf = Vec::with_capacity(self.key_size());
+        self.recursive_walk_typed_value(self.inner, &mut key_buf, self.key_size(), f)
+            .c(d!())
+    }
+
+    fn recursive_walk_typed_value<V, F>(
+        &self,
+        hdr: MapxRaw,
+        key_buf: &mut [RawValue],
+        depth: usize,
+        f: &mut F,
+    ) -> Result<()>
+    where
+        V: ValueEnDe,
+        F: FnMut(&[&[u8]], &V) -> Result<()>,
+    {
+        let idx = self.key_size() - depth;
+        if 1 == depth {
+            for (k, v) in hdr.iter() {
+                key_buf[idx] = k;
+                let key = key_buf
+                    .iter()
+                    .map(|sub_k| sub_k.as_ref())
+                    .collect::<Vec<_>>();
+                f(key.as_slice(), &pnk!(ValueEnDe::decode(&v))).c(d!())?;
+            }
+        } else {
+            for (k, v) in hdr.iter() {
+                key_buf[idx] = k;
+                let hdr = pnk!(ValueEnDe::decode(&v));
+                self.recursive_walk_typed_value(hdr, key_buf, depth - 1, f)
+                    .c(d!())?;
+            }
+        }
+
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub fn key_size(&self) -> usize {
+        self.key_size
+    }
 }
 
 #[derive(PartialEq, Eq, Debug)]

@@ -122,6 +122,11 @@ where
     pub fn clear(&self) {
         self.inner.clear();
     }
+
+    #[inline(always)]
+    pub fn key_size(&self) -> usize {
+        self.inner.key_size()
+    }
 }
 
 impl<K1, K2, K3, V> Default for MapxDk<K1, K2, K3, V>
