@@ -5,6 +5,9 @@
 //! - Both keys and values will **NOT** be encoded in this structure
 //!
 
+#[cfg(test)]
+mod test;
+
 use crate::basic::mapx_raw::MapxRaw;
 use crate::common::{ende::ValueEnDe, RawValue};
 use ruc::*;
@@ -42,7 +45,7 @@ impl MapxRawMk {
         let mut hdr = self.inner;
         for (idx, k) in key.iter().enumerate() {
             if let Some(v) = hdr.get(k) {
-                if idx == self.key_size - 1 {
+                if 1 + idx == self.key_size {
                     return Some(v);
                 } else {
                     hdr = pnk!(ValueEnDe::decode(&v));
@@ -80,23 +83,35 @@ impl MapxRawMk {
         if key.len() != self.key_size {
             return Err(eg!("Incorrect key size"));
         }
+
         let mut ret = None;
+
         let mut hdr = self.inner;
         for (idx, k) in key.iter().enumerate() {
-            if idx == self.key_size - 1 {
+            if 1 + idx == self.key_size {
                 ret = hdr.insert(k, value);
                 break;
             } else {
-                let h = hdr
-                    .entry_ref(k)
-                    .or_insert_ref(&MapxRaw::new().encode())
-                    .get_hdr();
+                let mut new_hdr = None;
+                let f = || {
+                    new_hdr.replace(MapxRaw::new());
+                    new_hdr.as_ref().unwrap().encode()
+                };
+                let mutv = hdr.entry_ref(k).or_insert_ref_with(f);
+                let h = if let Some(h) = new_hdr {
+                    h
+                } else {
+                    pnk!(ValueEnDe::decode(mutv.as_ref()))
+                };
+                drop(mutv);
                 hdr = h;
             }
         }
+
         Ok(ret)
     }
 
+    /// The value returned may not be a final value, it may also be a sub-map.
     #[inline(always)]
     pub fn remove(&self, key: &[&[u8]]) -> Result<Option<RawValue>> {
         // Support batch removal from key path.
@@ -107,8 +122,10 @@ impl MapxRawMk {
         let mut hdr = self.inner;
         for (idx, k) in key.iter().enumerate() {
             if let Some(v) = hdr.get(k) {
-                if idx == self.key_size - 1 {
-                    return Ok(Some(v));
+                // NOTE:
+                // use `key.len()` instead of `self.key_size`
+                if 1 + idx == key.len() {
+                    return Ok(hdr.remove(k));
                 } else {
                     hdr = pnk!(ValueEnDe::decode(&v));
                 }
@@ -164,10 +181,10 @@ pub struct Entry<'a> {
 }
 
 impl<'a> Entry<'a> {
-    pub fn or_insert_ref(self, default: &'a [u8]) -> ValueMut<'a> {
+    pub fn or_insert_ref(self, default: &'a [u8]) -> Result<ValueMut<'a>> {
         if !self.hdr.contains_key(self.key) {
-            pnk!(self.hdr.insert(self.key, default));
+            self.hdr.insert(self.key, default).c(d!())?;
         }
-        pnk!(self.hdr.get_mut(self.key))
+        self.hdr.get_mut(self.key).c(d!())
     }
 }

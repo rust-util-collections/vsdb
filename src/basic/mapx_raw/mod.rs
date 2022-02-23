@@ -93,8 +93,8 @@ impl MapxRaw {
     }
 
     #[inline(always)]
-    pub fn entry_ref<'a>(&'a self, key: &'a [u8]) -> Entry<'a> {
-        Entry { key, hdr: self }
+    pub fn entry_ref<'a>(&'a self, key: &'a [u8]) -> EntryRef<'a> {
+        EntryRef { key, hdr: self }
     }
 
     #[inline(always)]
@@ -138,12 +138,6 @@ impl<'a> ValueMut<'a> {
     fn new(hdr: &'a MapxRaw, key: &'a [u8], value: RawValue) -> Self {
         ValueMut { hdr, key, value }
     }
-
-    /// Get the data handler.
-    #[inline(always)]
-    pub fn get_hdr(&self) -> MapxRaw {
-        *self.hdr
-    }
 }
 
 impl<'a> Drop for ValueMut<'a> {
@@ -166,15 +160,24 @@ impl<'a> DerefMut for ValueMut<'a> {
     }
 }
 
-pub struct Entry<'a> {
+pub struct EntryRef<'a> {
     key: &'a [u8],
     hdr: &'a MapxRaw,
 }
 
-impl<'a> Entry<'a> {
+impl<'a> EntryRef<'a> {
     pub fn or_insert_ref(self, default: &'a [u8]) -> ValueMut<'a> {
         if !self.hdr.contains_key(self.key) {
             self.hdr.insert(self.key, default);
+        }
+        pnk!(self.hdr.get_mut(self.key))
+    }
+    pub fn or_insert_ref_with<F>(self, f: F) -> ValueMut<'a>
+    where
+        F: FnOnce() -> RawValue,
+    {
+        if !self.hdr.contains_key(self.key) {
+            self.hdr.insert(self.key, &f());
         }
         pnk!(self.hdr.get_mut(self.key))
     }
