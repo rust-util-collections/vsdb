@@ -96,15 +96,12 @@ where
     }
 
     #[inline(always)]
-    pub fn remove(&self, key: &(&K1, Option<&K2>, Option<&K3>)) -> Option<V> {
-        if key.1.is_none() && key.2.is_some() {
-            return None;
-        }
-
+    pub fn remove(&self, key: &(&K1, Option<(&K2, Option<&K3>)>)) -> Option<V> {
         let k1 = key.0.encode();
-        let k2 = key.1.map(|k2| k2.encode());
-        let k3 = key.2.map(|k3| k3.encode());
-        let k = if let Some(k2) = k2.as_ref() {
+        let k2_k3 = key
+            .1
+            .map(|(k2, k3)| (k2.encode(), k3.map(|k3| k3.encode())));
+        let k = if let Some((k2, k3)) = k2_k3.as_ref() {
             let mut res = vec![&k1[..], &k2[..]];
             if let Some(k3) = k3.as_ref() {
                 res.push(&k3[..]);

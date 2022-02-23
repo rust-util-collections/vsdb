@@ -13,14 +13,13 @@ fn double_key_ops() {
     assert_eq!(map.get(&(&1, &1, &3)).unwrap(), 7);
 
     // does not exist
-    assert!(map.remove(&(&1, Some(&1), Some(&4))).is_none());
-    assert!(map.remove(&(&1, None, Some(&4))).is_none());
+    assert!(map.remove(&(&1, Some((&1, Some(&4))))).is_none());
 
-    assert!(map.remove(&(&1, Some(&1), Some(&1))).is_some());
+    assert!(map.remove(&(&1, Some((&1, Some(&1))))).is_some());
     assert!(map.get(&(&1, &1, &1)).is_none());
 
     // partial-path remove
-    assert!(map.remove(&(&1, Some(&1), None)).is_none()); // yes, is none
+    assert!(map.remove(&(&1, Some((&1, None)))).is_none()); // yes, is none
     assert!(map.get(&(&1, &1, &2)).is_none());
     assert!(map.get(&(&1, &1, &3)).is_none());
 
