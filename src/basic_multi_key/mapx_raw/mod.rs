@@ -8,8 +8,10 @@
 #[cfg(test)]
 mod test;
 
-use crate::basic::mapx_raw::MapxRaw;
-use crate::common::{ende::ValueEnDe, RawValue};
+use crate::{
+    basic::mapx_raw::MapxRaw,
+    common::{ende::ValueEnDe, RawValue},
+};
 use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
@@ -111,7 +113,6 @@ impl MapxRawMk {
         Ok(ret)
     }
 
-    /// The value returned may not be a final value, it may also be a sub-map.
     #[inline(always)]
     pub fn remove(&self, key: &[&[u8]]) -> Result<Option<RawValue>> {
         // Support batch removal from key path.
@@ -122,10 +123,15 @@ impl MapxRawMk {
         let mut hdr = self.inner;
         for (idx, k) in key.iter().enumerate() {
             if let Some(v) = hdr.get(k) {
-                // NOTE:
-                // use `key.len()` instead of `self.key_size`
+                // NOTE: use `key.len()` instead of `self.key_size`
                 if 1 + idx == key.len() {
-                    return Ok(hdr.remove(k));
+                    let ret = hdr.remove(k);
+                    // NOTE: use `self.key_size` instead of `key.len()`
+                    if 1 + idx == self.key_size {
+                        return Ok(ret);
+                    } else {
+                        return Ok(None);
+                    }
                 } else {
                     hdr = pnk!(ValueEnDe::decode(&v));
                 }

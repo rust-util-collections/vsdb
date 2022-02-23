@@ -19,7 +19,7 @@ use std::{
 #[serde(bound = "")]
 pub struct MapxVs<K, V> {
     inner: MapxOrdRawKeyVs<V>,
-    pk: PhantomData<K>,
+    p: PhantomData<K>,
 }
 
 impl<K, V> Default for MapxVs<K, V>
@@ -41,7 +41,7 @@ where
     pub fn new() -> Self {
         MapxVs {
             inner: MapxOrdRawKeyVs::new(),
-            pk: PhantomData,
+            p: PhantomData,
         }
     }
 
@@ -98,7 +98,7 @@ where
     pub fn iter(&self) -> MapxVsIter<K, V> {
         MapxVsIter {
             iter: self.inner.iter(),
-            pk: PhantomData,
+            p: PhantomData,
         }
     }
 
@@ -120,7 +120,7 @@ where
 
         MapxVsIter {
             iter: self.inner.range((l, h)),
-            pk: PhantomData,
+            p: PhantomData,
         }
     }
 
@@ -204,7 +204,7 @@ where
     pub fn iter_by_branch(&self, branch_name: BranchName) -> MapxVsIter<K, V> {
         MapxVsIter {
             iter: self.inner.iter_by_branch(branch_name),
-            pk: PhantomData,
+            p: PhantomData,
         }
     }
 
@@ -227,7 +227,7 @@ where
 
         MapxVsIter {
             iter: self.inner.range_by_branch(branch_name, (l, h)),
-            pk: PhantomData,
+            p: PhantomData,
         }
     }
 
@@ -320,7 +320,7 @@ where
     ) -> MapxVsIter<K, V> {
         MapxVsIter {
             iter: self.inner.iter_by_branch_version(branch_name, version_name),
-            pk: PhantomData,
+            p: PhantomData,
         }
     }
 
@@ -346,7 +346,7 @@ where
             iter: self
                 .inner
                 .range_by_branch_version(branch_name, version_name, (l, h)),
-            pk: PhantomData,
+            p: PhantomData,
         }
     }
 
@@ -399,7 +399,7 @@ where
     V: ValueEnDe,
 {
     iter: MapxOrdRawKeyVsIter<'a, V>,
-    pk: PhantomData<K>,
+    p: PhantomData<K>,
 }
 
 impl<'a, K, V> Iterator for MapxVsIter<'a, K, V>

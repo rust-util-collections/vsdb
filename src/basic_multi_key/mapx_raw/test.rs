@@ -30,7 +30,7 @@ fn generic_mk_ops() {
     assert!(map.get(&[&[1], &[2], &[3], &[40]]).is_none());
 
     // partial-path remove
-    assert!(map.remove(&[&[1], &[2], &[30]]).unwrap().is_some());
+    assert!(map.remove(&[&[1], &[2], &[30]]).unwrap().is_none()); // yes, is none
     assert!(map.get(&[&[1], &[2], &[30], &[40]]).is_none());
     assert!(map.get(&[&[1], &[2], &[30], &[41]]).is_none());
 
@@ -38,7 +38,7 @@ fn generic_mk_ops() {
     assert!(map.remove(&[]).unwrap().is_none());
 
     assert!(map.get(&[&[1], &[2], &[3], &[4]]).is_some());
-    assert!(map.remove(&[&[1]]).unwrap().is_some());
+    assert!(map.remove(&[&[1]]).unwrap().is_none()); // yes, is none
     assert!(map.get(&[&[1], &[2], &[3], &[4]]).is_none());
 
     assert!(map.entry_ref(&[]).or_insert_ref(&[]).is_err());
