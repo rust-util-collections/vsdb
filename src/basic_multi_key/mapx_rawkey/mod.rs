@@ -82,11 +82,25 @@ impl<V: ValueEnDe> MapxMkRawKey<V> {
     }
 
     #[inline(always)]
-    pub fn iter_op<F>(&self, f: &mut F) -> Result<()>
+    pub fn iter_op<F>(&self, op: &mut F) -> Result<()>
     where
         F: FnMut(&[&[u8]], &V) -> Result<()>,
     {
-        self.inner.iter_op_typed_value(f).c(d!())
+        self.inner.iter_op_typed_value(op).c(d!())
+    }
+
+    #[inline(always)]
+    pub fn iter_op_with_key_prefix<F>(
+        &self,
+        op: &mut F,
+        key_prefix: &[&[u8]],
+    ) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], &V) -> Result<()>,
+    {
+        self.inner
+            .iter_op_typed_value_with_key_prefix(op, key_prefix)
+            .c(d!())
     }
 
     #[inline(always)]

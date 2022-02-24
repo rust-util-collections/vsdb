@@ -51,4 +51,52 @@ fn generic_mk_ops() {
         map.get(&[&[11], &[12], &[13], &[14]]).unwrap().as_ref(),
         &[]
     );
+
+    let mut cnt = 0;
+    let mut op = |k: &[&[u8]], v: &[u8]| {
+        cnt += 1;
+        assert_eq!(k, &[&[11], &[12], &[13], &[14]]);
+        assert_eq!(v, &[]);
+        Ok(())
+    };
+
+    pnk!(map.iter_op(&mut op));
+    assert_eq!(cnt, 1);
+
+    assert!(
+        map.entry_ref(&[&[11], &[12], &[13], &[15]])
+            .or_insert_ref(&[0])
+            .is_ok()
+    );
+    assert_eq!(
+        map.get(&[&[11], &[12], &[13], &[15]]).unwrap().as_ref(),
+        &[0]
+    );
+
+    let mut cnt = 0;
+    let mut op = |k: &[&[u8]], v: &[u8]| {
+        cnt += 1;
+        if v == &[] {
+            assert_eq!(k, &[&[11], &[12], &[13], &[14]]);
+        } else {
+            assert_eq!(k, &[&[11], &[12], &[13], &[15]]);
+        }
+        Ok(())
+    };
+
+    // cnt += 2
+    pnk!(map.iter_op(&mut op));
+    // cnt += 2
+    pnk!(map.iter_op_with_key_prefix(&mut op, &[&[11]]));
+    // cnt += 2
+    pnk!(map.iter_op_with_key_prefix(&mut op, &[&[11], &[12]]));
+    // cnt += 2
+    pnk!(map.iter_op_with_key_prefix(&mut op, &[&[11], &[12], &[13]]));
+    // cnt += 1
+    pnk!(map.iter_op_with_key_prefix(&mut op, &[&[11], &[12], &[13], &[14]]));
+    // cnt += 1
+    pnk!(map.iter_op_with_key_prefix(&mut op, &[&[11], &[12], &[13], &[15]]));
+
+    drop(op);
+    assert_eq!(cnt, 10);
 }

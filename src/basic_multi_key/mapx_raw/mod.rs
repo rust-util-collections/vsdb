@@ -149,13 +149,49 @@ impl MapxRawMk {
     }
 
     #[inline(always)]
-    pub fn iter_op<F>(&self, f: &mut F) -> Result<()>
+    pub fn iter_op<F>(&self, op: &mut F) -> Result<()>
     where
         F: FnMut(&[&[u8]], &[u8]) -> Result<()>,
     {
-        let mut key_buf = Vec::with_capacity(self.key_size());
-        self.recursive_walk(self.inner, &mut key_buf, self.key_size(), f)
-            .c(d!())
+        self.iter_op_with_key_prefix(op, &[]).c(d!())
+    }
+
+    #[inline(always)]
+    pub fn iter_op_with_key_prefix<F>(
+        &self,
+        op: &mut F,
+        key_prefix: &[&[u8]],
+    ) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], &[u8]) -> Result<()>,
+    {
+        let mut key_buf = vec![Default::default(); self.key_size()];
+        let mut hdr = self.inner;
+        let mut depth = self.key_size();
+
+        if self.key_size() < key_prefix.len() {
+            return Err(eg!("Invalid key size"));
+        } else {
+            for (idx, k) in key_prefix.iter().enumerate() {
+                if let Some(v) = hdr.get(k) {
+                    key_buf[idx] = k.to_vec().into_boxed_slice();
+                    if 1 + idx == self.key_size {
+                        let key = key_buf
+                            .iter()
+                            .map(|sub_k| sub_k.as_ref())
+                            .collect::<Vec<_>>();
+                        return op(key.as_slice(), &v).c(d!());
+                    } else {
+                        hdr = pnk!(ValueEnDe::decode(&v));
+                        depth -= 1;
+                    }
+                } else {
+                    return Err(eg!("key-prefix does not exist"));
+                }
+            }
+        };
+
+        self.recursive_walk(hdr, &mut key_buf, depth, op).c(d!())
     }
 
     fn recursive_walk<F>(
@@ -163,7 +199,7 @@ impl MapxRawMk {
         hdr: MapxRaw,
         key_buf: &mut [RawValue],
         depth: usize,
-        f: &mut F,
+        op: &mut F,
     ) -> Result<()>
     where
         F: FnMut(&[&[u8]], &[u8]) -> Result<()>,
@@ -176,13 +212,13 @@ impl MapxRawMk {
                     .iter()
                     .map(|sub_k| sub_k.as_ref())
                     .collect::<Vec<_>>();
-                f(key.as_slice(), &v[..]).c(d!())?;
+                op(key.as_slice(), &v[..]).c(d!())?;
             }
         } else {
             for (k, v) in hdr.iter() {
                 key_buf[idx] = k;
                 let hdr = pnk!(ValueEnDe::decode(&v));
-                self.recursive_walk(hdr, key_buf, depth - 1, f).c(d!())?;
+                self.recursive_walk(hdr, key_buf, depth - 1, op).c(d!())?;
             }
         }
 
@@ -190,13 +226,51 @@ impl MapxRawMk {
     }
 
     #[inline(always)]
-    pub(super) fn iter_op_typed_value<V, F>(&self, f: &mut F) -> Result<()>
+    pub(super) fn iter_op_typed_value<V, F>(&self, op: &mut F) -> Result<()>
     where
-        V: ValueEnDe,
         F: FnMut(&[&[u8]], &V) -> Result<()>,
+        V: ValueEnDe,
     {
-        let mut key_buf = Vec::with_capacity(self.key_size());
-        self.recursive_walk_typed_value(self.inner, &mut key_buf, self.key_size(), f)
+        self.iter_op_typed_value_with_key_prefix(op, &[]).c(d!())
+    }
+
+    #[inline(always)]
+    pub fn iter_op_typed_value_with_key_prefix<V, F>(
+        &self,
+        op: &mut F,
+        key_prefix: &[&[u8]],
+    ) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], &V) -> Result<()>,
+        V: ValueEnDe,
+    {
+        let mut key_buf = vec![Default::default(); self.key_size()];
+        let mut hdr = self.inner;
+        let mut depth = self.key_size();
+
+        if self.key_size() < key_prefix.len() {
+            return Err(eg!("Invalid key size"));
+        } else {
+            for (idx, k) in key_prefix.iter().enumerate() {
+                if let Some(v) = hdr.get(k) {
+                    key_buf[idx] = k.to_vec().into_boxed_slice();
+                    if 1 + idx == self.key_size {
+                        let key = key_buf
+                            .iter()
+                            .map(|sub_k| sub_k.as_ref())
+                            .collect::<Vec<_>>();
+                        return op(key.as_slice(), &pnk!(ValueEnDe::decode(&v))).c(d!());
+                    } else {
+                        hdr = pnk!(ValueEnDe::decode(&v));
+                        depth -= 1;
+                    }
+                } else {
+                    return Err(eg!("key-prefix does not exist"));
+                }
+            }
+        };
+
+        self.recursive_walk_typed_value(hdr, &mut key_buf, depth, op)
             .c(d!())
     }
 
@@ -205,11 +279,11 @@ impl MapxRawMk {
         hdr: MapxRaw,
         key_buf: &mut [RawValue],
         depth: usize,
-        f: &mut F,
+        op: &mut F,
     ) -> Result<()>
     where
-        V: ValueEnDe,
         F: FnMut(&[&[u8]], &V) -> Result<()>,
+        V: ValueEnDe,
     {
         let idx = self.key_size() - depth;
         if 1 == depth {
@@ -219,13 +293,13 @@ impl MapxRawMk {
                     .iter()
                     .map(|sub_k| sub_k.as_ref())
                     .collect::<Vec<_>>();
-                f(key.as_slice(), &pnk!(ValueEnDe::decode(&v))).c(d!())?;
+                op(key.as_slice(), &pnk!(ValueEnDe::decode(&v))).c(d!())?;
             }
         } else {
             for (k, v) in hdr.iter() {
                 key_buf[idx] = k;
                 let hdr = pnk!(ValueEnDe::decode(&v));
-                self.recursive_walk_typed_value(hdr, key_buf, depth - 1, f)
+                self.recursive_walk_typed_value(hdr, key_buf, depth - 1, op)
                     .c(d!())?;
             }
         }
