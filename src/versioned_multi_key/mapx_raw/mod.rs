@@ -4,8 +4,8 @@
 
 mod backend;
 
-// #[cfg(test)]
-// mod test;
+#[cfg(test)]
+mod test;
 
 use crate::{
     common::{BranchName, ParentBranchName, RawValue, VersionName, INITIAL_BRANCH_NAME},
