@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn generic_mk_ops() {
+fn basic_cases() {
     let map = MapxRawMk::new(4);
 
     // key size mismatch

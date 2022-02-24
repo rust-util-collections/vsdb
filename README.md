@@ -119,7 +119,8 @@ struct SubItem2 {
 ```rust
 // It can be compiled, but the result is wrong !
 // The versioned methods of the inner 'MapxVs<u8, u8>' will missing,
-// you should implement the 'VsMgmt' trait(or a part of it) manually.
+// We recommend you to use the 'multi-key' APIs of VSDB, or
+// you will have to implement the 'VsMgmt' trait manually.
 #[derive(Vs)]
 struct BadCase {
     a: VecxVs<MapxVs<u8, u8>>,

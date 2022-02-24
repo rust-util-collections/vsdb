@@ -49,12 +49,16 @@ impl MapxRawMkVs {
     }
 
     /// Remove a KV from the head version of the default branch.
+    ///
+    /// Support batch removal.
     #[inline(always)]
     pub fn remove(&self, key: &[&[u8]]) -> Result<Option<RawValue>> {
         self.inner.remove(key).c(d!())
     }
 
     /// Remove a KV from the head version of a specified branch.
+    ///
+    /// Support batch removal.
     #[inline(always)]
     pub fn remove_by_branch(
         &self,

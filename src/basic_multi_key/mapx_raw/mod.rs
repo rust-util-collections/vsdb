@@ -113,6 +113,7 @@ impl MapxRawMk {
         Ok(ret)
     }
 
+    /// Support batch removal.
     #[inline(always)]
     pub fn remove(&self, key: &[&[u8]]) -> Result<Option<RawValue>> {
         // Support batch removal from key path.

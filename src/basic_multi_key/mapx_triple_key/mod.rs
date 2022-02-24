@@ -21,9 +21,10 @@ use std::{
 
 const KEY_SIZE: usize = 3;
 
+/// A map structure with two-level keys.
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
-pub struct MapxDk<K1, K2, K3, V> {
+pub struct MapxTk<K1, K2, K3, V> {
     inner: MapxRawMk,
     p1: PhantomData<K1>,
     p2: PhantomData<K2>,
@@ -31,7 +32,7 @@ pub struct MapxDk<K1, K2, K3, V> {
     p4: PhantomData<V>,
 }
 
-impl<K1, K2, K3, V> MapxDk<K1, K2, K3, V>
+impl<K1, K2, K3, V> MapxTk<K1, K2, K3, V>
 where
     K1: KeyEnDe,
     K2: KeyEnDe,
@@ -95,6 +96,7 @@ where
             .map(|old_v| pnk!(ValueEnDe::decode(&old_v)))
     }
 
+    /// Support batch removal.
     #[inline(always)]
     pub fn remove(&self, key: &(&K1, Option<(&K2, Option<&K3>)>)) -> Option<V> {
         let k1 = key.0.encode();
@@ -126,7 +128,7 @@ where
     }
 }
 
-impl<K1, K2, K3, V> Default for MapxDk<K1, K2, K3, V>
+impl<K1, K2, K3, V> Default for MapxTk<K1, K2, K3, V>
 where
     K1: KeyEnDe,
     K2: KeyEnDe,
@@ -146,7 +148,7 @@ where
     K3: KeyEnDe,
     V: ValueEnDe,
 {
-    hdr: &'a MapxDk<K1, K2, K3, V>,
+    hdr: &'a MapxTk<K1, K2, K3, V>,
     key: &'a (&'a K1, &'a K2, &'a K3),
     value: V,
 }
@@ -159,7 +161,7 @@ where
     V: ValueEnDe,
 {
     fn new(
-        hdr: &'a MapxDk<K1, K2, K3, V>,
+        hdr: &'a MapxTk<K1, K2, K3, V>,
         key: &'a (&'a K1, &'a K2, &'a K3),
         value: V,
     ) -> Self {
@@ -206,7 +208,7 @@ where
 
 pub struct Entry<'a, K1, K2, K3, V> {
     key: &'a (&'a K1, &'a K2, &'a K3),
-    hdr: &'a MapxDk<K1, K2, K3, V>,
+    hdr: &'a MapxTk<K1, K2, K3, V>,
 }
 
 impl<'a, K1, K2, K3, V> Entry<'a, K1, K2, K3, V>

@@ -68,6 +68,7 @@ impl<V: ValueEnDe> MapxMkRawKey<V> {
             .map(|v| v.map(|old_v| pnk!(ValueEnDe::decode(&old_v))))
     }
 
+    /// Support batch removal.
     #[inline(always)]
     pub fn remove(&self, key: &[&[u8]]) -> Result<Option<V>> {
         self.inner

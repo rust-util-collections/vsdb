@@ -128,7 +128,8 @@
 //!
 //! // It can be compiled, but the result is wrong !
 //! // The versioned methods of the inner 'MapxVs<u8, u8>' will missing,
-//! // you should implement the 'VsMgmt' trait(or a part of it) manually.
+//! // We recommend you to use the 'multi-key' APIs of VSDB, or
+//! // you will have to implement the 'VsMgmt' trait manually.
 //! #[derive(Vs)]
 //! struct BadCase {
 //!     a: VecxVs<MapxVs<u8, u8>>,
@@ -174,14 +175,15 @@ pub mod merkle;
 pub mod versioned;
 pub mod versioned_multi_key;
 
-pub use basic::mapx::Mapx;
-pub use basic::mapx_ord::MapxOrd;
-pub use basic::vecx::Vecx;
+pub use basic::{mapx::Mapx, mapx_ord::MapxOrd, vecx::Vecx};
+pub use versioned::{mapx::MapxVs, mapx_ord::MapxOrdVs, orphan::OrphanVs, vecx::VecxVs};
 
-pub use versioned::mapx::MapxVs;
-pub use versioned::mapx_ord::MapxOrdVs;
-pub use versioned::orphan::OrphanVs;
-pub use versioned::vecx::VecxVs;
+pub use basic_multi_key::{
+    mapx_double_key::MapxDk, mapx_raw::MapxRawMk, mapx_triple_key::MapxTk,
+};
+pub use versioned_multi_key::{
+    mapx_double_key::MapxDkVs, mapx_raw::MapxRawMkVs, mapx_triple_key::MapxTkVs,
+};
 
 pub use versioned::VsMgmt;
 pub use vsdb_derive::Vs;

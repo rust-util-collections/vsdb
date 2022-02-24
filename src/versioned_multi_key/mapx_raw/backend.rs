@@ -169,6 +169,12 @@ impl MapxRawMkVs {
         branch_id: BranchID,
         version_id: VersionID,
     ) -> Result<Option<RawValue>> {
+        if key.len() < self.key_size {
+            return self
+                .batch_remove_by_branch_version(key, value, branch_id, version_id)
+                .c(d!());
+        };
+
         let ret = self.get_by_branch_version(key, branch_id, version_id);
 
         // remove a non-existing value
@@ -191,6 +197,43 @@ impl MapxRawMkVs {
             .insert_ref_encoded_value(&version_id, &encode_optioned_bytes(&value)[..]);
 
         Ok(ret)
+    }
+
+    fn batch_remove_by_branch_version(
+        &self,
+        key: &[&[u8]],
+        value: Option<&[u8]>,
+        branch_id: BranchID,
+        version_id: VersionID,
+    ) -> Result<Option<RawValue>> {
+        let hdr = self
+            .version_to_change_set
+            .get_mut(&version_id)
+            .c(d!("BUG: version not found"))?;
+        let mut op = |k: &[&[u8]], _: &[u8]| hdr.insert(k, &[]).c(d!()).map(|_| ());
+        hdr.iter_op_with_key_prefix(&mut op, key)
+            .c(d!("BUG: fatal !!"))?;
+
+        let mut op =
+            |k: &[&[u8]],
+             _: &MapxOrd<BranchID, MapxOrd<VersionID, Option<RawValue>>>| {
+                self.layered_kv
+                    .entry_ref(k)
+                    .or_insert_ref(&MapxOrd::new())
+                    .c(d!())?
+                    .entry(branch_id)
+                    .or_insert(MapxOrd::new())
+                    .insert_ref_encoded_value(
+                        &version_id,
+                        &encode_optioned_bytes(&value)[..],
+                    );
+                Ok(())
+            };
+        self.layered_kv
+            .iter_op_with_key_prefix(&mut op, key)
+            .c(d!())?;
+
+        Ok(None)
     }
 
     #[inline(always)]

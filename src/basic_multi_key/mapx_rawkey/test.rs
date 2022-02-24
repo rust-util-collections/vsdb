@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn rawkey_ops() {
+fn basic_cases() {
     let map = MapxMkRawKey::new(4);
 
     // key size mismatch

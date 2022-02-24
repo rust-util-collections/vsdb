@@ -21,6 +21,7 @@ use std::{
 
 const KEY_SIZE: usize = 2;
 
+/// A map structure with two-level keys.
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct MapxDk<K1, K2, V> {
@@ -87,6 +88,7 @@ where
             .map(|old_v| pnk!(ValueEnDe::decode(&old_v)))
     }
 
+    /// Support batch removal.
     #[inline(always)]
     pub fn remove(&self, key: &(&K1, Option<&K2>)) -> Option<V> {
         let k1 = key.0.encode();
