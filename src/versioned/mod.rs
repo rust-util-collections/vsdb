@@ -215,7 +215,6 @@ use crate::{
     merkle::{MerkleTree, MerkleTreeStore, Proof, ProofEntry},
     BranchName, ParentBranchName, VersionName,
 };
-use primitive_types::{H128, H160, H256, H512, U128, U256, U512};
 use ruc::*;
 use std::{
     collections::{
@@ -814,13 +813,20 @@ impl_for_primitives!(
     AtomicU32,
     AtomicU64,
     AtomicU8,
-    U128,
-    U256,
-    U512,
-    H128,
-    H160,
-    H256,
-    H512
+    primitive_types_0_10::U128,
+    primitive_types_0_10::U256,
+    primitive_types_0_10::U512,
+    primitive_types_0_10::H128,
+    primitive_types_0_10::H160,
+    primitive_types_0_10::H256,
+    primitive_types_0_10::H512,
+    primitive_types_0_11::U128,
+    primitive_types_0_11::U256,
+    primitive_types_0_11::U512,
+    primitive_types_0_11::H128,
+    primitive_types_0_11::H160,
+    primitive_types_0_11::H256,
+    primitive_types_0_11::H512
 );
 
 impl<T: VsMgmt> VsMgmt for Option<T> {
