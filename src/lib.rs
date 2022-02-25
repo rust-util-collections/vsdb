@@ -1,5 +1,7 @@
 //!
-//! ![GitHub top language](https://img.shields.io/github/languages/top/ccmlm/vsdb)
+//! ![GitHub top language](https://img.shields.io/github/languages/top/ccmlm/VSDB)
+//! ![Minimum rustc version](https://img.shields.io/badge/rustc-1.59+-lightgray.svg)
+//! ![GitHub Workflow Status](https://img.shields.io/github/workflow/status/ccmlm/VSDB/Rust)
 //!
 //! VSDB is a 'Git' in the form of a KV database.
 //!
