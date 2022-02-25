@@ -14,6 +14,7 @@ use std::{
     mem::size_of,
     ops::{Bound, RangeBounds},
     sync::atomic::{AtomicUsize, Ordering},
+    thread::available_parallelism,
 };
 
 const DATA_SET_NUM: usize = 4;
@@ -386,7 +387,7 @@ fn rocksdb_open() -> Result<(DB, Vec<String>)> {
 
     let mut cfg = Options::default();
     cfg.create_if_missing(true);
-    cfg.increase_parallelism(num_cpus::get() as i32);
+    cfg.increase_parallelism(available_parallelism().c(d!())?.get() as i32);
     cfg.set_compression_type(DBCompressionType::Lz4);
     cfg.set_max_open_files(4096);
     cfg.set_allow_mmap_writes(true);

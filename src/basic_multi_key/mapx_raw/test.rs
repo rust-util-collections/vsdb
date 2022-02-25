@@ -97,6 +97,17 @@ fn basic_cases() {
     // cnt += 1
     pnk!(map.iter_op_with_key_prefix(&mut op, &[&[11], &[12], &[13], &[15]]));
 
+    // cnt += 0
+    pnk!(map.iter_op_with_key_prefix(&mut op, &[&[111]]));
+    // cnt += 0
+    pnk!(map.iter_op_with_key_prefix(&mut op, &[&[111], &[12]]));
+    // cnt += 0
+    pnk!(map.iter_op_with_key_prefix(&mut op, &[&[111], &[12], &[13]]));
+    // cnt += 0
+    pnk!(map.iter_op_with_key_prefix(&mut op, &[&[111], &[12], &[13], &[14]]));
+    // cnt += 0
+    pnk!(map.iter_op_with_key_prefix(&mut op, &[&[111], &[12], &[13], &[15]]));
+
     drop(op);
     assert_eq!(cnt, 10);
 }

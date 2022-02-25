@@ -178,9 +178,6 @@ pub mod versioned_multi_key;
 pub use basic::{mapx::Mapx, mapx_ord::MapxOrd, vecx::Vecx};
 pub use versioned::{mapx::MapxVs, mapx_ord::MapxOrdVs, orphan::OrphanVs, vecx::VecxVs};
 
-pub use basic_multi_key::{
-    mapx_double_key::MapxDk, mapx_raw::MapxRawMk, mapx_triple_key::MapxTk,
-};
 pub use versioned_multi_key::{
     mapx_double_key::MapxDkVs, mapx_raw::MapxRawMkVs, mapx_triple_key::MapxTkVs,
 };

@@ -12,7 +12,7 @@
 //!     sync::{mpsc::channel, Mutex},
 //!     thread,
 //! };
-//! use vsdb::{BranchName, MapxVs, OrphanVs, VecxVs, VersionName, Vs, VsMgmt};
+//! use vsdb::{BranchName, MapxVs, OrphanVs, VecxVs, VersionName, Vs, VsMgmt, ValueEnDe};
 //!
 //! type Amount = u64;
 //! type Address = Vec<u8>;
@@ -166,7 +166,7 @@
 //! impl Transaction {
 //!     fn hash(&self) -> Vec<u8> {
 //!         // assume this is a hash function
-//!         bcs::to_bytes(self).unwrap()
+//!         self.encode().to_vec()
 //!     }
 //! }
 //!

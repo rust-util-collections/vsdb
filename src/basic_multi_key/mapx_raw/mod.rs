@@ -187,7 +187,8 @@ impl MapxRawMk {
                         depth -= 1;
                     }
                 } else {
-                    return Err(eg!("key-prefix does not exist"));
+                    // key-prefix does not exist
+                    return Ok(());
                 }
             }
         };
@@ -266,7 +267,8 @@ impl MapxRawMk {
                         depth -= 1;
                     }
                 } else {
-                    return Err(eg!("key-prefix does not exist"));
+                    // key-prefix does not exist
+                    return Ok(());
                 }
             }
         };

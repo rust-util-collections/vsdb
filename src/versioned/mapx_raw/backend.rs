@@ -69,7 +69,7 @@ impl MapxRawVs {
     fn init(&mut self) {
         self.default_branch = INITIAL_BRANCH_ID;
         self.branch_name_to_branch_id
-            .insert_ref(&INITIAL_BRANCH_NAME.to_vec(), &INITIAL_BRANCH_ID);
+            .insert_ref(INITIAL_BRANCH_NAME, &INITIAL_BRANCH_ID);
         self.branch_to_parent.insert(INITIAL_BRANCH_ID, None);
         self.branch_to_created_versions
             .insert(INITIAL_BRANCH_ID, MapxOrd::new());
@@ -519,8 +519,7 @@ impl MapxRawVs {
     ) -> bool {
         self.branch_to_created_versions
             .get(&branch_id)
-            .map(|vers| vers.get(&version_id))
-            .flatten()
+            .and_then(|vers| vers.get(&version_id))
             .is_some()
     }
 
