@@ -1,4 +1,4 @@
-all: lint
+all: release
 
 export CARGO_NET_GIT_FETCH_WITH_CLI = true
 
@@ -13,6 +13,8 @@ lint:
 	cargo check --tests
 	cargo check --benches
 	cargo check --examples
+
+lint_all: lint
 	cargo clippy --no-default-features --features "rocks_engine,cbor_codec"
 	cargo check --tests --no-default-features --features "rocks_engine,cbor_codec"
 	cargo check --benches --no-default-features --features "rocks_engine,cbor_codec"
@@ -21,6 +23,8 @@ lint:
 test:
 	- rm -rf ~/.vsdb
 	cargo test -- --test-threads=1
+
+test_all: test
 	- rm -rf ~/.vsdb
 	cargo test --no-default-features --features "rocks_engine,cbor_codec" -- --test-threads=1
 
@@ -28,6 +32,8 @@ bench:
 	- rm -rf ~/.vsdb
 	cargo bench
 	du -sh ~/.vsdb
+
+bench_all: bench
 	- rm -rf ~/.vsdb
 	cargo bench --no-default-features --features "rocks_engine,cbor_codec"
 	du -sh ~/.vsdb

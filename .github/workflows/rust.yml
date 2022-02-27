@@ -15,6 +15,6 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Build
-      run: make build
+      run: rustup update stable; make build
     - name: Run tests
-      run: make test
+      run: rustup update stable; make test
