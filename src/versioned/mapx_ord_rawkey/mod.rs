@@ -180,7 +180,7 @@ where
 
     #[inline(always)]
     pub fn insert(&self, key: RawKey, value: V) -> Result<Option<V>> {
-        self.insert_ref(&key, &value)
+        self.insert_ref(&key, &value).c(d!())
     }
 
     #[inline(always)]
@@ -190,13 +190,14 @@ where
         value: V,
         branch_name: BranchName,
     ) -> Result<Option<V>> {
-        self.insert_ref_by_branch(&key, &value, branch_name)
+        self.insert_ref_by_branch(&key, &value, branch_name).c(d!())
     }
 
     #[inline(always)]
     pub fn insert_ref(&self, key: &[u8], value: &V) -> Result<Option<V>> {
         self.inner
             .insert(key, &value.encode())
+            .c(d!())
             .map(|v| v.map(|v| <V as ValueEnDe>::decode(&v).unwrap()))
     }
 
@@ -209,6 +210,7 @@ where
     ) -> Result<Option<V>> {
         self.inner
             .insert_by_branch(key, &value.encode(), branch_name)
+            .c(d!())
             .map(|v| v.map(|v| <V as ValueEnDe>::decode(&v).unwrap()))
     }
 
@@ -383,6 +385,7 @@ where
     pub fn remove(&self, key: &[u8]) -> Result<Option<V>> {
         self.inner
             .remove(key)
+            .c(d!())
             .map(|v| v.map(|v| <V as ValueEnDe>::decode(&v).unwrap()))
     }
 
@@ -394,6 +397,7 @@ where
     ) -> Result<Option<V>> {
         self.inner
             .remove_by_branch(key, branch_name)
+            .c(d!())
             .map(|v| v.map(|v| <V as ValueEnDe>::decode(&v).unwrap()))
     }
 

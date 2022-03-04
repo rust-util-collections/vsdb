@@ -1,6 +1,9 @@
 use super::*;
 use crate::{
-    common::{BranchName, ParentBranchName, VersionName, BRANCH_ANCESTORS_LIMIT},
+    common::{
+        BranchName, ParentBranchName, VersionName, BRANCH_ANCESTORS_LIMIT,
+        INITIAL_BRANCH_NAME,
+    },
     ValueEnDe, VsMgmt,
 };
 use std::{sync::mpsc::channel, thread};
@@ -11,7 +14,9 @@ fn basic_cases() {
 
     let hdr = {
         let hdr_i = MapxRawVs::new();
+        assert!(hdr_i.branch_has_versions(INITIAL_BRANCH_NAME));
         hdr_i.version_create(VersionName(b"test")).unwrap();
+        assert!(hdr_i.branch_has_versions(INITIAL_BRANCH_NAME));
 
         assert_eq!(0, hdr_i.len());
         (0..cnt).for_each(|i: usize| {

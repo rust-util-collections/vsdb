@@ -11,7 +11,7 @@ use crate::{
     common::{
         ende::encode_optioned_bytes, BranchID, BranchName, RawKey, RawValue, VersionID,
         VersionName, BRANCH_ANCESTORS_LIMIT, INITIAL_BRANCH_ID, INITIAL_BRANCH_NAME,
-        INITIAL_VERSION, NULL, VSDB,
+        INITIAL_VERSION, NULL, RESERVED_VERSION_NUM_DEFAULT, VSDB,
     },
 };
 use ruc::*;
@@ -19,9 +19,6 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, ops::RangeBounds};
 
 type BranchPath = BTreeMap<BranchID, VersionID>;
-
-// default value for reserved number when pruning branches
-pub(super) const RESERVED_VERSION_NUM_DEFAULT: usize = 10;
 
 ////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////
@@ -69,7 +66,7 @@ impl MapxRawVs {
     fn init(&mut self) {
         self.default_branch = INITIAL_BRANCH_ID;
         self.branch_name_to_branch_id
-            .insert_ref(INITIAL_BRANCH_NAME, &INITIAL_BRANCH_ID);
+            .insert_ref(INITIAL_BRANCH_NAME.0, &INITIAL_BRANCH_ID);
         self.branch_to_parent.insert(INITIAL_BRANCH_ID, None);
         self.branch_to_created_versions
             .insert(INITIAL_BRANCH_ID, MapxOrd::new());
@@ -688,10 +685,16 @@ impl MapxRawVs {
         Ok(())
     }
 
-    // Check if a branch exists or not
+    // Check if a branch exists or not.
     #[inline(always)]
     pub(super) fn branch_exists(&self, branch_id: BranchID) -> bool {
         self.branch_to_parent.contains_key(&branch_id)
+    }
+
+    // Check if a branch exists and has versions on it.
+    #[inline(always)]
+    pub(super) fn branch_has_versions(&self, branch_id: BranchID) -> bool {
+        self.branch_exists(branch_id) || !self.version_name_to_version_id.is_empty()
     }
 
     // Remove all changes directly made by this branch, and delete the branch itself.

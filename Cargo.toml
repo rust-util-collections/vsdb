@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "0.15.2"
+version = "0.15.3"
 authors = ["fanhui.x@gmail.com"]
 edition = "2021"
 description = "Versioned Stateful DataBase, mainly used in blockchain scene."
@@ -12,12 +12,12 @@ license = "MIT"
 
 [dependencies]
 ruc = "1.0.5"
-once_cell = "1.9.0"
+once_cell = "1.10.0"
 serde = { version = "1.0.136", features = ["derive"] }
 parking_lot = "0.12.0"
 fast-math = "0.1"
 sha3 = "0.10.1"
-vsdb_derive = "0.2.2"
+vsdb_derive = "0.2.3"
 
 serde_cbor = { version = "0.11.2", optional = true }
 bcs = { version = "0.1.3", optional = true }
