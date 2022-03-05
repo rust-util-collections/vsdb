@@ -32,19 +32,19 @@ pub(crate) type BranchID = u64;
 pub(crate) type VersionID = u64;
 
 /// Avoid making mistakes between branch name and version name.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BranchName<'a>(pub &'a [u8]);
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BranchNameOwned(pub Vec<u8>);
 /// Avoid making mistakes between branch name and version name.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ParentBranchName<'a>(pub &'a [u8]);
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ParentBranchNameOwned(pub Vec<u8>);
 /// Avoid making mistakes between branch name and version name.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VersionName<'a>(pub &'a [u8]);
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VersionNameOwned(pub Vec<u8>);
 
 const RESERVED_ID_CNT: Prefix = 4096_0000;
