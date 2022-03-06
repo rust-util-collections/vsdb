@@ -10,6 +10,9 @@
 //! ```
 //! use vsdb::{VersionName, versioned::mapx_raw::MapxRawVs, VsMgmt};
 //!
+//! let dir = format!("/tmp/__vsdb__{}", rand::random::<u128>());
+//! vsdb::vsdb_set_base_dir(dir);
+//!
 //! let mut l = MapxRawVs::new();
 //! l.version_create(VersionName(b"test")).unwrap();
 //!

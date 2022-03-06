@@ -11,6 +11,9 @@
 //! ```
 //! use vsdb::basic::mapx_ord_rawkey::MapxOrdRawKey;
 //!
+//! let dir = format!("/tmp/__vsdb__{}", rand::random::<u128>());
+//! vsdb::vsdb_set_base_dir(dir);
+//!
 //! let mut l = MapxOrdRawKey::new();
 //!
 //! l.insert_ref(&[1], &0);

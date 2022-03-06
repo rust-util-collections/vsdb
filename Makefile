@@ -14,7 +14,7 @@ lint:
 	cargo check --benches
 	cargo check --examples
 
-lint_all: lint
+lintall: lint
 	cargo clippy --no-default-features --features "rocks_engine,cbor_codec"
 	cargo check --tests --no-default-features --features "rocks_engine,cbor_codec"
 	cargo check --benches --no-default-features --features "rocks_engine,cbor_codec"
@@ -24,7 +24,7 @@ test:
 	- rm -rf ~/.vsdb
 	cargo test -- --test-threads=1
 
-test_all: test
+testall: test
 	- rm -rf ~/.vsdb
 	cargo test --no-default-features --features "rocks_engine,cbor_codec" -- --test-threads=1
 
@@ -33,7 +33,7 @@ bench:
 	cargo bench
 	du -sh ~/.vsdb
 
-bench_all: bench
+benchall: bench
 	- rm -rf ~/.vsdb
 	cargo bench --no-default-features --features "rocks_engine,cbor_codec"
 	du -sh ~/.vsdb
