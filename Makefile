@@ -15,10 +15,10 @@ lint:
 	cargo check --examples
 
 lintall: lint
-	cargo clippy --no-default-features --features "rocks_engine,cbor_codec"
-	cargo check --tests --no-default-features --features "rocks_engine,cbor_codec"
-	cargo check --benches --no-default-features --features "rocks_engine,cbor_codec"
-	cargo check --examples --no-default-features --features "rocks_engine,cbor_codec"
+	cargo clippy --no-default-features --features "rocks_engine,msgpack_codec"
+	cargo check --tests --no-default-features --features "rocks_engine,msgpack_codec"
+	cargo check --benches --no-default-features --features "rocks_engine,msgpack_codec"
+	cargo check --examples --no-default-features --features "rocks_engine,msgpack_codec"
 
 test:
 	- rm -rf ~/.vsdb
@@ -26,7 +26,7 @@ test:
 
 testall: test
 	- rm -rf ~/.vsdb
-	cargo test --no-default-features --features "rocks_engine,cbor_codec" -- --test-threads=1
+	cargo test --no-default-features --features "rocks_engine,msgpack_codec" -- --test-threads=1
 
 bench:
 	- rm -rf ~/.vsdb
@@ -35,7 +35,7 @@ bench:
 
 benchall: bench
 	- rm -rf ~/.vsdb
-	cargo bench --no-default-features --features "rocks_engine,cbor_codec"
+	cargo bench --no-default-features --features "rocks_engine,msgpack_codec"
 	du -sh ~/.vsdb
 
 fmt:

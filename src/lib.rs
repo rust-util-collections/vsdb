@@ -150,7 +150,7 @@
 //! - `rocks_engine`, use rocksdb as the backend database
 //!     - Faster running speed
 //!     - Can not be compiled into a statically linked binary
-//! - \[**default**] `cbor_codec`, use cbor as the codec
+//! - \[**default**] `msgpack_codec`, use msgpack as the codec
 //!     - Faster running speed
 //! - `bcs_codec`, use bcs as the codec
 //!     - Created by the 'Libre' project of Facebook
