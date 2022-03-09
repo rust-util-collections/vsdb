@@ -694,7 +694,7 @@ impl MapxRawVs {
     // Check if a branch exists and has versions on it.
     #[inline(always)]
     pub(super) fn branch_has_versions(&self, branch_id: BranchID) -> bool {
-        self.branch_exists(branch_id) || !self.version_name_to_version_id.is_empty()
+        self.branch_exists(branch_id) && !self.version_name_to_version_id.is_empty()
     }
 
     // Remove all changes directly made by this branch, and delete the branch itself.

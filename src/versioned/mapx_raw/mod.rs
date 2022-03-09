@@ -559,7 +559,10 @@ impl VsMgmt for MapxRawVs {
     fn branch_exists(&self, branch_name: BranchName) -> bool {
         self.inner
             .get_branch_id(branch_name)
-            .map(|id| self.inner.branch_exists(id))
+            .map(|id| {
+                assert!(self.inner.branch_exists(id));
+                true
+            })
             .unwrap_or(false)
     }
 
