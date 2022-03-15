@@ -5,7 +5,7 @@
 use crate::{
     basic::{
         mapx_ord::MapxOrd,
-        mapx_ord_rawkey::{MapxOrdRawKey, MapxOrdRawKeyIter},
+        mapx_ord_rawkey::{MapxOrdRk, MapxOrdRkIter},
         mapx_raw::MapxRaw,
     },
     common::{
@@ -27,8 +27,8 @@ type BranchPath = BTreeMap<BranchID, VersionID>;
 pub(super) struct MapxRawVs {
     default_branch: BranchID,
 
-    branch_name_to_branch_id: MapxOrdRawKey<BranchID>,
-    version_name_to_version_id: MapxOrdRawKey<VersionID>,
+    branch_name_to_branch_id: MapxOrdRk<BranchID>,
+    version_name_to_version_id: MapxOrdRk<VersionID>,
 
     // which version the branch is forked from
     branch_to_parent: MapxOrd<BranchID, Option<BasePoint>>,
@@ -40,7 +40,7 @@ pub(super) struct MapxRawVs {
     version_to_change_set: MapxOrd<VersionID, MapxRaw>,
 
     // key -> multi-branch -> multi-version -> multi-value
-    layered_kv: MapxOrdRawKey<MapxOrd<BranchID, MapxOrd<VersionID, Option<RawValue>>>>,
+    layered_kv: MapxOrdRk<MapxOrd<BranchID, MapxOrd<VersionID, Option<RawValue>>>>,
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
@@ -51,12 +51,12 @@ impl MapxRawVs {
     pub(super) fn new() -> Self {
         let mut ret = Self {
             default_branch: BranchID::default(),
-            branch_name_to_branch_id: MapxOrdRawKey::new(),
-            version_name_to_version_id: MapxOrdRawKey::new(),
+            branch_name_to_branch_id: MapxOrdRk::new(),
+            version_name_to_version_id: MapxOrdRk::new(),
             branch_to_parent: MapxOrd::new(),
             branch_to_created_versions: MapxOrd::new(),
             version_to_change_set: MapxOrd::new(),
-            layered_kv: MapxOrdRawKey::new(),
+            layered_kv: MapxOrdRk::new(),
         };
         ret.init();
         ret
@@ -1046,7 +1046,7 @@ struct BasePoint {
 
 pub struct MapxRawVsIter<'a> {
     hdr: &'a MapxRawVs,
-    iter: MapxOrdRawKeyIter<MapxOrd<BranchID, MapxOrd<VersionID, Option<RawValue>>>>,
+    iter: MapxOrdRkIter<MapxOrd<BranchID, MapxOrd<VersionID, Option<RawValue>>>>,
     branch_id: BranchID,
     version_id: VersionID,
 }

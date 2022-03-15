@@ -1,5 +1,5 @@
 //!
-//! `MapxMkRawKey`, aka `MapxRawMk` with typed values.
+//! `MapxRkMk`, aka `MapxRawMk` with typed values.
 //!
 //! NOTE:
 //! - Values will be encoded in this structure
@@ -18,12 +18,12 @@ use std::{
 
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
-pub struct MapxMkRawKey<V> {
+pub struct MapxRkMk<V> {
     inner: MapxRawMk,
     p: PhantomData<V>,
 }
 
-impl<V: ValueEnDe> MapxMkRawKey<V> {
+impl<V: ValueEnDe> MapxRkMk<V> {
     /// # Panic
     /// Will panic if `0 == key_size`.
     #[inline(always)]
@@ -112,13 +112,13 @@ impl<V: ValueEnDe> MapxMkRawKey<V> {
 
 #[derive(PartialEq, Eq, Debug)]
 pub struct ValueMut<'a, V: ValueEnDe> {
-    hdr: &'a MapxMkRawKey<V>,
+    hdr: &'a MapxRkMk<V>,
     key: &'a [&'a [u8]],
     value: V,
 }
 
 impl<'a, V: ValueEnDe> ValueMut<'a, V> {
-    fn new(hdr: &'a MapxMkRawKey<V>, key: &'a [&'a [u8]], value: V) -> Self {
+    fn new(hdr: &'a MapxRkMk<V>, key: &'a [&'a [u8]], value: V) -> Self {
         ValueMut { hdr, key, value }
     }
 }
@@ -144,7 +144,7 @@ impl<'a, V: ValueEnDe> DerefMut for ValueMut<'a, V> {
 
 pub struct Entry<'a, V> {
     key: &'a [&'a [u8]],
-    hdr: &'a MapxMkRawKey<V>,
+    hdr: &'a MapxRkMk<V>,
 }
 
 impl<'a, V: ValueEnDe> Entry<'a, V> {

@@ -27,7 +27,7 @@ pub type MapxIter = rocks_db::RocksIter;
 
 use crate::common::{
     ende::{SimpleVisitor, ValueEnDe},
-    BranchID, Prefix, PrefixBytes, RawValue, VersionID, VSDB,
+    BranchID, Pre, PreBytes, RawValue, VersionID, VSDB,
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
@@ -39,32 +39,32 @@ use std::{ops::RangeBounds, result::Result as StdResult};
 /// Low-level database interface.
 pub trait Engine: Sized {
     fn new() -> Result<Self>;
-    fn alloc_prefix(&self) -> Prefix;
+    fn alloc_prefix(&self) -> Pre;
     fn alloc_branch_id(&self) -> BranchID;
     fn alloc_version_id(&self) -> VersionID;
     fn area_count(&self) -> usize;
     fn flush(&self);
 
-    fn iter(&self, area_idx: usize, meta_prefix: PrefixBytes) -> MapxIter;
+    fn iter(&self, area_idx: usize, meta_prefix: PreBytes) -> MapxIter;
 
     fn range<'a, R: RangeBounds<&'a [u8]>>(
         &'a self,
         area_idx: usize,
-        meta_prefix: PrefixBytes,
+        meta_prefix: PreBytes,
         bounds: R,
     ) -> MapxIter;
 
     fn get(
         &self,
         area_idx: usize,
-        meta_prefix: PrefixBytes,
+        meta_prefix: PreBytes,
         key: &[u8],
     ) -> Option<RawValue>;
 
     fn insert(
         &self,
         area_idx: usize,
-        meta_prefix: PrefixBytes,
+        meta_prefix: PreBytes,
         key: &[u8],
         value: &[u8],
     ) -> Option<RawValue>;
@@ -72,22 +72,22 @@ pub trait Engine: Sized {
     fn remove(
         &self,
         area_idx: usize,
-        meta_prefix: PrefixBytes,
+        meta_prefix: PreBytes,
         key: &[u8],
     ) -> Option<RawValue>;
 
-    fn get_instance_len(&self, instance_prefix: PrefixBytes) -> u64;
+    fn get_instance_len(&self, instance_prefix: PreBytes) -> u64;
 
-    fn set_instance_len(&self, instance_prefix: PrefixBytes, new_len: u64);
+    fn set_instance_len(&self, instance_prefix: PreBytes, new_len: u64);
 
-    fn increase_instance_len(&self, instance_prefix: PrefixBytes) {
+    fn increase_instance_len(&self, instance_prefix: PreBytes) {
         self.set_instance_len(
             instance_prefix,
             self.get_instance_len(instance_prefix) + 1,
         )
     }
 
-    fn decrease_instance_len(&self, instance_prefix: PrefixBytes) {
+    fn decrease_instance_len(&self, instance_prefix: PreBytes) {
         self.set_instance_len(
             instance_prefix,
             self.get_instance_len(instance_prefix) - 1,
@@ -102,7 +102,7 @@ pub trait Engine: Sized {
 pub(crate) struct Mapx {
     area_idx: usize,
     // the unique ID of each instance
-    prefix: PrefixBytes,
+    prefix: PreBytes,
 }
 
 impl Mapx {
@@ -113,9 +113,9 @@ impl Mapx {
         // NOTE: this is NOT equal to
         // `prefix as usize % VSDB.area_count()`, the MAX value of
         // the type used by `len()` of almost all known OS-platforms
-        // can be considered to be always less than Prefix::MAX(u64::MAX),
+        // can be considered to be always less than Pre::MAX(u64::MAX),
         // but the reverse logic can NOT be guaranteed.
-        let area_idx = (prefix % VSDB.db.area_count() as Prefix) as usize;
+        let area_idx = (prefix % VSDB.db.area_count() as Pre) as usize;
 
         let prefix_bytes = prefix.to_be_bytes();
 
@@ -197,7 +197,7 @@ impl PartialEq for Mapx {
 
 #[derive(Deserialize, Serialize, Debug)]
 struct InstanceCfg {
-    prefix: PrefixBytes,
+    prefix: PreBytes,
     area_idx: usize,
 }
 

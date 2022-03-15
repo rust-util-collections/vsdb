@@ -24,9 +24,9 @@ pub(crate) type RawBytes = Box<[u8]>;
 pub(crate) type RawKey = RawBytes;
 pub(crate) type RawValue = RawBytes;
 
-pub(crate) type Prefix = u64;
-pub(crate) type PrefixBytes = [u8; PREFIX_SIZ];
-pub(crate) const PREFIX_SIZ: usize = size_of::<Prefix>();
+pub(crate) type Pre = u64;
+pub(crate) type PreBytes = [u8; PREFIX_SIZ];
+pub(crate) const PREFIX_SIZ: usize = size_of::<Pre>();
 
 pub(crate) type BranchID = u64;
 pub(crate) type VersionID = u64;
@@ -47,8 +47,8 @@ pub struct VersionName<'a>(pub &'a [u8]);
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VersionNameOwned(pub Vec<u8>);
 
-const RESERVED_ID_CNT: Prefix = 4096_0000;
-pub(crate) const BIGGEST_RESERVED_ID: Prefix = RESERVED_ID_CNT - 1;
+const RESERVED_ID_CNT: Pre = 4096_0000;
+pub(crate) const BIGGEST_RESERVED_ID: Pre = RESERVED_ID_CNT - 1;
 pub(crate) const NULL: BranchID = BIGGEST_RESERVED_ID as BranchID;
 
 pub(crate) const INITIAL_BRANCH_ID: BranchID = 0;
@@ -95,11 +95,11 @@ macro_rules! parse_int {
     }};
 }
 
-/// Parse bytes to a `Prefix` type.
+/// Parse bytes to a `Pre` type.
 #[macro_export(crate)]
 macro_rules! parse_prefix {
     ($bytes: expr) => {
-        $crate::parse_int!($bytes, $crate::common::Prefix)
+        $crate::parse_int!($bytes, $crate::common::Pre)
     };
 }
 

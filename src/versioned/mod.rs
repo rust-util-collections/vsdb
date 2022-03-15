@@ -208,9 +208,9 @@ pub mod vecx;
 
 use crate::{
     basic::{
-        mapx::Mapx, mapx_ord::MapxOrd, mapx_ord_rawkey::MapxOrdRawKey,
-        mapx_ord_rawvalue::MapxOrdRawValue, mapx_raw::MapxRaw, orphan::Orphan,
-        vecx::Vecx, vecx_raw::VecxRaw,
+        mapx::Mapx, mapx_ord::MapxOrd, mapx_ord_rawkey::MapxOrdRk,
+        mapx_ord_rawvalue::MapxOrdRv, mapx_raw::MapxRaw, orphan::Orphan, vecx::Vecx,
+        vecx_raw::VecxRaw,
     },
     merkle::{MerkleTree, MerkleTreeStore, Proof, ProofEntry},
     BranchName, ParentBranchName, VersionName,
@@ -725,11 +725,11 @@ impl<K, V> VsMgmt for MapxOrd<K, V> {
     impl_vs_methods_nope!();
 }
 
-impl<V> VsMgmt for MapxOrdRawKey<V> {
+impl<V> VsMgmt for MapxOrdRk<V> {
     impl_vs_methods_nope!();
 }
 
-impl<K> VsMgmt for MapxOrdRawValue<K> {
+impl<K> VsMgmt for MapxOrdRv<K> {
     impl_vs_methods_nope!();
 }
 

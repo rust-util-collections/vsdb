@@ -1,5 +1,5 @@
 use crate::common::{
-    vsdb_get_base_dir, vsdb_set_base_dir, BranchID, Engine, Prefix, PrefixBytes, RawKey,
+    vsdb_get_base_dir, vsdb_set_base_dir, BranchID, Engine, Pre, PreBytes, RawKey,
     RawValue, VersionID, INITIAL_BRANCH_ID, PREFIX_SIZ, RESERVED_ID_CNT,
 };
 use once_cell::sync::Lazy;
@@ -19,7 +19,7 @@ const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 pub(crate) struct SledEngine {
     meta: Db,
     areas: Vec<Tree>,
-    prefix_allocator: PrefixAllocator,
+    prefix_allocator: PreAllocator,
 }
 
 impl Engine for SledEngine {
@@ -30,7 +30,7 @@ impl Engine for SledEngine {
             .map(|idx| meta.open_tree(idx.to_be_bytes()).c(d!()))
             .collect::<Result<Vec<_>>>()?;
 
-        let (prefix_allocator, initial_value) = PrefixAllocator::init();
+        let (prefix_allocator, initial_value) = PreAllocator::init();
 
         if meta.get(&META_KEY_BRANCH_ID).c(d!())?.is_none() {
             meta.insert(
@@ -58,7 +58,7 @@ impl Engine for SledEngine {
 
     // 'step 1' and 'step 2' is not atomic in multi-threads scene,
     // so we use a `Mutex` lock for thread safe.
-    fn alloc_prefix(&self) -> Prefix {
+    fn alloc_prefix(&self) -> Pre {
         static LK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
 
         let mut z = LK.lock();
@@ -145,7 +145,7 @@ impl Engine for SledEngine {
         });
     }
 
-    fn iter(&self, area_idx: usize, meta_prefix: PrefixBytes) -> SledIter {
+    fn iter(&self, area_idx: usize, meta_prefix: PreBytes) -> SledIter {
         SledIter {
             inner: self.areas[area_idx].scan_prefix(meta_prefix.as_slice()),
             bounds: (Bound::Unbounded, Bound::Unbounded),
@@ -155,7 +155,7 @@ impl Engine for SledEngine {
     fn range<'a, R: RangeBounds<&'a [u8]>>(
         &'a self,
         area_idx: usize,
-        meta_prefix: PrefixBytes,
+        meta_prefix: PreBytes,
         bounds: R,
     ) -> SledIter {
         let mut b_lo = meta_prefix.to_vec();
@@ -193,7 +193,7 @@ impl Engine for SledEngine {
     fn get(
         &self,
         area_idx: usize,
-        meta_prefix: PrefixBytes,
+        meta_prefix: PreBytes,
         key: &[u8],
     ) -> Option<RawValue> {
         let mut k = meta_prefix.to_vec();
@@ -207,7 +207,7 @@ impl Engine for SledEngine {
     fn insert(
         &self,
         area_idx: usize,
-        meta_prefix: PrefixBytes,
+        meta_prefix: PreBytes,
         key: &[u8],
         value: &[u8],
     ) -> Option<RawValue> {
@@ -222,7 +222,7 @@ impl Engine for SledEngine {
     fn remove(
         &self,
         area_idx: usize,
-        meta_prefix: PrefixBytes,
+        meta_prefix: PreBytes,
         key: &[u8],
     ) -> Option<RawValue> {
         let mut k = meta_prefix.to_vec();
@@ -233,11 +233,11 @@ impl Engine for SledEngine {
             .map(|iv| iv.to_vec().into_boxed_slice())
     }
 
-    fn get_instance_len(&self, instance_prefix: PrefixBytes) -> u64 {
+    fn get_instance_len(&self, instance_prefix: PreBytes) -> u64 {
         crate::parse_int!(self.meta.get(instance_prefix).unwrap().unwrap(), u64)
     }
 
-    fn set_instance_len(&self, instance_prefix: PrefixBytes, new_len: u64) {
+    fn set_instance_len(&self, instance_prefix: PreBytes, new_len: u64) {
         self.meta
             .insert(instance_prefix, new_len.to_be_bytes())
             .unwrap();
@@ -279,17 +279,17 @@ impl DoubleEndedIterator for SledIter {
 }
 
 // key of the prefix allocator in the 'meta'
-struct PrefixAllocator {
+struct PreAllocator {
     key: [u8; 1],
 }
 
-impl PrefixAllocator {
-    const fn init() -> (Self, PrefixBytes) {
+impl PreAllocator {
+    const fn init() -> (Self, PreBytes) {
         (
             Self {
                 key: META_KEY_PREFIX_ALLOCATOR,
             },
-            (RESERVED_ID_CNT + Prefix::MIN).to_be_bytes(),
+            (RESERVED_ID_CNT + Pre::MIN).to_be_bytes(),
         )
     }
 }

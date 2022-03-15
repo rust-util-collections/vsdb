@@ -3,8 +3,8 @@
 //!
 
 use crate::{
-    versioned::mapx_ord_rawkey::MapxOrdRawKeyVs, BranchName, ParentBranchName,
-    ValueEnDe, VersionName, VsMgmt,
+    versioned::mapx_ord_rawkey::MapxOrdRkVs, BranchName, ParentBranchName, ValueEnDe,
+    VersionName, VsMgmt,
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
@@ -17,7 +17,7 @@ use std::ops::{Deref, DerefMut};
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(bound = "")]
 pub struct OrphanVs<T> {
-    inner: MapxOrdRawKeyVs<T>,
+    inner: MapxOrdRkVs<T>,
 }
 
 impl<T> OrphanVs<T>
@@ -26,7 +26,7 @@ where
 {
     #[inline(always)]
     pub fn new(v: T) -> Self {
-        let hdr = MapxOrdRawKeyVs::new();
+        let hdr = MapxOrdRkVs::new();
         pnk!(hdr.insert_ref(&[], &v));
         Self { inner: hdr }
     }

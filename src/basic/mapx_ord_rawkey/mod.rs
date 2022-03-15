@@ -9,12 +9,12 @@
 //! # Examples
 //!
 //! ```
-//! use vsdb::basic::mapx_ord_rawkey::MapxOrdRawKey;
+//! use vsdb::basic::mapx_ord_rawkey::MapxOrdRk;
 //!
 //! let dir = format!("/tmp/__vsdb__{}", rand::random::<u128>());
 //! vsdb::vsdb_set_base_dir(dir);
 //!
-//! let mut l = MapxOrdRawKey::new();
+//! let mut l = MapxOrdRk::new();
 //!
 //! l.insert_ref(&[1], &0);
 //! l.insert(vec![1].into_boxed_slice(), 0);
@@ -48,12 +48,12 @@ use std::{
 
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
-pub struct MapxOrdRawKey<V> {
+pub struct MapxOrdRk<V> {
     inner: MapxRaw,
     p: PhantomData<V>,
 }
 
-impl<V> Default for MapxOrdRawKey<V>
+impl<V> Default for MapxOrdRk<V>
 where
     V: ValueEnDe,
 {
@@ -62,13 +62,13 @@ where
     }
 }
 
-impl<V> MapxOrdRawKey<V>
+impl<V> MapxOrdRk<V>
 where
     V: ValueEnDe,
 {
     #[inline(always)]
     pub fn new() -> Self {
-        MapxOrdRawKey {
+        MapxOrdRk {
             inner: MapxRaw::new(),
             p: PhantomData,
         }
@@ -166,20 +166,20 @@ where
     }
 
     #[inline(always)]
-    pub fn iter(&self) -> MapxOrdRawKeyIter<V> {
-        MapxOrdRawKeyIter {
+    pub fn iter(&self) -> MapxOrdRkIter<V> {
+        MapxOrdRkIter {
             iter: self.inner.iter(),
             p: PhantomData,
         }
     }
 
     #[inline(always)]
-    pub fn values(&self) -> MapxOrdRawKeyValues<V> {
-        MapxOrdRawKeyValues { iter: self.iter() }
+    pub fn values(&self) -> MapxOrdRkValues<V> {
+        MapxOrdRkValues { iter: self.iter() }
     }
 
     #[inline(always)]
-    pub fn range<R: RangeBounds<RawKey>>(&self, bounds: R) -> MapxOrdRawKeyIter<V> {
+    pub fn range<R: RangeBounds<RawKey>>(&self, bounds: R) -> MapxOrdRkIter<V> {
         let start = match bounds.start_bound() {
             Bound::Included(s) => Bound::Included(&s[..]),
             Bound::Excluded(s) => Bound::Excluded(&s[..]),
@@ -199,8 +199,8 @@ where
     pub fn range_ref<'a, R: RangeBounds<&'a [u8]>>(
         &'a self,
         bounds: R,
-    ) -> MapxOrdRawKeyIter<V> {
-        MapxOrdRawKeyIter {
+    ) -> MapxOrdRkIter<V> {
+        MapxOrdRkIter {
             iter: self.inner.range(bounds),
             p: PhantomData,
         }
@@ -239,7 +239,7 @@ pub struct ValueMut<'a, V>
 where
     V: ValueEnDe,
 {
-    hdr: &'a MapxOrdRawKey<V>,
+    hdr: &'a MapxOrdRk<V>,
     key: RawKey,
     value: V,
 }
@@ -248,7 +248,7 @@ impl<'a, V> ValueMut<'a, V>
 where
     V: ValueEnDe,
 {
-    pub fn new(hdr: &'a MapxOrdRawKey<V>, key: RawKey, value: V) -> Self {
+    pub fn new(hdr: &'a MapxOrdRk<V>, key: RawKey, value: V) -> Self {
         ValueMut { hdr, key, value }
     }
 }
@@ -286,7 +286,7 @@ where
     V: 'a + ValueEnDe,
 {
     pub key: RawKey,
-    pub hdr: &'a MapxOrdRawKey<V>,
+    pub hdr: &'a MapxOrdRk<V>,
 }
 
 impl<'a, V> Entry<'a, V>
@@ -306,7 +306,7 @@ where
     V: ValueEnDe,
 {
     key: &'a [u8],
-    hdr: &'a MapxOrdRawKey<V>,
+    hdr: &'a MapxOrdRk<V>,
 }
 
 impl<'a, V> EntryRef<'a, V>
@@ -321,7 +321,7 @@ where
     }
 }
 
-pub struct MapxOrdRawKeyIter<V>
+pub struct MapxOrdRkIter<V>
 where
     V: ValueEnDe,
 {
@@ -329,7 +329,7 @@ where
     p: PhantomData<V>,
 }
 
-impl<V> Iterator for MapxOrdRawKeyIter<V>
+impl<V> Iterator for MapxOrdRkIter<V>
 where
     V: ValueEnDe,
 {
@@ -341,7 +341,7 @@ where
     }
 }
 
-impl<V> DoubleEndedIterator for MapxOrdRawKeyIter<V>
+impl<V> DoubleEndedIterator for MapxOrdRkIter<V>
 where
     V: ValueEnDe,
 {
@@ -352,16 +352,16 @@ where
     }
 }
 
-impl<V> ExactSizeIterator for MapxOrdRawKeyIter<V> where V: ValueEnDe {}
+impl<V> ExactSizeIterator for MapxOrdRkIter<V> where V: ValueEnDe {}
 
-pub struct MapxOrdRawKeyValues<V>
+pub struct MapxOrdRkValues<V>
 where
     V: ValueEnDe,
 {
-    iter: MapxOrdRawKeyIter<V>,
+    iter: MapxOrdRkIter<V>,
 }
 
-impl<V> Iterator for MapxOrdRawKeyValues<V>
+impl<V> Iterator for MapxOrdRkValues<V>
 where
     V: ValueEnDe,
 {
@@ -371,7 +371,7 @@ where
     }
 }
 
-impl<V> DoubleEndedIterator for MapxOrdRawKeyValues<V>
+impl<V> DoubleEndedIterator for MapxOrdRkValues<V>
 where
     V: ValueEnDe,
 {
@@ -380,4 +380,4 @@ where
     }
 }
 
-impl<V> ExactSizeIterator for MapxOrdRawKeyValues<V> where V: ValueEnDe {}
+impl<V> ExactSizeIterator for MapxOrdRkValues<V> where V: ValueEnDe {}

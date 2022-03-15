@@ -3,8 +3,8 @@
 //!
 
 use crate::{
-    basic::{mapx_ord::MapxOrd, mapx_ord_rawkey::MapxOrdRawKey},
-    basic_multi_key::{mapx_raw::MapxRawMk, mapx_rawkey::MapxMkRawKey},
+    basic::{mapx_ord::MapxOrd, mapx_ord_rawkey::MapxOrdRk},
+    basic_multi_key::{mapx_raw::MapxRawMk, mapx_rawkey::MapxRkMk},
     common::{
         ende::encode_optioned_bytes, BranchID, BranchName, RawValue, VersionID,
         VersionName, BRANCH_ANCESTORS_LIMIT, INITIAL_BRANCH_ID, INITIAL_BRANCH_NAME,
@@ -25,8 +25,8 @@ pub(super) struct MapxRawMkVs {
     default_branch: BranchID,
     key_size: usize,
 
-    branch_name_to_branch_id: MapxOrdRawKey<BranchID>,
-    version_name_to_version_id: MapxOrdRawKey<VersionID>,
+    branch_name_to_branch_id: MapxOrdRk<BranchID>,
+    version_name_to_version_id: MapxOrdRk<VersionID>,
 
     // which version the branch is forked from
     branch_to_parent: MapxOrd<BranchID, Option<BasePoint>>,
@@ -38,7 +38,7 @@ pub(super) struct MapxRawMkVs {
     version_to_change_set: MapxOrd<VersionID, MapxRawMk>,
 
     // key -> multi-branch -> multi-version -> multi-value
-    layered_kv: MapxMkRawKey<MapxOrd<BranchID, MapxOrd<VersionID, Option<RawValue>>>>,
+    layered_kv: MapxRkMk<MapxOrd<BranchID, MapxOrd<VersionID, Option<RawValue>>>>,
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
@@ -50,12 +50,12 @@ impl MapxRawMkVs {
         let mut ret = Self {
             default_branch: BranchID::default(),
             key_size,
-            branch_name_to_branch_id: MapxOrdRawKey::new(),
-            version_name_to_version_id: MapxOrdRawKey::new(),
+            branch_name_to_branch_id: MapxOrdRk::new(),
+            version_name_to_version_id: MapxOrdRk::new(),
             branch_to_parent: MapxOrd::new(),
             branch_to_created_versions: MapxOrd::new(),
             version_to_change_set: MapxOrd::new(),
-            layered_kv: MapxMkRawKey::new(key_size),
+            layered_kv: MapxRkMk::new(key_size),
         };
         ret.init();
         ret
