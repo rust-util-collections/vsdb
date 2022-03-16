@@ -206,13 +206,14 @@ pub mod mapx_raw;
 pub mod orphan;
 pub mod vecx;
 
+#[cfg(feature = "merkle")]
+use crate::merkle::{MerkleTree, MerkleTreeStore, Proof, ProofEntry};
 use crate::{
     basic::{
         mapx::Mapx, mapx_ord::MapxOrd, mapx_ord_rawkey::MapxOrdRk,
         mapx_ord_rawvalue::MapxOrdRv, mapx_raw::MapxRaw, orphan::Orphan, vecx::Vecx,
         vecx_raw::VecxRaw,
     },
-    merkle::{MerkleTree, MerkleTreeStore, Proof, ProofEntry},
     BranchName, ParentBranchName, VersionName,
 };
 use ruc::*;
@@ -749,18 +750,22 @@ impl VsMgmt for VecxRaw {
     impl_vs_methods_nope!();
 }
 
+#[cfg(feature = "merkle")]
 impl VsMgmt for MerkleTree {
     impl_vs_methods_nope!();
 }
 
+#[cfg(feature = "merkle")]
 impl VsMgmt for MerkleTreeStore {
     impl_vs_methods_nope!();
 }
 
+#[cfg(feature = "merkle")]
 impl<'a> VsMgmt for Proof<'a> {
     impl_vs_methods_nope!();
 }
 
+#[cfg(feature = "merkle")]
 impl<'a> VsMgmt for ProofEntry<'a> {
     impl_vs_methods_nope!();
 }
