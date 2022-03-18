@@ -169,4 +169,9 @@ all stateful data has two additional identification dimensions ('branch' and 've
 
 ## NOTE
 
-The serialized result of a VSDB instance can not be used as the basis for distributed consensus, because the serialized result only contains some meta-information(storage paths, etc.), and these meta-information are likely to be different in different environments, the correct way is to read what you need from it, and then process the real content.
+- The serialized result of a VSDB instance can not be used as the basis for distributed consensus
+  - The serialized result only contains some meta-information(storage paths, etc.)
+  - These meta-information are likely to be different in different environments
+  - The correct way is to read what you need from it, and then process the real content
+- Version names must be globally unique
+  - Using a same version name on different branches is also not allowed
