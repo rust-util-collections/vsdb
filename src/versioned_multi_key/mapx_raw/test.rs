@@ -331,11 +331,11 @@ fn branch_operations(hdr: &mut MapxRawMkVs) {
         .is_err()
     );
 
-    // Version ID can not be repeated within the branch view, but can be repeated globally.
-    //
-    // Although "v-001" is not unique globally("v-001" exists on "main" branch),
-    // but it is unique in the "b-1" branch, so we can use it.
-    pnk!(hdr.version_create_by_branch(VersionName(b"v-001"), BranchName(b"b-1")));
+    // Version ID can not be repeated within the global view.
+    assert!(
+        hdr.version_create_by_branch(VersionName(b"v-001"), BranchName(b"b-1"))
+            .is_err()
+    );
 
     hdr.version_create_by_branch(VersionName(b"v-004"), BranchName(b"b-1"))
         .unwrap();
@@ -402,7 +402,7 @@ fn branch_operations(hdr: &mut MapxRawMkVs) {
             ParentBranchName(&(i - 1).to_be_bytes())
         ));
         pnk!(hdr.version_create_by_branch(
-            VersionName(b"verN"),
+            VersionName(format!("verN_{}", i).as_bytes()),
             BranchName(&i.to_be_bytes())
         ));
     });
@@ -662,7 +662,7 @@ fn default_branch(hdr: &mut MapxRawMkVs) {
         thread::spawn(move || {
             pnk!(h.branch_create(BranchName(&i.to_be_bytes())));
             pnk!(h.branch_set_default(BranchName(&i.to_be_bytes())));
-            pnk!(h.version_create(VersionName(b"ver-on-fork")));
+            pnk!(h.version_create(VersionName(format!("ver-on-fork—{}", i).as_bytes())));
             pnk!(h.insert(&[&[], b"key"], &i.to_be_bytes()));
             ss.send("done").unwrap();
         });
@@ -677,7 +677,7 @@ fn default_branch(hdr: &mut MapxRawMkVs) {
             &hdr.get_by_branch_version(
                 &[&[], b"key"],
                 BranchName(&i.to_be_bytes()),
-                VersionName(b"ver-on-fork")
+                VersionName(format!("ver-on-fork—{}", i).as_bytes())
             )
             .unwrap()[..],
             &i.to_be_bytes()

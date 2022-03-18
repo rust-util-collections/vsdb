@@ -307,11 +307,7 @@ impl MapxRawMkVs {
         version_name: &[u8],
         branch_id: BranchID,
     ) -> Result<()> {
-        let mut vername = branch_id.to_be_bytes().to_vec();
-        vername.push(b'_');
-        vername.extend_from_slice(version_name);
-
-        if self.version_name_to_version_id.get(&vername).is_some() {
+        if self.version_name_to_version_id.get(version_name).is_some() {
             return Err(eg!("version already exists"));
         }
 
@@ -324,7 +320,7 @@ impl MapxRawMkVs {
         vers.insert(version_id, ());
 
         self.version_name_to_version_id
-            .insert(vername.into_boxed_slice(), version_id);
+            .insert(version_name.to_vec().into_boxed_slice(), version_id);
         self.version_to_change_set
             .insert(version_id, MapxRawMk::new(self.key_size));
 
@@ -874,15 +870,8 @@ impl MapxRawMkVs {
     }
 
     #[inline(always)]
-    pub(super) fn get_version_id(
-        &self,
-        branch_name: BranchName,
-        version_name: VersionName,
-    ) -> Option<VersionID> {
-        let mut vername = self.get_branch_id(branch_name)?.to_be_bytes().to_vec();
-        vername.push(b'_');
-        vername.extend_from_slice(version_name.0);
-        self.version_name_to_version_id.get(&vername)
+    pub(super) fn get_version_id(&self, version_name: VersionName) -> Option<VersionID> {
+        self.version_name_to_version_id.get(version_name.0)
     }
 }
 
