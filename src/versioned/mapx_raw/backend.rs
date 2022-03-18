@@ -450,6 +450,7 @@ impl MapxRawVs {
         branch_id: BranchID,
     ) -> Result<()> {
         let mut vername = branch_id.to_be_bytes().to_vec();
+        vername.push(b'_');
         vername.extend_from_slice(version_name);
 
         if self.version_name_to_version_id.get(&vername).is_some() {
@@ -990,8 +991,8 @@ impl MapxRawVs {
         }
 
         for (ver, _) in created_vers.iter().rev().skip(reserved_ver_num) {
-            created_vers.remove(&ver);
-            self.version_to_change_set.remove(&ver);
+            created_vers.remove(&ver).unwrap();
+            self.version_to_change_set.remove(&ver).unwrap();
 
             // one version belong(directly) to one branch only,
             // so we can remove these created versions safely.
@@ -1018,6 +1019,7 @@ impl MapxRawVs {
         version_name: VersionName,
     ) -> Option<VersionID> {
         let mut vername = self.get_branch_id(branch_name)?.to_be_bytes().to_vec();
+        vername.push(b'_');
         vername.extend_from_slice(version_name.0);
         self.version_name_to_version_id.get(&vername)
     }
