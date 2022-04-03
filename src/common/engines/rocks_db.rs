@@ -384,11 +384,14 @@ impl PreAllocator {
 fn rocksdb_open() -> Result<(DB, Vec<String>)> {
     let dir = vsdb_get_base_dir();
 
+    // avoid setting again on an opened DB
+    info_omit!(vsdb_set_base_dir(&dir));
+
     let mut cfg = Options::default();
     cfg.create_if_missing(true);
     cfg.increase_parallelism(available_parallelism().c(d!())?.get() as i32);
-    cfg.set_compression_type(DBCompressionType::Lz4);
-    cfg.set_max_open_files(4096);
+    cfg.set_compression_type(DBCompressionType::Snappy);
+    cfg.set_max_open_files(8192);
     cfg.set_allow_mmap_writes(true);
     cfg.set_allow_mmap_reads(true);
     cfg.create_missing_column_families(true);
@@ -403,9 +406,6 @@ fn rocksdb_open() -> Result<(DB, Vec<String>)> {
         .collect::<Vec<_>>();
 
     let db = DB::open_cf_descriptors(&cfg, &dir, cfs).c(d!())?;
-
-    // avoid setting again on an opened DB
-    info_omit!(vsdb_set_base_dir(dir));
 
     Ok((db, cfhdrs))
 }

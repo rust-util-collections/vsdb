@@ -161,14 +161,14 @@ pub fn vsdb_get_base_dir() -> String {
 
 /// Set ${VSDB_BASE_DIR} manually.
 #[inline(always)]
-pub fn vsdb_set_base_dir(dir: String) -> Result<()> {
+pub fn vsdb_set_base_dir(dir: &str) -> Result<()> {
     static HAS_INITED: AtomicBool = AtomicBool::new(false);
 
     if HAS_INITED.swap(true, Ordering::Relaxed) {
         Err(eg!("VSDB has been initialized !!"))
     } else {
-        env::set_var(BASE_DIR_VAR, &dir);
-        *VSDB_BASE_DIR.lock() = dir;
+        env::set_var(BASE_DIR_VAR, dir);
+        *VSDB_BASE_DIR.lock() = dir.to_owned();
         Ok(())
     }
 }

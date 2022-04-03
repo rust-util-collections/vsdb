@@ -297,15 +297,20 @@ impl PreAllocator {
 fn sled_open() -> Result<Db> {
     let dir = vsdb_get_base_dir();
 
-    let db = Config::new()
-        .path(&dir)
-        .mode(Mode::HighThroughput)
-        .use_compression(true)
-        .open()
-        .c(d!())?;
-
     // avoid setting again on an opened DB
-    info_omit!(vsdb_set_base_dir(dir));
+    info_omit!(vsdb_set_base_dir(&dir));
 
-    Ok(db)
+    let mut cfg = Config::new().path(&dir).mode(Mode::HighThroughput);
+
+    #[cfg(feaature = "sled_compression")]
+    {
+        cfg = cfg.use_compression(true);
+    }
+
+    #[cfg(not(feaature = "sled_compression"))]
+    {
+        cfg = cfg.use_compression(false);
+    }
+
+    cfg.open().c(d!())
 }

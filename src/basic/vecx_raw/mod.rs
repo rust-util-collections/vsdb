@@ -10,7 +10,7 @@
 //! use vsdb::basic::vecx_raw::VecxRaw;
 //!
 //! let dir = format!("/tmp/__vsdb__{}", rand::random::<u128>());
-//! vsdb::vsdb_set_base_dir(dir);
+//! vsdb::vsdb_set_base_dir(&dir);
 //!
 //! let mut l = VecxRaw::new();
 //!
