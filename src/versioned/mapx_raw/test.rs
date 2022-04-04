@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     common::{
         BranchName, ParentBranchName, VersionName, BRANCH_ANCESTORS_LIMIT,
-        INITIAL_BRANCH_NAME,
+        INITIAL_BRANCH_NAME, INITIAL_VERSION,
     },
     ValueEnDe, VsMgmt,
 };
@@ -665,4 +665,180 @@ fn default_branch(hdr: &mut MapxRawVs) {
             &i.to_be_bytes()
         );
     }
+}
+
+#[test]
+fn version_rebase() {
+    let hdr = MapxRawVs::new();
+
+    pnk!(hdr.insert(&[0], &[0]));
+    pnk!(hdr.version_create(VersionName(&[1])));
+    pnk!(hdr.insert(&[0], &[1]));
+    pnk!(hdr.version_create(VersionName(&[2])));
+    pnk!(hdr.insert(&[0], &[2]));
+    pnk!(hdr.version_create(VersionName(&[3])));
+    pnk!(hdr.insert(&[0], &[3]));
+    pnk!(hdr.version_create(VersionName(&[4])));
+    pnk!(hdr.insert(&[0], &[4]));
+
+    assert_eq!(
+        &[0],
+        &pnk!(hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, INITIAL_VERSION))[..]
+    );
+    assert_eq!(
+        &[1],
+        &pnk!(hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[1])))[..]
+    );
+    assert_eq!(
+        &[2],
+        &pnk!(hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[2])))[..]
+    );
+    assert_eq!(
+        &[3],
+        &pnk!(hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[3])))[..]
+    );
+    assert_eq!(
+        &[4],
+        &pnk!(hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[4])))[..]
+    );
+
+    assert!(hdr.version_exists(VersionName(&[1])));
+    assert!(hdr.version_exists(VersionName(&[2])));
+    assert!(hdr.version_exists(VersionName(&[3])));
+    assert!(hdr.version_exists(VersionName(&[4])));
+
+    pnk!(hdr.version_rebase(VersionName(&[2])));
+
+    assert!(hdr.version_exists(VersionName(&[1])));
+    assert!(hdr.version_exists(VersionName(&[2])));
+    assert!(!hdr.version_exists(VersionName(&[3])));
+    assert!(!hdr.version_exists(VersionName(&[4])));
+
+    assert!(
+        hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[3]))
+            .is_none()
+    );
+    assert!(
+        hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[4]))
+            .is_none()
+    );
+
+    assert_eq!(
+        &[0],
+        &pnk!(hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, INITIAL_VERSION))[..]
+    );
+    assert_eq!(
+        &[1],
+        &pnk!(hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[1])))[..]
+    );
+    assert_eq!(
+        &[4],
+        &pnk!(hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[2])))[..]
+    );
+
+    // current header is version 2
+    assert_eq!(&[4], &pnk!(hdr.get(&[0]))[..]);
+
+    let br = BranchName(&[1]);
+    pnk!(hdr.branch_create(br));
+
+    pnk!(hdr.version_create_by_branch(VersionName(&[10]), br));
+    pnk!(hdr.insert_by_branch(&[0], &[0], br));
+    pnk!(hdr.version_create_by_branch(VersionName(&[11]), br));
+    pnk!(hdr.insert_by_branch(&[0], &[1], br));
+    pnk!(hdr.version_create_by_branch(VersionName(&[22]), br));
+    pnk!(hdr.insert_by_branch(&[0], &[2], br));
+    pnk!(hdr.version_create_by_branch(VersionName(&[33]), br));
+    pnk!(hdr.insert_by_branch(&[0], &[3], br));
+    pnk!(hdr.version_create_by_branch(VersionName(&[44]), br));
+    pnk!(hdr.insert_by_branch(&[0], &[4], br));
+
+    assert_eq!(
+        &[0],
+        &pnk!(hdr.get_by_branch_version(&[0], br, VersionName(&[10])))[..]
+    );
+    assert_eq!(
+        &[1],
+        &pnk!(hdr.get_by_branch_version(&[0], br, VersionName(&[11])))[..]
+    );
+    assert_eq!(
+        &[2],
+        &pnk!(hdr.get_by_branch_version(&[0], br, VersionName(&[22])))[..]
+    );
+    assert_eq!(
+        &[3],
+        &pnk!(hdr.get_by_branch_version(&[0], br, VersionName(&[33])))[..]
+    );
+    assert_eq!(
+        &[4],
+        &pnk!(hdr.get_by_branch_version(&[0], br, VersionName(&[44])))[..]
+    );
+
+    // target verison is created by this branch
+    assert!(hdr.version_rebase_by_branch(VersionName(&[2]), br).is_err());
+
+    assert!(hdr.version_exists_on_branch(VersionName(&[11]), br));
+    assert!(hdr.version_exists_on_branch(VersionName(&[22]), br));
+    assert!(hdr.version_exists_on_branch(VersionName(&[33]), br));
+    assert!(hdr.version_exists_on_branch(VersionName(&[44]), br));
+
+    pnk!(hdr.version_rebase_by_branch(VersionName(&[22]), br));
+
+    assert!(hdr.version_exists_on_branch(VersionName(&[11]), br));
+    assert!(hdr.version_exists_on_branch(VersionName(&[22]), br));
+    assert!(!hdr.version_exists_on_branch(VersionName(&[33]), br));
+    assert!(!hdr.version_exists_on_branch(VersionName(&[44]), br));
+
+    assert_eq!(
+        &[1],
+        &pnk!(hdr.get_by_branch_version(&[0], br, VersionName(&[11])))[..]
+    );
+    assert_eq!(
+        &[4],
+        &pnk!(hdr.get_by_branch_version(&[0], br, VersionName(&[22])))[..]
+    );
+
+    assert!(
+        hdr.get_by_branch_version(&[0], br, VersionName(&[33]))
+            .is_none()
+    );
+    assert!(
+        hdr.get_by_branch_version(&[0], br, VersionName(&[44]))
+            .is_none()
+    );
+
+    // current header is version 22
+    assert_eq!(&[4], &pnk!(hdr.get_by_branch(&[0], br))[..]);
+
+    ////////////////////////////////////
+    // recheck data on default branch //
+    ////////////////////////////////////
+
+    assert_eq!(
+        &[1],
+        &pnk!(hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[1])))[..]
+    );
+    assert_eq!(
+        &[4],
+        &pnk!(hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[2])))[..]
+    );
+
+    assert!(
+        hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[3]))
+            .is_none()
+    );
+    assert!(
+        hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[4]))
+            .is_none()
+    );
+
+    assert!(hdr.version_exists(VersionName(&[1])));
+    assert!(hdr.version_exists(VersionName(&[2])));
+    assert!(!hdr.version_exists(VersionName(&[3])));
+    assert!(!hdr.version_exists(VersionName(&[4])));
+
+    assert!(!hdr.version_exists(VersionName(&[11])));
+    assert!(!hdr.version_exists(VersionName(&[22])));
+    assert!(!hdr.version_exists(VersionName(&[33])));
+    assert!(!hdr.version_exists(VersionName(&[44])));
 }

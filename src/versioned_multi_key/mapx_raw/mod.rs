@@ -245,6 +245,27 @@ impl VsMgmt for MapxRawMkVs {
             .and_then(|br_id| self.inner.version_pop_by_branch(br_id).c(d!()))
     }
 
+    /// Merge all changes made by new versions after the base version into the base version.
+    #[inline(always)]
+    fn version_rebase(&self, base_version: VersionName) -> Result<()> {
+        self.inner
+            .get_version_id(base_version)
+            .c(d!())
+            .and_then(|bv| self.inner.version_rebase(bv).c(d!()))
+    }
+
+    /// Merge all changes made by new versions after the base version into the base version.
+    #[inline(always)]
+    fn version_rebase_by_branch(
+        &self,
+        base_version: VersionName,
+        branch_name: BranchName,
+    ) -> Result<()> {
+        let bv = self.inner.get_version_id(base_version).c(d!())?;
+        let brid = self.inner.get_branch_id(branch_name).c(d!())?;
+        self.inner.version_rebase_by_branch(bv, brid).c(d!())
+    }
+
     /// Create a new branch based on the head of the default branch.
     #[inline(always)]
     fn branch_create(&self, branch_name: BranchName) -> Result<()> {

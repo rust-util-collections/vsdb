@@ -36,7 +36,7 @@ pub(super) struct MapxRawVs {
     // versions directly created by this branch
     branch_to_created_versions: MapxOrd<BranchID, MapxOrd<VersionID, ()>>,
 
-    // globally ever changed keys within each version
+    // globally ever changed keys(no value is stored here!) within each version
     version_to_change_set: MapxOrd<VersionID, MapxRaw>,
 
     // key -> multi-branch -> multi-version -> multi-value
@@ -601,6 +601,68 @@ impl MapxRawVs {
         Ok(())
     }
 
+    #[inline(always)]
+    pub(super) fn version_rebase(&self, base_version: VersionID) -> Result<()> {
+        self.version_rebase_by_branch(base_version, self.branch_get_default())
+            .c(d!())
+    }
+
+    pub(super) fn version_rebase_by_branch(
+        &self,
+        base_version: VersionID,
+        branch_id: BranchID,
+    ) -> Result<()> {
+        let vers_hdr = self
+            .branch_to_created_versions
+            .get(&branch_id)
+            .c(d!("branch not found"))?;
+        let mut vers = vers_hdr.range(base_version..).map(|(ver, _)| ver);
+
+        if let Some(ver) = vers.next() {
+            if base_version != ver {
+                return Err(eg!("base version is not created by this branch"));
+            }
+        } else {
+            return Err(eg!("base version is not created by this branch"));
+        };
+
+        let base_ver_chg_set = self
+            .version_to_change_set
+            .get(&base_version)
+            .c(d!("BUG !!!"))?;
+        let vers_to_be_merged = vers.collect::<Vec<_>>();
+
+        for verid in vers_to_be_merged.iter() {
+            for (k, _) in self
+                .version_to_change_set
+                .remove(verid)
+                .c(d!("BUG !!!"))?
+                .iter()
+            {
+                base_ver_chg_set.insert(&k, &[]);
+                let kb_hdr = self
+                    .layered_kv
+                    .get(&k)
+                    .c(d!("BUG: datakey not exist"))?
+                    .get(&branch_id)
+                    .c(d!("BUG !!!"))?;
+                let v = kb_hdr.remove(verid).c(d!("BUG !!!"))?;
+                kb_hdr.insert(base_version, v);
+            }
+            vers_hdr.remove(verid).unwrap();
+        }
+
+        for (vername, _) in self
+            .version_name_to_version_id
+            .iter()
+            .filter(|(_, id)| vers_to_be_merged.contains(id))
+        {
+            self.version_name_to_version_id.remove(&vername).unwrap();
+        }
+
+        Ok(())
+    }
+
     // Check if the given version is bigger than the biggest existing version
     fn version_id_is_in_bounds(fp: &BranchPath, version_id: VersionID) -> bool {
         if let Some(max_version_id) = fp.values().last() {
@@ -996,7 +1058,7 @@ impl MapxRawVs {
                 .version_name_to_version_id
                 .iter()
                 .find(|(_, v)| *v == ver)
-                .unwrap();
+                .c(d!("BUG: version not exist"))?;
             self.version_name_to_version_id.remove(&vername);
         }
 

@@ -431,7 +431,7 @@ impl MapxRawMkVs {
             return Err(eg!("version is not created by this branch"));
         }
 
-        let mut change_set_ops = |key: &[&[u8]], _: &[u8]| {
+        let mut chgset_ops = |key: &[&[u8]], _: &[u8]| {
             let local_brs = self.layered_kv.get(key).unwrap();
             let local_vers = local_brs.get(&branch_id).unwrap();
             local_vers.remove(&version_id);
@@ -444,7 +444,7 @@ impl MapxRawMkVs {
         self.version_to_change_set
             .get(&version_id)
             .c(d!("BUG: change set not found"))?
-            .iter_op(&mut change_set_ops)
+            .iter_op(&mut chgset_ops)
             .c(d!())?;
 
         self.version_to_change_set.remove(&version_id);
@@ -458,6 +458,68 @@ impl MapxRawMkVs {
         self.version_name_to_version_id
             .remove(&version_name)
             .unwrap();
+
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub(super) fn version_rebase(&self, base_version: VersionID) -> Result<()> {
+        self.version_rebase_by_branch(base_version, self.branch_get_default())
+            .c(d!())
+    }
+
+    pub(super) fn version_rebase_by_branch(
+        &self,
+        base_version: VersionID,
+        branch_id: BranchID,
+    ) -> Result<()> {
+        let vers_hdr = self
+            .branch_to_created_versions
+            .get(&branch_id)
+            .c(d!("branch not found"))?;
+        let mut vers = vers_hdr.range(base_version..).map(|(ver, _)| ver);
+
+        if let Some(ver) = vers.next() {
+            if base_version != ver {
+                return Err(eg!("base version is not created by this branch"));
+            }
+        } else {
+            return Err(eg!("base version is not created by this branch"));
+        };
+
+        let base_ver_chgset = self
+            .version_to_change_set
+            .get(&base_version)
+            .c(d!("BUG !!!"))?;
+        let vers_to_be_merged = vers.collect::<Vec<_>>();
+
+        for verid in vers_to_be_merged.iter() {
+            vers_hdr.remove(verid).unwrap();
+
+            let mut chgset_ops = |k: &[&[u8]], v: &[u8]| {
+                base_ver_chgset.insert(k, v).c(d!())?;
+                let kb_hdr = self
+                    .layered_kv
+                    .get(k)
+                    .c(d!("BUG: datakey not exist"))?
+                    .get(&branch_id)
+                    .c(d!("BUG !!!"))?;
+                let v = kb_hdr.remove(verid).c(d!("BUG !!!"))?;
+                kb_hdr.insert(base_version, v);
+                Ok(())
+            };
+
+            let chgset = self.version_to_change_set.remove(verid).c(d!("BUG !!!"))?;
+            chgset.iter_op(&mut chgset_ops).c(d!())?;
+        }
+
+        for (vername, _) in self
+            .version_name_to_version_id
+            .iter()
+            .filter(|(_, id)| vers_to_be_merged.contains(id))
+        {
+            self.version_name_to_version_id.remove(&vername).unwrap();
+        }
 
         Ok(())
     }
@@ -681,7 +743,7 @@ impl MapxRawMkVs {
         for (ver, _) in vers_created.iter() {
             vers_created_parent.insert(ver, ());
 
-            let mut change_set_ops = |key: &[&[u8]], _: &[u8]| {
+            let mut chgset_ops = |key: &[&[u8]], _: &[u8]| {
                 let key_hdr = self.layered_kv.get_mut(key).unwrap();
                 let (value, empty) = {
                     let br_hdr = key_hdr.get_mut(&branch_id).unwrap();
@@ -702,7 +764,7 @@ impl MapxRawMkVs {
             self.version_to_change_set
                 .get(&ver)
                 .unwrap()
-                .iter_op(&mut change_set_ops)
+                .iter_op(&mut chgset_ops)
                 .c(d!())?;
         }
 
@@ -731,7 +793,7 @@ impl MapxRawMkVs {
             .branch_name_to_branch_id
             .iter()
             .find(|(_, br)| *br == branch_id)
-            .unwrap();
+            .c(d!("BUG !!!"))?;
         self.branch_name_to_branch_id.remove(&br_name);
 
         Ok(())

@@ -279,6 +279,16 @@ pub trait VsMgmt {
     /// and should not do any tracing.
     fn version_pop_by_branch(&self, branch_name: BranchName) -> Result<()>;
 
+    /// Merge all changes made by new versions after the base version into the base version.
+    fn version_rebase(&self, base_version: VersionName) -> Result<()>;
+
+    /// Merge all changes made by new versions after the base version into the base version.
+    fn version_rebase_by_branch(
+        &self,
+        base_version: VersionName,
+        branch_name: BranchName,
+    ) -> Result<()>;
+
     /// Create a new branch based on the head of the default branch.
     fn branch_create(&self, branch_name: BranchName) -> Result<()>;
 
@@ -444,6 +454,24 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         fn version_pop_by_branch(&self, branch_name: BranchName) -> Result<()> {
             self.inner.version_pop_by_branch(branch_name).c(d!())
+        }
+
+        /// Merge all changes made by new versions after the base version into the base version.
+        #[inline(always)]
+        fn version_rebase(&self, base_version: VersionName) -> Result<()> {
+            self.inner.version_rebase(base_version).c(d!())
+        }
+
+        /// Merge all changes made by new versions after the base version into the base version.
+        #[inline(always)]
+        fn version_rebase_by_branch(
+            &self,
+            base_version: VersionName,
+            branch_name: BranchName,
+        ) -> Result<()> {
+            self.inner
+                .version_rebase_by_branch(base_version, branch_name)
+                .c(d!())
         }
 
         /// Create a new branch based on the head of the default branch.
@@ -631,6 +659,16 @@ macro_rules! impl_vs_methods_nope {
 
         #[inline(always)]
         fn version_pop_by_branch(&self, _: BranchName) -> Result<()> {
+            Ok(())
+        }
+
+        #[inline(always)]
+        fn version_rebase(&self, _: VersionName) -> Result<()> {
+            Ok(())
+        }
+
+        #[inline(always)]
+        fn version_rebase_by_branch(&self, _: VersionName, _: BranchName) -> Result<()> {
             Ok(())
         }
 
@@ -920,6 +958,27 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
     fn version_pop_by_branch(&self, branch_name: BranchName) -> Result<()> {
         if let Some(i) = self.as_ref() {
             i.version_pop_by_branch(branch_name).c(d!())?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn version_rebase(&self, base_version: VersionName) -> Result<()> {
+        if let Some(i) = self.as_ref() {
+            i.version_rebase(base_version).c(d!())?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn version_rebase_by_branch(
+        &self,
+        base_version: VersionName,
+        branch_name: BranchName,
+    ) -> Result<()> {
+        if let Some(i) = self.as_ref() {
+            i.version_rebase_by_branch(base_version, branch_name)
+                .c(d!())?;
         }
         Ok(())
     }
