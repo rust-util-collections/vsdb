@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "0.21.1"
+version = "0.22.1"
 authors = ["fanhui.x@gmail.com"]
 edition = "2021"
 description = "Versioned Stateful DataBase, mainly used in blockchain scene."
@@ -26,7 +26,7 @@ bcs = { version = "0.1.3", optional = true }
 msgpack = { package = "rmp-serde", version = "1.0.0", optional = true }
 
 sled = { package = "vsdbsled", version = "0.34.7-p1", optional = true }
-rocksdb = { version = "0.18.0", default-features = false, features = ["snappy"], optional = true }
+rocksdb = { version = "0.18.0", default-features = false, optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.3.5", features = ["html_reports"]}
@@ -35,11 +35,11 @@ hex = "0.4.3"
 rand = "0.8.5"
 
 [features]
-default = ["derive", "rocks_engine", "msgpack_codec"]
+default = ["derive", "sled_engine", "msgpack_codec"]
 derive = ["vsdb_derive"]
-rocks_engine = ["rocksdb"]
 sled_engine = ["sled"]
-sled_compression=["sled/compression"]
+rocks_engine = ["rocksdb"]
+compress = ["sled/compression", "rocksdb/snappy"]
 msgpack_codec = ["msgpack"]
 bcs_codec = ["bcs"]
 merkle = ["sha3"]

@@ -302,12 +302,12 @@ fn sled_open() -> Result<Db> {
 
     let mut cfg = Config::new().path(&dir).mode(Mode::HighThroughput);
 
-    #[cfg(feaature = "sled_compression")]
+    #[cfg(feature = "compress")]
     {
-        cfg = cfg.use_compression(true);
+        cfg = cfg.use_compression(true).compression_factor(1);
     }
 
-    #[cfg(not(feaature = "sled_compression"))]
+    #[cfg(not(feature = "compress"))]
     {
         cfg = cfg.use_compression(false);
     }

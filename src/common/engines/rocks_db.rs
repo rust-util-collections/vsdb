@@ -390,13 +390,22 @@ fn rocksdb_open() -> Result<(DB, Vec<String>)> {
     let mut cfg = Options::default();
     cfg.create_if_missing(true);
     cfg.increase_parallelism(available_parallelism().c(d!())?.get() as i32);
-    cfg.set_compression_type(DBCompressionType::Snappy);
     cfg.set_max_open_files(8192);
     cfg.set_allow_mmap_writes(true);
     cfg.set_allow_mmap_reads(true);
     cfg.create_missing_column_families(true);
     cfg.set_atomic_flush(true);
     cfg.set_prefix_extractor(SliceTransform::create_fixed_prefix(size_of::<Pre>()));
+
+    #[cfg(feature = "compress")]
+    {
+        cfg.set_compression_type(DBCompressionType::Snappy);
+    }
+
+    #[cfg(not(feature = "compress"))]
+    {
+        cfg.set_compression_type(DBCompressionType::None);
+    }
 
     let cfhdrs = (0..DATA_SET_NUM).map(|i| i.to_string()).collect::<Vec<_>>();
 

@@ -144,9 +144,10 @@ Some complete examples:
 
 - [**default**] `sled_engine`, use sled as the backend database
     - Faster compilation speed
+    - Faster running speed in the versioned functions
     - Support for compiling into a statically linked object
 - `rocks_engine`, use rocksdb as the backend database
-    - Faster running speed
+    - Faster running speed in the unversioned functions
     - Can not be compiled into a statically linked object
 - [**default**] `msgpack_codec`, use msgpack as the codec
     - Faster running speed
@@ -155,6 +156,9 @@ Some complete examples:
     - Security reinforcement for blockchain scenarios
 - [**default**] `derive`, enable the `Vs` procedural macro
 - `merkle`, enable an optional mekle-tree implementation
+- `compress`, enable compression in the backend db
+    - NOTE: performance with this feature is lower when using sled
+    - NOTE: performance with this feature is higher when using rocksdb
 
 ## Low-level design
 
