@@ -47,6 +47,10 @@ pub struct VersionName<'a>(pub &'a [u8]);
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VersionNameOwned(pub Vec<u8>);
 
+pub const KB: u64 = 1 << 10;
+pub const MB: u64 = 1 << 20;
+pub const GB: u64 = 1 << 30;
+
 const RESERVED_ID_CNT: Pre = 4096_0000;
 pub(crate) const BIGGEST_RESERVED_ID: Pre = RESERVED_ID_CNT - 1;
 pub(crate) const NULL: BranchID = BIGGEST_RESERVED_ID as BranchID;

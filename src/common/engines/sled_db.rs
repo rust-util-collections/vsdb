@@ -1,6 +1,6 @@
 use crate::common::{
     vsdb_get_base_dir, vsdb_set_base_dir, BranchID, Engine, Pre, PreBytes, RawKey,
-    RawValue, VersionID, INITIAL_BRANCH_ID, PREFIX_SIZ, RESERVED_ID_CNT,
+    RawValue, VersionID, GB, INITIAL_BRANCH_ID, PREFIX_SIZ, RESERVED_ID_CNT,
 };
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -300,7 +300,11 @@ fn sled_open() -> Result<Db> {
     // avoid setting again on an opened DB
     info_omit!(vsdb_set_base_dir(&dir));
 
-    let mut cfg = Config::new().path(&dir).mode(Mode::HighThroughput);
+    let mut cfg = Config::new()
+        .path(&dir)
+        .mode(Mode::HighThroughput)
+        .cache_capacity(10 * GB)
+        .flush_every_ms(Some(10000));
 
     #[cfg(feature = "compress")]
     {

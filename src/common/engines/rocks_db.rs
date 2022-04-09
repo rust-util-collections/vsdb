@@ -1,6 +1,6 @@
 use crate::common::{
     vsdb_get_base_dir, vsdb_set_base_dir, BranchID, Engine, Pre, PreBytes, RawBytes,
-    RawKey, RawValue, VersionID, INITIAL_BRANCH_ID, PREFIX_SIZ, RESERVED_ID_CNT,
+    RawKey, RawValue, VersionID, GB, INITIAL_BRANCH_ID, PREFIX_SIZ, RESERVED_ID_CNT,
 };
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -393,6 +393,7 @@ fn rocksdb_open() -> Result<(DB, Vec<String>)> {
     cfg.set_max_open_files(8192);
     cfg.set_allow_mmap_writes(true);
     cfg.set_allow_mmap_reads(true);
+    cfg.optimize_for_point_lookup(GB);
     cfg.create_missing_column_families(true);
     cfg.set_atomic_flush(true);
     cfg.set_prefix_extractor(SliceTransform::create_fixed_prefix(size_of::<Pre>()));
