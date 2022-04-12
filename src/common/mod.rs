@@ -5,6 +5,9 @@
 pub(crate) mod ende;
 pub(crate) mod engines;
 
+#[cfg(feature = "hash")]
+pub(crate) mod utils;
+
 use {
     engines::Engine,
     once_cell::sync::Lazy,

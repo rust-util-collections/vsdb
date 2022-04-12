@@ -9,7 +9,8 @@ release:
 	cargo build --release
 
 lint:
-	cargo clippy --features "compress"
+	cargo clippy
+	cargo clippy --features "compress,merkle"
 	cargo check --tests
 	cargo check --benches
 	cargo check --examples

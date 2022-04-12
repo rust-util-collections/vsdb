@@ -4,20 +4,9 @@
 
 use crate::{
     basic::{mapx_ord_rawkey::MapxOrdRk, vecx_raw::VecxRaw},
-    common::RawBytes,
+    common::utils::hash::{hash, Hash, HASH_SIZ},
 };
 use serde::{Deserialize, Serialize};
-use sha3::{Digest, Sha3_256};
-
-type Hash = RawBytes;
-
-fn hashv(data: &[&[u8]]) -> Hash {
-    let mut hasher = Sha3_256::new();
-    for bytes in data {
-        hasher.update(bytes);
-    }
-    hasher.finalize().as_slice().to_vec().into_boxed_slice()
-}
 
 // We need to discern between leaf and intermediate nodes to prevent trivial second
 // pre-image attacks.
@@ -27,13 +16,13 @@ const INTERMEDIATE_PREFIX: &[u8] = &[1];
 
 macro_rules! hash_leaf {
     {$d:ident} => {
-        hashv(&[LEAF_PREFIX, $d])
+        hash(&[LEAF_PREFIX, $d])
     }
 }
 
 macro_rules! hash_intermediate {
     {$l:ident, $r:ident} => {
-        hashv(&[INTERMEDIATE_PREFIX, $l, $r])
+        hash(&[INTERMEDIATE_PREFIX, $l, $r])
     }
 }
 
@@ -240,7 +229,15 @@ impl From<&MerkleTreeStore> for MerkleTree {
     fn from(mts: &MerkleTreeStore) -> Self {
         Self {
             leaf_count: mts.leaf_count,
-            nodes: mts.nodes.iter().collect(),
+            nodes: mts
+                .nodes
+                .iter()
+                .map(|v| {
+                    let mut res = [0; HASH_SIZ];
+                    res.copy_from_slice(&v[..HASH_SIZ]);
+                    res
+                })
+                .collect(),
             hash_to_idx: mts.hash_to_idx,
         }
     }
@@ -266,7 +263,15 @@ impl From<MerkleTreeStore> for MerkleTree {
     fn from(mts: MerkleTreeStore) -> Self {
         Self {
             leaf_count: mts.leaf_count,
-            nodes: mts.nodes.iter().collect(),
+            nodes: mts
+                .nodes
+                .iter()
+                .map(|v| {
+                    let mut res = [0; HASH_SIZ];
+                    res.copy_from_slice(&v[..HASH_SIZ]);
+                    res
+                })
+                .collect(),
             hash_to_idx: mts.hash_to_idx,
         }
     }
