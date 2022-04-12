@@ -1,9 +1,9 @@
 //!
 //! ![GitHub top language](https://img.shields.io/github/languages/top/ccmlm/VSDB)
 //! ![GitHub Workflow Status](https://img.shields.io/github/workflow/status/ccmlm/VSDB/Rust)
-//! ![Minimum rustc version](https://img.shields.io/badge/rustc-1.59+-lightgray.svg)
+//! ![Minimum rustc version](https://img.shields.io/badge/rustc-1.60+-lightgray.svg)
 //!
-//! VSDB is a 'Git' in the form of a KV database.
+//! VSDB is a 'Git' in the form of KV-database.
 //!
 //! Based on the powerful version control function of VSDB, you can easily give your data structure the ability to version management.
 //!
