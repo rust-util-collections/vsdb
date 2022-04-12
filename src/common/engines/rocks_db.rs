@@ -16,7 +16,7 @@ use std::{
     thread::available_parallelism,
 };
 
-const DATA_SET_NUM: usize = 4;
+const DATA_SET_NUM: usize = 32;
 
 const META_KEY_MAX_KEYLEN: [u8; 1] = [u8::MAX];
 const META_KEY_BRANCH_ID: [u8; 1] = [u8::MAX - 1];
