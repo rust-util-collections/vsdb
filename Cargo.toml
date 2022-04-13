@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "0.25.4"
+version = "0.26.0"
 authors = ["fanhui.x@gmail.com"]
 edition = "2021"
 description = "Versioned Stateful DataBase, mainly used in blockchain scene."
@@ -44,7 +44,7 @@ default = ["derive", "sled_engine", "msgpack_codec"]
 derive = ["vsdb_derive"]
 sled_engine = ["sled"]
 rocks_engine = ["rocksdb"]
-compress = ["sled?/compression", "rocksdb?/snappy"]
+compress = ["sled?/compression", "rocksdb?/lz4"]
 bcs_codec = ["bcs"]
 msgpack_codec = ["msgpack"]
 hash= ["blake3"]

@@ -1,6 +1,6 @@
 use crate::common::{
     vsdb_get_base_dir, vsdb_set_base_dir, BranchID, Engine, Pre, PreBytes, RawBytes,
-    RawKey, RawValue, VersionID, GB, INITIAL_BRANCH_ID, PREFIX_SIZ, RESERVED_ID_CNT,
+    RawKey, RawValue, VersionID, INITIAL_BRANCH_ID, MB, PREFIX_SIZ, RESERVED_ID_CNT,
 };
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -16,7 +16,7 @@ use std::{
     thread::available_parallelism,
 };
 
-const DATA_SET_NUM: usize = 32;
+const DATA_SET_NUM: usize = 4;
 
 const META_KEY_MAX_KEYLEN: [u8; 1] = [u8::MAX];
 const META_KEY_BRANCH_ID: [u8; 1] = [u8::MAX - 1];
@@ -389,18 +389,21 @@ fn rocksdb_open() -> Result<(DB, Vec<String>)> {
 
     let mut cfg = Options::default();
     cfg.create_if_missing(true);
+    cfg.create_missing_column_families(true);
+    cfg.set_prefix_extractor(SliceTransform::create_fixed_prefix(size_of::<Pre>()));
     cfg.increase_parallelism(available_parallelism().c(d!())?.get() as i32);
+    cfg.set_num_levels(9);
     cfg.set_max_open_files(8192);
     cfg.set_allow_mmap_writes(true);
     cfg.set_allow_mmap_reads(true);
-    cfg.optimize_for_point_lookup(GB);
-    cfg.create_missing_column_families(true);
-    cfg.set_atomic_flush(true);
-    cfg.set_prefix_extractor(SliceTransform::create_fixed_prefix(size_of::<Pre>()));
+    // cfg.set_use_direct_reads(true);
+    // cfg.set_use_direct_io_for_flush_and_compaction(true);
+    cfg.set_write_buffer_size(796 * MB as usize);
+    cfg.set_max_write_buffer_number(3);
 
     #[cfg(feature = "compress")]
     {
-        cfg.set_compression_type(DBCompressionType::Snappy);
+        cfg.set_compression_type(DBCompressionType::Lz4);
     }
 
     #[cfg(not(feature = "compress"))]
