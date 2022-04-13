@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "0.25.3"
+version = "0.25.4"
 authors = ["fanhui.x@gmail.com"]
 edition = "2021"
 description = "Versioned Stateful DataBase, mainly used in blockchain scene."

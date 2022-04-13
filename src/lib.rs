@@ -143,10 +143,6 @@
 //! Please check the [**multi-key functions**](crate::versioned_multi_key)
 //! if you have requirements of the above or similar scenes.
 //!
-//! Some complete examples:
-//! - [**Versioned examples**](versioned/index.html)
-//! - [**Unversioned examples**](basic/index.html)
-//!
 //! ## Compilation features
 //!
 //! - \[**default**] `sled_engine`, use sled as the backend database
