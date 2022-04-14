@@ -37,7 +37,7 @@
 mod test;
 
 use crate::{
-    basic::mapx_ord_rawkey::{Entry, MapxOrdRk, MapxOrdRkIter, ValueMut},
+    basic::mapx_ord_rawkey::{Entry, MapxOrdRawKey, MapxOrdRawKeyIter, ValueMut},
     common::ende::{KeyEnDe, ValueEnDe},
 };
 use serde::{Deserialize, Serialize};
@@ -46,7 +46,7 @@ use std::marker::PhantomData;
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct Mapx<K, V> {
-    inner: MapxOrdRk<V>,
+    inner: MapxOrdRawKey<V>,
     p: PhantomData<K>,
 }
 
@@ -68,7 +68,7 @@ where
     #[inline(always)]
     pub fn new() -> Self {
         Mapx {
-            inner: MapxOrdRk::new(),
+            inner: MapxOrdRawKey::new(),
             p: PhantomData,
         }
     }
@@ -158,7 +158,7 @@ where
     K: KeyEnDe,
     V: ValueEnDe,
 {
-    iter: MapxOrdRkIter<V>,
+    iter: MapxOrdRawKeyIter<V>,
     p: PhantomData<K>,
 }
 

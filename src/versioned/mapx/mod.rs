@@ -4,7 +4,7 @@
 
 use crate::{
     common::ende::{KeyEnDe, ValueEnDe},
-    versioned::mapx_ord_rawkey::{MapxOrdRkVs, MapxOrdRkVsIter},
+    versioned::mapx_ord_rawkey::{MapxOrdRawKeyVs, MapxOrdRawKeyVsIter},
     BranchName, ParentBranchName, VersionName, VsMgmt,
 };
 use ruc::*;
@@ -18,7 +18,7 @@ use std::{
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct MapxVs<K, V> {
-    inner: MapxOrdRkVs<V>,
+    inner: MapxOrdRawKeyVs<V>,
     p: PhantomData<K>,
 }
 
@@ -40,7 +40,7 @@ where
     #[inline(always)]
     pub fn new() -> Self {
         MapxVs {
-            inner: MapxOrdRkVs::new(),
+            inner: MapxOrdRawKeyVs::new(),
             p: PhantomData,
         }
     }
@@ -398,7 +398,7 @@ where
     K: KeyEnDe,
     V: ValueEnDe,
 {
-    iter: MapxOrdRkVsIter<'a, V>,
+    iter: MapxOrdRawKeyVsIter<'a, V>,
     p: PhantomData<K>,
 }
 

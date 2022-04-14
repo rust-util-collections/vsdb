@@ -59,13 +59,10 @@ pub(crate) const BIGGEST_RESERVED_ID: Pre = RESERVED_ID_CNT - 1;
 pub(crate) const NULL: BranchID = BIGGEST_RESERVED_ID as BranchID;
 
 pub(crate) const INITIAL_BRANCH_ID: BranchID = 0;
-pub(crate) const INITIAL_BRANCH_NAME: BranchName<'static> = BranchName(b"main");
+pub(crate) const INITIAL_BRANCH_NAME: BranchName<'static> = BranchName(b"master");
 
 /// The initial verison along with each new instance.
 pub const INITIAL_VERSION: VersionName<'static> = VersionName([0u8; 0].as_slice());
-
-/// How many ancestral branches at most one new branch can have.
-pub const BRANCH_ANCESTORS_LIMIT: usize = 128;
 
 // default value for reserved number when pruning old data
 pub(crate) const RESERVED_VERSION_NUM_DEFAULT: usize = 10;
@@ -220,5 +217,26 @@ impl_from_for_name!(BranchName, ParentBranchName, VersionName);
 impl Default for BranchName<'static> {
     fn default() -> Self {
         INITIAL_BRANCH_NAME
+    }
+}
+
+impl BranchNameOwned {
+    #[inline(always)]
+    pub fn as_deref(&self) -> BranchName {
+        BranchName(&self.0)
+    }
+}
+
+impl ParentBranchNameOwned {
+    #[inline(always)]
+    pub fn as_deref(&self) -> ParentBranchName {
+        ParentBranchName(&self.0)
+    }
+}
+
+impl VersionNameOwned {
+    #[inline(always)]
+    pub fn as_deref(&self) -> VersionName {
+        VersionName(&self.0)
     }
 }

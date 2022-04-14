@@ -33,7 +33,7 @@
 mod test;
 
 use crate::{
-    basic::mapx_ord_rawvalue::{MapxOrdRv, MapxOrdRvIter, ValueMut},
+    basic::mapx_ord_rawvalue::{MapxOrdRawValue, MapxOrdRawValueIter, ValueMut},
     common::RawValue,
 };
 use ruc::*;
@@ -43,7 +43,7 @@ use std::cmp::Ordering;
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct VecxRaw {
-    inner: MapxOrdRv<u64>,
+    inner: MapxOrdRawValue<u64>,
 }
 
 impl Default for VecxRaw {
@@ -56,7 +56,7 @@ impl VecxRaw {
     #[inline(always)]
     pub fn new() -> Self {
         VecxRaw {
-            inner: MapxOrdRv::new(),
+            inner: MapxOrdRawValue::new(),
         }
     }
 
@@ -186,7 +186,7 @@ impl VecxRaw {
 }
 
 pub struct VecxRawIter {
-    iter: MapxOrdRvIter<u64>,
+    iter: MapxOrdRawValueIter<u64>,
 }
 
 impl Iterator for VecxRawIter {

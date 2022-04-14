@@ -3,7 +3,7 @@
 //!
 
 use crate::{
-    basic::{mapx_ord_rawkey::MapxOrdRk, vecx_raw::VecxRaw},
+    basic::{mapx_ord_rawkey::MapxOrdRawKey, vecx_raw::VecxRaw},
     common::utils::hash::{hash, Hash, HASH_SIZ},
 };
 use serde::{Deserialize, Serialize};
@@ -30,7 +30,7 @@ macro_rules! hash_intermediate {
 pub struct MerkleTree {
     leaf_count: usize,
     nodes: Vec<Hash>,
-    hash_to_idx: MapxOrdRk<u64>,
+    hash_to_idx: MapxOrdRawKey<u64>,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -111,7 +111,7 @@ impl MerkleTree {
         let mut mt = MerkleTree {
             leaf_count: items.len(),
             nodes: Vec::with_capacity(cap),
-            hash_to_idx: MapxOrdRk::new(),
+            hash_to_idx: MapxOrdRawKey::new(),
         };
 
         for (idx, item) in items.iter().enumerate() {
@@ -206,7 +206,7 @@ impl MerkleTree {
 pub struct MerkleTreeStore {
     leaf_count: usize,
     nodes: VecxRaw,
-    hash_to_idx: MapxOrdRk<u64>,
+    hash_to_idx: MapxOrdRawKey<u64>,
 }
 
 impl From<&MerkleTree> for MerkleTreeStore {

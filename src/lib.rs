@@ -207,5 +207,6 @@ pub use common::utils::hash::{hash, Hash, HASH_SIZ};
 pub use common::{
     ende::{KeyDe, KeyEn, KeyEnDe, KeyEnDeOrdered, ValueDe, ValueEn, ValueEnDe},
     vsdb_flush, vsdb_get_base_dir, vsdb_get_custom_dir, vsdb_set_base_dir, BranchName,
-    ParentBranchName, VersionName, GB, INITIAL_VERSION, KB, MB,
+    BranchNameOwned, ParentBranchName, ParentBranchNameOwned, VersionName,
+    VersionNameOwned, GB, INITIAL_VERSION, KB, MB,
 };

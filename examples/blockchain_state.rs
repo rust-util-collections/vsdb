@@ -10,7 +10,10 @@ use std::{
     sync::{mpsc::channel, Mutex},
     thread,
 };
-use vsdb::{BranchName, MapxVs, OrphanVs, ValueEnDe, VecxVs, VersionName, Vs, VsMgmt};
+use vsdb::{
+    BranchName, MapxVs, OrphanVs, ValueEnDe, VecxVs, VersionName, VersionNameOwned, Vs,
+    VsMgmt,
+};
 
 type Amount = u64;
 type Address = Vec<u8>;
@@ -43,6 +46,14 @@ static WORLD_STATE_SNAP_1: Lazy<Mutex<WorldState>> = Lazy::new(|| {
 });
 
 static MEM_POOL: Lazy<Mutex<Vec<Transaction>>> = Lazy::new(|| Mutex::new(vec![]));
+
+fn random_version() -> VersionNameOwned {
+    VersionNameOwned(
+        (1_0000_0000 + rand::random::<u64>() / 2)
+            .to_be_bytes()
+            .to_vec(),
+    )
+}
 
 fn transaction_pre_check(tx: Transaction) {
     let mut snap0 = WORLD_STATE_SNAP_0.lock().unwrap();
@@ -122,7 +133,7 @@ impl WorldState {
 
     fn new_branch(&mut self, branch: &str) -> Result<()> {
         let br = BranchName(branch.as_bytes());
-        self.branch_create(br).c(d!())
+        self.branch_create(br, random_version().as_deref()).c(d!())
     }
 
     fn delete_branch(&mut self, branch: &str) -> Result<()> {
@@ -132,7 +143,8 @@ impl WorldState {
 
     fn merge_branch(&mut self, branch: &str) -> Result<()> {
         let br = BranchName(branch.as_bytes());
-        self.branch_merge_to_parent(br).c(d!())
+        self.branch_merge_to(br, BranchName(MASTER_BRANCH.as_bytes()))
+            .c(d!())
     }
 
     fn set_default_branch(&mut self, branch: &str) -> Result<()> {
