@@ -23,11 +23,15 @@ lintall: lint
 
 test:
 	- rm -rf ~/.vsdb
-	cargo test --tests --bins --examples --features "derive,merkle" -- --test-threads=1
+	cargo test --tests --bins --features "derive,merkle" -- --test-threads=1
+	- rm -rf ~/.vsdb
+	cargo test --release --tests --bins --features "derive,merkle" -- --test-threads=1
 
 testall: test
 	- rm -rf ~/.vsdb
-	cargo test --tests --bins --examples --no-default-features --features "derive,merkle,rocks_engine,msgpack_codec" -- --test-threads=1
+	cargo test --tests --bins --no-default-features --features "derive,merkle,rocks_engine,msgpack_codec" -- --test-threads=1
+	- rm -rf ~/.vsdb
+	cargo test --release --tests --bins --no-default-features --features "derive,merkle,rocks_engine,msgpack_codec" -- --test-threads=1
 
 bench:
 	- rm -rf ~/.vsdb
