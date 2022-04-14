@@ -625,10 +625,6 @@ impl MapxRawVs {
         version_name: &[u8],
         base_branch_id: BranchID,
     ) -> Result<()> {
-        if self.version_name_to_version_id.contains_key(version_name) {
-            return Err(eg!("this version already exists"));
-        }
-
         let base_version_id = self
             .branch_to_its_versions
             .get(&base_branch_id)
@@ -646,10 +642,81 @@ impl MapxRawVs {
         .c(d!())
     }
 
+    #[inline(always)]
     pub(super) fn branch_create_by_base_branch_version(
         &self,
         branch_name: &[u8],
         version_name: &[u8],
+        base_branch_id: BranchID,
+        base_version_id: VersionID,
+    ) -> Result<()> {
+        if self.version_name_to_version_id.contains_key(version_name) {
+            return Err(eg!("this version already exists"));
+        }
+
+        unsafe {
+            self.do_branch_create_by_base_branch_version(
+                branch_name,
+                Some(version_name),
+                base_branch_id,
+                base_version_id,
+            )
+        }
+    }
+
+    #[inline(always)]
+    pub(super) unsafe fn branch_create_without_new_version(
+        &self,
+        branch_name: &[u8],
+    ) -> Result<()> {
+        self.branch_create_by_base_branch_without_new_version(
+            branch_name,
+            self.branch_get_default(),
+        )
+        .c(d!())
+    }
+
+    #[inline(always)]
+    pub(super) unsafe fn branch_create_by_base_branch_without_new_version(
+        &self,
+        branch_name: &[u8],
+        base_branch_id: BranchID,
+    ) -> Result<()> {
+        let base_version_id = self
+            .branch_to_its_versions
+            .get(&base_branch_id)
+            .c(d!("base branch not found"))?
+            .last()
+            .map(|(version_id, _)| version_id)
+            .c(d!("base version not found"))?;
+
+        self.branch_create_by_base_branch_version_without_new_version(
+            branch_name,
+            base_branch_id,
+            base_version_id,
+        )
+        .c(d!())
+    }
+
+    #[inline(always)]
+    pub(super) unsafe fn branch_create_by_base_branch_version_without_new_version(
+        &self,
+        branch_name: &[u8],
+        base_branch_id: BranchID,
+        base_version_id: VersionID,
+    ) -> Result<()> {
+        self.do_branch_create_by_base_branch_version(
+            branch_name,
+            None,
+            base_branch_id,
+            base_version_id,
+        )
+    }
+
+    unsafe fn do_branch_create_by_base_branch_version(
+        &self,
+        branch_name: &[u8],
+        version_name: Option<&[u8]>,
         base_branch_id: BranchID,
         base_version_id: VersionID,
     ) -> Result<()> {
@@ -680,9 +747,12 @@ impl MapxRawVs {
                 });
         self.branch_to_its_versions.insert(branch_id, vers_copied);
 
-        // create the first version of the new branch
-        self.version_create_by_branch(version_name, branch_id)
-            .c(d!())
+        if let Some(vername) = version_name {
+            // create the first version of the new branch
+            self.version_create_by_branch(vername, branch_id).c(d!())?;
+        }
+
+        Ok(())
     }
 
     // Check if a branch exists or not.
