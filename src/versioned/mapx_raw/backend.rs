@@ -958,6 +958,7 @@ impl MapxRawVs {
         let mut br_vers = self
             .branch_to_its_versions
             .iter()
+            .filter(|(_, vers)| !vers.is_empty())
             .map(|(_, vers)| vers.iter())
             .collect::<Vec<_>>();
 
