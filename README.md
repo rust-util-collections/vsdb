@@ -157,6 +157,7 @@ Some complete examples:
     - Created by the 'Libre' project of Facebook
     - Security reinforcement for blockchain scenarios
 - [**default**] `derive`, enable the `Vs` procedural macro
+- `hash`, enable an optional hash function based on blake3
 - `merkle`, enable an optional mekle-tree implementation
 - `compress`, enable compression in the backend db
     - NOTE: performance with this feature is lower when using sled

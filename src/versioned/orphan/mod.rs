@@ -3,8 +3,8 @@
 //!
 
 use crate::{
-    versioned::mapx_ord_rawkey::MapxOrdRawKeyVs, BranchName, ParentBranchName,
-    ValueEnDe, VersionName, VsMgmt,
+    versioned::mapx_ord_rawkey::MapxOrdRawKeyVs, BranchName, BranchNameOwned,
+    ParentBranchName, ValueEnDe, VersionName, VersionNameOwned, VsMgmt,
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};

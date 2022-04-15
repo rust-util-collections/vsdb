@@ -5,7 +5,7 @@
 use crate::{
     common::{ende::ValueEnDe, BranchName, ParentBranchName, RawKey, VersionName},
     versioned::mapx_raw::{MapxRawVs, MapxRawVsIter},
-    VsMgmt,
+    BranchNameOwned, VersionNameOwned, VsMgmt,
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};

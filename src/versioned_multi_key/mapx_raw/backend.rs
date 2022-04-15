@@ -5,9 +5,9 @@ use crate::{
     },
     basic_multi_key::{mapx_raw::MapxRawMk, mapx_rawkey::MapxRawKeyMk},
     common::{
-        ende::encode_optioned_bytes, BranchID, BranchName, RawValue, VersionID,
-        VersionName, INITIAL_BRANCH_ID, INITIAL_BRANCH_NAME, INITIAL_VERSION,
-        RESERVED_VERSION_NUM_DEFAULT, VSDB,
+        ende::encode_optioned_bytes, BranchID, BranchName, BranchNameOwned, RawValue,
+        VersionID, VersionName, VersionNameOwned, INITIAL_BRANCH_ID,
+        INITIAL_BRANCH_NAME, INITIAL_VERSION, RESERVED_VERSION_NUM_DEFAULT, VSDB,
     },
 };
 use ruc::*;
@@ -284,6 +284,12 @@ impl MapxRawMkVs {
         Ok(())
     }
 
+    // Check if a verison exists in the global scope
+    #[inline(always)]
+    pub(super) fn version_exists_globally(&self, version_id: BranchID) -> bool {
+        self.version_to_change_set.contains_key(&version_id)
+    }
+
     #[inline(always)]
     pub(super) fn version_exists(&self, version_id: BranchID) -> bool {
         self.version_exists_on_branch(version_id, self.branch_get_default())
@@ -393,6 +399,119 @@ impl MapxRawMkVs {
                     self.version_name_to_version_id.remove(&vername).c(d!())
                 })
                 .and_then(|_| vers_hdr.remove(verid).c(d!()))?;
+        }
+
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub(super) fn version_get_id_by_name(
+        &self,
+        version_name: VersionName,
+    ) -> Option<VersionID> {
+        self.version_name_to_version_id.get(version_name.0)
+    }
+
+    #[inline(always)]
+    pub(super) fn version_list(&self) -> Result<Vec<VersionNameOwned>> {
+        self.version_list_by_branch(self.branch_get_default())
+    }
+
+    #[inline(always)]
+    pub(super) fn version_list_by_branch(
+        &self,
+        branch_id: BranchID,
+    ) -> Result<Vec<VersionNameOwned>> {
+        self.branch_to_its_versions
+            .get(&branch_id)
+            .c(d!())
+            .map(|vers| {
+                vers.iter()
+                    .map(|(ver, _)| {
+                        self.version_id_to_version_name.get(&ver).unwrap().to_vec()
+                    })
+                    .map(VersionNameOwned)
+                    .collect()
+            })
+    }
+
+    #[inline(always)]
+    pub(super) fn version_list_globally(&self) -> Vec<VersionNameOwned> {
+        self.version_to_change_set
+            .iter()
+            .map(|(ver, _)| self.version_id_to_version_name.get(&ver).unwrap().to_vec())
+            .map(VersionNameOwned)
+            .collect()
+    }
+
+    #[inline(always)]
+    pub(super) fn version_has_change_set(&self, version_id: VersionID) -> Result<bool> {
+        self.version_to_change_set
+            .get(&version_id)
+            .c(d!())
+            .map(|chgset| !chgset.is_empty())
+    }
+
+    // # Safety
+    //
+    // Version itself and its corresponding changes will be completely purged from all branches
+    pub(super) unsafe fn version_revert_globally(
+        &self,
+        version_id: VersionID,
+    ) -> Result<()> {
+        let mut chgset_ops = |key: &[&[u8]], _: &[u8]| {
+            self.layered_kv
+                .get(key)
+                .c(d!())?
+                .remove(&version_id)
+                .c(d!())
+                .map(|_| ())
+        };
+        let chgset = self.version_to_change_set.remove(&version_id).c(d!())?;
+        chgset.iter_op(&mut chgset_ops).c(d!())?;
+
+        self.branch_to_its_versions.iter().for_each(|(_, vers)| {
+            vers.remove(&version_id);
+        });
+
+        self.version_id_to_version_name
+            .remove(&version_id)
+            .c(d!())
+            .and_then(|vername| self.version_name_to_version_id.remove(&vername).c(d!()))
+            .map(|_| ())
+    }
+
+    // clean up all orphaned versions in the global scope
+    #[inline(always)]
+    pub(super) fn version_clean_up_globally(&self) -> Result<()> {
+        let valid_vers = self
+            .branch_to_its_versions
+            .iter()
+            .flat_map(|(_, vers)| vers.iter().map(|(ver, _)| ver))
+            .collect::<HashSet<_>>();
+
+        for (ver, chgset) in self
+            .version_to_change_set
+            .iter()
+            .filter(|(ver, _)| !valid_vers.contains(ver))
+        {
+            let mut chgset_ops = |key: &[&[u8]], _: &[u8]| {
+                self.layered_kv
+                    .get(key)
+                    .c(d!())?
+                    .remove(&ver)
+                    .c(d!())
+                    .map(|_| ())
+            };
+            chgset.iter_op(&mut chgset_ops).c(d!())?;
+
+            self.version_id_to_version_name
+                .remove(&ver)
+                .c(d!())
+                .and_then(|vername| {
+                    self.version_name_to_version_id.remove(&vername).c(d!())
+                })
+                .and_then(|_| self.version_to_change_set.remove(&ver).c(d!()))?;
         }
 
         Ok(())
@@ -693,8 +812,83 @@ impl MapxRawMkVs {
     }
 
     #[inline(always)]
+    pub(super) fn branch_get_default_name(&self) -> BranchNameOwned {
+        self.branch_id_to_branch_name
+            .get(&self.default_branch)
+            .map(|br| BranchNameOwned(br.to_vec()))
+            .unwrap()
+    }
+
+    #[inline(always)]
+    pub(super) fn branch_is_empty(&self, branch_id: BranchID) -> Result<bool> {
+        self.branch_to_its_versions
+            .get(&branch_id)
+            .c(d!())
+            .map(|vers| {
+                vers.iter()
+                    .all(|(ver, _)| !self.version_has_change_set(ver).unwrap())
+            })
+    }
+
+    #[inline(always)]
+    pub(super) fn branch_list(&self) -> Vec<BranchNameOwned> {
+        self.branch_name_to_branch_id
+            .iter()
+            .map(|(brname, _)| brname.to_vec())
+            .map(BranchNameOwned)
+            .collect()
+    }
+
+    // Logically similar to `std::ptr::swap`
+    //
+    // For example: If you have a master branch and a test branch, the data is always trial-run on the test branch, and then periodically merged back into the master branch. Rather than merging the test branch into the master branch, and then recreating the new test branch, it is more efficient to just swap the two branches, and then recreating the new test branch.
+    //
+    // # Safety
+    //
+    // - Non-'thread safe'
+    // - Must ensure that there are no reads and writes to these two branches during the execution
+    pub(super) unsafe fn branch_swap(
+        &mut self,
+        branch_1: &[u8],
+        branch_2: &[u8],
+    ) -> Result<()> {
+        let brid_1 = self.branch_name_to_branch_id.get(branch_1).c(d!())?;
+        let brid_2 = self.branch_name_to_branch_id.get(branch_2).c(d!())?;
+
+        self.branch_name_to_branch_id
+            .insert_ref(branch_1, &brid_2)
+            .c(d!())?;
+        self.branch_name_to_branch_id
+            .insert_ref(branch_2, &brid_1)
+            .c(d!())?;
+
+        self.branch_id_to_branch_name
+            .insert_ref(&brid_1, branch_2)
+            .c(d!())?;
+        self.branch_id_to_branch_name
+            .insert_ref(&brid_2, branch_1)
+            .c(d!())?;
+
+        if self.default_branch == brid_1 {
+            self.default_branch = brid_2;
+        } else if self.default_branch == brid_2 {
+            self.default_branch = brid_1;
+        }
+
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub(super) fn branch_get_id_by_name(
+        &self,
+        branch_name: BranchName,
+    ) -> Option<BranchID> {
+        self.branch_name_to_branch_id.get(branch_name.0)
+    }
+
+    #[inline(always)]
     pub(super) fn prune(&self, reserved_ver_num: Option<usize>) -> Result<()> {
-        self.version_clean_up_global().c(d!())?;
+        self.version_clean_up_globally().c(d!())?;
 
         let reserved_ver_num = reserved_ver_num.unwrap_or(RESERVED_VERSION_NUM_DEFAULT);
         if 0 == reserved_ver_num {
@@ -765,52 +959,6 @@ impl MapxRawMkVs {
                 .c(d!())?
                 .iter_op(&mut chgset_ops)
                 .c(d!())?;
-        }
-
-        Ok(())
-    }
-
-    #[inline(always)]
-    pub(super) fn get_branch_id(&self, branch_name: BranchName) -> Option<BranchID> {
-        self.branch_name_to_branch_id.get(branch_name.0)
-    }
-
-    #[inline(always)]
-    pub(super) fn get_version_id(&self, version_name: VersionName) -> Option<VersionID> {
-        self.version_name_to_version_id.get(version_name.0)
-    }
-
-    // clean up all orphaned versions in the global scope
-    #[inline(always)]
-    fn version_clean_up_global(&self) -> Result<()> {
-        let valid_vers = self
-            .branch_to_its_versions
-            .iter()
-            .flat_map(|(_, vers)| vers.iter().map(|(ver, _)| ver))
-            .collect::<HashSet<_>>();
-
-        for (ver, chgset) in self
-            .version_to_change_set
-            .iter()
-            .filter(|(ver, _)| !valid_vers.contains(ver))
-        {
-            let mut chgset_ops = |key: &[&[u8]], _: &[u8]| {
-                self.layered_kv
-                    .get(key)
-                    .c(d!())?
-                    .remove(&ver)
-                    .c(d!())
-                    .map(|_| ())
-            };
-            chgset.iter_op(&mut chgset_ops).c(d!())?;
-
-            self.version_id_to_version_name
-                .remove(&ver)
-                .c(d!())
-                .and_then(|vername| {
-                    self.version_name_to_version_id.remove(&vername).c(d!())
-                })
-                .and_then(|_| self.version_to_change_set.remove(&ver).c(d!()))?;
         }
 
         Ok(())
