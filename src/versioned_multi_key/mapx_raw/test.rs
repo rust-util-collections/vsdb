@@ -437,9 +437,12 @@ fn branch_operations(hdr: &mut MapxRawMkVs) {
         );
     });
 
-    // clear all version on "b-2" branch
+    // clear up versions on "b-2" branch
     hdr.branch_truncate_to(BranchName(b"b-2"), VersionName(&0u64.to_be_bytes()))
         .unwrap();
+
+    // orphraned versions will exist until a `prune`
+    pnk!(hdr.prune(Some(100000)));
 
     // now we can use these version names again
     (11..=100u64).for_each(|i| {
