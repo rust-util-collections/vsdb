@@ -1,5 +1,14 @@
 # Change log
 
+## v0.30.1
+
+#### Internal optimizations
+
+- The results of those `xxx_list_xxx` APIs are unreliable
+  - Will try to return the first non-empty list for reference since this version
+  - The branches or versions of every child instance of a composite Vs instance may be different
+  - > **For example:**</br>there are three Vs-structures `struct Vs0(Vs1, Vs2); struct Vs1; struct Vs2`,</br>the caller of `Vs0` cannot guarantee that other callers will not directly create branches and versions on `Vs1` or `Vs2`.
+
 ## v0.30.0
 
 #### APIs changes

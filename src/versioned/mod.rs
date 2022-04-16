@@ -96,13 +96,58 @@ pub trait VsMgmt {
 
     fn version_exists_globally(&self, version_name: VersionName) -> bool;
 
+    /// # NOTE
+    ///
+    /// The result can only be used as hints, they are unreliable!
+    ///
+    /// For example, there are three Vs-structures:
+    ///
+    /// ```rust,no_run
+    /// struct Vs0(Vs1, Vs2);
+    /// struct Vs1;
+    /// struct Vs2
+    /// ```
+    /// the caller of `Vs0` can NOT guarantee that
+    /// other callers have never created new branches and versions on `Vs1` or `Vs2`,
+    /// so the results returned by `Vs1` and `Vs2` may be different,
+    /// so `Vs0` can NOT guarantee that it can get a completely consistent result.
     fn version_list(&self) -> Result<Vec<VersionNameOwned>>;
 
+    /// # NOTE
+    ///
+    /// The result can only be used as hints, they are unreliable!
+    ///
+    /// For example, there are three Vs-structures:
+    ///
+    /// ```rust,no_run
+    /// struct Vs0(Vs1, Vs2);
+    /// struct Vs1;
+    /// struct Vs2
+    /// ```
+    /// the caller of `Vs0` can NOT guarantee that
+    /// other callers have never created new branches and versions on `Vs1` or `Vs2`,
+    /// so the results returned by `Vs1` and `Vs2` may be different,
+    /// so `Vs0` can NOT guarantee that it can get a completely consistent result.
     fn version_list_by_branch(
         &self,
         branch_name: BranchName,
     ) -> Result<Vec<VersionNameOwned>>;
 
+    /// # NOTE
+    ///
+    /// The result can only be used as hints, they are unreliable!
+    ///
+    /// For example, there are three Vs-structures:
+    ///
+    /// ```rust,no_run
+    /// struct Vs0(Vs1, Vs2);
+    /// struct Vs1;
+    /// struct Vs2
+    /// ```
+    /// the caller of `Vs0` can NOT guarantee that
+    /// other callers have never created new branches and versions on `Vs1` or `Vs2`,
+    /// so the results returned by `Vs1` and `Vs2` may be different,
+    /// so `Vs0` can NOT guarantee that it can get a completely consistent result.
     fn version_list_globally(&self) -> Vec<VersionNameOwned>;
 
     fn version_has_change_set(&self, version_name: VersionName) -> Result<bool>;
@@ -246,6 +291,21 @@ pub trait VsMgmt {
 
     fn branch_is_empty(&self, branch_name: BranchName) -> Result<bool>;
 
+    /// # NOTE
+    ///
+    /// The result can only be used as hints, they are unreliable!
+    ///
+    /// For example, there are three Vs-structures:
+    ///
+    /// ```rust,no_run
+    /// struct Vs0(Vs1, Vs2);
+    /// struct Vs1;
+    /// struct Vs2
+    /// ```
+    /// the caller of `Vs0` can NOT guarantee that
+    /// other callers have never created new branches and versions on `Vs1` or `Vs2`,
+    /// so the results returned by `Vs1` and `Vs2` may be different,
+    /// so `Vs0` can NOT guarantee that it can get a completely consistent result.
     fn branch_list(&self) -> Vec<BranchNameOwned>;
 
     fn branch_get_default(&self) -> BranchNameOwned;
