@@ -540,22 +540,27 @@ impl MapxRawMkVs {
         base_branch_id: BranchID,
         force: bool,
     ) -> Result<()> {
+        if self.version_name_to_version_id.contains_key(version_name) {
+            return Err(eg!("this version already exists"));
+        }
+
         let base_version_id = self
             .branch_to_its_versions
             .get(&base_branch_id)
             .c(d!("base branch not found"))?
             .last()
-            .map(|(version_id, _)| version_id)
-            .c(d!("base version not found"))?;
+            .map(|(version_id, _)| version_id);
 
-        self.branch_create_by_base_branch_version(
-            branch_name,
-            version_name,
-            base_branch_id,
-            base_version_id,
-            force,
-        )
-        .c(d!())
+        unsafe {
+            self.do_branch_create_by_base_branch_version(
+                branch_name,
+                Some(version_name),
+                base_branch_id,
+                base_version_id,
+                force,
+            )
+            .c(d!())
+        }
     }
 
     #[inline(always)]
@@ -576,7 +581,7 @@ impl MapxRawMkVs {
                 branch_name,
                 Some(version_name),
                 base_branch_id,
-                base_version_id,
+                Some(base_version_id),
                 force,
             )
             .c(d!())
@@ -609,11 +614,11 @@ impl MapxRawMkVs {
             .get(&base_branch_id)
             .c(d!("base branch not found"))?
             .last()
-            .map(|(version_id, _)| version_id)
-            .c(d!("base version not found"))?;
+            .map(|(version_id, _)| version_id);
 
-        self.branch_create_by_base_branch_version_without_new_version(
+        self.do_branch_create_by_base_branch_version(
             branch_name,
+            None,
             base_branch_id,
             base_version_id,
             force,
@@ -633,7 +638,7 @@ impl MapxRawMkVs {
             branch_name,
             None,
             base_branch_id,
-            base_version_id,
+            Some(base_version_id),
             force,
         )
         .c(d!())
@@ -644,7 +649,7 @@ impl MapxRawMkVs {
         branch_name: &[u8],
         version_name: Option<&[u8]>,
         base_branch_id: BranchID,
-        base_version_id: VersionID,
+        base_version_id: Option<VersionID>,
         force: bool,
     ) -> Result<()> {
         if force {
@@ -661,9 +666,18 @@ impl MapxRawMkVs {
             .branch_to_its_versions
             .get(&base_branch_id)
             .c(d!("base branch not exist"))?;
-        if !vers.contains_key(&base_version_id) {
-            return Err(eg!("version is not on the base branch"));
-        }
+
+        let vers_copied = if let Some(bv) = base_version_id {
+            if !vers.contains_key(&bv) {
+                return Err(eg!("version is not on the base branch"));
+            }
+            vers.range(..=bv).fold(MapxOrd::new(), |acc, (k, v)| {
+                acc.insert(k, v);
+                acc
+            })
+        } else {
+            MapxOrd::new()
+        };
 
         let branch_id = VSDB.alloc_branch_id();
 
@@ -671,13 +685,6 @@ impl MapxRawMkVs {
             .insert_ref(branch_name, &branch_id);
         self.branch_id_to_branch_name
             .insert_ref(&branch_id, branch_name);
-
-        let vers_copied =
-            vers.range(..=base_version_id)
-                .fold(MapxOrd::new(), |acc, (k, v)| {
-                    acc.insert(k, v);
-                    acc
-                });
         self.branch_to_its_versions.insert(branch_id, vers_copied);
 
         if let Some(vername) = version_name {

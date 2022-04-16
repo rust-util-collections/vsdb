@@ -1,5 +1,11 @@
 # Change log
 
+## v0.31.1
+
+#### Internal optimizations
+
+- Allow creating new branches from an empty base branch
+
 ## v0.31.0
 
 #### Internal optimizations
