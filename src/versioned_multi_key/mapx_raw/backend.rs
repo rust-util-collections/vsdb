@@ -7,7 +7,7 @@ use crate::{
     common::{
         ende::encode_optioned_bytes, BranchID, BranchName, BranchNameOwned, RawValue,
         VersionID, VersionName, VersionNameOwned, INITIAL_BRANCH_ID,
-        INITIAL_BRANCH_NAME, INITIAL_VERSION, RESERVED_VERSION_NUM_DEFAULT, VSDB,
+        INITIAL_BRANCH_NAME, RESERVED_VERSION_NUM_DEFAULT, VSDB,
     },
 };
 use ruc::*;
@@ -65,7 +65,6 @@ impl MapxRawMkVs {
             .insert_ref(&INITIAL_BRANCH_ID, INITIAL_BRANCH_NAME.0);
         self.branch_to_its_versions
             .insert(INITIAL_BRANCH_ID, MapxOrd::new());
-        self.version_create(INITIAL_VERSION.0).unwrap();
     }
 
     #[inline(always)]

@@ -1,8 +1,7 @@
 use super::*;
 use crate::{
     common::{
-        BranchName, ParentBranchName, VersionName, VersionNameOwned,
-        INITIAL_BRANCH_NAME, INITIAL_VERSION,
+        BranchName, ParentBranchName, VersionName, VersionNameOwned, INITIAL_BRANCH_NAME,
     },
     ValueEnDe, VsMgmt,
 };
@@ -72,6 +71,8 @@ fn basic_cases() {
 #[allow(non_snake_case)]
 fn VCS_mgmt() {
     let mut hdr = MapxRawMkVs::new(2);
+    pnk!(hdr.version_create(VersionName(b"")));
+
     version_operations(&mut hdr);
     branch_operations(&mut hdr);
     default_branch(&mut hdr);
@@ -614,6 +615,7 @@ fn prune() {
     pnk!(hdr.prune(None));
     pnk!(hdr.prune(Some(1000000000)));
 
+    pnk!(hdr.version_create(VersionName(b"")));
     pnk!(hdr.insert(&[&[0], &[255]], &[0]));
     pnk!(hdr.version_create(VersionName(b"a")));
     pnk!(hdr.insert(&[&[1], &[255]], &[1]));
@@ -647,6 +649,7 @@ fn prune() {
 
     hdr.clear();
 
+    pnk!(hdr.version_create(VersionName(b"")));
     pnk!(hdr.insert(&[&[0], &[255]], &[0]));
     pnk!(hdr.version_create(VersionName(b"a")));
     pnk!(hdr.insert(&[&[1], &[255]], &[1]));
@@ -739,6 +742,7 @@ fn prune() {
 fn version_rebase() {
     let hdr = MapxRawMkVs::new(2);
 
+    pnk!(hdr.version_create(VersionName(&[0])));
     pnk!(hdr.insert(&[&[0], &[0]], &[0]));
     pnk!(hdr.version_create(VersionName(&[1])));
     pnk!(hdr.insert(&[&[0], &[0]], &[1]));
@@ -754,7 +758,7 @@ fn version_rebase() {
         &pnk!(hdr.get_by_branch_version(
             &[&[0], &[0]],
             INITIAL_BRANCH_NAME,
-            INITIAL_VERSION
+            VersionName(&[0])
         ))[..]
     );
     assert_eq!(
@@ -818,7 +822,7 @@ fn version_rebase() {
         &pnk!(hdr.get_by_branch_version(
             &[&[0], &[0]],
             INITIAL_BRANCH_NAME,
-            INITIAL_VERSION
+            VersionName(&[0])
         ))[..]
     );
     assert_eq!(

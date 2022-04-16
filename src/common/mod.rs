@@ -61,9 +61,6 @@ pub(crate) const NULL: BranchID = BIGGEST_RESERVED_ID as BranchID;
 pub(crate) const INITIAL_BRANCH_ID: BranchID = 0;
 pub(crate) const INITIAL_BRANCH_NAME: BranchName<'static> = BranchName(b"master");
 
-/// The initial verison along with each new instance.
-pub const INITIAL_VERSION: VersionName<'static> = VersionName([0u8; 0].as_slice());
-
 // default value for reserved number when pruning old data
 pub(crate) const RESERVED_VERSION_NUM_DEFAULT: usize = 10;
 

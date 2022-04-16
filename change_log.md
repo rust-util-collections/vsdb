@@ -1,5 +1,12 @@
 # Change log
 
+## v0.31.0
+
+#### Internal optimizations
+
+- The initial version should NOT exist
+  - It may make `prune` useless(common versions may never exist)
+
 ## v0.30.1
 
 #### Internal optimizations
