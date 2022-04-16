@@ -1,5 +1,12 @@
 # Change log
 
+## v0.30.0
+
+#### APIs changes
+
+- `branch_create_xxx`: add a 'force' param to all 'branch_create' prefixed functions
+  - if the value of 'force' is true, a branch with the same name of the target branch will be removed automatically
+
 ## v0.29.0
 
 #### BUG fixes

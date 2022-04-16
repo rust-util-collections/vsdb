@@ -305,21 +305,21 @@ fn version_operations(hdr: &mut MapxRawVs) {
 // - a branch can be merged to any branch, include itself
 // - the original branch will not be deleted along with a merge operation
 fn branch_operations(hdr: &mut MapxRawVs) {
-    hdr.branch_create(BranchName(b"b-1"), random_version().as_deref())
+    hdr.branch_create(BranchName(b"b-1"), random_version().as_deref(), false)
         .unwrap();
-    hdr.branch_create(BranchName(b"b-2"), random_version().as_deref())
+    hdr.branch_create(BranchName(b"b-2"), random_version().as_deref(), false)
         .unwrap();
 
     assert!(
-        hdr.branch_create(INITIAL_BRANCH_NAME, random_version().as_deref())
+        hdr.branch_create(INITIAL_BRANCH_NAME, random_version().as_deref(), false)
             .is_err()
     );
     assert!(
-        hdr.branch_create(BranchName(b"b-1"), random_version().as_deref())
+        hdr.branch_create(BranchName(b"b-1"), random_version().as_deref(), false)
             .is_err()
     );
     assert!(
-        hdr.branch_create(BranchName(b"b-2"), random_version().as_deref())
+        hdr.branch_create(BranchName(b"b-2"), random_version().as_deref(), false)
             .is_err()
     );
 
@@ -349,6 +349,7 @@ fn branch_operations(hdr: &mut MapxRawVs) {
         BranchName(b"b-1-child"),
         random_version().as_deref(),
         ParentBranchName(b"b-1"),
+        false,
     )
     .unwrap();
     assert_eq!(
@@ -379,9 +380,11 @@ fn branch_operations(hdr: &mut MapxRawVs) {
     );
 
     (4..2 * BRANCH_LIMITS).for_each(|i| {
-        pnk!(
-            hdr.branch_create(BranchName(&i.to_be_bytes()), random_version().as_deref())
-        );
+        pnk!(hdr.branch_create(
+            BranchName(&i.to_be_bytes()),
+            random_version().as_deref(),
+            false
+        ));
     });
     (4..2 * BRANCH_LIMITS).for_each(|i| {
         pnk!(hdr.branch_remove(BranchName(&i.to_be_bytes())));
@@ -391,7 +394,8 @@ fn branch_operations(hdr: &mut MapxRawVs) {
         BranchName(&3usize.to_be_bytes()),
         random_version().as_deref(),
         ParentBranchName(INITIAL_BRANCH_NAME.0),
-        VersionName(b"v-002")
+        VersionName(b"v-002"),
+        false
     ));
     pnk!(hdr.version_create_by_branch(
         VersionName(b"verN"),
@@ -402,7 +406,8 @@ fn branch_operations(hdr: &mut MapxRawVs) {
         pnk!(hdr.branch_create_by_base_branch(
             BranchName(&i.to_be_bytes()),
             random_version().as_deref(),
-            ParentBranchName(&(i - 1).to_be_bytes())
+            ParentBranchName(&(i - 1).to_be_bytes()),
+            false
         ));
         pnk!(hdr.version_create_by_branch(
             VersionName(format!("verN_{}", i).as_bytes()),
@@ -413,6 +418,7 @@ fn branch_operations(hdr: &mut MapxRawVs) {
         BranchName(&(BRANCH_LIMITS - 2).to_be_bytes()),
         random_version().as_deref(),
         ParentBranchName(&(BRANCH_LIMITS - 3).to_be_bytes()),
+        false,
     ));
     (3..(BRANCH_LIMITS - 1)).rev().for_each(|i| {
         pnk!(hdr.branch_remove(BranchName(&i.to_be_bytes())));
@@ -420,7 +426,8 @@ fn branch_operations(hdr: &mut MapxRawVs) {
 
     pnk!(hdr.branch_create(
         BranchName(&1usize.to_be_bytes()),
-        random_version().as_deref()
+        random_version().as_deref(),
+        false
     ));
     pnk!(hdr.branch_remove(BranchName(&1usize.to_be_bytes())));
 
@@ -516,6 +523,7 @@ fn branch_operations(hdr: &mut MapxRawVs) {
             BranchName(&i.to_be_bytes()),
             random_version().as_deref(),
             ParentBranchName(b"b-2"),
+            false,
         )
         .unwrap();
         (1000..1010u64).for_each(|j| {
@@ -577,7 +585,7 @@ fn branch_operations(hdr: &mut MapxRawVs) {
 }
 
 fn default_branch_operations(hdr: &mut MapxRawVs) {
-    hdr.branch_create(BranchName(b"fork"), random_version().as_deref())
+    hdr.branch_create(BranchName(b"fork"), random_version().as_deref(), false)
         .unwrap();
 
     hdr.branch_set_default(BranchName(b"fork")).unwrap();
@@ -600,7 +608,8 @@ fn default_branch_operations(hdr: &mut MapxRawVs) {
         thread::spawn(move || {
             pnk!(h.branch_create(
                 BranchName(&i.to_be_bytes()),
-                random_version().as_deref()
+                random_version().as_deref(),
+                false
             ));
             pnk!(h.branch_set_default(BranchName(&i.to_be_bytes())));
             pnk!(h.version_create(VersionName(format!("ver-on-fork—{}", i).as_bytes())));
@@ -679,7 +688,7 @@ fn prune() {
     pnk!(hdr.insert(&[6], &[6]));
     pnk!(hdr.insert(&[7], &[7]));
 
-    pnk!(hdr.branch_create(BranchName(b"A"), random_version().as_deref()));
+    pnk!(hdr.branch_create(BranchName(b"A"), random_version().as_deref(), false));
     pnk!(hdr.branch_set_default(BranchName(b"A")));
 
     pnk!(hdr.version_create(VersionName(b"d")));
@@ -693,7 +702,8 @@ fn prune() {
         BranchName(b"B"),
         random_version().as_deref(),
         ParentBranchName(INITIAL_BRANCH_NAME.0),
-        VersionName(b"c")
+        VersionName(b"c"),
+        false
     ));
     pnk!(hdr.branch_set_default(BranchName(b"B")));
 
@@ -829,7 +839,7 @@ fn version_rebase() {
     assert_eq!(&[4], &pnk!(hdr.get(&[0]))[..]);
 
     let br = BranchName(&[1]);
-    pnk!(hdr.branch_create(br, random_version().as_deref()));
+    pnk!(hdr.branch_create(br, random_version().as_deref(), false));
 
     pnk!(hdr.version_create_by_branch(VersionName(&[10]), br));
     pnk!(hdr.insert_by_branch(&[0], &[0], br));

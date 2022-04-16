@@ -119,6 +119,7 @@ pub trait VsMgmt {
         &self,
         branch_name: BranchName,
         version_name: VersionName,
+        force: bool,
     ) -> Result<()>;
 
     /// Create a new branch based on the head of a specified branch.
@@ -127,6 +128,7 @@ pub trait VsMgmt {
         branch_name: BranchName,
         version_name: VersionName,
         base_branch_name: ParentBranchName,
+        force: bool,
     ) -> Result<()>;
 
     /// Create a new branch based on a specified version of a specified branch.
@@ -136,6 +138,7 @@ pub trait VsMgmt {
         version_name: VersionName,
         base_branch_name: ParentBranchName,
         base_version_name: VersionName,
+        force: bool,
     ) -> Result<()>;
 
     /// # Safety
@@ -145,6 +148,7 @@ pub trait VsMgmt {
     unsafe fn branch_create_without_new_version(
         &self,
         branch_name: BranchName,
+        force: bool,
     ) -> Result<()>;
 
     /// # Safety
@@ -155,6 +159,7 @@ pub trait VsMgmt {
         &self,
         branch_name: BranchName,
         base_branch_name: ParentBranchName,
+        force: bool,
     ) -> Result<()>;
 
     /// # Safety
@@ -166,6 +171,7 @@ pub trait VsMgmt {
         branch_name: BranchName,
         base_branch_name: ParentBranchName,
         base_version_name: VersionName,
+        force: bool,
     ) -> Result<()>;
 
     /// Check if a branch exists or not.
@@ -402,8 +408,11 @@ macro_rules! impl_vs_methods {
             &self,
             branch_name: BranchName,
             version_name: VersionName,
+            force: bool,
         ) -> Result<()> {
-            self.inner.branch_create(branch_name, version_name).c(d!())
+            self.inner
+                .branch_create(branch_name, version_name, force)
+                .c(d!())
         }
 
         /// Create a new branch based on the head of a specified branch.
@@ -413,12 +422,14 @@ macro_rules! impl_vs_methods {
             branch_name: BranchName,
             version_name: VersionName,
             base_branch_name: ParentBranchName,
+            force: bool,
         ) -> Result<()> {
             self.inner
                 .branch_create_by_base_branch(
                     branch_name,
                     version_name,
                     base_branch_name,
+                    force,
                 )
                 .c(d!())
         }
@@ -431,6 +442,7 @@ macro_rules! impl_vs_methods {
             version_name: VersionName,
             base_branch_name: ParentBranchName,
             base_version_name: VersionName,
+            force: bool,
         ) -> Result<()> {
             self.inner
                 .branch_create_by_base_branch_version(
@@ -438,6 +450,7 @@ macro_rules! impl_vs_methods {
                     version_name,
                     base_branch_name,
                     base_version_name,
+                    force,
                 )
                 .c(d!())
         }
@@ -450,9 +463,10 @@ macro_rules! impl_vs_methods {
         unsafe fn branch_create_without_new_version(
             &self,
             branch_name: BranchName,
+            force: bool,
         ) -> Result<()> {
             self.inner
-                .branch_create_without_new_version(branch_name)
+                .branch_create_without_new_version(branch_name, force)
                 .c(d!())
         }
 
@@ -465,11 +479,13 @@ macro_rules! impl_vs_methods {
             &self,
             branch_name: BranchName,
             base_branch_name: ParentBranchName,
+            force: bool,
         ) -> Result<()> {
             self.inner
                 .branch_create_by_base_branch_without_new_version(
                     branch_name,
                     base_branch_name,
+                    force,
                 )
                 .c(d!())
         }
@@ -484,12 +500,14 @@ macro_rules! impl_vs_methods {
             branch_name: BranchName,
             base_branch_name: ParentBranchName,
             base_version_name: VersionName,
+            force: bool,
         ) -> Result<()> {
             self.inner
                 .branch_create_by_base_branch_version_without_new_version(
                     branch_name,
                     base_branch_name,
                     base_version_name,
+                    force,
                 )
                 .c(d!())
         }
@@ -708,7 +726,7 @@ macro_rules! impl_vs_methods_nope {
         }
 
         #[inline(always)]
-        fn branch_create(&self, _: BranchName, _: VersionName) -> Result<()> {
+        fn branch_create(&self, _: BranchName, _: VersionName, _: bool) -> Result<()> {
             Ok(())
         }
 
@@ -718,6 +736,7 @@ macro_rules! impl_vs_methods_nope {
             _: BranchName,
             _: VersionName,
             _: ParentBranchName,
+            _: bool,
         ) -> Result<()> {
             Ok(())
         }
@@ -729,11 +748,16 @@ macro_rules! impl_vs_methods_nope {
             _: VersionName,
             _: ParentBranchName,
             _: VersionName,
+            _: bool,
         ) -> Result<()> {
             Ok(())
         }
 
-        unsafe fn branch_create_without_new_version(&self, _: BranchName) -> Result<()> {
+        unsafe fn branch_create_without_new_version(
+            &self,
+            _: BranchName,
+            _: bool,
+        ) -> Result<()> {
             Ok(())
         }
 
@@ -741,6 +765,7 @@ macro_rules! impl_vs_methods_nope {
             &self,
             _: BranchName,
             _: ParentBranchName,
+            _: bool,
         ) -> Result<()> {
             Ok(())
         }
@@ -750,6 +775,7 @@ macro_rules! impl_vs_methods_nope {
             _: BranchName,
             _: ParentBranchName,
             _: VersionName,
+            _: bool,
         ) -> Result<()> {
             Ok(())
         }
@@ -1092,9 +1118,10 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
         &self,
         branch_name: BranchName,
         version_name: VersionName,
+        force: bool,
     ) -> Result<()> {
         if let Some(i) = self.as_ref() {
-            i.branch_create(branch_name, version_name).c(d!())?;
+            i.branch_create(branch_name, version_name, force).c(d!())?;
         }
         Ok(())
     }
@@ -1105,10 +1132,16 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
         branch_name: BranchName,
         version_name: VersionName,
         base_branch_name: ParentBranchName,
+        force: bool,
     ) -> Result<()> {
         if let Some(i) = self.as_ref() {
-            i.branch_create_by_base_branch(branch_name, version_name, base_branch_name)
-                .c(d!())?;
+            i.branch_create_by_base_branch(
+                branch_name,
+                version_name,
+                base_branch_name,
+                force,
+            )
+            .c(d!())?;
         }
         Ok(())
     }
@@ -1120,6 +1153,7 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
         version_name: VersionName,
         base_branch_name: ParentBranchName,
         base_version_name: VersionName,
+        force: bool,
     ) -> Result<()> {
         if let Some(i) = self.as_ref() {
             i.branch_create_by_base_branch_version(
@@ -1127,6 +1161,7 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
                 version_name,
                 base_branch_name,
                 base_version_name,
+                force,
             )
             .c(d!())?;
         }
@@ -1136,9 +1171,11 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
     unsafe fn branch_create_without_new_version(
         &self,
         branch_name: BranchName,
+        force: bool,
     ) -> Result<()> {
         if let Some(i) = self.as_ref() {
-            i.branch_create_without_new_version(branch_name).c(d!())?;
+            i.branch_create_without_new_version(branch_name, force)
+                .c(d!())?;
         }
         Ok(())
     }
@@ -1147,11 +1184,13 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
         &self,
         branch_name: BranchName,
         base_branch_name: ParentBranchName,
+        force: bool,
     ) -> Result<()> {
         if let Some(i) = self.as_ref() {
             i.branch_create_by_base_branch_without_new_version(
                 branch_name,
                 base_branch_name,
+                force,
             )
             .c(d!())?;
         }
@@ -1163,12 +1202,14 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
         branch_name: BranchName,
         base_branch_name: ParentBranchName,
         base_version_name: VersionName,
+        force: bool,
     ) -> Result<()> {
         if let Some(i) = self.as_ref() {
             i.branch_create_by_base_branch_version_without_new_version(
                 branch_name,
                 base_branch_name,
                 base_version_name,
+                force,
             )
             .c(d!())?;
         }

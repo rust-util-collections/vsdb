@@ -133,7 +133,8 @@ impl WorldState {
 
     fn new_branch(&mut self, branch: &str) -> Result<()> {
         let br = BranchName(branch.as_bytes());
-        self.branch_create(br, random_version().as_deref()).c(d!())
+        self.branch_create(br, random_version().as_deref(), false)
+            .c(d!())
     }
 
     fn delete_branch(&mut self, branch: &str) -> Result<()> {

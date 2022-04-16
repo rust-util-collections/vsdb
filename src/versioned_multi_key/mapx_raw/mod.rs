@@ -261,9 +261,10 @@ impl VsMgmt for MapxRawMkVs {
         &self,
         branch_name: BranchName,
         version_name: VersionName,
+        force: bool,
     ) -> Result<()> {
         self.inner
-            .branch_create(branch_name.0, version_name.0)
+            .branch_create(branch_name.0, version_name.0, force)
             .c(d!())
     }
 
@@ -273,6 +274,7 @@ impl VsMgmt for MapxRawMkVs {
         branch_name: BranchName,
         version_name: VersionName,
         base_branch_name: ParentBranchName,
+        force: bool,
     ) -> Result<()> {
         self.inner
             .branch_get_id_by_name(BranchName(base_branch_name.0))
@@ -283,6 +285,7 @@ impl VsMgmt for MapxRawMkVs {
                         branch_name.0,
                         version_name.0,
                         base_br_id,
+                        force,
                     )
                     .c(d!())
             })
@@ -295,6 +298,7 @@ impl VsMgmt for MapxRawMkVs {
         version_name: VersionName,
         base_branch_name: ParentBranchName,
         base_version_name: VersionName,
+        force: bool,
     ) -> Result<()> {
         let base_br_id = self
             .inner
@@ -310,6 +314,7 @@ impl VsMgmt for MapxRawMkVs {
                 version_name.0,
                 base_br_id,
                 base_ver_id,
+                force,
             )
             .c(d!())
     }
@@ -318,9 +323,10 @@ impl VsMgmt for MapxRawMkVs {
     unsafe fn branch_create_without_new_version(
         &self,
         branch_name: BranchName,
+        force: bool,
     ) -> Result<()> {
         self.inner
-            .branch_create_without_new_version(branch_name.0)
+            .branch_create_without_new_version(branch_name.0, force)
             .c(d!())
     }
 
@@ -329,6 +335,7 @@ impl VsMgmt for MapxRawMkVs {
         &self,
         branch_name: BranchName,
         base_branch_name: ParentBranchName,
+        force: bool,
     ) -> Result<()> {
         self.inner
             .branch_get_id_by_name(BranchName(base_branch_name.0))
@@ -338,6 +345,7 @@ impl VsMgmt for MapxRawMkVs {
                     .branch_create_by_base_branch_without_new_version(
                         branch_name.0,
                         base_br_id,
+                        force,
                     )
                     .c(d!())
             })
@@ -349,6 +357,7 @@ impl VsMgmt for MapxRawMkVs {
         branch_name: BranchName,
         base_branch_name: ParentBranchName,
         base_version_name: VersionName,
+        force: bool,
     ) -> Result<()> {
         let base_br_id = self
             .inner
@@ -363,6 +372,7 @@ impl VsMgmt for MapxRawMkVs {
                 branch_name.0,
                 base_br_id,
                 base_ver_id,
+                force,
             )
             .c(d!())
     }

@@ -540,11 +540,12 @@ impl MapxRawVs {
             .get(&branch_id)
             .c(d!("branch not found"))?
             .remove(&version_id)
-            .is_none()
+            .is_some()
         {
-            return Err(eg!("version is not on this branch"));
+            Ok(())
+        } else {
+            Err(eg!("version is not on this branch"))
         }
-        Ok(())
     }
 
     // # Safety
@@ -716,11 +717,13 @@ impl MapxRawVs {
         &self,
         branch_name: &[u8],
         version_name: &[u8],
+        force: bool,
     ) -> Result<()> {
         self.branch_create_by_base_branch(
             branch_name,
             version_name,
             self.branch_get_default(),
+            force,
         )
         .c(d!())
     }
@@ -731,6 +734,7 @@ impl MapxRawVs {
         branch_name: &[u8],
         version_name: &[u8],
         base_branch_id: BranchID,
+        force: bool,
     ) -> Result<()> {
         let base_version_id = self
             .branch_to_its_versions
@@ -745,6 +749,7 @@ impl MapxRawVs {
             version_name,
             base_branch_id,
             base_version_id,
+            force,
         )
         .c(d!())
     }
@@ -756,6 +761,7 @@ impl MapxRawVs {
         version_name: &[u8],
         base_branch_id: BranchID,
         base_version_id: VersionID,
+        force: bool,
     ) -> Result<()> {
         if self.version_name_to_version_id.contains_key(version_name) {
             return Err(eg!("this version already exists"));
@@ -767,6 +773,7 @@ impl MapxRawVs {
                 Some(version_name),
                 base_branch_id,
                 base_version_id,
+                force,
             )
             .c(d!())
         }
@@ -776,10 +783,12 @@ impl MapxRawVs {
     pub(super) unsafe fn branch_create_without_new_version(
         &self,
         branch_name: &[u8],
+        force: bool,
     ) -> Result<()> {
         self.branch_create_by_base_branch_without_new_version(
             branch_name,
             self.branch_get_default(),
+            force,
         )
         .c(d!())
     }
@@ -789,6 +798,7 @@ impl MapxRawVs {
         &self,
         branch_name: &[u8],
         base_branch_id: BranchID,
+        force: bool,
     ) -> Result<()> {
         let base_version_id = self
             .branch_to_its_versions
@@ -802,6 +812,7 @@ impl MapxRawVs {
             branch_name,
             base_branch_id,
             base_version_id,
+            force,
         )
         .c(d!())
     }
@@ -812,23 +823,34 @@ impl MapxRawVs {
         branch_name: &[u8],
         base_branch_id: BranchID,
         base_version_id: VersionID,
+        force: bool,
     ) -> Result<()> {
         self.do_branch_create_by_base_branch_version(
             branch_name,
             None,
             base_branch_id,
             base_version_id,
+            force,
         )
         .c(d!())
     }
 
+    // param 'force':
+    // remove the target new branch if it exists
     unsafe fn do_branch_create_by_base_branch_version(
         &self,
         branch_name: &[u8],
         version_name: Option<&[u8]>,
         base_branch_id: BranchID,
         base_version_id: VersionID,
+        force: bool,
     ) -> Result<()> {
+        if force {
+            if let Some(brid) = self.branch_name_to_branch_id.get(branch_name) {
+                self.branch_remove(brid).c(d!())?;
+            }
+        }
+
         if self.branch_name_to_branch_id.contains_key(branch_name) {
             return Err(eg!("branch already exists"));
         }
@@ -867,10 +889,7 @@ impl MapxRawVs {
     // Check if a branch exists or not.
     #[inline(always)]
     pub(super) fn branch_exists(&self, branch_id: BranchID) -> bool {
-        let condition_1 = self.branch_id_to_branch_name.contains_key(&branch_id);
-        let condition_2 = self.branch_to_its_versions.contains_key(&branch_id);
-        assert_eq!(condition_1, condition_2);
-        condition_1
+        self.branch_id_to_branch_name.contains_key(&branch_id)
     }
 
     // Check if a branch exists and has versions on it.
@@ -899,7 +918,6 @@ impl MapxRawVs {
             .c(d!())
             .and_then(|brname| self.branch_name_to_branch_id.remove(&brname).c(d!()))?;
 
-        // we do not call `clear()` on the discarded instance for performance reason.
         self.branch_to_its_versions
             .remove(&branch_id)
             .c(d!())
