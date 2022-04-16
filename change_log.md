@@ -1,22 +1,16 @@
 # Change log
 
-## v0.31.1
+## v0.31.3
+
+#### BUG fixes
+
+- Fix incorrect logic in the `prune` function
 
 #### Internal optimizations
 
 - Allow creating new branches from an empty base branch
-
-## v0.31.0
-
-#### Internal optimizations
-
 - The initial version should NOT exist
   - It may make `prune` useless(common versions may never exist)
-
-## v0.30.1
-
-#### Internal optimizations
-
 - The results of those `xxx_list_xxx` APIs are unreliable
   - Will try to return the first non-empty list for reference since this version
   - The branches or versions of every child instance of a composite Vs instance may be different

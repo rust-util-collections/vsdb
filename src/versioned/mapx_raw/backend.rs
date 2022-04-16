@@ -1173,8 +1173,6 @@ impl MapxRawVs {
             .collect::<Vec<_>>();
         alt!(br_vers.is_empty(), return Ok(()));
 
-        let last_idx = br_vers.len().saturating_sub(1);
-
         // filter out the longest common prefix
         let mut guard = 0;
         let mut vers_to_be_merged = vec![];
@@ -1183,11 +1181,11 @@ impl MapxRawVs {
                 if let Some((ver, _)) = vers.next() {
                     alt!(0 == idx, guard = ver);
                     alt!(guard != ver, break 'x);
-                    alt!(last_idx == idx, vers_to_be_merged.push(guard));
                 } else {
                     break 'x;
                 }
             }
+            vers_to_be_merged.push(guard);
         }
 
         let (vers_to_be_merged, rewrite_ver) = {
@@ -1205,7 +1203,11 @@ impl MapxRawVs {
 
         let rewrite_ver_chgset = self.version_to_change_set.get(rewrite_ver).c(d!())?;
 
-        for (_, vers) in self.branch_to_its_versions.iter() {
+        for (_, vers) in self
+            .branch_to_its_versions
+            .iter()
+            .filter(|(_, vers)| !vers.is_empty())
+        {
             for ver in vers_to_be_merged.iter() {
                 vers.remove(ver).c(d!())?;
             }
