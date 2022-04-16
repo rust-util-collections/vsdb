@@ -20,21 +20,18 @@ pub struct OrphanVs<T> {
     inner: MapxOrdRawKeyVs<T>,
 }
 
-impl<T> OrphanVs<T>
-where
-    T: ValueEnDe,
-{
+impl<T: ValueEnDe> OrphanVs<T> {
     #[inline(always)]
-    pub fn new(v: T) -> Self {
-        let hdr = MapxOrdRawKeyVs::new();
-        pnk!(hdr.insert_ref(&[], &v));
-        Self { inner: hdr }
+    pub fn new() -> Self {
+        Self {
+            inner: MapxOrdRawKeyVs::new(),
+        }
     }
 
     #[inline(always)]
-    pub fn get_value(&self) -> T {
+    pub fn get_value(&self) -> Option<T> {
         // value of the default branch must exists
-        self.inner.get(&[]).unwrap()
+        self.inner.get(&[])
     }
 
     /// Get the mutable handler of the value.
@@ -45,9 +42,8 @@ where
     /// - **NEVER** do this:
     ///     - `*(&mut <Orphan>) = Orphan::new(...)`
     ///     - OR you will loss the 'versioned' ability of this object
-    pub fn get_mut(&self) -> ValueMut<'_, T> {
-        let value = self.get_value();
-        ValueMut { hdr: self, value }
+    pub fn get_mut(&self) -> Option<ValueMut<'_, T>> {
+        self.get_value().map(|value| ValueMut { hdr: self, value })
     }
 
     #[inline(always)]
@@ -94,12 +90,9 @@ where
     }
 }
 
-impl<T> Default for OrphanVs<T>
-where
-    T: ValueEnDe + Default,
-{
+impl<T: ValueEnDe> Default for OrphanVs<T> {
     fn default() -> Self {
-        Self::new(T::default())
+        Self::new()
     }
 }
 

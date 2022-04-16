@@ -1,5 +1,13 @@
 # Change log
 
+## v0.29.0
+
+#### BUG fixes
+
+- Avoid incorrect panic in some APIs of `OrphanVs`
+  - `get_value -> Value` :=> `get_value -> Option<Value>`
+  - `get_mut -> MutValue` :=> `get_mut -> Option<MutValue>`
+
 ## v0.28.0
 
 #### New APIs
@@ -51,7 +59,7 @@
 
 - `prune`: no longer executed on the default branch, the logic now is to calculate the common prefix of the version list of all non-empty branches, and then prune this prefix list
 - `prune_by_branch`: **was removed**
-- `branch_merge_to_parent` -> `branch_merge_to`: support for safely merging into any static ancestor branch
+- `branch_merge_to_parent` :=> `branch_merge_to`: support for safely merging into any static ancestor branch
 
 #### External function changes
 

@@ -93,7 +93,7 @@ impl WorldState {
         let mut ws = WorldState {
             transactions: VecxVs::new(),
             balances: MapxVs::new(),
-            a_consensus_int: OrphanVs::new(0),
+            a_consensus_int: OrphanVs::new(),
         };
 
         if !ws.branch_is_found(MASTER_BRANCH) {
