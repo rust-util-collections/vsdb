@@ -768,6 +768,7 @@ impl MapxRawVs {
                 base_branch_id,
                 base_version_id,
             )
+            .c(d!())
         }
     }
 
@@ -818,6 +819,7 @@ impl MapxRawVs {
             base_branch_id,
             base_version_id,
         )
+        .c(d!())
     }
 
     unsafe fn do_branch_create_by_base_branch_version(
