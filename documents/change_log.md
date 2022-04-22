@@ -1,5 +1,11 @@
 # Change log
 
+## v0.31.4
+
+#### BUG fixes
+
+- Fix incorrect logic in the `branch_has_versions` function
+
 ## v0.31.3
 
 #### BUG fixes

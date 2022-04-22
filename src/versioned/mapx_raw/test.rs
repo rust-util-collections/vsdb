@@ -15,7 +15,7 @@ fn basic_cases() {
 
     let hdr = {
         let hdr_i = MapxRawVs::new();
-        assert!(hdr_i.branch_has_versions(INITIAL_BRANCH_NAME));
+        assert!(!hdr_i.branch_has_versions(INITIAL_BRANCH_NAME));
         hdr_i.version_create(VersionName(b"test")).unwrap();
         assert!(hdr_i.branch_has_versions(INITIAL_BRANCH_NAME));
 

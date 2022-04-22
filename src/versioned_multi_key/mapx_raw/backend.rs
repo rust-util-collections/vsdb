@@ -704,7 +704,12 @@ impl MapxRawMkVs {
 
     #[inline(always)]
     pub(super) fn branch_has_versions(&self, branch_id: BranchID) -> bool {
-        self.branch_exists(branch_id) && !self.branch_to_its_versions.is_empty()
+        self.branch_exists(branch_id)
+            && self
+                .branch_to_its_versions
+                .get(&branch_id)
+                .map(|vers| !vers.is_empty())
+                .unwrap_or(false)
     }
 
     #[inline(always)]

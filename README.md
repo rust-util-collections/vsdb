@@ -12,7 +12,7 @@ Based on the powerful version control function of VSDB, you can easily give your
 
 **Make everything versioned !!**
 
-[**To view the change log check here**](./change_log.md).
+[**To view the change log check here**](./documents/change_log.md).
 
 ## Highlights
 
