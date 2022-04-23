@@ -210,7 +210,7 @@ where
     #[inline(always)]
     pub fn iter_op<F>(&self, op: &mut F) -> Result<()>
     where
-        F: FnMut(&(&K1, &K2), V) -> Result<()>,
+        F: FnMut((K1, K2), V) -> Result<()>,
     {
         let mut cb = |k: &[&[u8]], v: RawValue| -> Result<()> {
             if KEY_SIZE != k.len() {
@@ -219,7 +219,7 @@ where
             let k1 = KeyEnDe::decode(k[0]).c(d!())?;
             let k2 = KeyEnDe::decode(k[1]).c(d!())?;
             let v = ValueEnDe::decode(&v).c(d!())?;
-            op(&(&k1, &k2), v).c(d!())
+            op((k1, k2), v).c(d!())
         };
 
         self.inner.iter_op(&mut cb).c(d!())
@@ -227,7 +227,7 @@ where
 
     pub fn iter_op_by_branch<F>(&self, branch_name: BranchName, op: &mut F) -> Result<()>
     where
-        F: FnMut(&(&K1, &K2), V) -> Result<()>,
+        F: FnMut((K1, K2), V) -> Result<()>,
     {
         let mut cb = |k: &[&[u8]], v: RawValue| -> Result<()> {
             if KEY_SIZE != k.len() {
@@ -236,7 +236,7 @@ where
             let k1 = KeyEnDe::decode(k[0]).c(d!())?;
             let k2 = KeyEnDe::decode(k[1]).c(d!())?;
             let v = ValueEnDe::decode(&v).c(d!())?;
-            op(&(&k1, &k2), v).c(d!())
+            op((k1, k2), v).c(d!())
         };
 
         self.inner.iter_op_by_branch(branch_name, &mut cb).c(d!())
@@ -249,7 +249,7 @@ where
         op: &mut F,
     ) -> Result<()>
     where
-        F: FnMut(&(&K1, &K2), V) -> Result<()>,
+        F: FnMut((K1, K2), V) -> Result<()>,
     {
         let mut cb = |k: &[&[u8]], v: RawValue| -> Result<()> {
             if KEY_SIZE != k.len() {
@@ -258,7 +258,7 @@ where
             let k1 = KeyEnDe::decode(k[0]).c(d!())?;
             let k2 = KeyEnDe::decode(k[1]).c(d!())?;
             let v = ValueEnDe::decode(&v).c(d!())?;
-            op(&(&k1, &k2), v).c(d!())
+            op((k1, k2), v).c(d!())
         };
 
         self.inner
@@ -268,7 +268,7 @@ where
 
     pub fn iter_op_with_key_prefix<F>(&self, op: &mut F, key_prefix: &K1) -> Result<()>
     where
-        F: FnMut(&(&K1, &K2), V) -> Result<()>,
+        F: FnMut((K1, K2), V) -> Result<()>,
     {
         let mut cb = |k: &[&[u8]], v: RawValue| -> Result<()> {
             if KEY_SIZE != k.len() {
@@ -277,7 +277,7 @@ where
             let k1 = KeyEnDe::decode(k[0]).c(d!())?;
             let k2 = KeyEnDe::decode(k[1]).c(d!())?;
             let v = ValueEnDe::decode(&v).c(d!())?;
-            op(&(&k1, &k2), v).c(d!())
+            op((k1, k2), v).c(d!())
         };
 
         self.inner
@@ -292,7 +292,7 @@ where
         key_prefix: &K1,
     ) -> Result<()>
     where
-        F: FnMut(&(&K1, &K2), V) -> Result<()>,
+        F: FnMut((K1, K2), V) -> Result<()>,
     {
         let mut cb = |k: &[&[u8]], v: RawValue| -> Result<()> {
             if KEY_SIZE != k.len() {
@@ -301,7 +301,7 @@ where
             let k1 = KeyEnDe::decode(k[0]).c(d!())?;
             let k2 = KeyEnDe::decode(k[1]).c(d!())?;
             let v = ValueEnDe::decode(&v).c(d!())?;
-            op(&(&k1, &k2), v).c(d!())
+            op((k1, k2), v).c(d!())
         };
 
         self.inner
@@ -322,7 +322,7 @@ where
         key_prefix: &K1,
     ) -> Result<()>
     where
-        F: FnMut(&(&K1, &K2), V) -> Result<()>,
+        F: FnMut((K1, K2), V) -> Result<()>,
     {
         let mut cb = |k: &[&[u8]], v: RawValue| -> Result<()> {
             if KEY_SIZE != k.len() {
@@ -331,7 +331,7 @@ where
             let k1 = KeyEnDe::decode(k[0]).c(d!())?;
             let k2 = KeyEnDe::decode(k[1]).c(d!())?;
             let v = ValueEnDe::decode(&v).c(d!())?;
-            op(&(&k1, &k2), v).c(d!())
+            op((k1, k2), v).c(d!())
         };
 
         self.inner

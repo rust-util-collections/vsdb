@@ -1,5 +1,11 @@
 # Change log
 
+## v0.33.0
+
+#### API changes
+
+- Change the callback parameter definition of `iter_op`
+
 ## v0.32.0
 
 #### New APIs
