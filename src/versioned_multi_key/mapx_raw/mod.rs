@@ -126,6 +126,88 @@ impl MapxRawMkVs {
     pub fn clear(&mut self) {
         self.inner.clear();
     }
+
+    #[inline(always)]
+    pub fn iter_op<F>(&self, op: &mut F) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], RawValue) -> Result<()>,
+    {
+        self.inner.iter_op(op).c(d!())
+    }
+
+    #[inline(always)]
+    pub fn iter_op_with_key_prefix<F>(
+        &self,
+        op: &mut F,
+        key_prefix: &[&[u8]],
+    ) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], RawValue) -> Result<()>,
+    {
+        self.inner.iter_op_with_key_prefix(op, key_prefix).c(d!())
+    }
+
+    #[inline(always)]
+    pub fn iter_op_by_branch<F>(&self, branch_name: BranchName, op: &mut F) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], RawValue) -> Result<()>,
+    {
+        let branch_id = self.inner.branch_get_id_by_name(branch_name).c(d!())?;
+        self.inner.iter_op_by_branch(branch_id, op).c(d!())
+    }
+
+    #[inline(always)]
+    pub fn iter_op_with_key_prefix_by_branch<F>(
+        &self,
+        branch_name: BranchName,
+        op: &mut F,
+        key_prefix: &[&[u8]],
+    ) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], RawValue) -> Result<()>,
+    {
+        let branch_id = self.inner.branch_get_id_by_name(branch_name).c(d!())?;
+        self.inner
+            .iter_op_with_key_prefix_by_branch(branch_id, op, key_prefix)
+            .c(d!())
+    }
+
+    #[inline(always)]
+    pub fn iter_op_by_branch_version<F>(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+        op: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], RawValue) -> Result<()>,
+    {
+        let branch_id = self.inner.branch_get_id_by_name(branch_name).c(d!())?;
+        let version_id = self.inner.version_get_id_by_name(version_name).c(d!())?;
+        self.inner
+            .iter_op_by_branch_version(branch_id, version_id, op)
+            .c(d!())
+    }
+
+    #[inline(always)]
+    pub fn iter_op_with_key_prefix_by_branch_version<F>(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+        op: &mut F,
+        key_prefix: &[&[u8]],
+    ) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], RawValue) -> Result<()>,
+    {
+        let branch_id = self.inner.branch_get_id_by_name(branch_name).c(d!())?;
+        let version_id = self.inner.version_get_id_by_name(version_name).c(d!())?;
+        self.inner
+            .iter_op_with_key_prefix_by_branch_version(
+                branch_id, version_id, op, key_prefix,
+            )
+            .c(d!())
+    }
 }
 
 impl VsMgmt for MapxRawMkVs {

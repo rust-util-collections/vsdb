@@ -65,6 +65,38 @@ fn basic_cases() {
     assert_eq!(&[4], &reloaded.get(&[&[], &[4]]).unwrap()[..]);
     assert_eq!(&[6], &reloaded.get(&[&[], &[6]]).unwrap()[..]);
     assert_eq!(&[80], &reloaded.get(&[&[], &[80]]).unwrap()[..]);
+
+    let mut cb = |k: &[&[u8]], v: RawValue| -> Result<()> {
+        assert_eq!(v, reloaded.remove(k).unwrap().unwrap());
+        Ok(())
+    };
+
+    pnk!(reloaded.iter_op_with_key_prefix(&mut cb, &[&[1]]));
+    assert_eq!(&[1], &reloaded.get(&[&[], &[1]]).unwrap()[..]);
+    assert_eq!(&[4], &reloaded.get(&[&[], &[4]]).unwrap()[..]);
+    assert_eq!(&[6], &reloaded.get(&[&[], &[6]]).unwrap()[..]);
+    assert_eq!(&[80], &reloaded.get(&[&[], &[80]]).unwrap()[..]);
+
+    assert!(
+        reloaded
+            .iter_op_with_key_prefix_by_branch_version(
+                BranchName(b"9ac"),
+                VersionName(b"123"),
+                &mut cb,
+                &[&[]]
+            )
+            .is_err()
+    );
+    assert_eq!(&[1], &reloaded.get(&[&[], &[1]]).unwrap()[..]);
+    assert_eq!(&[4], &reloaded.get(&[&[], &[4]]).unwrap()[..]);
+    assert_eq!(&[6], &reloaded.get(&[&[], &[6]]).unwrap()[..]);
+    assert_eq!(&[80], &reloaded.get(&[&[], &[80]]).unwrap()[..]);
+
+    pnk!(reloaded.iter_op(&mut cb));
+    assert!(reloaded.get(&[&[], &[1]]).is_none());
+    assert!(reloaded.get(&[&[], &[4]]).is_none());
+    assert!(reloaded.get(&[&[], &[6]]).is_none());
+    assert!(reloaded.get(&[&[], &[80]]).is_none());
 }
 
 #[test]

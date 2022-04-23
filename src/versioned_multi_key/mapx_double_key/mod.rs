@@ -206,6 +206,143 @@ where
         let k2 = key.1.encode();
         [k1, k2]
     }
+
+    #[inline(always)]
+    pub fn iter_op<F>(&self, op: &mut F) -> Result<()>
+    where
+        F: FnMut(&(&K1, &K2), V) -> Result<()>,
+    {
+        let mut cb = |k: &[&[u8]], v: RawValue| -> Result<()> {
+            if KEY_SIZE != k.len() {
+                return Err(eg!("key size mismatch"));
+            }
+            let k1 = KeyEnDe::decode(k[0]).c(d!())?;
+            let k2 = KeyEnDe::decode(k[1]).c(d!())?;
+            let v = ValueEnDe::decode(&v).c(d!())?;
+            op(&(&k1, &k2), v).c(d!())
+        };
+
+        self.inner.iter_op(&mut cb).c(d!())
+    }
+
+    pub fn iter_op_by_branch<F>(&self, branch_name: BranchName, op: &mut F) -> Result<()>
+    where
+        F: FnMut(&(&K1, &K2), V) -> Result<()>,
+    {
+        let mut cb = |k: &[&[u8]], v: RawValue| -> Result<()> {
+            if KEY_SIZE != k.len() {
+                return Err(eg!("key size mismatch"));
+            }
+            let k1 = KeyEnDe::decode(k[0]).c(d!())?;
+            let k2 = KeyEnDe::decode(k[1]).c(d!())?;
+            let v = ValueEnDe::decode(&v).c(d!())?;
+            op(&(&k1, &k2), v).c(d!())
+        };
+
+        self.inner.iter_op_by_branch(branch_name, &mut cb).c(d!())
+    }
+
+    pub fn iter_op_by_branch_version<F>(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+        op: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(&(&K1, &K2), V) -> Result<()>,
+    {
+        let mut cb = |k: &[&[u8]], v: RawValue| -> Result<()> {
+            if KEY_SIZE != k.len() {
+                return Err(eg!("key size mismatch"));
+            }
+            let k1 = KeyEnDe::decode(k[0]).c(d!())?;
+            let k2 = KeyEnDe::decode(k[1]).c(d!())?;
+            let v = ValueEnDe::decode(&v).c(d!())?;
+            op(&(&k1, &k2), v).c(d!())
+        };
+
+        self.inner
+            .iter_op_by_branch_version(branch_name, version_name, &mut cb)
+            .c(d!())
+    }
+
+    pub fn iter_op_with_key_prefix<F>(&self, op: &mut F, key_prefix: &K1) -> Result<()>
+    where
+        F: FnMut(&(&K1, &K2), V) -> Result<()>,
+    {
+        let mut cb = |k: &[&[u8]], v: RawValue| -> Result<()> {
+            if KEY_SIZE != k.len() {
+                return Err(eg!("key size mismatch"));
+            }
+            let k1 = KeyEnDe::decode(k[0]).c(d!())?;
+            let k2 = KeyEnDe::decode(k[1]).c(d!())?;
+            let v = ValueEnDe::decode(&v).c(d!())?;
+            op(&(&k1, &k2), v).c(d!())
+        };
+
+        self.inner
+            .iter_op_with_key_prefix(&mut cb, &[&KeyEnDe::encode(key_prefix)[..]])
+            .c(d!())
+    }
+
+    pub fn iter_op_with_key_prefix_by_branch<F>(
+        &self,
+        branch_name: BranchName,
+        op: &mut F,
+        key_prefix: &K1,
+    ) -> Result<()>
+    where
+        F: FnMut(&(&K1, &K2), V) -> Result<()>,
+    {
+        let mut cb = |k: &[&[u8]], v: RawValue| -> Result<()> {
+            if KEY_SIZE != k.len() {
+                return Err(eg!("key size mismatch"));
+            }
+            let k1 = KeyEnDe::decode(k[0]).c(d!())?;
+            let k2 = KeyEnDe::decode(k[1]).c(d!())?;
+            let v = ValueEnDe::decode(&v).c(d!())?;
+            op(&(&k1, &k2), v).c(d!())
+        };
+
+        self.inner
+            .iter_op_with_key_prefix_by_branch(
+                branch_name,
+                &mut cb,
+                &[&KeyEnDe::encode(key_prefix)[..]],
+            )
+            .c(d!())
+    }
+
+    #[inline(always)]
+    pub fn iter_op_with_key_prefix_by_branch_version<F>(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+        op: &mut F,
+        key_prefix: &K1,
+    ) -> Result<()>
+    where
+        F: FnMut(&(&K1, &K2), V) -> Result<()>,
+    {
+        let mut cb = |k: &[&[u8]], v: RawValue| -> Result<()> {
+            if KEY_SIZE != k.len() {
+                return Err(eg!("key size mismatch"));
+            }
+            let k1 = KeyEnDe::decode(k[0]).c(d!())?;
+            let k2 = KeyEnDe::decode(k[1]).c(d!())?;
+            let v = ValueEnDe::decode(&v).c(d!())?;
+            op(&(&k1, &k2), v).c(d!())
+        };
+
+        self.inner
+            .iter_op_with_key_prefix_by_branch_version(
+                branch_name,
+                version_name,
+                &mut cb,
+                &[&KeyEnDe::encode(key_prefix)[..]],
+            )
+            .c(d!())
+    }
 }
 
 impl<K1, K2, V> Default for MapxDkVs<K1, K2, V>

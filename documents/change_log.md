@@ -1,5 +1,18 @@
 # Change log
 
+## v0.32.0
+
+#### New APIs
+
+Add iter-like functions in `MapxMkVs` and its derivatives.
+
+- `iter_op`
+- `iter_op_by_branch`
+- `iter_op_by_branch_version`
+- `iter_op_with_key_prefix`
+- `iter_op_with_key_prefix_by_branch`
+- `iter_op_with_key_prefix_by_branch_version`
+
 ## v0.31.4
 
 #### BUG fixes

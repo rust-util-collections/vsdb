@@ -26,4 +26,24 @@ fn basic_cases() {
 
     map.entry_ref(&(&1, &1, &99)).or_insert_ref(&100);
     assert_eq!(map.get(&(&1, &1, &99)).unwrap(), 100);
+
+    let mut cb = |k: &(&u8, &u8, &u8), v: u8| -> Result<()> {
+        assert_eq!(
+            v,
+            map.remove(&(k.0, Some((k.1, Some(k.2))))).unwrap().unwrap()
+        );
+        Ok(())
+    };
+
+    pnk!(map.iter_op_with_key_prefix(&mut cb, (&0, None)));
+    assert_eq!(map.get(&(&1, &1, &99)).unwrap(), 100);
+
+    pnk!(map.iter_op_with_key_prefix(&mut cb, (&1, Some(&0))));
+    assert_eq!(map.get(&(&1, &1, &99)).unwrap(), 100);
+
+    assert!(map.iter_op_by_branch(BranchName(b"aaa"), &mut cb).is_err());
+    assert_eq!(map.get(&(&1, &1, &99)).unwrap(), 100);
+
+    pnk!(map.iter_op_with_key_prefix(&mut cb, (&1, Some(&1))));
+    assert!(map.get(&(&1, &1, &99)).is_none());
 }

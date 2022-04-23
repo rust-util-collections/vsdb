@@ -170,7 +170,7 @@ impl MapxRawMk {
         let mut hdr = self.inner;
         let mut depth = self.key_size();
 
-        if self.key_size() < key_prefix.len() {
+        if self.key_size < key_prefix.len() {
             return Err(eg!("Invalid key size"));
         } else {
             for (idx, k) in key_prefix.iter().enumerate() {
@@ -250,7 +250,7 @@ impl MapxRawMk {
         let mut hdr = self.inner;
         let mut depth = self.key_size();
 
-        if self.key_size() < key_prefix.len() {
+        if self.key_size < key_prefix.len() {
             return Err(eg!("Invalid key size"));
         } else {
             for (idx, k) in key_prefix.iter().enumerate() {
