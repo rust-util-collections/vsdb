@@ -294,8 +294,7 @@ fn sled_open() -> Result<Db> {
     let mut cfg = Config::new()
         .path(&dir)
         .mode(Mode::HighThroughput)
-        .cache_capacity(10 * GB)
-        .flush_every_ms(Some(10000));
+        .cache_capacity(10 * GB);
 
     #[cfg(feature = "compress")]
     {

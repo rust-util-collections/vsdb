@@ -1,5 +1,11 @@
 # Change log
 
+## v0.34.1
+
+#### Internal optimizations
+
+- Tuning options of the backend DB
+
 ## v0.34.0
 
 #### New APIs

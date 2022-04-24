@@ -385,10 +385,10 @@ fn rocksdb_open() -> Result<(DB, Vec<String>)> {
     cfg.increase_parallelism(available_parallelism().c(d!())?.get() as i32);
     cfg.set_num_levels(7);
     cfg.set_max_open_files(4096);
-    // cfg.set_allow_mmap_writes(true);
-    // cfg.set_allow_mmap_reads(true);
-    cfg.set_use_direct_reads(true);
-    cfg.set_use_direct_io_for_flush_and_compaction(true);
+    cfg.set_allow_mmap_writes(true);
+    cfg.set_allow_mmap_reads(true);
+    // cfg.set_use_direct_reads(true);
+    // cfg.set_use_direct_io_for_flush_and_compaction(true);
     cfg.set_write_buffer_size(512 * MB as usize);
     cfg.set_max_write_buffer_number(3);
 
