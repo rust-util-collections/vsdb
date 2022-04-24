@@ -97,6 +97,10 @@ fn basic_cases() {
     assert!(reloaded.get(&[&[], &[4]]).is_none());
     assert!(reloaded.get(&[&[], &[6]]).is_none());
     assert!(reloaded.get(&[&[], &[80]]).is_none());
+
+    pnk!(reloaded.branch_keep_only(&[]));
+    assert!(!reloaded.branch_exists(INITIAL_BRANCH_NAME));
+    assert!(!reloaded.version_exists_globally(VersionName(b"test")));
 }
 
 #[test]
@@ -108,6 +112,11 @@ fn VCS_mgmt() {
     version_operations(&mut hdr);
     branch_operations(&mut hdr);
     default_branch(&mut hdr);
+
+    pnk!(hdr.branch_keep_only(&[INITIAL_BRANCH_NAME]));
+    assert!(hdr.branch_exists(INITIAL_BRANCH_NAME));
+    assert!(!hdr.branch_exists(BranchName(b"b-1")));
+    assert!(!hdr.branch_exists(BranchName(b"b-2")));
 }
 
 fn version_operations(hdr: &mut MapxRawMkVs) {

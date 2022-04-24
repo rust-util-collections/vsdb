@@ -1,5 +1,19 @@
 # Change log
 
+## v0.34.0
+
+#### New APIs
+
+- `branch_keep_only`: delete all other branches out of the target list
+  - Will also clean up all orphan versions
+
+#### BUG fixes
+
+- Instance length counters are not atomic
+  - Multi-thread safety cannot be guaranteed
+- `branch_remove`: the cleanup of branch id is incomplete
+  - The `branch_id_to_branch_name` field is dirty
+
 ## v0.33.0
 
 #### API changes

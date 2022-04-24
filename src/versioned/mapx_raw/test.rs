@@ -77,6 +77,10 @@ fn basic_cases() {
     assert_eq!(&[80], &reloaded.get_ge(&[80]).unwrap().1[..]);
     assert_eq!(&[80], &reloaded.get_le(&[80]).unwrap().1[..]);
     assert_eq!(&[80], &reloaded.get_le(&[100]).unwrap().1[..]);
+
+    pnk!(reloaded.branch_keep_only(&[]));
+    assert!(!reloaded.branch_exists(INITIAL_BRANCH_NAME));
+    assert!(!reloaded.version_exists_globally(VersionName(b"test")));
 }
 
 // # VCS(version control system) scene
@@ -89,6 +93,11 @@ fn VCS_mgmt() {
     version_operations(&mut hdr);
     branch_operations(&mut hdr);
     default_branch_operations(&mut hdr);
+
+    pnk!(hdr.branch_keep_only(&[INITIAL_BRANCH_NAME]));
+    assert!(hdr.branch_exists(INITIAL_BRANCH_NAME));
+    assert!(!hdr.branch_exists(BranchName(b"b-1")));
+    assert!(!hdr.branch_exists(BranchName(b"b-2")));
 }
 
 // version:

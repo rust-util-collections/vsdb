@@ -925,7 +925,7 @@ impl MapxRawVs {
         self.branch_truncate(branch_id).c(d!())?;
 
         self.branch_id_to_branch_name
-            .get(&branch_id)
+            .remove(&branch_id)
             .c(d!())
             .and_then(|brname| self.branch_name_to_branch_id.remove(&brname).c(d!()))?;
 
@@ -933,6 +933,19 @@ impl MapxRawVs {
             .remove(&branch_id)
             .c(d!())
             .map(|_| ())
+    }
+
+    #[inline(always)]
+    pub(super) fn branch_keep_only(&self, branch_ids: &[BranchID]) -> Result<()> {
+        for brid in self
+            .branch_id_to_branch_name
+            .iter()
+            .map(|(brid, _)| brid)
+            .filter(|brid| !branch_ids.contains(brid))
+        {
+            self.branch_remove(brid).c(d!())?;
+        }
+        self.version_clean_up_globally().c(d!())
     }
 
     // Remove all changes directly made by this branch, but keep its meta infomation.
@@ -967,7 +980,7 @@ impl MapxRawVs {
             }
             Ok(())
         } else {
-            Err(eg!("branch not found"))
+            Err(eg!("branch not found: {}", branch_id))
         }
     }
 

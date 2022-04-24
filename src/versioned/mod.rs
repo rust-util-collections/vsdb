@@ -94,6 +94,7 @@ pub trait VsMgmt {
         branch_name: BranchName,
     ) -> Result<()>;
 
+    /// Check if a version exists.
     fn version_exists_globally(&self, version_name: VersionName) -> bool;
 
     /// # NOTE
@@ -150,8 +151,10 @@ pub trait VsMgmt {
     /// so `Vs0` can NOT guarantee that it can get a completely consistent result.
     fn version_list_globally(&self) -> Vec<VersionNameOwned>;
 
+    /// Check if some changes have been make on the version.
     fn version_has_change_set(&self, version_name: VersionName) -> Result<bool>;
 
+    /// Clean up all orphan versions, versions not belong to any branch.
     fn version_clean_up_globally(&self) -> Result<()>;
 
     /// # Safety
@@ -234,6 +237,10 @@ pub trait VsMgmt {
     /// and should not do any tracing.
     fn branch_remove(&self, branch_name: BranchName) -> Result<()>;
 
+    /// Clean up all other branches not in the list,
+    /// will also clean up all orphan versions.
+    fn branch_keep_only(&self, branch_names: &[BranchName]) -> Result<()>;
+
     /// Remove all changes directly made by versions(bigger than `last_version_id`) of this branch.
     ///
     /// 'Write'-like operations on branches and versions are different from operations on data.
@@ -289,6 +296,7 @@ pub trait VsMgmt {
     /// all default operations will be applied to it.
     fn branch_set_default(&mut self, branch_name: BranchName) -> Result<()>;
 
+    /// Check if the branch has no versions or only empty versions.
     fn branch_is_empty(&self, branch_name: BranchName) -> Result<bool>;
 
     /// # NOTE
@@ -308,6 +316,7 @@ pub trait VsMgmt {
     /// so `Vs0` can NOT guarantee that it can get a completely consistent result.
     fn branch_list(&self) -> Vec<BranchNameOwned>;
 
+    /// Get the default branch name.
     fn branch_get_default(&self) -> BranchNameOwned;
 
     /// Logically similar to `std::ptr::swap`
@@ -595,6 +604,12 @@ macro_rules! impl_vs_methods {
             self.inner.branch_remove(branch_name).c(d!())
         }
 
+        /// Clean up all other branches not in the list.
+        #[inline(always)]
+        fn branch_keep_only(&self, branch_names: &[BranchName]) -> Result<()> {
+            self.inner.branch_keep_only(branch_names).c(d!())
+        }
+
         /// Remove all changes directly made by versions(bigger than `last_version_id`) of this branch.
         ///
         /// 'Write'-like operations on branches and versions are different from operations on data.
@@ -854,6 +869,12 @@ macro_rules! impl_vs_methods_nope {
         fn branch_remove(&self, _: BranchName) -> Result<()> {
             Ok(())
         }
+
+        #[inline(always)]
+        fn branch_keep_only(&self, _: &[BranchName]) -> Result<()> {
+            Ok(())
+        }
+
         #[inline(always)]
         fn branch_truncate(&self, _: BranchName) -> Result<()> {
             Ok(())
@@ -1296,6 +1317,14 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
     fn branch_remove(&self, branch_name: BranchName) -> Result<()> {
         if let Some(i) = self.as_ref() {
             i.branch_remove(branch_name).c(d!())?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn branch_keep_only(&self, branch_names: &[BranchName]) -> Result<()> {
+        if let Some(i) = self.as_ref() {
+            i.branch_keep_only(branch_names).c(d!())?;
         }
         Ok(())
     }

@@ -113,10 +113,10 @@ impl Engine for RocksEngine {
 
     // 'step 1' and 'step 2' is not atomic in multi-threads scene,
     // so we use a `Mutex` lock for thread safe.
+    #[allow(unused_variables)]
     fn alloc_prefix(&self) -> Pre {
-        static LK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
-
-        let mut z = LK.lock();
+        static LK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+        let x = LK.lock();
 
         // step 1
         let ret = crate::parse_prefix!(
@@ -128,18 +128,15 @@ impl Engine for RocksEngine {
             .put(self.prefix_allocator.key, (1 + ret).to_be_bytes())
             .unwrap();
 
-        // meaningless but keep the lock
-        *z = false;
-
         ret
     }
 
     // 'step 1' and 'step 2' is not atomic in multi-threads scene,
     // so we use a `Mutex` lock for thread safe.
+    #[allow(unused_variables)]
     fn alloc_branch_id(&self) -> BranchID {
-        static LK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
-
-        let mut z = LK.lock();
+        static LK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+        let x = LK.lock();
 
         // step 1
         let ret = crate::parse_int!(
@@ -152,18 +149,15 @@ impl Engine for RocksEngine {
             .put(META_KEY_BRANCH_ID, (1 + ret).to_be_bytes())
             .unwrap();
 
-        // meaningless but keep the lock
-        *z = false;
-
         ret
     }
 
     // 'step 1' and 'step 2' is not atomic in multi-threads scene,
     // so we use a `Mutex` lock for thread safe.
+    #[allow(unused_variables)]
     fn alloc_version_id(&self) -> VersionID {
-        static LK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
-
-        let mut z = LK.lock();
+        static LK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+        let x = LK.lock();
 
         // step 1
         let ret = crate::parse_int!(
@@ -175,9 +169,6 @@ impl Engine for RocksEngine {
         self.meta
             .put(META_KEY_VERSION_ID, (1 + ret).to_be_bytes())
             .unwrap();
-
-        // meaningless but keep the lock
-        *z = false;
 
         ret
     }
