@@ -5,7 +5,7 @@
 use crate::{
     common::ende::{KeyEnDeOrdered, ValueEnDe},
     versioned::mapx_ord_rawkey::{MapxOrdRawKeyVs, MapxOrdRawKeyVsIter},
-    BranchName, ParentBranchName, VersionName,
+    BranchName, ParentBranchName, VersionName, VsMgmt,
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
@@ -79,12 +79,12 @@ where
     }
 
     #[inline(always)]
-    pub fn insert(&mut self, key: K, value: V) -> Result<Option<V>> {
+    pub fn insert(&self, key: K, value: V) -> Result<Option<V>> {
         self.insert_ref(&key, &value).c(d!())
     }
 
     #[inline(always)]
-    pub fn insert_ref(&mut self, key: &K, value: &V) -> Result<Option<V>> {
+    pub fn insert_ref(&self, key: &K, value: &V) -> Result<Option<V>> {
         self.inner.insert_ref(&key.to_bytes(), value).c(d!())
     }
 
@@ -134,7 +134,7 @@ where
     }
 
     #[inline(always)]
-    pub fn remove(&mut self, key: &K) -> Result<Option<V>> {
+    pub fn remove(&self, key: &K) -> Result<Option<V>> {
         self.inner.remove(&key.to_bytes()).c(d!())
     }
 
@@ -174,7 +174,7 @@ where
 
     #[inline(always)]
     pub fn insert_by_branch(
-        &mut self,
+        &self,
         key: K,
         value: V,
         branch_name: BranchName,
@@ -184,7 +184,7 @@ where
 
     #[inline(always)]
     pub fn insert_ref_by_branch(
-        &mut self,
+        &self,
         key: &K,
         value: &V,
         branch_name: BranchName,
@@ -243,7 +243,7 @@ where
 
     #[inline(always)]
     pub fn remove_by_branch(
-        &mut self,
+        &self,
         key: &K,
         branch_name: BranchName,
     ) -> Result<Option<V>> {
@@ -377,7 +377,13 @@ where
             version_name,
         )
     }
+}
 
+impl<K, V> VsMgmt for MapxOrdVs<K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
     crate::impl_vs_methods!();
 }
 

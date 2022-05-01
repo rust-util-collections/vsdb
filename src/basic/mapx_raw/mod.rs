@@ -76,7 +76,7 @@ impl MapxRaw {
     }
 
     #[inline(always)]
-    pub fn get_mut(&mut self, key: &[u8]) -> Option<ValueMut<'_>> {
+    pub fn get_mut(&self, key: &[u8]) -> Option<ValueMut<'_>> {
         self.inner
             .get(key)
             .map(move |v| ValueMut::new(self, key.to_owned().into_boxed_slice(), v))
@@ -93,7 +93,7 @@ impl MapxRaw {
     }
 
     #[inline(always)]
-    pub fn entry<'a>(&'a mut self, key: &'a [u8]) -> Entry<'a> {
+    pub fn entry<'a>(&'a self, key: &'a [u8]) -> Entry<'a> {
         Entry { key, hdr: self }
     }
 
@@ -112,30 +112,30 @@ impl MapxRaw {
     }
 
     #[inline(always)]
-    pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Option<RawValue> {
+    pub fn insert(&self, key: &[u8], value: &[u8]) -> Option<RawValue> {
         self.inner.insert(key, value)
     }
 
     #[inline(always)]
-    pub fn remove(&mut self, key: &[u8]) -> Option<RawValue> {
+    pub fn remove(&self, key: &[u8]) -> Option<RawValue> {
         self.inner.remove(key)
     }
 
     #[inline(always)]
-    pub fn clear(&mut self) {
+    pub fn clear(&self) {
         self.inner.clear();
     }
 }
 
 #[derive(PartialEq, Eq, Debug)]
 pub struct ValueMut<'a> {
-    hdr: &'a mut MapxRaw,
+    hdr: &'a MapxRaw,
     key: RawKey,
     value: RawValue,
 }
 
 impl<'a> ValueMut<'a> {
-    fn new(hdr: &'a mut MapxRaw, key: RawKey, value: RawValue) -> Self {
+    fn new(hdr: &'a MapxRaw, key: RawKey, value: RawValue) -> Self {
         ValueMut { hdr, key, value }
     }
 }
@@ -162,7 +162,7 @@ impl<'a> DerefMut for ValueMut<'a> {
 
 pub struct Entry<'a> {
     key: &'a [u8],
-    hdr: &'a mut MapxRaw,
+    hdr: &'a MapxRaw,
 }
 
 impl<'a> Entry<'a> {

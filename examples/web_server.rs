@@ -59,7 +59,7 @@ impl AnimalHospital {
     }
 
     fn discharged(&mut self, owner: AnimalOwner, id: AnimalID) -> Result<()> {
-        if let Some(mut animals) = self.owners.get_mut(&owner) {
+        if let Some(animals) = self.owners.get_mut(&owner) {
             if animals.remove(&id).is_none() {
                 return Err(eg!("animal ID not found"));
             }
@@ -77,8 +77,7 @@ impl AnimalHospital {
     }
 }
 
-#[test]
-fn stateless_scene() {
+fn main() {
     let (sender, receiver) = channel();
 
     thread::spawn(move || {

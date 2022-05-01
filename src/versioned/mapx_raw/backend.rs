@@ -68,18 +68,14 @@ impl MapxRawVs {
     }
 
     #[inline(always)]
-    pub(super) fn insert(
-        &mut self,
-        key: &[u8],
-        value: &[u8],
-    ) -> Result<Option<RawValue>> {
+    pub(super) fn insert(&self, key: &[u8], value: &[u8]) -> Result<Option<RawValue>> {
         self.insert_by_branch(key, value, self.branch_get_default())
             .c(d!())
     }
 
     #[inline(always)]
     pub(super) fn insert_by_branch(
-        &mut self,
+        &self,
         key: &[u8],
         value: &[u8],
         branch_id: BranchID,
@@ -101,7 +97,7 @@ impl MapxRawVs {
     // historical data version should be immutable in the user view.
     #[inline(always)]
     fn insert_by_branch_version(
-        &mut self,
+        &self,
         key: &[u8],
         value: &[u8],
         branch_id: BranchID,
@@ -112,14 +108,14 @@ impl MapxRawVs {
     }
 
     #[inline(always)]
-    pub(super) fn remove(&mut self, key: &[u8]) -> Result<Option<RawValue>> {
+    pub(super) fn remove(&self, key: &[u8]) -> Result<Option<RawValue>> {
         self.remove_by_branch(key, self.branch_get_default())
             .c(d!())
     }
 
     #[inline(always)]
     pub(super) fn remove_by_branch(
-        &mut self,
+        &self,
         key: &[u8],
         branch_id: BranchID,
     ) -> Result<Option<RawValue>> {
@@ -141,7 +137,7 @@ impl MapxRawVs {
     //
     // The `remove` is essentially assign a `None` value to the key.
     fn remove_by_branch_version(
-        &mut self,
+        &self,
         key: &[u8],
         branch_id: BranchID,
         version_id: VersionID,
@@ -155,7 +151,7 @@ impl MapxRawVs {
     // on the latest version of every branch,
     // historical data version should be immutable in the user view.
     fn write_by_branch_version(
-        &mut self,
+        &self,
         key: &[u8],
         value: Option<&[u8]>,
         branch_id: BranchID,
@@ -437,13 +433,13 @@ impl MapxRawVs {
     }
 
     #[inline(always)]
-    pub(super) fn version_create(&mut self, version_name: &[u8]) -> Result<()> {
+    pub(super) fn version_create(&self, version_name: &[u8]) -> Result<()> {
         self.version_create_by_branch(version_name, self.branch_get_default())
             .c(d!())
     }
 
     pub(super) fn version_create_by_branch(
-        &mut self,
+        &self,
         version_name: &[u8],
         branch_id: BranchID,
     ) -> Result<()> {
@@ -454,7 +450,7 @@ impl MapxRawVs {
             return Err(eg!("version already exists"));
         }
 
-        let mut vers = self
+        let vers = self
             .branch_to_created_versions
             .get_mut(&branch_id)
             .c(d!("branch not found"))?;
@@ -525,7 +521,7 @@ impl MapxRawVs {
     // while operations on branches and versions are limited to their own perspective,
     // and should not do any tracing.
     #[inline(always)]
-    pub(super) fn version_pop(&mut self) -> Result<()> {
+    pub(super) fn version_pop(&self) -> Result<()> {
         self.version_pop_by_branch(self.branch_get_default())
             .c(d!())
     }
@@ -536,7 +532,7 @@ impl MapxRawVs {
     // while operations on branches and versions are limited to their own perspective,
     // and should not do any tracing.
     #[inline(always)]
-    pub(super) fn version_pop_by_branch(&mut self, branch_id: BranchID) -> Result<()> {
+    pub(super) fn version_pop_by_branch(&self, branch_id: BranchID) -> Result<()> {
         if let Some((version_id, _)) = self
             .branch_to_created_versions
             .get(&branch_id)
@@ -561,7 +557,7 @@ impl MapxRawVs {
     // while operations on branches and versions are limited to their own perspective,
     // and should not do any tracing.
     fn version_remove_by_branch(
-        &mut self,
+        &self,
         version_id: VersionID,
         branch_id: BranchID,
     ) -> Result<()> {
@@ -581,8 +577,8 @@ impl MapxRawVs {
             .c(d!("BUG: change set not found"))?
             .iter()
         {
-            let mut local_brs = self.layered_kv.get(&key).unwrap();
-            let mut local_vers = local_brs.get(&branch_id).unwrap();
+            let local_brs = self.layered_kv.get(&key).unwrap();
+            let local_vers = local_brs.get(&branch_id).unwrap();
             local_vers.remove(&version_id);
             if local_vers.is_empty() {
                 local_brs.remove(&branch_id);
@@ -618,14 +614,14 @@ impl MapxRawVs {
     }
 
     #[inline(always)]
-    pub(super) fn branch_create(&mut self, branch_name: &[u8]) -> Result<()> {
+    pub(super) fn branch_create(&self, branch_name: &[u8]) -> Result<()> {
         self.branch_create_by_base_branch(branch_name, self.branch_get_default())
             .c(d!())
     }
 
     #[inline(always)]
     pub(super) fn branch_create_by_base_branch(
-        &mut self,
+        &self,
         branch_name: &[u8],
         base_branch_id: BranchID,
     ) -> Result<()> {
@@ -646,7 +642,7 @@ impl MapxRawVs {
     }
 
     pub(super) fn branch_create_by_base_branch_version(
-        &mut self,
+        &self,
         branch_name: &[u8],
         base_branch_id: BranchID,
         base_version_id: VersionID,
@@ -698,7 +694,7 @@ impl MapxRawVs {
     // while operations on branches and versions are limited to their own perspective,
     // and should not do any tracing.
     #[inline(always)]
-    pub(super) fn branch_remove(&mut self, branch_id: BranchID) -> Result<()> {
+    pub(super) fn branch_remove(&self, branch_id: BranchID) -> Result<()> {
         if self.branch_has_children(branch_id) {
             return Err(eg!("can not remove branches with children"));
         }
@@ -719,7 +715,7 @@ impl MapxRawVs {
             .c(d!("BUG: branch name not found"))?;
         self.branch_name_to_branch_id.remove(&branch_name);
 
-        let mut created_vers = self
+        let created_vers = self
             .branch_to_created_versions
             .remove(&branch_id)
             .c(d!("BUG: created versions missing"))?;
@@ -738,7 +734,7 @@ impl MapxRawVs {
     // while operations on branches and versions are limited to their own perspective,
     // and should not do any tracing.
     #[inline(always)]
-    pub(super) fn branch_truncate(&mut self, branch_id: BranchID) -> Result<()> {
+    pub(super) fn branch_truncate(&self, branch_id: BranchID) -> Result<()> {
         self.branch_truncate_to(branch_id, VersionID::MIN).c(d!())
     }
 
@@ -750,7 +746,7 @@ impl MapxRawVs {
     // while operations on branches and versions are limited to their own perspective,
     // and should not do any tracing.
     pub(super) fn branch_truncate_to(
-        &mut self,
+        &self,
         branch_id: BranchID,
         last_version_id: VersionID,
     ) -> Result<()> {
@@ -772,12 +768,12 @@ impl MapxRawVs {
     // while operations on branches and versions are limited to their own perspective,
     // and should not do any tracing.
     #[inline(always)]
-    pub(super) fn branch_pop_version(&mut self, branch_id: BranchID) -> Result<()> {
+    pub(super) fn branch_pop_version(&self, branch_id: BranchID) -> Result<()> {
         self.version_pop_by_branch(branch_id).c(d!())
     }
 
     // Merge a branch back to its parent branch
-    pub(super) fn branch_merge_to_parent(&mut self, branch_id: BranchID) -> Result<()> {
+    pub(super) fn branch_merge_to_parent(&self, branch_id: BranchID) -> Result<()> {
         if self.branch_has_children(branch_id) {
             return Err(eg!("can not merge branches with children"));
         }
@@ -793,10 +789,9 @@ impl MapxRawVs {
 
         let parent_branch_id = fp.keys().rev().find(|&id| *id != branch_id).unwrap();
 
-        let mut vers_created =
-            self.branch_to_created_versions.remove(&branch_id).unwrap();
+        let vers_created = self.branch_to_created_versions.remove(&branch_id).unwrap();
 
-        let mut vers_created_parent = self
+        let vers_created_parent = self
             .branch_to_created_versions
             .get_mut(parent_branch_id)
             .unwrap();
@@ -818,10 +813,10 @@ impl MapxRawVs {
                 .iter()
                 .map(|(k, _)| k)
             {
-                let mut key_hdr = self.layered_kv.get_mut(&k).unwrap();
+                let key_hdr = self.layered_kv.get_mut(&k).unwrap();
 
                 let (value, empty) = {
-                    let mut br_hdr = key_hdr.get_mut(&branch_id).unwrap();
+                    let br_hdr = key_hdr.get_mut(&branch_id).unwrap();
                     let v = br_hdr.remove(&ver).unwrap();
                     (v, br_hdr.is_empty())
                 };
@@ -926,12 +921,12 @@ impl MapxRawVs {
     }
 
     #[inline(always)]
-    pub(super) fn prune(&mut self, reserved_ver_num: Option<usize>) -> Result<()> {
+    pub(super) fn prune(&self, reserved_ver_num: Option<usize>) -> Result<()> {
         self.prune_by_branch(self.branch_get_default(), reserved_ver_num)
     }
 
     pub(super) fn prune_by_branch(
-        &mut self,
+        &self,
         branch_id: BranchID,
         reserved_ver_num: Option<usize>,
     ) -> Result<()> {
@@ -940,7 +935,7 @@ impl MapxRawVs {
             return Err(eg!("reserved version number should NOT be zero"));
         }
 
-        let mut created_vers = self
+        let created_vers = self
             .branch_to_created_versions
             .get_mut(&branch_id)
             .c(d!("branch not found"))?;
@@ -962,8 +957,8 @@ impl MapxRawVs {
             .iter()
             .filter(|(_, brs)| brs.contains_key(&branch_id))
         {
-            let mut key_hdr = self.layered_kv.get_mut(&key).unwrap();
-            let mut br_hdr = key_hdr.get_mut(&branch_id).unwrap();
+            let key_hdr = self.layered_kv.get_mut(&key).unwrap();
+            let br_hdr = key_hdr.get_mut(&branch_id).unwrap();
 
             // keep one version at least
             for (ver, _) in br_hdr

@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     common::{BranchName, ParentBranchName, VersionName, BRANCH_ANCESTORS_LIMIT},
-    ValueEnDe,
+    ValueEnDe, VsMgmt,
 };
 use std::{sync::mpsc::channel, thread};
 
@@ -10,7 +10,7 @@ fn basic_cases() {
     let cnt = 200;
 
     let hdr = {
-        let mut hdr_i = MapxRawVs::new();
+        let hdr_i = MapxRawVs::new();
         hdr_i.version_create(VersionName(b"test")).unwrap();
 
         assert_eq!(0, hdr_i.len());

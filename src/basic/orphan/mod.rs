@@ -104,6 +104,14 @@ where
     inner: MapxOrdRawKey<T>,
 }
 
+impl<T: Default + ValueEnDe> Default for Orphan<T> {
+    fn default() -> Self {
+        let hdr = MapxOrdRawKey::new();
+        hdr.insert_ref(&[], &T::default());
+        Self { inner: hdr }
+    }
+}
+
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
@@ -112,7 +120,7 @@ where
     T: ValueEnDe,
 {
     pub fn new(v: T) -> Self {
-        let mut hdr = MapxOrdRawKey::new();
+        let hdr = MapxOrdRawKey::new();
         hdr.insert_ref(&[], &v);
         Self { inner: hdr }
     }
@@ -122,7 +130,7 @@ where
         self.inner.get(&[]).unwrap()
     }
 
-    fn set_value_ref(&mut self, v: &T) {
+    fn set_value_ref(&self, v: &T) {
         self.inner.set_value_ref(&[], v);
     }
 
@@ -134,7 +142,7 @@ where
     /// - **NEVER** do this:
     ///     - `*(&mut <Orphan>) = Orphan::new(...)`
     ///     - OR you will loss the 'versioned' ability of this object
-    pub fn get_mut(&mut self) -> OrphanMut<'_, T> {
+    pub fn get_mut(&self) -> OrphanMut<'_, T> {
         let value = self.get_value();
         OrphanMut { hdr: self, value }
     }
@@ -273,7 +281,7 @@ pub struct OrphanMut<'a, T>
 where
     T: ValueEnDe,
 {
-    hdr: &'a mut Orphan<T>,
+    hdr: &'a Orphan<T>,
     value: T,
 }
 

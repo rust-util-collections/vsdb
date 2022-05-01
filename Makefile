@@ -10,17 +10,19 @@ release:
 
 lint:
 	cargo clippy
-	cargo clippy --tests
-	cargo clippy --benches
+	cargo check --tests
+	cargo check --benches
+	cargo check --examples
 	cargo clippy --no-default-features --features "rocks_engine,cbor_ende"
-	cargo clippy --tests --no-default-features --features "rocks_engine,cbor_ende"
-	cargo clippy --benches --no-default-features --features "rocks_engine,cbor_ende"
+	cargo check --tests --no-default-features --features "rocks_engine,cbor_ende"
+	cargo check --benches --no-default-features --features "rocks_engine,cbor_ende"
+	cargo check --examples --no-default-features --features "rocks_engine,cbor_ende"
 
 test:
 	- rm -rf ~/.vsdb
-	cargo test --release -- --test-threads=1
+	cargo test -- --test-threads=1
 	- rm -rf ~/.vsdb
-	cargo test --release --no-default-features --features "rocks_engine,cbor_ende" -- --test-threads=1
+	cargo test --no-default-features --features "rocks_engine,cbor_ende" -- --test-threads=1
 
 bench:
 	- rm -rf ~/.vsdb

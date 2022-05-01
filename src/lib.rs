@@ -38,6 +38,7 @@
 //! and your algorithm get the powerful version control ability at once!
 //!
 //! ```compile_fail
+//! #[dervive(Vs, Default)]
 //! struct GreatAlgo {
 //!     a: VecxVs<...>,
 //!     b: MapxOrdVs<...>,
@@ -46,22 +47,92 @@
 //!     e: ...
 //! }
 //!
-//! impl GreatAlgo {
-//!     fn version_create(&self, name: &str) {
-//!         self.a.version_create(VersionName(name)).unwrap();
-//!         self.b.version_create(VersionName(name)).unwrap();
-//!         self.c.version_create(VersionName(name)).unwrap();
-//!         self.d.version_create(VersionName(name)).unwrap();
-//!         ...
-//!     }
-//!     fn branch_create(&self, name: &str) {
-//!         self.a.branch_create(BranchName(name)).unwrap();
-//!         self.b.branch_create(BranchName(name)).unwrap();
-//!         self.c.branch_create(BranchName(name)).unwrap();
-//!         self.d.branch_create(BranchName(name)).unwrap();
-//!         ...
-//!     }
-//!     ...
+//! let algo = GreatAlgo.default();
+//!
+//! algo.get_by_branch_version(...);
+//! algo.branch_create(...);
+//! algo.branch_create_by_base_branch(...);
+//! algo.branch_create_by_base_branch_version(...);
+//! algo.branch_remove(...);
+//! algo.version_pop(...);
+//! algo.prune();
+//! ```
+//!
+//! **NOTE !!**
+//!
+//! the `#[derive(Vs)]` macro can be applied to structures
+//! whose internal fields are all types defined in VSDB
+//! (primitive types and their collections are also supported),
+//! but can not be applied to nesting wrapper among VSDB-types,
+//! you should implement the `VsMgmt` trait(or a part of it) manually.
+//!
+//! This data structure can be handled correctly by `#[derive(Vs)]`:
+//!
+//! ```no_run
+//! use std::collections::{
+//!     HashMap, HashSet, BTreeSet, VecDeque, LinkedList
+//! };
+//! use std::sync::atomic::AtomicU64;
+//! use std::marker::PhantomData;
+//! use ruc::*;
+//! use vsdb::{
+//!     BranchName, VersionName, ParentBranchName,
+//!     MapxVs, MapxOrdVs, OrphanVs, VsMgmt, Vs,
+//!     VecxVs, impl_vs_methods_nope
+//! };
+//!
+//! #[derive(Vs)]
+//! struct GoodCase<K, T> {
+//!     a: VecxVs<i64>,
+//!     b: SubItem0,
+//!     c: SubItem1,
+//!     d: SubItem2,
+//!     e: u8,
+//!     f: Vec<i16>,
+//!     g: VecDeque<i64>,
+//!     h: BTreeSet<u16>,
+//!     i: HashMap<K, AtomicU64>,
+//!     j: HashSet<i32>,
+//!     k: LinkedList<()>,
+//!     l: Box<dyn AsRef<bool>>,
+//!     m: Box<dyn AsRef<[Vec<u128>]>>,
+//!     n: PhantomData<T>,
+//! }
+//!
+//! #[derive(Vs)]
+//! struct SubItem0(MapxVs<u8, u8>, VecxVs<u8>);
+//!
+//! #[derive(Vs)]
+//! struct SubItem1 {
+//!     a: OrphanVs<i16>,
+//!     b: MapxOrdVs<String, u8>
+//! }
+//!
+//! #[derive(Vs)]
+//! struct SubItem2 {
+//!     a: i8,
+//!     b: u128
+//! }
+//!
+//! // // A nope implementation of `VsMgmt` for custom stateless types.
+//! // // the `#[derive(Vs)]` on 'SubItem2' is same as this implementation.
+//! // impl VsMgmt for SubItem2 {
+//! //     impl_vs_methods_nope!();
+//! // }
+//! ```
+//!
+//! **But** this one can NOT be handled correctly by `#[derive(Vs)]`:
+//!
+//! ```no_run
+//! use vsdb::{Vs, VecxVs, MapxVs};
+//! use ruc::*;
+//!
+//! // It can be compiled, but the result is wrong !
+//! // The versioned methods of the inner 'MapxVs<u8, u8>' will missing,
+//! // you should implement the 'VsMgmt' trait(or a part of it) manually.
+//! #[derive(Vs)]
+//! struct BadCase {
+//!     a: VecxVs<MapxVs<u8, u8>>,
 //! }
 //! ```
 //!
@@ -99,6 +170,7 @@
 
 pub mod basic;
 mod common;
+pub mod merkle;
 pub mod versioned;
 
 pub use basic::mapx::Mapx;
@@ -109,6 +181,11 @@ pub use versioned::mapx::MapxVs;
 pub use versioned::mapx_ord::MapxOrdVs;
 pub use versioned::orphan::OrphanVs;
 pub use versioned::vecx::VecxVs;
+
+pub use versioned::VsMgmt;
+pub use vsdb_derive::Vs;
+
+pub use merkle::MerkleTree;
 
 pub use common::{
     ende::{KeyEnDe, KeyEnDeOrdered, ValueEnDe},

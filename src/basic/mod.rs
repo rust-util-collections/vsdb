@@ -1,4 +1,6 @@
 //!
+//! Unversioned functions.
+//!
 //! # Examples
 //!
 //! ```rust
@@ -109,3 +111,4 @@ pub mod mapx_ord_rawvalue;
 pub mod mapx_raw;
 pub mod orphan;
 pub mod vecx;
+pub mod vecx_raw;
