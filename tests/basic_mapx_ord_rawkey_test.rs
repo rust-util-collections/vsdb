@@ -1,6 +1,6 @@
 use ruc::*;
 use serde::{Deserialize, Serialize};
-use vsdb::{basic::mapx_ord_rawkey::MapxOrdRawKey, ValueEnDe};
+use vsdb::{basic::mapx_ord_rawkey::MapxOrdRawKey, vsdb_set_base_dir, ValueEnDe};
 
 #[derive(Serialize, Deserialize, Default, Debug, Eq, PartialEq, Clone)]
 struct SampleBlock {
@@ -16,7 +16,7 @@ fn gen_sample(bytes: &[u8]) -> SampleBlock {
 #[test]
 fn basic_cases() {
     let cnt = 200;
-
+    vsdb_set_base_dir("/tmp/.vsdb/basic_mapx_ord_rawkey_test").unwrap();
     let hdr = {
         let hdr_i = MapxOrdRawKey::new();
 

@@ -1,6 +1,6 @@
 use ruc::*;
 use serde::{Deserialize, Serialize};
-use vsdb::{ValueEnDe, Vecx};
+use vsdb::{vsdb_set_base_dir, ValueEnDe, Vecx};
 
 #[derive(Default, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 struct SampleBlock {
@@ -18,7 +18,7 @@ fn gen_sample(idx: usize) -> SampleBlock {
 #[test]
 fn basic_cases() {
     let cnt = 200;
-
+    vsdb_set_base_dir("/tmp/.vsdb/basic_vecx_test/basic_cases").unwrap();
     let hdr = {
         let hdr = Vecx::new();
 

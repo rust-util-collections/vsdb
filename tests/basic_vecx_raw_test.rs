@@ -1,5 +1,5 @@
 use ruc::*;
-use vsdb::{basic::vecx_raw::VecxRaw, ValueEnDe};
+use vsdb::{basic::vecx_raw::VecxRaw, vsdb_set_base_dir, ValueEnDe};
 
 fn gen_sample(idx: usize) -> Box<[u8]> {
     idx.to_be_bytes().to_vec().into_boxed_slice()
@@ -8,7 +8,7 @@ fn gen_sample(idx: usize) -> Box<[u8]> {
 #[test]
 fn basic_cases() {
     let cnt = 200;
-
+    vsdb_set_base_dir("/tmp/.vsdb/basic_vecx_raw_test").unwrap();
     let hdr = {
         let hdr = VecxRaw::new();
 

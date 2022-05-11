@@ -1,11 +1,11 @@
 use ruc::*;
 use std::ops::Bound;
-use vsdb::{basic::mapx_ord_rawvalue::MapxOrdRawValue, ValueEnDe};
+use vsdb::{basic::mapx_ord_rawvalue::MapxOrdRawValue, vsdb_set_base_dir, ValueEnDe};
 
 #[test]
 fn basic_cases() {
     let cnt = 200;
-
+    vsdb_set_base_dir("/tmp/.vsdb/basic_mapx_ord_rawvalue_test").unwrap();
     let hdr = {
         let hdr_i = MapxOrdRawValue::new();
 

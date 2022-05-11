@@ -1,8 +1,8 @@
 use ruc::*;
 use std::{sync::mpsc::channel, thread};
 use vsdb::{
-    BranchName, MapxRawMkVs, ParentBranchName, ValueEnDe, VersionName, VersionNameOwned,
-    VsMgmt,
+    vsdb_set_base_dir, BranchName, MapxRawMkVs, ParentBranchName, ValueEnDe,
+    VersionName, VersionNameOwned, VsMgmt,
 };
 
 const BRANCH_LIMITS: usize = 128;
@@ -11,7 +11,7 @@ const INITIAL_BRANCH_NAME: BranchName<'static> = BranchName(b"master");
 #[test]
 fn basic_cases() {
     let cnt = 200;
-
+    vsdb_set_base_dir("/tmp/.vsdb/versioned_multi_key_mapx_raw_test").unwrap();
     let hdr = {
         let hdr_i = MapxRawMkVs::new(2);
         hdr_i.version_create(VersionName(b"test")).unwrap();
@@ -68,7 +68,7 @@ fn basic_cases() {
 
 #[test]
 #[allow(non_snake_case)]
-fn VCS_mgmt() {
+fn vcs_mgmt() {
     let mut hdr = MapxRawMkVs::new(2);
     pnk!(hdr.version_create(VersionName(b"")));
 

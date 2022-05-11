@@ -1,10 +1,10 @@
 use ruc::*;
-use vsdb::{basic::mapx_raw::MapxRaw, ValueEnDe};
+use vsdb::{basic::mapx_raw::MapxRaw, vsdb_set_base_dir, ValueEnDe};
 
 #[test]
 fn basic_cases() {
     let cnt = 200;
-
+    vsdb_set_base_dir("/tmp/.vsdb/basic_mapx_ord_test").unwrap();
     let hdr = {
         let hdr_i = MapxRaw::new();
 

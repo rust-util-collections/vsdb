@@ -1,8 +1,9 @@
 use ruc::*;
-use vsdb::{MapxTkVs, VersionName, VsMgmt};
+use vsdb::{vsdb_set_base_dir, MapxTkVs, VersionName, VsMgmt};
 
 #[test]
 fn basic_cases() {
+    vsdb_set_base_dir("/tmp/.vsdb/versioned_multi_key_mapx_triple_key_test").unwrap();
     let map = MapxTkVs::new();
     pnk!(map.version_create(VersionName(b"")));
 
