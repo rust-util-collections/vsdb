@@ -1,16 +1,20 @@
-use super::*;
+use serde::{Deserialize, Serialize};
+use vsdb::basic::orphan::Orphan;
 
 #[test]
-fn test_compare() {
+fn basic_cases() {
     assert_eq!(Orphan::new(0), 0);
     assert!(Orphan::new(111) > 0);
     assert!(Orphan::new(111) >= 0);
     assert!(Orphan::new(0) < 111);
     assert!(Orphan::new(0) <= 111);
-}
 
-#[test]
-fn test_calc() {
+    assert_eq!(Orphan::new(0), Orphan::new(0));
+    assert!(Orphan::new(111) > Orphan::new(0));
+    assert!(Orphan::new(111) >= Orphan::new(111));
+    assert!(Orphan::new(0) < Orphan::new(111));
+    assert!(Orphan::new(111) <= Orphan::new(111));
+
     assert_eq!(Orphan::new(111) + 111, 222);
     assert_eq!(Orphan::new(111) - 111, 0);
     assert_eq!(Orphan::new(111) * 111, 111 * 111);
@@ -26,9 +30,7 @@ fn test_calc() {
     assert_eq!(Orphan::new(111) | 2, 111 | 2);
     assert_eq!(Orphan::new(111) & 2, 111 & 2);
     assert_eq!(Orphan::new(111) ^ 2, 111 ^ 2);
-}
-#[test]
-fn test_mut() {
+
     let mut v = Orphan::new(1);
     v += 1;
     assert_eq!(v, 2);
@@ -43,6 +45,29 @@ fn test_mut() {
 
     *v.get_mut() = -v.get_value();
     assert_eq!(v, -9);
+
+    *v.get_mut() = !v.get_value();
+    assert_eq!(v, !-9);
+
+    *v.get_mut() = 732;
+    v >>= 2;
+    assert_eq!(v, 732 >> 2);
+
+    *v.get_mut() = 732;
+    v <<= 2;
+    assert_eq!(v, 732 << 2);
+
+    *v.get_mut() = 732;
+    v |= 2;
+    assert_eq!(v, 732 | 2);
+
+    *v.get_mut() = 732;
+    v &= 2;
+    assert_eq!(v, 732 & 2);
+
+    *v.get_mut() = 732;
+    v ^= 2;
+    assert_eq!(v, 732 ^ 2);
 }
 
 #[test]

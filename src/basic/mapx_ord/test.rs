@@ -1,89 +1,116 @@
 use super::*;
-use crate::ValueEnDe;
-use serde::{Deserialize, Serialize};
-use std::ops::Bound;
+use ruc::*;
 
-#[derive(Serialize, Deserialize, Default, Debug, Eq, PartialEq, Clone)]
-struct SampleBlock {
-    idx: usize,
-    data: Vec<usize>,
+#[test]
+fn test_insert() {
+    let hdr: MapxOrd<usize, usize> = MapxOrd::new();
+    let max = 500;
+    (0..max)
+        .map(|i: usize| (i, (max + i)))
+        .for_each(|(key, value)| {
+            assert!(hdr.get(&key).is_none());
+            hdr.set_value(key, value);
+            assert!(hdr.insert(key, value).is_some());
+            assert!(hdr.contains_key(&key));
+            assert_eq!(pnk!(hdr.get(&key)), value);
+            assert_eq!(pnk!(hdr.remove(&key)), value);
+            assert!(hdr.get(&key).is_none());
+        });
+    hdr.clear();
+    (0..max).map(|i: usize| i).for_each(|key| {
+        assert!(hdr.get(&key).is_none());
+    });
+    assert!(hdr.is_empty());
 }
 
-fn gen_sample(idx: usize) -> SampleBlock {
-    SampleBlock {
-        idx,
-        data: vec![idx],
+#[test]
+fn test_len() {
+    let hdr: MapxOrd<usize, usize> = MapxOrd::new();
+    let max = 500;
+    (0..max)
+        .map(|i: usize| (i, (max + i)))
+        .for_each(|(key, value)| {
+            assert!(hdr.insert(key, value).is_none());
+        });
+    assert_eq!(500, hdr.len());
+
+    for key in 0..max {
+        assert!(hdr.remove(&key).is_some());
+    }
+    assert_eq!(0, hdr.len());
+}
+
+#[test]
+fn test_valueende() {
+    let cnt = 500;
+    let dehdr = {
+        let hdr: MapxOrd<usize, usize> = MapxOrd::new();
+        (0..cnt).map(|i: usize| (i, i)).for_each(|(key, value)| {
+            assert!(hdr.insert(key, value).is_none());
+        });
+        <MapxOrd<usize, usize> as ValueEnDe>::encode(&hdr)
+    };
+    let reloaded = pnk!(<MapxOrd<usize, usize> as ValueEnDe>::decode(&dehdr));
+    assert_eq!(cnt, reloaded.len());
+    (0..cnt).map(|i: usize| i).for_each(|i| {
+        assert_eq!(i, reloaded.get(&i).unwrap());
+    });
+}
+
+#[test]
+fn test_iter() {
+    let hdr: MapxOrd<usize, usize> = MapxOrd::new();
+    let max = 500;
+    (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
+        assert!(hdr.insert(key, value).is_none());
+    });
+    for (key, value) in hdr.iter() {
+        assert_eq!(key, value);
+        hdr.unset_value(&key);
+    }
+    assert_eq!(0, hdr.len());
+}
+
+#[test]
+fn test_first_last() {
+    let hdr: MapxOrd<usize, usize> = MapxOrd::new();
+    let max = 500;
+    (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
+        assert!(hdr.insert(key, value).is_none());
+    });
+    let (key, value) = pnk!(hdr.first());
+    assert_eq!(key, value);
+    assert_eq!(0, key);
+
+    let (key, value) = pnk!(hdr.last());
+    assert_eq!(key, value);
+    assert_eq!(max - 1, key);
+}
+
+#[test]
+fn test_values() {
+    let hdr: MapxOrd<usize, usize> = MapxOrd::new();
+    let max = 500;
+    (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
+        assert!(hdr.insert(key, value).is_none());
+    });
+    let mut i = 0;
+    for it in hdr.values() {
+        assert_eq!(i, it);
+        i = i + 1;
     }
 }
 
 #[test]
-fn basic_cases() {
-    let cnt = 200;
-
-    let hdr = {
-        let hdr_i = super::MapxOrd::new();
-
-        assert_eq!(0, hdr_i.len());
-        (0..cnt).for_each(|i| {
-            assert!(hdr_i.get(&i).is_none());
-        });
-
-        (0..cnt).map(|i| (i, gen_sample(i))).for_each(|(i, b)| {
-            hdr_i.entry(i).or_insert(b.clone());
-            assert_eq!(1 + i as usize, hdr_i.len());
-            assert_eq!(pnk!(hdr_i.get(&i)).idx, i);
-            assert_eq!(hdr_i.remove(&i), Some(b.clone()));
-            assert_eq!(i as usize, hdr_i.len());
-            assert!(hdr_i.get(&i).is_none());
-            assert!(hdr_i.insert_ref(&i, &b).is_none());
-            assert!(hdr_i.insert(i, b).is_some());
-        });
-
-        assert_eq!(cnt, hdr_i.len());
-
-        <MapxOrd<usize, SampleBlock> as ValueEnDe>::encode(&hdr_i)
-    };
-
-    let reloaded = pnk!(<MapxOrd<usize, SampleBlock> as ValueEnDe>::decode(&hdr));
-
-    assert_eq!(cnt, reloaded.len());
-
-    (0..cnt).for_each(|i| {
-        assert_eq!(i, reloaded.get(&i).unwrap().idx);
+fn test_values_first_last() {
+    let hdr: MapxOrd<usize, usize> = MapxOrd::new();
+    let max = 500;
+    (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
+        assert!(hdr.insert(key, value).is_none());
     });
+    let value = pnk!(hdr.values().next());
+    assert_eq!(0, value);
 
-    (1..cnt).for_each(|i| {
-        pnk!(reloaded.get_mut(&i)).idx = 1 + i;
-        assert_eq!(pnk!(reloaded.get(&i)).idx, 1 + i);
-        assert!(reloaded.contains_key(&i));
-        assert!(reloaded.remove(&i).is_some());
-        assert!(!reloaded.contains_key(&i));
-    });
-
-    assert_eq!(1, reloaded.len());
-    reloaded.clear();
-    assert!(reloaded.is_empty());
-
-    reloaded.insert_ref(&1, &gen_sample(1));
-    reloaded.insert_ref(&10, &gen_sample(10));
-    reloaded.insert_ref(&100, &gen_sample(100));
-    reloaded.insert_ref(&1000, &gen_sample(1000));
-
-    assert!(reloaded.range(0..1).next().is_none());
-
-    assert_eq!(100, reloaded.range(12..999).next().unwrap().1.idx);
-    assert_eq!(100, reloaded.range(12..=999).next().unwrap().1.idx);
-
-    assert_eq!(100, reloaded.range(100..=999).next().unwrap().1.idx);
-    assert!(
-        reloaded
-            .range((Bound::Excluded(100), Bound::Included(999)))
-            .next()
-            .is_none()
-    );
-
-    assert_eq!(100, reloaded.get_ge(&99).unwrap().1.idx);
-    assert_eq!(100, reloaded.get_ge(&100).unwrap().1.idx);
-    assert_eq!(100, reloaded.get_le(&100).unwrap().1.idx);
-    assert_eq!(100, reloaded.get_le(&101).unwrap().1.idx);
+    let value = pnk!(hdr.values().next_back());
+    assert_eq!(max - 1, value);
 }

@@ -1,149 +1,119 @@
-use crate::ValueEnDe;
-use crate::Vecx;
+use super::*;
 use ruc::*;
-use serde::{Deserialize, Serialize};
 
-#[derive(Default, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-struct SampleBlock {
-    idx: usize,
-    data: Vec<usize>,
+#[test]
+fn test_insert() {
+    let hdr = Vecx::new();
+    let max = 500;
+    (0..max)
+        .map(|i: usize| (i, (max + i)))
+        .for_each(|(key, value)| {
+            assert!(hdr.get(key).is_none());
+            hdr.insert(key, value);
+            assert_eq!(pnk!(hdr.get(key)), value);
+        });
+    hdr.clear();
+    (0..max).map(|i: usize| i).for_each(|key| {
+        assert!(hdr.get(key).is_none());
+    });
+    assert!(hdr.is_empty());
+}
+#[test]
+fn test_len() {
+    let hdr = Vecx::new();
+    let max = 500;
+    (0..max)
+        .map(|i: usize| (i, (max + i)))
+        .for_each(|(key, value)| {
+            hdr.insert(key, value);
+        });
+    assert_eq!(500, hdr.len());
+    hdr.clear();
+    assert_eq!(0, hdr.len());
 }
 
-fn gen_sample(idx: usize) -> SampleBlock {
-    SampleBlock {
-        idx,
-        data: vec![idx],
+#[test]
+fn test_valueende() {
+    let cnt = 500;
+    let dehdr = {
+        let hdr = Vecx::new();
+        (0..cnt).map(|i: usize| (i, i)).for_each(|(key, value)| {
+            hdr.insert(key, value);
+        });
+        <Vecx<usize> as ValueEnDe>::encode(&hdr)
+    };
+    let reloaded = pnk!(<Vecx<usize> as ValueEnDe>::decode(&dehdr));
+    assert_eq!(cnt, reloaded.len());
+    (0..cnt).map(|i: usize| i).for_each(|i| {
+        assert_eq!(i, reloaded.get(i).unwrap());
+    });
+}
+
+#[test]
+fn test_remove() {
+    let hdr = Vecx::new();
+    let max = 500;
+    (0..max)
+        .map(|i: usize| (i, (max + i)))
+        .for_each(|(key, value)| {
+            hdr.insert(key, value);
+        });
+    assert_eq!(max, hdr.len());
+
+    let idx = 400;
+    assert_eq!(max + idx, hdr.remove(idx));
+    hdr.clear();
+    assert_eq!(0, hdr.len());
+}
+
+#[test]
+fn test_iter_next() {
+    let hdr = Vecx::new();
+    let max = 500;
+    (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
+        hdr.insert(key, value);
+    });
+    let value = pnk!(hdr.iter().next());
+    assert_eq!(0, value);
+
+    let value = pnk!(hdr.iter().next_back());
+    assert_eq!(max - 1, value);
+}
+
+#[test]
+fn test_push_pop() {
+    let hdr = Vecx::new();
+    let max = 500;
+    (0..max).map(|i: usize| i).for_each(|value| {
+        hdr.push(value);
+    });
+    for val in (0..max).rev() {
+        assert_eq!(val, pnk!(hdr.pop()));
     }
 }
 
 #[test]
-fn basic_cases() {
-    let cnt = 200;
-
-    let hdr = {
-        let hdr = Vecx::new();
-
-        assert_eq!(0, hdr.len());
-        (0..cnt).for_each(|i| {
-            assert!(hdr.get(i).is_none());
-        });
-
-        (0..cnt).map(|i| (i, gen_sample(i))).for_each(|(i, b)| {
-            hdr.push_ref(&b);
-            assert_eq!(1 + i as usize, hdr.len());
-            assert_eq!(pnk!(hdr.get(i as usize)), b);
-            assert_eq!(pnk!(hdr.last()), b);
-        });
-
-        assert_eq!(cnt, hdr.len());
-
-        <Vecx<SampleBlock> as ValueEnDe>::encode(&hdr)
-    };
-
-    let reloaded = pnk!(<Vecx<SampleBlock> as ValueEnDe>::decode(&hdr));
-
-    (0..cnt).for_each(|i| {
-        assert_eq!(i, reloaded.get(i).unwrap().idx);
+fn test_swap_remove() {
+    let hdr = Vecx::new();
+    let max = 500;
+    (0..max).map(|i: usize| i).for_each(|value| {
+        hdr.push(value);
     });
-
-    assert_eq!(cnt, reloaded.len());
-
-    reloaded.update_ref(0, &gen_sample(100 * cnt)).unwrap();
-    assert_eq!(cnt, reloaded.len());
-    *reloaded.get_mut(0).unwrap() = gen_sample(999 * cnt);
-    assert_eq!(reloaded.get(0).unwrap(), gen_sample(999 * cnt));
-
-    reloaded.pop();
-    assert_eq!(cnt - 1, reloaded.len());
-
-    reloaded.clear();
-    assert!(reloaded.is_empty());
-}
-
-#[test]
-fn write() {
-    let hdr = Vecx::new();
-
-    hdr.insert(0, 0);
+    for idx in (0..max - 1).rev() {
+        assert_eq!(idx, hdr.swap_remove(idx));
+    }
     assert_eq!(1, hdr.len());
-    hdr.insert(0, 0);
-    assert_eq!(2, hdr.len());
-
-    hdr.update_ref(0, &1);
-    assert_eq!(1, hdr.get(0).unwrap());
-    hdr.update_ref(1, &1);
-    assert_eq!(1, hdr.get(1).unwrap());
-
-    hdr.push(2);
-    assert_eq!(1, hdr.swap_remove(0));
-    assert_eq!(2, hdr.len());
-    assert_eq!(2, hdr.get(0).unwrap());
-
-    hdr.push_ref(&3);
-    assert_eq!(2, hdr.remove(0));
-    assert_eq!(2, hdr.len());
-    assert_eq!(3, hdr.get(1).unwrap());
+    let value = pnk!(hdr.last());
+    assert_eq!(max - 1, value);
 }
 
 #[test]
-#[should_panic]
-fn write_out_of_index_0() {
+fn test_last() {
     let hdr = Vecx::new();
-    hdr.insert_ref(100, &0);
-}
-
-#[test]
-#[should_panic]
-fn write_out_of_index_1() {
-    let hdr = Vecx::new();
-    hdr.insert(0, 0);
-    hdr.insert_ref(100, &0);
-}
-
-#[test]
-#[should_panic]
-fn write_out_of_index_2() {
-    let hdr = Vecx::new();
-    hdr.update_ref(100, &0);
-    hdr.insert(0, 0);
-}
-
-#[test]
-#[should_panic]
-fn write_out_of_index_3() {
-    let hdr = Vecx::new();
-    hdr.insert(0, 0);
-    hdr.update_ref(100, &0);
-}
-
-#[test]
-#[should_panic]
-fn write_out_of_index_4() {
-    let hdr = Vecx::new();
-    hdr.remove(100);
-    hdr.insert(0, 0);
-}
-
-#[test]
-#[should_panic]
-fn write_out_of_index_5() {
-    let hdr = Vecx::new();
-    hdr.insert(0, 0);
-    hdr.remove(100);
-}
-
-#[test]
-#[should_panic]
-fn write_out_of_index_6() {
-    let hdr = Vecx::new();
-    hdr.swap_remove(100);
-    hdr.insert(0, 0);
-}
-
-#[test]
-#[should_panic]
-fn write_out_of_index_7() {
-    let hdr = Vecx::new();
-    hdr.insert(0, 0);
-    hdr.swap_remove(100);
+    let max = 500;
+    (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
+        hdr.insert(key, value);
+    });
+    let value = pnk!(hdr.last());
+    assert_eq!(max - 1, value);
 }

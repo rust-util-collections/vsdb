@@ -1,5 +1,11 @@
 # Change log
 
+## v0.34.2
+
+#### Unit test
+
+- Add unit tests, test coverage is 75%
+
 ## v0.34.1
 
 #### Internal optimizations

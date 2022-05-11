@@ -1,6 +1,8 @@
 //!
 //! Documents => [MapxRawVs](crate::versioned::mapx_raw)
 //!
+#[cfg(test)]
+mod test;
 
 use crate::{
     common::ende::{KeyEnDeOrdered, ValueEnDe},

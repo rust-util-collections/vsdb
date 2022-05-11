@@ -2,6 +2,9 @@
 //! Documents => [MapxRawVs](crate::versioned::mapx_raw)
 //!
 
+#[cfg(test)]
+mod test;
+
 use crate::{
     versioned::mapx_ord_rawkey::{MapxOrdRawKeyVs, MapxOrdRawKeyVsIter},
     BranchName, BranchNameOwned, ParentBranchName, ValueEnDe, VersionName,

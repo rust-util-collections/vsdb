@@ -1,68 +1,124 @@
 use super::*;
-use crate::ValueEnDe;
-use serde::{Deserialize, Serialize};
+use ruc::*;
 
-#[derive(Serialize, Deserialize, Default, Debug, Eq, PartialEq, Clone)]
-struct SampleBlock {
-    data: Vec<u8>,
+#[test]
+fn test_insert() {
+    let hdr = MapxOrdRawKey::new();
+    let max = 500;
+    (0..max)
+        .map(|i: usize| (i.to_be_bytes(), (max + i).to_be_bytes()))
+        .for_each(|(key, value)| {
+            assert!(hdr.get(&key).is_none());
+            hdr.entry_ref(&key).or_insert_ref(&value);
+            hdr.set_value(Box::new(key), value);
+            assert!(hdr.insert(Box::new(key), value).is_some());
+            assert!(hdr.contains_key(&key));
+            assert_eq!(pnk!(hdr.get(&key)), value);
+            assert_eq!(pnk!(hdr.remove(&key)), value);
+            assert!(hdr.get(&key).is_none());
+            assert!(hdr.insert(Box::new(key), value).is_none());
+        });
+    hdr.clear();
+    (0..max).map(|i: usize| i.to_be_bytes()).for_each(|key| {
+        assert!(hdr.get(&key).is_none());
+    });
+    assert!(hdr.is_empty());
+}
+#[test]
+fn test_len() {
+    let hdr = MapxOrdRawKey::new();
+    let max = 500;
+    (0..max)
+        .map(|i: usize| (i.to_be_bytes(), (max + i).to_be_bytes()))
+        .for_each(|(key, value)| {
+            assert!(hdr.insert(Box::new(key), value).is_none());
+        });
+    assert_eq!(500, hdr.len());
+
+    for key in 0..max {
+        assert!(hdr.remove(&key.to_be_bytes()).is_some());
+    }
+    assert_eq!(0, hdr.len());
 }
 
-fn gen_sample(bytes: &[u8]) -> SampleBlock {
-    SampleBlock {
-        data: bytes.to_vec(),
+#[test]
+fn test_valueende() {
+    let cnt = 500;
+    let dehdr = {
+        let hdr = MapxOrdRawKey::new();
+        (0..cnt)
+            .map(|i: usize| (i.to_be_bytes(), i))
+            .for_each(|(key, value)| {
+                assert!(hdr.insert(Box::new(key), value).is_none());
+            });
+        <MapxOrdRawKey<usize> as ValueEnDe>::encode(&hdr)
+    };
+    let reloaded = pnk!(<MapxOrdRawKey<usize> as ValueEnDe>::decode(&dehdr));
+    assert_eq!(cnt, reloaded.len());
+    (0..cnt).map(|i: usize| i).for_each(|i| {
+        assert_eq!(i, reloaded.get(&i.to_be_bytes()).unwrap());
+    });
+}
+
+#[test]
+fn test_iter() {
+    let hdr = MapxOrdRawKey::new();
+    let max = 500;
+    (0..max)
+        .map(|i: usize| (i.to_be_bytes(), i))
+        .for_each(|(key, value)| {
+            assert!(hdr.insert(Box::new(key), value).is_none());
+        });
+    for (key, _) in hdr.iter() {
+        hdr.unset_value(&key);
+    }
+    assert_eq!(0, hdr.len());
+}
+
+#[test]
+fn test_first_last() {
+    let hdr = MapxOrdRawKey::new();
+    let max = 500;
+    (0..max)
+        .map(|i: usize| (i.to_be_bytes(), i))
+        .for_each(|(key, value)| {
+            assert!(hdr.insert(Box::new(key), value).is_none());
+        });
+    let (_, value) = pnk!(hdr.first());
+    assert_eq!(0, value);
+
+    let (_, value) = pnk!(hdr.last());
+    assert_eq!(max - 1, value);
+}
+
+#[test]
+fn test_values() {
+    let hdr = MapxOrdRawKey::new();
+    let max = 500;
+    (0..max)
+        .map(|i: usize| (i.to_be_bytes(), i))
+        .for_each(|(key, value)| {
+            assert!(hdr.insert(Box::new(key), value).is_none());
+        });
+    let mut i = 0;
+    for it in hdr.values() {
+        assert_eq!(i, it);
+        i = i + 1;
     }
 }
 
 #[test]
-fn basic_cases() {
-    let cnt = 200;
-
-    let hdr = {
-        let hdr_i = super::MapxOrdRawKey::new();
-
-        assert_eq!(0, hdr_i.len());
-        (0usize..cnt).map(|i| i.to_be_bytes()).for_each(|i| {
-            assert!(hdr_i.get(&i).is_none());
+fn test_values_first_last() {
+    let hdr = MapxOrdRawKey::new();
+    let max = 500;
+    (0..max)
+        .map(|i: usize| (i.to_be_bytes(), i))
+        .for_each(|(key, value)| {
+            assert!(hdr.insert(Box::new(key), value).is_none());
         });
+    let value = pnk!(hdr.values().next());
+    assert_eq!(0, value);
 
-        (0usize..cnt)
-            .map(|i| i.to_be_bytes())
-            .map(|i| (i, gen_sample(&i)))
-            .for_each(|(i, b)| {
-                hdr_i.entry_ref(&i).or_insert_ref(&b);
-                assert_eq!(&hdr_i.get(&i).unwrap().data, &i);
-                assert_eq!(hdr_i.remove(&i), Some(b.clone()));
-                assert!(hdr_i.get(&i).is_none());
-                assert!(hdr_i.insert_ref(&i, &b).is_none());
-                assert!(hdr_i.insert_ref(&i, &b).is_some());
-            });
-
-        assert_eq!(cnt, hdr_i.len());
-
-        <MapxOrdRawKey<SampleBlock> as ValueEnDe>::encode(&hdr_i)
-    };
-
-    let reloaded = pnk!(<MapxOrdRawKey<SampleBlock> as ValueEnDe>::decode(&hdr));
-
-    assert_eq!(cnt, reloaded.len());
-
-    (0usize..cnt).map(|i| i.to_be_bytes()).for_each(|i| {
-        assert_eq!(&i[..], &reloaded.get(&i).unwrap().data);
-    });
-
-    (1usize..cnt).for_each(|i| {
-        (*reloaded.get_mut(&i.to_be_bytes()).unwrap()).data =
-            (1 + i).to_be_bytes().to_vec();
-        assert_eq!(
-            &reloaded.get(&i.to_be_bytes()).unwrap().data,
-            &(1 + i).to_be_bytes()[..]
-        );
-        assert!(reloaded.contains_key(&i.to_be_bytes()));
-        assert!(reloaded.remove(&i.to_be_bytes()).is_some());
-        assert!(!reloaded.contains_key(&i.to_be_bytes()));
-    });
-
-    assert_eq!(1, reloaded.len());
-    reloaded.clear();
-    assert!(reloaded.is_empty());
+    let value = pnk!(hdr.values().next_back());
+    assert_eq!(max - 1, value);
 }
