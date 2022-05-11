@@ -53,7 +53,7 @@ hash= ["blake3"]
 merkle = ["hash", "fast-math"]
 
 [[bench]]
-name = "basic"
+name = "bench_main"
 harness = false
 
 [profile.dev]
