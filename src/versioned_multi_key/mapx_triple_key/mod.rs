@@ -20,14 +20,20 @@ use std::{
 const KEY_SIZE: usize = 3;
 
 /// A versioned map structure with tree-level keys.
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct MapxTkVs<K1, K2, K3, V> {
     inner: MapxRawMkVs,
-    p1: PhantomData<K1>,
-    p2: PhantomData<K2>,
-    p3: PhantomData<K3>,
-    p4: PhantomData<V>,
+    _mark: PhantomData<(K1, K2, K3, V)>,
+}
+
+impl<K1, K2, K3, V> Clone for MapxTkVs<K1, K2, K3, V> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            _mark: PhantomData::default(),
+        }
+    }
 }
 
 impl<K1, K2, K3, V> MapxTkVs<K1, K2, K3, V>
@@ -41,10 +47,7 @@ where
     pub fn new() -> Self {
         MapxTkVs {
             inner: MapxRawMkVs::new(KEY_SIZE),
-            p1: PhantomData,
-            p2: PhantomData,
-            p3: PhantomData,
-            p4: PhantomData,
+            _mark: PhantomData::default(),
         }
     }
 

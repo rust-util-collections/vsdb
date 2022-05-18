@@ -17,10 +17,18 @@ use std::ops::{Deref, DerefMut};
 /// such as any type of integer, an enum value, etc..
 ///
 /// Documents => [MapxRawVs](crate::versioned::mapx_raw::MapxRawVs)
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(bound = "")]
 pub struct OrphanVs<T> {
     inner: MapxOrdRawKeyVs<T>,
+}
+
+impl<T> Clone for OrphanVs<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
 }
 
 impl<T: ValueEnDe> OrphanVs<T> {

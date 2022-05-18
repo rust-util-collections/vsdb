@@ -49,12 +49,23 @@ use std::{
     ops::{Bound, RangeBounds},
 };
 
-#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct MapxOrd<K, V> {
     inner: MapxOrdRawKey<V>,
     p: PhantomData<K>,
 }
+
+impl<K, V> Clone for MapxOrd<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner,
+            p: PhantomData::default(),
+        }
+    }
+}
+
+impl<K, V> Copy for MapxOrd<K, V> {}
 
 impl<K, V> Default for MapxOrd<K, V>
 where
