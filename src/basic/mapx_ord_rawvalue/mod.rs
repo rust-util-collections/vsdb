@@ -47,12 +47,23 @@ use std::{
     ops::{Bound, Deref, DerefMut, RangeBounds},
 };
 
-#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct MapxOrdRawValue<K> {
     inner: MapxRaw,
     p: PhantomData<K>,
 }
+
+impl<K> Clone for MapxOrdRawValue<K> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner,
+            p: PhantomData,
+        }
+    }
+}
+
+impl<K> Copy for MapxOrdRawValue<K> {}
 
 impl<K> Default for MapxOrdRawValue<K>
 where

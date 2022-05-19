@@ -1,10 +1,16 @@
 # Change log
 
+## v0.34.3
+
+#### Internal optimizations
+
+- Relax the K/V binding conditions of all structured kinds
+
 ## v0.34.2
 
-#### Unit test
+#### Unit tests
 
-- Add unit tests, test coverage is 75%
+- Add more unit tests, test coverage reached 75%
 
 ## v0.34.1
 

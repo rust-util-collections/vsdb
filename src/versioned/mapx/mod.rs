@@ -19,11 +19,20 @@ use std::{
 };
 
 /// Documents => [MapxRawVs](crate::versioned::mapx_raw::MapxRawVs)
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct MapxVs<K, V> {
     inner: MapxOrdRawKeyVs<V>,
     p: PhantomData<K>,
+}
+
+impl<K, V> Clone for MapxVs<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            p: PhantomData,
+        }
+    }
 }
 
 impl<K, V> Default for MapxVs<K, V>

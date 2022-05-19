@@ -98,11 +98,19 @@ use std::{
 
 /// Used to express some 'non-collection' types,
 /// such as any type of integer, an enum value, etc..
-#[derive(Clone, Copy, Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(bound = "")]
 pub struct Orphan<T> {
     inner: MapxOrdRawKey<T>,
 }
+
+impl<T> Clone for Orphan<T> {
+    fn clone(&self) -> Self {
+        Self { inner: self.inner }
+    }
+}
+
+impl<T> Copy for Orphan<T> {}
 
 impl<T: Default + ValueEnDe> Default for Orphan<T> {
     fn default() -> Self {

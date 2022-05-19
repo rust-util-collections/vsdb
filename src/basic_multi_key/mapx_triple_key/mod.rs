@@ -22,15 +22,23 @@ use std::{
 const KEY_SIZE: usize = 3;
 
 /// A map structure with two-level keys.
-#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct MapxTk<K1, K2, K3, V> {
     inner: MapxRawMk,
-    p1: PhantomData<K1>,
-    p2: PhantomData<K2>,
-    p3: PhantomData<K3>,
-    p4: PhantomData<V>,
+    p: PhantomData<(K1, K2, K3, V)>,
 }
+
+impl<K1, K2, K3, V> Clone for MapxTk<K1, K2, K3, V> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner,
+            p: PhantomData,
+        }
+    }
+}
+
+impl<K1, K2, K3, V> Copy for MapxTk<K1, K2, K3, V> {}
 
 impl<K1, K2, K3, V> MapxTk<K1, K2, K3, V>
 where
@@ -43,10 +51,7 @@ where
     pub fn new() -> Self {
         Self {
             inner: MapxRawMk::new(KEY_SIZE),
-            p1: PhantomData,
-            p2: PhantomData,
-            p3: PhantomData,
-            p4: PhantomData,
+            p: PhantomData,
         }
     }
 

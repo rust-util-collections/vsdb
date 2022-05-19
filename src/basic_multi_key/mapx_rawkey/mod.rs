@@ -16,12 +16,23 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct MapxRawKeyMk<V> {
     inner: MapxRawMk,
     p: PhantomData<V>,
 }
+
+impl<V> Clone for MapxRawKeyMk<V> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner,
+            p: PhantomData,
+        }
+    }
+}
+
+impl<V> Copy for MapxRawKeyMk<V> {}
 
 impl<V: ValueEnDe> MapxRawKeyMk<V> {
     /// # Panic

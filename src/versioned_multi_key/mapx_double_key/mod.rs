@@ -20,13 +20,20 @@ use std::{
 const KEY_SIZE: usize = 2;
 
 /// A versioned map structure with two-level keys.
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct MapxDkVs<K1, K2, V> {
     inner: MapxRawMkVs,
-    p1: PhantomData<K1>,
-    p2: PhantomData<K2>,
-    p3: PhantomData<V>,
+    p: PhantomData<(K1, K2, V)>,
+}
+
+impl<K1, K2, V> Clone for MapxDkVs<K1, K2, V> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            p: PhantomData,
+        }
+    }
 }
 
 impl<K1, K2, V> MapxDkVs<K1, K2, V>
@@ -39,9 +46,7 @@ where
     pub fn new() -> Self {
         MapxDkVs {
             inner: MapxRawMkVs::new(KEY_SIZE),
-            p1: PhantomData,
-            p2: PhantomData,
-            p3: PhantomData,
+            p: PhantomData,
         }
     }
 
