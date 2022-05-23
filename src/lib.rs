@@ -157,7 +157,9 @@
 //!     - Created by the 'Libre' project of Facebook
 //!     - Security reinforcement for blockchain scenarios
 //! - \[**default**] `derive`, enable the `Vs` procedural macro
-//! - `merkle`, enable an optional mekle-tree implementation
+//! - `compress`, enable compression in the backend database
+//! - `hash`, enable an optional hash function
+//!     - Based on the 'blake3' crate
 //!
 //! ## Low-level design
 //!
@@ -183,9 +185,6 @@ mod common;
 pub mod versioned;
 pub mod versioned_multi_key;
 
-#[cfg(feature = "merkle")]
-pub mod merkle;
-
 pub use basic::{mapx::Mapx, mapx_ord::MapxOrd, vecx::Vecx};
 pub use versioned::{mapx::MapxVs, mapx_ord::MapxOrdVs, orphan::OrphanVs, vecx::VecxVs};
 
@@ -197,9 +196,6 @@ pub use versioned::VsMgmt;
 
 #[cfg(feature = "derive")]
 pub use vsdb_derive::Vs;
-
-#[cfg(feature = "merkle")]
-pub use merkle::MerkleTree;
 
 #[cfg(feature = "hash")]
 pub use common::utils::hash::{hash, Hash, HASH_SIZ};
