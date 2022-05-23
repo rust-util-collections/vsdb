@@ -1,5 +1,11 @@
 # Change log
 
+## v0.35.0
+
+#### Function changes
+
+- The embed MerkleTree is removed
+
 ## v0.34.3
 
 #### Internal optimizations
