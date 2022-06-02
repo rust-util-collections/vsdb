@@ -340,7 +340,7 @@ macro_rules! impl_vs_methods {
     () => {
         /// Create a new version on the default branch.
         #[inline(always)]
-        fn version_create(&self, version_name: VersionName) -> Result<()> {
+        fn version_create(&self, version_name: $crate::VersionName) -> ruc::Result<()> {
             self.inner.version_create(version_name).c(d!())
         }
 
@@ -349,9 +349,9 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         fn version_create_by_branch(
             &self,
-            version_name: VersionName,
-            branch_name: BranchName,
-        ) -> Result<()> {
+            version_name: $crate::VersionName,
+            branch_name: $crate::BranchName,
+        ) -> ruc::Result<()> {
             self.inner
                 .version_create_by_branch(version_name, branch_name)
                 .c(d!())
@@ -359,7 +359,7 @@ macro_rules! impl_vs_methods {
 
         /// Check if a verison exists on default branch.
         #[inline(always)]
-        fn version_exists(&self, version_name: VersionName) -> bool {
+        fn version_exists(&self, version_name: $crate::VersionName) -> bool {
             self.inner.version_exists(version_name)
         }
 
@@ -367,8 +367,8 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         fn version_exists_on_branch(
             &self,
-            version_name: VersionName,
-            branch_name: BranchName,
+            version_name: $crate::VersionName,
+            branch_name: $crate::BranchName,
         ) -> bool {
             self.inner
                 .version_exists_on_branch(version_name, branch_name)
@@ -382,7 +382,7 @@ macro_rules! impl_vs_methods {
         /// while operations on branches and versions are limited to their own perspective,
         /// and should not do any tracing.
         #[inline(always)]
-        fn version_pop(&self) -> Result<()> {
+        fn version_pop(&self) -> ruc::Result<()> {
             self.inner.version_pop().c(d!())
         }
 
@@ -394,7 +394,10 @@ macro_rules! impl_vs_methods {
         /// while operations on branches and versions are limited to their own perspective,
         /// and should not do any tracing.
         #[inline(always)]
-        fn version_pop_by_branch(&self, branch_name: BranchName) -> Result<()> {
+        fn version_pop_by_branch(
+            &self,
+            branch_name: $crate::BranchName,
+        ) -> ruc::Result<()> {
             self.inner.version_pop_by_branch(branch_name).c(d!())
         }
 
@@ -406,7 +409,10 @@ macro_rules! impl_vs_methods {
         /// the `base_version` was created directly by the `branch_id`,
         /// or the data records of other branches may be corrupted.
         #[inline(always)]
-        unsafe fn version_rebase(&self, base_version: VersionName) -> Result<()> {
+        unsafe fn version_rebase(
+            &self,
+            base_version: $crate::VersionName,
+        ) -> ruc::Result<()> {
             self.inner.version_rebase(base_version).c(d!())
         }
 
@@ -420,52 +426,55 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         unsafe fn version_rebase_by_branch(
             &self,
-            base_version: VersionName,
-            branch_name: BranchName,
-        ) -> Result<()> {
+            base_version: $crate::VersionName,
+            branch_name: $crate::BranchName,
+        ) -> ruc::Result<()> {
             self.inner
                 .version_rebase_by_branch(base_version, branch_name)
                 .c(d!())
         }
 
         #[inline(always)]
-        fn version_exists_globally(&self, version_name: VersionName) -> bool {
+        fn version_exists_globally(&self, version_name: $crate::VersionName) -> bool {
             self.inner.version_exists_globally(version_name)
         }
 
         #[inline(always)]
-        fn version_list(&self) -> Result<Vec<VersionNameOwned>> {
+        fn version_list(&self) -> ruc::Result<Vec<$crate::VersionNameOwned>> {
             self.inner.version_list().c(d!())
         }
 
         #[inline(always)]
         fn version_list_by_branch(
             &self,
-            branch_name: BranchName,
-        ) -> Result<Vec<VersionNameOwned>> {
+            branch_name: $crate::BranchName,
+        ) -> ruc::Result<Vec<$crate::VersionNameOwned>> {
             self.inner.version_list_by_branch(branch_name).c(d!())
         }
 
         #[inline(always)]
-        fn version_list_globally(&self) -> Vec<VersionNameOwned> {
+        fn version_list_globally(&self) -> Vec<$crate::VersionNameOwned> {
             self.inner.version_list_globally()
         }
 
         #[inline(always)]
-        fn version_has_change_set(&self, version_name: VersionName) -> Result<bool> {
+        fn version_has_change_set(
+            &self,
+            version_name: $crate::VersionName,
+        ) -> ruc::Result<bool> {
             self.inner.version_has_change_set(version_name).c(d!())
         }
 
         #[inline(always)]
-        fn version_clean_up_globally(&self) -> Result<()> {
+        fn version_clean_up_globally(&self) -> ruc::Result<()> {
             self.inner.version_clean_up_globally().c(d!())
         }
 
         #[inline(always)]
         unsafe fn version_revert_globally(
             &self,
-            version_name: VersionName,
-        ) -> Result<()> {
+            version_name: $crate::VersionName,
+        ) -> ruc::Result<()> {
             self.inner.version_revert_globally(version_name).c(d!())
         }
 
@@ -473,10 +482,10 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         fn branch_create(
             &self,
-            branch_name: BranchName,
-            version_name: VersionName,
+            branch_name: $crate::BranchName,
+            version_name: $crate::VersionName,
             force: bool,
-        ) -> Result<()> {
+        ) -> ruc::Result<()> {
             self.inner
                 .branch_create(branch_name, version_name, force)
                 .c(d!())
@@ -486,11 +495,11 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         fn branch_create_by_base_branch(
             &self,
-            branch_name: BranchName,
-            version_name: VersionName,
-            base_branch_name: ParentBranchName,
+            branch_name: $crate::BranchName,
+            version_name: $crate::VersionName,
+            base_branch_name: $crate::ParentBranchName,
             force: bool,
-        ) -> Result<()> {
+        ) -> ruc::Result<()> {
             self.inner
                 .branch_create_by_base_branch(
                     branch_name,
@@ -505,12 +514,12 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         fn branch_create_by_base_branch_version(
             &self,
-            branch_name: BranchName,
-            version_name: VersionName,
-            base_branch_name: ParentBranchName,
-            base_version_name: VersionName,
+            branch_name: $crate::BranchName,
+            version_name: $crate::VersionName,
+            base_branch_name: $crate::ParentBranchName,
+            base_version_name: $crate::VersionName,
             force: bool,
-        ) -> Result<()> {
+        ) -> ruc::Result<()> {
             self.inner
                 .branch_create_by_base_branch_version(
                     branch_name,
@@ -529,9 +538,9 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         unsafe fn branch_create_without_new_version(
             &self,
-            branch_name: BranchName,
+            branch_name: $crate::BranchName,
             force: bool,
-        ) -> Result<()> {
+        ) -> ruc::Result<()> {
             self.inner
                 .branch_create_without_new_version(branch_name, force)
                 .c(d!())
@@ -544,10 +553,10 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         unsafe fn branch_create_by_base_branch_without_new_version(
             &self,
-            branch_name: BranchName,
-            base_branch_name: ParentBranchName,
+            branch_name: $crate::BranchName,
+            base_branch_name: $crate::ParentBranchName,
             force: bool,
-        ) -> Result<()> {
+        ) -> ruc::Result<()> {
             self.inner
                 .branch_create_by_base_branch_without_new_version(
                     branch_name,
@@ -564,11 +573,11 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         unsafe fn branch_create_by_base_branch_version_without_new_version(
             &self,
-            branch_name: BranchName,
-            base_branch_name: ParentBranchName,
-            base_version_name: VersionName,
+            branch_name: $crate::BranchName,
+            base_branch_name: $crate::ParentBranchName,
+            base_version_name: $crate::VersionName,
             force: bool,
-        ) -> Result<()> {
+        ) -> ruc::Result<()> {
             self.inner
                 .branch_create_by_base_branch_version_without_new_version(
                     branch_name,
@@ -581,12 +590,12 @@ macro_rules! impl_vs_methods {
 
         /// Check if a branch exists or not.
         #[inline(always)]
-        fn branch_exists(&self, branch_name: BranchName) -> bool {
+        fn branch_exists(&self, branch_name: $crate::BranchName) -> bool {
             self.inner.branch_exists(branch_name)
         }
 
         /// Check if a branch exists and has versions on it.
-        fn branch_has_versions(&self, branch_name: BranchName) -> bool {
+        fn branch_has_versions(&self, branch_name: $crate::BranchName) -> bool {
             self.inner.branch_has_versions(branch_name)
         }
 
@@ -598,13 +607,16 @@ macro_rules! impl_vs_methods {
         /// while operations on branches and versions are limited to their own perspective,
         /// and should not do any tracing.
         #[inline(always)]
-        fn branch_remove(&self, branch_name: BranchName) -> Result<()> {
+        fn branch_remove(&self, branch_name: $crate::BranchName) -> ruc::Result<()> {
             self.inner.branch_remove(branch_name).c(d!())
         }
 
         /// Clean up all other branches not in the list.
         #[inline(always)]
-        fn branch_keep_only(&self, branch_names: &[BranchName]) -> Result<()> {
+        fn branch_keep_only(
+            &self,
+            branch_names: &[$crate::BranchName],
+        ) -> ruc::Result<()> {
             self.inner.branch_keep_only(branch_names).c(d!())
         }
 
@@ -616,7 +628,7 @@ macro_rules! impl_vs_methods {
         /// while operations on branches and versions are limited to their own perspective,
         /// and should not do any tracing.
         #[inline(always)]
-        fn branch_truncate(&self, branch_name: BranchName) -> Result<()> {
+        fn branch_truncate(&self, branch_name: $crate::BranchName) -> ruc::Result<()> {
             self.inner.branch_truncate(branch_name).c(d!())
         }
 
@@ -630,9 +642,9 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         fn branch_truncate_to(
             &self,
-            branch_name: BranchName,
-            last_version_name: VersionName,
-        ) -> Result<()> {
+            branch_name: $crate::BranchName,
+            last_version_name: $crate::VersionName,
+        ) -> ruc::Result<()> {
             self.inner
                 .branch_truncate_to(branch_name, last_version_name)
                 .c(d!())
@@ -646,7 +658,10 @@ macro_rules! impl_vs_methods {
         /// while operations on branches and versions are limited to their own perspective,
         /// and should not do any tracing.
         #[inline(always)]
-        fn branch_pop_version(&self, branch_name: BranchName) -> Result<()> {
+        fn branch_pop_version(
+            &self,
+            branch_name: $crate::BranchName,
+        ) -> ruc::Result<()> {
             self.inner.branch_pop_version(branch_name).c(d!())
         }
 
@@ -654,9 +669,9 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         fn branch_merge_to(
             &self,
-            branch_name: BranchName,
-            target_branch_name: BranchName,
-        ) -> Result<()> {
+            branch_name: $crate::BranchName,
+            target_branch_name: $crate::BranchName,
+        ) -> ruc::Result<()> {
             self.inner
                 .branch_merge_to(branch_name, target_branch_name)
                 .c(d!())
@@ -671,9 +686,9 @@ macro_rules! impl_vs_methods {
         /// the data records referenced by other branches may be corrupted.
         unsafe fn branch_merge_to_force(
             &self,
-            branch_name: BranchName,
-            target_branch_name: BranchName,
-        ) -> Result<()> {
+            branch_name: $crate::BranchName,
+            target_branch_name: $crate::BranchName,
+        ) -> ruc::Result<()> {
             self.inner
                 .branch_merge_to_force(branch_name, target_branch_name)
                 .c(d!())
@@ -682,33 +697,36 @@ macro_rules! impl_vs_methods {
         /// Make a branch to be default,
         /// all default operations will be applied to it.
         #[inline(always)]
-        fn branch_set_default(&mut self, branch_name: BranchName) -> Result<()> {
+        fn branch_set_default(
+            &mut self,
+            branch_name: $crate::BranchName,
+        ) -> ruc::Result<()> {
             self.inner.branch_set_default(branch_name).c(d!())
         }
 
-        fn branch_is_empty(&self, branch_name: BranchName) -> Result<bool> {
+        fn branch_is_empty(&self, branch_name: $crate::BranchName) -> ruc::Result<bool> {
             self.inner.branch_is_empty(branch_name).c(d!())
         }
 
-        fn branch_list(&self) -> Vec<BranchNameOwned> {
+        fn branch_list(&self) -> Vec<$crate::BranchNameOwned> {
             self.inner.branch_list()
         }
 
-        fn branch_get_default(&self) -> BranchNameOwned {
+        fn branch_get_default(&self) -> $crate::BranchNameOwned {
             self.inner.branch_get_default()
         }
 
         unsafe fn branch_swap(
             &mut self,
-            branch_1: BranchName,
-            branch_2: BranchName,
-        ) -> Result<()> {
+            branch_1: $crate::BranchName,
+            branch_2: $crate::BranchName,
+        ) -> ruc::Result<()> {
             self.inner.branch_swap(branch_1, branch_2).c(d!())
         }
 
         /// Clean outdated versions out of the default reserved number.
         #[inline(always)]
-        fn prune(&self, reserved_ver_num: Option<usize>) -> Result<()> {
+        fn prune(&self, reserved_ver_num: Option<usize>) -> ruc::Result<()> {
             self.inner.prune(reserved_ver_num).c(d!())
         }
     };
@@ -720,210 +738,234 @@ macro_rules! impl_vs_methods {
 macro_rules! impl_vs_methods_nope {
     () => {
         #[inline(always)]
-        fn version_create(&self, _: VersionName) -> Result<()> {
+        fn version_create(&self, _: $crate::VersionName) -> ruc::Result<()> {
             Ok(())
         }
 
         #[inline(always)]
         fn version_create_by_branch(
             &self,
-            _: VersionName,
-            __: BranchName,
-        ) -> Result<()> {
+            _: $crate::VersionName,
+            __: $crate::BranchName,
+        ) -> ruc::Result<()> {
             Ok(())
         }
 
         #[inline(always)]
-        fn version_exists(&self, _: VersionName) -> bool {
+        fn version_exists(&self, _: $crate::VersionName) -> bool {
             true
         }
 
         #[inline(always)]
-        fn version_exists_on_branch(&self, _: VersionName, __: BranchName) -> bool {
+        fn version_exists_on_branch(
+            &self,
+            _: $crate::VersionName,
+            __: $crate::BranchName,
+        ) -> bool {
             true
         }
 
         #[inline(always)]
-        fn version_pop(&self) -> Result<()> {
+        fn version_pop(&self) -> ruc::Result<()> {
             Ok(())
         }
 
         #[inline(always)]
-        fn version_pop_by_branch(&self, _: BranchName) -> Result<()> {
+        fn version_pop_by_branch(&self, _: $crate::BranchName) -> ruc::Result<()> {
             Ok(())
         }
 
         #[inline(always)]
-        unsafe fn version_rebase(&self, _: VersionName) -> Result<()> {
+        unsafe fn version_rebase(&self, _: $crate::VersionName) -> ruc::Result<()> {
             Ok(())
         }
 
         #[inline(always)]
         unsafe fn version_rebase_by_branch(
             &self,
-            _: VersionName,
-            _: BranchName,
-        ) -> Result<()> {
+            _: $crate::VersionName,
+            _: $crate::BranchName,
+        ) -> ruc::Result<()> {
             Ok(())
         }
 
-        fn version_exists_globally(&self, _: VersionName) -> bool {
+        fn version_exists_globally(&self, _: $crate::VersionName) -> bool {
             true
         }
 
-        fn version_list(&self) -> Result<Vec<VersionNameOwned>> {
+        fn version_list(&self) -> ruc::Result<Vec<$crate::VersionNameOwned>> {
             Ok(Default::default())
         }
 
         fn version_list_by_branch(
             &self,
-            _: BranchName,
-        ) -> Result<Vec<VersionNameOwned>> {
+            _: $crate::BranchName,
+        ) -> ruc::Result<Vec<$crate::VersionNameOwned>> {
             Ok(Default::default())
         }
 
-        fn version_list_globally(&self) -> Vec<VersionNameOwned> {
+        fn version_list_globally(&self) -> Vec<$crate::VersionNameOwned> {
             Default::default()
         }
 
-        fn version_has_change_set(&self, _: VersionName) -> Result<bool> {
+        fn version_has_change_set(&self, _: $crate::VersionName) -> ruc::Result<bool> {
             Ok(true)
         }
 
-        fn version_clean_up_globally(&self) -> Result<()> {
+        fn version_clean_up_globally(&self) -> ruc::Result<()> {
             Ok(())
         }
 
-        unsafe fn version_revert_globally(&self, _: VersionName) -> Result<()> {
+        unsafe fn version_revert_globally(
+            &self,
+            _: $crate::VersionName,
+        ) -> ruc::Result<()> {
             Ok(())
         }
 
         #[inline(always)]
-        fn branch_create(&self, _: BranchName, _: VersionName, _: bool) -> Result<()> {
+        fn branch_create(
+            &self,
+            _: $crate::BranchName,
+            _: $crate::VersionName,
+            _: bool,
+        ) -> ruc::Result<()> {
             Ok(())
         }
 
         #[inline(always)]
         fn branch_create_by_base_branch(
             &self,
-            _: BranchName,
-            _: VersionName,
-            _: ParentBranchName,
+            _: $crate::BranchName,
+            _: $crate::VersionName,
+            _: $crate::ParentBranchName,
             _: bool,
-        ) -> Result<()> {
+        ) -> ruc::Result<()> {
             Ok(())
         }
 
         #[inline(always)]
         fn branch_create_by_base_branch_version(
             &self,
-            _: BranchName,
-            _: VersionName,
-            _: ParentBranchName,
-            _: VersionName,
+            _: $crate::BranchName,
+            _: $crate::VersionName,
+            _: $crate::ParentBranchName,
+            _: $crate::VersionName,
             _: bool,
-        ) -> Result<()> {
+        ) -> ruc::Result<()> {
             Ok(())
         }
 
         unsafe fn branch_create_without_new_version(
             &self,
-            _: BranchName,
+            _: $crate::BranchName,
             _: bool,
-        ) -> Result<()> {
+        ) -> ruc::Result<()> {
             Ok(())
         }
 
         unsafe fn branch_create_by_base_branch_without_new_version(
             &self,
-            _: BranchName,
-            _: ParentBranchName,
+            _: $crate::BranchName,
+            _: $crate::ParentBranchName,
             _: bool,
-        ) -> Result<()> {
+        ) -> ruc::Result<()> {
             Ok(())
         }
 
         unsafe fn branch_create_by_base_branch_version_without_new_version(
             &self,
-            _: BranchName,
-            _: ParentBranchName,
-            _: VersionName,
+            _: $crate::BranchName,
+            _: $crate::ParentBranchName,
+            _: $crate::VersionName,
             _: bool,
-        ) -> Result<()> {
+        ) -> ruc::Result<()> {
             Ok(())
         }
 
         #[inline(always)]
-        fn branch_exists(&self, _: BranchName) -> bool {
+        fn branch_exists(&self, _: $crate::BranchName) -> bool {
             true
         }
 
         #[inline(always)]
-        fn branch_has_versions(&self, _: BranchName) -> bool {
+        fn branch_has_versions(&self, _: $crate::BranchName) -> bool {
             true
         }
 
         #[inline(always)]
-        fn branch_remove(&self, _: BranchName) -> Result<()> {
+        fn branch_remove(&self, _: $crate::BranchName) -> ruc::Result<()> {
             Ok(())
         }
 
         #[inline(always)]
-        fn branch_keep_only(&self, _: &[BranchName]) -> Result<()> {
+        fn branch_keep_only(&self, _: &[$crate::BranchName]) -> ruc::Result<()> {
             Ok(())
         }
 
         #[inline(always)]
-        fn branch_truncate(&self, _: BranchName) -> Result<()> {
+        fn branch_truncate(&self, _: $crate::BranchName) -> ruc::Result<()> {
             Ok(())
         }
 
         #[inline(always)]
-        fn branch_truncate_to(&self, _: BranchName, _: VersionName) -> Result<()> {
+        fn branch_truncate_to(
+            &self,
+            _: $crate::BranchName,
+            _: $crate::VersionName,
+        ) -> ruc::Result<()> {
             Ok(())
         }
 
         #[inline(always)]
-        fn branch_pop_version(&self, _: BranchName) -> Result<()> {
+        fn branch_pop_version(&self, _: $crate::BranchName) -> ruc::Result<()> {
             Ok(())
         }
 
         #[inline(always)]
-        fn branch_merge_to(&self, _: BranchName, _: BranchName) -> Result<()> {
+        fn branch_merge_to(
+            &self,
+            _: $crate::BranchName,
+            _: $crate::BranchName,
+        ) -> ruc::Result<()> {
             Ok(())
         }
 
         unsafe fn branch_merge_to_force(
             &self,
-            _: BranchName,
-            _: BranchName,
-        ) -> Result<()> {
+            _: $crate::BranchName,
+            _: $crate::BranchName,
+        ) -> ruc::Result<()> {
             Ok(())
         }
 
         #[inline(always)]
-        fn branch_set_default(&mut self, _: BranchName) -> Result<()> {
+        fn branch_set_default(&mut self, _: $crate::BranchName) -> ruc::Result<()> {
             Ok(())
         }
 
-        fn branch_is_empty(&self, _: BranchName) -> Result<bool> {
+        fn branch_is_empty(&self, _: $crate::BranchName) -> ruc::Result<bool> {
             Ok(true)
         }
 
-        fn branch_list(&self) -> Vec<BranchNameOwned> {
+        fn branch_list(&self) -> Vec<$crate::BranchNameOwned> {
             Default::default()
         }
 
-        fn branch_get_default(&self) -> BranchNameOwned {
+        fn branch_get_default(&self) -> $crate::BranchNameOwned {
             Default::default()
         }
 
-        unsafe fn branch_swap(&mut self, _: BranchName, _: BranchName) -> Result<()> {
+        unsafe fn branch_swap(
+            &mut self,
+            _: $crate::BranchName,
+            _: $crate::BranchName,
+        ) -> ruc::Result<()> {
             Ok(())
         }
 
         #[inline(always)]
-        fn prune(&self, _: Option<usize>) -> Result<()> {
+        fn prune(&self, _: Option<usize>) -> ruc::Result<()> {
             Ok(())
         }
     };

@@ -7,8 +7,7 @@ mod test;
 
 use crate::{
     versioned::mapx_ord_rawkey::{MapxOrdRawKeyVs, MapxOrdRawKeyVsIter},
-    BranchName, BranchNameOwned, ParentBranchName, ValueEnDe, VersionName,
-    VersionNameOwned, VsMgmt,
+    BranchName, ValueEnDe, VersionName, VsMgmt,
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};

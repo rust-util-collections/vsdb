@@ -21,17 +21,27 @@ lintall: lint
 	cargo check --benches --no-default-features --features "derive,rocks_engine,msgpack_codec"
 	cargo check --examples --no-default-features --features "derive,rocks_engine,msgpack_codec"
 
-test:
+test: examples
 	- rm -rf ~/.vsdb /tmp/.vsdb
 	cargo test --tests --bins --features "derive" -- --test-threads=1
 	- rm -rf ~/.vsdb /tmp/.vsdb
 	cargo test --release --tests --bins --features "derive" -- --test-threads=1
 
-testall: test
+examples:
+	cargo run --example derive_vs
+	cargo run --example web_server
+	cargo run --example blockchain_state
+
+testall: examplesall test
 	- rm -rf ~/.vsdb /tmp/.vsdb
 	cargo test --tests --bins --no-default-features --features "derive,rocks_engine,msgpack_codec" -- --test-threads=1
 	- rm -rf ~/.vsdb /tmp/.vsdb
 	cargo test --release --tests --bins --no-default-features --features "derive,rocks_engine,msgpack_codec" -- --test-threads=1
+
+examplesall:
+	cargo run --no-default-features --features "derive,rocks_engine,msgpack_codec" --example derive_vs
+	cargo run --no-default-features --features "derive,rocks_engine,msgpack_codec" --example web_server
+	cargo run --no-default-features --features "derive,rocks_engine,msgpack_codec" --example blockchain_state
 
 bench:
 	- rm -rf ~/.vsdb
