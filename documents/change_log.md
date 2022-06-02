@@ -1,5 +1,11 @@
 # Change log
 
+## v0.35.1
+
+#### Internal optimizations
+
+- Use absolute importing path in the scope of macro definations
+
 ## v0.35.0
 
 #### Function changes

@@ -1,5 +1,5 @@
 use super::*;
-use crate::common::INITIAL_BRANCH_NAME;
+use crate::common::{ParentBranchName, INITIAL_BRANCH_NAME};
 
 #[test]
 fn test_master_branch_exists() {

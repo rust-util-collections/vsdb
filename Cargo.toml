@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "0.35.0"
+version = "0.35.1"
 authors = ["fanhui.x@gmail.com"]
 edition = "2021"
 description = "A stuctured DB with some 'Git-like' features, originally designed for blockchain scene."
@@ -73,3 +73,6 @@ name = "blockchain_state"
 
 [[example]]
 name = "web_server"
+
+[[example]]
+name = "derive_vs"

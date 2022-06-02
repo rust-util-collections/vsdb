@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    common::{BranchName, INITIAL_BRANCH_NAME},
+    common::{BranchName, ParentBranchName, INITIAL_BRANCH_NAME},
     ValueEnDe, VsMgmt,
 };
 
