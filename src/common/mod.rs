@@ -78,11 +78,15 @@ static VSDB_CUSTOM_DIR: Lazy<String> = Lazy::new(|| {
     d
 });
 
+#[cfg(any(
+    feature = "rocks_engine",
+    all(feature = "rocks_engine", feature = "sled_engine"),
+    all(not(feature = "rocks_engine"), not(feature = "sled_engine")),
+))]
+pub(crate) static VSDB: Lazy<VsDB<engines::RocksDB>> = Lazy::new(|| pnk!(VsDB::new()));
+
 #[cfg(all(feature = "sled_engine", not(feature = "rocks_engine")))]
 pub(crate) static VSDB: Lazy<VsDB<engines::Sled>> = Lazy::new(|| pnk!(VsDB::new()));
-
-#[cfg(all(feature = "rocks_engine", not(feature = "sled_engine")))]
-pub(crate) static VSDB: Lazy<VsDB<engines::RocksDB>> = Lazy::new(|| pnk!(VsDB::new()));
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
