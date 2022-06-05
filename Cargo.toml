@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "0.37.0"
+version = "0.37.1"
 authors = ["fanhui.x@gmail.com"]
 edition = "2021"
 description = "A stuctured DB with some 'Git-like' features, originally designed for blockchain scene."
@@ -59,14 +59,12 @@ name = "bench_main"
 harness = false
 
 [profile.dev]
-incremental = false
-overflow-checks = true
 
 [profile.release]
-incremental = false
-overflow-checks = false
 
 [profile.bench]
+lto = "thin"
+codegen-units = 1
 incremental = false
 overflow-checks = false
 
