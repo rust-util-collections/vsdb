@@ -13,7 +13,7 @@ fn basic_cases() {
     let cnt = 200;
     vsdb_set_base_dir("/tmp/.vsdb/versioned_multi_key_mapx_raw_test").unwrap();
     let hdr = {
-        let hdr_i = MapxRawMkVs::new(2);
+        let mut hdr_i = MapxRawMkVs::new(2);
         hdr_i.version_create(VersionName(b"test")).unwrap();
 
         (0..cnt).for_each(|i: usize| {
@@ -35,7 +35,7 @@ fn basic_cases() {
         <MapxRawMkVs as ValueEnDe>::encode(&hdr_i)
     };
 
-    let reloaded = pnk!(<MapxRawMkVs as ValueEnDe>::decode(&hdr));
+    let mut reloaded = pnk!(<MapxRawMkVs as ValueEnDe>::decode(&hdr));
 
     (0..cnt).map(|i: usize| i.to_be_bytes()).for_each(|i| {
         assert_eq!(
@@ -739,7 +739,12 @@ fn prune() {
 
 #[test]
 fn version_rebase() {
-    let hdr = MapxRawMkVs::new(2);
+    info_omit!(vsdb_set_base_dir(&format!(
+        "/tmp/vsdb_testing/{}",
+        rand::random::<u64>()
+    )));
+
+    let mut hdr = MapxRawMkVs::new(2);
 
     pnk!(hdr.version_create(VersionName(&[0])));
     pnk!(hdr.insert(&[&[0], &[0]], &[0]));

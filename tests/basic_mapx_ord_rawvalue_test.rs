@@ -7,7 +7,7 @@ fn basic_cases() {
     let cnt = 200;
     vsdb_set_base_dir("/tmp/.vsdb/basic_mapx_ord_rawvalue_test").unwrap();
     let hdr = {
-        let hdr_i = MapxOrdRawValue::new();
+        let mut hdr_i = MapxOrdRawValue::new();
 
         assert_eq!(0, hdr_i.len());
         (0usize..cnt).for_each(|i| {
@@ -32,7 +32,7 @@ fn basic_cases() {
         <MapxOrdRawValue<usize> as ValueEnDe>::encode(&hdr_i)
     };
 
-    let reloaded = pnk!(<MapxOrdRawValue<usize> as ValueEnDe>::decode(&hdr));
+    let mut reloaded = pnk!(<MapxOrdRawValue<usize> as ValueEnDe>::decode(&hdr));
 
     assert_eq!(cnt, reloaded.len());
 

@@ -13,7 +13,7 @@ fn basic_cases() {
     let cnt = 200;
     vsdb_set_base_dir("/tmp/.vsdb/versioned_mapx_raw_test").unwrap();
     let hdr = {
-        let hdr_i = MapxRawVs::new();
+        let mut hdr_i = MapxRawVs::new();
         assert!(!hdr_i.branch_has_versions(INITIAL_BRANCH_NAME));
         hdr_i.version_create(VersionName(b"test")).unwrap();
         assert!(hdr_i.branch_has_versions(INITIAL_BRANCH_NAME));
@@ -768,7 +768,12 @@ fn prune() {
 
 #[test]
 fn version_rebase() {
-    let hdr = MapxRawVs::new();
+    info_omit!(vsdb_set_base_dir(&format!(
+        "/tmp/vsdb_testing/{}",
+        rand::random::<u64>()
+    )));
+
+    let mut hdr = MapxRawVs::new();
 
     pnk!(hdr.version_create(VersionName(&[0])));
     pnk!(hdr.insert(&[0], &[0]));

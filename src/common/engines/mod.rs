@@ -175,7 +175,7 @@ impl Mapx {
     }
 
     #[inline(always)]
-    pub(crate) fn insert(&self, key: &[u8], value: &[u8]) -> Option<RawValue> {
+    pub(crate) fn insert(&mut self, key: &[u8], value: &[u8]) -> Option<RawValue> {
         let ret = VSDB.db.insert(self.area_idx, self.prefix, key, value);
         if ret.is_none() {
             VSDB.db.increase_instance_len(self.prefix);
@@ -184,7 +184,7 @@ impl Mapx {
     }
 
     #[inline(always)]
-    pub(crate) fn remove(&self, key: &[u8]) -> Option<RawValue> {
+    pub(crate) fn remove(&mut self, key: &[u8]) -> Option<RawValue> {
         let ret = VSDB.db.remove(self.area_idx, self.prefix, key);
         if ret.is_some() {
             VSDB.db.decrease_instance_len(self.prefix);
@@ -193,10 +193,11 @@ impl Mapx {
     }
 
     #[inline(always)]
-    pub(crate) fn clear(&self) {
+    pub(crate) fn clear(&mut self) {
         VSDB.db.iter(self.area_idx, self.prefix).for_each(|(k, _)| {
-            VSDB.db.remove(self.area_idx, self.prefix, &k).unwrap();
-            VSDB.db.decrease_instance_len(self.prefix);
+            if VSDB.db.remove(self.area_idx, self.prefix, &k).is_some() {
+                VSDB.db.decrease_instance_len(self.prefix);
+            }
         });
     }
 }

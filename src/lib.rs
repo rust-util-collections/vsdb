@@ -1,6 +1,6 @@
 //!
-//! ![GitHub top language](https://img.shields.io/github/languages/top/ccmlm/VSDB)
-//! ![GitHub Workflow Status](https://img.shields.io/github/workflow/status/ccmlm/VSDB/Rust)
+//! ![GitHub top language](https://img.shields.io/github/languages/top/rust-util-collections/VSDB)
+//! ![GitHub Workflow Status](https://img.shields.io/github/workflow/status/rust-util-collections/VSDB/Rust)
 //! ![Minimum rustc version](https://img.shields.io/badge/rustc-1.60+-lightgray.svg)
 //!
 //! VSDB is a 'Git' in the form of KV-database.
@@ -177,6 +177,7 @@
 //! The serialized result of a VSDB instance can not be used as the basis for distributed consensus, because the serialized result only contains some meta-information(storage paths, etc.), and these meta-information are likely to be different in different environments, the correct way is to read what you need from it, and then process the real content.
 
 #![deny(warnings)]
+#![cfg_attr(test, allow(warnings))]
 #![recursion_limit = "512"]
 
 pub mod basic;

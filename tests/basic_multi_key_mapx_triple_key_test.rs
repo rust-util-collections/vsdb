@@ -1,9 +1,14 @@
+use ruc::*;
 use vsdb::{basic_multi_key::mapx_triple_key::MapxTk, vsdb_set_base_dir};
 
 #[test]
 fn basic_cases() {
-    vsdb_set_base_dir("/tmp/.vsdb/basic_multi_key_mapx_triple_key_test").unwrap();
-    let map = MapxTk::new();
+    info_omit!(vsdb_set_base_dir(&format!(
+        "/tmp/vsdb_testing/{}",
+        rand::random::<u64>()
+    )));
+
+    let mut map = MapxTk::new();
 
     assert!(map.insert(&(&1u8, &1u8, &1u8), &9u8).is_none());
     assert!(map.insert(&(&1, &1, &2), &8).is_none());

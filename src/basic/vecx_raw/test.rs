@@ -1,11 +1,14 @@
-use crate::ValueEnDe;
-
 use super::*;
+use crate::ValueEnDe;
 use ruc::*;
+
+fn gen_sample(idx: usize) -> Box<[u8]> {
+    idx.to_be_bytes().to_vec().into_boxed_slice()
+}
 
 #[test]
 fn test_insert() {
-    let hdr = VecxRaw::new();
+    let mut hdr = VecxRaw::new();
     let max = 500;
     (0..max)
         .map(|i: usize| (i, <usize as ValueEnDe>::encode(&(max + i))))
@@ -23,7 +26,7 @@ fn test_insert() {
 }
 #[test]
 fn test_len() {
-    let hdr = VecxRaw::new();
+    let mut hdr = VecxRaw::new();
     let max = 500;
     (0..max)
         .map(|i: usize| (i, (max + i).to_be_bytes()))
@@ -39,7 +42,7 @@ fn test_len() {
 fn test_valueende() {
     let cnt = 500;
     let dehdr = {
-        let hdr = VecxRaw::new();
+        let mut hdr = VecxRaw::new();
         (0..cnt)
             .map(|i: usize| (i, <usize as ValueEnDe>::encode(&i)))
             .for_each(|(key, value)| {
@@ -47,7 +50,7 @@ fn test_valueende() {
             });
         <VecxRaw as ValueEnDe>::encode(&hdr)
     };
-    let reloaded = pnk!(<VecxRaw as ValueEnDe>::decode(&dehdr));
+    let mut reloaded = pnk!(<VecxRaw as ValueEnDe>::decode(&dehdr));
     assert_eq!(cnt, reloaded.len());
     (0..cnt).map(|i: usize| i).for_each(|i| {
         let val = pnk!(<usize as ValueEnDe>::decode(&pnk!(reloaded.get(i))));
@@ -57,7 +60,7 @@ fn test_valueende() {
 
 #[test]
 fn test_remove() {
-    let hdr = VecxRaw::new();
+    let mut hdr = VecxRaw::new();
     let max = 500;
     (0..max)
         .map(|i: usize| (i, <usize as ValueEnDe>::encode(&(max + i))))
@@ -75,7 +78,7 @@ fn test_remove() {
 
 #[test]
 fn test_iter_next() {
-    let hdr = VecxRaw::new();
+    let mut hdr = VecxRaw::new();
     let max = 500;
     (0..max)
         .map(|i: usize| (i, <usize as ValueEnDe>::encode(&i)))
@@ -93,7 +96,7 @@ fn test_iter_next() {
 
 #[test]
 fn test_push_pop() {
-    let hdr = VecxRaw::new();
+    let mut hdr = VecxRaw::new();
     let max = 500;
     (0..max)
         .map(|i: usize| <usize as ValueEnDe>::encode(&i))
@@ -108,7 +111,7 @@ fn test_push_pop() {
 
 #[test]
 fn test_swap_remove() {
-    let hdr = VecxRaw::new();
+    let mut hdr = VecxRaw::new();
     let max = 500;
     (0..max)
         .map(|i: usize| <usize as ValueEnDe>::encode(&i))
@@ -127,7 +130,7 @@ fn test_swap_remove() {
 
 #[test]
 fn test_last() {
-    let hdr = VecxRaw::new();
+    let mut hdr = VecxRaw::new();
     let max = 500;
     (0..max)
         .map(|i: usize| (i, <usize as ValueEnDe>::encode(&i)))
@@ -137,4 +140,67 @@ fn test_last() {
     let value = pnk!(hdr.last());
     let val = pnk!(<usize as ValueEnDe>::decode(&value));
     assert_eq!(max - 1, val);
+}
+
+#[test]
+#[should_panic]
+fn write_out_of_index_0() {
+    let mut hdr = VecxRaw::new();
+    hdr.insert_ref(100, &gen_sample(0));
+}
+
+#[test]
+#[should_panic]
+fn write_out_of_index_1() {
+    let mut hdr = VecxRaw::new();
+    hdr.insert(0, gen_sample(0));
+    hdr.insert_ref(100, &gen_sample(0));
+}
+
+#[test]
+#[should_panic]
+fn write_out_of_index_2() {
+    let mut hdr = VecxRaw::new();
+    hdr.update_ref(100, &gen_sample(0));
+    hdr.insert(0, gen_sample(0));
+}
+
+#[test]
+#[should_panic]
+fn write_out_of_index_3() {
+    let mut hdr = VecxRaw::new();
+    hdr.insert(0, gen_sample(0));
+    hdr.update_ref(100, &gen_sample(0));
+}
+
+#[test]
+#[should_panic]
+fn write_out_of_index_4() {
+    let mut hdr = VecxRaw::new();
+    hdr.remove(100);
+    hdr.insert(0, gen_sample(0));
+}
+
+#[test]
+#[should_panic]
+fn write_out_of_index_5() {
+    let mut hdr = VecxRaw::new();
+    hdr.insert(0, gen_sample(0));
+    hdr.remove(100);
+}
+
+#[test]
+#[should_panic]
+fn write_out_of_index_6() {
+    let mut hdr = VecxRaw::new();
+    hdr.swap_remove(100);
+    hdr.insert(0, gen_sample(0));
+}
+
+#[test]
+#[should_panic]
+fn write_out_of_index_7() {
+    let mut hdr = VecxRaw::new();
+    hdr.insert(0, gen_sample(0));
+    hdr.swap_remove(100);
 }

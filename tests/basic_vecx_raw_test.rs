@@ -10,7 +10,7 @@ fn basic_cases() {
     let cnt = 200;
     vsdb_set_base_dir("/tmp/.vsdb/basic_vecx_raw_test").unwrap();
     let hdr = {
-        let hdr = VecxRaw::new();
+        let mut hdr = VecxRaw::new();
 
         assert_eq!(0, hdr.len());
         (0..cnt).for_each(|i| {
@@ -29,7 +29,7 @@ fn basic_cases() {
         <VecxRaw as ValueEnDe>::encode(&hdr)
     };
 
-    let reloaded = pnk!(<VecxRaw as ValueEnDe>::decode(&hdr));
+    let mut reloaded = pnk!(<VecxRaw as ValueEnDe>::decode(&hdr));
 
     (0..cnt).for_each(|i| {
         assert_eq!(gen_sample(i), reloaded.get(i).unwrap());
@@ -51,7 +51,12 @@ fn basic_cases() {
 
 #[test]
 fn write() {
-    let hdr = VecxRaw::new();
+    info_omit!(vsdb_set_base_dir(&format!(
+        "/tmp/vsdb_testing/{}",
+        rand::random::<u64>()
+    )));
+
+    let mut hdr = VecxRaw::new();
 
     hdr.insert(0, gen_sample(0));
     assert_eq!(1, hdr.len());
@@ -72,67 +77,4 @@ fn write() {
     assert_eq!(gen_sample(2), hdr.remove(0));
     assert_eq!(2, hdr.len());
     assert_eq!(gen_sample(3), hdr.get(1).unwrap());
-}
-
-#[test]
-#[should_panic]
-fn write_out_of_index_0() {
-    let hdr = VecxRaw::new();
-    hdr.insert_ref(100, &gen_sample(0));
-}
-
-#[test]
-#[should_panic]
-fn write_out_of_index_1() {
-    let hdr = VecxRaw::new();
-    hdr.insert(0, gen_sample(0));
-    hdr.insert_ref(100, &gen_sample(0));
-}
-
-#[test]
-#[should_panic]
-fn write_out_of_index_2() {
-    let hdr = VecxRaw::new();
-    hdr.update_ref(100, &gen_sample(0));
-    hdr.insert(0, gen_sample(0));
-}
-
-#[test]
-#[should_panic]
-fn write_out_of_index_3() {
-    let hdr = VecxRaw::new();
-    hdr.insert(0, gen_sample(0));
-    hdr.update_ref(100, &gen_sample(0));
-}
-
-#[test]
-#[should_panic]
-fn write_out_of_index_4() {
-    let hdr = VecxRaw::new();
-    hdr.remove(100);
-    hdr.insert(0, gen_sample(0));
-}
-
-#[test]
-#[should_panic]
-fn write_out_of_index_5() {
-    let hdr = VecxRaw::new();
-    hdr.insert(0, gen_sample(0));
-    hdr.remove(100);
-}
-
-#[test]
-#[should_panic]
-fn write_out_of_index_6() {
-    let hdr = VecxRaw::new();
-    hdr.swap_remove(100);
-    hdr.insert(0, gen_sample(0));
-}
-
-#[test]
-#[should_panic]
-fn write_out_of_index_7() {
-    let hdr = VecxRaw::new();
-    hdr.insert(0, gen_sample(0));
-    hdr.swap_remove(100);
 }

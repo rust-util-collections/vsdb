@@ -1,5 +1,17 @@
 # Change log
 
+## v0.41.0
+
+#### API changes
+
+- `write` functions now have `&mut self` definations
+
+## v0.37.2
+
+#### Metainfo changes
+
+- Migrate the repo address to 'github.com/rust-util-collections'
+
 ## v0.36.0
 
 #### Internal optimizations

@@ -33,8 +33,8 @@ test: example
 	- rm -rf ~/.vsdb /tmp/.vsdb
 	cargo test --release --tests --bins --features "derive,compress" -- --test-threads=1
 
-exampleall:
-	- rm -rf ~/.vsdb /tmp/.vsdb
+exampleall: example
+	- rm -rf ~/.vsdb /tmp/vsdb_testing
 	cargo run --no-default-features --features "derive,rocks_engine,msgpack_codec" --example derive_vs
 	cargo run --no-default-features --features "derive,rocks_engine,msgpack_codec" --example web_server
 	cargo run --no-default-features --features "derive,rocks_engine,msgpack_codec" --example blockchain_state

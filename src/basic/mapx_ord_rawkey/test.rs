@@ -3,7 +3,7 @@ use ruc::*;
 
 #[test]
 fn test_insert() {
-    let hdr = MapxOrdRawKey::new();
+    let mut hdr = MapxOrdRawKey::new();
     let max = 500;
     (0..max)
         .map(|i: usize| (i.to_be_bytes(), (max + i).to_be_bytes()))
@@ -26,7 +26,7 @@ fn test_insert() {
 }
 #[test]
 fn test_len() {
-    let hdr = MapxOrdRawKey::new();
+    let mut hdr = MapxOrdRawKey::new();
     let max = 500;
     (0..max)
         .map(|i: usize| (i.to_be_bytes(), (max + i).to_be_bytes()))
@@ -45,7 +45,7 @@ fn test_len() {
 fn test_valueende() {
     let cnt = 500;
     let dehdr = {
-        let hdr = MapxOrdRawKey::new();
+        let mut hdr = MapxOrdRawKey::new();
         (0..cnt)
             .map(|i: usize| (i.to_be_bytes(), i))
             .for_each(|(key, value)| {
@@ -53,7 +53,7 @@ fn test_valueende() {
             });
         <MapxOrdRawKey<usize> as ValueEnDe>::encode(&hdr)
     };
-    let reloaded = pnk!(<MapxOrdRawKey<usize> as ValueEnDe>::decode(&dehdr));
+    let mut reloaded = pnk!(<MapxOrdRawKey<usize> as ValueEnDe>::decode(&dehdr));
     assert_eq!(cnt, reloaded.len());
     (0..cnt).map(|i: usize| i).for_each(|i| {
         assert_eq!(i, reloaded.get(&i.to_be_bytes()).unwrap());
@@ -62,7 +62,7 @@ fn test_valueende() {
 
 #[test]
 fn test_iter() {
-    let hdr = MapxOrdRawKey::new();
+    let mut hdr = MapxOrdRawKey::new();
     let max = 500;
     (0..max)
         .map(|i: usize| (i.to_be_bytes(), i))
@@ -77,7 +77,7 @@ fn test_iter() {
 
 #[test]
 fn test_first_last() {
-    let hdr = MapxOrdRawKey::new();
+    let mut hdr = MapxOrdRawKey::new();
     let max = 500;
     (0..max)
         .map(|i: usize| (i.to_be_bytes(), i))
@@ -93,7 +93,7 @@ fn test_first_last() {
 
 #[test]
 fn test_values() {
-    let hdr = MapxOrdRawKey::new();
+    let mut hdr = MapxOrdRawKey::new();
     let max = 500;
     (0..max)
         .map(|i: usize| (i.to_be_bytes(), i))
@@ -109,7 +109,7 @@ fn test_values() {
 
 #[test]
 fn test_values_first_last() {
-    let hdr = MapxOrdRawKey::new();
+    let mut hdr = MapxOrdRawKey::new();
     let max = 500;
     (0..max)
         .map(|i: usize| (i.to_be_bytes(), i))

@@ -3,7 +3,7 @@ use ruc::*;
 
 #[test]
 fn test_insert() {
-    let hdr = Vecx::new();
+    let mut hdr = Vecx::new();
     let max = 500;
     (0..max)
         .map(|i: usize| (i, (max + i)))
@@ -20,7 +20,7 @@ fn test_insert() {
 }
 #[test]
 fn test_len() {
-    let hdr = Vecx::new();
+    let mut hdr = Vecx::new();
     let max = 500;
     (0..max)
         .map(|i: usize| (i, (max + i)))
@@ -36,13 +36,13 @@ fn test_len() {
 fn test_valueende() {
     let cnt = 500;
     let dehdr = {
-        let hdr = Vecx::new();
+        let mut hdr = Vecx::new();
         (0..cnt).map(|i: usize| (i, i)).for_each(|(key, value)| {
             hdr.insert(key, value);
         });
         <Vecx<usize> as ValueEnDe>::encode(&hdr)
     };
-    let reloaded = pnk!(<Vecx<usize> as ValueEnDe>::decode(&dehdr));
+    let mut reloaded = pnk!(<Vecx<usize> as ValueEnDe>::decode(&dehdr));
     assert_eq!(cnt, reloaded.len());
     (0..cnt).map(|i: usize| i).for_each(|i| {
         assert_eq!(i, reloaded.get(i).unwrap());
@@ -51,7 +51,7 @@ fn test_valueende() {
 
 #[test]
 fn test_remove() {
-    let hdr = Vecx::new();
+    let mut hdr = Vecx::new();
     let max = 500;
     (0..max)
         .map(|i: usize| (i, (max + i)))
@@ -68,7 +68,7 @@ fn test_remove() {
 
 #[test]
 fn test_iter_next() {
-    let hdr = Vecx::new();
+    let mut hdr = Vecx::new();
     let max = 500;
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
         hdr.insert(key, value);
@@ -82,7 +82,7 @@ fn test_iter_next() {
 
 #[test]
 fn test_push_pop() {
-    let hdr = Vecx::new();
+    let mut hdr = Vecx::new();
     let max = 500;
     (0..max).map(|i: usize| i).for_each(|value| {
         hdr.push(value);
@@ -94,7 +94,7 @@ fn test_push_pop() {
 
 #[test]
 fn test_swap_remove() {
-    let hdr = Vecx::new();
+    let mut hdr = Vecx::new();
     let max = 500;
     (0..max).map(|i: usize| i).for_each(|value| {
         hdr.push(value);
@@ -109,11 +109,74 @@ fn test_swap_remove() {
 
 #[test]
 fn test_last() {
-    let hdr = Vecx::new();
+    let mut hdr = Vecx::new();
     let max = 500;
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
         hdr.insert(key, value);
     });
     let value = pnk!(hdr.last());
     assert_eq!(max - 1, value);
+}
+
+#[test]
+#[should_panic]
+fn write_out_of_index_0() {
+    let mut hdr = Vecx::new();
+    hdr.insert_ref(100, &0);
+}
+
+#[test]
+#[should_panic]
+fn write_out_of_index_1() {
+    let mut hdr = Vecx::new();
+    hdr.insert(0, 0);
+    hdr.insert_ref(100, &0);
+}
+
+#[test]
+#[should_panic]
+fn write_out_of_index_2() {
+    let mut hdr = Vecx::new();
+    hdr.update_ref(100, &0);
+    hdr.insert(0, 0);
+}
+
+#[test]
+#[should_panic]
+fn write_out_of_index_3() {
+    let mut hdr = Vecx::new();
+    hdr.insert(0, 0);
+    hdr.update_ref(100, &0);
+}
+
+#[test]
+#[should_panic]
+fn write_out_of_index_4() {
+    let mut hdr = Vecx::new();
+    hdr.remove(100);
+    hdr.insert(0, 0);
+}
+
+#[test]
+#[should_panic]
+fn write_out_of_index_5() {
+    let mut hdr = Vecx::new();
+    hdr.insert(0, 0);
+    hdr.remove(100);
+}
+
+#[test]
+#[should_panic]
+fn write_out_of_index_6() {
+    let mut hdr = Vecx::new();
+    hdr.swap_remove(100);
+    hdr.insert(0, 0);
+}
+
+#[test]
+#[should_panic]
+fn write_out_of_index_7() {
+    let mut hdr = Vecx::new();
+    hdr.insert(0, 0);
+    hdr.swap_remove(100);
 }
