@@ -27,12 +27,14 @@ pub(crate) type RawBytes = Box<[u8]>;
 pub(crate) type RawKey = RawBytes;
 pub(crate) type RawValue = RawBytes;
 
-pub(crate) type Pre = u64;
-pub(crate) type PreBytes = [u8; PREFIX_SIZ];
-pub(crate) const PREFIX_SIZ: usize = size_of::<Pre>();
+pub(crate) type MetaType = u64;
+pub(crate) const META_KEY_SIZ: usize = size_of::<MetaType>();
 
-pub(crate) type BranchID = u64;
-pub(crate) type VersionID = u64;
+pub(crate) type Pre = MetaType;
+pub(crate) type PreBytes = [u8; META_KEY_SIZ];
+
+pub(crate) type BranchID = MetaType;
+pub(crate) type VersionID = MetaType;
 
 /// Avoid making mistakes between branch name and version name.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

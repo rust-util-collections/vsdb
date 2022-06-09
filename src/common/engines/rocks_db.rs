@@ -1,6 +1,6 @@
 use crate::common::{
     vsdb_get_base_dir, vsdb_set_base_dir, BranchID, Engine, Pre, PreBytes, RawBytes,
-    RawKey, RawValue, VersionID, INITIAL_BRANCH_ID, MB, PREFIX_SIZ, RESERVED_ID_CNT,
+    RawKey, RawValue, VersionID, INITIAL_BRANCH_ID, MB, META_KEY_SIZ, RESERVED_ID_CNT,
 };
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -332,23 +332,17 @@ pub struct RocksIter {
 impl Iterator for RocksIter {
     type Item = (RawKey, RawValue);
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|(ik, iv)| {
-            (
-                ik[PREFIX_SIZ..].to_vec().into_boxed_slice(),
-                iv.to_vec().into_boxed_slice(),
-            )
-        })
+        self.inner
+            .next()
+            .map(|(ik, iv)| (ik[META_KEY_SIZ..].into(), iv.into()))
     }
 }
 
 impl DoubleEndedIterator for RocksIter {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.inner_rev.next().map(|(ik, iv)| {
-            (
-                ik[PREFIX_SIZ..].to_vec().into_boxed_slice(),
-                iv.to_vec().into_boxed_slice(),
-            )
-        })
+        self.inner_rev
+            .next()
+            .map(|(ik, iv)| (ik[META_KEY_SIZ..].into(), iv.into()))
     }
 }
 
@@ -367,7 +361,7 @@ impl PreAllocator {
         )
     }
 
-    // fn next(base: &[u8]) -> [u8; PREFIX_SIZ] {
+    // fn next(base: &[u8]) -> [u8; META_KEY_SIZ] {
     //     (crate::parse_prefix!(base) + 1).to_be_bytes()
     // }
 }

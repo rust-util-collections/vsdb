@@ -1,25 +1,32 @@
 use crate::common::{
     vsdb_get_base_dir, vsdb_set_base_dir, BranchID, Engine, Pre, PreBytes, RawKey,
-    RawValue, VersionID, GB, INITIAL_BRANCH_ID, PREFIX_SIZ, RESERVED_ID_CNT,
+    RawValue, VersionID, GB, INITIAL_BRANCH_ID, META_KEY_SIZ, RESERVED_ID_CNT,
 };
+use lru::LruCache;
 use once_cell::sync::Lazy;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use ruc::*;
 use sled::{Config, Db, IVec, Iter, Mode, Tree};
-use std::ops::{Bound, RangeBounds};
+use std::{
+    ops::{Bound, RangeBounds},
+    sync::Arc,
+};
 
 // the 'prefix search' in sled is just a global scaning,
 // use a relative larger number to sharding the `Tree` pressure.
 const DATA_SET_NUM: usize = 796;
 
-const META_KEY_BRANCH_ID: [u8; 1] = [u8::MAX - 1];
-const META_KEY_VERSION_ID: [u8; 1] = [u8::MAX - 2];
-const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
+const META_KEY_BRANCH_ID: [u8; META_KEY_SIZ] = (u64::MAX - 1).to_be_bytes();
+const META_KEY_VERSION_ID: [u8; META_KEY_SIZ] = (u64::MAX - 2).to_be_bytes();
+const META_KEY_PREFIX_ALLOCATOR: [u8; META_KEY_SIZ] = u64::MIN.to_be_bytes();
 
 pub(crate) struct SledEngine {
     meta: Db,
     areas: Vec<Tree>,
     prefix_allocator: PreAllocator,
+
+    data_cache: Arc<RwLock<LruCache<RawKey, Option<RawValue>>>>,
+    meta_cache: Arc<RwLock<LruCache<[u8; META_KEY_SIZ], u64>>>,
 }
 
 impl Engine for SledEngine {
@@ -53,6 +60,8 @@ impl Engine for SledEngine {
             meta,
             areas,
             prefix_allocator,
+            meta_cache: Arc::new(RwLock::new(LruCache::new(100_0000))),
+            data_cache: Arc::new(RwLock::new(LruCache::new(1_0000_0000))),
         })
     }
 
@@ -63,16 +72,25 @@ impl Engine for SledEngine {
         static LK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
         let x = LK.lock();
 
+        let mut meta_cache = self.meta_cache.write();
+
         // step 1
-        let ret = crate::parse_prefix!(
-            self.meta
-                .get(self.prefix_allocator.key)
-                .unwrap()
-                .unwrap()
-                .as_ref()
-        );
+        let ret = if let Some(v) = meta_cache.get(&self.prefix_allocator.key) {
+            *v
+        } else {
+            crate::parse_prefix!(
+                self.meta
+                    .get(self.prefix_allocator.key)
+                    .unwrap()
+                    .unwrap()
+                    .as_ref()
+            )
+        };
 
         // step 2
+        meta_cache.put(self.prefix_allocator.key, 1 + ret);
+        drop(meta_cache);
+
         self.meta
             .insert(self.prefix_allocator.key, (1 + ret).to_be_bytes())
             .unwrap();
@@ -87,13 +105,22 @@ impl Engine for SledEngine {
         static LK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
         let x = LK.lock();
 
+        let mut meta_cache = self.meta_cache.write();
+
         // step 1
-        let ret = crate::parse_int!(
-            self.meta.get(META_KEY_BRANCH_ID).unwrap().unwrap().as_ref(),
-            BranchID
-        );
+        let ret = if let Some(v) = meta_cache.get(&META_KEY_BRANCH_ID) {
+            *v
+        } else {
+            crate::parse_int!(
+                self.meta.get(META_KEY_BRANCH_ID).unwrap().unwrap().as_ref(),
+                BranchID
+            )
+        };
 
         // step 2
+        meta_cache.put(META_KEY_BRANCH_ID, 1 + ret);
+        drop(meta_cache);
+
         self.meta
             .insert(META_KEY_BRANCH_ID, (1 + ret).to_be_bytes())
             .unwrap();
@@ -108,17 +135,26 @@ impl Engine for SledEngine {
         static LK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
         let x = LK.lock();
 
+        let mut meta_cache = self.meta_cache.write();
+
         // step 1
-        let ret = crate::parse_int!(
-            self.meta
-                .get(META_KEY_VERSION_ID)
-                .unwrap()
-                .unwrap()
-                .as_ref(),
-            VersionID
-        );
+        let ret = if let Some(v) = meta_cache.get(&META_KEY_VERSION_ID) {
+            *v
+        } else {
+            crate::parse_int!(
+                self.meta
+                    .get(META_KEY_VERSION_ID)
+                    .unwrap()
+                    .unwrap()
+                    .as_ref(),
+                VersionID
+            )
+        };
 
         // step 2
+        meta_cache.put(META_KEY_VERSION_ID, 1 + ret);
+        drop(meta_cache);
+
         self.meta
             .insert(META_KEY_VERSION_ID, (1 + ret).to_be_bytes())
             .unwrap();
@@ -189,10 +225,16 @@ impl Engine for SledEngine {
     ) -> Option<RawValue> {
         let mut k = meta_prefix.to_vec();
         k.extend_from_slice(key);
-        self.areas[area_idx]
-            .get(k)
-            .unwrap()
-            .map(|iv| iv.to_vec().into_boxed_slice())
+        let k = k.into_boxed_slice();
+
+        if let Some(v) = self.data_cache.read().peek(&k) {
+            v.clone()
+        } else {
+            self.areas[area_idx]
+                .get(k)
+                .unwrap()
+                .map(|iv| iv.to_vec().into_boxed_slice())
+        }
     }
 
     fn insert(
@@ -204,6 +246,12 @@ impl Engine for SledEngine {
     ) -> Option<RawValue> {
         let mut k = meta_prefix.to_vec();
         k.extend_from_slice(key);
+        let k = k.into_boxed_slice();
+
+        self.data_cache
+            .write()
+            .put(k.clone(), Some(value.to_vec().into()));
+
         self.areas[area_idx]
             .insert(k, value)
             .unwrap()
@@ -218,6 +266,10 @@ impl Engine for SledEngine {
     ) -> Option<RawValue> {
         let mut k = meta_prefix.to_vec();
         k.extend_from_slice(key);
+        let k = k.into_boxed_slice();
+
+        self.data_cache.write().put(k.clone(), None);
+
         self.areas[area_idx]
             .remove(k)
             .unwrap()
@@ -225,10 +277,15 @@ impl Engine for SledEngine {
     }
 
     fn get_instance_len(&self, instance_prefix: PreBytes) -> u64 {
-        crate::parse_int!(self.meta.get(instance_prefix).unwrap().unwrap(), u64)
+        if let Some(v) = self.meta_cache.read().peek(&instance_prefix) {
+            *v
+        } else {
+            crate::parse_int!(self.meta.get(instance_prefix).unwrap().unwrap(), u64)
+        }
     }
 
     fn set_instance_len(&self, instance_prefix: PreBytes, new_len: u64) {
+        self.meta_cache.write().put(instance_prefix, new_len);
         self.meta
             .insert(instance_prefix, new_len.to_be_bytes())
             .unwrap();
@@ -246,7 +303,7 @@ impl Iterator for SledIter {
         while let Some((k, v)) = self.inner.next().map(|i| i.unwrap()) {
             if self.bounds.contains(&k) {
                 return Some((
-                    k[PREFIX_SIZ..].to_vec().into_boxed_slice(),
+                    k[META_KEY_SIZ..].to_vec().into_boxed_slice(),
                     v.to_vec().into_boxed_slice(),
                 ));
             }
@@ -260,7 +317,7 @@ impl DoubleEndedIterator for SledIter {
         while let Some((k, v)) = self.inner.next_back().map(|i| i.unwrap()) {
             if self.bounds.contains(&k) {
                 return Some((
-                    k[PREFIX_SIZ..].to_vec().into_boxed_slice(),
+                    k[META_KEY_SIZ..].to_vec().into_boxed_slice(),
                     v.to_vec().into_boxed_slice(),
                 ));
             }
@@ -271,7 +328,7 @@ impl DoubleEndedIterator for SledIter {
 
 // key of the prefix allocator in the 'meta'
 struct PreAllocator {
-    key: [u8; 1],
+    key: [u8; META_KEY_SIZ],
 }
 
 impl PreAllocator {
