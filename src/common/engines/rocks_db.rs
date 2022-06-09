@@ -334,7 +334,7 @@ impl Iterator for RocksIter {
     fn next(&mut self) -> Option<Self::Item> {
         self.inner
             .next()
-            .map(|(ik, iv)| (ik[META_KEY_SIZ..].into(), iv.into()))
+            .map(|(ik, iv)| (ik[META_KEY_SIZ..].into(), iv))
     }
 }
 
@@ -342,7 +342,7 @@ impl DoubleEndedIterator for RocksIter {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.inner_rev
             .next()
-            .map(|(ik, iv)| (ik[META_KEY_SIZ..].into(), iv.into()))
+            .map(|(ik, iv)| (ik[META_KEY_SIZ..].into(), iv))
     }
 }
 

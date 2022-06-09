@@ -1,5 +1,11 @@
 # Change log
 
+## v0.41.1
+
+#### Internal optimizations
+
+- Enable lru cache when using sled as backend engine
+
 ## v0.41.0
 
 #### API changes
