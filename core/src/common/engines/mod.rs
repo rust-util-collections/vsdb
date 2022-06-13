@@ -1,0 +1,452 @@
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+
+#[cfg(any(
+    feature = "rocks_engine",
+    all(feature = "rocks_engine", feature = "sled_engine"),
+    all(not(feature = "rocks_engine"), not(feature = "sled_engine")),
+))]
+mod rocks_db;
+
+#[cfg(all(feature = "sled_engine", not(feature = "rocks_engine")))]
+mod sled_db;
+
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+
+#[cfg(any(
+    feature = "rocks_engine",
+    all(feature = "rocks_engine", feature = "sled_engine"),
+    all(not(feature = "rocks_engine"), not(feature = "sled_engine")),
+))]
+pub(crate) use rocks_db::RocksEngine as RocksDB;
+
+#[cfg(all(feature = "sled_engine", not(feature = "rocks_engine")))]
+pub(crate) use sled_db::SledEngine as Sled;
+
+#[cfg(any(
+    feature = "rocks_engine",
+    all(feature = "rocks_engine", feature = "sled_engine"),
+    all(not(feature = "rocks_engine"), not(feature = "sled_engine")),
+))]
+type EngineIter = rocks_db::RocksIter;
+
+#[cfg(all(feature = "sled_engine", not(feature = "rocks_engine")))]
+type EngineIter = sled_db::SledIter;
+
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+
+use crate::common::{
+    BranchIDBase as BranchID, Pre, PreBytes, RawKey, RawValue,
+    VersionIDBase as VersionID, VSDB,
+};
+use once_cell::sync::Lazy;
+use parking_lot::Mutex;
+use ruc::*;
+use serde::{de, Deserialize, Serialize};
+use std::{
+    borrow::Cow,
+    fmt,
+    mem::transmute,
+    ops::{Deref, DerefMut, RangeBounds},
+    result::Result as StdResult,
+};
+
+static LEN_LK: Lazy<Vec<Mutex<()>>> =
+    Lazy::new(|| (0..VSDB.db.area_count()).map(|_| Mutex::new(())).collect());
+
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+
+/// Low-level database interface.
+pub trait Engine: Sized {
+    fn new() -> Result<Self>;
+    fn alloc_prefix(&self) -> Pre;
+    fn alloc_branch_id(&self) -> BranchID;
+    fn alloc_version_id(&self) -> VersionID;
+    fn area_count(&self) -> usize;
+
+    // NOTE:
+    // do NOT make the number of areas bigger than `u8::MAX`
+    fn area_idx(&self, meta_prefix: PreBytes) -> usize {
+        meta_prefix[0] as usize % self.area_count()
+    }
+
+    fn flush(&self);
+
+    fn iter(&self, meta_prefix: PreBytes) -> EngineIter;
+
+    fn range<'a, R: RangeBounds<Cow<'a, [u8]>>>(
+        &'a self,
+        meta_prefix: PreBytes,
+        bounds: R,
+    ) -> EngineIter;
+
+    fn get(&self, meta_prefix: PreBytes, key: &[u8]) -> Option<RawValue>;
+
+    fn insert(
+        &self,
+        meta_prefix: PreBytes,
+        key: &[u8],
+        value: &[u8],
+    ) -> Option<RawValue>;
+
+    fn remove(&self, meta_prefix: PreBytes, key: &[u8]) -> Option<RawValue>;
+
+    fn get_instance_len(&self, instance_prefix: PreBytes) -> u64;
+
+    fn set_instance_len(&self, instance_prefix: PreBytes, new_len: u64);
+
+    #[allow(unused_variables)]
+    fn increase_instance_len(&self, instance_prefix: PreBytes) {
+        let x = LEN_LK[self.area_idx(instance_prefix)].lock();
+
+        let l = self.get_instance_len(instance_prefix);
+        self.set_instance_len(instance_prefix, l + 1)
+    }
+
+    #[allow(unused_variables)]
+    fn decrease_instance_len(&self, instance_prefix: PreBytes) {
+        let x = LEN_LK[self.area_idx(instance_prefix)].lock();
+
+        let l = self.get_instance_len(instance_prefix);
+        self.set_instance_len(instance_prefix, l - 1)
+    }
+}
+
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+
+#[derive(Debug)]
+pub(crate) struct Mapx {
+    // the unique ID of each instance
+    prefix: PreBytes,
+}
+
+impl Mapx {
+    // # Safety
+    //
+    // This API breaks the semantic safety guarantees,
+    // but it is safe to use in a race-free environment.
+    pub(crate) unsafe fn shadow(&self) -> Self {
+        Self {
+            prefix: self.prefix,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn new() -> Self {
+        let prefix = VSDB.db.alloc_prefix();
+
+        let prefix_bytes = prefix.to_be_bytes();
+
+        assert!(VSDB.db.iter(prefix_bytes).next().is_none());
+
+        VSDB.db.set_instance_len(prefix_bytes, 0);
+
+        Mapx {
+            prefix: prefix_bytes,
+        }
+    }
+
+    fn get_instance_cfg(&self) -> InstanceCfg {
+        InstanceCfg::from(self)
+    }
+
+    #[inline(always)]
+    pub(crate) fn get(&self, key: &[u8]) -> Option<RawValue> {
+        VSDB.db.get(self.prefix, key)
+    }
+
+    #[inline(always)]
+    pub(crate) fn get_mut(&mut self, key: &[u8]) -> Option<ValueMut> {
+        let v = VSDB.db.get(self.prefix, key)?;
+
+        Some(ValueMut {
+            key: key.to_vec().into(),
+            value: v,
+            hdr: self,
+        })
+    }
+
+    #[inline(always)]
+    pub(crate) fn len(&self) -> usize {
+        VSDB.db.get_instance_len(self.prefix) as usize
+    }
+
+    #[inline(always)]
+    pub(crate) fn is_empty(&self) -> bool {
+        0 == self.len()
+    }
+
+    #[inline(always)]
+    pub(crate) fn iter(&self) -> MapxIter {
+        MapxIter {
+            db_iter: VSDB.db.iter(self.prefix),
+            _hdr: self,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn iter_mut(&mut self) -> MapxIterMut {
+        MapxIterMut {
+            db_iter: VSDB.db.iter(self.prefix),
+            hdr: self,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn range<'a, R: RangeBounds<Cow<'a, [u8]>>>(
+        &'a self,
+        bounds: R,
+    ) -> MapxIter<'a> {
+        MapxIter {
+            db_iter: VSDB.db.range(self.prefix, bounds),
+            _hdr: self,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn range_mut<'a, R: RangeBounds<Cow<'a, [u8]>>>(
+        &'a mut self,
+        bounds: R,
+    ) -> MapxIterMut<'a> {
+        MapxIterMut {
+            db_iter: VSDB.db.range(self.prefix, bounds),
+            hdr: self,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn insert(&mut self, key: &[u8], value: &[u8]) -> Option<RawValue> {
+        let ret = VSDB.db.insert(self.prefix, key, value);
+        if ret.is_none() {
+            VSDB.db.increase_instance_len(self.prefix);
+        }
+        ret
+    }
+
+    #[inline(always)]
+    pub(crate) fn remove(&mut self, key: &[u8]) -> Option<RawValue> {
+        let ret = VSDB.db.remove(self.prefix, key);
+        if ret.is_some() {
+            VSDB.db.decrease_instance_len(self.prefix);
+        }
+        ret
+    }
+
+    #[inline(always)]
+    pub(crate) fn clear(&mut self) {
+        VSDB.db.iter(self.prefix).for_each(|(k, _)| {
+            VSDB.db.remove(self.prefix, &k);
+        });
+        VSDB.db.set_instance_len(self.prefix, 0);
+    }
+}
+
+impl Clone for Mapx {
+    fn clone(&self) -> Self {
+        let mut new_instance = Self::new();
+        for (k, v) in self.iter() {
+            new_instance.insert(&k, &v);
+        }
+        new_instance
+    }
+}
+
+impl PartialEq for Mapx {
+    fn eq(&self, other: &Mapx) -> bool {
+        self.len() == other.len()
+            && self
+                .iter()
+                .zip(other.iter())
+                .all(|((k, v), (ko, vo))| k == ko && v == vo)
+    }
+}
+
+impl Eq for Mapx {}
+
+#[derive(Deserialize, Serialize, Debug)]
+struct InstanceCfg {
+    prefix: PreBytes,
+}
+
+impl From<InstanceCfg> for Mapx {
+    fn from(cfg: InstanceCfg) -> Self {
+        Self { prefix: cfg.prefix }
+    }
+}
+
+impl From<&Mapx> for InstanceCfg {
+    fn from(x: &Mapx) -> Self {
+        Self { prefix: x.prefix }
+    }
+}
+
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
+
+pub(crate) struct SimpleVisitor;
+
+impl<'de> de::Visitor<'de> for SimpleVisitor {
+    type Value = Vec<u8>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("Fatal !!")
+    }
+
+    fn visit_bytes<E>(self, v: &[u8]) -> StdResult<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(v.to_vec())
+    }
+}
+
+impl Serialize for Mapx {
+    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_bytes(&pnk!(msgpack::to_vec(&self.get_instance_cfg())))
+    }
+}
+
+impl<'de> Deserialize<'de> for Mapx {
+    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
+            let meta = pnk!(msgpack::from_slice::<InstanceCfg>(&meta));
+            Mapx::from(meta)
+        })
+    }
+}
+
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
+
+pub struct MapxIter<'a> {
+    db_iter: EngineIter,
+    _hdr: &'a Mapx,
+}
+
+impl<'a> fmt::Debug for MapxIter<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("MapxIter").field(&self._hdr).finish()
+    }
+}
+
+impl<'a> Iterator for MapxIter<'a> {
+    type Item = (RawKey, RawValue);
+    fn next(&mut self) -> Option<Self::Item> {
+        self.db_iter.next()
+    }
+}
+
+impl<'a> DoubleEndedIterator for MapxIter<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.db_iter.next_back()
+    }
+}
+
+pub struct MapxIterMut<'a> {
+    db_iter: EngineIter,
+    hdr: &'a mut Mapx,
+}
+
+impl<'a> fmt::Debug for MapxIterMut<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("MapxIterMut").field(&self.hdr).finish()
+    }
+}
+
+impl<'a> Iterator for MapxIterMut<'a> {
+    type Item = (RawKey, ValueIterMut<'a>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (k, v) = self.db_iter.next()?;
+
+        let vmut = ValueIterMut {
+            key: k.clone(),
+            value: v,
+            iter_mut: unsafe { transmute::<&'_ mut Self, &'a mut Self>(self) },
+        };
+
+        Some((k, vmut))
+    }
+}
+
+impl<'a> DoubleEndedIterator for MapxIterMut<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        let (k, v) = self.db_iter.next_back()?;
+
+        let vmut = ValueIterMut {
+            key: k.clone(),
+            value: v,
+            iter_mut: unsafe { transmute::<&'_ mut Self, &'a mut Self>(self) },
+        };
+
+        Some((k, vmut))
+    }
+}
+
+#[derive(Debug)]
+pub struct ValueIterMut<'a> {
+    key: RawKey,
+    value: RawValue,
+    iter_mut: &'a mut MapxIterMut<'a>,
+}
+
+impl<'a> Drop for ValueIterMut<'a> {
+    fn drop(&mut self) {
+        self.iter_mut.hdr.insert(&self.key[..], &self.value[..]);
+    }
+}
+
+impl<'a> Deref for ValueIterMut<'a> {
+    type Target = RawValue;
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<'a> DerefMut for ValueIterMut<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
+    }
+}
+
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+
+#[derive(Debug)]
+pub struct ValueMut<'a> {
+    key: RawKey,
+    value: RawValue,
+    hdr: &'a mut Mapx,
+}
+
+impl<'a> Drop for ValueMut<'a> {
+    fn drop(&mut self) {
+        self.hdr.insert(&self.key[..], &self.value[..]);
+    }
+}
+
+impl<'a> Deref for ValueMut<'a> {
+    type Target = RawValue;
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<'a> DerefMut for ValueMut<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
+    }
+}
+
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
