@@ -168,7 +168,7 @@ pub fn vsdb_get_base_dir() -> String {
 
 /// Set ${VSDB_BASE_DIR} manually.
 #[inline(always)]
-pub fn vsdb_set_base_dir(dir: &str) -> Result<()> {
+pub fn vsdb_set_base_dir<D: AsRef<std::ffi::OsStr>>(dir: D) -> Result<()> {
     static HAS_INITED: AtomicBool = AtomicBool::new(false);
 
     if HAS_INITED.swap(true, Ordering::Relaxed) {
