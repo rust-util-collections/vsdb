@@ -40,7 +40,7 @@ sled_engine = ["vsdb_core/sled_engine"]
 rocks_engine = ["vsdb_core/rocks_engine"]
 
 [[bench]]
-name = "bench_main"
+name = "exec"
 harness = false
 
 [[example]]
@@ -49,5 +49,5 @@ name = "derive_vs"
 [[example]]
 name = "web_server"
 
-# [[example]]
-# name = "blockchain_state"
+[[example]]
+name = "blockchain_state"

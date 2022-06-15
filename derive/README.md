@@ -4,4 +4,9 @@
 
 # vsdb_derive
 
-Some procedure macro implementations for [**vsdb_core**](https://crates.io/crates/vsdb_core) and [**vsdb**](https://crates.io/crates/vsdb).
+Procedure macros for [**vsdb_core**](https://crates.io/crates/vsdb_core) and [**vsdb**](https://crates.io/crates/vsdb).
+
+### LICENSE
+
+- [**MIT**](https://choosealicense.com/licenses/mit) for v0.40 and earlier
+- [**GPL-3.0**](../LICENSE) for v0.41 and later

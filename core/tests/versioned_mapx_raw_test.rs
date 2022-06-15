@@ -1,7 +1,7 @@
 use ruc::*;
 use std::{borrow::Cow, sync::mpsc::channel, thread};
-use vsdb::{
-    vsdb_set_base_dir, BranchName, MapxRawVs, ParentBranchName, ValueEnDe, VersionName,
+use vsdb_core::{
+    vsdb_set_base_dir, BranchName, MapxRawVs, ParentBranchName, VersionName,
     VersionNameOwned, VsMgmt,
 };
 
@@ -36,10 +36,10 @@ fn basic_cases() {
 
         assert_eq!(cnt, hdr_i.len());
 
-        <MapxRawVs as ValueEnDe>::encode(&hdr_i)
+        pnk!(msgpack::to_vec(&hdr_i))
     };
 
-    let mut reloaded = pnk!(<MapxRawVs as ValueEnDe>::decode(&hdr));
+    let mut reloaded = pnk!(msgpack::from_slice::<MapxRawVs>(&hdr));
 
     assert_eq!(cnt, reloaded.len());
 

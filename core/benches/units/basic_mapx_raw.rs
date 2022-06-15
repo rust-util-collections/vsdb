@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
 };
-use vsdb::MapxRaw;
+use vsdb_core::MapxRaw;
 
 fn read_write(c: &mut Criterion) {
     let mut group = c.benchmark_group("** vsdb::basic::mapx_raw::MapxRaw **");

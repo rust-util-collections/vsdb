@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_derive"
-version = "0.42.1"
+version = "0.42.0"
 authors = ["dafanhui@163.com", "hui.fan@mail.ru"]
 edition = "2021"
 description = "Some procedure macro implementations for vsdb."
@@ -8,7 +8,7 @@ homepage = "https://github.com/rust-util-collections/vsdb"
 repository = "https://github.com/rust-util-collections/vsdb/tree/master/derive"
 keywords = ["git", "leveldb", "rocksdb", "version", "vcs"]
 categories = ["database-implementations", "data-structures", "algorithms", "caching"]
-license = "MIT"
+license = "GPL-3.0"
 
 [lib]
 proc-macro = true

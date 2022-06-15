@@ -14,7 +14,7 @@ Based on the powerful version control function of VSDB, you can easily give your
 
 [**To view the change log check here**](./documents/change_log.md).
 
-## Highlights
+### Highlights
 
 - Support Git-like verison operations, such as:
     - Create countless branches and merge them to their parents
@@ -26,7 +26,7 @@ Based on the powerful version control function of VSDB, you can easily give your
     - Use `MapxOrd` just like `BTreeMap`
 - ...
 
-## Examples
+### Examples
 
 Suppose you have a great algorithm like this:
 
@@ -142,7 +142,7 @@ Some complete examples:
     - [**Simple web server**](examples/web_server.rs)
     - [**Operations one by one**](src/basic/mapx/test.rs)
 
-## Compilation features
+### Compilation features
 
 - [**default**] `sled_engine`, use sled as the backend database
     - Faster compilation speed
@@ -161,18 +161,7 @@ Some complete examples:
 - `hash`, enable an optional hash function
     - Based on the 'blake3' crate
 
-## Low-level design
-
-Based on the underlying one-dimensional linear storage structure (native kv-database, such as sled/rocksdb, etc.), multiple different namespaces are divided, and then abstract each dimension in the multi-dimensional logical structure based on these divided namespaces.
-
-In the category of kv-database, namespaces can be expressed as different key ranges, or different key prefix.
-
-This is the same as expressing complex data structures in computer memory(the memory itself is just a one-dimensional linear structure).
-
-User data will be divided into two dimensions: 'branch' and 'version', the functions of the 'basic' category are stateless, and the functions of the 'versioned' category are stateful. In the internal implementation, each stateful function is implemented based on its corresponding stateless function,
-all stateful data has two additional identification dimensions ('branch' and 'version'), somewhat like the logic in Git. Stateless functions do not have the feature of 'version' management, but they have higher performance.
-
-## NOTE
+### NOTE
 
 - The serialized result of a VSDB instance can not be used as the basis for distributed consensus
   - The serialized result only contains some meta-information(storage paths, etc.)
@@ -180,3 +169,8 @@ all stateful data has two additional identification dimensions ('branch' and 've
   - The correct way is to read what you need from it, and then process the real content
 - Version names must be globally unique
   - Using a same version name on different branches is also not allowed
+
+### LICENSE
+
+- [**MIT**](https://choosealicense.com/licenses/mit) for v0.40 and earlier
+- [**GPL-3.0**](../LICENSE) for v0.41 and later

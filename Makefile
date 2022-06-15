@@ -62,7 +62,7 @@ fmtall:
 	bash tools/fmt.sh
 
 update:
-	cargo update --workspace
+	cargo update
 
 clean:
 	cargo clean

@@ -1,6 +1,6 @@
 use ruc::*;
 use std::borrow::Cow;
-use vsdb::{vsdb_set_base_dir, MapxRaw, ValueEnDe};
+use vsdb_core::{vsdb_set_base_dir, MapxRaw};
 
 #[test]
 fn basic_cases() {
@@ -27,10 +27,10 @@ fn basic_cases() {
 
         assert_eq!(cnt, hdr_i.len());
 
-        <MapxRaw as ValueEnDe>::encode(&hdr_i)
+        pnk!(msgpack::to_vec(&hdr_i))
     };
 
-    let mut reloaded = pnk!(<MapxRaw as ValueEnDe>::decode(&hdr));
+    let mut reloaded = pnk!(msgpack::from_slice::<MapxRaw>(&hdr));
 
     assert_eq!(cnt, reloaded.len());
 
