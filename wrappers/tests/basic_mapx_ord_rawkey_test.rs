@@ -29,7 +29,7 @@ fn basic_cases() {
             .map(|i| i.to_be_bytes())
             .map(|i| (i, gen_sample(&i)))
             .for_each(|(i, b)| {
-                hdr_i.entry_ref(&i[..]).or_insert(&b);
+                hdr_i.entry(&i[..]).or_insert(&b);
                 assert_eq!(&hdr_i.get(&i).unwrap().data, &i);
                 assert_eq!(hdr_i.remove(&i), Some(b.clone()));
                 assert!(hdr_i.get(&i).is_none());

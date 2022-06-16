@@ -136,7 +136,7 @@ impl MapxRawVs {
     }
 
     #[inline(always)]
-    pub fn entry_ref<'a>(&'a mut self, key: &'a [u8]) -> Entry<'a> {
+    pub fn entry<'a>(&'a mut self, key: &'a [u8]) -> Entry<'a> {
         Entry { key, hdr: self }
     }
 
@@ -953,7 +953,7 @@ pub struct Entry<'a> {
 }
 
 impl<'a> Entry<'a> {
-    pub fn or_insert_ref(self, default: &'a [u8]) -> ValueMut<'a> {
+    pub fn or_insert(self, default: &'a [u8]) -> ValueMut<'a> {
         if !self.hdr.contains_key(self.key) {
             pnk!(self.hdr.insert(self.key, default));
         }

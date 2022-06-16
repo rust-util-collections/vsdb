@@ -71,14 +71,9 @@ impl<T: ValueEnDe> VecxVs<T> {
     }
 
     #[inline(always)]
-    pub fn push(&mut self, v: T) {
-        self.push_ref(&v)
-    }
-
-    #[inline(always)]
-    pub fn push_ref(&mut self, v: &T) {
+    pub fn push(&mut self, v: &T) {
         self.inner
-            .insert_ref(&(self.len() as u64).to_be_bytes(), v)
+            .insert(&(self.len() as u64).to_be_bytes(), v)
             .unwrap();
     }
 
@@ -88,16 +83,10 @@ impl<T: ValueEnDe> VecxVs<T> {
         self.inner.remove(&(self.len() - 1).to_be_bytes()).c(d!())
     }
 
-    pub fn update(&mut self, idx: usize, v: T) -> Result<Option<T>> {
-        self.update_ref(idx, &v).c(d!())
-    }
-
     #[inline(always)]
-    pub fn update_ref(&mut self, idx: usize, v: &T) -> Result<Option<T>> {
+    pub fn update(&mut self, idx: usize, v: &T) -> Result<Option<T>> {
         if idx < self.len() {
-            self.inner
-                .insert_ref(&(idx as u64).to_be_bytes(), v)
-                .c(d!())
+            self.inner.insert(&(idx as u64).to_be_bytes(), v).c(d!())
         } else {
             Err(eg!("out of index"))
         }
@@ -145,14 +134,9 @@ impl<T: ValueEnDe> VecxVs<T> {
     }
 
     #[inline(always)]
-    pub fn push_by_branch(&mut self, v: T, branch_name: BranchName) {
-        self.push_ref_by_branch(&v, branch_name)
-    }
-
-    #[inline(always)]
-    pub fn push_ref_by_branch(&mut self, v: &T, branch_name: BranchName) {
+    pub fn push_by_branch(&mut self, v: &T, branch_name: BranchName) {
         self.inner
-            .insert_ref_by_branch(&(self.len() as u64).to_be_bytes(), v, branch_name)
+            .insert_by_branch(&(self.len() as u64).to_be_bytes(), v, branch_name)
             .unwrap();
     }
 
@@ -164,17 +148,8 @@ impl<T: ValueEnDe> VecxVs<T> {
             .c(d!())
     }
 
-    pub fn update_by_branch(
-        &mut self,
-        idx: usize,
-        v: T,
-        branch_name: BranchName,
-    ) -> Result<Option<T>> {
-        self.update_ref_by_branch(idx, &v, branch_name).c(d!())
-    }
-
     #[inline(always)]
-    pub fn update_ref_by_branch(
+    pub fn update_by_branch(
         &mut self,
         idx: usize,
         v: &T,
@@ -182,7 +157,7 @@ impl<T: ValueEnDe> VecxVs<T> {
     ) -> Result<Option<T>> {
         if idx < self.len() {
             self.inner
-                .insert_ref_by_branch(&(idx as u64).to_be_bytes(), v, branch_name)
+                .insert_by_branch(&(idx as u64).to_be_bytes(), v, branch_name)
                 .c(d!())
         } else {
             Err(eg!("out of index"))
@@ -319,7 +294,7 @@ where
     V: ValueEnDe,
 {
     fn drop(&mut self) {
-        pnk!(self.hdr.insert_ref(&self.key.to_be_bytes(), &self.value));
+        pnk!(self.hdr.insert(&self.key.to_be_bytes(), &self.value));
     }
 }
 

@@ -16,7 +16,7 @@ fn read_write(c: &mut Criterion) {
     group.bench_function(" write ", |b| {
         b.iter(|| {
             let n = rng.gen::<usize>();
-            db.push(n);
+            db.push(&n);
         })
     });
 

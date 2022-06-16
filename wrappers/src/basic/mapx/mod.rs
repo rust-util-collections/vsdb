@@ -38,10 +38,9 @@ mod test;
 
 use crate::{
     basic::{
-        mapx_ord::{MapxOrdValues, MapxOrdValuesMut},
+        mapx_ord::{Entry, MapxOrdValues, MapxOrdValuesMut},
         mapx_ord_rawkey::{
-            self, Entry, MapxOrdRawKey, MapxOrdRawKeyIter, MapxOrdRawKeyIterMut,
-            ValueMut,
+            self, MapxOrdRawKey, MapxOrdRawKeyIter, MapxOrdRawKeyIterMut, ValueMut,
         },
     },
     common::ende::{KeyEnDe, ValueEnDe},
@@ -122,7 +121,10 @@ where
 
     #[inline(always)]
     pub fn entry(&mut self, key: &K) -> Entry<'_, V> {
-        self.inner.entry(key.encode())
+        Entry {
+            key: key.encode(),
+            hdr: &mut self.inner,
+        }
     }
 
     #[inline(always)]

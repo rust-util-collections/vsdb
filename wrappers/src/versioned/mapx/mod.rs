@@ -61,7 +61,7 @@ where
     }
 
     #[inline(always)]
-    pub fn entry_ref<'a>(&'a mut self, key: &'a K) -> Entry<'a, K, V> {
+    pub fn entry<'a>(&'a mut self, key: &'a K) -> Entry<'a, K, V> {
         Entry { key, hdr: self }
     }
 
@@ -90,13 +90,8 @@ where
     }
 
     #[inline(always)]
-    pub fn insert(&mut self, key: K, value: V) -> Result<Option<V>> {
-        self.insert_ref(&key, &value).c(d!())
-    }
-
-    #[inline(always)]
-    pub fn insert_ref(&mut self, key: &K, value: &V) -> Result<Option<V>> {
-        self.inner.insert_ref(&key.encode(), value).c(d!())
+    pub fn insert(&mut self, key: &K, value: &V) -> Result<Option<V>> {
+        self.inner.insert(&key.encode(), value).c(d!())
     }
 
     #[inline(always)]
@@ -167,22 +162,12 @@ where
     #[inline(always)]
     pub fn insert_by_branch(
         &mut self,
-        key: K,
-        value: V,
-        branch_name: BranchName,
-    ) -> Result<Option<V>> {
-        self.insert_ref_by_branch(&key, &value, branch_name).c(d!())
-    }
-
-    #[inline(always)]
-    pub fn insert_ref_by_branch(
-        &mut self,
         key: &K,
         value: &V,
         branch_name: BranchName,
     ) -> Result<Option<V>> {
         self.inner
-            .insert_ref_by_branch(&key.encode(), value, branch_name)
+            .insert_by_branch(&key.encode(), value, branch_name)
             .c(d!())
     }
 
@@ -417,7 +402,7 @@ where
     V: ValueEnDe,
 {
     fn drop(&mut self) {
-        pnk!(self.hdr.insert_ref(self.key, &self.value));
+        pnk!(self.hdr.insert(self.key, &self.value));
     }
 }
 
@@ -456,9 +441,9 @@ where
     K: KeyEnDe,
     V: ValueEnDe,
 {
-    pub fn or_insert_ref(self, default: &V) -> ValueMut<'a, K, V> {
+    pub fn or_insert(self, default: &V) -> ValueMut<'a, K, V> {
         if !self.hdr.contains_key(self.key) {
-            pnk!(self.hdr.insert_ref(self.key, default));
+            pnk!(self.hdr.insert(self.key, default));
         }
         pnk!(self.hdr.get_mut(self.key))
     }

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
     marker::PhantomData,
-    ops::{Bound, Deref, DerefMut, RangeBounds},
+    ops::{Deref, DerefMut, RangeBounds},
 };
 use vsdb_core::versioned::mapx_raw::{MapxRawVs, MapxRawVsIter};
 
@@ -63,7 +63,7 @@ where
     }
 
     #[inline(always)]
-    pub fn entry_ref<'a>(&'a mut self, key: &'a [u8]) -> Entry<'a, V> {
+    pub fn entry<'a>(&'a mut self, key: &'a [u8]) -> Entry<'a, V> {
         Entry { key, hdr: self }
     }
 
@@ -186,22 +186,7 @@ where
     }
 
     #[inline(always)]
-    pub fn insert(&mut self, key: RawKey, value: V) -> Result<Option<V>> {
-        self.insert_ref(&key, &value).c(d!())
-    }
-
-    #[inline(always)]
-    pub fn insert_by_branch(
-        &mut self,
-        key: RawKey,
-        value: V,
-        branch_name: BranchName,
-    ) -> Result<Option<V>> {
-        self.insert_ref_by_branch(&key, &value, branch_name).c(d!())
-    }
-
-    #[inline(always)]
-    pub fn insert_ref(&mut self, key: &[u8], value: &V) -> Result<Option<V>> {
+    pub fn insert(&mut self, key: &[u8], value: &V) -> Result<Option<V>> {
         self.inner
             .insert(key, &value.encode())
             .c(d!())
@@ -209,7 +194,7 @@ where
     }
 
     #[inline(always)]
-    pub fn insert_ref_by_branch(
+    pub fn insert_by_branch(
         &mut self,
         key: &[u8],
         value: &V,
@@ -254,75 +239,7 @@ where
     }
 
     #[inline(always)]
-    pub fn range<'a, R: 'a + RangeBounds<RawKey>>(
-        &'a self,
-        bounds: R,
-    ) -> MapxOrdRawKeyVsIter<'a, V> {
-        let l = match bounds.start_bound() {
-            Bound::Included(l) => Bound::Included(Cow::Owned(l.to_vec())),
-            Bound::Excluded(l) => Bound::Excluded(Cow::Owned(l.to_vec())),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-        let h = match bounds.start_bound() {
-            Bound::Included(h) => Bound::Included(Cow::Owned(h.to_vec())),
-            Bound::Excluded(h) => Bound::Excluded(Cow::Owned(h.to_vec())),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-        MapxOrdRawKeyVsIter {
-            iter: self.inner.range((l, h)),
-            p: PhantomData,
-        }
-    }
-
-    #[inline(always)]
-    pub fn range_by_branch<'a, R: 'a + RangeBounds<RawKey>>(
-        &'a self,
-        branch_name: BranchName,
-        bounds: R,
-    ) -> MapxOrdRawKeyVsIter<'a, V> {
-        let l = match bounds.start_bound() {
-            Bound::Included(l) => Bound::Included(Cow::Owned(l.to_vec())),
-            Bound::Excluded(l) => Bound::Excluded(Cow::Owned(l.to_vec())),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-        let h = match bounds.start_bound() {
-            Bound::Included(h) => Bound::Included(Cow::Owned(h.to_vec())),
-            Bound::Excluded(h) => Bound::Excluded(Cow::Owned(h.to_vec())),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-        MapxOrdRawKeyVsIter {
-            iter: self.inner.range_by_branch(branch_name, (l, h)),
-            p: PhantomData,
-        }
-    }
-
-    #[inline(always)]
-    pub fn range_by_branch_version<'a, R: 'a + RangeBounds<RawKey>>(
-        &'a self,
-        branch_name: BranchName,
-        version_name: VersionName,
-        bounds: R,
-    ) -> MapxOrdRawKeyVsIter<'a, V> {
-        let l = match bounds.start_bound() {
-            Bound::Included(l) => Bound::Included(Cow::Owned(l.to_vec())),
-            Bound::Excluded(l) => Bound::Excluded(Cow::Owned(l.to_vec())),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-        let h = match bounds.start_bound() {
-            Bound::Included(h) => Bound::Included(Cow::Owned(h.to_vec())),
-            Bound::Excluded(h) => Bound::Excluded(Cow::Owned(h.to_vec())),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-        MapxOrdRawKeyVsIter {
-            iter: self
-                .inner
-                .range_by_branch_version(branch_name, version_name, (l, h)),
-            p: PhantomData,
-        }
-    }
-
-    #[inline(always)]
-    pub fn range_ref<'a, R: RangeBounds<Cow<'a, [u8]>>>(
+    pub fn range<'a, R: RangeBounds<Cow<'a, [u8]>>>(
         &'a self,
         bounds: R,
     ) -> MapxOrdRawKeyVsIter<'a, V> {
@@ -333,7 +250,7 @@ where
     }
 
     #[inline(always)]
-    pub fn range_ref_by_branch<'a, R: RangeBounds<Cow<'a, [u8]>>>(
+    pub fn range_by_branch<'a, R: RangeBounds<Cow<'a, [u8]>>>(
         &'a self,
         branch_name: BranchName,
         bounds: R,
@@ -345,7 +262,7 @@ where
     }
 
     #[inline(always)]
-    pub fn range_ref_by_branch_version<'a, R: RangeBounds<Cow<'a, [u8]>>>(
+    pub fn range_by_branch_version<'a, R: RangeBounds<Cow<'a, [u8]>>>(
         &'a self,
         branch_name: BranchName,
         version_name: VersionName,
@@ -525,7 +442,7 @@ where
     V: ValueEnDe,
 {
     fn drop(&mut self) {
-        pnk!(self.hdr.insert_ref(self.key, &self.value));
+        pnk!(self.hdr.insert(self.key, &self.value));
     }
 }
 
@@ -557,9 +474,9 @@ impl<'a, V> Entry<'a, V>
 where
     V: ValueEnDe,
 {
-    pub fn or_insert_ref(self, default: &V) -> ValueMut<'a, V> {
+    pub fn or_insert(self, default: &V) -> ValueMut<'a, V> {
         if !self.hdr.contains_key(self.key) {
-            pnk!(self.hdr.insert_ref(self.key, default));
+            pnk!(self.hdr.insert(self.key, default));
         }
         pnk!(self.hdr.get_mut(self.key))
     }

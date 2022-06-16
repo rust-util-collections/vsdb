@@ -12,6 +12,7 @@ use crate::{
 use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{
+    borrow::Cow,
     marker::PhantomData,
     ops::{Bound, Deref, DerefMut, RangeBounds},
 };
@@ -60,7 +61,7 @@ where
     }
 
     #[inline(always)]
-    pub fn entry_ref<'a>(&'a mut self, key: &'a K) -> Entry<'a, K, V> {
+    pub fn entry<'a>(&'a mut self, key: &'a K) -> Entry<'a, K, V> {
         Entry { key, hdr: self }
     }
 
@@ -89,13 +90,8 @@ where
     }
 
     #[inline(always)]
-    pub fn insert(&mut self, key: K, value: V) -> Result<Option<V>> {
-        self.insert_ref(&key, &value).c(d!())
-    }
-
-    #[inline(always)]
-    pub fn insert_ref(&mut self, key: &K, value: &V) -> Result<Option<V>> {
-        self.inner.insert_ref(&key.to_bytes(), value).c(d!())
+    pub fn insert(&mut self, key: &K, value: &V) -> Result<Option<V>> {
+        self.inner.insert(&key.to_bytes(), value).c(d!())
     }
 
     #[inline(always)]
@@ -116,13 +112,13 @@ where
         bounds: R,
     ) -> MapxOrdVsIter<'a, K, V> {
         let l = match bounds.start_bound() {
-            Bound::Included(i) => Bound::Included(i.to_bytes()),
-            Bound::Excluded(i) => Bound::Excluded(i.to_bytes()),
+            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes().into_vec())),
+            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes().into_vec())),
             _ => Bound::Unbounded,
         };
         let h = match bounds.end_bound() {
-            Bound::Included(i) => Bound::Included(i.to_bytes()),
-            Bound::Excluded(i) => Bound::Excluded(i.to_bytes()),
+            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes().into_vec())),
+            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes().into_vec())),
             _ => Bound::Unbounded,
         };
 
@@ -189,22 +185,12 @@ where
     #[inline(always)]
     pub fn insert_by_branch(
         &mut self,
-        key: K,
-        value: V,
-        branch_name: BranchName,
-    ) -> Result<Option<V>> {
-        self.insert_ref_by_branch(&key, &value, branch_name).c(d!())
-    }
-
-    #[inline(always)]
-    pub fn insert_ref_by_branch(
-        &mut self,
         key: &K,
         value: &V,
         branch_name: BranchName,
     ) -> Result<Option<V>> {
         self.inner
-            .insert_ref_by_branch(&key.to_bytes(), value, branch_name)
+            .insert_by_branch(&key.to_bytes(), value, branch_name)
             .c(d!())
     }
 
@@ -223,13 +209,13 @@ where
         bounds: R,
     ) -> MapxOrdVsIter<'a, K, V> {
         let l = match bounds.start_bound() {
-            Bound::Included(i) => Bound::Included(i.to_bytes()),
-            Bound::Excluded(i) => Bound::Excluded(i.to_bytes()),
+            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes().into_vec())),
+            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes().into_vec())),
             _ => Bound::Unbounded,
         };
         let h = match bounds.end_bound() {
-            Bound::Included(i) => Bound::Included(i.to_bytes()),
-            Bound::Excluded(i) => Bound::Excluded(i.to_bytes()),
+            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes().into_vec())),
+            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes().into_vec())),
             _ => Bound::Unbounded,
         };
 
@@ -340,13 +326,13 @@ where
         bounds: R,
     ) -> MapxOrdVsIter<'a, K, V> {
         let l = match bounds.start_bound() {
-            Bound::Included(i) => Bound::Included(i.to_bytes()),
-            Bound::Excluded(i) => Bound::Excluded(i.to_bytes()),
+            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes().into_vec())),
+            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes().into_vec())),
             _ => Bound::Unbounded,
         };
         let h = match bounds.end_bound() {
-            Bound::Included(i) => Bound::Included(i.to_bytes()),
-            Bound::Excluded(i) => Bound::Excluded(i.to_bytes()),
+            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes().into_vec())),
+            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes().into_vec())),
             _ => Bound::Unbounded,
         };
 
@@ -486,7 +472,7 @@ where
     V: ValueEnDe,
 {
     fn drop(&mut self) {
-        pnk!(self.hdr.insert_ref(self.key, &self.value));
+        pnk!(self.hdr.insert(self.key, &self.value));
     }
 }
 
@@ -525,9 +511,9 @@ where
     K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
-    pub fn or_insert_ref(self, default: &V) -> ValueMut<'a, K, V> {
+    pub fn or_insert(self, default: &V) -> ValueMut<'a, K, V> {
         if !self.hdr.contains_key(self.key) {
-            pnk!(self.hdr.insert_ref(self.key, default));
+            pnk!(self.hdr.insert(self.key, default));
         }
         pnk!(self.hdr.get_mut(self.key))
     }

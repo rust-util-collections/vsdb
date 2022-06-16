@@ -24,7 +24,7 @@ fn read_write(c: &mut Criterion) {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::SeqCst);
             let key = <usize as ValueEnDe>::encode(&n);
-            db.insert(key, n).unwrap();
+            db.insert(&key, &n).unwrap();
         })
     });
 
@@ -54,7 +54,7 @@ fn random_read_write(c: &mut Criterion) {
         b.iter(|| {
             let n = rng.gen::<usize>();
             let key = <usize as ValueEnDe>::encode(&n);
-            db.insert(key.clone(), n).unwrap();
+            db.insert(&key, &n).unwrap();
             keys.push(key);
         })
     });
@@ -83,7 +83,7 @@ fn version_read_write(c: &mut Criterion) {
             let n = i.fetch_add(1, Ordering::SeqCst);
             let key = <usize as ValueEnDe>::encode(&n);
             db.version_create(VersionName(&n.to_be_bytes())).unwrap();
-            db.insert(key, n).unwrap();
+            db.insert(&key, &n).unwrap();
         })
     });
 
@@ -117,7 +117,7 @@ fn version_random_read_write(c: &mut Criterion) {
             let n = rng.gen::<usize>();
             let key = <usize as ValueEnDe>::encode(&n);
             db.version_create(VersionName(key.as_ref())).unwrap();
-            db.insert(key.clone(), n).unwrap();
+            db.insert(&key, &n).unwrap();
             keys.push(key);
         })
     });
@@ -154,7 +154,7 @@ fn branch_version_read_write(c: &mut Criterion) {
             let key = <usize as ValueEnDe>::encode(&n);
             db.branch_create(BranchName(key.as_ref()), VersionName(key.as_ref()), false)
                 .unwrap();
-            db.insert(key, n).unwrap();
+            db.insert(&key, &n).unwrap();
         })
     });
 
@@ -187,7 +187,7 @@ fn branch_version_random_read_write(c: &mut Criterion) {
             let key = <usize as ValueEnDe>::encode(&n);
             db.branch_create(BranchName(key.as_ref()), VersionName(key.as_ref()), false)
                 .unwrap();
-            db.insert(key.clone(), n).unwrap();
+            db.insert(&key, &n).unwrap();
             keys.push(key);
         })
     });

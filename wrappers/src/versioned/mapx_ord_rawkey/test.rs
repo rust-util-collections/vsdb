@@ -42,7 +42,7 @@ fn test_branch_create_by_base_branch() {
 
     let key = <usize as ValueEnDe>::encode(&1);
     let value = 1;
-    pnk!(hdr.insert(key, value));
+    pnk!(hdr.insert(&key, &value));
 
     let bn2 = BranchName(b"test2");
     let vn21 = VersionName(b"testversion21");
@@ -50,7 +50,7 @@ fn test_branch_create_by_base_branch() {
     pnk!(hdr.branch_create_by_base_branch(bn2, vn21, ParentBranchName(b"test1"), false));
     let key = <usize as ValueEnDe>::encode(&2);
     let value = 2;
-    pnk!(hdr.insert(key, value));
+    pnk!(hdr.insert(&key, &value));
 }
 
 #[test]
@@ -70,7 +70,7 @@ fn test_branch_merge() {
     let mut hdr: MapxOrdRawKeyVs<usize> = MapxOrdRawKeyVs::new();
     let mvn = VersionName(b"manster0");
     pnk!(hdr.version_create(mvn));
-    pnk!(hdr.insert(<usize as ValueEnDe>::encode(&1), 1));
+    pnk!(hdr.insert(&<usize as ValueEnDe>::encode(&1), &1));
 
     let bn = BranchName(b"test");
     let vn = VersionName(b"test0");
@@ -78,7 +78,7 @@ fn test_branch_merge() {
     pnk!(hdr.branch_create(bn, vn, false));
     let key = <usize as ValueEnDe>::encode(&2);
     let value = 2;
-    pnk!(hdr.insert(key.clone(), value));
+    pnk!(hdr.insert(&key, &value));
     pnk!(hdr.branch_merge_to(bn, INITIAL_BRANCH_NAME));
     pnk!(hdr.branch_set_default(INITIAL_BRANCH_NAME));
     let val = pnk!(hdr.get_by_branch(&key.clone(), INITIAL_BRANCH_NAME));
@@ -102,7 +102,7 @@ fn test_branch_swap() {
 
     let mkey = <usize as ValueEnDe>::encode(&1);
     let mvalue = 1;
-    pnk!(hdr.insert(mkey.clone(), mvalue));
+    pnk!(hdr.insert(&mkey, &mvalue));
 
     let bn = BranchName(b"test");
     let vn = VersionName(b"test0");
@@ -110,7 +110,7 @@ fn test_branch_swap() {
 
     let tkey = <usize as ValueEnDe>::encode(&2);
     let tvalue = 2;
-    pnk!(hdr.insert(tkey.clone(), tvalue));
+    pnk!(hdr.insert(&tkey, &tvalue));
 
     unsafe {
         pnk!(hdr.branch_swap(INITIAL_BRANCH_NAME, bn));
@@ -127,11 +127,11 @@ fn test_branch_truncate() {
 
     let mkey0 = <usize as ValueEnDe>::encode(&1);
     let mvalue0 = 1;
-    pnk!(hdr.insert(mkey0.clone(), mvalue0));
+    pnk!(hdr.insert(&mkey0, &mvalue0));
 
     let mkey1 = <usize as ValueEnDe>::encode(&2);
     let mvalue1 = 2;
-    pnk!(hdr.insert(mkey1.clone(), mvalue1));
+    pnk!(hdr.insert(&mkey1, &mvalue1));
 
     pnk!(hdr.branch_truncate(INITIAL_BRANCH_NAME));
     assert!(hdr.get(&mkey0).is_none());
@@ -145,13 +145,13 @@ fn test_branch_truncate_to() {
 
     let mkey0 = <usize as ValueEnDe>::encode(&1);
     let mvalue0 = 1;
-    pnk!(hdr.insert(mkey0.clone(), mvalue0));
+    pnk!(hdr.insert(&mkey0, &mvalue0));
 
     pnk!(hdr.version_create(VersionName(b"manster1")));
 
     let mkey1 = <usize as ValueEnDe>::encode(&2);
     let mvalue1 = 2;
-    pnk!(hdr.insert(mkey1.clone(), mvalue1));
+    pnk!(hdr.insert(&mkey1, &mvalue1));
 
     pnk!(hdr.branch_truncate_to(INITIAL_BRANCH_NAME, vn));
 
@@ -167,8 +167,8 @@ fn test_insert() {
         .for_each(|(key, value)| {
             let key = <usize as ValueEnDe>::encode(&key);
             assert!(hdr.get(&key).is_none());
-            assert!(pnk!(hdr.insert(key.clone(), value)).is_none());
-            assert!(pnk!(hdr.insert(key.clone(), value)).is_some());
+            assert!(pnk!(hdr.insert(&key, &value)).is_none());
+            assert!(pnk!(hdr.insert(&key, &value)).is_some());
             assert!(hdr.contains_key(&key));
             assert_eq!(pnk!(hdr.get(&key)), value);
             assert_eq!(pnk!(pnk!(hdr.remove(&key))), value);
@@ -185,7 +185,7 @@ fn test_len() {
         .map(|i: usize| (i, (max + i)))
         .for_each(|(key, value)| {
             let key = <usize as ValueEnDe>::encode(&key);
-            assert!(pnk!(hdr.insert(key, value)).is_none());
+            assert!(pnk!(hdr.insert(&key, &value)).is_none());
         });
     assert_eq!(500, hdr.len());
 
@@ -204,7 +204,7 @@ fn test_valueende() {
         pnk!(hdr.version_create(VersionName(b"manster0")));
         (0..cnt).map(|i: usize| (i, i)).for_each(|(key, value)| {
             let key = <usize as ValueEnDe>::encode(&key);
-            assert!(pnk!(hdr.insert(key, value)).is_none());
+            assert!(pnk!(hdr.insert(&key, &value)).is_none());
         });
         <MapxOrdRawKeyVs<usize> as ValueEnDe>::encode(&hdr)
     };
@@ -225,7 +225,7 @@ fn test_emptystr_version() {
     let value = 1;
 
     assert!(hdr.get(&key).is_none());
-    assert!(pnk!(hdr.insert(key.clone(), value)).is_none());
+    assert!(pnk!(hdr.insert(&key, &value)).is_none());
     assert!(hdr.contains_key(&key));
     assert_eq!(pnk!(hdr.get(&key)), value);
     assert_eq!(pnk!(pnk!(hdr.remove(&key))), value);
@@ -253,9 +253,9 @@ fn test_version_empty() {
     assert!(hdr.is_empty_by_branch_version(INITIAL_BRANCH_NAME, VersionName(b"v-001")));
     assert!(hdr.is_empty_by_branch_version(INITIAL_BRANCH_NAME, VersionName(b"v-002")));
 
-    pnk!(hdr.insert(<usize as ValueEnDe>::encode(&1), 1));
-    pnk!(hdr.insert(<usize as ValueEnDe>::encode(&2), 2));
-    pnk!(hdr.insert(<usize as ValueEnDe>::encode(&3), 3));
+    pnk!(hdr.insert(&<usize as ValueEnDe>::encode(&1), &1));
+    pnk!(hdr.insert(&<usize as ValueEnDe>::encode(&2), &2));
+    pnk!(hdr.insert(&<usize as ValueEnDe>::encode(&3), &3));
 
     assert!(!hdr.is_empty());
     assert!(!hdr.is_empty_by_branch(INITIAL_BRANCH_NAME));
@@ -271,7 +271,7 @@ fn test_version_get() {
     let key = <usize as ValueEnDe>::encode(&1);
     let value = 1;
 
-    pnk!(hdr.insert(key.clone(), value));
+    pnk!(hdr.insert(&key, &value));
     assert_eq!(pnk!(hdr.get(&key)), value);
 
     let key2 = <usize as ValueEnDe>::encode(&2);
@@ -291,13 +291,13 @@ fn test_version_rebase() {
 
     let key = <usize as ValueEnDe>::encode(&0);
     pnk!(hdr.version_create(VersionName(&[0])));
-    pnk!(hdr.insert(key.clone(), 0));
+    pnk!(hdr.insert(&key, &0));
     pnk!(hdr.version_create(VersionName(&[1])));
-    pnk!(hdr.insert(key.clone(), 1));
+    pnk!(hdr.insert(&key, &1));
     pnk!(hdr.version_create(VersionName(&[2])));
-    pnk!(hdr.insert(key.clone(), 2));
+    pnk!(hdr.insert(&key, &2));
     pnk!(hdr.version_create(VersionName(&[3])));
-    pnk!(hdr.insert(key.clone(), 3));
+    pnk!(hdr.insert(&key, &3));
 
     assert!(hdr.version_exists(VersionName(&[0])));
     assert!(hdr.version_exists(VersionName(&[1])));
@@ -321,17 +321,17 @@ fn test_version_rebase_by_branch() {
     let vn = VersionName(b"test1");
     pnk!(hdr.branch_create(bn, vn, false));
     let key = <usize as ValueEnDe>::encode(&0);
-    pnk!(hdr.insert_by_branch(key.clone(), 0, bn));
+    pnk!(hdr.insert_by_branch(&key, &0, bn));
     pnk!(hdr.version_create_by_branch(VersionName(&[0]), bn));
-    pnk!(hdr.insert_by_branch(key.clone(), 1, bn));
+    pnk!(hdr.insert_by_branch(&key, &1, bn));
     pnk!(hdr.version_create_by_branch(VersionName(&[1]), bn));
-    pnk!(hdr.insert_by_branch(key.clone(), 2, bn));
+    pnk!(hdr.insert_by_branch(&key, &2, bn));
     pnk!(hdr.version_create_by_branch(VersionName(&[2]), bn));
-    pnk!(hdr.insert_by_branch(key.clone(), 3, bn));
+    pnk!(hdr.insert_by_branch(&key, &3, bn));
     pnk!(hdr.version_create_by_branch(VersionName(&[3]), bn));
-    pnk!(hdr.insert_by_branch(key.clone(), 4, bn));
+    pnk!(hdr.insert_by_branch(&key, &4, bn));
     pnk!(hdr.version_create_by_branch(VersionName(&[4]), bn));
-    pnk!(hdr.insert_by_branch(key.clone(), 5, bn));
+    pnk!(hdr.insert_by_branch(&key, &5, bn));
 
     assert_eq!(0, pnk!(hdr.get_by_branch_version(&key, bn, vn)));
     assert_eq!(
@@ -397,17 +397,17 @@ fn test_prune() {
     pnk!(hdr.prune(Some(1000000000)));
 
     pnk!(hdr.version_create(VersionName(b"")));
-    pnk!(hdr.insert(<usize as ValueEnDe>::encode(&0), 0));
+    pnk!(hdr.insert(&<usize as ValueEnDe>::encode(&0), &0));
     pnk!(hdr.version_create(VersionName(b"a")));
-    pnk!(hdr.insert(<usize as ValueEnDe>::encode(&1), 1));
-    pnk!(hdr.insert(<usize as ValueEnDe>::encode(&2), 2));
+    pnk!(hdr.insert(&<usize as ValueEnDe>::encode(&1), &1));
+    pnk!(hdr.insert(&<usize as ValueEnDe>::encode(&2), &2));
     pnk!(hdr.version_create(VersionName(b"b")));
-    pnk!(hdr.insert(<usize as ValueEnDe>::encode(&3), 3));
-    pnk!(hdr.insert(<usize as ValueEnDe>::encode(&4), 4));
-    pnk!(hdr.insert(<usize as ValueEnDe>::encode(&5), 5));
+    pnk!(hdr.insert(&<usize as ValueEnDe>::encode(&3), &3));
+    pnk!(hdr.insert(&<usize as ValueEnDe>::encode(&4), &4));
+    pnk!(hdr.insert(&<usize as ValueEnDe>::encode(&5), &5));
     pnk!(hdr.version_create(VersionName(b"c")));
-    pnk!(hdr.insert(<usize as ValueEnDe>::encode(&6), 6));
-    pnk!(hdr.insert(<usize as ValueEnDe>::encode(&7), 7));
+    pnk!(hdr.insert(&<usize as ValueEnDe>::encode(&6), &6));
+    pnk!(hdr.insert(&<usize as ValueEnDe>::encode(&7), &7));
 
     assert!(hdr.version_exists(VersionName(b"a")));
     assert!(hdr.version_exists(VersionName(b"b")));
@@ -428,7 +428,7 @@ fn test_iter() {
     let max = 500;
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
         let key = <usize as ValueEnDe>::encode(&key);
-        assert!(pnk!(hdr.insert(key, value)).is_none());
+        assert!(pnk!(hdr.insert(&key, &value)).is_none());
     });
     let hdr_shadow = hdr.clone();
     for (key, _) in hdr_shadow.iter() {
@@ -445,7 +445,7 @@ fn test_first_last() {
     let max = 500;
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
         let key = <usize as ValueEnDe>::encode(&key);
-        assert!(pnk!(hdr.insert(key, value)).is_none());
+        assert!(pnk!(hdr.insert(&key, &value)).is_none());
     });
     let (_, value) = pnk!(hdr.iter().next());
     assert_eq!(0, value);
@@ -468,7 +468,7 @@ fn test_by_branch() {
 
     (0..max).map(|i| i).for_each(|i| {
         let key = <usize as ValueEnDe>::encode(&i);
-        pnk!(hdr.insert_by_branch(key, i, INITIAL_BRANCH_NAME));
+        pnk!(hdr.insert_by_branch(&key, &i, INITIAL_BRANCH_NAME));
     });
 
     assert!(!hdr.is_empty_by_branch(INITIAL_BRANCH_NAME));

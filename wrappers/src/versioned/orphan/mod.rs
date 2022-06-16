@@ -61,13 +61,8 @@ impl<T: ValueEnDe> OrphanVs<T> {
     }
 
     #[inline(always)]
-    pub fn set_value(&mut self, v: T) -> Result<Option<T>> {
-        self.set_value_ref(&v).c(d!())
-    }
-
-    #[inline(always)]
-    pub fn set_value_ref(&mut self, v: &T) -> Result<Option<T>> {
-        self.inner.insert_ref(&[], v).c(d!())
+    pub fn set_value(&mut self, v: &T) -> Result<Option<T>> {
+        self.inner.insert(&[], v).c(d!())
     }
 
     #[inline(always)]
@@ -78,19 +73,10 @@ impl<T: ValueEnDe> OrphanVs<T> {
     #[inline(always)]
     pub fn set_value_by_branch(
         &mut self,
-        v: T,
-        branch_name: BranchName,
-    ) -> Result<Option<T>> {
-        self.set_value_ref_by_branch(&v, branch_name).c(d!())
-    }
-
-    #[inline(always)]
-    pub fn set_value_ref_by_branch(
-        &mut self,
         v: &T,
         branch_name: BranchName,
     ) -> Result<Option<T>> {
-        self.inner.insert_ref_by_branch(&[], v, branch_name).c(d!())
+        self.inner.insert_by_branch(&[], v, branch_name).c(d!())
     }
 
     #[inline(always)]
@@ -139,7 +125,7 @@ where
     T: ValueEnDe,
 {
     fn drop(&mut self) {
-        pnk!(self.hdr.set_value_ref(&self.value));
+        pnk!(self.hdr.set_value(&self.value));
     }
 }
 

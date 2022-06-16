@@ -148,13 +148,8 @@ where
     }
 
     #[inline(always)]
-    pub fn entry(&mut self, key: RawKey) -> Entry<'_, V> {
+    pub fn entry<'a>(&'a mut self, key: &'a [u8]) -> Entry<'a, V> {
         Entry { key, hdr: self }
-    }
-
-    #[inline(always)]
-    pub fn entry_ref<'a>(&'a mut self, key: &'a [u8]) -> EntryRef<'a, V> {
-        EntryRef { key, hdr: self }
     }
 
     #[inline(always)]
@@ -286,33 +281,13 @@ where
 
 pub struct Entry<'a, V>
 where
-    V: 'a + ValueEnDe,
-{
-    pub key: RawKey,
-    pub hdr: &'a mut MapxOrdRawKey<V>,
-}
-
-impl<'a, V> Entry<'a, V>
-where
-    V: ValueEnDe,
-{
-    pub fn or_insert(self, default: &V) -> ValueMut<'a, V> {
-        if !self.hdr.contains_key(&self.key) {
-            self.hdr.set_value(&self.key, default);
-        }
-        pnk!(self.hdr.get_mut(&self.key))
-    }
-}
-
-pub struct EntryRef<'a, V>
-where
     V: ValueEnDe,
 {
     key: &'a [u8],
     hdr: &'a mut MapxOrdRawKey<V>,
 }
 
-impl<'a, V> EntryRef<'a, V>
+impl<'a, V> Entry<'a, V>
 where
     V: ValueEnDe,
 {

@@ -170,14 +170,14 @@ where
         bounds: R,
     ) -> MapxOrdRawValueIter<K> {
         let l = match bounds.start_bound() {
-            Bound::Included(lo) => Bound::Included(Cow::Owned(lo.to_bytes().to_vec())),
-            Bound::Excluded(lo) => Bound::Excluded(Cow::Owned(lo.to_bytes().to_vec())),
+            Bound::Included(lo) => Bound::Included(Cow::Owned(lo.to_bytes().into_vec())),
+            Bound::Excluded(lo) => Bound::Excluded(Cow::Owned(lo.to_bytes().into_vec())),
             Bound::Unbounded => Bound::Unbounded,
         };
 
         let h = match bounds.end_bound() {
-            Bound::Included(hi) => Bound::Included(Cow::Owned(hi.to_bytes().to_vec())),
-            Bound::Excluded(hi) => Bound::Excluded(Cow::Owned(hi.to_bytes().to_vec())),
+            Bound::Included(hi) => Bound::Included(Cow::Owned(hi.to_bytes().into_vec())),
+            Bound::Excluded(hi) => Bound::Excluded(Cow::Owned(hi.to_bytes().into_vec())),
             Bound::Unbounded => Bound::Unbounded,
         };
 
@@ -193,14 +193,14 @@ where
         bounds: R,
     ) -> MapxOrdRawValueIterMut<K> {
         let l = match bounds.start_bound() {
-            Bound::Included(lo) => Bound::Included(Cow::Owned(lo.to_bytes().to_vec())),
-            Bound::Excluded(lo) => Bound::Excluded(Cow::Owned(lo.to_bytes().to_vec())),
+            Bound::Included(lo) => Bound::Included(Cow::Owned(lo.to_bytes().into_vec())),
+            Bound::Excluded(lo) => Bound::Excluded(Cow::Owned(lo.to_bytes().into_vec())),
             Bound::Unbounded => Bound::Unbounded,
         };
 
         let h = match bounds.end_bound() {
-            Bound::Included(hi) => Bound::Included(Cow::Owned(hi.to_bytes().to_vec())),
-            Bound::Excluded(hi) => Bound::Excluded(Cow::Owned(hi.to_bytes().to_vec())),
+            Bound::Included(hi) => Bound::Included(Cow::Owned(hi.to_bytes().into_vec())),
+            Bound::Excluded(hi) => Bound::Excluded(Cow::Owned(hi.to_bytes().into_vec())),
             Bound::Unbounded => Bound::Unbounded,
         };
 

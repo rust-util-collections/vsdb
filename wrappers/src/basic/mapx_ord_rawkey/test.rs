@@ -9,7 +9,7 @@ fn test_insert() {
         .map(|i: usize| (i.to_be_bytes(), (max + i).to_be_bytes()))
         .for_each(|(key, value)| {
             assert!(hdr.get(&key[..]).is_none());
-            hdr.entry_ref(&key[..]).or_insert(&value);
+            hdr.entry(&key[..]).or_insert(&value);
             hdr.set_value(&key[..], &value);
             assert!(hdr.insert(&key[..], &value).is_some());
             assert!(hdr.contains_key(&key[..]));

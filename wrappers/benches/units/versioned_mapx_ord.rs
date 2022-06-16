@@ -20,7 +20,7 @@ fn read_write(c: &mut Criterion) {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::SeqCst);
 
-            db.insert(n, n).unwrap();
+            db.insert(&n, &n).unwrap();
         })
     });
 
@@ -47,7 +47,7 @@ fn random_read_write(c: &mut Criterion) {
     group.bench_function(" random write ", |b| {
         b.iter(|| {
             let n = rng.gen::<usize>();
-            db.insert(n, n).unwrap();
+            db.insert(&n, &n).unwrap();
             keys.push(n);
         })
     });
@@ -74,7 +74,7 @@ fn version_read_write(c: &mut Criterion) {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::SeqCst);
             db.version_create(VersionName(&n.to_be_bytes())).unwrap();
-            db.insert(n, n).unwrap();
+            db.insert(&n, &n).unwrap();
         })
     });
 
@@ -105,7 +105,7 @@ fn version_random_read_write(c: &mut Criterion) {
         b.iter(|| {
             let n = rng.gen::<usize>();
             db.version_create(VersionName(&n.to_be_bytes())).unwrap();
-            db.insert(n, n).unwrap();
+            db.insert(&n, &n).unwrap();
             keys.push(n);
         })
     });
@@ -133,7 +133,7 @@ fn branch_version_read_write(c: &mut Criterion) {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::SeqCst);
 
-            db.insert(n, n).unwrap();
+            db.insert(&n, &n).unwrap();
         })
     });
 
@@ -160,7 +160,7 @@ fn branch_version_random_read_write(c: &mut Criterion) {
     group.bench_function(" random write ", |b| {
         b.iter(|| {
             let n = rng.gen::<usize>();
-            db.insert(n, n).unwrap();
+            db.insert(&n, &n).unwrap();
             keys.push(n);
         })
     });

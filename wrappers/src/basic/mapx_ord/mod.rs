@@ -39,10 +39,11 @@
 mod test;
 
 use crate::{
-    basic::mapx_ord_rawkey::{
-        Entry, MapxOrdRawKey, MapxOrdRawKeyIter, ValueIterMut, ValueMut,
+    basic::mapx_ord_rawkey::{MapxOrdRawKey, MapxOrdRawKeyIter, ValueIterMut, ValueMut},
+    common::{
+        ende::{KeyEnDeOrdered, ValueEnDe},
+        RawKey,
     },
-    common::ende::{KeyEnDeOrdered, ValueEnDe},
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
@@ -189,14 +190,14 @@ where
     #[inline(always)]
     pub fn range<R: RangeBounds<K>>(&self, bounds: R) -> MapxOrdIter<'_, K, V> {
         let l = match bounds.start_bound() {
-            Bound::Included(lo) => Bound::Included(Cow::Owned(lo.to_bytes().to_vec())),
-            Bound::Excluded(lo) => Bound::Excluded(Cow::Owned(lo.to_bytes().to_vec())),
+            Bound::Included(lo) => Bound::Included(Cow::Owned(lo.to_bytes().into_vec())),
+            Bound::Excluded(lo) => Bound::Excluded(Cow::Owned(lo.to_bytes().into_vec())),
             Bound::Unbounded => Bound::Unbounded,
         };
 
         let h = match bounds.end_bound() {
-            Bound::Included(hi) => Bound::Included(Cow::Owned(hi.to_bytes().to_vec())),
-            Bound::Excluded(hi) => Bound::Excluded(Cow::Owned(hi.to_bytes().to_vec())),
+            Bound::Included(hi) => Bound::Included(Cow::Owned(hi.to_bytes().into_vec())),
+            Bound::Excluded(hi) => Bound::Excluded(Cow::Owned(hi.to_bytes().into_vec())),
             Bound::Unbounded => Bound::Unbounded,
         };
 
@@ -212,14 +213,14 @@ where
         bounds: R,
     ) -> MapxOrdIterMut<'_, K, V> {
         let l = match bounds.start_bound() {
-            Bound::Included(lo) => Bound::Included(Cow::Owned(lo.to_bytes().to_vec())),
-            Bound::Excluded(lo) => Bound::Excluded(Cow::Owned(lo.to_bytes().to_vec())),
+            Bound::Included(lo) => Bound::Included(Cow::Owned(lo.to_bytes().into_vec())),
+            Bound::Excluded(lo) => Bound::Excluded(Cow::Owned(lo.to_bytes().into_vec())),
             Bound::Unbounded => Bound::Unbounded,
         };
 
         let h = match bounds.end_bound() {
-            Bound::Included(hi) => Bound::Included(Cow::Owned(hi.to_bytes().to_vec())),
-            Bound::Excluded(hi) => Bound::Excluded(Cow::Owned(hi.to_bytes().to_vec())),
+            Bound::Included(hi) => Bound::Included(Cow::Owned(hi.to_bytes().into_vec())),
+            Bound::Excluded(hi) => Bound::Excluded(Cow::Owned(hi.to_bytes().into_vec())),
             Bound::Unbounded => Bound::Unbounded,
         };
 
@@ -420,6 +421,29 @@ where
                 },
             )
         })
+    }
+}
+
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+
+pub struct Entry<'a, V>
+where
+    V: ValueEnDe,
+{
+    pub(crate) key: RawKey,
+    pub(crate) hdr: &'a mut MapxOrdRawKey<V>,
+}
+
+impl<'a, V> Entry<'a, V>
+where
+    V: ValueEnDe,
+{
+    pub fn or_insert(self, default: &V) -> ValueMut<'a, V> {
+        if !self.hdr.contains_key(&self.key) {
+            self.hdr.set_value(&self.key, default);
+        }
+        pnk!(self.hdr.get_mut(&self.key))
     }
 }
 
