@@ -1,12 +1,12 @@
 # Change log
 
-## v0.43.1
+## v0.43.x
 
 #### Internal optimizations
 
 - Optimize low-level en/decoding mechanism
 
-## v0.42.1
+## v0.42.x
 
 #### API changes
 
