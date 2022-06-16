@@ -1,6 +1,6 @@
 # Change log
 
-## v0.42.0
+## v0.42.1
 
 #### API changes
 
