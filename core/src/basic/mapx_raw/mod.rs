@@ -149,6 +149,18 @@ impl MapxRaw {
     pub fn clear(&mut self) {
         self.inner.clear();
     }
+
+    #[inline(always)]
+    pub(crate) unsafe fn from_slice(s: impl AsRef<[u8]>) -> Self {
+        Self {
+            inner: engines::Mapx::from_prefix_slice(s),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn as_prefix_slice(&self) -> &[u8] {
+        self.inner.as_prefix_slice()
+    }
 }
 
 impl Default for MapxRaw {

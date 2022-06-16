@@ -39,7 +39,7 @@ type EngineIter = sled_db::SledIter;
 
 use crate::common::{
     BranchIDBase as BranchID, Pre, PreBytes, RawKey, RawValue,
-    VersionIDBase as VersionID, VSDB,
+    VersionIDBase as VersionID, PREFIX_SIZE, VSDB,
 };
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -150,10 +150,6 @@ impl Mapx {
         }
     }
 
-    fn get_instance_cfg(&self) -> InstanceCfg {
-        InstanceCfg::from(self)
-    }
-
     #[inline(always)]
     pub(crate) fn get(&self, key: &[u8]) -> Option<RawValue> {
         VSDB.db.get(self.prefix, key)
@@ -243,6 +239,19 @@ impl Mapx {
         });
         VSDB.db.set_instance_len(self.prefix, 0);
     }
+
+    #[inline(always)]
+    pub(crate) unsafe fn from_prefix_slice(s: impl AsRef<[u8]>) -> Self {
+        debug_assert_eq!(s.as_ref().len(), PREFIX_SIZE);
+        let mut prefix = PreBytes::default();
+        prefix.copy_from_slice(s.as_ref());
+        Self { prefix }
+    }
+
+    #[inline(always)]
+    pub(crate) fn as_prefix_slice(&self) -> &[u8] {
+        &self.prefix
+    }
 }
 
 impl Clone for Mapx {
@@ -266,23 +275,6 @@ impl PartialEq for Mapx {
 }
 
 impl Eq for Mapx {}
-
-#[derive(Deserialize, Serialize, Debug)]
-struct InstanceCfg {
-    prefix: PreBytes,
-}
-
-impl From<InstanceCfg> for Mapx {
-    fn from(cfg: InstanceCfg) -> Self {
-        Self { prefix: cfg.prefix }
-    }
-}
-
-impl From<&Mapx> for InstanceCfg {
-    fn from(x: &Mapx) -> Self {
-        Self { prefix: x.prefix }
-    }
-}
 
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
@@ -309,7 +301,7 @@ impl Serialize for Mapx {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_bytes(&pnk!(msgpack::to_vec(&self.get_instance_cfg())))
+        serializer.serialize_bytes(self.as_prefix_slice())
     }
 }
 
@@ -318,10 +310,9 @@ impl<'de> Deserialize<'de> for Mapx {
     where
         D: serde::Deserializer<'de>,
     {
-        deserializer.deserialize_bytes(SimpleVisitor).map(|meta| {
-            let meta = pnk!(msgpack::from_slice::<InstanceCfg>(&meta));
-            Mapx::from(meta)
-        })
+        deserializer
+            .deserialize_bytes(SimpleVisitor)
+            .map(|meta| unsafe { Self::from_prefix_slice(&meta) })
     }
 }
 

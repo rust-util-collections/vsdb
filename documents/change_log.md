@@ -1,5 +1,11 @@
 # Change log
 
+## v0.43.1
+
+#### Internal optimizations
+
+- Optimize low-level en/decoding mechanism
+
 ## v0.42.1
 
 #### API changes

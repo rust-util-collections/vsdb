@@ -83,7 +83,7 @@ impl MapxRawVs {
         self.branch_id_to_branch_name
             .insert(&initial_brid[..], INITIAL_BRANCH_NAME.0);
         self.branch_to_its_versions
-            .insert(&initial_brid[..], &encode(&MapxRaw::new()));
+            .insert(&initial_brid[..], encode_map(&MapxRaw::new()));
     }
 
     #[inline(always)]
@@ -196,14 +196,14 @@ impl MapxRawVs {
         }
 
         // NOTE: the value needs not to be stored here
-        decode_map(&self.version_to_change_set.get_mut(&version_id).c(d!())?)
+        decode_map(&*self.version_to_change_set.get_mut(&version_id).c(d!())?)
             .insert(key, &[]);
 
         decode_map(
-            &self
+            &*self
                 .layered_kv
                 .entry(key)
-                .or_insert(&encode(&MapxRaw::new())),
+                .or_insert(encode_map(&MapxRaw::new())),
         )
         .insert(&version_id[..], value.unwrap_or_default());
 
@@ -436,7 +436,7 @@ impl MapxRawVs {
         }
 
         let mut vers = decode_map(
-            &self
+            &*self
                 .branch_to_its_versions
                 .get_mut(&branch_id)
                 .c(d!("branch not found"))?,
@@ -450,7 +450,7 @@ impl MapxRawVs {
         self.version_id_to_version_name
             .insert(&version_id, version_name);
         self.version_to_change_set
-            .insert(&version_id, &encode(&MapxRaw::new()));
+            .insert(&version_id, encode_map(&MapxRaw::new()));
 
         Ok(())
     }
@@ -873,7 +873,7 @@ impl MapxRawVs {
         self.branch_id_to_branch_name
             .insert(&branch_id, branch_name);
         self.branch_to_its_versions
-            .insert(&branch_id, &encode(&vers_copied));
+            .insert(&branch_id, encode_map(&vers_copied));
 
         if let Some(vername) = version_name {
             // create the first version of the new branch
@@ -1352,18 +1352,13 @@ impl DoubleEndedIterator for MapxRawVsIter<'_> {
 ////////////////////////////////////////////////////////////////////////////////////
 
 #[inline(always)]
-fn encode(t: &impl Serialize) -> Vec<u8> {
-    pnk!(msgpack::to_vec(t))
+fn encode_map(m: &MapxRaw) -> &[u8] {
+    m.as_prefix_slice()
 }
 
 #[inline(always)]
-fn decode<'a, T: Deserialize<'a>>(t: &'a [u8]) -> T {
-    pnk!(msgpack::from_slice(t))
-}
-
-#[inline(always)]
-fn decode_map(t: &[u8]) -> MapxRaw {
-    decode(t)
+fn decode_map(v: impl AsRef<[u8]>) -> MapxRaw {
+    unsafe { MapxRaw::from_slice(v.as_ref()) }
 }
 
 #[inline(always)]
