@@ -6,7 +6,9 @@
 mod test;
 
 use crate::{
-    versioned::mapx_ord_rawkey::{MapxOrdRawKeyVs, MapxOrdRawKeyVsIter},
+    versioned::mapx_ord_rawkey::{
+        MapxOrdRawKeyVs, MapxOrdRawKeyVsIter, MapxOrdRawKeyVsIterMut, ValueIterMut,
+    },
     BranchName, ValueEnDe, VersionName, VsMgmt,
 };
 use ruc::*;
@@ -95,12 +97,16 @@ impl<T: ValueEnDe> VecxVs<T> {
     #[inline(always)]
     pub fn iter(&self) -> VecxVsIter<'_, T> {
         VecxVsIter {
-            iter: self.inner.iter(),
+            inner: self.inner.iter(),
         }
     }
 
-    // TODO
-    // pub fn iter_mut
+    #[inline(always)]
+    pub fn iter_mut(&mut self) -> VecxVsIterMut<'_, T> {
+        VecxVsIterMut {
+            inner: self.inner.iter_mut(),
+        }
+    }
 
     #[inline(always)]
     pub fn clear(&mut self) {
@@ -167,7 +173,7 @@ impl<T: ValueEnDe> VecxVs<T> {
     #[inline(always)]
     pub fn iter_by_branch(&self, branch_name: BranchName) -> VecxVsIter<'_, T> {
         VecxVsIter {
-            iter: self.inner.iter_by_branch(branch_name),
+            inner: self.inner.iter_by_branch(branch_name),
         }
     }
 
@@ -229,10 +235,13 @@ impl<T: ValueEnDe> VecxVs<T> {
         version_name: VersionName,
     ) -> VecxVsIter<'_, T> {
         VecxVsIter {
-            iter: self.inner.iter_by_branch_version(branch_name, version_name),
+            inner: self.inner.iter_by_branch_version(branch_name, version_name),
         }
     }
 }
+
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
 
 impl<T> Clone for VecxVs<T> {
     fn clone(&self) -> Self {
@@ -248,26 +257,35 @@ impl<T: ValueEnDe> Default for VecxVs<T> {
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+
 impl<T: ValueEnDe> VsMgmt for VecxVs<T> {
     crate::impl_vs_methods!();
 }
 
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+
 pub struct VecxVsIter<'a, T: ValueEnDe> {
-    iter: MapxOrdRawKeyVsIter<'a, T>,
+    inner: MapxOrdRawKeyVsIter<'a, T>,
 }
 
 impl<'a, T: ValueEnDe> Iterator for VecxVsIter<'a, T> {
     type Item = T;
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next().map(|v| v.1)
+        self.inner.next().map(|v| v.1)
     }
 }
 
 impl<'a, T: ValueEnDe> DoubleEndedIterator for VecxVsIter<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.iter.next_back().map(|v| v.1)
+        self.inner.next_back().map(|v| v.1)
     }
 }
+
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
 
 #[derive(PartialEq, Eq, Debug)]
 pub struct ValueMut<'a, V: ValueEnDe> {
@@ -316,3 +334,36 @@ where
         &mut self.value
     }
 }
+
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+
+pub struct VecxVsIterMut<'a, T>
+where
+    T: ValueEnDe,
+{
+    inner: MapxOrdRawKeyVsIterMut<'a, T>,
+}
+
+impl<'a, T> Iterator for VecxVsIterMut<'a, T>
+where
+    T: ValueEnDe,
+{
+    type Item = ValueIterMut<'a, T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(_, v)| v)
+    }
+}
+
+impl<'a, T> DoubleEndedIterator for VecxVsIterMut<'a, T>
+where
+    T: ValueEnDe,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.inner.next_back().map(|(_, v)| v)
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////

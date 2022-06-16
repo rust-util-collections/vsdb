@@ -12,7 +12,7 @@ Based on the powerful version control function of VSDB, you can easily give your
 
 **Make everything versioned !!**
 
-[**To view the change log check here**](./documents/change_log.md).
+[**To view the change log check here**](../documents/change_log.md).
 
 ### Highlights
 
@@ -169,6 +169,8 @@ Some complete examples:
   - The correct way is to read what you need from it, and then process the real content
 - Version names must be globally unique
   - Using a same version name on different branches is also not allowed
+- The low-level "does not exist" expression has been changed from `None` to `[]` since v0.42.0
+  - If you assign an empty value(`[u8;0]`, `&[]` ...) to a key, the key will be treated as 'deleted'
 
 ### LICENSE
 

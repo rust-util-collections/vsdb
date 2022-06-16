@@ -421,8 +421,14 @@ fn test_iter() {
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
         assert!(pnk!(hdr.insert(&key, &value)).is_none());
     });
+
+    hdr.iter_mut().for_each(|(k, mut v)| {
+        *v += 1;
+    });
+
     let hdr_shadow = hdr.clone();
-    for (key, _) in hdr_shadow.iter() {
+    for (idx, (key, v)) in hdr_shadow.iter().enumerate() {
+        assert_eq!(idx + 1, v);
         assert!(pnk!(hdr.remove(&key)).is_some());
     }
     assert_eq!(0, hdr.len());

@@ -85,6 +85,15 @@ fn basic_cases() {
     assert_eq!(&[80], &reloaded.get_ge(&[80]).unwrap().1[..]);
     assert_eq!(&[80], &reloaded.get_le(&[80]).unwrap().1[..]);
     assert_eq!(&[80], &reloaded.get_le(&[100]).unwrap().1[..]);
+
+    reloaded.range_mut(..).for_each(|(_, mut v)| {
+        *v = vec![0u8; 1].into();
+    });
+
+    assert_eq!(&reloaded.get_ge(&[79]).unwrap().1[..], &[0]);
+    assert_eq!(&reloaded.get_ge(&[80]).unwrap().1[..], &[0]);
+    assert_eq!(&reloaded.get_le(&[80]).unwrap().1[..], &[0]);
+    assert_eq!(&reloaded.get_le(&[100]).unwrap().1[..], &[0]);
 }
 
 // # VCS(version control system) scene

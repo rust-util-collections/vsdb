@@ -430,8 +430,14 @@ fn test_iter() {
         let key = <usize as ValueEnDe>::encode(&key);
         assert!(pnk!(hdr.insert(&key, &value)).is_none());
     });
+
+    hdr.iter_mut().for_each(|(k, mut v)| {
+        *v += 1;
+    });
+
     let hdr_shadow = hdr.clone();
-    for (key, _) in hdr_shadow.iter() {
+    for (idx, (key, v)) in hdr_shadow.iter().enumerate() {
+        assert_eq!(idx + 1, v);
         assert!(pnk!(hdr.remove(&key)).is_some());
     }
     assert_eq!(0, hdr.len());

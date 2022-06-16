@@ -46,6 +46,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
     collections::BTreeSet,
+    mem::transmute,
     ops::{Deref, DerefMut, RangeBounds},
 };
 
@@ -245,8 +246,14 @@ impl MapxRawVs {
         self.inner.iter()
     }
 
-    // TODO
-    // pub fn iter_mut
+    /// Create a mutable iterator over the default branch.
+    #[inline(always)]
+    pub fn iter_mut(&mut self) -> MapxRawVsIterMut {
+        MapxRawVsIterMut {
+            hdr: self as *mut Self,
+            iter: self.inner.iter(),
+        }
+    }
 
     /// Create an iterator over a specified branch.
     #[inline(always)]
@@ -277,6 +284,18 @@ impl MapxRawVs {
     }
 
     /// Create a range iterator over the default branch.
+    #[inline(always)]
+    pub fn range_mut<'a, R: RangeBounds<Cow<'a, [u8]>>>(
+        &'a mut self,
+        bounds: R,
+    ) -> MapxRawVsIterMut<'a> {
+        MapxRawVsIterMut {
+            hdr: self as *mut Self,
+            iter: self.inner.range(bounds),
+        }
+    }
+
+    /// Create a mutable range iterator over the default branch.
     #[inline(always)]
     pub fn range<'a, R: RangeBounds<Cow<'a, [u8]>>>(
         &'a self,
@@ -914,6 +933,9 @@ impl VsMgmt for MapxRawVs {
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+
 #[derive(PartialEq, Eq, Debug)]
 pub struct ValueMut<'a> {
     hdr: &'a mut MapxRawVs,
@@ -947,6 +969,9 @@ impl<'a> DerefMut for ValueMut<'a> {
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+
 pub struct Entry<'a> {
     hdr: &'a mut MapxRawVs,
     key: &'a [u8],
@@ -960,3 +985,71 @@ impl<'a> Entry<'a> {
         pnk!(self.hdr.get_mut(self.key))
     }
 }
+
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+
+#[derive(Debug)]
+pub struct ValueIterMut<'a> {
+    key: RawKey,
+    value: RawValue,
+    iter_mut: &'a mut MapxRawVsIterMut<'a>,
+}
+
+impl<'a> Drop for ValueIterMut<'a> {
+    fn drop(&mut self) {
+        let hdr = unsafe { &mut (*self.iter_mut.hdr) };
+        pnk!(hdr.insert(&self.key, &self.value));
+    }
+}
+
+impl<'a> Deref for ValueIterMut<'a> {
+    type Target = RawValue;
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<'a> DerefMut for ValueIterMut<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+
+#[derive(Debug)]
+pub struct MapxRawVsIterMut<'a> {
+    hdr: *mut MapxRawVs,
+    iter: MapxRawVsIter<'a>,
+}
+
+impl<'a> Iterator for MapxRawVsIterMut<'a> {
+    type Item = (RawKey, ValueIterMut<'a>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (k, v) = self.iter.next()?;
+        let v = ValueIterMut {
+            key: k.clone(),
+            value: v,
+            iter_mut: unsafe { transmute::<&'_ mut Self, &'a mut Self>(self) },
+        };
+        Some((k, v))
+    }
+}
+
+impl<'a> DoubleEndedIterator for MapxRawVsIterMut<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        let (k, v) = self.iter.next_back()?;
+        let v = ValueIterMut {
+            key: k.clone(),
+            value: v,
+            iter_mut: unsafe { transmute::<&'_ mut Self, &'a mut Self>(self) },
+        };
+        Some((k, v))
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////

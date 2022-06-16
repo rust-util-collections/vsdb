@@ -6,7 +6,9 @@ mod test;
 
 use crate::{
     common::ende::{KeyEnDeOrdered, ValueEnDe},
-    versioned::mapx_ord_rawkey::{MapxOrdRawKeyVs, MapxOrdRawKeyVsIter},
+    versioned::mapx_ord_rawkey::{
+        MapxOrdRawKeyVs, MapxOrdRawKeyVsIter, MapxOrdRawKeyVsIterMut, ValueIterMut,
+    },
     BranchName, VersionName, VsMgmt,
 };
 use ruc::*;
@@ -22,7 +24,7 @@ use std::{
 #[serde(bound = "")]
 pub struct MapxOrdVs<K, V> {
     inner: MapxOrdRawKeyVs<V>,
-    p: PhantomData<K>,
+    _m_pd: PhantomData<K>,
 }
 
 impl<K, V> MapxOrdVs<K, V>
@@ -38,7 +40,7 @@ where
     pub unsafe fn shadow(&self) -> Self {
         Self {
             inner: self.inner.shadow(),
-            p: PhantomData,
+            _m_pd: PhantomData,
         }
     }
 
@@ -46,7 +48,7 @@ where
     pub fn new() -> Self {
         MapxOrdVs {
             inner: MapxOrdRawKeyVs::new(),
-            p: PhantomData,
+            _m_pd: PhantomData,
         }
     }
 
@@ -97,14 +99,32 @@ where
     #[inline(always)]
     pub fn iter(&self) -> MapxOrdVsIter<K, V> {
         MapxOrdVsIter {
-            iter: self.inner.iter(),
-            p: PhantomData,
+            inner: self.inner.iter(),
+            _m_pd: PhantomData,
         }
     }
 
-    // TODO
-    // pub fn iter_mut
-    // pub fn range_mut
+    #[inline(always)]
+    pub fn iter_mut(&mut self) -> MapxOrdVsIterMut<K, V> {
+        MapxOrdVsIterMut {
+            inner: self.inner.iter_mut(),
+            _m_pd: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub fn values(&self) -> MapxOrdVsValues<V> {
+        MapxOrdVsValues {
+            inner: self.inner.iter(),
+        }
+    }
+
+    #[inline(always)]
+    pub fn values_mut(&mut self) -> MapxOrdVsValuesMut<V> {
+        MapxOrdVsValuesMut {
+            inner: self.inner.iter_mut(),
+        }
+    }
 
     #[inline(always)]
     pub fn range<'a, R: 'a + RangeBounds<K>>(
@@ -123,8 +143,30 @@ where
         };
 
         MapxOrdVsIter {
-            iter: self.inner.range((l, h)),
-            p: PhantomData,
+            inner: self.inner.range((l, h)),
+            _m_pd: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub fn range_mut<'a, R: 'a + RangeBounds<K>>(
+        &'a mut self,
+        bounds: R,
+    ) -> MapxOrdVsIterMut<'a, K, V> {
+        let l = match bounds.start_bound() {
+            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes().into_vec())),
+            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes().into_vec())),
+            _ => Bound::Unbounded,
+        };
+        let h = match bounds.end_bound() {
+            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes().into_vec())),
+            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes().into_vec())),
+            _ => Bound::Unbounded,
+        };
+
+        MapxOrdVsIterMut {
+            inner: self.inner.range_mut((l, h)),
+            _m_pd: PhantomData,
         }
     }
 
@@ -197,8 +239,8 @@ where
     #[inline(always)]
     pub fn iter_by_branch(&self, branch_name: BranchName) -> MapxOrdVsIter<K, V> {
         MapxOrdVsIter {
-            iter: self.inner.iter_by_branch(branch_name),
-            p: PhantomData,
+            inner: self.inner.iter_by_branch(branch_name),
+            _m_pd: PhantomData,
         }
     }
 
@@ -220,8 +262,8 @@ where
         };
 
         MapxOrdVsIter {
-            iter: self.inner.range_by_branch(branch_name, (l, h)),
-            p: PhantomData,
+            inner: self.inner.range_by_branch(branch_name, (l, h)),
+            _m_pd: PhantomData,
         }
     }
 
@@ -313,8 +355,8 @@ where
         version_name: VersionName,
     ) -> MapxOrdVsIter<K, V> {
         MapxOrdVsIter {
-            iter: self.inner.iter_by_branch_version(branch_name, version_name),
-            p: PhantomData,
+            inner: self.inner.iter_by_branch_version(branch_name, version_name),
+            _m_pd: PhantomData,
         }
     }
 
@@ -337,10 +379,10 @@ where
         };
 
         MapxOrdVsIter {
-            iter: self
+            inner: self
                 .inner
                 .range_by_branch_version(branch_name, version_name, (l, h)),
-            p: PhantomData,
+            _m_pd: PhantomData,
         }
     }
 
@@ -379,11 +421,14 @@ where
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+
 impl<K, V> Clone for MapxOrdVs<K, V> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
-            p: PhantomData,
+            _m_pd: PhantomData,
         }
     }
 }
@@ -398,6 +443,9 @@ where
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+
 impl<K, V> VsMgmt for MapxOrdVs<K, V>
 where
     K: KeyEnDeOrdered,
@@ -406,44 +454,8 @@ where
     crate::impl_vs_methods!();
 }
 
-pub struct MapxOrdVsIter<'a, K, V>
-where
-    K: KeyEnDeOrdered,
-    V: ValueEnDe,
-{
-    iter: MapxOrdRawKeyVsIter<'a, V>,
-    p: PhantomData<K>,
-}
-
-impl<'a, K, V> Iterator for MapxOrdVsIter<'a, K, V>
-where
-    K: KeyEnDeOrdered,
-    V: ValueEnDe,
-{
-    type Item = (K, V);
-    fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next().map(|(k, v)| (pnk!(K::from_bytes(k)), v))
-    }
-}
-
-impl<'a, K, V> DoubleEndedIterator for MapxOrdVsIter<'a, K, V>
-where
-    K: KeyEnDeOrdered,
-    V: ValueEnDe,
-{
-    fn next_back(&mut self) -> Option<Self::Item> {
-        self.iter
-            .next_back()
-            .map(|(k, v)| (pnk!(K::from_bytes(k)), v))
-    }
-}
-
-impl<'a, K, V> ExactSizeIterator for MapxOrdVsIter<'a, K, V>
-where
-    K: KeyEnDeOrdered,
-    V: ValueEnDe,
-{
-}
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
 
 #[derive(PartialEq, Eq, Debug)]
 pub struct ValueMut<'a, K, V>
@@ -497,6 +509,9 @@ where
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+
 pub struct Entry<'a, K, V>
 where
     K: KeyEnDeOrdered,
@@ -518,3 +533,138 @@ where
         pnk!(self.hdr.get_mut(self.key))
     }
 }
+
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+
+pub struct MapxOrdVsIter<'a, K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    inner: MapxOrdRawKeyVsIter<'a, V>,
+    _m_pd: PhantomData<K>,
+}
+
+impl<'a, K, V> Iterator for MapxOrdVsIter<'a, K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    type Item = (K, V);
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(k, v)| (pnk!(K::from_bytes(k)), v))
+    }
+}
+
+impl<'a, K, V> DoubleEndedIterator for MapxOrdVsIter<'a, K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next_back()
+            .map(|(k, v)| (pnk!(K::from_bytes(k)), v))
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+
+pub struct MapxOrdVsValues<'a, V>
+where
+    V: ValueEnDe,
+{
+    inner: MapxOrdRawKeyVsIter<'a, V>,
+}
+
+impl<'a, V> Iterator for MapxOrdVsValues<'a, V>
+where
+    V: ValueEnDe,
+{
+    type Item = V;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(_, v)| v)
+    }
+}
+
+impl<'a, V> DoubleEndedIterator for MapxOrdVsValues<'a, V>
+where
+    V: ValueEnDe,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.inner.next_back().map(|(_, v)| v)
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+
+pub struct MapxOrdVsIterMut<'a, K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    inner: MapxOrdRawKeyVsIterMut<'a, V>,
+    _m_pd: PhantomData<K>,
+}
+
+impl<'a, K, V> Iterator for MapxOrdVsIterMut<'a, K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    type Item = (K, ValueIterMut<'a, V>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next()
+            .map(|(k, v)| (pnk!(<K as KeyEnDeOrdered>::from_bytes(k)), v))
+    }
+}
+
+impl<'a, K, V> DoubleEndedIterator for MapxOrdVsIterMut<'a, K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next_back()
+            .map(|(k, v)| (pnk!(<K as KeyEnDeOrdered>::from_bytes(k)), v))
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+
+pub struct MapxOrdVsValuesMut<'a, V>
+where
+    V: ValueEnDe,
+{
+    inner: MapxOrdRawKeyVsIterMut<'a, V>,
+}
+
+impl<'a, V> Iterator for MapxOrdVsValuesMut<'a, V>
+where
+    V: ValueEnDe,
+{
+    type Item = ValueIterMut<'a, V>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(_, v)| v)
+    }
+}
+
+impl<'a, V> DoubleEndedIterator for MapxOrdVsValuesMut<'a, V>
+where
+    V: ValueEnDe,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.inner.next_back().map(|(_, v)| v)
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////

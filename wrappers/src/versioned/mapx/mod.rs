@@ -7,7 +7,9 @@ mod test;
 
 use crate::{
     common::ende::{KeyEnDe, ValueEnDe},
-    versioned::mapx_ord_rawkey::{MapxOrdRawKeyVs, MapxOrdRawKeyVsIter},
+    versioned::mapx_ord_rawkey::{
+        MapxOrdRawKeyVs, MapxOrdRawKeyVsIter, MapxOrdRawKeyVsIterMut, ValueIterMut,
+    },
     BranchName, VersionName, VsMgmt,
 };
 use ruc::*;
@@ -22,7 +24,7 @@ use std::{
 #[serde(bound = "")]
 pub struct MapxVs<K, V> {
     inner: MapxOrdRawKeyVs<V>,
-    p: PhantomData<K>,
+    _m_pd: PhantomData<K>,
 }
 
 impl<K, V> MapxVs<K, V>
@@ -38,7 +40,7 @@ where
     pub unsafe fn shadow(&self) -> Self {
         Self {
             inner: self.inner.shadow(),
-            p: PhantomData,
+            _m_pd: PhantomData,
         }
     }
 
@@ -46,7 +48,7 @@ where
     pub fn new() -> Self {
         MapxVs {
             inner: MapxOrdRawKeyVs::new(),
-            p: PhantomData,
+            _m_pd: PhantomData,
         }
     }
 
@@ -97,13 +99,32 @@ where
     #[inline(always)]
     pub fn iter(&self) -> MapxVsIter<K, V> {
         MapxVsIter {
-            iter: self.inner.iter(),
-            p: PhantomData,
+            inner: self.inner.iter(),
+            _m_pd: PhantomData,
         }
     }
 
-    // TODO
-    // pub fn iter_mut
+    #[inline(always)]
+    pub fn iter_mut(&mut self) -> MapxVsIterMut<K, V> {
+        MapxVsIterMut {
+            inner: self.inner.iter_mut(),
+            _m_pd: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub fn values(&self) -> MapxVsValues<V> {
+        MapxVsValues {
+            inner: self.inner.iter(),
+        }
+    }
+
+    #[inline(always)]
+    pub fn values_mut(&mut self) -> MapxVsValuesMut<V> {
+        MapxVsValuesMut {
+            inner: self.inner.iter_mut(),
+        }
+    }
 
     #[inline(always)]
     pub fn first(&self) -> Option<(K, V)> {
@@ -174,8 +195,8 @@ where
     #[inline(always)]
     pub fn iter_by_branch(&self, branch_name: BranchName) -> MapxVsIter<K, V> {
         MapxVsIter {
-            iter: self.inner.iter_by_branch(branch_name),
-            p: PhantomData,
+            inner: self.inner.iter_by_branch(branch_name),
+            _m_pd: PhantomData,
         }
     }
 
@@ -267,8 +288,8 @@ where
         version_name: VersionName,
     ) -> MapxVsIter<K, V> {
         MapxVsIter {
-            iter: self.inner.iter_by_branch_version(branch_name, version_name),
-            p: PhantomData,
+            inner: self.inner.iter_by_branch_version(branch_name, version_name),
+            _m_pd: PhantomData,
         }
     }
 
@@ -307,11 +328,14 @@ where
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+
 impl<K, V> Clone for MapxVs<K, V> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
-            p: PhantomData,
+            _m_pd: PhantomData,
         }
     }
 }
@@ -326,6 +350,9 @@ where
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+
 impl<K, V> VsMgmt for MapxVs<K, V>
 where
     K: KeyEnDe,
@@ -334,46 +361,33 @@ where
     crate::impl_vs_methods!();
 }
 
-pub struct MapxVsIter<'a, K, V>
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+
+pub struct Entry<'a, K, V>
 where
     K: KeyEnDe,
     V: ValueEnDe,
 {
-    iter: MapxOrdRawKeyVsIter<'a, V>,
-    p: PhantomData<K>,
+    hdr: &'a mut MapxVs<K, V>,
+    key: &'a K,
 }
 
-impl<'a, K, V> Iterator for MapxVsIter<'a, K, V>
+impl<'a, K, V> Entry<'a, K, V>
 where
     K: KeyEnDe,
     V: ValueEnDe,
 {
-    type Item = (K, V);
-    fn next(&mut self) -> Option<Self::Item> {
-        self.iter
-            .next()
-            .map(|(k, v)| (pnk!(<K as KeyEnDe>::decode(&k)), v))
+    pub fn or_insert(self, default: &V) -> ValueMut<'a, K, V> {
+        if !self.hdr.contains_key(self.key) {
+            pnk!(self.hdr.insert(self.key, default));
+        }
+        pnk!(self.hdr.get_mut(self.key))
     }
 }
 
-impl<'a, K, V> DoubleEndedIterator for MapxVsIter<'a, K, V>
-where
-    K: KeyEnDe,
-    V: ValueEnDe,
-{
-    fn next_back(&mut self) -> Option<Self::Item> {
-        self.iter
-            .next_back()
-            .map(|(k, v)| (pnk!(<K as KeyEnDe>::decode(&k)), v))
-    }
-}
-
-impl<'a, K, V> ExactSizeIterator for MapxVsIter<'a, K, V>
-where
-    K: KeyEnDe,
-    V: ValueEnDe,
-{
-}
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
 
 #[derive(PartialEq, Eq, Debug)]
 pub struct ValueMut<'a, K, V>
@@ -427,24 +441,139 @@ where
     }
 }
 
-pub struct Entry<'a, K, V>
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+
+pub struct MapxVsIter<'a, K, V>
 where
     K: KeyEnDe,
     V: ValueEnDe,
 {
-    hdr: &'a mut MapxVs<K, V>,
-    key: &'a K,
+    inner: MapxOrdRawKeyVsIter<'a, V>,
+    _m_pd: PhantomData<K>,
 }
 
-impl<'a, K, V> Entry<'a, K, V>
+impl<'a, K, V> Iterator for MapxVsIter<'a, K, V>
 where
     K: KeyEnDe,
     V: ValueEnDe,
 {
-    pub fn or_insert(self, default: &V) -> ValueMut<'a, K, V> {
-        if !self.hdr.contains_key(self.key) {
-            pnk!(self.hdr.insert(self.key, default));
-        }
-        pnk!(self.hdr.get_mut(self.key))
+    type Item = (K, V);
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next()
+            .map(|(k, v)| (pnk!(<K as KeyEnDe>::decode(&k)), v))
     }
 }
+
+impl<'a, K, V> DoubleEndedIterator for MapxVsIter<'a, K, V>
+where
+    K: KeyEnDe,
+    V: ValueEnDe,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next_back()
+            .map(|(k, v)| (pnk!(<K as KeyEnDe>::decode(&k)), v))
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+
+pub struct MapxVsValues<'a, V>
+where
+    V: ValueEnDe,
+{
+    inner: MapxOrdRawKeyVsIter<'a, V>,
+}
+
+impl<'a, V> Iterator for MapxVsValues<'a, V>
+where
+    V: ValueEnDe,
+{
+    type Item = V;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(_, v)| v)
+    }
+}
+
+impl<'a, V> DoubleEndedIterator for MapxVsValues<'a, V>
+where
+    V: ValueEnDe,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.inner.next_back().map(|(_, v)| v)
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+
+pub struct MapxVsIterMut<'a, K, V>
+where
+    K: KeyEnDe,
+    V: ValueEnDe,
+{
+    inner: MapxOrdRawKeyVsIterMut<'a, V>,
+    _m_pd: PhantomData<K>,
+}
+
+impl<'a, K, V> Iterator for MapxVsIterMut<'a, K, V>
+where
+    K: KeyEnDe,
+    V: ValueEnDe,
+{
+    type Item = (K, ValueIterMut<'a, V>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next()
+            .map(|(k, v)| (pnk!(<K as KeyEnDe>::decode(&k)), v))
+    }
+}
+
+impl<'a, K, V> DoubleEndedIterator for MapxVsIterMut<'a, K, V>
+where
+    K: KeyEnDe,
+    V: ValueEnDe,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next_back()
+            .map(|(k, v)| (pnk!(<K as KeyEnDe>::decode(&k)), v))
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+
+pub struct MapxVsValuesMut<'a, V>
+where
+    V: ValueEnDe,
+{
+    inner: MapxOrdRawKeyVsIterMut<'a, V>,
+}
+
+impl<'a, V> Iterator for MapxVsValuesMut<'a, V>
+where
+    V: ValueEnDe,
+{
+    type Item = ValueIterMut<'a, V>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(_, v)| v)
+    }
+}
+
+impl<'a, V> DoubleEndedIterator for MapxVsValuesMut<'a, V>
+where
+    V: ValueEnDe,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.inner.next_back().map(|(_, v)| v)
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////

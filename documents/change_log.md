@@ -14,6 +14,8 @@
   - `iter_mut`
   - `values_mut`
   - `range_mut`
+- The low-level "does not exist" expression has been changed from 'None' to `&[]`
+  - If you assign a `&[]`, `vec![]` or `Box<[]>` value to a key, the key will be treated as 'deleted'
 
 #### Internal optimizations
 
