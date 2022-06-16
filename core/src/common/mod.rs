@@ -74,7 +74,7 @@ static VSDB_BASE_DIR: Lazy<Mutex<PathBuf>> = Lazy::new(|| Mutex::new(gen_data_di
 
 static VSDB_CUSTOM_DIR: Lazy<PathBuf> = Lazy::new(|| {
     let mut d = VSDB_BASE_DIR.lock().clone();
-    d.push("/__CUSTOM__");
+    d.push("__CUSTOM__");
     pnk!(fs::create_dir_all(&d));
     env::set_var("VSDB_CUSTOM_DIR", d.as_os_str());
     d
