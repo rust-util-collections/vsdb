@@ -109,7 +109,6 @@ impl MapxRawVs {
                 .get(&branch_id[..])
                 .c(d!("branch not found"))?,
         )
-        .iter()
         .last()
         .c(d!("no version on this branch, create a version first"))
         .and_then(|(version_id, _)| {
@@ -152,7 +151,6 @@ impl MapxRawVs {
                 .get(&branch_id)
                 .c(d!("branch not found"))?,
         )
-        .iter()
         .last()
         .c(d!("no version on this branch, create a version first"))
         .and_then(|(version_id, _)| {
@@ -222,7 +220,7 @@ impl MapxRawVs {
         branch_id: BranchID,
     ) -> Option<RawValue> {
         if let Some(vers) = self.branch_to_its_versions.get(&branch_id) {
-            if let Some(version_id) = decode_map(&vers).iter().last().map(|(id, _)| id) {
+            if let Some(version_id) = decode_map(&vers).last().map(|(id, _)| id) {
                 return self.get_by_branch_version(
                     key,
                     branch_id,
@@ -308,7 +306,7 @@ impl MapxRawVs {
     #[inline(always)]
     pub(super) fn iter_by_branch(&self, branch_id: BranchID) -> MapxRawVsIter {
         if let Some(vers) = self.branch_to_its_versions.get(&branch_id) {
-            if let Some((version_id, _)) = decode_map(&vers).iter().last() {
+            if let Some((version_id, _)) = decode_map(&vers).last() {
                 return self
                     .iter_by_branch_version(to_brid(&branch_id), to_verid(&version_id));
             }
@@ -351,7 +349,7 @@ impl MapxRawVs {
         bounds: R,
     ) -> MapxRawVsIter<'a> {
         if let Some(vers) = self.branch_to_its_versions.get(&branch_id) {
-            if let Some((version_id, _)) = decode_map(&vers).iter().last() {
+            if let Some((version_id, _)) = decode_map(&vers).last() {
                 return self.range_by_branch_version(
                     branch_id,
                     to_verid(&version_id),
@@ -505,7 +503,7 @@ impl MapxRawVs {
                 .c(d!("branch not found"))?,
         );
 
-        if let Some((version_id, _)) = vers.iter().next_back() {
+        if let Some((version_id, _)) = vers.last() {
             vers.remove(&version_id)
                 .c(d!("BUG: version is not on this branch"))?;
         }
@@ -724,7 +722,6 @@ impl MapxRawVs {
                 .get(&base_branch_id)
                 .c(d!("base branch not found"))?,
         )
-        .iter()
         .last()
         .map(|(version_id, _)| version_id);
 
@@ -792,7 +789,6 @@ impl MapxRawVs {
                 .get(&base_branch_id)
                 .c(d!("base branch not found"))?,
         )
-        .iter()
         .last()
         .map(|(version_id, _)| version_id);
 
@@ -1054,7 +1050,7 @@ impl MapxRawVs {
         );
 
         if !force {
-            if let Some((ver, _)) = target_vers.iter().last() {
+            if let Some((ver, _)) = target_vers.last() {
                 if !vers.contains_key(&ver) {
                     // Some new versions have been generated on the target branch
                     return Err(eg!("unable to merge safely"));
@@ -1071,8 +1067,8 @@ impl MapxRawVs {
                 .for_each(|(ver, _)| {
                     target_vers.insert(&ver, &[]);
                 });
-        } else if let Some((latest_ver, _)) = vers.iter().last() {
-            if let Some((target_latest_ver, _)) = target_vers.iter().last() {
+        } else if let Some((latest_ver, _)) = vers.last() {
+            if let Some((target_latest_ver, _)) = target_vers.last() {
                 match latest_ver.cmp(&target_latest_ver) {
                     Ordering::Equal => {
                         // no differences between the two branches

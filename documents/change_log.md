@@ -4,7 +4,9 @@
 
 #### Internal optimizations
 
-- Optimize low-level en/decoding mechanism
+- Optimize performance
+  - Tuning low-level en/decoding mechanism
+  - Avoid `iter().last()`, use `iter().next_back()`
 
 ## v0.42.x
 

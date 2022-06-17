@@ -132,6 +132,11 @@ impl MapxRaw {
     }
 
     #[inline(always)]
+    pub fn last(&self) -> Option<(RawKey, RawValue)> {
+        self.iter().next_back()
+    }
+
+    #[inline(always)]
     pub fn insert(
         &mut self,
         key: impl AsRef<[u8]>,

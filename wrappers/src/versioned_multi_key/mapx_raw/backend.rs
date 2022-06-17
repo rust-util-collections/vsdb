@@ -443,7 +443,7 @@ impl MapxRawMkVs {
             .get(&branch_id)
             .c(d!("branch not found"))?;
         let vers_shadow = unsafe { vers.shadow() };
-        if let Some((version_id, _)) = vers_shadow.iter().last() {
+        if let Some((version_id, _)) = vers_shadow.last() {
             vers.remove(&version_id)
                 .c(d!("version is not on this branch"))
         } else {
