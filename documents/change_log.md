@@ -1,5 +1,23 @@
 # Change log
 
+## v0.44.x
+
+#### Internal optimizations
+
+- Add a cache layer in the `MapxRawVs` and `MapxRawMkVs`
+  - New changes will be keeped in memory before calling `flush_cache`
+  - This mechanism will reduce repeated writes to the backend database
+- 'deleted' KVs of the oldest version should be cleaned up when do 'prune'
+
+#### New APIs
+
+- `flush_cache`
+  - Flush new changes to the backend database
+  - The flush process is parallel
+    - The parallelism here makes sense because the backend storage is sharded
+- `chgset_trie_root`, `chgset_trie_root_by_branch`, `chgset_trie_root_by_branch_version`
+  - Generate and return the 'trie' root hash of the change set of the target version
+
 ## v0.43.x
 
 #### Internal optimizations

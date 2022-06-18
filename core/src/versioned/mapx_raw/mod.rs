@@ -38,7 +38,7 @@ mod backend;
 mod test;
 
 use crate::{
-    common::{BranchName, ParentBranchName, RawKey, RawValue, VersionName, NULL},
+    common::{BranchName, ParentBranchName, RawKey, RawValue, VersionName, NULL_ID},
     BranchNameOwned, VersionNameOwned, VsMgmt,
 };
 use ruc::*;
@@ -261,7 +261,7 @@ impl MapxRawVs {
         let branch_id = self
             .inner
             .branch_get_id_by_name(branch_name)
-            .unwrap_or(NULL);
+            .unwrap_or(NULL_ID);
         self.inner.iter_by_branch(branch_id)
     }
 
@@ -275,11 +275,11 @@ impl MapxRawVs {
         let branch_id = self
             .inner
             .branch_get_id_by_name(branch_name)
-            .unwrap_or(NULL);
+            .unwrap_or(NULL_ID);
         let version_id = self
             .inner
             .version_get_id_by_name(version_name)
-            .unwrap_or(NULL);
+            .unwrap_or(NULL_ID);
         self.inner.iter_by_branch_version(branch_id, version_id)
     }
 
@@ -314,7 +314,7 @@ impl MapxRawVs {
         let branch_id = self
             .inner
             .branch_get_id_by_name(branch_name)
-            .unwrap_or(NULL);
+            .unwrap_or(NULL_ID);
         self.inner.range_by_branch(branch_id, bounds)
     }
 
@@ -329,11 +329,11 @@ impl MapxRawVs {
         let branch_id = self
             .inner
             .branch_get_id_by_name(branch_name)
-            .unwrap_or(NULL);
+            .unwrap_or(NULL_ID);
         let version_id = self
             .inner
             .version_get_id_by_name(version_name)
-            .unwrap_or(NULL);
+            .unwrap_or(NULL_ID);
         self.inner
             .range_by_branch_version(branch_id, version_id, bounds)
     }

@@ -21,6 +21,8 @@ use std::{
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
+pub const NULL: &[u8] = &[];
+
 pub type RawBytes = Box<[u8]>;
 pub type RawKey = RawBytes;
 pub type RawValue = RawBytes;
@@ -57,7 +59,7 @@ pub const GB: u64 = 1 << 30;
 
 const RESERVED_ID_CNT: Pre = 4096_0000;
 pub const BIGGEST_RESERVED_ID: Pre = RESERVED_ID_CNT - 1;
-pub const NULL: BranchID = (BIGGEST_RESERVED_ID as BranchIDBase).to_be_bytes();
+pub const NULL_ID: BranchID = (BIGGEST_RESERVED_ID as BranchIDBase).to_be_bytes();
 
 pub const INITIAL_BRANCH_ID: BranchIDBase = 0;
 pub const INITIAL_BRANCH_NAME: BranchName<'static> = BranchName(b"master");

@@ -7,7 +7,7 @@ use crate::{
     common::{
         BranchID, BranchIDBase, BranchName, BranchNameOwned, RawKey, RawValue,
         VersionID, VersionIDBase, VersionName, VersionNameOwned, INITIAL_BRANCH_ID,
-        INITIAL_BRANCH_NAME, NULL, RESERVED_VERSION_NUM_DEFAULT, VSDB,
+        INITIAL_BRANCH_NAME, NULL, NULL_ID, RESERVED_VERSION_NUM_DEFAULT, VSDB,
     },
 };
 use ruc::*;
@@ -203,7 +203,7 @@ impl MapxRawVs {
                 .entry(key)
                 .or_insert(encode_map(&MapxRaw::new())),
         )
-        .insert(&version_id[..], value.unwrap_or_default());
+        .insert(&version_id[..], value.unwrap_or(NULL));
 
         Ok(ret)
     }
@@ -315,8 +315,8 @@ impl MapxRawVs {
         MapxRawVsIter {
             hdr: self,
             iter: self.layered_kv.iter(),
-            branch_id: NULL,
-            version_id: NULL,
+            branch_id: NULL_ID,
+            version_id: NULL_ID,
         }
     }
 
@@ -363,7 +363,7 @@ impl MapxRawVs {
             hdr: self,
             iter: self.layered_kv.iter(),
             branch_id,
-            version_id: NULL,
+            version_id: NULL_ID,
         }
     }
 
@@ -1307,7 +1307,7 @@ impl<'a> Iterator for MapxRawVsIter<'a> {
 
     #[allow(clippy::while_let_on_iterator)]
     fn next(&mut self) -> Option<Self::Item> {
-        if NULL == self.branch_id || NULL == self.version_id {
+        if NULL_ID == self.branch_id || NULL_ID == self.version_id {
             return None;
         }
 
@@ -1327,7 +1327,7 @@ impl<'a> Iterator for MapxRawVsIter<'a> {
 impl DoubleEndedIterator for MapxRawVsIter<'_> {
     #[allow(clippy::while_let_on_iterator)]
     fn next_back(&mut self) -> Option<Self::Item> {
-        if NULL == self.branch_id || NULL == self.version_id {
+        if NULL_ID == self.branch_id || NULL_ID == self.version_id {
             return None;
         }
 
