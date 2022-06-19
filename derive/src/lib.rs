@@ -53,6 +53,7 @@ pub fn derive_vsmgmt(input: proc_macro::TokenStream) -> proc_macro::TokenStream 
     let version_has_change_set = gen_version_has_change_set(&input.data);
     let version_clean_up_globally = gen_version_clean_up_globally(&input.data);
     let version_revert_globally = gen_version_revert_globally(&input.data);
+    let version_chgset_trie_root = gen_version_chgset_trie_root(&input.data);
     let branch_is_empty = gen_branch_is_empty(&input.data);
     let branch_list = gen_branch_list(&input.data);
     let branch_get_default = gen_branch_get_default(&input.data);
@@ -279,6 +280,16 @@ pub fn derive_vsmgmt(input: proc_macro::TokenStream) -> proc_macro::TokenStream 
             unsafe fn version_revert_globally(&mut self, version_name: vsdb::VersionName) -> ruc::Result<()> {
                 #version_revert_globally
                 Ok(())
+            }
+
+            fn version_chgset_trie_root(
+                &self,
+                branch_name: Option<vsdb::BranchName>,
+                version_name: Option<vsdb::VersionName>
+            ) -> ruc::Result<Vec<u8>> {
+                let mut res = vec![];
+                #version_chgset_trie_root
+                Ok(res)
             }
 
             fn branch_is_empty(&self, branch_name: vsdb::BranchName) -> ruc::Result<bool> {
@@ -1371,6 +1382,37 @@ fn gen_version_revert_globally(data: &Data) -> TokenStream {
                     let id = Index::from(i);
                     quote_spanned! {f.span()=>
                         vsdb::VsMgmt::version_revert_globally(&mut self.#id, version_name).c(d!())?;
+                    }
+                });
+                quote! {
+                    #(#recurse)*
+                }
+            }
+            Fields::Unit => todo!(),
+        },
+        Data::Enum(_) | Data::Union(_) => todo!(),
+    }
+}
+
+fn gen_version_chgset_trie_root(data: &Data) -> TokenStream {
+    match *data {
+        Data::Struct(ref data) => match data.fields {
+            Fields::Named(ref fields) => {
+                let recurse = fields.named.iter().map(|f| {
+                    let id = &f.ident;
+                    quote_spanned! {f.span()=>
+                        res.append(&mut vsdb::VsMgmt::version_chgset_trie_root(&self.#id, branch_name, version_name).c(d!())?);
+                    }
+                });
+                quote! {
+                    #(#recurse)*
+                }
+            }
+            Fields::Unnamed(ref fields) => {
+                let recurse = fields.unnamed.iter().enumerate().map(|(i, f)| {
+                    let id = Index::from(i);
+                    quote_spanned! {f.span()=>
+                        res.append(vsdb::VsMgmt::version_chgset_trie_root(&self.#id, branch_name, version_name).c(d!())?);
                     }
                 });
                 quote! {

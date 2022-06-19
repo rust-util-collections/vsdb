@@ -5,9 +5,10 @@
 use crate::{
     basic::mapx_raw::{MapxRaw, MapxRawIter},
     common::{
-        BranchID, BranchIDBase, BranchName, BranchNameOwned, RawKey, RawValue,
-        VersionID, VersionIDBase, VersionName, VersionNameOwned, INITIAL_BRANCH_ID,
-        INITIAL_BRANCH_NAME, NULL, NULL_ID, RESERVED_VERSION_NUM_DEFAULT, VSDB,
+        utils::hash::trie_root, BranchID, BranchIDBase, BranchName, BranchNameOwned,
+        RawKey, RawValue, VersionID, VersionIDBase, VersionName, VersionNameOwned,
+        INITIAL_BRANCH_ID, INITIAL_BRANCH_NAME, NULL, NULL_ID,
+        RESERVED_VERSION_NUM_DEFAULT, VSDB,
     },
 };
 use ruc::*;
@@ -633,6 +634,38 @@ impl MapxRawVs {
             .map(|chgset| !chgset.is_empty())
     }
 
+    // clean up all orphaned versions in the global scope
+    pub(super) fn version_clean_up_globally(&mut self) -> Result<()> {
+        let mut valid_vers = HashSet::new();
+        self.branch_to_its_versions.iter().for_each(|(_, vers)| {
+            decode_map(&vers).iter().for_each(|(ver, _)| {
+                valid_vers.insert(ver);
+            })
+        });
+
+        for (ver, chgset) in unsafe { self.version_to_change_set.shadow() }
+            .iter()
+            .filter(|(ver, _)| !valid_vers.contains(ver))
+        {
+            for (k, _) in decode_map(&chgset).iter() {
+                let mut lkv = decode_map(&self.layered_kv.get(&k).c(d!())?);
+                lkv.remove(&ver).c(d!())?;
+                if lkv.is_empty() {
+                    self.layered_kv.remove(&k).c(d!())?;
+                }
+            }
+            self.version_id_to_version_name
+                .remove(&ver)
+                .c(d!())
+                .and_then(|vername| {
+                    self.version_name_to_version_id.remove(&vername).c(d!())
+                })
+                .and_then(|_| self.version_to_change_set.remove(&ver).c(d!()))?;
+        }
+
+        Ok(())
+    }
+
     // # Safety
     //
     // Version itself and its corresponding changes will be completely purged from all branches
@@ -658,34 +691,38 @@ impl MapxRawVs {
             .map(|_| ())
     }
 
-    // clean up all orphaned versions in the global scope
-    pub(super) fn version_clean_up_globally(&mut self) -> Result<()> {
-        let mut valid_vers = HashSet::new();
-        self.branch_to_its_versions.iter().for_each(|(_, vers)| {
-            decode_map(&vers).iter().for_each(|(ver, _)| {
-                valid_vers.insert(ver);
-            })
-        });
+    pub(super) fn version_chgset_trie_root(
+        &self,
+        branch_id: Option<BranchID>,
+        version_id: Option<VersionID>,
+    ) -> Result<Vec<u8>> {
+        let ver = if let Some(v) = version_id {
+            v
+        } else {
+            let br = branch_id.unwrap_or_else(|| self.branch_get_default());
+            let v = decode_map(
+                self.branch_to_its_versions
+                    .get(br)
+                    .c(d!("branch not found"))?,
+            )
+            .last()
+            .map(|(verid, _)| verid)
+            .c(d!("version not found"))?;
+            let mut ver = VersionID::default();
+            ver.copy_from_slice(&v);
+            ver
+        };
 
-        for (ver, chgset) in unsafe { self.version_to_change_set.shadow() }
+        let chgset = decode_map(self.version_to_change_set.get(ver).c(d!())?);
+        let entries = chgset
             .iter()
-            .filter(|(ver, _)| !valid_vers.contains(ver))
-        {
-            for (k, _) in decode_map(&chgset).iter() {
-                decode_map(&self.layered_kv.get(&k).c(d!())?)
-                    .remove(&ver)
-                    .c(d!())?;
-            }
-            self.version_id_to_version_name
-                .remove(&ver)
-                .c(d!())
-                .and_then(|vername| {
-                    self.version_name_to_version_id.remove(&vername).c(d!())
-                })
-                .and_then(|_| self.version_to_change_set.remove(&ver).c(d!()))?;
-        }
+            .map(|(k, _)| {
+                let v = pnk!(decode_map(pnk!(self.layered_kv.get(&k))).get(ver));
+                (k, v)
+            })
+            .collect::<Vec<_>>();
 
-        Ok(())
+        Ok(trie_root(entries))
     }
 
     #[inline(always)]
@@ -1196,24 +1233,30 @@ impl MapxRawVs {
             .map(|bytes| to_brid(&bytes))
     }
 
+    // The oldest version will be kept as the final data container.
+    //
+    // NOTE: As it will become bigger and bigger,
+    // if we migrate the its data to other vesions when pruning,
+    // the 'prune' process will be slower and slower,
+    // do we should not do that.
     #[inline(always)]
     pub(super) fn prune(&mut self, reserved_ver_num: Option<usize>) -> Result<()> {
-        self.version_clean_up_globally().c(d!())?;
-
-        let reserved_ver_num = reserved_ver_num.unwrap_or(RESERVED_VERSION_NUM_DEFAULT);
+        // the '1' of this 'add 1' means the never-deleted initial version.
+        let reserved_ver_num =
+            1 + reserved_ver_num.unwrap_or(RESERVED_VERSION_NUM_DEFAULT);
         if 0 == reserved_ver_num {
             return Err(eg!("reserved version number should NOT be zero"));
         }
 
-        let br_vers = self
+        let mut br_vers_non_empty = self
             .branch_to_its_versions
             .iter()
             .map(|(_, vers)| decode_map(&vers))
             .filter(|vers| !vers.is_empty())
             .collect::<Vec<_>>();
-        alt!(br_vers.is_empty(), return Ok(()));
-        let mut br_vers = (0..br_vers.len())
-            .map(|i| (&br_vers[i]).iter())
+        alt!(br_vers_non_empty.is_empty(), return Ok(()));
+        let mut br_vers = (0..br_vers_non_empty.len())
+            .map(|i| (&br_vers_non_empty[i]).iter())
             .collect::<Vec<_>>();
 
         // filter out the longest common prefix
@@ -1231,52 +1274,77 @@ impl MapxRawVs {
             vers_to_be_merged.push(to_verid(&guard));
         }
 
+        let l = vers_to_be_merged.len();
+        if l <= reserved_ver_num {
+            return Ok(());
+        }
+
         let (vers_to_be_merged, rewrite_ver) = {
-            let l = vers_to_be_merged.len();
-            if l > reserved_ver_num {
-                let guard_idx = l - reserved_ver_num;
-                (
-                    &vers_to_be_merged[..guard_idx],
-                    &vers_to_be_merged[guard_idx],
-                )
-            } else {
-                return Ok(());
-            }
+            let guard_idx = l - reserved_ver_num + 1;
+            (&vers_to_be_merged[1..guard_idx], &vers_to_be_merged[0])
         };
 
         let mut rewrite_ver_chgset =
             decode_map(&self.version_to_change_set.get(rewrite_ver).c(d!())?);
 
-        for (_, vers) in self
-            .branch_to_its_versions
-            .iter()
-            .filter(|(_, vers)| !decode_map(vers).is_empty())
-        {
+        for vers in br_vers_non_empty.iter_mut() {
             for ver in vers_to_be_merged.iter() {
-                decode_map(&vers).remove(ver).c(d!())?;
+                vers.remove(ver).c(d!())?;
             }
         }
 
+        let mut chgsets = vec![];
         for ver in vers_to_be_merged.iter() {
-            self.version_id_to_version_name
-                .remove(ver)
-                .c(d!())
-                .and_then(|vername| {
-                    self.version_name_to_version_id.remove(&vername).c(d!())
-                })?;
-            let chgset = decode_map(&self.version_to_change_set.remove(ver).c(d!())?);
+            // make all merged version to be orphan,
+            // so they will be cleaned up in the `version_clean_up_globally` later.
+            self.branch_to_its_versions.iter().for_each(|(_, vers)| {
+                decode_map(vers).remove(ver);
+            });
+
+            let chgset = decode_map(&self.version_to_change_set.get(ver).c(d!())?);
             for (k, _) in chgset.iter() {
                 let mut k_vers = decode_map(&self.layered_kv.get(&k).c(d!())?);
-                let value = k_vers.remove(ver).c(d!())?;
+                let value = k_vers.get(ver).c(d!())?;
 
-                // keep at least one version
-                if k_vers
-                    .range(..=Cow::Borrowed(&rewrite_ver[..]))
-                    .next()
-                    .is_none()
-                {
-                    assert!(rewrite_ver_chgset.insert(&k, &[]).is_none());
-                    assert!(k_vers.insert(&rewrite_ver[..], &value).is_none());
+                rewrite_ver_chgset.insert(&k, &[]);
+                k_vers.insert(&rewrite_ver[..], &value);
+            }
+            chgsets.push(chgset);
+        }
+
+        // lowest-level KVs with 'deleted' states should be cleaned up.
+        for k in chgsets
+            .iter()
+            .flat_map(|chgset| chgset.iter().map(|(k, _)| k))
+            .collect::<HashSet<_>>()
+            .iter()
+        {
+            if let Some(vers) = self.layered_kv.get(k) {
+                let mut vers = decode_map(vers);
+                // A 'NULL' value means 'not exist'.
+                if vers.get(rewrite_ver).c(d!())?.is_empty() {
+                    vers.remove(&rewrite_ver).c(d!())?;
+                    rewrite_ver_chgset.remove(k).c(d!())?;
+                }
+                if vers.is_empty() {
+                    self.layered_kv.remove(k).c(d!())?;
+                }
+            }
+        }
+
+        self.version_clean_up_globally().c(d!())?;
+
+        #[cfg(test)]
+        {
+            for vers in self.layered_kv.iter().map(|(_, vers)| decode_map(vers)) {
+                if let Some(v) = vers.get(rewrite_ver) {
+                    assert!(!v.is_empty());
+                }
+            }
+            for ver in vers_to_be_merged.iter() {
+                assert!(!self.version_to_change_set.contains_key(ver));
+                for vers in self.layered_kv.iter().map(|(_, vers)| decode_map(vers)) {
+                    assert!(!vers.contains_key(ver));
                 }
             }
         }

@@ -165,13 +165,22 @@ fn test_insert() {
     (0..max)
         .map(|i: usize| (i, (max + i)))
         .for_each(|(key, value)| {
+            let trie_root = pnk!(hdr.version_chgset_trie_root(None, None));
             assert!(hdr.get(&key).is_none());
             assert!(pnk!(hdr.insert(&key, &value)).is_none());
+            let trie_root2 = pnk!(hdr.version_chgset_trie_root(None, None));
             assert!(pnk!(hdr.insert(&key, &value)).is_some());
+            let trie_root3 = pnk!(hdr.version_chgset_trie_root(None, None));
             assert!(hdr.contains_key(&key));
             assert_eq!(pnk!(hdr.get(&key)), value);
             assert_eq!(pnk!(pnk!(hdr.remove(&key))), value);
+            let trie_root4 = pnk!(hdr.version_chgset_trie_root(None, None));
             assert!(hdr.get(&key).is_none());
+
+            assert_ne!(trie_root, trie_root2);
+            assert_eq!(trie_root2, trie_root3);
+            assert_ne!(trie_root3, trie_root4);
+            assert_ne!(trie_root4, trie_root);
         });
 }
 

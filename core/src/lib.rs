@@ -20,10 +20,8 @@ pub use versioned::VsMgmt;
 #[cfg(feature = "derive")]
 pub use vsdb_derive::Vs;
 
-#[cfg(feature = "hash")]
-pub use common::utils::hash::{hash, Hash, HASH_SIZ};
-
 pub use common::{
+    utils::hash::{hash, Hash, HASH_SIZ},
     vsdb_flush, vsdb_get_base_dir, vsdb_get_custom_dir, vsdb_set_base_dir, BranchName,
     BranchNameOwned, ParentBranchName, ParentBranchNameOwned, VersionName,
     VersionNameOwned, GB, KB, MB,

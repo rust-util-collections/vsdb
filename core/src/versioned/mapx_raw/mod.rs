@@ -599,6 +599,35 @@ impl VsMgmt for MapxRawVs {
             .and_then(|verid| self.inner.version_revert_globally(verid).c(d!()))
     }
 
+    #[inline(always)]
+    fn version_chgset_trie_root(
+        &self,
+        branch_name: Option<BranchName>,
+        version_name: Option<VersionName>,
+    ) -> Result<Vec<u8>> {
+        let brid = if let Some(bn) = branch_name {
+            Some(
+                self.inner
+                    .branch_get_id_by_name(bn)
+                    .c(d!("version not found"))?,
+            )
+        } else {
+            None
+        };
+
+        let verid = if let Some(vn) = version_name {
+            Some(
+                self.inner
+                    .version_get_id_by_name(vn)
+                    .c(d!("version not found"))?,
+            )
+        } else {
+            None
+        };
+
+        self.inner.version_chgset_trie_root(brid, verid).c(d!())
+    }
+
     /// Create a new branch based on the head of the default branch.
     #[inline(always)]
     fn branch_create(

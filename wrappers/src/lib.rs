@@ -158,8 +158,8 @@
 //!     - Security reinforcement for blockchain scenarios
 //! - \[**default**] `derive`, enable the `Vs` procedural macro
 //! - `compress`, enable compression in the backend database
-//! - `hash`, enable an optional hash function
-//!     - Based on the 'blake3' crate
+//! - `extra_types`, implement `VsMgmt` for some common extra types
+//!   - For example: `H256` and `H160` of the `primitive-types` crate
 
 #![deny(warnings)]
 #![cfg_attr(test, allow(warnings))]

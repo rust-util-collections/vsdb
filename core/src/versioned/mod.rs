@@ -154,6 +154,17 @@ pub trait VsMgmt {
         version_name: VersionName,
     ) -> Result<()>;
 
+    /// Generate a trie root of the changes **directly** made by the target version,
+    /// if no target version specified, the header version of the target branch will be used,
+    /// if not target branch specified, then use the default branch.
+    ///
+    /// The returned result may be a single `vec![u8; 32]` or a concat of many `vec![u8; 32]`.
+    fn version_chgset_trie_root(
+        &self,
+        branch_name: Option<BranchName>,
+        version_name: Option<VersionName>,
+    ) -> Result<Vec<u8>>;
+
     /// Create a new branch based on the head of the default branch.
     fn branch_create(
         &mut self,
@@ -473,6 +484,17 @@ macro_rules! impl_vs_methods {
             version_name: $crate::VersionName,
         ) -> ruc::Result<()> {
             self.inner.version_revert_globally(version_name).c(d!())
+        }
+
+        #[inline(always)]
+        fn version_chgset_trie_root(
+            &self,
+            branch_name: Option<BranchName>,
+            version_name: Option<VersionName>,
+        ) -> Result<Vec<u8>> {
+            self.inner
+                .version_chgset_trie_root(branch_name, version_name)
+                .c(d!())
         }
 
         /// Create a new branch based on the head of the default branch.
@@ -824,6 +846,15 @@ macro_rules! impl_vs_methods_nope {
         }
 
         #[inline(always)]
+        fn version_chgset_trie_root(
+            &self,
+            _: Option<$crate::BranchName>,
+            _: Option<$crate::VersionName>,
+        ) -> ruc::Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+
+        #[inline(always)]
         fn branch_create(
             &mut self,
             _: $crate::BranchName,
@@ -1043,7 +1074,11 @@ impl_for_primitives!(
     AtomicU16,
     AtomicU32,
     AtomicU64,
-    AtomicU8,
+    AtomicU8
+);
+
+#[cfg(feature = "extra_types")]
+impl_for_primitives!(
     primitive_types_0_10::U128,
     primitive_types_0_10::U256,
     primitive_types_0_10::U512,
@@ -1138,6 +1173,7 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
         Ok(())
     }
 
+    #[inline(always)]
     fn version_exists_globally(&self, version_name: VersionName) -> bool {
         if let Some(i) = self.as_ref() {
             return i.version_exists_globally(version_name);
@@ -1145,6 +1181,7 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
         true
     }
 
+    #[inline(always)]
     fn version_list(&self) -> Result<Vec<VersionNameOwned>> {
         if let Some(i) = self.as_ref() {
             i.version_list().c(d!())?;
@@ -1152,6 +1189,7 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
         Ok(Default::default())
     }
 
+    #[inline(always)]
     fn version_list_by_branch(
         &self,
         branch_name: BranchName,
@@ -1162,6 +1200,7 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
         Ok(Default::default())
     }
 
+    #[inline(always)]
     fn version_list_globally(&self) -> Vec<VersionNameOwned> {
         if let Some(i) = self.as_ref() {
             return i.version_list_globally();
@@ -1169,6 +1208,7 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
         Default::default()
     }
 
+    #[inline(always)]
     fn version_has_change_set(&self, version_name: VersionName) -> Result<bool> {
         if let Some(i) = self.as_ref() {
             i.version_has_change_set(version_name).c(d!())?;
@@ -1176,6 +1216,7 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
         Ok(true)
     }
 
+    #[inline(always)]
     fn version_clean_up_globally(&mut self) -> Result<()> {
         if let Some(i) = self.as_mut() {
             i.version_clean_up_globally().c(d!())?;
@@ -1183,6 +1224,7 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
         Ok(())
     }
 
+    #[inline(always)]
     unsafe fn version_revert_globally(
         &mut self,
         version_name: VersionName,
@@ -1191,6 +1233,19 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
             i.version_revert_globally(version_name).c(d!())?;
         }
         Ok(())
+    }
+
+    #[inline(always)]
+    fn version_chgset_trie_root(
+        &self,
+        branch_name: Option<BranchName>,
+        version_name: Option<VersionName>,
+    ) -> Result<Vec<u8>> {
+        if let Some(i) = self.as_ref() {
+            i.version_chgset_trie_root(branch_name, version_name)
+                .c(d!())?;
+        }
+        Ok(Vec::new())
     }
 
     #[inline(always)]

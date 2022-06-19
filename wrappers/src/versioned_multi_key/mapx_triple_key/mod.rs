@@ -390,6 +390,18 @@ where
             )
             .c(d!())
     }
+
+    /// NOTE: This is not a member of `VsMgmt`!
+    #[inline(always)]
+    pub fn version_chgset_trie_root(
+        &self,
+        branch_name: Option<BranchName>,
+        version_name: Option<VersionName>,
+    ) -> Result<Vec<u8>> {
+        self.inner
+            .version_chgset_trie_root(branch_name, version_name)
+            .c(d!())
+    }
 }
 
 impl<K1, K2, K3, V> Clone for MapxTkVs<K1, K2, K3, V> {

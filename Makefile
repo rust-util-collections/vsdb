@@ -4,14 +4,14 @@ export CARGO_NET_GIT_FETCH_WITH_CLI = true
 
 lint:
 	cargo clippy --workspace
-	cargo clippy --workspace --features "compress"
+	cargo clippy --workspace --features "compress,extra_types"
 	cargo check --workspace --tests
 	cargo check --workspace --benches
 	cargo check --workspace --examples
 
 lintall: lint
 	cargo clippy --workspace --no-default-features --features "derive,rocks_engine,compress,msgpack_codec"
-	cargo check --workspace --tests --no-default-features --features "derive,rocks_engine,msgpack_codec"
+	cargo check --workspace --tests --no-default-features --features "derive,rocks_engine,msgpack_codec,extra_types"
 	cargo check --workspace --benches --no-default-features --features "derive,rocks_engine,msgpack_codec"
 	cargo check --workspace --examples --no-default-features --features "derive,rocks_engine,msgpack_codec"
 

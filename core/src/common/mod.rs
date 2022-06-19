@@ -3,9 +3,7 @@
 //!
 
 pub(crate) mod engines;
-
-#[cfg(feature = "hash")]
-pub(crate) mod utils;
+pub mod utils;
 
 use engines::Engine;
 use once_cell::sync::Lazy;
