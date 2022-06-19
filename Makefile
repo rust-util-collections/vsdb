@@ -13,22 +13,24 @@ lint:
 	cargo check --tests
 	cargo check --benches
 	cargo check --examples
-	cargo clippy --no-default-features --features "rocks_engine,cbor_ende"
-	cargo check --tests --no-default-features --features "rocks_engine,cbor_ende"
-	cargo check --benches --no-default-features --features "rocks_engine,cbor_ende"
-	cargo check --examples --no-default-features --features "rocks_engine,cbor_ende"
+	cargo clippy --no-default-features --features "rocks_engine,cbor_codec"
+	cargo check --tests --no-default-features --features "rocks_engine,cbor_codec"
+	cargo check --benches --no-default-features --features "rocks_engine,cbor_codec"
+	cargo check --examples --no-default-features --features "rocks_engine,cbor_codec"
 
 test:
 	- rm -rf ~/.vsdb
 	cargo test -- --test-threads=1
 	- rm -rf ~/.vsdb
-	cargo test --no-default-features --features "rocks_engine,cbor_ende" -- --test-threads=1
+	cargo test --no-default-features --features "rocks_engine,cbor_codec" -- --test-threads=1
 
 bench:
 	- rm -rf ~/.vsdb
 	cargo bench
+	du -sh ~/.vsdb
 	- rm -rf ~/.vsdb
-	cargo bench --no-default-features --features "rocks_engine,cbor_ende"
+	cargo bench --no-default-features --features "rocks_engine,cbor_codec"
+	du -sh ~/.vsdb
 
 fmt:
 	bash tools/fmt.sh

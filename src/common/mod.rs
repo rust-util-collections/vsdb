@@ -45,7 +45,7 @@ pub struct VersionName<'a>(pub &'a [u8]);
 
 const RESERVED_ID_CNT: Prefix = 4096_0000;
 pub(crate) const BIGGEST_RESERVED_ID: Prefix = RESERVED_ID_CNT - 1;
-pub(crate) const NULL: BranchID = BIGGEST_RESERVED_ID;
+pub(crate) const NULL: BranchID = BIGGEST_RESERVED_ID as BranchID;
 
 pub(crate) const INITIAL_BRANCH_ID: BranchID = 0;
 pub(crate) const INITIAL_BRANCH_NAME: &[u8] = b"main";
@@ -150,3 +150,34 @@ pub fn vsdb_set_base_dir(dir: String) -> Result<()> {
 pub fn vsdb_flush() {
     VSDB.flush();
 }
+
+macro_rules! impl_from_for_name {
+    ($target: tt) => {
+        impl<'a> From<&'a [u8]> for $target<'a> {
+            fn from(t: &'a [u8]) -> Self {
+                $target(t)
+            }
+        }
+        impl<'a> From<&'a Vec<u8>> for $target<'a> {
+            fn from(t: &'a Vec<u8>) -> Self {
+                $target(t.as_slice())
+            }
+        }
+        impl<'a> From<&'a str> for $target<'a> {
+            fn from(t: &'a str) -> Self {
+                $target(t.as_bytes())
+            }
+        }
+        impl<'a> From<&'a String> for $target<'a> {
+            fn from(t: &'a String) -> Self {
+                $target(t.as_bytes())
+            }
+        }
+    };
+    ($target: tt, $($t: tt),+) => {
+        impl_from_for_name!($target);
+        impl_from_for_name!($($t), +);
+    };
+}
+
+impl_from_for_name!(BranchName, ParentBranchName, VersionName);

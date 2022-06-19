@@ -8,11 +8,12 @@ use crate::{
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
+use std::ops::{Deref, DerefMut};
 
 /// Documents => [MapxRawVs](crate::versioned::mapx_raw::MapxRawVs)
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
-pub struct VecxVs<T: ValueEnDe> {
+pub struct VecxVs<T> {
     inner: MapxOrdRawKeyVs<T>,
 }
 
@@ -33,6 +34,11 @@ impl<T: ValueEnDe> VecxVs<T> {
     #[inline(always)]
     pub fn get(&self, idx: usize) -> Option<T> {
         self.inner.get(&(idx as u64).to_be_bytes())
+    }
+
+    #[inline(always)]
+    pub fn get_mut(&self, idx: usize) -> Option<ValueMut<'_, T>> {
+        self.get(idx).map(|v| ValueMut::new(&self.inner, idx, v))
     }
 
     #[inline(always)]
@@ -259,5 +265,53 @@ impl<'a, T: ValueEnDe> Iterator for VecxVsIter<'a, T> {
 impl<'a, T: ValueEnDe> DoubleEndedIterator for VecxVsIter<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back().map(|v| v.1)
+    }
+}
+
+#[derive(PartialEq, Eq, Debug)]
+pub struct ValueMut<'a, V: ValueEnDe> {
+    hdr: &'a MapxOrdRawKeyVs<V>,
+    key: u64,
+    value: V,
+}
+
+impl<'a, V> ValueMut<'a, V>
+where
+    V: ValueEnDe,
+{
+    fn new(hdr: &'a MapxOrdRawKeyVs<V>, key: usize, value: V) -> Self {
+        ValueMut {
+            hdr,
+            key: key as u64,
+            value,
+        }
+    }
+}
+
+impl<'a, V> Drop for ValueMut<'a, V>
+where
+    V: ValueEnDe,
+{
+    fn drop(&mut self) {
+        pnk!(self.hdr.insert_ref(&self.key.to_be_bytes(), &self.value));
+    }
+}
+
+impl<'a, V> Deref for ValueMut<'a, V>
+where
+    V: ValueEnDe,
+{
+    type Target = V;
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<'a, V> DerefMut for ValueMut<'a, V>
+where
+    V: ValueEnDe,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
     }
 }

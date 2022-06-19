@@ -39,7 +39,7 @@ use std::cmp::Ordering;
 
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
-pub struct Vecx<T: ValueEnDe> {
+pub struct Vecx<T> {
     inner: MapxOrdRawKey<T>,
 }
 

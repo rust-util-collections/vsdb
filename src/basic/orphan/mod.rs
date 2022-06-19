@@ -95,12 +95,9 @@ use std::{
 
 /// Used to express some 'non-collection' types,
 /// such as any type of integer, an enum value, etc..
-#[derive(Clone, Copy, Serialize, Deserialize, Debug, Eq)]
+#[derive(Clone, Copy, Serialize, Deserialize, Debug)]
 #[serde(bound = "")]
-pub struct Orphan<T>
-where
-    T: ValueEnDe,
-{
+pub struct Orphan<T> {
     inner: MapxOrdRawKey<T>,
 }
 
@@ -141,15 +138,16 @@ where
     ///     - `*(<Orphan>).get_mut() = ...`
     /// - **NEVER** do this:
     ///     - `*(&mut <Orphan>) = Orphan::new(...)`
-    ///     - OR you will loss the 'versioned' ability of this object
-    pub fn get_mut(&self) -> OrphanMut<'_, T> {
+    pub fn get_mut(&self) -> ValueMut<'_, T> {
         let value = self.get_value();
-        OrphanMut { hdr: self, value }
+        ValueMut { hdr: self, value }
     }
 }
 
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
+
+impl<T> Eq for Orphan<T> where T: ValueEnDe + PartialEq {}
 
 impl<T> PartialEq for Orphan<T>
 where
@@ -277,7 +275,7 @@ impl_ops!(@Neg, neg, -);
 ////////////////////////////////////////////////////////////////////
 
 /// A type returned by `get_mut()`.
-pub struct OrphanMut<'a, T>
+pub struct ValueMut<'a, T>
 where
     T: ValueEnDe,
 {
@@ -285,7 +283,7 @@ where
     value: T,
 }
 
-impl<'a, T> Drop for OrphanMut<'a, T>
+impl<'a, T> Drop for ValueMut<'a, T>
 where
     T: ValueEnDe,
 {
@@ -294,7 +292,7 @@ where
     }
 }
 
-impl<'a, T> Deref for OrphanMut<'a, T>
+impl<'a, T> Deref for ValueMut<'a, T>
 where
     T: ValueEnDe,
 {
@@ -304,25 +302,12 @@ where
     }
 }
 
-impl<'a, T> DerefMut for OrphanMut<'a, T>
+impl<'a, T> DerefMut for ValueMut<'a, T>
 where
     T: ValueEnDe,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.value
-    }
-}
-
-////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////
-
-impl<T> Iterator for Orphan<T>
-where
-    T: ValueEnDe + Eq,
-{
-    type Item = T;
-    fn next(&mut self) -> Option<Self::Item> {
-        Some(self.get_value())
     }
 }
 

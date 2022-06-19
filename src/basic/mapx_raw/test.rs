@@ -16,7 +16,7 @@ fn basic_cases() {
         (0..cnt)
             .map(|i: usize| (i.to_be_bytes(), i.to_be_bytes()))
             .for_each(|(i, b)| {
-                hdr_i.entry(&i).or_insert(&b);
+                hdr_i.entry_ref(&i).or_insert_ref(&b);
                 assert_eq!(&hdr_i.get(&i).unwrap()[..], &i[..]);
                 assert_eq!(&hdr_i.remove(&i).unwrap()[..], &b[..]);
                 assert!(hdr_i.get(&i).is_none());

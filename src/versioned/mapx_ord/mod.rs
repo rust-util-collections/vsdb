@@ -11,17 +11,13 @@ use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{
     marker::PhantomData,
-    ops::{Bound, RangeBounds},
+    ops::{Bound, Deref, DerefMut, RangeBounds},
 };
 
 /// Documents => [MapxRawVs](crate::versioned::mapx_raw::MapxRawVs)
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
-pub struct MapxOrdVs<K, V>
-where
-    K: KeyEnDeOrdered,
-    V: ValueEnDe,
-{
+pub struct MapxOrdVs<K, V> {
     inner: MapxOrdRawKeyVs<V>,
     pk: PhantomData<K>,
 }
@@ -52,6 +48,16 @@ where
     #[inline(always)]
     pub fn get(&self, key: &K) -> Option<V> {
         self.inner.get(&key.to_bytes())
+    }
+
+    #[inline(always)]
+    pub fn get_mut<'a>(&'a self, key: &'a K) -> Option<ValueMut<'a, K, V>> {
+        self.get(key).map(move |v| ValueMut::new(self, key, v))
+    }
+
+    #[inline(always)]
+    pub fn entry_ref<'a>(&'a self, key: &'a K) -> Entry<'a, K, V> {
+        Entry { key, hdr: self }
     }
 
     #[inline(always)]
@@ -424,4 +430,78 @@ where
     K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
+}
+
+#[derive(PartialEq, Eq, Debug)]
+pub struct ValueMut<'a, K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    hdr: &'a MapxOrdVs<K, V>,
+    key: &'a K,
+    value: V,
+}
+
+impl<'a, K, V> ValueMut<'a, K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    fn new(hdr: &'a MapxOrdVs<K, V>, key: &'a K, value: V) -> Self {
+        ValueMut { hdr, key, value }
+    }
+}
+
+impl<'a, K, V> Drop for ValueMut<'a, K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    fn drop(&mut self) {
+        pnk!(self.hdr.insert_ref(self.key, &self.value));
+    }
+}
+
+impl<'a, K, V> Deref for ValueMut<'a, K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    type Target = V;
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<'a, K, V> DerefMut for ValueMut<'a, K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
+    }
+}
+
+pub struct Entry<'a, K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    key: &'a K,
+    hdr: &'a MapxOrdVs<K, V>,
+}
+
+impl<'a, K, V> Entry<'a, K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    pub fn or_insert_ref(self, default: &V) -> ValueMut<'a, K, V> {
+        if !self.hdr.contains_key(self.key) {
+            pnk!(self.hdr.insert_ref(self.key, default));
+        }
+        pnk!(self.hdr.get_mut(self.key))
+    }
 }

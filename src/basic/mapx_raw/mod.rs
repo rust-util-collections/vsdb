@@ -61,6 +61,13 @@ impl MapxRaw {
     }
 
     #[inline(always)]
+    pub fn get_mut<'a>(&'a self, key: &'a [u8]) -> Option<ValueMut<'a>> {
+        self.inner
+            .get(key)
+            .map(move |v| ValueMut::new(self, key, v))
+    }
+
+    #[inline(always)]
     pub fn contains_key(&self, key: &[u8]) -> bool {
         self.get(key).is_some()
     }
@@ -76,13 +83,6 @@ impl MapxRaw {
     }
 
     #[inline(always)]
-    pub fn get_mut(&self, key: &[u8]) -> Option<ValueMut<'_>> {
-        self.inner
-            .get(key)
-            .map(move |v| ValueMut::new(self, key.to_owned().into_boxed_slice(), v))
-    }
-
-    #[inline(always)]
     pub fn len(&self) -> usize {
         self.inner.len()
     }
@@ -93,7 +93,7 @@ impl MapxRaw {
     }
 
     #[inline(always)]
-    pub fn entry<'a>(&'a self, key: &'a [u8]) -> Entry<'a> {
+    pub fn entry_ref<'a>(&'a self, key: &'a [u8]) -> Entry<'a> {
         Entry { key, hdr: self }
     }
 
@@ -130,19 +130,19 @@ impl MapxRaw {
 #[derive(PartialEq, Eq, Debug)]
 pub struct ValueMut<'a> {
     hdr: &'a MapxRaw,
-    key: RawKey,
+    key: &'a [u8],
     value: RawValue,
 }
 
 impl<'a> ValueMut<'a> {
-    fn new(hdr: &'a MapxRaw, key: RawKey, value: RawValue) -> Self {
+    fn new(hdr: &'a MapxRaw, key: &'a [u8], value: RawValue) -> Self {
         ValueMut { hdr, key, value }
     }
 }
 
 impl<'a> Drop for ValueMut<'a> {
     fn drop(&mut self) {
-        self.hdr.insert(&self.key, &self.value);
+        self.hdr.insert(self.key, &self.value);
     }
 }
 
@@ -166,7 +166,7 @@ pub struct Entry<'a> {
 }
 
 impl<'a> Entry<'a> {
-    pub fn or_insert(self, default: &'a [u8]) -> ValueMut<'a> {
+    pub fn or_insert_ref(self, default: &'a [u8]) -> ValueMut<'a> {
         if !self.hdr.contains_key(self.key) {
             self.hdr.insert(self.key, default);
         }

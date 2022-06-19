@@ -37,14 +37,14 @@ macro_rules! hash_intermediate {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct MerkleTree {
     leaf_count: usize,
     nodes: Vec<Hash>,
     hash_to_idx: MapxOrdRawKey<u64>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub struct ProofEntry<'a>(&'a [u8], Option<&'a [u8]>, Option<&'a [u8]>);
 
 impl<'a> ProofEntry<'a> {
@@ -213,7 +213,7 @@ impl MerkleTree {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct MerkleTreeStore {
     leaf_count: usize,
     nodes: VecxRaw,
@@ -238,6 +238,32 @@ impl From<&MerkleTree> for MerkleTreeStore {
 impl From<&MerkleTreeStore> for MerkleTree {
     #[inline(always)]
     fn from(mts: &MerkleTreeStore) -> Self {
+        Self {
+            leaf_count: mts.leaf_count,
+            nodes: mts.nodes.iter().collect(),
+            hash_to_idx: mts.hash_to_idx,
+        }
+    }
+}
+
+impl From<MerkleTree> for MerkleTreeStore {
+    #[inline(always)]
+    fn from(mt: MerkleTree) -> Self {
+        let nodes = VecxRaw::new();
+        mt.nodes.iter().for_each(|h| {
+            nodes.push_ref(h);
+        });
+        Self {
+            leaf_count: mt.leaf_count,
+            nodes,
+            hash_to_idx: mt.hash_to_idx,
+        }
+    }
+}
+
+impl From<MerkleTreeStore> for MerkleTree {
+    #[inline(always)]
+    fn from(mts: MerkleTreeStore) -> Self {
         Self {
             leaf_count: mts.leaf_count,
             nodes: mts.nodes.iter().collect(),

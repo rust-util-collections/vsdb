@@ -42,11 +42,7 @@ use std::marker::PhantomData;
 
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
-pub struct Mapx<K, V>
-where
-    K: KeyEnDe,
-    V: ValueEnDe,
-{
+pub struct Mapx<K, V> {
     inner: MapxOrdRawKey<V>,
     pk: PhantomData<K>,
 }
@@ -83,6 +79,11 @@ where
     pub fn get_mut(&self, key: &K) -> Option<ValueMut<'_, V>> {
         let k = key.encode();
         self.inner.get(&k).map(|v| ValueMut::new(&self.inner, k, v))
+    }
+
+    #[inline(always)]
+    pub fn contains_key(&self, key: &K) -> bool {
+        self.inner.contains_key(&key.encode())
     }
 
     #[inline(always)]
@@ -131,11 +132,6 @@ where
     #[inline(always)]
     pub fn values(&self) -> MapxValues<K, V> {
         MapxValues { iter: self.iter() }
-    }
-
-    #[inline(always)]
-    pub fn contains_key(&self, key: &K) -> bool {
-        self.inner.contains_key(&key.encode())
     }
 
     #[inline(always)]
