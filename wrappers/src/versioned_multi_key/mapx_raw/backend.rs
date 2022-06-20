@@ -13,7 +13,10 @@ use crate::{
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
-use std::{cmp::Ordering, collections::HashSet};
+use std::{
+    cmp::Ordering,
+    collections::{HashMap, HashSet},
+};
 use vsdb_core::common::{utils::hash::trie_root, TRASH_CLEANER};
 
 ////////////////////////////////////////////////////////////////////////////////////
@@ -479,31 +482,23 @@ impl MapxRawMkVs {
             return Err(eg!("base version is not on this branch"));
         };
 
-        let mut base_ver_chg_set =
+        let mut base_ver_chgset =
             self.version_to_change_set.get(&base_version).c(d!())?;
         let vers_to_be_merged = vers.collect::<Vec<_>>();
 
+        let mut chgsets = vec![];
+        let mut new_kvchgset_for_base_ver = HashMap::new();
         for verid in vers_to_be_merged.iter() {
             let mut chgset_ops = |k: &[&[u8]], _: &[u8]| {
-                base_ver_chg_set.insert(k, &[]).c(d!())?;
-                self.layered_kv
-                    .get(k)
-                    .c(d!())
-                    .and_then(|mut hdr| {
-                        hdr.remove(verid)
-                            .c(d!())
-                            .map(|v| hdr.insert(&base_version, &v))
-                    })
-                    .map(|_| ())
+                let v = self.layered_kv.get(k).c(d!())?.remove(verid).c(d!())?;
+                let k = k.iter().map(|k| k.to_vec()).collect::<Vec<_>>();
+                new_kvchgset_for_base_ver.insert(k, v);
+                Ok(())
             };
 
             let chgset = self.version_to_change_set.remove(verid).c(d!())?;
             chgset.iter_op(&mut chgset_ops).c(d!())?;
-
-            TRASH_CLEANER.lock().execute(move || {
-                let mut cs = chgset;
-                cs.clear();
-            });
+            chgsets.push(chgset);
 
             self.version_id_to_version_name
                 .remove(verid)
@@ -513,6 +508,19 @@ impl MapxRawMkVs {
                 })
                 .and_then(|_| vers_hdr.remove(verid).c(d!()))?;
         }
+
+        // avoid dup-middle 'insert's
+        new_kvchgset_for_base_ver.iter().for_each(|(k, v)| {
+            let k = k.iter().map(|k| k.as_slice()).collect::<Vec<_>>();
+            pnk!(base_ver_chgset.insert(&k, &[]));
+            pnk!(self.layered_kv.get(&k)).insert(&base_version, v);
+        });
+
+        TRASH_CLEANER.lock().execute(move || {
+            chgsets.into_iter().for_each(|mut cs| {
+                cs.clear();
+            });
+        });
 
         Ok(())
     }
@@ -575,6 +583,7 @@ impl MapxRawMkVs {
             })
         });
 
+        let mut chgsets = vec![];
         for (ver, chgset) in unsafe { self.version_to_change_set.shadow() }
             .iter()
             .filter(|(ver, _)| !valid_vers.contains(ver))
@@ -595,14 +604,15 @@ impl MapxRawMkVs {
                 .and_then(|vername| {
                     self.version_name_to_version_id.remove(&vername).c(d!())
                 })
-                .and_then(|_| {
-                    let mut chgset = self.version_to_change_set.remove(&ver).c(d!())?;
-                    TRASH_CLEANER.lock().execute(move || {
-                        chgset.clear();
-                    });
-                    Ok(())
-                })?;
+                .and_then(|_| self.version_to_change_set.remove(&ver).c(d!()))
+                .map(|chgset| chgsets.push(chgset))?;
         }
+
+        TRASH_CLEANER.lock().execute(move || {
+            chgsets.into_iter().for_each(|mut cs| {
+                cs.clear();
+            });
+        });
 
         Ok(())
     }
@@ -1160,7 +1170,8 @@ impl MapxRawMkVs {
             }
         }
 
-        let mut chgsets = HashSet::new();
+        let mut chgkeys = HashSet::new();
+        let mut new_kvchgset_for_base_ver = HashMap::new();
         for ver in vers_to_be_merged.iter() {
             // make all merged version to be orphan,
             // so they will be cleaned up in the `version_clean_up_globally` later.
@@ -1172,18 +1183,27 @@ impl MapxRawMkVs {
 
             let chgset = self.version_to_change_set.get(ver).c(d!())?;
             let mut chgset_ops = |k: &[&[u8]], _: &[u8]| {
-                let mut k_vers = self.layered_kv.get(k).c(d!())?;
+                let k_vers = self.layered_kv.get(k).c(d!())?;
                 let value = k_vers.get(ver).c(d!())?;
-                rewrite_ver_chgset.insert(k, &[]).c(d!())?;
-                k_vers.insert(rewrite_ver, &value);
-                chgsets.insert(k.iter().map(|k| k.to_vec()).collect::<Vec<_>>());
+                let k = k.iter().map(|k| k.to_vec()).collect::<Vec<_>>();
+                new_kvchgset_for_base_ver.insert(k.clone(), (k_vers, value));
+                chgkeys.insert(k);
                 Ok(())
             };
             chgset.iter_op(&mut chgset_ops).c(d!())?;
         }
 
+        // avoid dup-middle 'insert's
+        new_kvchgset_for_base_ver
+            .into_iter()
+            .for_each(|(k, (mut k_vers, v))| {
+                let k = k.iter().map(|k| k.as_slice()).collect::<Vec<_>>();
+                pnk!(rewrite_ver_chgset.insert(&k, &[]));
+                k_vers.insert(rewrite_ver, &v);
+            });
+
         // lowest-level KVs with 'deleted' states should be cleaned up.
-        for k in chgsets.iter() {
+        for k in chgkeys.iter() {
             let k = k.iter().map(|k| k.as_slice()).collect::<Vec<_>>();
             if let Some(mut vers) = self.layered_kv.get(&k) {
                 // A 'NULL' value means 'not exist'.

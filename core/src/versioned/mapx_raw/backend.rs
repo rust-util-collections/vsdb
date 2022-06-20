@@ -14,7 +14,11 @@ use crate::{
 use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{
-    borrow::Cow, cmp::Ordering, collections::HashSet, mem::size_of, ops::RangeBounds,
+    borrow::Cow,
+    cmp::Ordering,
+    collections::{HashMap, HashSet},
+    mem::size_of,
+    ops::RangeBounds,
 };
 
 ////////////////////////////////////////////////////////////////////////////////////
@@ -554,27 +558,22 @@ impl MapxRawVs {
             return Err(eg!("base version is not on this branch"));
         };
 
-        let mut base_ver_chg_set =
+        let mut base_ver_chgset =
             decode_map(&self.version_to_change_set.get(&base_version).c(d!())?);
         let vers_to_be_merged = vers.collect::<Vec<_>>();
 
+        let mut chgsets = vec![];
+        let mut new_kvchgset_for_base_ver = HashMap::new();
         for verid in vers_to_be_merged.iter() {
             // we do not call `clear()` on the discarded instance for performance reason.
             let chgset = decode_map(&self.version_to_change_set.remove(verid).c(d!())?);
             for (k, _) in chgset.iter() {
-                base_ver_chg_set.insert(&k, &[]);
-                self.layered_kv.get(&k).c(d!()).and_then(|hdr| {
-                    let mut hdr = decode_map(&hdr);
-                    hdr.remove(verid)
-                        .c(d!())
-                        .map(|v| hdr.insert(&base_version, &v))
-                })?;
+                let v = decode_map(&self.layered_kv.get(&k).c(d!())?)
+                    .remove(verid)
+                    .c(d!())?;
+                new_kvchgset_for_base_ver.insert(k, v);
             }
-
-            TRASH_CLEANER.lock().execute(move || {
-                let mut cs = chgset;
-                cs.clear();
-            });
+            chgsets.push(chgset);
 
             self.version_id_to_version_name
                 .remove(verid)
@@ -584,6 +583,18 @@ impl MapxRawVs {
                 })
                 .and_then(|_| vers_hdr.remove(verid).c(d!()))?;
         }
+
+        // avoid dup-middle 'insert's
+        new_kvchgset_for_base_ver.into_iter().for_each(|(k, v)| {
+            base_ver_chgset.insert(&k, &[]);
+            decode_map(&pnk!(self.layered_kv.get(&k))).insert(&base_version, v);
+        });
+
+        TRASH_CLEANER.lock().execute(move || {
+            chgsets.into_iter().for_each(|mut cs| {
+                cs.clear();
+            });
+        });
 
         Ok(())
     }
@@ -648,6 +659,7 @@ impl MapxRawVs {
             })
         });
 
+        let mut chgsets = vec![];
         for (ver, chgset) in unsafe { self.version_to_change_set.shadow() }
             .iter()
             .filter(|(ver, _)| !valid_vers.contains(ver))
@@ -665,14 +677,15 @@ impl MapxRawVs {
                 .and_then(|vername| {
                     self.version_name_to_version_id.remove(&vername).c(d!())
                 })
-                .and_then(|_| {
-                    let chgset = self.version_to_change_set.remove(&ver).c(d!())?;
-                    TRASH_CLEANER.lock().execute(move || {
-                        decode_map(chgset).clear();
-                    });
-                    Ok(())
-                })?;
+                .and_then(|_| self.version_to_change_set.remove(&ver).c(d!()))
+                .map(|chgset| chgsets.push(chgset))?;
         }
+
+        TRASH_CLEANER.lock().execute(move || {
+            chgsets.into_iter().for_each(|cs| {
+                decode_map(cs).clear();
+            });
+        });
 
         Ok(())
     }
@@ -1314,6 +1327,7 @@ impl MapxRawVs {
         }
 
         let mut chgsets = vec![];
+        let mut new_kvchgset_for_base_ver = HashMap::new();
         for ver in vers_to_be_merged.iter() {
             // make all merged version to be orphan,
             // so they will be cleaned up in the `version_clean_up_globally` later.
@@ -1323,14 +1337,20 @@ impl MapxRawVs {
 
             let chgset = decode_map(&self.version_to_change_set.get(ver).c(d!())?);
             for (k, _) in chgset.iter() {
-                let mut k_vers = decode_map(&self.layered_kv.get(&k).c(d!())?);
+                let k_vers = decode_map(&self.layered_kv.get(&k).c(d!())?);
                 let value = k_vers.get(ver).c(d!())?;
-
-                rewrite_ver_chgset.insert(&k, &[]);
-                k_vers.insert(&rewrite_ver[..], &value);
+                new_kvchgset_for_base_ver.insert(k, (k_vers, value));
             }
             chgsets.push(chgset);
         }
+
+        // avoid dup-middle 'insert's
+        new_kvchgset_for_base_ver
+            .into_iter()
+            .for_each(|(k, (mut k_vers, v))| {
+                rewrite_ver_chgset.insert(&k, &[]);
+                k_vers.insert(rewrite_ver, v);
+            });
 
         // lowest-level KVs with 'deleted' states should be cleaned up.
         for k in chgsets
