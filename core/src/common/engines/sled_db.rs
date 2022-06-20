@@ -10,6 +10,7 @@ use sled::{Config, Db, IVec, Iter, Mode, Tree};
 use std::{
     borrow::Cow,
     ops::{Bound, RangeBounds},
+    thread::available_parallelism,
 };
 
 // the 'prefix search' in sled is just a global scaning,
@@ -302,10 +303,13 @@ fn sled_open() -> Result<Db> {
     // avoid setting again on an opened DB
     info_omit!(vsdb_set_base_dir(&dir));
 
+    let parallelism = available_parallelism().c(d!())?.get() as u64;
+    let cache_cap = max!(GB, min!((parallelism * 2 / 10) * GB, 12 * GB));
+
     let mut cfg = Config::new()
         .path(&dir)
         .mode(Mode::HighThroughput)
-        .cache_capacity(10 * GB);
+        .cache_capacity(cache_cap);
 
     #[cfg(feature = "compress")]
     {

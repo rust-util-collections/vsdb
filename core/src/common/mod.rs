@@ -15,6 +15,7 @@ use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
 };
+use threadpool::ThreadPool;
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -89,6 +90,10 @@ pub static VSDB: Lazy<VsDB<engines::RocksDB>> = Lazy::new(|| pnk!(VsDB::new()));
 
 #[cfg(all(feature = "sled_engine", not(feature = "rocks_engine")))]
 pub static VSDB: Lazy<VsDB<engines::Sled>> = Lazy::new(|| pnk!(VsDB::new()));
+
+/// Clean orphan instances in background.
+pub static TRASH_CLEANER: Lazy<Mutex<ThreadPool>> =
+    Lazy::new(|| Mutex::new(ThreadPool::new(1)));
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////

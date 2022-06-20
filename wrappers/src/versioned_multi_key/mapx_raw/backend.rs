@@ -14,7 +14,7 @@ use crate::{
 use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{cmp::Ordering, collections::HashSet};
-use vsdb_core::common::utils::hash::trie_root;
+use vsdb_core::common::{utils::hash::trie_root, TRASH_CLEANER};
 
 ////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////
@@ -497,11 +497,13 @@ impl MapxRawMkVs {
                     .map(|_| ())
             };
 
-            self.version_to_change_set
-                .remove(verid)
-                .c(d!())?
-                .iter_op(&mut chgset_ops)
-                .c(d!())?;
+            let chgset = self.version_to_change_set.remove(verid).c(d!())?;
+            chgset.iter_op(&mut chgset_ops).c(d!())?;
+
+            TRASH_CLEANER.lock().execute(move || {
+                let mut cs = chgset;
+                cs.clear();
+            });
 
             self.version_id_to_version_name
                 .remove(verid)
@@ -593,7 +595,13 @@ impl MapxRawMkVs {
                 .and_then(|vername| {
                     self.version_name_to_version_id.remove(&vername).c(d!())
                 })
-                .and_then(|_| self.version_to_change_set.remove(&ver).c(d!()))?;
+                .and_then(|_| {
+                    let mut chgset = self.version_to_change_set.remove(&ver).c(d!())?;
+                    TRASH_CLEANER.lock().execute(move || {
+                        chgset.clear();
+                    });
+                    Ok(())
+                })?;
         }
 
         Ok(())
@@ -616,6 +624,11 @@ impl MapxRawMkVs {
         };
         let chgset = self.version_to_change_set.remove(&version_id).c(d!())?;
         chgset.iter_op(&mut chgset_ops).c(d!())?;
+
+        TRASH_CLEANER.lock().execute(move || {
+            let mut cs = chgset;
+            cs.clear();
+        });
 
         self.branch_to_its_versions.values().for_each(|mut vers| {
             vers.remove(&version_id);
@@ -870,10 +883,13 @@ impl MapxRawMkVs {
             .c(d!())
             .and_then(|brname| self.branch_name_to_branch_id.remove(&brname).c(d!()))?;
 
-        self.branch_to_its_versions
-            .remove(&branch_id)
-            .c(d!())
-            .map(|_| ())
+        let mut vers = self.branch_to_its_versions.remove(&branch_id).c(d!())?;
+
+        TRASH_CLEANER.lock().execute(move || {
+            vers.clear();
+        });
+
+        Ok(())
     }
 
     #[inline(always)]

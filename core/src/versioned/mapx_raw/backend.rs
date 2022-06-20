@@ -8,7 +8,7 @@ use crate::{
         utils::hash::trie_root, BranchID, BranchIDBase, BranchName, BranchNameOwned,
         RawKey, RawValue, VersionID, VersionIDBase, VersionName, VersionNameOwned,
         INITIAL_BRANCH_ID, INITIAL_BRANCH_NAME, NULL, NULL_ID,
-        RESERVED_VERSION_NUM_DEFAULT, VSDB,
+        RESERVED_VERSION_NUM_DEFAULT, TRASH_CLEANER, VSDB,
     },
 };
 use ruc::*;
@@ -571,6 +571,11 @@ impl MapxRawVs {
                 })?;
             }
 
+            TRASH_CLEANER.lock().execute(move || {
+                let mut cs = chgset;
+                cs.clear();
+            });
+
             self.version_id_to_version_name
                 .remove(verid)
                 .c(d!())
@@ -660,7 +665,13 @@ impl MapxRawVs {
                 .and_then(|vername| {
                     self.version_name_to_version_id.remove(&vername).c(d!())
                 })
-                .and_then(|_| self.version_to_change_set.remove(&ver).c(d!()))?;
+                .and_then(|_| {
+                    let chgset = self.version_to_change_set.remove(&ver).c(d!())?;
+                    TRASH_CLEANER.lock().execute(move || {
+                        decode_map(chgset).clear();
+                    });
+                    Ok(())
+                })?;
         }
 
         Ok(())
@@ -673,12 +684,18 @@ impl MapxRawVs {
         &mut self,
         version_id: VersionID,
     ) -> Result<()> {
-        let chgset = self.version_to_change_set.remove(&version_id).c(d!())?;
-        for (key, _) in decode_map(&chgset).iter() {
+        let chgset =
+            decode_map(&self.version_to_change_set.remove(&version_id).c(d!())?);
+        for (key, _) in chgset.iter() {
             decode_map(&self.layered_kv.get(&key).c(d!())?)
                 .remove(&version_id)
                 .c(d!())?;
         }
+
+        TRASH_CLEANER.lock().execute(move || {
+            let mut cs = chgset;
+            cs.clear();
+        });
 
         self.branch_to_its_versions.iter().for_each(|(_, vers)| {
             decode_map(&vers).remove(&version_id);
@@ -953,10 +970,13 @@ impl MapxRawVs {
             .c(d!())
             .and_then(|brname| self.branch_name_to_branch_id.remove(&brname).c(d!()))?;
 
-        self.branch_to_its_versions
-            .remove(&branch_id)
-            .c(d!())
-            .map(|_| ())
+        let vers = self.branch_to_its_versions.remove(&branch_id).c(d!())?;
+
+        TRASH_CLEANER.lock().execute(move || {
+            decode_map(vers).clear();
+        });
+
+        Ok(())
     }
 
     #[inline(always)]
