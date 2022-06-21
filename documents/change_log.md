@@ -1,5 +1,16 @@
 # Change log
 
+## v0.45.x
+
+#### Internal optimizations
+
+- Avoid storing fields that can be derived from other fields
+  - Save space
+  - Improve efficiency
+  - But, the memory usage during runtime will increase
+  - But, the time for the process to restart will increase
+- Enhance atomicity guarantees during data changes
+
 ## v0.44.x
 
 #### Internal optimizations

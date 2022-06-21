@@ -1173,14 +1173,6 @@ impl MapxRawMkVs {
         let mut chgkeys = HashSet::new();
         let mut new_kvchgset_for_base_ver = HashMap::new();
         for ver in vers_to_be_merged.iter() {
-            // make all merged version to be orphan,
-            // so they will be cleaned up in the `version_clean_up_globally` later.
-            self.branch_to_its_versions
-                .iter()
-                .for_each(|(_, mut vers)| {
-                    vers.remove(ver);
-                });
-
             let chgset = self.version_to_change_set.get(ver).c(d!())?;
             let mut chgset_ops = |k: &[&[u8]], _: &[u8]| {
                 let k_vers = self.layered_kv.get(k).c(d!())?;
@@ -1201,6 +1193,18 @@ impl MapxRawMkVs {
                 pnk!(rewrite_ver_chgset.insert(&k, &[]));
                 k_vers.insert(rewrite_ver, &v);
             });
+
+        // Make all merged version to be orphan,
+        // so they will be cleaned up in the `version_clean_up_globally`.
+        //
+        // NOTE: do this after all data has been copied to new places!
+        for ver in vers_to_be_merged.iter() {
+            self.branch_to_its_versions
+                .iter()
+                .for_each(|(_, mut vers)| {
+                    vers.remove(ver);
+                });
+        }
 
         // lowest-level KVs with 'deleted' states should be cleaned up.
         for k in chgkeys.iter() {

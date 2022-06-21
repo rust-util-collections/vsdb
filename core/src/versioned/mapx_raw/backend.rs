@@ -42,7 +42,8 @@ pub(super) struct MapxRawVs {
     version_to_change_set: MapxRaw, // MapxOrd<VersionID, MapxRaw>,
 
     // key -> multi-version(globally unique) -> multi-value
-    layered_kv: MapxRaw, // MapxOrdRawKey<MapxOrd<VersionID, Option<RawValue>>>,
+    // NOTE: 'empty value' means 'not exist'
+    layered_kv: MapxRaw, // MapxOrdRawKey<MapxOrd<VersionID, RawValue>>,
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
@@ -1329,12 +1330,6 @@ impl MapxRawVs {
         let mut chgsets = vec![];
         let mut new_kvchgset_for_base_ver = HashMap::new();
         for ver in vers_to_be_merged.iter() {
-            // make all merged version to be orphan,
-            // so they will be cleaned up in the `version_clean_up_globally` later.
-            self.branch_to_its_versions.iter().for_each(|(_, vers)| {
-                decode_map(vers).remove(ver);
-            });
-
             let chgset = decode_map(&self.version_to_change_set.get(ver).c(d!())?);
             for (k, _) in chgset.iter() {
                 let k_vers = decode_map(&self.layered_kv.get(&k).c(d!())?);
@@ -1351,6 +1346,16 @@ impl MapxRawVs {
                 rewrite_ver_chgset.insert(&k, &[]);
                 k_vers.insert(rewrite_ver, v);
             });
+
+        // Make all merged version to be orphan,
+        // so they will be cleaned up in the `version_clean_up_globally`.
+        //
+        // NOTE: do this after all data has been copied to new places!
+        for ver in vers_to_be_merged.iter() {
+            self.branch_to_its_versions.iter().for_each(|(_, vers)| {
+                decode_map(vers).remove(ver);
+            });
+        }
 
         // lowest-level KVs with 'deleted' states should be cleaned up.
         for k in chgsets
