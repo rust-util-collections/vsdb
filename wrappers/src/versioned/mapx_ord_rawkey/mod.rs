@@ -68,9 +68,9 @@ where
     }
 
     #[inline(always)]
-    pub fn get_by_branch(&self, key: &[u8], branch_name: BranchName) -> Option<V> {
+    pub fn get_by_branch(&self, key: &[u8], br_name: BranchName) -> Option<V> {
         self.inner
-            .get_by_branch(key, branch_name)
+            .get_by_branch(key, br_name)
             .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
     }
 
@@ -78,11 +78,11 @@ where
     pub fn get_by_branch_version(
         &self,
         key: &[u8],
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> Option<V> {
         self.inner
-            .get_by_branch_version(key, branch_name, version_name)
+            .get_by_branch_version(key, br_name, ver_name)
             .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
     }
 
@@ -97,10 +97,10 @@ where
     pub fn get_le_by_branch(
         &self,
         key: &[u8],
-        branch_name: BranchName,
+        br_name: BranchName,
     ) -> Option<(RawKey, V)> {
         self.inner
-            .get_le_by_branch(key, branch_name)
+            .get_le_by_branch(key, br_name)
             .map(|(k, v)| (k, <V as ValueEnDe>::decode(&v).unwrap()))
     }
 
@@ -108,11 +108,11 @@ where
     pub fn get_le_by_branch_version(
         &self,
         key: &[u8],
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> Option<(RawKey, V)> {
         self.inner
-            .get_le_by_branch_version(key, branch_name, version_name)
+            .get_le_by_branch_version(key, br_name, ver_name)
             .map(|(k, v)| (k, <V as ValueEnDe>::decode(&v).unwrap()))
     }
 
@@ -127,10 +127,10 @@ where
     pub fn get_ge_by_branch(
         &self,
         key: &[u8],
-        branch_name: BranchName,
+        br_name: BranchName,
     ) -> Option<(RawKey, V)> {
         self.inner
-            .get_ge_by_branch(key, branch_name)
+            .get_ge_by_branch(key, br_name)
             .map(|(k, v)| (k, <V as ValueEnDe>::decode(&v).unwrap()))
     }
 
@@ -138,11 +138,11 @@ where
     pub fn get_ge_by_branch_version(
         &self,
         key: &[u8],
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> Option<(RawKey, V)> {
         self.inner
-            .get_ge_by_branch_version(key, branch_name, version_name)
+            .get_ge_by_branch_version(key, br_name, ver_name)
             .map(|(k, v)| (k, <V as ValueEnDe>::decode(&v).unwrap()))
     }
 
@@ -152,17 +152,17 @@ where
     }
 
     #[inline(always)]
-    pub fn len_by_branch(&self, branch_name: BranchName) -> usize {
-        self.inner.len_by_branch(branch_name)
+    pub fn len_by_branch(&self, br_name: BranchName) -> usize {
+        self.inner.len_by_branch(br_name)
     }
 
     #[inline(always)]
     pub fn len_by_branch_version(
         &self,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> usize {
-        self.inner.len_by_branch_version(branch_name, version_name)
+        self.inner.len_by_branch_version(br_name, ver_name)
     }
 
     #[inline(always)]
@@ -171,18 +171,17 @@ where
     }
 
     #[inline(always)]
-    pub fn is_empty_by_branch(&self, branch_name: BranchName) -> bool {
-        self.inner.is_empty_by_branch(branch_name)
+    pub fn is_empty_by_branch(&self, br_name: BranchName) -> bool {
+        self.inner.is_empty_by_branch(br_name)
     }
 
     #[inline(always)]
     pub fn is_empty_by_branch_version(
         &self,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> bool {
-        self.inner
-            .is_empty_by_branch_version(branch_name, version_name)
+        self.inner.is_empty_by_branch_version(br_name, ver_name)
     }
 
     #[inline(always)]
@@ -198,10 +197,10 @@ where
         &mut self,
         key: &[u8],
         value: &V,
-        branch_name: BranchName,
+        br_name: BranchName,
     ) -> Result<Option<V>> {
         self.inner
-            .insert_by_branch(key, &value.encode(), branch_name)
+            .insert_by_branch(key, &value.encode(), br_name)
             .c(d!())
             .map(|v| v.map(|v| <V as ValueEnDe>::decode(&v).unwrap()))
     }
@@ -223,9 +222,9 @@ where
     }
 
     #[inline(always)]
-    pub fn iter_by_branch(&self, branch_name: BranchName) -> MapxOrdRawKeyVsIter<'_, V> {
+    pub fn iter_by_branch(&self, br_name: BranchName) -> MapxOrdRawKeyVsIter<'_, V> {
         MapxOrdRawKeyVsIter {
-            inner: self.inner.iter_by_branch(branch_name),
+            inner: self.inner.iter_by_branch(br_name),
             p: PhantomData,
         }
     }
@@ -233,11 +232,11 @@ where
     #[inline(always)]
     pub fn iter_by_branch_version(
         &self,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> MapxOrdRawKeyVsIter<'_, V> {
         MapxOrdRawKeyVsIter {
-            inner: self.inner.iter_by_branch_version(branch_name, version_name),
+            inner: self.inner.iter_by_branch_version(br_name, ver_name),
             p: PhantomData,
         }
     }
@@ -267,11 +266,11 @@ where
     #[inline(always)]
     pub fn range_by_branch<'a, R: RangeBounds<Cow<'a, [u8]>>>(
         &'a self,
-        branch_name: BranchName,
+        br_name: BranchName,
         bounds: R,
     ) -> MapxOrdRawKeyVsIter<'a, V> {
         MapxOrdRawKeyVsIter {
-            inner: self.inner.range_by_branch(branch_name, bounds),
+            inner: self.inner.range_by_branch(br_name, bounds),
             p: PhantomData,
         }
     }
@@ -279,14 +278,14 @@ where
     #[inline(always)]
     pub fn range_by_branch_version<'a, R: RangeBounds<Cow<'a, [u8]>>>(
         &'a self,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
         bounds: R,
     ) -> MapxOrdRawKeyVsIter<'a, V> {
         MapxOrdRawKeyVsIter {
             inner: self
                 .inner
-                .range_by_branch_version(branch_name, version_name, bounds),
+                .range_by_branch_version(br_name, ver_name, bounds),
             p: PhantomData,
         }
     }
@@ -297,18 +296,17 @@ where
     }
 
     #[inline(always)]
-    pub fn first_by_branch(&self, branch_name: BranchName) -> Option<(RawKey, V)> {
-        self.iter_by_branch(branch_name).next()
+    pub fn first_by_branch(&self, br_name: BranchName) -> Option<(RawKey, V)> {
+        self.iter_by_branch(br_name).next()
     }
 
     #[inline(always)]
     pub fn first_by_branch_version(
         &self,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> Option<(RawKey, V)> {
-        self.iter_by_branch_version(branch_name, version_name)
-            .next()
+        self.iter_by_branch_version(br_name, ver_name).next()
     }
 
     #[inline(always)]
@@ -317,18 +315,17 @@ where
     }
 
     #[inline(always)]
-    pub fn last_by_branch(&self, branch_name: BranchName) -> Option<(RawKey, V)> {
-        self.iter_by_branch(branch_name).next_back()
+    pub fn last_by_branch(&self, br_name: BranchName) -> Option<(RawKey, V)> {
+        self.iter_by_branch(br_name).next_back()
     }
 
     #[inline(always)]
     pub fn last_by_branch_version(
         &self,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> Option<(RawKey, V)> {
-        self.iter_by_branch_version(branch_name, version_name)
-            .next_back()
+        self.iter_by_branch_version(br_name, ver_name).next_back()
     }
 
     #[inline(always)]
@@ -337,19 +334,19 @@ where
     }
 
     #[inline(always)]
-    pub fn contains_key_by_branch(&self, key: &[u8], branch_name: BranchName) -> bool {
-        self.inner.contains_key_by_branch(key, branch_name)
+    pub fn contains_key_by_branch(&self, key: &[u8], br_name: BranchName) -> bool {
+        self.inner.contains_key_by_branch(key, br_name)
     }
 
     #[inline(always)]
     pub fn contains_key_by_branch_version(
         &self,
         key: &[u8],
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> bool {
         self.inner
-            .contains_key_by_branch_version(key, branch_name, version_name)
+            .contains_key_by_branch_version(key, br_name, ver_name)
     }
 
     #[inline(always)]
@@ -364,10 +361,10 @@ where
     pub fn remove_by_branch(
         &mut self,
         key: &[u8],
-        branch_name: BranchName,
+        br_name: BranchName,
     ) -> Result<Option<V>> {
         self.inner
-            .remove_by_branch(key, branch_name)
+            .remove_by_branch(key, br_name)
             .c(d!())
             .map(|v| v.map(|v| <V as ValueEnDe>::decode(&v).unwrap()))
     }

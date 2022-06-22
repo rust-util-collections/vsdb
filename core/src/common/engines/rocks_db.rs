@@ -138,7 +138,7 @@ impl Engine for RocksEngine {
     // 'step 1' and 'step 2' is not atomic in multi-threads scene,
     // so we use a `Mutex` lock for thread safe.
     #[allow(unused_variables)]
-    fn alloc_branch_id(&self) -> BranchID {
+    fn alloc_br_id(&self) -> BranchID {
         static LK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
         let x = LK.lock();
 
@@ -159,7 +159,7 @@ impl Engine for RocksEngine {
     // 'step 1' and 'step 2' is not atomic in multi-threads scene,
     // so we use a `Mutex` lock for thread safe.
     #[allow(unused_variables)]
-    fn alloc_version_id(&self) -> VersionID {
+    fn alloc_ver_id(&self) -> VersionID {
         static LK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
         let x = LK.lock();
 

@@ -100,11 +100,11 @@ impl MapxRawVs {
         &mut self,
         key: impl AsRef<[u8]>,
         value: impl AsRef<[u8]>,
-        branch_name: BranchName,
+        br_name: BranchName,
     ) -> Result<Option<RawValue>> {
-        let branch_id = self.inner.branch_get_id_by_name(branch_name).c(d!())?;
+        let br_id = self.inner.branch_get_id_by_name(br_name).c(d!())?;
         self.inner
-            .insert_by_branch(key.as_ref(), value.as_ref(), branch_id)
+            .insert_by_branch(key.as_ref(), value.as_ref(), br_id)
             .c(d!())
     }
 
@@ -119,10 +119,10 @@ impl MapxRawVs {
     pub fn remove_by_branch(
         &mut self,
         key: impl AsRef<[u8]>,
-        branch_name: BranchName,
+        br_name: BranchName,
     ) -> Result<Option<RawValue>> {
-        let branch_id = self.inner.branch_get_id_by_name(branch_name).c(d!())?;
-        self.inner.remove_by_branch(key.as_ref(), branch_id).c(d!())
+        let br_id = self.inner.branch_get_id_by_name(br_name).c(d!())?;
+        self.inner.remove_by_branch(key.as_ref(), br_id).c(d!())
     }
 
     /// Get the value of a key from the default branch.
@@ -146,10 +146,10 @@ impl MapxRawVs {
     pub fn get_by_branch(
         &self,
         key: impl AsRef<[u8]>,
-        branch_name: BranchName,
+        br_name: BranchName,
     ) -> Option<RawValue> {
-        let branch_id = self.inner.branch_get_id_by_name(branch_name)?;
-        self.inner.get_by_branch(key.as_ref(), branch_id)
+        let br_id = self.inner.branch_get_id_by_name(br_name)?;
+        self.inner.get_by_branch(key.as_ref(), br_id)
     }
 
     /// Get the value of a key from a specified version of a specified branch.
@@ -157,13 +157,13 @@ impl MapxRawVs {
     pub fn get_by_branch_version(
         &self,
         key: impl AsRef<[u8]>,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> Option<RawValue> {
-        let branch_id = self.inner.branch_get_id_by_name(branch_name)?;
-        let version_id = self.inner.version_get_id_by_name(version_name)?;
+        let br_id = self.inner.branch_get_id_by_name(br_name)?;
+        let ver_id = self.inner.version_get_id_by_name(ver_name)?;
         self.inner
-            .get_by_branch_version(key.as_ref(), branch_id, version_id)
+            .get_by_branch_version(key.as_ref(), br_id, ver_id)
     }
 
     /// Get the value of a key from the default branch,
@@ -181,10 +181,10 @@ impl MapxRawVs {
     pub fn get_ge_by_branch(
         &self,
         key: impl AsRef<[u8]>,
-        branch_name: BranchName,
+        br_name: BranchName,
     ) -> Option<(RawKey, RawValue)> {
-        let branch_id = self.inner.branch_get_id_by_name(branch_name)?;
-        self.inner.get_ge_by_branch(key.as_ref(), branch_id)
+        let br_id = self.inner.branch_get_id_by_name(br_name)?;
+        self.inner.get_ge_by_branch(key.as_ref(), br_id)
     }
 
     /// Get the value of a key from a specified version of a specified branch,
@@ -194,13 +194,13 @@ impl MapxRawVs {
     pub fn get_ge_by_branch_version(
         &self,
         key: impl AsRef<[u8]>,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> Option<(RawKey, RawValue)> {
-        let branch_id = self.inner.branch_get_id_by_name(branch_name)?;
-        let version_id = self.inner.version_get_id_by_name(version_name)?;
+        let br_id = self.inner.branch_get_id_by_name(br_name)?;
+        let ver_id = self.inner.version_get_id_by_name(ver_name)?;
         self.inner
-            .get_ge_by_branch_version(key.as_ref(), branch_id, version_id)
+            .get_ge_by_branch_version(key.as_ref(), br_id, ver_id)
     }
 
     /// Get the value of a key from the default branch,
@@ -218,10 +218,10 @@ impl MapxRawVs {
     pub fn get_le_by_branch(
         &self,
         key: impl AsRef<[u8]>,
-        branch_name: BranchName,
+        br_name: BranchName,
     ) -> Option<(RawKey, RawValue)> {
-        let branch_id = self.inner.branch_get_id_by_name(branch_name)?;
-        self.inner.get_le_by_branch(key.as_ref(), branch_id)
+        let br_id = self.inner.branch_get_id_by_name(br_name)?;
+        self.inner.get_le_by_branch(key.as_ref(), br_id)
     }
 
     /// Get the value of a key from a specified version of a specified branch,
@@ -231,13 +231,13 @@ impl MapxRawVs {
     pub fn get_le_by_branch_version(
         &self,
         key: impl AsRef<[u8]>,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> Option<(RawKey, RawValue)> {
-        let branch_id = self.inner.branch_get_id_by_name(branch_name)?;
-        let version_id = self.inner.version_get_id_by_name(version_name)?;
+        let br_id = self.inner.branch_get_id_by_name(br_name)?;
+        let ver_id = self.inner.version_get_id_by_name(ver_name)?;
         self.inner
-            .get_le_by_branch_version(key.as_ref(), branch_id, version_id)
+            .get_le_by_branch_version(key.as_ref(), br_id, ver_id)
     }
 
     /// Create an iterator over the default branch.
@@ -257,30 +257,24 @@ impl MapxRawVs {
 
     /// Create an iterator over a specified branch.
     #[inline(always)]
-    pub fn iter_by_branch(&self, branch_name: BranchName) -> MapxRawVsIter {
-        let branch_id = self
-            .inner
-            .branch_get_id_by_name(branch_name)
-            .unwrap_or(NULL_ID);
-        self.inner.iter_by_branch(branch_id)
+    pub fn iter_by_branch(&self, br_name: BranchName) -> MapxRawVsIter {
+        let br_id = self.inner.branch_get_id_by_name(br_name).unwrap_or(NULL_ID);
+        self.inner.iter_by_branch(br_id)
     }
 
     /// Create an iterator over a specified version of a specified branch.
     #[inline(always)]
     pub fn iter_by_branch_version(
         &self,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> MapxRawVsIter {
-        let branch_id = self
+        let br_id = self.inner.branch_get_id_by_name(br_name).unwrap_or(NULL_ID);
+        let ver_id = self
             .inner
-            .branch_get_id_by_name(branch_name)
+            .version_get_id_by_name(ver_name)
             .unwrap_or(NULL_ID);
-        let version_id = self
-            .inner
-            .version_get_id_by_name(version_name)
-            .unwrap_or(NULL_ID);
-        self.inner.iter_by_branch_version(branch_id, version_id)
+        self.inner.iter_by_branch_version(br_id, ver_id)
     }
 
     /// Create a range iterator over the default branch.
@@ -308,34 +302,27 @@ impl MapxRawVs {
     #[inline(always)]
     pub fn range_by_branch<'a, R: RangeBounds<Cow<'a, [u8]>>>(
         &'a self,
-        branch_name: BranchName,
+        br_name: BranchName,
         bounds: R,
     ) -> MapxRawVsIter<'a> {
-        let branch_id = self
-            .inner
-            .branch_get_id_by_name(branch_name)
-            .unwrap_or(NULL_ID);
-        self.inner.range_by_branch(branch_id, bounds)
+        let br_id = self.inner.branch_get_id_by_name(br_name).unwrap_or(NULL_ID);
+        self.inner.range_by_branch(br_id, bounds)
     }
 
     /// Create a range iterator over a specified version of a specified branch.
     #[inline(always)]
     pub fn range_by_branch_version<'a, R: RangeBounds<Cow<'a, [u8]>>>(
         &'a self,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
         bounds: R,
     ) -> MapxRawVsIter<'a> {
-        let branch_id = self
+        let br_id = self.inner.branch_get_id_by_name(br_name).unwrap_or(NULL_ID);
+        let ver_id = self
             .inner
-            .branch_get_id_by_name(branch_name)
+            .version_get_id_by_name(ver_name)
             .unwrap_or(NULL_ID);
-        let version_id = self
-            .inner
-            .version_get_id_by_name(version_name)
-            .unwrap_or(NULL_ID);
-        self.inner
-            .range_by_branch_version(branch_id, version_id, bounds)
+        self.inner.range_by_branch_version(br_id, ver_id, bounds)
     }
 
     /// Check if a key exist on the default branch.
@@ -349,9 +336,9 @@ impl MapxRawVs {
     pub fn contains_key_by_branch(
         &self,
         key: impl AsRef<[u8]>,
-        branch_name: BranchName,
+        br_name: BranchName,
     ) -> bool {
-        self.get_by_branch(key.as_ref(), branch_name).is_some()
+        self.get_by_branch(key.as_ref(), br_name).is_some()
     }
 
     /// Check if a key exist on a specified version of a specified branch.
@@ -359,10 +346,10 @@ impl MapxRawVs {
     pub fn contains_key_by_branch_version(
         &self,
         key: impl AsRef<[u8]>,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> bool {
-        self.get_by_branch_version(key.as_ref(), branch_name, version_name)
+        self.get_by_branch_version(key.as_ref(), br_name, ver_name)
             .is_some()
     }
 
@@ -378,9 +365,9 @@ impl MapxRawVs {
     ///
     /// Get the total number of items of the head of a specified branch.
     #[inline(always)]
-    pub fn len_by_branch(&self, branch_name: BranchName) -> usize {
+    pub fn len_by_branch(&self, br_name: BranchName) -> usize {
         self.inner
-            .branch_get_id_by_name(branch_name)
+            .branch_get_id_by_name(br_name)
             .map(|id| self.inner.len_by_branch(id))
             .unwrap_or(0)
     }
@@ -391,14 +378,14 @@ impl MapxRawVs {
     #[inline(always)]
     pub fn len_by_branch_version(
         &self,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> usize {
         self.inner
-            .branch_get_id_by_name(branch_name)
+            .branch_get_id_by_name(br_name)
             .and_then(|br_id| {
                 self.inner
-                    .version_get_id_by_name(version_name)
+                    .version_get_id_by_name(ver_name)
                     .map(|ver_id| self.inner.len_by_branch_version(br_id, ver_id))
             })
             .unwrap_or(0)
@@ -412,18 +399,18 @@ impl MapxRawVs {
 
     #[inline(always)]
     #[allow(missing_docs)]
-    pub fn is_empty_by_branch(&self, branch_name: BranchName) -> bool {
-        self.iter_by_branch(branch_name).next().is_none()
+    pub fn is_empty_by_branch(&self, br_name: BranchName) -> bool {
+        self.iter_by_branch(br_name).next().is_none()
     }
 
     #[inline(always)]
     #[allow(missing_docs)]
     pub fn is_empty_by_branch_version(
         &self,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> bool {
-        self.iter_by_branch_version(branch_name, version_name)
+        self.iter_by_branch_version(br_name, ver_name)
             .next()
             .is_none()
     }
@@ -438,8 +425,8 @@ impl MapxRawVs {
 impl VsMgmt for MapxRawVs {
     /// Create a new version on the default branch.
     #[inline(always)]
-    fn version_create(&mut self, version_name: VersionName) -> Result<()> {
-        self.inner.version_create(version_name.0).c(d!())
+    fn version_create(&mut self, ver_name: VersionName) -> Result<()> {
+        self.inner.version_create(ver_name.0).c(d!())
     }
 
     /// Create a new version on a specified branch,
@@ -447,32 +434,32 @@ impl VsMgmt for MapxRawVs {
     #[inline(always)]
     fn version_create_by_branch(
         &mut self,
-        version_name: VersionName,
-        branch_name: BranchName,
+        ver_name: VersionName,
+        br_name: BranchName,
     ) -> Result<()> {
         self.inner
-            .branch_get_id_by_name(branch_name)
+            .branch_get_id_by_name(br_name)
             .c(d!("branch not found"))
             .and_then(|br_id| {
                 self.inner
-                    .version_create_by_branch(version_name.0, br_id)
+                    .version_create_by_branch(ver_name.0, br_id)
                     .c(d!())
             })
     }
 
     #[inline(always)]
-    fn version_exists_globally(&self, version_name: VersionName) -> bool {
+    fn version_exists_globally(&self, ver_name: VersionName) -> bool {
         self.inner
-            .version_get_id_by_name(version_name)
+            .version_get_id_by_name(ver_name)
             .map(|verid| self.inner.version_exists_globally(verid))
             .unwrap_or(false)
     }
 
     /// Check if a verison exists on default branch.
     #[inline(always)]
-    fn version_exists(&self, version_name: VersionName) -> bool {
+    fn version_exists(&self, ver_name: VersionName) -> bool {
         self.inner
-            .version_get_id_by_name(version_name)
+            .version_get_id_by_name(ver_name)
             .map(|id| self.inner.version_exists(id))
             .unwrap_or(false)
     }
@@ -481,14 +468,14 @@ impl VsMgmt for MapxRawVs {
     #[inline(always)]
     fn version_exists_on_branch(
         &self,
-        version_name: VersionName,
-        branch_name: BranchName,
+        ver_name: VersionName,
+        br_name: BranchName,
     ) -> bool {
         self.inner
-            .branch_get_id_by_name(branch_name)
+            .branch_get_id_by_name(br_name)
             .and_then(|br_id| {
                 self.inner
-                    .version_get_id_by_name(version_name)
+                    .version_get_id_by_name(ver_name)
                     .map(|ver_id| self.inner.version_exists_on_branch(ver_id, br_id))
             })
             .unwrap_or(false)
@@ -514,9 +501,9 @@ impl VsMgmt for MapxRawVs {
     /// while operations on branches and versions are limited to their own perspective,
     /// and should not do any tracing.
     #[inline(always)]
-    fn version_pop_by_branch(&mut self, branch_name: BranchName) -> Result<()> {
+    fn version_pop_by_branch(&mut self, br_name: BranchName) -> Result<()> {
         self.inner
-            .branch_get_id_by_name(branch_name)
+            .branch_get_id_by_name(br_name)
             .c(d!("branch not found"))
             .and_then(|br_id| self.inner.version_pop_by_branch(br_id).c(d!()))
     }
@@ -526,7 +513,7 @@ impl VsMgmt for MapxRawVs {
     /// # Safety
     ///
     /// It's the caller's duty to ensure that
-    /// the `base_version` was created directly by the `branch_id`,
+    /// the `base_version` was created directly by the `br_id`,
     /// or the data records of other branches may be corrupted.
     #[inline(always)]
     unsafe fn version_rebase(&mut self, base_version: VersionName) -> Result<()> {
@@ -541,16 +528,16 @@ impl VsMgmt for MapxRawVs {
     /// # Safety
     ///
     /// It's the caller's duty to ensure that
-    /// the `base_version` was created directly by the `branch_id`,
+    /// the `base_version` was created directly by the `br_id`,
     /// or the data records of other branches may be corrupted.
     #[inline(always)]
     unsafe fn version_rebase_by_branch(
         &mut self,
         base_version: VersionName,
-        branch_name: BranchName,
+        br_name: BranchName,
     ) -> Result<()> {
         let bv = self.inner.version_get_id_by_name(base_version).c(d!())?;
-        let brid = self.inner.branch_get_id_by_name(branch_name).c(d!())?;
+        let brid = self.inner.branch_get_id_by_name(br_name).c(d!())?;
         self.inner.version_rebase_by_branch(bv, brid).c(d!())
     }
 
@@ -562,10 +549,10 @@ impl VsMgmt for MapxRawVs {
     #[inline(always)]
     fn version_list_by_branch(
         &self,
-        branch_name: BranchName,
+        br_name: BranchName,
     ) -> Result<Vec<VersionNameOwned>> {
         self.inner
-            .branch_get_id_by_name(branch_name)
+            .branch_get_id_by_name(br_name)
             .c(d!("branch not found"))
             .and_then(|brid| self.inner.version_list_by_branch(brid).c(d!()))
     }
@@ -576,9 +563,9 @@ impl VsMgmt for MapxRawVs {
     }
 
     #[inline(always)]
-    fn version_has_change_set(&self, version_name: VersionName) -> Result<bool> {
+    fn version_has_change_set(&self, ver_name: VersionName) -> Result<bool> {
         self.inner
-            .version_get_id_by_name(version_name)
+            .version_get_id_by_name(ver_name)
             .c(d!("version not found"))
             .and_then(|verid| self.inner.version_has_change_set(verid).c(d!()))
     }
@@ -589,12 +576,9 @@ impl VsMgmt for MapxRawVs {
     }
 
     #[inline(always)]
-    unsafe fn version_revert_globally(
-        &mut self,
-        version_name: VersionName,
-    ) -> Result<()> {
+    unsafe fn version_revert_globally(&mut self, ver_name: VersionName) -> Result<()> {
         self.inner
-            .version_get_id_by_name(version_name)
+            .version_get_id_by_name(ver_name)
             .c(d!("version not found"))
             .and_then(|verid| self.inner.version_revert_globally(verid).c(d!()))
     }
@@ -602,10 +586,10 @@ impl VsMgmt for MapxRawVs {
     #[inline(always)]
     fn version_chgset_trie_root(
         &self,
-        branch_name: Option<BranchName>,
-        version_name: Option<VersionName>,
+        br_name: Option<BranchName>,
+        ver_name: Option<VersionName>,
     ) -> Result<Vec<u8>> {
-        let brid = if let Some(bn) = branch_name {
+        let brid = if let Some(bn) = br_name {
             Some(
                 self.inner
                     .branch_get_id_by_name(bn)
@@ -615,7 +599,7 @@ impl VsMgmt for MapxRawVs {
             None
         };
 
-        let verid = if let Some(vn) = version_name {
+        let verid = if let Some(vn) = ver_name {
             Some(
                 self.inner
                     .version_get_id_by_name(vn)
@@ -632,12 +616,12 @@ impl VsMgmt for MapxRawVs {
     #[inline(always)]
     fn branch_create(
         &mut self,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
         force: bool,
     ) -> Result<()> {
         self.inner
-            .branch_create(branch_name.0, version_name.0, force)
+            .branch_create(br_name.0, ver_name.0, force)
             .c(d!())
     }
 
@@ -645,21 +629,18 @@ impl VsMgmt for MapxRawVs {
     #[inline(always)]
     fn branch_create_by_base_branch(
         &mut self,
-        branch_name: BranchName,
-        version_name: VersionName,
-        base_branch_name: ParentBranchName,
+        br_name: BranchName,
+        ver_name: VersionName,
+        base_br_name: ParentBranchName,
         force: bool,
     ) -> Result<()> {
         self.inner
-            .branch_get_id_by_name(BranchName(base_branch_name.0))
+            .branch_get_id_by_name(BranchName(base_br_name.0))
             .c(d!("base branch not found"))
             .and_then(|base_br_id| {
                 self.inner
                     .branch_create_by_base_branch(
-                        branch_name.0,
-                        version_name.0,
-                        base_br_id,
-                        force,
+                        br_name.0, ver_name.0, base_br_id, force,
                     )
                     .c(d!())
             })
@@ -669,24 +650,24 @@ impl VsMgmt for MapxRawVs {
     #[inline(always)]
     fn branch_create_by_base_branch_version(
         &mut self,
-        branch_name: BranchName,
-        version_name: VersionName,
-        base_branch_name: ParentBranchName,
-        base_version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
+        base_br_name: ParentBranchName,
+        base_ver_name: VersionName,
         force: bool,
     ) -> Result<()> {
         let base_br_id = self
             .inner
-            .branch_get_id_by_name(BranchName(base_branch_name.0))
+            .branch_get_id_by_name(BranchName(base_br_name.0))
             .c(d!("base branch not found"))?;
         let base_ver_id = self
             .inner
-            .version_get_id_by_name(base_version_name)
+            .version_get_id_by_name(base_ver_name)
             .c(d!("base vesion not found"))?;
         self.inner
             .branch_create_by_base_branch_version(
-                branch_name.0,
-                version_name.0,
+                br_name.0,
+                ver_name.0,
                 base_br_id,
                 base_ver_id,
                 force,
@@ -701,11 +682,11 @@ impl VsMgmt for MapxRawVs {
     #[inline(always)]
     unsafe fn branch_create_without_new_version(
         &mut self,
-        branch_name: BranchName,
+        br_name: BranchName,
         force: bool,
     ) -> Result<()> {
         self.inner
-            .branch_create_without_new_version(branch_name.0, force)
+            .branch_create_without_new_version(br_name.0, force)
             .c(d!())
     }
 
@@ -716,19 +697,17 @@ impl VsMgmt for MapxRawVs {
     #[inline(always)]
     unsafe fn branch_create_by_base_branch_without_new_version(
         &mut self,
-        branch_name: BranchName,
-        base_branch_name: ParentBranchName,
+        br_name: BranchName,
+        base_br_name: ParentBranchName,
         force: bool,
     ) -> Result<()> {
         self.inner
-            .branch_get_id_by_name(BranchName(base_branch_name.0))
+            .branch_get_id_by_name(BranchName(base_br_name.0))
             .c(d!("base branch not found"))
             .and_then(|base_br_id| {
                 self.inner
                     .branch_create_by_base_branch_without_new_version(
-                        branch_name.0,
-                        base_br_id,
-                        force,
+                        br_name.0, base_br_id, force,
                     )
                     .c(d!())
             })
@@ -741,22 +720,22 @@ impl VsMgmt for MapxRawVs {
     #[inline(always)]
     unsafe fn branch_create_by_base_branch_version_without_new_version(
         &mut self,
-        branch_name: BranchName,
-        base_branch_name: ParentBranchName,
-        base_version_name: VersionName,
+        br_name: BranchName,
+        base_br_name: ParentBranchName,
+        base_ver_name: VersionName,
         force: bool,
     ) -> Result<()> {
         let base_br_id = self
             .inner
-            .branch_get_id_by_name(BranchName(base_branch_name.0))
+            .branch_get_id_by_name(BranchName(base_br_name.0))
             .c(d!("base branch not found"))?;
         let base_ver_id = self
             .inner
-            .version_get_id_by_name(base_version_name)
+            .version_get_id_by_name(base_ver_name)
             .c(d!("base vesion not found"))?;
         self.inner
             .branch_create_by_base_branch_version_without_new_version(
-                branch_name.0,
+                br_name.0,
                 base_br_id,
                 base_ver_id,
                 force,
@@ -766,9 +745,9 @@ impl VsMgmt for MapxRawVs {
 
     /// Check if a branch exists or not.
     #[inline(always)]
-    fn branch_exists(&self, branch_name: BranchName) -> bool {
+    fn branch_exists(&self, br_name: BranchName) -> bool {
         self.inner
-            .branch_get_id_by_name(branch_name)
+            .branch_get_id_by_name(br_name)
             .map(|id| {
                 assert!(self.inner.branch_exists(id));
                 true
@@ -778,9 +757,9 @@ impl VsMgmt for MapxRawVs {
 
     /// Check if a branch exists and has versions on it.
     #[inline(always)]
-    fn branch_has_versions(&self, branch_name: BranchName) -> bool {
+    fn branch_has_versions(&self, br_name: BranchName) -> bool {
         self.inner
-            .branch_get_id_by_name(branch_name)
+            .branch_get_id_by_name(br_name)
             .map(|id| self.inner.branch_has_versions(id))
             .unwrap_or(false)
     }
@@ -793,9 +772,9 @@ impl VsMgmt for MapxRawVs {
     /// while operations on branches and versions are limited to their own perspective,
     /// and should not do any tracing.
     #[inline(always)]
-    fn branch_remove(&mut self, branch_name: BranchName) -> Result<()> {
-        if let Some(branch_id) = self.inner.branch_get_id_by_name(branch_name) {
-            self.inner.branch_remove(branch_id).c(d!())
+    fn branch_remove(&mut self, br_name: BranchName) -> Result<()> {
+        if let Some(br_id) = self.inner.branch_get_id_by_name(br_name) {
+            self.inner.branch_remove(br_id).c(d!())
         } else {
             Err(eg!("branch not found"))
         }
@@ -803,8 +782,8 @@ impl VsMgmt for MapxRawVs {
 
     /// Clean up all other branches not in the list.
     #[inline(always)]
-    fn branch_keep_only(&mut self, branch_names: &[BranchName]) -> Result<()> {
-        let br_ids = branch_names
+    fn branch_keep_only(&mut self, br_names: &[BranchName]) -> Result<()> {
+        let br_ids = br_names
             .iter()
             .copied()
             .map(|brname| {
@@ -818,7 +797,7 @@ impl VsMgmt for MapxRawVs {
         self.inner.branch_keep_only(&br_ids).c(d!())
     }
 
-    /// Remove all changes directly made by versions(bigger than `last_version_id`) of this branch.
+    /// Remove all changes directly made by versions(bigger than `last_ver_id`) of this branch.
     ///
     /// 'Write'-like operations on branches and versions are different from operations on data.
     ///
@@ -826,14 +805,14 @@ impl VsMgmt for MapxRawVs {
     /// while operations on branches and versions are limited to their own perspective,
     /// and should not do any tracing.
     #[inline(always)]
-    fn branch_truncate(&mut self, branch_name: BranchName) -> Result<()> {
+    fn branch_truncate(&mut self, br_name: BranchName) -> Result<()> {
         self.inner
-            .branch_get_id_by_name(branch_name)
+            .branch_get_id_by_name(br_name)
             .c(d!("branch not found"))
             .and_then(|br_id| self.inner.branch_truncate(br_id).c(d!()))
     }
 
-    /// Remove all changes directly made by versions(bigger than `last_version_id`) of this branch.
+    /// Remove all changes directly made by versions(bigger than `last_ver_id`) of this branch.
     ///
     /// 'Write'-like operations on branches and versions are different from operations on data.
     ///
@@ -843,15 +822,15 @@ impl VsMgmt for MapxRawVs {
     #[inline(always)]
     fn branch_truncate_to(
         &mut self,
-        branch_name: BranchName,
-        last_version_name: VersionName,
+        br_name: BranchName,
+        last_ver_name: VersionName,
     ) -> Result<()> {
         self.inner
-            .branch_get_id_by_name(branch_name)
+            .branch_get_id_by_name(br_name)
             .c(d!("branch not found"))
             .and_then(|br_id| {
                 self.inner
-                    .version_get_id_by_name(last_version_name)
+                    .version_get_id_by_name(last_ver_name)
                     .c(d!("version not found"))
                     .and_then(|last_ver_id| {
                         self.inner.branch_truncate_to(br_id, last_ver_id).c(d!())
@@ -867,9 +846,9 @@ impl VsMgmt for MapxRawVs {
     /// while operations on branches and versions are limited to their own perspective,
     /// and should not do any tracing.
     #[inline(always)]
-    fn branch_pop_version(&mut self, branch_name: BranchName) -> Result<()> {
+    fn branch_pop_version(&mut self, br_name: BranchName) -> Result<()> {
         self.inner
-            .branch_get_id_by_name(branch_name)
+            .branch_get_id_by_name(br_name)
             .c(d!("branch not found"))
             .and_then(|id| self.inner.branch_pop_version(id).c(d!()))
     }
@@ -878,16 +857,16 @@ impl VsMgmt for MapxRawVs {
     #[inline(always)]
     fn branch_merge_to(
         &mut self,
-        branch_name: BranchName,
-        target_branch_name: BranchName,
+        br_name: BranchName,
+        target_br_name: BranchName,
     ) -> Result<()> {
         self.inner
-            .branch_get_id_by_name(branch_name)
+            .branch_get_id_by_name(br_name)
             .c(d!("branch not found"))
             .and_then(|brid| {
                 let target_brid = self
                     .inner
-                    .branch_get_id_by_name(target_branch_name)
+                    .branch_get_id_by_name(target_br_name)
                     .c(d!("target branch not found"))?;
                 self.inner.branch_merge_to(brid, target_brid).c(d!())
             })
@@ -903,16 +882,16 @@ impl VsMgmt for MapxRawVs {
     #[inline(always)]
     unsafe fn branch_merge_to_force(
         &mut self,
-        branch_name: BranchName,
-        target_branch_name: BranchName,
+        br_name: BranchName,
+        target_br_name: BranchName,
     ) -> Result<()> {
         self.inner
-            .branch_get_id_by_name(branch_name)
+            .branch_get_id_by_name(br_name)
             .c(d!("branch not found"))
             .and_then(|brid| {
                 let target_brid = self
                     .inner
-                    .branch_get_id_by_name(target_branch_name)
+                    .branch_get_id_by_name(target_br_name)
                     .c(d!("target branch not found"))?;
                 self.inner.branch_merge_to_force(brid, target_brid).c(d!())
             })
@@ -921,17 +900,17 @@ impl VsMgmt for MapxRawVs {
     /// Make a branch to be default,
     /// all default operations will be applied to it.
     #[inline(always)]
-    fn branch_set_default(&mut self, branch_name: BranchName) -> Result<()> {
+    fn branch_set_default(&mut self, br_name: BranchName) -> Result<()> {
         self.inner
-            .branch_get_id_by_name(branch_name)
+            .branch_get_id_by_name(br_name)
             .c(d!("branch not found"))
             .and_then(|brid| self.inner.branch_set_default(brid).c(d!()))
     }
 
     #[inline(always)]
-    fn branch_is_empty(&self, branch_name: BranchName) -> Result<bool> {
+    fn branch_is_empty(&self, br_name: BranchName) -> Result<bool> {
         self.inner
-            .branch_get_id_by_name(branch_name)
+            .branch_get_id_by_name(br_name)
             .c(d!("branch not found"))
             .and_then(|brid| self.inner.branch_is_empty(brid).c(d!()))
     }

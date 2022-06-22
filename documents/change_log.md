@@ -11,6 +11,14 @@
   - But, the time for the process to restart will increase
 - Enhance atomicity guarantees during data changes
 
+#### API changes
+
+- Use shorter names in all APIs
+  - `branch_id` ==> `br_id`
+  - `branch_name` ==> `br_name`
+  - `version_id` ==> `ver_id`
+  - `version_name` ==> `ver_name`
+
 ## v0.44.x
 
 #### Internal optimizations

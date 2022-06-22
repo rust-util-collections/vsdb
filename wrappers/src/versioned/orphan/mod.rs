@@ -66,27 +66,26 @@ impl<T: ValueEnDe> OrphanVs<T> {
     }
 
     #[inline(always)]
-    pub fn get_value_by_branch(&self, branch_name: BranchName) -> Option<T> {
-        self.inner.get_by_branch(&[], branch_name)
+    pub fn get_value_by_branch(&self, br_name: BranchName) -> Option<T> {
+        self.inner.get_by_branch(&[], br_name)
     }
 
     #[inline(always)]
     pub fn set_value_by_branch(
         &mut self,
         v: &T,
-        branch_name: BranchName,
+        br_name: BranchName,
     ) -> Result<Option<T>> {
-        self.inner.insert_by_branch(&[], v, branch_name).c(d!())
+        self.inner.insert_by_branch(&[], v, br_name).c(d!())
     }
 
     #[inline(always)]
     pub fn get_value_by_branch_version(
         &self,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> Option<T> {
-        self.inner
-            .get_by_branch_version(&[], branch_name, version_name)
+        self.inner.get_by_branch_version(&[], br_name, ver_name)
     }
 }
 

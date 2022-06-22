@@ -114,43 +114,43 @@ impl<T: ValueEnDe> VecxVs<T> {
     }
 
     #[inline(always)]
-    pub fn get_by_branch(&self, idx: usize, branch_name: BranchName) -> Option<T> {
+    pub fn get_by_branch(&self, idx: usize, br_name: BranchName) -> Option<T> {
         self.inner
-            .get_by_branch(&(idx as u64).to_be_bytes(), branch_name)
+            .get_by_branch(&(idx as u64).to_be_bytes(), br_name)
     }
 
     #[inline(always)]
-    pub fn last_by_branch(&self, branch_name: BranchName) -> Option<T> {
+    pub fn last_by_branch(&self, br_name: BranchName) -> Option<T> {
         alt!(self.is_empty(), return None);
         Some(
             self.inner
-                .get_by_branch(&(self.len() as u64 - 1).to_be_bytes(), branch_name)
+                .get_by_branch(&(self.len() as u64 - 1).to_be_bytes(), br_name)
                 .unwrap(),
         )
     }
 
     #[inline(always)]
-    pub fn len_by_branch(&self, branch_name: BranchName) -> usize {
-        self.inner.len_by_branch(branch_name)
+    pub fn len_by_branch(&self, br_name: BranchName) -> usize {
+        self.inner.len_by_branch(br_name)
     }
 
     #[inline(always)]
-    pub fn is_empty_by_branch(&self, branch_name: BranchName) -> bool {
-        self.inner.is_empty_by_branch(branch_name)
+    pub fn is_empty_by_branch(&self, br_name: BranchName) -> bool {
+        self.inner.is_empty_by_branch(br_name)
     }
 
     #[inline(always)]
-    pub fn push_by_branch(&mut self, v: &T, branch_name: BranchName) {
+    pub fn push_by_branch(&mut self, v: &T, br_name: BranchName) {
         self.inner
-            .insert_by_branch(&(self.len() as u64).to_be_bytes(), v, branch_name)
+            .insert_by_branch(&(self.len() as u64).to_be_bytes(), v, br_name)
             .unwrap();
     }
 
     #[inline(always)]
-    pub fn pop_by_branch(&mut self, branch_name: BranchName) -> Result<Option<T>> {
+    pub fn pop_by_branch(&mut self, br_name: BranchName) -> Result<Option<T>> {
         alt!(self.is_empty(), return Ok(None));
         self.inner
-            .remove_by_branch(&(self.len() - 1).to_be_bytes(), branch_name)
+            .remove_by_branch(&(self.len() - 1).to_be_bytes(), br_name)
             .c(d!())
     }
 
@@ -159,11 +159,11 @@ impl<T: ValueEnDe> VecxVs<T> {
         &mut self,
         idx: usize,
         v: &T,
-        branch_name: BranchName,
+        br_name: BranchName,
     ) -> Result<Option<T>> {
         if idx < self.len() {
             self.inner
-                .insert_by_branch(&(idx as u64).to_be_bytes(), v, branch_name)
+                .insert_by_branch(&(idx as u64).to_be_bytes(), v, br_name)
                 .c(d!())
         } else {
             Err(eg!("out of index"))
@@ -171,9 +171,9 @@ impl<T: ValueEnDe> VecxVs<T> {
     }
 
     #[inline(always)]
-    pub fn iter_by_branch(&self, branch_name: BranchName) -> VecxVsIter<'_, T> {
+    pub fn iter_by_branch(&self, br_name: BranchName) -> VecxVsIter<'_, T> {
         VecxVsIter {
-            inner: self.inner.iter_by_branch(branch_name),
+            inner: self.inner.iter_by_branch(br_name),
         }
     }
 
@@ -181,29 +181,26 @@ impl<T: ValueEnDe> VecxVs<T> {
     pub fn get_by_branch_version(
         &self,
         idx: usize,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> Option<T> {
-        self.inner.get_by_branch_version(
-            &(idx as u64).to_be_bytes(),
-            branch_name,
-            version_name,
-        )
+        self.inner
+            .get_by_branch_version(&(idx as u64).to_be_bytes(), br_name, ver_name)
     }
 
     #[inline(always)]
     pub fn last_by_branch_version(
         &self,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> Option<T> {
         alt!(self.is_empty(), return None);
         Some(
             self.inner
                 .get_by_branch_version(
                     &(self.len() as u64 - 1).to_be_bytes(),
-                    branch_name,
-                    version_name,
+                    br_name,
+                    ver_name,
                 )
                 .unwrap(),
         )
@@ -212,30 +209,29 @@ impl<T: ValueEnDe> VecxVs<T> {
     #[inline(always)]
     pub fn len_by_branch_version(
         &self,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> usize {
-        self.inner.len_by_branch_version(branch_name, version_name)
+        self.inner.len_by_branch_version(br_name, ver_name)
     }
 
     #[inline(always)]
     pub fn is_empty_by_branch_version(
         &self,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> bool {
-        self.inner
-            .is_empty_by_branch_version(branch_name, version_name)
+        self.inner.is_empty_by_branch_version(br_name, ver_name)
     }
 
     #[inline(always)]
     pub fn iter_by_branch_version(
         &self,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> VecxVsIter<'_, T> {
         VecxVsIter {
-            inner: self.inner.iter_by_branch_version(branch_name, version_name),
+            inner: self.inner.iter_by_branch_version(br_name, ver_name),
         }
     }
 }

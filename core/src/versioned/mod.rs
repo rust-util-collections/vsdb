@@ -23,24 +23,24 @@ use std::{
 /// Methods collection of version management.
 pub trait VsMgmt {
     /// Create a new version on the default branch.
-    fn version_create(&mut self, version_name: VersionName) -> Result<()>;
+    fn version_create(&mut self, ver_name: VersionName) -> Result<()>;
 
     /// Create a new version on a specified branch,
     /// NOTE: the branch must has been created.
     fn version_create_by_branch(
         &mut self,
-        version_name: VersionName,
-        branch_name: BranchName,
+        ver_name: VersionName,
+        br_name: BranchName,
     ) -> Result<()>;
 
     /// Check if a verison exists on default branch.
-    fn version_exists(&self, version_name: VersionName) -> bool;
+    fn version_exists(&self, ver_name: VersionName) -> bool;
 
     /// Check if a version exists on a specified branch(include its parents).
     fn version_exists_on_branch(
         &self,
-        version_name: VersionName,
-        branch_name: BranchName,
+        ver_name: VersionName,
+        br_name: BranchName,
     ) -> bool;
 
     /// Remove the newest version on the default branch.
@@ -59,14 +59,14 @@ pub trait VsMgmt {
     /// 'Write'-like operations on data require recursive tracing of all parent nodes,
     /// while operations on branches and versions are limited to their own perspective,
     /// and should not do any tracing.
-    fn version_pop_by_branch(&mut self, branch_name: BranchName) -> Result<()>;
+    fn version_pop_by_branch(&mut self, br_name: BranchName) -> Result<()>;
 
     /// Merge all changes made by new versions after the base version into the base version.
     ///
     /// # Safety
     ///
     /// It's the caller's duty to ensure that
-    /// the `base_version` was created directly by the `branch_id`,
+    /// the `base_version` was created directly by the `br_id`,
     /// or the data records of other branches may be corrupted.
     unsafe fn version_rebase(&mut self, base_version: VersionName) -> Result<()>;
 
@@ -75,16 +75,16 @@ pub trait VsMgmt {
     /// # Safety
     ///
     /// It's the caller's duty to ensure that
-    /// the `base_version` was created directly by the `branch_id`,
+    /// the `base_version` was created directly by the `br_id`,
     /// or the data records of other branches may be corrupted.
     unsafe fn version_rebase_by_branch(
         &mut self,
         base_version: VersionName,
-        branch_name: BranchName,
+        br_name: BranchName,
     ) -> Result<()>;
 
     /// Check if a version exists.
-    fn version_exists_globally(&self, version_name: VersionName) -> bool;
+    fn version_exists_globally(&self, ver_name: VersionName) -> bool;
 
     /// # NOTE
     ///
@@ -120,7 +120,7 @@ pub trait VsMgmt {
     /// so `Vs0` can NOT guarantee that it can get a completely consistent result.
     fn version_list_by_branch(
         &self,
-        branch_name: BranchName,
+        br_name: BranchName,
     ) -> Result<Vec<VersionNameOwned>>;
 
     /// # NOTE
@@ -141,7 +141,7 @@ pub trait VsMgmt {
     fn version_list_globally(&self) -> Vec<VersionNameOwned>;
 
     /// Check if some changes have been make on the version.
-    fn version_has_change_set(&self, version_name: VersionName) -> Result<bool>;
+    fn version_has_change_set(&self, ver_name: VersionName) -> Result<bool>;
 
     /// Clean up all orphan versions, versions not belong to any branch.
     fn version_clean_up_globally(&mut self) -> Result<()>;
@@ -149,10 +149,7 @@ pub trait VsMgmt {
     /// # Safety
     ///
     /// Version itself and its corresponding changes will be completely purged from all branches
-    unsafe fn version_revert_globally(
-        &mut self,
-        version_name: VersionName,
-    ) -> Result<()>;
+    unsafe fn version_revert_globally(&mut self, ver_name: VersionName) -> Result<()>;
 
     /// Generate a trie root of the changes **directly** made by the target version,
     /// if no target version specified, the header version of the target branch will be used,
@@ -161,34 +158,34 @@ pub trait VsMgmt {
     /// The returned result may be a single `vec![u8; 32]` or a concat of many `vec![u8; 32]`.
     fn version_chgset_trie_root(
         &self,
-        branch_name: Option<BranchName>,
-        version_name: Option<VersionName>,
+        br_name: Option<BranchName>,
+        ver_name: Option<VersionName>,
     ) -> Result<Vec<u8>>;
 
     /// Create a new branch based on the head of the default branch.
     fn branch_create(
         &mut self,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
         force: bool,
     ) -> Result<()>;
 
     /// Create a new branch based on the head of a specified branch.
     fn branch_create_by_base_branch(
         &mut self,
-        branch_name: BranchName,
-        version_name: VersionName,
-        base_branch_name: ParentBranchName,
+        br_name: BranchName,
+        ver_name: VersionName,
+        base_br_name: ParentBranchName,
         force: bool,
     ) -> Result<()>;
 
     /// Create a new branch based on a specified version of a specified branch.
     fn branch_create_by_base_branch_version(
         &mut self,
-        branch_name: BranchName,
-        version_name: VersionName,
-        base_branch_name: ParentBranchName,
-        base_version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
+        base_br_name: ParentBranchName,
+        base_ver_name: VersionName,
         force: bool,
     ) -> Result<()>;
 
@@ -198,7 +195,7 @@ pub trait VsMgmt {
     /// or the data records referenced by other branches may be corrupted.
     unsafe fn branch_create_without_new_version(
         &mut self,
-        branch_name: BranchName,
+        br_name: BranchName,
         force: bool,
     ) -> Result<()>;
 
@@ -208,8 +205,8 @@ pub trait VsMgmt {
     /// or the data records referenced by other branches may be corrupted.
     unsafe fn branch_create_by_base_branch_without_new_version(
         &mut self,
-        branch_name: BranchName,
-        base_branch_name: ParentBranchName,
+        br_name: BranchName,
+        base_br_name: ParentBranchName,
         force: bool,
     ) -> Result<()>;
 
@@ -219,17 +216,17 @@ pub trait VsMgmt {
     /// or the data records referenced by other branches may be corrupted.
     unsafe fn branch_create_by_base_branch_version_without_new_version(
         &mut self,
-        branch_name: BranchName,
-        base_branch_name: ParentBranchName,
-        base_version_name: VersionName,
+        br_name: BranchName,
+        base_br_name: ParentBranchName,
+        base_ver_name: VersionName,
         force: bool,
     ) -> Result<()>;
 
     /// Check if a branch exists or not.
-    fn branch_exists(&self, branch_name: BranchName) -> bool;
+    fn branch_exists(&self, br_name: BranchName) -> bool;
 
     /// Check if a branch exists and has versions on it.
-    fn branch_has_versions(&self, branch_name: BranchName) -> bool;
+    fn branch_has_versions(&self, br_name: BranchName) -> bool;
 
     /// Remove a branch, remove all changes directly made by this branch.
     ///
@@ -238,22 +235,22 @@ pub trait VsMgmt {
     /// 'Write'-like operations on data require recursive tracing of all parent nodes,
     /// while operations on branches and versions are limited to their own perspective,
     /// and should not do any tracing.
-    fn branch_remove(&mut self, branch_name: BranchName) -> Result<()>;
+    fn branch_remove(&mut self, br_name: BranchName) -> Result<()>;
 
     /// Clean up all other branches not in the list,
     /// will also clean up all orphan versions.
-    fn branch_keep_only(&mut self, branch_names: &[BranchName]) -> Result<()>;
+    fn branch_keep_only(&mut self, br_names: &[BranchName]) -> Result<()>;
 
-    /// Remove all changes directly made by versions(bigger than `last_version_id`) of this branch.
+    /// Remove all changes directly made by versions(bigger than `last_ver_id`) of this branch.
     ///
     /// 'Write'-like operations on branches and versions are different from operations on data.
     ///
     /// 'Write'-like operations on data require recursive tracing of all parent nodes,
     /// while operations on branches and versions are limited to their own perspective,
     /// and should not do any tracing.
-    fn branch_truncate(&mut self, branch_name: BranchName) -> Result<()>;
+    fn branch_truncate(&mut self, br_name: BranchName) -> Result<()>;
 
-    /// Remove all changes directly made by versions(bigger than `last_version_id`) of this branch.
+    /// Remove all changes directly made by versions(bigger than `last_ver_id`) of this branch.
     ///
     /// 'Write'-like operations on branches and versions are different from operations on data.
     ///
@@ -262,8 +259,8 @@ pub trait VsMgmt {
     /// and should not do any tracing.
     fn branch_truncate_to(
         &mut self,
-        branch_name: BranchName,
-        last_version_name: VersionName,
+        br_name: BranchName,
+        last_ver_name: VersionName,
     ) -> Result<()>;
 
     /// Remove the newest version on a specified branch.
@@ -273,13 +270,13 @@ pub trait VsMgmt {
     /// 'Write'-like operations on data require recursive tracing of all parent nodes,
     /// while operations on branches and versions are limited to their own perspective,
     /// and should not do any tracing.
-    fn branch_pop_version(&mut self, branch_name: BranchName) -> Result<()>;
+    fn branch_pop_version(&mut self, br_name: BranchName) -> Result<()>;
 
     /// Merge a branch into another.
     fn branch_merge_to(
         &mut self,
-        branch_name: BranchName,
-        target_branch_name: BranchName,
+        br_name: BranchName,
+        target_br_name: BranchName,
     ) -> Result<()>;
 
     /// Merge a branch into another,
@@ -291,16 +288,16 @@ pub trait VsMgmt {
     /// the data records referenced by other branches may be corrupted.
     unsafe fn branch_merge_to_force(
         &mut self,
-        branch_name: BranchName,
-        target_branch_name: BranchName,
+        br_name: BranchName,
+        target_br_name: BranchName,
     ) -> Result<()>;
 
     /// Make a branch to be default,
     /// all default operations will be applied to it.
-    fn branch_set_default(&mut self, branch_name: BranchName) -> Result<()>;
+    fn branch_set_default(&mut self, br_name: BranchName) -> Result<()>;
 
     /// Check if the branch has no versions or only empty versions.
-    fn branch_is_empty(&self, branch_name: BranchName) -> Result<bool>;
+    fn branch_is_empty(&self, br_name: BranchName) -> Result<bool>;
 
     /// # NOTE
     ///
@@ -345,11 +342,8 @@ macro_rules! impl_vs_methods {
     () => {
         /// Create a new version on the default branch.
         #[inline(always)]
-        fn version_create(
-            &mut self,
-            version_name: $crate::VersionName,
-        ) -> ruc::Result<()> {
-            self.inner.version_create(version_name).c(d!())
+        fn version_create(&mut self, ver_name: $crate::VersionName) -> ruc::Result<()> {
+            self.inner.version_create(ver_name).c(d!())
         }
 
         /// Create a new version on a specified branch,
@@ -357,29 +351,28 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         fn version_create_by_branch(
             &mut self,
-            version_name: $crate::VersionName,
-            branch_name: $crate::BranchName,
+            ver_name: $crate::VersionName,
+            br_name: $crate::BranchName,
         ) -> ruc::Result<()> {
             self.inner
-                .version_create_by_branch(version_name, branch_name)
+                .version_create_by_branch(ver_name, br_name)
                 .c(d!())
         }
 
         /// Check if a verison exists on default branch.
         #[inline(always)]
-        fn version_exists(&self, version_name: $crate::VersionName) -> bool {
-            self.inner.version_exists(version_name)
+        fn version_exists(&self, ver_name: $crate::VersionName) -> bool {
+            self.inner.version_exists(ver_name)
         }
 
         /// Check if a version exists on a specified branch(include its parents).
         #[inline(always)]
         fn version_exists_on_branch(
             &self,
-            version_name: $crate::VersionName,
-            branch_name: $crate::BranchName,
+            ver_name: $crate::VersionName,
+            br_name: $crate::BranchName,
         ) -> bool {
-            self.inner
-                .version_exists_on_branch(version_name, branch_name)
+            self.inner.version_exists_on_branch(ver_name, br_name)
         }
 
         /// Remove the newest version on the default branch.
@@ -404,9 +397,9 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         fn version_pop_by_branch(
             &mut self,
-            branch_name: $crate::BranchName,
+            br_name: $crate::BranchName,
         ) -> ruc::Result<()> {
-            self.inner.version_pop_by_branch(branch_name).c(d!())
+            self.inner.version_pop_by_branch(br_name).c(d!())
         }
 
         /// Merge all changes made by new versions after the base version into the base version.
@@ -414,7 +407,7 @@ macro_rules! impl_vs_methods {
         /// # Safety
         ///
         /// It's the caller's duty to ensure that
-        /// the `base_version` was created directly by the `branch_id`,
+        /// the `base_version` was created directly by the `br_id`,
         /// or the data records of other branches may be corrupted.
         #[inline(always)]
         unsafe fn version_rebase(
@@ -429,22 +422,22 @@ macro_rules! impl_vs_methods {
         /// # Safety
         ///
         /// It's the caller's duty to ensure that
-        /// the `base_version` was created directly by the `branch_id`,
+        /// the `base_version` was created directly by the `br_id`,
         /// or the data records of other branches may be corrupted.
         #[inline(always)]
         unsafe fn version_rebase_by_branch(
             &mut self,
             base_version: $crate::VersionName,
-            branch_name: $crate::BranchName,
+            br_name: $crate::BranchName,
         ) -> ruc::Result<()> {
             self.inner
-                .version_rebase_by_branch(base_version, branch_name)
+                .version_rebase_by_branch(base_version, br_name)
                 .c(d!())
         }
 
         #[inline(always)]
-        fn version_exists_globally(&self, version_name: $crate::VersionName) -> bool {
-            self.inner.version_exists_globally(version_name)
+        fn version_exists_globally(&self, ver_name: $crate::VersionName) -> bool {
+            self.inner.version_exists_globally(ver_name)
         }
 
         #[inline(always)]
@@ -455,9 +448,9 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         fn version_list_by_branch(
             &self,
-            branch_name: $crate::BranchName,
+            br_name: $crate::BranchName,
         ) -> ruc::Result<Vec<$crate::VersionNameOwned>> {
-            self.inner.version_list_by_branch(branch_name).c(d!())
+            self.inner.version_list_by_branch(br_name).c(d!())
         }
 
         #[inline(always)]
@@ -468,9 +461,9 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         fn version_has_change_set(
             &self,
-            version_name: $crate::VersionName,
+            ver_name: $crate::VersionName,
         ) -> ruc::Result<bool> {
-            self.inner.version_has_change_set(version_name).c(d!())
+            self.inner.version_has_change_set(ver_name).c(d!())
         }
 
         #[inline(always)]
@@ -481,19 +474,19 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         unsafe fn version_revert_globally(
             &mut self,
-            version_name: $crate::VersionName,
+            ver_name: $crate::VersionName,
         ) -> ruc::Result<()> {
-            self.inner.version_revert_globally(version_name).c(d!())
+            self.inner.version_revert_globally(ver_name).c(d!())
         }
 
         #[inline(always)]
         fn version_chgset_trie_root(
             &self,
-            branch_name: Option<BranchName>,
-            version_name: Option<VersionName>,
+            br_name: Option<BranchName>,
+            ver_name: Option<VersionName>,
         ) -> Result<Vec<u8>> {
             self.inner
-                .version_chgset_trie_root(branch_name, version_name)
+                .version_chgset_trie_root(br_name, ver_name)
                 .c(d!())
         }
 
@@ -501,31 +494,24 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         fn branch_create(
             &mut self,
-            branch_name: $crate::BranchName,
-            version_name: $crate::VersionName,
+            br_name: $crate::BranchName,
+            ver_name: $crate::VersionName,
             force: bool,
         ) -> ruc::Result<()> {
-            self.inner
-                .branch_create(branch_name, version_name, force)
-                .c(d!())
+            self.inner.branch_create(br_name, ver_name, force).c(d!())
         }
 
         /// Create a new branch based on the head of a specified branch.
         #[inline(always)]
         fn branch_create_by_base_branch(
             &mut self,
-            branch_name: $crate::BranchName,
-            version_name: $crate::VersionName,
-            base_branch_name: $crate::ParentBranchName,
+            br_name: $crate::BranchName,
+            ver_name: $crate::VersionName,
+            base_br_name: $crate::ParentBranchName,
             force: bool,
         ) -> ruc::Result<()> {
             self.inner
-                .branch_create_by_base_branch(
-                    branch_name,
-                    version_name,
-                    base_branch_name,
-                    force,
-                )
+                .branch_create_by_base_branch(br_name, ver_name, base_br_name, force)
                 .c(d!())
         }
 
@@ -533,18 +519,18 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         fn branch_create_by_base_branch_version(
             &mut self,
-            branch_name: $crate::BranchName,
-            version_name: $crate::VersionName,
-            base_branch_name: $crate::ParentBranchName,
-            base_version_name: $crate::VersionName,
+            br_name: $crate::BranchName,
+            ver_name: $crate::VersionName,
+            base_br_name: $crate::ParentBranchName,
+            base_ver_name: $crate::VersionName,
             force: bool,
         ) -> ruc::Result<()> {
             self.inner
                 .branch_create_by_base_branch_version(
-                    branch_name,
-                    version_name,
-                    base_branch_name,
-                    base_version_name,
+                    br_name,
+                    ver_name,
+                    base_br_name,
+                    base_ver_name,
                     force,
                 )
                 .c(d!())
@@ -557,11 +543,11 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         unsafe fn branch_create_without_new_version(
             &mut self,
-            branch_name: $crate::BranchName,
+            br_name: $crate::BranchName,
             force: bool,
         ) -> ruc::Result<()> {
             self.inner
-                .branch_create_without_new_version(branch_name, force)
+                .branch_create_without_new_version(br_name, force)
                 .c(d!())
         }
 
@@ -572,14 +558,14 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         unsafe fn branch_create_by_base_branch_without_new_version(
             &mut self,
-            branch_name: $crate::BranchName,
-            base_branch_name: $crate::ParentBranchName,
+            br_name: $crate::BranchName,
+            base_br_name: $crate::ParentBranchName,
             force: bool,
         ) -> ruc::Result<()> {
             self.inner
                 .branch_create_by_base_branch_without_new_version(
-                    branch_name,
-                    base_branch_name,
+                    br_name,
+                    base_br_name,
                     force,
                 )
                 .c(d!())
@@ -592,16 +578,16 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         unsafe fn branch_create_by_base_branch_version_without_new_version(
             &mut self,
-            branch_name: $crate::BranchName,
-            base_branch_name: $crate::ParentBranchName,
-            base_version_name: $crate::VersionName,
+            br_name: $crate::BranchName,
+            base_br_name: $crate::ParentBranchName,
+            base_ver_name: $crate::VersionName,
             force: bool,
         ) -> ruc::Result<()> {
             self.inner
                 .branch_create_by_base_branch_version_without_new_version(
-                    branch_name,
-                    base_branch_name,
-                    base_version_name,
+                    br_name,
+                    base_br_name,
+                    base_ver_name,
                     force,
                 )
                 .c(d!())
@@ -609,13 +595,13 @@ macro_rules! impl_vs_methods {
 
         /// Check if a branch exists or not.
         #[inline(always)]
-        fn branch_exists(&self, branch_name: $crate::BranchName) -> bool {
-            self.inner.branch_exists(branch_name)
+        fn branch_exists(&self, br_name: $crate::BranchName) -> bool {
+            self.inner.branch_exists(br_name)
         }
 
         /// Check if a branch exists and has versions on it.
-        fn branch_has_versions(&self, branch_name: $crate::BranchName) -> bool {
-            self.inner.branch_has_versions(branch_name)
+        fn branch_has_versions(&self, br_name: $crate::BranchName) -> bool {
+            self.inner.branch_has_versions(br_name)
         }
 
         /// Remove a branch, remove all changes directly made by this branch.
@@ -626,20 +612,20 @@ macro_rules! impl_vs_methods {
         /// while operations on branches and versions are limited to their own perspective,
         /// and should not do any tracing.
         #[inline(always)]
-        fn branch_remove(&mut self, branch_name: $crate::BranchName) -> ruc::Result<()> {
-            self.inner.branch_remove(branch_name).c(d!())
+        fn branch_remove(&mut self, br_name: $crate::BranchName) -> ruc::Result<()> {
+            self.inner.branch_remove(br_name).c(d!())
         }
 
         /// Clean up all other branches not in the list.
         #[inline(always)]
         fn branch_keep_only(
             &mut self,
-            branch_names: &[$crate::BranchName],
+            br_names: &[$crate::BranchName],
         ) -> ruc::Result<()> {
-            self.inner.branch_keep_only(branch_names).c(d!())
+            self.inner.branch_keep_only(br_names).c(d!())
         }
 
-        /// Remove all changes directly made by versions(bigger than `last_version_id`) of this branch.
+        /// Remove all changes directly made by versions(bigger than `last_ver_id`) of this branch.
         ///
         /// 'Write'-like operations on branches and versions are different from operations on data.
         ///
@@ -647,14 +633,11 @@ macro_rules! impl_vs_methods {
         /// while operations on branches and versions are limited to their own perspective,
         /// and should not do any tracing.
         #[inline(always)]
-        fn branch_truncate(
-            &mut self,
-            branch_name: $crate::BranchName,
-        ) -> ruc::Result<()> {
-            self.inner.branch_truncate(branch_name).c(d!())
+        fn branch_truncate(&mut self, br_name: $crate::BranchName) -> ruc::Result<()> {
+            self.inner.branch_truncate(br_name).c(d!())
         }
 
-        /// Remove all changes directly made by versions(bigger than `last_version_id`) of this branch.
+        /// Remove all changes directly made by versions(bigger than `last_ver_id`) of this branch.
         ///
         /// 'Write'-like operations on branches and versions are different from operations on data.
         ///
@@ -664,11 +647,11 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         fn branch_truncate_to(
             &mut self,
-            branch_name: $crate::BranchName,
-            last_version_name: $crate::VersionName,
+            br_name: $crate::BranchName,
+            last_ver_name: $crate::VersionName,
         ) -> ruc::Result<()> {
             self.inner
-                .branch_truncate_to(branch_name, last_version_name)
+                .branch_truncate_to(br_name, last_ver_name)
                 .c(d!())
         }
 
@@ -682,21 +665,19 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         fn branch_pop_version(
             &mut self,
-            branch_name: $crate::BranchName,
+            br_name: $crate::BranchName,
         ) -> ruc::Result<()> {
-            self.inner.branch_pop_version(branch_name).c(d!())
+            self.inner.branch_pop_version(br_name).c(d!())
         }
 
         /// Merge a branch into another
         #[inline(always)]
         fn branch_merge_to(
             &mut self,
-            branch_name: $crate::BranchName,
-            target_branch_name: $crate::BranchName,
+            br_name: $crate::BranchName,
+            target_br_name: $crate::BranchName,
         ) -> ruc::Result<()> {
-            self.inner
-                .branch_merge_to(branch_name, target_branch_name)
-                .c(d!())
+            self.inner.branch_merge_to(br_name, target_br_name).c(d!())
         }
 
         /// Merge a branch into another,
@@ -708,11 +689,11 @@ macro_rules! impl_vs_methods {
         /// the data records referenced by other branches may be corrupted.
         unsafe fn branch_merge_to_force(
             &mut self,
-            branch_name: $crate::BranchName,
-            target_branch_name: $crate::BranchName,
+            br_name: $crate::BranchName,
+            target_br_name: $crate::BranchName,
         ) -> ruc::Result<()> {
             self.inner
-                .branch_merge_to_force(branch_name, target_branch_name)
+                .branch_merge_to_force(br_name, target_br_name)
                 .c(d!())
         }
 
@@ -721,13 +702,13 @@ macro_rules! impl_vs_methods {
         #[inline(always)]
         fn branch_set_default(
             &mut self,
-            branch_name: $crate::BranchName,
+            br_name: $crate::BranchName,
         ) -> ruc::Result<()> {
-            self.inner.branch_set_default(branch_name).c(d!())
+            self.inner.branch_set_default(br_name).c(d!())
         }
 
-        fn branch_is_empty(&self, branch_name: $crate::BranchName) -> ruc::Result<bool> {
-            self.inner.branch_is_empty(branch_name).c(d!())
+        fn branch_is_empty(&self, br_name: $crate::BranchName) -> ruc::Result<bool> {
+            self.inner.branch_is_empty(br_name).c(d!())
         }
 
         fn branch_list(&self) -> Vec<$crate::BranchNameOwned> {
@@ -1096,9 +1077,9 @@ impl_for_primitives!(
 );
 
 impl<T: VsMgmt> VsMgmt for Option<T> {
-    fn version_create(&mut self, version_name: VersionName) -> Result<()> {
+    fn version_create(&mut self, ver_name: VersionName) -> Result<()> {
         if let Some(i) = self.as_mut() {
-            i.version_create(version_name).c(d!())?;
+            i.version_create(ver_name).c(d!())?;
         }
         Ok(())
     }
@@ -1106,20 +1087,19 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
     #[inline(always)]
     fn version_create_by_branch(
         &mut self,
-        version_name: VersionName,
-        branch_name: BranchName,
+        ver_name: VersionName,
+        br_name: BranchName,
     ) -> Result<()> {
         if let Some(i) = self.as_mut() {
-            i.version_create_by_branch(version_name, branch_name)
-                .c(d!())?;
+            i.version_create_by_branch(ver_name, br_name).c(d!())?;
         }
         Ok(())
     }
 
     #[inline(always)]
-    fn version_exists(&self, version_name: VersionName) -> bool {
+    fn version_exists(&self, ver_name: VersionName) -> bool {
         if let Some(i) = self.as_ref() {
-            return i.version_exists(version_name);
+            return i.version_exists(ver_name);
         }
         true
     }
@@ -1127,11 +1107,11 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
     #[inline(always)]
     fn version_exists_on_branch(
         &self,
-        version_name: VersionName,
-        branch_name: BranchName,
+        ver_name: VersionName,
+        br_name: BranchName,
     ) -> bool {
         if let Some(i) = self.as_ref() {
-            return i.version_exists_on_branch(version_name, branch_name);
+            return i.version_exists_on_branch(ver_name, br_name);
         }
         true
     }
@@ -1145,9 +1125,9 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
     }
 
     #[inline(always)]
-    fn version_pop_by_branch(&mut self, branch_name: BranchName) -> Result<()> {
+    fn version_pop_by_branch(&mut self, br_name: BranchName) -> Result<()> {
         if let Some(i) = self.as_mut() {
-            i.version_pop_by_branch(branch_name).c(d!())?;
+            i.version_pop_by_branch(br_name).c(d!())?;
         }
         Ok(())
     }
@@ -1164,19 +1144,18 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
     unsafe fn version_rebase_by_branch(
         &mut self,
         base_version: VersionName,
-        branch_name: BranchName,
+        br_name: BranchName,
     ) -> Result<()> {
         if let Some(i) = self.as_mut() {
-            i.version_rebase_by_branch(base_version, branch_name)
-                .c(d!())?;
+            i.version_rebase_by_branch(base_version, br_name).c(d!())?;
         }
         Ok(())
     }
 
     #[inline(always)]
-    fn version_exists_globally(&self, version_name: VersionName) -> bool {
+    fn version_exists_globally(&self, ver_name: VersionName) -> bool {
         if let Some(i) = self.as_ref() {
-            return i.version_exists_globally(version_name);
+            return i.version_exists_globally(ver_name);
         }
         true
     }
@@ -1192,10 +1171,10 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
     #[inline(always)]
     fn version_list_by_branch(
         &self,
-        branch_name: BranchName,
+        br_name: BranchName,
     ) -> Result<Vec<VersionNameOwned>> {
         if let Some(i) = self.as_ref() {
-            i.version_list_by_branch(branch_name).c(d!())?;
+            i.version_list_by_branch(br_name).c(d!())?;
         }
         Ok(Default::default())
     }
@@ -1209,9 +1188,9 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
     }
 
     #[inline(always)]
-    fn version_has_change_set(&self, version_name: VersionName) -> Result<bool> {
+    fn version_has_change_set(&self, ver_name: VersionName) -> Result<bool> {
         if let Some(i) = self.as_ref() {
-            i.version_has_change_set(version_name).c(d!())?;
+            i.version_has_change_set(ver_name).c(d!())?;
         }
         Ok(true)
     }
@@ -1225,12 +1204,9 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
     }
 
     #[inline(always)]
-    unsafe fn version_revert_globally(
-        &mut self,
-        version_name: VersionName,
-    ) -> Result<()> {
+    unsafe fn version_revert_globally(&mut self, ver_name: VersionName) -> Result<()> {
         if let Some(i) = self.as_mut() {
-            i.version_revert_globally(version_name).c(d!())?;
+            i.version_revert_globally(ver_name).c(d!())?;
         }
         Ok(())
     }
@@ -1238,12 +1214,11 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
     #[inline(always)]
     fn version_chgset_trie_root(
         &self,
-        branch_name: Option<BranchName>,
-        version_name: Option<VersionName>,
+        br_name: Option<BranchName>,
+        ver_name: Option<VersionName>,
     ) -> Result<Vec<u8>> {
         if let Some(i) = self.as_ref() {
-            i.version_chgset_trie_root(branch_name, version_name)
-                .c(d!())?;
+            i.version_chgset_trie_root(br_name, ver_name).c(d!())?;
         }
         Ok(Vec::new())
     }
@@ -1251,12 +1226,12 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
     #[inline(always)]
     fn branch_create(
         &mut self,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
         force: bool,
     ) -> Result<()> {
         if let Some(i) = self.as_mut() {
-            i.branch_create(branch_name, version_name, force).c(d!())?;
+            i.branch_create(br_name, ver_name, force).c(d!())?;
         }
         Ok(())
     }
@@ -1264,19 +1239,14 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
     #[inline(always)]
     fn branch_create_by_base_branch(
         &mut self,
-        branch_name: BranchName,
-        version_name: VersionName,
-        base_branch_name: ParentBranchName,
+        br_name: BranchName,
+        ver_name: VersionName,
+        base_br_name: ParentBranchName,
         force: bool,
     ) -> Result<()> {
         if let Some(i) = self.as_mut() {
-            i.branch_create_by_base_branch(
-                branch_name,
-                version_name,
-                base_branch_name,
-                force,
-            )
-            .c(d!())?;
+            i.branch_create_by_base_branch(br_name, ver_name, base_br_name, force)
+                .c(d!())?;
         }
         Ok(())
     }
@@ -1284,18 +1254,18 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
     #[inline(always)]
     fn branch_create_by_base_branch_version(
         &mut self,
-        branch_name: BranchName,
-        version_name: VersionName,
-        base_branch_name: ParentBranchName,
-        base_version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
+        base_br_name: ParentBranchName,
+        base_ver_name: VersionName,
         force: bool,
     ) -> Result<()> {
         if let Some(i) = self.as_mut() {
             i.branch_create_by_base_branch_version(
-                branch_name,
-                version_name,
-                base_branch_name,
-                base_version_name,
+                br_name,
+                ver_name,
+                base_br_name,
+                base_ver_name,
                 force,
             )
             .c(d!())?;
@@ -1305,11 +1275,11 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
 
     unsafe fn branch_create_without_new_version(
         &mut self,
-        branch_name: BranchName,
+        br_name: BranchName,
         force: bool,
     ) -> Result<()> {
         if let Some(i) = self.as_mut() {
-            i.branch_create_without_new_version(branch_name, force)
+            i.branch_create_without_new_version(br_name, force)
                 .c(d!())?;
         }
         Ok(())
@@ -1317,14 +1287,14 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
 
     unsafe fn branch_create_by_base_branch_without_new_version(
         &mut self,
-        branch_name: BranchName,
-        base_branch_name: ParentBranchName,
+        br_name: BranchName,
+        base_br_name: ParentBranchName,
         force: bool,
     ) -> Result<()> {
         if let Some(i) = self.as_mut() {
             i.branch_create_by_base_branch_without_new_version(
-                branch_name,
-                base_branch_name,
+                br_name,
+                base_br_name,
                 force,
             )
             .c(d!())?;
@@ -1334,16 +1304,16 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
 
     unsafe fn branch_create_by_base_branch_version_without_new_version(
         &mut self,
-        branch_name: BranchName,
-        base_branch_name: ParentBranchName,
-        base_version_name: VersionName,
+        br_name: BranchName,
+        base_br_name: ParentBranchName,
+        base_ver_name: VersionName,
         force: bool,
     ) -> Result<()> {
         if let Some(i) = self.as_mut() {
             i.branch_create_by_base_branch_version_without_new_version(
-                branch_name,
-                base_branch_name,
-                base_version_name,
+                br_name,
+                base_br_name,
+                base_ver_name,
                 force,
             )
             .c(d!())?;
@@ -1352,41 +1322,41 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
     }
 
     #[inline(always)]
-    fn branch_exists(&self, branch_name: BranchName) -> bool {
+    fn branch_exists(&self, br_name: BranchName) -> bool {
         if let Some(i) = self.as_ref() {
-            return i.branch_exists(branch_name);
+            return i.branch_exists(br_name);
         }
         true // always return true if nope
     }
 
     #[inline(always)]
-    fn branch_has_versions(&self, branch_name: BranchName) -> bool {
+    fn branch_has_versions(&self, br_name: BranchName) -> bool {
         if let Some(i) = self.as_ref() {
-            return i.branch_has_versions(branch_name);
+            return i.branch_has_versions(br_name);
         }
         true // always return true if nope
     }
 
     #[inline(always)]
-    fn branch_remove(&mut self, branch_name: BranchName) -> Result<()> {
+    fn branch_remove(&mut self, br_name: BranchName) -> Result<()> {
         if let Some(i) = self.as_mut() {
-            i.branch_remove(branch_name).c(d!())?;
+            i.branch_remove(br_name).c(d!())?;
         }
         Ok(())
     }
 
     #[inline(always)]
-    fn branch_keep_only(&mut self, branch_names: &[BranchName]) -> Result<()> {
+    fn branch_keep_only(&mut self, br_names: &[BranchName]) -> Result<()> {
         if let Some(i) = self.as_mut() {
-            i.branch_keep_only(branch_names).c(d!())?;
+            i.branch_keep_only(br_names).c(d!())?;
         }
         Ok(())
     }
 
     #[inline(always)]
-    fn branch_truncate(&mut self, branch_name: BranchName) -> Result<()> {
+    fn branch_truncate(&mut self, br_name: BranchName) -> Result<()> {
         if let Some(i) = self.as_mut() {
-            i.branch_truncate(branch_name).c(d!())?;
+            i.branch_truncate(br_name).c(d!())?;
         }
         Ok(())
     }
@@ -1394,20 +1364,19 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
     #[inline(always)]
     fn branch_truncate_to(
         &mut self,
-        branch_name: BranchName,
-        last_version_name: VersionName,
+        br_name: BranchName,
+        last_ver_name: VersionName,
     ) -> Result<()> {
         if let Some(i) = self.as_mut() {
-            i.branch_truncate_to(branch_name, last_version_name)
-                .c(d!())?;
+            i.branch_truncate_to(br_name, last_ver_name).c(d!())?;
         }
         Ok(())
     }
 
     #[inline(always)]
-    fn branch_pop_version(&mut self, branch_name: BranchName) -> Result<()> {
+    fn branch_pop_version(&mut self, br_name: BranchName) -> Result<()> {
         if let Some(i) = self.as_mut() {
-            i.branch_pop_version(branch_name).c(d!())?;
+            i.branch_pop_version(br_name).c(d!())?;
         }
         Ok(())
     }
@@ -1415,11 +1384,11 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
     #[inline(always)]
     fn branch_merge_to(
         &mut self,
-        branch_name: BranchName,
-        target_branch_name: BranchName,
+        br_name: BranchName,
+        target_br_name: BranchName,
     ) -> Result<()> {
         if let Some(i) = self.as_mut() {
-            i.branch_merge_to(branch_name, target_branch_name).c(d!())?;
+            i.branch_merge_to(br_name, target_br_name).c(d!())?;
         }
         Ok(())
     }
@@ -1427,27 +1396,26 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
     #[inline(always)]
     unsafe fn branch_merge_to_force(
         &mut self,
-        branch_name: BranchName,
-        target_branch_name: BranchName,
+        br_name: BranchName,
+        target_br_name: BranchName,
     ) -> Result<()> {
         if let Some(i) = self.as_mut() {
-            i.branch_merge_to_force(branch_name, target_branch_name)
-                .c(d!())?;
+            i.branch_merge_to_force(br_name, target_br_name).c(d!())?;
         }
         Ok(())
     }
 
     #[inline(always)]
-    fn branch_set_default(&mut self, branch_name: BranchName) -> Result<()> {
+    fn branch_set_default(&mut self, br_name: BranchName) -> Result<()> {
         if let Some(i) = self.as_mut() {
-            i.branch_set_default(branch_name).c(d!())?;
+            i.branch_set_default(br_name).c(d!())?;
         }
         Ok(())
     }
 
-    fn branch_is_empty(&self, branch_name: BranchName) -> Result<bool> {
+    fn branch_is_empty(&self, br_name: BranchName) -> Result<bool> {
         if let Some(i) = self.as_ref() {
-            i.branch_is_empty(branch_name).c(d!())?;
+            i.branch_is_empty(br_name).c(d!())?;
         }
         Ok(true)
     }
@@ -1487,34 +1455,34 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
 }
 
 // impl<T: VsMgmt + Deref + DerefMut> VsMgmt for Pin<T> {
-//     fn version_create(&mut self, version_name: VersionName) -> Result<()> {
-//         self.as_mut().version_create(version_name).c(d!())
+//     fn version_create(&mut self, ver_name: VersionName) -> Result<()> {
+//         self.as_mut().version_create(ver_name).c(d!())
 //     }
 //
 //     #[inline(always)]
 //     fn version_create_by_branch(
 //         &mut self,
-//         version_name: VersionName,
-//         branch_name: BranchName,
+//         ver_name: VersionName,
+//         br_name: BranchName,
 //     ) -> Result<()> {
 //         self.as_mut()
-//             .version_create_by_branch(version_name, branch_name)
+//             .version_create_by_branch(ver_name, br_name)
 //             .c(d!())
 //     }
 //
 //     #[inline(always)]
-//     fn version_exists(&self, version_name: VersionName) -> bool {
-//         self.as_ref().version_exists(version_name)
+//     fn version_exists(&self, ver_name: VersionName) -> bool {
+//         self.as_ref().version_exists(ver_name)
 //     }
 //
 //     #[inline(always)]
 //     fn version_exists_on_branch(
 //         &self,
-//         version_name: VersionName,
-//         branch_name: BranchName,
+//         ver_name: VersionName,
+//         br_name: BranchName,
 //     ) -> bool {
 //         self.as_ref()
-//             .version_exists_on_branch(version_name, branch_name)
+//             .version_exists_on_branch(ver_name, br_name)
 //     }
 //
 //     #[inline(always)]
@@ -1523,8 +1491,8 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
 //     }
 //
 //     #[inline(always)]
-//     fn version_pop_by_branch(&mut self, branch_name: BranchName) -> Result<()> {
-//         self.as_mut().version_pop_by_branch(branch_name).c(d!())
+//     fn version_pop_by_branch(&mut self, br_name: BranchName) -> Result<()> {
+//         self.as_mut().version_pop_by_branch(br_name).c(d!())
 //     }
 //
 //     #[inline(always)]
@@ -1536,15 +1504,15 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
 //     unsafe fn version_rebase_by_branch(
 //         &mut self,
 //         base_version: VersionName,
-//         branch_name: BranchName,
+//         br_name: BranchName,
 //     ) -> Result<()> {
 //         self.as_mut()
-//             .version_rebase_by_branch(base_version, branch_name)
+//             .version_rebase_by_branch(base_version, br_name)
 //             .c(d!())
 //     }
 //
-//     fn version_exists_globally(&self, version_name: VersionName) -> bool {
-//         self.as_ref().version_exists_globally(version_name)
+//     fn version_exists_globally(&self, ver_name: VersionName) -> bool {
+//         self.as_ref().version_exists_globally(ver_name)
 //     }
 //
 //     fn version_list(&self) -> Result<Vec<VersionNameOwned>> {
@@ -1553,17 +1521,17 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
 //
 //     fn version_list_by_branch(
 //         &self,
-//         branch_name: BranchName,
+//         br_name: BranchName,
 //     ) -> Result<Vec<VersionNameOwned>> {
-//         self.as_ref().version_list_by_branch(branch_name).c(d!())
+//         self.as_ref().version_list_by_branch(br_name).c(d!())
 //     }
 //
 //     fn version_list_globally(&self) -> Vec<VersionNameOwned> {
 //         self.as_ref().version_list_globally()
 //     }
 //
-//     fn version_has_change_set(&self, version_name: VersionName) -> Result<bool> {
-//         self.as_ref().version_has_change_set(version_name).c(d!())
+//     fn version_has_change_set(&self, ver_name: VersionName) -> Result<bool> {
+//         self.as_ref().version_has_change_set(ver_name).c(d!())
 //     }
 //
 //     fn version_clean_up_globally(&mut self) -> Result<()> {
@@ -1572,36 +1540,36 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
 //
 //     unsafe fn version_revert_globally(
 //         &mut self,
-//         version_name: VersionName,
+//         ver_name: VersionName,
 //     ) -> Result<()> {
-//         self.as_mut().version_revert_globally(version_name).c(d!())
+//         self.as_mut().version_revert_globally(ver_name).c(d!())
 //     }
 //
 //     #[inline(always)]
 //     fn branch_create(
 //         &mut self,
-//         branch_name: BranchName,
-//         version_name: VersionName,
+//         br_name: BranchName,
+//         ver_name: VersionName,
 //         force: bool,
 //     ) -> Result<()> {
 //         self.as_mut()
-//             .branch_create(branch_name, version_name, force)
+//             .branch_create(br_name, ver_name, force)
 //             .c(d!())
 //     }
 //
 //     #[inline(always)]
 //     fn branch_create_by_base_branch(
 //         &mut self,
-//         branch_name: BranchName,
-//         version_name: VersionName,
-//         base_branch_name: ParentBranchName,
+//         br_name: BranchName,
+//         ver_name: VersionName,
+//         base_br_name: ParentBranchName,
 //         force: bool,
 //     ) -> Result<()> {
 //         self.as_mut()
 //             .branch_create_by_base_branch(
-//                 branch_name,
-//                 version_name,
-//                 base_branch_name,
+//                 br_name,
+//                 ver_name,
+//                 base_br_name,
 //                 force,
 //             )
 //             .c(d!())
@@ -1610,18 +1578,18 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
 //     #[inline(always)]
 //     fn branch_create_by_base_branch_version(
 //         &mut self,
-//         branch_name: BranchName,
-//         version_name: VersionName,
-//         base_branch_name: ParentBranchName,
-//         base_version_name: VersionName,
+//         br_name: BranchName,
+//         ver_name: VersionName,
+//         base_br_name: ParentBranchName,
+//         base_ver_name: VersionName,
 //         force: bool,
 //     ) -> Result<()> {
 //         self.as_mut()
 //             .branch_create_by_base_branch_version(
-//                 branch_name,
-//                 version_name,
-//                 base_branch_name,
-//                 base_version_name,
+//                 br_name,
+//                 ver_name,
+//                 base_br_name,
+//                 base_ver_name,
 //                 force,
 //             )
 //             .c(d!())
@@ -1629,24 +1597,24 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
 //
 //     unsafe fn branch_create_without_new_version(
 //         &mut self,
-//         branch_name: BranchName,
+//         br_name: BranchName,
 //         force: bool,
 //     ) -> Result<()> {
 //         self.as_mut()
-//             .branch_create_without_new_version(branch_name, force)
+//             .branch_create_without_new_version(br_name, force)
 //             .c(d!())
 //     }
 //
 //     unsafe fn branch_create_by_base_branch_without_new_version(
 //         &mut self,
-//         branch_name: BranchName,
-//         base_branch_name: ParentBranchName,
+//         br_name: BranchName,
+//         base_br_name: ParentBranchName,
 //         force: bool,
 //     ) -> Result<()> {
 //         self.as_mut()
 //             .branch_create_by_base_branch_without_new_version(
-//                 branch_name,
-//                 base_branch_name,
+//                 br_name,
+//                 base_br_name,
 //                 force,
 //             )
 //             .c(d!())
@@ -1654,91 +1622,91 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
 //
 //     unsafe fn branch_create_by_base_branch_version_without_new_version(
 //         &mut self,
-//         branch_name: BranchName,
-//         base_branch_name: ParentBranchName,
-//         base_version_name: VersionName,
+//         br_name: BranchName,
+//         base_br_name: ParentBranchName,
+//         base_ver_name: VersionName,
 //         force: bool,
 //     ) -> Result<()> {
 //         self.as_mut()
 //             .branch_create_by_base_branch_version_without_new_version(
-//                 branch_name,
-//                 base_branch_name,
-//                 base_version_name,
+//                 br_name,
+//                 base_br_name,
+//                 base_ver_name,
 //                 force,
 //             )
 //             .c(d!())
 //     }
 //
 //     #[inline(always)]
-//     fn branch_exists(&self, branch_name: BranchName) -> bool {
-//         self.as_ref().branch_exists(branch_name)
+//     fn branch_exists(&self, br_name: BranchName) -> bool {
+//         self.as_ref().branch_exists(br_name)
 //     }
 //
 //     #[inline(always)]
-//     fn branch_has_versions(&self, branch_name: BranchName) -> bool {
-//         self.as_ref().branch_has_versions(branch_name)
+//     fn branch_has_versions(&self, br_name: BranchName) -> bool {
+//         self.as_ref().branch_has_versions(br_name)
 //     }
 //
 //     #[inline(always)]
-//     fn branch_remove(&mut self, branch_name: BranchName) -> Result<()> {
-//         self.as_mut().branch_remove(branch_name).c(d!())
+//     fn branch_remove(&mut self, br_name: BranchName) -> Result<()> {
+//         self.as_mut().branch_remove(br_name).c(d!())
 //     }
 //
 //     #[inline(always)]
-//     fn branch_keep_only(&mut self, branch_names: &[BranchName]) -> Result<()> {
-//         self.as_mut().branch_keep_only(branch_names).c(d!())
+//     fn branch_keep_only(&mut self, br_names: &[BranchName]) -> Result<()> {
+//         self.as_mut().branch_keep_only(br_names).c(d!())
 //     }
 //
 //     #[inline(always)]
-//     fn branch_truncate(&mut self, branch_name: BranchName) -> Result<()> {
-//         self.as_mut().branch_truncate(branch_name).c(d!())
+//     fn branch_truncate(&mut self, br_name: BranchName) -> Result<()> {
+//         self.as_mut().branch_truncate(br_name).c(d!())
 //     }
 //
 //     #[inline(always)]
 //     fn branch_truncate_to(
 //         &mut self,
-//         branch_name: BranchName,
-//         last_version_name: VersionName,
+//         br_name: BranchName,
+//         last_ver_name: VersionName,
 //     ) -> Result<()> {
 //         self.as_mut()
-//             .branch_truncate_to(branch_name, last_version_name)
+//             .branch_truncate_to(br_name, last_ver_name)
 //             .c(d!())
 //     }
 //
 //     #[inline(always)]
-//     fn branch_pop_version(&mut self, branch_name: BranchName) -> Result<()> {
-//         self.as_mut().branch_pop_version(branch_name).c(d!())
+//     fn branch_pop_version(&mut self, br_name: BranchName) -> Result<()> {
+//         self.as_mut().branch_pop_version(br_name).c(d!())
 //     }
 //
 //     #[inline(always)]
 //     fn branch_merge_to(
 //         &mut self,
-//         branch_name: BranchName,
-//         target_branch_name: BranchName,
+//         br_name: BranchName,
+//         target_br_name: BranchName,
 //     ) -> Result<()> {
 //         self.as_mut()
-//             .branch_merge_to(branch_name, target_branch_name)
+//             .branch_merge_to(br_name, target_br_name)
 //             .c(d!())
 //     }
 //
 //     #[inline(always)]
 //     unsafe fn branch_merge_to_force(
 //         &mut self,
-//         branch_name: BranchName,
-//         target_branch_name: BranchName,
+//         br_name: BranchName,
+//         target_br_name: BranchName,
 //     ) -> Result<()> {
 //         self.as_mut()
-//             .branch_merge_to_force(branch_name, target_branch_name)
+//             .branch_merge_to_force(br_name, target_br_name)
 //             .c(d!())
 //     }
 //
 //     #[inline(always)]
-//     fn branch_set_default(&mut self, branch_name: BranchName) -> Result<()> {
-//         self.as_mut().branch_set_default(branch_name).c(d!())
+//     fn branch_set_default(&mut self, br_name: BranchName) -> Result<()> {
+//         self.as_mut().branch_set_default(br_name).c(d!())
 //     }
 //
-//     fn branch_is_empty(&self, branch_name: BranchName) -> Result<bool> {
-//         self.as_ref().branch_is_empty(branch_name).c(d!())
+//     fn branch_is_empty(&self, br_name: BranchName) -> Result<bool> {
+//         self.as_ref().branch_is_empty(br_name).c(d!())
 //     }
 //
 //     fn branch_list(&self) -> Vec<BranchNameOwned> {

@@ -63,8 +63,8 @@ static LEN_LK: Lazy<Vec<Mutex<()>>> =
 pub trait Engine: Sized {
     fn new() -> Result<Self>;
     fn alloc_prefix(&self) -> Pre;
-    fn alloc_branch_id(&self) -> BranchID;
-    fn alloc_version_id(&self) -> VersionID;
+    fn alloc_br_id(&self) -> BranchID;
+    fn alloc_ver_id(&self) -> VersionID;
     fn area_count(&self) -> usize;
 
     // NOTE:

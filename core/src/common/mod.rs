@@ -131,13 +131,13 @@ impl<T: Engine> VsDB<T> {
     }
 
     #[inline(always)]
-    pub fn alloc_branch_id(&self) -> BranchIDBase {
-        self.db.alloc_branch_id()
+    pub fn alloc_br_id(&self) -> BranchIDBase {
+        self.db.alloc_br_id()
     }
 
     #[inline(always)]
-    pub fn alloc_version_id(&self) -> VersionIDBase {
-        self.db.alloc_version_id()
+    pub fn alloc_ver_id(&self) -> VersionIDBase {
+        self.db.alloc_ver_id()
     }
 
     #[inline(always)]
