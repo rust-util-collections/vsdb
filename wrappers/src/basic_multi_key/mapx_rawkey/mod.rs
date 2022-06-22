@@ -16,7 +16,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(bound = "")]
 pub struct MapxRawKeyMk<V> {
     inner: MapxRawMk,
@@ -135,7 +135,7 @@ impl<V> Clone for MapxRawKeyMk<V> {
     }
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(Debug)]
 pub struct ValueMut<'a, V: ValueEnDe> {
     hdr: &'a mut MapxRawKeyMk<V>,
     key: &'a [&'a [u8]],

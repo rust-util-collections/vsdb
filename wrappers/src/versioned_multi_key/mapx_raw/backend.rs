@@ -1,43 +1,146 @@
 use crate::{
-    basic::{
-        mapx_ord::MapxOrd, mapx_ord_rawkey::MapxOrdRawKey,
-        mapx_ord_rawvalue::MapxOrdRawValue,
-    },
-    basic_multi_key::{mapx_raw::MapxRawMk, mapx_rawkey::MapxRawKeyMk},
+    basic::{mapx_ord::MapxOrd, mapx_ord_rawkey::MapxOrdRawKey},
+    basic_multi_key::mapx_raw::MapxRawMk,
     common::{
-        ende::encode_optioned_bytes, BranchID, BranchIDBase, BranchName,
-        BranchNameOwned, RawValue, VersionID, VersionIDBase, VersionName,
-        VersionNameOwned, INITIAL_BRANCH_ID, INITIAL_BRANCH_NAME,
-        RESERVED_VERSION_NUM_DEFAULT, VSDB,
+        utils::hash::trie_root, BranchID, BranchIDBase, BranchName, BranchNameOwned,
+        RawKey, RawValue, VersionID, VersionIDBase, VersionName, VersionNameOwned,
+        INITIAL_BRANCH_ID, INITIAL_BRANCH_NAME, NULL, RESERVED_VERSION_NUM_DEFAULT,
+        TRASH_CLEANER, VSDB,
     },
 };
+use parking_lot::RwLock;
 use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
+    result::Result as StdResult,
+    sync::Arc,
 };
-use vsdb_core::common::{utils::hash::trie_root, TRASH_CLEANER};
 
 ////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug)]
+#[allow(clippy::type_complexity)]
 pub(super) struct MapxRawMkVs {
-    default_branch: BranchID,
     key_size: usize,
+    default_branch: BranchID,
 
     br_name_to_br_id: MapxOrdRawKey<BranchID>,
     ver_name_to_ver_id: MapxOrdRawKey<VersionID>,
-
-    br_id_to_br_name: MapxOrdRawValue<BranchID>,
-    ver_id_to_ver_name: MapxOrdRawValue<VersionID>,
-
     br_to_its_vers: MapxOrd<BranchID, MapxOrd<VersionID, ()>>,
-
     ver_to_change_set: MapxOrd<VersionID, MapxRawMk>,
 
-    layered_kv: MapxRawKeyMk<MapxOrd<VersionID, Option<RawValue>>>,
+    br_id_to_br_name: Arc<RwLock<HashMap<BranchID, RawValue>>>,
+    ver_id_to_ver_name: Arc<RwLock<HashMap<VersionID, RawValue>>>,
+    layered_kv: Arc<RwLock<BTreeMap<Vec<RawKey>, BTreeMap<VersionID, RawValue>>>>,
+}
+
+impl Clone for MapxRawMkVs {
+    fn clone(&self) -> Self {
+        Self {
+            key_size: self.key_size,
+            default_branch: self.default_branch,
+
+            br_name_to_br_id: self.br_name_to_br_id.clone(),
+            ver_name_to_ver_id: self.ver_name_to_ver_id.clone(),
+            br_to_its_vers: self.br_to_its_vers.clone(),
+            ver_to_change_set: self.ver_to_change_set.clone(),
+
+            br_id_to_br_name: self.br_id_to_br_name.clone(),
+            ver_id_to_ver_name: self.ver_id_to_ver_name.clone(),
+            layered_kv: Arc::new(RwLock::new(self.layered_kv.read().clone())),
+        }
+    }
+}
+
+impl Serialize for MapxRawMkVs {
+    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        MapxRawMkVsWithoutDerivedFields::from(self).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for MapxRawMkVs {
+    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        <MapxRawMkVsWithoutDerivedFields as Deserialize>::deserialize(deserializer)
+            .map(Self::from)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) struct MapxRawMkVsWithoutDerivedFields {
+    key_size: usize,
+    default_branch: BranchID,
+
+    br_name_to_br_id: MapxOrdRawKey<BranchID>,
+    ver_name_to_ver_id: MapxOrdRawKey<VersionID>,
+    br_to_its_vers: MapxOrd<BranchID, MapxOrd<VersionID, ()>>,
+    ver_to_change_set: MapxOrd<VersionID, MapxRawMk>,
+}
+
+impl From<MapxRawMkVsWithoutDerivedFields> for MapxRawMkVs {
+    fn from(m: MapxRawMkVsWithoutDerivedFields) -> Self {
+        let br_id_to_br_name = m
+            .br_name_to_br_id
+            .iter()
+            .map(|(n, id)| (id, n))
+            .collect::<HashMap<_, _>>();
+        let ver_id_to_ver_name = m
+            .ver_name_to_ver_id
+            .iter()
+            .map(|(n, id)| (id, n))
+            .collect::<HashMap<_, _>>();
+        let layered_kv = m.ver_to_change_set.iter().fold(
+            BTreeMap::new(),
+            |mut acc, (ver, chgset)| {
+                let mut op = |k: &[&[u8]], v: &[u8]| {
+                    let k = to_owned_key(k);
+                    let v = v.to_vec();
+                    acc.entry(k).or_insert_with(BTreeMap::new).insert(ver, v);
+                    Ok(())
+                };
+                pnk!(chgset.iter_op(&mut op));
+                acc
+            },
+        );
+
+        Self {
+            key_size: m.key_size,
+            default_branch: m.default_branch,
+
+            br_name_to_br_id: m.br_name_to_br_id,
+            ver_name_to_ver_id: m.ver_name_to_ver_id,
+            br_to_its_vers: m.br_to_its_vers,
+            ver_to_change_set: m.ver_to_change_set,
+
+            br_id_to_br_name: Arc::new(RwLock::new(br_id_to_br_name)),
+            ver_id_to_ver_name: Arc::new(RwLock::new(ver_id_to_ver_name)),
+            layered_kv: Arc::new(RwLock::new(layered_kv)),
+        }
+    }
+}
+
+impl From<&MapxRawMkVs> for MapxRawMkVsWithoutDerivedFields {
+    fn from(m: &MapxRawMkVs) -> Self {
+        unsafe {
+            Self {
+                key_size: m.key_size,
+                default_branch: m.default_branch,
+
+                br_name_to_br_id: m.br_name_to_br_id.shadow(),
+                ver_name_to_ver_id: m.ver_name_to_ver_id.shadow(),
+                br_to_its_vers: m.br_to_its_vers.shadow(),
+                ver_to_change_set: m.ver_to_change_set.shadow(),
+            }
+        }
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
@@ -47,44 +150,54 @@ impl MapxRawMkVs {
     #[inline(always)]
     pub(super) unsafe fn shadow(&self) -> Self {
         Self {
-            default_branch: self.default_branch,
             key_size: self.key_size,
+            default_branch: self.default_branch,
+
             br_name_to_br_id: self.br_name_to_br_id.shadow(),
             ver_name_to_ver_id: self.ver_name_to_ver_id.shadow(),
-            br_id_to_br_name: self.br_id_to_br_name.shadow(),
-            ver_id_to_ver_name: self.ver_id_to_ver_name.shadow(),
             br_to_its_vers: self.br_to_its_vers.shadow(),
             ver_to_change_set: self.ver_to_change_set.shadow(),
-            layered_kv: self.layered_kv.shadow(),
+
+            br_id_to_br_name: Arc::clone(&self.br_id_to_br_name),
+            ver_id_to_ver_name: Arc::clone(&self.ver_id_to_ver_name),
+            layered_kv: Arc::clone(&self.layered_kv),
         }
     }
 
     #[inline(always)]
     pub(super) fn new(key_size: usize) -> Self {
         let mut ret = Self {
-            default_branch: BranchID::default(),
             key_size,
+            default_branch: BranchID::default(),
+
             br_name_to_br_id: MapxOrdRawKey::new(),
             ver_name_to_ver_id: MapxOrdRawKey::new(),
-            br_id_to_br_name: MapxOrdRawValue::new(),
-            ver_id_to_ver_name: MapxOrdRawValue::new(),
             br_to_its_vers: MapxOrd::new(),
             ver_to_change_set: MapxOrd::new(),
-            layered_kv: MapxRawKeyMk::new(key_size),
+
+            br_id_to_br_name: Arc::new(RwLock::new(Default::default())),
+            ver_id_to_ver_name: Arc::new(RwLock::new(Default::default())),
+            layered_kv: Arc::new(RwLock::new(Default::default())),
         };
+
         ret.init();
+
         ret
     }
 
     #[inline(always)]
     fn init(&mut self) {
         let initial_brid = INITIAL_BRANCH_ID.to_be_bytes();
+
         self.default_branch = initial_brid;
         self.br_name_to_br_id
             .insert(INITIAL_BRANCH_NAME.0, &initial_brid);
-        self.br_id_to_br_name
-            .insert(&initial_brid, INITIAL_BRANCH_NAME.0);
+
         self.br_to_its_vers.insert(&initial_brid, &MapxOrd::new());
+
+        self.br_id_to_br_name
+            .write()
+            .insert(initial_brid, INITIAL_BRANCH_NAME.0.to_vec());
     }
 
     #[inline(always)]
@@ -167,9 +280,7 @@ impl MapxRawMkVs {
         ver_id: VersionID,
     ) -> Result<Option<RawValue>> {
         if key.len() < self.key_size {
-            return self
-                .batch_remove_by_branch_version(key, value, ver_id)
-                .c(d!());
+            return self.batch_remove_by_branch_version(key, ver_id).c(d!());
         };
 
         let ret = self.get_by_branch_version(key, br_id, ver_id);
@@ -178,19 +289,19 @@ impl MapxRawMkVs {
             return Ok(None);
         }
 
+        let value = value.unwrap_or(NULL);
+
         self.ver_to_change_set
             .get_mut(&ver_id)
             .c(d!())?
-            .insert(key, &[])
+            .insert(key, value)
             .c(d!())?;
 
-        unsafe {
-            self.layered_kv
-                .entry(key)
-                .or_insert(&MapxOrd::new())
-                .c(d!())?
-                .insert_encoded_value(&ver_id, &encode_optioned_bytes(&value)[..]);
-        }
+        self.layered_kv
+            .write()
+            .entry(to_owned_key(key))
+            .or_default()
+            .insert(ver_id, value.to_vec());
 
         Ok(ret)
     }
@@ -198,7 +309,6 @@ impl MapxRawMkVs {
     fn batch_remove_by_branch_version(
         &mut self,
         key: &[&[u8]],
-        value: Option<&[u8]>,
         ver_id: VersionID,
     ) -> Result<Option<RawValue>> {
         let mut hdr = self.ver_to_change_set.get(&ver_id).c(d!())?;
@@ -206,22 +316,14 @@ impl MapxRawMkVs {
         let mut op = |k: &[&[u8]], _: &[u8]| hdr.insert(k, &[]).c(d!()).map(|_| ());
         hdr_shadow.iter_op_with_key_prefix(&mut op, key).c(d!())?;
 
-        unsafe {
-            let layered_kv_shadow = self.layered_kv.shadow();
-
-            let mut op = |k: &[&[u8]], _: &MapxOrd<VersionID, Option<RawValue>>| {
-                self.layered_kv
-                    .entry(k)
-                    .or_insert(&MapxOrd::new())
-                    .c(d!())?
-                    .insert_encoded_value(&ver_id, &encode_optioned_bytes(&value)[..]);
-                Ok(())
-            };
-
-            layered_kv_shadow
-                .iter_op_with_key_prefix(&mut op, key)
-                .c(d!())?;
-        }
+        let key = to_owned_key(key);
+        self.layered_kv
+            .write()
+            .range_mut(key.clone()..)
+            .filter(|(k, _)| k.starts_with(&key))
+            .for_each(|(_, vers)| {
+                vers.insert(ver_id, vct![]);
+            });
 
         Ok(None)
     }
@@ -306,11 +408,12 @@ impl MapxRawMkVs {
     ) -> Option<RawValue> {
         let vers = self.br_to_its_vers.get(&br_id)?;
         self.layered_kv
-            .get(key)?
+            .read()
+            .get(&to_owned_key(key))?
             .range(..=ver_id)
             .rev()
             .find(|(ver, _)| vers.contains_key(ver))
-            .and_then(|(_, value)| value)
+            .and_then(|(_, value)| alt!(value.is_empty(), None, Some(value.clone())))
     }
 
     #[inline(always)]
@@ -338,33 +441,35 @@ impl MapxRawMkVs {
         F: FnMut(&[&[u8]], RawValue) -> Result<()>,
     {
         let vers = self.br_to_its_vers.get(&br_id).c(d!())?;
-        let mut cb =
-            |k: &[&[u8]], v: &MapxOrd<VersionID, Option<RawValue>>| -> Result<()> {
-                if let Some(value) = v
-                    .range(..=ver_id)
-                    .rev()
-                    .find(|(ver, _)| vers.contains_key(ver))
-                    .and_then(|(_, value)| value)
-                {
-                    op(k, value).c(d!())?;
-                }
-                Ok(())
-            };
+        let key_prefix = to_owned_key(key_prefix);
+        for (k, v) in self
+            .layered_kv
+            .read()
+            .range(key_prefix.clone()..)
+            .filter(|(k, _)| k.starts_with(&key_prefix))
+        {
+            if let Some((_, v)) = v
+                .range(..=ver_id)
+                .rev()
+                .find(|(ver, v)| !v.is_empty() && vers.contains_key(ver))
+            {
+                op(&k.iter().map(|k| &k[..]).collect::<Vec<_>>(), v.to_vec()).c(d!())?;
+            }
+        }
 
-        self.layered_kv
-            .iter_op_with_key_prefix(&mut cb, key_prefix)
-            .c(d!())
+        Ok(())
     }
 
     #[inline(always)]
     pub(super) fn clear(&mut self) {
         self.br_name_to_br_id.clear();
         self.ver_name_to_ver_id.clear();
-        self.br_id_to_br_name.clear();
-        self.ver_id_to_ver_name.clear();
         self.br_to_its_vers.clear();
         self.ver_to_change_set.clear();
-        self.layered_kv.clear();
+
+        self.br_id_to_br_name.write().clear();
+        self.ver_id_to_ver_name.write().clear();
+        self.layered_kv.write().clear();
 
         self.init();
     }
@@ -393,7 +498,9 @@ impl MapxRawMkVs {
         vers.insert(&ver_id, &());
 
         self.ver_name_to_ver_id.insert(ver_name, &ver_id);
-        self.ver_id_to_ver_name.insert(&ver_id, ver_name);
+        self.ver_id_to_ver_name
+            .write()
+            .insert(ver_id, ver_name.to_vec());
         self.ver_to_change_set
             .insert(&ver_id, &MapxRawMk::new(self.key_size));
 
@@ -469,19 +576,21 @@ impl MapxRawMkVs {
 
         let mut chgsets = vec![];
         let mut new_kvchgset_for_base_ver = HashMap::new();
+        let mut lkv_hdr = self.layered_kv.write();
+        let mut v_id_to_name = self.ver_id_to_ver_name.write();
+
         for verid in vers_to_be_merged.iter() {
+            let chgset = self.ver_to_change_set.remove(verid).c(d!())?;
             let mut chgset_ops = |k: &[&[u8]], _: &[u8]| {
-                let v = self.layered_kv.get(k).c(d!())?.remove(verid).c(d!())?;
-                let k = k.iter().map(|k| k.to_vec()).collect::<Vec<_>>();
+                let k = to_owned_key(k);
+                let v = lkv_hdr.get_mut(&k).c(d!())?.remove(verid).c(d!())?;
                 new_kvchgset_for_base_ver.insert(k, v);
                 Ok(())
             };
-
-            let chgset = self.ver_to_change_set.remove(verid).c(d!())?;
             chgset.iter_op(&mut chgset_ops).c(d!())?;
             chgsets.push(chgset);
 
-            self.ver_id_to_ver_name
+            v_id_to_name
                 .remove(verid)
                 .c(d!())
                 .and_then(|vername| self.ver_name_to_ver_id.remove(&vername).c(d!()))
@@ -489,11 +598,16 @@ impl MapxRawMkVs {
         }
 
         // avoid dup-middle 'insert's
-        new_kvchgset_for_base_ver.iter().for_each(|(k, v)| {
-            let k = k.iter().map(|k| k.as_slice()).collect::<Vec<_>>();
-            pnk!(base_ver_chgset.insert(&k, &[]));
-            pnk!(self.layered_kv.get(&k)).insert(&base_version, v);
+        new_kvchgset_for_base_ver.into_iter().for_each(|(k, v)| {
+            pnk!(
+                base_ver_chgset
+                    .insert(&k.iter().map(|k| &k[..]).collect::<Vec<_>>(), &v[..])
+            );
+            pnk!(lkv_hdr.get_mut(&k)).insert(base_version, v);
         });
+
+        drop(lkv_hdr);
+        drop(v_id_to_name);
 
         TRASH_CLEANER.lock().execute(move || {
             chgsets.into_iter().for_each(|mut cs| {
@@ -524,7 +638,9 @@ impl MapxRawMkVs {
     ) -> Result<Vec<VersionNameOwned>> {
         self.br_to_its_vers.get(&br_id).c(d!()).map(|vers| {
             vers.iter()
-                .map(|(ver, _)| self.ver_id_to_ver_name.get(&ver).unwrap().to_vec())
+                .map(|(ver, _)| {
+                    self.ver_id_to_ver_name.read().get(&ver).unwrap().to_vec()
+                })
                 .map(VersionNameOwned)
                 .collect()
         })
@@ -534,7 +650,7 @@ impl MapxRawMkVs {
     pub(super) fn version_list_globally(&self) -> Vec<VersionNameOwned> {
         self.ver_to_change_set
             .iter()
-            .map(|(ver, _)| self.ver_id_to_ver_name.get(&ver).unwrap().to_vec())
+            .map(|(ver, _)| self.ver_id_to_ver_name.read().get(&ver).unwrap().to_vec())
             .map(VersionNameOwned)
             .collect()
     }
@@ -558,27 +674,34 @@ impl MapxRawMkVs {
         });
 
         let mut chgsets = vec![];
+        let mut lkv_hdr = self.layered_kv.write();
+        let mut v_id_to_name = self.ver_id_to_ver_name.write();
+
         for (ver, chgset) in unsafe { self.ver_to_change_set.shadow() }
             .iter()
             .filter(|(ver, _)| !valid_vers.contains(ver))
         {
             let mut chgset_ops = |k: &[&[u8]], _: &[u8]| {
-                let mut lkv = self.layered_kv.get(k).c(d!())?;
+                let k = to_owned_key(k);
+                let lkv = lkv_hdr.get_mut(&k).c(d!())?;
                 lkv.remove(&ver).c(d!())?;
                 if lkv.is_empty() {
-                    self.layered_kv.remove(k).c(d!())?;
+                    lkv_hdr.remove(&k).c(d!())?;
                 }
                 Ok(())
             };
             chgset.iter_op(&mut chgset_ops).c(d!())?;
 
-            self.ver_id_to_ver_name
+            v_id_to_name
                 .remove(&ver)
                 .c(d!())
                 .and_then(|vername| self.ver_name_to_ver_id.remove(&vername).c(d!()))
                 .and_then(|_| self.ver_to_change_set.remove(&ver).c(d!()))
                 .map(|chgset| chgsets.push(chgset))?;
         }
+
+        drop(lkv_hdr);
+        drop(v_id_to_name);
 
         TRASH_CLEANER.lock().execute(move || {
             chgsets.into_iter().for_each(|mut cs| {
@@ -596,16 +719,18 @@ impl MapxRawMkVs {
         &mut self,
         ver_id: VersionID,
     ) -> Result<()> {
+        let chgset = self.ver_to_change_set.remove(&ver_id).c(d!())?;
+        let mut lkv_hdr = self.layered_kv.write();
         let mut chgset_ops = |key: &[&[u8]], _: &[u8]| {
-            self.layered_kv
-                .get(key)
+            lkv_hdr
+                .get_mut(&to_owned_key(key))
                 .c(d!())?
                 .remove(&ver_id)
                 .c(d!())
                 .map(|_| ())
         };
-        let chgset = self.ver_to_change_set.remove(&ver_id).c(d!())?;
         chgset.iter_op(&mut chgset_ops).c(d!())?;
+        drop(lkv_hdr);
 
         TRASH_CLEANER.lock().execute(move || {
             let mut cs = chgset;
@@ -617,6 +742,7 @@ impl MapxRawMkVs {
         });
 
         self.ver_id_to_ver_name
+            .write()
             .remove(&ver_id)
             .c(d!())
             .and_then(|vername| self.ver_name_to_ver_id.remove(&vername).c(d!()))
@@ -646,13 +772,10 @@ impl MapxRawMkVs {
 
         let chgset = self.ver_to_change_set.get(&ver).c(d!())?;
         let mut entries = vec![];
-        let mut ops = |k: &[&[u8]], _: &[u8]| {
-            let mut key = vec![];
-            k.iter().for_each(|k| {
-                key.extend_from_slice(k);
-            });
-            let v = pnk!(pnk!(self.layered_kv.get(k)).get(&ver)).unwrap_or_default();
-            entries.push((key, v));
+        let mut ops = |k: &[&[u8]], v: &[u8]| {
+            let k = k.iter().flat_map(|k| k.iter()).copied().collect::<Vec<_>>();
+            let v = v.to_vec();
+            entries.push((k, v));
             Ok(())
         };
         chgset.iter_op(&mut ops).c(d!())?;
@@ -826,7 +949,9 @@ impl MapxRawMkVs {
         let br_id = VSDB.alloc_br_id().to_be_bytes();
 
         self.br_name_to_br_id.insert(br_name, &br_id);
-        self.br_id_to_br_name.insert(&br_id, br_name);
+        self.br_id_to_br_name
+            .write()
+            .insert(br_id, br_name.to_vec());
         self.br_to_its_vers.insert(&br_id, &vers_copied);
 
         if let Some(vername) = ver_name {
@@ -838,7 +963,7 @@ impl MapxRawMkVs {
 
     #[inline(always)]
     pub(super) fn branch_exists(&self, br_id: BranchID) -> bool {
-        let condition_1 = self.br_id_to_br_name.contains_key(&br_id);
+        let condition_1 = self.br_id_to_br_name.read().contains_key(&br_id);
         let condition_2 = self.br_to_its_vers.contains_key(&br_id);
         assert_eq!(condition_1, condition_2);
         condition_1
@@ -859,6 +984,7 @@ impl MapxRawMkVs {
         self.branch_truncate(br_id).c(d!())?;
 
         self.br_id_to_br_name
+            .write()
             .remove(&br_id)
             .c(d!())
             .and_then(|brname| self.br_name_to_br_id.remove(&brname).c(d!()))?;
@@ -874,11 +1000,15 @@ impl MapxRawMkVs {
 
     #[inline(always)]
     pub(super) fn branch_keep_only(&mut self, br_ids: &[BranchID]) -> Result<()> {
-        for brid in unsafe { self.br_id_to_br_name.shadow() }
-            .iter()
-            .map(|(brid, _)| brid)
+        let brs = self
+            .br_id_to_br_name
+            .read()
+            .keys()
             .filter(|brid| !br_ids.contains(brid))
-        {
+            .copied()
+            .collect::<Vec<_>>();
+        let brs = brs; // avoid warnings
+        for brid in brs.into_iter() {
             self.branch_remove(brid).c(d!())?;
         }
         self.version_clean_up_globally().c(d!())
@@ -1012,6 +1142,7 @@ impl MapxRawMkVs {
     #[inline(always)]
     pub(super) fn branch_get_default_name(&self) -> BranchNameOwned {
         self.br_id_to_br_name
+            .read()
             .get(&self.default_branch)
             .map(|br| BranchNameOwned(br.to_vec()))
             .unwrap()
@@ -1053,8 +1184,11 @@ impl MapxRawMkVs {
         self.br_name_to_br_id.insert(branch_1, &brid_2).c(d!())?;
         self.br_name_to_br_id.insert(branch_2, &brid_1).c(d!())?;
 
-        self.br_id_to_br_name.insert(&brid_1, branch_2).c(d!())?;
-        self.br_id_to_br_name.insert(&brid_2, branch_1).c(d!())?;
+        {
+            let mut hdr = self.br_id_to_br_name.write();
+            hdr.insert(brid_1, branch_2.to_vec()).c(d!())?;
+            hdr.insert(brid_2, branch_1.to_vec()).c(d!())?;
+        }
 
         if self.default_branch == brid_1 {
             self.default_branch = brid_2;
@@ -1123,13 +1257,15 @@ impl MapxRawMkVs {
 
         let mut chgkeys = HashSet::new();
         let mut new_kvchgset_for_base_ver = HashMap::new();
+
+        let mut lkv_hdr = self.layered_kv.write();
+
         for ver in vers_to_be_merged.iter() {
             let chgset = self.ver_to_change_set.get(ver).c(d!())?;
             let mut chgset_ops = |k: &[&[u8]], _: &[u8]| {
-                let k_vers = self.layered_kv.get(k).c(d!())?;
-                let value = k_vers.get(ver).c(d!())?;
-                let k = k.iter().map(|k| k.to_vec()).collect::<Vec<_>>();
-                new_kvchgset_for_base_ver.insert(k.clone(), (k_vers, value));
+                let k = to_owned_key(k);
+                let value = lkv_hdr.get_mut(&k).c(d!())?.get(ver).c(d!())?.clone();
+                new_kvchgset_for_base_ver.insert(k.clone(), value);
                 chgkeys.insert(k);
                 Ok(())
             };
@@ -1137,13 +1273,31 @@ impl MapxRawMkVs {
         }
 
         // avoid dup-middle 'insert's
-        new_kvchgset_for_base_ver
-            .into_iter()
-            .for_each(|(k, (mut k_vers, v))| {
-                let k = k.iter().map(|k| k.as_slice()).collect::<Vec<_>>();
-                pnk!(rewrite_ver_chgset.insert(&k, &[]));
-                k_vers.insert(rewrite_ver, &v);
-            });
+        new_kvchgset_for_base_ver.into_iter().for_each(|(k, v)| {
+            pnk!(
+                rewrite_ver_chgset
+                    .insert(&k.iter().map(|k| &k[..]).collect::<Vec<_>>(), &v[..])
+            );
+            pnk!(lkv_hdr.get_mut(&k)).insert(*rewrite_ver, v);
+        });
+
+        // lowest-level KVs with 'deleted' states should be cleaned up.
+        for k in chgkeys.iter() {
+            if let Some(vers) = lkv_hdr.get_mut(k.as_slice()) {
+                // A 'NULL' value means 'not exist'.
+                if vers.get(rewrite_ver).c(d!())?.is_empty() {
+                    vers.remove(rewrite_ver).c(d!())?;
+                    rewrite_ver_chgset
+                        .remove(&k.iter().map(|k| &k[..]).collect::<Vec<_>>())
+                        .c(d!())?;
+                }
+                if vers.is_empty() {
+                    lkv_hdr.remove(k).c(d!())?;
+                }
+            }
+        }
+
+        drop(lkv_hdr);
 
         // Make all merged version to be orphan,
         // so they will be cleaned up in the `version_clean_up_globally`.
@@ -1155,41 +1309,21 @@ impl MapxRawMkVs {
             });
         }
 
-        // lowest-level KVs with 'deleted' states should be cleaned up.
-        for k in chgkeys.iter() {
-            let k = k.iter().map(|k| k.as_slice()).collect::<Vec<_>>();
-            if let Some(mut vers) = self.layered_kv.get(&k) {
-                // A 'NULL' value means 'not exist'.
-                if vers.get(rewrite_ver).c(d!())?.is_none() {
-                    vers.remove(rewrite_ver).c(d!())?;
-                    rewrite_ver_chgset.remove(&k).c(d!())?;
-                }
-                if vers.is_empty() {
-                    self.layered_kv.remove(&k).c(d!())?;
-                }
-            }
-        }
-
         self.version_clean_up_globally().c(d!())?;
 
         #[cfg(test)]
         {
-            let mut ops = |_: &[&[u8]], vers: &MapxOrd<VersionID, Option<RawValue>>| {
+            let lkv_hdr = self.layered_kv.read();
+            for vers in lkv_hdr.values() {
                 if let Some(v) = vers.get(rewrite_ver) {
-                    assert!(!v.is_none());
+                    assert!(!v.is_empty());
                 }
-                Ok(())
-            };
-            pnk!(self.layered_kv.iter_op(&mut ops));
-
+            }
             for ver in vers_to_be_merged.iter() {
                 assert!(!self.ver_to_change_set.contains_key(ver));
-                let mut ops =
-                    |_: &[&[u8]], vers: &MapxOrd<VersionID, Option<RawValue>>| {
-                        assert!(!vers.contains_key(ver));
-                        Ok(())
-                    };
-                pnk!(self.layered_kv.iter_op(&mut ops));
+                for vers in lkv_hdr.values() {
+                    assert!(!vers.contains_key(ver));
+                }
             }
         }
 
@@ -1203,4 +1337,9 @@ impl MapxRawMkVs {
 #[inline(always)]
 fn ver_add_1(ver: VersionID) -> VersionID {
     (VersionIDBase::from_be_bytes(ver) + 1).to_be_bytes()
+}
+
+#[inline(always)]
+fn to_owned_key(k: &[&[u8]]) -> Vec<RawKey> {
+    k.iter().map(|k| k.to_vec()).collect()
 }

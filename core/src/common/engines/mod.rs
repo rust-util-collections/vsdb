@@ -160,7 +160,7 @@ impl Mapx {
         let v = VSDB.db.get(self.prefix, key)?;
 
         Some(ValueMut {
-            key: key.to_vec().into(),
+            key: key.to_vec(),
             value: v,
             hdr: self,
         })

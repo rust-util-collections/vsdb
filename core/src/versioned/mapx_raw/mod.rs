@@ -53,7 +53,7 @@ use std::{
 pub use backend::MapxRawVsIter;
 
 /// Advanced `MapxRaw`, with versioned feature.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MapxRawVs {
     inner: backend::MapxRawVs,
 }
@@ -132,8 +132,12 @@ impl MapxRawVs {
     }
 
     #[inline(always)]
-    pub fn get_mut<'a>(&'a mut self, key: &'a [u8]) -> Option<ValueMut<'a>> {
-        self.get(key).map(move |v| ValueMut::new(self, key, v))
+    pub fn get_mut<'a, T: 'a + AsRef<[u8]> + ?Sized>(
+        &'a mut self,
+        key: &'a T,
+    ) -> Option<ValueMut<'a>> {
+        self.get(key.as_ref())
+            .map(|v| ValueMut::new(self, key.as_ref(), v))
     }
 
     #[inline(always)]
@@ -170,7 +174,10 @@ impl MapxRawVs {
     /// if the target key does not exist, will try to
     /// search a closest value bigger than the target key.
     #[inline(always)]
-    pub fn get_ge(&self, key: impl AsRef<[u8]>) -> Option<(RawKey, RawValue)> {
+    pub fn get_ge<T: AsRef<[u8]> + ?Sized>(
+        &self,
+        key: &T,
+    ) -> Option<(RawKey, RawValue)> {
         self.inner.get_ge(key.as_ref())
     }
 
@@ -178,9 +185,9 @@ impl MapxRawVs {
     /// if the target key does not exist, will try to
     /// search a closest value bigger than the target key.
     #[inline(always)]
-    pub fn get_ge_by_branch(
+    pub fn get_ge_by_branch<T: AsRef<[u8]> + ?Sized>(
         &self,
-        key: impl AsRef<[u8]>,
+        key: &T,
         br_name: BranchName,
     ) -> Option<(RawKey, RawValue)> {
         let br_id = self.inner.branch_get_id_by_name(br_name)?;
@@ -191,9 +198,9 @@ impl MapxRawVs {
     /// if the target key does not exist, will try to
     /// search a closest value bigger than the target key.
     #[inline(always)]
-    pub fn get_ge_by_branch_version(
+    pub fn get_ge_by_branch_version<T: AsRef<[u8]> + ?Sized>(
         &self,
-        key: impl AsRef<[u8]>,
+        key: &T,
         br_name: BranchName,
         ver_name: VersionName,
     ) -> Option<(RawKey, RawValue)> {
@@ -207,7 +214,10 @@ impl MapxRawVs {
     /// if the target key does not exist, will try to
     /// search a closest value less than the target key.
     #[inline(always)]
-    pub fn get_le(&self, key: impl AsRef<[u8]>) -> Option<(RawKey, RawValue)> {
+    pub fn get_le<T: AsRef<[u8]> + ?Sized>(
+        &self,
+        key: &T,
+    ) -> Option<(RawKey, RawValue)> {
         self.inner.get_le(key.as_ref())
     }
 
@@ -215,9 +225,9 @@ impl MapxRawVs {
     /// if the target key does not exist, will try to
     /// search a closest value bigger less the target key.
     #[inline(always)]
-    pub fn get_le_by_branch(
+    pub fn get_le_by_branch<T: AsRef<[u8]> + ?Sized>(
         &self,
-        key: impl AsRef<[u8]>,
+        key: &T,
         br_name: BranchName,
     ) -> Option<(RawKey, RawValue)> {
         let br_id = self.inner.branch_get_id_by_name(br_name)?;
@@ -228,9 +238,9 @@ impl MapxRawVs {
     /// if the target key does not exist, will try to
     /// search a closest value bigger than the target key.
     #[inline(always)]
-    pub fn get_le_by_branch_version(
+    pub fn get_le_by_branch_version<T: AsRef<[u8]> + ?Sized>(
         &self,
-        key: impl AsRef<[u8]>,
+        key: &T,
         br_name: BranchName,
         ver_name: VersionName,
     ) -> Option<(RawKey, RawValue)> {
@@ -944,7 +954,7 @@ impl VsMgmt for MapxRawVs {
 ////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(Debug)]
 pub struct ValueMut<'a> {
     hdr: &'a mut MapxRawVs,
     key: &'a [u8],

@@ -80,7 +80,7 @@ fn test_branch_merge() {
     pnk!(hdr.branch_merge_to(bn, INITIAL_BRANCH_NAME));
     pnk!(hdr.branch_set_default(INITIAL_BRANCH_NAME));
     let val = pnk!(hdr.get_by_branch(key, INITIAL_BRANCH_NAME));
-    assert_eq!(val.as_ref(), value);
+    assert_eq!(&val, value);
 }
 
 #[test]
@@ -114,9 +114,9 @@ fn test_branch_swap() {
         pnk!(hdr.branch_swap(INITIAL_BRANCH_NAME, bn));
     }
     let val = pnk!(hdr.get_by_branch(tkey, INITIAL_BRANCH_NAME));
-    assert_eq!(val.as_ref(), tvalue);
+    assert_eq!(&val, tvalue);
     let val = pnk!(hdr.get_by_branch(mkey, bn));
-    assert_eq!(val.as_ref(), mvalue);
+    assert_eq!(&val, mvalue);
 }
 
 #[test]
@@ -161,7 +161,7 @@ fn test_branch_truncate_to() {
 fn test_insert() {
     let mut hdr = MapxRawMkVs::new(2);
     pnk!(hdr.version_create(VersionName(b"manster0")));
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i.to_be_bytes(), (max + i).to_be_bytes()))
         .for_each(|(key, value)| {
@@ -178,7 +178,7 @@ fn test_insert() {
 
 #[test]
 fn test_valueende() {
-    let cnt = 500;
+    let cnt = 100;
     let dehdr = {
         let mut hdr = MapxRawMkVs::new(2);
         pnk!(hdr.version_create(VersionName(b"manster0")));
@@ -193,7 +193,7 @@ fn test_valueende() {
     let mut reloaded = pnk!(<MapxRawMkVs as ValueEnDe>::decode(&dehdr));
     (0..cnt).map(|i: usize| i.to_be_bytes()).for_each(|i| {
         let key: &[&[u8]] = &[&i, &i];
-        assert_eq!(i.to_vec().into_boxed_slice(), reloaded.get(key).unwrap());
+        assert_eq!(&i[..], &reloaded.get(key).unwrap()[..]);
     });
 }
 

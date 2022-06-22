@@ -48,13 +48,13 @@ pub trait KeyEn: Serialize + Sized {
         all(not(feature = "msgpack_codec"), not(feature = "bcs_codec")),
     ))]
     fn encode_key(&self) -> RawBytes {
-        msgpack::to_vec(self).unwrap().into_boxed_slice()
+        msgpack::to_vec(self).unwrap()
     }
 
     /// Encode original key type to bytes.
     #[cfg(all(feature = "bcs_codec", not(feature = "msgpack_codec")))]
     fn encode_key(&self) -> RawBytes {
-        bcs::to_bytes(self).unwrap().into_boxed_slice()
+        bcs::to_bytes(self).unwrap()
     }
 }
 
@@ -99,13 +99,13 @@ pub trait ValueEn: Serialize + Sized {
         all(not(feature = "msgpack_codec"), not(feature = "bcs_codec")),
     ))]
     fn encode_value(&self) -> RawBytes {
-        msgpack::to_vec(self).unwrap().into_boxed_slice()
+        msgpack::to_vec(self).unwrap()
     }
 
     /// Encode original key type to bytes.
     #[cfg(all(feature = "bcs_codec", not(feature = "msgpack_codec")))]
     fn encode_value(&self) -> RawBytes {
-        bcs::to_bytes(self).unwrap().into_boxed_slice()
+        bcs::to_bytes(self).unwrap()
     }
 }
 
@@ -150,22 +150,6 @@ impl<T: DeserializeOwned> ValueDe for T {}
 impl<T: KeyEn + KeyDe> KeyEnDe for T {}
 impl<T: ValueEn + ValueDe> ValueEnDe for T {}
 
-#[cfg(any(
-    feature = "msgpack_codec",
-    all(feature = "msgpack_codec", feature = "bcs_codec"),
-    all(not(feature = "msgpack_codec"), not(feature = "bcs_codec")),
-))]
-pub fn encode_optioned_bytes(v: &Option<&[u8]>) -> RawBytes {
-    // used to encode the deref value of `Option<Box<[u8]>>`
-    msgpack::to_vec(v).unwrap().into_boxed_slice()
-}
-
-#[cfg(all(feature = "bcs_codec", not(feature = "msgpack_codec")))]
-pub fn encode_optioned_bytes(v: &Option<&[u8]>) -> RawBytes {
-    // used to encode the deref value of `Option<Box<[u8]>>`
-    bcs::to_bytes(v).unwrap().into_boxed_slice()
-}
-
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
@@ -189,28 +173,6 @@ pub trait KeyEnDeOrdered: Clone + Eq + Ord + fmt::Debug {
     }
 }
 
-impl KeyEnDeOrdered for Vec<u8> {
-    #[inline(always)]
-    fn to_bytes(&self) -> RawBytes {
-        self.clone().into_boxed_slice()
-    }
-
-    #[inline(always)]
-    fn into_bytes(self) -> RawBytes {
-        self.into_boxed_slice()
-    }
-
-    #[inline(always)]
-    fn from_slice(b: &[u8]) -> Result<Self> {
-        Ok(b.to_vec())
-    }
-
-    #[inline(always)]
-    fn from_bytes(b: RawBytes) -> Result<Self> {
-        Ok(b.to_vec())
-    }
-}
-
 impl KeyEnDeOrdered for RawBytes {
     #[inline(always)]
     fn to_bytes(&self) -> RawBytes {
@@ -224,24 +186,46 @@ impl KeyEnDeOrdered for RawBytes {
 
     #[inline(always)]
     fn from_slice(b: &[u8]) -> Result<Self> {
-        Ok(b.to_vec().into_boxed_slice())
+        Ok(b.to_vec())
     }
 
     #[inline(always)]
     fn from_bytes(b: RawBytes) -> Result<Self> {
-        Ok(b)
+        Ok(b.to_vec())
+    }
+}
+
+impl KeyEnDeOrdered for Box<[u8]> {
+    #[inline(always)]
+    fn to_bytes(&self) -> RawBytes {
+        self.clone().to_vec()
+    }
+
+    #[inline(always)]
+    fn into_bytes(self) -> RawBytes {
+        self.to_vec()
+    }
+
+    #[inline(always)]
+    fn from_slice(b: &[u8]) -> Result<Self> {
+        Ok(b.to_vec().into())
+    }
+
+    #[inline(always)]
+    fn from_bytes(b: RawBytes) -> Result<Self> {
+        Ok(b.into())
     }
 }
 
 impl KeyEnDeOrdered for String {
     #[inline(always)]
     fn to_bytes(&self) -> RawBytes {
-        self.as_bytes().to_vec().into_boxed_slice()
+        self.as_bytes().to_vec()
     }
 
     #[inline(always)]
     fn into_bytes(self) -> RawBytes {
-        self.into_bytes().into_boxed_slice()
+        self.into_bytes()
     }
 
     #[inline(always)]
@@ -251,7 +235,7 @@ impl KeyEnDeOrdered for String {
 
     #[inline(always)]
     fn from_bytes(b: RawBytes) -> Result<Self> {
-        String::from_utf8(b.into()).c(d!())
+        String::from_utf8(b).c(d!())
     }
 }
 
@@ -260,7 +244,7 @@ macro_rules! impl_type {
         impl KeyEnDeOrdered for $int {
             #[inline(always)]
             fn to_bytes(&self) -> RawBytes {
-                Box::new(self.to_be_bytes())
+                self.to_be_bytes().to_vec()
             }
             #[inline(always)]
             fn from_slice(b: &[u8]) -> Result<Self> {
@@ -279,7 +263,6 @@ macro_rules! impl_type {
                     .map(|i| i.to_be_bytes())
                     .flatten()
                     .collect::<Vec<_>>()
-                    .into_boxed_slice()
             }
             #[inline(always)]
             fn into_bytes(mut self) -> RawBytes {
@@ -287,7 +270,7 @@ macro_rules! impl_type {
                     self[i] = self[i].to_be();
                 }
                 unsafe {
-                    let v = transmute::<Box<[$int]>, RawBytes>(self.into_boxed_slice());
+                    let v = transmute::<Vec<$int>, RawBytes>(self);
                     v
                 }
             }
@@ -310,7 +293,7 @@ macro_rules! impl_type {
                     return Err(eg!("invalid bytes"));
                 }
                 let mut ret = unsafe {
-                    let mut v = transmute::<Vec<u8>, Vec<$int>>(b.into());
+                    let mut v = transmute::<Vec<u8>, Vec<$int>>(b);
                     v.set_len(v.len() / size_of::<$int>());
                     v
                 };
@@ -333,13 +316,11 @@ macro_rules! impl_type {
             }
             #[inline(always)]
             fn from_slice(b: &[u8]) -> Result<Self> {
-                <Vec<$int> as KeyEnDeOrdered>::from_slice(b)
-                    .map(|v| v.into_boxed_slice())
+                <Vec<$int> as KeyEnDeOrdered>::from_slice(b).map(|b| b.into())
             }
             #[inline(always)]
             fn from_bytes(b: RawBytes) -> Result<Self> {
-                <Vec<$int> as KeyEnDeOrdered>::from_bytes(b)
-                    .map(|v| v.into_boxed_slice())
+                <Vec<$int> as KeyEnDeOrdered>::from_bytes(b).map(|b| b.into())
             }
         }
     };
@@ -351,7 +332,6 @@ macro_rules! impl_type {
                     .map(|i| i.to_be_bytes())
                     .flatten()
                     .collect::<Vec<_>>()
-                    .into_boxed_slice()
             }
             #[inline(always)]
             fn from_slice(b: &[u8]) -> Result<Self> {

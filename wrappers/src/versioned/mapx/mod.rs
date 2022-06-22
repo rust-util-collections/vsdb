@@ -20,7 +20,7 @@ use std::{
 };
 
 /// Documents => [MapxRawVs](crate::versioned::mapx_raw::MapxRawVs)
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(bound = "")]
 pub struct MapxVs<K, V> {
     inner: MapxOrdRawKeyVs<V>,
@@ -380,7 +380,7 @@ where
 ////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(Debug)]
 pub struct ValueMut<'a, K, V>
 where
     K: KeyEnDe,

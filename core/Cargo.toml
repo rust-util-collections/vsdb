@@ -30,7 +30,7 @@ vsdb_derive = { path = "../derive", optional = true }
 
 sled = { package = "vsdbsled", version = "0.34.7-p1", optional = true }
 # sled = { package = "vsdbsled", version = "0.34.7-p1", features = ["io_uring"], optional = true }
-rocksdb = { version = "0.18.0", default-features = false, optional = true }
+rocksdb = { version = "0.17.0", default-features = false, optional = true }
 
 [dev-dependencies]
 hex = "0.4.3"

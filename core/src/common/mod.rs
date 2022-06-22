@@ -22,7 +22,7 @@ use threadpool::ThreadPool;
 
 pub const NULL: &[u8] = &[];
 
-pub type RawBytes = Box<[u8]>;
+pub type RawBytes = Vec<u8>;
 pub type RawKey = RawBytes;
 pub type RawValue = RawBytes;
 

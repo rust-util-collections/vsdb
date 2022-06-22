@@ -4,7 +4,7 @@ use ruc::*;
 #[test]
 fn test_insert() {
     let mut hdr: MapxOrd<usize, usize> = MapxOrd::new();
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, (max + i)))
         .for_each(|(key, value)| {
@@ -26,13 +26,13 @@ fn test_insert() {
 #[test]
 fn test_len() {
     let mut hdr: MapxOrd<usize, usize> = MapxOrd::new();
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, (max + i)))
         .for_each(|(key, value)| {
             assert!(hdr.insert(&key, &value).is_none());
         });
-    assert_eq!(500, hdr.len());
+    assert_eq!(100, hdr.len());
 
     for key in 0..max {
         assert!(hdr.remove(&key).is_some());
@@ -42,7 +42,7 @@ fn test_len() {
 
 #[test]
 fn test_valueende() {
-    let cnt = 500;
+    let cnt = 100;
     let dehdr = {
         let mut hdr: MapxOrd<usize, usize> = MapxOrd::new();
         (0..cnt).map(|i: usize| (i, i)).for_each(|(key, value)| {
@@ -60,7 +60,7 @@ fn test_valueende() {
 #[test]
 fn test_iter() {
     let mut hdr: MapxOrd<usize, usize> = MapxOrd::new();
-    let max = 500;
+    let max = 100;
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
         assert!(hdr.insert(&key, &value).is_none());
     });
@@ -74,7 +74,7 @@ fn test_iter() {
 #[test]
 fn test_first_last() {
     let mut hdr: MapxOrd<usize, usize> = MapxOrd::new();
-    let max = 500;
+    let max = 100;
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
         assert!(hdr.insert(&key, &value).is_none());
     });
@@ -90,7 +90,7 @@ fn test_first_last() {
 #[test]
 fn test_values() {
     let mut hdr: MapxOrd<usize, usize> = MapxOrd::new();
-    let max = 500;
+    let max = 100;
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
         assert!(hdr.insert(&key, &value).is_none());
     });
@@ -104,7 +104,7 @@ fn test_values() {
 #[test]
 fn test_values_first_last() {
     let mut hdr: MapxOrd<usize, usize> = MapxOrd::new();
-    let max = 500;
+    let max = 100;
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
         assert!(hdr.insert(&key, &value).is_none());
     });

@@ -44,7 +44,7 @@ fn basic_cases() {
     assert_eq!(cnt, reloaded.len());
 
     (0..cnt).map(|i: usize| i.to_be_bytes()).for_each(|i| {
-        assert_eq!(i.to_vec().into_boxed_slice(), reloaded.get(&i).unwrap());
+        assert_eq!(&i[..], &reloaded.get(&i).unwrap()[..]);
     });
 
     (1..cnt).map(|i: usize| i.to_be_bytes()).for_each(|i| {
@@ -146,8 +146,8 @@ fn version_operations(hdr: &mut MapxRawVs) {
     pnk!(hdr.insert(b"v-002/key-02", b"v-002/value-02"));
 
     assert_eq!(
-        hdr.get(b"v-002/key-01"),
-        Some(b"v-002/value-01".to_vec().into_boxed_slice())
+        &hdr.get(b"v-002/key-01").unwrap()[..],
+        b"v-002/value-01".as_slice()
     );
     assert!(
         hdr.get_by_branch(b"v-002/key-01", BranchName(b"fake branch"))
@@ -162,8 +162,8 @@ fn version_operations(hdr: &mut MapxRawVs) {
         .is_none()
     );
     assert_eq!(
-        hdr.get(b"v-002/key-02"),
-        Some(b"v-002/value-02".to_vec().into_boxed_slice())
+        &hdr.get(b"v-002/key-02").unwrap()[..],
+        &b"v-002/value-02"[..]
     );
     assert!(
         hdr.get_by_branch(b"v-002/key-02", BranchName(b"fake branch"))

@@ -20,7 +20,7 @@ use std::{
 };
 
 /// Documents => [MapxRawVs](crate::versioned::mapx_raw::MapxRawVs)
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(bound = "")]
 pub struct MapxOrdVs<K, V> {
     inner: MapxOrdRawKeyVs<V>,
@@ -132,13 +132,13 @@ where
         bounds: R,
     ) -> MapxOrdVsIter<'a, K, V> {
         let l = match bounds.start_bound() {
-            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes().into_vec())),
-            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes().into_vec())),
+            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes())),
+            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes())),
             _ => Bound::Unbounded,
         };
         let h = match bounds.end_bound() {
-            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes().into_vec())),
-            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes().into_vec())),
+            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes())),
+            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes())),
             _ => Bound::Unbounded,
         };
 
@@ -154,13 +154,13 @@ where
         bounds: R,
     ) -> MapxOrdVsIterMut<'a, K, V> {
         let l = match bounds.start_bound() {
-            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes().into_vec())),
-            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes().into_vec())),
+            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes())),
+            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes())),
             _ => Bound::Unbounded,
         };
         let h = match bounds.end_bound() {
-            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes().into_vec())),
-            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes().into_vec())),
+            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes())),
+            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes())),
             _ => Bound::Unbounded,
         };
 
@@ -251,13 +251,13 @@ where
         bounds: R,
     ) -> MapxOrdVsIter<'a, K, V> {
         let l = match bounds.start_bound() {
-            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes().into_vec())),
-            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes().into_vec())),
+            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes())),
+            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes())),
             _ => Bound::Unbounded,
         };
         let h = match bounds.end_bound() {
-            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes().into_vec())),
-            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes().into_vec())),
+            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes())),
+            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes())),
             _ => Bound::Unbounded,
         };
 
@@ -366,13 +366,13 @@ where
         bounds: R,
     ) -> MapxOrdVsIter<'a, K, V> {
         let l = match bounds.start_bound() {
-            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes().into_vec())),
-            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes().into_vec())),
+            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes())),
+            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes())),
             _ => Bound::Unbounded,
         };
         let h = match bounds.end_bound() {
-            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes().into_vec())),
-            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes().into_vec())),
+            Bound::Included(i) => Bound::Included(Cow::Owned(i.to_bytes())),
+            Bound::Excluded(i) => Bound::Excluded(Cow::Owned(i.to_bytes())),
             _ => Bound::Unbounded,
         };
 
@@ -450,7 +450,7 @@ where
 ////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(Debug)]
 pub struct ValueMut<'a, K, V>
 where
     K: KeyEnDeOrdered,

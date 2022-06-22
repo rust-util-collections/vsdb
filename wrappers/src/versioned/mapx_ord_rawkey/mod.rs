@@ -19,7 +19,7 @@ use std::{
 use vsdb_core::versioned::mapx_raw::{self, MapxRawVs, MapxRawVsIter, MapxRawVsIterMut};
 
 /// Documents => [MapxRawVs](crate::versioned::mapx_raw::MapxRawVs)
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(bound = "")]
 pub struct MapxOrdRawKeyVs<V> {
     inner: MapxRawVs,
@@ -443,7 +443,7 @@ where
 ////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(Debug)]
 pub struct ValueMut<'a, V: ValueEnDe> {
     hdr: &'a mut MapxOrdRawKeyVs<V>,
     key: &'a [u8],

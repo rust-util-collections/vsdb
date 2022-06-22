@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
 
 /// Documents => [MapxRawVs](crate::versioned::mapx_raw::MapxRawVs)
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(bound = "")]
 pub struct VecxVs<T> {
     inner: MapxOrdRawKeyVs<T>,
@@ -283,7 +283,7 @@ impl<'a, T: ValueEnDe> DoubleEndedIterator for VecxVsIter<'a, T> {
 ////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(Debug)]
 pub struct ValueMut<'a, V: ValueEnDe> {
     hdr: &'a mut MapxOrdRawKeyVs<V>,
     key: u64,

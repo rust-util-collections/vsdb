@@ -18,7 +18,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MapxRawMkVs {
     inner: backend::MapxRawMkVs,
 }
@@ -81,7 +81,7 @@ impl MapxRawMkVs {
 
     #[inline(always)]
     pub fn get_mut<'a>(&'a mut self, key: &'a [&'a [u8]]) -> Option<ValueMut<'a>> {
-        self.get(key).map(move |v| ValueMut::new(self, key, v))
+        self.get(key).map(|v| ValueMut::new(self, key, v))
     }
 
     #[inline(always)]
@@ -640,7 +640,7 @@ impl VsMgmt for MapxRawMkVs {
     }
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(Debug)]
 pub struct ValueMut<'a> {
     hdr: &'a mut MapxRawMkVs,
     key: &'a [&'a [u8]],

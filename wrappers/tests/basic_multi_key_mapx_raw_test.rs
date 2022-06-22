@@ -18,10 +18,10 @@ fn basic_cases() {
     assert!(map.insert(&[&[1], &[2], &[30], &[40]], &[7]).is_ok());
     assert!(map.insert(&[&[1], &[2], &[30], &[41]], &[6]).is_ok());
 
-    assert_eq!(map.get(&[&[1], &[2], &[3], &[4]]).unwrap().as_ref(), &[9]);
-    assert_eq!(map.get(&[&[1], &[2], &[3], &[40]]).unwrap().as_ref(), &[8]);
-    assert_eq!(map.get(&[&[1], &[2], &[30], &[40]]).unwrap().as_ref(), &[7]);
-    assert_eq!(map.get(&[&[1], &[2], &[30], &[41]]).unwrap().as_ref(), &[6]);
+    assert_eq!(&map.get(&[&[1], &[2], &[3], &[4]]).unwrap(), &[9]);
+    assert_eq!(&map.get(&[&[1], &[2], &[3], &[40]]).unwrap(), &[8]);
+    assert_eq!(&map.get(&[&[1], &[2], &[30], &[40]]).unwrap(), &[7]);
+    assert_eq!(&map.get(&[&[1], &[2], &[30], &[41]]).unwrap(), &[6]);
 
     // key size mismatch
     assert!(map.get(&[&[1], &[2], &[3]]).is_none());
@@ -53,10 +53,7 @@ fn basic_cases() {
             .or_insert(&[])
             .is_ok()
     );
-    assert_eq!(
-        map.get(&[&[11], &[12], &[13], &[14]]).unwrap().as_ref(),
-        &[]
-    );
+    assert_eq!(&map.get(&[&[11], &[12], &[13], &[14]]).unwrap(), &[]);
 
     let mut cnt = 0;
     let mut op = |k: &[&[u8]], v: &[u8]| {
@@ -74,10 +71,7 @@ fn basic_cases() {
             .or_insert(&[0])
             .is_ok()
     );
-    assert_eq!(
-        map.get(&[&[11], &[12], &[13], &[15]]).unwrap().as_ref(),
-        &[0]
-    );
+    assert_eq!(&map.get(&[&[11], &[12], &[13], &[15]]).unwrap(), &[0]);
 
     let mut cnt = 0;
     let mut op = |k: &[&[u8]], v: &[u8]| {

@@ -159,7 +159,7 @@ fn test_branch_truncate_to() {
 fn test_insert() {
     let mut hdr: MapxDkVs<usize, usize, usize> = MapxDkVs::new();
     pnk!(hdr.version_create(VersionName(b"manster0")));
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, (max + i)))
         .for_each(|(i, value)| {
@@ -186,7 +186,7 @@ fn test_insert() {
 
 #[test]
 fn test_valueende() {
-    let cnt = 500;
+    let cnt = 100;
     let dehdr = {
         let mut hdr: MapxDkVs<usize, usize, usize> = MapxDkVs::new();
         pnk!(hdr.version_create(VersionName(b"manster0")));

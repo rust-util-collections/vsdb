@@ -57,7 +57,7 @@ impl RocksEngine {
 
     #[inline(always)]
     fn get_upper_bound_value(&self, meta_prefix: PreBytes) -> Vec<u8> {
-        static BUF: Lazy<RawBytes> = Lazy::new(|| vec![u8::MAX; 512].into_boxed_slice());
+        static BUF: Lazy<RawBytes> = Lazy::new(|| vec![u8::MAX; 512]);
 
         let mut max_guard = meta_prefix.to_vec();
 
@@ -279,10 +279,7 @@ impl Engine for RocksEngine {
 
         let mut k = meta_prefix.to_vec();
         k.extend_from_slice(key);
-        self.meta
-            .get_cf(self.cf_hdr(area_idx), k)
-            .unwrap()
-            .map(|v| v.into_boxed_slice())
+        self.meta.get_cf(self.cf_hdr(area_idx), k).unwrap()
     }
 
     fn insert(
@@ -302,7 +299,7 @@ impl Engine for RocksEngine {
 
         let old_v = self.meta.get_cf(self.cf_hdr(area_idx), &k).unwrap();
         self.meta.put_cf(self.cf_hdr(area_idx), k, value).unwrap();
-        old_v.map(|v| v.into_boxed_slice())
+        old_v
     }
 
     fn remove(&self, meta_prefix: PreBytes, key: &[u8]) -> Option<RawValue> {
@@ -312,7 +309,7 @@ impl Engine for RocksEngine {
         k.extend_from_slice(key);
         let old_v = self.meta.get_cf(self.cf_hdr(area_idx), &k).unwrap();
         self.meta.delete_cf(self.cf_hdr(area_idx), k).unwrap();
-        old_v.map(|v| v.into_boxed_slice())
+        old_v
     }
 
     fn get_instance_len(&self, instance_prefix: PreBytes) -> u64 {
@@ -336,7 +333,7 @@ impl Iterator for RocksIter {
     fn next(&mut self) -> Option<Self::Item> {
         self.inner
             .next()
-            .map(|(ik, iv)| (ik[PREFIX_SIZE..].into(), iv))
+            .map(|(ik, iv)| (ik[PREFIX_SIZE..].to_vec(), iv.into_vec()))
     }
 }
 
@@ -344,7 +341,7 @@ impl DoubleEndedIterator for RocksIter {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.inner_rev
             .next()
-            .map(|(ik, iv)| (ik[PREFIX_SIZE..].into(), iv))
+            .map(|(ik, iv)| (ik[PREFIX_SIZE..].to_vec(), iv.into_vec()))
     }
 }
 

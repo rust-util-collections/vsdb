@@ -19,7 +19,7 @@ use std::{
 const KEY_SIZE: usize = 3;
 
 /// A versioned map structure with tree-level keys.
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(bound = "")]
 pub struct MapxTkVs<K1, K2, K3, V> {
     inner: MapxRawMkVs,
@@ -428,7 +428,7 @@ where
     crate::impl_vs_methods!();
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(Debug)]
 pub struct ValueMut<'a, K1, K2, K3, V>
 where
     K1: KeyEnDe,

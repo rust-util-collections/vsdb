@@ -197,12 +197,8 @@ impl Engine for SledEngine {
 
         let mut k = meta_prefix.to_vec();
         k.extend_from_slice(key);
-        let k = k.into_boxed_slice();
 
-        self.areas[area_idx]
-            .get(k)
-            .unwrap()
-            .map(|iv| iv.to_vec().into_boxed_slice())
+        self.areas[area_idx].get(k).unwrap().map(|iv| iv.to_vec())
     }
 
     fn insert(
@@ -215,12 +211,11 @@ impl Engine for SledEngine {
 
         let mut k = meta_prefix.to_vec();
         k.extend_from_slice(key);
-        let k = k.into_boxed_slice();
 
         self.areas[area_idx]
             .insert(k, value)
             .unwrap()
-            .map(|iv| iv.to_vec().into_boxed_slice())
+            .map(|iv| iv.to_vec())
     }
 
     fn remove(&self, meta_prefix: PreBytes, key: &[u8]) -> Option<RawValue> {
@@ -228,12 +223,11 @@ impl Engine for SledEngine {
 
         let mut k = meta_prefix.to_vec();
         k.extend_from_slice(key);
-        let k = k.into_boxed_slice();
 
         self.areas[area_idx]
             .remove(k)
             .unwrap()
-            .map(|iv| iv.to_vec().into_boxed_slice())
+            .map(|iv| iv.to_vec())
     }
 
     fn get_instance_len(&self, instance_prefix: PreBytes) -> u64 {
@@ -257,10 +251,7 @@ impl Iterator for SledIter {
     fn next(&mut self) -> Option<Self::Item> {
         while let Some((k, v)) = self.inner.next().map(|i| i.unwrap()) {
             if self.bounds.contains(&k) {
-                return Some((
-                    k[PREFIX_SIZE..].to_vec().into_boxed_slice(),
-                    v.to_vec().into_boxed_slice(),
-                ));
+                return Some((k[PREFIX_SIZE..].to_vec(), v.to_vec()));
             }
         }
         None
@@ -271,10 +262,7 @@ impl DoubleEndedIterator for SledIter {
     fn next_back(&mut self) -> Option<Self::Item> {
         while let Some((k, v)) = self.inner.next_back().map(|i| i.unwrap()) {
             if self.bounds.contains(&k) {
-                return Some((
-                    k[PREFIX_SIZE..].to_vec().into_boxed_slice(),
-                    v.to_vec().into_boxed_slice(),
-                ));
+                return Some((k[PREFIX_SIZE..].to_vec(), v.to_vec()));
             }
         }
         None

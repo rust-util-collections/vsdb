@@ -9,7 +9,7 @@ fn gen_sample(idx: usize) -> Box<[u8]> {
 #[test]
 fn test_insert() {
     let mut hdr = VecxRaw::new();
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, <usize as ValueEnDe>::encode(&(max + i))))
         .for_each(|(key, value)| {
@@ -27,20 +27,20 @@ fn test_insert() {
 #[test]
 fn test_len() {
     let mut hdr = VecxRaw::new();
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, (max + i).to_be_bytes()))
         .for_each(|(key, value)| {
             hdr.insert(key, &value[..]);
         });
-    assert_eq!(500, hdr.len());
+    assert_eq!(100, hdr.len());
     hdr.clear();
     assert_eq!(0, hdr.len());
 }
 
 #[test]
 fn test_valueende() {
-    let cnt = 500;
+    let cnt = 100;
     let dehdr = {
         let mut hdr = VecxRaw::new();
         (0..cnt)
@@ -61,7 +61,7 @@ fn test_valueende() {
 #[test]
 fn test_remove() {
     let mut hdr = VecxRaw::new();
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, <usize as ValueEnDe>::encode(&(max + i))))
         .for_each(|(key, value)| {
@@ -69,7 +69,7 @@ fn test_remove() {
         });
     assert_eq!(max, hdr.len());
 
-    let idx = 400;
+    let idx = 50;
     let val = pnk!(<usize as ValueEnDe>::decode(&hdr.remove(idx)));
     assert_eq!(max + idx, val);
     hdr.clear();
@@ -79,7 +79,7 @@ fn test_remove() {
 #[test]
 fn test_iter_next() {
     let mut hdr = VecxRaw::new();
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, <usize as ValueEnDe>::encode(&i)))
         .for_each(|(key, value)| {
@@ -97,7 +97,7 @@ fn test_iter_next() {
 #[test]
 fn test_push_pop() {
     let mut hdr = VecxRaw::new();
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| <usize as ValueEnDe>::encode(&i))
         .for_each(|value| {
@@ -112,7 +112,7 @@ fn test_push_pop() {
 #[test]
 fn test_swap_remove() {
     let mut hdr = VecxRaw::new();
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| <usize as ValueEnDe>::encode(&i))
         .for_each(|value| {
@@ -131,7 +131,7 @@ fn test_swap_remove() {
 #[test]
 fn test_last() {
     let mut hdr = VecxRaw::new();
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, <usize as ValueEnDe>::encode(&i)))
         .for_each(|(key, value)| {

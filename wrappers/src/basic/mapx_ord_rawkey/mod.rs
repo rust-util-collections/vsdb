@@ -17,7 +17,7 @@
 //! let mut l = MapxOrdRawKey::new();
 //!
 //! l.insert(&[1], &0);
-//! l.insert(vec![1].into_boxed_slice(), 0);
+//! l.insert(vec![1], 0);
 //! l.insert(&[2], &0);
 //!
 //! l.iter().for_each(|(_, v)| {

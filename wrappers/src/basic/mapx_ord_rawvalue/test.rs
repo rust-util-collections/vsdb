@@ -6,7 +6,7 @@ use ruc::*;
 #[test]
 fn test_insert() {
     let mut hdr: MapxOrdRawValue<usize> = MapxOrdRawValue::new();
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, (max + i).to_be_bytes()))
         .for_each(|(key, value)| {
@@ -31,13 +31,13 @@ fn test_insert() {
 #[test]
 fn test_len() {
     let mut hdr: MapxOrdRawValue<usize> = MapxOrdRawValue::new();
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, (max + i).to_be_bytes()))
         .for_each(|(key, value)| {
             assert!(hdr.insert(&key, &value[..]).is_none());
         });
-    assert_eq!(500, hdr.len());
+    assert_eq!(100, hdr.len());
 
     for key in 0..max {
         assert!(hdr.remove(&key).is_some());
@@ -47,7 +47,7 @@ fn test_len() {
 
 #[test]
 fn test_valueende() {
-    let cnt = 500;
+    let cnt = 100;
     let dehdr = {
         let mut hdr: MapxOrdRawValue<usize> = MapxOrdRawValue::new();
         (0..cnt)
@@ -68,7 +68,7 @@ fn test_valueende() {
 #[test]
 fn test_iter() {
     let mut hdr: MapxOrdRawValue<usize> = MapxOrdRawValue::new();
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, i.to_be_bytes()))
         .for_each(|(key, value)| {
@@ -83,7 +83,7 @@ fn test_iter() {
 #[test]
 fn test_first_last() {
     let mut hdr: MapxOrdRawValue<usize> = MapxOrdRawValue::new();
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, <usize as ValueEnDe>::encode(&i)))
         .for_each(|(key, value)| {
