@@ -762,10 +762,47 @@ impl MapxRawVs {
             .map(|chgset| !chgset.is_empty())
     }
 
-    // Now, this is an 'alias' of `prune`.
+    /***
+     * Clean up orphan instances globally.
+     */
     #[inline(always)]
     pub(super) fn version_clean_up_globally(&mut self) -> Result<()> {
-        self.prune(Some(10000)).c(d!())
+        /////////////////////////////////////////////////////////////////////
+        let mut ver_hdr = self.ver_id_to_ver_name.try_write().c(d!("lock busy"))?;
+        let mut chgset_hdr = self.ver_to_change_set.try_write().c(d!("lock busy"))?;
+        /////////////////////////////////////////////////////////////////////
+
+        let mut valid_vers = HashSet::new();
+        self.br_to_its_vers.iter().for_each(|(_, vers)| {
+            decode_map(&vers).iter().for_each(|(ver, _)| {
+                valid_vers.insert(to_verid(&ver[..]));
+            })
+        });
+
+        let mut orphanvers = vec![];
+        for (ver, chgset) in chgset_hdr
+            .iter()
+            .filter(|(ver, _)| !valid_vers.contains(&ver[..]))
+        {
+            for k in chgset.iter() {
+                let mut lkv = decode_map(&*self.layered_kv.get(&k).c(d!())?);
+                lkv.remove(ver).c(d!())?;
+                if lkv.is_empty() {
+                    self.layered_kv.remove(&k).c(d!())?;
+                }
+            }
+            orphanvers.push(*ver);
+        }
+
+        for ver in orphanvers.iter() {
+            ver_hdr
+                .remove(ver)
+                .c(d!())
+                .and_then(|vername| self.ver_name_to_ver_id.remove(&vername).c(d!()))
+                .and_then(|_| chgset_hdr.remove(&ver[..]).c(d!()))?;
+        }
+
+        Ok(())
     }
 
     // # Safety
@@ -1339,50 +1376,11 @@ impl MapxRawVs {
     // do we should not do that.
     #[inline(always)]
     pub(super) fn prune(&mut self, reserved_ver_num: Option<usize>) -> Result<()> {
+        self.version_clean_up_globally().c(d!())?; // NOTE: will take 'lock' also
+
         /////////////////////////////////////////////////////////////////////
-        let mut ver_hdr = self.ver_id_to_ver_name.try_write().c(d!("lock busy"))?;
+        let ver_hdr = self.ver_id_to_ver_name.try_write().c(d!("lock busy"))?;
         let mut chgset_hdr = self.ver_to_change_set.try_write().c(d!("lock busy"))?;
-        /////////////////////////////////////////////////////////////////////
-
-        /***
-         * Clean up trash globally.
-         */
-        let mut clean_up = || -> Result<()> {
-            let mut valid_vers = HashSet::new();
-            self.br_to_its_vers.iter().for_each(|(_, vers)| {
-                decode_map(&vers).iter().for_each(|(ver, _)| {
-                    valid_vers.insert(to_verid(&ver[..]));
-                })
-            });
-
-            let mut orphanvers = vec![];
-            for (ver, chgset) in chgset_hdr
-                .iter()
-                .filter(|(ver, _)| !valid_vers.contains(&ver[..]))
-            {
-                for k in chgset.iter() {
-                    let mut lkv = decode_map(&*self.layered_kv.get(&k).c(d!())?);
-                    lkv.remove(ver).c(d!())?;
-                    if lkv.is_empty() {
-                        self.layered_kv.remove(&k).c(d!())?;
-                    }
-                }
-                orphanvers.push(*ver);
-            }
-
-            for ver in orphanvers.iter() {
-                ver_hdr
-                    .remove(ver)
-                    .c(d!())
-                    .and_then(|vername| self.ver_name_to_ver_id.remove(&vername).c(d!()))
-                    .and_then(|_| chgset_hdr.remove(&ver[..]).c(d!()))?;
-            }
-
-            Ok(())
-        };
-
-        clean_up().c(d!())?;
-
         /////////////////////////////////////////////////////////////////////
 
         // the '1' of this 'add 1' means the never-deleted initial version.

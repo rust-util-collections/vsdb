@@ -4,7 +4,16 @@
 
 # VSDB
 
-VSDB is a 'Git' in the form of KV-database, check [**here**](wrappers/README.md) for a detailed description.
+VSDB is a 'Git' in the form of KV-database, practical scenarios:
+
+- Support APIs in 'ETH Web3' in the form 'trial run'
+- Process `CheckTx`, `DeliverTx`, `Commit`, etc. in 'Tendermint ABCI'
+- Handle folk chain branches, e.g.:
+   - Handling 'folk' or 'uncle blocks' in non-deterministic consensus like 'POW'
+   - Handle temporary folk in a hybrid consensus like 'Babe + Grandpa'(substrate)
+- ...
+
+Check [**here**](wrappers/README.md) for a detailed description.
 
 ### Crate List
 
