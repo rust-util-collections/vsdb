@@ -28,11 +28,11 @@ Based on the powerful version control function of VSDB, you can easily give your
 
 ### Practical scenarios
 
-- Support APIs in 'ETH Web3' in the form 'trial run'
-- Process `CheckTx`, `DeliverTx`, `Commit`, etc. in 'Tendermint ABCI'
+- Process `CheckTx`, `DeliverTx`, `Commit` ... in 'Tendermint ABCI'
 - Handle folk chain branches, e.g.:
-   - Handling 'folk' or 'uncle blocks' in non-deterministic consensus like 'POW'
-   - Handle temporary folk in a hybrid consensus like 'Babe + Grandpa'(substrate)
+   - Handling 'chain folk' or 'uncle blocks' in non-deterministic consensus like 'POW'
+   - Handle temporary 'chain folk' in a hybrid consensus like 'Babe + Grandpa'(substrate)
+- Support some special APIs of 'ETH Web3' in the form of 'trial run'
 - ...
 
 ### Examples
