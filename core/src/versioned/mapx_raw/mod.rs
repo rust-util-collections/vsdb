@@ -524,6 +524,7 @@ impl VsMgmt for MapxRawVs {
     ///
     /// It's the caller's duty to ensure that
     /// the `base_version` was created directly by the `br_id`,
+    /// and versions newer than the `base_version` are not used by any other branches,
     /// or the data records of other branches may be corrupted.
     #[inline(always)]
     unsafe fn version_rebase(&mut self, base_version: VersionName) -> Result<()> {
@@ -539,6 +540,7 @@ impl VsMgmt for MapxRawVs {
     ///
     /// It's the caller's duty to ensure that
     /// the `base_version` was created directly by the `br_id`,
+    /// and versions newer than the `base_version` are not used by any other branches,
     /// or the data records of other branches may be corrupted.
     #[inline(always)]
     unsafe fn version_rebase_by_branch(

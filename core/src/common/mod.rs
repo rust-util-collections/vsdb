@@ -33,6 +33,8 @@ pub type PreBytes = [u8; PREFIX_SIZE];
 pub type BranchID = [u8; size_of::<u64>()];
 pub type VersionID = [u8; size_of::<u64>()];
 
+pub const VER_ID_MAX: VersionID = VersionIDBase::MAX.to_be_bytes();
+
 pub type BranchIDBase = u64;
 pub type VersionIDBase = u64;
 
