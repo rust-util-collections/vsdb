@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "0.45.1"
+version = "0.45.2"
 authors = ["dafanhui@163.com", "hui.fan@mail.ru"]
 edition = "2021"
 description = "A stuctured DB with some 'Git-like' features, mainly used in blockchain projects."
@@ -12,7 +12,7 @@ license = "GPL-3.0"
 
 [dependencies]
 ruc = "1.0.8"
-once_cell = "1.10.0"
+once_cell = "1.13.0"
 serde = { version = "1.0.136", features = ["derive"] }
 parking_lot = "0.12.1"
 
