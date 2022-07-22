@@ -97,7 +97,7 @@ pub trait ValueEn: Serialize + Sized {
     }
 }
 
-/// Methods used to encode the VALUE.
+/// Methods used to decode the VALUE.
 pub trait ValueDe: DeserializeOwned {
     /// Decode from bytes to the original key type.
     #[cfg(all(feature = "cbor_codec", not(feature = "bcs_codec")))]

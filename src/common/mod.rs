@@ -34,13 +34,13 @@ pub(crate) type BranchID = u64;
 pub(crate) type VersionID = u64;
 
 /// Avoid making mistakes between branch name and version name.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct BranchName<'a>(pub &'a [u8]);
 /// Avoid making mistakes between branch name and version name.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct ParentBranchName<'a>(pub &'a [u8]);
 /// Avoid making mistakes between branch name and version name.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct VersionName<'a>(pub &'a [u8]);
 
 const RESERVED_ID_CNT: Prefix = 4096_0000;
@@ -49,6 +49,9 @@ pub(crate) const NULL: BranchID = BIGGEST_RESERVED_ID as BranchID;
 
 pub(crate) const INITIAL_BRANCH_ID: BranchID = 0;
 pub(crate) const INITIAL_BRANCH_NAME: &[u8] = b"main";
+
+/// The initial verison along with each new instance.
+pub const INITIAL_VERSION: VersionName<'static> = VersionName([0u8; 0].as_slice());
 
 /// How many ancestral branches at most one new branch can have.
 pub const BRANCH_ANCESTORS_LIMIT: usize = 128;
@@ -59,7 +62,16 @@ pub(crate) const RESERVED_VERSION_NUM_DEFAULT: usize = 10;
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
+const BASE_DIR_VAR: &str = "VSDB_BASE_DIR";
+
 static VSDB_BASE_DIR: Lazy<Mutex<String>> = Lazy::new(|| Mutex::new(gen_data_dir()));
+
+static VSDB_CUSTOM_DIR: Lazy<String> = Lazy::new(|| {
+    let d = VSDB_BASE_DIR.lock().clone() + "/__CUSTOM__";
+    fs::create_dir_all(&d).unwrap();
+    env::set_var("VSDB_CUSTOM_DIR", &d);
+    d
+});
 
 #[cfg(all(feature = "sled_engine", not(feature = "rocks_engine")))]
 pub(crate) static VSDB: Lazy<VsDB<engines::Sled>> = Lazy::new(|| pnk!(VsDB::new()));
@@ -121,32 +133,44 @@ impl<T: Engine> VsDB<T> {
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
+#[inline(always)]
 fn gen_data_dir() -> String {
     // Compatible with Windows OS?
-    let d = env::var("VSDB_BASE_DIR")
+    let d = env::var(BASE_DIR_VAR)
         .or_else(|_| env::var("HOME").map(|h| format!("{}/.vsdb", h)))
         .unwrap_or_else(|_| "/tmp/.vsdb".to_owned());
     fs::create_dir_all(&d).unwrap();
     d
 }
 
-fn get_data_dir() -> String {
+/// ${VSDB_CUSTOM_DIR}
+#[inline(always)]
+pub fn vsdb_get_custom_dir() -> String {
+    VSDB_CUSTOM_DIR.clone()
+}
+
+/// ${VSDB_BASE_DIR}
+#[inline(always)]
+pub fn vsdb_get_base_dir() -> String {
     VSDB_BASE_DIR.lock().clone()
 }
 
 /// Set ${VSDB_BASE_DIR} manually.
+#[inline(always)]
 pub fn vsdb_set_base_dir(dir: String) -> Result<()> {
     static HAS_INITED: AtomicBool = AtomicBool::new(false);
 
     if HAS_INITED.swap(true, Ordering::Relaxed) {
         Err(eg!("VSDB has been initialized !!"))
     } else {
+        env::set_var(BASE_DIR_VAR, &dir);
         *VSDB_BASE_DIR.lock() = dir;
         Ok(())
     }
 }
 
 /// Flush data to disk, may take a long time.
+#[inline(always)]
 pub fn vsdb_flush() {
     VSDB.flush();
 }
@@ -181,3 +205,9 @@ macro_rules! impl_from_for_name {
 }
 
 impl_from_for_name!(BranchName, ParentBranchName, VersionName);
+
+impl Default for BranchName<'static> {
+    fn default() -> Self {
+        BranchName(INITIAL_BRANCH_NAME)
+    }
+}

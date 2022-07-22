@@ -1,6 +1,7 @@
 use crate::common::{
-    get_data_dir, vsdb_set_base_dir, BranchID, Engine, Prefix, PrefixBytes, RawBytes,
-    RawKey, RawValue, VersionID, INITIAL_BRANCH_ID, PREFIX_SIZ, RESERVED_ID_CNT,
+    vsdb_get_base_dir, vsdb_set_base_dir, BranchID, Engine, Prefix, PrefixBytes,
+    RawBytes, RawKey, RawValue, VersionID, INITIAL_BRANCH_ID, PREFIX_SIZ,
+    RESERVED_ID_CNT,
 };
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -381,7 +382,7 @@ impl PrefixAllocator {
 }
 
 fn rocksdb_open() -> Result<(DB, Vec<String>)> {
-    let dir = get_data_dir();
+    let dir = vsdb_get_base_dir();
 
     let mut cfg = Options::default();
     cfg.create_if_missing(true);

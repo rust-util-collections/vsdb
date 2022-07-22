@@ -25,9 +25,8 @@ where
     T: ValueEnDe,
 {
     #[inline(always)]
-    pub fn new(version: VersionName, v: T) -> Self {
+    pub fn new(v: T) -> Self {
         let hdr = MapxOrdRawKeyVs::new();
-        pnk!(hdr.version_create(version));
         pnk!(hdr.insert_ref(&[], &v));
         Self { inner: hdr }
     }
@@ -92,6 +91,15 @@ where
     ) -> Option<T> {
         self.inner
             .get_by_branch_version(&[], branch_name, version_name)
+    }
+}
+
+impl<T> Default for OrphanVs<T>
+where
+    T: ValueEnDe + Default,
+{
+    fn default() -> Self {
+        Self::new(T::default())
     }
 }
 

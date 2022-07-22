@@ -97,8 +97,12 @@ fn VCS_mgmt() {
 // - can not remove a KV except its version is the HEAD version(no public functions privided)
 // - can not write data to a version except it is the HEAD version(no public functions privided)
 fn version_operations(hdr: &mut MapxRawVs) {
-    // haven't create any version yet
-    assert!(hdr.insert(b"key", b"value").is_err());
+    // No version is created manually,
+    // but an empty version is automatically created
+    // each time an instance is initialized,
+    // so this operation will success.
+    assert!(hdr.insert(b"key", b"value").is_ok());
+    assert!(hdr.remove(b"key").is_ok());
 
     hdr.version_create(VersionName(b"v-001")).unwrap();
 

@@ -1,8 +1,9 @@
-![](https://tokei.rs/b1/github/ccmlm/VSDB)
 ![GitHub top language](https://img.shields.io/github/languages/top/ccmlm/VSDB)
-![GitHub Workflow Status](https://img.shields.io/github/workflow/status/ccmlm/VSDB/Rust)
+[![Latest Version](https://img.shields.io/crates/v/VSDB.svg)](https://crates.io/crates/VSDB)
+[![Rust Documentation](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/VSDB)
 ![GitHub issues](https://img.shields.io/github/issues-raw/ccmlm/VSDB)
 ![GitHub pull requests](https://img.shields.io/github/issues-pr-raw/ccmlm/VSDB)
+![GitHub Workflow Status](https://img.shields.io/github/workflow/status/ccmlm/VSDB/Rust)
 
 # VSDB
 
@@ -158,3 +159,22 @@ This is the same as expressing complex data structures in computer memory(the me
 
 User data will be divided into two dimensions: 'branch' and 'version', the functions of the 'basic' category are stateless, and the functions of the 'versioned' category are stateful. In the internal implementation, each stateful function is implemented based on its corresponding stateless function,
 all stateful data has two additional identification dimensions ('branch' and 'version'), somewhat like the logic in Git. Stateless functions do not have the feature of 'version' management, but they have higher performance.
+
+## Todo
+
+Support multi-key structures in v0.20.x, include versioned kinds.
+
+Draft design:
+
+```rust
+struct MapxMultiKey<K1, K2, ... KN, V> {
+    meta_len: u8,
+    data: Mapx<K1, Mapx<K2, ... Mapx<KN, V>>>,
+}
+
+struct MapxMultiKeyVs<K1, K2, ... KN, V> {
+    meta_len: u8,
+    ... "meta fields based on Mapx<K, V>"
+    ... "data fields based on MapxMultiKey<K1, K2, ... KN, V>"
+}
+```

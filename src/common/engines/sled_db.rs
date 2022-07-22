@@ -1,5 +1,5 @@
 use crate::common::{
-    get_data_dir, vsdb_set_base_dir, BranchID, Engine, Prefix, PrefixBytes, RawKey,
+    vsdb_get_base_dir, vsdb_set_base_dir, BranchID, Engine, Prefix, PrefixBytes, RawKey,
     RawValue, VersionID, INITIAL_BRANCH_ID, PREFIX_SIZ, RESERVED_ID_CNT,
 };
 use once_cell::sync::Lazy;
@@ -295,7 +295,7 @@ impl PrefixAllocator {
 }
 
 fn sled_open() -> Result<Db> {
-    let dir = get_data_dir();
+    let dir = vsdb_get_base_dir();
 
     let db = Config::new()
         .path(&dir)

@@ -84,7 +84,7 @@
 //!         let mut ws = WorldState {
 //!             transactions: VecxVs::new(),
 //!             balances: MapxVs::new(),
-//!             a_consensus_int: OrphanVs::new(VersionName(&[]), 0),
+//!             a_consensus_int: OrphanVs::new(0),
 //!         };
 //!
 //!         if !ws.branch_is_found(MASTER_BRANCH) {
@@ -341,6 +341,8 @@ pub trait VsMgmt {
     fn branch_pop_version(&self, branch_name: BranchName) -> Result<()>;
 
     /// Merge a branch to its parent branch.
+    ///
+    /// NOTE: the original branch will be deleted.
     fn branch_merge_to_parent(&self, branch_name: BranchName) -> Result<()>;
 
     /// Check if a branch has children branches.
@@ -350,10 +352,10 @@ pub trait VsMgmt {
     /// all default operations will be applied to it.
     fn branch_set_default(&mut self, branch_name: BranchName) -> Result<()>;
 
-    /// Clean outdated versions out of the default reserved number.
+    /// Clean outdated versions out of the default branch.
     fn prune(&self, reserved_ver_num: Option<usize>) -> Result<()>;
 
-    /// Clean outdated versions out of a specified reserved number.
+    /// Clean outdated versions out of a specified branch.
     fn prune_by_branch(
         &self,
         branch_name: BranchName,

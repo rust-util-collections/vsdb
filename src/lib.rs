@@ -1,5 +1,4 @@
 //!
-//! ![](https://tokei.rs/b1/github/ccmlm/vsdb)
 //! ![GitHub top language](https://img.shields.io/github/languages/top/ccmlm/vsdb)
 //!
 //! VSDB is a 'Git' in the form of a KV database.
@@ -189,5 +188,6 @@ pub use merkle::MerkleTree;
 
 pub use common::{
     ende::{KeyDe, KeyEn, KeyEnDe, KeyEnDeOrdered, ValueDe, ValueEn, ValueEnDe},
-    vsdb_flush, vsdb_set_base_dir, BranchName, ParentBranchName, VersionName,
+    vsdb_flush, vsdb_get_base_dir, vsdb_get_custom_dir, vsdb_set_base_dir, BranchName,
+    ParentBranchName, VersionName, INITIAL_VERSION,
 };
