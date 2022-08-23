@@ -333,6 +333,7 @@ impl Iterator for RocksIter {
     fn next(&mut self) -> Option<Self::Item> {
         self.inner
             .next()
+            .map(|v| v.unwrap())
             .map(|(ik, iv)| (ik[PREFIX_SIZE..].to_vec(), iv.into_vec()))
     }
 }
@@ -341,6 +342,7 @@ impl DoubleEndedIterator for RocksIter {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.inner_rev
             .next()
+            .map(|v| v.unwrap())
             .map(|(ik, iv)| (ik[PREFIX_SIZE..].to_vec(), iv.into_vec()))
     }
 }
