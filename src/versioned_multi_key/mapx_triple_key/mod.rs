@@ -1,0 +1,350 @@
+#[cfg(test)]
+mod test;
+
+use crate::{
+    common::{
+        ende::{KeyEnDe, ValueEnDe},
+        RawValue,
+    },
+    versioned_multi_key::mapx_raw::MapxRawMkVs,
+    BranchName, ParentBranchName, VersionName, VsMgmt,
+};
+use ruc::*;
+use serde::{Deserialize, Serialize};
+use std::{
+    marker::PhantomData,
+    ops::{Deref, DerefMut},
+};
+
+const KEY_SIZE: usize = 3;
+
+/// A versioned map structure with tree-level keys.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[serde(bound = "")]
+pub struct MapxTkVs<K1, K2, K3, V> {
+    inner: MapxRawMkVs,
+    p1: PhantomData<K1>,
+    p2: PhantomData<K2>,
+    p3: PhantomData<K3>,
+    p4: PhantomData<V>,
+}
+
+impl<K1, K2, K3, V> MapxTkVs<K1, K2, K3, V>
+where
+    K1: KeyEnDe,
+    K2: KeyEnDe,
+    K3: KeyEnDe,
+    V: ValueEnDe,
+{
+    #[inline(always)]
+    pub fn new() -> Self {
+        MapxTkVs {
+            inner: MapxRawMkVs::new(KEY_SIZE),
+            p1: PhantomData,
+            p2: PhantomData,
+            p3: PhantomData,
+            p4: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub fn get(&self, key: &(&K1, &K2, &K3)) -> Option<V> {
+        let key = Self::encode_key(key);
+        self.inner
+            .get(&keyref(&key))
+            .map(|v| pnk!(ValueEnDe::decode(&v)))
+    }
+
+    #[inline(always)]
+    pub fn get_mut<'a>(
+        &'a self,
+        key: &'a (&'a K1, &'a K2, &'a K3),
+    ) -> Option<ValueMut<'a, K1, K2, K3, V>> {
+        self.get(key).map(move |v| ValueMut::new(self, key, v))
+    }
+
+    #[inline(always)]
+    pub fn entry_ref<'a>(
+        &'a self,
+        key: &'a (&'a K1, &'a K2, &'a K3),
+    ) -> Entry<'a, K1, K2, K3, V> {
+        Entry { key, hdr: self }
+    }
+
+    #[inline(always)]
+    pub fn insert(&self, key: (K1, K2, K3), value: V) -> Result<Option<V>> {
+        let key = (&key.0, &key.1, &key.2);
+        self.insert_ref(&key, &value).c(d!())
+    }
+
+    #[inline(always)]
+    pub fn insert_ref(&self, key: &(&K1, &K2, &K3), value: &V) -> Result<Option<V>> {
+        let key = Self::encode_key(key);
+        self.inner
+            .insert(&keyref(&key), &value.encode())
+            .c(d!())
+            .map(|v| v.map(|v| pnk!(ValueEnDe::decode(&v))))
+    }
+
+    #[inline(always)]
+    pub fn contains_key(&self, key: &(&K1, &K2, &K3)) -> bool {
+        let key = Self::encode_key(key);
+        self.inner.contains_key(&keyref(&key))
+    }
+
+    /// Support batch removal.
+    #[inline(always)]
+    pub fn remove(&self, key: &(&K1, Option<(&K2, Option<&K3>)>)) -> Result<Option<V>> {
+        let k1 = key.0.encode();
+        let k2_k3 = key
+            .1
+            .map(|(k2, k3)| (k2.encode(), k3.map(|k3| k3.encode())));
+        let key = if let Some((k2, k3)) = k2_k3.as_ref() {
+            let mut res = vec![&k1[..], &k2[..]];
+            if let Some(k3) = k3.as_ref() {
+                res.push(&k3[..]);
+            }
+            res
+        } else {
+            vec![&k1[..]]
+        };
+        self.inner
+            .remove(&key)
+            .c(d!())
+            .map(|v| v.map(|v| pnk!(ValueEnDe::decode(&v))))
+    }
+
+    #[inline(always)]
+    pub fn clear(&mut self) {
+        self.inner.clear();
+    }
+
+    #[inline(always)]
+    pub fn get_by_branch(
+        &self,
+        key: &(&K1, &K2, &K3),
+        branch_name: BranchName,
+    ) -> Option<V> {
+        let key = Self::encode_key(key);
+        self.inner
+            .get_by_branch(&keyref(&key), branch_name)
+            .map(|v| pnk!(ValueEnDe::decode(&v)))
+    }
+
+    #[inline(always)]
+    pub fn insert_by_branch(
+        &self,
+        key: (K1, K2, K3),
+        value: V,
+        branch_name: BranchName,
+    ) -> Result<Option<V>> {
+        let key = (&key.0, &key.1, &key.2);
+        self.insert_ref_by_branch(&key, &value, branch_name).c(d!())
+    }
+
+    #[inline(always)]
+    pub fn insert_ref_by_branch(
+        &self,
+        key: &(&K1, &K2, &K3),
+        value: &V,
+        branch_name: BranchName,
+    ) -> Result<Option<V>> {
+        let key = Self::encode_key(key);
+        self.inner
+            .insert_by_branch(&keyref(&key), &value.encode(), branch_name)
+            .c(d!())
+            .map(|v| v.map(|v| pnk!(ValueEnDe::decode(&v))))
+    }
+
+    #[inline(always)]
+    pub fn contains_key_by_branch(
+        &self,
+        key: &(&K1, &K2, &K3),
+        branch_name: BranchName,
+    ) -> bool {
+        let key = Self::encode_key(key);
+        self.inner
+            .contains_key_by_branch(&keyref(&key), branch_name)
+    }
+
+    /// Support batch removal.
+    #[inline(always)]
+    pub fn remove_by_branch(
+        &self,
+        key: &(&K1, Option<(&K2, Option<&K3>)>),
+        branch_name: BranchName,
+    ) -> Result<Option<V>> {
+        let k1 = key.0.encode();
+        let k2_k3 = key
+            .1
+            .map(|(k2, k3)| (k2.encode(), k3.map(|k3| k3.encode())));
+        let key = if let Some((k2, k3)) = k2_k3.as_ref() {
+            let mut res = vec![&k1[..], &k2[..]];
+            if let Some(k3) = k3.as_ref() {
+                res.push(&k3[..]);
+            }
+            res
+        } else {
+            vec![&k1[..]]
+        };
+        self.inner
+            .remove_by_branch(&key, branch_name)
+            .c(d!())
+            .map(|v| v.map(|v| pnk!(ValueEnDe::decode(&v))))
+    }
+
+    #[inline(always)]
+    pub fn get_by_branch_version(
+        &self,
+        key: &(&K1, &K2, &K3),
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> Option<V> {
+        let key = Self::encode_key(key);
+        self.inner
+            .get_by_branch_version(&keyref(&key), branch_name, version_name)
+            .map(|v| pnk!(ValueEnDe::decode(&v)))
+    }
+
+    #[inline(always)]
+    pub fn contains_key_by_branch_version(
+        &self,
+        key: &(&K1, &K2, &K3),
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> bool {
+        let key = Self::encode_key(key);
+        self.inner.contains_key_by_branch_version(
+            &keyref(&key),
+            branch_name,
+            version_name,
+        )
+    }
+
+    #[inline(always)]
+    fn encode_key(key: &(&K1, &K2, &K3)) -> [RawValue; 3] {
+        let k1 = key.0.encode();
+        let k2 = key.1.encode();
+        let k3 = key.2.encode();
+        [k1, k2, k3]
+    }
+}
+
+impl<K1, K2, K3, V> Default for MapxTkVs<K1, K2, K3, V>
+where
+    K1: KeyEnDe,
+    K2: KeyEnDe,
+    K3: KeyEnDe,
+    V: ValueEnDe,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<K1, K2, K3, V> VsMgmt for MapxTkVs<K1, K2, K3, V>
+where
+    K1: KeyEnDe,
+    K2: KeyEnDe,
+    K3: KeyEnDe,
+    V: ValueEnDe,
+{
+    crate::impl_vs_methods!();
+}
+
+#[derive(PartialEq, Eq, Debug)]
+pub struct ValueMut<'a, K1, K2, K3, V>
+where
+    K1: KeyEnDe,
+    K2: KeyEnDe,
+    K3: KeyEnDe,
+    V: ValueEnDe,
+{
+    hdr: &'a MapxTkVs<K1, K2, K3, V>,
+    key: &'a (&'a K1, &'a K2, &'a K3),
+    value: V,
+}
+
+impl<'a, K1, K2, K3, V> ValueMut<'a, K1, K2, K3, V>
+where
+    K1: KeyEnDe,
+    K2: KeyEnDe,
+    K3: KeyEnDe,
+    V: ValueEnDe,
+{
+    fn new(
+        hdr: &'a MapxTkVs<K1, K2, K3, V>,
+        key: &'a (&'a K1, &'a K2, &'a K3),
+        value: V,
+    ) -> Self {
+        ValueMut { hdr, key, value }
+    }
+}
+
+impl<'a, K1, K2, K3, V> Drop for ValueMut<'a, K1, K2, K3, V>
+where
+    K1: KeyEnDe,
+    K2: KeyEnDe,
+    K3: KeyEnDe,
+    V: ValueEnDe,
+{
+    fn drop(&mut self) {
+        pnk!(self.hdr.insert_ref(self.key, &self.value));
+    }
+}
+
+impl<'a, K1, K2, K3, V> Deref for ValueMut<'a, K1, K2, K3, V>
+where
+    K1: KeyEnDe,
+    K2: KeyEnDe,
+    K3: KeyEnDe,
+    V: ValueEnDe,
+{
+    type Target = V;
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<'a, K1, K2, K3, V> DerefMut for ValueMut<'a, K1, K2, K3, V>
+where
+    K1: KeyEnDe,
+    K2: KeyEnDe,
+    K3: KeyEnDe,
+    V: ValueEnDe,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
+    }
+}
+
+pub struct Entry<'a, K1, K2, K3, V>
+where
+    K1: KeyEnDe,
+    K2: KeyEnDe,
+    K3: KeyEnDe,
+    V: ValueEnDe,
+{
+    key: &'a (&'a K1, &'a K2, &'a K3),
+    hdr: &'a MapxTkVs<K1, K2, K3, V>,
+}
+
+impl<'a, K1, K2, K3, V> Entry<'a, K1, K2, K3, V>
+where
+    K1: KeyEnDe,
+    K2: KeyEnDe,
+    K3: KeyEnDe,
+    V: ValueEnDe,
+{
+    pub fn or_insert_ref(self, default: &V) -> ValueMut<'a, K1, K2, K3, V> {
+        if !self.hdr.contains_key(self.key) {
+            pnk!(self.hdr.insert_ref(self.key, default));
+        }
+        pnk!(self.hdr.get_mut(self.key))
+    }
+}
+
+#[inline(always)]
+fn keyref(key_array: &[RawValue; 3]) -> [&[u8]; 3] {
+    [&key_array[0][..], &key_array[1][..], &key_array[2][..]]
+}

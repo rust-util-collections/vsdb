@@ -5,7 +5,7 @@
 use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{sync::mpsc::channel, thread};
-use vsdb::{Mapx, Vecx};
+use vsdb::{Mapx, ValueEnDe, Vecx};
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Animal {
@@ -86,13 +86,13 @@ fn main() {
             .map(|i| ah.hospitalized(AnimalKind::Cat, format!("owner-{}", i)))
             .collect::<Result<Vec<_>>>()
             .unwrap();
-        sender.send((bcs::to_bytes(&ah).unwrap(), ids)).unwrap();
+        sender.send((ah.encode(), ids)).unwrap();
     });
 
-    let (ah_str, ids) = receiver.recv().unwrap();
+    let (ah_bytes, ids) = receiver.recv().unwrap();
 
     // will be re-initilized when serializing
-    let mut ah = bcs::from_bytes::<AnimalHospital>(&ah_str).unwrap();
+    let mut ah: AnimalHospital = ValueEnDe::decode(&ah_bytes).unwrap();
 
     (0..100)
         .zip(ids.iter())

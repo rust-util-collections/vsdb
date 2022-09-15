@@ -10,7 +10,7 @@ use std::{
     sync::{mpsc::channel, Mutex},
     thread,
 };
-use vsdb::{BranchName, MapxVs, OrphanVs, VecxVs, VersionName, Vs, VsMgmt};
+use vsdb::{BranchName, MapxVs, OrphanVs, ValueEnDe, VecxVs, VersionName, Vs, VsMgmt};
 
 type Amount = u64;
 type Address = Vec<u8>;
@@ -164,7 +164,7 @@ struct Transaction {
 impl Transaction {
     fn hash(&self) -> Vec<u8> {
         // assume this is a hash function
-        bcs::to_bytes(self).unwrap()
+        self.encode().to_vec()
     }
 }
 

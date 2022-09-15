@@ -52,7 +52,7 @@ struct GreatAlgo {
     e: ...
 }
 
-let algo = GreatAlgo.default();
+let algo = GreatAlgo::default();
 
 algo.get_by_branch_version(...);
 algo.branch_create(...);
@@ -119,7 +119,8 @@ struct SubItem2 {
 ```rust
 // It can be compiled, but the result is wrong !
 // The versioned methods of the inner 'MapxVs<u8, u8>' will missing,
-// you should implement the 'VsMgmt' trait(or a part of it) manually.
+// We recommend you to use the 'multi-key' APIs of VSDB, or
+// you will have to implement the 'VsMgmt' trait manually.
 #[derive(Vs)]
 struct BadCase {
     a: VecxVs<MapxVs<u8, u8>>,
@@ -159,22 +160,3 @@ This is the same as expressing complex data structures in computer memory(the me
 
 User data will be divided into two dimensions: 'branch' and 'version', the functions of the 'basic' category are stateless, and the functions of the 'versioned' category are stateful. In the internal implementation, each stateful function is implemented based on its corresponding stateless function,
 all stateful data has two additional identification dimensions ('branch' and 'version'), somewhat like the logic in Git. Stateless functions do not have the feature of 'version' management, but they have higher performance.
-
-## Todo
-
-Support multi-key structures in v0.20.x, include versioned kinds.
-
-Draft design:
-
-```rust
-struct MapxMultiKey<K1, K2, ... KN, V> {
-    meta_len: u8,
-    data: Mapx<K1, Mapx<K2, ... Mapx<KN, V>>>,
-}
-
-struct MapxMultiKeyVs<K1, K2, ... KN, V> {
-    meta_len: u8,
-    ... "meta fields based on Mapx<K, V>"
-    ... "data fields based on MapxMultiKey<K1, K2, ... KN, V>"
-}
-```

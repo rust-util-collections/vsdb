@@ -50,7 +50,7 @@ use std::{
 #[serde(bound = "")]
 pub struct MapxOrd<K, V> {
     inner: MapxOrdRawKey<V>,
-    pk: PhantomData<K>,
+    p: PhantomData<K>,
 }
 
 impl<K, V> Default for MapxOrd<K, V>
@@ -72,7 +72,7 @@ where
     pub fn new() -> Self {
         MapxOrd {
             inner: MapxOrdRawKey::new(),
-            pk: PhantomData,
+            p: PhantomData,
         }
     }
 
@@ -154,7 +154,7 @@ where
     pub fn iter(&self) -> MapxOrdIter<K, V> {
         MapxOrdIter {
             iter: self.inner.iter(),
-            pk: PhantomData,
+            p: PhantomData,
         }
     }
 
@@ -201,7 +201,7 @@ where
 
         MapxOrdIter {
             iter: self.inner.range_ref((l, h)),
-            pk: PhantomData,
+            p: PhantomData,
         }
     }
 
@@ -237,7 +237,7 @@ where
     V: ValueEnDe,
 {
     iter: MapxOrdRawKeyIter<V>,
-    pk: PhantomData<K>,
+    p: PhantomData<K>,
 }
 
 impl<K, V> Iterator for MapxOrdIter<K, V>

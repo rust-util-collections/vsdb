@@ -44,7 +44,7 @@ use std::marker::PhantomData;
 #[serde(bound = "")]
 pub struct Mapx<K, V> {
     inner: MapxOrdRawKey<V>,
-    pk: PhantomData<K>,
+    p: PhantomData<K>,
 }
 
 impl<K, V> Default for Mapx<K, V>
@@ -66,7 +66,7 @@ where
     pub fn new() -> Self {
         Mapx {
             inner: MapxOrdRawKey::new(),
-            pk: PhantomData,
+            p: PhantomData,
         }
     }
 
@@ -125,7 +125,7 @@ where
     pub fn iter(&self) -> MapxIter<K, V> {
         MapxIter {
             iter: self.inner.iter(),
-            pk: PhantomData,
+            p: PhantomData,
         }
     }
 
@@ -156,7 +156,7 @@ where
     V: ValueEnDe,
 {
     iter: MapxOrdRawKeyIter<V>,
-    pk: PhantomData<K>,
+    p: PhantomData<K>,
 }
 
 impl<K, V> Iterator for MapxIter<K, V>
