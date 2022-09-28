@@ -1399,7 +1399,7 @@ impl MapxRawVs {
             .collect::<Vec<_>>();
         alt!(brvers_non_empty.is_empty(), return Ok(()));
         let mut brvers = (0..brvers_non_empty.len())
-            .map(|i| (&brvers_non_empty[i]).iter())
+            .map(|i| brvers_non_empty[i].iter())
             .collect::<Vec<_>>();
 
         // filter out the longest common prefix
