@@ -2,8 +2,6 @@
 //! # Common components
 //!
 
-#![allow(dead_code)]
-
 pub(crate) mod ende;
 pub(crate) mod engines;
 
@@ -34,21 +32,27 @@ pub(crate) type BranchID = u64;
 pub(crate) type VersionID = u64;
 
 /// Avoid making mistakes between branch name and version name.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BranchName<'a>(pub &'a [u8]);
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BranchNameOwned(pub Vec<u8>);
 /// Avoid making mistakes between branch name and version name.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ParentBranchName<'a>(pub &'a [u8]);
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParentBranchNameOwned(pub Vec<u8>);
 /// Avoid making mistakes between branch name and version name.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VersionName<'a>(pub &'a [u8]);
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VersionNameOwned(pub Vec<u8>);
 
 const RESERVED_ID_CNT: Prefix = 4096_0000;
 pub(crate) const BIGGEST_RESERVED_ID: Prefix = RESERVED_ID_CNT - 1;
 pub(crate) const NULL: BranchID = BIGGEST_RESERVED_ID as BranchID;
 
 pub(crate) const INITIAL_BRANCH_ID: BranchID = 0;
-pub(crate) const INITIAL_BRANCH_NAME: &[u8] = b"main";
+pub(crate) const INITIAL_BRANCH_NAME: BranchName<'static> = BranchName(b"main");
 
 /// The initial verison along with each new instance.
 pub const INITIAL_VERSION: VersionName<'static> = VersionName([0u8; 0].as_slice());
@@ -208,6 +212,6 @@ impl_from_for_name!(BranchName, ParentBranchName, VersionName);
 
 impl Default for BranchName<'static> {
     fn default() -> Self {
-        BranchName(INITIAL_BRANCH_NAME)
+        INITIAL_BRANCH_NAME
     }
 }

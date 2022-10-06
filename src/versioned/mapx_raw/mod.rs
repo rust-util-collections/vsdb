@@ -10,6 +10,9 @@
 //! ```
 //! use vsdb::{VersionName, versioned::mapx_raw::MapxRawVs, VsMgmt};
 //!
+//! let dir = format!("/tmp/__vsdb__{}", rand::random::<u128>());
+//! vsdb::vsdb_set_base_dir(dir);
+//!
 //! let mut l = MapxRawVs::new();
 //! l.version_create(VersionName(b"test")).unwrap();
 //!
@@ -435,7 +438,7 @@ impl VsMgmt for MapxRawVs {
     #[inline(always)]
     fn version_exists(&self, version_name: VersionName) -> bool {
         self.inner
-            .get_version_id(BranchName(INITIAL_BRANCH_NAME), version_name)
+            .get_version_id(INITIAL_BRANCH_NAME, version_name)
             .map(|id| self.inner.version_exists(id))
             .unwrap_or(false)
     }
@@ -460,7 +463,7 @@ impl VsMgmt for MapxRawVs {
     /// Check if a version is directly created on the default branch.
     #[inline(always)]
     fn version_created(&self, version_name: VersionName) -> bool {
-        self.version_created_on_branch(version_name, BranchName(INITIAL_BRANCH_NAME))
+        self.version_created_on_branch(version_name, INITIAL_BRANCH_NAME)
     }
 
     /// Check if a version is directly created on a specified branch(exclude its parents).
@@ -557,6 +560,15 @@ impl VsMgmt for MapxRawVs {
         self.inner
             .get_branch_id(branch_name)
             .map(|id| self.inner.branch_exists(id))
+            .unwrap_or(false)
+    }
+
+    /// Check if a branch exists and has versions on it.
+    #[inline(always)]
+    fn branch_has_versions(&self, branch_name: BranchName) -> bool {
+        self.inner
+            .get_branch_id(branch_name)
+            .map(|id| self.inner.branch_has_versions(id))
             .unwrap_or(false)
     }
 

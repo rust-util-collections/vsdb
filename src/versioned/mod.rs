@@ -215,7 +215,6 @@ use crate::{
     merkle::{MerkleTree, MerkleTreeStore, Proof, ProofEntry},
     BranchName, ParentBranchName, VersionName,
 };
-use primitive_types::{H128, H160, H256, H512, U128, U256, U512};
 use ruc::*;
 use std::{
     collections::{
@@ -299,6 +298,9 @@ pub trait VsMgmt {
 
     /// Check if a branch exists or not.
     fn branch_exists(&self, branch_name: BranchName) -> bool;
+
+    /// Check if a branch exists and has versions on it.
+    fn branch_has_versions(&self, branch_name: BranchName) -> bool;
 
     /// Remove a branch, remove all changes directly made by this branch.
     ///
@@ -484,6 +486,11 @@ macro_rules! impl_vs_methods {
             self.inner.branch_exists(branch_name)
         }
 
+        /// Check if a branch exists and has versions on it.
+        fn branch_has_versions(&self, branch_name: BranchName) -> bool {
+            self.inner.branch_has_versions(branch_name)
+        }
+
         /// Remove a branch, remove all changes directly made by this branch.
         ///
         /// 'Write'-like operations on branches and versions are different from operations on data.
@@ -652,7 +659,12 @@ macro_rules! impl_vs_methods_nope {
 
         #[inline(always)]
         fn branch_exists(&self, _: BranchName) -> bool {
-            true
+            false
+        }
+
+        #[inline(always)]
+        fn branch_has_versions(&self, _: BranchName) -> bool {
+            false
         }
 
         #[inline(always)]
@@ -814,13 +826,20 @@ impl_for_primitives!(
     AtomicU32,
     AtomicU64,
     AtomicU8,
-    U128,
-    U256,
-    U512,
-    H128,
-    H160,
-    H256,
-    H512
+    primitive_types_0_10::U128,
+    primitive_types_0_10::U256,
+    primitive_types_0_10::U512,
+    primitive_types_0_10::H128,
+    primitive_types_0_10::H160,
+    primitive_types_0_10::H256,
+    primitive_types_0_10::H512,
+    primitive_types_0_11::U128,
+    primitive_types_0_11::U256,
+    primitive_types_0_11::U512,
+    primitive_types_0_11::H128,
+    primitive_types_0_11::H160,
+    primitive_types_0_11::H256,
+    primitive_types_0_11::H512
 );
 
 impl<T: VsMgmt> VsMgmt for Option<T> {
@@ -948,9 +967,17 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
     #[inline(always)]
     fn branch_exists(&self, branch_name: BranchName) -> bool {
         if let Some(i) = self.as_ref() {
-            alt!(!i.branch_exists(branch_name), return false);
+            return i.branch_exists(branch_name);
         }
-        true
+        false
+    }
+
+    #[inline(always)]
+    fn branch_has_versions(&self, branch_name: BranchName) -> bool {
+        if let Some(i) = self.as_ref() {
+            return i.branch_has_versions(branch_name);
+        }
+        false
     }
 
     #[inline(always)]
@@ -1163,10 +1190,22 @@ macro_rules! impl_for_collections {
 
         #[inline(always)]
         fn branch_exists(&self, branch_name: BranchName) -> bool {
+            let mut exists = false;
             for i in self.$values() {
+                exists = true;
                 alt!(!i.branch_exists(branch_name), return false);
             }
-            true
+            exists
+        }
+
+        #[inline(always)]
+        fn branch_has_versions(&self, branch_name: BranchName) -> bool {
+            let mut exists = false;
+            for i in self.$values() {
+                exists = true;
+                alt!(!i.branch_has_versions(branch_name), return false);
+            }
+            exists
         }
 
         #[inline(always)]

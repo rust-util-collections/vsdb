@@ -377,9 +377,9 @@ impl PrefixAllocator {
         )
     }
 
-    fn next(base: &[u8]) -> [u8; PREFIX_SIZ] {
-        (crate::parse_prefix!(base) + 1).to_be_bytes()
-    }
+    // fn next(base: &[u8]) -> [u8; PREFIX_SIZ] {
+    //     (crate::parse_prefix!(base) + 1).to_be_bytes()
+    // }
 }
 
 fn rocksdb_open() -> Result<(DB, Vec<String>)> {

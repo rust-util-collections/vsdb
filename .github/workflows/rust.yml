@@ -15,6 +15,6 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Build
-      run: make build
+      run: rustup update stable; rustup component add clippy; make lintall
     - name: Run tests
-      run: make test
+      run: rustup update stable; make testall

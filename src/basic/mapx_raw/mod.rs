@@ -9,6 +9,9 @@
 //! ```
 //! use vsdb::basic::mapx_raw::MapxRaw;
 //!
+//! let dir = format!("/tmp/__vsdb__{}", rand::random::<u128>());
+//! vsdb::vsdb_set_base_dir(dir);
+//!
 //! let mut l = MapxRaw::new();
 //!
 //! l.insert(&[1], &[0]);

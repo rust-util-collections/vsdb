@@ -1,9 +1,8 @@
 ![GitHub top language](https://img.shields.io/github/languages/top/ccmlm/VSDB)
 [![Latest Version](https://img.shields.io/crates/v/VSDB.svg)](https://crates.io/crates/VSDB)
 [![Rust Documentation](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/VSDB)
-![GitHub issues](https://img.shields.io/github/issues-raw/ccmlm/VSDB)
-![GitHub pull requests](https://img.shields.io/github/issues-pr-raw/ccmlm/VSDB)
 ![GitHub Workflow Status](https://img.shields.io/github/workflow/status/ccmlm/VSDB/Rust)
+[![Minimum rustc version](https://img.shields.io/badge/rustc-1.59+-lightgray.svg)](https://github.com/rust-random/rand#rust-version-requirements)
 
 # VSDB
 
@@ -160,3 +159,7 @@ This is the same as expressing complex data structures in computer memory(the me
 
 User data will be divided into two dimensions: 'branch' and 'version', the functions of the 'basic' category are stateless, and the functions of the 'versioned' category are stateful. In the internal implementation, each stateful function is implemented based on its corresponding stateless function,
 all stateful data has two additional identification dimensions ('branch' and 'version'), somewhat like the logic in Git. Stateless functions do not have the feature of 'version' management, but they have higher performance.
+
+## NOTE
+
+The serialized result of a VSDB instance cannot be used as the basis for distributed consensus, because the serialized result only contains some meta-information(storage paths, etc.), and these meta-information are likely to be different in different environments, the correct way is to read what you need from it, and then process the real content.

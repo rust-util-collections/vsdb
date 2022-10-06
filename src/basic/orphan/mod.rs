@@ -9,6 +9,9 @@
 //! ```
 //! use vsdb::basic::orphan::Orphan;
 //!
+//! let dir = format!("/tmp/__vsdb__{}", rand::random::<u128>());
+//! vsdb::vsdb_set_base_dir(dir);
+//!
 //! assert_eq!(Orphan::new(0), 0);
 //! assert!(Orphan::new(1) > 0);
 //! assert!(Orphan::new(1) >= 0);

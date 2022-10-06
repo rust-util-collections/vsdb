@@ -25,9 +25,9 @@ for file in $(find .. -path "../target" -a -prune \
     -o -name "*.json" \
     -o -name "*.md" \
     -o -name "rc.local" \
-    -print \
     | grep -v "$(basename $0)" \
     | grep -v '\.git' \
+    | grep -v 'target' \
     | grep -iv 'Makefile' \
     | grep -v 'tendermint'); do
 
