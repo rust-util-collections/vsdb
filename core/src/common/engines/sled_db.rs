@@ -289,7 +289,7 @@ fn sled_open() -> Result<Db> {
     let dir = vsdb_get_base_dir();
 
     // avoid setting again on an opened DB
-    info_omit!(vsdb_set_base_dir(&dir));
+    omit!(vsdb_set_base_dir(&dir));
 
     let parallelism = available_parallelism().c(d!())?.get() as u64;
     let cache_cap = max!(GB, min!((parallelism * 2 / 10) * GB, 12 * GB));

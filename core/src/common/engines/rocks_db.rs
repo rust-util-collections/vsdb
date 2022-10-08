@@ -371,7 +371,7 @@ fn rocksdb_open() -> Result<(DB, Vec<String>, Cache)> {
     let dir = vsdb_get_base_dir();
 
     // avoid setting again on an opened DB
-    info_omit!(vsdb_set_base_dir(&dir));
+    omit!(vsdb_set_base_dir(&dir));
 
     let parallelism = available_parallelism().c(d!())?.get() as i32;
     let cache_cap =
