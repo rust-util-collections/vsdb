@@ -322,7 +322,7 @@ impl MapxRawMkVs {
             .range_mut(key.clone()..)
             .filter(|(k, _)| k.starts_with(&key))
             .for_each(|(_, vers)| {
-                vers.insert(ver_id, vct![]);
+                vers.insert(ver_id, Vec::new());
             });
 
         Ok(None)

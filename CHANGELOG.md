@@ -1,5 +1,13 @@
 # Change log
 
+## v0.47.x
+
+No functional changes, just upgraded some necessary dependencies.
+
+## v0.46.x
+
+No functional changes, just upgraded some necessary dependencies.
+
 ## v0.45.x
 
 #### Internal optimizations

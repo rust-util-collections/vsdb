@@ -12,7 +12,7 @@ Based on the powerful version control function of VSDB, you can easily give your
 
 **Make everything versioned !!**
 
-[**To view the change log check here**](https://github.com/rust-util-collections/vsdb/blob/master/documents/change_log.md).
+[**To view the change log check here**](https://github.com/rust-util-collections/vsdb/blob/master/CHANGELOG.md).
 
 ### Highlights
 
