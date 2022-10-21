@@ -39,7 +39,7 @@
 mod test;
 
 use crate::{
-    basic::mapx_ord_rawkey::{Entry, MapxOrdRawKey, MapxOrdRawKeyIter, ValueMut},
+    basic::mapx_ord_rawkey::{Entry, MapxOrdRk, MapxOrdRkIter, ValueMut},
     common::ende::{KeyEnDeOrdered, ValueEnDe},
 };
 use ruc::*;
@@ -52,7 +52,7 @@ use std::{
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct MapxOrd<K, V> {
-    inner: MapxOrdRawKey<V>,
+    inner: MapxOrdRk<V>,
     p: PhantomData<K>,
 }
 
@@ -74,7 +74,7 @@ where
     #[inline(always)]
     pub fn new() -> Self {
         MapxOrd {
-            inner: MapxOrdRawKey::new(),
+            inner: MapxOrdRk::new(),
             p: PhantomData,
         }
     }
@@ -239,7 +239,7 @@ where
     K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
-    iter: MapxOrdRawKeyIter<V>,
+    iter: MapxOrdRkIter<V>,
     p: PhantomData<K>,
 }
 

@@ -206,13 +206,14 @@ pub mod mapx_raw;
 pub mod orphan;
 pub mod vecx;
 
+#[cfg(feature = "merkle")]
+use crate::merkle::{MerkleTree, MerkleTreeStore, Proof, ProofEntry};
 use crate::{
     basic::{
-        mapx::Mapx, mapx_ord::MapxOrd, mapx_ord_rawkey::MapxOrdRawKey,
-        mapx_ord_rawvalue::MapxOrdRawValue, mapx_raw::MapxRaw, orphan::Orphan,
-        vecx::Vecx, vecx_raw::VecxRaw,
+        mapx::Mapx, mapx_ord::MapxOrd, mapx_ord_rawkey::MapxOrdRk,
+        mapx_ord_rawvalue::MapxOrdRv, mapx_raw::MapxRaw, orphan::Orphan, vecx::Vecx,
+        vecx_raw::VecxRaw,
     },
-    merkle::{MerkleTree, MerkleTreeStore, Proof, ProofEntry},
     BranchName, ParentBranchName, VersionName,
 };
 use ruc::*;
@@ -659,12 +660,12 @@ macro_rules! impl_vs_methods_nope {
 
         #[inline(always)]
         fn branch_exists(&self, _: BranchName) -> bool {
-            false
+            true
         }
 
         #[inline(always)]
         fn branch_has_versions(&self, _: BranchName) -> bool {
-            false
+            true
         }
 
         #[inline(always)]
@@ -725,11 +726,11 @@ impl<K, V> VsMgmt for MapxOrd<K, V> {
     impl_vs_methods_nope!();
 }
 
-impl<V> VsMgmt for MapxOrdRawKey<V> {
+impl<V> VsMgmt for MapxOrdRk<V> {
     impl_vs_methods_nope!();
 }
 
-impl<K> VsMgmt for MapxOrdRawValue<K> {
+impl<K> VsMgmt for MapxOrdRv<K> {
     impl_vs_methods_nope!();
 }
 
@@ -749,18 +750,22 @@ impl VsMgmt for VecxRaw {
     impl_vs_methods_nope!();
 }
 
+#[cfg(feature = "merkle")]
 impl VsMgmt for MerkleTree {
     impl_vs_methods_nope!();
 }
 
+#[cfg(feature = "merkle")]
 impl VsMgmt for MerkleTreeStore {
     impl_vs_methods_nope!();
 }
 
+#[cfg(feature = "merkle")]
 impl<'a> VsMgmt for Proof<'a> {
     impl_vs_methods_nope!();
 }
 
+#[cfg(feature = "merkle")]
 impl<'a> VsMgmt for ProofEntry<'a> {
     impl_vs_methods_nope!();
 }
@@ -866,7 +871,7 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
     #[inline(always)]
     fn version_exists(&self, version_name: VersionName) -> bool {
         if let Some(i) = self.as_ref() {
-            alt!(!i.version_exists(version_name), return false);
+            return i.version_exists(version_name);
         }
         true
     }
@@ -878,10 +883,7 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
         branch_name: BranchName,
     ) -> bool {
         if let Some(i) = self.as_ref() {
-            alt!(
-                !i.version_exists_on_branch(version_name, branch_name),
-                return false
-            );
+            return i.version_exists_on_branch(version_name, branch_name);
         }
         true
     }
@@ -889,7 +891,7 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
     #[inline(always)]
     fn version_created(&self, version_name: VersionName) -> bool {
         if let Some(i) = self.as_ref() {
-            alt!(!i.version_created(version_name), return false);
+            return i.version_created(version_name);
         }
         true
     }
@@ -901,10 +903,7 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
         branch_name: BranchName,
     ) -> bool {
         if let Some(i) = self.as_ref() {
-            alt!(
-                !i.version_created_on_branch(version_name, branch_name),
-                return false
-            );
+            return i.version_created_on_branch(version_name, branch_name);
         }
         true
     }
@@ -969,7 +968,7 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
         if let Some(i) = self.as_ref() {
             return i.branch_exists(branch_name);
         }
-        false
+        true // always return true if nope
     }
 
     #[inline(always)]
@@ -977,7 +976,7 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
         if let Some(i) = self.as_ref() {
             return i.branch_has_versions(branch_name);
         }
-        false
+        true // always return true if nope
     }
 
     #[inline(always)]
@@ -1028,7 +1027,7 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
     #[inline(always)]
     fn branch_has_children(&self, branch_name: BranchName) -> bool {
         if let Some(i) = self.as_ref() {
-            alt!(!i.branch_has_children(branch_name), return false);
+            return i.branch_has_children(branch_name);
         }
         true
     }
@@ -1060,233 +1059,4 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
         }
         Ok(())
     }
-}
-
-/// A helper for implementing `VsMgmt` for collection types,
-/// `struct NewType(HashMap)`, `struct NewType(BTreeMap)`, etc.
-#[macro_export]
-macro_rules! impl_for_collections {
-    ($values: tt, $values_mut: tt) => {
-        fn version_create(&self, version_name: VersionName) -> Result<()> {
-            for i in self.$values() {
-                i.version_create(version_name).c(d!())?;
-            }
-            Ok(())
-        }
-
-        #[inline(always)]
-        fn version_create_by_branch(
-            &self,
-            version_name: VersionName,
-            branch_name: BranchName,
-        ) -> Result<()> {
-            for i in self.$values() {
-                i.version_create_by_branch(version_name, branch_name)
-                    .c(d!())?;
-            }
-            Ok(())
-        }
-
-        #[inline(always)]
-        fn version_exists(&self, version_name: VersionName) -> bool {
-            for i in self.$values() {
-                alt!(!i.version_exists(version_name), return false);
-            }
-            true
-        }
-
-        #[inline(always)]
-        fn version_exists_on_branch(
-            &self,
-            version_name: VersionName,
-            branch_name: BranchName,
-        ) -> bool {
-            for i in self.$values() {
-                alt!(
-                    !i.version_exists_on_branch(version_name, branch_name),
-                    return false
-                );
-            }
-            true
-        }
-
-        #[inline(always)]
-        fn version_created(&self, version_name: VersionName) -> bool {
-            for i in self.$values() {
-                alt!(!i.version_created(version_name), return false);
-            }
-            true
-        }
-
-        #[inline(always)]
-        fn version_created_on_branch(
-            &self,
-            version_name: VersionName,
-            branch_name: BranchName,
-        ) -> bool {
-            for i in self.$values() {
-                alt!(
-                    !i.version_created_on_branch(version_name, branch_name),
-                    return false
-                );
-            }
-            true
-        }
-
-        #[inline(always)]
-        fn version_pop(&self) -> Result<()> {
-            for i in self.$values() {
-                i.version_pop().c(d!())?;
-            }
-            Ok(())
-        }
-
-        #[inline(always)]
-        fn version_pop_by_branch(&self, branch_name: BranchName) -> Result<()> {
-            for i in self.$values() {
-                i.version_pop_by_branch(branch_name).c(d!())?;
-            }
-            Ok(())
-        }
-
-        #[inline(always)]
-        fn branch_create(&self, branch_name: BranchName) -> Result<()> {
-            for i in self.$values() {
-                i.branch_create(branch_name).c(d!())?;
-            }
-            Ok(())
-        }
-
-        #[inline(always)]
-        fn branch_create_by_base_branch(
-            &self,
-            branch_name: BranchName,
-            base_branch_name: ParentBranchName,
-        ) -> Result<()> {
-            for i in self.$values() {
-                i.branch_create_by_base_branch(branch_name, base_branch_name)
-                    .c(d!())?;
-            }
-            Ok(())
-        }
-
-        #[inline(always)]
-        fn branch_create_by_base_branch_version(
-            &self,
-            branch_name: BranchName,
-            base_branch_name: ParentBranchName,
-            base_version_name: VersionName,
-        ) -> Result<()> {
-            for i in self.$values() {
-                i.branch_create_by_base_branch_version(
-                    branch_name,
-                    base_branch_name,
-                    base_version_name,
-                )
-                .c(d!())?;
-            }
-            Ok(())
-        }
-
-        #[inline(always)]
-        fn branch_exists(&self, branch_name: BranchName) -> bool {
-            let mut exists = false;
-            for i in self.$values() {
-                exists = true;
-                alt!(!i.branch_exists(branch_name), return false);
-            }
-            exists
-        }
-
-        #[inline(always)]
-        fn branch_has_versions(&self, branch_name: BranchName) -> bool {
-            let mut exists = false;
-            for i in self.$values() {
-                exists = true;
-                alt!(!i.branch_has_versions(branch_name), return false);
-            }
-            exists
-        }
-
-        #[inline(always)]
-        fn branch_remove(&self, branch_name: BranchName) -> Result<()> {
-            for i in self.$values() {
-                i.branch_remove(branch_name).c(d!())?;
-            }
-            Ok(())
-        }
-
-        #[inline(always)]
-        fn branch_truncate(&self, branch_name: BranchName) -> Result<()> {
-            for i in self.$values() {
-                i.branch_truncate(branch_name).c(d!())?;
-            }
-            Ok(())
-        }
-
-        #[inline(always)]
-        fn branch_truncate_to(
-            &self,
-            branch_name: BranchName,
-            last_version_name: VersionName,
-        ) -> Result<()> {
-            for i in self.$values() {
-                i.branch_truncate_to(branch_name, last_version_name)
-                    .c(d!())?;
-            }
-            Ok(())
-        }
-
-        #[inline(always)]
-        fn branch_pop_version(&self, branch_name: BranchName) -> Result<()> {
-            for i in self.$values() {
-                i.branch_pop_version(branch_name).c(d!())?;
-            }
-            Ok(())
-        }
-
-        #[inline(always)]
-        fn branch_merge_to_parent(&self, branch_name: BranchName) -> Result<()> {
-            for i in self.$values() {
-                i.branch_merge_to_parent(branch_name).c(d!())?;
-            }
-            Ok(())
-        }
-
-        #[inline(always)]
-        fn branch_has_children(&self, branch_name: BranchName) -> bool {
-            for i in self.$values() {
-                alt!(!i.branch_has_children(branch_name), return false);
-            }
-            true
-        }
-
-        #[inline(always)]
-        fn branch_set_default(&mut self, branch_name: BranchName) -> Result<()> {
-            for i in self.$values_mut() {
-                i.branch_set_default(branch_name).c(d!())?;
-            }
-            Ok(())
-        }
-
-        #[inline(always)]
-        fn prune(&self, reserved_ver_num: Option<usize>) -> Result<()> {
-            for i in self.$values() {
-                i.prune(reserved_ver_num).c(d!())?;
-            }
-            Ok(())
-        }
-
-        #[inline(always)]
-        fn prune_by_branch(
-            &self,
-            branch_name: BranchName,
-            reserved_ver_num: Option<usize>,
-        ) -> Result<()> {
-            for i in self.$values() {
-                i.prune_by_branch(branch_name, reserved_ver_num).c(d!())?;
-            }
-            Ok(())
-        }
-    };
 }

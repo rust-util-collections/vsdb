@@ -1,7 +1,6 @@
 use crate::common::{
-    vsdb_get_base_dir, vsdb_set_base_dir, BranchID, Engine, Prefix, PrefixBytes,
-    RawBytes, RawKey, RawValue, VersionID, INITIAL_BRANCH_ID, PREFIX_SIZ,
-    RESERVED_ID_CNT,
+    vsdb_get_base_dir, vsdb_set_base_dir, BranchID, Engine, Pre, PreBytes, RawBytes,
+    RawKey, RawValue, VersionID, INITIAL_BRANCH_ID, PREFIX_SIZ, RESERVED_ID_CNT,
 };
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -29,7 +28,7 @@ static HDR: Lazy<(DB, Vec<String>)> = Lazy::new(|| rocksdb_open().unwrap());
 pub(crate) struct RocksEngine {
     meta: &'static DB,
     areas: Vec<&'static str>,
-    prefix_allocator: PrefixAllocator,
+    prefix_allocator: PreAllocator,
     max_keylen: AtomicUsize,
 }
 
@@ -53,7 +52,7 @@ impl RocksEngine {
     }
 
     #[inline(always)]
-    fn get_upper_bound_value(&self, meta_prefix: PrefixBytes) -> Vec<u8> {
+    fn get_upper_bound_value(&self, meta_prefix: PreBytes) -> Vec<u8> {
         static BUF: Lazy<RawBytes> = Lazy::new(|| vec![u8::MAX; 512].into_boxed_slice());
 
         let mut max_guard = meta_prefix.to_vec();
@@ -74,7 +73,7 @@ impl Engine for RocksEngine {
         let (meta, areas) =
             (&HDR.0, HDR.1.iter().map(|i| i.as_str()).collect::<Vec<_>>());
 
-        let (prefix_allocator, initial_value) = PrefixAllocator::init();
+        let (prefix_allocator, initial_value) = PreAllocator::init();
 
         if meta.get(&META_KEY_MAX_KEYLEN).c(d!())?.is_none() {
             meta.put(META_KEY_MAX_KEYLEN, 0_usize.to_be_bytes())
@@ -114,7 +113,7 @@ impl Engine for RocksEngine {
 
     // 'step 1' and 'step 2' is not atomic in multi-threads scene,
     // so we use a `Mutex` lock for thread safe.
-    fn alloc_prefix(&self) -> Prefix {
+    fn alloc_prefix(&self) -> Pre {
         static LK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
 
         let mut z = LK.lock();
@@ -194,7 +193,7 @@ impl Engine for RocksEngine {
         });
     }
 
-    fn iter(&self, area_idx: usize, meta_prefix: PrefixBytes) -> RocksIter {
+    fn iter(&self, area_idx: usize, meta_prefix: PreBytes) -> RocksIter {
         let inner = self
             .meta
             .prefix_iterator_cf(self.cf_hdr(area_idx), meta_prefix);
@@ -217,7 +216,7 @@ impl Engine for RocksEngine {
     fn range<'a, R: RangeBounds<&'a [u8]>>(
         &'a self,
         area_idx: usize,
-        meta_prefix: PrefixBytes,
+        meta_prefix: PreBytes,
         bounds: R,
     ) -> RocksIter {
         let mut opt = ReadOptions::default();
@@ -280,7 +279,7 @@ impl Engine for RocksEngine {
     fn get(
         &self,
         area_idx: usize,
-        meta_prefix: PrefixBytes,
+        meta_prefix: PreBytes,
         key: &[u8],
     ) -> Option<RawValue> {
         let mut k = meta_prefix.to_vec();
@@ -294,7 +293,7 @@ impl Engine for RocksEngine {
     fn insert(
         &self,
         area_idx: usize,
-        meta_prefix: PrefixBytes,
+        meta_prefix: PreBytes,
         key: &[u8],
         value: &[u8],
     ) -> Option<RawValue> {
@@ -313,7 +312,7 @@ impl Engine for RocksEngine {
     fn remove(
         &self,
         area_idx: usize,
-        meta_prefix: PrefixBytes,
+        meta_prefix: PreBytes,
         key: &[u8],
     ) -> Option<RawValue> {
         let mut k = meta_prefix.to_vec();
@@ -323,11 +322,11 @@ impl Engine for RocksEngine {
         old_v.map(|v| v.into_boxed_slice())
     }
 
-    fn get_instance_len(&self, instance_prefix: PrefixBytes) -> u64 {
+    fn get_instance_len(&self, instance_prefix: PreBytes) -> u64 {
         crate::parse_int!(self.meta.get(instance_prefix).unwrap().unwrap(), u64)
     }
 
-    fn set_instance_len(&self, instance_prefix: PrefixBytes, new_len: u64) {
+    fn set_instance_len(&self, instance_prefix: PreBytes, new_len: u64) {
         self.meta
             .put(instance_prefix, new_len.to_be_bytes())
             .unwrap();
@@ -363,17 +362,17 @@ impl DoubleEndedIterator for RocksIter {
 }
 
 // key of the prefix allocator in the 'meta'
-struct PrefixAllocator {
+struct PreAllocator {
     key: [u8; 1],
 }
 
-impl PrefixAllocator {
-    const fn init() -> (Self, PrefixBytes) {
+impl PreAllocator {
+    const fn init() -> (Self, PreBytes) {
         (
             Self {
                 key: META_KEY_PREFIX_ALLOCATOR,
             },
-            (RESERVED_ID_CNT + Prefix::MIN).to_be_bytes(),
+            (RESERVED_ID_CNT + Pre::MIN).to_be_bytes(),
         )
     }
 
@@ -394,7 +393,7 @@ fn rocksdb_open() -> Result<(DB, Vec<String>)> {
     cfg.set_allow_mmap_reads(true);
     cfg.create_missing_column_families(true);
     cfg.set_atomic_flush(true);
-    cfg.set_prefix_extractor(SliceTransform::create_fixed_prefix(size_of::<Prefix>()));
+    cfg.set_prefix_extractor(SliceTransform::create_fixed_prefix(size_of::<Pre>()));
 
     let cfhdrs = (0..DATA_SET_NUM).map(|i| i.to_string()).collect::<Vec<_>>();
 

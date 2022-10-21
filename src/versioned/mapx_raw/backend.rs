@@ -5,7 +5,7 @@
 use crate::{
     basic::{
         mapx_ord::MapxOrd,
-        mapx_ord_rawkey::{MapxOrdRawKey, MapxOrdRawKeyIter},
+        mapx_ord_rawkey::{MapxOrdRk, MapxOrdRkIter},
         mapx_raw::MapxRaw,
     },
     common::{
@@ -27,8 +27,8 @@ type BranchPath = BTreeMap<BranchID, VersionID>;
 pub(super) struct MapxRawVs {
     default_branch: BranchID,
 
-    branch_name_to_branch_id: MapxOrdRawKey<BranchID>,
-    version_name_to_version_id: MapxOrdRawKey<VersionID>,
+    branch_name_to_branch_id: MapxOrdRk<BranchID>,
+    version_name_to_version_id: MapxOrdRk<VersionID>,
 
     // which version the branch is forked from
     branch_to_parent: MapxOrd<BranchID, Option<BasePoint>>,
@@ -40,7 +40,7 @@ pub(super) struct MapxRawVs {
     version_to_change_set: MapxOrd<VersionID, MapxRaw>,
 
     // key -> multi-branch -> multi-version -> multi-value
-    layered_kv: MapxOrdRawKey<MapxOrd<BranchID, MapxOrd<VersionID, Option<RawValue>>>>,
+    layered_kv: MapxOrdRk<MapxOrd<BranchID, MapxOrd<VersionID, Option<RawValue>>>>,
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
@@ -51,12 +51,12 @@ impl MapxRawVs {
     pub(super) fn new() -> Self {
         let mut ret = Self {
             default_branch: BranchID::default(),
-            branch_name_to_branch_id: MapxOrdRawKey::new(),
-            version_name_to_version_id: MapxOrdRawKey::new(),
+            branch_name_to_branch_id: MapxOrdRk::new(),
+            version_name_to_version_id: MapxOrdRk::new(),
             branch_to_parent: MapxOrd::new(),
             branch_to_created_versions: MapxOrd::new(),
             version_to_change_set: MapxOrd::new(),
-            layered_kv: MapxOrdRawKey::new(),
+            layered_kv: MapxOrdRk::new(),
         };
         ret.init();
         ret
@@ -449,10 +449,7 @@ impl MapxRawVs {
         version_name: &[u8],
         branch_id: BranchID,
     ) -> Result<()> {
-        let mut vername = branch_id.to_be_bytes().to_vec();
-        vername.extend_from_slice(version_name);
-
-        if self.version_name_to_version_id.get(&vername).is_some() {
+        if self.version_name_to_version_id.get(version_name).is_some() {
             return Err(eg!("version already exists"));
         }
 
@@ -465,7 +462,7 @@ impl MapxRawVs {
         vers.insert(version_id, ());
 
         self.version_name_to_version_id
-            .insert(vername.into_boxed_slice(), version_id);
+            .insert(version_name.to_vec().into_boxed_slice(), version_id);
         self.version_to_change_set
             .insert(version_id, MapxRaw::new());
 
@@ -694,7 +691,7 @@ impl MapxRawVs {
     // Check if a branch exists and has versions on it.
     #[inline(always)]
     pub(super) fn branch_has_versions(&self, branch_id: BranchID) -> bool {
-        self.branch_exists(branch_id) || !self.version_name_to_version_id.is_empty()
+        self.branch_exists(branch_id) && !self.version_name_to_version_id.is_empty()
     }
 
     // Remove all changes directly made by this branch, and delete the branch itself.
@@ -990,8 +987,8 @@ impl MapxRawVs {
         }
 
         for (ver, _) in created_vers.iter().rev().skip(reserved_ver_num) {
-            created_vers.remove(&ver);
-            self.version_to_change_set.remove(&ver);
+            created_vers.remove(&ver).unwrap();
+            self.version_to_change_set.remove(&ver).unwrap();
 
             // one version belong(directly) to one branch only,
             // so we can remove these created versions safely.
@@ -1012,14 +1009,8 @@ impl MapxRawVs {
     }
 
     #[inline(always)]
-    pub(super) fn get_version_id(
-        &self,
-        branch_name: BranchName,
-        version_name: VersionName,
-    ) -> Option<VersionID> {
-        let mut vername = self.get_branch_id(branch_name)?.to_be_bytes().to_vec();
-        vername.extend_from_slice(version_name.0);
-        self.version_name_to_version_id.get(&vername)
+    pub(super) fn get_version_id(&self, version_name: VersionName) -> Option<VersionID> {
+        self.version_name_to_version_id.get(version_name.0)
     }
 }
 
@@ -1046,7 +1037,7 @@ struct BasePoint {
 
 pub struct MapxRawVsIter<'a> {
     hdr: &'a MapxRawVs,
-    iter: MapxOrdRawKeyIter<MapxOrd<BranchID, MapxOrd<VersionID, Option<RawValue>>>>,
+    iter: MapxOrdRkIter<MapxOrd<BranchID, MapxOrd<VersionID, Option<RawValue>>>>,
     branch_id: BranchID,
     version_id: VersionID,
 }

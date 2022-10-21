@@ -105,7 +105,7 @@ impl MapxRawMkVs {
         version_name: VersionName,
     ) -> Option<RawValue> {
         let branch_id = self.inner.get_branch_id(branch_name)?;
-        let version_id = self.inner.get_version_id(branch_name, version_name)?;
+        let version_id = self.inner.get_version_id(version_name)?;
         self.inner.get_by_branch_version(key, branch_id, version_id)
     }
 
@@ -173,7 +173,7 @@ impl VsMgmt for MapxRawMkVs {
     #[inline(always)]
     fn version_exists(&self, version_name: VersionName) -> bool {
         self.inner
-            .get_version_id(INITIAL_BRANCH_NAME, version_name)
+            .get_version_id(version_name)
             .map(|id| self.inner.version_exists(id))
             .unwrap_or(false)
     }
@@ -189,7 +189,7 @@ impl VsMgmt for MapxRawMkVs {
             .get_branch_id(branch_name)
             .and_then(|br_id| {
                 self.inner
-                    .get_version_id(branch_name, version_name)
+                    .get_version_id(version_name)
                     .map(|ver_id| self.inner.version_exists_on_branch(ver_id, br_id).0)
             })
             .unwrap_or(false)
@@ -212,7 +212,7 @@ impl VsMgmt for MapxRawMkVs {
             .get_branch_id(branch_name)
             .and_then(|br_id| {
                 self.inner
-                    .get_version_id(branch_name, version_name)
+                    .get_version_id(version_name)
                     .map(|ver_id| self.inner.version_created_on_branch(ver_id, br_id))
             })
             .unwrap_or(false)
@@ -282,7 +282,7 @@ impl VsMgmt for MapxRawMkVs {
             .c(d!("base branch not found"))?;
         let base_ver_id = self
             .inner
-            .get_version_id(BranchName(base_branch_name.0), base_version_name)
+            .get_version_id(base_version_name)
             .c(d!("base vesion not found"))?;
         self.inner
             .branch_create_by_base_branch_version(branch_name.0, base_br_id, base_ver_id)
@@ -356,7 +356,7 @@ impl VsMgmt for MapxRawMkVs {
             .c(d!("branch not found"))
             .and_then(|br_id| {
                 self.inner
-                    .get_version_id(branch_name, last_version_name)
+                    .get_version_id(last_version_name)
                     .c(d!("version not found"))
                     .and_then(|last_ver_id| {
                         self.inner.branch_truncate_to(br_id, last_ver_id).c(d!())

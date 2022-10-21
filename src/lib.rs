@@ -65,7 +65,9 @@
 //! whose internal fields are all types defined in VSDB
 //! (primitive types and their collections are also supported),
 //! but can not be applied to nesting wrapper among VSDB-types,
-//! you should implement the `VsMgmt` trait(or a part of it) manually.
+//! we recommend you to use the [**multi-key APIs**](crate::versioned_multi_key)
+//! if you indeed require these functions(better performance also),
+//! or you will have to implement the `VsMgmt` trait manually.
 //!
 //! This data structure can be handled correctly by `#[derive(Vs)]`:
 //!
@@ -138,6 +140,9 @@
 //! }
 //! ```
 //!
+//! Please check the [**multi-key functions**](crate::versioned_multi_key)
+//! if you have requirements of the above or similar scenes.
+//!
 //! Some complete examples:
 //! - [**Versioned examples**](versioned/index.html)
 //! - [**Unversioned examples**](basic/index.html)
@@ -146,15 +151,17 @@
 //!
 //! - \[**default**] `sled_engine`, use sled as the backend database
 //!     - Faster compilation speed
-//!     - Support for compiling into a statically linked binary
+//!     - Support for compiling into a statically linked object
 //! - `rocks_engine`, use rocksdb as the backend database
 //!     - Faster running speed
-//!     - Can not be compiled into a statically linked binary
-//! - \[**default**] `cbor_codec`, use cbor as the codec
+//!     - Can not be compiled into a statically linked object
+//! - \[**default**] `msgpack_codec`, use msgpack as the codec
 //!     - Faster running speed
 //! - `bcs_codec`, use bcs as the codec
 //!     - Created by the 'Libre' project of Facebook
 //!     - Security reinforcement for blockchain scenarios
+//! - \[**default**] `derive`, enable the `Vs` procedural macro
+//! - `merkle`, enable an optional mekle-tree implementation
 //!
 //! ## Low-level design
 //!
@@ -169,7 +176,7 @@
 //!
 //! ## NOTE
 //!
-//! The serialized result of a VSDB instance cannot be used as the basis for distributed consensus, because the serialized result only contains some meta-information(storage paths, etc.), and these meta-information are likely to be different in different environments, the correct way is to read what you need from it, and then process the real content.
+//! The serialized result of a VSDB instance can not be used as the basis for distributed consensus, because the serialized result only contains some meta-information(storage paths, etc.), and these meta-information are likely to be different in different environments, the correct way is to read what you need from it, and then process the real content.
 
 #![deny(warnings)]
 #![recursion_limit = "512"]
@@ -177,9 +184,11 @@
 pub mod basic;
 pub mod basic_multi_key;
 mod common;
-pub mod merkle;
 pub mod versioned;
 pub mod versioned_multi_key;
+
+#[cfg(feature = "merkle")]
+pub mod merkle;
 
 pub use basic::{mapx::Mapx, mapx_ord::MapxOrd, vecx::Vecx};
 pub use versioned::{mapx::MapxVs, mapx_ord::MapxOrdVs, orphan::OrphanVs, vecx::VecxVs};
@@ -189,8 +198,11 @@ pub use versioned_multi_key::{
 };
 
 pub use versioned::VsMgmt;
+
+#[cfg(feature = "derive")]
 pub use vsdb_derive::Vs;
 
+#[cfg(feature = "merkle")]
 pub use merkle::MerkleTree;
 
 pub use common::{

@@ -9,12 +9,12 @@
 //! # Examples
 //!
 //! ```
-//! use vsdb::basic::mapx_ord_rawvalue::MapxOrdRawValue;
+//! use vsdb::basic::mapx_ord_rawvalue::MapxOrdRv;
 //!
 //! let dir = format!("/tmp/__vsdb__{}", rand::random::<u128>());
 //! vsdb::vsdb_set_base_dir(dir);
 //!
-//! let mut l = MapxOrdRawValue::new();
+//! let mut l = MapxOrdRv::new();
 //!
 //! l.insert_ref(&1, &[0]);
 //! l.insert(1, Box::new([0]));
@@ -49,12 +49,12 @@ use std::{
 
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
-pub struct MapxOrdRawValue<K> {
+pub struct MapxOrdRv<K> {
     inner: MapxRaw,
     p: PhantomData<K>,
 }
 
-impl<K> Default for MapxOrdRawValue<K>
+impl<K> Default for MapxOrdRv<K>
 where
     K: KeyEnDeOrdered,
 {
@@ -63,13 +63,13 @@ where
     }
 }
 
-impl<K> MapxOrdRawValue<K>
+impl<K> MapxOrdRv<K>
 where
     K: KeyEnDeOrdered,
 {
     #[inline(always)]
     pub fn new() -> Self {
-        MapxOrdRawValue {
+        MapxOrdRv {
             inner: MapxRaw::new(),
             p: PhantomData,
         }
@@ -147,15 +147,15 @@ where
     }
 
     #[inline(always)]
-    pub fn iter(&self) -> MapxOrdRawValueIter<K> {
-        MapxOrdRawValueIter {
+    pub fn iter(&self) -> MapxOrdRvIter<K> {
+        MapxOrdRvIter {
             iter: self.inner.iter(),
             p: PhantomData,
         }
     }
 
     #[inline(always)]
-    pub fn range<R: RangeBounds<K>>(&self, bounds: R) -> MapxOrdRawValueIter<K> {
+    pub fn range<R: RangeBounds<K>>(&self, bounds: R) -> MapxOrdRvIter<K> {
         self.range_ref((bounds.start_bound(), bounds.end_bound()))
     }
 
@@ -163,7 +163,7 @@ where
     pub fn range_ref<'a, R: RangeBounds<&'a K>>(
         &'a self,
         bounds: R,
-    ) -> MapxOrdRawValueIter<K> {
+    ) -> MapxOrdRvIter<K> {
         let ll;
         let l = match bounds.start_bound() {
             Bound::Included(lo) => {
@@ -190,7 +190,7 @@ where
             Bound::Unbounded => Bound::Unbounded,
         };
 
-        MapxOrdRawValueIter {
+        MapxOrdRvIter {
             iter: self.inner.range((l, h)),
             p: PhantomData,
         }
@@ -227,7 +227,7 @@ pub struct ValueMut<'a, K>
 where
     K: KeyEnDeOrdered,
 {
-    hdr: &'a MapxOrdRawValue<K>,
+    hdr: &'a MapxOrdRv<K>,
     key: K,
     value: RawValue,
 }
@@ -236,7 +236,7 @@ impl<'a, K> ValueMut<'a, K>
 where
     K: KeyEnDeOrdered,
 {
-    pub(crate) fn new(hdr: &'a MapxOrdRawValue<K>, key: K, value: RawValue) -> Self {
+    pub(crate) fn new(hdr: &'a MapxOrdRv<K>, key: K, value: RawValue) -> Self {
         ValueMut { hdr, key, value }
     }
 }
@@ -275,7 +275,7 @@ where
     K: KeyEnDeOrdered,
 {
     key: K,
-    hdr: &'a MapxOrdRawValue<K>,
+    hdr: &'a MapxOrdRv<K>,
 }
 
 impl<'a, K> Entry<'a, K>
@@ -295,7 +295,7 @@ where
     K: KeyEnDeOrdered,
 {
     key: &'a K,
-    hdr: &'a MapxOrdRawValue<K>,
+    hdr: &'a MapxOrdRv<K>,
 }
 
 impl<'a, K> EntryRef<'a, K>
@@ -310,7 +310,7 @@ where
     }
 }
 
-pub struct MapxOrdRawValueIter<K>
+pub struct MapxOrdRvIter<K>
 where
     K: KeyEnDeOrdered,
 {
@@ -318,7 +318,7 @@ where
     p: PhantomData<K>,
 }
 
-impl<K> Iterator for MapxOrdRawValueIter<K>
+impl<K> Iterator for MapxOrdRvIter<K>
 where
     K: KeyEnDeOrdered,
 {
@@ -328,7 +328,7 @@ where
     }
 }
 
-impl<K> DoubleEndedIterator for MapxOrdRawValueIter<K>
+impl<K> DoubleEndedIterator for MapxOrdRvIter<K>
 where
     K: KeyEnDeOrdered,
 {
@@ -339,4 +339,4 @@ where
     }
 }
 
-impl<K> ExactSizeIterator for MapxOrdRawValueIter<K> where K: KeyEnDeOrdered {}
+impl<K> ExactSizeIterator for MapxOrdRvIter<K> where K: KeyEnDeOrdered {}

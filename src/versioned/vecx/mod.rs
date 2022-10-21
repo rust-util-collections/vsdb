@@ -3,7 +3,7 @@
 //!
 
 use crate::{
-    versioned::mapx_ord_rawkey::{MapxOrdRawKeyVs, MapxOrdRawKeyVsIter},
+    versioned::mapx_ord_rawkey::{MapxOrdRkVs, MapxOrdRkVsIter},
     BranchName, ParentBranchName, ValueEnDe, VersionName, VsMgmt,
 };
 use ruc::*;
@@ -14,7 +14,7 @@ use std::ops::{Deref, DerefMut};
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct VecxVs<T> {
-    inner: MapxOrdRawKeyVs<T>,
+    inner: MapxOrdRkVs<T>,
 }
 
 impl<T: ValueEnDe> Default for VecxVs<T> {
@@ -27,7 +27,7 @@ impl<T: ValueEnDe> VecxVs<T> {
     #[inline(always)]
     pub fn new() -> Self {
         VecxVs {
-            inner: MapxOrdRawKeyVs::new(),
+            inner: MapxOrdRkVs::new(),
         }
     }
 
@@ -252,7 +252,7 @@ impl<T: ValueEnDe> VsMgmt for VecxVs<T> {
 }
 
 pub struct VecxVsIter<'a, T: ValueEnDe> {
-    iter: MapxOrdRawKeyVsIter<'a, T>,
+    iter: MapxOrdRkVsIter<'a, T>,
 }
 
 impl<'a, T: ValueEnDe> Iterator for VecxVsIter<'a, T> {
@@ -270,7 +270,7 @@ impl<'a, T: ValueEnDe> DoubleEndedIterator for VecxVsIter<'a, T> {
 
 #[derive(PartialEq, Eq, Debug)]
 pub struct ValueMut<'a, V: ValueEnDe> {
-    hdr: &'a MapxOrdRawKeyVs<V>,
+    hdr: &'a MapxOrdRkVs<V>,
     key: u64,
     value: V,
 }
@@ -279,7 +279,7 @@ impl<'a, V> ValueMut<'a, V>
 where
     V: ValueEnDe,
 {
-    fn new(hdr: &'a MapxOrdRawKeyVs<V>, key: usize, value: V) -> Self {
+    fn new(hdr: &'a MapxOrdRkVs<V>, key: usize, value: V) -> Self {
         ValueMut {
             hdr,
             key: key as u64,
