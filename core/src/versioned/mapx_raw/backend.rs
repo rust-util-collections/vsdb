@@ -675,7 +675,7 @@ impl MapxRawVs {
             decode_map(&self.br_to_its_vers.get(&br_id).c(d!("branch not found"))?);
         let mut brvers = brvers_hdr
             .range(Cow::Borrowed(&base_version[..])..)
-            .map(|(ver, _)| to_verid(&ver));
+            .map(|(ver, _)| to_verid(&ver[..]));
 
         if let Some(ver) = brvers.next() {
             if base_version != ver {
@@ -771,14 +771,14 @@ impl MapxRawVs {
         let mut valid_vers = HashSet::new();
         self.br_to_its_vers.iter().for_each(|(_, vers)| {
             decode_map(&vers).iter().for_each(|(ver, _)| {
-                valid_vers.insert(to_verid(&ver));
+                valid_vers.insert(to_verid(&ver[..]));
             })
         });
 
         let mut orphanvers = vec![];
         for (ver, chgset) in chgset_hdr
             .iter()
-            .filter(|(ver, _)| !valid_vers.contains(*ver))
+            .filter(|(ver, _)| !valid_vers.contains(&ver[..]))
         {
             for k in chgset.iter() {
                 let mut lkv = decode_map(&*self.layered_kv.get(&k).c(d!())?);

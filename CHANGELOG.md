@@ -1,6 +1,12 @@
 # Change log
 
-## v0.47.x
+## v0.47.1
+
+#### BUG fixes
+
+- Fix issues related to the `prune` operation
+
+## v0.47.0
 
 No functional changes, just upgraded some necessary dependencies.
 
