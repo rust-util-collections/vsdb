@@ -1,5 +1,11 @@
 # Change log
 
+## v0.47.2 ~ v0.47.3
+
+#### New APIs
+
+- Add more conversion functions for Version/Branch related structures
+
 ## v0.47.1
 
 #### BUG fixes
