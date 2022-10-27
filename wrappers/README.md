@@ -160,9 +160,10 @@ Some complete examples:
 - `rocks_engine`, use rocksdb as the backend database
     - Faster running speed in the unversioned functions
     - Can not be compiled into a statically linked object
-- [**default**] `msgpack_codec`, use msgpack as the codec
+- [**default**] `json_codec`, use `serde_json` as the codec
+    - Better generality and compatibility
+- `bcs_codec`, use `bcs` as the codec
     - Faster running speed
-- `bcs_codec`, use bcs as the codec
     - Created by the 'Libre' project of Facebook
     - Security reinforcement for blockchain scenarios
 - [**default**] `derive`, enable the `Vs` procedural macro
@@ -178,8 +179,9 @@ Some complete examples:
   - The correct way is to read what you need from it, and then process the real content
 - Version names must be globally unique
   - Using a same version name on different branches is also not allowed
-- The low-level "does not exist" expression has been changed from `None` to `[]` since v0.42.0
+- The low-level "does not exist" expression in `MapxRawVs` and `MapxRawMkVs` has been changed from `None` to `[]` since v0.42.0
   - If you assign an empty value(`[u8;0]`, `&[]` ...) to a key, the key will be treated as 'deleted'
+  - NOTE: these 'empty' values can be set as normal value in other instances except this two!
 
 ### LICENSE
 

@@ -9,7 +9,7 @@
 //! ```
 //! use vsdb_core::basic::mapx_raw::MapxRaw;
 //!
-//! let dir = format!("/tmp/__vsdb__{}", rand::random::<u128>());
+//! let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
 //! vsdb_core::vsdb_set_base_dir(&dir);
 //!
 //! let mut l = MapxRaw::new();

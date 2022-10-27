@@ -1,9 +1,14 @@
+use ruc::*;
 use serde::{Deserialize, Serialize};
 use vsdb::{basic::orphan::Orphan, vsdb_set_base_dir};
 
 #[test]
 fn basic_cases() {
-    vsdb_set_base_dir("/tmp/.vsdb/basic_orphan_test").unwrap();
+    info_omit!(vsdb_set_base_dir(&format!(
+        "/tmp/vsdb_testing/{}",
+        rand::random::<u64>()
+    )));
+
     assert_eq!(Orphan::new(0), 0);
     assert!(Orphan::new(111) > 0);
     assert!(Orphan::new(111) >= 0);

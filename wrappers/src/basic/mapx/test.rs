@@ -1,4 +1,4 @@
-use super::*;
+use super::{Mapx, ValueEnDe};
 use ruc::*;
 
 #[test]
@@ -41,14 +41,14 @@ fn test_len() {
 }
 
 #[test]
-fn test_valueende() {
+fn xx_test_valueende() {
     let cnt = 100;
     let dehdr = {
         let mut hdr: Mapx<usize, usize> = Mapx::new();
         (0..cnt).map(|i: usize| (i, i)).for_each(|(key, value)| {
             assert!(hdr.insert(&key, &value).is_none());
         });
-        <Mapx<usize, usize> as ValueEnDe>::encode(&hdr)
+        hdr.encode()
     };
     let mut reloaded = pnk!(<Mapx<usize, usize> as ValueEnDe>::decode(&dehdr));
     assert_eq!(cnt, reloaded.len());
@@ -90,14 +90,12 @@ fn test_first_last() {
 #[test]
 fn test_values() {
     let mut hdr: Mapx<usize, usize> = Mapx::new();
-    let max = 100;
-    (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
+    let max = 100usize;
+    (0..max).map(|i| (i, i)).for_each(|(key, value)| {
         assert!(hdr.insert(&key, &value).is_none());
     });
-    let mut i = 0;
-    for it in hdr.values() {
-        assert_eq!(i, it);
-        i = i + 1;
+    for (k, v) in hdr.iter() {
+        assert_eq!(k, v);
     }
 }
 

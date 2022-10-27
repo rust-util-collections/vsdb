@@ -3,6 +3,8 @@ use crate::ValueEnDe;
 use super::*;
 use ruc::*;
 
+const NIL: &[u8] = &[];
+
 #[test]
 fn test_insert() {
     let mut hdr = MapxRawMk::new(2);
@@ -78,7 +80,7 @@ fn test_iter_op_with_key_prefix() {
             .or_insert(&[])
             .is_ok()
     );
-    assert_eq!(&map.get(&[&[11], &[12], &[13], &[14]]).unwrap(), &[]);
+    assert_eq!(&map.get(&[&[11], &[12], &[13], &[14]]).unwrap(), NIL);
     assert!(
         map.entry(&[&[11], &[12], &[13], &[15]])
             .or_insert(&[0])
@@ -90,7 +92,7 @@ fn test_iter_op_with_key_prefix() {
     let mut op = |k: &[&[u8]], v: &[u8]| {
         cnt += 1;
         println!("cnt = {} v = {:?}", cnt, v);
-        if v == &[] {
+        if v == NIL {
             assert_eq!(k, &[&[11], &[12], &[13], &[14]]);
         } else {
             assert_eq!(k, &[&[11], &[12], &[13], &[15]]);

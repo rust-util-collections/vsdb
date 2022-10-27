@@ -182,6 +182,13 @@ fn test_insert() {
             assert_ne!(trie_root3, trie_root4);
             assert_ne!(trie_root4, trie_root);
         });
+
+    let mut hdr: MapxVs<usize, Vec<u8>> = MapxVs::new();
+    pnk!(hdr.version_create(VersionName(b"manster0")));
+    pnk!(hdr.insert(&111, &vec![]));
+
+    // empty value can be used as normally in `Mapx`
+    assert!(hdr.get(&111).is_some());
 }
 
 #[test]
@@ -436,9 +443,9 @@ fn test_iter() {
     });
 
     let hdr_shadow = unsafe { hdr.shadow() };
-    for (idx, (key, v)) in hdr_shadow.iter().enumerate() {
-        assert_eq!(idx + 1, v);
-        assert!(pnk!(hdr.remove(&key)).is_some());
+    for (k, v) in hdr_shadow.iter() {
+        assert_eq!(k + 1, v);
+        assert!(pnk!(hdr.remove(&k)).is_some());
     }
     assert_eq!(0, hdr.len());
 }

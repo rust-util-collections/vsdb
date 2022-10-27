@@ -11,7 +11,11 @@ const INITIAL_BRANCH_NAME: BranchName<'static> = BranchName(b"master");
 #[test]
 fn basic_cases() {
     let cnt = 200;
-    vsdb_set_base_dir("/tmp/.vsdb/versioned_multi_key_mapx_raw_test").unwrap();
+    info_omit!(vsdb_set_base_dir(&format!(
+        "/tmp/vsdb_testing/{}",
+        rand::random::<u64>()
+    )));
+
     let hdr = {
         let mut hdr_i = MapxRawMkVs::new(2);
         hdr_i.version_create(VersionName(b"test")).unwrap();

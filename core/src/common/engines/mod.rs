@@ -285,7 +285,21 @@ impl<'de> de::Visitor<'de> for SimpleVisitor {
     type Value = Vec<u8>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("Fatal !!")
+        formatter.write_str("bytes")
+    }
+
+    fn visit_str<E>(self, v: &str) -> StdResult<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(v.as_bytes().to_vec())
+    }
+
+    fn visit_string<E>(self, v: String) -> StdResult<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(v.into_bytes())
     }
 
     fn visit_bytes<E>(self, v: &[u8]) -> StdResult<Self::Value, E>
@@ -293,6 +307,35 @@ impl<'de> de::Visitor<'de> for SimpleVisitor {
         E: de::Error,
     {
         Ok(v.to_vec())
+    }
+
+    fn visit_byte_buf<E>(self, v: Vec<u8>) -> StdResult<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(v)
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> StdResult<Self::Value, A::Error>
+    where
+        A: de::SeqAccess<'de>,
+    {
+        let mut ret = vec![];
+        loop {
+            match seq.next_element() {
+                Ok(i) => {
+                    if let Some(i) = i {
+                        ret.push(i);
+                    } else {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    return Err(de::Error::custom(e));
+                }
+            }
+        }
+        Ok(ret)
     }
 }
 
@@ -311,8 +354,8 @@ impl<'de> Deserialize<'de> for Mapx {
         D: serde::Deserializer<'de>,
     {
         deserializer
-            .deserialize_bytes(SimpleVisitor)
-            .map(|meta| unsafe { Self::from_prefix_slice(&meta) })
+            .deserialize_byte_buf(SimpleVisitor)
+            .map(|meta| unsafe { Self::from_prefix_slice(meta) })
     }
 }
 

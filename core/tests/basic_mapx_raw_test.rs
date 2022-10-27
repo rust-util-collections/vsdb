@@ -5,7 +5,11 @@ use vsdb_core::{vsdb_set_base_dir, MapxRaw};
 #[test]
 fn basic_cases() {
     let cnt = 200;
-    vsdb_set_base_dir("/tmp/.vsdb/basic_mapx_ord_test").unwrap();
+    info_omit!(vsdb_set_base_dir(&format!(
+        "/tmp/vsdb_testing/{}",
+        rand::random::<u64>()
+    )));
+
     let hdr = {
         let mut hdr_i = MapxRaw::new();
 
@@ -27,10 +31,10 @@ fn basic_cases() {
 
         assert_eq!(cnt, hdr_i.len());
 
-        pnk!(msgpack::to_vec(&hdr_i))
+        pnk!(bcs::to_bytes(&hdr_i))
     };
 
-    let mut reloaded = pnk!(msgpack::from_slice::<MapxRaw>(&hdr));
+    let mut reloaded = pnk!(bcs::from_bytes::<MapxRaw>(&hdr));
 
     assert_eq!(cnt, reloaded.len());
 

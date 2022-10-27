@@ -6,35 +6,11 @@
 
 use super::RawBytes;
 use ruc::*;
-use serde::{
-    de::{self, DeserializeOwned},
-    Serialize,
-};
+use serde::{de::DeserializeOwned, Serialize};
 use std::{
     fmt,
     mem::{size_of, transmute},
-    result::Result as StdResult,
 };
-
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////
-
-pub(crate) struct SimpleVisitor;
-
-impl<'de> de::Visitor<'de> for SimpleVisitor {
-    type Value = Vec<u8>;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("Fatal !!")
-    }
-
-    fn visit_bytes<E>(self, v: &[u8]) -> StdResult<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Ok(v.to_vec())
-    }
-}
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -43,16 +19,16 @@ impl<'de> de::Visitor<'de> for SimpleVisitor {
 pub trait KeyEn: Serialize + Sized {
     /// Encode original key type to bytes.
     #[cfg(any(
-        feature = "msgpack_codec",
-        all(feature = "msgpack_codec", feature = "bcs_codec"),
-        all(not(feature = "msgpack_codec"), not(feature = "bcs_codec")),
+        feature = "json_codec",
+        all(feature = "json_codec", feature = "bcs_codec"),
+        all(not(feature = "json_codec"), not(feature = "bcs_codec")),
     ))]
     fn encode_key(&self) -> RawBytes {
-        msgpack::to_vec(self).unwrap()
+        serde_json::to_vec(self).unwrap()
     }
 
     /// Encode original key type to bytes.
-    #[cfg(all(feature = "bcs_codec", not(feature = "msgpack_codec")))]
+    #[cfg(all(feature = "bcs_codec", not(feature = "json_codec")))]
     fn encode_key(&self) -> RawBytes {
         bcs::to_bytes(self).unwrap()
     }
@@ -62,16 +38,16 @@ pub trait KeyEn: Serialize + Sized {
 pub trait KeyDe: DeserializeOwned {
     /// Decode from bytes to the original key type.
     #[cfg(any(
-        feature = "msgpack_codec",
-        all(feature = "msgpack_codec", feature = "bcs_codec"),
-        all(not(feature = "msgpack_codec"), not(feature = "bcs_codec")),
+        feature = "json_codec",
+        all(feature = "json_codec", feature = "bcs_codec"),
+        all(not(feature = "json_codec"), not(feature = "bcs_codec")),
     ))]
     fn decode_key(bytes: &[u8]) -> Result<Self> {
-        msgpack::from_slice(bytes).c(d!())
+        serde_json::from_slice(bytes).c(d!())
     }
 
     /// Decode from bytes to the original key type.
-    #[cfg(all(feature = "bcs_codec", not(feature = "msgpack_codec")))]
+    #[cfg(all(feature = "bcs_codec", not(feature = "json_codec")))]
     fn decode_key(bytes: &[u8]) -> Result<Self> {
         bcs::from_bytes(bytes).c(d!())
     }
@@ -94,16 +70,16 @@ pub trait KeyEnDe: KeyEn + KeyDe {
 pub trait ValueEn: Serialize + Sized {
     /// Encode original key type to bytes.
     #[cfg(any(
-        feature = "msgpack_codec",
-        all(feature = "msgpack_codec", feature = "bcs_codec"),
-        all(not(feature = "msgpack_codec"), not(feature = "bcs_codec")),
+        feature = "json_codec",
+        all(feature = "json_codec", feature = "bcs_codec"),
+        all(not(feature = "json_codec"), not(feature = "bcs_codec")),
     ))]
     fn encode_value(&self) -> RawBytes {
-        msgpack::to_vec(self).unwrap()
+        serde_json::to_vec(self).unwrap()
     }
 
     /// Encode original key type to bytes.
-    #[cfg(all(feature = "bcs_codec", not(feature = "msgpack_codec")))]
+    #[cfg(all(feature = "bcs_codec", not(feature = "json_codec")))]
     fn encode_value(&self) -> RawBytes {
         bcs::to_bytes(self).unwrap()
     }
@@ -113,16 +89,16 @@ pub trait ValueEn: Serialize + Sized {
 pub trait ValueDe: DeserializeOwned {
     /// Decode from bytes to the original key type.
     #[cfg(any(
-        feature = "msgpack_codec",
-        all(feature = "msgpack_codec", feature = "bcs_codec"),
-        all(not(feature = "msgpack_codec"), not(feature = "bcs_codec")),
+        feature = "json_codec",
+        all(feature = "json_codec", feature = "bcs_codec"),
+        all(not(feature = "json_codec"), not(feature = "bcs_codec")),
     ))]
     fn decode_value(bytes: &[u8]) -> Result<Self> {
-        msgpack::from_slice(bytes).c(d!())
+        serde_json::from_slice(bytes).c(d!())
     }
 
     /// Decode from bytes to the original key type.
-    #[cfg(all(feature = "bcs_codec", not(feature = "msgpack_codec")))]
+    #[cfg(all(feature = "bcs_codec", not(feature = "json_codec")))]
     fn decode_value(bytes: &[u8]) -> Result<Self> {
         bcs::from_bytes(bytes).c(d!())
     }
@@ -137,7 +113,7 @@ pub trait ValueEnDe: ValueEn + ValueDe {
 
     /// Decode from bytes to the original key type.
     fn decode(bytes: &[u8]) -> Result<Self> {
-        <Self as ValueDe>::decode_value(bytes)
+        <Self as ValueDe>::decode_value(bytes).c(d!())
     }
 }
 
