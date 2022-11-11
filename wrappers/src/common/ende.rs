@@ -18,11 +18,7 @@ use std::{
 /// Methods used to encode the KEY.
 pub trait KeyEn: Serialize + Sized {
     /// Encode original key type to bytes.
-    #[cfg(any(
-        feature = "json_codec",
-        all(feature = "json_codec", feature = "bcs_codec"),
-        all(not(feature = "json_codec"), not(feature = "bcs_codec")),
-    ))]
+    #[cfg(all(feature = "json_codec", not(feature = "bsc_codec")))]
     fn encode_key(&self) -> RawBytes {
         serde_json::to_vec(self).unwrap()
     }
@@ -37,11 +33,7 @@ pub trait KeyEn: Serialize + Sized {
 /// Methods used to decode the KEY.
 pub trait KeyDe: DeserializeOwned {
     /// Decode from bytes to the original key type.
-    #[cfg(any(
-        feature = "json_codec",
-        all(feature = "json_codec", feature = "bcs_codec"),
-        all(not(feature = "json_codec"), not(feature = "bcs_codec")),
-    ))]
+    #[cfg(all(feature = "json_codec", not(feature = "bsc_codec")))]
     fn decode_key(bytes: &[u8]) -> Result<Self> {
         serde_json::from_slice(bytes).c(d!())
     }
@@ -69,11 +61,7 @@ pub trait KeyEnDe: KeyEn + KeyDe {
 /// Methods used to encode the VALUE.
 pub trait ValueEn: Serialize + Sized {
     /// Encode original key type to bytes.
-    #[cfg(any(
-        feature = "json_codec",
-        all(feature = "json_codec", feature = "bcs_codec"),
-        all(not(feature = "json_codec"), not(feature = "bcs_codec")),
-    ))]
+    #[cfg(all(feature = "json_codec", not(feature = "bsc_codec")))]
     fn encode_value(&self) -> RawBytes {
         serde_json::to_vec(self).unwrap()
     }
@@ -88,11 +76,7 @@ pub trait ValueEn: Serialize + Sized {
 /// Methods used to decode the VALUE.
 pub trait ValueDe: DeserializeOwned {
     /// Decode from bytes to the original key type.
-    #[cfg(any(
-        feature = "json_codec",
-        all(feature = "json_codec", feature = "bcs_codec"),
-        all(not(feature = "json_codec"), not(feature = "bcs_codec")),
-    ))]
+    #[cfg(all(feature = "json_codec", not(feature = "bsc_codec")))]
     fn decode_value(bytes: &[u8]) -> Result<Self> {
         serde_json::from_slice(bytes).c(d!())
     }

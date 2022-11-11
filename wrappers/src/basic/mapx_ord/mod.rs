@@ -357,7 +357,7 @@ where
     type Item = ValueIterMut<'a, V>;
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next().map(|(_, v)| ValueIterMut {
-            value: pnk!(<V as ValueEnDe>::decode(&*v)),
+            value: pnk!(<V as ValueEnDe>::decode(&v)),
             inner: v,
         })
     }
@@ -369,7 +369,7 @@ where
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.inner.next_back().map(|(_, v)| ValueIterMut {
-            value: pnk!(<V as ValueEnDe>::decode(&*v)),
+            value: pnk!(<V as ValueEnDe>::decode(&v)),
             inner: v,
         })
     }
@@ -398,7 +398,7 @@ where
             (
                 pnk!(<K as KeyEnDeOrdered>::from_bytes(k)),
                 ValueIterMut {
-                    value: <V as ValueEnDe>::decode(&*v).unwrap(),
+                    value: <V as ValueEnDe>::decode(&v).unwrap(),
                     inner: v,
                 },
             )
@@ -416,7 +416,7 @@ where
             (
                 pnk!(<K as KeyEnDeOrdered>::from_bytes(k)),
                 ValueIterMut {
-                    value: <V as ValueEnDe>::decode(&*v).unwrap(),
+                    value: <V as ValueEnDe>::decode(&v).unwrap(),
                     inner: v,
                 },
             )

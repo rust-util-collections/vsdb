@@ -86,7 +86,7 @@ where
     #[inline(always)]
     pub fn get_mut(&mut self, key: impl AsRef<[u8]>) -> Option<ValueMut<'_, V>> {
         self.inner.get_mut(key.as_ref()).map(|inner| ValueMut {
-            value: <V as ValueEnDe>::decode(&*inner).unwrap(),
+            value: <V as ValueEnDe>::decode(&inner).unwrap(),
             inner,
         })
     }
@@ -348,7 +348,7 @@ where
             (
                 k,
                 ValueIterMut {
-                    value: <V as ValueEnDe>::decode(&*v).unwrap(),
+                    value: <V as ValueEnDe>::decode(&v).unwrap(),
                     inner: v,
                 },
             )
@@ -365,7 +365,7 @@ where
             (
                 k,
                 ValueIterMut {
-                    value: <V as ValueEnDe>::decode(&*v).unwrap(),
+                    value: <V as ValueEnDe>::decode(&v).unwrap(),
                     inner: v,
                 },
             )

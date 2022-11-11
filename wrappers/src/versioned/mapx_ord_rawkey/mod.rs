@@ -568,7 +568,7 @@ where
             (
                 k,
                 ValueIterMut {
-                    value: pnk!(<V as ValueEnDe>::decode(&*v)),
+                    value: pnk!(<V as ValueEnDe>::decode(&v)),
                     inner: v,
                 },
             )
@@ -585,7 +585,7 @@ where
             (
                 k,
                 ValueIterMut {
-                    value: pnk!(<V as ValueEnDe>::decode(&*v)),
+                    value: pnk!(<V as ValueEnDe>::decode(&v)),
                     inner: v,
                 },
             )

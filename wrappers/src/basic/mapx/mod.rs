@@ -287,7 +287,7 @@ where
 {
     type Target = V;
     fn deref(&self) -> &Self::Target {
-        &*self.inner
+        &self.inner
     }
 }
 
@@ -296,7 +296,7 @@ where
     V: ValueEnDe,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut *self.inner
+        &mut self.inner
     }
 }
 

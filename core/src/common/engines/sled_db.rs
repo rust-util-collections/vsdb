@@ -40,7 +40,7 @@ impl Engine for SledEngine {
 
         let (prefix_allocator, initial_value) = PreAllocator::init();
 
-        if meta.get(&META_KEY_BRANCH_ID).c(d!())?.is_none() {
+        if meta.get(META_KEY_BRANCH_ID).c(d!())?.is_none() {
             meta.insert(
                 META_KEY_BRANCH_ID,
                 (1 + INITIAL_BRANCH_ID as usize).to_be_bytes(),
@@ -48,7 +48,7 @@ impl Engine for SledEngine {
             .c(d!())?;
         }
 
-        if meta.get(&META_KEY_VERSION_ID).c(d!())?.is_none() {
+        if meta.get(META_KEY_VERSION_ID).c(d!())?.is_none() {
             meta.insert(META_KEY_VERSION_ID, 0_usize.to_be_bytes())
                 .c(d!())?;
         }

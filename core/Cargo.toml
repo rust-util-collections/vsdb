@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_core"
-version = "0.48.0"
+version = "0.48.3"
 authors = ["dafanhui@163.com", "hui.fan@mail.ru"]
 edition = "2021"
 description = "A stuctured DB with some 'Git-like' features, mainly used in blockchain projects."
@@ -42,10 +42,14 @@ hex = "0.4.3"
 default = ["sled_engine", "derive"]
 
 derive = ["vsdb_derive"]
-compress = ["sled?/compression", "rocksdb?/lz4"]
 
-rocks_engine = ["rocksdb"]
+compress = ["sled_compress", "rocks_compress"]
+
 sled_engine = ["sled"]
+rocks_engine = ["rocksdb"]
+
+sled_compress = ["sled?/compression"]
+rocks_compress = ["rocksdb?/lz4"]
 
 extra_types = ["primitive-types-0-11", "primitive-types-0-10"]
 

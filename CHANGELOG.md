@@ -1,4 +1,10 @@
-# Change log
+# CHANGE LOG
+
+## v0.48.1 ~ v0.48.3
+
+#### Internal optimizations
+
+- Tuning feature settings and code details
 
 ## v0.48.0
 
