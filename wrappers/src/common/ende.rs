@@ -19,14 +19,18 @@ use std::{
 pub trait KeyEn: Serialize + Sized {
     /// Encode original key type to bytes.
     #[cfg(all(feature = "json_codec", not(feature = "bsc_codec")))]
-    fn encode_key(&self) -> RawBytes {
-        serde_json::to_vec(self).unwrap()
+    fn try_encode_key(&self) -> Result<RawBytes> {
+        serde_json::to_vec(self).c(d!())
     }
 
     /// Encode original key type to bytes.
     #[cfg(all(feature = "bcs_codec", not(feature = "json_codec")))]
+    fn try_encode_key(&self) -> Result<RawBytes> {
+        bcs::to_bytes(self).c(d!())
+    }
+
     fn encode_key(&self) -> RawBytes {
-        bcs::to_bytes(self).unwrap()
+        pnk!(self.try_encode_key())
     }
 }
 
@@ -48,13 +52,17 @@ pub trait KeyDe: DeserializeOwned {
 /// Methods used to encode and decode the KEY.
 pub trait KeyEnDe: KeyEn + KeyDe {
     /// Encode original key type to bytes.
+    fn try_encode(&self) -> Result<RawBytes> {
+        <Self as KeyEn>::try_encode_key(self).c(d!())
+    }
+
     fn encode(&self) -> RawBytes {
-        <Self as KeyEn>::encode_key(self)
+        pnk!(self.try_encode())
     }
 
     /// Decode from bytes to the original key type.
     fn decode(bytes: &[u8]) -> Result<Self> {
-        <Self as KeyDe>::decode_key(bytes)
+        <Self as KeyDe>::decode_key(bytes).c(d!())
     }
 }
 
@@ -62,14 +70,18 @@ pub trait KeyEnDe: KeyEn + KeyDe {
 pub trait ValueEn: Serialize + Sized {
     /// Encode original key type to bytes.
     #[cfg(all(feature = "json_codec", not(feature = "bsc_codec")))]
-    fn encode_value(&self) -> RawBytes {
-        serde_json::to_vec(self).unwrap()
+    fn try_encode_value(&self) -> Result<RawBytes> {
+        serde_json::to_vec(self).c(d!())
     }
 
     /// Encode original key type to bytes.
     #[cfg(all(feature = "bcs_codec", not(feature = "json_codec")))]
+    fn try_encode_value(&self) -> Result<RawBytes> {
+        bcs::to_bytes(self).c(d!())
+    }
+
     fn encode_value(&self) -> RawBytes {
-        bcs::to_bytes(self).unwrap()
+        pnk!(self.try_encode_value())
     }
 }
 
@@ -91,8 +103,12 @@ pub trait ValueDe: DeserializeOwned {
 /// Methods used to encode and decode the VALUE.
 pub trait ValueEnDe: ValueEn + ValueDe {
     /// Encode original key type to bytes.
+    fn try_encode(&self) -> Result<RawBytes> {
+        <Self as ValueEn>::try_encode_value(self).c(d!())
+    }
+
     fn encode(&self) -> RawBytes {
-        <Self as ValueEn>::encode_value(self)
+        pnk!(self.try_encode())
     }
 
     /// Decode from bytes to the original key type.

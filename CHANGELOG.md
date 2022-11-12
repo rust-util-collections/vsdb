@@ -1,6 +1,6 @@
 # CHANGE LOG
 
-## v0.48.1 ~ v0.48.3
+## v0.48.1 ~ v0.48.4
 
 #### Internal optimizations
 
