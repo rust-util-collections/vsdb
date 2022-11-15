@@ -17,12 +17,12 @@ use std::{
 /// Documents => [MapxRawVs](crate::versioned::mapx_raw::MapxRawVs)
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
-pub struct MapxOrdRkVs<V> {
+pub struct MapxOrdRawKeyVs<V> {
     inner: MapxRawVs,
     p: PhantomData<V>,
 }
 
-impl<V> Default for MapxOrdRkVs<V>
+impl<V> Default for MapxOrdRawKeyVs<V>
 where
     V: ValueEnDe,
 {
@@ -31,13 +31,13 @@ where
     }
 }
 
-impl<V> MapxOrdRkVs<V>
+impl<V> MapxOrdRawKeyVs<V>
 where
     V: ValueEnDe,
 {
     #[inline(always)]
     pub fn new() -> Self {
-        MapxOrdRkVs {
+        MapxOrdRawKeyVs {
             inner: MapxRawVs::new(),
             p: PhantomData,
         }
@@ -215,16 +215,16 @@ where
     }
 
     #[inline(always)]
-    pub fn iter(&self) -> MapxOrdRkVsIter<'_, V> {
-        MapxOrdRkVsIter {
+    pub fn iter(&self) -> MapxOrdRawKeyVsIter<'_, V> {
+        MapxOrdRawKeyVsIter {
             iter: self.inner.iter(),
             p: PhantomData,
         }
     }
 
     #[inline(always)]
-    pub fn iter_by_branch(&self, branch_name: BranchName) -> MapxOrdRkVsIter<'_, V> {
-        MapxOrdRkVsIter {
+    pub fn iter_by_branch(&self, branch_name: BranchName) -> MapxOrdRawKeyVsIter<'_, V> {
+        MapxOrdRawKeyVsIter {
             iter: self.inner.iter_by_branch(branch_name),
             p: PhantomData,
         }
@@ -235,8 +235,8 @@ where
         &self,
         branch_name: BranchName,
         version_name: VersionName,
-    ) -> MapxOrdRkVsIter<'_, V> {
-        MapxOrdRkVsIter {
+    ) -> MapxOrdRawKeyVsIter<'_, V> {
+        MapxOrdRawKeyVsIter {
             iter: self.inner.iter_by_branch_version(branch_name, version_name),
             p: PhantomData,
         }
@@ -246,8 +246,8 @@ where
     pub fn range<'a, R: 'a + RangeBounds<RawKey>>(
         &'a self,
         bounds: R,
-    ) -> MapxOrdRkVsIter<'a, V> {
-        MapxOrdRkVsIter {
+    ) -> MapxOrdRawKeyVsIter<'a, V> {
+        MapxOrdRawKeyVsIter {
             iter: self.inner.range(bounds),
             p: PhantomData,
         }
@@ -258,8 +258,8 @@ where
         &'a self,
         branch_name: BranchName,
         bounds: R,
-    ) -> MapxOrdRkVsIter<'a, V> {
-        MapxOrdRkVsIter {
+    ) -> MapxOrdRawKeyVsIter<'a, V> {
+        MapxOrdRawKeyVsIter {
             iter: self.inner.range_by_branch(branch_name, bounds),
             p: PhantomData,
         }
@@ -271,8 +271,8 @@ where
         branch_name: BranchName,
         version_name: VersionName,
         bounds: R,
-    ) -> MapxOrdRkVsIter<'a, V> {
-        MapxOrdRkVsIter {
+    ) -> MapxOrdRawKeyVsIter<'a, V> {
+        MapxOrdRawKeyVsIter {
             iter: self
                 .inner
                 .range_by_branch_version(branch_name, version_name, bounds),
@@ -284,8 +284,8 @@ where
     pub fn range_ref<'a, R: RangeBounds<&'a [u8]>>(
         &'a self,
         bounds: R,
-    ) -> MapxOrdRkVsIter<'a, V> {
-        MapxOrdRkVsIter {
+    ) -> MapxOrdRawKeyVsIter<'a, V> {
+        MapxOrdRawKeyVsIter {
             iter: self.inner.range_ref(bounds),
             p: PhantomData,
         }
@@ -296,8 +296,8 @@ where
         &'a self,
         branch_name: BranchName,
         bounds: R,
-    ) -> MapxOrdRkVsIter<'a, V> {
-        MapxOrdRkVsIter {
+    ) -> MapxOrdRawKeyVsIter<'a, V> {
+        MapxOrdRawKeyVsIter {
             iter: self.inner.range_ref_by_branch(branch_name, bounds),
             p: PhantomData,
         }
@@ -309,8 +309,8 @@ where
         branch_name: BranchName,
         version_name: VersionName,
         bounds: R,
-    ) -> MapxOrdRkVsIter<'a, V> {
-        MapxOrdRkVsIter {
+    ) -> MapxOrdRawKeyVsIter<'a, V> {
+        MapxOrdRawKeyVsIter {
             iter: self.inner.range_ref_by_branch_version(
                 branch_name,
                 version_name,
@@ -407,14 +407,14 @@ where
     }
 }
 
-impl<V> VsMgmt for MapxOrdRkVs<V>
+impl<V> VsMgmt for MapxOrdRawKeyVs<V>
 where
     V: ValueEnDe,
 {
     crate::impl_vs_methods!();
 }
 
-pub struct MapxOrdRkVsIter<'a, V>
+pub struct MapxOrdRawKeyVsIter<'a, V>
 where
     V: ValueEnDe,
 {
@@ -422,7 +422,7 @@ where
     p: PhantomData<V>,
 }
 
-impl<'a, V> Iterator for MapxOrdRkVsIter<'a, V>
+impl<'a, V> Iterator for MapxOrdRawKeyVsIter<'a, V>
 where
     V: ValueEnDe,
 {
@@ -434,7 +434,7 @@ where
     }
 }
 
-impl<'a, V> DoubleEndedIterator for MapxOrdRkVsIter<'a, V>
+impl<'a, V> DoubleEndedIterator for MapxOrdRawKeyVsIter<'a, V>
 where
     V: ValueEnDe,
 {
@@ -445,11 +445,11 @@ where
     }
 }
 
-impl<'a, V> ExactSizeIterator for MapxOrdRkVsIter<'a, V> where V: ValueEnDe {}
+impl<'a, V> ExactSizeIterator for MapxOrdRawKeyVsIter<'a, V> where V: ValueEnDe {}
 
 #[derive(PartialEq, Eq, Debug)]
 pub struct ValueMut<'a, V: ValueEnDe> {
-    hdr: &'a MapxOrdRkVs<V>,
+    hdr: &'a MapxOrdRawKeyVs<V>,
     key: &'a [u8],
     value: V,
 }
@@ -458,7 +458,7 @@ impl<'a, V> ValueMut<'a, V>
 where
     V: ValueEnDe,
 {
-    fn new(hdr: &'a MapxOrdRkVs<V>, key: &'a [u8], value: V) -> Self {
+    fn new(hdr: &'a MapxOrdRawKeyVs<V>, key: &'a [u8], value: V) -> Self {
         ValueMut { hdr, key, value }
     }
 }
@@ -493,7 +493,7 @@ where
 
 pub struct Entry<'a, V: ValueEnDe> {
     key: &'a [u8],
-    hdr: &'a MapxOrdRkVs<V>,
+    hdr: &'a MapxOrdRawKeyVs<V>,
 }
 
 impl<'a, V> Entry<'a, V>

@@ -1,9 +1,9 @@
 //!
 //! ![GitHub top language](https://img.shields.io/github/languages/top/ccmlm/VSDB)
 //! ![GitHub Workflow Status](https://img.shields.io/github/workflow/status/ccmlm/VSDB/Rust)
-//! ![Minimum rustc version](https://img.shields.io/badge/rustc-1.59+-lightgray.svg)
+//! ![Minimum rustc version](https://img.shields.io/badge/rustc-1.60+-lightgray.svg)
 //!
-//! VSDB is a 'Git' in the form of a KV database.
+//! VSDB is a 'Git' in the form of KV-database.
 //!
 //! Based on the powerful version control function of VSDB, you can easily give your data structure the ability to version management.
 //!
@@ -143,10 +143,6 @@
 //! Please check the [**multi-key functions**](crate::versioned_multi_key)
 //! if you have requirements of the above or similar scenes.
 //!
-//! Some complete examples:
-//! - [**Versioned examples**](versioned/index.html)
-//! - [**Unversioned examples**](basic/index.html)
-//!
 //! ## Compilation features
 //!
 //! - \[**default**] `sled_engine`, use sled as the backend database
@@ -205,8 +201,12 @@ pub use vsdb_derive::Vs;
 #[cfg(feature = "merkle")]
 pub use merkle::MerkleTree;
 
+#[cfg(feature = "hash")]
+pub use common::utils::hash::{hash, Hash, HASH_SIZ};
+
 pub use common::{
     ende::{KeyDe, KeyEn, KeyEnDe, KeyEnDeOrdered, ValueDe, ValueEn, ValueEnDe},
     vsdb_flush, vsdb_get_base_dir, vsdb_get_custom_dir, vsdb_set_base_dir, BranchName,
-    ParentBranchName, VersionName, INITIAL_VERSION,
+    BranchNameOwned, ParentBranchName, ParentBranchNameOwned, VersionName,
+    VersionNameOwned, GB, INITIAL_VERSION, KB, MB,
 };

@@ -1,6 +1,6 @@
 use crate::common::{
     vsdb_get_base_dir, vsdb_set_base_dir, BranchID, Engine, Pre, PreBytes, RawKey,
-    RawValue, VersionID, INITIAL_BRANCH_ID, PREFIX_SIZ, RESERVED_ID_CNT,
+    RawValue, VersionID, GB, INITIAL_BRANCH_ID, PREFIX_SIZ, RESERVED_ID_CNT,
 };
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -10,7 +10,7 @@ use std::ops::{Bound, RangeBounds};
 
 // the 'prefix search' in sled is just a global scaning,
 // use a relative larger number to sharding the `Tree` pressure.
-const DATA_SET_NUM: usize = 512;
+const DATA_SET_NUM: usize = 796;
 
 const META_KEY_BRANCH_ID: [u8; 1] = [u8::MAX - 1];
 const META_KEY_VERSION_ID: [u8; 1] = [u8::MAX - 2];
@@ -297,15 +297,24 @@ impl PreAllocator {
 fn sled_open() -> Result<Db> {
     let dir = vsdb_get_base_dir();
 
-    let db = Config::new()
+    // avoid setting again on an opened DB
+    info_omit!(vsdb_set_base_dir(&dir));
+
+    let mut cfg = Config::new()
         .path(&dir)
         .mode(Mode::HighThroughput)
-        .use_compression(true)
-        .open()
-        .c(d!())?;
+        .cache_capacity(10 * GB)
+        .flush_every_ms(Some(10000));
 
-    // avoid setting again on an opened DB
-    info_omit!(vsdb_set_base_dir(dir));
+    #[cfg(feature = "compress")]
+    {
+        cfg = cfg.use_compression(true).compression_factor(1);
+    }
 
-    Ok(db)
+    #[cfg(not(feature = "compress"))]
+    {
+        cfg = cfg.use_compression(false);
+    }
+
+    cfg.open().c(d!())
 }

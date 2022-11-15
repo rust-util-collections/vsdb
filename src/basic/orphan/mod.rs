@@ -10,7 +10,7 @@
 //! use vsdb::basic::orphan::Orphan;
 //!
 //! let dir = format!("/tmp/__vsdb__{}", rand::random::<u128>());
-//! vsdb::vsdb_set_base_dir(dir);
+//! vsdb::vsdb_set_base_dir(&dir);
 //!
 //! assert_eq!(Orphan::new(0), 0);
 //! assert!(Orphan::new(1) > 0);
@@ -82,7 +82,7 @@
 #[cfg(test)]
 mod test;
 
-use crate::{basic::mapx_ord_rawkey::MapxOrdRk, ValueEnDe};
+use crate::{basic::mapx_ord_rawkey::MapxOrdRawKey, ValueEnDe};
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
@@ -101,12 +101,12 @@ use std::{
 #[derive(Clone, Copy, Serialize, Deserialize, Debug)]
 #[serde(bound = "")]
 pub struct Orphan<T> {
-    inner: MapxOrdRk<T>,
+    inner: MapxOrdRawKey<T>,
 }
 
 impl<T: Default + ValueEnDe> Default for Orphan<T> {
     fn default() -> Self {
-        let hdr = MapxOrdRk::new();
+        let hdr = MapxOrdRawKey::new();
         hdr.insert_ref(&[], &T::default());
         Self { inner: hdr }
     }
@@ -120,7 +120,7 @@ where
     T: ValueEnDe,
 {
     pub fn new(v: T) -> Self {
-        let hdr = MapxOrdRk::new();
+        let hdr = MapxOrdRawKey::new();
         hdr.insert_ref(&[], &v);
         Self { inner: hdr }
     }

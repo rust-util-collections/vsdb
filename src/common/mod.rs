@@ -5,6 +5,9 @@
 pub(crate) mod ende;
 pub(crate) mod engines;
 
+#[cfg(feature = "hash")]
+pub(crate) mod utils;
+
 use {
     engines::Engine,
     once_cell::sync::Lazy,
@@ -47,18 +50,19 @@ pub struct VersionName<'a>(pub &'a [u8]);
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VersionNameOwned(pub Vec<u8>);
 
+pub const KB: u64 = 1 << 10;
+pub const MB: u64 = 1 << 20;
+pub const GB: u64 = 1 << 30;
+
 const RESERVED_ID_CNT: Pre = 4096_0000;
 pub(crate) const BIGGEST_RESERVED_ID: Pre = RESERVED_ID_CNT - 1;
 pub(crate) const NULL: BranchID = BIGGEST_RESERVED_ID as BranchID;
 
 pub(crate) const INITIAL_BRANCH_ID: BranchID = 0;
-pub(crate) const INITIAL_BRANCH_NAME: BranchName<'static> = BranchName(b"main");
+pub(crate) const INITIAL_BRANCH_NAME: BranchName<'static> = BranchName(b"master");
 
 /// The initial verison along with each new instance.
 pub const INITIAL_VERSION: VersionName<'static> = VersionName([0u8; 0].as_slice());
-
-/// How many ancestral branches at most one new branch can have.
-pub const BRANCH_ANCESTORS_LIMIT: usize = 128;
 
 // default value for reserved number when pruning old data
 pub(crate) const RESERVED_VERSION_NUM_DEFAULT: usize = 10;
@@ -161,14 +165,14 @@ pub fn vsdb_get_base_dir() -> String {
 
 /// Set ${VSDB_BASE_DIR} manually.
 #[inline(always)]
-pub fn vsdb_set_base_dir(dir: String) -> Result<()> {
+pub fn vsdb_set_base_dir(dir: &str) -> Result<()> {
     static HAS_INITED: AtomicBool = AtomicBool::new(false);
 
     if HAS_INITED.swap(true, Ordering::Relaxed) {
         Err(eg!("VSDB has been initialized !!"))
     } else {
-        env::set_var(BASE_DIR_VAR, &dir);
-        *VSDB_BASE_DIR.lock() = dir;
+        env::set_var(BASE_DIR_VAR, dir);
+        *VSDB_BASE_DIR.lock() = dir.to_owned();
         Ok(())
     }
 }
@@ -213,5 +217,26 @@ impl_from_for_name!(BranchName, ParentBranchName, VersionName);
 impl Default for BranchName<'static> {
     fn default() -> Self {
         INITIAL_BRANCH_NAME
+    }
+}
+
+impl BranchNameOwned {
+    #[inline(always)]
+    pub fn as_deref(&self) -> BranchName {
+        BranchName(&self.0)
+    }
+}
+
+impl ParentBranchNameOwned {
+    #[inline(always)]
+    pub fn as_deref(&self) -> ParentBranchName {
+        ParentBranchName(&self.0)
+    }
+}
+
+impl VersionNameOwned {
+    #[inline(always)]
+    pub fn as_deref(&self) -> VersionName {
+        VersionName(&self.0)
     }
 }

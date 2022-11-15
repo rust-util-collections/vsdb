@@ -2,7 +2,7 @@
 [![Latest Version](https://img.shields.io/crates/v/VSDB.svg)](https://crates.io/crates/VSDB)
 [![Rust Documentation](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/VSDB)
 ![GitHub Workflow Status](https://img.shields.io/github/workflow/status/ccmlm/VSDB/Rust)
-[![Minimum rustc version](https://img.shields.io/badge/rustc-1.59+-lightgray.svg)](https://github.com/rust-random/rand#rust-version-requirements)
+[![Minimum rustc version](https://img.shields.io/badge/rustc-1.60+-lightgray.svg)](https://github.com/rust-random/rand#rust-version-requirements)
 
 # VSDB
 
@@ -11,6 +11,8 @@ VSDB is a 'Git' in the form of KV-database.
 Based on the powerful version control function of VSDB, you can easily give your data structure the ability to version management.
 
 **Make everything versioned !!**
+
+[**To view the change log check here**](./change_log.md).
 
 ## Highlights
 
@@ -144,9 +146,10 @@ Some complete examples:
 
 - [**default**] `sled_engine`, use sled as the backend database
     - Faster compilation speed
+    - Faster running speed in the versioned functions
     - Support for compiling into a statically linked object
 - `rocks_engine`, use rocksdb as the backend database
-    - Faster running speed
+    - Faster running speed in the unversioned functions
     - Can not be compiled into a statically linked object
 - [**default**] `msgpack_codec`, use msgpack as the codec
     - Faster running speed
@@ -155,6 +158,9 @@ Some complete examples:
     - Security reinforcement for blockchain scenarios
 - [**default**] `derive`, enable the `Vs` procedural macro
 - `merkle`, enable an optional mekle-tree implementation
+- `compress`, enable compression in the backend db
+    - NOTE: performance with this feature is lower when using sled
+    - NOTE: performance with this feature is higher when using rocksdb
 
 ## Low-level design
 

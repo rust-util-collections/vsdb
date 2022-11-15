@@ -11,7 +11,7 @@
 //! use vsdb::{VersionName, versioned::mapx_raw::MapxRawVs, VsMgmt};
 //!
 //! let dir = format!("/tmp/__vsdb__{}", rand::random::<u128>());
-//! vsdb::vsdb_set_base_dir(dir);
+//! vsdb::vsdb_set_base_dir(&dir);
 //!
 //! let mut l = MapxRawVs::new();
 //! l.version_create(VersionName(b"test")).unwrap();
@@ -38,10 +38,7 @@ mod backend;
 mod test;
 
 use crate::{
-    common::{
-        BranchName, ParentBranchName, RawKey, RawValue, VersionName,
-        INITIAL_BRANCH_NAME, NULL,
-    },
+    common::{BranchName, ParentBranchName, RawKey, RawValue, VersionName, NULL},
     VsMgmt,
 };
 use ruc::*;
@@ -337,12 +334,16 @@ impl MapxRawVs {
             .is_some()
     }
 
+    /// NOTE: just a stupid O(n) counter, very slow!
+    ///
     /// Get the total number of items of the default branch.
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.inner.len()
     }
 
+    /// NOTE: just a stupid O(n) counter, very slow!
+    ///
     /// Get the total number of items of the head of a specified branch.
     #[inline(always)]
     pub fn len_by_branch(&self, branch_name: BranchName) -> usize {
@@ -352,6 +353,8 @@ impl MapxRawVs {
             .unwrap_or(0)
     }
 
+    /// NOTE: just a stupid O(n) counter, very slow!
+    ///
     /// Get the total number of items of a specified version of a specified branch.
     #[inline(always)]
     pub fn len_by_branch_version(
@@ -446,30 +449,7 @@ impl VsMgmt for MapxRawVs {
             .and_then(|br_id| {
                 self.inner
                     .get_version_id(version_name)
-                    .map(|ver_id| self.inner.version_exists_on_branch(ver_id, br_id).0)
-            })
-            .unwrap_or(false)
-    }
-
-    /// Check if a version is directly created on the default branch.
-    #[inline(always)]
-    fn version_created(&self, version_name: VersionName) -> bool {
-        self.version_created_on_branch(version_name, INITIAL_BRANCH_NAME)
-    }
-
-    /// Check if a version is directly created on a specified branch(exclude its parents).
-    #[inline(always)]
-    fn version_created_on_branch(
-        &self,
-        version_name: VersionName,
-        branch_name: BranchName,
-    ) -> bool {
-        self.inner
-            .get_branch_id(branch_name)
-            .and_then(|br_id| {
-                self.inner
-                    .get_version_id(version_name)
-                    .map(|ver_id| self.inner.version_created_on_branch(ver_id, br_id))
+                    .map(|ver_id| self.inner.version_exists_on_branch(ver_id, br_id))
             })
             .unwrap_or(false)
     }
@@ -501,10 +481,49 @@ impl VsMgmt for MapxRawVs {
             .and_then(|br_id| self.inner.version_pop_by_branch(br_id).c(d!()))
     }
 
+    /// Merge all changes made by new versions after the base version into the base version.
+    ///
+    /// # Safety
+    ///
+    /// It's the caller's duty to ensure that
+    /// the `base_version` was created directly by the `branch_id`,
+    /// or the data records of other branches may be corrupted.
+    #[inline(always)]
+    unsafe fn version_rebase(&self, base_version: VersionName) -> Result<()> {
+        self.inner
+            .get_version_id(base_version)
+            .c(d!())
+            .and_then(|bv| self.inner.version_rebase(bv).c(d!()))
+    }
+
+    /// Merge all changes made by new versions after the base version into the base version.
+    ///
+    /// # Safety
+    ///
+    /// It's the caller's duty to ensure that
+    /// the `base_version` was created directly by the `branch_id`,
+    /// or the data records of other branches may be corrupted.
+    #[inline(always)]
+    unsafe fn version_rebase_by_branch(
+        &self,
+        base_version: VersionName,
+        branch_name: BranchName,
+    ) -> Result<()> {
+        let bv = self.inner.get_version_id(base_version).c(d!())?;
+        let brid = self.inner.get_branch_id(branch_name).c(d!())?;
+        self.inner.version_rebase_by_branch(bv, brid).c(d!())
+    }
+
     /// Create a new branch based on the head of the default branch.
     #[inline(always)]
-    fn branch_create(&self, branch_name: BranchName) -> Result<()> {
-        self.inner.branch_create(branch_name.0).c(d!())
+    fn branch_create(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+    ) -> Result<()> {
+        self.inner
+            .branch_create(branch_name.0, version_name.0)
+            .c(d!())
     }
 
     /// Create a new branch based on the head of a specified branch.
@@ -512,6 +531,7 @@ impl VsMgmt for MapxRawVs {
     fn branch_create_by_base_branch(
         &self,
         branch_name: BranchName,
+        version_name: VersionName,
         base_branch_name: ParentBranchName,
     ) -> Result<()> {
         self.inner
@@ -519,7 +539,11 @@ impl VsMgmt for MapxRawVs {
             .c(d!("base branch not found"))
             .and_then(|base_br_id| {
                 self.inner
-                    .branch_create_by_base_branch(branch_name.0, base_br_id)
+                    .branch_create_by_base_branch(
+                        branch_name.0,
+                        version_name.0,
+                        base_br_id,
+                    )
                     .c(d!())
             })
     }
@@ -529,6 +553,7 @@ impl VsMgmt for MapxRawVs {
     fn branch_create_by_base_branch_version(
         &self,
         branch_name: BranchName,
+        version_name: VersionName,
         base_branch_name: ParentBranchName,
         base_version_name: VersionName,
     ) -> Result<()> {
@@ -541,7 +566,12 @@ impl VsMgmt for MapxRawVs {
             .get_version_id(base_version_name)
             .c(d!("base vesion not found"))?;
         self.inner
-            .branch_create_by_base_branch_version(branch_name.0, base_br_id, base_ver_id)
+            .branch_create_by_base_branch_version(
+                branch_name.0,
+                version_name.0,
+                base_br_id,
+                base_ver_id,
+            )
             .c(d!())
     }
 
@@ -638,22 +668,48 @@ impl VsMgmt for MapxRawVs {
             .and_then(|id| self.inner.branch_pop_version(id).c(d!()))
     }
 
-    /// Merge a branch to its parent branch.
+    /// Merge a branch into another.
     #[inline(always)]
-    fn branch_merge_to_parent(&self, branch_name: BranchName) -> Result<()> {
+    fn branch_merge_to(
+        &self,
+        branch_name: BranchName,
+        target_branch_name: BranchName,
+    ) -> Result<()> {
         self.inner
             .get_branch_id(branch_name)
             .c(d!("branch not found"))
-            .and_then(|id| self.inner.branch_merge_to_parent(id).c(d!()))
+            .and_then(|brid| {
+                let target_brid = self
+                    .inner
+                    .get_branch_id(target_branch_name)
+                    .c(d!("target branch not found"))?;
+                self.inner.branch_merge_to(brid, target_brid).c(d!())
+            })
     }
 
-    /// Check if a branch has children branches.
+    /// Merge a branch into another,
+    /// even if new different versions have been created on the target branch.
+    ///
+    /// # Safety
+    ///
+    /// If new different versions have been created on the target branch,
+    /// the data records referenced by other branches may be corrupted.
     #[inline(always)]
-    fn branch_has_children(&self, branch_name: BranchName) -> bool {
+    unsafe fn branch_merge_to_force(
+        &self,
+        branch_name: BranchName,
+        target_branch_name: BranchName,
+    ) -> Result<()> {
         self.inner
             .get_branch_id(branch_name)
-            .map(|id| self.inner.branch_has_children(id))
-            .unwrap_or(false)
+            .c(d!("branch not found"))
+            .and_then(|brid| {
+                let target_brid = self
+                    .inner
+                    .get_branch_id(target_branch_name)
+                    .c(d!("target branch not found"))?;
+                self.inner.branch_merge_to_force(brid, target_brid).c(d!())
+            })
     }
 
     /// Make a branch to be default,
@@ -670,21 +726,6 @@ impl VsMgmt for MapxRawVs {
     #[inline(always)]
     fn prune(&self, reserved_ver_num: Option<usize>) -> Result<()> {
         self.inner.prune(reserved_ver_num).c(d!())
-    }
-
-    /// Clean outdated versions out of a specified reserved number.
-    #[inline(always)]
-    fn prune_by_branch(
-        &self,
-        branch_name: BranchName,
-        reserved_ver_num: Option<usize>,
-    ) -> Result<()> {
-        self.inner
-            .get_branch_id(branch_name)
-            .c(d!())
-            .and_then(|br_id| {
-                self.inner.prune_by_branch(br_id, reserved_ver_num).c(d!())
-            })
     }
 }
 

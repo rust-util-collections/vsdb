@@ -14,7 +14,7 @@
 //! use vsdb::basic::mapx_ord::MapxOrd;
 //!
 //! let dir = format!("/tmp/__vsdb__{}", rand::random::<u128>());
-//! vsdb::vsdb_set_base_dir(dir);
+//! vsdb::vsdb_set_base_dir(&dir);
 //!
 //! let mut l = MapxOrd::new();
 //!
@@ -39,7 +39,7 @@
 mod test;
 
 use crate::{
-    basic::mapx_ord_rawkey::{Entry, MapxOrdRk, MapxOrdRkIter, ValueMut},
+    basic::mapx_ord_rawkey::{Entry, MapxOrdRawKey, MapxOrdRawKeyIter, ValueMut},
     common::ende::{KeyEnDeOrdered, ValueEnDe},
 };
 use ruc::*;
@@ -52,7 +52,7 @@ use std::{
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct MapxOrd<K, V> {
-    inner: MapxOrdRk<V>,
+    inner: MapxOrdRawKey<V>,
     p: PhantomData<K>,
 }
 
@@ -74,7 +74,7 @@ where
     #[inline(always)]
     pub fn new() -> Self {
         MapxOrd {
-            inner: MapxOrdRk::new(),
+            inner: MapxOrdRawKey::new(),
             p: PhantomData,
         }
     }
@@ -239,7 +239,7 @@ where
     K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
-    iter: MapxOrdRkIter<V>,
+    iter: MapxOrdRawKeyIter<V>,
     p: PhantomData<K>,
 }
 

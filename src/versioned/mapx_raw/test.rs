@@ -1,12 +1,14 @@
 use super::*;
 use crate::{
     common::{
-        BranchName, ParentBranchName, VersionName, BRANCH_ANCESTORS_LIMIT,
-        INITIAL_BRANCH_NAME,
+        BranchName, ParentBranchName, VersionName, VersionNameOwned,
+        INITIAL_BRANCH_NAME, INITIAL_VERSION,
     },
     ValueEnDe, VsMgmt,
 };
 use std::{sync::mpsc::channel, thread};
+
+const BRANCH_LIMITS: usize = 128;
 
 #[test]
 fn basic_cases() {
@@ -85,14 +87,12 @@ fn VCS_mgmt() {
     let mut hdr = MapxRawVs::new();
     version_operations(&mut hdr);
     branch_operations(&mut hdr);
-    prune_operations(&mut hdr);
-    default_branch(&mut hdr);
+    default_branch_operations(&mut hdr);
 }
 
 // version:
 //
-// - can not write data before creating a version for the branch
-//     - use existing version name will fail
+// - use existing version name will fail
 // - newer version can read data created by older version
 //     - assume they have not been re-writed by the newer branch
 // - can not read data created by newer versions from an older version
@@ -119,9 +119,9 @@ fn version_operations(hdr: &mut MapxRawVs) {
     hdr.version_create(VersionName(b"v-002")).unwrap();
 
     assert!(hdr.is_empty());
-    assert!(hdr.is_empty_by_branch(BranchName(b"main")));
-    assert!(hdr.is_empty_by_branch_version(BranchName(b"main"), VersionName(b"v-001")));
-    assert!(hdr.is_empty_by_branch_version(BranchName(b"main"), VersionName(b"v-002")));
+    assert!(hdr.is_empty_by_branch(INITIAL_BRANCH_NAME));
+    assert!(hdr.is_empty_by_branch_version(INITIAL_BRANCH_NAME, VersionName(b"v-001")));
+    assert!(hdr.is_empty_by_branch_version(INITIAL_BRANCH_NAME, VersionName(b"v-002")));
 
     pnk!(hdr.insert(b"v-002/key-01", b"v-002/value-01"));
     pnk!(hdr.insert(b"v-002/key-02", b"v-002/value-02"));
@@ -138,7 +138,7 @@ fn version_operations(hdr: &mut MapxRawVs) {
     assert!(
         hdr.get_by_branch_version(
             b"v-002/key-01",
-            BranchName(b"main"),
+            INITIAL_BRANCH_NAME,
             VersionName(b"v-001")
         )
         .is_none()
@@ -154,16 +154,16 @@ fn version_operations(hdr: &mut MapxRawVs) {
     assert!(
         hdr.get_by_branch_version(
             b"v-002/key-02",
-            BranchName(b"main"),
+            INITIAL_BRANCH_NAME,
             VersionName(b"v-001")
         )
         .is_none()
     );
 
     assert!(!hdr.is_empty());
-    assert!(!hdr.is_empty_by_branch(BranchName(b"main")));
-    assert!(hdr.is_empty_by_branch_version(BranchName(b"main"), VersionName(b"v-001")));
-    assert!(!hdr.is_empty_by_branch_version(BranchName(b"main"), VersionName(b"v-002")));
+    assert!(!hdr.is_empty_by_branch(INITIAL_BRANCH_NAME));
+    assert!(hdr.is_empty_by_branch_version(INITIAL_BRANCH_NAME, VersionName(b"v-001")));
+    assert!(!hdr.is_empty_by_branch_version(INITIAL_BRANCH_NAME, VersionName(b"v-002")));
 
     hdr.version_create(VersionName(b"v-003")).unwrap();
     pnk!(hdr.insert(b"v-003/key-01", b"v-003/value-01"));
@@ -179,7 +179,7 @@ fn version_operations(hdr: &mut MapxRawVs) {
     assert!(
         hdr.get_by_branch_version(
             b"v-003/key-01",
-            BranchName(b"main"),
+            INITIAL_BRANCH_NAME,
             VersionName(b"v-003")
         )
         .is_none()
@@ -194,7 +194,7 @@ fn version_operations(hdr: &mut MapxRawVs) {
     assert_eq!(
         &hdr.get_by_branch_version(
             b"v-002/key-01",
-            BranchName(b"main"),
+            INITIAL_BRANCH_NAME,
             VersionName(b"v-002")
         )
         .unwrap()[..],
@@ -202,16 +202,16 @@ fn version_operations(hdr: &mut MapxRawVs) {
     );
 
     assert!(!hdr.is_empty());
-    assert!(!hdr.is_empty_by_branch(BranchName(b"main")));
-    assert!(hdr.is_empty_by_branch_version(BranchName(b"main"), VersionName(b"v-001")));
-    assert!(!hdr.is_empty_by_branch_version(BranchName(b"main"), VersionName(b"v-002")));
-    assert!(!hdr.is_empty_by_branch_version(BranchName(b"main"), VersionName(b"v-003")));
+    assert!(!hdr.is_empty_by_branch(INITIAL_BRANCH_NAME));
+    assert!(hdr.is_empty_by_branch_version(INITIAL_BRANCH_NAME, VersionName(b"v-001")));
+    assert!(!hdr.is_empty_by_branch_version(INITIAL_BRANCH_NAME, VersionName(b"v-002")));
+    assert!(!hdr.is_empty_by_branch_version(INITIAL_BRANCH_NAME, VersionName(b"v-003")));
 
     pnk!(hdr.insert(b"v-003/key-02", b"v-003/value-02"));
     assert!(
         hdr.get_by_branch_version(
             b"v-003/key-02",
-            BranchName(b"main"),
+            INITIAL_BRANCH_NAME,
             VersionName(b"v-001")
         )
         .is_none()
@@ -219,7 +219,7 @@ fn version_operations(hdr: &mut MapxRawVs) {
     assert!(
         hdr.get_by_branch_version(
             b"v-003/key-02",
-            BranchName(b"main"),
+            INITIAL_BRANCH_NAME,
             VersionName(b"v-002")
         )
         .is_none()
@@ -227,7 +227,7 @@ fn version_operations(hdr: &mut MapxRawVs) {
     assert_eq!(
         &hdr.get_by_branch_version(
             b"v-003/key-02",
-            BranchName(b"main"),
+            INITIAL_BRANCH_NAME,
             VersionName(b"v-003")
         )
         .unwrap()[..],
@@ -238,7 +238,7 @@ fn version_operations(hdr: &mut MapxRawVs) {
     assert_eq!(
         &hdr.get_by_branch_version(
             b"v-002/key-02",
-            BranchName(b"main"),
+            INITIAL_BRANCH_NAME,
             VersionName(b"v-003")
         )
         .unwrap()[..],
@@ -251,7 +251,7 @@ fn version_operations(hdr: &mut MapxRawVs) {
     assert_eq!(
         &hdr.get_by_branch_version(
             b"v-002/key-02",
-            BranchName(b"main"),
+            INITIAL_BRANCH_NAME,
             VersionName(b"v-003")
         )
         .unwrap()[..],
@@ -262,7 +262,7 @@ fn version_operations(hdr: &mut MapxRawVs) {
     assert!(
         hdr.get_by_branch_version(
             b"v-003/key-02",
-            BranchName(b"main"),
+            INITIAL_BRANCH_NAME,
             VersionName(b"v-003")
         )
         .is_none()
@@ -273,7 +273,7 @@ fn version_operations(hdr: &mut MapxRawVs) {
     assert_eq!(
         &hdr.get_by_branch_version(
             b"v-002/key-02",
-            BranchName(b"main"),
+            INITIAL_BRANCH_NAME,
             VersionName(b"v-002")
         )
         .unwrap()[..],
@@ -294,9 +294,6 @@ fn version_operations(hdr: &mut MapxRawVs) {
 // remove branch:
 //
 // - remove non-existing branch will fail
-// - remove branch with children will fail
-// - remove the initial branch will fail(branch name: "main")
-// - versions and data directly created by this branch will not be deleted
 //
 // truncate branch:
 //
@@ -305,16 +302,26 @@ fn version_operations(hdr: &mut MapxRawVs) {
 //
 // merge branch:
 //
-// - a branch can only be merged to its parent branch
-// - every branch with a same parent can be merged to their parent branch
-//     - all verisons will be ordered by the inner-defined version id
+// - a branch can be merged to any branch, include itself
+// - the original branch will not be deleted along with a merge operation
 fn branch_operations(hdr: &mut MapxRawVs) {
-    hdr.branch_create(BranchName(b"b-1")).unwrap();
-    hdr.branch_create(BranchName(b"b-2")).unwrap();
+    hdr.branch_create(BranchName(b"b-1"), random_version().as_deref())
+        .unwrap();
+    hdr.branch_create(BranchName(b"b-2"), random_version().as_deref())
+        .unwrap();
 
-    assert!(hdr.branch_create(BranchName(b"main")).is_err());
-    assert!(hdr.branch_create(BranchName(b"b-1")).is_err());
-    assert!(hdr.branch_create(BranchName(b"b-2")).is_err());
+    assert!(
+        hdr.branch_create(INITIAL_BRANCH_NAME, random_version().as_deref())
+            .is_err()
+    );
+    assert!(
+        hdr.branch_create(BranchName(b"b-1"), random_version().as_deref())
+            .is_err()
+    );
+    assert!(
+        hdr.branch_create(BranchName(b"b-2"), random_version().as_deref())
+            .is_err()
+    );
 
     assert_eq!(
         &hdr.get_by_branch(b"v-002/key-02", BranchName(b"b-1"))
@@ -325,12 +332,6 @@ fn branch_operations(hdr: &mut MapxRawVs) {
         &hdr.get_by_branch(b"v-002/key-02", BranchName(b"b-2"))
             .unwrap()[..],
         b"v-002/value-02"
-    );
-
-    // no version on the new branch
-    assert!(
-        hdr.insert_by_branch(b"v-001/key-01", b"v-001/value-01", BranchName(b"b-1"))
-            .is_err()
     );
 
     // Version ID can not be repeated within the global view.
@@ -344,8 +345,12 @@ fn branch_operations(hdr: &mut MapxRawVs) {
     pnk!(hdr.insert_by_branch(b"v-001/key-01", b"v-001/value-01", BranchName(b"b-1")));
 
     // multi-layers view
-    hdr.branch_create_by_base_branch(BranchName(b"b-1-child"), ParentBranchName(b"b-1"))
-        .unwrap();
+    hdr.branch_create_by_base_branch(
+        BranchName(b"b-1-child"),
+        random_version().as_deref(),
+        ParentBranchName(b"b-1"),
+    )
+    .unwrap();
     assert_eq!(
         &hdr.get_by_branch(b"v-002/key-02", BranchName(b"b-1-child"))
             .unwrap()[..],
@@ -373,30 +378,30 @@ fn branch_operations(hdr: &mut MapxRawVs) {
         .is_none()
     );
 
-    // total number of branch has no limits
-    (4..2 * BRANCH_ANCESTORS_LIMIT).for_each(|i| {
-        pnk!(hdr.branch_create(BranchName(&i.to_be_bytes())));
+    (4..2 * BRANCH_LIMITS).for_each(|i| {
+        pnk!(
+            hdr.branch_create(BranchName(&i.to_be_bytes()), random_version().as_deref())
+        );
     });
-    (4..2 * BRANCH_ANCESTORS_LIMIT).for_each(|i| {
+    (4..2 * BRANCH_LIMITS).for_each(|i| {
         pnk!(hdr.branch_remove(BranchName(&i.to_be_bytes())));
     });
 
     pnk!(hdr.branch_create_by_base_branch_version(
         BranchName(&3usize.to_be_bytes()),
-        ParentBranchName(b"main"),
+        random_version().as_deref(),
+        ParentBranchName(INITIAL_BRANCH_NAME.0),
         VersionName(b"v-002")
     ));
     pnk!(hdr.version_create_by_branch(
         VersionName(b"verN"),
         BranchName(&3usize.to_be_bytes())
     ));
-    assert!(hdr.branch_has_children(BranchName(b"main")));
-    assert!(!hdr.branch_has_children(BranchName(&3usize.to_be_bytes())));
 
-    // total number of branch ancestor has limits
-    (4..(BRANCH_ANCESTORS_LIMIT - 2)).for_each(|i| {
+    (4..(BRANCH_LIMITS - 2)).for_each(|i| {
         pnk!(hdr.branch_create_by_base_branch(
             BranchName(&i.to_be_bytes()),
+            random_version().as_deref(),
             ParentBranchName(&(i - 1).to_be_bytes())
         ));
         pnk!(hdr.version_create_by_branch(
@@ -405,32 +410,27 @@ fn branch_operations(hdr: &mut MapxRawVs) {
         ));
     });
     pnk!(hdr.branch_create_by_base_branch(
-        BranchName(&(BRANCH_ANCESTORS_LIMIT - 2).to_be_bytes()),
-        ParentBranchName(&(BRANCH_ANCESTORS_LIMIT - 3).to_be_bytes()),
+        BranchName(&(BRANCH_LIMITS - 2).to_be_bytes()),
+        random_version().as_deref(),
+        ParentBranchName(&(BRANCH_LIMITS - 3).to_be_bytes()),
     ));
-    (3..(BRANCH_ANCESTORS_LIMIT - 2)).for_each(|i| {
-        // can not remove because they all have one child
-        assert!(hdr.branch_has_children(BranchName(&i.to_be_bytes())));
-        assert!(hdr.branch_remove(BranchName(&i.to_be_bytes())).is_err());
-    });
-    (3..(BRANCH_ANCESTORS_LIMIT - 1)).rev().for_each(|i| {
+    (3..(BRANCH_LIMITS - 1)).rev().for_each(|i| {
         pnk!(hdr.branch_remove(BranchName(&i.to_be_bytes())));
     });
 
-    pnk!(hdr.branch_create(BranchName(&1usize.to_be_bytes())));
+    pnk!(hdr.branch_create(
+        BranchName(&1usize.to_be_bytes()),
+        random_version().as_deref()
+    ));
     pnk!(hdr.branch_remove(BranchName(&1usize.to_be_bytes())));
 
     // not exist
     assert!(hdr.branch_remove(BranchName(b"fake branch")).is_err());
-    // has children
-    assert!(hdr.branch_remove(BranchName(b"b-1")).is_err());
-    // initial branch is not allowed to be removed
-    assert!(hdr.branch_remove(BranchName(b"main")).is_err());
-    assert!(hdr.branch_remove(BranchName(b"main")).is_err());
 
     // remove its children
     pnk!(hdr.branch_remove(BranchName(b"b-1-child")));
-    // not it can be removed
+
+    // now it can be removed
     pnk!(hdr.branch_remove(BranchName(b"b-1")));
     assert!(
         hdr.get_by_branch(b"v-001/key-01", BranchName(b"b-1"))
@@ -472,8 +472,9 @@ fn branch_operations(hdr: &mut MapxRawVs) {
         );
     });
 
-    // clear all version on "b-2" branch
-    hdr.branch_truncate(BranchName(b"b-2")).unwrap();
+    // clear up versions on "b-2" branch
+    hdr.branch_truncate_to(BranchName(b"b-2"), VersionName(&0u64.to_be_bytes()))
+        .unwrap();
 
     // now we can use these version names again
     (11..=100u64).for_each(|i| {
@@ -483,7 +484,7 @@ fn branch_operations(hdr: &mut MapxRawVs) {
         ));
     });
 
-    // get very old value after passing through many verions
+    // get very old value after passing through many versions
     assert_eq!(
         &hdr.get_by_branch_version(
             b"v-002/key-02",
@@ -497,7 +498,7 @@ fn branch_operations(hdr: &mut MapxRawVs) {
     // ensure the view of main branch is not affected
     assert_eq!(&hdr.get(b"v-002/key-02").unwrap()[..], b"v-002/value-02");
     assert_eq!(
-        &hdr.get_by_branch(b"v-002/key-02", BranchName(b"main"))
+        &hdr.get_by_branch(b"v-002/key-02", INITIAL_BRANCH_NAME)
             .unwrap()[..],
         b"v-002/value-02"
     );
@@ -510,6 +511,7 @@ fn branch_operations(hdr: &mut MapxRawVs) {
     (0..10u64).for_each(|i| {
         hdr.branch_create_by_base_branch(
             BranchName(&i.to_be_bytes()),
+            random_version().as_deref(),
             ParentBranchName(b"b-2"),
         )
         .unwrap();
@@ -528,20 +530,34 @@ fn branch_operations(hdr: &mut MapxRawVs) {
     });
 
     (0..10u64).for_each(|i| {
-        pnk!(hdr.branch_merge_to_parent(BranchName(&i.to_be_bytes())));
+        if 0 == i {
+            pnk!(hdr.branch_merge_to(BranchName(&i.to_be_bytes()), BranchName(b"b-2")));
+        } else {
+            assert!(
+                hdr.branch_merge_to(BranchName(&i.to_be_bytes()), BranchName(b"b-2"))
+                    .is_err()
+            );
+            unsafe {
+                pnk!(hdr.branch_merge_to_force(
+                    BranchName(&i.to_be_bytes()),
+                    BranchName(b"b-2")
+                ));
+            }
+        }
+        assert!(hdr.branch_exists(BranchName(&i.to_be_bytes())));
     });
 
     // All versions and their chanegs are belong to the base branch now
     (0..10u64).for_each(|i| {
         (1000..1010u64).for_each(|j| {
-            // children branches have been removed
+            // children branches are still valid
             assert!(
                 hdr.get_by_branch_version(
                     &((1 + i) * j).to_be_bytes(),
                     BranchName(&i.to_be_bytes()),
                     VersionName(&((1 + i) * j).to_be_bytes())
                 )
-                .is_none()
+                .is_some()
             );
             // all changes have been move to the parent branch
             assert_eq!(
@@ -557,80 +573,17 @@ fn branch_operations(hdr: &mut MapxRawVs) {
     });
 }
 
-// prune version:
-//
-// - versions(with all changes created directly by them) older than the guard version will deleted
-// - non-changed value creatd by an old version will prevent that old version from being deleted
-fn prune_operations(hdr: &mut MapxRawVs) {
-    // prune "nain",
-    // have not enought versions, nothing to be pruned
-    hdr.prune(None).unwrap();
-
-    assert_eq!(&hdr.get(b"v-002/key-02").unwrap()[..], b"v-002/value-02");
-    assert_eq!(
-        &hdr.get_by_branch(b"v-002/key-02", BranchName(b"main"))
-            .unwrap()[..],
-        b"v-002/value-02"
-    );
-
-    // add a version for all data
-    (0..10u64).for_each(|i| {
-        (1000..1010u64).for_each(|j| {
-            hdr.version_create_by_branch(
-                VersionName(&((1 + i) * j * 1000).to_be_bytes()),
-                BranchName(b"b-2"),
-            )
-            .unwrap();
-            pnk!(hdr.insert_by_branch(
-                &((1 + i) * j).to_be_bytes(),
-                &[0],
-                BranchName(b"b-2")
-            ));
-        });
-    });
-
-    // only keep one version, so older data should be clear
-    hdr.prune_by_branch(BranchName(b"b-2"), Some(1)).unwrap();
-
-    // this key has only one version of value, so it will not be removed
-    assert_eq!(&hdr.get(b"v-002/key-02").unwrap()[..], b"v-002/value-02");
-    assert_eq!(
-        &hdr.get_by_branch(b"v-002/key-02", BranchName(b"b-2"))
-            .unwrap()[..],
-        b"v-002/value-02"
-    );
-
-    (0..10u64).for_each(|i| {
-        (1000..1010u64).for_each(|j| {
-            // old version view does not exist any more
-            assert!(
-                hdr.get_by_branch_version(
-                    &((1 + i) * j).to_be_bytes(),
-                    BranchName(b"b-2"),
-                    VersionName(&((1 + i) * j).to_be_bytes())
-                )
-                .is_none()
-            );
-            // the latest value exist
-            assert_eq!(
-                &hdr.get_by_branch(&((1 + i) * j).to_be_bytes(), BranchName(b"b-2"),)
-                    .unwrap()[..],
-                &[0]
-            );
-        });
-    });
-}
-
-fn default_branch(hdr: &mut MapxRawVs) {
-    hdr.branch_create(BranchName(b"fork")).unwrap();
+fn default_branch_operations(hdr: &mut MapxRawVs) {
+    hdr.branch_create(BranchName(b"fork"), random_version().as_deref())
+        .unwrap();
 
     hdr.branch_set_default(BranchName(b"fork")).unwrap();
     hdr.version_create(VersionName(b"ver-on-fork")).unwrap();
     hdr.insert(b"key", b"value").unwrap();
     assert_eq!(&hdr.get(b"key").unwrap()[..], b"value");
-    assert!(hdr.get_by_branch(b"key", BranchName(b"main")).is_none());
+    assert!(hdr.get_by_branch(b"key", INITIAL_BRANCH_NAME).is_none());
 
-    hdr.branch_set_default(BranchName(b"main")).unwrap();
+    hdr.branch_set_default(INITIAL_BRANCH_NAME).unwrap();
     assert!(hdr.get(b"key").is_none());
     assert_eq!(
         &hdr.get_by_branch(b"key", BranchName(b"fork")).unwrap()[..],
@@ -642,7 +595,10 @@ fn default_branch(hdr: &mut MapxRawVs) {
         let ss = s.clone();
         let mut h = hdr.clone();
         thread::spawn(move || {
-            pnk!(h.branch_create(BranchName(&i.to_be_bytes())));
+            pnk!(h.branch_create(
+                BranchName(&i.to_be_bytes()),
+                random_version().as_deref()
+            ));
             pnk!(h.branch_set_default(BranchName(&i.to_be_bytes())));
             pnk!(h.version_create(VersionName(format!("ver-on-fork—{}", i).as_bytes())));
             pnk!(h.insert(b"key", &i.to_be_bytes()));
@@ -665,4 +621,312 @@ fn default_branch(hdr: &mut MapxRawVs) {
             &i.to_be_bytes()
         );
     }
+}
+
+#[test]
+fn prune() {
+    let mut hdr = MapxRawVs::new();
+
+    // noop operation is ok
+    pnk!(hdr.prune(None));
+    pnk!(hdr.prune(Some(1000000000)));
+
+    pnk!(hdr.insert(&[0], &[0]));
+    pnk!(hdr.version_create(VersionName(b"a")));
+    pnk!(hdr.insert(&[1], &[1]));
+    pnk!(hdr.insert(&[2], &[2]));
+    pnk!(hdr.version_create(VersionName(b"b")));
+    pnk!(hdr.insert(&[3], &[3]));
+    pnk!(hdr.insert(&[4], &[4]));
+    pnk!(hdr.insert(&[5], &[5]));
+    pnk!(hdr.version_create(VersionName(b"c")));
+    pnk!(hdr.insert(&[6], &[6]));
+    pnk!(hdr.insert(&[7], &[7]));
+
+    assert!(hdr.version_exists(VersionName(b"a")));
+    assert!(hdr.version_exists(VersionName(b"b")));
+    assert!(hdr.version_exists(VersionName(b"c")));
+
+    pnk!(hdr.prune(Some(1)));
+
+    assert!(!hdr.version_exists(VersionName(b"a")));
+    assert!(!hdr.version_exists(VersionName(b"b")));
+    assert!(hdr.version_exists(VersionName(b"c")));
+
+    assert_eq!(&[0], &hdr.get(&[0]).unwrap()[..]);
+    assert_eq!(&[1], &hdr.get(&[1]).unwrap()[..]);
+    assert_eq!(&[2], &hdr.get(&[2]).unwrap()[..]);
+    assert_eq!(&[3], &hdr.get(&[3]).unwrap()[..]);
+    assert_eq!(&[4], &hdr.get(&[4]).unwrap()[..]);
+    assert_eq!(&[5], &hdr.get(&[5]).unwrap()[..]);
+    assert_eq!(&[6], &hdr.get(&[6]).unwrap()[..]);
+    assert_eq!(&[7], &hdr.get(&[7]).unwrap()[..]);
+
+    hdr.clear();
+
+    pnk!(hdr.insert(&[0], &[0]));
+    pnk!(hdr.version_create(VersionName(b"a")));
+    pnk!(hdr.insert(&[1], &[1]));
+    pnk!(hdr.insert(&[2], &[2]));
+    pnk!(hdr.version_create(VersionName(b"b")));
+    pnk!(hdr.insert(&[3], &[3]));
+    pnk!(hdr.insert(&[4], &[4]));
+    pnk!(hdr.insert(&[5], &[5]));
+    pnk!(hdr.version_create(VersionName(b"c")));
+    pnk!(hdr.insert(&[6], &[6]));
+    pnk!(hdr.insert(&[7], &[7]));
+
+    pnk!(hdr.branch_create(BranchName(b"A"), random_version().as_deref()));
+    pnk!(hdr.branch_set_default(BranchName(b"A")));
+
+    pnk!(hdr.version_create(VersionName(b"d")));
+    pnk!(hdr.insert(&[0], &[8]));
+    pnk!(hdr.version_create(VersionName(b"e")));
+    pnk!(hdr.insert(&[1], &[9]));
+    pnk!(hdr.version_create(VersionName(b"f")));
+    pnk!(hdr.insert(&[2], &[10]));
+
+    pnk!(hdr.branch_create_by_base_branch_version(
+        BranchName(b"B"),
+        random_version().as_deref(),
+        ParentBranchName(INITIAL_BRANCH_NAME.0),
+        VersionName(b"c")
+    ));
+    pnk!(hdr.branch_set_default(BranchName(b"B")));
+
+    pnk!(hdr.version_create(VersionName(b"g")));
+    pnk!(hdr.insert(&[0], &[11]));
+    pnk!(hdr.version_create(VersionName(b"h")));
+    pnk!(hdr.insert(&[1], &[12]));
+
+    pnk!(hdr.branch_set_default(INITIAL_BRANCH_NAME));
+
+    assert!(hdr.version_exists(VersionName(b"a")));
+    assert!(hdr.version_exists(VersionName(b"b")));
+    assert!(hdr.version_exists(VersionName(b"c")));
+    assert!(hdr.version_exists_on_branch(VersionName(b"d"), BranchName(b"A")));
+    assert!(hdr.version_exists_on_branch(VersionName(b"e"), BranchName(b"A")));
+    assert!(hdr.version_exists_on_branch(VersionName(b"f"), BranchName(b"A")));
+    assert!(!hdr.version_exists(VersionName(b"d")));
+    assert!(!hdr.version_exists(VersionName(b"e")));
+    assert!(!hdr.version_exists(VersionName(b"f")));
+    assert!(hdr.version_exists_on_branch(VersionName(b"g"), BranchName(b"B")));
+    assert!(hdr.version_exists_on_branch(VersionName(b"h"), BranchName(b"B")));
+    assert!(!hdr.version_exists_on_branch(VersionName(b"g"), BranchName(b"A")));
+    assert!(!hdr.version_exists_on_branch(VersionName(b"h"), BranchName(b"A")));
+    assert!(!hdr.version_exists(VersionName(b"g")));
+    assert!(!hdr.version_exists(VersionName(b"h")));
+
+    pnk!(hdr.prune(Some(2)));
+
+    assert!(!hdr.version_exists(VersionName(b"a")));
+    assert!(hdr.version_exists(VersionName(b"b")));
+    assert!(hdr.version_exists(VersionName(b"c")));
+
+    assert_eq!(&[0], &pnk!(hdr.get(&[0]))[..]);
+    assert_eq!(&[1], &pnk!(hdr.get(&[1]))[..]);
+    assert_eq!(&[2], &pnk!(hdr.get(&[2]))[..]);
+    assert_eq!(&[3], &pnk!(hdr.get(&[3]))[..]);
+    assert_eq!(&[4], &pnk!(hdr.get(&[4]))[..]);
+    assert_eq!(&[5], &pnk!(hdr.get(&[5]))[..]);
+    assert_eq!(&[6], &pnk!(hdr.get(&[6]))[..]);
+    assert_eq!(&[7], &pnk!(hdr.get(&[7]))[..]);
+
+    pnk!(hdr.branch_set_default(BranchName(b"A")));
+
+    assert!(hdr.version_exists(VersionName(b"d")));
+    assert!(hdr.version_exists(VersionName(b"e")));
+    assert!(hdr.version_exists(VersionName(b"f")));
+
+    assert_eq!(&[8], &hdr.get(&[0]).unwrap()[..]);
+    assert_eq!(&[9], &hdr.get(&[1]).unwrap()[..]);
+    assert_eq!(&[10], &hdr.get(&[2]).unwrap()[..]);
+
+    pnk!(hdr.branch_set_default(BranchName(b"B")));
+
+    assert!(hdr.version_exists(VersionName(b"g")));
+    assert!(hdr.version_exists(VersionName(b"h")));
+
+    assert_eq!(&[11], &hdr.get(&[0]).unwrap()[..]);
+    assert_eq!(&[12], &hdr.get(&[1]).unwrap()[..]);
+}
+
+#[test]
+fn version_rebase() {
+    let hdr = MapxRawVs::new();
+
+    pnk!(hdr.insert(&[0], &[0]));
+    pnk!(hdr.version_create(VersionName(&[1])));
+    pnk!(hdr.insert(&[0], &[1]));
+    pnk!(hdr.version_create(VersionName(&[2])));
+    pnk!(hdr.insert(&[0], &[2]));
+    pnk!(hdr.version_create(VersionName(&[3])));
+    pnk!(hdr.insert(&[0], &[3]));
+    pnk!(hdr.version_create(VersionName(&[4])));
+    pnk!(hdr.insert(&[0], &[4]));
+
+    assert_eq!(
+        &[0],
+        &pnk!(hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, INITIAL_VERSION))[..]
+    );
+    assert_eq!(
+        &[1],
+        &pnk!(hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[1])))[..]
+    );
+    assert_eq!(
+        &[2],
+        &pnk!(hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[2])))[..]
+    );
+    assert_eq!(
+        &[3],
+        &pnk!(hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[3])))[..]
+    );
+    assert_eq!(
+        &[4],
+        &pnk!(hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[4])))[..]
+    );
+
+    assert!(hdr.version_exists(VersionName(&[1])));
+    assert!(hdr.version_exists(VersionName(&[2])));
+    assert!(hdr.version_exists(VersionName(&[3])));
+    assert!(hdr.version_exists(VersionName(&[4])));
+
+    unsafe {
+        pnk!(hdr.version_rebase(VersionName(&[2])));
+    }
+
+    assert!(hdr.version_exists(VersionName(&[1])));
+    assert!(hdr.version_exists(VersionName(&[2])));
+    assert!(!hdr.version_exists(VersionName(&[3])));
+    assert!(!hdr.version_exists(VersionName(&[4])));
+
+    assert!(
+        hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[3]))
+            .is_none()
+    );
+    assert!(
+        hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[4]))
+            .is_none()
+    );
+
+    assert_eq!(
+        &[0],
+        &pnk!(hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, INITIAL_VERSION))[..]
+    );
+    assert_eq!(
+        &[1],
+        &pnk!(hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[1])))[..]
+    );
+    assert_eq!(
+        &[4],
+        &pnk!(hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[2])))[..]
+    );
+
+    // current header is version 2
+    assert_eq!(&[4], &pnk!(hdr.get(&[0]))[..]);
+
+    let br = BranchName(&[1]);
+    pnk!(hdr.branch_create(br, random_version().as_deref()));
+
+    pnk!(hdr.version_create_by_branch(VersionName(&[10]), br));
+    pnk!(hdr.insert_by_branch(&[0], &[0], br));
+    pnk!(hdr.version_create_by_branch(VersionName(&[11]), br));
+    pnk!(hdr.insert_by_branch(&[0], &[1], br));
+    pnk!(hdr.version_create_by_branch(VersionName(&[22]), br));
+    pnk!(hdr.insert_by_branch(&[0], &[2], br));
+    pnk!(hdr.version_create_by_branch(VersionName(&[33]), br));
+    pnk!(hdr.insert_by_branch(&[0], &[3], br));
+    pnk!(hdr.version_create_by_branch(VersionName(&[44]), br));
+    pnk!(hdr.insert_by_branch(&[0], &[4], br));
+
+    assert_eq!(
+        &[0],
+        &pnk!(hdr.get_by_branch_version(&[0], br, VersionName(&[10])))[..]
+    );
+    assert_eq!(
+        &[1],
+        &pnk!(hdr.get_by_branch_version(&[0], br, VersionName(&[11])))[..]
+    );
+    assert_eq!(
+        &[2],
+        &pnk!(hdr.get_by_branch_version(&[0], br, VersionName(&[22])))[..]
+    );
+    assert_eq!(
+        &[3],
+        &pnk!(hdr.get_by_branch_version(&[0], br, VersionName(&[33])))[..]
+    );
+    assert_eq!(
+        &[4],
+        &pnk!(hdr.get_by_branch_version(&[0], br, VersionName(&[44])))[..]
+    );
+
+    unsafe {
+        pnk!(hdr.version_rebase_by_branch(VersionName(&[22]), br));
+    }
+
+    assert!(hdr.version_exists_on_branch(VersionName(&[11]), br));
+    assert!(hdr.version_exists_on_branch(VersionName(&[22]), br));
+    assert!(!hdr.version_exists_on_branch(VersionName(&[33]), br));
+    assert!(!hdr.version_exists_on_branch(VersionName(&[44]), br));
+
+    assert_eq!(
+        &[1],
+        &pnk!(hdr.get_by_branch_version(&[0], br, VersionName(&[11])))[..]
+    );
+    assert_eq!(
+        &[4],
+        &pnk!(hdr.get_by_branch_version(&[0], br, VersionName(&[22])))[..]
+    );
+
+    assert!(
+        hdr.get_by_branch_version(&[0], br, VersionName(&[33]))
+            .is_none()
+    );
+    assert!(
+        hdr.get_by_branch_version(&[0], br, VersionName(&[44]))
+            .is_none()
+    );
+
+    // current header is version 22
+    assert_eq!(&[4], &pnk!(hdr.get_by_branch(&[0], br))[..]);
+
+    ////////////////////////////////////
+    // recheck data on default branch //
+    ////////////////////////////////////
+
+    assert_eq!(
+        &[1],
+        &pnk!(hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[1])))[..]
+    );
+    assert_eq!(
+        &[4],
+        &pnk!(hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[2])))[..]
+    );
+
+    assert!(
+        hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[3]))
+            .is_none()
+    );
+    assert!(
+        hdr.get_by_branch_version(&[0], INITIAL_BRANCH_NAME, VersionName(&[4]))
+            .is_none()
+    );
+
+    assert!(hdr.version_exists(VersionName(&[1])));
+    assert!(hdr.version_exists(VersionName(&[2])));
+    assert!(!hdr.version_exists(VersionName(&[3])));
+    assert!(!hdr.version_exists(VersionName(&[4])));
+
+    assert!(!hdr.version_exists(VersionName(&[11])));
+    assert!(!hdr.version_exists(VersionName(&[22])));
+    assert!(!hdr.version_exists(VersionName(&[33])));
+    assert!(!hdr.version_exists(VersionName(&[44])));
+}
+
+fn random_version() -> VersionNameOwned {
+    VersionNameOwned(
+        (1_0000_0000 + rand::random::<u64>() / 2)
+            .to_be_bytes()
+            .to_vec(),
+    )
 }
