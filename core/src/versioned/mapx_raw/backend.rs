@@ -763,42 +763,7 @@ impl MapxRawVs {
      */
     #[inline(always)]
     pub(super) fn version_clean_up_globally(&mut self) -> Result<()> {
-        /////////////////////////////////////////////////////////////////////
-        let mut ver_hdr = self.ver_id_to_ver_name.try_write().c(d!("lock busy"))?;
-        let mut chgset_hdr = self.ver_to_change_set.try_write().c(d!("lock busy"))?;
-        /////////////////////////////////////////////////////////////////////
-
-        let mut valid_vers = HashSet::new();
-        self.br_to_its_vers.iter().for_each(|(_, vers)| {
-            decode_map(&vers).iter().for_each(|(ver, _)| {
-                valid_vers.insert(to_verid(&ver[..]));
-            })
-        });
-
-        let mut orphanvers = vec![];
-        for (ver, chgset) in chgset_hdr
-            .iter()
-            .filter(|(ver, _)| !valid_vers.contains(&ver[..]))
-        {
-            for k in chgset.iter() {
-                let mut lkv = decode_map(&*self.layered_kv.get(k).c(d!())?);
-                lkv.remove(ver).c(d!())?;
-                if lkv.is_empty() {
-                    self.layered_kv.remove(k).c(d!())?;
-                }
-            }
-            orphanvers.push(*ver);
-        }
-
-        for ver in orphanvers.iter() {
-            chgset_hdr
-                .remove(ver)
-                .c(d!())
-                .and_then(|_| ver_hdr.remove(ver).c(d!()))
-                .and_then(|vername| self.ver_name_to_ver_id.remove(&vername).c(d!()))?;
-        }
-
-        Ok(())
+        self.do_prune(None, true).c(d!())
     }
 
     // # Safety
@@ -1366,10 +1331,7 @@ impl MapxRawVs {
 
     #[inline(always)]
     pub(super) fn prune(&mut self, reserved_ver_num: Option<usize>) -> Result<()> {
-        self.version_clean_up_globally()
-            .c(d!())
-            .and_then(|_| self.do_prune(reserved_ver_num).c(d!()))
-            .and_then(|_| self.version_clean_up_globally().c(d!()))
+        self.do_prune(reserved_ver_num, false).c(d!())
     }
 
     // The oldest version will be kept as the final data container.
@@ -1378,11 +1340,58 @@ impl MapxRawVs {
     // if we migrate the its data to other vesions when pruning,
     // the 'prune' process will be slower and slower,
     // do we should not do that.
-    pub(super) fn do_prune(&mut self, reserved_ver_num: Option<usize>) -> Result<()> {
+    fn do_prune(
+        &mut self,
+        reserved_ver_num: Option<usize>,
+        clean_only: bool,
+    ) -> Result<()> {
         /////////////////////////////////////////////////////////////////////
-        let ver_hdr = self.ver_id_to_ver_name.try_write().c(d!("lock busy"))?;
-        let mut chgset_hdr = self.ver_to_change_set.try_write().c(d!("lock busy"))?;
+        let (mut ver_hdr, mut chgset_hdr) = if 0 == ts!() % 16 {
+            (
+                self.ver_id_to_ver_name.write(),
+                self.ver_to_change_set.write(),
+            )
+        } else {
+            (
+                self.ver_id_to_ver_name.try_write().c(d!("lock busy"))?,
+                self.ver_to_change_set.try_write().c(d!("lock busy"))?,
+            )
+        };
         /////////////////////////////////////////////////////////////////////
+
+        let mut valid_vers = HashSet::new();
+        self.br_to_its_vers.iter().for_each(|(_, vers)| {
+            decode_map(&vers).iter().for_each(|(ver, _)| {
+                valid_vers.insert(to_verid(&ver[..]));
+            })
+        });
+
+        let mut orphanvers = vec![];
+        for (ver, chgset) in chgset_hdr
+            .iter()
+            .filter(|(ver, _)| !valid_vers.contains(&ver[..]))
+        {
+            for k in chgset.iter() {
+                let mut lkv = decode_map(&*self.layered_kv.get(k).c(d!())?);
+                lkv.remove(ver).c(d!())?;
+                if lkv.is_empty() {
+                    self.layered_kv.remove(k).c(d!())?;
+                }
+            }
+            orphanvers.push(*ver);
+        }
+
+        for ver in orphanvers.iter() {
+            chgset_hdr
+                .remove(ver)
+                .c(d!())
+                .and_then(|_| ver_hdr.remove(ver).c(d!()))
+                .and_then(|vername| self.ver_name_to_ver_id.remove(&vername).c(d!()))?;
+        }
+
+        if clean_only {
+            return Ok(());
+        }
 
         // the '1' of this 'add 1' means the never-deleted initial version.
         let reserved_ver_num =
