@@ -118,6 +118,36 @@ pub trait VsMgmt {
         base_version_name: VersionName,
     ) -> Result<()>;
 
+    /// # Safety
+    ///
+    /// You should create a new version manually before writing to the new branch,
+    /// or the data records referenced by other branches may be corrupted.
+    unsafe fn branch_create_without_new_version(
+        &self,
+        branch_name: BranchName,
+    ) -> Result<()>;
+
+    /// # Safety
+    ///
+    /// You should create a new version manually before writing to the new branch,
+    /// or the data records referenced by other branches may be corrupted.
+    unsafe fn branch_create_by_base_branch_without_new_version(
+        &self,
+        branch_name: BranchName,
+        base_branch_name: ParentBranchName,
+    ) -> Result<()>;
+
+    /// # Safety
+    ///
+    /// You should create a new version manually before writing to the new branch,
+    /// or the data records referenced by other branches may be corrupted.
+    unsafe fn branch_create_by_base_branch_version_without_new_version(
+        &self,
+        branch_name: BranchName,
+        base_branch_name: ParentBranchName,
+        base_version_name: VersionName,
+    ) -> Result<()>;
+
     /// Check if a branch exists or not.
     fn branch_exists(&self, branch_name: BranchName) -> bool;
 
@@ -331,6 +361,58 @@ macro_rules! impl_vs_methods {
                 .c(d!())
         }
 
+        /// # Safety
+        ///
+        /// You should create a new version manually before writing to the new branch,
+        /// or the data records referenced by other branches may be corrupted.
+        #[inline(always)]
+        unsafe fn branch_create_without_new_version(
+            &self,
+            branch_name: BranchName,
+        ) -> Result<()> {
+            self.inner
+                .branch_create_without_new_version(branch_name)
+                .c(d!())
+        }
+
+        /// # Safety
+        ///
+        /// You should create a new version manually before writing to the new branch,
+        /// or the data records referenced by other branches may be corrupted.
+        #[inline(always)]
+        unsafe fn branch_create_by_base_branch_without_new_version(
+            &self,
+            branch_name: BranchName,
+            base_branch_name: ParentBranchName,
+        ) -> Result<()> {
+            self.inner
+                .branch_create_by_base_branch_without_new_version(
+                    branch_name,
+                    base_branch_name,
+                )
+                .c(d!())
+        }
+
+        /// # Safety
+        ///
+        /// You should create a new version manually before writing to the new branch,
+        /// or the data records referenced by other branches may be corrupted.
+        #[inline(always)]
+        unsafe fn branch_create_by_base_branch_version_without_new_version(
+            &self,
+            branch_name: BranchName,
+            base_branch_name: ParentBranchName,
+            base_version_name: VersionName,
+        ) -> Result<()> {
+            self.inner
+                .branch_create_by_base_branch_version_without_new_version(
+                    branch_name,
+                    base_branch_name,
+                    base_version_name,
+                )
+                .c(d!())
+        }
+
         /// Check if a branch exists or not.
         #[inline(always)]
         fn branch_exists(&self, branch_name: BranchName) -> bool {
@@ -513,6 +595,27 @@ macro_rules! impl_vs_methods_nope {
             &self,
             _: BranchName,
             _: VersionName,
+            _: ParentBranchName,
+            _: VersionName,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        unsafe fn branch_create_without_new_version(&self, _: BranchName) -> Result<()> {
+            Ok(())
+        }
+
+        unsafe fn branch_create_by_base_branch_without_new_version(
+            &self,
+            _: BranchName,
+            _: ParentBranchName,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        unsafe fn branch_create_by_base_branch_version_without_new_version(
+            &self,
+            _: BranchName,
             _: ParentBranchName,
             _: VersionName,
         ) -> Result<()> {
@@ -822,6 +925,48 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
             i.branch_create_by_base_branch_version(
                 branch_name,
                 version_name,
+                base_branch_name,
+                base_version_name,
+            )
+            .c(d!())?;
+        }
+        Ok(())
+    }
+
+    unsafe fn branch_create_without_new_version(
+        &self,
+        branch_name: BranchName,
+    ) -> Result<()> {
+        if let Some(i) = self.as_ref() {
+            i.branch_create_without_new_version(branch_name).c(d!())?;
+        }
+        Ok(())
+    }
+
+    unsafe fn branch_create_by_base_branch_without_new_version(
+        &self,
+        branch_name: BranchName,
+        base_branch_name: ParentBranchName,
+    ) -> Result<()> {
+        if let Some(i) = self.as_ref() {
+            i.branch_create_by_base_branch_without_new_version(
+                branch_name,
+                base_branch_name,
+            )
+            .c(d!())?;
+        }
+        Ok(())
+    }
+
+    unsafe fn branch_create_by_base_branch_version_without_new_version(
+        &self,
+        branch_name: BranchName,
+        base_branch_name: ParentBranchName,
+        base_version_name: VersionName,
+    ) -> Result<()> {
+        if let Some(i) = self.as_ref() {
+            i.branch_create_by_base_branch_version_without_new_version(
+                branch_name,
                 base_branch_name,
                 base_version_name,
             )

@@ -538,8 +538,7 @@ impl MapxRawVs {
         {
             return Err(eg!("version is not on this branch"));
         }
-
-        self.clean_up_version_if_orphaned(version_id).c(d!())
+        Ok(())
     }
 
     // # Safety
@@ -591,14 +590,13 @@ impl MapxRawVs {
                 })?;
             }
 
-            vers_hdr.remove(verid).c(d!())?;
-
             self.version_id_to_version_name
                 .remove(verid)
                 .c(d!())
                 .and_then(|vername| {
                     self.version_name_to_version_id.remove(&vername).c(d!())
-                })?;
+                })
+                .and_then(|_| vers_hdr.remove(verid).c(d!()))?;
         }
 
         Ok(())
@@ -625,10 +623,6 @@ impl MapxRawVs {
         version_name: &[u8],
         base_branch_id: BranchID,
     ) -> Result<()> {
-        if self.version_name_to_version_id.contains_key(version_name) {
-            return Err(eg!("this version already exists"));
-        }
-
         let base_version_id = self
             .branch_to_its_versions
             .get(&base_branch_id)
@@ -646,10 +640,81 @@ impl MapxRawVs {
         .c(d!())
     }
 
+    #[inline(always)]
     pub(super) fn branch_create_by_base_branch_version(
         &self,
         branch_name: &[u8],
         version_name: &[u8],
+        base_branch_id: BranchID,
+        base_version_id: VersionID,
+    ) -> Result<()> {
+        if self.version_name_to_version_id.contains_key(version_name) {
+            return Err(eg!("this version already exists"));
+        }
+
+        unsafe {
+            self.do_branch_create_by_base_branch_version(
+                branch_name,
+                Some(version_name),
+                base_branch_id,
+                base_version_id,
+            )
+        }
+    }
+
+    #[inline(always)]
+    pub(super) unsafe fn branch_create_without_new_version(
+        &self,
+        branch_name: &[u8],
+    ) -> Result<()> {
+        self.branch_create_by_base_branch_without_new_version(
+            branch_name,
+            self.branch_get_default(),
+        )
+        .c(d!())
+    }
+
+    #[inline(always)]
+    pub(super) unsafe fn branch_create_by_base_branch_without_new_version(
+        &self,
+        branch_name: &[u8],
+        base_branch_id: BranchID,
+    ) -> Result<()> {
+        let base_version_id = self
+            .branch_to_its_versions
+            .get(&base_branch_id)
+            .c(d!("base branch not found"))?
+            .last()
+            .map(|(version_id, _)| version_id)
+            .c(d!("base version not found"))?;
+
+        self.branch_create_by_base_branch_version_without_new_version(
+            branch_name,
+            base_branch_id,
+            base_version_id,
+        )
+        .c(d!())
+    }
+
+    #[inline(always)]
+    pub(super) unsafe fn branch_create_by_base_branch_version_without_new_version(
+        &self,
+        branch_name: &[u8],
+        base_branch_id: BranchID,
+        base_version_id: VersionID,
+    ) -> Result<()> {
+        self.do_branch_create_by_base_branch_version(
+            branch_name,
+            None,
+            base_branch_id,
+            base_version_id,
+        )
+    }
+
+    unsafe fn do_branch_create_by_base_branch_version(
+        &self,
+        branch_name: &[u8],
+        version_name: Option<&[u8]>,
         base_branch_id: BranchID,
         base_version_id: VersionID,
     ) -> Result<()> {
@@ -680,9 +745,12 @@ impl MapxRawVs {
                 });
         self.branch_to_its_versions.insert(branch_id, vers_copied);
 
-        // create the first version of the new branch
-        self.version_create_by_branch(version_name, branch_id)
-            .c(d!())
+        if let Some(vername) = version_name {
+            // create the first version of the new branch
+            self.version_create_by_branch(vername, branch_id).c(d!())?;
+        }
+
+        Ok(())
     }
 
     // Check if a branch exists or not.
@@ -880,6 +948,8 @@ impl MapxRawVs {
 
     #[inline(always)]
     pub(super) fn prune(&self, reserved_ver_num: Option<usize>) -> Result<()> {
+        self.version_clean_up_global().c(d!())?;
+
         let reserved_ver_num = reserved_ver_num.unwrap_or(RESERVED_VERSION_NUM_DEFAULT);
         if 0 == reserved_ver_num {
             return Err(eg!("reserved version number should NOT be zero"));
@@ -888,6 +958,7 @@ impl MapxRawVs {
         let mut br_vers = self
             .branch_to_its_versions
             .iter()
+            .filter(|(_, vers)| !vers.is_empty())
             .map(|(_, vers)| vers.iter())
             .collect::<Vec<_>>();
 
@@ -948,23 +1019,6 @@ impl MapxRawVs {
             }
         }
 
-        let valid_vers = self
-            .branch_to_its_versions
-            .iter()
-            .flat_map(|(_, vers)| vers.iter().map(|(ver, _)| ver))
-            .collect::<HashSet<_>>();
-
-        // clean up orphaned versions
-        for (ver, chgset) in self
-            .version_to_change_set
-            .iter()
-            .filter(|(ver, _)| !valid_vers.contains(ver))
-        {
-            for (k, _) in chgset.iter() {
-                self.layered_kv.get(&k).c(d!())?.remove(&ver).c(d!())?;
-            }
-        }
-
         Ok(())
     }
 
@@ -978,17 +1032,32 @@ impl MapxRawVs {
         self.version_name_to_version_id.get(version_name.0)
     }
 
+    // clean up all orphaned versions in the global scope
     #[inline(always)]
-    fn clean_up_version_if_orphaned(&self, version_id: VersionID) -> Result<()> {
-        if self
+    fn version_clean_up_global(&self) -> Result<()> {
+        let valid_vers = self
             .branch_to_its_versions
             .iter()
-            .all(|(_, vers)| !vers.contains_key(&version_id))
+            .flat_map(|(_, vers)| vers.iter().map(|(ver, _)| ver))
+            .collect::<HashSet<_>>();
+
+        for (ver, chgset) in self
+            .version_to_change_set
+            .iter()
+            .filter(|(ver, _)| !valid_vers.contains(ver))
         {
-            if let Some(vername) = self.version_id_to_version_name.remove(&version_id) {
-                self.version_name_to_version_id.remove(&vername).c(d!())?;
+            for (k, _) in chgset.iter() {
+                self.layered_kv.get(&k).c(d!())?.remove(&ver).c(d!())?;
             }
+            self.version_id_to_version_name
+                .remove(&ver)
+                .c(d!())
+                .and_then(|vername| {
+                    self.version_name_to_version_id.remove(&vername).c(d!())
+                })
+                .and_then(|_| self.version_to_change_set.remove(&ver).c(d!()))?;
         }
+
         Ok(())
     }
 }

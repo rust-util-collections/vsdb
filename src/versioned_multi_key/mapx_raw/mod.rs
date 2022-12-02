@@ -265,6 +265,59 @@ impl VsMgmt for MapxRawMkVs {
     }
 
     #[inline(always)]
+    unsafe fn branch_create_without_new_version(
+        &self,
+        branch_name: BranchName,
+    ) -> Result<()> {
+        self.inner
+            .branch_create_without_new_version(branch_name.0)
+            .c(d!())
+    }
+
+    #[inline(always)]
+    unsafe fn branch_create_by_base_branch_without_new_version(
+        &self,
+        branch_name: BranchName,
+        base_branch_name: ParentBranchName,
+    ) -> Result<()> {
+        self.inner
+            .get_branch_id(BranchName(base_branch_name.0))
+            .c(d!("base branch not found"))
+            .and_then(|base_br_id| {
+                self.inner
+                    .branch_create_by_base_branch_without_new_version(
+                        branch_name.0,
+                        base_br_id,
+                    )
+                    .c(d!())
+            })
+    }
+
+    #[inline(always)]
+    unsafe fn branch_create_by_base_branch_version_without_new_version(
+        &self,
+        branch_name: BranchName,
+        base_branch_name: ParentBranchName,
+        base_version_name: VersionName,
+    ) -> Result<()> {
+        let base_br_id = self
+            .inner
+            .get_branch_id(BranchName(base_branch_name.0))
+            .c(d!("base branch not found"))?;
+        let base_ver_id = self
+            .inner
+            .get_version_id(base_version_name)
+            .c(d!("base vesion not found"))?;
+        self.inner
+            .branch_create_by_base_branch_version_without_new_version(
+                branch_name.0,
+                base_br_id,
+                base_ver_id,
+            )
+            .c(d!())
+    }
+
+    #[inline(always)]
     fn branch_exists(&self, branch_name: BranchName) -> bool {
         self.inner
             .get_branch_id(branch_name)
