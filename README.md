@@ -12,7 +12,7 @@ Based on the powerful version control function of VSDB, you can easily give your
 
 **Make everything versioned !!**
 
-[**To view the change log check here**](./change_log.md).
+[**To view the change log check here**](./documents/change_log.md).
 
 ## Highlights
 
@@ -158,9 +158,9 @@ Some complete examples:
     - Security reinforcement for blockchain scenarios
 - [**default**] `derive`, enable the `Vs` procedural macro
 - `merkle`, enable an optional mekle-tree implementation
-- `compress`, enable compression in the backend db
-    - NOTE: performance with this feature is lower when using sled
-    - NOTE: performance with this feature is higher when using rocksdb
+- `compress`, enable compression in the backend database
+- `hash`, enable an optional hash function
+    - Based on the 'blake3' crate
 
 ## Low-level design
 

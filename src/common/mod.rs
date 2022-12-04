@@ -37,17 +37,17 @@ pub(crate) type VersionID = u64;
 /// Avoid making mistakes between branch name and version name.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BranchName<'a>(pub &'a [u8]);
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub struct BranchNameOwned(pub Vec<u8>);
 /// Avoid making mistakes between branch name and version name.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 pub struct ParentBranchName<'a>(pub &'a [u8]);
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub struct ParentBranchNameOwned(pub Vec<u8>);
 /// Avoid making mistakes between branch name and version name.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VersionName<'a>(pub &'a [u8]);
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub struct VersionNameOwned(pub Vec<u8>);
 
 pub const KB: u64 = 1 << 10;
@@ -60,9 +60,6 @@ pub(crate) const NULL: BranchID = BIGGEST_RESERVED_ID as BranchID;
 
 pub(crate) const INITIAL_BRANCH_ID: BranchID = 0;
 pub(crate) const INITIAL_BRANCH_NAME: BranchName<'static> = BranchName(b"master");
-
-/// The initial verison along with each new instance.
-pub const INITIAL_VERSION: VersionName<'static> = VersionName([0u8; 0].as_slice());
 
 // default value for reserved number when pruning old data
 pub(crate) const RESERVED_VERSION_NUM_DEFAULT: usize = 10;

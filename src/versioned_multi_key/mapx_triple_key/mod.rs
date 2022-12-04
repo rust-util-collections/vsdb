@@ -7,7 +7,8 @@ use crate::{
         RawValue,
     },
     versioned_multi_key::mapx_raw::MapxRawMkVs,
-    BranchName, ParentBranchName, VersionName, VsMgmt,
+    BranchName, BranchNameOwned, ParentBranchName, VersionName, VersionNameOwned,
+    VsMgmt,
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};

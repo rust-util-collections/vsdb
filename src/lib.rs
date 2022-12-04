@@ -208,5 +208,5 @@ pub use common::{
     ende::{KeyDe, KeyEn, KeyEnDe, KeyEnDeOrdered, ValueDe, ValueEn, ValueEnDe},
     vsdb_flush, vsdb_get_base_dir, vsdb_get_custom_dir, vsdb_set_base_dir, BranchName,
     BranchNameOwned, ParentBranchName, ParentBranchNameOwned, VersionName,
-    VersionNameOwned, GB, INITIAL_VERSION, KB, MB,
+    VersionNameOwned, GB, KB, MB,
 };

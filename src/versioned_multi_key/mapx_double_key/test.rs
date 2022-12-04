@@ -3,6 +3,7 @@ use super::*;
 #[test]
 fn basic_cases() {
     let map = MapxDkVs::new();
+    pnk!(map.version_create(VersionName(b"")));
 
     assert!(pnk!(map.insert((1u8, 1u8), 9u8)).is_none());
     assert!(pnk!(map.insert((1, 2), 8)).is_none());

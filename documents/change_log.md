@@ -1,11 +1,51 @@
 # Change log
 
+## v0.31.4
+
+#### BUG fixes
+
+- Fix incorrect logic in the `branch_has_versions` function
+
+## v0.31.3
+
+#### BUG fixes
+
+- Fix incorrect logic in the `prune` function
+
+#### Internal optimizations
+
+- Allow creating new branches from an empty base branch
+- The initial version should NOT exist
+  - It may make `prune` useless(common versions may never exist)
+- The results of those `xxx_list_xxx` APIs are unreliable
+  - Will try to return the first non-empty list for reference since this version
+  - The branches or versions of every child instance of a composite Vs instance may be different
+  - > **For example:**</br>there are three Vs-structures `struct Vs0(Vs1, Vs2); struct Vs1; struct Vs2`,</br>the caller of `Vs0` cannot guarantee that other callers will not directly create branches and versions on `Vs1` or `Vs2`.
+
+## v0.30.0
+
+#### APIs changes
+
+- `branch_create_xxx`: add a 'force' param to all 'branch_create' prefixed functions
+  - if the value of 'force' is true, a branch with the same name of the target branch will be removed automatically
+
+## v0.29.0
+
+#### BUG fixes
+
+- Avoid incorrect panic in some APIs of `OrphanVs`
+  - `get_value -> Value` :=> `get_value -> Option<Value>`
+  - `get_mut -> MutValue` :=> `get_mut -> Option<MutValue>`
+
 ## v0.28.0
 
 #### New APIs
 
 - `branch_swap`: swap the underlying instance of two branches
-  - Logically similar to `std::mem::swap`
+  - **Unsafe**
+    - Non-'thread safe'
+    - Must ensure that there are no reads and writes to these two branches during the execution
+  - Logically similar to `std::ptr::swap`
   - > **For example:**</br>If you have a master branch and a test branch, the data is always trial-run on the test branch, and then periodically merged back into the master branch.</br>Rather than merging the test branch into the master branch, and then recreating the new test branch, it is more efficient to just swap the two branches, and then recreating the new test branch.
 - `branch_is_empty`: check if the specified branch is empty
   - 'empty' means that no actual data exists on this branch even if there are some empty versions on it
@@ -14,7 +54,9 @@
 - `version_list`: list all version names of the default branch
 - `version_list_by_branch`: list all version names of the specified branch
 - `version_list_globally`: list all version names of the global scope
-  - **NOTE**: include orphaned versions
+  - NOTE: include orphaned versions
+- `version_exists_globally`: check if a version exist in the global scope
+  - NOTE: include orphaned versions
 - `version_has_change_set`: check if a version has made some actual changes
 - `version_clean_up_globally`: clean all orphraned versions in the global scope
 - `version_revert_globally`: make the specified version disappear from the gloal scope
@@ -46,7 +88,7 @@
 
 - `prune`: no longer executed on the default branch, the logic now is to calculate the common prefix of the version list of all non-empty branches, and then prune this prefix list
 - `prune_by_branch`: **was removed**
-- `branch_merge_to_parent` -> `branch_merge_to`: support for safely merging into any static ancestor branch
+- `branch_merge_to_parent` :=> `branch_merge_to`: support for safely merging into any static ancestor branch
 
 #### External function changes
 
