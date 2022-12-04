@@ -1,5 +1,17 @@
 # CHANGE LOG
 
+## v0.48.6
+
+#### Internal optimizations
+
+- Add embed supports for 'primitive-types v0.12.x'
+
+## v0.48.5
+
+#### BUG fixes
+
+- Fix issues related to the `prune` operation
+
 ## v0.48.1 ~ v0.48.4
 
 #### Internal optimizations
