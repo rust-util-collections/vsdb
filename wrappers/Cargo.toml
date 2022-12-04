@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "0.48.5"
+version = "0.48.6"
 authors = ["dafanhui@163.com", "hui.fan@mail.ru"]
 edition = "2021"
 description = "A stuctured DB with some 'Git-like' features, mainly used in blockchain projects."
@@ -19,8 +19,7 @@ parking_lot = "0.12.1"
 serde_json = { version = "1.0.87", optional = true }
 bcs = { version = "0.1.4", optional = true }
 
-# vsdb_core = { path = "../core" }
-vsdb_core = "0.48.4"
+vsdb_core = { path = "../core", version = "0.48.5" }
 
 [dev-dependencies]
 hex = "0.4.3"

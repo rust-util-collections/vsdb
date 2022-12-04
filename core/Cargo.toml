@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_core"
-version = "0.48.4"
+version = "0.48.5"
 authors = ["dafanhui@163.com", "hui.fan@mail.ru"]
 edition = "2021"
 description = "A stuctured DB with some 'Git-like' features, mainly used in blockchain projects."
@@ -22,6 +22,7 @@ triehash = "0.8.4"
 
 threadpool = "1.8.1" # used in a background cleaner
 
+primitive-types-0-12 = { package = "primitive-types", version = "0.12", default-features = false, optional = true }
 primitive-types-0-11 = { package = "primitive-types", version = "0.11", default-features = false, optional = true }
 primitive-types-0-10 = { package = "primitive-types", version = "0.10", default-features = false, optional = true }
 
@@ -51,7 +52,7 @@ rocks_engine = ["rocksdb"]
 sled_compress = ["sled?/compression"]
 rocks_compress = ["rocksdb?/lz4"]
 
-extra_types = ["primitive-types-0-11", "primitive-types-0-10"]
+extra_types = ["primitive-types-0-12", "primitive-types-0-11", "primitive-types-0-10"]
 
 [[bench]]
 name = "exec"
