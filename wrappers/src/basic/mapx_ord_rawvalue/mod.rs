@@ -79,19 +79,19 @@ where
 
     #[inline(always)]
     pub fn get(&self, key: &K) -> Option<RawValue> {
-        self.inner.get(&key.to_bytes())
+        self.inner.get(key.to_bytes())
     }
 
     #[inline(always)]
     pub fn get_mut(&mut self, key: &K) -> Option<ValueMut<'_, K>> {
         self.inner
-            .get(&key.to_bytes())
+            .get(key.to_bytes())
             .map(|v| ValueMut::new(self, key.clone(), v))
     }
 
     #[inline(always)]
     pub fn contains_key(&self, key: &K) -> bool {
-        self.inner.contains_key(&key.to_bytes())
+        self.inner.contains_key(key.to_bytes())
     }
 
     #[inline(always)]
