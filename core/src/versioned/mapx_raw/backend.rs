@@ -1333,14 +1333,14 @@ impl MapxRawVs {
     // NOTE: As it will become bigger and bigger,
     // if we migrate the its data to other vesions when pruning,
     // the 'prune' process will be slower and slower,
-    // do we should not do that.
+    // so we should not do that.
     fn do_prune(
         &mut self,
         reserved_ver_num: Option<usize>,
         clean_only: bool,
     ) -> Result<()> {
         /////////////////////////////////////////////////////////////////////
-        let (mut ver_hdr, mut chgset_hdr) = if 0 == ts!() % 16 {
+        let (mut ver_hdr, mut chgset_hdr) = if 0 == rand::random::<u32>() % 16 {
             (
                 self.ver_id_to_ver_name.write(),
                 self.ver_to_change_set.write(),
