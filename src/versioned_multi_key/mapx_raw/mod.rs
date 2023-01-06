@@ -13,7 +13,10 @@ use crate::{
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
-use std::ops::{Deref, DerefMut};
+use std::{
+    collections::BTreeSet,
+    ops::{Deref, DerefMut},
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MapxRawMkVs {
@@ -125,6 +128,88 @@ impl MapxRawMkVs {
     #[inline(always)]
     pub fn clear(&mut self) {
         self.inner.clear();
+    }
+
+    #[inline(always)]
+    pub fn iter_op<F>(&self, op: &mut F) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], RawValue) -> Result<()>,
+    {
+        self.inner.iter_op(op).c(d!())
+    }
+
+    #[inline(always)]
+    pub fn iter_op_with_key_prefix<F>(
+        &self,
+        op: &mut F,
+        key_prefix: &[&[u8]],
+    ) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], RawValue) -> Result<()>,
+    {
+        self.inner.iter_op_with_key_prefix(op, key_prefix).c(d!())
+    }
+
+    #[inline(always)]
+    pub fn iter_op_by_branch<F>(&self, branch_name: BranchName, op: &mut F) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], RawValue) -> Result<()>,
+    {
+        let branch_id = self.inner.branch_get_id_by_name(branch_name).c(d!())?;
+        self.inner.iter_op_by_branch(branch_id, op).c(d!())
+    }
+
+    #[inline(always)]
+    pub fn iter_op_with_key_prefix_by_branch<F>(
+        &self,
+        branch_name: BranchName,
+        op: &mut F,
+        key_prefix: &[&[u8]],
+    ) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], RawValue) -> Result<()>,
+    {
+        let branch_id = self.inner.branch_get_id_by_name(branch_name).c(d!())?;
+        self.inner
+            .iter_op_with_key_prefix_by_branch(branch_id, op, key_prefix)
+            .c(d!())
+    }
+
+    #[inline(always)]
+    pub fn iter_op_by_branch_version<F>(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+        op: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], RawValue) -> Result<()>,
+    {
+        let branch_id = self.inner.branch_get_id_by_name(branch_name).c(d!())?;
+        let version_id = self.inner.version_get_id_by_name(version_name).c(d!())?;
+        self.inner
+            .iter_op_by_branch_version(branch_id, version_id, op)
+            .c(d!())
+    }
+
+    #[inline(always)]
+    pub fn iter_op_with_key_prefix_by_branch_version<F>(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+        op: &mut F,
+        key_prefix: &[&[u8]],
+    ) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], RawValue) -> Result<()>,
+    {
+        let branch_id = self.inner.branch_get_id_by_name(branch_name).c(d!())?;
+        let version_id = self.inner.version_get_id_by_name(version_name).c(d!())?;
+        self.inner
+            .iter_op_with_key_prefix_by_branch_version(
+                branch_id, version_id, op, key_prefix,
+            )
+            .c(d!())
     }
 }
 
@@ -400,6 +485,23 @@ impl VsMgmt for MapxRawMkVs {
         } else {
             Err(eg!("branch not found"))
         }
+    }
+
+    /// Clean up all other branches not in the list.
+    #[inline(always)]
+    fn branch_keep_only(&self, branch_names: &[BranchName]) -> Result<()> {
+        let br_ids = branch_names
+            .iter()
+            .copied()
+            .map(|brname| {
+                self.inner
+                    .branch_get_id_by_name(brname)
+                    .c(d!("version not found"))
+            })
+            .collect::<Result<BTreeSet<_>>>()?
+            .into_iter()
+            .collect::<Vec<_>>();
+        self.inner.branch_keep_only(&br_ids).c(d!())
     }
 
     #[inline(always)]

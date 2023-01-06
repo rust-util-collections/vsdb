@@ -1,47 +1,82 @@
+use crate::ValueEnDe;
+
 use super::*;
+use ruc::*;
 
 #[test]
-fn basic_cases() {
+fn test_insert() {
+    let hdr = MapxRawMk::new(2);
+    assert_eq!(2, hdr.key_size());
+    let max = 500;
+    (0..max)
+        .map(|i: usize| (i.to_be_bytes(), <usize as ValueEnDe>::encode(&(max + i))))
+        .for_each(|(subkey, value)| {
+            let key: &[&[u8]] = &[&subkey, &subkey];
+            assert!(hdr.get(&key).is_none());
+            pnk!(hdr.entry_ref(&key).or_insert_ref(&value));
+            assert!(pnk!(hdr.insert(&key, &value)).is_some());
+            assert!(hdr.contains_key(&key));
+            assert_eq!(pnk!(hdr.get(&key)), value);
+            assert_eq!(pnk!(pnk!(hdr.remove(&key))), value);
+            assert!(hdr.get(&key).is_none());
+            assert!(pnk!(hdr.insert(&key, &value)).is_none());
+        });
+    hdr.clear();
+    (0..max).map(|i: usize| i.to_be_bytes()).for_each(|subkey| {
+        assert!(hdr.get(&[&subkey, &subkey]).is_none());
+    });
+    assert!(hdr.is_empty());
+}
+
+#[test]
+fn test_valueende() {
+    let cnt = 500;
+    let dehdr = {
+        let hdr = MapxRawMk::new(2);
+        let max = 500;
+        (0..max)
+            .map(|i: usize| (i.to_be_bytes(), <usize as ValueEnDe>::encode(&i)))
+            .for_each(|(subkey, value)| {
+                let key: &[&[u8]] = &[&subkey, &subkey];
+                assert!(pnk!(hdr.insert(&key, &value)).is_none());
+            });
+        <MapxRawMk as ValueEnDe>::encode(&hdr)
+    };
+    let reloaded = pnk!(<MapxRawMk as ValueEnDe>::decode(&dehdr));
+
+    (0..cnt)
+        .map(|i: usize| (i, i.to_be_bytes()))
+        .for_each(|(i, subkey)| {
+            let val = pnk!(<usize as ValueEnDe>::decode(&pnk!(
+                reloaded.get(&[&subkey, &subkey])
+            )));
+            assert_eq!(i, val);
+        });
+}
+
+#[test]
+fn test_iter_op() {
     let map = MapxRawMk::new(4);
+    assert!(
+        map.entry_ref(&[&[1], &[2], &[3], &[4]])
+            .or_insert_ref(&[0])
+            .is_ok()
+    );
+    assert_eq!(map.get(&[&[1], &[2], &[3], &[4]]).unwrap().as_ref(), &[0]);
 
-    // key size mismatch
-    assert!(map.insert(&[&[1]], &[]).is_err());
+    let mut cnt = 0;
+    pnk!(map.iter_op(&mut |k: &[&[u8]], v: &[u8]| {
+        cnt += 1;
+        assert_eq!(k, &[&[1], &[2], &[3], &[4]]);
+        assert_eq!(v, &[0]);
+        Ok(())
+    }));
+    assert_eq!(cnt, 1);
+}
 
-    assert!(map.insert(&[&[1], &[2], &[3], &[4]], &[9]).is_ok());
-    assert!(map.insert(&[&[1], &[2], &[3], &[40]], &[8]).is_ok());
-    assert!(map.insert(&[&[1], &[2], &[30], &[40]], &[7]).is_ok());
-    assert!(map.insert(&[&[1], &[2], &[30], &[41]], &[6]).is_ok());
-
-    assert_eq!(map.get(&[&[1], &[2], &[3], &[4]]).unwrap().as_ref(), &[9]);
-    assert_eq!(map.get(&[&[1], &[2], &[3], &[40]]).unwrap().as_ref(), &[8]);
-    assert_eq!(map.get(&[&[1], &[2], &[30], &[40]]).unwrap().as_ref(), &[7]);
-    assert_eq!(map.get(&[&[1], &[2], &[30], &[41]]).unwrap().as_ref(), &[6]);
-
-    // key size mismatch
-    assert!(map.get(&[&[1], &[2], &[3]]).is_none());
-    assert!(map.get(&[&[1], &[2]]).is_none());
-    assert!(map.get(&[&[1]]).is_none());
-    assert!(map.get(&[]).is_none());
-
-    // does not exist
-    assert!(map.remove(&[&[1], &[2], &[3], &[200]]).unwrap().is_none());
-
-    assert!(map.remove(&[&[1], &[2], &[3], &[40]]).unwrap().is_some());
-    assert!(map.get(&[&[1], &[2], &[3], &[40]]).is_none());
-
-    // partial-path remove
-    assert!(map.remove(&[&[1], &[2], &[30]]).unwrap().is_none()); // yes, is none
-    assert!(map.get(&[&[1], &[2], &[30], &[40]]).is_none());
-    assert!(map.get(&[&[1], &[2], &[30], &[41]]).is_none());
-
-    // nothing will be removed by an empty key
-    assert!(map.remove(&[]).unwrap().is_none());
-
-    assert!(map.get(&[&[1], &[2], &[3], &[4]]).is_some());
-    assert!(map.remove(&[&[1]]).unwrap().is_none()); // yes, is none
-    assert!(map.get(&[&[1], &[2], &[3], &[4]]).is_none());
-
-    assert!(map.entry_ref(&[]).or_insert_ref(&[]).is_err());
+#[test]
+fn test_iter_op_with_key_prefix() {
+    let map = MapxRawMk::new(4);
     assert!(
         map.entry_ref(&[&[11], &[12], &[13], &[14]])
             .or_insert_ref(&[])
@@ -51,18 +86,6 @@ fn basic_cases() {
         map.get(&[&[11], &[12], &[13], &[14]]).unwrap().as_ref(),
         &[]
     );
-
-    let mut cnt = 0;
-    let mut op = |k: &[&[u8]], v: &[u8]| {
-        cnt += 1;
-        assert_eq!(k, &[&[11], &[12], &[13], &[14]]);
-        assert_eq!(v, &[]);
-        Ok(())
-    };
-
-    pnk!(map.iter_op(&mut op));
-    assert_eq!(cnt, 1);
-
     assert!(
         map.entry_ref(&[&[11], &[12], &[13], &[15]])
             .or_insert_ref(&[0])
@@ -76,6 +99,7 @@ fn basic_cases() {
     let mut cnt = 0;
     let mut op = |k: &[&[u8]], v: &[u8]| {
         cnt += 1;
+        println!("cnt = {} v = {:?}", cnt, v);
         if v == &[] {
             assert_eq!(k, &[&[11], &[12], &[13], &[14]]);
         } else {
@@ -88,13 +112,13 @@ fn basic_cases() {
     pnk!(map.iter_op(&mut op));
     // cnt += 2
     pnk!(map.iter_op_with_key_prefix(&mut op, &[&[11]]));
-    // cnt += 2
+    // // cnt += 2
     pnk!(map.iter_op_with_key_prefix(&mut op, &[&[11], &[12]]));
-    // cnt += 2
+    // // cnt += 2
     pnk!(map.iter_op_with_key_prefix(&mut op, &[&[11], &[12], &[13]]));
-    // cnt += 1
+    // // cnt += 1
     pnk!(map.iter_op_with_key_prefix(&mut op, &[&[11], &[12], &[13], &[14]]));
-    // cnt += 1
+    // // cnt += 1
     pnk!(map.iter_op_with_key_prefix(&mut op, &[&[11], &[12], &[13], &[15]]));
 
     // cnt += 0
@@ -108,6 +132,5 @@ fn basic_cases() {
     // cnt += 0
     pnk!(map.iter_op_with_key_prefix(&mut op, &[&[111], &[12], &[13], &[15]]));
 
-    drop(op);
     assert_eq!(cnt, 10);
 }

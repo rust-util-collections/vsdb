@@ -20,14 +20,20 @@ use std::{
 const KEY_SIZE: usize = 3;
 
 /// A versioned map structure with tree-level keys.
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct MapxTkVs<K1, K2, K3, V> {
     inner: MapxRawMkVs,
-    p1: PhantomData<K1>,
-    p2: PhantomData<K2>,
-    p3: PhantomData<K3>,
-    p4: PhantomData<V>,
+    p: PhantomData<(K1, K2, K3, V)>,
+}
+
+impl<K1, K2, K3, V> Clone for MapxTkVs<K1, K2, K3, V> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            p: PhantomData,
+        }
+    }
 }
 
 impl<K1, K2, K3, V> MapxTkVs<K1, K2, K3, V>
@@ -41,10 +47,7 @@ where
     pub fn new() -> Self {
         MapxTkVs {
             inner: MapxRawMkVs::new(KEY_SIZE),
-            p1: PhantomData,
-            p2: PhantomData,
-            p3: PhantomData,
-            p4: PhantomData,
+            p: PhantomData,
         }
     }
 
@@ -228,6 +231,176 @@ where
         let k2 = key.1.encode();
         let k3 = key.2.encode();
         [k1, k2, k3]
+    }
+
+    #[inline(always)]
+    pub fn iter_op<F>(&self, op: &mut F) -> Result<()>
+    where
+        F: FnMut((K1, K2, K3), V) -> Result<()>,
+    {
+        let mut cb = |k: &[&[u8]], v: RawValue| -> Result<()> {
+            if KEY_SIZE != k.len() {
+                return Err(eg!("key size mismatch"));
+            }
+            let k1 = KeyEnDe::decode(k[0]).c(d!())?;
+            let k2 = KeyEnDe::decode(k[1]).c(d!())?;
+            let k3 = KeyEnDe::decode(k[2]).c(d!())?;
+            let v = ValueEnDe::decode(&v).c(d!())?;
+            op((k1, k2, k3), v).c(d!())
+        };
+
+        self.inner.iter_op(&mut cb).c(d!())
+    }
+
+    pub fn iter_op_by_branch<F>(&self, branch_name: BranchName, op: &mut F) -> Result<()>
+    where
+        F: FnMut((K1, K2, K3), V) -> Result<()>,
+    {
+        let mut cb = |k: &[&[u8]], v: RawValue| -> Result<()> {
+            if KEY_SIZE != k.len() {
+                return Err(eg!("key size mismatch"));
+            }
+            let k1 = KeyEnDe::decode(k[0]).c(d!())?;
+            let k2 = KeyEnDe::decode(k[1]).c(d!())?;
+            let k3 = KeyEnDe::decode(k[2]).c(d!())?;
+            let v = ValueEnDe::decode(&v).c(d!())?;
+            op((k1, k2, k3), v).c(d!())
+        };
+
+        self.inner.iter_op_by_branch(branch_name, &mut cb).c(d!())
+    }
+
+    pub fn iter_op_by_branch_version<F>(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+        op: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut((K1, K2, K3), V) -> Result<()>,
+    {
+        let mut cb = |k: &[&[u8]], v: RawValue| -> Result<()> {
+            if KEY_SIZE != k.len() {
+                return Err(eg!("key size mismatch"));
+            }
+            let k1 = KeyEnDe::decode(k[0]).c(d!())?;
+            let k2 = KeyEnDe::decode(k[1]).c(d!())?;
+            let k3 = KeyEnDe::decode(k[2]).c(d!())?;
+            let v = ValueEnDe::decode(&v).c(d!())?;
+            op((k1, k2, k3), v).c(d!())
+        };
+
+        self.inner
+            .iter_op_by_branch_version(branch_name, version_name, &mut cb)
+            .c(d!())
+    }
+
+    pub fn iter_op_with_key_prefix<F>(
+        &self,
+        op: &mut F,
+        key_prefix: (&K1, Option<&K2>),
+    ) -> Result<()>
+    where
+        F: FnMut((K1, K2, K3), V) -> Result<()>,
+    {
+        let mut cb = |k: &[&[u8]], v: RawValue| -> Result<()> {
+            if KEY_SIZE != k.len() {
+                return Err(eg!("key size mismatch"));
+            }
+            let k1 = KeyEnDe::decode(k[0]).c(d!())?;
+            let k2 = KeyEnDe::decode(k[1]).c(d!())?;
+            let k3 = KeyEnDe::decode(k[2]).c(d!())?;
+            let v = ValueEnDe::decode(&v).c(d!())?;
+            op((k1, k2, k3), v).c(d!())
+        };
+
+        let k1 = KeyEnDe::encode(key_prefix.0);
+        let k2;
+        let mut prefix = vec![&k1[..]];
+        if let Some(key2) = key_prefix.1 {
+            k2 = KeyEnDe::encode(key2);
+            prefix.push(&k2[..]);
+        }
+        let key_prefix = &prefix[..];
+
+        self.inner
+            .iter_op_with_key_prefix(&mut cb, key_prefix)
+            .c(d!())
+    }
+
+    pub fn iter_op_with_key_prefix_by_branch<F>(
+        &self,
+        branch_name: BranchName,
+        op: &mut F,
+        key_prefix: (&K1, Option<&K2>),
+    ) -> Result<()>
+    where
+        F: FnMut((K1, K2, K3), V) -> Result<()>,
+    {
+        let mut cb = |k: &[&[u8]], v: RawValue| -> Result<()> {
+            if KEY_SIZE != k.len() {
+                return Err(eg!("key size mismatch"));
+            }
+            let k1 = KeyEnDe::decode(k[0]).c(d!())?;
+            let k2 = KeyEnDe::decode(k[1]).c(d!())?;
+            let k3 = KeyEnDe::decode(k[2]).c(d!())?;
+            let v = ValueEnDe::decode(&v).c(d!())?;
+            op((k1, k2, k3), v).c(d!())
+        };
+
+        let k1 = KeyEnDe::encode(key_prefix.0);
+        let k2;
+        let mut prefix = vec![&k1[..]];
+        if let Some(key2) = key_prefix.1 {
+            k2 = KeyEnDe::encode(key2);
+            prefix.push(&k2[..]);
+        }
+        let key_prefix = &prefix[..];
+
+        self.inner
+            .iter_op_with_key_prefix_by_branch(branch_name, &mut cb, key_prefix)
+            .c(d!())
+    }
+
+    #[inline(always)]
+    pub fn iter_op_with_key_prefix_by_branch_version<F>(
+        &self,
+        branch_name: BranchName,
+        version_name: VersionName,
+        op: &mut F,
+        key_prefix: (&K1, Option<&K2>),
+    ) -> Result<()>
+    where
+        F: FnMut((K1, K2, K3), V) -> Result<()>,
+    {
+        let mut cb = |k: &[&[u8]], v: RawValue| -> Result<()> {
+            if KEY_SIZE != k.len() {
+                return Err(eg!("key size mismatch"));
+            }
+            let k1 = KeyEnDe::decode(k[0]).c(d!())?;
+            let k2 = KeyEnDe::decode(k[1]).c(d!())?;
+            let k3 = KeyEnDe::decode(k[2]).c(d!())?;
+            let v = ValueEnDe::decode(&v).c(d!())?;
+            op((k1, k2, k3), v).c(d!())
+        };
+
+        let k1 = KeyEnDe::encode(key_prefix.0);
+        let k2;
+        let mut prefix = vec![&k1[..]];
+        if let Some(key2) = key_prefix.1 {
+            k2 = KeyEnDe::encode(key2);
+            prefix.push(&k2[..]);
+        }
+        let key_prefix = &prefix[..];
+
+        self.inner
+            .iter_op_with_key_prefix_by_branch_version(
+                branch_name,
+                version_name,
+                &mut cb,
+                key_prefix,
+            )
+            .c(d!())
     }
 }
 

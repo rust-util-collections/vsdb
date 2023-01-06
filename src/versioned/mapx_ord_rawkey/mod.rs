@@ -2,6 +2,9 @@
 //! Documents => [MapxRawVs](crate::versioned::mapx_raw)
 //!
 
+#[cfg(test)]
+mod test;
+
 use crate::{
     common::{ende::ValueEnDe, BranchName, ParentBranchName, RawKey, VersionName},
     versioned::mapx_raw::{MapxRawVs, MapxRawVsIter},
@@ -15,11 +18,20 @@ use std::{
 };
 
 /// Documents => [MapxRawVs](crate::versioned::mapx_raw::MapxRawVs)
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct MapxOrdRawKeyVs<V> {
     inner: MapxRawVs,
     p: PhantomData<V>,
+}
+
+impl<V> Clone for MapxOrdRawKeyVs<V> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            p: PhantomData,
+        }
+    }
 }
 
 impl<V> Default for MapxOrdRawKeyVs<V>

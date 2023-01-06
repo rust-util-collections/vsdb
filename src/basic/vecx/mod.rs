@@ -40,11 +40,19 @@ use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
-#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct Vecx<T> {
     inner: MapxOrdRawKey<T>,
 }
+
+impl<T> Clone for Vecx<T> {
+    fn clone(&self) -> Self {
+        Self { inner: self.inner }
+    }
+}
+
+impl<T> Copy for Vecx<T> {}
 
 impl<T: ValueEnDe> Default for Vecx<T> {
     fn default() -> Self {

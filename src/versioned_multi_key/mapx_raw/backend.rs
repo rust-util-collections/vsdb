@@ -209,6 +209,28 @@ impl MapxRawMkVs {
     }
 
     #[inline(always)]
+    pub(super) fn iter_op<F>(&self, op: &mut F) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], RawValue) -> Result<()>,
+    {
+        self.iter_op_by_branch(self.branch_get_default(), op)
+            .c(d!())
+    }
+
+    #[inline(always)]
+    pub(super) fn iter_op_with_key_prefix<F>(
+        &self,
+        op: &mut F,
+        key_prefix: &[&[u8]],
+    ) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], RawValue) -> Result<()>,
+    {
+        self.iter_op_with_key_prefix_by_branch(self.branch_get_default(), op, key_prefix)
+            .c(d!())
+    }
+
+    #[inline(always)]
     pub(super) fn get_by_branch(
         &self,
         key: &[&[u8]],
@@ -220,6 +242,41 @@ impl MapxRawMkVs {
             }
         }
         None
+    }
+
+    #[inline(always)]
+    pub(super) fn iter_op_by_branch<F>(
+        &self,
+        branch_id: BranchID,
+        op: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], RawValue) -> Result<()>,
+    {
+        self.iter_op_with_key_prefix_by_branch(branch_id, op, &[])
+            .c(d!())
+    }
+
+    #[inline(always)]
+    pub(super) fn iter_op_with_key_prefix_by_branch<F>(
+        &self,
+        branch_id: BranchID,
+        op: &mut F,
+        key_prefix: &[&[u8]],
+    ) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], RawValue) -> Result<()>,
+    {
+        self.branch_to_its_versions
+            .get(&branch_id)
+            .and_then(|vers| vers.last().map(|(id, _)| id))
+            .c(d!("no versions found"))
+            .and_then(|version_id| {
+                self.iter_op_with_key_prefix_by_branch_version(
+                    branch_id, version_id, op, key_prefix,
+                )
+                .c(d!())
+            })
     }
 
     pub(super) fn get_by_branch_version(
@@ -235,6 +292,49 @@ impl MapxRawMkVs {
             .rev()
             .find(|(ver, _)| vers.contains_key(ver))
             .and_then(|(_, value)| value)
+    }
+
+    #[inline(always)]
+    pub(super) fn iter_op_by_branch_version<F>(
+        &self,
+        branch_id: BranchID,
+        version_id: VersionID,
+        op: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], RawValue) -> Result<()>,
+    {
+        self.iter_op_with_key_prefix_by_branch_version(branch_id, version_id, op, &[])
+    }
+
+    #[inline(always)]
+    pub(super) fn iter_op_with_key_prefix_by_branch_version<F>(
+        &self,
+        branch_id: BranchID,
+        version_id: VersionID,
+        op: &mut F,
+        key_prefix: &[&[u8]],
+    ) -> Result<()>
+    where
+        F: FnMut(&[&[u8]], RawValue) -> Result<()>,
+    {
+        let vers = self.branch_to_its_versions.get(&branch_id).c(d!())?;
+        let mut cb =
+            |k: &[&[u8]], v: &MapxOrd<VersionID, Option<RawValue>>| -> Result<()> {
+                if let Some(value) = v
+                    .range(..=version_id)
+                    .rev()
+                    .find(|(ver, _)| vers.contains_key(ver))
+                    .and_then(|(_, value)| value)
+                {
+                    op(k, value).c(d!())?;
+                }
+                Ok(())
+            };
+
+        self.layered_kv
+            .iter_op_with_key_prefix(&mut cb, key_prefix)
+            .c(d!())
     }
 
     #[inline(always)]
@@ -717,7 +817,7 @@ impl MapxRawMkVs {
         self.branch_truncate(branch_id).c(d!())?;
 
         self.branch_id_to_branch_name
-            .get(&branch_id)
+            .remove(&branch_id)
             .c(d!())
             .and_then(|brname| self.branch_name_to_branch_id.remove(&brname).c(d!()))?;
 
@@ -725,6 +825,19 @@ impl MapxRawMkVs {
             .remove(&branch_id)
             .c(d!())
             .map(|_| ())
+    }
+
+    #[inline(always)]
+    pub(super) fn branch_keep_only(&self, branch_ids: &[BranchID]) -> Result<()> {
+        for brid in self
+            .branch_id_to_branch_name
+            .iter()
+            .map(|(brid, _)| brid)
+            .filter(|brid| !branch_ids.contains(brid))
+        {
+            self.branch_remove(brid).c(d!())?;
+        }
+        self.version_clean_up_globally().c(d!())
     }
 
     #[inline(always)]
@@ -744,7 +857,7 @@ impl MapxRawMkVs {
             }
             Ok(())
         } else {
-            Err(eg!("branch not found"))
+            Err(eg!("branch not found: {}", branch_id))
         }
     }
 

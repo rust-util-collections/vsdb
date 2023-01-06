@@ -1,5 +1,56 @@
 # Change log
 
+## v0.34.3
+
+#### Internal optimizations
+
+- Relax the K/V binding conditions of all structured kinds
+
+## v0.34.2
+
+#### Unit tests
+
+- Add more unit tests, test coverage reached 75%
+
+## v0.34.1
+
+#### Internal optimizations
+
+- Tuning options of the backend DB
+
+## v0.34.0
+
+#### New APIs
+
+- `branch_keep_only`: delete all other branches out of the target list
+  - Will also clean up all orphan versions
+
+#### BUG fixes
+
+- Instance length counters are not atomic
+  - Multi-thread safety cannot be guaranteed
+- `branch_remove`: the cleanup of branch id is incomplete
+  - The `branch_id_to_branch_name` field is dirty
+
+## v0.33.0
+
+#### API changes
+
+- Change the callback parameter definition of `iter_op`
+
+## v0.32.0
+
+#### New APIs
+
+Add iter-like functions in `MapxMkVs` and its derivatives.
+
+- `iter_op`
+- `iter_op_by_branch`
+- `iter_op_by_branch_version`
+- `iter_op_with_key_prefix`
+- `iter_op_with_key_prefix_by_branch`
+- `iter_op_with_key_prefix_by_branch_version`
+
 ## v0.31.4
 
 #### BUG fixes

@@ -43,12 +43,23 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
-#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct Mapx<K, V> {
     inner: MapxOrdRawKey<V>,
     p: PhantomData<K>,
 }
+
+impl<K, V> Clone for Mapx<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner,
+            p: PhantomData,
+        }
+    }
+}
+
+impl<K, V> Copy for Mapx<K, V> {}
 
 impl<K, V> Default for Mapx<K, V>
 where

@@ -43,7 +43,10 @@ use crate::{
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
-use std::ops::{Deref, DerefMut, RangeBounds};
+use std::{
+    collections::BTreeSet,
+    ops::{Deref, DerefMut, RangeBounds},
+};
 
 pub(crate) use backend::MapxRawVsIter;
 
@@ -762,6 +765,23 @@ impl VsMgmt for MapxRawVs {
         } else {
             Err(eg!("branch not found"))
         }
+    }
+
+    /// Clean up all other branches not in the list.
+    #[inline(always)]
+    fn branch_keep_only(&self, branch_names: &[BranchName]) -> Result<()> {
+        let br_ids = branch_names
+            .iter()
+            .copied()
+            .map(|brname| {
+                self.inner
+                    .branch_get_id_by_name(brname)
+                    .c(d!("version not found"))
+            })
+            .collect::<Result<BTreeSet<_>>>()?
+            .into_iter()
+            .collect::<Vec<_>>();
+        self.inner.branch_keep_only(&br_ids).c(d!())
     }
 
     /// Remove all changes directly made by versions(bigger than `last_version_id`) of this branch.
