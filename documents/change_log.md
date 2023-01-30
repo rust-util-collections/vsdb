@@ -1,5 +1,24 @@
 # Change log
 
+## v0.36.0
+
+#### Internal optimizations
+
+- Optimize conditional compilation attributes
+- Enable the `compress` feature by default
+
+## v0.35.3
+
+#### Internal optimizations
+
+- Use absolute importing path in the scope of macro definations
+
+## v0.35.0
+
+#### Function changes
+
+- The embed MerkleTree is removed
+
 ## v0.34.3
 
 #### Internal optimizations

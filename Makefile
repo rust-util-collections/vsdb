@@ -10,28 +10,40 @@ release:
 
 lint:
 	cargo clippy
-	cargo clippy --features "compress,merkle"
+	cargo clippy --features "compress"
 	cargo check --tests
 	cargo check --benches
 	cargo check --examples
 
 lintall: lint
-	cargo clippy --no-default-features --features "derive,merkle,rocks_engine,compress,msgpack_codec"
-	cargo check --tests --no-default-features --features "derive,merkle,rocks_engine,msgpack_codec"
-	cargo check --benches --no-default-features --features "derive,merkle,rocks_engine,msgpack_codec"
-	cargo check --examples --no-default-features --features "derive,merkle,rocks_engine,msgpack_codec"
+	cargo clippy --no-default-features --features "derive,rocks_engine,compress,msgpack_codec"
+	cargo check --tests --no-default-features --features "derive,rocks_engine,msgpack_codec"
+	cargo check --benches --no-default-features --features "derive,rocks_engine,msgpack_codec"
+	cargo check --examples --no-default-features --features "derive,rocks_engine,msgpack_codec"
 
-test:
+example:
 	- rm -rf ~/.vsdb /tmp/.vsdb
-	cargo test --tests --bins --features "derive,merkle" -- --test-threads=1
-	- rm -rf ~/.vsdb /tmp/.vsdb
-	cargo test --release --tests --bins --features "derive,merkle" -- --test-threads=1
+	cargo run --example derive_vs
+	cargo run --example web_server
+	cargo run --example blockchain_state
 
-testall: test
+test: example
 	- rm -rf ~/.vsdb /tmp/.vsdb
-	cargo test --tests --bins --no-default-features --features "derive,merkle,rocks_engine,msgpack_codec" -- --test-threads=1
+	cargo test --tests --bins --features "derive" -- --test-threads=1
 	- rm -rf ~/.vsdb /tmp/.vsdb
-	cargo test --release --tests --bins --no-default-features --features "derive,merkle,rocks_engine,msgpack_codec" -- --test-threads=1
+	cargo test --release --tests --bins --features "derive,compress" -- --test-threads=1
+
+exampleall:
+	- rm -rf ~/.vsdb /tmp/.vsdb
+	cargo run --no-default-features --features "derive,rocks_engine,msgpack_codec" --example derive_vs
+	cargo run --no-default-features --features "derive,rocks_engine,msgpack_codec" --example web_server
+	cargo run --no-default-features --features "derive,rocks_engine,msgpack_codec" --example blockchain_state
+
+testall: test exampleall
+	- rm -rf ~/.vsdb /tmp/.vsdb
+	cargo test --tests --bins --no-default-features --features "derive,rocks_engine,msgpack_codec" -- --test-threads=1
+	- rm -rf ~/.vsdb /tmp/.vsdb
+	cargo test --release --tests --bins --no-default-features --features "derive,rocks_engine,msgpack_codec,compress" -- --test-threads=1
 
 bench:
 	- rm -rf ~/.vsdb

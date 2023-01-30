@@ -1,7 +1,11 @@
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
-#[cfg(all(feature = "rocks_engine", not(feature = "sled_engine")))]
+#[cfg(any(
+    feature = "rocks_engine",
+    all(feature = "rocks_engine", feature = "sled_engine"),
+    all(not(feature = "rocks_engine"), not(feature = "sled_engine")),
+))]
 mod rocks_db;
 
 #[cfg(all(feature = "sled_engine", not(feature = "rocks_engine")))]
@@ -10,17 +14,25 @@ mod sled_db;
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
-#[cfg(all(feature = "rocks_engine", not(feature = "sled_engine")))]
+#[cfg(any(
+    feature = "rocks_engine",
+    all(feature = "rocks_engine", feature = "sled_engine"),
+    all(not(feature = "rocks_engine"), not(feature = "sled_engine")),
+))]
 pub(crate) use rocks_db::RocksEngine as RocksDB;
 
 #[cfg(all(feature = "sled_engine", not(feature = "rocks_engine")))]
 pub(crate) use sled_db::SledEngine as Sled;
 
+#[cfg(any(
+    feature = "rocks_engine",
+    all(feature = "rocks_engine", feature = "sled_engine"),
+    all(not(feature = "rocks_engine"), not(feature = "sled_engine")),
+))]
+pub type MapxIter = rocks_db::RocksIter;
+
 #[cfg(all(feature = "sled_engine", not(feature = "rocks_engine")))]
 pub type MapxIter = sled_db::SledIter;
-
-#[cfg(all(feature = "rocks_engine", not(feature = "sled_engine")))]
-pub type MapxIter = rocks_db::RocksIter;
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////

@@ -6,9 +6,9 @@
 mod test;
 
 use crate::{
-    common::{ende::ValueEnDe, BranchName, ParentBranchName, RawKey, VersionName},
+    common::{ende::ValueEnDe, BranchName, RawKey, VersionName},
     versioned::mapx_raw::{MapxRawVs, MapxRawVsIter},
-    BranchNameOwned, VersionNameOwned, VsMgmt,
+    VsMgmt,
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};

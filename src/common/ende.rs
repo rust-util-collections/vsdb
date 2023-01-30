@@ -42,7 +42,11 @@ impl<'de> de::Visitor<'de> for SimpleVisitor {
 /// Methods used to encode the KEY.
 pub trait KeyEn: Serialize + Sized {
     /// Encode original key type to bytes.
-    #[cfg(all(feature = "msgpack_codec", not(feature = "bcs_codec")))]
+    #[cfg(any(
+        feature = "msgpack_codec",
+        all(feature = "msgpack_codec", feature = "bcs_codec"),
+        all(not(feature = "msgpack_codec"), not(feature = "bcs_codec")),
+    ))]
     fn encode_key(&self) -> RawBytes {
         msgpack::to_vec(self).unwrap().into_boxed_slice()
     }
@@ -57,7 +61,11 @@ pub trait KeyEn: Serialize + Sized {
 /// Methods used to decode the KEY.
 pub trait KeyDe: DeserializeOwned {
     /// Decode from bytes to the original key type.
-    #[cfg(all(feature = "msgpack_codec", not(feature = "bcs_codec")))]
+    #[cfg(any(
+        feature = "msgpack_codec",
+        all(feature = "msgpack_codec", feature = "bcs_codec"),
+        all(not(feature = "msgpack_codec"), not(feature = "bcs_codec")),
+    ))]
     fn decode_key(bytes: &[u8]) -> Result<Self> {
         msgpack::from_slice(bytes).c(d!())
     }
@@ -85,7 +93,11 @@ pub trait KeyEnDe: KeyEn + KeyDe {
 /// Methods used to encode the VALUE.
 pub trait ValueEn: Serialize + Sized {
     /// Encode original key type to bytes.
-    #[cfg(all(feature = "msgpack_codec", not(feature = "bcs_codec")))]
+    #[cfg(any(
+        feature = "msgpack_codec",
+        all(feature = "msgpack_codec", feature = "bcs_codec"),
+        all(not(feature = "msgpack_codec"), not(feature = "bcs_codec")),
+    ))]
     fn encode_value(&self) -> RawBytes {
         msgpack::to_vec(self).unwrap().into_boxed_slice()
     }
@@ -100,7 +112,11 @@ pub trait ValueEn: Serialize + Sized {
 /// Methods used to decode the VALUE.
 pub trait ValueDe: DeserializeOwned {
     /// Decode from bytes to the original key type.
-    #[cfg(all(feature = "msgpack_codec", not(feature = "bcs_codec")))]
+    #[cfg(any(
+        feature = "msgpack_codec",
+        all(feature = "msgpack_codec", feature = "bcs_codec"),
+        all(not(feature = "msgpack_codec"), not(feature = "bcs_codec")),
+    ))]
     fn decode_value(bytes: &[u8]) -> Result<Self> {
         msgpack::from_slice(bytes).c(d!())
     }
@@ -135,7 +151,11 @@ impl<T: KeyEn + KeyDe> KeyEnDe for T {}
 impl<T: ValueEn + ValueDe> ValueEnDe for T {}
 
 // used to encode the deref value of `Option<Box<[u8]>>`
-#[cfg(all(feature = "msgpack_codec", not(feature = "bcs_codec")))]
+#[cfg(any(
+    feature = "msgpack_codec",
+    all(feature = "msgpack_codec", feature = "bcs_codec"),
+    all(not(feature = "msgpack_codec"), not(feature = "bcs_codec")),
+))]
 pub(crate) fn encode_optioned_bytes(v: &Option<&[u8]>) -> RawBytes {
     msgpack::to_vec(v).unwrap().into_boxed_slice()
 }
