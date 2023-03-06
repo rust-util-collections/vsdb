@@ -159,12 +159,14 @@ Some complete examples:
 - `rocks_engine`, use rocksdb as the backend database
     - Faster running speed in the unversioned functions
     - Can not be compiled into a statically linked object
-- [**default**] `json_codec`, use `serde_json` as the codec
-    - Better generality and compatibility
-- `bcs_codec`, use `bcs` as the codec
-    - Faster running speed
-    - Created by the 'Libre' project of Facebook
+- [**default**] `bcs_codec`, use `bcs` as the codec
+    - Faster running speed than json
     - Security reinforcement for blockchain scenarios
+    - Created by the original 'Libre' project of Facebook
+- `msgpack_codec`, use `rmp-serde` as the codec
+    - Faster running speed than json
+- `json_codec`, use `serde_json` as the codec
+    - Better generality and compatibility
 - [**default**] `derive`, enable the `Vs` procedural macro
 - `compress`, enable compression in the backend database
 - `extra_types`, implement `VsMgmt` for some common extra types

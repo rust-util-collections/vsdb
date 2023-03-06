@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "0.48.9"
+version = "0.49.0"
 authors = ["dafanhui@163.com", "hui.fan@mail.ru"]
 edition = "2021"
 description = "A stuctured DB with some 'Git-like' features, mainly used in blockchain projects."
@@ -18,6 +18,7 @@ parking_lot = "0.12.1"
 
 serde_json = { version = "1.0.87", optional = true }
 bcs = { version = "0.1.4", optional = true }
+rmp-serde = { version = "1.1.1", optional = true }
 
 vsdb_core = { path = "../core", version = "0.48.7" }
 
@@ -39,6 +40,7 @@ rocks_compress = ["vsdb_core/rocks_compress"]
 
 bcs_codec = ["bcs"]
 json_codec = ["serde_json"]
+msgpack_codec = ["rmp-serde"]
 
 derive = ["vsdb_core/derive"]
 extra_types = ["vsdb_core/extra_types"]

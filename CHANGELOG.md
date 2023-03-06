@@ -1,27 +1,25 @@
 # CHANGE LOG
 
-## v0.48.6
+## v0.49.x
+
+#### BUG fixes
 
 #### Internal optimizations
 
-- Add embed supports for 'primitive-types v0.12.x'
+- Switch the default codec from `json` to `bcs`
+- Add 'message pack' back to the list of alternative codec
+  - coresponding feature: `msgpack`
 
-## v0.48.5
+## v0.48.x
 
 #### BUG fixes
 
 - Fix issues related to the `prune` operation
 
-## v0.48.1 ~ v0.48.4
-
 #### Internal optimizations
 
 - Tuning feature settings and code details
-
-## v0.48.0
-
-#### Internal optimizations
-
+- Add embed supports for 'primitive-types v0.12.x'
 - Switch the default codec from `msgpack` to `json`
   - For better generality and compatibility
 
