@@ -1,7 +1,7 @@
 [package]
 name = "vsdb"
-version = "0.49.0"
-authors = ["dafanhui@163.com", "hui.fan@mail.ru"]
+version = "0.49.1"
+authors = ["fhfanhui@gmail.com", "hui.fan@mail.ru"]
 edition = "2021"
 description = "A stuctured DB with some 'Git-like' features, mainly used in blockchain projects."
 homepage = "https://github.com/rust-util-collections/vsdb"
