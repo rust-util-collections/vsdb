@@ -353,48 +353,115 @@ macro_rules! impl_type {
             }
         }
     };
+    (%$hash: ty) => {
+        impl KeyEnDeOrdered for $hash {
+            #[inline(always)]
+            fn to_bytes(&self) -> RawBytes {
+                self.as_bytes().to_vec()
+            }
+            #[inline(always)]
+            fn from_slice(b: &[u8]) -> Result<Self> {
+                if b.len() != <$hash>::len_bytes() {
+                    return Err(eg!("length mismatch"));
+                }
+                Ok(<$hash>::from_slice(b))
+            }
+        }
+    };
+    (~$bigint: ty) => {
+        impl KeyEnDeOrdered for $bigint {
+            #[inline(always)]
+            fn to_bytes(&self) -> RawBytes {
+                let mut r = vec![];
+                self.to_big_endian(&mut r);
+                r
+            }
+            #[inline(always)]
+            fn from_slice(b: &[u8]) -> Result<Self> {
+                Ok(<$bigint>::from_big_endian(b))
+            }
+        }
+    };
 }
 
-impl_type!(i8);
-impl_type!(i16);
-impl_type!(i32);
-impl_type!(i64);
-impl_type!(i128);
-impl_type!(isize);
-impl_type!(u8);
-impl_type!(u16);
-impl_type!(u32);
-impl_type!(u64);
-impl_type!(u128);
-impl_type!(usize);
+macro_rules! impl_all {
+    ($t: ty) => {
+        impl_type!($t);
+    };
+    ($t: ty, $($tt: ty),+) => {
+        impl_all!($t);
+        impl_all!($($tt), +);
+    };
+    (@$t: ty) => {
+        impl_type!(@$t);
+    };
+    (@$t: ty, $(@$tt: ty),+) => {
+        impl_all!(@$t);
+        impl_all!($(@$tt), +);
+    };
+    (^$t: ty) => {
+        impl_type!(^$t);
+    };
+    (^$t: ty, $(^$tt: ty),+) => {
+        impl_all!(^$t);
+        impl_all!($(^$tt), +);
+    };
+    (%$t: ty) => {
+        impl_type!(%$t);
+    };
+    (%$t: ty, $(%$tt: ty),+) => {
+        impl_all!(%$t);
+        impl_all!($(%$tt), +);
+    };
+    (~$t: ty) => {
+        impl_type!(~$t);
+    };
+    (~$t: ty, $(~$tt: ty),+) => {
+        impl_all!(~$t);
+        impl_all!($(~$tt), +);
+    };
+}
 
-impl_type!(@i8);
-impl_type!(@i16);
-impl_type!(@i32);
-impl_type!(@i64);
-impl_type!(@i128);
-impl_type!(@isize);
-// impl_type!(@u8);
-impl_type!(@u16);
-impl_type!(@u32);
-impl_type!(@u64);
-impl_type!(@u128);
-impl_type!(@usize);
+impl_all!(
+    i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
+);
+impl_all!(
+    @i8, @i16, @i32, @i64, @i128, @isize, @u16, @u32, @u64, @u128, @usize
+);
+impl_all!(
+    ^i8, ^i16, ^i32, ^i64, ^i128, ^isize, ^u16, ^u32, ^u64, ^u128, ^usize
+);
 
-impl_type!(^i8);
-impl_type!(^i16);
-impl_type!(^i32);
-impl_type!(^i64);
-impl_type!(^i128);
-impl_type!(^isize);
-// impl_type!(^u8);
-impl_type!(^u16);
-impl_type!(^u32);
-impl_type!(^u64);
-impl_type!(^u128);
-impl_type!(^usize);
+#[cfg(feature = "extra_types")]
+impl_all!(
+    %vsdb_core::primitive_types_0_10::H128,
+    %vsdb_core::primitive_types_0_10::H160,
+    %vsdb_core::primitive_types_0_10::H256,
+    %vsdb_core::primitive_types_0_10::H512,
+    %vsdb_core::primitive_types_0_11::H128,
+    %vsdb_core::primitive_types_0_11::H160,
+    %vsdb_core::primitive_types_0_11::H256,
+    %vsdb_core::primitive_types_0_11::H512,
+    %vsdb_core::primitive_types_0_12::H128,
+    %vsdb_core::primitive_types_0_12::H160,
+    %vsdb_core::primitive_types_0_12::H256,
+    %vsdb_core::primitive_types_0_12::H512
+);
 
-macro_rules! impl_repeat {
+#[cfg(feature = "extra_types")]
+impl_all!(
+    ~vsdb_core::primitive_types_0_10::U128,
+    ~vsdb_core::primitive_types_0_10::U256,
+    ~vsdb_core::primitive_types_0_10::U512,
+    ~vsdb_core::primitive_types_0_11::U128,
+    ~vsdb_core::primitive_types_0_11::U256,
+    ~vsdb_core::primitive_types_0_11::U512,
+    ~vsdb_core::primitive_types_0_12::U128,
+    ~vsdb_core::primitive_types_0_12::U256,
+    ~vsdb_core::primitive_types_0_12::U512
+);
+
+macro_rules! impl_array {
     ($i: expr) => {
         impl_type!(i8, $i);
         impl_type!(i16, $i);
@@ -410,12 +477,12 @@ macro_rules! impl_repeat {
         impl_type!(usize, $i);
     };
     ($i: expr, $($ii: expr),+) => {
-        impl_repeat!($i);
-        impl_repeat!($($ii), +);
+        impl_array!($i);
+        impl_array!($($ii), +);
     };
 }
 
-impl_repeat!(
+impl_array!(
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
     24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
     45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65,

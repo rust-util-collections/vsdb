@@ -26,3 +26,6 @@ pub use common::{
     BranchNameOwned, ParentBranchName, ParentBranchNameOwned, RawBytes, RawKey,
     RawValue, VersionName, VersionNameOwned, GB, KB, MB, NULL,
 };
+
+#[cfg(feature = "extra_types")]
+pub use {primitive_types_0_10, primitive_types_0_11, primitive_types_0_12};

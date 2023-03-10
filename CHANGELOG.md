@@ -1,10 +1,10 @@
 # CHANGE LOG
 
-## v0.50.0
+## v0.50.x
 
 #### Internal optimizations
 
-- ...
+- Implement KeyEnDeOrdered for some `primitive_types`
 
 ## v0.49.x
 
