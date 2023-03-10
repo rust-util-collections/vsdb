@@ -1,5 +1,11 @@
 # CHANGE LOG
 
+## v0.50.0
+
+#### Internal optimizations
+
+- ...
+
 ## v0.49.x
 
 #### BUG fixes
