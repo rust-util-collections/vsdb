@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "0.50.1"
+version = "0.50.2"
 authors = ["fhfanhui@gmail.com", "hui.fan@mail.ru"]
 edition = "2021"
 description = "A stuctured DB with some 'Git-like' features, mainly used in blockchain projects."

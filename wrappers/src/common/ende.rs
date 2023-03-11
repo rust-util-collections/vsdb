@@ -16,24 +16,18 @@ use std::{
 /////////////////////////////////////////////////////////////////////////////
 
 /// Methods used to encode the KEY.
-pub trait KeyEn: Serialize + Sized {
+pub trait KeyEn: Sized {
     /// Encode original key type to bytes.
     #[cfg(feature = "json_codec")]
-    fn try_encode_key(&self) -> Result<RawBytes> {
-        serde_json::to_vec(self).c(d!())
-    }
+    fn try_encode_key(&self) -> Result<RawBytes>;
 
     /// Encode original key type to bytes.
     #[cfg(feature = "bcs_codec")]
-    fn try_encode_key(&self) -> Result<RawBytes> {
-        bcs::to_bytes(self).c(d!())
-    }
+    fn try_encode_key(&self) -> Result<RawBytes>;
 
     /// Encode original key type to bytes.
     #[cfg(feature = "msgpack_codec")]
-    fn try_encode_key(&self) -> Result<RawBytes> {
-        rmp_serde::to_vec(self).c(d!())
-    }
+    fn try_encode_key(&self) -> Result<RawBytes>;
 
     fn encode_key(&self) -> RawBytes {
         pnk!(self.try_encode_key())
@@ -41,62 +35,46 @@ pub trait KeyEn: Serialize + Sized {
 }
 
 /// Methods used to decode the KEY.
-pub trait KeyDe: DeserializeOwned {
+pub trait KeyDe: Sized {
     /// Decode from bytes to the original key type.
     #[cfg(feature = "json_codec")]
-    fn decode_key(bytes: &[u8]) -> Result<Self> {
-        serde_json::from_slice(bytes).c(d!())
-    }
+    fn decode_key(bytes: &[u8]) -> Result<Self>;
 
     /// Decode from bytes to the original key type.
     #[cfg(feature = "bcs_codec")]
-    fn decode_key(bytes: &[u8]) -> Result<Self> {
-        bcs::from_bytes(bytes).c(d!())
-    }
+    fn decode_key(bytes: &[u8]) -> Result<Self>;
 
     /// Decode from bytes to the original key type.
     #[cfg(feature = "msgpack_codec")]
-    fn decode_key(bytes: &[u8]) -> Result<Self> {
-        rmp_serde::from_slice(bytes).c(d!())
-    }
+    fn decode_key(bytes: &[u8]) -> Result<Self>;
 }
 
 /// Methods used to encode and decode the KEY.
-pub trait KeyEnDe: KeyEn + KeyDe {
+pub trait KeyEnDe: Sized {
     /// Encode original key type to bytes.
-    fn try_encode(&self) -> Result<RawBytes> {
-        <Self as KeyEn>::try_encode_key(self).c(d!())
-    }
+    fn try_encode(&self) -> Result<RawBytes>;
 
     fn encode(&self) -> RawBytes {
         pnk!(self.try_encode())
     }
 
     /// Decode from bytes to the original key type.
-    fn decode(bytes: &[u8]) -> Result<Self> {
-        <Self as KeyDe>::decode_key(bytes).c(d!())
-    }
+    fn decode(bytes: &[u8]) -> Result<Self>;
 }
 
 /// Methods used to encode the VALUE.
-pub trait ValueEn: Serialize + Sized {
+pub trait ValueEn: Sized {
     /// Encode original key type to bytes.
     #[cfg(feature = "json_codec")]
-    fn try_encode_value(&self) -> Result<RawBytes> {
-        serde_json::to_vec(self).c(d!())
-    }
+    fn try_encode_value(&self) -> Result<RawBytes>;
 
     /// Encode original key type to bytes.
     #[cfg(feature = "bcs_codec")]
-    fn try_encode_value(&self) -> Result<RawBytes> {
-        bcs::to_bytes(self).c(d!())
-    }
+    fn try_encode_value(&self) -> Result<RawBytes>;
 
     /// Encode original key type to bytes.
     #[cfg(feature = "msgpack_codec")]
-    fn try_encode_value(&self) -> Result<RawBytes> {
-        rmp_serde::to_vec(self).c(d!())
-    }
+    fn try_encode_value(&self) -> Result<RawBytes>;
 
     fn encode_value(&self) -> RawBytes {
         pnk!(self.try_encode_value())
@@ -104,51 +82,128 @@ pub trait ValueEn: Serialize + Sized {
 }
 
 /// Methods used to decode the VALUE.
-pub trait ValueDe: DeserializeOwned {
+pub trait ValueDe: Sized {
     /// Decode from bytes to the original key type.
     #[cfg(feature = "json_codec")]
-    fn decode_value(bytes: &[u8]) -> Result<Self> {
-        serde_json::from_slice(bytes).c(d!())
-    }
+    fn decode_value(bytes: &[u8]) -> Result<Self>;
 
     /// Decode from bytes to the original key type.
     #[cfg(feature = "bcs_codec")]
-    fn decode_value(bytes: &[u8]) -> Result<Self> {
-        bcs::from_bytes(bytes).c(d!())
-    }
+    fn decode_value(bytes: &[u8]) -> Result<Self>;
 
     /// Decode from bytes to the original key type.
     #[cfg(feature = "msgpack_codec")]
-    fn decode_value(bytes: &[u8]) -> Result<Self> {
-        rmp_serde::from_slice(bytes).c(d!())
-    }
+    fn decode_value(bytes: &[u8]) -> Result<Self>;
 }
 
 /// Methods used to encode and decode the VALUE.
-pub trait ValueEnDe: ValueEn + ValueDe {
+pub trait ValueEnDe: Sized {
     /// Encode original key type to bytes.
-    fn try_encode(&self) -> Result<RawBytes> {
-        <Self as ValueEn>::try_encode_value(self).c(d!())
-    }
+    fn try_encode(&self) -> Result<RawBytes>;
 
     fn encode(&self) -> RawBytes {
         pnk!(self.try_encode())
     }
 
     /// Decode from bytes to the original key type.
+    fn decode(bytes: &[u8]) -> Result<Self>;
+}
+
+impl<T: Serialize> KeyEn for T {
+    #[cfg(feature = "json_codec")]
+    fn try_encode_key(&self) -> Result<RawBytes> {
+        serde_json::to_vec(self).c(d!())
+    }
+
+    #[cfg(feature = "bcs_codec")]
+    fn try_encode_key(&self) -> Result<RawBytes> {
+        bcs::to_bytes(self).c(d!())
+    }
+
+    #[cfg(feature = "msgpack_codec")]
+    fn try_encode_key(&self) -> Result<RawBytes> {
+        rmp_serde::to_vec(self).c(d!())
+    }
+}
+
+impl<T: DeserializeOwned> KeyDe for T {
+    #[cfg(feature = "json_codec")]
+    fn decode_key(bytes: &[u8]) -> Result<Self> {
+        serde_json::from_slice(bytes).c(d!())
+    }
+
+    #[cfg(feature = "bcs_codec")]
+    fn decode_key(bytes: &[u8]) -> Result<Self> {
+        bcs::from_bytes(bytes).c(d!())
+    }
+
+    #[cfg(feature = "msgpack_codec")]
+    fn decode_key(bytes: &[u8]) -> Result<Self> {
+        rmp_serde::from_slice(bytes).c(d!())
+    }
+}
+
+impl<T: Serialize> ValueEn for T {
+    #[cfg(feature = "json_codec")]
+    fn try_encode_value(&self) -> Result<RawBytes> {
+        serde_json::to_vec(self).c(d!())
+    }
+
+    #[cfg(feature = "bcs_codec")]
+    fn try_encode_value(&self) -> Result<RawBytes> {
+        bcs::to_bytes(self).c(d!())
+    }
+
+    #[cfg(feature = "msgpack_codec")]
+    fn try_encode_value(&self) -> Result<RawBytes> {
+        rmp_serde::to_vec(self).c(d!())
+    }
+}
+
+impl<T: DeserializeOwned> ValueDe for T {
+    #[cfg(feature = "json_codec")]
+    fn decode_value(bytes: &[u8]) -> Result<Self> {
+        serde_json::from_slice(bytes).c(d!())
+    }
+
+    #[cfg(feature = "bcs_codec")]
+    fn decode_value(bytes: &[u8]) -> Result<Self> {
+        bcs::from_bytes(bytes).c(d!())
+    }
+
+    #[cfg(feature = "msgpack_codec")]
+    fn decode_value(bytes: &[u8]) -> Result<Self> {
+        rmp_serde::from_slice(bytes).c(d!())
+    }
+}
+
+impl<T: KeyEn + KeyDe> KeyEnDe for T {
+    fn try_encode(&self) -> Result<RawBytes> {
+        <Self as KeyEn>::try_encode_key(self).c(d!())
+    }
+
+    fn encode(&self) -> RawBytes {
+        <Self as KeyEn>::encode_key(self)
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self> {
+        <Self as KeyDe>::decode_key(bytes).c(d!())
+    }
+}
+
+impl<T: ValueEn + ValueDe> ValueEnDe for T {
+    fn try_encode(&self) -> Result<RawBytes> {
+        <Self as ValueEn>::try_encode_value(self).c(d!())
+    }
+
+    fn encode(&self) -> RawBytes {
+        <Self as ValueEn>::encode_value(self)
+    }
+
     fn decode(bytes: &[u8]) -> Result<Self> {
         <Self as ValueDe>::decode_value(bytes).c(d!())
     }
 }
-
-impl<T: Serialize> KeyEn for T {}
-impl<T: Serialize> ValueEn for T {}
-
-impl<T: DeserializeOwned> KeyDe for T {}
-impl<T: DeserializeOwned> ValueDe for T {}
-
-impl<T: KeyEn + KeyDe> KeyEnDe for T {}
-impl<T: ValueEn + ValueDe> ValueEnDe for T {}
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////

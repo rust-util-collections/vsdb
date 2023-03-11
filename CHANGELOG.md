@@ -5,6 +5,9 @@
 #### Internal optimizations
 
 - Implement KeyEnDeOrdered for some `primitive_types`
+- Optimize the designs of some encoding related traits
+  - `KeyEn`, `KeyDe`, `KeyEnDe`
+  - `ValueEn`, `ValueDe`, `ValueEnDe`
 
 ## v0.49.x
 
