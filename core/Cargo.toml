@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_core"
-version = "0.50.1"
+version = "0.50.2"
 authors = ["dafanhui@163.com", "hui.fan@mail.ru"]
 edition = "2021"
 description = "A stuctured DB with some 'Git-like' features, mainly used in blockchain projects."
@@ -20,6 +20,7 @@ rand = "0.8.5"
 blake3 = "1.3.1"
 hash-db = "0.15.2"
 triehash = "0.8.4"
+hash256-std-hasher = "0.15.2"
 
 threadpool = "1.8.1" # used in a background cleaner
 

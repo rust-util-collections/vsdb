@@ -4,7 +4,6 @@
 
 pub mod hash {
     use blake3::{Hasher, OUT_LEN};
-    use std::hash::Hasher as StdHasher;
 
     pub type Hash = [u8; HASH_SIZ];
     pub const HASH_SIZ: usize = OUT_LEN;
@@ -17,21 +16,11 @@ pub mod hash {
         hasher.finalize().into()
     }
 
-    #[derive(Default)]
-    pub struct Mocker;
-
-    impl StdHasher for Mocker {
-        fn finish(&self) -> u64 {
-            0
-        }
-        fn write(&mut self, _: &[u8]) {}
-    }
-
     pub(crate) struct Blake3Hasher;
 
     impl hash_db::Hasher for Blake3Hasher {
         type Out = Hash;
-        type StdHasher = Mocker;
+        type StdHasher = hash256_std_hasher::Hash256StdHasher;
         const LENGTH: usize = HASH_SIZ;
         fn hash(data: &[u8]) -> Self::Out {
             hash(&[data])
