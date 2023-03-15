@@ -7,14 +7,14 @@
 use crate::{
     basic::mapx_raw::{MapxRaw, MapxRawIter},
     common::{
-        utils::hash::trie_root, BranchID, BranchIDBase, BranchName, BranchNameOwned,
-        RawKey, RawValue, VersionID, VersionIDBase, VersionName, VersionNameOwned,
-        INITIAL_BRANCH_ID, INITIAL_BRANCH_NAME, NULL, NULL_ID,
-        RESERVED_VERSION_NUM_DEFAULT, TRASH_CLEANER, VER_ID_MAX, VSDB,
+        BranchID, BranchIDBase, BranchName, BranchNameOwned, RawKey, RawValue,
+        VersionID, VersionIDBase, VersionName, VersionNameOwned, INITIAL_BRANCH_ID,
+        INITIAL_BRANCH_NAME, NULL, NULL_ID, RESERVED_VERSION_NUM_DEFAULT, TRASH_CLEANER,
+        VER_ID_MAX, VSDB,
     },
 };
 use parking_lot::RwLock;
-use ruc::*;
+use ruc::{crypto::trie_root, *};
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
@@ -826,7 +826,7 @@ impl MapxRawVs {
             })
             .collect::<Vec<_>>();
 
-        Ok(trie_root(entries))
+        Ok(trie_root(entries).to_vec())
     }
 
     #[inline(always)]
