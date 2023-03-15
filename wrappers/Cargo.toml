@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "0.51.0"
+version = "0.51.1"
 authors = ["hui.fan@mail.ru"]
 edition = "2021"
 description = "A stuctured DB with some 'Git-like' features, mainly used in blockchain projects."
@@ -28,7 +28,7 @@ criterion = "0.4.0"
 rand = "0.8.5"
 
 [features]
-default = ["sled_engine", "json_codec", "derive"]
+default = ["sled_engine", "bcs_codec", "derive"]
 
 compress = ["vsdb_core/compress"]
 

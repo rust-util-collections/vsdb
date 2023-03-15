@@ -1,5 +1,15 @@
 # CHANGE LOG
 
+## v0.51.x
+
+#### Function changes
+
+- Use `bcs` as the default codec
+
+#### Internal optimizations
+
+- Make documents consensus with codebase
+
 ## v0.50.x
 
 #### Internal optimizations
