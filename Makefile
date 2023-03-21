@@ -1,25 +1,19 @@
-all: release
+all: fmt lint
 
 export CARGO_NET_GIT_FETCH_WITH_CLI = true
 
-build:
-	cargo build
-
-release:
-	cargo build --release
-
 lint:
-	cargo clippy
-	cargo clippy --features "compress"
-	cargo check --tests
-	cargo check --benches
-	cargo check --examples
+	cargo clippy --workspace
+	cargo clippy --workspace --features "compress"
+	cargo check --workspace --tests
+	cargo check --workspace --benches
+	cargo check --workspace --examples
 
 lintall: lint
-	cargo clippy --no-default-features --features "derive,rocks_engine,compress,msgpack_codec"
-	cargo check --tests --no-default-features --features "derive,rocks_engine,msgpack_codec"
-	cargo check --benches --no-default-features --features "derive,rocks_engine,msgpack_codec"
-	cargo check --examples --no-default-features --features "derive,rocks_engine,msgpack_codec"
+	cargo clippy --workspace --no-default-features --features "derive,rocks_engine,compress,msgpack_codec"
+	cargo check --workspace --tests --no-default-features --features "derive,rocks_engine,msgpack_codec"
+	cargo check --workspace --benches --no-default-features --features "derive,rocks_engine,msgpack_codec"
+	cargo check --workspace --examples --no-default-features --features "derive,rocks_engine,msgpack_codec"
 
 example:
 	- rm -rf ~/.vsdb /tmp/.vsdb
@@ -27,38 +21,38 @@ example:
 	cargo run --example web_server
 	cargo run --example blockchain_state
 
-test: example
+test:
 	- rm -rf ~/.vsdb /tmp/.vsdb
-	cargo test --tests --bins --features "derive" -- --test-threads=1
+	cargo test --workspace --tests --bins --features "derive" -- --test-threads=1
 	- rm -rf ~/.vsdb /tmp/.vsdb
-	cargo test --release --tests --bins --features "derive,compress" -- --test-threads=1
+	cargo test --workspace --release --tests --bins --features "derive,compress" -- --test-threads=1
 
-exampleall:
-	- rm -rf ~/.vsdb /tmp/.vsdb
+exampleall: example
+	- rm -rf ~/.vsdb /tmp/vsdb_testing
 	cargo run --no-default-features --features "derive,rocks_engine,msgpack_codec" --example derive_vs
 	cargo run --no-default-features --features "derive,rocks_engine,msgpack_codec" --example web_server
 	cargo run --no-default-features --features "derive,rocks_engine,msgpack_codec" --example blockchain_state
 
-testall: test exampleall
+testall: test
 	- rm -rf ~/.vsdb /tmp/.vsdb
-	cargo test --tests --bins --no-default-features --features "derive,rocks_engine,msgpack_codec" -- --test-threads=1
+	cargo test --workspace --tests --bins --no-default-features --features "derive,rocks_engine,msgpack_codec" -- --test-threads=1
 	- rm -rf ~/.vsdb /tmp/.vsdb
-	cargo test --release --tests --bins --no-default-features --features "derive,rocks_engine,msgpack_codec,compress" -- --test-threads=1
+	cargo test --workspace --release --tests --bins --no-default-features --features "derive,rocks_engine,msgpack_codec,compress" -- --test-threads=1
 
 bench:
 	- rm -rf ~/.vsdb
-	cargo bench
+	cargo bench --workspace
 	du -sh ~/.vsdb
 	- rm -rf ~/.vsdb
-	cargo bench --features "compress"
+	cargo bench --workspace --features "compress"
 	du -sh ~/.vsdb
 
 benchall: bench
 	- rm -rf ~/.vsdb
-	cargo bench --no-default-features --features "rocks_engine,msgpack_codec"
+	cargo bench --workspace --no-default-features --features "rocks_engine,msgpack_codec"
 	du -sh ~/.vsdb
 	- rm -rf ~/.vsdb
-	cargo bench --no-default-features --features "rocks_engine,msgpack_codec,compress"
+	cargo bench --workspace --no-default-features --features "rocks_engine,msgpack_codec,compress"
 	du -sh ~/.vsdb
 
 fmt:

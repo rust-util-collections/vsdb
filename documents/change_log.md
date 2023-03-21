@@ -1,5 +1,46 @@
 # Change log
 
+## v0.42.0
+
+#### API changes
+
+- Split the original all-in-one crate into two pieces
+  - `vsdb`, path: "vsdb/wrappers"
+  - `vsdb_core`, path: "vsdb/core"
+- The semantic of `clone` has been changed to a deep copy
+  - The semantic of the previous `clone` is inherited by `shadow`
+  - NOTE: the newly added `shadow` API is marked as `unsafe`
+- Add `_mut` methods for various `Iter`s
+  - `iter_mut`
+  - `values_mut`
+  - `range_mut`
+- The low-level "does not exist" expression has been changed from 'None' to `&[]`
+  - If you assign a `&[]`, `vec![]` or `Box<[]>` value to a key, the key will be treated as 'deleted'
+
+#### Internal optimizations
+
+- Remove lru cache
+- Tuning `area idx` for LSM-friendly storage
+- Optimize the implementation of inner length counter
+
+## v0.41.1
+
+#### Internal optimizations
+
+- Enable lru cache when using sled as backend engine
+
+## v0.41.0
+
+#### API changes
+
+- `write` functions now have `&mut self` definations
+
+## v0.37.2
+
+#### Metainfo changes
+
+- Migrate the repo address to 'github.com/rust-util-collections'
+
 ## v0.36.0
 
 #### Internal optimizations
