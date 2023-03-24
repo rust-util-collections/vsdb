@@ -4,13 +4,3 @@ members = [
     "derive",
     "wrappers",
 ]
-
-[profile.dev]
-
-[profile.release]
-
-[profile.bench]
-lto = "thin"
-codegen-units = 1
-incremental = false
-overflow-checks = false
