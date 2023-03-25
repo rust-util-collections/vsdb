@@ -1,3 +1,5 @@
+#![cfg(feature = "vs")]
+
 use ruc::*;
 use std::{borrow::Cow, sync::mpsc::channel, thread};
 use vsdb_core::{

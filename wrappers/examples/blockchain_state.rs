@@ -2,6 +2,8 @@
 //! An example for stateless functions.
 //!
 
+#![cfg(feature = "vs")]
+
 use once_cell::sync::Lazy;
 use ruc::*;
 use serde::{Deserialize, Serialize};

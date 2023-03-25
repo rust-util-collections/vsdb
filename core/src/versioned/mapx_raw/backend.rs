@@ -1554,7 +1554,7 @@ fn encode_map(m: &MapxRaw) -> &[u8] {
 
 #[inline(always)]
 fn decode_map(v: impl AsRef<[u8]>) -> MapxRaw {
-    unsafe { MapxRaw::from_slice(v.as_ref()) }
+    unsafe { MapxRaw::from_prefix_slice(v.as_ref()) }
 }
 
 #[inline(always)]

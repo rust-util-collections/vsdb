@@ -1,17 +1,8 @@
-use criterion::criterion_main;
+#![allow(warnings)]
 
 mod units;
 
-criterion_main! {
-    units::versioned_multi_key_mapx_double_key::benches,
-    units::versioned_multi_key_mapx_triple_key::benches,
-    units::versioned_multi_key_mapx_raw::benches,
-
-    units::versioned_mapx::benches,
-    units::versioned_mapx_ord::benches,
-    units::versioned_mapx_ord_rawkey::benches,
-    units::versioned_vecx::benches,
-
+criterion::criterion_main! {
     units::basic_multi_key_mapx_double_key::benches,
     units::basic_multi_key_mapx_raw::benches,
     units::basic_multi_key_mapx_rawkey::benches,

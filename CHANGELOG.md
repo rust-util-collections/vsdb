@@ -1,5 +1,11 @@
 # CHANGE LOG
 
+## v0.52.x
+
+#### Function changes
+
+- Extend the feature of "derive" to "vs"
+
 ## v0.51.x
 
 #### Function changes
