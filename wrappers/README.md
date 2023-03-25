@@ -167,7 +167,7 @@ Some complete examples:
     - Faster running speed than json
 - `json_codec`, use `serde_json` as the codec
     - Better generality and compatibility
-- [**default**] `vs`, enable all versioned APIs and the `Vs` procedural macro
+- `vs`, enable all versioned APIs and the `Vs` procedural macro
 - `compress`, enable compression in the backend database
 - `extra_types`, implement `VsMgmt` for some common extra types
   - For example: `H256` and `H160` of the `primitive-types` crate
