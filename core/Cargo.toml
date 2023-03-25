@@ -1,6 +1,6 @@
 [package]
-name = "vsdb_core"
-version = "0.52.1"
+name = "vsdb-core"
+version = "0.53.0"
 authors = ["hui.fan@mail.ru"]
 edition = "2021"
 description = "A stuctured DB with some 'Git-like' features, mainly used in blockchain projects."
@@ -23,7 +23,7 @@ primitive-types-0-12 = {  workspace = true, optional = true }
 primitive-types-0-11 = { workspace = true, optional = true }
 primitive-types-0-10 = { workspace = true, optional = true }
 
-vsdb_derive = { workspace = true, optional = true }
+vsdb-derive = { workspace = true, optional = true }
 
 sled = { workspace = true, optional = true }
 rocksdb = { workspace = true, optional = true }
@@ -34,9 +34,9 @@ hex = "0.4.3"
 criterion = "0.4.0"
 
 [features]
-default = ["sled_engine", "vs"]
+default = ["sled_engine"]
 
-vs = ["vsdb_derive"] # the switch of all versioned APIs
+vs = ["vsdb-derive"] # the switch of all versioned APIs
 
 compress = ["sled_compress", "rocks_compress"]
 

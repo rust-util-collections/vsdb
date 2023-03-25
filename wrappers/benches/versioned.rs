@@ -1,7 +1,7 @@
 #![allow(warnings)]
 
 #[cfg(not(feature = "vs"))]
-criterion::criterion_main! {}
+fn main() {}
 
 #[cfg(feature = "vs")]
 mod units;

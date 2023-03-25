@@ -1,0 +1,32 @@
+[package]
+name = "vsdb-hash-db"
+version = "0.1.0"
+edition = "2021"
+keywords = ["mpt", "trie", "database", "blockchain"]
+license = "MIT"
+authors = ["hui.fan@mail.ru"]
+description = "An implementation of the `hash_db::HashDB` trait"
+homepage = "https://github.com/rust-util-collections/vsdb"
+repository = "https://github.com/rust-util-collections/vsdb"
+
+[dependencies]
+sp-trie = { workspace = true }
+sp-trie-db = { workspace = true }
+hash-db = { workspace = true }
+keccak-hasher = { workspace = true }
+
+bcs = { workspace = true }
+serde = { workspace = true }
+
+ruc = { workspace = true }
+vsdb = { workspace = true }
+
+[features]
+default = ["sled_engine", "bcs_codec"]
+
+sled_engine = ["vsdb/sled_engine"]
+rocks_engine = ["vsdb/rocks_engine"]
+
+bcs_codec = ["vsdb/bcs_codec"]
+json_codec = ["vsdb/json_codec"]
+msgpack_codec = ["vsdb/msgpack_codec"]

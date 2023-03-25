@@ -3,7 +3,11 @@ members = [
     "core",
     "derive",
     "wrappers",
+    "utils/hash-db",
+    "utils/trie-db",
+    "utils/trie-map",
 ]
+resolver = "2"
 
 [workspace.dependencies]
 rand = "0.8.5"
@@ -24,6 +28,16 @@ primitive-types-0-10 = { package = "primitive-types", version = "0.10", default-
 rocksdb = { version = "0.20.1", default-features = false }
 sled = { package = "vsdbsled", version = "0.34.7-p1", features = ["io_uring"] }
 
-ruc = { version = "4.1.0", features = ["crypto"] }
-vsdb_derive = { path = "derive", version = "0.45.0" }
-vsdb_core = { path = "core", version = "0.52.1" }
+sp-trie = "19.0"
+sp-trie-db = { package = "trie-db", version = "0.26.0" }
+hash-db = "0.15.2"
+keccak-hasher = "0.15.3"
+
+ruc = "4.1.0"
+
+vsdb = { path = "wrappers", version = "0.53.0", default-features = false }
+vsdb-core = { path = "core", version = "0.53.0", default-features = false }
+vsdb-derive = { path = "derive", version = "0.53.0" }
+
+vsdb-trie-db = { path = "utils/trie-db", version = "0.1.0", default-features = false }
+vsdb-hash-db = { path = "utils/hash-db", version = "0.1.0", default-features = false }

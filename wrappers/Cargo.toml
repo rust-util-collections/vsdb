@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "0.52.1"
+version = "0.53.0"
 authors = ["hui.fan@mail.ru"]
 edition = "2021"
 description = "A stuctured DB with some 'Git-like' features, mainly used in blockchain projects."
@@ -20,7 +20,7 @@ rmp-serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 
 ruc = { workspace = true }
-vsdb_core = { workspace = true }
+vsdb-core = { workspace = true }
 
 [dev-dependencies]
 hex = "0.4.3"
@@ -28,23 +28,23 @@ criterion = "0.4.0"
 rand = "0.8.5"
 
 [features]
-default = ["sled_engine", "bcs_codec", "vs"]
+default = ["sled_engine", "bcs_codec"]
 
-vs = ["vsdb_core/vs"]
+vs = ["vsdb-core/vs", "ruc/crypto"]
 
-compress = ["vsdb_core/compress"]
+compress = ["vsdb-core/compress"]
 
-sled_engine = ["vsdb_core/sled_engine"]
-rocks_engine = ["vsdb_core/rocks_engine"]
+sled_engine = ["vsdb-core/sled_engine"]
+rocks_engine = ["vsdb-core/rocks_engine"]
 
-sled_compress = ["vsdb_core/sled_compress"]
-rocks_compress = ["vsdb_core/rocks_compress"]
+sled_compress = ["vsdb-core/sled_compress"]
+rocks_compress = ["vsdb-core/rocks_compress"]
 
 bcs_codec = ["bcs"]
 json_codec = ["serde_json"]
 msgpack_codec = ["rmp-serde"]
 
-extra_types = ["vsdb_core/extra_types"]
+extra_types = ["vsdb-core/extra_types"]
 
 [[bench]]
 name = "basic"
