@@ -3,9 +3,9 @@ members = [
     "core",
     "derive",
     "wrappers",
-    "utils/hash-db",
-    "utils/trie-db",
-    "utils/trie-map",
+    "utils/hash_db",
+    "utils/trie_db",
+    "utils/trie_map",
 ]
 resolver = "2"
 
@@ -36,8 +36,8 @@ keccak-hasher = "0.15.3"
 ruc = "4.1.0"
 
 vsdb = { path = "wrappers", version = "0.53.0", default-features = false }
-vsdb-core = { path = "core", version = "0.53.0", default-features = false }
-vsdb-derive = { path = "derive", version = "0.53.0" }
+vsdb_core = { path = "core", version = "0.53.0", default-features = false }
+vsdb_derive = { path = "derive", version = "0.53.0" }
 
-vsdb-trie-db = { path = "utils/trie-db", version = "0.1.0", default-features = false }
-vsdb-hash-db = { path = "utils/hash-db", version = "0.1.0", default-features = false }
+vsdb_trie_db = { path = "utils/trie_db", version = "0.1.0", default-features = false }
+vsdb_hash_db = { path = "utils/hash_db", version = "0.1.0", default-features = false }

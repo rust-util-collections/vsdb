@@ -1,5 +1,5 @@
 [package]
-name = "vsdb-core"
+name = "vsdb_core"
 version = "0.53.0"
 authors = ["hui.fan@mail.ru"]
 edition = "2021"
@@ -23,7 +23,7 @@ primitive-types-0-12 = {  workspace = true, optional = true }
 primitive-types-0-11 = { workspace = true, optional = true }
 primitive-types-0-10 = { workspace = true, optional = true }
 
-vsdb-derive = { workspace = true, optional = true }
+vsdb_derive = { workspace = true, optional = true }
 
 sled = { workspace = true, optional = true }
 rocksdb = { workspace = true, optional = true }
@@ -36,7 +36,7 @@ criterion = "0.4.0"
 [features]
 default = ["sled_engine"]
 
-vs = ["vsdb-derive"] # the switch of all versioned APIs
+vs = ["vsdb_derive"] # the switch of all versioned APIs
 
 compress = ["sled_compress", "rocks_compress"]
 

@@ -1,5 +1,5 @@
 [package]
-name = "vsdb-trie-db"
+name = "vsdb_trie_db"
 version = "0.1.0"
 edition = "2021"
 keywords = ["mpt", "trie", "database", "blockchain"]
@@ -14,14 +14,14 @@ serde = { workspace = true }
 sp-trie = { workspace = true }
 
 ruc = { workspace = true }
-vsdb-hash-db = { workspace = true }
+vsdb_hash_db = { workspace = true }
 
 [features]
 default = ["sled_engine", "bcs_codec"]
 
-sled_engine = ["vsdb-hash-db/sled_engine"]
-rocks_engine = ["vsdb-hash-db/rocks_engine"]
+sled_engine = ["vsdb_hash_db/sled_engine"]
+rocks_engine = ["vsdb_hash_db/rocks_engine"]
 
-bcs_codec = ["vsdb-hash-db/bcs_codec"]
-json_codec = ["vsdb-hash-db/json_codec"]
-msgpack_codec = ["vsdb-hash-db/msgpack_codec"]
+bcs_codec = ["vsdb_hash_db/bcs_codec"]
+json_codec = ["vsdb_hash_db/json_codec"]
+msgpack_codec = ["vsdb_hash_db/msgpack_codec"]

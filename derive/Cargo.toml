@@ -1,5 +1,5 @@
 [package]
-name = "vsdb-derive"
+name = "vsdb_derive"
 version = "0.53.0"
 authors = ["dafanhui@163.com", "hui.fan@mail.ru"]
 edition = "2021"
