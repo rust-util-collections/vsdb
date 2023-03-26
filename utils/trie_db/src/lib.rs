@@ -52,14 +52,7 @@ impl MptStore {
         let backend = MptStore::new_backend(cache_size);
         self.put_backend(backend_key, &backend, reset).c(d!())?;
 
-        let backend = Box::into_raw(Box::new(backend));
-        let mut mpt = MptMut::new(unsafe { &mut *backend });
-        let root = mpt.commit();
-        Ok(MptOnce {
-            mpt,
-            root,
-            backend: unsafe { Box::from_raw(backend) },
-        })
+        MptOnce::create_with_backend(backend).c(d!())
     }
 
     /// @param cache_size:
@@ -127,6 +120,21 @@ pub struct MptOnce {
 }
 
 impl MptOnce {
+    pub fn create(cache_size: Option<usize>) -> Result<Self> {
+        Self::create_with_backend(TrieBackend::new(cache_size)).c(d!())
+    }
+
+    pub fn create_with_backend(backend: TrieBackend) -> Result<Self> {
+        let backend = Box::into_raw(Box::new(backend));
+        let mut mpt = MptMut::new(unsafe { &mut *backend });
+        let root = mpt.commit();
+        Ok(Self {
+            mpt,
+            root,
+            backend: unsafe { Box::from_raw(backend) },
+        })
+    }
+
     pub fn restore(backend: TrieBackend, root: TrieRoot) -> Result<Self> {
         let backend = Box::into_raw(Box::new(backend));
         let mpt = MptMut::from_existing(unsafe { &mut *backend }, root);
@@ -409,16 +417,33 @@ mod test {
     use std::collections::BTreeMap;
 
     #[test]
+    fn encode_decode() {
+        let mut hdr = pnk!(MptOnce::create(None));
+
+        pnk!(hdr.insert(b"key", b"value"));
+        assert_eq!(b"value", pnk!(hdr.get(b"key")).unwrap().as_slice());
+
+        let root = hdr.commit();
+        assert_eq!(root, hdr.root());
+
+        let hdr_encoded = hdr.encode();
+        drop(hdr);
+
+        let hdr = pnk!(MptOnce::decode(&hdr_encoded));
+        assert_eq!(b"value", pnk!(hdr.get(b"key")).unwrap().as_slice());
+    }
+
+    #[test]
     fn iter() {
-        run(None);
+        iter_run(None);
     }
 
     #[test]
     fn iter_with_cache() {
-        run(Some(1024))
+        iter_run(Some(1024))
     }
 
-    fn run(cache_size: Option<usize>) {
+    fn iter_run(cache_size: Option<usize>) {
         let s = MptStore::new();
         let mut hdr = pnk!(s.trie_create(b"backend_key", cache_size, false));
 
