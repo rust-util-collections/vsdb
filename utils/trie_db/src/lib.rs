@@ -10,8 +10,8 @@ use sp_trie::{
 };
 use std::mem;
 use vsdb_hash_db::{
-    sp_trie_db::{CError, DBValue, HashDB, TrieItem, TrieIterator, TrieKeyItem},
-    vsdb::basic::mapx_ord_rawkey::MapxOrdRawKey,
+    sp_trie_db::{CError, DBValue, HashDB, Hasher as _, TrieItem, TrieIterator, TrieKeyItem},
+    vsdb::{basic::mapx_ord_rawkey::MapxOrdRawKey, RawBytes, ValueEnDe},
     KeccakHasher as H, TrieBackend,
 };
 
@@ -43,12 +43,12 @@ impl MptStore {
         self.remove_backend(backend_key);
     }
 
-    pub fn trie_create<'a>(
+    pub fn trie_create(
         &self,
-        backend_key: &'a [u8],
+        backend_key: &[u8],
         cache_size: Option<usize>,
         reset: bool,
-    ) -> Result<MptOnce<'a>> {
+    ) -> Result<MptOnce> {
         let backend = MptStore::new_backend(cache_size);
         self.put_backend(backend_key, &backend, reset).c(d!())?;
 
@@ -67,12 +67,12 @@ impl MptStore {
     ///     - Some(negative value), close cache
     ///     - Some(0), reset the cache capacity to the default size
     ///     - Some(new_size), reset the cache capacity to the new size
-    pub fn trie_restore<'a>(
+    pub fn trie_restore(
         &self,
-        backend_key: &'a [u8],
+        backend_key: &[u8],
         cache_size: Option<isize>,
         root: TrieRoot,
-    ) -> Result<MptOnce<'a>> {
+    ) -> Result<MptOnce> {
         let mut backend = self.get_backend(backend_key).c(d!("backend not found"))?;
         if let Some(n) = cache_size {
             if 0 > n {
@@ -81,14 +81,7 @@ impl MptStore {
                 backend.reset_cache(Some(n as usize));
             }
         }
-
-        let backend = Box::into_raw(Box::new(backend));
-        let mpt = MptMut::from_existing(unsafe { &mut *backend }, root);
-        Ok(MptOnce {
-            mpt,
-            root,
-            backend: unsafe { Box::from_raw(backend) },
-        })
+        MptOnce::restore(backend, root).c(d!())
     }
 
     fn get_backend(&self, backend_key: &[u8]) -> Option<TrieBackend> {
@@ -124,8 +117,8 @@ impl MptStore {
 /// The referenced field **MUST** be placed after the field that references it,
 /// this is to ensure that the `drop`s can be executed in the correct order,
 /// so that UB will not occur
-pub struct MptOnce<'a> {
-    mpt: MptMut<'a>,
+pub struct MptOnce {
+    mpt: MptMut<'static>,
     root: TrieRoot,
 
     // self-reference
@@ -133,7 +126,17 @@ pub struct MptOnce<'a> {
     backend: Box<TrieBackend>,
 }
 
-impl<'a> MptOnce<'a> {
+impl MptOnce {
+    pub fn restore(backend: TrieBackend, root: TrieRoot) -> Result<Self> {
+        let backend = Box::into_raw(Box::new(backend));
+        let mpt = MptMut::from_existing(unsafe { &mut *backend }, root);
+        Ok(Self {
+            mpt,
+            root,
+            backend: unsafe { Box::from_raw(backend) },
+        })
+    }
+
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         self.mpt.get(key).c(d!())
     }
@@ -169,6 +172,29 @@ impl<'a> MptOnce<'a> {
 
     pub fn ro_handle(&self, root: TrieHash<L>) -> MptRo {
         MptRo::from_existing(&self.backend, root)
+    }
+}
+
+impl ValueEnDe for MptOnce {
+    fn try_encode(&self) -> Result<RawBytes> {
+        Ok(self.encode())
+    }
+
+    fn encode(&self) -> RawBytes {
+        let mut buf = self.root.to_vec();
+        buf.append(&mut self.backend.encode());
+        buf
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self> {
+        alt!(H::LENGTH > bytes.len(), return Err(eg!("Invalid length")));
+
+        let mut root = [0; H::LENGTH];
+        root.copy_from_slice(&bytes[..H::LENGTH]);
+
+        let backend = TrieBackend::decode(&bytes[H::LENGTH..]).c(d!())?;
+
+        Self::restore(backend, root).c(d!())
     }
 }
 
