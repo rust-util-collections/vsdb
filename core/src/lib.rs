@@ -12,16 +12,10 @@ pub mod common;
 
 pub mod basic;
 
-#[cfg(feature = "trie")]
-pub mod trie;
-
 #[cfg(feature = "vs")]
 pub mod versioned;
 
 pub use basic::mapx_raw::MapxRaw;
-
-#[cfg(feature = "trie")]
-pub use trie::mapx_raw::MapxRawTrie;
 
 #[cfg(feature = "vs")]
 pub use versioned::mapx_raw::MapxRawVs;
