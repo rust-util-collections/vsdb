@@ -18,15 +18,6 @@ use std::{
 /// Methods used to encode the KEY.
 pub trait KeyEn: Sized {
     /// Encode original key type to bytes.
-    #[cfg(feature = "json_codec")]
-    fn try_encode_key(&self) -> Result<RawBytes>;
-
-    /// Encode original key type to bytes.
-    #[cfg(feature = "bcs_codec")]
-    fn try_encode_key(&self) -> Result<RawBytes>;
-
-    /// Encode original key type to bytes.
-    #[cfg(feature = "msgpack_codec")]
     fn try_encode_key(&self) -> Result<RawBytes>;
 
     fn encode_key(&self) -> RawBytes {
@@ -37,15 +28,6 @@ pub trait KeyEn: Sized {
 /// Methods used to decode the KEY.
 pub trait KeyDe: Sized {
     /// Decode from bytes to the original key type.
-    #[cfg(feature = "json_codec")]
-    fn decode_key(bytes: &[u8]) -> Result<Self>;
-
-    /// Decode from bytes to the original key type.
-    #[cfg(feature = "bcs_codec")]
-    fn decode_key(bytes: &[u8]) -> Result<Self>;
-
-    /// Decode from bytes to the original key type.
-    #[cfg(feature = "msgpack_codec")]
     fn decode_key(bytes: &[u8]) -> Result<Self>;
 }
 
@@ -65,15 +47,6 @@ pub trait KeyEnDe: Sized {
 /// Methods used to encode the VALUE.
 pub trait ValueEn: Sized {
     /// Encode original key type to bytes.
-    #[cfg(feature = "json_codec")]
-    fn try_encode_value(&self) -> Result<RawBytes>;
-
-    /// Encode original key type to bytes.
-    #[cfg(feature = "bcs_codec")]
-    fn try_encode_value(&self) -> Result<RawBytes>;
-
-    /// Encode original key type to bytes.
-    #[cfg(feature = "msgpack_codec")]
     fn try_encode_value(&self) -> Result<RawBytes>;
 
     fn encode_value(&self) -> RawBytes {
@@ -84,15 +57,6 @@ pub trait ValueEn: Sized {
 /// Methods used to decode the VALUE.
 pub trait ValueDe: Sized {
     /// Decode from bytes to the original key type.
-    #[cfg(feature = "json_codec")]
-    fn decode_value(bytes: &[u8]) -> Result<Self>;
-
-    /// Decode from bytes to the original key type.
-    #[cfg(feature = "bcs_codec")]
-    fn decode_value(bytes: &[u8]) -> Result<Self>;
-
-    /// Decode from bytes to the original key type.
-    #[cfg(feature = "msgpack_codec")]
     fn decode_value(bytes: &[u8]) -> Result<Self>;
 }
 
