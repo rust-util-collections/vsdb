@@ -57,21 +57,20 @@ impl MptStore {
 
     /// @param cache_size:
     ///     - None, do nothing
-    ///     - Some(negative value), close cache
-    ///     - Some(0), reset the cache capacity to the default size
-    ///     - Some(new_size), reset the cache capacity to the new size
+    ///     - Some(0 or an negative value), disable cache
+    ///     - Some(a positive value), reset the cache capacity to the new size
     pub fn trie_restore(
         &self,
         backend_key: &[u8],
-        cache_size: Option<isize>,
+        new_cache_size: Option<isize>,
         root: TrieRoot,
     ) -> Result<MptOnce> {
         let mut backend = self.get_backend(backend_key).c(d!("backend not found"))?;
-        if let Some(n) = cache_size {
-            if 0 > n {
-                backend.reset_cache(None);
-            } else {
+        if let Some(n) = new_cache_size {
+            if 0 < n {
                 backend.reset_cache(Some(n as usize));
+            } else {
+                backend.reset_cache(None);
             }
         }
         MptOnce::restore(backend, root).c(d!())

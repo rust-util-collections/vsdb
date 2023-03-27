@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_trie_map"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
 keywords = ["mpt", "trie", "database", "blockchain"]
 license = "MIT"
