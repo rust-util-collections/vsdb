@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_trie_map"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 keywords = ["mpt", "trie", "database", "blockchain"]
 license = "MIT"
@@ -10,10 +10,6 @@ homepage = "https://github.com/rust-util-collections/vsdb"
 repository = "https://github.com/rust-util-collections/vsdb"
 
 [dependencies]
-serde = { workspace = true }
-
-ruc = { workspace = true }
-vsdb = { workspace = true }
 vsdb_trie_db = { workspace = true }
 
 [features]
