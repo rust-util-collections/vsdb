@@ -179,7 +179,7 @@ impl MptOnce {
         self.root
     }
 
-    pub fn ro_handle(&self, root: TrieHash<L>) -> MptRo {
+    pub fn ro_handle(&self, root: TrieRoot) -> MptRo {
         MptRo::from_existing(&self.backend, root)
     }
 }
@@ -291,7 +291,7 @@ impl<'a> MptMut<'a> {
         *self.trie.root()
     }
 
-    pub fn ro_handle(&self, root: TrieHash<L>) -> MptRo {
+    pub fn ro_handle(&self, root: TrieRoot) -> MptRo {
         MptRo::from_existing_dyn(self.trie.db(), root)
     }
 }
