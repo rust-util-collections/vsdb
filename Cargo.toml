@@ -39,5 +39,5 @@ vsdb = { path = "wrappers", version = "0.54.0", default-features = false }
 vsdb_core = { path = "core", version = "0.54.0", default-features = false }
 vsdb_derive = { path = "derive", version = "0.53.0" }
 
-vsdb_trie_db = { path = "utils/trie_db", version = "0.2.0", default-features = false }
-vsdb_hash_db = { path = "utils/hash_db", version = "0.1.0", default-features = false }
+vsdb_trie_db = { path = "utils/trie_db", version = "0.3.0", default-features = false }
+vsdb_hash_db = { path = "utils/hash_db", version = "0.2.0", default-features = false }
