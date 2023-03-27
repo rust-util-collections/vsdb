@@ -59,6 +59,21 @@ impl VecxRaw {
         }
     }
 
+    /// # Safety
+    ///
+    /// Do not use this API unless you know the internal details extremely well.
+    #[inline(always)]
+    pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
+        Self {
+            inner: MapxOrdRawValue::from_bytes(s),
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_bytes(&self) -> &[u8] {
+        self.inner.as_bytes()
+    }
+
     #[inline(always)]
     pub fn new() -> Self {
         VecxRaw {
@@ -177,7 +192,7 @@ impl VecxRaw {
     pub fn iter_mut(&mut self) -> VecxRawIterMut {
         VecxRawIterMut {
             inner: self.inner.inner.iter_mut(),
-            _m_pd: PhantomData,
+            _p: PhantomData,
         }
     }
 

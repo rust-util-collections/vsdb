@@ -24,7 +24,7 @@ use std::{
 #[serde(bound = "")]
 pub struct MapxVs<K, V> {
     inner: MapxOrdRawKeyVs<V>,
-    _m_pd: PhantomData<K>,
+    _p: PhantomData<K>,
 }
 
 impl<K, V> MapxVs<K, V>
@@ -40,7 +40,7 @@ where
     pub unsafe fn shadow(&self) -> Self {
         Self {
             inner: self.inner.shadow(),
-            _m_pd: PhantomData,
+            _p: PhantomData,
         }
     }
 
@@ -48,7 +48,7 @@ where
     pub fn new() -> Self {
         MapxVs {
             inner: MapxOrdRawKeyVs::new(),
-            _m_pd: PhantomData,
+            _p: PhantomData,
         }
     }
 
@@ -100,7 +100,7 @@ where
     pub fn iter(&self) -> MapxVsIter<K, V> {
         MapxVsIter {
             inner: self.inner.iter(),
-            _m_pd: PhantomData,
+            _p: PhantomData,
         }
     }
 
@@ -108,7 +108,7 @@ where
     pub fn iter_mut(&mut self) -> MapxVsIterMut<K, V> {
         MapxVsIterMut {
             inner: self.inner.iter_mut(),
-            _m_pd: PhantomData,
+            _p: PhantomData,
         }
     }
 
@@ -196,7 +196,7 @@ where
     pub fn iter_by_branch(&self, br_name: BranchName) -> MapxVsIter<K, V> {
         MapxVsIter {
             inner: self.inner.iter_by_branch(br_name),
-            _m_pd: PhantomData,
+            _p: PhantomData,
         }
     }
 
@@ -285,7 +285,7 @@ where
     ) -> MapxVsIter<K, V> {
         MapxVsIter {
             inner: self.inner.iter_by_branch_version(br_name, ver_name),
-            _m_pd: PhantomData,
+            _p: PhantomData,
         }
     }
 
@@ -326,7 +326,7 @@ impl<K, V> Clone for MapxVs<K, V> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
-            _m_pd: PhantomData,
+            _p: PhantomData,
         }
     }
 }
@@ -441,7 +441,7 @@ where
     V: ValueEnDe,
 {
     inner: MapxOrdRawKeyVsIter<'a, V>,
-    _m_pd: PhantomData<K>,
+    _p: PhantomData<K>,
 }
 
 impl<'a, K, V> Iterator for MapxVsIter<'a, K, V>
@@ -507,7 +507,7 @@ where
     V: ValueEnDe,
 {
     inner: MapxOrdRawKeyVsIterMut<'a, V>,
-    _m_pd: PhantomData<K>,
+    _p: PhantomData<K>,
 }
 
 impl<'a, K, V> Iterator for MapxVsIterMut<'a, K, V>

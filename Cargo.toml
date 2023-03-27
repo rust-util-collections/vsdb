@@ -16,8 +16,8 @@ parking_lot = "0.12.1"
 
 bcs = { version = "0.1.4" }
 rmp-serde = { version = "1.1.1" }
-serde = { version = "1.0.136", features = ["derive"] }
 serde_json = { version = "1.0.87" }
+serde = { version = "1.0.136", features = ["derive"] }
 
 threadpool = "1.8.1" # used in a background cleaner
 
@@ -35,8 +35,8 @@ keccak-hasher = "0.15.3"
 
 ruc = "4.1.0"
 
-vsdb = { path = "wrappers", version = "0.53.0", default-features = false }
-vsdb_core = { path = "core", version = "0.53.0", default-features = false }
+vsdb = { path = "wrappers", version = "0.54.0", default-features = false }
+vsdb_core = { path = "core", version = "0.54.0", default-features = false }
 vsdb_derive = { path = "derive", version = "0.53.0" }
 
 vsdb_trie_db = { path = "utils/trie_db", version = "0.2.0", default-features = false }

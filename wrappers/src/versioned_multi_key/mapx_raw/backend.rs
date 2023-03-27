@@ -24,7 +24,7 @@ use std::{
 #[derive(Debug)]
 #[allow(clippy::type_complexity)]
 pub(super) struct MapxRawMkVs {
-    key_size: usize,
+    key_size: u32,
     default_branch: BranchID,
 
     br_name_to_br_id: MapxOrdRawKey<BranchID>,
@@ -76,7 +76,7 @@ impl<'de> Deserialize<'de> for MapxRawMkVs {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct MapxRawMkVsWithoutDerivedFields {
-    key_size: usize,
+    key_size: u32,
     default_branch: BranchID,
 
     br_name_to_br_id: MapxOrdRawKey<BranchID>,
@@ -165,7 +165,7 @@ impl MapxRawMkVs {
     }
 
     #[inline(always)]
-    pub(super) fn new(key_size: usize) -> Self {
+    pub(super) fn new(key_size: u32) -> Self {
         let mut ret = Self {
             key_size,
             default_branch: BranchID::default(),
@@ -279,7 +279,7 @@ impl MapxRawMkVs {
         br_id: BranchID,
         ver_id: VersionID,
     ) -> Result<Option<RawValue>> {
-        if key.len() < self.key_size {
+        if key.len() < self.key_size as usize {
             return self.batch_remove_by_branch_version(key, ver_id).c(d!());
         };
 

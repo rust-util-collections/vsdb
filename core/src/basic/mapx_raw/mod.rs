@@ -159,10 +159,23 @@ impl MapxRaw {
     ///
     /// Do not use this API unless you know the internal details extremely well.
     #[inline(always)]
+    pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
+        Self::from_prefix_slice(s)
+    }
+
+    /// # Safety
+    ///
+    /// Do not use this API unless you know the internal details extremely well.
+    #[inline(always)]
     pub unsafe fn from_prefix_slice(s: impl AsRef<[u8]>) -> Self {
         Self {
             inner: engines::Mapx::from_prefix_slice(s),
         }
+    }
+
+    #[inline(always)]
+    pub fn as_bytes(&self) -> &[u8] {
+        self.as_prefix_slice()
     }
 
     #[inline(always)]

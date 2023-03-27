@@ -10,12 +10,14 @@ homepage = "https://github.com/rust-util-collections/vsdb"
 repository = "https://github.com/rust-util-collections/vsdb"
 
 [dependencies]
-ruc = { workspace = true }
 serde = { workspace = true }
+
+ruc = { workspace = true }
+vsdb = { workspace = true }
 vsdb_trie_db = { workspace = true }
 
 [features]
-default = ["sled_engine", "bcs_codec"]
+default = ["sled_engine"]
 
 sled_engine = ["vsdb_trie_db/sled_engine"]
 rocks_engine = ["vsdb_trie_db/rocks_engine"]

@@ -1,10 +1,16 @@
 # CHANGE LOG
 
+## v0.54.x
+
+#### Function changes
+
+- Disable the embed serde-based implementations of `KeyEnDe` and `ValueEnDe` by default
+
 ## v0.53.x
 
 #### New APIs
 
-- Add various trie-based/mpt-based functions
+- Add various trie/mpt based functions
 
 #### Function changes
 

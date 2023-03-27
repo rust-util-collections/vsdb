@@ -37,7 +37,7 @@ impl MapxRawMkVs {
 
     #[inline(always)]
     #[allow(missing_docs)]
-    pub fn new(key_size: usize) -> Self {
+    pub fn new(key_size: u32) -> Self {
         Self {
             inner: backend::MapxRawMkVs::new(key_size),
         }

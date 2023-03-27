@@ -122,6 +122,21 @@ where
         }
     }
 
+    /// # Safety
+    ///
+    /// Do not use this API unless you know the internal details extremely well.
+    #[inline(always)]
+    pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
+        Self {
+            inner: MapxOrdRawKey::from_bytes(s),
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_bytes(&self) -> &[u8] {
+        self.inner.as_bytes()
+    }
+
     pub fn new(v: T) -> Self {
         let mut hdr = MapxOrdRawKey::new();
         hdr.insert([], &v);

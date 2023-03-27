@@ -9,9 +9,9 @@ use sp_trie::{
     LayoutV1, Trie, TrieDBBuilder, TrieHash, TrieMut,
 };
 use std::mem;
+use vsdb::{basic::mapx_ord_rawkey::MapxOrdRawKey, RawBytes, ValueEnDe};
 use vsdb_hash_db::{
     sp_trie_db::{CError, DBValue, HashDB, Hasher as _, TrieItem, TrieIterator, TrieKeyItem},
-    vsdb::{basic::mapx_ord_rawkey::MapxOrdRawKey, RawBytes, ValueEnDe},
     KeccakHasher as H, TrieBackend,
 };
 
@@ -108,7 +108,7 @@ impl MptStore {
 /// # NOTE
 ///
 /// The referenced field **MUST** be placed after the field that references it,
-/// this is to ensure that the `drop`s can be executed in the correct order,
+/// this is to ensure that the `Drop::drop` can be executed in the correct order,
 /// so that UB will not occur
 pub struct MptOnce {
     mpt: MptMut<'static>,

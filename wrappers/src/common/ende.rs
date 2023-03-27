@@ -6,11 +6,13 @@
 
 use super::RawBytes;
 use ruc::*;
-use serde::{de::DeserializeOwned, Serialize};
 use std::{
     fmt,
     mem::{size_of, transmute},
 };
+
+#[cfg(feature = "serde_ende")]
+use serde::{de::DeserializeOwned, Serialize};
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -73,6 +75,7 @@ pub trait ValueEnDe: Sized {
     fn decode(bytes: &[u8]) -> Result<Self>;
 }
 
+#[cfg(feature = "serde_ende")]
 impl<T: Serialize> KeyEn for T {
     #[cfg(feature = "json_codec")]
     fn try_encode_key(&self) -> Result<RawBytes> {
@@ -90,6 +93,7 @@ impl<T: Serialize> KeyEn for T {
     }
 }
 
+#[cfg(feature = "serde_ende")]
 impl<T: DeserializeOwned> KeyDe for T {
     #[cfg(feature = "json_codec")]
     fn decode_key(bytes: &[u8]) -> Result<Self> {
@@ -107,6 +111,7 @@ impl<T: DeserializeOwned> KeyDe for T {
     }
 }
 
+#[cfg(feature = "serde_ende")]
 impl<T: Serialize> ValueEn for T {
     #[cfg(feature = "json_codec")]
     fn try_encode_value(&self) -> Result<RawBytes> {
@@ -124,6 +129,7 @@ impl<T: Serialize> ValueEn for T {
     }
 }
 
+#[cfg(feature = "serde_ende")]
 impl<T: DeserializeOwned> ValueDe for T {
     #[cfg(feature = "json_codec")]
     fn decode_value(bytes: &[u8]) -> Result<Self> {
@@ -168,6 +174,95 @@ impl<T: ValueEn + ValueDe> ValueEnDe for T {
         <Self as ValueDe>::decode_value(bytes).c(d!())
     }
 }
+
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+
+#[cfg(not(feature = "serde_ende"))]
+impl<T: KeyEnDeOrdered> KeyEn for T {
+    fn try_encode_key(&self) -> Result<RawBytes> {
+        Ok(self.encode_key())
+    }
+
+    fn encode_key(&self) -> RawBytes {
+        <T as KeyEnDeOrdered>::to_bytes(self)
+    }
+}
+
+#[cfg(not(feature = "serde_ende"))]
+impl<T: KeyEnDeOrdered> KeyDe for T {
+    fn decode_key(bytes: &[u8]) -> Result<Self> {
+        <T as KeyEnDeOrdered>::from_slice(bytes).c(d!())
+    }
+}
+
+macro_rules! impl_v_ende {
+    ($t: ty) => {
+        #[cfg(not(feature = "serde_ende"))]
+        impl ValueEnDe for $t {
+            fn try_encode(&self) -> Result<RawBytes> {
+                Ok(self.encode())
+            }
+            fn encode(&self) -> RawBytes {
+                self.as_bytes().into()
+            }
+            fn decode(bytes: &[u8]) -> Result<Self> {
+                unsafe { Ok(<$t>::from_bytes(bytes)) }
+            }
+        }
+    };
+    (@$t: ty) => {
+        #[cfg(not(feature = "serde_ende"))]
+        impl<K: KeyEnDeOrdered> ValueEnDe for $t {
+            fn try_encode(&self) -> Result<RawBytes> {
+                Ok(self.encode())
+            }
+            fn encode(&self) -> RawBytes {
+                self.as_bytes().into()
+            }
+            fn decode(bytes: &[u8]) -> Result<Self> {
+                unsafe { Ok(<$t>::from_bytes(bytes)) }
+            }
+        }
+    };
+    (^$t: ty) => {
+        #[cfg(not(feature = "serde_ende"))]
+        impl<V: ValueEnDe> ValueEnDe for $t {
+            fn try_encode(&self) -> Result<RawBytes> {
+                Ok(self.encode())
+            }
+            fn encode(&self) -> RawBytes {
+                self.as_bytes().into()
+            }
+            fn decode(bytes: &[u8]) -> Result<Self> {
+                unsafe { Ok(<$t>::from_bytes(bytes)) }
+            }
+        }
+    };
+    (~$t: ty) => {
+        #[cfg(not(feature = "serde_ende"))]
+        impl<K: KeyEnDeOrdered, V: ValueEnDe> ValueEnDe for $t {
+            fn try_encode(&self) -> Result<RawBytes> {
+                Ok(self.encode())
+            }
+            fn encode(&self) -> RawBytes {
+                self.as_bytes().into()
+            }
+            fn decode(bytes: &[u8]) -> Result<Self> {
+                unsafe { Ok(<$t>::from_bytes(bytes)) }
+            }
+        }
+    };
+}
+
+impl_v_ende!(vsdb_core::MapxRaw);
+impl_v_ende!(crate::basic::vecx_raw::VecxRaw);
+impl_v_ende!(~crate::basic::mapx::Mapx<K, V>);
+impl_v_ende!(~crate::basic::mapx_ord::MapxOrd<K, V>);
+impl_v_ende!(^crate::basic::vecx::Vecx<V>);
+impl_v_ende!(^crate::basic::orphan::Orphan<V>);
+impl_v_ende!(^crate::basic::mapx_ord_rawkey::MapxOrdRawKey<V>);
+impl_v_ende!(@crate::basic::mapx_ord_rawvalue::MapxOrdRawValue<K>);
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////

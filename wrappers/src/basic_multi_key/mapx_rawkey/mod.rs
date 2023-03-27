@@ -39,7 +39,7 @@ impl<V: ValueEnDe> MapxRawKeyMk<V> {
     /// # Panic
     /// Will panic if `0 == key_size`.
     #[inline(always)]
-    pub fn new(key_size: usize) -> Self {
+    pub fn new(key_size: u32) -> Self {
         Self {
             inner: MapxRawMk::new(key_size),
             p: PhantomData,
@@ -95,7 +95,7 @@ impl<V: ValueEnDe> MapxRawKeyMk<V> {
     }
 
     #[inline(always)]
-    pub fn key_size(&self) -> usize {
+    pub fn key_size(&self) -> u32 {
         self.inner.key_size()
     }
 

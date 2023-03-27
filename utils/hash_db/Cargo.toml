@@ -22,7 +22,7 @@ ruc = { workspace = true }
 vsdb = { workspace = true }
 
 [features]
-default = ["sled_engine", "bcs_codec"]
+default = ["sled_engine"]
 
 sled_engine = ["vsdb/sled_engine"]
 rocks_engine = ["vsdb/rocks_engine"]

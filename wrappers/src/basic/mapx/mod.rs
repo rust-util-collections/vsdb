@@ -56,7 +56,7 @@ use std::{
 #[serde(bound = "")]
 pub struct Mapx<K, V> {
     inner: MapxOrdRawKey<V>,
-    _m_pd: PhantomData<K>,
+    _p: PhantomData<K>,
 }
 
 impl<K, V> Mapx<K, V>
@@ -72,15 +72,31 @@ where
     pub unsafe fn shadow(&self) -> Self {
         Self {
             inner: self.inner.shadow(),
-            _m_pd: PhantomData,
+            _p: PhantomData,
         }
+    }
+
+    /// # Safety
+    ///
+    /// Do not use this API unless you know the internal details extremely well.
+    #[inline(always)]
+    pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
+        Self {
+            inner: MapxOrdRawKey::from_bytes(s),
+            _p: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_bytes(&self) -> &[u8] {
+        self.inner.as_bytes()
     }
 
     #[inline(always)]
     pub fn new() -> Self {
         Self {
             inner: MapxOrdRawKey::new(),
-            _m_pd: PhantomData,
+            _p: PhantomData,
         }
     }
 
@@ -131,7 +147,7 @@ where
     pub fn iter(&self) -> MapxIter<K, V> {
         MapxIter {
             iter: self.inner.iter(),
-            _m_pd: PhantomData,
+            _p: PhantomData,
         }
     }
 
@@ -139,7 +155,7 @@ where
     pub fn iter_mut(&mut self) -> MapxIterMut<K, V> {
         MapxIterMut {
             inner: self.inner.iter_mut(),
-            _m_pd: PhantomData,
+            _p: PhantomData,
         }
     }
 
@@ -154,7 +170,7 @@ where
     pub fn values_mut(&mut self) -> MapxValuesMut<V> {
         MapxValuesMut {
             inner: self.inner.inner.iter_mut(),
-            _m_pd: PhantomData,
+            _p: PhantomData,
         }
     }
 
@@ -178,7 +194,7 @@ impl<K, V> Clone for Mapx<K, V> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
-            _m_pd: PhantomData,
+            _p: PhantomData,
         }
     }
 }
@@ -202,7 +218,7 @@ where
     V: ValueEnDe,
 {
     iter: MapxOrdRawKeyIter<'a, V>,
-    _m_pd: PhantomData<K>,
+    _p: PhantomData<K>,
 }
 
 impl<'a, K, V> Iterator for MapxIter<'a, K, V>
@@ -239,7 +255,7 @@ where
     V: ValueEnDe,
 {
     inner: MapxOrdRawKeyIterMut<'a, V>,
-    _m_pd: PhantomData<K>,
+    _p: PhantomData<K>,
 }
 
 impl<'a, K, V> Iterator for MapxIterMut<'a, K, V>
