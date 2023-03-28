@@ -1,7 +1,7 @@
 #![deny(warnings)]
 #![allow(clippy::new_without_default)]
 
-pub use vsdb::ValueEnDe;
+pub use vsdb::{RawBytes, RawKey, RawValue, ValueEnDe};
 
 use ruc::*;
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,7 @@ use sp_trie::{
     LayoutV1, Trie, TrieDBBuilder, TrieHash, TrieMut,
 };
 use std::mem;
-use vsdb::{basic::mapx_ord_rawkey::MapxOrdRawKey, RawBytes};
+use vsdb::basic::mapx_ord_rawkey::MapxOrdRawKey;
 use vsdb_hash_db::{
     sp_trie_db::{CError, DBValue, HashDB, Hasher as _, TrieItem, TrieIterator, TrieKeyItem},
     KeccakHasher as H, TrieBackend,
