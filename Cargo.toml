@@ -29,7 +29,7 @@ primitive-types-0-10 = { package = "primitive-types", version = "0.10", default-
 rocksdb = { version = "0.20.1", default-features = false }
 sled = { package = "vsdbsled", version = "0.34.7-p1" }
 
-sp-trie = "20.0"
+sp-trie = "21.0"
 sp-trie-db = { package = "trie-db", version = "0.27.0" }
 hash-db = "0.16.0"
 keccak-hasher = "0.16.0"
