@@ -105,12 +105,13 @@ impl MptStore {
     }
 }
 
-///
-/// # NOTE
-///
-/// The referenced field **MUST** be placed after the field that references it,
-/// this is to ensure that the `Drop::drop` can be executed in the correct order,
-/// so that UB will not occur
+//
+// # NOTE
+//
+// The referenced field **MUST** be placed after the field that references it,
+// this is to ensure that the `Drop::drop` can be executed in the correct order,
+// so that UB will not occur
+/// An owned MPT instance
 pub struct MptOnce {
     mpt: MptMut<'static>,
     root: TrieRoot,
@@ -207,12 +208,13 @@ impl ValueEnDe for MptOnce {
     }
 }
 
-///
-/// # NOTE
-///
-/// The referenced field **MUST** be placed after the field that references it,
-/// this is to ensure that the `drop`s can be executed in the correct order,
-/// so that UB will not occur
+//
+// # NOTE
+//
+// The referenced field **MUST** be placed after the field that references it,
+// this is to ensure that the `drop`s can be executed in the correct order,
+// so that UB will not occur
+/// A mutable MPT instance
 pub struct MptMut<'a> {
     trie: TrieDBMut<'a, H>,
 
@@ -296,12 +298,13 @@ impl<'a> MptMut<'a> {
     }
 }
 
-///
-/// # NOTE
-///
-/// The referenced field **MUST** be placed after the field that references it,
-/// this is to ensure that the `drop`s can be executed in the correct order,
-/// so that UB will not occur
+//
+// # NOTE
+//
+// The referenced field **MUST** be placed after the field that references it,
+// this is to ensure that the `drop`s can be executed in the correct order,
+// so that UB will not occur
+/// A readonly MPT instance
 pub struct MptRo<'a> {
     trie: TrieDB<'a, 'a, H>,
 
