@@ -132,6 +132,11 @@ impl MapxRaw {
     }
 
     #[inline(always)]
+    pub fn last(&self) -> Option<(RawKey, RawValue)> {
+        self.iter().next_back()
+    }
+
+    #[inline(always)]
     pub fn insert(
         &mut self,
         key: impl AsRef<[u8]>,
@@ -148,6 +153,18 @@ impl MapxRaw {
     #[inline(always)]
     pub fn clear(&mut self) {
         self.inner.clear();
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn from_slice(s: impl AsRef<[u8]>) -> Self {
+        Self {
+            inner: engines::Mapx::from_prefix_slice(s),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn as_prefix_slice(&self) -> &[u8] {
+        self.inner.as_prefix_slice()
     }
 }
 

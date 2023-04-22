@@ -1,6 +1,14 @@
 # Change log
 
-## v0.42.0
+## v0.43.x
+
+#### Internal optimizations
+
+- Optimize performance
+  - Tuning low-level en/decoding mechanism
+  - Avoid `iter().last()`, use `iter().next_back()`
+
+## v0.42.x
 
 #### API changes
 

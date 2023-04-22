@@ -443,7 +443,7 @@ impl MapxRawMkVs {
             .get(&branch_id)
             .c(d!("branch not found"))?;
         let vers_shadow = unsafe { vers.shadow() };
-        if let Some((version_id, _)) = vers_shadow.iter().last() {
+        if let Some((version_id, _)) = vers_shadow.last() {
             vers.remove(&version_id)
                 .c(d!("version is not on this branch"))
         } else {
@@ -580,11 +580,9 @@ impl MapxRawMkVs {
         let chgset = self.version_to_change_set.remove(&version_id).c(d!())?;
         chgset.iter_op(&mut chgset_ops).c(d!())?;
 
-        self.branch_to_its_versions
-            .iter()
-            .for_each(|(_, mut vers)| {
-                vers.remove(&version_id);
-            });
+        self.branch_to_its_versions.values().for_each(|mut vers| {
+            vers.remove(&version_id);
+        });
 
         self.version_id_to_version_name
             .remove(&version_id)
@@ -597,7 +595,7 @@ impl MapxRawMkVs {
     #[inline(always)]
     pub(super) fn version_clean_up_globally(&mut self) -> Result<()> {
         let mut valid_vers = HashSet::new();
-        self.branch_to_its_versions.iter().for_each(|(_, vers)| {
+        self.branch_to_its_versions.values().for_each(|vers| {
             vers.iter().for_each(|(ver, _)| {
                 valid_vers.insert(ver);
             })
@@ -1067,8 +1065,7 @@ impl MapxRawMkVs {
 
         let br_vers = self
             .branch_to_its_versions
-            .iter()
-            .map(|(_, vers)| vers)
+            .values()
             .filter(|vers| !vers.is_empty())
             .collect::<Vec<_>>();
         alt!(br_vers.is_empty(), return Ok(()));
@@ -1106,10 +1103,10 @@ impl MapxRawMkVs {
         let mut rewrite_ver_chgset =
             self.version_to_change_set.get(rewrite_ver).c(d!())?;
 
-        for (_, mut vers) in self
+        for mut vers in self
             .branch_to_its_versions
-            .iter()
-            .filter(|(_, vers)| !vers.is_empty())
+            .values()
+            .filter(|vers| !vers.is_empty())
         {
             for ver in vers_to_be_merged.iter() {
                 vers.remove(ver).c(d!())?;

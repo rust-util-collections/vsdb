@@ -83,7 +83,7 @@ impl MapxRawVs {
         self.branch_id_to_branch_name
             .insert(&initial_brid[..], INITIAL_BRANCH_NAME.0);
         self.branch_to_its_versions
-            .insert(&initial_brid[..], &encode(&MapxRaw::new()));
+            .insert(&initial_brid[..], encode_map(&MapxRaw::new()));
     }
 
     #[inline(always)]
@@ -109,7 +109,6 @@ impl MapxRawVs {
                 .get(&branch_id[..])
                 .c(d!("branch not found"))?,
         )
-        .iter()
         .last()
         .c(d!("no version on this branch, create a version first"))
         .and_then(|(version_id, _)| {
@@ -152,7 +151,6 @@ impl MapxRawVs {
                 .get(&branch_id)
                 .c(d!("branch not found"))?,
         )
-        .iter()
         .last()
         .c(d!("no version on this branch, create a version first"))
         .and_then(|(version_id, _)| {
@@ -196,14 +194,14 @@ impl MapxRawVs {
         }
 
         // NOTE: the value needs not to be stored here
-        decode_map(&self.version_to_change_set.get_mut(&version_id).c(d!())?)
+        decode_map(&*self.version_to_change_set.get_mut(&version_id).c(d!())?)
             .insert(key, &[]);
 
         decode_map(
-            &self
+            &*self
                 .layered_kv
                 .entry(key)
-                .or_insert(&encode(&MapxRaw::new())),
+                .or_insert(encode_map(&MapxRaw::new())),
         )
         .insert(&version_id[..], value.unwrap_or_default());
 
@@ -222,7 +220,7 @@ impl MapxRawVs {
         branch_id: BranchID,
     ) -> Option<RawValue> {
         if let Some(vers) = self.branch_to_its_versions.get(&branch_id) {
-            if let Some(version_id) = decode_map(&vers).iter().last().map(|(id, _)| id) {
+            if let Some(version_id) = decode_map(&vers).last().map(|(id, _)| id) {
                 return self.get_by_branch_version(
                     key,
                     branch_id,
@@ -308,7 +306,7 @@ impl MapxRawVs {
     #[inline(always)]
     pub(super) fn iter_by_branch(&self, branch_id: BranchID) -> MapxRawVsIter {
         if let Some(vers) = self.branch_to_its_versions.get(&branch_id) {
-            if let Some((version_id, _)) = decode_map(&vers).iter().last() {
+            if let Some((version_id, _)) = decode_map(&vers).last() {
                 return self
                     .iter_by_branch_version(to_brid(&branch_id), to_verid(&version_id));
             }
@@ -351,7 +349,7 @@ impl MapxRawVs {
         bounds: R,
     ) -> MapxRawVsIter<'a> {
         if let Some(vers) = self.branch_to_its_versions.get(&branch_id) {
-            if let Some((version_id, _)) = decode_map(&vers).iter().last() {
+            if let Some((version_id, _)) = decode_map(&vers).last() {
                 return self.range_by_branch_version(
                     branch_id,
                     to_verid(&version_id),
@@ -436,7 +434,7 @@ impl MapxRawVs {
         }
 
         let mut vers = decode_map(
-            &self
+            &*self
                 .branch_to_its_versions
                 .get_mut(&branch_id)
                 .c(d!("branch not found"))?,
@@ -450,7 +448,7 @@ impl MapxRawVs {
         self.version_id_to_version_name
             .insert(&version_id, version_name);
         self.version_to_change_set
-            .insert(&version_id, &encode(&MapxRaw::new()));
+            .insert(&version_id, encode_map(&MapxRaw::new()));
 
         Ok(())
     }
@@ -505,7 +503,7 @@ impl MapxRawVs {
                 .c(d!("branch not found"))?,
         );
 
-        if let Some((version_id, _)) = vers.iter().next_back() {
+        if let Some((version_id, _)) = vers.last() {
             vers.remove(&version_id)
                 .c(d!("BUG: version is not on this branch"))?;
         }
@@ -724,7 +722,6 @@ impl MapxRawVs {
                 .get(&base_branch_id)
                 .c(d!("base branch not found"))?,
         )
-        .iter()
         .last()
         .map(|(version_id, _)| version_id);
 
@@ -792,7 +789,6 @@ impl MapxRawVs {
                 .get(&base_branch_id)
                 .c(d!("base branch not found"))?,
         )
-        .iter()
         .last()
         .map(|(version_id, _)| version_id);
 
@@ -873,7 +869,7 @@ impl MapxRawVs {
         self.branch_id_to_branch_name
             .insert(&branch_id, branch_name);
         self.branch_to_its_versions
-            .insert(&branch_id, &encode(&vers_copied));
+            .insert(&branch_id, encode_map(&vers_copied));
 
         if let Some(vername) = version_name {
             // create the first version of the new branch
@@ -1054,7 +1050,7 @@ impl MapxRawVs {
         );
 
         if !force {
-            if let Some((ver, _)) = target_vers.iter().last() {
+            if let Some((ver, _)) = target_vers.last() {
                 if !vers.contains_key(&ver) {
                     // Some new versions have been generated on the target branch
                     return Err(eg!("unable to merge safely"));
@@ -1071,8 +1067,8 @@ impl MapxRawVs {
                 .for_each(|(ver, _)| {
                     target_vers.insert(&ver, &[]);
                 });
-        } else if let Some((latest_ver, _)) = vers.iter().last() {
-            if let Some((target_latest_ver, _)) = target_vers.iter().last() {
+        } else if let Some((latest_ver, _)) = vers.last() {
+            if let Some((target_latest_ver, _)) = target_vers.last() {
                 match latest_ver.cmp(&target_latest_ver) {
                     Ordering::Equal => {
                         // no differences between the two branches
@@ -1352,18 +1348,13 @@ impl DoubleEndedIterator for MapxRawVsIter<'_> {
 ////////////////////////////////////////////////////////////////////////////////////
 
 #[inline(always)]
-fn encode(t: &impl Serialize) -> Vec<u8> {
-    pnk!(msgpack::to_vec(t))
+fn encode_map(m: &MapxRaw) -> &[u8] {
+    m.as_prefix_slice()
 }
 
 #[inline(always)]
-fn decode<'a, T: Deserialize<'a>>(t: &'a [u8]) -> T {
-    pnk!(msgpack::from_slice(t))
-}
-
-#[inline(always)]
-fn decode_map(t: &[u8]) -> MapxRaw {
-    decode(t)
+fn decode_map(v: impl AsRef<[u8]>) -> MapxRaw {
+    unsafe { MapxRaw::from_slice(v.as_ref()) }
 }
 
 #[inline(always)]

@@ -13,6 +13,7 @@ use std::{
     collections::{
         BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque,
     },
+    marker::{PhantomData, PhantomPinned},
     sync::atomic::{
         AtomicBool, AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicU16, AtomicU32,
         AtomicU64, AtomicU8,
@@ -974,6 +975,14 @@ impl VsMgmt for MapxRaw {
     impl_vs_methods_nope!();
 }
 
+impl<T> VsMgmt for PhantomData<T> {
+    impl_vs_methods_nope!();
+}
+
+impl VsMgmt for PhantomPinned {
+    impl_vs_methods_nope!();
+}
+
 macro_rules! impl_for_primitives {
     ($ty: ty) => {
         impl VsMgmt for $ty {
@@ -1421,3 +1430,280 @@ impl<T: VsMgmt> VsMgmt for Option<T> {
         Ok(())
     }
 }
+
+// impl<T: VsMgmt + Deref + DerefMut> VsMgmt for Pin<T> {
+//     fn version_create(&mut self, version_name: VersionName) -> Result<()> {
+//         self.as_mut().version_create(version_name).c(d!())
+//     }
+//
+//     #[inline(always)]
+//     fn version_create_by_branch(
+//         &mut self,
+//         version_name: VersionName,
+//         branch_name: BranchName,
+//     ) -> Result<()> {
+//         self.as_mut()
+//             .version_create_by_branch(version_name, branch_name)
+//             .c(d!())
+//     }
+//
+//     #[inline(always)]
+//     fn version_exists(&self, version_name: VersionName) -> bool {
+//         self.as_ref().version_exists(version_name)
+//     }
+//
+//     #[inline(always)]
+//     fn version_exists_on_branch(
+//         &self,
+//         version_name: VersionName,
+//         branch_name: BranchName,
+//     ) -> bool {
+//         self.as_ref()
+//             .version_exists_on_branch(version_name, branch_name)
+//     }
+//
+//     #[inline(always)]
+//     fn version_pop(&mut self) -> Result<()> {
+//         self.as_mut().version_pop().c(d!())
+//     }
+//
+//     #[inline(always)]
+//     fn version_pop_by_branch(&mut self, branch_name: BranchName) -> Result<()> {
+//         self.as_mut().version_pop_by_branch(branch_name).c(d!())
+//     }
+//
+//     #[inline(always)]
+//     unsafe fn version_rebase(&mut self, base_version: VersionName) -> Result<()> {
+//         self.as_mut().version_rebase(base_version).c(d!())
+//     }
+//
+//     #[inline(always)]
+//     unsafe fn version_rebase_by_branch(
+//         &mut self,
+//         base_version: VersionName,
+//         branch_name: BranchName,
+//     ) -> Result<()> {
+//         self.as_mut()
+//             .version_rebase_by_branch(base_version, branch_name)
+//             .c(d!())
+//     }
+//
+//     fn version_exists_globally(&self, version_name: VersionName) -> bool {
+//         self.as_ref().version_exists_globally(version_name)
+//     }
+//
+//     fn version_list(&self) -> Result<Vec<VersionNameOwned>> {
+//         self.as_ref().version_list().c(d!())
+//     }
+//
+//     fn version_list_by_branch(
+//         &self,
+//         branch_name: BranchName,
+//     ) -> Result<Vec<VersionNameOwned>> {
+//         self.as_ref().version_list_by_branch(branch_name).c(d!())
+//     }
+//
+//     fn version_list_globally(&self) -> Vec<VersionNameOwned> {
+//         self.as_ref().version_list_globally()
+//     }
+//
+//     fn version_has_change_set(&self, version_name: VersionName) -> Result<bool> {
+//         self.as_ref().version_has_change_set(version_name).c(d!())
+//     }
+//
+//     fn version_clean_up_globally(&mut self) -> Result<()> {
+//         self.as_mut().version_clean_up_globally().c(d!())
+//     }
+//
+//     unsafe fn version_revert_globally(
+//         &mut self,
+//         version_name: VersionName,
+//     ) -> Result<()> {
+//         self.as_mut().version_revert_globally(version_name).c(d!())
+//     }
+//
+//     #[inline(always)]
+//     fn branch_create(
+//         &mut self,
+//         branch_name: BranchName,
+//         version_name: VersionName,
+//         force: bool,
+//     ) -> Result<()> {
+//         self.as_mut()
+//             .branch_create(branch_name, version_name, force)
+//             .c(d!())
+//     }
+//
+//     #[inline(always)]
+//     fn branch_create_by_base_branch(
+//         &mut self,
+//         branch_name: BranchName,
+//         version_name: VersionName,
+//         base_branch_name: ParentBranchName,
+//         force: bool,
+//     ) -> Result<()> {
+//         self.as_mut()
+//             .branch_create_by_base_branch(
+//                 branch_name,
+//                 version_name,
+//                 base_branch_name,
+//                 force,
+//             )
+//             .c(d!())
+//     }
+//
+//     #[inline(always)]
+//     fn branch_create_by_base_branch_version(
+//         &mut self,
+//         branch_name: BranchName,
+//         version_name: VersionName,
+//         base_branch_name: ParentBranchName,
+//         base_version_name: VersionName,
+//         force: bool,
+//     ) -> Result<()> {
+//         self.as_mut()
+//             .branch_create_by_base_branch_version(
+//                 branch_name,
+//                 version_name,
+//                 base_branch_name,
+//                 base_version_name,
+//                 force,
+//             )
+//             .c(d!())
+//     }
+//
+//     unsafe fn branch_create_without_new_version(
+//         &mut self,
+//         branch_name: BranchName,
+//         force: bool,
+//     ) -> Result<()> {
+//         self.as_mut()
+//             .branch_create_without_new_version(branch_name, force)
+//             .c(d!())
+//     }
+//
+//     unsafe fn branch_create_by_base_branch_without_new_version(
+//         &mut self,
+//         branch_name: BranchName,
+//         base_branch_name: ParentBranchName,
+//         force: bool,
+//     ) -> Result<()> {
+//         self.as_mut()
+//             .branch_create_by_base_branch_without_new_version(
+//                 branch_name,
+//                 base_branch_name,
+//                 force,
+//             )
+//             .c(d!())
+//     }
+//
+//     unsafe fn branch_create_by_base_branch_version_without_new_version(
+//         &mut self,
+//         branch_name: BranchName,
+//         base_branch_name: ParentBranchName,
+//         base_version_name: VersionName,
+//         force: bool,
+//     ) -> Result<()> {
+//         self.as_mut()
+//             .branch_create_by_base_branch_version_without_new_version(
+//                 branch_name,
+//                 base_branch_name,
+//                 base_version_name,
+//                 force,
+//             )
+//             .c(d!())
+//     }
+//
+//     #[inline(always)]
+//     fn branch_exists(&self, branch_name: BranchName) -> bool {
+//         self.as_ref().branch_exists(branch_name)
+//     }
+//
+//     #[inline(always)]
+//     fn branch_has_versions(&self, branch_name: BranchName) -> bool {
+//         self.as_ref().branch_has_versions(branch_name)
+//     }
+//
+//     #[inline(always)]
+//     fn branch_remove(&mut self, branch_name: BranchName) -> Result<()> {
+//         self.as_mut().branch_remove(branch_name).c(d!())
+//     }
+//
+//     #[inline(always)]
+//     fn branch_keep_only(&mut self, branch_names: &[BranchName]) -> Result<()> {
+//         self.as_mut().branch_keep_only(branch_names).c(d!())
+//     }
+//
+//     #[inline(always)]
+//     fn branch_truncate(&mut self, branch_name: BranchName) -> Result<()> {
+//         self.as_mut().branch_truncate(branch_name).c(d!())
+//     }
+//
+//     #[inline(always)]
+//     fn branch_truncate_to(
+//         &mut self,
+//         branch_name: BranchName,
+//         last_version_name: VersionName,
+//     ) -> Result<()> {
+//         self.as_mut()
+//             .branch_truncate_to(branch_name, last_version_name)
+//             .c(d!())
+//     }
+//
+//     #[inline(always)]
+//     fn branch_pop_version(&mut self, branch_name: BranchName) -> Result<()> {
+//         self.as_mut().branch_pop_version(branch_name).c(d!())
+//     }
+//
+//     #[inline(always)]
+//     fn branch_merge_to(
+//         &mut self,
+//         branch_name: BranchName,
+//         target_branch_name: BranchName,
+//     ) -> Result<()> {
+//         self.as_mut()
+//             .branch_merge_to(branch_name, target_branch_name)
+//             .c(d!())
+//     }
+//
+//     #[inline(always)]
+//     unsafe fn branch_merge_to_force(
+//         &mut self,
+//         branch_name: BranchName,
+//         target_branch_name: BranchName,
+//     ) -> Result<()> {
+//         self.as_mut()
+//             .branch_merge_to_force(branch_name, target_branch_name)
+//             .c(d!())
+//     }
+//
+//     #[inline(always)]
+//     fn branch_set_default(&mut self, branch_name: BranchName) -> Result<()> {
+//         self.as_mut().branch_set_default(branch_name).c(d!())
+//     }
+//
+//     fn branch_is_empty(&self, branch_name: BranchName) -> Result<bool> {
+//         self.as_ref().branch_is_empty(branch_name).c(d!())
+//     }
+//
+//     fn branch_list(&self) -> Vec<BranchNameOwned> {
+//         self.as_ref().branch_list()
+//     }
+//
+//     fn branch_get_default(&self) -> BranchNameOwned {
+//         self.as_ref().branch_get_default()
+//     }
+//
+//     unsafe fn branch_swap(
+//         &mut self,
+//         branch_1: BranchName,
+//         branch_2: BranchName,
+//     ) -> Result<()> {
+//         self.as_mut().branch_swap(branch_1, branch_2).c(d!())
+//     }
+//
+//     #[inline(always)]
+//     fn prune(&mut self, reserved_ver_num: Option<usize>) -> Result<()> {
+//         self.as_mut().prune(reserved_ver_num).c(d!())
+//     }
+// }

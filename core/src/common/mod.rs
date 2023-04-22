@@ -7,16 +7,15 @@ pub(crate) mod engines;
 #[cfg(feature = "hash")]
 pub(crate) mod utils;
 
-use {
-    engines::Engine,
-    once_cell::sync::Lazy,
-    parking_lot::Mutex,
-    ruc::*,
-    std::{
-        env, fs,
-        mem::size_of,
-        sync::atomic::{AtomicBool, Ordering},
-    },
+use engines::Engine;
+use once_cell::sync::Lazy;
+use parking_lot::Mutex;
+use ruc::*;
+use std::{
+    env, fs,
+    mem::size_of,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 /////////////////////////////////////////////////////////////////////////////
@@ -71,12 +70,13 @@ pub const RESERVED_VERSION_NUM_DEFAULT: usize = 10;
 
 const BASE_DIR_VAR: &str = "VSDB_BASE_DIR";
 
-static VSDB_BASE_DIR: Lazy<Mutex<String>> = Lazy::new(|| Mutex::new(gen_data_dir()));
+static VSDB_BASE_DIR: Lazy<Mutex<PathBuf>> = Lazy::new(|| Mutex::new(gen_data_dir()));
 
-static VSDB_CUSTOM_DIR: Lazy<String> = Lazy::new(|| {
-    let d = VSDB_BASE_DIR.lock().clone() + "/__CUSTOM__";
-    fs::create_dir_all(&d).unwrap();
-    env::set_var("VSDB_CUSTOM_DIR", &d);
+static VSDB_CUSTOM_DIR: Lazy<PathBuf> = Lazy::new(|| {
+    let mut d = VSDB_BASE_DIR.lock().clone();
+    d.push("__CUSTOM__");
+    pnk!(fs::create_dir_all(&d));
+    env::set_var("VSDB_CUSTOM_DIR", d.as_os_str());
     d
 });
 
@@ -145,37 +145,37 @@ impl<T: Engine> VsDB<T> {
 /////////////////////////////////////////////////////////////////////////////
 
 #[inline(always)]
-fn gen_data_dir() -> String {
+fn gen_data_dir() -> PathBuf {
     // Compatible with Windows OS?
     let d = env::var(BASE_DIR_VAR)
         .or_else(|_| env::var("HOME").map(|h| format!("{}/.vsdb", h)))
         .unwrap_or_else(|_| "/tmp/.vsdb".to_owned());
-    fs::create_dir_all(&d).unwrap();
-    d
+    pnk!(fs::create_dir_all(&d));
+    PathBuf::from(d)
 }
 
 /// ${VSDB_CUSTOM_DIR}
 #[inline(always)]
-pub fn vsdb_get_custom_dir() -> String {
-    VSDB_CUSTOM_DIR.clone()
+pub fn vsdb_get_custom_dir() -> &'static Path {
+    VSDB_CUSTOM_DIR.as_path()
 }
 
 /// ${VSDB_BASE_DIR}
 #[inline(always)]
-pub fn vsdb_get_base_dir() -> String {
+pub fn vsdb_get_base_dir() -> PathBuf {
     VSDB_BASE_DIR.lock().clone()
 }
 
 /// Set ${VSDB_BASE_DIR} manually.
 #[inline(always)]
-pub fn vsdb_set_base_dir(dir: &str) -> Result<()> {
+pub fn vsdb_set_base_dir(dir: impl AsRef<Path>) -> Result<()> {
     static HAS_INITED: AtomicBool = AtomicBool::new(false);
 
     if HAS_INITED.swap(true, Ordering::Relaxed) {
         Err(eg!("VSDB has been initialized !!"))
     } else {
-        env::set_var(BASE_DIR_VAR, dir);
-        *VSDB_BASE_DIR.lock() = dir.to_owned();
+        env::set_var(BASE_DIR_VAR, dir.as_ref().as_os_str());
+        *VSDB_BASE_DIR.lock() = dir.as_ref().to_path_buf();
         Ok(())
     }
 }
