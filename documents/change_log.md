@@ -1,5 +1,40 @@
 # Change log
 
+## v0.45.x
+
+#### Internal optimizations
+
+- Avoid storing fields that can be derived from other fields
+  - Save space
+  - Improve efficiency
+  - But, the memory usage during runtime will increase
+  - But, the time for the process to restart will increase
+- Enhance atomicity guarantees during data changes
+
+#### API changes
+
+- Use shorter names in all APIs
+  - `branch_id` ==> `br_id`
+  - `branch_name` ==> `br_name`
+  - `version_id` ==> `ver_id`
+  - `version_name` ==> `ver_name`
+
+## v0.44.x
+
+#### Internal optimizations
+
+- Those 'deleted' KVs of the oldest version will be cleaned up
+- Enhance the ability of `prune` and optimize its performance
+- Start a background thread to clean up orphaned instances asynchronously
+- Enable the embed lru-cache of rocksdb if `feature = "rocks_engine"`
+- Make the supports for the `primitive-types` crate optional
+
+#### New APIs
+
+- `version_chgset_trie_root`
+  - Return the 'trie' root hash of the change set of the target version
+  - NOTE: this is a realtime-compution operation
+
 ## v0.43.x
 
 #### Internal optimizations

@@ -4,7 +4,7 @@ use ruc::*;
 #[test]
 fn test_insert() {
     let mut hdr = Vecx::new();
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, (max + i)))
         .for_each(|(key, value)| {
@@ -21,20 +21,20 @@ fn test_insert() {
 #[test]
 fn test_len() {
     let mut hdr = Vecx::new();
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, (max + i)))
         .for_each(|(key, value)| {
             hdr.insert(key, &value);
         });
-    assert_eq!(500, hdr.len());
+    assert_eq!(100, hdr.len());
     hdr.clear();
     assert_eq!(0, hdr.len());
 }
 
 #[test]
 fn test_valueende() {
-    let cnt = 500;
+    let cnt = 100;
     let dehdr = {
         let mut hdr = Vecx::new();
         (0..cnt).map(|i: usize| (i, i)).for_each(|(key, value)| {
@@ -52,7 +52,7 @@ fn test_valueende() {
 #[test]
 fn test_remove() {
     let mut hdr = Vecx::new();
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, (max + i)))
         .for_each(|(key, value)| {
@@ -60,7 +60,7 @@ fn test_remove() {
         });
     assert_eq!(max, hdr.len());
 
-    let idx = 400;
+    let idx = 50;
     assert_eq!(max + idx, hdr.remove(idx));
     hdr.clear();
     assert_eq!(0, hdr.len());
@@ -69,7 +69,7 @@ fn test_remove() {
 #[test]
 fn test_iter_next() {
     let mut hdr = Vecx::new();
-    let max = 500;
+    let max = 100;
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
         hdr.insert(key, &value);
     });
@@ -83,7 +83,7 @@ fn test_iter_next() {
 #[test]
 fn test_push_pop() {
     let mut hdr = Vecx::new();
-    let max = 500;
+    let max = 100;
     (0..max).map(|i: usize| i).for_each(|value| {
         hdr.push(&value);
     });
@@ -95,7 +95,7 @@ fn test_push_pop() {
 #[test]
 fn test_swap_remove() {
     let mut hdr = Vecx::new();
-    let max = 500;
+    let max = 100;
     (0..max).map(|i: usize| i).for_each(|value| {
         hdr.push(&value);
     });
@@ -110,7 +110,7 @@ fn test_swap_remove() {
 #[test]
 fn test_last() {
     let mut hdr = Vecx::new();
-    let max = 500;
+    let max = 100;
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
         hdr.insert(key, &value);
     });

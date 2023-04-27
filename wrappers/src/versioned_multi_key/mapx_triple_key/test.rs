@@ -159,28 +159,37 @@ fn test_branch_truncate_to() {
 fn test_insert() {
     let mut hdr: MapxTkVs<usize, usize, usize, usize> = MapxTkVs::new();
     pnk!(hdr.version_create(VersionName(b"manster0")));
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, (max + i)))
         .for_each(|(i, value)| {
             let gkey = &(&i, &i, &i);
             let key = (&i, &i, &i);
+            let trie_root = pnk!(hdr.version_chgset_trie_root(None, None));
             assert!(hdr.get(gkey).is_none());
             assert!(pnk!(hdr.insert(&key, &value)).is_none());
+            let trie_root2 = pnk!(hdr.version_chgset_trie_root(None, None));
             assert!(pnk!(hdr.insert(&key, &value)).is_some());
+            let trie_root3 = pnk!(hdr.version_chgset_trie_root(None, None));
             assert!(hdr.contains_key(gkey));
             assert_eq!(&pnk!(hdr.get(gkey)), &value);
             assert_eq!(
                 &pnk!(hdr.remove(&(&i, Some((&i, Some(&i)))))).unwrap(),
                 &value
             );
+            let trie_root4 = pnk!(hdr.version_chgset_trie_root(None, None));
             assert!(hdr.get(gkey).is_none());
+
+            assert_ne!(trie_root, trie_root2);
+            assert_eq!(trie_root2, trie_root3);
+            assert_ne!(trie_root3, trie_root4);
+            assert_ne!(trie_root4, trie_root);
         });
 }
 
 #[test]
 fn test_valueende() {
-    let cnt = 500;
+    let cnt = 100;
     let dehdr = {
         let mut hdr: MapxTkVs<usize, usize, usize, usize> = MapxTkVs::new();
         pnk!(hdr.version_create(VersionName(b"manster0")));

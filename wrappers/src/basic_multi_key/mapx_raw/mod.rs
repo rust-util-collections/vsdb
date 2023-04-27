@@ -16,7 +16,7 @@ use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(bound = "")]
 pub struct MapxRawMk {
     // Will never be changed once created
@@ -192,7 +192,7 @@ impl MapxRawMk {
         } else {
             for (idx, k) in key_prefix.iter().enumerate() {
                 if let Some(v) = hdr.get(k) {
-                    key_buf[idx] = k.to_vec().into();
+                    key_buf[idx] = k.to_vec();
                     if 1 + idx == self.key_size {
                         let key = key_buf
                             .iter()
@@ -273,7 +273,7 @@ impl MapxRawMk {
         } else {
             for (idx, k) in key_prefix.iter().enumerate() {
                 if let Some(v) = hdr.get(k) {
-                    key_buf[idx] = k.to_vec().into();
+                    key_buf[idx] = k.to_vec();
                     if 1 + idx == self.key_size {
                         let key = key_buf
                             .iter()
@@ -335,7 +335,7 @@ impl MapxRawMk {
     // pub fn iter_mut_op_typed_value_with_key_prefix
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(Debug)]
 pub struct ValueMut<'a> {
     hdr: &'a mut MapxRawMk,
     key: &'a [&'a [u8]],

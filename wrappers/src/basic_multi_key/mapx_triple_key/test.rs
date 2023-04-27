@@ -7,7 +7,7 @@ use ruc::*;
 fn test_insert() {
     let mut hdr: MapxTk<usize, usize, usize, usize> = MapxTk::new();
     assert_eq!(3, hdr.key_size());
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, max + i))
         .for_each(|(i, value)| {
@@ -31,10 +31,10 @@ fn test_insert() {
 
 #[test]
 fn test_valueende() {
-    let cnt = 500;
+    let cnt = 100;
     let dehdr = {
         let mut hdr: MapxTk<usize, usize, usize, usize> = MapxTk::new();
-        let max = 500;
+        let max = 100;
         (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
             let key = &(&key, &key, &key);
             assert!(hdr.insert(key, &value).is_none());

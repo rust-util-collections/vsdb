@@ -3,9 +3,7 @@
 //!
 
 pub(crate) mod engines;
-
-#[cfg(feature = "hash")]
-pub(crate) mod utils;
+pub mod utils;
 
 use engines::Engine;
 use once_cell::sync::Lazy;
@@ -17,11 +15,14 @@ use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
 };
+use threadpool::ThreadPool;
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
-pub type RawBytes = Box<[u8]>;
+pub const NULL: &[u8] = &[];
+
+pub type RawBytes = Vec<u8>;
 pub type RawKey = RawBytes;
 pub type RawValue = RawBytes;
 
@@ -57,7 +58,7 @@ pub const GB: u64 = 1 << 30;
 
 const RESERVED_ID_CNT: Pre = 4096_0000;
 pub const BIGGEST_RESERVED_ID: Pre = RESERVED_ID_CNT - 1;
-pub const NULL: BranchID = (BIGGEST_RESERVED_ID as BranchIDBase).to_be_bytes();
+pub const NULL_ID: BranchID = (BIGGEST_RESERVED_ID as BranchIDBase).to_be_bytes();
 
 pub const INITIAL_BRANCH_ID: BranchIDBase = 0;
 pub const INITIAL_BRANCH_NAME: BranchName<'static> = BranchName(b"master");
@@ -89,6 +90,10 @@ pub static VSDB: Lazy<VsDB<engines::RocksDB>> = Lazy::new(|| pnk!(VsDB::new()));
 
 #[cfg(all(feature = "sled_engine", not(feature = "rocks_engine")))]
 pub static VSDB: Lazy<VsDB<engines::Sled>> = Lazy::new(|| pnk!(VsDB::new()));
+
+/// Clean orphan instances in background.
+pub static TRASH_CLEANER: Lazy<Mutex<ThreadPool>> =
+    Lazy::new(|| Mutex::new(ThreadPool::new(1)));
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -126,13 +131,13 @@ impl<T: Engine> VsDB<T> {
     }
 
     #[inline(always)]
-    pub fn alloc_branch_id(&self) -> BranchIDBase {
-        self.db.alloc_branch_id()
+    pub fn alloc_br_id(&self) -> BranchIDBase {
+        self.db.alloc_br_id()
     }
 
     #[inline(always)]
-    pub fn alloc_version_id(&self) -> VersionIDBase {
-        self.db.alloc_version_id()
+    pub fn alloc_ver_id(&self) -> VersionIDBase {
+        self.db.alloc_ver_id()
     }
 
     #[inline(always)]

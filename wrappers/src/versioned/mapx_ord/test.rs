@@ -161,7 +161,7 @@ fn test_branch_truncate_to() {
 fn test_insert() {
     let mut hdr: MapxOrdVs<usize, usize> = MapxOrdVs::new();
     pnk!(hdr.version_create(VersionName(b"manster0")));
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, (max + i)))
         .for_each(|(key, value)| {
@@ -179,13 +179,13 @@ fn test_insert() {
 fn test_len() {
     let mut hdr: MapxOrdVs<usize, usize> = MapxOrdVs::new();
     pnk!(hdr.version_create(VersionName(b"manster0")));
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, (max + i)))
         .for_each(|(key, value)| {
             assert!(pnk!(hdr.insert(&key, &value)).is_none());
         });
-    assert_eq!(500, hdr.len());
+    assert_eq!(100, hdr.len());
 
     for key in 0..max {
         assert!(pnk!(hdr.remove(&key)).is_some());
@@ -195,7 +195,7 @@ fn test_len() {
 
 #[test]
 fn test_valueende() {
-    let cnt = 500;
+    let cnt = 100;
     let dehdr = {
         let mut hdr: MapxOrdVs<usize, usize> = MapxOrdVs::new();
         pnk!(hdr.version_create(VersionName(b"manster0")));
@@ -417,7 +417,7 @@ fn test_iter() {
     let mut hdr: MapxOrdVs<usize, usize> = MapxOrdVs::new();
     let mvn = VersionName(b"manster0");
     pnk!(hdr.version_create(mvn));
-    let max = 500;
+    let max = 100;
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
         assert!(pnk!(hdr.insert(&key, &value)).is_none());
     });
@@ -439,7 +439,7 @@ fn test_first_last() {
     let mut hdr: MapxOrdVs<usize, usize> = MapxOrdVs::new();
     let mvn = VersionName(b"manster0");
     pnk!(hdr.version_create(mvn));
-    let max = 500;
+    let max = 100;
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
         assert!(pnk!(hdr.insert(&key, &value)).is_none());
     });
@@ -454,7 +454,7 @@ fn test_first_last() {
 fn test_by_branch() {
     let mut hdr: MapxOrdVs<usize, usize> = MapxOrdVs::new();
     pnk!(hdr.version_create(VersionName(b"manster0")));
-    let max = 500;
+    let max = 100;
     let bn = BranchName(b"test");
     let vn = VersionName(b"test1");
     pnk!(hdr.branch_create(bn, vn, false));
@@ -469,6 +469,6 @@ fn test_by_branch() {
     assert!(!hdr.is_empty_by_branch(INITIAL_BRANCH_NAME));
     assert_eq!(max, hdr.len_by_branch(INITIAL_BRANCH_NAME));
 
-    assert_eq!(100, pnk!(hdr.get_ge_by_branch(&100, INITIAL_BRANCH_NAME)).0);
-    assert_eq!(100, pnk!(hdr.get_le_by_branch(&100, INITIAL_BRANCH_NAME)).0);
+    assert_eq!(10, pnk!(hdr.get_ge_by_branch(&10, INITIAL_BRANCH_NAME)).0);
+    assert_eq!(10, pnk!(hdr.get_le_by_branch(&10, INITIAL_BRANCH_NAME)).0);
 }

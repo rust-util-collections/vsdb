@@ -38,10 +38,7 @@ fn basic_cases() {
     let mut reloaded = pnk!(<MapxRawMkVs as ValueEnDe>::decode(&hdr));
 
     (0..cnt).map(|i: usize| i.to_be_bytes()).for_each(|i| {
-        assert_eq!(
-            i.to_vec().into_boxed_slice(),
-            reloaded.get(&[&[], &i]).unwrap()
-        );
+        assert_eq!(&i[..], &reloaded.get(&[&[], &i]).unwrap()[..]);
     });
 
     (1..cnt).map(|i: usize| i.to_be_bytes()).for_each(|i| {
@@ -104,8 +101,8 @@ fn version_operations(hdr: &mut MapxRawMkVs) {
     pnk!(hdr.insert(&[&[], b"v-002/key-02"], b"v-002/value-02"));
 
     assert_eq!(
-        hdr.get(&[&[], b"v-002/key-01"]),
-        Some(b"v-002/value-01".to_vec().into_boxed_slice())
+        &hdr.get(&[&[], b"v-002/key-01"]).unwrap()[..],
+        &b"v-002/value-01"[..]
     );
     assert!(
         hdr.get_by_branch(&[&[], b"v-002/key-01"], BranchName(b"fake branch"))
@@ -120,8 +117,8 @@ fn version_operations(hdr: &mut MapxRawMkVs) {
         .is_none()
     );
     assert_eq!(
-        hdr.get(&[&[], b"v-002/key-02"]),
-        Some(b"v-002/value-02".to_vec().into_boxed_slice())
+        &hdr.get(&[&[], b"v-002/key-02"]).unwrap()[..],
+        &b"v-002/value-02"[..]
     );
     assert!(
         hdr.get_by_branch(&[&[], b"v-002/key-02"], BranchName(b"fake branch"))
@@ -448,8 +445,7 @@ fn branch_operations(hdr: &mut MapxRawMkVs) {
     hdr.branch_truncate_to(BranchName(b"b-2"), VersionName(&0u64.to_be_bytes()))
         .unwrap();
 
-    // orphraned versions will exist until a `prune`
-    pnk!(hdr.prune(Some(100000)));
+    pnk!(hdr.version_clean_up_globally());
 
     // now we can use these version names again
     (11..=100u64).for_each(|i| {

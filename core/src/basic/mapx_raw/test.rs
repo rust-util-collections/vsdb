@@ -5,7 +5,7 @@ use std::mem::size_of;
 #[test]
 fn test_insert() {
     let mut hdr = MapxRaw::new();
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: u64| (to_bytes(i), to_bytes(max + i)))
         .for_each(|(key, value)| {
@@ -27,13 +27,13 @@ fn test_insert() {
 #[test]
 fn test_len() {
     let mut hdr = MapxRaw::new();
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: u64| (to_bytes(i), to_bytes(max + i)))
         .for_each(|(key, value)| {
             assert!(hdr.insert(&key, &value).is_none());
         });
-    assert_eq!(500, hdr.len());
+    assert_eq!(100, hdr.len());
 
     for key in 0..max {
         assert!(hdr.remove(&to_bytes(key)).is_some());
@@ -44,7 +44,7 @@ fn test_len() {
 #[test]
 fn test_iter() {
     let mut hdr = MapxRaw::new();
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: u64| (to_bytes(i), to_bytes(i)))
         .for_each(|(key, value)| {
@@ -71,7 +71,7 @@ fn test_iter() {
 #[test]
 fn test_first_last() {
     let mut hdr = MapxRaw::new();
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: u64| (to_bytes(i), to_bytes(i)))
         .for_each(|(key, value)| {

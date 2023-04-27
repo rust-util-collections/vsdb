@@ -10,6 +10,7 @@ use sled::{Config, Db, IVec, Iter, Mode, Tree};
 use std::{
     borrow::Cow,
     ops::{Bound, RangeBounds},
+    thread::available_parallelism,
 };
 
 // the 'prefix search' in sled is just a global scaning,
@@ -90,7 +91,7 @@ impl Engine for SledEngine {
     // 'step 1' and 'step 2' is not atomic in multi-threads scene,
     // so we use a `Mutex` lock for thread safe.
     #[allow(unused_variables)]
-    fn alloc_branch_id(&self) -> BranchID {
+    fn alloc_br_id(&self) -> BranchID {
         static LK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
         let x = LK.lock();
 
@@ -111,7 +112,7 @@ impl Engine for SledEngine {
     // 'step 1' and 'step 2' is not atomic in multi-threads scene,
     // so we use a `Mutex` lock for thread safe.
     #[allow(unused_variables)]
-    fn alloc_version_id(&self) -> VersionID {
+    fn alloc_ver_id(&self) -> VersionID {
         static LK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
         let x = LK.lock();
 
@@ -196,12 +197,8 @@ impl Engine for SledEngine {
 
         let mut k = meta_prefix.to_vec();
         k.extend_from_slice(key);
-        let k = k.into_boxed_slice();
 
-        self.areas[area_idx]
-            .get(k)
-            .unwrap()
-            .map(|iv| iv.to_vec().into_boxed_slice())
+        self.areas[area_idx].get(k).unwrap().map(|iv| iv.to_vec())
     }
 
     fn insert(
@@ -214,12 +211,11 @@ impl Engine for SledEngine {
 
         let mut k = meta_prefix.to_vec();
         k.extend_from_slice(key);
-        let k = k.into_boxed_slice();
 
         self.areas[area_idx]
             .insert(k, value)
             .unwrap()
-            .map(|iv| iv.to_vec().into_boxed_slice())
+            .map(|iv| iv.to_vec())
     }
 
     fn remove(&self, meta_prefix: PreBytes, key: &[u8]) -> Option<RawValue> {
@@ -227,12 +223,11 @@ impl Engine for SledEngine {
 
         let mut k = meta_prefix.to_vec();
         k.extend_from_slice(key);
-        let k = k.into_boxed_slice();
 
         self.areas[area_idx]
             .remove(k)
             .unwrap()
-            .map(|iv| iv.to_vec().into_boxed_slice())
+            .map(|iv| iv.to_vec())
     }
 
     fn get_instance_len(&self, instance_prefix: PreBytes) -> u64 {
@@ -256,10 +251,7 @@ impl Iterator for SledIter {
     fn next(&mut self) -> Option<Self::Item> {
         while let Some((k, v)) = self.inner.next().map(|i| i.unwrap()) {
             if self.bounds.contains(&k) {
-                return Some((
-                    k[PREFIX_SIZE..].to_vec().into_boxed_slice(),
-                    v.to_vec().into_boxed_slice(),
-                ));
+                return Some((k[PREFIX_SIZE..].to_vec(), v.to_vec()));
             }
         }
         None
@@ -270,10 +262,7 @@ impl DoubleEndedIterator for SledIter {
     fn next_back(&mut self) -> Option<Self::Item> {
         while let Some((k, v)) = self.inner.next_back().map(|i| i.unwrap()) {
             if self.bounds.contains(&k) {
-                return Some((
-                    k[PREFIX_SIZE..].to_vec().into_boxed_slice(),
-                    v.to_vec().into_boxed_slice(),
-                ));
+                return Some((k[PREFIX_SIZE..].to_vec(), v.to_vec()));
             }
         }
         None
@@ -302,10 +291,13 @@ fn sled_open() -> Result<Db> {
     // avoid setting again on an opened DB
     info_omit!(vsdb_set_base_dir(&dir));
 
+    let parallelism = available_parallelism().c(d!())?.get() as u64;
+    let cache_cap = max!(GB, min!((parallelism * 2 / 10) * GB, 12 * GB));
+
     let mut cfg = Config::new()
         .path(&dir)
         .mode(Mode::HighThroughput)
-        .cache_capacity(10 * GB);
+        .cache_capacity(cache_cap);
 
     #[cfg(feature = "compress")]
     {

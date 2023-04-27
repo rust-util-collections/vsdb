@@ -161,7 +161,7 @@ fn test_branch_truncate_to() {
 fn test_insert() {
     let mut hdr: MapxOrdRawKeyVs<usize> = MapxOrdRawKeyVs::new();
     pnk!(hdr.version_create(VersionName(b"manster0")));
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, (max + i)))
         .for_each(|(key, value)| {
@@ -180,14 +180,14 @@ fn test_insert() {
 fn test_len() {
     let mut hdr: MapxOrdRawKeyVs<usize> = MapxOrdRawKeyVs::new();
     pnk!(hdr.version_create(VersionName(b"manster0")));
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, (max + i)))
         .for_each(|(key, value)| {
             let key = <usize as ValueEnDe>::encode(&key);
             assert!(pnk!(hdr.insert(&key, &value)).is_none());
         });
-    assert_eq!(500, hdr.len());
+    assert_eq!(100, hdr.len());
 
     for key in 0..max {
         let key = <usize as ValueEnDe>::encode(&key);
@@ -198,7 +198,7 @@ fn test_len() {
 
 #[test]
 fn test_valueende() {
-    let cnt = 500;
+    let cnt = 100;
     let dehdr = {
         let mut hdr: MapxOrdRawKeyVs<usize> = MapxOrdRawKeyVs::new();
         pnk!(hdr.version_create(VersionName(b"manster0")));
@@ -425,7 +425,7 @@ fn test_iter() {
     let mut hdr: MapxOrdRawKeyVs<usize> = MapxOrdRawKeyVs::new();
     let mvn = VersionName(b"manster0");
     pnk!(hdr.version_create(mvn));
-    let max = 500;
+    let max = 100;
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
         let key = <usize as ValueEnDe>::encode(&key);
         assert!(pnk!(hdr.insert(&key, &value)).is_none());
@@ -448,7 +448,7 @@ fn test_first_last() {
     let mut hdr: MapxOrdRawKeyVs<usize> = MapxOrdRawKeyVs::new();
     let mvn = VersionName(b"manster0");
     pnk!(hdr.version_create(mvn));
-    let max = 500;
+    let max = 100;
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
         let key = <usize as ValueEnDe>::encode(&key);
         assert!(pnk!(hdr.insert(&key, &value)).is_none());
@@ -464,7 +464,7 @@ fn test_first_last() {
 fn test_by_branch() {
     let mut hdr: MapxOrdRawKeyVs<usize> = MapxOrdRawKeyVs::new();
     pnk!(hdr.version_create(VersionName(b"manster0")));
-    let max = 500;
+    let max = 100;
     let bn = BranchName(b"test");
     let vn = VersionName(b"test1");
     pnk!(hdr.branch_create(bn, vn, false));

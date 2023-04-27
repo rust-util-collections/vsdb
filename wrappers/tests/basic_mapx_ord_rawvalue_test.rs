@@ -41,8 +41,7 @@ fn basic_cases() {
     });
 
     (1usize..cnt).for_each(|i| {
-        *reloaded.get_mut(&i).unwrap() =
-            (1 + i).to_be_bytes().to_vec().into_boxed_slice();
+        *reloaded.get_mut(&i).unwrap() = (1 + i).to_be_bytes().to_vec();
         assert_eq!(&reloaded.get(&i).unwrap()[..], &(1 + i).to_be_bytes());
         assert!(reloaded.contains_key(&i));
         assert!(reloaded.remove(&i).is_some());

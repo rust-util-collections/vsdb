@@ -1,13 +1,13 @@
 use crate::common::{
     vsdb_get_base_dir, vsdb_set_base_dir, BranchIDBase as BranchID, Engine, Pre,
-    PreBytes, RawBytes, RawKey, RawValue, VersionIDBase as VersionID, INITIAL_BRANCH_ID,
-    MB, PREFIX_SIZE, RESERVED_ID_CNT,
+    PreBytes, RawBytes, RawKey, RawValue, VersionIDBase as VersionID, GB,
+    INITIAL_BRANCH_ID, MB, PREFIX_SIZE, RESERVED_ID_CNT,
 };
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use rocksdb::{
-    ColumnFamily, ColumnFamilyDescriptor, DBCompressionType, DBIterator, Direction,
-    IteratorMode, Options, ReadOptions, SliceTransform, DB,
+    Cache, ColumnFamily, ColumnFamilyDescriptor, DBCompressionType, DBIterator,
+    Direction, IteratorMode, Options, ReadOptions, SliceTransform, DB,
 };
 use ruc::*;
 use std::{
@@ -20,14 +20,14 @@ use std::{
 
 // NOTE:
 // do NOT make the number of areas bigger than `u8::MAX`
-const DATA_SET_NUM: usize = 4;
+const DATA_SET_NUM: usize = 8;
 
 const META_KEY_MAX_KEYLEN: [u8; 1] = [u8::MAX];
 const META_KEY_BRANCH_ID: [u8; 1] = [u8::MAX - 1];
 const META_KEY_VERSION_ID: [u8; 1] = [u8::MAX - 2];
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 
-static HDR: Lazy<(DB, Vec<String>)> = Lazy::new(|| rocksdb_open().unwrap());
+static HDR: Lazy<(DB, Vec<String>, Cache)> = Lazy::new(|| rocksdb_open().unwrap());
 
 pub struct RocksEngine {
     meta: &'static DB,
@@ -57,7 +57,7 @@ impl RocksEngine {
 
     #[inline(always)]
     fn get_upper_bound_value(&self, meta_prefix: PreBytes) -> Vec<u8> {
-        static BUF: Lazy<RawBytes> = Lazy::new(|| vec![u8::MAX; 512].into_boxed_slice());
+        static BUF: Lazy<RawBytes> = Lazy::new(|| vec![u8::MAX; 512]);
 
         let mut max_guard = meta_prefix.to_vec();
 
@@ -138,7 +138,7 @@ impl Engine for RocksEngine {
     // 'step 1' and 'step 2' is not atomic in multi-threads scene,
     // so we use a `Mutex` lock for thread safe.
     #[allow(unused_variables)]
-    fn alloc_branch_id(&self) -> BranchID {
+    fn alloc_br_id(&self) -> BranchID {
         static LK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
         let x = LK.lock();
 
@@ -159,7 +159,7 @@ impl Engine for RocksEngine {
     // 'step 1' and 'step 2' is not atomic in multi-threads scene,
     // so we use a `Mutex` lock for thread safe.
     #[allow(unused_variables)]
-    fn alloc_version_id(&self) -> VersionID {
+    fn alloc_ver_id(&self) -> VersionID {
         static LK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
         let x = LK.lock();
 
@@ -279,10 +279,7 @@ impl Engine for RocksEngine {
 
         let mut k = meta_prefix.to_vec();
         k.extend_from_slice(key);
-        self.meta
-            .get_cf(self.cf_hdr(area_idx), k)
-            .unwrap()
-            .map(|v| v.into_boxed_slice())
+        self.meta.get_cf(self.cf_hdr(area_idx), k).unwrap()
     }
 
     fn insert(
@@ -302,7 +299,7 @@ impl Engine for RocksEngine {
 
         let old_v = self.meta.get_cf(self.cf_hdr(area_idx), &k).unwrap();
         self.meta.put_cf(self.cf_hdr(area_idx), k, value).unwrap();
-        old_v.map(|v| v.into_boxed_slice())
+        old_v
     }
 
     fn remove(&self, meta_prefix: PreBytes, key: &[u8]) -> Option<RawValue> {
@@ -312,7 +309,7 @@ impl Engine for RocksEngine {
         k.extend_from_slice(key);
         let old_v = self.meta.get_cf(self.cf_hdr(area_idx), &k).unwrap();
         self.meta.delete_cf(self.cf_hdr(area_idx), k).unwrap();
-        old_v.map(|v| v.into_boxed_slice())
+        old_v
     }
 
     fn get_instance_len(&self, instance_prefix: PreBytes) -> u64 {
@@ -336,7 +333,7 @@ impl Iterator for RocksIter {
     fn next(&mut self) -> Option<Self::Item> {
         self.inner
             .next()
-            .map(|(ik, iv)| (ik[PREFIX_SIZE..].into(), iv))
+            .map(|(ik, iv)| (ik[PREFIX_SIZE..].to_vec(), iv.into_vec()))
     }
 }
 
@@ -344,7 +341,7 @@ impl DoubleEndedIterator for RocksIter {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.inner_rev
             .next()
-            .map(|(ik, iv)| (ik[PREFIX_SIZE..].into(), iv))
+            .map(|(ik, iv)| (ik[PREFIX_SIZE..].to_vec(), iv.into_vec()))
     }
 }
 
@@ -368,25 +365,33 @@ impl PreAllocator {
     // }
 }
 
-fn rocksdb_open() -> Result<(DB, Vec<String>)> {
+fn rocksdb_open() -> Result<(DB, Vec<String>, Cache)> {
     let dir = vsdb_get_base_dir();
 
     // avoid setting again on an opened DB
     info_omit!(vsdb_set_base_dir(&dir));
 
+    let parallelism = available_parallelism().c(d!())?.get() as i32;
+    let cache_cap =
+        max!(GB, min!(((parallelism as u64) * 2 / 10) * GB, 12 * GB)) as usize;
+
     let mut cfg = Options::default();
+
     cfg.create_if_missing(true);
     cfg.create_missing_column_families(true);
     cfg.set_prefix_extractor(SliceTransform::create_fixed_prefix(size_of::<Pre>()));
-    cfg.increase_parallelism(available_parallelism().c(d!())?.get() as i32);
+    cfg.increase_parallelism(parallelism);
     cfg.set_num_levels(7);
-    cfg.set_max_open_files(4096);
+    cfg.set_max_open_files(8192);
     cfg.set_allow_mmap_writes(true);
     cfg.set_allow_mmap_reads(true);
     // cfg.set_use_direct_reads(true);
     // cfg.set_use_direct_io_for_flush_and_compaction(true);
     cfg.set_write_buffer_size(512 * MB as usize);
     cfg.set_max_write_buffer_number(3);
+
+    let lru = Cache::new_lru_cache(cache_cap).c(d!())?;
+    cfg.set_row_cache(&lru);
 
     #[cfg(feature = "compress")]
     {
@@ -407,5 +412,5 @@ fn rocksdb_open() -> Result<(DB, Vec<String>)> {
 
     let db = DB::open_cf_descriptors(&cfg, &dir, cfs).c(d!())?;
 
-    Ok((db, cfhdrs))
+    Ok((db, cfhdrs, lru))
 }

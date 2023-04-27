@@ -22,7 +22,7 @@ use std::{
 const KEY_SIZE: usize = 2;
 
 /// A map structure with two-level keys.
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(bound = "")]
 pub struct MapxDk<K1, K2, V> {
     inner: MapxRawMk,
@@ -147,7 +147,7 @@ where
     }
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(Debug)]
 pub struct ValueMut<'a, K1, K2, V>
 where
     K1: KeyEnDe,

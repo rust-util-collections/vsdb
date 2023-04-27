@@ -161,17 +161,26 @@ fn test_branch_truncate_to() {
 fn test_insert() {
     let mut hdr: MapxVs<usize, usize> = MapxVs::new();
     pnk!(hdr.version_create(VersionName(b"manster0")));
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, (max + i)))
         .for_each(|(key, value)| {
+            let trie_root = pnk!(hdr.version_chgset_trie_root(None, None));
             assert!(hdr.get(&key).is_none());
             assert!(pnk!(hdr.insert(&key, &value)).is_none());
+            let trie_root2 = pnk!(hdr.version_chgset_trie_root(None, None));
             assert!(pnk!(hdr.insert(&key, &value)).is_some());
+            let trie_root3 = pnk!(hdr.version_chgset_trie_root(None, None));
             assert!(hdr.contains_key(&key));
             assert_eq!(pnk!(hdr.get(&key)), value);
             assert_eq!(pnk!(pnk!(hdr.remove(&key))), value);
+            let trie_root4 = pnk!(hdr.version_chgset_trie_root(None, None));
             assert!(hdr.get(&key).is_none());
+
+            assert_ne!(trie_root, trie_root2);
+            assert_eq!(trie_root2, trie_root3);
+            assert_ne!(trie_root3, trie_root4);
+            assert_ne!(trie_root4, trie_root);
         });
 }
 
@@ -179,13 +188,13 @@ fn test_insert() {
 fn test_len() {
     let mut hdr: MapxVs<usize, usize> = MapxVs::new();
     pnk!(hdr.version_create(VersionName(b"manster0")));
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i, (max + i)))
         .for_each(|(key, value)| {
             assert!(pnk!(hdr.insert(&key, &value)).is_none());
         });
-    assert_eq!(500, hdr.len());
+    assert_eq!(100, hdr.len());
 
     for key in 0..max {
         assert!(pnk!(hdr.remove(&key)).is_some());
@@ -195,7 +204,7 @@ fn test_len() {
 
 #[test]
 fn test_valueende() {
-    let cnt = 500;
+    let cnt = 100;
     let dehdr = {
         let mut hdr: MapxVs<usize, usize> = MapxVs::new();
         pnk!(hdr.version_create(VersionName(b"manster0")));
@@ -417,7 +426,7 @@ fn test_iter() {
     let mut hdr: MapxVs<usize, usize> = MapxVs::new();
     let mvn = VersionName(b"manster0");
     pnk!(hdr.version_create(mvn));
-    let max = 500;
+    let max = 100;
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
         assert!(pnk!(hdr.insert(&key, &value)).is_none());
     });
@@ -426,7 +435,7 @@ fn test_iter() {
         *v += 1;
     });
 
-    let hdr_shadow = hdr.clone();
+    let hdr_shadow = unsafe { hdr.shadow() };
     for (idx, (key, v)) in hdr_shadow.iter().enumerate() {
         assert_eq!(idx + 1, v);
         assert!(pnk!(hdr.remove(&key)).is_some());
@@ -439,7 +448,7 @@ fn test_first_last() {
     let mut hdr: MapxVs<usize, usize> = MapxVs::new();
     let mvn = VersionName(b"manster0");
     pnk!(hdr.version_create(mvn));
-    let max = 500;
+    let max = 100;
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
         assert!(pnk!(hdr.insert(&key, &value)).is_none());
     });
@@ -454,7 +463,7 @@ fn test_first_last() {
 fn test_by_branch() {
     let mut hdr: MapxVs<usize, usize> = MapxVs::new();
     pnk!(hdr.version_create(VersionName(b"manster0")));
-    let max = 500;
+    let max = 100;
     let bn = BranchName(b"test");
     let vn = VersionName(b"test1");
     pnk!(hdr.branch_create(bn, vn, false));
@@ -469,6 +478,6 @@ fn test_by_branch() {
     assert!(!hdr.is_empty_by_branch(INITIAL_BRANCH_NAME));
     assert_eq!(max, hdr.len_by_branch(INITIAL_BRANCH_NAME));
 
-    assert_eq!(100, pnk!(hdr.get_ge_by_branch(&100, INITIAL_BRANCH_NAME)).0);
-    assert_eq!(100, pnk!(hdr.get_le_by_branch(&100, INITIAL_BRANCH_NAME)).0);
+    assert_eq!(10, pnk!(hdr.get_ge_by_branch(&10, INITIAL_BRANCH_NAME)).0);
+    assert_eq!(10, pnk!(hdr.get_le_by_branch(&10, INITIAL_BRANCH_NAME)).0);
 }

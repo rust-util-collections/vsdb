@@ -19,7 +19,7 @@ use std::{
 const KEY_SIZE: usize = 2;
 
 /// A versioned map structure with two-level keys.
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(bound = "")]
 pub struct MapxDkVs<K1, K2, V> {
     inner: MapxRawMkVs,
@@ -110,10 +110,10 @@ where
     }
 
     #[inline(always)]
-    pub fn get_by_branch(&self, key: &(&K1, &K2), branch_name: BranchName) -> Option<V> {
+    pub fn get_by_branch(&self, key: &(&K1, &K2), br_name: BranchName) -> Option<V> {
         let key = Self::encode_key(key);
         self.inner
-            .get_by_branch(&keyref(&key), branch_name)
+            .get_by_branch(&keyref(&key), br_name)
             .map(|v| pnk!(ValueEnDe::decode(&v)))
     }
 
@@ -122,24 +122,19 @@ where
         &mut self,
         key: &(&K1, &K2),
         value: &V,
-        branch_name: BranchName,
+        br_name: BranchName,
     ) -> Result<Option<V>> {
         let key = Self::encode_key(key);
         self.inner
-            .insert_by_branch(&keyref(&key), &value.encode(), branch_name)
+            .insert_by_branch(&keyref(&key), &value.encode(), br_name)
             .c(d!())
             .map(|v| v.map(|v| pnk!(ValueEnDe::decode(&v))))
     }
 
     #[inline(always)]
-    pub fn contains_key_by_branch(
-        &self,
-        key: &(&K1, &K2),
-        branch_name: BranchName,
-    ) -> bool {
+    pub fn contains_key_by_branch(&self, key: &(&K1, &K2), br_name: BranchName) -> bool {
         let key = Self::encode_key(key);
-        self.inner
-            .contains_key_by_branch(&keyref(&key), branch_name)
+        self.inner.contains_key_by_branch(&keyref(&key), br_name)
     }
 
     /// Support batch removal.
@@ -147,7 +142,7 @@ where
     pub fn remove_by_branch(
         &mut self,
         key: &(&K1, Option<&K2>),
-        branch_name: BranchName,
+        br_name: BranchName,
     ) -> Result<Option<V>> {
         let k1 = key.0.encode();
         let k2 = key.1.map(|k2| k2.encode());
@@ -157,7 +152,7 @@ where
             vec![&k1[..]]
         };
         self.inner
-            .remove_by_branch(&key, branch_name)
+            .remove_by_branch(&key, br_name)
             .c(d!())
             .map(|v| v.map(|v| pnk!(ValueEnDe::decode(&v))))
     }
@@ -166,12 +161,12 @@ where
     pub fn get_by_branch_version(
         &self,
         key: &(&K1, &K2),
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> Option<V> {
         let key = Self::encode_key(key);
         self.inner
-            .get_by_branch_version(&keyref(&key), branch_name, version_name)
+            .get_by_branch_version(&keyref(&key), br_name, ver_name)
             .map(|v| pnk!(ValueEnDe::decode(&v)))
     }
 
@@ -179,15 +174,12 @@ where
     pub fn contains_key_by_branch_version(
         &self,
         key: &(&K1, &K2),
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
     ) -> bool {
         let key = Self::encode_key(key);
-        self.inner.contains_key_by_branch_version(
-            &keyref(&key),
-            branch_name,
-            version_name,
-        )
+        self.inner
+            .contains_key_by_branch_version(&keyref(&key), br_name, ver_name)
     }
 
     #[inline(always)]
@@ -215,7 +207,7 @@ where
         self.inner.iter_op(&mut cb).c(d!())
     }
 
-    pub fn iter_op_by_branch<F>(&self, branch_name: BranchName, op: &mut F) -> Result<()>
+    pub fn iter_op_by_branch<F>(&self, br_name: BranchName, op: &mut F) -> Result<()>
     where
         F: FnMut((K1, K2), V) -> Result<()>,
     {
@@ -229,13 +221,13 @@ where
             op((k1, k2), v).c(d!())
         };
 
-        self.inner.iter_op_by_branch(branch_name, &mut cb).c(d!())
+        self.inner.iter_op_by_branch(br_name, &mut cb).c(d!())
     }
 
     pub fn iter_op_by_branch_version<F>(
         &self,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
         op: &mut F,
     ) -> Result<()>
     where
@@ -252,7 +244,7 @@ where
         };
 
         self.inner
-            .iter_op_by_branch_version(branch_name, version_name, &mut cb)
+            .iter_op_by_branch_version(br_name, ver_name, &mut cb)
             .c(d!())
     }
 
@@ -277,7 +269,7 @@ where
 
     pub fn iter_op_with_key_prefix_by_branch<F>(
         &self,
-        branch_name: BranchName,
+        br_name: BranchName,
         op: &mut F,
         key_prefix: &K1,
     ) -> Result<()>
@@ -296,7 +288,7 @@ where
 
         self.inner
             .iter_op_with_key_prefix_by_branch(
-                branch_name,
+                br_name,
                 &mut cb,
                 &[&KeyEnDe::encode(key_prefix)[..]],
             )
@@ -306,8 +298,8 @@ where
     #[inline(always)]
     pub fn iter_op_with_key_prefix_by_branch_version<F>(
         &self,
-        branch_name: BranchName,
-        version_name: VersionName,
+        br_name: BranchName,
+        ver_name: VersionName,
         op: &mut F,
         key_prefix: &K1,
     ) -> Result<()>
@@ -326,8 +318,8 @@ where
 
         self.inner
             .iter_op_with_key_prefix_by_branch_version(
-                branch_name,
-                version_name,
+                br_name,
+                ver_name,
                 &mut cb,
                 &[&KeyEnDe::encode(key_prefix)[..]],
             )
@@ -364,7 +356,7 @@ where
     crate::impl_vs_methods!();
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(Debug)]
 pub struct ValueMut<'a, K1, K2, V>
 where
     K1: KeyEnDe,

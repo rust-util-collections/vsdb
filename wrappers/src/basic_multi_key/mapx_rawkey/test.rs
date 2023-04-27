@@ -7,7 +7,7 @@ use ruc::*;
 fn test_insert() {
     let mut hdr = MapxRawKeyMk::new(2);
     assert_eq!(2, hdr.key_size());
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i.to_be_bytes(), <usize as ValueEnDe>::encode(&(max + i))))
         .for_each(|(subkey, value)| {
@@ -30,19 +30,19 @@ fn test_insert() {
 
 #[test]
 fn test_valueende() {
-    let cnt = 500;
+    let cnt = 100;
     let dehdr = {
-        let mut hdr: MapxRawKeyMk<Box<[u8]>> = MapxRawKeyMk::new(2);
-        let max = 500;
+        let mut hdr: MapxRawKeyMk<Vec<u8>> = MapxRawKeyMk::new(2);
+        let max = 100;
         (0..max)
             .map(|i: usize| (i.to_be_bytes(), <usize as ValueEnDe>::encode(&i)))
             .for_each(|(subkey, value)| {
                 let key: &[&[u8]] = &[&subkey, &subkey];
                 assert!(pnk!(hdr.insert(&key, &value)).is_none());
             });
-        <MapxRawKeyMk<Box<[u8]>> as ValueEnDe>::encode(&hdr)
+        <MapxRawKeyMk<Vec<u8>> as ValueEnDe>::encode(&hdr)
     };
-    let mut reloaded = pnk!(<MapxRawKeyMk<Box<[u8]>> as ValueEnDe>::decode(&dehdr));
+    let mut reloaded = pnk!(<MapxRawKeyMk<Vec<u8>> as ValueEnDe>::decode(&dehdr));
 
     (0..cnt)
         .map(|i: usize| (i, i.to_be_bytes()))

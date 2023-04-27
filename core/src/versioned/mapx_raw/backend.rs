@@ -2,42 +2,165 @@
 //! Core logic of the version managements.
 //!
 
+#![allow(unused_variables)]
+
 use crate::{
     basic::mapx_raw::{MapxRaw, MapxRawIter},
     common::{
-        BranchID, BranchIDBase, BranchName, BranchNameOwned, RawKey, RawValue,
-        VersionID, VersionIDBase, VersionName, VersionNameOwned, INITIAL_BRANCH_ID,
-        INITIAL_BRANCH_NAME, NULL, RESERVED_VERSION_NUM_DEFAULT, VSDB,
+        utils::hash::trie_root, BranchID, BranchIDBase, BranchName, BranchNameOwned,
+        RawKey, RawValue, VersionID, VersionIDBase, VersionName, VersionNameOwned,
+        INITIAL_BRANCH_ID, INITIAL_BRANCH_NAME, NULL, NULL_ID,
+        RESERVED_VERSION_NUM_DEFAULT, TRASH_CLEANER, VSDB,
     },
 };
+use parking_lot::RwLock;
 use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{
-    borrow::Cow, cmp::Ordering, collections::HashSet, mem::size_of, ops::RangeBounds,
+    borrow::Cow,
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    mem::size_of,
+    ops::{Bound, RangeBounds},
+    result::Result as StdResult,
+    sync::Arc,
 };
 
 ////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug)]
 pub(super) struct MapxRawVs {
     default_branch: BranchID,
 
-    branch_name_to_branch_id: MapxRaw, // MapxOrdRawKey<BranchID>,
-    version_name_to_version_id: MapxRaw, // MapxOrdRawKey<VersionID>,
-
-    branch_id_to_branch_name: MapxRaw, // MapxOrdRawValue<BranchID>,
-    version_id_to_version_name: MapxRaw, // MapxOrdRawValue<VersionID>,
+    br_name_to_br_id: MapxRaw,   // MapxOrdRawKey<BranchID>,
+    ver_name_to_ver_id: MapxRaw, // MapxOrdRawKey<VersionID>,
 
     // versions on this branch,
     // created dirctly by it or inherited from its ancestors
-    branch_to_its_versions: MapxRaw, // MapxOrd<BranchID, MapxOrd<VersionID, ()>>,
+    br_to_its_vers: MapxRaw, // MapxOrd<BranchID, MapxOrd<VersionID, ()>>,
 
-    // globally ever changed keys(no value is stored here!) within each version
-    version_to_change_set: MapxRaw, // MapxOrd<VersionID, MapxRaw>,
+    // - 'empty value'(&[] ...) means 'not exist'
+    // - 'key -> multi-version(globally unique) -> multi-value'
+    layered_kv: MapxRaw, // <RawKey, MapxRaw<VersionID, RawValue>>,
 
-    // key -> multi-version(globally unique) -> multi-value
-    layered_kv: MapxRaw, // MapxOrdRawKey<MapxOrd<VersionID, Option<RawValue>>>,
+    // derived from `br_name_to_br_id` during starting
+    br_id_to_br_name: Arc<RwLock<HashMap<BranchID, RawValue>>>,
+
+    // derived from `ver_name_to_ver_id` during starting
+    ver_id_to_ver_name: Arc<RwLock<HashMap<VersionID, RawValue>>>,
+
+    // Globally ever changed keys within each version
+    // derived from `layered_kv` during the starting process.
+    ver_to_change_set: Arc<RwLock<BTreeMap<VersionID, BTreeSet<RawKey>>>>,
+}
+
+// !^~^! 撸猫 !^~^!
+unsafe impl Send for MapxRawVs {}
+unsafe impl Sync for MapxRawVs {}
+
+impl Clone for MapxRawVs {
+    fn clone(&self) -> Self {
+        Self {
+            default_branch: self.default_branch,
+            br_name_to_br_id: self.br_name_to_br_id.clone(),
+            ver_name_to_ver_id: self.ver_name_to_ver_id.clone(),
+            br_to_its_vers: self.br_to_its_vers.clone(),
+            layered_kv: self.layered_kv.clone(),
+            br_id_to_br_name: Arc::new(RwLock::new(
+                self.br_id_to_br_name.read().clone(),
+            )),
+            ver_id_to_ver_name: Arc::new(RwLock::new(
+                self.ver_id_to_ver_name.read().clone(),
+            )),
+            ver_to_change_set: Arc::new(RwLock::new(
+                self.ver_to_change_set.read().clone(),
+            )),
+        }
+    }
+}
+
+impl Serialize for MapxRawVs {
+    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        MapxRawVsWithoutDerivedFields::from(self).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for MapxRawVs {
+    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        <MapxRawVsWithoutDerivedFields as Deserialize>::deserialize(deserializer)
+            .map(Self::from)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) struct MapxRawVsWithoutDerivedFields {
+    default_branch: BranchID,
+
+    br_name_to_br_id: MapxRaw,   // MapxOrdRawKey<BranchID>,
+    ver_name_to_ver_id: MapxRaw, // MapxOrdRawKey<VersionID>,
+
+    // versions on this branch,
+    // created dirctly by it or inherited from its ancestors
+    br_to_its_vers: MapxRaw, // MapxOrd<BranchID, MapxOrd<VersionID, ()>>,
+
+    layered_kv: MapxRaw, // <RawKey, MapxRaw<VersionID, RawValue>>
+}
+
+impl From<MapxRawVsWithoutDerivedFields> for MapxRawVs {
+    fn from(m: MapxRawVsWithoutDerivedFields) -> Self {
+        let br_id_to_br_name = m
+            .br_name_to_br_id
+            .iter()
+            .map(|(n, id)| (to_brid(&id), n))
+            .collect::<HashMap<_, _>>();
+        let ver_id_to_ver_name = m
+            .ver_name_to_ver_id
+            .iter()
+            .map(|(n, id)| (to_verid(&id), n))
+            .collect::<HashMap<_, _>>();
+        let ver_to_change_set =
+            m.layered_kv
+                .iter()
+                .fold(BTreeMap::new(), |mut acc, (k, vers)| {
+                    for (ver, _) in decode_map(vers).iter() {
+                        acc.entry(to_verid(&ver))
+                            .or_insert_with(BTreeSet::new)
+                            .insert(k.clone());
+                    }
+                    acc
+                });
+        Self {
+            default_branch: m.default_branch,
+            br_name_to_br_id: m.br_name_to_br_id,
+            ver_name_to_ver_id: m.ver_name_to_ver_id,
+            br_to_its_vers: m.br_to_its_vers,
+            layered_kv: m.layered_kv,
+            br_id_to_br_name: Arc::new(RwLock::new(br_id_to_br_name)),
+            ver_id_to_ver_name: Arc::new(RwLock::new(ver_id_to_ver_name)),
+            ver_to_change_set: Arc::new(RwLock::new(ver_to_change_set)),
+        }
+    }
+}
+
+impl From<&MapxRawVs> for MapxRawVsWithoutDerivedFields {
+    fn from(m: &MapxRawVs) -> Self {
+        unsafe {
+            Self {
+                default_branch: m.default_branch,
+                br_name_to_br_id: m.br_name_to_br_id.shadow(),
+                ver_name_to_ver_id: m.ver_name_to_ver_id.shadow(),
+                br_to_its_vers: m.br_to_its_vers.shadow(),
+                layered_kv: m.layered_kv.shadow(),
+            }
+        }
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
@@ -48,13 +171,13 @@ impl MapxRawVs {
     pub(super) unsafe fn shadow(&self) -> Self {
         Self {
             default_branch: self.default_branch,
-            branch_name_to_branch_id: self.branch_name_to_branch_id.shadow(),
-            version_name_to_version_id: self.version_name_to_version_id.shadow(),
-            branch_id_to_branch_name: self.branch_id_to_branch_name.shadow(),
-            version_id_to_version_name: self.version_id_to_version_name.shadow(),
-            branch_to_its_versions: self.branch_to_its_versions.shadow(),
-            version_to_change_set: self.version_to_change_set.shadow(),
+            br_name_to_br_id: self.br_name_to_br_id.shadow(),
+            ver_name_to_ver_id: self.ver_name_to_ver_id.shadow(),
+            br_to_its_vers: self.br_to_its_vers.shadow(),
             layered_kv: self.layered_kv.shadow(),
+            br_id_to_br_name: Arc::clone(&self.br_id_to_br_name),
+            ver_id_to_ver_name: Arc::clone(&self.ver_id_to_ver_name),
+            ver_to_change_set: Arc::clone(&self.ver_to_change_set),
         }
     }
 
@@ -62,14 +185,17 @@ impl MapxRawVs {
     pub(super) fn new() -> Self {
         let mut ret = Self {
             default_branch: BranchID::default(),
-            branch_name_to_branch_id: MapxRaw::new(),
-            version_name_to_version_id: MapxRaw::new(),
-            branch_id_to_branch_name: MapxRaw::new(),
-            version_id_to_version_name: MapxRaw::new(),
-            branch_to_its_versions: MapxRaw::new(),
-            version_to_change_set: MapxRaw::new(),
+
+            br_name_to_br_id: MapxRaw::new(),
+            ver_name_to_ver_id: MapxRaw::new(),
+            br_to_its_vers: MapxRaw::new(),
             layered_kv: MapxRaw::new(),
+
+            br_id_to_br_name: Arc::new(RwLock::new(Default::default())),
+            ver_id_to_ver_name: Arc::new(RwLock::new(Default::default())),
+            ver_to_change_set: Arc::new(RwLock::new(Default::default())),
         };
+
         ret.init();
         ret
     }
@@ -77,13 +203,15 @@ impl MapxRawVs {
     #[inline(always)]
     fn init(&mut self) {
         let initial_brid = INITIAL_BRANCH_ID.to_be_bytes();
+
         self.default_branch = initial_brid;
-        self.branch_name_to_branch_id
+        self.br_name_to_br_id
             .insert(INITIAL_BRANCH_NAME.0, &initial_brid[..]);
-        self.branch_id_to_branch_name
-            .insert(&initial_brid[..], INITIAL_BRANCH_NAME.0);
-        self.branch_to_its_versions
+        self.br_to_its_vers
             .insert(&initial_brid[..], encode_map(&MapxRaw::new()));
+        self.br_id_to_br_name
+            .write()
+            .insert(initial_brid, INITIAL_BRANCH_NAME.0.to_vec());
     }
 
     #[inline(always)]
@@ -101,18 +229,18 @@ impl MapxRawVs {
         &mut self,
         key: &[u8],
         value: &[u8],
-        branch_id: BranchID,
+        br_id: BranchID,
     ) -> Result<Option<RawValue>> {
         decode_map(
             &self
-                .branch_to_its_versions
-                .get(&branch_id[..])
+                .br_to_its_vers
+                .get(&br_id[..])
                 .c(d!("branch not found"))?,
         )
         .last()
         .c(d!("no version on this branch, create a version first"))
-        .and_then(|(version_id, _)| {
-            self.insert_by_branch_version(key, value, branch_id, to_verid(&version_id))
+        .and_then(|(ver_id, _)| {
+            self.insert_by_branch_version(key, value, br_id, to_verid(&ver_id))
                 .c(d!())
         })
     }
@@ -126,10 +254,10 @@ impl MapxRawVs {
         &mut self,
         key: &[u8],
         value: &[u8],
-        branch_id: BranchID,
-        version_id: VersionID,
+        br_id: BranchID,
+        ver_id: VersionID,
     ) -> Result<Option<RawValue>> {
-        self.write_by_branch_version(key, Some(value), branch_id, version_id)
+        self.write_by_branch_version(key, Some(value), br_id, ver_id)
             .c(d!())
     }
 
@@ -143,20 +271,15 @@ impl MapxRawVs {
     pub(super) fn remove_by_branch(
         &mut self,
         key: &[u8],
-        branch_id: BranchID,
+        br_id: BranchID,
     ) -> Result<Option<RawValue>> {
-        decode_map(
-            &self
-                .branch_to_its_versions
-                .get(&branch_id)
-                .c(d!("branch not found"))?,
-        )
-        .last()
-        .c(d!("no version on this branch, create a version first"))
-        .and_then(|(version_id, _)| {
-            self.remove_by_branch_version(key, branch_id, to_verid(&version_id))
-                .c(d!())
-        })
+        decode_map(&self.br_to_its_vers.get(&br_id).c(d!("branch not found"))?)
+            .last()
+            .c(d!("no version on this branch, create a version first"))
+            .and_then(|(ver_id, _)| {
+                self.remove_by_branch_version(key, br_id, to_verid(&ver_id))
+                    .c(d!())
+            })
     }
 
     // This function should **NOT** be public,
@@ -168,10 +291,10 @@ impl MapxRawVs {
     fn remove_by_branch_version(
         &mut self,
         key: &[u8],
-        branch_id: BranchID,
-        version_id: VersionID,
+        br_id: BranchID,
+        ver_id: VersionID,
     ) -> Result<Option<RawValue>> {
-        self.write_by_branch_version(key, None, branch_id, version_id)
+        self.write_by_branch_version(key, None, br_id, ver_id)
             .c(d!())
     }
 
@@ -183,19 +306,18 @@ impl MapxRawVs {
         &mut self,
         key: &[u8],
         value: Option<&[u8]>,
-        branch_id: BranchID,
-        version_id: VersionID,
+        br_id: BranchID,
+        ver_id: VersionID,
     ) -> Result<Option<RawValue>> {
-        let ret = self.get_by_branch_version(key, branch_id, version_id);
+        // clone it, keep a copy of the original unchanged value.
+        let ret = self.get_by_branch_version(key, br_id, ver_id);
 
         // remove a non-existing value
         if value.is_none() && ret.is_none() {
             return Ok(None);
         }
 
-        // NOTE: the value needs not to be stored here
-        decode_map(&*self.version_to_change_set.get_mut(&version_id).c(d!())?)
-            .insert(key, &[]);
+        let value = value.unwrap_or(NULL);
 
         decode_map(
             &*self
@@ -203,7 +325,13 @@ impl MapxRawVs {
                 .entry(key)
                 .or_insert(encode_map(&MapxRaw::new())),
         )
-        .insert(&version_id[..], value.unwrap_or_default());
+        .insert(ver_id, value);
+
+        self.ver_to_change_set
+            .write()
+            .get_mut(&ver_id)
+            .c(d!())?
+            .insert(key.to_vec());
 
         Ok(ret)
     }
@@ -214,18 +342,10 @@ impl MapxRawVs {
     }
 
     #[inline(always)]
-    pub(super) fn get_by_branch(
-        &self,
-        key: &[u8],
-        branch_id: BranchID,
-    ) -> Option<RawValue> {
-        if let Some(vers) = self.branch_to_its_versions.get(&branch_id) {
-            if let Some(version_id) = decode_map(&vers).last().map(|(id, _)| id) {
-                return self.get_by_branch_version(
-                    key,
-                    branch_id,
-                    to_verid(&version_id),
-                );
+    pub(super) fn get_by_branch(&self, key: &[u8], br_id: BranchID) -> Option<RawValue> {
+        if let Some(vers) = self.br_to_its_vers.get(&br_id) {
+            if let Some(ver_id) = decode_map(&vers).last().map(|(id, _)| id) {
+                return self.get_by_branch_version(key, br_id, to_verid(&ver_id));
             }
         }
         None
@@ -235,13 +355,13 @@ impl MapxRawVs {
     pub(super) fn get_by_branch_version(
         &self,
         key: &[u8],
-        branch_id: BranchID,
-        version_id: VersionID,
+        br_id: BranchID,
+        ver_id: VersionID,
     ) -> Option<RawValue> {
-        let vers = decode_map(&self.branch_to_its_versions.get(&branch_id)?);
+        let vers = decode_map(&self.br_to_its_vers.get(&br_id)?);
 
-        decode_map(&self.layered_kv.get(key)?)
-            .range(..=Cow::Borrowed(&version_id[..]))
+        decode_map(self.layered_kv.get(key)?)
+            .range(..=Cow::Borrowed(&ver_id[..]))
             .rev()
             .find(|(ver, _)| vers.contains_key(ver))
             .and_then(|(_, value)| alt!(value.is_empty(), None, Some(value)))
@@ -256,19 +376,19 @@ impl MapxRawVs {
     pub(super) fn get_ge_by_branch(
         &self,
         key: &[u8],
-        branch_id: BranchID,
+        br_id: BranchID,
     ) -> Option<(RawKey, RawValue)> {
-        self.range_by_branch(branch_id, Cow::Borrowed(key)..).next()
+        self.range_by_branch(br_id, Cow::Borrowed(key)..).next()
     }
 
     #[inline(always)]
     pub(super) fn get_ge_by_branch_version(
         &self,
         key: &[u8],
-        branch_id: BranchID,
-        version_id: VersionID,
+        br_id: BranchID,
+        ver_id: VersionID,
     ) -> Option<(RawKey, RawValue)> {
-        self.range_by_branch_version(branch_id, version_id, Cow::Borrowed(key)..)
+        self.range_by_branch_version(br_id, ver_id, Cow::Borrowed(key)..)
             .next()
     }
 
@@ -281,9 +401,9 @@ impl MapxRawVs {
     pub(super) fn get_le_by_branch(
         &self,
         key: &[u8],
-        branch_id: BranchID,
+        br_id: BranchID,
     ) -> Option<(RawKey, RawValue)> {
-        self.range_by_branch(branch_id, ..=Cow::Borrowed(key))
+        self.range_by_branch(br_id, ..=Cow::Borrowed(key))
             .next_back()
     }
 
@@ -291,10 +411,10 @@ impl MapxRawVs {
     pub(super) fn get_le_by_branch_version(
         &self,
         key: &[u8],
-        branch_id: BranchID,
-        version_id: VersionID,
+        br_id: BranchID,
+        ver_id: VersionID,
     ) -> Option<(RawKey, RawValue)> {
-        self.range_by_branch_version(branch_id, version_id, ..=Cow::Borrowed(key))
+        self.range_by_branch_version(br_id, ver_id, ..=Cow::Borrowed(key))
             .next_back()
     }
 
@@ -304,33 +424,32 @@ impl MapxRawVs {
     }
 
     #[inline(always)]
-    pub(super) fn iter_by_branch(&self, branch_id: BranchID) -> MapxRawVsIter {
-        if let Some(vers) = self.branch_to_its_versions.get(&branch_id) {
-            if let Some((version_id, _)) = decode_map(&vers).last() {
-                return self
-                    .iter_by_branch_version(to_brid(&branch_id), to_verid(&version_id));
+    pub(super) fn iter_by_branch(&self, br_id: BranchID) -> MapxRawVsIter {
+        if let Some(vers) = self.br_to_its_vers.get(&br_id) {
+            if let Some((ver_id, _)) = decode_map(&vers).last() {
+                return self.iter_by_branch_version(to_brid(&br_id), to_verid(&ver_id));
             }
         }
 
         MapxRawVsIter {
             hdr: self,
-            iter: self.layered_kv.iter(),
-            branch_id: NULL,
-            version_id: NULL,
+            iter: self.layered_kv.range(..),
+            br_id: NULL_ID,
+            ver_id: NULL_ID,
         }
     }
 
     #[inline(always)]
     pub(super) fn iter_by_branch_version(
         &self,
-        branch_id: BranchID,
-        version_id: VersionID,
+        br_id: BranchID,
+        ver_id: VersionID,
     ) -> MapxRawVsIter {
         MapxRawVsIter {
             hdr: self,
-            iter: self.layered_kv.iter(),
-            branch_id,
-            version_id,
+            iter: self.layered_kv.range(..),
+            br_id,
+            ver_id,
         }
     }
 
@@ -345,40 +464,48 @@ impl MapxRawVs {
     #[inline(always)]
     pub(super) fn range_by_branch<'a, R: RangeBounds<Cow<'a, [u8]>>>(
         &'a self,
-        branch_id: BranchID,
+        br_id: BranchID,
         bounds: R,
     ) -> MapxRawVsIter<'a> {
-        if let Some(vers) = self.branch_to_its_versions.get(&branch_id) {
-            if let Some((version_id, _)) = decode_map(&vers).last() {
-                return self.range_by_branch_version(
-                    branch_id,
-                    to_verid(&version_id),
-                    bounds,
-                );
+        if let Some(vers) = self.br_to_its_vers.get(&br_id) {
+            if let Some((ver_id, _)) = decode_map(&vers).last() {
+                return self.range_by_branch_version(br_id, to_verid(&ver_id), bounds);
             }
         }
 
         // An empty `Iter`
         MapxRawVsIter {
             hdr: self,
-            iter: self.layered_kv.iter(),
-            branch_id,
-            version_id: NULL,
+            iter: self.layered_kv.range(..),
+            br_id,
+            ver_id: NULL_ID,
         }
     }
 
     #[inline(always)]
     pub(super) fn range_by_branch_version<'a, R: RangeBounds<Cow<'a, [u8]>>>(
         &'a self,
-        branch_id: BranchID,
-        version_id: VersionID,
+        br_id: BranchID,
+        ver_id: VersionID,
         bounds: R,
     ) -> MapxRawVsIter<'a> {
+        let l = match bounds.start_bound() {
+            Bound::Included(v) => Bound::Included(Cow::Owned(v.to_vec())),
+            Bound::Excluded(v) => Bound::Excluded(Cow::Owned(v.to_vec())),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+
+        let h = match bounds.end_bound() {
+            Bound::Included(v) => Bound::Included(Cow::Owned(v.to_vec())),
+            Bound::Excluded(v) => Bound::Excluded(Cow::Owned(v.to_vec())),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+
         MapxRawVsIter {
             hdr: self,
-            iter: self.layered_kv.range(bounds),
-            branch_id,
-            version_id,
+            iter: self.layered_kv.range((l, h)),
+            br_id,
+            ver_id,
         }
     }
 
@@ -390,91 +517,93 @@ impl MapxRawVs {
 
     // NOTE: just a stupid O(n) counter, very slow!
     #[inline(always)]
-    pub(super) fn len_by_branch(&self, branch_id: BranchID) -> usize {
-        self.iter_by_branch(branch_id).count()
+    pub(super) fn len_by_branch(&self, br_id: BranchID) -> usize {
+        self.iter_by_branch(br_id).count()
     }
 
     // NOTE: just a stupid O(n) counter, very slow!
     #[inline(always)]
     pub(super) fn len_by_branch_version(
         &self,
-        branch_id: BranchID,
-        version_id: VersionID,
+        br_id: BranchID,
+        ver_id: VersionID,
     ) -> usize {
-        self.iter_by_branch_version(branch_id, version_id).count()
+        self.iter_by_branch_version(br_id, ver_id).count()
     }
 
     // Clear all data, for testing purpose.
     #[inline(always)]
     pub(super) fn clear(&mut self) {
-        self.branch_name_to_branch_id.clear();
-        self.version_name_to_version_id.clear();
-        self.branch_id_to_branch_name.clear();
-        self.version_id_to_version_name.clear();
-        self.branch_to_its_versions.clear();
-        self.version_to_change_set.clear();
+        self.br_name_to_br_id.clear();
+        self.ver_name_to_ver_id.clear();
+        self.br_to_its_vers.clear();
         self.layered_kv.clear();
+
+        self.br_id_to_br_name.write().clear();
+        self.ver_id_to_ver_name.write().clear();
+        self.ver_to_change_set.write().clear();
 
         self.init();
     }
 
     #[inline(always)]
-    pub(super) fn version_create(&mut self, version_name: &[u8]) -> Result<()> {
-        self.version_create_by_branch(version_name, self.branch_get_default())
+    pub(super) fn version_create(&mut self, ver_name: &[u8]) -> Result<()> {
+        self.version_create_by_branch(ver_name, self.branch_get_default())
             .c(d!())
     }
 
     pub(super) fn version_create_by_branch(
         &mut self,
-        version_name: &[u8],
-        branch_id: BranchID,
+        ver_name: &[u8],
+        br_id: BranchID,
     ) -> Result<()> {
-        if self.version_name_to_version_id.get(version_name).is_some() {
+        if self.ver_name_to_ver_id.get(ver_name).is_some() {
             return Err(eg!("version already exists"));
         }
 
         let mut vers = decode_map(
             &*self
-                .branch_to_its_versions
-                .get_mut(&branch_id)
+                .br_to_its_vers
+                .get_mut(&br_id)
                 .c(d!("branch not found"))?,
         );
 
-        let version_id = VSDB.alloc_version_id().to_be_bytes();
-        vers.insert(&version_id, &[]);
+        let ver_id = VSDB.alloc_ver_id().to_be_bytes();
+        vers.insert(&ver_id, &[]);
 
-        self.version_name_to_version_id
-            .insert(version_name, &version_id);
-        self.version_id_to_version_name
-            .insert(&version_id, version_name);
-        self.version_to_change_set
-            .insert(&version_id, encode_map(&MapxRaw::new()));
+        self.ver_name_to_ver_id.insert(ver_name, &ver_id);
+        self.ver_id_to_ver_name
+            .write()
+            .insert(ver_id, ver_name.to_vec());
+        self.ver_to_change_set
+            .write()
+            .insert(ver_id, BTreeSet::new());
 
         Ok(())
     }
 
     // Check if a verison exists on the default branch
     #[inline(always)]
-    pub(super) fn version_exists(&self, version_id: BranchID) -> bool {
-        self.version_exists_on_branch(version_id, self.branch_get_default())
+    pub(super) fn version_exists(&self, ver_id: BranchID) -> bool {
+        self.version_exists_on_branch(ver_id, self.branch_get_default())
     }
 
     // Check if a verison exists in the global scope
     #[inline(always)]
-    pub(super) fn version_exists_globally(&self, version_id: BranchID) -> bool {
-        self.version_to_change_set.contains_key(&version_id)
+    pub(super) fn version_exists_globally(&self, ver_id: BranchID) -> bool {
+        self.ver_to_change_set.read().contains_key(&ver_id)
     }
 
     // Check if a version exists on a specified branch
     #[inline(always)]
     pub(super) fn version_exists_on_branch(
         &self,
-        version_id: VersionID,
-        branch_id: BranchID,
+        ver_id: VersionID,
+        br_id: BranchID,
     ) -> bool {
-        self.branch_to_its_versions
-            .get(&branch_id)
-            .map(|vers| decode_map(&vers).contains_key(&version_id))
+        self.br_to_its_vers
+            .get(&br_id)
+            .map(|vers| decode_map(&vers).contains_key(&ver_id))
             .unwrap_or(false)
     }
 
@@ -495,16 +624,12 @@ impl MapxRawVs {
     // while operations on branches and versions are limited to their own perspective,
     // and should not do any tracing.
     #[inline(always)]
-    pub(super) fn version_pop_by_branch(&mut self, branch_id: BranchID) -> Result<()> {
-        let mut vers = decode_map(
-            &self
-                .branch_to_its_versions
-                .get(&branch_id)
-                .c(d!("branch not found"))?,
-        );
+    pub(super) fn version_pop_by_branch(&mut self, br_id: BranchID) -> Result<()> {
+        let mut vers =
+            decode_map(&self.br_to_its_vers.get(&br_id).c(d!("branch not found"))?);
 
-        if let Some((version_id, _)) = vers.last() {
-            vers.remove(&version_id)
+        if let Some((ver_id, _)) = vers.last() {
+            vers.remove(&ver_id)
                 .c(d!("BUG: version is not on this branch"))?;
         }
 
@@ -514,7 +639,7 @@ impl MapxRawVs {
     // # Safety
     //
     // It's the caller's duty to ensure that
-    // the `base_version` was created directly by the `branch_id`,
+    // the `base_version` was created directly by the `br_id`,
     // or the data records of other branches may be corrupted.
     #[inline(always)]
     pub(super) unsafe fn version_rebase(
@@ -528,19 +653,15 @@ impl MapxRawVs {
     // # Safety
     //
     // It's the caller's duty to ensure that
-    // the `base_version` was created directly by the `branch_id`,
+    // the `base_version` was created directly by the `br_id`,
     // or the data records of other branches may be corrupted.
     pub(super) unsafe fn version_rebase_by_branch(
         &mut self,
         base_version: VersionID,
-        branch_id: BranchID,
+        br_id: BranchID,
     ) -> Result<()> {
-        let mut vers_hdr = decode_map(
-            &self
-                .branch_to_its_versions
-                .get(&branch_id)
-                .c(d!("branch not found"))?,
-        );
+        let mut vers_hdr =
+            decode_map(&self.br_to_its_vers.get(&br_id).c(d!("branch not found"))?);
         let mut vers = vers_hdr
             .range(Cow::Borrowed(&base_version[..])..)
             .map(|(ver, _)| ver);
@@ -553,30 +674,39 @@ impl MapxRawVs {
             return Err(eg!("base version is not on this branch"));
         };
 
-        let mut base_ver_chg_set =
-            decode_map(&self.version_to_change_set.get(&base_version).c(d!())?);
         let vers_to_be_merged = vers.collect::<Vec<_>>();
 
+        let mut new_kvchgset_for_base_ver = HashMap::new();
+        let mut ver_hdr = self.ver_id_to_ver_name.write();
+
         for verid in vers_to_be_merged.iter() {
+            let verid = to_verid(verid);
             // we do not call `clear()` on the discarded instance for performance reason.
-            let chgset = decode_map(&self.version_to_change_set.remove(verid).c(d!())?);
-            for (k, _) in chgset.iter() {
-                base_ver_chg_set.insert(&k, &[]);
-                self.layered_kv.get(&k).c(d!()).and_then(|hdr| {
-                    let mut hdr = decode_map(&hdr);
-                    hdr.remove(verid)
-                        .c(d!())
-                        .map(|v| hdr.insert(&base_version, &v))
-                })?;
+            let mut chgset_hdr = self.ver_to_change_set.write();
+            let chgset = chgset_hdr.remove(&verid).c(d!())?;
+            for k in chgset.iter() {
+                let mut kvers = decode_map(&*self.layered_kv.get_mut(&k).c(d!())?);
+                let v = kvers.remove(verid).c(d!())?;
+                new_kvchgset_for_base_ver.insert(k.clone(), (kvers, v));
             }
 
-            self.version_id_to_version_name
-                .remove(verid)
+            ver_hdr
+                .remove(&verid)
                 .c(d!())
-                .and_then(|vername| {
-                    self.version_name_to_version_id.remove(&vername).c(d!())
-                })
-                .and_then(|_| vers_hdr.remove(verid).c(d!()))?;
+                .and_then(|vername| self.ver_name_to_ver_id.remove(&vername).c(d!()))
+                .and_then(|_| vers_hdr.remove(&verid).c(d!()))?;
+        }
+
+        // avoid dup-middle 'insert's
+        {
+            let mut base_ver_chgset = self.ver_to_change_set.write();
+            let base_ver_chgset = base_ver_chgset.get_mut(&base_version).c(d!())?;
+            new_kvchgset_for_base_ver
+                .into_iter()
+                .for_each(|(k, (mut kvers, v))| {
+                    base_ver_chgset.insert(k);
+                    kvers.insert(base_version, v);
+                });
         }
 
         Ok(())
@@ -585,10 +715,10 @@ impl MapxRawVs {
     #[inline(always)]
     pub(super) fn version_get_id_by_name(
         &self,
-        version_name: VersionName,
+        ver_name: VersionName,
     ) -> Option<VersionID> {
-        self.version_name_to_version_id
-            .get(version_name.0)
+        self.ver_name_to_ver_id
+            .get(ver_name.0)
             .map(|bytes| to_verid(&bytes))
     }
 
@@ -600,37 +730,42 @@ impl MapxRawVs {
     #[inline(always)]
     pub(super) fn version_list_by_branch(
         &self,
-        branch_id: BranchID,
+        br_id: BranchID,
     ) -> Result<Vec<VersionNameOwned>> {
-        self.branch_to_its_versions
-            .get(&branch_id)
-            .c(d!())
-            .map(|vers| {
-                decode_map(&vers)
-                    .iter()
-                    .map(|(ver, _)| {
-                        self.version_id_to_version_name.get(&ver).unwrap().to_vec()
-                    })
-                    .map(VersionNameOwned)
-                    .collect()
-            })
+        self.br_to_its_vers.get(&br_id).c(d!()).map(|vers| {
+            let ver_hdr = self.ver_id_to_ver_name.read();
+            decode_map(&vers)
+                .iter()
+                .map(|(ver, _)| ver_hdr.get(&to_verid(&ver)).unwrap().to_vec())
+                .map(VersionNameOwned)
+                .collect()
+        })
     }
 
     #[inline(always)]
     pub(super) fn version_list_globally(&self) -> Vec<VersionNameOwned> {
-        self.version_to_change_set
+        let ver_hdr = self.ver_id_to_ver_name.read();
+        self.ver_to_change_set
+            .read()
             .iter()
-            .map(|(ver, _)| self.version_id_to_version_name.get(&ver).unwrap().to_vec())
+            .map(|(ver, _)| ver_hdr.get(ver).unwrap().to_vec())
             .map(VersionNameOwned)
             .collect()
     }
 
     #[inline(always)]
-    pub(super) fn version_has_change_set(&self, version_id: VersionID) -> Result<bool> {
-        self.version_to_change_set
-            .get(&version_id)
+    pub(super) fn version_has_change_set(&self, ver_id: VersionID) -> Result<bool> {
+        self.ver_to_change_set
+            .read()
+            .get(&ver_id)
             .c(d!())
             .map(|chgset| !chgset.is_empty())
+    }
+
+    // Now, this is an 'alias' of `prune`.
+    #[inline(always)]
+    pub(super) fn version_clean_up_globally(&mut self) -> Result<()> {
+        self.prune(Some(10000)).c(d!())
     }
 
     // # Safety
@@ -638,66 +773,75 @@ impl MapxRawVs {
     // Version itself and its corresponding changes will be completely purged from all branches
     pub(super) unsafe fn version_revert_globally(
         &mut self,
-        version_id: VersionID,
+        ver_id: VersionID,
     ) -> Result<()> {
-        let chgset = self.version_to_change_set.remove(&version_id).c(d!())?;
-        for (key, _) in decode_map(&chgset).iter() {
-            decode_map(&self.layered_kv.get(&key).c(d!())?)
-                .remove(&version_id)
+        let mut ver_hdr = self.ver_id_to_ver_name.write();
+
+        for key in self
+            .ver_to_change_set
+            .write()
+            .remove(&ver_id)
+            .c(d!())?
+            .iter()
+        {
+            decode_map(&*self.layered_kv.get_mut(&key).c(d!())?)
+                .remove(&ver_id)
                 .c(d!())?;
         }
 
-        self.branch_to_its_versions.iter().for_each(|(_, vers)| {
-            decode_map(&vers).remove(&version_id);
+        self.br_to_its_vers.iter().for_each(|(_, vers)| {
+            decode_map(&vers).remove(&ver_id);
         });
 
-        self.version_id_to_version_name
-            .remove(&version_id)
+        ver_hdr
+            .remove(&ver_id)
             .c(d!())
-            .and_then(|vername| self.version_name_to_version_id.remove(&vername).c(d!()))
+            .and_then(|vername| self.ver_name_to_ver_id.remove(&vername).c(d!()))
             .map(|_| ())
     }
 
-    // clean up all orphaned versions in the global scope
-    pub(super) fn version_clean_up_globally(&mut self) -> Result<()> {
-        let mut valid_vers = HashSet::new();
-        self.branch_to_its_versions.iter().for_each(|(_, vers)| {
-            decode_map(&vers).iter().for_each(|(ver, _)| {
-                valid_vers.insert(ver);
-            })
-        });
+    pub(super) fn version_chgset_trie_root(
+        &self,
+        br_id: Option<BranchID>,
+        ver_id: Option<VersionID>,
+    ) -> Result<Vec<u8>> {
+        let ver = if let Some(v) = ver_id {
+            v
+        } else {
+            let br = br_id.unwrap_or_else(|| self.branch_get_default());
+            let v = decode_map(self.br_to_its_vers.get(br).c(d!("branch not found"))?)
+                .last()
+                .map(|(verid, _)| verid)
+                .c(d!("version not found"))?;
+            let mut ver = VersionID::default();
+            ver.copy_from_slice(&v);
+            ver
+        };
 
-        for (ver, chgset) in unsafe { self.version_to_change_set.shadow() }
+        let chgset_hdr = self.ver_to_change_set.read();
+        let chgset = chgset_hdr.get(&ver).c(d!())?;
+        let entries = chgset
             .iter()
-            .filter(|(ver, _)| !valid_vers.contains(ver))
-        {
-            for (k, _) in decode_map(&chgset).iter() {
-                decode_map(&self.layered_kv.get(&k).c(d!())?)
-                    .remove(&ver)
-                    .c(d!())?;
-            }
-            self.version_id_to_version_name
-                .remove(&ver)
-                .c(d!())
-                .and_then(|vername| {
-                    self.version_name_to_version_id.remove(&vername).c(d!())
-                })
-                .and_then(|_| self.version_to_change_set.remove(&ver).c(d!()))?;
-        }
+            .map(|k| {
+                let kvers = decode_map(pnk!(self.layered_kv.get(k)));
+                let v = pnk!(kvers.get(ver));
+                (k.clone(), v)
+            })
+            .collect::<Vec<_>>();
 
-        Ok(())
+        Ok(trie_root(entries))
     }
 
     #[inline(always)]
     pub(super) fn branch_create(
         &mut self,
-        branch_name: &[u8],
-        version_name: &[u8],
+        br_name: &[u8],
+        ver_name: &[u8],
         force: bool,
     ) -> Result<()> {
         self.branch_create_by_base_branch(
-            branch_name,
-            version_name,
+            br_name,
+            ver_name,
             self.branch_get_default(),
             force,
         )
@@ -707,30 +851,30 @@ impl MapxRawVs {
     #[inline(always)]
     pub(super) fn branch_create_by_base_branch(
         &mut self,
-        branch_name: &[u8],
-        version_name: &[u8],
-        base_branch_id: BranchID,
+        br_name: &[u8],
+        ver_name: &[u8],
+        base_br_id: BranchID,
         force: bool,
     ) -> Result<()> {
-        if self.version_name_to_version_id.contains_key(version_name) {
+        if self.ver_name_to_ver_id.contains_key(ver_name) {
             return Err(eg!("this version already exists"));
         }
 
-        let base_version_id = decode_map(
+        let base_ver_id = decode_map(
             &self
-                .branch_to_its_versions
-                .get(&base_branch_id)
+                .br_to_its_vers
+                .get(&base_br_id)
                 .c(d!("base branch not found"))?,
         )
         .last()
-        .map(|(version_id, _)| version_id);
+        .map(|(ver_id, _)| ver_id);
 
         unsafe {
             self.do_branch_create_by_base_branch_version(
-                branch_name,
-                Some(version_name),
-                base_branch_id,
-                base_version_id.map(|bytes| to_verid(&bytes)),
+                br_name,
+                Some(ver_name),
+                base_br_id,
+                base_ver_id.map(|bytes| to_verid(&bytes)),
                 force,
             )
             .c(d!())
@@ -740,22 +884,22 @@ impl MapxRawVs {
     #[inline(always)]
     pub(super) fn branch_create_by_base_branch_version(
         &mut self,
-        branch_name: &[u8],
-        version_name: &[u8],
-        base_branch_id: BranchID,
-        base_version_id: VersionID,
+        br_name: &[u8],
+        ver_name: &[u8],
+        base_br_id: BranchID,
+        base_ver_id: VersionID,
         force: bool,
     ) -> Result<()> {
-        if self.version_name_to_version_id.contains_key(version_name) {
+        if self.ver_name_to_ver_id.contains_key(ver_name) {
             return Err(eg!("this version already exists"));
         }
 
         unsafe {
             self.do_branch_create_by_base_branch_version(
-                branch_name,
-                Some(version_name),
-                base_branch_id,
-                Some(base_version_id),
+                br_name,
+                Some(ver_name),
+                base_br_id,
+                Some(base_ver_id),
                 force,
             )
             .c(d!())
@@ -765,11 +909,11 @@ impl MapxRawVs {
     #[inline(always)]
     pub(super) unsafe fn branch_create_without_new_version(
         &mut self,
-        branch_name: &[u8],
+        br_name: &[u8],
         force: bool,
     ) -> Result<()> {
         self.branch_create_by_base_branch_without_new_version(
-            branch_name,
+            br_name,
             self.branch_get_default(),
             force,
         )
@@ -779,24 +923,24 @@ impl MapxRawVs {
     #[inline(always)]
     pub(super) unsafe fn branch_create_by_base_branch_without_new_version(
         &mut self,
-        branch_name: &[u8],
-        base_branch_id: BranchID,
+        br_name: &[u8],
+        base_br_id: BranchID,
         force: bool,
     ) -> Result<()> {
-        let base_version_id = decode_map(
+        let base_ver_id = decode_map(
             &self
-                .branch_to_its_versions
-                .get(&base_branch_id)
+                .br_to_its_vers
+                .get(&base_br_id)
                 .c(d!("base branch not found"))?,
         )
         .last()
-        .map(|(version_id, _)| version_id);
+        .map(|(ver_id, _)| ver_id);
 
         self.do_branch_create_by_base_branch_version(
-            branch_name,
+            br_name,
             None,
-            base_branch_id,
-            base_version_id.map(|bytes| to_verid(&bytes)),
+            base_br_id,
+            base_ver_id.map(|bytes| to_verid(&bytes)),
             force,
         )
         .c(d!())
@@ -805,16 +949,16 @@ impl MapxRawVs {
     #[inline(always)]
     pub(super) unsafe fn branch_create_by_base_branch_version_without_new_version(
         &mut self,
-        branch_name: &[u8],
-        base_branch_id: BranchID,
-        base_version_id: VersionID,
+        br_name: &[u8],
+        base_br_id: BranchID,
+        base_ver_id: VersionID,
         force: bool,
     ) -> Result<()> {
         self.do_branch_create_by_base_branch_version(
-            branch_name,
+            br_name,
             None,
-            base_branch_id,
-            Some(base_version_id),
+            base_br_id,
+            Some(base_ver_id),
             force,
         )
         .c(d!())
@@ -824,30 +968,30 @@ impl MapxRawVs {
     // remove the target new branch if it exists
     unsafe fn do_branch_create_by_base_branch_version(
         &mut self,
-        branch_name: &[u8],
-        version_name: Option<&[u8]>,
-        base_branch_id: BranchID,
-        base_version_id: Option<VersionID>,
+        br_name: &[u8],
+        ver_name: Option<&[u8]>,
+        base_br_id: BranchID,
+        base_ver_id: Option<VersionID>,
         force: bool,
     ) -> Result<()> {
         if force {
-            if let Some(brid) = self.branch_name_to_branch_id.get(branch_name) {
+            if let Some(brid) = self.br_name_to_br_id.get(br_name) {
                 self.branch_remove(to_brid(&brid)).c(d!())?;
             }
         }
 
-        if self.branch_name_to_branch_id.contains_key(branch_name) {
+        if self.br_name_to_br_id.contains_key(br_name) {
             return Err(eg!("branch already exists"));
         }
 
         let vers = decode_map(
             &self
-                .branch_to_its_versions
-                .get(&base_branch_id)
+                .br_to_its_vers
+                .get(&base_br_id)
                 .c(d!("base branch not exist"))?,
         );
 
-        let vers_copied = if let Some(bv) = base_version_id {
+        let vers_copied = if let Some(bv) = base_ver_id {
             if !vers.contains_key(&bv) {
                 return Err(eg!("version is not on the base branch"));
             }
@@ -862,18 +1006,17 @@ impl MapxRawVs {
             MapxRaw::new()
         };
 
-        let branch_id = VSDB.alloc_branch_id().to_be_bytes();
+        let br_id = VSDB.alloc_br_id().to_be_bytes();
 
-        self.branch_name_to_branch_id
-            .insert(branch_name, &branch_id);
-        self.branch_id_to_branch_name
-            .insert(&branch_id, branch_name);
-        self.branch_to_its_versions
-            .insert(&branch_id, encode_map(&vers_copied));
+        self.br_name_to_br_id.insert(br_name, &br_id);
+        self.br_id_to_br_name
+            .write()
+            .insert(br_id, br_name.to_vec());
+        self.br_to_its_vers.insert(&br_id, encode_map(&vers_copied));
 
-        if let Some(vername) = version_name {
+        if let Some(vername) = ver_name {
             // create the first version of the new branch
-            self.version_create_by_branch(vername, branch_id).c(d!())?;
+            self.version_create_by_branch(vername, br_id).c(d!())?;
         }
 
         Ok(())
@@ -881,17 +1024,17 @@ impl MapxRawVs {
 
     // Check if a branch exists or not.
     #[inline(always)]
-    pub(super) fn branch_exists(&self, branch_id: BranchID) -> bool {
-        self.branch_id_to_branch_name.contains_key(&branch_id)
+    pub(super) fn branch_exists(&self, br_id: BranchID) -> bool {
+        self.br_id_to_br_name.read().contains_key(&br_id)
     }
 
     // Check if a branch exists and has versions on it.
     #[inline(always)]
-    pub(super) fn branch_has_versions(&self, branch_id: BranchID) -> bool {
-        self.branch_exists(branch_id)
+    pub(super) fn branch_has_versions(&self, br_id: BranchID) -> bool {
+        self.branch_exists(br_id)
             && self
-                .branch_to_its_versions
-                .get(&branch_id)
+                .br_to_its_vers
+                .get(&br_id)
                 .map(|vers| !decode_map(&vers).is_empty())
                 .unwrap_or(false)
     }
@@ -904,33 +1047,39 @@ impl MapxRawVs {
     // while operations on branches and versions are limited to their own perspective,
     // and should not do any tracing.
     #[inline(always)]
-    pub(super) fn branch_remove(&mut self, branch_id: BranchID) -> Result<()> {
-        // if self.branch_get_default() == branch_id {
-        //     return Err(eg!("the default branch can NOT be removed"));
-        // }
+    pub(super) fn branch_remove(&mut self, br_id: BranchID) -> Result<()> {
+        self.branch_truncate(br_id).c(d!())?;
 
-        self.branch_truncate(branch_id).c(d!())?;
-
-        self.branch_id_to_branch_name
-            .remove(&branch_id)
+        self.br_id_to_br_name
+            .write()
+            .remove(&br_id)
             .c(d!())
-            .and_then(|brname| self.branch_name_to_branch_id.remove(&brname).c(d!()))?;
+            .and_then(|brname| self.br_name_to_br_id.remove(&brname).c(d!()))?;
 
-        self.branch_to_its_versions
-            .remove(&branch_id)
-            .c(d!())
-            .map(|_| ())
+        let vers = self.br_to_its_vers.remove(&br_id).c(d!())?;
+
+        TRASH_CLEANER.lock().execute(move || {
+            decode_map(vers).clear();
+        });
+
+        Ok(())
     }
 
     #[inline(always)]
-    pub(super) fn branch_keep_only(&mut self, branch_ids: &[BranchID]) -> Result<()> {
-        for brid in unsafe { self.branch_id_to_branch_name.shadow() }
+    pub(super) fn branch_keep_only(&mut self, br_ids: &[BranchID]) -> Result<()> {
+        let brs = self
+            .br_id_to_br_name
+            .read()
             .iter()
             .map(|(brid, _)| brid)
-            .filter(|brid| !branch_ids.contains(&to_brid(brid)))
-        {
-            self.branch_remove(to_brid(&brid)).c(d!())?;
+            .filter(|brid| !br_ids.contains(brid))
+            .copied()
+            .collect::<Vec<_>>();
+        let brs = brs;
+        for brid in brs.into_iter() {
+            self.branch_remove(brid).c(d!())?;
         }
+
         self.version_clean_up_globally().c(d!())
     }
 
@@ -942,19 +1091,19 @@ impl MapxRawVs {
     // while operations on branches and versions are limited to their own perspective,
     // and should not do any tracing.
     #[inline(always)]
-    pub(super) fn branch_truncate(&mut self, branch_id: BranchID) -> Result<()> {
-        if let Some(vers) = self.branch_to_its_versions.get(&branch_id) {
+    pub(super) fn branch_truncate(&mut self, br_id: BranchID) -> Result<()> {
+        if let Some(vers) = self.br_to_its_vers.get(&br_id) {
             decode_map(&vers).clear();
             Ok(())
         } else {
             Err(eg!(
                 "branch not found: {}",
-                BranchIDBase::from_be_bytes(branch_id)
+                BranchIDBase::from_be_bytes(br_id)
             ))
         }
     }
 
-    // Remove all changes directly made by versions(bigger than `last_version_id`) of this branch.
+    // Remove all changes directly made by versions(bigger than `last_ver_id`) of this branch.
     //
     // 'Write'-like operations on branches and versions are different from operations on data.
     //
@@ -963,30 +1112,31 @@ impl MapxRawVs {
     // and should not do any tracing.
     pub(super) fn branch_truncate_to(
         &mut self,
-        branch_id: BranchID,
-        last_version_id: VersionID,
+        br_id: BranchID,
+        last_ver_id: VersionID,
     ) -> Result<()> {
-        if let Some(vers) = self.branch_to_its_versions.get(&branch_id) {
+        if let Some(vers) = self.br_to_its_vers.get(&br_id) {
             // version id must be in descending order
             let mut vers = decode_map(&vers);
             let vers_shadow = unsafe { vers.shadow() };
-            for (version_id, _) in vers_shadow
-                .range(
-                    Cow::Borrowed(
-                        &(VersionIDBase::from_be_bytes(last_version_id) + 1)
-                            .to_be_bytes()[..],
-                    )..,
-                )
-                .rev()
+            for (ver_id, _) in
+                vers_shadow
+                    .range(
+                        Cow::Borrowed(
+                            &(VersionIDBase::from_be_bytes(last_ver_id) + 1)
+                                .to_be_bytes()[..],
+                        )..,
+                    )
+                    .rev()
             {
-                vers.remove(&version_id)
+                vers.remove(&ver_id)
                     .c(d!("version is not on this branch"))?;
             }
             Ok(())
         } else {
             Err(eg!(
                 "branch not found: {}",
-                BranchIDBase::from_be_bytes(branch_id)
+                BranchIDBase::from_be_bytes(br_id)
             ))
         }
     }
@@ -997,17 +1147,17 @@ impl MapxRawVs {
     // while operations on branches and versions are limited to their own perspective,
     // and should not do any tracing.
     #[inline(always)]
-    pub(super) fn branch_pop_version(&mut self, branch_id: BranchID) -> Result<()> {
-        self.version_pop_by_branch(branch_id).c(d!())
+    pub(super) fn branch_pop_version(&mut self, br_id: BranchID) -> Result<()> {
+        self.version_pop_by_branch(br_id).c(d!())
     }
 
     #[inline(always)]
     pub(super) fn branch_merge_to(
         &mut self,
-        branch_id: BranchID,
-        target_branch_id: BranchID,
+        br_id: BranchID,
+        target_br_id: BranchID,
     ) -> Result<()> {
-        unsafe { self.do_branch_merge_to(branch_id, target_branch_id, false) }
+        unsafe { self.do_branch_merge_to(br_id, target_br_id, false) }
     }
 
     // # Safety
@@ -1017,10 +1167,10 @@ impl MapxRawVs {
     #[inline(always)]
     pub(super) unsafe fn branch_merge_to_force(
         &mut self,
-        branch_id: BranchID,
-        target_branch_id: BranchID,
+        br_id: BranchID,
+        target_br_id: BranchID,
     ) -> Result<()> {
-        self.do_branch_merge_to(branch_id, target_branch_id, true)
+        self.do_branch_merge_to(br_id, target_br_id, true)
     }
 
     // Merge a branch into another,
@@ -1032,20 +1182,16 @@ impl MapxRawVs {
     // the data records referenced by other branches may be corrupted.
     unsafe fn do_branch_merge_to(
         &mut self,
-        branch_id: BranchID,
-        target_branch_id: BranchID,
+        br_id: BranchID,
+        target_br_id: BranchID,
         force: bool,
     ) -> Result<()> {
-        let vers = decode_map(
-            &self
-                .branch_to_its_versions
-                .get(&branch_id)
-                .c(d!("branch not found"))?,
-        );
+        let vers =
+            decode_map(&self.br_to_its_vers.get(&br_id).c(d!("branch not found"))?);
         let mut target_vers = decode_map(
             &self
-                .branch_to_its_versions
-                .get(&target_branch_id)
+                .br_to_its_vers
+                .get(&target_br_id)
                 .c(d!("target branch not found"))?,
         );
 
@@ -1105,11 +1251,11 @@ impl MapxRawVs {
     }
 
     #[inline(always)]
-    pub(super) fn branch_set_default(&mut self, branch_id: BranchID) -> Result<()> {
-        if !self.branch_exists(branch_id) {
+    pub(super) fn branch_set_default(&mut self, br_id: BranchID) -> Result<()> {
+        if !self.branch_exists(br_id) {
             return Err(eg!("branch not found"));
         }
-        self.default_branch = branch_id;
+        self.default_branch = br_id;
         Ok(())
     }
 
@@ -1120,27 +1266,25 @@ impl MapxRawVs {
 
     #[inline(always)]
     pub(super) fn branch_get_default_name(&self) -> BranchNameOwned {
-        self.branch_id_to_branch_name
+        self.br_id_to_br_name
+            .read()
             .get(&self.default_branch)
             .map(|br| BranchNameOwned(br.to_vec()))
             .unwrap()
     }
 
     #[inline(always)]
-    pub(super) fn branch_is_empty(&self, branch_id: BranchID) -> Result<bool> {
-        self.branch_to_its_versions
-            .get(&branch_id)
-            .c(d!())
-            .map(|vers| {
-                decode_map(&vers).iter().all(|(ver, _)| {
-                    !self.version_has_change_set(to_verid(&ver)).unwrap()
-                })
-            })
+    pub(super) fn branch_is_empty(&self, br_id: BranchID) -> Result<bool> {
+        self.br_to_its_vers.get(&br_id).c(d!()).map(|vers| {
+            decode_map(&vers)
+                .iter()
+                .all(|(ver, _)| !self.version_has_change_set(to_verid(&ver)).unwrap())
+        })
     }
 
     #[inline(always)]
     pub(super) fn branch_list(&self) -> Vec<BranchNameOwned> {
-        self.branch_name_to_branch_id
+        self.br_name_to_br_id
             .iter()
             .map(|(brname, _)| brname.to_vec())
             .map(BranchNameOwned)
@@ -1160,22 +1304,16 @@ impl MapxRawVs {
         branch_1: &[u8],
         branch_2: &[u8],
     ) -> Result<()> {
-        let brid_1 = to_brid(&self.branch_name_to_branch_id.get(branch_1).c(d!())?);
-        let brid_2 = to_brid(&self.branch_name_to_branch_id.get(branch_2).c(d!())?);
+        let mut br_hdr = self.br_id_to_br_name.write();
 
-        self.branch_name_to_branch_id
-            .insert(branch_1, &brid_2)
-            .c(d!())?;
-        self.branch_name_to_branch_id
-            .insert(branch_2, &brid_1)
-            .c(d!())?;
+        let brid_1 = to_brid(&self.br_name_to_br_id.get(branch_1).c(d!())?);
+        let brid_2 = to_brid(&self.br_name_to_br_id.get(branch_2).c(d!())?);
 
-        self.branch_id_to_branch_name
-            .insert(&brid_1, branch_2)
-            .c(d!())?;
-        self.branch_id_to_branch_name
-            .insert(&brid_2, branch_1)
-            .c(d!())?;
+        self.br_name_to_br_id.insert(branch_1, &brid_2).c(d!())?;
+        self.br_name_to_br_id.insert(branch_2, &brid_1).c(d!())?;
+
+        br_hdr.insert(brid_1, branch_2.to_vec()).c(d!())?;
+        br_hdr.insert(brid_2, branch_1.to_vec()).c(d!())?;
 
         if self.default_branch == brid_1 {
             self.default_branch = brid_2;
@@ -1187,33 +1325,82 @@ impl MapxRawVs {
     }
 
     #[inline(always)]
-    pub(super) fn branch_get_id_by_name(
-        &self,
-        branch_name: BranchName,
-    ) -> Option<BranchID> {
-        self.branch_name_to_branch_id
-            .get(branch_name.0)
+    pub(super) fn branch_get_id_by_name(&self, br_name: BranchName) -> Option<BranchID> {
+        self.br_name_to_br_id
+            .get(br_name.0)
             .map(|bytes| to_brid(&bytes))
     }
 
+    // The oldest version will be kept as the final data container.
+    //
+    // NOTE: As it will become bigger and bigger,
+    // if we migrate the its data to other vesions when pruning,
+    // the 'prune' process will be slower and slower,
+    // do we should not do that.
     #[inline(always)]
     pub(super) fn prune(&mut self, reserved_ver_num: Option<usize>) -> Result<()> {
-        self.version_clean_up_globally().c(d!())?;
+        /////////////////////////////////////////////////////////////////////
+        let mut ver_hdr = self.ver_id_to_ver_name.try_write().c(d!("lock busy"))?;
+        let mut chgset_hdr = self.ver_to_change_set.try_write().c(d!("lock busy"))?;
+        /////////////////////////////////////////////////////////////////////
 
-        let reserved_ver_num = reserved_ver_num.unwrap_or(RESERVED_VERSION_NUM_DEFAULT);
+        /***
+         * Clean up trash globally.
+         */
+        let mut clean_up = || -> Result<()> {
+            let mut valid_vers = HashSet::new();
+            self.br_to_its_vers.iter().for_each(|(_, vers)| {
+                decode_map(&vers).iter().for_each(|(ver, _)| {
+                    valid_vers.insert(to_verid(&ver[..]));
+                })
+            });
+
+            let mut orphanvers = vec![];
+            for (ver, chgset) in chgset_hdr
+                .iter()
+                .filter(|(ver, _)| !valid_vers.contains(&ver[..]))
+            {
+                for k in chgset.iter() {
+                    let mut lkv = decode_map(&*self.layered_kv.get(&k).c(d!())?);
+                    lkv.remove(ver).c(d!())?;
+                    if lkv.is_empty() {
+                        self.layered_kv.remove(&k).c(d!())?;
+                    }
+                }
+                orphanvers.push(*ver);
+            }
+
+            for ver in orphanvers.iter() {
+                ver_hdr
+                    .remove(ver)
+                    .c(d!())
+                    .and_then(|vername| self.ver_name_to_ver_id.remove(&vername).c(d!()))
+                    .and_then(|_| chgset_hdr.remove(&ver[..]).c(d!()))?;
+            }
+
+            Ok(())
+        };
+
+        clean_up().c(d!())?;
+
+        /////////////////////////////////////////////////////////////////////
+
+        // the '1' of this 'add 1' means the never-deleted initial version.
+        let reserved_ver_num =
+            1 + reserved_ver_num.unwrap_or(RESERVED_VERSION_NUM_DEFAULT);
         if 0 == reserved_ver_num {
             return Err(eg!("reserved version number should NOT be zero"));
         }
 
-        let br_vers = self
-            .branch_to_its_versions
+        let mut br_vers_non_empty = self
+            .br_to_its_vers
             .iter()
             .map(|(_, vers)| decode_map(&vers))
             .filter(|vers| !vers.is_empty())
             .collect::<Vec<_>>();
-        alt!(br_vers.is_empty(), return Ok(()));
-        let mut br_vers = (0..br_vers.len())
-            .map(|i| (&br_vers[i]).iter())
+        alt!(br_vers_non_empty.is_empty(), return Ok(()));
+        let mut br_vers = (0..br_vers_non_empty.len())
+            .map(|i| (&br_vers_non_empty[i]).iter())
             .collect::<Vec<_>>();
 
         // filter out the longest common prefix
@@ -1231,54 +1418,71 @@ impl MapxRawVs {
             vers_to_be_merged.push(to_verid(&guard));
         }
 
+        let l = vers_to_be_merged.len();
+        if l <= reserved_ver_num {
+            return Ok(());
+        }
+
         let (vers_to_be_merged, rewrite_ver) = {
-            let l = vers_to_be_merged.len();
-            if l > reserved_ver_num {
-                let guard_idx = l - reserved_ver_num;
-                (
-                    &vers_to_be_merged[..guard_idx],
-                    &vers_to_be_merged[guard_idx],
-                )
-            } else {
-                return Ok(());
-            }
+            let guard_idx = l - reserved_ver_num + 1;
+            (&vers_to_be_merged[1..guard_idx], &vers_to_be_merged[0])
         };
 
-        let mut rewrite_ver_chgset =
-            decode_map(&self.version_to_change_set.get(rewrite_ver).c(d!())?);
-
-        for (_, vers) in self
-            .branch_to_its_versions
-            .iter()
-            .filter(|(_, vers)| !decode_map(vers).is_empty())
-        {
+        for vers in br_vers_non_empty.iter_mut() {
             for ver in vers_to_be_merged.iter() {
-                decode_map(&vers).remove(ver).c(d!())?;
+                vers.remove(ver).c(d!())?;
             }
         }
 
-        for ver in vers_to_be_merged.iter() {
-            self.version_id_to_version_name
-                .remove(ver)
-                .c(d!())
-                .and_then(|vername| {
-                    self.version_name_to_version_id.remove(&vername).c(d!())
-                })?;
-            let chgset = decode_map(&self.version_to_change_set.remove(ver).c(d!())?);
-            for (k, _) in chgset.iter() {
-                let mut k_vers = decode_map(&self.layered_kv.get(&k).c(d!())?);
-                let value = k_vers.remove(ver).c(d!())?;
+        let mut chgsets = HashSet::new();
+        let mut new_kvchgset_for_base_ver = map! {};
 
-                // keep at least one version
-                if k_vers
-                    .range(..=Cow::Borrowed(&rewrite_ver[..]))
-                    .next()
-                    .is_none()
-                {
-                    assert!(rewrite_ver_chgset.insert(&k, &[]).is_none());
-                    assert!(k_vers.insert(&rewrite_ver[..], &value).is_none());
+        for ver in vers_to_be_merged.iter() {
+            let chgset = chgset_hdr.get(ver).c(d!())?;
+            for k in chgset.iter() {
+                let kvers = decode_map(&*self.layered_kv.get(&k).c(d!())?);
+                let value = kvers.get(ver).c(d!())?;
+                new_kvchgset_for_base_ver.insert(k.clone(), (kvers, value));
+                chgsets.insert(k.clone());
+            }
+        }
+
+        let rewrite_ver_chgset = chgset_hdr.get_mut(&to_verid(rewrite_ver)).c(d!())?;
+
+        // avoid dup-middle 'insert's
+        for (k, (mut kvers, v)) in new_kvchgset_for_base_ver.into_iter() {
+            rewrite_ver_chgset.insert(k);
+            kvers.insert(rewrite_ver, v);
+        }
+
+        // lowest-level KVs with 'deleted' states should be cleaned up.
+        let mut empty_keys = vec![];
+        for k in chgsets.iter() {
+            if let Some(vers) = self.layered_kv.get(k) {
+                let mut vers = decode_map(vers);
+                // A 'NULL' value means 'not exist'.
+                if vers.get(rewrite_ver).c(d!())?.is_empty() {
+                    vers.remove(rewrite_ver).c(d!())?;
+                    rewrite_ver_chgset.remove(k);
+                }
+                if vers.is_empty() {
+                    empty_keys.push(k);
                 }
             }
+        }
+
+        for k in empty_keys.iter() {
+            self.layered_kv.remove(k).c(d!())?;
+        }
+
+        // Make all merged version to be orphan,
+        // so they will be cleaned up in the `version_clean_up_globally`.
+        //
+        // NOTE: do this after all data has been copied to new places!
+        for ver in vers_to_be_merged.iter() {
+            self.br_to_its_vers.iter().for_each(|(_, vers)| {
+                decode_map(vers).remove(ver);
+            });
         }
 
         Ok(())
@@ -1295,52 +1499,55 @@ impl Default for MapxRawVs {
 ////////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct MapxRawVsIter<'a> {
     hdr: &'a MapxRawVs,
-    iter: MapxRawIter<'a>, // <MapxOrd<VersionID, Option<RawValue>>>,
-    branch_id: BranchID,
-    version_id: VersionID,
+    iter: MapxRawIter<'a>,
+    br_id: BranchID,
+    ver_id: VersionID,
 }
 
 impl<'a> Iterator for MapxRawVsIter<'a> {
     type Item = (RawKey, RawValue);
 
-    #[allow(clippy::while_let_on_iterator)]
     fn next(&mut self) -> Option<Self::Item> {
-        if NULL == self.branch_id || NULL == self.version_id {
+        if NULL_ID == self.br_id || NULL_ID == self.ver_id {
             return None;
         }
 
-        while let Some((k, _)) = self.iter.next() {
-            if let Some(v) =
-                self.hdr
-                    .get_by_branch_version(&k, self.branch_id, self.version_id)
-            {
-                return Some((k, v));
+        loop {
+            if let Some((k, _)) = self.iter.next() {
+                if let Some(v) =
+                    self.hdr.get_by_branch_version(&k, self.br_id, self.ver_id)
+                {
+                    return Some((k.clone(), v));
+                }
+                // else { continue }
+            } else {
+                return None;
             }
         }
-
-        None
     }
 }
 
 impl DoubleEndedIterator for MapxRawVsIter<'_> {
-    #[allow(clippy::while_let_on_iterator)]
     fn next_back(&mut self) -> Option<Self::Item> {
-        if NULL == self.branch_id || NULL == self.version_id {
+        if NULL_ID == self.br_id || NULL_ID == self.ver_id {
             return None;
         }
 
-        while let Some((k, _)) = self.iter.next_back() {
-            if let Some(v) =
-                self.hdr
-                    .get_by_branch_version(&k, self.branch_id, self.version_id)
-            {
-                return Some((k, v));
+        loop {
+            if let Some((k, _)) = self.iter.next_back() {
+                if let Some(v) =
+                    self.hdr.get_by_branch_version(&k, self.br_id, self.ver_id)
+                {
+                    return Some((k.clone(), v));
+                }
+                // else { continue }
+            } else {
+                return None;
             }
         }
-
-        None
     }
 }
 

@@ -39,7 +39,7 @@ fn basic_cases() {
     });
 
     (1..cnt).map(|i: usize| i.to_be_bytes()).for_each(|i| {
-        *reloaded.get_mut(&i).unwrap() = i.to_vec().into_boxed_slice();
+        *reloaded.get_mut(&i).unwrap() = i.to_vec();
         assert_eq!(&reloaded.get(&i).unwrap()[..], &i[..]);
         assert!(reloaded.contains_key(&i));
         assert!(reloaded.remove(&i).is_some());
@@ -62,7 +62,7 @@ fn basic_cases() {
             .is_none()
     );
     assert_eq!(
-        vec![4].into_boxed_slice(),
+        vec![4],
         reloaded
             .range(Cow::Borrowed(&[2][..])..Cow::Borrowed(&[10][..]))
             .next()
@@ -70,20 +70,8 @@ fn basic_cases() {
             .1
     );
 
-    assert_eq!(
-        vec![80].into_boxed_slice(),
-        reloaded.get_ge(&[79]).unwrap().1
-    );
-    assert_eq!(
-        vec![80].into_boxed_slice(),
-        reloaded.get_ge(&[80]).unwrap().1
-    );
-    assert_eq!(
-        vec![80].into_boxed_slice(),
-        reloaded.get_le(&[80]).unwrap().1
-    );
-    assert_eq!(
-        vec![80].into_boxed_slice(),
-        reloaded.get_le(&[100]).unwrap().1
-    );
+    assert_eq!(vec![80], reloaded.get_ge(&[79]).unwrap().1);
+    assert_eq!(vec![80], reloaded.get_ge(&[80]).unwrap().1);
+    assert_eq!(vec![80], reloaded.get_le(&[80]).unwrap().1);
+    assert_eq!(vec![80], reloaded.get_le(&[100]).unwrap().1);
 }

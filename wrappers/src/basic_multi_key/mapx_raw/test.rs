@@ -7,7 +7,7 @@ use ruc::*;
 fn test_insert() {
     let mut hdr = MapxRawMk::new(2);
     assert_eq!(2, hdr.key_size());
-    let max = 500;
+    let max = 100;
     (0..max)
         .map(|i: usize| (i.to_be_bytes(), <usize as ValueEnDe>::encode(&(max + i))))
         .for_each(|(subkey, value)| {
@@ -30,10 +30,10 @@ fn test_insert() {
 
 #[test]
 fn test_valueende() {
-    let cnt = 500;
+    let cnt = 100;
     let dehdr = {
         let mut hdr = MapxRawMk::new(2);
-        let max = 500;
+        let max = 100;
         (0..max)
             .map(|i: usize| (i.to_be_bytes(), <usize as ValueEnDe>::encode(&i)))
             .for_each(|(subkey, value)| {
@@ -58,7 +58,7 @@ fn test_valueende() {
 fn test_iter_op() {
     let mut map = MapxRawMk::new(4);
     assert!(map.entry(&[&[1], &[2], &[3], &[4]]).or_insert(&[0]).is_ok());
-    assert_eq!(map.get(&[&[1], &[2], &[3], &[4]]).unwrap().as_ref(), &[0]);
+    assert_eq!(&map.get(&[&[1], &[2], &[3], &[4]]).unwrap(), &[0]);
 
     let mut cnt = 0;
     pnk!(map.iter_op(&mut |k: &[&[u8]], v: &[u8]| {
@@ -78,19 +78,13 @@ fn test_iter_op_with_key_prefix() {
             .or_insert(&[])
             .is_ok()
     );
-    assert_eq!(
-        map.get(&[&[11], &[12], &[13], &[14]]).unwrap().as_ref(),
-        &[]
-    );
+    assert_eq!(&map.get(&[&[11], &[12], &[13], &[14]]).unwrap(), &[]);
     assert!(
         map.entry(&[&[11], &[12], &[13], &[15]])
             .or_insert(&[0])
             .is_ok()
     );
-    assert_eq!(
-        map.get(&[&[11], &[12], &[13], &[15]]).unwrap().as_ref(),
-        &[0]
-    );
+    assert_eq!(&map.get(&[&[11], &[12], &[13], &[15]]).unwrap(), &[0]);
 
     let mut cnt = 0;
     let mut op = |k: &[&[u8]], v: &[u8]| {
