@@ -393,7 +393,8 @@ fn rocksdb_open() -> Result<(DB, Vec<String>)> {
             .replace(|ch: char| !ch.is_numeric(), "")
             .parse::<usize>()
             .c(d!())?
-            * 1024 / 10
+            * 1024
+            / 10
     } else {
         GB as usize
     };
