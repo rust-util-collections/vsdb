@@ -1,17 +1,18 @@
 use crate::common::{
     vsdb_get_base_dir, vsdb_set_base_dir, BranchIDBase as BranchID, Engine, Pre,
     PreBytes, RawBytes, RawKey, RawValue, VersionIDBase as VersionID, GB,
-    INITIAL_BRANCH_ID, MB, PREFIX_SIZE, RESERVED_ID_CNT,
+    INITIAL_BRANCH_ID, PREFIX_SIZE, RESERVED_ID_CNT,
 };
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use rocksdb::{
-    Cache, ColumnFamily, ColumnFamilyDescriptor, DBCompressionType, DBIterator,
-    Direction, IteratorMode, Options, ReadOptions, SliceTransform, DB,
+    ColumnFamily, ColumnFamilyDescriptor, DBCompressionType, DBIterator, Direction,
+    IteratorMode, Options, ReadOptions, SliceTransform, DB,
 };
 use ruc::*;
 use std::{
     borrow::Cow,
+    fs,
     mem::size_of,
     ops::{Bound, RangeBounds},
     sync::atomic::{AtomicUsize, Ordering},
@@ -27,7 +28,7 @@ const META_KEY_BRANCH_ID: [u8; 1] = [u8::MAX - 1];
 const META_KEY_VERSION_ID: [u8; 1] = [u8::MAX - 2];
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 
-static HDR: Lazy<(DB, Vec<String>, Cache)> = Lazy::new(|| rocksdb_open().unwrap());
+static HDR: Lazy<(DB, Vec<String>)> = Lazy::new(|| rocksdb_open().unwrap());
 
 pub struct RocksEngine {
     meta: &'static DB,
@@ -367,41 +368,44 @@ impl PreAllocator {
     // }
 }
 
-fn rocksdb_open() -> Result<(DB, Vec<String>, Cache)> {
+fn rocksdb_open() -> Result<(DB, Vec<String>)> {
     let dir = vsdb_get_base_dir();
 
     // avoid setting again on an opened DB
     omit!(vsdb_set_base_dir(&dir));
 
-    let parallelism = available_parallelism().c(d!())?.get() as i32;
-    let cache_cap =
-        max!(GB, min!(((parallelism as u64) * 2 / 10) * GB, 12 * GB)) as usize;
-
     let mut cfg = Options::default();
 
     cfg.create_if_missing(true);
     cfg.create_missing_column_families(true);
+
     cfg.set_prefix_extractor(SliceTransform::create_fixed_prefix(size_of::<Pre>()));
-    cfg.increase_parallelism(parallelism);
-    cfg.set_num_levels(7);
-    cfg.set_max_open_files(8192);
+
     cfg.set_allow_mmap_writes(true);
     cfg.set_allow_mmap_reads(true);
-    // cfg.set_use_direct_reads(true);
-    // cfg.set_use_direct_io_for_flush_and_compaction(true);
-    cfg.set_write_buffer_size(512 * MB as usize);
+
+    let wr_buffer_size = if cfg!(target_os = "linux") {
+        fs::read_to_string("/proc/meminfo")
+            .c(d!())?
+            .lines()
+            .find(|l| l.contains("MemAvailable"))
+            .c(d!())?
+            .replace(|ch: char| !ch.is_numeric(), "")
+            .parse::<usize>()
+            .c(d!())?
+            * 1024 / 10
+    } else {
+        GB as usize
+    };
+    cfg.set_write_buffer_size(wr_buffer_size);
     cfg.set_max_write_buffer_number(3);
 
-    let lru = Cache::new_lru_cache(cache_cap).c(d!())?;
-    cfg.set_row_cache(&lru);
+    let parallelism = available_parallelism().c(d!())?.get() as i32;
+    cfg.increase_parallelism(parallelism);
 
-    #[cfg(feature = "compress")]
-    {
-        cfg.set_compression_type(DBCompressionType::Lz4);
-    }
-
-    #[cfg(not(feature = "compress"))]
-    {
+    if cfg!(feature = "compress") {
+        cfg.set_compression_type(DBCompressionType::Zstd);
+    } else {
         cfg.set_compression_type(DBCompressionType::None);
     }
 
@@ -414,5 +418,5 @@ fn rocksdb_open() -> Result<(DB, Vec<String>, Cache)> {
 
     let db = DB::open_cf_descriptors(&cfg, &dir, cfs).c(d!())?;
 
-    Ok((db, cfhdrs, lru))
+    Ok((db, cfhdrs))
 }
