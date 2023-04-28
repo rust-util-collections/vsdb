@@ -1,5 +1,11 @@
 # CHANGE LOG
 
+## v0.55.x
+
+#### Function changes
+
+- The `sled` project looks dead, so we switch the default backend to `rocksdb`
+
 ## v0.54.x
 
 #### Function changes
