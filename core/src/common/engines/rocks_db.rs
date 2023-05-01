@@ -1,7 +1,7 @@
 use crate::common::{
     vsdb_get_base_dir, vsdb_set_base_dir, BranchIDBase as BranchID, Engine, Pre,
     PreBytes, RawBytes, RawKey, RawValue, VersionIDBase as VersionID, GB,
-    INITIAL_BRANCH_ID, PREFIX_SIZE, RESERVED_ID_CNT,
+    INITIAL_BRANCH_ID, MB, PREFIX_SIZE, RESERVED_ID_CNT,
 };
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -21,7 +21,7 @@ use std::{
 
 // NOTE:
 // do NOT make the number of areas bigger than `u8::MAX`
-const DATA_SET_NUM: usize = 8;
+const DATA_SET_NUM: usize = 2;
 
 const META_KEY_MAX_KEYLEN: [u8; 1] = [u8::MAX];
 const META_KEY_BRANCH_ID: [u8; 1] = [u8::MAX - 1];
@@ -384,8 +384,15 @@ fn rocksdb_open() -> Result<(DB, Vec<String>)> {
     cfg.set_allow_mmap_writes(true);
     cfg.set_allow_mmap_reads(true);
 
+    const WR_BUF_NUM: u8 = 2;
+    const G: usize = GB as usize;
+    const M: usize = MB as usize;
+
+    cfg.set_min_write_buffer_number(WR_BUF_NUM as i32);
+    cfg.set_max_write_buffer_number(1 + WR_BUF_NUM as i32);
+
     let wr_buffer_size = if cfg!(target_os = "linux") {
-        fs::read_to_string("/proc/meminfo")
+        let memsiz = fs::read_to_string("/proc/meminfo")
             .c(d!())?
             .lines()
             .find(|l| l.contains("MemAvailable"))
@@ -393,13 +400,25 @@ fn rocksdb_open() -> Result<(DB, Vec<String>)> {
             .replace(|ch: char| !ch.is_numeric(), "")
             .parse::<usize>()
             .c(d!())?
-            * 1024
-            / 10
+            * 1024;
+        alt!((32 * G) < memsiz, 16 * G, G) / DATA_SET_NUM
     } else {
-        GB as usize
+        G / DATA_SET_NUM
     };
+    println!(
+        "[vsdb]: The `write_buffer_size` of rocksdb is {}MB, per column family",
+        wr_buffer_size / M
+    );
     cfg.set_write_buffer_size(wr_buffer_size);
-    cfg.set_max_write_buffer_number(3);
+
+    cfg.set_enable_blob_files(true);
+    cfg.set_enable_blob_gc(true);
+    cfg.set_min_blob_size(MB);
+
+    // SEE: https://rocksdb.org/blog/2021/05/26/integrated-blob-db.html
+    cfg.set_blob_file_size(wr_buffer_size as u64);
+    cfg.set_target_file_size_base(wr_buffer_size as u64 / 10);
+    cfg.set_max_bytes_for_level_base(wr_buffer_size as u64);
 
     let parallelism = available_parallelism().c(d!())?.get() as i32;
     cfg.increase_parallelism(parallelism);
