@@ -148,8 +148,18 @@ where
         self.inner.get([]).unwrap()
     }
 
-    fn set_value(&mut self, v: &T) {
+    pub fn set_value(&mut self, v: &T) {
         self.inner.set_value([], v);
+    }
+
+    pub fn is_uninitialized(&self) -> bool {
+        self.inner.get([]).is_none()
+    }
+
+    pub fn initialize_if_empty(&mut self, v: T) {
+        if self.is_uninitialized() {
+            self.set_value(&v)
+        }
     }
 
     /// Get the mutable handler of the value.

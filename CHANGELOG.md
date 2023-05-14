@@ -2,8 +2,17 @@
 
 ## v0.56.x
 
-- Bump `rocksdb-rs`
-- Tuning inner details
+#### Internal optimizations
+
+- Tuning details
+- Bump the version of `rocksdb-rs`
+
+#### New APIs
+
+- Orphan: add two new APIs
+  - `is_uninitialized`
+  - `initialize_if_empty`
+- Orphan: make `set_value` public
 
 ## v0.55.x
 
