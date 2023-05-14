@@ -1,5 +1,10 @@
 # CHANGE LOG
 
+## v0.56.x
+
+- Bump `rocksdb-rs`
+- Tuning inner details
+
 ## v0.55.x
 
 #### Function changes
