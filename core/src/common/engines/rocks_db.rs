@@ -386,7 +386,6 @@ fn rocksdb_open() -> Result<(DB, Vec<String>)> {
 
     const WR_BUF_NUM: u8 = 2;
     const G: usize = GB as usize;
-    const M: usize = MB as usize;
 
     cfg.set_min_write_buffer_number(WR_BUF_NUM as i32);
     cfg.set_max_write_buffer_number(1 + WR_BUF_NUM as i32);
@@ -405,10 +404,12 @@ fn rocksdb_open() -> Result<(DB, Vec<String>)> {
     } else {
         G / DATA_SET_NUM
     };
-    println!(
-        "[vsdb]: The `write_buffer_size` of rocksdb is {}MB, per column family",
-        wr_buffer_size / M
-    );
+
+    // println!(
+    //     "[vsdb]: The `write_buffer_size` of rocksdb is {}MB, per column family",
+    //     wr_buffer_size / MB as usize
+    // );
+
     cfg.set_write_buffer_size(wr_buffer_size);
 
     cfg.set_enable_blob_files(true);
