@@ -1,5 +1,13 @@
 # CHANGE LOG
 
+## v0.57.x
+
+#### Internal optimizations
+
+- Switch the default engine to `rocksdb` globally
+- Switch the default codec from `bcs` to `msgpack`
+- Add a new sub crate: [**slot db**](utils/slot_db)
+
 ## v0.56.x
 
 #### Internal optimizations

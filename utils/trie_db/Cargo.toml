@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_trie_db"
-version = "0.8.0"
+version = "0.10.0"
 edition = "2021"
 keywords = ["mpt", "trie", "database", "blockchain"]
 license = "MIT"
@@ -18,7 +18,7 @@ vsdb = { workspace = true }
 vsdb_hash_db = { workspace = true }
 
 [features]
-default = ["sled_engine"]
+default = ["rocks_engine"]
 
 sled_engine = ["vsdb_hash_db/sled_engine"]
 rocks_engine = ["vsdb_hash_db/rocks_engine"]

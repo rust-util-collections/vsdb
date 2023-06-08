@@ -98,20 +98,22 @@ pub trait Engine: Sized {
 
     fn set_instance_len(&self, instance_prefix: PreBytes, new_len: u64);
 
-    #[allow(unused_variables)]
     fn increase_instance_len(&self, instance_prefix: PreBytes) {
         let x = LEN_LK[self.area_idx(instance_prefix)].lock();
 
         let l = self.get_instance_len(instance_prefix);
-        self.set_instance_len(instance_prefix, l + 1)
+        self.set_instance_len(instance_prefix, l + 1);
+
+        drop(x);
     }
 
-    #[allow(unused_variables)]
     fn decrease_instance_len(&self, instance_prefix: PreBytes) {
         let x = LEN_LK[self.area_idx(instance_prefix)].lock();
 
         let l = self.get_instance_len(instance_prefix);
-        self.set_instance_len(instance_prefix, l - 1)
+        self.set_instance_len(instance_prefix, l - 1);
+
+        drop(x);
     }
 }
 
