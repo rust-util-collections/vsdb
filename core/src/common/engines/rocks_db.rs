@@ -416,10 +416,10 @@ fn rocksdb_open() -> Result<(DB, Vec<String>)> {
     cfg.set_enable_blob_gc(true);
     cfg.set_min_blob_size(MB);
 
-    // SEE: https://rocksdb.org/blog/2021/05/26/integrated-blob-db.html
-    cfg.set_blob_file_size(wr_buffer_size as u64);
-    cfg.set_target_file_size_base(wr_buffer_size as u64 / 10);
-    cfg.set_max_bytes_for_level_base(wr_buffer_size as u64);
+    // // SEE: https://rocksdb.org/blog/2021/05/26/integrated-blob-db.html
+    // cfg.set_blob_file_size(wr_buffer_size as u64);
+    // cfg.set_target_file_size_base(wr_buffer_size as u64 / 10);
+    // cfg.set_max_bytes_for_level_base(wr_buffer_size as u64);
 
     let parallelism = available_parallelism().c(d!())?.get() as i32;
     cfg.increase_parallelism(parallelism);

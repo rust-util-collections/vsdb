@@ -1,6 +1,6 @@
 ![GitHub top language](https://img.shields.io/github/languages/top/rust-util-collections/VSDB)
-[![Minimum rustc version](https://img.shields.io/badge/rustc-1.65+-lightgray.svg)](https://github.com/rust-random/rand#rust-version-requirements)
-![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/rust-util-collections/vsdb/rust.yml?branch=master)
+[![Rust](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml/badge.svg)](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml)
+[![Minimum rustc version](https://img.shields.io/badge/rustc-1.70+-lightgray.svg)](https://github.com/rust-random/rand#rust-version-requirements)
 
 # VSDB
 
@@ -25,6 +25,7 @@ Check [**here**](wrappers/README.md) for a detailed description.
 |[**vsdb_core**](core)|[![](https://img.shields.io/crates/v/vsdb_core.svg)](https://crates.io/crates/vsdb_core)|[![](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/vsdb_core)|`./core`|Low-level implementations|
 |[**vsdb_derive**](derive)|[![](https://img.shields.io/crates/v/vsdb_derive.svg)](https://crates.io/crates/vsdb_derive)|[![](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/vsdb_derive)|`./derive`|Procedure macro collection|
 |[**vsdb_trie_map**](utils/trie_map)|[![](https://img.shields.io/crates/v/vsdb_trie_map.svg)](https://crates.io/crates/vsdb_trie_map)|[![](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/vsdb_trie_map)|`./utils/trie_map`|trie based structures with </br> limited version capabilities|
+|[**vsdb_slot_db**](utils/slot_db)|[![](https://img.shields.io/crates/v/vsdb_slot_db.svg)](https://crates.io/crates/vsdb_slot_db)|[![](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/vsdb_slot_db)|`./utils/slot_db`|A skip-list like timestamp DB|
 
 ### Gratitude
 

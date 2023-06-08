@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_trie_map"
-version = "0.6.0"
+version = "0.8.0"
 edition = "2021"
 keywords = ["mpt", "trie", "database", "blockchain"]
 license = "MIT"
@@ -13,7 +13,7 @@ repository = "https://github.com/rust-util-collections/vsdb"
 vsdb_trie_db = { workspace = true }
 
 [features]
-default = ["sled_engine"]
+default = ["rocks_engine"]
 
 sled_engine = ["vsdb_trie_db/sled_engine"]
 rocks_engine = ["vsdb_trie_db/rocks_engine"]
