@@ -1,5 +1,5 @@
 [package]
-name = "slot_db"
+name = "vsdb_slot_db"
 version = "0.1.0"
 edition = "2021"
 keywords = ["timestamp", "slot", "database", "web"]
