@@ -5,7 +5,7 @@ use rand::random;
 fn data_container() {
     let mut db = SlotDB::new(4, false);
 
-    db.insert(0, 0u32.to_be_bytes()).unwrap();
+    db.insert(0, 0).unwrap();
 
     assert!(matches!(
         db.data.iter().next().unwrap().1,
@@ -13,7 +13,7 @@ fn data_container() {
     ));
 
     (0..100u32).for_each(|i| {
-        db.insert(0, i.to_be_bytes()).unwrap();
+        db.insert(0, i).unwrap();
     });
 
     assert!(matches!(
@@ -21,9 +21,9 @@ fn data_container() {
         DataCtner::Large(_)
     ));
     assert_eq!(db.data.len(), 1);
-    assert_eq!(db.data.first().unwrap().1.len(), 101);
-    assert_eq!(db.data.first().unwrap().1.iter().next().unwrap(), 0u32.to_be_bytes());
-    assert_eq!(db.data.first().unwrap().1.iter().last().unwrap(), 99u32.to_be_bytes());
+    assert_eq!(db.data.first().unwrap().1.len(), 100);
+    assert_eq!(db.data.first().unwrap().1.iter().next().unwrap(), 0);
+    assert_eq!(db.data.first().unwrap().1.iter().last().unwrap(), 99);
 }
 
 #[test]
@@ -41,7 +41,7 @@ fn slot_db_original_order(mn: u64) {
     let min = max - 20000;
 
     (min..max).for_each(|i| {
-        db.insert(i, i.to_be_bytes().to_vec()).unwrap();
+        db.insert(i, i).unwrap();
     });
 
     dbg!(db.total);
@@ -51,29 +51,16 @@ fn slot_db_original_order(mn: u64) {
 
     for _ in 0..3 {
         (min..max).for_each(|i| {
-            db.insert(i, i.to_be_bytes().to_vec()).unwrap();
+            db.insert(i, i).unwrap();
         });
     }
 
     assert_queryable(&db, false, 4, 256, min, max - 1);
 
-    //
     // Cover the remove scene
-    //
-
     (min..max).for_each(|i| {
-        db.remove(i, i.to_be_bytes().to_vec());
+        db.remove(i, &i);
     });
-
-    assert_queryable(&db, false, 3, 256, min, max - 1);
-
-    (min..max).for_each(|i| {
-        db.remove(i, i.to_be_bytes().to_vec());
-    });
-
-    assert_queryable(&db, false, 2, 256, min, max - 1);
-
-    db.clear();
     assert_eq!(0, db.total);
     assert!(db.get_entries_by_page(10, 0, true).is_empty());
     assert!(db.get_entries_by_page(10, 0, false).is_empty());
@@ -86,7 +73,7 @@ fn slot_db_swap_order(mn: u64) {
     let min = max - max / 100_000;
 
     (min..max).for_each(|i| {
-        db.insert(i, i.to_be_bytes().to_vec()).unwrap();
+        db.insert(i, i).unwrap();
     });
 
     dbg!(db.total);
@@ -96,36 +83,23 @@ fn slot_db_swap_order(mn: u64) {
 
     for _ in 0..3 {
         (min..max).for_each(|i| {
-            db.insert(i, i.to_be_bytes().to_vec()).unwrap();
+            db.insert(i, i).unwrap();
         });
     }
 
     assert_queryable(&db, true, 4, 256, min, max - 1);
 
-    //
     // Cover the remove scene
-    //
-
     (min..max).for_each(|i| {
-        db.remove(i, i.to_be_bytes().to_vec());
+        db.remove(i, &i);
     });
-
-    assert_queryable(&db, true, 3, 256, min, max - 1);
-
-    (min..max).for_each(|i| {
-        db.remove(i, i.to_be_bytes().to_vec());
-    });
-
-    assert_queryable(&db, true, 2, 256, min, max - 1);
-
-    db.clear();
     assert_eq!(0, db.total);
     assert!(db.get_entries_by_page(0, 10, true).is_empty());
     assert!(db.get_entries_by_page(0, 10, true).is_empty());
 }
 
 fn assert_queryable(
-    db: &SlotDB<Vec<u8>>,
+    db: &SlotDB<u64>,
     swap_order: bool,
     step: u32,
     times: u64,
@@ -138,8 +112,6 @@ fn assert_queryable(
     assert!(slot_min <= slot_max);
 
     for i in 0..times {
-        let n = step as u64;
-
         let page_size = step + (random::<u16>() as u32) % 128 / step * step;
         let max_page = min!(u32::MAX, (db.total / (page_size as u64) - 1) as u32);
 
@@ -152,15 +124,10 @@ fn assert_queryable(
         let page_number = page_number as u64;
 
         dbg!(page_number, page_size);
-        let end = slot_max - page_number * page_size / n;
-        let mut a = (0..n)
-            .map(|_| {
-                (0..=dbg!(end))
-                    .rev()
-                    .take((page_size / n) as usize)
-                    .map(|i| i.to_be_bytes().to_vec())
-            })
-            .flatten()
+        let end = slot_max - page_number * page_size;
+        let mut a = (0..=dbg!(end))
+            .rev()
+            .take((page_size) as usize)
             .collect::<Vec<_>>();
         a.sort_unstable_by(|a, b| b.cmp(&a));
         let c = db.get_entries_by_page(page_size as u16, page_number as u32, true);
@@ -171,21 +138,16 @@ fn assert_queryable(
                 .data
                 .range(..=end)
                 .rev()
-                .take((page_size / n) as usize)
+                .take((page_size) as usize)
                 .map(|(_, v)| v.iter().collect::<Vec<_>>())
                 .flatten()
                 .collect::<Vec<_>>();
             assert_eq!(b, c);
         }
 
-        let start = slot_min + page_number * page_size / n;
-        let mut a = (0..n)
-            .map(|_| {
-                (dbg!(start)..)
-                    .take((page_size / n) as usize)
-                    .map(|i| i.to_be_bytes().to_vec())
-            })
-            .flatten()
+        let start = slot_min + page_number * page_size;
+        let mut a = (dbg!(start)..)
+            .take((page_size) as usize)
             .collect::<Vec<_>>();
         a.sort_unstable();
         let c = db.get_entries_by_page(page_size as u16, page_number as u32, false);
@@ -195,7 +157,7 @@ fn assert_queryable(
             let b = db
                 .data
                 .range(start..)
-                .take((page_size / n) as usize)
+                .take((page_size) as usize)
                 .map(|(_, v)| v.iter().collect::<Vec<_>>())
                 .flatten()
                 .collect::<Vec<_>>();
@@ -231,19 +193,14 @@ fn assert_queryable(
         );
         println!("Step {} Round {} <==\n", step, i);
 
-        let end = smax_actual - page_number * page_size / n;
+        let end = smax_actual - page_number * page_size;
         let take_n = min!(
             alt!(end < smin_actual, 0, 1 + end.saturating_sub(smin_actual)),
-            page_size / n
+            page_size
         );
-        let mut a = (0..n)
-            .map(|_| {
-                (smin_actual..=dbg!(end))
-                    .rev()
-                    .take(dbg!(take_n) as usize)
-                    .map(|j| j.to_be_bytes().to_vec())
-            })
-            .flatten()
+        let mut a = (smin_actual..=dbg!(end))
+            .rev()
+            .take(dbg!(take_n) as usize)
             .collect::<Vec<_>>();
         a.sort_unstable_by(|a, b| b.cmp(&a));
         let c = db.get_entries_by_page_slot(
@@ -283,22 +240,17 @@ fn assert_queryable(
         );
         println!("Step {} Round {} <==\n", step, i);
 
-        let start = smin_actual + page_number * page_size / n;
+        let start = smin_actual + page_number * page_size;
         let take_n = min!(
             alt!(
                 start > smax_actual,
                 0,
                 1 + smax_actual.saturating_sub(start)
             ),
-            page_size / n
+            page_size
         );
-        let mut a = (0..n)
-            .map(|_| {
-                (dbg!(start)..=smax_actual)
-                    .take(dbg!(take_n) as usize)
-                    .map(|j| j.to_be_bytes().to_vec())
-            })
-            .flatten()
+        let mut a = (dbg!(start)..=smax_actual)
+            .take(dbg!(take_n) as usize)
             .collect::<Vec<_>>();
         a.sort_unstable();
         let c = db.get_entries_by_page_slot(
