@@ -2,7 +2,32 @@ use super::*;
 use rand::random;
 
 #[test]
-fn slot_db() {
+fn data_container() {
+    let mut db = SlotDB::new(4, false);
+
+    db.insert(0, 0u32.to_be_bytes()).unwrap();
+
+    assert!(matches!(
+        db.data.iter().next().unwrap().1,
+        DataCtner::Small(_)
+    ));
+
+    (0..100u32).for_each(|i| {
+        db.insert(0, i.to_be_bytes()).unwrap();
+    });
+
+    assert!(matches!(
+        db.data.iter().next().unwrap().1,
+        DataCtner::Large(_)
+    ));
+    assert_eq!(db.data.len(), 1);
+    assert_eq!(db.data.first().unwrap().1.len(), 101);
+    assert_eq!(db.data.first().unwrap().1.iter().next().unwrap(), 0u32.to_be_bytes());
+    assert_eq!(db.data.first().unwrap().1.iter().last().unwrap(), 99u32.to_be_bytes());
+}
+
+#[test]
+fn workflow() {
     [16, 8, 4].into_iter().for_each(|i| {
         slot_db_original_order(i);
         slot_db_swap_order(i);
