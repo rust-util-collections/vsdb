@@ -3,8 +3,8 @@ mod test;
 
 use ruc::*;
 use serde::{de, Deserialize, Serialize};
-use std::mem;
-use vsdb::{MapxOrd, Vecx};
+use std::{mem, slice::Iter as VecIter};
+use vsdb::{basic::vecx::VecxIter, MapxOrd, Vecx};
 
 type Slot = u64;
 type SlotFloor = Slot;
@@ -15,9 +15,9 @@ type EntryCnt = u64;
 #[serde(bound = "V: Serialize + de::DeserializeOwned")]
 pub struct SlotDB<V>
 where
-    V: Eq + Serialize + de::DeserializeOwned,
+    V: Clone + Eq + Serialize + de::DeserializeOwned,
 {
-    data: MapxOrd<Slot, Vecx<V>>,
+    data: MapxOrd<Slot, DataCtner<V>>,
 
     // How many entries in this DB
     total: EntryCnt,
@@ -36,18 +36,9 @@ where
     swap_order: bool,
 }
 
-impl<V> Default for SlotDB<V>
-where
-    V: Eq + Serialize + for<'d> Deserialize<'d>,
-{
-    fn default() -> Self {
-        Self::new(8, false)
-    }
-}
-
 impl<V> SlotDB<V>
 where
-    V: Eq + Serialize + for<'d> Deserialize<'d>,
+    V: Clone + Eq + Serialize + for<'d> Deserialize<'d>,
 {
     pub fn new(multiple_step: u64, swap_order: bool) -> Self {
         Self {
@@ -88,7 +79,10 @@ where
             self.levels.push(newtop);
         };
 
-        self.data.entry(&slot).or_insert(Vecx::new()).push(&value);
+        self.data
+            .entry(&slot)
+            .or_insert(DataCtner::default())
+            .push(value);
 
         self.levels.iter_mut().for_each(|l| {
             let slot_floor = slot / l.floor_base * l.floor_base;
@@ -358,6 +352,113 @@ where
 
     pub fn total(&self) -> u64 {
         self.total
+    }
+}
+
+impl<V> Default for SlotDB<V>
+where
+    V: Clone + Eq + Serialize + for<'d> Deserialize<'d>,
+{
+    fn default() -> Self {
+        Self::new(8, false)
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(bound = "V: Serialize + de::DeserializeOwned")]
+enum DataCtner<V>
+where
+    V: Clone + Eq + Serialize + de::DeserializeOwned,
+{
+    Small(Vec<V>),
+    Large(Vecx<V>),
+}
+
+impl<V> DataCtner<V>
+where
+    V: Clone + Eq + Serialize + de::DeserializeOwned,
+{
+    fn len(&self) -> usize {
+        match self {
+            Self::Small(i) => i.len(),
+            Self::Large(i) => i.len(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        0 == self.len()
+    }
+
+    fn push(&mut self, v: V) {
+        if let Self::Small(i) = self {
+            if i.len() > 8 {
+                *self = Self::Large(i.iter().fold(Vecx::new(), |mut acc, v| {
+                    acc.push(v);
+                    acc
+                }));
+            }
+        }
+
+        match self {
+            Self::Small(i) => i.push(v),
+            Self::Large(i) => i.push(&v),
+        }
+    }
+
+    fn remove(&mut self, idx: usize) -> V {
+        match self {
+            Self::Small(i) => i.remove(idx),
+            Self::Large(i) => i.remove(idx),
+        }
+    }
+
+    fn iter(&self) -> DataCtnerIter<V> {
+        match self {
+            Self::Small(i) => DataCtnerIter::Small(i.iter()),
+            Self::Large(i) => DataCtnerIter::Large(i.iter()),
+        }
+    }
+}
+
+impl<V> Default for DataCtner<V>
+where
+    V: Clone + Eq + Serialize + de::DeserializeOwned,
+{
+    fn default() -> Self {
+        Self::Small(vec![])
+    }
+}
+
+enum DataCtnerIter<'a, V>
+where
+    V: Clone + Eq + Serialize + de::DeserializeOwned,
+{
+    Small(VecIter<'a, V>),
+    Large(VecxIter<'a, V>),
+}
+
+impl<'a, V> Iterator for DataCtnerIter<'a, V>
+where
+    V: Clone + Eq + Serialize + de::DeserializeOwned,
+{
+    type Item = V;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Small(i) => i.next().cloned(),
+            Self::Large(i) => i.next(),
+        }
+    }
+}
+
+impl<'a, V> DoubleEndedIterator for DataCtnerIter<'a, V>
+where
+    V: Clone + Eq + Serialize + de::DeserializeOwned,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Small(i) => i.next_back().cloned(),
+            Self::Large(i) => i.next_back(),
+        }
     }
 }
 
