@@ -169,6 +169,15 @@ impl Mapx {
     }
 
     #[inline(always)]
+    pub(crate) fn gen_mut(&mut self, key: RawValue, value: RawValue) -> ValueMut {
+        ValueMut {
+            key,
+            value,
+            hdr: self,
+        }
+    }
+
+    #[inline(always)]
     pub(crate) fn len(&self) -> usize {
         VSDB.db.get_instance_len(self.prefix) as usize
     }

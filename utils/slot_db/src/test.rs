@@ -147,7 +147,7 @@ fn assert_queryable(
                 .range(..=end)
                 .rev()
                 .take((page_size / n) as usize)
-                .map(|(_, v)| v)
+                .map(|(_, v)| v.iter().collect::<Vec<_>>())
                 .flatten()
                 .collect::<Vec<_>>();
             assert_eq!(b, c);
@@ -171,7 +171,7 @@ fn assert_queryable(
                 .data
                 .range(start..)
                 .take((page_size / n) as usize)
-                .map(|(_, v)| v)
+                .map(|(_, v)| v.iter().collect::<Vec<_>>())
                 .flatten()
                 .collect::<Vec<_>>();
             assert_eq!(b, c);
@@ -235,7 +235,7 @@ fn assert_queryable(
                 .range(smin_actual..=end)
                 .rev()
                 .take(take_n as usize)
-                .map(|(_, v)| v)
+                .map(|(_, v)| v.iter().collect::<Vec<_>>())
                 .flatten()
                 .collect::<Vec<_>>();
             assert_eq!(b, c);
@@ -289,7 +289,7 @@ fn assert_queryable(
                 .data
                 .range(start..=smax_actual)
                 .take(take_n as usize)
-                .map(|(_, v)| v)
+                .map(|(_, v)| v.iter().collect::<Vec<_>>())
                 .flatten()
                 .collect::<Vec<_>>();
             assert_eq!(b, c);

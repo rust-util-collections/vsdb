@@ -13,7 +13,7 @@ fn test_insert() {
         .for_each(|(subkey, value)| {
             let key: &[&[u8]] = &[&subkey, &subkey];
             assert!(hdr.get(&key).is_none());
-            pnk!(hdr.entry(&key).or_insert(&value));
+            hdr.entry(key).unwrap().or_insert(value.clone());
             assert!(pnk!(hdr.insert(&key, &value)).is_some());
             assert!(hdr.contains_key(&key));
             assert_eq!(pnk!(hdr.get(&key)), value);
@@ -57,12 +57,10 @@ fn test_valueende() {
 #[test]
 fn test_iter_op() {
     let mut hdr = MapxRawKeyMk::new(4);
-    assert!(hdr.entry(&[]).or_insert(&777).is_err());
-    assert!(
-        hdr.entry(&[&[11], &[12], &[13], &[14]])
-            .or_insert(&777)
-            .is_ok()
-    );
+    assert!(hdr.entry(&[]).is_err());
+    hdr.entry(&[&[11], &[12], &[13], &[14]])
+        .unwrap()
+        .or_insert(777);
     assert_eq!(hdr.get(&[&[11], &[12], &[13], &[14]]).unwrap(), 777);
 
     let mut cnt = 0;
@@ -80,19 +78,15 @@ fn test_iter_op() {
 #[test]
 fn test_iter_op_with_key_prefix() {
     let mut hdr = MapxRawKeyMk::new(4);
-    assert!(hdr.entry(&[]).or_insert(&777).is_err());
-    assert!(
-        hdr.entry(&[&[11], &[12], &[13], &[14]])
-            .or_insert(&777)
-            .is_ok()
-    );
+    assert!(hdr.entry(&[]).is_err());
+    hdr.entry(&[&[11], &[12], &[13], &[14]])
+        .unwrap()
+        .or_insert(777);
     assert_eq!(hdr.get(&[&[11], &[12], &[13], &[14]]).unwrap(), 777);
 
-    assert!(
-        hdr.entry(&[&[11], &[12], &[13], &[15]])
-            .or_insert(&888)
-            .is_ok()
-    );
+    hdr.entry(&[&[11], &[12], &[13], &[15]])
+        .unwrap()
+        .or_insert(888);
     assert_eq!(hdr.get(&[&[11], &[12], &[13], &[15]]).unwrap(), 888);
 
     let mut cnt = 0;

@@ -65,6 +65,8 @@ update:
 
 clean:
 	cargo clean
+
+clean_all: clean
 	git stash
 	git clean -fdx
 

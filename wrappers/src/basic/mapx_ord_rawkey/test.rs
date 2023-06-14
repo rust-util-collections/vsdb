@@ -8,14 +8,16 @@ fn test_insert() {
     (0..max)
         .map(|i: usize| (i.to_be_bytes(), (max + i).to_be_bytes()))
         .for_each(|(key, value)| {
-            assert!(hdr.get(&key[..]).is_none());
-            hdr.entry(&key[..]).or_insert(&value);
+            let key = key.to_vec();
+            let value = value.to_vec();
+            assert!(hdr.get(&key).is_none());
+            hdr.entry(&key[..]).or_insert(value.clone());
             hdr.set_value(&key[..], &value);
             assert!(hdr.insert(&key[..], &value).is_some());
             assert!(hdr.contains_key(&key[..]));
             assert_eq!(pnk!(hdr.get(&key[..])), value);
             assert_eq!(pnk!(hdr.remove(&key[..])), value);
-            assert!(hdr.get(&key).is_none());
+            assert!(hdr.get(&key[..]).is_none());
             assert!(hdr.insert(&key[..], &value).is_none());
         });
     hdr.clear();

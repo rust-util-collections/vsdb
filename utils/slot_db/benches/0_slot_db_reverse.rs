@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use vsdb_slot_db::SlotDB;
 use rand::random;
+use vsdb_slot_db::SlotDB;
 
 const DATA_SIZE: u32 = 100_0000;
 

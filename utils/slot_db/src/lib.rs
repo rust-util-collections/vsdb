@@ -4,7 +4,7 @@ mod test;
 use ruc::*;
 use serde::{de, Deserialize, Serialize};
 use std::mem;
-use vsdb::MapxOrd;
+use vsdb::{MapxOrd, Vecx};
 
 type Slot = u64;
 type SlotFloor = Slot;
@@ -17,7 +17,7 @@ pub struct SlotDB<V>
 where
     V: Eq + Serialize + de::DeserializeOwned,
 {
-    data: MapxOrd<Slot, Vec<V>>,
+    data: MapxOrd<Slot, Vecx<V>>,
 
     // How many entries in this DB
     total: EntryCnt,
@@ -70,7 +70,7 @@ where
                     Level::new(self.levels.len() as u32, self.multiple_step),
                     |mut l, (slot, cnt)| {
                         let slot_floor = slot / l.floor_base * l.floor_base;
-                        *l.data.entry(&slot_floor).or_insert(&0) += cnt;
+                        *l.data.entry(&slot_floor).or_insert(0) += cnt;
                         l
                     },
                 );
@@ -81,18 +81,18 @@ where
                 Level::new(self.levels.len() as u32, self.multiple_step),
                 |mut l, (slot, entries)| {
                     let slot_floor = slot / l.floor_base * l.floor_base;
-                    *l.data.entry(&slot_floor).or_insert(&0) += entries.len() as u64;
+                    *l.data.entry(&slot_floor).or_insert(0) += entries.len() as u64;
                     l
                 },
             );
             self.levels.push(newtop);
         };
 
-        self.data.entry(&slot).or_insert(&Vec::new()).push(value);
+        self.data.entry(&slot).or_insert(Vecx::new()).push(&value);
 
         self.levels.iter_mut().for_each(|l| {
             let slot_floor = slot / l.floor_base * l.floor_base;
-            *l.data.entry(&slot_floor).or_insert(&0) += 1;
+            *l.data.entry(&slot_floor).or_insert(0) += 1;
         });
 
         self.total += 1;
@@ -116,7 +116,7 @@ where
         }
 
         let (exist, empty) = if let Some(mut d) = self.data.get_mut(&slot) {
-            let exist = if let Some((idx, _)) = d.iter().enumerate().find(|(_, id)| **id == value) {
+            let exist = if let Some((idx, _)) = d.iter().enumerate().find(|(_, id)| *id == value) {
                 d.remove(idx);
                 true
             } else {
@@ -328,7 +328,7 @@ where
         if reverse_order {
             for (_, entries) in self.data.range(slot_start..slot_end).rev() {
                 entries
-                    .into_iter()
+                    .iter()
                     .rev()
                     .skip(slot_start_inner_idx)
                     .take(take_n - ret.len())
@@ -342,7 +342,7 @@ where
         } else {
             for (_, entries) in self.data.range(slot_start..slot_end) {
                 entries
-                    .into_iter()
+                    .iter()
                     .skip(slot_start_inner_idx)
                     .take(take_n - ret.len())
                     .for_each(|entry| ret.push(entry));

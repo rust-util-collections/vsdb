@@ -21,7 +21,7 @@ fn basic_cases() {
         (0usize..cnt)
             .map(|i| (i, i.to_be_bytes()))
             .for_each(|(i, b)| {
-                hdr_i.entry(&i).or_insert(&b);
+                hdr_i.entry(i).or_insert(b.clone());
                 assert_eq!(1 + i as usize, hdr_i.len());
                 assert_eq!(&hdr_i.get(&i).unwrap()[..], &b[..]);
                 assert_eq!(&hdr_i.remove(&i).unwrap()[..], &b);

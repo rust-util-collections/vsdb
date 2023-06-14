@@ -34,7 +34,6 @@
 mod test;
 
 use crate::common::{engines, RawKey, RawValue};
-use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, ops::RangeBounds};
 
@@ -76,6 +75,11 @@ impl MapxRaw {
     #[inline(always)]
     pub fn get_mut(&mut self, key: impl AsRef<[u8]>) -> Option<ValueMut<'_>> {
         self.inner.get_mut(key.as_ref())
+    }
+
+    #[inline(always)]
+    pub fn gen_mut(&mut self, key: RawValue, value: RawValue) -> ValueMut {
+        self.inner.gen_mut(key, value)
     }
 
     #[inline(always)]
@@ -197,19 +201,23 @@ pub struct Entry<'a> {
 
 impl<'a> Entry<'a> {
     pub fn or_insert(self, default: &'a [u8]) -> ValueMut<'a> {
-        if !self.hdr.contains_key(self.key) {
-            self.hdr.insert(self.key, default);
+        let hdr = self.hdr as *mut MapxRaw;
+        if let Some(v) = unsafe { &mut *hdr }.get_mut(self.key) {
+            v
+        } else {
+            unsafe { &mut *hdr }.gen_mut(self.key.to_vec(), default.to_vec())
         }
-        pnk!(self.hdr.get_mut(self.key))
     }
 
     pub fn or_insert_with<F>(self, f: F) -> ValueMut<'a>
     where
         F: FnOnce() -> RawValue,
     {
-        if !self.hdr.contains_key(self.key) {
-            self.hdr.insert(self.key, &f());
+        let hdr = self.hdr as *mut MapxRaw;
+        if let Some(v) = unsafe { &mut *hdr }.get_mut(self.key) {
+            v
+        } else {
+            unsafe { &mut *hdr }.gen_mut(self.key.to_vec(), f())
         }
-        pnk!(self.hdr.get_mut(self.key))
     }
 }

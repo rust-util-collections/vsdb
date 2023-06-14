@@ -13,7 +13,7 @@ fn test_insert() {
         .for_each(|(i, value)| {
             let key = &(&i, &i, &i);
             assert!(hdr.get(key).is_none());
-            hdr.entry(key).or_insert(&value);
+            hdr.entry(key).or_insert(value);
             assert!(hdr.insert(key, &value).is_some());
             assert!(hdr.contains_key(&key));
             assert_eq!(pnk!(hdr.get(&key)), value);

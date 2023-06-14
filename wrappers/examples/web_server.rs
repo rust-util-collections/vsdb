@@ -52,7 +52,7 @@ impl AnimalHospital {
         };
         self.owners
             .entry(&owner)
-            .or_insert(&Mapx::new())
+            .or_insert(Mapx::new())
             .insert(&new_id, &animal);
 
         Ok(new_id)

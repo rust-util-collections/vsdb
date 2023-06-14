@@ -49,12 +49,10 @@ fn basic_cases() {
     assert!(map.remove(&[&[1]]).unwrap().is_none()); // yes, is none
     assert!(map.get(&[&[1], &[2], &[3], &[4]]).is_none());
 
-    assert!(map.entry(&[]).or_insert(&[]).is_err());
-    assert!(
-        map.entry(&[&[11], &[12], &[13], &[14]])
-            .or_insert(&[])
-            .is_ok()
-    );
+    assert!(map.entry(&[]).is_err());
+    map.entry(&[&[11], &[12], &[13], &[14]])
+        .unwrap()
+        .or_insert(&[]);
     assert_eq!(&map.get(&[&[11], &[12], &[13], &[14]]).unwrap(), NIL);
 
     let mut cnt = 0;
@@ -68,11 +66,9 @@ fn basic_cases() {
     pnk!(map.iter_op(&mut op));
     assert_eq!(cnt, 1);
 
-    assert!(
-        map.entry(&[&[11], &[12], &[13], &[15]])
-            .or_insert(&[0])
-            .is_ok()
-    );
+    map.entry(&[&[11], &[12], &[13], &[15]])
+        .unwrap()
+        .or_insert(&[0]);
     assert_eq!(&map.get(&[&[11], &[12], &[13], &[15]]).unwrap(), &[0]);
 
     let mut cnt = 0;
