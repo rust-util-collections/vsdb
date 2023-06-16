@@ -1,5 +1,11 @@
 # CHANGE LOG
 
+## v0.59.x
+
+#### Internal optimizations
+
+- Remove all `sled` related features
+
 ## v0.57.x
 
 #### Internal optimizations

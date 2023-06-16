@@ -152,13 +152,6 @@ Some complete examples:
 
 ### Compilation features
 
-- [**default**] `sled_engine`, use sled as the backend database
-    - Faster compilation speed
-    - Faster running speed in the versioned functions
-    - Support for compiling into a statically linked object
-- `rocks_engine`, use rocksdb as the backend database
-    - Faster running speed in the unversioned functions
-    - Can not be compiled into a statically linked object
 - `bcs_codec`, use `bcs` as the codec
     - Faster running speed than json
     - Security reinforcement for blockchain scenarios
