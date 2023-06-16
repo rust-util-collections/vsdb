@@ -6,6 +6,10 @@
 
 - Remove all `sled` related features
 
+#### BUG fixes
+
+- Fix `range` on negative integers(key)
+
 ## v0.57.x
 
 #### Internal optimizations
