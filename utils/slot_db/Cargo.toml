@@ -17,6 +17,7 @@ serde = { workspace = true }
 [dev-dependencies]
 criterion = "0.5.1"
 rand = { workspace = true }
+rayon = "1.7.0"
 
 [features]
 default = ["rocks_engine", "msgpack_codec"]

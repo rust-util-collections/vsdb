@@ -1,9 +1,10 @@
 use super::*;
 use rand::random;
+use rayon::prelude::*;
 
 #[test]
 fn data_container() {
-    let mut db = SlotDB::new(4, false);
+    let mut db = SlotDB::new(16, false);
 
     db.insert(0, 0).unwrap();
 
@@ -27,9 +28,15 @@ fn data_container() {
 }
 
 #[test]
-fn workflow() {
-    [16, 8, 4].into_iter().for_each(|i| {
+fn workflow_original_order() {
+    [32, 16, 8, 4].into_par_iter().for_each(|i| {
         slot_db_original_order(i);
+    });
+}
+
+#[test]
+fn workflow_swap_order() {
+    [32, 16, 8, 4].into_par_iter().for_each(|i| {
         slot_db_swap_order(i);
     });
 }
@@ -38,7 +45,7 @@ fn slot_db_original_order(mn: u64) {
     let mut db = SlotDB::new(mn, false);
 
     let max = ts!();
-    let min = max - 20000;
+    let min = max - siz();
 
     (min..max).for_each(|i| {
         db.insert(i, i).unwrap();
@@ -64,13 +71,14 @@ fn slot_db_original_order(mn: u64) {
     assert_eq!(0, db.total);
     assert!(db.get_entries_by_page(10, 0, true).is_empty());
     assert!(db.get_entries_by_page(10, 0, false).is_empty());
+    db.clear();
 }
 
 fn slot_db_swap_order(mn: u64) {
     let mut db = SlotDB::new(mn, true);
 
     let max = ts!();
-    let min = max - max / 100_000;
+    let min = max - siz();
 
     (min..max).for_each(|i| {
         db.insert(i, i).unwrap();
@@ -96,6 +104,7 @@ fn slot_db_swap_order(mn: u64) {
     assert_eq!(0, db.total);
     assert!(db.get_entries_by_page(0, 10, true).is_empty());
     assert!(db.get_entries_by_page(0, 10, true).is_empty());
+    db.clear();
 }
 
 fn assert_queryable(
@@ -271,5 +280,13 @@ fn assert_queryable(
                 .collect::<Vec<_>>();
             assert_eq!(b, c);
         }
+    }
+}
+
+const fn siz() -> u64 {
+    if cfg!(debug_assertions) {
+        1000
+    } else {
+        50_000
     }
 }

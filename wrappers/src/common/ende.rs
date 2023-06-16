@@ -358,13 +358,13 @@ macro_rules! impl_type {
         impl KeyEnDeOrdered for $int {
             #[inline(always)]
             fn to_bytes(&self) -> RawBytes {
-                self.to_be_bytes().to_vec()
+                self.wrapping_sub(<$int>::MIN).to_be_bytes().to_vec()
             }
             #[inline(always)]
             fn from_slice(b: &[u8]) -> Result<Self> {
                 <[u8; size_of::<$int>()]>::try_from(b)
                     .c(d!())
-                    .map(<$int>::from_be_bytes)
+                    .map(|bytes| <$int>::from_be_bytes(bytes).wrapping_sub(<$int>::MIN))
             }
         }
     };
@@ -374,14 +374,14 @@ macro_rules! impl_type {
             #[inline(always)]
             fn to_bytes(&self) -> RawBytes {
                 self.iter()
-                    .map(|i| i.to_be_bytes())
+                    .map(|i| i.wrapping_sub(<$int>::MIN).to_be_bytes())
                     .flatten()
                     .collect::<Vec<_>>()
             }
             #[inline(always)]
             fn into_bytes(mut self) -> RawBytes {
                 for i in 0..self.len() {
-                    self[i] = self[i].to_be();
+                    self[i] = self[i].wrapping_sub(<$int>::MIN).to_be();
                 }
                 unsafe {
                     let v = transmute::<Vec<$int>, RawBytes>(self);
@@ -395,9 +395,9 @@ macro_rules! impl_type {
                 }
                 b.chunks(size_of::<$int>())
                     .map(|i| {
-                        <[u8; size_of::<$int>()]>::try_from(i)
-                            .c(d!())
-                            .map(<$int>::from_be_bytes)
+                        <[u8; size_of::<$int>()]>::try_from(i).c(d!()).map(|bytes| {
+                            <$int>::from_be_bytes(bytes).wrapping_sub(<$int>::MIN)
+                        })
                     })
                     .collect()
             }
@@ -412,7 +412,7 @@ macro_rules! impl_type {
                     v
                 };
                 for i in 0..ret.len() {
-                    ret[i] = <$int>::from_be(ret[i]);
+                    ret[i] = <$int>::from_be(ret[i]).wrapping_sub(<$int>::MIN);
                 }
                 Ok(ret)
             }
@@ -443,7 +443,7 @@ macro_rules! impl_type {
             #[inline(always)]
             fn to_bytes(&self) -> RawBytes {
                 self.iter()
-                    .map(|i| i.to_be_bytes())
+                    .map(|i| i.wrapping_sub(<$int>::MIN).to_be_bytes())
                     .flatten()
                     .collect::<Vec<_>>()
             }
@@ -460,7 +460,9 @@ macro_rules! impl_type {
                     .enumerate()
                     .for_each(|(idx, i)| {
                         res[idx] = <[u8; size_of::<$int>()]>::try_from(i)
-                            .map(<$int>::from_be_bytes)
+                            .map(|bytes| {
+                                <$int>::from_be_bytes(bytes).wrapping_sub(<$int>::MIN)
+                            })
                             .unwrap();
                     });
                 Ok(res)
@@ -482,8 +484,8 @@ macro_rules! impl_type {
             }
         }
     };
-    (~$bigint: ty) => {
-        impl KeyEnDeOrdered for $bigint {
+    (~$big_uint: ty) => {
+        impl KeyEnDeOrdered for $big_uint {
             #[inline(always)]
             fn to_bytes(&self) -> RawBytes {
                 let mut r = vec![];
@@ -492,7 +494,7 @@ macro_rules! impl_type {
             }
             #[inline(always)]
             fn from_slice(b: &[u8]) -> Result<Self> {
-                Ok(<$bigint>::from_big_endian(b))
+                Ok(<$big_uint>::from_big_endian(b))
             }
         }
     };

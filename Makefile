@@ -16,15 +16,15 @@ lintall: lint
 
 test:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo test --workspace --release --tests --features "vs" -- --test-threads=1 #--nocapture
+	cargo test --workspace --release --tests --features "vs" #--nocapture
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo test --workspace --tests --features "vs" -- --test-threads=1 #--nocapture
+	cargo test --workspace --tests --features "vs" #--nocapture
 
 testall: test
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo test --workspace --release --tests --no-default-features --features "vs,rocks_engine,msgpack_codec" -- --test-threads=1 #--nocapture
+	cargo test --workspace --release --tests --no-default-features --features "vs,rocks_engine,msgpack_codec" #--nocapture
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo test --workspace --release --tests --no-default-features --features "vs,sled_engine,bcs_codec,compress" -- --test-threads=1 #--nocapture
+	cargo test --workspace --release --tests --no-default-features --features "vs,sled_engine,bcs_codec,compress" #--nocapture
 
 example:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
