@@ -36,6 +36,9 @@ where
 {
     data: MapxOrd<Slot, DataCtner<T>>,
 
+    // How many entries in this DB
+    total: EntryCnt,
+
     levels: Vec<Level>,
 
     multiple_step: u64,
@@ -48,6 +51,7 @@ where
     pub fn new(multiple_step: u64) -> Self {
         Self {
             data: MapxOrd::new(),
+            total: 0,
             levels: vec![],
             multiple_step,
         }
@@ -89,6 +93,7 @@ where
                 let slot_floor = slot / l.floor_base * l.floor_base;
                 *l.data.entry(&slot_floor).or_insert(0) += 1;
             });
+            self.total += 1;
         }
 
         Ok(())
@@ -127,14 +132,18 @@ where
                     *cnt -= 1;
                 }
             });
+            self.total -= 1;
         }
     }
 
     pub fn clear(&mut self) {
+        self.total = 0;
         self.data.clear();
+
         self.levels.iter_mut().for_each(|l| {
             l.data.clear();
         });
+
         self.levels.clear();
     }
 
@@ -163,9 +172,7 @@ where
         page_index: PageIndex, // start from 0
         reverse_order: bool,
     ) -> Vec<T> {
-        if 0 == page_size
-            || 0 == self.total_by_slot(slot_left_bound, slot_right_bound)
-        {
+        if 0 == page_size || 0 == self.total() {
             return vec![];
         }
 
@@ -369,7 +376,12 @@ where
     ) -> EntryCnt {
         let slot_start = slot_start.unwrap_or(Slot::MIN);
         let slot_end = slot_end.unwrap_or(Slot::MAX);
-        self.entry_cnt_within_two_slots(slot_start, slot_end)
+
+        if Slot::MIN == slot_start && Slot::MAX == slot_end {
+            self.total
+        } else {
+            self.entry_cnt_within_two_slots(slot_start, slot_end)
+        }
     }
 
     pub fn total(&self) -> EntryCnt {
