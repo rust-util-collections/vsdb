@@ -1,4 +1,5 @@
 #![deny(warnings)]
+#![cfg_attr(test, warn(warnings))]
 
 use ruc::*;
 use serde::{de, Deserialize, Serialize};
@@ -151,7 +152,7 @@ where
     pub fn get_entries_by_page(
         &self,
         page_size: PageSize,
-        page_index: PageIndex, // start from 0
+        page_index: PageIndex, // Start from 0
         reverse_order: bool,
     ) -> Vec<T> {
         self.get_entries_by_page_slot(
@@ -172,14 +173,14 @@ where
         page_index: PageIndex, // start from 0
         reverse_order: bool,
     ) -> Vec<T> {
-        if 0 == page_size || 0 == self.total() {
-            return vec![];
-        }
-
         let slot_min = slot_left_bound.unwrap_or(Slot::MIN);
         let slot_max = slot_right_bound.unwrap_or(Slot::MAX);
 
         if slot_max < slot_min {
+            return vec![];
+        }
+
+        if 0 == page_size || 0 == self.total() {
             return vec![];
         }
 
@@ -291,7 +292,7 @@ where
                     break;
                 } else {
                     slot_start =
-                        hdr.peek().map(|(s, _)| *s).unwrap_or(u64::MAX);
+                        hdr.peek().map(|(s, _)| *s).unwrap_or(Slot::MAX);
                     local_idx -= entry_cnt;
                 }
             }

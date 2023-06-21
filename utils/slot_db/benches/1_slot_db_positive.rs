@@ -21,25 +21,6 @@ fn query(db: &SlotDB<V>, page_size: u16) {
     db.get_entries_by_page(page_size, page_number, false);
 }
 
-fn slot_2(c: &mut Criterion) {
-    let mut db = slot_db_custom(2);
-
-    c.bench_function("slot 2, page size: 10", |b| {
-        b.iter(|| query(&db, black_box(10)))
-    });
-    c.bench_function("slot 2, page size: 20", |b| {
-        b.iter(|| query(&db, black_box(20)))
-    });
-    c.bench_function("slot 2, page size: 40", |b| {
-        b.iter(|| query(&db, black_box(40)))
-    });
-    c.bench_function("slot 2, page size: 80", |b| {
-        b.iter(|| query(&db, black_box(80)))
-    });
-
-    db.clear();
-}
-
 fn slot_4(c: &mut Criterion) {
     let mut db = slot_db_custom(4);
 
@@ -135,5 +116,5 @@ fn slot_64(c: &mut Criterion) {
     db.clear();
 }
 
-criterion_group!(benches, slot_64, slot_32, slot_16, slot_8, slot_4, slot_2);
+criterion_group!(benches, slot_64, slot_32, slot_16, slot_8, slot_4);
 criterion_main!(benches);

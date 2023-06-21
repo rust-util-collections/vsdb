@@ -3,38 +3,13 @@ use rand::random;
 use rayon::prelude::*;
 
 #[test]
-fn data_container() {
-    let mut db = SlotDB::new(16);
-
-    db.insert(0, 0).unwrap();
-
-    assert!(matches!(
-        db.data.iter().next().unwrap().1,
-        DataCtner::Small(_)
-    ));
-
-    (0..100u32).for_each(|i| {
-        db.insert(0, i).unwrap();
-    });
-
-    assert!(matches!(
-        db.data.iter().next().unwrap().1,
-        DataCtner::Large(_)
-    ));
-    assert_eq!(db.data.len(), 1);
-    assert_eq!(db.data.first().unwrap().1.len(), 100);
-    assert_eq!(db.data.first().unwrap().1.iter().next().unwrap(), 0);
-    assert_eq!(db.data.first().unwrap().1.iter().last().unwrap(), 99);
-}
-
-#[test]
-fn workflow_order() {
+fn workflow() {
     [32, 16, 8, 4].into_par_iter().for_each(|i| {
-        slot_db_order(i);
+        slot_db(i);
     });
 }
 
-fn slot_db_order(mn: u64) {
+fn slot_db(mn: u64) {
     let mut db = SlotDB::new(mn);
 
     let max = ts!();
@@ -243,4 +218,29 @@ fn assert_queryable(
 
 const fn siz() -> u64 {
     if cfg!(debug_assertions) { 1000 } else { 50_000 }
+}
+
+#[test]
+fn data_container() {
+    let mut db = SlotDB::new(16);
+
+    db.insert(0, 0).unwrap();
+
+    assert!(matches!(
+        db.data.iter().next().unwrap().1,
+        DataCtner::Small(_)
+    ));
+
+    (0..100u32).for_each(|i| {
+        db.insert(0, i).unwrap();
+    });
+
+    assert!(matches!(
+        db.data.iter().next().unwrap().1,
+        DataCtner::Large(_)
+    ));
+    assert_eq!(db.data.len(), 1);
+    assert_eq!(db.data.first().unwrap().1.len(), 100);
+    assert_eq!(db.data.first().unwrap().1.iter().next().unwrap(), 0);
+    assert_eq!(db.data.first().unwrap().1.iter().last().unwrap(), 99);
 }
