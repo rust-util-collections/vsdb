@@ -424,11 +424,11 @@ fn rocksdb_open() -> Result<(DB, Vec<String>)> {
     let parallelism = available_parallelism().c(d!())?.get() as i32;
     cfg.increase_parallelism(parallelism);
 
-    if cfg!(feature = "compress") {
-        cfg.set_compression_type(DBCompressionType::Zstd);
-    } else {
-        cfg.set_compression_type(DBCompressionType::None);
-    }
+    #[cfg(feature = "compress")]
+    cfg.set_compression_type(DBCompressionType::Zstd);
+
+    #[cfg(not(feature = "compress"))]
+    cfg.set_compression_type(DBCompressionType::None);
 
     let cfhdrs = (0..DATA_SET_NUM).map(|i| i.to_string()).collect::<Vec<_>>();
 
