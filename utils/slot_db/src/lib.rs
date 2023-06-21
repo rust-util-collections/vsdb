@@ -340,7 +340,7 @@ where
         }
 
         if reverse {
-            ret.sort_unstable_by(|a, b| b.cmp(a));
+            ret = ret.into_iter().rev().collect();
         }
 
         ret
