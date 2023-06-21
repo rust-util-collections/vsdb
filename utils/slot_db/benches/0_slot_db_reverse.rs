@@ -7,7 +7,7 @@ const DATA_SIZE: u32 = 100_0000;
 type V = Vec<u8>;
 
 fn slot_db_custom(mn: u64) -> SlotDB<V> {
-    let mut db = SlotDB::new(mn, true);
+    let mut db = SlotDB::new(mn);
 
     (1..DATA_SIZE).for_each(|i| {
         db.insert(i as u64, i.to_be_bytes().to_vec()).unwrap();
