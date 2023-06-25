@@ -6,11 +6,9 @@ pub use vsdb::{RawBytes, RawKey, RawValue, ValueEnDe};
 use ruc::*;
 use serde::{Deserialize, Serialize};
 use sp_trie::{
-    cache::{LocalTrieCache, TrieCache},
     trie_types::{TrieDB, TrieDBMutBuilderV1 as TrieDBMutBuilder, TrieDBMutV1 as TrieDBMut},
     LayoutV1, Trie, TrieDBBuilder, TrieHash, TrieMut,
 };
-use std::mem;
 use vsdb::basic::mapx_ord_rawkey::MapxOrdRawKey;
 use vsdb_hash_db::{
     sp_trie_db::{CError, DBValue, HashDB, Hasher as _, TrieItem, TrieIterator, TrieKeyItem},
@@ -45,37 +43,17 @@ impl MptStore {
         self.remove_backend(backend_key);
     }
 
-    pub fn trie_create(
-        &self,
-        backend_key: &[u8],
-        cache_size: Option<usize>,
-        reset: bool,
-    ) -> Result<MptOnce> {
-        let backend = MptStore::new_backend(cache_size);
+    pub fn trie_create(&self, backend_key: &[u8], reset: bool) -> Result<MptOnce> {
+        let backend = MptStore::new_backend();
         self.put_backend(backend_key, &backend, reset).c(d!())?;
 
         MptOnce::create_with_backend(backend).c(d!())
     }
 
-    /// @param cache_size:
-    ///     - None, do nothing
-    ///     - Some(0 or an negative value), disable cache
-    ///     - Some(a positive value), reset the cache capacity to the new size
-    pub fn trie_restore(
-        &self,
-        backend_key: &[u8],
-        new_cache_size: Option<isize>,
-        root: TrieRoot,
-    ) -> Result<MptOnce> {
-        let mut backend = self.get_backend(backend_key).c(d!("backend not found"))?;
-        if let Some(n) = new_cache_size {
-            if 0 < n {
-                backend.reset_cache(Some(n as usize));
-            } else {
-                backend.reset_cache(None);
-            }
-        }
-        MptOnce::restore(backend, root).c(d!())
+    pub fn trie_restore(&self, backend_key: &[u8], root: TrieRoot) -> Result<MptOnce> {
+        self.get_backend(backend_key)
+            .c(d!("backend not found"))
+            .and_then(|backend| MptOnce::restore(backend, root).c(d!()))
     }
 
     fn get_backend(&self, backend_key: &[u8]) -> Option<TrieBackend> {
@@ -100,8 +78,8 @@ impl MptStore {
         unsafe { self.meta.shadow() }.remove(backend_key);
     }
 
-    fn new_backend(cache_size: Option<usize>) -> TrieBackend {
-        TrieBackend::new(cache_size)
+    fn new_backend() -> TrieBackend {
+        TrieBackend::new()
     }
 }
 
@@ -122,8 +100,8 @@ pub struct MptOnce {
 }
 
 impl MptOnce {
-    pub fn create(cache_size: Option<usize>) -> Result<Self> {
-        Self::create_with_backend(TrieBackend::new(cache_size)).c(d!())
+    pub fn create() -> Result<Self> {
+        Self::create_with_backend(TrieBackend::new()).c(d!())
     }
 
     pub fn create_with_backend(backend: TrieBackend) -> Result<Self> {
@@ -220,42 +198,27 @@ pub struct MptMut<'a> {
 
     // self-reference
     #[allow(dead_code)]
-    meta: MptMeta<'a>,
+    meta: MptMeta,
 }
 
 impl<'a> MptMut<'a> {
     // keep private !!
     pub fn new(backend: &'a mut TrieBackend) -> Self {
-        let lc = backend.get_cache_hdr().map(|hdr| hdr.local_cache());
-
         // The buf will be rewrited when building the target `Trie`,
         // so its original contents can be arbitrary values.
         let root_buf = Default::default();
 
-        let meta = MptMeta::new(lc, root_buf, true);
+        let meta = MptMeta::new(root_buf);
 
-        let trie = TrieDBMutBuilder::new(backend, unsafe { &mut *meta.root })
-            .with_optional_cache(
-                meta.cache
-                    .as_ref()
-                    .map(|c| unsafe { &mut *c.cache } as &mut dyn sp_trie::TrieCache<_>),
-            )
-            .build();
+        let trie = TrieDBMutBuilder::new(backend, unsafe { &mut *meta.root }).build();
 
         Self { trie, meta }
     }
 
     pub fn from_existing(backend: &'a mut TrieBackend, root: TrieRoot) -> Self {
-        let lc = backend.get_cache_hdr().map(|hdr| hdr.local_cache());
-        let meta = MptMeta::new(lc, root, true);
+        let meta = MptMeta::new(root);
 
-        let trie = TrieDBMutBuilder::from_existing(backend, unsafe { &mut *meta.root })
-            .with_optional_cache(
-                meta.cache
-                    .as_ref()
-                    .map(|c| unsafe { &mut *c.cache } as &mut dyn sp_trie::TrieCache<_>),
-            )
-            .build();
+        let trie = TrieDBMutBuilder::from_existing(backend, unsafe { &mut *meta.root }).build();
 
         Self { trie, meta }
     }
@@ -310,21 +273,14 @@ pub struct MptRo<'a> {
 
     // self-reference
     #[allow(dead_code)]
-    meta: MptMeta<'a>,
+    meta: MptMeta,
 }
 
 impl<'a> MptRo<'a> {
     pub fn from_existing(backend: &'a TrieBackend, root: TrieRoot) -> Self {
-        let lc = backend.get_cache_hdr().map(|hdr| hdr.local_cache());
-        let meta = MptMeta::new(lc, root, false);
+        let meta = MptMeta::new(root);
 
-        let trie = TrieDBBuilder::new(backend, unsafe { &*meta.root })
-            .with_optional_cache(
-                meta.cache
-                    .as_ref()
-                    .map(|c| unsafe { &mut *c.cache } as &mut dyn sp_trie::TrieCache<_>),
-            )
-            .build();
+        let trie = TrieDBBuilder::new(backend, unsafe { &*meta.root }).build();
 
         Self { trie, meta }
     }
@@ -357,60 +313,24 @@ impl<'a> MptRo<'a> {
     }
 }
 
-struct MptMeta<'a> {
-    // self-reference
-    #[allow(dead_code)]
-    cache: Option<LayeredCache<'a>>,
-
+struct MptMeta {
     // self-reference
     #[allow(dead_code)]
     root: *mut TrieRoot,
 }
 
-impl<'a> MptMeta<'a> {
-    fn new(lc: Option<LocalTrieCache<H>>, root: TrieRoot, mutable: bool) -> Self {
+impl MptMeta {
+    fn new(root: TrieRoot) -> Self {
         Self {
-            cache: lc.map(|lc| LayeredCache::new(lc, alt!(mutable, None, Some(root)))),
             root: Box::into_raw(Box::new(root)),
         }
     }
 }
 
-// The raw pointers in `LayeredCache` will be dropped here
-impl Drop for MptMeta<'_> {
+impl Drop for MptMeta {
     fn drop(&mut self) {
         unsafe {
             drop(Box::from_raw(self.root));
-            if let Some(c) = mem::take(&mut self.cache) {
-                Box::from_raw(c.cache).merge_into(&Box::from_raw(c.local_cache), *self.root);
-            }
-        }
-    }
-}
-
-struct LayeredCache<'a> {
-    // self-reference
-    #[allow(dead_code)]
-    cache: *mut TrieCache<'a, H>,
-
-    // self-reference
-    #[allow(dead_code)]
-    local_cache: *mut LocalTrieCache<H>,
-}
-
-impl<'a> LayeredCache<'a> {
-    fn new(lc: LocalTrieCache<H>, root: Option<TrieRoot>) -> Self {
-        let lc = Box::into_raw(Box::new(lc));
-
-        let cache = if let Some(root) = root {
-            Box::into_raw(Box::new(unsafe { &*lc }.as_trie_db_cache(root)))
-        } else {
-            Box::into_raw(Box::new(unsafe { &*lc }.as_trie_db_mut_cache()))
-        };
-
-        Self {
-            cache,
-            local_cache: lc,
         }
     }
 }
@@ -421,8 +341,8 @@ mod test {
     use std::collections::BTreeMap;
 
     #[test]
-    fn encode_decode() {
-        let mut hdr = pnk!(MptOnce::create(None));
+    fn trie_db_encode_decode() {
+        let mut hdr = pnk!(MptOnce::create());
 
         pnk!(hdr.insert(b"key", b"value"));
         assert_eq!(b"value", pnk!(hdr.get(b"key")).unwrap().as_slice());
@@ -438,18 +358,9 @@ mod test {
     }
 
     #[test]
-    fn iter() {
-        iter_run(None);
-    }
-
-    #[test]
-    fn iter_with_cache() {
-        iter_run(Some(1024))
-    }
-
-    fn iter_run(cache_size: Option<usize>) {
+    fn trie_db_iter() {
         let s = MptStore::new();
-        let mut hdr = pnk!(s.trie_create(b"backend_key", cache_size, false));
+        let mut hdr = pnk!(s.trie_create(b"backend_key", false));
 
         {
             let samples = (0u8..200).map(|i| ([i], [i])).collect::<Vec<_>>();
