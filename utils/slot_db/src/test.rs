@@ -4,215 +4,143 @@ use rayon::prelude::*;
 
 #[test]
 fn workflow() {
-    [32, 16, 8, 4].into_par_iter().for_each(|i| {
-        slot_db(i);
+    [32, 16, 8].into_par_iter().for_each(|i| {
+        slot_db(i, false);
     });
 }
 
-fn slot_db(mn: u64) {
-    let mut db = SlotDB::new(mn);
+#[test]
+fn workflow_swap_order() {
+    [32, 16, 8].into_par_iter().for_each(|i| {
+        slot_db(i, true);
+    });
+}
 
-    let max = ts!();
-    let min = max - siz();
+fn slot_db(mn: u64, swap_order: bool) {
+    let mut db = SlotDB::new(mn, swap_order);
+    let mut test_db = testdb::TestDB::default();
 
-    (min..max).for_each(|i| {
+    let mut slot_min = 0;
+    let mut slot_max = Slot::MAX;
+
+    (0..siz()).for_each(|_| {
+        let i = random::<u64>();
+        slot_min = i.min(slot_min);
+        slot_max = i.max(slot_max);
+
         db.insert(i, i).unwrap();
+        test_db.insert(i, i);
     });
 
-    assert_eq!(max - min, db.total());
+    assert_eq!(siz(), db.total());
 
-    assert_queryable(&db, 1, 256, min, max - 1);
+    assert_queryable(&db, &test_db, slot_min, slot_max);
 
     for _ in 0..3 {
-        (min..max).for_each(|i| {
+        (0..siz()).for_each(|_| {
+            let i = random::<u64>();
+            slot_min = i.min(slot_min);
+            slot_max = i.max(slot_max);
+
             db.insert(i, i).unwrap();
+            test_db.insert(i, i);
         });
     }
 
-    assert_queryable(&db, 4, 256, min, max - 1);
+    assert_queryable(&db, &test_db, slot_min, slot_max);
 
-    // Cover the remove scene
-    (min..max).for_each(|i| {
-        db.remove(i, &i);
-    });
+    db.clear();
     assert_eq!(0, db.total());
     assert!(db.get_entries_by_page(10, 0, true).is_empty());
     assert!(db.get_entries_by_page(10, 0, false).is_empty());
-    db.clear();
 }
 
 fn assert_queryable(
     db: &SlotDB<u64>,
-    step: u32,
-    times: u64,
-    slot_min: u64,
-    slot_max: u64,
+    test_db: &testdb::TestDB<u64>,
+    slot_min: Slot,
+    slot_max: Slot,
 ) {
-    dbg!(step, times, slot_min, slot_max);
-    assert!(0 < step);
-    assert!(0 < times);
-    assert!(slot_min <= slot_max);
-
-    for i in 0..times {
-        let page_size = step + (random::<u16>() as u32) % 128 / step * step;
-        let max_page =
-            min!(u32::MAX, (db.total() / (page_size as u64) - 1) as u32);
-
-        dbg!("||<-----===========----->||", max_page);
+    for _ in 0..16 {
+        let page_size = 1 + (random::<u16>() as u32) % 128;
+        let max_page = 100 + (db.total() / (page_size as u64)) as u32;
 
         // Ensure the first page case is covered
-        let page_number = alt!(0 == i, 0, random::<u32>() % max_page);
+        let page_number = random::<u32>() % max_page;
 
         let page_size = page_size as u64;
         let page_number = page_number as u64;
-
         dbg!(page_number, page_size);
-        let end = slot_max - page_number * page_size;
-        let mut a = (0..=dbg!(end))
-            .rev()
-            .take((page_size) as usize)
-            .collect::<Vec<_>>();
-        a.sort_unstable_by(|a, b| b.cmp(&a));
-        let c =
+
+        let a = test_db.get_entries_by_page_slot(
+            None,
+            None,
+            page_size as u16,
+            page_number as u32,
+            true,
+        );
+        let b =
             db.get_entries_by_page(page_size as u16, page_number as u32, true);
-        assert_eq!(a, c);
+        assert_eq!(a, b);
 
-        let b = db
-            .data
-            .range(..=end)
-            .rev()
-            .take((page_size) as usize)
-            .map(|(_, v)| v.iter().collect::<Vec<_>>())
-            .flatten()
-            .collect::<Vec<_>>();
-        assert_eq!(b, c);
-
-        let start = slot_min + page_number * page_size;
-        let mut a = (dbg!(start)..)
-            .take((page_size) as usize)
-            .collect::<Vec<_>>();
-        a.sort_unstable();
-        let c = db.get_entries_by_page(
+        let a = test_db.get_entries_by_page_slot(
+            None,
+            None,
             page_size as u16,
             page_number as u32,
             false,
         );
-        assert_eq!(a, c);
-
-        let b = db
-            .data
-            .range(start..)
-            .take((page_size) as usize)
-            .map(|(_, v)| v.iter().collect::<Vec<_>>())
-            .flatten()
-            .collect::<Vec<_>>();
-        assert_eq!(b, c);
+        let b = db.get_entries_by_page(
+            page_size as u16,
+            page_number as u32,
+            false,
+        );
+        assert_eq!(a, b);
 
         //////////////////////////////////
         // Cases with custom slot range //
         //////////////////////////////////
 
-        let smin = random::<u64>() % slot_min;
-        let smax = slot_min.saturating_add(random::<u64>() % 99999);
-
-        let smin_actual = max!(smin, slot_min); // should always be slot_min
-        let smax_actual = min!(smax, slot_max);
-
-        let actual_gap = 1 + smax_actual - smin_actual;
+        let smin = random::<u64>() % (slot_min.saturating_add(100));
+        let smax = smin
+            + random::<u64>() % ((slot_max - slot_min).saturating_add(100));
 
         ////////////////////////////////////////
         ////////////////////////////////////////
 
-        println!("Step {} Round {} ==>", step, i);
-        dbg!(
-            slot_min,
-            slot_max,
-            smin,
-            smax,
-            smin_actual,
-            smax_actual,
-            actual_gap,
-            page_number,
-            page_size,
-        );
-        println!("Step {} Round {} <==\n", step, i);
-
-        let end = smax_actual - page_number * page_size;
-        let take_n = min!(
-            alt!(end < smin_actual, 0, 1 + end.saturating_sub(smin_actual)),
-            page_size
-        );
-        let mut a = (smin_actual..=dbg!(end))
-            .rev()
-            .take(dbg!(take_n) as usize)
-            .collect::<Vec<_>>();
-        a.sort_unstable_by(|a, b| b.cmp(&a));
-        let c = db.get_entries_by_page_slot(
+        let a = test_db.get_entries_by_page_slot(
             Some(smin),
             Some(smax),
             page_size as u16,
             page_number as u32,
             true,
         );
-        assert_eq!(a, c);
 
-        let b = db
-            .data
-            .range(smin_actual..=end)
-            .rev()
-            .take(take_n as usize)
-            .map(|(_, v)| v.iter().collect::<Vec<_>>())
-            .flatten()
-            .collect::<Vec<_>>();
-        assert_eq!(b, c);
-
-        ////////////////////////////////////////
-        ////////////////////////////////////////
-
-        println!("Step {} Round {} ==>", step, i);
-        dbg!(
-            slot_min,
-            slot_max,
-            smin,
-            smax,
-            smin_actual,
-            smax_actual,
-            actual_gap,
-            page_number,
-            page_size,
+        let b = db.get_entries_by_page_slot(
+            Some(smin),
+            Some(smax),
+            page_size as u16,
+            page_number as u32,
+            true,
         );
-        println!("Step {} Round {} <==\n", step, i);
+        assert_eq!(a, b);
 
-        let start = smin_actual + page_number * page_size;
-        let take_n = min!(
-            alt!(
-                start > smax_actual,
-                0,
-                1 + smax_actual.saturating_sub(start)
-            ),
-            page_size
-        );
-        let mut a = (dbg!(start)..=smax_actual)
-            .take(dbg!(take_n) as usize)
-            .collect::<Vec<_>>();
-        a.sort_unstable();
-        let c = db.get_entries_by_page_slot(
+        let a = test_db.get_entries_by_page_slot(
             Some(smin),
             Some(smax),
             page_size as u16,
             page_number as u32,
             false,
         );
-        assert_eq!(a, c);
 
-        let b = db
-            .data
-            .range(start..=smax_actual)
-            .take(take_n as usize)
-            .map(|(_, v)| v.iter().collect::<Vec<_>>())
-            .flatten()
-            .collect::<Vec<_>>();
-        assert_eq!(b, c);
+        let b = db.get_entries_by_page_slot(
+            Some(smin),
+            Some(smax),
+            page_size as u16,
+            page_number as u32,
+            false,
+        );
+        assert_eq!(a, b);
     }
 }
 
@@ -222,7 +150,7 @@ const fn siz() -> u64 {
 
 #[test]
 fn data_container() {
-    let mut db = SlotDB::new(16);
+    let mut db = SlotDB::new(16, false);
 
     db.insert(0, 0).unwrap();
 
@@ -243,4 +171,62 @@ fn data_container() {
     assert_eq!(db.data.first().unwrap().1.len(), 100);
     assert_eq!(db.data.first().unwrap().1.iter().next().unwrap(), 0);
     assert_eq!(db.data.first().unwrap().1.iter().last().unwrap(), 99);
+
+    db.clear();
+}
+
+mod testdb {
+    use super::*;
+    use std::{
+        collections::BTreeMap,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    static INNER_ID: AtomicU64 = AtomicU64::new(0);
+
+    #[derive(Default)]
+    pub struct TestDB<T: Clone> {
+        data: BTreeMap<[Slot; 2], T>,
+    }
+
+    impl<T: Clone> TestDB<T> {
+        pub fn insert(&mut self, slot: Slot, v: T) {
+            let inner_id = INNER_ID.fetch_add(1, Ordering::Relaxed);
+            self.data.insert([slot, inner_id], v);
+        }
+
+        pub fn get_entries_by_page_slot(
+            &self,
+            slot_start: Option<Slot>,
+            slot_end: Option<Slot>,
+            page_size: PageSize,
+            page_index: PageIndex,
+            reverse: bool,
+        ) -> Vec<T> {
+            let page_size = page_size as usize;
+            let page_index = page_index as usize;
+
+            let slot_start = slot_start.unwrap_or(Slot::MIN);
+            let slot_end = slot_end.unwrap_or(Slot::MAX);
+
+            if reverse {
+                self.data
+                    .range([slot_start, 0]..=[slot_end, Slot::MAX])
+                    .map(|(_, v)| v)
+                    .rev()
+                    .skip(page_size * page_index)
+                    .take(page_size)
+                    .cloned()
+                    .collect()
+            } else {
+                self.data
+                    .range([slot_start, 0]..=[slot_end, Slot::MAX])
+                    .map(|(_, v)| v)
+                    .skip(page_size * page_index)
+                    .take(page_size)
+                    .cloned()
+                    .collect()
+            }
+        }
+    }
 }

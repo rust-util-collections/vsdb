@@ -34,10 +34,10 @@ example:
 
 bench:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench --workspace
+	cargo bench --workspace --features "compress"
 	du -sh ~/.vsdb
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench --workspace --features "compress"
+	cargo bench --workspace
 	du -sh ~/.vsdb
 
 fmt:

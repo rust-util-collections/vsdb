@@ -41,10 +41,10 @@ compress = ["rocksdb/zstd"]
 
 extra_types = ["primitive-types-0-12", "primitive-types-0-11", "primitive-types-0-10"]
 
-[[bench]]
-name = "basic"
-harness = false
+# [[bench]]
+# name = "basic"
+# harness = false
 
-[[bench]]
-name = "versioned"
-harness = false
+# [[bench]]
+# name = "versioned"
+# harness = false

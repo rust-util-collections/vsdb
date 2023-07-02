@@ -43,22 +43,36 @@ where
     levels: Vec<Level>,
 
     multiple_step: u64,
+
+    // Switch the inner implementations of the slot direction:
+    // - positive => reverse
+    // - reverse => positive
+    //
+    // Positive query usually get better performance,
+    // if most scenes are under the reverse mode,
+    // then swap the low-level logic
+    swap_order: bool,
 }
 
 impl<T> SlotDB<T>
 where
     T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
-    pub fn new(multiple_step: u64) -> Self {
+    pub fn new(multiple_step: u64, swap_order: bool) -> Self {
         Self {
             data: MapxOrd::new(),
             total: 0,
             levels: vec![],
             multiple_step,
+            swap_order,
         }
     }
 
-    pub fn insert(&mut self, slot: Slot, t: T) -> Result<()> {
+    pub fn insert(&mut self, mut slot: Slot, t: T) -> Result<()> {
+        if self.swap_order {
+            slot = swap_order(slot);
+        }
+
         if let Some(top) = self.levels.last() {
             if top.data.len() as u64 > self.multiple_step {
                 let newtop = top.data.iter().fold(
@@ -100,7 +114,11 @@ where
         Ok(())
     }
 
-    pub fn remove(&mut self, slot: Slot, t: &T) {
+    pub fn remove(&mut self, mut slot: Slot, t: &T) {
+        if self.swap_order {
+            slot = swap_order(slot);
+        }
+
         loop {
             if let Some(top_len) = self.levels.last().map(|top| top.data.len())
             {
@@ -171,10 +189,16 @@ where
         slot_right_bound: Option<Slot>, // Included
         page_size: PageSize,
         page_index: PageIndex, // start from 0
-        reverse_order: bool,
+        mut reverse_order: bool,
     ) -> Vec<T> {
-        let slot_min = slot_left_bound.unwrap_or(Slot::MIN);
-        let slot_max = slot_right_bound.unwrap_or(Slot::MAX);
+        let mut slot_min = slot_left_bound.unwrap_or(Slot::MIN);
+        let mut slot_max = slot_right_bound.unwrap_or(Slot::MAX);
+
+        if self.swap_order {
+            (slot_min, slot_max) =
+                (swap_order(slot_max), swap_order(slot_min));
+            reverse_order = !reverse_order;
+        }
 
         if slot_max < slot_min {
             return vec![];
@@ -395,7 +419,7 @@ where
     T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
     fn default() -> Self {
-        Self::new(8)
+        Self::new(8, false)
     }
 }
 
@@ -516,6 +540,11 @@ impl Level {
             data: MapxOrd::new(),
         }
     }
+}
+
+#[inline(always)]
+fn swap_order(original_slot_value: Slot) -> Slot {
+    Slot::MAX - original_slot_value
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_slot_db"
-version = "0.6.1"
+version = "0.7.0"
 edition = "2021"
 keywords = ["timestamp", "slot", "database", "web"]
 license = "MIT"
@@ -27,9 +27,13 @@ json_codec = ["vsdb/json_codec"]
 msgpack_codec = ["vsdb/msgpack_codec"]
 
 [[bench]]
-name = "0_slot_db_reverse"
+name = "0_slot_db_reverse_swap_order"
 harness = false
 
 [[bench]]
 name = "1_slot_db_positive"
+harness = false
+
+[[bench]]
+name = "2_slot_db_reverse"
 harness = false

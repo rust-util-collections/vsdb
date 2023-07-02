@@ -7,9 +7,9 @@ const DATA_SIZE: u32 = 100_0000;
 type V = Vec<u8>;
 
 fn slot_db_custom(mn: u64) -> SlotDB<V> {
-    let mut db = SlotDB::new(mn, false);
+    let mut db = SlotDB::new(mn, true);
 
-    (0..DATA_SIZE).for_each(|i| {
+    (1..DATA_SIZE).for_each(|i| {
         db.insert(i as u64, i.to_be_bytes().to_vec()).unwrap();
     });
 
@@ -18,7 +18,7 @@ fn slot_db_custom(mn: u64) -> SlotDB<V> {
 
 fn query(db: &SlotDB<V>, page_size: u16) {
     let page_number = random::<u32>() % (DATA_SIZE / (page_size as u32));
-    db.get_entries_by_page(page_size, page_number, false);
+    db.get_entries_by_page(page_size, page_number, true);
 }
 
 fn slot_4(c: &mut Criterion) {
@@ -42,7 +42,6 @@ fn slot_4(c: &mut Criterion) {
 
 fn slot_8(c: &mut Criterion) {
     let mut db = slot_db_custom(8);
-
     c.bench_function("slot 8, page size: 10", |b| {
         b.iter(|| query(&db, black_box(10)))
     });
@@ -61,7 +60,6 @@ fn slot_8(c: &mut Criterion) {
 
 fn slot_16(c: &mut Criterion) {
     let mut db = slot_db_custom(16);
-
     c.bench_function("slot 16, page size: 10", |b| {
         b.iter(|| query(&db, black_box(10)))
     });
@@ -80,7 +78,6 @@ fn slot_16(c: &mut Criterion) {
 
 fn slot_32(c: &mut Criterion) {
     let mut db = slot_db_custom(32);
-
     c.bench_function("slot 32, page size: 10", |b| {
         b.iter(|| query(&db, black_box(10)))
     });
@@ -99,7 +96,6 @@ fn slot_32(c: &mut Criterion) {
 
 fn slot_64(c: &mut Criterion) {
     let mut db = slot_db_custom(64);
-
     c.bench_function("slot 64, page size: 10", |b| {
         b.iter(|| query(&db, black_box(10)))
     });
