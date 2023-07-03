@@ -378,8 +378,8 @@ where
         ret
     }
 
-    // Can also be used to do some `data statistics`
-    fn entry_cnt_within_two_slots(
+    /// Can also be used to do some `data statistics`
+    pub fn entry_cnt_within_two_slots(
         &self,
         slot_start: Slot,
         slot_end: Slot,
