@@ -6,6 +6,7 @@ use serde::{de, Deserialize, Serialize};
 use std::{
     collections::{btree_set::Iter as SmallIter, BTreeSet},
     mem,
+    ops::Bound,
 };
 use vsdb::{
     basic::mapx_ord::MapxOrdIter as LargeIter, KeyEnDeOrdered, MapxOrd,
@@ -272,12 +273,11 @@ where
                     distance_of_slot_start.saturating_sub(skip_n),
                     PageSize::MAX as Distance
                 );
+
+                skip_n = distance_of_slot_start;
+
                 page_size.saturating_sub(back_shift as PageSize)
             };
-
-            if 0 > skip_n {
-                skip_n = 0;
-            }
 
             (skip_n as SkipNum, take_n as TakeNum)
         } else {
@@ -304,32 +304,39 @@ where
     fn get_local_skip_num(
         &self,
         global_skip_num: EntryCnt,
-    ) -> (StartSlotActual, SkipNum) {
-        let mut slot_start = Slot::MIN;
+    ) -> (Bound<StartSlotActual>, SkipNum) {
+        let mut slot_start = Bound::Included(Slot::MIN);
         let mut local_idx = global_skip_num as usize;
 
         for l in self.levels.iter().rev() {
-            let mut hdr = l.data.range(slot_start..).peekable();
+            let mut hdr =
+                l.data.range((slot_start, Bound::Unbounded)).peekable();
             while let Some(entry_cnt) = hdr.next().map(|(_, cnt)| cnt as usize)
             {
                 if entry_cnt > local_idx {
                     break;
                 } else {
-                    slot_start =
-                        hdr.peek().map(|(s, _)| *s).unwrap_or(Slot::MAX);
+                    slot_start = hdr
+                        .peek()
+                        .map(|(s, _)| Bound::Included(*s))
+                        .unwrap_or(Bound::Excluded(Slot::MAX));
                     local_idx -= entry_cnt;
                 }
             }
         }
 
-        let mut hdr = self.data.range(slot_start..).peekable();
+        let mut hdr =
+            self.data.range((slot_start, Bound::Unbounded)).peekable();
         while let Some(entry_cnt) =
             hdr.next().map(|(_, entries)| entries.len())
         {
             if entry_cnt > local_idx {
                 break;
             } else {
-                slot_start = hdr.peek().map(|(s, _)| *s).unwrap_or(u64::MAX);
+                slot_start = hdr
+                    .peek()
+                    .map(|(s, _)| Bound::Included(*s))
+                    .unwrap_or(Bound::Excluded(Slot::MAX));
                 local_idx -= entry_cnt;
             }
         }
@@ -358,7 +365,10 @@ where
         let mut skip_n = local_skip_n as usize;
         let take_n = take_n as usize;
 
-        for (_, entries) in self.data.range(slot_start_actual..=slot_end) {
+        for (_, entries) in self
+            .data
+            .range((slot_start_actual, Bound::Included(slot_end)))
+        {
             entries
                 .iter()
                 .skip(skip_n)
@@ -544,7 +554,7 @@ impl Level {
 
 #[inline(always)]
 fn swap_order(original_slot_value: Slot) -> Slot {
-    Slot::MAX - original_slot_value
+    !original_slot_value
 }
 
 #[cfg(test)]

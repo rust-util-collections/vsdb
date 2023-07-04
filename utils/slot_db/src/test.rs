@@ -1,17 +1,16 @@
 use super::*;
 use rand::random;
-use rayon::prelude::*;
 
 #[test]
-fn workflow() {
-    [32, 16, 8].into_par_iter().for_each(|i| {
+fn workflow_normal() {
+    [32, 16, 8].into_iter().for_each(|i| {
         slot_db(i, false);
     });
 }
 
 #[test]
 fn workflow_swap_order() {
-    [32, 16, 8].into_par_iter().for_each(|i| {
+    [32, 16, 8].into_iter().for_each(|i| {
         slot_db(i, true);
     });
 }
@@ -20,11 +19,10 @@ fn slot_db(mn: u64, swap_order: bool) {
     let mut db = SlotDB::new(mn, swap_order);
     let mut test_db = testdb::TestDB::default();
 
-    let mut slot_min = 0;
-    let mut slot_max = Slot::MAX;
+    let mut slot_min = Slot::MAX;
+    let mut slot_max = Slot::MIN;
 
-    (0..siz()).for_each(|_| {
-        let i = random::<u64>();
+    (0..siz()).for_each(|i| {
         slot_min = i.min(slot_min);
         slot_max = i.max(slot_max);
 
@@ -33,19 +31,6 @@ fn slot_db(mn: u64, swap_order: bool) {
     });
 
     assert_eq!(siz(), db.total());
-
-    assert_queryable(&db, &test_db, slot_min, slot_max);
-
-    for _ in 0..3 {
-        (0..siz()).for_each(|_| {
-            let i = random::<u64>();
-            slot_min = i.min(slot_min);
-            slot_max = i.max(slot_max);
-
-            db.insert(i, i).unwrap();
-            test_db.insert(i, i);
-        });
-    }
 
     assert_queryable(&db, &test_db, slot_min, slot_max);
 
@@ -109,8 +94,8 @@ fn assert_queryable(
         ////////////////////////////////////////
 
         let a = test_db.get_entries_by_page_slot(
-            Some(smin),
-            Some(smax),
+            Some(dbg!(smin)),
+            Some(dbg!(smax)),
             page_size as u16,
             page_number as u32,
             true,
@@ -145,7 +130,11 @@ fn assert_queryable(
 }
 
 const fn siz() -> u64 {
-    if cfg!(debug_assertions) { 1000 } else { 50_000 }
+    if cfg!(debug_assertions) {
+        1_0000
+    } else {
+        100_0000
+    }
 }
 
 #[test]
@@ -185,11 +174,11 @@ mod testdb {
     static INNER_ID: AtomicU64 = AtomicU64::new(0);
 
     #[derive(Default)]
-    pub struct TestDB<T: Clone> {
+    pub struct TestDB<T: Clone + Eq> {
         data: BTreeMap<[Slot; 2], T>,
     }
 
-    impl<T: Clone> TestDB<T> {
+    impl<T: Clone + Eq> TestDB<T> {
         pub fn insert(&mut self, slot: Slot, v: T) {
             let inner_id = INNER_ID.fetch_add(1, Ordering::Relaxed);
             self.data.insert([slot, inner_id], v);

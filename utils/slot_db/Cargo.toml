@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_slot_db"
-version = "0.7.2"
+version = "0.7.3"
 edition = "2021"
 keywords = ["database", "timestamp", "slot", "web"]
 license = "MIT"
@@ -17,7 +17,6 @@ serde = { workspace = true }
 [dev-dependencies]
 criterion = "0.5.1"
 rand = { workspace = true }
-rayon = "1.7.0"
 
 [features]
 default = ["compress", "msgpack_codec"]
