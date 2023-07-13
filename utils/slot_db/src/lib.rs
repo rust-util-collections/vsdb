@@ -391,9 +391,14 @@ where
     /// Can also be used to do some `data statistics`
     pub fn entry_cnt_within_two_slots(
         &self,
-        slot_start: Slot,
-        slot_end: Slot,
+        mut slot_start: Slot,
+        mut slot_end: Slot,
     ) -> EntryCnt {
+        if self.swap_order {
+            (slot_start, slot_end) =
+                (swap_order(slot_end), swap_order(slot_start));
+        }
+
         if slot_start > slot_end {
             0
         } else {
