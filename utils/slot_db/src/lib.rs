@@ -27,7 +27,8 @@ type Distance = i128;
 type PageSize = u16;
 type PageIndex = u32;
 
-/// A `Skip List` like structure
+/// A `Skip List` like structure,
+/// designed to support fast paged queries and indexes
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(
     bound = "T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned"
@@ -59,6 +60,15 @@ impl<T> SlotDB<T>
 where
     T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
+    ///
+    /// @param: `swap_order`:
+    ///
+    /// Switch the inner logic of the slot direction:
+    /// - positive => reverse
+    /// - reverse => positive
+    ///
+    /// Positive query usually get better performance,
+    /// swap order if most cases run in the reverse mode
     pub fn new(multiple_step: u64, swap_order: bool) -> Self {
         Self {
             data: MapxOrd::new(),

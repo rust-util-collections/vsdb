@@ -3,4 +3,10 @@
 
 # Slot DB
 
-A `Skip List`-like timestamp database, based on the powerful [`vsdb`](https://crates.io/crates/vsdb) crate.
+A `Skip List`-like index cache, based on the powerful [`vsdb`](https://crates.io/crates/vsdb) crate.
+
+If you have a big key-value database, and you need high-performance pagination display or data analysis based on that data, then this crate may be a great tool for you.
+
+## Usage
+
+For examples, please check [**the embed test cases**](src/test.rs).

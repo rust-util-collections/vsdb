@@ -1,11 +1,11 @@
 [package]
 name = "vsdb_slot_db"
-version = "0.7.4"
+version = "0.7.5"
 edition = "2021"
-keywords = ["database", "timestamp", "slot", "web"]
+keywords = ["index", "cache", "timestamp", "slot", "database"]
 license = "MIT"
 authors = ["hui.fan@mail.ru"]
-description = "A skip-list like timestamp DB"
+description = "A skip-list like index cache"
 homepage = "https://github.com/rust-util-collections/vsdb"
 repository = "https://github.com/rust-util-collections/vsdb"
 
