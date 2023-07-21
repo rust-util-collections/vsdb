@@ -39,14 +39,9 @@ testall: test
 
 testmusl:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo test --workspace --target x86_64-unknown-linux-musl --tests \
-		--no-default-features \
-		--features "parity_backend,vs,msgpack_codec" \
-		-- --test-threads=1 #--nocapture
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo test --workspace --target x86_64-unknown-linux-musl --release --tests \
 		--no-default-features \
-		--features "parity_backend,vs,bcs_codec,compress" \
+		--features "parity_backend,vs,msgpack_codec" \
 		-- --test-threads=1 #--nocapture
 
 example:
@@ -57,26 +52,22 @@ example:
 
 bench:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench --workspace --features "compress"
-	du -sh ~/.vsdb
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo bench --workspace
 	du -sh ~/.vsdb
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench --workspace --no-default-features --features "parity_backend,compress"
+	cargo bench --workspace --features "compress"
 	du -sh ~/.vsdb
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench --workspace --no-default-features --features "parity_backend"
+	cargo bench --workspace --no-default-features --features "parity_backend,bcs_codec"
+	du -sh ~/.vsdb
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
+	cargo bench --workspace --no-default-features --features "parity_backend,compress,bcs_codec"
 	du -sh ~/.vsdb
 
 benchmusl:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo bench --workspace --target x86_64-unknown-linux-musl \
-		--no-default-features --features "parity_backend,compress"
-	du -sh ~/.vsdb
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench --workspace --target x86_64-unknown-linux-musl \
-		--no-default-features --features "parity_backend"
+		--no-default-features --features "parity_backend,bcs_codec"
 	du -sh ~/.vsdb
 
 fmt:
