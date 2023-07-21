@@ -1,14 +1,26 @@
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
-mod rocks_db;
+#[cfg(feature = "rocks_backend")]
+mod rocks_backend;
+
+#[cfg(feature = "parity_backend")]
+mod parity_backend;
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
-pub(crate) use rocks_db::RocksEngine as RocksDB;
+#[cfg(feature = "rocks_backend")]
+pub(crate) use rocks_backend::RocksEngine as RocksDB;
 
-type EngineIter = rocks_db::RocksIter;
+#[cfg(feature = "rocks_backend")]
+type EngineIter = rocks_backend::RocksIter;
+
+#[cfg(feature = "parity_backend")]
+pub(crate) use parity_backend::ParityEngine as ParityDB;
+
+#[cfg(feature = "parity_backend")]
+type EngineIter = parity_backend::ParityIter;
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -44,7 +56,7 @@ pub trait Engine: Sized {
     fn area_count(&self) -> usize;
 
     // NOTE:
-    // do NOT make the number of areas bigger than `u8::MAX`
+    // do NOT make the number of areas bigger than `u8::MAX - 1`
     fn area_idx(&self, meta_prefix: PreBytes) -> usize {
         meta_prefix[0] as usize % self.area_count()
     }

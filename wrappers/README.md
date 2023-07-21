@@ -153,6 +153,12 @@ Some complete examples:
 
 ### Compilation features
 
+- [ **DEFAULT** ] `rocks_backend`, use `rocksdb` as the backend database
+  - Stable
+  - C++ implementation, difficult to be compiled into a static binary
+- `parity_backend`, use `parity-db` as the backend database
+  - Experimental
+  - Pure rust implementation, can be easily compiled into a static binary
 - `bcs_codec`, use `bcs` as the codec
     - Faster running speed than json
     - Security reinforcement for blockchain scenarios
