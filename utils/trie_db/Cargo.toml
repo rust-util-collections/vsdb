@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_trie_db"
-version = "0.14.0"
+version = "0.15.0"
 edition = "2021"
 keywords = ["mpt", "trie", "database", "blockchain"]
 license = "MIT"
@@ -11,7 +11,8 @@ repository = "https://github.com/rust-util-collections/vsdb"
 
 [dependencies]
 serde = { workspace = true }
-sp-trie = { workspace = true }
+trie-db = { workspace = true }
+reference-trie = { workspace = true }
 
 ruc = { workspace = true }
 vsdb = { workspace = true }

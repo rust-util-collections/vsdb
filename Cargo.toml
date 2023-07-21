@@ -28,14 +28,14 @@ primitive-types-0-10 = { package = "primitive-types", version = "0.10", default-
 
 rocksdb = { version = "0.21.0", default-features = false }
 
-sp-trie = "22.0"
-sp-trie-db = { package = "trie-db", version = "0.27.1" }
-hash-db = "0.16.0"
 keccak-hasher = "0.16.0"
+hash-db = "0.16.0"
+trie-db = "0.27.1"
+reference-trie = "0.29.1"
 
 vsdb = { path = "wrappers", version = "0.60.0", default-features = false }
 vsdb_core = { path = "core", version = "0.60.1", default-features = false }
 vsdb_derive = { path = "derive", version = "0.53.0" }
 
-vsdb_trie_db = { path = "utils/trie_db", version = "0.14.0", default-features = false }
-vsdb_hash_db = { path = "utils/hash_db", version = "0.13.0", default-features = false }
+vsdb_trie_db = { path = "utils/trie_db", version = "0.15.0", default-features = false }
+vsdb_hash_db = { path = "utils/hash_db", version = "0.14.0", default-features = false }

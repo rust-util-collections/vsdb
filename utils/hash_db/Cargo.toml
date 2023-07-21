@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_hash_db"
-version = "0.13.0"
+version = "0.14.0"
 edition = "2021"
 keywords = ["mpt", "trie", "database", "blockchain"]
 license = "MIT"
@@ -10,8 +10,6 @@ homepage = "https://github.com/rust-util-collections/vsdb"
 repository = "https://github.com/rust-util-collections/vsdb"
 
 [dependencies]
-sp-trie = { workspace = true }
-sp-trie-db = { workspace = true }
 hash-db = { workspace = true }
 keccak-hasher = { workspace = true }
 

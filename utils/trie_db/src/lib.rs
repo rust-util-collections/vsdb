@@ -3,19 +3,19 @@
 
 pub use vsdb::{RawBytes, RawKey, RawValue, ValueEnDe};
 
+use reference_trie::{
+    ExtensionLayout as L, RefTrieDB as TrieDB, RefTrieDBBuilder as TrieDBBuilder,
+    RefTrieDBMut as TrieDBMut, RefTrieDBMutBuilder as TrieDBMutBuilder,
+};
 use ruc::*;
 use serde::{Deserialize, Serialize};
-use sp_trie::{
-    trie_types::{TrieDB, TrieDBMutBuilderV1 as TrieDBMutBuilder, TrieDBMutV1 as TrieDBMut},
-    LayoutV1, Trie, TrieDBBuilder, TrieHash, TrieMut,
+use trie_db::{
+    CError, DBValue, HashDB, Hasher as _, Trie, TrieHash, TrieItem, TrieIterator, TrieKeyItem,
+    TrieMut,
 };
 use vsdb::basic::mapx_ord_rawkey::MapxOrdRawKey;
-use vsdb_hash_db::{
-    sp_trie_db::{CError, DBValue, HashDB, Hasher as _, TrieItem, TrieIterator, TrieKeyItem},
-    KeccakHasher as H, TrieBackend,
-};
+use vsdb_hash_db::{KeccakHasher as H, TrieBackend};
 
-type L = LayoutV1<H>;
 pub type TrieRoot = TrieHash<L>;
 
 pub type TrieIter<'a> = Box<dyn TrieIterator<L, Item = TrieItem<TrieHash<L>, CError<L>>> + 'a>;
@@ -194,7 +194,7 @@ impl ValueEnDe for MptOnce {
 // so that UB will not occur
 /// A mutable MPT instance
 pub struct MptMut<'a> {
-    trie: TrieDBMut<'a, H>,
+    trie: TrieDBMut<'a>,
 
     // self-reference
     #[allow(dead_code)]
@@ -269,7 +269,7 @@ impl<'a> MptMut<'a> {
 // so that UB will not occur
 /// A readonly MPT instance
 pub struct MptRo<'a> {
-    trie: TrieDB<'a, 'a, H>,
+    trie: TrieDB<'a, 'a>,
 
     // self-reference
     #[allow(dead_code)]
