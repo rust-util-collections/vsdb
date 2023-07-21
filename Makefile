@@ -69,6 +69,16 @@ bench:
 	cargo bench --workspace --no-default-features --features "parity_backend"
 	du -sh ~/.vsdb
 
+benchmusl:
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
+	cargo bench --workspace --target x86_64-unknown-linux-musl \
+		--no-default-features --features "parity_backend,compress"
+	du -sh ~/.vsdb
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
+	cargo bench --workspace --target x86_64-unknown-linux-musl \
+		--no-default-features --features "parity_backend"
+	du -sh ~/.vsdb
+
 fmt:
 	cargo +nightly fmt
 
