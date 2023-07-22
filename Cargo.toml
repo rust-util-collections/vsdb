@@ -8,6 +8,7 @@ members = [
     "utils/trie_map",
     "utils/slot_db",
 ]
+resolver = "2"
 
 [workspace.dependencies]
 ruc = "5.0.10"
