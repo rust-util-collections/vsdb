@@ -31,11 +31,6 @@ testall: test
 		--no-default-features \
 		--features "parity_backend,vs,msgpack_codec" \
 		-- --test-threads=1 #--nocapture
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo test --workspace --release --tests \
-		--no-default-features \
-		--features "parity_backend,vs,bcs_codec,compress" \
-		-- --test-threads=1 #--nocapture
 
 testmusl:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
