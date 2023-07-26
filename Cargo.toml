@@ -35,9 +35,19 @@ hash-db = "0.16.0"
 trie-db = "0.27.1"
 reference-trie = "0.29.1"
 
+# vsdb = { git = "https://github.com/rust-util-collections/vsdb", branch = "feat-full-trie", default-features = false }
+# vsdb_core = { git = "https://github.com/rust-util-collections/vsdb", branch = "feat-full-trie", default-features = false }
 vsdb = { path = "wrappers", version = "0.61.0", default-features = false }
 vsdb_core = { path = "core", version = "0.61.0", default-features = false }
 vsdb_derive = { path = "derive", version = "0.53.0" }
 
+# vsdb_trie_db = { git = "https://github.com/rust-util-collections/vsdb", branch = "feat-full-trie", default-features = false }
+# vsdb_hash_db = { git = "https://github.com/rust-util-collections/vsdb", branch = "feat-full-trie", default-features = false }
 vsdb_trie_db = { path = "utils/trie_db", version = "0.20.0", default-features = false }
 vsdb_hash_db = { path = "utils/hash_db", version = "0.20.0", default-features = false }
+
+[patch.crates-io]
+keccak-hasher = { git = "https://github.com/rust-util-collections/trie", tag = "v0.27.1-full-history" }
+hash-db = { git = "https://github.com/rust-util-collections/trie", tag = "v0.27.1-full-history" }
+trie-db = { git = "https://github.com/rust-util-collections/trie", tag = "v0.27.1-full-history" }
+reference-trie = { git = "https://github.com/rust-util-collections/trie", tag = "v0.27.1-full-history" }
