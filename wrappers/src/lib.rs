@@ -19,6 +19,15 @@
 //!     - Use `Vecx` just like `Vec`
 //!     - Use `Mapx` just like `HashMap`
 //!     - Use `MapxOrd` just like `BTreeMap`
+//!     - ...
+//!
+//! ## Practical scenarios
+//!
+//! - Process `CheckTx`, `DeliverTx`, `Commit` ... in 'Tendermint ABCI'
+//! - Handle folk chain branches, e.g.:
+//!    - Handling 'chain folk' or 'uncle blocks' in non-deterministic consensus like 'POW'
+//!    - Handle temporary 'chain folk' in a hybrid consensus like 'Babe + Grandpa'(substrate)
+//! - Support some special APIs of 'ETH Web3' in the form of 'trial run'
 //! - ...
 //!
 //! ## Examples

@@ -2,7 +2,7 @@
 [![Latest Version](https://img.shields.io/crates/v/VSDB.svg)](https://crates.io/crates/VSDB)
 [![Rust Documentation](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/VSDB)
 ![GitHub Workflow Status](https://img.shields.io/github/workflow/status/rust-util-collections/VSDB/Rust)
-[![Minimum rustc version](https://img.shields.io/badge/rustc-1.60+-lightgray.svg)](https://github.com/rust-random/rand#rust-version-requirements)
+[![Minimum rustc version](https://img.shields.io/badge/rustc-1.63+-lightgray.svg)](https://github.com/rust-random/rand#rust-version-requirements)
 
 # VSDB
 
@@ -24,6 +24,15 @@ Based on the powerful version control function of VSDB, you can easily give your
     - Use `Vecx` just like `Vec`
     - Use `Mapx` just like `HashMap`
     - Use `MapxOrd` just like `BTreeMap`
+- ...
+
+### Practical scenarios
+
+- Process `CheckTx`, `DeliverTx`, `Commit` ... in 'Tendermint ABCI'
+- Handle folk chain branches, e.g.:
+   - Handling 'chain folk' or 'uncle blocks' in non-deterministic consensus like 'POW'
+   - Handle temporary 'chain folk' in a hybrid consensus like 'Babe + Grandpa'(substrate)
+- Support some special APIs of 'ETH Web3' in the form of 'trial run'
 - ...
 
 ### Examples

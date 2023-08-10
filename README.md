@@ -1,10 +1,21 @@
 ![GitHub top language](https://img.shields.io/github/languages/top/rust-util-collections/VSDB)
 ![GitHub Workflow Status](https://img.shields.io/github/workflow/status/rust-util-collections/VSDB/Rust)
-[![Minimum rustc version](https://img.shields.io/badge/rustc-1.60+-lightgray.svg)](https://github.com/rust-random/rand#rust-version-requirements)
+[![Minimum rustc version](https://img.shields.io/badge/rustc-1.63+-lightgray.svg)](https://github.com/rust-random/rand#rust-version-requirements)
 
 # VSDB
 
-VSDB is a 'Git' in the form of KV-database, check [**here**](wrappers/README.md) for a detailed description.
+VSDB is a 'Git' in the form of KV-database.
+
+Some known practical scenarios:
+
+- Process `CheckTx`, `DeliverTx`, `Commit` ... in 'Tendermint ABCI'
+- Handle folk chain branches, e.g.:
+   - Handling 'chain folk' or 'uncle blocks' in non-deterministic consensus like 'POW'
+   - Handle temporary 'chain folk' in a hybrid consensus like 'Babe + Grandpa'(substrate)
+- Support some special APIs of 'ETH Web3' in the form of 'trial run'
+- ...
+
+Check [**here**](wrappers/README.md) for a detailed description.
 
 ### Crate List
 
