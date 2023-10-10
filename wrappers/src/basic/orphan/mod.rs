@@ -231,7 +231,7 @@ where
     T: ValueEnDe + Ord,
 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.get_value().partial_cmp(&other.get_value())
+        Some(self.cmp(other))
     }
 }
 

@@ -139,9 +139,7 @@ impl From<MapxRawVsWithoutDerivedFields> for MapxRawVs {
                 .iter()
                 .fold(existing_vers, |mut acc, (k, vers)| {
                     for (ver, _) in decode_map(vers).iter() {
-                        acc.entry(to_verid(&ver))
-                            .or_insert_with(BTreeSet::new)
-                            .insert(k.clone());
+                        acc.entry(to_verid(&ver)).or_default().insert(k.clone());
                     }
                     acc
                 });
@@ -1069,7 +1067,6 @@ impl MapxRawVs {
             .filter(|brid| !br_ids.contains(brid))
             .copied()
             .collect::<Vec<_>>();
-        let brs = brs;
         for brid in brs.into_iter() {
             self.branch_remove(brid).c(d!())?;
         }

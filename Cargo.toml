@@ -27,7 +27,7 @@ primitive-types-0-12 = { package = "primitive-types", version = "0.12", default-
 primitive-types-0-11 = { package = "primitive-types", version = "0.11", default-features = false }
 primitive-types-0-10 = { package = "primitive-types", version = "0.10", default-features = false }
 
-parity-db = "0.4.10"
+parity-db = "0.4.11"
 rocksdb = { version = "0.21.0", default-features = false }
 
 keccak-hasher = "0.16.0"
