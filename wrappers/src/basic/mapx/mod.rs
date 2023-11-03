@@ -11,7 +11,7 @@
 //! ```
 //! use vsdb::Mapx;
 //!
-//! let dir = format!("/tmp/__vsdb__{}", rand::random::<u128>());
+//! let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
 //! vsdb::vsdb_set_base_dir(&dir);
 //!
 //! let mut l = Mapx::new();
@@ -287,7 +287,7 @@ where
 {
     type Target = V;
     fn deref(&self) -> &Self::Target {
-        &*self.inner
+        &self.inner
     }
 }
 
@@ -296,7 +296,7 @@ where
     V: ValueEnDe,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut *self.inner
+        &mut self.inner
     }
 }
 

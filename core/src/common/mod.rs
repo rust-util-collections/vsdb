@@ -9,6 +9,7 @@ use engines::Engine;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use ruc::*;
+use serde::{Deserialize, Serialize};
 use std::{
     env, fs,
     mem::size_of,
@@ -39,19 +40,19 @@ pub type BranchIDBase = u64;
 pub type VersionIDBase = u64;
 
 /// Avoid making mistakes between branch name and version name.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BranchName<'a>(pub &'a [u8]);
-#[derive(Clone, Debug, Eq, PartialEq, Default)]
+#[derive(Clone, Debug, Eq, PartialEq, Default, Serialize, Deserialize)]
 pub struct BranchNameOwned(pub Vec<u8>);
 /// Avoid making mistakes between branch name and version name.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default, Serialize, Deserialize)]
 pub struct ParentBranchName<'a>(pub &'a [u8]);
-#[derive(Clone, Debug, Eq, PartialEq, Default)]
+#[derive(Clone, Debug, Eq, PartialEq, Default, Serialize, Deserialize)]
 pub struct ParentBranchNameOwned(pub Vec<u8>);
 /// Avoid making mistakes between branch name and version name.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct VersionName<'a>(pub &'a [u8]);
-#[derive(Clone, Debug, Eq, PartialEq, Default)]
+#[derive(Clone, Debug, Eq, PartialEq, Default, Serialize, Deserialize)]
 pub struct VersionNameOwned(pub Vec<u8>);
 
 pub const KB: u64 = 1 << 10;
@@ -237,6 +238,18 @@ impl BranchNameOwned {
     }
 }
 
+impl<'a> From<&'a BranchNameOwned> for BranchName<'a> {
+    fn from(b: &'a BranchNameOwned) -> Self {
+        b.as_deref()
+    }
+}
+
+impl From<BranchName<'_>> for BranchNameOwned {
+    fn from(b: BranchName) -> Self {
+        BranchNameOwned(b.0.to_vec())
+    }
+}
+
 impl ParentBranchNameOwned {
     #[inline(always)]
     pub fn as_deref(&self) -> ParentBranchName {
@@ -244,9 +257,33 @@ impl ParentBranchNameOwned {
     }
 }
 
+impl<'a> From<&'a ParentBranchNameOwned> for ParentBranchName<'a> {
+    fn from(b: &'a ParentBranchNameOwned) -> Self {
+        b.as_deref()
+    }
+}
+
+impl From<ParentBranchName<'_>> for ParentBranchNameOwned {
+    fn from(b: ParentBranchName) -> Self {
+        ParentBranchNameOwned(b.0.to_vec())
+    }
+}
+
 impl VersionNameOwned {
     #[inline(always)]
     pub fn as_deref(&self) -> VersionName {
         VersionName(&self.0)
+    }
+}
+
+impl<'a> From<&'a VersionNameOwned> for VersionName<'a> {
+    fn from(b: &'a VersionNameOwned) -> Self {
+        b.as_deref()
+    }
+}
+
+impl From<VersionName<'_>> for VersionNameOwned {
+    fn from(b: VersionName) -> Self {
+        VersionNameOwned(b.0.to_vec())
     }
 }

@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     common::{BranchName, ParentBranchName, INITIAL_BRANCH_NAME},
-    VsMgmt,
+    VsMgmt, NULL,
 };
 
 #[test]
@@ -173,6 +173,10 @@ fn test_insert() {
             assert_eq!(&pnk!(hdr.remove(&key)).unwrap()[..], &value);
             assert!(hdr.get(&key).is_none());
         });
+
+    let key = 111usize.to_be_bytes();
+    pnk!(hdr.insert(&key, NULL));
+    assert!(hdr.get(&key).is_none());
 }
 
 #[test]

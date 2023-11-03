@@ -11,7 +11,11 @@ const INITIAL_BRANCH_NAME: BranchName<'static> = BranchName(b"master");
 #[test]
 fn basic_cases() {
     let cnt = 200;
-    vsdb_set_base_dir("/tmp/.vsdb/versioned_mapx_raw_test").unwrap();
+    info_omit!(vsdb_set_base_dir(&format!(
+        "/tmp/vsdb_testing/{}",
+        rand::random::<u64>()
+    )));
+
     let hdr = {
         let mut hdr_i = MapxRawVs::new();
         assert!(!hdr_i.branch_has_versions(INITIAL_BRANCH_NAME));
@@ -36,10 +40,10 @@ fn basic_cases() {
 
         assert_eq!(cnt, hdr_i.len());
 
-        pnk!(msgpack::to_vec(&hdr_i))
+        pnk!(bcs::to_bytes(&hdr_i))
     };
 
-    let mut reloaded = pnk!(msgpack::from_slice::<MapxRawVs>(&hdr));
+    let mut reloaded = pnk!(bcs::from_bytes::<MapxRawVs>(&hdr));
 
     assert_eq!(cnt, reloaded.len());
 

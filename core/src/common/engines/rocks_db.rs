@@ -79,12 +79,12 @@ impl Engine for RocksEngine {
 
         let (prefix_allocator, initial_value) = PreAllocator::init();
 
-        if meta.get(&META_KEY_MAX_KEYLEN).c(d!())?.is_none() {
+        if meta.get(META_KEY_MAX_KEYLEN).c(d!())?.is_none() {
             meta.put(META_KEY_MAX_KEYLEN, 0_usize.to_be_bytes())
                 .c(d!())?;
         }
 
-        if meta.get(&META_KEY_BRANCH_ID).c(d!())?.is_none() {
+        if meta.get(META_KEY_BRANCH_ID).c(d!())?.is_none() {
             meta.put(
                 META_KEY_BRANCH_ID,
                 (1 + INITIAL_BRANCH_ID as usize).to_be_bytes(),
@@ -92,7 +92,7 @@ impl Engine for RocksEngine {
             .c(d!())?;
         }
 
-        if meta.get(&META_KEY_VERSION_ID).c(d!())?.is_none() {
+        if meta.get(META_KEY_VERSION_ID).c(d!())?.is_none() {
             meta.put(META_KEY_VERSION_ID, 0_usize.to_be_bytes())
                 .c(d!())?;
         }
@@ -102,7 +102,7 @@ impl Engine for RocksEngine {
         }
 
         let max_keylen = AtomicUsize::new(crate::parse_int!(
-            meta.get(&META_KEY_MAX_KEYLEN).unwrap().unwrap(),
+            meta.get(META_KEY_MAX_KEYLEN).unwrap().unwrap(),
             usize
         ));
 
@@ -371,7 +371,7 @@ fn rocksdb_open() -> Result<(DB, Vec<String>, Cache)> {
     let dir = vsdb_get_base_dir();
 
     // avoid setting again on an opened DB
-    info_omit!(vsdb_set_base_dir(&dir));
+    omit!(vsdb_set_base_dir(&dir));
 
     let parallelism = available_parallelism().c(d!())?.get() as i32;
     let cache_cap =

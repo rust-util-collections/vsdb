@@ -160,9 +160,10 @@
 //! - `rocks_engine`, use rocksdb as the backend database
 //!     - Faster running speed
 //!     - Can not be compiled into a statically linked object
-//! - \[**default**] `msgpack_codec`, use msgpack as the codec
+//! - \[**default**] `json_codec`, use `serde_json` as the codec
+//!     - Better generality and compatibility
+//! - `bcs_codec`, use `bcs` as the codec
 //!     - Faster running speed
-//! - `bcs_codec`, use bcs as the codec
 //!     - Created by the 'Libre' project of Facebook
 //!     - Security reinforcement for blockchain scenarios
 //! - \[**default**] `derive`, enable the `Vs` procedural macro
@@ -181,8 +182,9 @@ pub mod versioned;
 pub mod versioned_multi_key;
 
 pub use basic::{mapx::Mapx, mapx_ord::MapxOrd, vecx::Vecx};
-pub use common::ende::{
-    KeyDe, KeyEn, KeyEnDe, KeyEnDeOrdered, ValueDe, ValueEn, ValueEnDe,
+pub use common::{
+    ende::{KeyDe, KeyEn, KeyEnDe, KeyEnDeOrdered, ValueDe, ValueEn, ValueEnDe},
+    NULL,
 };
 pub use versioned::{mapx::MapxVs, mapx_ord::MapxOrdVs, orphan::OrphanVs, vecx::VecxVs};
 pub use versioned_multi_key::{

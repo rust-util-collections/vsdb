@@ -1,6 +1,8 @@
 use ruc::*;
 use vsdb::{basic_multi_key::mapx_raw::MapxRawMk, vsdb_set_base_dir};
 
+const NIL: &[u8] = &[];
+
 #[test]
 fn basic_cases() {
     info_omit!(vsdb_set_base_dir(&format!(
@@ -53,13 +55,13 @@ fn basic_cases() {
             .or_insert(&[])
             .is_ok()
     );
-    assert_eq!(&map.get(&[&[11], &[12], &[13], &[14]]).unwrap(), &[]);
+    assert_eq!(&map.get(&[&[11], &[12], &[13], &[14]]).unwrap(), NIL);
 
     let mut cnt = 0;
     let mut op = |k: &[&[u8]], v: &[u8]| {
         cnt += 1;
         assert_eq!(k, &[&[11], &[12], &[13], &[14]]);
-        assert_eq!(v, &[]);
+        assert_eq!(v, NIL);
         Ok(())
     };
 
@@ -76,7 +78,7 @@ fn basic_cases() {
     let mut cnt = 0;
     let mut op = |k: &[&[u8]], v: &[u8]| {
         cnt += 1;
-        if v == &[] {
+        if v == NIL {
             assert_eq!(k, &[&[11], &[12], &[13], &[14]]);
         } else {
             assert_eq!(k, &[&[11], &[12], &[13], &[15]]);

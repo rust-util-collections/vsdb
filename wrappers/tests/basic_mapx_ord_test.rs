@@ -19,7 +19,11 @@ fn gen_sample(idx: usize) -> SampleBlock {
 #[test]
 fn basic_cases() {
     let cnt = 200;
-    vsdb_set_base_dir("/tmp/.vsdb/basic_mapx_ord_test").unwrap();
+    info_omit!(vsdb_set_base_dir(&format!(
+        "/tmp/vsdb_testing/{}",
+        rand::random::<u64>()
+    )));
+
     let hdr = {
         let mut hdr_i = MapxOrd::new();
 

@@ -9,7 +9,7 @@
 //! ```
 //! use vsdb::basic::orphan::Orphan;
 //!
-//! let dir = format!("/tmp/__vsdb__{}", rand::random::<u128>());
+//! let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
 //! vsdb::vsdb_set_base_dir(&dir);
 //!
 //! assert_eq!(Orphan::new(0), 0);
@@ -124,17 +124,17 @@ where
 
     pub fn new(v: T) -> Self {
         let mut hdr = MapxOrdRawKey::new();
-        hdr.insert(&[], &v);
+        hdr.insert([], &v);
         Self { inner: hdr }
     }
 
     /// Get the inner cloned value.
     pub fn get_value(&self) -> T {
-        self.inner.get(&[]).unwrap()
+        self.inner.get([]).unwrap()
     }
 
     fn set_value(&mut self, v: &T) {
-        self.inner.set_value(&[], v);
+        self.inner.set_value([], v);
     }
 
     /// Get the mutable handler of the value.
@@ -161,7 +161,7 @@ impl<T> Clone for Orphan<T> {
 impl<T: Default + ValueEnDe> Default for Orphan<T> {
     fn default() -> Self {
         let mut hdr = MapxOrdRawKey::new();
-        hdr.insert(&[], &T::default());
+        hdr.insert([], &T::default());
         Self { inner: hdr }
     }
 }

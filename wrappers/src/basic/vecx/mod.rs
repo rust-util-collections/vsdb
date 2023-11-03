@@ -9,7 +9,7 @@
 //! ```
 //! use vsdb::Vecx;
 //!
-//! let dir = format!("/tmp/__vsdb__{}", rand::random::<u128>());
+//! let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
 //! vsdb::vsdb_set_base_dir(&dir);
 //!
 //! let mut l = Vecx::new();
@@ -69,12 +69,12 @@ impl<T: ValueEnDe> Vecx<T> {
 
     #[inline(always)]
     pub fn get(&self, idx: usize) -> Option<T> {
-        self.inner.get(&(idx as u64).to_be_bytes())
+        self.inner.get((idx as u64).to_be_bytes())
     }
 
     #[inline(always)]
     pub fn get_mut(&mut self, idx: usize) -> Option<ValueMut<'_, T>> {
-        self.inner.get_mut(&(idx as u64).to_be_bytes())
+        self.inner.get_mut((idx as u64).to_be_bytes())
     }
 
     #[inline(always)]
@@ -82,7 +82,7 @@ impl<T: ValueEnDe> Vecx<T> {
         alt!(self.is_empty(), return None);
         Some(
             self.inner
-                .get(&(self.len() as u64 - 1).to_be_bytes())
+                .get((self.len() as u64 - 1).to_be_bytes())
                 .unwrap(),
         )
     }
@@ -99,7 +99,7 @@ impl<T: ValueEnDe> Vecx<T> {
 
     #[inline(always)]
     pub fn push(&mut self, v: &T) {
-        self.inner.insert(&(self.len() as u64).to_be_bytes(), v);
+        self.inner.insert((self.len() as u64).to_be_bytes(), v);
     }
 
     #[inline(always)]
@@ -115,9 +115,9 @@ impl<T: ValueEnDe> Vecx<T> {
                     )
                     .for_each(|(i, iv)| {
                         self.inner
-                            .insert(&(crate::parse_int!(i, u64) + 1).to_be_bytes(), &iv);
+                            .insert((crate::parse_int!(i, u64) + 1).to_be_bytes(), &iv);
                     });
-                self.inner.insert(&idx.to_be_bytes(), v);
+                self.inner.insert(idx.to_be_bytes(), v);
             }
             Ordering::Equal => {
                 self.push(v);
@@ -131,7 +131,7 @@ impl<T: ValueEnDe> Vecx<T> {
     #[inline(always)]
     pub fn pop(&mut self) -> Option<T> {
         alt!(self.is_empty(), return None);
-        self.inner.remove(&(self.len() as u64 - 1).to_be_bytes())
+        self.inner.remove((self.len() as u64 - 1).to_be_bytes())
     }
 
     #[inline(always)]
@@ -139,15 +139,15 @@ impl<T: ValueEnDe> Vecx<T> {
         let idx = idx as u64;
         if !self.is_empty() && idx < self.len() as u64 {
             let last_idx = self.len() as u64 - 1;
-            let ret = self.inner.remove(&idx.to_be_bytes()).unwrap();
+            let ret = self.inner.remove(idx.to_be_bytes()).unwrap();
             let shadow = unsafe { self.inner.shadow() };
             shadow
                 .range(Cow::Borrowed(&(1 + idx).to_be_bytes()[..])..)
                 .for_each(|(i, v)| {
                     self.inner
-                        .insert(&(crate::parse_int!(i, u64) - 1).to_be_bytes(), &v);
+                        .insert((crate::parse_int!(i, u64) - 1).to_be_bytes(), &v);
                 });
-            self.inner.remove(&last_idx.to_be_bytes());
+            self.inner.remove(last_idx.to_be_bytes());
             return ret;
         }
         panic!("out of index");
@@ -158,9 +158,9 @@ impl<T: ValueEnDe> Vecx<T> {
         let idx = idx as u64;
         if !self.is_empty() && idx < self.len() as u64 {
             let last_idx = self.len() as u64 - 1;
-            let ret = self.inner.remove(&idx.to_be_bytes()).unwrap();
-            if let Some(v) = self.inner.remove(&last_idx.to_be_bytes()) {
-                self.inner.insert(&idx.to_be_bytes(), &v);
+            let ret = self.inner.remove(idx.to_be_bytes()).unwrap();
+            if let Some(v) = self.inner.remove(last_idx.to_be_bytes()) {
+                self.inner.insert(idx.to_be_bytes(), &v);
             }
             return ret;
         }
@@ -170,7 +170,7 @@ impl<T: ValueEnDe> Vecx<T> {
     #[inline(always)]
     pub fn update(&mut self, idx: usize, v: &T) -> Option<T> {
         if idx < self.len() {
-            return self.inner.insert(&(idx as u64).to_be_bytes(), v);
+            return self.inner.insert((idx as u64).to_be_bytes(), v);
         }
         panic!("out of index");
     }

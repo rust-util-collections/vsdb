@@ -322,7 +322,7 @@ impl MapxRawMkVs {
             .range_mut(key.clone()..)
             .filter(|(k, _)| k.starts_with(&key))
             .for_each(|(_, vers)| {
-                vers.insert(ver_id, vct![]);
+                vers.insert(ver_id, Vec::new());
             });
 
         Ok(None)
@@ -1207,10 +1207,9 @@ impl MapxRawMkVs {
         self.version_clean_up_globally()
             .c(d!())
             .and_then(|_| self.do_prune(reserved_ver_num).c(d!()))
-            .and_then(|_| self.version_clean_up_globally().c(d!()))
     }
 
-    pub(super) fn do_prune(&mut self, reserved_ver_num: Option<usize>) -> Result<()> {
+    fn do_prune(&mut self, reserved_ver_num: Option<usize>) -> Result<()> {
         // the '1' of this 'add 1' means the never-deleted initial version.
         let reserved_ver_num =
             1 + reserved_ver_num.unwrap_or(RESERVED_VERSION_NUM_DEFAULT);
@@ -1225,7 +1224,7 @@ impl MapxRawMkVs {
             .collect::<Vec<_>>();
         alt!(brvers_non_empty.is_empty(), return Ok(()));
         let mut brvers = (0..brvers_non_empty.len())
-            .map(|i| (&brvers_non_empty[i]).iter())
+            .map(|i| brvers_non_empty[i].iter())
             .collect::<Vec<_>>();
 
         let mut guard = VER_ID_MAX;

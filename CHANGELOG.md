@@ -1,4 +1,31 @@
-# Change log
+# CHANGE LOG
+
+## v0.48.1 ~ v0.48.4
+
+#### Internal optimizations
+
+- Tuning feature settings and code details
+
+## v0.48.0
+
+#### Internal optimizations
+
+- Switch the default codec from `msgpack` to `json`
+  - For better generality and compatibility
+
+## v0.47.x
+
+#### New APIs
+
+- Add more conversion functions for Version/Branch related structures
+
+#### BUG fixes
+
+- Fix issues related to the `prune` operation
+
+## v0.46.x
+
+No functional changes, just upgraded some necessary dependencies.
 
 ## v0.45.x
 
