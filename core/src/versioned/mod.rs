@@ -1073,7 +1073,14 @@ impl_for_primitives!(
     primitive_types_0_11::H128,
     primitive_types_0_11::H160,
     primitive_types_0_11::H256,
-    primitive_types_0_11::H512
+    primitive_types_0_11::H512,
+    primitive_types_0_12::U128,
+    primitive_types_0_12::U256,
+    primitive_types_0_12::U512,
+    primitive_types_0_12::H128,
+    primitive_types_0_12::H160,
+    primitive_types_0_12::H256,
+    primitive_types_0_12::H512
 );
 
 impl<T: VsMgmt> VsMgmt for Option<T> {

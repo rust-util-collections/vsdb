@@ -88,30 +88,30 @@ where
 
     #[inline(always)]
     pub fn get(&self, key: &K) -> Option<V> {
-        self.inner.get(&key.to_bytes())
+        self.inner.get(key.to_bytes())
     }
 
     #[inline(always)]
     pub fn get_mut<'a>(&'a mut self, key: &K) -> Option<ValueMut<'a, V>> {
-        self.inner.get_mut(&key.to_bytes())
+        self.inner.get_mut(key.to_bytes())
     }
 
     #[inline(always)]
     pub fn contains_key(&self, key: &K) -> bool {
-        self.inner.contains_key(&key.to_bytes())
+        self.inner.contains_key(key.to_bytes())
     }
 
     #[inline(always)]
     pub fn get_le(&self, key: &K) -> Option<(K, V)> {
         self.inner
-            .get_le(&key.to_bytes())
+            .get_le(key.to_bytes())
             .map(|(k, v)| (pnk!(K::from_bytes(k)), v))
     }
 
     #[inline(always)]
     pub fn get_ge(&self, key: &K) -> Option<(K, V)> {
         self.inner
-            .get_ge(&key.to_bytes())
+            .get_ge(key.to_bytes())
             .map(|(k, v)| (pnk!(K::from_bytes(k)), v))
     }
 
@@ -127,7 +127,7 @@ where
 
     #[inline(always)]
     pub fn insert(&mut self, key: &K, value: &V) -> Option<V> {
-        self.inner.insert(&key.to_bytes(), value)
+        self.inner.insert(key.to_bytes(), value)
     }
 
     /// # Safety

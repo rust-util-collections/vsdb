@@ -86,17 +86,17 @@ where
 
     #[inline(always)]
     pub fn get(&self, key: &K) -> Option<V> {
-        self.inner.get(&key.encode())
+        self.inner.get(key.encode())
     }
 
     #[inline(always)]
     pub fn get_mut(&mut self, key: &K) -> Option<ValueMut<'_, V>> {
-        self.inner.get_mut(&key.encode())
+        self.inner.get_mut(key.encode())
     }
 
     #[inline(always)]
     pub fn contains_key(&self, key: &K) -> bool {
-        self.inner.contains_key(&key.encode())
+        self.inner.contains_key(key.encode())
     }
 
     #[inline(always)]
@@ -111,12 +111,12 @@ where
 
     #[inline(always)]
     pub fn insert(&mut self, key: &K, value: &V) -> Option<V> {
-        self.inner.insert(&key.encode(), value)
+        self.inner.insert(key.encode(), value)
     }
 
     #[inline(always)]
     pub fn set_value(&mut self, key: &K, value: &V) {
-        self.inner.set_value(&key.encode(), value);
+        self.inner.set_value(key.encode(), value);
     }
 
     #[inline(always)]

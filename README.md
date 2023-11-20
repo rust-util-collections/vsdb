@@ -1,5 +1,4 @@
 ![GitHub top language](https://img.shields.io/github/languages/top/rust-util-collections/VSDB)
-![GitHub Workflow Status](https://img.shields.io/github/workflow/status/rust-util-collections/VSDB/Rust)
 [![Minimum rustc version](https://img.shields.io/badge/rustc-1.65+-lightgray.svg)](https://github.com/rust-random/rand#rust-version-requirements)
 
 # VSDB
