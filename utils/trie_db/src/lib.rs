@@ -3,13 +3,13 @@
 
 pub use vsdb::{RawBytes, RawKey, RawValue, ValueEnDe};
 
-use reference_trie::{
+use reference_trie_fun::{
     ExtensionLayout as L, RefTrieDB as TrieDB, RefTrieDBBuilder as TrieDBBuilder,
     RefTrieDBMut as TrieDBMut, RefTrieDBMutBuilder as TrieDBMutBuilder,
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
-use trie_db::{
+use trie_db_fun::{
     CError, DBValue, HashDB, Hasher as _, Trie, TrieHash, TrieItem, TrieIterator, TrieKeyItem,
     TrieMut,
 };
