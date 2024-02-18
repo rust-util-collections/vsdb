@@ -27,17 +27,17 @@ primitive-types-0-12 = { package = "primitive-types", version = "0.12", default-
 primitive-types-0-11 = { package = "primitive-types", version = "0.11", default-features = false }
 primitive-types-0-10 = { package = "primitive-types", version = "0.10", default-features = false }
 
-parity-db = "0.4.11"
-rocksdb = { version = "0.21.0", default-features = false }
+parity-db = "0.4.13"
+rocksdb = { version = "0.22.0", default-features = false }
 
 keccak-hasher = "0.16.0"
 hash-db = "0.16.0"
 trie-db-fun = { version = "100.28.0" }
 reference-trie-fun = { version = "100.29.1" }
 
-vsdb = { path = "wrappers", version = "0.61.0", default-features = false }
-vsdb_core = { path = "core", version = "0.61.0", default-features = false }
+vsdb = { path = "wrappers", version = "0.62.0", default-features = false }
+vsdb_core = { path = "core", version = "0.62.0", default-features = false }
 vsdb_derive = { path = "derive", version = "0.53.0" }
 
-vsdb_trie_db = { path = "utils/trie_db", version = "0.20.0", default-features = false }
-vsdb_hash_db = { path = "utils/hash_db", version = "0.20.0", default-features = false }
+vsdb_trie_db = { path = "utils/trie_db", version = "0.21.0", default-features = false }
+vsdb_hash_db = { path = "utils/hash_db", version = "0.21.0", default-features = false }
