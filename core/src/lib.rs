@@ -1,8 +1,4 @@
-//!
-//! # vsdb_core
-//!
-//! The core implementations of [VSDB](https://crates.io/crates/vsdb).
-//!
+#![doc = include_str!("../README.md")]
 
 #![deny(warnings)]
 #![cfg_attr(test, allow(warnings))]
