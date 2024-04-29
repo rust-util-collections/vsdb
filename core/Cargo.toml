@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_core"
-version = "0.48.7"
+version = "0.48.8"
 authors = ["dafanhui@163.com", "hui.fan@mail.ru"]
 edition = "2021"
 description = "A stuctured DB with some 'Git-like' features, mainly used in blockchain projects."
@@ -32,7 +32,7 @@ vsdb_derive = { version = "0.45.0", optional = true }
 
 sled = { package = "vsdbsled", version = "0.34.7-p1", optional = true }
 # sled = { package = "vsdbsled", version = "0.34.7-p1", features = ["io_uring"], optional = true }
-rocksdb = { version = "0.19.0", default-features = false, optional = true }
+rocksdb = { version = "0.20.1", default-features = false, optional = true }
 
 [dev-dependencies]
 bcs = "0.1.4"
