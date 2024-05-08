@@ -1,5 +1,4 @@
 #![doc = include_str!("../README.md")]
-
 #![deny(warnings)]
 #![cfg_attr(test, allow(warnings))]
 #![recursion_limit = "512"]
