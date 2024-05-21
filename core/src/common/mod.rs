@@ -3,7 +3,8 @@
 //!
 
 pub(crate) mod engines;
-pub mod utils;
+
+pub use ruc::crypto::trie_root;
 
 use engines::Engine;
 use once_cell::sync::Lazy;

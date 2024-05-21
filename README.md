@@ -1,5 +1,6 @@
 ![GitHub top language](https://img.shields.io/github/languages/top/rust-util-collections/VSDB)
 [![Minimum rustc version](https://img.shields.io/badge/rustc-1.65+-lightgray.svg)](https://github.com/rust-random/rand#rust-version-requirements)
+![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/rust-util-collections/vsdb/rust.yml?branch=master)
 
 # VSDB
 
@@ -23,6 +24,14 @@ Check [**here**](wrappers/README.md) for a detailed description.
 |[**vsdb**](wrappers)|[![](https://img.shields.io/crates/v/vsdb.svg)](https://crates.io/crates/vsdb)|[![](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/vsdb)|`./wrappers` High-level APIs|
 |[**vsdb_core**](core)|[![](https://img.shields.io/crates/v/vsdb_core.svg)](https://crates.io/crates/vsdb_core)|[![](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/vsdb_core)|`./core` Low-level implementations|
 |[**vsdb_derive**](derive)|[![](https://img.shields.io/crates/v/vsdb_derive.svg)](https://crates.io/crates/vsdb_derive)|[![](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/vsdb_derive)|`./derive` Procedure macro collection|
+
+### Gratitude
+
+Thanks to all the people who already contributed!
+
+<a href="https://github.com/rust-util-collections/vsdb/graphs/contributors">
+  <img src="https://contributors-img.web.app/image?repo=rust-util-collections/vsdb"/>
+</a>
 
 ### LICENSE
 

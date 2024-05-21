@@ -2,8 +2,8 @@ use crate::{
     basic::{mapx_ord::MapxOrd, mapx_ord_rawkey::MapxOrdRawKey},
     basic_multi_key::mapx_raw::MapxRawMk,
     common::{
-        utils::hash::trie_root, BranchID, BranchIDBase, BranchName, BranchNameOwned,
-        RawKey, RawValue, VersionID, VersionIDBase, VersionName, VersionNameOwned,
+        trie_root, BranchID, BranchIDBase, BranchName, BranchNameOwned, RawKey,
+        RawValue, VersionID, VersionIDBase, VersionName, VersionNameOwned,
         INITIAL_BRANCH_ID, INITIAL_BRANCH_NAME, NULL, RESERVED_VERSION_NUM_DEFAULT,
         TRASH_CLEANER, VER_ID_MAX, VSDB,
     },

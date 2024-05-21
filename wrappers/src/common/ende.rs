@@ -16,18 +16,18 @@ use std::{
 /////////////////////////////////////////////////////////////////////////////
 
 /// Methods used to encode the KEY.
-pub trait KeyEn: Serialize + Sized {
+pub trait KeyEn: Sized {
     /// Encode original key type to bytes.
-    #[cfg(all(feature = "json_codec", not(feature = "bsc_codec")))]
-    fn try_encode_key(&self) -> Result<RawBytes> {
-        serde_json::to_vec(self).c(d!())
-    }
+    #[cfg(feature = "json_codec")]
+    fn try_encode_key(&self) -> Result<RawBytes>;
 
     /// Encode original key type to bytes.
-    #[cfg(all(feature = "bcs_codec", not(feature = "json_codec")))]
-    fn try_encode_key(&self) -> Result<RawBytes> {
-        bcs::to_bytes(self).c(d!())
-    }
+    #[cfg(feature = "bcs_codec")]
+    fn try_encode_key(&self) -> Result<RawBytes>;
+
+    /// Encode original key type to bytes.
+    #[cfg(feature = "msgpack_codec")]
+    fn try_encode_key(&self) -> Result<RawBytes>;
 
     fn encode_key(&self) -> RawBytes {
         pnk!(self.try_encode_key())
@@ -35,50 +35,46 @@ pub trait KeyEn: Serialize + Sized {
 }
 
 /// Methods used to decode the KEY.
-pub trait KeyDe: DeserializeOwned {
+pub trait KeyDe: Sized {
     /// Decode from bytes to the original key type.
-    #[cfg(all(feature = "json_codec", not(feature = "bsc_codec")))]
-    fn decode_key(bytes: &[u8]) -> Result<Self> {
-        serde_json::from_slice(bytes).c(d!())
-    }
+    #[cfg(feature = "json_codec")]
+    fn decode_key(bytes: &[u8]) -> Result<Self>;
 
     /// Decode from bytes to the original key type.
-    #[cfg(all(feature = "bcs_codec", not(feature = "json_codec")))]
-    fn decode_key(bytes: &[u8]) -> Result<Self> {
-        bcs::from_bytes(bytes).c(d!())
-    }
+    #[cfg(feature = "bcs_codec")]
+    fn decode_key(bytes: &[u8]) -> Result<Self>;
+
+    /// Decode from bytes to the original key type.
+    #[cfg(feature = "msgpack_codec")]
+    fn decode_key(bytes: &[u8]) -> Result<Self>;
 }
 
 /// Methods used to encode and decode the KEY.
-pub trait KeyEnDe: KeyEn + KeyDe {
+pub trait KeyEnDe: Sized {
     /// Encode original key type to bytes.
-    fn try_encode(&self) -> Result<RawBytes> {
-        <Self as KeyEn>::try_encode_key(self).c(d!())
-    }
+    fn try_encode(&self) -> Result<RawBytes>;
 
     fn encode(&self) -> RawBytes {
         pnk!(self.try_encode())
     }
 
     /// Decode from bytes to the original key type.
-    fn decode(bytes: &[u8]) -> Result<Self> {
-        <Self as KeyDe>::decode_key(bytes).c(d!())
-    }
+    fn decode(bytes: &[u8]) -> Result<Self>;
 }
 
 /// Methods used to encode the VALUE.
-pub trait ValueEn: Serialize + Sized {
+pub trait ValueEn: Sized {
     /// Encode original key type to bytes.
-    #[cfg(all(feature = "json_codec", not(feature = "bsc_codec")))]
-    fn try_encode_value(&self) -> Result<RawBytes> {
-        serde_json::to_vec(self).c(d!())
-    }
+    #[cfg(feature = "json_codec")]
+    fn try_encode_value(&self) -> Result<RawBytes>;
 
     /// Encode original key type to bytes.
-    #[cfg(all(feature = "bcs_codec", not(feature = "json_codec")))]
-    fn try_encode_value(&self) -> Result<RawBytes> {
-        bcs::to_bytes(self).c(d!())
-    }
+    #[cfg(feature = "bcs_codec")]
+    fn try_encode_value(&self) -> Result<RawBytes>;
+
+    /// Encode original key type to bytes.
+    #[cfg(feature = "msgpack_codec")]
+    fn try_encode_value(&self) -> Result<RawBytes>;
 
     fn encode_value(&self) -> RawBytes {
         pnk!(self.try_encode_value())
@@ -86,45 +82,128 @@ pub trait ValueEn: Serialize + Sized {
 }
 
 /// Methods used to decode the VALUE.
-pub trait ValueDe: DeserializeOwned {
+pub trait ValueDe: Sized {
     /// Decode from bytes to the original key type.
-    #[cfg(all(feature = "json_codec", not(feature = "bsc_codec")))]
-    fn decode_value(bytes: &[u8]) -> Result<Self> {
-        serde_json::from_slice(bytes).c(d!())
-    }
+    #[cfg(feature = "json_codec")]
+    fn decode_value(bytes: &[u8]) -> Result<Self>;
 
     /// Decode from bytes to the original key type.
-    #[cfg(all(feature = "bcs_codec", not(feature = "json_codec")))]
-    fn decode_value(bytes: &[u8]) -> Result<Self> {
-        bcs::from_bytes(bytes).c(d!())
-    }
+    #[cfg(feature = "bcs_codec")]
+    fn decode_value(bytes: &[u8]) -> Result<Self>;
+
+    /// Decode from bytes to the original key type.
+    #[cfg(feature = "msgpack_codec")]
+    fn decode_value(bytes: &[u8]) -> Result<Self>;
 }
 
 /// Methods used to encode and decode the VALUE.
-pub trait ValueEnDe: ValueEn + ValueDe {
+pub trait ValueEnDe: Sized {
     /// Encode original key type to bytes.
-    fn try_encode(&self) -> Result<RawBytes> {
-        <Self as ValueEn>::try_encode_value(self).c(d!())
-    }
+    fn try_encode(&self) -> Result<RawBytes>;
 
     fn encode(&self) -> RawBytes {
         pnk!(self.try_encode())
     }
 
     /// Decode from bytes to the original key type.
+    fn decode(bytes: &[u8]) -> Result<Self>;
+}
+
+impl<T: Serialize> KeyEn for T {
+    #[cfg(feature = "json_codec")]
+    fn try_encode_key(&self) -> Result<RawBytes> {
+        serde_json::to_vec(self).c(d!())
+    }
+
+    #[cfg(feature = "bcs_codec")]
+    fn try_encode_key(&self) -> Result<RawBytes> {
+        bcs::to_bytes(self).c(d!())
+    }
+
+    #[cfg(feature = "msgpack_codec")]
+    fn try_encode_key(&self) -> Result<RawBytes> {
+        rmp_serde::to_vec(self).c(d!())
+    }
+}
+
+impl<T: DeserializeOwned> KeyDe for T {
+    #[cfg(feature = "json_codec")]
+    fn decode_key(bytes: &[u8]) -> Result<Self> {
+        serde_json::from_slice(bytes).c(d!())
+    }
+
+    #[cfg(feature = "bcs_codec")]
+    fn decode_key(bytes: &[u8]) -> Result<Self> {
+        bcs::from_bytes(bytes).c(d!())
+    }
+
+    #[cfg(feature = "msgpack_codec")]
+    fn decode_key(bytes: &[u8]) -> Result<Self> {
+        rmp_serde::from_slice(bytes).c(d!())
+    }
+}
+
+impl<T: Serialize> ValueEn for T {
+    #[cfg(feature = "json_codec")]
+    fn try_encode_value(&self) -> Result<RawBytes> {
+        serde_json::to_vec(self).c(d!())
+    }
+
+    #[cfg(feature = "bcs_codec")]
+    fn try_encode_value(&self) -> Result<RawBytes> {
+        bcs::to_bytes(self).c(d!())
+    }
+
+    #[cfg(feature = "msgpack_codec")]
+    fn try_encode_value(&self) -> Result<RawBytes> {
+        rmp_serde::to_vec(self).c(d!())
+    }
+}
+
+impl<T: DeserializeOwned> ValueDe for T {
+    #[cfg(feature = "json_codec")]
+    fn decode_value(bytes: &[u8]) -> Result<Self> {
+        serde_json::from_slice(bytes).c(d!())
+    }
+
+    #[cfg(feature = "bcs_codec")]
+    fn decode_value(bytes: &[u8]) -> Result<Self> {
+        bcs::from_bytes(bytes).c(d!())
+    }
+
+    #[cfg(feature = "msgpack_codec")]
+    fn decode_value(bytes: &[u8]) -> Result<Self> {
+        rmp_serde::from_slice(bytes).c(d!())
+    }
+}
+
+impl<T: KeyEn + KeyDe> KeyEnDe for T {
+    fn try_encode(&self) -> Result<RawBytes> {
+        <Self as KeyEn>::try_encode_key(self).c(d!())
+    }
+
+    fn encode(&self) -> RawBytes {
+        <Self as KeyEn>::encode_key(self)
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self> {
+        <Self as KeyDe>::decode_key(bytes).c(d!())
+    }
+}
+
+impl<T: ValueEn + ValueDe> ValueEnDe for T {
+    fn try_encode(&self) -> Result<RawBytes> {
+        <Self as ValueEn>::try_encode_value(self).c(d!())
+    }
+
+    fn encode(&self) -> RawBytes {
+        <Self as ValueEn>::encode_value(self)
+    }
+
     fn decode(bytes: &[u8]) -> Result<Self> {
         <Self as ValueDe>::decode_value(bytes).c(d!())
     }
 }
-
-impl<T: Serialize> KeyEn for T {}
-impl<T: Serialize> ValueEn for T {}
-
-impl<T: DeserializeOwned> KeyDe for T {}
-impl<T: DeserializeOwned> ValueDe for T {}
-
-impl<T: KeyEn + KeyDe> KeyEnDe for T {}
-impl<T: ValueEn + ValueDe> ValueEnDe for T {}
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -329,48 +408,115 @@ macro_rules! impl_type {
             }
         }
     };
+    (%$hash: ty) => {
+        impl KeyEnDeOrdered for $hash {
+            #[inline(always)]
+            fn to_bytes(&self) -> RawBytes {
+                self.as_bytes().to_vec()
+            }
+            #[inline(always)]
+            fn from_slice(b: &[u8]) -> Result<Self> {
+                if b.len() != <$hash>::len_bytes() {
+                    return Err(eg!("length mismatch"));
+                }
+                Ok(<$hash>::from_slice(b))
+            }
+        }
+    };
+    (~$bigint: ty) => {
+        impl KeyEnDeOrdered for $bigint {
+            #[inline(always)]
+            fn to_bytes(&self) -> RawBytes {
+                let mut r = vec![];
+                self.to_big_endian(&mut r);
+                r
+            }
+            #[inline(always)]
+            fn from_slice(b: &[u8]) -> Result<Self> {
+                Ok(<$bigint>::from_big_endian(b))
+            }
+        }
+    };
 }
 
-impl_type!(i8);
-impl_type!(i16);
-impl_type!(i32);
-impl_type!(i64);
-impl_type!(i128);
-impl_type!(isize);
-impl_type!(u8);
-impl_type!(u16);
-impl_type!(u32);
-impl_type!(u64);
-impl_type!(u128);
-impl_type!(usize);
+macro_rules! impl_all {
+    ($t: ty) => {
+        impl_type!($t);
+    };
+    ($t: ty, $($tt: ty),+) => {
+        impl_all!($t);
+        impl_all!($($tt), +);
+    };
+    (@$t: ty) => {
+        impl_type!(@$t);
+    };
+    (@$t: ty, $(@$tt: ty),+) => {
+        impl_all!(@$t);
+        impl_all!($(@$tt), +);
+    };
+    (^$t: ty) => {
+        impl_type!(^$t);
+    };
+    (^$t: ty, $(^$tt: ty),+) => {
+        impl_all!(^$t);
+        impl_all!($(^$tt), +);
+    };
+    (%$t: ty) => {
+        impl_type!(%$t);
+    };
+    (%$t: ty, $(%$tt: ty),+) => {
+        impl_all!(%$t);
+        impl_all!($(%$tt), +);
+    };
+    (~$t: ty) => {
+        impl_type!(~$t);
+    };
+    (~$t: ty, $(~$tt: ty),+) => {
+        impl_all!(~$t);
+        impl_all!($(~$tt), +);
+    };
+}
 
-impl_type!(@i8);
-impl_type!(@i16);
-impl_type!(@i32);
-impl_type!(@i64);
-impl_type!(@i128);
-impl_type!(@isize);
-// impl_type!(@u8);
-impl_type!(@u16);
-impl_type!(@u32);
-impl_type!(@u64);
-impl_type!(@u128);
-impl_type!(@usize);
+impl_all!(
+    i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
+);
+impl_all!(
+    @i8, @i16, @i32, @i64, @i128, @isize, @u16, @u32, @u64, @u128, @usize
+);
+impl_all!(
+    ^i8, ^i16, ^i32, ^i64, ^i128, ^isize, ^u16, ^u32, ^u64, ^u128, ^usize
+);
 
-impl_type!(^i8);
-impl_type!(^i16);
-impl_type!(^i32);
-impl_type!(^i64);
-impl_type!(^i128);
-impl_type!(^isize);
-// impl_type!(^u8);
-impl_type!(^u16);
-impl_type!(^u32);
-impl_type!(^u64);
-impl_type!(^u128);
-impl_type!(^usize);
+#[cfg(feature = "extra_types")]
+impl_all!(
+    %vsdb_core::primitive_types_0_10::H128,
+    %vsdb_core::primitive_types_0_10::H160,
+    %vsdb_core::primitive_types_0_10::H256,
+    %vsdb_core::primitive_types_0_10::H512,
+    %vsdb_core::primitive_types_0_11::H128,
+    %vsdb_core::primitive_types_0_11::H160,
+    %vsdb_core::primitive_types_0_11::H256,
+    %vsdb_core::primitive_types_0_11::H512,
+    %vsdb_core::primitive_types_0_12::H128,
+    %vsdb_core::primitive_types_0_12::H160,
+    %vsdb_core::primitive_types_0_12::H256,
+    %vsdb_core::primitive_types_0_12::H512
+);
 
-macro_rules! impl_repeat {
+#[cfg(feature = "extra_types")]
+impl_all!(
+    ~vsdb_core::primitive_types_0_10::U128,
+    ~vsdb_core::primitive_types_0_10::U256,
+    ~vsdb_core::primitive_types_0_10::U512,
+    ~vsdb_core::primitive_types_0_11::U128,
+    ~vsdb_core::primitive_types_0_11::U256,
+    ~vsdb_core::primitive_types_0_11::U512,
+    ~vsdb_core::primitive_types_0_12::U128,
+    ~vsdb_core::primitive_types_0_12::U256,
+    ~vsdb_core::primitive_types_0_12::U512
+);
+
+macro_rules! impl_array {
     ($i: expr) => {
         impl_type!(i8, $i);
         impl_type!(i16, $i);
@@ -386,12 +532,12 @@ macro_rules! impl_repeat {
         impl_type!(usize, $i);
     };
     ($i: expr, $($ii: expr),+) => {
-        impl_repeat!($i);
-        impl_repeat!($($ii), +);
+        impl_array!($i);
+        impl_array!($($ii), +);
     };
 }
 
-impl_repeat!(
+impl_array!(
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
     24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
     45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65,
