@@ -1,20 +1,28 @@
+#![doc = include_str!("../README.md")]
 #![deny(warnings)]
 #![allow(clippy::new_without_default)]
 
+mod substrate_trie;
+
+#[cfg(test)]
+mod test;
+
 pub use vsdb::{RawBytes, RawKey, RawValue, ValueEnDe};
 
-use reference_trie_fun::{
-    ExtensionLayout as L, RefTrieDB as TrieDB, RefTrieDBBuilder as TrieDBBuilder,
-    RefTrieDBMut as TrieDBMut, RefTrieDBMutBuilder as TrieDBMutBuilder,
-};
 use ruc::*;
 use serde::{Deserialize, Serialize};
-use trie_db_fun::{
+use trie_db::{
     CError, DBValue, HashDB, Hasher as _, Trie, TrieHash, TrieItem, TrieIterator, TrieKeyItem,
     TrieMut,
 };
-use vsdb::basic::mapx_ord_rawkey::MapxOrdRawKey;
+use vsdb::{MapxOrdRawKey, Orphan};
 use vsdb_hash_db::{sp_hash_db::EMPTY_PREFIX, KeccakHasher as H, TrieBackend};
+
+type L = substrate_trie::LayoutV1<H>;
+type TrieDB<'a, 'cache> = trie_db::TrieDB<'a, 'cache, L>;
+type TrieDBBuilder<'a, 'cache> = trie_db::TrieDBBuilder<'a, 'cache, L>;
+type TrieDBMut<'a> = trie_db::TrieDBMut<'a, L>;
+type TrieDBMutBuilder<'a> = trie_db::TrieDBMutBuilder<'a, L>;
 
 pub type TrieRoot = TrieHash<L>;
 
@@ -22,74 +30,107 @@ pub type TrieIter<'a> = Box<dyn TrieIterator<L, Item = TrieItem<TrieHash<L>, CEr
 pub type TrieKeyIter<'a> =
     Box<dyn TrieIterator<L, Item = TrieKeyItem<TrieHash<L>, CError<L>>> + 'a>;
 
+// root hash ==> backend instance
+type HeaderSet = MapxOrdRawKey<TrieBackend>;
+
 #[derive(Deserialize, Serialize)]
 pub struct MptStore {
     // backend key ==> backend instance
     //
     // the backend key
-    // - for the world state MPT, it is `[0]`
+    // - for the world state MPT, it is `[0]`(just an example)
     // - for the storage MPT, it is the bytes of a H160 address
-    meta: MapxOrdRawKey<TrieBackend>,
+    meta: MapxOrdRawKey<HeaderSet>,
 }
 
 impl MptStore {
+    /// Create a new mpt DB.
+    #[inline(always)]
     pub fn new() -> Self {
         Self {
             meta: MapxOrdRawKey::new(),
         }
     }
 
-    pub fn trie_remove(&self, backend_key: &[u8]) {
-        self.remove_backend(backend_key);
+    /// # Safety
+    ///
+    /// This API breaks the semantic safety guarantees,
+    /// but it is safe to use in a race-free environment.
+    #[inline(always)]
+    pub unsafe fn shadow(&self) -> Self {
+        Self {
+            meta: self.meta.shadow(),
+        }
     }
 
-    pub fn trie_create(&self, backend_key: &[u8], reset: bool) -> Result<MptOnce> {
-        let backend = MptStore::new_backend();
-        self.put_backend(backend_key, &backend, reset).c(d!())?;
-
-        MptOnce::create_with_backend(backend).c(d!())
+    /// Create a new trie from scratch(no parent).
+    #[inline(always)]
+    pub fn trie_init(&mut self, backend_key: &[u8]) -> Result<MptOnce> {
+        let b = TrieBackend::new(&mut Orphan::new(None)).unwrap();
+        self.trie_create(backend_key, b).c(d!())
     }
 
-    pub fn trie_restore(&self, backend_key: &[u8], root: TrieRoot) -> Result<MptOnce> {
-        self.get_backend(backend_key)
-            .c(d!("backend not found"))
-            .and_then(|backend| MptOnce::restore(backend, root).c(d!()))
+    /// Create a new trie from a specified backend.
+    #[inline(always)]
+    pub fn trie_create(&mut self, backend_key: &[u8], backend: TrieBackend) -> Result<MptOnce> {
+        let hdr = self.meta.entry(backend_key).or_insert(HeaderSet::new());
+        MptOnce::create_with_backend(backend, &hdr).c(d!())
     }
 
-    fn get_backend(&self, backend_key: &[u8]) -> Option<TrieBackend> {
-        self.meta.get(backend_key)
+    /// Re-derive a trie handler from a specified trie root.
+    ///
+    /// NOTE:
+    /// The returned handler is actually a new created child of the target trie node.
+    #[inline(always)]
+    pub fn trie_rederive(&self, backend_key: &[u8], root: TrieRoot) -> Result<MptOnce> {
+        self.meta.get(backend_key).c(d!()).and_then(|hs| {
+            hs.get(root)
+                .c(d!())
+                .and_then(|b| MptOnce::rederive(&b, root, &hs).c(d!()))
+        })
     }
 
-    fn put_backend(&self, backend_key: &[u8], backend: &TrieBackend, reset: bool) -> Result<()> {
-        let mut hdr = unsafe { self.meta.shadow() };
+    /// Merge all nodes into the genesis node(include the target node itself).
+    pub fn trie_prune(&mut self, backend_key: &[u8], root: TrieRoot) -> Result<()> {
+        let mut hs = self.meta.get(backend_key).c(d!())?;
+        let backend = hs.get(root).c(d!())?;
 
-        if reset {
-            hdr.remove(backend_key);
-        } else if hdr.contains_key(backend_key) {
-            return Err(eg!("backend key already exists"));
+        let new_backend = backend.prune().c(d!())?;
+
+        let hs_ro = unsafe { hs.shadow() };
+        for k in hs_ro
+            .iter()
+            .filter(|(_, i)| i.is_dead() || i.is_the_same_instance(&new_backend))
+            .map(|(key, _)| key)
+        {
+            hs.remove(k);
         }
 
-        hdr.insert(backend_key, backend);
+        hs.insert(root, &new_backend);
 
         Ok(())
     }
 
-    fn remove_backend(&self, backend_key: &[u8]) {
-        unsafe { self.meta.shadow() }.remove(backend_key);
-    }
-
-    fn new_backend() -> TrieBackend {
-        TrieBackend::new()
+    /// Destroy the entire trie related to the target `backend_key`.
+    #[inline(always)]
+    pub fn trie_destroy(&mut self, backend_key: &[u8]) {
+        if let Some(mut hs) = self.meta.remove(backend_key) {
+            for (_root, mut b) in hs.iter() {
+                b.clear();
+            }
+            hs.clear();
+        }
     }
 }
 
-//
-// # NOTE
-//
-// The referenced field **MUST** be placed after the field that references it,
-// this is to ensure that the `Drop::drop` can be executed in the correct order,
-// so that UB will not occur
-/// An owned MPT instance
+///
+/// An owned MPT instance.
+///
+/// # NOTE
+///
+/// The referenced field **MUST** be placed after the field that references it,
+/// this is to ensure that the `Drop::drop` can be executed in the correct order,
+/// so that UB will not occur
 pub struct MptOnce {
     mpt: MptMut<'static>,
     root: TrieRoot,
@@ -97,14 +138,13 @@ pub struct MptOnce {
     // self-reference
     #[allow(dead_code)]
     backend: Box<TrieBackend>,
+
+    // A shadow of the instance in MptStore
+    header_set: HeaderSet,
 }
 
 impl MptOnce {
-    pub fn create() -> Result<Self> {
-        Self::create_with_backend(TrieBackend::new()).c(d!())
-    }
-
-    pub fn create_with_backend(backend: TrieBackend) -> Result<Self> {
+    fn create_with_backend(backend: TrieBackend, header_set: &HeaderSet) -> Result<Self> {
         let backend = Box::into_raw(Box::new(backend));
         let mut mpt = MptMut::new(unsafe { &mut *backend });
         let root = mpt.commit();
@@ -112,16 +152,28 @@ impl MptOnce {
             mpt,
             root,
             backend: unsafe { Box::from_raw(backend) },
+            header_set: unsafe { header_set.shadow() },
         })
     }
 
-    pub fn restore(backend: TrieBackend, root: TrieRoot) -> Result<Self> {
-        let backend = Box::into_raw(Box::new(backend));
-        let mpt = MptMut::from_existing(unsafe { &mut *backend }, root).c(d!())?;
+    fn rederive(
+        parent_backend: &TrieBackend,
+        root: TrieRoot,
+        header_set: &HeaderSet,
+    ) -> Result<Self> {
+        let b = TrieBackend::new(&mut Orphan::new(Some(
+            unsafe { parent_backend.shadow_backend() }.into_inner(),
+        )))
+        .c(d!())
+        .map(|b| Box::into_raw(Box::new(b)))?;
+
+        let mpt = MptMut::from_existing(unsafe { &mut *b }, root).c(d!())?;
+
         Ok(Self {
             mpt,
             root,
-            backend: unsafe { Box::from_raw(backend) },
+            backend: unsafe { Box::from_raw(b) },
+            header_set: unsafe { header_set.shadow() },
         })
     }
 
@@ -141,6 +193,7 @@ impl MptOnce {
         self.mpt.remove(key).c(d!()).map(|_| ())
     }
 
+    /// Remove all `key-value`s in the current snapshot(version).
     pub fn clear(&mut self) -> Result<()> {
         self.mpt.clear().c(d!())
     }
@@ -149,15 +202,29 @@ impl MptOnce {
         self.mpt.is_empty()
     }
 
-    pub fn commit(&mut self) -> TrieRoot {
-        self.root = self.mpt.commit();
-        self.root
+    /// Commit all changes into the trie,
+    /// consume the trie handler, and derive a new trie handler
+    /// as a child of the current handler.
+    pub fn commit(mut self) -> Result<Self> {
+        let root = self.mpt.commit();
+
+        // if self.header_set.contains_key(root) {
+        //     return Err(eg!("the root value exists!"));
+        // }
+
+        // root ==> its data version
+        self.header_set.insert(root, &self.backend);
+
+        Self::rederive(&self.backend, root, &self.header_set).c(d!())
     }
 
+    /// Get the cached trie root,
+    /// no `commit` operations will be triggered.
     pub fn root(&self) -> TrieRoot {
         self.root
     }
 
+    /// Derive a readonly handler of the trie.
     pub fn ro_handle(&self, root: TrieRoot) -> Result<MptRo> {
         MptRo::from_existing(&self.backend, root).c(d!())
     }
@@ -169,20 +236,25 @@ impl ValueEnDe for MptOnce {
     }
 
     fn encode(&self) -> RawBytes {
-        let mut buf = self.root.to_vec();
-        buf.append(&mut self.backend.encode());
-        buf
+        [
+            self.root.to_vec(),
+            self.backend.encode(),
+            self.header_set.encode(),
+        ]
+        .encode()
     }
 
     fn decode(bytes: &[u8]) -> Result<Self> {
-        alt!(H::LENGTH > bytes.len(), return Err(eg!("Invalid length")));
+        let [r, b, h] = <[Vec<u8>; 3]>::decode(bytes).c(d!())?;
 
+        alt!(H::LENGTH > r.len(), return Err(eg!("Invalid length")));
         let mut root = [0; H::LENGTH];
-        root.copy_from_slice(&bytes[..H::LENGTH]);
+        root.copy_from_slice(&r[..H::LENGTH]);
 
-        let backend = TrieBackend::decode(&bytes[H::LENGTH..]).c(d!())?;
+        let backend = TrieBackend::decode(&b).c(d!())?;
+        let header_set = HeaderSet::decode(&h).c(d!())?;
 
-        Self::restore(backend, root).c(d!())
+        Self::rederive(&backend, root, &header_set).c(d!())
     }
 }
 
@@ -192,8 +264,8 @@ impl ValueEnDe for MptOnce {
 // The referenced field **MUST** be placed after the field that references it,
 // this is to ensure that the `drop`s can be executed in the correct order,
 // so that UB will not occur
-/// A mutable MPT instance
-pub struct MptMut<'a> {
+// A mutable MPT instance
+struct MptMut<'a> {
     trie: TrieDBMut<'a>,
 
     // self-reference
@@ -203,7 +275,7 @@ pub struct MptMut<'a> {
 
 impl<'a> MptMut<'a> {
     // keep private !!
-    pub fn new(backend: &'a mut TrieBackend) -> Self {
+    fn new(backend: &'a mut TrieBackend) -> Self {
         // The buf will be rewrited when building the target `Trie`,
         // so its original contents can be arbitrary values.
         let root_buf = Default::default();
@@ -215,7 +287,7 @@ impl<'a> MptMut<'a> {
         Self { trie, meta }
     }
 
-    pub fn from_existing(backend: &'a mut TrieBackend, root: TrieRoot) -> Result<Self> {
+    fn from_existing(backend: &'a mut TrieBackend, root: TrieRoot) -> Result<Self> {
         if !backend.contains(&root, EMPTY_PREFIX) {
             return Err(eg!("Invalid state root: {:02x?}", root));
         }
@@ -227,23 +299,23 @@ impl<'a> MptMut<'a> {
         Ok(Self { trie, meta })
     }
 
-    pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         self.trie.get(key).c(d!())
     }
 
-    pub fn contains(&self, key: &[u8]) -> Result<bool> {
+    fn contains(&self, key: &[u8]) -> Result<bool> {
         self.trie.contains(key).c(d!())
     }
 
-    pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
+    fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         self.trie.insert(key, value).c(d!()).map(|_| ())
     }
 
-    pub fn remove(&mut self, key: &[u8]) -> Result<()> {
+    fn remove(&mut self, key: &[u8]) -> Result<()> {
         self.trie.remove(key).c(d!()).map(|_| ())
     }
 
-    pub fn clear(&mut self) -> Result<()> {
+    fn clear(&mut self) -> Result<()> {
         let root = self.commit();
         let keys = self.ro_handle(root).unwrap().key_iter().collect::<Vec<_>>();
         for k in keys.iter().map(|k| k.as_ref().unwrap()) {
@@ -252,15 +324,15 @@ impl<'a> MptMut<'a> {
         Ok(())
     }
 
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.trie.is_empty()
     }
 
-    pub fn commit(&mut self) -> TrieRoot {
+    fn commit(&mut self) -> TrieRoot {
         *self.trie.root()
     }
 
-    pub fn ro_handle(&self, root: TrieRoot) -> Result<MptRo> {
+    fn ro_handle(&self, root: TrieRoot) -> Result<MptRo> {
         MptRo::from_existing_dyn(self.trie.db(), root).c(d!())
     }
 }
@@ -316,7 +388,7 @@ impl<'a> MptRo<'a> {
         pnk!(self.trie.key_iter())
     }
 
-    pub fn root(&mut self) -> TrieRoot {
+    pub fn root(&self) -> TrieRoot {
         *self.trie.root()
     }
 }
@@ -340,84 +412,5 @@ impl Drop for MptMeta {
         unsafe {
             drop(Box::from_raw(self.root));
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    use std::collections::BTreeMap;
-
-    #[test]
-    fn trie_db_encode_decode() {
-        let mut hdr = pnk!(MptOnce::create());
-
-        pnk!(hdr.insert(b"key", b"value"));
-        assert_eq!(b"value", pnk!(hdr.get(b"key")).unwrap().as_slice());
-
-        let root = hdr.commit();
-        assert_eq!(root, hdr.root());
-
-        let hdr_encoded = hdr.encode();
-        drop(hdr);
-
-        let hdr = pnk!(MptOnce::decode(&hdr_encoded));
-        assert_eq!(b"value", pnk!(hdr.get(b"key")).unwrap().as_slice());
-    }
-
-    #[test]
-    fn trie_db_iter() {
-        let s = MptStore::new();
-        let mut hdr = pnk!(s.trie_create(b"backend_key", false));
-
-        {
-            let samples = (0u8..200).map(|i| ([i], [i])).collect::<Vec<_>>();
-            samples.iter().for_each(|(k, v)| {
-                pnk!(hdr.insert(k, v));
-            });
-
-            let root = hdr.commit();
-
-            let ro_hdr = hdr.ro_handle(root).unwrap();
-            let bt = ro_hdr
-                .iter()
-                .map(|i| i.unwrap())
-                .collect::<BTreeMap<_, _>>();
-
-            bt.iter().enumerate().for_each(|(i, (k, v))| {
-                assert_eq!(&[i as u8], k.as_slice());
-                assert_eq!(k, v);
-            });
-
-            let keylist = ro_hdr.key_iter().map(|i| i.unwrap()).collect::<Vec<_>>();
-            assert_eq!(keylist, bt.keys().cloned().collect::<Vec<_>>());
-        }
-
-        {
-            let samples = (0u8..200).map(|i| ([i], [i + 1])).collect::<Vec<_>>();
-            samples.iter().for_each(|(k, v)| {
-                pnk!(hdr.insert(k, v));
-            });
-
-            let root = hdr.commit();
-
-            let ro_hdr = hdr.ro_handle(root).unwrap();
-            let bt = ro_hdr
-                .iter()
-                .map(|i| i.unwrap())
-                .collect::<BTreeMap<_, _>>();
-
-            bt.iter().enumerate().for_each(|(i, (k, v))| {
-                assert_eq!(&[i as u8], k.as_slice());
-                assert_eq!(&[k[0] + 1], v.as_slice());
-            });
-
-            let keylist = ro_hdr.key_iter().map(|i| i.unwrap()).collect::<Vec<_>>();
-            assert_eq!(keylist, bt.keys().cloned().collect::<Vec<_>>());
-        }
-
-        assert!(!hdr.is_empty());
-        hdr.clear().unwrap();
-        assert!(hdr.is_empty());
     }
 }

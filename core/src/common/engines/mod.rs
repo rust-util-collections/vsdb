@@ -251,6 +251,11 @@ impl Mapx {
     pub(crate) fn as_prefix_slice(&self) -> &[u8] {
         &self.prefix
     }
+
+    #[inline(always)]
+    pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
+        self.prefix == other_hdr.prefix
+    }
 }
 
 impl Clone for Mapx {

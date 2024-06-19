@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_slot_db"
-version = "0.9.1"
+version = "0.30.0"
 edition = "2021"
 keywords = ["index", "cache", "timestamp", "slot", "database"]
 license = "MIT"
@@ -26,7 +26,6 @@ parity_backend = ["vsdb/parity_backend"]
 
 compress = ["vsdb/compress"]
 
-bcs_codec = ["vsdb/bcs_codec"]
 json_codec = ["vsdb/json_codec"]
 msgpack_codec = ["vsdb/msgpack_codec"]
 

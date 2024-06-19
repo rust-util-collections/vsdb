@@ -259,6 +259,11 @@ where
     pub fn clear(&mut self) {
         self.inner.clear();
     }
+
+    #[inline(always)]
+    pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
+        self.inner.is_the_same_instance(&other_hdr.inner)
+    }
 }
 
 impl<K> Clone for MapxOrdRawValue<K> {

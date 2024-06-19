@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_core"
-version = "0.62.2"
+version = "0.70.0"
 authors = ["hui.fan@mail.ru"]
 edition = "2021"
 description = "A stuctured DB with some 'Git-like' features, mainly used in blockchain projects."
@@ -29,7 +29,7 @@ rocksdb = { workspace = true, optional = true }
 parity-db = { workspace = true, optional = true }
 
 [dev-dependencies]
-bcs = "0.1.4"
+msgpack = { workspace = true }
 hex = "0.4.3"
 criterion = "0.4.0"
 

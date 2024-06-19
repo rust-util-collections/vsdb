@@ -11,7 +11,7 @@ lint:
 
 lintall: lint
 	cargo clippy --workspace --no-default-features --features "parity_backend,vs,msgpack_codec"
-	cargo clippy --workspace --no-default-features --features "parity_backend,vs,compress,bcs_codec"
+	cargo clippy --workspace --no-default-features --features "parity_backend,vs,compress,msgpack_codec"
 	cargo check --workspace --tests --no-default-features --features "parity_backend,vs,json_codec"
 
 lintmusl:
@@ -47,10 +47,10 @@ example:
 
 bench:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench --workspace --no-default-features --features "parity_backend,bcs_codec"
+	cargo bench --workspace --no-default-features --features "parity_backend,msgpack_codec"
 	du -sh ~/.vsdb
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench --workspace --no-default-features --features "parity_backend,compress,bcs_codec"
+	cargo bench --workspace --no-default-features --features "parity_backend,compress,msgpack_codec"
 	du -sh ~/.vsdb
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo bench --workspace
@@ -62,7 +62,7 @@ bench:
 benchmusl:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo bench --workspace --target x86_64-unknown-linux-musl \
-		--no-default-features --features "parity_backend,bcs_codec"
+		--no-default-features --features "parity_backend,msgpack_codec"
 	du -sh ~/.vsdb
 
 fmt:

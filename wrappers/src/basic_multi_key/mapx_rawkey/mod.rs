@@ -108,6 +108,11 @@ impl<V: ValueEnDe> MapxRawKeyMk<V> {
     }
 
     #[inline(always)]
+    pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
+        self.inner.is_the_same_instance(&other_hdr.inner)
+    }
+
+    #[inline(always)]
     pub fn key_size(&self) -> u32 {
         self.inner.key_size()
     }

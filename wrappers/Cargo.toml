@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "0.62.1"
+version = "0.70.0"
 authors = ["hui.fan@mail.ru"]
 edition = "2021"
 description = "A stuctured DB with some 'Git-like' features, mainly used in blockchain projects."
@@ -18,8 +18,7 @@ serde = { workspace = true }
 once_cell = { workspace = true }
 parking_lot = { workspace = true }
 
-bcs = { workspace = true, optional = true }
-rmp-serde = { workspace = true, optional = true }
+msgpack  = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 
 ruc = { workspace = true }
@@ -39,9 +38,8 @@ parity_backend = ["vsdb_core/parity_backend"]
 compress = ["vsdb_core/compress"]
 
 serde_ende = []
-msgpack_codec = ["serde_ende", "rmp-serde"]
+msgpack_codec = ["serde_ende", "msgpack"]
 json_codec = ["serde_ende", "serde_json"]
-bcs_codec = ["serde_ende", "bcs"]
 
 vs = ["vsdb_core/vs", "ruc/crypto"]
 extra_types = ["vsdb_core/extra_types"]

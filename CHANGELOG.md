@@ -1,5 +1,9 @@
 # CHANGE LOG
 
+## v0.70.x
+
+Backport the changes of the `mmdb` crate.
+
 ## v0.61.x
 
 #### Internal optimizations

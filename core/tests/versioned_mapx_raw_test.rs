@@ -42,10 +42,10 @@ fn basic_cases() {
 
         assert_eq!(cnt, hdr_i.len());
 
-        pnk!(bcs::to_bytes(&hdr_i))
+        pnk!(msgpack::to_vec(&hdr_i))
     };
 
-    let mut reloaded = pnk!(bcs::from_bytes::<MapxRawVs>(&hdr));
+    let mut reloaded = pnk!(msgpack::from_slice::<MapxRawVs>(&hdr));
 
     assert_eq!(cnt, reloaded.len());
 
