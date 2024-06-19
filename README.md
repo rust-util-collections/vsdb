@@ -24,7 +24,7 @@ Check [**here**](wrappers/README.md) for a detailed description.
 |[**vsdb**](wrappers)|[![](https://img.shields.io/crates/v/vsdb.svg)](https://crates.io/crates/vsdb)|[![](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/vsdb)|`./wrappers`|High-level APIs|
 |[**vsdb_core**](core)|[![](https://img.shields.io/crates/v/vsdb_core.svg)](https://crates.io/crates/vsdb_core)|[![](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/vsdb_core)|`./core`|Low-level implementations|
 |[**vsdb_derive**](derive)|[![](https://img.shields.io/crates/v/vsdb_derive.svg)](https://crates.io/crates/vsdb_derive)|[![](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/vsdb_derive)|`./derive`|Procedure macro collection|
-|[**vsdb_trie_map**](utils/trie_map)|[![](https://img.shields.io/crates/v/vsdb_trie_map.svg)](https://crates.io/crates/vsdb_trie_map)|[![](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/vsdb_trie_map)|`./utils/trie_map`|trie based structures with </br> limited version capabilities|
+|[**vsdb_trie_db**](utils/trie_db)|[![](https://img.shields.io/crates/v/vsdb_trie_db.svg)](https://crates.io/crates/vsdb_trie_db)|[![](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/vsdb_trie_db)|`./utils/trie_db`|trie based structures with </br> limited version capabilities|
 |[**vsdb_slot_db**](utils/slot_db)|[![](https://img.shields.io/crates/v/vsdb_slot_db.svg)](https://crates.io/crates/vsdb_slot_db)|[![](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/vsdb_slot_db)|`./utils/slot_db`|A skip-list like timestamp DB|
 
 ### Gratitude
