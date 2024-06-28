@@ -74,3 +74,10 @@ clean_all: clean
 
 doc:
 	cargo doc --open
+
+publish:
+	cargo publish -p vsdb_core
+	cargo publish -p vsdb
+	cargo publish -p vsdb_hash_db
+	cargo publish -p vsdb_trie_db
+	cargo publish -p vsdb_slot_db
