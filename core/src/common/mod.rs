@@ -4,9 +4,6 @@
 
 pub(crate) mod engines;
 
-#[cfg(feature = "vs")]
-pub use ruc::crypto::trie_root;
-
 use engines::Engine;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -93,8 +90,13 @@ pub static VSDB: Lazy<VsDB<engines::RocksDB>> = Lazy::new(|| pnk!(VsDB::new()));
 pub static VSDB: Lazy<VsDB<engines::ParityDB>> = Lazy::new(|| pnk!(VsDB::new()));
 
 /// Clean orphan instances in background.
-pub static TRASH_CLEANER: Lazy<Mutex<ThreadPool>> =
-    Lazy::new(|| Mutex::new(ThreadPool::new(1)));
+pub static TRASH_CLEANER: Lazy<Mutex<ThreadPool>> = Lazy::new(|| {
+    let pool = threadpool::Builder::new()
+        .num_threads(1)
+        .thread_stack_size(512 * MB as usize) // use large stack size
+        .build();
+    Mutex::new(pool)
+});
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////

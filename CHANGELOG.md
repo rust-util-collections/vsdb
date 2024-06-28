@@ -1,5 +1,9 @@
 # CHANGE LOG
 
+## v1.0.x
+
+Simplify functions and release v1.0.0
+
 ## v0.70.x
 
 Backport the changes of the `mmdb` crate.
