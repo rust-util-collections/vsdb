@@ -19,11 +19,12 @@ Check [**here**](wrappers/README.md) for a detailed description.
 
 ### Crate List
 
-|Name|Version|Doc|Description|
-|:-|:-|:-|:-|
-|[**vsdb**](wrappers)|[![](https://img.shields.io/crates/v/vsdb.svg)](https://crates.io/crates/vsdb)|[![](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/vsdb)|`./wrappers` High-level APIs|
-|[**vsdb_core**](core)|[![](https://img.shields.io/crates/v/vsdb_core.svg)](https://crates.io/crates/vsdb_core)|[![](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/vsdb_core)|`./core` Low-level implementations|
-|[**vsdb_derive**](derive)|[![](https://img.shields.io/crates/v/vsdb_derive.svg)](https://crates.io/crates/vsdb_derive)|[![](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/vsdb_derive)|`./derive` Procedure macro collection|
+|Name|Version|Doc|Path|Description|
+|:-|:-|:-|:-|:-|
+|[**vsdb**](wrappers)|[![](https://img.shields.io/crates/v/vsdb.svg)](https://crates.io/crates/vsdb)|[![](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/vsdb)|`./wrappers`|High-level APIs|
+|[**vsdb_core**](core)|[![](https://img.shields.io/crates/v/vsdb_core.svg)](https://crates.io/crates/vsdb_core)|[![](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/vsdb_core)|`./core`|Low-level implementations|
+|[**vsdb_derive**](derive)|[![](https://img.shields.io/crates/v/vsdb_derive.svg)](https://crates.io/crates/vsdb_derive)|[![](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/vsdb_derive)|`./derive`|Procedure macro collection|
+|[**vsdb_trie_map**](utils/trie_map)|[![](https://img.shields.io/crates/v/vsdb_trie_map.svg)](https://crates.io/crates/vsdb_trie_map)|[![](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/vsdb_trie_map)|`./utils/trie_map`|trie based structures with </br> limited version capabilities|
 
 ### Gratitude
 

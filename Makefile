@@ -4,17 +4,31 @@ export CARGO_NET_GIT_FETCH_WITH_CLI = true
 
 lint:
 	cargo clippy --workspace
-	cargo clippy --workspace --features "compress,extra_types"
+	cargo clippy --workspace --features "vs,compress,extra_types"
 	cargo check --workspace --tests
 	cargo check --workspace --benches
 	cargo check --workspace --examples
 
 lintall: lint
-	cargo clippy --workspace --no-default-features --features "derive,rocks_engine,compress,json_codec"
-	cargo clippy --workspace --no-default-features --features "derive,rocks_engine,compress,msgpack_codec"
-	cargo check --workspace --tests --no-default-features --features "derive,rocks_engine,msgpack_codec,extra_types"
-	cargo check --workspace --benches --no-default-features --features "derive,rocks_engine,msgpack_codec"
-	cargo check --workspace --examples --no-default-features --features "derive,rocks_engine,msgpack_codec"
+	cargo clippy --workspace --no-default-features --features "vs,rocks_engine,compress,json_codec"
+	cargo clippy --workspace --no-default-features --features "vs,rocks_engine,compress,msgpack_codec"
+	cargo check --workspace --tests --no-default-features --features "vs,rocks_engine,msgpack_codec,extra_types"
+	cargo check --workspace --benches --no-default-features --features "vs,rocks_engine,msgpack_codec"
+	cargo check --workspace --examples --no-default-features --features "vs,rocks_engine,msgpack_codec"
+
+test:
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing
+	cargo test --workspace --release --tests --features "vs,compress" -- --test-threads=1 #--nocapture
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing
+	cargo test --workspace --tests --features "vs" -- --test-threads=1 #--nocapture
+
+testall: test
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing
+	cargo test --workspace --release --tests --no-default-features --features "vs,rocks_engine,msgpack_codec,compress" -- --test-threads=1 #--nocapture
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing
+	cargo test --workspace --release --tests --no-default-features --features "vs,rocks_engine,json_codec,compress" -- --test-threads=1 #--nocapture
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing
+	cargo test --workspace --tests --no-default-features --features "vs,rocks_engine,msgpack_codec" -- --test-threads=1 #--nocapture
 
 example:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing
@@ -22,25 +36,11 @@ example:
 	cargo run --example web_server
 	cargo run --example blockchain_state
 
-test:
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing
-	cargo test --workspace --release --tests --bins --features "derive,compress" -- --test-threads=1 #--nocapture
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing
-	cargo test --workspace --tests --bins --features "derive" -- --test-threads=1 #--nocapture
-
 exampleall: example
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing
-	cargo run --no-default-features --features "derive,rocks_engine,msgpack_codec" --example derive_vs
-	cargo run --no-default-features --features "derive,rocks_engine,msgpack_codec" --example web_server
-	cargo run --no-default-features --features "derive,rocks_engine,msgpack_codec" --example blockchain_state
-
-testall: test
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing
-	cargo test --workspace --release --tests --bins --no-default-features --features "derive,rocks_engine,msgpack_codec,compress" -- --test-threads=1 #--nocapture
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing
-	cargo test --workspace --release --tests --bins --no-default-features --features "derive,rocks_engine,json_codec,compress" -- --test-threads=1 #--nocapture
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing
-	cargo test --workspace --tests --bins --no-default-features --features "derive,rocks_engine,msgpack_codec" -- --test-threads=1 #--nocapture
+	cargo run --no-default-features --features "vs,rocks_engine,msgpack_codec" --example derive_vs
+	cargo run --no-default-features --features "vs,rocks_engine,msgpack_codec" --example web_server
+	cargo run --no-default-features --features "vs,rocks_engine,msgpack_codec" --example blockchain_state
 
 bench:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing
@@ -62,7 +62,7 @@ fmt:
 	cargo +nightly fmt
 
 fmtall:
-	bash tools/fmt.sh
+	bash scripts/fmt.sh
 
 update:
 	cargo update

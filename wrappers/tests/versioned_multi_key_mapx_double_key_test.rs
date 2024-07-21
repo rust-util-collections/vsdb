@@ -1,3 +1,5 @@
+#![cfg(feature = "vs")]
+
 use ruc::*;
 use vsdb::{vsdb_set_base_dir, MapxDkVs, VersionName, VsMgmt};
 

@@ -155,15 +155,18 @@ impl MapxRaw {
         self.inner.clear();
     }
 
+    /// # Safety
+    ///
+    /// Do not use this API unless you know the internal details extremely well.
     #[inline(always)]
-    pub(crate) unsafe fn from_slice(s: impl AsRef<[u8]>) -> Self {
+    pub unsafe fn from_prefix_slice(s: impl AsRef<[u8]>) -> Self {
         Self {
             inner: engines::Mapx::from_prefix_slice(s),
         }
     }
 
     #[inline(always)]
-    pub(crate) fn as_prefix_slice(&self) -> &[u8] {
+    pub fn as_prefix_slice(&self) -> &[u8] {
         self.inner.as_prefix_slice()
     }
 }

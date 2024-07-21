@@ -1,11 +1,22 @@
-use vsdb::Vs;
+#[cfg(not(feature = "vs"))]
+fn main() {}
 
-#[derive(Vs, Debug, Default)]
-struct VsDerive {
-    a: i32,
-    b: u64,
+#[cfg(feature = "vs")]
+fn main() {
+    real::run();
 }
 
-fn main() {
-    dbg!(VsDerive::default());
+#[cfg(feature = "vs")]
+mod real {
+    use vsdb::Vs;
+
+    #[derive(Vs, Debug, Default)]
+    struct VsDerive {
+        a: i32,
+        b: u64,
+    }
+
+    pub fn run() {
+        dbg!(VsDerive::default());
+    }
 }

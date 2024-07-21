@@ -1,0 +1,25 @@
+[package]
+name = "vsdb_trie_map"
+version = "0.1.0"
+edition = "2021"
+keywords = ["mpt", "trie", "database", "blockchain"]
+license = "MIT"
+authors = ["hui.fan@mail.ru"]
+description = "Various easy-to-use KV-map structures based of the `vsdb_trie_db` crate"
+homepage = "https://github.com/rust-util-collections/vsdb"
+repository = "https://github.com/rust-util-collections/vsdb"
+
+[dependencies]
+ruc = { workspace = true }
+serde = { workspace = true }
+vsdb_trie_db = { workspace = true }
+
+[features]
+default = ["sled_engine", "bcs_codec"]
+
+sled_engine = ["vsdb_trie_db/sled_engine"]
+rocks_engine = ["vsdb_trie_db/rocks_engine"]
+
+bcs_codec = ["vsdb_trie_db/bcs_codec"]
+json_codec = ["vsdb_trie_db/json_codec"]
+msgpack_codec = ["vsdb_trie_db/msgpack_codec"]

@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "0.51.1"
+version = "0.53.2"
 authors = ["hui.fan@mail.ru"]
 edition = "2021"
 description = "A stuctured DB with some 'Git-like' features, mainly used in blockchain projects."
@@ -10,17 +10,20 @@ keywords = ["git", "leveldb", "rocksdb", "version", "vcs"]
 categories = ["database-implementations", "data-structures", "algorithms", "caching"]
 license = "GPL-3.0"
 
+[package.metadata.docs.rs]
+features = ["vs", "extra_types"]
+
 [dependencies]
-ruc = "4.0.0"
-once_cell = "1.13.1"
-serde = { version = "1.0.136", features = ["derive"] }
-parking_lot = "0.12.1"
+serde = { workspace = true }
+once_cell = { workspace = true }
+parking_lot = { workspace = true }
 
-serde_json = { version = "1.0.87", optional = true }
-bcs = { version = "0.1.4", optional = true }
-rmp-serde = { version = "1.1.1", optional = true }
+bcs = { workspace = true, optional = true }
+rmp-serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 
-vsdb_core = { path = "../core", version = "0.51.0" }
+ruc = { workspace = true }
+vsdb_core = { workspace = true }
 
 [dev-dependencies]
 hex = "0.4.3"
@@ -28,7 +31,9 @@ criterion = "0.4.0"
 rand = "0.8.5"
 
 [features]
-default = ["sled_engine", "bcs_codec", "derive"]
+default = ["sled_engine", "bcs_codec"]
+
+vs = ["vsdb_core/vs", "ruc/crypto"]
 
 compress = ["vsdb_core/compress"]
 
@@ -42,11 +47,14 @@ bcs_codec = ["bcs"]
 json_codec = ["serde_json"]
 msgpack_codec = ["rmp-serde"]
 
-derive = ["vsdb_core/derive"]
 extra_types = ["vsdb_core/extra_types"]
 
 [[bench]]
-name = "exec"
+name = "basic"
+harness = false
+
+[[bench]]
+name = "versioned"
 harness = false
 
 [[example]]
