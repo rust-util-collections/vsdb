@@ -58,7 +58,7 @@ use vsdb_core::basic::mapx_raw;
 #[serde(bound = "")]
 pub struct MapxOrd<K, V> {
     inner: MapxOrdRawKey<V>,
-    _m_pd: PhantomData<K>,
+    _p: PhantomData<K>,
 }
 
 impl<K, V> MapxOrd<K, V>
@@ -74,15 +74,31 @@ where
     pub unsafe fn shadow(&self) -> Self {
         Self {
             inner: self.inner.shadow(),
-            _m_pd: PhantomData,
+            _p: PhantomData,
         }
+    }
+
+    /// # Safety
+    ///
+    /// Do not use this API unless you know the internal details extremely well.
+    #[inline(always)]
+    pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
+        Self {
+            inner: MapxOrdRawKey::from_bytes(s),
+            _p: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_bytes(&self) -> &[u8] {
+        self.inner.as_bytes()
     }
 
     #[inline(always)]
     pub fn new() -> Self {
         MapxOrd {
             inner: MapxOrdRawKey::new(),
-            _m_pd: PhantomData,
+            _p: PhantomData,
         }
     }
 
@@ -160,7 +176,7 @@ where
     pub fn iter(&self) -> MapxOrdIter<K, V> {
         MapxOrdIter {
             inner: self.inner.iter(),
-            _m_pd: PhantomData,
+            _p: PhantomData,
         }
     }
 
@@ -168,7 +184,7 @@ where
     pub fn iter_mut(&mut self) -> MapxOrdIterMut<K, V> {
         MapxOrdIterMut {
             inner: self.inner.inner.iter_mut(),
-            _m_pd: PhantomData,
+            _p: PhantomData,
         }
     }
 
@@ -183,7 +199,7 @@ where
     pub fn values_mut(&mut self) -> MapxOrdValuesMut<V> {
         MapxOrdValuesMut {
             inner: self.inner.inner.iter_mut(),
-            _m_pd: PhantomData,
+            _p: PhantomData,
         }
     }
 
@@ -203,7 +219,7 @@ where
 
         MapxOrdIter {
             inner: self.inner.range((l, h)),
-            _m_pd: PhantomData,
+            _p: PhantomData,
         }
     }
 
@@ -226,7 +242,7 @@ where
 
         MapxOrdIterMut {
             inner: self.inner.inner.range_mut((l, h)),
-            _m_pd: PhantomData,
+            _p: PhantomData,
         }
     }
 
@@ -260,7 +276,7 @@ impl<K, V> Clone for MapxOrd<K, V> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
-            _m_pd: PhantomData,
+            _p: PhantomData,
         }
     }
 }
@@ -284,7 +300,7 @@ where
     V: ValueEnDe,
 {
     inner: MapxOrdRawKeyIter<'a, V>,
-    _m_pd: PhantomData<K>,
+    _p: PhantomData<K>,
 }
 
 impl<'a, K, V> Iterator for MapxOrdIter<'a, K, V>
@@ -347,7 +363,7 @@ where
     V: ValueEnDe,
 {
     pub(crate) inner: mapx_raw::MapxRawIterMut<'a>,
-    pub(crate) _m_pd: PhantomData<V>,
+    pub(crate) _p: PhantomData<V>,
 }
 
 impl<'a, V> Iterator for MapxOrdValuesMut<'a, V>
@@ -384,7 +400,7 @@ where
     V: ValueEnDe,
 {
     inner: mapx_raw::MapxRawIterMut<'a>,
-    _m_pd: PhantomData<(K, V)>,
+    _p: PhantomData<(K, V)>,
 }
 
 impl<'a, K, V> Iterator for MapxOrdIterMut<'a, K, V>

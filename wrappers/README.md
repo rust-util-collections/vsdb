@@ -159,7 +159,7 @@ Some complete examples:
 - `rocks_engine`, use rocksdb as the backend database
     - Faster running speed in the unversioned functions
     - Can not be compiled into a statically linked object
-- [**default**] `bcs_codec`, use `bcs` as the codec
+- `bcs_codec`, use `bcs` as the codec
     - Faster running speed than json
     - Security reinforcement for blockchain scenarios
     - Created by the original 'Libre' project of Facebook
@@ -167,10 +167,10 @@ Some complete examples:
     - Faster running speed than json
 - `json_codec`, use `serde_json` as the codec
     - Better generality and compatibility
-- `vs`, enable all versioned APIs and the `Vs` procedural macro
 - `compress`, enable compression in the backend database
 - `extra_types`, implement `VsMgmt` for some common extra types
   - For example: `H256` and `H160` of the `primitive-types` crate
+- `vs`, enable all versioned APIs and the `Vs` procedural macro
 
 ### NOTE
 

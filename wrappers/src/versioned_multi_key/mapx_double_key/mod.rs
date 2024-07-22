@@ -47,7 +47,7 @@ where
     #[inline(always)]
     pub fn new() -> Self {
         MapxDkVs {
-            inner: MapxRawMkVs::new(KEY_SIZE),
+            inner: MapxRawMkVs::new(KEY_SIZE as u32),
             p: PhantomData,
         }
     }

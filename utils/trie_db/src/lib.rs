@@ -1,6 +1,8 @@
 #![deny(warnings)]
 #![allow(clippy::new_without_default)]
 
+pub use vsdb::{RawBytes, RawKey, RawValue, ValueEnDe};
+
 use ruc::*;
 use serde::{Deserialize, Serialize};
 use sp_trie::{
@@ -9,9 +11,9 @@ use sp_trie::{
     LayoutV1, Trie, TrieDBBuilder, TrieHash, TrieMut,
 };
 use std::mem;
+use vsdb::basic::mapx_ord_rawkey::MapxOrdRawKey;
 use vsdb_hash_db::{
     sp_trie_db::{CError, DBValue, HashDB, Hasher as _, TrieItem, TrieIterator, TrieKeyItem},
-    vsdb::{basic::mapx_ord_rawkey::MapxOrdRawKey, RawBytes, ValueEnDe},
     KeccakHasher as H, TrieBackend,
 };
 
@@ -57,21 +59,20 @@ impl MptStore {
 
     /// @param cache_size:
     ///     - None, do nothing
-    ///     - Some(negative value), close cache
-    ///     - Some(0), reset the cache capacity to the default size
-    ///     - Some(new_size), reset the cache capacity to the new size
+    ///     - Some(0 or an negative value), disable cache
+    ///     - Some(a positive value), reset the cache capacity to the new size
     pub fn trie_restore(
         &self,
         backend_key: &[u8],
-        cache_size: Option<isize>,
+        new_cache_size: Option<isize>,
         root: TrieRoot,
     ) -> Result<MptOnce> {
         let mut backend = self.get_backend(backend_key).c(d!("backend not found"))?;
-        if let Some(n) = cache_size {
-            if 0 > n {
-                backend.reset_cache(None);
-            } else {
+        if let Some(n) = new_cache_size {
+            if 0 < n {
                 backend.reset_cache(Some(n as usize));
+            } else {
+                backend.reset_cache(None);
             }
         }
         MptOnce::restore(backend, root).c(d!())
@@ -104,12 +105,13 @@ impl MptStore {
     }
 }
 
-///
-/// # NOTE
-///
-/// The referenced field **MUST** be placed after the field that references it,
-/// this is to ensure that the `drop`s can be executed in the correct order,
-/// so that UB will not occur
+//
+// # NOTE
+//
+// The referenced field **MUST** be placed after the field that references it,
+// this is to ensure that the `Drop::drop` can be executed in the correct order,
+// so that UB will not occur
+/// An owned MPT instance
 pub struct MptOnce {
     mpt: MptMut<'static>,
     root: TrieRoot,
@@ -178,7 +180,7 @@ impl MptOnce {
         self.root
     }
 
-    pub fn ro_handle(&self, root: TrieHash<L>) -> MptRo {
+    pub fn ro_handle(&self, root: TrieRoot) -> MptRo {
         MptRo::from_existing(&self.backend, root)
     }
 }
@@ -206,12 +208,13 @@ impl ValueEnDe for MptOnce {
     }
 }
 
-///
-/// # NOTE
-///
-/// The referenced field **MUST** be placed after the field that references it,
-/// this is to ensure that the `drop`s can be executed in the correct order,
-/// so that UB will not occur
+//
+// # NOTE
+//
+// The referenced field **MUST** be placed after the field that references it,
+// this is to ensure that the `drop`s can be executed in the correct order,
+// so that UB will not occur
+/// A mutable MPT instance
 pub struct MptMut<'a> {
     trie: TrieDBMut<'a, H>,
 
@@ -290,17 +293,18 @@ impl<'a> MptMut<'a> {
         *self.trie.root()
     }
 
-    pub fn ro_handle(&self, root: TrieHash<L>) -> MptRo {
+    pub fn ro_handle(&self, root: TrieRoot) -> MptRo {
         MptRo::from_existing_dyn(self.trie.db(), root)
     }
 }
 
-///
-/// # NOTE
-///
-/// The referenced field **MUST** be placed after the field that references it,
-/// this is to ensure that the `drop`s can be executed in the correct order,
-/// so that UB will not occur
+//
+// # NOTE
+//
+// The referenced field **MUST** be placed after the field that references it,
+// this is to ensure that the `drop`s can be executed in the correct order,
+// so that UB will not occur
+/// A readonly MPT instance
 pub struct MptRo<'a> {
     trie: TrieDB<'a, 'a, H>,
 

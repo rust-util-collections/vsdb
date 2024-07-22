@@ -20,7 +20,7 @@ use std::ops::{Deref, DerefMut};
 #[serde(bound = "")]
 pub struct MapxRawMk {
     // Will never be changed once created
-    key_size: usize,
+    key_size: u32,
     // A nested map-structure, looks like:
     // map { key => map { key => map { key => value } } }
     inner: MapxRaw,
@@ -42,7 +42,7 @@ impl MapxRawMk {
     /// # Panic
     /// Will panic if `0 == key_size`.
     #[inline(always)]
-    pub fn new(key_size: usize) -> Self {
+    pub fn new(key_size: u32) -> Self {
         assert!(0 < key_size);
         Self {
             key_size,
@@ -52,14 +52,14 @@ impl MapxRawMk {
 
     #[inline(always)]
     pub fn get(&self, key: &[&[u8]]) -> Option<RawValue> {
-        if key.len() != self.key_size {
+        if key.len() != self.key_size as usize {
             return None;
         }
 
         let mut hdr = unsafe { self.inner.shadow() };
         for (idx, k) in key.iter().enumerate() {
             if let Some(v) = hdr.get(k) {
-                if 1 + idx == self.key_size {
+                if 1 + idx == self.key_size as usize {
                     return Some(v);
                 } else {
                     hdr = pnk!(ValueEnDe::decode(&v));
@@ -94,7 +94,7 @@ impl MapxRawMk {
 
     #[inline(always)]
     pub fn insert(&mut self, key: &[&[u8]], value: &[u8]) -> Result<Option<RawValue>> {
-        if key.len() != self.key_size {
+        if key.len() != self.key_size as usize {
             return Err(eg!("Incorrect key size"));
         }
 
@@ -102,7 +102,7 @@ impl MapxRawMk {
 
         let mut hdr = unsafe { self.inner.shadow() };
         for (idx, k) in key.iter().enumerate() {
-            if 1 + idx == self.key_size {
+            if 1 + idx == self.key_size as usize {
                 ret = hdr.insert(k, value);
                 break;
             } else {
@@ -129,7 +129,7 @@ impl MapxRawMk {
     #[inline(always)]
     pub fn remove(&mut self, key: &[&[u8]]) -> Result<Option<RawValue>> {
         // Support batch removal from key path.
-        if key.len() > self.key_size {
+        if key.len() > self.key_size as usize {
             return Err(eg!("Incorrect key size"));
         }
 
@@ -140,7 +140,7 @@ impl MapxRawMk {
                 if 1 + idx == key.len() {
                     let ret = hdr.remove(k);
                     // NOTE: use `self.key_size` instead of `key.len()`
-                    if 1 + idx == self.key_size {
+                    if 1 + idx == self.key_size as usize {
                         return Ok(ret);
                     } else {
                         return Ok(None);
@@ -162,7 +162,7 @@ impl MapxRawMk {
     }
 
     #[inline(always)]
-    pub fn key_size(&self) -> usize {
+    pub fn key_size(&self) -> u32 {
         self.key_size
     }
 
@@ -183,17 +183,18 @@ impl MapxRawMk {
     where
         F: FnMut(&[&[u8]], &[u8]) -> Result<()>,
     {
-        let mut key_buf = vec![RawKey::default(); self.key_size()];
+        let key_size = self.key_size() as usize;
+        let mut key_buf = vec![RawKey::default(); key_size];
         let mut hdr = unsafe { self.inner.shadow() };
-        let mut depth = self.key_size();
+        let mut depth = key_size;
 
-        if self.key_size < key_prefix.len() {
+        if key_size < key_prefix.len() {
             return Err(eg!("Invalid key size"));
         } else {
             for (idx, k) in key_prefix.iter().enumerate() {
                 if let Some(v) = hdr.get(k) {
                     key_buf[idx] = k.to_vec();
-                    if 1 + idx == self.key_size {
+                    if 1 + idx == key_size {
                         let key = key_buf
                             .iter()
                             .map(|sub_k| sub_k.as_ref())
@@ -210,7 +211,7 @@ impl MapxRawMk {
             }
         };
 
-        self.recursive_walk(hdr, key_buf.as_mut_slice(), depth, op)
+        self.recursive_walk(hdr, key_buf.as_mut_slice(), depth as u32, op)
             .c(d!())
     }
 
@@ -218,13 +219,13 @@ impl MapxRawMk {
         &self,
         hdr: MapxRaw,
         key_buf: &mut [RawKey],
-        depth: usize,
+        depth: u32,
         op: &mut F,
     ) -> Result<()>
     where
         F: FnMut(&[&[u8]], &[u8]) -> Result<()>,
     {
-        let idx = self.key_size() - depth;
+        let idx = (self.key_size() - depth) as usize;
         if 1 == depth {
             for (k, v) in hdr.iter() {
                 key_buf[idx] = k;
@@ -264,17 +265,18 @@ impl MapxRawMk {
         F: FnMut(&[&[u8]], &V) -> Result<()>,
         V: ValueEnDe,
     {
-        let mut key_buf = vec![RawKey::default(); self.key_size()];
+        let key_size = self.key_size() as usize;
+        let mut key_buf = vec![RawKey::default(); key_size];
         let mut hdr = unsafe { self.inner.shadow() };
-        let mut depth = self.key_size();
+        let mut depth = key_size;
 
-        if self.key_size < key_prefix.len() {
+        if key_size < key_prefix.len() {
             return Err(eg!("Invalid key size"));
         } else {
             for (idx, k) in key_prefix.iter().enumerate() {
                 if let Some(v) = hdr.get(k) {
                     key_buf[idx] = k.to_vec();
-                    if 1 + idx == self.key_size {
+                    if 1 + idx == key_size {
                         let key = key_buf
                             .iter()
                             .map(|sub_k| sub_k.as_ref())
@@ -291,7 +293,7 @@ impl MapxRawMk {
             }
         };
 
-        self.recursive_walk_typed_value(hdr, key_buf.as_mut_slice(), depth, op)
+        self.recursive_walk_typed_value(hdr, key_buf.as_mut_slice(), depth as u32, op)
             .c(d!())
     }
 
@@ -299,14 +301,14 @@ impl MapxRawMk {
         &self,
         hdr: MapxRaw,
         key_buf: &mut [RawKey],
-        depth: usize,
+        depth: u32,
         op: &mut F,
     ) -> Result<()>
     where
         F: FnMut(&[&[u8]], &V) -> Result<()>,
         V: ValueEnDe,
     {
-        let idx = self.key_size() - depth;
+        let idx = (self.key_size() - depth) as usize;
         if 1 == depth {
             for (k, v) in hdr.iter() {
                 key_buf[idx] = k;

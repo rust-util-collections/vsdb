@@ -19,7 +19,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-const KEY_SIZE: usize = 3;
+const KEY_SIZE: u32 = 3;
 
 /// A map structure with two-level keys.
 #[derive(Serialize, Deserialize, Debug)]
@@ -129,7 +129,7 @@ where
     }
 
     #[inline(always)]
-    pub fn key_size(&self) -> usize {
+    pub fn key_size(&self) -> u32 {
         self.inner.key_size()
     }
 

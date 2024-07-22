@@ -60,6 +60,21 @@ impl<T: ValueEnDe> Vecx<T> {
         }
     }
 
+    /// # Safety
+    ///
+    /// Do not use this API unless you know the internal details extremely well.
+    #[inline(always)]
+    pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
+        Self {
+            inner: MapxOrdRawKey::from_bytes(s),
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_bytes(&self) -> &[u8] {
+        self.inner.as_bytes()
+    }
+
     #[inline(always)]
     pub fn new() -> Self {
         Vecx {
