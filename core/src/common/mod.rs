@@ -104,7 +104,7 @@ pub static TRASH_CLEANER: Lazy<Mutex<ThreadPool>> =
 /////////////////////////////////////////////////////////////////////////////
 
 /// Parse bytes to a specified integer type.
-#[macro_export(crate)]
+#[macro_export]
 macro_rules! parse_int {
     ($bytes: expr, $ty: ty) => {{
         let array: [u8; std::mem::size_of::<$ty>()] = $bytes[..].try_into().unwrap();
@@ -113,7 +113,7 @@ macro_rules! parse_int {
 }
 
 /// Parse bytes to a `Pre` type.
-#[macro_export(crate)]
+#[macro_export]
 macro_rules! parse_prefix {
     ($bytes: expr) => {
         $crate::parse_int!($bytes, $crate::common::Pre)

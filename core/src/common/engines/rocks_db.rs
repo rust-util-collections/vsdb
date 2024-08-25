@@ -6,12 +6,13 @@ use crate::common::{
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use rocksdb::{
-    Cache, ColumnFamily, ColumnFamilyDescriptor, DBCompressionType, DBIterator,
-    Direction, IteratorMode, Options, ReadOptions, SliceTransform, DB,
+    ColumnFamily, ColumnFamilyDescriptor, DBCompressionType, DBIterator, Direction,
+    IteratorMode, Options, ReadOptions, SliceTransform, DB,
 };
 use ruc::*;
 use std::{
     borrow::Cow,
+    fs,
     mem::size_of,
     ops::{Bound, RangeBounds},
     sync::atomic::{AtomicUsize, Ordering},
@@ -20,14 +21,14 @@ use std::{
 
 // NOTE:
 // do NOT make the number of areas bigger than `u8::MAX`
-const DATA_SET_NUM: usize = 8;
+const DATA_SET_NUM: usize = 2;
 
 const META_KEY_MAX_KEYLEN: [u8; 1] = [u8::MAX];
 const META_KEY_BRANCH_ID: [u8; 1] = [u8::MAX - 1];
 const META_KEY_VERSION_ID: [u8; 1] = [u8::MAX - 2];
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 
-static HDR: Lazy<(DB, Vec<String>, Cache)> = Lazy::new(|| rocksdb_open().unwrap());
+static HDR: Lazy<(DB, Vec<String>)> = Lazy::new(|| rocksdb_open().unwrap());
 
 pub struct RocksEngine {
     meta: &'static DB,
@@ -367,41 +368,64 @@ impl PreAllocator {
     // }
 }
 
-fn rocksdb_open() -> Result<(DB, Vec<String>, Cache)> {
+fn rocksdb_open() -> Result<(DB, Vec<String>)> {
     let dir = vsdb_get_base_dir();
 
     // avoid setting again on an opened DB
     omit!(vsdb_set_base_dir(&dir));
 
-    let parallelism = available_parallelism().c(d!())?.get() as i32;
-    let cache_cap =
-        max!(GB, min!(((parallelism as u64) * 2 / 10) * GB, 12 * GB)) as usize;
-
     let mut cfg = Options::default();
 
     cfg.create_if_missing(true);
     cfg.create_missing_column_families(true);
+
     cfg.set_prefix_extractor(SliceTransform::create_fixed_prefix(size_of::<Pre>()));
-    cfg.increase_parallelism(parallelism);
-    cfg.set_num_levels(7);
-    cfg.set_max_open_files(8192);
+
     cfg.set_allow_mmap_writes(true);
     cfg.set_allow_mmap_reads(true);
-    // cfg.set_use_direct_reads(true);
-    // cfg.set_use_direct_io_for_flush_and_compaction(true);
-    cfg.set_write_buffer_size(512 * MB as usize);
-    cfg.set_max_write_buffer_number(3);
 
-    let lru = Cache::new_lru_cache(cache_cap).c(d!())?;
-    cfg.set_row_cache(&lru);
+    const WR_BUF_NUM: u8 = 2;
+    const G: usize = GB as usize;
+    const M: usize = MB as usize;
 
-    #[cfg(feature = "compress")]
-    {
-        cfg.set_compression_type(DBCompressionType::Lz4);
-    }
+    cfg.set_min_write_buffer_number(WR_BUF_NUM as i32);
+    cfg.set_max_write_buffer_number(1 + WR_BUF_NUM as i32);
 
-    #[cfg(not(feature = "compress"))]
-    {
+    let wr_buffer_size = if cfg!(target_os = "linux") {
+        let memsiz = fs::read_to_string("/proc/meminfo")
+            .c(d!())?
+            .lines()
+            .find(|l| l.contains("MemAvailable"))
+            .c(d!())?
+            .replace(|ch: char| !ch.is_numeric(), "")
+            .parse::<usize>()
+            .c(d!())?
+            * 1024;
+        alt!((32 * G) < memsiz, 16 * G, G) / DATA_SET_NUM
+    } else {
+        G / DATA_SET_NUM
+    };
+    println!(
+        "[vsdb]: The `write_buffer_size` of rocksdb is {}MB, per column family",
+        wr_buffer_size / M
+    );
+    cfg.set_write_buffer_size(wr_buffer_size);
+
+    cfg.set_enable_blob_files(true);
+    cfg.set_enable_blob_gc(true);
+    cfg.set_min_blob_size(MB);
+
+    // SEE: https://rocksdb.org/blog/2021/05/26/integrated-blob-db.html
+    cfg.set_blob_file_size(wr_buffer_size as u64);
+    cfg.set_target_file_size_base(wr_buffer_size as u64 / 10);
+    cfg.set_max_bytes_for_level_base(wr_buffer_size as u64);
+
+    let parallelism = available_parallelism().c(d!())?.get() as i32;
+    cfg.increase_parallelism(parallelism);
+
+    if cfg!(feature = "compress") {
+        cfg.set_compression_type(DBCompressionType::Zstd);
+    } else {
         cfg.set_compression_type(DBCompressionType::None);
     }
 
@@ -414,5 +438,5 @@ fn rocksdb_open() -> Result<(DB, Vec<String>, Cache)> {
 
     let db = DB::open_cf_descriptors(&cfg, &dir, cfs).c(d!())?;
 
-    Ok((db, cfhdrs, lru))
+    Ok((db, cfhdrs))
 }
