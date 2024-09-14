@@ -141,6 +141,15 @@ impl MapxRawVs {
     }
 
     #[inline(always)]
+    fn gen_mut<'a, T: 'a + AsRef<[u8]> + ?Sized>(
+        &'a mut self,
+        key: &'a T,
+        v: RawValue,
+    ) -> ValueMut<'a> {
+        ValueMut::new(self, key.as_ref(), v)
+    }
+
+    #[inline(always)]
     pub fn entry<'a>(&'a mut self, key: &'a [u8]) -> Entry<'a> {
         Entry { key, hdr: self }
     }
@@ -999,10 +1008,12 @@ pub struct Entry<'a> {
 
 impl<'a> Entry<'a> {
     pub fn or_insert(self, default: &'a [u8]) -> ValueMut<'a> {
-        if !self.hdr.contains_key(self.key) {
-            pnk!(self.hdr.insert(self.key, default));
+        let hdr = self.hdr as *mut MapxRawVs;
+        if let Some(v) = unsafe { &mut *hdr }.get_mut(self.key) {
+            v
+        } else {
+            unsafe { &mut *hdr }.gen_mut(self.key, default.to_vec())
         }
-        pnk!(self.hdr.get_mut(self.key))
     }
 }
 

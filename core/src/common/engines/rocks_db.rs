@@ -386,7 +386,6 @@ fn rocksdb_open() -> Result<(DB, Vec<String>)> {
 
     const WR_BUF_NUM: u8 = 2;
     const G: usize = GB as usize;
-    const M: usize = MB as usize;
 
     cfg.set_min_write_buffer_number(WR_BUF_NUM as i32);
     cfg.set_max_write_buffer_number(1 + WR_BUF_NUM as i32);
@@ -405,20 +404,22 @@ fn rocksdb_open() -> Result<(DB, Vec<String>)> {
     } else {
         G / DATA_SET_NUM
     };
-    println!(
-        "[vsdb]: The `write_buffer_size` of rocksdb is {}MB, per column family",
-        wr_buffer_size / M
-    );
+
+    // println!(
+    //     "[vsdb]: The `write_buffer_size` of rocksdb is {}MB, per column family",
+    //     wr_buffer_size / MB as usize
+    // );
+
     cfg.set_write_buffer_size(wr_buffer_size);
 
     cfg.set_enable_blob_files(true);
     cfg.set_enable_blob_gc(true);
     cfg.set_min_blob_size(MB);
 
-    // SEE: https://rocksdb.org/blog/2021/05/26/integrated-blob-db.html
-    cfg.set_blob_file_size(wr_buffer_size as u64);
-    cfg.set_target_file_size_base(wr_buffer_size as u64 / 10);
-    cfg.set_max_bytes_for_level_base(wr_buffer_size as u64);
+    // // SEE: https://rocksdb.org/blog/2021/05/26/integrated-blob-db.html
+    // cfg.set_blob_file_size(wr_buffer_size as u64);
+    // cfg.set_target_file_size_base(wr_buffer_size as u64 / 10);
+    // cfg.set_max_bytes_for_level_base(wr_buffer_size as u64);
 
     let parallelism = available_parallelism().c(d!())?.get() as i32;
     cfg.increase_parallelism(parallelism);

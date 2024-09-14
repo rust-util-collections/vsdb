@@ -106,6 +106,15 @@ where
     }
 
     #[inline(always)]
+    pub(crate) fn gen_mut(&mut self, key: K, value: RawValue) -> ValueMut<'_, K> {
+        ValueMut {
+            hdr: self,
+            key,
+            value,
+        }
+    }
+
+    #[inline(always)]
     pub fn contains_key(&self, key: &K) -> bool {
         self.inner.contains_key(key.to_bytes())
     }
@@ -145,7 +154,7 @@ where
     }
 
     #[inline(always)]
-    pub fn entry<'a>(&'a mut self, key: &'a K) -> Entry<'a, K> {
+    pub fn entry(&mut self, key: K) -> Entry<'_, K> {
         Entry { key, hdr: self }
     }
 
@@ -328,7 +337,7 @@ pub struct Entry<'a, K>
 where
     K: KeyEnDeOrdered,
 {
-    key: &'a K,
+    key: K,
     hdr: &'a mut MapxOrdRawValue<K>,
 }
 
@@ -337,10 +346,12 @@ where
     K: KeyEnDeOrdered,
 {
     pub fn or_insert(self, default: impl AsRef<[u8]>) -> ValueMut<'a, K> {
-        if !self.hdr.contains_key(self.key) {
-            self.hdr.set_value(self.key, default.as_ref());
+        let hdr = self.hdr as *mut MapxOrdRawValue<K>;
+        if let Some(v) = unsafe { &mut *hdr }.get_mut(&self.key) {
+            v
+        } else {
+            unsafe { &mut *hdr }.gen_mut(self.key, default.as_ref().to_vec())
         }
-        pnk!(self.hdr.get_mut(self.key))
     }
 }
 

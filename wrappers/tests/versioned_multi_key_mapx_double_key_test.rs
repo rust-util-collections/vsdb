@@ -32,6 +32,6 @@ fn basic_cases() {
     assert!(map.get(&(&1, &2)).is_none());
     assert!(map.get(&(&1, &3)).is_none());
 
-    map.entry(&(&1, &99)).or_insert(&100);
+    map.entry(&(&1, &99)).or_insert(100);
     assert_eq!(map.get(&(&1, &99)).unwrap(), 100);
 }

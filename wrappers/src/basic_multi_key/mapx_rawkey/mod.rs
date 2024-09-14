@@ -57,6 +57,15 @@ impl<V: ValueEnDe> MapxRawKeyMk<V> {
     }
 
     #[inline(always)]
+    pub(crate) fn gen_mut<'a>(
+        &'a mut self,
+        key: &'a [&'a [u8]],
+        v: V,
+    ) -> ValueMut<'a, V> {
+        ValueMut::new(self, key, v)
+    }
+
+    #[inline(always)]
     pub fn contains_key(&self, key: &[&[u8]]) -> bool {
         self.get(key).is_some()
     }
@@ -67,8 +76,12 @@ impl<V: ValueEnDe> MapxRawKeyMk<V> {
     }
 
     #[inline(always)]
-    pub fn entry<'a>(&'a mut self, key: &'a [&'a [u8]]) -> Entry<'a, V> {
-        Entry { key, hdr: self }
+    pub fn entry<'a>(&'a mut self, key: &'a [&'a [u8]]) -> Result<Entry<'a, V>> {
+        if key.len() != self.key_size() as usize {
+            Err(eg!())
+        } else {
+            Ok(Entry { key, hdr: self })
+        }
     }
 
     #[inline(always)]
@@ -168,16 +181,18 @@ impl<'a, V: ValueEnDe> DerefMut for ValueMut<'a, V> {
 }
 
 pub struct Entry<'a, V> {
-    hdr: &'a mut MapxRawKeyMk<V>,
     key: &'a [&'a [u8]],
+    hdr: &'a mut MapxRawKeyMk<V>,
 }
 
 impl<'a, V: ValueEnDe> Entry<'a, V> {
-    pub fn or_insert(self, default: &'a V) -> Result<ValueMut<'a, V>> {
-        if !self.hdr.contains_key(self.key) {
-            self.hdr.insert(self.key, default).c(d!())?;
+    pub fn or_insert(self, default: V) -> ValueMut<'a, V> {
+        let hdr = self.hdr as *mut MapxRawKeyMk<V>;
+        if let Some(v) = unsafe { &mut *hdr }.get_mut(self.key) {
+            v
+        } else {
+            unsafe { &mut *hdr }.gen_mut(self.key, default)
         }
-        self.hdr.get_mut(self.key).c(d!())
     }
 }
 

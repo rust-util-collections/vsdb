@@ -1,5 +1,27 @@
 # CHANGE LOG
 
+## v0.57.x
+
+#### Internal optimizations
+
+- Switch the default engine to `rocksdb` globally
+- Switch the default codec from `bcs` to `msgpack`
+- Add a new sub crate: [**slot db**](utils/slot_db)
+
+## v0.56.x
+
+#### Internal optimizations
+
+- Tuning details
+- Bump the version of `rocksdb-rs`
+
+#### New APIs
+
+- Orphan: add two new APIs
+  - `is_uninitialized`
+  - `initialize_if_empty`
+- Orphan: make `set_value` public
+
 ## v0.55.x
 
 #### Function changes

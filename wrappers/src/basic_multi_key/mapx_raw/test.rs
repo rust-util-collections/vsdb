@@ -15,7 +15,7 @@ fn test_insert() {
         .for_each(|(subkey, value)| {
             let key: &[&[u8]] = &[&subkey, &subkey];
             assert!(hdr.get(&key).is_none());
-            pnk!(hdr.entry(&key).or_insert(&value));
+            hdr.entry(&key).unwrap().or_insert(&value);
             assert!(pnk!(hdr.insert(&key, &value)).is_some());
             assert!(hdr.contains_key(&key));
             assert_eq!(pnk!(hdr.get(&key)), value);
@@ -59,7 +59,9 @@ fn test_valueende() {
 #[test]
 fn test_iter_op() {
     let mut map = MapxRawMk::new(4);
-    assert!(map.entry(&[&[1], &[2], &[3], &[4]]).or_insert(&[0]).is_ok());
+    map.entry(&[&[1], &[2], &[3], &[4]])
+        .unwrap()
+        .or_insert(&[0]);
     assert_eq!(&map.get(&[&[1], &[2], &[3], &[4]]).unwrap(), &[0]);
 
     let mut cnt = 0;
@@ -75,17 +77,13 @@ fn test_iter_op() {
 #[test]
 fn test_iter_op_with_key_prefix() {
     let mut map = MapxRawMk::new(4);
-    assert!(
-        map.entry(&[&[11], &[12], &[13], &[14]])
-            .or_insert(&[])
-            .is_ok()
-    );
+    map.entry(&[&[11], &[12], &[13], &[14]])
+        .unwrap()
+        .or_insert(&[]);
     assert_eq!(&map.get(&[&[11], &[12], &[13], &[14]]).unwrap(), NIL);
-    assert!(
-        map.entry(&[&[11], &[12], &[13], &[15]])
-            .or_insert(&[0])
-            .is_ok()
-    );
+    map.entry(&[&[11], &[12], &[13], &[15]])
+        .unwrap()
+        .or_insert(&[0]);
     assert_eq!(&map.get(&[&[11], &[12], &[13], &[15]]).unwrap(), &[0]);
 
     let mut cnt = 0;

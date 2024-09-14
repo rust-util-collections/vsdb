@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "0.55.0"
+version = "0.58.0"
 authors = ["hui.fan@mail.ru"]
 edition = "2021"
 description = "A stuctured DB with some 'Git-like' features, mainly used in blockchain projects."
@@ -31,7 +31,7 @@ criterion = "0.4.0"
 rand = "0.8.5"
 
 [features]
-default = ["sled_engine"]
+default = ["rocks_engine", "compress", "msgpack_codec"]
 
 vs = ["vsdb_core/vs", "ruc/crypto"]
 
@@ -44,9 +44,9 @@ sled_compress = ["vsdb_core/sled_compress"]
 rocks_compress = ["vsdb_core/rocks_compress"]
 
 serde_ende = []
-bcs_codec = ["serde_ende", "bcs"]
-json_codec = ["serde_ende", "serde_json"]
 msgpack_codec = ["serde_ende", "rmp-serde"]
+json_codec = ["serde_ende", "serde_json"]
+bcs_codec = ["serde_ende", "bcs"]
 
 extra_types = ["vsdb_core/extra_types"]
 

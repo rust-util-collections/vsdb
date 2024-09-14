@@ -36,7 +36,6 @@
 mod test;
 
 use crate::common::{ende::ValueEnDe, RawKey};
-use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
@@ -105,6 +104,15 @@ where
             value: <V as ValueEnDe>::decode(&inner).unwrap(),
             inner,
         })
+    }
+
+    #[inline(always)]
+    pub(crate) fn gen_mut(&mut self, key: RawKey, value: V) -> ValueMut<'_, V> {
+        let v = value.encode();
+        ValueMut {
+            value,
+            inner: self.inner.gen_mut(key, v),
+        }
     }
 
     #[inline(always)]
@@ -307,11 +315,13 @@ impl<'a, V> Entry<'a, V>
 where
     V: ValueEnDe,
 {
-    pub fn or_insert(self, default: &V) -> ValueMut<'a, V> {
-        if !self.hdr.contains_key(self.key) {
-            self.hdr.set_value(self.key, default);
+    pub fn or_insert(self, default: V) -> ValueMut<'a, V> {
+        let hdr = self.hdr as *mut MapxOrdRawKey<V>;
+        if let Some(v) = unsafe { &mut *hdr }.get_mut(self.key) {
+            v
+        } else {
+            unsafe { &mut *hdr }.gen_mut(self.key.to_vec(), default)
         }
-        pnk!(self.hdr.get_mut(self.key))
     }
 }
 

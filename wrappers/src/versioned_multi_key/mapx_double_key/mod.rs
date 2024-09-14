@@ -69,6 +69,15 @@ where
     }
 
     #[inline(always)]
+    fn gen_mut<'a>(
+        &'a mut self,
+        key: &'a (&'a K1, &'a K2),
+        v: V,
+    ) -> ValueMut<'a, K1, K2, V> {
+        ValueMut::new(self, key, v)
+    }
+
+    #[inline(always)]
     pub fn entry<'a>(&'a mut self, key: &'a (&'a K1, &'a K2)) -> Entry<'a, K1, K2, V> {
         Entry { key, hdr: self }
     }
@@ -433,11 +442,13 @@ where
     K2: KeyEnDe,
     V: ValueEnDe,
 {
-    pub fn or_insert(self, default: &V) -> ValueMut<'a, K1, K2, V> {
-        if !self.hdr.contains_key(self.key) {
-            pnk!(self.hdr.insert(self.key, default));
+    pub fn or_insert(self, default: V) -> ValueMut<'a, K1, K2, V> {
+        let hdr = self.hdr as *mut MapxDkVs<K1, K2, V>;
+        if let Some(v) = unsafe { &mut *hdr }.get_mut(self.key) {
+            v
+        } else {
+            unsafe { &mut *hdr }.gen_mut(self.key, default)
         }
-        pnk!(self.hdr.get_mut(self.key))
     }
 }
 

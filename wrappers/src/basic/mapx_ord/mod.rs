@@ -108,7 +108,7 @@ where
     }
 
     #[inline(always)]
-    pub fn get_mut<'a>(&'a mut self, key: &K) -> Option<ValueMut<'a, V>> {
+    pub fn get_mut(&mut self, key: &K) -> Option<ValueMut<'_, V>> {
         self.inner.get_mut(key.to_bytes())
     }
 
@@ -455,11 +455,13 @@ impl<'a, V> Entry<'a, V>
 where
     V: ValueEnDe,
 {
-    pub fn or_insert(self, default: &V) -> ValueMut<'a, V> {
-        if !self.hdr.contains_key(&self.key) {
-            self.hdr.set_value(&self.key, default);
+    pub fn or_insert(self, default: V) -> ValueMut<'a, V> {
+        let hdr = self.hdr as *mut MapxOrdRawKey<V>;
+        if let Some(v) = unsafe { &mut *hdr }.get_mut(&self.key) {
+            v
+        } else {
+            unsafe { &mut *hdr }.gen_mut(self.key, default)
         }
-        pnk!(self.hdr.get_mut(&self.key))
     }
 }
 
