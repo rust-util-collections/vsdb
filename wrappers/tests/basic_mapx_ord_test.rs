@@ -69,6 +69,7 @@ fn basic_cases() {
     assert!(reloaded.is_empty());
 
     reloaded.insert(&1, &gen_sample(1));
+    reloaded.insert(&1, &gen_sample(1));
     reloaded.insert(&10, &gen_sample(10));
     reloaded.insert(&100, &gen_sample(100));
     reloaded.insert(&1000, &gen_sample(1000));
@@ -90,4 +91,30 @@ fn basic_cases() {
     assert_eq!(100, reloaded.get_ge(&100).unwrap().1.idx);
     assert_eq!(100, reloaded.get_le(&100).unwrap().1.idx);
     assert_eq!(100, reloaded.get_le(&101).unwrap().1.idx);
+}
+
+#[test]
+fn negative_int_range() {
+    macro_rules! run {
+        ($int: ty) => {
+            let mut hdr = MapxOrd::<$int, $int>::new();
+            (-50..50).for_each(|i| {
+                hdr.insert(&i, &i);
+            });
+
+            hdr.range(..)
+                .map(|(i, _)| i)
+                .enumerate()
+                .for_each(|(idx, i)| {
+                    assert_eq!((idx as $int) - 50, i);
+                });
+        };
+    }
+
+    run!(i8);
+    run!(i16);
+    run!(i32);
+    run!(i64);
+    run!(i128);
+    run!(isize);
 }

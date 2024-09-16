@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_hash_db"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2021"
 keywords = ["mpt", "trie", "database", "blockchain"]
 license = "MIT"
@@ -22,10 +22,7 @@ ruc = { workspace = true }
 vsdb = { workspace = true }
 
 [features]
-default = ["rocks_engine"]
-
-sled_engine = ["vsdb/sled_engine"]
-rocks_engine = ["vsdb/rocks_engine"]
+default = []
 
 bcs_codec = ["vsdb/bcs_codec"]
 json_codec = ["vsdb/json_codec"]

@@ -8,7 +8,7 @@ The core implementations of [**vsdb**](https://crates.io/crates/vsdb).
 
 ### Design Principles
 
-Based on the underlying one-dimensional linear storage structure (native kv-database, such as sled/rocksdb, etc.), multiple different namespaces are divided, and then abstract each dimension in the multi-dimensional logical structure based on these divided namespaces.
+Based on the underlying one-dimensional linear storage structure (native kv-database, such as rocksdb, etc.), multiple different namespaces are divided, and then abstract each dimension in the multi-dimensional logical structure based on these divided namespaces.
 
 In the category of kv-database, namespaces can be expressed as different key ranges, or different key prefix.
 

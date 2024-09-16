@@ -1,10 +1,12 @@
-#[cfg(test)]
-mod test;
+#![deny(warnings)]
 
 use ruc::*;
 use serde::{de, Deserialize, Serialize};
-use std::mem;
-use vsdb::{MapxOrd, Vecx};
+use std::{
+    collections::{btree_set::Iter as SmallIter, BTreeSet},
+    mem,
+};
+use vsdb::{basic::mapx_ord::MapxOrdIter as LargeIter, KeyEnDeOrdered, MapxOrd};
 
 type Slot = u64;
 type SlotFloor = Slot;
@@ -12,12 +14,12 @@ type EntryCnt = u64;
 
 /// A `Skip List` like structure
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(bound = "V: Serialize + de::DeserializeOwned")]
-pub struct SlotDB<V>
+#[serde(bound = "T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned")]
+pub struct SlotDB<T>
 where
-    V: Eq + Serialize + de::DeserializeOwned,
+    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
-    data: MapxOrd<Slot, Vecx<V>>,
+    data: MapxOrd<Slot, DataCtner<T>>,
 
     // How many entries in this DB
     total: EntryCnt,
@@ -36,18 +38,9 @@ where
     swap_order: bool,
 }
 
-impl<V> Default for SlotDB<V>
+impl<T> SlotDB<T>
 where
-    V: Eq + Serialize + for<'d> Deserialize<'d>,
-{
-    fn default() -> Self {
-        Self::new(8, false)
-    }
-}
-
-impl<V> SlotDB<V>
-where
-    V: Eq + Serialize + for<'d> Deserialize<'d>,
+    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
     pub fn new(multiple_step: u64, swap_order: bool) -> Self {
         Self {
@@ -59,7 +52,7 @@ where
         }
     }
 
-    pub fn insert(&mut self, mut slot: Slot, value: V) -> Result<()> {
+    pub fn insert(&mut self, mut slot: Slot, t: T) -> Result<()> {
         if self.swap_order {
             slot = swap_order(slot);
         }
@@ -88,19 +81,23 @@ where
             self.levels.push(newtop);
         };
 
-        self.data.entry(&slot).or_insert(Vecx::new()).push(&value);
-
-        self.levels.iter_mut().for_each(|l| {
-            let slot_floor = slot / l.floor_base * l.floor_base;
-            *l.data.entry(&slot_floor).or_insert(0) += 1;
-        });
-
-        self.total += 1;
+        if self
+            .data
+            .entry(&slot)
+            .or_insert(DataCtner::default())
+            .insert(t)
+        {
+            self.levels.iter_mut().for_each(|l| {
+                let slot_floor = slot / l.floor_base * l.floor_base;
+                *l.data.entry(&slot_floor).or_insert(0) += 1;
+            });
+            self.total += 1;
+        }
 
         Ok(())
     }
 
-    pub fn remove(&mut self, mut slot: Slot, value: V) {
+    pub fn remove(&mut self, mut slot: Slot, t: &T) {
         if self.swap_order {
             slot = swap_order(slot);
         }
@@ -116,13 +113,7 @@ where
         }
 
         let (exist, empty) = if let Some(mut d) = self.data.get_mut(&slot) {
-            let exist = if let Some((idx, _)) = d.iter().enumerate().find(|(_, id)| *id == value) {
-                d.remove(idx);
-                true
-            } else {
-                false
-            };
-            (exist, d.is_empty())
+            (d.remove(t), d.is_empty())
         } else {
             return;
         };
@@ -161,7 +152,7 @@ where
         page_size: u16,
         page_number: u32, // start from 0
         reverse_order: bool,
-    ) -> Vec<V> {
+    ) -> Vec<T> {
         self.get_entries_by_page_slot(None, page_size, page_number, reverse_order)
     }
 
@@ -172,7 +163,7 @@ where
         page_size: u16,
         page_number: u32, // start from 0
         mut reverse_order: bool,
-    ) -> Vec<V> {
+    ) -> Vec<T> {
         if self.swap_order {
             if let Some([a, b]) = slot_itv {
                 slot_itv.replace([swap_order(b), swap_order(a)]);
@@ -192,7 +183,7 @@ where
     }
 
     // Keep it private
-    fn entry_range(&self, page_size: u16, page_number: u32, reverse_order: bool) -> Vec<V> {
+    fn entry_range(&self, page_size: u16, page_number: u32, reverse_order: bool) -> Vec<T> {
         let page_number = page_number as u64;
         let page_size = page_size as u64;
 
@@ -270,7 +261,7 @@ where
         page_size: u16,
         page_number: u32,
         reverse_order: bool,
-    ) -> Vec<V> {
+    ) -> Vec<T> {
         let [slot_min, mut slot_max] = slot_itv;
         if slot_max < slot_min {
             return vec![];
@@ -321,7 +312,7 @@ where
         mut slot_start_inner_idx: usize,
         take_n: usize,
         reverse_order: bool,
-    ) -> Vec<V> {
+    ) -> Vec<T> {
         alt!(slot_end < slot_start, return vec![]);
         let mut ret = vec![];
 
@@ -361,6 +352,113 @@ where
     }
 }
 
+impl<T> Default for SlotDB<T>
+where
+    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+{
+    fn default() -> Self {
+        Self::new(8, false)
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(bound = "T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned")]
+enum DataCtner<T>
+where
+    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+{
+    Small(BTreeSet<T>),
+    Large(MapxOrd<T, ()>),
+}
+
+impl<T> DataCtner<T>
+where
+    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+{
+    fn len(&self) -> usize {
+        match self {
+            Self::Small(i) => i.len(),
+            Self::Large(i) => i.len(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        0 == self.len()
+    }
+
+    fn insert(&mut self, t: T) -> bool {
+        if let Self::Small(i) = self {
+            if i.len() > 8 {
+                *self = Self::Large(i.iter().fold(MapxOrd::new(), |mut acc, t| {
+                    acc.insert(t, &());
+                    acc
+                }));
+            }
+        }
+
+        match self {
+            Self::Small(i) => i.insert(t),
+            Self::Large(i) => i.insert(&t, &()).is_none(),
+        }
+    }
+
+    fn remove(&mut self, target: &T) -> bool {
+        match self {
+            Self::Small(i) => i.remove(target),
+            Self::Large(i) => i.remove(target).is_some(),
+        }
+    }
+
+    fn iter(&self) -> DataCtnerIter<T> {
+        match self {
+            Self::Small(i) => DataCtnerIter::Small(i.iter()),
+            Self::Large(i) => DataCtnerIter::Large(i.iter()),
+        }
+    }
+}
+
+impl<T> Default for DataCtner<T>
+where
+    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+{
+    fn default() -> Self {
+        Self::Small(BTreeSet::new())
+    }
+}
+
+enum DataCtnerIter<'a, T>
+where
+    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+{
+    Small(SmallIter<'a, T>),
+    Large(LargeIter<'a, T, ()>),
+}
+
+impl<'a, T> Iterator for DataCtnerIter<'a, T>
+where
+    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+{
+    type Item = T;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Small(i) => i.next().cloned(),
+            Self::Large(i) => i.next().map(|j| j.0),
+        }
+    }
+}
+
+impl<'a, T> DoubleEndedIterator for DataCtnerIter<'a, T>
+where
+    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Small(i) => i.next_back().cloned(),
+            Self::Large(i) => i.next_back().map(|j| j.0),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct Level {
     floor_base: u64,
@@ -381,3 +479,6 @@ impl Level {
 fn swap_order(original_slot_value: Slot) -> Slot {
     Slot::MAX - original_slot_value
 }
+
+#[cfg(test)]
+mod test;
