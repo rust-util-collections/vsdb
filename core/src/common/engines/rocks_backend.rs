@@ -126,9 +126,11 @@ impl Engine for RocksEngine {
         let x = LK.lock();
 
         // step 1
-        let ret = crate::parse_prefix!(
-            self.meta.get(self.prefix_allocator.key).unwrap().unwrap()
-        );
+        let ret = crate::parse_prefix!(self
+            .meta
+            .get(self.prefix_allocator.key)
+            .unwrap()
+            .unwrap());
 
         // step 2
         self.meta

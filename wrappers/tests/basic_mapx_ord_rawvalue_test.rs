@@ -76,12 +76,10 @@ fn basic_cases() {
         &100usize.to_be_bytes()[..],
         &reloaded.range(&100..=&999).next().unwrap().1[..]
     );
-    assert!(
-        reloaded
-            .range((Bound::Excluded(&100), Bound::Included(&999)))
-            .next()
-            .is_none()
-    );
+    assert!(reloaded
+        .range((Bound::Excluded(&100), Bound::Included(&999)))
+        .next()
+        .is_none());
 
     assert_eq!(
         &100usize.to_be_bytes()[..],
