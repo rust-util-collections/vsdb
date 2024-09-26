@@ -176,12 +176,12 @@ where
 
     #[inline(always)]
     pub fn remove(&mut self, key: &K) -> Option<V> {
-        self.inner.remove(&key.encode())
+        self.inner.remove(key.encode())
     }
 
     #[inline(always)]
     pub fn unset_value(&mut self, key: &K) {
-        self.inner.unset_value(&key.encode());
+        self.inner.unset_value(key.encode());
     }
 
     #[inline(always)]

@@ -3,7 +3,6 @@ use crate::common::{
     PreBytes, RawBytes, RawKey, RawValue, VersionIDBase as VersionID, GB,
     INITIAL_BRANCH_ID, MB, PREFIX_SIZE, RESERVED_ID_CNT,
 };
-use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use rocksdb::{
     ColumnFamily, ColumnFamilyDescriptor, DBCompressionType, DBIterator, Direction,
@@ -15,7 +14,10 @@ use std::{
     fs,
     mem::size_of,
     ops::{Bound, RangeBounds},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        LazyLock,
+    },
     thread::available_parallelism,
 };
 
@@ -28,7 +30,7 @@ const META_KEY_BRANCH_ID: [u8; 1] = [u8::MAX - 1];
 const META_KEY_VERSION_ID: [u8; 1] = [u8::MAX - 2];
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 
-static HDR: Lazy<(DB, Vec<String>)> = Lazy::new(|| rocksdb_open().unwrap());
+static HDR: LazyLock<(DB, Vec<String>)> = LazyLock::new(|| rocksdb_open().unwrap());
 
 pub struct RocksEngine {
     meta: &'static DB,
@@ -58,7 +60,7 @@ impl RocksEngine {
 
     #[inline(always)]
     fn get_upper_bound_value(&self, meta_prefix: PreBytes) -> Vec<u8> {
-        static BUF: Lazy<RawBytes> = Lazy::new(|| vec![u8::MAX; 512]);
+        static BUF: LazyLock<RawBytes> = LazyLock::new(|| vec![u8::MAX; 512]);
 
         let mut max_guard = meta_prefix.to_vec();
 
@@ -120,7 +122,7 @@ impl Engine for RocksEngine {
     // so we use a `Mutex` lock for thread safe.
     #[allow(unused_variables)]
     fn alloc_prefix(&self) -> Pre {
-        static LK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+        static LK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
         let x = LK.lock();
 
         // step 1
@@ -140,7 +142,7 @@ impl Engine for RocksEngine {
     // so we use a `Mutex` lock for thread safe.
     #[allow(unused_variables)]
     fn alloc_br_id(&self) -> BranchID {
-        static LK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+        static LK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
         let x = LK.lock();
 
         // step 1
@@ -161,7 +163,7 @@ impl Engine for RocksEngine {
     // so we use a `Mutex` lock for thread safe.
     #[allow(unused_variables)]
     fn alloc_ver_id(&self) -> VersionID {
-        static LK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+        static LK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
         let x = LK.lock();
 
         // step 1

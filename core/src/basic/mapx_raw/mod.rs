@@ -88,13 +88,13 @@ impl MapxRaw {
     }
 
     #[inline(always)]
-    pub fn get_le(&self, key: &[u8]) -> Option<(RawKey, RawValue)> {
-        self.range(..=Cow::Borrowed(key)).next_back()
+    pub fn get_le(&self, key: impl AsRef<[u8]>) -> Option<(RawKey, RawValue)> {
+        self.range(..=Cow::Borrowed(key.as_ref())).next_back()
     }
 
     #[inline(always)]
-    pub fn get_ge(&self, key: &[u8]) -> Option<(RawKey, RawValue)> {
-        self.range(Cow::Borrowed(key)..).next()
+    pub fn get_ge(&self, key: impl AsRef<[u8]>) -> Option<(RawKey, RawValue)> {
+        self.range(Cow::Borrowed(key.as_ref())..).next()
     }
 
     #[inline(always)]

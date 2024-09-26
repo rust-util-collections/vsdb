@@ -156,12 +156,12 @@ where
         key: &K,
         value: impl AsRef<[u8]>,
     ) -> Option<V> {
-        self.inner.insert_encoded_value(&key.to_bytes(), value)
+        self.inner.insert_encoded_value(key.to_bytes(), value)
     }
 
     #[inline(always)]
     pub fn set_value(&mut self, key: &K, value: &V) {
-        self.inner.insert(&key.to_bytes(), value);
+        self.inner.insert(key.to_bytes(), value);
     }
 
     #[inline(always)]
@@ -258,12 +258,12 @@ where
 
     #[inline(always)]
     pub fn remove(&mut self, key: &K) -> Option<V> {
-        self.inner.remove(&key.to_bytes())
+        self.inner.remove(key.to_bytes())
     }
 
     #[inline(always)]
     pub fn unset_value(&mut self, key: &K) {
-        self.inner.remove(&key.to_bytes());
+        self.inner.remove(key.to_bytes());
     }
 
     #[inline(always)]

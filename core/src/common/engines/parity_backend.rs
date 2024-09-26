@@ -3,14 +3,16 @@ use crate::common::{
     PreBytes, RawBytes, RawKey, RawValue, VersionIDBase as VersionID, INITIAL_BRANCH_ID,
     PREFIX_SIZE, RESERVED_ID_CNT,
 };
-use once_cell::sync::Lazy;
 use parity_db::{BTreeIterator, CompressionType, Db as DB, Options};
 use parking_lot::Mutex;
 use ruc::*;
 use std::{
     borrow::Cow,
     ops::{Bound, RangeBounds},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        LazyLock,
+    },
 };
 
 // NOTE:
@@ -26,7 +28,7 @@ const META_KEY_VERSION_ID: [u8; 1] = [u8::MAX - 2];
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 const META_KEY_NULL: [u8; 0] = [0; 0];
 
-static HDR: Lazy<DB> = Lazy::new(|| paritydb_open().unwrap());
+static HDR: LazyLock<DB> = LazyLock::new(|| paritydb_open().unwrap());
 
 pub struct ParityEngine {
     hdr: &'static DB,
@@ -54,7 +56,7 @@ impl ParityEngine {
 
     #[inline(always)]
     fn get_upper_bound_value(&self, hdr_prefix: PreBytes) -> Vec<u8> {
-        static BUF: Lazy<RawBytes> = Lazy::new(|| vec![u8::MAX; 512]);
+        static BUF: LazyLock<RawBytes> = LazyLock::new(|| vec![u8::MAX; 512]);
 
         let mut max_guard = hdr_prefix.to_vec();
 
@@ -132,7 +134,7 @@ impl Engine for ParityEngine {
     // so we use a `Mutex` lock for thread safe.
     #[allow(unused_variables)]
     fn alloc_prefix(&self) -> Pre {
-        static LK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+        static LK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
         let x = LK.lock();
 
         // step 1
@@ -159,7 +161,7 @@ impl Engine for ParityEngine {
     // so we use a `Mutex` lock for thread safe.
     #[allow(unused_variables)]
     fn alloc_br_id(&self) -> BranchID {
-        static LK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+        static LK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
         let x = LK.lock();
 
         // step 1
@@ -187,7 +189,7 @@ impl Engine for ParityEngine {
     // so we use a `Mutex` lock for thread safe.
     #[allow(unused_variables)]
     fn alloc_ver_id(&self) -> VersionID {
-        static LK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+        static LK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
         let x = LK.lock();
 
         // step 1

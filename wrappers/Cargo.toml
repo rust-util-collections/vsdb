@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "1.0.1"
+version = "1.0.2"
 authors = ["hui.fan@mail.ru"]
 edition = "2021"
 description = "A std-collection-like database"
@@ -15,7 +15,6 @@ features = []
 
 [dependencies]
 serde = { workspace = true }
-once_cell = { workspace = true }
 parking_lot = { workspace = true }
 
 msgpack = { workspace = true, optional = true }

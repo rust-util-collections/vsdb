@@ -29,7 +29,6 @@ use crate::common::{
     BranchIDBase as BranchID, Pre, PreBytes, RawKey, RawValue,
     VersionIDBase as VersionID, PREFIX_SIZE, VSDB,
 };
-use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use ruc::*;
 use serde::{de, Deserialize, Serialize};
@@ -39,10 +38,11 @@ use std::{
     mem::transmute,
     ops::{Deref, DerefMut, RangeBounds},
     result::Result as StdResult,
+    sync::LazyLock,
 };
 
-static LEN_LK: Lazy<Vec<Mutex<()>>> =
-    Lazy::new(|| (0..VSDB.db.area_count()).map(|_| Mutex::new(())).collect());
+static LEN_LK: LazyLock<Vec<Mutex<()>>> =
+    LazyLock::new(|| (0..VSDB.db.area_count()).map(|_| Mutex::new(())).collect());
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////

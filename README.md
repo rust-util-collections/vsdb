@@ -1,6 +1,6 @@
 ![GitHub top language](https://img.shields.io/github/languages/top/rust-util-collections/vsdb)
 [![Rust](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml/badge.svg)](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml)
-[![Minimum rustc version](https://img.shields.io/badge/rustc-1.70+-lightgray.svg)](https://github.com/rust-random/rand#rust-version-requirements)
+[![Minimum rustc version](https://img.shields.io/badge/rustc-1.81+-lightgray.svg)](https://github.com/rust-random/rand#rust-version-requirements)
 
 # vsdb
 

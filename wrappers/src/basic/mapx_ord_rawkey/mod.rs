@@ -147,7 +147,7 @@ where
     #[inline(always)]
     pub fn insert(&mut self, key: impl AsRef<[u8]>, value: &V) -> Option<V> {
         self.inner
-            .insert(key.as_ref(), &value.encode())
+            .insert(key.as_ref(), value.encode())
             .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
     }
 
@@ -168,7 +168,7 @@ where
 
     #[inline(always)]
     pub fn set_value(&mut self, key: impl AsRef<[u8]>, value: &V) {
-        self.inner.insert(key.as_ref(), &value.encode());
+        self.inner.insert(key.as_ref(), value.encode());
     }
 
     #[inline(always)]

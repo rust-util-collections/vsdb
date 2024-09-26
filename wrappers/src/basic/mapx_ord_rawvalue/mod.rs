@@ -122,14 +122,14 @@ where
     #[inline(always)]
     pub fn get_le(&self, key: &K) -> Option<(K, RawValue)> {
         self.inner
-            .get_le(&key.to_bytes())
+            .get_le(key.to_bytes())
             .map(|(k, v)| (pnk!(K::from_bytes(k)), v))
     }
 
     #[inline(always)]
     pub fn get_ge(&self, key: &K) -> Option<(K, RawValue)> {
         self.inner
-            .get_ge(&key.to_bytes())
+            .get_ge(key.to_bytes())
             .map(|(k, v)| (pnk!(K::from_bytes(k)), v))
     }
 
@@ -145,12 +145,12 @@ where
 
     #[inline(always)]
     pub fn insert(&mut self, key: &K, value: impl AsRef<[u8]>) -> Option<RawValue> {
-        self.inner.insert(&key.to_bytes(), value.as_ref())
+        self.inner.insert(key.to_bytes(), value.as_ref())
     }
 
     #[inline(always)]
     pub fn set_value(&mut self, key: &K, value: impl AsRef<[u8]>) {
-        self.inner.insert(&key.to_bytes(), value.as_ref());
+        self.inner.insert(key.to_bytes(), value.as_ref());
     }
 
     #[inline(always)]
@@ -247,12 +247,12 @@ where
 
     #[inline(always)]
     pub fn remove(&mut self, key: &K) -> Option<RawValue> {
-        self.inner.remove(&key.to_bytes())
+        self.inner.remove(key.to_bytes())
     }
 
     #[inline(always)]
     pub fn unset_value(&mut self, key: &K) {
-        self.inner.remove(&key.to_bytes());
+        self.inner.remove(key.to_bytes());
     }
 
     #[inline(always)]

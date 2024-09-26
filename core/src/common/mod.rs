@@ -5,7 +5,6 @@
 pub(crate) mod engines;
 
 use engines::Engine;
-use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use ruc::*;
 use serde::{Deserialize, Serialize};
@@ -13,7 +12,10 @@ use std::{
     env, fs,
     mem::size_of,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        LazyLock,
+    },
 };
 use threadpool::ThreadPool;
 
@@ -73,9 +75,10 @@ pub const RESERVED_VERSION_NUM_DEFAULT: usize = 10;
 
 const BASE_DIR_VAR: &str = "VSDB_BASE_DIR";
 
-static VSDB_BASE_DIR: Lazy<Mutex<PathBuf>> = Lazy::new(|| Mutex::new(gen_data_dir()));
+static VSDB_BASE_DIR: LazyLock<Mutex<PathBuf>> =
+    LazyLock::new(|| Mutex::new(gen_data_dir()));
 
-static VSDB_CUSTOM_DIR: Lazy<PathBuf> = Lazy::new(|| {
+static VSDB_CUSTOM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     let mut d = VSDB_BASE_DIR.lock().clone();
     d.push("__CUSTOM__");
     pnk!(fs::create_dir_all(&d));
@@ -84,13 +87,13 @@ static VSDB_CUSTOM_DIR: Lazy<PathBuf> = Lazy::new(|| {
 });
 
 #[cfg(feature = "rocks_backend")]
-pub static VSDB: Lazy<VsDB<engines::RocksDB>> = Lazy::new(|| pnk!(VsDB::new()));
+pub static VSDB: LazyLock<VsDB<engines::RocksDB>> = LazyLock::new(|| pnk!(VsDB::new()));
 
 #[cfg(feature = "parity_backend")]
-pub static VSDB: Lazy<VsDB<engines::ParityDB>> = Lazy::new(|| pnk!(VsDB::new()));
+pub static VSDB: LazyLock<VsDB<engines::ParityDB>> = LazyLock::new(|| pnk!(VsDB::new()));
 
 /// Clean orphan instances in background.
-pub static TRASH_CLEANER: Lazy<Mutex<ThreadPool>> = Lazy::new(|| {
+pub static TRASH_CLEANER: LazyLock<Mutex<ThreadPool>> = LazyLock::new(|| {
     let pool = threadpool::Builder::new()
         .num_threads(1)
         .thread_stack_size(512 * MB as usize) // use large stack size
