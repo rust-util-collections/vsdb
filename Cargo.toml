@@ -9,7 +9,7 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-ruc = "6.0.0"
+ruc = "7.0.1"
 rand = "0.8.5"
 parking_lot = "0.12.1"
 
@@ -28,8 +28,8 @@ hash-db = "0.16.0"
 trie-db = "0.29.1"
 trie-root = "0.18.0"
 
-vsdb = { path = "wrappers", version = "1.0.0", default-features = false }
-vsdb_core = { path = "core", version = "1.0.0", default-features = false }
+vsdb = { path = "wrappers", version = "2.0", default-features = false }
+vsdb_core = { path = "core", version = "2.0", default-features = false }
 
-vsdb_trie_db = { path = "utils/trie_db", version = "1.0.0", default-features = false }
-vsdb_hash_db = { path = "utils/hash_db", version = "1.0.0", default-features = false }
+vsdb_trie_db = { path = "utils/trie_db", version = "2.0", default-features = false }
+vsdb_hash_db = { path = "utils/hash_db", version = "2.0", default-features = false }

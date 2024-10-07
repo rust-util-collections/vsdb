@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_slot_db"
-version = "1.0.0"
+version = "2.0.0"
 edition = "2021"
 keywords = ["index", "cache", "timestamp", "slot", "database"]
 license = "MIT"
