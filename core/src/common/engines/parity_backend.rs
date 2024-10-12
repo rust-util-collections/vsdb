@@ -387,7 +387,7 @@ fn paritydb_open() -> Result<DB> {
 
     #[cfg(feature = "compress")]
     cfg.columns.iter_mut().for_each(|c| {
-        c.compression = CompressionType::Lz4;
+        c.compression = CompressionType::Snappy;
     });
 
     #[cfg(not(feature = "compress"))]
