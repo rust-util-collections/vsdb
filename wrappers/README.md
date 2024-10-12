@@ -22,11 +22,11 @@ This is a simplified version of the original [**vsdb**](https://crates.io/crates
 
 ### Compilation features
 
-- [ **DEFAULT** ] `rocks_backend`, use `rocksdb` as the backend database
-  - Stable
+- `rocks_backend`, use `rocksdb` as the backend database
+  - Stable ?
   - C++ implementation, difficult to be compiled into a static binary
-- `parity_backend`, use `parity-db` as the backend database
-  - Experimental
+- [ **DEFAULT** ] `parity_backend`, use `parity-db` as the backend database
+  - Experimental ?
   - Pure rust implementation, can be easily compiled into a static binary
 - `msgpack_codec`, use `rmp-serde` as the codec
     - Faster running speed than json

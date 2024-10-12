@@ -1,7 +1,6 @@
 use crate::common::{
-    vsdb_get_base_dir, vsdb_set_base_dir, BranchIDBase as BranchID, Engine, Pre,
-    PreBytes, RawBytes, RawKey, RawValue, VersionIDBase as VersionID, GB,
-    INITIAL_BRANCH_ID, MB, PREFIX_SIZE, RESERVED_ID_CNT,
+    vsdb_get_base_dir, vsdb_set_base_dir, Engine, Pre, PreBytes, RawKey, RawValue, GB,
+    MB, PREFIX_SIZE, RESERVED_ID_CNT,
 };
 use parking_lot::Mutex;
 use rocksdb::{
@@ -26,8 +25,6 @@ use std::{
 const DATA_SET_NUM: usize = 2;
 
 const META_KEY_MAX_KEYLEN: [u8; 1] = [u8::MAX];
-const META_KEY_BRANCH_ID: [u8; 1] = [u8::MAX - 1];
-const META_KEY_VERSION_ID: [u8; 1] = [u8::MAX - 2];
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 
 static HDR: LazyLock<(DB, Vec<String>)> = LazyLock::new(|| rocksdb_open().unwrap());
@@ -60,12 +57,12 @@ impl RocksEngine {
 
     #[inline(always)]
     fn get_upper_bound_value(&self, meta_prefix: PreBytes) -> Vec<u8> {
-        static BUF: LazyLock<RawBytes> = LazyLock::new(|| vec![u8::MAX; 512]);
+        const BUF: [u8; 256] = [u8::MAX; 256];
 
         let mut max_guard = meta_prefix.to_vec();
 
         let l = self.get_max_keylen();
-        if l < 513 {
+        if l < 257 {
             max_guard.extend_from_slice(&BUF[..l]);
         } else {
             max_guard.extend_from_slice(&vec![u8::MAX; l]);
@@ -84,19 +81,6 @@ impl Engine for RocksEngine {
 
         if meta.get(META_KEY_MAX_KEYLEN).c(d!())?.is_none() {
             meta.put(META_KEY_MAX_KEYLEN, 0_usize.to_be_bytes())
-                .c(d!())?;
-        }
-
-        if meta.get(META_KEY_BRANCH_ID).c(d!())?.is_none() {
-            meta.put(
-                META_KEY_BRANCH_ID,
-                (1 + INITIAL_BRANCH_ID as usize).to_be_bytes(),
-            )
-            .c(d!())?;
-        }
-
-        if meta.get(META_KEY_VERSION_ID).c(d!())?.is_none() {
-            meta.put(META_KEY_VERSION_ID, 0_usize.to_be_bytes())
                 .c(d!())?;
         }
 
@@ -135,48 +119,6 @@ impl Engine for RocksEngine {
         // step 2
         self.meta
             .put(self.prefix_allocator.key, (1 + ret).to_be_bytes())
-            .unwrap();
-
-        ret
-    }
-
-    // 'step 1' and 'step 2' is not atomic in multi-threads scene,
-    // so we use a `Mutex` lock for thread safe.
-    #[allow(unused_variables)]
-    fn alloc_br_id(&self) -> BranchID {
-        static LK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-        let x = LK.lock();
-
-        // step 1
-        let ret = crate::parse_int!(
-            self.meta.get(META_KEY_BRANCH_ID).unwrap().unwrap(),
-            BranchID
-        );
-
-        // step 2
-        self.meta
-            .put(META_KEY_BRANCH_ID, (1 + ret).to_be_bytes())
-            .unwrap();
-
-        ret
-    }
-
-    // 'step 1' and 'step 2' is not atomic in multi-threads scene,
-    // so we use a `Mutex` lock for thread safe.
-    #[allow(unused_variables)]
-    fn alloc_ver_id(&self) -> VersionID {
-        static LK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-        let x = LK.lock();
-
-        // step 1
-        let ret = crate::parse_int!(
-            self.meta.get(META_KEY_VERSION_ID).unwrap().unwrap(),
-            VersionID
-        );
-
-        // step 2
-        self.meta
-            .put(META_KEY_VERSION_ID, (1 + ret).to_be_bytes())
             .unwrap();
 
         ret

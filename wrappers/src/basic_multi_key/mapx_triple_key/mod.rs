@@ -75,7 +75,7 @@ where
     }
 
     #[inline(always)]
-    pub fn gen_mut<'a>(
+    pub fn mock_value_mut<'a>(
         &'a mut self,
         key: &'a (&'a K1, &'a K2, &'a K3),
         v: V,
@@ -258,7 +258,7 @@ where
         if let Some(v) = unsafe { &mut *hdr }.get_mut(self.key) {
             v
         } else {
-            unsafe { &mut *hdr }.gen_mut(self.key, default)
+            unsafe { &mut *hdr }.mock_value_mut(self.key, default)
         }
     }
 }

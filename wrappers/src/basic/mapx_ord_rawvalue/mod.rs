@@ -106,7 +106,7 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn gen_mut(&mut self, key: K, value: RawValue) -> ValueMut<'_, K> {
+    pub(crate) fn mock_value_mut(&mut self, key: K, value: RawValue) -> ValueMut<'_, K> {
         ValueMut {
             hdr: self,
             key,
@@ -355,7 +355,7 @@ where
         if let Some(v) = unsafe { &mut *hdr }.get_mut(&self.key) {
             v
         } else {
-            unsafe { &mut *hdr }.gen_mut(self.key, default.as_ref().to_vec())
+            unsafe { &mut *hdr }.mock_value_mut(self.key, default.as_ref().to_vec())
         }
     }
 }

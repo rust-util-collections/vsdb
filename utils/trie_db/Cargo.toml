@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_trie_db"
-version = "2.0.0"
+version = "3.0.0"
 edition = "2021"
 keywords = ["mpt", "trie", "database", "blockchain"]
 license = "MIT"
@@ -22,10 +22,10 @@ vsdb = { workspace = true }
 vsdb_hash_db = { workspace = true }
 
 [features]
-default = ["rocks_backend","msgpack_codec"]
+default = ["parity_backend","msgpack_codec"]
 
-rocks_backend = ["vsdb/rocks_backend"]
 parity_backend = ["vsdb/parity_backend"]
+rocks_backend = ["vsdb/rocks_backend"]
 
 json_codec = ["vsdb/json_codec"]
 msgpack_codec = ["vsdb/msgpack_codec"]

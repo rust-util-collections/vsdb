@@ -8,8 +8,8 @@ lint:
 	cargo check --workspace --benches
 
 lintall: lint
-	cargo clippy --workspace --no-default-features --features "parity_backend,compress,msgpack_codec"
-	cargo check --workspace --tests --no-default-features --features "parity_backend,json_codec"
+	cargo clippy --workspace --no-default-features --features "rocks_backend,compress,msgpack_codec"
+	cargo check --workspace --tests --no-default-features --features "rocks_backend,json_codec"
 
 lintmusl:
 	cargo clippy --workspace --target x86_64-unknown-linux-musl \
@@ -26,7 +26,7 @@ testall: test
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo test --workspace --tests \
 		--no-default-features \
-		--features "parity_backend,msgpack_codec" \
+		--features "rocks_backend,msgpack_codec" \
 		-- --test-threads=1 #--nocapture
 
 testmusl:
@@ -38,13 +38,13 @@ testmusl:
 
 bench:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench --workspace --no-default-features --features "parity_backend,msgpack_codec"
-	du -sh ~/.vsdb
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench --workspace --no-default-features --features "parity_backend,compress,msgpack_codec"
+	cargo bench --workspace --no-default-features --features "rocks_backend,msgpack_codec"
 	du -sh ~/.vsdb
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo bench --workspace
+	du -sh ~/.vsdb
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
+	cargo bench --workspace --no-default-features --features "rocks_backend,compress,msgpack_codec"
 	du -sh ~/.vsdb
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo bench --workspace --features "compress"

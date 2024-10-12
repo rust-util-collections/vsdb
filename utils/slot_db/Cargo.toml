@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_slot_db"
-version = "2.0.0"
+version = "3.0.0"
 edition = "2021"
 keywords = ["index", "cache", "timestamp", "slot", "database"]
 license = "MIT"
@@ -19,10 +19,10 @@ criterion = "0.5.1"
 rand = { workspace = true }
 
 [features]
-default = ["rocks_backend", "compress", "msgpack_codec"]
+default = ["parity_backend", "compress", "msgpack_codec"]
 
-rocks_backend = ["vsdb/rocks_backend"]
 parity_backend = ["vsdb/parity_backend"]
+rocks_backend = ["vsdb/rocks_backend"]
 
 compress = ["vsdb/compress"]
 

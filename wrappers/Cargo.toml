@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "2.0.0"
+version = "3.0.0"
 authors = ["hui.fan@mail.ru"]
 edition = "2021"
 description = "A std-collection-like database"
@@ -11,7 +11,7 @@ categories = ["database-implementations", "data-structures", "algorithms", "cach
 license = "GPL-3.0"
 
 [package.metadata.docs.rs]
-features = []
+# features = []
 
 [dependencies]
 serde = { workspace = true }
@@ -29,10 +29,10 @@ criterion = "0.5.1"
 rand = "0.8.5"
 
 [features]
-default = ["rocks_backend", "compress", "msgpack_codec"]
+default = ["parity_backend", "compress", "msgpack_codec"]
 
-rocks_backend = ["vsdb_core/rocks_backend"]
 parity_backend = ["vsdb_core/parity_backend"]
+rocks_backend = ["vsdb_core/rocks_backend"]
 
 compress = ["vsdb_core/compress"]
 

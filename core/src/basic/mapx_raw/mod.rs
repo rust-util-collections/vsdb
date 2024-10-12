@@ -33,7 +33,7 @@
 #[cfg(test)]
 mod test;
 
-use crate::common::{engines, RawKey, RawValue};
+use crate::common::{engines, PreBytes, RawKey, RawValue};
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, ops::RangeBounds};
 
@@ -78,8 +78,8 @@ impl MapxRaw {
     }
 
     #[inline(always)]
-    pub fn gen_mut(&mut self, key: RawValue, value: RawValue) -> ValueMut {
-        self.inner.gen_mut(key, value)
+    pub fn mock_value_mut(&mut self, key: RawValue, value: RawValue) -> ValueMut {
+        self.inner.mock_value_mut(key, value)
     }
 
     #[inline(always)]
@@ -183,7 +183,7 @@ impl MapxRaw {
     }
 
     #[inline(always)]
-    pub fn as_prefix_slice(&self) -> &[u8] {
+    pub fn as_prefix_slice(&self) -> &PreBytes {
         self.inner.as_prefix_slice()
     }
 
@@ -210,7 +210,7 @@ impl<'a> Entry<'a> {
         if let Some(v) = unsafe { &mut *hdr }.get_mut(self.key) {
             v
         } else {
-            unsafe { &mut *hdr }.gen_mut(self.key.to_vec(), default.to_vec())
+            unsafe { &mut *hdr }.mock_value_mut(self.key.to_vec(), default.to_vec())
         }
     }
 
@@ -222,7 +222,7 @@ impl<'a> Entry<'a> {
         if let Some(v) = unsafe { &mut *hdr }.get_mut(self.key) {
             v
         } else {
-            unsafe { &mut *hdr }.gen_mut(self.key.to_vec(), f())
+            unsafe { &mut *hdr }.mock_value_mut(self.key.to_vec(), f())
         }
     }
 }

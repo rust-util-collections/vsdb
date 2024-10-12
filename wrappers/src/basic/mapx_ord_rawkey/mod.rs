@@ -107,11 +107,11 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn gen_mut(&mut self, key: RawKey, value: V) -> ValueMut<'_, V> {
+    pub(crate) fn mock_value_mut(&mut self, key: RawKey, value: V) -> ValueMut<'_, V> {
         let v = value.encode();
         ValueMut {
             value,
-            inner: self.inner.gen_mut(key, v),
+            inner: self.inner.mock_value_mut(key, v),
         }
     }
 
@@ -325,7 +325,7 @@ where
         if let Some(v) = unsafe { &mut *hdr }.get_mut(self.key) {
             v
         } else {
-            unsafe { &mut *hdr }.gen_mut(self.key.to_vec(), default)
+            unsafe { &mut *hdr }.mock_value_mut(self.key.to_vec(), default)
         }
     }
 }

@@ -57,7 +57,7 @@ impl<V: ValueEnDe> MapxRawKeyMk<V> {
     }
 
     #[inline(always)]
-    pub(crate) fn gen_mut<'a>(
+    pub(crate) fn mock_value_mut<'a>(
         &'a mut self,
         key: &'a [&'a [u8]],
         v: V,
@@ -196,7 +196,7 @@ impl<'a, V: ValueEnDe> Entry<'a, V> {
         if let Some(v) = unsafe { &mut *hdr }.get_mut(self.key) {
             v
         } else {
-            unsafe { &mut *hdr }.gen_mut(self.key, default)
+            unsafe { &mut *hdr }.mock_value_mut(self.key, default)
         }
     }
 }

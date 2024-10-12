@@ -1,12 +1,18 @@
 # CHANGE LOG
 
-## v1.0.x
+## v3.x.x
 
-Simplify functions and release v1.0.0
+- Make `<Type>::new()` lazyable
+  - 'Copy On Write' style
+- Set `paritydb` as the default backend to save compilation time
+
+## v1.x.x
+
+- Simplify functions and release v1.0.0
 
 ## v0.70.x
 
-Backport the changes of the `mmdb` crate.
+- Backport the changes of the `mmdb` crate.
 
 ## v0.61.x
 
