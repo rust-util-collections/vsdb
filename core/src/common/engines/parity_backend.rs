@@ -266,14 +266,14 @@ impl Engine for ParityEngine {
         old_v
     }
 
-    fn get_instance_len(&self, instance_prefix: PreBytes) -> u64 {
+    fn get_instance_len_hint(&self, instance_prefix: PreBytes) -> u64 {
         crate::parse_int!(
             self.hdr.get(META_COLID, &instance_prefix).unwrap().unwrap(),
             u64
         )
     }
 
-    fn set_instance_len(&self, instance_prefix: PreBytes, new_len: u64) {
+    fn set_instance_len_hint(&self, instance_prefix: PreBytes, new_len: u64) {
         self.hdr
             .commit([(
                 META_COLID,

@@ -77,24 +77,24 @@ pub trait Engine: Sized {
 
     fn remove(&self, meta_prefix: PreBytes, key: &[u8]) -> Option<RawValue>;
 
-    fn get_instance_len(&self, instance_prefix: PreBytes) -> u64;
+    fn get_instance_len_hint(&self, instance_prefix: PreBytes) -> u64;
 
-    fn set_instance_len(&self, instance_prefix: PreBytes, new_len: u64);
+    fn set_instance_len_hint(&self, instance_prefix: PreBytes, new_len: u64);
 
-    fn increase_instance_len(&self, instance_prefix: PreBytes) {
+    fn increase_instance_len_hint(&self, instance_prefix: PreBytes) {
         let x = LEN_LK[self.area_idx(instance_prefix)].lock();
 
-        let l = self.get_instance_len(instance_prefix);
-        self.set_instance_len(instance_prefix, l + 1);
+        let l = self.get_instance_len_hint(instance_prefix);
+        self.set_instance_len_hint(instance_prefix, l + 1);
 
         drop(x);
     }
 
-    fn decrease_instance_len(&self, instance_prefix: PreBytes) {
+    fn decrease_instance_len_hint(&self, instance_prefix: PreBytes) {
         let x = LEN_LK[self.area_idx(instance_prefix)].lock();
 
-        let l = self.get_instance_len(instance_prefix);
-        self.set_instance_len(instance_prefix, l - 1);
+        let l = self.get_instance_len_hint(instance_prefix);
+        self.set_instance_len_hint(instance_prefix, l.saturating_sub(1));
 
         drop(x);
     }
@@ -151,7 +151,7 @@ impl Prefix {
             let prefix = VSDB.db.alloc_prefix();
             let prefix_bytes = prefix.to_be_bytes();
             debug_assert!(VSDB.db.iter(prefix_bytes).next().is_none());
-            VSDB.db.set_instance_len(prefix_bytes, 0);
+            VSDB.db.set_instance_len_hint(prefix_bytes, 0);
             prefix_bytes
         }))
     }
@@ -202,7 +202,7 @@ impl Mapx {
 
     #[inline(always)]
     pub(crate) fn len(&self) -> usize {
-        VSDB.db.get_instance_len(self.prefix.to_bytes()) as usize
+        VSDB.db.get_instance_len_hint(self.prefix.to_bytes()) as usize
     }
 
     #[inline(always)]
@@ -253,7 +253,7 @@ impl Mapx {
         let prefix = self.prefix.hack_bytes();
         let ret = VSDB.db.insert(prefix, key, value);
         if ret.is_none() {
-            VSDB.db.increase_instance_len(prefix);
+            VSDB.db.increase_instance_len_hint(prefix);
         }
         ret
     }
@@ -263,7 +263,7 @@ impl Mapx {
         let prefix = self.prefix.hack_bytes();
         let ret = VSDB.db.remove(prefix, key);
         if ret.is_some() {
-            VSDB.db.decrease_instance_len(prefix);
+            VSDB.db.decrease_instance_len_hint(prefix);
         }
         ret
     }
@@ -274,7 +274,7 @@ impl Mapx {
         VSDB.db.iter(prefix).for_each(|(k, _)| {
             VSDB.db.remove(prefix, &k);
         });
-        VSDB.db.set_instance_len(prefix, 0);
+        VSDB.db.set_instance_len_hint(prefix, 0);
     }
 
     #[inline(always)]

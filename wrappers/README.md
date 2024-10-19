@@ -40,3 +40,4 @@ This is a simplified version of the original [**vsdb**](https://crates.io/crates
   - The serialized result only contains some meta-information(storage paths, etc.)
   - These meta-information are likely to be different in different environments
   - The correct way is to read what you need from it, and then process the real content
+- The instance `len` is not absolutely reliable and should be regarded as a hint
