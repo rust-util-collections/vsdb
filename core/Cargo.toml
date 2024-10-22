@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_core"
-version = "0.59.0"
+version = "0.60.1"
 authors = ["hui.fan@mail.ru"]
 edition = "2021"
 description = "A stuctured DB with some 'Git-like' features, mainly used in blockchain projects."
@@ -41,10 +41,10 @@ compress = ["rocksdb/zstd"]
 
 extra_types = ["primitive-types-0-12", "primitive-types-0-11", "primitive-types-0-10"]
 
-[[bench]]
-name = "basic"
-harness = false
+# [[bench]]
+# name = "basic"
+# harness = false
 
-[[bench]]
-name = "versioned"
-harness = false
+# [[bench]]
+# name = "versioned"
+# harness = false

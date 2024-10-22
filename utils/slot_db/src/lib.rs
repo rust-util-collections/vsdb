@@ -1,20 +1,38 @@
 #![deny(warnings)]
+#![cfg_attr(test, warn(warnings))]
 
 use ruc::*;
 use serde::{de, Deserialize, Serialize};
 use std::{
     collections::{btree_set::Iter as SmallIter, BTreeSet},
     mem,
+    ops::Bound,
 };
-use vsdb::{basic::mapx_ord::MapxOrdIter as LargeIter, KeyEnDeOrdered, MapxOrd};
+use vsdb::{
+    basic::mapx_ord::MapxOrdIter as LargeIter, KeyEnDeOrdered, MapxOrd,
+};
 
 type Slot = u64;
 type SlotFloor = Slot;
 type EntryCnt = u64;
 
-/// A `Skip List` like structure
+// The actual slot which contains the first entry
+type StartSlotActual = Slot;
+type SkipNum = EntryCnt;
+type TakeNum = EntryCnt;
+
+// Declare as a signed `int`!
+type Distance = i128;
+
+type PageSize = u16;
+type PageIndex = u32;
+
+/// A `Skip List` like structure,
+/// designed to support fast paged queries and indexes
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(bound = "T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned")]
+#[serde(
+    bound = "T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned"
+)]
 pub struct SlotDB<T>
 where
     T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
@@ -34,7 +52,7 @@ where
     //
     // Positive query usually get better performance,
     // if most scenes are under the reverse mode,
-    // then swap the inner logic
+    // then swap the low-level logic
     swap_order: bool,
 }
 
@@ -42,6 +60,15 @@ impl<T> SlotDB<T>
 where
     T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
+    ///
+    /// @param: `swap_order`:
+    ///
+    /// Switch the inner logic of the slot direction:
+    /// - positive => reverse
+    /// - reverse => positive
+    ///
+    /// Positive query usually get better performance,
+    /// swap order if most cases run in the reverse mode
     pub fn new(multiple_step: u64, swap_order: bool) -> Self {
         Self {
             data: MapxOrd::new(),
@@ -74,7 +101,8 @@ where
                 Level::new(self.levels.len() as u32, self.multiple_step),
                 |mut l, (slot, entries)| {
                     let slot_floor = slot / l.floor_base * l.floor_base;
-                    *l.data.entry(&slot_floor).or_insert(0) += entries.len() as u64;
+                    *l.data.entry(&slot_floor).or_insert(0) +=
+                        entries.len() as EntryCnt;
                     l
                 },
             );
@@ -103,7 +131,8 @@ where
         }
 
         loop {
-            if let Some(top_len) = self.levels.last().map(|top| top.data.len()) {
+            if let Some(top_len) = self.levels.last().map(|top| top.data.len())
+            {
                 if top_len < 2 {
                     self.levels.pop();
                     continue;
@@ -138,217 +167,275 @@ where
     }
 
     pub fn clear(&mut self) {
+        self.total = 0;
         self.data.clear();
+
         self.levels.iter_mut().for_each(|l| {
             l.data.clear();
         });
+
         self.levels.clear();
-        self.total = 0;
     }
 
     /// Common usages in web services
     pub fn get_entries_by_page(
         &self,
-        page_size: u16,
-        page_number: u32, // start from 0
+        page_size: PageSize,
+        page_index: PageIndex, // Start from 0
         reverse_order: bool,
     ) -> Vec<T> {
-        self.get_entries_by_page_slot(None, page_size, page_number, reverse_order)
+        self.get_entries_by_page_slot(
+            None,
+            None,
+            page_size,
+            page_index,
+            reverse_order,
+        )
     }
 
     /// Common usages in web services
     pub fn get_entries_by_page_slot(
         &self,
-        mut slot_itv: Option<[u64; 2]>, // [included, included]
-        page_size: u16,
-        page_number: u32, // start from 0
+        slot_left_bound: Option<Slot>,  // Included
+        slot_right_bound: Option<Slot>, // Included
+        page_size: PageSize,
+        page_index: PageIndex, // start from 0
         mut reverse_order: bool,
     ) -> Vec<T> {
+        let mut slot_min = slot_left_bound.unwrap_or(Slot::MIN);
+        let mut slot_max = slot_right_bound.unwrap_or(Slot::MAX);
+
         if self.swap_order {
-            if let Some([a, b]) = slot_itv {
-                slot_itv.replace([swap_order(b), swap_order(a)]);
-            }
+            (slot_min, slot_max) =
+                (swap_order(slot_max), swap_order(slot_min));
             reverse_order = !reverse_order;
         }
 
-        if 0 == self.total || 0 == page_size {
-            return vec![];
-        }
-
-        if let Some(itv) = slot_itv {
-            self.entry_range_with_slot_itv(itv, page_size, page_number, reverse_order)
-        } else {
-            self.entry_range(page_size, page_number, reverse_order)
-        }
-    }
-
-    // Keep it private
-    fn entry_range(&self, page_size: u16, page_number: u32, reverse_order: bool) -> Vec<T> {
-        let page_number = page_number as u64;
-        let page_size = page_size as u64;
-
-        let take_n = page_size as usize;
-
-        // this is safe as the original type of page is u32
-        let n_base = page_size * page_number;
-        alt!(self.total <= n_base, return vec![]);
-
-        let mut slot_start = if reverse_order { u64::MAX } else { 0 };
-        let mut slot_start_inner_idx = n_base as usize;
-
-        for l in self.levels.iter().rev() {
-            if reverse_order {
-                for (slot, entry_cnt) in l
-                    .data
-                    .range(..slot_start)
-                    .rev()
-                    .map(|(s, cnt)| (s, cnt as usize))
-                {
-                    if entry_cnt > slot_start_inner_idx {
-                        break;
-                    } else {
-                        slot_start = slot;
-                        slot_start_inner_idx -= entry_cnt;
-                    }
-                }
-            } else {
-                let mut hdr = l.data.range(slot_start..).peekable();
-                while let Some(entry_cnt) = hdr.next().map(|(_, cnt)| cnt as usize) {
-                    if entry_cnt > slot_start_inner_idx {
-                        break;
-                    } else {
-                        slot_start = hdr.peek().map(|(s, _)| *s).unwrap_or(u64::MAX);
-                        slot_start_inner_idx -= entry_cnt;
-                    }
-                }
-            }
-        }
-
-        if reverse_order {
-            for (slot, entries) in self.data.range(..slot_start).rev() {
-                if entries.len() > slot_start_inner_idx {
-                    break;
-                } else {
-                    slot_start = slot;
-                    slot_start_inner_idx -= entries.len();
-                }
-            }
-        } else {
-            let mut hdr = self.data.range(slot_start..).peekable();
-            while let Some(entry_cnt) = hdr.next().map(|(_, entries)| entries.len()) {
-                if entry_cnt > slot_start_inner_idx {
-                    break;
-                } else {
-                    slot_start = hdr.peek().map(|(s, _)| *s).unwrap_or(u64::MAX);
-                    slot_start_inner_idx -= entry_cnt;
-                }
-            }
-        }
-
-        self.entry_data_range(
-            alt!(reverse_order, 0, slot_start),
-            alt!(reverse_order, slot_start, u64::MAX),
-            slot_start_inner_idx,
-            take_n,
-            reverse_order,
-        )
-    }
-
-    // Keep it private
-    fn entry_range_with_slot_itv(
-        &self,
-        slot_itv: [u64; 2], // [included, included]
-        page_size: u16,
-        page_number: u32,
-        reverse_order: bool,
-    ) -> Vec<T> {
-        let [slot_min, mut slot_max] = slot_itv;
         if slot_max < slot_min {
             return vec![];
         }
-        slot_max = slot_max.saturating_add(1);
 
-        let page_number = page_number as u64;
-        let page_size = page_size as u64;
-
-        let mut slot_start = if reverse_order { slot_max } else { slot_min };
-        let mut slot_start_inner_idx = (page_size * page_number) as usize;
-
-        if reverse_order {
-            for (slot, entries) in self.data.range(slot_min..slot_start).rev() {
-                if entries.len() > slot_start_inner_idx {
-                    break;
-                } else {
-                    slot_start = slot;
-                    slot_start_inner_idx -= entries.len();
-                }
-            }
-        } else {
-            let mut hdr = self.data.range(slot_start..slot_max).peekable();
-            while let Some(entry_cnt) = hdr.next().map(|(_, entries)| entries.len()) {
-                if entry_cnt > slot_start_inner_idx {
-                    break;
-                } else {
-                    slot_start = hdr.peek().map(|(s, _)| *s).unwrap_or(u64::MAX);
-                    slot_start_inner_idx -= entry_cnt;
-                }
-            }
+        if 0 == page_size || 0 == self.total() {
+            return vec![];
         }
 
-        self.entry_data_range(
-            alt!(reverse_order, slot_min, slot_start),
-            alt!(reverse_order, slot_start, slot_max),
-            slot_start_inner_idx,
-            page_size as usize,
+        self.get_entries(
+            slot_min,
+            slot_max,
+            page_size,
+            page_index,
             reverse_order,
         )
     }
 
-    // Keep it private
-    fn entry_data_range(
-        &self,
-        slot_start: u64, // included
-        slot_end: u64,   // included
-        mut slot_start_inner_idx: usize,
-        take_n: usize,
-        reverse_order: bool,
-    ) -> Vec<T> {
-        alt!(slot_end < slot_start, return vec![]);
-        let mut ret = vec![];
+    fn slot_entry_cnt(&self, slot: Slot) -> EntryCnt {
+        self.data
+            .get(&slot)
+            .map(|d| d.len() as EntryCnt)
+            .unwrap_or(0)
+    }
 
-        if reverse_order {
-            for (_, entries) in self.data.range(slot_start..slot_end).rev() {
-                entries
-                    .iter()
-                    .rev()
-                    .skip(slot_start_inner_idx)
-                    .take(take_n - ret.len())
-                    .for_each(|entry| ret.push(entry));
-                slot_start_inner_idx = 0;
-                if ret.len() >= take_n {
-                    assert_eq!(ret.len(), take_n);
-                    break;
-                }
-            }
-        } else {
-            for (_, entries) in self.data.range(slot_start..slot_end) {
-                entries
-                    .iter()
-                    .skip(slot_start_inner_idx)
-                    .take(take_n - ret.len())
-                    .for_each(|entry| ret.push(entry));
-                slot_start_inner_idx = 0;
-                if ret.len() >= take_n {
-                    assert_eq!(ret.len(), take_n);
-                    break;
-                }
-            }
+    // Exclude the slot itself-owned entries(whether it exists or not)
+    fn distance_to_the_leftmost_slot(&self, slot: Slot) -> Distance {
+        let mut left_bound = Slot::MIN;
+        let mut ret = 0;
+        for l in self.levels.iter().rev() {
+            let right_bound = slot / l.floor_base * l.floor_base;
+            ret += l
+                .data
+                .range(left_bound..right_bound)
+                .map(|(_, cnt)| cnt as Distance)
+                .sum::<Distance>();
+            left_bound = right_bound
         }
+        ret += self
+            .data
+            .range(left_bound..slot)
+            .map(|(_, d)| d.len() as Distance)
+            .sum::<Distance>();
         ret
     }
 
-    pub fn total(&self) -> u64 {
-        self.total
+    fn offsets_from_the_leftmost_slot(
+        &self,
+        slot_start: Slot, // Included
+        slot_end: Slot,   // Included
+        page_size: PageSize,
+        page_index: PageIndex,
+        reverse: bool,
+    ) -> (SkipNum, TakeNum) {
+        if slot_start > slot_end {
+            return (0, 0);
+        }
+
+        if reverse {
+            let mut skip_n = self.distance_to_the_leftmost_slot(slot_end)
+                + self.slot_entry_cnt(slot_end) as Distance
+                - (page_size as Distance) * (1 + page_index as Distance);
+
+            let distance_of_slot_start =
+                self.distance_to_the_leftmost_slot(slot_start);
+
+            let take_n = if distance_of_slot_start <= skip_n {
+                page_size
+            } else {
+                let back_shift = min!(
+                    distance_of_slot_start.saturating_sub(skip_n),
+                    PageSize::MAX as Distance
+                );
+
+                skip_n = distance_of_slot_start;
+
+                page_size.saturating_sub(back_shift as PageSize)
+            };
+
+            (skip_n as SkipNum, take_n as TakeNum)
+        } else {
+            let skip_n = self.distance_to_the_leftmost_slot(slot_start)
+                + (page_size as Distance) * (page_index as Distance);
+            (skip_n as SkipNum, page_size as TakeNum)
+        }
+    }
+
+    #[inline(always)]
+    fn page_info_to_global_offsets(
+        &self,
+        slot_start: Slot, // Included
+        slot_end: Slot,   // Included
+        page_size: PageSize,
+        page_index: PageIndex,
+        reverse: bool,
+    ) -> (SkipNum, TakeNum) {
+        self.offsets_from_the_leftmost_slot(
+            slot_start, slot_end, page_size, page_index, reverse,
+        )
+    }
+
+    fn get_local_skip_num(
+        &self,
+        global_skip_num: EntryCnt,
+    ) -> (Bound<StartSlotActual>, SkipNum) {
+        let mut slot_start = Bound::Included(Slot::MIN);
+        let mut local_idx = global_skip_num as usize;
+
+        for l in self.levels.iter().rev() {
+            let mut hdr =
+                l.data.range((slot_start, Bound::Unbounded)).peekable();
+            while let Some(entry_cnt) = hdr.next().map(|(_, cnt)| cnt as usize)
+            {
+                if entry_cnt > local_idx {
+                    break;
+                } else {
+                    slot_start = hdr
+                        .peek()
+                        .map(|(s, _)| Bound::Included(*s))
+                        .unwrap_or(Bound::Excluded(Slot::MAX));
+                    local_idx -= entry_cnt;
+                }
+            }
+        }
+
+        let mut hdr =
+            self.data.range((slot_start, Bound::Unbounded)).peekable();
+        while let Some(entry_cnt) =
+            hdr.next().map(|(_, entries)| entries.len())
+        {
+            if entry_cnt > local_idx {
+                break;
+            } else {
+                slot_start = hdr
+                    .peek()
+                    .map(|(s, _)| Bound::Included(*s))
+                    .unwrap_or(Bound::Excluded(Slot::MAX));
+                local_idx -= entry_cnt;
+            }
+        }
+
+        (slot_start, local_idx as EntryCnt)
+    }
+
+    fn get_entries(
+        &self,
+        slot_start: Slot, // Included
+        slot_end: Slot,   // Included
+        page_size: PageSize,
+        page_index: PageIndex,
+        reverse: bool,
+    ) -> Vec<T> {
+        let mut ret = vec![];
+        alt!(slot_end < slot_start, return ret);
+
+        let (global_skip_n, take_n) = self.page_info_to_global_offsets(
+            slot_start, slot_end, page_size, page_index, reverse,
+        );
+
+        let (slot_start_actual, local_skip_n) =
+            self.get_local_skip_num(global_skip_n);
+
+        let mut skip_n = local_skip_n as usize;
+        let take_n = take_n as usize;
+
+        for (_, entries) in self
+            .data
+            .range((slot_start_actual, Bound::Included(slot_end)))
+        {
+            entries
+                .iter()
+                .skip(skip_n)
+                .take(take_n - ret.len())
+                .for_each(|entry| ret.push(entry));
+            skip_n = 0;
+            if ret.len() >= take_n {
+                assert_eq!(ret.len(), take_n);
+                break;
+            }
+        }
+
+        if reverse {
+            ret = ret.into_iter().rev().collect();
+        }
+
+        ret
+    }
+
+    /// Can also be used to do some `data statistics`
+    pub fn entry_cnt_within_two_slots(
+        &self,
+        mut slot_start: Slot,
+        mut slot_end: Slot,
+    ) -> EntryCnt {
+        if self.swap_order {
+            (slot_start, slot_end) =
+                (swap_order(slot_end), swap_order(slot_start));
+        }
+
+        if slot_start > slot_end {
+            0
+        } else {
+            let cnt = self.distance_to_the_leftmost_slot(slot_end)
+                - self.distance_to_the_leftmost_slot(slot_start)
+                + self.slot_entry_cnt(slot_end) as Distance;
+            cnt as EntryCnt
+        }
+    }
+
+    pub fn total_by_slot(
+        &self,
+        slot_start: Option<Slot>,
+        slot_end: Option<Slot>,
+    ) -> EntryCnt {
+        let slot_start = slot_start.unwrap_or(Slot::MIN);
+        let slot_end = slot_end.unwrap_or(Slot::MAX);
+
+        if Slot::MIN == slot_start && Slot::MAX == slot_end {
+            self.total
+        } else {
+            self.entry_cnt_within_two_slots(slot_start, slot_end)
+        }
+    }
+
+    pub fn total(&self) -> EntryCnt {
+        self.total_by_slot(None, None)
     }
 }
 
@@ -362,7 +449,9 @@ where
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(bound = "T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned")]
+#[serde(
+    bound = "T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned"
+)]
 enum DataCtner<T>
 where
     T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
@@ -389,10 +478,13 @@ where
     fn insert(&mut self, t: T) -> bool {
         if let Self::Small(i) = self {
             if i.len() > 8 {
-                *self = Self::Large(i.iter().fold(MapxOrd::new(), |mut acc, t| {
-                    acc.insert(t, &());
-                    acc
-                }));
+                *self = Self::Large(i.iter().fold(
+                    MapxOrd::new(),
+                    |mut acc, t| {
+                        acc.insert(t, &());
+                        acc
+                    },
+                ));
             }
         }
 
@@ -477,7 +569,7 @@ impl Level {
 
 #[inline(always)]
 fn swap_order(original_slot_value: Slot) -> Slot {
-    Slot::MAX - original_slot_value
+    !original_slot_value
 }
 
 #[cfg(test)]

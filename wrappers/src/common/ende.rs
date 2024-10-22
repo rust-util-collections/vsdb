@@ -364,7 +364,7 @@ macro_rules! impl_type {
             fn from_slice(b: &[u8]) -> Result<Self> {
                 <[u8; size_of::<$int>()]>::try_from(b)
                     .c(d!())
-                    .map(|bytes| <$int>::from_be_bytes(bytes).wrapping_sub(<$int>::MIN))
+                    .map(|bytes| <$int>::from_be_bytes(bytes).wrapping_add(<$int>::MIN))
             }
         }
     };
@@ -396,7 +396,7 @@ macro_rules! impl_type {
                 b.chunks(size_of::<$int>())
                     .map(|i| {
                         <[u8; size_of::<$int>()]>::try_from(i).c(d!()).map(|bytes| {
-                            <$int>::from_be_bytes(bytes).wrapping_sub(<$int>::MIN)
+                            <$int>::from_be_bytes(bytes).wrapping_add(<$int>::MIN)
                         })
                     })
                     .collect()
@@ -412,7 +412,7 @@ macro_rules! impl_type {
                     v
                 };
                 for i in 0..ret.len() {
-                    ret[i] = <$int>::from_be(ret[i]).wrapping_sub(<$int>::MIN);
+                    ret[i] = <$int>::from_be(ret[i]).wrapping_add(<$int>::MIN);
                 }
                 Ok(ret)
             }
@@ -461,7 +461,7 @@ macro_rules! impl_type {
                     .for_each(|(idx, i)| {
                         res[idx] = <[u8; size_of::<$int>()]>::try_from(i)
                             .map(|bytes| {
-                                <$int>::from_be_bytes(bytes).wrapping_sub(<$int>::MIN)
+                                <$int>::from_be_bytes(bytes).wrapping_add(<$int>::MIN)
                             })
                             .unwrap();
                     });

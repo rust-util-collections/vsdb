@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "0.59.0"
+version = "0.60.0"
 authors = ["hui.fan@mail.ru"]
 edition = "2021"
 description = "A stuctured DB with some 'Git-like' features, mainly used in blockchain projects."
@@ -44,13 +44,13 @@ bcs_codec = ["serde_ende", "bcs"]
 
 extra_types = ["vsdb_core/extra_types"]
 
-[[bench]]
-name = "basic"
-harness = false
+# [[bench]]
+# name = "basic"
+# harness = false
 
-[[bench]]
-name = "versioned"
-harness = false
+# [[bench]]
+# name = "versioned"
+# harness = false
 
 [[example]]
 name = "derive_vs"

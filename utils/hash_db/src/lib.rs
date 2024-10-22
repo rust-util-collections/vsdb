@@ -5,17 +5,13 @@ pub use vsdb;
 use hash_db::{AsHashDB, HashDB, HashDBRef, Hasher as KeyHasher, Prefix};
 use ruc::*;
 use serde::{Deserialize, Serialize};
-use sp_trie::{
-    cache::{CacheSize, SharedTrieCache},
-    NodeCodec,
-};
+use sp_trie::NodeCodec;
 use sp_trie_db::NodeCodec as _;
 use vsdb::{basic::mapx_ord_rawkey::MapxOrdRawKey as Map, RawBytes, ValueEnDe};
 
 pub use keccak_hasher::KeccakHasher;
 
 pub type TrieBackend = VsBackend<KeccakHasher, Vec<u8>>;
-type SharedCache = SharedTrieCache<KeccakHasher>;
 
 pub trait TrieVar: AsRef<[u8]> + for<'a> From<&'a [u8]> {}
 
@@ -28,7 +24,6 @@ where
     T: TrieVar,
 {
     data: Map<Value<T>>,
-    cache: Option<(SharedCache, usize)>,
     hashed_null_key: H::Out,
     null_node_data: T,
 }
@@ -39,33 +34,22 @@ where
     T: TrieVar,
 {
     /// Create a new `VsBackend` from the default null key/data
-    pub fn new(cache_size: Option<usize>) -> Self {
-        let cache = cache_size.and_then(|n| {
-            alt!(0 == n, return None);
-            Some((SharedCache::new(CacheSize::new(n)), n))
-        });
-
+    pub fn new() -> Self {
         VsBackend {
             data: Map::new(),
-            cache,
             hashed_null_key: NodeCodec::<H>::hashed_null_node(), // the initial root node
             null_node_data: [0u8].as_slice().into(),
         }
     }
+}
 
-    pub fn get_cache_hdr(&self) -> Option<&SharedCache> {
-        self.cache.as_ref().map(|c| &c.0)
-    }
-
-    pub fn reset_cache(&mut self, size: Option<usize>) {
-        if let Some(n) = size {
-            if 0 < n {
-                let siz = CacheSize::new(n);
-                self.cache.replace((SharedCache::new(siz), n));
-                return;
-            }
-        }
-        self.cache.take();
+impl<H, T> Default for VsBackend<H, T>
+where
+    H: KeyHasher,
+    T: TrieVar,
+{
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -217,8 +201,6 @@ where
     T: TrieVar,
 {
     data: Map<Value<T>>,
-    cache_size: Option<usize>,
-
     null_node_data: Vec<u8>,
 }
 
@@ -230,9 +212,6 @@ where
     fn from(vbs: VsBackendSerde<T>) -> Self {
         Self {
             data: vbs.data,
-            cache: vbs
-                .cache_size
-                .map(|n| (SharedCache::new(CacheSize::new(n)), n)),
             hashed_null_key: NodeCodec::<H>::hashed_null_node(),
             null_node_data: T::from(&vbs.null_node_data),
         }
@@ -247,7 +226,6 @@ where
     fn from(vb: &VsBackend<H, T>) -> Self {
         Self {
             data: unsafe { vb.data.shadow() },
-            cache_size: vb.cache.as_ref().map(|c| c.1),
             null_node_data: vb.null_node_data.as_ref().to_vec(),
         }
     }
@@ -276,7 +254,7 @@ where
 #[cfg(test)]
 mod test {
     #[test]
-    fn print_null_value() {
+    fn hash_db_print_null_value() {
         use super::*;
         println!("{:?}", KeccakHasher::hash(&[]));
         println!("{:?}", KeccakHasher::hash(&[0u8][..]));
