@@ -1,9 +1,4 @@
-//!
-//! VSDB is a 'Git' in the form of KV-database.
-//!
-//! Based on the powerful version control function of VSDB,
-//! you can easily give your data structure the ability to version management.
-//!
+#![doc = include_str!("../README.md")]
 
 #![deny(warnings)]
 #![cfg_attr(test, allow(warnings))]

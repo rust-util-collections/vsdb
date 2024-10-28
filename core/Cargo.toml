@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_core"
-version = "0.60.1"
+version = "0.62.2"
 authors = ["hui.fan@mail.ru"]
 edition = "2021"
 description = "A stuctured DB with some 'Git-like' features, mainly used in blockchain projects."
@@ -25,7 +25,8 @@ primitive-types-0-10 = { workspace = true, optional = true }
 
 vsdb_derive = { workspace = true, optional = true }
 
-rocksdb = { workspace = true }
+rocksdb = { workspace = true, optional = true }
+parity-db = { workspace = true, optional = true }
 
 [dev-dependencies]
 bcs = "0.1.4"
@@ -33,12 +34,14 @@ hex = "0.4.3"
 criterion = "0.4.0"
 
 [features]
-default = ["compress"]
+default = ["compress", "rocks_backend"]
+
+rocks_backend = ["rocksdb"]
+parity_backend = ["parity-db"]
+
+compress = ["rocksdb?/zstd"]
 
 vs = ["vsdb_derive"] # the switch of all versioned APIs
-
-compress = ["rocksdb/zstd"]
-
 extra_types = ["primitive-types-0-12", "primitive-types-0-11", "primitive-types-0-10"]
 
 # [[bench]]

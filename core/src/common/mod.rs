@@ -86,7 +86,11 @@ static VSDB_CUSTOM_DIR: Lazy<PathBuf> = Lazy::new(|| {
     d
 });
 
+#[cfg(feature = "rocks_backend")]
 pub static VSDB: Lazy<VsDB<engines::RocksDB>> = Lazy::new(|| pnk!(VsDB::new()));
+
+#[cfg(feature = "parity_backend")]
+pub static VSDB: Lazy<VsDB<engines::ParityDB>> = Lazy::new(|| pnk!(VsDB::new()));
 
 /// Clean orphan instances in background.
 pub static TRASH_CLEANER: Lazy<Mutex<ThreadPool>> =

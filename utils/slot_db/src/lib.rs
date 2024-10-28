@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 #![deny(warnings)]
 #![cfg_attr(test, warn(warnings))]
 
@@ -109,12 +111,8 @@ where
             self.levels.push(newtop);
         };
 
-        if self
-            .data
-            .entry(&slot)
-            .or_insert(DataCtner::default())
-            .insert(t)
-        {
+        #[allow(clippy::unwrap_or_default)]
+        if self.data.entry(&slot).or_insert(DataCtner::new()).insert(t) {
             self.levels.iter_mut().for_each(|l| {
                 let slot_floor = slot / l.floor_base * l.floor_base;
                 *l.data.entry(&slot_floor).or_insert(0) += 1;
@@ -464,6 +462,10 @@ impl<T> DataCtner<T>
 where
     T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
+    fn new() -> Self {
+        Self::Small(BTreeSet::new())
+    }
+
     fn len(&self) -> usize {
         match self {
             Self::Small(i) => i.len(),
@@ -514,7 +516,7 @@ where
     T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
     fn default() -> Self {
-        Self::Small(BTreeSet::new())
+        Self::new()
     }
 }
 

@@ -103,6 +103,7 @@ impl From<MapxRawMkVsWithoutDerivedFields> for MapxRawMkVs {
                 let mut op = |k: &[&[u8]], v: &[u8]| {
                     let k = to_owned_key(k);
                     let v = v.to_vec();
+                    #[allow(clippy::unwrap_or_default)]
                     acc.entry(k).or_insert_with(BTreeMap::new).insert(ver, v);
                     Ok(())
                 };
@@ -1004,7 +1005,6 @@ impl MapxRawMkVs {
             .filter(|brid| !br_ids.contains(brid))
             .copied()
             .collect::<Vec<_>>();
-        let brs = brs; // avoid warnings
         for brid in brs.into_iter() {
             self.branch_remove(brid).c(d!())?;
         }

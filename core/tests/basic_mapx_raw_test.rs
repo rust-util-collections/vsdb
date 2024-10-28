@@ -73,6 +73,15 @@ fn basic_cases() {
             .unwrap()
             .1
     );
+    assert_eq!(
+        vec![6],
+        reloaded
+            .range(Cow::Borrowed(&[2][..])..Cow::Borrowed(&[10][..]))
+            .rev()
+            .next()
+            .unwrap()
+            .1
+    );
 
     assert_eq!(vec![80], reloaded.get_ge(&[79]).unwrap().1);
     assert_eq!(vec![80], reloaded.get_ge(&[80]).unwrap().1);

@@ -3,19 +3,19 @@
 
 pub use vsdb::{RawBytes, RawKey, RawValue, ValueEnDe};
 
+use reference_trie_fun::{
+    ExtensionLayout as L, RefTrieDB as TrieDB, RefTrieDBBuilder as TrieDBBuilder,
+    RefTrieDBMut as TrieDBMut, RefTrieDBMutBuilder as TrieDBMutBuilder,
+};
 use ruc::*;
 use serde::{Deserialize, Serialize};
-use sp_trie::{
-    trie_types::{TrieDB, TrieDBMutBuilderV1 as TrieDBMutBuilder, TrieDBMutV1 as TrieDBMut},
-    LayoutV1, Trie, TrieDBBuilder, TrieHash, TrieMut,
+use trie_db_fun::{
+    CError, DBValue, HashDB, Hasher as _, Trie, TrieHash, TrieItem, TrieIterator, TrieKeyItem,
+    TrieMut,
 };
 use vsdb::basic::mapx_ord_rawkey::MapxOrdRawKey;
-use vsdb_hash_db::{
-    sp_trie_db::{CError, DBValue, HashDB, Hasher as _, TrieItem, TrieIterator, TrieKeyItem},
-    KeccakHasher as H, TrieBackend,
-};
+use vsdb_hash_db::{sp_hash_db::EMPTY_PREFIX, KeccakHasher as H, TrieBackend};
 
-type L = LayoutV1<H>;
 pub type TrieRoot = TrieHash<L>;
 
 pub type TrieIter<'a> = Box<dyn TrieIterator<L, Item = TrieItem<TrieHash<L>, CError<L>>> + 'a>;
@@ -117,7 +117,7 @@ impl MptOnce {
 
     pub fn restore(backend: TrieBackend, root: TrieRoot) -> Result<Self> {
         let backend = Box::into_raw(Box::new(backend));
-        let mpt = MptMut::from_existing(unsafe { &mut *backend }, root);
+        let mpt = MptMut::from_existing(unsafe { &mut *backend }, root).c(d!())?;
         Ok(Self {
             mpt,
             root,
@@ -158,8 +158,8 @@ impl MptOnce {
         self.root
     }
 
-    pub fn ro_handle(&self, root: TrieRoot) -> MptRo {
-        MptRo::from_existing(&self.backend, root)
+    pub fn ro_handle(&self, root: TrieRoot) -> Result<MptRo> {
+        MptRo::from_existing(&self.backend, root).c(d!())
     }
 }
 
@@ -194,7 +194,7 @@ impl ValueEnDe for MptOnce {
 // so that UB will not occur
 /// A mutable MPT instance
 pub struct MptMut<'a> {
-    trie: TrieDBMut<'a, H>,
+    trie: TrieDBMut<'a>,
 
     // self-reference
     #[allow(dead_code)]
@@ -215,12 +215,16 @@ impl<'a> MptMut<'a> {
         Self { trie, meta }
     }
 
-    pub fn from_existing(backend: &'a mut TrieBackend, root: TrieRoot) -> Self {
+    pub fn from_existing(backend: &'a mut TrieBackend, root: TrieRoot) -> Result<Self> {
+        if !backend.contains(&root, EMPTY_PREFIX) {
+            return Err(eg!("Invalid state root: {:02x?}", root));
+        }
+
         let meta = MptMeta::new(root);
 
         let trie = TrieDBMutBuilder::from_existing(backend, unsafe { &mut *meta.root }).build();
 
-        Self { trie, meta }
+        Ok(Self { trie, meta })
     }
 
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
@@ -241,7 +245,7 @@ impl<'a> MptMut<'a> {
 
     pub fn clear(&mut self) -> Result<()> {
         let root = self.commit();
-        let keys = self.ro_handle(root).key_iter().collect::<Vec<_>>();
+        let keys = self.ro_handle(root).unwrap().key_iter().collect::<Vec<_>>();
         for k in keys.iter().map(|k| k.as_ref().unwrap()) {
             self.remove(k).c(d!())?;
         }
@@ -256,8 +260,8 @@ impl<'a> MptMut<'a> {
         *self.trie.root()
     }
 
-    pub fn ro_handle(&self, root: TrieRoot) -> MptRo {
-        MptRo::from_existing_dyn(self.trie.db(), root)
+    pub fn ro_handle(&self, root: TrieRoot) -> Result<MptRo> {
+        MptRo::from_existing_dyn(self.trie.db(), root).c(d!())
     }
 }
 
@@ -269,7 +273,7 @@ impl<'a> MptMut<'a> {
 // so that UB will not occur
 /// A readonly MPT instance
 pub struct MptRo<'a> {
-    trie: TrieDB<'a, 'a, H>,
+    trie: TrieDB<'a, 'a>,
 
     // self-reference
     #[allow(dead_code)]
@@ -277,19 +281,23 @@ pub struct MptRo<'a> {
 }
 
 impl<'a> MptRo<'a> {
-    pub fn from_existing(backend: &'a TrieBackend, root: TrieRoot) -> Self {
+    pub fn from_existing(backend: &'a TrieBackend, root: TrieRoot) -> Result<Self> {
+        if !backend.contains(&root, EMPTY_PREFIX) {
+            return Err(eg!("Invalid state root: {:02x?}", root));
+        }
+
         let meta = MptMeta::new(root);
 
         let trie = TrieDBBuilder::new(backend, unsafe { &*meta.root }).build();
 
-        Self { trie, meta }
+        Ok(Self { trie, meta })
     }
 
-    pub fn from_existing_dyn(backend: &dyn HashDB<H, DBValue>, root: TrieRoot) -> Self {
+    pub fn from_existing_dyn(backend: &dyn HashDB<H, DBValue>, root: TrieRoot) -> Result<Self> {
         let backend = &backend as *const &dyn HashDB<H, DBValue>;
         let backend = backend.cast::<&TrieBackend>();
         let backend = unsafe { *backend };
-        MptRo::from_existing(backend, root)
+        MptRo::from_existing(backend, root).c(d!())
     }
 
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
@@ -370,7 +378,7 @@ mod test {
 
             let root = hdr.commit();
 
-            let ro_hdr = hdr.ro_handle(root);
+            let ro_hdr = hdr.ro_handle(root).unwrap();
             let bt = ro_hdr
                 .iter()
                 .map(|i| i.unwrap())
@@ -393,7 +401,7 @@ mod test {
 
             let root = hdr.commit();
 
-            let ro_hdr = hdr.ro_handle(root);
+            let ro_hdr = hdr.ro_handle(root).unwrap();
             let bt = ro_hdr
                 .iter()
                 .map(|i| i.unwrap())

@@ -1,12 +1,9 @@
 pub use hash_db as sp_hash_db;
-pub use sp_trie_db;
 pub use vsdb;
 
 use hash_db::{AsHashDB, HashDB, HashDBRef, Hasher as KeyHasher, Prefix};
 use ruc::*;
 use serde::{Deserialize, Serialize};
-use sp_trie::NodeCodec;
-use sp_trie_db::NodeCodec as _;
 use vsdb::{basic::mapx_ord_rawkey::MapxOrdRawKey as Map, RawBytes, ValueEnDe};
 
 pub use keccak_hasher::KeccakHasher;
@@ -37,9 +34,14 @@ where
     pub fn new() -> Self {
         VsBackend {
             data: Map::new(),
-            hashed_null_key: NodeCodec::<H>::hashed_null_node(), // the initial root node
+            hashed_null_key: Self::hashed_null_node(),
             null_node_data: [0u8].as_slice().into(),
         }
+    }
+
+    // The initial root node
+    fn hashed_null_node() -> H::Out {
+        H::hash(&[0])
     }
 }
 
@@ -212,7 +214,7 @@ where
     fn from(vbs: VsBackendSerde<T>) -> Self {
         Self {
             data: vbs.data,
-            hashed_null_key: NodeCodec::<H>::hashed_null_node(),
+            hashed_null_key: Self::hashed_null_node(),
             null_node_data: T::from(&vbs.null_node_data),
         }
     }

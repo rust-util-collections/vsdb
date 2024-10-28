@@ -400,7 +400,7 @@ fn rocksdb_open() -> Result<(DB, Vec<String>)> {
             .parse::<usize>()
             .c(d!())?
             * 1024;
-        alt!((32 * G) < memsiz, 16 * G, G) / DATA_SET_NUM
+        alt!((32 * G) < memsiz, 8 * G, G) / DATA_SET_NUM
     } else {
         G / DATA_SET_NUM
     };

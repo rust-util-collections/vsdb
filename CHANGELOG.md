@@ -1,5 +1,19 @@
 # CHANGE LOG
 
+## v0.61.x
+
+#### Internal optimizations
+
+- Add a new optional engine based on `parity-db`
+  - Enable the `rocks_backend` feature to use `rocksdb`, default
+  - Enable the `parity_backend` feature to use the `parity-db`
+
+## v0.60.x
+
+#### Internal optimizations
+
+- Optimize performance
+
 ## v0.59.x
 
 #### Internal optimizations
