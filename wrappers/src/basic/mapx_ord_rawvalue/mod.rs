@@ -259,6 +259,11 @@ where
     pub fn clear(&mut self) {
         self.inner.clear();
     }
+
+    #[inline(always)]
+    pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
+        self.inner.is_the_same_instance(&other_hdr.inner)
+    }
 }
 
 impl<K> Clone for MapxOrdRawValue<K> {
@@ -467,14 +472,6 @@ impl<'a> DoubleEndedIterator for MapxOrdRawValueValuesMut<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.inner.next_back().map(|(_, v)| v)
     }
-}
-
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////
-
-#[cfg(feature = "vs")]
-impl<K> vsdb_core::VsMgmt for MapxOrdRawValue<K> {
-    vsdb_core::impl_vs_methods_nope! {}
 }
 
 /////////////////////////////////////////////////////////////////////////////

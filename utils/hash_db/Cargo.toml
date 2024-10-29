@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_hash_db"
-version = "0.21.0"
+version = "1.0.0"
 edition = "2021"
 keywords = ["mpt", "trie", "database", "blockchain"]
 license = "MIT"
@@ -13,18 +13,17 @@ repository = "https://github.com/rust-util-collections/vsdb"
 hash-db = { workspace = true }
 keccak-hasher = { workspace = true }
 
-bcs = { workspace = true }
 serde = { workspace = true }
+msgpack = { workspace = true }
 
 ruc = { workspace = true }
 vsdb = { workspace = true }
 
 [features]
-default = ["rocks_backend"]
+default = ["rocks_backend","msgpack_codec"]
 
 rocks_backend = ["vsdb/rocks_backend"]
 parity_backend = ["vsdb/parity_backend"]
 
-bcs_codec = ["vsdb/bcs_codec"]
 json_codec = ["vsdb/json_codec"]
 msgpack_codec = ["vsdb/msgpack_codec"]

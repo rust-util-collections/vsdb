@@ -1,21 +1,25 @@
+#![doc = include_str!("../README.md")]
+#![deny(warnings)]
+#![cfg_attr(test, warn(warnings))]
+
 pub use hash_db as sp_hash_db;
 pub use vsdb;
 
 use hash_db::{AsHashDB, HashDB, HashDBRef, Hasher as KeyHasher, Prefix};
 use ruc::*;
 use serde::{Deserialize, Serialize};
-use vsdb::{basic::mapx_ord_rawkey::MapxOrdRawKey as Map, RawBytes, ValueEnDe};
+use vsdb::{DagMapRaw, DagMapRawKey as Map, Orphan, RawBytes, ValueEnDe};
 
 pub use keccak_hasher::KeccakHasher;
 
-pub type TrieBackend = VsBackend<KeccakHasher, Vec<u8>>;
+pub type TrieBackend = MmBackend<KeccakHasher, Vec<u8>>;
 
-pub trait TrieVar: AsRef<[u8]> + for<'a> From<&'a [u8]> {}
+pub trait TrieVar: Clone + AsRef<[u8]> + for<'a> From<&'a [u8]> {}
 
-impl<T> TrieVar for T where T: AsRef<[u8]> + for<'a> From<&'a [u8]> {}
+impl<T> TrieVar for T where T: Clone + AsRef<[u8]> + for<'a> From<&'a [u8]> {}
 
 // NOTE: make it `!Clone`
-pub struct VsBackend<H, T>
+pub struct MmBackend<H, T>
 where
     H: KeyHasher,
     T: TrieVar,
@@ -25,37 +29,80 @@ where
     null_node_data: T,
 }
 
-impl<H, T> VsBackend<H, T>
+impl<H, T> MmBackend<H, T>
 where
     H: KeyHasher,
     T: TrieVar,
 {
-    /// Create a new `VsBackend` from the default null key/data
-    pub fn new() -> Self {
-        VsBackend {
-            data: Map::new(),
+    /// Create a new `MmBackend` from the default null key/data
+    pub fn new(raw_parent: &mut Orphan<Option<DagMapRaw>>) -> Result<Self> {
+        Ok(MmBackend {
+            data: Map::new(raw_parent).c(d!())?,
             hashed_null_key: Self::hashed_null_node(),
             null_node_data: [0u8].as_slice().into(),
-        }
+        })
     }
 
     // The initial root node
     fn hashed_null_node() -> H::Out {
         H::hash(&[0])
     }
-}
 
-impl<H, T> Default for VsBackend<H, T>
-where
-    H: KeyHasher,
-    T: TrieVar,
-{
-    fn default() -> Self {
-        Self::new()
+    /// # Safety
+    ///
+    /// This API breaks the semantic safety guarantees,
+    /// but it is safe to use in a race-free environment.
+    #[inline(always)]
+    pub unsafe fn shadow(&self) -> Self {
+        Self {
+            data: self.data.shadow(),
+            hashed_null_key: self.hashed_null_key,
+            null_node_data: self.null_node_data.clone(),
+        }
+    }
+
+    /// # Safety
+    ///
+    /// This API breaks the semantic safety guarantees,
+    /// but it is safe to use in a race-free environment.
+    #[inline(always)]
+    pub unsafe fn shadow_backend(&self) -> Map<Value<T>> {
+        self.shadow().data
+    }
+
+    #[inline(always)]
+    pub fn is_dead(&self) -> bool {
+        self.data.is_dead()
+    }
+
+    #[inline(always)]
+    pub fn no_children(&self) -> bool {
+        self.data.no_children()
+    }
+
+    #[inline(always)]
+    pub fn clear(&mut self) {
+        self.data.destroy();
+    }
+
+    #[inline(always)]
+    pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
+        self.data.is_the_same_instance(&other_hdr.data)
+    }
+
+    /// Return a new backend instance
+    #[inline(always)]
+    pub fn prune(self) -> Result<Self> {
+        let data = self.data.prune().c(d!())?;
+        Ok(Self {
+            data,
+            hashed_null_key: Self::hashed_null_node(),
+            null_node_data: [0u8].as_slice().into(),
+        })
     }
 }
 
-impl<H, T> HashDB<H, T> for VsBackend<H, T>
+impl<H, T> HashDB<H, T> for MmBackend<H, T>
 where
     H: KeyHasher,
     T: TrieVar + Clone + Sync + Send + PartialEq + Default,
@@ -124,7 +171,7 @@ where
     }
 }
 
-impl<H, T> HashDBRef<H, T> for VsBackend<H, T>
+impl<H, T> HashDBRef<H, T> for MmBackend<H, T>
 where
     H: KeyHasher,
     T: TrieVar + Clone + Sync + Send + Default + PartialEq,
@@ -137,7 +184,7 @@ where
     }
 }
 
-impl<H, T> AsHashDB<H, T> for VsBackend<H, T>
+impl<H, T> AsHashDB<H, T> for MmBackend<H, T>
 where
     H: KeyHasher,
     T: TrieVar + Clone + Sync + Send + Default + PartialEq,
@@ -161,7 +208,7 @@ fn prefixed_key<H: KeyHasher>(key: &H::Out, prefix: Prefix) -> Vec<u8> {
     prefixed_key
 }
 
-struct Value<T> {
+pub struct Value<T> {
     v: T,
     rc: i32,
 }
@@ -198,7 +245,7 @@ where
 
 #[derive(Serialize, Deserialize)]
 #[serde(bound = "")]
-struct VsBackendSerde<T>
+struct MmBackendSerde<T>
 where
     T: TrieVar,
 {
@@ -206,12 +253,12 @@ where
     null_node_data: Vec<u8>,
 }
 
-impl<H, T> From<VsBackendSerde<T>> for VsBackend<H, T>
+impl<H, T> From<MmBackendSerde<T>> for MmBackend<H, T>
 where
     H: KeyHasher,
     T: TrieVar,
 {
-    fn from(vbs: VsBackendSerde<T>) -> Self {
+    fn from(vbs: MmBackendSerde<T>) -> Self {
         Self {
             data: vbs.data,
             hashed_null_key: Self::hashed_null_node(),
@@ -220,12 +267,12 @@ where
     }
 }
 
-impl<H, T> From<&VsBackend<H, T>> for VsBackendSerde<T>
+impl<H, T> From<&MmBackend<H, T>> for MmBackendSerde<T>
 where
     H: KeyHasher,
     T: TrieVar,
 {
-    fn from(vb: &VsBackend<H, T>) -> Self {
+    fn from(vb: &MmBackend<H, T>) -> Self {
         Self {
             data: unsafe { vb.data.shadow() },
             null_node_data: vb.null_node_data.as_ref().to_vec(),
@@ -233,13 +280,13 @@ where
     }
 }
 
-impl<H, T> ValueEnDe for VsBackend<H, T>
+impl<H, T> ValueEnDe for MmBackend<H, T>
 where
     H: KeyHasher,
     T: TrieVar,
 {
     fn try_encode(&self) -> Result<RawBytes> {
-        bcs::to_bytes(&VsBackendSerde::from(self)).c(d!())
+        msgpack::to_vec(&MmBackendSerde::from(self)).c(d!())
     }
 
     fn encode(&self) -> RawBytes {
@@ -247,7 +294,7 @@ where
     }
 
     fn decode(bytes: &[u8]) -> Result<Self> {
-        bcs::from_bytes::<VsBackendSerde<T>>(bytes)
+        msgpack::from_slice::<MmBackendSerde<T>>(bytes)
             .c(d!())
             .map(Self::from)
     }

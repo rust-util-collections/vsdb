@@ -1,25 +1,24 @@
 [package]
 name = "vsdb"
-version = "0.62.1"
+version = "1.0.1"
 authors = ["hui.fan@mail.ru"]
 edition = "2021"
-description = "A stuctured DB with some 'Git-like' features, mainly used in blockchain projects."
+description = "A std-collection-like database"
 homepage = "https://github.com/rust-util-collections/vsdb"
 repository = "https://github.com/rust-util-collections/vsdb/tree/master/wrappers"
-keywords = ["git", "leveldb", "rocksdb", "version", "vcs"]
+keywords = ["kv", "leveldb", "rocksdb", "std"]
 categories = ["database-implementations", "data-structures", "algorithms", "caching"]
 license = "GPL-3.0"
 
 [package.metadata.docs.rs]
-features = ["vs", "extra_types"]
+features = []
 
 [dependencies]
 serde = { workspace = true }
 once_cell = { workspace = true }
 parking_lot = { workspace = true }
 
-bcs = { workspace = true, optional = true }
-rmp-serde = { workspace = true, optional = true }
+msgpack = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 
 ruc = { workspace = true }
@@ -27,7 +26,7 @@ vsdb_core = { workspace = true }
 
 [dev-dependencies]
 hex = "0.4.3"
-criterion = "0.4.0"
+criterion = "0.5.1"
 rand = "0.8.5"
 
 [features]
@@ -39,12 +38,8 @@ parity_backend = ["vsdb_core/parity_backend"]
 compress = ["vsdb_core/compress"]
 
 serde_ende = []
-msgpack_codec = ["serde_ende", "rmp-serde"]
+msgpack_codec = ["serde_ende", "msgpack"]
 json_codec = ["serde_ende", "serde_json"]
-bcs_codec = ["serde_ende", "bcs"]
-
-vs = ["vsdb_core/vs", "ruc/crypto"]
-extra_types = ["vsdb_core/extra_types"]
 
 # [[bench]]
 # name = "basic"
@@ -53,12 +48,3 @@ extra_types = ["vsdb_core/extra_types"]
 # [[bench]]
 # name = "versioned"
 # harness = false
-
-[[example]]
-name = "derive_vs"
-
-[[example]]
-name = "web_server"
-
-[[example]]
-name = "blockchain_state"

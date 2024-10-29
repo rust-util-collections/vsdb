@@ -240,6 +240,11 @@ where
     pub fn clear(&mut self) {
         self.inner.clear();
     }
+
+    #[inline(always)]
+    pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
+        self.inner.is_the_same_instance(&other_hdr.inner)
+    }
 }
 
 impl<V> Clone for MapxOrdRawKey<V> {
@@ -437,14 +442,6 @@ where
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.value
     }
-}
-
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////
-
-#[cfg(feature = "vs")]
-impl<V> vsdb_core::VsMgmt for MapxOrdRawKey<V> {
-    vsdb_core::impl_vs_methods_nope! {}
 }
 
 /////////////////////////////////////////////////////////////////////////////

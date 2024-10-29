@@ -186,6 +186,11 @@ impl MapxRaw {
     pub fn as_prefix_slice(&self) -> &[u8] {
         self.inner.as_prefix_slice()
     }
+
+    #[inline(always)]
+    pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
+        self.inner.is_the_same_instance(&other_hdr.inner)
+    }
 }
 
 impl Default for MapxRaw {

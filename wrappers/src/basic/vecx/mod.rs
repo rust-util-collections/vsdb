@@ -204,6 +204,11 @@ impl<T: ValueEnDe> Vecx<T> {
     pub fn clear(&mut self) {
         self.inner.clear();
     }
+
+    #[inline(always)]
+    pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
+        self.inner.is_the_same_instance(&other_hdr.inner)
+    }
 }
 
 impl<T> Clone for Vecx<T> {
@@ -263,14 +268,6 @@ where
     fn next_back(&mut self) -> Option<Self::Item> {
         self.0.next_back().map(|(_, v)| v)
     }
-}
-
-////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////
-
-#[cfg(feature = "vs")]
-impl<T> vsdb_core::VsMgmt for Vecx<T> {
-    vsdb_core::impl_vs_methods_nope! {}
 }
 
 /////////////////////////////////////////////////////////////////////////////

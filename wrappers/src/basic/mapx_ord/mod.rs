@@ -270,6 +270,11 @@ where
     pub fn clear(&mut self) {
         self.inner.clear();
     }
+
+    #[inline(always)]
+    pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
+        self.inner.is_the_same_instance(&other_hdr.inner)
+    }
 }
 
 impl<K, V> Clone for MapxOrd<K, V> {
@@ -463,14 +468,6 @@ where
             unsafe { &mut *hdr }.gen_mut(self.key, default)
         }
     }
-}
-
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////
-
-#[cfg(feature = "vs")]
-impl<K, V> vsdb_core::VsMgmt for MapxOrd<K, V> {
-    vsdb_core::impl_vs_methods_nope! {}
 }
 
 /////////////////////////////////////////////////////////////////////////////

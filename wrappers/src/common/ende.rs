@@ -82,14 +82,9 @@ impl<T: Serialize> KeyEn for T {
         serde_json::to_vec(self).c(d!())
     }
 
-    #[cfg(feature = "bcs_codec")]
-    fn try_encode_key(&self) -> Result<RawBytes> {
-        bcs::to_bytes(self).c(d!())
-    }
-
     #[cfg(feature = "msgpack_codec")]
     fn try_encode_key(&self) -> Result<RawBytes> {
-        rmp_serde::to_vec(self).c(d!())
+        msgpack::to_vec(self).c(d!())
     }
 }
 
@@ -100,14 +95,9 @@ impl<T: DeserializeOwned> KeyDe for T {
         serde_json::from_slice(bytes).c(d!())
     }
 
-    #[cfg(feature = "bcs_codec")]
-    fn decode_key(bytes: &[u8]) -> Result<Self> {
-        bcs::from_bytes(bytes).c(d!())
-    }
-
     #[cfg(feature = "msgpack_codec")]
     fn decode_key(bytes: &[u8]) -> Result<Self> {
-        rmp_serde::from_slice(bytes).c(d!())
+        msgpack::from_slice(bytes).c(d!())
     }
 }
 
@@ -118,14 +108,9 @@ impl<T: Serialize> ValueEn for T {
         serde_json::to_vec(self).c(d!())
     }
 
-    #[cfg(feature = "bcs_codec")]
-    fn try_encode_value(&self) -> Result<RawBytes> {
-        bcs::to_bytes(self).c(d!())
-    }
-
     #[cfg(feature = "msgpack_codec")]
     fn try_encode_value(&self) -> Result<RawBytes> {
-        rmp_serde::to_vec(self).c(d!())
+        msgpack::to_vec(self).c(d!())
     }
 }
 
@@ -136,14 +121,9 @@ impl<T: DeserializeOwned> ValueDe for T {
         serde_json::from_slice(bytes).c(d!())
     }
 
-    #[cfg(feature = "bcs_codec")]
-    fn decode_value(bytes: &[u8]) -> Result<Self> {
-        bcs::from_bytes(bytes).c(d!())
-    }
-
     #[cfg(feature = "msgpack_codec")]
     fn decode_value(bytes: &[u8]) -> Result<Self> {
-        rmp_serde::from_slice(bytes).c(d!())
+        msgpack::from_slice(bytes).c(d!())
     }
 }
 

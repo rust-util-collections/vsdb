@@ -173,6 +173,11 @@ where
         let value = self.get_value();
         ValueMut { hdr: self, value }
     }
+
+    #[inline(always)]
+    pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
+        self.inner.is_the_same_instance(&other_hdr.inner)
+    }
 }
 
 impl<T> Clone for Orphan<T> {
@@ -360,8 +365,3 @@ where
 
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
-
-#[cfg(feature = "vs")]
-impl<T> vsdb_core::VsMgmt for Orphan<T> {
-    vsdb_core::impl_vs_methods_nope! {}
-}
