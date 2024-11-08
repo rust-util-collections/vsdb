@@ -19,7 +19,7 @@ export LC_ALL=en_US.UTF-8 # perl
 export LANGUAGE=en_US.UTF-8 # perl
 
 for file in $(find .. -path "../target" -a -prune \
-    -o -type f \
+    -a -type f \
     -o -name "*.rs" \
     -o -name "*.c" \
     -o -name "*.h" \
