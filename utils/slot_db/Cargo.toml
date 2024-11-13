@@ -19,11 +19,11 @@ criterion = "0.5.1"
 rand = { workspace = true }
 
 [features]
-default = ["parity_backend", "compress", "msgpack_codec"]
+default = ["sled_backend", "compress", "msgpack_codec"]
 
 parity_backend = ["vsdb/parity_backend"]
 rocks_backend = ["vsdb/rocks_backend"]
-
+sled_backend = ["vsdb/sled_backend"]
 compress = ["vsdb/compress"]
 
 json_codec = ["vsdb/json_codec"]

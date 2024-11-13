@@ -22,7 +22,7 @@ threadpool = "1.8.1" # used in a background cleaner
 
 parity-db = { package = "pigdb", version = "0.5.0" }
 rocksdb = { version = "0.22.0", default-features = false }
-
+sled-db = {package = "sled",version = "0.34"}
 keccak-hasher = "0.16.0"
 hash-db = "0.16.0"
 trie-db = "0.29.1"

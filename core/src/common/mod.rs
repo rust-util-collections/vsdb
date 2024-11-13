@@ -60,6 +60,8 @@ pub static VSDB: LazyLock<VsDB<engines::RocksDB>> = LazyLock::new(|| pnk!(VsDB::
 #[cfg(feature = "parity_backend")]
 pub static VSDB: LazyLock<VsDB<engines::ParityDB>> = LazyLock::new(|| pnk!(VsDB::new()));
 
+#[cfg(feature = "sled_backend")]
+pub static VSDB: LazyLock<VsDB<engines::SledDB>> = LazyLock::new(|| pnk!(VsDB::new()));
 /// Clean orphan instances in background.
 pub static TRASH_CLEANER: LazyLock<Mutex<ThreadPool>> = LazyLock::new(|| {
     let pool = threadpool::Builder::new()

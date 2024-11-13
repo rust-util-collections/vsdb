@@ -29,11 +29,11 @@ criterion = "0.5.1"
 rand = "0.8.5"
 
 [features]
-default = ["parity_backend", "compress", "msgpack_codec"]
+default = ["sled_backend", "compress", "msgpack_codec"]
 
 parity_backend = ["vsdb_core/parity_backend"]
 rocks_backend = ["vsdb_core/rocks_backend"]
-
+sled_backend = ["vsdb_core/sled_backend"]
 compress = ["vsdb_core/compress"]
 
 serde_ende = []

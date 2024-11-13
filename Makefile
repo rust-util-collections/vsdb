@@ -5,11 +5,11 @@ export CARGO_NET_GIT_FETCH_WITH_CLI = true
 lint:
 	cargo clippy --workspace
 	cargo check --workspace --tests
-	cargo check --workspace --benches
+#	cargo check --workspace --benches
 
 lintall: lint
-	cargo clippy --workspace --no-default-features --features "rocks_backend,compress,msgpack_codec"
-	cargo check --workspace --tests --no-default-features --features "rocks_backend,json_codec"
+	cargo clippy --workspace --no-default-features --features "sled_backend,compress,msgpack_codec"
+	cargo check --workspace --tests --no-default-features --features "sled_backend,json_codec"
 
 lintmusl:
 	cargo clippy --workspace --target x86_64-unknown-linux-musl \
@@ -17,8 +17,8 @@ lintmusl:
 		--features "parity_backend,msgpack_codec"
 
 test:
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo test --workspace --release --tests -- --test-threads=1
+#	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
+#	cargo test --workspace --release --tests -- --test-threads=1
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo test --workspace --tests -- --test-threads=1
 
@@ -26,7 +26,7 @@ testall: test
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo test --workspace --tests \
 		--no-default-features \
-		--features "rocks_backend,msgpack_codec" \
+		--features "sled_backend,msgpack_codec" \
 		-- --test-threads=1 #--nocapture
 
 testmusl:

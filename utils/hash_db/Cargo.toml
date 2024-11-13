@@ -20,10 +20,10 @@ ruc = { workspace = true }
 vsdb = { workspace = true }
 
 [features]
-default = ["parity_backend","msgpack_codec"]
+default = ["sled_backend","msgpack_codec"]
 
 parity_backend = ["vsdb/parity_backend"]
 rocks_backend = ["vsdb/rocks_backend"]
-
+sled_backend = ["vsdb/sled_backend"]
 json_codec = ["vsdb/json_codec"]
 msgpack_codec = ["vsdb/msgpack_codec"]
