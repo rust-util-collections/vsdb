@@ -33,7 +33,7 @@
 #[cfg(test)]
 mod test;
 
-use crate::common::{engines, RawKey, RawValue};
+use crate::common::{PreBytes, RawKey, RawValue, engines};
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, ops::RangeBounds};
 
@@ -56,7 +56,7 @@ impl MapxRaw {
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
         Self {
-            inner: self.inner.shadow(),
+            inner: unsafe { self.inner.shadow() },
         }
     }
 
@@ -78,8 +78,8 @@ impl MapxRaw {
     }
 
     #[inline(always)]
-    pub fn gen_mut(&mut self, key: RawValue, value: RawValue) -> ValueMut {
-        self.inner.gen_mut(key, value)
+    pub fn mock_value_mut(&mut self, key: RawValue, value: RawValue) -> ValueMut {
+        self.inner.mock_value_mut(key, value)
     }
 
     #[inline(always)]
@@ -88,13 +88,13 @@ impl MapxRaw {
     }
 
     #[inline(always)]
-    pub fn get_le(&self, key: &[u8]) -> Option<(RawKey, RawValue)> {
-        self.range(..=Cow::Borrowed(key)).next_back()
+    pub fn get_le(&self, key: impl AsRef<[u8]>) -> Option<(RawKey, RawValue)> {
+        self.range(..=Cow::Borrowed(key.as_ref())).next_back()
     }
 
     #[inline(always)]
-    pub fn get_ge(&self, key: &[u8]) -> Option<(RawKey, RawValue)> {
-        self.range(Cow::Borrowed(key)..).next()
+    pub fn get_ge(&self, key: impl AsRef<[u8]>) -> Option<(RawKey, RawValue)> {
+        self.range(Cow::Borrowed(key.as_ref())..).next()
     }
 
     #[inline(always)]
@@ -118,7 +118,10 @@ impl MapxRaw {
     }
 
     #[inline(always)]
-    pub fn range<'a, R: RangeBounds<Cow<'a, [u8]>>>(&'a self, bounds: R) -> MapxRawIter {
+    pub fn range<'a, R: RangeBounds<Cow<'a, [u8]>>>(
+        &'a self,
+        bounds: R,
+    ) -> MapxRawIter<'a> {
         self.inner.range(bounds)
     }
 
@@ -131,7 +134,7 @@ impl MapxRaw {
     pub fn range_mut<'a, R: RangeBounds<Cow<'a, [u8]>>>(
         &'a mut self,
         bounds: R,
-    ) -> MapxRawIterMut {
+    ) -> MapxRawIterMut<'a> {
         self.inner.range_mut(bounds)
     }
 
@@ -164,7 +167,7 @@ impl MapxRaw {
     /// Do not use this API unless you know the internal details extremely well.
     #[inline(always)]
     pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
-        Self::from_prefix_slice(s)
+        unsafe { Self::from_prefix_slice(s) }
     }
 
     /// # Safety
@@ -173,7 +176,7 @@ impl MapxRaw {
     #[inline(always)]
     pub unsafe fn from_prefix_slice(s: impl AsRef<[u8]>) -> Self {
         Self {
-            inner: engines::Mapx::from_prefix_slice(s),
+            inner: unsafe { engines::Mapx::from_prefix_slice(s) },
         }
     }
 
@@ -183,7 +186,7 @@ impl MapxRaw {
     }
 
     #[inline(always)]
-    pub fn as_prefix_slice(&self) -> &[u8] {
+    pub fn as_prefix_slice(&self) -> &PreBytes {
         self.inner.as_prefix_slice()
     }
 
@@ -207,10 +210,11 @@ pub struct Entry<'a> {
 impl<'a> Entry<'a> {
     pub fn or_insert(self, default: &'a [u8]) -> ValueMut<'a> {
         let hdr = self.hdr as *mut MapxRaw;
-        if let Some(v) = unsafe { &mut *hdr }.get_mut(self.key) {
-            v
-        } else {
-            unsafe { &mut *hdr }.gen_mut(self.key.to_vec(), default.to_vec())
+        match unsafe { &mut *hdr }.get_mut(self.key) {
+            Some(v) => v,
+            _ => {
+                unsafe { &mut *hdr }.mock_value_mut(self.key.to_vec(), default.to_vec())
+            }
         }
     }
 
@@ -219,10 +223,9 @@ impl<'a> Entry<'a> {
         F: FnOnce() -> RawValue,
     {
         let hdr = self.hdr as *mut MapxRaw;
-        if let Some(v) = unsafe { &mut *hdr }.get_mut(self.key) {
-            v
-        } else {
-            unsafe { &mut *hdr }.gen_mut(self.key.to_vec(), f())
+        match unsafe { &mut *hdr }.get_mut(self.key) {
+            Some(v) => v,
+            _ => unsafe { &mut *hdr }.mock_value_mut(self.key.to_vec(), f()),
         }
     }
 }

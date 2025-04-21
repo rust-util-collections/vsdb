@@ -9,8 +9,8 @@
 mod test;
 
 use crate::{
-    common::{ende::ValueEnDe, RawKey, RawValue},
     MapxRaw,
+    common::{RawKey, RawValue, ende::ValueEnDe},
 };
 use ruc::*;
 use serde::{Deserialize, Serialize};
@@ -33,9 +33,11 @@ impl MapxRawMk {
     /// but it is safe to use in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
-        Self {
-            key_size: self.key_size,
-            inner: self.inner.shadow(),
+        unsafe {
+            Self {
+                key_size: self.key_size,
+                inner: self.inner.shadow(),
+            }
         }
     }
 
@@ -78,7 +80,7 @@ impl MapxRawMk {
     }
 
     #[inline(always)]
-    pub(crate) fn gen_mut<'a>(
+    pub(crate) fn mock_value_mut<'a>(
         &'a mut self,
         key: &'a [&'a [u8]],
         v: RawValue,
@@ -368,20 +370,20 @@ impl<'a> ValueMut<'a> {
     }
 }
 
-impl<'a> Drop for ValueMut<'a> {
+impl Drop for ValueMut<'_> {
     fn drop(&mut self) {
         pnk!(self.hdr.insert(self.key, &self.value));
     }
 }
 
-impl<'a> Deref for ValueMut<'a> {
+impl Deref for ValueMut<'_> {
     type Target = RawValue;
     fn deref(&self) -> &Self::Target {
         &self.value
     }
 }
 
-impl<'a> DerefMut for ValueMut<'a> {
+impl DerefMut for ValueMut<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.value
     }
@@ -395,10 +397,9 @@ pub struct Entry<'a> {
 impl<'a> Entry<'a> {
     pub fn or_insert(self, default: &'a [u8]) -> ValueMut<'a> {
         let hdr = self.hdr as *mut MapxRawMk;
-        if let Some(v) = unsafe { &mut *hdr }.get_mut(self.key) {
-            v
-        } else {
-            unsafe { &mut *hdr }.gen_mut(self.key, default.to_vec())
+        match unsafe { &mut *hdr }.get_mut(self.key) {
+            Some(v) => v,
+            _ => unsafe { &mut *hdr }.mock_value_mut(self.key, default.to_vec()),
         }
     }
 }

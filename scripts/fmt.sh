@@ -15,8 +15,11 @@ EXEC_PATH=$(echo ${EXEC_PATH} | sed 's@/\./@/@g' | sed 's@/\.*$@@')
 cd $EXEC_PATH || exit 1
 #################################################
 
+export LC_ALL=en_US.UTF-8 # perl
+export LANGUAGE=en_US.UTF-8 # perl
+
 for file in $(find .. -path "../target" -a -prune \
-    -o -type f \
+    -a -type f \
     -o -name "*.rs" \
     -o -name "*.c" \
     -o -name "*.h" \
@@ -27,7 +30,11 @@ for file in $(find .. -path "../target" -a -prune \
     -o -name "rc.local" \
     | grep -v "$(basename $0)" \
     | grep -v '\.git' \
+    | grep -v 'submodules' \
     | grep -v 'target' \
+    | grep -v '\.tmp' \
+    | grep -v '/debug/' \
+    | grep -v '/release/' \
     | grep -iv 'Makefile' \
     | grep -iv 'LICENSE' \
     | grep -v 'tendermint'); do
@@ -42,12 +49,11 @@ for file in $(find .. -path "../target" -a -prune \
     perl -pi -e 's/。 */. /g' $file
     perl -pi -e 's/、 +/、/g' $file
 
-    perl -pi -e 's/, +/, /g' $file
-    perl -pi -e 's/\. +/. /g' $file
+    perl -pi -e 's/, +(\S)/, $1/g' $file
+    perl -pi -e 's/\. +(\S)/. $1/g' $file
 
     perl -pi -e 's/\t/    /g' $file
-    perl -pi -e 's/ +$//g' $file
+    echo $file | grep -c '\.md$'>/dev/null || perl -pi -e 's/ +$//g' $file
 done
 
-cd ..
-cargo +nightly fmt --all
+cargo fmt

@@ -1,6 +1,6 @@
 use ruc::*;
 use serde::{Deserialize, Serialize};
-use vsdb::{basic::mapx_ord_rawkey::MapxOrdRawKey, vsdb_set_base_dir, ValueEnDe};
+use vsdb::{ValueEnDe, basic::mapx_ord_rawkey::MapxOrdRawKey, vsdb_set_base_dir};
 
 #[derive(Serialize, Deserialize, Default, Debug, Eq, PartialEq, Clone)]
 struct SampleBlock {

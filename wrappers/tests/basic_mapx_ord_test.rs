@@ -1,7 +1,7 @@
 use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::ops::Bound;
-use vsdb::{vsdb_set_base_dir, MapxOrd, ValueEnDe};
+use vsdb::{MapxOrd, ValueEnDe, vsdb_set_base_dir};
 
 #[derive(Serialize, Deserialize, Default, Debug, Eq, PartialEq, Clone)]
 struct SampleBlock {

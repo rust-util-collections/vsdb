@@ -55,8 +55,10 @@ impl<T: ValueEnDe> Vecx<T> {
     /// but it is safe to use in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
-        Self {
-            inner: self.inner.shadow(),
+        unsafe {
+            Self {
+                inner: self.inner.shadow(),
+            }
         }
     }
 
@@ -65,8 +67,10 @@ impl<T: ValueEnDe> Vecx<T> {
     /// Do not use this API unless you know the internal details extremely well.
     #[inline(always)]
     pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
-        Self {
-            inner: MapxOrdRawKey::from_bytes(s),
+        unsafe {
+            Self {
+                inner: MapxOrdRawKey::from_bytes(s),
+            }
         }
     }
 
@@ -230,7 +234,7 @@ impl<T: ValueEnDe> Default for Vecx<T> {
 
 pub struct VecxIter<'a, T>(MapxOrdRawKeyIter<'a, T>);
 
-impl<'a, T> Iterator for VecxIter<'a, T>
+impl<T> Iterator for VecxIter<'_, T>
 where
     T: ValueEnDe,
 {
@@ -240,7 +244,7 @@ where
     }
 }
 
-impl<'a, V> DoubleEndedIterator for VecxIter<'a, V>
+impl<V> DoubleEndedIterator for VecxIter<'_, V>
 where
     V: ValueEnDe,
 {
@@ -261,7 +265,7 @@ where
     }
 }
 
-impl<'a, V> DoubleEndedIterator for VecxIterMut<'a, V>
+impl<V> DoubleEndedIterator for VecxIterMut<'_, V>
 where
     V: ValueEnDe,
 {

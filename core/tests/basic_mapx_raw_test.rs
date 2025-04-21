@@ -1,6 +1,6 @@
 use ruc::*;
 use std::borrow::Cow;
-use vsdb_core::{vsdb_set_base_dir, MapxRaw};
+use vsdb_core::{MapxRaw, vsdb_set_base_dir};
 
 #[test]
 fn basic_cases() {

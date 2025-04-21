@@ -23,9 +23,8 @@ use hash_db::Hasher;
 use parity_scale_codec as codec;
 use parity_scale_codec::{Compact, Decode, Encode, Input, Output};
 use trie_db::{
-    nibble_ops,
+    ChildReference, NodeCodec as NodeCodecT, TrieConfiguration, TrieLayout, nibble_ops,
     node::{NibbleSlicePlan, NodeHandlePlan, NodePlan, Value, ValuePlan},
-    ChildReference, NodeCodec as NodeCodecT, TrieConfiguration, TrieLayout,
 };
 
 /// Constants used into trie simplification codec.

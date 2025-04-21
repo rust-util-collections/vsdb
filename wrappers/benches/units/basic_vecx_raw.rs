@@ -1,10 +1,10 @@
-use criterion::{criterion_group, Criterion};
+use criterion::{Criterion, criterion_group};
 use rand::Rng;
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
 };
-use vsdb::{basic::vecx_raw::VecxRaw, ValueEnDe};
+use vsdb::{ValueEnDe, basic::vecx_raw::VecxRaw};
 
 fn read_write(c: &mut Criterion) {
     let mut group = c.benchmark_group("** vsdb::basic::vecx_raw::VecxRaw **");
@@ -42,7 +42,7 @@ fn random_read_write(c: &mut Criterion) {
     let mut db = VecxRaw::new();
     group.bench_function(" random write ", |b| {
         b.iter(|| {
-            let n = rng.gen::<usize>();
+            let n = rng.r#gen::<usize>();
             let val = <usize as ValueEnDe>::encode(&n);
             db.push(&val);
         })
@@ -50,7 +50,7 @@ fn random_read_write(c: &mut Criterion) {
 
     group.bench_function(" random read ", |b| {
         b.iter(|| {
-            let idx: usize = rng.gen_range(0..db.len());
+            let idx: usize = rng.r#gen_range(0..db.len());
             db.get(idx);
         })
     });

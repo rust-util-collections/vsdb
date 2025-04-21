@@ -12,7 +12,7 @@ use std::{
 };
 
 #[cfg(feature = "serde_ende")]
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -526,35 +526,6 @@ impl_all!(
 );
 impl_all!(
     ^i8, ^i16, ^i32, ^i64, ^i128, ^isize, ^u16, ^u32, ^u64, ^u128, ^usize
-);
-
-#[cfg(feature = "extra_types")]
-impl_all!(
-    %vsdb_core::primitive_types_0_10::H128,
-    %vsdb_core::primitive_types_0_10::H160,
-    %vsdb_core::primitive_types_0_10::H256,
-    %vsdb_core::primitive_types_0_10::H512,
-    %vsdb_core::primitive_types_0_11::H128,
-    %vsdb_core::primitive_types_0_11::H160,
-    %vsdb_core::primitive_types_0_11::H256,
-    %vsdb_core::primitive_types_0_11::H512,
-    %vsdb_core::primitive_types_0_12::H128,
-    %vsdb_core::primitive_types_0_12::H160,
-    %vsdb_core::primitive_types_0_12::H256,
-    %vsdb_core::primitive_types_0_12::H512
-);
-
-#[cfg(feature = "extra_types")]
-impl_all!(
-    ~vsdb_core::primitive_types_0_10::U128,
-    ~vsdb_core::primitive_types_0_10::U256,
-    ~vsdb_core::primitive_types_0_10::U512,
-    ~vsdb_core::primitive_types_0_11::U128,
-    ~vsdb_core::primitive_types_0_11::U256,
-    ~vsdb_core::primitive_types_0_11::U512,
-    ~vsdb_core::primitive_types_0_12::U128,
-    ~vsdb_core::primitive_types_0_12::U256,
-    ~vsdb_core::primitive_types_0_12::U512
 );
 
 macro_rules! impl_array {

@@ -45,10 +45,12 @@ impl DagMapRaw {
     /// but it is safe to use in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
-        Self {
-            data: self.data.shadow(),
-            parent: self.parent.shadow(),
-            children: self.children.shadow(),
+        unsafe {
+            Self {
+                data: self.data.shadow(),
+                parent: self.parent.shadow(),
+                children: self.children.shadow(),
+            }
         }
     }
 
@@ -72,11 +74,14 @@ impl DagMapRaw {
             if let Some(v) = hdr.data.get(key) {
                 return alt!(v.is_empty(), None, Some(v));
             }
-            if let Some(p) = hdr.parent.get_value() {
-                hdr_owned = p;
-                hdr = &hdr_owned;
-            } else {
-                return None;
+            match hdr.parent.get_value() {
+                Some(p) => {
+                    hdr_owned = p;
+                    hdr = &hdr_owned;
+                }
+                _ => {
+                    return None;
+                }
             }
         }
     }
@@ -112,10 +117,11 @@ impl DagMapRaw {
 
     // Return the new head of mainline
     fn prune_mainline(mut self) -> Result<DagHead> {
-        let p = if let Some(p) = self.parent.get_value() {
-            p
-        } else {
-            return Ok(self);
+        let p = match self.parent.get_value() {
+            Some(p) => p,
+            _ => {
+                return Ok(self);
+            }
         };
 
         let mut linebuf = vec![p];
@@ -219,20 +225,20 @@ pub struct ValueMut<'a> {
     inner: mapx_raw::ValueMut<'a>,
 }
 
-impl<'a> Drop for ValueMut<'a> {
+impl Drop for ValueMut<'_> {
     fn drop(&mut self) {
         self.inner.clone_from(&self.value);
     }
 }
 
-impl<'a> Deref for ValueMut<'a> {
+impl Deref for ValueMut<'_> {
     type Target = RawBytes;
     fn deref(&self) -> &Self::Target {
         &self.value
     }
 }
 
-impl<'a> DerefMut for ValueMut<'a> {
+impl DerefMut for ValueMut<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.value
     }

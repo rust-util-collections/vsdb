@@ -1,13 +1,11 @@
 use crate::common::{
-    vsdb_get_base_dir, vsdb_set_base_dir, BranchIDBase as BranchID, Engine, Pre,
-    PreBytes, RawBytes, RawKey, RawValue, VersionIDBase as VersionID, GB,
-    INITIAL_BRANCH_ID, MB, PREFIX_SIZE, RESERVED_ID_CNT,
+    Engine, GB, MB, PREFIX_SIZE, Pre, PreBytes, RESERVED_ID_CNT, RawKey, RawValue,
+    vsdb_get_base_dir, vsdb_set_base_dir,
 };
-use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use rocksdb::{
-    ColumnFamily, ColumnFamilyDescriptor, DBCompressionType, DBIterator, Direction,
-    IteratorMode, Options, ReadOptions, SliceTransform, DB,
+    ColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType, DBIterator, Direction,
+    IteratorMode, Options, ReadOptions, SliceTransform,
 };
 use ruc::*;
 use std::{
@@ -15,7 +13,10 @@ use std::{
     fs,
     mem::size_of,
     ops::{Bound, RangeBounds},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        LazyLock,
+        atomic::{AtomicUsize, Ordering},
+    },
     thread::available_parallelism,
 };
 
@@ -24,11 +25,9 @@ use std::{
 const DATA_SET_NUM: usize = 2;
 
 const META_KEY_MAX_KEYLEN: [u8; 1] = [u8::MAX];
-const META_KEY_BRANCH_ID: [u8; 1] = [u8::MAX - 1];
-const META_KEY_VERSION_ID: [u8; 1] = [u8::MAX - 2];
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 
-static HDR: Lazy<(DB, Vec<String>)> = Lazy::new(|| rocksdb_open().unwrap());
+static HDR: LazyLock<(DB, Vec<String>)> = LazyLock::new(|| rocksdb_open().unwrap());
 
 pub struct RocksEngine {
     meta: &'static DB,
@@ -58,12 +57,12 @@ impl RocksEngine {
 
     #[inline(always)]
     fn get_upper_bound_value(&self, meta_prefix: PreBytes) -> Vec<u8> {
-        static BUF: Lazy<RawBytes> = Lazy::new(|| vec![u8::MAX; 512]);
+        const BUF: [u8; 256] = [u8::MAX; 256];
 
         let mut max_guard = meta_prefix.to_vec();
 
         let l = self.get_max_keylen();
-        if l < 513 {
+        if l < 257 {
             max_guard.extend_from_slice(&BUF[..l]);
         } else {
             max_guard.extend_from_slice(&vec![u8::MAX; l]);
@@ -82,19 +81,6 @@ impl Engine for RocksEngine {
 
         if meta.get(META_KEY_MAX_KEYLEN).c(d!())?.is_none() {
             meta.put(META_KEY_MAX_KEYLEN, 0_usize.to_be_bytes())
-                .c(d!())?;
-        }
-
-        if meta.get(META_KEY_BRANCH_ID).c(d!())?.is_none() {
-            meta.put(
-                META_KEY_BRANCH_ID,
-                (1 + INITIAL_BRANCH_ID as usize).to_be_bytes(),
-            )
-            .c(d!())?;
-        }
-
-        if meta.get(META_KEY_VERSION_ID).c(d!())?.is_none() {
-            meta.put(META_KEY_VERSION_ID, 0_usize.to_be_bytes())
                 .c(d!())?;
         }
 
@@ -120,7 +106,7 @@ impl Engine for RocksEngine {
     // so we use a `Mutex` lock for thread safe.
     #[allow(unused_variables)]
     fn alloc_prefix(&self) -> Pre {
-        static LK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+        static LK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
         let x = LK.lock();
 
         // step 1
@@ -131,48 +117,6 @@ impl Engine for RocksEngine {
         // step 2
         self.meta
             .put(self.prefix_allocator.key, (1 + ret).to_be_bytes())
-            .unwrap();
-
-        ret
-    }
-
-    // 'step 1' and 'step 2' is not atomic in multi-threads scene,
-    // so we use a `Mutex` lock for thread safe.
-    #[allow(unused_variables)]
-    fn alloc_br_id(&self) -> BranchID {
-        static LK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-        let x = LK.lock();
-
-        // step 1
-        let ret = crate::parse_int!(
-            self.meta.get(META_KEY_BRANCH_ID).unwrap().unwrap(),
-            BranchID
-        );
-
-        // step 2
-        self.meta
-            .put(META_KEY_BRANCH_ID, (1 + ret).to_be_bytes())
-            .unwrap();
-
-        ret
-    }
-
-    // 'step 1' and 'step 2' is not atomic in multi-threads scene,
-    // so we use a `Mutex` lock for thread safe.
-    #[allow(unused_variables)]
-    fn alloc_ver_id(&self) -> VersionID {
-        static LK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-        let x = LK.lock();
-
-        // step 1
-        let ret = crate::parse_int!(
-            self.meta.get(META_KEY_VERSION_ID).unwrap().unwrap(),
-            VersionID
-        );
-
-        // step 2
-        self.meta
-            .put(META_KEY_VERSION_ID, (1 + ret).to_be_bytes())
             .unwrap();
 
         ret
@@ -313,11 +257,11 @@ impl Engine for RocksEngine {
         old_v
     }
 
-    fn get_instance_len(&self, instance_prefix: PreBytes) -> u64 {
+    fn get_instance_len_hint(&self, instance_prefix: PreBytes) -> u64 {
         crate::parse_int!(self.meta.get(instance_prefix).unwrap().unwrap(), u64)
     }
 
-    fn set_instance_len(&self, instance_prefix: PreBytes, new_len: u64) {
+    fn set_instance_len_hint(&self, instance_prefix: PreBytes, new_len: u64) {
         self.meta
             .put(instance_prefix, new_len.to_be_bytes())
             .unwrap();

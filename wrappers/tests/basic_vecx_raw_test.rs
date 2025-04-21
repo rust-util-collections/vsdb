@@ -1,5 +1,5 @@
 use ruc::*;
-use vsdb::{basic::vecx_raw::VecxRaw, vsdb_set_base_dir, RawBytes, ValueEnDe};
+use vsdb::{RawBytes, ValueEnDe, basic::vecx_raw::VecxRaw, vsdb_set_base_dir};
 
 fn gen_sample(idx: usize) -> RawBytes {
     idx.to_be_bytes().to_vec()

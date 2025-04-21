@@ -70,9 +70,11 @@ where
     /// but it is safe to use in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
-        Self {
-            inner: self.inner.shadow(),
-            _p: PhantomData,
+        unsafe {
+            Self {
+                inner: self.inner.shadow(),
+                _p: PhantomData,
+            }
         }
     }
 
@@ -81,9 +83,11 @@ where
     /// Do not use this API unless you know the internal details extremely well.
     #[inline(always)]
     pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
-        Self {
-            inner: MapxOrdRawKey::from_bytes(s),
-            _p: PhantomData,
+        unsafe {
+            Self {
+                inner: MapxOrdRawKey::from_bytes(s),
+                _p: PhantomData,
+            }
         }
     }
 
@@ -176,12 +180,12 @@ where
 
     #[inline(always)]
     pub fn remove(&mut self, key: &K) -> Option<V> {
-        self.inner.remove(&key.encode())
+        self.inner.remove(key.encode())
     }
 
     #[inline(always)]
     pub fn unset_value(&mut self, key: &K) {
-        self.inner.unset_value(&key.encode());
+        self.inner.unset_value(key.encode());
     }
 
     #[inline(always)]
@@ -226,7 +230,7 @@ where
     _p: PhantomData<K>,
 }
 
-impl<'a, K, V> Iterator for MapxIter<'a, K, V>
+impl<K, V> Iterator for MapxIter<'_, K, V>
 where
     K: KeyEnDe,
     V: ValueEnDe,
@@ -239,7 +243,7 @@ where
     }
 }
 
-impl<'a, K, V> DoubleEndedIterator for MapxIter<'a, K, V>
+impl<K, V> DoubleEndedIterator for MapxIter<'_, K, V>
 where
     K: KeyEnDe,
     V: ValueEnDe,
@@ -276,7 +280,7 @@ where
     }
 }
 
-impl<'a, K, V> DoubleEndedIterator for MapxIterMut<'a, K, V>
+impl<K, V> DoubleEndedIterator for MapxIterMut<'_, K, V>
 where
     K: KeyEnDe,
     V: ValueEnDe,
@@ -302,7 +306,7 @@ where
     pub(crate) inner: mapx_ord_rawkey::ValueIterMut<'a, V>,
 }
 
-impl<'a, V> Deref for ValueIterMut<'a, V>
+impl<V> Deref for ValueIterMut<'_, V>
 where
     V: ValueEnDe,
 {
@@ -312,7 +316,7 @@ where
     }
 }
 
-impl<'a, V> DerefMut for ValueIterMut<'a, V>
+impl<V> DerefMut for ValueIterMut<'_, V>
 where
     V: ValueEnDe,
 {

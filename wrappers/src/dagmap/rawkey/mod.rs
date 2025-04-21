@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod test;
 
-use crate::{dagmap::raw, DagMapId, DagMapRaw, Orphan, ValueEnDe};
+use crate::{DagMapId, DagMapRaw, Orphan, ValueEnDe, dagmap::raw};
 use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -41,7 +41,7 @@ where
     /// but it is safe to use in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow_inner(&self) -> DagMapRaw {
-        self.inner.shadow()
+        unsafe { self.inner.shadow() }
     }
 
     /// # Safety
@@ -50,9 +50,11 @@ where
     /// but it is safe to use in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> DagMapRawKey<V> {
-        Self {
-            inner: self.shadow_inner(),
-            _p: PhantomData,
+        unsafe {
+            Self {
+                inner: self.shadow_inner(),
+                _p: PhantomData,
+            }
         }
     }
 
@@ -136,7 +138,7 @@ where
     inner: raw::ValueMut<'a>,
 }
 
-impl<'a, V> Drop for ValueMut<'a, V>
+impl<V> Drop for ValueMut<'_, V>
 where
     V: ValueEnDe,
 {
@@ -145,7 +147,7 @@ where
     }
 }
 
-impl<'a, V> Deref for ValueMut<'a, V>
+impl<V> Deref for ValueMut<'_, V>
 where
     V: ValueEnDe,
 {
@@ -155,7 +157,7 @@ where
     }
 }
 
-impl<'a, V> DerefMut for ValueMut<'a, V>
+impl<V> DerefMut for ValueMut<'_, V>
 where
     V: ValueEnDe,
 {

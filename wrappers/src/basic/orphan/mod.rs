@@ -82,7 +82,7 @@
 #[cfg(test)]
 mod test;
 
-use crate::{basic::mapx_ord_rawkey::MapxOrdRawKey, ValueEnDe};
+use crate::{ValueEnDe, basic::mapx_ord_rawkey::MapxOrdRawKey};
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
@@ -117,8 +117,10 @@ where
     /// but it is safe to use in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
-        Self {
-            inner: self.inner.shadow(),
+        unsafe {
+            Self {
+                inner: self.inner.shadow(),
+            }
         }
     }
 
@@ -127,8 +129,10 @@ where
     /// Do not use this API unless you know the internal details extremely well.
     #[inline(always)]
     pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
-        Self {
-            inner: MapxOrdRawKey::from_bytes(s),
+        unsafe {
+            Self {
+                inner: MapxOrdRawKey::from_bytes(s),
+            }
         }
     }
 
@@ -335,7 +339,7 @@ where
     value: T,
 }
 
-impl<'a, T> Drop for ValueMut<'a, T>
+impl<T> Drop for ValueMut<'_, T>
 where
     T: ValueEnDe,
 {
@@ -344,7 +348,7 @@ where
     }
 }
 
-impl<'a, T> Deref for ValueMut<'a, T>
+impl<T> Deref for ValueMut<'_, T>
 where
     T: ValueEnDe,
 {
@@ -354,7 +358,7 @@ where
     }
 }
 
-impl<'a, T> DerefMut for ValueMut<'a, T>
+impl<T> DerefMut for ValueMut<'_, T>
 where
     T: ValueEnDe,
 {

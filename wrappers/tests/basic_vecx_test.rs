@@ -1,6 +1,6 @@
 use ruc::*;
 use serde::{Deserialize, Serialize};
-use vsdb::{vsdb_set_base_dir, ValueEnDe, Vecx};
+use vsdb::{ValueEnDe, Vecx, vsdb_set_base_dir};
 
 #[derive(Default, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 struct SampleBlock {

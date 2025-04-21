@@ -1,8 +1,8 @@
 [package]
 name = "vsdb_core"
-version = "1.0.1"
+version = "4.0.1"
 authors = ["hui.fan@mail.ru"]
-edition = "2021"
+edition = "2024"
 description = "A std-collection-like database"
 homepage = "https://github.com/rust-util-collections/vsdb"
 repository = "https://github.com/rust-util-collections/vsdb/tree/master/core"
@@ -14,13 +14,12 @@ license = "GPL-3.0"
 ruc = { workspace = true }
 serde = { workspace = true }
 rand = { workspace = true }
-once_cell = { workspace = true }
 parking_lot = { workspace = true }
 
 threadpool = { workspace = true } # used in a background cleaner
 
-rocksdb = { workspace = true, optional = true }
 parity-db = { workspace = true, optional = true }
+rocksdb = { workspace = true, optional = true }
 
 [dev-dependencies]
 msgpack = { workspace = true }
@@ -28,10 +27,10 @@ hex = "0.4.3"
 criterion = "0.5.1"
 
 [features]
-default = ["compress", "rocks_backend"]
+default = ["compress", "parity_backend"]
 
-rocks_backend = ["rocksdb"]
 parity_backend = ["parity-db"]
+rocks_backend = ["rocksdb"]
 
 compress = ["rocksdb?/zstd"]
 

@@ -1,4 +1,4 @@
-use criterion::{criterion_group, Criterion};
+use criterion::{Criterion, criterion_group};
 use rand::Rng;
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
@@ -46,7 +46,7 @@ fn random_read_write(c: &mut Criterion) {
     let mut keys = vec![];
     group.bench_function(" random write ", |b| {
         b.iter(|| {
-            let n = rng.gen::<usize>();
+            let n = rng.r#gen::<usize>();
             keys.push(n);
             let n = n.to_be_bytes();
             let key: &[&[u8]] = &[&n, &n];
@@ -56,7 +56,7 @@ fn random_read_write(c: &mut Criterion) {
 
     group.bench_function(" random read ", |b| {
         b.iter(|| {
-            let index: usize = rng.gen_range(0..keys.len());
+            let index: usize = rng.r#gen_range(0..keys.len());
             keys.get(index).map(|i| {
                 let n = i.to_be_bytes();
                 let key: &[&[u8]] = &[&n, &n];

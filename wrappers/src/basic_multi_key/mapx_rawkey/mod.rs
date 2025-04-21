@@ -30,9 +30,11 @@ impl<V: ValueEnDe> MapxRawKeyMk<V> {
     /// but it is safe to use in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
-        Self {
-            inner: self.inner.shadow(),
-            p: PhantomData,
+        unsafe {
+            Self {
+                inner: self.inner.shadow(),
+                p: PhantomData,
+            }
         }
     }
 
@@ -57,7 +59,7 @@ impl<V: ValueEnDe> MapxRawKeyMk<V> {
     }
 
     #[inline(always)]
-    pub(crate) fn gen_mut<'a>(
+    pub(crate) fn mock_value_mut<'a>(
         &'a mut self,
         key: &'a [&'a [u8]],
         v: V,
@@ -166,20 +168,20 @@ impl<'a, V: ValueEnDe> ValueMut<'a, V> {
     }
 }
 
-impl<'a, V: ValueEnDe> Drop for ValueMut<'a, V> {
+impl<V: ValueEnDe> Drop for ValueMut<'_, V> {
     fn drop(&mut self) {
         pnk!(self.hdr.insert(self.key, &self.value));
     }
 }
 
-impl<'a, V: ValueEnDe> Deref for ValueMut<'a, V> {
+impl<V: ValueEnDe> Deref for ValueMut<'_, V> {
     type Target = V;
     fn deref(&self) -> &Self::Target {
         &self.value
     }
 }
 
-impl<'a, V: ValueEnDe> DerefMut for ValueMut<'a, V> {
+impl<V: ValueEnDe> DerefMut for ValueMut<'_, V> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.value
     }
@@ -193,10 +195,9 @@ pub struct Entry<'a, V> {
 impl<'a, V: ValueEnDe> Entry<'a, V> {
     pub fn or_insert(self, default: V) -> ValueMut<'a, V> {
         let hdr = self.hdr as *mut MapxRawKeyMk<V>;
-        if let Some(v) = unsafe { &mut *hdr }.get_mut(self.key) {
-            v
-        } else {
-            unsafe { &mut *hdr }.gen_mut(self.key, default)
+        match unsafe { &mut *hdr }.get_mut(self.key) {
+            Some(v) => v,
+            _ => unsafe { &mut *hdr }.mock_value_mut(self.key, default),
         }
     }
 }

@@ -54,10 +54,12 @@ where
     /// but it is safe to use in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
-        Self {
-            data: self.data.shadow(),
-            hashed_null_key: self.hashed_null_key,
-            null_node_data: self.null_node_data.clone(),
+        unsafe {
+            Self {
+                data: self.data.shadow(),
+                hashed_null_key: self.hashed_null_key,
+                null_node_data: self.null_node_data.clone(),
+            }
         }
     }
 
@@ -67,7 +69,7 @@ where
     /// but it is safe to use in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow_backend(&self) -> Map<Value<T>> {
-        self.shadow().data
+        unsafe { self.shadow().data }
     }
 
     #[inline(always)]

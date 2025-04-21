@@ -1,16 +1,17 @@
 use crate::common::{
-    vsdb_get_base_dir, vsdb_set_base_dir, BranchIDBase as BranchID, Engine, Pre,
-    PreBytes, RawBytes, RawKey, RawValue, VersionIDBase as VersionID, INITIAL_BRANCH_ID,
-    PREFIX_SIZE, RESERVED_ID_CNT,
+    Engine, PREFIX_SIZE, Pre, PreBytes, RESERVED_ID_CNT, RawKey, RawValue,
+    vsdb_get_base_dir, vsdb_set_base_dir,
 };
-use once_cell::sync::Lazy;
 use parity_db::{BTreeIterator, CompressionType, Db as DB, Options};
 use parking_lot::Mutex;
 use ruc::*;
 use std::{
     borrow::Cow,
     ops::{Bound, RangeBounds},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        LazyLock,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 // NOTE:
@@ -21,12 +22,10 @@ const DATA_SET_NUM: u8 = 2;
 const META_COLID: u8 = DATA_SET_NUM;
 
 const META_KEY_MAX_KEYLEN: [u8; 1] = [u8::MAX];
-const META_KEY_BRANCH_ID: [u8; 1] = [u8::MAX - 1];
-const META_KEY_VERSION_ID: [u8; 1] = [u8::MAX - 2];
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 const META_KEY_NULL: [u8; 0] = [0; 0];
 
-static HDR: Lazy<DB> = Lazy::new(|| paritydb_open().unwrap());
+static HDR: LazyLock<DB> = LazyLock::new(|| paritydb_open().unwrap());
 
 pub struct ParityEngine {
     hdr: &'static DB,
@@ -54,12 +53,12 @@ impl ParityEngine {
 
     #[inline(always)]
     fn get_upper_bound_value(&self, hdr_prefix: PreBytes) -> Vec<u8> {
-        static BUF: Lazy<RawBytes> = Lazy::new(|| vec![u8::MAX; 512]);
+        const BUF: [u8; 256] = [u8::MAX; 256];
 
         let mut max_guard = hdr_prefix.to_vec();
 
         let l = self.get_max_keylen();
-        if l < 513 {
+        if l < 257 {
             max_guard.extend_from_slice(&BUF[..l]);
         } else {
             max_guard.extend_from_slice(&vec![u8::MAX; l]);
@@ -79,24 +78,6 @@ impl Engine for ParityEngine {
             hdr.commit([(
                 META_COLID,
                 META_KEY_MAX_KEYLEN,
-                Some(0_usize.to_be_bytes().to_vec()),
-            )])
-            .c(d!())?;
-        }
-
-        if hdr.get(META_COLID, &META_KEY_BRANCH_ID).c(d!())?.is_none() {
-            hdr.commit([(
-                META_COLID,
-                META_KEY_BRANCH_ID,
-                Some((1 + INITIAL_BRANCH_ID as usize).to_be_bytes().to_vec()),
-            )])
-            .c(d!())?;
-        }
-
-        if hdr.get(META_COLID, &META_KEY_VERSION_ID).c(d!())?.is_none() {
-            hdr.commit([(
-                META_COLID,
-                META_KEY_VERSION_ID,
                 Some(0_usize.to_be_bytes().to_vec()),
             )])
             .c(d!())?;
@@ -132,7 +113,7 @@ impl Engine for ParityEngine {
     // so we use a `Mutex` lock for thread safe.
     #[allow(unused_variables)]
     fn alloc_prefix(&self) -> Pre {
-        static LK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+        static LK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
         let x = LK.lock();
 
         // step 1
@@ -148,62 +129,6 @@ impl Engine for ParityEngine {
             .commit([(
                 META_COLID,
                 self.prefix_allocator.key,
-                Some((1 + ret).to_be_bytes().to_vec()),
-            )])
-            .unwrap();
-
-        ret
-    }
-
-    // 'step 1' and 'step 2' is not atomic in multi-threads scene,
-    // so we use a `Mutex` lock for thread safe.
-    #[allow(unused_variables)]
-    fn alloc_br_id(&self) -> BranchID {
-        static LK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-        let x = LK.lock();
-
-        // step 1
-        let ret = crate::parse_int!(
-            self.hdr
-                .get(META_COLID, &META_KEY_BRANCH_ID)
-                .unwrap()
-                .unwrap(),
-            BranchID
-        );
-
-        // step 2
-        self.hdr
-            .commit([(
-                META_COLID,
-                META_KEY_BRANCH_ID,
-                Some((1 + ret).to_be_bytes().to_vec()),
-            )])
-            .unwrap();
-
-        ret
-    }
-
-    // 'step 1' and 'step 2' is not atomic in multi-threads scene,
-    // so we use a `Mutex` lock for thread safe.
-    #[allow(unused_variables)]
-    fn alloc_ver_id(&self) -> VersionID {
-        static LK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-        let x = LK.lock();
-
-        // step 1
-        let ret = crate::parse_int!(
-            self.hdr
-                .get(META_COLID, &META_KEY_VERSION_ID)
-                .unwrap()
-                .unwrap(),
-            VersionID
-        );
-
-        // step 2
-        self.hdr
-            .commit([(
-                META_COLID,
-                META_KEY_VERSION_ID,
                 Some((1 + ret).to_be_bytes().to_vec()),
             )])
             .unwrap();
@@ -342,14 +267,14 @@ impl Engine for ParityEngine {
         old_v
     }
 
-    fn get_instance_len(&self, instance_prefix: PreBytes) -> u64 {
+    fn get_instance_len_hint(&self, instance_prefix: PreBytes) -> u64 {
         crate::parse_int!(
             self.hdr.get(META_COLID, &instance_prefix).unwrap().unwrap(),
             u64
         )
     }
 
-    fn set_instance_len(&self, instance_prefix: PreBytes, new_len: u64) {
+    fn set_instance_len_hint(&self, instance_prefix: PreBytes, new_len: u64) {
         self.hdr
             .commit([(
                 META_COLID,
@@ -463,7 +388,7 @@ fn paritydb_open() -> Result<DB> {
 
     #[cfg(feature = "compress")]
     cfg.columns.iter_mut().for_each(|c| {
-        c.compression = CompressionType::Lz4;
+        c.compression = CompressionType::Snappy;
     });
 
     #[cfg(not(feature = "compress"))]

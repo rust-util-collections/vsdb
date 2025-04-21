@@ -25,24 +25,21 @@ type EngineIter = parity_backend::ParityIter;
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
-use crate::common::{
-    BranchIDBase as BranchID, Pre, PreBytes, RawKey, RawValue,
-    VersionIDBase as VersionID, PREFIX_SIZE, VSDB,
-};
-use once_cell::sync::Lazy;
+use crate::common::{PREFIX_SIZE, Pre, PreBytes, RawKey, RawValue, VSDB};
 use parking_lot::Mutex;
 use ruc::*;
-use serde::{de, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de};
 use std::{
     borrow::Cow,
     fmt,
     mem::transmute,
     ops::{Deref, DerefMut, RangeBounds},
     result::Result as StdResult,
+    sync::LazyLock,
 };
 
-static LEN_LK: Lazy<Vec<Mutex<()>>> =
-    Lazy::new(|| (0..VSDB.db.area_count()).map(|_| Mutex::new(())).collect());
+static LEN_LK: LazyLock<Vec<Mutex<()>>> =
+    LazyLock::new(|| (0..VSDB.db.area_count()).map(|_| Mutex::new(())).collect());
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -51,8 +48,6 @@ static LEN_LK: Lazy<Vec<Mutex<()>>> =
 pub trait Engine: Sized {
     fn new() -> Result<Self>;
     fn alloc_prefix(&self) -> Pre;
-    fn alloc_br_id(&self) -> BranchID;
-    fn alloc_ver_id(&self) -> VersionID;
     fn area_count(&self) -> usize;
 
     // NOTE:
@@ -82,24 +77,24 @@ pub trait Engine: Sized {
 
     fn remove(&self, meta_prefix: PreBytes, key: &[u8]) -> Option<RawValue>;
 
-    fn get_instance_len(&self, instance_prefix: PreBytes) -> u64;
+    fn get_instance_len_hint(&self, instance_prefix: PreBytes) -> u64;
 
-    fn set_instance_len(&self, instance_prefix: PreBytes, new_len: u64);
+    fn set_instance_len_hint(&self, instance_prefix: PreBytes, new_len: u64);
 
-    fn increase_instance_len(&self, instance_prefix: PreBytes) {
+    fn increase_instance_len_hint(&self, instance_prefix: PreBytes) {
         let x = LEN_LK[self.area_idx(instance_prefix)].lock();
 
-        let l = self.get_instance_len(instance_prefix);
-        self.set_instance_len(instance_prefix, l + 1);
+        let l = self.get_instance_len_hint(instance_prefix);
+        self.set_instance_len_hint(instance_prefix, l + 1);
 
         drop(x);
     }
 
-    fn decrease_instance_len(&self, instance_prefix: PreBytes) {
+    fn decrease_instance_len_hint(&self, instance_prefix: PreBytes) {
         let x = LEN_LK[self.area_idx(instance_prefix)].lock();
 
-        let l = self.get_instance_len(instance_prefix);
-        self.set_instance_len(instance_prefix, l - 1);
+        let l = self.get_instance_len_hint(instance_prefix);
+        self.set_instance_len_hint(instance_prefix, l.saturating_sub(1));
 
         drop(x);
     }
@@ -111,7 +106,55 @@ pub trait Engine: Sized {
 #[derive(Debug)]
 pub(crate) struct Mapx {
     // the unique ID of each instance
-    prefix: PreBytes,
+    prefix: Prefix,
+}
+
+#[derive(Debug)]
+enum Prefix {
+    Recoverd(PreBytes),
+    Created(LazyLock<PreBytes>),
+}
+
+impl Prefix {
+    #[inline(always)]
+    fn as_bytes(&self) -> &PreBytes {
+        match self {
+            Self::Recoverd(bytes) => bytes,
+            Self::Created(lc) => LazyLock::force(lc),
+        }
+    }
+
+    #[inline(always)]
+    fn to_bytes(&self) -> PreBytes {
+        *self.as_bytes()
+    }
+
+    fn hack_bytes(&mut self) -> PreBytes {
+        match self {
+            Self::Recoverd(bytes) => *bytes,
+            Self::Created(lc) => {
+                let b = *LazyLock::force(lc);
+                *self = Self::Recoverd(b);
+                b
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn from_bytes(b: PreBytes) -> Self {
+        Self::Recoverd(b)
+    }
+
+    #[inline(always)]
+    fn create() -> Self {
+        Self::Created(LazyLock::new(|| {
+            let prefix = VSDB.db.alloc_prefix();
+            let prefix_bytes = prefix.to_be_bytes();
+            debug_assert!(VSDB.db.iter(prefix_bytes).next().is_none());
+            VSDB.db.set_instance_len_hint(prefix_bytes, 0);
+            prefix_bytes
+        }))
+    }
 }
 
 impl Mapx {
@@ -121,33 +164,25 @@ impl Mapx {
     // but it is safe to use in a race-free environment.
     pub(crate) unsafe fn shadow(&self) -> Self {
         Self {
-            prefix: self.prefix,
+            prefix: Prefix::from_bytes(self.prefix.to_bytes()),
         }
     }
 
     #[inline(always)]
     pub(crate) fn new() -> Self {
-        let prefix = VSDB.db.alloc_prefix();
-
-        let prefix_bytes = prefix.to_be_bytes();
-
-        assert!(VSDB.db.iter(prefix_bytes).next().is_none());
-
-        VSDB.db.set_instance_len(prefix_bytes, 0);
-
-        Mapx {
-            prefix: prefix_bytes,
+        Self {
+            prefix: Prefix::create(),
         }
     }
 
     #[inline(always)]
     pub(crate) fn get(&self, key: &[u8]) -> Option<RawValue> {
-        VSDB.db.get(self.prefix, key)
+        VSDB.db.get(self.prefix.to_bytes(), key)
     }
 
     #[inline(always)]
     pub(crate) fn get_mut(&mut self, key: &[u8]) -> Option<ValueMut> {
-        let v = VSDB.db.get(self.prefix, key)?;
+        let v = VSDB.db.get(self.prefix.hack_bytes(), key)?;
 
         Some(ValueMut {
             key: key.to_vec(),
@@ -157,7 +192,7 @@ impl Mapx {
     }
 
     #[inline(always)]
-    pub(crate) fn gen_mut(&mut self, key: RawValue, value: RawValue) -> ValueMut {
+    pub(crate) fn mock_value_mut(&mut self, key: RawValue, value: RawValue) -> ValueMut {
         ValueMut {
             key,
             value,
@@ -167,7 +202,7 @@ impl Mapx {
 
     #[inline(always)]
     pub(crate) fn len(&self) -> usize {
-        VSDB.db.get_instance_len(self.prefix) as usize
+        VSDB.db.get_instance_len_hint(self.prefix.to_bytes()) as usize
     }
 
     #[inline(always)]
@@ -178,7 +213,7 @@ impl Mapx {
     #[inline(always)]
     pub(crate) fn iter(&self) -> MapxIter {
         MapxIter {
-            db_iter: VSDB.db.iter(self.prefix),
+            db_iter: VSDB.db.iter(self.prefix.to_bytes()),
             _hdr: self,
         }
     }
@@ -186,7 +221,7 @@ impl Mapx {
     #[inline(always)]
     pub(crate) fn iter_mut(&mut self) -> MapxIterMut {
         MapxIterMut {
-            db_iter: VSDB.db.iter(self.prefix),
+            db_iter: VSDB.db.iter(self.prefix.hack_bytes()),
             hdr: self,
         }
     }
@@ -197,7 +232,7 @@ impl Mapx {
         bounds: R,
     ) -> MapxIter<'a> {
         MapxIter {
-            db_iter: VSDB.db.range(self.prefix, bounds),
+            db_iter: VSDB.db.range(self.prefix.to_bytes(), bounds),
             _hdr: self,
         }
     }
@@ -208,35 +243,38 @@ impl Mapx {
         bounds: R,
     ) -> MapxIterMut<'a> {
         MapxIterMut {
-            db_iter: VSDB.db.range(self.prefix, bounds),
+            db_iter: VSDB.db.range(self.prefix.hack_bytes(), bounds),
             hdr: self,
         }
     }
 
     #[inline(always)]
     pub(crate) fn insert(&mut self, key: &[u8], value: &[u8]) -> Option<RawValue> {
-        let ret = VSDB.db.insert(self.prefix, key, value);
+        let prefix = self.prefix.hack_bytes();
+        let ret = VSDB.db.insert(prefix, key, value);
         if ret.is_none() {
-            VSDB.db.increase_instance_len(self.prefix);
+            VSDB.db.increase_instance_len_hint(prefix);
         }
         ret
     }
 
     #[inline(always)]
     pub(crate) fn remove(&mut self, key: &[u8]) -> Option<RawValue> {
-        let ret = VSDB.db.remove(self.prefix, key);
+        let prefix = self.prefix.hack_bytes();
+        let ret = VSDB.db.remove(prefix, key);
         if ret.is_some() {
-            VSDB.db.decrease_instance_len(self.prefix);
+            VSDB.db.decrease_instance_len_hint(prefix);
         }
         ret
     }
 
     #[inline(always)]
     pub(crate) fn clear(&mut self) {
-        VSDB.db.iter(self.prefix).for_each(|(k, _)| {
-            VSDB.db.remove(self.prefix, &k);
+        let prefix = self.prefix.hack_bytes();
+        VSDB.db.iter(prefix).for_each(|(k, _)| {
+            VSDB.db.remove(prefix, &k);
         });
-        VSDB.db.set_instance_len(self.prefix, 0);
+        VSDB.db.set_instance_len_hint(prefix, 0);
     }
 
     #[inline(always)]
@@ -244,17 +282,19 @@ impl Mapx {
         debug_assert_eq!(s.as_ref().len(), PREFIX_SIZE);
         let mut prefix = PreBytes::default();
         prefix.copy_from_slice(s.as_ref());
-        Self { prefix }
+        Self {
+            prefix: Prefix::Recoverd(prefix),
+        }
     }
 
     #[inline(always)]
-    pub(crate) fn as_prefix_slice(&self) -> &[u8] {
-        &self.prefix
+    pub(crate) fn as_prefix_slice(&self) -> &PreBytes {
+        self.prefix.as_bytes()
     }
 
     #[inline(always)]
     pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
-        self.prefix == other_hdr.prefix
+        self.prefix.to_bytes() == other_hdr.prefix.to_bytes()
     }
 }
 
@@ -348,7 +388,7 @@ impl Serialize for Mapx {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_bytes(self.as_prefix_slice())
+        serializer.serialize_bytes(&self.prefix.to_bytes())
     }
 }
 
@@ -371,20 +411,20 @@ pub struct MapxIter<'a> {
     _hdr: &'a Mapx,
 }
 
-impl<'a> fmt::Debug for MapxIter<'a> {
+impl fmt::Debug for MapxIter<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("MapxIter").field(&self._hdr).finish()
     }
 }
 
-impl<'a> Iterator for MapxIter<'a> {
+impl Iterator for MapxIter<'_> {
     type Item = (RawKey, RawValue);
     fn next(&mut self) -> Option<Self::Item> {
         self.db_iter.next()
     }
 }
 
-impl<'a> DoubleEndedIterator for MapxIter<'a> {
+impl DoubleEndedIterator for MapxIter<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.db_iter.next_back()
     }
@@ -395,7 +435,7 @@ pub struct MapxIterMut<'a> {
     hdr: &'a mut Mapx,
 }
 
-impl<'a> fmt::Debug for MapxIterMut<'a> {
+impl fmt::Debug for MapxIterMut<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("MapxIterMut").field(&self.hdr).finish()
     }
@@ -438,20 +478,20 @@ pub struct ValueIterMut<'a> {
     iter_mut: &'a mut MapxIterMut<'a>,
 }
 
-impl<'a> Drop for ValueIterMut<'a> {
+impl Drop for ValueIterMut<'_> {
     fn drop(&mut self) {
         self.iter_mut.hdr.insert(&self.key[..], &self.value[..]);
     }
 }
 
-impl<'a> Deref for ValueIterMut<'a> {
+impl Deref for ValueIterMut<'_> {
     type Target = RawValue;
     fn deref(&self) -> &Self::Target {
         &self.value
     }
 }
 
-impl<'a> DerefMut for ValueIterMut<'a> {
+impl DerefMut for ValueIterMut<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.value
     }
@@ -467,20 +507,20 @@ pub struct ValueMut<'a> {
     hdr: &'a mut Mapx,
 }
 
-impl<'a> Drop for ValueMut<'a> {
+impl Drop for ValueMut<'_> {
     fn drop(&mut self) {
         self.hdr.insert(&self.key[..], &self.value[..]);
     }
 }
 
-impl<'a> Deref for ValueMut<'a> {
+impl Deref for ValueMut<'_> {
     type Target = RawValue;
     fn deref(&self) -> &Self::Target {
         &self.value
     }
 }
 
-impl<'a> DerefMut for ValueMut<'a> {
+impl DerefMut for ValueMut<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.value
     }

@@ -9,3 +9,7 @@
 vsdb is a 'std-collection-like' database.
 
 This is a simplified version of the original [**vsdb_core**](https://crates.io/crates/vsdb_core/0.70.0), retaining only the most practical and stable parts.
+
+### Known Issues
+
+- The instance `len` is not absolutely reliable and should be regarded as a hint
