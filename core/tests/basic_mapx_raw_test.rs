@@ -1,6 +1,6 @@
 use ruc::*;
 use std::borrow::Cow;
-use vsdb_core::{vsdb_set_base_dir, MapxRaw};
+use vsdb_core::{MapxRaw, vsdb_set_base_dir};
 
 #[test]
 fn basic_cases() {
@@ -59,10 +59,12 @@ fn basic_cases() {
     reloaded.insert(&[6], &[6]);
     reloaded.insert(&[80], &[80]);
 
-    assert!(reloaded
-        .range(Cow::Borrowed(&[][..])..Cow::Borrowed(&[1][..]))
-        .next()
-        .is_none());
+    assert!(
+        reloaded
+            .range(Cow::Borrowed(&[][..])..Cow::Borrowed(&[1][..]))
+            .next()
+            .is_none()
+    );
     assert_eq!(
         vec![4],
         reloaded

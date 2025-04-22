@@ -35,7 +35,7 @@
 #[cfg(test)]
 mod test;
 
-use crate::common::{ende::ValueEnDe, RawKey};
+use crate::common::{RawKey, ende::ValueEnDe};
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
@@ -61,9 +61,11 @@ where
     /// but it is safe to use in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
-        Self {
-            inner: self.inner.shadow(),
-            _p: PhantomData,
+        unsafe {
+            Self {
+                inner: self.inner.shadow(),
+                _p: PhantomData,
+            }
         }
     }
 
@@ -72,9 +74,11 @@ where
     /// Do not use this API unless you know the internal details extremely well.
     #[inline(always)]
     pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
-        Self {
-            inner: MapxRaw::from_bytes(s),
-            _p: PhantomData,
+        unsafe {
+            Self {
+                inner: MapxRaw::from_bytes(s),
+                _p: PhantomData,
+            }
         }
     }
 
@@ -277,7 +281,7 @@ where
     inner: mapx_raw::ValueMut<'a>,
 }
 
-impl<'a, V> Drop for ValueMut<'a, V>
+impl<V> Drop for ValueMut<'_, V>
 where
     V: ValueEnDe,
 {
@@ -286,7 +290,7 @@ where
     }
 }
 
-impl<'a, V> Deref for ValueMut<'a, V>
+impl<V> Deref for ValueMut<'_, V>
 where
     V: ValueEnDe,
 {
@@ -296,7 +300,7 @@ where
     }
 }
 
-impl<'a, V> DerefMut for ValueMut<'a, V>
+impl<V> DerefMut for ValueMut<'_, V>
 where
     V: ValueEnDe,
 {
@@ -322,10 +326,9 @@ where
 {
     pub fn or_insert(self, default: V) -> ValueMut<'a, V> {
         let hdr = self.hdr as *mut MapxOrdRawKey<V>;
-        if let Some(v) = unsafe { &mut *hdr }.get_mut(self.key) {
-            v
-        } else {
-            unsafe { &mut *hdr }.mock_value_mut(self.key.to_vec(), default)
+        match unsafe { &mut *hdr }.get_mut(self.key) {
+            Some(v) => v,
+            _ => unsafe { &mut *hdr }.mock_value_mut(self.key.to_vec(), default),
         }
     }
 }
@@ -338,7 +341,7 @@ pub struct MapxOrdRawKeyIter<'a, V> {
     _p: PhantomData<V>,
 }
 
-impl<'a, V> Iterator for MapxOrdRawKeyIter<'a, V>
+impl<V> Iterator for MapxOrdRawKeyIter<'_, V>
 where
     V: ValueEnDe,
 {
@@ -350,7 +353,7 @@ where
     }
 }
 
-impl<'a, V> DoubleEndedIterator for MapxOrdRawKeyIter<'a, V>
+impl<V> DoubleEndedIterator for MapxOrdRawKeyIter<'_, V>
 where
     V: ValueEnDe,
 {
@@ -387,7 +390,7 @@ where
     }
 }
 
-impl<'a, V> DoubleEndedIterator for MapxOrdRawKeyIterMut<'a, V>
+impl<V> DoubleEndedIterator for MapxOrdRawKeyIterMut<'_, V>
 where
     V: ValueEnDe,
 {
@@ -416,7 +419,7 @@ where
     pub(crate) inner: mapx_raw::ValueIterMut<'a>,
 }
 
-impl<'a, V> Drop for ValueIterMut<'a, V>
+impl<V> Drop for ValueIterMut<'_, V>
 where
     V: ValueEnDe,
 {
@@ -425,7 +428,7 @@ where
     }
 }
 
-impl<'a, V> Deref for ValueIterMut<'a, V>
+impl<V> Deref for ValueIterMut<'_, V>
 where
     V: ValueEnDe,
 {
@@ -435,7 +438,7 @@ where
     }
 }
 
-impl<'a, V> DerefMut for ValueIterMut<'a, V>
+impl<V> DerefMut for ValueIterMut<'_, V>
 where
     V: ValueEnDe,
 {

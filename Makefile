@@ -57,7 +57,7 @@ benchmusl:
 	du -sh ~/.vsdb
 
 fmt:
-	cargo +nightly fmt
+	cargo fmt
 
 fmtall:
 	bash scripts/fmt.sh

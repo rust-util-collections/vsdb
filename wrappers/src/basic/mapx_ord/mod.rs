@@ -41,8 +41,8 @@ mod test;
 use crate::{
     basic::mapx_ord_rawkey::{MapxOrdRawKey, MapxOrdRawKeyIter, ValueIterMut, ValueMut},
     common::{
-        ende::{KeyEnDeOrdered, ValueEnDe},
         RawKey,
+        ende::{KeyEnDeOrdered, ValueEnDe},
     },
 };
 use ruc::*;
@@ -72,9 +72,11 @@ where
     /// but it is safe to use in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
-        Self {
-            inner: self.inner.shadow(),
-            _p: PhantomData,
+        unsafe {
+            Self {
+                inner: self.inner.shadow(),
+                _p: PhantomData,
+            }
         }
     }
 
@@ -83,9 +85,11 @@ where
     /// Do not use this API unless you know the internal details extremely well.
     #[inline(always)]
     pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
-        Self {
-            inner: MapxOrdRawKey::from_bytes(s),
-            _p: PhantomData,
+        unsafe {
+            Self {
+                inner: MapxOrdRawKey::from_bytes(s),
+                _p: PhantomData,
+            }
         }
     }
 
@@ -156,7 +160,7 @@ where
         key: &K,
         value: impl AsRef<[u8]>,
     ) -> Option<V> {
-        self.inner.insert_encoded_value(key.to_bytes(), value)
+        unsafe { self.inner.insert_encoded_value(key.to_bytes(), value) }
     }
 
     #[inline(always)]
@@ -308,7 +312,7 @@ where
     _p: PhantomData<K>,
 }
 
-impl<'a, K, V> Iterator for MapxOrdIter<'a, K, V>
+impl<K, V> Iterator for MapxOrdIter<'_, K, V>
 where
     K: KeyEnDeOrdered,
     V: ValueEnDe,
@@ -319,7 +323,7 @@ where
     }
 }
 
-impl<'a, K, V> DoubleEndedIterator for MapxOrdIter<'a, K, V>
+impl<K, V> DoubleEndedIterator for MapxOrdIter<'_, K, V>
 where
     K: KeyEnDeOrdered,
     V: ValueEnDe,
@@ -341,7 +345,7 @@ where
     pub(crate) inner: MapxOrdRawKeyIter<'a, V>,
 }
 
-impl<'a, V> Iterator for MapxOrdValues<'a, V>
+impl<V> Iterator for MapxOrdValues<'_, V>
 where
     V: ValueEnDe,
 {
@@ -351,7 +355,7 @@ where
     }
 }
 
-impl<'a, V> DoubleEndedIterator for MapxOrdValues<'a, V>
+impl<V> DoubleEndedIterator for MapxOrdValues<'_, V>
 where
     V: ValueEnDe,
 {
@@ -384,7 +388,7 @@ where
     }
 }
 
-impl<'a, V> DoubleEndedIterator for MapxOrdValuesMut<'a, V>
+impl<V> DoubleEndedIterator for MapxOrdValuesMut<'_, V>
 where
     V: ValueEnDe,
 {
@@ -427,7 +431,7 @@ where
     }
 }
 
-impl<'a, K, V> DoubleEndedIterator for MapxOrdIterMut<'a, K, V>
+impl<K, V> DoubleEndedIterator for MapxOrdIterMut<'_, K, V>
 where
     K: KeyEnDeOrdered,
     V: ValueEnDe,
@@ -462,10 +466,9 @@ where
 {
     pub fn or_insert(self, default: V) -> ValueMut<'a, V> {
         let hdr = self.hdr as *mut MapxOrdRawKey<V>;
-        if let Some(v) = unsafe { &mut *hdr }.get_mut(&self.key) {
-            v
-        } else {
-            unsafe { &mut *hdr }.mock_value_mut(self.key, default)
+        match unsafe { &mut *hdr }.get_mut(&self.key) {
+            Some(v) => v,
+            _ => unsafe { &mut *hdr }.mock_value_mut(self.key, default),
         }
     }
 }

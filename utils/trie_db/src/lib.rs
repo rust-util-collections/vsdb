@@ -16,7 +16,7 @@ use trie_db::{
     TrieMut,
 };
 use vsdb::{MapxOrdRawKey, Orphan};
-use vsdb_hash_db::{sp_hash_db::EMPTY_PREFIX, KeccakHasher as H, TrieBackend};
+use vsdb_hash_db::{KeccakHasher as H, TrieBackend, sp_hash_db::EMPTY_PREFIX};
 
 type L = substrate_trie::LayoutV1<H>;
 type TrieDB<'a, 'cache> = trie_db::TrieDB<'a, 'cache, L>;
@@ -58,8 +58,10 @@ impl MptStore {
     /// but it is safe to use in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
-        Self {
-            meta: self.meta.shadow(),
+        unsafe {
+            Self {
+                meta: self.meta.shadow(),
+            }
         }
     }
 

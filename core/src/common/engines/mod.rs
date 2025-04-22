@@ -25,10 +25,10 @@ type EngineIter = parity_backend::ParityIter;
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
-use crate::common::{Pre, PreBytes, RawKey, RawValue, PREFIX_SIZE, VSDB};
+use crate::common::{PREFIX_SIZE, Pre, PreBytes, RawKey, RawValue, VSDB};
 use parking_lot::Mutex;
 use ruc::*;
-use serde::{de, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de};
 use std::{
     borrow::Cow,
     fmt,
@@ -411,20 +411,20 @@ pub struct MapxIter<'a> {
     _hdr: &'a Mapx,
 }
 
-impl<'a> fmt::Debug for MapxIter<'a> {
+impl fmt::Debug for MapxIter<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("MapxIter").field(&self._hdr).finish()
     }
 }
 
-impl<'a> Iterator for MapxIter<'a> {
+impl Iterator for MapxIter<'_> {
     type Item = (RawKey, RawValue);
     fn next(&mut self) -> Option<Self::Item> {
         self.db_iter.next()
     }
 }
 
-impl<'a> DoubleEndedIterator for MapxIter<'a> {
+impl DoubleEndedIterator for MapxIter<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.db_iter.next_back()
     }
@@ -435,7 +435,7 @@ pub struct MapxIterMut<'a> {
     hdr: &'a mut Mapx,
 }
 
-impl<'a> fmt::Debug for MapxIterMut<'a> {
+impl fmt::Debug for MapxIterMut<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("MapxIterMut").field(&self.hdr).finish()
     }
@@ -478,20 +478,20 @@ pub struct ValueIterMut<'a> {
     iter_mut: &'a mut MapxIterMut<'a>,
 }
 
-impl<'a> Drop for ValueIterMut<'a> {
+impl Drop for ValueIterMut<'_> {
     fn drop(&mut self) {
         self.iter_mut.hdr.insert(&self.key[..], &self.value[..]);
     }
 }
 
-impl<'a> Deref for ValueIterMut<'a> {
+impl Deref for ValueIterMut<'_> {
     type Target = RawValue;
     fn deref(&self) -> &Self::Target {
         &self.value
     }
 }
 
-impl<'a> DerefMut for ValueIterMut<'a> {
+impl DerefMut for ValueIterMut<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.value
     }
@@ -507,20 +507,20 @@ pub struct ValueMut<'a> {
     hdr: &'a mut Mapx,
 }
 
-impl<'a> Drop for ValueMut<'a> {
+impl Drop for ValueMut<'_> {
     fn drop(&mut self) {
         self.hdr.insert(&self.key[..], &self.value[..]);
     }
 }
 
-impl<'a> Deref for ValueMut<'a> {
+impl Deref for ValueMut<'_> {
     type Target = RawValue;
     fn deref(&self) -> &Self::Target {
         &self.value
     }
 }
 
-impl<'a> DerefMut for ValueMut<'a> {
+impl DerefMut for ValueMut<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.value
     }

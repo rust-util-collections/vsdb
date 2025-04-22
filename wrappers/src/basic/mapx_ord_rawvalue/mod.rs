@@ -36,7 +36,7 @@
 #[cfg(test)]
 mod test;
 
-use crate::common::{ende::KeyEnDeOrdered, RawValue};
+use crate::common::{RawValue, ende::KeyEnDeOrdered};
 use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -63,9 +63,11 @@ where
     /// but it is safe to use in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
-        Self {
-            inner: self.inner.shadow(),
-            _p: PhantomData,
+        unsafe {
+            Self {
+                inner: self.inner.shadow(),
+                _p: PhantomData,
+            }
         }
     }
 
@@ -74,9 +76,11 @@ where
     /// Do not use this API unless you know the internal details extremely well.
     #[inline(always)]
     pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
-        Self {
-            inner: MapxRaw::from_bytes(s),
-            _p: PhantomData,
+        unsafe {
+            Self {
+                inner: MapxRaw::from_bytes(s),
+                _p: PhantomData,
+            }
         }
     }
 
@@ -193,7 +197,7 @@ where
     pub fn range<'a, R: RangeBounds<&'a K>>(
         &'a self,
         bounds: R,
-    ) -> MapxOrdRawValueIter<K> {
+    ) -> MapxOrdRawValueIter<'a, K> {
         let l = match bounds.start_bound() {
             Bound::Included(lo) => Bound::Included(Cow::Owned(lo.to_bytes())),
             Bound::Excluded(lo) => Bound::Excluded(Cow::Owned(lo.to_bytes())),
@@ -216,7 +220,7 @@ where
     pub fn range_mut<'a, R: RangeBounds<&'a K>>(
         &'a mut self,
         bounds: R,
-    ) -> MapxOrdRawValueIterMut<K> {
+    ) -> MapxOrdRawValueIterMut<'a, K> {
         let l = match bounds.start_bound() {
             Bound::Included(lo) => Bound::Included(Cow::Owned(lo.to_bytes())),
             Bound::Excluded(lo) => Bound::Excluded(Cow::Owned(lo.to_bytes())),
@@ -306,7 +310,7 @@ where
     }
 }
 
-impl<'a, K> Drop for ValueMut<'a, K>
+impl<K> Drop for ValueMut<'_, K>
 where
     K: KeyEnDeOrdered,
 {
@@ -315,7 +319,7 @@ where
     }
 }
 
-impl<'a, K> Deref for ValueMut<'a, K>
+impl<K> Deref for ValueMut<'_, K>
 where
     K: KeyEnDeOrdered,
 {
@@ -326,7 +330,7 @@ where
     }
 }
 
-impl<'a, K> DerefMut for ValueMut<'a, K>
+impl<K> DerefMut for ValueMut<'_, K>
 where
     K: KeyEnDeOrdered,
 {
@@ -352,10 +356,11 @@ where
 {
     pub fn or_insert(self, default: impl AsRef<[u8]>) -> ValueMut<'a, K> {
         let hdr = self.hdr as *mut MapxOrdRawValue<K>;
-        if let Some(v) = unsafe { &mut *hdr }.get_mut(&self.key) {
-            v
-        } else {
-            unsafe { &mut *hdr }.mock_value_mut(self.key, default.as_ref().to_vec())
+        match unsafe { &mut *hdr }.get_mut(&self.key) {
+            Some(v) => v,
+            _ => {
+                unsafe { &mut *hdr }.mock_value_mut(self.key, default.as_ref().to_vec())
+            }
         }
     }
 }
@@ -371,7 +376,7 @@ where
     _p: PhantomData<K>,
 }
 
-impl<'a, K> Iterator for MapxOrdRawValueIter<'a, K>
+impl<K> Iterator for MapxOrdRawValueIter<'_, K>
 where
     K: KeyEnDeOrdered,
 {
@@ -381,7 +386,7 @@ where
     }
 }
 
-impl<'a, K> DoubleEndedIterator for MapxOrdRawValueIter<'a, K>
+impl<K> DoubleEndedIterator for MapxOrdRawValueIter<'_, K>
 where
     K: KeyEnDeOrdered,
 {
@@ -403,7 +408,7 @@ where
     _p: PhantomData<K>,
 }
 
-impl<'a, K> Iterator for MapxOrdRawValueValues<'a, K>
+impl<K> Iterator for MapxOrdRawValueValues<'_, K>
 where
     K: KeyEnDeOrdered,
 {
@@ -414,7 +419,7 @@ where
     }
 }
 
-impl<'a, K> DoubleEndedIterator for MapxOrdRawValueValues<'a, K>
+impl<K> DoubleEndedIterator for MapxOrdRawValueValues<'_, K>
 where
     K: KeyEnDeOrdered,
 {
@@ -443,7 +448,7 @@ where
     }
 }
 
-impl<'a, K> DoubleEndedIterator for MapxOrdRawValueIterMut<'a, K>
+impl<K> DoubleEndedIterator for MapxOrdRawValueIterMut<'_, K>
 where
     K: KeyEnDeOrdered,
 {
@@ -468,7 +473,7 @@ impl<'a> Iterator for MapxOrdRawValueValuesMut<'a> {
     }
 }
 
-impl<'a> DoubleEndedIterator for MapxOrdRawValueValuesMut<'a> {
+impl DoubleEndedIterator for MapxOrdRawValueValuesMut<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.inner.next_back().map(|(_, v)| v)
     }

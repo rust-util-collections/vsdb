@@ -1,11 +1,11 @@
 use crate::common::{
-    vsdb_get_base_dir, vsdb_set_base_dir, Engine, Pre, PreBytes, RawKey, RawValue, GB,
-    MB, PREFIX_SIZE, RESERVED_ID_CNT,
+    Engine, GB, MB, PREFIX_SIZE, Pre, PreBytes, RESERVED_ID_CNT, RawKey, RawValue,
+    vsdb_get_base_dir, vsdb_set_base_dir,
 };
 use parking_lot::Mutex;
 use rocksdb::{
-    ColumnFamily, ColumnFamilyDescriptor, DBCompressionType, DBIterator, Direction,
-    IteratorMode, Options, ReadOptions, SliceTransform, DB,
+    ColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType, DBIterator, Direction,
+    IteratorMode, Options, ReadOptions, SliceTransform,
 };
 use ruc::*;
 use std::{
@@ -14,8 +14,8 @@ use std::{
     mem::size_of,
     ops::{Bound, RangeBounds},
     sync::{
-        atomic::{AtomicUsize, Ordering},
         LazyLock,
+        atomic::{AtomicUsize, Ordering},
     },
     thread::available_parallelism,
 };
@@ -110,11 +110,9 @@ impl Engine for RocksEngine {
         let x = LK.lock();
 
         // step 1
-        let ret = crate::parse_prefix!(self
-            .meta
-            .get(self.prefix_allocator.key)
-            .unwrap()
-            .unwrap());
+        let ret = crate::parse_prefix!(
+            self.meta.get(self.prefix_allocator.key).unwrap().unwrap()
+        );
 
         // step 2
         self.meta

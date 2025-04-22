@@ -41,9 +41,11 @@ where
     /// but it is safe to use in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
-        Self {
-            inner: self.inner.shadow(),
-            p: PhantomData,
+        unsafe {
+            Self {
+                inner: self.inner.shadow(),
+                p: PhantomData,
+            }
         }
     }
 
@@ -184,7 +186,7 @@ where
     }
 }
 
-impl<'a, K1, K2, V> Drop for ValueMut<'a, K1, K2, V>
+impl<K1, K2, V> Drop for ValueMut<'_, K1, K2, V>
 where
     K1: KeyEnDe,
     K2: KeyEnDe,
@@ -195,7 +197,7 @@ where
     }
 }
 
-impl<'a, K1, K2, V> Deref for ValueMut<'a, K1, K2, V>
+impl<K1, K2, V> Deref for ValueMut<'_, K1, K2, V>
 where
     K1: KeyEnDe,
     K2: KeyEnDe,
@@ -207,7 +209,7 @@ where
     }
 }
 
-impl<'a, K1, K2, V> DerefMut for ValueMut<'a, K1, K2, V>
+impl<K1, K2, V> DerefMut for ValueMut<'_, K1, K2, V>
 where
     K1: KeyEnDe,
     K2: KeyEnDe,
@@ -231,10 +233,9 @@ where
 {
     pub fn or_insert(self, default: V) -> ValueMut<'a, K1, K2, V> {
         let hdr = self.hdr as *mut MapxDk<K1, K2, V>;
-        if let Some(v) = unsafe { &mut *hdr }.get_mut(self.key) {
-            v
-        } else {
-            unsafe { &mut *hdr }.mock_value_mut(self.key, default)
+        match unsafe { &mut *hdr }.get_mut(self.key) {
+            Some(v) => v,
+            _ => unsafe { &mut *hdr }.mock_value_mut(self.key, default),
         }
     }
 }

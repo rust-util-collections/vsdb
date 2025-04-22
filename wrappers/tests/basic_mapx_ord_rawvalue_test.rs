@@ -1,6 +1,6 @@
 use ruc::*;
 use std::ops::Bound;
-use vsdb::{basic::mapx_ord_rawvalue::MapxOrdRawValue, vsdb_set_base_dir, ValueEnDe};
+use vsdb::{ValueEnDe, basic::mapx_ord_rawvalue::MapxOrdRawValue, vsdb_set_base_dir};
 
 #[test]
 fn basic_cases() {
@@ -76,10 +76,12 @@ fn basic_cases() {
         &100usize.to_be_bytes()[..],
         &reloaded.range(&100..=&999).next().unwrap().1[..]
     );
-    assert!(reloaded
-        .range((Bound::Excluded(&100), Bound::Included(&999)))
-        .next()
-        .is_none());
+    assert!(
+        reloaded
+            .range((Bound::Excluded(&100), Bound::Included(&999)))
+            .next()
+            .is_none()
+    );
 
     assert_eq!(
         &100usize.to_be_bytes()[..],

@@ -54,8 +54,10 @@ impl VecxRaw {
     /// but it is safe to use in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
-        Self {
-            inner: self.inner.shadow(),
+        unsafe {
+            Self {
+                inner: self.inner.shadow(),
+            }
         }
     }
 
@@ -64,8 +66,10 @@ impl VecxRaw {
     /// Do not use this API unless you know the internal details extremely well.
     #[inline(always)]
     pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
-        Self {
-            inner: MapxOrdRawValue::from_bytes(s),
+        unsafe {
+            Self {
+                inner: MapxOrdRawValue::from_bytes(s),
+            }
         }
     }
 
@@ -220,14 +224,14 @@ pub struct VecxRawIter<'a> {
     iter: MapxRawIter<'a>,
 }
 
-impl<'a> Iterator for VecxRawIter<'a> {
+impl Iterator for VecxRawIter<'_> {
     type Item = RawValue;
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().map(|(_, v)| v)
     }
 }
 
-impl<'a> DoubleEndedIterator for VecxRawIter<'a> {
+impl DoubleEndedIterator for VecxRawIter<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back().map(|(_, v)| v)
     }

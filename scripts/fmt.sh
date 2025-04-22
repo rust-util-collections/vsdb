@@ -56,4 +56,4 @@ for file in $(find .. -path "../target" -a -prune \
     echo $file | grep -c '\.md$'>/dev/null || perl -pi -e 's/ +$//g' $file
 done
 
-cargo +nightly fmt
+cargo fmt

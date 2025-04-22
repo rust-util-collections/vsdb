@@ -1,9 +1,7 @@
 use super::*;
 
 macro_rules! s {
-    ($i: expr) => {{
-        $i.as_bytes().to_vec()
-    }};
+    ($i: expr) => {{ $i.as_bytes().to_vec() }};
 }
 
 #[test]

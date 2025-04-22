@@ -1,6 +1,6 @@
 use crate::common::{
-    vsdb_get_base_dir, vsdb_set_base_dir, Engine, Pre, PreBytes, RawKey, RawValue,
-    PREFIX_SIZE, RESERVED_ID_CNT,
+    Engine, PREFIX_SIZE, Pre, PreBytes, RESERVED_ID_CNT, RawKey, RawValue,
+    vsdb_get_base_dir, vsdb_set_base_dir,
 };
 use parity_db::{BTreeIterator, CompressionType, Db as DB, Options};
 use parking_lot::Mutex;
@@ -9,8 +9,8 @@ use std::{
     borrow::Cow,
     ops::{Bound, RangeBounds},
     sync::{
-        atomic::{AtomicUsize, Ordering},
         LazyLock,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -117,11 +117,12 @@ impl Engine for ParityEngine {
         let x = LK.lock();
 
         // step 1
-        let ret = crate::parse_prefix!(self
-            .hdr
-            .get(META_COLID, &self.prefix_allocator.key)
-            .unwrap()
-            .unwrap());
+        let ret = crate::parse_prefix!(
+            self.hdr
+                .get(META_COLID, &self.prefix_allocator.key)
+                .unwrap()
+                .unwrap()
+        );
 
         // step 2
         self.hdr

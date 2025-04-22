@@ -12,8 +12,8 @@ use std::{
     mem::size_of,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
         LazyLock,
+        atomic::{AtomicBool, Ordering},
     },
 };
 use threadpool::ThreadPool;
@@ -50,7 +50,7 @@ static VSDB_CUSTOM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     let mut d = VSDB_BASE_DIR.lock().clone();
     d.push("__CUSTOM__");
     pnk!(fs::create_dir_all(&d));
-    env::set_var("VSDB_CUSTOM_DIR", d.as_os_str());
+    unsafe { env::set_var("VSDB_CUSTOM_DIR", d.as_os_str()) }
     d
 });
 
@@ -143,7 +143,7 @@ pub fn vsdb_set_base_dir(dir: impl AsRef<Path>) -> Result<()> {
     if HAS_INITED.swap(true, Ordering::Relaxed) {
         Err(eg!("VSDB has been initialized !!"))
     } else {
-        env::set_var(BASE_DIR_VAR, dir.as_ref().as_os_str());
+        unsafe { env::set_var(BASE_DIR_VAR, dir.as_ref().as_os_str()) }
         *VSDB_BASE_DIR.lock() = dir.as_ref().to_path_buf();
         Ok(())
     }

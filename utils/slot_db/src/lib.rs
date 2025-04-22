@@ -3,14 +3,14 @@
 #![cfg_attr(test, warn(warnings))]
 
 use ruc::*;
-use serde::{de, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de};
 use std::{
-    collections::{btree_set::Iter as SmallIter, BTreeSet},
+    collections::{BTreeSet, btree_set::Iter as SmallIter},
     mem,
     ops::Bound,
 };
 use vsdb::{
-    basic::mapx_ord::MapxOrdIter as LargeIter, KeyEnDeOrdered, MapxOrd,
+    KeyEnDeOrdered, MapxOrd, basic::mapx_ord::MapxOrdIter as LargeIter,
 };
 
 type Slot = u64;
@@ -138,10 +138,11 @@ where
             break;
         }
 
-        let (exist, empty) = if let Some(mut d) = self.data.get_mut(&slot) {
-            (d.remove(t), d.is_empty())
-        } else {
-            return;
+        let (exist, empty) = match self.data.get_mut(&slot) {
+            Some(mut d) => (d.remove(t), d.is_empty()),
+            _ => {
+                return;
+            }
         };
 
         if empty {
@@ -527,7 +528,7 @@ where
     Large(LargeIter<'a, T, ()>),
 }
 
-impl<'a, T> Iterator for DataCtnerIter<'a, T>
+impl<T> Iterator for DataCtnerIter<'_, T>
 where
     T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
@@ -540,7 +541,7 @@ where
     }
 }
 
-impl<'a, T> DoubleEndedIterator for DataCtnerIter<'a, T>
+impl<T> DoubleEndedIterator for DataCtnerIter<'_, T>
 where
     T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {

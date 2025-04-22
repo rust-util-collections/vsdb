@@ -1,7 +1,7 @@
 use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::ops::Bound;
-use vsdb::{vsdb_set_base_dir, MapxOrd, ValueEnDe};
+use vsdb::{MapxOrd, ValueEnDe, vsdb_set_base_dir};
 
 #[derive(Serialize, Deserialize, Default, Debug, Eq, PartialEq, Clone)]
 struct SampleBlock {
@@ -80,10 +80,12 @@ fn basic_cases() {
     assert_eq!(100, reloaded.range(12..=999).next().unwrap().1.idx);
 
     assert_eq!(100, reloaded.range(100..=999).next().unwrap().1.idx);
-    assert!(reloaded
-        .range((Bound::Excluded(100), Bound::Included(999)))
-        .next()
-        .is_none());
+    assert!(
+        reloaded
+            .range((Bound::Excluded(100), Bound::Included(999)))
+            .next()
+            .is_none()
+    );
 
     assert_eq!(100, reloaded.get_ge(&99).unwrap().1.idx);
     assert_eq!(100, reloaded.get_ge(&100).unwrap().1.idx);

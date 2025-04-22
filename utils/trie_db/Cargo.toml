@@ -1,7 +1,7 @@
 [package]
 name = "vsdb_trie_db"
-version = "3.0.0"
-edition = "2021"
+version = "4.0.0"
+edition = "2024"
 keywords = ["mpt", "trie", "database", "blockchain"]
 license = "MIT"
 authors = ["hui.fan@mail.ru"]
