@@ -520,6 +520,7 @@ where
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 enum DataCtnerIter<'a, T>
 where
     T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
