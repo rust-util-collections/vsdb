@@ -1,35 +1,47 @@
 //!
-//! A `HashMap`-like structure but storing data in disk.
+//! A `HashMap`-like structure that stores data on disk.
 //!
-//! NOTE:
-//!
-//! - Both keys and values will be encoded(serde) in this structure
-//!     - Both of them will be encoded by some `serde`-like methods
+//! `Mapx` provides a key-value store where both keys and values are encoded
+//! using `serde`-like methods before being persisted. This allows for storing
+//! complex data types while maintaining a familiar `HashMap` interface.
 //!
 //! # Examples
 //!
 //! ```
-//! use vsdb::Mapx;
+//! use vsdb::{Mapx, vsdb_set_base_dir, vsdb_get_base_dir};
+//! use std::fs;
 //!
+//! // It's recommended to use a temporary directory for testing
 //! let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
-//! vsdb::vsdb_set_base_dir(&dir);
+//! vsdb_set_base_dir(&dir).unwrap();
 //!
-//! let mut l = Mapx::new();
+//! let mut m: Mapx<i32, String> = Mapx::new();
 //!
-//! l.insert(1, 0);
-//! l.insert(&1, &0);
-//! l.insert(2, 0);
+//! // Insert key-value pairs
+//! m.insert(&1, &"hello".to_string());
+//! m.insert(&2, &"world".to_string());
 //!
-//! l.iter().for_each(|(k, v)| {
-//!     assert!(k >= 1);
-//!     assert_eq!(v, 0);
-//! });
+//! // Check the length of the map
+//! assert_eq!(m.len(), 2);
 //!
-//! l.remove(&2);
-//! assert_eq!(l.len(), 1);
+//! // Retrieve a value
+//! assert_eq!(m.get(&1), Some("hello".to_string()));
 //!
-//! l.clear();
-//! assert_eq!(l.len(), 0);
+//! // Iterate over the map
+//! for (k, v) in m.iter() {
+//!     println!("key: {}, val: {}", k, v);
+//! }
+//!
+//! // Remove a key-value pair
+//! m.remove(&2);
+//! assert_eq!(m.len(), 1);
+//!
+//! // Clear the entire map
+//! m.clear();
+//! assert_eq!(m.len(), 0);
+//!
+//! // Clean up the directory
+//! fs::remove_dir_all(vsdb_get_base_dir()).unwrap();
 //! ```
 //!
 
@@ -44,19 +56,24 @@ use crate::{
         },
     },
     common::ende::{KeyEnDe, ValueEnDe},
+    define_map_wrapper,
 };
 use ruc::*;
-use serde::{Deserialize, Serialize};
 use std::{
     marker::PhantomData,
     ops::{Deref, DerefMut},
 };
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
-#[serde(bound = "")]
-pub struct Mapx<K, V> {
-    inner: MapxOrdRawKey<V>,
-    _p: PhantomData<K>,
+define_map_wrapper! {
+    #[doc = "A disk-based, `HashMap`-like data structure with typed keys and values."]
+    #[doc = ""]
+    #[doc = "`Mapx` stores key-value pairs on disk, encoding both keys and values"]
+    #[doc = "for type safety and persistence."]
+    pub struct Mapx<K, V> {
+        inner: MapxOrdRawKey<V>,
+        _p: PhantomData<K>,
+    }
+    where K: KeyEnDe, V: ValueEnDe
 }
 
 impl<K, V> Mapx<K, V>
@@ -64,81 +81,39 @@ where
     K: KeyEnDe,
     V: ValueEnDe,
 {
-    /// # Safety
-    ///
-    /// This API breaks the semantic safety guarantees,
-    /// but it is safe to use in a race-free environment.
-    #[inline(always)]
-    pub unsafe fn shadow(&self) -> Self {
-        unsafe {
-            Self {
-                inner: self.inner.shadow(),
-                _p: PhantomData,
-            }
-        }
-    }
-
-    /// # Safety
-    ///
-    /// Do not use this API unless you know the internal details extremely well.
-    #[inline(always)]
-    pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
-        unsafe {
-            Self {
-                inner: MapxOrdRawKey::from_bytes(s),
-                _p: PhantomData,
-            }
-        }
-    }
-
-    #[inline(always)]
-    pub fn as_bytes(&self) -> &[u8] {
-        self.inner.as_bytes()
-    }
-
-    #[inline(always)]
-    pub fn new() -> Self {
-        Self {
-            inner: MapxOrdRawKey::new(),
-            _p: PhantomData,
-        }
-    }
-
+    /// Retrieves a value from the map for a given key.
     #[inline(always)]
     pub fn get(&self, key: &K) -> Option<V> {
         self.inner.get(key.encode())
     }
 
+    /// Retrieves a mutable reference to a value in the map.
     #[inline(always)]
     pub fn get_mut(&mut self, key: &K) -> Option<ValueMut<'_, V>> {
         self.inner.get_mut(key.encode())
     }
 
+    /// Checks if the map contains a value for the specified key.
     #[inline(always)]
     pub fn contains_key(&self, key: &K) -> bool {
         self.inner.contains_key(key.encode())
     }
 
-    #[inline(always)]
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    #[inline(always)]
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
+    /// Inserts a key-value pair into the map.
+    ///
+    /// If the key already exists, the old value is returned.
     #[inline(always)]
     pub fn insert(&mut self, key: &K, value: &V) -> Option<V> {
         self.inner.insert(key.encode(), value)
     }
 
+    /// Sets the value for a key, overwriting any existing value.
     #[inline(always)]
     pub fn set_value(&mut self, key: &K, value: &V) {
         self.inner.set_value(key.encode(), value);
     }
 
+    /// Gets an entry for a given key, allowing for in-place modification.
     #[inline(always)]
     pub fn entry(&mut self, key: &K) -> Entry<'_, V> {
         Entry {
@@ -147,80 +122,58 @@ where
         }
     }
 
+    /// Returns an iterator over the map's entries.
     #[inline(always)]
-    pub fn iter(&self) -> MapxIter<K, V> {
+    pub fn iter(&self) -> MapxIter<'_, K, V> {
         MapxIter {
             iter: self.inner.iter(),
             _p: PhantomData,
         }
     }
 
+    /// Returns a mutable iterator over the map's entries.
     #[inline(always)]
-    pub fn iter_mut(&mut self) -> MapxIterMut<K, V> {
+    pub fn iter_mut(&mut self) -> MapxIterMut<'_, K, V> {
         MapxIterMut {
             inner: self.inner.iter_mut(),
             _p: PhantomData,
         }
     }
 
+    /// Returns an iterator over the map's values.
     #[inline(always)]
-    pub fn values(&self) -> MapxValues<V> {
+    pub fn values(&self) -> MapxValues<'_, V> {
         MapxValues {
             inner: self.inner.iter(),
         }
     }
 
+    /// Returns a mutable iterator over the map's values.
     #[inline(always)]
-    pub fn values_mut(&mut self) -> MapxValuesMut<V> {
+    pub fn values_mut(&mut self) -> MapxValuesMut<'_, V> {
         MapxValuesMut {
             inner: self.inner.inner.iter_mut(),
             _p: PhantomData,
         }
     }
 
+    /// Removes a key from the map, returning the value at the key if it existed.
     #[inline(always)]
     pub fn remove(&mut self, key: &K) -> Option<V> {
         self.inner.remove(key.encode())
     }
 
+    /// Removes a key from the map without returning the value.
     #[inline(always)]
     pub fn unset_value(&mut self, key: &K) {
         self.inner.unset_value(key.encode());
     }
-
-    #[inline(always)]
-    pub fn clear(&mut self) {
-        self.inner.clear();
-    }
-
-    #[inline(always)]
-    pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
-        self.inner.is_the_same_instance(&other_hdr.inner)
-    }
-}
-
-impl<K, V> Clone for Mapx<K, V> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-            _p: PhantomData,
-        }
-    }
-}
-
-impl<K, V> Default for Mapx<K, V>
-where
-    K: KeyEnDe,
-    V: ValueEnDe,
-{
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
+/// An iterator over the entries of a `Mapx`.
 pub struct MapxIter<'a, K, V>
 where
     K: KeyEnDe,
@@ -258,6 +211,7 @@ where
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
+/// A mutable iterator over the entries of a `Mapx`.
 pub struct MapxIterMut<'a, K, V>
 where
     K: KeyEnDe,
@@ -298,11 +252,13 @@ where
 type MapxValues<'a, V> = MapxOrdValues<'a, V>;
 type MapxValuesMut<'a, V> = MapxOrdValuesMut<'a, V>;
 
+/// A mutable reference to a value in a `Mapx` iterator.
 #[derive(Debug)]
 pub struct ValueIterMut<'a, V>
 where
     V: ValueEnDe,
 {
+    /// The inner mutable reference to the value.
     pub(crate) inner: mapx_ord_rawkey::ValueIterMut<'a, V>,
 }
 
@@ -324,6 +280,3 @@ where
         &mut self.inner
     }
 }
-
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////

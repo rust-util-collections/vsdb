@@ -1,9 +1,37 @@
 //!
-//! A triple-key style of `Mapx`.
+//! A `Mapx` with a three-level key structure.
 //!
-//! NOTE:
-//! - Both keys and values will be encoded in this structure
+//! `MapxTk` (Mapx Triple Key) provides a map-like interface where each value is
+//! associated with a triplet of keys (K1, K2, K3). This is useful for creating
+//! complex hierarchical or composite key structures.
 //!
+//! # Examples
+//!
+//! ```
+//! use vsdb::basic_multi_key::mapx_triple_key::MapxTk;
+//! use vsdb::{vsdb_set_base_dir, vsdb_get_base_dir};
+//! use std::fs;
+//!
+//! // It's recommended to use a temporary directory for testing
+//! let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
+//! vsdb_set_base_dir(&dir).unwrap();
+//!
+//! let mut m: MapxTk<u32, u32, u32, String> = MapxTk::new();
+//!
+//! // Insert a value with a triple key
+//! m.insert(&(&1, &10, &100), &"hello".to_string());
+//! m.insert(&(&2, &20, &200), &"world".to_string());
+//!
+//! // Get a value
+//! assert_eq!(m.get(&(&1, &10, &100)), Some("hello".to_string()));
+//!
+//! // Remove values
+//! m.remove(&(&1, Some((&10, Some(&100)))));
+//! assert!(!m.contains_key(&(&1, &10, &100)));
+//!
+//! // Clean up the directory
+//! fs::remove_dir_all(vsdb_get_base_dir()).unwrap();
+//! ```
 
 #[cfg(test)]
 mod test;
@@ -21,7 +49,7 @@ use std::{
 
 const KEY_SIZE: u32 = 3;
 
-/// A map structure with two-level keys.
+/// A map structure with three-level keys.
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(bound = "")]
 pub struct MapxTk<K1, K2, K3, V> {
@@ -36,10 +64,11 @@ where
     K3: KeyEnDe,
     V: ValueEnDe,
 {
+    /// Creates a "shadow" copy of the `MapxTk` instance.
+    ///
     /// # Safety
     ///
-    /// This API breaks the semantic safety guarantees,
-    /// but it is safe to use in a race-free environment.
+    /// This API breaks Rust's semantic safety guarantees. Use only in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
         unsafe {
@@ -50,6 +79,7 @@ where
         }
     }
 
+    /// Creates a new, empty `MapxTk`.
     #[inline(always)]
     pub fn new() -> Self {
         Self {
@@ -58,6 +88,7 @@ where
         }
     }
 
+    /// Retrieves a value from the map for a given triple key.
     #[inline(always)]
     pub fn get(&self, key: &(&K1, &K2, &K3)) -> Option<V> {
         let k1 = key.0.encode();
@@ -68,6 +99,7 @@ where
             .map(|v| pnk!(ValueEnDe::decode(&v)))
     }
 
+    /// Retrieves a mutable reference to a value in the map.
     #[inline(always)]
     pub fn get_mut<'a>(
         &'a mut self,
@@ -76,6 +108,7 @@ where
         self.get(key).map(move |v| ValueMut::new(self, key, v))
     }
 
+    /// Mocks a mutable value for a given key.
     #[inline(always)]
     pub fn mock_value_mut<'a>(
         &'a mut self,
@@ -85,16 +118,19 @@ where
         ValueMut::new(self, key, v)
     }
 
+    /// Checks if the map contains a value for the specified triple key.
     #[inline(always)]
     pub fn contains_key(&self, key: &(&K1, &K2, &K3)) -> bool {
         self.get(key).is_some()
     }
 
+    /// Checks if the map is empty.
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
+    /// Gets an entry for a given key, allowing for in-place modification.
     #[inline(always)]
     pub fn entry<'a>(
         &'a mut self,
@@ -103,6 +139,7 @@ where
         Entry { key, hdr: self }
     }
 
+    /// Inserts a key-value pair into the map.
     #[inline(always)]
     pub fn insert(&mut self, key: &(&K1, &K2, &K3), value: &V) -> Option<V> {
         let k1 = key.0.encode();
@@ -113,7 +150,7 @@ where
             .map(|old_v| pnk!(ValueEnDe::decode(&old_v)))
     }
 
-    /// Support batch removal.
+    /// Removes a key-value pair from the map. Supports batch removal by omitting keys.
     #[inline(always)]
     pub fn remove(&mut self, key: &(&K1, Option<(&K2, Option<&K3>)>)) -> Option<V> {
         let k1 = key.0.encode();
@@ -134,16 +171,19 @@ where
             .map(|old_v| pnk!(ValueEnDe::decode(&old_v)))
     }
 
+    /// Clears the map, removing all key-value pairs.
     #[inline(always)]
     pub fn clear(&mut self) {
         self.inner.clear();
     }
 
+    /// Checks if this `MapxTk` instance is the same as another.
     #[inline(always)]
     pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
         self.inner.is_the_same_instance(&other_hdr.inner)
     }
 
+    /// Returns the number of keys in the map.
     #[inline(always)]
     pub fn key_size(&self) -> u32 {
         self.inner.key_size()
@@ -177,6 +217,7 @@ where
     }
 }
 
+/// A mutable reference to a value in a `MapxTk`.
 #[derive(Debug)]
 pub struct ValueMut<'a, K1, K2, K3, V>
 where
@@ -243,6 +284,7 @@ where
     }
 }
 
+/// A view into a single entry in a map, which may either be vacant or occupied.
 pub struct Entry<'a, K1, K2, K3, V> {
     hdr: &'a mut MapxTk<K1, K2, K3, V>,
     key: &'a (&'a K1, &'a K2, &'a K3),
@@ -255,6 +297,8 @@ where
     K3: KeyEnDe,
     V: ValueEnDe,
 {
+    /// Ensures a value is in the entry by inserting the default if empty,
+    /// and returns a mutable reference to the value.
     pub fn or_insert(self, default: V) -> ValueMut<'a, K1, K2, K3, V> {
         let hdr = self.hdr as *mut MapxTk<K1, K2, K3, V>;
         match unsafe { &mut *hdr }.get_mut(self.key) {

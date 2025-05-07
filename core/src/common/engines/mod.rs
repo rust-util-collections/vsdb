@@ -160,7 +160,7 @@ impl Prefix {
 impl Mapx {
     // # Safety
     //
-    // This API breaks the semantic safety guarantees,
+    // This API breaks Rust's semantic safety guarantees. Use only
     // but it is safe to use in a race-free environment.
     pub(crate) unsafe fn shadow(&self) -> Self {
         Self {
@@ -181,7 +181,7 @@ impl Mapx {
     }
 
     #[inline(always)]
-    pub(crate) fn get_mut(&mut self, key: &[u8]) -> Option<ValueMut> {
+    pub(crate) fn get_mut(&mut self, key: &[u8]) -> Option<ValueMut<'_>> {
         let v = VSDB.db.get(self.prefix.hack_bytes(), key)?;
 
         Some(ValueMut {
@@ -192,7 +192,11 @@ impl Mapx {
     }
 
     #[inline(always)]
-    pub(crate) fn mock_value_mut(&mut self, key: RawValue, value: RawValue) -> ValueMut {
+    pub(crate) fn mock_value_mut(
+        &mut self,
+        key: RawValue,
+        value: RawValue,
+    ) -> ValueMut<'_> {
         ValueMut {
             key,
             value,
@@ -211,7 +215,7 @@ impl Mapx {
     }
 
     #[inline(always)]
-    pub(crate) fn iter(&self) -> MapxIter {
+    pub(crate) fn iter(&self) -> MapxIter<'_> {
         MapxIter {
             db_iter: VSDB.db.iter(self.prefix.to_bytes()),
             _hdr: self,
@@ -219,7 +223,7 @@ impl Mapx {
     }
 
     #[inline(always)]
-    pub(crate) fn iter_mut(&mut self) -> MapxIterMut {
+    pub(crate) fn iter_mut(&mut self) -> MapxIterMut<'_> {
         MapxIterMut {
             db_iter: VSDB.db.iter(self.prefix.hack_bytes()),
             hdr: self,

@@ -1,4 +1,10 @@
-#![doc = include_str!("../README.md")]
+//! # vsdb_slot_db
+//!
+//! `vsdb_slot_db` provides `SlotDB`, a skip-list-like data structure designed for
+//! efficient, timestamp-based paged queries. It is ideal for indexing and querying
+//! large datasets where entries are associated with a slot (e.g., a timestamp or
+//! block number).
+
 #![deny(warnings)]
 #![cfg_attr(test, warn(warnings))]
 
@@ -6,11 +12,11 @@ use ruc::*;
 use serde::{Deserialize, Serialize, de};
 use std::{
     collections::{BTreeSet, btree_set::Iter as SmallIter},
-    mem,
     ops::Bound,
 };
 use vsdb::{
     KeyEnDeOrdered, MapxOrd, basic::mapx_ord::MapxOrdIter as LargeIter,
+    basic::orphan::Orphan,
 };
 
 type Slot = u64;
@@ -28,118 +34,105 @@ type Distance = i128;
 type PageSize = u16;
 type PageIndex = u32;
 
-/// A `Skip List` like structure,
-/// designed to support fast paged queries and indexes
+const INLINE_CAPACITY_THRESHOLD: usize = 8;
+
+/// A skip-list-like data structure for fast, timestamp-based paged queries.
+///
+/// `SlotDB` organizes data into "slots" (e.g., timestamps or block numbers),
+/// which are then grouped into tiers. This hierarchical structure allows for
+/// rapid seeking and counting, making it highly efficient for pagination and
+/// range queries over large datasets.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(
-    bound = "T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned"
+    bound = "K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned"
 )]
-pub struct SlotDB<T>
+pub struct SlotDB<K>
 where
-    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
-    data: MapxOrd<Slot, DataCtner<T>>,
+    data: MapxOrd<Slot, DataCtner<K>>,
 
-    // How many entries in this DB
-    total: EntryCnt,
+    // How many entries are in this DB
+    total: Orphan<EntryCnt>,
 
-    levels: Vec<Level>,
+    tiers: Vec<Tier>,
 
-    multiple_step: u64,
+    tier_capacity: u64,
 
-    // Switch the inner implementations of the slot direction:
+    // Switch the inner implementation of the slot direction:
     // - positive => reverse
     // - reverse => positive
     //
-    // Positive query usually get better performance,
-    // if most scenes are under the reverse mode,
-    // then swap the low-level logic
+    // Positive queries usually get better performance. If most use cases
+    // are in reverse mode, swapping the low-level logic can improve performance.
     swap_order: bool,
 }
 
-impl<T> SlotDB<T>
+impl<K> SlotDB<K>
 where
-    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
+    /// Creates a new `SlotDB`.
     ///
-    /// @param: `swap_order`:
+    /// # Arguments
     ///
-    /// Switch the inner logic of the slot direction:
-    /// - positive => reverse
-    /// - reverse => positive
-    ///
-    /// Positive query usually get better performance,
-    /// swap order if most cases run in the reverse mode
-    pub fn new(multiple_step: u64, swap_order: bool) -> Self {
+    /// * `tier_capacity` - The capacity of each tier, controlling the granularity of the index.
+    /// * `swap_order` - If `true`, reverses the internal slot order. This can improve
+    ///   performance for applications that primarily query in reverse chronological order.
+    pub fn new(tier_capacity: u64, swap_order: bool) -> Self {
         Self {
             data: MapxOrd::new(),
-            total: 0,
-            levels: vec![],
-            multiple_step,
+            total: Orphan::new(0),
+            tiers: vec![],
+            tier_capacity,
             swap_order,
         }
     }
 
-    pub fn insert(&mut self, mut slot: Slot, t: T) -> Result<()> {
-        if self.swap_order {
-            slot = swap_order(slot);
-        }
+    /// Inserts a key into a specified slot.
+    ///
+    /// # Arguments
+    ///
+    /// * `slot` - The slot to insert the key into (e.g., a timestamp).
+    /// * `k` - The key to insert.
+    pub fn insert(&mut self, slot: Slot, k: K) -> Result<()> {
+        let slot = self.to_storage_slot(slot);
 
-        if let Some(top) = self.levels.last() {
-            if top.data.len() as u64 > self.multiple_step {
-                let newtop = top.data.iter().fold(
-                    Level::new(self.levels.len() as u32, self.multiple_step),
-                    |mut l, (slot, cnt)| {
-                        let slot_floor = slot / l.floor_base * l.floor_base;
-                        *l.data.entry(&slot_floor).or_insert(0) += cnt;
-                        l
-                    },
-                );
-                self.levels.push(newtop);
-            }
-        } else {
-            let newtop = self.data.iter().fold(
-                Level::new(self.levels.len() as u32, self.multiple_step),
-                |mut l, (slot, entries)| {
-                    let slot_floor = slot / l.floor_base * l.floor_base;
-                    *l.data.entry(&slot_floor).or_insert(0) +=
-                        entries.len() as EntryCnt;
-                    l
-                },
-            );
-            self.levels.push(newtop);
-        };
+        self.ensure_tier_capacity(slot);
 
         #[allow(clippy::unwrap_or_default)]
-        if self.data.entry(&slot).or_insert(DataCtner::new()).insert(t) {
-            self.levels.iter_mut().for_each(|l| {
-                let slot_floor = slot / l.floor_base * l.floor_base;
-                *l.data.entry(&slot_floor).or_insert(0) += 1;
+        if self.data.entry(&slot).or_insert(DataCtner::new()).insert(k) {
+            self.tiers.iter_mut().for_each(|t| {
+                let slot_floor = slot / t.floor_base * t.floor_base;
+                *t.data.entry(&slot_floor).or_insert(0) += 1;
             });
-            self.total += 1;
+            *self.total.get_mut() += 1;
         }
 
         Ok(())
     }
 
-    pub fn remove(&mut self, mut slot: Slot, t: &T) {
-        if self.swap_order {
-            slot = swap_order(slot);
-        }
+    /// Removes a key from a specified slot.
+    ///
+    /// # Arguments
+    ///
+    /// * `slot` - The slot to remove the key from.
+    /// * `k` - The key to remove.
+    pub fn remove(&mut self, slot: Slot, k: &K) {
+        let slot = self.to_storage_slot(slot);
 
         loop {
-            if let Some(top_len) = self.levels.last().map(|top| top.data.len())
+            if let Some(top_len) = self.tiers.last().map(|top| top.data.len())
+                && top_len < 2
             {
-                if top_len < 2 {
-                    self.levels.pop();
-                    continue;
-                }
+                self.tiers.pop();
+                continue;
             }
             break;
         }
 
         let (exist, empty) = match self.data.get_mut(&slot) {
-            Some(mut d) => (d.remove(t), d.is_empty()),
+            Some(mut d) => (d.remove(k), d.is_empty()),
             _ => {
                 return;
             }
@@ -150,38 +143,49 @@ where
         }
 
         if exist {
-            self.levels.iter_mut().for_each(|l| {
-                let slot_floor = slot / l.floor_base * l.floor_base;
-                let mut cnt = l.data.get_mut(&slot_floor).unwrap();
+            self.tiers.iter_mut().for_each(|t| {
+                let slot_floor = slot / t.floor_base * t.floor_base;
+                let mut cnt = t.data.get_mut(&slot_floor).unwrap();
                 if 1 == *cnt {
-                    mem::forget(cnt); // for performance
-                    l.data.remove(&slot_floor);
+                    drop(cnt); // release the mut reference
+                    t.data.remove(&slot_floor);
                 } else {
                     *cnt -= 1;
                 }
             });
-            self.total -= 1;
+            *self.total.get_mut() -= 1;
         }
     }
 
+    /// Clears the `SlotDB`, removing all entries and tiers.
     pub fn clear(&mut self) {
-        self.total = 0;
+        *self.total.get_mut() = 0;
         self.data.clear();
 
-        self.levels.iter_mut().for_each(|l| {
-            l.data.clear();
+        self.tiers.iter_mut().for_each(|t| {
+            t.data.clear();
         });
 
-        self.levels.clear();
+        self.tiers.clear();
     }
 
-    /// Common usages in web services
+    /// Retrieves entries by page, a common use case for web services.
+    ///
+    /// # Arguments
+    ///
+    /// * `page_size` - The number of entries per page.
+    /// * `page_index` - The zero-based index of the page to retrieve.
+    /// * `reverse_order` - If `true`, returns entries in reverse order.
+    ///
+    /// # Returns
+    ///
+    /// A `Vec<K>` containing the entries for the specified page.
     pub fn get_entries_by_page(
         &self,
         page_size: PageSize,
         page_index: PageIndex, // Start from 0
         reverse_order: bool,
-    ) -> Vec<T> {
+    ) -> Vec<K> {
         self.get_entries_by_page_slot(
             None,
             None,
@@ -191,23 +195,29 @@ where
         )
     }
 
-    /// Common usages in web services
+    /// Retrieves entries by page within a specified slot range.
+    ///
+    /// # Arguments
+    ///
+    /// * `slot_left_bound` - The inclusive left bound of the slot range.
+    /// * `slot_right_bound` - The inclusive right bound of the slot range.
+    /// * `page_size` - The number of entries per page.
+    /// * `page_index` - The zero-based index of the page to retrieve.
+    /// * `reverse_order` - If `true`, returns entries in reverse order.
+    ///
+    /// # Returns
+    ///
+    /// A `Vec<K>` containing the entries for the specified page and slot range.
     pub fn get_entries_by_page_slot(
         &self,
         slot_left_bound: Option<Slot>,  // Included
         slot_right_bound: Option<Slot>, // Included
         page_size: PageSize,
         page_index: PageIndex, // start from 0
-        mut reverse_order: bool,
-    ) -> Vec<T> {
-        let mut slot_min = slot_left_bound.unwrap_or(Slot::MIN);
-        let mut slot_max = slot_right_bound.unwrap_or(Slot::MAX);
-
-        if self.swap_order {
-            (slot_min, slot_max) =
-                (swap_order(slot_max), swap_order(slot_min));
-            reverse_order = !reverse_order;
-        }
+        reverse_order: bool,
+    ) -> Vec<K> {
+        let (slot_min, slot_max, storage_is_reversed) =
+            self.transform_range(slot_left_bound, slot_right_bound);
 
         if slot_max < slot_min {
             return vec![];
@@ -222,7 +232,7 @@ where
             slot_max,
             page_size,
             page_index,
-            reverse_order,
+            reverse_order ^ storage_is_reversed,
         )
     }
 
@@ -233,13 +243,13 @@ where
             .unwrap_or(0)
     }
 
-    // Exclude the slot itself-owned entries(whether it exists or not)
+    // Exclude the slot itself-owned entries (whether it exists or not)
     fn distance_to_the_leftmost_slot(&self, slot: Slot) -> Distance {
         let mut left_bound = Slot::MIN;
         let mut ret = 0;
-        for l in self.levels.iter().rev() {
-            let right_bound = slot / l.floor_base * l.floor_base;
-            ret += l
+        for t in self.tiers.iter().rev() {
+            let right_bound = slot / t.floor_base * t.floor_base;
+            ret += t
                 .data
                 .range(left_bound..right_bound)
                 .map(|(_, cnt)| cnt as Distance)
@@ -316,9 +326,9 @@ where
         let mut slot_start = Bound::Included(Slot::MIN);
         let mut local_idx = global_skip_num as usize;
 
-        for l in self.levels.iter().rev() {
+        for t in self.tiers.iter().rev() {
             let mut hdr =
-                l.data.range((slot_start, Bound::Unbounded)).peekable();
+                t.data.range((slot_start, Bound::Unbounded)).peekable();
             while let Some(entry_cnt) = hdr.next().map(|(_, cnt)| cnt as usize)
             {
                 if entry_cnt > local_idx {
@@ -359,7 +369,7 @@ where
         page_size: PageSize,
         page_index: PageIndex,
         reverse: bool,
-    ) -> Vec<T> {
+    ) -> Vec<K> {
         let mut ret = vec![];
         alt!(slot_end < slot_start, return ret);
 
@@ -396,27 +406,46 @@ where
         ret
     }
 
-    /// Can also be used to do some `data statistics`
+    /// Calculates the number of entries within a given slot range.
+    ///
+    /// This method can be used for data statistics and is called by `total_by_slot`.
+    ///
+    /// # Arguments
+    ///
+    /// * `slot_start` - The starting slot of the range.
+    /// * `slot_end` - The ending slot of the range.
+    ///
+    /// # Returns
+    ///
+    /// The total number of entries (`EntryCnt`) within the specified range.
     pub fn entry_cnt_within_two_slots(
         &self,
-        mut slot_start: Slot,
-        mut slot_end: Slot,
+        slot_start: Slot,
+        slot_end: Slot,
     ) -> EntryCnt {
-        if self.swap_order {
-            (slot_start, slot_end) =
-                (swap_order(slot_end), swap_order(slot_start));
-        }
+        let (slot_min, slot_max, _) =
+            self.transform_range(Some(slot_start), Some(slot_end));
 
-        if slot_start > slot_end {
+        if slot_min > slot_max {
             0
         } else {
-            let cnt = self.distance_to_the_leftmost_slot(slot_end)
-                - self.distance_to_the_leftmost_slot(slot_start)
-                + self.slot_entry_cnt(slot_end) as Distance;
+            let cnt = self.distance_to_the_leftmost_slot(slot_max)
+                - self.distance_to_the_leftmost_slot(slot_min)
+                + self.slot_entry_cnt(slot_max) as Distance;
             cnt as EntryCnt
         }
     }
 
+    /// Returns the total number of entries within a specified slot range.
+    ///
+    /// # Arguments
+    ///
+    /// * `slot_start` - An `Option<Slot>` for the starting slot. If `None`, `Slot::MIN` is used.
+    /// * `slot_end` - An `Option<Slot>` for the ending slot. If `None`, `Slot::MAX` is used.
+    ///
+    /// # Returns
+    ///
+    /// The total number of entries (`EntryCnt`) in the given range.
     pub fn total_by_slot(
         &self,
         slot_start: Option<Slot>,
@@ -426,20 +455,95 @@ where
         let slot_end = slot_end.unwrap_or(Slot::MAX);
 
         if Slot::MIN == slot_start && Slot::MAX == slot_end {
-            self.total
+            self.total.get_value()
         } else {
             self.entry_cnt_within_two_slots(slot_start, slot_end)
         }
     }
 
+    /// Returns the total number of entries in the `SlotDB`.
     pub fn total(&self) -> EntryCnt {
         self.total_by_slot(None, None)
     }
+
+    // --- Private Helper Methods ---
+
+    // Ensure there is enough tier capacity to cover the new slot.
+    fn ensure_tier_capacity(&mut self, _target_slot: Slot) {
+        if let Some(top) = self.tiers.last() {
+            if top.data.len() as u64 <= self.tier_capacity {
+                return;
+            }
+            // Create a new top tier
+            let newtop = top.data.iter().fold(
+                Tier::new(self.tiers.len() as u32, self.tier_capacity),
+                |mut t, (slot, cnt)| {
+                    let slot_floor = slot / t.floor_base * t.floor_base;
+                    *t.data.entry(&slot_floor).or_insert(0) += cnt;
+                    t
+                },
+            );
+            self.tiers.push(newtop);
+        } else {
+            // First insertion, tiers' length should be 0
+            let newtop = self.data.iter().fold(
+                Tier::new(self.tiers.len() as u32, self.tier_capacity),
+                |mut t, (slot, entries)| {
+                    let slot_floor = slot / t.floor_base * t.floor_base;
+                    *t.data.entry(&slot_floor).or_insert(0) +=
+                        entries.len() as EntryCnt;
+                    t
+                },
+            );
+            self.tiers.push(newtop);
+        }
+    }
+
+    // Convert a logical slot (user perspective) to a storage slot (internal key).
+    #[inline(always)]
+    fn to_storage_slot(&self, logical_slot: Slot) -> Slot {
+        if self.swap_order {
+            !logical_slot
+        } else {
+            logical_slot
+        }
+    }
+
+    // Convert a storage slot (internal key) back to a logical slot.
+    #[allow(dead_code)]
+    #[inline(always)]
+    fn to_logical_slot(&self, storage_slot: Slot) -> Slot {
+        if self.swap_order {
+            !storage_slot
+        } else {
+            storage_slot
+        }
+    }
+
+    // Transform a logical range [min, max] into a storage range and direction flag.
+    // Returns (storage_min, storage_max, storage_is_reversed_relative_to_logical)
+    fn transform_range(
+        &self,
+        logical_min: Option<Slot>,
+        logical_max: Option<Slot>,
+    ) -> (Slot, Slot, bool) {
+        let min = logical_min.unwrap_or(Slot::MIN);
+        let max = logical_max.unwrap_or(Slot::MAX);
+
+        if self.swap_order {
+            // If storage is reversed:
+            // logical [10, 20] -> storage [!20, !10]
+            // And the storage order is reversed relative to logical order.
+            (self.to_storage_slot(max), self.to_storage_slot(min), true)
+        } else {
+            (min, max, false)
+        }
+    }
 }
 
-impl<T> Default for SlotDB<T>
+impl<K> Default for SlotDB<K>
 where
-    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
     fn default() -> Self {
         Self::new(8, false)
@@ -448,19 +552,19 @@ where
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(
-    bound = "T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned"
+    bound = "K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned"
 )]
-enum DataCtner<T>
+enum DataCtner<K>
 where
-    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
-    Small(BTreeSet<T>),
-    Large(MapxOrd<T, ()>),
+    Small(BTreeSet<K>),
+    Large(MapxOrd<K, ()>),
 }
 
-impl<T> DataCtner<T>
+impl<K> DataCtner<K>
 where
-    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
     fn new() -> Self {
         Self::Small(BTreeSet::new())
@@ -477,33 +581,37 @@ where
         0 == self.len()
     }
 
-    fn insert(&mut self, t: T) -> bool {
-        if let Self::Small(i) = self {
-            if i.len() > 8 {
-                *self = Self::Large(i.iter().fold(
-                    MapxOrd::new(),
-                    |mut acc, t| {
-                        acc.insert(t, &());
-                        acc
-                    },
-                ));
-            }
-        }
+    fn try_upgrade(&mut self) {
+        let inner_set = match self {
+            Self::Small(set) if set.len() > INLINE_CAPACITY_THRESHOLD => set,
+            _ => return,
+        };
+
+        let new_map = inner_set.iter().fold(MapxOrd::new(), |mut acc, k| {
+            acc.insert(k, &());
+            acc
+        });
+
+        *self = Self::Large(new_map);
+    }
+
+    fn insert(&mut self, k: K) -> bool {
+        self.try_upgrade();
 
         match self {
-            Self::Small(i) => i.insert(t),
-            Self::Large(i) => i.insert(&t, &()).is_none(),
+            Self::Small(i) => i.insert(k),
+            Self::Large(i) => i.insert(&k, &()).is_none(),
         }
     }
 
-    fn remove(&mut self, target: &T) -> bool {
+    fn remove(&mut self, target: &K) -> bool {
         match self {
             Self::Small(i) => i.remove(target),
             Self::Large(i) => i.remove(target).is_some(),
         }
     }
 
-    fn iter(&self) -> DataCtnerIter<T> {
+    fn iter(&self) -> DataCtnerIter<'_, K> {
         match self {
             Self::Small(i) => DataCtnerIter::Small(i.iter()),
             Self::Large(i) => DataCtnerIter::Large(i.iter()),
@@ -511,9 +619,9 @@ where
     }
 }
 
-impl<T> Default for DataCtner<T>
+impl<K> Default for DataCtner<K>
 where
-    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
     fn default() -> Self {
         Self::new()
@@ -521,19 +629,19 @@ where
 }
 
 #[allow(clippy::large_enum_variant)]
-enum DataCtnerIter<'a, T>
+enum DataCtnerIter<'a, K>
 where
-    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
-    Small(SmallIter<'a, T>),
-    Large(LargeIter<'a, T, ()>),
+    Small(SmallIter<'a, K>),
+    Large(LargeIter<'a, K, ()>),
 }
 
-impl<T> Iterator for DataCtnerIter<'_, T>
+impl<K> Iterator for DataCtnerIter<'_, K>
 where
-    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
-    type Item = T;
+    type Item = K;
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             Self::Small(i) => i.next().cloned(),
@@ -542,9 +650,9 @@ where
     }
 }
 
-impl<T> DoubleEndedIterator for DataCtnerIter<'_, T>
+impl<K> DoubleEndedIterator for DataCtnerIter<'_, K>
 where
-    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         match self {
@@ -555,24 +663,19 @@ where
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct Level {
+struct Tier {
     floor_base: u64,
     data: MapxOrd<SlotFloor, EntryCnt>,
 }
 
-impl Level {
-    fn new(level_idx: u32, multiple_step: u64) -> Self {
-        let pow = 1 + level_idx;
+impl Tier {
+    fn new(tier_idx: u32, tier_capacity: u64) -> Self {
+        let pow = 1 + tier_idx;
         Self {
-            floor_base: multiple_step.pow(pow),
+            floor_base: tier_capacity.pow(pow),
             data: MapxOrd::new(),
         }
     }
-}
-
-#[inline(always)]
-fn swap_order(original_slot_value: Slot) -> Slot {
-    !original_slot_value
 }
 
 #[cfg(test)]

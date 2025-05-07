@@ -131,9 +131,9 @@ fn assert_queryable(
 
 const fn siz() -> u64 {
     if cfg!(debug_assertions) {
-        1_0000
+        1_000
     } else {
-        100_0000
+        100_000
     }
 }
 

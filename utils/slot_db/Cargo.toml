@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_slot_db"
-version = "4.0.1"
+version = "6.0.0"
 edition = "2024"
 keywords = ["index", "cache", "timestamp", "slot", "database"]
 license = "MIT"
@@ -15,8 +15,8 @@ vsdb = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]
-criterion = "0.5.1"
 rand = { workspace = true }
+criterion = "0.8"
 
 [features]
 default = ["parity_backend", "compress", "msgpack_codec"]

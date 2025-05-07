@@ -1,3 +1,36 @@
+//!
+//! A raw, disk-based, directed acyclic graph (DAG) map.
+//!
+//! `DagMapRaw` provides a map-like interface where each instance can have a parent
+//! and multiple children, forming a directed acyclic graph. This is useful for
+//! representing versioned or hierarchical data.
+//!
+//! # Examples
+//!
+//! ```
+//! use vsdb::{DagMapRaw, Orphan};
+//! use vsdb::{vsdb_set_base_dir, vsdb_get_base_dir};
+//! use std::fs;
+//!
+//! // It's recommended to use a temporary directory for testing
+//! let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
+//! vsdb_set_base_dir(&dir).unwrap();
+//!
+//! let mut parent = Orphan::new(None);
+//! let mut dag = DagMapRaw::new(&mut parent).unwrap();
+//!
+//! // Insert a value
+//! dag.insert(&[1], &[10]);
+//! assert_eq!(dag.get(&[1]), Some(vec![10]));
+//!
+//! // Create a child
+//! let mut child = DagMapRaw::new(&mut Orphan::new(Some(dag))).unwrap();
+//! assert_eq!(child.get(&[1]), Some(vec![10]));
+//!
+//! // Clean up the directory
+//! fs::remove_dir_all(vsdb_get_base_dir()).unwrap();
+//! ```
+
 #[cfg(test)]
 mod test;
 
@@ -12,6 +45,7 @@ use vsdb_core::{basic::mapx_raw, common::RawBytes};
 
 type DagHead = DagMapRaw;
 
+/// A raw, disk-based, directed acyclic graph (DAG) map.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DagMapRaw {
     data: MapxRaw,
@@ -23,6 +57,7 @@ pub struct DagMapRaw {
 }
 
 impl DagMapRaw {
+    /// Creates a new `DagMapRaw`.
     pub fn new(parent: &mut Orphan<Option<Self>>) -> Result<Self> {
         let r = Self {
             parent: unsafe { parent.shadow() },
@@ -32,17 +67,18 @@ impl DagMapRaw {
         if let Some(p) = parent.get_mut().as_mut() {
             let child_id = super::gen_dag_map_id_num().to_be_bytes();
             if p.children.insert(child_id, &r).is_some() {
-                return Err(eg!("The fucking world is over! Child ID exist!"));
+                return Err(eg!("Error! Child ID exist!"));
             }
         }
 
         Ok(r)
     }
 
+    /// Creates a "shadow" copy of the `DagMapRaw` instance.
+    ///
     /// # Safety
     ///
-    /// This API breaks the semantic safety guarantees,
-    /// but it is safe to use in a race-free environment.
+    /// This API breaks Rust's semantic safety guarantees. Use only in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
         unsafe {
@@ -54,16 +90,19 @@ impl DagMapRaw {
         }
     }
 
+    /// Checks if the DAG map is dead (i.e., has no data, parent, or children).
     #[inline(always)]
     pub fn is_dead(&self) -> bool {
         self.data.is_empty() && self.parent.get_value().is_none() && self.no_children()
     }
 
+    /// Checks if the DAG map has no children.
     #[inline(always)]
     pub fn no_children(&self) -> bool {
         self.children.is_empty()
     }
 
+    /// Retrieves a value from the DAG map, traversing up to the parent if necessary.
     pub fn get(&self, key: impl AsRef<[u8]>) -> Option<RawBytes> {
         let key = key.as_ref();
 
@@ -86,6 +125,7 @@ impl DagMapRaw {
         }
     }
 
+    /// Retrieves a mutable reference to a value in the DAG map.
     #[inline(always)]
     pub fn get_mut(&mut self, key: impl AsRef<[u8]>) -> Option<ValueMut<'_>> {
         self.data.get_mut(key.as_ref()).map(|inner| ValueMut {
@@ -94,6 +134,7 @@ impl DagMapRaw {
         })
     }
 
+    /// Inserts a key-value pair into the DAG map.
     #[inline(always)]
     pub fn insert(
         &mut self,
@@ -103,13 +144,15 @@ impl DagMapRaw {
         self.data.insert(key.as_ref(), value)
     }
 
+    /// Removes a key-value pair from the DAG map.
     #[inline(always)]
     pub fn remove(&mut self, key: impl AsRef<[u8]>) -> Option<RawBytes> {
         self.data.insert(key.as_ref(), [])
     }
 
-    /// Return the new head of mainline,
-    /// all instances should have been committed!
+    /// Prunes the DAG, merging all nodes in the mainline into the genesis node.
+    ///
+    /// Returns the new head of the mainline.
     #[inline(always)]
     pub fn prune(self) -> Result<DagHead> {
         self.prune_mainline().c(d!())
@@ -160,13 +203,13 @@ impl DagMapRaw {
         Ok(linebuf.pop().unwrap())
     }
 
-    /// Drop children that are in the `targets` list
+    /// Prunes children that are in the `include_targets` list.
     #[inline(always)]
     pub fn prune_children_include(&mut self, include_targets: &[impl AsRef<DagMapId>]) {
         self.prune_children(include_targets, false);
     }
 
-    /// Drop children that are not in the `exclude_targets` list
+    /// Prunes children that are not in the `exclude_targets` list.
     #[inline(always)]
     pub fn prune_children_exclude(&mut self, exclude_targets: &[impl AsRef<DagMapId>]) {
         self.prune_children(exclude_targets, true);
@@ -196,7 +239,7 @@ impl DagMapRaw {
         }
     }
 
-    /// Drop all data
+    /// Destroys the DAG map and all its children, clearing all data.
     #[inline(always)]
     pub fn destroy(&mut self) {
         *self.parent.get_mut() = None;
@@ -210,6 +253,7 @@ impl DagMapRaw {
         }
     }
 
+    /// Checks if this `DagMapRaw` instance is the same as another.
     #[inline(always)]
     pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
         self.data.is_the_same_instance(&other_hdr.data)
@@ -219,6 +263,7 @@ impl DagMapRaw {
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
+/// A mutable reference to a value in a `DagMapRaw`.
 #[derive(Debug)]
 pub struct ValueMut<'a> {
     value: RawBytes,

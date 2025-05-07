@@ -41,14 +41,14 @@ fn random_read_write(c: &mut Criterion) {
     let mut db = Vecx::new();
     group.bench_function(" random write ", |b| {
         b.iter(|| {
-            let n = rng.r#gen::<usize>();
+            let n = rng.random::<u64>() as usize;
             db.push(&vec![n; 128]);
         })
     });
 
     group.bench_function(" random read ", |b| {
         b.iter(|| {
-            let idx: usize = rng.r#gen_range(0..db.len());
+            let idx: usize = rng.random_range(0..db.len());
             db.get(idx);
         })
     });

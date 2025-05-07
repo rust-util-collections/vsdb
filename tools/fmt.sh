@@ -20,7 +20,6 @@ export LANGUAGE=en_US.UTF-8 # perl
 
 for file in $(find .. -path "../target" -a -prune \
     -a -type f \
-    -o -name "*.rs" \
     -o -name "*.c" \
     -o -name "*.h" \
     -o -name "*.sh" \
@@ -56,4 +55,4 @@ for file in $(find .. -path "../target" -a -prune \
     echo $file | grep -c '\.md$'>/dev/null || perl -pi -e 's/ +$//g' $file
 done
 
-cargo fmt
+cd .. && cargo fmt

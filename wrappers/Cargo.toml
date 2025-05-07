@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "4.0.1"
+version = "6.0.0"
 authors = ["hui.fan@mail.ru"]
 edition = "2024"
 description = "A std-collection-like database"
@@ -19,14 +19,15 @@ parking_lot = { workspace = true }
 
 msgpack = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+serde_cbor_2 = { workspace = true, optional = true }
 
 ruc = { workspace = true }
 vsdb_core = { workspace = true }
 
 [dev-dependencies]
-hex = "0.4.3"
-criterion = "0.5.1"
-rand = "0.8.5"
+rand = { workspace = true }
+hex = "0.4"
+criterion = "0.8"
 
 [features]
 default = ["parity_backend", "compress", "msgpack_codec"]
@@ -39,6 +40,7 @@ compress = ["vsdb_core/compress"]
 serde_ende = []
 msgpack_codec = ["serde_ende", "msgpack"]
 json_codec = ["serde_ende", "serde_json"]
+cbor_codec = ["serde_ende", "serde_cbor_2"]
 
 # [[bench]]
 # name = "basic"

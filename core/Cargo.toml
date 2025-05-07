@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_core"
-version = "4.0.1"
+version = "6.0.0"
 authors = ["hui.fan@mail.ru"]
 edition = "2024"
 description = "A std-collection-like database"
@@ -23,8 +23,8 @@ rocksdb = { workspace = true, optional = true }
 
 [dev-dependencies]
 msgpack = { workspace = true }
-hex = "0.4.3"
-criterion = "0.5.1"
+hex = "0.4"
+criterion = "0.8"
 
 [features]
 default = ["compress", "parity_backend"]
