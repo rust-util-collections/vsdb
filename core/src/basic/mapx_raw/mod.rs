@@ -252,6 +252,26 @@ impl MapxRaw {
         self.inner.range(bounds)
     }
 
+    /// Returns a detached iterator over a range of entries in the map.
+    ///
+    /// This iterator is not tied to the lifetime of `&self`, allowing for concurrent
+    /// modification of the map during iteration (though the iterator will see a snapshot).
+    ///
+    /// # Arguments
+    ///
+    /// * `bounds` - The range of keys to iterate over.
+    ///
+    /// # Returns
+    ///
+    /// A `MapxRawIter` that iterates over the key-value pairs in the specified range.
+    #[inline(always)]
+    pub fn range_detached<'a, R: RangeBounds<Cow<'a, [u8]>>>(
+        &self,
+        bounds: R,
+    ) -> MapxRawIter<'a> {
+        self.inner.range_detached(bounds)
+    }
+
     /// Returns a mutable iterator over the map's entries.
     ///
     /// # Returns

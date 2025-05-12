@@ -20,14 +20,14 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-vsdb_core = "6.0.0"
+vsdb_core = "7.0.0"
 ```
 
 ## Features
 
 For detailed API examples, see [API Examples](docs/api.md).
 
-- `parity_backend`: **(Default)** Use `parity-db` as the backend database. Pure Rust implementation.
+- `fjall_backend`: **(Default)** Use `fjall` as the backend database. Pure Rust implementation.
 - `rocks_backend`: Use `rocksdb` as the backend database. C++ implementation.
 - `compress`: Enable data compression in the backend database.
 

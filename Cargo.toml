@@ -22,10 +22,10 @@ sha3 = "0.10"
 
 threadpool = "1.8.1" # used in a background cleaner
 
-parity-db = "0.5.4"
+fjall = { version = "2.11.2", default-features = false, features = ["single_writer_tx"] }
 rocksdb = { version = "0.24.0", default-features = false, features = ["bindgen-runtime"] }
 
-vsdb = { path = "wrappers", version = "6.0.0", default-features = false }
-vsdb_core = { path = "core", version = "6.0.0", default-features = false }
+vsdb = { path = "wrappers", version = "7.0.0", default-features = false }
+vsdb_core = { path = "core", version = "7.0.0", default-features = false }
 
-vsdb_trie_db = { path = "utils/trie_db", version = "6.0.0", default-features = false }
+vsdb_trie_db = { path = "utils/trie_db", version = "7.0.0", default-features = false }

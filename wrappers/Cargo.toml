@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "6.0.0"
+version = "7.0.0"
 authors = ["hui.fan@mail.ru"]
 edition = "2024"
 description = "A std-collection-like database"
@@ -30,9 +30,9 @@ hex = "0.4"
 criterion = "0.8"
 
 [features]
-default = ["parity_backend", "compress", "msgpack_codec"]
+default = ["fjall_backend", "compress", "msgpack_codec"]
 
-parity_backend = ["vsdb_core/parity_backend"]
+fjall_backend = ["vsdb_core/fjall_backend"]
 rocks_backend = ["vsdb_core/rocks_backend"]
 
 compress = ["vsdb_core/compress"]

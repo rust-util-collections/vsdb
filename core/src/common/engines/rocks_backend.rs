@@ -13,6 +13,7 @@ use std::{
     fs,
     mem::size_of,
     ops::{Bound, RangeBounds},
+    path::Path,
     sync::{
         LazyLock,
         atomic::{AtomicUsize, Ordering},
@@ -23,23 +24,36 @@ use std::{
 // NOTE:
 // do NOT make the number of areas bigger than `u8::MAX`
 const DATA_SET_NUM: usize = 2;
+const SHARD_CNT: usize = 16;
 
 const META_KEY_MAX_KEYLEN: [u8; 1] = [u8::MAX];
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 
-static HDR: LazyLock<(DB, Vec<String>)> = LazyLock::new(|| rocksdb_open().unwrap());
-
 pub struct RocksEngine {
     meta: &'static DB,
-    areas: Vec<&'static str>,
+    shards: Vec<&'static DB>,
+    shards_cfs: Vec<Vec<&'static ColumnFamily>>,
     prefix_allocator: PreAllocator,
     max_keylen: AtomicUsize,
 }
 
 impl RocksEngine {
     #[inline(always)]
-    fn cf_hdr(&self, area_idx: usize) -> &ColumnFamily {
-        self.meta.cf_handle(self.areas[area_idx]).unwrap()
+    fn get_shard_idx(&self, prefix: PreBytes) -> usize {
+        (prefix[0] as usize) % SHARD_CNT
+    }
+
+    #[inline(always)]
+    fn get_cf(&self, prefix: PreBytes) -> &'static ColumnFamily {
+        let shard_idx = self.get_shard_idx(prefix);
+        // Reuse the `area_idx` logic from Engine trait which defaults to prefix[0] % area_count()
+        let cf_idx = self.area_idx(prefix);
+        self.shards_cfs[shard_idx][cf_idx]
+    }
+
+    #[inline(always)]
+    fn get_db(&self, prefix: PreBytes) -> &'static DB {
+        self.shards[self.get_shard_idx(prefix)]
     }
 
     #[inline(always)]
@@ -74,8 +88,32 @@ impl RocksEngine {
 
 impl Engine for RocksEngine {
     fn new() -> Result<Self> {
-        let (meta, areas) =
-            (&HDR.0, HDR.1.iter().map(|i| i.as_str()).collect::<Vec<_>>());
+        let base_dir = vsdb_get_base_dir();
+        // avoid setting again on an opened DB
+        omit!(vsdb_set_base_dir(&base_dir));
+
+        let mut shards = Vec::with_capacity(SHARD_CNT);
+        let mut shards_cfs = Vec::with_capacity(SHARD_CNT);
+
+        // Ensure base dir exists
+        fs::create_dir_all(&base_dir).c(d!())?;
+
+        for i in 0..SHARD_CNT {
+            let dir = base_dir.join(format!("shard_{}", i));
+            let (db, cf_names) = rocksdb_open_shard(&dir)?;
+            let db = Box::leak(Box::new(db));
+
+            let cfs = cf_names
+                .iter()
+                .map(|name| db.cf_handle(name).unwrap())
+                .collect::<Vec<_>>();
+
+            shards.push(db as &'static DB);
+            shards_cfs.push(cfs);
+        }
+
+        // Use shard 0 as the meta shard
+        let meta = shards[0];
 
         let (prefix_allocator, initial_value) = PreAllocator::init();
 
@@ -95,7 +133,8 @@ impl Engine for RocksEngine {
 
         Ok(RocksEngine {
             meta,
-            areas,
+            shards,
+            shards_cfs,
             prefix_allocator,
             // length of the raw key, exclude the meta prefix
             max_keylen,
@@ -127,24 +166,25 @@ impl Engine for RocksEngine {
     }
 
     fn flush(&self) {
-        self.meta.flush().unwrap();
-        (0..DATA_SET_NUM).for_each(|i| {
-            self.meta.flush_cf(self.cf_hdr(i)).unwrap();
-        });
+        for (i, db) in self.shards.iter().enumerate() {
+            db.flush().unwrap();
+            for cf in &self.shards_cfs[i] {
+                db.flush_cf(cf).unwrap();
+            }
+        }
     }
 
     fn iter(&self, meta_prefix: PreBytes) -> RocksIter {
-        let area_idx = self.area_idx(meta_prefix);
+        let db = self.get_db(meta_prefix);
+        let cf = self.get_cf(meta_prefix);
 
-        let inner = self
-            .meta
-            .prefix_iterator_cf(self.cf_hdr(area_idx), meta_prefix);
+        let inner = db.prefix_iterator_cf(cf, meta_prefix);
 
         let mut opt = ReadOptions::default();
         opt.set_prefix_same_as_start(true);
 
-        let inner_rev = self.meta.iterator_cf_opt(
-            self.cf_hdr(area_idx),
+        let inner_rev = db.iterator_cf_opt(
+            cf,
             opt,
             IteratorMode::From(
                 &self.get_upper_bound_value(meta_prefix),
@@ -160,7 +200,8 @@ impl Engine for RocksEngine {
         meta_prefix: PreBytes,
         bounds: R,
     ) -> RocksIter {
-        let area_idx = self.area_idx(meta_prefix);
+        let db = self.get_db(meta_prefix);
+        let cf = self.get_cf(meta_prefix);
 
         let mut opt = ReadOptions::default();
         let mut opt_rev = ReadOptions::default();
@@ -204,27 +245,22 @@ impl Engine for RocksEngine {
         opt.set_prefix_same_as_start(true);
         opt_rev.set_prefix_same_as_start(true);
 
-        let inner = self.meta.iterator_cf_opt(
-            self.cf_hdr(area_idx),
-            opt,
-            IteratorMode::From(l, Direction::Forward),
-        );
+        let inner =
+            db.iterator_cf_opt(cf, opt, IteratorMode::From(l, Direction::Forward));
 
-        let inner_rev = self.meta.iterator_cf_opt(
-            self.cf_hdr(area_idx),
-            opt_rev,
-            IteratorMode::From(&h, Direction::Reverse),
-        );
+        let inner_rev =
+            db.iterator_cf_opt(cf, opt_rev, IteratorMode::From(&h, Direction::Reverse));
 
         RocksIter { inner, inner_rev }
     }
 
     fn get(&self, meta_prefix: PreBytes, key: &[u8]) -> Option<RawValue> {
-        let area_idx = self.area_idx(meta_prefix);
+        let db = self.get_db(meta_prefix);
+        let cf = self.get_cf(meta_prefix);
 
         let mut k = meta_prefix.to_vec();
         k.extend_from_slice(key);
-        self.meta.get_cf(self.cf_hdr(area_idx), k).unwrap()
+        db.get_cf(cf, k).unwrap()
     }
 
     fn insert(
@@ -233,7 +269,8 @@ impl Engine for RocksEngine {
         key: &[u8],
         value: &[u8],
     ) -> Option<RawValue> {
-        let area_idx = self.area_idx(meta_prefix);
+        let db = self.get_db(meta_prefix);
+        let cf = self.get_cf(meta_prefix);
 
         let mut k = meta_prefix.to_vec();
         k.extend_from_slice(key);
@@ -242,23 +279,28 @@ impl Engine for RocksEngine {
             self.set_max_key_len(key.len());
         }
 
-        let old_v = self.meta.get_cf(self.cf_hdr(area_idx), &k).unwrap();
-        self.meta.put_cf(self.cf_hdr(area_idx), k, value).unwrap();
+        let old_v = db.get_cf(cf, &k).unwrap();
+        db.put_cf(cf, k, value).unwrap();
         old_v
     }
 
     fn remove(&self, meta_prefix: PreBytes, key: &[u8]) -> Option<RawValue> {
-        let area_idx = self.area_idx(meta_prefix);
+        let db = self.get_db(meta_prefix);
+        let cf = self.get_cf(meta_prefix);
 
         let mut k = meta_prefix.to_vec();
         k.extend_from_slice(key);
-        let old_v = self.meta.get_cf(self.cf_hdr(area_idx), &k).unwrap();
-        self.meta.delete_cf(self.cf_hdr(area_idx), k).unwrap();
+        let old_v = db.get_cf(cf, &k).unwrap();
+        db.delete_cf(cf, k).unwrap();
         old_v
     }
 
     fn get_instance_len_hint(&self, instance_prefix: PreBytes) -> u64 {
-        crate::parse_int!(self.meta.get(instance_prefix).unwrap().unwrap(), u64)
+        self.meta
+            .get(instance_prefix)
+            .unwrap()
+            .map(|v| crate::parse_int!(v, u64))
+            .unwrap_or(0)
     }
 
     fn set_instance_len_hint(&self, instance_prefix: PreBytes, new_len: u64) {
@@ -276,19 +318,21 @@ pub struct RocksIter {
 impl Iterator for RocksIter {
     type Item = (RawKey, RawValue);
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner
-            .next()
-            .map(|v| v.unwrap())
-            .map(|(ik, iv)| (ik[PREFIX_SIZE..].to_vec(), iv.into_vec()))
+        self.inner.next().map(|v| v.unwrap()).map(|(ik, iv)| {
+            let mut k = ik.into_vec();
+            k.drain(..PREFIX_SIZE);
+            (k, iv.into_vec())
+        })
     }
 }
 
 impl DoubleEndedIterator for RocksIter {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.inner_rev
-            .next()
-            .map(|v| v.unwrap())
-            .map(|(ik, iv)| (ik[PREFIX_SIZE..].to_vec(), iv.into_vec()))
+        self.inner_rev.next().map(|v| v.unwrap()).map(|(ik, iv)| {
+            let mut k = ik.into_vec();
+            k.drain(..PREFIX_SIZE);
+            (k, iv.into_vec())
+        })
     }
 }
 
@@ -312,12 +356,7 @@ impl PreAllocator {
     // }
 }
 
-fn rocksdb_open() -> Result<(DB, Vec<String>)> {
-    let dir = vsdb_get_base_dir();
-
-    // avoid setting again on an opened DB
-    omit!(vsdb_set_base_dir(&dir));
-
+fn rocksdb_open_shard(dir: &Path) -> Result<(DB, Vec<String>)> {
     let mut cfg = Options::default();
 
     cfg.create_if_missing(true);
@@ -344,9 +383,9 @@ fn rocksdb_open() -> Result<(DB, Vec<String>)> {
             .parse::<usize>()
             .c(d!())?
             * 1024;
-        alt!((32 * G) < memsiz, 8 * G, G) / DATA_SET_NUM
+        alt!((16 * G) < memsiz, memsiz / 4, G) / (DATA_SET_NUM * SHARD_CNT)
     } else {
-        G / DATA_SET_NUM
+        G / (DATA_SET_NUM * SHARD_CNT)
     };
 
     // println!(
@@ -381,7 +420,7 @@ fn rocksdb_open() -> Result<(DB, Vec<String>)> {
         .map(|i| ColumnFamilyDescriptor::new(i, cfg.clone()))
         .collect::<Vec<_>>();
 
-    let db = DB::open_cf_descriptors(&cfg, &dir, cfs).c(d!())?;
+    let db = DB::open_cf_descriptors(&cfg, dir, cfs).c(d!())?;
 
     Ok((db, cfhdrs))
 }

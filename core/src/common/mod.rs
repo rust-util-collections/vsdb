@@ -83,8 +83,8 @@ pub static VSDB: LazyLock<VsDB<engines::RocksDB>> = LazyLock::new(|| pnk!(VsDB::
 /// This static variable is lazily initialized and provides a single point of
 /// access to the underlying database. The backend is determined by the
 /// feature flags passed at compile time.
-#[cfg(feature = "parity_backend")]
-pub static VSDB: LazyLock<VsDB<engines::ParityDB>> = LazyLock::new(|| pnk!(VsDB::new()));
+#[cfg(feature = "fjall_backend")]
+pub static VSDB: LazyLock<VsDB<engines::FjallDB>> = LazyLock::new(|| pnk!(VsDB::new()));
 
 /// A thread pool for cleaning up orphan instances in the background.
 ///

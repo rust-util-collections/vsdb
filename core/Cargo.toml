@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_core"
-version = "6.0.0"
+version = "7.0.2"
 authors = ["hui.fan@mail.ru"]
 edition = "2024"
 description = "A std-collection-like database"
@@ -18,7 +18,7 @@ parking_lot = { workspace = true }
 
 threadpool = { workspace = true } # used in a background cleaner
 
-parity-db = { workspace = true, optional = true }
+fjall = { workspace = true, optional = true }
 rocksdb = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -27,12 +27,12 @@ hex = "0.4"
 criterion = "0.8"
 
 [features]
-default = ["compress", "parity_backend"]
+default = ["compress", "fjall_backend"]
 
-parity_backend = ["parity-db"]
+fjall_backend = ["fjall"]
 rocks_backend = ["rocksdb"]
 
-compress = ["rocksdb?/zstd"]
+compress = ["rocksdb?/zstd", "fjall?/lz4"]
 
 # [[bench]]
 # name = "basic"

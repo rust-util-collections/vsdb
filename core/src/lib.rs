@@ -12,7 +12,7 @@
 /// Manages storage backends, raw data types, and shared utilities.
 ///
 /// This module provides the `Engine` trait for abstracting over different
-/// key-value stores (like RocksDB and ParityDB), along with fundamental
+/// key-value stores (like RocksDB and Fjall), along with fundamental
 /// types such as `RawKey`, `RawValue`, and environment management functions.
 pub mod common;
 

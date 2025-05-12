@@ -160,15 +160,19 @@ impl<T: ValueEnDe> Vecx<T> {
         let idx = idx as u64;
         match (self.len() as u64).cmp(&idx) {
             Ordering::Greater => {
-                let shadow = unsafe { self.inner.shadow() };
-                shadow
-                    .range(
+                self.inner
+                    .inner
+                    .range_detached(
                         Cow::Borrowed(&idx.to_be_bytes()[..])
                             ..Cow::Borrowed(&(self.len() as u64).to_be_bytes()[..]),
                     )
                     .for_each(|(i, iv)| {
-                        self.inner
-                            .insert((crate::parse_int!(i, u64) + 1).to_be_bytes(), &iv);
+                        unsafe {
+                            self.inner.insert_encoded_value(
+                                (crate::parse_int!(i, u64) + 1).to_be_bytes(),
+                                iv,
+                            )
+                        };
                     });
                 self.inner.insert(idx.to_be_bytes(), v);
             }
@@ -199,12 +203,16 @@ impl<T: ValueEnDe> Vecx<T> {
         if !self.is_empty() && idx < self.len() as u64 {
             let last_idx = self.len() as u64 - 1;
             let ret = self.inner.remove(idx.to_be_bytes()).unwrap();
-            let shadow = unsafe { self.inner.shadow() };
-            shadow
-                .range(Cow::Borrowed(&(1 + idx).to_be_bytes()[..])..)
+            self.inner
+                .inner
+                .range_detached(Cow::Borrowed(&(1 + idx).to_be_bytes()[..])..)
                 .for_each(|(i, v)| {
-                    self.inner
-                        .insert((crate::parse_int!(i, u64) - 1).to_be_bytes(), &v);
+                    unsafe {
+                        self.inner.insert_encoded_value(
+                            (crate::parse_int!(i, u64) - 1).to_be_bytes(),
+                            v,
+                        )
+                    };
                 });
             self.inner.remove(last_idx.to_be_bytes());
             return ret;

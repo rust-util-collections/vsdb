@@ -17,7 +17,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-vsdb = "6.0.0"
+vsdb = "7.0.0"
 ```
 
 ## Highlights
@@ -33,7 +33,7 @@ For more detailed API examples, see [API Examples](docs/api.md).
 
 ## Features
 
-- `parity_backend`: **(Default)** Use `parity-db` as the backend database. Pure Rust implementation.
+- `fjall_backend`: **(Default)** Use `fjall` as the backend database. Pure Rust implementation.
 - `rocks_backend`: Use `rocksdb` as the backend database. C++ implementation.
 - `msgpack_codec`: **(Default)** Use `rmp-serde` as the codec for faster performance.
 - `json_codec`: Use `serde_json` as the codec for better compatibility.

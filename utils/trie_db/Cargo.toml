@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_trie_db"
-version = "6.0.1"
+version = "7.0.0"
 edition = "2024"
 keywords = ["mpt", "trie", "database", "blockchain"]
 license = "MIT"
@@ -21,7 +21,7 @@ thiserror = { workspace = true }
 rand = { workspace = true }
 
 [features]
-default = ["parity_backend", "msgpack_codec"]
-parity_backend = ["vsdb/parity_backend"]
+default = ["fjall_backend", "msgpack_codec"]
+fjall_backend = ["vsdb/fjall_backend"]
 rocks_backend = ["vsdb/rocks_backend"]
 msgpack_codec = ["vsdb/msgpack_codec"]
