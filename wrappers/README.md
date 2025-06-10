@@ -17,7 +17,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-vsdb = "7.0.0"
+vsdb = "7.1.0"
 ```
 
 ## Highlights
@@ -40,33 +40,6 @@ For more detailed API examples, see [API Examples](docs/api.md).
 - `compress`: **(Default)** Enable data compression in the backend database.
 
 ## Usage
-
-### Vecx
-
-`Vecx` is a persistent, vector-like data structure.
-
-```rust
-use vsdb::Vecx;
-
-let mut vec = Vecx::new();
-
-// Push some values
-vec.push(&10);
-vec.push(&20);
-vec.push(&30);
-
-// Get a value
-assert_eq!(vec.get(1), Some(20));
-
-// Iterate over the values
-for value in vec.iter() {
-    println!("{}", value);
-}
-
-// Pop a value
-assert_eq!(vec.pop(), Some(30));
-assert_eq!(vec.len(), 2);
-```
 
 ### Mapx
 
@@ -94,7 +67,6 @@ for (key, value) in map.iter() {
 
 // Remove a key-value pair
 map.remove(&"key1");
-assert_eq!(map.len(), 1);
 ```
 
 ### MapxOrd
@@ -127,7 +99,6 @@ assert_eq!(map.last(), Some((3, "three".to_string())));
 ## Important Notes
 
 - The serialized result of a `vsdb` instance cannot be used for distributed consensus. The serialized data contains meta-information (like storage paths) that may differ across environments. The correct approach is to read the required data and then process the raw content.
-- The `len()` of a data structure is not always guaranteed to be absolutely reliable and should be treated as a hint. This is because some operations may not update the length atomically in real-time for performance reasons.
 
 ## License
 

@@ -22,9 +22,6 @@
 //! m.insert(&1, &"hello".to_string());
 //! m.insert(&2, &"world".to_string());
 //!
-//! // Check the length of the map
-//! assert_eq!(m.len(), 2);
-//!
 //! // Retrieve a value
 //! assert_eq!(m.get(&1), Some("hello".to_string()));
 //!
@@ -35,11 +32,9 @@
 //!
 //! // Remove a key-value pair
 //! m.remove(&2);
-//! assert_eq!(m.len(), 1);
 //!
 //! // Clear the entire map
 //! m.clear();
-//! assert_eq!(m.len(), 0);
 //!
 //! // Clean up the directory
 //! fs::remove_dir_all(vsdb_get_base_dir()).unwrap();
@@ -159,21 +154,11 @@ where
             .map(|(k, v)| (pnk!(K::from_bytes(k)), v))
     }
 
-    /// Returns the number of entries in the map.
-    #[inline(always)]
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    /// Checks if the map is empty.
-    #[inline(always)]
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
     /// Inserts a key-value pair into the map.
+    ///
+    /// Does not return the old value for performance reasons.
     #[inline(always)]
-    pub fn insert(&mut self, key: &K, value: &V) -> Option<V> {
+    pub fn insert(&mut self, key: &K, value: &V) {
         self.inner.insert(key.to_bytes(), value)
     }
 
@@ -184,11 +169,7 @@ where
     /// This is a low-level API for performance-critical scenarios, such as versioned
     /// implementations. Do not use for common purposes.
     #[inline(always)]
-    pub unsafe fn insert_encoded_value(
-        &mut self,
-        key: &K,
-        value: impl AsRef<[u8]>,
-    ) -> Option<V> {
+    pub unsafe fn insert_encoded_value(&mut self, key: &K, value: impl AsRef<[u8]>) {
         unsafe { self.inner.insert_encoded_value(key.to_bytes(), value) }
     }
 
@@ -299,9 +280,11 @@ where
         self.iter().next_back()
     }
 
-    /// Removes a key from the map, returning the value if it existed.
+    /// Removes a key from the map.
+    ///
+    /// Does not return the old value for performance reasons.
     #[inline(always)]
-    pub fn remove(&mut self, key: &K) -> Option<V> {
+    pub fn remove(&mut self, key: &K) {
         self.inner.remove(key.to_bytes())
     }
 
@@ -315,6 +298,15 @@ where
     #[inline(always)]
     pub fn clear(&mut self) {
         self.inner.clear();
+    }
+
+    /// Batch write operations.
+    #[inline(always)]
+    pub fn batch<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut dyn vsdb_core::common::BatchTrait),
+    {
+        self.inner.batch(f);
     }
 
     /// Checks if this `MapxOrd` instance is the same as another.

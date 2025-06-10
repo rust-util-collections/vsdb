@@ -1,11 +1,11 @@
 use crate::common::{
-    Engine, GB, MB, PREFIX_SIZE, Pre, PreBytes, RESERVED_ID_CNT, RawKey, RawValue,
-    vsdb_get_base_dir, vsdb_set_base_dir,
+    BatchTrait, Engine, GB, MB, PREFIX_SIZE, Pre, PreBytes, RESERVED_ID_CNT, RawKey,
+    RawValue, vsdb_get_base_dir, vsdb_set_base_dir,
 };
 use parking_lot::Mutex;
 use rocksdb::{
     ColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType, DBIterator, Direction,
-    IteratorMode, Options, ReadOptions, SliceTransform,
+    IteratorMode, Options, ReadOptions, SliceTransform, WriteBatch,
 };
 use ruc::*;
 use std::{
@@ -16,7 +16,7 @@ use std::{
     path::Path,
     sync::{
         LazyLock,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     thread::available_parallelism,
 };
@@ -35,6 +35,16 @@ pub struct RocksEngine {
     shards_cfs: Vec<Vec<&'static ColumnFamily>>,
     prefix_allocator: PreAllocator,
     max_keylen: AtomicUsize,
+}
+
+// Optimization: Helper function to build full key with pre-allocated capacity
+#[inline(always)]
+fn make_full_key(meta_prefix: &[u8], key: &[u8]) -> Vec<u8> {
+    let total_len = meta_prefix.len() + key.len();
+    let mut full_key = Vec::with_capacity(total_len);
+    full_key.extend_from_slice(meta_prefix);
+    full_key.extend_from_slice(key);
+    full_key
 }
 
 impl RocksEngine {
@@ -63,10 +73,16 @@ impl RocksEngine {
 
     #[inline(always)]
     fn set_max_key_len(&self, len: usize) {
-        self.max_keylen.store(len, Ordering::Relaxed);
-        self.meta
-            .put(META_KEY_MAX_KEYLEN, len.to_be_bytes())
-            .unwrap();
+        // Optimization: Check if update is needed
+        let current = self.max_keylen.load(Ordering::Relaxed);
+        if len > current {
+            // SAFETY: Always persist to meta DB before updating memory to ensure consistency on crash.
+            // Performance impact is acceptable as key length growth usually stabilizes quickly.
+            self.meta
+                .put(META_KEY_MAX_KEYLEN, len.to_be_bytes())
+                .unwrap();
+            self.max_keylen.store(len, Ordering::Relaxed);
+        }
     }
 
     #[inline(always)]
@@ -142,23 +158,43 @@ impl Engine for RocksEngine {
     }
 
     // 'step 1' and 'step 2' is not atomic in multi-threads scene,
-    // so we use a `Mutex` lock for thread safe.
+    // Optimization: Use AtomicU64 for better performance, persist periodically
     #[allow(unused_variables)]
     fn alloc_prefix(&self) -> Pre {
+        static COUNTER: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
         static LK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+        // Try lock-free fast path first
+        let current = COUNTER.load(Ordering::Relaxed);
+        if current > 0 {
+            let next = COUNTER.fetch_add(1, Ordering::AcqRel);
+            // Persist every 1024 allocations to reduce write amplification
+            if next.is_multiple_of(1024) {
+                let _ = self
+                    .meta
+                    .put(self.prefix_allocator.key, (next + 1024).to_be_bytes());
+            }
+            return next;
+        }
+
+        // Slow path: initialize from DB
         let x = LK.lock();
-
-        // step 1
-        let ret = crate::parse_prefix!(
-            self.meta.get(self.prefix_allocator.key).unwrap().unwrap()
-        );
-
-        // step 2
-        self.meta
-            .put(self.prefix_allocator.key, (1 + ret).to_be_bytes())
-            .unwrap();
-
-        ret
+        let db_value = COUNTER.load(Ordering::Relaxed);
+        if db_value == 0 {
+            // Read from DB
+            let ret = crate::parse_prefix!(
+                self.meta.get(self.prefix_allocator.key).unwrap().unwrap()
+            );
+            COUNTER.store(ret + 1, Ordering::Release);
+            // Reserve a batch for future allocations
+            self.meta
+                .put(self.prefix_allocator.key, (ret + 1024).to_be_bytes())
+                .unwrap();
+            ret
+        } else {
+            drop(x);
+            self.alloc_prefix()
+        }
     }
 
     fn area_count(&self) -> usize {
@@ -258,55 +294,52 @@ impl Engine for RocksEngine {
         let db = self.get_db(meta_prefix);
         let cf = self.get_cf(meta_prefix);
 
-        let mut k = meta_prefix.to_vec();
-        k.extend_from_slice(key);
-        db.get_cf(cf, k).unwrap()
+        // Optimization: Use helper function with pre-allocated capacity
+        let full_key = make_full_key(meta_prefix.as_slice(), key);
+        db.get_cf(cf, full_key).unwrap()
     }
 
-    fn insert(
-        &self,
-        meta_prefix: PreBytes,
-        key: &[u8],
-        value: &[u8],
-    ) -> Option<RawValue> {
+    fn insert(&self, meta_prefix: PreBytes, key: &[u8], value: &[u8]) {
         let db = self.get_db(meta_prefix);
         let cf = self.get_cf(meta_prefix);
 
-        let mut k = meta_prefix.to_vec();
-        k.extend_from_slice(key);
-
+        // Optimization: Check and update max_keylen with reduced frequency
         if key.len() > self.get_max_keylen() {
             self.set_max_key_len(key.len());
         }
 
-        let old_v = db.get_cf(cf, &k).unwrap();
-        db.put_cf(cf, k, value).unwrap();
-        old_v
+        // Optimization: Use helper function with pre-allocated capacity
+        let full_key = make_full_key(meta_prefix.as_slice(), key);
+
+        // Direct insert without read-before-write - major performance improvement
+        db.put_cf(cf, full_key, value).unwrap();
     }
 
-    fn remove(&self, meta_prefix: PreBytes, key: &[u8]) -> Option<RawValue> {
+    fn remove(&self, meta_prefix: PreBytes, key: &[u8]) {
         let db = self.get_db(meta_prefix);
         let cf = self.get_cf(meta_prefix);
 
-        let mut k = meta_prefix.to_vec();
-        k.extend_from_slice(key);
-        let old_v = db.get_cf(cf, &k).unwrap();
-        db.delete_cf(cf, k).unwrap();
-        old_v
+        // Optimization: Use helper function with pre-allocated capacity
+        let full_key = make_full_key(meta_prefix.as_slice(), key);
+
+        // Direct remove without read-before-write - major performance improvement
+        db.delete_cf(cf, full_key).unwrap();
     }
 
-    fn get_instance_len_hint(&self, instance_prefix: PreBytes) -> u64 {
-        self.meta
-            .get(instance_prefix)
-            .unwrap()
-            .map(|v| crate::parse_int!(v, u64))
-            .unwrap_or(0)
-    }
+    fn write_batch<F>(&self, meta_prefix: PreBytes, f: F)
+    where
+        F: FnOnce(&mut dyn BatchTrait),
+    {
+        let db = self.get_db(meta_prefix);
+        let cf = self.get_cf(meta_prefix);
+        let mut batch = RocksBatch::new(meta_prefix, cf);
+        f(&mut batch);
+        db.write(batch.inner).unwrap();
 
-    fn set_instance_len_hint(&self, instance_prefix: PreBytes, new_len: u64) {
-        self.meta
-            .put(instance_prefix, new_len.to_be_bytes())
-            .unwrap();
+        // Update max_keylen if needed
+        if batch.max_key_len > 0 && batch.max_key_len > self.get_max_keylen() {
+            self.set_max_key_len(batch.max_key_len);
+        }
     }
 }
 
@@ -354,6 +387,54 @@ impl PreAllocator {
     // fn next(base: &[u8]) -> [u8; PREFIX_SIZE] {
     //     (crate::parse_prefix!(base) + 1).to_be_bytes()
     // }
+}
+
+/// Batch write operations for RocksDB
+pub struct RocksBatch {
+    inner: WriteBatch,
+    meta_prefix: PreBytes,
+    cf: &'static ColumnFamily,
+    max_key_len: usize,
+}
+
+impl RocksBatch {
+    fn new(meta_prefix: PreBytes, cf: &'static ColumnFamily) -> Self {
+        Self {
+            inner: WriteBatch::default(),
+            meta_prefix,
+            cf,
+            max_key_len: 0,
+        }
+    }
+
+    /// Insert a key-value pair in this batch
+    #[inline(always)]
+    pub fn insert(&mut self, key: &[u8], value: &[u8]) {
+        let full_key = make_full_key(self.meta_prefix.as_slice(), key);
+        self.inner.put_cf(self.cf, full_key, value);
+        if key.len() > self.max_key_len {
+            self.max_key_len = key.len();
+        }
+    }
+
+    /// Remove a key in this batch
+    #[inline(always)]
+    pub fn remove(&mut self, key: &[u8]) {
+        let full_key = make_full_key(self.meta_prefix.as_slice(), key);
+        self.inner.delete_cf(self.cf, full_key);
+    }
+}
+
+impl BatchTrait for RocksBatch {
+    #[inline(always)]
+    fn insert(&mut self, key: &[u8], value: &[u8]) {
+        self.insert(key, value);
+    }
+
+    #[inline(always)]
+    fn remove(&mut self, key: &[u8]) {
+        self.remove(key);
+    }
 }
 
 fn rocksdb_open_shard(dir: &Path) -> Result<(DB, Vec<String>)> {

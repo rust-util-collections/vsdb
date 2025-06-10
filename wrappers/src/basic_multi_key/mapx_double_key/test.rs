@@ -14,19 +14,18 @@ fn test_insert() {
             let key = &(&i, &i);
             assert!(hdr.get(key).is_none());
             hdr.entry(key).or_insert(value);
-            assert!(hdr.insert(key, &value).is_some());
+            hdr.insert(key, &value);
             assert!(hdr.contains_key(&key));
             assert_eq!(pnk!(hdr.get(&key)), value);
-            assert_eq!(pnk!(hdr.remove(&(&i, Some(&i)))), value);
+            hdr.remove(&(&i, Some(&i)));
             assert!(hdr.get(&key).is_none());
-            assert!(hdr.insert(&key, &value).is_none());
+            hdr.insert(&key, &value);
         });
     hdr.clear();
     (0..max).map(|i: usize| i).for_each(|i| {
         let key = &(&i, &i);
         assert!(hdr.get(key).is_none());
     });
-    assert!(hdr.is_empty());
 }
 
 #[test]
@@ -37,7 +36,7 @@ fn test_valueende() {
         let max = 100;
         (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
             let key = &(&key, &key);
-            assert!(hdr.insert(key, &value).is_none());
+            hdr.insert(key, &value);
         });
         <MapxDk<usize, usize, usize> as ValueEnDe>::encode(&hdr)
     };

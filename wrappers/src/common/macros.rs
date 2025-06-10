@@ -65,16 +65,6 @@ macro_rules! define_map_wrapper {
             }
 
             #[inline(always)]
-            pub fn len(&self) -> usize {
-                self.inner.len()
-            }
-
-            #[inline(always)]
-            pub fn is_empty(&self) -> bool {
-                self.inner.is_empty()
-            }
-
-            #[inline(always)]
             pub fn clear(&mut self) {
                 self.inner.clear();
             }

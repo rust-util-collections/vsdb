@@ -135,18 +135,21 @@ where
     }
 
     /// Inserts a key-value pair into the map.
+    ///
+    /// Does not return the old value for performance reasons.
     #[inline(always)]
-    pub fn insert(&mut self, key: &(&K1, &K2), value: &V) -> Option<V> {
+    pub fn insert(&mut self, key: &(&K1, &K2), value: &V) {
         let k1 = key.0.encode();
         let k2 = key.1.encode();
         let v = value.encode();
-        pnk!(self.inner.insert(&[&k1, &k2], &v))
-            .map(|old_v| pnk!(ValueEnDe::decode(&old_v)))
+        pnk!(self.inner.insert(&[&k1, &k2], &v));
     }
 
     /// Removes a key-value pair from the map. Supports batch removal by omitting the second key.
+    ///
+    /// Does not return the old value for performance reasons.
     #[inline(always)]
-    pub fn remove(&mut self, key: &(&K1, Option<&K2>)) -> Option<V> {
+    pub fn remove(&mut self, key: &(&K1, Option<&K2>)) {
         let k1 = key.0.encode();
         let k2 = key.1.map(|k2| k2.encode());
         let k = if let Some(k2) = k2.as_ref() {
@@ -154,8 +157,7 @@ where
         } else {
             vec![&k1[..]]
         };
-        pnk!(self.inner.remove(k.as_slice()))
-            .map(|old_v| pnk!(ValueEnDe::decode(&old_v)))
+        pnk!(self.inner.remove(k.as_slice()));
     }
 
     /// Clears the map, removing all key-value pairs.

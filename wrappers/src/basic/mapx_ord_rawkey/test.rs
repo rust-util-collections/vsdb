@@ -3,60 +3,41 @@ use ruc::*;
 
 #[test]
 fn test_insert() {
-    let mut hdr = MapxOrdRawKey::new();
+    let mut hdr: MapxOrdRawKey<usize> = MapxOrdRawKey::new();
     let max = 100;
     (0..max)
-        .map(|i: usize| (i.to_be_bytes(), (max + i).to_be_bytes()))
+        .map(|i: usize| (i.to_be_bytes(), (max + i)))
         .for_each(|(key, value)| {
             let key = key.to_vec();
-            let value = value.to_vec();
             assert!(hdr.get(&key).is_none());
-            hdr.entry(&key[..]).or_insert(value.clone());
+            hdr.entry(&key[..]).or_insert(value);
             hdr.set_value(&key[..], &value);
-            assert!(hdr.insert(&key[..], &value).is_some());
+            hdr.insert(&key[..], &value);
             assert!(hdr.contains_key(&key[..]));
             assert_eq!(pnk!(hdr.get(&key[..])), value);
-            assert_eq!(pnk!(hdr.remove(&key[..])), value);
+            hdr.remove(&key[..]);
             assert!(hdr.get(&key[..]).is_none());
-            assert!(hdr.insert(&key[..], &value).is_none());
+            hdr.insert(&key[..], &value);
         });
     hdr.clear();
     (0..max).map(|i: usize| i.to_be_bytes()).for_each(|key| {
         assert!(hdr.get(&key).is_none());
     });
-    assert!(hdr.is_empty());
-}
-#[test]
-fn test_len() {
-    let mut hdr = MapxOrdRawKey::new();
-    let max = 100;
-    (0..max)
-        .map(|i: usize| (i.to_be_bytes(), max + i))
-        .for_each(|(key, value)| {
-            assert!(hdr.insert(&key[..], &value).is_none());
-        });
-    assert_eq!(100, hdr.len());
-
-    for key in 0..max {
-        assert!(hdr.remove(&key.to_be_bytes()).is_some());
-    }
-    assert_eq!(0, hdr.len());
 }
 
 #[test]
 fn test_valueende() {
     let cnt = 100;
     let dehdr = {
-        let mut hdr = MapxOrdRawKey::new();
+        let mut hdr: MapxOrdRawKey<usize> = MapxOrdRawKey::new();
         (0..cnt)
             .map(|i: usize| (i.to_be_bytes(), i))
             .for_each(|(key, value)| {
-                assert!(hdr.insert(&key[..], &value).is_none());
+                hdr.insert(&key[..], &value);
             });
         <MapxOrdRawKey<usize> as ValueEnDe>::encode(&hdr)
     };
     let mut reloaded = pnk!(<MapxOrdRawKey<usize> as ValueEnDe>::decode(&dehdr));
-    assert_eq!(cnt, reloaded.len());
     (0..cnt).map(|i: usize| i).for_each(|i| {
         assert_eq!(i, reloaded.get(&i.to_be_bytes()).unwrap());
     });
@@ -64,27 +45,26 @@ fn test_valueende() {
 
 #[test]
 fn test_iter() {
-    let mut hdr = MapxOrdRawKey::new();
+    let mut hdr: MapxOrdRawKey<usize> = MapxOrdRawKey::new();
     let max = 100;
     (0..max)
         .map(|i: usize| (i.to_be_bytes(), i))
         .for_each(|(key, value)| {
-            assert!(hdr.insert(&key[..], &value).is_none());
+            hdr.insert(&key[..], &value);
         });
     for (key, _) in hdr.iter().collect::<Vec<_>>().into_iter() {
-        hdr.unset_value(&key);
+        hdr.remove(&key);
     }
-    assert_eq!(0, hdr.len());
 }
 
 #[test]
 fn test_first_last() {
-    let mut hdr = MapxOrdRawKey::new();
+    let mut hdr: MapxOrdRawKey<usize> = MapxOrdRawKey::new();
     let max = 100;
     (0..max)
         .map(|i: usize| (i.to_be_bytes(), i))
         .for_each(|(key, value)| {
-            assert!(hdr.insert(&key[..], &value).is_none());
+            hdr.insert(&key[..], &value);
         });
     let (_, value) = pnk!(hdr.first());
     assert_eq!(0, value);
@@ -95,12 +75,12 @@ fn test_first_last() {
 
 #[test]
 fn test_values() {
-    let mut hdr = MapxOrdRawKey::new();
+    let mut hdr: MapxOrdRawKey<usize> = MapxOrdRawKey::new();
     let max = 100;
     (0..max)
         .map(|i: usize| (i.to_be_bytes(), i))
         .for_each(|(key, value)| {
-            assert!(hdr.insert(&key[..], &value).is_none());
+            hdr.insert(&key[..], &value);
         });
     let mut i = 0;
     for (_, it) in hdr.iter() {
@@ -111,12 +91,12 @@ fn test_values() {
 
 #[test]
 fn test_values_first_last() {
-    let mut hdr = MapxOrdRawKey::new();
+    let mut hdr: MapxOrdRawKey<usize> = MapxOrdRawKey::new();
     let max = 100;
     (0..max)
         .map(|i: usize| (i.to_be_bytes(), i))
         .for_each(|(key, value)| {
-            assert!(hdr.insert(&key[..], &value).is_none());
+            hdr.insert(&key[..], &value);
         });
     let (_, value) = pnk!(hdr.iter().next());
     assert_eq!(0, value);

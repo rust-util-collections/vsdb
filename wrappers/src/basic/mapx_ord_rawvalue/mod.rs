@@ -123,7 +123,7 @@ where
 
     /// Inserts a key-value pair into the map.
     #[inline(always)]
-    pub fn insert(&mut self, key: &K, value: impl AsRef<[u8]>) -> Option<RawValue> {
+    pub fn insert(&mut self, key: &K, value: impl AsRef<[u8]>) {
         self.inner.insert(key.to_bytes(), value.as_ref())
     }
 
@@ -236,7 +236,7 @@ where
 
     /// Removes a key from the map, returning the value if it existed.
     #[inline(always)]
-    pub fn remove(&mut self, key: &K) -> Option<RawValue> {
+    pub fn remove(&mut self, key: &K) {
         self.inner.remove(key.to_bytes())
     }
 
@@ -244,6 +244,15 @@ where
     #[inline(always)]
     pub fn unset_value(&mut self, key: &K) {
         self.inner.remove(key.to_bytes());
+    }
+
+    /// Batch write operations.
+    #[inline(always)]
+    pub fn batch<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut dyn vsdb_core::common::BatchTrait),
+    {
+        self.inner.batch(f);
     }
 }
 

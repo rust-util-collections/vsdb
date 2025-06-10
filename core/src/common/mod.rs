@@ -8,6 +8,7 @@
 
 pub(crate) mod engines;
 
+pub use engines::BatchTrait;
 use engines::Engine;
 use parking_lot::Mutex;
 use ruc::*;

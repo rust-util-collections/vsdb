@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
 };
-use vsdb::basic::mapx::Mapx;
+use vsdb::{ValueEnDe, basic::mapx::Mapx};
 
 fn read_write(c: &mut Criterion) {
     let mut group = c.benchmark_group("** vsdb::basic::mapx::Mapx **");
@@ -28,6 +28,18 @@ fn read_write(c: &mut Criterion) {
             db.get(&[n; 2]);
         })
     });
+
+    group.bench_function(" batch write (100 items) ", |b| {
+        b.iter(|| {
+            db.batch(|batch| {
+                for _ in 0..100 {
+                    let n = i.fetch_add(1, Ordering::SeqCst);
+                    batch.insert(&[n; 2].encode(), &vec![n; 128].encode());
+                }
+            });
+        })
+    });
+
     group.finish();
 }
 

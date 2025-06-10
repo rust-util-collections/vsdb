@@ -11,34 +11,24 @@ fn test_insert() {
         .for_each(|(key, value)| {
             assert!(hdr.get(&key).is_none());
             hdr.entry(&key).or_insert(&value);
-            assert!(hdr.insert(&key, &value).is_some());
+
+            // After inserting, should exist
             assert!(hdr.contains_key(&key));
             assert_eq!(&pnk!(hdr.get(&key))[..], &value[..]);
-            assert_eq!(&pnk!(hdr.remove(&key))[..], &value[..]);
+
+            // Remove it
+            hdr.remove(&key);
             assert!(hdr.get(&key).is_none());
-            assert!(hdr.insert(&key, &value).is_none());
+
+            // Insert again
+            hdr.insert(&key, &value);
+            assert!(hdr.contains_key(&key));
         });
+
     hdr.clear();
     (0..max).map(|i: u64| to_bytes(i)).for_each(|key| {
         assert!(hdr.get(&key).is_none());
     });
-    assert!(hdr.is_empty());
-}
-#[test]
-fn test_len() {
-    let mut hdr = MapxRaw::new();
-    let max = 100;
-    (0..max)
-        .map(|i: u64| (to_bytes(i), to_bytes(max + i)))
-        .for_each(|(key, value)| {
-            assert!(hdr.insert(&key, &value).is_none());
-        });
-    assert_eq!(100, hdr.len());
-
-    for key in 0..max {
-        assert!(hdr.remove(&to_bytes(key)).is_some());
-    }
-    assert_eq!(0, hdr.len());
 }
 
 #[test]
@@ -48,24 +38,16 @@ fn test_iter() {
     (0..max)
         .map(|i: u64| (to_bytes(i), to_bytes(i)))
         .for_each(|(key, value)| {
-            assert!(hdr.insert(&key, &value).is_none());
+            hdr.insert(&key, &value);
         });
 
     hdr.iter_mut().for_each(|(k, mut v)| {
         *v = to_bytes(to_u64(&v) + 1).to_vec().into();
     });
 
-    for (idx, key) in hdr
-        .iter()
-        .map(|(k, _)| k)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .enumerate()
-    {
-        assert_eq!(idx as u64 + 1, to_u64(&hdr.remove(&key).unwrap()));
+    for (idx, (key, value)) in hdr.iter().enumerate() {
+        assert_eq!(idx as u64 + 1, to_u64(&value));
     }
-
-    assert_eq!(0, hdr.len());
 }
 
 #[test]
@@ -75,8 +57,9 @@ fn test_first_last() {
     (0..max)
         .map(|i: u64| (to_bytes(i), to_bytes(i)))
         .for_each(|(key, value)| {
-            assert!(hdr.insert(&key, &value).is_none());
+            hdr.insert(&key, &value);
         });
+
     let (_, value) = pnk!(hdr.iter().next());
     let val = to_u64(&value);
     assert_eq!(0, val);
@@ -84,6 +67,38 @@ fn test_first_last() {
     let (_, value) = pnk!(hdr.iter().next_back());
     let val = to_u64(&value);
     assert_eq!(max - 1, val);
+}
+
+#[test]
+fn test_batch() {
+    let mut hdr = MapxRaw::new();
+    let max = 100u64;
+
+    hdr.batch(|batch| {
+        for i in 0..max {
+            let key = to_bytes(i);
+            let value = to_bytes(max + i);
+            batch.insert(&key, &value);
+        }
+    });
+
+    for i in 0..max {
+        let key = to_bytes(i);
+        let value = to_bytes(max + i);
+        assert_eq!(&pnk!(hdr.get(&key))[..], &value[..]);
+    }
+
+    hdr.batch(|batch| {
+        for i in 0..max {
+            let key = to_bytes(i);
+            batch.remove(&key);
+        }
+    });
+
+    for i in 0..max {
+        let key = to_bytes(i);
+        assert!(hdr.get(&key).is_none());
+    }
 }
 
 fn to_u64(bytes: &[u8]) -> u64 {

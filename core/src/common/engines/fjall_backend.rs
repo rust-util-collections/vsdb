@@ -49,10 +49,15 @@ impl FjallEngine {
 
     #[inline(always)]
     fn set_max_key_len(&self, len: usize) {
-        self.max_keylen.store(len, Ordering::Relaxed);
-        self.meta
-            .insert(META_KEY_MAX_KEYLEN, len.to_be_bytes())
-            .unwrap();
+        // Optimization: Check if update is needed
+        let current = self.max_keylen.load(Ordering::Relaxed);
+        if len > current {
+            // SAFETY: Always persist to meta DB before updating memory to ensure consistency on crash.
+            self.meta
+                .insert(META_KEY_MAX_KEYLEN, len.to_be_bytes())
+                .unwrap();
+            self.max_keylen.store(len, Ordering::Relaxed);
+        }
     }
 }
 
@@ -78,9 +83,11 @@ impl Engine for FjallEngine {
                 .parse::<u64>()
                 .c(d!())?
                 * 1024;
-            alt!((16 * GB) < memsiz, memsiz / 4, GB)
+            // Use more memory on systems with >16GB RAM
+            alt!((16 * GB) < memsiz, memsiz / 3, GB)
         } else {
-            GB
+            // Use more memory on non-Linux systems (e.g., macOS)
+            4 * GB
         };
 
         // NOTE:
@@ -89,19 +96,35 @@ impl Engine for FjallEngine {
         // starting from a small number, the MSB will remain 0 for practically forever
         // (until 2^56 collections are created).
         // This means effectively ONLY Shard 0 is used.
-        // If we divide memory by SHARD_CNT (16), we starve the only active shard.
-        // Therefore, we oversubscribe memory significantly, assuming that in practice
-        // only a few shards (likely just one) will ever be active.
-        // We set the budget per shard to half of the total available budget.
-        let per_shard_budget = total_mem_budget / 2;
-        let write_buffer_size = per_shard_budget / 4;
+        // Therefore, we allocate most of the memory budget to each shard,
+        // assuming that in practice only a few shards (likely just one) will ever be active.
+        // This significantly improves performance for the active shard.
+        let per_shard_budget = (total_mem_budget * 4) / 5; // 80% of total budget
+
+        // For write-heavy workloads, use 30% for write buffer (up from 25%)
+        let write_buffer_size = (per_shard_budget * 3) / 10;
         let cache_size = per_shard_budget - write_buffer_size;
+
+        // Determine number of CPU cores for workers
+        let num_cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+
+        // Configure flush and compaction workers based on CPU count
+        let flush_workers = num_cpus.min(8);
+        let compaction_workers = num_cpus.min(4);
+
+        // Use larger journal size (1GB) for better write performance
+        let max_journaling_size = 1024 * 1024 * 1024; // 1GB
 
         for i in 0..SHARD_CNT {
             let dir = base_dir.join(format!("shard_{}", i));
             let ks = Config::new(dir)
                 .max_write_buffer_size(write_buffer_size)
                 .cache_size(cache_size)
+                .flush_workers(flush_workers)
+                .compaction_workers(compaction_workers)
+                .max_journaling_size(max_journaling_size)
                 .open()
                 .c(d!())?;
 
@@ -192,6 +215,7 @@ impl Engine for FjallEngine {
     }
 
     fn flush(&self) {
+        // Persist all shards
         for ks in &self.shards {
             // ks.persist(fjall::PersistMode::SyncAll).unwrap();
             ks.persist(fjall::PersistMode::Buffer).unwrap();
@@ -217,30 +241,29 @@ impl Engine for FjallEngine {
     ) -> FjallIter {
         let part = self.get_part(meta_prefix);
 
+        // Optimize: build bounds without unnecessary clones
         let mut b_lo = meta_prefix.to_vec();
         let start = match bounds.start_bound() {
             Bound::Included(lo) => {
                 b_lo.extend_from_slice(lo);
-                Bound::Included(b_lo.clone())
+                Bound::Included(b_lo)
             }
             Bound::Excluded(lo) => {
                 b_lo.extend_from_slice(lo);
-                Bound::Excluded(b_lo.clone())
+                Bound::Excluded(b_lo)
             }
-            Bound::Unbounded => {
-                Bound::Included(b_lo.clone()) // Start from prefix
-            }
+            Bound::Unbounded => Bound::Included(b_lo),
         };
 
         let mut b_hi = meta_prefix.to_vec();
         let end = match bounds.end_bound() {
             Bound::Included(hi) => {
                 b_hi.extend_from_slice(hi);
-                Bound::Included(b_hi.clone())
+                Bound::Included(b_hi)
             }
             Bound::Excluded(hi) => {
                 b_hi.extend_from_slice(hi);
-                Bound::Excluded(b_hi.clone())
+                Bound::Excluded(b_hi)
             }
             Bound::Unbounded => Bound::Unbounded,
         };
@@ -262,12 +285,7 @@ impl Engine for FjallEngine {
         part.get(k).unwrap().map(|v| v.to_vec())
     }
 
-    fn insert(
-        &self,
-        meta_prefix: PreBytes,
-        key: &[u8],
-        value: &[u8],
-    ) -> Option<RawValue> {
+    fn insert(&self, meta_prefix: PreBytes, key: &[u8], value: &[u8]) {
         let part = self.get_part(meta_prefix);
         let mut k = meta_prefix.to_vec();
         k.extend_from_slice(key);
@@ -276,36 +294,70 @@ impl Engine for FjallEngine {
             self.set_max_key_len(key.len());
         }
 
-        // Fjall insert does not return old value.
-        // We must get it first to satisfy the trait.
-        // This makes insert slower (read-modify-write).
-        let old_v = part.get(&k).unwrap().map(|v| v.to_vec());
+        // Direct insert without read-before-write - major performance improvement
         part.insert(k, value).unwrap();
-        old_v
     }
 
-    fn remove(&self, meta_prefix: PreBytes, key: &[u8]) -> Option<RawValue> {
+    fn remove(&self, meta_prefix: PreBytes, key: &[u8]) {
         let part = self.get_part(meta_prefix);
         let mut k = meta_prefix.to_vec();
         k.extend_from_slice(key);
 
-        let old_v = part.get(&k).unwrap().map(|v| v.to_vec());
+        // Direct remove without read-before-write - major performance improvement
         part.remove(k).unwrap();
-        old_v
     }
 
-    fn get_instance_len_hint(&self, instance_prefix: PreBytes) -> u64 {
-        self.meta
-            .get(instance_prefix)
-            .unwrap()
-            .map(|v| crate::parse_int!(v, u64))
-            .unwrap_or(0)
+    fn write_batch<F>(&self, meta_prefix: PreBytes, f: F)
+    where
+        F: FnOnce(&mut dyn crate::common::BatchTrait),
+    {
+        let shard_idx = self.get_shard_idx(meta_prefix);
+        let ks = &self.shards[shard_idx];
+        let part = self.get_part(meta_prefix);
+
+        let mut batch = ks.batch();
+        let mut wrapper = FjallBatch {
+            inner: &mut batch,
+            part,
+            meta_prefix,
+            max_key_len: 0,
+        };
+
+        f(&mut wrapper);
+
+        let max_len = wrapper.max_key_len;
+
+        batch.commit().unwrap();
+
+        if max_len > self.get_max_keylen() {
+            self.set_max_key_len(max_len);
+        }
+    }
+}
+
+pub struct FjallBatch<'a> {
+    inner: &'a mut fjall::Batch,
+    part: &'a Partition,
+    meta_prefix: PreBytes,
+    max_key_len: usize,
+}
+
+impl crate::common::BatchTrait for FjallBatch<'_> {
+    #[inline(always)]
+    fn insert(&mut self, key: &[u8], value: &[u8]) {
+        let mut k = self.meta_prefix.to_vec();
+        k.extend_from_slice(key);
+        self.inner.insert(self.part, k, value);
+        if key.len() > self.max_key_len {
+            self.max_key_len = key.len();
+        }
     }
 
-    fn set_instance_len_hint(&self, instance_prefix: PreBytes, new_len: u64) {
-        self.meta
-            .insert(instance_prefix, new_len.to_be_bytes())
-            .unwrap();
+    #[inline(always)]
+    fn remove(&mut self, key: &[u8]) {
+        let mut k = self.meta_prefix.to_vec();
+        k.extend_from_slice(key);
+        self.inner.remove(self.part, k);
     }
 }
 
@@ -325,9 +377,8 @@ impl Iterator for FjallIter {
                 if !k.starts_with(&self.prefix) {
                     return None;
                 }
-                let mut k_vec = k;
-                k_vec.drain(..PREFIX_SIZE);
-                Some((k_vec, v))
+                // Use slice instead of Vec::drain for better performance
+                Some((k[PREFIX_SIZE..].to_vec(), v))
             }
             Some(Err(e)) => {
                 panic!("Fjall iteration error: {}", e);
@@ -344,9 +395,8 @@ impl DoubleEndedIterator for FjallIter {
                 if !k.starts_with(&self.prefix) {
                     return None;
                 }
-                let mut k_vec = k;
-                k_vec.drain(..PREFIX_SIZE);
-                Some((k_vec, v))
+                // Use slice instead of Vec::drain for better performance
+                Some((k[PREFIX_SIZE..].to_vec(), v))
             }
             Some(Err(e)) => {
                 panic!("Fjall iteration error: {}", e);

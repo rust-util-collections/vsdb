@@ -2,34 +2,7 @@
 
 This document provides examples for the public APIs in the `vsdb` crate.
 
-## Vecx
-
-`Vecx` is a vector-like data structure that stores values in a contiguous sequence.
-
-```rust
-use vsdb::Vecx;
-
-let mut vec = Vecx::new();
-
-// Push some values
-vec.push(&10);
-vec.push(&20);
-vec.push(&30);
-
-// Get a value
-assert_eq!(vec.get(1), Some(20));
-
-// Iterate over the values
-for value in vec.iter() {
-    println!("{}", value);
-}
-
-// Pop a value
-assert_eq!(vec.pop(), Some(30));
-assert_eq!(vec.len(), 2);
-```
-
-### Mapx
+## Mapx
 
 `Mapx` is a hash map-like data structure that stores key-value pairs.
 
@@ -55,7 +28,6 @@ for (key, value) in map.iter() {
 
 // Remove a key-value pair
 map.remove(&"key1");
-assert_eq!(map.len(), 1);
 ```
 
 ### MapxOrd

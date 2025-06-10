@@ -133,7 +133,7 @@ impl MapxRawMk {
     /// Checks if the map is empty.
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        self.inner.iter().next().is_none()
     }
 
     /// Gets an entry for a given key, allowing for in-place modification.
@@ -147,18 +147,18 @@ impl MapxRawMk {
     }
 
     /// Inserts a key-value pair into the map.
+    ///
+    /// Does not return the old value for performance reasons.
     #[inline(always)]
-    pub fn insert(&mut self, key: &[&[u8]], value: &[u8]) -> Result<Option<RawValue>> {
+    pub fn insert(&mut self, key: &[&[u8]], value: &[u8]) -> Result<()> {
         if key.len() != self.key_size as usize {
             return Err(eg!("Incorrect key size"));
         }
 
-        let mut ret = None;
-
         let mut hdr = unsafe { self.inner.shadow() };
         for (idx, k) in key.iter().enumerate() {
             if 1 + idx == self.key_size as usize {
-                ret = hdr.insert(k, value);
+                hdr.insert(k, value);
                 break;
             } else {
                 let mut new_hdr = None;
@@ -177,12 +177,14 @@ impl MapxRawMk {
             }
         }
 
-        Ok(ret)
+        Ok(())
     }
 
     /// Removes a key-value pair from the map. Supports batch removal by providing a partial key.
+    ///
+    /// Does not return the old value for performance reasons.
     #[inline(always)]
-    pub fn remove(&mut self, key: &[&[u8]]) -> Result<Option<RawValue>> {
+    pub fn remove(&mut self, key: &[&[u8]]) -> Result<()> {
         // Support batch removal from key path.
         if key.len() > self.key_size as usize {
             return Err(eg!("Incorrect key size"));
@@ -193,22 +195,18 @@ impl MapxRawMk {
             if let Some(v) = hdr.get(k) {
                 // NOTE: use `key.len()` instead of `self.key_size`
                 if 1 + idx == key.len() {
-                    let ret = hdr.remove(k);
+                    hdr.remove(k);
                     // NOTE: use `self.key_size` instead of `key.len()`
-                    if 1 + idx == self.key_size as usize {
-                        return Ok(ret);
-                    } else {
-                        return Ok(None);
-                    }
+                    return Ok(());
                 } else {
                     hdr = pnk!(ValueEnDe::decode(&v));
                 }
             } else {
-                return Ok(None);
+                return Ok(());
             }
         }
 
-        Ok(None) // empty key
+        Ok(()) // empty key
     }
 
     /// Clears the map, removing all key-value pairs.

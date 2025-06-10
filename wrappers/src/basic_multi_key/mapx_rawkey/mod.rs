@@ -127,21 +127,17 @@ impl<V: ValueEnDe> MapxRawKeyMk<V> {
 
     /// Inserts a key-value pair into the map.
     #[inline(always)]
-    pub fn insert(&mut self, key: &[&[u8]], value: &V) -> Result<Option<V>> {
+    pub fn insert(&mut self, key: &[&[u8]], value: &V) -> Result<()> {
         let v = value.encode();
-        self.inner
-            .insert(key, &v)
-            .c(d!())
-            .map(|v| v.map(|old_v| pnk!(ValueEnDe::decode(&old_v))))
+        self.inner.insert(key, &v).c(d!())
     }
 
     /// Removes a key-value pair from the map. Supports batch removal by providing a partial key.
+    ///
+    /// Does not return the old value for performance reasons.
     #[inline(always)]
-    pub fn remove(&mut self, key: &[&[u8]]) -> Result<Option<V>> {
-        self.inner
-            .remove(key)
-            .c(d!())
-            .map(|v| v.map(|old_v| pnk!(ValueEnDe::decode(&old_v))))
+    pub fn remove(&mut self, key: &[&[u8]]) -> Result<()> {
+        self.inner.remove(key).c(d!())
     }
 
     /// Clears the map, removing all key-value pairs.

@@ -25,7 +25,7 @@ threadpool = "1.8.1" # used in a background cleaner
 fjall = { version = "2.11.2", default-features = false, features = ["single_writer_tx"] }
 rocksdb = { version = "0.24.0", default-features = false, features = ["bindgen-runtime"] }
 
-vsdb = { path = "wrappers", version = "7.0.0", default-features = false }
-vsdb_core = { path = "core", version = "7.0.0", default-features = false }
+vsdb = { path = "wrappers", version = "7.1.0", default-features = false }
+vsdb_core = { path = "core", version = "7.1.0", default-features = false }
 
-vsdb_trie_db = { path = "utils/trie_db", version = "7.0.0", default-features = false }
+vsdb_trie_db = { path = "utils/trie_db", version = "7.1.0", default-features = false }

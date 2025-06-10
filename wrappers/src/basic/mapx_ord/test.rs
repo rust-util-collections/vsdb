@@ -10,34 +10,16 @@ fn test_insert() {
         .for_each(|(key, value)| {
             assert!(hdr.get(&key).is_none());
             hdr.set_value(&key, &value);
-            assert!(hdr.insert(&key, &value).is_some());
+            hdr.insert(&key, &value);
             assert!(hdr.contains_key(&key));
             assert_eq!(pnk!(hdr.get(&key)), value);
-            assert_eq!(pnk!(hdr.remove(&key)), value);
+            hdr.remove(&key);
             assert!(hdr.get(&key).is_none());
         });
     hdr.clear();
     (0..max).map(|i: usize| i).for_each(|key| {
         assert!(hdr.get(&key).is_none());
     });
-    assert!(hdr.is_empty());
-}
-
-#[test]
-fn test_len() {
-    let mut hdr: MapxOrd<usize, usize> = MapxOrd::new();
-    let max = 100;
-    (0..max)
-        .map(|i: usize| (i, (max + i)))
-        .for_each(|(key, value)| {
-            assert!(hdr.insert(&key, &value).is_none());
-        });
-    assert_eq!(100, hdr.len());
-
-    for key in 0..max {
-        assert!(hdr.remove(&key).is_some());
-    }
-    assert_eq!(0, hdr.len());
 }
 
 #[test]
@@ -46,12 +28,11 @@ fn test_valueende() {
     let dehdr = {
         let mut hdr: MapxOrd<usize, usize> = MapxOrd::new();
         (0..cnt).map(|i: usize| (i, i)).for_each(|(key, value)| {
-            assert!(hdr.insert(&key, &value).is_none());
+            hdr.insert(&key, &value);
         });
         <MapxOrd<usize, usize> as ValueEnDe>::encode(&hdr)
     };
     let mut reloaded = pnk!(<MapxOrd<usize, usize> as ValueEnDe>::decode(&dehdr));
-    assert_eq!(cnt, reloaded.len());
     (0..cnt).map(|i: usize| i).for_each(|i| {
         assert_eq!(i, reloaded.get(&i).unwrap());
     });
@@ -62,13 +43,12 @@ fn test_iter() {
     let mut hdr: MapxOrd<usize, usize> = MapxOrd::new();
     let max = 100;
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
-        assert!(hdr.insert(&key, &value).is_none());
+        hdr.insert(&key, &value);
     });
     for (key, value) in hdr.iter().collect::<Vec<_>>().into_iter() {
         assert_eq!(key, value);
         hdr.unset_value(&key);
     }
-    assert_eq!(0, hdr.len());
 }
 
 #[test]
@@ -76,7 +56,7 @@ fn test_first_last() {
     let mut hdr: MapxOrd<usize, usize> = MapxOrd::new();
     let max = 100;
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
-        assert!(hdr.insert(&key, &value).is_none());
+        hdr.insert(&key, &value);
     });
     let (key, value) = pnk!(hdr.first());
     assert_eq!(key, value);
@@ -92,7 +72,7 @@ fn test_values() {
     let mut hdr: MapxOrd<usize, usize> = MapxOrd::new();
     let max = 100;
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
-        assert!(hdr.insert(&key, &value).is_none());
+        hdr.insert(&key, &value);
     });
     let mut i = 0;
     for it in hdr.values() {
@@ -106,7 +86,7 @@ fn test_values_first_last() {
     let mut hdr: MapxOrd<usize, usize> = MapxOrd::new();
     let max = 100;
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
-        assert!(hdr.insert(&key, &value).is_none());
+        hdr.insert(&key, &value);
     });
     let value = pnk!(hdr.values().next());
     assert_eq!(0, value);

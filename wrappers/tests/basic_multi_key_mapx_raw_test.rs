@@ -32,21 +32,21 @@ fn basic_cases() {
     assert!(map.get(&[]).is_none());
 
     // does not exist
-    assert!(map.remove(&[&[1], &[2], &[3], &[200]]).unwrap().is_none());
+    map.remove(&[&[1], &[2], &[3], &[200]]).unwrap();
 
-    assert!(map.remove(&[&[1], &[2], &[3], &[40]]).unwrap().is_some());
+    map.remove(&[&[1], &[2], &[3], &[40]]).unwrap();
     assert!(map.get(&[&[1], &[2], &[3], &[40]]).is_none());
 
     // partial-path remove
-    assert!(map.remove(&[&[1], &[2], &[30]]).unwrap().is_none()); // yes, is none
+    map.remove(&[&[1], &[2], &[30]]).unwrap(); // yes, is none
     assert!(map.get(&[&[1], &[2], &[30], &[40]]).is_none());
     assert!(map.get(&[&[1], &[2], &[30], &[41]]).is_none());
 
     // nothing will be removed by an empty key
-    assert!(map.remove(&[]).unwrap().is_none());
+    map.remove(&[]).unwrap();
 
     assert!(map.get(&[&[1], &[2], &[3], &[4]]).is_some());
-    assert!(map.remove(&[&[1]]).unwrap().is_none()); // yes, is none
+    map.remove(&[&[1]]).unwrap(); // yes, is none
     assert!(map.get(&[&[1], &[2], &[3], &[4]]).is_none());
 
     assert!(map.entry(&[]).is_err());

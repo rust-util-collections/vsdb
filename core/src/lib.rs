@@ -32,6 +32,6 @@ pub use basic::mapx_raw::MapxRaw;
 /// raw data types (`RawBytes`, `RawKey`, `RawValue`), and functions for managing
 /// the database environment (e.g., `vsdb_flush`, `vsdb_set_base_dir`).
 pub use common::{
-    GB, KB, MB, NULL, RawBytes, RawKey, RawValue, vsdb_flush, vsdb_get_base_dir,
-    vsdb_get_custom_dir, vsdb_set_base_dir,
+    BatchTrait, GB, KB, MB, NULL, RawBytes, RawKey, RawValue, vsdb_flush,
+    vsdb_get_base_dir, vsdb_get_custom_dir, vsdb_set_base_dir,
 };

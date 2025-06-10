@@ -124,17 +124,19 @@ where
     }
 
     /// Inserts a key-value pair into the DAG map.
+    ///
+    /// Does not return the old value for performance reasons.
     #[inline(always)]
-    pub fn insert(&mut self, key: impl AsRef<[u8]>, value: &V) -> Option<V> {
-        self.inner
-            .insert(key, value.encode())
-            .map(|v| V::decode(&v).unwrap())
+    pub fn insert(&mut self, key: impl AsRef<[u8]>, value: &V) {
+        self.inner.insert(key, value.encode())
     }
 
     /// Removes a key-value pair from the DAG map.
+    ///
+    /// Does not return the old value for performance reasons.
     #[inline(always)]
-    pub fn remove(&mut self, key: impl AsRef<[u8]>) -> Option<V> {
-        self.inner.remove(key).map(|v| V::decode(&v).unwrap())
+    pub fn remove(&mut self, key: impl AsRef<[u8]>) {
+        self.inner.remove(key)
     }
 
     /// Prunes the DAG, merging all nodes in the mainline into the genesis node.

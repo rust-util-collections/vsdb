@@ -13,7 +13,6 @@ fn basic_cases() {
     let hdr = {
         let mut hdr_i = MapxRaw::new();
 
-        assert_eq!(0, hdr_i.len());
         (0..cnt).for_each(|i: usize| {
             assert!(hdr_i.get(&i.to_be_bytes()).is_none());
         });
@@ -23,20 +22,25 @@ fn basic_cases() {
             .for_each(|(i, b)| {
                 hdr_i.entry(&i).or_insert(&b);
                 assert_eq!(&hdr_i.get(&i).unwrap()[..], &i[..]);
-                assert_eq!(&hdr_i.remove(&i).unwrap()[..], &b[..]);
-                assert!(hdr_i.get(&i).is_none());
-                assert!(hdr_i.insert(&i, &b).is_none());
-                assert!(hdr_i.insert(&i, &b).is_some());
-            });
 
-        assert_eq!(cnt, hdr_i.len());
+                // Remove check
+                assert!(hdr_i.contains_key(&i));
+                hdr_i.remove(&i);
+                assert!(hdr_i.get(&i).is_none());
+
+                // Insert checks
+                hdr_i.insert(&i, &b);
+                assert!(hdr_i.contains_key(&i));
+
+                // Overwrite check
+                hdr_i.insert(&i, &b);
+                assert!(hdr_i.contains_key(&i));
+            });
 
         pnk!(msgpack::to_vec(&hdr_i))
     };
 
     let mut reloaded = pnk!(msgpack::from_slice::<MapxRaw>(&hdr));
-
-    assert_eq!(cnt, reloaded.len());
 
     (0..cnt).map(|i: usize| i.to_be_bytes()).for_each(|i| {
         assert_eq!(&i[..], &reloaded.get(&i).unwrap()[..]);
@@ -46,13 +50,11 @@ fn basic_cases() {
         *reloaded.get_mut(&i).unwrap() = i.to_vec();
         assert_eq!(&reloaded.get(&i).unwrap()[..], &i[..]);
         assert!(reloaded.contains_key(&i));
-        assert!(reloaded.remove(&i).is_some());
+        reloaded.remove(&i);
         assert!(!reloaded.contains_key(&i));
     });
 
-    assert_eq!(1, reloaded.len());
     reloaded.clear();
-    assert!(reloaded.is_empty());
 
     reloaded.insert(&[1], &[1]);
     reloaded.insert(&[4], &[4]);
