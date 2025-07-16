@@ -104,7 +104,14 @@ where
         if self.data.entry(&slot).or_insert(DataCtner::new()).insert(k) {
             self.tiers.iter_mut().for_each(|t| {
                 let slot_floor = slot / t.floor_base * t.floor_base;
-                *t.data.entry(&slot_floor).or_insert(0) += 1;
+                let mut v = t.data.entry(&slot_floor).or_insert(0);
+                if 0 == *v {
+                    *t.entry_count.get_mut() += 1;
+                    if let Some(l) = t.len_cache.as_mut() {
+                        *l += 1;
+                    }
+                }
+                *v += 1;
             });
             *self.total.get_mut() += 1;
         }
@@ -122,7 +129,7 @@ where
         let slot = self.to_storage_slot(slot);
 
         loop {
-            if let Some(top) = self.tiers.last()
+            if let Some(top) = self.tiers.last_mut()
                 && top.len() < 2
             {
                 self.tiers.pop();
@@ -149,6 +156,7 @@ where
                 if 1 == *cnt {
                     drop(cnt); // release the mut reference
                     t.data.remove(&slot_floor);
+                    t.dec_len();
                 } else {
                     *cnt -= 1;
                 }
@@ -470,17 +478,25 @@ where
 
     // Ensure there is enough tier capacity to cover the new slot.
     fn ensure_tier_capacity(&mut self, _target_slot: Slot) {
-        if let Some(top) = self.tiers.last() {
+        let tiers_len = self.tiers.len();
+        if let Some(top) = self.tiers.last_mut() {
             if top.len() as u64 <= self.tier_capacity {
                 return;
             }
             // Create a new top tier
             let newtop = top.data.iter().fold(
-                Tier::new(self.tiers.len() as u32, self.tier_capacity),
+                Tier::new(tiers_len as u32, self.tier_capacity),
                 |mut t, (slot, cnt)| {
                     let slot_floor = slot / t.floor_base * t.floor_base;
-                    *t.data.entry(&slot_floor).or_insert(0) += cnt;
-                    *t.entry_count.get_mut() += 1;
+                    let mut v = t.data.entry(&slot_floor).or_insert(0);
+                    if 0 == *v {
+                        *t.entry_count.get_mut() += 1;
+                        if let Some(l) = t.len_cache.as_mut() {
+                            *l += 1;
+                        }
+                    }
+                    *v += cnt;
+                    drop(v);
                     t
                 },
             );
@@ -488,12 +504,18 @@ where
         } else {
             // First insertion, tiers' length should be 0
             let newtop = self.data.iter().fold(
-                Tier::new(self.tiers.len() as u32, self.tier_capacity),
+                Tier::new(tiers_len as u32, self.tier_capacity),
                 |mut t, (slot, entries)| {
                     let slot_floor = slot / t.floor_base * t.floor_base;
-                    *t.data.entry(&slot_floor).or_insert(0) +=
-                        entries.len() as EntryCnt;
-                    *t.entry_count.get_mut() += 1;
+                    let mut v = t.data.entry(&slot_floor).or_insert(0);
+                    if 0 == *v {
+                        *t.entry_count.get_mut() += 1;
+                        if let Some(l) = t.len_cache.as_mut() {
+                            *l += 1;
+                        }
+                    }
+                    *v += entries.len() as EntryCnt;
+                    drop(v);
                     t
                 },
             );
@@ -508,17 +530,6 @@ where
             !logical_slot
         } else {
             logical_slot
-        }
-    }
-
-    // Convert a storage slot (internal key) back to a logical slot.
-    #[allow(dead_code)]
-    #[inline(always)]
-    fn to_logical_slot(&self, storage_slot: Slot) -> Slot {
-        if self.swap_order {
-            !storage_slot
-        } else {
-            storage_slot
         }
     }
 
@@ -561,10 +572,7 @@ where
     K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
     Small(BTreeSet<K>),
-    Large {
-        map: MapxOrd<K, ()>,
-        len: Orphan<usize>,
-    },
+    Large { map: MapxOrd<K, ()>, len: usize },
 }
 
 impl<K> DataCtner<K>
@@ -578,7 +586,7 @@ where
     fn len(&self) -> usize {
         match self {
             Self::Small(i) => i.len(),
-            Self::Large { len, .. } => len.get_value(),
+            Self::Large { len, .. } => *len,
         }
     }
 
@@ -600,7 +608,7 @@ where
 
         *self = Self::Large {
             map: new_map,
-            len: Orphan::new(set_len),
+            len: set_len,
         };
     }
 
@@ -613,7 +621,7 @@ where
                 let existed = map.get(&k).is_some();
                 map.insert(&k, &());
                 if !existed {
-                    *len.get_mut() += 1;
+                    *len += 1;
                 }
                 !existed
             }
@@ -627,7 +635,7 @@ where
                 let existed = map.get(target).is_some();
                 if existed {
                     map.remove(target);
-                    *len.get_mut() -= 1;
+                    *len -= 1;
                 }
                 existed
             }
@@ -691,6 +699,8 @@ struct Tier {
     data: MapxOrd<SlotFloor, EntryCnt>,
     // Track the number of entries since MapxOrd no longer has len()
     entry_count: Orphan<usize>,
+    #[serde(skip)]
+    len_cache: Option<usize>,
 }
 
 impl Tier {
@@ -700,12 +710,26 @@ impl Tier {
             floor_base: tier_capacity.pow(pow),
             data: MapxOrd::new(),
             entry_count: Orphan::new(0),
+            len_cache: Some(0),
         }
     }
 
     #[inline(always)]
-    fn len(&self) -> usize {
-        self.entry_count.get_value()
+    fn len(&mut self) -> usize {
+        if let Some(l) = self.len_cache {
+            l
+        } else {
+            let l = self.entry_count.get_value();
+            self.len_cache = Some(l);
+            l
+        }
+    }
+
+    fn dec_len(&mut self) {
+        *self.entry_count.get_mut() -= 1;
+        if let Some(l) = self.len_cache.as_mut() {
+            *l -= 1;
+        }
     }
 }
 
