@@ -31,13 +31,13 @@ type PageIndex = u32;
 /// designed to support fast paged queries and indexes
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(
-    bound = "T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned"
+    bound = "K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned"
 )]
-pub struct SlotDB<T>
+pub struct SlotDB<K>
 where
-    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
-    data: MapxOrd<Slot, DataCtner<T>>,
+    data: MapxOrd<Slot, DataCtner<K>>,
 
     // How many entries in this DB
     total: EntryCnt,
@@ -56,9 +56,9 @@ where
     swap_order: bool,
 }
 
-impl<T> SlotDB<T>
+impl<K> SlotDB<K>
 where
-    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
     ///
     /// @param: `swap_order`:
@@ -79,7 +79,7 @@ where
         }
     }
 
-    pub fn insert(&mut self, mut slot: Slot, t: T) -> Result<()> {
+    pub fn insert(&mut self, mut slot: Slot, k: K) -> Result<()> {
         if self.swap_order {
             slot = swap_order(slot);
         }
@@ -111,7 +111,7 @@ where
         };
 
         #[allow(clippy::unwrap_or_default)]
-        if self.data.entry(&slot).or_insert(DataCtner::new()).insert(t) {
+        if self.data.entry(&slot).or_insert(DataCtner::new()).insert(k) {
             self.tiers.iter_mut().for_each(|t| {
                 let slot_floor = slot / t.floor_base * t.floor_base;
                 *t.data.entry(&slot_floor).or_insert(0) += 1;
@@ -122,7 +122,7 @@ where
         Ok(())
     }
 
-    pub fn remove(&mut self, mut slot: Slot, k: &T) {
+    pub fn remove(&mut self, mut slot: Slot, k: &K) {
         if self.swap_order {
             slot = swap_order(slot);
         }
@@ -181,7 +181,7 @@ where
         page_size: PageSize,
         page_index: PageIndex, // Start from 0
         reverse_order: bool,
-    ) -> Vec<T> {
+    ) -> Vec<K> {
         self.get_entries_by_page_slot(
             None,
             None,
@@ -199,7 +199,7 @@ where
         page_size: PageSize,
         page_index: PageIndex, // start from 0
         mut reverse_order: bool,
-    ) -> Vec<T> {
+    ) -> Vec<K> {
         let mut slot_min = slot_left_bound.unwrap_or(Slot::MIN);
         let mut slot_max = slot_right_bound.unwrap_or(Slot::MAX);
 
@@ -359,7 +359,7 @@ where
         page_size: PageSize,
         page_index: PageIndex,
         reverse: bool,
-    ) -> Vec<T> {
+    ) -> Vec<K> {
         let mut ret = vec![];
         alt!(slot_end < slot_start, return ret);
 
@@ -438,9 +438,9 @@ where
     }
 }
 
-impl<T> Default for SlotDB<T>
+impl<K> Default for SlotDB<K>
 where
-    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
     fn default() -> Self {
         Self::new(8, false)
@@ -449,19 +449,19 @@ where
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(
-    bound = "T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned"
+    bound = "K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned"
 )]
-enum DataCtner<T>
+enum DataCtner<K>
 where
-    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
-    Small(BTreeSet<T>),
-    Large(MapxOrd<T, ()>),
+    Small(BTreeSet<K>),
+    Large(MapxOrd<K, ()>),
 }
 
-impl<T> DataCtner<T>
+impl<K> DataCtner<K>
 where
-    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
     fn new() -> Self {
         Self::Small(BTreeSet::new())
@@ -478,13 +478,13 @@ where
         0 == self.len()
     }
 
-    fn insert(&mut self, t: T) -> bool {
+    fn insert(&mut self, k: K) -> bool {
         if let Self::Small(i) = self {
             if i.len() > 8 {
                 *self = Self::Large(i.iter().fold(
                     MapxOrd::new(),
-                    |mut acc, t| {
-                        acc.insert(t, &());
+                    |mut acc, k| {
+                        acc.insert(k, &());
                         acc
                     },
                 ));
@@ -492,19 +492,19 @@ where
         }
 
         match self {
-            Self::Small(i) => i.insert(t),
-            Self::Large(i) => i.insert(&t, &()).is_none(),
+            Self::Small(i) => i.insert(k),
+            Self::Large(i) => i.insert(&k, &()).is_none(),
         }
     }
 
-    fn remove(&mut self, target: &T) -> bool {
+    fn remove(&mut self, target: &K) -> bool {
         match self {
             Self::Small(i) => i.remove(target),
             Self::Large(i) => i.remove(target).is_some(),
         }
     }
 
-    fn iter(&self) -> DataCtnerIter<T> {
+    fn iter(&self) -> DataCtnerIter<K> {
         match self {
             Self::Small(i) => DataCtnerIter::Small(i.iter()),
             Self::Large(i) => DataCtnerIter::Large(i.iter()),
@@ -512,9 +512,9 @@ where
     }
 }
 
-impl<T> Default for DataCtner<T>
+impl<K> Default for DataCtner<K>
 where
-    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
     fn default() -> Self {
         Self::new()
@@ -522,19 +522,19 @@ where
 }
 
 #[allow(clippy::large_enum_variant)]
-enum DataCtnerIter<'a, T>
+enum DataCtnerIter<'a, K>
 where
-    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
-    Small(SmallIter<'a, T>),
-    Large(LargeIter<'a, T, ()>),
+    Small(SmallIter<'a, K>),
+    Large(LargeIter<'a, K, ()>),
 }
 
-impl<T> Iterator for DataCtnerIter<'_, T>
+impl<K> Iterator for DataCtnerIter<'_, K>
 where
-    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
-    type Item = T;
+    type Item = K;
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             Self::Small(i) => i.next().cloned(),
@@ -543,9 +543,9 @@ where
     }
 }
 
-impl<T> DoubleEndedIterator for DataCtnerIter<'_, T>
+impl<K> DoubleEndedIterator for DataCtnerIter<'_, K>
 where
-    T: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         match self {
