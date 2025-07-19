@@ -6,7 +6,6 @@ use ruc::*;
 use serde::{Deserialize, Serialize, de};
 use std::{
     collections::{BTreeSet, btree_set::Iter as SmallIter},
-    mem,
     ops::Bound,
 };
 use vsdb::{
@@ -43,9 +42,9 @@ where
     // How many entries in this DB
     total: EntryCnt,
 
-    levels: Vec<Level>,
+    tiers: Vec<Tier>,
 
-    multiple_step: u64,
+    tier_capacity: u64,
 
     // Switch the inner implementations of the slot direction:
     // - positive => reverse
@@ -70,12 +69,12 @@ where
     ///
     /// Positive query usually get better performance,
     /// swap order if most cases run in the reverse mode
-    pub fn new(multiple_step: u64, swap_order: bool) -> Self {
+    pub fn new(tier_capacity: u64, swap_order: bool) -> Self {
         Self {
             data: MapxOrd::new(),
             total: 0,
-            levels: vec![],
-            multiple_step,
+            tiers: vec![],
+            tier_capacity,
             swap_order,
         }
     }
@@ -85,36 +84,37 @@ where
             slot = swap_order(slot);
         }
 
-        if let Some(top) = self.levels.last() {
-            if top.data.len() as u64 > self.multiple_step {
+        if let Some(top) = self.tiers.last() {
+            if top.data.len() as u64 > self.tier_capacity {
                 let newtop = top.data.iter().fold(
-                    Level::new(self.levels.len() as u32, self.multiple_step),
-                    |mut l, (slot, cnt)| {
-                        let slot_floor = slot / l.floor_base * l.floor_base;
-                        *l.data.entry(&slot_floor).or_insert(0) += cnt;
-                        l
+                    Tier::new(self.tiers.len() as u32, self.tier_capacity),
+                    |mut t, (slot, cnt)| {
+                        let slot_floor = slot / t.floor_base * t.floor_base;
+                        *t.data.entry(&slot_floor).or_insert(0) += cnt;
+                        t
                     },
                 );
-                self.levels.push(newtop);
+                self.tiers.push(newtop);
             }
         } else {
+            // First insertion scene, tiers' length should be 0
             let newtop = self.data.iter().fold(
-                Level::new(self.levels.len() as u32, self.multiple_step),
-                |mut l, (slot, entries)| {
-                    let slot_floor = slot / l.floor_base * l.floor_base;
-                    *l.data.entry(&slot_floor).or_insert(0) +=
+                Tier::new(self.tiers.len() as u32, self.tier_capacity),
+                |mut t, (slot, entries)| {
+                    let slot_floor = slot / t.floor_base * t.floor_base;
+                    *t.data.entry(&slot_floor).or_insert(0) +=
                         entries.len() as EntryCnt;
-                    l
+                    t
                 },
             );
-            self.levels.push(newtop);
+            self.tiers.push(newtop);
         };
 
         #[allow(clippy::unwrap_or_default)]
         if self.data.entry(&slot).or_insert(DataCtner::new()).insert(t) {
-            self.levels.iter_mut().for_each(|l| {
-                let slot_floor = slot / l.floor_base * l.floor_base;
-                *l.data.entry(&slot_floor).or_insert(0) += 1;
+            self.tiers.iter_mut().for_each(|t| {
+                let slot_floor = slot / t.floor_base * t.floor_base;
+                *t.data.entry(&slot_floor).or_insert(0) += 1;
             });
             self.total += 1;
         }
@@ -122,16 +122,16 @@ where
         Ok(())
     }
 
-    pub fn remove(&mut self, mut slot: Slot, t: &T) {
+    pub fn remove(&mut self, mut slot: Slot, k: &T) {
         if self.swap_order {
             slot = swap_order(slot);
         }
 
         loop {
-            if let Some(top_len) = self.levels.last().map(|top| top.data.len())
+            if let Some(top_len) = self.tiers.last().map(|top| top.data.len())
             {
                 if top_len < 2 {
-                    self.levels.pop();
+                    self.tiers.pop();
                     continue;
                 }
             }
@@ -139,7 +139,7 @@ where
         }
 
         let (exist, empty) = match self.data.get_mut(&slot) {
-            Some(mut d) => (d.remove(t), d.is_empty()),
+            Some(mut d) => (d.remove(k), d.is_empty()),
             _ => {
                 return;
             }
@@ -150,12 +150,12 @@ where
         }
 
         if exist {
-            self.levels.iter_mut().for_each(|l| {
-                let slot_floor = slot / l.floor_base * l.floor_base;
-                let mut cnt = l.data.get_mut(&slot_floor).unwrap();
+            self.tiers.iter_mut().for_each(|t| {
+                let slot_floor = slot / t.floor_base * t.floor_base;
+                let mut cnt = t.data.get_mut(&slot_floor).unwrap();
                 if 1 == *cnt {
-                    mem::forget(cnt); // for performance
-                    l.data.remove(&slot_floor);
+                    drop(cnt); // release the mut reference
+                    t.data.remove(&slot_floor);
                 } else {
                     *cnt -= 1;
                 }
@@ -168,11 +168,11 @@ where
         self.total = 0;
         self.data.clear();
 
-        self.levels.iter_mut().for_each(|l| {
-            l.data.clear();
+        self.tiers.iter_mut().for_each(|t| {
+            t.data.clear();
         });
 
-        self.levels.clear();
+        self.tiers.clear();
     }
 
     /// Common usages in web services
@@ -237,9 +237,9 @@ where
     fn distance_to_the_leftmost_slot(&self, slot: Slot) -> Distance {
         let mut left_bound = Slot::MIN;
         let mut ret = 0;
-        for l in self.levels.iter().rev() {
-            let right_bound = slot / l.floor_base * l.floor_base;
-            ret += l
+        for t in self.tiers.iter().rev() {
+            let right_bound = slot / t.floor_base * t.floor_base;
+            ret += t
                 .data
                 .range(left_bound..right_bound)
                 .map(|(_, cnt)| cnt as Distance)
@@ -316,9 +316,9 @@ where
         let mut slot_start = Bound::Included(Slot::MIN);
         let mut local_idx = global_skip_num as usize;
 
-        for l in self.levels.iter().rev() {
+        for t in self.tiers.iter().rev() {
             let mut hdr =
-                l.data.range((slot_start, Bound::Unbounded)).peekable();
+                t.data.range((slot_start, Bound::Unbounded)).peekable();
             while let Some(entry_cnt) = hdr.next().map(|(_, cnt)| cnt as usize)
             {
                 if entry_cnt > local_idx {
@@ -396,7 +396,8 @@ where
         ret
     }
 
-    /// Can also be used to do some `data statistics`
+    /// Called by the `total_by_slot`,
+    /// can also be used to do some `data statistics`
     pub fn entry_cnt_within_two_slots(
         &self,
         mut slot_start: Slot,
@@ -555,16 +556,16 @@ where
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct Level {
+struct Tier {
     floor_base: u64,
     data: MapxOrd<SlotFloor, EntryCnt>,
 }
 
-impl Level {
-    fn new(level_idx: u32, multiple_step: u64) -> Self {
-        let pow = 1 + level_idx;
+impl Tier {
+    fn new(tier_idx: u32, tier_capacity: u64) -> Self {
+        let pow = 1 + tier_idx;
         Self {
-            floor_base: multiple_step.pow(pow),
+            floor_base: tier_capacity.pow(pow),
             data: MapxOrd::new(),
         }
     }
