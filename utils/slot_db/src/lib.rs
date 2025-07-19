@@ -10,6 +10,7 @@ use std::{
 };
 use vsdb::{
     KeyEnDeOrdered, MapxOrd, basic::mapx_ord::MapxOrdIter as LargeIter,
+    basic::orphan::Orphan,
 };
 
 type Slot = u64;
@@ -40,7 +41,7 @@ where
     data: MapxOrd<Slot, DataCtner<K>>,
 
     // How many entries in this DB
-    total: EntryCnt,
+    total: Orphan<EntryCnt>,
 
     tiers: Vec<Tier>,
 
@@ -72,7 +73,7 @@ where
     pub fn new(tier_capacity: u64, swap_order: bool) -> Self {
         Self {
             data: MapxOrd::new(),
-            total: 0,
+            total: Orphan::new(0),
             tiers: vec![],
             tier_capacity,
             swap_order,
@@ -116,7 +117,7 @@ where
                 let slot_floor = slot / t.floor_base * t.floor_base;
                 *t.data.entry(&slot_floor).or_insert(0) += 1;
             });
-            self.total += 1;
+            *self.total.get_mut() += 1;
         }
 
         Ok(())
@@ -160,12 +161,12 @@ where
                     *cnt -= 1;
                 }
             });
-            self.total -= 1;
+            *self.total.get_mut() -= 1;
         }
     }
 
     pub fn clear(&mut self) {
-        self.total = 0;
+        *self.total.get_mut() = 0;
         self.data.clear();
 
         self.tiers.iter_mut().for_each(|t| {
@@ -427,7 +428,7 @@ where
         let slot_end = slot_end.unwrap_or(Slot::MAX);
 
         if Slot::MIN == slot_start && Slot::MAX == slot_end {
-            self.total
+            self.total.get_value()
         } else {
             self.entry_cnt_within_two_slots(slot_start, slot_end)
         }
