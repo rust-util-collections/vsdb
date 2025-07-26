@@ -1,5 +1,14 @@
 # CHANGE LOG
 
+## v4.x.x
+
+- Migrate to the 2024 edition of Rust
+- Bump `parity-db` and other dependencies
+- Fix the `total` issue in `slot_db`
+- Rename generic types for clarity
+- Optimize variable naming
+- Declare `len` as a hint in `slot_db`
+
 ## v3.x.x
 
 - Make `<Type>::new()` lazyable

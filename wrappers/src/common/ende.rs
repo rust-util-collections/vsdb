@@ -1,7 +1,9 @@
 //!
-//! # ende
+//! # EnDe (Encode/Decode)
 //!
-//! (en)Encode and (de)Decode
+//! This module provides traits for encoding and decoding keys and values.
+//! These traits are used by the various data structures in `vsdb` to serialize
+//! and deserialize data for storage.
 //!
 
 use super::RawBytes;
@@ -17,61 +19,65 @@ use serde::{Serialize, de::DeserializeOwned};
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
-/// Methods used to encode the KEY.
+/// A trait for encoding keys.
 pub trait KeyEn: Sized {
-    /// Encode original key type to bytes.
+    /// Tries to encode the key into a byte vector.
     fn try_encode_key(&self) -> Result<RawBytes>;
 
+    /// Encodes the key into a byte vector, panicking on failure.
     fn encode_key(&self) -> RawBytes {
         pnk!(self.try_encode_key())
     }
 }
 
-/// Methods used to decode the KEY.
+/// A trait for decoding keys.
 pub trait KeyDe: Sized {
-    /// Decode from bytes to the original key type.
+    /// Decodes a key from a byte slice.
     fn decode_key(bytes: &[u8]) -> Result<Self>;
 }
 
-/// Methods used to encode and decode the KEY.
+/// A trait for both encoding and decoding keys.
 pub trait KeyEnDe: Sized {
-    /// Encode original key type to bytes.
+    /// Tries to encode the key into a byte vector.
     fn try_encode(&self) -> Result<RawBytes>;
 
+    /// Encodes the key into a byte vector, panicking on failure.
     fn encode(&self) -> RawBytes {
         pnk!(self.try_encode())
     }
 
-    /// Decode from bytes to the original key type.
+    /// Decodes a key from a byte slice.
     fn decode(bytes: &[u8]) -> Result<Self>;
 }
 
-/// Methods used to encode the VALUE.
+/// A trait for encoding values.
 pub trait ValueEn: Sized {
-    /// Encode original key type to bytes.
+    /// Tries to encode the value into a byte vector.
     fn try_encode_value(&self) -> Result<RawBytes>;
 
+    /// Encodes the value into a byte vector, panicking on failure.
     fn encode_value(&self) -> RawBytes {
         pnk!(self.try_encode_value())
     }
 }
 
-/// Methods used to decode the VALUE.
+/// A trait for decoding values.
 pub trait ValueDe: Sized {
-    /// Decode from bytes to the original key type.
+    /// Decodes a value from a byte slice.
     fn decode_value(bytes: &[u8]) -> Result<Self>;
 }
 
-/// Methods used to encode and decode the VALUE.
+/// A trait for both encoding and decoding values.
 pub trait ValueEnDe: Sized {
-    /// Encode original key type to bytes.
+    /// Tries to encode the value into a byte vector.
     fn try_encode(&self) -> Result<RawBytes>;
 
+    /// Encodes the value into a byte vector, panicking on failure.
     fn encode(&self) -> RawBytes {
         pnk!(self.try_encode())
     }
 
-    /// Decode from bytes to the original key type.
+    /// Decodes a value from a byte slice.
     fn decode(bytes: &[u8]) -> Result<Self>;
 }
 
@@ -247,21 +253,23 @@ impl_v_ende!(@crate::basic::mapx_ord_rawvalue::MapxOrdRawValue<K>);
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
-/// For keys that their serialized order keep consistent with their original format.
-/// When using this kind of keys, we can do some ordered operations, such as: `get_le/get_be ...`
+/// A trait for keys that maintain their order when serialized.
+///
+/// This trait is crucial for ordered data structures like `MapxOrd`, ensuring that
+/// operations like range queries work correctly.
 pub trait KeyEnDeOrdered: Clone + Eq + Ord + fmt::Debug {
-    /// &key => bytes
+    /// Encodes the key into a byte vector.
     fn to_bytes(&self) -> RawBytes;
 
-    /// key => bytes
+    /// Consumes the key and encodes it into a byte vector.
     fn into_bytes(self) -> RawBytes {
         self.to_bytes()
     }
 
-    /// &bytes => key
+    /// Decodes a key from a byte slice.
     fn from_slice(b: &[u8]) -> Result<Self>;
 
-    /// bytes => key
+    /// Consumes a byte vector and decodes it into a key.
     fn from_bytes(b: RawBytes) -> Result<Self> {
         Self::from_slice(&b)
     }

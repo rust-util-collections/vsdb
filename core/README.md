@@ -1,15 +1,33 @@
-![GitHub top language](https://img.shields.io/github/languages/top/rust-util-collections/vsdb)
-[![Rust](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml/badge.svg)](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml)
-[![Latest Version](https://img.shields.io/crates/v/vsdb.svg)](https://crates.io/crates/vsdb_core)
-[![Rust Documentation](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/vsdb_core)
-[![Minimum rustc version](https://img.shields.io/badge/rustc-1.78+-lightgray.svg)](https://github.com/rust-random/rand#rust-version-requirements)
-
 # vsdb_core
 
-vsdb is a 'std-collection-like' database.
+[![Crates.io](https://img.shields.io/crates/v/vsdb_core.svg)](https://crates.io/crates/vsdb_core)
+[![Docs.rs](https://docs.rs/vsdb_core/badge.svg)](https://docs.rs/vsdb_core)
+[![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](../../LICENSE)
+[![Rust](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml/badge.svg)](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml)
 
-This is a simplified version of the original [**vsdb_core**](https://crates.io/crates/vsdb_core/0.70.0), retaining only the most practical and stable parts.
+> A std-collection-like database.
 
-### Known Issues
+This crate provides the low-level implementations for `vsdb`.
 
-- The instance `len` is not absolutely reliable and should be regarded as a hint
+## Installation
+
+Add this to your `Cargo.toml`:
+
+```toml
+[dependencies]
+vsdb_core = "4.0.2"
+```
+
+## Features
+
+- `parity_backend`: Use `parity-db` as the backend database (default).
+- `rocks_backend`: Use `rocksdb` as the backend database.
+- `compress`: Enable compression in the backend database.
+
+## Known Issues
+
+- The instance `len` is not absolutely reliable and should be regarded as a hint.
+
+## License
+
+This project is licensed under the **GPL-3.0** license.

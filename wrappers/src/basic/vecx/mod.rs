@@ -1,32 +1,47 @@
 //!
-//! A disk-storage replacement for the in-memory Vec.
+//! A disk-based, `Vec`-like data structure.
 //!
-//! NOTE:
-//! - Values will be encoded by some `serde`-like methods
+//! `Vecx` provides a vector-like interface for storing a sequence of values on disk.
+//! Values are encoded using `serde`-like methods, allowing for the storage of
+//! complex data types.
 //!
 //! # Examples
 //!
 //! ```
-//! use vsdb::Vecx;
+//! use vsdb::{Vecx, vsdb_set_base_dir, vsdb_get_base_dir};
+//! use std::fs;
 //!
+//! // It's recommended to use a temporary directory for testing
 //! let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
-//! vsdb::vsdb_set_base_dir(&dir);
+//! vsdb_set_base_dir(&dir).unwrap();
 //!
-//! let mut l = Vecx::new();
+//! let mut v: Vecx<String> = Vecx::new();
 //!
-//! l.push(1);
-//! for i in l.iter() {
-//!     assert_eq!(1, i);
+//! // Push values
+//! v.push(&"hello".to_string());
+//! v.push(&"world".to_string());
+//!
+//! // Check the length
+//! assert_eq!(v.len(), 2);
+//!
+//! // Get a value by index
+//! assert_eq!(v.get(0), Some("hello".to_string()));
+//!
+//! // Iterate over the values
+//! for value in v.iter() {
+//!     println!("{}", value);
 //! }
 //!
-//! l.pop();
-//! assert_eq!(l.len(), 0);
+//! // Pop a value
+//! assert_eq!(v.pop(), Some("world".to_string()));
+//! assert_eq!(v.len(), 1);
 //!
-//! l.insert(0, 1);
-//! assert_eq!(l.len(), 1);
+//! // Clear the vector
+//! v.clear();
+//! assert_eq!(v.len(), 0);
 //!
-//! l.clear();
-//! assert_eq!(l.len(), 0);
+//! // Clean up the directory
+//! fs::remove_dir_all(vsdb_get_base_dir()).unwrap();
 //! ```
 
 #[cfg(test)]
@@ -42,6 +57,9 @@ use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, cmp::Ordering};
 
+/// A disk-based, `Vec`-like data structure with typed values.
+///
+/// `Vecx` stores a sequence of values on disk, encoding them for persistence.
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct Vecx<T> {
@@ -49,10 +67,11 @@ pub struct Vecx<T> {
 }
 
 impl<T: ValueEnDe> Vecx<T> {
+    /// Creates a "shadow" copy of the `Vecx` instance.
+    ///
     /// # Safety
     ///
-    /// This API breaks the semantic safety guarantees,
-    /// but it is safe to use in a race-free environment.
+    /// This API breaks Rust's semantic safety guarantees. Use only in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
         unsafe {
@@ -62,9 +81,11 @@ impl<T: ValueEnDe> Vecx<T> {
         }
     }
 
+    /// Creates a `Vecx` from a byte slice.
+    ///
     /// # Safety
     ///
-    /// Do not use this API unless you know the internal details extremely well.
+    /// This function is unsafe and assumes the byte slice is a valid representation.
     #[inline(always)]
     pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
         unsafe {
@@ -74,11 +95,13 @@ impl<T: ValueEnDe> Vecx<T> {
         }
     }
 
+    /// Returns the byte representation of the `Vecx`.
     #[inline(always)]
     pub fn as_bytes(&self) -> &[u8] {
         self.inner.as_bytes()
     }
 
+    /// Creates a new, empty `Vecx`.
     #[inline(always)]
     pub fn new() -> Self {
         Vecx {
@@ -86,16 +109,19 @@ impl<T: ValueEnDe> Vecx<T> {
         }
     }
 
+    /// Retrieves a value at a specific index.
     #[inline(always)]
     pub fn get(&self, idx: usize) -> Option<T> {
         self.inner.get((idx as u64).to_be_bytes())
     }
 
+    /// Retrieves a mutable reference to a value at a specific index.
     #[inline(always)]
     pub fn get_mut(&mut self, idx: usize) -> Option<ValueMut<'_, T>> {
         self.inner.get_mut((idx as u64).to_be_bytes())
     }
 
+    /// Retrieves the last value in the vector.
     #[inline(always)]
     pub fn last(&self) -> Option<T> {
         alt!(self.is_empty(), return None);
@@ -106,21 +132,29 @@ impl<T: ValueEnDe> Vecx<T> {
         )
     }
 
+    /// Returns the number of values in the vector.
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.inner.len()
     }
 
+    /// Checks if the vector is empty.
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
+    /// Appends a value to the end of the vector.
     #[inline(always)]
     pub fn push(&mut self, v: &T) {
         self.inner.insert((self.len() as u64).to_be_bytes(), v);
     }
 
+    /// Inserts a value at a specific index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `idx` is out of bounds.
     #[inline(always)]
     pub fn insert(&mut self, idx: usize, v: &T) {
         let idx = idx as u64;
@@ -147,12 +181,18 @@ impl<T: ValueEnDe> Vecx<T> {
         }
     }
 
+    /// Removes and returns the last value in the vector.
     #[inline(always)]
     pub fn pop(&mut self) -> Option<T> {
         alt!(self.is_empty(), return None);
         self.inner.remove((self.len() as u64 - 1).to_be_bytes())
     }
 
+    /// Removes and returns the value at a specific index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `idx` is out of bounds.
     #[inline(always)]
     pub fn remove(&mut self, idx: usize) -> T {
         let idx = idx as u64;
@@ -172,6 +212,11 @@ impl<T: ValueEnDe> Vecx<T> {
         panic!("out of index");
     }
 
+    /// Removes a value at a specific index and returns it, replacing it with the last value.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `idx` is out of bounds.
     #[inline(always)]
     pub fn swap_remove(&mut self, idx: usize) -> T {
         let idx = idx as u64;
@@ -186,6 +231,11 @@ impl<T: ValueEnDe> Vecx<T> {
         panic!("out of index");
     }
 
+    /// Updates the value at a specific index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `idx` is out of bounds.
     #[inline(always)]
     pub fn update(&mut self, idx: usize, v: &T) -> Option<T> {
         if idx < self.len() {
@@ -194,21 +244,25 @@ impl<T: ValueEnDe> Vecx<T> {
         panic!("out of index");
     }
 
+    /// Returns an iterator over the vector's values.
     #[inline(always)]
     pub fn iter(&self) -> VecxIter<T> {
         VecxIter(self.inner.iter())
     }
 
+    /// Returns a mutable iterator over the vector's values.
     #[inline(always)]
     pub fn iter_mut(&mut self) -> VecxIterMut<T> {
         VecxIterMut(self.inner.iter_mut())
     }
 
+    /// Clears the vector, removing all values.
     #[inline(always)]
     pub fn clear(&mut self) {
         self.inner.clear();
     }
 
+    /// Checks if this `Vecx` instance is the same as another.
     #[inline(always)]
     pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
         self.inner.is_the_same_instance(&other_hdr.inner)
@@ -232,6 +286,7 @@ impl<T: ValueEnDe> Default for Vecx<T> {
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
+/// An iterator over the values of a `Vecx`.
 pub struct VecxIter<'a, T>(MapxOrdRawKeyIter<'a, T>);
 
 impl<T> Iterator for VecxIter<'_, T>
@@ -253,6 +308,7 @@ where
     }
 }
 
+/// A mutable iterator over the values of a `Vecx`.
 pub struct VecxIterMut<'a, T>(MapxOrdRawKeyIterMut<'a, T>);
 
 impl<'a, T> Iterator for VecxIterMut<'a, T>

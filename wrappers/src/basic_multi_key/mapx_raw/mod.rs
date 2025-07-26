@@ -1,9 +1,37 @@
 //!
-//! A multi-key style of `MapxRaw`.
+//! A multi-key version of `MapxRaw`.
 //!
-//! NOTE:
-//! - Both keys and values will **NOT** be encoded in this structure
+//! `MapxRawMk` (MapxRaw Multi-Key) provides a map-like interface where each value
+//! is associated with a sequence of keys. This allows for creating nested or
+//! hierarchical key structures with raw byte keys and values.
 //!
+//! # Examples
+//!
+//! ```
+//! use vsdb::basic_multi_key::mapx_raw::MapxRawMk;
+//! use vsdb::{vsdb_set_base_dir, vsdb_get_base_dir};
+//! use std::fs;
+//!
+//! // It's recommended to use a temporary directory for testing
+//! let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
+//! vsdb_set_base_dir(&dir).unwrap();
+//!
+//! let mut m = MapxRawMk::new(2); // Two keys
+//!
+//! // Insert a value with a multi-key
+//! m.insert(&[&[1], &[10]], &[100]).unwrap();
+//! m.insert(&[&[2], &[20]], &[200]).unwrap();
+//!
+//! // Get a value
+//! assert_eq!(m.get(&[&[1], &[10]]), Some(vec![100]));
+//!
+//! // Remove a value
+//! m.remove(&[&[1], &[10]]).unwrap();
+//! assert!(!m.contains_key(&[&[1], &[10]]));
+//!
+//! // Clean up the directory
+//! fs::remove_dir_all(vsdb_get_base_dir()).unwrap();
+//! ```
 
 #[cfg(test)]
 mod test;
@@ -16,6 +44,7 @@ use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
 
+/// A multi-key map with raw keys and values.
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(bound = "")]
 pub struct MapxRawMk {
@@ -27,10 +56,11 @@ pub struct MapxRawMk {
 }
 
 impl MapxRawMk {
+    /// Creates a "shadow" copy of the `MapxRawMk` instance.
+    ///
     /// # Safety
     ///
-    /// This API breaks the semantic safety guarantees,
-    /// but it is safe to use in a race-free environment.
+    /// This API breaks Rust's semantic safety guarantees. Use only in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
         unsafe {
@@ -41,8 +71,11 @@ impl MapxRawMk {
         }
     }
 
-    /// # Panic
-    /// Will panic if `0 == key_size`.
+    /// Creates a new `MapxRawMk` with a specified number of keys.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `key_size` is 0.
     #[inline(always)]
     pub fn new(key_size: u32) -> Self {
         assert!(0 < key_size);
@@ -52,6 +85,7 @@ impl MapxRawMk {
         }
     }
 
+    /// Retrieves a value from the map for a given multi-key.
     #[inline(always)]
     pub fn get(&self, key: &[&[u8]]) -> Option<RawValue> {
         if key.len() != self.key_size as usize {
@@ -74,11 +108,13 @@ impl MapxRawMk {
         None // empty key
     }
 
+    /// Retrieves a mutable reference to a value in the map.
     #[inline(always)]
     pub fn get_mut<'a>(&'a mut self, key: &'a [&'a [u8]]) -> Option<ValueMut<'a>> {
         self.get(key).map(move |v| ValueMut::new(self, key, v))
     }
 
+    /// Mocks a mutable value for a given key.
     #[inline(always)]
     pub(crate) fn mock_value_mut<'a>(
         &'a mut self,
@@ -88,16 +124,19 @@ impl MapxRawMk {
         ValueMut::new(self, key, v)
     }
 
+    /// Checks if the map contains a value for the specified multi-key.
     #[inline(always)]
     pub fn contains_key(&self, key: &[&[u8]]) -> bool {
         self.get(key).is_some()
     }
 
+    /// Checks if the map is empty.
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
+    /// Gets an entry for a given key, allowing for in-place modification.
     #[inline(always)]
     pub fn entry<'a>(&'a mut self, key: &'a [&'a [u8]]) -> Result<Entry<'a>> {
         if key.len() != self.key_size() as usize {
@@ -107,6 +146,7 @@ impl MapxRawMk {
         }
     }
 
+    /// Inserts a key-value pair into the map.
     #[inline(always)]
     pub fn insert(&mut self, key: &[&[u8]], value: &[u8]) -> Result<Option<RawValue>> {
         if key.len() != self.key_size as usize {
@@ -140,7 +180,7 @@ impl MapxRawMk {
         Ok(ret)
     }
 
-    /// Support batch removal.
+    /// Removes a key-value pair from the map. Supports batch removal by providing a partial key.
     #[inline(always)]
     pub fn remove(&mut self, key: &[&[u8]]) -> Result<Option<RawValue>> {
         // Support batch removal from key path.
@@ -171,21 +211,25 @@ impl MapxRawMk {
         Ok(None) // empty key
     }
 
+    /// Clears the map, removing all key-value pairs.
     #[inline(always)]
     pub fn clear(&mut self) {
         self.inner.clear();
     }
 
+    /// Checks if this `MapxRawMk` instance is the same as another.
     #[inline(always)]
     pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
         self.inner.is_the_same_instance(&other_hdr.inner)
     }
 
+    /// Returns the number of keys in the map.
     #[inline(always)]
     pub fn key_size(&self) -> u32 {
         self.key_size
     }
 
+    /// Iterates over the map's entries, applying a function to each.
     #[inline(always)]
     pub fn iter_op<F>(&self, op: &mut F) -> Result<()>
     where
@@ -194,6 +238,7 @@ impl MapxRawMk {
         self.iter_op_with_key_prefix(op, &[]).c(d!())
     }
 
+    /// Iterates over the map's entries with a given key prefix, applying a function to each.
     #[inline(always)]
     pub fn iter_op_with_key_prefix<F>(
         &self,
@@ -275,6 +320,7 @@ impl MapxRawMk {
         self.iter_op_typed_value_with_key_prefix(op, &[]).c(d!())
     }
 
+    /// Iterates over the map's entries with a given key prefix, applying a function to each typed value.
     #[inline(always)]
     pub fn iter_op_typed_value_with_key_prefix<V, F>(
         &self,
@@ -357,6 +403,7 @@ impl MapxRawMk {
     // pub fn iter_mut_op_typed_value_with_key_prefix
 }
 
+/// A mutable reference to a value in a `MapxRawMk`.
 #[derive(Debug)]
 pub struct ValueMut<'a> {
     hdr: &'a mut MapxRawMk,
@@ -389,12 +436,15 @@ impl DerefMut for ValueMut<'_> {
     }
 }
 
+/// A view into a single entry in a map, which may either be vacant or occupied.
 pub struct Entry<'a> {
     key: &'a [&'a [u8]],
     hdr: &'a mut MapxRawMk,
 }
 
 impl<'a> Entry<'a> {
+    /// Ensures a value is in the entry by inserting the default if empty,
+    /// and returns a mutable reference to the value.
     pub fn or_insert(self, default: &'a [u8]) -> ValueMut<'a> {
         let hdr = self.hdr as *mut MapxRawMk;
         match unsafe { &mut *hdr }.get_mut(self.key) {

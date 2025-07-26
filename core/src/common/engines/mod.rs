@@ -160,7 +160,7 @@ impl Prefix {
 impl Mapx {
     // # Safety
     //
-    // This API breaks the semantic safety guarantees,
+    // This API breaks Rust's semantic safety guarantees. Use only
     // but it is safe to use in a race-free environment.
     pub(crate) unsafe fn shadow(&self) -> Self {
         Self {

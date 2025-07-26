@@ -28,8 +28,11 @@ type Distance = i128;
 type PageSize = u16;
 type PageIndex = u32;
 
-/// A `Skip List` like structure,
-/// designed to support fast paged queries and indexes
+/// A `Skip List`-like data structure for fast paged queries.
+///
+/// `SlotDB` is designed to support efficient pagination and indexing over a large
+/// number of entries. It organizes data into "slots," which are then grouped into
+/// tiers to allow for rapid seeking and counting.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(
     bound = "K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned"
@@ -61,15 +64,14 @@ impl<K> SlotDB<K>
 where
     K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
+    /// Creates a new `SlotDB`.
     ///
-    /// @param: `swap_order`:
+    /// # Arguments
     ///
-    /// Switch the inner logic of the slot direction:
-    /// - positive => reverse
-    /// - reverse => positive
-    ///
-    /// Positive query usually get better performance,
-    /// swap order if most cases run in the reverse mode
+    /// * `tier_capacity` - The capacity of each tier in the `SlotDB`.
+    /// * `swap_order` - A boolean indicating whether to swap the order of slots.
+    ///   Positive queries generally have better performance. If most use cases
+    ///   involve reverse order, setting this to `true` can improve performance.
     pub fn new(tier_capacity: u64, swap_order: bool) -> Self {
         Self {
             data: MapxOrd::new(),
@@ -80,6 +82,16 @@ where
         }
     }
 
+    /// Inserts a key into a specified slot.
+    ///
+    /// # Arguments
+    ///
+    /// * `slot` - The slot to insert the key into.
+    /// * `k` - The key to insert.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success or failure.
     pub fn insert(&mut self, mut slot: Slot, k: K) -> Result<()> {
         if self.swap_order {
             slot = swap_order(slot);
@@ -123,6 +135,12 @@ where
         Ok(())
     }
 
+    /// Removes a key from a specified slot.
+    ///
+    /// # Arguments
+    ///
+    /// * `slot` - The slot to remove the key from.
+    /// * `k` - The key to remove.
     pub fn remove(&mut self, mut slot: Slot, k: &K) {
         if self.swap_order {
             slot = swap_order(slot);
@@ -165,6 +183,7 @@ where
         }
     }
 
+    /// Clears the `SlotDB`, removing all entries and tiers.
     pub fn clear(&mut self) {
         *self.total.get_mut() = 0;
         self.data.clear();
@@ -176,7 +195,17 @@ where
         self.tiers.clear();
     }
 
-    /// Common usages in web services
+    /// Retrieves entries by page, a common use case for web services.
+    ///
+    /// # Arguments
+    ///
+    /// * `page_size` - The number of entries per page.
+    /// * `page_index` - The index of the page to retrieve (starting from 0).
+    /// * `reverse_order` - A boolean indicating whether to return entries in reverse order.
+    ///
+    /// # Returns
+    ///
+    /// A `Vec<K>` containing the entries for the specified page.
     pub fn get_entries_by_page(
         &self,
         page_size: PageSize,
@@ -192,7 +221,19 @@ where
         )
     }
 
-    /// Common usages in web services
+    /// Retrieves entries by page within a specified slot range.
+    ///
+    /// # Arguments
+    ///
+    /// * `slot_left_bound` - The left bound of the slot range (inclusive).
+    /// * `slot_right_bound` - The right bound of the slot range (inclusive).
+    /// * `page_size` - The number of entries per page.
+    /// * `page_index` - The index of the page to retrieve (starting from 0).
+    /// * `reverse_order` - A boolean indicating whether to return entries in reverse order.
+    ///
+    /// # Returns
+    ///
+    /// A `Vec<K>` containing the entries for the specified page and slot range.
     pub fn get_entries_by_page_slot(
         &self,
         slot_left_bound: Option<Slot>,  // Included
@@ -397,8 +438,18 @@ where
         ret
     }
 
-    /// Called by the `total_by_slot`,
-    /// can also be used to do some `data statistics`
+    /// Calculates the number of entries within a given slot range.
+    ///
+    /// This method can be used for data statistics and is called by `total_by_slot`.
+    ///
+    /// # Arguments
+    ///
+    /// * `slot_start` - The starting slot of the range.
+    /// * `slot_end` - The ending slot of the range.
+    ///
+    /// # Returns
+    ///
+    /// The total number of entries (`EntryCnt`) within the specified range.
     pub fn entry_cnt_within_two_slots(
         &self,
         mut slot_start: Slot,
@@ -419,6 +470,16 @@ where
         }
     }
 
+    /// Returns the total number of entries within a specified slot range.
+    ///
+    /// # Arguments
+    ///
+    /// * `slot_start` - An `Option<Slot>` for the starting slot. If `None`, `Slot::MIN` is used.
+    /// * `slot_end` - An `Option<Slot>` for the ending slot. If `None`, `Slot::MAX` is used.
+    ///
+    /// # Returns
+    ///
+    /// The total number of entries (`EntryCnt`) in the given range.
     pub fn total_by_slot(
         &self,
         slot_start: Option<Slot>,
@@ -434,6 +495,11 @@ where
         }
     }
 
+    /// Returns the total number of entries in the `SlotDB`.
+    ///
+    /// # Returns
+    ///
+    /// The total number of entries (`EntryCnt`).
     pub fn total(&self) -> EntryCnt {
         self.total_by_slot(None, None)
     }

@@ -1,82 +1,29 @@
 //!
-//! A storage type for various kinds of single value.
+//! A storage type for various kinds of single, non-collection values.
 //!
-//! NOTE:
-//! - Values will be encoded by some `serde`-like methods
+//! `Orphan` is designed to store single values, such as integers, enums, or other
+//! simple data types, on disk. It provides a convenient way to manage individual
+//! pieces of data that are not part of a larger collection.
 //!
 //! # Examples
 //!
 //! ```
 //! use vsdb::basic::orphan::Orphan;
+//! use vsdb::{vsdb_set_base_dir, vsdb_get_base_dir};
+//! use std::fs;
 //!
+//! // It's recommended to use a temporary directory for testing
 //! let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
-//! vsdb::vsdb_set_base_dir(&dir);
+//! vsdb_set_base_dir(&dir).unwrap();
 //!
-//! assert_eq!(Orphan::new(0), 0);
-//! assert!(Orphan::new(1) > 0);
-//! assert!(Orphan::new(1) >= 0);
-//! assert!(Orphan::new(0) < 1);
-//! assert!(Orphan::new(0) <= 1);
+//! let mut o = Orphan::new(10);
+//! assert_eq!(o.get_value(), 10);
 //!
-//! assert_eq!(Orphan::new(0), Orphan::new(0));
-//! assert!(Orphan::new(1) > Orphan::new(0));
-//! assert!(Orphan::new(1) >= Orphan::new(1));
-//! assert!(Orphan::new(0) < Orphan::new(1));
-//! assert!(Orphan::new(1) <= Orphan::new(1));
+//! *o.get_mut() += 5;
+//! assert_eq!(o.get_value(), 15);
 //!
-//! assert_eq!(Orphan::new(1) + 1, 2);
-//! assert_eq!(Orphan::new(1) - 1, 0);
-//! assert_eq!(Orphan::new(1) * 1, 1);
-//! assert_eq!(Orphan::new(1) / 2, 0);
-//! assert_eq!(Orphan::new(1) % 2, 1);
-//!
-//! assert_eq!(-Orphan::new(1), -1);
-//! assert_eq!(!Orphan::new(1), !1);
-//!
-//! assert_eq!(Orphan::new(1) >> 2, 1 >> 2);
-//! assert_eq!(Orphan::new(1) << 2, 1 << 2);
-//!
-//! assert_eq!(Orphan::new(1) | 2, 1 | 2);
-//! assert_eq!(Orphan::new(1) & 2, 1 & 2);
-//! assert_eq!(Orphan::new(1) ^ 2, 1 ^ 2);
-//!
-//! let mut v = Orphan::new(1);
-//! v += 1;
-//! assert_eq!(v, 2);
-//! v *= 100;
-//! assert_eq!(v, 200);
-//! v -= 1;
-//! assert_eq!(v, 199);
-//! v /= 10;
-//! assert_eq!(v, 19);
-//! v %= 10;
-//! assert_eq!(v, 9);
-//!
-//! *v.get_mut() = -v.get_value();
-//! assert_eq!(v, -9);
-//!
-//! *v.get_mut() = !v.get_value();
-//! assert_eq!(v, !-9);
-//!
-//! *v.get_mut() = 0;
-//! v >>= 2;
-//! assert_eq!(v, 0 >> 2);
-//!
-//! *v.get_mut() = 0;
-//! v <<= 2;
-//! assert_eq!(v, 0 << 2);
-//!
-//! *v.get_mut() = 0;
-//! v |= 2;
-//! assert_eq!(v, 0 | 2);
-//!
-//! *v.get_mut() = 0;
-//! v &= 2;
-//! assert_eq!(v, 0 & 2);
-//!
-//! *v.get_mut() = 0;
-//! v ^= 2;
-//! assert_eq!(v, 0 ^ 2);
+//! // Clean up the directory
+//! fs::remove_dir_all(vsdb_get_base_dir()).unwrap();
 //! ```
 
 #[cfg(test)]
@@ -96,8 +43,9 @@ use std::{
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
-/// Used to express some 'non-collection' types,
-/// such as any type of integer, an enum value, etc..
+/// A container for a single, non-collection value stored on disk.
+///
+/// `Orphan` is suitable for storing simple data types like integers, enums, etc.
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(bound = "")]
 pub struct Orphan<T> {
@@ -111,10 +59,11 @@ impl<T> Orphan<T>
 where
     T: ValueEnDe,
 {
+    /// Creates a "shadow" copy of the `Orphan` instance.
+    ///
     /// # Safety
     ///
-    /// This API breaks the semantic safety guarantees,
-    /// but it is safe to use in a race-free environment.
+    /// This API breaks Rust's semantic safety guarantees. Use only in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
         unsafe {
@@ -124,9 +73,11 @@ where
         }
     }
 
+    /// Creates an `Orphan` from a byte slice.
+    ///
     /// # Safety
     ///
-    /// Do not use this API unless you know the internal details extremely well.
+    /// This function is unsafe and assumes the byte slice is a valid representation.
     #[inline(always)]
     pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
         unsafe {
@@ -136,48 +87,64 @@ where
         }
     }
 
+    /// Returns the byte representation of the `Orphan`.
     #[inline(always)]
     pub fn as_bytes(&self) -> &[u8] {
         self.inner.as_bytes()
     }
 
+    /// Creates a new `Orphan` with an initial value.
     pub fn new(v: T) -> Self {
         let mut hdr = MapxOrdRawKey::new();
         hdr.insert([], &v);
         Self { inner: hdr }
     }
 
-    /// Get the inner cloned value.
+    /// Retrieves a clone of the inner value.
     pub fn get_value(&self) -> T {
         self.inner.get([]).unwrap()
     }
 
+    /// Sets the inner value.
     pub fn set_value(&mut self, v: &T) {
         self.inner.set_value([], v);
     }
 
+    /// Checks if the `Orphan` is uninitialized.
     pub fn is_uninitialized(&self) -> bool {
         self.inner.get([]).is_none()
     }
 
+    /// Initializes the `Orphan` with a value if it is currently empty.
     pub fn initialize_if_empty(&mut self, v: T) {
         if self.is_uninitialized() {
             self.set_value(&v)
         }
     }
 
-    /// Get the mutable handler of the value.
+    /// Retrieves a mutable handler for the value.
     ///
-    /// NOTE:
-    /// - Always use this method to change value
-    ///     - `*(<Orphan>).get_mut() = ...`
-    /// - **NEVER** do this:
-    ///     - `*(&mut <Orphan>) = Orphan::new(...)`
+    /// This is the recommended way to modify the value.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use vsdb::basic::orphan::Orphan;
+    /// # use vsdb::{vsdb_set_base_dir, vsdb_get_base_dir};
+    /// # use std::fs;
+    /// # let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
+    /// # vsdb_set_base_dir(&dir).unwrap();
+    /// let mut o = Orphan::new(10);
+    /// *o.get_mut() = 20;
+    /// assert_eq!(o.get_value(), 20);
+    /// # fs::remove_dir_all(vsdb_get_base_dir()).unwrap();
+    /// ```
     pub fn get_mut(&mut self) -> ValueMut<'_, T> {
         let value = self.get_value();
         ValueMut { hdr: self, value }
     }
 
+    /// Checks if this `Orphan` instance is the same as another.
     #[inline(always)]
     pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
         self.inner.is_the_same_instance(&other_hdr.inner)
@@ -330,7 +297,10 @@ impl_ops!(@Neg, neg, -);
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
-/// A type returned by `get_mut()`.
+/// A mutable reference to the value of an `Orphan`.
+///
+/// This struct is returned by `get_mut()` and ensures that any changes to the
+/// value are written back to disk when it is dropped.
 pub struct ValueMut<'a, T>
 where
     T: ValueEnDe,

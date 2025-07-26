@@ -12,12 +12,21 @@ use vsdb::{DagMapRaw, DagMapRawKey as Map, Orphan, RawBytes, ValueEnDe};
 
 pub use keccak_hasher::KeccakHasher;
 
+/// A type alias for the memory-mapped backend with Keccak hashing.
 pub type TrieBackend = MmBackend<KeccakHasher, Vec<u8>>;
 
+/// A trait for types that can be used as values in the trie.
+///
+/// This trait requires that the type can be cloned, referenced as a byte slice,
+/// and created from a byte slice.
 pub trait TrieVar: Clone + AsRef<[u8]> + for<'a> From<&'a [u8]> {}
 
 impl<T> TrieVar for T where T: Clone + AsRef<[u8]> + for<'a> From<&'a [u8]> {}
 
+/// A memory-mapped backend for the trie.
+///
+/// This struct provides a `HashDB` implementation that stores trie nodes in a
+/// memory-mapped file. It uses a `DagMapRaw` to manage the underlying data.
 // NOTE: make it `!Clone`
 pub struct MmBackend<H, T>
 where
@@ -34,7 +43,17 @@ where
     H: KeyHasher,
     T: TrieVar,
 {
-    /// Create a new `MmBackend` from the default null key/data
+    /// Creates a new `MmBackend`.
+    ///
+    /// This function initializes a new `MmBackend` with a given raw parent.
+    ///
+    /// # Arguments
+    ///
+    /// * `raw_parent` - A mutable reference to an `Orphan` containing an `Option<DagMapRaw>`.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the new `MmBackend` or an error.
     pub fn new(raw_parent: &mut Orphan<Option<DagMapRaw>>) -> Result<Self> {
         Ok(MmBackend {
             data: Map::new(raw_parent).c(d!())?,
@@ -48,10 +67,14 @@ where
         H::hash(&[0])
     }
 
+    /// Creates a "shadow" copy of the `MmBackend`.
+    ///
+    /// This method creates a new `MmBackend` that shares the same underlying data source.
+    ///
     /// # Safety
     ///
-    /// This API breaks the semantic safety guarantees,
-    /// but it is safe to use in a race-free environment.
+    /// This API breaks Rust's semantic safety guarantees. It is safe to use only in a
+    /// race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
         unsafe {
@@ -63,36 +86,42 @@ where
         }
     }
 
+    /// Creates a "shadow" copy of the backend's data map.
+    ///
     /// # Safety
     ///
-    /// This API breaks the semantic safety guarantees,
-    /// but it is safe to use in a race-free environment.
+    /// This API breaks Rust's semantic safety guarantees. It is safe to use only in a
+    /// race-free environment.
     #[inline(always)]
     pub unsafe fn shadow_backend(&self) -> Map<Value<T>> {
         unsafe { self.shadow().data }
     }
 
+    /// Checks if the backend is dead (i.e., has no associated data).
     #[inline(always)]
     pub fn is_dead(&self) -> bool {
         self.data.is_dead()
     }
 
+    /// Checks if the backend has no children.
     #[inline(always)]
     pub fn no_children(&self) -> bool {
         self.data.no_children()
     }
 
+    /// Clears the backend, destroying all associated data.
     #[inline(always)]
     pub fn clear(&mut self) {
         self.data.destroy();
     }
 
+    /// Checks if this backend is the same instance as another.
     #[inline(always)]
     pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
         self.data.is_the_same_instance(&other_hdr.data)
     }
 
-    /// Return a new backend instance
+    /// Prunes the backend, creating a new instance with a fresh data map.
     #[inline(always)]
     pub fn prune(self) -> Result<Self> {
         let data = self.data.prune().c(d!())?;
@@ -210,6 +239,7 @@ fn prefixed_key<H: KeyHasher>(key: &H::Out, prefix: Prefix) -> Vec<u8> {
     prefixed_key
 }
 
+/// A struct representing a value in the trie, with a reference count.
 pub struct Value<T> {
     v: T,
     rc: i32,

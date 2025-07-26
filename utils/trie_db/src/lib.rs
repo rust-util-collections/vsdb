@@ -24,15 +24,22 @@ type TrieDBBuilder<'a, 'cache> = trie_db::TrieDBBuilder<'a, 'cache, L>;
 type TrieDBMut<'a> = trie_db::TrieDBMut<'a, L>;
 type TrieDBMutBuilder<'a> = trie_db::TrieDBMutBuilder<'a, L>;
 
+/// The root hash of a Merkle Patricia Trie.
 pub type TrieRoot = TrieHash<L>;
 
+/// An iterator over the items of a Merkle Patricia Trie.
 pub type TrieIter<'a> = Box<dyn TrieIterator<L, Item = TrieItem<TrieHash<L>, CError<L>>> + 'a>;
+/// An iterator over the keys of a Merkle Patricia Trie.
 pub type TrieKeyIter<'a> =
     Box<dyn TrieIterator<L, Item = TrieKeyItem<TrieHash<L>, CError<L>>> + 'a>;
 
 // root hash ==> backend instance
 type HeaderSet = MapxOrdRawKey<TrieBackend>;
 
+/// A store for Merkle Patricia Tries (MPTs).
+///
+/// `MptStore` manages multiple MPTs, each identified by a `backend_key`.
+/// It handles the creation, derivation, and lifecycle of tries.
 #[derive(Deserialize, Serialize)]
 pub struct MptStore {
     // backend key ==> backend instance
@@ -44,7 +51,7 @@ pub struct MptStore {
 }
 
 impl MptStore {
-    /// Create a new mpt DB.
+    /// Creates a new, empty `MptStore`.
     #[inline(always)]
     pub fn new() -> Self {
         Self {
@@ -52,10 +59,14 @@ impl MptStore {
         }
     }
 
+    /// Creates a "shadow" copy of the `MptStore`.
+    ///
+    /// This method creates a new `MptStore` that shares the same underlying data source.
+    ///
     /// # Safety
     ///
-    /// This API breaks the semantic safety guarantees,
-    /// but it is safe to use in a race-free environment.
+    /// This API breaks Rust's semantic safety guarantees. It is safe to use only in a
+    /// race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
         unsafe {
@@ -65,24 +76,49 @@ impl MptStore {
         }
     }
 
-    /// Create a new trie from scratch(no parent).
+    /// Initializes a new trie from scratch (with no parent).
+    ///
+    /// # Arguments
+    ///
+    /// * `backend_key` - The key to identify the new trie's backend.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a new `MptOnce` instance or an error.
     #[inline(always)]
     pub fn trie_init(&mut self, backend_key: &[u8]) -> Result<MptOnce> {
         let b = TrieBackend::new(&mut Orphan::new(None)).unwrap();
         self.trie_create(backend_key, b).c(d!())
     }
 
-    /// Create a new trie from a specified backend.
+    /// Creates a new trie from a specified backend.
+    ///
+    /// # Arguments
+    ///
+    /// * `backend_key` - The key to identify the new trie's backend.
+    /// * `backend` - The `TrieBackend` to use for the new trie.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a new `MptOnce` instance or an error.
     #[inline(always)]
     pub fn trie_create(&mut self, backend_key: &[u8], backend: TrieBackend) -> Result<MptOnce> {
         let hdr = self.meta.entry(backend_key).or_insert(HeaderSet::new());
         MptOnce::create_with_backend(backend, &hdr).c(d!())
     }
 
-    /// Re-derive a trie handler from a specified trie root.
+    /// Re-derives a trie handler from a specified trie root.
     ///
-    /// NOTE:
-    /// The returned handler is actually a new created child of the target trie node.
+    /// The returned handler is a new child of the target trie node.
+    ///
+    /// # Arguments
+    ///
+    /// * `backend_key` - The key of the trie's backend.
+    /// * `root` - The `TrieRoot` to re-derive from.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a new `MptOnce` instance or an error.
     #[inline(always)]
     pub fn trie_rederive(&self, backend_key: &[u8], root: TrieRoot) -> Result<MptOnce> {
         self.meta.get(backend_key).c(d!()).and_then(|hs| {
@@ -92,7 +128,18 @@ impl MptStore {
         })
     }
 
-    /// Merge all nodes into the genesis node(include the target node itself).
+    /// Prunes the trie, merging all nodes into the genesis node.
+    ///
+    /// This includes the target node itself.
+    ///
+    /// # Arguments
+    ///
+    /// * `backend_key` - The key of the trie's backend.
+    /// * `root` - The `TrieRoot` of the trie to prune.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success or failure.
     pub fn trie_prune(&mut self, backend_key: &[u8], root: TrieRoot) -> Result<()> {
         let mut hs = self.meta.get(backend_key).c(d!())?;
         let backend = hs.get(root).c(d!())?;
@@ -113,7 +160,11 @@ impl MptStore {
         Ok(())
     }
 
-    /// Destroy the entire trie related to the target `backend_key`.
+    /// Destroys the entire trie associated with the target `backend_key`.
+    ///
+    /// # Arguments
+    ///
+    /// * `backend_key` - The key of the trie's backend to destroy.
     #[inline(always)]
     pub fn trie_destroy(&mut self, backend_key: &[u8]) {
         if let Some(mut hs) = self.meta.remove(backend_key) {
@@ -125,14 +176,12 @@ impl MptStore {
     }
 }
 
-///
-/// An owned MPT instance.
+/// An owned, mutable Merkle Patricia Trie instance.
 ///
 /// # NOTE
 ///
-/// The referenced field **MUST** be placed after the field that references it,
-/// this is to ensure that the `Drop::drop` can be executed in the correct order,
-/// so that UB will not occur
+/// The referenced field **MUST** be placed after the field that references it
+/// to ensure that `Drop::drop` is executed in the correct order, preventing UB.
 pub struct MptOnce {
     mpt: MptMut<'static>,
     root: TrieRoot,
@@ -179,34 +228,75 @@ impl MptOnce {
         })
     }
 
+    /// Retrieves a value for a key from the trie.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to look up.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing an `Option<Vec<u8>>` with the value, or an error.
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         self.mpt.get(key).c(d!())
     }
 
+    /// Checks if a key exists in the trie.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to check.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a boolean or an error.
     pub fn contains(&self, key: &[u8]) -> Result<bool> {
         self.mpt.contains(key).c(d!())
     }
 
+    /// Inserts a key-value pair into the trie.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to insert.
+    /// * `value` - The value to associate with the key.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success or failure.
     pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         self.mpt.insert(key, value).c(d!())
     }
 
+    /// Removes a key-value pair from the trie.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to remove.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success or failure.
     pub fn remove(&mut self, key: &[u8]) -> Result<()> {
         self.mpt.remove(key).c(d!()).map(|_| ())
     }
 
-    /// Remove all `key-value`s in the current snapshot(version).
+    /// Removes all key-value pairs in the current snapshot (version).
     pub fn clear(&mut self) -> Result<()> {
         self.mpt.clear().c(d!())
     }
 
+    /// Checks if the trie is empty.
     pub fn is_empty(&self) -> bool {
         self.mpt.is_empty()
     }
 
-    /// Commit all changes into the trie,
-    /// consume the trie handler, and derive a new trie handler
-    /// as a child of the current handler.
+    /// Commits all changes to the trie, consumes the current handler,
+    /// and derives a new handler as a child of the current one.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the new `MptOnce` instance or an error.
     pub fn commit(mut self) -> Result<Self> {
         let root = self.mpt.commit();
 
@@ -220,13 +310,20 @@ impl MptOnce {
         Self::rederive(&self.backend, root, &self.header_set).c(d!())
     }
 
-    /// Get the cached trie root,
-    /// no `commit` operations will be triggered.
+    /// Gets the cached trie root without triggering a commit.
     pub fn root(&self) -> TrieRoot {
         self.root
     }
 
-    /// Derive a readonly handler of the trie.
+    /// Derives a read-only handler for the trie.
+    ///
+    /// # Arguments
+    ///
+    /// * `root` - The `TrieRoot` to create the read-only handler from.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a new `MptRo` instance or an error.
     pub fn ro_handle(&self, root: TrieRoot) -> Result<MptRo> {
         MptRo::from_existing(&self.backend, root).c(d!())
     }
@@ -345,7 +442,7 @@ impl<'a> MptMut<'a> {
 // The referenced field **MUST** be placed after the field that references it,
 // this is to ensure that the `drop`s can be executed in the correct order,
 // so that UB will not occur
-/// A readonly MPT instance
+/// A read-only Merkle Patricia Trie instance.
 pub struct MptRo<'a> {
     trie: TrieDB<'a, 'a>,
 
@@ -355,6 +452,16 @@ pub struct MptRo<'a> {
 }
 
 impl<'a> MptRo<'a> {
+    /// Creates a new read-only MPT instance from an existing backend and root.
+    ///
+    /// # Arguments
+    ///
+    /// * `backend` - The `TrieBackend` to use.
+    /// * `root` - The `TrieRoot` to create the instance from.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a new `MptRo` instance or an error.
     pub fn from_existing(backend: &'a TrieBackend, root: TrieRoot) -> Result<Self> {
         if !backend.contains(&root, EMPTY_PREFIX) {
             return Err(eg!("Invalid state root: {:02x?}", root));
@@ -367,6 +474,16 @@ impl<'a> MptRo<'a> {
         Ok(Self { trie, meta })
     }
 
+    /// Creates a new read-only MPT instance from a dynamic `HashDB` object and root.
+    ///
+    /// # Arguments
+    ///
+    /// * `backend` - A dynamic reference to a `HashDB`.
+    /// * `root` - The `TrieRoot` to create the instance from.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a new `MptRo` instance or an error.
     pub fn from_existing_dyn(backend: &dyn HashDB<H, DBValue>, root: TrieRoot) -> Result<Self> {
         let backend = &backend as *const &dyn HashDB<H, DBValue>;
         let backend = backend.cast::<&TrieBackend>();
@@ -374,22 +491,43 @@ impl<'a> MptRo<'a> {
         MptRo::from_existing(backend, root).c(d!())
     }
 
+    /// Retrieves a value for a key from the trie.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to look up.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing an `Option<Vec<u8>>` with the value, or an error.
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         self.trie.get(key).c(d!())
     }
 
+    /// Checks if a key exists in the trie.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to check.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a boolean or an error.
     pub fn contains(&self, key: &[u8]) -> Result<bool> {
         self.trie.contains(key).c(d!())
     }
 
+    /// Returns an iterator over the trie's items.
     pub fn iter(&self) -> TrieIter<'_> {
         pnk!(self.trie.iter())
     }
 
+    /// Returns an iterator over the trie's keys.
     pub fn key_iter(&self) -> TrieKeyIter<'_> {
         pnk!(self.trie.key_iter())
     }
 
+    /// Gets the trie root.
     pub fn root(&self) -> TrieRoot {
         *self.trie.root()
     }

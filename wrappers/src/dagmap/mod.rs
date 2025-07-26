@@ -1,8 +1,22 @@
+//!
+//! # Directed Acyclic Graph (DAG) Map
+//!
+//! This module provides data structures for representing and managing directed
+//! acyclic graphs (DAGs) on disk.
+//!
+
+/// A module for raw DAG maps.
 pub mod raw;
+/// A module for DAG maps with raw keys.
 pub mod rawkey;
 
+/// A type alias for a DAG map ID.
 pub type DagMapId = [u8];
 
+/// Generates a new, unique ID for a DAG map.
+///
+/// This function maintains a persistent counter to ensure that each generated
+/// ID is unique.
 pub fn gen_dag_map_id_num() -> u128 {
     use crate::{Orphan, ValueEnDe};
     use parking_lot::Mutex;
@@ -22,7 +36,7 @@ pub fn gen_dag_map_id_num() -> u128 {
                     Mutex::new(i)
                 }
                 _ => {
-                    pnk!(Err(eg!("The fucking world is over!")))
+                    pnk!(Err(eg!("Error!")))
                 }
             },
         }

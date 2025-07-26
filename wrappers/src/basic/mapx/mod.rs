@@ -1,35 +1,47 @@
 //!
-//! A `HashMap`-like structure but storing data in disk.
+//! A `HashMap`-like structure that stores data on disk.
 //!
-//! NOTE:
-//!
-//! - Both keys and values will be encoded(serde) in this structure
-//!     - Both of them will be encoded by some `serde`-like methods
+//! `Mapx` provides a key-value store where both keys and values are encoded
+//! using `serde`-like methods before being persisted. This allows for storing
+//! complex data types while maintaining a familiar `HashMap` interface.
 //!
 //! # Examples
 //!
 //! ```
-//! use vsdb::Mapx;
+//! use vsdb::{Mapx, vsdb_set_base_dir, vsdb_get_base_dir};
+//! use std::fs;
 //!
+//! // It's recommended to use a temporary directory for testing
 //! let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
-//! vsdb::vsdb_set_base_dir(&dir);
+//! vsdb_set_base_dir(&dir).unwrap();
 //!
-//! let mut l = Mapx::new();
+//! let mut m: Mapx<i32, String> = Mapx::new();
 //!
-//! l.insert(1, 0);
-//! l.insert(&1, &0);
-//! l.insert(2, 0);
+//! // Insert key-value pairs
+//! m.insert(&1, &"hello".to_string());
+//! m.insert(&2, &"world".to_string());
 //!
-//! l.iter().for_each(|(k, v)| {
-//!     assert!(k >= 1);
-//!     assert_eq!(v, 0);
-//! });
+//! // Check the length of the map
+//! assert_eq!(m.len(), 2);
 //!
-//! l.remove(&2);
-//! assert_eq!(l.len(), 1);
+//! // Retrieve a value
+//! assert_eq!(m.get(&1), Some("hello".to_string()));
 //!
-//! l.clear();
-//! assert_eq!(l.len(), 0);
+//! // Iterate over the map
+//! for (k, v) in m.iter() {
+//!     println!("key: {}, val: {}", k, v);
+//! }
+//!
+//! // Remove a key-value pair
+//! m.remove(&2);
+//! assert_eq!(m.len(), 1);
+//!
+//! // Clear the entire map
+//! m.clear();
+//! assert_eq!(m.len(), 0);
+//!
+//! // Clean up the directory
+//! fs::remove_dir_all(vsdb_get_base_dir()).unwrap();
 //! ```
 //!
 
@@ -52,6 +64,10 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
+/// A disk-based, `HashMap`-like data structure with typed keys and values.
+///
+/// `Mapx` stores key-value pairs on disk, encoding both keys and values
+/// for type safety and persistence.
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct Mapx<K, V> {
@@ -64,10 +80,14 @@ where
     K: KeyEnDe,
     V: ValueEnDe,
 {
+    /// Creates a "shadow" copy of the `Mapx` instance.
+    ///
+    /// This method creates a new `Mapx` that shares the same underlying data source.
+    ///
     /// # Safety
     ///
-    /// This API breaks the semantic safety guarantees,
-    /// but it is safe to use in a race-free environment.
+    /// This API breaks Rust's semantic safety guarantees. It is safe to use only in a
+    /// race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
         unsafe {
@@ -78,9 +98,13 @@ where
         }
     }
 
+    /// Creates a `Mapx` from a byte slice.
+    ///
     /// # Safety
     ///
-    /// Do not use this API unless you know the internal details extremely well.
+    /// This function is unsafe because it assumes the byte slice is a valid
+    /// representation of a `Mapx`. Do not use this API unless you are certain
+    /// about the internal data structure.
     #[inline(always)]
     pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
         unsafe {
@@ -91,11 +115,13 @@ where
         }
     }
 
+    /// Returns the byte representation of the `Mapx`.
     #[inline(always)]
     pub fn as_bytes(&self) -> &[u8] {
         self.inner.as_bytes()
     }
 
+    /// Creates a new, empty `Mapx`.
     #[inline(always)]
     pub fn new() -> Self {
         Self {
@@ -104,41 +130,51 @@ where
         }
     }
 
+    /// Retrieves a value from the map for a given key.
     #[inline(always)]
     pub fn get(&self, key: &K) -> Option<V> {
         self.inner.get(key.encode())
     }
 
+    /// Retrieves a mutable reference to a value in the map.
     #[inline(always)]
     pub fn get_mut(&mut self, key: &K) -> Option<ValueMut<'_, V>> {
         self.inner.get_mut(key.encode())
     }
 
+    /// Checks if the map contains a value for the specified key.
     #[inline(always)]
     pub fn contains_key(&self, key: &K) -> bool {
         self.inner.contains_key(key.encode())
     }
 
+    /// Returns the number of entries in the map.
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.inner.len()
     }
 
+    /// Checks if the map is empty.
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
+    /// Inserts a key-value pair into the map.
+    ///
+    /// If the key already exists, the old value is returned.
     #[inline(always)]
     pub fn insert(&mut self, key: &K, value: &V) -> Option<V> {
         self.inner.insert(key.encode(), value)
     }
 
+    /// Sets the value for a key, overwriting any existing value.
     #[inline(always)]
     pub fn set_value(&mut self, key: &K, value: &V) {
         self.inner.set_value(key.encode(), value);
     }
 
+    /// Gets an entry for a given key, allowing for in-place modification.
     #[inline(always)]
     pub fn entry(&mut self, key: &K) -> Entry<'_, V> {
         Entry {
@@ -147,6 +183,7 @@ where
         }
     }
 
+    /// Returns an iterator over the map's entries.
     #[inline(always)]
     pub fn iter(&self) -> MapxIter<K, V> {
         MapxIter {
@@ -155,6 +192,7 @@ where
         }
     }
 
+    /// Returns a mutable iterator over the map's entries.
     #[inline(always)]
     pub fn iter_mut(&mut self) -> MapxIterMut<K, V> {
         MapxIterMut {
@@ -163,6 +201,7 @@ where
         }
     }
 
+    /// Returns an iterator over the map's values.
     #[inline(always)]
     pub fn values(&self) -> MapxValues<V> {
         MapxValues {
@@ -170,6 +209,7 @@ where
         }
     }
 
+    /// Returns a mutable iterator over the map's values.
     #[inline(always)]
     pub fn values_mut(&mut self) -> MapxValuesMut<V> {
         MapxValuesMut {
@@ -178,21 +218,25 @@ where
         }
     }
 
+    /// Removes a key from the map, returning the value at the key if it existed.
     #[inline(always)]
     pub fn remove(&mut self, key: &K) -> Option<V> {
         self.inner.remove(key.encode())
     }
 
+    /// Removes a key from the map without returning the value.
     #[inline(always)]
     pub fn unset_value(&mut self, key: &K) {
         self.inner.unset_value(key.encode());
     }
 
+    /// Clears the map, removing all key-value pairs.
     #[inline(always)]
     pub fn clear(&mut self) {
         self.inner.clear();
     }
 
+    /// Checks if this `Mapx` instance is the same as another.
     #[inline(always)]
     pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
         self.inner.is_the_same_instance(&other_hdr.inner)
@@ -221,6 +265,7 @@ where
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
+/// An iterator over the entries of a `Mapx`.
 pub struct MapxIter<'a, K, V>
 where
     K: KeyEnDe,
@@ -258,6 +303,7 @@ where
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
+/// A mutable iterator over the entries of a `Mapx`.
 pub struct MapxIterMut<'a, K, V>
 where
     K: KeyEnDe,
@@ -298,11 +344,13 @@ where
 type MapxValues<'a, V> = MapxOrdValues<'a, V>;
 type MapxValuesMut<'a, V> = MapxOrdValuesMut<'a, V>;
 
+/// A mutable reference to a value in a `Mapx` iterator.
 #[derive(Debug)]
 pub struct ValueIterMut<'a, V>
 where
     V: ValueEnDe,
 {
+    /// The inner mutable reference to the value.
     pub(crate) inner: mapx_ord_rawkey::ValueIterMut<'a, V>,
 }
 
