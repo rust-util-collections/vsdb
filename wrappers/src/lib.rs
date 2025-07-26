@@ -3,12 +3,13 @@
 #![cfg_attr(test, allow(warnings))]
 #![recursion_limit = "512"]
 
+#[macro_use]
+pub mod common;
+
 /// Contains basic data structures with typed keys and values.
 pub mod basic;
 /// Contains basic data structures with multiple keys.
 pub mod basic_multi_key;
-/// Contains common utilities and traits for encoding and decoding.
-pub mod common;
 /// Contains data structures for directed acyclic graphs (DAGs).
 pub mod dagmap;
 

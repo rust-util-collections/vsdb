@@ -15,7 +15,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-vsdb_core = "4.0.2"
+vsdb_core = "4.0"
 ```
 
 ## Features

@@ -9,15 +9,13 @@
 
 This is a simplified version of the original [**vsdb**](https://crates.io/crates/vsdb/0.70.0), retaining only the most practical and stable parts. This crate provides high-level APIs.
 
-[**To view the change log check here**](../../CHANGELOG.md).
-
 ## Installation
 
 Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-vsdb = "4.0.1"
+vsdb = "4.0"
 ```
 
 ## Highlights

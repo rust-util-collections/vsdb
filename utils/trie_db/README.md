@@ -15,7 +15,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-vsdb_trie_db = "4.0.1"
+vsdb_trie_db = "4.0"
 ```
 
 ## Usage

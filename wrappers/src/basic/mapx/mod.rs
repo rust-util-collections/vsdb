@@ -56,23 +56,24 @@ use crate::{
         },
     },
     common::ende::{KeyEnDe, ValueEnDe},
+    define_map_wrapper,
 };
 use ruc::*;
-use serde::{Deserialize, Serialize};
 use std::{
     marker::PhantomData,
     ops::{Deref, DerefMut},
 };
 
-/// A disk-based, `HashMap`-like data structure with typed keys and values.
-///
-/// `Mapx` stores key-value pairs on disk, encoding both keys and values
-/// for type safety and persistence.
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
-#[serde(bound = "")]
-pub struct Mapx<K, V> {
-    inner: MapxOrdRawKey<V>,
-    _p: PhantomData<K>,
+define_map_wrapper! {
+    #[doc = "A disk-based, `HashMap`-like data structure with typed keys and values."]
+    #[doc = ""]
+    #[doc = "`Mapx` stores key-value pairs on disk, encoding both keys and values"]
+    #[doc = "for type safety and persistence."]
+    pub struct Mapx<K, V> {
+        inner: MapxOrdRawKey<V>,
+        _p: PhantomData<K>,
+    }
+    where K: KeyEnDe, V: ValueEnDe
 }
 
 impl<K, V> Mapx<K, V>
@@ -80,56 +81,6 @@ where
     K: KeyEnDe,
     V: ValueEnDe,
 {
-    /// Creates a "shadow" copy of the `Mapx` instance.
-    ///
-    /// This method creates a new `Mapx` that shares the same underlying data source.
-    ///
-    /// # Safety
-    ///
-    /// This API breaks Rust's semantic safety guarantees. It is safe to use only in a
-    /// race-free environment.
-    #[inline(always)]
-    pub unsafe fn shadow(&self) -> Self {
-        unsafe {
-            Self {
-                inner: self.inner.shadow(),
-                _p: PhantomData,
-            }
-        }
-    }
-
-    /// Creates a `Mapx` from a byte slice.
-    ///
-    /// # Safety
-    ///
-    /// This function is unsafe because it assumes the byte slice is a valid
-    /// representation of a `Mapx`. Do not use this API unless you are certain
-    /// about the internal data structure.
-    #[inline(always)]
-    pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
-        unsafe {
-            Self {
-                inner: MapxOrdRawKey::from_bytes(s),
-                _p: PhantomData,
-            }
-        }
-    }
-
-    /// Returns the byte representation of the `Mapx`.
-    #[inline(always)]
-    pub fn as_bytes(&self) -> &[u8] {
-        self.inner.as_bytes()
-    }
-
-    /// Creates a new, empty `Mapx`.
-    #[inline(always)]
-    pub fn new() -> Self {
-        Self {
-            inner: MapxOrdRawKey::new(),
-            _p: PhantomData,
-        }
-    }
-
     /// Retrieves a value from the map for a given key.
     #[inline(always)]
     pub fn get(&self, key: &K) -> Option<V> {
@@ -146,18 +97,6 @@ where
     #[inline(always)]
     pub fn contains_key(&self, key: &K) -> bool {
         self.inner.contains_key(key.encode())
-    }
-
-    /// Returns the number of entries in the map.
-    #[inline(always)]
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    /// Checks if the map is empty.
-    #[inline(always)]
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
     }
 
     /// Inserts a key-value pair into the map.
@@ -228,37 +167,6 @@ where
     #[inline(always)]
     pub fn unset_value(&mut self, key: &K) {
         self.inner.unset_value(key.encode());
-    }
-
-    /// Clears the map, removing all key-value pairs.
-    #[inline(always)]
-    pub fn clear(&mut self) {
-        self.inner.clear();
-    }
-
-    /// Checks if this `Mapx` instance is the same as another.
-    #[inline(always)]
-    pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
-        self.inner.is_the_same_instance(&other_hdr.inner)
-    }
-}
-
-impl<K, V> Clone for Mapx<K, V> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-            _p: PhantomData,
-        }
-    }
-}
-
-impl<K, V> Default for Mapx<K, V>
-where
-    K: KeyEnDe,
-    V: ValueEnDe,
-{
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -372,6 +280,3 @@ where
         &mut self.inner
     }
 }
-
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////

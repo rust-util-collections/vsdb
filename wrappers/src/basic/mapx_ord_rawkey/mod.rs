@@ -51,7 +51,7 @@
 mod test;
 
 use crate::common::{RawKey, ende::ValueEnDe};
-use serde::{Deserialize, Serialize};
+use crate::define_map_wrapper;
 use std::{
     borrow::Cow,
     marker::PhantomData,
@@ -59,66 +59,21 @@ use std::{
 };
 use vsdb_core::basic::mapx_raw::{self, MapxRaw, MapxRawIter};
 
-/// A disk-based, `BTreeMap`-like data structure with raw keys and typed values.
-///
-/// `MapxOrdRawKey` stores keys as raw bytes and values as encoded data.
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
-#[serde(bound = "")]
-pub struct MapxOrdRawKey<V> {
-    /// The inner raw map.
-    pub(crate) inner: MapxRaw,
-    _p: PhantomData<V>,
+define_map_wrapper! {
+    #[doc = "A disk-based, `BTreeMap`-like data structure with raw keys and typed values."]
+    #[doc = ""]
+    #[doc = "`MapxOrdRawKey` stores keys as raw bytes and values as encoded data."]
+    pub struct MapxOrdRawKey<V> {
+        pub(crate) inner: MapxRaw,
+        _p: PhantomData<V>,
+    }
+    where V: ValueEnDe
 }
 
 impl<V> MapxOrdRawKey<V>
 where
     V: ValueEnDe,
 {
-    /// Creates a "shadow" copy of the `MapxOrdRawKey` instance.
-    ///
-    /// # Safety
-    ///
-    /// This API breaks Rust's semantic safety guarantees. Use only in a race-free environment.
-    #[inline(always)]
-    pub unsafe fn shadow(&self) -> Self {
-        unsafe {
-            Self {
-                inner: self.inner.shadow(),
-                _p: PhantomData,
-            }
-        }
-    }
-
-    /// Creates a `MapxOrdRawKey` from a byte slice.
-    ///
-    /// # Safety
-    ///
-    /// This function is unsafe and assumes the byte slice is a valid representation.
-    #[inline(always)]
-    pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
-        unsafe {
-            Self {
-                inner: MapxRaw::from_bytes(s),
-                _p: PhantomData,
-            }
-        }
-    }
-
-    /// Returns the byte representation of the `MapxOrdRawKey`.
-    #[inline(always)]
-    pub fn as_bytes(&self) -> &[u8] {
-        self.inner.as_bytes()
-    }
-
-    /// Creates a new, empty `MapxOrdRawKey`.
-    #[inline(always)]
-    pub fn new() -> Self {
-        MapxOrdRawKey {
-            inner: MapxRaw::new(),
-            _p: PhantomData,
-        }
-    }
-
     /// Retrieves a value from the map for a given key.
     #[inline(always)]
     pub fn get(&self, key: impl AsRef<[u8]>) -> Option<V> {
@@ -166,18 +121,6 @@ where
         self.inner
             .get_ge(key.as_ref())
             .map(|(k, v)| (k, <V as ValueEnDe>::decode(&v).unwrap()))
-    }
-
-    /// Returns the number of entries in the map.
-    #[inline(always)]
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    /// Checks if the map is empty.
-    #[inline(always)]
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
     }
 
     /// Inserts a key-value pair into the map.
@@ -282,36 +225,6 @@ where
     #[inline(always)]
     pub fn unset_value(&mut self, key: impl AsRef<[u8]>) {
         self.inner.remove(key.as_ref());
-    }
-
-    /// Clears the map, removing all key-value pairs.
-    #[inline(always)]
-    pub fn clear(&mut self) {
-        self.inner.clear();
-    }
-
-    /// Checks if this `MapxOrdRawKey` instance is the same as another.
-    #[inline(always)]
-    pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
-        self.inner.is_the_same_instance(&other_hdr.inner)
-    }
-}
-
-impl<V> Clone for MapxOrdRawKey<V> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-            _p: PhantomData,
-        }
-    }
-}
-
-impl<V> Default for MapxOrdRawKey<V>
-where
-    V: ValueEnDe,
-{
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -501,6 +414,3 @@ where
         &mut self.value
     }
 }
-
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////

@@ -8,5 +8,6 @@
 
 /// A module for encoding and decoding traits.
 pub mod ende;
+pub mod macros;
 
 pub use vsdb_core::common::*;
