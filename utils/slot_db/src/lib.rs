@@ -1,4 +1,10 @@
-#![doc = include_str!("../README.md")]
+//! # vsdb_slot_db
+//!
+//! `vsdb_slot_db` provides `SlotDB`, a skip-list-like data structure designed for
+//! efficient, timestamp-based paged queries. It is ideal for indexing and querying
+//! large datasets where entries are associated with a slot (e.g., a timestamp or
+//! block number).
+
 #![deny(warnings)]
 #![cfg_attr(test, warn(warnings))]
 
@@ -28,11 +34,12 @@ type Distance = i128;
 type PageSize = u16;
 type PageIndex = u32;
 
-/// A `Skip List`-like data structure for fast paged queries.
+/// A skip-list-like data structure for fast, timestamp-based paged queries.
 ///
-/// `SlotDB` is designed to support efficient pagination and indexing over a large
-/// number of entries. It organizes data into "slots," which are then grouped into
-/// tiers to allow for rapid seeking and counting.
+/// `SlotDB` organizes data into "slots" (e.g., timestamps or block numbers),
+/// which are then grouped into tiers. This hierarchical structure allows for
+/// rapid seeking and counting, making it highly efficient for pagination and
+/// range queries over large datasets.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(
     bound = "K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned"
@@ -43,20 +50,19 @@ where
 {
     data: MapxOrd<Slot, DataCtner<K>>,
 
-    // How many entries in this DB
+    // How many entries are in this DB
     total: Orphan<EntryCnt>,
 
     tiers: Vec<Tier>,
 
     tier_capacity: u64,
 
-    // Switch the inner implementations of the slot direction:
+    // Switch the inner implementation of the slot direction:
     // - positive => reverse
     // - reverse => positive
     //
-    // Positive query usually get better performance,
-    // if most scenes are under the reverse mode,
-    // then swap the low-level logic
+    // Positive queries usually get better performance. If most use cases
+    // are in reverse mode, swapping the low-level logic can improve performance.
     swap_order: bool,
 }
 
@@ -68,10 +74,9 @@ where
     ///
     /// # Arguments
     ///
-    /// * `tier_capacity` - The capacity of each tier in the `SlotDB`.
-    /// * `swap_order` - A boolean indicating whether to swap the order of slots.
-    ///   Positive queries generally have better performance. If most use cases
-    ///   involve reverse order, setting this to `true` can improve performance.
+    /// * `tier_capacity` - The capacity of each tier, controlling the granularity of the index.
+    /// * `swap_order` - If `true`, reverses the internal slot order. This can improve
+    ///   performance for applications that primarily query in reverse chronological order.
     pub fn new(tier_capacity: u64, swap_order: bool) -> Self {
         Self {
             data: MapxOrd::new(),
@@ -86,12 +91,8 @@ where
     ///
     /// # Arguments
     ///
-    /// * `slot` - The slot to insert the key into.
+    /// * `slot` - The slot to insert the key into (e.g., a timestamp).
     /// * `k` - The key to insert.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` indicating success or failure.
     pub fn insert(&mut self, mut slot: Slot, k: K) -> Result<()> {
         if self.swap_order {
             slot = swap_order(slot);
@@ -110,7 +111,7 @@ where
                 self.tiers.push(newtop);
             }
         } else {
-            // First insertion scene, tiers' length should be 0
+            // First insertion, tiers' length should be 0
             let newtop = self.data.iter().fold(
                 Tier::new(self.tiers.len() as u32, self.tier_capacity),
                 |mut t, (slot, entries)| {
@@ -199,8 +200,8 @@ where
     /// # Arguments
     ///
     /// * `page_size` - The number of entries per page.
-    /// * `page_index` - The index of the page to retrieve (starting from 0).
-    /// * `reverse_order` - A boolean indicating whether to return entries in reverse order.
+    /// * `page_index` - The zero-based index of the page to retrieve.
+    /// * `reverse_order` - If `true`, returns entries in reverse order.
     ///
     /// # Returns
     ///
@@ -224,11 +225,11 @@ where
     ///
     /// # Arguments
     ///
-    /// * `slot_left_bound` - The left bound of the slot range (inclusive).
-    /// * `slot_right_bound` - The right bound of the slot range (inclusive).
+    /// * `slot_left_bound` - The inclusive left bound of the slot range.
+    /// * `slot_right_bound` - The inclusive right bound of the slot range.
     /// * `page_size` - The number of entries per page.
-    /// * `page_index` - The index of the page to retrieve (starting from 0).
-    /// * `reverse_order` - A boolean indicating whether to return entries in reverse order.
+    /// * `page_index` - The zero-based index of the page to retrieve.
+    /// * `reverse_order` - If `true`, returns entries in reverse order.
     ///
     /// # Returns
     ///
@@ -274,7 +275,7 @@ where
             .unwrap_or(0)
     }
 
-    // Exclude the slot itself-owned entries(whether it exists or not)
+    // Exclude the slot itself-owned entries (whether it exists or not)
     fn distance_to_the_leftmost_slot(&self, slot: Slot) -> Distance {
         let mut left_bound = Slot::MIN;
         let mut ret = 0;
@@ -495,10 +496,6 @@ where
     }
 
     /// Returns the total number of entries in the `SlotDB`.
-    ///
-    /// # Returns
-    ///
-    /// The total number of entries (`EntryCnt`).
     pub fn total(&self) -> EntryCnt {
         self.total_by_slot(None, None)
     }

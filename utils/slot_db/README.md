@@ -5,11 +5,9 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](../../LICENSE)
 [![Rust](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml/badge.svg)](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml)
 
-> A skip-list like index cache.
+> A skip-list-like index for efficient, timestamp-based paged queries.
 
-A `Skip List`-like index cache, based on the powerful [`vsdb`](https://crates.io/crates/vsdb) crate.
-
-If you have a large key-value database and need high-performance pagination or data analysis, this crate could be a great tool for you.
+This crate provides `SlotDB`, a data structure that uses a tiered, skip-list-like index to enable fast pagination and range queries over large, ordered datasets. It is ideal for applications where data is associated with a "slot" (such as a timestamp or block number) and needs to be queried in pages.
 
 ## Installation
 
@@ -17,35 +15,42 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-vsdb_slot_db = "4.0"
+vsdb_slot_db = "5.0.1"
 ```
 
 ## Usage
 
-`SlotDB` is a skip-list-like index cache that can be used for high-performance pagination and data analysis.
+`SlotDB` provides an efficient way to query large, ordered datasets in pages.
 
 ```rust
-use vsdb_slot_db::{SlotDB, Slot};
+use vsdb_slot_db::SlotDB;
 
-// Create a new SlotDB with a maximum of 16 entries per slot
-let mut db: SlotDB<String> = SlotDB::new(16, false);
+// Create a new SlotDB with a tier capacity of 10 and normal order.
+let mut db = SlotDB::<String>::new(10, false);
 
-// Insert some data with slot numbers
-db.insert(1, "data1".to_string()).unwrap();
-db.insert(1, "data2".to_string()).unwrap();
-db.insert(2, "data3".to_string()).unwrap();
+// Insert some keys into different slots.
+db.insert(100, "entry_a".to_string()).unwrap();
+db.insert(100, "entry_b".to_string()).unwrap();
+db.insert(200, "entry_c".to_string()).unwrap();
+db.insert(300, "entry_d".to_string()).unwrap();
 
-// Get entries by page
-let page1 = db.get_entries_by_page(10, 0, false);
-assert_eq!(page1.len(), 3);
+// Check the total number of entries.
+assert_eq!(db.total(), 4);
 
-// Get entries by page with a specific slot range
-let page2 = db.get_entries_by_page_slot(Some(1), Some(1), 10, 0, false);
-assert_eq!(page2.len(), 2);
-assert_eq!(page2[0], "data1");
-assert_eq!(page2[1], "data2");
+// Get entries by page.
+// Get the first page with a size of 2, in reverse order.
+let entries = db.get_entries_by_page(2, 0, true);
+assert_eq!(entries, vec!["entry_d".to_string(), "entry_c".to_string()]);
+
+// Get entries within a slot range.
+let entries_in_slot = db.get_entries_by_page_slot(Some(100), Some(100), 10, 0, false);
+assert_eq!(entries_in_slot.len(), 2);
+assert!(entries_in_slot.contains(&"entry_a".to_string()));
+assert!(entries_in_slot.contains(&"entry_b".to_string()));
 ```
 
 ## License
+
+For API examples, see [API Examples](docs/api.md).
 
 This project is licensed under the **MIT** license.

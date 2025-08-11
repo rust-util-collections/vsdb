@@ -1,35 +1,36 @@
-#![doc = include_str!("../README.md")]
+//! # vsdb_core
+//!
+//! `vsdb_core` provides the low-level building blocks for `vsdb`, including storage
+//! engine abstractions, raw data structures, and common utilities. It is not
+//! typically used directly by end-users, but forms the foundation of the `vsdb`
+//! ecosystem.
+
 #![deny(warnings)]
 #![cfg_attr(test, allow(warnings))]
 #![recursion_limit = "512"]
 
-/// Contains common modules and utilities for the VSDB framework.
+/// Manages storage backends, raw data types, and shared utilities.
 ///
-/// This module provides access to essential components such as database backends,
-/// traits for data manipulation, and various utility functions. It serves as a
-/// central hub for shared functionality used throughout the VSDB ecosystem.
+/// This module provides the `Engine` trait for abstracting over different
+/// key-value stores (like RocksDB and ParityDB), along with fundamental
+/// types such as `RawKey`, `RawValue`, and environment management functions.
 pub mod common;
 
-/// Defines basic data structures for the VSDB framework.
+/// Contains raw, untyped data structures.
 ///
-/// This module contains fundamental data structures like maps and vectors
-/// that are essential for building more complex storage solutions. These
-/// structures are designed to be efficient and flexible, providing the
-/// building blocks for various data management tasks.
+/// This module provides `MapxRaw`, a basic, high-performance key-value map that
+/// operates on raw bytes. It serves as the foundation for the typed, user-facing
+/// collections in the `vsdb` crate.
 pub mod basic;
 
-/// A re-export of the `MapxRaw` data structure for convenient access.
-///
-/// `MapxRaw` is a raw, high-performance map implementation that forms the
-/// foundation of many other data structures in the VSDB framework.
+/// A raw, high-performance, disk-backed key-value map.
 pub use basic::mapx_raw::MapxRaw;
 
-/// A re-export of commonly used items for convenient access.
+/// Commonly used items, re-exported for convenience.
 ///
-/// This includes constants for data sizes (KB, MB, GB), a null terminator constant (`NULL`),
-/// and various raw data types (`RawBytes`, `RawKey`, `RawValue`). It also includes
-/// functions for managing the VSDB environment, such as flushing data and
-/// getting or setting directory paths.
+/// This includes data size constants (KB, MB, GB), a null terminator constant (`NULL`),
+/// raw data types (`RawBytes`, `RawKey`, `RawValue`), and functions for managing
+/// the database environment (e.g., `vsdb_flush`, `vsdb_set_base_dir`).
 pub use common::{
     GB, KB, MB, NULL, RawBytes, RawKey, RawValue, vsdb_flush, vsdb_get_base_dir,
     vsdb_get_custom_dir, vsdb_set_base_dir,

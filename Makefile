@@ -60,7 +60,7 @@ fmt:
 	cargo fmt
 
 fmtall:
-	bash scripts/fmt.sh
+	bash tools/fmt.sh
 
 update:
 	cargo update --verbose
