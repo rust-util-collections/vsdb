@@ -62,7 +62,7 @@ impl RedbEngine {
     fn get_table_definition(
         &self,
         area_idx: usize,
-    ) -> TableDefinition<'_, &'static [u8], &'static [u8]> {
+    ) -> TableDefinition<'static, &'static [u8], &'static [u8]> {
         *DATA_TABLES.get(area_idx).unwrap()
     }
 }
@@ -258,76 +258,120 @@ impl Engine for RedbEngine {
 }
 
 pub struct RedbIter {
-    items: Vec<(RawKey, RawValue)>,
-    start: usize,
-    end: usize,
+    db: &'static Database,
+    table_def: TableDefinition<'static, &'static [u8], &'static [u8]>,
+    prefix: Vec<u8>,
+    start_bound: Bound<Vec<u8>>,
+    end_bound: Bound<Vec<u8>>,
+    current_position: Option<Vec<u8>>,
+    exhausted: bool,
+    reverse_items: Option<Vec<(RawKey, RawValue)>>,
 }
 
 impl RedbIter {
     fn new(
-        db: &Database,
-        table_def: TableDefinition<&'static [u8], &'static [u8]>,
+        db: &'static Database,
+        table_def: TableDefinition<'static, &'static [u8], &'static [u8]>,
         prefix: PreBytes,
         start: Bound<Vec<u8>>,
         end: Bound<Vec<u8>>,
     ) -> Self {
-        let mut items = Vec::new();
+        RedbIter {
+            db,
+            table_def,
+            prefix: prefix.to_vec(),
+            start_bound: start,
+            end_bound: end,
+            current_position: None,
+            exhausted: false,
+            reverse_items: None,
+        }
+    }
 
-        if let Ok(txn) = db.begin_read()
-            && let Ok(table) = txn.open_table(table_def)
-        {
-            let prefix_vec = prefix.to_vec();
+    fn check_bounds(&self, raw_key: &[u8]) -> bool {
+        match (&self.start_bound, &self.end_bound) {
+            (Bound::Unbounded, Bound::Unbounded) => true,
+            (Bound::Included(s), Bound::Unbounded) => raw_key >= s.as_slice(),
+            (Bound::Excluded(s), Bound::Unbounded) => raw_key > s.as_slice(),
+            (Bound::Unbounded, Bound::Included(e)) => raw_key <= e.as_slice(),
+            (Bound::Unbounded, Bound::Excluded(e)) => raw_key < e.as_slice(),
+            (Bound::Included(s), Bound::Included(e)) => {
+                raw_key >= s.as_slice() && raw_key <= e.as_slice()
+            }
+            (Bound::Included(s), Bound::Excluded(e)) => {
+                raw_key >= s.as_slice() && raw_key < e.as_slice()
+            }
+            (Bound::Excluded(s), Bound::Included(e)) => {
+                raw_key > s.as_slice() && raw_key <= e.as_slice()
+            }
+            (Bound::Excluded(s), Bound::Excluded(e)) => {
+                raw_key > s.as_slice() && raw_key < e.as_slice()
+            }
+        }
+    }
 
-            // Collect all items with the matching prefix
-            if let Ok(mut iter) = table.range(&prefix_vec[..]..) {
-                while let Some(Ok((k, v))) = iter.next() {
-                    let key_bytes = k.value();
-                    if !key_bytes.starts_with(&prefix_vec) {
-                        break;
-                    }
+    fn get_next_item(&mut self) -> Option<(RawKey, RawValue)> {
+        let txn = self.db.begin_read().ok()?;
+        let table = txn.open_table(self.table_def).ok()?;
 
-                    let raw_key = &key_bytes[PREFIX_SIZE..];
+        let start_key = match &self.current_position {
+            Some(pos) => {
+                let mut key = self.prefix.clone();
+                key.extend_from_slice(pos);
+                key
+            }
+            None => self.prefix.clone(),
+        };
 
-                    // Apply range bounds
-                    let should_include = match (&start, &end) {
-                        (Bound::Unbounded, Bound::Unbounded) => true,
-                        (Bound::Included(s), Bound::Unbounded) => {
-                            raw_key >= s.as_slice()
-                        }
-                        (Bound::Excluded(s), Bound::Unbounded) => raw_key > s.as_slice(),
-                        (Bound::Unbounded, Bound::Included(e)) => {
-                            raw_key <= e.as_slice()
-                        }
-                        (Bound::Unbounded, Bound::Excluded(e)) => raw_key < e.as_slice(),
-                        (Bound::Included(s), Bound::Included(e)) => {
-                            raw_key >= s.as_slice() && raw_key <= e.as_slice()
-                        }
-                        (Bound::Included(s), Bound::Excluded(e)) => {
-                            raw_key >= s.as_slice() && raw_key < e.as_slice()
-                        }
-                        (Bound::Excluded(s), Bound::Included(e)) => {
-                            raw_key > s.as_slice() && raw_key <= e.as_slice()
-                        }
-                        (Bound::Excluded(s), Bound::Excluded(e)) => {
-                            raw_key > s.as_slice() && raw_key < e.as_slice()
-                        }
-                    };
+        let mut iter = table.range(&start_key[..]..).ok()?;
 
-                    if !should_include {
-                        continue;
-                    }
+        // If we have a current position, skip the current item to get the next one
+        if self.current_position.is_some() {
+            iter.next();
+        }
 
-                    items.push((raw_key.to_vec(), v.value().to_vec()));
-                }
+        while let Some(Ok((k, v))) = iter.next() {
+            let key_bytes = k.value();
+            if !key_bytes.starts_with(&self.prefix) {
+                self.exhausted = true;
+                return None;
+            }
+
+            let raw_key = &key_bytes[PREFIX_SIZE..];
+            if self.check_bounds(raw_key) {
+                self.current_position = Some(raw_key.to_vec());
+                return Some((raw_key.to_vec(), v.value().to_vec()));
             }
         }
 
-        let len = items.len();
-        RedbIter {
-            items,
-            start: 0,
-            end: len,
+        self.exhausted = true;
+        None
+    }
+
+    fn collect_all_for_reverse(&mut self) -> Option<()> {
+        if self.reverse_items.is_some() {
+            return Some(());
         }
+
+        let txn = self.db.begin_read().ok()?;
+        let table = txn.open_table(self.table_def).ok()?;
+        let mut items = Vec::new();
+
+        let mut iter = table.range(&self.prefix[..]..).ok()?;
+        while let Some(Ok((k, v))) = iter.next() {
+            let key_bytes = k.value();
+            if !key_bytes.starts_with(&self.prefix) {
+                break;
+            }
+
+            let raw_key = &key_bytes[PREFIX_SIZE..];
+            if self.check_bounds(raw_key) {
+                items.push((raw_key.to_vec(), v.value().to_vec()));
+            }
+        }
+
+        self.reverse_items = Some(items);
+        Some(())
     }
 }
 
@@ -335,24 +379,19 @@ impl Iterator for RedbIter {
     type Item = (RawKey, RawValue);
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.start < self.end {
-            let item = self.items[self.start].clone();
-            self.start += 1;
-            Some(item)
-        } else {
-            None
+        if self.exhausted {
+            return None;
         }
+
+        self.get_next_item()
     }
 }
 
 impl DoubleEndedIterator for RedbIter {
     fn next_back(&mut self) -> Option<Self::Item> {
-        if self.start < self.end {
-            self.end -= 1;
-            Some(self.items[self.end].clone())
-        } else {
-            None
-        }
+        self.collect_all_for_reverse()?;
+
+        self.reverse_items.as_mut()?.pop()
     }
 }
 
