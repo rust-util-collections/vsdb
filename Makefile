@@ -38,16 +38,16 @@ testmusl:
 
 bench:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench --workspace --no-default-features --features "rocks_backend,msgpack_codec"
-	du -sh ~/.vsdb
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo bench --workspace
 	du -sh ~/.vsdb
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench --workspace --no-default-features --features "rocks_backend,compress,msgpack_codec"
+	cargo bench --workspace --no-default-features --features "rocks_backend,msgpack_codec"
 	du -sh ~/.vsdb
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo bench --workspace --features "compress"
+	du -sh ~/.vsdb
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
+	cargo bench --workspace --no-default-features --features "rocks_backend,compress,msgpack_codec"
 	du -sh ~/.vsdb
 
 benchmusl:
