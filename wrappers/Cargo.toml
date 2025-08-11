@@ -29,9 +29,9 @@ criterion = "0.7.0"
 rand = "0.8.5"
 
 [features]
-default = ["parity_backend", "compress", "msgpack_codec"]
+default = ["redb_backend", "compress", "msgpack_codec"]
 
-parity_backend = ["vsdb_core/parity_backend"]
+redb_backend = ["vsdb_core/redb_backend"]
 rocks_backend = ["vsdb_core/rocks_backend"]
 
 compress = ["vsdb_core/compress"]

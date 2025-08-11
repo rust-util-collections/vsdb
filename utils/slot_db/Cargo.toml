@@ -19,9 +19,9 @@ criterion = "0.7.0"
 rand = { workspace = true }
 
 [features]
-default = ["parity_backend", "compress", "msgpack_codec"]
+default = ["redb_backend", "compress", "msgpack_codec"]
 
-parity_backend = ["vsdb/parity_backend"]
+redb_backend = ["vsdb/redb_backend"]
 rocks_backend = ["vsdb/rocks_backend"]
 
 compress = ["vsdb/compress"]

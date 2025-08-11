@@ -4,8 +4,8 @@
 #[cfg(feature = "rocks_backend")]
 mod rocks_backend;
 
-#[cfg(feature = "parity_backend")]
-mod parity_backend;
+#[cfg(feature = "redb_backend")]
+mod redb_backend;
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -16,11 +16,11 @@ pub(crate) use rocks_backend::RocksEngine as RocksDB;
 #[cfg(feature = "rocks_backend")]
 type EngineIter = rocks_backend::RocksIter;
 
-#[cfg(feature = "parity_backend")]
-pub(crate) use parity_backend::ParityEngine as ParityDB;
+#[cfg(feature = "redb_backend")]
+pub(crate) use redb_backend::RedbEngine as RedbDB;
 
-#[cfg(feature = "parity_backend")]
-type EngineIter = parity_backend::ParityIter;
+#[cfg(feature = "redb_backend")]
+type EngineIter = redb_backend::RedbIter;
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////

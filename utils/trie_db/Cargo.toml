@@ -22,9 +22,9 @@ vsdb = { workspace = true }
 vsdb_hash_db = { workspace = true }
 
 [features]
-default = ["parity_backend","msgpack_codec"]
+default = ["redb_backend","msgpack_codec"]
 
-parity_backend = ["vsdb/parity_backend"]
+redb_backend = ["vsdb/redb_backend"]
 rocks_backend = ["vsdb/rocks_backend"]
 
 json_codec = ["vsdb/json_codec"]

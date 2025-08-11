@@ -20,7 +20,7 @@ parity-scale-codec = "3.6.12"
 
 threadpool = "1.8.1" # used in a background cleaner
 
-parity-db = "0.5.3"
+redb = "3.0.0"
 rocksdb = { version = "0.24.0", default-features = false, features = ["bindgen-runtime"] }
 
 keccak-hasher = "0.16.0"

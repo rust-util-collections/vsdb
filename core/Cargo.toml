@@ -18,7 +18,7 @@ parking_lot = { workspace = true }
 
 threadpool = { workspace = true } # used in a background cleaner
 
-parity-db = { workspace = true, optional = true }
+redb = { workspace = true, optional = true }
 rocksdb = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -27,9 +27,9 @@ hex = "0.4.3"
 criterion = "0.7.0"
 
 [features]
-default = ["compress", "parity_backend"]
+default = ["compress", "redb_backend"]
 
-parity_backend = ["parity-db"]
+redb_backend = ["redb"]
 rocks_backend = ["rocksdb"]
 
 compress = ["rocksdb?/zstd"]
