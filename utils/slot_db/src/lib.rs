@@ -148,11 +148,10 @@ where
 
         loop {
             if let Some(top_len) = self.tiers.last().map(|top| top.data.len())
+                && top_len < 2
             {
-                if top_len < 2 {
-                    self.tiers.pop();
-                    continue;
-                }
+                self.tiers.pop();
+                continue;
             }
             break;
         }
@@ -546,16 +545,14 @@ where
     }
 
     fn insert(&mut self, k: K) -> bool {
-        if let Self::Small(i) = self {
-            if i.len() > 8 {
-                *self = Self::Large(i.iter().fold(
-                    MapxOrd::new(),
-                    |mut acc, k| {
-                        acc.insert(k, &());
-                        acc
-                    },
-                ));
-            }
+        if let Self::Small(i) = self
+            && i.len() > 8
+        {
+            *self =
+                Self::Large(i.iter().fold(MapxOrd::new(), |mut acc, k| {
+                    acc.insert(k, &());
+                    acc
+                }));
         }
 
         match self {
@@ -571,7 +568,7 @@ where
         }
     }
 
-    fn iter(&self) -> DataCtnerIter<K> {
+    fn iter(&self) -> DataCtnerIter<'_, K> {
         match self {
             Self::Small(i) => DataCtnerIter::Small(i.iter()),
             Self::Large(i) => DataCtnerIter::Large(i.iter()),

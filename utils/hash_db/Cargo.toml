@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_hash_db"
-version = "4.0.2"
+version = "5.0.0"
 edition = "2024"
 keywords = ["mpt", "trie", "database", "blockchain"]
 license = "MIT"

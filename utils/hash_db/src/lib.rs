@@ -194,10 +194,10 @@ where
         }
 
         let key = prefixed_key::<H>(key, prefix);
-        if let Some(mut v) = self.data.get_mut(&key) {
-            if v.rc > 0 {
-                v.rc -= 1;
-            }
+        if let Some(mut v) = self.data.get_mut(&key)
+            && v.rc > 0
+        {
+            v.rc -= 1;
         }
     }
 }

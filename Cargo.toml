@@ -21,15 +21,15 @@ parity-scale-codec = "3.6.12"
 threadpool = "1.8.1" # used in a background cleaner
 
 parity-db = "0.5.3"
-rocksdb = { version = "0.23.0", default-features = false, features = ["bindgen-runtime"] }
+rocksdb = { version = "0.24.0", default-features = false, features = ["bindgen-runtime"] }
 
 keccak-hasher = "0.16.0"
 hash-db = "0.16.0"
 trie-db = "0.30.0"
 trie-root = "0.18.0"
 
-vsdb = { path = "wrappers", version = "4.0", default-features = false }
-vsdb_core = { path = "core", version = "4.0", default-features = false }
+vsdb = { path = "wrappers", version = "5.0", default-features = false }
+vsdb_core = { path = "core", version = "5.0", default-features = false }
 
-vsdb_trie_db = { path = "utils/trie_db", version = "4.0", default-features = false }
-vsdb_hash_db = { path = "utils/hash_db", version = "4.0", default-features = false }
+vsdb_trie_db = { path = "utils/trie_db", version = "5.0", default-features = false }
+vsdb_hash_db = { path = "utils/hash_db", version = "5.0", default-features = false }

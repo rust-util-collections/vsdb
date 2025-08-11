@@ -324,7 +324,7 @@ impl MptOnce {
     /// # Returns
     ///
     /// A `Result` containing a new `MptRo` instance or an error.
-    pub fn ro_handle(&self, root: TrieRoot) -> Result<MptRo> {
+    pub fn ro_handle(&self, root: TrieRoot) -> Result<MptRo<'_>> {
         MptRo::from_existing(&self.backend, root).c(d!())
     }
 }
@@ -431,7 +431,7 @@ impl<'a> MptMut<'a> {
         *self.trie.root()
     }
 
-    fn ro_handle(&self, root: TrieRoot) -> Result<MptRo> {
+    fn ro_handle(&self, root: TrieRoot) -> Result<MptRo<'_>> {
         MptRo::from_existing_dyn(self.trie.db(), root).c(d!())
     }
 }

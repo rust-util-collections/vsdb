@@ -246,13 +246,13 @@ impl<T: ValueEnDe> Vecx<T> {
 
     /// Returns an iterator over the vector's values.
     #[inline(always)]
-    pub fn iter(&self) -> VecxIter<T> {
+    pub fn iter(&self) -> VecxIter<'_, T> {
         VecxIter(self.inner.iter())
     }
 
     /// Returns a mutable iterator over the vector's values.
     #[inline(always)]
-    pub fn iter_mut(&mut self) -> VecxIterMut<T> {
+    pub fn iter_mut(&mut self) -> VecxIterMut<'_, T> {
         VecxIterMut(self.inner.iter_mut())
     }
 
