@@ -22,7 +22,7 @@ sha3 = "0.10"
 
 threadpool = "1.8.1" # used in a background cleaner
 
-fjall = { version = "2.11.2", default-features = false, features = ["single_writer_tx"] }
+parity-db = { version = "0.5.4" }
 rocksdb = { version = "0.24.0", default-features = false, features = ["bindgen-runtime"] }
 
 vsdb = { path = "wrappers", version = "7.1.0", default-features = false }

@@ -21,7 +21,7 @@ thiserror = { workspace = true }
 rand = { workspace = true }
 
 [features]
-default = ["fjall_backend", "msgpack_codec"]
-fjall_backend = ["vsdb/fjall_backend"]
+default = ["parity_backend", "msgpack_codec"]
+parity_backend = ["vsdb/parity_backend"]
 rocks_backend = ["vsdb/rocks_backend"]
 msgpack_codec = ["vsdb/msgpack_codec"]

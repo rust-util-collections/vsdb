@@ -47,7 +47,8 @@ use crate::{
     basic::{
         mapx_ord::{Entry, MapxOrdValues, MapxOrdValuesMut},
         mapx_ord_rawkey::{
-            self, MapxOrdRawKey, MapxOrdRawKeyIter, MapxOrdRawKeyIterMut, ValueMut,
+            self, MapxOrdRawKey, MapxOrdRawKeyBatchEntry, MapxOrdRawKeyIter,
+            MapxOrdRawKeyIterMut, ValueMut,
         },
     },
     common::ende::{KeyEnDe, ValueEnDe},
@@ -160,13 +161,90 @@ where
         self.inner.remove(key.encode())
     }
 
-    /// Batch write operations.
+    /// Start a batch operation.
+    ///
+    /// This method allows you to perform multiple insert/remove operations
+    /// and commit them atomically.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use vsdb::{Mapx, vsdb_set_base_dir};
+    ///
+    /// vsdb_set_base_dir("/tmp/vsdb_mapx_batch_entry").unwrap();
+    /// let mut map = Mapx::new();
+    ///
+    /// let mut batch = map.batch_entry();
+    /// batch.insert(&1, &"one".to_string());
+    /// batch.insert(&2, &"two".to_string());
+    /// batch.commit().unwrap();
+    ///
+    /// assert_eq!(map.get(&1), Some("one".to_string()));
+    /// assert_eq!(map.get(&2), Some("two".to_string()));
+    /// ```
     #[inline(always)]
-    pub fn batch<F>(&mut self, f: F)
-    where
-        F: FnOnce(&mut dyn vsdb_core::common::BatchTrait),
-    {
-        self.inner.batch(f);
+    pub fn batch_entry(&mut self) -> MapxBatchEntry<'_, K, V> {
+        MapxBatchEntry {
+            inner: self.inner.batch_entry(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+/// A batch writer for `Mapx`.
+pub struct MapxBatch<'a, 'b, K, V>
+where
+    K: KeyEnDe,
+    V: ValueEnDe,
+{
+    inner: &'b mut mapx_ord_rawkey::MapxOrdRawKeyBatch<'a, V>,
+    _marker: PhantomData<K>,
+}
+
+impl<'a, 'b, K, V> MapxBatch<'a, 'b, K, V>
+where
+    K: KeyEnDe,
+    V: ValueEnDe,
+{
+    /// Insert a key-value pair into the batch.
+    pub fn insert(&mut self, key: &K, value: &V) {
+        self.inner.insert(key.encode(), value);
+    }
+
+    /// Remove a key in the batch.
+    pub fn remove(&mut self, key: &K) {
+        self.inner.remove(key.encode());
+    }
+}
+
+/// A batch entry for `Mapx`.
+pub struct MapxBatchEntry<'a, K, V>
+where
+    K: KeyEnDe,
+    V: ValueEnDe,
+{
+    inner: MapxOrdRawKeyBatchEntry<'a, V>,
+    _marker: PhantomData<K>,
+}
+
+impl<'a, K, V> MapxBatchEntry<'a, K, V>
+where
+    K: KeyEnDe,
+    V: ValueEnDe,
+{
+    /// Insert a key-value pair into the batch.
+    pub fn insert(&mut self, key: &K, value: &V) {
+        self.inner.insert(key.encode(), value);
+    }
+
+    /// Remove a key in the batch.
+    pub fn remove(&mut self, key: &K) {
+        self.inner.remove(key.encode());
+    }
+
+    /// Commit the batch.
+    pub fn commit(self) -> Result<()> {
+        self.inner.commit()
     }
 }
 

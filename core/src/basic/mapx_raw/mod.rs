@@ -310,17 +310,31 @@ impl MapxRaw {
         self.inner.remove(key.as_ref())
     }
 
-    /// Batch write operations for better performance and atomicity.
+    /// Start a batch operation.
     ///
-    /// # Arguments
+    /// This method allows you to perform multiple insert/remove operations
+    /// and commit them atomically.
     ///
-    /// * `f` - A closure that takes a `&mut BatchTrait` and performs batch operations.
+    /// # Examples
+    ///
+    /// ```
+    /// use vsdb_core::basic::mapx_raw::MapxRaw;
+    /// use vsdb_core::vsdb_set_base_dir;
+    ///
+    /// vsdb_set_base_dir("/tmp/vsdb_core_mapx_raw_batch_entry").unwrap();
+    /// let mut map = MapxRaw::new();
+    ///
+    /// let mut batch = map.batch_entry();
+    /// batch.insert(&[1], &[10]);
+    /// batch.insert(&[2], &[20]);
+    /// batch.commit().unwrap();
+    ///
+    /// assert_eq!(map.get(&[1]), Some(vec![10]));
+    /// assert_eq!(map.get(&[2]), Some(vec![20]));
+    /// ```
     #[inline(always)]
-    pub fn batch<F>(&mut self, f: F)
-    where
-        F: FnOnce(&mut dyn crate::common::BatchTrait),
-    {
-        self.inner.write_batch(f);
+    pub fn batch_entry(&mut self) -> Box<dyn crate::common::BatchTrait + '_> {
+        self.inner.batch_begin()
     }
 
     /// Clears the map, removing all key-value pairs.

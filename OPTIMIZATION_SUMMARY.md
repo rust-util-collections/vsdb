@@ -80,28 +80,18 @@ fn set_max_key_len(&self, len: usize) {
 
 ```rust
 /// Batch write operations for better performance
-pub fn write_batch<F>(&self, meta_prefix: PreBytes, f: F)
-where
-    F: FnOnce(&mut dyn BatchTrait)
-{
-    let db = self.get_db(meta_prefix);
-    let cf = self.get_cf(meta_prefix);
-    let mut batch = RocksBatch::new(meta_prefix, cf);
-    f(&mut batch);
-    db.write(batch.inner).unwrap();
-    
-    // ... update max_keylen logic
-}
+let mut batch = map.batch_entry();
+batch.insert(&key, &value);
+batch.commit().unwrap();
 ```
 
 **Usage Example**:
 
 ```rust
-map.batch(|batch| {
-    for i in 0..1000 {
-        batch.insert(&key(i), &value(i));
-    }
-});
+// Example: Batch write
+let mut batch = map.batch_entry();
+batch.insert(&key(i), &value(i));
+batch.commit().unwrap();
 ```
 
 **Effect**:
@@ -148,7 +138,7 @@ fn alloc_prefix(&self) -> Pre {
 | Operation Type | Before | After | Improvement Source |
 | :--- | :--- | :--- | :--- |
 | Single Write | Baseline | 5-15% faster | Memory allocation optimization |
-| Batch Write | Baseline | 2-5x faster | WriteBatch API |
+| Batch Write | Baseline | 2-5x faster | batch_entry API |
 | Prefix Allocation (High Concurrency) | Baseline | 10-100x faster | Lock-free algorithm |
 
 ## 2. Benchmark Improvements
@@ -270,7 +260,7 @@ Suggested additions:
 This optimization work focused on:
 
 1. **RocksDB Engine Core Optimization** - Reduced memory allocation, lower write amplification, improved concurrency performance.
-2. **API Improvements** - Added `WriteBatch` support for batch operations.
+2. **API Improvements** - Added `batch_entry` support for batch operations.
 3. **Code Cleanup** - Removed deprecated `Vecx` related code.
 4. **Test Improvements** - Added new performance test cases.
 

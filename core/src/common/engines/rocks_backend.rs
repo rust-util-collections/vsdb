@@ -326,20 +326,9 @@ impl Engine for RocksEngine {
         db.delete_cf(cf, full_key).unwrap();
     }
 
-    fn write_batch<F>(&self, meta_prefix: PreBytes, f: F)
-    where
-        F: FnOnce(&mut dyn BatchTrait),
-    {
-        let db = self.get_db(meta_prefix);
+    fn batch_begin<'a>(&'a self, meta_prefix: PreBytes) -> Box<dyn BatchTrait + 'a> {
         let cf = self.get_cf(meta_prefix);
-        let mut batch = RocksBatch::new(meta_prefix, cf);
-        f(&mut batch);
-        db.write(batch.inner).unwrap();
-
-        // Update max_keylen if needed
-        if batch.max_key_len > 0 && batch.max_key_len > self.get_max_keylen() {
-            self.set_max_key_len(batch.max_key_len);
-        }
+        Box::new(RocksBatch::new(meta_prefix, cf, self))
     }
 }
 
@@ -390,20 +379,26 @@ impl PreAllocator {
 }
 
 /// Batch write operations for RocksDB
-pub struct RocksBatch {
+pub struct RocksBatch<'a> {
     inner: WriteBatch,
     meta_prefix: PreBytes,
     cf: &'static ColumnFamily,
     max_key_len: usize,
+    engine: &'a RocksEngine,
 }
 
-impl RocksBatch {
-    fn new(meta_prefix: PreBytes, cf: &'static ColumnFamily) -> Self {
+impl<'a> RocksBatch<'a> {
+    fn new(
+        meta_prefix: PreBytes,
+        cf: &'static ColumnFamily,
+        engine: &'a RocksEngine,
+    ) -> Self {
         Self {
             inner: WriteBatch::default(),
             meta_prefix,
             cf,
             max_key_len: 0,
+            engine,
         }
     }
 
@@ -425,7 +420,7 @@ impl RocksBatch {
     }
 }
 
-impl BatchTrait for RocksBatch {
+impl BatchTrait for RocksBatch<'_> {
     #[inline(always)]
     fn insert(&mut self, key: &[u8], value: &[u8]) {
         self.insert(key, value);
@@ -434,6 +429,19 @@ impl BatchTrait for RocksBatch {
     #[inline(always)]
     fn remove(&mut self, key: &[u8]) {
         self.remove(key);
+    }
+
+    #[inline(always)]
+    fn commit(&mut self) -> Result<()> {
+        let db = self.engine.get_db(self.meta_prefix);
+        let batch = std::mem::take(&mut self.inner);
+        db.write(batch).c(d!())?;
+
+        if self.max_key_len > 0 && self.max_key_len > self.engine.get_max_keylen() {
+            self.engine.set_max_key_len(self.max_key_len);
+        }
+
+        Ok(())
     }
 }
 

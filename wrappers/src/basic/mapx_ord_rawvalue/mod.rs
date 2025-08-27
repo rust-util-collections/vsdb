@@ -246,13 +246,87 @@ where
         self.inner.remove(key.to_bytes());
     }
 
-    /// Batch write operations.
+    /// Start a batch operation.
+    ///
+    /// This method allows you to perform multiple insert/remove operations
+    /// and commit them atomically.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use vsdb::basic::mapx_ord_rawvalue::MapxOrdRawValue;
+    /// use vsdb::vsdb_set_base_dir;
+    ///
+    /// vsdb_set_base_dir("/tmp/vsdb_mapx_ord_rawvalue_batch_entry").unwrap();
+    /// let mut map: MapxOrdRawValue<u32> = MapxOrdRawValue::new();
+    ///
+    /// let mut batch = map.batch_entry();
+    /// batch.insert(&1, &[10]);
+    /// batch.insert(&2, &[20]);
+    /// batch.commit().unwrap();
+    ///
+    /// assert_eq!(map.get(&1), Some(vec![10]));
+    /// assert_eq!(map.get(&2), Some(vec![20]));
+    /// ```
     #[inline(always)]
-    pub fn batch<F>(&mut self, f: F)
-    where
-        F: FnOnce(&mut dyn vsdb_core::common::BatchTrait),
-    {
-        self.inner.batch(f);
+    pub fn batch_entry(&mut self) -> MapxOrdRawValueBatchEntry<'_, K> {
+        MapxOrdRawValueBatchEntry {
+            inner: self.inner.batch_entry(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+/// A batch writer for `MapxOrdRawValue`.
+pub struct MapxOrdRawValueBatch<'a, K>
+where
+    K: KeyEnDeOrdered,
+{
+    inner: &'a mut dyn vsdb_core::common::BatchTrait,
+    _marker: PhantomData<K>,
+}
+
+impl<'a, K> MapxOrdRawValueBatch<'a, K>
+where
+    K: KeyEnDeOrdered,
+{
+    /// Insert a key-value pair into the batch.
+    pub fn insert(&mut self, key: &K, value: impl AsRef<[u8]>) {
+        self.inner.insert(&key.to_bytes(), value.as_ref());
+    }
+
+    /// Remove a key in the batch.
+    pub fn remove(&mut self, key: &K) {
+        self.inner.remove(&key.to_bytes());
+    }
+}
+
+/// A batch entry for `MapxOrdRawValue`.
+pub struct MapxOrdRawValueBatchEntry<'a, K>
+where
+    K: KeyEnDeOrdered,
+{
+    inner: Box<dyn vsdb_core::common::BatchTrait + 'a>,
+    _marker: PhantomData<K>,
+}
+
+impl<'a, K> MapxOrdRawValueBatchEntry<'a, K>
+where
+    K: KeyEnDeOrdered,
+{
+    /// Insert a key-value pair into the batch.
+    pub fn insert(&mut self, key: &K, value: impl AsRef<[u8]>) {
+        self.inner.insert(&key.to_bytes(), value.as_ref());
+    }
+
+    /// Remove a key in the batch.
+    pub fn remove(&mut self, key: &K) {
+        self.inner.remove(&key.to_bytes());
+    }
+
+    /// Commit the batch.
+    pub fn commit(mut self) -> Result<()> {
+        self.inner.commit()
     }
 }
 

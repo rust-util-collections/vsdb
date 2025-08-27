@@ -12,7 +12,5 @@ criterion::criterion_main! {
     units::basic_mapx_ord::benches,
     units::basic_mapx_ord_rawkey::benches,
     units::basic_mapx_ord_rawvalue::benches,
-    // Vecx and VecxRaw have been removed - they relied on unreliable len() tracking
-    // units::basic_vecx::benches,
-    // units::basic_vecx_raw::benches,
+    units::batch_vs_normal::benches,
 }

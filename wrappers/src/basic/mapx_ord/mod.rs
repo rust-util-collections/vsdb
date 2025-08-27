@@ -45,7 +45,10 @@
 mod test;
 
 use crate::{
-    basic::mapx_ord_rawkey::{MapxOrdRawKey, MapxOrdRawKeyIter, ValueIterMut, ValueMut},
+    basic::mapx_ord_rawkey::{
+        MapxOrdRawKey, MapxOrdRawKeyBatchEntry, MapxOrdRawKeyIter, ValueIterMut,
+        ValueMut,
+    },
     common::{
         RawKey,
         ende::{KeyEnDeOrdered, ValueEnDe},
@@ -300,13 +303,34 @@ where
         self.inner.clear();
     }
 
-    /// Batch write operations.
+    /// Start a batch operation.
+    ///
+    /// This method allows you to perform multiple insert/remove operations
+    /// and commit them atomically.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use vsdb::basic::mapx_ord::MapxOrd;
+    /// use vsdb::vsdb_set_base_dir;
+    ///
+    /// vsdb_set_base_dir("/tmp/vsdb_mapx_ord_batch_entry").unwrap();
+    /// let mut map: MapxOrd<u32, String> = MapxOrd::new();
+    ///
+    /// let mut batch = map.batch_entry();
+    /// batch.insert(&1, &"one".to_string());
+    /// batch.insert(&2, &"two".to_string());
+    /// batch.commit().unwrap();
+    ///
+    /// assert_eq!(map.get(&1), Some("one".to_string()));
+    /// assert_eq!(map.get(&2), Some("two".to_string()));
+    /// ```
     #[inline(always)]
-    pub fn batch<F>(&mut self, f: F)
-    where
-        F: FnOnce(&mut dyn vsdb_core::common::BatchTrait),
-    {
-        self.inner.batch(f);
+    pub fn batch_entry(&mut self) -> MapxOrdBatchEntry<'_, K, V> {
+        MapxOrdBatchEntry {
+            inner: self.inner.batch_entry(),
+            _marker: PhantomData,
+        }
     }
 
     /// Checks if this `MapxOrd` instance is the same as another.
@@ -316,12 +340,60 @@ where
     }
 }
 
-impl<K, V> Clone for MapxOrd<K, V> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-            _p: PhantomData,
-        }
+/// A batch writer for `MapxOrd`.
+pub struct MapxOrdBatch<'a, 'b, K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    inner: &'b mut crate::basic::mapx_ord_rawkey::MapxOrdRawKeyBatch<'a, V>,
+    _marker: PhantomData<(K, V)>,
+}
+
+impl<'a, 'b, K, V> MapxOrdBatch<'a, 'b, K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    /// Insert a key-value pair into the batch.
+    pub fn insert(&mut self, key: &K, value: &V) {
+        self.inner.insert(key.to_bytes(), value);
+    }
+
+    /// Remove a key in the batch.
+    pub fn remove(&mut self, key: &K) {
+        self.inner.remove(key.to_bytes());
+    }
+}
+
+/// A batch entry for `MapxOrd`.
+pub struct MapxOrdBatchEntry<'a, K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    inner: MapxOrdRawKeyBatchEntry<'a, V>,
+    _marker: PhantomData<K>,
+}
+
+impl<'a, K, V> MapxOrdBatchEntry<'a, K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    /// Insert a key-value pair into the batch.
+    pub fn insert(&mut self, key: &K, value: &V) {
+        self.inner.insert(key.to_bytes(), value);
+    }
+
+    /// Remove a key in the batch.
+    pub fn remove(&mut self, key: &K) {
+        self.inner.remove(key.to_bytes());
+    }
+
+    /// Commit the batch.
+    pub fn commit(self) -> Result<()> {
+        self.inner.commit()
     }
 }
 

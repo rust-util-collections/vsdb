@@ -47,6 +47,7 @@ mod test;
 
 use crate::common::{RawKey, ende::ValueEnDe};
 use crate::define_map_wrapper;
+use ruc::*;
 use std::{
     borrow::Cow,
     marker::PhantomData,
@@ -214,13 +215,87 @@ where
         self.inner.remove(key.as_ref())
     }
 
-    /// Batch write operations.
+    /// Start a batch operation.
+    ///
+    /// This method allows you to perform multiple insert/remove operations
+    /// and commit them atomically.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use vsdb::basic::mapx_ord_rawkey::MapxOrdRawKey;
+    /// use vsdb::vsdb_set_base_dir;
+    ///
+    /// vsdb_set_base_dir("/tmp/vsdb_mapx_ord_rawkey_batch_entry").unwrap();
+    /// let mut map: MapxOrdRawKey<String> = MapxOrdRawKey::new();
+    ///
+    /// let mut batch = map.batch_entry();
+    /// batch.insert(&[1], &"one".to_string());
+    /// batch.insert(&[2], &"two".to_string());
+    /// batch.commit().unwrap();
+    ///
+    /// assert_eq!(map.get(&[1]), Some("one".to_string()));
+    /// assert_eq!(map.get(&[2]), Some("two".to_string()));
+    /// ```
     #[inline(always)]
-    pub fn batch<F>(&mut self, f: F)
-    where
-        F: FnOnce(&mut dyn vsdb_core::common::BatchTrait),
-    {
-        self.inner.batch(f);
+    pub fn batch_entry(&mut self) -> MapxOrdRawKeyBatchEntry<'_, V> {
+        MapxOrdRawKeyBatchEntry {
+            inner: self.inner.batch_entry(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+/// A batch writer for `MapxOrdRawKey`.
+pub struct MapxOrdRawKeyBatch<'a, V>
+where
+    V: ValueEnDe,
+{
+    inner: &'a mut dyn vsdb_core::common::BatchTrait,
+    _marker: PhantomData<V>,
+}
+
+impl<'a, V> MapxOrdRawKeyBatch<'a, V>
+where
+    V: ValueEnDe,
+{
+    /// Insert a key-value pair into the batch.
+    pub fn insert(&mut self, key: impl AsRef<[u8]>, value: &V) {
+        self.inner.insert(key.as_ref(), &value.encode());
+    }
+
+    /// Remove a key in the batch.
+    pub fn remove(&mut self, key: impl AsRef<[u8]>) {
+        self.inner.remove(key.as_ref());
+    }
+}
+
+/// A batch entry for `MapxOrdRawKey`.
+pub struct MapxOrdRawKeyBatchEntry<'a, V>
+where
+    V: ValueEnDe,
+{
+    inner: Box<dyn vsdb_core::common::BatchTrait + 'a>,
+    _marker: PhantomData<V>,
+}
+
+impl<'a, V> MapxOrdRawKeyBatchEntry<'a, V>
+where
+    V: ValueEnDe,
+{
+    /// Insert a key-value pair into the batch.
+    pub fn insert(&mut self, key: impl AsRef<[u8]>, value: &V) {
+        self.inner.insert(key.as_ref(), &value.encode());
+    }
+
+    /// Remove a key in the batch.
+    pub fn remove(&mut self, key: impl AsRef<[u8]>) {
+        self.inner.remove(key.as_ref());
+    }
+
+    /// Commit the batch.
+    pub fn commit(mut self) -> Result<()> {
+        self.inner.commit()
     }
 }
 

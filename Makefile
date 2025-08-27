@@ -14,7 +14,7 @@ lintall: lint
 lintmusl:
 	cargo clippy --workspace --target x86_64-unknown-linux-musl \
 		--no-default-features \
-		--features "fjall_backend,cbor_codec"
+		--features "parity_backend,cbor_codec"
 
 test:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
@@ -33,7 +33,7 @@ testmusl:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo test --workspace --target x86_64-unknown-linux-musl --release --tests \
 		--no-default-features \
-		--features "fjall_backend,cbor_codec" \
+		--features "parity_backend,cbor_codec" \
 		-- --test-threads=1 #--nocapture
 
 bench:
@@ -55,7 +55,7 @@ bench_rocksdb:
 benchmusl:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo bench --workspace --target x86_64-unknown-linux-musl \
-		--no-default-features --features "fjall_backend,cbor_codec"
+		--no-default-features --features "parity_backend,cbor_codec"
 	du -sh ~/.vsdb
 
 fmt:

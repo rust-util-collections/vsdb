@@ -19,9 +19,9 @@ rand = { workspace = true }
 criterion = "0.8"
 
 [features]
-default = ["fjall_backend", "compress", "msgpack_codec"]
+default = ["parity_backend", "compress", "msgpack_codec"]
 
-fjall_backend = ["vsdb/fjall_backend"]
+parity_backend = ["vsdb/parity_backend"]
 rocks_backend = ["vsdb/rocks_backend"]
 
 compress = ["vsdb/compress"]

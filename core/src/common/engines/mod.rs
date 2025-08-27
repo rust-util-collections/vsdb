@@ -4,8 +4,8 @@
 #[cfg(feature = "rocks_backend")]
 mod rocks_backend;
 
-#[cfg(feature = "fjall_backend")]
-mod fjall_backend;
+#[cfg(feature = "parity_backend")]
+mod parity_backend;
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -16,11 +16,11 @@ pub(crate) use rocks_backend::RocksEngine as RocksDB;
 #[cfg(feature = "rocks_backend")]
 type EngineIter = rocks_backend::RocksIter;
 
-#[cfg(feature = "fjall_backend")]
-pub(crate) use fjall_backend::FjallEngine as FjallDB;
+#[cfg(feature = "parity_backend")]
+pub(crate) use parity_backend::ParityEngine as ParityDB;
 
-#[cfg(feature = "fjall_backend")]
-type EngineIter = fjall_backend::FjallIter;
+#[cfg(feature = "parity_backend")]
+type EngineIter = parity_backend::ParityIter;
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -70,16 +70,15 @@ pub trait Engine: Sized {
     /// Remove a key. Does not return the old value for performance.
     fn remove(&self, meta_prefix: PreBytes, key: &[u8]);
 
-    /// Batch write operations.
-    fn write_batch<F>(&self, meta_prefix: PreBytes, f: F)
-    where
-        F: FnOnce(&mut dyn BatchTrait);
+    /// Alloc a batch.
+    fn batch_begin<'a>(&'a self, meta_prefix: PreBytes) -> Box<dyn BatchTrait + 'a>;
 }
 
 /// Trait for batch write operations
 pub trait BatchTrait {
     fn insert(&mut self, key: &[u8], value: &[u8]);
     fn remove(&mut self, key: &[u8]);
+    fn commit(&mut self) -> Result<()>;
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -247,12 +246,9 @@ impl Mapx {
     }
 
     #[inline(always)]
-    pub(crate) fn write_batch<F>(&mut self, f: F)
-    where
-        F: FnOnce(&mut dyn BatchTrait),
-    {
+    pub(crate) fn batch_begin(&mut self) -> Box<dyn BatchTrait + '_> {
         let prefix = self.prefix.hack_bytes();
-        VSDB.db.write_batch(prefix, f);
+        VSDB.db.batch_begin(prefix)
     }
 
     #[inline(always)]
