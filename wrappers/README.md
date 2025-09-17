@@ -17,7 +17,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-vsdb = "7.1.0"
+vsdb = "8.0.0"
 ```
 
 ## Highlights
@@ -25,7 +25,6 @@ vsdb = "7.1.0"
 For more detailed API examples, see [API Examples](docs/api.md).
 
 - **Familiar API**: Most APIs are designed to mirror their counterparts in the standard library.
-  - `Vecx` behaves like `std::collections::Vec`.
   - `Mapx` behaves like `std::collections::HashMap`.
   - `MapxOrd` behaves like `std::collections::BTreeMap`.
 - **Persistent Storage**: Data is automatically saved to disk and loaded on instantiation.
@@ -33,11 +32,10 @@ For more detailed API examples, see [API Examples](docs/api.md).
 
 ## Features
 
-- `parity_backend`: **(Default)** Use `parity-db` as the backend database. Pure Rust implementation.
+- `mdbx_backend`: **(Default)** Use `libmdbx` as the backend database. Near-RocksDB performance with fast compilation.
 - `rocks_backend`: Use `rocksdb` as the backend database. C++ implementation.
 - `msgpack_codec`: **(Default)** Use `rmp-serde` as the codec for faster performance.
 - `json_codec`: Use `serde_json` as the codec for better compatibility.
-- `compress`: **(Default)** Enable data compression in the backend database.
 
 ## Usage
 

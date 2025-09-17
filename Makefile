@@ -8,13 +8,8 @@ lint:
 	cargo check --workspace --benches
 
 lintall: lint
-	cargo clippy --workspace --no-default-features --features "rocks_backend,compress,cbor_codec"
+	cargo clippy --workspace --no-default-features --features "rocks_backend,cbor_codec"
 	cargo check --workspace --tests --no-default-features --features "rocks_backend,json_codec"
-
-lintmusl:
-	cargo clippy --workspace --target x86_64-unknown-linux-musl \
-		--no-default-features \
-		--features "parity_backend,cbor_codec"
 
 test:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
@@ -29,33 +24,14 @@ testall: test
 		--features "rocks_backend,cbor_codec" \
 		-- --test-threads=1 #--nocapture
 
-testmusl:
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo test --workspace --target x86_64-unknown-linux-musl --release --tests \
-		--no-default-features \
-		--features "parity_backend,cbor_codec" \
-		-- --test-threads=1 #--nocapture
-
 bench:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo bench --workspace
-	du -sh ~/.vsdb
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench --workspace --features "compress"
 	du -sh ~/.vsdb
 
 bench_rocksdb:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo bench --workspace --no-default-features --features "rocks_backend,cbor_codec"
-	du -sh ~/.vsdb
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench --workspace --no-default-features --features "rocks_backend,compress,cbor_codec"
-	du -sh ~/.vsdb
-
-benchmusl:
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench --workspace --target x86_64-unknown-linux-musl \
-		--no-default-features --features "parity_backend,cbor_codec"
 	du -sh ~/.vsdb
 
 fmt:
@@ -78,9 +54,9 @@ doc:
 	cargo doc --open
 
 publish:
-	cargo publish -p vsdb_core
-	cargo publish -p vsdb
+	- cargo publish -p vsdb_core
+	- cargo publish -p vsdb
 
 publish_all: publish
-	cargo publish -p vsdb_slot_db
-	cargo publish -p vsdb_trie_db
+	- cargo publish -p vsdb_slot_db
+	- cargo publish -p vsdb_trie_db

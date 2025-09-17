@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_core"
-version = "7.1.0"
+version = "8.0.0"
 authors = ["hui.fan@mail.ru"]
 edition = "2024"
 description = "A std-collection-like database"
@@ -18,8 +18,8 @@ parking_lot = { workspace = true }
 
 threadpool = { workspace = true } # used in a background cleaner
 
-parity-db = { workspace = true, optional = true }
 rocksdb = { workspace = true, optional = true }
+libmdbx = { workspace = true, optional = true }
 
 [dev-dependencies]
 msgpack = { workspace = true }
@@ -27,12 +27,10 @@ hex = "0.4"
 criterion = "0.8"
 
 [features]
-default = ["compress", "parity_backend"]
+default = ["mdbx_backend"]
 
-parity_backend = ["parity-db"]
 rocks_backend = ["rocksdb"]
-
-compress = ["rocksdb?/zstd"]
+mdbx_backend = ["libmdbx"]
 
 # [[bench]]
 # name = "basic"

@@ -4,8 +4,8 @@ use crate::common::{
 };
 use parking_lot::Mutex;
 use rocksdb::{
-    ColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType, DBIterator, Direction,
-    IteratorMode, Options, ReadOptions, SliceTransform, WriteBatch,
+    BlockBasedOptions, Cache, ColumnFamily, ColumnFamilyDescriptor, DB, DBIterator,
+    Direction, IteratorMode, Options, ReadOptions, SliceTransform, WriteBatch,
 };
 use ruc::*;
 use std::{
@@ -456,6 +456,7 @@ fn rocksdb_open_shard(dir: &Path) -> Result<(DB, Vec<String>)> {
     cfg.set_allow_mmap_writes(true);
     cfg.set_allow_mmap_reads(true);
 
+    // ---- Write buffer ----
     const WR_BUF_NUM: u8 = 2;
     const G: usize = GB as usize;
 
@@ -477,30 +478,50 @@ fn rocksdb_open_shard(dir: &Path) -> Result<(DB, Vec<String>)> {
         G / (DATA_SET_NUM * SHARD_CNT)
     };
 
-    // println!(
-    //     "[vsdb]: The `write_buffer_size` of rocksdb is {}MB, per column family",
-    //     wr_buffer_size / MB as usize
-    // );
-
     cfg.set_write_buffer_size(wr_buffer_size);
 
-    cfg.set_enable_blob_files(true);
-    cfg.set_enable_blob_gc(true);
-    cfg.set_min_blob_size(MB);
+    // ---- Block cache + Bloom filter ----
+    // Block cache: use ~1/8 of available memory, shared across all CFs in this shard
+    let block_cache_size = if cfg!(target_os = "linux") {
+        let memsiz = fs::read_to_string("/proc/meminfo")
+            .ok()
+            .and_then(|s| {
+                s.lines()
+                    .find(|l| l.contains("MemAvailable"))
+                    .and_then(|l| {
+                        l.replace(|ch: char| !ch.is_numeric(), "")
+                            .parse::<usize>()
+                            .ok()
+                    })
+            })
+            .unwrap_or(G)
+            * 1024;
+        memsiz / 8 / SHARD_CNT
+    } else {
+        128 * MB as usize // 128MB fallback per shard
+    };
+    let cache = Cache::new_lru_cache(block_cache_size);
 
-    // // SEE: https://rocksdb.org/blog/2021/05/26/integrated-blob-db.html
-    // cfg.set_blob_file_size(wr_buffer_size as u64);
-    // cfg.set_target_file_size_base(wr_buffer_size as u64 / 10);
-    // cfg.set_max_bytes_for_level_base(wr_buffer_size as u64);
+    let mut table_opts = BlockBasedOptions::default();
+    table_opts.set_block_cache(&cache);
+    // Bloom filter: 10 bits/key, ~1% false positive rate
+    table_opts.set_bloom_filter(10.0, false);
+    // Pin index/filter blocks in cache to avoid re-reading from disk
+    table_opts.set_cache_index_and_filter_blocks(true);
+    table_opts.set_pin_l0_filter_and_index_blocks_in_cache(true);
+    cfg.set_block_based_table_factory(&table_opts);
 
+    // ---- Memtable bloom for faster prefix lookups ----
+    cfg.set_memtable_prefix_bloom_ratio(0.02);
+
+    // ---- Compaction tuning ----
+    cfg.set_level_compaction_dynamic_level_bytes(true);
+    // Delay L0 compaction trigger for write-heavy workloads
+    cfg.set_level_zero_file_num_compaction_trigger(8);
+
+    // ---- Parallelism ----
     let parallelism = available_parallelism().c(d!())?.get() as i32;
     cfg.increase_parallelism(parallelism);
-
-    #[cfg(feature = "compress")]
-    cfg.set_compression_type(DBCompressionType::Zstd);
-
-    #[cfg(not(feature = "compress"))]
-    cfg.set_compression_type(DBCompressionType::None);
 
     let cfhdrs = (0..DATA_SET_NUM).map(|i| i.to_string()).collect::<Vec<_>>();
 

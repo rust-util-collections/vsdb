@@ -324,10 +324,12 @@ impl MapxRaw {
     /// vsdb_set_base_dir("/tmp/vsdb_core_mapx_raw_batch_entry").unwrap();
     /// let mut map = MapxRaw::new();
     ///
-    /// let mut batch = map.batch_entry();
-    /// batch.insert(&[1], &[10]);
-    /// batch.insert(&[2], &[20]);
-    /// batch.commit().unwrap();
+    /// {
+    ///     let mut batch = map.batch_entry();
+    ///     batch.insert(&[1], &[10]);
+    ///     batch.insert(&[2], &[20]);
+    ///     batch.commit().unwrap();
+    /// }
     ///
     /// assert_eq!(map.get(&[1]), Some(vec![10]));
     /// assert_eq!(map.get(&[2]), Some(vec![20]));

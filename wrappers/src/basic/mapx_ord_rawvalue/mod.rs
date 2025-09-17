@@ -23,8 +23,8 @@
 //! m.insert(&1, &[10]);
 //! m.insert(&2, &[20]);
 //!
-//! // Check the length of the map
-//! assert_eq!(m.len(), 2);
+//! // Check the count of entries
+//! assert_eq!(m.iter().count(), 2);
 //!
 //! // Retrieve a value
 //! assert_eq!(m.get(&1), Some(vec![10]));
@@ -36,11 +36,11 @@
 //!
 //! // Remove a key-value pair
 //! m.remove(&2);
-//! assert_eq!(m.len(), 1);
+//! assert_eq!(m.iter().count(), 1);
 //!
 //! // Clear the entire map
 //! m.clear();
-//! assert_eq!(m.len(), 0);
+//! assert_eq!(m.iter().count(), 0);
 //!
 //! // Clean up the directory
 //! fs::remove_dir_all(vsdb_get_base_dir()).unwrap();

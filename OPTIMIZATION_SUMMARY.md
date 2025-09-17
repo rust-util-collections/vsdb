@@ -167,10 +167,10 @@ fn alloc_prefix(&self) -> Pre {
 
 ```bash
 # Run all benchmarks
-cargo bench --no-default-features --features "rocks_backend,compress,msgpack_codec"
+cargo bench --no-default-features --features "rocks_backend,msgpack_codec"
 
 # Run only the new batch_write benchmark
-cargo bench --no-default-features --features "rocks_backend,compress,msgpack_codec" batch_write
+cargo bench --no-default-features --features "rocks_backend,msgpack_codec" batch_write
 ```
 
 ## 3. Code Quality Improvements
@@ -206,26 +206,26 @@ cargo bench --no-default-features --features "rocks_backend,compress,msgpack_cod
 
 ```bash
 # RocksDB backend
-cargo build --no-default-features --features "rocks_backend,compress,msgpack_codec"
+cargo build --no-default-features --features "rocks_backend,msgpack_codec"
 
 # Fjall backend (default)
 cargo build --features fjall_backend
 
 # All packages (including utils)
-cargo build --all --no-default-features --features "rocks_backend,compress,msgpack_codec"
+cargo build --all --no-default-features --features "rocks_backend,msgpack_codec"
 ```
 
 ### 4.2 Test Verification
 
 ```bash
 # Run core tests
-cargo test --no-default-features --features "rocks_backend,compress,msgpack_codec" -p vsdb_core
+cargo test --no-default-features --features "rocks_backend,msgpack_codec" -p vsdb_core
 
 # Run wrapper tests
-cargo test --no-default-features --features "rocks_backend,compress,msgpack_codec" -p vsdb
+cargo test --no-default-features --features "rocks_backend,msgpack_codec" -p vsdb
 
 # Run benchmarks
-cargo bench --no-default-features --features "rocks_backend,compress,msgpack_codec"
+cargo bench --no-default-features --features "rocks_backend,msgpack_codec"
 ```
 
 ## 5. Future Work Suggestions
@@ -243,10 +243,6 @@ cargo bench --no-default-features --features "rocks_backend,compress,msgpack_cod
 3. **Caching Layer**
     *   Add an optional in-memory caching layer.
     *   Reduce disk access for hot data.
-
-4. **Compression Optimization**
-    *   Select compression algorithms based on data characteristics.
-    *   Support column-family level compression configuration.
 
 ### 5.2 Performance Monitoring
 

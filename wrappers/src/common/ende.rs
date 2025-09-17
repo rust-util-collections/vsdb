@@ -262,10 +262,8 @@ macro_rules! impl_v_ende {
 }
 
 impl_v_ende!(vsdb_core::MapxRaw);
-impl_v_ende!(crate::basic::vecx_raw::VecxRaw);
 impl_v_ende!(~crate::basic::mapx::Mapx<K, V>);
 impl_v_ende!(~crate::basic::mapx_ord::MapxOrd<K, V>);
-impl_v_ende!(^crate::basic::vecx::Vecx<V>);
 impl_v_ende!(^crate::basic::orphan::Orphan<V>);
 impl_v_ende!(^crate::basic::mapx_ord_rawkey::MapxOrdRawKey<V>);
 impl_v_ende!(@crate::basic::mapx_ord_rawvalue::MapxOrdRawValue<K>);

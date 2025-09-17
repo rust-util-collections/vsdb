@@ -20,16 +20,15 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-vsdb_core = "7.0.0"
+vsdb_core = "8.0.0"
 ```
 
 ## Features
 
 For detailed API examples, see [API Examples](docs/api.md).
 
-- `fjall_backend`: **(Default)** Use `fjall` as the backend database. Pure Rust implementation.
+- `mdbx_backend`: **(Default)** Use `libmdbx` as the backend database. Near-RocksDB performance with fast compilation.
 - `rocks_backend`: Use `rocksdb` as the backend database. C++ implementation.
-- `compress`: Enable data compression in the backend database.
 
 
 ## License
