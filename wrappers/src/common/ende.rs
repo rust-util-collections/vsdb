@@ -92,6 +92,11 @@ impl<T: Serialize> KeyEn for T {
     fn try_encode_key(&self) -> Result<RawBytes> {
         msgpack::to_vec(self).c(d!())
     }
+
+    #[cfg(feature = "cbor_codec")]
+    fn try_encode_key(&self) -> Result<RawBytes> {
+        serde_cbor_2::to_vec(self).c(d!())
+    }
 }
 
 #[cfg(feature = "serde_ende")]
@@ -104,6 +109,11 @@ impl<T: DeserializeOwned> KeyDe for T {
     #[cfg(feature = "msgpack_codec")]
     fn decode_key(bytes: &[u8]) -> Result<Self> {
         msgpack::from_slice(bytes).c(d!())
+    }
+
+    #[cfg(feature = "cbor_codec")]
+    fn decode_key(bytes: &[u8]) -> Result<Self> {
+        serde_cbor_2::from_slice(bytes).c(d!())
     }
 }
 
@@ -118,6 +128,11 @@ impl<T: Serialize> ValueEn for T {
     fn try_encode_value(&self) -> Result<RawBytes> {
         msgpack::to_vec(self).c(d!())
     }
+
+    #[cfg(feature = "cbor_codec")]
+    fn try_encode_value(&self) -> Result<RawBytes> {
+        serde_cbor_2::to_vec(self).c(d!())
+    }
 }
 
 #[cfg(feature = "serde_ende")]
@@ -130,6 +145,11 @@ impl<T: DeserializeOwned> ValueDe for T {
     #[cfg(feature = "msgpack_codec")]
     fn decode_value(bytes: &[u8]) -> Result<Self> {
         msgpack::from_slice(bytes).c(d!())
+    }
+
+    #[cfg(feature = "cbor_codec")]
+    fn decode_value(bytes: &[u8]) -> Result<Self> {
+        serde_cbor_2::from_slice(bytes).c(d!())
     }
 }
 

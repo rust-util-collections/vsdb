@@ -236,7 +236,7 @@ impl VecxRaw {
 
     /// Returns an iterator over the vector's values.
     #[inline(always)]
-    pub fn iter(&self) -> VecxRawIter {
+    pub fn iter(&self) -> VecxRawIter<'_> {
         VecxRawIter {
             iter: self.inner.inner.iter(),
         }
@@ -244,7 +244,7 @@ impl VecxRaw {
 
     /// Returns a mutable iterator over the vector's values.
     #[inline(always)]
-    pub fn iter_mut(&mut self) -> VecxRawIterMut {
+    pub fn iter_mut(&mut self) -> VecxRawIterMut<'_> {
         VecxRawIterMut {
             inner: self.inner.inner.iter_mut(),
             _p: PhantomData,

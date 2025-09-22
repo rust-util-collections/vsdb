@@ -1,4 +1,9 @@
-#![doc = include_str!("../README.md")]
+//! # vsdb_hash_db
+//!
+//! `vsdb_hash_db` provides a `hash_db::HashDB` implementation backed by `vsdb`.
+//! It serves as a concrete storage backend for hash-based data structures like
+//! Merkle Patricia Tries.
+
 #![deny(warnings)]
 #![cfg_attr(test, warn(warnings))]
 
@@ -12,21 +17,20 @@ use vsdb::{DagMapRaw, DagMapRawKey as Map, Orphan, RawBytes, ValueEnDe};
 
 pub use keccak_hasher::KeccakHasher;
 
-/// A type alias for the memory-mapped backend with Keccak hashing.
+/// A type alias for the `vsdb`-backed trie backend with `KeccakHasher`.
 pub type TrieBackend = MmBackend<KeccakHasher, Vec<u8>>;
 
 /// A trait for types that can be used as values in the trie.
 ///
-/// This trait requires that the type can be cloned, referenced as a byte slice,
-/// and created from a byte slice.
+/// This trait requires that the type can be cloned and converted to/from byte slices.
 pub trait TrieVar: Clone + AsRef<[u8]> + for<'a> From<&'a [u8]> {}
 
 impl<T> TrieVar for T where T: Clone + AsRef<[u8]> + for<'a> From<&'a [u8]> {}
 
-/// A memory-mapped backend for the trie.
+/// A `vsdb`-backed `HashDB` implementation for storing trie nodes.
 ///
-/// This struct provides a `HashDB` implementation that stores trie nodes in a
-/// memory-mapped file. It uses a `DagMapRaw` to manage the underlying data.
+/// This struct uses a `DagMapRaw` to store reference-counted trie nodes,
+/// providing a persistent, memory-mapped backend for `trie-db`.
 // NOTE: make it `!Clone`
 pub struct MmBackend<H, T>
 where
@@ -45,15 +49,11 @@ where
 {
     /// Creates a new `MmBackend`.
     ///
-    /// This function initializes a new `MmBackend` with a given raw parent.
+    /// Initializes a new backend using a raw parent from `vsdb`'s orphan system.
     ///
     /// # Arguments
     ///
-    /// * `raw_parent` - A mutable reference to an `Orphan` containing an `Option<DagMapRaw>`.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing the new `MmBackend` or an error.
+    /// * `raw_parent` - A mutable reference to an `Orphan` that will hold the backend's data.
     pub fn new(raw_parent: &mut Orphan<Option<DagMapRaw>>) -> Result<Self> {
         Ok(MmBackend {
             data: Map::new(raw_parent).c(d!())?,
@@ -62,7 +62,7 @@ where
         })
     }
 
-    // The initial root node
+    // The hash of the initial, empty root node.
     fn hashed_null_node() -> H::Out {
         H::hash(&[0])
     }
@@ -73,8 +73,9 @@ where
     ///
     /// # Safety
     ///
-    /// This API breaks Rust's semantic safety guarantees. It is safe to use only in a
-    /// race-free environment.
+    /// This API breaks Rust's ownership and borrowing rules. It is safe to use only
+    /// in a race-free environment where the original and shadow copies do not
+    /// conflict.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
         unsafe {
@@ -86,24 +87,23 @@ where
         }
     }
 
-    /// Creates a "shadow" copy of the backend's data map.
+    /// Creates a "shadow" copy of the backend's underlying data map.
     ///
     /// # Safety
     ///
-    /// This API breaks Rust's semantic safety guarantees. It is safe to use only in a
-    /// race-free environment.
+    /// This API breaks Rust's ownership and borrowing rules. See `shadow` for details.
     #[inline(always)]
     pub unsafe fn shadow_backend(&self) -> Map<Value<T>> {
         unsafe { self.shadow().data }
     }
 
-    /// Checks if the backend is dead (i.e., has no associated data).
+    /// Checks if the backend is dead (i.e., has no associated data map).
     #[inline(always)]
     pub fn is_dead(&self) -> bool {
         self.data.is_dead()
     }
 
-    /// Checks if the backend has no children.
+    /// Checks if the backend's data map has no children.
     #[inline(always)]
     pub fn no_children(&self) -> bool {
         self.data.no_children()
@@ -194,10 +194,10 @@ where
         }
 
         let key = prefixed_key::<H>(key, prefix);
-        if let Some(mut v) = self.data.get_mut(&key) {
-            if v.rc > 0 {
-                v.rc -= 1;
-            }
+        if let Some(mut v) = self.data.get_mut(&key)
+            && v.rc > 0
+        {
+            v.rc -= 1;
         }
     }
 }
@@ -228,7 +228,7 @@ where
     }
 }
 
-// Derive a database key from hash value of the node (key) and the node prefix.
+// Derive a database key from the hash of the node and its prefix.
 fn prefixed_key<H: KeyHasher>(key: &H::Out, prefix: Prefix) -> Vec<u8> {
     let mut prefixed_key = Vec::with_capacity(key.as_ref().len() + prefix.0.len() + 1);
     prefixed_key.extend_from_slice(prefix.0);
@@ -239,7 +239,7 @@ fn prefixed_key<H: KeyHasher>(key: &H::Out, prefix: Prefix) -> Vec<u8> {
     prefixed_key
 }
 
-/// A struct representing a value in the trie, with a reference count.
+/// A wrapper for a trie value that includes a reference count.
 pub struct Value<T> {
     v: T,
     rc: i32,

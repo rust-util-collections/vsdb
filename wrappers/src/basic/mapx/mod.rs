@@ -124,7 +124,7 @@ where
 
     /// Returns an iterator over the map's entries.
     #[inline(always)]
-    pub fn iter(&self) -> MapxIter<K, V> {
+    pub fn iter(&self) -> MapxIter<'_, K, V> {
         MapxIter {
             iter: self.inner.iter(),
             _p: PhantomData,
@@ -133,7 +133,7 @@ where
 
     /// Returns a mutable iterator over the map's entries.
     #[inline(always)]
-    pub fn iter_mut(&mut self) -> MapxIterMut<K, V> {
+    pub fn iter_mut(&mut self) -> MapxIterMut<'_, K, V> {
         MapxIterMut {
             inner: self.inner.iter_mut(),
             _p: PhantomData,
@@ -142,7 +142,7 @@ where
 
     /// Returns an iterator over the map's values.
     #[inline(always)]
-    pub fn values(&self) -> MapxValues<V> {
+    pub fn values(&self) -> MapxValues<'_, V> {
         MapxValues {
             inner: self.inner.iter(),
         }
@@ -150,7 +150,7 @@ where
 
     /// Returns a mutable iterator over the map's values.
     #[inline(always)]
-    pub fn values_mut(&mut self) -> MapxValuesMut<V> {
+    pub fn values_mut(&mut self) -> MapxValuesMut<'_, V> {
         MapxValuesMut {
             inner: self.inner.inner.iter_mut(),
             _p: PhantomData,

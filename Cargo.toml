@@ -16,20 +16,21 @@ parking_lot = "0.12.1"
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = { version = "1.0.87" }
 msgpack = { package = "rmp-serde", version = "1.1.1" }
+serde_cbor_2 = "0.13.0"
 parity-scale-codec = "3.6.12"
 
 threadpool = "1.8.1" # used in a background cleaner
 
-parity-db = "0.5.3"
-rocksdb = { version = "0.23.0", default-features = false, features = ["bindgen-runtime"] }
+parity-db = "0.5.4"
+rocksdb = { version = "0.24.0", default-features = false, features = ["bindgen-runtime"] }
 
 keccak-hasher = "0.16.0"
 hash-db = "0.16.0"
 trie-db = "0.30.0"
 trie-root = "0.18.0"
 
-vsdb = { path = "wrappers", version = "4.0", default-features = false }
-vsdb_core = { path = "core", version = "4.0", default-features = false }
+vsdb = { path = "wrappers", version = "5.0.1", default-features = false }
+vsdb_core = { path = "core", version = "5.0.1", default-features = false }
 
-vsdb_trie_db = { path = "utils/trie_db", version = "4.0", default-features = false }
-vsdb_hash_db = { path = "utils/hash_db", version = "4.0", default-features = false }
+vsdb_trie_db = { path = "utils/trie_db", version = "5.0.1", default-features = false }
+vsdb_hash_db = { path = "utils/hash_db", version = "5.0.1", default-features = false }

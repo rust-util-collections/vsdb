@@ -5,9 +5,14 @@
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](../../LICENSE)
 [![Rust](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml/badge.svg)](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml)
 
-> A std-collection-like database.
+> `vsdb_core` provides the low-level building blocks for `vsdb`.
 
-This crate provides the low-level implementations for `vsdb`.
+This crate contains the foundational components of `vsdb`, including:
+- **Storage Abstractions**: An `Engine` trait that abstracts over key-value storage backends.
+- **Raw Data Structures**: Untyped, high-performance data structures like `MapxRaw` that operate on raw bytes.
+- **Utilities**: Shared functions for environment management, such as setting the database directory.
+
+Most users should use the `vsdb` crate instead, which provides high-level, typed APIs.
 
 ## Installation
 
@@ -15,18 +20,20 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-vsdb_core = "4.0"
+vsdb_core = "5.0.1"
 ```
 
 ## Features
 
-- `parity_backend`: Use `parity-db` as the backend database (default).
-- `rocks_backend`: Use `rocksdb` as the backend database.
-- `compress`: Enable compression in the backend database.
+For detailed API examples, see [API Examples](docs/api.md).
+
+- `parity_backend`: **(Default)** Use `parity-db` as the backend database. Pure Rust implementation.
+- `rocks_backend`: Use `rocksdb` as the backend database. C++ implementation.
+- `compress`: Enable data compression in the backend database.
 
 ## Known Issues
 
-- The instance `len` is not absolutely reliable and should be regarded as a hint.
+- The `len()` of a data structure is not always guaranteed to be absolutely reliable and should be treated as a hint. This is because some operations may not update the length atomically in real-time for performance reasons.
 
 ## License
 

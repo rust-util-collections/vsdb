@@ -145,7 +145,7 @@ impl MapxRaw {
     ///
     /// A `ValueMut` instance.
     #[inline(always)]
-    pub fn mock_value_mut(&mut self, key: RawValue, value: RawValue) -> ValueMut {
+    pub fn mock_value_mut(&mut self, key: RawValue, value: RawValue) -> ValueMut<'_> {
         self.inner.mock_value_mut(key, value)
     }
 
@@ -231,7 +231,7 @@ impl MapxRaw {
     ///
     /// A `MapxRawIter` that iterates over the key-value pairs.
     #[inline(always)]
-    pub fn iter(&self) -> MapxRawIter {
+    pub fn iter(&self) -> MapxRawIter<'_> {
         self.inner.iter()
     }
 
@@ -258,7 +258,7 @@ impl MapxRaw {
     ///
     /// A `MapxRawIterMut` that allows for mutable iteration over the key-value pairs.
     #[inline(always)]
-    pub fn iter_mut(&mut self) -> MapxRawIterMut {
+    pub fn iter_mut(&mut self) -> MapxRawIterMut<'_> {
         self.inner.iter_mut()
     }
 
