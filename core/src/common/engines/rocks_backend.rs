@@ -4,8 +4,8 @@ use crate::common::{
 };
 use parking_lot::Mutex;
 use rocksdb::{
-    BlockBasedOptions, Cache, ColumnFamily, ColumnFamilyDescriptor, DB, DBIterator,
-    Direction, IteratorMode, Options, ReadOptions, SliceTransform, WriteBatch,
+    BlockBasedOptions, Cache, DB, DBIterator, Direction, IteratorMode, Options,
+    ReadOptions, SliceTransform, WriteBatch,
 };
 use ruc::*;
 use std::{
@@ -21,10 +21,7 @@ use std::{
     thread::available_parallelism,
 };
 
-// NOTE:
-// do NOT make the number of areas bigger than `u8::MAX`
-const DATA_SET_NUM: usize = 2;
-const SHARD_CNT: usize = 16;
+const SHARD_CNT: usize = 1;
 
 const META_KEY_MAX_KEYLEN: [u8; 1] = [u8::MAX];
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
@@ -32,7 +29,6 @@ const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 pub struct RocksEngine {
     meta: &'static DB,
     shards: Vec<&'static DB>,
-    shards_cfs: Vec<Vec<&'static ColumnFamily>>,
     prefix_allocator: PreAllocator,
     max_keylen: AtomicUsize,
 }
@@ -47,18 +43,27 @@ fn make_full_key(meta_prefix: &[u8], key: &[u8]) -> Vec<u8> {
     full_key
 }
 
+/// Compute the successor of a byte slice: the smallest byte string
+/// that is strictly greater than `key`. Returns `None` if `key` is
+/// all `0xFF` bytes (no finite successor exists).
+fn successor(key: &[u8]) -> Option<Vec<u8>> {
+    let mut s = key.to_vec();
+    // Walk backwards, incrementing the first byte that isn't 0xFF
+    for i in (0..s.len()).rev() {
+        if s[i] < u8::MAX {
+            s[i] += 1;
+            s.truncate(i + 1);
+            return Some(s);
+        }
+    }
+    // All bytes are 0xFF — no finite successor
+    None
+}
+
 impl RocksEngine {
     #[inline(always)]
-    fn get_shard_idx(&self, prefix: PreBytes) -> usize {
-        (prefix[0] as usize) % SHARD_CNT
-    }
-
-    #[inline(always)]
-    fn get_cf(&self, prefix: PreBytes) -> &'static ColumnFamily {
-        let shard_idx = self.get_shard_idx(prefix);
-        // Reuse the `area_idx` logic from Engine trait which defaults to prefix[0] % area_count()
-        let cf_idx = self.area_idx(prefix);
-        self.shards_cfs[shard_idx][cf_idx]
+    fn get_shard_idx(&self, _prefix: PreBytes) -> usize {
+        0
     }
 
     #[inline(always)]
@@ -89,13 +94,15 @@ impl RocksEngine {
     fn get_upper_bound_value(&self, meta_prefix: PreBytes) -> Vec<u8> {
         const BUF: [u8; 256] = [u8::MAX; 256];
 
-        let mut max_guard = meta_prefix.to_vec();
-
         let l = self.get_max_keylen();
+        let total_len = PREFIX_SIZE + l;
+        let mut max_guard = Vec::with_capacity(total_len);
+        max_guard.extend_from_slice(&meta_prefix);
+
         if l < 257 {
             max_guard.extend_from_slice(&BUF[..l]);
         } else {
-            max_guard.extend_from_slice(&vec![u8::MAX; l]);
+            max_guard.resize(total_len, u8::MAX);
         }
 
         max_guard
@@ -109,23 +116,16 @@ impl Engine for RocksEngine {
         omit!(vsdb_set_base_dir(&base_dir));
 
         let mut shards = Vec::with_capacity(SHARD_CNT);
-        let mut shards_cfs = Vec::with_capacity(SHARD_CNT);
 
         // Ensure base dir exists
         fs::create_dir_all(&base_dir).c(d!())?;
 
         for i in 0..SHARD_CNT {
             let dir = base_dir.join(format!("shard_{}", i));
-            let (db, cf_names) = rocksdb_open_shard(&dir)?;
+            let db = rocksdb_open_shard(&dir)?;
             let db = Box::leak(Box::new(db));
 
-            let cfs = cf_names
-                .iter()
-                .map(|name| db.cf_handle(name).unwrap())
-                .collect::<Vec<_>>();
-
             shards.push(db as &'static DB);
-            shards_cfs.push(cfs);
         }
 
         // Use shard 0 as the meta shard
@@ -150,82 +150,84 @@ impl Engine for RocksEngine {
         Ok(RocksEngine {
             meta,
             shards,
-            shards_cfs,
             prefix_allocator,
             // length of the raw key, exclude the meta prefix
             max_keylen,
         })
     }
 
-    // 'step 1' and 'step 2' is not atomic in multi-threads scene,
-    // Optimization: Use AtomicU64 for better performance, persist periodically
+    // Fixed: persist `next + 1024` (the ceiling) so that on crash-restart
+    // we resume from the persisted ceiling, never re-issuing a prefix.
     #[allow(unused_variables)]
     fn alloc_prefix(&self) -> Pre {
         static COUNTER: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
+        static CEILING: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
         static LK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-        // Try lock-free fast path first
+        // Fast path: try to allocate from the current batch
         let current = COUNTER.load(Ordering::Relaxed);
         if current > 0 {
             let next = COUNTER.fetch_add(1, Ordering::AcqRel);
-            // Persist every 1024 allocations to reduce write amplification
-            if next.is_multiple_of(1024) {
-                let _ = self
-                    .meta
-                    .put(self.prefix_allocator.key, (next + 1024).to_be_bytes());
+            let ceil = CEILING.load(Ordering::Acquire);
+            if next < ceil {
+                return next;
             }
+            // We've exhausted the current batch; reserve a new one
+            let _x = LK.lock();
+            // Double-check: another thread may have already reserved
+            let ceil2 = CEILING.load(Ordering::Acquire);
+            if next < ceil2 {
+                return next;
+            }
+            let new_ceil = next + 1024;
+            self.meta
+                .put(self.prefix_allocator.key, new_ceil.to_be_bytes())
+                .unwrap();
+            CEILING.store(new_ceil, Ordering::Release);
             return next;
         }
 
         // Slow path: initialize from DB
-        let x = LK.lock();
+        let _x = LK.lock();
         let db_value = COUNTER.load(Ordering::Relaxed);
         if db_value == 0 {
             // Read from DB
             let ret = crate::parse_prefix!(
                 self.meta.get(self.prefix_allocator.key).unwrap().unwrap()
             );
-            COUNTER.store(ret + 1, Ordering::Release);
-            // Reserve a batch for future allocations
+            let new_ceil = ret + 1024;
             self.meta
-                .put(self.prefix_allocator.key, (ret + 1024).to_be_bytes())
+                .put(self.prefix_allocator.key, new_ceil.to_be_bytes())
                 .unwrap();
+            COUNTER.store(ret + 1, Ordering::Release);
+            CEILING.store(new_ceil, Ordering::Release);
             ret
         } else {
-            drop(x);
+            drop(_x);
             self.alloc_prefix()
         }
     }
 
-    fn area_count(&self) -> usize {
-        DATA_SET_NUM
-    }
-
     fn flush(&self) {
-        for (i, db) in self.shards.iter().enumerate() {
+        for db in self.shards.iter() {
             db.flush().unwrap();
-            for cf in &self.shards_cfs[i] {
-                db.flush_cf(cf).unwrap();
-            }
         }
     }
 
     fn iter(&self, meta_prefix: PreBytes) -> RocksIter {
         let db = self.get_db(meta_prefix);
-        let cf = self.get_cf(meta_prefix);
 
-        let inner = db.prefix_iterator_cf(cf, meta_prefix);
+        let inner = db.prefix_iterator(meta_prefix);
 
         let mut opt = ReadOptions::default();
         opt.set_prefix_same_as_start(true);
 
-        let inner_rev = db.iterator_cf_opt(
-            cf,
-            opt,
+        let inner_rev = db.iterator_opt(
             IteratorMode::From(
                 &self.get_upper_bound_value(meta_prefix),
                 Direction::Reverse,
             ),
+            opt,
         );
 
         RocksIter { inner, inner_rev }
@@ -237,7 +239,6 @@ impl Engine for RocksEngine {
         bounds: R,
     ) -> RocksIter {
         let db = self.get_db(meta_prefix);
-        let cf = self.get_cf(meta_prefix);
 
         let mut opt = ReadOptions::default();
         let mut opt_rev = ReadOptions::default();
@@ -260,14 +261,23 @@ impl Engine for RocksEngine {
             _ => meta_prefix.as_slice(),
         };
 
+        // RocksDB upper bound is exclusive.
+        // For Included(hi): compute successor(prefix + hi) so that hi itself is included.
+        // For Excluded(hi): use prefix + hi directly as the exclusive upper bound.
         let mut b_hi = meta_prefix.to_vec();
         let h = match bounds.end_bound() {
             Bound::Included(hi) => {
                 b_hi.extend_from_slice(hi);
-                b_hi.push(0u8);
-                opt.set_iterate_upper_bound(b_hi.as_slice());
-                opt_rev.set_iterate_upper_bound(b_hi.as_slice());
-                b_hi
+                // Compute the successor of the full key so that
+                // the upper bound is strictly past `hi`.
+                let upper = match successor(&b_hi) {
+                    Some(s) => s,
+                    // All 0xFF: fall back to the max guard value
+                    None => self.get_upper_bound_value(meta_prefix),
+                };
+                opt.set_iterate_upper_bound(upper.as_slice());
+                opt_rev.set_iterate_upper_bound(upper.as_slice());
+                upper
             }
             Bound::Excluded(hi) => {
                 b_hi.extend_from_slice(hi);
@@ -281,27 +291,24 @@ impl Engine for RocksEngine {
         opt.set_prefix_same_as_start(true);
         opt_rev.set_prefix_same_as_start(true);
 
-        let inner =
-            db.iterator_cf_opt(cf, opt, IteratorMode::From(l, Direction::Forward));
+        let inner = db.iterator_opt(IteratorMode::From(l, Direction::Forward), opt);
 
         let inner_rev =
-            db.iterator_cf_opt(cf, opt_rev, IteratorMode::From(&h, Direction::Reverse));
+            db.iterator_opt(IteratorMode::From(&h, Direction::Reverse), opt_rev);
 
         RocksIter { inner, inner_rev }
     }
 
     fn get(&self, meta_prefix: PreBytes, key: &[u8]) -> Option<RawValue> {
         let db = self.get_db(meta_prefix);
-        let cf = self.get_cf(meta_prefix);
 
         // Optimization: Use helper function with pre-allocated capacity
         let full_key = make_full_key(meta_prefix.as_slice(), key);
-        db.get_cf(cf, full_key).unwrap()
+        db.get(full_key).unwrap()
     }
 
     fn insert(&self, meta_prefix: PreBytes, key: &[u8], value: &[u8]) {
         let db = self.get_db(meta_prefix);
-        let cf = self.get_cf(meta_prefix);
 
         // Optimization: Check and update max_keylen with reduced frequency
         if key.len() > self.get_max_keylen() {
@@ -312,23 +319,21 @@ impl Engine for RocksEngine {
         let full_key = make_full_key(meta_prefix.as_slice(), key);
 
         // Direct insert without read-before-write - major performance improvement
-        db.put_cf(cf, full_key, value).unwrap();
+        db.put(full_key, value).unwrap();
     }
 
     fn remove(&self, meta_prefix: PreBytes, key: &[u8]) {
         let db = self.get_db(meta_prefix);
-        let cf = self.get_cf(meta_prefix);
 
         // Optimization: Use helper function with pre-allocated capacity
         let full_key = make_full_key(meta_prefix.as_slice(), key);
 
         // Direct remove without read-before-write - major performance improvement
-        db.delete_cf(cf, full_key).unwrap();
+        db.delete(full_key).unwrap();
     }
 
     fn batch_begin<'a>(&'a self, meta_prefix: PreBytes) -> Box<dyn BatchTrait + 'a> {
-        let cf = self.get_cf(meta_prefix);
-        Box::new(RocksBatch::new(meta_prefix, cf, self))
+        Box::new(RocksBatch::new(meta_prefix, self))
     }
 }
 
@@ -372,31 +377,21 @@ impl PreAllocator {
             (RESERVED_ID_CNT + Pre::MIN).to_be_bytes(),
         )
     }
-
-    // fn next(base: &[u8]) -> [u8; PREFIX_SIZE] {
-    //     (crate::parse_prefix!(base) + 1).to_be_bytes()
-    // }
 }
 
 /// Batch write operations for RocksDB
 pub struct RocksBatch<'a> {
     inner: WriteBatch,
     meta_prefix: PreBytes,
-    cf: &'static ColumnFamily,
     max_key_len: usize,
     engine: &'a RocksEngine,
 }
 
 impl<'a> RocksBatch<'a> {
-    fn new(
-        meta_prefix: PreBytes,
-        cf: &'static ColumnFamily,
-        engine: &'a RocksEngine,
-    ) -> Self {
+    fn new(meta_prefix: PreBytes, engine: &'a RocksEngine) -> Self {
         Self {
             inner: WriteBatch::default(),
             meta_prefix,
-            cf,
             max_key_len: 0,
             engine,
         }
@@ -406,7 +401,7 @@ impl<'a> RocksBatch<'a> {
     #[inline(always)]
     pub fn insert(&mut self, key: &[u8], value: &[u8]) {
         let full_key = make_full_key(self.meta_prefix.as_slice(), key);
-        self.inner.put_cf(self.cf, full_key, value);
+        self.inner.put(full_key, value);
         if key.len() > self.max_key_len {
             self.max_key_len = key.len();
         }
@@ -416,7 +411,7 @@ impl<'a> RocksBatch<'a> {
     #[inline(always)]
     pub fn remove(&mut self, key: &[u8]) {
         let full_key = make_full_key(self.meta_prefix.as_slice(), key);
-        self.inner.delete_cf(self.cf, full_key);
+        self.inner.delete(full_key);
     }
 }
 
@@ -445,11 +440,10 @@ impl BatchTrait for RocksBatch<'_> {
     }
 }
 
-fn rocksdb_open_shard(dir: &Path) -> Result<(DB, Vec<String>)> {
+fn rocksdb_open_shard(dir: &Path) -> Result<DB> {
     let mut cfg = Options::default();
 
     cfg.create_if_missing(true);
-    cfg.create_missing_column_families(true);
 
     cfg.set_prefix_extractor(SliceTransform::create_fixed_prefix(size_of::<Pre>()));
 
@@ -473,9 +467,9 @@ fn rocksdb_open_shard(dir: &Path) -> Result<(DB, Vec<String>)> {
             .parse::<usize>()
             .c(d!())?
             * 1024;
-        alt!((16 * G) < memsiz, memsiz / 4, G) / (DATA_SET_NUM * SHARD_CNT)
+        alt!((16 * G) < memsiz, memsiz / 4, G) / SHARD_CNT
     } else {
-        G / (DATA_SET_NUM * SHARD_CNT)
+        G / SHARD_CNT
     };
 
     cfg.set_write_buffer_size(wr_buffer_size);
@@ -523,14 +517,7 @@ fn rocksdb_open_shard(dir: &Path) -> Result<(DB, Vec<String>)> {
     let parallelism = available_parallelism().c(d!())?.get() as i32;
     cfg.increase_parallelism(parallelism);
 
-    let cfhdrs = (0..DATA_SET_NUM).map(|i| i.to_string()).collect::<Vec<_>>();
+    let db = DB::open(&cfg, dir).c(d!())?;
 
-    let cfs = cfhdrs
-        .iter()
-        .map(|i| ColumnFamilyDescriptor::new(i, cfg.clone()))
-        .collect::<Vec<_>>();
-
-    let db = DB::open_cf_descriptors(&cfg, dir, cfs).c(d!())?;
-
-    Ok((db, cfhdrs))
+    Ok(db)
 }

@@ -8,8 +8,8 @@ use vsdb::basic::mapx::Mapx;
 fn batch_vs_normal_write(c: &mut Criterion) {
     let mut group = c.benchmark_group("** Batch vs Normal Write (100 items) **");
     group
-        .measurement_time(Duration::from_secs(10))
-        .sample_size(50);
+        .measurement_time(std::time::Duration::from_secs(3))
+        .sample_size(10);
 
     let i = AtomicUsize::new(0);
     let mut db = Mapx::new();

@@ -15,8 +15,8 @@ use std::{
     ops::Bound,
 };
 use vsdb::{
-    KeyEnDeOrdered, MapxOrd, basic::mapx_ord::MapxOrdIter as LargeIter,
-    basic::orphan::Orphan,
+    KeyEnDeOrdered, MapxOrd,
+    basic::{mapx_ord::MapxOrdIter as LargeIter, orphan::Orphan},
 };
 
 type Slot = u64;
@@ -80,6 +80,8 @@ where
     /// * `swap_order` - If `true`, reverses the internal slot order. This can improve
     ///   performance for applications that primarily query in reverse chronological order.
     pub fn new(tier_capacity: u64, swap_order: bool) -> Self {
+        let tier_capacity = tier_capacity.max(1);
+
         Self {
             data: MapxOrd::new(),
             total: Orphan::new(0),
@@ -100,18 +102,20 @@ where
 
         self.ensure_tier_capacity(slot);
 
-        #[allow(clippy::unwrap_or_default)]
-        if self.data.entry(&slot).or_insert(DataCtner::new()).insert(k) {
+        let mut ctner = self.data.get(&slot).unwrap_or_default();
+        if ctner.insert(k) {
+            self.data.insert(&slot, &ctner);
             self.tiers.iter_mut().for_each(|t| {
                 let slot_floor = slot / t.floor_base * t.floor_base;
-                let mut v = t.data.entry(&slot_floor).or_insert(0);
-                if 0 == *v {
+                let mut v = t.data.get(&slot_floor).unwrap_or(0);
+                if 0 == v {
                     *t.entry_count.get_mut() += 1;
                     if let Some(l) = t.len_cache.as_mut() {
                         *l += 1;
                     }
                 }
-                *v += 1;
+                v += 1;
+                t.data.insert(&slot_floor, &v);
             });
             *self.total.get_mut() += 1;
         }
@@ -138,8 +142,11 @@ where
             break;
         }
 
-        let (exist, empty) = match self.data.get_mut(&slot) {
-            Some(mut d) => (d.remove(k), d.is_empty()),
+        let (exist, empty, d) = match self.data.get(&slot) {
+            Some(mut d) => {
+                let existed = d.remove(k);
+                (existed, d.is_empty(), d)
+            }
             _ => {
                 return;
             }
@@ -147,18 +154,20 @@ where
 
         if empty {
             self.data.remove(&slot);
+        } else if exist {
+            self.data.insert(&slot, &d);
         }
 
         if exist {
             self.tiers.iter_mut().for_each(|t| {
                 let slot_floor = slot / t.floor_base * t.floor_base;
-                let mut cnt = t.data.get_mut(&slot_floor).unwrap();
-                if 1 == *cnt {
-                    drop(cnt); // release the mut reference
+                let mut cnt = t.data.get(&slot_floor).unwrap();
+                if 1 == cnt {
                     t.data.remove(&slot_floor);
                     t.dec_len();
                 } else {
-                    *cnt -= 1;
+                    cnt -= 1;
+                    t.data.insert(&slot_floor, &cnt);
                 }
             });
             *self.total.get_mut() -= 1;
@@ -332,13 +341,12 @@ where
         global_skip_num: EntryCnt,
     ) -> (Bound<StartSlotActual>, SkipNum) {
         let mut slot_start = Bound::Included(Slot::MIN);
-        let mut local_idx = global_skip_num as usize;
+        let mut local_idx: u64 = global_skip_num;
 
         for t in self.tiers.iter().rev() {
             let mut hdr =
                 t.data.range((slot_start, Bound::Unbounded)).peekable();
-            while let Some(entry_cnt) = hdr.next().map(|(_, cnt)| cnt as usize)
-            {
+            while let Some(entry_cnt) = hdr.next().map(|(_, cnt)| cnt) {
                 if entry_cnt > local_idx {
                     break;
                 } else {
@@ -354,7 +362,7 @@ where
         let mut hdr =
             self.data.range((slot_start, Bound::Unbounded)).peekable();
         while let Some(entry_cnt) =
-            hdr.next().map(|(_, entries)| entries.len())
+            hdr.next().map(|(_, entries)| entries.len() as u64)
         {
             if entry_cnt > local_idx {
                 break;
@@ -367,7 +375,7 @@ where
             }
         }
 
-        (slot_start, local_idx as EntryCnt)
+        (slot_start, local_idx)
     }
 
     fn get_entries(
@@ -378,12 +386,15 @@ where
         page_index: PageIndex,
         reverse: bool,
     ) -> Vec<K> {
-        let mut ret = vec![];
-        alt!(slot_end < slot_start, return ret);
+        if slot_end < slot_start {
+            return vec![];
+        }
 
         let (global_skip_n, take_n) = self.page_info_to_global_offsets(
             slot_start, slot_end, page_size, page_index, reverse,
         );
+
+        let mut ret = Vec::with_capacity(take_n as usize);
 
         let (slot_start_actual, local_skip_n) =
             self.get_local_skip_num(global_skip_n);
@@ -488,15 +499,15 @@ where
                 Tier::new(tiers_len as u32, self.tier_capacity),
                 |mut t, (slot, cnt)| {
                     let slot_floor = slot / t.floor_base * t.floor_base;
-                    let mut v = t.data.entry(&slot_floor).or_insert(0);
-                    if 0 == *v {
+                    let mut v = t.data.get(&slot_floor).unwrap_or(0);
+                    if 0 == v {
                         *t.entry_count.get_mut() += 1;
                         if let Some(l) = t.len_cache.as_mut() {
                             *l += 1;
                         }
                     }
-                    *v += cnt;
-                    drop(v);
+                    v += cnt;
+                    t.data.insert(&slot_floor, &v);
                     t
                 },
             );
@@ -507,15 +518,15 @@ where
                 Tier::new(tiers_len as u32, self.tier_capacity),
                 |mut t, (slot, entries)| {
                     let slot_floor = slot / t.floor_base * t.floor_base;
-                    let mut v = t.data.entry(&slot_floor).or_insert(0);
-                    if 0 == *v {
+                    let mut v = t.data.get(&slot_floor).unwrap_or(0);
+                    if 0 == v {
                         *t.entry_count.get_mut() += 1;
                         if let Some(l) = t.len_cache.as_mut() {
                             *l += 1;
                         }
                     }
-                    *v += entries.len() as EntryCnt;
-                    drop(v);
+                    v += entries.len() as EntryCnt;
+                    t.data.insert(&slot_floor, &v);
                     t
                 },
             );
@@ -596,7 +607,7 @@ where
 
     fn try_upgrade(&mut self) {
         let inner_set = match self {
-            Self::Small(set) if set.len() > INLINE_CAPACITY_THRESHOLD => set,
+            Self::Small(set) if set.len() >= INLINE_CAPACITY_THRESHOLD => set,
             _ => return,
         };
 
@@ -613,10 +624,18 @@ where
     }
 
     fn insert(&mut self, k: K) -> bool {
-        self.try_upgrade();
-
         match self {
-            Self::Small(i) => i.insert(k),
+            Self::Small(set) => {
+                // Only upgrade if we're about to exceed the inline threshold with a new key.
+                if set.len() >= INLINE_CAPACITY_THRESHOLD && !set.contains(&k)
+                {
+                    // upgrade in-place (reuse existing helper)
+                    self.try_upgrade();
+                    // self is now Large, fall through by re-calling insert on the new state
+                    return self.insert(k);
+                }
+                set.insert(k)
+            }
             Self::Large { map, len } => {
                 let existed = map.get(&k).is_some();
                 map.insert(&k, &());
@@ -707,7 +726,10 @@ impl Tier {
     fn new(tier_idx: u32, tier_capacity: u64) -> Self {
         let pow = 1 + tier_idx;
         Self {
-            floor_base: tier_capacity.pow(pow),
+            floor_base: tier_capacity
+                .checked_pow(pow)
+                .filter(|&v| v != 0)
+                .unwrap_or(u64::MAX),
             data: MapxOrd::new(),
             entry_count: Orphan::new(0),
             len_cache: Some(0),

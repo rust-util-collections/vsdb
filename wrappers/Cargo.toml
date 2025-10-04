@@ -40,9 +40,9 @@ msgpack_codec = ["serde_ende", "msgpack"]
 json_codec = ["serde_ende", "serde_json"]
 cbor_codec = ["serde_ende", "serde_cbor_2"]
 
-# [[bench]]
-# name = "basic"
-# harness = false
+[[bench]]
+name = "basic"
+harness = false
 
 # [[bench]]
 # name = "versioned"

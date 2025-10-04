@@ -3,7 +3,7 @@ use rand::random;
 use std::hint::black_box;
 use vsdb_slot_db::SlotDB;
 
-const DATA_SIZE: u32 = 100_0000;
+const DATA_SIZE: u32 = 100_000;
 
 type V = Vec<u8>;
 
@@ -24,96 +24,121 @@ fn query(db: &SlotDB<V>, page_size: u16) {
 
 fn slot_4(c: &mut Criterion) {
     let mut db = slot_db_custom(4);
+    let mut group = c.benchmark_group("slot 4");
+    group
+        .measurement_time(std::time::Duration::from_secs(3))
+        .sample_size(10);
 
-    c.bench_function("slot 4, page size: 10", |b| {
+    group.bench_function("page size: 10", |b| {
         b.iter(|| query(&db, black_box(10)))
     });
-    c.bench_function("slot 4, page size: 20", |b| {
+    group.bench_function("page size: 20", |b| {
         b.iter(|| query(&db, black_box(20)))
     });
-    c.bench_function("slot 4, page size: 40", |b| {
+    group.bench_function("page size: 40", |b| {
         b.iter(|| query(&db, black_box(40)))
     });
-    c.bench_function("slot 4, page size: 80", |b| {
+    group.bench_function("page size: 80", |b| {
         b.iter(|| query(&db, black_box(80)))
     });
 
+    group.finish();
     db.clear();
 }
 
 fn slot_8(c: &mut Criterion) {
     let mut db = slot_db_custom(8);
+    let mut group = c.benchmark_group("slot 8");
+    group
+        .measurement_time(std::time::Duration::from_secs(3))
+        .sample_size(10);
 
-    c.bench_function("slot 8, page size: 10", |b| {
+    group.bench_function("page size: 10", |b| {
         b.iter(|| query(&db, black_box(10)))
     });
-    c.bench_function("slot 8, page size: 20", |b| {
+    group.bench_function("page size: 20", |b| {
         b.iter(|| query(&db, black_box(20)))
     });
-    c.bench_function("slot 8, page size: 40", |b| {
+    group.bench_function("page size: 40", |b| {
         b.iter(|| query(&db, black_box(40)))
     });
-    c.bench_function("slot 8, page size: 80", |b| {
+    group.bench_function("page size: 80", |b| {
         b.iter(|| query(&db, black_box(80)))
     });
 
+    group.finish();
     db.clear();
 }
 
 fn slot_16(c: &mut Criterion) {
     let mut db = slot_db_custom(16);
+    let mut group = c.benchmark_group("slot 16");
+    group
+        .measurement_time(std::time::Duration::from_secs(3))
+        .sample_size(10);
 
-    c.bench_function("slot 16, page size: 10", |b| {
+    group.bench_function("page size: 10", |b| {
         b.iter(|| query(&db, black_box(10)))
     });
-    c.bench_function("slot 16, page size: 20", |b| {
+    group.bench_function("page size: 20", |b| {
         b.iter(|| query(&db, black_box(20)))
     });
-    c.bench_function("slot 16, page size: 40", |b| {
+    group.bench_function("page size: 40", |b| {
         b.iter(|| query(&db, black_box(40)))
     });
-    c.bench_function("slot 16, page size: 80", |b| {
+    group.bench_function("page size: 80", |b| {
         b.iter(|| query(&db, black_box(80)))
     });
 
+    group.finish();
     db.clear();
 }
 
 fn slot_32(c: &mut Criterion) {
     let mut db = slot_db_custom(32);
+    let mut group = c.benchmark_group("slot 32");
+    group
+        .measurement_time(std::time::Duration::from_secs(3))
+        .sample_size(10);
 
-    c.bench_function("slot 32, page size: 10", |b| {
+    group.bench_function("page size: 10", |b| {
         b.iter(|| query(&db, black_box(10)))
     });
-    c.bench_function("slot 32, page size: 20", |b| {
+    group.bench_function("page size: 20", |b| {
         b.iter(|| query(&db, black_box(20)))
     });
-    c.bench_function("slot 32, page size: 40", |b| {
+    group.bench_function("page size: 40", |b| {
         b.iter(|| query(&db, black_box(40)))
     });
-    c.bench_function("slot 32, page size: 80", |b| {
+    group.bench_function("page size: 80", |b| {
         b.iter(|| query(&db, black_box(80)))
     });
 
+    group.finish();
     db.clear();
 }
 
 fn slot_64(c: &mut Criterion) {
     let mut db = slot_db_custom(64);
+    let mut group = c.benchmark_group("slot 64");
+    group
+        .measurement_time(std::time::Duration::from_secs(3))
+        .sample_size(10);
 
-    c.bench_function("slot 64, page size: 10", |b| {
+    group.bench_function("page size: 10", |b| {
         b.iter(|| query(&db, black_box(10)))
     });
-    c.bench_function("slot 64, page size: 20", |b| {
+    group.bench_function("page size: 20", |b| {
         b.iter(|| query(&db, black_box(20)))
     });
-    c.bench_function("slot 64, page size: 40", |b| {
+    group.bench_function("page size: 40", |b| {
         b.iter(|| query(&db, black_box(40)))
     });
-    c.bench_function("slot 64, page size: 80", |b| {
+    group.bench_function("page size: 80", |b| {
         b.iter(|| query(&db, black_box(80)))
     });
 
+    group.finish();
     db.clear();
 }
 

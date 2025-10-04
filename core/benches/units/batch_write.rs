@@ -6,8 +6,8 @@ use vsdb_core::MapxRaw;
 fn single_inserts(c: &mut Criterion) {
     let mut group = c.benchmark_group("** RocksDB Write Performance **");
     group
-        .measurement_time(Duration::from_secs(10))
-        .sample_size(50);
+        .measurement_time(std::time::Duration::from_secs(3))
+        .sample_size(10);
 
     group.bench_function(" single inserts (1000 ops) ", |b| {
         b.iter(|| {
@@ -28,8 +28,8 @@ fn single_inserts(c: &mut Criterion) {
 fn mixed_workload(c: &mut Criterion) {
     let mut group = c.benchmark_group("** RocksDB Mixed Workload **");
     group
-        .measurement_time(Duration::from_secs(10))
-        .sample_size(50);
+        .measurement_time(std::time::Duration::from_secs(3))
+        .sample_size(10);
 
     group.bench_function(" 80% read / 20% write (1000 ops) ", |b| {
         b.iter(|| {
@@ -65,8 +65,8 @@ fn mixed_workload(c: &mut Criterion) {
 fn range_scans(c: &mut Criterion) {
     let mut group = c.benchmark_group("** RocksDB Range Scans **");
     group
-        .measurement_time(Duration::from_secs(10))
-        .sample_size(50);
+        .measurement_time(std::time::Duration::from_secs(3))
+        .sample_size(10);
 
     let mut db = MapxRaw::new();
     // Pre-populate with 10000 entries

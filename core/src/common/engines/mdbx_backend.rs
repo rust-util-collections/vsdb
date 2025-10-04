@@ -10,24 +10,34 @@ use parking_lot::Mutex;
 use ruc::*;
 use std::{
     borrow::Cow,
-    collections::HashMap,
+    collections::BTreeMap,
     fs,
     ops::{Bound, RangeBounds},
     sync::{
-        Arc, LazyLock, Once, Weak,
+        Arc, LazyLock, Once,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
 
+// It is safe to declare `atexit` as a safe fn because it only accepts
+// safe `extern "C" fn()` function pointers.
 unsafe extern "C" {
     safe fn atexit(func: extern "C" fn()) -> std::os::raw::c_int;
 }
 
-type WriteBuf = HashMap<Vec<u8>, Option<Vec<u8>>>;
+/// Wrapper around libc `atexit`.
+///
+/// Note: The registered function must be safe to call at program exit.
+/// We only register `atexit_flush` which satisfies this requirement.
+fn register_atexit(func: extern "C" fn()) {
+    atexit(func);
+}
+
+type WriteBuf = BTreeMap<Vec<u8>, Option<Vec<u8>>>;
 
 struct FlushOnExit {
-    write_buf: Weak<Mutex<WriteBuf>>,
+    write_bufs: std::sync::Weak<Vec<parking_lot::Mutex<WriteBuf>>>,
     shards: Vec<&'static Database<NoWriteMap>>,
 }
 
@@ -38,10 +48,12 @@ static INIT_ATEXIT: Once = Once::new();
 extern "C" fn atexit_flush() {
     if let Some(registry) = FLUSH_REGISTRY.try_lock() {
         for state in registry.iter() {
-            if let Some(buf_arc) = state.write_buf.upgrade()
-                && let Some(mut buf) = buf_arc.try_lock()
-            {
-                flush_buffer_impl(&state.shards, &mut buf);
+            if let Some(bufs_arc) = state.write_bufs.upgrade() {
+                for (shard_idx, buf_mtx) in bufs_arc.iter().enumerate() {
+                    if let Some(mut buf) = buf_mtx.try_lock() {
+                        flush_buffer_impl_shard(state.shards[shard_idx], &mut buf);
+                    }
+                }
                 for db in &state.shards {
                     let _ = db.sync(true);
                 }
@@ -53,10 +65,9 @@ extern "C" fn atexit_flush() {
 // NOTE:
 // The last table is preserved for the meta storage,
 // so the max value should be `u8::MAX - 1`
-const DATA_SET_NUM: usize = 2;
 const SHARD_CNT: usize = 16;
 
-const TABLE_DATA: [&str; DATA_SET_NUM] = ["data_0", "data_1"];
+const TABLE_DATA: &str = "data";
 const TABLE_META: &str = "meta";
 
 const META_KEY_MAX_KEYLEN: [u8; 1] = [u8::MAX];
@@ -74,7 +85,7 @@ pub struct MdbxEngine {
     // Write buffer: full_key -> Option<value> (None = tombstone/delete)
     // Amortizes MDBX per-transaction overhead by batching writes.
     // Arc so the background flush thread can hold a reference.
-    write_buf: Arc<Mutex<WriteBuf>>,
+    write_bufs: Arc<Vec<Mutex<WriteBuf>>>,
 }
 
 // Optimization: Helper function to build full key with pre-allocated capacity
@@ -90,7 +101,11 @@ fn make_full_key(meta_prefix: &[u8], key: &[u8]) -> Vec<u8> {
 impl MdbxEngine {
     #[inline(always)]
     fn get_shard_idx(&self, prefix: PreBytes) -> usize {
-        (prefix[0] as usize) % SHARD_CNT
+        // NOTE: The prefix is a big-endian encoded u64 that increments from 0.
+        // We use the last byte (LSB) for sharding to ensure even distribution.
+        // Using the first byte would cause all keys to hit shard 0 until the
+        // prefix exceeds 2^56.
+        (prefix[PREFIX_SIZE - 1] as usize) % SHARD_CNT
     }
 
     #[inline(always)]
@@ -122,63 +137,39 @@ impl MdbxEngine {
     }
 
     #[inline(always)]
-    fn get_table_name(&self, meta_prefix: PreBytes) -> &'static str {
-        let area_idx = self.area_idx(meta_prefix);
-        TABLE_DATA[area_idx]
+    fn get_table_name(&self, _meta_prefix: PreBytes) -> &'static str {
+        TABLE_DATA
     }
 
     /// Flush buffered writes to DB. Caller must hold the Mutex guard.
     #[inline(always)]
-    fn flush_locked(&self, buf: &mut WriteBuf) {
-        flush_buffer_impl(&self.shards, buf);
+    fn flush_locked(&self, shard_idx: usize, buf: &mut WriteBuf) {
+        flush_buffer_impl_shard(self.shards[shard_idx], buf);
     }
 }
 
-/// Standalone flush: groups buffered writes by shard, commits one txn per shard.
-/// Shared by MdbxEngine methods and the background flush thread.
-fn flush_buffer_impl(shards: &[&'static Database<NoWriteMap>], buf: &mut WriteBuf) {
+/// Standalone flush: commits one txn for a single shard.
+fn flush_buffer_impl_shard(db: &'static Database<NoWriteMap>, buf: &mut WriteBuf) {
     if buf.is_empty() {
         return;
     }
 
-    type ShardOp<'a> = (&'a [u8], usize, Option<&'a [u8]>);
-    let mut by_shard: Vec<Vec<ShardOp<'_>>> =
-        (0..SHARD_CNT).map(|_| Vec::new()).collect();
+    let txn = db.begin_rw_txn().unwrap();
+    let table = txn.open_table(Some(TABLE_DATA)).unwrap();
 
-    for (full_key, value) in buf.iter() {
-        let prefix: PreBytes = full_key[..PREFIX_SIZE].try_into().unwrap();
-        let shard_idx = (prefix[0] as usize) % SHARD_CNT;
-        let area_idx = (prefix[0] as usize) % DATA_SET_NUM;
-        by_shard[shard_idx].push((full_key.as_slice(), area_idx, value.as_deref()));
-    }
-
-    for (shard_idx, ops) in by_shard.iter().enumerate() {
-        if ops.is_empty() {
-            continue;
-        }
-        let db = shards[shard_idx];
-        let txn = db.begin_rw_txn().unwrap();
-
-        let tables: Vec<_> = TABLE_DATA
-            .iter()
-            .map(|name| txn.open_table(Some(name)).unwrap())
-            .collect();
-
-        for &(key, area_idx, value) in ops {
-            let table = &tables[area_idx];
-            match value {
-                Some(v) => {
-                    txn.put(table, key, v, WriteFlags::UPSERT).unwrap();
-                }
-                None => {
-                    let _ = txn.del(table, key, None);
-                }
+    for (key, value) in buf.iter() {
+        match value {
+            Some(v) => {
+                txn.put(&table, key.as_slice(), v.as_slice(), WriteFlags::UPSERT)
+                    .unwrap();
+            }
+            None => {
+                let _ = txn.del(&table, key.as_slice(), None);
             }
         }
-
-        txn.commit().unwrap();
     }
 
+    txn.commit().unwrap();
     buf.clear();
 }
 
@@ -252,19 +243,25 @@ impl Engine for MdbxEngine {
             AtomicUsize::new(crate::parse_int!(val, usize))
         };
 
-        let write_buf = Arc::new(Mutex::new(HashMap::new()));
+        let write_bufs = Arc::new(
+            (0..SHARD_CNT)
+                .map(|_| Mutex::new(BTreeMap::new()))
+                .collect::<Vec<_>>(),
+        );
 
         // Spawn background flush thread
         {
-            let buf = Arc::clone(&write_buf);
+            let bufs = Arc::clone(&write_bufs);
             let shards_ref = shards.clone();
             std::thread::Builder::new()
                 .name("vsdb-flush".into())
                 .spawn(move || {
                     loop {
                         std::thread::sleep(FLUSH_INTERVAL);
-                        let mut guard = buf.lock();
-                        flush_buffer_impl(&shards_ref, &mut guard);
+                        for (i, buf_mtx) in bufs.iter().enumerate() {
+                            let mut guard = buf_mtx.lock();
+                            flush_buffer_impl_shard(shards_ref[i], &mut guard);
+                        }
                     }
                 })
                 .unwrap();
@@ -273,14 +270,14 @@ impl Engine for MdbxEngine {
         // Register atexit hook to flush buffered writes on normal process exit.
         // Does not help with kill -9, but covers exit()/main-return/panic-unwind.
         INIT_ATEXIT.call_once(|| {
-            atexit(atexit_flush);
+            register_atexit(atexit_flush);
         });
 
         {
             let mut registry = FLUSH_REGISTRY.lock();
-            registry.retain(|state| state.write_buf.strong_count() > 0);
+            registry.retain(|state| state.write_bufs.strong_count() > 0);
             registry.push(FlushOnExit {
-                write_buf: Arc::downgrade(&write_buf),
+                write_bufs: std::sync::Arc::downgrade(&write_bufs),
                 shards: shards.clone(),
             });
         }
@@ -290,39 +287,51 @@ impl Engine for MdbxEngine {
             shards,
             prefix_allocator,
             max_keylen,
-            write_buf,
+            write_bufs,
         })
     }
 
-    // 'step 1' and 'step 2' is not atomic in multi-threads scene,
-    // Optimization: Use AtomicU64 for better performance, persist periodically
+    // Fixed: use a CEILING atomic to track the persisted upper bound.
+    // On crash-restart we resume from the persisted ceiling, never
+    // re-issuing a prefix.
     #[allow(unused_variables)]
     fn alloc_prefix(&self) -> Pre {
         static COUNTER: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
+        static CEILING: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
         static LK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-        // Try lock-free fast path first
+        // Fast path: try to allocate from the current batch
         let current = COUNTER.load(Ordering::Relaxed);
         if current > 0 {
             let next = COUNTER.fetch_add(1, Ordering::AcqRel);
-            // Persist every 1024 allocations to reduce write amplification
-            if next.is_multiple_of(1024) {
-                let txn = self.hdr.begin_rw_txn().unwrap();
-                let table = txn.open_table(Some(TABLE_META)).unwrap();
-                txn.put(
-                    &table,
-                    self.prefix_allocator.key,
-                    (next + 1024).to_be_bytes(),
-                    WriteFlags::UPSERT,
-                )
-                .unwrap();
-                txn.commit().unwrap();
+            let ceil = CEILING.load(Ordering::Acquire);
+            if next < ceil {
+                return next;
             }
+            // We've exhausted the current batch; reserve a new one
+            let _x = LK.lock();
+            // Double-check: another thread may have already reserved
+            let ceil2 = CEILING.load(Ordering::Acquire);
+            if next < ceil2 {
+                return next;
+            }
+            let new_ceil = next + 1024;
+            let txn = self.hdr.begin_rw_txn().unwrap();
+            let table = txn.open_table(Some(TABLE_META)).unwrap();
+            txn.put(
+                &table,
+                self.prefix_allocator.key,
+                new_ceil.to_be_bytes(),
+                WriteFlags::UPSERT,
+            )
+            .unwrap();
+            txn.commit().unwrap();
+            CEILING.store(new_ceil, Ordering::Release);
             return next;
         }
 
         // Slow path: initialize from DB
-        let x = LK.lock();
+        let _x = LK.lock();
         let db_value = COUNTER.load(Ordering::Relaxed);
         if db_value == 0 {
             // step 1
@@ -335,7 +344,7 @@ impl Engine for MdbxEngine {
             );
             drop(txn);
 
-            COUNTER.store(ret + 1, Ordering::Release);
+            let new_ceil = ret + 1024;
 
             // step 2
             let txn = self.hdr.begin_rw_txn().unwrap();
@@ -343,27 +352,26 @@ impl Engine for MdbxEngine {
             txn.put(
                 &table,
                 self.prefix_allocator.key,
-                (ret + 1024).to_be_bytes(),
+                new_ceil.to_be_bytes(),
                 WriteFlags::UPSERT,
             )
             .unwrap();
             txn.commit().unwrap();
 
+            COUNTER.store(ret + 1, Ordering::Release);
+            CEILING.store(new_ceil, Ordering::Release);
+
             ret
         } else {
-            drop(x);
+            drop(_x);
             self.alloc_prefix()
         }
     }
 
-    fn area_count(&self) -> usize {
-        DATA_SET_NUM
-    }
-
     fn flush(&self) {
-        {
-            let mut buf = self.write_buf.lock();
-            self.flush_locked(&mut buf);
+        for (i, buf_mtx) in self.write_bufs.iter().enumerate() {
+            let mut buf = buf_mtx.lock();
+            self.flush_locked(i, &mut buf);
         }
         for db in &self.shards {
             db.sync(true).unwrap();
@@ -371,10 +379,11 @@ impl Engine for MdbxEngine {
     }
 
     fn iter(&self, hdr_prefix: PreBytes) -> MdbxIter {
+        let shard_idx = self.get_shard_idx(hdr_prefix);
         // Flush buffer so the iterator sees all pending writes
         {
-            let mut buf = self.write_buf.lock();
-            self.flush_locked(&mut buf);
+            let mut buf = self.write_bufs[shard_idx].lock();
+            self.flush_locked(shard_idx, &mut buf);
         }
 
         let db = self.get_db(hdr_prefix);
@@ -399,10 +408,11 @@ impl Engine for MdbxEngine {
         hdr_prefix: PreBytes,
         bounds: R,
     ) -> MdbxIter {
+        let shard_idx = self.get_shard_idx(hdr_prefix);
         // Flush buffer so the iterator sees all pending writes
         {
-            let mut buf = self.write_buf.lock();
-            self.flush_locked(&mut buf);
+            let mut buf = self.write_bufs[shard_idx].lock();
+            self.flush_locked(shard_idx, &mut buf);
         }
 
         let db = self.get_db(hdr_prefix);
@@ -481,10 +491,11 @@ impl Engine for MdbxEngine {
 
     fn get(&self, hdr_prefix: PreBytes, key: &[u8]) -> Option<RawValue> {
         let full_key = make_full_key(hdr_prefix.as_slice(), key);
+        let shard_idx = self.get_shard_idx(hdr_prefix);
 
         // Check write buffer first
         {
-            let buf = self.write_buf.lock();
+            let buf = self.write_bufs[shard_idx].lock();
             if let Some(entry) = buf.get(&full_key) {
                 return entry.clone(); // Some(value) or None (tombstone)
             }
@@ -504,27 +515,30 @@ impl Engine for MdbxEngine {
         }
 
         let full_key = make_full_key(hdr_prefix.as_slice(), key);
-        let mut buf = self.write_buf.lock();
+        let shard_idx = self.get_shard_idx(hdr_prefix);
+        let mut buf = self.write_bufs[shard_idx].lock();
         buf.insert(full_key, Some(value.to_vec()));
         if buf.len() >= WRITE_BUF_THRESHOLD {
-            self.flush_locked(&mut buf);
+            self.flush_locked(shard_idx, &mut buf);
         }
     }
 
     fn remove(&self, hdr_prefix: PreBytes, key: &[u8]) {
         let full_key = make_full_key(hdr_prefix.as_slice(), key);
-        let mut buf = self.write_buf.lock();
+        let shard_idx = self.get_shard_idx(hdr_prefix);
+        let mut buf = self.write_bufs[shard_idx].lock();
         buf.insert(full_key, None);
         if buf.len() >= WRITE_BUF_THRESHOLD {
-            self.flush_locked(&mut buf);
+            self.flush_locked(shard_idx, &mut buf);
         }
     }
 
     fn batch_begin<'a>(&'a self, meta_prefix: PreBytes) -> Box<dyn BatchTrait + 'a> {
+        let shard_idx = self.get_shard_idx(meta_prefix);
         // Flush buffer so batch operations see all prior writes
         {
-            let mut buf = self.write_buf.lock();
-            self.flush_locked(&mut buf);
+            let mut buf = self.write_bufs[shard_idx].lock();
+            self.flush_locked(shard_idx, &mut buf);
         }
         Box::new(MdbxBatch::new(meta_prefix, self))
     }
@@ -721,6 +735,21 @@ impl Iterator for MdbxIter {
             return None;
         }
 
+        // Check lower bound (for Excluded start bounds where the
+        // cursor may have landed exactly on the excluded key)
+        if !self.check_lower_bound(&ik) {
+            // Skip this entry and try the next one
+            if let Some(cursor) = self.inner_fwd.as_mut() {
+                self.fwd_pending = cursor.next::<Vec<u8>, Vec<u8>>().unwrap();
+                if self.fwd_pending.is_none() {
+                    self.fwd_done = true;
+                }
+            } else {
+                self.fwd_done = true;
+            }
+            return self.next();
+        }
+
         // Check upper bound
         if !self.check_upper_bound(&ik) {
             self.fwd_done = true;
@@ -755,6 +784,21 @@ impl DoubleEndedIterator for MdbxIter {
         if !ik.starts_with(&self.prefix) {
             self.rev_done = true;
             return None;
+        }
+
+        // Check upper bound (for Excluded end bounds where the
+        // cursor may have landed exactly on the excluded key)
+        if !self.check_upper_bound(&ik) {
+            // Skip this entry and try the previous one
+            if let Some(cursor) = self.inner_rev.as_mut() {
+                self.rev_pending = cursor.prev::<Vec<u8>, Vec<u8>>().unwrap();
+                if self.rev_pending.is_none() {
+                    self.rev_done = true;
+                }
+            } else {
+                self.rev_done = true;
+            }
+            return self.next_back();
         }
 
         // Check lower bound
@@ -801,7 +845,7 @@ fn mdbx_open_shard(dir: &std::path::Path) -> Result<Database<NoWriteMap>> {
     // The application-level write buffer (WRITE_BUF_THRESHOLD) batches thousands
     // of writes into a single transaction, so the per-entry fsync cost is negligible.
     let opts = DatabaseOptions {
-        max_tables: Some(DATA_SET_NUM as u64 + 1), // data tables + meta table
+        max_tables: Some(2), // data table + meta table
         page_size: Some(PageSize::Set(4096)),
         mode: Mode::ReadWrite(ReadWriteOptions {
             sync_mode: SyncMode::Durable,
@@ -815,10 +859,8 @@ fn mdbx_open_shard(dir: &std::path::Path) -> Result<Database<NoWriteMap>> {
     // Pre-create all tables so they exist for readers
     {
         let txn = db.begin_rw_txn().c(d!())?;
-        for name in TABLE_DATA.iter() {
-            txn.create_table(Some(name), TableFlags::default())
-                .c(d!())?;
-        }
+        txn.create_table(Some(TABLE_DATA), TableFlags::default())
+            .c(d!())?;
         txn.create_table(Some(TABLE_META), TableFlags::default())
             .c(d!())?;
         txn.commit().c(d!())?;

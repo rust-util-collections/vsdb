@@ -32,7 +32,7 @@ use std::{
     borrow::Cow,
     fmt,
     marker::PhantomData,
-    ops::{Deref, DerefMut, RangeBounds},
+    ops::{Bound, Deref, DerefMut, RangeBounds},
     result::Result as StdResult,
     sync::LazyLock,
 };
@@ -44,13 +44,6 @@ use std::{
 pub trait Engine: Sized {
     fn new() -> Result<Self>;
     fn alloc_prefix(&self) -> Pre;
-    fn area_count(&self) -> usize;
-
-    // NOTE:
-    // do NOT make the number of areas bigger than `u8::MAX - 1`
-    fn area_idx(&self, meta_prefix: PreBytes) -> usize {
-        meta_prefix[0] as usize % self.area_count()
-    }
 
     fn flush(&self);
 
@@ -167,6 +160,7 @@ impl Mapx {
         Some(ValueMut {
             key: key.to_vec(),
             value: v,
+            dirty: false,
             hdr: self,
         })
     }
@@ -180,6 +174,7 @@ impl Mapx {
         ValueMut {
             key,
             value,
+            dirty: true,
             hdr: self,
         }
     }
@@ -253,10 +248,44 @@ impl Mapx {
 
     #[inline(always)]
     pub(crate) fn clear(&mut self) {
+        // Avoid collecting all keys into memory at once.
+        // Instead, delete in chunks using repeated range scans.
+        //
+        // Important: we do not delete while holding an iterator alive.
+        // Each loop creates a fresh iterator starting strictly after `last_key`.
+        const CLEAR_CHUNK: usize = 4096;
+
         let prefix = self.prefix.hack_bytes();
-        VSDB.db.iter(prefix).for_each(|(k, _)| {
-            VSDB.db.remove(prefix, &k);
-        });
+        let mut last_key: Option<RawKey> = None;
+
+        loop {
+            let mut it = match &last_key {
+                None => VSDB.db.iter(prefix),
+                Some(k) => VSDB.db.range(
+                    prefix,
+                    (Bound::Excluded(Cow::Owned(k.clone())), Bound::Unbounded),
+                ),
+            };
+
+            let mut keys = Vec::with_capacity(CLEAR_CHUNK);
+            for _ in 0..CLEAR_CHUNK {
+                let Some((k, _)) = it.next() else {
+                    break;
+                };
+                last_key = Some(k.clone());
+                keys.push(k);
+            }
+
+            if keys.is_empty() {
+                break;
+            }
+
+            let mut batch = VSDB.db.batch_begin(prefix);
+            for k in keys.iter() {
+                batch.remove(k);
+            }
+            batch.commit().unwrap();
+        }
     }
 
     #[inline(always)]
@@ -283,8 +312,12 @@ impl Mapx {
 impl Clone for Mapx {
     fn clone(&self) -> Self {
         let mut new_instance = Self::new();
-        for (k, v) in self.iter() {
-            new_instance.insert(&k, &v);
+        {
+            let mut batch = new_instance.batch_begin();
+            for (k, v) in self.iter() {
+                batch.insert(&k, &v);
+            }
+            batch.commit().unwrap();
         }
         new_instance
     }
@@ -292,6 +325,11 @@ impl Clone for Mapx {
 
 impl PartialEq for Mapx {
     fn eq(&self, other: &Mapx) -> bool {
+        // Short-circuit: if both point to the same prefix, they are identical
+        if self.prefix.to_bytes() == other.prefix.to_bytes() {
+            return true;
+        }
+
         // Compare all key-value pairs
         let mut self_iter = self.iter();
         let mut other_iter = other.iter();
@@ -443,6 +481,7 @@ impl<'a> Iterator for MapxIterMut<'a> {
             prefix: self.hdr.prefix.to_bytes(),
             key: k.clone(),
             value: v,
+            dirty: false,
             _marker: PhantomData,
         };
 
@@ -458,6 +497,7 @@ impl<'a> DoubleEndedIterator for MapxIterMut<'a> {
             prefix: self.hdr.prefix.to_bytes(),
             key: k.clone(),
             value: v,
+            dirty: false,
             _marker: PhantomData,
         };
 
@@ -470,12 +510,15 @@ pub struct ValueIterMut<'a> {
     prefix: PreBytes,
     key: RawKey,
     value: RawValue,
+    dirty: bool,
     _marker: PhantomData<&'a mut ()>,
 }
 
 impl Drop for ValueIterMut<'_> {
     fn drop(&mut self) {
-        VSDB.db.insert(self.prefix, &self.key, &self.value);
+        if self.dirty {
+            VSDB.db.insert(self.prefix, &self.key, &self.value);
+        }
     }
 }
 
@@ -488,6 +531,7 @@ impl Deref for ValueIterMut<'_> {
 
 impl DerefMut for ValueIterMut<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
+        self.dirty = true;
         &mut self.value
     }
 }
@@ -499,12 +543,15 @@ impl DerefMut for ValueIterMut<'_> {
 pub struct ValueMut<'a> {
     key: RawKey,
     value: RawValue,
+    dirty: bool,
     hdr: &'a mut Mapx,
 }
 
 impl Drop for ValueMut<'_> {
     fn drop(&mut self) {
-        self.hdr.insert(&self.key[..], &self.value[..]);
+        if self.dirty {
+            self.hdr.insert(&self.key[..], &self.value[..]);
+        }
     }
 }
 
@@ -517,6 +564,7 @@ impl Deref for ValueMut<'_> {
 
 impl DerefMut for ValueMut<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
+        self.dirty = true;
         &mut self.value
     }
 }
