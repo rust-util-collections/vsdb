@@ -444,11 +444,12 @@ impl<'a> Entry<'a> {
     /// Ensures a value is in the entry by inserting the default if empty,
     /// and returns a mutable reference to the value.
     pub fn or_insert(self, default: &'a [u8]) -> ValueMut<'a> {
-        let hdr = self.hdr as *mut MapxRawMk;
-        match unsafe { &mut *hdr }.get_mut(self.key) {
-            Some(v) => v,
-            _ => unsafe { &mut *hdr }.mock_value_mut(self.key, default.to_vec()),
-        }
+        crate::entry_or_insert_via_mock!(
+            self,
+            MapxRawMk,
+            get_mut(self.key),
+            mock_value_mut(self.key, default.to_vec())
+        )
     }
 }
 

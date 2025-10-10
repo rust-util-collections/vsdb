@@ -26,6 +26,11 @@ const SHARD_CNT: usize = 1;
 const META_KEY_MAX_KEYLEN: [u8; 1] = [u8::MAX];
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 
+// Number of prefixes to reserve per alloc_prefix slow-path DB write.
+// Larger values reduce lock contention at the cost of wasting prefix IDs on crash.
+// With u64 prefix space this is negligible.
+const PREFIX_ALLOC_BATCH: u64 = 8192;
+
 pub struct RocksEngine {
     meta: &'static DB,
     shards: Vec<&'static DB>,
@@ -179,7 +184,7 @@ impl Engine for RocksEngine {
             if next < ceil2 {
                 return next;
             }
-            let new_ceil = next + 1024;
+            let new_ceil = next + PREFIX_ALLOC_BATCH;
             self.meta
                 .put(self.prefix_allocator.key, new_ceil.to_be_bytes())
                 .unwrap();
@@ -195,7 +200,7 @@ impl Engine for RocksEngine {
             let ret = crate::parse_prefix!(
                 self.meta.get(self.prefix_allocator.key).unwrap().unwrap()
             );
-            let new_ceil = ret + 1024;
+            let new_ceil = ret + PREFIX_ALLOC_BATCH;
             self.meta
                 .put(self.prefix_allocator.key, new_ceil.to_be_bytes())
                 .unwrap();

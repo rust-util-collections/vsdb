@@ -77,6 +77,11 @@ const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 // Amortizes MDBX per-transaction overhead across many writes.
 const WRITE_BUF_THRESHOLD: usize = 4096;
 
+// Number of prefixes to reserve per alloc_prefix slow-path DB write.
+// Larger values reduce lock contention at the cost of wasting prefix IDs on crash.
+// With u64 prefix space this is negligible.
+const PREFIX_ALLOC_BATCH: u64 = 8192;
+
 pub struct MdbxEngine {
     hdr: &'static Database<NoWriteMap>,
     shards: Vec<&'static Database<NoWriteMap>>,
@@ -315,7 +320,7 @@ impl Engine for MdbxEngine {
             if next < ceil2 {
                 return next;
             }
-            let new_ceil = next + 1024;
+            let new_ceil = next + PREFIX_ALLOC_BATCH;
             let txn = self.hdr.begin_rw_txn().unwrap();
             let table = txn.open_table(Some(TABLE_META)).unwrap();
             txn.put(
@@ -344,7 +349,7 @@ impl Engine for MdbxEngine {
             );
             drop(txn);
 
-            let new_ceil = ret + 1024;
+            let new_ceil = ret + PREFIX_ALLOC_BATCH;
 
             // step 2
             let txn = self.hdr.begin_rw_txn().unwrap();
@@ -534,12 +539,6 @@ impl Engine for MdbxEngine {
     }
 
     fn batch_begin<'a>(&'a self, meta_prefix: PreBytes) -> Box<dyn BatchTrait + 'a> {
-        let shard_idx = self.get_shard_idx(meta_prefix);
-        // Flush buffer so batch operations see all prior writes
-        {
-            let mut buf = self.write_bufs[shard_idx].lock();
-            self.flush_locked(shard_idx, &mut buf);
-        }
         Box::new(MdbxBatch::new(meta_prefix, self))
     }
 }
@@ -580,25 +579,16 @@ impl BatchTrait for MdbxBatch<'_> {
 
     #[inline(always)]
     fn commit(&mut self) -> Result<()> {
-        let db = self.engine.get_db(self.meta_prefix);
-        let table_name = self.engine.get_table_name(self.meta_prefix);
-
-        let txn = db.begin_rw_txn().c(d!())?;
-        let table = txn.open_table(Some(table_name)).c(d!())?;
+        let shard_idx = self.engine.get_shard_idx(self.meta_prefix);
+        let mut buf = self.engine.write_bufs[shard_idx].lock();
 
         for (key, value) in self.ops.drain(..) {
-            match value {
-                Some(v) => {
-                    txn.put(&table, key.as_slice(), v.as_slice(), WriteFlags::UPSERT)
-                        .c(d!())?;
-                }
-                None => {
-                    let _ = txn.del(&table, key.as_slice(), None);
-                }
-            }
+            buf.insert(key, value);
         }
 
-        txn.commit().c(d!())?;
+        if buf.len() >= WRITE_BUF_THRESHOLD {
+            self.engine.flush_locked(shard_idx, &mut buf);
+        }
 
         if self.max_key_len > 0 && self.max_key_len > self.engine.get_max_keylen() {
             self.engine.set_max_key_len(self.max_key_len);

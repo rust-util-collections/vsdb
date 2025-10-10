@@ -359,11 +359,12 @@ where
     /// Ensures a value is in the entry by inserting the default if empty,
     /// and returns a mutable reference to the value.
     pub fn or_insert(self, default: V) -> ValueMut<'a, V> {
-        let hdr = self.hdr as *mut MapxOrdRawKey<V>;
-        match unsafe { &mut *hdr }.get_mut(self.key) {
-            Some(v) => v,
-            _ => unsafe { &mut *hdr }.mock_value_mut(self.key.to_vec(), default),
-        }
+        crate::entry_or_insert_via_mock!(
+            self,
+            MapxOrdRawKey<V>,
+            get_mut(self.key),
+            mock_value_mut(self.key.to_vec(), default)
+        )
     }
 }
 

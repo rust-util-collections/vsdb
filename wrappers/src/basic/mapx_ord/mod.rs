@@ -53,24 +53,21 @@ use crate::{
         RawKey,
         ende::{KeyEnDeOrdered, ValueEnDe},
     },
+    define_map_wrapper,
 };
 use ruc::*;
-use serde::{Deserialize, Serialize};
-use std::{
-    borrow::Cow,
-    marker::PhantomData,
-    ops::{Bound, RangeBounds},
-};
+use std::{marker::PhantomData, ops::RangeBounds};
 use vsdb_core::basic::mapx_raw;
 
-/// A disk-based, `BTreeMap`-like data structure with typed, ordered keys and values.
-///
-/// `MapxOrd` stores key-value pairs on disk, ensuring that the keys are ordered.
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
-#[serde(bound = "")]
-pub struct MapxOrd<K, V> {
-    inner: MapxOrdRawKey<V>,
-    _p: PhantomData<K>,
+define_map_wrapper! {
+    #[doc = "A disk-based, `BTreeMap`-like data structure with typed, ordered keys and values."]
+    #[doc = ""]
+    #[doc = "`MapxOrd` stores key-value pairs on disk, ensuring that the keys are ordered."]
+    pub struct MapxOrd<K, V> {
+        inner: MapxOrdRawKey<V>,
+        _p: PhantomData<K>,
+    }
+    where K: KeyEnDeOrdered, V: ValueEnDe
 }
 
 impl<K, V> MapxOrd<K, V>
@@ -78,51 +75,6 @@ where
     K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
-    /// Creates a "shadow" copy of the `MapxOrd` instance.
-    ///
-    /// # Safety
-    ///
-    /// This API breaks Rust's semantic safety guarantees. Use only in a race-free environment.
-    #[inline(always)]
-    pub unsafe fn shadow(&self) -> Self {
-        unsafe {
-            Self {
-                inner: self.inner.shadow(),
-                _p: PhantomData,
-            }
-        }
-    }
-
-    /// Creates a `MapxOrd` from a byte slice.
-    ///
-    /// # Safety
-    ///
-    /// This function is unsafe and assumes the byte slice is a valid representation.
-    #[inline(always)]
-    pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
-        unsafe {
-            Self {
-                inner: MapxOrdRawKey::from_bytes(s),
-                _p: PhantomData,
-            }
-        }
-    }
-
-    /// Returns the byte representation of the `MapxOrd`.
-    #[inline(always)]
-    pub fn as_bytes(&self) -> &[u8] {
-        self.inner.as_bytes()
-    }
-
-    /// Creates a new, empty `MapxOrd`.
-    #[inline(always)]
-    pub fn new() -> Self {
-        MapxOrd {
-            inner: MapxOrdRawKey::new(),
-            _p: PhantomData,
-        }
-    }
-
     /// Retrieves a value from the map for a given key.
     #[inline(always)]
     pub fn get(&self, key: &K) -> Option<V> {
@@ -229,17 +181,7 @@ where
     /// Returns an iterator over a range of entries in the map.
     #[inline(always)]
     pub fn range<R: RangeBounds<K>>(&self, bounds: R) -> MapxOrdIter<'_, K, V> {
-        let l = match bounds.start_bound() {
-            Bound::Included(lo) => Bound::Included(Cow::Owned(lo.to_bytes())),
-            Bound::Excluded(lo) => Bound::Excluded(Cow::Owned(lo.to_bytes())),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-
-        let h = match bounds.end_bound() {
-            Bound::Included(hi) => Bound::Included(Cow::Owned(hi.to_bytes())),
-            Bound::Excluded(hi) => Bound::Excluded(Cow::Owned(hi.to_bytes())),
-            Bound::Unbounded => Bound::Unbounded,
-        };
+        let (l, h) = crate::cow_bytes_bounds!(bounds);
 
         MapxOrdIter {
             inner: self.inner.range((l, h)),
@@ -253,17 +195,7 @@ where
         &mut self,
         bounds: R,
     ) -> MapxOrdIterMut<'_, K, V> {
-        let l = match bounds.start_bound() {
-            Bound::Included(lo) => Bound::Included(Cow::Owned(lo.to_bytes())),
-            Bound::Excluded(lo) => Bound::Excluded(Cow::Owned(lo.to_bytes())),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-
-        let h = match bounds.end_bound() {
-            Bound::Included(hi) => Bound::Included(Cow::Owned(hi.to_bytes())),
-            Bound::Excluded(hi) => Bound::Excluded(Cow::Owned(hi.to_bytes())),
-            Bound::Unbounded => Bound::Unbounded,
-        };
+        let (l, h) = crate::cow_bytes_bounds!(bounds);
 
         MapxOrdIterMut {
             inner: self.inner.inner.range_mut((l, h)),
@@ -297,12 +229,6 @@ where
         self.inner.remove(key.to_bytes());
     }
 
-    /// Clears the map, removing all key-value pairs.
-    #[inline(always)]
-    pub fn clear(&mut self) {
-        self.inner.clear();
-    }
-
     /// Start a batch operation.
     ///
     /// This method allows you to perform multiple insert/remove operations
@@ -331,12 +257,6 @@ where
             inner: self.inner.batch_entry(),
             _marker: PhantomData,
         }
-    }
-
-    /// Checks if this `MapxOrd` instance is the same as another.
-    #[inline(always)]
-    pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
-        self.inner.is_the_same_instance(&other_hdr.inner)
     }
 }
 
@@ -394,16 +314,6 @@ where
     /// Commit the batch.
     pub fn commit(self) -> Result<()> {
         self.inner.commit()
-    }
-}
-
-impl<K, V> Default for MapxOrd<K, V>
-where
-    K: KeyEnDeOrdered,
-    V: ValueEnDe,
-{
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -584,11 +494,12 @@ where
     /// Ensures a value is in the entry by inserting the default if empty,
     /// and returns a mutable reference to the value.
     pub fn or_insert(self, default: V) -> ValueMut<'a, V> {
-        let hdr = self.hdr as *mut MapxOrdRawKey<V>;
-        match unsafe { &mut *hdr }.get_mut(&self.key) {
-            Some(v) => v,
-            _ => unsafe { &mut *hdr }.mock_value_mut(self.key, default),
-        }
+        crate::entry_or_insert_via_mock!(
+            self,
+            MapxOrdRawKey<V>,
+            get_mut(&self.key),
+            mock_value_mut(self.key, default)
+        )
     }
 }
 

@@ -54,9 +54,8 @@ use crate::common::{RawValue, ende::KeyEnDeOrdered};
 use crate::define_map_wrapper;
 use ruc::*;
 use std::{
-    borrow::Cow,
     marker::PhantomData,
-    ops::{Bound, Deref, DerefMut, RangeBounds},
+    ops::{Deref, DerefMut, RangeBounds},
 };
 use vsdb_core::basic::mapx_raw::{MapxRaw, MapxRawIter, MapxRawIterMut, ValueIterMut};
 
@@ -180,17 +179,7 @@ where
         &'a self,
         bounds: R,
     ) -> MapxOrdRawValueIter<'a, K> {
-        let l = match bounds.start_bound() {
-            Bound::Included(lo) => Bound::Included(Cow::Owned(lo.to_bytes())),
-            Bound::Excluded(lo) => Bound::Excluded(Cow::Owned(lo.to_bytes())),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-
-        let h = match bounds.end_bound() {
-            Bound::Included(hi) => Bound::Included(Cow::Owned(hi.to_bytes())),
-            Bound::Excluded(hi) => Bound::Excluded(Cow::Owned(hi.to_bytes())),
-            Bound::Unbounded => Bound::Unbounded,
-        };
+        let (l, h) = crate::cow_bytes_bounds!(bounds);
 
         MapxOrdRawValueIter {
             inner: self.inner.range((l, h)),
@@ -204,17 +193,7 @@ where
         &'a mut self,
         bounds: R,
     ) -> MapxOrdRawValueIterMut<'a, K> {
-        let l = match bounds.start_bound() {
-            Bound::Included(lo) => Bound::Included(Cow::Owned(lo.to_bytes())),
-            Bound::Excluded(lo) => Bound::Excluded(Cow::Owned(lo.to_bytes())),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-
-        let h = match bounds.end_bound() {
-            Bound::Included(hi) => Bound::Included(Cow::Owned(hi.to_bytes())),
-            Bound::Excluded(hi) => Bound::Excluded(Cow::Owned(hi.to_bytes())),
-            Bound::Unbounded => Bound::Unbounded,
-        };
+        let (l, h) = crate::cow_bytes_bounds!(bounds);
 
         MapxOrdRawValueIterMut {
             inner: self.inner.range_mut((l, h)),
@@ -402,13 +381,12 @@ where
     /// Ensures a value is in the entry by inserting the default if empty,
     /// and returns a mutable reference to the value.
     pub fn or_insert(self, default: impl AsRef<[u8]>) -> ValueMut<'a, K> {
-        let hdr = self.hdr as *mut MapxOrdRawValue<K>;
-        match unsafe { &mut *hdr }.get_mut(&self.key) {
-            Some(v) => v,
-            _ => {
-                unsafe { &mut *hdr }.mock_value_mut(self.key, default.as_ref().to_vec())
-            }
-        }
+        crate::entry_or_insert_via_mock!(
+            self,
+            MapxOrdRawValue<K>,
+            get_mut(&self.key),
+            mock_value_mut(self.key, default.as_ref().to_vec())
+        )
     }
 }
 

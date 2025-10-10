@@ -95,3 +95,35 @@ macro_rules! define_map_wrapper {
         }
     };
 }
+
+#[macro_export]
+macro_rules! entry_or_insert_via_mock {
+    ($slf:expr, $hdr_ty:ty, $get_mut_call:ident($($get_mut_args:expr),*), $mock_call:ident($($mock_args:expr),*)) => {{
+        let hdr = $slf.hdr as *mut $hdr_ty;
+        match unsafe { &mut *hdr }.$get_mut_call($($get_mut_args),*) {
+            Some(v) => v,
+            _ => unsafe { &mut *hdr }.$mock_call($($mock_args),*),
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! cow_bytes_bounds {
+    ($bounds:expr) => {{
+        use std::{borrow::Cow, ops::Bound};
+
+        let l = match ($bounds).start_bound() {
+            Bound::Included(lo) => Bound::Included(Cow::Owned(lo.to_bytes())),
+            Bound::Excluded(lo) => Bound::Excluded(Cow::Owned(lo.to_bytes())),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+
+        let h = match ($bounds).end_bound() {
+            Bound::Included(hi) => Bound::Included(Cow::Owned(hi.to_bytes())),
+            Bound::Excluded(hi) => Bound::Excluded(Cow::Owned(hi.to_bytes())),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+
+        (l, h)
+    }};
+}
