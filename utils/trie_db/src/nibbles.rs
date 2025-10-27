@@ -26,6 +26,7 @@ impl Nibbles {
     }
 
     pub fn from_nibbles_unsafe(nibbles: Vec<u8>) -> Self {
+        debug_assert!(nibbles.iter().all(|&n| n < 16));
         Self { data: nibbles }
     }
 

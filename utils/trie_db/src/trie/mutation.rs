@@ -3,10 +3,12 @@ use crate::nibbles::Nibbles;
 use crate::node::{Node, NodeCodec, NodeHandle};
 use crate::storage::TrieBackend;
 use sha3::{Digest, Keccak256};
+use std::collections::HashSet;
 
 pub struct TrieMut<'a, B: TrieBackend> {
     root: NodeHandle,
     backend: &'a mut B,
+    removed_hashes: Vec<Vec<u8>>,
 }
 
 impl<'a, B: TrieBackend> TrieMut<'a, B> {
@@ -16,42 +18,84 @@ impl<'a, B: TrieBackend> TrieMut<'a, B> {
         } else {
             NodeHandle::Hash(root_hash.to_vec())
         };
-        Self { root, backend }
+        Self {
+            root,
+            backend,
+            removed_hashes: Vec::new(),
+        }
     }
 
     pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         let path = Nibbles::from_raw(key, false);
-        // We need to pass backend to insert_rec.
-        // self.backend is &mut B. We can pass &B.
-        let new_root = Self::insert_rec(self.backend, self.root.clone(), path, value.to_vec())?;
+        let new_root = Self::insert_rec(
+            self.backend,
+            &mut self.removed_hashes,
+            self.root.clone(),
+            path,
+            value.to_vec(),
+        )?;
         self.root = new_root;
         Ok(())
     }
 
     pub fn remove(&mut self, key: &[u8]) -> Result<()> {
         let path = Nibbles::from_raw(key, false);
-        let (new_root, _) = Self::remove_rec(self.backend, self.root.clone(), path)?;
+        let (new_root, _) = Self::remove_rec(
+            self.backend,
+            &mut self.removed_hashes,
+            self.root.clone(),
+            path,
+        )?;
         self.root = new_root.unwrap_or(NodeHandle::InMemory(Box::new(Node::Null)));
         Ok(())
     }
 
     pub fn commit(self) -> Result<Vec<u8>> {
-        let mut batch = Vec::new();
-        // Move root out
         let root = self.root;
-        // Move backend out (it's a mutable reference)
         let backend = self.backend;
+        let removed_hashes = self.removed_hashes;
 
+        // Special case: empty trie (root is Null)
+        if matches!(&root, NodeHandle::InMemory(n) if **n == Node::Null) {
+            // Still clean up any obsolete nodes from the DB
+            if !removed_hashes.is_empty() {
+                backend.remove_batch(&removed_hashes)?;
+            }
+            return Ok(vec![0u8; 32]);
+        }
+
+        let mut batch = Vec::new();
         let root_handle = Self::commit_rec(root, &mut batch)?;
 
+        // Deduplicate batch entries (same hash can appear multiple times for identical subtrees)
+        batch.sort_by(|a, b| a.0.cmp(&b.0));
+        batch.dedup_by(|a, b| a.0 == b.0);
+
+        // Deduplicate: do not remove hashes that are being (re-)inserted in this commit.
+        // This prevents corruption when a node with the same content exists in multiple
+        // parts of the trie, or when a modification produces a node identical to one
+        // that was previously removed in the same transaction.
+        let inserted_set: HashSet<&[u8]> = batch.iter().map(|(k, _)| k.as_slice()).collect();
+        let mut to_remove: Vec<Vec<u8>> = removed_hashes
+            .into_iter()
+            .filter(|h| !inserted_set.contains(h.as_slice()))
+            .collect();
+
+        to_remove.sort();
+        to_remove.dedup();
+
         backend.insert_batch(batch)?;
+        if !to_remove.is_empty() {
+            backend.remove_batch(&to_remove)?;
+        }
 
         match root_handle {
             NodeHandle::Hash(h) | NodeHandle::Cached(h, _) => Ok(h),
-            NodeHandle::InMemory(_) => panic!("Root should be hashed after commit"),
+            NodeHandle::InMemory(_) => Err(TrieError::InvalidState(
+                "Root should be hashed after commit".into(),
+            )),
         }
     }
-    // --- Helpers (Static to avoid self borrow issues) ---
 
     fn resolve(backend: &B, handle: &NodeHandle) -> Result<Node> {
         match handle {
@@ -64,8 +108,15 @@ impl<'a, B: TrieBackend> TrieMut<'a, B> {
         }
     }
 
+    fn add_obsolete(removed_hashes: &mut Vec<Vec<u8>>, handle: &NodeHandle) {
+        if let Some(h) = handle.hash() {
+            removed_hashes.push(h.to_vec());
+        }
+    }
+
     fn insert_rec(
         backend: &B,
+        removed_hashes: &mut Vec<Vec<u8>>,
         node_handle: NodeHandle,
         path: Nibbles,
         value: Vec<u8>,
@@ -73,11 +124,15 @@ impl<'a, B: TrieBackend> TrieMut<'a, B> {
         let node = Self::resolve(backend, &node_handle)?;
 
         match node {
-            Node::Null => Ok(NodeHandle::InMemory(Box::new(Node::Leaf { path, value }))),
+            Node::Null => {
+                Self::add_obsolete(removed_hashes, &node_handle);
+                Ok(NodeHandle::InMemory(Box::new(Node::Leaf { path, value })))
+            }
             Node::Leaf {
                 path: leaf_path,
                 value: leaf_value,
             } => {
+                Self::add_obsolete(removed_hashes, &node_handle);
                 let common = path.common_prefix(&leaf_path);
 
                 if common == path.len() && common == leaf_path.len() {
@@ -135,12 +190,14 @@ impl<'a, B: TrieBackend> TrieMut<'a, B> {
 
                 if common == ext_path.len() {
                     let (_, rest) = path.split_at(common);
-                    let new_child = Self::insert_rec(backend, child, rest, value)?;
+                    let new_child = Self::insert_rec(backend, removed_hashes, child, rest, value)?;
+                    Self::add_obsolete(removed_hashes, &node_handle);
                     Ok(NodeHandle::InMemory(Box::new(Node::Extension {
                         path: ext_path,
                         child: new_child,
                     })))
                 } else {
+                    Self::add_obsolete(removed_hashes, &node_handle);
                     let (common_path, _) = ext_path.split_at(common);
                     let idx_ext = ext_path.at(common) as usize;
                     let (_, rest_ext) = ext_path.split_at(common + 1);
@@ -192,17 +249,19 @@ impl<'a, B: TrieBackend> TrieMut<'a, B> {
                 value: b_value,
             } => {
                 if path.is_empty() {
+                    Self::add_obsolete(removed_hashes, &node_handle);
                     Ok(NodeHandle::InMemory(Box::new(Node::Branch {
                         children,
                         value: Some(value),
                     })))
                 } else {
+                    Self::add_obsolete(removed_hashes, &node_handle);
                     let idx = path.at(0) as usize;
                     let (_, rest) = path.split_at(1);
                     let child = children[idx]
                         .clone()
                         .unwrap_or(NodeHandle::InMemory(Box::new(Node::Null)));
-                    let new_child = Self::insert_rec(backend, child, rest, value)?;
+                    let new_child = Self::insert_rec(backend, removed_hashes, child, rest, value)?;
                     children[idx] = Some(new_child);
                     Ok(NodeHandle::InMemory(Box::new(Node::Branch {
                         children,
@@ -213,8 +272,102 @@ impl<'a, B: TrieBackend> TrieMut<'a, B> {
         }
     }
 
+    fn compact(
+        backend: &B,
+        removed_hashes: &mut Vec<Vec<u8>>,
+        node: Node,
+    ) -> Result<Option<NodeHandle>> {
+        match node {
+            Node::Null => Ok(None),
+            Node::Leaf { path, value } => Ok(Some(NodeHandle::InMemory(Box::new(Node::Leaf {
+                path,
+                value,
+            })))),
+            Node::Extension { path, child } => {
+                let child_node = Self::resolve(backend, &child)?;
+                match child_node {
+                    Node::Extension {
+                        path: ref child_path,
+                        child: grand_child,
+                    } => {
+                        Self::add_obsolete(removed_hashes, &child);
+                        let mut new_path_data = path.as_slice().to_vec();
+                        new_path_data.extend_from_slice(child_path.as_slice());
+                        let new_path = Nibbles::from_nibbles_unsafe(new_path_data);
+                        Self::compact(
+                            backend,
+                            removed_hashes,
+                            Node::Extension {
+                                path: new_path,
+                                child: grand_child,
+                            },
+                        )
+                    }
+                    Node::Leaf {
+                        path: ref child_path,
+                        value,
+                    } => {
+                        Self::add_obsolete(removed_hashes, &child);
+                        let mut new_path_data = path.as_slice().to_vec();
+                        new_path_data.extend_from_slice(child_path.as_slice());
+                        let new_path = Nibbles::from_nibbles_unsafe(new_path_data);
+                        Ok(Some(NodeHandle::InMemory(Box::new(Node::Leaf {
+                            path: new_path,
+                            value,
+                        }))))
+                    }
+                    _ => Ok(Some(NodeHandle::InMemory(Box::new(Node::Extension {
+                        path,
+                        child,
+                    })))),
+                }
+            }
+            Node::Branch {
+                mut children,
+                value,
+            } => {
+                let mut num_children = 0;
+                let mut last_idx = 0;
+                for (i, c) in children.iter().enumerate() {
+                    if c.is_some() {
+                        num_children += 1;
+                        last_idx = i;
+                    }
+                }
+
+                if num_children == 0 {
+                    if let Some(v) = value {
+                        Ok(Some(NodeHandle::InMemory(Box::new(Node::Leaf {
+                            path: Nibbles::default(),
+                            value: v,
+                        }))))
+                    } else {
+                        Ok(None)
+                    }
+                } else if num_children == 1 && value.is_none() {
+                    let remaining_child = children[last_idx].take().unwrap();
+                    let ext_path = Nibbles::from_nibbles_unsafe(vec![last_idx as u8]);
+                    Self::compact(
+                        backend,
+                        removed_hashes,
+                        Node::Extension {
+                            path: ext_path,
+                            child: remaining_child,
+                        },
+                    )
+                } else {
+                    Ok(Some(NodeHandle::InMemory(Box::new(Node::Branch {
+                        children,
+                        value,
+                    }))))
+                }
+            }
+        }
+    }
+
     fn remove_rec(
         backend: &B,
+        removed_hashes: &mut Vec<Vec<u8>>,
         node_handle: NodeHandle,
         path: Nibbles,
     ) -> Result<(Option<NodeHandle>, bool)> {
@@ -227,6 +380,7 @@ impl<'a, B: TrieBackend> TrieMut<'a, B> {
                 value: _,
             } => {
                 if leaf_path == path {
+                    Self::add_obsolete(removed_hashes, &node_handle);
                     Ok((None, true))
                 } else {
                     Ok((Some(node_handle), false))
@@ -238,19 +392,23 @@ impl<'a, B: TrieBackend> TrieMut<'a, B> {
             } => {
                 if path.starts_with(&ext_path) {
                     let (_, rest) = path.split_at(ext_path.len());
-                    let (new_child, changed) = Self::remove_rec(backend, child, rest)?;
+                    let (new_child, changed) =
+                        Self::remove_rec(backend, removed_hashes, child, rest)?;
                     if !changed {
                         return Ok((Some(node_handle), false));
                     }
 
+                    Self::add_obsolete(removed_hashes, &node_handle);
                     if let Some(c) = new_child {
-                        Ok((
-                            Some(NodeHandle::InMemory(Box::new(Node::Extension {
+                        let compacted = Self::compact(
+                            backend,
+                            removed_hashes,
+                            Node::Extension {
                                 path: ext_path,
                                 child: c,
-                            }))),
-                            true,
-                        ))
+                            },
+                        )?;
+                        Ok((compacted, true))
                     } else {
                         Ok((None, true))
                     }
@@ -264,17 +422,16 @@ impl<'a, B: TrieBackend> TrieMut<'a, B> {
             } => {
                 if path.is_empty() {
                     if value.is_some() {
-                        if children.iter().all(|c| c.is_none()) {
-                            Ok((None, true))
-                        } else {
-                            Ok((
-                                Some(NodeHandle::InMemory(Box::new(Node::Branch {
-                                    children,
-                                    value: None,
-                                }))),
-                                true,
-                            ))
-                        }
+                        Self::add_obsolete(removed_hashes, &node_handle);
+                        let compacted = Self::compact(
+                            backend,
+                            removed_hashes,
+                            Node::Branch {
+                                children,
+                                value: None,
+                            },
+                        )?;
+                        Ok((compacted, true))
                     } else {
                         Ok((Some(node_handle), false))
                     }
@@ -282,20 +439,17 @@ impl<'a, B: TrieBackend> TrieMut<'a, B> {
                     let idx = path.at(0) as usize;
                     let (_, rest) = path.split_at(1);
                     if let Some(child) = &children[idx] {
-                        let (new_child, changed) = Self::remove_rec(backend, child.clone(), rest)?;
+                        let (new_child, changed) =
+                            Self::remove_rec(backend, removed_hashes, child.clone(), rest)?;
                         if changed {
+                            Self::add_obsolete(removed_hashes, &node_handle);
                             children[idx] = new_child;
-                            if children.iter().all(|c| c.is_none()) && value.is_none() {
-                                Ok((None, true))
-                            } else {
-                                Ok((
-                                    Some(NodeHandle::InMemory(Box::new(Node::Branch {
-                                        children,
-                                        value,
-                                    }))),
-                                    true,
-                                ))
-                            }
+                            let compacted = Self::compact(
+                                backend,
+                                removed_hashes,
+                                Node::Branch { children, value },
+                            )?;
+                            Ok((compacted, true))
                         } else {
                             Ok((Some(node_handle), false))
                         }

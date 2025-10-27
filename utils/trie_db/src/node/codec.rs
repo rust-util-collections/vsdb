@@ -141,7 +141,7 @@ impl NodeCodec {
 
 fn encode_varint(buf: &mut Vec<u8>, mut n: usize) {
     while n >= 0x80 {
-        buf.push((n as u8) | 0x80);
+        buf.push(((n as u8) & 0x7F) | 0x80);
         n >>= 7;
     }
     buf.push(n as u8);
@@ -149,14 +149,20 @@ fn encode_varint(buf: &mut Vec<u8>, mut n: usize) {
 
 fn decode_varint(data: &[u8], cursor: &mut usize) -> Result<usize> {
     let mut n: usize = 0;
-    let mut shift = 0;
+    let mut shift: u32 = 0;
     loop {
         if *cursor >= data.len() {
             return Err(TrieError::DecodeError("Varint unexpected EOF".into()));
         }
         let b = data[*cursor];
         *cursor += 1;
-        n |= ((b & 0x7F) as usize) << shift;
+        if shift >= usize::BITS {
+            return Err(TrieError::DecodeError("Varint overflow".into()));
+        }
+        let val = ((b & 0x7F) as usize)
+            .checked_shl(shift)
+            .ok_or_else(|| TrieError::DecodeError("Varint overflow".into()))?;
+        n |= val;
         if b & 0x80 == 0 {
             break;
         }

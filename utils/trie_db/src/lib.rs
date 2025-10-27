@@ -60,6 +60,10 @@ impl MptOnce {
         trie.get(key)
     }
 
+    /// Insert a key-value pair and immediately commit to storage.
+    ///
+    /// **Note**: Each call performs a full trie commit (hashing + DB write).
+    /// For bulk operations, use [`batch_update`](Self::batch_update) instead.
     pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         let mut trie = TrieMut::new(&self.root, &mut self.backend);
         trie.insert(key, value)?;
@@ -67,6 +71,10 @@ impl MptOnce {
         Ok(())
     }
 
+    /// Remove a key and immediately commit to storage.
+    ///
+    /// **Note**: Each call performs a full trie commit (hashing + DB write).
+    /// For bulk operations, use [`batch_update`](Self::batch_update) instead.
     pub fn remove(&mut self, key: &[u8]) -> Result<()> {
         let mut trie = TrieMut::new(&self.root, &mut self.backend);
         trie.remove(key)?;
