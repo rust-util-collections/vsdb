@@ -6,33 +6,38 @@ use libmdbx::{
     Database, DatabaseOptions, Mode, NoWriteMap, PageSize, RO, ReadWriteOptions,
     SyncMode, Table, TableFlags, Transaction, WriteFlags,
 };
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{Condvar, Mutex, RwLock};
 use ruc::*;
 use std::{
     borrow::Cow,
     cell::Cell,
     collections::BTreeMap,
     fs,
+    mem::ManuallyDrop,
     ops::{Bound, RangeBounds},
     sync::{
         Arc, LazyLock, Once,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
 
-// It is safe to declare `atexit` as a safe fn because it only accepts
-// safe `extern "C" fn()` function pointers.
 unsafe extern "C" {
-    safe fn atexit(func: extern "C" fn()) -> std::os::raw::c_int;
+    fn atexit(func: extern "C" fn()) -> std::os::raw::c_int;
 }
 
 /// Wrapper around libc `atexit`.
 ///
-/// Note: The registered function must be safe to call at program exit.
+/// # Safety
+///
+/// The registered function must be safe to call at program exit.
 /// We only register `atexit_flush` which satisfies this requirement.
 fn register_atexit(func: extern "C" fn()) {
-    atexit(func);
+    // SAFETY: We only register `atexit_flush`, which is safe to call
+    // at program exit. The function pointer is a valid `extern "C" fn()`.
+    unsafe {
+        atexit(func);
+    }
 }
 
 type WriteBuf = BTreeMap<Vec<u8>, Option<Vec<u8>>>;
@@ -40,6 +45,54 @@ type WriteBuf = BTreeMap<Vec<u8>, Option<Vec<u8>>>;
 struct FlushOnExit {
     write_bufs: std::sync::Weak<Vec<parking_lot::RwLock<WriteBuf>>>,
     shards: Vec<&'static Database<NoWriteMap>>,
+}
+
+struct FlushCtlState {
+    shutdown: bool,
+}
+
+struct FlushCtl {
+    state: Mutex<FlushCtlState>,
+    cv: Condvar,
+    dirty: Vec<AtomicBool>,
+    bg_error: Mutex<Option<String>>,
+}
+
+impl FlushCtl {
+    fn new() -> Self {
+        let mut dirty = Vec::with_capacity(SHARD_CNT);
+        for _ in 0..SHARD_CNT {
+            dirty.push(AtomicBool::new(false));
+        }
+
+        Self {
+            state: Mutex::new(FlushCtlState { shutdown: false }),
+            cv: Condvar::new(),
+            dirty,
+            bg_error: Mutex::new(None),
+        }
+    }
+
+    #[inline(always)]
+    fn check_bg_error(&self) {
+        if let Some(e) = self.bg_error.lock().as_deref() {
+            panic!("MDBX background flush thread encountered an error: {e}");
+        }
+    }
+
+    #[inline(always)]
+    fn notify(&self) {
+        self.cv.notify_one();
+    }
+
+    #[inline(always)]
+    fn request_shutdown(&self) {
+        {
+            let mut st = self.state.lock();
+            st.shutdown = true;
+        }
+        self.cv.notify_all();
+    }
 }
 
 static FLUSH_REGISTRY: LazyLock<Mutex<Vec<FlushOnExit>>> =
@@ -52,7 +105,8 @@ extern "C" fn atexit_flush() {
             if let Some(bufs_arc) = state.write_bufs.upgrade() {
                 for (shard_idx, buf_mtx) in bufs_arc.iter().enumerate() {
                     if let Some(mut buf) = buf_mtx.try_write() {
-                        flush_buffer_impl_shard(state.shards[shard_idx], &mut buf);
+                        let _ =
+                            flush_buffer_impl_shard(state.shards[shard_idx], &mut buf);
                     }
                 }
                 for db in &state.shards {
@@ -96,6 +150,15 @@ pub struct MdbxEngine {
     // Amortizes MDBX per-transaction overhead by batching writes.
     // Arc so the background flush thread can hold a reference.
     write_bufs: Arc<Vec<RwLock<WriteBuf>>>,
+    flush_ctl: Arc<FlushCtl>,
+}
+
+impl Drop for MdbxEngine {
+    fn drop(&mut self) {
+        // Best-effort: request the background flush thread to exit promptly.
+        // The atexit hook will still do a final best-effort flush on normal exit.
+        self.flush_ctl.request_shutdown();
+    }
 }
 
 // Optimization: Helper function to build full key with pre-allocated capacity
@@ -109,6 +172,19 @@ fn make_full_key(meta_prefix: &[u8], key: &[u8]) -> Vec<u8> {
 }
 
 impl MdbxEngine {
+    #[inline(always)]
+    fn check_bg_error(&self) {
+        self.flush_ctl.check_bg_error();
+    }
+
+    #[inline(always)]
+    fn mark_shard_dirty_and_notify(&self, shard_idx: usize) {
+        // Only notify on a false -> true transition to avoid waking the flush thread
+        // excessively under high write rates.
+        if !self.flush_ctl.dirty[shard_idx].swap(true, Ordering::AcqRel) {
+            self.flush_ctl.notify();
+        }
+    }
     #[inline(always)]
     fn get_shard_idx(&self, prefix: PreBytes) -> usize {
         // NOTE: The prefix is a big-endian encoded u64 that increments from 0.
@@ -151,27 +227,33 @@ impl MdbxEngine {
         TABLE_DATA
     }
 
-    /// Flush buffered writes to DB. Caller must hold the Mutex guard.
+    /// Flush buffered writes to DB. Caller must hold the write buffer lock.
     #[inline(always)]
-    fn flush_locked(&self, shard_idx: usize, buf: &mut WriteBuf) {
-        flush_buffer_impl_shard(self.shards[shard_idx], buf);
+    fn flush_locked(&self, shard_idx: usize, buf: &mut WriteBuf) -> Result<()> {
+        flush_buffer_impl_shard(self.shards[shard_idx], buf).c(d!())?;
+        // The buffer is cleared by flush_buffer_impl_shard(), so the shard is no longer dirty.
+        self.flush_ctl.dirty[shard_idx].store(false, Ordering::Release);
+        Ok(())
     }
 }
 
 /// Standalone flush: commits one txn for a single shard.
-fn flush_buffer_impl_shard(db: &'static Database<NoWriteMap>, buf: &mut WriteBuf) {
+fn flush_buffer_impl_shard(
+    db: &'static Database<NoWriteMap>,
+    buf: &mut WriteBuf,
+) -> Result<()> {
     if buf.is_empty() {
-        return;
+        return Ok(());
     }
 
-    let txn = db.begin_rw_txn().unwrap();
-    let table = txn.open_table(Some(TABLE_DATA)).unwrap();
+    let txn = db.begin_rw_txn().c(d!())?;
+    let table = txn.open_table(Some(TABLE_DATA)).c(d!())?;
 
     for (key, value) in buf.iter() {
         match value {
             Some(v) => {
                 txn.put(&table, key.as_slice(), v.as_slice(), WriteFlags::UPSERT)
-                    .unwrap();
+                    .c(d!())?;
             }
             None => {
                 let _ = txn.del(&table, key.as_slice(), None);
@@ -179,8 +261,9 @@ fn flush_buffer_impl_shard(db: &'static Database<NoWriteMap>, buf: &mut WriteBuf
         }
     }
 
-    txn.commit().unwrap();
+    txn.commit().c(d!())?;
     buf.clear();
+    Ok(())
 }
 
 // Background flush interval
@@ -259,18 +342,67 @@ impl Engine for MdbxEngine {
                 .collect::<Vec<_>>(),
         );
 
-        // Spawn background flush thread
+        let flush_ctl = Arc::new(FlushCtl::new());
+
+        // Spawn background flush thread.
+        // The thread holds Weak references so it can detect when the
+        // engine is dropped and exit gracefully.
         {
-            let bufs = Arc::clone(&write_bufs);
+            let bufs_weak = Arc::downgrade(&write_bufs);
+            let ctl_weak = Arc::downgrade(&flush_ctl);
             let shards_ref = shards.clone();
             std::thread::Builder::new()
                 .name("vsdb-flush".into())
                 .spawn(move || {
                     loop {
-                        std::thread::sleep(FLUSH_INTERVAL);
-                        for (i, buf_mtx) in bufs.iter().enumerate() {
-                            let mut guard = buf_mtx.write();
-                            flush_buffer_impl_shard(shards_ref[i], &mut guard);
+                        std::thread::sleep(Duration::from_millis(0));
+
+                        let Some(ctl) = ctl_weak.upgrade() else {
+                            break;
+                        };
+
+                        // Wait until notified (writes) or periodic interval (safety net).
+                        {
+                            let mut st = ctl.state.lock();
+                            if st.shutdown {
+                                break;
+                            }
+                            let _timeout = ctl.cv.wait_for(&mut st, FLUSH_INTERVAL);
+                            if st.shutdown {
+                                break;
+                            }
+                        }
+
+                        let Some(bufs) = bufs_weak.upgrade() else {
+                            break;
+                        };
+
+                        // Fast path: only attempt shards marked dirty.
+                        for shard_idx in 0..bufs.len() {
+                            if !ctl.dirty[shard_idx].load(Ordering::Acquire) {
+                                continue;
+                            }
+
+                            let Some(mut guard) = bufs[shard_idx].try_write() else {
+                                // Keep dirty=true so we retry on next wake.
+                                continue;
+                            };
+
+                            // Flush & clear dirty under the same lock so we cannot lose
+                            // concurrent writes (writers set dirty=true while holding this lock).
+                            match flush_buffer_impl_shard(
+                                shards_ref[shard_idx],
+                                &mut guard,
+                            ) {
+                                Ok(()) => {
+                                    ctl.dirty[shard_idx].store(false, Ordering::Release);
+                                }
+                                Err(e) => {
+                                    *ctl.bg_error.lock() = Some(format!("{e}"));
+                                    ctl.request_shutdown();
+                                    break;
+                                }
+                            }
                         }
                     }
                 })
@@ -298,6 +430,7 @@ impl Engine for MdbxEngine {
             prefix_allocator,
             max_keylen,
             write_bufs,
+            flush_ctl,
         })
     }
 
@@ -308,6 +441,12 @@ impl Engine for MdbxEngine {
     // the global counter, then hands them out locally with zero
     // cross-core contention. The global atomic is only touched once
     // per PREFIX_ALLOC_BATCH allocations per thread.
+    //
+    // NOTE: The static GLOBAL_COUNTER / GLOBAL_CEILING / LK variables
+    // are process-global. This is correct as long as only a single
+    // MdbxEngine instance exists (enforced by the LazyLock<VsDB<..>>
+    // singleton in common/mod.rs). Creating multiple MdbxEngine
+    // instances in the same process would cause prefix collisions.
     #[allow(unused_variables)]
     fn alloc_prefix(&self) -> Pre {
         thread_local! {
@@ -399,21 +538,35 @@ impl Engine for MdbxEngine {
     }
 
     fn flush(&self) {
+        self.check_bg_error();
+
         for (i, buf_mtx) in self.write_bufs.iter().enumerate() {
             let mut buf = buf_mtx.write();
-            self.flush_locked(i, &mut buf);
+            self.flush_locked(i, &mut buf).unwrap();
         }
         for db in &self.shards {
             db.sync(true).unwrap();
         }
     }
 
+    /// Create an iterator over all entries with the given prefix.
+    ///
+    /// NOTE: This flushes the entire shard's write buffer before
+    /// creating the iterator, which may be expensive if many
+    /// different prefixes share the same shard. This is necessary
+    /// to ensure the iterator sees all pending writes.
     fn iter(&self, hdr_prefix: PreBytes) -> MdbxIter {
+        self.check_bg_error();
+
         let shard_idx = self.get_shard_idx(hdr_prefix);
-        // Flush buffer so the iterator sees all pending writes
+
+        // Flush buffer so the iterator sees all pending writes.
+        // Avoid locking when nothing is pending.
+        if self.flush_ctl.dirty[shard_idx].load(Ordering::Acquire)
+            || !self.write_bufs[shard_idx].read().is_empty()
         {
             let mut buf = self.write_bufs[shard_idx].write();
-            self.flush_locked(shard_idx, &mut buf);
+            self.flush_locked(shard_idx, &mut buf).unwrap();
         }
 
         let db = self.get_db(hdr_prefix);
@@ -433,16 +586,23 @@ impl Engine for MdbxEngine {
         )
     }
 
+    /// Create a range iterator. See `iter()` for flush semantics.
     fn range<'a, R: RangeBounds<Cow<'a, [u8]>>>(
         &'a self,
         hdr_prefix: PreBytes,
         bounds: R,
     ) -> MdbxIter {
+        self.check_bg_error();
+
         let shard_idx = self.get_shard_idx(hdr_prefix);
-        // Flush buffer so the iterator sees all pending writes
+
+        // Flush buffer so the iterator sees all pending writes.
+        // Avoid locking when nothing is pending.
+        if self.flush_ctl.dirty[shard_idx].load(Ordering::Acquire)
+            || !self.write_bufs[shard_idx].read().is_empty()
         {
             let mut buf = self.write_bufs[shard_idx].write();
-            self.flush_locked(shard_idx, &mut buf);
+            self.flush_locked(shard_idx, &mut buf).unwrap();
         }
 
         let db = self.get_db(hdr_prefix);
@@ -520,6 +680,8 @@ impl Engine for MdbxEngine {
     }
 
     fn get(&self, hdr_prefix: PreBytes, key: &[u8]) -> Option<RawValue> {
+        self.check_bg_error();
+
         let full_key = make_full_key(hdr_prefix.as_slice(), key);
         let shard_idx = self.get_shard_idx(hdr_prefix);
 
@@ -540,6 +702,8 @@ impl Engine for MdbxEngine {
     }
 
     fn insert(&self, hdr_prefix: PreBytes, key: &[u8], value: &[u8]) {
+        self.check_bg_error();
+
         if key.len() > self.get_max_keylen() {
             self.set_max_key_len(key.len());
         }
@@ -548,22 +712,27 @@ impl Engine for MdbxEngine {
         let shard_idx = self.get_shard_idx(hdr_prefix);
         let mut buf = self.write_bufs[shard_idx].write();
         buf.insert(full_key, Some(value.to_vec()));
+        self.mark_shard_dirty_and_notify(shard_idx);
         if buf.len() >= WRITE_BUF_THRESHOLD {
-            self.flush_locked(shard_idx, &mut buf);
+            self.flush_locked(shard_idx, &mut buf).unwrap();
         }
     }
 
     fn remove(&self, hdr_prefix: PreBytes, key: &[u8]) {
+        self.check_bg_error();
+
         let full_key = make_full_key(hdr_prefix.as_slice(), key);
         let shard_idx = self.get_shard_idx(hdr_prefix);
         let mut buf = self.write_bufs[shard_idx].write();
         buf.insert(full_key, None);
+        self.mark_shard_dirty_and_notify(shard_idx);
         if buf.len() >= WRITE_BUF_THRESHOLD {
-            self.flush_locked(shard_idx, &mut buf);
+            self.flush_locked(shard_idx, &mut buf).unwrap();
         }
     }
 
     fn batch_begin<'a>(&'a self, meta_prefix: PreBytes) -> Box<dyn BatchTrait + 'a> {
+        self.check_bg_error();
         Box::new(MdbxBatch::new(meta_prefix, self))
     }
 }
@@ -611,8 +780,10 @@ impl BatchTrait for MdbxBatch<'_> {
             buf.insert(key, value);
         }
 
+        self.engine.mark_shard_dirty_and_notify(shard_idx);
+
         if buf.len() >= WRITE_BUF_THRESHOLD {
-            self.engine.flush_locked(shard_idx, &mut buf);
+            self.engine.flush_locked(shard_idx, &mut buf).unwrap();
         }
 
         if self.max_key_len > 0 && self.max_key_len > self.engine.get_max_keylen() {
@@ -630,23 +801,49 @@ impl BatchTrait for MdbxBatch<'_> {
 // We need to erase the lifetimes because:
 // 1. Database is &'static (Box::leak), so Transaction<'db> is effectively 'static
 // 2. Cursor<'txn> must live shorter than Transaction, which is guaranteed by
-//    struct field drop order (cursors declared before _txn are dropped first)
-
+//    the explicit Drop impl below that drops cursors before the transaction.
+//
+// SAFETY INVARIANT: The custom Drop impl ensures:
+// 1) cursors are dropped first,
+// 2) then the table,
+// 3) then the transaction.
+//
+// **Do NOT derive Drop or change this drop sequence.**
 pub struct MdbxIter {
-    // SAFETY: cursors must be declared before _txn so they drop first.
-    // Rust drops struct fields in declaration order.
+    // These are dropped explicitly in our Drop impl — declaration order
+    // does not matter for safety because we control the drop sequence.
     inner_fwd: Option<libmdbx::Cursor<'static, RO>>,
     inner_rev: Option<libmdbx::Cursor<'static, RO>>,
-    _table: Table<'static>,
-    _txn: Transaction<'static, RO, NoWriteMap>,
+    _table: ManuallyDrop<Table<'static>>,
+    _txn: ManuallyDrop<Transaction<'static, RO, NoWriteMap>>,
     prefix: PreBytes,
     range: (Bound<RawKey>, Bound<RawKey>),
+    // Track the last keys returned by forward/reverse iteration
+    // to detect and prevent cursor overlap (issue #4).
+    last_fwd_full_key: Option<Vec<u8>>,
+    last_rev_full_key: Option<Vec<u8>>,
     // Buffered entries: set_range/last returns the current entry,
     // so we buffer it and return it on the first next()/next_back() call.
     fwd_pending: Option<(Vec<u8>, Vec<u8>)>,
     rev_pending: Option<(Vec<u8>, Vec<u8>)>,
     fwd_done: bool,
     rev_done: bool,
+}
+
+impl Drop for MdbxIter {
+    fn drop(&mut self) {
+        // SAFETY: Cursors borrow from the transaction, so they must be
+        // released before the transaction is dropped.
+        drop(self.inner_fwd.take());
+        drop(self.inner_rev.take());
+
+        // SAFETY: We must drop the table before dropping the transaction
+        // because the table borrows from the transaction.
+        unsafe {
+            ManuallyDrop::drop(&mut self._table);
+            ManuallyDrop::drop(&mut self._txn);
+        }
+    }
 }
 
 impl MdbxIter {
@@ -665,15 +862,18 @@ impl MdbxIter {
             unsafe { std::mem::transmute(txn) };
 
         let table = txn.open_table(Some(table_name)).unwrap();
-        // SAFETY: table borrows txn which we keep alive in the struct
+        // SAFETY: table borrows txn which we keep alive in the struct.
+        // Our Drop impl ensures table is dropped before txn.
         let table: Table<'static> = unsafe { std::mem::transmute(table) };
 
         let cursor_fwd = txn.cursor(&table).unwrap();
-        // SAFETY: cursor borrows txn; txn outlives cursor due to drop order
+        // SAFETY: cursor borrows txn; our Drop impl drops cursor
+        // before txn.
         let mut cursor_fwd: libmdbx::Cursor<'static, RO> =
             unsafe { std::mem::transmute(cursor_fwd) };
 
         let cursor_rev = txn.cursor(&table).unwrap();
+        // SAFETY: same as cursor_fwd above.
         let mut cursor_rev: libmdbx::Cursor<'static, RO> =
             unsafe { std::mem::transmute(cursor_rev) };
 
@@ -703,10 +903,12 @@ impl MdbxIter {
         MdbxIter {
             inner_fwd: if !fwd_done { Some(cursor_fwd) } else { None },
             inner_rev: if !rev_done { Some(cursor_rev) } else { None },
-            _table: table,
-            _txn: txn,
+            _table: ManuallyDrop::new(table),
+            _txn: ManuallyDrop::new(txn),
             prefix,
             range,
+            last_fwd_full_key: None,
+            last_rev_full_key: None,
             fwd_pending,
             rev_pending,
             fwd_done,
@@ -729,6 +931,29 @@ impl MdbxIter {
             Bound::Unbounded => true,
             Bound::Included(l) => full_key[..] >= l[..],
             Bound::Excluded(l) => full_key[..] > l[..],
+        }
+    }
+
+    /// Check whether the forward and reverse cursors have crossed.
+    /// If the forward cursor has reached or passed the reverse
+    /// cursor's last-returned key, the iterator is exhausted.
+    #[inline(always)]
+    fn cursors_crossed(&self, fwd_full_key: &[u8]) -> bool {
+        if let Some(ref rev_key) = self.last_rev_full_key {
+            fwd_full_key >= rev_key.as_slice()
+        } else {
+            false
+        }
+    }
+
+    /// Check whether the reverse cursor has crossed the forward
+    /// cursor's last-returned key.
+    #[inline(always)]
+    fn cursors_crossed_rev(&self, rev_full_key: &[u8]) -> bool {
+        if let Some(ref fwd_key) = self.last_fwd_full_key {
+            rev_full_key <= fwd_key.as_slice()
+        } else {
+            false
         }
     }
 }
@@ -770,6 +995,17 @@ impl Iterator for MdbxIter {
             self.fwd_done = true;
             return None;
         }
+
+        // Check for cursor overlap with the reverse iterator.
+        // If the forward cursor has reached or passed the last key
+        // returned by next_back(), we are done to avoid duplicates.
+        if self.cursors_crossed(&ik) {
+            self.fwd_done = true;
+            return None;
+        }
+
+        // Record the full key for cross-cursor overlap detection
+        self.last_fwd_full_key = Some(ik.clone());
 
         // Advance cursor and buffer the next entry
         if let Some(cursor) = self.inner_fwd.as_mut() {
@@ -821,6 +1057,17 @@ impl DoubleEndedIterator for MdbxIter {
             self.rev_done = true;
             return None;
         }
+
+        // Check for cursor overlap with the forward iterator.
+        // If the reverse cursor has reached or passed the last key
+        // returned by next(), we are done to avoid duplicates.
+        if self.cursors_crossed_rev(&ik) {
+            self.rev_done = true;
+            return None;
+        }
+
+        // Record the full key for cross-cursor overlap detection
+        self.last_rev_full_key = Some(ik.clone());
 
         // Advance cursor backward and buffer the previous entry
         if let Some(cursor) = self.inner_rev.as_mut() {
@@ -882,4 +1129,124 @@ fn mdbx_open_shard(dir: &std::path::Path) -> Result<Database<NoWriteMap>> {
     }
 
     Ok(db)
+}
+
+#[cfg(all(test, feature = "mdbx_backend"))]
+mod tests {
+    use super::*;
+    use std::{
+        collections::BTreeSet,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn tmp_dir(tag: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("vsdb-{tag}-{nanos}"))
+    }
+
+    fn put_full(db: &Database<NoWriteMap>, full_key: &[u8], value: &[u8]) -> Result<()> {
+        let txn = db.begin_rw_txn().c(d!())?;
+        let table = txn.open_table(Some(TABLE_DATA)).c(d!())?;
+        txn.put(&table, full_key, value, WriteFlags::UPSERT)
+            .c(d!())?;
+        txn.commit().c(d!())?;
+        Ok(())
+    }
+
+    #[test]
+    fn mdbx_iter_double_ended_interleaving_no_duplicates() {
+        let dir = tmp_dir("mdbx-iter-interleave");
+        let db = mdbx_open_shard(&dir).unwrap();
+        let db: &'static Database<NoWriteMap> = Box::leak(Box::new(db));
+
+        let prefix: PreBytes = 42_u64.to_be_bytes();
+
+        // Insert 3 keys under the same prefix.
+        for i in 0_u8..3_u8 {
+            let mut fk = Vec::with_capacity(PREFIX_SIZE + 1);
+            fk.extend_from_slice(&prefix);
+            fk.push(i);
+            put_full(db, &fk, &[i]).unwrap();
+        }
+
+        let next_prefix: PreBytes = 43_u64.to_be_bytes();
+
+        let mut it = MdbxIter::create(
+            db,
+            TABLE_DATA,
+            prefix,
+            (Bound::Unbounded, Bound::Unbounded),
+            &prefix,
+            &next_prefix,
+        );
+
+        // Interleave next()/next_back() and ensure no duplicates.
+        let mut seen = BTreeSet::new();
+        if let Some((k, _)) = it.next() {
+            assert!(seen.insert(k));
+        }
+        if let Some((k, _)) = it.next_back() {
+            assert!(seen.insert(k));
+        }
+        while let Some((k, _)) = it.next() {
+            assert!(seen.insert(k));
+        }
+        while let Some((k, _)) = it.next_back() {
+            assert!(seen.insert(k));
+        }
+
+        assert_eq!(seen.len(), 3);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mdbx_range_included_end_excludes_longer_keys() {
+        let dir = tmp_dir("mdbx-range-included");
+        let db = mdbx_open_shard(&dir).unwrap();
+        let db: &'static Database<NoWriteMap> = Box::leak(Box::new(db));
+
+        let prefix: PreBytes = 7_u64.to_be_bytes();
+
+        let mut fk_ab = Vec::new();
+        fk_ab.extend_from_slice(&prefix);
+        fk_ab.extend_from_slice(b"ab");
+
+        let mut fk_ab0 = Vec::new();
+        fk_ab0.extend_from_slice(&prefix);
+        fk_ab0.extend_from_slice(b"ab\0");
+
+        let mut fk_ac = Vec::new();
+        fk_ac.extend_from_slice(&prefix);
+        fk_ac.extend_from_slice(b"ac");
+
+        put_full(db, &fk_ab, b"1").unwrap();
+        put_full(db, &fk_ab0, b"2").unwrap();
+        put_full(db, &fk_ac, b"3").unwrap();
+
+        let next_prefix: PreBytes = 8_u64.to_be_bytes();
+
+        // Range: ..= "ab" should include only "ab".
+        let mut hi = Vec::new();
+        hi.extend_from_slice(&prefix);
+        hi.extend_from_slice(b"ab");
+
+        let mut it = MdbxIter::create(
+            db,
+            TABLE_DATA,
+            prefix,
+            (Bound::Unbounded, Bound::Included(hi)),
+            &prefix,
+            &next_prefix,
+        );
+
+        let collected = it.collect::<Vec<_>>();
+        assert_eq!(collected.len(), 1);
+        assert_eq!(collected[0].0, b"ab".to_vec());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

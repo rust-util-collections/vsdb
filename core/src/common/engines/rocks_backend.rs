@@ -49,6 +49,7 @@ fn make_full_key(meta_prefix: &[u8], key: &[u8]) -> Vec<u8> {
     full_key
 }
 
+#[cfg(test)]
 /// Compute the successor of a byte slice: the smallest byte string
 /// that is strictly greater than `key`. Returns `None` if `key` is
 /// all `0xFF` bytes (no finite successor exists).
@@ -169,6 +170,12 @@ impl Engine for RocksEngine {
     // the global counter, then hands them out locally with zero
     // cross-core contention. The global atomic is only touched once
     // per PREFIX_ALLOC_BATCH allocations per thread.
+    //
+    // NOTE: The static GLOBAL_COUNTER / GLOBAL_CEILING / LK variables
+    // are process-global. This is correct as long as only a single
+    // RocksEngine instance exists (enforced by the LazyLock<VsDB<..>>
+    // singleton in common/mod.rs). Creating multiple RocksEngine
+    // instances in the same process would cause prefix collisions.
     #[allow(unused_variables)]
     fn alloc_prefix(&self) -> Pre {
         thread_local! {
@@ -260,7 +267,15 @@ impl Engine for RocksEngine {
             opt,
         );
 
-        RocksIter { inner, inner_rev }
+        RocksIter {
+            inner,
+            inner_rev,
+            prefix: meta_prefix,
+            range: (Bound::Unbounded, Bound::Unbounded),
+            done: false,
+            last_fwd_full_key: None,
+            last_rev_full_key: None,
+        }
     }
 
     fn range<'a, R: RangeBounds<Cow<'a, [u8]>>>(
@@ -291,31 +306,40 @@ impl Engine for RocksEngine {
             _ => meta_prefix.as_slice(),
         };
 
-        // RocksDB upper bound is exclusive.
-        // For Included(hi): compute successor(prefix + hi) so that hi itself is included.
-        // For Excluded(hi): use prefix + hi directly as the exclusive upper bound.
-        let mut b_hi = meta_prefix.to_vec();
-        let h = match bounds.end_bound() {
+        // Range bounds are enforced in RocksIter itself to correctly handle
+        // variable-length keys (e.g. Included("ab") must NOT include "ab\0").
+        // Iterator bounds are only used to constrain iteration to this prefix.
+        let prefix_upper = self.get_upper_bound_value(meta_prefix);
+        opt.set_iterate_upper_bound(prefix_upper.as_slice());
+        opt_rev.set_iterate_upper_bound(prefix_upper.as_slice());
+
+        // Full-key bounds for in-iterator checks (prefix + user key).
+        let lo_full: Bound<Vec<u8>> = match bounds.start_bound() {
+            Bound::Included(lo) => {
+                let mut v = meta_prefix.to_vec();
+                v.extend_from_slice(lo);
+                Bound::Included(v)
+            }
+            Bound::Excluded(lo) => {
+                let mut v = meta_prefix.to_vec();
+                v.extend_from_slice(lo);
+                Bound::Excluded(v)
+            }
+            Bound::Unbounded => Bound::Unbounded,
+        };
+
+        let hi_full: Bound<Vec<u8>> = match bounds.end_bound() {
             Bound::Included(hi) => {
-                b_hi.extend_from_slice(hi);
-                // Compute the successor of the full key so that
-                // the upper bound is strictly past `hi`.
-                let upper = match successor(&b_hi) {
-                    Some(s) => s,
-                    // All 0xFF: fall back to the max guard value
-                    None => self.get_upper_bound_value(meta_prefix),
-                };
-                opt.set_iterate_upper_bound(upper.as_slice());
-                opt_rev.set_iterate_upper_bound(upper.as_slice());
-                upper
+                let mut v = meta_prefix.to_vec();
+                v.extend_from_slice(hi);
+                Bound::Included(v)
             }
             Bound::Excluded(hi) => {
-                b_hi.extend_from_slice(hi);
-                opt.set_iterate_upper_bound(b_hi.as_slice());
-                opt_rev.set_iterate_upper_bound(b_hi.as_slice());
-                b_hi
+                let mut v = meta_prefix.to_vec();
+                v.extend_from_slice(hi);
+                Bound::Excluded(v)
             }
-            _ => self.get_upper_bound_value(meta_prefix),
+            Bound::Unbounded => Bound::Unbounded,
         };
 
         opt.set_prefix_same_as_start(true);
@@ -323,10 +347,28 @@ impl Engine for RocksEngine {
 
         let inner = db.iterator_opt(IteratorMode::From(l, Direction::Forward), opt);
 
-        let inner_rev =
-            db.iterator_opt(IteratorMode::From(&h, Direction::Reverse), opt_rev);
+        // For reverse, start from the end bound if present; otherwise from the prefix upper.
+        let rev_seek = match bounds.end_bound() {
+            Bound::Included(hi) | Bound::Excluded(hi) => {
+                make_full_key(meta_prefix.as_slice(), hi)
+            }
+            Bound::Unbounded => prefix_upper.clone(),
+        };
 
-        RocksIter { inner, inner_rev }
+        let inner_rev = db.iterator_opt(
+            IteratorMode::From(rev_seek.as_slice(), Direction::Reverse),
+            opt_rev,
+        );
+
+        RocksIter {
+            inner,
+            inner_rev,
+            prefix: meta_prefix,
+            range: (lo_full, hi_full),
+            done: false,
+            last_fwd_full_key: None,
+            last_rev_full_key: None,
+        }
     }
 
     fn get(&self, meta_prefix: PreBytes, key: &[u8]) -> Option<RawValue> {
@@ -370,26 +412,133 @@ impl Engine for RocksEngine {
 pub struct RocksIter {
     inner: DBIterator<'static>,
     inner_rev: DBIterator<'static>,
+    prefix: PreBytes,
+    range: (Bound<Vec<u8>>, Bound<Vec<u8>>),
+    done: bool,
+    // Track the last full keys (prefix + user key) returned by
+    // forward/reverse iteration to detect cursor overlap and
+    // prevent returning duplicate entries when next() and
+    // next_back() are interleaved.
+    last_fwd_full_key: Option<Vec<u8>>,
+    last_rev_full_key: Option<Vec<u8>>,
+}
+
+impl RocksIter {
+    #[inline(always)]
+    fn check_upper_bound(&self, full_key: &[u8]) -> bool {
+        match &self.range.1 {
+            Bound::Unbounded => true,
+            Bound::Included(u) => full_key <= u.as_slice(),
+            Bound::Excluded(u) => full_key < u.as_slice(),
+        }
+    }
+
+    #[inline(always)]
+    fn check_lower_bound(&self, full_key: &[u8]) -> bool {
+        match &self.range.0 {
+            Bound::Unbounded => true,
+            Bound::Included(l) => full_key >= l.as_slice(),
+            Bound::Excluded(l) => full_key > l.as_slice(),
+        }
+    }
+
+    #[inline(always)]
+    fn cursors_crossed(&self, fwd_full_key: &[u8]) -> bool {
+        if let Some(ref rev_key) = self.last_rev_full_key {
+            fwd_full_key >= rev_key.as_slice()
+        } else {
+            false
+        }
+    }
+
+    #[inline(always)]
+    fn cursors_crossed_rev(&self, rev_full_key: &[u8]) -> bool {
+        if let Some(ref fwd_key) = self.last_fwd_full_key {
+            rev_full_key <= fwd_key.as_slice()
+        } else {
+            false
+        }
+    }
 }
 
 impl Iterator for RocksIter {
     type Item = (RawKey, RawValue);
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|v| v.unwrap()).map(|(ik, iv)| {
+        if self.done {
+            return None;
+        }
+
+        loop {
+            let Some((ik, iv)) = self.inner.next().map(|v| v.unwrap()) else {
+                self.done = true;
+                return None;
+            };
+
+            if !ik.as_ref().starts_with(self.prefix.as_slice()) {
+                self.done = true;
+                return None;
+            }
+
+            if !self.check_lower_bound(ik.as_ref()) {
+                continue;
+            }
+
+            if !self.check_upper_bound(ik.as_ref()) {
+                self.done = true;
+                return None;
+            }
+
+            if self.cursors_crossed(ik.as_ref()) {
+                self.done = true;
+                return None;
+            }
+
+            self.last_fwd_full_key = Some(ik.to_vec());
+
             let mut k = ik.into_vec();
             k.drain(..PREFIX_SIZE);
-            (k, iv.into_vec())
-        })
+            return Some((k, iv.into_vec()));
+        }
     }
 }
 
 impl DoubleEndedIterator for RocksIter {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.inner_rev.next().map(|v| v.unwrap()).map(|(ik, iv)| {
+        if self.done {
+            return None;
+        }
+
+        loop {
+            let Some((ik, iv)) = self.inner_rev.next().map(|v| v.unwrap()) else {
+                self.done = true;
+                return None;
+            };
+
+            if !ik.as_ref().starts_with(self.prefix.as_slice()) {
+                self.done = true;
+                return None;
+            }
+
+            if !self.check_upper_bound(ik.as_ref()) {
+                continue;
+            }
+
+            if !self.check_lower_bound(ik.as_ref()) {
+                self.done = true;
+                return None;
+            }
+
+            if self.cursors_crossed_rev(ik.as_ref()) {
+                self.done = true;
+                return None;
+            }
+
+            self.last_rev_full_key = Some(ik.to_vec());
+
             let mut k = ik.into_vec();
             k.drain(..PREFIX_SIZE);
-            (k, iv.into_vec())
-        })
+            return Some((k, iv.into_vec()));
+        }
     }
 }
 
@@ -550,4 +699,73 @@ fn rocksdb_open_shard(dir: &Path) -> Result<DB> {
     let db = DB::open(&cfg, dir).c(d!())?;
 
     Ok(db)
+}
+
+#[cfg(all(test, feature = "rocks_backend"))]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn tmp_dir(tag: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("vsdb-rocks-{tag}-{nanos}"))
+    }
+
+    #[test]
+    fn rocks_range_included_end_excludes_longer_keys() {
+        let dir = tmp_dir("range-included");
+        let db = rocksdb_open_shard(&dir).unwrap();
+        let db: &'static DB = Box::leak(Box::new(db));
+
+        let prefix: PreBytes = 7_u64.to_be_bytes();
+
+        let fk_ab = make_full_key(prefix.as_slice(), b"ab");
+        let fk_ab0 = make_full_key(prefix.as_slice(), b"ab\0");
+        let fk_ac = make_full_key(prefix.as_slice(), b"ac");
+
+        db.put(&fk_ab, b"1").unwrap();
+        db.put(&fk_ab0, b"2").unwrap();
+        db.put(&fk_ac, b"3").unwrap();
+
+        // Constrain iterator to this prefix only (exclusive upper bound is successor(prefix)).
+        let mut opt = ReadOptions::default();
+        let mut opt_rev = ReadOptions::default();
+
+        opt.set_prefix_same_as_start(true);
+        opt_rev.set_prefix_same_as_start(true);
+
+        let prefix_upper = successor(prefix.as_slice())
+            .expect("fixed-size prefix always has successor");
+        opt.set_iterate_upper_bound(prefix_upper.as_slice());
+        opt_rev.set_iterate_upper_bound(prefix_upper.as_slice());
+
+        let inner = db.iterator_opt(
+            IteratorMode::From(prefix.as_slice(), Direction::Forward),
+            opt,
+        );
+
+        let inner_rev = db.iterator_opt(
+            IteratorMode::From(fk_ab.as_slice(), Direction::Reverse),
+            opt_rev,
+        );
+
+        let mut it = RocksIter {
+            inner,
+            inner_rev,
+            prefix,
+            range: (Bound::Unbounded, Bound::Included(fk_ab.clone())),
+            done: false,
+            last_fwd_full_key: None,
+            last_rev_full_key: None,
+        };
+
+        let collected = it.collect::<Vec<_>>();
+        assert_eq!(collected.len(), 1);
+        assert_eq!(collected[0].0, b"ab".to_vec());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -103,7 +103,10 @@ impl Prefix {
         *self.as_bytes()
     }
 
-    fn hack_bytes(&mut self) -> PreBytes {
+    /// Force the prefix to be materialized (if lazily created)
+    /// and return the bytes. Converts `Created` → `Recoverd`
+    /// so subsequent calls avoid re-forcing the LazyLock.
+    fn materialize(&mut self) -> PreBytes {
         match self {
             Self::Recoverd(bytes) => *bytes,
             Self::Created(lc) => {
@@ -133,8 +136,16 @@ impl Prefix {
 impl Mapx {
     // # Safety
     //
-    // This API breaks Rust's semantic safety guarantees. Use only
-    // but it is safe to use in a race-free environment.
+    // This API breaks Rust's semantic safety guarantees.
+    // It creates a second handle to the same underlying prefix,
+    // allowing two `&mut Mapx` references to coexist. This
+    // bypasses the borrow checker's exclusivity guarantee.
+    //
+    // Callers MUST ensure:
+    // - No concurrent reads and writes to the same key.
+    // - No concurrent iteration and mutation.
+    // - Essentially, the caller must uphold single-writer semantics
+    //   externally.
     pub(crate) unsafe fn shadow(&self) -> Self {
         Self {
             prefix: Prefix::from_bytes(self.prefix.to_bytes()),
@@ -155,7 +166,7 @@ impl Mapx {
 
     #[inline(always)]
     pub(crate) fn get_mut(&mut self, key: &[u8]) -> Option<ValueMut<'_>> {
-        let v = VSDB.db.get(self.prefix.hack_bytes(), key)?;
+        let v = VSDB.db.get(self.prefix.materialize(), key)?;
 
         Some(ValueMut {
             key: key.to_vec(),
@@ -190,7 +201,7 @@ impl Mapx {
     #[inline(always)]
     pub(crate) fn iter_mut(&mut self) -> MapxIterMut<'_> {
         MapxIterMut {
-            db_iter: VSDB.db.iter(self.prefix.hack_bytes()),
+            db_iter: VSDB.db.iter(self.prefix.materialize()),
             hdr: self,
         }
     }
@@ -223,26 +234,26 @@ impl Mapx {
         bounds: R,
     ) -> MapxIterMut<'a> {
         MapxIterMut {
-            db_iter: VSDB.db.range(self.prefix.hack_bytes(), bounds),
+            db_iter: VSDB.db.range(self.prefix.materialize(), bounds),
             hdr: self,
         }
     }
 
     #[inline(always)]
     pub(crate) fn insert(&mut self, key: &[u8], value: &[u8]) {
-        let prefix = self.prefix.hack_bytes();
+        let prefix = self.prefix.materialize();
         VSDB.db.insert(prefix, key, value);
     }
 
     #[inline(always)]
     pub(crate) fn remove(&mut self, key: &[u8]) {
-        let prefix = self.prefix.hack_bytes();
+        let prefix = self.prefix.materialize();
         VSDB.db.remove(prefix, key);
     }
 
     #[inline(always)]
     pub(crate) fn batch_begin(&mut self) -> Box<dyn BatchTrait + '_> {
-        let prefix = self.prefix.hack_bytes();
+        let prefix = self.prefix.materialize();
         VSDB.db.batch_begin(prefix)
     }
 
@@ -253,9 +264,12 @@ impl Mapx {
         //
         // Important: we do not delete while holding an iterator alive.
         // Each loop creates a fresh iterator starting strictly after `last_key`.
+        //
+        // NOTE: This operation is NOT atomic. Concurrent readers (e.g.
+        // via `shadow()`) may observe a partially-cleared state.
         const CLEAR_CHUNK: usize = 4096;
 
-        let prefix = self.prefix.hack_bytes();
+        let prefix = self.prefix.materialize();
         let mut last_key: Option<RawKey> = None;
 
         loop {
@@ -275,6 +289,10 @@ impl Mapx {
                 last_key = Some(k.clone());
                 keys.push(k);
             }
+
+            // Drop the iterator before mutating the DB to avoid
+            // holding a read snapshot across the batch delete.
+            drop(it);
 
             if keys.is_empty() {
                 break;
