@@ -10,6 +10,7 @@ use rocksdb::{
 use ruc::*;
 use std::{
     borrow::Cow,
+    cell::Cell,
     fs,
     mem::size_of,
     ops::{Bound, RangeBounds},
@@ -161,56 +162,80 @@ impl Engine for RocksEngine {
         })
     }
 
-    // Fixed: persist `next + 1024` (the ceiling) so that on crash-restart
-    // we resume from the persisted ceiling, never re-issuing a prefix.
+    // Per-thread batch allocation to avoid cross-CCD atomic contention
+    // on multi-CCD CPUs (e.g. EPYC 9474F).
+    //
+    // Each thread reserves a batch of PREFIX_ALLOC_BATCH prefixes from
+    // the global counter, then hands them out locally with zero
+    // cross-core contention. The global atomic is only touched once
+    // per PREFIX_ALLOC_BATCH allocations per thread.
     #[allow(unused_variables)]
     fn alloc_prefix(&self) -> Pre {
-        static COUNTER: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
-        static CEILING: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
-        static LK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-
-        // Fast path: try to allocate from the current batch
-        let current = COUNTER.load(Ordering::Relaxed);
-        if current > 0 {
-            let next = COUNTER.fetch_add(1, Ordering::AcqRel);
-            let ceil = CEILING.load(Ordering::Acquire);
-            if next < ceil {
-                return next;
-            }
-            // We've exhausted the current batch; reserve a new one
-            let _x = LK.lock();
-            // Double-check: another thread may have already reserved
-            let ceil2 = CEILING.load(Ordering::Acquire);
-            if next < ceil2 {
-                return next;
-            }
-            let new_ceil = next + PREFIX_ALLOC_BATCH;
-            self.meta
-                .put(self.prefix_allocator.key, new_ceil.to_be_bytes())
-                .unwrap();
-            CEILING.store(new_ceil, Ordering::Release);
-            return next;
+        thread_local! {
+            static LOCAL_NEXT: Cell<u64> = const { Cell::new(0) };
+            static LOCAL_CEIL: Cell<u64> = const { Cell::new(0) };
         }
 
-        // Slow path: initialize from DB
-        let _x = LK.lock();
-        let db_value = COUNTER.load(Ordering::Relaxed);
-        if db_value == 0 {
-            // Read from DB
-            let ret = crate::parse_prefix!(
-                self.meta.get(self.prefix_allocator.key).unwrap().unwrap()
-            );
-            let new_ceil = ret + PREFIX_ALLOC_BATCH;
-            self.meta
-                .put(self.prefix_allocator.key, new_ceil.to_be_bytes())
-                .unwrap();
-            COUNTER.store(ret + 1, Ordering::Release);
-            CEILING.store(new_ceil, Ordering::Release);
-            ret
-        } else {
-            drop(_x);
-            self.alloc_prefix()
-        }
+        LOCAL_NEXT.with(|next_cell| {
+            LOCAL_CEIL.with(|ceil_cell| {
+                let next = next_cell.get();
+                let ceil = ceil_cell.get();
+                if next > 0 && next < ceil {
+                    next_cell.set(next + 1);
+                    return next;
+                }
+
+                // Slow path: reserve a new batch from the global counter
+                static GLOBAL_COUNTER: LazyLock<AtomicU64> =
+                    LazyLock::new(|| AtomicU64::new(0));
+                static GLOBAL_CEILING: LazyLock<AtomicU64> =
+                    LazyLock::new(|| AtomicU64::new(0));
+                static LK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+                let gc = GLOBAL_COUNTER.load(Ordering::Relaxed);
+                if gc == 0 {
+                    // First-time initialization from DB
+                    let _x = LK.lock();
+                    if GLOBAL_COUNTER.load(Ordering::Relaxed) == 0 {
+                        let ret = crate::parse_prefix!(
+                            self.meta.get(self.prefix_allocator.key).unwrap().unwrap()
+                        );
+                        let new_ceil = ret + PREFIX_ALLOC_BATCH;
+                        self.meta
+                            .put(self.prefix_allocator.key, new_ceil.to_be_bytes())
+                            .unwrap();
+                        GLOBAL_COUNTER.store(ret, Ordering::Release);
+                        GLOBAL_CEILING.store(new_ceil, Ordering::Release);
+                    }
+                }
+
+                // Reserve a thread-local batch from the global
+                // counter. This is the only cross-CCD atomic RMW
+                // and it happens once per PREFIX_ALLOC_BATCH
+                // allocations per thread.
+                let batch_start =
+                    GLOBAL_COUNTER.fetch_add(PREFIX_ALLOC_BATCH, Ordering::AcqRel);
+                let batch_end = batch_start + PREFIX_ALLOC_BATCH;
+
+                // If we've exceeded the persisted ceiling, extend it
+                let old_ceil = GLOBAL_CEILING.load(Ordering::Acquire);
+                if batch_end > old_ceil {
+                    let _x = LK.lock();
+                    let old_ceil2 = GLOBAL_CEILING.load(Ordering::Acquire);
+                    if batch_end > old_ceil2 {
+                        let new_ceil = batch_end + PREFIX_ALLOC_BATCH;
+                        self.meta
+                            .put(self.prefix_allocator.key, new_ceil.to_be_bytes())
+                            .unwrap();
+                        GLOBAL_CEILING.store(new_ceil, Ordering::Release);
+                    }
+                }
+
+                next_cell.set(batch_start + 1);
+                ceil_cell.set(batch_end);
+                batch_start
+            })
+        })
     }
 
     fn flush(&self) {

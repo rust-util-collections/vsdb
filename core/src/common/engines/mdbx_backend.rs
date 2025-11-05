@@ -6,10 +6,11 @@ use libmdbx::{
     Database, DatabaseOptions, Mode, NoWriteMap, PageSize, RO, ReadWriteOptions,
     SyncMode, Table, TableFlags, Transaction, WriteFlags,
 };
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use ruc::*;
 use std::{
     borrow::Cow,
+    cell::Cell,
     collections::BTreeMap,
     fs,
     ops::{Bound, RangeBounds},
@@ -37,7 +38,7 @@ fn register_atexit(func: extern "C" fn()) {
 type WriteBuf = BTreeMap<Vec<u8>, Option<Vec<u8>>>;
 
 struct FlushOnExit {
-    write_bufs: std::sync::Weak<Vec<parking_lot::Mutex<WriteBuf>>>,
+    write_bufs: std::sync::Weak<Vec<parking_lot::RwLock<WriteBuf>>>,
     shards: Vec<&'static Database<NoWriteMap>>,
 }
 
@@ -50,7 +51,7 @@ extern "C" fn atexit_flush() {
         for state in registry.iter() {
             if let Some(bufs_arc) = state.write_bufs.upgrade() {
                 for (shard_idx, buf_mtx) in bufs_arc.iter().enumerate() {
-                    if let Some(mut buf) = buf_mtx.try_lock() {
+                    if let Some(mut buf) = buf_mtx.try_write() {
                         flush_buffer_impl_shard(state.shards[shard_idx], &mut buf);
                     }
                 }
@@ -65,7 +66,11 @@ extern "C" fn atexit_flush() {
 // NOTE:
 // The last table is preserved for the meta storage,
 // so the max value should be `u8::MAX - 1`
-const SHARD_CNT: usize = 16;
+//
+// Use 64 shards to reduce write-lock contention on multi-CCD CPUs
+// (e.g. EPYC 9474F with 48 cores). With 16 shards there were ~3
+// cores per shard on average, causing frequent lock collisions.
+const SHARD_CNT: usize = 64;
 
 const TABLE_DATA: &str = "data";
 const TABLE_META: &str = "meta";
@@ -90,7 +95,7 @@ pub struct MdbxEngine {
     // Write buffer: full_key -> Option<value> (None = tombstone/delete)
     // Amortizes MDBX per-transaction overhead by batching writes.
     // Arc so the background flush thread can hold a reference.
-    write_bufs: Arc<Vec<Mutex<WriteBuf>>>,
+    write_bufs: Arc<Vec<RwLock<WriteBuf>>>,
 }
 
 // Optimization: Helper function to build full key with pre-allocated capacity
@@ -250,7 +255,7 @@ impl Engine for MdbxEngine {
 
         let write_bufs = Arc::new(
             (0..SHARD_CNT)
-                .map(|_| Mutex::new(BTreeMap::new()))
+                .map(|_| RwLock::new(BTreeMap::new()))
                 .collect::<Vec<_>>(),
         );
 
@@ -264,7 +269,7 @@ impl Engine for MdbxEngine {
                     loop {
                         std::thread::sleep(FLUSH_INTERVAL);
                         for (i, buf_mtx) in bufs.iter().enumerate() {
-                            let mut guard = buf_mtx.lock();
+                            let mut guard = buf_mtx.write();
                             flush_buffer_impl_shard(shards_ref[i], &mut guard);
                         }
                     }
@@ -296,86 +301,106 @@ impl Engine for MdbxEngine {
         })
     }
 
-    // Fixed: use a CEILING atomic to track the persisted upper bound.
-    // On crash-restart we resume from the persisted ceiling, never
-    // re-issuing a prefix.
+    // Per-thread batch allocation to avoid cross-CCD atomic contention
+    // on multi-CCD CPUs (e.g. EPYC 9474F).
+    //
+    // Each thread reserves a batch of PREFIX_ALLOC_BATCH prefixes from
+    // the global counter, then hands them out locally with zero
+    // cross-core contention. The global atomic is only touched once
+    // per PREFIX_ALLOC_BATCH allocations per thread.
     #[allow(unused_variables)]
     fn alloc_prefix(&self) -> Pre {
-        static COUNTER: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
-        static CEILING: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
-        static LK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-
-        // Fast path: try to allocate from the current batch
-        let current = COUNTER.load(Ordering::Relaxed);
-        if current > 0 {
-            let next = COUNTER.fetch_add(1, Ordering::AcqRel);
-            let ceil = CEILING.load(Ordering::Acquire);
-            if next < ceil {
-                return next;
-            }
-            // We've exhausted the current batch; reserve a new one
-            let _x = LK.lock();
-            // Double-check: another thread may have already reserved
-            let ceil2 = CEILING.load(Ordering::Acquire);
-            if next < ceil2 {
-                return next;
-            }
-            let new_ceil = next + PREFIX_ALLOC_BATCH;
-            let txn = self.hdr.begin_rw_txn().unwrap();
-            let table = txn.open_table(Some(TABLE_META)).unwrap();
-            txn.put(
-                &table,
-                self.prefix_allocator.key,
-                new_ceil.to_be_bytes(),
-                WriteFlags::UPSERT,
-            )
-            .unwrap();
-            txn.commit().unwrap();
-            CEILING.store(new_ceil, Ordering::Release);
-            return next;
+        thread_local! {
+            static LOCAL_NEXT: Cell<u64> = const { Cell::new(0) };
+            static LOCAL_CEIL: Cell<u64> = const { Cell::new(0) };
         }
 
-        // Slow path: initialize from DB
-        let _x = LK.lock();
-        let db_value = COUNTER.load(Ordering::Relaxed);
-        if db_value == 0 {
-            // step 1
-            let txn = self.hdr.begin_ro_txn().unwrap();
-            let table = txn.open_table(Some(TABLE_META)).unwrap();
-            let ret = crate::parse_prefix!(
-                txn.get::<Vec<u8>>(&table, &self.prefix_allocator.key)
-                    .unwrap()
-                    .unwrap()
-            );
-            drop(txn);
+        LOCAL_NEXT.with(|next_cell| {
+            LOCAL_CEIL.with(|ceil_cell| {
+                let next = next_cell.get();
+                let ceil = ceil_cell.get();
+                if next > 0 && next < ceil {
+                    next_cell.set(next + 1);
+                    return next;
+                }
 
-            let new_ceil = ret + PREFIX_ALLOC_BATCH;
+                // Slow path: reserve a new batch from the global counter
+                static GLOBAL_COUNTER: LazyLock<AtomicU64> =
+                    LazyLock::new(|| AtomicU64::new(0));
+                static GLOBAL_CEILING: LazyLock<AtomicU64> =
+                    LazyLock::new(|| AtomicU64::new(0));
+                static LK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-            // step 2
-            let txn = self.hdr.begin_rw_txn().unwrap();
-            let table = txn.open_table(Some(TABLE_META)).unwrap();
-            txn.put(
-                &table,
-                self.prefix_allocator.key,
-                new_ceil.to_be_bytes(),
-                WriteFlags::UPSERT,
-            )
-            .unwrap();
-            txn.commit().unwrap();
+                let gc = GLOBAL_COUNTER.load(Ordering::Relaxed);
+                if gc == 0 {
+                    // First-time initialization from DB
+                    let _x = LK.lock();
+                    if GLOBAL_COUNTER.load(Ordering::Relaxed) == 0 {
+                        let txn = self.hdr.begin_ro_txn().unwrap();
+                        let table = txn.open_table(Some(TABLE_META)).unwrap();
+                        let ret = crate::parse_prefix!(
+                            txn.get::<Vec<u8>>(&table, &self.prefix_allocator.key)
+                                .unwrap()
+                                .unwrap()
+                        );
+                        drop(txn);
 
-            COUNTER.store(ret + 1, Ordering::Release);
-            CEILING.store(new_ceil, Ordering::Release);
+                        let new_ceil = ret + PREFIX_ALLOC_BATCH;
+                        let txn = self.hdr.begin_rw_txn().unwrap();
+                        let table = txn.open_table(Some(TABLE_META)).unwrap();
+                        txn.put(
+                            &table,
+                            self.prefix_allocator.key,
+                            new_ceil.to_be_bytes(),
+                            WriteFlags::UPSERT,
+                        )
+                        .unwrap();
+                        txn.commit().unwrap();
 
-            ret
-        } else {
-            drop(_x);
-            self.alloc_prefix()
-        }
+                        GLOBAL_COUNTER.store(ret, Ordering::Release);
+                        GLOBAL_CEILING.store(new_ceil, Ordering::Release);
+                    }
+                }
+
+                // Reserve a thread-local batch from the global
+                // counter. This is the only cross-CCD atomic RMW
+                // and it happens once per PREFIX_ALLOC_BATCH
+                // allocations per thread.
+                let batch_start =
+                    GLOBAL_COUNTER.fetch_add(PREFIX_ALLOC_BATCH, Ordering::AcqRel);
+                let batch_end = batch_start + PREFIX_ALLOC_BATCH;
+
+                // If we've exceeded the persisted ceiling, extend it
+                let old_ceil = GLOBAL_CEILING.load(Ordering::Acquire);
+                if batch_end > old_ceil {
+                    let _x = LK.lock();
+                    let old_ceil2 = GLOBAL_CEILING.load(Ordering::Acquire);
+                    if batch_end > old_ceil2 {
+                        let new_ceil = batch_end + PREFIX_ALLOC_BATCH;
+                        let txn = self.hdr.begin_rw_txn().unwrap();
+                        let table = txn.open_table(Some(TABLE_META)).unwrap();
+                        txn.put(
+                            &table,
+                            self.prefix_allocator.key,
+                            new_ceil.to_be_bytes(),
+                            WriteFlags::UPSERT,
+                        )
+                        .unwrap();
+                        txn.commit().unwrap();
+                        GLOBAL_CEILING.store(new_ceil, Ordering::Release);
+                    }
+                }
+
+                next_cell.set(batch_start + 1);
+                ceil_cell.set(batch_end);
+                batch_start
+            })
+        })
     }
 
     fn flush(&self) {
         for (i, buf_mtx) in self.write_bufs.iter().enumerate() {
-            let mut buf = buf_mtx.lock();
+            let mut buf = buf_mtx.write();
             self.flush_locked(i, &mut buf);
         }
         for db in &self.shards {
@@ -387,7 +412,7 @@ impl Engine for MdbxEngine {
         let shard_idx = self.get_shard_idx(hdr_prefix);
         // Flush buffer so the iterator sees all pending writes
         {
-            let mut buf = self.write_bufs[shard_idx].lock();
+            let mut buf = self.write_bufs[shard_idx].write();
             self.flush_locked(shard_idx, &mut buf);
         }
 
@@ -416,7 +441,7 @@ impl Engine for MdbxEngine {
         let shard_idx = self.get_shard_idx(hdr_prefix);
         // Flush buffer so the iterator sees all pending writes
         {
-            let mut buf = self.write_bufs[shard_idx].lock();
+            let mut buf = self.write_bufs[shard_idx].write();
             self.flush_locked(shard_idx, &mut buf);
         }
 
@@ -500,7 +525,7 @@ impl Engine for MdbxEngine {
 
         // Check write buffer first
         {
-            let buf = self.write_bufs[shard_idx].lock();
+            let buf = self.write_bufs[shard_idx].read();
             if let Some(entry) = buf.get(&full_key) {
                 return entry.clone(); // Some(value) or None (tombstone)
             }
@@ -521,7 +546,7 @@ impl Engine for MdbxEngine {
 
         let full_key = make_full_key(hdr_prefix.as_slice(), key);
         let shard_idx = self.get_shard_idx(hdr_prefix);
-        let mut buf = self.write_bufs[shard_idx].lock();
+        let mut buf = self.write_bufs[shard_idx].write();
         buf.insert(full_key, Some(value.to_vec()));
         if buf.len() >= WRITE_BUF_THRESHOLD {
             self.flush_locked(shard_idx, &mut buf);
@@ -531,7 +556,7 @@ impl Engine for MdbxEngine {
     fn remove(&self, hdr_prefix: PreBytes, key: &[u8]) {
         let full_key = make_full_key(hdr_prefix.as_slice(), key);
         let shard_idx = self.get_shard_idx(hdr_prefix);
-        let mut buf = self.write_bufs[shard_idx].lock();
+        let mut buf = self.write_bufs[shard_idx].write();
         buf.insert(full_key, None);
         if buf.len() >= WRITE_BUF_THRESHOLD {
             self.flush_locked(shard_idx, &mut buf);
@@ -580,7 +605,7 @@ impl BatchTrait for MdbxBatch<'_> {
     #[inline(always)]
     fn commit(&mut self) -> Result<()> {
         let shard_idx = self.engine.get_shard_idx(self.meta_prefix);
-        let mut buf = self.engine.write_bufs[shard_idx].lock();
+        let mut buf = self.engine.write_bufs[shard_idx].write();
 
         for (key, value) in self.ops.drain(..) {
             buf.insert(key, value);
