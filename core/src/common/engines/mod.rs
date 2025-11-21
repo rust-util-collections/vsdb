@@ -1,31 +1,19 @@
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
-#[cfg(feature = "rocks_backend")]
 mod rocks_backend;
 
-#[cfg(feature = "mdbx_backend")]
-mod mdbx_backend;
-
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
-#[cfg(feature = "rocks_backend")]
 pub(crate) use rocks_backend::RocksEngine as RocksDB;
 
-#[cfg(feature = "rocks_backend")]
 type EngineIter = rocks_backend::RocksIter;
 
-#[cfg(feature = "mdbx_backend")]
-pub(crate) use mdbx_backend::MdbxEngine as MdbxDB;
-
-#[cfg(feature = "mdbx_backend")]
-type EngineIter = mdbx_backend::MdbxIter;
-
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
-use crate::common::{PREFIX_SIZE, Pre, PreBytes, RawKey, RawValue, VSDB};
+use crate::common::{PREFIX_SIZE, PreBytes, RawKey, RawValue, VSDB};
 use ruc::*;
 use serde::{Deserialize, Serialize, de};
 use std::{
@@ -39,33 +27,6 @@ use std::{
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
-
-/// Low-level database interface.
-pub trait Engine: Sized {
-    fn new() -> Result<Self>;
-    fn alloc_prefix(&self) -> Pre;
-
-    fn flush(&self);
-
-    fn iter(&self, meta_prefix: PreBytes) -> EngineIter;
-
-    fn range<'a, R: RangeBounds<Cow<'a, [u8]>>>(
-        &'a self,
-        meta_prefix: PreBytes,
-        bounds: R,
-    ) -> EngineIter;
-
-    fn get(&self, meta_prefix: PreBytes, key: &[u8]) -> Option<RawValue>;
-
-    /// Insert a key-value pair. Does not return the old value for performance.
-    fn insert(&self, meta_prefix: PreBytes, key: &[u8], value: &[u8]);
-
-    /// Remove a key. Does not return the old value for performance.
-    fn remove(&self, meta_prefix: PreBytes, key: &[u8]);
-
-    /// Alloc a batch.
-    fn batch_begin<'a>(&'a self, meta_prefix: PreBytes) -> Box<dyn BatchTrait + 'a>;
-}
 
 /// Trait for batch write operations
 pub trait BatchTrait {

@@ -8,7 +8,6 @@
 > `vsdb_core` provides the low-level building blocks for `vsdb`.
 
 This crate contains the foundational components of `vsdb`, including:
-- **Storage Abstractions**: An `Engine` trait that abstracts over key-value storage backends.
 - **Raw Data Structures**: Untyped, high-performance data structures like `MapxRaw` that operate on raw bytes.
 - **Utilities**: Shared functions for environment management, such as setting the database directory.
 
@@ -27,8 +26,7 @@ vsdb_core = "8.0.0"
 
 For detailed API examples, see [API Examples](docs/api.md).
 
-- `mdbx_backend`: **(Default)** Use `libmdbx` as the backend database. Near-RocksDB performance with fast compilation.
-- `rocks_backend`: Use `rocksdb` as the backend database. C++ implementation.
+RocksDB is the sole storage backend — no feature flags are needed to select it.
 
 
 ## License

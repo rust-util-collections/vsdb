@@ -9,7 +9,6 @@
 pub(crate) mod engines;
 
 pub use engines::BatchTrait;
-use engines::Engine;
 use parking_lot::Mutex;
 use ruc::*;
 use std::{
@@ -21,7 +20,6 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
-use threadpool::ThreadPool;
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -74,30 +72,10 @@ static VSDB_CUSTOM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
 /// The global instance of the VsDB database.
 ///
 /// This static variable is lazily initialized and provides a single point of
-/// access to the underlying database. The backend is determined by the
-/// feature flags passed at compile time.
-#[cfg(feature = "rocks_backend")]
-pub static VSDB: LazyLock<VsDB<engines::RocksDB>> = LazyLock::new(|| pnk!(VsDB::new()));
-
-/// The global instance of the VsDB database.
+/// access to the underlying database.
 ///
-/// This static variable is lazily initialized and provides a single point of
-/// access to the underlying database. The backend is determined by the
-/// feature flags passed at compile time.
-#[cfg(feature = "mdbx_backend")]
-pub static VSDB: LazyLock<VsDB<engines::MdbxDB>> = LazyLock::new(|| pnk!(VsDB::new()));
-
-/// A thread pool for cleaning up orphan instances in the background.
-///
-/// This static variable is lazily initialized and provides a thread pool
-/// with a single thread and a large stack size to handle background cleanup tasks.
-pub static TRASH_CLEANER: LazyLock<Mutex<ThreadPool>> = LazyLock::new(|| {
-    let pool = threadpool::Builder::new()
-        .num_threads(1)
-        .thread_stack_size(512 * MB as usize) // use large stack size
-        .build();
-    Mutex::new(pool)
-});
+/// VSDB is now backed exclusively by RocksDB (single-engine design).
+pub static VSDB: LazyLock<VsDB> = LazyLock::new(|| pnk!(VsDB::new()));
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -141,17 +119,17 @@ macro_rules! parse_prefix {
 
 /// A struct representing the VsDB database.
 ///
-/// This struct encapsulates the underlying database engine and provides a
+/// This struct encapsulates the underlying RocksDB engine and provides a
 /// high-level interface for interacting with the database.
-pub struct VsDB<T: Engine> {
-    db: T,
+pub struct VsDB {
+    db: engines::RocksDB,
 }
 
-impl<T: Engine> VsDB<T> {
+impl VsDB {
     #[inline(always)]
     fn new() -> Result<Self> {
         Ok(Self {
-            db: T::new().c(d!())?,
+            db: engines::RocksDB::new().c(d!())?,
         })
     }
 

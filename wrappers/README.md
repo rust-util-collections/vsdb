@@ -32,8 +32,8 @@ For more detailed API examples, see [API Examples](docs/api.md).
 
 ## Features
 
-- `mdbx_backend`: **(Default)** Use `libmdbx` as the backend database. Near-RocksDB performance with fast compilation.
-- `rocks_backend`: Use `rocksdb` as the backend database. C++ implementation.
+RocksDB is the sole storage backend — no feature flags are needed to select it.
+
 - `msgpack_codec`: **(Default)** Use `rmp-serde` as the codec for faster performance.
 - `json_codec`: Use `serde_json` as the codec for better compatibility.
 

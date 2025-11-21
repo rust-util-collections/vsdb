@@ -21,7 +21,5 @@ thiserror = { workspace = true }
 rand = { workspace = true }
 
 [features]
-default = ["mdbx_backend", "msgpack_codec"]
-rocks_backend = ["vsdb/rocks_backend"]
-mdbx_backend = ["vsdb/mdbx_backend"]
+default = ["msgpack_codec"]
 msgpack_codec = ["vsdb/msgpack_codec"]

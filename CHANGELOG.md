@@ -111,44 +111,38 @@ These vector-like types heavily depended on reliable length tracking for indexin
 
 - **Eliminated read-before-write**: `insert()` and `remove()` no longer read old values, significantly reducing I/O operations
 - **Removed length tracking overhead**: No more atomic counter updates or length hint synchronization
-- **Simplified backend operations**: Storage backends (`fjall_backend`, `rocks_backend`) have cleaner, faster implementations
+- **Simplified backend operations**: RocksDB backend has cleaner, faster implementation
 
 #### RocksDB Engine Optimizations
 
-**1. Optimized Memory Allocation in Hot Paths**
-- Added `make_full_key()` helper function with pre-allocated capacity to avoid repeated Vec allocations
-- Reduced memory allocations and copies in `get()`, `insert()`, and `remove()` operations
-- Each operation now only allocates once with exact capacity needed
+**1. Stack-Allocated Full Keys**
+- `make_full_key()` returns a `FullKey` enum: stack-allocated for keys up to 56 bytes, heap fallback for larger keys
+- Zero heap allocations for the vast majority of `get()`, `insert()`, and `remove()` operations
+- Iterator overlap-detection vectors reuse heap allocations via `clear()` + `extend_from_slice()`
 
-**2. Reduced Write Amplification for max_keylen**
-- Changed from updating on every length increase to batched updates
-- Only persists to DB when key length increases by >64 bytes or doubles
-- Dramatically reduces metadata writes for workloads with varying key sizes
+**2. Race-Free max_keylen Updates**
+- Uses `AtomicUsize::fetch_max()` instead of check-then-store to eliminate data races
+- Persists to meta DB on every new maximum for crash consistency
+- Key length growth stabilizes quickly, so writes are rare in steady state
 
-**3. Lock-Free Prefix Allocator**
-- Replaced global mutex with `AtomicU64` for fast path allocation
-- Batch persistence: only writes to DB every 1024 allocations
-- Reduces contention in high-concurrency scenarios
+**3. Per-Thread Prefix Allocator**
+- Each thread reserves a batch of 8192 prefixes from the global counter
+- Fast path is entirely thread-local — no atomics, no locks, no cross-CCD traffic
+- Slow path (once per 8192 allocations per thread) uses a single `fetch_add`
 - **Expected improvement**: 10-100x faster prefix allocation under contention
 
 **4. WriteBatch API for Bulk Operations**
 - New `Mapx::batch_entry()` method for atomic batch writes
-- Removed `Mapx::batch()` closure-based API
-
-// Example: Batch write
-let mut batch = engine.batch_entry();
-batch.insert(&key(i), &value(i));
-batch.commit().unwrap();
 
 **Performance Impact:**
-- **Single writes**: 5-15% faster due to reduced allocations
+- **Single writes**: 5-15% faster due to stack-allocated keys
 - **Prefix allocation**: 10-100x faster under high concurrency
 - **Batch writes**: 2-5x faster compared to individual inserts
-- **Memory usage**: Reduced heap allocations in hot paths
+- **Memory usage**: Zero heap allocations for keys up to 56 bytes
 
 ### Storage Backend Changes
 
-**Modified in `fjall_backend.rs` and `rocks_backend.rs`:**
+**Modified in `rocks_backend.rs`:**
 
 ```rust
 // Before

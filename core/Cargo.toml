@@ -16,21 +16,12 @@ serde = { workspace = true }
 rand = { workspace = true }
 parking_lot = { workspace = true }
 
-threadpool = { workspace = true } # used in a background cleaner
-
-rocksdb = { workspace = true, optional = true }
-libmdbx = { workspace = true, optional = true }
+rocksdb = { workspace = true }
 
 [dev-dependencies]
 msgpack = { workspace = true }
 hex = "0.4"
 criterion = "0.8"
-
-[features]
-default = ["mdbx_backend"]
-
-rocks_backend = ["rocksdb"]
-mdbx_backend = ["libmdbx"]
 
 # [[bench]]
 # name = "basic"

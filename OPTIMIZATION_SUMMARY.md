@@ -15,7 +15,7 @@ Code review identified the following performance issues:
 2. **Frequent `max_keylen` Updates**
     *   Every `insert` checked the key length.
     *   If the length increased, it immediately wrote to the meta DB.
-    *   This caused unnecessary write amplification.
+    *   The check-then-store pattern was racy under concurrent writes.
 
 3. **Lack of Batch Operation API**
     *   Unable to utilize RocksDB's `WriteBatch` optimization.
@@ -27,52 +27,70 @@ Code review identified the following performance issues:
 
 ### 1.2 Optimization Solutions and Implementation
 
-#### Optimization 1: Hot Path Memory Allocation
+#### Optimization 1: Stack-Allocated Full Keys
 
 **Modified File**: `core/src/common/engines/rocks_backend.rs`
 
 **Implementation**:
 
 ```rust
-// Added make_full_key helper function
-#[inline(always)]
-fn make_full_key(meta_prefix: &[u8], key: &[u8]) -> Vec<u8> {
-    let total_len = meta_prefix.len() + key.len();
-    let mut full_key = Vec::with_capacity(total_len);
-    full_key.extend_from_slice(meta_prefix);
-    full_key.extend_from_slice(key);
-    full_key
+const FULL_KEY_STACK_CAP: usize = 64;
+
+enum FullKey {
+    Stack { buf: [u8; FULL_KEY_STACK_CAP], len: usize },
+    Heap(Vec<u8>),
 }
 
-// Used in get/insert/remove
-let full_key = make_full_key(meta_prefix.as_slice(), key);
-```
+impl AsRef<[u8]> for FullKey {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            FullKey::Stack { buf, len } => &buf[..*len],
+            FullKey::Heap(v) => v.as_slice(),
+        }
+    }
+}
 
-**Effect**:
-*   Allocates only once per operation with exact capacity.
-*   Avoids dynamic `Vec` expansion.
-*   Expected 5-15% performance improvement for single operations.
-
-#### Optimization 2: `max_keylen` Update Strategy
-
-**Implementation**:
-
-```rust
-fn set_max_key_len(&self, len: usize) {
-    let current = self.max_keylen.load(Ordering::Relaxed);
-    if len > current {
-        // SAFETY: Always persist to meta DB before updating memory to ensure consistency on crash.
-        // Performance impact is acceptable as key length growth usually stabilizes quickly.
-        self.meta.put(META_KEY_MAX_KEYLEN, len.to_be_bytes()).unwrap();
-        self.max_keylen.store(len, Ordering::Relaxed);
+fn make_full_key(meta_prefix: &[u8], key: &[u8]) -> FullKey {
+    let total_len = meta_prefix.len() + key.len();
+    if total_len <= FULL_KEY_STACK_CAP {
+        let mut buf = [0u8; FULL_KEY_STACK_CAP];
+        buf[..meta_prefix.len()].copy_from_slice(meta_prefix);
+        buf[meta_prefix.len()..total_len].copy_from_slice(key);
+        FullKey::Stack { buf, len: total_len }
+    } else {
+        let mut v = Vec::with_capacity(total_len);
+        v.extend_from_slice(meta_prefix);
+        v.extend_from_slice(key);
+        FullKey::Heap(v)
     }
 }
 ```
 
 **Effect**:
-*   Ensures metadata consistency and safety.
-*   Avoids risk of metadata rollback and data corruption due to program crashes.
-*   While sacrificing some metadata write performance, it guarantees data correctness (Correctness over Performance).
+*   PREFIX_SIZE = 8, so keys up to 56 bytes fit entirely on the stack (64-byte buffer).
+*   Zero heap allocations for the vast majority of keys.
+*   Falls back to heap for rare oversized keys.
+*   Iterator overlap-detection vectors (`last_fwd_full_key`, `last_rev_full_key`) reuse heap allocations via `clear()` + `extend_from_slice()`.
+
+#### Optimization 2: Race-Free `max_keylen` Update
+
+**Implementation**:
+
+```rust
+fn set_max_key_len(&self, len: usize) {
+    let prev = self.max_keylen.fetch_max(len, Ordering::Relaxed);
+    if len > prev {
+        self.db
+            .put(META_KEY_MAX_KEYLEN, len.to_be_bytes())
+            .expect("vsdb: meta write failed");
+    }
+}
+```
+
+**Effect**:
+*   Uses `AtomicUsize::fetch_max()` instead of check-then-store, eliminating the race where two threads could both see len > current and clobber each other.
+*   Persists to meta DB on every new maximum to ensure crash consistency.
+*   Key length growth usually stabilizes quickly, so writes are rare in steady state.
 
 #### Optimization 3: WriteBatch API
 
@@ -85,65 +103,89 @@ batch.insert(&key, &value);
 batch.commit().unwrap();
 ```
 
-**Usage Example**:
-
-```rust
-// Example: Batch write
-let mut batch = map.batch_entry();
-batch.insert(&key(i), &value(i));
-batch.commit().unwrap();
-```
-
 **Effect**:
 *   2-5x performance improvement for batch writes.
 *   Atomicity guarantee: all operations succeed or fail together.
 *   Reduced fsync calls.
 
-#### Optimization 4: Lock-Free Prefix Allocator
+#### Optimization 4: Per-Thread Prefix Allocator
 
 **Implementation**:
 
+Each thread reserves a batch of `PREFIX_ALLOC_BATCH` (8192) prefixes from the global counter, then hands them out locally with zero cross-core contention. The global atomic is only touched once per 8192 allocations per thread.
+
 ```rust
 fn alloc_prefix(&self) -> Pre {
-    static COUNTER: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
-    static LK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-
-    // Fast path: lock-free allocation
-    let current = COUNTER.load(Ordering::Relaxed);
-    if current > 0 {
-        let next = COUNTER.fetch_add(1, Ordering::AcqRel);
-        // Persist only every 1024 allocations
-        if next % 1024 == 0 {
-            let _ = self.meta.put(
-                self.prefix_allocator.key,
-                (next + 1024).to_be_bytes(),
-            );
-        }
-        return next;
+    thread_local! {
+        static LOCAL_NEXT: Cell<u64> = const { Cell::new(0) };
+        static LOCAL_CEIL: Cell<u64> = const { Cell::new(0) };
     }
 
-    // Slow path: initialization
-    let x = LK.lock();
-    // ... read from DB and initialize
+    LOCAL_NEXT.with(|next_cell| {
+        LOCAL_CEIL.with(|ceil_cell| {
+            let next = next_cell.get();
+            let ceil = ceil_cell.get();
+            if next > 0 && next < ceil {
+                // Fast path: thread-local, zero contention
+                next_cell.set(next + 1);
+                return next;
+            }
+            // Slow path: reserve batch from global counter + persist ceiling to DB
+            // ...
+        })
+    })
 }
 ```
 
 **Effect**:
-*   Fast path is completely lock-free, using only atomic operations.
-*   Batch persistence reduces DB writes by 99.9%.
-*   10-100x performance improvement in high-concurrency scenarios.
+*   Fast path is entirely thread-local — no atomics, no locks, no cross-CCD traffic.
+*   Slow path (once per 8192 allocations per thread) uses a single `fetch_add` on the global counter.
+*   DB persistence only happens when the global ceiling is exceeded.
+*   Massive reduction in cross-CCD contention on EPYC multi-CCD CPUs.
 
 ### 1.3 Expected Performance Comparison
 
 | Operation Type | Before | After | Improvement Source |
 | :--- | :--- | :--- | :--- |
-| Single Write | Baseline | 5-15% faster | Memory allocation optimization |
+| Single Write | Baseline | 5-15% faster | Stack-allocated full keys |
 | Batch Write | Baseline | 2-5x faster | batch_entry API |
-| Prefix Allocation (High Concurrency) | Baseline | 10-100x faster | Lock-free algorithm |
+| Prefix Allocation (High Concurrency) | Baseline | 10-100x faster | Per-thread batching |
 
-## 2. Benchmark Improvements
+## 2. RocksDB Configuration Tuning
 
-### 2.1 Cleanup
+### 2.1 Target Environment
+
+AMD EPYC 3rd-5th gen multi-CCD servers with SSD storage.
+
+### 2.2 Configuration Changes
+
+**Per-level compression**: LZ4 for L0-L1 (fast, low CPU), ZSTD for L2+ (better ratio, amortized over larger SSTs). Backward compatible — RocksDB transparently reads uncompressed SSTs.
+
+**Block size**: Increased to 16 KB for better SSD performance (fewer seeks, better compression ratio).
+
+**Memtable bloom ratio**: Increased from 0.02 to 0.1 (10% of memtable) for better prefix-lookup false-positive reduction.
+
+**Background parallelism**: Capped at `min(available_parallelism, 8)` to avoid diminishing returns on many-core EPYC CPUs.
+
+**Data safety**: Removed `mmap_writes` (crash-safety risk), kept `mmap_reads`. Replaced bare `.unwrap()` on DB operations with descriptive `.expect()` messages.
+
+## 3. Architecture Simplification
+
+### 3.1 Single-Engine Design
+
+The multi-engine abstraction (RocksDB + Fjall) has been removed. RocksDB is the sole storage backend — no feature flags are needed to select it.
+
+### 3.2 Sharding Removal
+
+The `SHARD_CNT` / `get_shard_idx()` / `get_db()` indirection has been removed. `RocksEngine` now holds a single `db: &'static DB` instead of `meta` + `shards: Vec<&'static DB>`. The directory name `shard_0` is kept for backward compatibility.
+
+### 3.3 Dead Code Removal
+
+*   Removed `TRASH_CLEANER` thread pool and `threadpool` dependency.
+
+## 4. Benchmark Improvements
+
+### 4.1 Cleanup
 
 **Removed Files**:
 *   `wrappers/benches/units/basic_vecx.rs`
@@ -154,28 +196,9 @@ fn alloc_prefix(&self) -> Pre {
 *   `wrappers/benches/basic.rs` - Removed `vecx` references.
 *   `wrappers/benches/units/mod.rs` - Commented out `vecx` module.
 
-### 2.2 New Performance Tests
+## 5. Code Quality Improvements
 
-**File**: `core/benches/units/batch_write.rs`
-
-**Test Content**:
-1. **Single Inserts** - Test performance of 1000 single inserts.
-2. **Mixed Workload** - Test 80% read / 20% write mixed workload.
-3. **Range Scans** - Test range scan performance (100 and 1000 records).
-
-**How to Run**:
-
-```bash
-# Run all benchmarks
-cargo bench --no-default-features --features "rocks_backend,msgpack_codec"
-
-# Run only the new batch_write benchmark
-cargo bench --no-default-features --features "rocks_backend,msgpack_codec" batch_write
-```
-
-## 3. Code Quality Improvements
-
-### 3.1 Removal of Deprecated Code
+### 5.1 Removal of Deprecated Code
 
 **Completely Removed**:
 *   `Vecx` and `VecxRaw` types and all their implementations.
@@ -187,88 +210,39 @@ cargo bench --no-default-features --features "rocks_backend,msgpack_codec" batch
 *   High maintenance cost.
 *   Users can use `MapxOrd<usize, V>` as a replacement.
 
-### 3.2 Documentation Updates
+## 6. Compilation and Testing
 
-**CHANGELOG.md**:
-*   Detailed all breaking changes.
-*   Provided migration guides.
-*   Explained performance improvements and rationale.
-*   Included code examples.
-
-**README.md**:
-*   Updated "Important Changes" section.
-*   Explained API changes.
-*   Removed content related to `Vecx`.
-
-## 4. Compilation and Testing
-
-### 4.1 Compilation Verification
+### 6.1 Compilation Verification
 
 ```bash
-# RocksDB backend
-cargo build --no-default-features --features "rocks_backend,msgpack_codec"
-
-# Fjall backend (default)
-cargo build --features fjall_backend
-
-# All packages (including utils)
-cargo build --all --no-default-features --features "rocks_backend,msgpack_codec"
+cargo check --workspace
+cargo check --workspace --tests
+cargo clippy --workspace
 ```
 
-### 4.2 Test Verification
+### 6.2 Test Verification
 
 ```bash
 # Run core tests
-cargo test --no-default-features --features "rocks_backend,msgpack_codec" -p vsdb_core
+cargo test -p vsdb_core --release -- --test-threads=1
 
-# Run wrapper tests
-cargo test --no-default-features --features "rocks_backend,msgpack_codec" -p vsdb
-
-# Run benchmarks
-cargo bench --no-default-features --features "rocks_backend,msgpack_codec"
+# Run all workspace tests
+cargo test --workspace --release -- --test-threads=1
 ```
 
-## 5. Future Work Suggestions
-
-### 5.1 Further Optimization Directions
-
-1. **Batch Read API**
-    *   Add `multi_get()` support.
-    *   Utilize RocksDB's `multi_get()` optimization.
-
-2. **Async API**
-    *   Consider adding async versions of the API.
-    *   Utilize `tokio` or `async-std`.
-
-3. **Caching Layer**
-    *   Add an optional in-memory caching layer.
-    *   Reduce disk access for hot data.
-
-### 5.2 Performance Monitoring
-
-Suggested additions:
-1. Performance metrics collection (latency, throughput, resource usage).
-2. Regular performance regression testing.
-3. Performance benchmarks for different workloads.
-
-## 6. Summary
+## 7. Summary
 
 This optimization work focused on:
 
-1. **RocksDB Engine Core Optimization** - Reduced memory allocation, lower write amplification, improved concurrency performance.
-2. **API Improvements** - Added `batch_entry` support for batch operations.
-3. **Code Cleanup** - Removed deprecated `Vecx` related code.
-4. **Test Improvements** - Added new performance test cases.
+1. **RocksDB Engine Core Optimization** - Stack-allocated keys, race-free atomics, per-thread prefix batching.
+2. **RocksDB Configuration Tuning** - Per-level compression (LZ4/ZSTD), 16 KB blocks, capped parallelism, data safety fixes.
+3. **Architecture Simplification** - Single-engine design, sharding removal, dead code cleanup.
+4. **API Improvements** - Added `batch_entry` support for batch operations.
+5. **Code Cleanup** - Removed deprecated `Vecx` related code, `TRASH_CLEANER`, `threadpool`.
 
 **Expected Overall Performance Improvement**:
-*   Single Write: 5-15% improvement.
+*   Single Write: 5-15% improvement (stack-allocated keys).
 *   Batch Write: 2-5x improvement.
-*   High Concurrency: 10-100x improvement (prefix allocation).
+*   High Concurrency: 10-100x improvement (per-thread prefix batching).
 *   Memory Usage: Significantly reduced heap allocation on hot paths.
-
-**Documentation Completeness**:
-*   CHANGELOG details all changes.
-*   Complete migration guide provided.
-*   Includes code examples and usage instructions.
-
-All changes have passed compilation verification and are ready for actual performance testing to verify optimization effects.
+*   Disk I/O: Per-level compression reduces SSD write amplification.

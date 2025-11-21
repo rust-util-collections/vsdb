@@ -19,10 +19,7 @@ rand = { workspace = true }
 criterion = "0.8"
 
 [features]
-default = ["mdbx_backend", "msgpack_codec"]
-
-rocks_backend = ["vsdb/rocks_backend"]
-mdbx_backend = ["vsdb/mdbx_backend"]
+default = ["msgpack_codec"]
 
 json_codec = ["vsdb/json_codec"]
 msgpack_codec = ["vsdb/msgpack_codec"]

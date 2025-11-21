@@ -1,7 +1,7 @@
 //! # vsdb_core
 //!
-//! `vsdb_core` provides the low-level building blocks for `vsdb`, including storage
-//! engine abstractions, raw data structures, and common utilities. It is not
+//! `vsdb_core` provides the low-level building blocks for `vsdb`, including the
+//! RocksDB storage backend, raw data structures, and common utilities. It is not
 //! typically used directly by end-users, but forms the foundation of the `vsdb`
 //! ecosystem.
 
@@ -9,10 +9,9 @@
 #![cfg_attr(test, allow(warnings))]
 #![recursion_limit = "512"]
 
-/// Manages storage backends, raw data types, and shared utilities.
+/// Manages the RocksDB storage backend, raw data types, and shared utilities.
 ///
-/// This module provides the `Engine` trait for abstracting over different
-/// key-value stores (like RocksDB and Fjall), along with fundamental
+/// This module provides the RocksDB-backed storage engine along with fundamental
 /// types such as `RawKey`, `RawValue`, and environment management functions.
 pub mod common;
 
