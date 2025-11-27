@@ -34,6 +34,8 @@ type Distance = i128;
 type PageSize = u16;
 type PageIndex = u32;
 
+const INLINE_CAPACITY_THRESHOLD: usize = 8;
+
 /// A skip-list-like data structure for fast, timestamp-based paged queries.
 ///
 /// `SlotDB` organizes data into "slots" (e.g., timestamps or block numbers),
@@ -93,36 +95,10 @@ where
     ///
     /// * `slot` - The slot to insert the key into (e.g., a timestamp).
     /// * `k` - The key to insert.
-    pub fn insert(&mut self, mut slot: Slot, k: K) -> Result<()> {
-        if self.swap_order {
-            slot = swap_order(slot);
-        }
+    pub fn insert(&mut self, slot: Slot, k: K) -> Result<()> {
+        let slot = self.to_storage_slot(slot);
 
-        if let Some(top) = self.tiers.last() {
-            if top.data.len() as u64 > self.tier_capacity {
-                let newtop = top.data.iter().fold(
-                    Tier::new(self.tiers.len() as u32, self.tier_capacity),
-                    |mut t, (slot, cnt)| {
-                        let slot_floor = slot / t.floor_base * t.floor_base;
-                        *t.data.entry(&slot_floor).or_insert(0) += cnt;
-                        t
-                    },
-                );
-                self.tiers.push(newtop);
-            }
-        } else {
-            // First insertion, tiers' length should be 0
-            let newtop = self.data.iter().fold(
-                Tier::new(self.tiers.len() as u32, self.tier_capacity),
-                |mut t, (slot, entries)| {
-                    let slot_floor = slot / t.floor_base * t.floor_base;
-                    *t.data.entry(&slot_floor).or_insert(0) +=
-                        entries.len() as EntryCnt;
-                    t
-                },
-            );
-            self.tiers.push(newtop);
-        };
+        self.ensure_tier_capacity(slot);
 
         #[allow(clippy::unwrap_or_default)]
         if self.data.entry(&slot).or_insert(DataCtner::new()).insert(k) {
@@ -142,10 +118,8 @@ where
     ///
     /// * `slot` - The slot to remove the key from.
     /// * `k` - The key to remove.
-    pub fn remove(&mut self, mut slot: Slot, k: &K) {
-        if self.swap_order {
-            slot = swap_order(slot);
-        }
+    pub fn remove(&mut self, slot: Slot, k: &K) {
+        let slot = self.to_storage_slot(slot);
 
         loop {
             if let Some(top_len) = self.tiers.last().map(|top| top.data.len())
@@ -240,16 +214,10 @@ where
         slot_right_bound: Option<Slot>, // Included
         page_size: PageSize,
         page_index: PageIndex, // start from 0
-        mut reverse_order: bool,
+        reverse_order: bool,
     ) -> Vec<K> {
-        let mut slot_min = slot_left_bound.unwrap_or(Slot::MIN);
-        let mut slot_max = slot_right_bound.unwrap_or(Slot::MAX);
-
-        if self.swap_order {
-            (slot_min, slot_max) =
-                (swap_order(slot_max), swap_order(slot_min));
-            reverse_order = !reverse_order;
-        }
+        let (slot_min, slot_max, storage_is_reversed) =
+            self.transform_range(slot_left_bound, slot_right_bound);
 
         if slot_max < slot_min {
             return vec![];
@@ -264,7 +232,7 @@ where
             slot_max,
             page_size,
             page_index,
-            reverse_order,
+            reverse_order ^ storage_is_reversed,
         )
     }
 
@@ -452,20 +420,18 @@ where
     /// The total number of entries (`EntryCnt`) within the specified range.
     pub fn entry_cnt_within_two_slots(
         &self,
-        mut slot_start: Slot,
-        mut slot_end: Slot,
+        slot_start: Slot,
+        slot_end: Slot,
     ) -> EntryCnt {
-        if self.swap_order {
-            (slot_start, slot_end) =
-                (swap_order(slot_end), swap_order(slot_start));
-        }
+        let (slot_min, slot_max, _) =
+            self.transform_range(Some(slot_start), Some(slot_end));
 
-        if slot_start > slot_end {
+        if slot_min > slot_max {
             0
         } else {
-            let cnt = self.distance_to_the_leftmost_slot(slot_end)
-                - self.distance_to_the_leftmost_slot(slot_start)
-                + self.slot_entry_cnt(slot_end) as Distance;
+            let cnt = self.distance_to_the_leftmost_slot(slot_max)
+                - self.distance_to_the_leftmost_slot(slot_min)
+                + self.slot_entry_cnt(slot_max) as Distance;
             cnt as EntryCnt
         }
     }
@@ -498,6 +464,80 @@ where
     /// Returns the total number of entries in the `SlotDB`.
     pub fn total(&self) -> EntryCnt {
         self.total_by_slot(None, None)
+    }
+
+    // --- Private Helper Methods ---
+
+    // Ensure there is enough tier capacity to cover the new slot.
+    fn ensure_tier_capacity(&mut self, _target_slot: Slot) {
+        if let Some(top) = self.tiers.last() {
+            if top.data.len() as u64 <= self.tier_capacity {
+                return;
+            }
+            // Create a new top tier
+            let newtop = top.data.iter().fold(
+                Tier::new(self.tiers.len() as u32, self.tier_capacity),
+                |mut t, (slot, cnt)| {
+                    let slot_floor = slot / t.floor_base * t.floor_base;
+                    *t.data.entry(&slot_floor).or_insert(0) += cnt;
+                    t
+                },
+            );
+            self.tiers.push(newtop);
+        } else {
+            // First insertion, tiers' length should be 0
+            let newtop = self.data.iter().fold(
+                Tier::new(self.tiers.len() as u32, self.tier_capacity),
+                |mut t, (slot, entries)| {
+                    let slot_floor = slot / t.floor_base * t.floor_base;
+                    *t.data.entry(&slot_floor).or_insert(0) +=
+                        entries.len() as EntryCnt;
+                    t
+                },
+            );
+            self.tiers.push(newtop);
+        }
+    }
+
+    // Convert a logical slot (user perspective) to a storage slot (internal key).
+    #[inline(always)]
+    fn to_storage_slot(&self, logical_slot: Slot) -> Slot {
+        if self.swap_order {
+            !logical_slot
+        } else {
+            logical_slot
+        }
+    }
+
+    // Convert a storage slot (internal key) back to a logical slot.
+    #[allow(dead_code)]
+    #[inline(always)]
+    fn to_logical_slot(&self, storage_slot: Slot) -> Slot {
+        if self.swap_order {
+            !storage_slot
+        } else {
+            storage_slot
+        }
+    }
+
+    // Transform a logical range [min, max] into a storage range and direction flag.
+    // Returns (storage_min, storage_max, storage_is_reversed_relative_to_logical)
+    fn transform_range(
+        &self,
+        logical_min: Option<Slot>,
+        logical_max: Option<Slot>,
+    ) -> (Slot, Slot, bool) {
+        let min = logical_min.unwrap_or(Slot::MIN);
+        let max = logical_max.unwrap_or(Slot::MAX);
+
+        if self.swap_order {
+            // If storage is reversed:
+            // logical [10, 20] -> storage [!20, !10]
+            // And the storage order is reversed relative to logical order.
+            (self.to_storage_slot(max), self.to_storage_slot(min), true)
+        } else {
+            (min, max, false)
+        }
     }
 }
 
@@ -541,16 +581,22 @@ where
         0 == self.len()
     }
 
+    fn try_upgrade(&mut self) {
+        let inner_set = match self {
+            Self::Small(set) if set.len() > INLINE_CAPACITY_THRESHOLD => set,
+            _ => return,
+        };
+
+        let new_map = inner_set.iter().fold(MapxOrd::new(), |mut acc, k| {
+            acc.insert(k, &());
+            acc
+        });
+
+        *self = Self::Large(new_map);
+    }
+
     fn insert(&mut self, k: K) -> bool {
-        if let Self::Small(i) = self
-            && i.len() > 8
-        {
-            *self =
-                Self::Large(i.iter().fold(MapxOrd::new(), |mut acc, k| {
-                    acc.insert(k, &());
-                    acc
-                }));
-        }
+        self.try_upgrade();
 
         match self {
             Self::Small(i) => i.insert(k),
@@ -632,10 +678,7 @@ impl Tier {
     }
 }
 
-#[inline(always)]
-fn swap_order(original_slot_value: Slot) -> Slot {
-    !original_slot_value
-}
+
 
 #[cfg(test)]
 mod test;
