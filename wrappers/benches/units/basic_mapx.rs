@@ -42,7 +42,7 @@ fn random_read_write(c: &mut Criterion) {
     let mut keys = vec![];
     group.bench_function(" random write ", |b| {
         b.iter(|| {
-            let n = rng.r#gen::<usize>();
+            let n = rng.random::<u64>() as usize;
             let key = [n; 2];
             db.set_value(&key, &vec![n; 128]);
             keys.push(key);
@@ -51,7 +51,7 @@ fn random_read_write(c: &mut Criterion) {
 
     group.bench_function(" random read ", |b| {
         b.iter(|| {
-            let index: usize = rng.r#gen_range(0..keys.len());
+            let index: usize = rng.random_range(0..keys.len());
             keys.get(index).map(|key| db.get(key));
         })
     });

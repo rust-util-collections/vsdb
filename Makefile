@@ -80,6 +80,5 @@ publish:
 	cargo publish -p vsdb
 
 publish_all: publish
-	cargo publish -p vsdb_hash_db
-	cargo publish -p vsdb_trie_db
 	cargo publish -p vsdb_slot_db
+	cargo publish -p vsdb_trie_db
