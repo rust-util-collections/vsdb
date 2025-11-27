@@ -678,7 +678,5 @@ impl Tier {
     }
 }
 
-
-
 #[cfg(test)]
 mod test;
