@@ -15,7 +15,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-vsdb_trie_db = "5.0.1"
+vsdb_trie_db = "6.0.1"
 ```
 
 ## Usage
@@ -28,26 +28,33 @@ For more detailed API examples, see [API Examples](docs/api.md).
 use vsdb_trie_db::MptStore;
 
 // Create a new MptStore
-let mut store = MptStore::new();
+let store = MptStore::new();
 
-// Initialize a new trie with a unique backend key
-let mut trie = store.trie_init(b"my_app_state").unwrap();
+// Initialize a new trie (starts with an empty root)
+let mut trie = store.trie_init();
 
-// Insert a key-value pair
+// Insert key-value pairs (automatically commits)
 trie.insert(b"key1", b"value1").unwrap();
+trie.insert(b"key2", b"value2").unwrap();
 
-// Commit the changes to persist them and get a new state root
-let mut trie = trie.commit().unwrap();
+// Get the current root hash
 let root = trie.root();
 
-// Retrieve the value using the latest trie instance
+// Retrieve values
 let value = trie.get(b"key1").unwrap().unwrap();
 assert_eq!(value, b"value1");
 
-// Create a read-only handle to the trie at a specific root
-let ro_trie = trie.ro_handle(root).unwrap();
-let value = ro_trie.get(b"key1").unwrap().unwrap();
+// Load an existing trie from a root hash
+let loaded_trie = store.trie_load(&root);
+let value = loaded_trie.get(b"key1").unwrap().unwrap();
 assert_eq!(value, b"value1");
+
+// Batch update operations
+let ops = vec![
+    (b"key3".as_ref(), Some(b"value3".as_ref())),
+    (b"key1".as_ref(), None), // Remove key1
+];
+trie.batch_update(&ops).unwrap();
 ```
 
 ## License

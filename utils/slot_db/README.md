@@ -15,7 +15,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-vsdb_slot_db = "5.0.1"
+vsdb_slot_db = "6.0.0"
 ```
 
 ## Usage
