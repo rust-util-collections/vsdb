@@ -258,7 +258,11 @@ impl Engine for RocksEngine {
     }
 
     fn get_instance_len_hint(&self, instance_prefix: PreBytes) -> u64 {
-        crate::parse_int!(self.meta.get(instance_prefix).unwrap().unwrap(), u64)
+        self.meta
+            .get(instance_prefix)
+            .unwrap()
+            .map(|v| crate::parse_int!(v, u64))
+            .unwrap_or(0)
     }
 
     fn set_instance_len_hint(&self, instance_prefix: PreBytes, new_len: u64) {
