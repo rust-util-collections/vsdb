@@ -1,5 +1,5 @@
 use crate::common::{
-    Engine, PREFIX_SIZE, Pre, PreBytes, RESERVED_ID_CNT, RawKey, RawValue,
+    Engine, GB, PREFIX_SIZE, Pre, PreBytes, RESERVED_ID_CNT, RawKey, RawValue,
     vsdb_get_base_dir, vsdb_set_base_dir,
 };
 use fjall::{CompressionType, Config, Keyspace, Partition, PartitionCreateOptions};
@@ -68,9 +68,42 @@ impl Engine for FjallEngine {
         // Ensure base dir exists
         fs::create_dir_all(&base_dir).c(d!())?;
 
+        let total_mem_budget = if cfg!(target_os = "linux") {
+            let memsiz = fs::read_to_string("/proc/meminfo")
+                .c(d!())?
+                .lines()
+                .find(|l| l.contains("MemAvailable"))
+                .c(d!())?
+                .replace(|ch: char| !ch.is_numeric(), "")
+                .parse::<u64>()
+                .c(d!())?
+                * 1024;
+            alt!((16 * GB) < memsiz, memsiz / 4, GB)
+        } else {
+            GB
+        };
+
+        // NOTE:
+        // The current `get_shard_idx` implementation uses the most significant byte (MSB)
+        // of the Big-Endian prefix. Since `alloc_prefix` increments a counter sequentially
+        // starting from a small number, the MSB will remain 0 for practically forever
+        // (until 2^56 collections are created).
+        // This means effectively ONLY Shard 0 is used.
+        // If we divide memory by SHARD_CNT (16), we starve the only active shard.
+        // Therefore, we oversubscribe memory significantly, assuming that in practice
+        // only a few shards (likely just one) will ever be active.
+        // We set the budget per shard to half of the total available budget.
+        let per_shard_budget = total_mem_budget / 2;
+        let write_buffer_size = per_shard_budget / 4;
+        let cache_size = per_shard_budget - write_buffer_size;
+
         for i in 0..SHARD_CNT {
             let dir = base_dir.join(format!("shard_{}", i));
-            let ks = Config::new(dir).open().c(d!())?;
+            let ks = Config::new(dir)
+                .max_write_buffer_size(write_buffer_size)
+                .cache_size(cache_size)
+                .open()
+                .c(d!())?;
 
             let mut parts = Vec::with_capacity(DATA_SET_NUM);
             for j in 0..DATA_SET_NUM {
@@ -160,7 +193,8 @@ impl Engine for FjallEngine {
 
     fn flush(&self) {
         for ks in &self.shards {
-            ks.persist(fjall::PersistMode::SyncAll).unwrap();
+            // ks.persist(fjall::PersistMode::SyncAll).unwrap();
+            ks.persist(fjall::PersistMode::Buffer).unwrap();
         }
     }
 
