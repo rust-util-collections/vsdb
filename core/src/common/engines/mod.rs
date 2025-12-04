@@ -4,8 +4,8 @@
 #[cfg(feature = "rocks_backend")]
 mod rocks_backend;
 
-#[cfg(feature = "parity_backend")]
-mod parity_backend;
+#[cfg(feature = "fjall_backend")]
+mod fjall_backend;
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -16,11 +16,11 @@ pub(crate) use rocks_backend::RocksEngine as RocksDB;
 #[cfg(feature = "rocks_backend")]
 type EngineIter = rocks_backend::RocksIter;
 
-#[cfg(feature = "parity_backend")]
-pub(crate) use parity_backend::ParityEngine as ParityDB;
+#[cfg(feature = "fjall_backend")]
+pub(crate) use fjall_backend::FjallEngine as FjallDB;
 
-#[cfg(feature = "parity_backend")]
-type EngineIter = parity_backend::ParityIter;
+#[cfg(feature = "fjall_backend")]
+type EngineIter = fjall_backend::FjallIter;
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
