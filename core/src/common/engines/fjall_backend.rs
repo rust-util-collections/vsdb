@@ -2,7 +2,7 @@ use crate::common::{
     Engine, PREFIX_SIZE, Pre, PreBytes, RESERVED_ID_CNT, RawKey, RawValue,
     vsdb_get_base_dir, vsdb_set_base_dir,
 };
-use fjall::{Config, Keyspace, Partition, PartitionCreateOptions};
+use fjall::{CompressionType, Config, Keyspace, Partition, PartitionCreateOptions};
 use parking_lot::Mutex;
 use ruc::*;
 use std::{
@@ -74,12 +74,19 @@ impl Engine for FjallEngine {
 
             let mut parts = Vec::with_capacity(DATA_SET_NUM);
             for j in 0..DATA_SET_NUM {
-                let p = ks
-                    .open_partition(
-                        &format!("part_{}", j),
-                        PartitionCreateOptions::default(),
-                    )
-                    .c(d!())?;
+                let mut opts = PartitionCreateOptions::default();
+
+                #[cfg(feature = "compress")]
+                {
+                    opts = opts.compression(CompressionType::Lz4);
+                }
+
+                #[cfg(not(feature = "compress"))]
+                {
+                    opts = opts.compression(CompressionType::None);
+                }
+
+                let p = ks.open_partition(&format!("part_{}", j), opts).c(d!())?;
                 parts.push(p);
             }
             shards.push(ks);
@@ -87,9 +94,19 @@ impl Engine for FjallEngine {
         }
 
         // Use a dedicated partition in shard 0 for meta
-        let meta = shards[0]
-            .open_partition("meta", PartitionCreateOptions::default())
-            .c(d!())?;
+        let mut meta_opts = PartitionCreateOptions::default();
+
+        #[cfg(feature = "compress")]
+        {
+            meta_opts = meta_opts.compression(CompressionType::Lz4);
+        }
+
+        #[cfg(not(feature = "compress"))]
+        {
+            meta_opts = meta_opts.compression(CompressionType::None);
+        }
+
+        let meta = shards[0].open_partition("meta", meta_opts).c(d!())?;
 
         let (prefix_allocator, initial_value) = PreAllocator::init();
 
