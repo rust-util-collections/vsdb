@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize, de};
 use std::{
     borrow::Cow,
     fmt,
-    mem::transmute,
+    marker::PhantomData,
     ops::{Deref, DerefMut, RangeBounds},
     result::Result as StdResult,
     sync::LazyLock,
@@ -218,7 +218,7 @@ impl Mapx {
     pub(crate) fn iter(&self) -> MapxIter<'_> {
         MapxIter {
             db_iter: VSDB.db.iter(self.prefix.to_bytes()),
-            _hdr: self,
+            _marker: PhantomData,
         }
     }
 
@@ -237,7 +237,18 @@ impl Mapx {
     ) -> MapxIter<'a> {
         MapxIter {
             db_iter: VSDB.db.range(self.prefix.to_bytes(), bounds),
-            _hdr: self,
+            _marker: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn range_detached<'a, R: RangeBounds<Cow<'a, [u8]>>>(
+        &self,
+        bounds: R,
+    ) -> MapxIter<'a> {
+        MapxIter {
+            db_iter: VSDB.db.range(self.prefix.to_bytes(), bounds),
+            _marker: PhantomData,
         }
     }
 
@@ -412,12 +423,12 @@ impl<'de> Deserialize<'de> for Mapx {
 
 pub struct MapxIter<'a> {
     db_iter: EngineIter,
-    _hdr: &'a Mapx,
+    _marker: PhantomData<&'a ()>,
 }
 
 impl fmt::Debug for MapxIter<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("MapxIter").field(&self._hdr).finish()
+        f.debug_tuple("MapxIter").finish()
     }
 }
 
@@ -452,9 +463,10 @@ impl<'a> Iterator for MapxIterMut<'a> {
         let (k, v) = self.db_iter.next()?;
 
         let vmut = ValueIterMut {
+            prefix: self.hdr.prefix.to_bytes(),
             key: k.clone(),
             value: v,
-            iter_mut: unsafe { transmute::<&'_ mut Self, &'a mut Self>(self) },
+            _marker: PhantomData,
         };
 
         Some((k, vmut))
@@ -466,9 +478,10 @@ impl<'a> DoubleEndedIterator for MapxIterMut<'a> {
         let (k, v) = self.db_iter.next_back()?;
 
         let vmut = ValueIterMut {
+            prefix: self.hdr.prefix.to_bytes(),
             key: k.clone(),
             value: v,
-            iter_mut: unsafe { transmute::<&'_ mut Self, &'a mut Self>(self) },
+            _marker: PhantomData,
         };
 
         Some((k, vmut))
@@ -477,14 +490,15 @@ impl<'a> DoubleEndedIterator for MapxIterMut<'a> {
 
 #[derive(Debug)]
 pub struct ValueIterMut<'a> {
+    prefix: PreBytes,
     key: RawKey,
     value: RawValue,
-    iter_mut: &'a mut MapxIterMut<'a>,
+    _marker: PhantomData<&'a mut ()>,
 }
 
 impl Drop for ValueIterMut<'_> {
     fn drop(&mut self) {
-        self.iter_mut.hdr.insert(&self.key[..], &self.value[..]);
+        VSDB.db.insert(self.prefix, &self.key, &self.value);
     }
 }
 

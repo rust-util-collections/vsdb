@@ -31,7 +31,7 @@ static HDR: LazyLock<(DB, Vec<String>)> = LazyLock::new(|| rocksdb_open().unwrap
 
 pub struct RocksEngine {
     meta: &'static DB,
-    areas: Vec<&'static str>,
+    cfs: Vec<&'static ColumnFamily>,
     prefix_allocator: PreAllocator,
     max_keylen: AtomicUsize,
 }
@@ -39,7 +39,7 @@ pub struct RocksEngine {
 impl RocksEngine {
     #[inline(always)]
     fn cf_hdr(&self, area_idx: usize) -> &ColumnFamily {
-        self.meta.cf_handle(self.areas[area_idx]).unwrap()
+        self.cfs[area_idx]
     }
 
     #[inline(always)]
@@ -93,9 +93,14 @@ impl Engine for RocksEngine {
             usize
         ));
 
+        let cfs = areas
+            .iter()
+            .map(|name| meta.cf_handle(name).unwrap())
+            .collect();
+
         Ok(RocksEngine {
             meta,
-            areas,
+            cfs,
             prefix_allocator,
             // length of the raw key, exclude the meta prefix
             max_keylen,
@@ -280,19 +285,21 @@ pub struct RocksIter {
 impl Iterator for RocksIter {
     type Item = (RawKey, RawValue);
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner
-            .next()
-            .map(|v| v.unwrap())
-            .map(|(ik, iv)| (ik[PREFIX_SIZE..].to_vec(), iv.into_vec()))
+        self.inner.next().map(|v| v.unwrap()).map(|(ik, iv)| {
+            let mut k = ik.into_vec();
+            k.drain(..PREFIX_SIZE);
+            (k, iv.into_vec())
+        })
     }
 }
 
 impl DoubleEndedIterator for RocksIter {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.inner_rev
-            .next()
-            .map(|v| v.unwrap())
-            .map(|(ik, iv)| (ik[PREFIX_SIZE..].to_vec(), iv.into_vec()))
+        self.inner_rev.next().map(|v| v.unwrap()).map(|(ik, iv)| {
+            let mut k = ik.into_vec();
+            k.drain(..PREFIX_SIZE);
+            (k, iv.into_vec())
+        })
     }
 }
 

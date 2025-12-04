@@ -297,23 +297,27 @@ impl Iterator for ParityIter {
     type Item = (RawKey, RawValue);
     fn next(&mut self) -> Option<Self::Item> {
         match self.inner.next().unwrap() {
-            Some((ik, iv)) => {
+            Some((mut ik, iv)) => {
                 if !ik.starts_with(&self.prefix) {
                     return None;
                 }
-                let k = &ik[PREFIX_SIZE..];
                 match self.range.1.as_ref() {
-                    Bound::Unbounded => Some((k.to_vec(), iv)),
+                    Bound::Unbounded => {
+                        ik.drain(..PREFIX_SIZE);
+                        Some((ik, iv))
+                    }
                     Bound::Excluded(u) => {
-                        if &u[PREFIX_SIZE..] > k {
-                            Some((k.to_vec(), iv))
+                        if u[..] > ik[..] {
+                            ik.drain(..PREFIX_SIZE);
+                            Some((ik, iv))
                         } else {
                             None
                         }
                     }
                     Bound::Included(u) => {
-                        if &u[PREFIX_SIZE..] >= k {
-                            Some((k.to_vec(), iv))
+                        if u[..] >= ik[..] {
+                            ik.drain(..PREFIX_SIZE);
+                            Some((ik, iv))
                         } else {
                             None
                         }
@@ -328,23 +332,27 @@ impl Iterator for ParityIter {
 impl DoubleEndedIterator for ParityIter {
     fn next_back(&mut self) -> Option<Self::Item> {
         match self.inner_rev.prev().unwrap() {
-            Some((ik, iv)) => {
+            Some((mut ik, iv)) => {
                 if !ik.starts_with(&self.prefix) {
                     return None;
                 }
-                let k = &ik[PREFIX_SIZE..];
                 match self.range.0.as_ref() {
-                    Bound::Unbounded => Some((k.to_vec(), iv)),
+                    Bound::Unbounded => {
+                        ik.drain(..PREFIX_SIZE);
+                        Some((ik, iv))
+                    }
                     Bound::Excluded(l) => {
-                        if &l[PREFIX_SIZE..] < k {
-                            Some((k.to_vec(), iv))
+                        if l[..] < ik[..] {
+                            ik.drain(..PREFIX_SIZE);
+                            Some((ik, iv))
                         } else {
                             None
                         }
                     }
                     Bound::Included(l) => {
-                        if &l[PREFIX_SIZE..] <= k {
-                            Some((k.to_vec(), iv))
+                        if l[..] <= ik[..] {
+                            ik.drain(..PREFIX_SIZE);
+                            Some((ik, iv))
                         } else {
                             None
                         }
