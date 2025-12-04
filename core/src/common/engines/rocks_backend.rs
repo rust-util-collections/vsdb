@@ -420,7 +420,7 @@ fn rocksdb_open_shard(dir: &Path) -> Result<(DB, Vec<String>)> {
         .map(|i| ColumnFamilyDescriptor::new(i, cfg.clone()))
         .collect::<Vec<_>>();
 
-    let db = DB::open_cf_descriptors(&cfg, &dir, cfs).c(d!())?;
+    let db = DB::open_cf_descriptors(&cfg, dir, cfs).c(d!())?;
 
     Ok((db, cfhdrs))
 }
