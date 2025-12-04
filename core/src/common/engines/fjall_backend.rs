@@ -2,7 +2,10 @@ use crate::common::{
     Engine, PREFIX_SIZE, Pre, PreBytes, RESERVED_ID_CNT, RawKey, RawValue,
     vsdb_get_base_dir, vsdb_set_base_dir,
 };
-use fjall::{Config, Keyspace, Partition, PartitionCreateOptions};
+use fjall::{
+    CompressionType, Database, Keyspace, KeyspaceCreateOptions, PersistMode,
+    config::CompressionPolicy,
+};
 use parking_lot::Mutex;
 use ruc::*;
 use std::{
@@ -21,10 +24,32 @@ const SHARD_CNT: usize = 16;
 const META_KEY_MAX_KEYLEN: [u8; 1] = [u8::MAX];
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 
+fn keyspace_create_options() -> KeyspaceCreateOptions {
+    let mut opts = KeyspaceCreateOptions::default();
+
+    #[cfg(feature = "compress")]
+    {
+        // When compress feature is enabled, use LZ4 compression for data blocks
+        // L0 and L1 are uncompressed for performance, L2+ use LZ4
+        opts = opts.data_block_compression_policy(CompressionPolicy::new([
+            CompressionType::None,
+            CompressionType::None,
+            CompressionType::Lz4,
+        ]));
+    }
+
+    #[cfg(not(feature = "compress"))]
+    {
+        opts = opts.data_block_compression_policy(CompressionPolicy::disabled());
+    }
+
+    opts
+}
+
 pub struct FjallEngine {
-    meta: Partition,
-    shards: Vec<Keyspace>,
-    shards_parts: Vec<Vec<Partition>>,
+    meta: Keyspace,
+    shards: Vec<Database>,
+    shards_parts: Vec<Vec<Keyspace>>,
     prefix_allocator: PreAllocator,
     max_keylen: AtomicUsize,
 }
@@ -36,7 +61,7 @@ impl FjallEngine {
     }
 
     #[inline(always)]
-    fn get_part(&self, prefix: PreBytes) -> &Partition {
+    fn get_part(&self, prefix: PreBytes) -> &Keyspace {
         let shard_idx = self.get_shard_idx(prefix);
         let part_idx = self.area_idx(prefix);
         &self.shards_parts[shard_idx][part_idx]
@@ -70,25 +95,22 @@ impl Engine for FjallEngine {
 
         for i in 0..SHARD_CNT {
             let dir = base_dir.join(format!("shard_{}", i));
-            let ks = Config::new(dir).open().c(d!())?;
+            let db = Database::builder(&dir).open().c(d!())?;
 
             let mut parts = Vec::with_capacity(DATA_SET_NUM);
             for j in 0..DATA_SET_NUM {
-                let p = ks
-                    .open_partition(
-                        &format!("part_{}", j),
-                        PartitionCreateOptions::default(),
-                    )
+                let p = db
+                    .keyspace(&format!("part_{}", j), keyspace_create_options)
                     .c(d!())?;
                 parts.push(p);
             }
-            shards.push(ks);
+            shards.push(db);
             shards_parts.push(parts);
         }
 
-        // Use a dedicated partition in shard 0 for meta
+        // Use a dedicated keyspace in shard 0 for meta
         let meta = shards[0]
-            .open_partition("meta", PartitionCreateOptions::default())
+            .keyspace("meta", keyspace_create_options)
             .c(d!())?;
 
         let (prefix_allocator, initial_value) = PreAllocator::init();
@@ -142,8 +164,8 @@ impl Engine for FjallEngine {
     }
 
     fn flush(&self) {
-        for ks in &self.shards {
-            ks.persist(fjall::PersistMode::SyncAll).unwrap();
+        for db in &self.shards {
+            db.persist(PersistMode::SyncAll).unwrap();
         }
     }
 
@@ -151,7 +173,7 @@ impl Engine for FjallEngine {
         let part = self.get_part(meta_prefix);
         let inner = part
             .prefix(meta_prefix)
-            .map(|res| res.map(|(k, v)| (k.to_vec(), v.to_vec())));
+            .map(|guard| guard.into_inner().map(|(k, v)| (k.to_vec(), v.to_vec())));
 
         FjallIter {
             inner: Box::new(inner),
@@ -196,7 +218,7 @@ impl Engine for FjallEngine {
 
         let inner = part
             .range((start, end))
-            .map(|res| res.map(|(k, v)| (k.to_vec(), v.to_vec())));
+            .map(|guard| guard.into_inner().map(|(k, v)| (k.to_vec(), v.to_vec())));
 
         FjallIter {
             inner: Box::new(inner),
