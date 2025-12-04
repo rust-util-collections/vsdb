@@ -20,7 +20,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-vsdb_core = "6.0.0"
+vsdb_core = "7.0.0"
 ```
 
 ## Features
