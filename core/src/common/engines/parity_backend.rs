@@ -7,7 +7,9 @@ use parking_lot::Mutex;
 use ruc::*;
 use std::{
     borrow::Cow,
+    fs,
     ops::{Bound, RangeBounds},
+    path::Path,
     sync::{
         LazyLock,
         atomic::{AtomicUsize, Ordering},
@@ -18,6 +20,7 @@ use std::{
 // The last COLID is preserved for the meta storage,
 // so the max value should be `u8::MAX - 1`
 const DATA_SET_NUM: u8 = 2;
+const SHARD_CNT: usize = 16;
 
 const META_COLID: u8 = DATA_SET_NUM;
 
@@ -25,15 +28,24 @@ const META_KEY_MAX_KEYLEN: [u8; 1] = [u8::MAX];
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 const META_KEY_NULL: [u8; 0] = [0; 0];
 
-static HDR: LazyLock<DB> = LazyLock::new(|| paritydb_open().unwrap());
-
 pub struct ParityEngine {
     hdr: &'static DB,
+    shards: Vec<&'static DB>,
     prefix_allocator: PreAllocator,
     max_keylen: AtomicUsize,
 }
 
 impl ParityEngine {
+    #[inline(always)]
+    fn get_shard_idx(&self, prefix: PreBytes) -> usize {
+        (prefix[0] as usize) % SHARD_CNT
+    }
+
+    #[inline(always)]
+    fn get_db(&self, prefix: PreBytes) -> &'static DB {
+        self.shards[self.get_shard_idx(prefix)]
+    }
+
     #[inline(always)]
     fn get_max_keylen(&self) -> usize {
         self.max_keylen.load(Ordering::Relaxed)
@@ -70,7 +82,22 @@ impl ParityEngine {
 
 impl Engine for ParityEngine {
     fn new() -> Result<Self> {
-        let hdr = &HDR;
+        let base_dir = vsdb_get_base_dir();
+        // avoid setting again on an opened DB
+        omit!(vsdb_set_base_dir(&base_dir));
+
+        let mut shards = Vec::with_capacity(SHARD_CNT);
+
+        // Ensure base dir exists
+        fs::create_dir_all(&base_dir).c(d!())?;
+
+        for i in 0..SHARD_CNT {
+            let dir = base_dir.join(format!("shard_{}", i));
+            let db = paritydb_open_shard(&dir)?;
+            shards.push(Box::leak(Box::new(db)) as &'static DB);
+        }
+
+        let hdr = shards[0];
 
         let (prefix_allocator, initial_value) = PreAllocator::init();
 
@@ -103,6 +130,7 @@ impl Engine for ParityEngine {
 
         Ok(ParityEngine {
             hdr,
+            shards,
             prefix_allocator,
             // length of the raw key, exclude the hdr prefix
             max_keylen,
@@ -143,12 +171,13 @@ impl Engine for ParityEngine {
     fn flush(&self) {}
 
     fn iter(&self, hdr_prefix: PreBytes) -> ParityIter {
+        let db = self.get_db(hdr_prefix);
         let area_idx = self.area_idx(hdr_prefix);
 
-        let mut inner = self.hdr.iter(area_idx as u8).unwrap();
+        let mut inner = db.iter(area_idx as u8).unwrap();
         inner.seek(&hdr_prefix).unwrap();
 
-        let mut inner_rev = self.hdr.iter(area_idx as u8).unwrap();
+        let mut inner_rev = db.iter(area_idx as u8).unwrap();
         inner_rev
             .seek(&self.get_upper_bound_value(hdr_prefix))
             .unwrap();
@@ -166,9 +195,10 @@ impl Engine for ParityEngine {
         hdr_prefix: PreBytes,
         bounds: R,
     ) -> ParityIter {
+        let db = self.get_db(hdr_prefix);
         let area_idx = self.area_idx(hdr_prefix);
 
-        let mut inner = self.hdr.iter(area_idx as u8).unwrap();
+        let mut inner = db.iter(area_idx as u8).unwrap();
         let mut b_lo = hdr_prefix.to_vec();
         let l = match bounds.start_bound() {
             Bound::Included(lo) => {
@@ -188,7 +218,7 @@ impl Engine for ParityEngine {
             }
         };
 
-        let mut inner_rev = self.hdr.iter(area_idx as u8).unwrap();
+        let mut inner_rev = db.iter(area_idx as u8).unwrap();
         let mut b_hi = hdr_prefix.to_vec();
         let h = match bounds.end_bound() {
             Bound::Included(hi) => {
@@ -228,11 +258,12 @@ impl Engine for ParityEngine {
     }
 
     fn get(&self, hdr_prefix: PreBytes, key: &[u8]) -> Option<RawValue> {
+        let db = self.get_db(hdr_prefix);
         let area_idx = self.area_idx(hdr_prefix);
 
         let mut k = hdr_prefix.to_vec();
         k.extend_from_slice(key);
-        self.hdr.get(area_idx as u8, &k).unwrap()
+        db.get(area_idx as u8, &k).unwrap()
     }
 
     fn insert(
@@ -241,6 +272,7 @@ impl Engine for ParityEngine {
         key: &[u8],
         value: &[u8],
     ) -> Option<RawValue> {
+        let db = self.get_db(hdr_prefix);
         let area_idx = self.area_idx(hdr_prefix);
 
         let mut k = hdr_prefix.to_vec();
@@ -250,20 +282,20 @@ impl Engine for ParityEngine {
             self.set_max_key_len(key.len());
         }
 
-        let old_v = self.hdr.get(area_idx as u8, &k).unwrap();
-        self.hdr
-            .commit([(area_idx as u8, k, Some(value.to_vec()))])
+        let old_v = db.get(area_idx as u8, &k).unwrap();
+        db.commit([(area_idx as u8, k, Some(value.to_vec()))])
             .unwrap();
         old_v
     }
 
     fn remove(&self, hdr_prefix: PreBytes, key: &[u8]) -> Option<RawValue> {
+        let db = self.get_db(hdr_prefix);
         let area_idx = self.area_idx(hdr_prefix);
 
         let mut k = hdr_prefix.to_vec();
         k.extend_from_slice(key);
-        let old_v = self.hdr.get(area_idx as u8, &k).unwrap();
-        self.hdr.commit([(area_idx as u8, k, None)]).unwrap();
+        let old_v = db.get(area_idx as u8, &k).unwrap();
+        db.commit([(area_idx as u8, k, None)]).unwrap();
         old_v
     }
 
@@ -384,13 +416,8 @@ impl PreAllocator {
     // }
 }
 
-fn paritydb_open() -> Result<DB> {
-    let dir = vsdb_get_base_dir();
-
-    // avoid setting again on an opened DB
-    omit!(vsdb_set_base_dir(&dir));
-
-    let mut cfg = Options::with_columns(&dir, 1 + DATA_SET_NUM);
+fn paritydb_open_shard(dir: &Path) -> Result<DB> {
+    let mut cfg = Options::with_columns(dir, 1 + DATA_SET_NUM);
     cfg.columns.iter_mut().for_each(|c| {
         c.btree_index = true;
     });
