@@ -31,9 +31,6 @@ For detailed API examples, see [API Examples](docs/api.md).
 - `rocks_backend`: Use `rocksdb` as the backend database. C++ implementation.
 - `compress`: Enable data compression in the backend database.
 
-## Known Issues
-
-- The `len()` of a data structure is not always guaranteed to be absolutely reliable and should be treated as a hint. This is because some operations may not update the length atomically in real-time for performance reasons.
 
 ## License
 

@@ -1,39 +1,40 @@
 # VSDB Performance Optimization Summary
 
-本文档总结了对 VSDB 项目进行的性能优化工作。
+This document summarizes the performance optimization work done on the VSDB project.
 
-## 1. RocksDB Engine 优化
+## 1. RocksDB Engine Optimization
 
-### 1.1 性能瓶颈分析
+### 1.1 Performance Bottleneck Analysis
 
-通过代码审查，发现了以下性能问题：
+Code review identified the following performance issues:
 
-1. **热路径内存分配开销大**
-   - 每次 `get()`, `insert()`, `remove()` 都需要创建新的 Vec 并拷贝 meta_prefix + key
-   - 在高频操作场景下造成大量内存分配和拷贝
+1.  **High Overhead in Hot Path Memory Allocation**
+    *   Every `get()`, `insert()`, and `remove()` operation required creating a new `Vec` and copying `meta_prefix + key`.
+    *   This caused significant memory allocation and copying in high-frequency operation scenarios.
 
-2. **max_keylen 更新频繁**
-   - 每次 insert 都检查 key 长度
-   - 长度增大时立即写入 meta DB
-   - 造成不必要的写入放大
+2.  **Frequent `max_keylen` Updates**
+    *   Every `insert` checked the key length.
+    *   If the length increased, it immediately wrote to the meta DB.
+    *   This caused unnecessary write amplification.
 
-3. **缺少批量操作 API**
-   - 无法利用 RocksDB 的 WriteBatch 优化
-   - 批量操作需要逐个写入
+3.  **Lack of Batch Operation API**
+    *   Unable to utilize RocksDB's `WriteBatch` optimization.
+    *   Batch operations had to be written sequentially.
 
-4. **prefix_allocator 使用全局锁**
-   - `alloc_prefix()` 使用 Mutex 保护
-   - 高并发场景下成为性能瓶颈
+4.  **Global Lock on `prefix_allocator`**
+    *   `alloc_prefix()` was protected by a `Mutex`.
+    *   This became a bottleneck in high-concurrency scenarios.
 
-### 1.2 优化方案与实现
+### 1.2 Optimization Solutions and Implementation
 
-#### 优化 1：热路径内存分配优化
+#### Optimization 1: Hot Path Memory Allocation
 
-**修改文件**: `core/src/common/engines/rocks_backend.rs`
+**Modified File**: `core/src/common/engines/rocks_backend.rs`
 
-**实现**:
+**Implementation**:
+
 ```rust
-// 添加 make_full_key 辅助函数
+// Added make_full_key helper function
 #[inline(always)]
 fn make_full_key(meta_prefix: &[u8], key: &[u8]) -> Vec<u8> {
     let total_len = meta_prefix.len() + key.len();
@@ -43,92 +44,85 @@ fn make_full_key(meta_prefix: &[u8], key: &[u8]) -> Vec<u8> {
     full_key
 }
 
-// 在 get/insert/remove 中使用
+// Used in get/insert/remove
 let full_key = make_full_key(meta_prefix.as_slice(), key);
 ```
 
-**效果**:
-- 每次操作只分配一次，使用精确的容量
-- 避免了 Vec 的动态扩容
-- 预计单次操作性能提升 5-15%
+**Effect**:
+*   Allocates only once per operation with exact capacity.
+*   Avoids dynamic `Vec` expansion.
+*   Expected 5-15% performance improvement for single operations.
 
-#### 优化 2：max_keylen 更新策略
+#### Optimization 2: `max_keylen` Update Strategy
 
-**实现**:
+**Implementation**:
+
 ```rust
 fn set_max_key_len(&self, len: usize) {
     let current = self.max_keylen.load(Ordering::Relaxed);
     if len > current {
+        // SAFETY: Always persist to meta DB before updating memory to ensure consistency on crash.
+        // Performance impact is acceptable as key length growth usually stabilizes quickly.
+        self.meta.put(META_KEY_MAX_KEYLEN, len.to_be_bytes()).unwrap();
         self.max_keylen.store(len, Ordering::Relaxed);
-        // 只在显著增长时持久化
-        if len > current + 64 || len > current * 2 {
-            let _ = self.meta.put(META_KEY_MAX_KEYLEN, len.to_be_bytes());
-        }
     }
 }
 ```
 
-**效果**:
-- 大幅减少 meta DB 的写入次数
-- 对于 key 长度变化频繁的工作负载，减少 90%+ 的元数据写入
-- 几乎不影响功能（upper_bound 计算仍然正确）
+**Effect**:
+*   Ensures metadata consistency and safety.
+*   Avoids risk of metadata rollback and data corruption due to program crashes.
+*   While sacrificing some metadata write performance, it guarantees data correctness (Correctness over Performance).
 
-#### 优化 3：WriteBatch API
+#### Optimization 3: WriteBatch API
 
-**新增 API**:
+**New API**:
+
 ```rust
 /// Batch write operations for better performance
 pub fn write_batch<F>(&self, meta_prefix: PreBytes, f: F)
 where
-    F: FnOnce(&mut RocksBatch)
+    F: FnOnce(&mut dyn BatchTrait)
 {
     let db = self.get_db(meta_prefix);
     let cf = self.get_cf(meta_prefix);
     let mut batch = RocksBatch::new(meta_prefix, cf);
     f(&mut batch);
     db.write(batch.inner).unwrap();
-}
-
-pub struct RocksBatch {
-    inner: WriteBatch,
-    meta_prefix: PreBytes,
-    cf: &'static ColumnFamily,
-    max_key_len: usize,
-}
-
-impl RocksBatch {
-    pub fn insert(&mut self, key: &[u8], value: &[u8]) { ... }
-    pub fn remove(&mut self, key: &[u8]) { ... }
+    
+    // ... update max_keylen logic
 }
 ```
 
-**使用示例**:
+**Usage Example**:
+
 ```rust
-engine.write_batch(prefix, |batch| {
+map.batch(|batch| {
     for i in 0..1000 {
         batch.insert(&key(i), &value(i));
     }
 });
 ```
 
-**效果**:
-- 批量写入性能提升 2-5x
-- 原子性保证：所有操作要么全部成功，要么全部失败
-- 减少 fsync 调用次数
+**Effect**:
+*   2-5x performance improvement for batch writes.
+*   Atomicity guarantee: all operations succeed or fail together.
+*   Reduced fsync calls.
 
-#### 优化 4：Lock-Free Prefix Allocator
+#### Optimization 4: Lock-Free Prefix Allocator
 
-**实现**:
+**Implementation**:
+
 ```rust
 fn alloc_prefix(&self) -> Pre {
     static COUNTER: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
     static LK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-    // 快速路径：无锁分配
+    // Fast path: lock-free allocation
     let current = COUNTER.load(Ordering::Relaxed);
     if current > 0 {
         let next = COUNTER.fetch_add(1, Ordering::AcqRel);
-        // 每 1024 次分配才持久化一次
+        // Persist only every 1024 allocations
         if next % 1024 == 0 {
             let _ = self.meta.put(
                 self.prefix_allocator.key,
@@ -138,106 +132,87 @@ fn alloc_prefix(&self) -> Pre {
         return next;
     }
 
-    // 慢速路径：初始化
+    // Slow path: initialization
     let x = LK.lock();
-    // ... 从 DB 读取并初始化
+    // ... read from DB and initialize
 }
 ```
 
-**效果**:
-- 快速路径完全无锁，只有原子操作
-- 批量持久化减少 99.9% 的 DB 写入
-- 高并发场景下性能提升 10-100x
+**Effect**:
+*   Fast path is completely lock-free, using only atomic operations.
+*   Batch persistence reduces DB writes by 99.9%.
+*   10-100x performance improvement in high-concurrency scenarios.
 
-### 1.3 性能对比预期
+### 1.3 Expected Performance Comparison
 
-| 操作类型 | 优化前 | 优化后 | 提升 |
-|---------|--------|--------|------|
-| 单次写入 | 基准 | 5-15% faster | 内存分配优化 |
-| 批量写入 | 基准 | 2-5x faster | WriteBatch API |
-| Prefix 分配（高并发） | 基准 | 10-100x faster | 无锁算法 |
-| 变长 key 写入 | 基准 | 显著减少写放大 | 批量更新 max_keylen |
+| Operation Type | Before | After | Improvement Source |
+| :--- | :--- | :--- | :--- |
+| Single Write | Baseline | 5-15% faster | Memory allocation optimization |
+| Batch Write | Baseline | 2-5x faster | WriteBatch API |
+| Prefix Allocation (High Concurrency) | Baseline | 10-100x faster | Lock-free algorithm |
 
-## 2. Benchmark 改进
+## 2. Benchmark Improvements
 
-### 2.1 清理工作
+### 2.1 Cleanup
 
-**删除的文件**:
-- `wrappers/benches/units/basic_vecx.rs`
-- `wrappers/benches/units/basic_vecx_raw.rs`
-- 对应的测试文件
+**Removed Files**:
+*   `wrappers/benches/units/basic_vecx.rs`
+*   `wrappers/benches/units/basic_vecx_raw.rs`
+*   Corresponding test files
 
-**修改的文件**:
-- `wrappers/benches/basic.rs` - 移除 vecx 引用
-- `wrappers/benches/units/mod.rs` - 注释掉 vecx 模块
+**Modified Files**:
+*   `wrappers/benches/basic.rs` - Removed `vecx` references.
+*   `wrappers/benches/units/mod.rs` - Commented out `vecx` module.
 
-### 2.2 新增性能测试
+### 2.2 New Performance Tests
 
-**文件**: `core/benches/units/batch_write.rs`
+**File**: `core/benches/units/batch_write.rs`
 
-**测试内容**:
-1. **Single Inserts** - 测试 1000 次单独插入的性能
-2. **Mixed Workload** - 测试 80% 读 / 20% 写的混合负载
-3. **Range Scans** - 测试范围扫描性能（100 和 1000 条记录）
+**Test Content**:
+1.  **Single Inserts** - Test performance of 1000 single inserts.
+2.  **Mixed Workload** - Test 80% read / 20% write mixed workload.
+3.  **Range Scans** - Test range scan performance (100 and 1000 records).
 
-**运行方式**:
+**How to Run**:
+
 ```bash
-# 运行所有 benchmark
+# Run all benchmarks
 cargo bench --no-default-features --features "rocks_backend,compress,msgpack_codec"
 
-# 只运行新的 batch_write benchmark
+# Run only the new batch_write benchmark
 cargo bench --no-default-features --features "rocks_backend,compress,msgpack_codec" batch_write
 ```
 
-### 2.3 测试建议
+## 3. Code Quality Improvements
 
-建议在以下场景进行性能测试：
+### 3.1 Removal of Deprecated Code
 
-1. **单机性能测试**
-   - 测试单线程写入吞吐量
-   - 测试多线程并发写入
-   - 测试批量写入 vs 单条写入
+**Completely Removed**:
+*   `Vecx` and `VecxRaw` types and all their implementations.
+*   Related test files.
+*   References in Benchmarks.
 
-2. **实际工作负载模拟**
-   - 模拟实际应用的读写比例
-   - 测试不同 key 大小的影响
-   - 测试不同 value 大小的影响
+**Reason**:
+*   Relied on unreliable `len()` tracking.
+*   High maintenance cost.
+*   Users can use `MapxOrd<usize, V>` as a replacement.
 
-3. **压力测试**
-   - 高并发 prefix 分配
-   - 大量短 key vs 少量长 key
-   - 持续写入的稳定性
-
-## 3. 代码质量改进
-
-### 3.1 删除废弃代码
-
-**完全移除**:
-- `Vecx` 和 `VecxRaw` 类型及其所有实现
-- 相关的测试文件
-- Benchmark 中的引用
-
-**原因**:
-- 依赖不可靠的 `len()` 跟踪
-- 维护成本高
-- 用户可以使用 `MapxOrd<usize, V>` 替代
-
-### 3.2 文档更新
+### 3.2 Documentation Updates
 
 **CHANGELOG.md**:
-- 详细记录所有 breaking changes
-- 提供迁移指南
-- 说明性能改进和原理
-- 包含代码示例
+*   Detailed all breaking changes.
+*   Provided migration guides.
+*   Explained performance improvements and rationale.
+*   Included code examples.
 
 **README.md**:
-- 更新 "Important Changes" 部分
-- 说明 API 变更
-- 移除 Vecx 相关内容
+*   Updated "Important Changes" section.
+*   Explained API changes.
+*   Removed content related to `Vecx`.
 
-## 4. 编译和测试
+## 4. Compilation and Testing
 
-### 4.1 编译验证
+### 4.1 Compilation Verification
 
 ```bash
 # RocksDB backend
@@ -246,68 +221,68 @@ cargo build --no-default-features --features "rocks_backend,compress,msgpack_cod
 # Fjall backend (default)
 cargo build --features fjall_backend
 
-# 全部包（包括 utils）
+# All packages (including utils)
 cargo build --all --no-default-features --features "rocks_backend,compress,msgpack_codec"
 ```
 
-### 4.2 测试验证
+### 4.2 Test Verification
 
 ```bash
-# 运行核心测试
+# Run core tests
 cargo test --no-default-features --features "rocks_backend,compress,msgpack_codec" -p vsdb_core
 
-# 运行 wrapper 测试
+# Run wrapper tests
 cargo test --no-default-features --features "rocks_backend,compress,msgpack_codec" -p vsdb
 
-# 运行 benchmark
+# Run benchmarks
 cargo bench --no-default-features --features "rocks_backend,compress,msgpack_codec"
 ```
 
-## 5. 后续工作建议
+## 5. Future Work Suggestions
 
-### 5.1 进一步优化方向
+### 5.1 Further Optimization Directions
 
-1. **批量读取 API**
-   - 添加 `multi_get()` 支持
-   - 利用 RocksDB 的 `multi_get()` 优化
+1.  **Batch Read API**
+    *   Add `multi_get()` support.
+    *   Utilize RocksDB's `multi_get()` optimization.
 
-2. **异步 API**
-   - 考虑添加异步版本的 API
-   - 利用 tokio 或 async-std
+2.  **Async API**
+    *   Consider adding async versions of the API.
+    *   Utilize `tokio` or `async-std`.
 
-3. **缓存层**
-   - 添加可选的内存缓存层
-   - 减少热数据的磁盘访问
+3.  **Caching Layer**
+    *   Add an optional in-memory caching layer.
+    *   Reduce disk access for hot data.
 
-4. **压缩优化**
-   - 根据数据特征选择压缩算法
-   - 支持列族级别的压缩配置
+4.  **Compression Optimization**
+    *   Select compression algorithms based on data characteristics.
+    *   Support column-family level compression configuration.
 
-### 5.2 性能监控
+### 5.2 Performance Monitoring
 
-建议添加：
-1. 性能指标收集（延迟、吞吐量、资源使用）
-2. 定期的性能回归测试
-3. 不同工作负载的性能基准
+Suggested additions:
+1.  Performance metrics collection (latency, throughput, resource usage).
+2.  Regular performance regression testing.
+3.  Performance benchmarks for different workloads.
 
-## 6. 总结
+## 6. Summary
 
-本次优化工作主要聚焦于：
+This optimization work focused on:
 
-1. **RocksDB Engine 核心优化** - 减少内存分配、降低写放大、提高并发性能
-2. **API 改进** - 添加 WriteBatch 支持批量操作
-3. **代码清理** - 移除废弃的 Vecx 相关代码
-4. **测试改进** - 添加新的性能测试用例
+1.  **RocksDB Engine Core Optimization** - Reduced memory allocation, lower write amplification, improved concurrency performance.
+2.  **API Improvements** - Added `WriteBatch` support for batch operations.
+3.  **Code Cleanup** - Removed deprecated `Vecx` related code.
+4.  **Test Improvements** - Added new performance test cases.
 
-**预期整体性能提升**:
-- 单次写入：5-15% 提升
-- 批量写入：2-5x 提升
-- 高并发场景：10-100x 提升（prefix 分配）
-- 内存使用：显著减少热路径上的堆分配
+**Expected Overall Performance Improvement**:
+*   Single Write: 5-15% improvement.
+*   Batch Write: 2-5x improvement.
+*   High Concurrency: 10-100x improvement (prefix allocation).
+*   Memory Usage: Significantly reduced heap allocation on hot paths.
 
-**文档完整性**:
-- CHANGELOG 详细记录所有变更
-- 提供完整的迁移指南
-- 包含代码示例和使用说明
+**Documentation Completeness**:
+*   CHANGELOG details all changes.
+*   Complete migration guide provided.
+*   Includes code examples and usage instructions.
 
-所有修改已完成编译验证，可以进行实际性能测试来验证优化效果。
+All changes have passed compilation verification and are ready for actual performance testing to verify optimization effects.
