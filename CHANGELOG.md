@@ -203,7 +203,7 @@ enum DataCtner<K> {
     Small(BTreeSet<K>),
     Large {
         map: MapxOrd<K, ()>,
-        len: Orphan<usize>  // Explicit length counter
+        len: usize, // Explicit length counter (fast)
     },
 }
 ```
@@ -212,6 +212,7 @@ This is an acceptable exception because:
 1. Slot DB explicitly needs length for its pagination algorithm
 2. The counter is clearly visible in the type definition
 3. It's maintained manually at the application level, not in the core
+4. `DataCtner` updates are fully persisted as values, ensuring the length counter is safe.
 
 ### Testing Changes
 

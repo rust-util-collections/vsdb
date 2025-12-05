@@ -563,7 +563,7 @@ where
     Small(BTreeSet<K>),
     Large {
         map: MapxOrd<K, ()>,
-        len: Orphan<usize>,
+        len: usize,
     },
 }
 
@@ -578,7 +578,7 @@ where
     fn len(&self) -> usize {
         match self {
             Self::Small(i) => i.len(),
-            Self::Large { len, .. } => len.get_value(),
+            Self::Large { len, .. } => *len,
         }
     }
 
@@ -600,7 +600,7 @@ where
 
         *self = Self::Large {
             map: new_map,
-            len: Orphan::new(set_len),
+            len: set_len,
         };
     }
 
@@ -613,7 +613,7 @@ where
                 let existed = map.get(&k).is_some();
                 map.insert(&k, &());
                 if !existed {
-                    *len.get_mut() += 1;
+                    *len += 1;
                 }
                 !existed
             }
@@ -627,7 +627,7 @@ where
                 let existed = map.get(target).is_some();
                 if existed {
                     map.remove(target);
-                    *len.get_mut() -= 1;
+                    *len -= 1;
                 }
                 existed
             }
