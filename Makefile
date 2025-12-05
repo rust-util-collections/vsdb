@@ -41,10 +41,12 @@ bench:
 	cargo bench --workspace
 	du -sh ~/.vsdb
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench --workspace --no-default-features --features "rocks_backend,cbor_codec"
-	du -sh ~/.vsdb
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo bench --workspace --features "compress"
+	du -sh ~/.vsdb
+
+bench_rocksdb:
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
+	cargo bench --workspace --no-default-features --features "rocks_backend,cbor_codec"
 	du -sh ~/.vsdb
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo bench --workspace --no-default-features --features "rocks_backend,compress,cbor_codec"
