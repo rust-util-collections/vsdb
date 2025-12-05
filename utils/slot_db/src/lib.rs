@@ -104,7 +104,11 @@ where
         if self.data.entry(&slot).or_insert(DataCtner::new()).insert(k) {
             self.tiers.iter_mut().for_each(|t| {
                 let slot_floor = slot / t.floor_base * t.floor_base;
-                *t.data.entry(&slot_floor).or_insert(0) += 1;
+                let mut v = t.data.entry(&slot_floor).or_insert(0);
+                if 0 == *v {
+                    *t.entry_count.get_mut() += 1;
+                }
+                *v += 1;
             });
             *self.total.get_mut() += 1;
         }
@@ -149,6 +153,7 @@ where
                 if 1 == *cnt {
                     drop(cnt); // release the mut reference
                     t.data.remove(&slot_floor);
+                    *t.entry_count.get_mut() -= 1;
                 } else {
                     *cnt -= 1;
                 }
@@ -479,8 +484,12 @@ where
                 Tier::new(self.tiers.len() as u32, self.tier_capacity),
                 |mut t, (slot, cnt)| {
                     let slot_floor = slot / t.floor_base * t.floor_base;
-                    *t.data.entry(&slot_floor).or_insert(0) += cnt;
-                    *t.entry_count.get_mut() += 1;
+                    let mut v = t.data.entry(&slot_floor).or_insert(0);
+                    if 0 == *v {
+                        *t.entry_count.get_mut() += 1;
+                    }
+                    *v += cnt;
+                    drop(v);
                     t
                 },
             );
@@ -491,9 +500,12 @@ where
                 Tier::new(self.tiers.len() as u32, self.tier_capacity),
                 |mut t, (slot, entries)| {
                     let slot_floor = slot / t.floor_base * t.floor_base;
-                    *t.data.entry(&slot_floor).or_insert(0) +=
-                        entries.len() as EntryCnt;
-                    *t.entry_count.get_mut() += 1;
+                    let mut v = t.data.entry(&slot_floor).or_insert(0);
+                    if 0 == *v {
+                        *t.entry_count.get_mut() += 1;
+                    }
+                    *v += entries.len() as EntryCnt;
+                    drop(v);
                     t
                 },
             );
@@ -561,10 +573,7 @@ where
     K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
     Small(BTreeSet<K>),
-    Large {
-        map: MapxOrd<K, ()>,
-        len: usize,
-    },
+    Large { map: MapxOrd<K, ()>, len: usize },
 }
 
 impl<K> DataCtner<K>
