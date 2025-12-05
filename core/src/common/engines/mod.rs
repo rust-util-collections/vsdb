@@ -26,7 +26,6 @@ type EngineIter = fjall_backend::FjallIter;
 /////////////////////////////////////////////////////////////////////////////
 
 use crate::common::{PREFIX_SIZE, Pre, PreBytes, RawKey, RawValue, VSDB};
-use parking_lot::Mutex;
 use ruc::*;
 use serde::{Deserialize, Serialize, de};
 use std::{
@@ -37,9 +36,6 @@ use std::{
     result::Result as StdResult,
     sync::LazyLock,
 };
-
-static LEN_LK: LazyLock<Vec<Mutex<()>>> =
-    LazyLock::new(|| (0..VSDB.db.area_count()).map(|_| Mutex::new(())).collect());
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -68,36 +64,22 @@ pub trait Engine: Sized {
 
     fn get(&self, meta_prefix: PreBytes, key: &[u8]) -> Option<RawValue>;
 
-    fn insert(
-        &self,
-        meta_prefix: PreBytes,
-        key: &[u8],
-        value: &[u8],
-    ) -> Option<RawValue>;
+    /// Insert a key-value pair. Does not return the old value for performance.
+    fn insert(&self, meta_prefix: PreBytes, key: &[u8], value: &[u8]);
 
-    fn remove(&self, meta_prefix: PreBytes, key: &[u8]) -> Option<RawValue>;
+    /// Remove a key. Does not return the old value for performance.
+    fn remove(&self, meta_prefix: PreBytes, key: &[u8]);
 
-    fn get_instance_len_hint(&self, instance_prefix: PreBytes) -> u64;
+    /// Batch write operations.
+    fn write_batch<F>(&self, meta_prefix: PreBytes, f: F)
+    where
+        F: FnOnce(&mut dyn BatchTrait);
+}
 
-    fn set_instance_len_hint(&self, instance_prefix: PreBytes, new_len: u64);
-
-    fn increase_instance_len_hint(&self, instance_prefix: PreBytes) {
-        let x = LEN_LK[self.area_idx(instance_prefix)].lock();
-
-        let l = self.get_instance_len_hint(instance_prefix);
-        self.set_instance_len_hint(instance_prefix, l + 1);
-
-        drop(x);
-    }
-
-    fn decrease_instance_len_hint(&self, instance_prefix: PreBytes) {
-        let x = LEN_LK[self.area_idx(instance_prefix)].lock();
-
-        let l = self.get_instance_len_hint(instance_prefix);
-        self.set_instance_len_hint(instance_prefix, l.saturating_sub(1));
-
-        drop(x);
-    }
+/// Trait for batch write operations
+pub trait BatchTrait {
+    fn insert(&mut self, key: &[u8], value: &[u8]);
+    fn remove(&mut self, key: &[u8]);
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -151,7 +133,6 @@ impl Prefix {
             let prefix = VSDB.db.alloc_prefix();
             let prefix_bytes = prefix.to_be_bytes();
             debug_assert!(VSDB.db.iter(prefix_bytes).next().is_none());
-            VSDB.db.set_instance_len_hint(prefix_bytes, 0);
             prefix_bytes
         }))
     }
@@ -205,16 +186,6 @@ impl Mapx {
     }
 
     #[inline(always)]
-    pub(crate) fn len(&self) -> usize {
-        VSDB.db.get_instance_len_hint(self.prefix.to_bytes()) as usize
-    }
-
-    #[inline(always)]
-    pub(crate) fn is_empty(&self) -> bool {
-        0 == self.len()
-    }
-
-    #[inline(always)]
     pub(crate) fn iter(&self) -> MapxIter<'_> {
         MapxIter {
             db_iter: VSDB.db.iter(self.prefix.to_bytes()),
@@ -264,23 +235,24 @@ impl Mapx {
     }
 
     #[inline(always)]
-    pub(crate) fn insert(&mut self, key: &[u8], value: &[u8]) -> Option<RawValue> {
+    pub(crate) fn insert(&mut self, key: &[u8], value: &[u8]) {
         let prefix = self.prefix.hack_bytes();
-        let ret = VSDB.db.insert(prefix, key, value);
-        if ret.is_none() {
-            VSDB.db.increase_instance_len_hint(prefix);
-        }
-        ret
+        VSDB.db.insert(prefix, key, value);
     }
 
     #[inline(always)]
-    pub(crate) fn remove(&mut self, key: &[u8]) -> Option<RawValue> {
+    pub(crate) fn remove(&mut self, key: &[u8]) {
         let prefix = self.prefix.hack_bytes();
-        let ret = VSDB.db.remove(prefix, key);
-        if ret.is_some() {
-            VSDB.db.decrease_instance_len_hint(prefix);
-        }
-        ret
+        VSDB.db.remove(prefix, key);
+    }
+
+    #[inline(always)]
+    pub(crate) fn write_batch<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut dyn BatchTrait),
+    {
+        let prefix = self.prefix.hack_bytes();
+        VSDB.db.write_batch(prefix, f);
     }
 
     #[inline(always)]
@@ -289,7 +261,6 @@ impl Mapx {
         VSDB.db.iter(prefix).for_each(|(k, _)| {
             VSDB.db.remove(prefix, &k);
         });
-        VSDB.db.set_instance_len_hint(prefix, 0);
     }
 
     #[inline(always)]
@@ -325,11 +296,21 @@ impl Clone for Mapx {
 
 impl PartialEq for Mapx {
     fn eq(&self, other: &Mapx) -> bool {
-        self.len() == other.len()
-            && self
-                .iter()
-                .zip(other.iter())
-                .all(|((k, v), (ko, vo))| k == ko && v == vo)
+        // Compare all key-value pairs
+        let mut self_iter = self.iter();
+        let mut other_iter = other.iter();
+
+        loop {
+            match (self_iter.next(), other_iter.next()) {
+                (Some((k1, v1)), Some((k2, v2))) => {
+                    if k1 != k2 || v1 != v2 {
+                        return false;
+                    }
+                }
+                (None, None) => return true,
+                _ => return false,
+            }
+        }
     }
 }
 

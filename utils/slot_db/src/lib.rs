@@ -122,8 +122,8 @@ where
         let slot = self.to_storage_slot(slot);
 
         loop {
-            if let Some(top_len) = self.tiers.last().map(|top| top.data.len())
-                && top_len < 2
+            if let Some(top) = self.tiers.last()
+                && top.len() < 2
             {
                 self.tiers.pop();
                 continue;
@@ -471,7 +471,7 @@ where
     // Ensure there is enough tier capacity to cover the new slot.
     fn ensure_tier_capacity(&mut self, _target_slot: Slot) {
         if let Some(top) = self.tiers.last() {
-            if top.data.len() as u64 <= self.tier_capacity {
+            if top.len() as u64 <= self.tier_capacity {
                 return;
             }
             // Create a new top tier
@@ -480,6 +480,7 @@ where
                 |mut t, (slot, cnt)| {
                     let slot_floor = slot / t.floor_base * t.floor_base;
                     *t.data.entry(&slot_floor).or_insert(0) += cnt;
+                    *t.entry_count.get_mut() += 1;
                     t
                 },
             );
@@ -492,6 +493,7 @@ where
                     let slot_floor = slot / t.floor_base * t.floor_base;
                     *t.data.entry(&slot_floor).or_insert(0) +=
                         entries.len() as EntryCnt;
+                    *t.entry_count.get_mut() += 1;
                     t
                 },
             );
@@ -559,7 +561,10 @@ where
     K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
     Small(BTreeSet<K>),
-    Large(MapxOrd<K, ()>),
+    Large {
+        map: MapxOrd<K, ()>,
+        len: Orphan<usize>,
+    },
 }
 
 impl<K> DataCtner<K>
@@ -573,7 +578,7 @@ where
     fn len(&self) -> usize {
         match self {
             Self::Small(i) => i.len(),
-            Self::Large(i) => i.len(),
+            Self::Large { len, .. } => len.get_value(),
         }
     }
 
@@ -587,12 +592,16 @@ where
             _ => return,
         };
 
+        let set_len = inner_set.len();
         let new_map = inner_set.iter().fold(MapxOrd::new(), |mut acc, k| {
             acc.insert(k, &());
             acc
         });
 
-        *self = Self::Large(new_map);
+        *self = Self::Large {
+            map: new_map,
+            len: Orphan::new(set_len),
+        };
     }
 
     fn insert(&mut self, k: K) -> bool {
@@ -600,21 +609,35 @@ where
 
         match self {
             Self::Small(i) => i.insert(k),
-            Self::Large(i) => i.insert(&k, &()).is_none(),
+            Self::Large { map, len } => {
+                let existed = map.get(&k).is_some();
+                map.insert(&k, &());
+                if !existed {
+                    *len.get_mut() += 1;
+                }
+                !existed
+            }
         }
     }
 
     fn remove(&mut self, target: &K) -> bool {
         match self {
             Self::Small(i) => i.remove(target),
-            Self::Large(i) => i.remove(target).is_some(),
+            Self::Large { map, len } => {
+                let existed = map.get(target).is_some();
+                if existed {
+                    map.remove(target);
+                    *len.get_mut() -= 1;
+                }
+                existed
+            }
         }
     }
 
     fn iter(&self) -> DataCtnerIter<'_, K> {
         match self {
             Self::Small(i) => DataCtnerIter::Small(i.iter()),
-            Self::Large(i) => DataCtnerIter::Large(i.iter()),
+            Self::Large { map, .. } => DataCtnerIter::Large(map.iter()),
         }
     }
 }
@@ -666,6 +689,8 @@ where
 struct Tier {
     floor_base: u64,
     data: MapxOrd<SlotFloor, EntryCnt>,
+    // Track the number of entries since MapxOrd no longer has len()
+    entry_count: Orphan<usize>,
 }
 
 impl Tier {
@@ -674,7 +699,13 @@ impl Tier {
         Self {
             floor_base: tier_capacity.pow(pow),
             data: MapxOrd::new(),
+            entry_count: Orphan::new(0),
         }
+    }
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.entry_count.get_value()
     }
 }
 

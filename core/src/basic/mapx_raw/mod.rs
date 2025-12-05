@@ -23,9 +23,6 @@
 //! m.insert(&[2], &[20]);
 //! m.insert(&[3], &[30]);
 //!
-//! // Check the length of the map
-//! assert_eq!(m.len(), 3);
-//!
 //! // Retrieve a value
 //! assert_eq!(m.get(&[2]), Some(vec![20]));
 //!
@@ -36,11 +33,10 @@
 //!
 //! // Remove a key-value pair
 //! m.remove(&[2]);
-//! assert_eq!(m.len(), 2);
+//! assert!(m.get(&[2]).is_none());
 //!
 //! // Clear the entire map
 //! m.clear();
-//! assert_eq!(m.len(), 0);
 //!
 //! // Clean up the directory
 //! fs::remove_dir_all(vsdb_get_base_dir()).unwrap();
@@ -191,26 +187,6 @@ impl MapxRaw {
         self.range(Cow::Borrowed(key.as_ref())..).next()
     }
 
-    /// Returns the number of entries in the map.
-    ///
-    /// # Returns
-    ///
-    /// The number of entries as a `usize`.
-    #[inline(always)]
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    /// Checks if the map is empty.
-    ///
-    /// # Returns
-    ///
-    /// `true` if the map is empty, `false` otherwise.
-    #[inline(always)]
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
     /// Gets an entry for the given key, allowing for in-place modification.
     ///
     /// # Arguments
@@ -311,38 +287,40 @@ impl MapxRaw {
 
     /// Inserts a key-value pair into the map.
     ///
-    /// If the map did not have this key present, `None` is returned. If the map did have this key
-    /// present, the value is updated, and the old value is returned.
+    /// Does not return the old value for performance reasons.
     ///
     /// # Arguments
     ///
     /// * `key` - The key to insert.
     /// * `value` - The value to associate with the key.
-    ///
-    /// # Returns
-    ///
-    /// An `Option<RawValue>` containing the old value if the key already existed, or `None` otherwise.
     #[inline(always)]
-    pub fn insert(
-        &mut self,
-        key: impl AsRef<[u8]>,
-        value: impl AsRef<[u8]>,
-    ) -> Option<RawValue> {
+    pub fn insert(&mut self, key: impl AsRef<[u8]>, value: impl AsRef<[u8]>) {
         self.inner.insert(key.as_ref(), value.as_ref())
     }
 
-    /// Removes a key from the map, returning the value at the key if the key was previously in the map.
+    /// Removes a key from the map.
+    ///
+    /// Does not return the old value for performance reasons.
     ///
     /// # Arguments
     ///
     /// * `key` - The key to remove.
-    ///
-    /// # Returns
-    ///
-    /// An `Option<RawValue>` containing the value if the key existed, or `None` otherwise.
     #[inline(always)]
-    pub fn remove(&mut self, key: impl AsRef<[u8]>) -> Option<RawValue> {
+    pub fn remove(&mut self, key: impl AsRef<[u8]>) {
         self.inner.remove(key.as_ref())
+    }
+
+    /// Batch write operations for better performance and atomicity.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - A closure that takes a `&mut BatchTrait` and performs batch operations.
+    #[inline(always)]
+    pub fn batch<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut dyn crate::common::BatchTrait),
+    {
+        self.inner.write_batch(f);
     }
 
     /// Clears the map, removing all key-value pairs.

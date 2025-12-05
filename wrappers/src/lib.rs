@@ -25,8 +25,12 @@ pub mod dagmap;
 
 // Basic data structures
 pub use basic::{
-    mapx::Mapx, mapx_ord::MapxOrd, mapx_ord_rawkey::MapxOrdRawKey,
-    mapx_ord_rawvalue::MapxOrdRawValue, orphan::Orphan, vecx::Vecx, vecx_raw::VecxRaw,
+    mapx::Mapx,
+    mapx_ord::MapxOrd,
+    mapx_ord_rawkey::MapxOrdRawKey,
+    mapx_ord_rawvalue::MapxOrdRawValue,
+    orphan::Orphan,
+    // vecx::Vecx, vecx_raw::VecxRaw, // Removed - relied on unreliable len() tracking
 };
 
 // Common traits and types

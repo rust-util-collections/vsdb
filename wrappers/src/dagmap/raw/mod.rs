@@ -66,9 +66,11 @@ impl DagMapRaw {
 
         if let Some(p) = parent.get_mut().as_mut() {
             let child_id = super::gen_dag_map_id_num().to_be_bytes();
-            if p.children.insert(child_id, &r).is_some() {
+            // Check if child already exists before inserting
+            if p.children.get(child_id).is_some() {
                 return Err(eg!("Error! Child ID exist!"));
             }
+            p.children.insert(child_id, &r);
         }
 
         Ok(r)
@@ -93,13 +95,15 @@ impl DagMapRaw {
     /// Checks if the DAG map is dead (i.e., has no data, parent, or children).
     #[inline(always)]
     pub fn is_dead(&self) -> bool {
-        self.data.is_empty() && self.parent.get_value().is_none() && self.no_children()
+        self.data.iter().next().is_none()
+            && self.parent.get_value().is_none()
+            && self.no_children()
     }
 
     /// Checks if the DAG map has no children.
     #[inline(always)]
     pub fn no_children(&self) -> bool {
-        self.children.is_empty()
+        self.children.inner.iter().next().is_none()
     }
 
     /// Retrieves a value from the DAG map, traversing up to the parent if necessary.
@@ -135,18 +139,18 @@ impl DagMapRaw {
     }
 
     /// Inserts a key-value pair into the DAG map.
+    ///
+    /// Does not return the old value for performance reasons.
     #[inline(always)]
-    pub fn insert(
-        &mut self,
-        key: impl AsRef<[u8]>,
-        value: impl AsRef<[u8]>,
-    ) -> Option<RawBytes> {
+    pub fn insert(&mut self, key: impl AsRef<[u8]>, value: impl AsRef<[u8]>) {
         self.data.insert(key.as_ref(), value)
     }
 
     /// Removes a key-value pair from the DAG map.
+    ///
+    /// Does not return the old value for performance reasons.
     #[inline(always)]
-    pub fn remove(&mut self, key: impl AsRef<[u8]>) -> Option<RawBytes> {
+    pub fn remove(&mut self, key: impl AsRef<[u8]>) {
         self.data.insert(key.as_ref(), [])
     }
 

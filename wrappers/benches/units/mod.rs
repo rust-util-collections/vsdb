@@ -7,5 +7,6 @@ pub mod basic_mapx;
 pub mod basic_mapx_ord;
 pub mod basic_mapx_ord_rawkey;
 pub mod basic_mapx_ord_rawvalue;
-pub mod basic_vecx;
-pub mod basic_vecx_raw;
+// Vecx and VecxRaw have been removed - they relied on unreliable len() tracking
+// pub mod basic_vecx;
+// pub mod basic_vecx_raw;

@@ -23,9 +23,6 @@
 //! m.insert(&[1], &"hello".to_string());
 //! m.insert(&[2], &"world".to_string());
 //!
-//! // Check the length of the map
-//! assert_eq!(m.len(), 2);
-//!
 //! // Retrieve a value
 //! assert_eq!(m.get(&[1]), Some("hello".to_string()));
 //!
@@ -36,11 +33,9 @@
 //!
 //! // Remove a key-value pair
 //! m.remove(&[2]);
-//! assert_eq!(m.len(), 1);
 //!
 //! // Clear the entire map
 //! m.clear();
-//! assert_eq!(m.len(), 0);
 //!
 //! // Clean up the directory
 //! fs::remove_dir_all(vsdb_get_base_dir()).unwrap();
@@ -124,11 +119,11 @@ where
     }
 
     /// Inserts a key-value pair into the map.
+    ///
+    /// Does not return the old value for performance reasons.
     #[inline(always)]
-    pub fn insert(&mut self, key: impl AsRef<[u8]>, value: &V) -> Option<V> {
-        self.inner
-            .insert(key.as_ref(), value.encode())
-            .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
+    pub fn insert(&mut self, key: impl AsRef<[u8]>, value: &V) {
+        self.inner.insert(key.as_ref(), value.encode())
     }
 
     /// Inserts a key with an already encoded value.
@@ -141,10 +136,8 @@ where
         &mut self,
         key: impl AsRef<[u8]>,
         value: impl AsRef<[u8]>,
-    ) -> Option<V> {
-        self.inner
-            .insert(key.as_ref(), value.as_ref())
-            .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
+    ) {
+        self.inner.insert(key.as_ref(), value.as_ref())
     }
 
     /// Sets the value for a key, overwriting any existing value.
@@ -213,18 +206,21 @@ where
         self.iter().next_back()
     }
 
-    /// Removes a key from the map, returning the value if it existed.
+    /// Removes a key from the map.
+    ///
+    /// Does not return the old value for performance reasons.
     #[inline(always)]
-    pub fn remove(&mut self, key: impl AsRef<[u8]>) -> Option<V> {
-        self.inner
-            .remove(key.as_ref())
-            .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
+    pub fn remove(&mut self, key: impl AsRef<[u8]>) {
+        self.inner.remove(key.as_ref())
     }
 
-    /// Removes a key from the map without returning the value.
+    /// Batch write operations.
     #[inline(always)]
-    pub fn unset_value(&mut self, key: impl AsRef<[u8]>) {
-        self.inner.remove(key.as_ref());
+    pub fn batch<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut dyn vsdb_core::common::BatchTrait),
+    {
+        self.inner.batch(f);
     }
 }
 

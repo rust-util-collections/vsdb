@@ -16,12 +16,14 @@ The `vsdb` project is a workspace containing several related crates:
 
 | Crate | Version | Documentation | Path | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| [**vsdb**](wrappers) | [![Crates.io](https://img.shields.io/crates/v/vsdb.svg)](https://crates.io/crates/vsdb) | [![Docs.rs](https://docs.rs/vsdb/badge.svg)](https://docs.rs/vsdb) | `wrappers` | High-level, typed data structures (e.g., `Mapx`, `Vecx`). This is the primary crate for most users. |
+| [**vsdb**](wrappers) | [![Crates.io](https://img.shields.io/crates/v/vsdb.svg)](https://crates.io/crates/vsdb) | [![Docs.rs](https://docs.rs/vsdb/badge.svg)](https://docs.rs/vsdb) | `wrappers` | High-level, typed data structures (e.g., `Mapx`, `MapxOrd`). This is the primary crate for most users. |
 | [**vsdb_core**](core) | [![Crates.io](https://img.shields.io/crates/v/vsdb_core.svg)](https://crates.io/crates/vsdb_core) | [![Docs.rs](https://docs.rs/vsdb_core/badge.svg)](https://docs.rs/vsdb_core) | `core` | Low-level implementations, including storage backends and raw data structures. |
 | [**vsdb_slot_db**](utils/slot_db) | [![Crates.io](https://img.shields.io/crates/v/vsdb_slot_db.svg)](https://crates.io/crates/vsdb_slot_db) | [![Docs.rs](https://docs.rs/vsdb_slot_db/badge.svg)](https://docs.rs/vsdb_slot_db) | `utils/slot_db` | A skip-list-like, timestamp-based index for efficient paged queries. |
 | [**vsdb_trie_db**](utils/trie_db) | [![Crates.io](https://img.shields.io/crates/v/vsdb_trie_db.svg)](https://crates.io/crates/vsdb_trie_db) | [![Docs.rs](https://docs.rs/vsdb_trie_db/badge.svg)](https://docs.rs/vsdb_trie_db) | `utils/trie_db` | An out-of-the-box Merkle Patricia Trie (MPT) implementation. |
 
-### Known Issues
+### Important Changes
 
-- The `len()` of a data structure is not always guaranteed to be absolutely reliable and should be treated as a hint. This is because some operations may not update the length atomically in real-time for performance reasons.
+- **Performance-focused API**: The `insert()` and `remove()` methods no longer return the old value, eliminating expensive read-before-write operations and significantly improving write performance.
+- **Simplified API**: The unreliable `len()` and `is_empty()` methods have been removed from map structures. If you need to track collection size, maintain a separate counter in your application.
+- **Removed Types**: `Vecx` and `VecxRaw` have been removed as they heavily depended on the unreliable `len()` tracking.
 
