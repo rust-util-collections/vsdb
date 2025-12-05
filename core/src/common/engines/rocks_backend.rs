@@ -1,6 +1,6 @@
 use crate::common::{
-    BatchTrait, Engine, GB, MB, PREFIX_SIZE, Pre, PreBytes, RESERVED_ID_CNT, RawKey, RawValue,
-    vsdb_get_base_dir, vsdb_set_base_dir,
+    BatchTrait, Engine, GB, MB, PREFIX_SIZE, Pre, PreBytes, RESERVED_ID_CNT, RawKey,
+    RawValue, vsdb_get_base_dir, vsdb_set_base_dir,
 };
 use parking_lot::Mutex;
 use rocksdb::{
@@ -78,7 +78,9 @@ impl RocksEngine {
         if len > current {
             // SAFETY: Always persist to meta DB before updating memory to ensure consistency on crash.
             // Performance impact is acceptable as key length growth usually stabilizes quickly.
-            self.meta.put(META_KEY_MAX_KEYLEN, len.to_be_bytes()).unwrap();
+            self.meta
+                .put(META_KEY_MAX_KEYLEN, len.to_be_bytes())
+                .unwrap();
             self.max_keylen.store(len, Ordering::Relaxed);
         }
     }
@@ -168,10 +170,9 @@ impl Engine for RocksEngine {
             let next = COUNTER.fetch_add(1, Ordering::AcqRel);
             // Persist every 1024 allocations to reduce write amplification
             if next % 1024 == 0 {
-                let _ = self.meta.put(
-                    self.prefix_allocator.key,
-                    (next + 1024).to_be_bytes(),
-                );
+                let _ = self
+                    .meta
+                    .put(self.prefix_allocator.key, (next + 1024).to_be_bytes());
             }
             return next;
         }
@@ -422,8 +423,6 @@ impl RocksBatch {
         let full_key = make_full_key(self.meta_prefix.as_slice(), key);
         self.inner.delete_cf(self.cf, full_key);
     }
-
-
 }
 
 impl BatchTrait for RocksBatch {

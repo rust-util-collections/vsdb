@@ -326,8 +326,6 @@ impl Engine for FjallEngine {
         f(&mut wrapper);
 
         let max_len = wrapper.max_key_len;
-        // End the borrow of batch
-        drop(wrapper);
 
         batch.commit().unwrap();
 

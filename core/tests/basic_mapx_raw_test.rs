@@ -31,7 +31,7 @@ fn basic_cases() {
                 // Insert checks
                 hdr_i.insert(&i, &b);
                 assert!(hdr_i.contains_key(&i));
-                
+
                 // Overwrite check
                 hdr_i.insert(&i, &b);
                 assert!(hdr_i.contains_key(&i));

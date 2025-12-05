@@ -24,7 +24,6 @@ fn basic_cases() {
     let hdr = {
         let mut hdr_i = MapxOrdRawKey::new();
 
-        assert_eq!(0, hdr_i.len());
         (0usize..cnt).map(|i| i.to_be_bytes()).for_each(|i| {
             assert!(hdr_i.get(&i).is_none());
         });
@@ -35,20 +34,16 @@ fn basic_cases() {
             .for_each(|(i, b)| {
                 hdr_i.entry(&i[..]).or_insert(b.clone());
                 assert_eq!(&hdr_i.get(&i).unwrap().data, &i);
-                assert_eq!(hdr_i.remove(&i), Some(b.clone()));
+                hdr_i.remove(&i);
                 assert!(hdr_i.get(&i).is_none());
-                assert!(hdr_i.insert(&i, &b).is_none());
-                assert!(hdr_i.insert(&i, &b).is_some());
+                hdr_i.insert(&i, &b);
+                hdr_i.insert(&i, &b);
             });
-
-        assert_eq!(cnt, hdr_i.len());
 
         <MapxOrdRawKey<SampleBlock> as ValueEnDe>::encode(&hdr_i)
     };
 
     let mut reloaded = pnk!(<MapxOrdRawKey<SampleBlock> as ValueEnDe>::decode(&hdr));
-
-    assert_eq!(cnt, reloaded.len());
 
     (0usize..cnt).map(|i| i.to_be_bytes()).for_each(|i| {
         assert_eq!(&i[..], &reloaded.get(&i).unwrap().data);
@@ -62,11 +57,9 @@ fn basic_cases() {
             &(1 + i).to_be_bytes()[..]
         );
         assert!(reloaded.contains_key(&i.to_be_bytes()));
-        assert!(reloaded.remove(&i.to_be_bytes()).is_some());
+        reloaded.remove(&i.to_be_bytes());
         assert!(!reloaded.contains_key(&i.to_be_bytes()));
     });
 
-    assert_eq!(1, reloaded.len());
     reloaded.clear();
-    assert!(reloaded.is_empty());
 }

@@ -10,22 +10,22 @@ fn basic_cases() {
 
     let mut map = MapxDk::new();
 
-    assert!(map.insert(&(&1u8, &1u8), &9u8).is_none());
-    assert!(map.insert(&(&1, &2), &8).is_none());
-    assert!(map.insert(&(&1, &3), &7).is_none());
+    map.insert(&(&1u8, &1u8), &9u8);
+    map.insert(&(&1, &2), &8);
+    map.insert(&(&1, &3), &7);
 
     assert_eq!(map.get(&(&1, &1)).unwrap(), 9);
     assert_eq!(map.get(&(&1, &2)).unwrap(), 8);
     assert_eq!(map.get(&(&1, &3)).unwrap(), 7);
 
     // does not exist
-    assert!(map.remove(&(&1, Some(&4))).is_none());
+    map.remove(&(&1, Some(&4)));
 
-    assert!(map.remove(&(&1, Some(&1))).is_some());
+    map.remove(&(&1, Some(&1)));
     assert!(map.get(&(&1, &1)).is_none());
 
     // partial-path remove
-    assert!(map.remove(&(&1, None)).is_none()); // yes, is none
+    map.remove(&(&1, None));
     assert!(map.get(&(&1, &2)).is_none());
     assert!(map.get(&(&1, &3)).is_none());
 

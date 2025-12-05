@@ -73,7 +73,7 @@ fn dagmapraw_functions() {
     let mut head = pnk!(head.prune());
     sleep_ms!(1000); // give some time to the async cleaner
     assert!(head.parent.get_value().is_none());
-    assert!(head.children.is_empty());
+    assert!(head.children.iter().next().is_none());
 
     for i in 10u8..=255 {
         assert_eq!(

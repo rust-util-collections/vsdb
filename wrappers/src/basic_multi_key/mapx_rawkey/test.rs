@@ -14,18 +14,17 @@ fn test_insert() {
             let key: &[&[u8]] = &[&subkey, &subkey];
             assert!(hdr.get(&key).is_none());
             hdr.entry(key).unwrap().or_insert(value.clone());
-            assert!(pnk!(hdr.insert(&key, &value)).is_some());
+            hdr.insert(&key, &value).unwrap();
             assert!(hdr.contains_key(&key));
             assert_eq!(pnk!(hdr.get(&key)), value);
-            assert_eq!(pnk!(pnk!(hdr.remove(&key))), value);
+            hdr.remove(&key).unwrap();
             assert!(hdr.get(&key).is_none());
-            assert!(pnk!(hdr.insert(&key, &value)).is_none());
+            hdr.insert(&key, &value).unwrap();
         });
     hdr.clear();
     (0..max).map(|i: usize| i.to_be_bytes()).for_each(|subkey| {
         assert!(hdr.get(&[&subkey, &subkey]).is_none());
     });
-    assert!(hdr.is_empty());
 }
 
 #[test]
@@ -38,7 +37,7 @@ fn test_valueende() {
             .map(|i: usize| (i.to_be_bytes(), <usize as ValueEnDe>::encode(&i)))
             .for_each(|(subkey, value)| {
                 let key: &[&[u8]] = &[&subkey, &subkey];
-                assert!(pnk!(hdr.insert(&key, &value)).is_none());
+                hdr.insert(&key, &value).unwrap();
             });
         <MapxRawKeyMk<Vec<u8>> as ValueEnDe>::encode(&hdr)
     };

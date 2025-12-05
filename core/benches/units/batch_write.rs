@@ -1,4 +1,4 @@
-use criterion::{Criterion, criterion_group, black_box};
+use criterion::{Criterion, black_box, criterion_group};
 use std::time::Duration;
 use vsdb_core::MapxRaw;
 
@@ -12,7 +12,7 @@ fn single_inserts(c: &mut Criterion) {
     group.bench_function(" single inserts (1000 ops) ", |b| {
         b.iter(|| {
             let mut db = MapxRaw::new();
-            for i in 0..1000 {
+            for i in 0usize..1000 {
                 let key = i.to_be_bytes();
                 let value = (i * 2).to_be_bytes();
                 db.insert(&key, &value);
@@ -35,14 +35,14 @@ fn mixed_workload(c: &mut Criterion) {
         b.iter(|| {
             let mut db = MapxRaw::new();
             // Pre-populate
-            for i in 0..800 {
+            for i in 0usize..800 {
                 let key = i.to_be_bytes();
                 let value = i.to_be_bytes();
                 db.insert(&key, &value);
             }
 
             // Mixed workload
-            for i in 0..1000 {
+            for i in 0usize..1000 {
                 if i % 5 == 0 {
                     // 20% writes
                     let key = (800 + i / 5).to_be_bytes();
@@ -70,7 +70,7 @@ fn range_scans(c: &mut Criterion) {
 
     let mut db = MapxRaw::new();
     // Pre-populate with 10000 entries
-    for i in 0..10000u64 {
+    for i in 0u64..10000u64 {
         let key = i.to_be_bytes();
         let value = i.to_be_bytes();
         db.insert(&key, &value);
