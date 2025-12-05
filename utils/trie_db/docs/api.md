@@ -38,7 +38,7 @@ assert!(trie.get(b"key2").unwrap().is_none());
 // Batch update operations
 let ops = vec![
     (b"key3".as_ref(), Some(b"value3".as_ref())), // Insert
-    (b"key1".as_ref(), None),                       // Remove
+    (b"key1".as_ref(), None), // Remove
 ];
 trie.batch_update(&ops).unwrap();
 

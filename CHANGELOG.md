@@ -196,7 +196,7 @@ The slot database genuinely needs length tracking for pagination and floor calcu
 struct Tier {
     floor_base: u64,
     data: MapxOrd<SlotFloor, EntryCnt>,
-    entry_count: Orphan<usize>,  // Explicit length counter
+    entry_count: Orphan<usize>, // Explicit length counter
 }
 
 enum DataCtner<K> {

@@ -8,20 +8,20 @@ This document summarizes the performance optimization work done on the VSDB proj
 
 Code review identified the following performance issues:
 
-1.  **High Overhead in Hot Path Memory Allocation**
+1. **High Overhead in Hot Path Memory Allocation**
     *   Every `get()`, `insert()`, and `remove()` operation required creating a new `Vec` and copying `meta_prefix + key`.
     *   This caused significant memory allocation and copying in high-frequency operation scenarios.
 
-2.  **Frequent `max_keylen` Updates**
+2. **Frequent `max_keylen` Updates**
     *   Every `insert` checked the key length.
     *   If the length increased, it immediately wrote to the meta DB.
     *   This caused unnecessary write amplification.
 
-3.  **Lack of Batch Operation API**
+3. **Lack of Batch Operation API**
     *   Unable to utilize RocksDB's `WriteBatch` optimization.
     *   Batch operations had to be written sequentially.
 
-4.  **Global Lock on `prefix_allocator`**
+4. **Global Lock on `prefix_allocator`**
     *   `alloc_prefix()` was protected by a `Mutex`.
     *   This became a bottleneck in high-concurrency scenarios.
 
@@ -169,9 +169,9 @@ fn alloc_prefix(&self) -> Pre {
 **File**: `core/benches/units/batch_write.rs`
 
 **Test Content**:
-1.  **Single Inserts** - Test performance of 1000 single inserts.
-2.  **Mixed Workload** - Test 80% read / 20% write mixed workload.
-3.  **Range Scans** - Test range scan performance (100 and 1000 records).
+1. **Single Inserts** - Test performance of 1000 single inserts.
+2. **Mixed Workload** - Test 80% read / 20% write mixed workload.
+3. **Range Scans** - Test range scan performance (100 and 1000 records).
 
 **How to Run**:
 
@@ -242,37 +242,37 @@ cargo bench --no-default-features --features "rocks_backend,compress,msgpack_cod
 
 ### 5.1 Further Optimization Directions
 
-1.  **Batch Read API**
+1. **Batch Read API**
     *   Add `multi_get()` support.
     *   Utilize RocksDB's `multi_get()` optimization.
 
-2.  **Async API**
+2. **Async API**
     *   Consider adding async versions of the API.
     *   Utilize `tokio` or `async-std`.
 
-3.  **Caching Layer**
+3. **Caching Layer**
     *   Add an optional in-memory caching layer.
     *   Reduce disk access for hot data.
 
-4.  **Compression Optimization**
+4. **Compression Optimization**
     *   Select compression algorithms based on data characteristics.
     *   Support column-family level compression configuration.
 
 ### 5.2 Performance Monitoring
 
 Suggested additions:
-1.  Performance metrics collection (latency, throughput, resource usage).
-2.  Regular performance regression testing.
-3.  Performance benchmarks for different workloads.
+1. Performance metrics collection (latency, throughput, resource usage).
+2. Regular performance regression testing.
+3. Performance benchmarks for different workloads.
 
 ## 6. Summary
 
 This optimization work focused on:
 
-1.  **RocksDB Engine Core Optimization** - Reduced memory allocation, lower write amplification, improved concurrency performance.
-2.  **API Improvements** - Added `WriteBatch` support for batch operations.
-3.  **Code Cleanup** - Removed deprecated `Vecx` related code.
-4.  **Test Improvements** - Added new performance test cases.
+1. **RocksDB Engine Core Optimization** - Reduced memory allocation, lower write amplification, improved concurrency performance.
+2. **API Improvements** - Added `WriteBatch` support for batch operations.
+3. **Code Cleanup** - Removed deprecated `Vecx` related code.
+4. **Test Improvements** - Added new performance test cases.
 
 **Expected Overall Performance Improvement**:
 *   Single Write: 5-15% improvement.

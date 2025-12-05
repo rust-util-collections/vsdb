@@ -169,7 +169,7 @@ impl Engine for RocksEngine {
         if current > 0 {
             let next = COUNTER.fetch_add(1, Ordering::AcqRel);
             // Persist every 1024 allocations to reduce write amplification
-            if next % 1024 == 0 {
+            if next.is_multiple_of(1024) {
                 let _ = self
                     .meta
                     .put(self.prefix_allocator.key, (next + 1024).to_be_bytes());

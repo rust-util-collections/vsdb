@@ -154,7 +154,7 @@ fn data_container() {
 
     assert!(matches!(
         db.data.iter().next().unwrap().1,
-        DataCtner::Large{ .. }
+        DataCtner::Large { .. }
     ));
     assert_eq!(db.data.iter().count(), 1);
     assert_eq!(db.data.first().unwrap().1.len(), 100);
