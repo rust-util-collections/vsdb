@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_core"
-version = "7.0.2"
+version = "7.1.0"
 authors = ["hui.fan@mail.ru"]
 edition = "2024"
 description = "A std-collection-like database"
