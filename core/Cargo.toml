@@ -18,7 +18,7 @@ parking_lot = { workspace = true }
 
 threadpool = { workspace = true } # used in a background cleaner
 
-fjall = { workspace = true, optional = true }
+parity-db = { workspace = true, optional = true }
 rocksdb = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -27,12 +27,12 @@ hex = "0.4"
 criterion = "0.8"
 
 [features]
-default = ["compress", "fjall_backend"]
+default = ["compress", "parity_backend"]
 
-fjall_backend = ["fjall"]
+parity_backend = ["parity-db"]
 rocks_backend = ["rocksdb"]
 
-compress = ["rocksdb?/zstd", "fjall?/lz4"]
+compress = ["rocksdb?/zstd"]
 
 # [[bench]]
 # name = "basic"
