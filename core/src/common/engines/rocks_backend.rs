@@ -326,16 +326,6 @@ impl Engine for RocksEngine {
         db.delete_cf(cf, full_key).unwrap();
     }
 
-    fn write_batch<F>(&self, meta_prefix: PreBytes, f: F)
-    where
-        F: FnOnce(&mut dyn BatchTrait),
-    {
-        let cf = self.get_cf(meta_prefix);
-        let mut batch = RocksBatch::new(meta_prefix, cf, self);
-        f(&mut batch);
-        batch.commit().unwrap();
-    }
-
     fn batch_begin<'a>(&'a self, meta_prefix: PreBytes) -> Box<dyn BatchTrait + 'a> {
         let cf = self.get_cf(meta_prefix);
         Box::new(RocksBatch::new(meta_prefix, cf, self))

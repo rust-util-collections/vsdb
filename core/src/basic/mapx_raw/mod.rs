@@ -310,19 +310,6 @@ impl MapxRaw {
         self.inner.remove(key.as_ref())
     }
 
-    /// Batch write operations for better performance and atomicity.
-    ///
-    /// # Arguments
-    ///
-    /// * `f` - A closure that takes a `&mut BatchTrait` and performs batch operations.
-    #[inline(always)]
-    pub fn batch<F>(&mut self, f: F)
-    where
-        F: FnOnce(&mut dyn crate::common::BatchTrait),
-    {
-        self.inner.write_batch(f);
-    }
-
     /// Start a batch operation.
     ///
     /// This method allows you to perform multiple insert/remove operations

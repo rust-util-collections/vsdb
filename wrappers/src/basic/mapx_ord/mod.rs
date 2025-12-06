@@ -303,21 +303,6 @@ where
         self.inner.clear();
     }
 
-    /// Batch write operations.
-    #[inline(always)]
-    pub fn batch<F>(&mut self, f: F)
-    where
-        F: FnOnce(&mut MapxOrdBatch<K, V>),
-    {
-        self.inner.batch(|raw_batch| {
-            let mut batch = MapxOrdBatch {
-                inner: raw_batch,
-                _marker: PhantomData,
-            };
-            f(&mut batch);
-        });
-    }
-
     /// Start a batch operation.
     ///
     /// This method allows you to perform multiple insert/remove operations

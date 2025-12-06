@@ -1,6 +1,5 @@
-use std::fs;
 use vsdb::Mapx;
-use vsdb::{vsdb_get_base_dir, vsdb_set_base_dir};
+use vsdb::vsdb_set_base_dir;
 
 #[test]
 fn test_batch_entry_basic() {
@@ -40,6 +39,4 @@ fn test_batch_entry_basic() {
         // dropped here
     }
     assert_eq!(map.get(&4), None);
-
-    fs::remove_dir_all(vsdb_get_base_dir()).unwrap();
 }

@@ -330,15 +330,6 @@ impl Engine for ParityEngine {
         db.commit([(area_idx as u8, full_key, None)]).unwrap();
     }
 
-    fn write_batch<F>(&self, meta_prefix: PreBytes, f: F)
-    where
-        F: FnOnce(&mut dyn BatchTrait),
-    {
-        let mut batch = ParityBatch::new(meta_prefix, self);
-        f(&mut batch);
-        batch.commit().unwrap();
-    }
-
     fn batch_begin<'a>(&'a self, meta_prefix: PreBytes) -> Box<dyn BatchTrait + 'a> {
         Box::new(ParityBatch::new(meta_prefix, self))
     }

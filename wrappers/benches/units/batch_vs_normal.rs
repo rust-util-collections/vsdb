@@ -24,19 +24,7 @@ fn batch_vs_normal_write(c: &mut Criterion) {
         })
     });
 
-    // Case 2: Batch write 100 items (closure)
-    group.bench_function(" batch closure 100 ", |b| {
-        b.iter(|| {
-            db.batch(|batch| {
-                for _ in 0..100 {
-                    let n = i.fetch_add(1, Ordering::Relaxed);
-                    batch.insert(&n, &n);
-                }
-            });
-        })
-    });
-
-    // Case 3: Batch write 100 items (entry struct)
+    // Case 2: Batch write 100 items (entry struct)
     group.bench_function(" batch entry 100 ", |b| {
         b.iter(|| {
             let mut batch = db.batch_entry();

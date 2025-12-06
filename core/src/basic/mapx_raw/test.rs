@@ -74,13 +74,15 @@ fn test_batch() {
     let mut hdr = MapxRaw::new();
     let max = 100u64;
 
-    hdr.batch(|batch| {
+    {
+        let mut batch = hdr.batch_entry();
         for i in 0..max {
             let key = to_bytes(i);
             let value = to_bytes(max + i);
             batch.insert(&key, &value);
         }
-    });
+        batch.commit().unwrap();
+    }
 
     for i in 0..max {
         let key = to_bytes(i);
@@ -88,12 +90,14 @@ fn test_batch() {
         assert_eq!(&pnk!(hdr.get(&key))[..], &value[..]);
     }
 
-    hdr.batch(|batch| {
+    {
+        let mut batch = hdr.batch_entry();
         for i in 0..max {
             let key = to_bytes(i);
             batch.remove(&key);
         }
-    });
+        batch.commit().unwrap();
+    }
 
     for i in 0..max {
         let key = to_bytes(i);

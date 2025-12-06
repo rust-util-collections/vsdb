@@ -215,21 +215,6 @@ where
         self.inner.remove(key.as_ref())
     }
 
-    /// Batch write operations.
-    #[inline(always)]
-    pub fn batch<F>(&mut self, f: F)
-    where
-        F: FnOnce(&mut MapxOrdRawKeyBatch<V>),
-    {
-        self.inner.batch(|raw_batch| {
-            let mut batch = MapxOrdRawKeyBatch {
-                inner: raw_batch,
-                _marker: PhantomData,
-            };
-            f(&mut batch);
-        });
-    }
-
     /// Start a batch operation.
     ///
     /// This method allows you to perform multiple insert/remove operations

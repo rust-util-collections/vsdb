@@ -132,19 +132,13 @@ These vector-like types heavily depended on reliable length tracking for indexin
 - **Expected improvement**: 10-100x faster prefix allocation under contention
 
 **4. WriteBatch API for Bulk Operations**
-- New `RocksEngine::write_batch()` method for atomic batch writes
-- Leverages RocksDB's native WriteBatch for optimal performance
-- Reduces per-operation overhead and improves throughput
-- **Use case**: Bulk inserts, transaction-like operations
+- New `Mapx::batch_entry()` method for atomic batch writes
+- Removed `Mapx::batch()` closure-based API
 
-```rust
 // Example: Batch write
-engine.write_batch(prefix, |batch| {
-    for i in 0..1000 {
-        batch.insert(&key(i), &value(i));
-    }
-});
-```
+let mut batch = engine.batch_entry();
+batch.insert(&key(i), &value(i));
+batch.commit().unwrap();
 
 **Performance Impact:**
 - **Single writes**: 5-15% faster due to reduced allocations

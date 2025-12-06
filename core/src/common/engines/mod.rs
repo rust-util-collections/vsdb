@@ -70,11 +70,6 @@ pub trait Engine: Sized {
     /// Remove a key. Does not return the old value for performance.
     fn remove(&self, meta_prefix: PreBytes, key: &[u8]);
 
-    /// Batch write operations.
-    fn write_batch<F>(&self, meta_prefix: PreBytes, f: F)
-    where
-        F: FnOnce(&mut dyn BatchTrait);
-
     /// Alloc a batch.
     fn batch_begin<'a>(&'a self, meta_prefix: PreBytes) -> Box<dyn BatchTrait + 'a>;
 }
@@ -248,15 +243,6 @@ impl Mapx {
     pub(crate) fn remove(&mut self, key: &[u8]) {
         let prefix = self.prefix.hack_bytes();
         VSDB.db.remove(prefix, key);
-    }
-
-    #[inline(always)]
-    pub(crate) fn write_batch<F>(&mut self, f: F)
-    where
-        F: FnOnce(&mut dyn BatchTrait),
-    {
-        let prefix = self.prefix.hack_bytes();
-        VSDB.db.write_batch(prefix, f);
     }
 
     #[inline(always)]
