@@ -334,36 +334,38 @@ impl Engine for ParityEngine {
     where
         F: FnOnce(&mut dyn BatchTrait),
     {
-        let db = self.get_db(meta_prefix);
-        let area_idx = self.area_idx(meta_prefix);
-
-        let mut batch = ParityBatch {
-            ops: Vec::with_capacity(16),
-            area_idx: area_idx as u8,
-            meta_prefix,
-            max_key_len: 0,
-        };
-
+        let mut batch = ParityBatch::new(meta_prefix, self);
         f(&mut batch);
+        batch.commit().unwrap();
+    }
 
-        let max_len = batch.max_key_len;
-
-        db.commit(batch.ops).unwrap();
-
-        if max_len > self.get_max_keylen() {
-            self.set_max_key_len(max_len);
-        }
+    fn batch_begin<'a>(&'a self, meta_prefix: PreBytes) -> Box<dyn BatchTrait + 'a> {
+        Box::new(ParityBatch::new(meta_prefix, self))
     }
 }
 
-pub struct ParityBatch {
+pub struct ParityBatch<'a> {
     ops: Vec<(u8, Vec<u8>, Option<Vec<u8>>)>,
     area_idx: u8,
     meta_prefix: PreBytes,
     max_key_len: usize,
+    engine: &'a ParityEngine,
 }
 
-impl BatchTrait for ParityBatch {
+impl<'a> ParityBatch<'a> {
+    fn new(meta_prefix: PreBytes, engine: &'a ParityEngine) -> Self {
+        let area_idx = engine.area_idx(meta_prefix);
+        Self {
+            ops: Vec::with_capacity(16),
+            area_idx: area_idx as u8,
+            meta_prefix,
+            max_key_len: 0,
+            engine,
+        }
+    }
+}
+
+impl BatchTrait for ParityBatch<'_> {
     #[inline(always)]
     fn insert(&mut self, key: &[u8], value: &[u8]) {
         let full_key = make_full_key(self.meta_prefix.as_slice(), key);
@@ -378,6 +380,18 @@ impl BatchTrait for ParityBatch {
     fn remove(&mut self, key: &[u8]) {
         let full_key = make_full_key(self.meta_prefix.as_slice(), key);
         self.ops.push((self.area_idx, full_key, None));
+    }
+
+    #[inline(always)]
+    fn commit(&mut self) -> Result<()> {
+        let db = self.engine.get_db(self.meta_prefix);
+        db.commit(self.ops.drain(..)).unwrap();
+
+        if self.max_key_len > self.engine.get_max_keylen() {
+            self.engine.set_max_key_len(self.max_key_len);
+        }
+
+        Ok(())
     }
 }
 

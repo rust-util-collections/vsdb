@@ -34,7 +34,7 @@ fn read_write(c: &mut Criterion) {
             db.batch(|batch| {
                 for _ in 0..100 {
                     let n = i.fetch_add(1, Ordering::SeqCst);
-                    batch.insert(&[n; 2].encode(), &vec![n; 128].encode());
+                    batch.insert(&[n; 2], &vec![n; 128]);
                 }
             });
         })

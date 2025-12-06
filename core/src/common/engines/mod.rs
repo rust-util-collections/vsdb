@@ -74,12 +74,16 @@ pub trait Engine: Sized {
     fn write_batch<F>(&self, meta_prefix: PreBytes, f: F)
     where
         F: FnOnce(&mut dyn BatchTrait);
+
+    /// Alloc a batch.
+    fn batch_begin<'a>(&'a self, meta_prefix: PreBytes) -> Box<dyn BatchTrait + 'a>;
 }
 
 /// Trait for batch write operations
 pub trait BatchTrait {
     fn insert(&mut self, key: &[u8], value: &[u8]);
     fn remove(&mut self, key: &[u8]);
+    fn commit(&mut self) -> Result<()>;
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -253,6 +257,12 @@ impl Mapx {
     {
         let prefix = self.prefix.hack_bytes();
         VSDB.db.write_batch(prefix, f);
+    }
+
+    #[inline(always)]
+    pub(crate) fn batch_begin(&mut self) -> Box<dyn BatchTrait + '_> {
+        let prefix = self.prefix.hack_bytes();
+        VSDB.db.batch_begin(prefix)
     }
 
     #[inline(always)]
