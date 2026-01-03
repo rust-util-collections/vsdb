@@ -72,7 +72,7 @@ fn make_full_key(meta_prefix: &[u8], key: &[u8]) -> FullKey {
     }
 }
 
-pub struct RocksEngine {
+pub struct RocksDB {
     db: &'static DB,
     prefix_allocator: PreAllocator,
     max_keylen: AtomicUsize,
@@ -96,7 +96,7 @@ fn successor(key: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
-impl RocksEngine {
+impl RocksDB {
     #[inline(always)]
     fn get_max_keylen(&self) -> usize {
         self.max_keylen.load(Ordering::Relaxed)
@@ -131,7 +131,7 @@ impl RocksEngine {
     }
 }
 
-impl RocksEngine {
+impl RocksDB {
     pub(crate) fn new() -> Result<Self> {
         let base_dir = vsdb_get_base_dir();
         // avoid setting again on an opened DB
@@ -140,9 +140,17 @@ impl RocksEngine {
         // Ensure base dir exists
         fs::create_dir_all(&base_dir).c(d!())?;
 
-        // Keep directory name `shard_0` for backward compatibility.
-        let dir = base_dir.join("shard_0");
-        let db = rocksdb_open_shard(&dir)?;
+        let dir = base_dir.join("rocksdb");
+
+        // Migrate legacy directory name from previous multi-shard design.
+        if !dir.exists() {
+            let legacy = base_dir.join("shard_0");
+            if legacy.exists() {
+                fs::rename(&legacy, &dir).c(d!())?;
+            }
+        }
+
+        let db = rocksdb_open(&dir)?;
         let db: &'static DB = Box::leak(Box::new(db));
 
         let (prefix_allocator, initial_value) = PreAllocator::init();
@@ -160,7 +168,7 @@ impl RocksEngine {
             usize
         ));
 
-        Ok(RocksEngine {
+        Ok(RocksDB {
             db,
             prefix_allocator,
             // length of the raw key, exclude the meta prefix
@@ -178,8 +186,8 @@ impl RocksEngine {
     //
     // NOTE: The static GLOBAL_COUNTER / GLOBAL_CEILING / LK variables
     // are process-global. This is correct as long as only a single
-    // RocksEngine instance exists (enforced by the LazyLock<VsDB<..>>
-    // singleton in common/mod.rs). Creating multiple RocksEngine
+    // RocksDB instance exists (enforced by the LazyLock<VsDB<..>>
+    // singleton in common/mod.rs). Creating multiple RocksDB
     // instances in the same process would cause prefix collisions.
     #[allow(unused_variables)]
     pub(crate) fn alloc_prefix(&self) -> Pre {
@@ -570,11 +578,11 @@ pub struct RocksBatch<'a> {
     inner: WriteBatch,
     meta_prefix: PreBytes,
     max_key_len: usize,
-    engine: &'a RocksEngine,
+    engine: &'a RocksDB,
 }
 
 impl<'a> RocksBatch<'a> {
-    fn new(meta_prefix: PreBytes, engine: &'a RocksEngine) -> Self {
+    fn new(meta_prefix: PreBytes, engine: &'a RocksDB) -> Self {
         Self {
             inner: WriteBatch::default(),
             meta_prefix,
@@ -625,14 +633,26 @@ impl BatchTrait for RocksBatch<'_> {
     }
 }
 
-fn rocksdb_open_shard(dir: &Path) -> Result<DB> {
+fn rocksdb_open(dir: &Path) -> Result<DB> {
     let mut cfg = Options::default();
 
     cfg.create_if_missing(true);
 
     cfg.set_prefix_extractor(SliceTransform::create_fixed_prefix(size_of::<Pre>()));
 
-    cfg.set_allow_mmap_reads(true);
+    // Disable mmap reads: on multi-CCD NUMA CPUs (e.g. EPYC 9474F)
+    // mmap causes TLB shootdowns and page-table lock contention under
+    // concurrent access. Buffered I/O through the block cache scales better.
+    cfg.set_allow_mmap_reads(false);
+
+    // ---- Concurrent write tuning ----
+    // Allow multiple threads to insert into the memtable concurrently.
+    // This is the single biggest win for multi-threaded write throughput.
+    // Safe: WAL is still serialized; only memtable insertion is parallelized.
+    cfg.set_allow_concurrent_memtable_write(true);
+    // Better spin-wait strategy for write threads on many-core systems.
+    // Reduces context-switch overhead when multiple writers contend.
+    cfg.set_enable_write_thread_adaptive_yield(true);
 
     // ---- Per-level compression: LZ4 for L0-L1, ZSTD for L2+ ----
     cfg.set_compression_per_level(&[
@@ -646,7 +666,7 @@ fn rocksdb_open_shard(dir: &Path) -> Result<DB> {
     ]);
 
     // ---- Write buffer ----
-    const WR_BUF_NUM: u8 = 2;
+    const WR_BUF_NUM: u8 = 4;
     const G: usize = GB as usize;
 
     cfg.set_min_write_buffer_number(WR_BUF_NUM as i32);
@@ -670,7 +690,7 @@ fn rocksdb_open_shard(dir: &Path) -> Result<DB> {
     cfg.set_write_buffer_size(wr_buffer_size);
 
     // ---- Block cache + Bloom filter ----
-    // Block cache: use ~1/8 of available memory, shared across all CFs in this shard
+    // Block cache: use ~1/8 of available memory
     let block_cache_size = if cfg!(target_os = "linux") {
         let memsiz = fs::read_to_string("/proc/meminfo")
             .ok()
@@ -708,9 +728,13 @@ fn rocksdb_open_shard(dir: &Path) -> Result<DB> {
     cfg.set_level_compaction_dynamic_level_bytes(true);
     // Delay L0 compaction trigger for write-heavy workloads
     cfg.set_level_zero_file_num_compaction_trigger(8);
+    // Allow sub-compactions to parallelize large compaction jobs
+    cfg.set_max_subcompactions(4);
 
-    // ---- Parallelism (capped for many-core EPYC) ----
-    let parallelism = cmp::min(available_parallelism().c(d!())?.get(), 8) as i32;
+    // ---- Parallelism ----
+    // On many-core systems (e.g. 96-core EPYC) allow more background
+    // threads for compaction and flush to keep up with write throughput.
+    let parallelism = cmp::min(available_parallelism().c(d!())?.get(), 16) as i32;
     cfg.increase_parallelism(parallelism);
 
     let db = DB::open(&cfg, dir).c(d!())?;
@@ -734,7 +758,7 @@ mod tests {
     #[test]
     fn rocks_range_included_end_excludes_longer_keys() {
         let dir = tmp_dir("range-included");
-        let db = rocksdb_open_shard(&dir).unwrap();
+        let db = rocksdb_open(&dir).unwrap();
         let db: &'static DB = Box::leak(Box::new(db));
 
         let prefix: PreBytes = 7_u64.to_be_bytes();

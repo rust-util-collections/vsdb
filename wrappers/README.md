@@ -32,7 +32,7 @@ For more detailed API examples, see [API Examples](docs/api.md).
 
 ## Features
 
-RocksDB is the sole storage backend — no feature flags are needed to select it.
+Uses RocksDB as the storage backend.
 
 - `msgpack_codec`: **(Default)** Use `rmp-serde` as the codec for faster performance.
 - `json_codec`: Use `serde_json` as the codec for better compatibility.

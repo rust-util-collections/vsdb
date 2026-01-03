@@ -6,9 +6,9 @@
 //! underlying database environment.
 //!
 
-pub(crate) mod engines;
+pub(crate) mod engine;
 
-pub use engines::BatchTrait;
+pub use engine::BatchTrait;
 use parking_lot::Mutex;
 use ruc::*;
 use std::{
@@ -74,7 +74,7 @@ static VSDB_CUSTOM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
 /// This static variable is lazily initialized and provides a single point of
 /// access to the underlying database.
 ///
-/// VSDB is now backed exclusively by RocksDB (single-engine design).
+/// VSDB is backed exclusively by RocksDB.
 pub static VSDB: LazyLock<VsDB> = LazyLock::new(|| pnk!(VsDB::new()));
 
 /////////////////////////////////////////////////////////////////////////////
@@ -122,14 +122,14 @@ macro_rules! parse_prefix {
 /// This struct encapsulates the underlying RocksDB engine and provides a
 /// high-level interface for interacting with the database.
 pub struct VsDB {
-    db: engines::RocksDB,
+    db: engine::RocksDB,
 }
 
 impl VsDB {
     #[inline(always)]
     fn new() -> Result<Self> {
         Ok(Self {
-            db: engines::RocksDB::new().c(d!())?,
+            db: engine::RocksDB::new().c(d!())?,
         })
     }
 

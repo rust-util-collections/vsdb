@@ -17,7 +17,7 @@ The `vsdb` project is a workspace containing several related crates:
 | Crate | Version | Documentation | Path | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | [**vsdb**](wrappers) | [![Crates.io](https://img.shields.io/crates/v/vsdb.svg)](https://crates.io/crates/vsdb) | [![Docs.rs](https://docs.rs/vsdb/badge.svg)](https://docs.rs/vsdb) | `wrappers` | High-level, typed data structures (e.g., `Mapx`, `MapxOrd`). This is the primary crate for most users. |
-| [**vsdb_core**](core) | [![Crates.io](https://img.shields.io/crates/v/vsdb_core.svg)](https://crates.io/crates/vsdb_core) | [![Docs.rs](https://docs.rs/vsdb_core/badge.svg)](https://docs.rs/vsdb_core) | `core` | Low-level implementations, including storage backends and raw data structures. |
+| [**vsdb_core**](core) | [![Crates.io](https://img.shields.io/crates/v/vsdb_core.svg)](https://crates.io/crates/vsdb_core) | [![Docs.rs](https://docs.rs/vsdb_core/badge.svg)](https://docs.rs/vsdb_core) | `core` | Low-level implementations, including the RocksDB storage layer and raw data structures. |
 | [**vsdb_slot_db**](utils/slot_db) | [![Crates.io](https://img.shields.io/crates/v/vsdb_slot_db.svg)](https://crates.io/crates/vsdb_slot_db) | [![Docs.rs](https://docs.rs/vsdb_slot_db/badge.svg)](https://docs.rs/vsdb_slot_db) | `utils/slot_db` | A skip-list-like, timestamp-based index for efficient paged queries. |
 | [**vsdb_trie_db**](utils/trie_db) | [![Crates.io](https://img.shields.io/crates/v/vsdb_trie_db.svg)](https://crates.io/crates/vsdb_trie_db) | [![Docs.rs](https://docs.rs/vsdb_trie_db/badge.svg)](https://docs.rs/vsdb_trie_db) | `utils/trie_db` | An out-of-the-box Merkle Patricia Trie (MPT) implementation. |
 

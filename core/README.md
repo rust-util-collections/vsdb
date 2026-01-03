@@ -26,7 +26,7 @@ vsdb_core = "8.0.0"
 
 For detailed API examples, see [API Examples](docs/api.md).
 
-RocksDB is the sole storage backend — no feature flags are needed to select it.
+Uses RocksDB as the storage backend.
 
 
 ## License

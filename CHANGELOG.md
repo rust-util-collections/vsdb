@@ -43,7 +43,7 @@ The unreliable `len()` method and related length-tracking infrastructure have be
 **Removed methods:**
 - `len()` - removed from all map types
 - `is_empty()` - removed from core map types (still available where implemented via iterator check)
-- Internal: `get_instance_len_hint()`, `set_instance_len_hint()` removed from storage backends
+- Internal: `get_instance_len_hint()`, `set_instance_len_hint()` removed from storage layer
 
 **Migration guide:**
 - If you need to track collection size, maintain a separate counter in your application
@@ -111,7 +111,7 @@ These vector-like types heavily depended on reliable length tracking for indexin
 
 - **Eliminated read-before-write**: `insert()` and `remove()` no longer read old values, significantly reducing I/O operations
 - **Removed length tracking overhead**: No more atomic counter updates or length hint synchronization
-- **Simplified backend operations**: RocksDB backend has cleaner, faster implementation
+- **Simplified storage operations**: RocksDB storage layer has cleaner, faster implementation
 
 #### RocksDB Engine Optimizations
 
@@ -140,9 +140,9 @@ These vector-like types heavily depended on reliable length tracking for indexin
 - **Batch writes**: 2-5x faster compared to individual inserts
 - **Memory usage**: Zero heap allocations for keys up to 56 bytes
 
-### Storage Backend Changes
+### Storage Layer Changes
 
-**Modified in `rocks_backend.rs`:**
+**Modified in `rocksdb.rs`:**
 
 ```rust
 // Before
@@ -228,9 +228,9 @@ assert!(hdr.contains_key(&key));
 
 ### Internal Changes
 
-- Removed unused `parking_lot::Mutex` import from `engines/mod.rs`
+- Removed unused `parking_lot::Mutex` import from `engine/mod.rs`
 - Updated `define_map_wrapper!` macro to remove `len()` and `is_empty()` methods
-- Simplified storage backend trait definitions
+- Simplified storage trait definitions
 
 ## Migration Checklist
 

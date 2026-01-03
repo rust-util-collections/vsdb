@@ -27,7 +27,10 @@ fn concurrent_independent_writes(c: &mut Criterion) {
     for &num_threads in &thread_counts {
         group.bench_function(format!("{} threads", num_threads), |b| {
             b.iter_custom(|iters| {
-                let iters_per_thread = (iters / num_threads).max(5000);
+                // Each thread does `iters` operations.
+                // Total work = num_threads * iters; criterion divides elapsed by iters,
+                // so reported time = wall-clock for one "round" of all threads doing 1 op.
+                // Perfect scaling: reported time stays constant as threads increase.
                 let barrier = Arc::new(Barrier::new(num_threads as usize + 1));
                 let mut handles = vec![];
 
@@ -39,7 +42,7 @@ fn concurrent_independent_writes(c: &mut Criterion) {
                         bar.wait();
 
                         // Disjoint key ranges by thread id.
-                        for j in 0..iters_per_thread {
+                        for j in 0..iters {
                             let k = ((tid as u64) << 48) | (j as u64);
                             db_shadow.insert(&k.to_be_bytes(), &value);
                         }
@@ -74,7 +77,6 @@ fn concurrent_hotspot_writes(c: &mut Criterion) {
     for &num_threads in &thread_counts {
         group.bench_function(format!("{} threads", num_threads), |b| {
             b.iter_custom(|iters| {
-                let iters_per_thread = (iters / num_threads).max(5000);
                 let shared_db: Mapx<[u8; 8], Vec<u8>> = Mapx::new();
                 let barrier = Arc::new(Barrier::new(num_threads as usize + 1));
                 let mut handles = vec![];
@@ -85,9 +87,8 @@ fn concurrent_hotspot_writes(c: &mut Criterion) {
                     handles.push(std::thread::spawn(move || {
                         let value = vec![0u8; 64];
                         bar.wait();
-                        for j in 0..iters_per_thread {
-                            // Same map, disjoint key ranges -> shard/buffer contention without key races.
-                            let k = (i * iters_per_thread + j) as u64;
+                        for j in 0..iters {
+                            let k = ((i as u64) << 48) | (j as u64);
                             db.insert(&k.to_be_bytes(), &value);
                         }
                         bar.wait();
@@ -120,7 +121,6 @@ fn concurrent_shadow_hotspot_writes(c: &mut Criterion) {
     for &num_threads in &thread_counts {
         group.bench_function(format!("{} threads", num_threads), |b| {
             b.iter_custom(|iters| {
-                let iters_per_thread = (iters / num_threads).max(5000);
                 let db: Mapx<[u8; 8], Vec<u8>> = Mapx::new();
                 let barrier = Arc::new(Barrier::new(num_threads as usize + 1));
                 let mut handles = vec![];
@@ -131,10 +131,8 @@ fn concurrent_shadow_hotspot_writes(c: &mut Criterion) {
                     handles.push(std::thread::spawn(move || {
                         let value = vec![0u8; 64];
                         bar.wait();
-                        for j in 0..iters_per_thread {
-                            // Same map, disjoint key ranges -> avoid key races while
-                            // still stressing shared engine buffers/locks.
-                            let k = (i * iters_per_thread + j) as u64;
+                        for j in 0..iters {
+                            let k = ((i as u64) << 48) | (j as u64);
                             db_shadow.insert(&k.to_be_bytes(), &value);
                         }
                         bar.wait();
@@ -176,7 +174,6 @@ fn concurrent_reads(c: &mut Criterion) {
     for &num_threads in &thread_counts {
         group.bench_function(format!("{} threads", num_threads), |b| {
             b.iter_custom(|iters| {
-                let iters_per_thread = (iters / num_threads).max(10_000);
                 let barrier = Arc::new(Barrier::new(num_threads as usize + 1));
                 let mut handles = vec![];
 
@@ -186,7 +183,7 @@ fn concurrent_reads(c: &mut Criterion) {
                     handles.push(std::thread::spawn(move || {
                         let mut rng = 0x9E3779B97F4A7C15_u64 ^ (tid as u64);
                         bar.wait();
-                        for _ in 0..iters_per_thread {
+                        for _ in 0..iters {
                             let k = xorshift64(&mut rng) % num_items;
                             let _ = db_shadow.get(&k.to_be_bytes());
                         }
@@ -231,7 +228,6 @@ fn concurrent_mixed_read_write(c: &mut Criterion) {
             format!("{} readers + {} writers", num_readers, num_writers),
             |b| {
                 b.iter_custom(|iters| {
-                    let iters_per_thread = (iters / total as u64).max(10_000);
                     let barrier = Arc::new(Barrier::new(total + 1));
                     let mut handles = vec![];
 
@@ -241,7 +237,7 @@ fn concurrent_mixed_read_write(c: &mut Criterion) {
                         handles.push(std::thread::spawn(move || {
                             let mut rng = 0xD1B54A32D192ED03_u64 ^ (tid as u64);
                             bar.wait();
-                            for _ in 0..iters_per_thread {
+                            for _ in 0..iters {
                                 let k = xorshift64(&mut rng) % num_items;
                                 let _ = db_shadow.get(&k.to_be_bytes());
                             }
@@ -255,12 +251,9 @@ fn concurrent_mixed_read_write(c: &mut Criterion) {
                         handles.push(std::thread::spawn(move || {
                             let value = vec![0u8; 64];
                             bar.wait();
-                            for j in 0..iters_per_thread {
-                                // Disjoint write ranges per writer to avoid key races.
-                                // Overwrites are allowed but we keep them disjoint.
-                                let k =
-                                    (num_items + (wid as u64) * iters_per_thread + j)
-                                        % (num_items * 4);
+                            for j in 0..iters {
+                                let k = ((wid as u64 + num_readers as u64) << 48)
+                                    | (j % (num_items * 4));
                                 db_shadow.insert(&k.to_be_bytes(), &value);
                             }
                             bar.wait();

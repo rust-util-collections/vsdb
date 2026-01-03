@@ -46,18 +46,18 @@
 #[cfg(test)]
 mod test;
 
-use crate::common::{PreBytes, RawKey, RawValue, engines};
+use crate::common::{PreBytes, RawKey, RawValue, engine};
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, ops::RangeBounds};
 
 /// An iterator over the entries of a `MapxRaw`.
-pub type MapxRawIter<'a> = engines::MapxIter<'a>;
+pub type MapxRawIter<'a> = engine::MapxIter<'a>;
 /// A mutable iterator over the entries of a `MapxRaw`.
-pub type MapxRawIterMut<'a> = engines::MapxIterMut<'a>;
+pub type MapxRawIterMut<'a> = engine::MapxIterMut<'a>;
 /// A mutable reference to a value in a `MapxRaw`.
-pub type ValueMut<'a> = engines::ValueMut<'a>;
+pub type ValueMut<'a> = engine::ValueMut<'a>;
 /// A mutable iterator over the values of a `MapxRaw`.
-pub type ValueIterMut<'a> = engines::ValueIterMut<'a>;
+pub type ValueIterMut<'a> = engine::ValueIterMut<'a>;
 
 /// A raw, disk-based, key-value map.
 ///
@@ -66,7 +66,7 @@ pub type ValueIterMut<'a> = engines::ValueIterMut<'a>;
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(bound = "")]
 pub struct MapxRaw {
-    inner: engines::Mapx,
+    inner: engine::Mapx,
 }
 
 impl MapxRaw {
@@ -96,7 +96,7 @@ impl MapxRaw {
     #[inline(always)]
     pub fn new() -> Self {
         MapxRaw {
-            inner: engines::Mapx::new(),
+            inner: engine::Mapx::new(),
         }
     }
 
@@ -365,7 +365,7 @@ impl MapxRaw {
     #[inline(always)]
     pub unsafe fn from_prefix_slice(s: impl AsRef<[u8]>) -> Self {
         Self {
-            inner: unsafe { engines::Mapx::from_prefix_slice(s) },
+            inner: unsafe { engine::Mapx::from_prefix_slice(s) },
         }
     }
 
