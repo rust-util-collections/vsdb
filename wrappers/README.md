@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/vsdb.svg)](https://crates.io/crates/vsdb)
 [![Docs.rs](https://docs.rs/vsdb/badge.svg)](https://docs.rs/vsdb)
-[![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](../../LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](../../LICENSE)
 [![Rust](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml/badge.svg)](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml)
 
 > `vsdb` is a high-performance, embedded database with an API similar to Rust's standard collections.
@@ -100,4 +100,4 @@ assert_eq!(map.last(), Some((3, "three".to_string())));
 
 ## License
 
-This project is licensed under the **GPL-3.0** license.
+This project is licensed under the **MIT** license.

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v8.3.0] - 2024-07-27
+
+### Changed
+
+- **License changed from GPL-3.0 to MIT.** The entire project is now licensed under the MIT license, allowing for more permissive use and integration.
+
 ## [Unreleased]
 
 ### Breaking Changes

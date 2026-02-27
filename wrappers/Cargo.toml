@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "8.1.1"
+version = "8.3.0"
 authors = ["hui.fan@mail.ru"]
 edition = "2024"
 description = "A std-collection-like database"
@@ -8,7 +8,7 @@ homepage = "https://github.com/rust-util-collections/vsdb"
 repository = "https://github.com/rust-util-collections/vsdb/tree/master/wrappers"
 keywords = ["kv", "leveldb", "rocksdb", "std"]
 categories = ["database-implementations", "data-structures", "algorithms", "caching"]
-license = "GPL-3.0"
+license = "MIT"
 
 [package.metadata.docs.rs]
 # features = []
