@@ -66,8 +66,6 @@ block-beta
     block:L3["Layer 3 — Raw KV Storage"]
         C["MapxRaw / MapxOrd / Mapx<br/>RocksDB-backed byte storage"]
     end
-
-    L1 --> L2 --> L3
 ```
 
 **VerMap** holds the following persistent state:
