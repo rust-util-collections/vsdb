@@ -240,20 +240,15 @@ where
     }
 
     /// Iterates all entries on `branch` in ascending key order.
-    pub fn iter(
-        &self,
-        branch: BranchId,
-    ) -> Result<impl Iterator<Item = (K, V)> + '_> {
+    pub fn iter(&self, branch: BranchId) -> Result<impl Iterator<Item = (K, V)> + '_> {
         let state = self
             .branches
             .get(&branch)
             .ok_or_else(|| eg!("branch not found"))?;
-        Ok(self.tree.iter(state.dirty_root).map(|(k, v)| {
-            (
-                pnk!(K::from_slice(&k)),
-                pnk!(V::decode(&v)),
-            )
-        }))
+        Ok(self
+            .tree
+            .iter(state.dirty_root)
+            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(V::decode(&v)))))
     }
 
     /// Iterates entries in `[lo, hi)` on `branch` in ascending key order.
@@ -284,12 +279,7 @@ where
                 lo_raw.as_ref().map(|v| v.as_slice()),
                 hi_raw.as_ref().map(|v| v.as_slice()),
             )
-            .map(|(k, v)| {
-                (
-                    pnk!(K::from_slice(&k)),
-                    pnk!(V::decode(&v)),
-                )
-            }))
+            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(V::decode(&v)))))
     }
 
     /// Iterates all entries at a specific historical commit.
@@ -301,12 +291,10 @@ where
             .commits
             .get(&commit_id)
             .ok_or_else(|| eg!("commit not found"))?;
-        Ok(self.tree.iter(commit.root).map(|(k, v)| {
-            (
-                pnk!(K::from_slice(&k)),
-                pnk!(V::decode(&v)),
-            )
-        }))
+        Ok(self
+            .tree
+            .iter(commit.root)
+            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(V::decode(&v)))))
     }
 
     // =================================================================
@@ -319,9 +307,9 @@ where
             .branches
             .get(&branch)
             .ok_or_else(|| eg!("branch not found"))?;
-        state.dirty_root = self
-            .tree
-            .insert(state.dirty_root, &key.to_bytes(), &value.encode());
+        state.dirty_root =
+            self.tree
+                .insert(state.dirty_root, &key.to_bytes(), &value.encode());
         self.branches.insert(&branch, &state);
         Ok(())
     }
@@ -367,10 +355,7 @@ where
         self.commits.insert(&id, &commit);
 
         // Update branch head; dirty_root stays the same (it IS the snapshot).
-        let new_state = BranchState {
-            head: id,
-            ..state
-        };
+        let new_state = BranchState { head: id, ..state };
         self.branches.insert(&branch, &new_state);
         Ok(id)
     }
@@ -599,10 +584,10 @@ where
             .collect();
 
         while let Some(id) = queue.pop() {
-            if reachable_commits.insert(id) {
-                if let Some(c) = self.commits.get(&id) {
-                    queue.extend_from_slice(&c.parents);
-                }
+            if reachable_commits.insert(id)
+                && let Some(c) = self.commits.get(&id)
+            {
+                queue.extend_from_slice(&c.parents);
             }
         }
 

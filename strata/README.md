@@ -17,7 +17,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-vsdb = "8.3.0"
+vsdb = "9.0.0"
 ```
 
 ## Highlights

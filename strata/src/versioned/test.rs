@@ -16,10 +16,7 @@ fn basic_insert_get() {
     setup();
     let mut m: VersionedMap<u32, String> = VersionedMap::new("test");
     m.insert(MAIN_BRANCH, &1, &"hello".into()).unwrap();
-    assert_eq!(
-        m.get(MAIN_BRANCH, &1).unwrap(),
-        Some("hello".to_string())
-    );
+    assert_eq!(m.get(MAIN_BRANCH, &1).unwrap(), Some("hello".to_string()));
     assert_eq!(m.get(MAIN_BRANCH, &2).unwrap(), None);
 }
 
@@ -307,14 +304,8 @@ fn branch_isolation() {
     m.commit(feat).unwrap();
 
     // Main is unchanged.
-    assert_eq!(
-        m.get(MAIN_BRANCH, &1).unwrap(),
-        Some("base".to_string())
-    );
-    assert_eq!(
-        m.get(feat, &1).unwrap(),
-        Some("feature_val".to_string())
-    );
+    assert_eq!(m.get(MAIN_BRANCH, &1).unwrap(), Some("base".to_string()));
+    assert_eq!(m.get(feat, &1).unwrap(), Some("feature_val".to_string()));
 }
 
 #[test]
@@ -452,7 +443,8 @@ fn list_many_branches() {
     setup();
     let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
     for i in 0..20 {
-        m.create_branch(&format!("branch_{i}"), MAIN_BRANCH).unwrap();
+        m.create_branch(&format!("branch_{i}"), MAIN_BRANCH)
+            .unwrap();
     }
     assert_eq!(m.list_branches().len(), 21); // 20 + main
 }
@@ -874,9 +866,9 @@ fn merge_with_mixed_add_delete_change() {
 
     m.merge(feat, MAIN_BRANCH).unwrap();
 
-    assert_eq!(m.get(MAIN_BRANCH, &1).unwrap(), None);    // deleted in feat, unchanged in main → delete
+    assert_eq!(m.get(MAIN_BRANCH, &1).unwrap(), None); // deleted in feat, unchanged in main → delete
     assert_eq!(m.get(MAIN_BRANCH, &2).unwrap(), Some(99)); // changed in feat → take feat
-    assert_eq!(m.get(MAIN_BRANCH, &3).unwrap(), None);    // deleted in main, unchanged in feat → delete
+    assert_eq!(m.get(MAIN_BRANCH, &3).unwrap(), None); // deleted in main, unchanged in feat → delete
     assert_eq!(m.get(MAIN_BRANCH, &4).unwrap(), Some(88)); // changed in main → take main
     assert_eq!(m.get(MAIN_BRANCH, &5).unwrap(), Some(50)); // unchanged both → keep
     assert_eq!(m.get(MAIN_BRANCH, &6).unwrap(), Some(60)); // added in feat → take
@@ -1560,9 +1552,7 @@ fn range_on_branch() {
 fn range_invalid_branch() {
     setup();
     let m: VersionedMap<u32, u32> = VersionedMap::new("test");
-    assert!(m
-        .range(999, Bound::Unbounded, Bound::Unbounded)
-        .is_err());
+    assert!(m.range(999, Bound::Unbounded, Bound::Unbounded).is_err());
 }
 
 #[test]

@@ -26,10 +26,7 @@ pub mod versioned;
 
 // Basic data structures
 pub use basic::{
-    mapx::Mapx,
-    mapx_ord::MapxOrd,
-    mapx_ord_rawkey::MapxOrdRawKey,
-    orphan::Orphan,
+    mapx::Mapx, mapx_ord::MapxOrd, mapx_ord_rawkey::MapxOrdRawKey, orphan::Orphan,
 };
 
 // Common traits and types

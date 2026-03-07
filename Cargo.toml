@@ -22,8 +22,8 @@ sha3 = "0.10"
 
 rocksdb = { version = "0.24.0", default-features = false, features = ["bindgen-runtime", "lz4", "zstd"] }
 
-vsdb = { path = "strata", version = "8.3.0", default-features = false }
-vsdb_core = { path = "core", version = "8.3.0", default-features = false }
+vsdb = { path = "strata", version = "9.0.0", default-features = false }
+vsdb_core = { path = "core", version = "9.0.0", default-features = false }
 
-vsdb_trie_db = { path = "utils/trie_db", version = "8.3.0", default-features = false }
-vsdb_slot_db = { path = "utils/slot_db", version = "8.3.0", default-features = false }
+vsdb_trie_db = { path = "utils/trie_db", version = "9.0.0", default-features = false }
+vsdb_slot_db = { path = "utils/slot_db", version = "9.0.0", default-features = false }

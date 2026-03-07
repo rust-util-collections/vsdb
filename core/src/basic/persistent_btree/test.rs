@@ -278,7 +278,10 @@ fn fork_many_versions() {
     }
 
     // Base is untouched.
-    assert_eq!(tree.get(base, &0u32.to_be_bytes()).unwrap(), 0u32.to_be_bytes());
+    assert_eq!(
+        tree.get(base, &0u32.to_be_bytes()).unwrap(),
+        0u32.to_be_bytes()
+    );
     // Each fork has its own value for key 0.
     for (f, &v) in forks.iter().enumerate() {
         assert_eq!(
@@ -556,9 +559,7 @@ fn range_full_unbounded() {
     for i in 0u32..100 {
         r = tree.insert(r, &i.to_be_bytes(), &i.to_be_bytes());
     }
-    let items: Vec<_> = tree
-        .range(r, Bound::Unbounded, Bound::Unbounded)
-        .collect();
+    let items: Vec<_> = tree.range(r, Bound::Unbounded, Bound::Unbounded).collect();
     assert_eq!(items.len(), 100);
 }
 
@@ -595,7 +596,10 @@ fn insert_triggers_multi_level_splits() {
     }
     assert_eq!(tree.iter(r).count(), n as usize);
     // Spot-check first, middle, last.
-    assert_eq!(tree.get(r, &0u32.to_be_bytes()).unwrap(), 0u32.to_be_bytes());
+    assert_eq!(
+        tree.get(r, &0u32.to_be_bytes()).unwrap(),
+        0u32.to_be_bytes()
+    );
     assert_eq!(
         tree.get(r, &(n / 2).to_be_bytes()).unwrap(),
         (n / 2).to_be_bytes()

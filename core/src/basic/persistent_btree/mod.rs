@@ -131,13 +131,13 @@ impl Node {
                 let mut keys = Vec::with_capacity(n);
                 let mut values = Vec::with_capacity(n);
                 for _ in 0..n {
-                    let klen =
-                        u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+                    let klen = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap())
+                        as usize;
                     pos += 4;
                     keys.push(data[pos..pos + klen].to_vec());
                     pos += klen;
-                    let vlen =
-                        u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+                    let vlen = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap())
+                        as usize;
                     pos += 4;
                     values.push(data[pos..pos + vlen].to_vec());
                     pos += vlen;
@@ -147,8 +147,8 @@ impl Node {
             TAG_INTERNAL => {
                 let mut keys = Vec::with_capacity(n);
                 for _ in 0..n {
-                    let klen =
-                        u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+                    let klen = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap())
+                        as usize;
                     pos += 4;
                     keys.push(data[pos..pos + klen].to_vec());
                     pos += klen;
@@ -243,14 +243,14 @@ impl PersistentBTree {
     fn alloc(&mut self, node: &Node) -> NodeId {
         let id = self.next_id;
         self.next_id += 1;
-        self.nodes.insert(&id.to_be_bytes(), &node.encode());
+        self.nodes.insert(id.to_be_bytes(), node.encode());
         id
     }
 
     fn node(&self, id: NodeId) -> Node {
         let raw = self
             .nodes
-            .get(&id.to_be_bytes())
+            .get(id.to_be_bytes())
             .unwrap_or_else(|| panic!("PersistentBTree: missing node {id}"));
         Node::decode(&raw)
     }
@@ -364,7 +364,10 @@ impl PersistentBTree {
         InsertResult::Split {
             left: self.alloc(&Node::Leaf { keys, values }),
             sep,
-            right: self.alloc(&Node::Leaf { keys: rk, values: rv }),
+            right: self.alloc(&Node::Leaf {
+                keys: rk,
+                values: rv,
+            }),
         }
     }
 
@@ -507,8 +510,7 @@ impl PersistentBTree {
             return RemoveResult::Done(nid);
         }
         // Try borrow from right sibling.
-        if ci + 1 < children.len()
-            && self.node(children[ci + 1]).key_count() > MIN_KEYS
+        if ci + 1 < children.len() && self.node(children[ci + 1]).key_count() > MIN_KEYS
         {
             self.borrow_right(&mut keys, &mut children, ci);
             let nid = self.alloc(&Node::Internal { keys, children });
@@ -530,12 +532,7 @@ impl PersistentBTree {
 
     // ----- borrow / merge -----
 
-    fn borrow_left(
-        &mut self,
-        pk: &mut Vec<Vec<u8>>,
-        pc: &mut Vec<NodeId>,
-        ci: usize,
-    ) {
+    fn borrow_left(&mut self, pk: &mut [Vec<u8>], pc: &mut [NodeId], ci: usize) {
         let si = ci - 1;
         let left = self.node(pc[si]);
         let child = self.node(pc[ci]);
@@ -553,8 +550,14 @@ impl PersistentBTree {
                 ck.insert(0, lk.pop().unwrap());
                 cv.insert(0, lv.pop().unwrap());
                 pk[si] = ck[0].clone();
-                pc[si] = self.alloc(&Node::Leaf { keys: lk, values: lv });
-                pc[ci] = self.alloc(&Node::Leaf { keys: ck, values: cv });
+                pc[si] = self.alloc(&Node::Leaf {
+                    keys: lk,
+                    values: lv,
+                });
+                pc[ci] = self.alloc(&Node::Leaf {
+                    keys: ck,
+                    values: cv,
+                });
             }
             (
                 Node::Internal {
@@ -569,19 +572,20 @@ impl PersistentBTree {
                 ck.insert(0, pk[si].clone());
                 cc.insert(0, lc.pop().unwrap());
                 pk[si] = lk.pop().unwrap();
-                pc[si] = self.alloc(&Node::Internal { keys: lk, children: lc });
-                pc[ci] = self.alloc(&Node::Internal { keys: ck, children: cc });
+                pc[si] = self.alloc(&Node::Internal {
+                    keys: lk,
+                    children: lc,
+                });
+                pc[ci] = self.alloc(&Node::Internal {
+                    keys: ck,
+                    children: cc,
+                });
             }
             _ => unreachable!(),
         }
     }
 
-    fn borrow_right(
-        &mut self,
-        pk: &mut Vec<Vec<u8>>,
-        pc: &mut Vec<NodeId>,
-        ci: usize,
-    ) {
+    fn borrow_right(&mut self, pk: &mut [Vec<u8>], pc: &mut [NodeId], ci: usize) {
         let ri = ci + 1;
         let child = self.node(pc[ci]);
         let right = self.node(pc[ri]);
@@ -599,8 +603,14 @@ impl PersistentBTree {
                 ck.push(rk.remove(0));
                 cv.push(rv.remove(0));
                 pk[ci] = rk[0].clone();
-                pc[ci] = self.alloc(&Node::Leaf { keys: ck, values: cv });
-                pc[ri] = self.alloc(&Node::Leaf { keys: rk, values: rv });
+                pc[ci] = self.alloc(&Node::Leaf {
+                    keys: ck,
+                    values: cv,
+                });
+                pc[ri] = self.alloc(&Node::Leaf {
+                    keys: rk,
+                    values: rv,
+                });
             }
             (
                 Node::Internal {
@@ -615,8 +625,14 @@ impl PersistentBTree {
                 ck.push(pk[ci].clone());
                 cc.push(rc.remove(0));
                 pk[ci] = rk.remove(0);
-                pc[ci] = self.alloc(&Node::Internal { keys: ck, children: cc });
-                pc[ri] = self.alloc(&Node::Internal { keys: rk, children: rc });
+                pc[ci] = self.alloc(&Node::Internal {
+                    keys: ck,
+                    children: cc,
+                });
+                pc[ri] = self.alloc(&Node::Internal {
+                    keys: rk,
+                    children: rc,
+                });
             }
             _ => unreachable!(),
         }
@@ -638,23 +654,35 @@ impl PersistentBTree {
                     keys: mut lk,
                     values: mut lv,
                 },
-                Node::Leaf { keys: rk, values: rv },
+                Node::Leaf {
+                    keys: rk,
+                    values: rv,
+                },
             ) => {
                 lk.extend(rk);
                 lv.extend(rv);
-                Node::Leaf { keys: lk, values: lv }
+                Node::Leaf {
+                    keys: lk,
+                    values: lv,
+                }
             }
             (
                 Node::Internal {
                     keys: mut lk,
                     children: mut lc,
                 },
-                Node::Internal { keys: rk, children: rc },
+                Node::Internal {
+                    keys: rk,
+                    children: rc,
+                },
             ) => {
                 lk.push(sep);
                 lk.extend(rk);
                 lc.extend(rc);
-                Node::Internal { keys: lk, children: lc }
+                Node::Internal {
+                    keys: lk,
+                    children: lc,
+                }
             }
             _ => unreachable!(),
         };
@@ -776,7 +804,7 @@ impl PersistentBTree {
         if !seen.insert(id) {
             return;
         }
-        if let Some(raw) = self.nodes.get(&id.to_be_bytes()) {
+        if let Some(raw) = self.nodes.get(id.to_be_bytes()) {
             let node = Node::decode(&raw);
             if let Node::Internal { children, .. } = &node {
                 for &c in children {
@@ -797,13 +825,16 @@ impl Default for PersistentBTree {
 // BTreeIter
 // =========================================================================
 
+/// Keys, values, and current index within a leaf node.
+type LeafState = (Vec<Vec<u8>>, Vec<Vec<u8>>, usize);
+
 /// A forward iterator over entries in a [`PersistentBTree`].
 ///
 /// Uses an explicit ancestor stack — no sibling pointers needed.
 pub struct BTreeIter<'a> {
     tree: &'a PersistentBTree,
     stack: Vec<(Node, usize)>,
-    leaf: Option<(Vec<Vec<u8>>, Vec<Vec<u8>>, usize)>,
+    leaf: Option<LeafState>,
     hi: Bound<Vec<u8>>,
     done: bool,
 }
@@ -850,10 +881,9 @@ impl<'a> BTreeIter<'a> {
                 Node::Leaf { keys, values } => {
                     let start = match lo {
                         Bound::Unbounded => 0,
-                        Bound::Included(k) => {
-                            keys.binary_search_by(|x| x.as_slice().cmp(k))
-                                .unwrap_or_else(|i| i)
-                        }
+                        Bound::Included(k) => keys
+                            .binary_search_by(|x| x.as_slice().cmp(k))
+                            .unwrap_or_else(|i| i),
                         Bound::Excluded(k) => {
                             match keys.binary_search_by(|x| x.as_slice().cmp(k)) {
                                 Ok(i) => i + 1,
@@ -875,13 +905,13 @@ impl<'a> BTreeIter<'a> {
     fn advance_leaf(&mut self) {
         self.leaf = None;
         while let Some((node, next_ci)) = self.stack.last_mut() {
-            if let Node::Internal { children, .. } = node {
-                if *next_ci < children.len() {
-                    let child_id = children[*next_ci];
-                    *next_ci += 1;
-                    self.descend_leftmost(child_id);
-                    return;
-                }
+            if let Node::Internal { children, .. } = node
+                && *next_ci < children.len()
+            {
+                let child_id = children[*next_ci];
+                *next_ci += 1;
+                self.descend_leftmost(child_id);
+                return;
             }
             self.stack.pop();
         }
@@ -909,7 +939,6 @@ impl<'a> BTreeIter<'a> {
             }
         }
     }
-
 }
 
 impl Iterator for BTreeIter<'_> {

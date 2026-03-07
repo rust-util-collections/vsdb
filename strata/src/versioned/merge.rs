@@ -59,12 +59,7 @@ pub fn three_way_merge(
             break;
         }
 
-        let min_key = [ka, ks, kt]
-            .into_iter()
-            .flatten()
-            .min()
-            .unwrap()
-            .to_vec();
+        let min_key = [ka, ks, kt].into_iter().flatten().min().unwrap().to_vec();
 
         let a_val = if ka == Some(min_key.as_slice()) {
             let (_, v) = iter_a.next().unwrap();
