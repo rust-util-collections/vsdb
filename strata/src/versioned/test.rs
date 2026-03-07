@@ -627,9 +627,9 @@ fn merge_delete_source_changed_target() {
     m.insert(MAIN_BRANCH, &1, &99).unwrap();
     m.commit(MAIN_BRANCH).unwrap();
 
-    // Delete in one, changed in other → keep the change.
+    // Source deletes, target changes → source wins (delete).
     m.merge(feat, MAIN_BRANCH).unwrap();
-    assert_eq!(m.get(MAIN_BRANCH, &1).unwrap(), Some(99));
+    assert_eq!(m.get(MAIN_BRANCH, &1).unwrap(), None);
 }
 
 #[test]
@@ -649,7 +649,7 @@ fn merge_changed_source_delete_target() {
     m.remove(MAIN_BRANCH, &1).unwrap();
     m.commit(MAIN_BRANCH).unwrap();
 
-    // Delete in one, changed in other → keep the change (source's value).
+    // Source changed, target deleted → source wins (keep source's value).
     m.merge(feat, MAIN_BRANCH).unwrap();
     assert_eq!(m.get(MAIN_BRANCH, &1).unwrap(), Some(99));
 }

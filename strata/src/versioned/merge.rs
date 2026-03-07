@@ -1,26 +1,56 @@
 //!
 //! Three-way merge for persistent B+ trees.
 //!
-//! Given an ancestor, "ours" and "theirs" tree roots, produces a merged tree:
+//! # Merge semantics: source wins on conflicts
 //!
-//! * Keys changed only in ours → take ours.
-//! * Keys changed only in theirs → take theirs.
-//! * Keys changed in both to the same value → keep.
-//! * Keys changed in both to different values → **source wins** (last-writer-wins).
-//! * Keys added only in ours → take ours.
-//! * Keys added only in theirs → take theirs.
-//! * Keys deleted only in ours → delete.
-//! * Keys deleted only in theirs → delete.
-//! * Key deleted in one side, changed in other → **keep the change** (safer default).
+//! Given an **ancestor** (common base), a **source** branch, and a
+//! **target** branch, the merge compares each key across all three
+//! snapshots and applies these rules:
+//!
+//! 1. **Non-conflict (single-sided change):** if only one side differs
+//!    from the ancestor, keep that side's change.
+//! 2. **Conflict (both sides changed the same key differently):**
+//!    **source wins**.
+//!
+//! A deletion is treated as "assigning the empty value ∅".  This means
+//! delete-vs-modify is also a regular conflict, so source-side delete
+//! wins over target-side modify.
+//!
+//! ## Complete decision matrix
+//!
+//! | ancestor | source | target | result          | rationale                     |
+//! |----------|--------|--------|-----------------|-------------------------------|
+//! | A        | A      | A      | A (keep)        | no change on either side      |
+//! | A        | **S**  | A      | **S**           | only source changed           |
+//! | A        | A      | **T**  | **T**           | only target changed           |
+//! | A        | **S**  | **S**  | **S**           | both changed to same value    |
+//! | A        | **S**  | **T**  | **S** ⚠         | conflict → source wins        |
+//! | A        | ∅      | A      | ∅ (delete)      | source deleted, target unchanged → source wins |
+//! | A        | A      | ∅      | ∅ (delete)      | target deleted, source unchanged → target wins (no conflict) |
+//! | A        | ∅      | **T**  | ∅ (delete) ⚠    | conflict → source wins (delete beats modify)  |
+//! | A        | **S**  | ∅      | **S** ⚠         | conflict → source wins (modify beats delete)  |
+//! | A        | ∅      | ∅      | ∅ (delete)      | both deleted                  |
+//! | ∅        | **S**  | ∅      | **S**           | only source added             |
+//! | ∅        | ∅      | **T**  | **T**           | only target added             |
+//! | ∅        | **S**  | **S**  | **S**           | both added same value         |
+//! | ∅        | **S**  | **T**  | **S** ⚠         | conflict → source wins        |
+//!
+//! Rows marked ⚠ are conflict cases (source wins). Non-⚠ rows are
+//! single-sided or non-conflicting updates determined by ancestor
+//! comparison. The caller controls priority by choosing which branch
+//! to pass as `source` vs `target` in
+//! [`VerMap::merge(source, target)`](super::map::VerMap::merge).
 //!
 
 use vsdb_core::basic::persistent_btree::{NodeId, PersistentBTree};
 
 /// Performs a three-way merge.
 ///
-/// `source_root` is given priority over `target_root` when both sides
-/// modify the same key to different values (last-writer-wins with source
-/// winning).
+/// Deletion is treated as "assigning ∅", so all conflicts — including
+/// delete-vs-modify — are resolved uniformly: **source wins**.
+///
+/// See the [module-level documentation](self) for the full decision
+/// matrix.
 pub fn three_way_merge(
     tree: &mut PersistentBTree,
     ancestor_root: NodeId,
@@ -97,8 +127,9 @@ pub fn three_way_merge(
             (Some(a), None, Some(t)) if a == t => None,
             // Deleted in target, unchanged in source → delete.
             (Some(a), Some(s), None) if a == s => None,
-            // Deleted in one, changed in other → keep the change.
-            (Some(_), None, Some(t)) => Some(t),
+            // Deleted in source, changed in target → source wins (delete).
+            (Some(_), None, Some(_)) => None,
+            // Changed in source, deleted in target → source wins (keep change).
             (Some(_), Some(s), None) => Some(s),
             // Deleted in both → delete.
             (Some(_), None, None) => None,

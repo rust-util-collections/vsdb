@@ -51,8 +51,10 @@ struct BranchState {
 /// 4. **Branch** — `create_branch` forks a lightweight branch from any
 ///    existing branch.  The new branch shares all history via structural
 ///    sharing — no data is copied.
-/// 5. **Merge** — `merge` performs a three-way merge between two branches.
-///    On conflict the source branch wins (last-writer-wins).
+/// 5. **Merge** — `merge(source, target)` performs a three-way merge.
+///    Deletion is treated as "assigning ∅", so all conflicts are resolved
+///    uniformly: **source wins** — whether source wrote a new value or
+///    deleted the key.
 /// 6. **Rollback** — `rollback_to` rewinds a branch to an earlier commit;
 ///    `discard` throws away uncommitted changes.
 /// 7. **History** — `log`, `get_at_commit`, `iter_at_commit` let you
@@ -481,7 +483,24 @@ where
     /// Merges `source` branch into `target` branch using three-way merge.
     ///
     /// Both branches must be committed (no uncommitted changes).
-    /// On conflict, the source branch's value wins (last-writer-wins).
+    ///
+    /// # Conflict resolution: source wins on conflicts
+    ///
+    /// First, non-conflicting single-sided changes are preserved using the
+    /// ancestor snapshot. If both sides changed the same key differently,
+    /// **source wins**. A deletion is treated as "assigning ∅", so
+    /// delete-vs-modify is also resolved by source priority.
+    ///
+    /// | source | target | result |
+    /// |--------|--------|--------|
+    /// | unchanged (A) | changed to T | **T** (target-only change preserved) |
+    /// | changed to S | unchanged (A) | **S** (source-only change preserved) |
+    /// | changed to S | changed to T | **S** (conflict → source wins) |
+    /// | deleted (∅) | changed to T | **∅** (conflict → source wins → delete) |
+    /// | changed to S | deleted (∅) | **S** (conflict → source wins → keep) |
+    ///
+    /// The caller controls priority by choosing which branch to pass as
+    /// `source` vs `target`.
     ///
     /// If `target` has no commits, performs a fast-forward (no merge commit
     /// is created).  Otherwise creates a merge commit on `target` with two

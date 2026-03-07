@@ -101,6 +101,24 @@ assert_eq!(map.last(), Some((3, "three".to_string())));
 
 The typical lifecycle is: **create → write → commit → branch → merge → gc**.
 
+#### Merge conflict resolution: source wins on conflicts
+
+`merge(source, target)` uses three-way merge with the common ancestor.
+If only one side changed a key relative to the ancestor, that single-sided
+change is preserved. If both sides changed the same key differently, **source
+wins**. A deletion is treated as "assigning ∅", so delete-vs-modify is also
+resolved by source priority.
+
+| source | target | result |
+|--------|--------|--------|
+| unchanged (A) | changed to T | **T** (target-only change preserved) |
+| changed to S | unchanged (A) | **S** (source-only change preserved) |
+| changed to S | changed to T | **S** (conflict → source wins) |
+| deleted (∅) | changed to T | **∅** (conflict → source wins → delete) |
+| changed to S | deleted (∅) | **S** (conflict → source wins → keep) |
+
+The caller controls priority by choosing which branch to pass as `source` vs `target`.
+
 ```rust
 use vsdb::versioned::map::VerMap;
 use vsdb::versioned::{MAIN_BRANCH, BranchId};
