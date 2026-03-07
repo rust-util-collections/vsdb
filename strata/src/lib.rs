@@ -20,6 +20,8 @@ pub mod basic;
 pub mod basic_multi_key;
 /// Data structures for representing directed acyclic graphs (DAGs).
 pub mod dagmap;
+/// Git-model versioned storage: branches, commits, merge, and history.
+pub mod versioned;
 
 // --- Re-exports ---
 

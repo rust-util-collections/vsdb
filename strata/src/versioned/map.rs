@@ -1,0 +1,554 @@
+//!
+//! [`VersionedMap`] — a typed, versioned key-value map with branch / commit /
+//! merge support, modelled after Git semantics.
+//!
+
+use super::{BranchId, Commit, CommitId, MAIN_BRANCH, NO_COMMIT};
+use crate::common::ende::{KeyEnDeOrdered, ValueEnDe};
+use crate::{Mapx, MapxOrd, Orphan};
+use ruc::*;
+use serde::{Deserialize, Serialize};
+use std::marker::PhantomData;
+use std::time::{SystemTime, UNIX_EPOCH};
+use vsdb_core::basic::persistent_btree::{EMPTY_ROOT, NodeId, PersistentBTree};
+
+// =========================================================================
+// BranchState
+// =========================================================================
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct BranchState {
+    name: String,
+    /// The latest commit on this branch.
+    head: CommitId,
+    /// B+ tree root of uncommitted (working) state.
+    /// Starts as the root of `head`'s commit; mutations update this.
+    dirty_root: NodeId,
+}
+
+// =========================================================================
+// VersionedMap
+// =========================================================================
+
+/// A persistent, versioned, ordered key-value map.
+///
+/// Supports Git-style branching, committing, merging and rollback, backed
+/// by a persistent B+ tree with copy-on-write structural sharing.
+///
+/// # Quick start
+///
+/// ```
+/// use vsdb::versioned::map::VersionedMap;
+/// use vsdb::versioned::{MAIN_BRANCH, NO_COMMIT};
+/// use vsdb::{vsdb_set_base_dir, vsdb_get_base_dir};
+/// use std::fs;
+///
+/// let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
+/// vsdb_set_base_dir(&dir).unwrap();
+///
+/// let mut m: VersionedMap<u32, String> = VersionedMap::new("demo");
+///
+/// // Write on the default "main" branch.
+/// m.insert(MAIN_BRANCH, &1, &"hello".into()).unwrap();
+/// m.insert(MAIN_BRANCH, &2, &"world".into()).unwrap();
+/// let c1 = m.commit(MAIN_BRANCH).unwrap();
+///
+/// // Fork a feature branch from main.
+/// let feat = m.create_branch("feature", MAIN_BRANCH).unwrap();
+/// m.insert(feat, &1, &"hi".into()).unwrap();
+/// let c2 = m.commit(feat).unwrap();
+///
+/// // Main is unchanged.
+/// assert_eq!(m.get(MAIN_BRANCH, &1).unwrap(), Some("hello".into()));
+/// // Feature has the new value.
+/// assert_eq!(m.get(feat, &1).unwrap(), Some("hi".into()));
+///
+/// // Merge feature → main.
+/// m.merge(feat, MAIN_BRANCH).unwrap();
+/// assert_eq!(m.get(MAIN_BRANCH, &1).unwrap(), Some("hi".into()));
+///
+/// fs::remove_dir_all(&dir).unwrap();
+/// ```
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(bound = "")]
+pub struct VersionedMap<K, V> {
+    /// The underlying persistent B+ tree (shared node pool).
+    tree: PersistentBTree,
+
+    /// CommitId → Commit
+    commits: MapxOrd<u64, Commit>,
+
+    /// BranchId → BranchState
+    branches: MapxOrd<u64, BranchState>,
+
+    /// branch name → BranchId
+    branch_names: Mapx<String, u64>,
+
+    /// ID allocators
+    next_commit: Orphan<u64>,
+    next_branch: Orphan<u64>,
+
+    #[serde(skip)]
+    _phantom: PhantomData<(K, V)>,
+}
+
+impl<K, V> VersionedMap<K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    /// Creates a new versioned map with a default `main` branch.
+    pub fn new(_name: &str) -> Self {
+        let mut branches: MapxOrd<u64, BranchState> = MapxOrd::new();
+        let mut branch_names: Mapx<String, u64> = Mapx::new();
+
+        let main = BranchState {
+            name: "main".into(),
+            head: NO_COMMIT,
+            dirty_root: EMPTY_ROOT,
+        };
+        branches.insert(&MAIN_BRANCH, &main);
+        branch_names.insert(&"main".to_string(), &MAIN_BRANCH);
+
+        Self {
+            tree: PersistentBTree::new(),
+            commits: MapxOrd::new(),
+            branches,
+            branch_names,
+            next_commit: Orphan::new(1), // 0 = NO_COMMIT
+            next_branch: Orphan::new(MAIN_BRANCH + 1),
+            _phantom: PhantomData,
+        }
+    }
+
+    // =================================================================
+    // Branch management
+    // =================================================================
+
+    /// Creates a new branch forked from the head of `source_branch`.
+    ///
+    /// Returns the new branch's ID.
+    pub fn create_branch(
+        &mut self,
+        name: &str,
+        source_branch: BranchId,
+    ) -> Result<BranchId> {
+        if self.branch_names.contains_key(&name.to_string()) {
+            return Err(eg!("branch '{}' already exists", name));
+        }
+        let src = self
+            .branches
+            .get(&source_branch)
+            .ok_or_else(|| eg!("source branch not found"))?;
+
+        let id = self.next_branch.get_value();
+        *self.next_branch.get_mut() = id + 1;
+
+        let state = BranchState {
+            name: name.into(),
+            head: src.head,
+            dirty_root: src.dirty_root,
+        };
+        self.branches.insert(&id, &state);
+        self.branch_names.insert(&name.to_string(), &id);
+        Ok(id)
+    }
+
+    /// Deletes a branch.  The branch's commits remain in the object store
+    /// until [`gc`](Self::gc) is called.
+    pub fn delete_branch(&mut self, branch: BranchId) -> Result<()> {
+        if branch == MAIN_BRANCH {
+            return Err(eg!("cannot delete the main branch"));
+        }
+        let state = self
+            .branches
+            .get(&branch)
+            .ok_or_else(|| eg!("branch not found"))?;
+        self.branch_names.remove(&state.name);
+        self.branches.remove(&branch);
+        Ok(())
+    }
+
+    /// Lists all branches as `(BranchId, name)`.
+    pub fn list_branches(&self) -> Vec<(BranchId, String)> {
+        self.branches.iter().map(|(id, s)| (id, s.name)).collect()
+    }
+
+    // =================================================================
+    // Read
+    // =================================================================
+
+    /// Reads a value from the working state of `branch`.
+    pub fn get(&self, branch: BranchId, key: &K) -> Result<Option<V>> {
+        let state = self
+            .branches
+            .get(&branch)
+            .ok_or_else(|| eg!("branch not found"))?;
+        let raw = self.tree.get(state.dirty_root, &key.to_bytes());
+        match raw {
+            Some(v) => Ok(Some(pnk!(V::decode(&v)))),
+            None => Ok(None),
+        }
+    }
+
+    /// Reads a value at a specific historical commit.
+    pub fn get_at_commit(&self, commit_id: CommitId, key: &K) -> Result<Option<V>> {
+        let commit = self
+            .commits
+            .get(&commit_id)
+            .ok_or_else(|| eg!("commit not found"))?;
+        let raw = self.tree.get(commit.root, &key.to_bytes());
+        match raw {
+            Some(v) => Ok(Some(pnk!(V::decode(&v)))),
+            None => Ok(None),
+        }
+    }
+
+    /// Checks if `key` exists in the working state of `branch`.
+    pub fn contains_key(&self, branch: BranchId, key: &K) -> Result<bool> {
+        let state = self
+            .branches
+            .get(&branch)
+            .ok_or_else(|| eg!("branch not found"))?;
+        Ok(self.tree.contains_key(state.dirty_root, &key.to_bytes()))
+    }
+
+    /// Iterates all entries on `branch` in ascending key order.
+    pub fn iter(
+        &self,
+        branch: BranchId,
+    ) -> Result<impl Iterator<Item = (K, V)> + '_> {
+        let state = self
+            .branches
+            .get(&branch)
+            .ok_or_else(|| eg!("branch not found"))?;
+        Ok(self.tree.iter(state.dirty_root).map(|(k, v)| {
+            (
+                pnk!(K::from_slice(&k)),
+                pnk!(V::decode(&v)),
+            )
+        }))
+    }
+
+    // =================================================================
+    // Write (working state)
+    // =================================================================
+
+    /// Inserts a key-value pair into the working state of `branch`.
+    pub fn insert(&mut self, branch: BranchId, key: &K, value: &V) -> Result<()> {
+        let mut state = self
+            .branches
+            .get(&branch)
+            .ok_or_else(|| eg!("branch not found"))?;
+        state.dirty_root = self
+            .tree
+            .insert(state.dirty_root, &key.to_bytes(), &value.encode());
+        self.branches.insert(&branch, &state);
+        Ok(())
+    }
+
+    /// Removes a key from the working state of `branch`.
+    pub fn remove(&mut self, branch: BranchId, key: &K) -> Result<()> {
+        let mut state = self
+            .branches
+            .get(&branch)
+            .ok_or_else(|| eg!("branch not found"))?;
+        state.dirty_root = self.tree.remove(state.dirty_root, &key.to_bytes());
+        self.branches.insert(&branch, &state);
+        Ok(())
+    }
+
+    // =================================================================
+    // Commit / Rollback
+    // =================================================================
+
+    /// Commits the current working state of `branch`, creating a new
+    /// immutable [`Commit`].  Returns the commit ID.
+    pub fn commit(&mut self, branch: BranchId) -> Result<CommitId> {
+        let state = self
+            .branches
+            .get(&branch)
+            .ok_or_else(|| eg!("branch not found"))?;
+
+        let id = self.next_commit.get_value();
+        *self.next_commit.get_mut() = id + 1;
+
+        let parents = if state.head == NO_COMMIT {
+            vec![]
+        } else {
+            vec![state.head]
+        };
+
+        let commit = Commit {
+            id,
+            root: state.dirty_root,
+            parents,
+            timestamp_us: now_us(),
+        };
+        self.commits.insert(&id, &commit);
+
+        // Update branch head; dirty_root stays the same (it IS the snapshot).
+        let new_state = BranchState {
+            head: id,
+            ..state
+        };
+        self.branches.insert(&branch, &new_state);
+        Ok(id)
+    }
+
+    /// Discards uncommitted changes, resetting the working state to the
+    /// branch head.
+    pub fn discard(&mut self, branch: BranchId) -> Result<()> {
+        let state = self
+            .branches
+            .get(&branch)
+            .ok_or_else(|| eg!("branch not found"))?;
+        let root = if state.head == NO_COMMIT {
+            EMPTY_ROOT
+        } else {
+            self.commits.get(&state.head).unwrap().root
+        };
+        let new_state = BranchState {
+            dirty_root: root,
+            ..state
+        };
+        self.branches.insert(&branch, &new_state);
+        Ok(())
+    }
+
+    /// Rolls back `branch` to a previous commit, discarding all commits
+    /// after `target` on this branch.
+    ///
+    /// The discarded commits are not deleted (they may be reachable from
+    /// other branches).  Call [`gc`](Self::gc) to reclaim them.
+    pub fn rollback_to(&mut self, branch: BranchId, target: CommitId) -> Result<()> {
+        let _ = self
+            .branches
+            .get(&branch)
+            .ok_or_else(|| eg!("branch not found"))?;
+        let commit = self
+            .commits
+            .get(&target)
+            .ok_or_else(|| eg!("commit not found"))?;
+
+        let new_state = BranchState {
+            name: self.branches.get(&branch).unwrap().name,
+            head: target,
+            dirty_root: commit.root,
+        };
+        self.branches.insert(&branch, &new_state);
+        Ok(())
+    }
+
+    // =================================================================
+    // Merge
+    // =================================================================
+
+    /// Merges `source` branch into `target` branch using three-way merge.
+    ///
+    /// Both branches must be committed (no uncommitted changes).
+    /// On conflict, the source branch's value wins (last-writer-wins).
+    ///
+    /// Creates a merge commit on `target` with two parents.
+    pub fn merge(&mut self, source: BranchId, target: BranchId) -> Result<CommitId> {
+        let src = self
+            .branches
+            .get(&source)
+            .ok_or_else(|| eg!("source branch not found"))?;
+        let tgt = self
+            .branches
+            .get(&target)
+            .ok_or_else(|| eg!("target branch not found"))?;
+
+        if src.head == NO_COMMIT {
+            return Err(eg!("source branch has no commits"));
+        }
+        if tgt.head == NO_COMMIT {
+            // Target is empty — just fast-forward.
+            let src_commit = self.commits.get(&src.head).unwrap();
+            let new_state = BranchState {
+                head: src.head,
+                dirty_root: src_commit.root,
+                ..tgt
+            };
+            self.branches.insert(&target, &new_state);
+            return Ok(src.head);
+        }
+
+        let src_commit = self.commits.get(&src.head).unwrap();
+        let tgt_commit = self.commits.get(&tgt.head).unwrap();
+
+        // Find common ancestor.
+        let ancestor_id = self.find_common_ancestor(src.head, tgt.head);
+        let ancestor_root = match ancestor_id {
+            Some(aid) => self.commits.get(&aid).unwrap().root,
+            None => EMPTY_ROOT,
+        };
+
+        let merged_root = super::merge::three_way_merge(
+            &mut self.tree,
+            ancestor_root,
+            src_commit.root,
+            tgt_commit.root,
+        );
+
+        // Create merge commit.
+        let id = self.next_commit.get_value();
+        *self.next_commit.get_mut() = id + 1;
+
+        let commit = Commit {
+            id,
+            root: merged_root,
+            parents: vec![tgt.head, src.head],
+            timestamp_us: now_us(),
+        };
+        self.commits.insert(&id, &commit);
+
+        let new_state = BranchState {
+            head: id,
+            dirty_root: merged_root,
+            ..tgt
+        };
+        self.branches.insert(&target, &new_state);
+        Ok(id)
+    }
+
+    /// Finds the lowest common ancestor of two commits via BFS.
+    fn find_common_ancestor(&self, a: CommitId, b: CommitId) -> Option<CommitId> {
+        use std::collections::HashSet;
+
+        let mut visited_a = HashSet::new();
+        let mut visited_b = HashSet::new();
+        let mut queue_a = vec![a];
+        let mut queue_b = vec![b];
+
+        loop {
+            if queue_a.is_empty() && queue_b.is_empty() {
+                return None;
+            }
+            // Expand a.
+            let mut next_a = Vec::new();
+            for id in queue_a.drain(..) {
+                if id == NO_COMMIT || !visited_a.insert(id) {
+                    continue;
+                }
+                if visited_b.contains(&id) {
+                    return Some(id);
+                }
+                if let Some(c) = self.commits.get(&id) {
+                    next_a.extend_from_slice(&c.parents);
+                }
+            }
+            queue_a = next_a;
+
+            // Expand b.
+            let mut next_b = Vec::new();
+            for id in queue_b.drain(..) {
+                if id == NO_COMMIT || !visited_b.insert(id) {
+                    continue;
+                }
+                if visited_a.contains(&id) {
+                    return Some(id);
+                }
+                if let Some(c) = self.commits.get(&id) {
+                    next_b.extend_from_slice(&c.parents);
+                }
+            }
+            queue_b = next_b;
+        }
+    }
+
+    // =================================================================
+    // History
+    // =================================================================
+
+    /// Returns the commit at the head of `branch`.
+    pub fn head_commit(&self, branch: BranchId) -> Result<Option<Commit>> {
+        let state = self
+            .branches
+            .get(&branch)
+            .ok_or_else(|| eg!("branch not found"))?;
+        if state.head == NO_COMMIT {
+            Ok(None)
+        } else {
+            Ok(self.commits.get(&state.head))
+        }
+    }
+
+    /// Walks the commit history of `branch` from head to root.
+    pub fn log(&self, branch: BranchId) -> Result<Vec<Commit>> {
+        let state = self
+            .branches
+            .get(&branch)
+            .ok_or_else(|| eg!("branch not found"))?;
+        let mut result = Vec::new();
+        let mut cur = state.head;
+        while cur != NO_COMMIT {
+            if let Some(c) = self.commits.get(&cur) {
+                cur = c.parents.first().copied().unwrap_or(NO_COMMIT);
+                result.push(c);
+            } else {
+                break;
+            }
+        }
+        Ok(result)
+    }
+
+    // =================================================================
+    // GC
+    // =================================================================
+
+    /// Garbage-collects unreachable commits and B+ tree nodes.
+    ///
+    /// Walks all branches to find reachable commits, then prunes the
+    /// B+ tree node pool.
+    pub fn gc(&mut self) {
+        use std::collections::HashSet;
+
+        // 1. Find all reachable commits.
+        let mut reachable_commits = HashSet::new();
+        let mut queue: Vec<CommitId> = self
+            .branches
+            .iter()
+            .map(|(_, s)| s.head)
+            .filter(|&h| h != NO_COMMIT)
+            .collect();
+
+        while let Some(id) = queue.pop() {
+            if reachable_commits.insert(id) {
+                if let Some(c) = self.commits.get(&id) {
+                    queue.extend_from_slice(&c.parents);
+                }
+            }
+        }
+
+        // 2. Delete unreachable commits.
+        let all_commits: Vec<u64> = self.commits.iter().map(|(id, _)| id).collect();
+        for id in all_commits {
+            if !reachable_commits.contains(&id) {
+                self.commits.remove(&id);
+            }
+        }
+
+        // 3. Collect live tree roots (from reachable commits + dirty roots).
+        let mut live_roots: Vec<NodeId> = reachable_commits
+            .iter()
+            .filter_map(|id| self.commits.get(id).map(|c| c.root))
+            .collect();
+        for (_, s) in self.branches.iter() {
+            if s.dirty_root != EMPTY_ROOT {
+                live_roots.push(s.dirty_root);
+            }
+        }
+
+        // 4. GC the B+ tree node pool.
+        self.tree.gc(&live_roots);
+    }
+}
+
+fn now_us() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or(0)
+}

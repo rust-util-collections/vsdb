@@ -25,6 +25,9 @@ pub mod basic;
 /// A raw, high-performance, disk-backed key-value map.
 pub use basic::mapx_raw::MapxRaw;
 
+/// A persistent B+ tree with copy-on-write structural sharing.
+pub use basic::persistent_btree::PersistentBTree;
+
 /// Commonly used items, re-exported for convenience.
 ///
 /// This includes data size constants (KB, MB, GB), a null terminator constant (`NULL`),
