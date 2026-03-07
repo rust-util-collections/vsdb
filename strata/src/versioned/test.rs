@@ -1,5 +1,6 @@
 use super::map::VersionedMap;
 use super::*;
+use std::ops::Bound;
 
 fn setup() {
     let dir = format!("/tmp/vsdb_versioned_test/{}", rand::random::<u128>());
@@ -1208,6 +1209,561 @@ fn stress_many_branches_and_gc() {
     for i in 1..=50u32 {
         assert_eq!(m.get(MAIN_BRANCH, &i).unwrap(), None);
     }
+}
+
+// =====================================================================
+// Edge cases: type variety
+// =====================================================================
+
+// =====================================================================
+// New convenience APIs: branch_id, branch_name, has_uncommitted,
+//                       range, iter_at_commit, get_commit
+// =====================================================================
+
+// --- branch_id ---
+
+#[test]
+fn branch_id_main() {
+    setup();
+    let m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    assert_eq!(m.branch_id("main"), Some(MAIN_BRANCH));
+}
+
+#[test]
+fn branch_id_custom_branch() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    let feat = m.create_branch("feature", MAIN_BRANCH).unwrap();
+    assert_eq!(m.branch_id("feature"), Some(feat));
+}
+
+#[test]
+fn branch_id_nonexistent() {
+    setup();
+    let m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    assert_eq!(m.branch_id("no_such_branch"), None);
+}
+
+#[test]
+fn branch_id_after_delete() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    let b = m.create_branch("temp", MAIN_BRANCH).unwrap();
+    assert_eq!(m.branch_id("temp"), Some(b));
+    m.delete_branch(b).unwrap();
+    assert_eq!(m.branch_id("temp"), None);
+}
+
+#[test]
+fn branch_id_reused_name() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    let b1 = m.create_branch("reuse", MAIN_BRANCH).unwrap();
+    m.delete_branch(b1).unwrap();
+    let b2 = m.create_branch("reuse", MAIN_BRANCH).unwrap();
+    assert_eq!(m.branch_id("reuse"), Some(b2));
+    assert_ne!(b1, b2);
+}
+
+// --- branch_name ---
+
+#[test]
+fn branch_name_main() {
+    setup();
+    let m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    assert_eq!(m.branch_name(MAIN_BRANCH), Some("main".to_string()));
+}
+
+#[test]
+fn branch_name_custom() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    let feat = m.create_branch("my-feature", MAIN_BRANCH).unwrap();
+    assert_eq!(m.branch_name(feat), Some("my-feature".to_string()));
+}
+
+#[test]
+fn branch_name_nonexistent() {
+    setup();
+    let m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    assert_eq!(m.branch_name(999), None);
+}
+
+#[test]
+fn branch_name_after_delete() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    let b = m.create_branch("ephemeral", MAIN_BRANCH).unwrap();
+    assert_eq!(m.branch_name(b), Some("ephemeral".to_string()));
+    m.delete_branch(b).unwrap();
+    assert_eq!(m.branch_name(b), None);
+}
+
+#[test]
+fn branch_id_and_name_roundtrip() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    let names = ["alpha", "beta", "gamma"];
+    for name in &names {
+        m.create_branch(name, MAIN_BRANCH).unwrap();
+    }
+    for name in &names {
+        let id = m.branch_id(name).unwrap();
+        assert_eq!(m.branch_name(id).unwrap(), *name);
+    }
+}
+
+// --- has_uncommitted ---
+
+#[test]
+fn has_uncommitted_fresh_map() {
+    setup();
+    let m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    // No commits and no inserts → no uncommitted changes.
+    assert!(!m.has_uncommitted(MAIN_BRANCH).unwrap());
+}
+
+#[test]
+fn has_uncommitted_after_insert() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    m.insert(MAIN_BRANCH, &1, &10).unwrap();
+    assert!(m.has_uncommitted(MAIN_BRANCH).unwrap());
+}
+
+#[test]
+fn has_uncommitted_after_commit() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    m.insert(MAIN_BRANCH, &1, &10).unwrap();
+    m.commit(MAIN_BRANCH).unwrap();
+    assert!(!m.has_uncommitted(MAIN_BRANCH).unwrap());
+}
+
+#[test]
+fn has_uncommitted_after_commit_then_modify() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    m.insert(MAIN_BRANCH, &1, &10).unwrap();
+    m.commit(MAIN_BRANCH).unwrap();
+    m.insert(MAIN_BRANCH, &2, &20).unwrap();
+    assert!(m.has_uncommitted(MAIN_BRANCH).unwrap());
+}
+
+#[test]
+fn has_uncommitted_after_discard() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    m.insert(MAIN_BRANCH, &1, &10).unwrap();
+    m.commit(MAIN_BRANCH).unwrap();
+    m.insert(MAIN_BRANCH, &2, &20).unwrap();
+    assert!(m.has_uncommitted(MAIN_BRANCH).unwrap());
+    m.discard(MAIN_BRANCH).unwrap();
+    assert!(!m.has_uncommitted(MAIN_BRANCH).unwrap());
+}
+
+#[test]
+fn has_uncommitted_on_new_branch() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    m.insert(MAIN_BRANCH, &1, &10).unwrap();
+    m.commit(MAIN_BRANCH).unwrap();
+    let feat = m.create_branch("feat", MAIN_BRANCH).unwrap();
+    // New branch starts clean (same root as parent head).
+    assert!(!m.has_uncommitted(feat).unwrap());
+    m.insert(feat, &2, &20).unwrap();
+    assert!(m.has_uncommitted(feat).unwrap());
+}
+
+#[test]
+fn has_uncommitted_invalid_branch() {
+    setup();
+    let m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    assert!(m.has_uncommitted(999).is_err());
+}
+
+// --- range ---
+
+#[test]
+fn range_full_unbounded() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    for i in 1..=5u32 {
+        m.insert(MAIN_BRANCH, &i, &(i * 10)).unwrap();
+    }
+    let items: Vec<_> = m
+        .range(MAIN_BRANCH, Bound::Unbounded, Bound::Unbounded)
+        .unwrap()
+        .collect();
+    assert_eq!(items.len(), 5);
+    assert_eq!(items[0], (1, 10));
+    assert_eq!(items[4], (5, 50));
+}
+
+#[test]
+fn range_included_both() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    for i in 1..=10u32 {
+        m.insert(MAIN_BRANCH, &i, &(i * 10)).unwrap();
+    }
+    let items: Vec<_> = m
+        .range(MAIN_BRANCH, Bound::Included(&3), Bound::Included(&7))
+        .unwrap()
+        .collect();
+    assert_eq!(items.len(), 5);
+    assert_eq!(items[0].0, 3);
+    assert_eq!(items[4].0, 7);
+}
+
+#[test]
+fn range_excluded_both() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    for i in 1..=10u32 {
+        m.insert(MAIN_BRANCH, &i, &(i * 10)).unwrap();
+    }
+    let items: Vec<_> = m
+        .range(MAIN_BRANCH, Bound::Excluded(&3), Bound::Excluded(&7))
+        .unwrap()
+        .collect();
+    assert_eq!(items.len(), 3); // 4, 5, 6
+    assert_eq!(items[0].0, 4);
+    assert_eq!(items[2].0, 6);
+}
+
+#[test]
+fn range_included_lo_excluded_hi() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    for i in 1..=10u32 {
+        m.insert(MAIN_BRANCH, &i, &(i * 10)).unwrap();
+    }
+    // [3, 7) → 3, 4, 5, 6
+    let items: Vec<_> = m
+        .range(MAIN_BRANCH, Bound::Included(&3), Bound::Excluded(&7))
+        .unwrap()
+        .collect();
+    assert_eq!(items.len(), 4);
+    assert_eq!(items[0].0, 3);
+    assert_eq!(items[3].0, 6);
+}
+
+#[test]
+fn range_excluded_lo_included_hi() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    for i in 1..=10u32 {
+        m.insert(MAIN_BRANCH, &i, &(i * 10)).unwrap();
+    }
+    // (3, 7] → 4, 5, 6, 7
+    let items: Vec<_> = m
+        .range(MAIN_BRANCH, Bound::Excluded(&3), Bound::Included(&7))
+        .unwrap()
+        .collect();
+    assert_eq!(items.len(), 4);
+    assert_eq!(items[0].0, 4);
+    assert_eq!(items[3].0, 7);
+}
+
+#[test]
+fn range_unbounded_lo() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    for i in 1..=10u32 {
+        m.insert(MAIN_BRANCH, &i, &(i * 10)).unwrap();
+    }
+    // [.., 5] → 1, 2, 3, 4, 5
+    let items: Vec<_> = m
+        .range(MAIN_BRANCH, Bound::Unbounded, Bound::Included(&5))
+        .unwrap()
+        .collect();
+    assert_eq!(items.len(), 5);
+    assert_eq!(items[0].0, 1);
+    assert_eq!(items[4].0, 5);
+}
+
+#[test]
+fn range_unbounded_hi() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    for i in 1..=10u32 {
+        m.insert(MAIN_BRANCH, &i, &(i * 10)).unwrap();
+    }
+    // [6, ..] → 6, 7, 8, 9, 10
+    let items: Vec<_> = m
+        .range(MAIN_BRANCH, Bound::Included(&6), Bound::Unbounded)
+        .unwrap()
+        .collect();
+    assert_eq!(items.len(), 5);
+    assert_eq!(items[0].0, 6);
+    assert_eq!(items[4].0, 10);
+}
+
+#[test]
+fn range_empty_result() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    for i in 1..=5u32 {
+        m.insert(MAIN_BRANCH, &i, &(i * 10)).unwrap();
+    }
+    // Range with no matching keys.
+    let items: Vec<_> = m
+        .range(MAIN_BRANCH, Bound::Included(&100), Bound::Included(&200))
+        .unwrap()
+        .collect();
+    assert!(items.is_empty());
+}
+
+#[test]
+fn range_empty_map() {
+    setup();
+    let m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    let items: Vec<_> = m
+        .range(MAIN_BRANCH, Bound::Unbounded, Bound::Unbounded)
+        .unwrap()
+        .collect();
+    assert!(items.is_empty());
+}
+
+#[test]
+fn range_on_branch() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    for i in 1..=10u32 {
+        m.insert(MAIN_BRANCH, &i, &(i * 10)).unwrap();
+    }
+    m.commit(MAIN_BRANCH).unwrap();
+
+    let feat = m.create_branch("feat", MAIN_BRANCH).unwrap();
+    m.insert(feat, &11, &110).unwrap();
+    m.insert(feat, &12, &120).unwrap();
+
+    // Range on feat should see all 12 keys.
+    let items: Vec<_> = m
+        .range(feat, Bound::Included(&9), Bound::Unbounded)
+        .unwrap()
+        .collect();
+    assert_eq!(items.len(), 4); // 9, 10, 11, 12
+    assert_eq!(items[0].0, 9);
+    assert_eq!(items[3].0, 12);
+
+    // Range on main should only see 10 keys.
+    let main_items: Vec<_> = m
+        .range(MAIN_BRANCH, Bound::Included(&9), Bound::Unbounded)
+        .unwrap()
+        .collect();
+    assert_eq!(main_items.len(), 2); // 9, 10
+}
+
+#[test]
+fn range_invalid_branch() {
+    setup();
+    let m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    assert!(m
+        .range(999, Bound::Unbounded, Bound::Unbounded)
+        .is_err());
+}
+
+#[test]
+fn range_single_key() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    for i in 1..=10u32 {
+        m.insert(MAIN_BRANCH, &i, &(i * 10)).unwrap();
+    }
+    // Exact single key: [5, 5]
+    let items: Vec<_> = m
+        .range(MAIN_BRANCH, Bound::Included(&5), Bound::Included(&5))
+        .unwrap()
+        .collect();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0], (5, 50));
+}
+
+// --- iter_at_commit ---
+
+#[test]
+fn iter_at_commit_basic() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    m.insert(MAIN_BRANCH, &1, &10).unwrap();
+    m.insert(MAIN_BRANCH, &2, &20).unwrap();
+    let c1 = m.commit(MAIN_BRANCH).unwrap();
+
+    m.insert(MAIN_BRANCH, &3, &30).unwrap();
+    let c2 = m.commit(MAIN_BRANCH).unwrap();
+
+    // c1 should have 2 entries.
+    let items1: Vec<_> = m.iter_at_commit(c1).unwrap().collect();
+    assert_eq!(items1.len(), 2);
+    assert_eq!(items1, vec![(1, 10), (2, 20)]);
+
+    // c2 should have 3 entries.
+    let items2: Vec<_> = m.iter_at_commit(c2).unwrap().collect();
+    assert_eq!(items2.len(), 3);
+    assert_eq!(items2, vec![(1, 10), (2, 20), (3, 30)]);
+}
+
+#[test]
+fn iter_at_commit_after_remove() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    m.insert(MAIN_BRANCH, &1, &10).unwrap();
+    m.insert(MAIN_BRANCH, &2, &20).unwrap();
+    let c1 = m.commit(MAIN_BRANCH).unwrap();
+
+    m.remove(MAIN_BRANCH, &1).unwrap();
+    let c2 = m.commit(MAIN_BRANCH).unwrap();
+
+    let items1: Vec<_> = m.iter_at_commit(c1).unwrap().collect();
+    assert_eq!(items1.len(), 2);
+
+    let items2: Vec<_> = m.iter_at_commit(c2).unwrap().collect();
+    assert_eq!(items2.len(), 1);
+    assert_eq!(items2[0], (2, 20));
+}
+
+#[test]
+fn iter_at_commit_on_branch_commit() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    m.insert(MAIN_BRANCH, &1, &10).unwrap();
+    m.commit(MAIN_BRANCH).unwrap();
+
+    let feat = m.create_branch("feat", MAIN_BRANCH).unwrap();
+    m.insert(feat, &2, &20).unwrap();
+    let fc = m.commit(feat).unwrap();
+
+    // iter_at_commit works with any commit, regardless of branch.
+    let items: Vec<_> = m.iter_at_commit(fc).unwrap().collect();
+    assert_eq!(items, vec![(1, 10), (2, 20)]);
+}
+
+#[test]
+fn iter_at_commit_invalid() {
+    setup();
+    let m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    assert!(m.iter_at_commit(999).is_err());
+}
+
+#[test]
+fn iter_at_commit_ordered() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    // Insert in reverse order.
+    for i in (1..=50u32).rev() {
+        m.insert(MAIN_BRANCH, &i, &(i * 10)).unwrap();
+    }
+    let c = m.commit(MAIN_BRANCH).unwrap();
+
+    let items: Vec<_> = m.iter_at_commit(c).unwrap().collect();
+    assert_eq!(items.len(), 50);
+    for (idx, (k, v)) in items.iter().enumerate() {
+        let expected_key = (idx + 1) as u32;
+        assert_eq!(*k, expected_key);
+        assert_eq!(*v, expected_key * 10);
+    }
+}
+
+#[test]
+fn iter_at_commit_empty_tree() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    // Commit with nothing in it (empty tree).
+    // First add and remove so we have a commit with empty state.
+    m.insert(MAIN_BRANCH, &1, &10).unwrap();
+    m.remove(MAIN_BRANCH, &1).unwrap();
+    let c = m.commit(MAIN_BRANCH).unwrap();
+
+    let items: Vec<_> = m.iter_at_commit(c).unwrap().collect();
+    assert!(items.is_empty());
+}
+
+// --- get_commit ---
+
+#[test]
+fn get_commit_basic() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    m.insert(MAIN_BRANCH, &1, &10).unwrap();
+    let c = m.commit(MAIN_BRANCH).unwrap();
+
+    let commit = m.get_commit(c).unwrap();
+    assert_eq!(commit.id, c);
+    assert!(commit.parents.is_empty()); // First commit has no parents.
+    assert!(commit.timestamp_us > 0);
+}
+
+#[test]
+fn get_commit_nonexistent() {
+    setup();
+    let m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    assert!(m.get_commit(999).is_none());
+}
+
+#[test]
+fn get_commit_with_parent() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    m.insert(MAIN_BRANCH, &1, &10).unwrap();
+    let c1 = m.commit(MAIN_BRANCH).unwrap();
+
+    m.insert(MAIN_BRANCH, &2, &20).unwrap();
+    let c2 = m.commit(MAIN_BRANCH).unwrap();
+
+    let commit2 = m.get_commit(c2).unwrap();
+    assert_eq!(commit2.id, c2);
+    assert_eq!(commit2.parents, vec![c1]);
+}
+
+#[test]
+fn get_commit_merge_commit() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+
+    m.insert(MAIN_BRANCH, &1, &10).unwrap();
+    m.commit(MAIN_BRANCH).unwrap();
+
+    let feat = m.create_branch("feat", MAIN_BRANCH).unwrap();
+    m.insert(feat, &2, &20).unwrap();
+    m.commit(feat).unwrap();
+
+    m.insert(MAIN_BRANCH, &3, &30).unwrap();
+    m.commit(MAIN_BRANCH).unwrap();
+
+    let merge_id = m.merge(feat, MAIN_BRANCH).unwrap();
+    let merge_commit = m.get_commit(merge_id).unwrap();
+    assert_eq!(merge_commit.id, merge_id);
+    assert_eq!(merge_commit.parents.len(), 2);
+}
+
+#[test]
+fn get_commit_timestamp_uss_increase() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    m.insert(MAIN_BRANCH, &1, &1).unwrap();
+    let c1 = m.commit(MAIN_BRANCH).unwrap();
+    m.insert(MAIN_BRANCH, &2, &2).unwrap();
+    let c2 = m.commit(MAIN_BRANCH).unwrap();
+
+    let t1 = m.get_commit(c1).unwrap().timestamp_us;
+    let t2 = m.get_commit(c2).unwrap().timestamp_us;
+    assert!(t2 >= t1);
+}
+
+#[test]
+fn get_commit_matches_head_commit() {
+    setup();
+    let mut m: VersionedMap<u32, u32> = VersionedMap::new("test");
+    m.insert(MAIN_BRANCH, &1, &10).unwrap();
+    let c = m.commit(MAIN_BRANCH).unwrap();
+
+    let via_get = m.get_commit(c).unwrap();
+    let via_head = m.head_commit(MAIN_BRANCH).unwrap().unwrap();
+    assert_eq!(via_get.id, via_head.id);
+    assert_eq!(via_get.parents, via_head.parents);
+    assert_eq!(via_get.timestamp_us, via_head.timestamp_us);
 }
 
 // =====================================================================

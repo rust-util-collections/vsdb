@@ -9,6 +9,7 @@ use crate::{Mapx, MapxOrd, Orphan};
 use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
+use std::ops::Bound;
 use std::time::{SystemTime, UNIX_EPOCH};
 use vsdb_core::basic::persistent_btree::{EMPTY_ROOT, NodeId, PersistentBTree};
 
@@ -174,6 +175,31 @@ where
         self.branches.iter().map(|(id, s)| (id, s.name)).collect()
     }
 
+    /// Looks up a branch by name, returning its ID if it exists.
+    pub fn branch_id(&self, name: &str) -> Option<BranchId> {
+        self.branch_names.get(&name.to_string())
+    }
+
+    /// Returns the name of a branch given its ID.
+    pub fn branch_name(&self, branch: BranchId) -> Option<String> {
+        self.branches.get(&branch).map(|s| s.name)
+    }
+
+    /// Returns `true` if the branch has uncommitted changes (dirty state
+    /// differs from the head commit's snapshot).
+    pub fn has_uncommitted(&self, branch: BranchId) -> Result<bool> {
+        let state = self
+            .branches
+            .get(&branch)
+            .ok_or_else(|| eg!("branch not found"))?;
+        if state.head == NO_COMMIT {
+            Ok(state.dirty_root != EMPTY_ROOT)
+        } else {
+            let head_root = self.commits.get(&state.head).unwrap().root;
+            Ok(state.dirty_root != head_root)
+        }
+    }
+
     // =================================================================
     // Read
     // =================================================================
@@ -223,6 +249,59 @@ where
             .get(&branch)
             .ok_or_else(|| eg!("branch not found"))?;
         Ok(self.tree.iter(state.dirty_root).map(|(k, v)| {
+            (
+                pnk!(K::from_slice(&k)),
+                pnk!(V::decode(&v)),
+            )
+        }))
+    }
+
+    /// Iterates entries in `[lo, hi)` on `branch` in ascending key order.
+    pub fn range(
+        &self,
+        branch: BranchId,
+        lo: Bound<&K>,
+        hi: Bound<&K>,
+    ) -> Result<impl Iterator<Item = (K, V)> + '_> {
+        let state = self
+            .branches
+            .get(&branch)
+            .ok_or_else(|| eg!("branch not found"))?;
+        let lo_raw = match lo {
+            Bound::Included(k) => Bound::Included(k.to_bytes()),
+            Bound::Excluded(k) => Bound::Excluded(k.to_bytes()),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+        let hi_raw = match hi {
+            Bound::Included(k) => Bound::Included(k.to_bytes()),
+            Bound::Excluded(k) => Bound::Excluded(k.to_bytes()),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+        Ok(self
+            .tree
+            .range(
+                state.dirty_root,
+                lo_raw.as_ref().map(|v| v.as_slice()),
+                hi_raw.as_ref().map(|v| v.as_slice()),
+            )
+            .map(|(k, v)| {
+                (
+                    pnk!(K::from_slice(&k)),
+                    pnk!(V::decode(&v)),
+                )
+            }))
+    }
+
+    /// Iterates all entries at a specific historical commit.
+    pub fn iter_at_commit(
+        &self,
+        commit_id: CommitId,
+    ) -> Result<impl Iterator<Item = (K, V)> + '_> {
+        let commit = self
+            .commits
+            .get(&commit_id)
+            .ok_or_else(|| eg!("commit not found"))?;
+        Ok(self.tree.iter(commit.root).map(|(k, v)| {
             (
                 pnk!(K::from_slice(&k)),
                 pnk!(V::decode(&v)),
@@ -461,6 +540,11 @@ where
     // =================================================================
     // History
     // =================================================================
+
+    /// Retrieves a commit by its ID.
+    pub fn get_commit(&self, commit_id: CommitId) -> Option<Commit> {
+        self.commits.get(&commit_id)
+    }
 
     /// Returns the commit at the head of `branch`.
     pub fn head_commit(&self, branch: BranchId) -> Result<Option<Commit>> {
