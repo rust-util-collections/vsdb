@@ -1,9 +1,10 @@
 //! # vsdb
 //!
 //! `vsdb` is a high-performance, embedded database designed to feel like using
-//! Rust's standard collections. It provides a suite of familiar data structures
-//! like `Vecx` (a `Vec`-like vector) and `Mapx` (a `HashMap`-like map), all
-//! backed by a persistent, on-disk key-value store.
+//! Rust's standard collections. It provides persistent, disk-backed data
+//! structures — `Mapx` (a `HashMap`-like map), `MapxOrd` (a `BTreeMap`-like
+//! ordered map), and [`VersionedMap`](versioned::map::VersionedMap)
+//! (Git-model versioned storage with branching, commits, and merge).
 //!
 //! This crate is the primary entry point for most users.
 
@@ -14,7 +15,7 @@
 #[macro_use]
 pub mod common;
 
-/// User-facing, typed data structures (e.g., `Mapx`, `Vecx`).
+/// User-facing, typed data structures (e.g., `Mapx`, `MapxOrd`).
 pub mod basic;
 /// Data structures for representing directed acyclic graphs (DAGs).
 pub mod dagmap;
@@ -29,7 +30,6 @@ pub use basic::{
     mapx_ord::MapxOrd,
     mapx_ord_rawkey::MapxOrdRawKey,
     orphan::Orphan,
-    // vecx::Vecx, vecx_raw::VecxRaw, // Removed - relied on unreliable len() tracking
 };
 
 // Common traits and types

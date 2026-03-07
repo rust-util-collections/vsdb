@@ -17,7 +17,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-vsdb = "8.0.0"
+vsdb = "8.3.0"
 ```
 
 ## Highlights
@@ -29,6 +29,7 @@ For more detailed API examples, see [API Examples](docs/api.md).
   - `MapxOrd` behaves like `std::collections::BTreeMap`.
 - **Persistent Storage**: Data is automatically saved to disk and loaded on instantiation.
 - **Typed Keys and Values**: Keys and values are strongly typed and automatically serialized/deserialized.
+- **Git-Model Versioning**: `VersionedMap` provides branching, commits, three-way merge, rollback, and history — backed by a persistent B+ tree with copy-on-write structural sharing.
 
 ## Features
 
@@ -92,6 +93,34 @@ for (key, value) in map.iter() {
 // Get the first and last key-value pairs
 assert_eq!(map.first(), Some((1, "one".to_string())));
 assert_eq!(map.last(), Some((3, "three".to_string())));
+```
+
+### VersionedMap
+
+`VersionedMap` provides Git-style versioned storage with branching, commits, merge, and rollback.
+
+```rust
+use vsdb::versioned::map::VersionedMap;
+use vsdb::versioned::{MAIN_BRANCH, BranchId};
+
+let mut m: VersionedMap<u32, String> = VersionedMap::new("example");
+
+// Write and commit on the main branch.
+m.insert(MAIN_BRANCH, &1, &"hello".into()).unwrap();
+m.commit(MAIN_BRANCH).unwrap();
+
+// Fork a feature branch from main.
+let feat: BranchId = m.create_branch("feature", MAIN_BRANCH).unwrap();
+m.insert(feat, &1, &"updated".into()).unwrap();
+m.commit(feat).unwrap();
+
+// Main is unchanged; feature has the new value.
+assert_eq!(m.get(MAIN_BRANCH, &1).unwrap(), Some("hello".into()));
+assert_eq!(m.get(feat, &1).unwrap(), Some("updated".into()));
+
+// Merge feature → main (source wins on conflict).
+m.merge(feat, MAIN_BRANCH).unwrap();
+assert_eq!(m.get(MAIN_BRANCH, &1).unwrap(), Some("updated".into()));
 ```
 
 ## Important Notes

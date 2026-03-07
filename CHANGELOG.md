@@ -38,8 +38,7 @@ map.insert(&key, &new_value);
 
 **Affected types:**
 - `MapxRaw` (vsdb_core)
-- `Mapx`, `MapxOrd`, `MapxOrdRawKey`, `MapxOrdRawValue` (vsdb)
-- `MapxRaw`, `MapxDk`, `MapxTk`, `MapxRawMk` (multi-key variants)
+- `Mapx`, `MapxOrd`, `MapxOrdRawKey` (vsdb)
 - `DagMapRaw`, `DagMapRawKey`
 
 #### Removed `len()` and `is_empty()` Methods
@@ -101,13 +100,11 @@ These vector-like types heavily depended on reliable length tracking for indexin
 - For general sequential storage: Consider using `MapxOrd` with custom keys
 - For true vector semantics: Maintain length tracking externally
 
-**Removed files:**
-- `wrappers/src/basic/vecx/mod.rs`
-- `wrappers/src/basic/vecx/test.rs`
-- `wrappers/src/basic/vecx_raw/mod.rs`
-- `wrappers/src/basic/vecx_raw/test.rs`
-- `wrappers/tests/basic_vecx_test.rs`
-- `wrappers/tests/basic_vecx_raw_test.rs`
+**Removed files** (paths shown under old `wrappers/` directory, now `strata/`):
+- `strata/src/basic/vecx/`
+- `strata/src/basic/vecx_raw/`
+- `strata/tests/basic_vecx_test.rs`
+- `strata/tests/basic_vecx_raw_test.rs`
 
 **Removed from exports:**
 - `pub use basic::vecx::Vecx;`
@@ -162,15 +159,6 @@ fn insert(&self, meta_prefix: PreBytes, key: &[u8], value: &[u8]);
 fn remove(&self, meta_prefix: PreBytes, key: &[u8]);
 // Length hint methods removed entirely
 ```
-
-### Multi-Key Map Changes
-
-Multi-key map implementations have been updated for consistency:
-
-**`MapxRaw`, `MapxDk`, `MapxTk`, `MapxRawMk` (basic_multi_key):**
-- `insert()` now returns `Result<()>` instead of `Result<Option<RawValue>>`
-- `remove()` now returns `Result<()>` instead of `Result<Option<RawValue>>`
-- `is_empty()` implemented via iterator check: `self.inner.iter().next().is_none()`
 
 ### DAG Map Changes
 
@@ -229,7 +217,7 @@ assert!(hdr.contains_key(&key));
 
 - Updated all doc examples to remove `len()` and `is_empty()` usage
 - Added "Important Changes" section to README.md
-- Updated module documentation for `Mapx`, `MapxOrd`, `MapxOrdRawKey`, `MapxOrdRawValue`
+- Updated module documentation for `Mapx`, `MapxOrd`, `MapxOrdRawKey`
 - Fixed all code examples in documentation comments
 
 ### Internal Changes

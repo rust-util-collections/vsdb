@@ -1,7 +1,7 @@
 //!
 //! # Common Components
 //!
-//! This module provides common components and utilities used throughout the `vsdb` wrappers.
+//! This module provides common components and utilities used throughout the `vsdb` crate.
 //! It re-exports items from `vsdb_core::common` and includes the `ende` module for
 //! encoding and decoding traits.
 //!

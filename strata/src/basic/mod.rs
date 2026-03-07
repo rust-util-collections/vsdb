@@ -1,23 +1,16 @@
 //!
 //! # Basic Data Structures
 //!
-//! This module provides a collection of fundamental, unversioned data structures
-//! that wrap the raw storage implementations from `vsdb_core`. These wrappers
-//! offer typed APIs for keys and values, leveraging the encoding and decoding
-//! capabilities defined in the `common::ende` module.
+//! Fundamental, unversioned data structures that wrap the raw storage
+//! implementations from `vsdb_core`, offering typed APIs for keys and values.
 //!
-//! The structures available include various map and vector implementations,
-//! each tailored for specific use cases.
-//!
-
-//!
-//! Contains basic data structures with typed keys and values.
+//! - [`Mapx`](mapx::Mapx) — `HashMap`-like, unordered.
+//! - [`MapxOrd`](mapx_ord::MapxOrd) — `BTreeMap`-like, ordered by key.
+//! - [`MapxOrdRawKey`](mapx_ord_rawkey::MapxOrdRawKey) — ordered map with raw-byte keys (internal building block).
+//! - [`Orphan`](orphan::Orphan) — a single persistent value.
 //!
 
 pub mod mapx;
 pub mod mapx_ord;
 pub mod mapx_ord_rawkey;
 pub mod orphan;
-// vecx and vecx_raw have been removed - they relied on unreliable len() tracking
-// pub mod vecx;
-// pub mod vecx_raw;
