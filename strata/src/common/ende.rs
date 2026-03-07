@@ -217,20 +217,6 @@ macro_rules! impl_v_ende {
             }
         }
     };
-    (@$t: ty) => {
-        #[cfg(not(feature = "serde_ende"))]
-        impl<K: KeyEnDeOrdered> ValueEnDe for $t {
-            fn try_encode(&self) -> Result<RawBytes> {
-                Ok(self.encode())
-            }
-            fn encode(&self) -> RawBytes {
-                self.as_bytes().into()
-            }
-            fn decode(bytes: &[u8]) -> Result<Self> {
-                unsafe { Ok(<$t>::from_bytes(bytes)) }
-            }
-        }
-    };
     (^$t: ty) => {
         #[cfg(not(feature = "serde_ende"))]
         impl<V: ValueEnDe> ValueEnDe for $t {
@@ -266,8 +252,6 @@ impl_v_ende!(~crate::basic::mapx::Mapx<K, V>);
 impl_v_ende!(~crate::basic::mapx_ord::MapxOrd<K, V>);
 impl_v_ende!(^crate::basic::orphan::Orphan<V>);
 impl_v_ende!(^crate::basic::mapx_ord_rawkey::MapxOrdRawKey<V>);
-impl_v_ende!(@crate::basic::mapx_ord_rawvalue::MapxOrdRawValue<K>);
-
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 

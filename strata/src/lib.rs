@@ -16,8 +16,6 @@ pub mod common;
 
 /// User-facing, typed data structures (e.g., `Mapx`, `Vecx`).
 pub mod basic;
-/// Data structures that use multiple keys for indexing.
-pub mod basic_multi_key;
 /// Data structures for representing directed acyclic graphs (DAGs).
 pub mod dagmap;
 /// Git-model versioned storage: branches, commits, merge, and history.
@@ -30,7 +28,6 @@ pub use basic::{
     mapx::Mapx,
     mapx_ord::MapxOrd,
     mapx_ord_rawkey::MapxOrdRawKey,
-    mapx_ord_rawvalue::MapxOrdRawValue,
     orphan::Orphan,
     // vecx::Vecx, vecx_raw::VecxRaw, // Removed - relied on unreliable len() tracking
 };
