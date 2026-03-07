@@ -23,6 +23,7 @@ vsdb = "9.0.0"
 ## Highlights
 
 For more detailed API examples, see [API Examples](docs/api.md).
+For the versioned storage architecture with diagrams, see [Versioned Module — Architecture & Internals](docs/versioned.md).
 
 - **Familiar API**: Most APIs are designed to mirror their counterparts in the standard library.
   - `Mapx` behaves like `std::collections::HashMap`.

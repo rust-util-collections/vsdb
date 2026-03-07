@@ -9,6 +9,7 @@
 This repository is a simplified version of the original [**vsdb**](https://crates.io/crates/vsdb/0.70.0), retaining the most practical and stable features while focusing on performance and ease of use.
 
 For a detailed guide and API examples, see the [**vsdb crate documentation**](strata/README.md).
+For the versioned storage architecture (VerMap internals, merge algorithm, COW B+ tree, etc.), see the [**Versioned Module — Architecture & Internals**](strata/docs/versioned.md).
 
 ### Crate Ecosystem
 

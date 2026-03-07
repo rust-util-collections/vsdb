@@ -20,6 +20,8 @@ vsdb_slot_db = "9.0.0"
 
 ## Usage
 
+For more detailed API examples, see [API Examples](docs/api.md).
+
 `SlotDB` provides an efficient way to query large, ordered datasets in pages.
 
 ## Features
@@ -62,7 +64,5 @@ assert!(entries_in_slot.contains(&"entry_b".to_string()));
 ```
 
 ## License
-
-For API examples, see [API Examples](docs/api.md).
 
 This project is licensed under the **MIT** license.
