@@ -9,11 +9,26 @@
 //! | commit      | [`Commit`]                          |
 //! | ref/branch  | [`BranchId`] → mutable pointer      |
 //! | working dir | uncommitted writes on a branch      |
-//! | `git gc`    | [`VersionedMap::gc`]                |
+//! | `git gc`    | [`VerMap::gc`]                |
 //!
 //! A *version* is a complete, self-contained snapshot (a B+ tree root).
 //! Branches are lightweight pointers. Structural sharing keeps storage
 //! costs proportional to the number of *changes*, not the dataset size.
+//!
+//! # Workflow
+//!
+//! ```text
+//! new()  ──►  insert / remove  ──►  commit()
+//!                  ▲                    │
+//!                  │                    ▼
+//!              discard()         create_branch()
+//!                  ▲                    │
+//!                  │                    ▼
+//!            rollback_to()    insert / remove / commit
+//!                                       │
+//!                                       ▼
+//!                                   merge()  ──►  gc()
+//! ```
 //!
 
 pub mod map;
@@ -38,7 +53,7 @@ pub type BranchId = u64;
 /// Sentinel: no commit yet.
 pub const NO_COMMIT: CommitId = 0;
 
-/// The default branch created by [`VersionedMap::new`].
+/// The default branch created by [`VerMap::new`].
 pub const MAIN_BRANCH: BranchId = 1;
 
 // =========================================================================

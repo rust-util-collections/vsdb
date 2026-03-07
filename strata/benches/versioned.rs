@@ -3,7 +3,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::ops::Bound;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use vsdb::versioned::map::VersionedMap;
+use vsdb::versioned::map::VerMap;
 use vsdb::versioned::{BranchId, MAIN_BRANCH};
 
 fn setup() {
@@ -23,7 +23,7 @@ fn single_branch_crud(c: &mut Criterion) {
 
     setup();
     let counter = AtomicUsize::new(0);
-    let mut m: VersionedMap<u64, Vec<u8>> = VersionedMap::new("bench_crud");
+    let mut m: VerMap<u64, Vec<u8>> = VerMap::new();
 
     group.bench_function("insert", |b| {
         b.iter(|| {
@@ -85,7 +85,7 @@ fn commit_rollback(c: &mut Criterion) {
         .sample_size(10);
 
     setup();
-    let mut m: VersionedMap<u64, Vec<u8>> = VersionedMap::new("bench_commit");
+    let mut m: VerMap<u64, Vec<u8>> = VerMap::new();
     let counter = AtomicUsize::new(0);
 
     group.bench_function("insert + commit (1 key)", |b| {
@@ -120,7 +120,7 @@ fn branching(c: &mut Criterion) {
         .sample_size(10);
 
     setup();
-    let mut m: VersionedMap<u64, Vec<u8>> = VersionedMap::new("bench_branch");
+    let mut m: VerMap<u64, Vec<u8>> = VerMap::new();
 
     // Pre-populate with 1000 keys on main.
     for i in 0..1000u64 {
@@ -166,7 +166,7 @@ fn iteration(c: &mut Criterion) {
         .sample_size(10);
 
     setup();
-    let mut m: VersionedMap<u64, Vec<u8>> = VersionedMap::new("bench_iter");
+    let mut m: VerMap<u64, Vec<u8>> = VerMap::new();
 
     // Populate 5000 keys.
     for i in 0..5000u64 {
@@ -215,7 +215,7 @@ fn historical(c: &mut Criterion) {
         .sample_size(10);
 
     setup();
-    let mut m: VersionedMap<u64, Vec<u8>> = VersionedMap::new("bench_hist");
+    let mut m: VerMap<u64, Vec<u8>> = VerMap::new();
 
     // Create 20 commits, each adding 50 keys.
     let mut commits = Vec::new();
@@ -265,7 +265,7 @@ fn merge_bench(c: &mut Criterion) {
         .sample_size(10);
 
     setup();
-    let mut m: VersionedMap<u64, Vec<u8>> = VersionedMap::new("bench_merge");
+    let mut m: VerMap<u64, Vec<u8>> = VerMap::new();
 
     // Common ancestor: 1000 keys.
     for i in 0..1000u64 {
@@ -311,7 +311,7 @@ fn gc_bench(c: &mut Criterion) {
         .sample_size(10);
 
     setup();
-    let mut m: VersionedMap<u64, Vec<u8>> = VersionedMap::new("bench_gc");
+    let mut m: VerMap<u64, Vec<u8>> = VerMap::new();
 
     // Build up history: 50 commits on main, each with 20 inserts.
     for c_idx in 0..50u64 {

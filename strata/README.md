@@ -29,7 +29,7 @@ For more detailed API examples, see [API Examples](docs/api.md).
   - `MapxOrd` behaves like `std::collections::BTreeMap`.
 - **Persistent Storage**: Data is automatically saved to disk and loaded on instantiation.
 - **Typed Keys and Values**: Keys and values are strongly typed and automatically serialized/deserialized.
-- **Git-Model Versioning**: `VersionedMap` provides branching, commits, three-way merge, rollback, and history — backed by a persistent B+ tree with copy-on-write structural sharing.
+- **Git-Model Versioning**: `VerMap` provides branching, commits, three-way merge, rollback, and history — backed by a persistent B+ tree with copy-on-write structural sharing.
 
 ## Features
 
@@ -95,32 +95,39 @@ assert_eq!(map.first(), Some((1, "one".to_string())));
 assert_eq!(map.last(), Some((3, "three".to_string())));
 ```
 
-### VersionedMap
+### VerMap
 
-`VersionedMap` provides Git-style versioned storage with branching, commits, merge, and rollback.
+`VerMap` provides Git-style versioned storage with branching, commits, merge, and rollback.
+
+The typical lifecycle is: **create → write → commit → branch → merge → gc**.
 
 ```rust
-use vsdb::versioned::map::VersionedMap;
+use vsdb::versioned::map::VerMap;
 use vsdb::versioned::{MAIN_BRANCH, BranchId};
 
-let mut m: VersionedMap<u32, String> = VersionedMap::new("example");
+// 1. Create an empty versioned map (starts with a "main" branch).
+let mut m: VerMap<u32, String> = VerMap::new();
 
-// Write and commit on the main branch.
+// 2. Write on the main branch and commit a snapshot.
 m.insert(MAIN_BRANCH, &1, &"hello".into()).unwrap();
 m.commit(MAIN_BRANCH).unwrap();
 
-// Fork a feature branch from main.
+// 3. Fork a feature branch — cheap, no data copied.
 let feat: BranchId = m.create_branch("feature", MAIN_BRANCH).unwrap();
 m.insert(feat, &1, &"updated".into()).unwrap();
 m.commit(feat).unwrap();
 
-// Main is unchanged; feature has the new value.
+// 4. Branches are isolated.
 assert_eq!(m.get(MAIN_BRANCH, &1).unwrap(), Some("hello".into()));
 assert_eq!(m.get(feat, &1).unwrap(), Some("updated".into()));
 
-// Merge feature → main (source wins on conflict).
+// 5. Three-way merge: feature → main (source wins on conflict).
 m.merge(feat, MAIN_BRANCH).unwrap();
 assert_eq!(m.get(MAIN_BRANCH, &1).unwrap(), Some("updated".into()));
+
+// 6. Clean up: delete the branch, then garbage-collect unreachable data.
+m.delete_branch(feat).unwrap();
+m.gc();
 ```
 
 ## Important Notes

@@ -8,10 +8,7 @@
 
 use super::RawBytes;
 use ruc::*;
-use std::{
-    fmt,
-    mem::size_of,
-};
+use std::{fmt, mem::size_of};
 
 #[cfg(feature = "serde_ende")]
 use serde::{Serialize, de::DeserializeOwned};

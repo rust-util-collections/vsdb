@@ -3,7 +3,7 @@
 //! `vsdb` is a high-performance, embedded database designed to feel like using
 //! Rust's standard collections. It provides persistent, disk-backed data
 //! structures — `Mapx` (a `HashMap`-like map), `MapxOrd` (a `BTreeMap`-like
-//! ordered map), and [`VersionedMap`](versioned::map::VersionedMap)
+//! ordered map), and [`VerMap`](versioned::map::VerMap)
 //! (Git-model versioned storage with branching, commits, and merge).
 //!
 //! This crate is the primary entry point for most users.

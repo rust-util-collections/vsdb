@@ -1,5 +1,5 @@
 //!
-//! [`VersionedMap`] — a typed, versioned key-value map with branch / commit /
+//! [`VerMap`] — a typed, versioned key-value map with branch / commit /
 //! merge support, modelled after Git semantics.
 //!
 
@@ -28,18 +28,42 @@ struct BranchState {
 }
 
 // =========================================================================
-// VersionedMap
+// VerMap
 // =========================================================================
 
 /// A persistent, versioned, ordered key-value map.
 ///
-/// Supports Git-style branching, committing, merging and rollback, backed
-/// by a persistent B+ tree with copy-on-write structural sharing.
+/// `VerMap` provides Git-style version control for a typed key-value store:
+/// branching, committing, three-way merge, rollback, and garbage collection,
+/// all backed by a persistent B+ tree with copy-on-write structural sharing.
+///
+/// # Lifecycle
+///
+/// A typical workflow mirrors the Git mental model:
+///
+/// 1. **Create** — `VerMap::new()` gives you a map with a single `main`
+///    branch and an empty working state.
+/// 2. **Write** — `insert` / `remove` mutate the *working state* of a
+///    branch (analogous to editing files in a Git working directory).
+/// 3. **Commit** — `commit` snapshots the current working state into an
+///    immutable [`Commit`].  Each commit records the B+ tree root, parent
+///    linkage, and a wall-clock timestamp.
+/// 4. **Branch** — `create_branch` forks a lightweight branch from any
+///    existing branch.  The new branch shares all history via structural
+///    sharing — no data is copied.
+/// 5. **Merge** — `merge` performs a three-way merge between two branches.
+///    On conflict the source branch wins (last-writer-wins).
+/// 6. **Rollback** — `rollback_to` rewinds a branch to an earlier commit;
+///    `discard` throws away uncommitted changes.
+/// 7. **History** — `log`, `get_at_commit`, `iter_at_commit` let you
+///    inspect any historical snapshot.
+/// 8. **GC** — `gc` reclaims commits and B+ tree nodes that are no longer
+///    reachable from any live branch.
 ///
 /// # Quick start
 ///
 /// ```
-/// use vsdb::versioned::map::VersionedMap;
+/// use vsdb::versioned::map::VerMap;
 /// use vsdb::versioned::{MAIN_BRANCH, NO_COMMIT};
 /// use vsdb::{vsdb_set_base_dir, vsdb_get_base_dir};
 /// use std::fs;
@@ -47,32 +71,35 @@ struct BranchState {
 /// let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
 /// vsdb_set_base_dir(&dir).unwrap();
 ///
-/// let mut m: VersionedMap<u32, String> = VersionedMap::new("demo");
+/// let mut m: VerMap<u32, String> = VerMap::new();
 ///
-/// // Write on the default "main" branch.
+/// // 1. Write on the default "main" branch.
 /// m.insert(MAIN_BRANCH, &1, &"hello".into()).unwrap();
 /// m.insert(MAIN_BRANCH, &2, &"world".into()).unwrap();
 /// let c1 = m.commit(MAIN_BRANCH).unwrap();
 ///
-/// // Fork a feature branch from main.
+/// // 2. Fork a feature branch from main.
 /// let feat = m.create_branch("feature", MAIN_BRANCH).unwrap();
 /// m.insert(feat, &1, &"hi".into()).unwrap();
 /// let c2 = m.commit(feat).unwrap();
 ///
-/// // Main is unchanged.
+/// // 3. Branches are isolated — main is unchanged.
 /// assert_eq!(m.get(MAIN_BRANCH, &1).unwrap(), Some("hello".into()));
-/// // Feature has the new value.
 /// assert_eq!(m.get(feat, &1).unwrap(), Some("hi".into()));
 ///
-/// // Merge feature → main.
+/// // 4. Merge feature → main (source wins on conflict).
 /// m.merge(feat, MAIN_BRANCH).unwrap();
 /// assert_eq!(m.get(MAIN_BRANCH, &1).unwrap(), Some("hi".into()));
+///
+/// // 5. Clean up: delete the feature branch and run GC.
+/// m.delete_branch(feat).unwrap();
+/// m.gc();
 ///
 /// fs::remove_dir_all(&dir).unwrap();
 /// ```
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(bound = "")]
-pub struct VersionedMap<K, V> {
+pub struct VerMap<K, V> {
     /// The underlying persistent B+ tree (shared node pool).
     tree: PersistentBTree,
 
@@ -93,13 +120,27 @@ pub struct VersionedMap<K, V> {
     _phantom: PhantomData<(K, V)>,
 }
 
-impl<K, V> VersionedMap<K, V>
+impl<K, V> Default for VerMap<K, V>
 where
     K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
-    /// Creates a new versioned map with a default `main` branch.
-    pub fn new(_name: &str) -> Self {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<K, V> VerMap<K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    /// Creates a new, empty versioned map with a default `main` branch.
+    ///
+    /// The map starts with no commits and an empty working state.
+    /// Use [`insert`](Self::insert) to add data, then [`commit`](Self::commit)
+    /// to create an immutable snapshot.
+    pub fn new() -> Self {
         let mut branches: MapxOrd<u64, BranchState> = MapxOrd::new();
         let mut branch_names: Mapx<String, u64> = Mapx::new();
 

@@ -4,7 +4,7 @@
 
 # vsdb
 
-`vsdb` is a high-performance, embedded database designed to feel like using Rust's standard collections. It provides persistent, disk-backed data structures (`Mapx`, `MapxOrd`) with a familiar, in-memory feel, plus Git-model versioned storage (`VersionedMap`) with branching, commits, merge, and history.
+`vsdb` is a high-performance, embedded database designed to feel like using Rust's standard collections. It provides persistent, disk-backed data structures (`Mapx`, `MapxOrd`) with a familiar, in-memory feel, plus Git-model versioned storage (`VerMap`) with branching, commits, merge, and history.
 
 This repository is a simplified version of the original [**vsdb**](https://crates.io/crates/vsdb/0.70.0), retaining the most practical and stable features while focusing on performance and ease of use.
 
