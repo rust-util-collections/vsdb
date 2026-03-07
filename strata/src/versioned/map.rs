@@ -377,6 +377,51 @@ where
             .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(V::decode(&v)))))
     }
 
+    /// Iterates entries in `[lo, hi)` at a specific historical commit
+    /// in ascending key order.
+    pub fn range_at_commit(
+        &self,
+        commit_id: CommitId,
+        lo: Bound<&K>,
+        hi: Bound<&K>,
+    ) -> Result<impl Iterator<Item = (K, V)> + '_> {
+        let commit = self
+            .commits
+            .get(&commit_id)
+            .ok_or_else(|| eg!("commit not found"))?;
+        let lo_raw = match lo {
+            Bound::Included(k) => Bound::Included(k.to_bytes()),
+            Bound::Excluded(k) => Bound::Excluded(k.to_bytes()),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+        let hi_raw = match hi {
+            Bound::Included(k) => Bound::Included(k.to_bytes()),
+            Bound::Excluded(k) => Bound::Excluded(k.to_bytes()),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+        Ok(self
+            .tree
+            .range(
+                commit.root,
+                lo_raw.as_ref().map(|v| v.as_slice()),
+                hi_raw.as_ref().map(|v| v.as_slice()),
+            )
+            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(V::decode(&v)))))
+    }
+
+    /// Checks if `key` exists at a specific historical commit.
+    pub fn contains_key_at_commit(
+        &self,
+        commit_id: CommitId,
+        key: &K,
+    ) -> Result<bool> {
+        let commit = self
+            .commits
+            .get(&commit_id)
+            .ok_or_else(|| eg!("commit not found"))?;
+        Ok(self.tree.contains_key(commit.root, &key.to_bytes()))
+    }
+
     // =================================================================
     // Write (working state)
     // =================================================================

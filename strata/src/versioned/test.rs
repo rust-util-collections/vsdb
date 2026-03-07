@@ -1775,7 +1775,172 @@ fn iter_at_commit_empty_tree() {
     assert!(items.is_empty());
 }
 
-// --- get_commit ---
+// --- range_at_commit ---
+
+#[test]
+fn range_at_commit_basic() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+
+    for i in 0..10u32 {
+        m.insert(main, &i, &(i * 10)).unwrap();
+    }
+    let c1 = m.commit(main).unwrap();
+
+    // Mutate after c1.
+    m.insert(main, &5, &999).unwrap();
+    m.insert(main, &10, &100).unwrap();
+    m.commit(main).unwrap();
+
+    // range_at_commit sees c1's state, not the latest.
+    let items: Vec<(u32, u32)> = m
+        .range_at_commit(c1, Bound::Included(&3), Bound::Excluded(&7))
+        .unwrap()
+        .collect();
+    assert_eq!(items, vec![(3, 30), (4, 40), (5, 50), (6, 60)]);
+}
+
+#[test]
+fn range_at_commit_empty_range() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+
+    m.insert(main, &1, &10).unwrap();
+    let c = m.commit(main).unwrap();
+
+    let items: Vec<(u32, u32)> = m
+        .range_at_commit(c, Bound::Included(&100), Bound::Excluded(&200))
+        .unwrap()
+        .collect();
+    assert!(items.is_empty());
+}
+
+#[test]
+fn range_at_commit_unbounded() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+
+    for i in 1..=5u32 {
+        m.insert(main, &i, &i).unwrap();
+    }
+    let c = m.commit(main).unwrap();
+
+    // Unbounded on both sides = full scan (same as iter_at_commit).
+    let items: Vec<(u32, u32)> = m
+        .range_at_commit(c, Bound::Unbounded, Bound::Unbounded)
+        .unwrap()
+        .collect();
+    assert_eq!(items.len(), 5);
+
+    // Lower-bounded only.
+    let items: Vec<(u32, u32)> = m
+        .range_at_commit(c, Bound::Excluded(&3), Bound::Unbounded)
+        .unwrap()
+        .collect();
+    assert_eq!(items, vec![(4, 4), (5, 5)]);
+}
+
+#[test]
+fn range_at_commit_invalid_commit() {
+    setup();
+    let m: VerMap<u32, u32> = VerMap::new();
+    let _main = m.main_branch();
+    assert!(m
+        .range_at_commit(999, Bound::Unbounded, Bound::Unbounded)
+        .is_err());
+}
+
+#[test]
+fn range_at_commit_on_branch() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+
+    m.insert(main, &1, &10).unwrap();
+    m.insert(main, &2, &20).unwrap();
+    m.commit(main).unwrap();
+
+    let fork = m.create_branch("fork", main).unwrap();
+    m.insert(fork, &3, &30).unwrap();
+    m.insert(fork, &4, &40).unwrap();
+    let fc = m.commit(fork).unwrap();
+
+    let items: Vec<(u32, u32)> = m
+        .range_at_commit(fc, Bound::Included(&2), Bound::Included(&4))
+        .unwrap()
+        .collect();
+    assert_eq!(items, vec![(2, 20), (3, 30), (4, 40)]);
+}
+
+// --- contains_key_at_commit ---
+
+#[test]
+fn contains_key_at_commit_basic() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+
+    m.insert(main, &1, &10).unwrap();
+    let c1 = m.commit(main).unwrap();
+
+    m.insert(main, &2, &20).unwrap();
+    m.remove(main, &1).unwrap();
+    let c2 = m.commit(main).unwrap();
+
+    // At c1: key 1 exists, key 2 does not.
+    assert!(m.contains_key_at_commit(c1, &1).unwrap());
+    assert!(!m.contains_key_at_commit(c1, &2).unwrap());
+
+    // At c2: key 1 was removed, key 2 was added.
+    assert!(!m.contains_key_at_commit(c2, &1).unwrap());
+    assert!(m.contains_key_at_commit(c2, &2).unwrap());
+}
+
+#[test]
+fn contains_key_at_commit_nonexistent_key() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+
+    m.insert(main, &1, &1).unwrap();
+    let c = m.commit(main).unwrap();
+
+    assert!(!m.contains_key_at_commit(c, &999).unwrap());
+}
+
+#[test]
+fn contains_key_at_commit_invalid_commit() {
+    setup();
+    let m: VerMap<u32, u32> = VerMap::new();
+    let _main = m.main_branch();
+    assert!(m.contains_key_at_commit(999, &1).is_err());
+}
+
+#[test]
+fn contains_key_at_commit_on_branch() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+
+    m.insert(main, &1, &10).unwrap();
+    m.commit(main).unwrap();
+
+    let fork = m.create_branch("fork", main).unwrap();
+    m.insert(fork, &2, &20).unwrap();
+    let fc = m.commit(fork).unwrap();
+
+    // Fork commit has both keys.
+    assert!(m.contains_key_at_commit(fc, &1).unwrap());
+    assert!(m.contains_key_at_commit(fc, &2).unwrap());
+
+    // Main's latest commit does not have key 2.
+    let mc = m.head_commit(main).unwrap().unwrap().id;
+    assert!(m.contains_key_at_commit(mc, &1).unwrap());
+    assert!(!m.contains_key_at_commit(mc, &2).unwrap());
+}
 
 #[test]
 fn get_commit_basic() {
