@@ -3,8 +3,8 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::ops::Bound;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use vsdb::versioned::map::VerMap;
 use vsdb::versioned::BranchId;
+use vsdb::versioned::map::VerMap;
 
 fn setup() {
     let dir = format!("/tmp/vsdb_bench_versioned/{}", rand::random::<u128>());
@@ -323,8 +323,7 @@ fn gc_bench(c: &mut Criterion) {
     // Build up history: 50 commits on main, each with 20 inserts.
     for c_idx in 0..50u64 {
         for j in 0..20u64 {
-            m.insert(main, &(c_idx * 20 + j), &vec![0u8; 64])
-                .unwrap();
+            m.insert(main, &(c_idx * 20 + j), &vec![0u8; 64]).unwrap();
         }
         m.commit(main).unwrap();
     }

@@ -410,11 +410,7 @@ where
     }
 
     /// Checks if `key` exists at a specific historical commit.
-    pub fn contains_key_at_commit(
-        &self,
-        commit_id: CommitId,
-        key: &K,
-    ) -> Result<bool> {
+    pub fn contains_key_at_commit(&self, commit_id: CommitId, key: &K) -> Result<bool> {
         let commit = self
             .commits
             .get(&commit_id)

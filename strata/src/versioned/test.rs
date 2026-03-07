@@ -1,5 +1,5 @@
-use super::map::VerMap;
 use super::NO_COMMIT;
+use super::map::VerMap;
 use std::ops::Bound;
 
 fn setup() {
@@ -476,8 +476,7 @@ fn list_many_branches() {
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     for i in 0..20 {
-        m.create_branch(&format!("branch_{i}"), main)
-            .unwrap();
+        m.create_branch(&format!("branch_{i}"), main).unwrap();
     }
     assert_eq!(m.list_branches().len(), 21); // 20 + main
 }
@@ -1848,9 +1847,10 @@ fn range_at_commit_invalid_commit() {
     setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
-    assert!(m
-        .range_at_commit(999, Bound::Unbounded, Bound::Unbounded)
-        .is_err());
+    assert!(
+        m.range_at_commit(999, Bound::Unbounded, Bound::Unbounded)
+            .is_err()
+    );
 }
 
 #[test]
