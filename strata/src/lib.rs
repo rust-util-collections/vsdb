@@ -12,6 +12,19 @@
 #![cfg_attr(test, allow(warnings))]
 #![recursion_limit = "512"]
 
+#[cfg(all(feature = "msgpack_codec", feature = "cbor_codec"))]
+compile_error!(
+    "features `msgpack_codec` and `cbor_codec` are mutually exclusive; use `--no-default-features --features cbor_codec` to switch codec"
+);
+
+#[cfg(all(
+    feature = "serde_ende",
+    not(any(feature = "msgpack_codec", feature = "cbor_codec"))
+))]
+compile_error!(
+    "feature `serde_ende` requires exactly one codec feature: `msgpack_codec` or `cbor_codec`"
+);
+
 #[macro_use]
 pub mod common;
 

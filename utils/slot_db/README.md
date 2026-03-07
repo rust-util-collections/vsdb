@@ -22,6 +22,18 @@ vsdb_slot_db = "9.0.0"
 
 `SlotDB` provides an efficient way to query large, ordered datasets in pages.
 
+## Features
+
+- `msgpack_codec`: **(Default)** Use MessagePack-based encoding via `vsdb`.
+- `cbor_codec`: Use CBOR-based encoding via `vsdb`.
+
+`msgpack_codec` and `cbor_codec` are mutually exclusive. To use CBOR:
+
+```toml
+[dependencies]
+vsdb_slot_db = { version = "9.0.0", default-features = false, features = ["cbor_codec"] }
+```
+
 ```rust
 use vsdb_slot_db::SlotDB;
 

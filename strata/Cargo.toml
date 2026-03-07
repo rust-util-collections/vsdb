@@ -18,7 +18,6 @@ serde = { workspace = true }
 parking_lot = { workspace = true }
 
 msgpack = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
 serde_cbor_2 = { workspace = true, optional = true }
 
 ruc = { workspace = true }
@@ -34,7 +33,6 @@ default = ["msgpack_codec"]
 
 serde_ende = []
 msgpack_codec = ["serde_ende", "msgpack"]
-json_codec = ["serde_ende", "serde_json"]
 cbor_codec = ["serde_ende", "serde_cbor_2"]
 
 [[bench]]

@@ -24,6 +24,18 @@ For more detailed API examples, see [API Examples](docs/api.md).
 
 `vsdb_trie_db` provides an easy-to-use interface for creating and managing persistent MPTs.
 
+## Features
+
+- `msgpack_codec`: **(Default)** Use MessagePack-based encoding via `vsdb`.
+- `cbor_codec`: Use CBOR-based encoding via `vsdb`.
+
+`msgpack_codec` and `cbor_codec` are mutually exclusive. To use CBOR:
+
+```toml
+[dependencies]
+vsdb_trie_db = { version = "9.0.0", default-features = false, features = ["cbor_codec"] }
+```
+
 ```rust
 use vsdb_trie_db::MptStore;
 

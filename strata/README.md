@@ -36,7 +36,15 @@ For more detailed API examples, see [API Examples](docs/api.md).
 Uses RocksDB as the storage backend.
 
 - `msgpack_codec`: **(Default)** Use `rmp-serde` as the codec for faster performance.
-- `json_codec`: Use `serde_json` as the codec for better compatibility.
+- `cbor_codec`: Use `serde_cbor_2` as an alternative codec.
+
+`msgpack_codec` and `cbor_codec` are mutually exclusive.
+To switch from the default MessagePack codec to CBOR, disable default features:
+
+```toml
+[dependencies]
+vsdb = { version = "9.0.0", default-features = false, features = ["cbor_codec"] }
+```
 
 ## Usage
 
