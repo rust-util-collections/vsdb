@@ -126,9 +126,10 @@ where
     // Branch management
     // =================================================================
 
-    /// Creates a new branch forked from the head of `source_branch`.
+    /// Creates a new branch forked from `source_branch`.
     ///
-    /// Returns the new branch's ID.
+    /// The new branch inherits both the committed head and the current
+    /// working state (uncommitted changes, if any) of the source branch.
     pub fn create_branch(
         &mut self,
         name: &str,
@@ -383,20 +384,48 @@ where
     /// Rolls back `branch` to a previous commit, discarding all commits
     /// after `target` on this branch.
     ///
+    /// `target` must be an ancestor of the branch's current head.
     /// The discarded commits are not deleted (they may be reachable from
     /// other branches).  Call [`gc`](Self::gc) to reclaim them.
     pub fn rollback_to(&mut self, branch: BranchId, target: CommitId) -> Result<()> {
-        let _ = self
+        use std::collections::HashSet;
+
+        let state = self
             .branches
             .get(&branch)
             .ok_or_else(|| eg!("branch not found"))?;
-        let commit = self
+        let _ = self
             .commits
             .get(&target)
             .ok_or_else(|| eg!("commit not found"))?;
 
+        // Verify target is reachable from the branch head.
+        if state.head != NO_COMMIT && target != state.head {
+            let mut queue = vec![state.head];
+            let mut visited = HashSet::new();
+            let mut found = false;
+            while let Some(cur) = queue.pop() {
+                if cur == NO_COMMIT || !visited.insert(cur) {
+                    continue;
+                }
+                if cur == target {
+                    found = true;
+                    break;
+                }
+                if let Some(c) = self.commits.get(&cur) {
+                    queue.extend_from_slice(&c.parents);
+                }
+            }
+            if !found {
+                return Err(eg!(
+                    "target commit is not an ancestor of this branch's head"
+                ));
+            }
+        }
+
+        let commit = self.commits.get(&target).unwrap();
         let new_state = BranchState {
-            name: self.branches.get(&branch).unwrap().name,
+            name: state.name,
             head: target,
             dirty_root: commit.root,
         };
@@ -413,8 +442,18 @@ where
     /// Both branches must be committed (no uncommitted changes).
     /// On conflict, the source branch's value wins (last-writer-wins).
     ///
-    /// Creates a merge commit on `target` with two parents.
+    /// If `target` has no commits, performs a fast-forward (no merge commit
+    /// is created).  Otherwise creates a merge commit on `target` with two
+    /// parents.
     pub fn merge(&mut self, source: BranchId, target: BranchId) -> Result<CommitId> {
+        // Reject if either branch has uncommitted changes.
+        if self.has_uncommitted(source)? {
+            return Err(eg!("source branch has uncommitted changes"));
+        }
+        if self.has_uncommitted(target)? {
+            return Err(eg!("target branch has uncommitted changes"));
+        }
+
         let src = self
             .branches
             .get(&source)
@@ -544,7 +583,10 @@ where
         }
     }
 
-    /// Walks the commit history of `branch` from head to root.
+    /// Walks the first-parent commit history of `branch` from head to root.
+    ///
+    /// For merge commits, only the first parent (the target branch at merge
+    /// time) is followed — analogous to `git log --first-parent`.
     pub fn log(&self, branch: BranchId) -> Result<Vec<Commit>> {
         let state = self
             .branches

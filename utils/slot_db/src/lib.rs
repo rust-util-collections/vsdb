@@ -132,16 +132,6 @@ where
     pub fn remove(&mut self, slot: Slot, k: &K) {
         let slot = self.to_storage_slot(slot);
 
-        loop {
-            if let Some(top) = self.tiers.last_mut()
-                && top.len() < 2
-            {
-                self.tiers.pop();
-                continue;
-            }
-            break;
-        }
-
         let (exist, empty, d) = match self.data.get(&slot) {
             Some(mut d) => {
                 let existed = d.remove(k);
@@ -151,6 +141,17 @@ where
                 return;
             }
         };
+
+        // Shrink degenerate top tiers (structural maintenance).
+        loop {
+            if let Some(top) = self.tiers.last_mut()
+                && top.len() < 2
+            {
+                self.tiers.pop();
+                continue;
+            }
+            break;
+        }
 
         if empty {
             self.data.remove(&slot);

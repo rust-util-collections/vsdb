@@ -15,7 +15,7 @@ impl<'a, B: TrieBackend + ?Sized> TrieRo<'a, B> {
     }
 
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
-        if self.root.iter().all(|&b| b == 0) {
+        if self.root.len() == 32 && self.root.iter().all(|&b| b == 0) {
             return Ok(None);
         }
 

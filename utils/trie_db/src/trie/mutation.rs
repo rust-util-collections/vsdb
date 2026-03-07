@@ -13,7 +13,7 @@ pub struct TrieMut<'a, B: TrieBackend> {
 
 impl<'a, B: TrieBackend> TrieMut<'a, B> {
     pub fn new(root_hash: &[u8], backend: &'a mut B) -> Self {
-        let root = if root_hash.iter().all(|&b| b == 0) {
+        let root = if root_hash.len() == 32 && root_hash.iter().all(|&b| b == 0) {
             NodeHandle::InMemory(Box::new(Node::Null))
         } else {
             NodeHandle::Hash(root_hash.to_vec())

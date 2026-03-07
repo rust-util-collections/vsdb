@@ -408,7 +408,15 @@ impl<'de> Deserialize<'de> for Mapx {
     {
         deserializer
             .deserialize_byte_buf(SimpleVisitor)
-            .map(|meta| unsafe { Self::from_prefix_slice(meta) })
+            .and_then(|meta| {
+                if meta.len() != PREFIX_SIZE {
+                    return Err(serde::de::Error::invalid_length(
+                        meta.len(),
+                        &"exactly 8 bytes for Mapx prefix",
+                    ));
+                }
+                Ok(unsafe { Self::from_prefix_slice(meta) })
+            })
     }
 }
 

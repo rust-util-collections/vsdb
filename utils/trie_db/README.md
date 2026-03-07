@@ -5,9 +5,9 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](../../LICENSE)
 [![Rust](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml/badge.svg)](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml)
 
-> An out-of-the-box wrapper for `trie-db` with persistent storage.
+> A lightweight, production-grade Merkle Patricia Trie (MPT) implementation with persistent storage.
 
-This crate provides `MptStore`, a high-level wrapper for [`trie-db`](https://crates.io/crates/trie-db) that uses `vsdb` for its underlying storage. It simplifies the management of multiple Merkle Patricia Tries (MPTs), handling state, commits, and backend storage automatically.
+This crate provides `MptStore`, a self-contained Merkle Patricia Trie (MPT) implementation that uses `vsdb` for its underlying storage. It simplifies the management of multiple MPTs, handling state, commits, and backend storage automatically.
 
 ## Installation
 
@@ -15,7 +15,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-vsdb_trie_db = "6.0.1"
+vsdb_trie_db = "9.0.0"
 ```
 
 ## Usage

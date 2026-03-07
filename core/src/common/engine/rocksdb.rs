@@ -76,6 +76,7 @@ pub struct RocksDB {
     db: &'static DB,
     prefix_allocator: PreAllocator,
     max_keylen: AtomicUsize,
+    max_keylen_lock: Mutex<()>,
 }
 
 #[cfg(test)]
@@ -104,11 +105,16 @@ impl RocksDB {
 
     #[inline(always)]
     fn set_max_key_len(&self, len: usize) {
-        let prev = self.max_keylen.fetch_max(len, Ordering::Relaxed);
-        if len > prev {
+        if len <= self.get_max_keylen() {
+            return;
+        }
+
+        let _g = self.max_keylen_lock.lock();
+        if len > self.get_max_keylen() {
             self.db
                 .put(META_KEY_MAX_KEYLEN, len.to_be_bytes())
                 .expect("vsdb: meta write failed");
+            self.max_keylen.store(len, Ordering::Relaxed);
         }
     }
 
@@ -173,6 +179,7 @@ impl RocksDB {
             prefix_allocator,
             // length of the raw key, exclude the meta prefix
             max_keylen,
+            max_keylen_lock: Mutex::new(()),
         })
     }
 
@@ -622,12 +629,30 @@ impl BatchTrait for RocksBatch<'_> {
 
     #[inline(always)]
     fn commit(&mut self) -> Result<()> {
-        let batch = std::mem::take(&mut self.inner);
+        let mut batch = std::mem::take(&mut self.inner);
+
+        let mut updated_max = false;
+        let mut max_keylen_lock_guard = None;
+
+        // Include max_keylen update in the same WriteBatch for atomicity.
+        if self.max_key_len > self.engine.get_max_keylen() {
+            let guard = self.engine.max_keylen_lock.lock();
+            if self.max_key_len > self.engine.get_max_keylen() {
+                batch.put(META_KEY_MAX_KEYLEN, self.max_key_len.to_be_bytes());
+                updated_max = true;
+            }
+            max_keylen_lock_guard = Some(guard);
+        }
+
         self.engine.db.write(batch).c(d!())?;
 
-        if self.max_key_len > 0 && self.max_key_len > self.engine.get_max_keylen() {
-            self.engine.set_max_key_len(self.max_key_len);
+        // Update the in-memory atomic after successful write.
+        if updated_max {
+            self.engine
+                .max_keylen
+                .store(self.max_key_len, Ordering::Relaxed);
         }
+        drop(max_keylen_lock_guard);
 
         Ok(())
     }

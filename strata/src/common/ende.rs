@@ -10,7 +10,7 @@ use super::RawBytes;
 use ruc::*;
 use std::{
     fmt,
-    mem::{size_of, transmute},
+    mem::size_of,
 };
 
 #[cfg(feature = "serde_ende")]
@@ -359,7 +359,6 @@ macro_rules! impl_type {
         }
     };
     (@$int: ty) => {
-        #[allow(clippy::unsound_collection_transmute)]
         impl KeyEnDeOrdered for Vec<$int> {
             #[inline(always)]
             fn to_bytes(&self) -> RawBytes {
@@ -369,14 +368,8 @@ macro_rules! impl_type {
                     .collect::<Vec<_>>()
             }
             #[inline(always)]
-            fn into_bytes(mut self) -> RawBytes {
-                for i in 0..self.len() {
-                    self[i] = self[i].wrapping_sub(<$int>::MIN).to_be();
-                }
-                unsafe {
-                    let v = transmute::<Vec<$int>, RawBytes>(self);
-                    v
-                }
+            fn into_bytes(self) -> RawBytes {
+                self.to_bytes()
             }
             #[inline(always)]
             fn from_slice(b: &[u8]) -> Result<Self> {
@@ -393,18 +386,7 @@ macro_rules! impl_type {
             }
             #[inline(always)]
             fn from_bytes(b: RawBytes) -> Result<Self> {
-                if 0 != b.len() % size_of::<$int>() {
-                    return Err(eg!("invalid bytes"));
-                }
-                let mut ret = unsafe {
-                    let mut v = transmute::<Vec<u8>, Vec<$int>>(b);
-                    v.set_len(v.len() / size_of::<$int>());
-                    v
-                };
-                for i in 0..ret.len() {
-                    ret[i] = <$int>::from_be(ret[i]).wrapping_add(<$int>::MIN);
-                }
-                Ok(ret)
+                Self::from_slice(&b)
             }
         }
     };
