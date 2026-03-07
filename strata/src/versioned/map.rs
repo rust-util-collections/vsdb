@@ -3,7 +3,7 @@
 //! merge support, modelled after Git semantics.
 //!
 
-use super::{BranchId, Commit, CommitId, MAIN_BRANCH, NO_COMMIT};
+use super::{BranchId, Commit, CommitId, NO_COMMIT};
 use crate::common::ende::{KeyEnDeOrdered, ValueEnDe};
 use crate::{Mapx, MapxOrd, Orphan};
 use ruc::*;
@@ -66,7 +66,7 @@ struct BranchState {
 ///
 /// ```
 /// use vsdb::versioned::map::VerMap;
-/// use vsdb::versioned::{MAIN_BRANCH, NO_COMMIT};
+/// use vsdb::versioned::NO_COMMIT;
 /// use vsdb::{vsdb_set_base_dir, vsdb_get_base_dir};
 /// use std::fs;
 ///
@@ -74,24 +74,25 @@ struct BranchState {
 /// vsdb_set_base_dir(&dir).unwrap();
 ///
 /// let mut m: VerMap<u32, String> = VerMap::new();
+/// let main = m.main_branch();
 ///
 /// // 1. Write on the default "main" branch.
-/// m.insert(MAIN_BRANCH, &1, &"hello".into()).unwrap();
-/// m.insert(MAIN_BRANCH, &2, &"world".into()).unwrap();
-/// let c1 = m.commit(MAIN_BRANCH).unwrap();
+/// m.insert(main, &1, &"hello".into()).unwrap();
+/// m.insert(main, &2, &"world".into()).unwrap();
+/// let c1 = m.commit(main).unwrap();
 ///
 /// // 2. Fork a feature branch from main.
-/// let feat = m.create_branch("feature", MAIN_BRANCH).unwrap();
+/// let feat = m.create_branch("feature", main).unwrap();
 /// m.insert(feat, &1, &"hi".into()).unwrap();
 /// let c2 = m.commit(feat).unwrap();
 ///
 /// // 3. Branches are isolated — main is unchanged.
-/// assert_eq!(m.get(MAIN_BRANCH, &1).unwrap(), Some("hello".into()));
+/// assert_eq!(m.get(main, &1).unwrap(), Some("hello".into()));
 /// assert_eq!(m.get(feat, &1).unwrap(), Some("hi".into()));
 ///
 /// // 4. Merge feature → main (source wins on conflict).
-/// m.merge(feat, MAIN_BRANCH).unwrap();
-/// assert_eq!(m.get(MAIN_BRANCH, &1).unwrap(), Some("hi".into()));
+/// m.merge(feat, main).unwrap();
+/// assert_eq!(m.get(main, &1).unwrap(), Some("hi".into()));
 ///
 /// // 5. Clean up: delete the feature branch and run GC.
 /// m.delete_branch(feat).unwrap();
@@ -118,6 +119,9 @@ pub struct VerMap<K, V> {
     next_commit: Orphan<u64>,
     next_branch: Orphan<u64>,
 
+    /// The branch currently designated as "main" (protected from deletion).
+    main_branch: Orphan<u64>,
+
     #[serde(skip)]
     _phantom: PhantomData<(K, V)>,
 }
@@ -139,20 +143,30 @@ where
 {
     /// Creates a new, empty versioned map with a default `main` branch.
     ///
-    /// The map starts with no commits and an empty working state.
-    /// Use [`insert`](Self::insert) to add data, then [`commit`](Self::commit)
-    /// to create an immutable snapshot.
+    /// Equivalent to `new_with_main("main")`.
     pub fn new() -> Self {
+        Self::new_with_main("main")
+    }
+
+    /// Creates a new, empty versioned map whose initial branch has the
+    /// given `name` (e.g. `"genesis"`, `"canonical"`).
+    ///
+    /// The initial branch is automatically designated as the *main* branch
+    /// and cannot be deleted until another branch is promoted via
+    /// [`set_main_branch`](Self::set_main_branch).
+    pub fn new_with_main(name: &str) -> Self {
         let mut branches: MapxOrd<u64, BranchState> = MapxOrd::new();
         let mut branch_names: Mapx<String, u64> = Mapx::new();
 
+        let initial_id: BranchId = 1;
+
         let main = BranchState {
-            name: "main".into(),
+            name: name.into(),
             head: NO_COMMIT,
             dirty_root: EMPTY_ROOT,
         };
-        branches.insert(&MAIN_BRANCH, &main);
-        branch_names.insert(&"main".to_string(), &MAIN_BRANCH);
+        branches.insert(&initial_id, &main);
+        branch_names.insert(&name.to_string(), &initial_id);
 
         Self {
             tree: PersistentBTree::new(),
@@ -160,9 +174,31 @@ where
             branches,
             branch_names,
             next_commit: Orphan::new(1), // 0 = NO_COMMIT
-            next_branch: Orphan::new(MAIN_BRANCH + 1),
+            next_branch: Orphan::new(initial_id + 1),
+            main_branch: Orphan::new(initial_id),
             _phantom: PhantomData,
         }
+    }
+
+    // =================================================================
+    // Main branch
+    // =================================================================
+
+    /// Returns the [`BranchId`] of the current main branch.
+    pub fn main_branch(&self) -> BranchId {
+        self.main_branch.get_value()
+    }
+
+    /// Designates `branch` as the new main branch.
+    ///
+    /// The previous main branch becomes an ordinary branch (deletable).
+    /// The new main branch is protected from deletion.
+    pub fn set_main_branch(&mut self, branch: BranchId) -> Result<()> {
+        if !self.branches.contains_key(&branch) {
+            return Err(eg!("branch not found"));
+        }
+        *self.main_branch.get_mut() = branch;
+        Ok(())
     }
 
     // =================================================================
@@ -202,7 +238,7 @@ where
     /// Deletes a branch.  The branch's commits remain in the object store
     /// until [`gc`](Self::gc) is called.
     pub fn delete_branch(&mut self, branch: BranchId) -> Result<()> {
-        if branch == MAIN_BRANCH {
+        if branch == self.main_branch.get_value() {
             return Err(eg!("cannot delete the main branch"));
         }
         let state = self
@@ -624,6 +660,44 @@ where
     // =================================================================
     // History
     // =================================================================
+
+    /// Returns the lowest common ancestor (fork point) of two commits.
+    ///
+    /// Useful for blockchain scenarios: given two chain tips, this finds
+    /// the block where they diverged.  Returns `None` only if the two
+    /// commits share no common history.
+    pub fn fork_point(&self, a: CommitId, b: CommitId) -> Option<CommitId> {
+        self.find_common_ancestor(a, b)
+    }
+
+    /// Counts the number of first-parent commits between `from` and
+    /// `ancestor` (exclusive).
+    ///
+    /// Walks the first-parent chain starting at `from` until `ancestor`
+    /// is reached.  Returns `None` if `ancestor` is not a first-parent
+    /// ancestor of `from`.
+    ///
+    /// # Example — comparing fork lengths
+    ///
+    /// ```ignore
+    /// let lca = map.fork_point(tip_a, tip_b).unwrap();
+    /// let ahead_a = map.commit_distance(tip_a, lca).unwrap();
+    /// let ahead_b = map.commit_distance(tip_b, lca).unwrap();
+    /// // The longer fork wins.
+    /// ```
+    pub fn commit_distance(&self, from: CommitId, ancestor: CommitId) -> Option<u64> {
+        let mut cur = from;
+        let mut count = 0u64;
+        while cur != ancestor {
+            if cur == NO_COMMIT {
+                return None;
+            }
+            let c = self.commits.get(&cur)?;
+            cur = c.parents.first().copied().unwrap_or(NO_COMMIT);
+            count += 1;
+        }
+        Some(count)
+    }
 
     /// Retrieves a commit by its ID.
     pub fn get_commit(&self, commit_id: CommitId) -> Option<Commit> {

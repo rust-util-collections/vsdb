@@ -121,27 +121,28 @@ The caller controls priority by choosing which branch to pass as `source` vs `ta
 
 ```rust
 use vsdb::versioned::map::VerMap;
-use vsdb::versioned::{MAIN_BRANCH, BranchId};
+use vsdb::versioned::BranchId;
 
 // 1. Create an empty versioned map (starts with a "main" branch).
 let mut m: VerMap<u32, String> = VerMap::new();
+let main = m.main_branch();
 
 // 2. Write on the main branch and commit a snapshot.
-m.insert(MAIN_BRANCH, &1, &"hello".into()).unwrap();
-m.commit(MAIN_BRANCH).unwrap();
+m.insert(main, &1, &"hello".into()).unwrap();
+m.commit(main).unwrap();
 
 // 3. Fork a feature branch — cheap, no data copied.
-let feat: BranchId = m.create_branch("feature", MAIN_BRANCH).unwrap();
+let feat: BranchId = m.create_branch("feature", main).unwrap();
 m.insert(feat, &1, &"updated".into()).unwrap();
 m.commit(feat).unwrap();
 
 // 4. Branches are isolated.
-assert_eq!(m.get(MAIN_BRANCH, &1).unwrap(), Some("hello".into()));
+assert_eq!(m.get(main, &1).unwrap(), Some("hello".into()));
 assert_eq!(m.get(feat, &1).unwrap(), Some("updated".into()));
 
 // 5. Three-way merge: feature → main (source wins on conflict).
-m.merge(feat, MAIN_BRANCH).unwrap();
-assert_eq!(m.get(MAIN_BRANCH, &1).unwrap(), Some("updated".into()));
+m.merge(feat, main).unwrap();
+assert_eq!(m.get(main, &1).unwrap(), Some("updated".into()));
 
 // 6. Clean up: delete the branch, then garbage-collect unreachable data.
 m.delete_branch(feat).unwrap();

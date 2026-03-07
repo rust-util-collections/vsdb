@@ -53,9 +53,6 @@ pub type BranchId = u64;
 /// Sentinel: no commit yet.
 pub const NO_COMMIT: CommitId = 0;
 
-/// The default branch created by [`VerMap::new`].
-pub const MAIN_BRANCH: BranchId = 1;
-
 // =========================================================================
 // Commit
 // =========================================================================
