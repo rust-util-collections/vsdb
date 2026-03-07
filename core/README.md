@@ -22,12 +22,11 @@ Add this to your `Cargo.toml`:
 vsdb_core = "9.0.0"
 ```
 
-## Features
-
 For detailed API examples, see [API Examples](docs/api.md).
 
-Uses RocksDB as the storage backend.
+## Features
 
+Uses RocksDB as the storage backend.
 
 ## License
 

@@ -9,8 +9,6 @@
 
 This crate provides high-level, typed data structures that are backed by a persistent key-value store. It is the primary crate for end-users.
 
-This is a simplified version of the original [**vsdb**](https://crates.io/crates/vsdb/0.70.0), retaining only the most practical and stable parts.
-
 ## Installation
 
 Add this to your `Cargo.toml`:

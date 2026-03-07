@@ -24,18 +24,6 @@ For more detailed API examples, see [API Examples](docs/api.md).
 
 `SlotDB` provides an efficient way to query large, ordered datasets in pages.
 
-## Features
-
-- `msgpack_codec`: **(Default)** Use MessagePack-based encoding via `vsdb`.
-- `cbor_codec`: Use CBOR-based encoding via `vsdb`.
-
-`msgpack_codec` and `cbor_codec` are mutually exclusive. To use CBOR:
-
-```toml
-[dependencies]
-vsdb_slot_db = { version = "9.0.0", default-features = false, features = ["cbor_codec"] }
-```
-
 ```rust
 use vsdb_slot_db::SlotDB;
 
@@ -61,6 +49,18 @@ let entries_in_slot = db.get_entries_by_page_slot(Some(100), Some(100), 10, 0, f
 assert_eq!(entries_in_slot.len(), 2);
 assert!(entries_in_slot.contains(&"entry_a".to_string()));
 assert!(entries_in_slot.contains(&"entry_b".to_string()));
+```
+
+## Features
+
+- `msgpack_codec`: **(Default)** Use MessagePack-based encoding via `vsdb`.
+- `cbor_codec`: Use CBOR-based encoding via `vsdb`.
+
+`msgpack_codec` and `cbor_codec` are mutually exclusive. To use CBOR:
+
+```toml
+[dependencies]
+vsdb_slot_db = { version = "9.0.0", default-features = false, features = ["cbor_codec"] }
 ```
 
 ## License
