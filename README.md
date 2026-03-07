@@ -23,6 +23,3 @@ The `vsdb` project is a workspace containing several related crates:
 ## Important Changes
 
 - **Performance-focused API**: The `insert()` and `remove()` methods no longer return the old value, eliminating expensive read-before-write operations and significantly improving write performance.
-- **Simplified API**: The unreliable `len()` and `is_empty()` methods have been removed from map structures. If you need to track collection size, maintain a separate counter in your application.
-- **Removed Types**: `Vecx` and `VecxRaw` have been removed as they heavily depended on the unreliable `len()` tracking.
-
