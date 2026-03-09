@@ -30,7 +30,7 @@ For the versioned storage architecture with diagrams, see [Versioned Module — 
 - **Typed Keys and Values**: Keys and values are strongly typed and automatically serialized/deserialized.
 - **Git-Model Versioning**: `VerMap` provides branching, commits, three-way merge, rollback, and history — backed by a persistent B+ tree with copy-on-write structural sharing.
 - **Merkle Trie**: Built-in `MptCalc` (Merkle Patricia Trie) and `SmtCalc` (Sparse Merkle Tree) for cryptographic state commitments. `VerMapWithProof` integrates `VerMap` with `MptCalc` for versioned Merkle roots.
-- **SlotDB**: A skip-list-like index for efficient, timestamp-based paged queries.
+- **Slotdex**: A skip-list-like index (`SlotDex`) for efficient, timestamp-based paged queries.
 
 ## Features
 
@@ -221,14 +221,14 @@ let root = vmp.merkle_root(main).unwrap();
 assert_eq!(root.len(), 32);
 ```
 
-### SlotDB
+### Slotdex
 
-`SlotDB` is a skip-list-like data structure for fast, timestamp-based paged queries.
+`SlotDex` (in the `slotdex` module) is a skip-list-like data structure for fast, timestamp-based paged queries.
 
 ```rust,ignore
-use vsdb::slotdex::SlotDB;
+use vsdb::slotdex::SlotDex;
 
-let mut db = SlotDB::<String>::new(10, false);
+let mut db = SlotDex::<String>::new(10, false);
 
 db.insert(100, "entry_a".to_string()).unwrap();
 db.insert(100, "entry_b".to_string()).unwrap();

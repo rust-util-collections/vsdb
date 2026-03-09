@@ -1,6 +1,6 @@
 //! Slot-based index for efficient, timestamp-based paged queries.
 //!
-//! [`SlotDB`] is a skip-list-like data structure ideal for indexing and
+//! [`SlotDex`] is a skip-list-like data structure ideal for indexing and
 //! querying large datasets where entries are associated with a slot
 //! (e.g., a timestamp or block number).
 
@@ -34,13 +34,13 @@ const INLINE_CAPACITY_THRESHOLD: usize = 8;
 
 /// A skip-list-like data structure for fast, timestamp-based paged queries.
 ///
-/// `SlotDB` organizes data into "slots" (e.g., timestamps or block numbers),
+/// `SlotDex` organizes data into "slots" (e.g., timestamps or block numbers),
 /// which are then grouped into tiers. This hierarchical structure allows for
 /// rapid seeking and counting, making it highly efficient for pagination and
 /// range queries over large datasets.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(bound = "K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned")]
-pub struct SlotDB<K>
+pub struct SlotDex<K>
 where
     K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
@@ -62,11 +62,11 @@ where
     swap_order: bool,
 }
 
-impl<K> SlotDB<K>
+impl<K> SlotDex<K>
 where
     K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
-    /// Creates a new `SlotDB`.
+    /// Creates a new `SlotDex`.
     ///
     /// # Arguments
     ///
@@ -169,7 +169,7 @@ where
         }
     }
 
-    /// Clears the `SlotDB`, removing all entries and tiers.
+    /// Clears the `SlotDex`, removing all entries and tiers.
     pub fn clear(&mut self) {
         *self.total.get_mut() = 0;
         self.data.clear();
@@ -463,7 +463,7 @@ where
         }
     }
 
-    /// Returns the total number of entries in the `SlotDB`.
+    /// Returns the total number of entries in the `SlotDex`.
     pub fn total(&self) -> EntryCnt {
         self.total_by_slot(None, None)
     }
@@ -548,7 +548,7 @@ where
     }
 }
 
-impl<K> Default for SlotDB<K>
+impl<K> Default for SlotDex<K>
 where
     K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {

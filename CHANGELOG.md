@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v9.1.0] - 2026-03-09
+
+### Changed
+
+- **Merged `vsdb_trie_db` and `vsdb_slot_db` into `vsdb`** — they are now modules (`trie` and `slotdex`) instead of separate crates. The workspace is reduced to two crates: `vsdb_core` and `vsdb`.
+- **Renamed `trie_db` -> `trie`**, inner `trie/trie` -> `trie/mpt`, `slot_db` -> `slotdex`.
+- **Moved `VerMapWithProof`** from `versioned::proof` to `trie::proof`, alongside `MptCalc` and `SmtCalc`.
+- **Removed `merkle` feature gate** — the `trie` module (including `sha3` and `thiserror`) is always compiled.
+- All public types re-exported from crate root: `MptCalc`, `SmtCalc`, `SmtProof`, `VerMapWithProof`, `SlotDex`.
+
+### Added
+
+- **`SmtCalc`** — Sparse Merkle Tree with 256-level proofs (`prove` / `verify_proof`).
+- **SMT cache** — `save_cache` / `load_cache` for `SmtCalc` (disposable on-disk persistence).
+- Comprehensive SMT test suite (24 tests) and benchmarks.
+- Architecture diagram in `trie` module docs.
+
 ## [v9.0.0] - 2026-03-07
 
 ### Added

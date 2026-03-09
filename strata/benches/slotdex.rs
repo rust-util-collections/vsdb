@@ -1,14 +1,14 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use rand::random;
 use std::hint::black_box;
-use vsdb::slotdex::SlotDB;
+use vsdb::slotdex::SlotDex;
 
 const DATA_SIZE: u32 = 100_000;
 
 type V = Vec<u8>;
 
-fn slot_db_custom(mn: u64) -> SlotDB<V> {
-    let mut db = SlotDB::new(mn, false);
+fn slot_db_custom(mn: u64) -> SlotDex<V> {
+    let mut db = SlotDex::new(mn, false);
 
     (0..DATA_SIZE).for_each(|i| {
         db.insert(i as u64, i.to_be_bytes().to_vec()).unwrap();
@@ -17,7 +17,7 @@ fn slot_db_custom(mn: u64) -> SlotDB<V> {
     db
 }
 
-fn query(db: &SlotDB<V>, page_size: u16) {
+fn query(db: &SlotDex<V>, page_size: u16) {
     let page_number = random::<u32>() % (DATA_SIZE / (page_size as u32));
     db.get_entries_by_page(page_size, page_number, false);
 }

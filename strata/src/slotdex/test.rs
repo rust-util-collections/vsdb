@@ -16,7 +16,7 @@ fn workflow_swap_order() {
 }
 
 fn slot_db(mn: u64, swap_order: bool) {
-    let mut db = SlotDB::new(mn, swap_order);
+    let mut db = SlotDex::new(mn, swap_order);
     let mut test_db = testdb::TestDB::default();
 
     let mut slot_min = Slot::MAX;
@@ -41,7 +41,7 @@ fn slot_db(mn: u64, swap_order: bool) {
 }
 
 fn assert_queryable(
-    db: &SlotDB<u64>,
+    db: &SlotDex<u64>,
     test_db: &testdb::TestDB<u64>,
     slot_min: Slot,
     slot_max: Slot,
@@ -133,7 +133,7 @@ const fn siz() -> u64 {
 
 #[test]
 fn data_container() {
-    let mut db = SlotDB::new(16, false);
+    let mut db = SlotDex::new(16, false);
 
     db.insert(0, 0).unwrap();
 

@@ -1,23 +1,115 @@
 ![GitHub top language](https://img.shields.io/github/languages/top/rust-util-collections/vsdb)
+[![Crates.io](https://img.shields.io/crates/v/vsdb.svg)](https://crates.io/crates/vsdb)
+[![Docs.rs](https://docs.rs/vsdb/badge.svg)](https://docs.rs/vsdb)
 [![Rust](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml/badge.svg)](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml)
 [![Minimum rustc version](https://img.shields.io/badge/rustc-1.85+-lightgray.svg)](https://github.com/rust-util-collections/vsdb)
 
 # vsdb
 
-`vsdb` is a high-performance, embedded database designed to feel like using Rust's standard collections. It provides persistent, disk-backed data structures (`Mapx`, `MapxOrd`) with a familiar, in-memory feel, plus Git-model versioned storage (`VerMap`) with branching, commits, merge, and history.
+A high-performance, embedded key-value database for Rust with an API that feels like standard collections.
 
-For a detailed guide and API examples, see the [**vsdb crate documentation**](strata/README.md).
-For the versioned storage architecture (VerMap internals, merge algorithm, COW B+ tree, etc.), see the [**Versioned Module — Architecture & Internals**](strata/docs/versioned.md).
+## What it does
 
-## Crate Ecosystem
+- **Persistent collections** — `Mapx` (like `HashMap`), `MapxOrd` (like `BTreeMap`), backed by RocksDB
+- **Git-model versioning** — `VerMap` provides branching, commits, three-way merge, rollback, and garbage collection over a COW B+ tree with structural sharing
+- **Merkle trie** — `MptCalc` (Merkle Patricia Trie) and `SmtCalc` (Sparse Merkle Tree) as stateless computation layers; `VerMapWithProof` integrates `VerMap` with `MptCalc` for versioned 32-byte Merkle root commitments
+- **Slot-based index** — `SlotDex` for efficient, timestamp-based paged queries via a skip-list-like tier structure
 
-The `vsdb` project is a workspace containing two crates:
+## Quick start
 
-| Crate | Version | Documentation | Path | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| [**vsdb**](strata) | [![Crates.io](https://img.shields.io/crates/v/vsdb.svg)](https://crates.io/crates/vsdb) | [![Docs.rs](https://docs.rs/vsdb/badge.svg)](https://docs.rs/vsdb) | `strata` | High-level, typed data structures (`Mapx`, `MapxOrd`, `VerMap`, `SlotDB`, `MptCalc`, `SmtCalc`). This is the primary crate for most users. |
-| [**vsdb_core**](core) | [![Crates.io](https://img.shields.io/crates/v/vsdb_core.svg)](https://crates.io/crates/vsdb_core) | [![Docs.rs](https://docs.rs/vsdb_core/badge.svg)](https://docs.rs/vsdb_core) | `core` | Low-level implementations, including the RocksDB storage layer and raw data structures. |
+```toml
+[dependencies]
+vsdb = "9.1.0"
+```
 
-## Important Changes
+```rust
+use vsdb::versioned::map::VerMap;
 
-- **Performance-focused API**: The `insert()` and `remove()` methods no longer return the old value, eliminating expensive read-before-write operations and significantly improving write performance.
+let mut m: VerMap<u32, String> = VerMap::new();
+let main = m.main_branch();
+
+m.insert(main, &1, &"hello".into()).unwrap();
+m.commit(main).unwrap();
+
+let feat = m.create_branch("feature", main).unwrap();
+m.insert(feat, &1, &"updated".into()).unwrap();
+m.commit(feat).unwrap();
+
+// Branches are isolated
+assert_eq!(m.get(main, &1).unwrap(), Some("hello".into()));
+assert_eq!(m.get(feat, &1).unwrap(), Some("updated".into()));
+
+// Three-way merge: source wins on conflict
+m.merge(feat, main).unwrap();
+assert_eq!(m.get(main, &1).unwrap(), Some("updated".into()));
+
+m.delete_branch(feat).unwrap();
+m.gc();
+```
+
+## Architecture
+
+```text
+vsdb (workspace)
++-- core/    vsdb_core   RocksDB engine, MapxRaw, PersistentBTree
++-- strata/  vsdb         High-level crate (the one users depend on)
+     +-- basic/       Mapx, MapxOrd, MapxOrdRawKey, Orphan
+     +-- versioned/   VerMap (branch, commit, merge, diff, gc)
+     +-- trie/        MptCalc, SmtCalc, VerMapWithProof
+     +-- slotdex/     SlotDex
+     +-- dagmap/      DagMapRaw, DagMapRawKey
+```
+
+### Module overview
+
+| Module | Key types | Purpose |
+|--------|-----------|---------|
+| [`basic`](strata/src/basic) | `Mapx`, `MapxOrd`, `Orphan` | Persistent, typed collections backed by RocksDB |
+| [`versioned`](strata/src/versioned) | `VerMap`, `BranchId`, `CommitId` | Git-model versioned KV store with COW B+ tree |
+| [`trie`](strata/src/trie) | `MptCalc`, `SmtCalc`, `SmtProof`, `VerMapWithProof` | Stateless Merkle tries + VerMap integration |
+| [`slotdex`](strata/src/slotdex) | `SlotDex` | Skip-list-like index for timestamp-based paged queries |
+| [`dagmap`](strata/src/dagmap) | `DagMapRaw`, `DagMapRawKey` | DAG-based collections |
+
+### Trie + VerMap integration
+
+```text
+  VerMap<K,V>          MptCalc / SmtCalc
+  (persistence)        (computation)
+  +-------------+      +-------------+
+  | branch/     |      | in-memory   |
+  | commit/     | diff | trie nodes  |  root_hash()
+  | merge/      |----->| (ephemeral) |-------------> [u8; 32]
+  | rollback    |      |             |
+  +-------------+      +-------------+
+       |                      |
+       |                 save_cache()
+       |                 load_cache()
+       |                      |
+       |                +-----v-----+
+       |                | disk cache| (disposable)
+       +----------------+-----------+
+```
+
+`VerMapWithProof` wraps a `VerMap` and an `MptCalc`. On each `merkle_root()` call it computes an incremental diff from the last sync point and applies it to the trie, avoiding full rebuilds. A disposable on-disk cache makes restarts cheap.
+
+`SmtCalc` additionally supports `prove()` / `verify_proof()` for constant-time (256-hash) membership and non-membership proofs.
+
+## Codec features
+
+- `msgpack_codec` **(default)** — MessagePack via `rmp-serde`
+- `cbor_codec` — CBOR via `serde_cbor_2`
+
+Mutually exclusive. To use CBOR:
+
+```toml
+vsdb = { version = "9.1.0", default-features = false, features = ["cbor_codec"] }
+```
+
+## Documentation
+
+- [API Examples](strata/docs/api.md)
+- [Versioned Module — Architecture & Internals](strata/docs/versioned.md)
+
+## License
+
+MIT

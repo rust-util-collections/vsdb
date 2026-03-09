@@ -172,14 +172,14 @@ assert_eq!(root.len(), 32);
 vmp.save_cache(std::path::Path::new("/tmp/vermap.cache")).unwrap();
 ```
 
-## SlotDB
+## Slotdex
 
-`SlotDB` is a skip-list-like index for efficient, timestamp-based paged queries.
+`SlotDex` (in the `slotdex` module) is a skip-list-like index for efficient, timestamp-based paged queries.
 
 ```rust,ignore
-use vsdb::slotdex::SlotDB;
+use vsdb::slotdex::SlotDex;
 
-let mut db = SlotDB::<String>::new(10, false);
+let mut db = SlotDex::<String>::new(10, false);
 
 // Insert entries into slots (e.g., timestamps)
 db.insert(100, "entry_a".to_string()).unwrap();

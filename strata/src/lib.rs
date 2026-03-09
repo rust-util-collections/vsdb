@@ -7,7 +7,7 @@
 //! (Git-model versioned storage with branching, commits, and merge),
 //! [`MptCalc`] / [`SmtCalc`] (stateless Merkle trie implementations),
 //! [`VerMapWithProof`] (versioned storage with Merkle root computation),
-//! and [`SlotDB`] (skip-list-like index for paged queries).
+//! and [`SlotDex`] (skip-list-like index for paged queries).
 //!
 //! This crate is the primary entry point for most users.
 
@@ -63,8 +63,8 @@ pub use dagmap::{DagMapId, raw::DagMapRaw, rawkey::DagMapRawKey};
 // Trie
 pub use trie::{MptCalc, SmtCalc, SmtProof, VerMapWithProof};
 
-// SlotDB
-pub use slotdex::SlotDB;
+// Slotdex
+pub use slotdex::SlotDex;
 
 // Re-export all of vsdb_core for convenience
 pub use vsdb_core::{self, *};
