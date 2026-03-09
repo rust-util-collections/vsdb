@@ -46,10 +46,7 @@ pub fn diff_roots(
     let mut result = Vec::new();
 
     loop {
-        let ko = iter_old.peek().map(|(k, _)| k.clone());
-        let kn = iter_new.peek().map(|(k, _)| k.clone());
-
-        match (ko, kn) {
+        match (iter_old.peek(), iter_new.peek()) {
             (None, None) => break,
             (Some(_), None) => {
                 let (k, v) = iter_old.next().unwrap();
@@ -59,7 +56,7 @@ pub fn diff_roots(
                 let (k, v) = iter_new.next().unwrap();
                 result.push(DiffEntry::Added { key: k, value: v });
             }
-            (Some(ok), Some(nk)) => match ok.cmp(&nk) {
+            (Some((ok, _)), Some((nk, _))) => match ok.cmp(nk) {
                 Ordering::Less => {
                     let (k, v) = iter_old.next().unwrap();
                     result.push(DiffEntry::Removed { key: k, value: v });

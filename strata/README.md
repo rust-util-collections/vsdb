@@ -15,7 +15,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-vsdb = "9.0.0"
+vsdb = "9.1.0"
 ```
 
 ## Highlights
@@ -29,6 +29,8 @@ For the versioned storage architecture with diagrams, see [Versioned Module — 
 - **Persistent Storage**: Data is automatically saved to disk and loaded on instantiation.
 - **Typed Keys and Values**: Keys and values are strongly typed and automatically serialized/deserialized.
 - **Git-Model Versioning**: `VerMap` provides branching, commits, three-way merge, rollback, and history — backed by a persistent B+ tree with copy-on-write structural sharing.
+- **Merkle Trie**: Built-in `MptCalc` (Merkle Patricia Trie) and `SmtCalc` (Sparse Merkle Tree) for cryptographic state commitments. `VerMapWithProof` integrates `VerMap` with `MptCalc` for versioned Merkle roots.
+- **SlotDB**: A skip-list-like index for efficient, timestamp-based paged queries.
 
 ## Features
 
@@ -42,7 +44,7 @@ To switch from the default MessagePack codec to CBOR, disable default features:
 
 ```toml
 [dependencies]
-vsdb = { version = "9.0.0", default-features = false, features = ["cbor_codec"] }
+vsdb = { version = "9.1.0", default-features = false, features = ["cbor_codec"] }
 ```
 
 ## Usage
@@ -106,23 +108,23 @@ assert_eq!(map.last(), Some((3, "three".to_string())));
 
 `VerMap` provides Git-style versioned storage with branching, commits, merge, and rollback.
 
-The typical lifecycle is: **create → write → commit → branch → merge → gc**.
+The typical lifecycle is: **create -> write -> commit -> branch -> merge -> gc**.
 
 #### Merge conflict resolution: source wins on conflicts
 
 `merge(source, target)` uses three-way merge with the common ancestor.
 If only one side changed a key relative to the ancestor, that single-sided
 change is preserved. If both sides changed the same key differently, **source
-wins**. A deletion is treated as "assigning ∅", so delete-vs-modify is also
+wins**. A deletion is treated as "assigning empty", so delete-vs-modify is also
 resolved by source priority.
 
 | source | target | result |
 |--------|--------|--------|
 | unchanged (A) | changed to T | **T** (target-only change preserved) |
 | changed to S | unchanged (A) | **S** (source-only change preserved) |
-| changed to S | changed to T | **S** (conflict → source wins) |
-| deleted (∅) | changed to T | **∅** (conflict → source wins → delete) |
-| changed to S | deleted (∅) | **S** (conflict → source wins → keep) |
+| changed to S | changed to T | **S** (conflict -> source wins) |
+| deleted | changed to T | **deleted** (conflict -> source wins -> delete) |
+| changed to S | deleted | **S** (conflict -> source wins -> keep) |
 
 The caller controls priority by choosing which branch to pass as `source` vs `target`.
 
@@ -147,13 +149,97 @@ m.commit(feat).unwrap();
 assert_eq!(m.get(main, &1).unwrap(), Some("hello".into()));
 assert_eq!(m.get(feat, &1).unwrap(), Some("updated".into()));
 
-// 5. Three-way merge: feature → main (source wins on conflict).
+// 5. Three-way merge: feature -> main (source wins on conflict).
 m.merge(feat, main).unwrap();
 assert_eq!(m.get(main, &1).unwrap(), Some("updated".into()));
 
 // 6. Clean up: delete the branch, then garbage-collect unreachable data.
 m.delete_branch(feat).unwrap();
 m.gc();
+```
+
+### MptCalc / SmtCalc (Merkle Trie)
+
+`MptCalc` (Merkle Patricia Trie) and `SmtCalc` (Sparse Merkle Tree) are stateless,
+in-memory Merkle trie implementations. They are designed as computation layers
+that can be paired with `VerMap` for versioned Merkle root commitments.
+
+```rust,ignore
+use vsdb::trie::MptCalc;
+
+let mut mpt = MptCalc::new();
+mpt.insert(b"key1", b"value1").unwrap();
+mpt.insert(b"key2", b"value2").unwrap();
+
+// Compute the 32-byte Merkle root hash
+let root = mpt.root_hash().unwrap();
+assert_eq!(root.len(), 32);
+
+// Lookup by key
+assert_eq!(mpt.get(b"key1").unwrap(), Some(b"value1".to_vec()));
+```
+
+`SmtCalc` additionally supports Merkle proofs:
+
+```rust,ignore
+use vsdb::trie::SmtCalc;
+
+let mut smt = SmtCalc::new();
+smt.insert(b"alice", b"100").unwrap();
+smt.insert(b"bob", b"200").unwrap();
+
+let root = smt.root_hash().unwrap();
+let root32: [u8; 32] = root.try_into().unwrap();
+
+// Membership proof
+let proof = smt.prove(b"alice").unwrap();
+assert_eq!(proof.value, Some(b"100".to_vec()));
+assert!(SmtCalc::verify_proof(&root32, &proof).unwrap());
+
+// Non-membership proof
+let proof = smt.prove(b"charlie").unwrap();
+assert_eq!(proof.value, None);
+assert!(SmtCalc::verify_proof(&root32, &proof).unwrap());
+```
+
+### VerMapWithProof
+
+`VerMapWithProof` integrates `VerMap` with `MptCalc` for versioned Merkle root computation:
+
+```rust,ignore
+use vsdb::trie::VerMapWithProof;
+
+let mut vmp: VerMapWithProof<Vec<u8>, Vec<u8>> = VerMapWithProof::new();
+let main = vmp.map().main_branch();
+
+// Write data and commit
+vmp.map_mut().insert(main, &b"key1".to_vec(), &b"val1".to_vec()).unwrap();
+vmp.map_mut().commit(main).unwrap();
+
+// Compute the Merkle root (incrementally maintained)
+let root = vmp.merkle_root(main).unwrap();
+assert_eq!(root.len(), 32);
+```
+
+### SlotDB
+
+`SlotDB` is a skip-list-like data structure for fast, timestamp-based paged queries.
+
+```rust,ignore
+use vsdb::slot_db::SlotDB;
+
+let mut db = SlotDB::<String>::new(10, false);
+
+db.insert(100, "entry_a".to_string()).unwrap();
+db.insert(100, "entry_b".to_string()).unwrap();
+db.insert(200, "entry_c".to_string()).unwrap();
+db.insert(300, "entry_d".to_string()).unwrap();
+
+assert_eq!(db.total(), 4);
+
+// Get entries by page (page_size=2, page_index=0, reverse=true)
+let entries = db.get_entries_by_page(2, 0, true);
+assert_eq!(entries, vec!["entry_d".to_string(), "entry_c".to_string()]);
 ```
 
 ## Important Notes

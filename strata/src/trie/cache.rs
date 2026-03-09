@@ -10,14 +10,16 @@
 //! stale, the caller simply rebuilds from the authoritative store.
 //!
 
-use crate::error::{Result, TrieError};
-use crate::nibbles::Nibbles;
-use crate::node::{Node, NodeHandle};
+use crate::trie::error::{Result, TrieError};
+use crate::trie::nibbles::Nibbles;
+use crate::trie::node::{Node, NodeHandle};
+use sha3::{Digest, Keccak256};
 use std::io::{Read, Write};
 use std::path::Path;
 
 const MAGIC: &[u8; 4] = b"MPTC";
 const VERSION: u8 = 1;
+const CHECKSUM_LEN: usize = 8;
 
 // =========================================================================
 // Public API (called from MptCalc)
@@ -30,54 +32,82 @@ pub(crate) fn save(
     root_hash: &[u8],
     w: &mut impl Write,
 ) -> Result<()> {
-    w.write_all(MAGIC).map_err(io_err)?;
-    w.write_all(&[VERSION]).map_err(io_err)?;
-    w.write_all(&sync_tag.to_le_bytes()).map_err(io_err)?;
+    let mut payload = Vec::new();
+    payload.extend_from_slice(MAGIC);
+    payload.push(VERSION);
+    payload.extend_from_slice(&sync_tag.to_le_bytes());
 
     let hash_len = root_hash.len() as u32;
-    w.write_all(&hash_len.to_le_bytes()).map_err(io_err)?;
-    w.write_all(root_hash).map_err(io_err)?;
+    payload.extend_from_slice(&hash_len.to_le_bytes());
+    payload.extend_from_slice(root_hash);
 
     let tree_data = serialize_handle(root);
-    w.write_all(&tree_data).map_err(io_err)?;
+    payload.extend_from_slice(&tree_data);
+
+    let checksum = compute_checksum(&payload);
+    w.write_all(&payload).map_err(io_err)?;
+    w.write_all(&checksum).map_err(io_err)?;
     Ok(())
 }
 
 /// Loads an `MptCalc` trie from a reader.
 ///
 /// Returns `(root_handle, sync_tag, root_hash)`.
-pub(crate) fn load(
-    r: &mut impl Read,
-) -> Result<(NodeHandle, u64, Vec<u8>)> {
-    let mut magic = [0u8; 4];
-    r.read_exact(&mut magic).map_err(io_err)?;
-    if &magic != MAGIC {
+pub(crate) fn load(r: &mut impl Read) -> Result<(NodeHandle, u64, Vec<u8>)> {
+    let mut all_data = Vec::new();
+    r.read_to_end(&mut all_data).map_err(io_err)?;
+
+    if all_data.len() < CHECKSUM_LEN {
+        return Err(TrieError::InvalidState("cache file too short".into()));
+    }
+
+    let (payload, stored_checksum) = all_data.split_at(all_data.len() - CHECKSUM_LEN);
+    let expected = compute_checksum(payload);
+    if stored_checksum != expected {
+        return Err(TrieError::InvalidState("cache checksum mismatch".into()));
+    }
+
+    if payload.len() < 5 {
+        return Err(TrieError::InvalidState("cache header too short".into()));
+    }
+    if &payload[0..4] != MAGIC {
         return Err(TrieError::InvalidState("invalid cache magic".into()));
     }
-
-    let mut ver = [0u8; 1];
-    r.read_exact(&mut ver).map_err(io_err)?;
-    if ver[0] != VERSION {
-        return Err(TrieError::InvalidState(
-            format!("unsupported cache version {}", ver[0]),
-        ));
+    if payload[4] != VERSION {
+        return Err(TrieError::InvalidState(format!(
+            "unsupported cache version {}",
+            payload[4]
+        )));
     }
 
-    let mut tag_bytes = [0u8; 8];
-    r.read_exact(&mut tag_bytes).map_err(io_err)?;
-    let sync_tag = u64::from_le_bytes(tag_bytes);
+    let mut cursor = 5;
 
-    let mut hash_len_bytes = [0u8; 4];
-    r.read_exact(&mut hash_len_bytes).map_err(io_err)?;
-    let hash_len = u32::from_le_bytes(hash_len_bytes) as usize;
-    let mut root_hash = vec![0u8; hash_len];
-    r.read_exact(&mut root_hash).map_err(io_err)?;
+    if cursor + 8 > payload.len() {
+        return Err(TrieError::InvalidState(
+            "unexpected EOF reading sync_tag".into(),
+        ));
+    }
+    let sync_tag = u64::from_le_bytes(payload[cursor..cursor + 8].try_into().unwrap());
+    cursor += 8;
 
-    let mut tree_data = Vec::new();
-    r.read_to_end(&mut tree_data).map_err(io_err)?;
+    if cursor + 4 > payload.len() {
+        return Err(TrieError::InvalidState(
+            "unexpected EOF reading hash_len".into(),
+        ));
+    }
+    let hash_len =
+        u32::from_le_bytes(payload[cursor..cursor + 4].try_into().unwrap()) as usize;
+    cursor += 4;
 
-    let mut cursor = 0;
-    let root = deserialize_handle(&tree_data, &mut cursor)?;
+    if cursor + hash_len > payload.len() {
+        return Err(TrieError::InvalidState(
+            "unexpected EOF reading root_hash".into(),
+        ));
+    }
+    let root_hash = payload[cursor..cursor + hash_len].to_vec();
+    cursor += hash_len;
+
+    let root = deserialize_handle(payload, &mut cursor)?;
     Ok((root, sync_tag, root_hash))
 }
 
@@ -93,9 +123,7 @@ pub(crate) fn save_to_file(
 }
 
 /// Convenience: load from a file path.
-pub(crate) fn load_from_file(
-    path: &Path,
-) -> Result<(NodeHandle, u64, Vec<u8>)> {
+pub(crate) fn load_from_file(path: &Path) -> Result<(NodeHandle, u64, Vec<u8>)> {
     let mut f = std::fs::File::open(path).map_err(io_err)?;
     load(&mut f)
 }
@@ -187,9 +215,9 @@ fn deserialize_handle(data: &[u8], cursor: &mut usize) -> Result<NodeHandle> {
             let node = deserialize_node(data, cursor)?;
             Ok(NodeHandle::Cached(hash, Box::new(node)))
         }
-        _ => Err(TrieError::InvalidState(
-            format!("invalid handle tag: {tag}"),
-        )),
+        _ => Err(TrieError::InvalidState(format!(
+            "invalid handle tag: {tag}"
+        ))),
     }
 }
 
@@ -209,7 +237,9 @@ fn deserialize_node(data: &[u8], cursor: &mut usize) -> Result<Node> {
         }
         NODE_BRANCH => {
             if *cursor + 2 > data.len() {
-                return Err(TrieError::InvalidState("unexpected EOF in branch bitmap".into()));
+                return Err(TrieError::InvalidState(
+                    "unexpected EOF in branch bitmap".into(),
+                ));
             }
             let bitmap = u16::from_le_bytes([data[*cursor], data[*cursor + 1]]);
             *cursor += 2;
@@ -222,8 +252,8 @@ fn deserialize_node(data: &[u8], cursor: &mut usize) -> Result<Node> {
             };
 
             let mut children: Box<[Option<NodeHandle>; 16]> = Box::new([
-                None, None, None, None, None, None, None, None,
-                None, None, None, None, None, None, None, None,
+                None, None, None, None, None, None, None, None, None, None, None, None,
+                None, None, None, None,
             ]);
             for i in 0..16 {
                 if (bitmap & (1 << i)) != 0 {
@@ -232,9 +262,7 @@ fn deserialize_node(data: &[u8], cursor: &mut usize) -> Result<Node> {
             }
             Ok(Node::Branch { children, value })
         }
-        _ => Err(TrieError::InvalidState(
-            format!("invalid node tag: {tag}"),
-        )),
+        _ => Err(TrieError::InvalidState(format!("invalid node tag: {tag}"))),
     }
 }
 
@@ -316,4 +344,12 @@ fn read_u8(data: &[u8], cursor: &mut usize) -> Result<u8> {
 
 fn io_err(e: std::io::Error) -> TrieError {
     TrieError::InvalidState(format!("I/O error: {e}"))
+}
+
+/// Computes a truncated Keccak256 checksum (first 8 bytes).
+fn compute_checksum(data: &[u8]) -> [u8; CHECKSUM_LEN] {
+    let hash = Keccak256::digest(data);
+    let mut out = [0u8; CHECKSUM_LEN];
+    out.copy_from_slice(&hash[..CHECKSUM_LEN]);
+    out
 }

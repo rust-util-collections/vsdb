@@ -30,13 +30,18 @@
 //!                                   merge()  ──►  gc()
 //! ```
 //!
+//! # Merkle proofs
+//!
+//! [`VerMapWithProof`](crate::trie::VerMapWithProof) wraps a `VerMap<K, V>`
+//! with an [`MptCalc`](crate::trie::MptCalc) (or
+//! [`SmtCalc`](crate::trie::SmtCalc)) to provide a 32-byte Merkle root
+//! commitment over the versioned state.  See the [`trie`](crate::trie)
+//! module for details.
+//!
 
 pub mod diff;
 pub mod map;
 pub mod merge;
-
-#[cfg(feature = "merkle")]
-pub mod proof;
 
 #[cfg(test)]
 mod test;

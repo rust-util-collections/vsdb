@@ -2,21 +2,21 @@
 //! [`VerMapWithProof`] — a versioned KV map with Merkle root computation.
 //!
 //! Combines [`VerMap`] (versioning, branching, merging) with
-//! [`MptCalc`](vsdb_trie_db::MptCalc) (stateless Merkle Patricia Trie)
+//! [`MptCalc`](super::MptCalc) (stateless Merkle Patricia Trie)
 //! to provide cryptographic commitments over versioned state.
 //!
 //! The MPT is treated as a disposable computation layer: it holds an
 //! in-memory trie that can be rebuilt from any VerMap snapshot at any
 //! time.  An optional on-disk cache avoids full rebuilds on restart.
 
-use super::diff::DiffEntry;
-use super::{BranchId, CommitId};
 use crate::common::ende::{KeyEnDeOrdered, ValueEnDe};
+use crate::versioned::diff::DiffEntry;
+use crate::versioned::map::VerMap;
+use crate::versioned::{BranchId, CommitId};
 use ruc::*;
 use std::path::Path;
-use vsdb_trie_db::MptCalc;
 
-use super::map::VerMap;
+use super::MptCalc;
 
 /// A versioned key-value map with Merkle root hash computation.
 ///
@@ -43,10 +43,15 @@ use super::map::VerMap;
 pub struct VerMapWithProof<K, V> {
     map: VerMap<K, V>,
     mpt: MptCalc,
+    /// Snapshot of `mpt` at the last synced commit (before dirty overlay).
+    /// Used to reset when re-applying dirty changes.
+    mpt_at_head: Option<MptCalc>,
     /// The commit the MPT is currently synced to.
     sync_commit: Option<CommitId>,
     /// The branch the MPT is currently synced to.
     sync_branch: Option<BranchId>,
+    /// Whether uncommitted (dirty) changes have been applied on top of HEAD.
+    dirty_applied: bool,
 }
 
 impl<K, V> VerMapWithProof<K, V>
@@ -59,8 +64,10 @@ where
         Self {
             map: VerMap::new(),
             mpt: MptCalc::new(),
+            mpt_at_head: None,
             sync_commit: None,
             sync_branch: None,
+            dirty_applied: false,
         }
     }
 
@@ -69,8 +76,10 @@ where
         Self {
             map,
             mpt: MptCalc::new(),
+            mpt_at_head: None,
             sync_commit: None,
             sync_branch: None,
+            dirty_applied: false,
         }
     }
 
@@ -97,31 +106,30 @@ where
     /// Includes uncommitted changes.  Performs an incremental diff
     /// update when possible, falling back to a full rebuild otherwise.
     pub fn merkle_root(&mut self, branch: BranchId) -> Result<Vec<u8>> {
-        // Fast path: same branch, synced to HEAD, no uncommitted changes.
-        if self.sync_branch == Some(branch) {
-            if let Some(sync_id) = self.sync_commit {
-                let head = self.map.head_commit(branch)?;
-                let head_id = head.as_ref().map(|c| c.id);
-                let has_dirty = self.map.has_uncommitted(branch)?;
+        // Fast path: same branch, synced to HEAD, no uncommitted changes,
+        // and no dirty overlay currently applied.
+        if self.sync_branch == Some(branch)
+            && !self.dirty_applied
+            && let Some(sync_id) = self.sync_commit
+        {
+            let head = self.map.head_commit(branch)?;
+            let head_id = head.as_ref().map(|c| c.id);
+            let has_dirty = self.map.has_uncommitted(branch)?;
 
-                if head_id == Some(sync_id) && !has_dirty {
-                    // MPT matches the branch HEAD exactly.
-                    return self.mpt.root_hash().map_err(|e| eg!(e));
-                }
+            if head_id == Some(sync_id) && !has_dirty {
+                // MPT matches the branch HEAD exactly.
+                return self.mpt.root_hash().c(d!());
             }
         }
 
         self.sync_to_branch(branch)?;
-        self.mpt.root_hash().map_err(|e| eg!(e))
+        self.mpt.root_hash().c(d!())
     }
 
     /// Computes the Merkle root hash for a specific historical commit.
-    pub fn merkle_root_at_commit(
-        &mut self,
-        commit: CommitId,
-    ) -> Result<Vec<u8>> {
+    pub fn merkle_root_at_commit(&mut self, commit: CommitId) -> Result<Vec<u8>> {
         self.sync_to_commit(commit)?;
-        self.mpt.root_hash().map_err(|e| eg!(e))
+        self.mpt.root_hash().c(d!())
     }
 
     // =================================================================
@@ -134,7 +142,7 @@ where
     /// synced to a committed state (not uncommitted changes).
     pub fn save_cache(&mut self, path: &Path) -> Result<()> {
         let tag = self.sync_commit.ok_or_else(|| eg!("no synced commit"))?;
-        self.mpt.save_cache(path, tag).map_err(|e| eg!(e))
+        self.mpt.save_cache(path, tag).c(d!())
     }
 
     /// Restores the MPT from a cached file and incrementally catches up
@@ -150,14 +158,18 @@ where
         match MptCalc::load_cache(path) {
             Ok((mpt, sync_tag, _root_hash)) => {
                 self.mpt = mpt;
+                self.mpt_at_head = None;
                 self.sync_commit = Some(sync_tag);
-                self.sync_branch = None; // don't know which branch
+                self.sync_branch = None;
+                self.dirty_applied = false;
             }
             Err(_) => {
                 // Cache corrupted or missing — start fresh.
                 self.mpt = MptCalc::new();
+                self.mpt_at_head = None;
                 self.sync_commit = None;
                 self.sync_branch = None;
+                self.dirty_applied = false;
             }
         }
         self.merkle_root(branch)
@@ -173,7 +185,16 @@ where
         let head = self.map.head_commit(branch)?;
         let head_id = head.as_ref().map(|c| c.id);
 
-        // First, sync to the branch's HEAD commit.
+        // If dirty changes were previously applied, restore the MPT
+        // to the clean HEAD state before re-syncing.
+        if self.dirty_applied {
+            if let Some(ref snapshot) = self.mpt_at_head {
+                self.mpt = snapshot.clone();
+            }
+            self.dirty_applied = false;
+        }
+
+        // Sync to the branch's HEAD commit.
         if let Some(hid) = head_id {
             if self.sync_commit != Some(hid) {
                 self.sync_to_commit(hid)?;
@@ -181,15 +202,19 @@ where
         } else if self.sync_commit.is_some() {
             // Branch has no commits yet but MPT was synced elsewhere → reset.
             self.mpt = MptCalc::new();
+            self.mpt_at_head = None;
             self.sync_commit = None;
         }
 
         // Then, apply any uncommitted changes.
         if self.map.has_uncommitted(branch)? {
+            self.mpt_at_head = Some(self.mpt.clone());
             let diff = self.map.diff_uncommitted(branch)?;
             self.apply_diff(&diff)?;
-            // Mark as synced to this branch's dirty state
-            // (not a commit, so sync_commit stays at HEAD).
+            self.dirty_applied = true;
+        } else {
+            self.mpt_at_head = None;
+            self.dirty_applied = false;
         }
 
         self.sync_branch = Some(branch);
@@ -198,6 +223,19 @@ where
 
     /// Synchronizes the MPT to a specific commit.
     fn sync_to_commit(&mut self, target: CommitId) -> Result<()> {
+        if self.sync_commit == Some(target) && !self.dirty_applied {
+            return Ok(());
+        }
+
+        // Restore clean state if dirty overlay was applied.
+        if self.dirty_applied {
+            if let Some(ref snapshot) = self.mpt_at_head {
+                self.mpt = snapshot.clone();
+            }
+            self.dirty_applied = false;
+            self.mpt_at_head = None;
+        }
+
         if self.sync_commit == Some(target) {
             return Ok(());
         }
@@ -223,7 +261,7 @@ where
     /// Full rebuild: clear MPT and re-insert all entries at `commit`.
     fn full_rebuild_commit(&mut self, commit: CommitId) -> Result<()> {
         let entries: Vec<_> = self.map.raw_iter_at_commit(commit)?.collect();
-        self.mpt = MptCalc::from_entries(entries).map_err(|e| eg!(e))?;
+        self.mpt = MptCalc::from_entries(entries).c(d!())?;
         Ok(())
     }
 
@@ -241,7 +279,7 @@ where
                 }
             })
             .collect();
-        self.mpt.batch_update(&ops).map_err(|e| eg!(e))
+        self.mpt.batch_update(&ops).c(d!())
     }
 }
 

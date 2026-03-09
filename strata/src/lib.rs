@@ -2,9 +2,12 @@
 //!
 //! `vsdb` is a high-performance, embedded database designed to feel like using
 //! Rust's standard collections. It provides persistent, disk-backed data
-//! structures — `Mapx` (a `HashMap`-like map), `MapxOrd` (a `BTreeMap`-like
-//! ordered map), and [`VerMap`](versioned::map::VerMap)
-//! (Git-model versioned storage with branching, commits, and merge).
+//! structures — [`Mapx`] (a `HashMap`-like map), [`MapxOrd`] (a `BTreeMap`-like
+//! ordered map), [`VerMap`](versioned::map::VerMap)
+//! (Git-model versioned storage with branching, commits, and merge),
+//! [`MptCalc`] / [`SmtCalc`] (stateless Merkle trie implementations),
+//! [`VerMapWithProof`] (versioned storage with Merkle root computation),
+//! and [`SlotDB`] (skip-list-like index for paged queries).
 //!
 //! This crate is the primary entry point for most users.
 
@@ -35,6 +38,12 @@ pub mod dagmap;
 /// Git-model versioned storage: branches, commits, merge, and history.
 pub mod versioned;
 
+/// Skip-list-like index for efficient, timestamp-based paged queries.
+pub mod slot_db;
+
+/// Lightweight, stateless Merkle trie implementations (MPT + SMT).
+pub mod trie;
+
 // --- Re-exports ---
 
 // Basic data structures
@@ -50,6 +59,12 @@ pub use common::{
 
 // DAG-related structures
 pub use dagmap::{DagMapId, raw::DagMapRaw, rawkey::DagMapRawKey};
+
+// Trie
+pub use trie::{MptCalc, SmtCalc, SmtProof, VerMapWithProof};
+
+// SlotDB
+pub use slot_db::SlotDB;
 
 // Re-export all of vsdb_core for convenience
 pub use vsdb_core::{self, *};

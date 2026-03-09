@@ -2637,9 +2637,15 @@ fn diff_commits_basic() {
 
     use super::diff::DiffEntry;
     // Diff is in ascending key order.
-    assert!(matches!(&diff[0], DiffEntry::Removed { key, .. } if key == &1u32.to_be_bytes()));
-    assert!(matches!(&diff[1], DiffEntry::Modified { key, .. } if key == &2u32.to_be_bytes()));
-    assert!(matches!(&diff[2], DiffEntry::Added { key, .. } if key == &3u32.to_be_bytes()));
+    assert!(
+        matches!(&diff[0], DiffEntry::Removed { key, .. } if key == &1u32.to_be_bytes())
+    );
+    assert!(
+        matches!(&diff[1], DiffEntry::Modified { key, .. } if key == &2u32.to_be_bytes())
+    );
+    assert!(
+        matches!(&diff[2], DiffEntry::Added { key, .. } if key == &3u32.to_be_bytes())
+    );
 }
 
 #[test]
@@ -2673,8 +2679,12 @@ fn diff_uncommitted_changes() {
     assert_eq!(diff.len(), 2);
 
     use super::diff::DiffEntry;
-    assert!(matches!(&diff[0], DiffEntry::Removed { key, .. } if key == &1u32.to_be_bytes()));
-    assert!(matches!(&diff[1], DiffEntry::Added { key, .. } if key == &3u32.to_be_bytes()));
+    assert!(
+        matches!(&diff[0], DiffEntry::Removed { key, .. } if key == &1u32.to_be_bytes())
+    );
+    assert!(
+        matches!(&diff[1], DiffEntry::Added { key, .. } if key == &3u32.to_be_bytes())
+    );
 }
 
 #[test]
@@ -2730,18 +2740,111 @@ fn diff_across_branches() {
     assert_eq!(diff.len(), 2);
 
     use super::diff::DiffEntry;
-    assert!(matches!(&diff[0], DiffEntry::Modified { key, .. } if key == &1u32.to_be_bytes()));
-    assert!(matches!(&diff[1], DiffEntry::Added { key, .. } if key == &3u32.to_be_bytes()));
+    assert!(
+        matches!(&diff[0], DiffEntry::Modified { key, .. } if key == &1u32.to_be_bytes())
+    );
+    assert!(
+        matches!(&diff[1], DiffEntry::Added { key, .. } if key == &3u32.to_be_bytes())
+    );
+}
+
+#[test]
+fn diff_large_dataset() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+
+    // Commit 100 entries.
+    for i in 0..100u32 {
+        m.insert(main, &i, &(i * 10)).unwrap();
+    }
+    let c1 = m.commit(main).unwrap();
+
+    // Modify some, add some, remove some.
+    for i in 0..10u32 {
+        m.remove(main, &i).unwrap();
+    }
+    for i in 50..60u32 {
+        m.insert(main, &i, &(i * 100)).unwrap();
+    }
+    for i in 100..110u32 {
+        m.insert(main, &i, &(i * 10)).unwrap();
+    }
+    let c2 = m.commit(main).unwrap();
+
+    let diff = m.diff_commits(c1, c2).unwrap();
+
+    use super::diff::DiffEntry;
+    let removed: Vec<_> = diff
+        .iter()
+        .filter(|d| matches!(d, DiffEntry::Removed { .. }))
+        .collect();
+    let modified: Vec<_> = diff
+        .iter()
+        .filter(|d| matches!(d, DiffEntry::Modified { .. }))
+        .collect();
+    let added: Vec<_> = diff
+        .iter()
+        .filter(|d| matches!(d, DiffEntry::Added { .. }))
+        .collect();
+
+    assert_eq!(removed.len(), 10);
+    assert_eq!(modified.len(), 10);
+    assert_eq!(added.len(), 10);
+}
+
+#[test]
+fn diff_all_removed() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+
+    m.insert(main, &1, &10).unwrap();
+    m.insert(main, &2, &20).unwrap();
+    m.insert(main, &3, &30).unwrap();
+    let c1 = m.commit(main).unwrap();
+
+    m.remove(main, &1).unwrap();
+    m.remove(main, &2).unwrap();
+    m.remove(main, &3).unwrap();
+    let c2 = m.commit(main).unwrap();
+
+    let diff = m.diff_commits(c1, c2).unwrap();
+    assert_eq!(diff.len(), 3);
+
+    use super::diff::DiffEntry;
+    assert!(diff.iter().all(|d| matches!(d, DiffEntry::Removed { .. })));
+}
+
+#[test]
+fn diff_reverse_direction() {
+    setup();
+    let mut m: VerMap<u32, String> = VerMap::new();
+    let main = m.main_branch();
+
+    m.insert(main, &1, &"a".into()).unwrap();
+    let c1 = m.commit(main).unwrap();
+
+    m.insert(main, &2, &"b".into()).unwrap();
+    let c2 = m.commit(main).unwrap();
+
+    // Forward: key 2 was added.
+    let fwd = m.diff_commits(c1, c2).unwrap();
+    // Reverse: key 2 was removed.
+    let rev = m.diff_commits(c2, c1).unwrap();
+
+    use super::diff::DiffEntry;
+    assert!(matches!(&fwd[0], DiffEntry::Added { .. }));
+    assert!(matches!(&rev[0], DiffEntry::Removed { .. }));
 }
 
 // =========================================================================
 // VerMapWithProof tests (feature = "merkle")
 // =========================================================================
 
-#[cfg(feature = "merkle")]
 mod proof_tests {
-    use super::super::map::VerMap;
-    use super::super::proof::VerMapWithProof;
+    use crate::trie::VerMapWithProof;
+    use crate::versioned::map::VerMap;
 
     type Vm = VerMap<u32, String>;
 
@@ -2924,5 +3027,143 @@ mod proof_tests {
         vp.map_mut().commit(main).unwrap();
         let hash = vp.merkle_root(main).unwrap();
         assert_eq!(hash.len(), 32);
+    }
+
+    /// Regression test: calling `merkle_root` twice with the same dirty
+    /// state must return the same hash (no double-apply of dirty diff).
+    #[test]
+    fn test_merkle_root_idempotent_with_dirty() {
+        let mut vp = new_proof();
+        let main = vp.map().main_branch();
+
+        vp.map_mut().insert(main, &1, &"a".into()).unwrap();
+        let _c1 = vp.map_mut().commit(main).unwrap();
+
+        // Add uncommitted changes.
+        vp.map_mut().insert(main, &2, &"b".into()).unwrap();
+
+        let h1 = vp.merkle_root(main).unwrap();
+        let h2 = vp.merkle_root(main).unwrap();
+        let h3 = vp.merkle_root(main).unwrap();
+        assert_eq!(h1, h2);
+        assert_eq!(h2, h3);
+    }
+
+    /// After computing merkle_root with dirty changes, committing,
+    /// then computing again should reflect the committed state.
+    #[test]
+    fn test_merkle_root_dirty_then_commit() {
+        let mut vp = new_proof();
+        let main = vp.map().main_branch();
+
+        vp.map_mut().insert(main, &1, &"a".into()).unwrap();
+        let _c1 = vp.map_mut().commit(main).unwrap();
+
+        // Dirty changes.
+        vp.map_mut().insert(main, &2, &"b".into()).unwrap();
+        let hash_dirty = vp.merkle_root(main).unwrap();
+
+        // Commit the dirty changes.
+        let _c2 = vp.map_mut().commit(main).unwrap();
+        let hash_committed = vp.merkle_root(main).unwrap();
+
+        // Should be the same: the committed state is what was dirty.
+        assert_eq!(hash_dirty, hash_committed);
+    }
+
+    /// Dirty changes that are then reverted (discard) should restore
+    /// the original hash.
+    #[test]
+    fn test_merkle_root_dirty_discard() {
+        let mut vp = new_proof();
+        let main = vp.map().main_branch();
+
+        vp.map_mut().insert(main, &1, &"a".into()).unwrap();
+        vp.map_mut().insert(main, &2, &"b".into()).unwrap();
+        let _c1 = vp.map_mut().commit(main).unwrap();
+        let hash_clean = vp.merkle_root(main).unwrap();
+
+        // Make dirty changes.
+        vp.map_mut().insert(main, &3, &"c".into()).unwrap();
+        let hash_dirty = vp.merkle_root(main).unwrap();
+        assert_ne!(hash_clean, hash_dirty);
+
+        // Discard uncommitted changes.
+        vp.map_mut().discard(main).unwrap();
+        let hash_after_discard = vp.merkle_root(main).unwrap();
+        assert_eq!(hash_clean, hash_after_discard);
+    }
+
+    /// Switching between branches should produce correct hashes.
+    #[test]
+    fn test_merkle_root_branch_switching() {
+        let mut vp = new_proof();
+        let main = vp.map().main_branch();
+
+        vp.map_mut().insert(main, &1, &"a".into()).unwrap();
+        vp.map_mut().insert(main, &2, &"b".into()).unwrap();
+        let _c1 = vp.map_mut().commit(main).unwrap();
+        let hash_main = vp.merkle_root(main).unwrap();
+
+        let feat = vp.map_mut().create_branch("feat", main).unwrap();
+        vp.map_mut().insert(feat, &3, &"c".into()).unwrap();
+        let _c2 = vp.map_mut().commit(feat).unwrap();
+        let hash_feat = vp.merkle_root(feat).unwrap();
+
+        // Switch back to main — should get the same hash.
+        let hash_main_again = vp.merkle_root(main).unwrap();
+        assert_eq!(hash_main, hash_main_again);
+
+        // Switch back to feat — should get the same hash.
+        let hash_feat_again = vp.merkle_root(feat).unwrap();
+        assert_eq!(hash_feat, hash_feat_again);
+    }
+
+    /// Multiple commits with incremental merkle root computation.
+    #[test]
+    fn test_merkle_root_multi_commit_incremental() {
+        let mut vp = new_proof();
+        let main = vp.map().main_branch();
+
+        vp.map_mut().insert(main, &1, &"a".into()).unwrap();
+        let _c1 = vp.map_mut().commit(main).unwrap();
+        let h1 = vp.merkle_root(main).unwrap();
+
+        vp.map_mut().insert(main, &2, &"b".into()).unwrap();
+        let _c2 = vp.map_mut().commit(main).unwrap();
+        let h2 = vp.merkle_root(main).unwrap();
+
+        vp.map_mut().insert(main, &3, &"c".into()).unwrap();
+        let _c3 = vp.map_mut().commit(main).unwrap();
+        let h3 = vp.merkle_root(main).unwrap();
+
+        // All different.
+        assert_ne!(h1, h2);
+        assert_ne!(h2, h3);
+        assert_ne!(h1, h3);
+
+        // Verify historical hashes are stable.
+        let h1_check = vp.merkle_root_at_commit(_c1).unwrap();
+        assert_eq!(h1, h1_check);
+    }
+
+    /// Full rebuild path: merkle_root_at_commit with no prior sync.
+    #[test]
+    fn test_merkle_root_at_commit_cold_start() {
+        let mut vp = new_proof();
+        let main = vp.map().main_branch();
+
+        vp.map_mut().insert(main, &1, &"a".into()).unwrap();
+        vp.map_mut().insert(main, &2, &"b".into()).unwrap();
+        let c1 = vp.map_mut().commit(main).unwrap();
+
+        // No prior merkle_root call — cold start.
+        let mut vp2 = VerMapWithProof::from_map(vp.map().clone());
+        let h = vp2.merkle_root_at_commit(c1).unwrap();
+        assert_eq!(h.len(), 32);
+
+        // Compare with the original.
+        let h_orig = vp.merkle_root_at_commit(c1).unwrap();
+        assert_eq!(h, h_orig);
     }
 }

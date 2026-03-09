@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "9.0.0"
+version = "9.1.0"
 authors = ["hui.fan@mail.ru"]
 edition = "2024"
 description = "A std-collection-like database"
@@ -22,7 +22,9 @@ serde_cbor_2 = { workspace = true, optional = true }
 
 ruc = { workspace = true }
 vsdb_core = { workspace = true }
-vsdb_trie_db = { workspace = true, optional = true }
+
+sha3 = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 rand = { workspace = true }
@@ -35,7 +37,6 @@ default = ["msgpack_codec"]
 serde_ende = []
 msgpack_codec = ["serde_ende", "msgpack"]
 cbor_codec = ["serde_ende", "serde_cbor_2"]
-merkle = ["vsdb_trie_db"]
 
 [[bench]]
 name = "basic"
@@ -43,4 +44,12 @@ harness = false
 
 [[bench]]
 name = "versioned"
+harness = false
+
+[[bench]]
+name = "slot_db"
+harness = false
+
+[[bench]]
+name = "trie_bench"
 harness = false

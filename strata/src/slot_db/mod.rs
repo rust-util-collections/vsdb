@@ -1,22 +1,17 @@
-//! # vsdb_slot_db
-//!
-//! `vsdb_slot_db` provides `SlotDB`, a skip-list-like data structure designed for
+//! `SlotDB` — a skip-list-like data structure designed for
 //! efficient, timestamp-based paged queries. It is ideal for indexing and querying
 //! large datasets where entries are associated with a slot (e.g., a timestamp or
 //! block number).
 
-#![deny(warnings)]
-#![cfg_attr(test, warn(warnings))]
-
+use crate::{
+    KeyEnDeOrdered, MapxOrd,
+    basic::{mapx_ord::MapxOrdIter as LargeIter, orphan::Orphan},
+};
 use ruc::*;
 use serde::{Deserialize, Serialize, de};
 use std::{
     collections::{BTreeSet, btree_set::Iter as SmallIter},
     ops::Bound,
-};
-use vsdb::{
-    KeyEnDeOrdered, MapxOrd,
-    basic::{mapx_ord::MapxOrdIter as LargeIter, orphan::Orphan},
 };
 
 type Slot = u64;
@@ -43,9 +38,7 @@ const INLINE_CAPACITY_THRESHOLD: usize = 8;
 /// rapid seeking and counting, making it highly efficient for pagination and
 /// range queries over large datasets.
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(
-    bound = "K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned"
-)]
+#[serde(bound = "K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned")]
 pub struct SlotDB<K>
 where
     K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
@@ -204,13 +197,7 @@ where
         page_index: PageIndex, // Start from 0
         reverse_order: bool,
     ) -> Vec<K> {
-        self.get_entries_by_page_slot(
-            None,
-            None,
-            page_size,
-            page_index,
-            reverse_order,
-        )
+        self.get_entries_by_page_slot(None, None, page_size, page_index, reverse_order)
     }
 
     /// Retrieves entries by page within a specified slot range.
@@ -299,8 +286,7 @@ where
                 + self.slot_entry_cnt(slot_end) as Distance
                 - (page_size as Distance) * (1 + page_index as Distance);
 
-            let distance_of_slot_start =
-                self.distance_to_the_leftmost_slot(slot_start);
+            let distance_of_slot_start = self.distance_to_the_leftmost_slot(slot_start);
 
             let take_n = if distance_of_slot_start <= skip_n {
                 page_size
@@ -345,8 +331,7 @@ where
         let mut local_idx: u64 = global_skip_num;
 
         for t in self.tiers.iter().rev() {
-            let mut hdr =
-                t.data.range((slot_start, Bound::Unbounded)).peekable();
+            let mut hdr = t.data.range((slot_start, Bound::Unbounded)).peekable();
             while let Some(entry_cnt) = hdr.next().map(|(_, cnt)| cnt) {
                 if entry_cnt > local_idx {
                     break;
@@ -360,11 +345,8 @@ where
             }
         }
 
-        let mut hdr =
-            self.data.range((slot_start, Bound::Unbounded)).peekable();
-        while let Some(entry_cnt) =
-            hdr.next().map(|(_, entries)| entries.len() as u64)
-        {
+        let mut hdr = self.data.range((slot_start, Bound::Unbounded)).peekable();
+        while let Some(entry_cnt) = hdr.next().map(|(_, entries)| entries.len() as u64) {
             if entry_cnt > local_idx {
                 break;
             } else {
@@ -397,8 +379,7 @@ where
 
         let mut ret = Vec::with_capacity(take_n as usize);
 
-        let (slot_start_actual, local_skip_n) =
-            self.get_local_skip_num(global_skip_n);
+        let (slot_start_actual, local_skip_n) = self.get_local_skip_num(global_skip_n);
 
         let mut skip_n = local_skip_n as usize;
         let take_n = take_n as usize;
@@ -576,9 +557,7 @@ where
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(
-    bound = "K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned"
-)]
+#[serde(bound = "K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned")]
 enum DataCtner<K>
 where
     K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
@@ -628,8 +607,7 @@ where
         match self {
             Self::Small(set) => {
                 // Only upgrade if we're about to exceed the inline threshold with a new key.
-                if set.len() >= INLINE_CAPACITY_THRESHOLD && !set.contains(&k)
-                {
+                if set.len() >= INLINE_CAPACITY_THRESHOLD && !set.contains(&k) {
                     // upgrade in-place (reuse existing helper)
                     self.try_upgrade();
                     // self is now Large, fall through by re-calling insert on the new state

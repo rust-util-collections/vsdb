@@ -1,7 +1,7 @@
 mod codec;
 pub use codec::NodeCodec;
 
-use crate::nibbles::Nibbles;
+use crate::trie::nibbles::Nibbles;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NodeHandle {

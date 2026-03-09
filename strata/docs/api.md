@@ -92,3 +92,112 @@ assert_eq!(m.get(main, &1).unwrap(), Some("updated".into()));
 m.delete_branch(feat).unwrap();
 m.gc();
 ```
+
+## MptCalc / SmtCalc (Merkle Trie)
+
+`MptCalc` and `SmtCalc` are stateless, in-memory Merkle trie implementations.
+
+```rust,ignore
+use vsdb::trie::MptCalc;
+
+// Build a trie
+let mut mpt = MptCalc::new();
+mpt.insert(b"key1", b"value1").unwrap();
+mpt.insert(b"key2", b"value2").unwrap();
+
+// Compute the 32-byte Merkle root hash
+let root = mpt.root_hash().unwrap();
+assert_eq!(root.len(), 32);
+
+// Lookup
+assert_eq!(mpt.get(b"key1").unwrap(), Some(b"value1".to_vec()));
+
+// Remove
+mpt.remove(b"key1").unwrap();
+assert_eq!(mpt.get(b"key1").unwrap(), None);
+
+// Batch update
+mpt.batch_update(&[
+    (b"k1".as_ref(), Some(b"v1".as_ref())),
+    (b"k2".as_ref(), None),  // remove
+]).unwrap();
+
+// Disposable cache: save to disk, restore later
+mpt.save_cache(std::path::Path::new("/tmp/mpt.cache"), 42).unwrap();
+let (loaded, sync_tag, root_hash) = MptCalc::load_cache(std::path::Path::new("/tmp/mpt.cache")).unwrap();
+```
+
+### SmtCalc with Proofs
+
+```rust,ignore
+use vsdb::trie::SmtCalc;
+
+let mut smt = SmtCalc::new();
+smt.insert(b"alice", b"100").unwrap();
+smt.insert(b"bob", b"200").unwrap();
+
+let root = smt.root_hash().unwrap();
+let root32: [u8; 32] = root.try_into().unwrap();
+
+// Membership proof
+let proof = smt.prove(b"alice").unwrap();
+assert_eq!(proof.value, Some(b"100".to_vec()));
+assert!(SmtCalc::verify_proof(&root32, &proof).unwrap());
+
+// Non-membership proof
+let proof = smt.prove(b"charlie").unwrap();
+assert_eq!(proof.value, None);
+assert!(SmtCalc::verify_proof(&root32, &proof).unwrap());
+```
+
+## VerMapWithProof
+
+Integrates `VerMap` with `MptCalc` for versioned Merkle root computation.
+
+```rust,ignore
+use vsdb::trie::VerMapWithProof;
+
+let mut vmp: VerMapWithProof<Vec<u8>, Vec<u8>> = VerMapWithProof::new();
+let main = vmp.map().main_branch();
+
+// Write data and commit
+vmp.map_mut().insert(main, &b"key1".to_vec(), &b"val1".to_vec()).unwrap();
+vmp.map_mut().commit(main).unwrap();
+
+// Compute the Merkle root (incrementally maintained)
+let root = vmp.merkle_root(main).unwrap();
+assert_eq!(root.len(), 32);
+
+// Save/restore cache for fast restarts
+vmp.save_cache(std::path::Path::new("/tmp/vermap.cache")).unwrap();
+```
+
+## SlotDB
+
+`SlotDB` is a skip-list-like index for efficient, timestamp-based paged queries.
+
+```rust,ignore
+use vsdb::slot_db::SlotDB;
+
+let mut db = SlotDB::<String>::new(10, false);
+
+// Insert entries into slots (e.g., timestamps)
+db.insert(100, "entry_a".to_string()).unwrap();
+db.insert(100, "entry_b".to_string()).unwrap();
+db.insert(200, "entry_c".to_string()).unwrap();
+db.insert(300, "entry_d".to_string()).unwrap();
+
+assert_eq!(db.total(), 4);
+
+// Paged queries
+let page = db.get_entries_by_page(2, 0, true);  // page_size=2, page_index=0, reverse=true
+assert_eq!(page, vec!["entry_d".to_string(), "entry_c".to_string()]);
+
+// Slot-range queries
+let entries = db.get_entries_by_page_slot(Some(100), Some(200), 10, 0, false);
+assert_eq!(entries.len(), 3);
+
+// Remove
+db.remove(100, &"entry_a".to_string());
+assert_eq!(db.total(), 3);
+```

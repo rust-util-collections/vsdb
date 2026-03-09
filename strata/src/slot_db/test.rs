@@ -64,8 +64,7 @@ fn assert_queryable(
             page_number as u32,
             true,
         );
-        let b =
-            db.get_entries_by_page(page_size as u16, page_number as u32, true);
+        let b = db.get_entries_by_page(page_size as u16, page_number as u32, true);
         assert_eq!(a, b);
 
         let a = test_db.get_entries_by_page_slot(
@@ -75,11 +74,7 @@ fn assert_queryable(
             page_number as u32,
             false,
         );
-        let b = db.get_entries_by_page(
-            page_size as u16,
-            page_number as u32,
-            false,
-        );
+        let b = db.get_entries_by_page(page_size as u16, page_number as u32, false);
         assert_eq!(a, b);
 
         //////////////////////////////////
@@ -87,8 +82,7 @@ fn assert_queryable(
         //////////////////////////////////
 
         let smin = random::<u64>() % (slot_min.saturating_add(100));
-        let smax = smin
-            + random::<u64>() % ((slot_max - slot_min).saturating_add(100));
+        let smax = smin + random::<u64>() % ((slot_max - slot_min).saturating_add(100));
 
         ////////////////////////////////////////
         ////////////////////////////////////////

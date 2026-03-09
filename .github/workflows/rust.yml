@@ -28,10 +28,6 @@ jobs:
       run: |
         cargo check -p vsdb --no-default-features --features msgpack_codec
         cargo check -p vsdb --no-default-features --features cbor_codec
-        cargo check -p vsdb_slot_db --no-default-features --features msgpack_codec
-        cargo check -p vsdb_slot_db --no-default-features --features cbor_codec
-        cargo check -p vsdb_trie_db --no-default-features --features msgpack_codec
-        cargo check -p vsdb_trie_db --no-default-features --features cbor_codec
         if cargo check -p vsdb --features cbor_codec; then
           echo "expected failure when both msgpack_codec and cbor_codec are enabled"
           exit 1

@@ -1,5 +1,5 @@
 use super::Node;
-use crate::nibbles::Nibbles;
+use crate::trie::nibbles::Nibbles;
 
 pub struct NodeCodec;
 

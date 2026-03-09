@@ -1,6 +1,6 @@
-use crate::error::Result;
-use crate::nibbles::Nibbles;
-use crate::node::{Node, NodeHandle};
+use crate::trie::error::Result;
+use crate::trie::nibbles::Nibbles;
+use crate::trie::node::{Node, NodeHandle};
 
 pub struct TrieRo<'a> {
     root: &'a NodeHandle,
