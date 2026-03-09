@@ -2,25 +2,13 @@
 name = "vsdb_trie_db"
 version = "9.0.0"
 edition = "2024"
-keywords = ["mpt", "trie", "database", "blockchain"]
+keywords = ["mpt", "trie", "merkle", "blockchain"]
 license = "MIT"
 authors = ["hui.fan@mail.ru"]
-description = "A lightweight, production-grade Merkle Patricia Trie (MPT) implementation for vsdb"
+description = "A lightweight, stateless Merkle Patricia Trie (MPT) implementation"
 homepage = "https://github.com/rust-util-collections/vsdb"
 repository = "https://github.com/rust-util-collections/vsdb"
 
 [dependencies]
-serde = { workspace = true }
-ruc = { workspace = true }
-vsdb = { workspace = true }
-
 sha3 = { workspace = true }
 thiserror = { workspace = true }
-
-[dev-dependencies]
-rand = { workspace = true }
-
-[features]
-default = ["msgpack_codec"]
-msgpack_codec = ["vsdb/msgpack_codec"]
-cbor_codec = ["vsdb/cbor_codec"]

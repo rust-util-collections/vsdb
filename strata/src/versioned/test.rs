@@ -2612,3 +2612,317 @@ fn fork_point_deep_chain() {
     // fork: 30 commits ahead
     assert_eq!(m.commit_distance(fork_tip, lca), Some(30));
 }
+
+// =====================================================================
+// Diff
+// =====================================================================
+
+#[test]
+fn diff_commits_basic() {
+    setup();
+    let mut m: VerMap<u32, String> = VerMap::new();
+    let main = m.main_branch();
+
+    m.insert(main, &1, &"a".into()).unwrap();
+    m.insert(main, &2, &"b".into()).unwrap();
+    let c1 = m.commit(main).unwrap();
+
+    m.insert(main, &2, &"B".into()).unwrap(); // modify
+    m.insert(main, &3, &"c".into()).unwrap(); // add
+    m.remove(main, &1).unwrap(); // remove
+    let c2 = m.commit(main).unwrap();
+
+    let diff = m.diff_commits(c1, c2).unwrap();
+    assert_eq!(diff.len(), 3);
+
+    use super::diff::DiffEntry;
+    // Diff is in ascending key order.
+    assert!(matches!(&diff[0], DiffEntry::Removed { key, .. } if key == &1u32.to_be_bytes()));
+    assert!(matches!(&diff[1], DiffEntry::Modified { key, .. } if key == &2u32.to_be_bytes()));
+    assert!(matches!(&diff[2], DiffEntry::Added { key, .. } if key == &3u32.to_be_bytes()));
+}
+
+#[test]
+fn diff_commits_identical() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+
+    m.insert(main, &1, &10).unwrap();
+    let c1 = m.commit(main).unwrap();
+
+    let diff = m.diff_commits(c1, c1).unwrap();
+    assert!(diff.is_empty());
+}
+
+#[test]
+fn diff_uncommitted_changes() {
+    setup();
+    let mut m: VerMap<u32, String> = VerMap::new();
+    let main = m.main_branch();
+
+    m.insert(main, &1, &"a".into()).unwrap();
+    m.insert(main, &2, &"b".into()).unwrap();
+    let _c1 = m.commit(main).unwrap();
+
+    // Make uncommitted changes.
+    m.insert(main, &3, &"c".into()).unwrap();
+    m.remove(main, &1).unwrap();
+
+    let diff = m.diff_uncommitted(main).unwrap();
+    assert_eq!(diff.len(), 2);
+
+    use super::diff::DiffEntry;
+    assert!(matches!(&diff[0], DiffEntry::Removed { key, .. } if key == &1u32.to_be_bytes()));
+    assert!(matches!(&diff[1], DiffEntry::Added { key, .. } if key == &3u32.to_be_bytes()));
+}
+
+#[test]
+fn diff_uncommitted_no_changes() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+
+    m.insert(main, &1, &10).unwrap();
+    let _c1 = m.commit(main).unwrap();
+
+    let diff = m.diff_uncommitted(main).unwrap();
+    assert!(diff.is_empty());
+}
+
+#[test]
+fn diff_from_empty() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+
+    // First commit with some data.
+    m.insert(main, &1, &10).unwrap();
+    m.insert(main, &2, &20).unwrap();
+
+    // Diff of uncommitted from empty HEAD.
+    let diff = m.diff_uncommitted(main).unwrap();
+    assert_eq!(diff.len(), 2);
+
+    use super::diff::DiffEntry;
+    assert!(matches!(&diff[0], DiffEntry::Added { .. }));
+    assert!(matches!(&diff[1], DiffEntry::Added { .. }));
+}
+
+#[test]
+fn diff_across_branches() {
+    setup();
+    let mut m: VerMap<u32, String> = VerMap::new();
+    let main = m.main_branch();
+
+    m.insert(main, &1, &"a".into()).unwrap();
+    m.insert(main, &2, &"b".into()).unwrap();
+    let c1 = m.commit(main).unwrap();
+
+    // Fork and diverge.
+    let feat = m.create_branch("feat", main).unwrap();
+    m.insert(feat, &1, &"A".into()).unwrap();
+    m.insert(feat, &3, &"c".into()).unwrap();
+    let c2 = m.commit(feat).unwrap();
+
+    // Diff between the two branch heads.
+    let diff = m.diff_commits(c1, c2).unwrap();
+    assert_eq!(diff.len(), 2);
+
+    use super::diff::DiffEntry;
+    assert!(matches!(&diff[0], DiffEntry::Modified { key, .. } if key == &1u32.to_be_bytes()));
+    assert!(matches!(&diff[1], DiffEntry::Added { key, .. } if key == &3u32.to_be_bytes()));
+}
+
+// =========================================================================
+// VerMapWithProof tests (feature = "merkle")
+// =========================================================================
+
+#[cfg(feature = "merkle")]
+mod proof_tests {
+    use super::super::map::VerMap;
+    use super::super::proof::VerMapWithProof;
+
+    type Vm = VerMap<u32, String>;
+
+    fn new_proof() -> VerMapWithProof<u32, String> {
+        VerMapWithProof::new()
+    }
+
+    #[test]
+    fn test_basic_merkle_root() {
+        let mut vp = new_proof();
+        let main = vp.map().main_branch();
+
+        vp.map_mut().insert(main, &1, &"hello".into()).unwrap();
+        vp.map_mut().insert(main, &2, &"world".into()).unwrap();
+        let _c1 = vp.map_mut().commit(main).unwrap();
+
+        let hash = vp.merkle_root(main).unwrap();
+        assert_eq!(hash.len(), 32);
+    }
+
+    #[test]
+    fn test_merkle_root_deterministic() {
+        let mut vp1 = new_proof();
+        let main1 = vp1.map().main_branch();
+        vp1.map_mut().insert(main1, &1, &"a".into()).unwrap();
+        vp1.map_mut().insert(main1, &2, &"b".into()).unwrap();
+        let _c1 = vp1.map_mut().commit(main1).unwrap();
+        let hash1 = vp1.merkle_root(main1).unwrap();
+
+        let mut vp2 = new_proof();
+        let main2 = vp2.map().main_branch();
+        vp2.map_mut().insert(main2, &1, &"a".into()).unwrap();
+        vp2.map_mut().insert(main2, &2, &"b".into()).unwrap();
+        let _c2 = vp2.map_mut().commit(main2).unwrap();
+        let hash2 = vp2.merkle_root(main2).unwrap();
+
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_incremental_update() {
+        let mut vp = new_proof();
+        let main = vp.map().main_branch();
+
+        vp.map_mut().insert(main, &1, &"a".into()).unwrap();
+        vp.map_mut().insert(main, &2, &"b".into()).unwrap();
+        let _c1 = vp.map_mut().commit(main).unwrap();
+        let hash1 = vp.merkle_root(main).unwrap();
+
+        vp.map_mut().insert(main, &2, &"B".into()).unwrap();
+        let _c2 = vp.map_mut().commit(main).unwrap();
+        let hash2 = vp.merkle_root(main).unwrap();
+
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_merkle_root_at_commit() {
+        let mut vp = new_proof();
+        let main = vp.map().main_branch();
+
+        vp.map_mut().insert(main, &1, &"a".into()).unwrap();
+        let c1 = vp.map_mut().commit(main).unwrap();
+
+        vp.map_mut().insert(main, &2, &"b".into()).unwrap();
+        let c2 = vp.map_mut().commit(main).unwrap();
+
+        let h1 = vp.merkle_root_at_commit(c1).unwrap();
+        let h2 = vp.merkle_root_at_commit(c2).unwrap();
+        assert_ne!(h1, h2);
+
+        let h1_again = vp.merkle_root_at_commit(c1).unwrap();
+        assert_eq!(h1, h1_again);
+    }
+
+    #[test]
+    fn test_branch_isolation() {
+        let mut vp = new_proof();
+        let main = vp.map().main_branch();
+
+        vp.map_mut().insert(main, &1, &"a".into()).unwrap();
+        vp.map_mut().insert(main, &2, &"b".into()).unwrap();
+        let _c1 = vp.map_mut().commit(main).unwrap();
+
+        let feat = vp.map_mut().create_branch("feat", main).unwrap();
+        vp.map_mut().insert(feat, &3, &"c".into()).unwrap();
+        let _c2 = vp.map_mut().commit(feat).unwrap();
+
+        let hash_main = vp.merkle_root(main).unwrap();
+        let hash_feat = vp.merkle_root(feat).unwrap();
+        assert_ne!(hash_main, hash_feat);
+    }
+
+    #[test]
+    fn test_uncommitted_changes() {
+        let mut vp = new_proof();
+        let main = vp.map().main_branch();
+
+        vp.map_mut().insert(main, &1, &"a".into()).unwrap();
+        let _c1 = vp.map_mut().commit(main).unwrap();
+        let hash_committed = vp.merkle_root(main).unwrap();
+
+        vp.map_mut().insert(main, &2, &"b".into()).unwrap();
+        let hash_dirty = vp.merkle_root(main).unwrap();
+        assert_ne!(hash_committed, hash_dirty);
+    }
+
+    #[test]
+    fn test_from_existing_map() {
+        let mut m: Vm = VerMap::new();
+        let main = m.main_branch();
+        m.insert(main, &1, &"hello".into()).unwrap();
+        m.insert(main, &2, &"world".into()).unwrap();
+        let _c1 = m.commit(main).unwrap();
+
+        let mut vp = VerMapWithProof::from_map(m);
+        let hash = vp.merkle_root(main).unwrap();
+        assert_eq!(hash.len(), 32);
+    }
+
+    #[test]
+    fn test_cache_save_load() {
+        let dir = std::env::temp_dir().join("vsdb_proof_cache_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let cache_path = dir.join("mpt.cache");
+
+        let main;
+        let hash1;
+
+        {
+            let mut vp = new_proof();
+            main = vp.map().main_branch();
+            vp.map_mut().insert(main, &1, &"a".into()).unwrap();
+            vp.map_mut().insert(main, &2, &"b".into()).unwrap();
+            let _c1 = vp.map_mut().commit(main).unwrap();
+            hash1 = vp.merkle_root(main).unwrap();
+            vp.save_cache(&cache_path).unwrap();
+        }
+
+        {
+            let mut m: Vm = VerMap::new();
+            let br = m.main_branch();
+            m.insert(br, &1, &"a".into()).unwrap();
+            m.insert(br, &2, &"b".into()).unwrap();
+            let _c1 = m.commit(br).unwrap();
+
+            let mut vp = VerMapWithProof::from_map(m);
+            let hash_restored = vp.load_cache_and_sync(&cache_path, br).unwrap();
+            assert_eq!(hash1, hash_restored);
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_merge_determinism() {
+        let mut vp = new_proof();
+        let main = vp.map().main_branch();
+
+        vp.map_mut().insert(main, &1, &"a".into()).unwrap();
+        vp.map_mut().insert(main, &2, &"b".into()).unwrap();
+        let _c1 = vp.map_mut().commit(main).unwrap();
+
+        let feat = vp.map_mut().create_branch("feat", main).unwrap();
+        vp.map_mut().insert(feat, &3, &"c".into()).unwrap();
+        let _c2 = vp.map_mut().commit(feat).unwrap();
+
+        let _merge_commit = vp.map_mut().merge(feat, main).unwrap();
+
+        let hash_main = vp.merkle_root(main).unwrap();
+        let hash_feat = vp.merkle_root(feat).unwrap();
+        assert_eq!(hash_main, hash_feat);
+    }
+
+    #[test]
+    fn test_empty_map_merkle_root() {
+        let mut vp = new_proof();
+        let main = vp.map().main_branch();
+
+        vp.map_mut().commit(main).unwrap();
+        let hash = vp.merkle_root(main).unwrap();
+        assert_eq!(hash.len(), 32);
+    }
+}

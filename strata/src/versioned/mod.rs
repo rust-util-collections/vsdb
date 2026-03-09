@@ -31,8 +31,12 @@
 //! ```
 //!
 
+pub mod diff;
 pub mod map;
 pub mod merge;
+
+#[cfg(feature = "merkle")]
+pub mod proof;
 
 #[cfg(test)]
 mod test;

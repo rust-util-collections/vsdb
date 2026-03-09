@@ -22,6 +22,7 @@ serde_cbor_2 = { workspace = true, optional = true }
 
 ruc = { workspace = true }
 vsdb_core = { workspace = true }
+vsdb_trie_db = { workspace = true, optional = true }
 
 [dev-dependencies]
 rand = { workspace = true }
@@ -34,6 +35,7 @@ default = ["msgpack_codec"]
 serde_ende = []
 msgpack_codec = ["serde_ende", "msgpack"]
 cbor_codec = ["serde_ende", "serde_cbor_2"]
+merkle = ["vsdb_trie_db"]
 
 [[bench]]
 name = "basic"

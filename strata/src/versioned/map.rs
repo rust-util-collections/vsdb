@@ -409,6 +409,33 @@ where
             .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(V::decode(&v)))))
     }
 
+    /// Iterates all raw (untyped) key-value pairs on a branch.
+    ///
+    /// Returns `(Vec<u8>, Vec<u8>)` without decoding, useful for
+    /// feeding into external consumers (e.g. MPT hash computation).
+    pub fn raw_iter(
+        &self,
+        branch: BranchId,
+    ) -> Result<impl Iterator<Item = (Vec<u8>, Vec<u8>)> + '_> {
+        let state = self
+            .branches
+            .get(&branch)
+            .ok_or_else(|| eg!("branch not found"))?;
+        Ok(self.tree.iter(state.dirty_root))
+    }
+
+    /// Iterates all raw (untyped) key-value pairs at a historical commit.
+    pub fn raw_iter_at_commit(
+        &self,
+        commit_id: CommitId,
+    ) -> Result<impl Iterator<Item = (Vec<u8>, Vec<u8>)> + '_> {
+        let commit = self
+            .commits
+            .get(&commit_id)
+            .ok_or_else(|| eg!("commit not found"))?;
+        Ok(self.tree.iter(commit.root))
+    }
+
     /// Checks if `key` exists at a specific historical commit.
     pub fn contains_key_at_commit(&self, commit_id: CommitId, key: &K) -> Result<bool> {
         let commit = self
@@ -778,6 +805,58 @@ where
             }
         }
         Ok(result)
+    }
+
+    // =================================================================
+    // Diff
+    // =================================================================
+
+    /// Computes the diff between two commits.
+    ///
+    /// Returns a list of [`DiffEntry`](super::diff::DiffEntry) in
+    /// ascending key order, describing every key that was added, removed,
+    /// or modified between `from` and `to`.
+    pub fn diff_commits(
+        &self,
+        from: CommitId,
+        to: CommitId,
+    ) -> Result<Vec<super::diff::DiffEntry>> {
+        let from_commit = self
+            .commits
+            .get(&from)
+            .ok_or_else(|| eg!("from commit not found"))?;
+        let to_commit = self
+            .commits
+            .get(&to)
+            .ok_or_else(|| eg!("to commit not found"))?;
+        Ok(super::diff::diff_roots(
+            &self.tree,
+            from_commit.root,
+            to_commit.root,
+        ))
+    }
+
+    /// Computes the diff of uncommitted (working) changes on `branch`.
+    ///
+    /// Analogous to `git diff` (unstaged changes relative to HEAD).
+    pub fn diff_uncommitted(
+        &self,
+        branch: BranchId,
+    ) -> Result<Vec<super::diff::DiffEntry>> {
+        let state = self
+            .branches
+            .get(&branch)
+            .ok_or_else(|| eg!("branch not found"))?;
+        let head_root = if state.head == NO_COMMIT {
+            EMPTY_ROOT
+        } else {
+            self.commits.get(&state.head).unwrap().root
+        };
+        Ok(super::diff::diff_roots(
+            &self.tree,
+            head_root,
+            state.dirty_root,
+        ))
     }
 
     // =================================================================
