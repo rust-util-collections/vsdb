@@ -1,7 +1,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use rand::random;
 use std::hint::black_box;
-use vsdb::slot_db::SlotDB;
+use vsdb::slotdex::SlotDB;
 
 const DATA_SIZE: u32 = 100_000;
 

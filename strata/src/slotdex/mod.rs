@@ -1,7 +1,8 @@
-//! `SlotDB` — a skip-list-like data structure designed for
-//! efficient, timestamp-based paged queries. It is ideal for indexing and querying
-//! large datasets where entries are associated with a slot (e.g., a timestamp or
-//! block number).
+//! Slot-based index for efficient, timestamp-based paged queries.
+//!
+//! [`SlotDB`] is a skip-list-like data structure ideal for indexing and
+//! querying large datasets where entries are associated with a slot
+//! (e.g., a timestamp or block number).
 
 use crate::{
     KeyEnDeOrdered, MapxOrd,

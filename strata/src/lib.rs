@@ -39,7 +39,7 @@ pub mod dagmap;
 pub mod versioned;
 
 /// Skip-list-like index for efficient, timestamp-based paged queries.
-pub mod slot_db;
+pub mod slotdex;
 
 /// Lightweight, stateless Merkle trie implementations (MPT + SMT).
 pub mod trie;
@@ -64,7 +64,7 @@ pub use dagmap::{DagMapId, raw::DagMapRaw, rawkey::DagMapRawKey};
 pub use trie::{MptCalc, SmtCalc, SmtProof, VerMapWithProof};
 
 // SlotDB
-pub use slot_db::SlotDB;
+pub use slotdex::SlotDB;
 
 // Re-export all of vsdb_core for convenience
 pub use vsdb_core::{self, *};

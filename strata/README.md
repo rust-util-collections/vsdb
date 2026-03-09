@@ -226,7 +226,7 @@ assert_eq!(root.len(), 32);
 `SlotDB` is a skip-list-like data structure for fast, timestamp-based paged queries.
 
 ```rust,ignore
-use vsdb::slot_db::SlotDB;
+use vsdb::slotdex::SlotDB;
 
 let mut db = SlotDB::<String>::new(10, false);
 

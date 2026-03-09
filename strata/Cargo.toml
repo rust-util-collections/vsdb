@@ -47,7 +47,7 @@ name = "versioned"
 harness = false
 
 [[bench]]
-name = "slot_db"
+name = "slotdex"
 harness = false
 
 [[bench]]

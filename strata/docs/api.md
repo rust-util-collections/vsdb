@@ -177,7 +177,7 @@ vmp.save_cache(std::path::Path::new("/tmp/vermap.cache")).unwrap();
 `SlotDB` is a skip-list-like index for efficient, timestamp-based paged queries.
 
 ```rust,ignore
-use vsdb::slot_db::SlotDB;
+use vsdb::slotdex::SlotDB;
 
 let mut db = SlotDB::<String>::new(10, false);
 
