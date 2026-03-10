@@ -141,7 +141,7 @@ where
     /// The MPT must be synced (call `merkle_root` first) and must be
     /// synced to a committed state (not uncommitted changes).
     pub fn save_cache(&mut self, path: &Path) -> Result<()> {
-        let tag = self.sync_commit.ok_or_else(|| eg!("no synced commit"))?;
+        let tag = self.sync_commit.c(d!("no synced commit"))?;
         self.mpt.save_cache(path, tag).c(d!())
     }
 

@@ -194,9 +194,7 @@ where
     /// The previous main branch becomes an ordinary branch (deletable).
     /// The new main branch is protected from deletion.
     pub fn set_main_branch(&mut self, branch: BranchId) -> Result<()> {
-        if !self.branches.contains_key(&branch) {
-            return Err(eg!("branch not found"));
-        }
+        self.branches.get(&branch).c(d!("branch not found"))?;
         *self.main_branch.get_mut() = branch;
         Ok(())
     }
@@ -220,7 +218,7 @@ where
         let src = self
             .branches
             .get(&source_branch)
-            .ok_or_else(|| eg!("source branch not found"))?;
+            .c(d!("source branch not found"))?;
 
         let id = self.next_branch.get_value();
         *self.next_branch.get_mut() = id + 1;
@@ -241,10 +239,7 @@ where
         if branch == self.main_branch.get_value() {
             return Err(eg!("cannot delete the main branch"));
         }
-        let state = self
-            .branches
-            .get(&branch)
-            .ok_or_else(|| eg!("branch not found"))?;
+        let state = self.branches.get(&branch).c(d!("branch not found"))?;
         self.branch_names.remove(&state.name);
         self.branches.remove(&branch);
         Ok(())
@@ -268,14 +263,15 @@ where
     /// Returns `true` if the branch has uncommitted changes (dirty state
     /// differs from the head commit's snapshot).
     pub fn has_uncommitted(&self, branch: BranchId) -> Result<bool> {
-        let state = self
-            .branches
-            .get(&branch)
-            .ok_or_else(|| eg!("branch not found"))?;
+        let state = self.branches.get(&branch).c(d!("branch not found"))?;
         if state.head == NO_COMMIT {
             Ok(state.dirty_root != EMPTY_ROOT)
         } else {
-            let head_root = self.commits.get(&state.head).unwrap().root;
+            let head_root = self
+                .commits
+                .get(&state.head)
+                .c(d!("head commit {} missing", state.head))?
+                .root;
             Ok(state.dirty_root != head_root)
         }
     }
@@ -286,10 +282,7 @@ where
 
     /// Reads a value from the working state of `branch`.
     pub fn get(&self, branch: BranchId, key: &K) -> Result<Option<V>> {
-        let state = self
-            .branches
-            .get(&branch)
-            .ok_or_else(|| eg!("branch not found"))?;
+        let state = self.branches.get(&branch).c(d!("branch not found"))?;
         let raw = self.tree.get(state.dirty_root, &key.to_bytes());
         match raw {
             Some(v) => Ok(Some(pnk!(V::decode(&v)))),
@@ -299,10 +292,7 @@ where
 
     /// Reads a value at a specific historical commit.
     pub fn get_at_commit(&self, commit_id: CommitId, key: &K) -> Result<Option<V>> {
-        let commit = self
-            .commits
-            .get(&commit_id)
-            .ok_or_else(|| eg!("commit not found"))?;
+        let commit = self.commits.get(&commit_id).c(d!("commit not found"))?;
         let raw = self.tree.get(commit.root, &key.to_bytes());
         match raw {
             Some(v) => Ok(Some(pnk!(V::decode(&v)))),
@@ -312,19 +302,13 @@ where
 
     /// Checks if `key` exists in the working state of `branch`.
     pub fn contains_key(&self, branch: BranchId, key: &K) -> Result<bool> {
-        let state = self
-            .branches
-            .get(&branch)
-            .ok_or_else(|| eg!("branch not found"))?;
+        let state = self.branches.get(&branch).c(d!("branch not found"))?;
         Ok(self.tree.contains_key(state.dirty_root, &key.to_bytes()))
     }
 
     /// Iterates all entries on `branch` in ascending key order.
     pub fn iter(&self, branch: BranchId) -> Result<impl Iterator<Item = (K, V)> + '_> {
-        let state = self
-            .branches
-            .get(&branch)
-            .ok_or_else(|| eg!("branch not found"))?;
+        let state = self.branches.get(&branch).c(d!("branch not found"))?;
         Ok(self
             .tree
             .iter(state.dirty_root)
@@ -338,10 +322,7 @@ where
         lo: Bound<&K>,
         hi: Bound<&K>,
     ) -> Result<impl Iterator<Item = (K, V)> + '_> {
-        let state = self
-            .branches
-            .get(&branch)
-            .ok_or_else(|| eg!("branch not found"))?;
+        let state = self.branches.get(&branch).c(d!("branch not found"))?;
         let lo_raw = match lo {
             Bound::Included(k) => Bound::Included(k.to_bytes()),
             Bound::Excluded(k) => Bound::Excluded(k.to_bytes()),
@@ -367,10 +348,7 @@ where
         &self,
         commit_id: CommitId,
     ) -> Result<impl Iterator<Item = (K, V)> + '_> {
-        let commit = self
-            .commits
-            .get(&commit_id)
-            .ok_or_else(|| eg!("commit not found"))?;
+        let commit = self.commits.get(&commit_id).c(d!("commit not found"))?;
         Ok(self
             .tree
             .iter(commit.root)
@@ -385,10 +363,7 @@ where
         lo: Bound<&K>,
         hi: Bound<&K>,
     ) -> Result<impl Iterator<Item = (K, V)> + '_> {
-        let commit = self
-            .commits
-            .get(&commit_id)
-            .ok_or_else(|| eg!("commit not found"))?;
+        let commit = self.commits.get(&commit_id).c(d!("commit not found"))?;
         let lo_raw = match lo {
             Bound::Included(k) => Bound::Included(k.to_bytes()),
             Bound::Excluded(k) => Bound::Excluded(k.to_bytes()),
@@ -417,10 +392,7 @@ where
         &self,
         branch: BranchId,
     ) -> Result<impl Iterator<Item = (Vec<u8>, Vec<u8>)> + '_> {
-        let state = self
-            .branches
-            .get(&branch)
-            .ok_or_else(|| eg!("branch not found"))?;
+        let state = self.branches.get(&branch).c(d!("branch not found"))?;
         Ok(self.tree.iter(state.dirty_root))
     }
 
@@ -429,19 +401,13 @@ where
         &self,
         commit_id: CommitId,
     ) -> Result<impl Iterator<Item = (Vec<u8>, Vec<u8>)> + '_> {
-        let commit = self
-            .commits
-            .get(&commit_id)
-            .ok_or_else(|| eg!("commit not found"))?;
+        let commit = self.commits.get(&commit_id).c(d!("commit not found"))?;
         Ok(self.tree.iter(commit.root))
     }
 
     /// Checks if `key` exists at a specific historical commit.
     pub fn contains_key_at_commit(&self, commit_id: CommitId, key: &K) -> Result<bool> {
-        let commit = self
-            .commits
-            .get(&commit_id)
-            .ok_or_else(|| eg!("commit not found"))?;
+        let commit = self.commits.get(&commit_id).c(d!("commit not found"))?;
         Ok(self.tree.contains_key(commit.root, &key.to_bytes()))
     }
 
@@ -451,10 +417,7 @@ where
 
     /// Inserts a key-value pair into the working state of `branch`.
     pub fn insert(&mut self, branch: BranchId, key: &K, value: &V) -> Result<()> {
-        let mut state = self
-            .branches
-            .get(&branch)
-            .ok_or_else(|| eg!("branch not found"))?;
+        let mut state = self.branches.get(&branch).c(d!("branch not found"))?;
         state.dirty_root =
             self.tree
                 .insert(state.dirty_root, &key.to_bytes(), &value.encode());
@@ -464,10 +427,7 @@ where
 
     /// Removes a key from the working state of `branch`.
     pub fn remove(&mut self, branch: BranchId, key: &K) -> Result<()> {
-        let mut state = self
-            .branches
-            .get(&branch)
-            .ok_or_else(|| eg!("branch not found"))?;
+        let mut state = self.branches.get(&branch).c(d!("branch not found"))?;
         state.dirty_root = self.tree.remove(state.dirty_root, &key.to_bytes());
         self.branches.insert(&branch, &state);
         Ok(())
@@ -480,10 +440,7 @@ where
     /// Commits the current working state of `branch`, creating a new
     /// immutable [`Commit`].  Returns the commit ID.
     pub fn commit(&mut self, branch: BranchId) -> Result<CommitId> {
-        let state = self
-            .branches
-            .get(&branch)
-            .ok_or_else(|| eg!("branch not found"))?;
+        let state = self.branches.get(&branch).c(d!("branch not found"))?;
 
         let id = self.next_commit.get_value();
         *self.next_commit.get_mut() = id + 1;
@@ -511,14 +468,14 @@ where
     /// Discards uncommitted changes, resetting the working state to the
     /// branch head.
     pub fn discard(&mut self, branch: BranchId) -> Result<()> {
-        let state = self
-            .branches
-            .get(&branch)
-            .ok_or_else(|| eg!("branch not found"))?;
+        let state = self.branches.get(&branch).c(d!("branch not found"))?;
         let root = if state.head == NO_COMMIT {
             EMPTY_ROOT
         } else {
-            self.commits.get(&state.head).unwrap().root
+            self.commits
+                .get(&state.head)
+                .c(d!("head commit {} missing", state.head))?
+                .root
         };
         let new_state = BranchState {
             dirty_root: root,
@@ -537,14 +494,8 @@ where
     pub fn rollback_to(&mut self, branch: BranchId, target: CommitId) -> Result<()> {
         use std::collections::HashSet;
 
-        let state = self
-            .branches
-            .get(&branch)
-            .ok_or_else(|| eg!("branch not found"))?;
-        let _ = self
-            .commits
-            .get(&target)
-            .ok_or_else(|| eg!("commit not found"))?;
+        let state = self.branches.get(&branch).c(d!("branch not found"))?;
+        let _ = self.commits.get(&target).c(d!("commit not found"))?;
 
         // Verify target is reachable from the branch head.
         if state.head != NO_COMMIT && target != state.head {
@@ -570,7 +521,10 @@ where
             }
         }
 
-        let commit = self.commits.get(&target).unwrap();
+        let commit = self
+            .commits
+            .get(&target)
+            .c(d!("target commit {} missing", target))?;
         let new_state = BranchState {
             name: state.name,
             head: target,
@@ -621,18 +575,21 @@ where
         let src = self
             .branches
             .get(&source)
-            .ok_or_else(|| eg!("source branch not found"))?;
+            .c(d!("source branch not found"))?;
         let tgt = self
             .branches
             .get(&target)
-            .ok_or_else(|| eg!("target branch not found"))?;
+            .c(d!("target branch not found"))?;
 
         if src.head == NO_COMMIT {
             return Err(eg!("source branch has no commits"));
         }
         if tgt.head == NO_COMMIT {
             // Target is empty — just fast-forward.
-            let src_commit = self.commits.get(&src.head).unwrap();
+            let src_commit = self
+                .commits
+                .get(&src.head)
+                .c(d!("source head commit {} missing", src.head))?;
             let new_state = BranchState {
                 head: src.head,
                 dirty_root: src_commit.root,
@@ -642,13 +599,24 @@ where
             return Ok(src.head);
         }
 
-        let src_commit = self.commits.get(&src.head).unwrap();
-        let tgt_commit = self.commits.get(&tgt.head).unwrap();
+        let src_commit = self
+            .commits
+            .get(&src.head)
+            .c(d!("source head commit {} missing", src.head))?;
+        let tgt_commit = self
+            .commits
+            .get(&tgt.head)
+            .c(d!("target head commit {} missing", tgt.head))?;
 
         // Find common ancestor.
         let ancestor_id = self.find_common_ancestor(src.head, tgt.head);
         let ancestor_root = match ancestor_id {
-            Some(aid) => self.commits.get(&aid).unwrap().root,
+            Some(aid) => {
+                self.commits
+                    .get(&aid)
+                    .c(d!("ancestor commit {} missing", aid))?
+                    .root
+            }
             None => EMPTY_ROOT,
         };
 
@@ -680,7 +648,7 @@ where
         Ok(id)
     }
 
-    /// Finds the lowest common ancestor of two commits via BFS.
+    /// Finds the lowest common ancestor of two commits via alternating BFS.
     fn find_common_ancestor(&self, a: CommitId, b: CommitId) -> Option<CommitId> {
         use std::collections::HashSet;
 
@@ -693,9 +661,10 @@ where
             if queue_a.is_empty() && queue_b.is_empty() {
                 return None;
             }
-            // Expand a.
-            let mut next_a = Vec::new();
-            for id in queue_a.drain(..) {
+            // Expand a — reuse the same Vec via drain + extend in place.
+            let drain_end = queue_a.len();
+            for i in 0..drain_end {
+                let id = queue_a[i];
                 if id == NO_COMMIT || !visited_a.insert(id) {
                     continue;
                 }
@@ -703,14 +672,15 @@ where
                     return Some(id);
                 }
                 if let Some(c) = self.commits.get(&id) {
-                    next_a.extend_from_slice(&c.parents);
+                    queue_a.extend_from_slice(&c.parents);
                 }
             }
-            queue_a = next_a;
+            queue_a.drain(..drain_end);
 
             // Expand b.
-            let mut next_b = Vec::new();
-            for id in queue_b.drain(..) {
+            let drain_end = queue_b.len();
+            for i in 0..drain_end {
+                let id = queue_b[i];
                 if id == NO_COMMIT || !visited_b.insert(id) {
                     continue;
                 }
@@ -718,10 +688,10 @@ where
                     return Some(id);
                 }
                 if let Some(c) = self.commits.get(&id) {
-                    next_b.extend_from_slice(&c.parents);
+                    queue_b.extend_from_slice(&c.parents);
                 }
             }
-            queue_b = next_b;
+            queue_b.drain(..drain_end);
         }
     }
 
@@ -774,10 +744,7 @@ where
 
     /// Returns the commit at the head of `branch`.
     pub fn head_commit(&self, branch: BranchId) -> Result<Option<Commit>> {
-        let state = self
-            .branches
-            .get(&branch)
-            .ok_or_else(|| eg!("branch not found"))?;
+        let state = self.branches.get(&branch).c(d!("branch not found"))?;
         if state.head == NO_COMMIT {
             Ok(None)
         } else {
@@ -790,10 +757,7 @@ where
     /// For merge commits, only the first parent (the target branch at merge
     /// time) is followed — analogous to `git log --first-parent`.
     pub fn log(&self, branch: BranchId) -> Result<Vec<Commit>> {
-        let state = self
-            .branches
-            .get(&branch)
-            .ok_or_else(|| eg!("branch not found"))?;
+        let state = self.branches.get(&branch).c(d!("branch not found"))?;
         let mut result = Vec::new();
         let mut cur = state.head;
         while cur != NO_COMMIT {
@@ -821,14 +785,8 @@ where
         from: CommitId,
         to: CommitId,
     ) -> Result<Vec<super::diff::DiffEntry>> {
-        let from_commit = self
-            .commits
-            .get(&from)
-            .ok_or_else(|| eg!("from commit not found"))?;
-        let to_commit = self
-            .commits
-            .get(&to)
-            .ok_or_else(|| eg!("to commit not found"))?;
+        let from_commit = self.commits.get(&from).c(d!("from commit not found"))?;
+        let to_commit = self.commits.get(&to).c(d!("to commit not found"))?;
         Ok(super::diff::diff_roots(
             &self.tree,
             from_commit.root,
@@ -843,14 +801,14 @@ where
         &self,
         branch: BranchId,
     ) -> Result<Vec<super::diff::DiffEntry>> {
-        let state = self
-            .branches
-            .get(&branch)
-            .ok_or_else(|| eg!("branch not found"))?;
+        let state = self.branches.get(&branch).c(d!("branch not found"))?;
         let head_root = if state.head == NO_COMMIT {
             EMPTY_ROOT
         } else {
-            self.commits.get(&state.head).unwrap().root
+            self.commits
+                .get(&state.head)
+                .c(d!("head commit {} missing", state.head))?
+                .root
         };
         Ok(super::diff::diff_roots(
             &self.tree,

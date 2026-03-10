@@ -118,6 +118,12 @@ impl Node {
     // ---- decode ----
 
     fn decode(data: &[u8]) -> Self {
+        let len = data.len();
+        assert!(
+            len >= 5,
+            "PersistentBTree: node data too short ({len} bytes)"
+        );
+
         let mut pos = 0;
 
         let tag = data[pos];
@@ -131,14 +137,30 @@ impl Node {
                 let mut keys = Vec::with_capacity(n);
                 let mut values = Vec::with_capacity(n);
                 for _ in 0..n {
+                    assert!(
+                        pos + 4 <= len,
+                        "PersistentBTree: truncated leaf key length at pos {pos}"
+                    );
                     let klen = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap())
                         as usize;
                     pos += 4;
+                    assert!(
+                        pos + klen <= len,
+                        "PersistentBTree: truncated leaf key at pos {pos}, klen={klen}"
+                    );
                     keys.push(data[pos..pos + klen].to_vec());
                     pos += klen;
+                    assert!(
+                        pos + 4 <= len,
+                        "PersistentBTree: truncated leaf value length at pos {pos}"
+                    );
                     let vlen = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap())
                         as usize;
                     pos += 4;
+                    assert!(
+                        pos + vlen <= len,
+                        "PersistentBTree: truncated leaf value at pos {pos}, vlen={vlen}"
+                    );
                     values.push(data[pos..pos + vlen].to_vec());
                     pos += vlen;
                 }
@@ -147,14 +169,26 @@ impl Node {
             TAG_INTERNAL => {
                 let mut keys = Vec::with_capacity(n);
                 for _ in 0..n {
+                    assert!(
+                        pos + 4 <= len,
+                        "PersistentBTree: truncated internal key length at pos {pos}"
+                    );
                     let klen = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap())
                         as usize;
                     pos += 4;
+                    assert!(
+                        pos + klen <= len,
+                        "PersistentBTree: truncated internal key at pos {pos}, klen={klen}"
+                    );
                     keys.push(data[pos..pos + klen].to_vec());
                     pos += klen;
                 }
                 let mut children = Vec::with_capacity(n + 1);
                 for _ in 0..=n {
+                    assert!(
+                        pos + 8 <= len,
+                        "PersistentBTree: truncated child id at pos {pos}"
+                    );
                     let c = u64::from_be_bytes(data[pos..pos + 8].try_into().unwrap());
                     pos += 8;
                     children.push(c);

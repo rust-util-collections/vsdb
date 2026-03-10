@@ -195,7 +195,7 @@ pub fn vsdb_get_base_dir() -> PathBuf {
 pub fn vsdb_set_base_dir(dir: impl AsRef<Path>) -> Result<()> {
     static HAS_INITED: AtomicBool = AtomicBool::new(false);
 
-    if HAS_INITED.swap(true, Ordering::Relaxed) {
+    if HAS_INITED.swap(true, Ordering::AcqRel) {
         Err(eg!("VSDB has been initialized !!"))
     } else {
         unsafe { env::set_var(BASE_DIR_VAR, dir.as_ref().as_os_str()) }

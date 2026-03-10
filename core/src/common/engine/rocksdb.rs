@@ -169,10 +169,11 @@ impl RocksDB {
             db.put(prefix_allocator.key, initial_value).c(d!())?;
         }
 
-        let max_keylen = AtomicUsize::new(crate::parse_int!(
-            db.get(META_KEY_MAX_KEYLEN).unwrap().unwrap(),
-            usize
-        ));
+        let max_keylen_bytes = db
+            .get(META_KEY_MAX_KEYLEN)
+            .c(d!("failed to read max_keylen meta"))?
+            .c(d!("max_keylen meta key missing after init"))?;
+        let max_keylen = AtomicUsize::new(crate::parse_int!(max_keylen_bytes, usize));
 
         Ok(RocksDB {
             db,
