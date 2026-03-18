@@ -1,19 +1,20 @@
 use crate::common::{
-    BatchTrait, PREFIX_SIZE, Pre, PreBytes, RESERVED_ID_CNT, RawKey, RawValue,
+    BatchTrait, GB, MB, PREFIX_SIZE, Pre, PreBytes, RESERVED_ID_CNT, RawKey, RawValue,
     vsdb_get_base_dir, vsdb_set_base_dir,
 };
-use mmdb::{DB, DbOptions, WriteBatch};
+use mmdb::{CompressionType, DB, DbOptions, WriteBatch};
 use parking_lot::Mutex;
 use ruc::*;
 use std::{
     borrow::Cow,
     cell::Cell,
-    fs,
+    cmp, fs,
     ops::{Bound, RangeBounds},
     sync::{
         LazyLock,
         atomic::{AtomicU64, Ordering},
     },
+    thread::available_parallelism,
 };
 
 const META_KEY_MAX_KEYLEN: [u8; 1] = [u8::MAX];
@@ -382,9 +383,85 @@ fn check_bound_hi(full_key: &[u8], bound: &Bound<Vec<u8>>) -> bool {
 }
 
 fn mmdb_open(dir: &std::path::Path) -> Result<DB> {
+    const G: usize = GB as usize;
+
+    // ---- Write buffer: mirror RocksDB sizing ----
+    let wr_buffer_size = if cfg!(target_os = "linux") {
+        let memsiz = fs::read_to_string("/proc/meminfo")
+            .c(d!())?
+            .lines()
+            .find(|l| l.contains("MemAvailable"))
+            .c(d!())?
+            .replace(|ch: char| !ch.is_numeric(), "")
+            .parse::<usize>()
+            .c(d!())?
+            * 1024;
+        alt!((16 * G) < memsiz, memsiz / 4, G)
+    } else {
+        G
+    };
+
+    // ---- Block cache: use ~1/8 of available memory ----
+    let block_cache_size = if cfg!(target_os = "linux") {
+        let memsiz = fs::read_to_string("/proc/meminfo")
+            .ok()
+            .and_then(|s| {
+                s.lines()
+                    .find(|l| l.contains("MemAvailable"))
+                    .and_then(|l| {
+                        l.replace(|ch: char| !ch.is_numeric(), "")
+                            .parse::<u64>()
+                            .ok()
+                    })
+            })
+            .unwrap_or(G as u64)
+            * 1024;
+        memsiz / 8
+    } else {
+        128 * MB // 128MB fallback
+    };
+
+    // ---- Parallelism: min(cpus, 16) ----
+    let parallelism = cmp::min(available_parallelism().c(d!())?.get(), 16);
+
     let opts = DbOptions {
         create_if_missing: true,
         prefix_len: PREFIX_SIZE,
+
+        // Per-level compression: LZ4 for L0-L1, ZSTD for L2+
+        compression_per_level: vec![
+            CompressionType::Lz4,  // L0
+            CompressionType::Lz4,  // L1
+            CompressionType::Zstd, // L2
+            CompressionType::Zstd, // L3
+            CompressionType::Zstd, // L4
+            CompressionType::Zstd, // L5
+            CompressionType::Zstd, // L6
+        ],
+
+        // Write buffer
+        write_buffer_size: wr_buffer_size,
+        max_write_buffer_number: 5,
+        max_immutable_memtables: 4,
+
+        // Block cache + block size
+        block_cache_capacity: block_cache_size,
+        block_size: 16 * 1024, // 16 KB
+
+        // Memtable prefix bloom
+        memtable_prefix_bloom_ratio: 0.1,
+
+        // Compaction tuning
+        level_compaction_dynamic_level_bytes: true,
+        l0_compaction_trigger: 8,
+        max_subcompactions: 4,
+
+        // Parallelism
+        max_background_compactions: parallelism,
+
+        // Concurrent memtable writes
+        allow_concurrent_memtable_write: true,
+
         ..DbOptions::default()
     };
 
