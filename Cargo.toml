@@ -21,3 +21,6 @@ rocksdb = { version = "0.24.0", default-features = false, features = ["bindgen-r
 
 vsdb_core = { path = "core", version = "9.1.0", default-features = false }
 
+criterion = "0.8"
+hex = "0.4"
+

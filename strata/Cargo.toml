@@ -28,8 +28,8 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 rand = { workspace = true }
-hex = "0.4"
-criterion = "0.8"
+hex = { workspace = true }
+criterion = { workspace = true }
 
 [features]
 default = ["msgpack_codec"]

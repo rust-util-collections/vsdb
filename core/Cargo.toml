@@ -20,8 +20,8 @@ rocksdb = { workspace = true }
 
 [dev-dependencies]
 msgpack = { workspace = true }
-hex = "0.4"
-criterion = "0.8"
+hex = { workspace = true }
+criterion = { workspace = true }
 
 [[bench]]
 name = "basic"

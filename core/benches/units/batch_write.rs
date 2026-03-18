@@ -4,7 +4,7 @@ use vsdb_core::MapxRaw;
 
 // Benchmark single insert operations
 fn single_inserts(c: &mut Criterion) {
-    let mut group = c.benchmark_group("** RocksDB Write Performance **");
+    let mut group = c.benchmark_group("** vsdb_core::MapxRaw write **");
     group
         .measurement_time(std::time::Duration::from_secs(3))
         .sample_size(10);
@@ -26,7 +26,7 @@ fn single_inserts(c: &mut Criterion) {
 
 // Benchmark mixed read/write workload
 fn mixed_workload(c: &mut Criterion) {
-    let mut group = c.benchmark_group("** RocksDB Mixed Workload **");
+    let mut group = c.benchmark_group("** vsdb_core::MapxRaw mixed **");
     group
         .measurement_time(std::time::Duration::from_secs(3))
         .sample_size(10);
@@ -63,7 +63,7 @@ fn mixed_workload(c: &mut Criterion) {
 
 // Benchmark range scans
 fn range_scans(c: &mut Criterion) {
-    let mut group = c.benchmark_group("** RocksDB Range Scans **");
+    let mut group = c.benchmark_group("** vsdb_core::MapxRaw range_scan **");
     group
         .measurement_time(std::time::Duration::from_secs(3))
         .sample_size(10);

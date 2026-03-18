@@ -31,7 +31,7 @@ fn test_batch_entry_basic() {
     assert_eq!(map.get(&3), Some("three".to_string()));
 
     // 3. Drop without commit (should discard changes? No, batch is only a buffer)
-    // Actually, RocksDB WriteBatch is just a list of operations.
+    // Actually, the backend WriteBatch is just a list of operations.
     // If we don't commit, nothing happens to DB.
     {
         let mut batch = map.batch_entry();
