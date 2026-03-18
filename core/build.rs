@@ -1,4 +1,9 @@
 fn main() {
+    // C++ linker flags are only needed for the RocksDB backend.
+    if std::env::var("CARGO_FEATURE_BACKEND_ROCKSDB").is_err() {
+        return;
+    }
+
     // When using a pre-built RocksDB library (ROCKSDB_LIB_DIR is set),
     // librocksdb-sys's build.rs skips build_rocksdb() — which is where
     // the cc crate would normally emit `cargo:rustc-link-lib=c++`.

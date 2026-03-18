@@ -100,5 +100,7 @@ fn slot_write(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, slot_64, slot_32, slot_16, slot_8, slot_4, slot_write);
+criterion_group!(
+    benches, slot_64, slot_32, slot_16, slot_8, slot_4, slot_write
+);
 criterion_main!(benches);

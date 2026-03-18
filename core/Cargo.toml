@@ -16,7 +16,13 @@ serde = { workspace = true }
 rand = { workspace = true }
 parking_lot = { workspace = true }
 
-rocksdb = { workspace = true }
+rocksdb = { workspace = true, optional = true }
+mmdb = { workspace = true, optional = true }
+
+[features]
+default = ["backend_rocksdb"]
+backend_rocksdb = ["rocksdb"]
+backend_mmdb = ["mmdb"]
 
 [dev-dependencies]
 msgpack = { workspace = true }

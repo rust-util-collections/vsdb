@@ -1,4 +1,4 @@
-use criterion::{Criterion, criterion_group, black_box};
+use criterion::{Criterion, black_box, criterion_group};
 use rand::Rng;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use vsdb::{ValueEnDe, basic::mapx::Mapx};

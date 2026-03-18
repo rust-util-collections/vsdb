@@ -57,7 +57,7 @@ setup-rocksdb: $(ROCKSDB_DEP)
 clean-rocksdb:
 	rm -rf $(ROCKSDB_CACHE_DIR)
 
-# ---- Main targets ----
+# ---- Main targets (default: RocksDB backend) ----
 
 lint: $(ROCKSDB_DEP)
 	cargo clippy --workspace
@@ -74,6 +74,28 @@ bench: $(ROCKSDB_DEP)
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo bench --workspace
 	du -sh ~/.vsdb
+
+# ---- MMDB backend targets ----
+
+MMDB_FLAGS := --no-default-features --features "backend_mmdb,msgpack_codec"
+
+lint-mmdb:
+	cargo clippy --workspace $(MMDB_FLAGS)
+	cargo check --workspace $(MMDB_FLAGS) --tests
+	cargo check --workspace $(MMDB_FLAGS) --benches
+
+test-mmdb:
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
+	cargo test --workspace --release $(MMDB_FLAGS) --tests -- --test-threads=1
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
+	cargo test --workspace $(MMDB_FLAGS) --tests -- --test-threads=1
+
+bench-mmdb:
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
+	cargo bench --workspace $(MMDB_FLAGS)
+	du -sh ~/.vsdb
+
+# ---- Utilities ----
 
 fmt:
 	cargo fmt

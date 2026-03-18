@@ -38,6 +38,9 @@ serde_ende = []
 msgpack_codec = ["serde_ende", "msgpack"]
 cbor_codec = ["serde_ende", "serde_cbor_2"]
 
+backend_rocksdb = ["vsdb_core/backend_rocksdb"]
+backend_mmdb = ["vsdb_core/backend_mmdb"]
+
 [[bench]]
 name = "basic"
 harness = false

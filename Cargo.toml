@@ -18,6 +18,7 @@ serde_cbor_2 = "0.13.0"
 sha3 = "0.10"
 
 rocksdb = { version = "0.24.0", default-features = false, features = ["bindgen-runtime", "lz4", "zstd"] }
+mmdb = "2.1"
 
 vsdb_core = { path = "core", version = "9.1.0", default-features = false }
 

@@ -73,8 +73,6 @@ static VSDB_CUSTOM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
 ///
 /// This static variable is lazily initialized and provides a single point of
 /// access to the underlying database.
-///
-/// VSDB is backed exclusively by RocksDB.
 pub static VSDB: LazyLock<VsDB> = LazyLock::new(|| pnk!(VsDB::new()));
 
 /////////////////////////////////////////////////////////////////////////////
@@ -119,17 +117,21 @@ macro_rules! parse_prefix {
 
 /// A struct representing the VsDB database.
 ///
-/// This struct encapsulates the underlying RocksDB engine and provides a
+/// This struct encapsulates the underlying storage engine and provides a
 /// high-level interface for interacting with the database.
+///
+/// The storage engine is selected at compile time via feature flags:
+/// - `backend_rocksdb` (default): uses RocksDB
+/// - `backend_mmdb`: uses MMDB (pure-Rust LSM-Tree engine)
 pub struct VsDB {
-    db: engine::RocksDB,
+    db: engine::Engine,
 }
 
 impl VsDB {
     #[inline(always)]
     fn new() -> Result<Self> {
         Ok(Self {
-            db: engine::RocksDB::new().c(d!())?,
+            db: engine::Engine::new().c(d!())?,
         })
     }
 
