@@ -23,6 +23,6 @@ msgpack = { workspace = true }
 hex = "0.4"
 criterion = "0.8"
 
-# [[bench]]
-# name = "basic"
-# harness = false
+[[bench]]
+name = "basic"
+harness = false

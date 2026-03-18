@@ -60,6 +60,50 @@ fn mpt_get(c: &mut Criterion) {
     });
 }
 
+fn mpt_remove(c: &mut Criterion) {
+    c.bench_function("mpt_remove_1000", |b| {
+        b.iter(|| {
+            let mut mpt = MptCalc::new();
+            for i in 0u32..1000 {
+                mpt.insert(&i.to_be_bytes(), &i.to_be_bytes()).unwrap();
+            }
+            for i in 0u32..1000 {
+                mpt.remove(&i.to_be_bytes()).unwrap();
+            }
+        });
+    });
+}
+
+fn mpt_batch_update(c: &mut Criterion) {
+    c.bench_function("mpt_batch_update_100", |b| {
+        b.iter(|| {
+            let mut mpt = MptCalc::new();
+            let ops: Vec<(Vec<u8>, Option<Vec<u8>>)> = (0u32..100)
+                .map(|i| (i.to_be_bytes().to_vec(), Some(i.to_be_bytes().to_vec())))
+                .collect();
+            let ops_ref: Vec<(&[u8], Option<&[u8]>)> = ops
+                .iter()
+                .map(|(k, v)| (k.as_slice(), v.as_deref()))
+                .collect();
+            mpt.batch_update(&ops_ref).unwrap();
+        });
+    });
+
+    c.bench_function("mpt_batch_update_1000", |b| {
+        b.iter(|| {
+            let mut mpt = MptCalc::new();
+            let ops: Vec<(Vec<u8>, Option<Vec<u8>>)> = (0u32..1000)
+                .map(|i| (i.to_be_bytes().to_vec(), Some(i.to_be_bytes().to_vec())))
+                .collect();
+            let ops_ref: Vec<(&[u8], Option<&[u8]>)> = ops
+                .iter()
+                .map(|(k, v)| (k.as_slice(), v.as_deref()))
+                .collect();
+            mpt.batch_update(&ops_ref).unwrap();
+        });
+    });
+}
+
 fn smt_insert(c: &mut Criterion) {
     c.bench_function("smt_insert_100", |b| {
         b.iter(|| {
@@ -118,6 +162,20 @@ fn smt_get(c: &mut Criterion) {
     });
 }
 
+fn smt_remove(c: &mut Criterion) {
+    c.bench_function("smt_remove_1000", |b| {
+        b.iter(|| {
+            let mut smt = SmtCalc::new();
+            for i in 0u32..1000 {
+                smt.insert(&i.to_be_bytes(), &i.to_be_bytes()).unwrap();
+            }
+            for i in 0u32..1000 {
+                smt.remove(&i.to_be_bytes()).unwrap();
+            }
+        });
+    });
+}
+
 fn smt_prove_verify(c: &mut Criterion) {
     let mut smt = SmtCalc::new();
     for i in 0u32..100 {
@@ -152,9 +210,12 @@ criterion_group!(
     mpt_insert,
     mpt_root_hash,
     mpt_get,
+    mpt_remove,
+    mpt_batch_update,
     smt_insert,
     smt_root_hash,
     smt_get,
+    smt_remove,
     smt_prove_verify,
 );
 criterion_main!(benches);

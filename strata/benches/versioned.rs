@@ -108,6 +108,37 @@ fn commit_rollback(c: &mut Criterion) {
         })
     });
 
+    group.bench_function("rollback_to (1000 keys)", |b| {
+        b.iter(|| {
+            // Insert 1000 keys across 10 commits, then rollback to the first.
+            let mut rm: VerMap<u64, Vec<u8>> = VerMap::new();
+            let br = rm.main_branch();
+            for c_idx in 0..10u64 {
+                for j in 0..100u64 {
+                    rm.insert(br, &(c_idx * 100 + j), &vec![0u8; 64]).unwrap();
+                }
+                rm.commit(br).unwrap();
+            }
+            let target = rm.commit(br).unwrap(); // empty commit as anchor
+            for j in 0..100u64 {
+                rm.insert(br, &(10_000 + j), &vec![0u8; 64]).unwrap();
+            }
+            rm.commit(br).unwrap();
+            rm.rollback_to(br, target).unwrap();
+        })
+    });
+
+    group.bench_function("discard", |b| {
+        b.iter(|| {
+            let mut dm: VerMap<u64, Vec<u8>> = VerMap::new();
+            let br = dm.main_branch();
+            for j in 0..1000u64 {
+                dm.insert(br, &j, &vec![0u8; 64]).unwrap();
+            }
+            dm.discard(br).unwrap();
+        })
+    });
+
     group.finish();
 }
 

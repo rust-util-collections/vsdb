@@ -1,9 +1,6 @@
-use criterion::{Criterion, criterion_group};
+use criterion::{Criterion, criterion_group, black_box};
 use rand::Rng;
-use std::{
-    sync::atomic::{AtomicUsize, Ordering},
-    time::Duration,
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use vsdb::{ValueEnDe, basic::mapx::Mapx};
 
 fn read_write(c: &mut Criterion) {
@@ -25,7 +22,7 @@ fn read_write(c: &mut Criterion) {
     group.bench_function(" read ", |b| {
         b.iter(|| {
             let n = i.fetch_sub(1, Ordering::SeqCst);
-            db.get(&[n; 2]);
+            black_box(db.get(&[n; 2]));
         })
     });
 
@@ -37,6 +34,37 @@ fn read_write(c: &mut Criterion) {
                 batch.insert(&[n; 2], &vec![n; 128]);
             }
             batch.commit().unwrap();
+        })
+    });
+
+    // Pre-populate for contains_key / remove / iter
+    let base = i.load(Ordering::SeqCst);
+    for n in base..(base + 5000) {
+        db.set_value(&[n; 2], &vec![n; 128]);
+    }
+    i.store(base + 5000, Ordering::SeqCst);
+
+    group.bench_function(" contains_key ", |b| {
+        let max = i.load(Ordering::SeqCst);
+        let mut k = 0usize;
+        b.iter(|| {
+            k = (k + 1) % max;
+            black_box(db.contains_key(&[k; 2]));
+        })
+    });
+
+    group.bench_function(" iter (5k entries) ", |b| {
+        b.iter(|| {
+            let count = db.iter().count();
+            black_box(count);
+        })
+    });
+
+    group.bench_function(" remove ", |b| {
+        let rm = AtomicUsize::new(i.load(Ordering::SeqCst));
+        b.iter(|| {
+            let n = rm.fetch_sub(1, Ordering::SeqCst);
+            db.remove(&[n; 2]);
         })
     });
 
@@ -64,7 +92,7 @@ fn random_read_write(c: &mut Criterion) {
     group.bench_function(" random read ", |b| {
         b.iter(|| {
             let index: usize = rng.random_range(0..keys.len());
-            keys.get(index).map(|key| db.get(key));
+            black_box(keys.get(index).map(|key| db.get(key)));
         })
     });
     group.finish();
