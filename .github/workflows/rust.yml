@@ -25,13 +25,7 @@ jobs:
       run: rustup update stable; rustup component add clippy; make lint
 
     - name: Validate codec feature matrix
-      run: |
-        cargo check -p vsdb --no-default-features --features msgpack_codec
-        cargo check -p vsdb --no-default-features --features cbor_codec
-        if cargo check -p vsdb --features cbor_codec; then
-          echo "expected failure when both msgpack_codec and cbor_codec are enabled"
-          exit 1
-        fi
+      run: make lint-codecs
 
     - name: Run tests
       run: rustup update stable; make test

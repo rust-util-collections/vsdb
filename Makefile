@@ -75,6 +75,17 @@ bench: $(ROCKSDB_DEP)
 	cargo bench --workspace
 	du -sh ~/.vsdb
 
+# ---- Codec feature matrix validation ----
+
+lint-codecs:
+	cargo check -p vsdb --no-default-features --features "backend_mmdb,msgpack_codec"
+	cargo check -p vsdb --no-default-features --features "backend_mmdb,cbor_codec"
+	@if cargo check -p vsdb --no-default-features \
+	    --features "backend_mmdb,msgpack_codec,cbor_codec" 2>/dev/null; then \
+		echo "expected failure when both msgpack_codec and cbor_codec are enabled"; \
+		exit 1; \
+	fi
+
 # ---- MMDB backend targets ----
 
 MMDB_FLAGS := --no-default-features --features "backend_mmdb,msgpack_codec"
