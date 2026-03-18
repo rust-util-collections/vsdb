@@ -2,7 +2,7 @@ use crate::common::{
     BatchTrait, GB, MB, PREFIX_SIZE, Pre, PreBytes, RESERVED_ID_CNT, RawKey, RawValue,
     vsdb_get_base_dir, vsdb_set_base_dir,
 };
-use mmdb::{CompressionType, DB, DbOptions, WriteBatch};
+use mmdb::{BidiIterator, CompressionType, DB, DbOptions, WriteBatch};
 use parking_lot::Mutex;
 use ruc::*;
 use std::{
@@ -144,8 +144,15 @@ impl MmDB {
     }
 
     pub(crate) fn iter(&self, meta_prefix: PreBytes) -> MmdbIter {
-        let entries = self.collect_prefix_entries(meta_prefix);
-        MmdbIter::new(entries)
+        // prefix_iterator uses prefix bloom filters to skip entire SST files that
+        // don't contain the prefix, and seeks directly to the prefix start.
+        // The returned BidiIterator is fully lazy (streaming, O(1) memory per step).
+        let iter = self
+            .db
+            .prefix_iterator(&meta_prefix)
+            .expect("vsdb: mmdb prefix_iterator failed")
+            .map(|(k, v)| (k[PREFIX_SIZE..].to_vec(), v));
+        MmdbIter(Box::new(iter))
     }
 
     pub(crate) fn range<'a, R: RangeBounds<Cow<'a, [u8]>>>(
@@ -153,7 +160,7 @@ impl MmDB {
         meta_prefix: PreBytes,
         bounds: R,
     ) -> MmdbIter {
-        // Build full-key bounds for filtering
+        // Build full-key bounds (owned Vec<u8> so they can be moved into the closure).
         let lo_full: Bound<Vec<u8>> = match bounds.start_bound() {
             Bound::Included(lo) => {
                 let mut v = meta_prefix.to_vec();
@@ -165,7 +172,7 @@ impl MmDB {
                 v.extend_from_slice(lo);
                 Bound::Excluded(v)
             }
-            Bound::Unbounded => Bound::Included(meta_prefix.to_vec()),
+            Bound::Unbounded => Bound::Unbounded,
         };
 
         let hi_full: Bound<Vec<u8>> = match bounds.end_bound() {
@@ -179,42 +186,43 @@ impl MmDB {
                 v.extend_from_slice(hi);
                 Bound::Excluded(v)
             }
-            Bound::Unbounded => {
-                // Upper bound is the prefix successor
-                match prefix_successor(&meta_prefix) {
-                    Some(succ) => Bound::Excluded(succ),
-                    None => Bound::Unbounded,
-                }
-            }
+            Bound::Unbounded => Bound::Unbounded,
         };
 
-        // Use iter_with_range for efficient SST file pruning
-        let start_hint = match &lo_full {
-            Bound::Included(v) | Bound::Excluded(v) => Some(v.as_slice()),
-            Bound::Unbounded => None,
+        // SST-level pruning hints: start from lo or prefix start, end at prefix boundary.
+        let start_hint: Option<Vec<u8>> = match &lo_full {
+            Bound::Included(v) | Bound::Excluded(v) => Some(v.clone()),
+            Bound::Unbounded => Some(meta_prefix.to_vec()),
         };
-        let end_hint = match &hi_full {
-            Bound::Included(v) | Bound::Excluded(v) => Some(v.as_slice()),
-            Bound::Unbounded => None,
-        };
+        let end_hint = prefix_successor(&meta_prefix);
 
-        let db_iter = self
+        let mut db_iter = self
             .db
-            .iter_with_range(&mmdb::ReadOptions::default(), start_hint, end_hint)
+            .iter_with_range(
+                &mmdb::ReadOptions::default(),
+                start_hint.as_deref(),
+                end_hint.as_deref(),
+            )
             .expect("vsdb: mmdb iter_with_range failed");
 
-        let entries: Vec<(RawKey, RawValue)> = db_iter
-            .filter(|(k, _)| {
-                if !k.starts_with(&meta_prefix) {
-                    return false;
-                }
-                let full_key = k.as_slice();
-                check_bound_lo(full_key, &lo_full) && check_bound_hi(full_key, &hi_full)
-            })
-            .map(|(k, v)| (k[PREFIX_SIZE..].to_vec(), v))
-            .collect();
+        // Seek the forward cursor to the lower bound so next() starts there in O(1)
+        // rather than scanning entries below lo_full one by one.
+        if let Bound::Included(ref lo) | Bound::Excluded(ref lo) = lo_full {
+            db_iter.seek(lo);
+        }
 
-        MmdbIter::new(entries)
+        // Wrap in BidiIterator for DoubleEndedIterator support, then apply
+        // bound checks lazily. Filter::next_back() correctly scans backward,
+        // so entries above hi_full are skipped without full materialisation.
+        let iter = BidiIterator::lazy(db_iter)
+            .filter(move |(k, _)| {
+                k.starts_with(&meta_prefix)
+                    && check_bound_lo(k.as_slice(), &lo_full)
+                    && check_bound_hi(k.as_slice(), &hi_full)
+            })
+            .map(|(k, v)| (k[PREFIX_SIZE..].to_vec(), v));
+
+        MmdbIter(Box::new(iter))
     }
 
     pub(crate) fn batch_begin<'a>(
@@ -223,66 +231,31 @@ impl MmDB {
     ) -> Box<dyn BatchTrait + 'a> {
         Box::new(MmdbBatch::new(meta_prefix, self))
     }
-
-    /// Collect all entries matching the given prefix, stripping the prefix from keys.
-    fn collect_prefix_entries(&self, meta_prefix: PreBytes) -> Vec<(RawKey, RawValue)> {
-        let prefix_end = prefix_successor(&meta_prefix);
-
-        let start_hint = Some(meta_prefix.as_slice());
-        let end_hint = prefix_end.as_deref();
-
-        let db_iter = self
-            .db
-            .iter_with_range(&mmdb::ReadOptions::default(), start_hint, end_hint)
-            .expect("vsdb: mmdb iter_with_range failed");
-
-        db_iter
-            .filter(|(k, _)| k.starts_with(&meta_prefix))
-            .map(|(k, v)| (k[PREFIX_SIZE..].to_vec(), v))
-            .collect()
-    }
 }
 
 // ---- Iterator ----
 
-pub struct MmdbIter {
-    entries: Vec<(RawKey, RawValue)>,
-    fwd_idx: usize,
-    rev_idx: usize,
-}
-
-impl MmdbIter {
-    fn new(entries: Vec<(RawKey, RawValue)>) -> Self {
-        let len = entries.len();
-        Self {
-            entries,
-            fwd_idx: 0,
-            rev_idx: len,
-        }
-    }
-}
+/// A lazy, bidirectional iterator over key-value pairs in a single prefix namespace.
+///
+/// Wraps a boxed `DoubleEndedIterator` so that the concrete streaming type
+/// (e.g. `Map<Filter<BidiIterator, _>, _>`) is hidden behind a stable ABI.
+/// No entries are collected into memory upfront; data flows from mmdb's
+/// streaming SST/memtable sources one item at a time.
+pub struct MmdbIter(Box<dyn DoubleEndedIterator<Item = (RawKey, RawValue)>>);
 
 impl Iterator for MmdbIter {
     type Item = (RawKey, RawValue);
 
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
-        if self.fwd_idx >= self.rev_idx {
-            return None;
-        }
-        let item = self.entries[self.fwd_idx].clone();
-        self.fwd_idx += 1;
-        Some(item)
+        self.0.next()
     }
 }
 
 impl DoubleEndedIterator for MmdbIter {
+    #[inline(always)]
     fn next_back(&mut self) -> Option<Self::Item> {
-        if self.rev_idx == 0 || self.fwd_idx >= self.rev_idx {
-            return None;
-        }
-        self.rev_idx -= 1;
-        let item = self.entries[self.rev_idx].clone();
-        Some(item)
+        self.0.next_back()
     }
 }
 

@@ -1,5 +1,5 @@
 use criterion::{Criterion, criterion_group};
-use rand::Rng;
+use rand::{Rng, RngExt};
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
@@ -37,7 +37,7 @@ fn random_read_write(c: &mut Criterion) {
         .measurement_time(std::time::Duration::from_secs(3))
         .sample_size(10);
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut db = MapxRaw::new();
     let mut keys = vec![];
     group.bench_function(" random write ", |b| {
