@@ -144,14 +144,15 @@ impl MmDB {
     }
 
     pub(crate) fn iter(&self, meta_prefix: PreBytes) -> MmdbIter {
-        // prefix_iterator uses prefix bloom filters to skip entire SST files that
+        // iter_with_prefix uses prefix bloom filters to skip entire SST files that
         // don't contain the prefix, and seeks directly to the prefix start.
         // The returned BidiIterator is fully lazy (streaming, O(1) memory per step).
-        let iter = self
+        let db_iter = self
             .db
-            .prefix_iterator(&meta_prefix)
-            .expect("vsdb: mmdb prefix_iterator failed")
-            .map(|(k, v)| (k[PREFIX_SIZE..].to_vec(), v));
+            .iter_with_prefix(&meta_prefix, &mmdb::ReadOptions::default())
+            .expect("vsdb: mmdb iter_with_prefix failed");
+        let iter =
+            BidiIterator::lazy(db_iter).map(|(k, v)| (k[PREFIX_SIZE..].to_vec(), v));
         MmdbIter(Box::new(iter))
     }
 
