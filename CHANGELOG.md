@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v10.0.0] - 2026-03-19
+
+### Breaking
+
+- **Removed msgpack codec** — CBOR (`serde_cbor_2`) is now the only serde encoding. Existing data serialized with msgpack is incompatible; a migration step is required.
+- **Default backend for `vsdb` crate** — `backend_rocksdb` is now enabled by default so that `vsdb = "10.0.0"` works out of the box (previously required explicit feature selection).
+
+### Added
+
+- **MMDB backend** (`backend_mmdb`) — a pure-Rust LSM-Tree alternative to RocksDB. No C/C++ dependency; suitable for cross-compilation and WASM targets.
+- **Engine comparison guide** — `strata/docs/engine-comparison.md` with detailed benchmarks of MMDB vs RocksDB.
+- **`make all-mmdb`** target and MMDB-specific lint/test/bench targets in Makefile.
+
+### Changed
+
+- **SlotDex performance** — tier data backed by an in-memory `BTreeMap` cache (auto-hydrated via `RefCell`), reducing page query latency from ~1 ms to ~8 us.
+- Aligned MMDB DB options with RocksDB configuration for consistent behavior.
+- Fixed mmdb 2.2 API: replaced removed `prefix_iterator` with `iter_with_prefix`.
+- Replaced `unwrap`/`panic` with `c(d!())` error chains; hardened decode bounds.
+- Expanded benchmark coverage and fixed methodological issues.
+- Bumped dependencies.
+
+### Removed
+
+- Removed `lint-codecs` CI target (no longer needed with single codec).
+- Removed RocksDB pre-built static lib cache from Makefile.
+
 ## [v9.1.0] - 2026-03-09
 
 ### Changed

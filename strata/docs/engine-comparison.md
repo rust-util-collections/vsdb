@@ -96,10 +96,10 @@ from ~1 ms to ~8 us (both backends benefit equally from this optimization).
 
 ```toml
 # RocksDB (default)
-vsdb = "9.1.0"
+vsdb = "10.0.0"
 
 # MMDB
-vsdb = { version = "9.1.0", default-features = false, features = ["backend_mmdb"] }
+vsdb = { version = "10.0.0", default-features = false, features = ["backend_mmdb"] }
 ```
 
 The API is identical regardless of backend. No special action is needed

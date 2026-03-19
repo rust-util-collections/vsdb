@@ -19,14 +19,17 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-vsdb_core = "9.1.0"
+vsdb_core = "10.0.0"
 ```
 
 For detailed API examples, see [API Examples](docs/api.md).
 
 ## Features
 
-Uses RocksDB as the storage backend.
+Two storage backends are supported, selected at compile time:
+
+- `backend_rocksdb` (default) — RocksDB via C++ FFI
+- `backend_mmdb` — MMDB, a pure-Rust LSM-Tree engine
 
 ## License
 

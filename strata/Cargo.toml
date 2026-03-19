@@ -31,7 +31,7 @@ hex = { workspace = true }
 criterion = { workspace = true }
 
 [features]
-default = []
+default = ["backend_rocksdb"]
 
 backend_rocksdb = ["vsdb_core/backend_rocksdb"]
 backend_mmdb = ["vsdb_core/backend_mmdb"]

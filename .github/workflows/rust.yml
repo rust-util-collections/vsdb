@@ -15,17 +15,8 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Cache pre-built librocksdb.a
-      uses: actions/cache@v4
-      with:
-        path: ~/.local/rocksdb
-        key: rocksdb-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-
     - name: Build
       run: rustup update stable; rustup component add clippy; make lint
-
-    - name: Validate codec feature matrix
-      run: make lint-codecs
 
     - name: Run tests
       run: rustup update stable; make test
