@@ -1,5 +1,5 @@
 use crate::common::{
-    BatchTrait, GB, MB, PREFIX_SIZE, Pre, PreBytes, RESERVED_ID_CNT, RawKey, RawValue,
+    BatchTrait, GB, PREFIX_SIZE, Pre, PreBytes, RESERVED_ID_CNT, RawKey, RawValue,
     vsdb_get_base_dir, vsdb_set_base_dir,
 };
 use mmdb::{BidiIterator, CompressionType, DB, DbOptions, WriteBatch};
@@ -160,34 +160,16 @@ impl MmDB {
         meta_prefix: PreBytes,
         bounds: R,
     ) -> MmdbIter {
-        // Build full-key bounds (owned Vec<u8> so they can be moved into the closure).
-        let lo_full: Bound<Vec<u8>> = match bounds.start_bound() {
-            Bound::Included(lo) => {
-                let mut v = meta_prefix.to_vec();
-                v.extend_from_slice(lo);
-                Bound::Included(v)
+        let prefixed = |b: &Bound<&Cow<'_, [u8]>>| -> Bound<Vec<u8>> {
+            match b {
+                Bound::Included(k) => Bound::Included(make_full_key(&meta_prefix, k)),
+                Bound::Excluded(k) => Bound::Excluded(make_full_key(&meta_prefix, k)),
+                Bound::Unbounded => Bound::Unbounded,
             }
-            Bound::Excluded(lo) => {
-                let mut v = meta_prefix.to_vec();
-                v.extend_from_slice(lo);
-                Bound::Excluded(v)
-            }
-            Bound::Unbounded => Bound::Unbounded,
         };
 
-        let hi_full: Bound<Vec<u8>> = match bounds.end_bound() {
-            Bound::Included(hi) => {
-                let mut v = meta_prefix.to_vec();
-                v.extend_from_slice(hi);
-                Bound::Included(v)
-            }
-            Bound::Excluded(hi) => {
-                let mut v = meta_prefix.to_vec();
-                v.extend_from_slice(hi);
-                Bound::Excluded(v)
-            }
-            Bound::Unbounded => Bound::Unbounded,
-        };
+        let lo_full = prefixed(&bounds.start_bound());
+        let hi_full = prefixed(&bounds.end_bound());
 
         // SST-level pruning hints: start from lo or prefix start, end at prefix boundary.
         let start_hint: Option<Vec<u8>> = match &lo_full {
@@ -358,41 +340,32 @@ fn check_bound_hi(full_key: &[u8], bound: &Bound<Vec<u8>>) -> bool {
 fn mmdb_open(dir: &std::path::Path) -> Result<DB> {
     const G: usize = GB as usize;
 
-    // ---- Write buffer: mirror RocksDB sizing ----
-    let wr_buffer_size = if cfg!(target_os = "linux") {
-        let memsiz = fs::read_to_string("/proc/meminfo")
-            .c(d!())?
-            .lines()
-            .find(|l| l.contains("MemAvailable"))
-            .c(d!())?
-            .replace(|ch: char| !ch.is_numeric(), "")
-            .parse::<usize>()
-            .c(d!())?
-            * 1024;
-        alt!((16 * G) < memsiz, memsiz / 4, G)
-    } else {
-        G
-    };
-
-    // ---- Block cache: use ~1/8 of available memory ----
-    let block_cache_size = if cfg!(target_os = "linux") {
-        let memsiz = fs::read_to_string("/proc/meminfo")
+    // Read available memory once (Linux only).
+    let avail_mem_bytes: usize = if cfg!(target_os = "linux") {
+        fs::read_to_string("/proc/meminfo")
             .ok()
             .and_then(|s| {
                 s.lines()
                     .find(|l| l.contains("MemAvailable"))
                     .and_then(|l| {
                         l.replace(|ch: char| !ch.is_numeric(), "")
-                            .parse::<u64>()
+                            .parse::<usize>()
                             .ok()
                     })
             })
-            .unwrap_or(G as u64)
-            * 1024;
-        memsiz / 8
+            .unwrap_or(G / 1024)
+            * 1024
     } else {
-        128 * MB // 128MB fallback
+        G
     };
+
+    let wr_buffer_size = if avail_mem_bytes > 16 * G {
+        avail_mem_bytes / 4
+    } else {
+        G
+    };
+
+    let block_cache_size = (avail_mem_bytes as u64) / 8;
 
     // ---- Parallelism: min(cpus, 16) ----
     let parallelism = cmp::min(available_parallelism().c(d!())?.get(), 16);

@@ -11,7 +11,7 @@ use crate::{
 use ruc::*;
 use serde::{Deserialize, Serialize, de};
 use std::{
-    collections::{BTreeSet, btree_set::Iter as SmallIter},
+    collections::{BTreeMap, BTreeSet, btree_set::Iter as SmallIter},
     ops::Bound,
 };
 
@@ -101,7 +101,7 @@ where
             self.data.insert(&slot, &ctner);
             self.tiers.iter_mut().for_each(|t| {
                 let slot_floor = slot / t.floor_base * t.floor_base;
-                let mut v = t.data.get(&slot_floor).unwrap_or(0);
+                let mut v = t.cache.get(&slot_floor).copied().unwrap_or(0);
                 if 0 == v {
                     *t.entry_count.get_mut() += 1;
                     if let Some(l) = t.len_cache.as_mut() {
@@ -109,7 +109,8 @@ where
                     }
                 }
                 v += 1;
-                t.data.insert(&slot_floor, &v);
+                t.cache.insert(slot_floor, v);
+                t.store.insert(&slot_floor, &v);
             });
             *self.total.get_mut() += 1;
         }
@@ -156,13 +157,15 @@ where
         if exist {
             self.tiers.iter_mut().for_each(|t| {
                 let slot_floor = slot / t.floor_base * t.floor_base;
-                let mut cnt = t.data.get(&slot_floor).unwrap();
+                let cnt = t.cache.get(&slot_floor).copied().unwrap();
                 if 1 == cnt {
-                    t.data.remove(&slot_floor);
+                    t.cache.remove(&slot_floor);
+                    t.store.remove(&slot_floor);
                     t.dec_len();
                 } else {
-                    cnt -= 1;
-                    t.data.insert(&slot_floor, &cnt);
+                    let new_cnt = cnt - 1;
+                    t.cache.insert(slot_floor, new_cnt);
+                    t.store.insert(&slot_floor, &new_cnt);
                 }
             });
             *self.total.get_mut() -= 1;
@@ -175,10 +178,19 @@ where
         self.data.clear();
 
         self.tiers.iter_mut().for_each(|t| {
-            t.data.clear();
+            t.store.clear();
+            t.cache.clear();
         });
 
         self.tiers.clear();
+    }
+
+    /// Hydrate in-memory tier caches from persistent storage.
+    /// Must be called after deserialization before querying.
+    pub fn hydrate(&mut self) {
+        for t in &mut self.tiers {
+            t.hydrate_cache();
+        }
     }
 
     /// Retrieves entries by page, a common use case for web services.
@@ -251,14 +263,17 @@ where
 
     // Exclude the slot itself-owned entries (whether it exists or not)
     fn distance_to_the_leftmost_slot(&self, slot: Slot) -> Distance {
+        if slot == Slot::MIN {
+            return 0;
+        }
         let mut left_bound = Slot::MIN;
         let mut ret = 0;
         for t in self.tiers.iter().rev() {
             let right_bound = slot / t.floor_base * t.floor_base;
             ret += t
-                .data
+                .cache
                 .range(left_bound..right_bound)
-                .map(|(_, cnt)| cnt as Distance)
+                .map(|(_, cnt)| *cnt as Distance)
                 .sum::<Distance>();
             left_bound = right_bound
         }
@@ -310,56 +325,44 @@ where
         }
     }
 
-    #[inline(always)]
-    fn page_info_to_global_offsets(
-        &self,
-        slot_start: Slot, // Included
-        slot_end: Slot,   // Included
-        page_size: PageSize,
-        page_index: PageIndex,
-        reverse: bool,
-    ) -> (SkipNum, TakeNum) {
-        self.offsets_from_the_leftmost_slot(
-            slot_start, slot_end, page_size, page_index, reverse,
-        )
-    }
 
-    fn get_local_skip_num(
+    /// Single-pass page location using in-memory tier caches.
+    fn locate_page_start(
         &self,
-        global_skip_num: EntryCnt,
+        global_skip_n: EntryCnt,
     ) -> (Bound<StartSlotActual>, SkipNum) {
         let mut slot_start = Bound::Included(Slot::MIN);
-        let mut local_idx: u64 = global_skip_num;
+        let mut remaining: u64 = global_skip_n;
 
         for t in self.tiers.iter().rev() {
-            let mut hdr = t.data.range((slot_start, Bound::Unbounded)).peekable();
-            while let Some(entry_cnt) = hdr.next().map(|(_, cnt)| cnt) {
-                if entry_cnt > local_idx {
+            let mut hdr = t.cache.range((slot_start, Bound::Unbounded)).peekable();
+            while let Some(entry_cnt) = hdr.next().map(|(_, cnt)| *cnt) {
+                if entry_cnt > remaining {
                     break;
                 } else {
                     slot_start = hdr
                         .peek()
-                        .map(|(s, _)| Bound::Included(*s))
+                        .map(|(s, _)| Bound::Included(**s))
                         .unwrap_or(Bound::Excluded(Slot::MAX));
-                    local_idx -= entry_cnt;
+                    remaining -= entry_cnt;
                 }
             }
         }
 
         let mut hdr = self.data.range((slot_start, Bound::Unbounded)).peekable();
         while let Some(entry_cnt) = hdr.next().map(|(_, entries)| entries.len() as u64) {
-            if entry_cnt > local_idx {
+            if entry_cnt > remaining {
                 break;
             } else {
                 slot_start = hdr
                     .peek()
                     .map(|(s, _)| Bound::Included(*s))
                     .unwrap_or(Bound::Excluded(Slot::MAX));
-                local_idx -= entry_cnt;
+                remaining -= entry_cnt;
             }
         }
 
-        (slot_start, local_idx)
+        (slot_start, remaining)
     }
 
     fn get_entries(
@@ -374,13 +377,13 @@ where
             return vec![];
         }
 
-        let (global_skip_n, take_n) = self.page_info_to_global_offsets(
+        let (global_skip_n, take_n) = self.offsets_from_the_leftmost_slot(
             slot_start, slot_end, page_size, page_index, reverse,
         );
 
         let mut ret = Vec::with_capacity(take_n as usize);
 
-        let (slot_start_actual, local_skip_n) = self.get_local_skip_num(global_skip_n);
+        let (slot_start_actual, local_skip_n) = self.locate_page_start(global_skip_n);
 
         let mut skip_n = local_skip_n as usize;
         let take_n = take_n as usize;
@@ -402,7 +405,7 @@ where
         }
 
         if reverse {
-            ret = ret.into_iter().rev().collect();
+            ret.reverse();
         }
 
         ret
@@ -477,42 +480,37 @@ where
             if top.len() as u64 <= self.tier_capacity {
                 return;
             }
-            // Create a new top tier
-            let newtop = top.data.iter().fold(
-                Tier::new(tiers_len as u32, self.tier_capacity),
-                |mut t, (slot, cnt)| {
-                    let slot_floor = slot / t.floor_base * t.floor_base;
-                    let mut v = t.data.get(&slot_floor).unwrap_or(0);
-                    if 0 == v {
-                        *t.entry_count.get_mut() += 1;
-                        if let Some(l) = t.len_cache.as_mut() {
-                            *l += 1;
-                        }
+            let entries: Vec<_> = top.cache.iter().map(|(k, v)| (*k, *v)).collect();
+            let mut newtop = Tier::new(tiers_len as u32, self.tier_capacity);
+            for (slot, cnt) in entries {
+                let slot_floor = slot / newtop.floor_base * newtop.floor_base;
+                let v = newtop.cache.get(&slot_floor).copied().unwrap_or(0);
+                if 0 == v {
+                    *newtop.entry_count.get_mut() += 1;
+                    if let Some(l) = newtop.len_cache.as_mut() {
+                        *l += 1;
                     }
-                    v += cnt;
-                    t.data.insert(&slot_floor, &v);
-                    t
-                },
-            );
+                }
+                let new_v = v + cnt;
+                newtop.cache.insert(slot_floor, new_v);
+                newtop.store.insert(&slot_floor, &new_v);
+            }
             self.tiers.push(newtop);
         } else {
-            // First insertion, tiers' length should be 0
-            let newtop = self.data.iter().fold(
-                Tier::new(tiers_len as u32, self.tier_capacity),
-                |mut t, (slot, entries)| {
-                    let slot_floor = slot / t.floor_base * t.floor_base;
-                    let mut v = t.data.get(&slot_floor).unwrap_or(0);
-                    if 0 == v {
-                        *t.entry_count.get_mut() += 1;
-                        if let Some(l) = t.len_cache.as_mut() {
-                            *l += 1;
-                        }
+            let mut newtop = Tier::new(tiers_len as u32, self.tier_capacity);
+            for (slot, entries) in self.data.iter() {
+                let slot_floor = slot / newtop.floor_base * newtop.floor_base;
+                let v = newtop.cache.get(&slot_floor).copied().unwrap_or(0);
+                if 0 == v {
+                    *newtop.entry_count.get_mut() += 1;
+                    if let Some(l) = newtop.len_cache.as_mut() {
+                        *l += 1;
                     }
-                    v += entries.len() as EntryCnt;
-                    t.data.insert(&slot_floor, &v);
-                    t
-                },
-            );
+                }
+                let new_v = v + entries.len() as EntryCnt;
+                newtop.cache.insert(slot_floor, new_v);
+                newtop.store.insert(&slot_floor, &new_v);
+            }
             self.tiers.push(newtop);
         }
     }
@@ -695,8 +693,9 @@ where
 #[derive(Debug, Deserialize, Serialize)]
 struct Tier {
     floor_base: u64,
-    data: MapxOrd<SlotFloor, EntryCnt>,
-    // Track the number of entries since MapxOrd no longer has len()
+    store: MapxOrd<SlotFloor, EntryCnt>,
+    #[serde(skip)]
+    cache: BTreeMap<SlotFloor, EntryCnt>,
     entry_count: Orphan<usize>,
     #[serde(skip)]
     len_cache: Option<usize>,
@@ -710,9 +709,18 @@ impl Tier {
                 .checked_pow(pow)
                 .filter(|&v| v != 0)
                 .unwrap_or(u64::MAX),
-            data: MapxOrd::new(),
+            store: MapxOrd::new(),
+            cache: BTreeMap::new(),
             entry_count: Orphan::new(0),
             len_cache: Some(0),
+        }
+    }
+
+    fn hydrate_cache(&mut self) {
+        if self.cache.is_empty() {
+            for (k, v) in self.store.iter() {
+                self.cache.insert(k, v);
+            }
         }
     }
 

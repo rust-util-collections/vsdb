@@ -108,6 +108,7 @@ vsdb = { version = "9.1.0", default-features = false, features = ["cbor_codec"] 
 ## Documentation
 
 - [API Examples](strata/docs/api.md)
+- [Engine Comparison: MMDB vs RocksDB](strata/docs/engine-comparison.md)
 - [Versioned Module — Architecture & Internals](strata/docs/versioned.md)
 
 ## License
