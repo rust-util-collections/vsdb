@@ -22,24 +22,24 @@ bench:
 	cargo bench --workspace
 	du -sh ~/.vsdb
 
-# ---- MMDB backend targets ----
+# ---- RocksDB backend targets ----
 
-MMDB_FLAGS := --no-default-features --features "backend_rocksdb"
+RocksDB_FLAGS := --no-default-features --features "backend_rocksdb"
 
 lint-rocksdb:
-	cargo clippy --workspace $(MMDB_FLAGS)
-	cargo check --workspace $(MMDB_FLAGS) --tests
-	cargo check --workspace $(MMDB_FLAGS) --benches
+	cargo clippy --workspace $(RocksDB_FLAGS)
+	cargo check --workspace $(RocksDB_FLAGS) --tests
+	cargo check --workspace $(RocksDB_FLAGS) --benches
 
 test-rocksdb:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo test --workspace --release $(MMDB_FLAGS) --tests -- --test-threads=1
+	cargo test --workspace --release $(RocksDB_FLAGS) --tests -- --test-threads=1
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo test --workspace $(MMDB_FLAGS) --tests -- --test-threads=1
+	cargo test --workspace $(RocksDB_FLAGS) --tests -- --test-threads=1
 
 bench-rocksdb:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench --workspace $(MMDB_FLAGS)
+	cargo bench --workspace $(RocksDB_FLAGS)
 	du -sh ~/.vsdb
 
 # ---- Utilities ----
