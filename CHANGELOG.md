@@ -9,13 +9,13 @@ All notable changes to this project will be documented in this file.
 ### Breaking
 
 - **Removed msgpack codec** — CBOR (`serde_cbor_2`) is now the only serde encoding. Existing data serialized with msgpack is incompatible; a migration step is required.
-- **Default backend for `vsdb` crate** — `backend_rocksdb` is now enabled by default so that `vsdb = "10.0.0"` works out of the box (previously required explicit feature selection).
+- **Default backend for `vsdb` crate** — `backend_mmdb` is now enabled by default so that `vsdb = "10.0.0"` works out of the box without a C/C++ toolchain (previously required explicit feature selection).
 
 ### Added
 
 - **MMDB backend** (`backend_mmdb`) — a pure-Rust LSM-Tree alternative to RocksDB. No C/C++ dependency; suitable for cross-compilation and WASM targets.
 - **Engine comparison guide** — `strata/docs/engine-comparison.md` with detailed benchmarks of MMDB vs RocksDB.
-- **`make all-mmdb`** target and MMDB-specific lint/test/bench targets in Makefile.
+- **`make all-rocksdb`** target and RocksDB-specific lint/test/bench targets in Makefile (default targets use MMDB).
 
 ### Changed
 

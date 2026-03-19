@@ -2,8 +2,8 @@
 
 vsdb supports two storage backends selected at compile time via feature flags:
 
-- `backend_rocksdb` (default) — RocksDB via C++ FFI
-- `backend_mmdb` — MMDB, a pure-Rust LSM-Tree engine
+- `backend_mmdb` (default) — MMDB, a pure-Rust LSM-Tree engine
+- `backend_rocksdb` — RocksDB via C++ FFI
 
 ## Performance Profile
 
@@ -95,11 +95,11 @@ from ~1 ms to ~8 us (both backends benefit equally from this optimization).
 ## Switching Backends
 
 ```toml
-# RocksDB (default)
+# MMDB (default)
 vsdb = "10.0.0"
 
-# MMDB
-vsdb = { version = "10.0.0", default-features = false, features = ["backend_mmdb"] }
+# RocksDB
+vsdb = { version = "10.0.0", default-features = false, features = ["backend_rocksdb"] }
 ```
 
 The API is identical regardless of backend. No special action is needed

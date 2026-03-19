@@ -28,8 +28,8 @@ For detailed API examples, see [API Examples](docs/api.md).
 
 Two storage backends are supported, selected at compile time:
 
-- `backend_rocksdb` (default) — RocksDB via C++ FFI
-- `backend_mmdb` — MMDB, a pure-Rust LSM-Tree engine
+- `backend_mmdb` (default) — MMDB, a pure-Rust LSM-Tree engine
+- `backend_rocksdb` — RocksDB via C++ FFI
 
 ## License
 

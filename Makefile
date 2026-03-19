@@ -4,7 +4,7 @@ all-rocksdb: fmt lint-rocksdb test-rocksdb
 
 export CARGO_NET_GIT_FETCH_WITH_CLI = true
 
-# ---- Main targets (default: RocksDB backend) ----
+# ---- Main targets (default: MMDB backend) ----
 
 lint:
 	cargo clippy --workspace
@@ -28,7 +28,6 @@ bench:
 	cargo bench -p vsdb --bench slotdex
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo bench -p vsdb --bench trie_bench
-	du -sh ~/.vsdb
 
 # ---- RocksDB backend targets ----
 
@@ -56,7 +55,6 @@ bench-rocksdb:
 	cargo bench -p vsdb --bench slotdex $(RocksDB_FLAGS)
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo bench -p vsdb --bench trie_bench $(RocksDB_FLAGS)
-	du -sh ~/.vsdb
 
 # ---- Utilities ----
 

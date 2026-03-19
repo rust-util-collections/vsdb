@@ -121,8 +121,8 @@ macro_rules! parse_prefix {
 /// high-level interface for interacting with the database.
 ///
 /// The storage engine is selected at compile time via feature flags:
-/// - `backend_rocksdb` (default): uses RocksDB
-/// - `backend_mmdb`: uses MMDB (pure-Rust LSM-Tree engine)
+/// - `backend_mmdb` (default): uses MMDB (pure-Rust LSM-Tree engine)
+/// - `backend_rocksdb`: uses RocksDB
 pub struct VsDB {
     db: engine::Engine,
 }

@@ -10,7 +10,7 @@ A high-performance, embedded key-value database for Rust with an API that feels 
 
 ## What it does
 
-- **Persistent collections** — `Mapx` (like `HashMap`), `MapxOrd` (like `BTreeMap`), backed by RocksDB
+- **Persistent collections** — `Mapx` (like `HashMap`), `MapxOrd` (like `BTreeMap`), backed by MMDB (default) or RocksDB
 - **Git-model versioning** — `VerMap` provides branching, commits, three-way merge, rollback, and garbage collection over a COW B+ tree with structural sharing
 - **Merkle trie** — `MptCalc` (Merkle Patricia Trie) and `SmtCalc` (Sparse Merkle Tree) as stateless computation layers; `VerMapWithProof` integrates `VerMap` with `MptCalc` for versioned 32-byte Merkle root commitments
 - **Slot-based index** — `SlotDex` for efficient, timestamp-based paged queries via a skip-list-like tier structure
@@ -51,7 +51,7 @@ m.gc();
 
 ```text
 vsdb (workspace)
-+-- core/    vsdb_core   RocksDB engine, MapxRaw, PersistentBTree
++-- core/    vsdb_core   Storage engine (MMDB/RocksDB), MapxRaw, PersistentBTree
 +-- strata/  vsdb         High-level crate (the one users depend on)
      +-- basic/       Mapx, MapxOrd, MapxOrdRawKey, Orphan
      +-- versioned/   VerMap (branch, commit, merge, diff, gc)
@@ -64,7 +64,7 @@ vsdb (workspace)
 
 | Module | Key types | Purpose |
 |--------|-----------|---------|
-| [`basic`](strata/src/basic) | `Mapx`, `MapxOrd`, `Orphan` | Persistent, typed collections backed by RocksDB |
+| [`basic`](strata/src/basic) | `Mapx`, `MapxOrd`, `Orphan` | Persistent, typed collections |
 | [`versioned`](strata/src/versioned) | `VerMap`, `BranchId`, `CommitId` | Git-model versioned KV store with COW B+ tree |
 | [`trie`](strata/src/trie) | `MptCalc`, `SmtCalc`, `SmtProof`, `VerMapWithProof` | Stateless Merkle tries + VerMap integration |
 | [`slotdex`](strata/src/slotdex) | `SlotDex` | Skip-list-like index for timestamp-based paged queries |
