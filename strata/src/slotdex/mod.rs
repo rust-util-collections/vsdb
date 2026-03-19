@@ -320,7 +320,6 @@ where
         }
     }
 
-
     /// Single-pass page location using in-memory tier caches.
     fn locate_page_start(
         &self,
@@ -477,7 +476,8 @@ where
             if top.len() as u64 <= self.tier_capacity {
                 return;
             }
-            let entries: Vec<_> = top.cache.borrow().iter().map(|(k, v)| (*k, *v)).collect();
+            let entries: Vec<_> =
+                top.cache.borrow().iter().map(|(k, v)| (*k, *v)).collect();
             let mut newtop = Tier::new(tiers_len as u32, self.tier_capacity);
             for (slot, cnt) in entries {
                 let slot_floor = slot / newtop.floor_base * newtop.floor_base;

@@ -237,8 +237,14 @@ fn page_boundaries_exact() {
     // page_size=5: should have 4 pages
     assert_eq!(db.get_entries_by_page(5, 0, false), vec![0, 1, 2, 3, 4]);
     assert_eq!(db.get_entries_by_page(5, 1, false), vec![5, 6, 7, 8, 9]);
-    assert_eq!(db.get_entries_by_page(5, 2, false), vec![10, 11, 12, 13, 14]);
-    assert_eq!(db.get_entries_by_page(5, 3, false), vec![15, 16, 17, 18, 19]);
+    assert_eq!(
+        db.get_entries_by_page(5, 2, false),
+        vec![10, 11, 12, 13, 14]
+    );
+    assert_eq!(
+        db.get_entries_by_page(5, 3, false),
+        vec![15, 16, 17, 18, 19]
+    );
     assert!(db.get_entries_by_page(5, 4, false).is_empty());
 
     // Reverse
@@ -326,14 +332,20 @@ fn tier_growth_and_shrink() {
     assert!(tier_count_after_insert >= 1, "should have at least 1 tier");
 
     // Verify queries still work
-    assert_eq!(db.get_entries_by_page(10, 0, false), (0u64..10).collect::<Vec<_>>());
+    assert_eq!(
+        db.get_entries_by_page(10, 0, false),
+        (0u64..10).collect::<Vec<_>>()
+    );
 
     // Remove most entries
     for i in 0u64..95 {
         db.remove(i, &i);
     }
     assert_eq!(db.total(), 5);
-    assert_eq!(db.get_entries_by_page(10, 0, false), (95u64..100).collect::<Vec<_>>());
+    assert_eq!(
+        db.get_entries_by_page(10, 0, false),
+        (95u64..100).collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -369,7 +381,10 @@ fn clear_and_reuse() {
         db.insert(i, i).unwrap();
     }
     assert_eq!(db.total(), 5);
-    assert_eq!(db.get_entries_by_page(10, 0, false), (100u64..105).collect::<Vec<_>>());
+    assert_eq!(
+        db.get_entries_by_page(10, 0, false),
+        (100u64..105).collect::<Vec<_>>()
+    );
 }
 
 #[test]
