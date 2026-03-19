@@ -19,7 +19,15 @@ test:
 
 bench:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench --workspace
+	cargo bench -p vsdb_core --bench basic
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
+	cargo bench -p vsdb --bench basic
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
+	cargo bench -p vsdb --bench versioned
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
+	cargo bench -p vsdb --bench slotdex
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
+	cargo bench -p vsdb --bench trie_bench
 	du -sh ~/.vsdb
 
 # ---- RocksDB backend targets ----
@@ -39,7 +47,15 @@ test-rocksdb:
 
 bench-rocksdb:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench --workspace $(RocksDB_FLAGS)
+	cargo bench -p vsdb_core --bench basic $(RocksDB_FLAGS)
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
+	cargo bench -p vsdb --bench basic $(RocksDB_FLAGS)
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
+	cargo bench -p vsdb --bench versioned $(RocksDB_FLAGS)
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
+	cargo bench -p vsdb --bench slotdex $(RocksDB_FLAGS)
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
+	cargo bench -p vsdb --bench trie_bench $(RocksDB_FLAGS)
 	du -sh ~/.vsdb
 
 # ---- Utilities ----
