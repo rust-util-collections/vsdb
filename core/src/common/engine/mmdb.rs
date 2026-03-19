@@ -60,10 +60,8 @@ impl MmDB {
             let db: &'static DB = Box::leak(Box::new(db));
             dbs_vec.push(db);
         }
-        let dbs: [&'static DB; NUM_SHARDS] = dbs_vec
-            .try_into()
-            .ok()
-            .expect("shard count mismatch");
+        let dbs: [&'static DB; NUM_SHARDS] =
+            dbs_vec.try_into().ok().expect("shard count mismatch");
 
         // Meta keys live in shard 0
         let meta_db = dbs[0];
