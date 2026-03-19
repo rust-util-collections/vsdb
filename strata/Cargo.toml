@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "10.0.0"
+version = "10.0.1"
 authors = ["hui.fan@mail.ru"]
 edition = "2024"
 description = "A std-collection-like database"
@@ -31,10 +31,10 @@ hex = { workspace = true }
 criterion = { workspace = true }
 
 [features]
-default = ["backend_rocksdb"]
+default = ["backend_mmdb"]
 
-backend_rocksdb = ["vsdb_core/backend_rocksdb"]
 backend_mmdb = ["vsdb_core/backend_mmdb"]
+backend_rocksdb = ["vsdb_core/backend_rocksdb"]
 
 [[bench]]
 name = "basic"

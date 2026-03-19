@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_core"
-version = "10.0.0"
+version = "10.0.1"
 authors = ["hui.fan@mail.ru"]
 edition = "2024"
 description = "A std-collection-like database"
@@ -20,9 +20,9 @@ rocksdb = { workspace = true, optional = true }
 mmdb = { workspace = true, optional = true }
 
 [features]
-default = ["backend_rocksdb"]
-backend_rocksdb = ["rocksdb"]
+default = ["backend_mmdb"]
 backend_mmdb = ["mmdb"]
+backend_rocksdb = ["rocksdb"]
 
 [dev-dependencies]
 serde_cbor_2 = { workspace = true }

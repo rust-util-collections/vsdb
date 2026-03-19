@@ -1,6 +1,6 @@
 all: fmt lint test
 
-all-mmdb: fmt lint-mmdb test-mmdb
+all-rocksdb: fmt lint-rocksdb test-rocksdb
 
 export CARGO_NET_GIT_FETCH_WITH_CLI = true
 
@@ -24,20 +24,20 @@ bench:
 
 # ---- MMDB backend targets ----
 
-MMDB_FLAGS := --no-default-features --features "backend_mmdb"
+MMDB_FLAGS := --no-default-features --features "backend_rocksdb"
 
-lint-mmdb:
+lint-rocksdb:
 	cargo clippy --workspace $(MMDB_FLAGS)
 	cargo check --workspace $(MMDB_FLAGS) --tests
 	cargo check --workspace $(MMDB_FLAGS) --benches
 
-test-mmdb:
+test-rocksdb:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo test --workspace --release $(MMDB_FLAGS) --tests -- --test-threads=1
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo test --workspace $(MMDB_FLAGS) --tests -- --test-threads=1
 
-bench-mmdb:
+bench-rocksdb:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo bench --workspace $(MMDB_FLAGS)
 	du -sh ~/.vsdb
