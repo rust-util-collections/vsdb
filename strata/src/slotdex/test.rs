@@ -19,8 +19,8 @@ fn slot_db(mn: u64, swap_order: bool) {
     let mut db = SlotDex::new(mn, swap_order);
     let mut test_db = testdb::TestDB::default();
 
-    let mut slot_min = Slot::MAX;
-    let mut slot_max = Slot::MIN;
+    let mut slot_min = u64::MAX;
+    let mut slot_max = u64::MIN;
 
     (0..siz()).for_each(|i| {
         slot_min = i.min(slot_min);
@@ -41,10 +41,10 @@ fn slot_db(mn: u64, swap_order: bool) {
 }
 
 fn assert_queryable(
-    db: &SlotDex<u64>,
+    db: &SlotDex<u64, u64>,
     test_db: &testdb::TestDB<u64>,
-    slot_min: Slot,
-    slot_max: Slot,
+    slot_min: u64,
+    slot_max: u64,
 ) {
     for _ in 0..16 {
         let page_size = 1 + (random::<u16>() as u32) % 128;
@@ -133,7 +133,7 @@ const fn siz() -> u64 {
 
 #[test]
 fn data_container() {
-    let mut db = SlotDex::new(16, false);
+    let mut db: SlotDex<u64, u32> = SlotDex::new(16, false);
 
     db.insert(0, 0).unwrap();
 
@@ -162,7 +162,7 @@ fn data_container() {
 
 #[test]
 fn empty_db_queries() {
-    let db: SlotDex<u64> = SlotDex::new(8, false);
+    let db: SlotDex<u64, u64> = SlotDex::new(8, false);
     assert_eq!(db.total(), 0);
     assert!(db.get_entries_by_page(10, 0, false).is_empty());
     assert!(db.get_entries_by_page(10, 0, true).is_empty());
@@ -173,7 +173,7 @@ fn empty_db_queries() {
 
 #[test]
 fn single_entry() {
-    let mut db: SlotDex<u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
     db.insert(42, 100).unwrap();
 
     assert_eq!(db.total(), 1);
@@ -188,7 +188,7 @@ fn single_entry() {
 
 #[test]
 fn insert_remove_reinsert() {
-    let mut db: SlotDex<u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
     db.insert(0, 10).unwrap();
     db.insert(0, 20).unwrap();
     assert_eq!(db.total(), 2);
@@ -209,7 +209,7 @@ fn insert_remove_reinsert() {
 
 #[test]
 fn remove_nonexistent_is_noop() {
-    let mut db: SlotDex<u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
     db.insert(0, 1).unwrap();
     db.remove(0, &999); // does not exist
     assert_eq!(db.total(), 1);
@@ -219,7 +219,7 @@ fn remove_nonexistent_is_noop() {
 
 #[test]
 fn duplicate_insert_is_noop() {
-    let mut db: SlotDex<u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
     db.insert(0, 1).unwrap();
     db.insert(0, 1).unwrap(); // duplicate
     assert_eq!(db.total(), 1);
@@ -227,7 +227,7 @@ fn duplicate_insert_is_noop() {
 
 #[test]
 fn page_boundaries_exact() {
-    let mut db: SlotDex<u64> = SlotDex::new(64, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(64, false);
     // Insert exactly 20 entries: slots 0..20, key = slot
     for i in 0u64..20 {
         db.insert(i, i).unwrap();
@@ -254,7 +254,7 @@ fn page_boundaries_exact() {
 
 #[test]
 fn page_size_larger_than_total() {
-    let mut db: SlotDex<u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
     for i in 0u64..3 {
         db.insert(i, i).unwrap();
     }
@@ -267,7 +267,7 @@ fn page_size_larger_than_total() {
 
 #[test]
 fn slot_range_query() {
-    let mut db: SlotDex<u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
     for i in 0u64..100 {
         db.insert(i, i).unwrap();
     }
@@ -286,7 +286,7 @@ fn slot_range_query() {
 
 #[test]
 fn entry_cnt_within_range() {
-    let mut db: SlotDex<u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
     for i in 0u64..100 {
         db.insert(i, i).unwrap();
     }
@@ -300,7 +300,7 @@ fn entry_cnt_within_range() {
 
 #[test]
 fn multiple_entries_per_slot() {
-    let mut db: SlotDex<u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
     // Slot 0 gets 5 entries, slot 1 gets 3 entries
     for i in 0u64..5 {
         db.insert(0, i).unwrap();
@@ -323,7 +323,7 @@ fn multiple_entries_per_slot() {
 
 #[test]
 fn tier_growth_and_shrink() {
-    let mut db: SlotDex<u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
     // Insert enough to trigger tier creation (> 8 distinct slot floors)
     for i in 0u64..100 {
         db.insert(i, i).unwrap();
@@ -350,7 +350,7 @@ fn tier_growth_and_shrink() {
 
 #[test]
 fn swap_order_basic() {
-    let mut db: SlotDex<u64> = SlotDex::new(8, true);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, true);
     for i in 0u64..10 {
         db.insert(i, i).unwrap();
     }
@@ -366,7 +366,7 @@ fn swap_order_basic() {
 
 #[test]
 fn clear_and_reuse() {
-    let mut db: SlotDex<u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
     for i in 0u64..50 {
         db.insert(i, i).unwrap();
     }
@@ -389,7 +389,7 @@ fn clear_and_reuse() {
 
 #[test]
 fn large_tier_capacity() {
-    let mut db: SlotDex<u64> = SlotDex::new(64, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(64, false);
     for i in 0u64..200 {
         db.insert(i, i).unwrap();
     }
@@ -405,7 +405,7 @@ fn large_tier_capacity() {
 
 #[test]
 fn sparse_slots() {
-    let mut db: SlotDex<u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
     // Widely spaced slots
     let slots = [0, 100, 10000, 1000000, u64::MAX / 2];
     for (i, &s) in slots.iter().enumerate() {
@@ -421,29 +421,31 @@ fn sparse_slots() {
 }
 
 mod testdb {
-    use super::*;
     use std::{
         collections::BTreeMap,
         sync::atomic::{AtomicU64, Ordering},
     };
 
+    type PageSize = u16;
+    type PageIndex = u32;
+
     static INNER_ID: AtomicU64 = AtomicU64::new(0);
 
     #[derive(Default)]
     pub struct TestDB<T: Clone + Eq> {
-        data: BTreeMap<[Slot; 2], T>,
+        data: BTreeMap<[u64; 2], T>,
     }
 
     impl<T: Clone + Eq> TestDB<T> {
-        pub fn insert(&mut self, slot: Slot, v: T) {
+        pub fn insert(&mut self, slot: u64, v: T) {
             let inner_id = INNER_ID.fetch_add(1, Ordering::Relaxed);
             self.data.insert([slot, inner_id], v);
         }
 
         pub fn get_entries_by_page_slot(
             &self,
-            slot_start: Option<Slot>,
-            slot_end: Option<Slot>,
+            slot_start: Option<u64>,
+            slot_end: Option<u64>,
             page_size: PageSize,
             page_index: PageIndex,
             reverse: bool,
@@ -451,12 +453,12 @@ mod testdb {
             let page_size = page_size as usize;
             let page_index = page_index as usize;
 
-            let slot_start = slot_start.unwrap_or(Slot::MIN);
-            let slot_end = slot_end.unwrap_or(Slot::MAX);
+            let slot_start = slot_start.unwrap_or(u64::MIN);
+            let slot_end = slot_end.unwrap_or(u64::MAX);
 
             if reverse {
                 self.data
-                    .range([slot_start, 0]..=[slot_end, Slot::MAX])
+                    .range([slot_start, 0]..=[slot_end, u64::MAX])
                     .map(|(_, v)| v)
                     .rev()
                     .skip(page_size * page_index)
@@ -465,7 +467,7 @@ mod testdb {
                     .collect()
             } else {
                 self.data
-                    .range([slot_start, 0]..=[slot_end, Slot::MAX])
+                    .range([slot_start, 0]..=[slot_end, u64::MAX])
                     .map(|(_, v)| v)
                     .skip(page_size * page_index)
                     .take(page_size)

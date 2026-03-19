@@ -1,12 +1,12 @@
 [package]
 name = "vsdb"
-version = "10.0.1"
+version = "10.1.1"
 authors = ["hui.fan@mail.ru"]
 edition = "2024"
 description = "A std-collection-like database"
 homepage = "https://github.com/rust-util-collections/vsdb"
 repository = "https://github.com/rust-util-collections/vsdb/tree/master/strata"
-keywords = ["kv", "leveldb", "rocksdb", "std"]
+keywords = ["git", "vcs", "leveldb", "rocksdb", "database"]
 categories = ["database-implementations", "data-structures", "algorithms", "caching"]
 license = "MIT"
 

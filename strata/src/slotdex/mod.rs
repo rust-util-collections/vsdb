@@ -13,15 +13,71 @@ use serde::{Deserialize, Serialize, de};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, btree_set::Iter as SmallIter},
-    ops::Bound,
+    fmt,
+    ops::{Bound, Not},
 };
 
-type Slot = u64;
-type SlotFloor = Slot;
-type EntryCnt = u64;
+/// Trait for types usable as a slot key in [`SlotDex`].
+///
+/// Implemented for the native unsigned integers `u32`, `u64`, and `u128`.
+pub trait SlotType:
+    Clone
+    + Ord
+    + fmt::Debug
+    + Not<Output = Self>
+    + KeyEnDeOrdered
+    + Serialize
+    + de::DeserializeOwned
+    + 'static
+{
+    /// The minimum value of this type.
+    const MIN: Self;
+    /// The maximum value of this type.
+    const MAX: Self;
 
-// The actual slot which contains the first entry
-type StartSlotActual = Slot;
+    /// Floor-align `self` to a multiple of `base`: `self / base * base`.
+    fn floor_align(&self, base: &Self) -> Self;
+
+    /// `self.checked_pow(exp)`, returning `None` on overflow.
+    fn checked_pow(&self, exp: u32) -> Option<Self>;
+
+    /// Returns the larger of `self` and `other`.
+    fn max_val(self, other: Self) -> Self;
+
+    /// Saturating subtraction.
+    fn saturating_add(&self, rhs: &Self) -> Self;
+
+    /// Widen to `i128` for distance arithmetic.
+    fn as_i128(&self) -> i128;
+
+    /// Widen to `u64` for entry-count arithmetic.
+    fn as_u64(&self) -> u64;
+}
+
+macro_rules! impl_slot_type {
+    ($($t:ty),+) => { $(
+        impl SlotType for $t {
+            const MIN: Self = <$t>::MIN;
+            const MAX: Self = <$t>::MAX;
+            #[inline]
+            fn floor_align(&self, base: &Self) -> Self { self / base * base }
+            #[inline]
+            fn checked_pow(&self, exp: u32) -> Option<Self> { <$t>::checked_pow(*self, exp) }
+            #[inline]
+            fn max_val(self, other: Self) -> Self { Ord::max(self, other) }
+            #[inline]
+            fn saturating_add(&self, rhs: &Self) -> Self { <$t>::saturating_add(*self, *rhs) }
+            #[inline]
+            fn as_i128(&self) -> i128 { *self as i128 }
+            #[inline]
+            fn as_u64(&self) -> u64 { *self as u64 }
+        }
+    )+ };
+}
+
+impl_slot_type!(u32, u64, u128);
+
+type EntryCnt = u64;
 type SkipNum = EntryCnt;
 type TakeNum = EntryCnt;
 
@@ -39,20 +95,26 @@ const INLINE_CAPACITY_THRESHOLD: usize = 8;
 /// which are then grouped into tiers. This hierarchical structure allows for
 /// rapid seeking and counting, making it highly efficient for pagination and
 /// range queries over large datasets.
+///
+/// The slot type `S` must implement [`SlotType`]; built-in support covers
+/// `u32`, `u64`, and `u128`.
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(bound = "K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned")]
-pub struct SlotDex<K>
+#[serde(
+    bound = "S: SlotType + Serialize + de::DeserializeOwned, K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned"
+)]
+pub struct SlotDex<S, K>
 where
+    S: SlotType,
     K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
-    data: MapxOrd<Slot, DataCtner<K>>,
+    data: MapxOrd<S, DataCtner<K>>,
 
     // How many entries are in this DB
     total: Orphan<EntryCnt>,
 
-    tiers: Vec<Tier>,
+    tiers: Vec<Tier<S>>,
 
-    tier_capacity: u64,
+    tier_capacity: S,
 
     // Switch the inner implementation of the slot direction:
     // - positive => reverse
@@ -63,8 +125,9 @@ where
     swap_order: bool,
 }
 
-impl<K> SlotDex<K>
+impl<S, K> SlotDex<S, K>
 where
+    S: SlotType,
     K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
 {
     /// Creates a new `SlotDex`.
@@ -74,8 +137,8 @@ where
     /// * `tier_capacity` - The capacity of each tier, controlling the granularity of the index.
     /// * `swap_order` - If `true`, reverses the internal slot order. This can improve
     ///   performance for applications that primarily query in reverse chronological order.
-    pub fn new(tier_capacity: u64, swap_order: bool) -> Self {
-        let tier_capacity = tier_capacity.max(1);
+    pub fn new(tier_capacity: S, swap_order: bool) -> Self {
+        let tier_capacity = tier_capacity.max_val(S::MIN);
 
         Self {
             data: MapxOrd::new(),
@@ -92,16 +155,16 @@ where
     ///
     /// * `slot` - The slot to insert the key into (e.g., a timestamp).
     /// * `k` - The key to insert.
-    pub fn insert(&mut self, slot: Slot, k: K) -> Result<()> {
+    pub fn insert(&mut self, slot: S, k: K) -> Result<()> {
         let slot = self.to_storage_slot(slot);
 
-        self.ensure_tier_capacity(slot);
+        self.ensure_tier_capacity(slot.clone());
 
         let mut ctner = self.data.get(&slot).unwrap_or_default();
         if ctner.insert(k) {
             self.data.insert(&slot, &ctner);
             self.tiers.iter_mut().for_each(|t| {
-                let slot_floor = slot / t.floor_base * t.floor_base;
+                let slot_floor = slot.floor_align(&t.floor_base);
                 let mut v = t.cache.borrow().get(&slot_floor).copied().unwrap_or(0);
                 if 0 == v {
                     *t.entry_count.get_mut() += 1;
@@ -110,7 +173,7 @@ where
                     }
                 }
                 v += 1;
-                t.cache.borrow_mut().insert(slot_floor, v);
+                t.cache.borrow_mut().insert(slot_floor.clone(), v);
                 t.store.insert(&slot_floor, &v);
             });
             *self.total.get_mut() += 1;
@@ -125,7 +188,7 @@ where
     ///
     /// * `slot` - The slot to remove the key from.
     /// * `k` - The key to remove.
-    pub fn remove(&mut self, slot: Slot, k: &K) {
+    pub fn remove(&mut self, slot: S, k: &K) {
         let slot = self.to_storage_slot(slot);
 
         let (exist, empty, d) = match self.data.get(&slot) {
@@ -157,7 +220,7 @@ where
 
         if exist {
             self.tiers.iter_mut().for_each(|t| {
-                let slot_floor = slot / t.floor_base * t.floor_base;
+                let slot_floor = slot.floor_align(&t.floor_base);
                 let cnt = t.cache.borrow().get(&slot_floor).copied().unwrap();
                 if 1 == cnt {
                     t.cache.borrow_mut().remove(&slot_floor);
@@ -165,7 +228,7 @@ where
                     t.dec_len();
                 } else {
                     let new_cnt = cnt - 1;
-                    t.cache.borrow_mut().insert(slot_floor, new_cnt);
+                    t.cache.borrow_mut().insert(slot_floor.clone(), new_cnt);
                     t.store.insert(&slot_floor, &new_cnt);
                 }
             });
@@ -221,8 +284,8 @@ where
     /// A `Vec<K>` containing the entries for the specified page and slot range.
     pub fn get_entries_by_page_slot(
         &self,
-        slot_left_bound: Option<Slot>,  // Included
-        slot_right_bound: Option<Slot>, // Included
+        slot_left_bound: Option<S>,  // Included
+        slot_right_bound: Option<S>, // Included
         page_size: PageSize,
         page_index: PageIndex, // start from 0
         reverse_order: bool,
@@ -247,34 +310,34 @@ where
         )
     }
 
-    fn slot_entry_cnt(&self, slot: Slot) -> EntryCnt {
+    fn slot_entry_cnt(&self, slot: &S) -> EntryCnt {
         self.data
-            .get(&slot)
+            .get(slot)
             .map(|d| d.len() as EntryCnt)
             .unwrap_or(0)
     }
 
     // Exclude the slot itself-owned entries (whether it exists or not)
-    fn distance_to_the_leftmost_slot(&self, slot: Slot) -> Distance {
-        if slot == Slot::MIN {
+    fn distance_to_the_leftmost_slot(&self, slot: &S) -> Distance {
+        if *slot == S::MIN {
             return 0;
         }
-        let mut left_bound = Slot::MIN;
+        let mut left_bound = S::MIN;
         let mut ret = 0;
         for t in self.tiers.iter().rev() {
             t.ensure_cache();
-            let right_bound = slot / t.floor_base * t.floor_base;
+            let right_bound = slot.floor_align(&t.floor_base);
             ret += t
                 .cache
                 .borrow()
-                .range(left_bound..right_bound)
+                .range(left_bound.clone()..right_bound.clone())
                 .map(|(_, cnt)| *cnt as Distance)
                 .sum::<Distance>();
             left_bound = right_bound
         }
         ret += self
             .data
-            .range(left_bound..slot)
+            .range(left_bound..slot.clone())
             .map(|(_, d)| d.len() as Distance)
             .sum::<Distance>();
         ret
@@ -282,8 +345,8 @@ where
 
     fn offsets_from_the_leftmost_slot(
         &self,
-        slot_start: Slot, // Included
-        slot_end: Slot,   // Included
+        slot_start: &S, // Included
+        slot_end: &S,   // Included
         page_size: PageSize,
         page_index: PageIndex,
         reverse: bool,
@@ -321,39 +384,39 @@ where
     }
 
     /// Single-pass page location using in-memory tier caches.
-    fn locate_page_start(
-        &self,
-        global_skip_n: EntryCnt,
-    ) -> (Bound<StartSlotActual>, SkipNum) {
-        let mut slot_start = Bound::Included(Slot::MIN);
+    fn locate_page_start(&self, global_skip_n: EntryCnt) -> (Bound<S>, SkipNum) {
+        let mut slot_start = Bound::Included(S::MIN);
         let mut remaining: u64 = global_skip_n;
 
         for t in self.tiers.iter().rev() {
             t.ensure_cache();
             let c = t.cache.borrow();
-            let mut hdr = c.range((slot_start, Bound::Unbounded)).peekable();
+            let mut hdr = c.range((slot_start.clone(), Bound::Unbounded)).peekable();
             while let Some(entry_cnt) = hdr.next().map(|(_, cnt)| *cnt) {
                 if entry_cnt > remaining {
                     break;
                 } else {
                     slot_start = hdr
                         .peek()
-                        .map(|(s, _)| Bound::Included(**s))
-                        .unwrap_or(Bound::Excluded(Slot::MAX));
+                        .map(|(s, _)| Bound::Included((*s).clone()))
+                        .unwrap_or(Bound::Excluded(S::MAX));
                     remaining -= entry_cnt;
                 }
             }
         }
 
-        let mut hdr = self.data.range((slot_start, Bound::Unbounded)).peekable();
+        let mut hdr = self
+            .data
+            .range((slot_start.clone(), Bound::Unbounded))
+            .peekable();
         while let Some(entry_cnt) = hdr.next().map(|(_, entries)| entries.len() as u64) {
             if entry_cnt > remaining {
                 break;
             } else {
                 slot_start = hdr
                     .peek()
-                    .map(|(s, _)| Bound::Included(*s))
-                    .unwrap_or(Bound::Excluded(Slot::MAX));
+                    .map(|(s, _)| Bound::Included((*s).clone()))
+                    .unwrap_or(Bound::Excluded(S::MAX));
                 remaining -= entry_cnt;
             }
         }
@@ -363,8 +426,8 @@ where
 
     fn get_entries(
         &self,
-        slot_start: Slot, // Included
-        slot_end: Slot,   // Included
+        slot_start: S, // Included
+        slot_end: S,   // Included
         page_size: PageSize,
         page_index: PageIndex,
         reverse: bool,
@@ -374,7 +437,11 @@ where
         }
 
         let (global_skip_n, take_n) = self.offsets_from_the_leftmost_slot(
-            slot_start, slot_end, page_size, page_index, reverse,
+            &slot_start,
+            &slot_end,
+            page_size,
+            page_index,
+            reverse,
         );
 
         let mut ret = Vec::with_capacity(take_n as usize);
@@ -419,20 +486,16 @@ where
     /// # Returns
     ///
     /// The total number of entries (`EntryCnt`) within the specified range.
-    pub fn entry_cnt_within_two_slots(
-        &self,
-        slot_start: Slot,
-        slot_end: Slot,
-    ) -> EntryCnt {
+    pub fn entry_cnt_within_two_slots(&self, slot_start: S, slot_end: S) -> EntryCnt {
         let (slot_min, slot_max, _) =
             self.transform_range(Some(slot_start), Some(slot_end));
 
         if slot_min > slot_max {
             0
         } else {
-            let cnt = self.distance_to_the_leftmost_slot(slot_max)
-                - self.distance_to_the_leftmost_slot(slot_min)
-                + self.slot_entry_cnt(slot_max) as Distance;
+            let cnt = self.distance_to_the_leftmost_slot(&slot_max)
+                - self.distance_to_the_leftmost_slot(&slot_min)
+                + self.slot_entry_cnt(&slot_max) as Distance;
             cnt as EntryCnt
         }
     }
@@ -441,21 +504,17 @@ where
     ///
     /// # Arguments
     ///
-    /// * `slot_start` - An `Option<Slot>` for the starting slot. If `None`, `Slot::MIN` is used.
-    /// * `slot_end` - An `Option<Slot>` for the ending slot. If `None`, `Slot::MAX` is used.
+    /// * `slot_start` - An `Option<S>` for the starting slot. If `None`, `S::MIN` is used.
+    /// * `slot_end` - An `Option<S>` for the ending slot. If `None`, `S::MAX` is used.
     ///
     /// # Returns
     ///
     /// The total number of entries (`EntryCnt`) in the given range.
-    pub fn total_by_slot(
-        &self,
-        slot_start: Option<Slot>,
-        slot_end: Option<Slot>,
-    ) -> EntryCnt {
-        let slot_start = slot_start.unwrap_or(Slot::MIN);
-        let slot_end = slot_end.unwrap_or(Slot::MAX);
+    pub fn total_by_slot(&self, slot_start: Option<S>, slot_end: Option<S>) -> EntryCnt {
+        let slot_start = slot_start.unwrap_or(S::MIN);
+        let slot_end = slot_end.unwrap_or(S::MAX);
 
-        if Slot::MIN == slot_start && Slot::MAX == slot_end {
+        if S::MIN == slot_start && S::MAX == slot_end {
             self.total.get_value()
         } else {
             self.entry_cnt_within_two_slots(slot_start, slot_end)
@@ -470,17 +529,21 @@ where
     // --- Private Helper Methods ---
 
     // Ensure there is enough tier capacity to cover the new slot.
-    fn ensure_tier_capacity(&mut self, _target_slot: Slot) {
+    fn ensure_tier_capacity(&mut self, _target_slot: S) {
         let tiers_len = self.tiers.len();
         if let Some(top) = self.tiers.last_mut() {
-            if top.len() as u64 <= self.tier_capacity {
+            if (top.len() as u64) <= self.tier_capacity.as_u64() {
                 return;
             }
-            let entries: Vec<_> =
-                top.cache.borrow().iter().map(|(k, v)| (*k, *v)).collect();
-            let mut newtop = Tier::new(tiers_len as u32, self.tier_capacity);
+            let entries: Vec<_> = top
+                .cache
+                .borrow()
+                .iter()
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+            let mut newtop = Tier::new(tiers_len as u32, &self.tier_capacity);
             for (slot, cnt) in entries {
-                let slot_floor = slot / newtop.floor_base * newtop.floor_base;
+                let slot_floor = slot.floor_align(&newtop.floor_base);
                 let mut c = newtop.cache.borrow_mut();
                 let v = c.get(&slot_floor).copied().unwrap_or(0);
                 if 0 == v {
@@ -490,15 +553,15 @@ where
                     }
                 }
                 let new_v = v + cnt;
-                c.insert(slot_floor, new_v);
+                c.insert(slot_floor.clone(), new_v);
                 drop(c);
                 newtop.store.insert(&slot_floor, &new_v);
             }
             self.tiers.push(newtop);
         } else {
-            let mut newtop = Tier::new(tiers_len as u32, self.tier_capacity);
+            let mut newtop = Tier::new(tiers_len as u32, &self.tier_capacity);
             for (slot, entries) in self.data.iter() {
-                let slot_floor = slot / newtop.floor_base * newtop.floor_base;
+                let slot_floor = slot.floor_align(&newtop.floor_base);
                 let mut c = newtop.cache.borrow_mut();
                 let v = c.get(&slot_floor).copied().unwrap_or(0);
                 if 0 == v {
@@ -508,7 +571,7 @@ where
                     }
                 }
                 let new_v = v + entries.len() as EntryCnt;
-                c.insert(slot_floor, new_v);
+                c.insert(slot_floor.clone(), new_v);
                 drop(c);
                 newtop.store.insert(&slot_floor, &new_v);
             }
@@ -518,7 +581,7 @@ where
 
     // Convert a logical slot (user perspective) to a storage slot (internal key).
     #[inline(always)]
-    fn to_storage_slot(&self, logical_slot: Slot) -> Slot {
+    fn to_storage_slot(&self, logical_slot: S) -> S {
         if self.swap_order {
             !logical_slot
         } else {
@@ -530,11 +593,11 @@ where
     // Returns (storage_min, storage_max, storage_is_reversed_relative_to_logical)
     fn transform_range(
         &self,
-        logical_min: Option<Slot>,
-        logical_max: Option<Slot>,
-    ) -> (Slot, Slot, bool) {
-        let min = logical_min.unwrap_or(Slot::MIN);
-        let max = logical_max.unwrap_or(Slot::MAX);
+        logical_min: Option<S>,
+        logical_max: Option<S>,
+    ) -> (S, S, bool) {
+        let min = logical_min.unwrap_or(S::MIN);
+        let max = logical_max.unwrap_or(S::MAX);
 
         if self.swap_order {
             // If storage is reversed:
@@ -547,14 +610,12 @@ where
     }
 }
 
-impl<K> Default for SlotDex<K>
-where
-    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
-{
-    fn default() -> Self {
-        Self::new(8, false)
-    }
-}
+/// Convenience alias for `SlotDex<u32, K>`.
+pub type SlotDex32<K> = SlotDex<u32, K>;
+/// Convenience alias for `SlotDex<u64, K>`.
+pub type SlotDex64<K> = SlotDex<u64, K>;
+/// Convenience alias for `SlotDex<u128, K>`.
+pub type SlotDex128<K> = SlotDex<u128, K>;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(bound = "K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned")]
@@ -692,24 +753,25 @@ where
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct Tier {
-    floor_base: u64,
-    store: MapxOrd<SlotFloor, EntryCnt>,
+#[serde(bound = "S: SlotType + Serialize + de::DeserializeOwned")]
+struct Tier<S: SlotType> {
+    floor_base: S,
+    store: MapxOrd<S, EntryCnt>,
     #[serde(skip)]
-    cache: RefCell<BTreeMap<SlotFloor, EntryCnt>>,
+    cache: RefCell<BTreeMap<S, EntryCnt>>,
     entry_count: Orphan<usize>,
     #[serde(skip)]
     len_cache: Option<usize>,
 }
 
-impl Tier {
-    fn new(tier_idx: u32, tier_capacity: u64) -> Self {
+impl<S: SlotType> Tier<S> {
+    fn new(tier_idx: u32, tier_capacity: &S) -> Self {
         let pow = 1 + tier_idx;
         Self {
             floor_base: tier_capacity
                 .checked_pow(pow)
-                .filter(|&v| v != 0)
-                .unwrap_or(u64::MAX),
+                .filter(|v| *v != S::MIN)
+                .unwrap_or(S::MAX),
             store: MapxOrd::new(),
             cache: RefCell::new(BTreeMap::new()),
             entry_count: Orphan::new(0),
