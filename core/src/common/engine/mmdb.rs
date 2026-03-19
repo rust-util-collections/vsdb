@@ -2,7 +2,7 @@ use crate::common::{
     BatchTrait, GB, PREFIX_SIZE, Pre, PreBytes, RESERVED_ID_CNT, RawKey, RawValue,
     vsdb_get_base_dir, vsdb_set_base_dir,
 };
-use mmdb::{BidiIterator, CompressionType, DB, DbOptions, WriteBatch};
+use mmdb::{BidiIterator, CompressionType, DB, DbOptions, WriteBatch, WriteOptions};
 use parking_lot::Mutex;
 use ruc::*;
 use std::{
@@ -21,6 +21,16 @@ const META_KEY_MAX_KEYLEN: [u8; 1] = [u8::MAX];
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 
 const PREFIX_ALLOC_BATCH: u64 = 8192;
+
+/// WriteOptions with WAL fsync enabled.
+/// Used for metadata writes (prefix allocator, max_keylen) that must survive
+/// process exit without DB::drop() (e.g. Box::leak singleton pattern).
+fn sync_write_opts() -> WriteOptions {
+    WriteOptions {
+        sync: true,
+        ..Default::default()
+    }
+}
 
 pub struct MmDB {
     db: &'static DB,
@@ -43,12 +53,21 @@ impl MmDB {
         let (prefix_allocator, initial_value) = PreAllocator::init();
 
         if db.get(&META_KEY_MAX_KEYLEN).c(d!())?.is_none() {
-            db.put(&META_KEY_MAX_KEYLEN, &0_usize.to_be_bytes())
-                .c(d!())?;
+            db.put_with_options(
+                &sync_write_opts(),
+                &META_KEY_MAX_KEYLEN,
+                &0_usize.to_be_bytes(),
+            )
+            .c(d!())?;
         }
 
         if db.get(&prefix_allocator.key).c(d!())?.is_none() {
-            db.put(&prefix_allocator.key, &initial_value).c(d!())?;
+            db.put_with_options(
+                &sync_write_opts(),
+                &prefix_allocator.key,
+                &initial_value,
+            )
+            .c(d!())?;
         }
 
         Ok(MmDB {
@@ -91,7 +110,11 @@ impl MmDB {
                         );
                         let new_ceil = ret + PREFIX_ALLOC_BATCH;
                         self.db
-                            .put(&self.prefix_allocator.key, &new_ceil.to_be_bytes())
+                            .put_with_options(
+                                &sync_write_opts(),
+                                &self.prefix_allocator.key,
+                                &new_ceil.to_be_bytes(),
+                            )
                             .expect("vsdb: meta write failed");
                         GLOBAL_COUNTER.store(ret, Ordering::Release);
                         GLOBAL_CEILING.store(new_ceil, Ordering::Release);
@@ -109,7 +132,11 @@ impl MmDB {
                     if batch_end > old_ceil2 {
                         let new_ceil = batch_end + PREFIX_ALLOC_BATCH;
                         self.db
-                            .put(&self.prefix_allocator.key, &new_ceil.to_be_bytes())
+                            .put_with_options(
+                                &sync_write_opts(),
+                                &self.prefix_allocator.key,
+                                &new_ceil.to_be_bytes(),
+                            )
                             .expect("vsdb: meta write failed");
                         GLOBAL_CEILING.store(new_ceil, Ordering::Release);
                     }
@@ -341,30 +368,61 @@ fn check_bound_hi(full_key: &[u8], bound: &Bound<Vec<u8>>) -> bool {
 fn mmdb_open(dir: &std::path::Path) -> Result<DB> {
     const G: usize = GB as usize;
 
-    // Read available memory once (Linux only).
-    let avail_mem_bytes: usize = if cfg!(target_os = "linux") {
-        fs::read_to_string("/proc/meminfo")
-            .ok()
-            .and_then(|s| {
-                s.lines()
-                    .find(|l| l.contains("MemAvailable"))
-                    .and_then(|l| {
-                        l.replace(|ch: char| !ch.is_numeric(), "")
-                            .parse::<usize>()
-                            .ok()
-                    })
-            })
-            .unwrap_or(G / 1024)
-            * 1024
-    } else {
-        G
+    // Detect available physical memory (platform-specific).
+    let avail_mem_bytes: usize = {
+        #[cfg(target_os = "linux")]
+        {
+            fs::read_to_string("/proc/meminfo")
+                .ok()
+                .and_then(|s| {
+                    s.lines()
+                        .find(|l| l.contains("MemAvailable"))
+                        .and_then(|l| {
+                            l.replace(|ch: char| !ch.is_numeric(), "")
+                                .parse::<usize>()
+                                .ok()
+                        })
+                })
+                .unwrap_or(G / 1024)
+                * 1024
+        }
+        #[cfg(any(target_os = "freebsd", target_os = "macos"))]
+        {
+            // FreeBSD: hw.physmem, macOS: hw.memsize (both return bytes)
+            let key = if cfg!(target_os = "freebsd") {
+                "hw.physmem"
+            } else {
+                "hw.memsize"
+            };
+            std::process::Command::new("sysctl")
+                .arg("-n")
+                .arg(key)
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .and_then(|s| s.trim().parse::<usize>().ok())
+                .unwrap_or(G)
+        }
+        #[cfg(not(any(
+            target_os = "linux",
+            target_os = "freebsd",
+            target_os = "macos"
+        )))]
+        {
+            G
+        }
     };
 
-    let wr_buffer_size = if avail_mem_bytes > 16 * G {
-        avail_mem_bytes / 4
-    } else {
-        G
-    };
+    // Cap write_buffer_size at 512 MB to avoid very long flush stalls
+    // (flush runs synchronously under the write lock).
+    let wr_buffer_size = cmp::min(
+        if avail_mem_bytes > 16 * G {
+            avail_mem_bytes / 4
+        } else {
+            G
+        },
+        512 * 1024 * 1024,
+    );
 
     let block_cache_size = (avail_mem_bytes as u64) / 8;
 

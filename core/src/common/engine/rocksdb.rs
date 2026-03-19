@@ -5,7 +5,7 @@ use crate::common::{
 use parking_lot::Mutex;
 use rocksdb::{
     BlockBasedOptions, Cache, DB, DBCompressionType, DBIterator, Direction,
-    IteratorMode, Options, ReadOptions, SliceTransform, WriteBatch,
+    IteratorMode, Options, ReadOptions, SliceTransform, WriteBatch, WriteOptions,
 };
 use ruc::*;
 use std::{
@@ -29,6 +29,15 @@ const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 // Larger values reduce lock contention at the cost of wasting prefix IDs on crash.
 // With u64 prefix space this is negligible.
 const PREFIX_ALLOC_BATCH: u64 = 8192;
+
+/// WriteOptions with WAL fsync enabled.
+/// Used for metadata writes (prefix allocator, max_keylen) that must survive
+/// process exit without DB::drop() (e.g. Box::leak singleton pattern).
+fn sync_write_opts() -> WriteOptions {
+    let mut opts = WriteOptions::default();
+    opts.set_sync(true);
+    opts
+}
 
 // Stack threshold for FullKey: PREFIX_SIZE (8) + up to 56 bytes of user key.
 const FULL_KEY_STACK_CAP: usize = 64;
@@ -162,11 +171,17 @@ impl RocksDB {
         let (prefix_allocator, initial_value) = PreAllocator::init();
 
         if db.get(META_KEY_MAX_KEYLEN).c(d!())?.is_none() {
-            db.put(META_KEY_MAX_KEYLEN, 0_usize.to_be_bytes()).c(d!())?;
+            db.put_opt(
+                META_KEY_MAX_KEYLEN,
+                0_usize.to_be_bytes(),
+                &sync_write_opts(),
+            )
+            .c(d!())?;
         }
 
         if db.get(prefix_allocator.key).c(d!())?.is_none() {
-            db.put(prefix_allocator.key, initial_value).c(d!())?;
+            db.put_opt(prefix_allocator.key, initial_value, &sync_write_opts())
+                .c(d!())?;
         }
 
         let max_keylen_bytes = db
@@ -233,7 +248,11 @@ impl RocksDB {
                         );
                         let new_ceil = ret + PREFIX_ALLOC_BATCH;
                         self.db
-                            .put(self.prefix_allocator.key, new_ceil.to_be_bytes())
+                            .put_opt(
+                                self.prefix_allocator.key,
+                                new_ceil.to_be_bytes(),
+                                &sync_write_opts(),
+                            )
                             .expect("vsdb: meta write failed");
                         GLOBAL_COUNTER.store(ret, Ordering::Release);
                         GLOBAL_CEILING.store(new_ceil, Ordering::Release);
@@ -256,7 +275,11 @@ impl RocksDB {
                     if batch_end > old_ceil2 {
                         let new_ceil = batch_end + PREFIX_ALLOC_BATCH;
                         self.db
-                            .put(self.prefix_allocator.key, new_ceil.to_be_bytes())
+                            .put_opt(
+                                self.prefix_allocator.key,
+                                new_ceil.to_be_bytes(),
+                                &sync_write_opts(),
+                            )
                             .expect("vsdb: meta write failed");
                         GLOBAL_CEILING.store(new_ceil, Ordering::Release);
                     }
