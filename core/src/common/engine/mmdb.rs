@@ -14,13 +14,16 @@ use std::{
         LazyLock,
         atomic::{AtomicU64, Ordering},
     },
-    thread::available_parallelism,
 };
 
 const META_KEY_MAX_KEYLEN: [u8; 1] = [u8::MAX];
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 
 const PREFIX_ALLOC_BATCH: u64 = 8192;
+
+/// Number of DB shards. Each prefix is routed to one shard via `prefix % NUM_SHARDS`.
+/// This gives 16 independent write locks, compaction queues, and WALs.
+const NUM_SHARDS: usize = 16;
 
 /// WriteOptions with WAL fsync enabled.
 /// Used for metadata writes (prefix allocator, max_keylen) that must survive
@@ -33,7 +36,8 @@ fn sync_write_opts() -> WriteOptions {
 }
 
 pub struct MmDB {
-    db: &'static DB,
+    /// Sharded DB handlers. Meta keys live in shard 0.
+    dbs: [&'static DB; NUM_SHARDS],
     prefix_allocator: PreAllocator,
 }
 
@@ -47,33 +51,61 @@ impl MmDB {
         let dir = base_dir.join("mmdb");
         fs::create_dir_all(&dir).c(d!())?;
 
-        let db = mmdb_open(&dir)?;
-        let db: &'static DB = Box::leak(Box::new(db));
+        // Open NUM_SHARDS independent DB instances
+        let mut dbs_vec: Vec<&'static DB> = Vec::with_capacity(NUM_SHARDS);
+        for i in 0..NUM_SHARDS {
+            let shard_dir = dir.join(format!("shard_{:02}", i));
+            fs::create_dir_all(&shard_dir).c(d!())?;
+            let db = mmdb_open(&shard_dir)?;
+            let db: &'static DB = Box::leak(Box::new(db));
+            dbs_vec.push(db);
+        }
+        let dbs: [&'static DB; NUM_SHARDS] = dbs_vec
+            .try_into()
+            .ok()
+            .expect("shard count mismatch");
 
+        // Meta keys live in shard 0
+        let meta_db = dbs[0];
         let (prefix_allocator, initial_value) = PreAllocator::init();
 
-        if db.get(&META_KEY_MAX_KEYLEN).c(d!())?.is_none() {
-            db.put_with_options(
-                &sync_write_opts(),
-                &META_KEY_MAX_KEYLEN,
-                &0_usize.to_be_bytes(),
-            )
-            .c(d!())?;
+        if meta_db.get(&META_KEY_MAX_KEYLEN).c(d!())?.is_none() {
+            meta_db
+                .put_with_options(
+                    &sync_write_opts(),
+                    &META_KEY_MAX_KEYLEN,
+                    &0_usize.to_be_bytes(),
+                )
+                .c(d!())?;
         }
 
-        if db.get(&prefix_allocator.key).c(d!())?.is_none() {
-            db.put_with_options(
-                &sync_write_opts(),
-                &prefix_allocator.key,
-                &initial_value,
-            )
-            .c(d!())?;
+        if meta_db.get(&prefix_allocator.key).c(d!())?.is_none() {
+            meta_db
+                .put_with_options(
+                    &sync_write_opts(),
+                    &prefix_allocator.key,
+                    &initial_value,
+                )
+                .c(d!())?;
         }
 
         Ok(MmDB {
-            db,
+            dbs,
             prefix_allocator,
         })
+    }
+
+    /// Route a prefix to its shard.
+    #[inline(always)]
+    fn shard(&self, meta_prefix: &PreBytes) -> &'static DB {
+        let prefix = u64::from_be_bytes(*meta_prefix);
+        self.dbs[(prefix % NUM_SHARDS as u64) as usize]
+    }
+
+    /// Shard 0 holds meta keys (prefix allocator, max_keylen).
+    #[inline(always)]
+    fn meta_db(&self) -> &'static DB {
+        self.dbs[0]
     }
 
     #[allow(unused_variables)]
@@ -103,13 +135,13 @@ impl MmDB {
                     let _x = LK.lock();
                     if GLOBAL_COUNTER.load(Ordering::Relaxed) == 0 {
                         let ret = crate::parse_prefix!(
-                            self.db
+                            self.meta_db()
                                 .get(&self.prefix_allocator.key)
                                 .expect("vsdb: meta read failed")
                                 .unwrap()
                         );
                         let new_ceil = ret + PREFIX_ALLOC_BATCH;
-                        self.db
+                        self.meta_db()
                             .put_with_options(
                                 &sync_write_opts(),
                                 &self.prefix_allocator.key,
@@ -131,7 +163,7 @@ impl MmDB {
                     let old_ceil2 = GLOBAL_CEILING.load(Ordering::Acquire);
                     if batch_end > old_ceil2 {
                         let new_ceil = batch_end + PREFIX_ALLOC_BATCH;
-                        self.db
+                        self.meta_db()
                             .put_with_options(
                                 &sync_write_opts(),
                                 &self.prefix_allocator.key,
@@ -150,32 +182,35 @@ impl MmDB {
     }
 
     pub(crate) fn flush(&self) {
-        self.db.flush().expect("vsdb: mmdb flush failed");
+        for db in &self.dbs {
+            db.flush().expect("vsdb: mmdb flush failed");
+        }
     }
 
     pub(crate) fn get(&self, meta_prefix: PreBytes, key: &[u8]) -> Option<RawValue> {
         let full_key = make_full_key(&meta_prefix, key);
-        self.db.get(&full_key).expect("vsdb: mmdb get failed")
+        self.shard(&meta_prefix)
+            .get(&full_key)
+            .expect("vsdb: mmdb get failed")
     }
 
     pub(crate) fn insert(&self, meta_prefix: PreBytes, key: &[u8], value: &[u8]) {
         let full_key = make_full_key(&meta_prefix, key);
-        self.db
+        self.shard(&meta_prefix)
             .put(&full_key, value)
             .expect("vsdb: mmdb put failed");
     }
 
     pub(crate) fn remove(&self, meta_prefix: PreBytes, key: &[u8]) {
         let full_key = make_full_key(&meta_prefix, key);
-        self.db.delete(&full_key).expect("vsdb: mmdb delete failed");
+        self.shard(&meta_prefix)
+            .delete(&full_key)
+            .expect("vsdb: mmdb delete failed");
     }
 
     pub(crate) fn iter(&self, meta_prefix: PreBytes) -> MmdbIter {
-        // iter_with_prefix uses prefix bloom filters to skip entire SST files that
-        // don't contain the prefix, and seeks directly to the prefix start.
-        // The returned BidiIterator is fully lazy (streaming, O(1) memory per step).
-        let db_iter = self
-            .db
+        let db = self.shard(&meta_prefix);
+        let db_iter = db
             .iter_with_prefix(&meta_prefix, &mmdb::ReadOptions::default())
             .expect("vsdb: mmdb iter_with_prefix failed");
         let iter =
@@ -188,6 +223,8 @@ impl MmDB {
         meta_prefix: PreBytes,
         bounds: R,
     ) -> MmdbIter {
+        let db = self.shard(&meta_prefix);
+
         let prefixed = |b: &Bound<&Cow<'_, [u8]>>| -> Bound<Vec<u8>> {
             match b {
                 Bound::Included(k) => Bound::Included(make_full_key(&meta_prefix, k)),
@@ -206,8 +243,7 @@ impl MmDB {
         };
         let end_hint = prefix_successor(&meta_prefix);
 
-        let mut db_iter = self
-            .db
+        let mut db_iter = db
             .iter_with_range(
                 &mmdb::ReadOptions::default(),
                 start_hint.as_deref(),
@@ -215,15 +251,10 @@ impl MmDB {
             )
             .expect("vsdb: mmdb iter_with_range failed");
 
-        // Seek the forward cursor to the lower bound so next() starts there in O(1)
-        // rather than scanning entries below lo_full one by one.
         if let Bound::Included(ref lo) | Bound::Excluded(ref lo) = lo_full {
             db_iter.seek(lo);
         }
 
-        // Wrap in BidiIterator for DoubleEndedIterator support, then apply
-        // bound checks lazily. Filter::next_back() correctly scans backward,
-        // so entries above hi_full are skipped without full materialisation.
         let iter = BidiIterator::lazy(db_iter)
             .filter(move |(k, _)| {
                 k.starts_with(&meta_prefix)
@@ -318,7 +349,7 @@ impl BatchTrait for MmdbBatch<'_> {
     #[inline(always)]
     fn commit(&mut self) -> Result<()> {
         let batch = std::mem::replace(&mut self.inner, WriteBatch::new());
-        self.engine.db.write(batch).c(d!())?;
+        self.engine.shard(&self.meta_prefix).write(batch).c(d!())?;
         Ok(())
     }
 }
@@ -413,22 +444,19 @@ fn mmdb_open(dir: &std::path::Path) -> Result<DB> {
         }
     };
 
-    // Cap write_buffer_size at 512 MB to avoid very long flush stalls
-    // (flush runs synchronously under the write lock).
+    // Per-shard sizes: divide totals by NUM_SHARDS
     let wr_buffer_size = cmp::min(
         if avail_mem_bytes > 16 * G {
-            avail_mem_bytes / 4
+            avail_mem_bytes / 4 / NUM_SHARDS
         } else {
-            G
+            G / NUM_SHARDS
         },
         512 * 1024 * 1024,
     );
 
-    let block_cache_size = (avail_mem_bytes as u64) / 8;
+    let block_cache_size = (avail_mem_bytes as u64) / 8 / NUM_SHARDS as u64;
 
-    // ---- Parallelism: min(cpus, 16) ----
-    let parallelism = cmp::min(available_parallelism().c(d!())?.get(), 16);
-
+    // Single compaction thread per shard (16 shards = 16 parallel compactions)
     let opts = DbOptions {
         create_if_missing: true,
         prefix_len: PREFIX_SIZE,
@@ -444,12 +472,12 @@ fn mmdb_open(dir: &std::path::Path) -> Result<DB> {
             CompressionType::Zstd, // L6
         ],
 
-        // Write buffer
+        // Write buffer (per-shard)
         write_buffer_size: wr_buffer_size,
         max_write_buffer_number: 5,
         max_immutable_memtables: 4,
 
-        // Block cache + block size
+        // Block cache + block size (per-shard)
         block_cache_capacity: block_cache_size,
         block_size: 16 * 1024, // 16 KB
 
@@ -461,8 +489,8 @@ fn mmdb_open(dir: &std::path::Path) -> Result<DB> {
         l0_compaction_trigger: 8,
         max_subcompactions: 4,
 
-        // Parallelism
-        max_background_compactions: parallelism,
+        // Single compaction thread per shard — 16 shards give natural parallelism
+        max_background_compactions: 1,
 
         // Concurrent memtable writes
         allow_concurrent_memtable_write: true,
