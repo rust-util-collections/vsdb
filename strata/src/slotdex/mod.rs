@@ -11,6 +11,7 @@ use crate::{
 use ruc::*;
 use serde::{Deserialize, Serialize, de};
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, BTreeSet, btree_set::Iter as SmallIter},
     ops::Bound,
 };
@@ -101,7 +102,7 @@ where
             self.data.insert(&slot, &ctner);
             self.tiers.iter_mut().for_each(|t| {
                 let slot_floor = slot / t.floor_base * t.floor_base;
-                let mut v = t.cache.get(&slot_floor).copied().unwrap_or(0);
+                let mut v = t.cache.borrow().get(&slot_floor).copied().unwrap_or(0);
                 if 0 == v {
                     *t.entry_count.get_mut() += 1;
                     if let Some(l) = t.len_cache.as_mut() {
@@ -109,7 +110,7 @@ where
                     }
                 }
                 v += 1;
-                t.cache.insert(slot_floor, v);
+                t.cache.borrow_mut().insert(slot_floor, v);
                 t.store.insert(&slot_floor, &v);
             });
             *self.total.get_mut() += 1;
@@ -157,14 +158,14 @@ where
         if exist {
             self.tiers.iter_mut().for_each(|t| {
                 let slot_floor = slot / t.floor_base * t.floor_base;
-                let cnt = t.cache.get(&slot_floor).copied().unwrap();
+                let cnt = t.cache.borrow().get(&slot_floor).copied().unwrap();
                 if 1 == cnt {
-                    t.cache.remove(&slot_floor);
+                    t.cache.borrow_mut().remove(&slot_floor);
                     t.store.remove(&slot_floor);
                     t.dec_len();
                 } else {
                     let new_cnt = cnt - 1;
-                    t.cache.insert(slot_floor, new_cnt);
+                    t.cache.borrow_mut().insert(slot_floor, new_cnt);
                     t.store.insert(&slot_floor, &new_cnt);
                 }
             });
@@ -179,18 +180,10 @@ where
 
         self.tiers.iter_mut().for_each(|t| {
             t.store.clear();
-            t.cache.clear();
+            t.cache.borrow_mut().clear();
         });
 
         self.tiers.clear();
-    }
-
-    /// Hydrate in-memory tier caches from persistent storage.
-    /// Must be called after deserialization before querying.
-    pub fn hydrate(&mut self) {
-        for t in &mut self.tiers {
-            t.hydrate_cache();
-        }
     }
 
     /// Retrieves entries by page, a common use case for web services.
@@ -269,9 +262,11 @@ where
         let mut left_bound = Slot::MIN;
         let mut ret = 0;
         for t in self.tiers.iter().rev() {
+            t.ensure_cache();
             let right_bound = slot / t.floor_base * t.floor_base;
             ret += t
                 .cache
+                .borrow()
                 .range(left_bound..right_bound)
                 .map(|(_, cnt)| *cnt as Distance)
                 .sum::<Distance>();
@@ -335,7 +330,9 @@ where
         let mut remaining: u64 = global_skip_n;
 
         for t in self.tiers.iter().rev() {
-            let mut hdr = t.cache.range((slot_start, Bound::Unbounded)).peekable();
+            t.ensure_cache();
+            let c = t.cache.borrow();
+            let mut hdr = c.range((slot_start, Bound::Unbounded)).peekable();
             while let Some(entry_cnt) = hdr.next().map(|(_, cnt)| *cnt) {
                 if entry_cnt > remaining {
                     break;
@@ -480,11 +477,12 @@ where
             if top.len() as u64 <= self.tier_capacity {
                 return;
             }
-            let entries: Vec<_> = top.cache.iter().map(|(k, v)| (*k, *v)).collect();
+            let entries: Vec<_> = top.cache.borrow().iter().map(|(k, v)| (*k, *v)).collect();
             let mut newtop = Tier::new(tiers_len as u32, self.tier_capacity);
             for (slot, cnt) in entries {
                 let slot_floor = slot / newtop.floor_base * newtop.floor_base;
-                let v = newtop.cache.get(&slot_floor).copied().unwrap_or(0);
+                let mut c = newtop.cache.borrow_mut();
+                let v = c.get(&slot_floor).copied().unwrap_or(0);
                 if 0 == v {
                     *newtop.entry_count.get_mut() += 1;
                     if let Some(l) = newtop.len_cache.as_mut() {
@@ -492,7 +490,8 @@ where
                     }
                 }
                 let new_v = v + cnt;
-                newtop.cache.insert(slot_floor, new_v);
+                c.insert(slot_floor, new_v);
+                drop(c);
                 newtop.store.insert(&slot_floor, &new_v);
             }
             self.tiers.push(newtop);
@@ -500,7 +499,8 @@ where
             let mut newtop = Tier::new(tiers_len as u32, self.tier_capacity);
             for (slot, entries) in self.data.iter() {
                 let slot_floor = slot / newtop.floor_base * newtop.floor_base;
-                let v = newtop.cache.get(&slot_floor).copied().unwrap_or(0);
+                let mut c = newtop.cache.borrow_mut();
+                let v = c.get(&slot_floor).copied().unwrap_or(0);
                 if 0 == v {
                     *newtop.entry_count.get_mut() += 1;
                     if let Some(l) = newtop.len_cache.as_mut() {
@@ -508,7 +508,8 @@ where
                     }
                 }
                 let new_v = v + entries.len() as EntryCnt;
-                newtop.cache.insert(slot_floor, new_v);
+                c.insert(slot_floor, new_v);
+                drop(c);
                 newtop.store.insert(&slot_floor, &new_v);
             }
             self.tiers.push(newtop);
@@ -695,7 +696,7 @@ struct Tier {
     floor_base: u64,
     store: MapxOrd<SlotFloor, EntryCnt>,
     #[serde(skip)]
-    cache: BTreeMap<SlotFloor, EntryCnt>,
+    cache: RefCell<BTreeMap<SlotFloor, EntryCnt>>,
     entry_count: Orphan<usize>,
     #[serde(skip)]
     len_cache: Option<usize>,
@@ -710,16 +711,20 @@ impl Tier {
                 .filter(|&v| v != 0)
                 .unwrap_or(u64::MAX),
             store: MapxOrd::new(),
-            cache: BTreeMap::new(),
+            cache: RefCell::new(BTreeMap::new()),
             entry_count: Orphan::new(0),
             len_cache: Some(0),
         }
     }
 
-    fn hydrate_cache(&mut self) {
-        if self.cache.is_empty() {
+    /// Ensure cache is populated. Called lazily on first access after
+    /// deserialization (cache is #[serde(skip)] so starts empty).
+    /// Safe to call on &self thanks to RefCell interior mutability.
+    fn ensure_cache(&self) {
+        let mut c = self.cache.borrow_mut();
+        if c.is_empty() && self.entry_count.get_value() > 0 {
             for (k, v) in self.store.iter() {
-                self.cache.insert(k, v);
+                c.insert(k, v);
             }
         }
     }

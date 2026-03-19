@@ -102,6 +102,5 @@ vsdb = "9.1.0"
 vsdb = { version = "9.1.0", default-features = false, features = ["backend_mmdb", "msgpack_codec"] }
 ```
 
-The API is identical regardless of backend. Only `SlotDex::hydrate()` is
-MMDB-specific (must be called after deserialization to populate in-memory
-tier caches).
+The API is identical regardless of backend. No special action is needed
+after switching — `SlotDex` tier caches are hydrated lazily on first access.
