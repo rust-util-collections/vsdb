@@ -12,14 +12,13 @@ thiserror = "2.0"
 parking_lot = "0.12.1"
 
 serde = { version = "1.0.136", features = ["derive"] }
-msgpack = { package = "rmp-serde", version = "1.1.1" }
 serde_cbor_2 = "0.13.0"
 sha3 = "0.10"
 
 rocksdb = { version = "0.24.0", default-features = false, features = ["bindgen-runtime", "lz4", "zstd"] }
 mmdb = "2.2"
 
-vsdb_core = { path = "core", version = "9.1.0", default-features = false }
+vsdb_core = { path = "core", version = "10.0.0", default-features = false }
 
 criterion = "0.8"
 hex = "0.4"

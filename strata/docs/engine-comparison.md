@@ -99,7 +99,7 @@ from ~1 ms to ~8 us (both backends benefit equally from this optimization).
 vsdb = "9.1.0"
 
 # MMDB
-vsdb = { version = "9.1.0", default-features = false, features = ["backend_mmdb", "msgpack_codec"] }
+vsdb = { version = "9.1.0", default-features = false, features = ["backend_mmdb"] }
 ```
 
 The API is identical regardless of backend. No special action is needed

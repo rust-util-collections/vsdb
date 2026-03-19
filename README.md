@@ -94,17 +94,6 @@ vsdb (workspace)
 
 `SmtCalc` additionally supports `prove()` / `verify_proof()` for constant-time (256-hash) membership and non-membership proofs.
 
-## Codec features
-
-- `msgpack_codec` **(default)** — MessagePack via `rmp-serde`
-- `cbor_codec` — CBOR via `serde_cbor_2`
-
-Mutually exclusive. To use CBOR:
-
-```toml
-vsdb = { version = "9.1.0", default-features = false, features = ["cbor_codec"] }
-```
-
 ## Documentation
 
 - [API Examples](strata/docs/api.md)

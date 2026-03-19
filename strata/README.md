@@ -32,21 +32,6 @@ For the versioned storage architecture with diagrams, see [Versioned Module — 
 - **Merkle Trie**: Built-in `MptCalc` (Merkle Patricia Trie) and `SmtCalc` (Sparse Merkle Tree) for cryptographic state commitments. `VerMapWithProof` integrates `VerMap` with `MptCalc` for versioned Merkle roots.
 - **Slotdex**: A skip-list-like index (`SlotDex`) for efficient, timestamp-based paged queries.
 
-## Features
-
-Uses RocksDB as the storage backend.
-
-- `msgpack_codec`: **(Default)** Use `rmp-serde` as the codec for faster performance.
-- `cbor_codec`: Use `serde_cbor_2` as an alternative codec.
-
-`msgpack_codec` and `cbor_codec` are mutually exclusive.
-To switch from the default MessagePack codec to CBOR, disable default features:
-
-```toml
-[dependencies]
-vsdb = { version = "9.1.0", default-features = false, features = ["cbor_codec"] }
-```
-
 ## Usage
 
 ### Mapx

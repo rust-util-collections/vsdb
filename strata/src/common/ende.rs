@@ -10,7 +10,6 @@ use super::RawBytes;
 use ruc::*;
 use std::{fmt, mem::size_of};
 
-#[cfg(feature = "serde_ende")]
 use serde::{Serialize, de::DeserializeOwned};
 
 /////////////////////////////////////////////////////////////////////////////
@@ -78,75 +77,27 @@ pub trait ValueEnDe: Sized {
     fn decode(bytes: &[u8]) -> Result<Self>;
 }
 
-#[cfg(feature = "serde_ende")]
 impl<T: Serialize> KeyEn for T {
-    #[cfg(feature = "msgpack_codec")]
-    fn try_encode_key(&self) -> Result<RawBytes> {
-        msgpack::to_vec(self).c(d!())
-    }
-
-    #[cfg(all(not(feature = "msgpack_codec"), feature = "cbor_codec"))]
     fn try_encode_key(&self) -> Result<RawBytes> {
         serde_cbor_2::to_vec(self).c(d!())
     }
-
-    #[cfg(not(any(feature = "msgpack_codec", feature = "cbor_codec")))]
-    fn try_encode_key(&self) -> Result<RawBytes> {
-        Err(eg!("no serde codec feature enabled"))
-    }
 }
 
-#[cfg(feature = "serde_ende")]
 impl<T: DeserializeOwned> KeyDe for T {
-    #[cfg(feature = "msgpack_codec")]
-    fn decode_key(bytes: &[u8]) -> Result<Self> {
-        msgpack::from_slice(bytes).c(d!())
-    }
-
-    #[cfg(all(not(feature = "msgpack_codec"), feature = "cbor_codec"))]
     fn decode_key(bytes: &[u8]) -> Result<Self> {
         serde_cbor_2::from_slice(bytes).c(d!())
     }
-
-    #[cfg(not(any(feature = "msgpack_codec", feature = "cbor_codec")))]
-    fn decode_key(_bytes: &[u8]) -> Result<Self> {
-        Err(eg!("no serde codec feature enabled"))
-    }
 }
 
-#[cfg(feature = "serde_ende")]
 impl<T: Serialize> ValueEn for T {
-    #[cfg(feature = "msgpack_codec")]
-    fn try_encode_value(&self) -> Result<RawBytes> {
-        msgpack::to_vec(self).c(d!())
-    }
-
-    #[cfg(all(not(feature = "msgpack_codec"), feature = "cbor_codec"))]
     fn try_encode_value(&self) -> Result<RawBytes> {
         serde_cbor_2::to_vec(self).c(d!())
     }
-
-    #[cfg(not(any(feature = "msgpack_codec", feature = "cbor_codec")))]
-    fn try_encode_value(&self) -> Result<RawBytes> {
-        Err(eg!("no serde codec feature enabled"))
-    }
 }
 
-#[cfg(feature = "serde_ende")]
 impl<T: DeserializeOwned> ValueDe for T {
-    #[cfg(feature = "msgpack_codec")]
-    fn decode_value(bytes: &[u8]) -> Result<Self> {
-        msgpack::from_slice(bytes).c(d!())
-    }
-
-    #[cfg(all(not(feature = "msgpack_codec"), feature = "cbor_codec"))]
     fn decode_value(bytes: &[u8]) -> Result<Self> {
         serde_cbor_2::from_slice(bytes).c(d!())
-    }
-
-    #[cfg(not(any(feature = "msgpack_codec", feature = "cbor_codec")))]
-    fn decode_value(_bytes: &[u8]) -> Result<Self> {
-        Err(eg!("no serde codec feature enabled"))
     }
 }
 
@@ -178,77 +129,6 @@ impl<T: ValueEn + ValueDe> ValueEnDe for T {
     }
 }
 
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////
-
-#[cfg(not(feature = "serde_ende"))]
-impl<T: KeyEnDeOrdered> KeyEn for T {
-    fn try_encode_key(&self) -> Result<RawBytes> {
-        Ok(self.encode_key())
-    }
-
-    fn encode_key(&self) -> RawBytes {
-        <T as KeyEnDeOrdered>::to_bytes(self)
-    }
-}
-
-#[cfg(not(feature = "serde_ende"))]
-impl<T: KeyEnDeOrdered> KeyDe for T {
-    fn decode_key(bytes: &[u8]) -> Result<Self> {
-        <T as KeyEnDeOrdered>::from_slice(bytes).c(d!())
-    }
-}
-
-macro_rules! impl_v_ende {
-    ($t: ty) => {
-        #[cfg(not(feature = "serde_ende"))]
-        impl ValueEnDe for $t {
-            fn try_encode(&self) -> Result<RawBytes> {
-                Ok(self.encode())
-            }
-            fn encode(&self) -> RawBytes {
-                self.as_bytes().into()
-            }
-            fn decode(bytes: &[u8]) -> Result<Self> {
-                unsafe { Ok(<$t>::from_bytes(bytes)) }
-            }
-        }
-    };
-    (^$t: ty) => {
-        #[cfg(not(feature = "serde_ende"))]
-        impl<V: ValueEnDe> ValueEnDe for $t {
-            fn try_encode(&self) -> Result<RawBytes> {
-                Ok(self.encode())
-            }
-            fn encode(&self) -> RawBytes {
-                self.as_bytes().into()
-            }
-            fn decode(bytes: &[u8]) -> Result<Self> {
-                unsafe { Ok(<$t>::from_bytes(bytes)) }
-            }
-        }
-    };
-    (~$t: ty) => {
-        #[cfg(not(feature = "serde_ende"))]
-        impl<K: KeyEnDeOrdered, V: ValueEnDe> ValueEnDe for $t {
-            fn try_encode(&self) -> Result<RawBytes> {
-                Ok(self.encode())
-            }
-            fn encode(&self) -> RawBytes {
-                self.as_bytes().into()
-            }
-            fn decode(bytes: &[u8]) -> Result<Self> {
-                unsafe { Ok(<$t>::from_bytes(bytes)) }
-            }
-        }
-    };
-}
-
-impl_v_ende!(vsdb_core::MapxRaw);
-impl_v_ende!(~crate::basic::mapx::Mapx<K, V>);
-impl_v_ende!(~crate::basic::mapx_ord::MapxOrd<K, V>);
-impl_v_ende!(^crate::basic::orphan::Orphan<V>);
-impl_v_ende!(^crate::basic::mapx_ord_rawkey::MapxOrdRawKey<V>);
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
