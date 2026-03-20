@@ -5,7 +5,7 @@
 //! (e.g., a timestamp or block number).
 
 use crate::{
-    KeyEnDeOrdered, MapxOrd,
+    KeyEnDeOrdered, MapxOrd, ValueEnDe,
     basic::{mapx_ord::MapxOrdIter as LargeIter, orphan::Orphan},
 };
 use ruc::*;
@@ -99,13 +99,11 @@ const INLINE_CAPACITY_THRESHOLD: usize = 8;
 /// The slot type `S` must implement [`SlotType`]; built-in support covers
 /// `u32`, `u64`, and `u128`.
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(
-    bound = "S: SlotType + Serialize + de::DeserializeOwned, K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned"
-)]
+#[serde(bound = "S: SlotType + Serialize + de::DeserializeOwned")]
 pub struct SlotDex<S, K>
 where
     S: SlotType,
-    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered,
 {
     data: MapxOrd<S, DataCtner<K>>,
 
@@ -128,7 +126,7 @@ where
 impl<S, K> SlotDex<S, K>
 where
     S: SlotType,
-    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered,
 {
     /// Creates a new `SlotDex`.
     ///
@@ -617,19 +615,124 @@ pub type SlotDex64<K> = SlotDex<u64, K>;
 /// Convenience alias for `SlotDex<u128, K>`.
 pub type SlotDex128<K> = SlotDex<u128, K>;
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(bound = "K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned")]
 enum DataCtner<K>
 where
-    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered,
 {
     Small(BTreeSet<K>),
     Large { map: MapxOrd<K, ()>, len: usize },
 }
 
+impl<K> fmt::Debug for DataCtner<K>
+where
+    K: Clone + Ord + KeyEnDeOrdered,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Small(s) => f.debug_tuple("Small").field(&s.len()).finish(),
+            Self::Large { len, .. } => {
+                f.debug_struct("Large").field("len", len).finish()
+            }
+        }
+    }
+}
+
+// Tag bytes for binary encoding
+const TAG_SMALL: u8 = 0;
+const TAG_LARGE: u8 = 1;
+
+impl<K> ValueEnDe for DataCtner<K>
+where
+    K: Clone + Ord + KeyEnDeOrdered,
+{
+    fn try_encode(&self) -> ruc::Result<Vec<u8>> {
+        match self {
+            Self::Small(set) => {
+                let mut buf = vec![TAG_SMALL];
+                let count = set.len() as u32;
+                buf.extend_from_slice(&count.to_le_bytes());
+                for k in set {
+                    let kb = k.to_bytes();
+                    buf.extend_from_slice(&(kb.len() as u32).to_le_bytes());
+                    buf.extend_from_slice(&kb);
+                }
+                Ok(buf)
+            }
+            Self::Large { map, len } => {
+                // Large variant: only persist the MapxOrd handle + len;
+                // the actual entries live on disk inside MapxOrd already.
+                let mut buf = vec![TAG_LARGE];
+                let handle_bytes = map.encode();
+                buf.extend_from_slice(&(handle_bytes.len() as u32).to_le_bytes());
+                buf.extend_from_slice(&handle_bytes);
+                buf.extend_from_slice(&(*len as u64).to_le_bytes());
+                Ok(buf)
+            }
+        }
+    }
+
+    fn decode(bytes: &[u8]) -> ruc::Result<Self> {
+        use ruc::eg;
+        if bytes.is_empty() {
+            return Err(eg!("empty DataCtner bytes"));
+        }
+        match bytes[0] {
+            TAG_SMALL => {
+                let mut off = 1;
+                if bytes.len() < off + 4 {
+                    return Err(eg!("truncated count"));
+                }
+                let count =
+                    u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()) as usize;
+                off += 4;
+                let mut set = BTreeSet::new();
+                for _ in 0..count {
+                    if bytes.len() < off + 4 {
+                        return Err(eg!("truncated key len"));
+                    }
+                    let klen =
+                        u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap())
+                            as usize;
+                    off += 4;
+                    if bytes.len() < off + klen {
+                        return Err(eg!("truncated key data"));
+                    }
+                    let k =
+                        K::from_slice(&bytes[off..off + klen]).map_err(|e| eg!(e))?;
+                    off += klen;
+                    set.insert(k);
+                }
+                Ok(Self::Small(set))
+            }
+            TAG_LARGE => {
+                let mut off = 1;
+                if bytes.len() < off + 4 {
+                    return Err(eg!("truncated handle len"));
+                }
+                let hlen =
+                    u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()) as usize;
+                off += 4;
+                if bytes.len() < off + hlen {
+                    return Err(eg!("truncated handle data"));
+                }
+                let map =
+                    MapxOrd::decode(&bytes[off..off + hlen]).map_err(|e| eg!(e))?;
+                off += hlen;
+                if bytes.len() < off + 8 {
+                    return Err(eg!("truncated len"));
+                }
+                let len =
+                    u64::from_le_bytes(bytes[off..off + 8].try_into().unwrap()) as usize;
+                Ok(Self::Large { map, len })
+            }
+            _ => Err(eg!("unknown DataCtner tag")),
+        }
+    }
+}
+
 impl<K> DataCtner<K>
 where
-    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered,
 {
     fn new() -> Self {
         Self::Small(BTreeSet::new())
@@ -711,7 +814,7 @@ where
 
 impl<K> Default for DataCtner<K>
 where
-    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered,
 {
     fn default() -> Self {
         Self::new()
@@ -721,7 +824,7 @@ where
 #[allow(clippy::large_enum_variant)]
 enum DataCtnerIter<'a, K>
 where
-    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered,
 {
     Small(SmallIter<'a, K>),
     Large(LargeIter<'a, K, ()>),
@@ -729,7 +832,7 @@ where
 
 impl<K> Iterator for DataCtnerIter<'_, K>
 where
-    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered,
 {
     type Item = K;
     fn next(&mut self) -> Option<Self::Item> {
@@ -742,7 +845,7 @@ where
 
 impl<K> DoubleEndedIterator for DataCtnerIter<'_, K>
 where
-    K: Clone + Ord + KeyEnDeOrdered + Serialize + de::DeserializeOwned,
+    K: Clone + Ord + KeyEnDeOrdered,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         match self {
