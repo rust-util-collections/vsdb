@@ -2843,13 +2843,14 @@ fn diff_reverse_direction() {
 // =========================================================================
 
 mod proof_tests {
-    use crate::trie::VerMapWithProof;
+    use crate::trie::{MptCalc, VerMapWithProof};
     use crate::versioned::map::VerMap;
 
     type Vm = VerMap<u32, String>;
+    type Vp = VerMapWithProof<u32, String, MptCalc>;
 
-    fn new_proof() -> VerMapWithProof<u32, String> {
-        VerMapWithProof::new()
+    fn new_proof() -> Vp {
+        Vp::new()
     }
 
     #[test]
@@ -2960,7 +2961,7 @@ mod proof_tests {
         m.insert(main, &2, &"world".into()).unwrap();
         let _c1 = m.commit(main).unwrap();
 
-        let mut vp = VerMapWithProof::from_map(m);
+        let mut vp = Vp::from_map(m);
         let hash = vp.merkle_root(main).unwrap();
         assert_eq!(hash.len(), 32);
     }
@@ -2991,7 +2992,7 @@ mod proof_tests {
             m.insert(br, &2, &"b".into()).unwrap();
             let _c1 = m.commit(br).unwrap();
 
-            let mut vp = VerMapWithProof::from_map(m);
+            let mut vp = Vp::from_map(m);
             let hash_restored = vp.load_cache_and_sync(&cache_path, br).unwrap();
             assert_eq!(hash1, hash_restored);
         }
@@ -3158,12 +3159,45 @@ mod proof_tests {
         let c1 = vp.map_mut().commit(main).unwrap();
 
         // No prior merkle_root call — cold start.
-        let mut vp2 = VerMapWithProof::from_map(vp.map().clone());
+        let mut vp2 = Vp::from_map(vp.map().clone());
         let h = vp2.merkle_root_at_commit(c1).unwrap();
         assert_eq!(h.len(), 32);
 
         // Compare with the original.
         let h_orig = vp.merkle_root_at_commit(c1).unwrap();
         assert_eq!(h, h_orig);
+    }
+
+    // ---- SMT-backed VerMapWithProof with prove/verify ----
+
+    #[test]
+    fn test_smt_backed_prove_verify() {
+        use crate::trie::SmtCalc;
+
+        type VpSmt = VerMapWithProof<u32, String, SmtCalc>;
+
+        let mut vp = VpSmt::new();
+        let main = vp.map().main_branch();
+
+        vp.map_mut().insert(main, &1, &"alice".into()).unwrap();
+        vp.map_mut().insert(main, &2, &"bob".into()).unwrap();
+        let _c1 = vp.map_mut().commit(main).unwrap();
+
+        let root = vp.merkle_root(main).unwrap();
+        assert_eq!(root.len(), 32);
+
+        // Prove membership for key 1
+        let proof = vp.prove(&1u32.to_be_bytes()).unwrap();
+        assert!(proof.value.is_some());
+
+        let root_arr: [u8; 32] = root.try_into().unwrap();
+        let ok = VpSmt::verify_proof(&root_arr, &proof).unwrap();
+        assert!(ok);
+
+        // Prove non-membership for absent key
+        let proof_absent = vp.prove(&999u32.to_be_bytes()).unwrap();
+        assert!(proof_absent.value.is_none());
+        let ok2 = VpSmt::verify_proof(&root_arr, &proof_absent).unwrap();
+        assert!(ok2);
     }
 }

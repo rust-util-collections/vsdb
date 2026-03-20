@@ -8,8 +8,8 @@
 //! - **[`SmtCalc`]** — Sparse Merkle Tree (binary, 256-bit key-hash
 //!   paths). Supports compact membership and non-membership proofs.
 //! - **[`VerMapWithProof`]** — Wraps a [`VerMap`](crate::versioned::map::VerMap)
-//!   with `MptCalc` to provide versioned Merkle root computation with
-//!   incremental diff-based updates and disposable cache persistence.
+//!   with a [`TrieCalc`] back-end to provide versioned Merkle root computation
+//!   with incremental diff-based updates and disposable cache persistence.
 //!
 //! Both `MptCalc` and `SmtCalc` are designed as **stateless computation
 //! layers** on top of a versioned store (e.g. `VerMap`): the trie is
@@ -67,6 +67,39 @@ pub use smt::SmtProof;
 
 use mpt::{TrieMut, TrieRo};
 use node::NodeHandle;
+use std::path::Path;
+
+/// Common interface for stateless, in-memory Merkle trie engines.
+///
+/// Implemented by [`MptCalc`] and [`SmtCalc`].  Used as the trie
+/// back-end in [`VerMapWithProof`].
+pub trait TrieCalc: Clone + Default {
+    /// Builds a trie from key-value pairs.
+    fn from_entries(
+        kvs: impl IntoIterator<Item = (impl AsRef<[u8]>, impl AsRef<[u8]>)>,
+    ) -> Result<Self>;
+
+    /// Looks up a value by key.
+    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>>;
+
+    /// Inserts a key-value pair.
+    fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()>;
+
+    /// Removes a key.
+    fn remove(&mut self, key: &[u8]) -> Result<()>;
+
+    /// Computes the 32-byte Merkle root hash.
+    fn root_hash(&mut self) -> Result<Vec<u8>>;
+
+    /// Applies a batch of insert/remove operations.
+    fn batch_update(&mut self, ops: &[(&[u8], Option<&[u8]>)]) -> Result<()>;
+
+    /// Saves the trie to a file for fast restoration.
+    fn save_cache(&mut self, path: &Path, sync_tag: u64) -> Result<()>;
+
+    /// Loads a previously saved trie from a file.
+    fn load_cache(path: &Path) -> Result<(Self, u64, Vec<u8>)>;
+}
 
 /// A stateless, in-memory Merkle Patricia Trie.
 ///
@@ -183,6 +216,35 @@ impl MptCalc {
     pub fn load_cache(path: &std::path::Path) -> Result<(Self, u64, Vec<u8>)> {
         let (root, sync_tag, root_hash) = cache::load_from_file(path)?;
         Ok((Self { root }, sync_tag, root_hash))
+    }
+}
+
+impl TrieCalc for MptCalc {
+    fn from_entries(
+        kvs: impl IntoIterator<Item = (impl AsRef<[u8]>, impl AsRef<[u8]>)>,
+    ) -> Result<Self> {
+        Self::from_entries(kvs)
+    }
+    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        self.get(key)
+    }
+    fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
+        self.insert(key, value)
+    }
+    fn remove(&mut self, key: &[u8]) -> Result<()> {
+        self.remove(key)
+    }
+    fn root_hash(&mut self) -> Result<Vec<u8>> {
+        self.root_hash()
+    }
+    fn batch_update(&mut self, ops: &[(&[u8], Option<&[u8]>)]) -> Result<()> {
+        self.batch_update(ops)
+    }
+    fn save_cache(&mut self, path: &Path, sync_tag: u64) -> Result<()> {
+        self.save_cache(path, sync_tag)
+    }
+    fn load_cache(path: &Path) -> Result<(Self, u64, Vec<u8>)> {
+        Self::load_cache(path)
     }
 }
 
@@ -318,5 +380,34 @@ impl SmtCalc {
     fn hash_key(key: &[u8]) -> [u8; 32] {
         use sha3::{Digest, Keccak256};
         Keccak256::digest(key).into()
+    }
+}
+
+impl TrieCalc for SmtCalc {
+    fn from_entries(
+        kvs: impl IntoIterator<Item = (impl AsRef<[u8]>, impl AsRef<[u8]>)>,
+    ) -> Result<Self> {
+        Self::from_entries(kvs)
+    }
+    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        self.get(key)
+    }
+    fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
+        self.insert(key, value)
+    }
+    fn remove(&mut self, key: &[u8]) -> Result<()> {
+        self.remove(key)
+    }
+    fn root_hash(&mut self) -> Result<Vec<u8>> {
+        self.root_hash()
+    }
+    fn batch_update(&mut self, ops: &[(&[u8], Option<&[u8]>)]) -> Result<()> {
+        self.batch_update(ops)
+    }
+    fn save_cache(&mut self, path: &Path, sync_tag: u64) -> Result<()> {
+        self.save_cache(path, sync_tag)
+    }
+    fn load_cache(path: &Path) -> Result<(Self, u64, Vec<u8>)> {
+        Self::load_cache(path)
     }
 }

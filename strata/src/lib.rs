@@ -48,7 +48,7 @@ pub use common::{
 pub use dagmap::{DagMapId, raw::DagMapRaw, rawkey::DagMapRawKey};
 
 // Trie
-pub use trie::{MptCalc, SmtCalc, SmtProof, VerMapWithProof};
+pub use trie::{MptCalc, SmtCalc, SmtProof, TrieCalc, VerMapWithProof};
 
 // Slotdex — re-export SlotDex64 as SlotDex for backward compatibility;
 // the generic struct is still accessible as `vsdb::slotdex::SlotDex<S, K>`.

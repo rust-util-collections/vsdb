@@ -1,11 +1,12 @@
 //!
 //! [`VerMapWithProof`] — a versioned KV map with Merkle root computation.
 //!
-//! Combines [`VerMap`] (versioning, branching, merging) with
-//! [`MptCalc`](super::MptCalc) (stateless Merkle Patricia Trie)
-//! to provide cryptographic commitments over versioned state.
+//! Combines [`VerMap`] (versioning, branching, merging) with a
+//! [`TrieCalc`](super::TrieCalc) back-end (e.g. [`MptCalc`](super::MptCalc)
+//! or [`SmtCalc`](super::SmtCalc)) to provide cryptographic commitments
+//! over versioned state.
 //!
-//! The MPT is treated as a disposable computation layer: it holds an
+//! The trie is treated as a disposable computation layer: it holds an
 //! in-memory trie that can be rebuilt from any VerMap snapshot at any
 //! time.  An optional on-disk cache avoids full rebuilds on restart.
 
@@ -16,20 +17,20 @@ use crate::versioned::{BranchId, CommitId};
 use ruc::*;
 use std::path::Path;
 
-use super::MptCalc;
+use super::{SmtCalc, SmtProof, TrieCalc};
 
 /// A versioned key-value map with Merkle root hash computation.
 ///
-/// Wraps a [`VerMap<K, V>`] and an [`MptCalc`] to provide a
-/// [`merkle_root`](Self::merkle_root) method that lazily computes
+/// Wraps a [`VerMap<K, V>`] and a [`TrieCalc`] back-end `T` to provide
+/// a [`merkle_root`](Self::merkle_root) method that lazily computes
 /// the 32-byte Merkle root hash for any branch or commit.
 ///
 /// # Incremental updates
 ///
-/// The internal MPT tracks a *sync point* — the commit it was last
+/// The internal trie tracks a *sync point* — the commit it was last
 /// synchronized to.  When `merkle_root` is called:
 ///
-/// 1. If the MPT is already synced to the target → return cached hash.
+/// 1. If the trie is already synced to the target → return cached hash.
 /// 2. If the target is reachable via diff from the sync point →
 ///    apply diff incrementally.
 /// 3. Otherwise → full rebuild from the store's iterator.
@@ -37,34 +38,35 @@ use super::MptCalc;
 /// # Cache persistence
 ///
 /// [`save_cache`](Self::save_cache) / [`load_cache`](Self::load_cache)
-/// serialize the MPT to disk so that restarts only require an
+/// serialize the trie to disk so that restarts only require an
 /// incremental diff rather than a full rebuild.  The cache is
 /// disposable — if lost or corrupted, the trie is rebuilt from VerMap.
-pub struct VerMapWithProof<K, V> {
+pub struct VerMapWithProof<K, V, T: TrieCalc> {
     map: VerMap<K, V>,
-    mpt: MptCalc,
-    /// Snapshot of `mpt` at the last synced commit (before dirty overlay).
+    trie: T,
+    /// Snapshot of `trie` at the last synced commit (before dirty overlay).
     /// Used to reset when re-applying dirty changes.
-    mpt_at_head: Option<MptCalc>,
-    /// The commit the MPT is currently synced to.
+    trie_at_head: Option<T>,
+    /// The commit the trie is currently synced to.
     sync_commit: Option<CommitId>,
-    /// The branch the MPT is currently synced to.
+    /// The branch the trie is currently synced to.
     sync_branch: Option<BranchId>,
     /// Whether uncommitted (dirty) changes have been applied on top of HEAD.
     dirty_applied: bool,
 }
 
-impl<K, V> VerMapWithProof<K, V>
+impl<K, V, T> VerMapWithProof<K, V, T>
 where
     K: KeyEnDeOrdered,
     V: ValueEnDe,
+    T: TrieCalc,
 {
     /// Creates a new `VerMapWithProof` with a fresh VerMap.
     pub fn new() -> Self {
         Self {
             map: VerMap::new(),
-            mpt: MptCalc::new(),
-            mpt_at_head: None,
+            trie: T::default(),
+            trie_at_head: None,
             sync_commit: None,
             sync_branch: None,
             dirty_applied: false,
@@ -75,8 +77,8 @@ where
     pub fn from_map(map: VerMap<K, V>) -> Self {
         Self {
             map,
-            mpt: MptCalc::new(),
-            mpt_at_head: None,
+            trie: T::default(),
+            trie_at_head: None,
             sync_commit: None,
             sync_branch: None,
             dirty_applied: false,
@@ -91,7 +93,7 @@ where
     /// Returns a mutable reference to the underlying VerMap.
     ///
     /// Mutations through this reference will **not** automatically
-    /// update the MPT — call [`merkle_root`](Self::merkle_root) to
+    /// update the trie — call [`merkle_root`](Self::merkle_root) to
     /// resynchronize.
     pub fn map_mut(&mut self) -> &mut VerMap<K, V> {
         &mut self.map
@@ -117,35 +119,35 @@ where
             let has_dirty = self.map.has_uncommitted(branch)?;
 
             if head_id == Some(sync_id) && !has_dirty {
-                // MPT matches the branch HEAD exactly.
-                return self.mpt.root_hash().c(d!());
+                // Trie matches the branch HEAD exactly.
+                return self.trie.root_hash().c(d!());
             }
         }
 
         self.sync_to_branch(branch)?;
-        self.mpt.root_hash().c(d!())
+        self.trie.root_hash().c(d!())
     }
 
     /// Computes the Merkle root hash for a specific historical commit.
     pub fn merkle_root_at_commit(&mut self, commit: CommitId) -> Result<Vec<u8>> {
         self.sync_to_commit(commit)?;
-        self.mpt.root_hash().c(d!())
+        self.trie.root_hash().c(d!())
     }
 
     // =================================================================
     // Cache persistence
     // =================================================================
 
-    /// Persists the MPT to disk for fast restoration on restart.
+    /// Persists the trie to disk for fast restoration on restart.
     ///
-    /// The MPT must be synced (call `merkle_root` first) and must be
+    /// The trie must be synced (call `merkle_root` first) and must be
     /// synced to a committed state (not uncommitted changes).
     pub fn save_cache(&mut self, path: &Path) -> Result<()> {
         let tag = self.sync_commit.c(d!("no synced commit"))?;
-        self.mpt.save_cache(path, tag).c(d!())
+        self.trie.save_cache(path, tag).c(d!())
     }
 
-    /// Restores the MPT from a cached file and incrementally catches up
+    /// Restores the trie from a cached file and incrementally catches up
     /// to the current HEAD of `branch`.
     ///
     /// If the cache file is missing or corrupted, falls back to a full
@@ -155,18 +157,18 @@ where
         path: &Path,
         branch: BranchId,
     ) -> Result<Vec<u8>> {
-        match MptCalc::load_cache(path) {
-            Ok((mpt, sync_tag, _root_hash)) => {
-                self.mpt = mpt;
-                self.mpt_at_head = None;
+        match T::load_cache(path) {
+            Ok((trie, sync_tag, _root_hash)) => {
+                self.trie = trie;
+                self.trie_at_head = None;
                 self.sync_commit = Some(sync_tag);
                 self.sync_branch = None;
                 self.dirty_applied = false;
             }
             Err(_) => {
                 // Cache corrupted or missing — start fresh.
-                self.mpt = MptCalc::new();
-                self.mpt_at_head = None;
+                self.trie = T::default();
+                self.trie_at_head = None;
                 self.sync_commit = None;
                 self.sync_branch = None;
                 self.dirty_applied = false;
@@ -179,17 +181,17 @@ where
     // Internal sync logic
     // =================================================================
 
-    /// Synchronizes the MPT to the current state of `branch`
+    /// Synchronizes the trie to the current state of `branch`
     /// (including uncommitted changes).
     fn sync_to_branch(&mut self, branch: BranchId) -> Result<()> {
         let head = self.map.head_commit(branch)?;
         let head_id = head.as_ref().map(|c| c.id);
 
-        // If dirty changes were previously applied, restore the MPT
+        // If dirty changes were previously applied, restore the trie
         // to the clean HEAD state before re-syncing.
         if self.dirty_applied {
-            if let Some(ref snapshot) = self.mpt_at_head {
-                self.mpt = snapshot.clone();
+            if let Some(ref snapshot) = self.trie_at_head {
+                self.trie = snapshot.clone();
             }
             self.dirty_applied = false;
         }
@@ -200,20 +202,20 @@ where
                 self.sync_to_commit(hid)?;
             }
         } else if self.sync_commit.is_some() {
-            // Branch has no commits yet but MPT was synced elsewhere → reset.
-            self.mpt = MptCalc::new();
-            self.mpt_at_head = None;
+            // Branch has no commits yet but trie was synced elsewhere → reset.
+            self.trie = T::default();
+            self.trie_at_head = None;
             self.sync_commit = None;
         }
 
         // Then, apply any uncommitted changes.
         if self.map.has_uncommitted(branch)? {
-            self.mpt_at_head = Some(self.mpt.clone());
+            self.trie_at_head = Some(self.trie.clone());
             let diff = self.map.diff_uncommitted(branch)?;
             self.apply_diff(&diff)?;
             self.dirty_applied = true;
         } else {
-            self.mpt_at_head = None;
+            self.trie_at_head = None;
             self.dirty_applied = false;
         }
 
@@ -221,7 +223,7 @@ where
         Ok(())
     }
 
-    /// Synchronizes the MPT to a specific commit.
+    /// Synchronizes the trie to a specific commit.
     fn sync_to_commit(&mut self, target: CommitId) -> Result<()> {
         if self.sync_commit == Some(target) && !self.dirty_applied {
             return Ok(());
@@ -229,11 +231,11 @@ where
 
         // Restore clean state if dirty overlay was applied.
         if self.dirty_applied {
-            if let Some(ref snapshot) = self.mpt_at_head {
-                self.mpt = snapshot.clone();
+            if let Some(ref snapshot) = self.trie_at_head {
+                self.trie = snapshot.clone();
             }
             self.dirty_applied = false;
-            self.mpt_at_head = None;
+            self.trie_at_head = None;
         }
 
         if self.sync_commit == Some(target) {
@@ -258,14 +260,14 @@ where
         Ok(())
     }
 
-    /// Full rebuild: clear MPT and re-insert all entries at `commit`.
+    /// Full rebuild: clear trie and re-insert all entries at `commit`.
     fn full_rebuild_commit(&mut self, commit: CommitId) -> Result<()> {
         let entries: Vec<_> = self.map.raw_iter_at_commit(commit)?.collect();
-        self.mpt = MptCalc::from_entries(entries).c(d!())?;
+        self.trie = T::from_entries(entries).c(d!())?;
         Ok(())
     }
 
-    /// Apply a diff to the current MPT.
+    /// Apply a diff to the current trie.
     fn apply_diff(&mut self, diff: &[DiffEntry]) -> Result<()> {
         let ops: Vec<(&[u8], Option<&[u8]>)> = diff
             .iter()
@@ -279,14 +281,38 @@ where
                 }
             })
             .collect();
-        self.mpt.batch_update(&ops).c(d!())
+        self.trie.batch_update(&ops).c(d!())
     }
 }
 
-impl<K, V> Default for VerMapWithProof<K, V>
+// =================================================================
+// SMT-specific proof API
+// =================================================================
+
+impl<K, V> VerMapWithProof<K, V, SmtCalc>
 where
     K: KeyEnDeOrdered,
     V: ValueEnDe,
+{
+    /// Generates a Merkle proof for the given key.
+    ///
+    /// The trie must be synced (call [`merkle_root`](Self::merkle_root)
+    /// first) for proof generation to work.
+    pub fn prove(&self, key: &[u8]) -> Result<SmtProof> {
+        self.trie.prove(key).c(d!())
+    }
+
+    /// Verifies a proof against a root hash.
+    pub fn verify_proof(root_hash: &[u8; 32], proof: &SmtProof) -> Result<bool> {
+        SmtCalc::verify_proof(root_hash, proof).c(d!())
+    }
+}
+
+impl<K, V, T> Default for VerMapWithProof<K, V, T>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+    T: TrieCalc,
 {
     fn default() -> Self {
         Self::new()
