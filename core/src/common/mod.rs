@@ -150,7 +150,12 @@ fn gen_data_dir() -> PathBuf {
         .unwrap_or_else(|_| {
             let mut p = env::temp_dir();
             p.push(format!(".vsdb_{}", std::process::id()));
-            p.to_string_lossy().into_owned()
+            let s = p.to_string_lossy().into_owned();
+            eprintln!(
+                "vsdb: neither VSDB_BASE_DIR nor HOME is set; \
+                 using temporary directory {s} (data will not persist across restarts)"
+            );
+            s
         });
     pnk!(fs::create_dir_all(&d));
     PathBuf::from(d)
@@ -172,8 +177,8 @@ pub fn vsdb_get_custom_dir() -> &'static Path {
 /// Returns the base directory path for VSDB.
 ///
 /// This function returns the path of the base directory, which is determined
-/// by the `VSDB_BASE_DIR` environment variable, the `HOME` environment variable,
-/// or a default path of `/tmp/.vsdb`.
+/// by the `VSDB_BASE_DIR` environment variable, the `HOME` environment variable
+/// (`$HOME/.vsdb`), or a process-private temporary directory as a last resort.
 ///
 /// # Returns
 ///

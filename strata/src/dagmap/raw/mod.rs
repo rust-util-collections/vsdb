@@ -34,13 +34,14 @@
 #[cfg(test)]
 mod test;
 
-use crate::{DagMapId, MapxOrdRawKey, MapxRaw, Orphan};
+use crate::{DagMapId, MapxOrdRawKey, Orphan};
 use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     ops::{Deref, DerefMut},
 };
+use vsdb_core::basic::mapx_raw::MapxRaw;
 use vsdb_core::{basic::mapx_raw, common::RawBytes};
 
 type DagHead = DagMapRaw;
