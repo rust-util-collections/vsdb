@@ -314,7 +314,13 @@ impl PersistentBTree {
                 }
                 Node::Leaf { .. } => Vec::new(),
             };
-            self.ref_counts.insert(id, NodeRef { ref_count: 0, children });
+            self.ref_counts.insert(
+                id,
+                NodeRef {
+                    ref_count: 0,
+                    children,
+                },
+            );
         }
 
         id
@@ -902,10 +908,13 @@ impl PersistentBTree {
         let mut queue: Vec<NodeId> = Vec::new();
         for &root in live_roots {
             if root != EMPTY_ROOT {
-                new_refs.entry(root).or_insert_with(|| NodeRef {
-                    ref_count: 0,
-                    children: Vec::new(),
-                }).ref_count += 1;
+                new_refs
+                    .entry(root)
+                    .or_insert_with(|| NodeRef {
+                        ref_count: 0,
+                        children: Vec::new(),
+                    })
+                    .ref_count += 1;
                 queue.push(root);
             }
         }
@@ -920,20 +929,26 @@ impl PersistentBTree {
                 let children = match &node {
                     Node::Internal { children, .. } => {
                         for &child in children {
-                            new_refs.entry(child).or_insert_with(|| NodeRef {
-                                ref_count: 0,
-                                children: Vec::new(),
-                            }).ref_count += 1;
+                            new_refs
+                                .entry(child)
+                                .or_insert_with(|| NodeRef {
+                                    ref_count: 0,
+                                    children: Vec::new(),
+                                })
+                                .ref_count += 1;
                             queue.push(child);
                         }
                         children.clone()
                     }
                     Node::Leaf { .. } => Vec::new(),
                 };
-                new_refs.entry(id).or_insert_with(|| NodeRef {
-                    ref_count: 0,
-                    children: Vec::new(),
-                }).children = children;
+                new_refs
+                    .entry(id)
+                    .or_insert_with(|| NodeRef {
+                        ref_count: 0,
+                        children: Vec::new(),
+                    })
+                    .children = children;
             }
         }
 
@@ -958,58 +973,6 @@ impl PersistentBTree {
     /// in-memory reference-count map.
     pub fn gc(&mut self, live_roots: &[NodeId]) {
         self.rebuild_ref_counts(live_roots);
-    }
-
-    /// Targeted GC: removes nodes reachable from `dead_roots` that are
-    /// NOT reachable from any of the `live_roots`.
-    ///
-    /// Uses lazy deletion — marked keys are physically dropped during
-    /// the next compaction cycle.  More efficient than [`gc`](Self::gc)
-    /// when the dead set is small relative to the total node pool.
-    pub fn gc_targeted(&mut self, dead_roots: &[NodeId], live_roots: &[NodeId]) {
-        use std::collections::HashSet;
-
-        if dead_roots.is_empty() {
-            return;
-        }
-
-        // Mark all nodes reachable from live roots.
-        let mut live_nodes = HashSet::new();
-        for &r in live_roots {
-            if r != EMPTY_ROOT {
-                self.mark(r, &mut live_nodes);
-            }
-        }
-
-        // Collect nodes reachable from dead roots.
-        let mut dead_candidates = HashSet::new();
-        for &r in dead_roots {
-            if r != EMPTY_ROOT {
-                self.mark(r, &mut dead_candidates);
-            }
-        }
-
-        // Lazy-delete nodes in dead set that are NOT in live set.
-        let dead_keys: Vec<[u8; 8]> = dead_candidates
-            .into_iter()
-            .filter(|id| !live_nodes.contains(id))
-            .map(|id| id.to_be_bytes())
-            .collect();
-        self.nodes.lazy_delete_batch(dead_keys);
-    }
-
-    fn mark(&self, id: NodeId, seen: &mut std::collections::HashSet<NodeId>) {
-        if !seen.insert(id) {
-            return;
-        }
-        if let Some(raw) = self.nodes.get(id.to_be_bytes()) {
-            let node = Node::decode(&raw);
-            if let Node::Internal { children, .. } = &node {
-                for &c in children {
-                    self.mark(c, seen);
-                }
-            }
-        }
     }
 }
 

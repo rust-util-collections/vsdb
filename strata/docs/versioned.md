@@ -38,7 +38,7 @@ graph TB
     end
 
     subgraph "Persistence"
-        MR["MapxRaw<br/>(RocksDB)"]
+        MR["MapxRaw<br/>(MMDB)"]
     end
 
     VM -->|"branch/commit/merge"| BR
@@ -64,7 +64,7 @@ block-beta
         B["PersistentBTree<br/>insert / remove / iter / range / bulk_load / gc<br/>Copy-on-Write, structural sharing"]
     end
     block:L3["Layer 3 — Raw KV Storage"]
-        C["MapxRaw / MapxOrd / Mapx<br/>RocksDB-backed byte storage"]
+        C["MapxRaw / MapxOrd / Mapx<br/>MMDB-backed byte storage"]
     end
 ```
 
@@ -154,7 +154,7 @@ sequenceDiagram
     participant U as User
     participant V as VerMap
     participant T as PersistentBTree
-    participant D as Disk (RocksDB)
+    participant D as Disk (MMDB)
 
     Note over V: 1. CREATE
     U->>V: VerMap::new()
@@ -583,4 +583,4 @@ flowchart LR
 | **Structural sharing** | COW B+ tree — mutations allocate ~O(log n) nodes |
 | **Merge** | Three-way with sorted iterators; source wins on conflict |
 | **GC** | Two-stage mark-and-sweep (commits + tree nodes) |
-| **Persistence** | All state stored in RocksDB via `MapxRaw` |
+| **Persistence** | All state stored in MMDB via `MapxRaw` |

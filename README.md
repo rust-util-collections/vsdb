@@ -52,12 +52,12 @@ m.gc();
 ```text
 vsdb (workspace)
 +-- core/    vsdb_core   Storage engine (MMDB), MapxRaw, PersistentBTree
-+-- strata/  vsdb         High-level crate (the one users depend on)
-     +-- basic/       Mapx, MapxOrd, MapxOrdRawKey, Orphan
-     +-- versioned/   VerMap (branch, commit, merge, diff, gc)
-     +-- trie/        MptCalc, SmtCalc, VerMapWithProof
-     +-- slotdex/     SlotDex
-     +-- dagmap/      DagMapRaw, DagMapRawKey
++-- strata/  vsdb        High-level crate (the one users depend on)
+     +-- basic/          Mapx, MapxOrd, MapxOrdRawKey, Orphan
+     +-- versioned/      VerMap (branch, commit, merge, diff, gc)
+     +-- trie/           MptCalc, SmtCalc, VerMapWithProof
+     +-- slotdex/        SlotDex
+     +-- dagmap/         DagMapRaw, DagMapRawKey
 ```
 
 ### Module overview

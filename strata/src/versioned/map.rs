@@ -452,9 +452,7 @@ where
     pub fn insert(&mut self, branch: BranchId, key: &K, value: &V) -> Result<()> {
         let mut state = self.branches.get(&branch).c(d!("branch not found"))?;
         let old_root = state.dirty_root;
-        state.dirty_root =
-            self.tree
-                .insert(old_root, &key.to_bytes(), &value.encode());
+        state.dirty_root = self.tree.insert(old_root, &key.to_bytes(), &value.encode());
         self.tree.acquire_node(state.dirty_root);
         self.tree.release_node(old_root);
         self.branches.insert(&branch, &state);
@@ -921,11 +919,8 @@ where
         }
 
         // 2. Collect live roots from all commits + dirty roots.
-        let mut live_roots: Vec<NodeId> = self
-            .commits
-            .iter()
-            .map(|(_, c)| c.root)
-            .collect();
+        let mut live_roots: Vec<NodeId> =
+            self.commits.iter().map(|(_, c)| c.root).collect();
         for (_, s) in self.branches.iter() {
             if s.dirty_root != EMPTY_ROOT {
                 live_roots.push(s.dirty_root);

@@ -324,10 +324,7 @@ impl MapxRaw {
     /// Batch version of [`lazy_delete`](Self::lazy_delete).
     #[doc(hidden)]
     #[inline(always)]
-    pub fn lazy_delete_batch(
-        &self,
-        keys: impl IntoIterator<Item = impl AsRef<[u8]>>,
-    ) {
+    pub fn lazy_delete_batch(&self, keys: impl IntoIterator<Item = impl AsRef<[u8]>>) {
         self.inner.lazy_delete_batch(keys)
     }
 

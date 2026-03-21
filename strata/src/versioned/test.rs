@@ -1360,9 +1360,10 @@ fn rollback_decrements_abandoned_commits() {
 }
 
 #[test]
-fn gc_rebuilds_ref_counts_from_zero() {
-    // Simulate migration from pre-ref-count data: serialize a map
-    // whose commits have ref_count=0, then gc() should rebuild them.
+fn gc_after_serialize_roundtrip() {
+    // After serialize→deserialize, ref_counts are preserved and gc()
+    // is idempotent.  The deserialized map also has ref_counts_ready=false
+    // on the B+ tree (serde skip), so gc() rebuilds the node ref map.
     setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
@@ -1374,22 +1375,25 @@ fn gc_rebuilds_ref_counts_from_zero() {
     m.insert(feat, &2, &20).unwrap();
     let c2 = m.commit(feat).unwrap();
 
-    // Serialize → deserialize.  Deserialized Commits will have the
-    // current ref_counts, but we can verify gc() is idempotent and
-    // doesn't break anything when called on a healthy map.
     let bytes = serde_cbor_2::to_vec(&m).unwrap();
     let mut m2: VerMap<u32, u32> = serde_cbor_2::from_slice(&bytes).unwrap();
 
-    // gc() should leave everything intact.
+    // gc() rebuilds the in-memory node ref counts and leaves data intact.
     m2.gc();
 
     assert_eq!(m2.get(main, &1).unwrap(), Some(10));
     assert_eq!(m2.get(feat, &2).unwrap(), Some(20));
 
-    // c1: ref_count=2 (main HEAD parent-link + feat HEAD parent-link via branch fork)
-    assert!(m2.get_commit(c1).unwrap().ref_count >= 1);
+    // c1: ref_count=2 (main HEAD + feat's parent-link through c1)
+    assert_eq!(m2.get_commit(c1).unwrap().ref_count, 2);
     // c2: ref_count=1 (feat HEAD)
     assert_eq!(m2.get_commit(c2).unwrap().ref_count, 1);
+
+    // delete_branch on the deserialized map works correctly.
+    m2.delete_branch(feat).unwrap();
+    assert!(m2.get_commit(c2).is_none());
+    assert_eq!(m2.get_commit(c1).unwrap().ref_count, 1);
+    assert_eq!(m2.get(main, &1).unwrap(), Some(10));
 }
 
 // =====================================================================
