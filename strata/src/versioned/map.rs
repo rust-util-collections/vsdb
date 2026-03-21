@@ -122,6 +122,14 @@ pub struct VerMap<K, V> {
     /// The branch currently designated as "main" (protected from deletion).
     main_branch: Orphan<u64>,
 
+    /// Dead branch heads awaiting GC. Persisted for crash recovery.
+    /// Maps a monotonic sequence → dead head CommitId.
+    #[serde(default)]
+    pending_gc: MapxOrd<u64, u64>,
+    /// Allocator for pending_gc sequence IDs.
+    #[serde(default)]
+    next_gc_seq: Orphan<u64>,
+
     #[serde(skip)]
     _phantom: PhantomData<(K, V)>,
 }
@@ -146,6 +154,11 @@ where
     /// Equivalent to `new_with_main("main")`.
     pub fn new() -> Self {
         Self::new_with_main("main")
+    }
+
+    /// Returns the unique instance ID of this `VerMap`.
+    pub fn instance_id(&self) -> u64 {
+        self.tree.instance_id()
     }
 
     /// Creates a new, empty versioned map whose initial branch has the
@@ -176,6 +189,8 @@ where
             next_commit: Orphan::new(1), // 0 = NO_COMMIT
             next_branch: Orphan::new(initial_id + 1),
             main_branch: Orphan::new(initial_id),
+            pending_gc: MapxOrd::new(),
+            next_gc_seq: Orphan::new(1),
             _phantom: PhantomData,
         }
     }
@@ -233,15 +248,28 @@ where
         Ok(id)
     }
 
-    /// Deletes a branch.  The branch's commits remain in the object store
-    /// until [`gc`](Self::gc) is called.
+    /// Deletes a branch.
+    ///
+    /// The dead branch head is recorded in [`pending_gc`] for crash-safe
+    /// cleanup.  Call [`gc`](Self::gc) to actually reclaim the orphaned
+    /// commits and B+ tree nodes, or rely on
+    /// [`recover_pending_gc`](Self::recover_pending_gc) after a restart.
     pub fn delete_branch(&mut self, branch: BranchId) -> Result<()> {
         if branch == self.main_branch.get_value() {
             return Err(eg!("cannot delete the main branch"));
         }
         let state = self.branches.get(&branch).c(d!("branch not found"))?;
+
+        // Record the dead head for crash-safe cleanup.
+        if state.head != NO_COMMIT {
+            let seq = self.next_gc_seq.get_value();
+            *self.next_gc_seq.get_mut() = seq + 1;
+            self.pending_gc.insert(&seq, &state.head);
+        }
+
         self.branch_names.remove(&state.name);
         self.branches.remove(&branch);
+
         Ok(())
     }
 
@@ -823,9 +851,14 @@ where
 
     /// Garbage-collects unreachable commits and B+ tree nodes.
     ///
-    /// Walks all branches to find reachable commits, then prunes the
-    /// B+ tree node pool.
+    /// Since [`delete_branch`](Self::delete_branch) now performs automatic
+    /// incremental cleanup, calling `gc` explicitly is rarely needed.
+    /// It may still be useful as a full sweep to reclaim garbage from
+    /// older data or after crash recovery.
     pub fn gc(&mut self) {
+        // Process any crash-recovery pending entries first.
+        self.process_pending_gc();
+
         use std::collections::HashSet;
 
         // 1. Find all reachable commits.
@@ -866,6 +899,106 @@ where
 
         // 4. GC the B+ tree node pool.
         self.tree.gc(&live_roots);
+    }
+
+    /// Processes all pending GC entries, removing unreachable commits
+    /// and their associated B+ tree nodes.
+    ///
+    /// This method is **idempotent** — it can be called multiple times
+    /// or interrupted by a crash and resumed safely. The `pending_gc`
+    /// entries are only removed after cleanup is complete.
+    fn process_pending_gc(&mut self) {
+        use std::collections::HashSet;
+
+        let entries: Vec<(u64, u64)> = self.pending_gc.iter().collect();
+        if entries.is_empty() {
+            return;
+        }
+
+        // 1. Build the set of reachable commits from all live branches.
+        let mut live_commits = HashSet::new();
+        let mut queue: Vec<CommitId> = self
+            .branches
+            .iter()
+            .map(|(_, s)| s.head)
+            .filter(|&h| h != NO_COMMIT)
+            .collect();
+        while let Some(id) = queue.pop() {
+            if live_commits.insert(id) {
+                if let Some(c) = self.commits.get(&id) {
+                    queue.extend_from_slice(&c.parents);
+                }
+            }
+        }
+
+        // 2. For each pending entry, BFS from dead head to find dead commits.
+        let mut all_dead_commits = HashSet::new();
+        let mut processed_seqs = Vec::new();
+
+        for &(seq, dead_head) in &entries {
+            if live_commits.contains(&dead_head) {
+                // This commit is still reachable (e.g. shared ancestor).
+                processed_seqs.push(seq);
+                continue;
+            }
+
+            let mut dead_queue = vec![dead_head];
+            while let Some(id) = dead_queue.pop() {
+                if live_commits.contains(&id) {
+                    continue; // Shared ancestor — stop traversal.
+                }
+                if all_dead_commits.insert(id) {
+                    if let Some(c) = self.commits.get(&id) {
+                        dead_queue.extend_from_slice(&c.parents);
+                    }
+                }
+            }
+            processed_seqs.push(seq);
+        }
+
+        if all_dead_commits.is_empty() {
+            // Nothing to clean, just remove the pending entries.
+            for seq in processed_seqs {
+                self.pending_gc.remove(&seq);
+            }
+            return;
+        }
+
+        // 3. Collect dead tree roots and live tree roots.
+        let dead_roots: Vec<NodeId> = all_dead_commits
+            .iter()
+            .filter_map(|id| self.commits.get(id).map(|c| c.root))
+            .collect();
+
+        let mut live_roots: Vec<NodeId> = live_commits
+            .iter()
+            .filter_map(|id| self.commits.get(id).map(|c| c.root))
+            .collect();
+        for (_, s) in self.branches.iter() {
+            if s.dirty_root != EMPTY_ROOT {
+                live_roots.push(s.dirty_root);
+            }
+        }
+
+        // 4. Delete dead commits.
+        for id in &all_dead_commits {
+            self.commits.remove(id);
+        }
+
+        // 5. GC the B+ tree — targeted sweep of dead roots,
+        //    preserving all nodes reachable from live roots.
+        self.tree.gc_targeted(&dead_roots, &live_roots);
+
+        // 6. Remove processed pending_gc entries.
+        for seq in processed_seqs {
+            self.pending_gc.remove(&seq);
+        }
+    }
+
+    /// Reprocesses any pending GC entries left over from a previous crash.
+    /// Call this once after opening/deserializing a `VerMap`.
+    pub fn recover_pending_gc(&mut self) {
+        self.process_pending_gc();
     }
 }
 

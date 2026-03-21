@@ -122,9 +122,10 @@ mpt.batch_update(&[
     (b"k2".as_ref(), None),  // remove
 ]).unwrap();
 
-// Disposable cache: save to disk, restore later
-mpt.save_cache(std::path::Path::new("/tmp/mpt.cache"), 42).unwrap();
-let (loaded, sync_tag, root_hash) = MptCalc::load_cache(std::path::Path::new("/tmp/mpt.cache")).unwrap();
+// Disposable cache (low-level API, used internally by VerMapWithProof):
+// mpt.save_cache(cache_id, sync_tag).unwrap();
+// let (loaded, tag, hash) = MptCalc::load_cache(cache_id).unwrap();
+// When using VerMapWithProof, caching is fully automatic.
 ```
 
 ### SmtCalc with Proofs
@@ -168,8 +169,8 @@ vmp.map_mut().commit(main).unwrap();
 let root = vmp.merkle_root(main).unwrap();
 assert_eq!(root.len(), 32);
 
-// Save/restore cache for fast restarts
-vmp.save_cache(std::path::Path::new("/tmp/vermap.cache")).unwrap();
+// Cache is auto-saved on Drop and auto-loaded on construction.
+// No manual save_cache / load_cache calls needed.
 ```
 
 ## Slotdex

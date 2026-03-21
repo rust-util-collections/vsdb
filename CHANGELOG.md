@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v11.0.0]
+
+### Breaking
+
+- **Removed RocksDB backend** — MMDB is now the sole storage engine. The `backend_rocksdb` and `backend_mmdb` feature flags have been removed. No C/C++ toolchain required.
+- **`delete_branch` records dead heads for deferred GC** — orphaned commits and B+ tree nodes are cleaned up on the next `gc()` call (or automatically on `recover_pending_gc()`). The GC intent is crash-safe.
+- **`VerMapWithProof`: automatic cache lifecycle** — `save_cache()` and `load_cache_and_sync()` have been removed from the public API. The trie cache is now eagerly saved after each `sync_to_commit` and auto-loaded on construction. No manual calls required.
+
+### Added
+
+- **`pending_gc`** — crash-safe GC intent tracking. Dead branch heads are persisted before cleanup; `recover_pending_gc()` resumes interrupted operations (also called automatically from `VerMapWithProof::from_map`).
+- **`gc_targeted`** — incremental B+ tree GC that only scans dead subtrees instead of the entire node pool.
+- **`VerMapWithProof` auto-cache** — auto-load in `new()`/`from_map()`, eager save after each `sync_to_commit`. A `cache_dirty` flag avoids redundant serialization in read-only scenarios.
+
+### Removed
+
+- `backend_rocksdb` feature flag and all RocksDB-related code, Makefile targets, and documentation.
+- `strata/docs/engine-comparison.md` (no longer applicable).
+
 ## [v10.0.0] - 2026-03-19
 
 ### Breaking

@@ -27,7 +27,9 @@
 //!            rollback_to()    insert / remove / commit
 //!                                       │
 //!                                       ▼
-//!                                   merge()  ──►  gc()
+//!                                   merge()  ──►  delete_branch()
+//!                                                       │
+//!                                                   gc() (reclaims)
 //! ```
 //!
 //! # Merkle proofs

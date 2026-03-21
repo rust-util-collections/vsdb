@@ -7,24 +7,11 @@
 //!
 //! ## Storage backend
 //!
-//! The storage engine is selected at compile time via feature flags:
-//! - `backend_mmdb` (default): uses MMDB (pure-Rust LSM-Tree engine)
-//! - `backend_rocksdb`: uses RocksDB (C++ FFI)
+//! The storage engine is MMDB, a pure-Rust LSM-Tree engine.
 
 #![deny(warnings)]
 #![cfg_attr(test, allow(warnings))]
 #![recursion_limit = "512"]
-
-#[cfg(all(feature = "backend_rocksdb", feature = "backend_mmdb"))]
-compile_error!(
-    "features `backend_rocksdb` and `backend_mmdb` are mutually exclusive; \
-     use `--no-default-features --features backend_rocksdb` to switch backend"
-);
-
-#[cfg(not(any(feature = "backend_rocksdb", feature = "backend_mmdb")))]
-compile_error!(
-    "exactly one storage backend must be enabled: `backend_rocksdb` or `backend_mmdb`"
-);
 
 /// Manages the storage layer, raw data types, and shared utilities.
 ///

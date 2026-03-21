@@ -120,9 +120,7 @@ macro_rules! parse_prefix {
 /// This struct encapsulates the underlying storage engine and provides a
 /// high-level interface for interacting with the database.
 ///
-/// The storage engine is selected at compile time via feature flags:
-/// - `backend_mmdb` (default): uses MMDB (pure-Rust LSM-Tree engine)
-/// - `backend_rocksdb`: uses RocksDB
+/// The storage engine is MMDB, a pure-Rust LSM-Tree engine.
 pub struct VsDB {
     db: engine::Engine,
 }

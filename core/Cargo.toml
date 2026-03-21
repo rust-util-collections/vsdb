@@ -1,12 +1,12 @@
 [package]
 name = "vsdb_core"
-version = "10.1.1"
+version = "11.0.0"
 authors = ["hui.fan@mail.ru"]
 edition = "2024"
 description = "A std-collection-like database"
 homepage = "https://github.com/rust-util-collections/vsdb"
 repository = "https://github.com/rust-util-collections/vsdb/tree/master/core"
-keywords = ["kv", "leveldb", "rocksdb", "std"]
+keywords = ["kv", "leveldb", "lsm", "std"]
 categories = ["database-implementations", "data-structures", "algorithms", "caching"]
 license = "MIT"
 
@@ -16,13 +16,10 @@ serde = { workspace = true }
 rand = { workspace = true }
 parking_lot = { workspace = true }
 
-rocksdb = { workspace = true, optional = true }
-mmdb = { workspace = true, optional = true }
+mmdb = { workspace = true }
 
 [features]
-default = ["backend_mmdb"]
-backend_mmdb = ["mmdb"]
-backend_rocksdb = ["rocksdb"]
+default = []
 
 [dev-dependencies]
 serde_cbor_2 = { workspace = true }

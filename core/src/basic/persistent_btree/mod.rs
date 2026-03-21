@@ -264,6 +264,11 @@ pub struct PersistentBTree {
 }
 
 impl PersistentBTree {
+    /// Returns the unique instance ID of this `PersistentBTree`.
+    pub fn instance_id(&self) -> u64 {
+        self.nodes.instance_id()
+    }
+
     /// Creates a new, empty persistent B+ tree.
     pub fn new() -> Self {
         Self {
@@ -830,6 +835,42 @@ impl PersistentBTree {
             let id = u64::from_be_bytes(k[..8].try_into().unwrap());
             if !reachable.contains(&id) {
                 self.nodes.remove(&k);
+            }
+        }
+    }
+
+    /// Targeted GC: removes nodes reachable from `dead_roots` that are
+    /// NOT reachable from any of the `live_roots`.
+    ///
+    /// More efficient than [`gc`](Self::gc) when the dead set is small
+    /// relative to the total node pool.
+    pub fn gc_targeted(&mut self, dead_roots: &[NodeId], live_roots: &[NodeId]) {
+        use std::collections::HashSet;
+
+        if dead_roots.is_empty() {
+            return;
+        }
+
+        // Mark all nodes reachable from live roots.
+        let mut live_nodes = HashSet::new();
+        for &r in live_roots {
+            if r != EMPTY_ROOT {
+                self.mark(r, &mut live_nodes);
+            }
+        }
+
+        // Collect nodes reachable from dead roots.
+        let mut dead_candidates = HashSet::new();
+        for &r in dead_roots {
+            if r != EMPTY_ROOT {
+                self.mark(r, &mut dead_candidates);
+            }
+        }
+
+        // Delete nodes in dead set that are NOT in live set.
+        for id in dead_candidates {
+            if !live_nodes.contains(&id) {
+                self.nodes.remove(id.to_be_bytes());
             }
         }
     }

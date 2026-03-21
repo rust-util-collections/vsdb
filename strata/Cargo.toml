@@ -1,12 +1,12 @@
 [package]
 name = "vsdb"
-version = "10.1.3"
+version = "11.0.0"
 authors = ["hui.fan@mail.ru"]
 edition = "2024"
 description = "A std-collection-like database"
 homepage = "https://github.com/rust-util-collections/vsdb"
 repository = "https://github.com/rust-util-collections/vsdb/tree/master/strata"
-keywords = ["git", "vcs", "leveldb", "rocksdb", "database"]
+keywords = ["git", "vcs", "leveldb", "lsm", "database"]
 categories = ["database-implementations", "data-structures", "algorithms", "caching"]
 license = "MIT"
 
@@ -31,10 +31,7 @@ hex = { workspace = true }
 criterion = { workspace = true }
 
 [features]
-default = ["backend_mmdb"]
-
-backend_mmdb = ["vsdb_core/backend_mmdb"]
-backend_rocksdb = ["vsdb_core/backend_rocksdb"]
+default = []
 
 [[bench]]
 name = "basic"

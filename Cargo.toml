@@ -15,10 +15,9 @@ serde = { version = "1.0.136", features = ["derive"] }
 serde_cbor_2 = "0.13.0"
 sha3 = "0.10"
 
-rocksdb = { version = "0.24.0", default-features = false, features = ["bindgen-runtime", "lz4", "zstd"] }
-mmdb = "2.2.2"
+mmdb = "3.0.0"
 
-vsdb_core = { path = "core", version = "10.1.0", default-features = false }
+vsdb_core = { path = "core", version = "11.0.0", default-features = false }
 
 criterion = "0.8"
 hex = "0.4"

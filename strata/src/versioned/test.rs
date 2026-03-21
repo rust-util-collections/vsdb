@@ -1191,6 +1191,98 @@ fn gc_multiple_times_is_idempotent() {
 }
 
 // =====================================================================
+// Deferred GC via pending_gc
+// =====================================================================
+
+#[test]
+fn delete_branch_deferred_gc() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+
+    m.insert(main, &1, &10).unwrap();
+    m.commit(main).unwrap();
+
+    let feat = m.create_branch("feat", main).unwrap();
+    m.insert(feat, &2, &20).unwrap();
+    m.commit(feat).unwrap();
+
+    // delete_branch records the dead head; gc() reclaims.
+    m.delete_branch(feat).unwrap();
+    m.gc();
+
+    // Main data unaffected.
+    assert_eq!(m.get(main, &1).unwrap(), Some(10));
+}
+
+#[test]
+fn delete_branch_auto_gc_preserves_shared_ancestors() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+
+    m.insert(main, &1, &10).unwrap();
+    let c1 = m.commit(main).unwrap();
+
+    let feat = m.create_branch("feat", main).unwrap();
+    m.insert(feat, &2, &20).unwrap();
+    m.commit(feat).unwrap();
+
+    m.insert(main, &3, &30).unwrap();
+    m.commit(main).unwrap();
+
+    // Delete feat — shared ancestor c1 must survive.
+    m.delete_branch(feat).unwrap();
+
+    assert_eq!(m.get(main, &1).unwrap(), Some(10));
+    assert_eq!(m.get(main, &3).unwrap(), Some(30));
+    assert_eq!(m.get_at_commit(c1, &1).unwrap(), Some(10));
+}
+
+#[test]
+fn delete_branch_auto_gc_multiple_branches() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+
+    m.insert(main, &1, &10).unwrap();
+    m.commit(main).unwrap();
+
+    // Create and delete many branches.
+    for i in 0u32..20 {
+        let name = format!("feat_{}", i);
+        let br = m.create_branch(&name, main).unwrap();
+        m.insert(br, &(100 + i), &i).unwrap();
+        m.commit(br).unwrap();
+        m.delete_branch(br).unwrap();
+    }
+
+    // Main data still intact.
+    assert_eq!(m.get(main, &1).unwrap(), Some(10));
+}
+
+#[test]
+fn pending_gc_idempotent() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+
+    m.insert(main, &1, &10).unwrap();
+    m.commit(main).unwrap();
+
+    let feat = m.create_branch("feat", main).unwrap();
+    m.insert(feat, &2, &20).unwrap();
+    m.commit(feat).unwrap();
+    m.delete_branch(feat).unwrap();
+
+    // Multiple gc() calls should be fine (idempotent).
+    m.gc();
+    m.gc();
+
+    assert_eq!(m.get(main, &1).unwrap(), Some(10));
+}
+
+// =====================================================================
 // Many entries (stress test for splits/rebalancing through versioning)
 // =====================================================================
 
@@ -2967,37 +3059,116 @@ mod proof_tests {
     }
 
     #[test]
-    fn test_cache_save_load() {
-        let dir = std::env::temp_dir().join("vsdb_proof_cache_test");
-        let _ = std::fs::create_dir_all(&dir);
-        let cache_path = dir.join("mpt.cache");
-
-        let main;
+    fn test_auto_cache_save_load() {
+        let map_bytes;
         let hash1;
 
         {
             let mut vp = new_proof();
-            main = vp.map().main_branch();
+            let main = vp.map().main_branch();
             vp.map_mut().insert(main, &1, &"a".into()).unwrap();
             vp.map_mut().insert(main, &2, &"b".into()).unwrap();
             let _c1 = vp.map_mut().commit(main).unwrap();
             hash1 = vp.merkle_root(main).unwrap();
-            vp.save_cache(&cache_path).unwrap();
+
+            // Serialize the VerMap metadata so we can recreate a handle
+            // to the same persistent data (simulates process restart).
+            map_bytes = serde_cbor_2::to_vec(vp.map()).unwrap();
+
+            // Cache is saved eagerly inside merkle_root → sync_to_commit.
         }
 
         {
-            let mut m: Vm = VerMap::new();
-            let br = m.main_branch();
-            m.insert(br, &1, &"a".into()).unwrap();
-            m.insert(br, &2, &"b".into()).unwrap();
-            let _c1 = m.commit(br).unwrap();
+            // Deserialize recreates a handle with the same instance_id,
+            // pointing to the same persistent data.
+            let map: Vm = serde_cbor_2::from_slice(&map_bytes).unwrap();
+            let br = map.main_branch();
 
-            let mut vp = Vp::from_map(m);
-            let hash_restored = vp.load_cache_and_sync(&cache_path, br).unwrap();
+            // from_map auto-loads the cache saved by the previous sync.
+            let mut vp = Vp::from_map(map);
+
+            // merkle_root should produce the same hash — from cache, not
+            // a full rebuild.
+            let hash_restored = vp.merkle_root(br).unwrap();
             assert_eq!(hash1, hash_restored);
         }
+    }
 
-        let _ = std::fs::remove_dir_all(&dir);
+    #[test]
+    fn test_auto_cache_dirty_flag() {
+        // Read-only usage: cache_dirty should remain false, no re-save.
+        let map_bytes;
+        let hash1;
+
+        {
+            let mut vp = new_proof();
+            let main = vp.map().main_branch();
+            vp.map_mut().insert(main, &1, &"x".into()).unwrap();
+            let _c1 = vp.map_mut().commit(main).unwrap();
+            hash1 = vp.merkle_root(main).unwrap();
+            map_bytes = serde_cbor_2::to_vec(vp.map()).unwrap();
+            // Cache was saved eagerly in sync_to_commit.
+        }
+
+        {
+            let map: Vm = serde_cbor_2::from_slice(&map_bytes).unwrap();
+            let br = map.main_branch();
+            let mut vp = Vp::from_map(map);
+
+            // Trie was loaded from cache.  Calling merkle_root on the
+            // same commit should be a cache hit — no trie mutation, so
+            // cache_dirty stays false.
+            let h = vp.merkle_root(br).unwrap();
+            assert_eq!(hash1, h);
+
+            // Drop here.  cache_dirty should be false → no disk write.
+            // (We can't easily observe this, but at least verify no crash.)
+        }
+    }
+
+    #[test]
+    fn test_auto_cache_incremental_catchup() {
+        // After loading a stale cache, the trie catches up via diff.
+        let map_bytes;
+        let hash1;
+
+        {
+            let mut vp = new_proof();
+            let main = vp.map().main_branch();
+            vp.map_mut().insert(main, &1, &"a".into()).unwrap();
+            let _c1 = vp.map_mut().commit(main).unwrap();
+            hash1 = vp.merkle_root(main).unwrap();
+            map_bytes = serde_cbor_2::to_vec(vp.map()).unwrap();
+            // Cache was saved eagerly at commit c1.
+        }
+
+        // Mutate the map WITHOUT a VerMapWithProof wrapper (simulates
+        // external writes between process restarts).
+        let map_bytes2;
+        let hash2;
+        {
+            let mut map: Vm = serde_cbor_2::from_slice(&map_bytes).unwrap();
+            let br = map.main_branch();
+            map.insert(br, &3, &"c".into()).unwrap();
+            let _c2 = map.commit(br).unwrap();
+            map_bytes2 = serde_cbor_2::to_vec(&map).unwrap();
+
+            // Compute expected hash via a fresh (no-cache) VerMapWithProof.
+            let mut vp_fresh = Vp::from_map(map);
+            hash2 = vp_fresh.merkle_root(br).unwrap();
+            assert_ne!(hash1, hash2);
+        }
+
+        {
+            // Reload map; from_map auto-loads stale cache at c1.
+            let map: Vm = serde_cbor_2::from_slice(&map_bytes2).unwrap();
+            let br = map.main_branch();
+            let mut vp = Vp::from_map(map);
+
+            // merkle_root catches up via incremental diff (c1 → c2).
+            let h = vp.merkle_root(br).unwrap();
+            assert_eq!(hash2, h);
+        }
     }
 
     #[test]

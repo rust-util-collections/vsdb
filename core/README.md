@@ -24,12 +24,9 @@ vsdb_core = "10.0.0"
 
 For detailed API examples, see [API Examples](docs/api.md).
 
-## Features
+## Storage Engine
 
-Two storage backends are supported, selected at compile time:
-
-- `backend_mmdb` (default) — MMDB, a pure-Rust LSM-Tree engine
-- `backend_rocksdb` — RocksDB via C++ FFI
+The storage backend is MMDB, a pure-Rust LSM-Tree engine.
 
 ## License
 

@@ -26,21 +26,22 @@
 //!   | merge/      |----->| (ephemeral) |-------------> [u8; 32]
 //!   | rollback    |      |             |
 //!   +-------------+      +-------------+
-//!        |                      |
-//!        |                 save_cache()
-//!        |                 load_cache()
-//!        |                      |
-//!        |                +-----v-----+
-//!        |                | disk cache| (disposable)
-//!        +----------------+-----------+
+//!        |                  |         ^
+//!        |           eager save    auto-load
+//!        |           on sync      on new/from_map
+//!        |                  |         |
+//!        |                +--v--------+-+
+//!        |                | disk cache  | (disposable)
+//!        +----------------+-------------+
 //! ```
 //!
 //! 1. **`VerMap`** handles persistence, branching, commits, merges.
 //! 2. **`MptCalc` / `SmtCalc`** mirrors the current state as an
 //!    in-memory trie, synchronized via full rebuild or incremental diff.
 //! 3. **`root_hash()`** returns the 32-byte Merkle commitment.
-//! 4. **Disposable cache** (`save_cache` / `load_cache`) avoids full
-//!    rebuilds on process restart.
+//! 4. **Automatic cache** — on construction, the trie is silently
+//!    restored from a previous cache file; after each commit sync,
+//!    the clean state is eagerly saved.  No manual calls required.
 //!
 //! # SMT proofs
 //!
@@ -67,7 +68,6 @@ pub use smt::SmtProof;
 
 use mpt::{TrieMut, TrieRo};
 use node::NodeHandle;
-use std::path::Path;
 
 /// Common interface for stateless, in-memory Merkle trie engines.
 ///
@@ -95,10 +95,10 @@ pub trait TrieCalc: Clone + Default {
     fn batch_update(&mut self, ops: &[(&[u8], Option<&[u8]>)]) -> Result<()>;
 
     /// Saves the trie to a file for fast restoration.
-    fn save_cache(&mut self, path: &Path, sync_tag: u64) -> Result<()>;
+    fn save_cache(&mut self, cache_id: u64, sync_tag: u64) -> Result<()>;
 
     /// Loads a previously saved trie from a file.
-    fn load_cache(path: &Path) -> Result<(Self, u64, Vec<u8>)>;
+    fn load_cache(cache_id: u64) -> Result<(Self, u64, Vec<u8>)>;
 }
 
 /// A stateless, in-memory Merkle Patricia Trie.
@@ -203,9 +203,11 @@ impl MptCalc {
     ///
     /// The cache is **disposable**: if the file is lost or corrupted,
     /// the trie can always be rebuilt from the authoritative store.
-    pub fn save_cache(&mut self, path: &std::path::Path, sync_tag: u64) -> Result<()> {
+    pub fn save_cache(&mut self, cache_id: u64, sync_tag: u64) -> Result<()> {
         let hash = self.root_hash()?;
-        cache::save_to_file(&self.root, sync_tag, &hash, path)
+        let path = vsdb_core::common::vsdb_get_custom_dir()
+            .join(format!("mpt_cache_{}.bin", cache_id));
+        cache::save_to_file(&self.root, sync_tag, &hash, &path)
     }
 
     /// Loads a previously saved trie from a file.
@@ -213,8 +215,10 @@ impl MptCalc {
     /// Returns `(MptCalc, sync_tag, root_hash)`.  The caller should
     /// compare `sync_tag` with the current store head and apply any
     /// diff via [`insert`](Self::insert)/[`remove`](Self::remove).
-    pub fn load_cache(path: &std::path::Path) -> Result<(Self, u64, Vec<u8>)> {
-        let (root, sync_tag, root_hash) = cache::load_from_file(path)?;
+    pub fn load_cache(cache_id: u64) -> Result<(Self, u64, Vec<u8>)> {
+        let path = vsdb_core::common::vsdb_get_custom_dir()
+            .join(format!("mpt_cache_{}.bin", cache_id));
+        let (root, sync_tag, root_hash) = cache::load_from_file(&path)?;
         Ok((Self { root }, sync_tag, root_hash))
     }
 }
@@ -240,11 +244,11 @@ impl TrieCalc for MptCalc {
     fn batch_update(&mut self, ops: &[(&[u8], Option<&[u8]>)]) -> Result<()> {
         self.batch_update(ops)
     }
-    fn save_cache(&mut self, path: &Path, sync_tag: u64) -> Result<()> {
-        self.save_cache(path, sync_tag)
+    fn save_cache(&mut self, cache_id: u64, sync_tag: u64) -> Result<()> {
+        self.save_cache(cache_id, sync_tag)
     }
-    fn load_cache(path: &Path) -> Result<(Self, u64, Vec<u8>)> {
-        Self::load_cache(path)
+    fn load_cache(cache_id: u64) -> Result<(Self, u64, Vec<u8>)> {
+        Self::load_cache(cache_id)
     }
 }
 
@@ -362,14 +366,18 @@ impl SmtCalc {
     // =================================================================
 
     /// Saves the SMT to a file for fast restoration.
-    pub fn save_cache(&mut self, path: &std::path::Path, sync_tag: u64) -> Result<()> {
+    pub fn save_cache(&mut self, cache_id: u64, sync_tag: u64) -> Result<()> {
         let hash = self.root_hash()?;
-        smt::cache::save_to_file(&self.root, sync_tag, &hash, path)
+        let path = vsdb_core::common::vsdb_get_custom_dir()
+            .join(format!("smt_cache_{}.bin", cache_id));
+        smt::cache::save_to_file(&self.root, sync_tag, &hash, &path)
     }
 
     /// Loads a previously saved SMT from a file.
-    pub fn load_cache(path: &std::path::Path) -> Result<(Self, u64, Vec<u8>)> {
-        let (root, sync_tag, root_hash) = smt::cache::load_from_file(path)?;
+    pub fn load_cache(cache_id: u64) -> Result<(Self, u64, Vec<u8>)> {
+        let path = vsdb_core::common::vsdb_get_custom_dir()
+            .join(format!("smt_cache_{}.bin", cache_id));
+        let (root, sync_tag, root_hash) = smt::cache::load_from_file(&path)?;
         Ok((Self { root }, sync_tag, root_hash))
     }
 
@@ -404,10 +412,10 @@ impl TrieCalc for SmtCalc {
     fn batch_update(&mut self, ops: &[(&[u8], Option<&[u8]>)]) -> Result<()> {
         self.batch_update(ops)
     }
-    fn save_cache(&mut self, path: &Path, sync_tag: u64) -> Result<()> {
-        self.save_cache(path, sync_tag)
+    fn save_cache(&mut self, cache_id: u64, sync_tag: u64) -> Result<()> {
+        self.save_cache(cache_id, sync_tag)
     }
-    fn load_cache(path: &Path) -> Result<(Self, u64, Vec<u8>)> {
-        Self::load_cache(path)
+    fn load_cache(cache_id: u64) -> Result<(Self, u64, Vec<u8>)> {
+        Self::load_cache(cache_id)
     }
 }
