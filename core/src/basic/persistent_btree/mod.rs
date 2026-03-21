@@ -821,8 +821,8 @@ impl PersistentBTree {
 
     /// Deletes every node **not** reachable from any of the given roots.
     ///
-    /// Call this periodically to reclaim storage from old versions that are
-    /// no longer needed.
+    /// Uses lazy deletion — keys are marked for removal and physically
+    /// dropped during the next compaction cycle.
     pub fn gc(&mut self, live_roots: &[NodeId]) {
         let mut reachable = std::collections::HashSet::new();
         for &r in live_roots {
@@ -831,19 +831,26 @@ impl PersistentBTree {
             }
         }
         let all: Vec<(Vec<u8>, Vec<u8>)> = self.nodes.iter().collect();
-        for (k, _) in all {
-            let id = u64::from_be_bytes(k[..8].try_into().unwrap());
-            if !reachable.contains(&id) {
-                self.nodes.remove(&k);
-            }
-        }
+        let dead_keys: Vec<Vec<u8>> = all
+            .into_iter()
+            .filter_map(|(k, _)| {
+                let id = u64::from_be_bytes(k[..8].try_into().unwrap());
+                if reachable.contains(&id) {
+                    None
+                } else {
+                    Some(k)
+                }
+            })
+            .collect();
+        self.nodes.lazy_delete_batch(dead_keys);
     }
 
     /// Targeted GC: removes nodes reachable from `dead_roots` that are
     /// NOT reachable from any of the `live_roots`.
     ///
-    /// More efficient than [`gc`](Self::gc) when the dead set is small
-    /// relative to the total node pool.
+    /// Uses lazy deletion — marked keys are physically dropped during
+    /// the next compaction cycle.  More efficient than [`gc`](Self::gc)
+    /// when the dead set is small relative to the total node pool.
     pub fn gc_targeted(&mut self, dead_roots: &[NodeId], live_roots: &[NodeId]) {
         use std::collections::HashSet;
 
@@ -867,12 +874,13 @@ impl PersistentBTree {
             }
         }
 
-        // Delete nodes in dead set that are NOT in live set.
-        for id in dead_candidates {
-            if !live_nodes.contains(&id) {
-                self.nodes.remove(id.to_be_bytes());
-            }
-        }
+        // Lazy-delete nodes in dead set that are NOT in live set.
+        let dead_keys: Vec<[u8; 8]> = dead_candidates
+            .into_iter()
+            .filter(|id| !live_nodes.contains(id))
+            .map(|id| id.to_be_bytes())
+            .collect();
+        self.nodes.lazy_delete_batch(dead_keys);
     }
 
     fn mark(&self, id: NodeId, seen: &mut std::collections::HashSet<NodeId>) {

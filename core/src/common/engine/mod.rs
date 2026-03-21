@@ -212,6 +212,21 @@ impl Mapx {
         VSDB.db.remove(prefix, key);
     }
 
+    /// Marks a key for deferred removal via compaction filter.
+    #[inline(always)]
+    pub(crate) fn lazy_delete(&self, key: &[u8]) {
+        VSDB.db.lazy_delete(self.prefix.to_bytes(), key);
+    }
+
+    /// Batch version of [`lazy_delete`](Self::lazy_delete).
+    #[inline(always)]
+    pub(crate) fn lazy_delete_batch(
+        &self,
+        keys: impl IntoIterator<Item = impl AsRef<[u8]>>,
+    ) {
+        VSDB.db.lazy_delete_batch(self.prefix.to_bytes(), keys);
+    }
+
     #[inline(always)]
     pub(crate) fn batch_begin(&mut self) -> Box<dyn BatchTrait + '_> {
         let prefix = self.prefix.materialize();

@@ -122,13 +122,10 @@ pub struct VerMap<K, V> {
     /// The branch currently designated as "main" (protected from deletion).
     main_branch: Orphan<u64>,
 
-    /// Dead branch heads awaiting GC. Persisted for crash recovery.
-    /// Maps a monotonic sequence → dead head CommitId.
+    /// Set `true` before a ref-count cascade, `false` after.
+    /// If `true` on startup → run `rebuild_ref_counts()` to repair.
     #[serde(default)]
-    pending_gc: MapxOrd<u64, u64>,
-    /// Allocator for pending_gc sequence IDs.
-    #[serde(default)]
-    next_gc_seq: Orphan<u64>,
+    gc_dirty: Orphan<bool>,
 
     #[serde(skip)]
     _phantom: PhantomData<(K, V)>,
@@ -189,8 +186,7 @@ where
             next_commit: Orphan::new(1), // 0 = NO_COMMIT
             next_branch: Orphan::new(initial_id + 1),
             main_branch: Orphan::new(initial_id),
-            pending_gc: MapxOrd::new(),
-            next_gc_seq: Orphan::new(1),
+            gc_dirty: Orphan::new(false),
             _phantom: PhantomData,
         }
     }
@@ -245,30 +241,33 @@ where
         };
         self.branches.insert(&id, &state);
         self.branch_names.insert(&name.to_string(), &id);
+
+        // New branch HEAD adds a reference to the shared commit.
+        self.increment_ref(src.head);
+
         Ok(id)
     }
 
-    /// Deletes a branch.
+    /// Deletes a branch and automatically cleans up orphaned commits.
     ///
-    /// The dead branch head is recorded in [`pending_gc`] for crash-safe
-    /// cleanup.  Call [`gc`](Self::gc) to actually reclaim the orphaned
-    /// commits and B+ tree nodes, or rely on
-    /// [`recover_pending_gc`](Self::recover_pending_gc) after a restart.
+    /// Decrements the ref-count on the branch's HEAD commit. If it
+    /// reaches zero, the commit is hard-deleted and the decrement
+    /// cascades to its parents.
+    ///
+    /// B+ tree node reclamation requires a separate [`gc`](Self::gc)
+    /// call (or happens automatically in
+    /// [`VerMapWithProof::from_map`](crate::trie::VerMapWithProof::from_map)).
     pub fn delete_branch(&mut self, branch: BranchId) -> Result<()> {
         if branch == self.main_branch.get_value() {
             return Err(eg!("cannot delete the main branch"));
         }
         let state = self.branches.get(&branch).c(d!("branch not found"))?;
-
-        // Record the dead head for crash-safe cleanup.
-        if state.head != NO_COMMIT {
-            let seq = self.next_gc_seq.get_value();
-            *self.next_gc_seq.get_mut() = seq + 1;
-            self.pending_gc.insert(&seq, &state.head);
-        }
+        let dead_head = state.head;
 
         self.branch_names.remove(&state.name);
         self.branches.remove(&branch);
+
+        self.decrement_ref(dead_head);
 
         Ok(())
     }
@@ -479,11 +478,14 @@ where
             vec![state.head]
         };
 
+        // ref_count = 1: the branch HEAD that will point here.
+        // Old HEAD: net 0 (loses branch-HEAD, gains parent-link).
         let commit = Commit {
             id,
             root: state.dirty_root,
             parents,
             timestamp_us: now_us(),
+            ref_count: 1,
         };
         self.commits.insert(&id, &commit);
 
@@ -553,12 +555,19 @@ where
             .commits
             .get(&target)
             .c(d!("target commit {} missing", target))?;
+        let old_head = state.head;
         let new_state = BranchState {
             name: state.name,
             head: target,
             dirty_root: commit.root,
         };
         self.branches.insert(&branch, &new_state);
+
+        // Adjust ref counts: target gains a branch-HEAD, old head
+        // loses one.  Increment FIRST to protect target from cascade.
+        self.increment_ref(target);
+        self.decrement_ref(old_head);
+
         Ok(())
     }
 
@@ -624,6 +633,8 @@ where
                 ..tgt
             };
             self.branches.insert(&target, &new_state);
+            // Target branch HEAD now points to src.head → +1 ref.
+            self.increment_ref(src.head);
             return Ok(src.head);
         }
 
@@ -659,11 +670,15 @@ where
         let id = self.next_commit.get_value();
         *self.next_commit.get_mut() = id + 1;
 
+        // ref_count = 1: the target branch HEAD.
+        // tgt.head: net 0 (loses branch-HEAD, gains parent-link).
+        // src.head: +1 (gains parent-link from merge commit).
         let commit = Commit {
             id,
             root: merged_root,
             parents: vec![tgt.head, src.head],
             timestamp_us: now_us(),
+            ref_count: 1,
         };
         self.commits.insert(&id, &commit);
 
@@ -673,6 +688,9 @@ where
             ..tgt
         };
         self.branches.insert(&target, &new_state);
+
+        self.increment_ref(src.head);
+
         Ok(id)
     }
 
@@ -849,156 +867,147 @@ where
     // GC
     // =================================================================
 
-    /// Garbage-collects unreachable commits and B+ tree nodes.
+    /// Reclaims B+ tree nodes that are no longer reachable.
     ///
-    /// Since [`delete_branch`](Self::delete_branch) now performs automatic
-    /// incremental cleanup, calling `gc` explicitly is rarely needed.
-    /// It may still be useful as a full sweep to reclaim garbage from
-    /// older data or after crash recovery.
+    /// Commit lifecycle is handled automatically by reference counting
+    /// (see [`delete_branch`](Self::delete_branch),
+    /// [`rollback_to`](Self::rollback_to)).  This method performs:
+    ///
+    /// 1. **Crash recovery** — if a ref-count cascade was interrupted,
+    ///    rebuilds all ref counts from scratch and removes orphaned
+    ///    commits.
+    /// 2. **B+ tree sweep** — mark-and-sweep over the node pool,
+    ///    keeping only nodes reachable from live commit roots and
+    ///    dirty (uncommitted) roots.
     pub fn gc(&mut self) {
-        // Process any crash-recovery pending entries first.
-        self.process_pending_gc();
+        // 1. Crash recovery: rebuild ref counts if the dirty flag is
+        //    set, or if any commit has ref_count == 0 (migration from
+        //    pre-ref-count data).
+        if self.gc_dirty.get_value()
+            || self.commits.iter().any(|(_, c)| c.ref_count == 0)
+        {
+            self.rebuild_ref_counts();
+        }
 
-        use std::collections::HashSet;
-
-        // 1. Find all reachable commits.
-        let mut reachable_commits = HashSet::new();
-        let mut queue: Vec<CommitId> = self
-            .branches
+        // 2. Collect live roots from all commits + dirty roots.
+        let mut live_roots: Vec<NodeId> = self
+            .commits
             .iter()
-            .map(|(_, s)| s.head)
-            .filter(|&h| h != NO_COMMIT)
+            .map(|(_, c)| c.root)
             .collect();
-
-        while let Some(id) = queue.pop() {
-            if reachable_commits.insert(id)
-                && let Some(c) = self.commits.get(&id)
-            {
-                queue.extend_from_slice(&c.parents);
+        for (_, s) in self.branches.iter() {
+            if s.dirty_root != EMPTY_ROOT {
+                live_roots.push(s.dirty_root);
             }
         }
 
-        // 2. Delete unreachable commits.
-        let all_commits: Vec<u64> = self.commits.iter().map(|(id, _)| id).collect();
-        for id in all_commits {
-            if !reachable_commits.contains(&id) {
+        // 3. GC the B+ tree node pool.
+        self.tree.gc(&live_roots);
+    }
+
+    // =================================================================
+    // Reference counting
+    // =================================================================
+
+    /// Increments the ref_count of the given commit by 1.
+    fn increment_ref(&mut self, commit_id: CommitId) {
+        if commit_id == NO_COMMIT {
+            return;
+        }
+        if let Some(mut c) = self.commits.get(&commit_id) {
+            c.ref_count += 1;
+            self.commits.insert(&commit_id, &c);
+        }
+    }
+
+    /// Decrements the ref_count of the given commit by 1.
+    /// If it reaches zero, hard-deletes the commit and cascades
+    /// to each parent.
+    fn decrement_ref(&mut self, commit_id: CommitId) {
+        if commit_id == NO_COMMIT {
+            return;
+        }
+
+        *self.gc_dirty.get_mut() = true;
+
+        let mut work = vec![commit_id];
+        while let Some(id) = work.pop() {
+            if id == NO_COMMIT {
+                continue;
+            }
+            let Some(mut c) = self.commits.get(&id) else {
+                continue; // already deleted (crash recovery case)
+            };
+            c.ref_count = c.ref_count.saturating_sub(1);
+            if c.ref_count == 0 {
+                let parents = c.parents.clone();
+                self.commits.remove(&id);
+                work.extend(parents);
+            } else {
+                self.commits.insert(&id, &c);
+            }
+        }
+
+        *self.gc_dirty.get_mut() = false;
+    }
+
+    /// Rebuilds all commit ref_counts from scratch by walking all
+    /// live branches.  Hard-deletes any unreachable commits.
+    ///
+    /// Called on crash recovery (`gc_dirty == true`) or when migrating
+    /// from pre-ref-count data (`ref_count == 0` on all commits).
+    fn rebuild_ref_counts(&mut self) {
+        use std::collections::{HashMap, HashSet};
+
+        // 1. Walk all branches to find live commits via BFS.
+        let mut reachable = HashSet::new();
+        let mut ref_counts: HashMap<CommitId, u32> = HashMap::new();
+        let mut queue: Vec<CommitId> = Vec::new();
+
+        // Branch HEADs contribute +1 each.
+        for (_, s) in self.branches.iter() {
+            if s.head != NO_COMMIT {
+                *ref_counts.entry(s.head).or_insert(0) += 1;
+                queue.push(s.head);
+            }
+        }
+
+        // BFS — parent links contribute +1 each.
+        while let Some(id) = queue.pop() {
+            if !reachable.insert(id) {
+                continue;
+            }
+            if let Some(c) = self.commits.get(&id) {
+                for &parent in &c.parents {
+                    if parent != NO_COMMIT {
+                        *ref_counts.entry(parent).or_insert(0) += 1;
+                        queue.push(parent);
+                    }
+                }
+            }
+        }
+
+        // 2. Update ref_counts on all reachable commits.
+        for &id in &reachable {
+            if let Some(mut c) = self.commits.get(&id) {
+                let correct = *ref_counts.get(&id).unwrap_or(&0);
+                if c.ref_count != correct {
+                    c.ref_count = correct;
+                    self.commits.insert(&id, &c);
+                }
+            }
+        }
+
+        // 3. Hard-delete any unreachable commits.
+        let all_ids: Vec<u64> = self.commits.iter().map(|(id, _)| id).collect();
+        for id in all_ids {
+            if !reachable.contains(&id) {
                 self.commits.remove(&id);
             }
         }
 
-        // 3. Collect live tree roots (from reachable commits + dirty roots).
-        let mut live_roots: Vec<NodeId> = reachable_commits
-            .iter()
-            .filter_map(|id| self.commits.get(id).map(|c| c.root))
-            .collect();
-        for (_, s) in self.branches.iter() {
-            if s.dirty_root != EMPTY_ROOT {
-                live_roots.push(s.dirty_root);
-            }
-        }
-
-        // 4. GC the B+ tree node pool.
-        self.tree.gc(&live_roots);
-    }
-
-    /// Processes all pending GC entries, removing unreachable commits
-    /// and their associated B+ tree nodes.
-    ///
-    /// This method is **idempotent** — it can be called multiple times
-    /// or interrupted by a crash and resumed safely. The `pending_gc`
-    /// entries are only removed after cleanup is complete.
-    fn process_pending_gc(&mut self) {
-        use std::collections::HashSet;
-
-        let entries: Vec<(u64, u64)> = self.pending_gc.iter().collect();
-        if entries.is_empty() {
-            return;
-        }
-
-        // 1. Build the set of reachable commits from all live branches.
-        let mut live_commits = HashSet::new();
-        let mut queue: Vec<CommitId> = self
-            .branches
-            .iter()
-            .map(|(_, s)| s.head)
-            .filter(|&h| h != NO_COMMIT)
-            .collect();
-        while let Some(id) = queue.pop() {
-            if live_commits.insert(id) {
-                if let Some(c) = self.commits.get(&id) {
-                    queue.extend_from_slice(&c.parents);
-                }
-            }
-        }
-
-        // 2. For each pending entry, BFS from dead head to find dead commits.
-        let mut all_dead_commits = HashSet::new();
-        let mut processed_seqs = Vec::new();
-
-        for &(seq, dead_head) in &entries {
-            if live_commits.contains(&dead_head) {
-                // This commit is still reachable (e.g. shared ancestor).
-                processed_seqs.push(seq);
-                continue;
-            }
-
-            let mut dead_queue = vec![dead_head];
-            while let Some(id) = dead_queue.pop() {
-                if live_commits.contains(&id) {
-                    continue; // Shared ancestor — stop traversal.
-                }
-                if all_dead_commits.insert(id) {
-                    if let Some(c) = self.commits.get(&id) {
-                        dead_queue.extend_from_slice(&c.parents);
-                    }
-                }
-            }
-            processed_seqs.push(seq);
-        }
-
-        if all_dead_commits.is_empty() {
-            // Nothing to clean, just remove the pending entries.
-            for seq in processed_seqs {
-                self.pending_gc.remove(&seq);
-            }
-            return;
-        }
-
-        // 3. Collect dead tree roots and live tree roots.
-        let dead_roots: Vec<NodeId> = all_dead_commits
-            .iter()
-            .filter_map(|id| self.commits.get(id).map(|c| c.root))
-            .collect();
-
-        let mut live_roots: Vec<NodeId> = live_commits
-            .iter()
-            .filter_map(|id| self.commits.get(id).map(|c| c.root))
-            .collect();
-        for (_, s) in self.branches.iter() {
-            if s.dirty_root != EMPTY_ROOT {
-                live_roots.push(s.dirty_root);
-            }
-        }
-
-        // 4. Delete dead commits.
-        for id in &all_dead_commits {
-            self.commits.remove(id);
-        }
-
-        // 5. GC the B+ tree — targeted sweep of dead roots,
-        //    preserving all nodes reachable from live roots.
-        self.tree.gc_targeted(&dead_roots, &live_roots);
-
-        // 6. Remove processed pending_gc entries.
-        for seq in processed_seqs {
-            self.pending_gc.remove(&seq);
-        }
-    }
-
-    /// Reprocesses any pending GC entries left over from a previous crash.
-    /// Call this once after opening/deserializing a `VerMap`.
-    pub fn recover_pending_gc(&mut self) {
-        self.process_pending_gc();
+        // 4. Clear the dirty flag.
+        *self.gc_dirty.get_mut() = false;
     }
 }
 

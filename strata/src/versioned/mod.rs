@@ -28,8 +28,9 @@
 //!                                       │
 //!                                       ▼
 //!                                   merge()  ──►  delete_branch()
+//!                                                    (ref-count GC)
 //!                                                       │
-//!                                                   gc() (reclaims)
+//!                                                   gc() (B+ tree nodes)
 //! ```
 //!
 //! # Merkle proofs
@@ -71,7 +72,8 @@ pub const NO_COMMIT: CommitId = 0;
 /// An immutable snapshot in the version history.
 ///
 /// Each commit records the complete state of the map (as a B+ tree root)
-/// plus parent linkage.  Once created, a commit is never modified.
+/// plus parent linkage and a reference count for automatic lifecycle
+/// management.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Commit {
     /// Unique identifier.
@@ -82,4 +84,9 @@ pub struct Commit {
     pub parents: Vec<CommitId>,
     /// Wall-clock microseconds since epoch (informational only).
     pub timestamp_us: u64,
+    /// Number of references: branch HEADs pointing at this commit
+    /// plus child commits listing it in their `parents` array.
+    /// When this reaches zero the commit is automatically deleted.
+    #[serde(default)]
+    pub ref_count: u32,
 }

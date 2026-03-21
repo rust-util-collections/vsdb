@@ -310,6 +310,27 @@ impl MapxRaw {
         self.inner.remove(key.as_ref())
     }
 
+    /// Marks a key for deferred removal via the compaction filter.
+    ///
+    /// The key remains readable until the underlying storage engine
+    /// compacts the relevant level.  Use this for bulk cleanup (e.g.
+    /// garbage collection) where immediate visibility is not required.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn lazy_delete(&self, key: impl AsRef<[u8]>) {
+        self.inner.lazy_delete(key.as_ref())
+    }
+
+    /// Batch version of [`lazy_delete`](Self::lazy_delete).
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn lazy_delete_batch(
+        &self,
+        keys: impl IntoIterator<Item = impl AsRef<[u8]>>,
+    ) {
+        self.inner.lazy_delete_batch(keys)
+    }
+
     /// Start a batch operation.
     ///
     /// This method allows you to perform multiple insert/remove operations

@@ -98,10 +98,10 @@ where
 
     /// Wraps an existing `VerMap`.
     ///
-    /// Automatically recovers any pending GC entries left from a
-    /// previous crash and attempts to restore the trie cache.
+    /// Runs [`gc`](VerMap::gc) for crash recovery (if needed) and
+    /// B+ tree cleanup, then attempts to restore the trie cache.
     pub fn from_map(mut map: VerMap<K, V>) -> Self {
-        map.recover_pending_gc();
+        map.gc();
         let cache_id = map.instance_id();
         let mut this = Self {
             map,
@@ -250,8 +250,10 @@ where
         // Eagerly persist the cache while the trie is in a clean
         // committed state (before any dirty overlay is applied).
         // This avoids an expensive clone in `Drop`.
-        let _ = self.trie.save_cache(self.cache_id, target);
-        self.cache_dirty = false;
+        self.cache_dirty = true;
+        if self.trie.save_cache(self.cache_id, target).is_ok() {
+            self.cache_dirty = false;
+        }
         Ok(())
     }
 

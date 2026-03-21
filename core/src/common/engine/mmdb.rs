@@ -206,6 +206,34 @@ impl MmDB {
             .expect("vsdb: mmdb delete failed");
     }
 
+    /// Marks a key for deferred removal during the next compaction.
+    ///
+    /// Unlike [`remove`](Self::remove), this does **not** write a
+    /// tombstone immediately.  The key stays readable until mmdb's
+    /// compaction filter physically drops it.
+    pub(crate) fn lazy_delete(&self, meta_prefix: PreBytes, key: &[u8]) {
+        let full_key = make_full_key(&meta_prefix, key);
+        self.shard(&meta_prefix).lazy_delete(&full_key);
+    }
+
+    /// Batch version of [`lazy_delete`](Self::lazy_delete).
+    ///
+    /// All keys share the same prefix (and therefore the same shard).
+    /// Triggers auto-compaction when the dead-key count crosses the
+    /// threshold configured in `DbOptions`.
+    pub(crate) fn lazy_delete_batch(
+        &self,
+        meta_prefix: PreBytes,
+        keys: impl IntoIterator<Item = impl AsRef<[u8]>>,
+    ) {
+        let shard = self.shard(&meta_prefix);
+        let full_keys: Vec<Vec<u8>> = keys
+            .into_iter()
+            .map(|k| make_full_key(&meta_prefix, k.as_ref()))
+            .collect();
+        shard.lazy_delete_batch(full_keys);
+    }
+
     pub(crate) fn iter(&self, meta_prefix: PreBytes) -> MmdbIter {
         let db = self.shard(&meta_prefix);
         let db_iter = db
