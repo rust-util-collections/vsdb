@@ -313,7 +313,7 @@ impl Clone for Mapx {
             for (k, v) in self.iter() {
                 batch.insert(&k, &v);
             }
-            batch.commit().unwrap();
+            batch.commit().expect("vsdb: clone failed — I/O error");
         }
         new_instance
     }
