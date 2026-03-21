@@ -6,7 +6,7 @@ use std::{
 use vsdb::basic::mapx::Mapx;
 
 fn batch_vs_normal_write(c: &mut Criterion) {
-    let mut group = c.benchmark_group("** Batch vs Normal Write (100 items) **");
+    let mut group = c.benchmark_group("vsdb::mapx / batch_vs_normal");
     group
         .measurement_time(std::time::Duration::from_secs(3))
         .sample_size(10);

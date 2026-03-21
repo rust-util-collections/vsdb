@@ -14,7 +14,7 @@ fn xorshift64(s: &mut u64) -> u64 {
 }
 
 fn concurrent_independent_writes(c: &mut Criterion) {
-    let mut group = c.benchmark_group("** vsdb::concurrent::independent_writes **");
+    let mut group = c.benchmark_group("vsdb::concurrent / independent_writes");
     group.sample_size(10);
 
     // A single shared map, with per-thread disjoint keyspaces.
@@ -69,7 +69,7 @@ fn concurrent_independent_writes(c: &mut Criterion) {
 }
 
 fn concurrent_hotspot_writes(c: &mut Criterion) {
-    let mut group = c.benchmark_group("** vsdb::concurrent::hotspot_writes **");
+    let mut group = c.benchmark_group("vsdb::concurrent / hotspot_writes");
     group.sample_size(10);
 
     let thread_counts = [2, 4, 8, 16];
@@ -113,7 +113,7 @@ fn concurrent_hotspot_writes(c: &mut Criterion) {
 }
 
 fn concurrent_shadow_hotspot_writes(c: &mut Criterion) {
-    let mut group = c.benchmark_group("** vsdb::concurrent::shadow_hotspot_writes **");
+    let mut group = c.benchmark_group("vsdb::concurrent / shadow_hotspot_writes");
     group.sample_size(10);
 
     let thread_counts = [2, 4, 8, 16];
@@ -157,7 +157,7 @@ fn concurrent_shadow_hotspot_writes(c: &mut Criterion) {
 }
 
 fn concurrent_reads(c: &mut Criterion) {
-    let mut group = c.benchmark_group("** vsdb::concurrent::reads **");
+    let mut group = c.benchmark_group("vsdb::concurrent / reads");
     group.sample_size(10);
 
     let mut db: Mapx<[u8; 8], Vec<u8>> = Mapx::new();
@@ -209,7 +209,7 @@ fn concurrent_reads(c: &mut Criterion) {
 }
 
 fn concurrent_mixed_read_write(c: &mut Criterion) {
-    let mut group = c.benchmark_group("** vsdb::concurrent::mixed_read_write **");
+    let mut group = c.benchmark_group("vsdb::concurrent / mixed_read_write");
     group.sample_size(10);
 
     let mut db: Mapx<[u8; 8], Vec<u8>> = Mapx::new();

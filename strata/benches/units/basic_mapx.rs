@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use vsdb::{ValueEnDe, basic::mapx::Mapx};
 
 fn read_write(c: &mut Criterion) {
-    let mut group = c.benchmark_group("** vsdb::basic::mapx::Mapx **");
+    let mut group = c.benchmark_group("vsdb::mapx / sequential");
     group
         .measurement_time(std::time::Duration::from_secs(3))
         .sample_size(10);
@@ -72,7 +72,7 @@ fn read_write(c: &mut Criterion) {
 }
 
 fn random_read_write(c: &mut Criterion) {
-    let mut group = c.benchmark_group("** vsdb::basic::mapx::Mapx **");
+    let mut group = c.benchmark_group("vsdb::mapx / random");
     group
         .measurement_time(std::time::Duration::from_secs(3))
         .sample_size(10);

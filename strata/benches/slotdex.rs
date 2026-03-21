@@ -29,7 +29,7 @@ fn query_reverse(db: &SlotDex<V>, page_size: u16) {
 
 fn slot_query(c: &mut Criterion, tier: u64) {
     let mut db = slot_db_custom(tier);
-    let name = format!("slot {tier}");
+    let name = format!("vsdb::slotdex / tier_{tier}");
     let mut group = c.benchmark_group(&name);
     group
         .measurement_time(std::time::Duration::from_secs(3))
@@ -68,7 +68,7 @@ fn slot_64(c: &mut Criterion) {
 }
 
 fn slot_write(c: &mut Criterion) {
-    let mut group = c.benchmark_group("slot write");
+    let mut group = c.benchmark_group("vsdb::slotdex / write");
     group
         .measurement_time(std::time::Duration::from_secs(3))
         .sample_size(10);

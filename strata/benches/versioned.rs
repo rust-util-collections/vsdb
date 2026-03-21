@@ -16,7 +16,7 @@ fn setup() {
 // =====================================================================
 
 fn single_branch_crud(c: &mut Criterion) {
-    let mut group = c.benchmark_group("** versioned::single_branch **");
+    let mut group = c.benchmark_group("vsdb::versioned / single_branch");
     group
         .measurement_time(std::time::Duration::from_secs(3))
         .sample_size(10);
@@ -80,7 +80,7 @@ fn single_branch_crud(c: &mut Criterion) {
 // =====================================================================
 
 fn commit_rollback(c: &mut Criterion) {
-    let mut group = c.benchmark_group("** versioned::commit_rollback **");
+    let mut group = c.benchmark_group("vsdb::versioned / commit_rollback");
     group
         .measurement_time(std::time::Duration::from_secs(3))
         .sample_size(10);
@@ -147,7 +147,7 @@ fn commit_rollback(c: &mut Criterion) {
 // =====================================================================
 
 fn branching(c: &mut Criterion) {
-    let mut group = c.benchmark_group("** versioned::branching **");
+    let mut group = c.benchmark_group("vsdb::versioned / branching");
     group
         .measurement_time(std::time::Duration::from_secs(3))
         .sample_size(10);
@@ -194,7 +194,7 @@ fn branching(c: &mut Criterion) {
 // =====================================================================
 
 fn iteration(c: &mut Criterion) {
-    let mut group = c.benchmark_group("** versioned::iteration **");
+    let mut group = c.benchmark_group("vsdb::versioned / iteration");
     group
         .measurement_time(std::time::Duration::from_secs(3))
         .sample_size(10);
@@ -244,7 +244,7 @@ fn iteration(c: &mut Criterion) {
 // =====================================================================
 
 fn historical(c: &mut Criterion) {
-    let mut group = c.benchmark_group("** versioned::historical **");
+    let mut group = c.benchmark_group("vsdb::versioned / historical");
     group
         .measurement_time(std::time::Duration::from_secs(3))
         .sample_size(10);
@@ -295,7 +295,7 @@ fn historical(c: &mut Criterion) {
 // =====================================================================
 
 fn merge_bench(c: &mut Criterion) {
-    let mut group = c.benchmark_group("** versioned::merge **");
+    let mut group = c.benchmark_group("vsdb::versioned / merge");
     group
         .measurement_time(std::time::Duration::from_secs(5))
         .sample_size(10);
@@ -342,7 +342,7 @@ fn merge_bench(c: &mut Criterion) {
 // =====================================================================
 
 fn gc_bench(c: &mut Criterion) {
-    let mut group = c.benchmark_group("** versioned::gc **");
+    let mut group = c.benchmark_group("vsdb::versioned / gc");
     group
         .measurement_time(std::time::Duration::from_secs(5))
         .sample_size(10);

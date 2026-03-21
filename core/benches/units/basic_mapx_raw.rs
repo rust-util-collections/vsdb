@@ -7,7 +7,7 @@ use std::{
 use vsdb_core::MapxRaw;
 
 fn read_write(c: &mut Criterion) {
-    let mut group = c.benchmark_group("** vsdb::basic::mapx_raw::MapxRaw **");
+    let mut group = c.benchmark_group("vsdb_core::mapx_raw / sequential");
     group
         .measurement_time(std::time::Duration::from_secs(3))
         .sample_size(10);
@@ -32,7 +32,7 @@ fn read_write(c: &mut Criterion) {
 }
 
 fn random_read_write(c: &mut Criterion) {
-    let mut group = c.benchmark_group("** vsdb::basic::mapx_raw::MapxRaw **");
+    let mut group = c.benchmark_group("vsdb_core::mapx_raw / random");
     group
         .measurement_time(std::time::Duration::from_secs(3))
         .sample_size(10);
