@@ -41,7 +41,7 @@ impl SmtMut {
     /// Hash the entire tree. Returns `(root_hash, hashed_root)`.
     pub fn commit(self) -> Result<(Vec<u8>, SmtHandle)> {
         let root = commit_rec(self.root)?;
-        let hash = root.expect_hash().to_vec();
+        let hash = root.expect_hash()?.to_vec();
         Ok((hash, root))
     }
 
@@ -375,11 +375,11 @@ fn commit_rec(handle: SmtHandle) -> Result<SmtHandle> {
                     // Combine children at the split point, then wrap
                     // through the compressed path.
                     let left_h: [u8; 32] = left
-                        .expect_hash()
+                        .expect_hash()?
                         .try_into()
                         .map_err(|_| TrieError::InvalidState("bad hash len".into()))?;
                     let right_h: [u8; 32] = right
-                        .expect_hash()
+                        .expect_hash()?
                         .try_into()
                         .map_err(|_| TrieError::InvalidState("bad hash len".into()))?;
 

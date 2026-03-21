@@ -332,7 +332,15 @@ impl<K, V, T: TrieCalc> VerMapWithProof<K, V, T> {
     /// On failure (missing file, corruption, version mismatch), silently
     /// falls back to the default empty trie.
     fn try_load_cache(&mut self) {
-        if let Ok((trie, sync_tag, _root_hash)) = T::load_cache(self.cache_id) {
+        if let Ok((mut trie, sync_tag, saved_hash)) = T::load_cache(self.cache_id) {
+            // Verify the loaded trie produces the same root hash that
+            // was saved.  Discards the cache on any mismatch (tampered
+            // or corrupted file) — the trie will be rebuilt from VerMap
+            // on the next merkle_root() call.
+            let ok = trie.root_hash().map(|h| h == saved_hash).unwrap_or(false);
+            if !ok {
+                return;
+            }
             self.trie = trie;
             self.trie_at_head = None;
             self.sync_commit = Some(sync_tag);

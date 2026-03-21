@@ -117,8 +117,8 @@ fn prove_walk(
                     ));
                 }
 
-                let left_h = to_hash32(left.expect_hash())?;
-                let right_h = to_hash32(right.expect_hash())?;
+                let left_h = to_hash32(left.expect_hash()?)?;
+                let right_h = to_hash32(right.expect_hash()?)?;
                 let internal_h = hash_internal(&left_h, &right_h);
 
                 // Wrap from the split level up to diverge_depth + 1.
@@ -138,10 +138,10 @@ fn prove_walk(
 
                 let bit = key_path.bit_at(split_depth);
                 if bit == 0 {
-                    siblings[split_depth] = to_hash32(right.expect_hash())?;
+                    siblings[split_depth] = to_hash32(right.expect_hash()?)?;
                     prove_walk(left, key_path, key_hash, split_depth + 1, siblings)
                 } else {
-                    siblings[split_depth] = to_hash32(left.expect_hash())?;
+                    siblings[split_depth] = to_hash32(left.expect_hash()?)?;
                     prove_walk(right, key_path, key_hash, split_depth + 1, siblings)
                 }
             }

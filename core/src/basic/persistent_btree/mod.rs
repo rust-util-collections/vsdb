@@ -298,7 +298,10 @@ impl PersistentBTree {
 
     fn alloc(&mut self, node: &Node) -> NodeId {
         let id = self.next_id;
-        self.next_id += 1;
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .expect("PersistentBTree: NodeId space exhausted");
         self.nodes.insert(id.to_be_bytes(), node.encode());
 
         // Populate in-memory ref tracking.

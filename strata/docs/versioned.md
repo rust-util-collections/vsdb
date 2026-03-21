@@ -92,6 +92,7 @@ Commit {
     root:         NodeId    (B+ tree root snapshot),
     parents:      Vec<CommitId>,
     timestamp_us: u64,
+    ref_count:    u32,       // branch HEADs + child parent-links
 }
 ```
 
@@ -184,11 +185,11 @@ sequenceDiagram
     T-->>V: merged_root
     V->>D: store merge Commit{parents: [main.head, feat.head]}
 
-    Note over V: 6. GC
+    Note over V: 6. GC (optional — disk reclamation)
     U->>V: gc()
-    V->>V: mark reachable commits (BFS from all branch heads)
-    V->>T: tree.gc(live_roots)
-    T->>D: delete unreachable nodes
+    V->>V: rebuild commit ref_counts if needed (crash recovery)
+    V->>T: tree.rebuild_ref_counts(live_roots)
+    T->>D: delete unreachable nodes from disk
 ```
 
 ---
@@ -433,70 +434,80 @@ The caller controls priority by choosing which branch to pass as `source` vs `ta
 
 ## Garbage Collection
 
-GC is a two-stage **mark-and-sweep** that reclaims unreachable commits
-and orphaned B+ tree nodes.
+Lifecycle management is split into two layers:
+
+1. **Commit ref counting** — each `Commit` tracks a `ref_count`
+   (branch HEADs + child parent-links).  When a branch is deleted or
+   rolled back, commits whose `ref_count` drops to zero are
+   **immediately hard-deleted** via cascading decrement.  No manual
+   `gc()` call is needed for commit cleanup.
+
+2. **B+ tree node ref counting (in-memory)** — `PersistentBTree`
+   maintains an in-memory `HashMap<NodeId, NodeRef>` that tracks
+   per-node reference counts.  When a commit root is released,
+   orphaned nodes are cascade-removed from the map.  Dead nodes
+   remain on disk until `gc()` reclaims the space.
+
+`gc()` performs:
+- **Crash recovery** — if a ref-count cascade was interrupted
+  (`gc_dirty` flag set), rebuilds all commit ref counts from scratch.
+- **B+ tree disk reclamation** — walks all live commit roots and
+  dirty roots, rebuilds the in-memory node ref map, and hard-deletes
+  unreachable nodes from disk.
 
 ```mermaid
 flowchart TD
-    Start(["gc()"]) --> S1["Stage 1: Mark reachable commits"]
-    S1 --> BFS["BFS from every branch head<br/>following parent pointers"]
-    BFS --> Sweep1["Delete commits NOT in reachable set"]
+    Start(["gc()"]) --> Check{"gc_dirty or<br/>ref_count == 0?"}
+    Check -->|yes| Rebuild["Rebuild commit ref_counts<br/>(BFS from branch heads)"]
+    Check -->|no| S2
+    Rebuild --> S2["Collect live B+ tree roots<br/>(all commits + dirty_roots)"]
+    S2 --> Mark["Walk reachable nodes,<br/>rebuild in-memory ref map"]
+    Mark --> Sweep["Hard-delete unreachable<br/>nodes from disk"]
+    Sweep --> Done(["Done"])
 
-    Sweep1 --> S2["Stage 2: Collect live B+ tree roots"]
-    S2 --> Roots["Live roots =<br/>reachable commits' roots<br/>+ all branches' dirty_roots"]
-    Roots --> Mark["Recursive mark from each live root<br/>(traverse Internal → children)"]
-    Mark --> Sweep2["Delete all unmarked B+ tree nodes"]
-    Sweep2 --> Done(["Done — storage reclaimed"])
-
-    style Sweep1 fill:#c62,color:#fff
-    style Sweep2 fill:#c62,color:#fff
+    style Rebuild fill:#c62,color:#fff
+    style Sweep fill:#c62,color:#fff
 ```
 
 ### What Gets Preserved vs Reclaimed
 
 ```mermaid
 graph TB
-    subgraph "Preserved"
-        P1["Commits reachable from any branch head"]
-        P2["B+ tree nodes reachable from live commits"]
-        P3["B+ tree nodes for uncommitted dirty_roots"]
+    subgraph "Automatic (ref counting)"
+        A1["Commits — deleted immediately<br/>when ref_count reaches 0"]
+        A2["B+ tree nodes — removed from<br/>in-memory ref map on cascade"]
     end
 
-    subgraph "Reclaimed"
-        R1["Commits from deleted branches<br/>(unreachable)"]
-        R2["B+ tree nodes no longer<br/>referenced by any live tree"]
-        R3["Dangling nodes from<br/>rolled-back commits"]
+    subgraph "gc() — disk reclamation"
+        R1["Dead B+ tree nodes still on disk"]
+        R2["Crash-recovery orphans"]
     end
 
+    style A1 fill:#4a9,color:#fff
+    style A2 fill:#4a9,color:#fff
     style R1 fill:#c62,color:#fff
     style R2 fill:#c62,color:#fff
-    style R3 fill:#c62,color:#fff
-    style P1 fill:#4a9,color:#fff
-    style P2 fill:#4a9,color:#fff
-    style P3 fill:#4a9,color:#fff
 ```
 
 ### GC Example
 
 ```mermaid
 graph RL
-    subgraph "Before GC"
-        c1["c1"] --> c0["c0 (initial)"]
-        c2["c2"] --> c1
-        c3["c3 (deleted branch)"] --> c1
-        c4["c4 (deleted branch)"] --> c3
+    subgraph "Before delete_branch(feat)"
+        c1["c1 (ref=2)"] --> c0["c0 (ref=1)"]
+        c2["c2 (ref=1)"] --> c1
+        c3["c3 (ref=1)"] --> c1
+        c4["c4 (ref=1)"] --> c3
     end
 
     MAIN["main.head"] -.-> c2
-    FEAT["feat (deleted)"] -.->|"branch deleted"| c4
-
-    style c3 fill:#c62,color:#fff
-    style c4 fill:#c62,color:#fff
-    style FEAT fill:#888,color:#fff
+    FEAT["feat.head"] -.-> c4
 ```
 
-After `gc()`: commits **c3** and **c4** are removed (no branch points to them).
-Their B+ tree nodes are swept if not shared with c0/c1/c2.
+After `delete_branch(feat)`: ref-count cascade immediately deletes **c4** (ref 1→0)
+and **c3** (ref 1→0).  **c1** drops from ref=2 to ref=1 (still alive via c2).
+No `gc()` call needed.  B+ tree nodes from c3/c4 are released from the
+in-memory ref map; `gc()` reclaims their disk space.
 
 ---
 
@@ -563,7 +574,7 @@ flowchart LR
     subgraph "rollback_to(branch, target_commit)"
         R1["Verify target is ancestor of head"] --> R2["head = target_commit"]
         R2 --> R3["dirty_root = target_commit.root"]
-        R3 --> R4["Later commits become<br/>unreachable (gc reclaims)"]
+        R3 --> R4["Abandoned commits auto-deleted<br/>via ref-count cascade"]
     end
 
     subgraph "discard(branch)"
@@ -582,5 +593,5 @@ flowchart LR
 | **Isolation** | Each branch has independent `head` + `dirty_root` |
 | **Structural sharing** | COW B+ tree — mutations allocate ~O(log n) nodes |
 | **Merge** | Three-way with sorted iterators; source wins on conflict |
-| **GC** | Two-stage mark-and-sweep (commits + tree nodes) |
+| **GC** | Commit ref counting (automatic) + B+ tree node ref counting (in-memory); `gc()` for disk reclamation and crash recovery |
 | **Persistence** | All state stored in MMDB via `MapxRaw` |

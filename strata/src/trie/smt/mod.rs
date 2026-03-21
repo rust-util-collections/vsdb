@@ -19,6 +19,7 @@ pub(crate) mod query;
 pub(crate) use bitpath::BitPath;
 pub use proof::SmtProof;
 
+use crate::trie::error::{Result, TrieError};
 use std::fmt;
 
 /// The fixed depth of the sparse Merkle tree (256-bit key hash).
@@ -63,12 +64,15 @@ impl SmtHandle {
     }
 
     /// Returns the hash if cached, or `EMPTY_HASH` if the node is empty.
-    /// Panics if the node is a non-empty InMemory (must commit first).
-    pub(crate) fn expect_hash(&self) -> &[u8] {
+    /// Returns `Err` if the node is a non-empty InMemory (must call
+    /// `root_hash()` first to compute hashes).
+    pub(crate) fn expect_hash(&self) -> Result<&[u8]> {
         match self {
-            SmtHandle::Cached(h, _) => h,
-            SmtHandle::InMemory(n) if **n == SmtNode::Empty => &EMPTY_HASH,
-            _ => panic!("SmtHandle::expect_hash called on unhashed non-empty node"),
+            SmtHandle::Cached(h, _) => Ok(h),
+            SmtHandle::InMemory(n) if **n == SmtNode::Empty => Ok(&EMPTY_HASH),
+            _ => Err(TrieError::InvalidState(
+                "unhashed non-empty node — call root_hash() first".into(),
+            )),
         }
     }
 }

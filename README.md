@@ -19,7 +19,7 @@ A high-performance, embedded key-value database for Rust with an API that feels 
 
 ```toml
 [dependencies]
-vsdb = "10.0.0"
+vsdb = "11.0.0"
 ```
 
 ```rust

@@ -54,5 +54,8 @@ pub use trie::{MptCalc, SmtCalc, SmtProof, TrieCalc, VerMapWithProof};
 // the generic struct is still accessible as `vsdb::slotdex::SlotDex<S, K>`.
 pub use slotdex::{SlotDex32, SlotDex64 as SlotDex, SlotDex64, SlotDex128, SlotType};
 
-// Re-export all of vsdb_core for convenience
+// Re-export vsdb_core.  User-facing items: vsdb_set_base_dir,
+// vsdb_get_base_dir, vsdb_flush.  The rest (MapxRaw, PersistentBTree,
+// RawKey, etc.) are implementation details — prefer the typed wrappers
+// (Mapx, MapxOrd, VerMap) instead.
 pub use vsdb_core::{self, *};

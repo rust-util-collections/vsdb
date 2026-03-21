@@ -19,7 +19,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-vsdb_core = "10.0.0"
+vsdb_core = "11.0.0"
 ```
 
 For detailed API examples, see [API Examples](docs/api.md).

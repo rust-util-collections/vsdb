@@ -147,7 +147,11 @@ fn gen_data_dir() -> PathBuf {
     // Compatible with Windows OS?
     let d = env::var(BASE_DIR_VAR)
         .or_else(|_| env::var("HOME").map(|h| format!("{h}/.vsdb")))
-        .unwrap_or_else(|_| "/tmp/.vsdb".to_owned());
+        .unwrap_or_else(|_| {
+            let mut p = env::temp_dir();
+            p.push(format!(".vsdb_{}", std::process::id()));
+            p.to_string_lossy().into_owned()
+        });
     pnk!(fs::create_dir_all(&d));
     PathBuf::from(d)
 }
