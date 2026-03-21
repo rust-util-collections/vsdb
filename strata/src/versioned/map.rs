@@ -244,6 +244,8 @@ where
 
         // New branch HEAD adds a reference to the shared commit.
         self.increment_ref(src.head);
+        // New branch's dirty_root references the shared tree root.
+        self.tree.acquire_node(src.dirty_root);
 
         Ok(id)
     }
@@ -263,10 +265,14 @@ where
         }
         let state = self.branches.get(&branch).c(d!("branch not found"))?;
         let dead_head = state.head;
+        let dead_dirty = state.dirty_root;
 
         self.branch_names.remove(&state.name);
         self.branches.remove(&branch);
 
+        // Release tree root ref from the branch's dirty_root.
+        self.tree.release_node(dead_dirty);
+        // Cascade commit ref counting (may also release commit.root refs).
         self.decrement_ref(dead_head);
 
         Ok(())
@@ -445,9 +451,12 @@ where
     /// Inserts a key-value pair into the working state of `branch`.
     pub fn insert(&mut self, branch: BranchId, key: &K, value: &V) -> Result<()> {
         let mut state = self.branches.get(&branch).c(d!("branch not found"))?;
+        let old_root = state.dirty_root;
         state.dirty_root =
             self.tree
-                .insert(state.dirty_root, &key.to_bytes(), &value.encode());
+                .insert(old_root, &key.to_bytes(), &value.encode());
+        self.tree.acquire_node(state.dirty_root);
+        self.tree.release_node(old_root);
         self.branches.insert(&branch, &state);
         Ok(())
     }
@@ -455,7 +464,10 @@ where
     /// Removes a key from the working state of `branch`.
     pub fn remove(&mut self, branch: BranchId, key: &K) -> Result<()> {
         let mut state = self.branches.get(&branch).c(d!("branch not found"))?;
-        state.dirty_root = self.tree.remove(state.dirty_root, &key.to_bytes());
+        let old_root = state.dirty_root;
+        state.dirty_root = self.tree.remove(old_root, &key.to_bytes());
+        self.tree.acquire_node(state.dirty_root);
+        self.tree.release_node(old_root);
         self.branches.insert(&branch, &state);
         Ok(())
     }
@@ -489,6 +501,9 @@ where
         };
         self.commits.insert(&id, &commit);
 
+        // commit.root now also references dirty_root → acquire.
+        self.tree.acquire_node(state.dirty_root);
+
         // Update branch head; dirty_root stays the same (it IS the snapshot).
         let new_state = BranchState { head: id, ..state };
         self.branches.insert(&branch, &new_state);
@@ -499,6 +514,7 @@ where
     /// branch head.
     pub fn discard(&mut self, branch: BranchId) -> Result<()> {
         let state = self.branches.get(&branch).c(d!("branch not found"))?;
+        let old_dirty = state.dirty_root;
         let root = if state.head == NO_COMMIT {
             EMPTY_ROOT
         } else {
@@ -511,6 +527,8 @@ where
             dirty_root: root,
             ..state
         };
+        self.tree.acquire_node(root);
+        self.tree.release_node(old_dirty);
         self.branches.insert(&branch, &new_state);
         Ok(())
     }
@@ -556,6 +574,7 @@ where
             .get(&target)
             .c(d!("target commit {} missing", target))?;
         let old_head = state.head;
+        let old_dirty = state.dirty_root;
         let new_state = BranchState {
             name: state.name,
             head: target,
@@ -563,7 +582,11 @@ where
         };
         self.branches.insert(&branch, &new_state);
 
-        // Adjust ref counts: target gains a branch-HEAD, old head
+        // Tree root: dirty_root changes to commit.root.
+        self.tree.acquire_node(commit.root);
+        self.tree.release_node(old_dirty);
+
+        // Commit ref counts: target gains a branch-HEAD, old head
         // loses one.  Increment FIRST to protect target from cascade.
         self.increment_ref(target);
         self.decrement_ref(old_head);
@@ -635,6 +658,9 @@ where
             self.branches.insert(&target, &new_state);
             // Target branch HEAD now points to src.head → +1 ref.
             self.increment_ref(src.head);
+            // Tree root: dirty_root changes to src_commit.root.
+            self.tree.acquire_node(src_commit.root);
+            self.tree.release_node(tgt.dirty_root);
             return Ok(src.head);
         }
 
@@ -688,6 +714,11 @@ where
             ..tgt
         };
         self.branches.insert(&target, &new_state);
+
+        // Tree root: commit.root + dirty_root both reference merged_root.
+        self.tree.acquire_node(merged_root); // commit.root
+        self.tree.acquire_node(merged_root); // dirty_root
+        self.tree.release_node(tgt.dirty_root); // old target dirty
 
         self.increment_ref(src.head);
 
@@ -941,6 +972,8 @@ where
             c.ref_count = c.ref_count.saturating_sub(1);
             if c.ref_count == 0 {
                 let parents = c.parents.clone();
+                // Release the B+ tree root owned by this commit.
+                self.tree.release_node(c.root);
                 self.commits.remove(&id);
                 work.extend(parents);
             } else {

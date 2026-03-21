@@ -255,12 +255,27 @@ enum RemoveResult {
 ///
 /// fs::remove_dir_all(&dir).unwrap();
 /// ```
+/// In-memory metadata for a single B+ tree node.
+#[derive(Clone, Debug)]
+struct NodeRef {
+    ref_count: u32,
+    /// Child NodeIds (empty for leaf nodes).
+    children: Vec<NodeId>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PersistentBTree {
     /// Flat node pool.  Key = big-endian NodeId, Value = encoded Node.
     nodes: MapxRaw,
     /// Next node ID to allocate (monotonically increasing).
     next_id: NodeId,
+    /// In-memory reference counts and cached children lists.
+    /// Rebuilt from disk by [`rebuild_ref_counts`].
+    #[serde(skip)]
+    ref_counts: std::collections::HashMap<NodeId, NodeRef>,
+    /// Whether `ref_counts` has been populated (false after deserialization).
+    #[serde(skip)]
+    ref_counts_ready: bool,
 }
 
 impl PersistentBTree {
@@ -274,6 +289,8 @@ impl PersistentBTree {
         Self {
             nodes: MapxRaw::new(),
             next_id: 1, // 0 is EMPTY_ROOT sentinel
+            ref_counts: std::collections::HashMap::new(),
+            ref_counts_ready: true, // empty tree — nothing to rebuild
         }
     }
 
@@ -283,6 +300,23 @@ impl PersistentBTree {
         let id = self.next_id;
         self.next_id += 1;
         self.nodes.insert(id.to_be_bytes(), node.encode());
+
+        // Populate in-memory ref tracking.
+        if self.ref_counts_ready {
+            let children = match node {
+                Node::Internal { children, .. } => {
+                    for &child in children {
+                        if let Some(cr) = self.ref_counts.get_mut(&child) {
+                            cr.ref_count += 1;
+                        }
+                    }
+                    children.clone()
+                }
+                Node::Leaf { .. } => Vec::new(),
+            };
+            self.ref_counts.insert(id, NodeRef { ref_count: 0, children });
+        }
+
         id
     }
 
@@ -816,33 +850,114 @@ impl PersistentBTree {
     }
 
     // =================================================================
-    // GARBAGE COLLECTION
+    // NODE REFERENCE COUNTING
     // =================================================================
 
-    /// Deletes every node **not** reachable from any of the given roots.
-    ///
-    /// Uses lazy deletion — keys are marked for removal and physically
-    /// dropped during the next compaction cycle.
-    pub fn gc(&mut self, live_roots: &[NodeId]) {
-        let mut reachable = std::collections::HashSet::new();
-        for &r in live_roots {
-            if r != EMPTY_ROOT {
-                self.mark(r, &mut reachable);
+    /// Increments the in-memory reference count for `id`.
+    pub fn acquire_node(&mut self, id: NodeId) {
+        if id == EMPTY_ROOT || !self.ref_counts_ready {
+            return;
+        }
+        if let Some(nr) = self.ref_counts.get_mut(&id) {
+            nr.ref_count += 1;
+        }
+    }
+
+    /// Decrements the in-memory reference count for `id`.
+    /// If it reaches zero, cascades to all children and removes the
+    /// entry from the map.  The node is NOT deleted from disk —
+    /// call [`gc`] to reclaim disk space.
+    pub fn release_node(&mut self, id: NodeId) {
+        if id == EMPTY_ROOT || !self.ref_counts_ready {
+            return;
+        }
+        let mut work = vec![id];
+        while let Some(nid) = work.pop() {
+            if nid == EMPTY_ROOT {
+                continue;
+            }
+            let Some(nr) = self.ref_counts.get_mut(&nid) else {
+                continue;
+            };
+            nr.ref_count = nr.ref_count.saturating_sub(1);
+            if nr.ref_count == 0 {
+                let children = std::mem::take(&mut nr.children);
+                self.ref_counts.remove(&nid);
+                work.extend(children);
             }
         }
-        let all: Vec<(Vec<u8>, Vec<u8>)> = self.nodes.iter().collect();
-        let dead_keys: Vec<Vec<u8>> = all
-            .into_iter()
-            .filter_map(|(k, _)| {
-                let id = u64::from_be_bytes(k[..8].try_into().unwrap());
-                if reachable.contains(&id) {
-                    None
-                } else {
-                    Some(k)
-                }
-            })
-            .collect();
-        self.nodes.lazy_delete_batch(dead_keys);
+    }
+
+    /// Rebuilds the in-memory reference-count map from scratch by
+    /// walking all nodes reachable from `live_roots`.
+    ///
+    /// Also hard-deletes unreachable nodes from disk (space reclamation).
+    pub fn rebuild_ref_counts(&mut self, live_roots: &[NodeId]) {
+        use std::collections::{HashMap, HashSet};
+
+        let mut new_refs: HashMap<NodeId, NodeRef> = HashMap::new();
+        let mut visited = HashSet::new();
+
+        // Seed: each root gets +1.
+        let mut queue: Vec<NodeId> = Vec::new();
+        for &root in live_roots {
+            if root != EMPTY_ROOT {
+                new_refs.entry(root).or_insert_with(|| NodeRef {
+                    ref_count: 0,
+                    children: Vec::new(),
+                }).ref_count += 1;
+                queue.push(root);
+            }
+        }
+
+        // BFS: walk all reachable nodes, count parent→child references.
+        while let Some(id) = queue.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            if let Some(raw) = self.nodes.get(id.to_be_bytes()) {
+                let node = Node::decode(&raw);
+                let children = match &node {
+                    Node::Internal { children, .. } => {
+                        for &child in children {
+                            new_refs.entry(child).or_insert_with(|| NodeRef {
+                                ref_count: 0,
+                                children: Vec::new(),
+                            }).ref_count += 1;
+                            queue.push(child);
+                        }
+                        children.clone()
+                    }
+                    Node::Leaf { .. } => Vec::new(),
+                };
+                new_refs.entry(id).or_insert_with(|| NodeRef {
+                    ref_count: 0,
+                    children: Vec::new(),
+                }).children = children;
+            }
+        }
+
+        // Hard-delete unreachable nodes from disk.
+        let all: Vec<Vec<u8>> = self.nodes.iter().map(|(k, _)| k).collect();
+        for k in all {
+            let id = u64::from_be_bytes(k[..8].try_into().unwrap());
+            if !visited.contains(&id) {
+                self.nodes.remove(&k);
+            }
+        }
+
+        self.ref_counts = new_refs;
+        self.ref_counts_ready = true;
+    }
+
+    // =================================================================
+    // GARBAGE COLLECTION (legacy, delegates to rebuild_ref_counts)
+    // =================================================================
+
+    /// Reclaims disk space for unreachable nodes and rebuilds the
+    /// in-memory reference-count map.
+    pub fn gc(&mut self, live_roots: &[NodeId]) {
+        self.rebuild_ref_counts(live_roots);
     }
 
     /// Targeted GC: removes nodes reachable from `dead_roots` that are
