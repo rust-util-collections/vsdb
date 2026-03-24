@@ -117,7 +117,7 @@ pub static VSDB: LazyLock<VsDB> = LazyLock::new(|| pnk!(VsDB::new()));
 macro_rules! parse_int {
     ($bytes: expr, $ty: ty) => {{
         let array: [u8; std::mem::size_of::<$ty>()] = $bytes[..].try_into().unwrap();
-        <$ty>::from_be_bytes(array)
+        <$ty>::from_le_bytes(array)
     }};
 }
 

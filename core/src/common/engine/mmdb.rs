@@ -72,7 +72,7 @@ impl MmDB {
                 .put_with_options(
                     &sync_write_opts(),
                     &META_KEY_MAX_KEYLEN,
-                    &0_usize.to_be_bytes(),
+                    &0_usize.to_le_bytes(),
                 )
                 .c(d!())?;
         }
@@ -96,7 +96,7 @@ impl MmDB {
     /// Route a prefix to its shard.
     #[inline(always)]
     fn shard(&self, meta_prefix: &PreBytes) -> &'static DB {
-        let prefix = u64::from_be_bytes(*meta_prefix);
+        let prefix = u64::from_le_bytes(*meta_prefix);
         self.dbs[(prefix % NUM_SHARDS as u64) as usize]
     }
 
@@ -143,7 +143,7 @@ impl MmDB {
                             .put_with_options(
                                 &sync_write_opts(),
                                 &self.prefix_allocator.key,
-                                &new_ceil.to_be_bytes(),
+                                &new_ceil.to_le_bytes(),
                             )
                             .expect("vsdb: meta write failed");
                         GLOBAL_COUNTER.store(ret, Ordering::Release);
@@ -165,7 +165,7 @@ impl MmDB {
                             .put_with_options(
                                 &sync_write_opts(),
                                 &self.prefix_allocator.key,
-                                &new_ceil.to_be_bytes(),
+                                &new_ceil.to_le_bytes(),
                             )
                             .expect("vsdb: meta write failed");
                         GLOBAL_CEILING.store(new_ceil, Ordering::Release);
@@ -338,7 +338,7 @@ impl PreAllocator {
             Self {
                 key: META_KEY_PREFIX_ALLOCATOR,
             },
-            (RESERVED_ID_CNT + Pre::MIN).to_be_bytes(),
+            (RESERVED_ID_CNT + Pre::MIN).to_le_bytes(),
         )
     }
 }
@@ -560,8 +560,8 @@ mod tests {
         let dir = tmp_dir("prefix-iter");
         let db = mmdb_open(&dir).unwrap();
 
-        let prefix_a: PreBytes = 1_u64.to_be_bytes();
-        let prefix_b: PreBytes = 2_u64.to_be_bytes();
+        let prefix_a: PreBytes = 1_u64.to_le_bytes();
+        let prefix_b: PreBytes = 2_u64.to_le_bytes();
 
         // Insert entries under two different prefixes
         let fk = |p: &[u8], k: &[u8]| make_full_key(p, k);

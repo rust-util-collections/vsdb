@@ -92,23 +92,23 @@ impl Node {
         match self {
             Node::Leaf { keys, values } => {
                 buf.push(TAG_LEAF);
-                buf.extend_from_slice(&(keys.len() as u32).to_be_bytes());
+                buf.extend_from_slice(&(keys.len() as u32).to_le_bytes());
                 for i in 0..keys.len() {
-                    buf.extend_from_slice(&(keys[i].len() as u32).to_be_bytes());
+                    buf.extend_from_slice(&(keys[i].len() as u32).to_le_bytes());
                     buf.extend_from_slice(&keys[i]);
-                    buf.extend_from_slice(&(values[i].len() as u32).to_be_bytes());
+                    buf.extend_from_slice(&(values[i].len() as u32).to_le_bytes());
                     buf.extend_from_slice(&values[i]);
                 }
             }
             Node::Internal { keys, children } => {
                 buf.push(TAG_INTERNAL);
-                buf.extend_from_slice(&(keys.len() as u32).to_be_bytes());
+                buf.extend_from_slice(&(keys.len() as u32).to_le_bytes());
                 for k in keys {
-                    buf.extend_from_slice(&(k.len() as u32).to_be_bytes());
+                    buf.extend_from_slice(&(k.len() as u32).to_le_bytes());
                     buf.extend_from_slice(k);
                 }
                 for c in children {
-                    buf.extend_from_slice(&c.to_be_bytes());
+                    buf.extend_from_slice(&c.to_le_bytes());
                 }
             }
         }
@@ -129,7 +129,7 @@ impl Node {
         let tag = data[pos];
         pos += 1;
 
-        let n = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+        let n = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
         pos += 4;
 
         match tag {
@@ -141,7 +141,7 @@ impl Node {
                         pos + 4 <= len,
                         "PersistentBTree: truncated leaf key length at pos {pos}"
                     );
-                    let klen = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap())
+                    let klen = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap())
                         as usize;
                     pos += 4;
                     assert!(
@@ -154,7 +154,7 @@ impl Node {
                         pos + 4 <= len,
                         "PersistentBTree: truncated leaf value length at pos {pos}"
                     );
-                    let vlen = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap())
+                    let vlen = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap())
                         as usize;
                     pos += 4;
                     assert!(
@@ -173,7 +173,7 @@ impl Node {
                         pos + 4 <= len,
                         "PersistentBTree: truncated internal key length at pos {pos}"
                     );
-                    let klen = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap())
+                    let klen = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap())
                         as usize;
                     pos += 4;
                     assert!(
@@ -189,7 +189,7 @@ impl Node {
                         pos + 8 <= len,
                         "PersistentBTree: truncated child id at pos {pos}"
                     );
-                    let c = u64::from_be_bytes(data[pos..pos + 8].try_into().unwrap());
+                    let c = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap());
                     pos += 8;
                     children.push(c);
                 }
@@ -302,7 +302,7 @@ impl PersistentBTree {
             .next_id
             .checked_add(1)
             .expect("PersistentBTree: NodeId space exhausted");
-        self.nodes.insert(id.to_be_bytes(), node.encode());
+        self.nodes.insert(id.to_le_bytes(), node.encode());
 
         // Populate in-memory ref tracking.
         if self.ref_counts_ready {
@@ -332,7 +332,7 @@ impl PersistentBTree {
     fn node(&self, id: NodeId) -> Node {
         let raw = self
             .nodes
-            .get(id.to_be_bytes())
+            .get(id.to_le_bytes())
             .unwrap_or_else(|| panic!("PersistentBTree: missing node {id}"));
         Node::decode(&raw)
     }
@@ -927,7 +927,7 @@ impl PersistentBTree {
             if !visited.insert(id) {
                 continue;
             }
-            if let Some(raw) = self.nodes.get(id.to_be_bytes()) {
+            if let Some(raw) = self.nodes.get(id.to_le_bytes()) {
                 let node = Node::decode(&raw);
                 let children = match &node {
                     Node::Internal { children, .. } => {
@@ -958,7 +958,7 @@ impl PersistentBTree {
         // Hard-delete unreachable nodes from disk.
         let all: Vec<Vec<u8>> = self.nodes.iter().map(|(k, _)| k).collect();
         for k in all {
-            let id = u64::from_be_bytes(k[..8].try_into().unwrap());
+            let id = u64::from_le_bytes(k[..8].try_into().unwrap());
             if !visited.contains(&id) {
                 self.nodes.remove(&k);
             }

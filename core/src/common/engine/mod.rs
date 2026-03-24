@@ -87,7 +87,7 @@ impl Prefix {
     fn create() -> Self {
         Self::Created(LazyLock::new(|| {
             let prefix = VSDB.db.alloc_prefix();
-            let prefix_bytes = prefix.to_be_bytes();
+            let prefix_bytes = prefix.to_le_bytes();
             debug_assert!(VSDB.db.iter(prefix_bytes).next().is_none());
             prefix_bytes
         }))

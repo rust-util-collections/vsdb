@@ -97,7 +97,7 @@ macro_rules! define_map_wrapper {
             pub fn instance_id(&self) -> u64 {
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(self.as_bytes());
-                u64::from_be_bytes(bytes)
+                u64::from_le_bytes(bytes)
             }
 
             /// Persists this instance's metadata to disk so that it can be

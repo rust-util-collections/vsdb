@@ -156,9 +156,9 @@ assert!(SmtCalc::verify_proof(&root32, &proof).unwrap());
 Integrates `VerMap` with `MptCalc` for versioned Merkle root computation.
 
 ```rust,ignore
-use vsdb::trie::VerMapWithProof;
+use vsdb::trie::{MptCalc, VerMapWithProof};
 
-let mut vmp: VerMapWithProof<Vec<u8>, Vec<u8>> = VerMapWithProof::new();
+let mut vmp: VerMapWithProof<Vec<u8>, Vec<u8>, MptCalc> = VerMapWithProof::new();
 let main = vmp.map().main_branch();
 
 // Write data and commit
@@ -178,9 +178,9 @@ assert_eq!(root.len(), 32);
 `SlotDex` (in the `slotdex` module) is a skip-list-like index for efficient, timestamp-based paged queries.
 
 ```rust,ignore
-use vsdb::slotdex::SlotDex;
+use vsdb::SlotDex;  // SlotDex64<K> alias — slot type is u64
 
-let mut db = SlotDex::<String>::new(10, false);
+let mut db = SlotDex::<String>::new(10u64, false);
 
 // Insert entries into slots (e.g., timestamps)
 db.insert(100, "entry_a".to_string()).unwrap();

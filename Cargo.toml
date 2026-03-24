@@ -17,7 +17,7 @@ sha3 = "0.10"
 
 mmdb = "3.0.0"
 
-vsdb_core = { path = "core", version = "11.0.0", default-features = false }
+vsdb_core = { path = "core", version = "12.1.0", default-features = false }
 
 criterion = "0.8"
 hex = "0.4"

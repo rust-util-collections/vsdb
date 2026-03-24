@@ -116,7 +116,7 @@ impl DagMapRaw {
         };
 
         if let Some(p) = parent.get_mut().as_mut() {
-            let child_id = super::gen_dag_map_id_num().to_be_bytes();
+            let child_id = super::gen_dag_map_id_num().to_le_bytes();
             // Check if child already exists before inserting
             if p.children.get(child_id).is_some() {
                 return Err(eg!("Error! Child ID exist!"));
