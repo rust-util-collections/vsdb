@@ -150,6 +150,30 @@ where
         }
     }
 
+    /// Returns the unique instance ID of this `SlotDex`.
+    #[inline(always)]
+    pub fn instance_id(&self) -> u64 {
+        self.data.instance_id()
+    }
+
+    /// Persists this instance's metadata to disk so that it can be
+    /// recovered later via [`from_meta`](Self::from_meta).
+    ///
+    /// Returns the `instance_id` that should be passed to `from_meta`.
+    pub fn save_meta(&self) -> Result<u64> {
+        let id = self.instance_id();
+        crate::common::save_instance_meta(id, self).c(d!())?;
+        Ok(id)
+    }
+
+    /// Recovers a `SlotDex` instance from previously saved metadata.
+    ///
+    /// The caller must ensure that the underlying VSDB database still
+    /// contains the data referenced by this instance ID.
+    pub fn from_meta(instance_id: u64) -> Result<Self> {
+        crate::common::load_instance_meta(instance_id).c(d!())
+    }
+
     /// Inserts a key into a specified slot.
     ///
     /// # Arguments

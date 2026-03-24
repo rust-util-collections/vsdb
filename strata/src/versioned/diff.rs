@@ -9,8 +9,8 @@
 //! [`three_way_merge`](super::merge::three_way_merge).
 //!
 
+use crate::basic::persistent_btree::{NodeId, PersistentBTree};
 use std::cmp::Ordering;
-use vsdb_core::basic::persistent_btree::{NodeId, PersistentBTree};
 
 /// A single difference between two snapshots.
 #[derive(Clone, Debug, PartialEq, Eq)]

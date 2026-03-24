@@ -69,6 +69,31 @@ static VSDB_CUSTOM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     d
 });
 
+static VSDB_META_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
+    let mut d = VSDB_CUSTOM_DIR.clone();
+    d.push("__instance_meta__");
+    pnk!(fs::create_dir_all(&d));
+    d
+});
+
+/// Returns the instance-meta directory path for VSDB.
+///
+/// This directory (`{custom_dir}/__instance_meta__/`) is used to persist
+/// lightweight metadata (e.g. serialized handles) for individual VSDB
+/// instances, keyed by their unique `instance_id`.
+#[inline(always)]
+pub fn vsdb_get_meta_dir() -> &'static Path {
+    VSDB_META_DIR.as_path()
+}
+
+/// Returns the meta file path for a given instance ID.
+#[inline(always)]
+pub fn vsdb_meta_path(instance_id: u64) -> PathBuf {
+    let mut p = VSDB_META_DIR.clone();
+    p.push(format!("{:016x}", instance_id));
+    p
+}
+
 /// The global instance of the VsDB database.
 ///
 /// This static variable is lazily initialized and provides a single point of

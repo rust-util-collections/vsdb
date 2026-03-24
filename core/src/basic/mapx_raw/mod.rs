@@ -47,8 +47,9 @@
 mod test;
 
 use crate::common::{PreBytes, RawKey, RawValue, engine};
+use ruc::*;
 use serde::{Deserialize, Serialize};
-use std::{borrow::Cow, ops::RangeBounds};
+use std::{borrow::Cow, fs, ops::RangeBounds};
 
 /// An iterator over the entries of a `MapxRaw`.
 pub type MapxRawIter<'a> = engine::MapxIter<'a>;
@@ -63,10 +64,27 @@ pub type ValueIterMut<'a> = engine::ValueIterMut<'a>;
 ///
 /// `MapxRaw` provides a `Map`-like interface for storing and retrieving raw byte slices.
 /// It is unversioned and does not perform any encoding on keys or values.
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
-#[serde(bound = "")]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MapxRaw {
     inner: engine::Mapx,
+}
+
+impl Serialize for MapxRaw {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.inner.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for MapxRaw {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        engine::Mapx::deserialize(deserializer).map(|inner| Self { inner })
+    }
 }
 
 impl MapxRaw {
@@ -426,6 +444,26 @@ impl MapxRaw {
     #[inline(always)]
     pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
         self.inner.is_the_same_instance(&other_hdr.inner)
+    }
+
+    /// Persists this instance's metadata (its 8-byte prefix) to the
+    /// instance-meta directory so that it can be recovered later via
+    /// [`from_meta`](Self::from_meta).
+    ///
+    /// Returns the `instance_id` that can be passed to `from_meta`.
+    pub fn save_meta(&self) -> Result<u64> {
+        let id = self.instance_id();
+        fs::write(crate::common::vsdb_meta_path(id), self.as_prefix_slice()).c(d!())?;
+        Ok(id)
+    }
+
+    /// Recovers a `MapxRaw` instance from previously saved metadata.
+    ///
+    /// The caller must ensure that the underlying VSDB database still
+    /// contains the data referenced by this instance ID.
+    pub fn from_meta(instance_id: u64) -> Result<Self> {
+        let bytes = fs::read(crate::common::vsdb_meta_path(instance_id)).c(d!())?;
+        Ok(unsafe { Self::from_bytes(&bytes) })
     }
 }
 

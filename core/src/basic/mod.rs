@@ -9,6 +9,3 @@
 
 /// A module for the raw, unversioned map implementation.
 pub mod mapx_raw;
-
-/// A persistent B+ tree with copy-on-write structural sharing.
-pub mod persistent_btree;

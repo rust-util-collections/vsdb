@@ -1375,8 +1375,8 @@ fn gc_after_serialize_roundtrip() {
     m.insert(feat, &2, &20).unwrap();
     let c2 = m.commit(feat).unwrap();
 
-    let bytes = serde_cbor_2::to_vec(&m).unwrap();
-    let mut m2: VerMap<u32, u32> = serde_cbor_2::from_slice(&bytes).unwrap();
+    let bytes = postcard::to_allocvec(&m).unwrap();
+    let mut m2: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
 
     // gc() rebuilds the in-memory node ref counts and leaves data intact.
     m2.gc();
@@ -3187,7 +3187,7 @@ mod proof_tests {
 
             // Serialize the VerMap metadata so we can recreate a handle
             // to the same persistent data (simulates process restart).
-            map_bytes = serde_cbor_2::to_vec(vp.map()).unwrap();
+            map_bytes = postcard::to_allocvec(vp.map()).unwrap();
 
             // Cache is saved eagerly inside merkle_root → sync_to_commit.
         }
@@ -3195,7 +3195,7 @@ mod proof_tests {
         {
             // Deserialize recreates a handle with the same instance_id,
             // pointing to the same persistent data.
-            let map: Vm = serde_cbor_2::from_slice(&map_bytes).unwrap();
+            let map: Vm = postcard::from_bytes(&map_bytes).unwrap();
             let br = map.main_branch();
 
             // from_map auto-loads the cache saved by the previous sync.
@@ -3220,12 +3220,12 @@ mod proof_tests {
             vp.map_mut().insert(main, &1, &"x".into()).unwrap();
             let _c1 = vp.map_mut().commit(main).unwrap();
             hash1 = vp.merkle_root(main).unwrap();
-            map_bytes = serde_cbor_2::to_vec(vp.map()).unwrap();
+            map_bytes = postcard::to_allocvec(vp.map()).unwrap();
             // Cache was saved eagerly in sync_to_commit.
         }
 
         {
-            let map: Vm = serde_cbor_2::from_slice(&map_bytes).unwrap();
+            let map: Vm = postcard::from_bytes(&map_bytes).unwrap();
             let br = map.main_branch();
             let mut vp = Vp::from_map(map);
 
@@ -3252,7 +3252,7 @@ mod proof_tests {
             vp.map_mut().insert(main, &1, &"a".into()).unwrap();
             let _c1 = vp.map_mut().commit(main).unwrap();
             hash1 = vp.merkle_root(main).unwrap();
-            map_bytes = serde_cbor_2::to_vec(vp.map()).unwrap();
+            map_bytes = postcard::to_allocvec(vp.map()).unwrap();
             // Cache was saved eagerly at commit c1.
         }
 
@@ -3261,11 +3261,11 @@ mod proof_tests {
         let map_bytes2;
         let hash2;
         {
-            let mut map: Vm = serde_cbor_2::from_slice(&map_bytes).unwrap();
+            let mut map: Vm = postcard::from_bytes(&map_bytes).unwrap();
             let br = map.main_branch();
             map.insert(br, &3, &"c".into()).unwrap();
             let _c2 = map.commit(br).unwrap();
-            map_bytes2 = serde_cbor_2::to_vec(&map).unwrap();
+            map_bytes2 = postcard::to_allocvec(&map).unwrap();
 
             // Compute expected hash via a fresh (no-cache) VerMapWithProof.
             let mut vp_fresh = Vp::from_map(map);
@@ -3275,7 +3275,7 @@ mod proof_tests {
 
         {
             // Reload map; from_map auto-loads stale cache at c1.
-            let map: Vm = serde_cbor_2::from_slice(&map_bytes2).unwrap();
+            let map: Vm = postcard::from_bytes(&map_bytes2).unwrap();
             let br = map.main_branch();
             let mut vp = Vp::from_map(map);
 
@@ -3485,4 +3485,182 @@ mod proof_tests {
         let ok2 = VpSmt::verify_proof(&root_arr, &proof_absent).unwrap();
         assert!(ok2);
     }
+}
+
+// =====================================================================
+// Meta persistence
+// =====================================================================
+
+#[test]
+fn test_save_and_from_meta() {
+    setup();
+    let mut m: VerMap<u32, String> = VerMap::new();
+    let main = m.main_branch();
+    m.insert(main, &1, &"hello".into()).unwrap();
+    m.insert(main, &2, &"world".into()).unwrap();
+    m.commit(main).unwrap();
+
+    let id = m.save_meta().unwrap();
+    assert_eq!(id, m.instance_id());
+
+    let restored: VerMap<u32, String> = VerMap::from_meta(id).unwrap();
+    let main_r = restored.main_branch();
+    assert_eq!(restored.get(main_r, &1).unwrap(), Some("hello".to_string()));
+    assert_eq!(restored.get(main_r, &2).unwrap(), Some("world".to_string()));
+}
+
+/// Multi-branch VerMap: save meta once, restore, verify all branches
+/// and commit history survive — this exercises the full composite
+/// internal structure (PersistentBTree + multiple MapxOrd + Orphan).
+#[test]
+fn test_save_and_from_meta_with_branches() {
+    setup();
+    let mut m: VerMap<u32, String> = VerMap::new();
+    let main = m.main_branch();
+
+    m.insert(main, &1, &"v1".into()).unwrap();
+    m.insert(main, &2, &"v2".into()).unwrap();
+    let c1 = m.commit(main).unwrap();
+
+    // Fork a feature branch
+    let feat = m.create_branch("feature", main).unwrap();
+    m.insert(feat, &1, &"v1-feat".into()).unwrap();
+    m.insert(feat, &3, &"v3-feat".into()).unwrap();
+    let c2 = m.commit(feat).unwrap();
+
+    // Continue on main
+    m.insert(main, &1, &"v1-main".into()).unwrap();
+    m.commit(main).unwrap();
+
+    // Save + restore
+    let id = m.save_meta().unwrap();
+    let restored: VerMap<u32, String> = VerMap::from_meta(id).unwrap();
+
+    let main_r = restored.main_branch();
+    let feat_r = restored.branch_id("feature").unwrap();
+
+    // main should have latest values
+    assert_eq!(restored.get(main_r, &1).unwrap(), Some("v1-main".into()));
+    assert_eq!(restored.get(main_r, &2).unwrap(), Some("v2".into()));
+    assert_eq!(restored.get(main_r, &3).unwrap(), None);
+
+    // feature branch is isolated
+    assert_eq!(restored.get(feat_r, &1).unwrap(), Some("v1-feat".into()));
+    assert_eq!(restored.get(feat_r, &2).unwrap(), Some("v2".into()));
+    assert_eq!(restored.get(feat_r, &3).unwrap(), Some("v3-feat".into()));
+
+    // Historical snapshot at c1
+    assert_eq!(restored.get_at_commit(c1, &1).unwrap(), Some("v1".into()));
+    assert_eq!(
+        restored.get_at_commit(c2, &1).unwrap(),
+        Some("v1-feat".into())
+    );
+}
+
+/// Postcard serde roundtrip: VerMap with data, branches, commits.
+/// This validates the hand-written 8-tuple Serialize/Deserialize impl.
+#[test]
+fn test_serde_roundtrip_full() {
+    setup();
+    let mut m: VerMap<u64, String> = VerMap::new();
+    let main = m.main_branch();
+
+    for i in 0..20 {
+        m.insert(main, &i, &format!("val_{i}")).unwrap();
+    }
+    let c1 = m.commit(main).unwrap();
+
+    let feat = m.create_branch("feat", main).unwrap();
+    m.insert(feat, &100, &"feat_val".into()).unwrap();
+    m.commit(feat).unwrap();
+
+    let bytes = postcard::to_allocvec(&m).unwrap();
+    let restored: VerMap<u64, String> = postcard::from_bytes(&bytes).unwrap();
+
+    // Verify main data
+    for i in 0..20 {
+        assert_eq!(restored.get(main, &i).unwrap(), Some(format!("val_{i}")));
+    }
+
+    // Verify branch isolation
+    let feat_r = restored.branch_id("feat").unwrap();
+    assert_eq!(restored.get(feat_r, &100).unwrap(), Some("feat_val".into()));
+    assert!(restored.get(main, &100).unwrap().is_none());
+
+    // Verify iteration order
+    let keys: Vec<u64> = restored.iter(main).unwrap().map(|(k, _)| k).collect();
+    assert_eq!(keys, (0..20).collect::<Vec<u64>>());
+}
+
+/// Serialized size: VerMap = 8 handles, each ~8B + overhead → should be compact.
+#[test]
+fn test_serde_size() {
+    setup();
+    let m: VerMap<u32, u32> = VerMap::new();
+    let bytes = postcard::to_allocvec(&m).unwrap();
+    // 8 fields × ~9B each ≈ 72B. With postcard varint overhead < 80B.
+    assert!(bytes.len() <= 80, "expected ≤80 bytes, got {}", bytes.len());
+}
+
+/// from_meta nonexistent.
+#[test]
+fn test_from_meta_nonexistent() {
+    setup();
+    assert!(VerMap::<u32, u32>::from_meta(u64::MAX).is_err());
+}
+
+/// Restore from meta, continue committing and branching.
+#[test]
+fn test_meta_restore_then_continue() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+    m.insert(main, &1, &10).unwrap();
+    m.commit(main).unwrap();
+
+    let id = m.save_meta().unwrap();
+    let mut restored: VerMap<u32, u32> = VerMap::from_meta(id).unwrap();
+
+    // Continue working on the restored handle
+    restored.insert(main, &2, &20).unwrap();
+    let c2 = restored.commit(main).unwrap();
+
+    let dev = restored.create_branch("dev", main).unwrap();
+    restored.insert(dev, &3, &30).unwrap();
+    restored.commit(dev).unwrap();
+
+    // Verify full state
+    assert_eq!(restored.get(main, &1).unwrap(), Some(10));
+    assert_eq!(restored.get(main, &2).unwrap(), Some(20));
+    assert!(restored.get(main, &3).unwrap().is_none());
+    assert_eq!(restored.get(dev, &3).unwrap(), Some(30));
+
+    // GC on restored handle
+    restored.delete_branch(dev).unwrap();
+    restored.gc();
+    assert_eq!(restored.get(main, &1).unwrap(), Some(10));
+    assert_eq!(restored.get(main, &2).unwrap(), Some(20));
+}
+
+/// Double save-restore: save, restore, mutate, save again, restore again.
+#[test]
+fn test_double_save_restore() {
+    setup();
+    let mut m: VerMap<u32, String> = VerMap::new();
+    let main = m.main_branch();
+    m.insert(main, &1, &"first".into()).unwrap();
+    m.commit(main).unwrap();
+
+    let id1 = m.save_meta().unwrap();
+    let mut m2: VerMap<u32, String> = VerMap::from_meta(id1).unwrap();
+
+    m2.insert(main, &2, &"second".into()).unwrap();
+    m2.commit(main).unwrap();
+
+    let id2 = m2.save_meta().unwrap();
+    assert_eq!(id1, id2); // Same instance, same id
+
+    let m3: VerMap<u32, String> = VerMap::from_meta(id2).unwrap();
+    assert_eq!(m3.get(main, &1).unwrap(), Some("first".into()));
+    assert_eq!(m3.get(main, &2).unwrap(), Some("second".into()));
 }

@@ -22,7 +22,7 @@ mmdb = { workspace = true }
 default = []
 
 [dev-dependencies]
-serde_cbor_2 = { workspace = true }
+postcard = { workspace = true }
 hex = { workspace = true }
 criterion = { workspace = true }
 

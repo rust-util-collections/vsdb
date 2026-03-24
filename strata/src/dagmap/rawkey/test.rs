@@ -92,3 +92,56 @@ fn dagmaprawkey_functions() {
         0u8.to_be_bytes()
     );
 }
+
+#[test]
+fn test_save_and_from_meta() {
+    let mut dag: DagMapRawKey<Vec<u8>> =
+        DagMapRawKey::new(&mut Orphan::new(None)).unwrap();
+    dag.insert("k1", &s!("v1"));
+    dag.insert("k2", &s!("v2"));
+
+    let id = dag.save_meta().unwrap();
+    assert_eq!(id, dag.instance_id());
+
+    let restored: DagMapRawKey<Vec<u8>> = DagMapRawKey::from_meta(id).unwrap();
+    assert_eq!(restored.get("k1").unwrap(), s!("v1"));
+    assert_eq!(restored.get("k2").unwrap(), s!("v2"));
+}
+
+/// Postcard serde roundtrip for DagMapRawKey (delegates to DagMapRaw).
+#[test]
+fn test_serde_roundtrip() {
+    let mut dag: DagMapRawKey<Vec<u8>> =
+        DagMapRawKey::new(&mut Orphan::new(None)).unwrap();
+    dag.insert("x", &s!("X"));
+    dag.insert("y", &s!("Y"));
+
+    let bytes = postcard::to_allocvec(&dag).unwrap();
+    let restored: DagMapRawKey<Vec<u8>> = postcard::from_bytes(&bytes).unwrap();
+
+    assert_eq!(restored.get("x").unwrap(), s!("X"));
+    assert_eq!(restored.get("y").unwrap(), s!("Y"));
+}
+
+/// from_meta nonexistent.
+#[test]
+fn test_from_meta_nonexistent() {
+    assert!(DagMapRawKey::<Vec<u8>>::from_meta(u64::MAX).is_err());
+}
+
+/// Restore meta with parent-child lineage.
+#[test]
+fn test_meta_with_parent_child() {
+    let mut p = DagMapRawKey::<Vec<u8>>::new(&mut Orphan::new(None)).unwrap();
+    p.insert("pk", &s!("pv"));
+
+    let mut c =
+        DagMapRawKey::<Vec<u8>>::new(&mut Orphan::new(Some(p.into_inner()))).unwrap();
+    c.insert("ck", &s!("cv"));
+
+    let id = c.save_meta().unwrap();
+    let restored: DagMapRawKey<Vec<u8>> = DagMapRawKey::from_meta(id).unwrap();
+
+    assert_eq!(restored.get("ck").unwrap(), s!("cv"));
+    assert_eq!(restored.get("pk").unwrap(), s!("pv"));
+}

@@ -79,3 +79,78 @@ fn custom_types() {
     assert!(Orphan::new(Foo::default()) >= Foo::default());
     assert!(Orphan::new(Foo::default()) >= Orphan::new(Foo::default()));
 }
+
+#[test]
+fn test_save_and_from_meta() {
+    let o = Orphan::new(42i64);
+
+    let id = pnk!(o.save_meta());
+    assert_eq!(id, o.instance_id());
+
+    let restored: Orphan<i64> = pnk!(Orphan::from_meta(id));
+    assert_eq!(restored.get_value(), 42);
+    assert!(restored.is_the_same_instance(&o));
+}
+
+/// Postcard serde roundtrip for Orphan.
+#[test]
+fn test_serde_roundtrip() {
+    let o = Orphan::new(999u64);
+    let bytes = postcard::to_allocvec(&o).unwrap();
+    let restored: Orphan<u64> = postcard::from_bytes(&bytes).unwrap();
+    assert!(restored.is_the_same_instance(&o));
+    assert_eq!(restored.get_value(), 999);
+}
+
+/// Serialized size should be minimal.
+#[test]
+fn test_serde_size() {
+    let o = Orphan::new(0u32);
+    let bytes = postcard::to_allocvec(&o).unwrap();
+    assert!(bytes.len() <= 10, "expected ≤10 bytes, got {}", bytes.len());
+}
+
+/// from_meta with nonexistent ID.
+#[test]
+fn test_from_meta_nonexistent() {
+    assert!(Orphan::<u64>::from_meta(u64::MAX).is_err());
+}
+
+/// Mutate after meta restore.
+#[test]
+fn test_meta_restore_then_mutate() {
+    let o = Orphan::new(10i32);
+    let id = pnk!(o.save_meta());
+
+    let mut restored: Orphan<i32> = pnk!(Orphan::from_meta(id));
+    *restored.get_mut() = 42;
+
+    assert_eq!(o.get_value(), 42);
+}
+
+/// ValueEnDe roundtrip for Orphan.
+#[test]
+fn test_valueende_roundtrip() {
+    let o = Orphan::new("hello".to_string());
+    let encoded = o.encode();
+    let decoded: Orphan<String> = Orphan::decode(&encoded).unwrap();
+    assert!(decoded.is_the_same_instance(&o));
+    assert_eq!(decoded.get_value(), "hello".to_string());
+}
+
+/// Orphan holding a complex type (Mapx inside).
+#[test]
+fn test_orphan_of_mapx_serde_roundtrip() {
+    use crate::basic::mapx::Mapx;
+    let mut m: Mapx<u32, String> = Mapx::new();
+    m.insert(&1, &"one".into());
+    m.insert(&2, &"two".into());
+
+    let o: Orphan<Mapx<u32, String>> = Orphan::new(m);
+    let bytes = postcard::to_allocvec(&o).unwrap();
+    let restored: Orphan<Mapx<u32, String>> = postcard::from_bytes(&bytes).unwrap();
+
+    let inner = restored.get_value();
+    assert_eq!(inner.get(&1), Some("one".into()));
+    assert_eq!(inner.get(&2), Some("two".into()));
+}

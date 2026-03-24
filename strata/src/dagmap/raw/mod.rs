@@ -39,6 +39,7 @@ use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
+    fmt,
     ops::{Deref, DerefMut},
 };
 use vsdb_core::basic::mapx_raw::MapxRaw;
@@ -47,7 +48,7 @@ use vsdb_core::{basic::mapx_raw, common::RawBytes};
 type DagHead = DagMapRaw;
 
 /// A raw, disk-based, directed acyclic graph (DAG) map.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default)]
 pub struct DagMapRaw {
     data: MapxRaw,
 
@@ -55,6 +56,55 @@ pub struct DagMapRaw {
 
     // child id --> child instance
     children: MapxOrdRawKey<DagMapRaw>,
+}
+
+impl Serialize for DagMapRaw {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeTuple;
+        let mut t = serializer.serialize_tuple(3)?;
+        t.serialize_element(&self.data)?;
+        t.serialize_element(&self.parent)?;
+        t.serialize_element(&self.children)?;
+        t.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for DagMapRaw {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct Vis;
+        impl<'de> serde::de::Visitor<'de> for Vis {
+            type Value = DagMapRaw;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("DagMapRaw")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> std::result::Result<DagMapRaw, A::Error> {
+                let data = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
+                let parent = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
+                let children = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(2, &self))?;
+                Ok(DagMapRaw {
+                    data,
+                    parent,
+                    children,
+                })
+            }
+        }
+        deserializer.deserialize_tuple(3, Vis)
+    }
 }
 
 impl DagMapRaw {
@@ -91,6 +141,30 @@ impl DagMapRaw {
                 children: self.children.shadow(),
             }
         }
+    }
+
+    /// Returns the unique instance ID of this `DagMapRaw`.
+    #[inline(always)]
+    pub fn instance_id(&self) -> u64 {
+        self.data.instance_id()
+    }
+
+    /// Persists this instance's metadata to disk so that it can be
+    /// recovered later via [`from_meta`](Self::from_meta).
+    ///
+    /// Returns the `instance_id` that should be passed to `from_meta`.
+    pub fn save_meta(&self) -> Result<u64> {
+        let id = self.instance_id();
+        crate::common::save_instance_meta(id, self).c(d!())?;
+        Ok(id)
+    }
+
+    /// Recovers a `DagMapRaw` instance from previously saved metadata.
+    ///
+    /// The caller must ensure that the underlying VSDB database still
+    /// contains the data referenced by this instance ID.
+    pub fn from_meta(instance_id: u64) -> Result<Self> {
+        crate::common::load_instance_meta(instance_id).c(d!())
     }
 
     /// Checks if the DAG map is dead (i.e., has no data, parent, or children).

@@ -30,6 +30,7 @@
 mod test;
 
 use crate::{ValueEnDe, basic::mapx_ord_rawkey::MapxOrdRawKey};
+use ruc::*;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
@@ -46,10 +47,27 @@ use std::{
 /// A container for a single, non-collection value stored on disk.
 ///
 /// `Orphan` is suitable for storing simple data types like integers, enums, etc.
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(bound = "")]
+#[derive(Debug)]
 pub struct Orphan<T> {
     inner: MapxOrdRawKey<T>,
+}
+
+impl<T> Serialize for Orphan<T> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.inner.serialize(serializer)
+    }
+}
+
+impl<'de, T> Deserialize<'de> for Orphan<T> {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        MapxOrdRawKey::deserialize(deserializer).map(|inner| Self { inner })
+    }
 }
 
 ////////////////////////////////////////////////////////////////////
@@ -148,6 +166,30 @@ where
     #[inline(always)]
     pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
         self.inner.is_the_same_instance(&other_hdr.inner)
+    }
+
+    /// Returns the unique instance ID of this `Orphan`.
+    #[inline(always)]
+    pub fn instance_id(&self) -> u64 {
+        self.inner.instance_id()
+    }
+
+    /// Persists this instance's metadata to disk so that it can be
+    /// recovered later via [`from_meta`](Self::from_meta).
+    ///
+    /// Returns the `instance_id` that should be passed to `from_meta`.
+    pub fn save_meta(&self) -> ruc::Result<u64> {
+        let id = self.instance_id();
+        crate::common::save_instance_meta(id, self).c(d!())?;
+        Ok(id)
+    }
+
+    /// Recovers an `Orphan` instance from previously saved metadata.
+    ///
+    /// The caller must ensure that the underlying VSDB database still
+    /// contains the data referenced by this instance ID.
+    pub fn from_meta(instance_id: u64) -> ruc::Result<Self> {
+        crate::common::load_instance_meta(instance_id).c(d!())
     }
 }
 

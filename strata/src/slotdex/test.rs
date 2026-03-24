@@ -477,3 +477,61 @@ mod testdb {
         }
     }
 }
+
+#[test]
+fn test_save_and_from_meta() {
+    let mut db: SlotDex<u64, u64> = SlotDex::new(16, false);
+    db.insert(10, 100).unwrap();
+    db.insert(20, 200).unwrap();
+
+    let id = db.save_meta().unwrap();
+    assert_eq!(id, db.instance_id());
+
+    let restored: SlotDex<u64, u64> = SlotDex::from_meta(id).unwrap();
+    assert_eq!(restored.total(), 2);
+}
+
+/// Postcard serde roundtrip for SlotDex (derived serde, but inner types are hand-written).
+#[test]
+fn test_serde_roundtrip() {
+    let mut db: SlotDex<u64, u64> = SlotDex::new(16, false);
+    for i in 1..=50 {
+        db.insert(i, i * 10).unwrap();
+    }
+
+    let bytes = postcard::to_allocvec(&db).unwrap();
+    let restored: SlotDex<u64, u64> = postcard::from_bytes(&bytes).unwrap();
+
+    assert_eq!(restored.total(), 50);
+
+    // Verify paging still works
+    let entries = restored.get_entries_by_page(10, 0, false);
+    assert_eq!(entries.len(), 10);
+}
+
+/// from_meta nonexistent.
+#[test]
+fn test_from_meta_nonexistent() {
+    assert!(SlotDex::<u64, u64>::from_meta(u64::MAX).is_err());
+}
+
+/// Restore from meta with substantial data, verify queries work.
+#[test]
+fn test_meta_restore_with_data() {
+    let mut db: SlotDex<u64, u64> = SlotDex::new(16, false);
+    for i in 0..100 {
+        db.insert(i, i * 3).unwrap();
+    }
+
+    let id = db.save_meta().unwrap();
+    let restored: SlotDex<u64, u64> = SlotDex::from_meta(id).unwrap();
+
+    assert_eq!(restored.total(), 100);
+
+    // Verify page queries produce correct results
+    let entries = restored.get_entries_by_page(20, 0, false);
+    assert_eq!(entries.len(), 20);
+
+    let entries_p4 = restored.get_entries_by_page(20, 4, false);
+    assert_eq!(entries_p4.len(), 20);
+}

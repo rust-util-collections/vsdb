@@ -42,7 +42,7 @@
 //! [`VerMap::merge(source, target)`](super::map::VerMap::merge).
 //!
 
-use vsdb_core::basic::persistent_btree::{NodeId, PersistentBTree};
+use crate::basic::persistent_btree::{NodeId, PersistentBTree};
 
 /// Performs a three-way merge.
 ///

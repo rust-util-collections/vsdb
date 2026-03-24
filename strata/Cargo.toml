@@ -17,7 +17,7 @@ license = "MIT"
 serde = { workspace = true }
 parking_lot = { workspace = true }
 
-serde_cbor_2 = { workspace = true }
+postcard = { workspace = true }
 
 ruc = { workspace = true }
 vsdb_core = { workspace = true }

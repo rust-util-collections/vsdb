@@ -9,11 +9,29 @@ macro_rules! define_map_wrapper {
         where $($trait_bounds:tt)+
     ) => {
         $(#[$struct_doc])*
-        #[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq, Debug)]
-        #[serde(bound = "")]
+        #[derive(PartialEq, Eq, Debug)]
         $vis struct $wrapper_name<$($wrapper_generics),*> {
             $inner_vis inner: $inner_type,
             $phantom_field: $phantom_type,
+        }
+
+        impl<$($wrapper_generics),*> serde::Serialize for $wrapper_name<$($wrapper_generics),*> {
+            fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                self.inner.serialize(serializer)
+            }
+        }
+
+        impl<'de, $($wrapper_generics),*> serde::Deserialize<'de> for $wrapper_name<$($wrapper_generics),*> {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                <$inner_type as serde::Deserialize>::deserialize(deserializer)
+                    .map(|inner| Self { inner, $phantom_field: std::marker::PhantomData })
+            }
         }
 
         impl<$($wrapper_generics),*> $wrapper_name<$($wrapper_generics),*>
@@ -72,6 +90,34 @@ macro_rules! define_map_wrapper {
             #[inline(always)]
             pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
                 self.inner.is_the_same_instance(&other_hdr.inner)
+            }
+
+            /// Returns the unique instance ID of this data structure.
+            #[inline(always)]
+            pub fn instance_id(&self) -> u64 {
+                let mut bytes = [0u8; 8];
+                bytes.copy_from_slice(self.as_bytes());
+                u64::from_be_bytes(bytes)
+            }
+
+            /// Persists this instance's metadata to disk so that it can be
+            /// recovered later via [`from_meta`](Self::from_meta).
+            ///
+            /// Returns the `instance_id` that should be passed to `from_meta`.
+            pub fn save_meta(&self) -> ruc::Result<u64> {
+                use ruc::RucResult;
+                let id = self.instance_id();
+                $crate::common::save_instance_meta(id, self).c(ruc::d!())?;
+                Ok(id)
+            }
+
+            /// Recovers an instance from previously saved metadata.
+            ///
+            /// The caller must ensure that the underlying VSDB database still
+            /// contains the data referenced by this instance ID.
+            pub fn from_meta(instance_id: u64) -> ruc::Result<Self> {
+                use ruc::RucResult;
+                $crate::common::load_instance_meta(instance_id).c(ruc::d!())
             }
         }
 

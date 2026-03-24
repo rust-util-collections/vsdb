@@ -58,3 +58,6 @@ pub use slotdex::{SlotDex32, SlotDex64 as SlotDex, SlotDex64, SlotDex128, SlotTy
 // environment management functions.
 pub use vsdb_core;
 pub use vsdb_core::{vsdb_flush, vsdb_get_base_dir, vsdb_set_base_dir};
+
+// Persistent B+ tree (moved from vsdb_core).
+pub use basic::persistent_btree::PersistentBTree;

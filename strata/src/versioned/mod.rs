@@ -49,8 +49,8 @@ pub mod merge;
 #[cfg(test)]
 mod test;
 
+use crate::basic::persistent_btree::NodeId;
 use serde::{Deserialize, Serialize};
-use vsdb_core::basic::persistent_btree::NodeId;
 
 // =========================================================================
 // ID types

@@ -4,14 +4,15 @@
 //!
 
 use super::{BranchId, Commit, CommitId, NO_COMMIT};
+use crate::basic::persistent_btree::{EMPTY_ROOT, NodeId, PersistentBTree};
 use crate::common::ende::{KeyEnDeOrdered, ValueEnDe};
 use crate::{Mapx, MapxOrd, Orphan};
 use ruc::*;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::marker::PhantomData;
 use std::ops::Bound;
 use std::time::{SystemTime, UNIX_EPOCH};
-use vsdb_core::basic::persistent_btree::{EMPTY_ROOT, NodeId, PersistentBTree};
 
 // =========================================================================
 // BranchState
@@ -100,8 +101,7 @@ struct BranchState {
 ///
 /// fs::remove_dir_all(&dir).unwrap();
 /// ```
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(bound = "")]
+#[derive(Clone, Debug)]
 pub struct VerMap<K, V> {
     /// The underlying persistent B+ tree (shared node pool).
     tree: PersistentBTree,
@@ -124,11 +124,84 @@ pub struct VerMap<K, V> {
 
     /// Set `true` before a ref-count cascade, `false` after.
     /// If `true` on startup → run `rebuild_ref_counts()` to repair.
-    #[serde(default)]
     gc_dirty: Orphan<bool>,
 
-    #[serde(skip)]
     _phantom: PhantomData<(K, V)>,
+}
+
+impl<K, V> Serialize for VerMap<K, V> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeTuple;
+        let mut t = serializer.serialize_tuple(8)?;
+        t.serialize_element(&self.tree)?;
+        t.serialize_element(&self.commits)?;
+        t.serialize_element(&self.branches)?;
+        t.serialize_element(&self.branch_names)?;
+        t.serialize_element(&self.next_commit)?;
+        t.serialize_element(&self.next_branch)?;
+        t.serialize_element(&self.main_branch)?;
+        t.serialize_element(&self.gc_dirty)?;
+        t.end()
+    }
+}
+
+impl<'de, K, V> Deserialize<'de> for VerMap<K, V> {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct Vis<K, V>(PhantomData<(K, V)>);
+        impl<'de, K, V> serde::de::Visitor<'de> for Vis<K, V> {
+            type Value = VerMap<K, V>;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("VerMap")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> std::result::Result<VerMap<K, V>, A::Error> {
+                let tree = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
+                let commits = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
+                let branches = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(2, &self))?;
+                let branch_names = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(3, &self))?;
+                let next_commit = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(4, &self))?;
+                let next_branch = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(5, &self))?;
+                let main_branch = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(6, &self))?;
+                let gc_dirty = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(7, &self))?;
+                Ok(VerMap {
+                    tree,
+                    commits,
+                    branches,
+                    branch_names,
+                    next_commit,
+                    next_branch,
+                    main_branch,
+                    gc_dirty,
+                    _phantom: PhantomData,
+                })
+            }
+        }
+        deserializer.deserialize_tuple(8, Vis(PhantomData))
+    }
 }
 
 impl<K, V> Default for VerMap<K, V>
@@ -156,6 +229,24 @@ where
     /// Returns the unique instance ID of this `VerMap`.
     pub fn instance_id(&self) -> u64 {
         self.tree.instance_id()
+    }
+
+    /// Persists this instance's metadata to disk so that it can be
+    /// recovered later via [`from_meta`](Self::from_meta).
+    ///
+    /// Returns the `instance_id` that should be passed to `from_meta`.
+    pub fn save_meta(&self) -> Result<u64> {
+        let id = self.instance_id();
+        crate::common::save_instance_meta(id, self).c(d!())?;
+        Ok(id)
+    }
+
+    /// Recovers a `VerMap` instance from previously saved metadata.
+    ///
+    /// The caller must ensure that the underlying VSDB database still
+    /// contains the data referenced by this instance ID.
+    pub fn from_meta(instance_id: u64) -> Result<Self> {
+        crate::common::load_instance_meta(instance_id).c(d!())
     }
 
     /// Creates a new, empty versioned map whose initial branch has the

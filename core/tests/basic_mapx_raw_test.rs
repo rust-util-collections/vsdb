@@ -37,10 +37,10 @@ fn basic_cases() {
                 assert!(hdr_i.contains_key(&i));
             });
 
-        pnk!(serde_cbor_2::to_vec(&hdr_i))
+        pnk!(postcard::to_allocvec(&hdr_i))
     };
 
-    let mut reloaded = pnk!(serde_cbor_2::from_slice::<MapxRaw>(&hdr));
+    let mut reloaded = pnk!(postcard::from_bytes::<MapxRaw>(&hdr));
 
     (0..cnt).map(|i: usize| i.to_be_bytes()).for_each(|i| {
         assert_eq!(&i[..], &reloaded.get(&i).unwrap()[..]);

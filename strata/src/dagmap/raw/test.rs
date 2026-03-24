@@ -93,3 +93,69 @@ fn dagmapraw_functions() {
         0u8.to_be_bytes()
     );
 }
+
+#[test]
+fn test_save_and_from_meta() {
+    let mut dag = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
+    dag.insert("k1", "v1");
+    dag.insert("k2", "v2");
+
+    let id = dag.save_meta().unwrap();
+    assert_eq!(id, dag.instance_id());
+
+    let restored = DagMapRaw::from_meta(id).unwrap();
+    assert_eq!(restored.get("k1").unwrap().as_slice(), "v1".as_bytes());
+    assert_eq!(restored.get("k2").unwrap().as_slice(), "v2".as_bytes());
+}
+
+/// Postcard serde roundtrip for DagMapRaw (hand-written tuple serde, 3 fields).
+#[test]
+fn test_serde_roundtrip() {
+    let mut dag = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
+    dag.insert("alpha", "A");
+    dag.insert("beta", "B");
+
+    let bytes = postcard::to_allocvec(&dag).unwrap();
+    let restored: DagMapRaw = postcard::from_bytes(&bytes).unwrap();
+
+    assert_eq!(restored.get("alpha").unwrap().as_slice(), b"A");
+    assert_eq!(restored.get("beta").unwrap().as_slice(), b"B");
+}
+
+/// from_meta nonexistent.
+#[test]
+fn test_from_meta_nonexistent() {
+    assert!(DagMapRaw::from_meta(u64::MAX).is_err());
+}
+
+/// Restore from meta, mutate, verify shared storage.
+#[test]
+fn test_meta_restore_then_mutate() {
+    let mut dag = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
+    dag.insert("k1", "v1");
+
+    let id = dag.save_meta().unwrap();
+    let mut restored = DagMapRaw::from_meta(id).unwrap();
+
+    restored.insert("k2", "v2");
+    assert_eq!(dag.get("k2").unwrap().as_slice(), b"v2");
+}
+
+/// Save meta of a DagMapRaw with parent-child relationship,
+/// restore, and verify the lineage is intact.
+#[test]
+fn test_meta_with_parent_child() {
+    let mut i0 = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
+    i0.insert("base", "v0");
+
+    let mut i1 = DagMapRaw::new(&mut Orphan::new(Some(i0))).unwrap();
+    i1.insert("child", "v1");
+
+    let id = i1.save_meta().unwrap();
+    let restored = DagMapRaw::from_meta(id).unwrap();
+
+    // Child data
+    assert_eq!(restored.get("child").unwrap().as_slice(), b"v1");
+    // Inherited from parent
+    assert_eq!(restored.get("base").unwrap().as_slice(), b"v0");
+}
