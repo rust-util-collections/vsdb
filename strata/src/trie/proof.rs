@@ -16,7 +16,7 @@ use crate::versioned::map::VerMap;
 use crate::versioned::{BranchId, CommitId};
 use ruc::*;
 
-use super::{SmtCalc, SmtProof, TrieCalc};
+use super::{MptCalc, MptProof, SmtCalc, SmtProof, TrieCalc};
 
 /// A versioned key-value map with Merkle root hash computation.
 ///
@@ -302,6 +302,36 @@ where
     /// Verifies a proof against a root hash.
     pub fn verify_proof(root_hash: &[u8; 32], proof: &SmtProof) -> Result<bool> {
         SmtCalc::verify_proof(root_hash, proof).c(d!())
+    }
+}
+
+// =================================================================
+// MPT-specific proof API
+// =================================================================
+
+impl<K, V> VerMapWithProof<K, V, MptCalc>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    /// Generates a Merkle proof for the given key.
+    ///
+    /// The trie must be synced (call [`merkle_root`](Self::merkle_root)
+    /// first) for proof generation to work.
+    pub fn prove_mpt(&self, key: &K) -> Result<MptProof> {
+        self.trie.prove(&key.to_bytes()).c(d!())
+    }
+
+    /// Verifies an MPT proof against a root hash for a specific key.
+    ///
+    /// `expected_key` is the raw-byte key the caller expects this proof
+    /// to cover.
+    pub fn verify_mpt_proof(
+        root_hash: &[u8; 32],
+        expected_key: &[u8],
+        proof: &MptProof,
+    ) -> Result<bool> {
+        MptCalc::verify_proof(root_hash, expected_key, proof).c(d!())
     }
 }
 

@@ -879,3 +879,208 @@ mod smt_tests {
         assert_eq!(fresh.root_hash().unwrap(), h);
     }
 }
+
+// =========================================================================
+// MPT proof tests
+// =========================================================================
+
+#[cfg(test)]
+mod mpt_proof_tests {
+    use crate::trie::MptCalc;
+
+    #[test]
+    fn test_mpt_proof_membership_single() {
+        let mut trie = MptCalc::new();
+        trie.insert(b"hello", b"world").unwrap();
+        let root = trie.root_hash().unwrap();
+        let root_hash: [u8; 32] = root.try_into().unwrap();
+
+        let proof = trie.prove(b"hello").unwrap();
+        assert_eq!(proof.value, Some(b"world".to_vec()));
+        assert!(MptCalc::verify_proof(&root_hash, b"hello", &proof).unwrap());
+    }
+
+    #[test]
+    fn test_mpt_proof_membership_multiple() {
+        let mut trie = MptCalc::new();
+        trie.insert(b"alpha", b"1").unwrap();
+        trie.insert(b"beta", b"2").unwrap();
+        trie.insert(b"gamma", b"3").unwrap();
+        let root = trie.root_hash().unwrap();
+        let root_hash: [u8; 32] = root.try_into().unwrap();
+
+        for (key, val) in [
+            (&b"alpha"[..], &b"1"[..]),
+            (&b"beta"[..], &b"2"[..]),
+            (&b"gamma"[..], &b"3"[..]),
+        ] {
+            let proof = trie.prove(key).unwrap();
+            assert_eq!(proof.value.as_deref(), Some(val));
+            assert!(MptCalc::verify_proof(&root_hash, key, &proof).unwrap());
+        }
+    }
+
+    #[test]
+    fn test_mpt_proof_prefix_keys() {
+        let mut trie = MptCalc::new();
+        trie.insert(b"ab", b"v1").unwrap();
+        trie.insert(b"abc", b"v2").unwrap();
+        trie.insert(b"abcd", b"v3").unwrap();
+        let root = trie.root_hash().unwrap();
+        let root_hash: [u8; 32] = root.try_into().unwrap();
+
+        for (key, val) in [
+            (&b"ab"[..], &b"v1"[..]),
+            (&b"abc"[..], &b"v2"[..]),
+            (&b"abcd"[..], &b"v3"[..]),
+        ] {
+            let proof = trie.prove(key).unwrap();
+            assert_eq!(proof.value.as_deref(), Some(val));
+            assert!(MptCalc::verify_proof(&root_hash, key, &proof).unwrap());
+        }
+    }
+
+    #[test]
+    fn test_mpt_proof_nonmembership_empty_trie() {
+        let trie = MptCalc::new();
+        let proof = trie.prove(b"anything").unwrap();
+        assert_eq!(proof.value, None);
+        let root_hash = [0u8; 32];
+        assert!(MptCalc::verify_proof(&root_hash, b"anything", &proof).unwrap());
+    }
+
+    #[test]
+    fn test_mpt_proof_nonmembership_missing_key() {
+        let mut trie = MptCalc::new();
+        trie.insert(b"present", b"yes").unwrap();
+        let root = trie.root_hash().unwrap();
+        let root_hash: [u8; 32] = root.try_into().unwrap();
+
+        let proof = trie.prove(b"absent").unwrap();
+        assert_eq!(proof.value, None);
+        assert!(MptCalc::verify_proof(&root_hash, b"absent", &proof).unwrap());
+    }
+
+    #[test]
+    fn test_mpt_proof_wrong_root_fails() {
+        let mut trie = MptCalc::new();
+        trie.insert(b"key", b"value").unwrap();
+        let _root = trie.root_hash().unwrap();
+
+        let proof = trie.prove(b"key").unwrap();
+        let wrong_root = [0xFFu8; 32];
+        assert!(!MptCalc::verify_proof(&wrong_root, b"key", &proof).unwrap());
+    }
+
+    #[test]
+    fn test_mpt_proof_tampered_value_fails() {
+        let mut trie = MptCalc::new();
+        trie.insert(b"key", b"value").unwrap();
+        let root = trie.root_hash().unwrap();
+        let root_hash: [u8; 32] = root.try_into().unwrap();
+
+        let mut proof = trie.prove(b"key").unwrap();
+        // Tamper with the claimed value
+        proof.value = Some(b"tampered".to_vec());
+        assert!(!MptCalc::verify_proof(&root_hash, b"key", &proof).unwrap());
+    }
+
+    #[test]
+    fn test_mpt_proof_tampered_node_fails() {
+        let mut trie = MptCalc::new();
+        trie.insert(b"key", b"value").unwrap();
+        let root = trie.root_hash().unwrap();
+        let root_hash: [u8; 32] = root.try_into().unwrap();
+
+        let mut proof = trie.prove(b"key").unwrap();
+        // Corrupt a byte in the first node
+        if let Some(first) = proof.nodes.first_mut() {
+            if let Some(last) = first.last_mut() {
+                *last ^= 0xFF;
+            }
+        }
+        assert!(!MptCalc::verify_proof(&root_hash, b"key", &proof).unwrap());
+    }
+
+    #[test]
+    fn test_mpt_proof_after_remove() {
+        let mut trie = MptCalc::new();
+        trie.insert(b"a", b"1").unwrap();
+        trie.insert(b"b", b"2").unwrap();
+        trie.remove(b"a").unwrap();
+        let root = trie.root_hash().unwrap();
+        let root_hash: [u8; 32] = root.try_into().unwrap();
+
+        // "a" should be non-membership
+        let proof_a = trie.prove(b"a").unwrap();
+        assert_eq!(proof_a.value, None);
+        assert!(MptCalc::verify_proof(&root_hash, b"a", &proof_a).unwrap());
+
+        // "b" should be membership
+        let proof_b = trie.prove(b"b").unwrap();
+        assert_eq!(proof_b.value, Some(b"2".to_vec()));
+        assert!(MptCalc::verify_proof(&root_hash, b"b", &proof_b).unwrap());
+    }
+
+    #[test]
+    fn test_mpt_proof_after_update() {
+        let mut trie = MptCalc::new();
+        trie.insert(b"key", b"v1").unwrap();
+        trie.insert(b"key", b"v2").unwrap();
+        let root = trie.root_hash().unwrap();
+        let root_hash: [u8; 32] = root.try_into().unwrap();
+
+        let proof = trie.prove(b"key").unwrap();
+        assert_eq!(proof.value, Some(b"v2".to_vec()));
+        assert!(MptCalc::verify_proof(&root_hash, b"key", &proof).unwrap());
+    }
+
+    #[test]
+    fn test_mpt_proof_many_keys() {
+        let mut trie = MptCalc::new();
+        let keys: Vec<Vec<u8>> = (0u32..50).map(|i| i.to_be_bytes().to_vec()).collect();
+        for (i, key) in keys.iter().enumerate() {
+            trie.insert(key, format!("val{i}").as_bytes()).unwrap();
+        }
+        let root = trie.root_hash().unwrap();
+        let root_hash: [u8; 32] = root.try_into().unwrap();
+
+        // Verify membership for all inserted keys
+        for (i, key) in keys.iter().enumerate() {
+            let proof = trie.prove(key).unwrap();
+            assert_eq!(
+                proof.value.as_deref(),
+                Some(format!("val{i}").as_bytes()),
+                "membership failed for key {i}"
+            );
+            assert!(
+                MptCalc::verify_proof(&root_hash, key, &proof).unwrap(),
+                "verification failed for key {i}"
+            );
+        }
+
+        // Verify non-membership for keys not inserted
+        for i in 50u32..55 {
+            let key = i.to_be_bytes();
+            let proof = trie.prove(&key).unwrap();
+            assert_eq!(proof.value, None, "should be non-member for key {i}");
+            assert!(
+                MptCalc::verify_proof(&root_hash, &key, &proof).unwrap(),
+                "non-membership verification failed for key {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_mpt_proof_wrong_key_fails() {
+        let mut trie = MptCalc::new();
+        trie.insert(b"real_key", b"value").unwrap();
+        let root = trie.root_hash().unwrap();
+        let root_hash: [u8; 32] = root.try_into().unwrap();
+
+        let proof = trie.prove(b"real_key").unwrap();
+        // Proof is valid for "real_key" but must fail for a different key
+        assert!(MptCalc::verify_proof(&root_hash, b"real_key", &proof).unwrap());
+        assert!(!MptCalc::verify_proof(&root_hash, b"wrong_key", &proof).unwrap());
+    }
+}

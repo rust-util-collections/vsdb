@@ -63,6 +63,7 @@ mod smt;
 mod test;
 
 pub use error::{Result, TrieError};
+pub use mpt::MptProof;
 pub use proof::VerMapWithProof;
 pub use smt::SmtProof;
 
@@ -188,6 +189,29 @@ impl MptCalc {
         }
         self.root = trie.into_root();
         Ok(())
+    }
+
+    // =================================================================
+    // Proofs
+    // =================================================================
+
+    /// Generates a Merkle proof for the given key.
+    ///
+    /// The tree must be committed (call [`root_hash`](Self::root_hash)
+    /// first) for proof generation to work.
+    pub fn prove(&self, key: &[u8]) -> Result<MptProof> {
+        mpt::proof::prove(&self.root, key)
+    }
+
+    /// Verifies an MPT proof against a root hash for a specific key.
+    ///
+    /// `expected_key` is the key the caller expects this proof to cover.
+    pub fn verify_proof(
+        root_hash: &[u8; 32],
+        expected_key: &[u8],
+        proof: &MptProof,
+    ) -> Result<bool> {
+        mpt::proof::verify_proof(root_hash, expected_key, proof)
     }
 
     // =================================================================
