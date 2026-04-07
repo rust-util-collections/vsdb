@@ -11,7 +11,7 @@ A high-performance, embedded key-value database for Rust with an API that feels 
 ## What it does
 
 - **Persistent collections** — `Mapx` (like `HashMap`), `MapxOrd` (like `BTreeMap`), backed by MMDB (pure-Rust LSM-Tree)
-- **Git-model versioning** — `VerMap` provides branching, commits, three-way merge, rollback, and garbage collection over a COW B+ tree with structural sharing
+- **Git-model versioning** — `VerMap` provides branching, commits, three-way merge, and rollback over a COW B+ tree with structural sharing; garbage collection is fully automatic via reference counting and MMDB background compaction
 - **Merkle trie** — `MptCalc` (Merkle Patricia Trie) and `SmtCalc` (Sparse Merkle Tree) as stateless computation layers; `VerMapWithProof` integrates `VerMap` with `MptCalc` for versioned 32-byte Merkle root commitments
 - **Slot-based index** — `SlotDex` for efficient, timestamp-based paged queries via a skip-list-like tier structure
 
@@ -44,7 +44,8 @@ m.merge(feat, main).unwrap();
 assert_eq!(m.get(main, &1).unwrap(), Some("updated".into()));
 
 m.delete_branch(feat).unwrap();
-m.gc();
+// Dead commits and B+ tree nodes are reclaimed automatically —
+// no manual gc() call required.
 ```
 
 ## Architecture
@@ -54,7 +55,7 @@ vsdb (workspace)
 +-- core/    vsdb_core   Storage engine (MMDB), MapxRaw, PersistentBTree
 +-- strata/  vsdb        High-level crate (the one users depend on)
      +-- basic/          Mapx, MapxOrd, MapxOrdRawKey, Orphan
-     +-- versioned/      VerMap (branch, commit, merge, diff, gc)
+     +-- versioned/      VerMap (branch, commit, merge, diff)
      +-- trie/           MptCalc, SmtCalc, VerMapWithProof
      +-- slotdex/        SlotDex
      +-- dagmap/         DagMapRaw, DagMapRawKey

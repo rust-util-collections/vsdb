@@ -15,8 +15,11 @@
 //!   nodes of 16..32 keys and a tree depth of ~4 for 1 million entries.
 //! * **Path copying** — inserting or removing a single key allocates at
 //!   most `O(depth)` new nodes (~4), sharing all others.
-//! * **Garbage collection** — unreachable nodes can be reclaimed via
-//!   [`PersistentBTree::gc`].
+//! * **Garbage collection** — unreachable nodes are automatically
+//!   registered for deferred deletion via the storage engine's
+//!   compaction filter when their reference count reaches zero.
+//!   [`PersistentBTree::gc`] can still be called for crash recovery
+//!   or to force a full sweep.
 //!
 
 #[cfg(test)]
@@ -939,13 +942,14 @@ impl PersistentBTree {
     }
 
     /// Decrements the in-memory reference count for `id`.
-    /// If it reaches zero, cascades to all children and removes the
-    /// entry from the map.  The node is NOT deleted from disk —
-    /// call [`gc`] to reclaim disk space.
+    /// If it reaches zero, cascades to all children, removes the entry
+    /// from the in-memory map, and registers the node for deferred disk
+    /// deletion via the storage engine's compaction filter.
     pub fn release_node(&mut self, id: NodeId) {
         if id == EMPTY_ROOT || !self.ref_counts_ready {
             return;
         }
+        let mut dead_keys = Vec::new();
         let mut work = vec![id];
         while let Some(nid) = work.pop() {
             if nid == EMPTY_ROOT {
@@ -958,15 +962,19 @@ impl PersistentBTree {
             if nr.ref_count == 0 {
                 let children = std::mem::take(&mut nr.children);
                 self.ref_counts.remove(&nid);
+                dead_keys.push(nid.to_le_bytes().to_vec());
                 work.extend(children);
             }
+        }
+        if !dead_keys.is_empty() {
+            self.nodes.lazy_delete_batch(dead_keys);
         }
     }
 
     /// Rebuilds the in-memory reference-count map from scratch by
     /// walking all nodes reachable from `live_roots`.
     ///
-    /// Also hard-deletes unreachable nodes from disk (space reclamation).
+    /// Also registers unreachable nodes for deferred disk deletion.
     pub fn rebuild_ref_counts(&mut self, live_roots: &[NodeId]) {
         use std::collections::{HashMap, HashSet};
 
@@ -1021,13 +1029,17 @@ impl PersistentBTree {
             }
         }
 
-        // Hard-delete unreachable nodes from disk.
-        let all: Vec<Vec<u8>> = self.nodes.iter().map(|(k, _)| k).collect();
-        for k in all {
-            let id = u64::from_le_bytes(k[..8].try_into().unwrap());
-            if !visited.contains(&id) {
-                self.nodes.remove(&k);
-            }
+        // Register unreachable nodes for deferred disk deletion.
+        let dead_keys: Vec<Vec<u8>> = self
+            .nodes
+            .iter()
+            .filter_map(|(k, _)| {
+                let id = u64::from_le_bytes(k[..8].try_into().unwrap());
+                (!visited.contains(&id)).then_some(k)
+            })
+            .collect();
+        if !dead_keys.is_empty() {
+            self.nodes.lazy_delete_batch(dead_keys);
         }
 
         self.ref_counts = new_refs;
@@ -1035,11 +1047,20 @@ impl PersistentBTree {
     }
 
     // =================================================================
-    // GARBAGE COLLECTION (legacy, delegates to rebuild_ref_counts)
+    // GARBAGE COLLECTION
     // =================================================================
 
-    /// Reclaims disk space for unreachable nodes and rebuilds the
-    /// in-memory reference-count map.
+    /// Rebuilds the in-memory reference-count map and registers any
+    /// unreachable nodes for deferred disk deletion.
+    ///
+    /// In normal operation this is **not required** — [`release_node`]
+    /// already registers dead nodes for compaction.  Call this only for:
+    ///
+    /// - **Crash recovery** — when `ref_counts_ready` is false after
+    ///   deserialization or an interrupted cascade.
+    /// - **Forced full sweep** — when you want to guarantee that every
+    ///   unreachable node is registered, even if a prior `release_node`
+    ///   cascade was incomplete.
     pub fn gc(&mut self, live_roots: &[NodeId]) {
         self.rebuild_ref_counts(live_roots);
     }

@@ -60,8 +60,10 @@ struct BranchState {
 ///    `discard` throws away uncommitted changes.
 /// 7. **History** — `log`, `get_at_commit`, `iter_at_commit` let you
 ///    inspect any historical snapshot.
-/// 8. **GC** — `gc` reclaims commits and B+ tree nodes that are no longer
-///    reachable from any live branch.
+/// 8. **GC** — garbage collection is automatic: commits are deleted via
+///    reference counting and dead B+ tree nodes are reclaimed by the
+///    storage engine's background compaction.  [`gc`](Self::gc) is only
+///    needed for crash recovery or a forced full sweep.
 ///
 /// # Quick start
 ///
@@ -95,9 +97,9 @@ struct BranchState {
 /// m.merge(feat, main).unwrap();
 /// assert_eq!(m.get(main, &1).unwrap(), Some("hi".into()));
 ///
-/// // 5. Clean up: delete the feature branch and run GC.
+/// // 5. Clean up: delete the feature branch.
+/// //    Dead commits and B+ tree nodes are reclaimed automatically.
 /// m.delete_branch(feat).unwrap();
-/// m.gc();
 ///
 /// fs::remove_dir_all(&dir).unwrap();
 /// ```
@@ -987,18 +989,30 @@ where
     // GC
     // =================================================================
 
-    /// Reclaims B+ tree nodes that are no longer reachable.
+    /// Performs crash recovery and a full B+ tree node sweep.
     ///
-    /// Commit lifecycle is handled automatically by reference counting
-    /// (see [`delete_branch`](Self::delete_branch),
-    /// [`rollback_to`](Self::rollback_to)).  This method performs:
+    /// In normal operation **you do not need to call this method**.
+    /// Both commit cleanup and B+ tree node cleanup happen
+    /// automatically:
     ///
-    /// 1. **Crash recovery** — if a ref-count cascade was interrupted,
-    ///    rebuilds all ref counts from scratch and removes orphaned
-    ///    commits.
-    /// 2. **B+ tree sweep** — mark-and-sweep over the node pool,
-    ///    keeping only nodes reachable from live commit roots and
-    ///    dirty (uncommitted) roots.
+    /// - **Commits** are immediately hard-deleted when their reference
+    ///   count reaches zero (via
+    ///   [`delete_branch`](Self::delete_branch) /
+    ///   [`rollback_to`](Self::rollback_to)).
+    /// - **B+ tree nodes** are registered for deferred disk deletion
+    ///   via the storage engine's compaction filter when
+    ///   [`release_node`] drops their reference count to zero.
+    ///   The underlying MMDB engine reclaims disk space
+    ///   during background compaction — no user action required.
+    ///
+    /// This method is still useful in two scenarios:
+    ///
+    /// 1. **Crash recovery** — if a ref-count cascade was interrupted
+    ///    (`gc_dirty` flag), rebuilds all commit ref counts from
+    ///    scratch and removes orphaned commits.
+    /// 2. **Forced full sweep** — guarantees that every unreachable
+    ///    B+ tree node is registered for compaction, even if a prior
+    ///    cascade was incomplete.
     pub fn gc(&mut self) {
         // 1. Crash recovery: rebuild ref counts if the dirty flag is
         //    set, or if any commit has ref_count == 0 (migration from

@@ -10,7 +10,7 @@ the Git-model versioned storage engine in `vsdb`.
 - [Architecture Overview](#architecture-overview)
 - [Layer Architecture](#layer-architecture)
 - [Core Data Structures](#core-data-structures)
-- [Lifecycle: Create → Write → Commit → Branch → Merge → GC](#lifecycle)
+- [Lifecycle: Create → Write → Commit → Branch → Merge](#lifecycle)
 - [Copy-on-Write & Structural Sharing](#copy-on-write--structural-sharing)
 - [Commit DAG](#commit-dag)
 - [Three-Way Merge Algorithm](#three-way-merge-algorithm)
@@ -142,11 +142,10 @@ graph LR
     D --> B
     C --> E(["Merge"])
     E --> C
-    C --> F(["GC"])
-    F -.->|"reclaim"| C
 ```
 
-Typical flow: **create → write → commit → branch → merge → gc**
+Typical flow: **create → write → commit → branch → merge**
+(GC is automatic — no explicit step needed)
 
 ### Detailed Step-by-Step
 
@@ -185,11 +184,9 @@ sequenceDiagram
     T-->>V: merged_root
     V->>D: store merge Commit{parents: [main.head, feat.head]}
 
-    Note over V: 6. GC (optional — disk reclamation)
-    U->>V: gc()
-    V->>V: rebuild commit ref_counts if needed (crash recovery)
-    V->>T: tree.rebuild_ref_counts(live_roots)
-    T->>D: delete unreachable nodes from disk
+    Note over V: 6. GC (automatic)
+    Note right of V: Dead commits are already hard-deleted<br/>by ref-count cascade in step 5.
+    Note right of T: Dead B+ tree nodes are registered<br/>for deferred deletion (lazy_delete).<br/>MMDB reclaims disk space during<br/>background compaction.
 ```
 
 ---
@@ -434,62 +431,58 @@ The caller controls priority by choosing which branch to pass as `source` vs `ta
 
 ## Garbage Collection
 
-Lifecycle management is split into two layers:
+**Users do not need to call `gc()` in normal operation.**  Both commit
+cleanup and B+ tree disk reclamation happen automatically.
+
+### How It Works
+
+Lifecycle management is split into two layers, both fully automatic:
 
 1. **Commit ref counting** — each `Commit` tracks a `ref_count`
    (branch HEADs + child parent-links).  When a branch is deleted or
    rolled back, commits whose `ref_count` drops to zero are
-   **immediately hard-deleted** via cascading decrement.  No manual
-   `gc()` call is needed for commit cleanup.
+   **immediately hard-deleted** via cascading decrement.
 
-2. **B+ tree node ref counting (in-memory)** — `PersistentBTree`
+2. **B+ tree node ref counting + lazy deletion** — `PersistentBTree`
    maintains an in-memory `HashMap<NodeId, NodeRef>` that tracks
-   per-node reference counts.  When a commit root is released,
-   orphaned nodes are cascade-removed from the map.  Dead nodes
-   remain on disk until `gc()` reclaims the space.
+   per-node reference counts.  When a commit root is released and a
+   node's count reaches zero, it is:
+   - cascade-removed from the in-memory ref map, **and**
+   - registered for deferred disk deletion via the MMDB storage
+     engine's compaction filter (`lazy_delete`).
 
-`gc()` performs:
-- **Crash recovery** — if a ref-count cascade was interrupted
-  (`gc_dirty` flag set), rebuilds all commit ref counts from scratch.
-- **B+ tree disk reclamation** — walks all live commit roots and
-  dirty roots, rebuilds the in-memory node ref map, and hard-deletes
-  unreachable nodes from disk.
+   The underlying MMDB engine reclaims disk space during background
+   compaction — no user action required.
 
 ```mermaid
 flowchart TD
-    Start(["gc()"]) --> Check{"gc_dirty or<br/>ref_count == 0?"}
-    Check -->|yes| Rebuild["Rebuild commit ref_counts<br/>(BFS from branch heads)"]
-    Check -->|no| S2
-    Rebuild --> S2["Collect live B+ tree roots<br/>(all commits + dirty_roots)"]
-    S2 --> Mark["Walk reachable nodes,<br/>rebuild in-memory ref map"]
-    Mark --> Sweep["Hard-delete unreachable<br/>nodes from disk"]
-    Sweep --> Done(["Done"])
+    Start(["delete_branch / rollback"]) --> RC["Decrement commit ref_count"]
+    RC --> Dead{"ref_count == 0?"}
+    Dead -->|yes| Del["Hard-delete commit"]
+    Del --> Rel["release_node(commit.root)"]
+    Rel --> NodeRC["Cascade-decrement<br/>B+ tree node ref_counts"]
+    NodeRC --> NodeDead{"node ref_count == 0?"}
+    NodeDead -->|yes| Lazy["lazy_delete(node key)<br/>→ MMDB dead_keys set"]
+    Lazy --> Compact["MMDB background compaction<br/>→ disk space reclaimed"]
+    Dead -->|no| Done(["Done"])
+    NodeDead -->|no| Done
 
-    style Rebuild fill:#c62,color:#fff
-    style Sweep fill:#c62,color:#fff
+    style Del fill:#4a9,color:#fff
+    style Lazy fill:#4a9,color:#fff
+    style Compact fill:#4a9,color:#fff
 ```
 
-### What Gets Preserved vs Reclaimed
+### When to Call `gc()` Explicitly
 
-```mermaid
-graph TB
-    subgraph "Automatic (ref counting)"
-        A1["Commits — deleted immediately<br/>when ref_count reaches 0"]
-        A2["B+ tree nodes — removed from<br/>in-memory ref map on cascade"]
-    end
+`gc()` is still available for two edge cases:
 
-    subgraph "gc() — disk reclamation"
-        R1["Dead B+ tree nodes still on disk"]
-        R2["Crash-recovery orphans"]
-    end
+- **Crash recovery** — if a ref-count cascade was interrupted
+  (`gc_dirty` flag set), `gc()` rebuilds all commit ref counts from
+  scratch and removes orphaned commits.
+- **Forced full sweep** — guarantees every unreachable node is
+  registered for compaction, even if a prior cascade was incomplete.
 
-    style A1 fill:#4a9,color:#fff
-    style A2 fill:#4a9,color:#fff
-    style R1 fill:#c62,color:#fff
-    style R2 fill:#c62,color:#fff
-```
-
-### GC Example
+### Example
 
 ```mermaid
 graph RL
@@ -504,10 +497,13 @@ graph RL
     FEAT["feat.head"] -.-> c4
 ```
 
-After `delete_branch(feat)`: ref-count cascade immediately deletes **c4** (ref 1→0)
-and **c3** (ref 1→0).  **c1** drops from ref=2 to ref=1 (still alive via c2).
-No `gc()` call needed.  B+ tree nodes from c3/c4 are released from the
-in-memory ref map; `gc()` reclaims their disk space.
+After `delete_branch(feat)`:
+- Ref-count cascade immediately deletes **c4** (ref 1→0) and
+  **c3** (ref 1→0).
+- **c1** drops from ref=2 to ref=1 (still alive via c2).
+- B+ tree nodes from c3/c4 are released from the in-memory ref map
+  **and** registered for deferred disk deletion via `lazy_delete`.
+- MMDB background compaction reclaims disk space automatically.
 
 ---
 
@@ -593,5 +589,5 @@ flowchart LR
 | **Isolation** | Each branch has independent `head` + `dirty_root` |
 | **Structural sharing** | COW B+ tree — mutations allocate ~O(log n) nodes |
 | **Merge** | Three-way with sorted iterators; source wins on conflict |
-| **GC** | Commit ref counting (automatic) + B+ tree node ref counting (in-memory); `gc()` for disk reclamation and crash recovery |
+| **GC** | Fully automatic — commit ref counting + B+ tree lazy deletion via MMDB compaction; `gc()` only for crash recovery |
 | **Persistence** | All state stored in MMDB via `MapxRaw` |
