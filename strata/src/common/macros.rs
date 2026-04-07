@@ -40,9 +40,15 @@ macro_rules! define_map_wrapper {
         {
             /// # Safety
             ///
-            /// This function is unsafe because it creates a new wrapper instance that shares the same underlying
-            /// data source. The caller must ensure that no write operations occur on the original instance
-            /// while the shadow instance exists, as this could lead to data corruption or undefined behavior.
+            /// Creates a second handle to the same underlying storage, bypassing
+            /// Rust's aliasing guarantees.  The caller **must** enforce
+            /// Single-Writer-Multiple-Readers (SWMR) for the entire lifetime
+            /// of the shadow:
+            ///
+            /// - No `insert`, `remove`, `set_value`, or other mutation may occur
+            ///   on the original **or** any other shadow while the shadow exists.
+            /// - Multiple concurrent *reads* are permitted.
+            /// - All shadows must be dropped before the next write.
             #[inline(always)]
             pub unsafe fn shadow(&self) -> Self {
                 unsafe {
@@ -55,10 +61,12 @@ macro_rules! define_map_wrapper {
 
             /// # Safety
             ///
-            /// This function is unsafe because it deserializes the data structure from a raw byte slice.
-            /// The caller must ensure that the provided bytes represent a valid, serialized instance of the
-            /// data structure. Providing invalid or malicious data can lead to memory unsafety, panics,
-            /// or other undefined behavior.
+            /// Reconstructs a handle from a raw byte slice that was previously
+            /// produced by [`as_bytes`](Self::as_bytes) on a valid instance of
+            /// the **same type and code version**.  Passing any other bytes
+            /// (corrupted, truncated, from a different type, or from an
+            /// incompatible code version) is undefined behavior and may cause
+            /// panics or silent data corruption on subsequent operations.
             #[inline(always)]
             pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
                 unsafe {
@@ -146,6 +154,9 @@ macro_rules! define_map_wrapper {
 macro_rules! entry_or_insert_via_mock {
     ($slf:expr, $hdr_ty:ty, $get_mut_call:ident($($get_mut_args:expr),*), $mock_call:ident($($mock_args:expr),*)) => {{
         let hdr = $slf.hdr as *mut $hdr_ty;
+        // SAFETY: `hdr` is derived from `$slf.hdr: &'a mut $hdr_ty`.
+        // The two dereferences are in mutually exclusive match arms and
+        // never coexist; no aliasing occurs.
         match unsafe { &mut *hdr }.$get_mut_call($($get_mut_args),*) {
             Some(v) => v,
             _ => unsafe { &mut *hdr }.$mock_call($($mock_args),*),

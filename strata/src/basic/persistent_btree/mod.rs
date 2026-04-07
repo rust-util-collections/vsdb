@@ -1099,7 +1099,7 @@ impl<'a> BTreeIter<'a> {
                         Bound::Unbounded => 0,
                         Bound::Included(k) | Bound::Excluded(k) => {
                             match keys.binary_search_by(|x| x.as_slice().cmp(k)) {
-                                Ok(i) => i,
+                                Ok(i) => i + 1,
                                 Err(i) => i,
                             }
                         }

@@ -106,7 +106,6 @@ impl MmDB {
         self.dbs[0]
     }
 
-    #[allow(unused_variables)]
     pub(crate) fn alloc_prefix(&self) -> Pre {
         thread_local! {
             static LOCAL_NEXT: Cell<u64> = const { Cell::new(0) };

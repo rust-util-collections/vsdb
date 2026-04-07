@@ -127,11 +127,14 @@ impl DagMapRaw {
         Ok(r)
     }
 
-    /// Creates a "shadow" copy of the `DagMapRaw` instance.
+    /// Creates a second handle to the same underlying storage.
     ///
     /// # Safety
     ///
-    /// This API breaks Rust's semantic safety guarantees. Use only in a race-free environment.
+    /// The caller must enforce Single-Writer-Multiple-Readers (SWMR):
+    /// no mutation (`insert`, `remove`, `destroy`) may occur on the
+    /// original **or** any shadow while any shadow exists.  All shadows
+    /// must be dropped before the next write.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
         unsafe {
@@ -182,13 +185,18 @@ impl DagMapRaw {
     }
 
     /// Retrieves a value from the DAG map, traversing up to the parent if necessary.
+    ///
+    /// The traversal follows at most 1024 parent links.  If a cycle or
+    /// excessively deep chain exists (corrupt data), the walk stops and
+    /// returns `None` rather than looping forever.
     pub fn get(&self, key: impl AsRef<[u8]>) -> Option<RawBytes> {
+        const MAX_DEPTH: usize = 1024;
         let key = key.as_ref();
 
         let mut hdr = self;
         let mut hdr_owned;
 
-        loop {
+        for _ in 0..MAX_DEPTH {
             if let Some(v) = hdr.data.get(key) {
                 return alt!(v.is_empty(), None, Some(v));
             }
@@ -202,6 +210,7 @@ impl DagMapRaw {
                 }
             }
         }
+        None
     }
 
     /// Retrieves a mutable reference to a value in the DAG map.
@@ -246,8 +255,12 @@ impl DagMapRaw {
             }
         };
 
+        const MAX_DEPTH: usize = 1024;
         let mut linebuf = vec![p];
         while let Some(p) = linebuf.last().unwrap().parent.get_value() {
+            if linebuf.len() >= MAX_DEPTH {
+                return Err(eg!("DAG mainline exceeds MAX_DEPTH — possible cycle"));
+            }
             linebuf.push(p);
         }
 
@@ -318,7 +331,13 @@ impl DagMapRaw {
         }
     }
 
-    /// Destroys the DAG map and all its children, clearing all data.
+    /// Destroys this node and all its descendant children, clearing all data.
+    ///
+    /// **Important**: this method does NOT remove `self` from its parent's
+    /// `children` collection.  Callers must remove the entry from
+    /// `parent.children` before calling `destroy()` to avoid dangling
+    /// references (see [`prune_children`](Self::prune_children_include)
+    /// which does this correctly).
     #[inline(always)]
     pub fn destroy(&mut self) {
         *self.parent.get_mut() = None;

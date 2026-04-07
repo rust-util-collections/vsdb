@@ -77,11 +77,14 @@ impl<T> Orphan<T>
 where
     T: ValueEnDe,
 {
-    /// Creates a "shadow" copy of the `Orphan` instance.
+    /// Creates a second handle to the same underlying storage.
     ///
     /// # Safety
     ///
-    /// This API breaks Rust's semantic safety guarantees. Use only in a race-free environment.
+    /// The caller must enforce Single-Writer-Multiple-Readers (SWMR):
+    /// no mutation (`set_value`, `get_mut`) may occur on the original
+    /// **or** any shadow while any shadow exists.  All shadows must be
+    /// dropped before the next write.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
         unsafe {
@@ -91,11 +94,15 @@ where
         }
     }
 
-    /// Creates an `Orphan` from a byte slice.
+    /// Reconstructs an `Orphan` from a byte slice previously produced by
+    /// [`as_bytes`](Self::as_bytes) on a valid instance of the same type
+    /// and code version.
     ///
     /// # Safety
     ///
-    /// This function is unsafe and assumes the byte slice is a valid representation.
+    /// Passing any other bytes (corrupted, truncated, or from a different
+    /// type / code version) is undefined behavior and may cause panics
+    /// or silent data corruption on subsequent operations.
     #[inline(always)]
     pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
         unsafe {

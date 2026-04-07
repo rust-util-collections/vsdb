@@ -497,6 +497,9 @@ impl<'a> Entry<'a> {
     /// A `ValueMut` to the value in the entry.
     pub fn or_insert(self, default: &'a [u8]) -> ValueMut<'a> {
         let hdr = self.hdr as *mut MapxRaw;
+        // SAFETY: `hdr` is derived from `self.hdr: &'a mut MapxRaw`.
+        // The two dereferences are in mutually exclusive match arms and
+        // never coexist; no aliasing occurs.
         match unsafe { &mut *hdr }.get_mut(self.key) {
             Some(v) => v,
             _ => {
@@ -520,6 +523,9 @@ impl<'a> Entry<'a> {
         F: FnOnce() -> RawValue,
     {
         let hdr = self.hdr as *mut MapxRaw;
+        // SAFETY: `hdr` is derived from `self.hdr: &'a mut MapxRaw`.
+        // The two dereferences are in mutually exclusive match arms and
+        // never coexist; no aliasing occurs.
         match unsafe { &mut *hdr }.get_mut(self.key) {
             Some(v) => v,
             _ => unsafe { &mut *hdr }.mock_value_mut(self.key.to_vec(), f()),

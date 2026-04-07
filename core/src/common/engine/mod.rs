@@ -278,9 +278,9 @@ impl Mapx {
             for k in keys.iter() {
                 batch.remove(k);
             }
-            if let Err(e) = batch.commit() {
-                eprintln!("vsdb: batch delete failed during clear: {e}");
-            }
+            batch
+                .commit()
+                .expect("vsdb: batch delete failed during clear");
         }
     }
 

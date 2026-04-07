@@ -245,6 +245,7 @@ where
 
         if exist {
             self.tiers.iter_mut().for_each(|t| {
+                t.ensure_cache();
                 let slot_floor = slot.floor_align(&t.floor_base);
                 let cnt = t.cache.borrow().get(&slot_floor).copied().unwrap();
                 if 1 == cnt {
@@ -834,7 +835,7 @@ where
     fn iter(&self) -> DataCtnerIter<'_, K> {
         match self {
             Self::Small(i) => DataCtnerIter::Small(i.iter()),
-            Self::Large { map, .. } => DataCtnerIter::Large(map.iter()),
+            Self::Large { map, .. } => DataCtnerIter::Large(Box::new(map.iter())),
         }
     }
 }
@@ -848,13 +849,12 @@ where
     }
 }
 
-#[allow(clippy::large_enum_variant)]
 enum DataCtnerIter<'a, K>
 where
     K: Clone + Ord + KeyEnDeOrdered,
 {
     Small(SmallIter<'a, K>),
-    Large(LargeIter<'a, K, ()>),
+    Large(Box<LargeIter<'a, K, ()>>),
 }
 
 impl<K> Iterator for DataCtnerIter<'_, K>
