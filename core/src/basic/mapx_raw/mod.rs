@@ -381,45 +381,42 @@ impl MapxRaw {
         self.inner.clear();
     }
 
-    /// Creates a `MapxRaw` from a byte slice.
+    /// Reconstructs a `MapxRaw` from the 8-byte prefix previously
+    /// obtained via [`as_bytes`](Self::as_bytes).
     ///
     /// # Safety
     ///
-    /// This function is unsafe because it assumes the byte slice is a valid representation of a `MapxRaw`.
-    /// This function is unsafe because it assumes the byte slice is a valid representation of a `MapxRaw`. Do not use this API unless you know the internal details of the data structure extremely well.
+    /// The caller must ensure that `s` was produced by [`as_bytes`](Self::as_bytes)
+    /// on a valid instance of the **same code version**, and that the
+    /// underlying VSDB database still contains the data for this prefix.
+    /// Passing arbitrary bytes is undefined behavior.
     #[inline(always)]
     pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
-        unsafe { Self::from_prefix_slice(s) }
-    }
-
-    /// Creates a `MapxRaw` from a prefix slice.
-    ///
-    /// # Safety
-    ///
-    /// This function is unsafe because it assumes the prefix slice is a valid representation of a `MapxRaw`.
-    /// This function is unsafe because it assumes the byte slice is a valid representation of a `MapxRaw`. Do not use this API unless you know the internal details of the data structure extremely well.
-    #[inline(always)]
-    pub unsafe fn from_prefix_slice(s: impl AsRef<[u8]>) -> Self {
         Self {
             inner: unsafe { engine::Mapx::from_prefix_slice(s) },
         }
     }
 
-    /// Returns the byte representation of the `MapxRaw`.
+    /// Alias for [`from_bytes`](Self::from_bytes).
     ///
-    /// # Returns
+    /// # Safety
     ///
-    /// A byte slice `&[u8]` representing the `MapxRaw`.
+    /// Same as [`from_bytes`](Self::from_bytes).
+    #[deprecated(since = "13.0.0", note = "use `from_bytes` instead")]
     #[inline(always)]
-    pub fn as_bytes(&self) -> &[u8] {
-        self.as_prefix_slice()
+    pub unsafe fn from_prefix_slice(s: impl AsRef<[u8]>) -> Self {
+        unsafe { Self::from_bytes(s) }
     }
 
-    /// Returns the prefix slice of the `MapxRaw`.
-    ///
-    /// # Returns
-    ///
-    /// A `&PreBytes` slice representing the prefix of the `MapxRaw`.
+    /// Returns the 8-byte prefix that uniquely identifies this map's
+    /// storage namespace.
+    #[inline(always)]
+    pub fn as_bytes(&self) -> &PreBytes {
+        self.inner.as_prefix_slice()
+    }
+
+    /// Alias for [`as_bytes`](Self::as_bytes).
+    #[deprecated(since = "13.0.0", note = "use `as_bytes` instead")]
     #[inline(always)]
     pub fn as_prefix_slice(&self) -> &PreBytes {
         self.inner.as_prefix_slice()
@@ -428,7 +425,7 @@ impl MapxRaw {
     /// Returns the unique instance ID of this `MapxRaw`.
     pub fn instance_id(&self) -> u64 {
         let mut bytes = [0u8; 8];
-        bytes.copy_from_slice(self.as_prefix_slice());
+        bytes.copy_from_slice(self.as_bytes());
         u64::from_le_bytes(bytes)
     }
 
@@ -453,7 +450,7 @@ impl MapxRaw {
     /// Returns the `instance_id` that can be passed to `from_meta`.
     pub fn save_meta(&self) -> Result<u64> {
         let id = self.instance_id();
-        fs::write(crate::common::vsdb_meta_path(id), self.as_prefix_slice()).c(d!())?;
+        fs::write(crate::common::vsdb_meta_path(id), self.as_bytes()).c(d!())?;
         Ok(id)
     }
 
