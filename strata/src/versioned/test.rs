@@ -1,5 +1,6 @@
 use super::NO_COMMIT;
 use super::map::VerMap;
+use crate::common::error::VsdbError;
 use std::ops::Bound;
 
 fn setup() {
@@ -3663,4 +3664,259 @@ fn test_double_save_restore() {
     let m3: VerMap<u32, String> = VerMap::from_meta(id2).unwrap();
     assert_eq!(m3.get(main, &1).unwrap(), Some("first".into()));
     assert_eq!(m3.get(main, &2).unwrap(), Some("second".into()));
+}
+
+// =====================================================================
+// VsdbError — verify structured error variants
+// =====================================================================
+
+#[test]
+fn error_branch_not_found() {
+    setup();
+    let m: VerMap<u32, u32> = VerMap::new();
+    let err = m.get(9999, &1).unwrap_err();
+    assert!(
+        matches!(err, VsdbError::BranchNotFound { branch_id: 9999 }),
+        "expected BranchNotFound, got: {err:?}"
+    );
+}
+
+#[test]
+fn error_commit_not_found() {
+    setup();
+    let m: VerMap<u32, u32> = VerMap::new();
+    let err = m.get_at_commit(9999, &1).unwrap_err();
+    assert!(
+        matches!(err, VsdbError::CommitNotFound { commit_id: 9999 }),
+        "expected CommitNotFound, got: {err:?}"
+    );
+}
+
+#[test]
+fn error_branch_already_exists() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+    let err = m.create_branch("main", main).unwrap_err();
+    assert!(
+        matches!(err, VsdbError::BranchAlreadyExists { .. }),
+        "expected BranchAlreadyExists, got: {err:?}"
+    );
+}
+
+#[test]
+fn error_cannot_delete_main() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+    let err = m.delete_branch(main).unwrap_err();
+    assert!(
+        matches!(err, VsdbError::CannotDeleteMainBranch),
+        "expected CannotDeleteMainBranch, got: {err:?}"
+    );
+}
+
+#[test]
+fn error_uncommitted_changes_on_merge() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+    m.insert(main, &1, &10).unwrap();
+    m.commit(main).unwrap();
+    let feat = m.create_branch("feat", main).unwrap();
+    m.insert(feat, &2, &20).unwrap();
+    m.commit(feat).unwrap();
+    // Dirty main before merge
+    m.insert(main, &3, &30).unwrap();
+    let err = m.merge(feat, main).unwrap_err();
+    assert!(
+        matches!(err, VsdbError::UncommittedChanges { .. }),
+        "expected UncommittedChanges, got: {err:?}"
+    );
+}
+
+#[test]
+fn error_display_preserves_context() {
+    setup();
+    let m: VerMap<u32, u32> = VerMap::new();
+    let err = m.get(9999, &1).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("9999"),
+        "Display should contain branch id: {msg}"
+    );
+}
+
+// =====================================================================
+// Branch / BranchMut handles
+// =====================================================================
+
+#[test]
+fn handle_main_read() {
+    setup();
+    let mut m: VerMap<u32, String> = VerMap::new();
+    let main_id = m.main_branch();
+    m.insert(main_id, &1, &"hello".into()).unwrap();
+
+    let br = m.main();
+    assert_eq!(br.id(), main_id);
+    assert_eq!(br.name(), Some("main".to_string()));
+    assert_eq!(br.get(&1).unwrap(), Some("hello".to_string()));
+    assert!(br.contains_key(&1).unwrap());
+    assert!(!br.contains_key(&2).unwrap());
+}
+
+#[test]
+fn handle_main_mut_write() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    {
+        let mut main = m.main_mut();
+        main.insert(&1, &10).unwrap();
+        main.insert(&2, &20).unwrap();
+        let c = main.commit().unwrap();
+        assert!(c > 0);
+    }
+    assert_eq!(m.get(m.main_branch(), &1).unwrap(), Some(10));
+    assert_eq!(m.get(m.main_branch(), &2).unwrap(), Some(20));
+}
+
+#[test]
+fn handle_branch_read_write() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+    m.insert(main, &1, &100).unwrap();
+    m.commit(main).unwrap();
+
+    let feat = m.create_branch("feat", main).unwrap();
+    {
+        let mut handle = m.branch_mut(feat).unwrap();
+        handle.insert(&2, &200).unwrap();
+        handle.commit().unwrap();
+    }
+
+    let handle = m.branch(feat).unwrap();
+    assert_eq!(handle.get(&1).unwrap(), Some(100));
+    assert_eq!(handle.get(&2).unwrap(), Some(200));
+}
+
+#[test]
+fn handle_iter() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    {
+        let mut main = m.main_mut();
+        for i in 1..=5 {
+            main.insert(&i, &(i * 10)).unwrap();
+        }
+    }
+    let main = m.main();
+    let entries: Vec<_> = main.iter().unwrap().collect();
+    assert_eq!(entries.len(), 5);
+    assert_eq!(entries[0], (1, 10));
+    assert_eq!(entries[4], (5, 50));
+}
+
+#[test]
+fn handle_range() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    {
+        let mut main = m.main_mut();
+        for i in 1..=10 {
+            main.insert(&i, &(i * 10)).unwrap();
+        }
+    }
+    let main = m.main();
+    let entries: Vec<_> = main
+        .range(Bound::Included(&3), Bound::Excluded(&7))
+        .unwrap()
+        .collect();
+    assert_eq!(entries.len(), 4);
+    assert_eq!(entries[0].0, 3);
+    assert_eq!(entries[3].0, 6);
+}
+
+#[test]
+fn handle_has_uncommitted() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    assert!(!m.main().has_uncommitted().unwrap());
+    m.main_mut().insert(&1, &10).unwrap();
+    assert!(m.main().has_uncommitted().unwrap());
+}
+
+#[test]
+fn handle_discard() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    {
+        let mut main = m.main_mut();
+        main.insert(&1, &10).unwrap();
+        main.commit().unwrap();
+        main.insert(&2, &20).unwrap();
+        main.discard().unwrap();
+    }
+    assert_eq!(m.get(m.main_branch(), &1).unwrap(), Some(10));
+    assert_eq!(m.get(m.main_branch(), &2).unwrap(), None);
+}
+
+#[test]
+fn handle_rollback() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let c1;
+    {
+        let mut main = m.main_mut();
+        main.insert(&1, &10).unwrap();
+        c1 = main.commit().unwrap();
+        main.insert(&2, &20).unwrap();
+        main.commit().unwrap();
+        main.rollback_to(c1).unwrap();
+    }
+    assert_eq!(m.get(m.main_branch(), &1).unwrap(), Some(10));
+    assert_eq!(m.get(m.main_branch(), &2).unwrap(), None);
+}
+
+#[test]
+fn handle_log_and_head_commit() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    {
+        let mut main = m.main_mut();
+        main.insert(&1, &10).unwrap();
+        main.commit().unwrap();
+        main.insert(&2, &20).unwrap();
+        main.commit().unwrap();
+    }
+    let main = m.main();
+    let log = main.log().unwrap();
+    assert_eq!(log.len(), 2);
+    let head = main.head_commit().unwrap().unwrap();
+    assert_eq!(head.id, log[0].id);
+}
+
+#[test]
+fn handle_diff_uncommitted() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    {
+        let mut main = m.main_mut();
+        main.insert(&1, &10).unwrap();
+        main.commit().unwrap();
+        main.insert(&2, &20).unwrap();
+    }
+    let diff = m.main().diff_uncommitted().unwrap();
+    assert_eq!(diff.len(), 1);
+}
+
+#[test]
+fn handle_invalid_branch_returns_error() {
+    setup();
+    let m: VerMap<u32, u32> = VerMap::new();
+    let err = m.branch(9999).unwrap_err();
+    assert!(matches!(err, VsdbError::BranchNotFound { .. }));
+    // main() never errors (main branch always exists)
+    let _ = m.main();
 }

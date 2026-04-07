@@ -149,6 +149,59 @@ fn test_meta_restore_then_mutate() {
     assert_eq!(hdr.get(&2), Some("b".into()));
 }
 
+// =====================================================================
+// IntoIterator + keys()
+// =====================================================================
+
+#[test]
+fn test_into_iter_ref() {
+    let mut hdr: MapxOrd<u32, u32> = MapxOrd::new();
+    for i in 0..10u32 {
+        hdr.insert(&i, &(i * 10));
+    }
+    let mut count = 0;
+    for (k, v) in &hdr {
+        assert_eq!(v, k * 10);
+        count += 1;
+    }
+    assert_eq!(count, 10);
+}
+
+#[test]
+fn test_into_iter_mut() {
+    let mut hdr: MapxOrd<u32, u32> = MapxOrd::new();
+    for i in 0..5u32 {
+        hdr.insert(&i, &i);
+    }
+    for (_k, mut v) in &mut hdr {
+        *v += 100;
+    }
+    for i in 0..5u32 {
+        assert_eq!(hdr.get(&i), Some(i + 100));
+    }
+}
+
+#[test]
+fn test_keys_ordered() {
+    let mut hdr: MapxOrd<u32, String> = MapxOrd::new();
+    hdr.insert(&30, &"c".into());
+    hdr.insert(&10, &"a".into());
+    hdr.insert(&20, &"b".into());
+    // keys() must return ascending order for MapxOrd
+    let keys: Vec<u32> = hdr.keys().collect();
+    assert_eq!(keys, vec![10, 20, 30]);
+}
+
+#[test]
+fn test_keys_empty() {
+    let hdr: MapxOrd<u32, u32> = MapxOrd::new();
+    assert_eq!(hdr.keys().count(), 0);
+}
+
+// =====================================================================
+// Persistence
+// =====================================================================
+
 /// ValueEnDe roundtrip for MapxOrd (used when MapxOrd is a nested value).
 #[test]
 fn test_valueende_roundtrip() {

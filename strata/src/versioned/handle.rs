@@ -20,6 +20,7 @@ use crate::versioned::{BranchId, CommitId};
 /// Read-only handle bound to a specific branch.
 ///
 /// Obtained via [`VerMap::branch`] or [`VerMap::main`].
+#[derive(Debug)]
 pub struct Branch<'a, K, V> {
     pub(super) map: &'a VerMap<K, V>,
     pub(super) id: BranchId,
@@ -89,6 +90,7 @@ where
 ///
 /// Obtained via [`VerMap::branch_mut`] or [`VerMap::main_mut`].
 /// Provides all [`Branch`] read methods plus write operations.
+#[derive(Debug)]
 pub struct BranchMut<'a, K, V> {
     pub(super) map: &'a mut VerMap<K, V>,
     pub(super) id: BranchId,

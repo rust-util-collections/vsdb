@@ -233,6 +233,59 @@ fn test_valueende_roundtrip() {
     assert_eq!(decoded.get(&20), Some("twenty".into()));
 }
 
+// =====================================================================
+// IntoIterator + keys()
+// =====================================================================
+
+#[test]
+fn test_into_iter_ref() {
+    let mut hdr: Mapx<u32, u32> = Mapx::new();
+    for i in 0..10u32 {
+        hdr.insert(&i, &(i * 10));
+    }
+    let mut count = 0;
+    for (k, v) in &hdr {
+        assert_eq!(v, k * 10);
+        count += 1;
+    }
+    assert_eq!(count, 10);
+}
+
+#[test]
+fn test_into_iter_mut() {
+    let mut hdr: Mapx<u32, u32> = Mapx::new();
+    for i in 0..5u32 {
+        hdr.insert(&i, &i);
+    }
+    for (_k, mut v) in &mut hdr {
+        *v += 100;
+    }
+    for i in 0..5u32 {
+        assert_eq!(hdr.get(&i), Some(i + 100));
+    }
+}
+
+#[test]
+fn test_keys() {
+    let mut hdr: Mapx<u32, String> = Mapx::new();
+    hdr.insert(&3, &"c".into());
+    hdr.insert(&1, &"a".into());
+    hdr.insert(&2, &"b".into());
+    let mut keys: Vec<u32> = hdr.keys().collect();
+    keys.sort();
+    assert_eq!(keys, vec![1, 2, 3]);
+}
+
+#[test]
+fn test_keys_empty() {
+    let hdr: Mapx<u32, u32> = Mapx::new();
+    assert_eq!(hdr.keys().count(), 0);
+}
+
+// =====================================================================
+// Persistence / nesting
+// =====================================================================
+
 /// Deep nesting: Mapx<String, Mapx<String, Mapx<u32, u64>>>
 /// Only outer meta needed; all 3 layers survive.
 #[test]
