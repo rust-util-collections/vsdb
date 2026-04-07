@@ -23,3 +23,9 @@ nohup.out
 
 log_tester.tar.gz*
 .aider*
+
+# Claude Code: track shared configs, ignore personal/runtime files
+.claude/*
+!.claude/commands/
+!.claude/docs/
+!.claude/settings.json
