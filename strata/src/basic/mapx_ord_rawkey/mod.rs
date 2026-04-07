@@ -141,12 +141,6 @@ where
         self.inner.insert(key.as_ref(), value.as_ref())
     }
 
-    /// Sets the value for a key, overwriting any existing value.
-    #[inline(always)]
-    pub fn set_value(&mut self, key: impl AsRef<[u8]>, value: &V) {
-        self.inner.insert(key.as_ref(), value.encode());
-    }
-
     /// Gets an entry for a given key, allowing for in-place modification.
     #[inline(always)]
     pub fn entry<'a>(&'a mut self, key: &'a [u8]) -> Entry<'a, V> {

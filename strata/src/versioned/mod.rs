@@ -43,6 +43,7 @@
 //!
 
 pub mod diff;
+pub mod handle;
 pub mod map;
 pub mod merge;
 

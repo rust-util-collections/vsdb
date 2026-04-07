@@ -9,7 +9,6 @@ fn test_insert() {
         .map(|i: usize| (i, (max + i)))
         .for_each(|(key, value)| {
             assert!(hdr.get(&key).is_none());
-            hdr.set_value(&key, &value);
             hdr.insert(&key, &value);
             assert!(hdr.contains_key(&key));
             assert_eq!(pnk!(hdr.get(&key)), value);
@@ -47,7 +46,7 @@ fn test_iter() {
     });
     for (key, value) in hdr.iter().collect::<Vec<_>>().into_iter() {
         assert_eq!(key, value);
-        hdr.unset_value(&key);
+        hdr.remove(&key);
     }
 }
 

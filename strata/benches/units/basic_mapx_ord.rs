@@ -17,7 +17,7 @@ fn read_write(c: &mut Criterion) {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::SeqCst);
             let key = <usize as ValueEnDe>::encode(&n);
-            db.set_value(&key, &n);
+            db.insert(&key, &n);
         })
     });
 
@@ -33,7 +33,7 @@ fn read_write(c: &mut Criterion) {
     let base = i.load(Ordering::SeqCst);
     for n in base..(base + 5000) {
         let key = <usize as ValueEnDe>::encode(&n);
-        db.set_value(&key, &n);
+        db.insert(&key, &n);
     }
     i.store(base + 5000, Ordering::SeqCst);
 
@@ -62,7 +62,7 @@ fn random_read_write(c: &mut Criterion) {
         b.iter(|| {
             let n = rng.random::<u64>() as usize;
             let key = <usize as ValueEnDe>::encode(&n);
-            db.set_value(&key, &n);
+            db.insert(&key, &n);
             keys.push(key);
         })
     });
@@ -88,7 +88,7 @@ fn ordered_ops(c: &mut Criterion) {
     for n in 0..10_000usize {
         let key_val = n * 3;
         let key = <usize as ValueEnDe>::encode(&key_val);
-        db.set_value(&key, &key_val);
+        db.insert(&key, &key_val);
     }
 
     group.bench_function(" get_le ", |b| {

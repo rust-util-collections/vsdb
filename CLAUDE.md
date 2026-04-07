@@ -38,7 +38,8 @@ make bench        # criterion benches (core, basic, versioned, slotdex, trie)
 | MapxRaw | `core/src/basic/mapx_raw/` | Untyped raw KV, prefix isolation |
 | Typed Collections | `strata/src/basic/mapx/`, `mapx_ord/` | Mapx<K,V>, MapxOrd<K,V> |
 | Persistent B+ Tree | `strata/src/basic/persistent_btree/` | COW B+ tree, structural sharing |
-| Versioning | `strata/src/versioned/` | VerMap, commit DAG, branch, merge |
+| Versioning | `strata/src/versioned/` | VerMap, Branch/BranchMut handles, commit DAG, merge |
+| Error types | `strata/src/common/error.rs` | VsdbError enum (thiserror-based) |
 | Merkle Tries | `strata/src/trie/` | MPT (16-ary) + SMT (binary 256-bit) |
 | Slot Index | `strata/src/slotdex/` | Time-slot tier-based indexing |
 | DAG Collections | `strata/src/dagmap/` | DAG-based data structures |
@@ -64,7 +65,7 @@ Supporting documentation in `.claude/docs/`:
 - **Grouped imports** — merge common prefixes: `use std::sync::{Arc, Mutex};`
 - **Doc-code alignment** — public API changes must update corresponding docs
 - `parking_lot` for Mutex (prefix allocator, VSDB_BASE_DIR global, DagMap ID allocation)
-- `ruc` for error handling
+- `VsdbError` (thiserror) for public API errors; `ruc` for internal error chaining
 - `postcard` for serialization (replaced serde_cbor_2 in v12)
 - Tests run single-threaded; use `tempdir` or `/tmp/vsdb_testing` for isolation
 - ~23 unsafe blocks — all require `// SAFETY:` comments

@@ -15,7 +15,7 @@ fn read_write(c: &mut Criterion) {
     group.bench_function(" write ", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::SeqCst);
-            db.set_value(&[n; 2], &vec![n; 128]);
+            db.insert(&[n; 2], &vec![n; 128]);
         })
     });
 
@@ -40,7 +40,7 @@ fn read_write(c: &mut Criterion) {
     // Pre-populate for contains_key / remove / iter
     let base = i.load(Ordering::SeqCst);
     for n in base..(base + 5000) {
-        db.set_value(&[n; 2], &vec![n; 128]);
+        db.insert(&[n; 2], &vec![n; 128]);
     }
     i.store(base + 5000, Ordering::SeqCst);
 
@@ -84,7 +84,7 @@ fn random_read_write(c: &mut Criterion) {
         b.iter(|| {
             let n = rng.random::<u64>() as usize;
             let key = [n; 2];
-            db.set_value(&key, &vec![n; 128]);
+            db.insert(&key, &vec![n; 128]);
             keys.push(key);
         })
     });

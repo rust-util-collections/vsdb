@@ -38,11 +38,22 @@ pub use basic::{
     mapx::Mapx, mapx_ord::MapxOrd, mapx_ord_rawkey::MapxOrdRawKey, orphan::Orphan,
 };
 
-// Common traits and types
+// Common traits and types — only the three user-facing encoding traits
+// are re-exported.  `KeyEn`/`KeyDe`/`ValueEn`/`ValueDe` remain accessible
+// via `vsdb::common::ende::*` for advanced use cases.
 pub use common::{
     NULL,
-    ende::{KeyDe, KeyEn, KeyEnDe, KeyEnDeOrdered, ValueDe, ValueEn, ValueEnDe},
+    ende::{KeyEnDe, KeyEnDeOrdered, ValueEnDe},
 };
+
+// Structured error type
+pub use common::error::{Result as VsdbResult, VsdbError};
+
+// Versioned storage core types (previously not re-exported)
+pub use versioned::diff::DiffEntry;
+pub use versioned::handle::{Branch, BranchMut};
+pub use versioned::map::VerMap;
+pub use versioned::{BranchId, Commit, CommitId, NO_COMMIT};
 
 // DAG-related structures
 pub use dagmap::{DagMapId, raw::DagMapRaw, rawkey::DagMapRawKey};

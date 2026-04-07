@@ -11,7 +11,6 @@ fn test_insert() {
             let key = key.to_vec();
             assert!(hdr.get(&key).is_none());
             hdr.entry(&key[..]).or_insert(value);
-            hdr.set_value(&key[..], &value);
             hdr.insert(&key[..], &value);
             assert!(hdr.contains_key(&key[..]));
             assert_eq!(pnk!(hdr.get(&key[..])), value);

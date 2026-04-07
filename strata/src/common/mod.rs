@@ -8,6 +8,8 @@
 
 /// A module for encoding and decoding traits.
 pub mod ende;
+/// Structured error types for the public API.
+pub mod error;
 pub mod macros;
 
 pub use vsdb_core::common::*;

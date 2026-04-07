@@ -128,12 +128,6 @@ where
         unsafe { self.inner.insert_encoded_value(key.to_bytes(), value) }
     }
 
-    /// Sets the value for a key, overwriting any existing value.
-    #[inline(always)]
-    pub fn set_value(&mut self, key: &K, value: &V) {
-        self.inner.insert(key.to_bytes(), value);
-    }
-
     /// Gets an entry for a given key, allowing for in-place modification.
     #[inline(always)]
     pub fn entry(&mut self, key: &K) -> Entry<'_, V> {
@@ -223,12 +217,6 @@ where
         self.inner.remove(key.to_bytes())
     }
 
-    /// Removes a key from the map without returning the value.
-    #[inline(always)]
-    pub fn unset_value(&mut self, key: &K) {
-        self.inner.remove(key.to_bytes());
-    }
-
     /// Start a batch operation.
     ///
     /// This method allows you to perform multiple insert/remove operations
@@ -257,6 +245,38 @@ where
             inner: self.inner.batch_entry(),
             _marker: PhantomData,
         }
+    }
+
+    /// Returns an iterator over the map's keys in ascending order.
+    #[inline(always)]
+    pub fn keys(&self) -> impl Iterator<Item = K> + '_ {
+        self.iter().map(|(k, _)| k)
+    }
+}
+
+impl<'a, K, V> IntoIterator for &'a MapxOrd<K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    type Item = (K, V);
+    type IntoIter = MapxOrdIter<'a, K, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, K, V> IntoIterator for &'a mut MapxOrd<K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    type Item = (K, ValueIterMut<'a, V>);
+    type IntoIter = MapxOrdIterMut<'a, K, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
     }
 }
 

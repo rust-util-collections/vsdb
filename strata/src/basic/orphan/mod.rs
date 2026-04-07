@@ -132,7 +132,7 @@ where
 
     /// Sets the inner value.
     pub fn set_value(&mut self, v: &T) {
-        self.inner.set_value([], v);
+        self.inner.insert([], v);
     }
 
     /// Checks if the `Orphan` is uninitialized.

@@ -103,12 +103,6 @@ where
         self.inner.insert(key.encode(), value)
     }
 
-    /// Sets the value for a key, overwriting any existing value.
-    #[inline(always)]
-    pub fn set_value(&mut self, key: &K, value: &V) {
-        self.inner.set_value(key.encode(), value);
-    }
-
     /// Gets an entry for a given key, allowing for in-place modification.
     #[inline(always)]
     pub fn entry(&mut self, key: &K) -> Entry<'_, V> {
@@ -188,6 +182,38 @@ where
             inner: self.inner.batch_entry(),
             _marker: PhantomData,
         }
+    }
+
+    /// Returns an iterator over the map's keys.
+    #[inline(always)]
+    pub fn keys(&self) -> impl Iterator<Item = K> + '_ {
+        self.iter().map(|(k, _)| k)
+    }
+}
+
+impl<'a, K, V> IntoIterator for &'a Mapx<K, V>
+where
+    K: KeyEnDe,
+    V: ValueEnDe,
+{
+    type Item = (K, V);
+    type IntoIter = MapxIter<'a, K, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, K, V> IntoIterator for &'a mut Mapx<K, V>
+where
+    K: KeyEnDe,
+    V: ValueEnDe,
+{
+    type Item = (K, ValueIterMut<'a, V>);
+    type IntoIter = MapxIterMut<'a, K, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
     }
 }
 
