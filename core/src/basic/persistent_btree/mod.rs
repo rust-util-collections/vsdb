@@ -24,6 +24,7 @@ mod test;
 
 use crate::basic::mapx_raw::MapxRaw;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::ops::Bound;
 
 // =========================================================================
@@ -54,7 +55,7 @@ const MIN_KEYS: usize = B;
 // Node — serialised manually for zero external codec dependency
 // =========================================================================
 
-// Wire format (all multi-byte integers are big-endian):
+// Wire format (all multi-byte integers are little-endian):
 //
 //   tag: u8          0 = Leaf, 1 = Internal
 //   n:   u32         number of keys
@@ -265,14 +266,14 @@ struct NodeRef {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PersistentBTree {
-    /// Flat node pool.  Key = big-endian NodeId, Value = encoded Node.
+    /// Flat node pool.  Key = little-endian NodeId, Value = encoded Node.
     nodes: MapxRaw,
     /// Next node ID to allocate (monotonically increasing).
     next_id: NodeId,
     /// In-memory reference counts and cached children lists.
     /// Rebuilt from disk by [`rebuild_ref_counts`].
     #[serde(skip)]
-    ref_counts: std::collections::HashMap<NodeId, NodeRef>,
+    ref_counts: HashMap<NodeId, NodeRef>,
     /// Whether `ref_counts` has been populated (false after deserialization).
     #[serde(skip)]
     ref_counts_ready: bool,
@@ -289,7 +290,7 @@ impl PersistentBTree {
         Self {
             nodes: MapxRaw::new(),
             next_id: 1, // 0 is EMPTY_ROOT sentinel
-            ref_counts: std::collections::HashMap::new(),
+            ref_counts: HashMap::new(),
             ref_counts_ready: true, // empty tree — nothing to rebuild
         }
     }

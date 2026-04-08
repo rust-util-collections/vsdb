@@ -217,32 +217,6 @@ where
     }
 }
 
-/// A batch writer for `Mapx`.
-pub struct MapxBatch<'a, 'b, K, V>
-where
-    K: KeyEnDe,
-    V: ValueEnDe,
-{
-    inner: &'b mut mapx_ord_rawkey::MapxOrdRawKeyBatch<'a, V>,
-    _marker: PhantomData<K>,
-}
-
-impl<'a, 'b, K, V> MapxBatch<'a, 'b, K, V>
-where
-    K: KeyEnDe,
-    V: ValueEnDe,
-{
-    /// Insert a key-value pair into the batch.
-    pub fn insert(&mut self, key: &K, value: &V) {
-        self.inner.insert(key.encode(), value);
-    }
-
-    /// Remove a key in the batch.
-    pub fn remove(&mut self, key: &K) {
-        self.inner.remove(key.encode());
-    }
-}
-
 /// A batch entry for `Mapx`.
 pub struct MapxBatchEntry<'a, K, V>
 where

@@ -7,6 +7,7 @@
 
 use crate::trie::error::{Result, TrieError};
 use sha3::{Digest, Keccak256};
+use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
 
@@ -111,12 +112,12 @@ pub(crate) fn save_to_file(
     root_hash: &[u8],
     path: &Path,
 ) -> Result<()> {
-    let mut f = std::fs::File::create(path).map_err(io_err)?;
+    let mut f = File::create(path).map_err(io_err)?;
     save(root, sync_tag, root_hash, &mut f)
 }
 
 pub(crate) fn load_from_file(path: &Path) -> Result<(SmtHandle, u64, Vec<u8>)> {
-    let mut f = std::fs::File::open(path).map_err(io_err)?;
+    let mut f = File::open(path).map_err(io_err)?;
     load(&mut f)
 }
 

@@ -2,6 +2,8 @@
 //! SMT insert, remove, and commit (hashing).
 //!
 
+use std::mem;
+
 use crate::trie::error::{Result, TrieError};
 
 use super::bitpath::BitPath;
@@ -20,7 +22,7 @@ impl SmtMut {
     pub fn insert(&mut self, key_hash: &[u8; 32], value: &[u8]) -> Result<()> {
         let full_path = BitPath::from_hash(key_hash);
         let new_root = insert_rec(
-            std::mem::take(&mut self.root),
+            mem::take(&mut self.root),
             &full_path,
             0,
             *key_hash,
@@ -32,8 +34,7 @@ impl SmtMut {
 
     pub fn remove(&mut self, key_hash: &[u8; 32]) -> Result<()> {
         let full_path = BitPath::from_hash(key_hash);
-        let new_root =
-            remove_rec(std::mem::take(&mut self.root), &full_path, 0, key_hash)?;
+        let new_root = remove_rec(mem::take(&mut self.root), &full_path, 0, key_hash)?;
         self.root = new_root;
         Ok(())
     }
@@ -369,8 +370,8 @@ fn commit_rec(handle: SmtHandle) -> Result<SmtHandle> {
                     ref mut right,
                 } => {
                     // Recursively commit children first.
-                    *left = commit_rec(std::mem::take(left))?;
-                    *right = commit_rec(std::mem::take(right))?;
+                    *left = commit_rec(mem::take(left))?;
+                    *right = commit_rec(mem::take(right))?;
 
                     // Combine children at the split point, then wrap
                     // through the compressed path.

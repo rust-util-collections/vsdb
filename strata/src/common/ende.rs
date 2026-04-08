@@ -232,14 +232,14 @@ impl KeyEnDeOrdered for RawBytes {
 
     #[inline(always)]
     fn from_bytes(b: RawBytes) -> Result<Self> {
-        Ok(b.to_vec())
+        Ok(b)
     }
 }
 
 impl KeyEnDeOrdered for Box<[u8]> {
     #[inline(always)]
     fn to_bytes(&self) -> RawBytes {
-        self.clone().to_vec()
+        self.to_vec()
     }
 
     #[inline(always)]

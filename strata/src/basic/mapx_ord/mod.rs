@@ -280,32 +280,6 @@ where
     }
 }
 
-/// A batch writer for `MapxOrd`.
-pub struct MapxOrdBatch<'a, 'b, K, V>
-where
-    K: KeyEnDeOrdered,
-    V: ValueEnDe,
-{
-    inner: &'b mut crate::basic::mapx_ord_rawkey::MapxOrdRawKeyBatch<'a, V>,
-    _marker: PhantomData<(K, V)>,
-}
-
-impl<'a, 'b, K, V> MapxOrdBatch<'a, 'b, K, V>
-where
-    K: KeyEnDeOrdered,
-    V: ValueEnDe,
-{
-    /// Insert a key-value pair into the batch.
-    pub fn insert(&mut self, key: &K, value: &V) {
-        self.inner.insert(key.to_bytes(), value);
-    }
-
-    /// Remove a key in the batch.
-    pub fn remove(&mut self, key: &K) {
-        self.inner.remove(key.to_bytes());
-    }
-}
-
 /// A batch entry for `MapxOrd`.
 pub struct MapxOrdBatchEntry<'a, K, V>
 where

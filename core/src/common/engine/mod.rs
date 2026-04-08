@@ -46,7 +46,7 @@ pub(crate) struct Mapx {
 
 #[derive(Debug)]
 enum Prefix {
-    Recoverd(PreBytes),
+    Recovered(PreBytes),
     Created(LazyLock<PreBytes>),
 }
 
@@ -54,7 +54,7 @@ impl Prefix {
     #[inline(always)]
     fn as_bytes(&self) -> &PreBytes {
         match self {
-            Self::Recoverd(bytes) => bytes,
+            Self::Recovered(bytes) => bytes,
             Self::Created(lc) => LazyLock::force(lc),
         }
     }
@@ -65,14 +65,14 @@ impl Prefix {
     }
 
     /// Force the prefix to be materialized (if lazily created)
-    /// and return the bytes. Converts `Created` → `Recoverd`
+    /// and return the bytes. Converts `Created` → `Recovered`
     /// so subsequent calls avoid re-forcing the LazyLock.
     fn materialize(&mut self) -> PreBytes {
         match self {
-            Self::Recoverd(bytes) => *bytes,
+            Self::Recovered(bytes) => *bytes,
             Self::Created(lc) => {
                 let b = *LazyLock::force(lc);
-                *self = Self::Recoverd(b);
+                *self = Self::Recovered(b);
                 b
             }
         }
@@ -80,7 +80,7 @@ impl Prefix {
 
     #[inline(always)]
     fn from_bytes(b: PreBytes) -> Self {
-        Self::Recoverd(b)
+        Self::Recovered(b)
     }
 
     #[inline(always)]
@@ -290,7 +290,7 @@ impl Mapx {
         let mut prefix = PreBytes::default();
         prefix.copy_from_slice(s.as_ref());
         Self {
-            prefix: Prefix::Recoverd(prefix),
+            prefix: Prefix::Recovered(prefix),
         }
     }
 

@@ -1,3 +1,5 @@
+use std::mem;
+
 use crate::trie::error::{Result, TrieError};
 use crate::trie::nibbles::Nibbles;
 use crate::trie::node::{Node, NodeCodec, NodeHandle};
@@ -361,13 +363,13 @@ impl TrieMut {
             NodeHandle::InMemory(mut node) => {
                 match *node {
                     Node::Extension { ref mut child, .. } => {
-                        *child = Self::commit_rec(std::mem::take(child))?;
+                        *child = Self::commit_rec(mem::take(child))?;
                     }
                     Node::Branch {
                         ref mut children, ..
                     } => {
                         for child in children.iter_mut().flatten() {
-                            *child = Self::commit_rec(std::mem::take(child))?;
+                            *child = Self::commit_rec(mem::take(child))?;
                         }
                     }
                     _ => {}

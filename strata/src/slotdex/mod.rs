@@ -9,6 +9,7 @@ use crate::{
     basic::{mapx_ord::MapxOrdIter as LargeIter, orphan::Orphan},
     common::error::Result,
 };
+use ruc::eg;
 use serde::{Deserialize, Serialize, de};
 use std::{
     cell::RefCell,
@@ -44,7 +45,7 @@ pub trait SlotType:
     /// Returns the larger of `self` and `other`.
     fn max_val(self, other: Self) -> Self;
 
-    /// Saturating subtraction.
+    /// Saturating addition.
     fn saturating_add(&self, rhs: &Self) -> Self;
 
     /// Widen to `i128` for distance arithmetic.
@@ -228,13 +229,19 @@ where
 
         // Shrink degenerate top tiers (structural maintenance).
         loop {
-            if let Some(top) = self.tiers.last_mut()
-                && top.len() < 2
-            {
+            let dominated = self.tiers.last_mut().is_some_and(|top| {
+                if top.len() < 2 {
+                    top.store.clear();
+                    true
+                } else {
+                    false
+                }
+            });
+            if dominated {
                 self.tiers.pop();
-                continue;
+            } else {
+                break;
             }
-            break;
         }
 
         if empty {
@@ -698,7 +705,6 @@ where
     }
 
     fn decode(bytes: &[u8]) -> ruc::Result<Self> {
-        use ruc::eg;
         if bytes.is_empty() {
             return Err(eg!("empty DataCtner bytes"));
         }

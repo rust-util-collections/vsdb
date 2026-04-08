@@ -17,6 +17,7 @@ use crate::common::error::Result;
 use crate::versioned::diff::DiffEntry;
 use crate::versioned::map::VerMap;
 use crate::versioned::{BranchId, CommitId};
+use std::ops::Bound;
 /// Read-only handle bound to a specific branch.
 ///
 /// Obtained via [`VerMap::branch`] or [`VerMap::main`].
@@ -59,8 +60,8 @@ where
     /// Iterates entries within `bounds` in ascending key order.
     pub fn range(
         &self,
-        lo: std::ops::Bound<&K>,
-        hi: std::ops::Bound<&K>,
+        lo: Bound<&K>,
+        hi: Bound<&K>,
     ) -> Result<impl Iterator<Item = (K, V)> + '_> {
         self.map.range(self.id, lo, hi)
     }
@@ -131,8 +132,8 @@ where
     /// Iterates entries within `bounds` in ascending key order.
     pub fn range(
         &self,
-        lo: std::ops::Bound<&K>,
-        hi: std::ops::Bound<&K>,
+        lo: Bound<&K>,
+        hi: Bound<&K>,
     ) -> Result<impl Iterator<Item = (K, V)> + '_> {
         self.map.range(self.id, lo, hi)
     }

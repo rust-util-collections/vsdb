@@ -27,11 +27,10 @@ mod test;
 
 use crate::common::error::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::ops::Bound;
 use vsdb_core::basic::mapx_raw::MapxRaw;
-
-// Re-used by the hand-written Deserialize impl.
-use std::fmt;
 
 // =========================================================================
 // Public types
@@ -61,7 +60,7 @@ const MIN_KEYS: usize = B;
 // Node — serialised manually for zero external codec dependency
 // =========================================================================
 
-// Wire format (all multi-byte integers are big-endian):
+// Wire format (all multi-byte integers are little-endian):
 //
 //   tag: u8          0 = Leaf, 1 = Internal
 //   n:   u32         number of keys
@@ -272,13 +271,13 @@ struct NodeRef {
 
 #[derive(Clone, Debug)]
 pub struct PersistentBTree {
-    /// Flat node pool.  Key = big-endian NodeId, Value = encoded Node.
+    /// Flat node pool.  Key = little-endian NodeId, Value = encoded Node.
     nodes: MapxRaw,
     /// Next node ID to allocate (monotonically increasing).
     next_id: NodeId,
     /// In-memory reference counts and cached children lists.
     /// Rebuilt from disk by [`rebuild_ref_counts`].
-    ref_counts: std::collections::HashMap<NodeId, NodeRef>,
+    ref_counts: HashMap<NodeId, NodeRef>,
     /// Whether `ref_counts` has been populated (false after deserialization).
     ref_counts_ready: bool,
 }
@@ -358,7 +357,7 @@ impl PersistentBTree {
         Self {
             nodes: MapxRaw::new(),
             next_id: 1, // 0 is EMPTY_ROOT sentinel
-            ref_counts: std::collections::HashMap::new(),
+            ref_counts: HashMap::new(),
             ref_counts_ready: true, // empty tree — nothing to rebuild
         }
     }
@@ -976,8 +975,6 @@ impl PersistentBTree {
     ///
     /// Also registers unreachable nodes for deferred disk deletion.
     pub fn rebuild_ref_counts(&mut self, live_roots: &[NodeId]) {
-        use std::collections::{HashMap, HashSet};
-
         let mut new_refs: HashMap<NodeId, NodeRef> = HashMap::new();
         let mut visited = HashSet::new();
 

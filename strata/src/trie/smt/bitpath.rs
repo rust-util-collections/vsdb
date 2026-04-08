@@ -7,6 +7,7 @@
 //! than 4-bit nibbles.
 //!
 
+use std::cmp;
 use std::fmt;
 
 #[derive(Clone, PartialEq, Eq, Hash, Default)]
@@ -71,8 +72,8 @@ impl BitPath {
 
     /// Returns the number of leading bits shared with `other`.
     pub fn common_prefix(&self, other: &BitPath) -> usize {
-        let min_bytes = std::cmp::min(self.data.len(), other.data.len());
-        let min_bits = std::cmp::min(self.bit_len, other.bit_len);
+        let min_bytes = cmp::min(self.data.len(), other.data.len());
+        let min_bits = cmp::min(self.bit_len, other.bit_len);
         let mut matched = 0;
 
         for i in 0..min_bytes {
@@ -84,7 +85,7 @@ impl BitPath {
                 }
             } else {
                 matched += xor.leading_zeros() as usize;
-                return std::cmp::min(matched, min_bits);
+                return cmp::min(matched, min_bits);
             }
         }
         min_bits
@@ -165,7 +166,7 @@ impl BitPath {
 impl fmt::Debug for BitPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "BitPath({}:", self.bit_len)?;
-        for i in 0..std::cmp::min(self.bit_len, 32) {
+        for i in 0..cmp::min(self.bit_len, 32) {
             write!(f, "{}", self.bit_at(i))?;
         }
         if self.bit_len > 32 {

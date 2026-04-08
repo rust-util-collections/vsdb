@@ -113,6 +113,10 @@ impl DagMapRaw {
     /// Creates a new `DagMapRaw`.
     pub fn new(parent: &mut Orphan<Option<Self>>) -> Result<Self> {
         let r = Self {
+            // SAFETY: The shadow is stored in `r.parent` and not read
+            // until after `new()` returns. The write to `parent` at
+            // line 120 is the sole mutation and completes before any
+            // read through the shadow.
             parent: unsafe { parent.shadow() },
             ..Default::default()
         };
@@ -223,6 +227,7 @@ impl DagMapRaw {
         self.data.get_mut(key.as_ref()).map(|inner| ValueMut {
             value: inner.clone(),
             inner,
+            dirty: false,
         })
     }
 
@@ -285,6 +290,9 @@ impl DagMapRaw {
 
         let mut exclude_targets = vec![];
         for (id, mut child) in self.children.iter_mut() {
+            // SAFETY: The shadow is stored as the child's parent pointer
+            // and is not read until after prune_mainline completes. All
+            // mutations to genesis[0] finish within this function.
             *child.parent.get_mut() = Some(unsafe { genesis[0].shadow() });
             genesis[0].children.insert(&id, &child);
             exclude_targets.push(id);
@@ -372,11 +380,14 @@ impl DagMapRaw {
 pub struct ValueMut<'a> {
     value: RawBytes,
     inner: mapx_raw::ValueMut<'a>,
+    dirty: bool,
 }
 
 impl Drop for ValueMut<'_> {
     fn drop(&mut self) {
-        self.inner.clone_from(&self.value);
+        if self.dirty {
+            self.inner.clone_from(&self.value);
+        }
     }
 }
 
@@ -389,6 +400,7 @@ impl Deref for ValueMut<'_> {
 
 impl DerefMut for ValueMut<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
+        self.dirty = true;
         &mut self.value
     }
 }

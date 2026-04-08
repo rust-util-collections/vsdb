@@ -165,6 +165,7 @@ where
         self.inner.get_mut(key.as_ref()).map(|inner| ValueMut {
             value: <V as ValueEnDe>::decode(&inner).unwrap(),
             inner,
+            dirty: false,
         })
     }
 
@@ -229,6 +230,7 @@ where
 {
     value: V,
     inner: raw::ValueMut<'a>,
+    dirty: bool,
 }
 
 impl<V> Drop for ValueMut<'_, V>
@@ -236,7 +238,9 @@ where
     V: ValueEnDe,
 {
     fn drop(&mut self) {
-        *self.inner = self.value.encode();
+        if self.dirty {
+            *self.inner = self.value.encode();
+        }
     }
 }
 
@@ -255,6 +259,7 @@ where
     V: ValueEnDe,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
+        self.dirty = true;
         &mut self.value
     }
 }

@@ -67,8 +67,11 @@ pub use mpt::MptProof;
 pub use proof::VerMapWithProof;
 pub use smt::SmtProof;
 
+use std::mem;
+
 use mpt::{TrieMut, TrieRo};
 use node::NodeHandle;
+use vsdb_core::common::vsdb_get_custom_dir;
 
 /// Common interface for stateless, in-memory Merkle trie engines.
 ///
@@ -150,7 +153,7 @@ impl MptCalc {
 
     /// Inserts a key-value pair into the trie.
     pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
-        let mut trie = TrieMut::new(std::mem::take(&mut self.root));
+        let mut trie = TrieMut::new(mem::take(&mut self.root));
         trie.insert(key, value)?;
         self.root = trie.into_root();
         Ok(())
@@ -158,7 +161,7 @@ impl MptCalc {
 
     /// Removes a key from the trie.
     pub fn remove(&mut self, key: &[u8]) -> Result<()> {
-        let mut trie = TrieMut::new(std::mem::take(&mut self.root));
+        let mut trie = TrieMut::new(mem::take(&mut self.root));
         trie.remove(key)?;
         self.root = trie.into_root();
         Ok(())
@@ -169,7 +172,7 @@ impl MptCalc {
     /// Internally caches node hashes so that a subsequent call without
     /// intervening mutations is essentially free.
     pub fn root_hash(&mut self) -> Result<Vec<u8>> {
-        let trie = TrieMut::new(std::mem::take(&mut self.root));
+        let trie = TrieMut::new(mem::take(&mut self.root));
         let (hash, new_root) = trie.commit()?;
         self.root = new_root;
         Ok(hash)
@@ -179,7 +182,7 @@ impl MptCalc {
     ///
     /// Each entry is `(key, Some(value))` for insert or `(key, None)` for remove.
     pub fn batch_update(&mut self, ops: &[(&[u8], Option<&[u8]>)]) -> Result<()> {
-        let mut trie = TrieMut::new(std::mem::take(&mut self.root));
+        let mut trie = TrieMut::new(mem::take(&mut self.root));
         for (key, val) in ops {
             if let Some(v) = val {
                 trie.insert(key, v)?;
@@ -229,8 +232,7 @@ impl MptCalc {
     /// the trie can always be rebuilt from the authoritative store.
     pub fn save_cache(&mut self, cache_id: u64, sync_tag: u64) -> Result<()> {
         let hash = self.root_hash()?;
-        let path = vsdb_core::common::vsdb_get_custom_dir()
-            .join(format!("mpt_cache_{}.bin", cache_id));
+        let path = vsdb_get_custom_dir().join(format!("mpt_cache_{}.bin", cache_id));
         cache::save_to_file(&self.root, sync_tag, &hash, &path)
     }
 
@@ -240,8 +242,7 @@ impl MptCalc {
     /// compare `sync_tag` with the current store head and apply any
     /// diff via [`insert`](Self::insert)/[`remove`](Self::remove).
     pub fn load_cache(cache_id: u64) -> Result<(Self, u64, Vec<u8>)> {
-        let path = vsdb_core::common::vsdb_get_custom_dir()
-            .join(format!("mpt_cache_{}.bin", cache_id));
+        let path = vsdb_get_custom_dir().join(format!("mpt_cache_{}.bin", cache_id));
         let (root, sync_tag, root_hash) = cache::load_from_file(&path)?;
         Ok((Self { root }, sync_tag, root_hash))
     }
@@ -331,7 +332,7 @@ impl SmtCalc {
     /// Inserts a key-value pair.
     pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         let key_hash = Self::hash_key(key);
-        let mut m = smt::mutation::SmtMut::new(std::mem::take(&mut self.root));
+        let mut m = smt::mutation::SmtMut::new(mem::take(&mut self.root));
         m.insert(&key_hash, value)?;
         self.root = m.into_root();
         Ok(())
@@ -340,7 +341,7 @@ impl SmtCalc {
     /// Removes a key.
     pub fn remove(&mut self, key: &[u8]) -> Result<()> {
         let key_hash = Self::hash_key(key);
-        let mut m = smt::mutation::SmtMut::new(std::mem::take(&mut self.root));
+        let mut m = smt::mutation::SmtMut::new(mem::take(&mut self.root));
         m.remove(&key_hash)?;
         self.root = m.into_root();
         Ok(())
@@ -350,7 +351,7 @@ impl SmtCalc {
     ///
     /// Caches node hashes so repeated calls without mutations are free.
     pub fn root_hash(&mut self) -> Result<Vec<u8>> {
-        let m = smt::mutation::SmtMut::new(std::mem::take(&mut self.root));
+        let m = smt::mutation::SmtMut::new(mem::take(&mut self.root));
         let (hash, new_root) = m.commit()?;
         self.root = new_root;
         Ok(hash)
@@ -358,7 +359,7 @@ impl SmtCalc {
 
     /// Applies a batch of insert/remove operations.
     pub fn batch_update(&mut self, ops: &[(&[u8], Option<&[u8]>)]) -> Result<()> {
-        let mut m = smt::mutation::SmtMut::new(std::mem::take(&mut self.root));
+        let mut m = smt::mutation::SmtMut::new(mem::take(&mut self.root));
         for (key, val) in ops {
             let key_hash = Self::hash_key(key);
             if let Some(v) = val {
@@ -392,15 +393,13 @@ impl SmtCalc {
     /// Saves the SMT to a file for fast restoration.
     pub fn save_cache(&mut self, cache_id: u64, sync_tag: u64) -> Result<()> {
         let hash = self.root_hash()?;
-        let path = vsdb_core::common::vsdb_get_custom_dir()
-            .join(format!("smt_cache_{}.bin", cache_id));
+        let path = vsdb_get_custom_dir().join(format!("smt_cache_{}.bin", cache_id));
         smt::cache::save_to_file(&self.root, sync_tag, &hash, &path)
     }
 
     /// Loads a previously saved SMT from a file.
     pub fn load_cache(cache_id: u64) -> Result<(Self, u64, Vec<u8>)> {
-        let path = vsdb_core::common::vsdb_get_custom_dir()
-            .join(format!("smt_cache_{}.bin", cache_id));
+        let path = vsdb_get_custom_dir().join(format!("smt_cache_{}.bin", cache_id));
         let (root, sync_tag, root_hash) = smt::cache::load_from_file(&path)?;
         Ok((Self { root }, sync_tag, root_hash))
     }

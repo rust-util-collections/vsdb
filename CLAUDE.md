@@ -61,7 +61,7 @@ Supporting documentation in `.claude/docs/`:
 
 - All clippy warnings are errors (`#![deny(warnings)]` in lib.rs)
 - **No `#[allow(...)]`** — fix warnings at the source, never suppress them
-- **No inline paths** — use `use` imports at file top; no `std::foo::Bar::new()` in function bodies
+- **No inline paths** — use `use` imports at file top; no `std::foo::Bar::new()` in function bodies. **Exception**: a single-use reference in a file is allowed to stay inline. For multi-use, prefer `use std::mem;` + `mem::take(..)` style (import parent module, not leaf item)
 - **Grouped imports** — merge common prefixes: `use std::sync::{Arc, Mutex};`
 - **Doc-code alignment** — public API changes must update corresponding docs
 - `parking_lot` for Mutex (prefix allocator, VSDB_BASE_DIR global, DagMap ID allocation)

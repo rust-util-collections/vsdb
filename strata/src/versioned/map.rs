@@ -10,6 +10,7 @@ use crate::common::error::{Result, VsdbError};
 use crate::{Mapx, MapxOrd, Orphan};
 use ruc::{RucResult, pnk};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::marker::PhantomData;
 use std::ops::Bound;
@@ -695,8 +696,6 @@ where
     /// The discarded commits are not deleted (they may be reachable from
     /// other branches).  Call [`gc`](Self::gc) to reclaim them.
     pub fn rollback_to(&mut self, branch: BranchId, target: CommitId) -> Result<()> {
-        use std::collections::HashSet;
-
         let state = self.get_branch(branch)?;
         let _ = self.get_commit_inner(target)?;
 
@@ -862,8 +861,6 @@ where
 
     /// Finds the lowest common ancestor of two commits via alternating BFS.
     fn find_common_ancestor(&self, a: CommitId, b: CommitId) -> Option<CommitId> {
-        use std::collections::HashSet;
-
         let mut visited_a = HashSet::new();
         let mut visited_b = HashSet::new();
         let mut queue_a = vec![a];
@@ -1171,8 +1168,6 @@ where
     /// Called on crash recovery (`gc_dirty == true`) or when migrating
     /// from pre-ref-count data (`ref_count == 0` on all commits).
     fn rebuild_ref_counts(&mut self) {
-        use std::collections::{HashMap, HashSet};
-
         // 1. Walk all branches to find live commits via BFS.
         let mut reachable = HashSet::new();
         let mut ref_counts: HashMap<CommitId, u32> = HashMap::new();
