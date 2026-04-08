@@ -79,7 +79,12 @@ Check changed files against project style rules:
 1. **No lint suppression** — `#[allow(...)]` is forbidden. All warnings must be fixed at the source.
 2. **No inline paths** — Types must be imported via `use` at the top of the file, not referenced inline. Exception: single-site disambiguation.
 3. **Import grouping** — Imports with common prefix must be merged: `use std::sync::{Arc, Mutex};`
-4. **Doc-code alignment** — If the change modifies a public function signature, struct field, or module behavior, verify docs still match.
+4. **Doc-code alignment** — If the change modifies a public function signature, struct field, module structure, or adds/removes/renames a public type or module, verify docs still match. Specifically check:
+   - `CLAUDE.md` architecture table (subsystem paths, type names, serialization crate)
+   - `CLAUDE.md` conventions (unsafe count, dependency names)
+   - `.claude/docs/review-core.md` subsystem path mappings (Phase 1)
+   - `.claude/commands/vs-review.md` full-audit subsystem partitioning table
+   - `.claude/docs/patterns/` guides — referenced file lists and invariants
 
 ### Task 5: Unsafe Code Audit
 
@@ -147,7 +152,7 @@ Launch **one Agent per subsystem** in parallel. Each agent receives:
 | engine & raw KV | `core/src/common/engine/mmdb.rs`, `core/src/common/mod.rs`, `core/src/basic/mapx_raw/` | `engine.md` |
 | typed collections | `strata/src/basic/mapx/`, `strata/src/basic/mapx_ord/`, `strata/src/basic/mapx_ord_rawkey/`, `strata/src/basic/orphan/` | `engine.md` |
 | B+ tree | `strata/src/basic/persistent_btree/` | `btree.md` |
-| versioning | `strata/src/versioned/` (mod.rs, map.rs, diff.rs, merge.rs) | `versioning.md` |
+| versioning | `strata/src/versioned/` (mod.rs, map.rs, handle.rs, diff.rs, merge.rs) | `versioning.md` |
 | Merkle tries | `strata/src/trie/` (mpt/, smt/, node/, cache.rs, proof.rs) | `trie.md` |
 | slot index | `strata/src/slotdex/` | `slotdex.md` |
 | DAG collections | `strata/src/dagmap/` | `dagmap.md` |

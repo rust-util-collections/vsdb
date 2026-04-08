@@ -25,7 +25,7 @@ vsdb/
 make all          # fmt + lint + test
 make test         # cargo test --workspace (release + debug, single-threaded)
 make lint         # cargo clippy --workspace + check tests/benches
-make bench        # criterion benches (core, basic, versioned, slotdex, trie)
+make bench        # criterion benches (core, basic, versioned, slotdex, trie_bench)
 ```
 
 **Important**: Tests MUST run single-threaded (`--test-threads=1`) due to global MMDB state.
@@ -36,7 +36,7 @@ make bench        # criterion benches (core, basic, versioned, slotdex, trie)
 |-----------|-----------|---------|
 | Engine | `core/src/common/engine/mmdb.rs` | MMDB integration, 16-shard routing |
 | MapxRaw | `core/src/basic/mapx_raw/` | Untyped raw KV, prefix isolation |
-| Typed Collections | `strata/src/basic/mapx/`, `mapx_ord/` | Mapx<K,V>, MapxOrd<K,V> |
+| Typed Collections | `strata/src/basic/mapx/`, `mapx_ord/`, `mapx_ord_rawkey/` | Mapx<K,V>, MapxOrd<K,V>, MapxOrdRawKey<V> |
 | Persistent B+ Tree | `strata/src/basic/persistent_btree/` | COW B+ tree, structural sharing |
 | Versioning | `strata/src/versioned/` | VerMap, Branch/BranchMut handles, commit DAG, merge |
 | Error types | `strata/src/common/error.rs` | VsdbError enum (thiserror-based) |
