@@ -1,4 +1,5 @@
 use super::*;
+use ruc::*;
 
 #[test]
 fn dagmapraw_functions() {

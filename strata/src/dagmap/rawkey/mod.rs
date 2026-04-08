@@ -34,8 +34,9 @@
 #[cfg(test)]
 mod test;
 
+use crate::common::error::Result;
 use crate::{DagMapId, DagMapRaw, Orphan, ValueEnDe, dagmap::raw};
-use ruc::*;
+use ruc::{d, RucResult};
 use serde::{Deserialize, Serialize};
 use std::{
     marker::PhantomData,
@@ -78,7 +79,7 @@ where
 {
     /// Creates a new `DagMapRawKey`.
     #[inline(always)]
-    pub fn new(raw_parent: &mut Orphan<Option<DagMapRaw>>) -> Result<Self> {
+    pub fn new(raw_parent: &mut Orphan<Option<DagMapRaw>>) -> ruc::Result<Self> {
         DagMapRaw::new(raw_parent).c(d!()).map(|inner| Self {
             inner,
             _p: PhantomData,
@@ -126,7 +127,7 @@ where
     /// recovered later via [`from_meta`](Self::from_meta).
     ///
     /// Returns the `instance_id` that should be passed to `from_meta`.
-    pub fn save_meta(&self) -> crate::common::error::Result<u64> {
+    pub fn save_meta(&self) -> Result<u64> {
         let id = self.instance_id();
         crate::common::save_instance_meta(id, self)?;
         Ok(id)
@@ -136,7 +137,7 @@ where
     ///
     /// The caller must ensure that the underlying VSDB database still
     /// contains the data referenced by this instance ID.
-    pub fn from_meta(instance_id: u64) -> crate::common::error::Result<Self> {
+    pub fn from_meta(instance_id: u64) -> Result<Self> {
         crate::common::load_instance_meta(instance_id)
     }
 
@@ -185,7 +186,7 @@ where
 
     /// Prunes the DAG, merging all nodes in the mainline into the genesis node.
     #[inline(always)]
-    pub fn prune(self) -> Result<DagHead<V>> {
+    pub fn prune(self) -> ruc::Result<DagHead<V>> {
         self.inner.prune().c(d!()).map(|inner| Self {
             inner,
             _p: PhantomData,
