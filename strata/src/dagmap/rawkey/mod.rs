@@ -34,9 +34,9 @@
 #[cfg(test)]
 mod test;
 
-use crate::common::error::Result;
-use crate::{DagMapId, DagMapRaw, Orphan, ValueEnDe, dagmap::raw};
-use ruc::{d, RucResult};
+use crate::{
+    DagMapId, DagMapRaw, Orphan, ValueEnDe, common::error::Result, dagmap::raw,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     marker::PhantomData,
@@ -79,8 +79,8 @@ where
 {
     /// Creates a new `DagMapRawKey`.
     #[inline(always)]
-    pub fn new(raw_parent: &mut Orphan<Option<DagMapRaw>>) -> ruc::Result<Self> {
-        DagMapRaw::new(raw_parent).c(d!()).map(|inner| Self {
+    pub fn new(raw_parent: &mut Orphan<Option<DagMapRaw>>) -> Result<Self> {
+        DagMapRaw::new(raw_parent).map(|inner| Self {
             inner,
             _p: PhantomData,
         })
@@ -186,8 +186,8 @@ where
 
     /// Prunes the DAG, merging all nodes in the mainline into the genesis node.
     #[inline(always)]
-    pub fn prune(self) -> ruc::Result<DagHead<V>> {
-        self.inner.prune().c(d!()).map(|inner| Self {
+    pub fn prune(self) -> Result<DagHead<V>> {
+        self.inner.prune().map(|inner| Self {
             inner,
             _p: PhantomData,
         })

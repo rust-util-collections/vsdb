@@ -34,9 +34,10 @@
 #[cfg(test)]
 mod test;
 
-use crate::common::error::Result;
-use crate::{DagMapId, MapxOrdRawKey, Orphan};
-use ruc::{d, eg, RucResult};
+use crate::{
+    DagMapId, MapxOrdRawKey, Orphan,
+    common::error::{Result, VsdbError},
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -110,7 +111,7 @@ impl<'de> Deserialize<'de> for DagMapRaw {
 
 impl DagMapRaw {
     /// Creates a new `DagMapRaw`.
-    pub fn new(parent: &mut Orphan<Option<Self>>) -> ruc::Result<Self> {
+    pub fn new(parent: &mut Orphan<Option<Self>>) -> Result<Self> {
         let r = Self {
             parent: unsafe { parent.shadow() },
             ..Default::default()
@@ -120,7 +121,9 @@ impl DagMapRaw {
             let child_id = super::gen_dag_map_id_num().to_le_bytes();
             // Check if child already exists before inserting
             if p.children.get(child_id).is_some() {
-                return Err(eg!("Error! Child ID exist!"));
+                return Err(VsdbError::Other {
+                    detail: "Error! Child ID exist!".to_owned(),
+                });
             }
             p.children.insert(child_id, &r);
         }
@@ -243,12 +246,12 @@ impl DagMapRaw {
     ///
     /// Returns the new head of the mainline.
     #[inline(always)]
-    pub fn prune(self) -> ruc::Result<DagHead> {
-        self.prune_mainline().c(d!())
+    pub fn prune(self) -> Result<DagHead> {
+        self.prune_mainline()
     }
 
     // Return the new head of mainline
-    fn prune_mainline(mut self) -> ruc::Result<DagHead> {
+    fn prune_mainline(mut self) -> Result<DagHead> {
         let p = match self.parent.get_value() {
             Some(p) => p,
             _ => {
@@ -260,7 +263,9 @@ impl DagMapRaw {
         let mut linebuf = vec![p];
         while let Some(p) = linebuf.last().unwrap().parent.get_value() {
             if linebuf.len() >= MAX_DEPTH {
-                return Err(eg!("DAG mainline exceeds MAX_DEPTH — possible cycle"));
+                return Err(VsdbError::Other {
+                    detail: "DAG mainline exceeds MAX_DEPTH — possible cycle".to_owned(),
+                });
             }
             linebuf.push(p);
         }

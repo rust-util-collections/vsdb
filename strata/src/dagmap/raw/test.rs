@@ -50,7 +50,7 @@ fn dagmapraw_functions() {
         "v0".as_bytes()
     );
 
-    let mut head = pnk!(i2.prune());
+    let mut head = i2.prune().unwrap();
     sleep_ms!(1000); // give some time to the async cleaner
 
     assert_eq!(head.get("k2").unwrap().as_slice(), "v2x".as_bytes());
@@ -71,7 +71,7 @@ fn dagmapraw_functions() {
         head = DagMapRaw::new(&mut Orphan::new(Some(head))).unwrap();
     }
 
-    let mut head = pnk!(head.prune());
+    let mut head = head.prune().unwrap();
     sleep_ms!(1000); // give some time to the async cleaner
     assert!(head.parent.get_value().is_none());
     assert!(head.children.iter().next().is_none());

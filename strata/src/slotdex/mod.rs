@@ -180,7 +180,7 @@ where
     ///
     /// * `slot` - The slot to insert the key into (e.g., a timestamp).
     /// * `k` - The key to insert.
-    pub fn insert(&mut self, slot: S, k: K) -> ruc::Result<()> {
+    pub fn insert(&mut self, slot: S, k: K) -> Result<()> {
         let slot = self.to_storage_slot(slot);
 
         self.ensure_tier_capacity(slot.clone());
