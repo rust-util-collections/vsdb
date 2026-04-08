@@ -29,6 +29,7 @@
 #[cfg(test)]
 mod test;
 
+use crate::common::error::Result;
 use crate::{ValueEnDe, basic::mapx_ord_rawkey::MapxOrdRawKey};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -184,7 +185,7 @@ where
     /// recovered later via [`from_meta`](Self::from_meta).
     ///
     /// Returns the `instance_id` that should be passed to `from_meta`.
-    pub fn save_meta(&self) -> crate::common::error::Result<u64> {
+    pub fn save_meta(&self) -> Result<u64> {
         let id = self.instance_id();
         crate::common::save_instance_meta(id, self)?;
         Ok(id)
@@ -194,7 +195,7 @@ where
     ///
     /// The caller must ensure that the underlying VSDB database still
     /// contains the data referenced by this instance ID.
-    pub fn from_meta(instance_id: u64) -> crate::common::error::Result<Self> {
+    pub fn from_meta(instance_id: u64) -> Result<Self> {
         crate::common::load_instance_meta(instance_id)
     }
 }

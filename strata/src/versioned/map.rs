@@ -249,7 +249,21 @@ where
     /// The caller must ensure that the underlying VSDB database still
     /// contains the data referenced by this instance ID.
     pub fn from_meta(instance_id: u64) -> Result<Self> {
-        crate::common::load_instance_meta(instance_id)
+        let mut m: Self = crate::common::load_instance_meta(instance_id)?;
+
+        // After deserialization the B+ tree's in-memory ref-count map is
+        // empty (ref_counts_ready == false), so release_node() would be a
+        // no-op and dead nodes would never be reclaimed.  Rebuild now.
+        let mut live_roots: Vec<NodeId> =
+            m.commits.iter().map(|(_, c)| c.root).collect();
+        for (_, s) in m.branches.iter() {
+            if s.dirty_root != EMPTY_ROOT {
+                live_roots.push(s.dirty_root);
+            }
+        }
+        m.tree.rebuild_ref_counts(&live_roots);
+
+        Ok(m)
     }
 
     /// Creates a new, empty versioned map whose initial branch has the
