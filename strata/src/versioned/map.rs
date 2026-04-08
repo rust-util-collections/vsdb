@@ -190,7 +190,7 @@ impl<'de, K, V> Deserialize<'de> for VerMap<K, V> {
                 let gc_dirty = seq
                     .next_element()?
                     .ok_or_else(|| serde::de::Error::invalid_length(7, &self))?;
-                Ok(VerMap {
+                let mut m = VerMap {
                     tree,
                     commits,
                     branches,
@@ -200,10 +200,32 @@ impl<'de, K, V> Deserialize<'de> for VerMap<K, V> {
                     main_branch,
                     gc_dirty,
                     _phantom: PhantomData,
-                })
+                };
+                m.rebuild_tree_ref_counts();
+                Ok(m)
             }
         }
         deserializer.deserialize_tuple(8, Vis(PhantomData))
+    }
+}
+
+// Separate impl block without K/V trait bounds so that the
+// Deserialize visitor (which has no trait bounds on K/V) can call it.
+impl<K, V> VerMap<K, V> {
+    /// Rebuilds the B+ tree's in-memory ref-count map from the
+    /// current set of live roots (all commit roots + dirty roots).
+    ///
+    /// Called after every deserialization path (serde, from_meta)
+    /// because PersistentBTree's Deserialize sets `ref_counts_ready = false`.
+    fn rebuild_tree_ref_counts(&mut self) {
+        let mut live_roots: Vec<NodeId> =
+            self.commits.iter().map(|(_, c)| c.root).collect();
+        for (_, s) in self.branches.iter() {
+            if s.dirty_root != EMPTY_ROOT {
+                live_roots.push(s.dirty_root);
+            }
+        }
+        self.tree.rebuild_ref_counts(&live_roots);
     }
 }
 
@@ -249,21 +271,8 @@ where
     /// The caller must ensure that the underlying VSDB database still
     /// contains the data referenced by this instance ID.
     pub fn from_meta(instance_id: u64) -> Result<Self> {
-        let mut m: Self = crate::common::load_instance_meta(instance_id)?;
-
-        // After deserialization the B+ tree's in-memory ref-count map is
-        // empty (ref_counts_ready == false), so release_node() would be a
-        // no-op and dead nodes would never be reclaimed.  Rebuild now.
-        let mut live_roots: Vec<NodeId> =
-            m.commits.iter().map(|(_, c)| c.root).collect();
-        for (_, s) in m.branches.iter() {
-            if s.dirty_root != EMPTY_ROOT {
-                live_roots.push(s.dirty_root);
-            }
-        }
-        m.tree.rebuild_ref_counts(&live_roots);
-
-        Ok(m)
+        // Deserialize already calls rebuild_tree_ref_counts().
+        crate::common::load_instance_meta(instance_id)
     }
 
     /// Creates a new, empty versioned map whose initial branch has the
