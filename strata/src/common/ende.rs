@@ -5,6 +5,31 @@
 //! These traits are used by the various data structures in `vsdb` to serialize
 //! and deserialize data for storage.
 //!
+//! # Trust model
+//!
+//! VSDB operates a **closed data loop**: every byte sequence stored on disk
+//! was produced by the same encode path in the same process (or a prior run
+//! of the same binary).  This has two implications for error handling:
+//!
+//! * **Encoding a valid Rust value should never fail.**  The blanket
+//!   implementations delegate to `postcard::to_allocvec`, which can only
+//!   fail if the `Serialize` impl itself is buggy.  Accordingly,
+//!   [`KeyEnDe::encode`] / [`ValueEnDe::encode`] **panic** on error —
+//!   a failure here is a programming bug, not a recoverable runtime
+//!   condition.  Use [`KeyEnDe::try_encode`] / [`ValueEnDe::try_encode`]
+//!   at trust boundaries (e.g. first-time validation of a third-party
+//!   type) where you want a `Result` instead.
+//!
+//! * **Decoding VSDB-written data should never fail.**  VSDB collections
+//!   (`Mapx`, `MapxOrd`, `VerMap`, …) use `pnk!` (assert-like unwrap) on
+//!   `decode` calls for data they wrote themselves.  A decode failure in
+//!   this context indicates data corruption or a schema-incompatible code
+//!   change — neither is automatically recoverable.  The `decode` method
+//!   returns `Result` at the **trait level** because the trait cannot
+//!   assume the byte source is trusted; callers at boundaries (e.g.
+//!   [`from_meta`](crate::Mapx::from_meta) reading an on-disk file) use
+//!   `?` to propagate errors normally.
+//!
 
 use super::RawBytes;
 use ruc::*;
@@ -17,10 +42,15 @@ use serde::{Serialize, de::DeserializeOwned};
 
 /// A trait for encoding keys.
 pub trait KeyEn: Sized {
-    /// Tries to encode the key into a byte vector.
+    /// Attempts to encode the key.  Returns `Err` only if the
+    /// `Serialize` implementation is broken — see [module-level trust
+    /// model](self) for details.
     fn try_encode_key(&self) -> Result<RawBytes>;
 
-    /// Encodes the key into a byte vector, panicking on failure.
+    /// Encodes the key, **panicking** on failure.
+    ///
+    /// This is the normal path inside VSDB collections.  A panic here
+    /// means the type's `Serialize` impl has a bug.
     fn encode_key(&self) -> RawBytes {
         pnk!(self.try_encode_key())
     }
@@ -29,29 +59,44 @@ pub trait KeyEn: Sized {
 /// A trait for decoding keys.
 pub trait KeyDe: Sized {
     /// Decodes a key from a byte slice.
+    ///
+    /// Returns `Err` when the bytes are invalid.  VSDB collections use
+    /// `pnk!` on this internally because data they wrote is always
+    /// trusted — see [module-level trust model](self).
     fn decode_key(bytes: &[u8]) -> Result<Self>;
 }
 
 /// A trait for both encoding and decoding keys.
 pub trait KeyEnDe: Sized {
-    /// Tries to encode the key into a byte vector.
+    /// Attempts to encode the key.  Prefer [`encode`](Self::encode) for
+    /// internal VSDB paths; use this at trust boundaries where a `Result`
+    /// is needed.
     fn try_encode(&self) -> Result<RawBytes>;
 
-    /// Encodes the key into a byte vector, panicking on failure.
+    /// Encodes the key, **panicking** on failure.
+    ///
+    /// See [`try_encode`](Self::try_encode) for the fallible variant.
     fn encode(&self) -> RawBytes {
         pnk!(self.try_encode())
     }
 
     /// Decodes a key from a byte slice.
+    ///
+    /// Returns `Err` when the bytes are invalid.  VSDB collections use
+    /// `pnk!` on this internally for data they wrote themselves.
     fn decode(bytes: &[u8]) -> Result<Self>;
 }
 
 /// A trait for encoding values.
 pub trait ValueEn: Sized {
-    /// Tries to encode the value into a byte vector.
+    /// Attempts to encode the value.  Returns `Err` only if the
+    /// `Serialize` implementation is broken.
     fn try_encode_value(&self) -> Result<RawBytes>;
 
-    /// Encodes the value into a byte vector, panicking on failure.
+    /// Encodes the value, **panicking** on failure.
+    ///
+    /// This is the normal path inside VSDB collections.  A panic here
+    /// means the type's `Serialize` impl has a bug.
     fn encode_value(&self) -> RawBytes {
         pnk!(self.try_encode_value())
     }
@@ -60,20 +105,31 @@ pub trait ValueEn: Sized {
 /// A trait for decoding values.
 pub trait ValueDe: Sized {
     /// Decodes a value from a byte slice.
+    ///
+    /// Returns `Err` when the bytes are invalid.  VSDB collections use
+    /// `pnk!` on this internally because data they wrote is always
+    /// trusted.
     fn decode_value(bytes: &[u8]) -> Result<Self>;
 }
 
 /// A trait for both encoding and decoding values.
 pub trait ValueEnDe: Sized {
-    /// Tries to encode the value into a byte vector.
+    /// Attempts to encode the value.  Prefer [`encode`](Self::encode) for
+    /// internal VSDB paths; use this at trust boundaries where a `Result`
+    /// is needed.
     fn try_encode(&self) -> Result<RawBytes>;
 
-    /// Encodes the value into a byte vector, panicking on failure.
+    /// Encodes the value, **panicking** on failure.
+    ///
+    /// See [`try_encode`](Self::try_encode) for the fallible variant.
     fn encode(&self) -> RawBytes {
         pnk!(self.try_encode())
     }
 
     /// Decodes a value from a byte slice.
+    ///
+    /// Returns `Err` when the bytes are invalid.  VSDB collections use
+    /// `pnk!` on this internally for data they wrote themselves.
     fn decode(bytes: &[u8]) -> Result<Self>;
 }
 

@@ -40,18 +40,12 @@ pub enum VsdbError {
         /// The branch ID that has dirty state.
         branch_id: u64,
     },
-    /// Encoding or decoding failed.
-    #[error("encoding error: {detail}")]
-    Encoding {
-        /// Detailed error chain.
-        detail: String,
-    },
-    /// Storage-layer error (I/O, engine, compaction, etc.).
-    #[error("storage error: {detail}")]
-    Storage {
-        /// Detailed error chain.
-        detail: String,
-    },
+    /// Encoding or decoding failed (e.g. postcard serialization).
+    #[error("encoding error: {0}")]
+    Encoding(#[from] postcard::Error),
+    /// Storage-layer I/O error.
+    #[error("storage error: {0}")]
+    Io(#[from] std::io::Error),
     /// Trie operation error.
     #[error("trie error: {detail}")]
     Trie {
@@ -80,22 +74,6 @@ impl From<Box<dyn ruc::err::RucError>> for VsdbError {
     fn from(e: Box<dyn ruc::err::RucError>) -> Self {
         Self::Other {
             detail: e.stringify_chain(None),
-        }
-    }
-}
-
-impl From<std::io::Error> for VsdbError {
-    fn from(e: std::io::Error) -> Self {
-        Self::Storage {
-            detail: e.to_string(),
-        }
-    }
-}
-
-impl From<postcard::Error> for VsdbError {
-    fn from(e: postcard::Error) -> Self {
-        Self::Encoding {
-            detail: e.to_string(),
         }
     }
 }

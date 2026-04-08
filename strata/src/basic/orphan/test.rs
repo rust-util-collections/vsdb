@@ -84,10 +84,10 @@ fn custom_types() {
 fn test_save_and_from_meta() {
     let o = Orphan::new(42i64);
 
-    let id = pnk!(o.save_meta());
+    let id = o.save_meta().unwrap();
     assert_eq!(id, o.instance_id());
 
-    let restored: Orphan<i64> = pnk!(Orphan::from_meta(id));
+    let restored: Orphan<i64> = Orphan::from_meta(id).unwrap();
     assert_eq!(restored.get_value(), 42);
     assert!(restored.is_the_same_instance(&o));
 }
@@ -120,9 +120,9 @@ fn test_from_meta_nonexistent() {
 #[test]
 fn test_meta_restore_then_mutate() {
     let o = Orphan::new(10i32);
-    let id = pnk!(o.save_meta());
+    let id = o.save_meta().unwrap();
 
-    let mut restored: Orphan<i32> = pnk!(Orphan::from_meta(id));
+    let mut restored: Orphan<i32> = Orphan::from_meta(id).unwrap();
     *restored.get_mut() = 42;
 
     assert_eq!(o.get_value(), 42);

@@ -160,9 +160,9 @@ where
     /// recovered later via [`from_meta`](Self::from_meta).
     ///
     /// Returns the `instance_id` that should be passed to `from_meta`.
-    pub fn save_meta(&self) -> Result<u64> {
+    pub fn save_meta(&self) -> crate::common::error::Result<u64> {
         let id = self.instance_id();
-        crate::common::save_instance_meta(id, self).c(d!())?;
+        crate::common::save_instance_meta(id, self)?;
         Ok(id)
     }
 
@@ -170,8 +170,8 @@ where
     ///
     /// The caller must ensure that the underlying VSDB database still
     /// contains the data referenced by this instance ID.
-    pub fn from_meta(instance_id: u64) -> Result<Self> {
-        crate::common::load_instance_meta(instance_id).c(d!())
+    pub fn from_meta(instance_id: u64) -> crate::common::error::Result<Self> {
+        crate::common::load_instance_meta(instance_id)
     }
 
     /// Inserts a key into a specified slot.

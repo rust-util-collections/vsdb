@@ -240,7 +240,7 @@ where
     /// Returns the `instance_id` that should be passed to `from_meta`.
     pub fn save_meta(&self) -> Result<u64> {
         let id = self.instance_id();
-        crate::common::save_instance_meta(id, self).map_err(VsdbError::from)?;
+        crate::common::save_instance_meta(id, self)?;
         Ok(id)
     }
 
@@ -249,7 +249,7 @@ where
     /// The caller must ensure that the underlying VSDB database still
     /// contains the data referenced by this instance ID.
     pub fn from_meta(instance_id: u64) -> Result<Self> {
-        crate::common::load_instance_meta(instance_id).map_err(VsdbError::from)
+        crate::common::load_instance_meta(instance_id)
     }
 
     /// Creates a new, empty versioned map whose initial branch has the
@@ -419,6 +419,13 @@ where
     // =================================================================
 
     /// Reads a value from the working state of `branch`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the stored bytes cannot be decoded back into `V`.
+    /// This can only happen due to data corruption or a type mismatch
+    /// between the writing and reading code — see the
+    /// [encode/decode trust model](crate::common::ende).
     pub fn get(&self, branch: BranchId, key: &K) -> Result<Option<V>> {
         let state = self.get_branch(branch)?;
         let raw = self.tree.get(state.dirty_root, &key.to_bytes());
@@ -429,6 +436,11 @@ where
     }
 
     /// Reads a value at a specific historical commit.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the stored bytes cannot be decoded — see
+    /// [`get`](Self::get) for details.
     pub fn get_at_commit(&self, commit_id: CommitId, key: &K) -> Result<Option<V>> {
         let commit = self.get_commit_inner(commit_id)?;
         let raw = self.tree.get(commit.root, &key.to_bytes());
@@ -445,6 +457,11 @@ where
     }
 
     /// Iterates all entries on `branch` in ascending key order.
+    ///
+    /// # Panics
+    ///
+    /// The returned iterator panics if any stored entry cannot be
+    /// decoded — see [`get`](Self::get) for details.
     pub fn iter(&self, branch: BranchId) -> Result<impl Iterator<Item = (K, V)> + '_> {
         let state = self.get_branch(branch)?;
         Ok(self
@@ -454,6 +471,11 @@ where
     }
 
     /// Iterates entries in `[lo, hi)` on `branch` in ascending key order.
+    ///
+    /// # Panics
+    ///
+    /// The returned iterator panics on decode failure — see
+    /// [`get`](Self::get).
     pub fn range(
         &self,
         branch: BranchId,
@@ -482,6 +504,11 @@ where
     }
 
     /// Iterates all entries at a specific historical commit.
+    ///
+    /// # Panics
+    ///
+    /// The returned iterator panics on decode failure — see
+    /// [`get`](Self::get).
     pub fn iter_at_commit(
         &self,
         commit_id: CommitId,
@@ -495,6 +522,11 @@ where
 
     /// Iterates entries in `[lo, hi)` at a specific historical commit
     /// in ascending key order.
+    ///
+    /// # Panics
+    ///
+    /// The returned iterator panics on decode failure — see
+    /// [`get`](Self::get).
     pub fn range_at_commit(
         &self,
         commit_id: CommitId,
