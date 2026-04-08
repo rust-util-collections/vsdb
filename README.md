@@ -17,9 +17,8 @@ A high-performance, embedded key-value database for Rust with an API that feels 
 
 ## Quick start
 
-```toml
-[dependencies]
-vsdb = "12.0.0"
+```bash
+cargo add vsdb
 ```
 
 ```rust

@@ -15,11 +15,8 @@ Most users should use the `vsdb` crate instead, which provides high-level, typed
 
 ## Installation
 
-Add this to your `Cargo.toml`:
-
-```toml
-[dependencies]
-vsdb_core = "12.0.0"
+```bash
+cargo add vsdb_core
 ```
 
 For detailed API examples, see [API Examples](docs/api.md).

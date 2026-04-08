@@ -11,11 +11,8 @@ This crate provides high-level, typed data structures that are backed by a persi
 
 ## Installation
 
-Add this to your `Cargo.toml`:
-
-```toml
-[dependencies]
-vsdb = "12.0.0"
+```bash
+cargo add vsdb
 ```
 
 ## Highlights
