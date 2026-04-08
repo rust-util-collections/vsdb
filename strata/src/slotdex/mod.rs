@@ -9,7 +9,6 @@ use crate::{
     basic::{mapx_ord::MapxOrdIter as LargeIter, orphan::Orphan},
     common::error::Result,
 };
-use ruc::min;
 use serde::{Deserialize, Serialize, de};
 use std::{
     cell::RefCell,
@@ -392,10 +391,8 @@ where
             let take_n = if distance_of_slot_start <= skip_n {
                 page_size
             } else {
-                let back_shift = min!(
-                    distance_of_slot_start.saturating_sub(skip_n),
-                    PageSize::MAX as Distance
-                );
+                let back_shift = (distance_of_slot_start.saturating_sub(skip_n))
+                    .min(PageSize::MAX as Distance);
 
                 skip_n = distance_of_slot_start;
 

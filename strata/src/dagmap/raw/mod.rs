@@ -36,7 +36,7 @@ mod test;
 
 use crate::common::error::Result;
 use crate::{DagMapId, MapxOrdRawKey, Orphan};
-use ruc::{alt, d, eg, RucResult};
+use ruc::{d, eg, RucResult};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -199,7 +199,7 @@ impl DagMapRaw {
 
         for _ in 0..MAX_DEPTH {
             if let Some(v) = hdr.data.get(key) {
-                return alt!(v.is_empty(), None, Some(v));
+                return if v.is_empty() { None } else { Some(v) };
             }
             match hdr.parent.get_value() {
                 Some(p) => {
