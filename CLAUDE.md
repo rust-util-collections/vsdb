@@ -61,7 +61,7 @@ Supporting documentation in `.claude/docs/`:
 
 - All clippy warnings are errors (`#![deny(warnings)]` in lib.rs)
 - **No `#[allow(...)]`** — fix warnings at the source, never suppress them
-- **No inline paths** — use `use` imports at file top; no `std::foo::Bar::new()` in function bodies. **Exception**: a single-use reference in a file is allowed to stay inline. For multi-use, prefer `use std::mem;` + `mem::take(..)` style (import parent module, not leaf item)
+- **Prefer imports over inline paths** — avoid `std::foo::Bar::new()` inline in function bodies when the same path appears 3+ times in a file; add `use std::foo;` at file top (or `use std::foo::Bar;`) instead. Function-body `use` statements (scoped imports) are fine and don't count as inline paths. 1-2 inline uses of common `std::` items are acceptable.
 - **Grouped imports** — merge common prefixes: `use std::sync::{Arc, Mutex};`
 - **Doc-code alignment** — public API changes must update corresponding docs
 - `parking_lot` for Mutex (prefix allocator, VSDB_BASE_DIR global, DagMap ID allocation)

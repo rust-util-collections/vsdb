@@ -77,7 +77,7 @@ Check every change for:
 Check changed files against project style rules:
 
 1. **No lint suppression** — `#[allow(...)]` is forbidden. All warnings must be fixed at the source.
-2. **No inline paths** — Types must be imported via `use` at the top of the file, not referenced inline. Exception: single-site disambiguation.
+2. **Prefer imports over inline paths** — Avoid inline `std::foo::Bar::new()` when the same path appears 3+ times in a file. Function-body `use` (scoped imports) are fine. 1-2 inline uses are acceptable.
 3. **Import grouping** — Imports with common prefix must be merged: `use std::sync::{Arc, Mutex};`
 4. **Doc-code alignment** — If the change modifies a public function signature, struct field, module structure, or adds/removes/renames a public type or module, verify docs still match. Specifically check:
    - `CLAUDE.md` architecture table (subsystem paths, type names, serialization crate)
