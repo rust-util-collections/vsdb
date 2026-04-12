@@ -65,6 +65,9 @@ static VSDB_CUSTOM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     let mut d = VSDB_BASE_DIR.lock().clone();
     d.push("__CUSTOM__");
     pnk!(fs::create_dir_all(&d));
+    // SAFETY: Called during `LazyLock` init, which runs exactly once and
+    // blocks concurrent accessors. No other threads read this env var
+    // before initialization completes.
     unsafe { env::set_var("VSDB_CUSTOM_DIR", d.as_os_str()) }
     d
 });
@@ -232,6 +235,9 @@ pub fn vsdb_set_base_dir(dir: impl AsRef<Path>) -> Result<()> {
     if HAS_INITED.swap(true, Ordering::AcqRel) {
         Err(eg!("VSDB has been initialized !!"))
     } else {
+        // SAFETY: Guarded by `HAS_INITED` swap — runs at most once.
+        // Must be called before spawning worker threads; the caller is
+        // responsible for ensuring no concurrent env readers exist.
         unsafe { env::set_var(BASE_DIR_VAR, dir.as_ref().as_os_str()) }
         *VSDB_BASE_DIR.lock() = dir.as_ref().to_path_buf();
         Ok(())

@@ -221,7 +221,11 @@ impl DagMapRaw {
         None
     }
 
-    /// Retrieves a mutable reference to a value in the DAG map.
+    /// Retrieves a mutable reference to a value in this node's local data.
+    ///
+    /// Unlike [`get`](Self::get), this does **not** traverse parent links.
+    /// Returns `None` if the key is not in this node's own storage, even if
+    /// a parent would return it via `get`.
     #[inline(always)]
     pub fn get_mut(&mut self, key: impl AsRef<[u8]>) -> Option<ValueMut<'_>> {
         self.data.get_mut(key.as_ref()).map(|inner| ValueMut {
@@ -278,10 +282,28 @@ impl DagMapRaw {
         let mid = linebuf.len() - 1;
         let (others, genesis) = linebuf.split_at_mut(mid);
 
-        for i in others.iter().rev() {
+        // Instance IDs on the mainline path — must not be destroyed.
+        let mainline_ids: Vec<u64> = {
+            let mut ids = vec![self.instance_id()];
+            ids.extend(others.iter().map(|n| n.instance_id()));
+            ids.push(genesis[0].instance_id());
+            ids
+        };
+
+        for i in others.iter_mut().rev() {
             for (k, v) in i.data.iter() {
                 genesis[0].data.insert(k, v);
             }
+            // Destroy side-branch children of intermediate nodes so they
+            // don't become unreachable orphans on disk.
+            for (_, mut child) in i.children.iter_mut() {
+                if !mainline_ids.contains(&child.instance_id()) {
+                    child.destroy();
+                }
+            }
+            *i.parent.get_mut() = None;
+            i.data.clear();
+            i.children.clear();
         }
 
         for (k, v) in self.data.iter() {

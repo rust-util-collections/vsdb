@@ -190,6 +190,7 @@ where
         if ctner.insert(k) {
             self.data.insert(&slot, &ctner);
             self.tiers.iter_mut().for_each(|t| {
+                t.ensure_cache();
                 let slot_floor = slot.floor_align(&t.floor_base);
                 let mut v = t.cache.borrow().get(&slot_floor).copied().unwrap_or(0);
                 if 0 == v {
@@ -566,6 +567,7 @@ where
             if (top.len() as u64) <= self.tier_capacity.as_u64() {
                 return;
             }
+            top.ensure_cache();
             let entries: Vec<_> = top
                 .cache
                 .borrow()
