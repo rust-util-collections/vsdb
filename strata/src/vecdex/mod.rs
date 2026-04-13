@@ -143,7 +143,7 @@ where
     /// Creates a new, empty `VecDex` with the given configuration.
     pub fn new(config: HnswConfig) -> Self {
         assert!(config.dim > 0, "VecDex: dim must be > 0");
-        assert!(config.m > 0, "VecDex: m must be > 0");
+        assert!(config.m >= 2, "VecDex: m must be >= 2");
         let meta = HnswMeta {
             entry_point: None,
             max_layer: 0,
@@ -192,6 +192,34 @@ where
     /// Returns `true` if the index contains no vectors.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Updates the default search beam width.
+    pub fn set_ef_search(&mut self, ef: usize) {
+        self.meta.get_mut().ef_search = ef;
+    }
+
+    /// Returns the vector associated with the given key, if it exists.
+    pub fn get(&self, key: &K) -> Option<Vec<S>> {
+        let node_id = self.key_to_node.get(key)?;
+        self.vectors.get(&node_id)
+    }
+
+    /// Returns `true` if the index contains the given key.
+    pub fn contains_key(&self, key: &K) -> bool {
+        self.key_to_node.contains_key(key)
+    }
+
+    /// Returns an iterator over all indexed keys.
+    pub fn keys(&self) -> impl Iterator<Item = K> + '_ {
+        self.key_to_node.keys()
+    }
+
+    /// Returns an iterator over all (key, vector) pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (K, Vec<S>)> + '_ {
+        self.node_to_key
+            .iter()
+            .filter_map(|(node_id, key)| self.vectors.get(&node_id).map(|v| (key, v)))
     }
 
     /// Clears all indexed data.
@@ -328,6 +356,8 @@ where
     ///
     /// Equivalent to calling [`insert`](Self::insert) in a loop but
     /// provides a clear semantic entry point for bulk loading.
+    ///
+    /// Note: inserts are sequential; no batch-level optimization is applied.
     pub fn insert_batch(&mut self, items: &[(K, Vec<S>)]) -> Result<()> {
         for (key, vec) in items {
             self.insert(key, vec)?;
@@ -350,6 +380,10 @@ where
     ///
     /// Non-matching nodes still participate in graph traversal to maintain
     /// connectivity, but are excluded from the result set.
+    ///
+    /// For highly selective predicates (< 10% match rate), prefer
+    /// [`search_ef_with_filter`](Self::search_ef_with_filter) with an
+    /// increased `ef` to maintain recall.
     pub fn search_with_filter(
         &self,
         query: &[S],
@@ -397,7 +431,16 @@ where
             return Ok(vec![]);
         }
 
-        let get_vec = |id: u64| -> Option<Vec<S>> { self.vectors.get(&id) };
+        let cache: std::cell::RefCell<std::collections::HashMap<u64, Vec<S>>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+        let get_vec = |id: u64| -> Option<Vec<S>> {
+            if let Some(v) = cache.borrow().get(&id) {
+                return Some(v.clone());
+            }
+            let v = self.vectors.get(&id)?;
+            cache.borrow_mut().insert(id, v.clone());
+            Some(v)
+        };
 
         let node_filter: Option<Box<dyn Fn(u64) -> bool + '_>> =
             predicate.map(|pred| -> Box<dyn Fn(u64) -> bool + '_> {
@@ -425,7 +468,7 @@ where
         }
 
         let search_ef = if predicate.is_some() {
-            (ef * 2).max(k)
+            (ef * 4).max(k * 2)
         } else {
             ef.max(k)
         };
@@ -450,13 +493,20 @@ where
     }
 
     /// Removes a vector by user key. Returns `true` if the key existed.
+    ///
+    /// Former neighbors of the removed node are reconnected to each
+    /// other (best-effort) to preserve graph connectivity.
     pub fn remove(&mut self, key: &K) -> Result<bool> {
         let Some(node_id) = self.key_to_node.get(key) else {
             return Ok(false);
         };
 
         let info = self.node_info.get(&node_id).unwrap_or_default();
+        let meta = self.meta.get_value().clone();
 
+        // Phase 1: Remove edges and collect former neighbors per layer.
+        let mut former_neighbors: Vec<Vec<u64>> =
+            Vec::with_capacity(info.max_layer as usize + 1);
         for l in 0..=info.max_layer {
             let neighbors = get_neighbors(&self.adjacency, l, node_id);
             for &n in &neighbors {
@@ -465,8 +515,54 @@ where
                 set_neighbors(&mut self.adjacency, l, n, &n_list);
             }
             remove_adjacency(&mut self.adjacency, l, node_id);
+            former_neighbors.push(neighbors);
         }
 
+        // Phase 2: Reconnect former neighbors (best-effort).
+        // Runs before vectors.remove so distance computation still works.
+        let get_vec = |id: u64| -> Option<Vec<S>> { self.vectors.get(&id) };
+        for l in 0..=info.max_layer {
+            let m_max = if l == 0 { meta.m_max0 } else { meta.m };
+            let fns = &former_neighbors[l as usize];
+            for &n in fns {
+                let cur = get_neighbors(&self.adjacency, l, n);
+                if cur.len() >= m_max {
+                    continue;
+                }
+                let slots = m_max - cur.len();
+                let cur_set: std::collections::HashSet<u64> =
+                    cur.iter().copied().collect();
+                let mut added = 0usize;
+                for &candidate in fns {
+                    if added >= slots {
+                        break;
+                    }
+                    if candidate == n || cur_set.contains(&candidate) {
+                        continue;
+                    }
+                    let mut n_list = get_neighbors(&self.adjacency, l, n);
+                    n_list.push(candidate);
+                    set_neighbors(&mut self.adjacency, l, n, &n_list);
+
+                    let mut c_list = get_neighbors(&self.adjacency, l, candidate);
+                    c_list.push(n);
+                    set_neighbors(&mut self.adjacency, l, candidate, &c_list);
+                    prune_neighbors::<S, D>(
+                        candidate,
+                        l,
+                        m_max,
+                        &mut self.adjacency,
+                        &get_vec,
+                    );
+                    added += 1;
+                }
+                if added > 0 {
+                    prune_neighbors::<S, D>(n, l, m_max, &mut self.adjacency, &get_vec);
+                }
+            }
+        }
+
+        // Phase 3: Clean up maps and metadata.
         self.vectors.remove(&node_id);
         self.key_to_node.remove(key);
         self.node_to_key.remove(&node_id);
@@ -474,13 +570,9 @@ where
 
         {
             let mut m = self.meta.get_mut();
-            m.node_count -= 1;
+            m.node_count = m.node_count.saturating_sub(1);
 
             if m.entry_point == Some(node_id) {
-                // Find the node with the highest max_layer to be the new
-                // entry point.  HNSW requires the entry point to be at the
-                // global maximum layer so top-down greedy descent reaches
-                // all layers.
                 let mut best: Option<(u64, u8)> = None;
                 for (nid, info) in self.node_info.iter() {
                     match best {
@@ -504,13 +596,17 @@ where
     /// Rebuilds the HNSW graph from the existing vectors.
     ///
     /// Useful after many deletions to restore graph quality and recall.
+    /// Vectors are re-inserted in random order for better graph quality.
     pub fn compact(&mut self) -> Result<()> {
-        let pairs: Vec<(K, Vec<S>)> = self
+        use rand::seq::SliceRandom;
+
+        let mut pairs: Vec<(K, Vec<S>)> = self
             .node_to_key
             .iter()
             .filter_map(|(node_id, key)| self.vectors.get(&node_id).map(|v| (key, v)))
             .collect();
 
+        pairs.shuffle(&mut rand::rng());
         self.clear();
 
         for (key, vec) in &pairs {

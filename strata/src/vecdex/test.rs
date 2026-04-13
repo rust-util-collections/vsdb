@@ -445,3 +445,460 @@ fn remove_entry_point_preserves_max_layer() {
     let results = idx.search(&[25.0, 0.0], 5).unwrap();
     assert_eq!(results.len(), 5);
 }
+
+// ---- T-1: Single-node duplicate-key update (regression for stale-metadata fix) ----
+
+#[test]
+fn single_node_duplicate_key_update() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 2,
+        ..Default::default()
+    };
+    let mut idx: VecDex<String, L2> = VecDex::new(cfg);
+
+    idx.insert(&"only".into(), &[0.0, 0.0]).unwrap();
+    assert_eq!(idx.len(), 1);
+
+    // Re-insert the only node with a different vector.
+    idx.insert(&"only".into(), &[5.0, 5.0]).unwrap();
+    assert_eq!(idx.len(), 1);
+
+    let results = idx.search(&[5.0, 5.0], 1).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].0, "only");
+    assert!(results[0].1 < f32::EPSILON);
+}
+
+// ---- T-2: Update entry point's vector ----
+
+#[test]
+fn update_entry_point_vector() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 2,
+        ..Default::default()
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+
+    for i in 0..10u32 {
+        idx.insert(&i, &[i as f32, 0.0]).unwrap();
+    }
+
+    let ep = idx.meta.get_value().entry_point.unwrap();
+    // Re-insert the entry point with a far-away vector.
+    idx.insert(&(ep as u32), &[100.0, 100.0]).unwrap();
+    assert_eq!(idx.len(), 10);
+
+    // All 10 nodes should still be searchable.
+    let results = idx.search(&[5.0, 0.0], 10).unwrap();
+    assert_eq!(results.len(), 10);
+}
+
+// ---- T-3: Consecutive entry point removals ----
+
+#[test]
+fn consecutive_entry_point_removals() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 2,
+        m: 4,
+        m_max0: 8,
+        ef_construction: 50,
+        ef_search: 50,
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+
+    for i in 0..20u32 {
+        idx.insert(&i, &[i as f32, 0.0]).unwrap();
+    }
+
+    // Repeatedly remove the entry point.
+    for _ in 0..10 {
+        let meta = idx.meta.get_value().clone();
+        if meta.entry_point.is_none() {
+            break;
+        }
+        let ep = meta.entry_point.unwrap();
+        idx.remove(&(ep as u32)).unwrap();
+
+        let after = idx.meta.get_value().clone();
+        let actual_max = idx
+            .node_info
+            .iter()
+            .map(|(_, info)| info.max_layer)
+            .max()
+            .unwrap_or(0);
+        assert_eq!(after.max_layer, actual_max);
+    }
+}
+
+// ---- T-4: Remove all then re-insert ----
+
+#[test]
+fn remove_all_then_reinsert() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 2,
+        ..Default::default()
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+
+    for i in 0..10u32 {
+        idx.insert(&i, &[i as f32, 0.0]).unwrap();
+    }
+
+    for i in 0..10u32 {
+        assert!(idx.remove(&i).unwrap());
+    }
+    assert_eq!(idx.len(), 0);
+    assert!(idx.search(&[0.0, 0.0], 1).unwrap().is_empty());
+
+    for i in 100..105u32 {
+        idx.insert(&i, &[i as f32, 0.0]).unwrap();
+    }
+    assert_eq!(idx.len(), 5);
+    let results = idx.search(&[102.0, 0.0], 1).unwrap();
+    assert_eq!(results[0].0, 102);
+}
+
+// ---- T-5: Graph connectivity after deletions ----
+
+#[test]
+fn graph_connectivity_after_deletions() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 2,
+        m: 8,
+        m_max0: 16,
+        ef_construction: 100,
+        ef_search: 50,
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+
+    for i in 0..50u32 {
+        idx.insert(&i, &[i as f32, (i as f32 * 0.3).sin()]).unwrap();
+    }
+
+    // Remove 10 nodes that are NOT the entry point.
+    let ep = idx.meta.get_value().entry_point.unwrap();
+    let mut removed = 0;
+    for i in 0..50u32 {
+        if i as u64 == ep {
+            continue;
+        }
+        idx.remove(&i).unwrap();
+        removed += 1;
+        if removed >= 10 {
+            break;
+        }
+    }
+    let remaining = idx.len() as usize;
+
+    // BFS from entry point at layer 0.
+    let ep = idx.meta.get_value().entry_point.unwrap();
+    let mut visited = std::collections::HashSet::new();
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back(ep);
+    visited.insert(ep);
+    while let Some(node) = queue.pop_front() {
+        let neighbors = hnsw::get_neighbors(&idx.adjacency, 0, node);
+        for n in neighbors {
+            if visited.insert(n) {
+                queue.push_back(n);
+            }
+        }
+    }
+    assert_eq!(
+        visited.len(),
+        remaining,
+        "all {} remaining nodes must be reachable from EP, but only {} found",
+        remaining,
+        visited.len()
+    );
+}
+
+// ---- T-6: Compact recall comparison ----
+
+#[test]
+fn compact_improves_or_maintains_recall() {
+    setup();
+    let dim = 16;
+    let cfg = HnswConfig {
+        dim,
+        m: 8,
+        m_max0: 16,
+        ef_construction: 100,
+        ef_search: 100,
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+
+    let mut vecs = Vec::new();
+    for i in 0..100u32 {
+        let v: Vec<f32> = (0..dim).map(|_| rand::random::<f32>()).collect();
+        idx.insert(&i, &v).unwrap();
+        vecs.push((i, v));
+    }
+
+    // Delete half.
+    for i in 0..50u32 {
+        idx.remove(&i).unwrap();
+    }
+    let live: Vec<_> = vecs.iter().filter(|(id, _)| *id >= 50).collect();
+
+    let measure_recall = |index: &VecDex<u32, L2>| -> f64 {
+        let queries = 10;
+        let k = 5;
+        let mut total = 0.0;
+        for q in 0..queries {
+            let query: Vec<f32> = (0..dim).map(|_| rand::random::<f32>()).collect();
+            let mut dists: Vec<(f32, u32)> = live
+                .iter()
+                .map(|(id, v)| (L2::distance(&query, v), *id))
+                .collect();
+            dists.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let gt: std::collections::HashSet<u32> =
+                dists.iter().take(k).map(|&(_, id)| id).collect();
+
+            let results = index.search(&query, k).unwrap();
+            let found: std::collections::HashSet<u32> =
+                results.iter().map(|(key, _)| *key).collect();
+            total += gt.intersection(&found).count() as f64 / k as f64;
+        }
+        total / queries as f64
+    };
+
+    let recall_before = measure_recall(&idx);
+    idx.compact().unwrap();
+    let recall_after = measure_recall(&idx);
+
+    assert!(
+        recall_after >= recall_before - 0.1,
+        "compact should maintain or improve recall: before={recall_before:.2}, after={recall_after:.2}"
+    );
+}
+
+// ---- T-7: Large-scale recall ----
+
+#[test]
+fn recall_large_scale() {
+    setup();
+    let dim = 64;
+    let cfg = HnswConfig {
+        dim,
+        m: 16,
+        m_max0: 32,
+        ef_construction: 200,
+        ef_search: 100,
+    };
+    let mut idx: VecDex<u64, L2> = VecDex::new(cfg);
+
+    let n = 2000;
+    let k = 10;
+    let mut all_vecs: Vec<(u64, Vec<f32>)> = Vec::with_capacity(n);
+    for i in 0..n as u64 {
+        let v: Vec<f32> = (0..dim).map(|_| rand::random::<f32>()).collect();
+        idx.insert(&i, &v).unwrap();
+        all_vecs.push((i, v));
+    }
+
+    let queries = 20;
+    let mut total_recall = 0.0f64;
+    for _ in 0..queries {
+        let query: Vec<f32> = (0..dim).map(|_| rand::random::<f32>()).collect();
+        let mut dists: Vec<(f32, u64)> = all_vecs
+            .iter()
+            .map(|(id, v)| (L2::distance(&query, v), *id))
+            .collect();
+        dists.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let gt: std::collections::HashSet<u64> =
+            dists.iter().take(k).map(|&(_, id)| id).collect();
+
+        let results = idx.search(&query, k).unwrap();
+        let found: std::collections::HashSet<u64> =
+            results.iter().map(|(key, _)| *key).collect();
+        total_recall += gt.intersection(&found).count() as f64 / k as f64;
+    }
+
+    let avg_recall = total_recall / queries as f64;
+    assert!(
+        avg_recall >= 0.8,
+        "average recall@{k} = {avg_recall:.2}, expected >= 0.8"
+    );
+}
+
+// ---- T-8: search_ef and search_ef_with_filter ----
+
+#[test]
+fn search_ef_variants() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 2,
+        ..Default::default()
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+
+    for i in 0..20u32 {
+        idx.insert(&i, &[i as f32, 0.0]).unwrap();
+    }
+
+    let results = idx.search_ef(&[5.0, 0.0], 3, 100).unwrap();
+    assert_eq!(results.len(), 3);
+    assert_eq!(results[0].0, 5);
+
+    let results = idx
+        .search_ef_with_filter(&[0.0, 0.0], 3, 100, |k: &u32| k % 2 == 0)
+        .unwrap();
+    assert_eq!(results.len(), 3);
+    for (k, _) in &results {
+        assert_eq!(k % 2, 0);
+    }
+}
+
+// ---- T-9: Cosine distance with zero vector ----
+
+#[test]
+fn cosine_zero_vector() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 3,
+        ..Default::default()
+    };
+    let mut idx: VecDex<String, Cosine> = VecDex::new(cfg);
+
+    idx.insert(&"zero".into(), &[0.0, 0.0, 0.0]).unwrap();
+    idx.insert(&"one".into(), &[1.0, 0.0, 0.0]).unwrap();
+
+    // Searching with a zero vector should not panic.
+    let results = idx.search(&[0.0, 0.0, 0.0], 2).unwrap();
+    assert_eq!(results.len(), 2);
+}
+
+// ---- T-10: Compact empty index ----
+
+#[test]
+fn compact_empty_noop() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 3,
+        ..Default::default()
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    idx.compact().unwrap();
+    assert_eq!(idx.len(), 0);
+}
+
+// ---- T-11: Minimum m=2 ----
+
+#[test]
+fn minimum_m_config() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 2,
+        m: 2,
+        m_max0: 4,
+        ef_construction: 50,
+        ef_search: 50,
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+
+    for i in 0..10u32 {
+        idx.insert(&i, &[i as f32, 0.0]).unwrap();
+    }
+    assert_eq!(idx.len(), 10);
+
+    let results = idx.search(&[5.0, 0.0], 3).unwrap();
+    assert_eq!(results.len(), 3);
+}
+
+#[test]
+#[should_panic(expected = "m must be >= 2")]
+fn m_one_panics() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 2,
+        m: 1,
+        m_max0: 2,
+        ef_construction: 50,
+        ef_search: 50,
+    };
+    let _: VecDex<u32, L2> = VecDex::new(cfg);
+}
+
+// ---- T-12: Serde roundtrip ----
+
+#[test]
+fn serde_roundtrip() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 3,
+        ..Default::default()
+    };
+    let mut idx: VecDex<String, L2> = VecDex::new(cfg);
+    idx.insert(&"a".into(), &[1.0, 2.0, 3.0]).unwrap();
+    idx.insert(&"b".into(), &[4.0, 5.0, 6.0]).unwrap();
+
+    let bytes = postcard::to_allocvec(&idx).unwrap();
+    let restored: VecDex<String, L2> = postcard::from_bytes(&bytes).unwrap();
+
+    assert_eq!(restored.len(), 2);
+    let results = restored.search(&[1.0, 2.0, 3.0], 1).unwrap();
+    assert_eq!(results[0].0, "a");
+}
+
+// ---- New API tests ----
+
+#[test]
+fn get_and_contains_key() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 3,
+        ..Default::default()
+    };
+    let mut idx: VecDex<String, L2> = VecDex::new(cfg);
+    idx.insert(&"a".into(), &[1.0, 2.0, 3.0]).unwrap();
+
+    assert!(idx.contains_key(&"a".into()));
+    assert!(!idx.contains_key(&"b".into()));
+
+    let v = idx.get(&"a".into()).unwrap();
+    assert_eq!(v, vec![1.0, 2.0, 3.0]);
+    assert!(idx.get(&"b".into()).is_none());
+}
+
+#[test]
+fn keys_and_iter() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 2,
+        ..Default::default()
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    idx.insert(&1, &[1.0, 0.0]).unwrap();
+    idx.insert(&2, &[0.0, 1.0]).unwrap();
+
+    let mut keys: Vec<u32> = idx.keys().collect();
+    keys.sort();
+    assert_eq!(keys, vec![1, 2]);
+
+    let mut pairs: Vec<(u32, Vec<f32>)> = idx.iter().collect();
+    pairs.sort_by_key(|(k, _)| *k);
+    assert_eq!(pairs.len(), 2);
+    assert_eq!(pairs[0].1, vec![1.0, 0.0]);
+}
+
+#[test]
+fn set_ef_search_works() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 2,
+        ef_search: 50,
+        ..Default::default()
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    idx.insert(&1, &[0.0, 0.0]).unwrap();
+    idx.set_ef_search(200);
+
+    let results = idx.search(&[0.0, 0.0], 1).unwrap();
+    assert_eq!(results.len(), 1);
+}

@@ -70,6 +70,22 @@ pub(crate) fn get_neighbors(adjacency: &MapxRaw, layer: u8, node_id: u64) -> Vec
         .unwrap_or_default()
 }
 
+/// Decode neighbors into a reusable buffer, avoiding allocation on hot paths.
+pub(crate) fn get_neighbors_into(
+    adjacency: &MapxRaw,
+    layer: u8,
+    node_id: u64,
+    buf: &mut Vec<u64>,
+) {
+    buf.clear();
+    let key = adj_key(layer, node_id);
+    if let Some(v) = adjacency.get(key) {
+        for chunk in v.chunks_exact(8) {
+            buf.push(u64::from_le_bytes(chunk.try_into().unwrap()));
+        }
+    }
+}
+
 /// Set neighbors of a node at a given layer.
 pub(crate) fn set_neighbors(
     adjacency: &mut MapxRaw,
@@ -123,6 +139,7 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>>(
         }
     }
 
+    let mut neighbor_buf = Vec::new();
     while let Some(std::cmp::Reverse((OrdS(c_dist), c_id))) = candidates.pop() {
         if let Some(&(OrdS(f_dist), _)) = result.peek()
             && c_dist.total_cmp(&f_dist) == Ordering::Greater
@@ -131,8 +148,8 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>>(
             break;
         }
 
-        let neighbors = get_neighbors(adjacency, layer, c_id);
-        for &n_id in &neighbors {
+        get_neighbors_into(adjacency, layer, c_id, &mut neighbor_buf);
+        for &n_id in &neighbor_buf {
             if !visited.insert(n_id) {
                 continue;
             }
@@ -234,7 +251,8 @@ pub(crate) fn select_neighbors_heuristic<S: Scalar, D: DistanceMetric<S>>(
     selected.iter().map(|&(_, id)| id).collect()
 }
 
-/// Prune a neighbor list to at most `m_max` entries, keeping the closest.
+/// Prune a neighbor list to at most `m_max` entries using the diversity
+/// heuristic (Algorithm 4), matching the selection strategy used during insert.
 pub(crate) fn prune_neighbors<S: Scalar, D: DistanceMetric<S>>(
     node_id: u64,
     layer: u8,
@@ -249,12 +267,11 @@ pub(crate) fn prune_neighbors<S: Scalar, D: DistanceMetric<S>>(
     let Some(node_vec) = get_vector(node_id) else {
         return;
     };
-    let mut scored: Vec<(S, u64)> = neighbors
+    let scored: Vec<(S, u64)> = neighbors
         .iter()
         .filter_map(|&n| get_vector(n).map(|v| (D::distance(&node_vec, &v), n)))
         .collect();
-    scored.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let pruned: Vec<u64> = scored.iter().take(m_max).map(|&(_, id)| id).collect();
+    let pruned = select_neighbors_heuristic::<S, D>(&scored, m_max, get_vector);
     set_neighbors(adjacency, layer, node_id, &pruned);
 }
 
