@@ -37,6 +37,7 @@ use hnsw::{
     select_neighbors_heuristic, set_neighbors,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::marker::PhantomData;
 use vsdb_core::basic::mapx_raw::MapxRaw;
 
@@ -431,8 +432,10 @@ where
             return Ok(vec![]);
         }
 
-        let cache: std::cell::RefCell<std::collections::HashMap<u64, Vec<S>>> =
-            std::cell::RefCell::new(std::collections::HashMap::new());
+        use std::cell::RefCell;
+        use std::collections::HashMap;
+        let cache: RefCell<HashMap<u64, Vec<S>>> =
+            RefCell::new(HashMap::new());
         let get_vec = |id: u64| -> Option<Vec<S>> {
             if let Some(v) = cache.borrow().get(&id) {
                 return Some(v.clone());
@@ -530,7 +533,7 @@ where
                     continue;
                 }
                 let slots = m_max - cur.len();
-                let cur_set: std::collections::HashSet<u64> =
+                let cur_set: HashSet<u64> =
                     cur.iter().copied().collect();
                 let mut added = 0usize;
                 for &candidate in fns {

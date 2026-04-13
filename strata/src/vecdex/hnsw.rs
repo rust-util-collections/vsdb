@@ -1,7 +1,8 @@
 //! Core HNSW algorithm: layer assignment, graph search, neighbor selection.
 
 use super::distance::{DistanceMetric, Scalar};
-use std::{cmp::Ordering, collections::BinaryHeap};
+use std::cmp::{Ordering, Reverse};
+use std::collections::BinaryHeap;
 use vsdb_core::basic::mapx_raw::MapxRaw;
 
 // ---- Ordered scalar wrapper (for BinaryHeap) ----------------------------
@@ -121,7 +122,7 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>>(
     adjacency: &MapxRaw,
     filter: Option<&dyn Fn(u64) -> bool>,
 ) -> Vec<(S, u64)> {
-    let mut candidates: BinaryHeap<std::cmp::Reverse<(OrdS<S>, u64)>> =
+    let mut candidates: BinaryHeap<Reverse<(OrdS<S>, u64)>> =
         BinaryHeap::new();
     let mut result: BinaryHeap<(OrdS<S>, u64)> = BinaryHeap::new();
     let mut visited = std::collections::HashSet::new();
@@ -131,7 +132,7 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>>(
     for &ep in entry_points {
         if let Some(vec) = get_vector(ep) {
             let dist = D::distance(query, &vec);
-            candidates.push(std::cmp::Reverse((OrdS(dist), ep)));
+            candidates.push(Reverse((OrdS(dist), ep)));
             if passes(ep) {
                 result.push((OrdS(dist), ep));
             }
@@ -140,7 +141,7 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>>(
     }
 
     let mut neighbor_buf = Vec::new();
-    while let Some(std::cmp::Reverse((OrdS(c_dist), c_id))) = candidates.pop() {
+    while let Some(Reverse((OrdS(c_dist), c_id))) = candidates.pop() {
         if let Some(&(OrdS(f_dist), _)) = result.peek()
             && c_dist.total_cmp(&f_dist) == Ordering::Greater
             && result.len() >= ef
@@ -164,7 +165,7 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>>(
                     .is_some_and(|&(OrdS(f), _)| n_dist.total_cmp(&f) == Ordering::Less);
 
             if should_add {
-                candidates.push(std::cmp::Reverse((OrdS(n_dist), n_id)));
+                candidates.push(Reverse((OrdS(n_dist), n_id)));
                 if passes(n_id) {
                     result.push((OrdS(n_dist), n_id));
                     if result.len() > ef {
