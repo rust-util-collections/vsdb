@@ -213,12 +213,12 @@ where
     /// If the key already exists, the old vector is replaced and the
     /// graph connections are rebuilt.
     pub fn insert(&mut self, key: &K, vector: &[S]) -> Result<()> {
-        let meta = self.meta.get_value().clone();
-        if vector.len() != meta.dim {
+        let dim = self.meta.get_value().dim;
+        if vector.len() != dim {
             return Err(VsdbError::Other {
                 detail: format!(
                     "dimension mismatch: expected {}, got {}",
-                    meta.dim,
+                    dim,
                     vector.len()
                 ),
             });
@@ -228,6 +228,9 @@ where
             self.remove(key)?;
         }
 
+        // Re-read metadata after potential remove() to avoid stale
+        // entry_point / node_count / max_layer from a prior snapshot.
+        let meta = self.meta.get_value().clone();
         let node_id = meta.next_node_id;
         let node_layer = random_layer(meta.m);
 
@@ -251,9 +254,6 @@ where
             let mut m = self.meta.get_mut();
             m.entry_point = Some(node_id);
             m.max_layer = node_layer;
-            for l in 0..=node_layer {
-                set_neighbors(&mut self.adjacency, l, node_id, &[]);
-            }
             return Ok(());
         }
 
@@ -319,11 +319,6 @@ where
             let mut m = self.meta.get_mut();
             m.entry_point = Some(node_id);
             m.max_layer = node_layer;
-            for l in (cur_max + 1)..=node_layer {
-                if get_neighbors(&self.adjacency, l, node_id).is_empty() {
-                    set_neighbors(&mut self.adjacency, l, node_id, &[]);
-                }
-            }
         }
 
         Ok(())

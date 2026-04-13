@@ -196,6 +196,10 @@ impl<T: ValueEn + ValueDe> ValueEnDe for T {
 /// All built-in implementations (`u32`, `i64`, `String`, etc.) also
 /// implement [`KeyEnDe`] (via serde blanket), so they can be used
 /// as keys in both [`MapxOrd`](crate::MapxOrd) and [`Mapx`](crate::Mapx).
+///
+/// **Note**: `usize` and `isize` use platform-dependent encoding widths
+/// (4 bytes on 32-bit, 8 bytes on 64-bit). Databases written with these
+/// key types are not portable across platforms with different pointer sizes.
 pub trait KeyEnDeOrdered: Clone + Eq + Ord + fmt::Debug {
     /// Encodes the key into a byte vector.
     fn to_bytes(&self) -> RawBytes;
