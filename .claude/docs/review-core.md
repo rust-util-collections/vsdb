@@ -18,6 +18,7 @@ Before analyzing any change, gather context:
    - `strata/src/trie/` → Merkle tries (MPT, SMT)
    - `strata/src/slotdex/` → slot indexing
    - `strata/src/dagmap/` → DAG collections
+   - `strata/src/vecdex/` → vector index (HNSW)
    - `strata/src/common/ende.rs` → encoding/serialization
 3. **Load subsystem patterns** — read the relevant `.claude/docs/patterns/<subsystem>.md`
 4. **Check call sites** — use grep/LSP to find all callers of changed functions

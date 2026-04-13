@@ -405,3 +405,43 @@ fn k_larger_than_index_size() {
     assert_eq!(results.len(), 3);
     assert_eq!(results[0].0, 1);
 }
+
+#[test]
+fn remove_entry_point_preserves_max_layer() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 2,
+        m: 4,
+        m_max0: 8,
+        ef_construction: 50,
+        ef_search: 50,
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+
+    // Insert enough nodes that some land on higher layers.
+    for i in 0..50u32 {
+        idx.insert(&i, &[i as f32, 0.0]).unwrap();
+    }
+
+    // Record the entry point and remove it.
+    let meta_before = idx.meta.get_value().clone();
+    let ep = meta_before.entry_point.unwrap();
+    idx.remove(&(ep as u32)).unwrap();
+
+    // After removal, max_layer should still reflect the true global max.
+    let meta_after = idx.meta.get_value().clone();
+    let actual_max = idx
+        .node_info
+        .iter()
+        .map(|(_, info)| info.max_layer)
+        .max()
+        .unwrap_or(0);
+    assert_eq!(
+        meta_after.max_layer, actual_max,
+        "max_layer should equal the true global maximum layer"
+    );
+
+    // Search should still work — all remaining vectors reachable.
+    let results = idx.search(&[25.0, 0.0], 5).unwrap();
+    assert_eq!(results.len(), 5);
+}

@@ -156,6 +156,7 @@ Launch **one Agent per subsystem** in parallel. Each agent receives:
 | Merkle tries | `strata/src/trie/` (mpt/, smt/, node/, cache.rs, proof.rs) | `trie.md` |
 | slot index | `strata/src/slotdex/` | `slotdex.md` |
 | DAG collections | `strata/src/dagmap/` | `dagmap.md` |
+| vector index | `strata/src/vecdex/` | `vecdex.md` |
 | encoding & common | `strata/src/common/ende.rs`, `strata/src/common/macros.rs`, `strata/src/lib.rs` | (cross-cutting) |
 
 ### Aggregation

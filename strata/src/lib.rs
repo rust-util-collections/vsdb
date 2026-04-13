@@ -7,7 +7,8 @@
 //! (Git-model versioned storage with branching, commits, and merge),
 //! [`MptCalc`] / [`SmtCalc`] (stateless Merkle trie implementations),
 //! [`VerMapWithProof`] (versioned storage with Merkle root computation),
-//! and [`SlotDex`] (skip-list-like index for paged queries).
+//! [`SlotDex`] (skip-list-like index for paged queries),
+//! and [`VecDex`] (approximate nearest-neighbor vector index via HNSW).
 //!
 //! This crate is the primary entry point for most users.
 

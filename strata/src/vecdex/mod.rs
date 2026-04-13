@@ -482,11 +482,22 @@ where
             m.node_count -= 1;
 
             if m.entry_point == Some(node_id) {
-                m.entry_point = None;
-                if let Some((id, new_info)) = self.node_info.iter().next() {
-                    m.entry_point = Some(id);
-                    m.max_layer = new_info.max_layer;
+                // Find the node with the highest max_layer to be the new
+                // entry point.  HNSW requires the entry point to be at the
+                // global maximum layer so top-down greedy descent reaches
+                // all layers.
+                let mut best: Option<(u64, u8)> = None;
+                for (nid, info) in self.node_info.iter() {
+                    match best {
+                        Some((_, bl)) if info.max_layer <= bl => {}
+                        _ => best = Some((nid, info.max_layer)),
+                    }
+                }
+                if let Some((new_ep, new_max)) = best {
+                    m.entry_point = Some(new_ep);
+                    m.max_layer = new_max;
                 } else {
+                    m.entry_point = None;
                     m.max_layer = 0;
                 }
             }
