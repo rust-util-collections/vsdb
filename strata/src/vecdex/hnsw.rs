@@ -65,7 +65,7 @@ pub(crate) fn decode_neighbors(bytes: &[u8]) -> Vec<u64> {
 pub(crate) fn get_neighbors(adjacency: &MapxRaw, layer: u8, node_id: u64) -> Vec<u64> {
     let key = adj_key(layer, node_id);
     adjacency
-        .get(&key)
+        .get(key)
         .map(|v| decode_neighbors(&v))
         .unwrap_or_default()
 }
@@ -79,15 +79,15 @@ pub(crate) fn set_neighbors(
 ) {
     let key = adj_key(layer, node_id);
     if neighbors.is_empty() {
-        adjacency.remove(&key);
+        adjacency.remove(key);
     } else {
-        adjacency.insert(&key, &encode_neighbors(neighbors));
+        adjacency.insert(key, encode_neighbors(neighbors));
     }
 }
 
 /// Remove a node's adjacency entry at a given layer.
 pub(crate) fn remove_adjacency(adjacency: &mut MapxRaw, layer: u8, node_id: u64) {
-    adjacency.remove(&adj_key(layer, node_id));
+    adjacency.remove(adj_key(layer, node_id));
 }
 
 // ---- Graph search ------------------------------------------------------
@@ -110,7 +110,7 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>>(
     let mut result: BinaryHeap<(OrdS<S>, u64)> = BinaryHeap::new();
     let mut visited = std::collections::HashSet::new();
 
-    let passes = |id: u64| -> bool { filter.map_or(true, |f| f(id)) };
+    let passes = |id: u64| -> bool { filter.is_none_or(|f| f(id)) };
 
     for &ep in entry_points {
         if let Some(vec) = get_vector(ep) {
@@ -124,10 +124,11 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>>(
     }
 
     while let Some(std::cmp::Reverse((OrdS(c_dist), c_id))) = candidates.pop() {
-        if let Some(&(OrdS(f_dist), _)) = result.peek() {
-            if c_dist.total_cmp(&f_dist) == Ordering::Greater && result.len() >= ef {
-                break;
-            }
+        if let Some(&(OrdS(f_dist), _)) = result.peek()
+            && c_dist.total_cmp(&f_dist) == Ordering::Greater
+            && result.len() >= ef
+        {
+            break;
         }
 
         let neighbors = get_neighbors(adjacency, layer, c_id);

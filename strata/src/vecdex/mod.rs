@@ -407,7 +407,7 @@ where
         let node_filter: Option<Box<dyn Fn(u64) -> bool + '_>> =
             predicate.map(|pred| -> Box<dyn Fn(u64) -> bool + '_> {
                 Box::new(move |node_id: u64| {
-                    self.node_to_key.get(&node_id).map_or(false, |k| pred(&k))
+                    self.node_to_key.get(&node_id).is_some_and(|k| pred(&k))
                 })
             });
         let filter_ref: Option<&dyn Fn(u64) -> bool> =
