@@ -3,8 +3,8 @@
 //! This module provides two in-memory Merkle data structures plus a
 //! versioned-store integration layer:
 //!
-//! - **[`MptCalc`]** — Merkle Patricia Trie (16-ary, nibble-based,
-//!   Ethereum-style). Best for general key-value Merkle commitments.
+//! - **[`MptCalc`]** — Merkle Patricia Trie (16-ary, nibble-based).
+//!   Best for general key-value Merkle commitments.
 //! - **[`SmtCalc`]** — Sparse Merkle Tree (binary, 256-bit key-hash
 //!   paths). Supports compact membership and non-membership proofs.
 //! - **[`VerMapWithProof`]** — Wraps a [`VerMap`](crate::versioned::map::VerMap)
@@ -71,7 +71,7 @@ use std::mem;
 
 use mpt::{TrieMut, TrieRo};
 use node::NodeHandle;
-use vsdb_core::common::vsdb_get_custom_dir;
+use vsdb_core::common::vsdb_get_system_dir;
 
 /// Common interface for stateless, in-memory Merkle trie engines.
 ///
@@ -232,7 +232,7 @@ impl MptCalc {
     /// the trie can always be rebuilt from the authoritative store.
     pub fn save_cache(&mut self, cache_id: u64, sync_tag: u64) -> Result<()> {
         let hash = self.root_hash()?;
-        let path = vsdb_get_custom_dir().join(format!("mpt_cache_{}.bin", cache_id));
+        let path = vsdb_get_system_dir().join(format!("mpt_cache_{}.bin", cache_id));
         cache::save_to_file(&self.root, sync_tag, &hash, &path)
     }
 
@@ -242,7 +242,7 @@ impl MptCalc {
     /// compare `sync_tag` with the current store head and apply any
     /// diff via [`insert`](Self::insert)/[`remove`](Self::remove).
     pub fn load_cache(cache_id: u64) -> Result<(Self, u64, Vec<u8>)> {
-        let path = vsdb_get_custom_dir().join(format!("mpt_cache_{}.bin", cache_id));
+        let path = vsdb_get_system_dir().join(format!("mpt_cache_{}.bin", cache_id));
         let (root, sync_tag, root_hash) = cache::load_from_file(&path)?;
         Ok((Self { root }, sync_tag, root_hash))
     }
@@ -393,13 +393,13 @@ impl SmtCalc {
     /// Saves the SMT to a file for fast restoration.
     pub fn save_cache(&mut self, cache_id: u64, sync_tag: u64) -> Result<()> {
         let hash = self.root_hash()?;
-        let path = vsdb_get_custom_dir().join(format!("smt_cache_{}.bin", cache_id));
+        let path = vsdb_get_system_dir().join(format!("smt_cache_{}.bin", cache_id));
         smt::cache::save_to_file(&self.root, sync_tag, &hash, &path)
     }
 
     /// Loads a previously saved SMT from a file.
     pub fn load_cache(cache_id: u64) -> Result<(Self, u64, Vec<u8>)> {
-        let path = vsdb_get_custom_dir().join(format!("smt_cache_{}.bin", cache_id));
+        let path = vsdb_get_system_dir().join(format!("smt_cache_{}.bin", cache_id));
         let (root, sync_tag, root_hash) = smt::cache::load_from_file(&path)?;
         Ok((Self { root }, sync_tag, root_hash))
     }

@@ -9,7 +9,7 @@
 - `strata/src/trie/proof.rs` — VerMapWithProof integration
 
 ## Architecture
-- **MPT**: Ethereum-style 16-ary trie. Path = key nibbles (4-bit each). Nodes: Branch (16 children), Extension (shared prefix), Leaf (value).
+- **MPT**: 16-ary nibble-based trie. Path = key nibbles (4-bit each). Nodes: Branch (16 children), Extension (shared prefix), Leaf (value).
 - **SMT**: Binary trie with 256-bit paths. Empty subtrees hash to a known default. Constant-depth proofs.
 - Both are **stateless** computation layers — ephemeral in-memory, backed by disk cache.
 - Integrated with VerMap via VerMapWithProof for version-aware Merkle commitments.

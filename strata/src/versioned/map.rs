@@ -910,8 +910,8 @@ where
 
     /// Returns the lowest common ancestor (fork point) of two commits.
     ///
-    /// Useful for blockchain scenarios: given two chain tips, this finds
-    /// the block where they diverged.  Returns `None` only if the two
+    /// Useful for branching scenarios: given two divergent tips, this finds
+    /// the commit where they diverged.  Returns `None` only if the two
     /// commits share no common history.
     pub fn fork_point(&self, a: CommitId, b: CommitId) -> Option<CommitId> {
         self.find_common_ancestor(a, b)

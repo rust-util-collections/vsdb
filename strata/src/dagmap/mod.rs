@@ -24,7 +24,7 @@ pub fn gen_dag_map_id_num() -> u128 {
     use std::{fs, io::ErrorKind, sync::LazyLock};
 
     static ID_NUM: LazyLock<Mutex<Orphan<u128>>> = LazyLock::new(|| {
-        let mut meta_path = vsdb_core::vsdb_get_custom_dir().to_owned();
+        let mut meta_path = vsdb_core::vsdb_get_system_dir().to_owned();
         meta_path.push("id_num");
 
         match fs::read(&meta_path) {

@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn test_cache_save_load_roundtrip() {
         let cache_id = 1001;
-        let cache_path = vsdb_core::common::vsdb_get_custom_dir()
+        let cache_path = vsdb_core::common::vsdb_get_system_dir()
             .join(format!("mpt_cache_{}.bin", cache_id));
 
         let mut trie = MptCalc::new();
@@ -246,7 +246,7 @@ mod tests {
     #[test]
     fn test_cache_incremental_after_load() {
         let cache_id = 1002;
-        let cache_path = vsdb_core::common::vsdb_get_custom_dir()
+        let cache_path = vsdb_core::common::vsdb_get_system_dir()
             .join(format!("mpt_cache_{}.bin", cache_id));
 
         let mut trie = MptCalc::new();
@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn test_cache_empty_trie() {
         let cache_id = 1003;
-        let cache_path = vsdb_core::common::vsdb_get_custom_dir()
+        let cache_path = vsdb_core::common::vsdb_get_system_dir()
             .join(format!("mpt_cache_{}.bin", cache_id));
 
         let mut trie = MptCalc::new();
@@ -288,7 +288,7 @@ mod tests {
     #[test]
     fn test_cache_many_keys() {
         let cache_id = 1004;
-        let cache_path = vsdb_core::common::vsdb_get_custom_dir()
+        let cache_path = vsdb_core::common::vsdb_get_system_dir()
             .join(format!("mpt_cache_{}.bin", cache_id));
 
         let mut trie = MptCalc::new();
@@ -314,7 +314,7 @@ mod tests {
     #[test]
     fn test_cache_corrupted_data() {
         let cache_id = 1005;
-        let cache_path = vsdb_core::common::vsdb_get_custom_dir()
+        let cache_path = vsdb_core::common::vsdb_get_system_dir()
             .join(format!("mpt_cache_{}.bin", cache_id));
 
         let mut trie = MptCalc::new();
@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn test_cache_truncated_file() {
         let cache_id = 1006;
-        let cache_path = vsdb_core::common::vsdb_get_custom_dir()
+        let cache_path = vsdb_core::common::vsdb_get_system_dir()
             .join(format!("mpt_cache_{}.bin", cache_id));
 
         let mut trie = MptCalc::new();
@@ -460,7 +460,7 @@ mod tests {
     #[test]
     fn test_cache_save_load_preserves_hash_after_mutation() {
         let cache_id = 1007;
-        let cache_path = vsdb_core::common::vsdb_get_custom_dir()
+        let cache_path = vsdb_core::common::vsdb_get_system_dir()
             .join(format!("mpt_cache_{}.bin", cache_id));
 
         let mut trie = MptCalc::new();
@@ -812,7 +812,7 @@ mod smt_tests {
     #[test]
     fn test_smt_cache_roundtrip() {
         let cache_id = 1008;
-        let path = vsdb_core::common::vsdb_get_custom_dir()
+        let path = vsdb_core::common::vsdb_get_system_dir()
             .join(format!("smt_cache_{}.bin", cache_id));
 
         let mut smt = SmtCalc::new();
@@ -839,7 +839,7 @@ mod smt_tests {
     #[test]
     fn test_smt_cache_corrupted() {
         let cache_id = 1009;
-        let path = vsdb_core::common::vsdb_get_custom_dir()
+        let path = vsdb_core::common::vsdb_get_system_dir()
             .join(format!("smt_cache_{}.bin", cache_id));
 
         let mut smt = SmtCalc::new();
@@ -859,7 +859,7 @@ mod smt_tests {
     #[test]
     fn test_smt_cache_incremental() {
         let cache_id = 1010;
-        let path = vsdb_core::common::vsdb_get_custom_dir()
+        let path = vsdb_core::common::vsdb_get_system_dir()
             .join(format!("smt_cache_{}.bin", cache_id));
 
         let mut smt = SmtCalc::new();

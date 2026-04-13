@@ -24,9 +24,9 @@ vsdb_core = { workspace = true }
 
 sha3 = { workspace = true }
 thiserror = { workspace = true }
+rand = { workspace = true }
 
 [dev-dependencies]
-rand = { workspace = true }
 hex = { workspace = true }
 criterion = { workspace = true }
 
@@ -47,4 +47,8 @@ harness = false
 
 [[bench]]
 name = "trie_bench"
+harness = false
+
+[[bench]]
+name = "vecdex"
 harness = false

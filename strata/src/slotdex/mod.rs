@@ -2,17 +2,17 @@
 //!
 //! [`SlotDex`] is a skip-list-like data structure ideal for indexing and
 //! querying large datasets where entries are associated with a slot
-//! (e.g., a timestamp or block number).
+//! (e.g., a timestamp or sequence number).
 
 use crate::{
     KeyEnDeOrdered, MapxOrd, ValueEnDe,
     basic::{mapx_ord::MapxOrdIter as LargeIter, orphan::Orphan},
     common::error::Result,
 };
+use parking_lot::Mutex;
 use ruc::eg;
 use serde::{Deserialize, Serialize, de};
 use std::{
-    cell::RefCell,
     collections::{BTreeMap, BTreeSet, btree_set::Iter as SmallIter},
     fmt,
     ops::{Bound, Not},
@@ -92,7 +92,7 @@ const INLINE_CAPACITY_THRESHOLD: usize = 8;
 
 /// A skip-list-like data structure for fast, timestamp-based paged queries.
 ///
-/// `SlotDex` organizes data into "slots" (e.g., timestamps or block numbers),
+/// `SlotDex` organizes data into "slots" (e.g., timestamps or sequence numbers),
 /// which are then grouped into tiers. This hierarchical structure allows for
 /// rapid seeking and counting, making it highly efficient for pagination and
 /// range queries over large datasets.
@@ -192,7 +192,8 @@ where
             self.tiers.iter_mut().for_each(|t| {
                 t.ensure_cache();
                 let slot_floor = slot.floor_align(&t.floor_base);
-                let mut v = t.cache.borrow().get(&slot_floor).copied().unwrap_or(0);
+                let c = t.cache.get_mut();
+                let mut v = c.get(&slot_floor).copied().unwrap_or(0);
                 if 0 == v {
                     *t.entry_count.get_mut() += 1;
                     if let Some(l) = t.len_cache.as_mut() {
@@ -200,7 +201,7 @@ where
                     }
                 }
                 v += 1;
-                t.cache.borrow_mut().insert(slot_floor.clone(), v);
+                c.insert(slot_floor.clone(), v);
                 t.store.insert(&slot_floor, &v);
             });
             *self.total.get_mut() += 1;
@@ -255,14 +256,15 @@ where
             self.tiers.iter_mut().for_each(|t| {
                 t.ensure_cache();
                 let slot_floor = slot.floor_align(&t.floor_base);
-                let cnt = t.cache.borrow().get(&slot_floor).copied().unwrap();
+                let c = t.cache.get_mut();
+                let cnt = c.get(&slot_floor).copied().unwrap();
                 if 1 == cnt {
-                    t.cache.borrow_mut().remove(&slot_floor);
+                    c.remove(&slot_floor);
                     t.store.remove(&slot_floor);
                     t.dec_len();
                 } else {
                     let new_cnt = cnt - 1;
-                    t.cache.borrow_mut().insert(slot_floor.clone(), new_cnt);
+                    c.insert(slot_floor.clone(), new_cnt);
                     t.store.insert(&slot_floor, &new_cnt);
                 }
             });
@@ -277,7 +279,7 @@ where
 
         self.tiers.iter_mut().for_each(|t| {
             t.store.clear();
-            t.cache.borrow_mut().clear();
+            t.cache.get_mut().clear();
         });
 
         self.tiers.clear();
@@ -363,7 +365,7 @@ where
             let right_bound = slot.floor_align(&t.floor_base);
             ret += t
                 .cache
-                .borrow()
+                .lock()
                 .range(left_bound.clone()..right_bound.clone())
                 .map(|(_, cnt)| *cnt as Distance)
                 .sum::<Distance>();
@@ -422,7 +424,7 @@ where
 
         for t in self.tiers.iter().rev() {
             t.ensure_cache();
-            let c = t.cache.borrow();
+            let c = t.cache.lock();
             let mut hdr = c.range((slot_start.clone(), Bound::Unbounded)).peekable();
             while let Some(entry_cnt) = hdr.next().map(|(_, cnt)| *cnt) {
                 if entry_cnt > remaining {
@@ -568,16 +570,16 @@ where
                 return;
             }
             top.ensure_cache();
-            let entries: Vec<_> = top
+            let entries: Vec<(S, EntryCnt)> = top
                 .cache
-                .borrow()
+                .get_mut()
                 .iter()
                 .map(|(k, v)| (k.clone(), *v))
                 .collect();
             let mut newtop = Tier::new(tiers_len as u32, &self.tier_capacity);
             for (slot, cnt) in entries {
                 let slot_floor = slot.floor_align(&newtop.floor_base);
-                let mut c = newtop.cache.borrow_mut();
+                let c = newtop.cache.get_mut();
                 let v = c.get(&slot_floor).copied().unwrap_or(0);
                 if 0 == v {
                     *newtop.entry_count.get_mut() += 1;
@@ -587,7 +589,6 @@ where
                 }
                 let new_v = v + cnt;
                 c.insert(slot_floor.clone(), new_v);
-                drop(c);
                 newtop.store.insert(&slot_floor, &new_v);
             }
             self.tiers.push(newtop);
@@ -595,7 +596,7 @@ where
             let mut newtop = Tier::new(tiers_len as u32, &self.tier_capacity);
             for (slot, entries) in self.data.iter() {
                 let slot_floor = slot.floor_align(&newtop.floor_base);
-                let mut c = newtop.cache.borrow_mut();
+                let c = newtop.cache.get_mut();
                 let v = c.get(&slot_floor).copied().unwrap_or(0);
                 if 0 == v {
                     *newtop.entry_count.get_mut() += 1;
@@ -605,7 +606,6 @@ where
                 }
                 let new_v = v + entries.len() as EntryCnt;
                 c.insert(slot_floor.clone(), new_v);
-                drop(c);
                 newtop.store.insert(&slot_floor, &new_v);
             }
             self.tiers.push(newtop);
@@ -894,7 +894,7 @@ struct Tier<S: SlotType> {
     floor_base: S,
     store: MapxOrd<S, EntryCnt>,
     #[serde(skip)]
-    cache: RefCell<BTreeMap<S, EntryCnt>>,
+    cache: Mutex<BTreeMap<S, EntryCnt>>,
     entry_count: Orphan<usize>,
     #[serde(skip)]
     len_cache: Option<usize>,
@@ -909,7 +909,7 @@ impl<S: SlotType> Tier<S> {
                 .filter(|v| *v != S::MIN)
                 .unwrap_or(S::MAX),
             store: MapxOrd::new(),
-            cache: RefCell::new(BTreeMap::new()),
+            cache: Mutex::new(BTreeMap::new()),
             entry_count: Orphan::new(0),
             len_cache: Some(0),
         }
@@ -917,9 +917,9 @@ impl<S: SlotType> Tier<S> {
 
     /// Ensure cache is populated. Called lazily on first access after
     /// deserialization (cache is #[serde(skip)] so starts empty).
-    /// Safe to call on &self thanks to RefCell interior mutability.
+    /// Safe to call on &self thanks to Mutex interior mutability.
     fn ensure_cache(&self) {
-        let mut c = self.cache.borrow_mut();
+        let mut c = self.cache.lock();
         if c.is_empty() && self.entry_count.get_value() > 0 {
             for (k, v) in self.store.iter() {
                 c.insert(k, v);
@@ -944,6 +944,12 @@ impl<S: SlotType> Tier<S> {
             *l -= 1;
         }
     }
+}
+
+// Compile-time proof that SlotDex is Send + Sync.
+fn _assert_send_sync() {
+    fn require<T: Send + Sync>() {}
+    require::<SlotDex<u64, u64>>();
 }
 
 #[cfg(test)]

@@ -31,6 +31,9 @@ pub mod slotdex;
 /// Lightweight, stateless Merkle trie implementations (MPT + SMT).
 pub mod trie;
 
+/// Approximate nearest-neighbor vector index (HNSW algorithm).
+pub mod vecdex;
+
 // --- Re-exports ---
 
 // Basic data structures
@@ -64,6 +67,12 @@ pub use trie::{MptCalc, MptProof, SmtCalc, SmtProof, TrieCalc, VerMapWithProof};
 // Slotdex — re-export SlotDex64 as SlotDex for backward compatibility;
 // the generic struct is still accessible as `vsdb::slotdex::SlotDex<S, K>`.
 pub use slotdex::{SlotDex32, SlotDex64 as SlotDex, SlotDex64, SlotDex128, SlotType};
+
+// VecDex — approximate nearest-neighbor vector index.
+pub use vecdex::distance::{Cosine, DistanceMetric, InnerProduct, L2, Scalar};
+pub use vecdex::{
+    HnswConfig, VecDex, VecDexCosine, VecDexCosineF64, VecDexL2, VecDexL2F64,
+};
 
 // Re-export vsdb_core crate for advanced users, plus the user-facing
 // environment management functions.

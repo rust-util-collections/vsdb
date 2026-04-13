@@ -72,8 +72,15 @@ static VSDB_CUSTOM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     d
 });
 
+static VSDB_SYSTEM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
+    let mut d = VSDB_BASE_DIR.lock().clone();
+    d.push("__SYSTEM__");
+    pnk!(fs::create_dir_all(&d));
+    d
+});
+
 static VSDB_META_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
-    let mut d = VSDB_CUSTOM_DIR.clone();
+    let mut d = VSDB_SYSTEM_DIR.clone();
     d.push("__instance_meta__");
     pnk!(fs::create_dir_all(&d));
     d
@@ -81,7 +88,7 @@ static VSDB_META_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
 
 /// Returns the instance-meta directory path for VSDB.
 ///
-/// This directory (`{custom_dir}/__instance_meta__/`) is used to persist
+/// This directory (`{system_dir}/__instance_meta__/`) is used to persist
 /// lightweight metadata (e.g. serialized handles) for individual VSDB
 /// instances, keyed by their unique `instance_id`.
 #[inline(always)]
@@ -191,8 +198,8 @@ fn gen_data_dir() -> PathBuf {
 
 /// Returns the custom directory path for VSDB.
 ///
-/// This function returns a static reference to the path of the custom directory,
-/// which is set by the `VSDB_CUSTOM_DIR` environment variable.
+/// This directory (`{base_dir}/__CUSTOM__/`) is available for users to store
+/// application-specific files alongside the VSDB data directory.
 ///
 /// # Returns
 ///
@@ -200,6 +207,15 @@ fn gen_data_dir() -> PathBuf {
 #[inline(always)]
 pub fn vsdb_get_custom_dir() -> &'static Path {
     VSDB_CUSTOM_DIR.as_path()
+}
+
+/// Returns the internal system directory path for VSDB.
+///
+/// This directory (`{base_dir}/__SYSTEM__/`) is reserved for VSDB internal use
+/// (instance metadata, trie caches, ID counters). Not intended for external use.
+#[inline(always)]
+pub fn vsdb_get_system_dir() -> &'static Path {
+    VSDB_SYSTEM_DIR.as_path()
 }
 
 /// Returns the base directory path for VSDB.

@@ -509,7 +509,7 @@ After `delete_branch(feat)`:
 
 ## Fork Point & Commit Distance
 
-These APIs support blockchain-style fork detection.
+These APIs support divergent-branch detection.
 
 ### Fork Point
 

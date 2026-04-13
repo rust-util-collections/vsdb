@@ -14,6 +14,7 @@ A high-performance, embedded key-value database for Rust with an API that feels 
 - **Git-model versioning** — `VerMap` provides branching, commits, three-way merge, and rollback over a COW B+ tree with structural sharing; garbage collection is fully automatic via reference counting and MMDB background compaction
 - **Merkle trie** — `MptCalc` (Merkle Patricia Trie) and `SmtCalc` (Sparse Merkle Tree) as stateless computation layers; `VerMapWithProof` integrates `VerMap` with `MptCalc` for versioned 32-byte Merkle root commitments
 - **Slot-based index** — `SlotDex` for efficient, timestamp-based paged queries via a skip-list-like tier structure
+- **Vector index** — `VecDex` for approximate nearest-neighbor search via a pure-Rust HNSW implementation; supports L2, Cosine, and InnerProduct metrics with filtered search
 
 ## Quick start
 
@@ -58,6 +59,7 @@ vsdb (workspace)
      +-- trie/           MptCalc, SmtCalc, VerMapWithProof
      +-- slotdex/        SlotDex
      +-- dagmap/         DagMapRaw, DagMapRawKey
+     +-- vecdex/         VecDex (HNSW vector index)
 ```
 
 ### Module overview
@@ -69,6 +71,7 @@ vsdb (workspace)
 | [`trie`](strata/src/trie) | `MptCalc`, `SmtCalc`, `SmtProof`, `VerMapWithProof` | Stateless Merkle tries + VerMap integration |
 | [`slotdex`](strata/src/slotdex) | `SlotDex` | Skip-list-like index for timestamp-based paged queries |
 | [`dagmap`](strata/src/dagmap) | `DagMapRaw`, `DagMapRawKey` | DAG-based collections |
+| [`vecdex`](strata/src/vecdex) | `VecDex`, `HnswConfig` | Approximate nearest-neighbor vector index (HNSW) |
 
 ### Trie + VerMap integration
 

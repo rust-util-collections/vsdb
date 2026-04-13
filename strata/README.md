@@ -28,6 +28,7 @@ For the versioned storage architecture with diagrams, see [Versioned Module — 
 - **Git-Model Versioning**: `VerMap` provides branching, commits, three-way merge, rollback, and history — backed by a persistent B+ tree with copy-on-write structural sharing.
 - **Merkle Trie**: Built-in `MptCalc` (Merkle Patricia Trie) and `SmtCalc` (Sparse Merkle Tree) for cryptographic state commitments. `VerMapWithProof` integrates `VerMap` with `MptCalc` for versioned Merkle roots.
 - **Slotdex**: A skip-list-like index (`SlotDex`) for efficient, timestamp-based paged queries.
+- **VecDex**: A persistent approximate nearest-neighbor vector index (`VecDex`) using the HNSW algorithm. Supports L2, Cosine, and InnerProduct metrics with filtered search. See [VecDex docs](docs/vecdex.md).
 
 ## Usage
 

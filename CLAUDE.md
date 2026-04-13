@@ -8,6 +8,7 @@ VSDB is a high-performance embedded key-value database for Rust that provides:
 - **Merkle tries** (MPT + SMT) for stateless cryptographic commitments
 - **Slot-based indexing** (SlotDex) for timestamp-paged queries
 - **DAG-based collections** (DagMap) for graph-like data
+- **Vector index** (VecDex) — pure-Rust HNSW for approximate nearest-neighbor search
 
 Built exclusively on [mmdb](https://github.com/rust-util-collections/mmdb) (pure-Rust LSM-Tree engine) with 16-shard prefix-based routing.
 
@@ -16,7 +17,7 @@ Built exclusively on [mmdb](https://github.com/rust-util-collections/mmdb) (pure
 ```
 vsdb/
 ├── core/     # vsdb_core — engine integration, MapxRaw, prefix allocation
-└── strata/   # vsdb — typed collections, versioning, tries, slotdex, dagmap
+└── strata/   # vsdb — typed collections, versioning, tries, slotdex, dagmap, vecdex
 ```
 
 ## Build & Test
@@ -43,6 +44,7 @@ make bench        # criterion benches (core, basic, versioned, slotdex, trie_ben
 | Merkle Tries | `strata/src/trie/` | MPT (16-ary) + SMT (binary 256-bit) |
 | Slot Index | `strata/src/slotdex/` | Time-slot tier-based indexing |
 | DAG Collections | `strata/src/dagmap/` | DAG-based data structures |
+| Vector Index | `strata/src/vecdex/` | VecDex, HNSW ANN search, distance metrics |
 | Encoding | `strata/src/common/ende.rs` | postcard-based KeyEnDe/ValueEnDe |
 
 ## Code Review Commands

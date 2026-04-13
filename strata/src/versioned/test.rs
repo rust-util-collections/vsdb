@@ -2388,12 +2388,12 @@ fn set_main_branch_persists_across_operations() {
 }
 
 #[test]
-fn set_main_branch_blockchain_reorg() {
+fn set_main_branch_divergent_switch() {
     setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
-    // Build canonical chain: b0 -> b1 -> b2
+    // Build primary branch: b0 -> b1 -> b2
     m.insert(main, &0, &0).unwrap();
     let b0 = m.commit(main).unwrap();
     m.insert(main, &1, &1).unwrap();
@@ -2410,17 +2410,17 @@ fn set_main_branch_blockchain_reorg() {
     }
     let fork_tip = m.head_commit(fork).unwrap().unwrap().id;
 
-    // Fork is longer — do a reorg.
+    // Fork is longer — switch primary branch.
     let lca = m.fork_point(b2, fork_tip).unwrap();
     let main_len = m.commit_distance(b2, lca).unwrap();
     let fork_len = m.commit_distance(fork_tip, lca).unwrap();
     assert!(fork_len > main_len);
 
-    // Switch canonical chain.
+    // Switch primary branch.
     m.set_main_branch(fork).unwrap();
     assert_eq!(m.main_branch(), fork);
 
-    // Old chain is now deletable.
+    // Old branch is now deletable.
     m.delete_branch(main).unwrap();
 }
 
@@ -2733,12 +2733,12 @@ fn commit_distance_after_merge_follows_first_parent() {
 }
 
 #[test]
-fn blockchain_longest_chain_scenario() {
+fn longest_branch_scenario() {
     setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
-    // Main chain (canonical): block0 -> block1 -> block2 -> block3 -> block4
+    // Main branch (primary): b0 -> b1 -> b2 -> b3 -> b4
     m.insert(main, &0, &0).unwrap();
     let b0 = m.commit(main).unwrap();
     m.insert(main, &1, &1).unwrap();
@@ -2750,7 +2750,7 @@ fn blockchain_longest_chain_scenario() {
     m.insert(main, &4, &4).unwrap();
     let b4 = m.commit(main).unwrap();
 
-    // Fork A diverges at block1: block1 -> a1 -> a2  (2 blocks)
+    // Fork A diverges at b1: b1 -> a1 -> a2  (2 commits)
     let chain_a = m.create_branch("chain_a", main).unwrap();
     m.rollback_to(chain_a, b1).unwrap();
     m.insert(chain_a, &100, &100).unwrap();
@@ -2758,7 +2758,7 @@ fn blockchain_longest_chain_scenario() {
     m.insert(chain_a, &101, &101).unwrap();
     let a_tip = m.commit(chain_a).unwrap();
 
-    // Fork B diverges at block0: block0 -> x1 -> x2 -> x3 -> x4 -> x5 -> x6  (6 blocks)
+    // Fork B diverges at b0: b0 -> x1 -> x2 -> x3 -> x4 -> x5 -> x6  (6 commits)
     let chain_b = m.create_branch("chain_b", main).unwrap();
     m.rollback_to(chain_b, b0).unwrap();
     for i in 200..206 {
@@ -2767,11 +2767,11 @@ fn blockchain_longest_chain_scenario() {
     }
     let b_tip = m.head_commit(chain_b).unwrap().unwrap().id;
 
-    // Determine which fork is "longest" (most work)
+    // Determine which fork is longest (most commits ahead)
     let lca_a = m.fork_point(b4, a_tip).unwrap();
     let lca_b = m.fork_point(b4, b_tip).unwrap();
-    assert_eq!(lca_a, b1); // forked at block1
-    assert_eq!(lca_b, b0); // forked at block0
+    assert_eq!(lca_a, b1); // forked at b1
+    assert_eq!(lca_b, b0); // forked at b0
 
     let main_ahead_of_a = m.commit_distance(b4, lca_a).unwrap(); // 3
     let fork_a_ahead = m.commit_distance(a_tip, lca_a).unwrap(); // 2
