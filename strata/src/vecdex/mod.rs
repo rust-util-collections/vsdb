@@ -432,16 +432,16 @@ where
             return Ok(vec![]);
         }
 
-        use std::cell::RefCell;
         use std::collections::HashMap;
-        let cache: RefCell<HashMap<u64, Vec<S>>> =
-            RefCell::new(HashMap::new());
+        let cache = parking_lot::Mutex::new(HashMap::<u64, Vec<S>>::new());
         let get_vec = |id: u64| -> Option<Vec<S>> {
-            if let Some(v) = cache.borrow().get(&id) {
+            let guard = cache.lock();
+            if let Some(v) = guard.get(&id) {
                 return Some(v.clone());
             }
+            drop(guard);
             let v = self.vectors.get(&id)?;
-            cache.borrow_mut().insert(id, v.clone());
+            cache.lock().insert(id, v.clone());
             Some(v)
         };
 
@@ -533,8 +533,7 @@ where
                     continue;
                 }
                 let slots = m_max - cur.len();
-                let cur_set: HashSet<u64> =
-                    cur.iter().copied().collect();
+                let cur_set: HashSet<u64> = cur.iter().copied().collect();
                 let mut added = 0usize;
                 for &candidate in fns {
                     if added >= slots {

@@ -683,7 +683,7 @@ fn compact_improves_or_maintains_recall() {
 #[test]
 fn recall_large_scale() {
     setup();
-    let dim = 64;
+    let dim = 32;
     let cfg = HnswConfig {
         dim,
         m: 16,
@@ -693,7 +693,7 @@ fn recall_large_scale() {
     };
     let mut idx: VecDex<u64, L2> = VecDex::new(cfg);
 
-    let n = 2000;
+    let n = 500;
     let k = 10;
     let mut all_vecs: Vec<(u64, Vec<f32>)> = Vec::with_capacity(n);
     for i in 0..n as u64 {

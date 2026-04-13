@@ -122,8 +122,7 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>>(
     adjacency: &MapxRaw,
     filter: Option<&dyn Fn(u64) -> bool>,
 ) -> Vec<(S, u64)> {
-    let mut candidates: BinaryHeap<Reverse<(OrdS<S>, u64)>> =
-        BinaryHeap::new();
+    let mut candidates: BinaryHeap<Reverse<(OrdS<S>, u64)>> = BinaryHeap::new();
     let mut result: BinaryHeap<(OrdS<S>, u64)> = BinaryHeap::new();
     let mut visited = std::collections::HashSet::new();
 
