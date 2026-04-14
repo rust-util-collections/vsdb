@@ -11,6 +11,57 @@
 //! and [`VecDex`] (approximate nearest-neighbor vector index via HNSW).
 //!
 //! This crate is the primary entry point for most users.
+//!
+//! # Why core collections don't have `len()`
+//!
+//! The underlying LSM-Tree engine (mmdb) does not support atomic
+//! "write data + update count" across different keys.  A process crash
+//! between the two leaves them inconsistent — downstream code that
+//! trusts the count for index arithmetic will panic.  For this reason
+//! [`Mapx`], [`MapxOrd`], and other core primitives intentionally omit
+//! `len()`.
+//!
+//! Higher-level structures ([`VecDex`], [`SlotDex`]) **do** maintain a
+//! count because they fully control their own insert/remove paths.
+//! These counts are accurate during normal operation but may drift after
+//! an unclean shutdown — see their respective docs.
+//!
+//! ## Application-layer counting
+//!
+//! If you need a count over a core collection, maintain it yourself:
+//!
+//! ```rust,ignore
+//! use vsdb::MapxOrd;
+//! use vsdb::{KeyEnDe, KeyEnDeOrdered, ValueEnDe};
+//!
+//! struct CountedMap<K: KeyEnDe + KeyEnDeOrdered, V: ValueEnDe> {
+//!     map: MapxOrd<K, V>,
+//!     count: usize,  // in-memory; rebuild on restart
+//! }
+//!
+//! impl<K: KeyEnDe + KeyEnDeOrdered + Ord, V: ValueEnDe> CountedMap<K, V> {
+//!     fn insert(&mut self, key: &K, value: &V) {
+//!         if !self.map.contains_key(key) {
+//!             self.count += 1;
+//!         }
+//!         self.map.insert(key, value);
+//!     }
+//!
+//!     fn remove(&mut self, key: &K) {
+//!         if self.map.contains_key(key) {
+//!             self.count -= 1;
+//!         }
+//!         self.map.remove(key);
+//!     }
+//!
+//!     fn len(&self) -> usize { self.count }
+//!
+//!     /// Rebuild from disk after an unclean shutdown.
+//!     fn rebuild_count(&mut self) {
+//!         self.count = self.map.iter().count();
+//!     }
+//! }
+//! ```
 
 #![deny(warnings)]
 #![recursion_limit = "512"]

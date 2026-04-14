@@ -186,11 +186,19 @@ where
     }
 
     /// Returns the number of indexed vectors.
+    ///
+    /// This is maintained as an application-layer counter (incremented on
+    /// insert, decremented on remove).  It is accurate during normal
+    /// operation but may drift after an unclean shutdown because the
+    /// counter and data updates are not in the same atomic write.
+    /// Call `iter().count()` for a guaranteed-accurate count when needed.
     pub fn len(&self) -> u64 {
         self.meta.get_value().node_count
     }
 
     /// Returns `true` if the index contains no vectors.
+    ///
+    /// See [`len`](Self::len) for accuracy caveats.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

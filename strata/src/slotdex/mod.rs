@@ -559,6 +559,12 @@ where
     }
 
     /// Returns the total number of entries in the `SlotDex`.
+    ///
+    /// This is maintained as an application-layer counter and is accurate
+    /// during normal operation.  After an unclean shutdown the counter
+    /// may drift because it is not updated atomically with the data.
+    /// Suitable for pagination estimates and display; do not use for
+    /// index arithmetic that would panic on an off-by-one.
     pub fn total(&self) -> EntryCnt {
         self.total_by_slot(None, None)
     }
