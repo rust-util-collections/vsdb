@@ -55,7 +55,7 @@ fn assert_queryable(
 
         let page_size = page_size as u64;
         let page_number = page_number as u64;
-        dbg!(page_number, page_size);
+        let _ = (page_number, page_size);
 
         let a = test_db.get_entries_by_page_slot(
             None,
@@ -88,8 +88,8 @@ fn assert_queryable(
         ////////////////////////////////////////
 
         let a = test_db.get_entries_by_page_slot(
-            Some(dbg!(smin)),
-            Some(dbg!(smax)),
+            Some(smin),
+            Some(smax),
             page_size as u16,
             page_number as u32,
             true,

@@ -701,8 +701,11 @@ where
     /// after `target` on this branch.
     ///
     /// `target` must be an ancestor of the branch's current head.
-    /// The discarded commits are not deleted (they may be reachable from
-    /// other branches).  Call [`gc`](Self::gc) to reclaim them.
+    /// Commits between `target` and the previous head that are exclusively
+    /// reachable from this branch are immediately deleted via ref-count
+    /// cascade.  Commits still referenced by other branches are preserved.
+    /// Call [`gc`](Self::gc) only to recover from a crash or force a full
+    /// B+ tree sweep.
     pub fn rollback_to(&mut self, branch: BranchId, target: CommitId) -> Result<()> {
         let state = self.get_branch(branch)?;
         let _ = self.get_commit_inner(target)?;
@@ -791,6 +794,12 @@ where
     /// is created).  Otherwise creates a merge commit on `target` with two
     /// parents.
     pub fn merge(&mut self, source: BranchId, target: BranchId) -> Result<CommitId> {
+        if source == target {
+            return Err(VsdbError::Other {
+                detail: "cannot merge a branch into itself".into(),
+            });
+        }
+
         // Reject if either branch has uncommitted changes.
         if self.has_uncommitted(source)? {
             return Err(VsdbError::UncommittedChanges { branch_id: source });

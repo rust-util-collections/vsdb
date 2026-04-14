@@ -184,7 +184,7 @@ where
     pub fn insert(&mut self, slot: S, k: K) -> Result<()> {
         let slot = self.to_storage_slot(slot);
 
-        self.ensure_tier_capacity(slot.clone());
+        self.ensure_tier_capacity();
 
         let mut ctner = self.data.get(&slot).unwrap_or_default();
         if ctner.insert(k) {
@@ -242,6 +242,7 @@ where
                     if top.len() < 2 {
                         top.store.clear();
                         *top.entry_count.get_mut() = 0;
+                        top.cache.get_mut().clear();
                         true
                     } else {
                         false
@@ -258,7 +259,10 @@ where
                 t.ensure_cache();
                 let slot_floor = slot.floor_align(&t.floor_base);
                 let c = t.cache.get_mut();
-                let cnt = c.get(&slot_floor).copied().unwrap();
+                let cnt = match c.get(&slot_floor).copied() {
+                    Some(n) => n,
+                    None => return,
+                };
                 if 1 == cnt {
                     c.remove(&slot_floor);
                     t.store.remove(&slot_floor);
@@ -565,7 +569,7 @@ where
     // --- Private Helper Methods ---
 
     // Ensure there is enough tier capacity to cover the new slot.
-    fn ensure_tier_capacity(&mut self, _target_slot: S) {
+    fn ensure_tier_capacity(&mut self) {
         let tiers_len = self.tiers.len();
         if let Some(top) = self.tiers.last_mut() {
             if (top.len() as u64) <= self.tier_capacity.as_u64() {

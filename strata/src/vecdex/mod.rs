@@ -37,7 +37,7 @@ use hnsw::{
     select_neighbors_heuristic, set_neighbors,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use vsdb_core::basic::mapx_raw::MapxRaw;
 
@@ -441,16 +441,13 @@ where
             return Ok(vec![]);
         }
 
-        use std::collections::HashMap;
-        let cache = parking_lot::Mutex::new(HashMap::<u64, Vec<S>>::new());
+        let cache = std::cell::RefCell::new(HashMap::<u64, Vec<S>>::new());
         let get_vec = |id: u64| -> Option<Vec<S>> {
-            let guard = cache.lock();
-            if let Some(v) = guard.get(&id) {
+            if let Some(v) = cache.borrow().get(&id) {
                 return Some(v.clone());
             }
-            drop(guard);
             let v = self.vectors.get(&id)?;
-            cache.lock().insert(id, v.clone());
+            cache.borrow_mut().insert(id, v.clone());
             Some(v)
         };
 

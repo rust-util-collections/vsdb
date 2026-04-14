@@ -10,6 +10,7 @@ use thiserror::Error;
 /// programmatically (e.g. retry on a different branch) while the
 /// `String` fields preserve the full error chain from the underlying
 /// `ruc` layer so that no diagnostic information is lost.
+#[non_exhaustive]
 #[derive(Error, Debug)]
 pub enum VsdbError {
     /// The specified branch does not exist.

@@ -51,7 +51,7 @@ fn dagmapraw_functions() {
     );
 
     let mut head = i2.prune().unwrap();
-    sleep_ms!(1000); // give some time to the async cleaner
+    sleep_ms!(1000);
 
     assert_eq!(head.get("k2").unwrap().as_slice(), "v2x".as_bytes());
     assert_eq!(head.get("k1").unwrap().as_slice(), "v1x".as_bytes());
@@ -72,7 +72,7 @@ fn dagmapraw_functions() {
     }
 
     let mut head = head.prune().unwrap();
-    sleep_ms!(1000); // give some time to the async cleaner
+    sleep_ms!(1000);
     assert!(head.parent.get_value().is_none());
     assert!(head.children.iter().next().is_none());
 

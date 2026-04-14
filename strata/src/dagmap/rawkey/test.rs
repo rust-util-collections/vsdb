@@ -55,7 +55,7 @@ fn dagmaprawkey_functions() {
     );
 
     let mut head = i2.prune().unwrap();
-    sleep_ms!(1000); // give some time to the async cleaner
+    sleep_ms!(1000);
 
     assert_eq!(head.get("k2").unwrap(), s!("v2x"));
     assert_eq!(head.get("k1").unwrap(), s!("v1x"));
@@ -76,7 +76,7 @@ fn dagmaprawkey_functions() {
     }
 
     let mut head = head.prune().unwrap();
-    sleep_ms!(1000); // give some time to the async cleaner
+    sleep_ms!(1000);
 
     for i in 10u8..=255 {
         assert_eq!(head.get(i.to_be_bytes()).unwrap(), i.to_be_bytes().to_vec());

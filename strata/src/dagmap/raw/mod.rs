@@ -115,10 +115,10 @@ impl DagMapRaw {
     /// Creates a new `DagMapRaw`.
     pub fn new(parent: &mut Orphan<Option<Self>>) -> Result<Self> {
         let r = Self {
-            // SAFETY: The shadow is stored in `r.parent` and not read
-            // until after `new()` returns. The write to `parent` at
-            // the insertion below is the sole mutation and completes
-            // before any read through the shadow.
+            // SAFETY: The shadow is serialized (read-only) during
+            // p.children.insert() below. No mutation occurs through
+            // the shadow; all writes go through `parent`, satisfying
+            // the SWMR contract.
             parent: unsafe { parent.shadow() },
             ..Default::default()
         };
@@ -232,10 +232,15 @@ impl DagMapRaw {
     /// a parent would return it via `get`.
     #[inline(always)]
     pub fn get_mut(&mut self, key: impl AsRef<[u8]>) -> Option<ValueMut<'_>> {
-        self.data.get_mut(key.as_ref()).map(|inner| ValueMut {
-            value: inner.clone(),
-            inner,
-            dirty: false,
+        self.data.get_mut(key.as_ref()).and_then(|inner| {
+            if inner.is_empty() {
+                return None;
+            }
+            Some(ValueMut {
+                value: inner.clone(),
+                inner,
+                dirty: false,
+            })
         })
     }
 
@@ -326,9 +331,10 @@ impl DagMapRaw {
 
         let mut exclude_targets = vec![];
         for (id, mut child) in self.children.iter_mut() {
-            // SAFETY: The shadow is stored as the child's parent pointer
-            // and is not read until after prune_mainline completes. All
-            // mutations to genesis[0] finish within this function.
+            // SAFETY: The shadow is serialized (read-only) immediately in
+            // the following insert call. No mutation occurs through the
+            // shadow; all writes go through genesis[0], satisfying the
+            // SWMR contract.
             *child.parent.get_mut() = Some(unsafe { genesis[0].shadow() });
             genesis[0].children.insert(&id, &child);
             exclude_targets.push(id);

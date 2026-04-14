@@ -158,10 +158,12 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>>(
             };
             let n_dist = D::distance(query, &n_vec);
 
-            let should_add = result.len() < ef
-                || result
+            let result_full = result.len() >= ef;
+            let worse_than_worst = result_full
+                && result
                     .peek()
-                    .is_some_and(|&(OrdS(f), _)| n_dist.total_cmp(&f) == Ordering::Less);
+                    .is_some_and(|&(OrdS(f), _)| n_dist.total_cmp(&f) != Ordering::Less);
+            let should_add = !worse_than_worst;
 
             if should_add {
                 candidates.push(Reverse((OrdS(n_dist), n_id)));
@@ -236,13 +238,13 @@ pub(crate) fn select_neighbors_heuristic<S: Scalar, D: DistanceMetric<S>>(
 
     // If heuristic didn't fill m slots, pad with closest remaining.
     if selected.len() < m {
-        let selected_ids: std::collections::HashSet<u64> =
+        let mut selected_ids: std::collections::HashSet<u64> =
             selected.iter().map(|&(_, id)| id).collect();
         for &(_, cand_id) in &sorted {
             if selected.len() >= m {
                 break;
             }
-            if !selected_ids.contains(&cand_id) {
+            if selected_ids.insert(cand_id) {
                 selected.push((S::zero(), cand_id));
             }
         }

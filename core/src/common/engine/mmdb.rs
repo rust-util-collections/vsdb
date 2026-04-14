@@ -116,10 +116,10 @@ impl MmDB {
                     LazyLock::new(|| AtomicU64::new(0));
                 static LK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-                let gc = GLOBAL_COUNTER.load(Ordering::Relaxed);
+                let gc = GLOBAL_COUNTER.load(Ordering::Acquire);
                 if gc == 0 {
                     let _x = LK.lock();
-                    if GLOBAL_COUNTER.load(Ordering::Relaxed) == 0 {
+                    if GLOBAL_COUNTER.load(Ordering::Acquire) == 0 {
                         let ret = crate::parse_prefix!(
                             self.meta_db()
                                 .get(&self.prefix_allocator.key)

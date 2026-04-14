@@ -162,10 +162,15 @@ where
     /// Retrieves a mutable reference to a value in the DAG map.
     #[inline(always)]
     pub fn get_mut(&mut self, key: impl AsRef<[u8]>) -> Option<ValueMut<'_, V>> {
-        self.inner.get_mut(key.as_ref()).map(|inner| ValueMut {
-            value: <V as ValueEnDe>::decode(&inner).unwrap(),
-            inner,
-            dirty: false,
+        self.inner.get_mut(key.as_ref()).and_then(|inner| {
+            if inner.is_empty() {
+                return None;
+            }
+            Some(ValueMut {
+                value: <V as ValueEnDe>::decode(&inner).unwrap(),
+                inner,
+                dirty: false,
+            })
         })
     }
 

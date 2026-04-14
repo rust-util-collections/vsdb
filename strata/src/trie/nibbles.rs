@@ -7,10 +7,6 @@ pub struct Nibbles {
 }
 
 impl Nibbles {
-    // pub fn new() -> Self {
-    //     Self { data: Vec::new() }
-    // }
-
     pub fn from_raw(key: &[u8], is_leaf: bool) -> Self {
         let mut data = Vec::with_capacity(key.len() * 2);
         for &b in key {
@@ -42,12 +38,6 @@ impl Nibbles {
         self.data[index]
     }
 
-    // pub fn slice(&self, start: usize, end: usize) -> Self {
-    //     Self {
-    //         data: self.data[start..end].to_vec(),
-    //     }
-    // }
-
     pub fn common_prefix(&self, other: &Nibbles) -> usize {
         let len = std::cmp::min(self.len(), other.len());
         let mut i = 0;
@@ -68,21 +58,6 @@ impl Nibbles {
         let (a, b) = self.data.split_at(idx);
         (Self { data: a.to_vec() }, Self { data: b.to_vec() })
     }
-
-    // pub fn join(&self, other: &Nibbles) -> Self {
-    //     let mut data = self.data.clone();
-    //     data.extend_from_slice(&other.data);
-    //     Self { data }
-    // }
-
-    // pub fn push(&mut self, nibble: u8) {
-    //     debug_assert!(nibble < 16);
-    //     self.data.push(nibble);
-    // }
-
-    // pub fn pop(&mut self) -> Option<u8> {
-    //     self.data.pop()
-    // }
 
     pub fn as_slice(&self) -> &[u8] {
         &self.data

@@ -15,11 +15,11 @@
 //!   nodes of 16..32 keys and a tree depth of ~4 for 1 million entries.
 //! * **Path copying** — inserting or removing a single key allocates at
 //!   most `O(depth)` new nodes (~4), sharing all others.
-//! * **Garbage collection** — unreachable nodes are automatically
-//!   registered for deferred deletion via the storage engine's
-//!   compaction filter when their reference count reaches zero.
-//!   [`PersistentBTree::gc`] can still be called for crash recovery
-//!   or to force a full sweep.
+//! * **Garbage collection** — nodes released via [`PersistentBTree::release_node`]
+//!   are automatically registered for deferred deletion when their
+//!   reference count reaches zero.  Call [`PersistentBTree::gc`] for
+//!   crash recovery or to sweep nodes that became unreachable through
+//!   internal mutation paths.
 //!
 
 #[cfg(test)]
@@ -27,9 +27,11 @@ mod test;
 
 use crate::common::error::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
-use std::fmt;
-use std::ops::Bound;
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+    ops::Bound,
+};
 use vsdb_core::basic::mapx_raw::MapxRaw;
 
 // =========================================================================
