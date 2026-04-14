@@ -339,6 +339,15 @@ where
                     &mut self.adjacency,
                     &get_vec,
                 );
+                // Enforce bidirectionality: if prune evicted node_id
+                // from neighbor's list, remove neighbor from node_id's
+                // list symmetrically (INV-VD2).
+                let n_after = get_neighbors(&self.adjacency, l, neighbor);
+                if !n_after.contains(&node_id) {
+                    let mut my_list = get_neighbors(&self.adjacency, l, node_id);
+                    my_list.retain(|&x| x != neighbor);
+                    set_neighbors(&mut self.adjacency, l, node_id, &my_list);
+                }
             }
 
             cur_ep = candidates.iter().map(|&(_, id)| id).collect();
@@ -570,7 +579,20 @@ where
                     }
                 }
                 if added > 0 {
+                    let before = get_neighbors(&self.adjacency, l, n);
                     prune_neighbors::<S, D>(n, l, m_max, &mut self.adjacency, &get_vec);
+                    // Enforce bidirectionality: if prune evicted a
+                    // neighbor from n's list, remove n from that
+                    // neighbor's list symmetrically (INV-VD2).
+                    let after: HashSet<u64> =
+                        get_neighbors(&self.adjacency, l, n).into_iter().collect();
+                    for evicted in before {
+                        if !after.contains(&evicted) {
+                            let mut e_list = get_neighbors(&self.adjacency, l, evicted);
+                            e_list.retain(|&x| x != n);
+                            set_neighbors(&mut self.adjacency, l, evicted, &e_list);
+                        }
+                    }
                 }
             }
         }

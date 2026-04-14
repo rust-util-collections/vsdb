@@ -725,8 +725,10 @@ impl PersistentBTree {
 
     fn borrow_left(&mut self, pk: &mut [Vec<u8>], pc: &mut [NodeId], ci: usize) {
         let si = ci - 1;
-        let left = self.node(pc[si]);
-        let child = self.node(pc[ci]);
+        let old_si = pc[si];
+        let old_ci = pc[ci];
+        let left = self.node(old_si);
+        let child = self.node(old_ci);
         match (left, child) {
             (
                 Node::Leaf {
@@ -774,12 +776,16 @@ impl PersistentBTree {
             }
             _ => unreachable!(),
         }
+        self.discard_node(old_si);
+        self.discard_node(old_ci);
     }
 
     fn borrow_right(&mut self, pk: &mut [Vec<u8>], pc: &mut [NodeId], ci: usize) {
         let ri = ci + 1;
-        let child = self.node(pc[ci]);
-        let right = self.node(pc[ri]);
+        let old_ci = pc[ci];
+        let old_ri = pc[ri];
+        let child = self.node(old_ci);
+        let right = self.node(old_ri);
         match (child, right) {
             (
                 Node::Leaf {
@@ -827,6 +833,8 @@ impl PersistentBTree {
             }
             _ => unreachable!(),
         }
+        self.discard_node(old_ci);
+        self.discard_node(old_ri);
     }
 
     fn merge_children(
@@ -835,7 +843,8 @@ impl PersistentBTree {
         pc: &mut Vec<NodeId>,
         idx: usize,
     ) {
-        let left = self.node(pc[idx]);
+        let old_idx = pc[idx];
+        let left = self.node(old_idx);
         let right = self.node(pc[idx + 1]);
         let sep = pk.remove(idx);
 
@@ -879,6 +888,7 @@ impl PersistentBTree {
         };
         pc[idx] = self.alloc(&merged);
         let discarded = pc.remove(idx + 1);
+        self.discard_node(old_idx);
         self.discard_node(discarded);
     }
 
