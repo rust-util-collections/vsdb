@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize, de};
 use std::{
     collections::{BTreeMap, BTreeSet, btree_set::Iter as SmallIter},
     fmt,
+    marker::PhantomData,
     ops::{Bound, Not},
 };
 
@@ -100,29 +101,90 @@ const INLINE_CAPACITY_THRESHOLD: usize = 8;
 ///
 /// The slot type `S` must implement [`SlotType`]; built-in support covers
 /// `u32`, `u64`, and `u128`.
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(bound = "S: SlotType + Serialize + de::DeserializeOwned")]
+#[derive(Debug)]
 pub struct SlotDex<S, K>
 where
     S: SlotType,
     K: Clone + Ord + KeyEnDeOrdered,
 {
     data: MapxOrd<S, DataCtner<K>>,
-
-    // How many entries are in this DB
     total: Orphan<EntryCnt>,
-
     tiers: Vec<Tier<S>>,
-
     tier_capacity: S,
-
-    // Switch the inner implementation of the slot direction:
-    // - positive => reverse
-    // - reverse => positive
-    //
-    // Positive queries usually get better performance. If most use cases
-    // are in reverse mode, swapping the low-level logic can improve performance.
     swap_order: bool,
+}
+
+impl<S, K> Serialize for SlotDex<S, K>
+where
+    S: SlotType,
+    K: Clone + Ord + KeyEnDeOrdered,
+{
+    fn serialize<Ser>(&self, serializer: Ser) -> std::result::Result<Ser::Ok, Ser::Error>
+    where
+        Ser: serde::Serializer,
+    {
+        use serde::ser::SerializeTuple;
+        let mut t = serializer.serialize_tuple(5)?;
+        t.serialize_element(&self.data)?;
+        t.serialize_element(&self.total)?;
+        t.serialize_element(&self.tiers)?;
+        t.serialize_element(&self.tier_capacity)?;
+        t.serialize_element(&self.swap_order)?;
+        t.end()
+    }
+}
+
+impl<'de, S, K> Deserialize<'de> for SlotDex<S, K>
+where
+    S: SlotType,
+    K: Clone + Ord + KeyEnDeOrdered,
+{
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct Vis<S, K>(PhantomData<(S, K)>);
+        impl<'de, S, K> serde::de::Visitor<'de> for Vis<S, K>
+        where
+            S: SlotType,
+            K: Clone + Ord + KeyEnDeOrdered,
+        {
+            type Value = SlotDex<S, K>;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("SlotDex")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> std::result::Result<SlotDex<S, K>, A::Error> {
+                let data = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
+                let total = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
+                let tiers = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(2, &self))?;
+                let tier_capacity = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(3, &self))?;
+                let swap_order = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(4, &self))?;
+                let mut me = SlotDex {
+                    data,
+                    total,
+                    tiers,
+                    tier_capacity,
+                    swap_order,
+                };
+                me.ensure_count();
+                Ok(me)
+            }
+        }
+        deserializer.deserialize_tuple(5, Vis(PhantomData))
+    }
 }
 
 impl<S, K> SlotDex<S, K>
@@ -176,13 +238,12 @@ where
     /// (unclean shutdown), the total count is automatically rebuilt from
     /// the live data.
     pub fn from_meta(instance_id: u64) -> Result<Self> {
-        let mut me: Self = crate::common::load_instance_meta(instance_id)?;
-        me.ensure_count();
-        Ok(me)
+        crate::common::load_instance_meta(instance_id)
     }
 
     /// If the dirty bit is set, rebuild the count from live data.
     /// Then set the dirty bit for the current process lifetime.
+    /// Called automatically during deserialization.
     fn ensure_count(&mut self) {
         let raw = self.total.get_value();
         if dc::is_dirty(raw) {

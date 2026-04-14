@@ -95,8 +95,6 @@ struct NodeInfo {
 /// - `D`: distance metric ([`L2`](distance::L2), [`Cosine`](distance::Cosine),
 ///   [`InnerProduct`](distance::InnerProduct)).
 /// - `S`: scalar type for vector components (`f32` or `f64`, default `f32`).
-#[derive(Serialize, Deserialize)]
-#[serde(bound = "K: Serialize + serde::de::DeserializeOwned, S: Scalar")]
 pub struct VecDex<K, D, S: Scalar = f32>
 where
     K: KeyEnDe + ValueEnDe + Clone + Eq,
@@ -108,8 +106,89 @@ where
     node_to_key: MapxOrd<u64, K>,
     node_info: MapxOrd<u64, NodeInfo>,
     meta: Orphan<HnswMeta>,
-    #[serde(skip)]
     _metric: PhantomData<D>,
+}
+
+impl<K, D, S> Serialize for VecDex<K, D, S>
+where
+    K: KeyEnDe + ValueEnDe + Clone + Eq + Serialize,
+    D: DistanceMetric<S>,
+    S: Scalar,
+{
+    fn serialize<Ser>(&self, serializer: Ser) -> std::result::Result<Ser::Ok, Ser::Error>
+    where
+        Ser: serde::Serializer,
+    {
+        use serde::ser::SerializeTuple;
+        let mut t = serializer.serialize_tuple(6)?;
+        t.serialize_element(&self.vectors)?;
+        t.serialize_element(&self.adjacency)?;
+        t.serialize_element(&self.key_to_node)?;
+        t.serialize_element(&self.node_to_key)?;
+        t.serialize_element(&self.node_info)?;
+        t.serialize_element(&self.meta)?;
+        t.end()
+    }
+}
+
+impl<'de, K, D, S> Deserialize<'de> for VecDex<K, D, S>
+where
+    K: KeyEnDe + ValueEnDe + Clone + Eq + Deserialize<'de>,
+    D: DistanceMetric<S>,
+    S: Scalar,
+{
+    fn deserialize<De>(deserializer: De) -> std::result::Result<Self, De::Error>
+    where
+        De: serde::Deserializer<'de>,
+    {
+        struct Vis<K, D, S>(PhantomData<(K, D, S)>);
+        impl<'de, K, D, S> serde::de::Visitor<'de> for Vis<K, D, S>
+        where
+            K: KeyEnDe + ValueEnDe + Clone + Eq + Deserialize<'de>,
+            D: DistanceMetric<S>,
+            S: Scalar,
+        {
+            type Value = VecDex<K, D, S>;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("VecDex")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> std::result::Result<VecDex<K, D, S>, A::Error> {
+                let vectors = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
+                let adjacency = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
+                let key_to_node = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(2, &self))?;
+                let node_to_key = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(3, &self))?;
+                let node_info = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(4, &self))?;
+                let meta = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(5, &self))?;
+                let mut me = VecDex {
+                    vectors,
+                    adjacency,
+                    key_to_node,
+                    node_to_key,
+                    node_info,
+                    meta,
+                    _metric: PhantomData,
+                };
+                me.ensure_count();
+                Ok(me)
+            }
+        }
+        deserializer.deserialize_tuple(6, Vis(PhantomData))
+    }
 }
 
 impl<K, D, S> std::fmt::Debug for VecDex<K, D, S>
@@ -135,6 +214,30 @@ pub type VecDexCosine<K> = VecDex<K, distance::Cosine>;
 // f64 aliases
 pub type VecDexL2F64<K> = VecDex<K, distance::L2, f64>;
 pub type VecDexCosineF64<K> = VecDex<K, distance::Cosine, f64>;
+
+// Separate impl block without Serialize/DeserializeOwned bounds so that
+// the hand-written Deserialize visitor (which only has `K: Deserialize`)
+// can call ensure_count().
+impl<K, D, S> VecDex<K, D, S>
+where
+    K: KeyEnDe + ValueEnDe + Clone + Eq,
+    D: DistanceMetric<S>,
+    S: Scalar,
+{
+    /// If the dirty bit is set, rebuild the count from live data.
+    /// Then set the dirty bit for the current process lifetime.
+    /// Called automatically during deserialization.
+    fn ensure_count(&mut self) {
+        let raw = self.meta.get_value().node_count;
+        if dc::is_dirty(raw) {
+            let actual = self.node_to_key.iter().count() as u64;
+            self.meta.get_mut().node_count = dc::set_dirty(actual);
+        } else {
+            // Clean shutdown — count is trustworthy. Set dirty for this session.
+            self.meta.get_mut().node_count = dc::set_dirty(raw);
+        }
+    }
+}
 
 impl<K, D, S> VecDex<K, D, S>
 where
@@ -195,22 +298,7 @@ where
     /// (unclean shutdown), the node count is automatically rebuilt from
     /// the live data.
     pub fn from_meta(instance_id: u64) -> Result<Self> {
-        let mut me: Self = crate::common::load_instance_meta(instance_id)?;
-        me.ensure_count();
-        Ok(me)
-    }
-
-    /// If the dirty bit is set, rebuild the count from live data.
-    /// Then set the dirty bit for the current process lifetime.
-    fn ensure_count(&mut self) {
-        let raw = self.meta.get_value().node_count;
-        if dc::is_dirty(raw) {
-            let actual = self.node_to_key.iter().count() as u64;
-            self.meta.get_mut().node_count = dc::set_dirty(actual);
-        } else {
-            // Clean shutdown — count is trustworthy. Set dirty for this session.
-            self.meta.get_mut().node_count = dc::set_dirty(raw);
-        }
+        crate::common::load_instance_meta(instance_id)
     }
 
     /// Returns the number of indexed vectors.
