@@ -8,7 +8,7 @@
 ## Architecture
 - DAG-based collection: entries can have multiple parents
 - Backed by MapxOrd for storage
-- Unique ID allocation via `parking_lot::Mutex<Orphan<u128>>`
+- Unique ID allocation via `parking_lot::Mutex<DagIdAllocator>` with crash-safe ceiling file
 - Used for graph-like data structures with persistent storage
 
 ## Critical Invariants
@@ -28,8 +28,8 @@ Deleting a node that is referenced as a parent by other nodes would create dangl
 ## Common Bug Patterns
 
 ### ID Counter Rollback on Crash
-Counter stored in Orphan<u128>. If crash happens after ID assignment but before the entry is persisted, the next restart may reuse the ID.
-**Check**: Verify counter persistence is atomic with entry creation.
+Counter backed by a crash-safe ceiling file (batch-allocated, fsync'd via tmp→rename). On crash, the counter resumes from the persisted ceiling — IDs between the last returned value and the ceiling are skipped (safe gap of at most `DAG_ID_BATCH`). No ID is ever reused.
+**Check**: Verify ceiling is persisted before any ID in the new batch is returned. Verify atomic write (tmp → fsync → rename).
 
 ### Mutex Contention on ID Allocation
 `parking_lot::Mutex` on the counter becomes a bottleneck under concurrent writes.

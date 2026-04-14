@@ -83,7 +83,7 @@ Check changed files against project style rules:
    - `CLAUDE.md` architecture table (subsystem paths, type names, serialization crate)
    - `CLAUDE.md` conventions (unsafe count, dependency names)
    - `.claude/docs/review-core.md` subsystem path mappings (Phase 1)
-   - `.claude/commands/vs-review.md` full-audit subsystem partitioning table
+   - `.claude/commands/x-review.md` full-audit subsystem partitioning table
    - `.claude/docs/patterns/` guides — referenced file lists and invariants
 
 ### Task 5: Unsafe Code Audit
@@ -94,6 +94,41 @@ If ANY `unsafe` block is added or modified:
 3. For `from_bytes()`: verify input comes from trusted source
 4. For pointer casts: verify no aliasing violation
 5. Verify no undefined behavior
+
+### Task 6: Audit Registry (.claude/audit.md)
+
+After completing the analysis:
+
+1. Read `.claude/audit.md` from the project root (create if absent).
+2. **Prune**: For each entry under `## Open`, verify against the current codebase. Remove entries that are 100% fixed.
+3. **Merge**: Add new findings from this review under `## Open`, deduplicating against existing entries. Sort by severity (CRITICAL → HIGH → MEDIUM → LOW).
+4. **Preserve**: Leave all `## Won't Fix` entries untouched.
+5. Write the updated `.claude/audit.md`.
+
+The file format:
+
+```markdown
+# Audit Findings
+
+> Auto-managed by /x-review and /x-fix.
+
+## Open
+
+### [SEVERITY] subsystem: one-line summary
+- **Where**: file:line_range
+- **What**: description
+- **Why**: invariant/pattern violated
+- **Suggested fix**: how to fix
+
+---
+
+## Won't Fix
+
+### [SEVERITY] subsystem: one-line summary
+- **Where**: file:line_range
+- **What**: description
+- **Reason**: why this cannot or should not be fixed
+```
 
 ## Output Format
 

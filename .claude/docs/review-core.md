@@ -114,7 +114,7 @@ These are enforced project conventions — violations are findings (severity LOW
 - **Doc-code alignment**: Public API changes must have matching doc comment / README / CLAUDE.md updates. Stale docs are a finding. When a change adds, removes, or renames a public type, module, or subsystem path, also verify:
   - `CLAUDE.md` architecture table (paths, type names, dependency info)
   - `.claude/docs/review-core.md` subsystem path mappings
-  - `.claude/commands/vs-review.md` full-audit subsystem partitioning table
+  - `.claude/commands/x-review.md` full-audit subsystem partitioning table
   - `.claude/docs/patterns/` guides — referenced file lists and invariants
 
 ## Phase 5: Reporting

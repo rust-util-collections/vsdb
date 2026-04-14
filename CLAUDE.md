@@ -47,11 +47,12 @@ make bench        # criterion benches (core, basic, versioned, slotdex, trie_ben
 | Vector Index | `strata/src/vecdex/` | VecDex, HNSW ANN search, distance metrics |
 | Encoding | `strata/src/common/ende.rs` | postcard-based KeyEnDe/ValueEnDe |
 
-## Code Review Commands
+## Commands
 
-- `/vs-review` — deep regression analysis (supports: N commits, `all`, hash, range)
-- `/vs-debug` — crash/corruption root cause investigation
-- `/vs-verify` — validate whether a reported finding is true bug or false positive
+- `/x-review` — deep regression analysis (supports: N commits, `all`, hash, range)
+- `/x-fix` — resolve all open findings in `.claude/audit.md`
+- `/x-commit` — self-reviewing commit (review, fix, format, commit)
+- `/x-auto` — full pipeline: review → fix → commit
 
 Supporting documentation in `.claude/docs/`:
 - `technical-patterns.md` — cataloged bug patterns for vsdb + mmdb layers

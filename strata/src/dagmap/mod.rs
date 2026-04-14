@@ -13,47 +13,81 @@ pub mod rawkey;
 /// A type alias for a DAG map ID.
 pub type DagMapId = [u8];
 
+/// Number of IDs per batch.  A filesystem `fsync` is performed once per
+/// batch, so this controls the trade-off between crash-safety overhead
+/// and the maximum ID gap after a crash (at most `DAG_ID_BATCH` IDs
+/// are "wasted" per unclean shutdown).
+const DAG_ID_BATCH: u128 = 128;
+
 /// Generates a new, unique ID for a DAG map.
 ///
-/// Maintains a persistent monotonic counter (`Orphan<u128>`) to ensure
-/// that each generated ID is globally unique.
+/// Maintains a persistent monotonic counter backed by a crash-safe
+/// ceiling file.  IDs are handed out from an in-memory counter;
+/// a batch ceiling is advanced and `fsync`'d to disk *before* any ID
+/// in the new batch is returned.
 ///
 /// # Crash semantics
 ///
-/// The counter persists via `Orphan<u128>` in MMDB. If the process
-/// crashes after the counter increment is flushed but before the child
-/// entry is written, the counter advances permanently and the skipped
-/// ID is never used (safe gap). If the WAL flush for the counter is
-/// itself lost (pre-WAL crash), the counter reverts while a different
-/// shard may already contain the child entry — this is a known
-/// limitation accepted by the current design.
+/// The ceiling file always stores a value **>= any ID ever returned**.
+/// On recovery the counter resumes from the persisted ceiling.  IDs
+/// between the last returned value and the ceiling are skipped (safe
+/// gap of at most [`DAG_ID_BATCH`] entries).  No ID is ever reused,
+/// even after power failure.
 pub fn gen_dag_map_id_num() -> u128 {
-    use crate::{Orphan, ValueEnDe};
     use parking_lot::Mutex;
-    use ruc::*;
-    use std::{fs, io::ErrorKind, sync::LazyLock};
+    use std::{fs, sync::LazyLock};
 
-    static ID_NUM: LazyLock<Mutex<Orphan<u128>>> = LazyLock::new(|| {
-        let mut meta_path = vsdb_core::vsdb_get_system_dir().to_owned();
-        meta_path.push("id_num");
+    struct DagIdAllocator {
+        next: u128,
+        ceiling: u128,
+        path: std::path::PathBuf,
+    }
 
-        match fs::read(&meta_path) {
-            Ok(m) => Mutex::new(ValueEnDe::decode(&m).unwrap()),
-            Err(e) => match e.kind() {
-                ErrorKind::NotFound => {
-                    let i = Orphan::new(0);
-                    fs::write(&meta_path, i.encode()).unwrap();
-                    Mutex::new(i)
+    impl DagIdAllocator {
+        fn init() -> Self {
+            let base = vsdb_core::common::vsdb_get_system_dir().to_owned();
+            let path = base.join("dag_id_ceiling");
+
+            let ceiling = match fs::read(&path) {
+                Ok(bytes) if bytes.len() == 16 => {
+                    u128::from_le_bytes(bytes.try_into().unwrap())
                 }
-                _ => {
-                    pnk!(Err(eg!("Error!")))
-                }
-            },
+                _ => 0,
+            };
+
+            DagIdAllocator {
+                next: ceiling,
+                ceiling,
+                path,
+            }
         }
-    });
 
-    let mut hdr = ID_NUM.lock();
-    let mut hdr = hdr.get_mut();
-    *hdr += 1;
-    *hdr
+        fn alloc(&mut self) -> u128 {
+            if self.next >= self.ceiling {
+                let new_ceiling = self.next + DAG_ID_BATCH;
+                self.persist_ceiling(new_ceiling);
+                self.ceiling = new_ceiling;
+            }
+            self.next += 1;
+            self.next
+        }
+
+        /// Atomic write: tmp → fsync → rename.  Guarantees the ceiling
+        /// is durable before any ID from the new batch is returned.
+        fn persist_ceiling(&self, ceiling: u128) {
+            use std::io::Write;
+            let tmp = self.path.with_extension("tmp");
+            let mut f =
+                fs::File::create(&tmp).expect("dag_id_ceiling: create tmp failed");
+            f.write_all(&ceiling.to_le_bytes())
+                .expect("dag_id_ceiling: write failed");
+            f.sync_all().expect("dag_id_ceiling: fsync failed");
+            fs::rename(&tmp, &self.path).expect("dag_id_ceiling: rename failed");
+        }
+    }
+
+    static ALLOC: LazyLock<Mutex<DagIdAllocator>> =
+        LazyLock::new(|| Mutex::new(DagIdAllocator::init()));
+
+    ALLOC.lock().alloc()
 }
