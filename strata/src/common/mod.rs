@@ -14,6 +14,8 @@ pub mod macros;
 
 pub use vsdb_core::common::*;
 
+pub mod dirty_count;
+
 use serde::{Serialize, de::DeserializeOwned};
 use std::fs;
 

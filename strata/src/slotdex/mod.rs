@@ -7,6 +7,7 @@
 use crate::{
     KeyEnDeOrdered, MapxOrd, ValueEnDe,
     basic::{mapx_ord::MapxOrdIter as LargeIter, orphan::Orphan},
+    common::dirty_count as dc,
     common::error::Result,
 };
 use parking_lot::Mutex;
@@ -90,11 +91,6 @@ type PageIndex = u32;
 
 const INLINE_CAPACITY_THRESHOLD: usize = 8;
 
-/// Bit 63 of `total` doubles as a dirty flag.  Set when the process
-/// starts operating, cleared on clean shutdown via [`SlotDex::save_meta`].
-/// If set on recovery, `from_meta` rebuilds the count from live data.
-const COUNT_DIRTY_BIT: u64 = 1 << 63;
-
 /// A skip-list-like data structure for fast, timestamp-based paged queries.
 ///
 /// `SlotDex` organizes data into "slots" (e.g., timestamps or sequence numbers),
@@ -167,7 +163,7 @@ where
     pub fn save_meta(&mut self) -> Result<u64> {
         // Clear dirty bit — signals clean shutdown.
         let raw = self.total.get_value();
-        self.total.set_value(&(raw & !COUNT_DIRTY_BIT));
+        self.total.set_value(&dc::clear_dirty(raw));
 
         let id = self.instance_id();
         crate::common::save_instance_meta(id, self)?;
@@ -189,11 +185,11 @@ where
     /// Then set the dirty bit for the current process lifetime.
     fn ensure_count(&mut self) {
         let raw = self.total.get_value();
-        if raw & COUNT_DIRTY_BIT != 0 {
+        if dc::is_dirty(raw) {
             let actual: u64 = self.data.iter().map(|(_, d)| d.len() as u64).sum();
-            self.total.set_value(&(actual | COUNT_DIRTY_BIT));
+            self.total.set_value(&dc::set_dirty(actual));
         } else {
-            self.total.set_value(&(raw | COUNT_DIRTY_BIT));
+            self.total.set_value(&dc::set_dirty(raw));
         }
     }
 
@@ -227,8 +223,7 @@ where
                 t.store.insert(&slot_floor, &v);
             });
             let t = self.total.get_value();
-            self.total
-                .set_value(&(((t & !COUNT_DIRTY_BIT) + 1) | (t & COUNT_DIRTY_BIT)));
+            self.total.set_value(&dc::inc(t));
         }
 
         Ok(())
@@ -298,16 +293,13 @@ where
                 }
             });
             let t = self.total.get_value();
-            self.total.set_value(
-                &((t & !COUNT_DIRTY_BIT).saturating_sub(1) | (t & COUNT_DIRTY_BIT)),
-            );
+            self.total.set_value(&dc::dec(t));
         }
     }
 
     /// Clears the `SlotDex`, removing all entries and tiers.
     pub fn clear(&mut self) {
-        self.total
-            .set_value(&(self.total.get_value() & COUNT_DIRTY_BIT));
+        self.total.set_value(&dc::zero(self.total.get_value()));
         self.data.clear();
 
         self.tiers.iter_mut().for_each(|t| {
@@ -583,7 +575,7 @@ where
         let slot_end = slot_end.unwrap_or(S::MAX);
 
         if S::MIN == slot_start && S::MAX == slot_end {
-            self.total.get_value() & !COUNT_DIRTY_BIT
+            dc::count(self.total.get_value())
         } else {
             self.entry_cnt_within_two_slots(slot_start, slot_end)
         }

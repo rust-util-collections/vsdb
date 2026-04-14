@@ -25,15 +25,10 @@
 pub mod distance;
 mod hnsw;
 
-/// Bit 63 of `node_count` doubles as a dirty flag.  Set when the
-/// process starts operating (in-flight), cleared on clean shutdown
-/// via [`VecDex::save_meta`].  If set on recovery, `from_meta`
-/// rebuilds the count from live data.
-const COUNT_DIRTY_BIT: u64 = 1 << 63;
-
 use crate::{
     Mapx, MapxOrd,
     basic::orphan::Orphan,
+    common::dirty_count as dc,
     common::ende::{KeyEnDe, ValueEnDe},
     common::error::{Result, VsdbError},
 };
@@ -186,7 +181,7 @@ where
     pub fn save_meta(&mut self) -> Result<u64> {
         // Clear the dirty bit — signals clean shutdown.
         let mut m = self.meta.get_mut();
-        m.node_count &= !COUNT_DIRTY_BIT;
+        m.node_count = dc::clear_dirty(m.node_count);
         drop(m);
 
         let id = self.instance_id();
@@ -209,12 +204,12 @@ where
     /// Then set the dirty bit for the current process lifetime.
     fn ensure_count(&mut self) {
         let raw = self.meta.get_value().node_count;
-        if raw & COUNT_DIRTY_BIT != 0 {
+        if dc::is_dirty(raw) {
             let actual = self.node_to_key.iter().count() as u64;
-            self.meta.get_mut().node_count = actual | COUNT_DIRTY_BIT;
+            self.meta.get_mut().node_count = dc::set_dirty(actual);
         } else {
             // Clean shutdown — count is trustworthy. Set dirty for this session.
-            self.meta.get_mut().node_count = raw | COUNT_DIRTY_BIT;
+            self.meta.get_mut().node_count = dc::set_dirty(raw);
         }
     }
 
@@ -223,7 +218,7 @@ where
     /// Automatically rebuilt from disk on recovery after an unclean
     /// shutdown (see [`from_meta`](Self::from_meta)).
     pub fn len(&self) -> u64 {
-        self.meta.get_value().node_count & !COUNT_DIRTY_BIT
+        dc::count(self.meta.get_value().node_count)
     }
 
     /// Returns `true` if the index contains no vectors.
@@ -269,7 +264,7 @@ where
         let mut m = self.meta.get_mut();
         m.entry_point = None;
         m.max_layer = 0;
-        m.node_count &= COUNT_DIRTY_BIT; // count=0, preserve dirty
+        m.node_count = dc::zero(m.node_count);
         m.next_node_id = 0;
     }
 
@@ -312,8 +307,7 @@ where
         {
             let mut m = self.meta.get_mut();
             m.next_node_id = node_id + 1;
-            let count = (m.node_count & !COUNT_DIRTY_BIT) + 1;
-            m.node_count = count | (m.node_count & COUNT_DIRTY_BIT);
+            m.node_count = dc::inc(m.node_count);
         }
 
         if meta.entry_point.is_none() {
@@ -639,8 +633,7 @@ where
 
         {
             let mut m = self.meta.get_mut();
-            let count = (m.node_count & !COUNT_DIRTY_BIT).saturating_sub(1);
-            m.node_count = count | (m.node_count & COUNT_DIRTY_BIT);
+            m.node_count = dc::dec(m.node_count);
 
             if m.entry_point == Some(node_id) {
                 let mut best: Option<(u64, u8)> = None;
