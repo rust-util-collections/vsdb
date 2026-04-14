@@ -208,50 +208,46 @@ fn remove_rec(
     depth: usize,
     key_hash: &[u8; 32],
 ) -> Result<SmtHandle> {
+    // Fast-path: inspect the node without consuming the handle.
+    // If the key is not in this subtree, return the original handle
+    // unchanged — preserving any Cached hash.
+    match handle.node() {
+        SmtNode::Empty => return Ok(handle),
+        SmtNode::Leaf {
+            key_hash: leaf_kh, ..
+        } => {
+            if leaf_kh != key_hash {
+                return Ok(handle);
+            }
+            // Key matches — fall through to consume the handle.
+        }
+        SmtNode::Internal { path, .. } => {
+            let remaining = full_path.slice(depth, full_path.len());
+            if !remaining.starts_with(path) {
+                return Ok(handle);
+            }
+            let next_depth = depth + path.len();
+            if next_depth >= full_path.len() {
+                return Ok(handle);
+            }
+            // Path matches — fall through to consume the handle.
+        }
+    }
+
+    // Past here the node is consumed because we know removal will
+    // modify this subtree.
     let node = handle.into_node();
 
     match node {
-        SmtNode::Empty => Ok(SmtHandle::default()),
+        SmtNode::Empty => unreachable!("handled above"),
 
-        SmtNode::Leaf {
-            key_hash: leaf_kh,
-            path: leaf_path,
-            value: leaf_val,
-        } => {
-            if &leaf_kh == key_hash {
-                Ok(SmtHandle::default())
-            } else {
-                // Not our key — keep it.
-                Ok(SmtHandle::InMemory(Box::new(SmtNode::Leaf {
-                    path: leaf_path,
-                    key_hash: leaf_kh,
-                    value: leaf_val,
-                })))
-            }
+        SmtNode::Leaf { .. } => {
+            // Key matched — delete by returning empty.
+            Ok(SmtHandle::default())
         }
 
         SmtNode::Internal { path, left, right } => {
-            let remaining = full_path.slice(depth, full_path.len());
-
-            if !remaining.starts_with(&path) {
-                // Path doesn't match — key not in tree.
-                return Ok(SmtHandle::InMemory(Box::new(SmtNode::Internal {
-                    path,
-                    left,
-                    right,
-                })));
-            }
-
             let next_depth = depth + path.len();
-            if next_depth >= full_path.len() {
-                // Shouldn't happen for valid 256-bit keys.
-                return Ok(SmtHandle::InMemory(Box::new(SmtNode::Internal {
-                    path,
-                    left,
-                    right,
-                })));
-            }
-
             let bit = full_path.bit_at(next_depth);
             let child_depth = next_depth + 1;
 
@@ -263,19 +259,13 @@ fn remove_rec(
                 (left, new_right)
             };
 
-            // Compact: if one child is now empty, promote the other.
-            compact(path, bit, new_left, new_right)
+            compact(path, new_left, new_right)
         }
     }
 }
 
 /// Compacts an Internal node after a child becomes empty.
-fn compact(
-    path: BitPath,
-    removed_side: u8,
-    left: SmtHandle,
-    right: SmtHandle,
-) -> Result<SmtHandle> {
+fn compact(path: BitPath, left: SmtHandle, right: SmtHandle) -> Result<SmtHandle> {
     let left_empty = left.is_empty();
     let right_empty = right.is_empty();
 
@@ -292,23 +282,12 @@ fn compact(
         })));
     }
 
-    // Exactly one child is empty. Promote the other.
+    // Exactly one child is empty — promote the survivor.
     let (surviving, surviving_bit) = if left_empty {
         (right, 1u8)
     } else {
         (left, 0u8)
     };
-
-    // Only compact if the removed side is the one that became empty.
-    // This prevents false compaction when the surviving child was
-    // already empty before the remove.
-    if surviving_bit != removed_side {
-        // The non-removed side became empty somehow — this shouldn't
-        // happen in normal operation but handle it gracefully.
-        if surviving.is_empty() {
-            return Ok(SmtHandle::default());
-        }
-    }
 
     let surviving_node = surviving.into_node();
     match surviving_node {

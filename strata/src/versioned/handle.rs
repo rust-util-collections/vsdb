@@ -12,12 +12,14 @@
 //! main.commit()?;
 //! ```
 
-use crate::common::ende::{KeyEnDeOrdered, ValueEnDe};
-use crate::common::error::Result;
-use crate::versioned::diff::DiffEntry;
-use crate::versioned::map::VerMap;
-use crate::versioned::{BranchId, CommitId};
 use std::ops::Bound;
+
+use crate::common::{
+    ende::{KeyEnDeOrdered, ValueEnDe},
+    error::Result,
+};
+use crate::versioned::{BranchId, CommitId, diff::DiffEntry, map::VerMap};
+
 /// Read-only handle bound to a specific branch.
 ///
 /// Obtained via [`VerMap::branch`] or [`VerMap::main`].

@@ -640,6 +640,11 @@ where
     pub fn commit(&mut self, branch: BranchId) -> Result<CommitId> {
         let state = self.get_branch(branch)?;
 
+        // Mark dirty before any structural mutation so that crash
+        // recovery (gc → rebuild_ref_counts) will repair orphaned
+        // commits or imbalanced ref-counts.
+        *self.gc_dirty.get_mut() = true;
+
         let id = self.next_commit.get_value();
         *self.next_commit.get_mut() = id + 1;
 
@@ -666,6 +671,9 @@ where
         // Update branch head; dirty_root stays the same (it IS the snapshot).
         let new_state = BranchState { head: id, ..state };
         self.branches.insert(&branch, &new_state);
+
+        *self.gc_dirty.get_mut() = false;
+
         Ok(id)
     }
 
@@ -698,6 +706,11 @@ where
     pub fn rollback_to(&mut self, branch: BranchId, target: CommitId) -> Result<()> {
         let state = self.get_branch(branch)?;
         let _ = self.get_commit_inner(target)?;
+
+        // Mark dirty before any structural mutation so that crash
+        // recovery (gc → rebuild_ref_counts) will repair orphaned
+        // commits or imbalanced ref-counts.
+        *self.gc_dirty.get_mut() = true;
 
         // Verify target is reachable from the branch head.
         if state.head != NO_COMMIT && target != state.head {
@@ -742,6 +755,8 @@ where
         // loses one.  Increment FIRST to protect target from cascade.
         self.increment_ref(target);
         self.decrement_ref(old_head);
+
+        *self.gc_dirty.get_mut() = false;
 
         Ok(())
     }
@@ -792,6 +807,12 @@ where
                 detail: format!("source branch {source} has no commits"),
             });
         }
+
+        // Mark dirty before any structural mutation so that crash
+        // recovery (gc → rebuild_ref_counts) will repair orphaned
+        // commits or imbalanced ref-counts.
+        *self.gc_dirty.get_mut() = true;
+
         if tgt.head == NO_COMMIT {
             // Target is empty — just fast-forward.
             let src_commit = self.get_commit_inner(src.head)?;
@@ -806,6 +827,7 @@ where
             // Tree root: dirty_root changes to src_commit.root.
             self.tree.acquire_node(src_commit.root);
             self.tree.release_node(tgt.dirty_root);
+            *self.gc_dirty.get_mut() = false;
             return Ok(src.head);
         }
 
@@ -855,6 +877,8 @@ where
         self.tree.release_node(tgt.dirty_root); // old target dirty
 
         self.increment_ref(src.head);
+
+        *self.gc_dirty.get_mut() = false;
 
         Ok(id)
     }

@@ -31,7 +31,7 @@ fn test_valueende() {
         });
         <MapxOrd<usize, usize> as ValueEnDe>::encode(&hdr)
     };
-    let mut reloaded = pnk!(<MapxOrd<usize, usize> as ValueEnDe>::decode(&dehdr));
+    let reloaded = pnk!(<MapxOrd<usize, usize> as ValueEnDe>::decode(&dehdr));
     (0..cnt).map(|i: usize| i).for_each(|i| {
         assert_eq!(i, reloaded.get(&i).unwrap());
     });
@@ -73,10 +73,8 @@ fn test_values() {
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
         hdr.insert(&key, &value);
     });
-    let mut i = 0;
-    for it in hdr.values() {
+    for (i, it) in hdr.values().enumerate() {
         assert_eq!(i, it);
-        i = i + 1;
     }
 }
 

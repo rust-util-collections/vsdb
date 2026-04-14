@@ -4,7 +4,7 @@
 //! `MapxOrdRawKey` is an ordered map where keys are stored as raw bytes,
 //! while values are encoded using `serde`-like methods. This is useful when
 //! you need to work with keys that are already in a byte format and want to
-// avoid the overhead of encoding and decoding them.
+//! avoid the overhead of encoding and decoding them.
 //!
 //! # Examples
 //!
@@ -131,7 +131,12 @@ where
     ///
     /// # Safety
     ///
-    /// This is a low-level API for performance-critical scenarios. Do not use for common purposes.
+    /// `value` must be the bytes produced by `<V as ValueEnDe>::encode(v)`
+    /// for a valid `v` of the same type and code version.  Any other byte
+    /// content will cause `decode()` to panic or silently return garbage
+    /// on the next read of this key.  Intended only for the versioned
+    /// layer that stores pre-encoded values to avoid a redundant
+    /// encode-decode round trip.
     #[inline(always)]
     pub unsafe fn insert_encoded_value(
         &mut self,

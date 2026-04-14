@@ -33,7 +33,7 @@ fn xx_test_valueende() {
         });
         hdr.encode()
     };
-    let mut reloaded = pnk!(<Mapx<usize, usize> as ValueEnDe>::decode(&dehdr));
+    let reloaded = pnk!(<Mapx<usize, usize> as ValueEnDe>::decode(&dehdr));
     (0..cnt).map(|i: usize| i).for_each(|i| {
         assert_eq!(i, reloaded.get(&i).unwrap());
     });
@@ -88,10 +88,10 @@ fn test_values_first_last() {
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
         hdr.insert(&key, &value);
     });
-    let value = pnk!(hdr.values().next());
+    let _value = pnk!(hdr.values().next());
     // assert_eq!(0, value);
 
-    let value = pnk!(hdr.values().next_back());
+    let _value = pnk!(hdr.values().next_back());
     // assert_eq!(max - 1, value);
 }
 

@@ -20,7 +20,7 @@ fn test_insert() {
         });
     hdr.clear();
     (0..max).map(|i: usize| i.to_be_bytes()).for_each(|key| {
-        assert!(hdr.get(&key).is_none());
+        assert!(hdr.get(key).is_none());
     });
 }
 
@@ -36,9 +36,9 @@ fn test_valueende() {
             });
         <MapxOrdRawKey<usize> as ValueEnDe>::encode(&hdr)
     };
-    let mut reloaded = pnk!(<MapxOrdRawKey<usize> as ValueEnDe>::decode(&dehdr));
+    let reloaded = pnk!(<MapxOrdRawKey<usize> as ValueEnDe>::decode(&dehdr));
     (0..cnt).map(|i: usize| i).for_each(|i| {
-        assert_eq!(i, reloaded.get(&i.to_be_bytes()).unwrap());
+        assert_eq!(i, reloaded.get(i.to_be_bytes()).unwrap());
     });
 }
 
@@ -81,10 +81,8 @@ fn test_values() {
         .for_each(|(key, value)| {
             hdr.insert(&key[..], &value);
         });
-    let mut i = 0;
-    for (_, it) in hdr.iter() {
+    for (i, (_, it)) in hdr.iter().enumerate() {
         assert_eq!(i, it);
-        i = i + 1;
     }
 }
 
@@ -107,15 +105,15 @@ fn test_values_first_last() {
 #[test]
 fn test_save_and_from_meta() {
     let mut hdr: MapxOrdRawKey<String> = MapxOrdRawKey::new();
-    hdr.insert(&[1u8], &"hello".to_string());
-    hdr.insert(&[2u8], &"world".to_string());
+    hdr.insert([1u8], &"hello".to_string());
+    hdr.insert([2u8], &"world".to_string());
 
     let id = pnk!(hdr.save_meta());
     assert_eq!(id, hdr.instance_id());
 
     let restored: MapxOrdRawKey<String> = pnk!(MapxOrdRawKey::from_meta(id));
-    assert_eq!(restored.get(&[1u8]), Some("hello".to_string()));
-    assert_eq!(restored.get(&[2u8]), Some("world".to_string()));
+    assert_eq!(restored.get([1u8]), Some("hello".to_string()));
+    assert_eq!(restored.get([2u8]), Some("world".to_string()));
     assert!(restored.is_the_same_instance(&hdr));
 }
 
@@ -144,11 +142,11 @@ fn test_from_meta_nonexistent() {
 #[test]
 fn test_meta_restore_then_mutate() {
     let mut hdr: MapxOrdRawKey<u64> = MapxOrdRawKey::new();
-    hdr.insert(&[1u8], &100);
+    hdr.insert([1u8], &100);
 
     let id = pnk!(hdr.save_meta());
     let mut restored: MapxOrdRawKey<u64> = pnk!(MapxOrdRawKey::from_meta(id));
-    restored.insert(&[2u8], &200);
+    restored.insert([2u8], &200);
 
-    assert_eq!(hdr.get(&[2u8]), Some(200));
+    assert_eq!(hdr.get([2u8]), Some(200));
 }

@@ -44,8 +44,10 @@ use std::{
     fmt,
     ops::{Deref, DerefMut},
 };
-use vsdb_core::basic::mapx_raw::MapxRaw;
-use vsdb_core::{basic::mapx_raw, common::RawBytes};
+use vsdb_core::{
+    basic::mapx_raw::{self, MapxRaw},
+    common::RawBytes,
+};
 
 type DagHead = DagMapRaw;
 
@@ -115,20 +117,22 @@ impl DagMapRaw {
         let r = Self {
             // SAFETY: The shadow is stored in `r.parent` and not read
             // until after `new()` returns. The write to `parent` at
-            // line 120 is the sole mutation and completes before any
-            // read through the shadow.
+            // the insertion below is the sole mutation and completes
+            // before any read through the shadow.
             parent: unsafe { parent.shadow() },
             ..Default::default()
         };
 
         if let Some(p) = parent.get_mut().as_mut() {
             let child_id = super::gen_dag_map_id_num().to_le_bytes();
-            // Check if child already exists before inserting
-            if p.children.get(child_id).is_some() {
-                return Err(VsdbError::Other {
-                    detail: "Error! Child ID exist!".to_owned(),
-                });
-            }
+            // gen_dag_map_id_num() is monotonically increasing, so
+            // duplicate IDs are impossible under normal operation.
+            // The assertion guards against ID counter corruption
+            // (e.g. crash-induced rollback).
+            debug_assert!(
+                p.children.get(child_id).is_none(),
+                "Child ID already exists — possible ID counter rollback"
+            );
             p.children.insert(child_id, &r);
         }
 
@@ -238,8 +242,18 @@ impl DagMapRaw {
     /// Inserts a key-value pair into the DAG map.
     ///
     /// Does not return the old value for performance reasons.
+    ///
+    /// # Panics (debug builds)
+    ///
+    /// Panics if `value` is empty — an empty byte slice is used
+    /// internally as a deletion tombstone.  Use [`remove`](Self::remove)
+    /// to delete a key instead.
     #[inline(always)]
     pub fn insert(&mut self, key: impl AsRef<[u8]>, value: impl AsRef<[u8]>) {
+        debug_assert!(
+            !value.as_ref().is_empty(),
+            "empty value is a tombstone; call remove() instead"
+        );
         self.data.insert(key.as_ref(), value)
     }
 

@@ -19,7 +19,7 @@ fn gen_sample(idx: usize) -> SampleBlock {
 #[test]
 fn basic_cases() {
     let cnt = 200;
-    info_omit!(vsdb_set_base_dir(&format!(
+    info_omit!(vsdb_set_base_dir(format!(
         "/tmp/vsdb_testing/{}",
         rand::random::<u64>()
     )));

@@ -315,7 +315,7 @@ fn filtered_search_respects_k() {
 
     // Search with filter for even keys only, k=3.
     let results = idx
-        .search_with_filter(&[0.0, 0.0], 3, |k: &u32| k % 2 == 0)
+        .search_with_filter(&[0.0, 0.0], 3, |k: &u32| k.is_multiple_of(2))
         .unwrap();
     assert_eq!(results.len(), 3);
     for (k, _) in &results {
@@ -650,7 +650,7 @@ fn compact_improves_or_maintains_recall() {
         let queries = 10;
         let k = 5;
         let mut total = 0.0;
-        for q in 0..queries {
+        for _q in 0..queries {
             let query: Vec<f32> = (0..dim).map(|_| rand::random::<f32>()).collect();
             let mut dists: Vec<(f32, u32)> = live
                 .iter()
@@ -747,7 +747,7 @@ fn search_ef_variants() {
     assert_eq!(results[0].0, 5);
 
     let results = idx
-        .search_ef_with_filter(&[0.0, 0.0], 3, 100, |k: &u32| k % 2 == 0)
+        .search_ef_with_filter(&[0.0, 0.0], 3, 100, |k: &u32| k.is_multiple_of(2))
         .unwrap();
     assert_eq!(results.len(), 3);
     for (k, _) in &results {

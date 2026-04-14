@@ -4,7 +4,7 @@ use vsdb::{basic::orphan::Orphan, vsdb_set_base_dir};
 
 #[test]
 fn basic_cases() {
-    info_omit!(vsdb_set_base_dir(&format!(
+    info_omit!(vsdb_set_base_dir(format!(
         "/tmp/vsdb_testing/{}",
         rand::random::<u64>()
     )));

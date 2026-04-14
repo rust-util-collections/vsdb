@@ -10,7 +10,6 @@
 //! The storage engine is MMDB, a pure-Rust LSM-Tree engine.
 
 #![deny(warnings)]
-#![cfg_attr(test, allow(warnings))]
 #![recursion_limit = "512"]
 
 /// Manages the storage layer, raw data types, and shared utilities.

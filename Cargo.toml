@@ -12,7 +12,7 @@ thiserror = "2.0"
 parking_lot = "0.12.1"
 
 serde = { version = "1.0.136", features = ["derive"] }
-postcard = { version = "1.1.3", features = ["alloc"] }
+postcard = { version = "=1.1.3", features = ["alloc"] }
 sha3 = "0.10"
 
 mmdb = "3.0.0"

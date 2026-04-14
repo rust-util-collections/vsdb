@@ -9,25 +9,25 @@ fn test_insert() {
     (0..max)
         .map(|i: u64| (to_bytes(i), to_bytes(max + i)))
         .for_each(|(key, value)| {
-            assert!(hdr.get(&key).is_none());
+            assert!(hdr.get(key).is_none());
             hdr.entry(&key).or_insert(&value);
 
             // After inserting, should exist
-            assert!(hdr.contains_key(&key));
-            assert_eq!(&pnk!(hdr.get(&key))[..], &value[..]);
+            assert!(hdr.contains_key(key));
+            assert_eq!(&pnk!(hdr.get(key))[..], &value[..]);
 
             // Remove it
-            hdr.remove(&key);
-            assert!(hdr.get(&key).is_none());
+            hdr.remove(key);
+            assert!(hdr.get(key).is_none());
 
             // Insert again
-            hdr.insert(&key, &value);
-            assert!(hdr.contains_key(&key));
+            hdr.insert(key, value);
+            assert!(hdr.contains_key(key));
         });
 
     hdr.clear();
     (0..max).map(|i: u64| to_bytes(i)).for_each(|key| {
-        assert!(hdr.get(&key).is_none());
+        assert!(hdr.get(key).is_none());
     });
 }
 
@@ -38,14 +38,14 @@ fn test_iter() {
     (0..max)
         .map(|i: u64| (to_bytes(i), to_bytes(i)))
         .for_each(|(key, value)| {
-            hdr.insert(&key, &value);
+            hdr.insert(key, value);
         });
 
-    hdr.iter_mut().for_each(|(k, mut v)| {
-        *v = to_bytes(to_u64(&v) + 1).to_vec().into();
+    hdr.iter_mut().for_each(|(_k, mut v)| {
+        *v = to_bytes(to_u64(&v) + 1).to_vec();
     });
 
-    for (idx, (key, value)) in hdr.iter().enumerate() {
+    for (idx, (_key, value)) in hdr.iter().enumerate() {
         assert_eq!(idx as u64 + 1, to_u64(&value));
     }
 }
@@ -57,7 +57,7 @@ fn test_first_last() {
     (0..max)
         .map(|i: u64| (to_bytes(i), to_bytes(i)))
         .for_each(|(key, value)| {
-            hdr.insert(&key, &value);
+            hdr.insert(key, value);
         });
 
     let (_, value) = pnk!(hdr.iter().next());
@@ -87,7 +87,7 @@ fn test_batch() {
     for i in 0..max {
         let key = to_bytes(i);
         let value = to_bytes(max + i);
-        assert_eq!(&pnk!(hdr.get(&key))[..], &value[..]);
+        assert_eq!(&pnk!(hdr.get(key))[..], &value[..]);
     }
 
     {
@@ -101,7 +101,7 @@ fn test_batch() {
 
     for i in 0..max {
         let key = to_bytes(i);
-        assert!(hdr.get(&key).is_none());
+        assert!(hdr.get(key).is_none());
     }
 }
 
@@ -116,15 +116,15 @@ fn to_bytes(i: u64) -> [u8; size_of::<u64>()] {
 #[test]
 fn test_save_and_from_meta() {
     let mut hdr = MapxRaw::new();
-    hdr.insert(&[1], &[10]);
-    hdr.insert(&[2], &[20]);
+    hdr.insert([1], [10]);
+    hdr.insert([2], [20]);
 
     let id = pnk!(hdr.save_meta());
     assert_eq!(id, hdr.instance_id());
 
     let restored = pnk!(MapxRaw::from_meta(id));
-    assert_eq!(restored.get(&[1]), Some(vec![10]));
-    assert_eq!(restored.get(&[2]), Some(vec![20]));
+    assert_eq!(restored.get([1]), Some(vec![10]));
+    assert_eq!(restored.get([2]), Some(vec![20]));
     assert!(restored.is_the_same_instance(&hdr));
 }
 
@@ -138,7 +138,7 @@ fn test_from_meta_nonexistent() {
 fn test_serde_roundtrip() {
     let mut hdr = MapxRaw::new();
     for i in 0u64..50 {
-        hdr.insert(&i.to_be_bytes(), &(i * 10).to_be_bytes());
+        hdr.insert(i.to_be_bytes(), (i * 10).to_be_bytes());
     }
 
     let bytes = postcard::to_allocvec(&hdr).unwrap();
@@ -147,7 +147,7 @@ fn test_serde_roundtrip() {
     assert!(restored.is_the_same_instance(&hdr));
     for i in 0u64..50 {
         assert_eq!(
-            &restored.get(&i.to_be_bytes()).unwrap()[..],
+            &restored.get(i.to_be_bytes()).unwrap()[..],
             &(i * 10).to_be_bytes()
         );
     }

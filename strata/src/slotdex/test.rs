@@ -394,7 +394,7 @@ fn large_tier_capacity() {
         db.insert(i, i).unwrap();
     }
     // With capacity 64, 200 entries should create at least 1 tier
-    assert!(db.tiers.len() >= 1);
+    assert!(!db.tiers.is_empty());
 
     let page = db.get_entries_by_page(20, 5, false);
     assert_eq!(page, (100u64..120).collect::<Vec<_>>());

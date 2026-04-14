@@ -15,8 +15,18 @@ pub type DagMapId = [u8];
 
 /// Generates a new, unique ID for a DAG map.
 ///
-/// This function maintains a persistent counter to ensure that each generated
-/// ID is unique.
+/// Maintains a persistent monotonic counter (`Orphan<u128>`) to ensure
+/// that each generated ID is globally unique.
+///
+/// # Crash semantics
+///
+/// The counter persists via `Orphan<u128>` in MMDB. If the process
+/// crashes after the counter increment is flushed but before the child
+/// entry is written, the counter advances permanently and the skipped
+/// ID is never used (safe gap). If the WAL flush for the counter is
+/// itself lost (pre-WAL crash), the counter reverts while a different
+/// shard may already contain the child entry — this is a known
+/// limitation accepted by the current design.
 pub fn gen_dag_map_id_num() -> u128 {
     use crate::{Orphan, ValueEnDe};
     use parking_lot::Mutex;

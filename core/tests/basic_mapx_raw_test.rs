@@ -5,7 +5,7 @@ use vsdb_core::{MapxRaw, vsdb_set_base_dir};
 #[test]
 fn basic_cases() {
     let cnt = 200;
-    info_omit!(vsdb_set_base_dir(&format!(
+    info_omit!(vsdb_set_base_dir(format!(
         "/tmp/vsdb_testing/{}",
         rand::random::<u64>()
     )));
@@ -14,27 +14,27 @@ fn basic_cases() {
         let mut hdr_i = MapxRaw::new();
 
         (0..cnt).for_each(|i: usize| {
-            assert!(hdr_i.get(&i.to_be_bytes()).is_none());
+            assert!(hdr_i.get(i.to_be_bytes()).is_none());
         });
 
         (0..cnt)
             .map(|i: usize| (i.to_be_bytes(), i.to_be_bytes()))
             .for_each(|(i, b)| {
                 hdr_i.entry(&i).or_insert(&b);
-                assert_eq!(&hdr_i.get(&i).unwrap()[..], &i[..]);
+                assert_eq!(&hdr_i.get(i).unwrap()[..], &i[..]);
 
                 // Remove check
-                assert!(hdr_i.contains_key(&i));
-                hdr_i.remove(&i);
-                assert!(hdr_i.get(&i).is_none());
+                assert!(hdr_i.contains_key(i));
+                hdr_i.remove(i);
+                assert!(hdr_i.get(i).is_none());
 
                 // Insert checks
-                hdr_i.insert(&i, &b);
-                assert!(hdr_i.contains_key(&i));
+                hdr_i.insert(i, b);
+                assert!(hdr_i.contains_key(i));
 
                 // Overwrite check
-                hdr_i.insert(&i, &b);
-                assert!(hdr_i.contains_key(&i));
+                hdr_i.insert(i, b);
+                assert!(hdr_i.contains_key(i));
             });
 
         pnk!(postcard::to_allocvec(&hdr_i))
@@ -43,23 +43,23 @@ fn basic_cases() {
     let mut reloaded = pnk!(postcard::from_bytes::<MapxRaw>(&hdr));
 
     (0..cnt).map(|i: usize| i.to_be_bytes()).for_each(|i| {
-        assert_eq!(&i[..], &reloaded.get(&i).unwrap()[..]);
+        assert_eq!(&i[..], &reloaded.get(i).unwrap()[..]);
     });
 
     (1..cnt).map(|i: usize| i.to_be_bytes()).for_each(|i| {
-        *reloaded.get_mut(&i).unwrap() = i.to_vec();
-        assert_eq!(&reloaded.get(&i).unwrap()[..], &i[..]);
-        assert!(reloaded.contains_key(&i));
-        reloaded.remove(&i);
-        assert!(!reloaded.contains_key(&i));
+        *reloaded.get_mut(i).unwrap() = i.to_vec();
+        assert_eq!(&reloaded.get(i).unwrap()[..], &i[..]);
+        assert!(reloaded.contains_key(i));
+        reloaded.remove(i);
+        assert!(!reloaded.contains_key(i));
     });
 
     reloaded.clear();
 
-    reloaded.insert(&[1], &[1]);
-    reloaded.insert(&[4], &[4]);
-    reloaded.insert(&[6], &[6]);
-    reloaded.insert(&[80], &[80]);
+    reloaded.insert([1], [1]);
+    reloaded.insert([4], [4]);
+    reloaded.insert([6], [6]);
+    reloaded.insert([80], [80]);
 
     assert!(
         reloaded
@@ -79,14 +79,13 @@ fn basic_cases() {
         vec![6],
         reloaded
             .range(Cow::Borrowed(&[2][..])..Cow::Borrowed(&[10][..]))
-            .rev()
-            .next()
+            .next_back()
             .unwrap()
             .1
     );
 
-    assert_eq!(vec![80], reloaded.get_ge(&[79]).unwrap().1);
-    assert_eq!(vec![80], reloaded.get_ge(&[80]).unwrap().1);
-    assert_eq!(vec![80], reloaded.get_le(&[80]).unwrap().1);
-    assert_eq!(vec![80], reloaded.get_le(&[100]).unwrap().1);
+    assert_eq!(vec![80], reloaded.get_ge([79]).unwrap().1);
+    assert_eq!(vec![80], reloaded.get_ge([80]).unwrap().1);
+    assert_eq!(vec![80], reloaded.get_le([80]).unwrap().1);
+    assert_eq!(vec![80], reloaded.get_le([100]).unwrap().1);
 }

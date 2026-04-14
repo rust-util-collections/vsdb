@@ -41,6 +41,19 @@ use serde::{Serialize, de::DeserializeOwned};
 /////////////////////////////////////////////////////////////////////////////
 
 /// A trait for encoding keys.
+///
+/// # Warning
+///
+/// The blanket implementation covers **all** types that implement
+/// [`serde::Serialize`], including `HashMap` and `HashSet`.
+/// These types produce **non-deterministic** byte sequences (iteration
+/// order depends on the random `SipHash` seed).  Using them as VSDB
+/// keys will cause lookups to silently miss after a process restart.
+///
+/// Only use types with **deterministic** serialization as keys:
+/// primitive types, `Vec`, `BTreeMap`, `BTreeSet`, tuples, `String`,
+/// and fixed-size arrays are safe.  `HashMap`, `HashSet`, and any
+/// wrapper containing them are **not** safe as key types.
 pub trait KeyEn: Sized {
     /// Attempts to encode the key.  Returns `Err` only if the
     /// `Serialize` implementation is broken — see [module-level trust

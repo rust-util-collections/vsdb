@@ -229,23 +229,6 @@ where
             }
         };
 
-        // Shrink degenerate top tiers (structural maintenance).
-        loop {
-            let dominated = self.tiers.last_mut().is_some_and(|top| {
-                if top.len() < 2 {
-                    top.store.clear();
-                    true
-                } else {
-                    false
-                }
-            });
-            if dominated {
-                self.tiers.pop();
-            } else {
-                break;
-            }
-        }
-
         if empty {
             self.data.remove(&slot);
         } else if exist {
@@ -253,6 +236,24 @@ where
         }
 
         if exist {
+            // Shrink degenerate top tiers (structural maintenance).
+            loop {
+                let dominated = self.tiers.last_mut().is_some_and(|top| {
+                    if top.len() < 2 {
+                        top.store.clear();
+                        *top.entry_count.get_mut() = 0;
+                        true
+                    } else {
+                        false
+                    }
+                });
+                if dominated {
+                    self.tiers.pop();
+                } else {
+                    break;
+                }
+            }
+
             self.tiers.iter_mut().for_each(|t| {
                 t.ensure_cache();
                 let slot_floor = slot.floor_align(&t.floor_base);
@@ -279,6 +280,7 @@ where
 
         self.tiers.iter_mut().for_each(|t| {
             t.store.clear();
+            *t.entry_count.get_mut() = 0;
             t.cache.get_mut().clear();
         });
 

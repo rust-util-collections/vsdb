@@ -1,4 +1,3 @@
-use super::NO_COMMIT;
 use super::map::VerMap;
 use crate::common::error::VsdbError;
 use std::ops::Bound;
@@ -84,7 +83,7 @@ fn contains_key_on_empty_map() {
 fn get_on_invalid_branch() {
     setup();
     let m: VerMap<u32, u32> = VerMap::new();
-    let main = m.main_branch();
+    let _main = m.main_branch();
     assert!(m.get(999, &1).is_err());
 }
 
@@ -92,7 +91,7 @@ fn get_on_invalid_branch() {
 fn insert_on_invalid_branch() {
     setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
-    let main = m.main_branch();
+    let _main = m.main_branch();
     assert!(m.insert(999, &1, &1).is_err());
 }
 
@@ -194,7 +193,7 @@ fn read_historical_commit() {
 fn get_at_commit_invalid_id() {
     setup();
     let m: VerMap<u32, u32> = VerMap::new();
-    let main = m.main_branch();
+    let _main = m.main_branch();
     assert!(m.get_at_commit(999, &1).is_err());
 }
 
@@ -303,7 +302,7 @@ fn head_commit_returns_latest() {
 fn head_commit_invalid_branch() {
     setup();
     let m: VerMap<u32, u32> = VerMap::new();
-    let main = m.main_branch();
+    let _main = m.main_branch();
     assert!(m.head_commit(999).is_err());
 }
 
@@ -445,7 +444,7 @@ fn delete_branch_then_reuse_name() {
 fn create_branch_from_invalid_source() {
     setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
-    let main = m.main_branch();
+    let _main = m.main_branch();
     assert!(m.create_branch("bad", 999).is_err());
 }
 
@@ -994,7 +993,7 @@ fn iter_on_branch() {
 fn iter_invalid_branch() {
     setup();
     let m: VerMap<u32, u32> = VerMap::new();
-    let main = m.main_branch();
+    let _main = m.main_branch();
     assert!(m.iter(999).is_err());
 }
 
@@ -1034,7 +1033,7 @@ fn log_empty_branch() {
 fn log_invalid_branch() {
     setup();
     let m: VerMap<u32, u32> = VerMap::new();
-    let main = m.main_branch();
+    let _main = m.main_branch();
     assert!(m.log(999).is_err());
 }
 
@@ -1511,7 +1510,7 @@ fn branch_id_custom_branch() {
 fn branch_id_nonexistent() {
     setup();
     let m: VerMap<u32, u32> = VerMap::new();
-    let main = m.main_branch();
+    let _main = m.main_branch();
     assert_eq!(m.branch_id("no_such_branch"), None);
 }
 
@@ -1561,7 +1560,7 @@ fn branch_name_custom() {
 fn branch_name_nonexistent() {
     setup();
     let m: VerMap<u32, u32> = VerMap::new();
-    let main = m.main_branch();
+    let _main = m.main_branch();
     assert_eq!(m.branch_name(999), None);
 }
 
@@ -1663,7 +1662,7 @@ fn has_uncommitted_on_new_branch() {
 fn has_uncommitted_invalid_branch() {
     setup();
     let m: VerMap<u32, u32> = VerMap::new();
-    let main = m.main_branch();
+    let _main = m.main_branch();
     assert!(m.has_uncommitted(999).is_err());
 }
 
@@ -1855,7 +1854,7 @@ fn range_on_branch() {
 fn range_invalid_branch() {
     setup();
     let m: VerMap<u32, u32> = VerMap::new();
-    let main = m.main_branch();
+    let _main = m.main_branch();
     assert!(m.range(999, Bound::Unbounded, Bound::Unbounded).is_err());
 }
 
@@ -1942,7 +1941,7 @@ fn iter_at_commit_on_branch_commit() {
 fn iter_at_commit_invalid() {
     setup();
     let m: VerMap<u32, u32> = VerMap::new();
-    let main = m.main_branch();
+    let _main = m.main_branch();
     assert!(m.iter_at_commit(999).is_err());
 }
 
@@ -2167,7 +2166,7 @@ fn get_commit_basic() {
 fn get_commit_nonexistent() {
     setup();
     let m: VerMap<u32, u32> = VerMap::new();
-    let main = m.main_branch();
+    let _main = m.main_branch();
     assert!(m.get_commit(999).is_none());
 }
 
@@ -2436,7 +2435,7 @@ fn fork_point_basic_diverge() {
 
     // Main: c1 -> c2 -> c3
     m.insert(main, &1, &10).unwrap();
-    let c1 = m.commit(main).unwrap();
+    let _c1 = m.commit(main).unwrap();
     m.insert(main, &2, &20).unwrap();
     let c2 = m.commit(main).unwrap();
     m.insert(main, &3, &30).unwrap();
@@ -3569,7 +3568,7 @@ fn test_serde_roundtrip_full() {
     for i in 0..20 {
         m.insert(main, &i, &format!("val_{i}")).unwrap();
     }
-    let c1 = m.commit(main).unwrap();
+    let _c1 = m.commit(main).unwrap();
 
     let feat = m.create_branch("feat", main).unwrap();
     m.insert(feat, &100, &"feat_val".into()).unwrap();
@@ -3624,7 +3623,7 @@ fn test_meta_restore_then_continue() {
 
     // Continue working on the restored handle
     restored.insert(main, &2, &20).unwrap();
-    let c2 = restored.commit(main).unwrap();
+    let _c2 = restored.commit(main).unwrap();
 
     let dev = restored.create_branch("dev", main).unwrap();
     restored.insert(dev, &3, &30).unwrap();

@@ -3,7 +3,7 @@
 //!
 //! `MapxOrd` provides an ordered map where keys and values are encoded before
 //! being persisted. Keys are encoded using `KeyEnDeOrdered` to ensure that
-// a lexicographical ordering of the encoded bytes maintains the original order of the keys.
+//! a lexicographical ordering of the encoded bytes maintains the original order of the keys.
 //!
 //! # Examples
 //!
@@ -121,8 +121,12 @@ where
     ///
     /// # Safety
     ///
-    /// This is a low-level API for performance-critical scenarios, such as versioned
-    /// implementations. Do not use for common purposes.
+    /// `value` must be the bytes produced by `<V as ValueEnDe>::encode(v)`
+    /// for a valid `v` of the same type and code version.  Any other byte
+    /// content will cause `decode()` to panic or silently return garbage
+    /// on the next read of this key.  Intended only for the versioned
+    /// layer that stores pre-encoded values to avoid a redundant
+    /// encode-decode round trip.
     #[inline(always)]
     pub unsafe fn insert_encoded_value(&mut self, key: &K, value: impl AsRef<[u8]>) {
         unsafe { self.inner.insert_encoded_value(key.to_bytes(), value) }

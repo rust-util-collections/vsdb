@@ -583,15 +583,42 @@ impl PersistentBTree {
         }
     }
 
-    fn shrink_root(&self, root: NodeId) -> NodeId {
+    fn shrink_root(&mut self, root: NodeId) -> NodeId {
         match self.node(root) {
-            Node::Leaf { ref keys, .. } if keys.is_empty() => EMPTY_ROOT,
+            Node::Leaf { ref keys, .. } if keys.is_empty() => {
+                self.discard_node(root);
+                EMPTY_ROOT
+            }
             Node::Internal {
                 ref keys,
                 ref children,
-            } if keys.is_empty() => children[0],
+            } if keys.is_empty() => {
+                let child = children[0];
+                self.discard_node(root);
+                child
+            }
             _ => root,
         }
+    }
+
+    /// Removes a freshly-allocated, unreferenced node that is being
+    /// discarded before it enters any live commit's root tree.
+    ///
+    /// Undoes the ref_count increments that `alloc` applied to its
+    /// children and registers the node for deferred disk deletion.
+    fn discard_node(&mut self, nid: NodeId) {
+        if !self.ref_counts_ready {
+            return;
+        }
+        if let Some(nr) = self.ref_counts.remove(&nid) {
+            for &child in &nr.children {
+                if let Some(cr) = self.ref_counts.get_mut(&child) {
+                    cr.ref_count = cr.ref_count.saturating_sub(1);
+                }
+            }
+        }
+        self.nodes
+            .lazy_delete_batch(vec![nid.to_le_bytes().to_vec()]);
     }
 
     fn remove_rec(&mut self, id: NodeId, key: &[u8]) -> RemoveResult {
@@ -837,7 +864,8 @@ impl PersistentBTree {
             _ => unreachable!(),
         };
         pc[idx] = self.alloc(&merged);
-        pc.remove(idx + 1);
+        let discarded = pc.remove(idx + 1);
+        self.discard_node(discarded);
     }
 
     // =================================================================
@@ -957,7 +985,14 @@ impl PersistentBTree {
             let Some(nr) = self.ref_counts.get_mut(&nid) else {
                 continue;
             };
-            nr.ref_count = nr.ref_count.saturating_sub(1);
+            debug_assert!(
+                nr.ref_count > 0,
+                "release_node called on node {nid} with ref_count=0"
+            );
+            if nr.ref_count == 0 {
+                continue;
+            }
+            nr.ref_count -= 1;
             if nr.ref_count == 0 {
                 let children = std::mem::take(&mut nr.children);
                 self.ref_counts.remove(&nid);

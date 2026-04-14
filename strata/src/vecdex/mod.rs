@@ -556,7 +556,18 @@ where
                         &mut self.adjacency,
                         &get_vec,
                     );
-                    added += 1;
+
+                    // Enforce bidirectionality: if prune evicted n
+                    // from candidate's list, remove candidate from n's
+                    // list to avoid one-directional edges (INV-VD2).
+                    let c_after = get_neighbors(&self.adjacency, l, candidate);
+                    if !c_after.contains(&n) {
+                        let mut n_list2 = get_neighbors(&self.adjacency, l, n);
+                        n_list2.retain(|&x| x != candidate);
+                        set_neighbors(&mut self.adjacency, l, n, &n_list2);
+                    } else {
+                        added += 1;
+                    }
                 }
                 if added > 0 {
                     prune_neighbors::<S, D>(n, l, m_max, &mut self.adjacency, &get_vec);
@@ -609,6 +620,11 @@ where
             .collect();
 
         pairs.shuffle(&mut rand::rng());
+
+        // Note: clear() is irreversible. insert() cannot fail here because
+        // all vectors already passed dimension validation at original
+        // insertion time. If insert semantics ever change to introduce new
+        // error paths, this must become a two-phase commit.
         self.clear();
 
         for (key, vec) in &pairs {

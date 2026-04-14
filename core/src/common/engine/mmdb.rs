@@ -16,7 +16,6 @@ use std::{
     },
 };
 
-const META_KEY_MAX_KEYLEN: [u8; 1] = [u8::MAX];
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 
 const PREFIX_ALLOC_BATCH: u64 = 8192;
@@ -66,16 +65,6 @@ impl MmDB {
         // Meta keys live in shard 0
         let meta_db = dbs[0];
         let (prefix_allocator, initial_value) = PreAllocator::init();
-
-        if meta_db.get(&META_KEY_MAX_KEYLEN).c(d!())?.is_none() {
-            meta_db
-                .put_with_options(
-                    &sync_write_opts(),
-                    &META_KEY_MAX_KEYLEN,
-                    &0_usize.to_le_bytes(),
-                )
-                .c(d!())?;
-        }
 
         if meta_db.get(&prefix_allocator.key).c(d!())?.is_none() {
             meta_db

@@ -13,7 +13,6 @@
 //! This crate is the primary entry point for most users.
 
 #![deny(warnings)]
-#![cfg_attr(test, allow(warnings))]
 #![recursion_limit = "512"]
 
 #[macro_use]

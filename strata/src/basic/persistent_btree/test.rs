@@ -310,8 +310,8 @@ fn deep_version_chain() {
     }
 
     // Version k should have exactly k keys (0..k-1).
-    for k in 0..=100usize {
-        assert_eq!(tree.iter(versions[k]).count(), k);
+    for (k, ver) in versions.iter().enumerate() {
+        assert_eq!(tree.iter(*ver).count(), k);
     }
 }
 
@@ -365,8 +365,8 @@ fn single_byte_keys_full_range() {
     assert_eq!(tree.iter(r).count(), 256);
     // Should be sorted by byte value.
     let items: Vec<_> = tree.iter(r).collect();
-    for i in 0..256usize {
-        assert_eq!(items[i].0, vec![i as u8]);
+    for (i, item) in items.iter().enumerate().take(256) {
+        assert_eq!(item.0, vec![i as u8]);
     }
 }
 
