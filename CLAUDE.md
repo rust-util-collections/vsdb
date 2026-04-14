@@ -52,7 +52,8 @@ make bench        # criterion benches (core, basic, versioned, slotdex, trie_ben
 - `/x-review` — deep regression analysis (supports: N commits, `all`, hash, range)
 - `/x-fix` — resolve all open findings in `.claude/audit.md`
 - `/x-commit` — self-reviewing commit (review, fix, format, commit)
-- `/x-auto` — full pipeline: review → fix → commit
+- `/x-auto` — full pipeline: review → fix → commit (incremental, uncommitted changes only)
+- `/x-overhaul` — full codebase overhaul: review all → fix → commit
 
 Supporting documentation in `.claude/docs/`:
 - `technical-patterns.md` — cataloged bug patterns for vsdb + mmdb layers
