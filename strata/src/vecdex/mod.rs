@@ -25,6 +25,12 @@
 pub mod distance;
 mod hnsw;
 
+/// Bit 63 of `node_count` doubles as a dirty flag.  Set when the
+/// process starts operating (in-flight), cleared on clean shutdown
+/// via [`VecDex::save_meta`].  If set on recovery, `from_meta`
+/// rebuilds the count from live data.
+const COUNT_DIRTY_BIT: u64 = 1 << 63;
+
 use crate::{
     Mapx, MapxOrd,
     basic::orphan::Orphan,
@@ -174,31 +180,53 @@ where
     }
 
     /// Persists metadata for later recovery via [`from_meta`](Self::from_meta).
-    pub fn save_meta(&self) -> Result<u64> {
+    ///
+    /// Marks a clean shutdown so that the next [`from_meta`](Self::from_meta)
+    /// call can skip the count rebuild.
+    pub fn save_meta(&mut self) -> Result<u64> {
+        // Clear the dirty bit — signals clean shutdown.
+        let mut m = self.meta.get_mut();
+        m.node_count &= !COUNT_DIRTY_BIT;
+        drop(m);
+
         let id = self.instance_id();
         crate::common::save_instance_meta(id, self)?;
         Ok(id)
     }
 
     /// Recovers a `VecDex` from previously saved metadata.
+    ///
+    /// If the previous session did not call [`save_meta`](Self::save_meta)
+    /// (unclean shutdown), the node count is automatically rebuilt from
+    /// the live data.
     pub fn from_meta(instance_id: u64) -> Result<Self> {
-        crate::common::load_instance_meta(instance_id)
+        let mut me: Self = crate::common::load_instance_meta(instance_id)?;
+        me.ensure_count();
+        Ok(me)
+    }
+
+    /// If the dirty bit is set, rebuild the count from live data.
+    /// Then set the dirty bit for the current process lifetime.
+    fn ensure_count(&mut self) {
+        let raw = self.meta.get_value().node_count;
+        if raw & COUNT_DIRTY_BIT != 0 {
+            let actual = self.node_to_key.iter().count() as u64;
+            self.meta.get_mut().node_count = actual | COUNT_DIRTY_BIT;
+        } else {
+            // Clean shutdown — count is trustworthy. Set dirty for this session.
+            self.meta.get_mut().node_count = raw | COUNT_DIRTY_BIT;
+        }
     }
 
     /// Returns the number of indexed vectors.
     ///
-    /// This is maintained as an application-layer counter (incremented on
-    /// insert, decremented on remove).  It is accurate during normal
-    /// operation but may drift after an unclean shutdown because the
-    /// counter and data updates are not in the same atomic write.
-    /// Call `iter().count()` for a guaranteed-accurate count when needed.
+    /// Automatically rebuilt from disk on recovery after an unclean
+    /// shutdown (see [`from_meta`](Self::from_meta)).
     pub fn len(&self) -> u64 {
-        self.meta.get_value().node_count
+        self.meta.get_value().node_count & !COUNT_DIRTY_BIT
     }
 
     /// Returns `true` if the index contains no vectors.
-    ///
-    /// See [`len`](Self::len) for accuracy caveats.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -241,7 +269,7 @@ where
         let mut m = self.meta.get_mut();
         m.entry_point = None;
         m.max_layer = 0;
-        m.node_count = 0;
+        m.node_count &= COUNT_DIRTY_BIT; // count=0, preserve dirty
         m.next_node_id = 0;
     }
 
@@ -284,7 +312,8 @@ where
         {
             let mut m = self.meta.get_mut();
             m.next_node_id = node_id + 1;
-            m.node_count += 1;
+            let count = (m.node_count & !COUNT_DIRTY_BIT) + 1;
+            m.node_count = count | (m.node_count & COUNT_DIRTY_BIT);
         }
 
         if meta.entry_point.is_none() {
@@ -610,7 +639,8 @@ where
 
         {
             let mut m = self.meta.get_mut();
-            m.node_count = m.node_count.saturating_sub(1);
+            let count = (m.node_count & !COUNT_DIRTY_BIT).saturating_sub(1);
+            m.node_count = count | (m.node_count & COUNT_DIRTY_BIT);
 
             if m.entry_point == Some(node_id) {
                 let mut best: Option<(u64, u8)> = None;

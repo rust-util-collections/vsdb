@@ -23,8 +23,8 @@
 //!
 //! Higher-level structures ([`VecDex`], [`SlotDex`]) **do** maintain a
 //! count because they fully control their own insert/remove paths.
-//! These counts are accurate during normal operation but may drift after
-//! an unclean shutdown — see their respective docs.
+//! A dirty-flag mechanism automatically rebuilds the count from live
+//! data on recovery after an unclean shutdown.
 //!
 //! ## Application-layer counting
 //!

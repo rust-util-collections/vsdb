@@ -90,6 +90,11 @@ type PageIndex = u32;
 
 const INLINE_CAPACITY_THRESHOLD: usize = 8;
 
+/// Bit 63 of `total` doubles as a dirty flag.  Set when the process
+/// starts operating, cleared on clean shutdown via [`SlotDex::save_meta`].
+/// If set on recovery, `from_meta` rebuilds the count from live data.
+const COUNT_DIRTY_BIT: u64 = 1 << 63;
+
 /// A skip-list-like data structure for fast, timestamp-based paged queries.
 ///
 /// `SlotDex` organizes data into "slots" (e.g., timestamps or sequence numbers),
@@ -157,8 +162,13 @@ where
     /// Persists this instance's metadata to disk so that it can be
     /// recovered later via [`from_meta`](Self::from_meta).
     ///
-    /// Returns the `instance_id` that should be passed to `from_meta`.
-    pub fn save_meta(&self) -> Result<u64> {
+    /// Marks a clean shutdown so that the next [`from_meta`](Self::from_meta)
+    /// call can skip the count rebuild.
+    pub fn save_meta(&mut self) -> Result<u64> {
+        // Clear dirty bit — signals clean shutdown.
+        let raw = self.total.get_value();
+        self.total.set_value(&(raw & !COUNT_DIRTY_BIT));
+
         let id = self.instance_id();
         crate::common::save_instance_meta(id, self)?;
         Ok(id)
@@ -166,10 +176,25 @@ where
 
     /// Recovers a `SlotDex` instance from previously saved metadata.
     ///
-    /// The caller must ensure that the underlying VSDB database still
-    /// contains the data referenced by this instance ID.
+    /// If the previous session did not call [`save_meta`](Self::save_meta)
+    /// (unclean shutdown), the total count is automatically rebuilt from
+    /// the live data.
     pub fn from_meta(instance_id: u64) -> Result<Self> {
-        crate::common::load_instance_meta(instance_id)
+        let mut me: Self = crate::common::load_instance_meta(instance_id)?;
+        me.ensure_count();
+        Ok(me)
+    }
+
+    /// If the dirty bit is set, rebuild the count from live data.
+    /// Then set the dirty bit for the current process lifetime.
+    fn ensure_count(&mut self) {
+        let raw = self.total.get_value();
+        if raw & COUNT_DIRTY_BIT != 0 {
+            let actual: u64 = self.data.iter().map(|(_, d)| d.len() as u64).sum();
+            self.total.set_value(&(actual | COUNT_DIRTY_BIT));
+        } else {
+            self.total.set_value(&(raw | COUNT_DIRTY_BIT));
+        }
     }
 
     /// Inserts a key into a specified slot.
@@ -201,7 +226,9 @@ where
                 c.insert(slot_floor.clone(), v);
                 t.store.insert(&slot_floor, &v);
             });
-            *self.total.get_mut() += 1;
+            let t = self.total.get_value();
+            self.total
+                .set_value(&(((t & !COUNT_DIRTY_BIT) + 1) | (t & COUNT_DIRTY_BIT)));
         }
 
         Ok(())
@@ -270,13 +297,17 @@ where
                     t.store.insert(&slot_floor, &new_cnt);
                 }
             });
-            *self.total.get_mut() -= 1;
+            let t = self.total.get_value();
+            self.total.set_value(
+                &((t & !COUNT_DIRTY_BIT).saturating_sub(1) | (t & COUNT_DIRTY_BIT)),
+            );
         }
     }
 
     /// Clears the `SlotDex`, removing all entries and tiers.
     pub fn clear(&mut self) {
-        *self.total.get_mut() = 0;
+        self.total
+            .set_value(&(self.total.get_value() & COUNT_DIRTY_BIT));
         self.data.clear();
 
         self.tiers.iter_mut().for_each(|t| {
@@ -552,7 +583,7 @@ where
         let slot_end = slot_end.unwrap_or(S::MAX);
 
         if S::MIN == slot_start && S::MAX == slot_end {
-            self.total.get_value()
+            self.total.get_value() & !COUNT_DIRTY_BIT
         } else {
             self.entry_cnt_within_two_slots(slot_start, slot_end)
         }
@@ -560,11 +591,8 @@ where
 
     /// Returns the total number of entries in the `SlotDex`.
     ///
-    /// This is maintained as an application-layer counter and is accurate
-    /// during normal operation.  After an unclean shutdown the counter
-    /// may drift because it is not updated atomically with the data.
-    /// Suitable for pagination estimates and display; do not use for
-    /// index arithmetic that would panic on an off-by-one.
+    /// Automatically rebuilt from disk on recovery after an unclean
+    /// shutdown (see [`from_meta`](Self::from_meta)).
     pub fn total(&self) -> EntryCnt {
         self.total_by_slot(None, None)
     }
