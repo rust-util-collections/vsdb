@@ -57,16 +57,18 @@ For EVERY finding from Task 1 (CRITICAL, HIGH, MEDIUM, or LOW):
 
 1. Run `make fmt` to apply code formatting.
 
-### Task 4: Bump Patch Version
+### Task 4: Bump Patch Version — MANDATORY
 
-If `git diff HEAD` shows actual code changes (not just version bumps):
+**You MUST complete every step below before proceeding to Task 5. Do NOT skip this task.**
 
-1. Read the current version from `core/Cargo.toml` (the `version = "x.y.z"` line).
-2. Increment `z` by 1 (e.g., `13.4.0` → `13.4.1`).
-3. Update all three version locations:
-   - `core/Cargo.toml` — `version = "x.y.z+1"`
-   - `strata/Cargo.toml` — `version = "x.y.z+1"`
-   - `Cargo.toml` (workspace) — `vsdb_core = { ... version = "x.y.z+1" ... }`
+1. Run `git diff HEAD --name-only` — if it lists any `.rs` file, a version bump is required. Skip this task ONLY if every changed file is a non-code file (`.md`, `.toml` version-only, etc.).
+2. Read `core/Cargo.toml` line 3 to get the current `version = "X.Y.Z"`.
+3. Compute `NEW = X.Y.(Z+1)` (e.g., `13.4.0` → `13.4.1`).
+4. Update these three locations with the NEW version:
+   - `core/Cargo.toml` — `version = "NEW"`
+   - `strata/Cargo.toml` — `version = "NEW"`
+   - `Cargo.toml` (workspace root) — `vsdb_core = { path = "core", version = "NEW", ... }`
+5. **Verify**: grep all three files for the NEW version string — all three must match. If any mismatch, fix it before continuing.
 
 ### Task 5: Commit
 
