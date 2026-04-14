@@ -99,6 +99,7 @@ where
     /// This API breaks Rust's semantic safety guarantees. Use only in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow_inner(&self) -> DagMapRaw {
+        // SAFETY: Caller enforces SWMR — only one writer at a time.
         unsafe { self.inner.shadow() }
     }
 
@@ -109,6 +110,7 @@ where
     /// This API breaks Rust's semantic safety guarantees. Use only in a race-free environment.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> DagMapRawKey<V> {
+        // SAFETY: Caller enforces SWMR — only one writer at a time.
         unsafe {
             Self {
                 inner: self.shadow_inner(),

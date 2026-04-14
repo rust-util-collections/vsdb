@@ -137,10 +137,7 @@ where
     /// * `swap_order` - If `true`, reverses the internal slot order. This can improve
     ///   performance for applications that primarily query in reverse chronological order.
     pub fn new(tier_capacity: S, swap_order: bool) -> Self {
-        assert!(
-            tier_capacity.as_u64() > 0,
-            "SlotDex: tier_capacity must be > 0"
-        );
+        assert!(tier_capacity > S::MIN, "SlotDex: tier_capacity must be > 0");
 
         Self {
             data: MapxOrd::new(),
@@ -572,7 +569,7 @@ where
     fn ensure_tier_capacity(&mut self) {
         let tiers_len = self.tiers.len();
         if let Some(top) = self.tiers.last_mut() {
-            if (top.len() as u64) <= self.tier_capacity.as_u64() {
+            if (top.len() as i128) <= self.tier_capacity.as_i128() {
                 return;
             }
             top.ensure_cache();
