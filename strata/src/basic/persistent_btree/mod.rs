@@ -601,8 +601,11 @@ impl PersistentBTree {
         }
     }
 
-    /// Removes a freshly-allocated, unreferenced node that is being
-    /// discarded before it enters any live commit's root tree.
+    /// Discards a node that is no longer reachable from any live root.
+    ///
+    /// Only acts when the node's `ref_count` is zero (freshly allocated
+    /// and never entered a live commit).  Shared nodes (`ref_count > 0`)
+    /// are left intact — they are still owned by other versions.
     ///
     /// Undoes the ref_count increments that `alloc` applied to its
     /// children and registers the node for deferred disk deletion.
@@ -610,11 +613,22 @@ impl PersistentBTree {
         if !self.ref_counts_ready {
             return;
         }
-        if let Some(nr) = self.ref_counts.remove(&nid) {
-            for &child in &nr.children {
-                if let Some(cr) = self.ref_counts.get_mut(&child) {
-                    cr.ref_count = cr.ref_count.saturating_sub(1);
-                }
+        // Guard: only discard truly unreferenced nodes.  In merge
+        // paths the discarded NodeId may be a shared sibling from a
+        // prior version (ref_count > 0) — leave those alone.
+        match self.ref_counts.get(&nid) {
+            Some(nr) if nr.ref_count > 0 => return,
+            None => return,
+            _ => {}
+        }
+        let nr = self.ref_counts.remove(&nid).unwrap();
+        for &child in &nr.children {
+            if let Some(cr) = self.ref_counts.get_mut(&child) {
+                debug_assert!(
+                    cr.ref_count > 0,
+                    "discard_node: child {child} already at ref_count=0"
+                );
+                cr.ref_count = cr.ref_count.saturating_sub(1);
             }
         }
         self.nodes

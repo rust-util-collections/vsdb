@@ -707,11 +707,6 @@ where
         let state = self.get_branch(branch)?;
         let _ = self.get_commit_inner(target)?;
 
-        // Mark dirty before any structural mutation so that crash
-        // recovery (gc → rebuild_ref_counts) will repair orphaned
-        // commits or imbalanced ref-counts.
-        *self.gc_dirty.get_mut() = true;
-
         // Verify target is reachable from the branch head.
         if state.head != NO_COMMIT && target != state.head {
             let mut queue = vec![state.head];
@@ -736,6 +731,11 @@ where
                 });
             }
         }
+
+        // Mark dirty before any structural mutation so that crash
+        // recovery (gc → rebuild_ref_counts) will repair orphaned
+        // commits or imbalanced ref-counts.
+        *self.gc_dirty.get_mut() = true;
 
         let commit = self.get_commit_inner(target)?;
         let old_head = state.head;
