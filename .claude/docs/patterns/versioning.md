@@ -2,7 +2,7 @@
 
 ## Files
 - `strata/src/versioned/mod.rs` — VerMap core, BranchState, Commit types
-- `strata/src/versioned/map.rs` — VerMap<K,V> implementation (500+ lines)
+- `strata/src/versioned/map.rs` — VerMap<K,V> implementation (1200+ lines)
 - `strata/src/versioned/diff.rs` — incremental diff computation
 - `strata/src/versioned/merge.rs` — three-way merge algorithm
 

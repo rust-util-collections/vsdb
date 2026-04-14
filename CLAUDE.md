@@ -35,7 +35,7 @@ make bench        # criterion benches (core, basic, versioned, slotdex, trie_ben
 
 | Subsystem | Key files | Purpose |
 |-----------|-----------|---------|
-| Engine | `core/src/common/engine/mmdb.rs` | MMDB integration, 16-shard routing |
+| Engine | `core/src/common/engine/mod.rs`, `mmdb.rs` | Mapx, batch ops, prefix alloc, 16-shard routing |
 | MapxRaw | `core/src/basic/mapx_raw/` | Untyped raw KV, prefix isolation |
 | Typed Collections | `strata/src/basic/mapx/`, `mapx_ord/`, `mapx_ord_rawkey/` | Mapx<K,V>, MapxOrd<K,V>, MapxOrdRawKey<V> |
 | Persistent B+ Tree | `strata/src/basic/persistent_btree/` | COW B+ tree, structural sharing |

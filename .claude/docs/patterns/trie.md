@@ -5,6 +5,8 @@
 - `strata/src/trie/mpt/` — Merkle Patricia Trie (16-ary, nibble-based)
 - `strata/src/trie/smt/` — Sparse Merkle Tree (binary, 256-bit paths)
 - `strata/src/trie/node/` — trie node codecs
+- `strata/src/trie/nibbles.rs` — Nibble path representation (MPT key paths)
+- `strata/src/trie/error.rs` — Trie error types
 - `strata/src/trie/cache.rs` — disk cache for trie snapshots
 - `strata/src/trie/proof.rs` — VerMapWithProof integration
 

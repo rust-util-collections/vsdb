@@ -184,15 +184,15 @@ Launch **one Agent per subsystem** in parallel. Each agent receives:
 
 | Subsystem | Files | Pattern Guide |
 |-----------|-------|---------------|
-| engine & raw KV | `core/src/common/engine/mmdb.rs`, `core/src/common/mod.rs`, `core/src/basic/mapx_raw/` | `engine.md` |
+| engine & raw KV | `core/src/common/engine/mod.rs`, `core/src/common/engine/mmdb.rs`, `core/src/common/mod.rs`, `core/src/basic/mapx_raw/` | `engine.md` |
 | typed collections | `strata/src/basic/mapx/`, `strata/src/basic/mapx_ord/`, `strata/src/basic/mapx_ord_rawkey/`, `strata/src/basic/orphan/` | `engine.md` |
 | B+ tree | `strata/src/basic/persistent_btree/` | `btree.md` |
 | versioning | `strata/src/versioned/` (mod.rs, map.rs, handle.rs, diff.rs, merge.rs) | `versioning.md` |
-| Merkle tries | `strata/src/trie/` (mpt/, smt/, node/, cache.rs, proof.rs) | `trie.md` |
+| Merkle tries | `strata/src/trie/` (mpt/, smt/, node/, nibbles.rs, error.rs, cache.rs, proof.rs) | `trie.md` |
 | slot index | `strata/src/slotdex/` | `slotdex.md` |
 | DAG collections | `strata/src/dagmap/` | `dagmap.md` |
 | vector index | `strata/src/vecdex/` | `vecdex.md` |
-| encoding & common | `strata/src/common/ende.rs`, `strata/src/common/macros.rs`, `strata/src/lib.rs` | (cross-cutting) |
+| encoding & common | `strata/src/common/ende.rs`, `strata/src/common/error.rs`, `strata/src/common/mod.rs`, `strata/src/common/macros.rs`, `strata/src/lib.rs` | (cross-cutting) |
 
 ### Aggregation
 

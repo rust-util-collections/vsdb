@@ -1,7 +1,8 @@
 # Engine & Storage Layer Review Patterns
 
 ## Files
-- `core/src/common/engine/mmdb.rs` — MMDB integration, 16-shard routing
+- `core/src/common/engine/mod.rs` — engine::Mapx, batch ops, prefix allocation, shard routing
+- `core/src/common/engine/mmdb.rs` — MMDB integration, 16-shard DB instances
 - `core/src/common/mod.rs` — VSDB singleton, paths, config
 - `core/src/basic/mapx_raw/mod.rs` — MapxRaw (untyped KV, prefix-scoped)
 
