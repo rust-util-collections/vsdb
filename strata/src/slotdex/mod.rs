@@ -204,7 +204,7 @@ where
 
         Self {
             data: MapxOrd::new(),
-            total: Orphan::new(0),
+            total: Orphan::new(dc::set_dirty(0)),
             tiers: vec![],
             tier_capacity,
             swap_order,

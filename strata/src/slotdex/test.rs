@@ -535,3 +535,67 @@ fn test_meta_restore_with_data() {
     let entries_p4 = restored.get_entries_by_page(20, 4, false);
     assert_eq!(entries_p4.len(), 20);
 }
+
+// ---- Dirty-flag crash recovery tests ----
+
+#[test]
+fn clean_shutdown_preserves_total() {
+    let mut db: SlotDex<u64, u64> = SlotDex::new(10, false);
+    for i in 0..20u64 {
+        db.insert(i, i).unwrap();
+    }
+
+    let id = db.save_meta().unwrap();
+    let restored: SlotDex<u64, u64> = SlotDex::from_meta(id).unwrap();
+    assert_eq!(restored.total(), 20);
+}
+
+#[test]
+fn crash_recovery_rebuilds_total() {
+    let mut db: SlotDex<u64, u64> = SlotDex::new(10, false);
+    for i in 0..15u64 {
+        db.insert(i, i * 10).unwrap();
+    }
+
+    // Simulate crash: persist without calling save_meta.
+    let id = db.instance_id();
+    crate::common::save_instance_meta(id, &db).unwrap();
+
+    let restored: SlotDex<u64, u64> = SlotDex::from_meta(id).unwrap();
+    assert_eq!(restored.total(), 15);
+}
+
+#[test]
+fn serde_roundtrip_triggers_ensure_count() {
+    let mut db: SlotDex<u64, u64> = SlotDex::new(10, false);
+    for i in 0..8u64 {
+        db.insert(i, i).unwrap();
+    }
+
+    // Serialize while dirty (no save_meta).
+    let bytes = postcard::to_allocvec(&db).unwrap();
+
+    // Deserialize — should trigger ensure_count.
+    let restored: SlotDex<u64, u64> = postcard::from_bytes(&bytes).unwrap();
+    assert_eq!(restored.total(), 8);
+}
+
+#[test]
+fn crash_with_corrupted_total_is_corrected() {
+    let mut db: SlotDex<u64, u64> = SlotDex::new(10, false);
+    for i in 0..12u64 {
+        db.insert(i, i * 100).unwrap();
+    }
+
+    // Corrupt total: set dirty + wrong count.
+    db.total
+        .set_value(&crate::common::dirty_count::set_dirty(999));
+
+    // Persist the corrupted state.
+    let id = db.instance_id();
+    crate::common::save_instance_meta(id, &db).unwrap();
+
+    // Restore — should rebuild to actual count of 12.
+    let restored: SlotDex<u64, u64> = SlotDex::from_meta(id).unwrap();
+    assert_eq!(restored.total(), 12);
+}

@@ -902,3 +902,99 @@ fn set_ef_search_works() {
     let results = idx.search(&[0.0, 0.0], 1).unwrap();
     assert_eq!(results.len(), 1);
 }
+
+// ---- Dirty-flag crash recovery tests ----
+
+#[test]
+fn clean_shutdown_skips_rebuild() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 2,
+        ..Default::default()
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    for i in 0..5u32 {
+        idx.insert(&i, &[i as f32, 0.0]).unwrap();
+    }
+
+    // Clean shutdown: save_meta clears the dirty bit.
+    let id = idx.save_meta().unwrap();
+    let raw = idx.meta.get_value().node_count;
+    assert!(
+        !crate::common::dirty_count::is_dirty(raw),
+        "dirty bit should be cleared after save_meta"
+    );
+
+    // Restore — count should be correct without rebuild.
+    let restored: VecDex<u32, L2> = VecDex::from_meta(id).unwrap();
+    assert_eq!(restored.len(), 5);
+}
+
+#[test]
+fn crash_recovery_rebuilds_count() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 2,
+        ..Default::default()
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    for i in 0..7u32 {
+        idx.insert(&i, &[i as f32, 0.0]).unwrap();
+    }
+
+    // Simulate crash: persist without calling save_meta (dirty bit stays set).
+    let id = idx.instance_id();
+    crate::common::save_instance_meta(id, &idx).unwrap();
+    let raw = idx.meta.get_value().node_count;
+    assert!(
+        crate::common::dirty_count::is_dirty(raw),
+        "dirty bit should be set during operation"
+    );
+
+    // Restore — ensure_count should detect dirty and rebuild.
+    let restored: VecDex<u32, L2> = VecDex::from_meta(id).unwrap();
+    assert_eq!(restored.len(), 7);
+}
+
+#[test]
+fn serde_roundtrip_triggers_ensure_count() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 2,
+        ..Default::default()
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    idx.insert(&1, &[1.0, 0.0]).unwrap();
+    idx.insert(&2, &[2.0, 0.0]).unwrap();
+
+    // Serialize while dirty (no save_meta).
+    let bytes = postcard::to_allocvec(&idx).unwrap();
+
+    // Deserialize — should trigger ensure_count via hand-written Deserialize.
+    let restored: VecDex<u32, L2> = postcard::from_bytes(&bytes).unwrap();
+    assert_eq!(restored.len(), 2);
+}
+
+#[test]
+fn crash_with_corrupted_count_is_corrected() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 2,
+        ..Default::default()
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    for i in 0..10u32 {
+        idx.insert(&i, &[i as f32, 0.0]).unwrap();
+    }
+
+    // Corrupt count: set dirty + wrong count.
+    idx.meta.get_mut().node_count = crate::common::dirty_count::set_dirty(999);
+
+    // Persist the corrupted state.
+    let id = idx.instance_id();
+    crate::common::save_instance_meta(id, &idx).unwrap();
+
+    // Restore — should rebuild to actual count of 10.
+    let restored: VecDex<u32, L2> = VecDex::from_meta(id).unwrap();
+    assert_eq!(restored.len(), 10);
+}

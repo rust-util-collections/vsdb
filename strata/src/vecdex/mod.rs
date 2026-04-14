@@ -252,7 +252,7 @@ where
         let meta = HnswMeta {
             entry_point: None,
             max_layer: 0,
-            node_count: 0,
+            node_count: dc::set_dirty(0),
             next_node_id: 0,
             m: config.m,
             m_max0: config.m_max0,

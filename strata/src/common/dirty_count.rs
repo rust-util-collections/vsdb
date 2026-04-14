@@ -56,3 +56,100 @@ pub fn zero(raw: u64) -> u64 {
 pub fn set_count(raw: u64, new_count: u64) -> u64 {
     new_count | (raw & DIRTY_BIT)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clean_value() {
+        assert_eq!(count(42), 42);
+        assert!(!is_dirty(42));
+    }
+
+    #[test]
+    fn dirty_value() {
+        let raw = set_dirty(42);
+        assert!(is_dirty(raw));
+        assert_eq!(count(raw), 42);
+    }
+
+    #[test]
+    fn clear_dirty_preserves_count() {
+        let raw = set_dirty(99);
+        let cleaned = clear_dirty(raw);
+        assert_eq!(cleaned, 99);
+        assert!(!is_dirty(cleaned));
+    }
+
+    #[test]
+    fn inc_preserves_dirty() {
+        let clean = 5u64;
+        assert_eq!(inc(clean), 6);
+        assert!(!is_dirty(inc(clean)));
+
+        let dirty = set_dirty(5);
+        assert_eq!(count(inc(dirty)), 6);
+        assert!(is_dirty(inc(dirty)));
+    }
+
+    #[test]
+    fn dec_preserves_dirty() {
+        let dirty = set_dirty(3);
+        assert_eq!(count(dec(dirty)), 2);
+        assert!(is_dirty(dec(dirty)));
+    }
+
+    #[test]
+    fn dec_saturates_at_zero() {
+        let dirty = set_dirty(0);
+        assert_eq!(count(dec(dirty)), 0);
+        assert!(is_dirty(dec(dirty)));
+
+        assert_eq!(count(dec(0)), 0);
+    }
+
+    #[test]
+    fn zero_preserves_dirty() {
+        let dirty = set_dirty(100);
+        assert_eq!(count(zero(dirty)), 0);
+        assert!(is_dirty(zero(dirty)));
+
+        assert_eq!(zero(100), 0);
+        assert!(!is_dirty(zero(100)));
+    }
+
+    #[test]
+    fn set_count_preserves_dirty() {
+        let dirty = set_dirty(10);
+        let updated = set_count(dirty, 99);
+        assert_eq!(count(updated), 99);
+        assert!(is_dirty(updated));
+
+        let clean = 10u64;
+        let updated = set_count(clean, 99);
+        assert_eq!(updated, 99);
+        assert!(!is_dirty(updated));
+    }
+
+    #[test]
+    fn roundtrip_through_all_ops() {
+        let mut v = 0u64;
+        v = set_dirty(v);
+        for _ in 0..100 {
+            v = inc(v);
+        }
+        assert_eq!(count(v), 100);
+        assert!(is_dirty(v));
+
+        for _ in 0..30 {
+            v = dec(v);
+        }
+        assert_eq!(count(v), 70);
+        assert!(is_dirty(v));
+
+        v = clear_dirty(v);
+        assert_eq!(count(v), 70);
+        assert!(!is_dirty(v));
+    }
+}
