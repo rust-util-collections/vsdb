@@ -46,8 +46,8 @@ mod test;
 
 use crate::{
     basic::mapx_ord_rawkey::{
-        MapxOrdRawKey, MapxOrdRawKeyBatchEntry, MapxOrdRawKeyIter, ValueIterMut,
-        ValueMut,
+        MapxOrdRawKey, MapxOrdRawKeyBatchEntry, MapxOrdRawKeyIter, MapxOrdRawKeyIterMut,
+        ValueIterMut, ValueMut,
     },
     common::{
         RawKey,
@@ -57,8 +57,6 @@ use crate::{
 };
 use ruc::*;
 use std::{marker::PhantomData, ops::RangeBounds};
-use vsdb_core::basic::mapx_raw;
-
 define_map_wrapper! {
     #[doc = "A disk-based, `BTreeMap`-like data structure with typed, ordered keys and values."]
     #[doc = ""]
@@ -154,7 +152,7 @@ where
     #[inline(always)]
     pub fn iter_mut(&mut self) -> MapxOrdIterMut<'_, K, V> {
         MapxOrdIterMut {
-            inner: self.inner.inner.iter_mut(),
+            inner: self.inner.iter_mut(),
             _p: PhantomData,
         }
     }
@@ -171,7 +169,7 @@ where
     #[inline(always)]
     pub fn values_mut(&mut self) -> MapxOrdValuesMut<'_, V> {
         MapxOrdValuesMut {
-            inner: self.inner.inner.iter_mut(),
+            inner: self.inner.iter_mut(),
             _p: PhantomData,
         }
     }
@@ -196,7 +194,7 @@ where
         let (l, h) = crate::cow_bytes_bounds!(bounds);
 
         MapxOrdIterMut {
-            inner: self.inner.inner.range_mut((l, h)),
+            inner: self.inner.range_mut((l, h)),
             _p: PhantomData,
         }
     }
@@ -390,9 +388,7 @@ pub struct MapxOrdValuesMut<'a, V>
 where
     V: ValueEnDe,
 {
-    /// The inner mutable iterator over raw key-value pairs.
-    pub(crate) inner: mapx_raw::MapxRawIterMut<'a>,
-    /// A phantom data field to hold the value type.
+    pub(crate) inner: MapxOrdRawKeyIterMut<'a, V>,
     pub(crate) _p: PhantomData<V>,
 }
 
@@ -402,10 +398,7 @@ where
 {
     type Item = ValueIterMut<'a, V>;
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|(_, v)| ValueIterMut {
-            value: pnk!(<V as ValueEnDe>::decode(&v)),
-            inner: v,
-        })
+        self.inner.next().map(|(_, v)| v)
     }
 }
 
@@ -414,10 +407,7 @@ where
     V: ValueEnDe,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.inner.next_back().map(|(_, v)| ValueIterMut {
-            value: pnk!(<V as ValueEnDe>::decode(&v)),
-            inner: v,
-        })
+        self.inner.next_back().map(|(_, v)| v)
     }
 }
 
@@ -430,7 +420,7 @@ where
     K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
-    inner: mapx_raw::MapxRawIterMut<'a>,
+    inner: MapxOrdRawKeyIterMut<'a, V>,
     _p: PhantomData<(K, V)>,
 }
 
@@ -441,15 +431,9 @@ where
 {
     type Item = (K, ValueIterMut<'a, V>);
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|(k, v)| {
-            (
-                pnk!(<K as KeyEnDeOrdered>::from_bytes(k)),
-                ValueIterMut {
-                    value: <V as ValueEnDe>::decode(&v).unwrap(),
-                    inner: v,
-                },
-            )
-        })
+        self.inner
+            .next()
+            .map(|(k, v)| (pnk!(<K as KeyEnDeOrdered>::from_bytes(k)), v))
     }
 }
 
@@ -459,15 +443,9 @@ where
     V: ValueEnDe,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.inner.next_back().map(|(k, v)| {
-            (
-                pnk!(<K as KeyEnDeOrdered>::from_bytes(k)),
-                ValueIterMut {
-                    value: <V as ValueEnDe>::decode(&v).unwrap(),
-                    inner: v,
-                },
-            )
-        })
+        self.inner
+            .next_back()
+            .map(|(k, v)| (pnk!(<K as KeyEnDeOrdered>::from_bytes(k)), v))
     }
 }
 

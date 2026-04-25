@@ -193,3 +193,35 @@ fn test_meta_with_parent_child() {
     // Inherited from parent
     assert_eq!(restored.get("base").unwrap().as_slice(), b"v0");
 }
+
+#[test]
+fn test_prune_with_side_branches() {
+    let mut i0 = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
+    i0.insert("k0", "v0");
+    let mut i0_slot = Orphan::new(Some(i0));
+
+    let mid = DagMapRaw::new(&mut i0_slot).unwrap();
+    let mut mid_slot = Orphan::new(Some(mid.clone()));
+
+    // Side-branch child of mid
+    let mut side = DagMapRaw::new(&mut mid_slot).unwrap();
+    side.insert("k_side", "v_side");
+
+    // Another side-branch child of mid
+    let mut side2 = DagMapRaw::new(&mut mid_slot).unwrap();
+    side2.insert("k_side2", "v_side2");
+
+    // Head node on mainline
+    let mut head = DagMapRaw::new(&mut mid_slot).unwrap();
+    head.insert("k_head", "v_head");
+
+    // Prune
+    let pruned = head.prune().unwrap();
+
+    assert_eq!(pruned.get("k0").unwrap().as_slice(), b"v0");
+    assert_eq!(pruned.get("k_head").unwrap().as_slice(), b"v_head");
+
+    // Side branches of intermediate nodes should be destroyed
+    assert!(side.get("k_side").is_none());
+    assert!(side2.get("k_side2").is_none());
+}

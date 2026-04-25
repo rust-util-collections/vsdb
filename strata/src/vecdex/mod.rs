@@ -504,11 +504,13 @@ where
     /// Searches with a key predicate evaluated during beam search.
     ///
     /// Non-matching nodes still participate in graph traversal to maintain
-    /// connectivity, but are excluded from the result set.
+    /// connectivity, but are excluded from the result set.  Distance-based
+    /// pruning is disabled when filtering to avoid missing matches reachable
+    /// only through non-matching bridge nodes.
     ///
-    /// For highly selective predicates (< 10% match rate), prefer
+    /// For very large indexes or highly selective predicates, use
     /// [`search_ef_with_filter`](Self::search_ef_with_filter) with an
-    /// increased `ef` to maintain recall.
+    /// increased `ef` to collect more candidate results.
     pub fn search_with_filter(
         &self,
         query: &[S],

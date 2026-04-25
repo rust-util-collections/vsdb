@@ -148,7 +148,7 @@ where
     #[inline(always)]
     pub fn values_mut(&mut self) -> MapxValuesMut<'_, V> {
         MapxValuesMut {
-            inner: self.inner.inner.iter_mut(),
+            inner: self.inner.iter_mut(),
             _p: PhantomData,
         }
     }
