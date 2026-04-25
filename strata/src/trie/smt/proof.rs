@@ -153,10 +153,18 @@ fn prove_walk(
 // Proof verification
 // =========================================================================
 
-/// Verifies an SMT proof against a root hash.
+/// Verifies an SMT proof against a root hash and expected key hash.
 ///
 /// Returns `Ok(true)` if the proof is valid.
-pub fn verify_proof(root_hash: &[u8; 32], proof: &SmtProof) -> Result<bool> {
+pub fn verify_proof(
+    root_hash: &[u8; 32],
+    expected_key_hash: &[u8; 32],
+    proof: &SmtProof,
+) -> Result<bool> {
+    if &proof.key_hash != expected_key_hash {
+        return Ok(false);
+    }
+
     if proof.siblings.len() != TREE_DEPTH {
         return Err(TrieError::InvalidState(format!(
             "proof must have {} siblings, got {}",

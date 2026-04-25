@@ -124,6 +124,13 @@ fn test_serde_roundtrip() {
     assert_eq!(restored.get("y").unwrap(), s!("Y"));
 }
 
+#[test]
+#[should_panic(expected = "empty encoded value is a tombstone")]
+fn typed_empty_encoding_panics() {
+    let mut dag: DagMapRawKey<()> = DagMapRawKey::new(&mut Orphan::new(None)).unwrap();
+    dag.insert("unit", &());
+}
+
 /// from_meta nonexistent.
 #[test]
 fn test_from_meta_nonexistent() {

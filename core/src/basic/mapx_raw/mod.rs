@@ -443,14 +443,18 @@ impl MapxRaw {
         self.inner.is_the_same_instance(&other_hdr.inner)
     }
 
-    /// Persists this instance's metadata (its 8-byte prefix) to the
+    /// Persists this instance's metadata to the
     /// instance-meta directory so that it can be recovered later via
     /// [`from_meta`](Self::from_meta).
     ///
     /// Returns the `instance_id` that can be passed to `from_meta`.
     pub fn save_meta(&self) -> Result<u64> {
         let id = self.instance_id();
-        fs::write(crate::common::vsdb_meta_path(id), self.as_bytes()).c(d!())?;
+        fs::write(
+            crate::common::vsdb_meta_path(id),
+            self.inner.encode_prefix_meta(),
+        )
+        .c(d!())?;
         Ok(id)
     }
 
@@ -460,7 +464,8 @@ impl MapxRaw {
     /// contains the data referenced by this instance ID.
     pub fn from_meta(instance_id: u64) -> Result<Self> {
         let bytes = fs::read(crate::common::vsdb_meta_path(instance_id)).c(d!())?;
-        Ok(unsafe { Self::from_bytes(&bytes) })
+        let prefix = engine::Mapx::decode_trusted_prefix_meta(&bytes).c(d!())?;
+        Ok(unsafe { Self::from_bytes(prefix) })
     }
 }
 

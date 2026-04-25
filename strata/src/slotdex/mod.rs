@@ -263,6 +263,7 @@ where
     pub fn insert(&mut self, slot: S, k: K) -> Result<()> {
         let slot = self.to_storage_slot(slot);
 
+        self.mark_dirty();
         self.ensure_tier_capacity();
 
         let mut ctner = self.data.get(&slot).unwrap_or_default();
@@ -299,16 +300,14 @@ where
     pub fn remove(&mut self, slot: S, k: &K) {
         let slot = self.to_storage_slot(slot);
 
-        let (exist, empty, d) = match self.data.get(&slot) {
-            Some(mut d) => {
-                let existed = d.remove(k);
-                (existed, d.is_empty(), d)
-            }
-            _ => {
-                return;
-            }
+        let mut d = match self.data.get(&slot) {
+            Some(d) => d,
+            _ => return,
         };
 
+        self.mark_dirty();
+        let exist = d.remove(k);
+        let empty = d.is_empty();
         if empty {
             self.data.remove(&slot);
         } else if exist {
@@ -360,6 +359,10 @@ where
 
     /// Clears the `SlotDex`, removing all entries and tiers.
     pub fn clear(&mut self) {
+        self.mark_dirty();
+        for mut ctner in self.data.values_mut() {
+            ctner.clear_storage();
+        }
         self.total.set_value(&dc::zero(self.total.get_value()));
         self.data.clear();
 
@@ -652,6 +655,11 @@ where
 
     // --- Private Helper Methods ---
 
+    fn mark_dirty(&mut self) {
+        let raw = self.total.get_value();
+        self.total.set_value(&dc::set_dirty(raw));
+    }
+
     // Ensure there is enough tier capacity to cover the new slot.
     fn ensure_tier_capacity(&mut self) {
         let tiers_len = self.tiers.len();
@@ -871,6 +879,12 @@ where
 
     fn is_empty(&self) -> bool {
         0 == self.len()
+    }
+
+    fn clear_storage(&mut self) {
+        if let Self::Large { map, .. } = self {
+            map.clear();
+        }
     }
 
     fn try_upgrade(&mut self) {

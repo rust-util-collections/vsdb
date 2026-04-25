@@ -666,12 +666,13 @@ mod smt_tests {
         // Membership proof for "alpha".
         let proof = smt.prove(b"alpha").unwrap();
         assert_eq!(proof.value, Some(b"A".to_vec()));
-        assert!(SmtCalc::verify_proof(&root32, &proof).unwrap());
+        assert!(SmtCalc::verify_proof(&root32, b"alpha", &proof).unwrap());
+        assert!(!SmtCalc::verify_proof(&root32, b"beta", &proof).unwrap());
 
         // Membership proof for "beta".
         let proof = smt.prove(b"beta").unwrap();
         assert_eq!(proof.value, Some(b"B".to_vec()));
-        assert!(SmtCalc::verify_proof(&root32, &proof).unwrap());
+        assert!(SmtCalc::verify_proof(&root32, b"beta", &proof).unwrap());
     }
 
     #[test]
@@ -684,7 +685,7 @@ mod smt_tests {
         // Non-membership proof for a key that doesn't exist.
         let proof = smt.prove(b"missing").unwrap();
         assert_eq!(proof.value, None);
-        assert!(SmtCalc::verify_proof(&root32, &proof).unwrap());
+        assert!(SmtCalc::verify_proof(&root32, b"missing", &proof).unwrap());
     }
 
     #[test]
@@ -701,7 +702,7 @@ mod smt_tests {
 
         let proof = smt.prove(b"nonexistent_key").unwrap();
         assert_eq!(proof.value, None);
-        assert!(SmtCalc::verify_proof(&root32, &proof).unwrap());
+        assert!(SmtCalc::verify_proof(&root32, b"nonexistent_key", &proof).unwrap());
     }
 
     #[test]
@@ -712,7 +713,7 @@ mod smt_tests {
         let proof = smt.prove(b"key").unwrap();
 
         let wrong_root = [0xFFu8; 32];
-        assert!(!SmtCalc::verify_proof(&wrong_root, &proof).unwrap());
+        assert!(!SmtCalc::verify_proof(&wrong_root, b"key", &proof).unwrap());
     }
 
     #[test]
@@ -724,7 +725,7 @@ mod smt_tests {
 
         let mut proof = smt.prove(b"key").unwrap();
         proof.value = Some(b"tampered".to_vec());
-        assert!(!SmtCalc::verify_proof(&root32, &proof).unwrap());
+        assert!(!SmtCalc::verify_proof(&root32, b"key", &proof).unwrap());
     }
 
     #[test]
@@ -735,11 +736,11 @@ mod smt_tests {
         let root32: [u8; 32] = root.try_into().unwrap();
 
         let proof = smt.prove(b"only").unwrap();
-        assert!(SmtCalc::verify_proof(&root32, &proof).unwrap());
+        assert!(SmtCalc::verify_proof(&root32, b"only", &proof).unwrap());
 
         let proof = smt.prove(b"other").unwrap();
         assert_eq!(proof.value, None);
-        assert!(SmtCalc::verify_proof(&root32, &proof).unwrap());
+        assert!(SmtCalc::verify_proof(&root32, b"other", &proof).unwrap());
     }
 
     #[test]
@@ -757,7 +758,7 @@ mod smt_tests {
             let proof = smt.prove(&i.to_be_bytes()).unwrap();
             assert_eq!(proof.value, Some(i.to_be_bytes().to_vec()));
             assert!(
-                SmtCalc::verify_proof(&root32, &proof).unwrap(),
+                SmtCalc::verify_proof(&root32, &i.to_be_bytes(), &proof).unwrap(),
                 "membership proof failed for key {}",
                 i
             );
@@ -768,7 +769,7 @@ mod smt_tests {
             let proof = smt.prove(&i.to_be_bytes()).unwrap();
             assert_eq!(proof.value, None);
             assert!(
-                SmtCalc::verify_proof(&root32, &proof).unwrap(),
+                SmtCalc::verify_proof(&root32, &i.to_be_bytes(), &proof).unwrap(),
                 "non-membership proof failed for key {}",
                 i
             );
@@ -787,11 +788,11 @@ mod smt_tests {
 
         let proof_a = smt.prove(b"a").unwrap();
         assert_eq!(proof_a.value, None);
-        assert!(SmtCalc::verify_proof(&root32, &proof_a).unwrap());
+        assert!(SmtCalc::verify_proof(&root32, b"a", &proof_a).unwrap());
 
         let proof_b = smt.prove(b"b").unwrap();
         assert_eq!(proof_b.value, Some(b"2".to_vec()));
-        assert!(SmtCalc::verify_proof(&root32, &proof_b).unwrap());
+        assert!(SmtCalc::verify_proof(&root32, b"b", &proof_b).unwrap());
     }
 
     #[test]
@@ -802,7 +803,7 @@ mod smt_tests {
 
         let proof = smt.prove(b"anything").unwrap();
         assert_eq!(proof.value, None);
-        assert!(SmtCalc::verify_proof(&root32, &proof).unwrap());
+        assert!(SmtCalc::verify_proof(&root32, b"anything", &proof).unwrap());
     }
 
     // =================================================================

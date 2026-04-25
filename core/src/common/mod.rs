@@ -12,6 +12,7 @@ pub use engine::BatchTrait;
 use parking_lot::Mutex;
 use ruc::*;
 use std::{
+    cell::Cell,
     env, fs,
     mem::size_of,
     path::{Path, PathBuf},
@@ -85,6 +86,33 @@ static VSDB_META_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     pnk!(fs::create_dir_all(&d));
     d
 });
+
+thread_local! {
+    static LEGACY_MAPX_META_DECODE_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+struct LegacyMapxMetaDecodeGuard;
+
+impl Drop for LegacyMapxMetaDecodeGuard {
+    fn drop(&mut self) {
+        LEGACY_MAPX_META_DECODE_DEPTH.with(|depth| {
+            depth.set(depth.get().saturating_sub(1));
+        });
+    }
+}
+
+#[doc(hidden)]
+pub fn with_legacy_mapx_meta_decode<T>(f: impl FnOnce() -> T) -> T {
+    LEGACY_MAPX_META_DECODE_DEPTH.with(|depth| {
+        depth.set(depth.get() + 1);
+    });
+    let _guard = LegacyMapxMetaDecodeGuard;
+    f()
+}
+
+pub(crate) fn legacy_mapx_meta_decode_enabled() -> bool {
+    LEGACY_MAPX_META_DECODE_DEPTH.with(|depth| depth.get() > 0)
+}
 
 /// Returns the instance-meta directory path for VSDB.
 ///

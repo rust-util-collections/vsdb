@@ -6,6 +6,25 @@ fn setup() {
     let _ = vsdb_core::vsdb_set_base_dir(&dir);
 }
 
+fn assert_bidirectional<K, D, S>(idx: &VecDex<K, D, S>)
+where
+    K: KeyEnDe + ValueEnDe + Clone + Eq,
+    D: DistanceMetric<S>,
+    S: Scalar,
+{
+    for (node, info) in idx.node_info.iter() {
+        for layer in 0..=info.max_layer {
+            for neighbor in hnsw::get_neighbors(&idx.adjacency, layer, node) {
+                let reverse = hnsw::get_neighbors(&idx.adjacency, layer, neighbor);
+                assert!(
+                    reverse.contains(&node),
+                    "missing reverse edge layer {layer}: {neighbor} -> {node}"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn basic_insert_search_l2() {
     setup();
@@ -579,6 +598,7 @@ fn graph_connectivity_after_deletions() {
     for i in 0..50u32 {
         idx.insert(&i, &[i as f32, (i as f32 * 0.3).sin()]).unwrap();
     }
+    assert_bidirectional(&idx);
 
     // Remove 10 nodes that are NOT the entry point.
     let ep = idx.meta.get_value().entry_point.unwrap();
@@ -588,6 +608,7 @@ fn graph_connectivity_after_deletions() {
             continue;
         }
         idx.remove(&i).unwrap();
+        assert_bidirectional(&idx);
         removed += 1;
         if removed >= 10 {
             break;

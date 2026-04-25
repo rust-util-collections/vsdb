@@ -695,6 +695,35 @@ fn bulk_load_single_entry() {
 }
 
 #[test]
+fn bulk_load_coalesces_duplicate_keys() {
+    setup();
+    let mut tree = PersistentBTree::new();
+    let root = tree.bulk_load(vec![
+        (b"a".to_vec(), b"old".to_vec()),
+        (b"a".to_vec(), b"new".to_vec()),
+        (b"b".to_vec(), b"bee".to_vec()),
+    ]);
+
+    assert_eq!(tree.get(root, b"a").unwrap(), b"new");
+    assert_eq!(tree.iter(root).collect::<Vec<_>>().len(), 2);
+
+    let root = tree.remove(root, b"a");
+    assert!(tree.get(root, b"a").is_none());
+    assert_eq!(tree.iter(root).collect::<Vec<_>>().len(), 1);
+}
+
+#[test]
+#[should_panic(expected = "PersistentBTree::bulk_load entries must be sorted by key")]
+fn bulk_load_rejects_unsorted_keys() {
+    setup();
+    let mut tree = PersistentBTree::new();
+    let _ = tree.bulk_load(vec![
+        (b"b".to_vec(), b"bee".to_vec()),
+        (b"a".to_vec(), b"aye".to_vec()),
+    ]);
+}
+
+#[test]
 fn bulk_load_then_modify() {
     setup();
     let mut tree = PersistentBTree::new();
@@ -1014,14 +1043,13 @@ fn test_serde_roundtrip() {
     }
 }
 
-/// Serialized size: nodes handle (8B) + next_id (varint) → should be small.
+/// Serialized size: nodes handle metadata + next_id (varint) should stay small.
 #[test]
 fn test_serde_size() {
     setup();
     let tree = PersistentBTree::new();
     let bytes = postcard::to_allocvec(&tree).unwrap();
-    // Tuple of (MapxRaw handle ~8B, next_id=1 varint ~1B) → ~9-10 bytes
-    assert!(bytes.len() <= 12, "expected ≤12 bytes, got {}", bytes.len());
+    assert!(bytes.len() <= 24, "expected ≤24 bytes, got {}", bytes.len());
 }
 
 /// from_meta nonexistent.

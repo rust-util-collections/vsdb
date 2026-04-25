@@ -193,13 +193,13 @@ fn smt_prove_verify(c: &mut Criterion) {
     });
 
     let proofs: Vec<_> = (0u32..100)
-        .map(|i| smt.prove(&i.to_be_bytes()).unwrap())
+        .map(|i| (i.to_be_bytes(), smt.prove(&i.to_be_bytes()).unwrap()))
         .collect();
 
     c.bench_function("smt_verify_100", |b| {
         b.iter(|| {
-            for proof in &proofs {
-                SmtCalc::verify_proof(&root32, proof).unwrap();
+            for (key, proof) in &proofs {
+                SmtCalc::verify_proof(&root32, key, proof).unwrap();
             }
         });
     });

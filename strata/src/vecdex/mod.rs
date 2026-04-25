@@ -451,21 +451,17 @@ where
                 let mut n_neighbors = get_neighbors(&self.adjacency, l, neighbor);
                 n_neighbors.push(node_id);
                 set_neighbors(&mut self.adjacency, l, neighbor, &n_neighbors);
-                prune_neighbors::<S, D>(
+                let evicted = prune_neighbors::<S, D>(
                     neighbor,
                     l,
                     m_max,
                     &mut self.adjacency,
                     &get_vec,
                 );
-                // Enforce bidirectionality: if prune evicted node_id
-                // from neighbor's list, remove neighbor from node_id's
-                // list symmetrically (INV-VD2).
-                let n_after = get_neighbors(&self.adjacency, l, neighbor);
-                if !n_after.contains(&node_id) {
-                    let mut my_list = get_neighbors(&self.adjacency, l, node_id);
-                    my_list.retain(|&x| x != neighbor);
-                    set_neighbors(&mut self.adjacency, l, node_id, &my_list);
+                for evicted_id in evicted {
+                    let mut e_list = get_neighbors(&self.adjacency, l, evicted_id);
+                    e_list.retain(|&x| x != neighbor);
+                    set_neighbors(&mut self.adjacency, l, evicted_id, &e_list);
                 }
             }
 
@@ -674,7 +670,7 @@ where
                     let mut c_list = get_neighbors(&self.adjacency, l, candidate);
                     c_list.push(n);
                     set_neighbors(&mut self.adjacency, l, candidate, &c_list);
-                    prune_neighbors::<S, D>(
+                    let evicted = prune_neighbors::<S, D>(
                         candidate,
                         l,
                         m_max,
@@ -682,32 +678,28 @@ where
                         &get_vec,
                     );
 
-                    // Enforce bidirectionality: if prune evicted n
-                    // from candidate's list, remove candidate from n's
-                    // list to avoid one-directional edges (INV-VD2).
-                    let c_after = get_neighbors(&self.adjacency, l, candidate);
-                    if !c_after.contains(&n) {
-                        let mut n_list2 = get_neighbors(&self.adjacency, l, n);
-                        n_list2.retain(|&x| x != candidate);
-                        set_neighbors(&mut self.adjacency, l, n, &n_list2);
-                    } else {
+                    let kept_n = !evicted.contains(&n);
+                    for evicted_id in evicted {
+                        let mut e_list = get_neighbors(&self.adjacency, l, evicted_id);
+                        e_list.retain(|&x| x != candidate);
+                        set_neighbors(&mut self.adjacency, l, evicted_id, &e_list);
+                    }
+                    if kept_n {
                         added += 1;
                     }
                 }
                 if added > 0 {
-                    let before = get_neighbors(&self.adjacency, l, n);
-                    prune_neighbors::<S, D>(n, l, m_max, &mut self.adjacency, &get_vec);
-                    // Enforce bidirectionality: if prune evicted a
-                    // neighbor from n's list, remove n from that
-                    // neighbor's list symmetrically (INV-VD2).
-                    let after: HashSet<u64> =
-                        get_neighbors(&self.adjacency, l, n).into_iter().collect();
-                    for evicted in before {
-                        if !after.contains(&evicted) {
-                            let mut e_list = get_neighbors(&self.adjacency, l, evicted);
-                            e_list.retain(|&x| x != n);
-                            set_neighbors(&mut self.adjacency, l, evicted, &e_list);
-                        }
+                    let evicted = prune_neighbors::<S, D>(
+                        n,
+                        l,
+                        m_max,
+                        &mut self.adjacency,
+                        &get_vec,
+                    );
+                    for evicted_id in evicted {
+                        let mut e_list = get_neighbors(&self.adjacency, l, evicted_id);
+                        e_list.retain(|&x| x != n);
+                        set_neighbors(&mut self.adjacency, l, evicted_id, &e_list);
                     }
                 }
             }

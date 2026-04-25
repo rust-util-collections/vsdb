@@ -6,8 +6,6 @@
 
 (none)
 
----
-
 ## Won't Fix
 
 ### [LOW] typed-collections: inconsistent decode error handling (unwrap vs pnk!)

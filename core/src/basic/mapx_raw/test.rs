@@ -1,5 +1,6 @@
 use super::*;
 use ruc::*;
+use std::fs;
 use std::mem::size_of;
 
 #[test]
@@ -129,6 +130,19 @@ fn test_save_and_from_meta() {
 }
 
 #[test]
+fn test_from_meta_accepts_legacy_prefix_metadata() {
+    let mut hdr = MapxRaw::new();
+    hdr.insert([1], [10]);
+
+    let id = hdr.instance_id();
+    fs::write(crate::common::vsdb_meta_path(id), hdr.as_bytes()).unwrap();
+
+    let restored = pnk!(MapxRaw::from_meta(id));
+    assert_eq!(restored.get([1]), Some(vec![10]));
+    assert!(restored.is_the_same_instance(&hdr));
+}
+
+#[test]
 fn test_from_meta_nonexistent() {
     assert!(MapxRaw::from_meta(u64::MAX).is_err());
 }
@@ -153,14 +167,32 @@ fn test_serde_roundtrip() {
     }
 }
 
-/// Verify the serialized size is minimal (just the 8-byte prefix).
+/// Verify the serialized size stays compact while carrying a metadata magic.
 #[test]
 fn test_serde_size() {
     let hdr = MapxRaw::new();
     let bytes = postcard::to_allocvec(&hdr).unwrap();
-    // engine::Mapx hand-written serde: 8-byte prefix as a byte string.
-    // postcard encodes [u8; 8] as 8 raw bytes → 8 bytes total.
-    assert!(bytes.len() <= 10, "expected ≤10 bytes, got {}", bytes.len());
+    // engine::Mapx hand-written serde: magic + 8-byte prefix as a byte string.
+    assert!(bytes.len() <= 20, "expected ≤20 bytes, got {}", bytes.len());
+}
+
+#[test]
+fn test_serde_rejects_raw_prefix_bytes() {
+    let hdr = MapxRaw::new();
+    assert!(postcard::from_bytes::<MapxRaw>(hdr.as_bytes()).is_err());
+}
+
+#[test]
+fn test_serde_rejects_legacy_prefix_payload_by_default() {
+    let hdr = MapxRaw::new();
+    let legacy_payload = postcard::to_allocvec(hdr.as_bytes().as_slice()).unwrap();
+    assert!(postcard::from_bytes::<MapxRaw>(&legacy_payload).is_err());
+
+    let restored: MapxRaw = crate::common::with_legacy_mapx_meta_decode(|| {
+        postcard::from_bytes(&legacy_payload)
+    })
+    .unwrap();
+    assert!(restored.is_the_same_instance(&hdr));
 }
 
 /// Mutate after restoring from meta — ensures the restored handle is fully live.

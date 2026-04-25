@@ -155,7 +155,36 @@ fn data_container() {
     assert_eq!(db.data.first().unwrap().1.iter().next().unwrap(), 0);
     assert_eq!(db.data.first().unwrap().1.iter().last().unwrap(), 99);
 
+    let DataCtner::Large { map, .. } = db.data.get(&0).unwrap() else {
+        panic!("slot 0 should use large container");
+    };
     db.clear();
+    assert_eq!(db.total(), 0);
+    assert!(db.data.iter().next().is_none());
+    assert!(map.iter().next().is_none());
+}
+
+#[test]
+fn mutations_after_save_meta_mark_dirty() {
+    let mut db: SlotDex<u64, u64> = SlotDex::new(16, false);
+    db.insert(1, 10).unwrap();
+    let _ = db.save_meta().unwrap();
+    assert!(!crate::common::dirty_count::is_dirty(db.total.get_value()));
+
+    db.insert(2, 20).unwrap();
+    assert!(crate::common::dirty_count::is_dirty(db.total.get_value()));
+
+    let _ = db.save_meta().unwrap();
+    assert!(!crate::common::dirty_count::is_dirty(db.total.get_value()));
+
+    db.remove(1, &10);
+    assert!(crate::common::dirty_count::is_dirty(db.total.get_value()));
+
+    let _ = db.save_meta().unwrap();
+    assert!(!crate::common::dirty_count::is_dirty(db.total.get_value()));
+
+    db.clear();
+    assert!(crate::common::dirty_count::is_dirty(db.total.get_value()));
 }
 
 // ---- Deterministic edge-case tests for in-memory tier cache ----

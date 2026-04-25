@@ -25,6 +25,9 @@ use std::{
     sync::LazyLock,
 };
 
+const MAPX_META_MAGIC: &[u8; 8] = b"VSMAPX01";
+const MAPX_META_LEN: usize = MAPX_META_MAGIC.len() + PREFIX_SIZE;
+
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
@@ -295,6 +298,39 @@ impl Mapx {
     }
 
     #[inline(always)]
+    pub(crate) fn encode_prefix_meta(&self) -> Vec<u8> {
+        let mut meta = Vec::with_capacity(MAPX_META_LEN);
+        meta.extend_from_slice(MAPX_META_MAGIC);
+        meta.extend_from_slice(&self.prefix.to_bytes());
+        meta
+    }
+
+    pub(crate) fn decode_prefix_meta(meta: &[u8]) -> Result<PreBytes> {
+        if meta.len() != MAPX_META_LEN {
+            return Err(eg!(
+                "invalid Mapx metadata length: expected {}, got {}",
+                MAPX_META_LEN,
+                meta.len()
+            ));
+        }
+        if &meta[..MAPX_META_MAGIC.len()] != MAPX_META_MAGIC {
+            return Err(eg!("invalid Mapx metadata magic"));
+        }
+        let mut prefix = PreBytes::default();
+        prefix.copy_from_slice(&meta[MAPX_META_MAGIC.len()..]);
+        Ok(prefix)
+    }
+
+    pub(crate) fn decode_trusted_prefix_meta(meta: &[u8]) -> Result<PreBytes> {
+        if meta.len() == PREFIX_SIZE {
+            let mut prefix = PreBytes::default();
+            prefix.copy_from_slice(meta);
+            return Ok(prefix);
+        }
+        Self::decode_prefix_meta(meta)
+    }
+
+    #[inline(always)]
     pub(crate) fn as_prefix_slice(&self) -> &PreBytes {
         self.prefix.as_bytes()
     }
@@ -414,7 +450,7 @@ impl Serialize for Mapx {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_bytes(&self.prefix.to_bytes())
+        serializer.serialize_bytes(&self.encode_prefix_meta())
     }
 }
 
@@ -426,13 +462,13 @@ impl<'de> Deserialize<'de> for Mapx {
         deserializer
             .deserialize_byte_buf(SimpleVisitor)
             .and_then(|meta| {
-                if meta.len() != PREFIX_SIZE {
-                    return Err(serde::de::Error::invalid_length(
-                        meta.len(),
-                        &"exactly 8 bytes for Mapx prefix",
-                    ));
-                }
-                Ok(unsafe { Self::from_prefix_slice(meta) })
+                let decode = if crate::common::legacy_mapx_meta_decode_enabled() {
+                    Self::decode_trusted_prefix_meta
+                } else {
+                    Self::decode_prefix_meta
+                };
+                let prefix = decode(&meta).map_err(serde::de::Error::custom)?;
+                Ok(unsafe { Self::from_prefix_slice(prefix) })
             })
     }
 }

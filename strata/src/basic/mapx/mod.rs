@@ -65,6 +65,12 @@ define_map_wrapper! {
     #[doc = ""]
     #[doc = "`Mapx` stores key-value pairs on disk, encoding both keys and values"]
     #[doc = "for type safety and persistence."]
+    #[doc = ""]
+    #[doc = "# Key determinism"]
+    #[doc = ""]
+    #[doc = "`K` must encode deterministically. Do not use `HashMap`, `HashSet`,"]
+    #[doc = "or wrappers containing them as keys; their randomized iteration order"]
+    #[doc = "can produce different storage bytes for logically equal keys."]
     pub struct Mapx<K, V> {
         inner: MapxOrdRawKey<V>,
         _p: PhantomData<K>,

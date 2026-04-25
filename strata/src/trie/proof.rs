@@ -299,9 +299,13 @@ where
         self.trie.prove(key).map_err(VsdbError::from)
     }
 
-    /// Verifies a proof against a root hash.
-    pub fn verify_proof(root_hash: &[u8; 32], proof: &SmtProof) -> Result<bool> {
-        SmtCalc::verify_proof(root_hash, proof).map_err(VsdbError::from)
+    /// Verifies a proof against a root hash and expected key.
+    pub fn verify_proof(
+        root_hash: &[u8; 32],
+        expected_key: &[u8],
+        proof: &SmtProof,
+    ) -> Result<bool> {
+        SmtCalc::verify_proof(root_hash, expected_key, proof).map_err(VsdbError::from)
     }
 }
 

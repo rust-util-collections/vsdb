@@ -3476,13 +3476,14 @@ mod proof_tests {
         assert!(proof.value.is_some());
 
         let root_arr: [u8; 32] = root.try_into().unwrap();
-        let ok = VpSmt::verify_proof(&root_arr, &proof).unwrap();
+        let ok = VpSmt::verify_proof(&root_arr, &1u32.to_be_bytes(), &proof).unwrap();
         assert!(ok);
 
         // Prove non-membership for absent key
         let proof_absent = vp.prove(&999u32.to_be_bytes()).unwrap();
         assert!(proof_absent.value.is_none());
-        let ok2 = VpSmt::verify_proof(&root_arr, &proof_absent).unwrap();
+        let ok2 = VpSmt::verify_proof(&root_arr, &999u32.to_be_bytes(), &proof_absent)
+            .unwrap();
         assert!(ok2);
     }
 }
@@ -3592,14 +3593,17 @@ fn test_serde_roundtrip_full() {
     assert_eq!(keys, (0..20).collect::<Vec<u64>>());
 }
 
-/// Serialized size: VerMap = 8 handles, each ~8B + overhead → should be compact.
+/// Serialized size should remain compact enough for metadata persistence.
 #[test]
 fn test_serde_size() {
     setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let bytes = postcard::to_allocvec(&m).unwrap();
-    // 8 fields × ~9B each ≈ 72B. With postcard varint overhead < 80B.
-    assert!(bytes.len() <= 80, "expected ≤80 bytes, got {}", bytes.len());
+    assert!(
+        bytes.len() <= 160,
+        "expected ≤160 bytes, got {}",
+        bytes.len()
+    );
 }
 
 /// from_meta nonexistent.

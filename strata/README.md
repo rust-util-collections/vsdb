@@ -177,12 +177,12 @@ let root32: [u8; 32] = root.try_into().unwrap();
 // Membership proof
 let proof = smt.prove(b"alice").unwrap();
 assert_eq!(proof.value, Some(b"100".to_vec()));
-assert!(SmtCalc::verify_proof(&root32, &proof).unwrap());
+assert!(SmtCalc::verify_proof(&root32, b"alice", &proof).unwrap());
 
 // Non-membership proof
 let proof = smt.prove(b"charlie").unwrap();
 assert_eq!(proof.value, None);
-assert!(SmtCalc::verify_proof(&root32, &proof).unwrap());
+assert!(SmtCalc::verify_proof(&root32, b"charlie", &proof).unwrap());
 ```
 
 ### VerMapWithProof

@@ -935,7 +935,23 @@ impl PersistentBTree {
         &mut self,
         entries: impl IntoIterator<Item = (Vec<u8>, Vec<u8>)>,
     ) -> NodeId {
-        let entries: Vec<_> = entries.into_iter().collect();
+        let entries: Vec<_> = entries.into_iter().fold(
+            Vec::<(Vec<u8>, Vec<u8>)>::new(),
+            |mut acc, (k, v)| {
+                if let Some((last_k, last_v)) = acc.last_mut() {
+                    if k == *last_k {
+                        *last_v = v;
+                        return acc;
+                    }
+                    assert!(
+                        k > *last_k,
+                        "PersistentBTree::bulk_load entries must be sorted by key"
+                    );
+                }
+                acc.push((k, v));
+                acc
+            },
+        );
         if entries.is_empty() {
             return EMPTY_ROOT;
         }

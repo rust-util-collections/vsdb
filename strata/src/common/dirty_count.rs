@@ -8,11 +8,12 @@
 
 /// The dirty-flag bit (bit 63 of a u64 counter).
 const DIRTY_BIT: u64 = 1 << 63;
+const COUNT_MASK: u64 = !DIRTY_BIT;
 
 /// Extract the pure count (bits 0..62).
 #[inline(always)]
 pub fn count(raw: u64) -> u64 {
-    raw & !DIRTY_BIT
+    raw & COUNT_MASK
 }
 
 /// Returns `true` if the dirty flag is set.
@@ -30,13 +31,13 @@ pub fn set_dirty(raw: u64) -> u64 {
 /// Clear the dirty flag, preserving the count.
 #[inline(always)]
 pub fn clear_dirty(raw: u64) -> u64 {
-    raw & !DIRTY_BIT
+    raw & COUNT_MASK
 }
 
 /// Increment the count by 1, preserving the dirty flag.
 #[inline(always)]
 pub fn inc(raw: u64) -> u64 {
-    (count(raw) + 1) | (raw & DIRTY_BIT)
+    count(raw).saturating_add(1).min(COUNT_MASK) | (raw & DIRTY_BIT)
 }
 
 /// Decrement the count by 1 (saturating), preserving the dirty flag.
@@ -54,7 +55,7 @@ pub fn zero(raw: u64) -> u64 {
 /// Overwrite the count with `new_count`, preserving the dirty flag.
 #[inline(always)]
 pub fn set_count(raw: u64, new_count: u64) -> u64 {
-    new_count | (raw & DIRTY_BIT)
+    (new_count & COUNT_MASK) | (raw & DIRTY_BIT)
 }
 
 #[cfg(test)]
@@ -130,6 +131,28 @@ mod tests {
         let updated = set_count(clean, 99);
         assert_eq!(updated, 99);
         assert!(!is_dirty(updated));
+    }
+
+    #[test]
+    fn count_never_overwrites_dirty_bit() {
+        let clean = set_count(0, DIRTY_BIT);
+        assert_eq!(count(clean), 0);
+        assert!(!is_dirty(clean));
+
+        let dirty = set_count(set_dirty(0), DIRTY_BIT | 7);
+        assert_eq!(count(dirty), 7);
+        assert!(is_dirty(dirty));
+    }
+
+    #[test]
+    fn inc_saturates_below_dirty_bit() {
+        let clean = inc(COUNT_MASK);
+        assert_eq!(count(clean), COUNT_MASK);
+        assert!(!is_dirty(clean));
+
+        let dirty = inc(set_dirty(COUNT_MASK));
+        assert_eq!(count(dirty), COUNT_MASK);
+        assert!(is_dirty(dirty));
     }
 
     #[test]

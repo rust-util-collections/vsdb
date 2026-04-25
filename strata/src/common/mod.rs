@@ -35,5 +35,7 @@ pub fn save_instance_meta(
 pub fn load_instance_meta<T: DeserializeOwned>(instance_id: u64) -> error::Result<T> {
     let path = vsdb_meta_path(instance_id);
     let bytes = fs::read(&path)?;
-    Ok(postcard::from_bytes(&bytes)?)
+    Ok(with_legacy_mapx_meta_decode(|| {
+        postcard::from_bytes(&bytes)
+    })?)
 }

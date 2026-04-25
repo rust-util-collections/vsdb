@@ -101,7 +101,7 @@ let results = idx.search_with_filter(&query, 10, |k: &String| {
 ```
 
 To compensate for selective filters, the search internally expands `ef` to
-`ef * 2` to maintain graph exploration breadth.
+`max(ef * 4, k * 2)` to maintain graph exploration breadth.
 
 ## Storage Architecture
 

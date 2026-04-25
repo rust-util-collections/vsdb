@@ -250,12 +250,24 @@ impl MmDB {
         let lo_full = prefixed(&bounds.start_bound());
         let hi_full = prefixed(&bounds.end_bound());
 
-        // SST-level pruning hints: start from lo or prefix start, end at prefix boundary.
+        // SST-level pruning hints: start from lo or prefix start, end at
+        // the requested upper bound capped by the prefix boundary.
         let start_hint: Option<Vec<u8>> = match &lo_full {
             Bound::Included(v) | Bound::Excluded(v) => Some(v.clone()),
             Bound::Unbounded => Some(meta_prefix.to_vec()),
         };
-        let end_hint = prefix_successor(&meta_prefix);
+        let prefix_end = prefix_successor(&meta_prefix);
+        let requested_end = match &hi_full {
+            Bound::Included(v) => prefix_successor(v).or_else(|| prefix_end.clone()),
+            Bound::Excluded(v) => Some(v.clone()),
+            Bound::Unbounded => prefix_end.clone(),
+        };
+        let end_hint = match (requested_end, prefix_end) {
+            (Some(end), Some(prefix_end)) => Some(cmp::min(end, prefix_end)),
+            (Some(end), None) => Some(end),
+            (None, Some(prefix_end)) => Some(prefix_end),
+            (None, None) => None,
+        };
 
         let mut db_iter = db
             .iter_with_range(

@@ -381,9 +381,14 @@ impl SmtCalc {
         smt::proof::prove(&self.root, &key_hash)
     }
 
-    /// Verifies a proof against a root hash.
-    pub fn verify_proof(root_hash: &[u8; 32], proof: &SmtProof) -> Result<bool> {
-        smt::proof::verify_proof(root_hash, proof)
+    /// Verifies a proof against a root hash and expected key.
+    pub fn verify_proof(
+        root_hash: &[u8; 32],
+        expected_key: &[u8],
+        proof: &SmtProof,
+    ) -> Result<bool> {
+        let expected_key_hash = Self::hash_key(expected_key);
+        smt::proof::verify_proof(root_hash, &expected_key_hash, proof)
     }
 
     // =================================================================

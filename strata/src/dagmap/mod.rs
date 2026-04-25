@@ -83,6 +83,11 @@ pub fn gen_dag_map_id_num() -> u128 {
                 .expect("dag_id_ceiling: write failed");
             f.sync_all().expect("dag_id_ceiling: fsync failed");
             fs::rename(&tmp, &self.path).expect("dag_id_ceiling: rename failed");
+            if let Some(parent) = self.path.parent() {
+                fs::File::open(parent)
+                    .and_then(|dir| dir.sync_all())
+                    .expect("dag_id_ceiling: parent dir fsync failed");
+            }
         }
     }
 

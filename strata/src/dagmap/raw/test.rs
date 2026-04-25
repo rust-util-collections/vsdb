@@ -142,6 +142,39 @@ fn test_meta_restore_then_mutate() {
     assert_eq!(dag.get("k2").unwrap().as_slice(), b"v2");
 }
 
+#[test]
+#[should_panic(expected = "empty value is a tombstone")]
+fn insert_empty_value_panics() {
+    let mut dag = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
+    dag.insert("empty", []);
+}
+
+#[test]
+fn destroy_unlinks_from_parent() {
+    let parent = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
+    let mut parent_slot = Orphan::new(Some(parent));
+    let mut child = DagMapRaw::new(&mut parent_slot).unwrap();
+
+    let parent_handle = parent_slot.get_value().unwrap();
+    assert!(!parent_handle.no_children());
+    child.destroy();
+    assert!(parent_handle.no_children());
+}
+
+#[test]
+fn deep_acyclic_chain_remains_readable_and_prunable() {
+    let mut head = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
+    head.insert("root", "value");
+
+    for _ in 0..1030 {
+        head = DagMapRaw::new(&mut Orphan::new(Some(head))).unwrap();
+    }
+
+    assert_eq!(head.get("root").unwrap().as_slice(), b"value");
+    let pruned = head.prune().unwrap();
+    assert_eq!(pruned.get("root").unwrap().as_slice(), b"value");
+}
+
 /// Save meta of a DagMapRaw with parent-child relationship,
 /// restore, and verify the lineage is intact.
 #[test]

@@ -198,17 +198,19 @@ impl DagMapRaw {
 
     /// Retrieves a value from the DAG map, traversing up to the parent if necessary.
     ///
-    /// The traversal follows at most 1024 parent links.  If a cycle or
-    /// excessively deep chain exists (corrupt data), the walk stops and
-    /// returns `None` rather than looping forever.
+    /// The traversal tracks visited instance IDs to avoid looping forever
+    /// if on-disk metadata is corrupt and contains a parent cycle.
     pub fn get(&self, key: impl AsRef<[u8]>) -> Option<RawBytes> {
-        const MAX_DEPTH: usize = 1024;
         let key = key.as_ref();
 
         let mut hdr = self;
         let mut hdr_owned;
+        let mut seen = HashSet::new();
 
-        for _ in 0..MAX_DEPTH {
+        loop {
+            if !seen.insert(hdr.instance_id()) {
+                return None;
+            }
             if let Some(v) = hdr.data.get(key) {
                 return if v.is_empty() { None } else { Some(v) };
             }
@@ -222,7 +224,6 @@ impl DagMapRaw {
                 }
             }
         }
-        None
     }
 
     /// Retrieves a mutable reference to a value in this node's local data.
@@ -248,14 +249,14 @@ impl DagMapRaw {
     ///
     /// Does not return the old value for performance reasons.
     ///
-    /// # Panics (debug builds)
+    /// # Panics
     ///
     /// Panics if `value` is empty — an empty byte slice is used
     /// internally as a deletion tombstone.  Use [`remove`](Self::remove)
     /// to delete a key instead.
     #[inline(always)]
     pub fn insert(&mut self, key: impl AsRef<[u8]>, value: impl AsRef<[u8]>) {
-        debug_assert!(
+        assert!(
             !value.as_ref().is_empty(),
             "empty value is a tombstone; call remove() instead"
         );
@@ -287,15 +288,20 @@ impl DagMapRaw {
             }
         };
 
-        const MAX_DEPTH: usize = 1024;
+        let mut seen = HashSet::new();
+        seen.insert(self.instance_id());
         let mut linebuf = vec![p];
-        while let Some(p) = linebuf.last().unwrap().parent.get_value() {
-            if linebuf.len() >= MAX_DEPTH {
+        loop {
+            let current_id = linebuf.last().unwrap().instance_id();
+            if !seen.insert(current_id) {
                 return Err(VsdbError::Other {
-                    detail: "DAG mainline exceeds MAX_DEPTH — possible cycle".to_owned(),
+                    detail: "DAG mainline contains a parent cycle".to_owned(),
                 });
             }
-            linebuf.push(p);
+            match linebuf.last().unwrap().parent.get_value() {
+                Some(p) => linebuf.push(p),
+                None => break,
+            }
         }
 
         let mid = linebuf.len() - 1;
@@ -389,13 +395,21 @@ impl DagMapRaw {
 
     /// Destroys this node and all its descendant children, clearing all data.
     ///
-    /// **Important**: this method does NOT remove `self` from its parent's
-    /// `children` collection.  Callers must remove the entry from
-    /// `parent.children` before calling `destroy()` to avoid dangling
-    /// references (see [`prune_children`](Self::prune_children_include)
-    /// which does this correctly).
+    /// If this node is attached to a parent, it first removes its own child
+    /// entry from the parent's `children` collection.
     #[inline(always)]
     pub fn destroy(&mut self) {
+        let self_id = self.instance_id();
+        if let Some(mut parent) = self.parent.get_value() {
+            let child_ids = parent
+                .children
+                .iter()
+                .filter_map(|(id, child)| (child.instance_id() == self_id).then_some(id))
+                .collect::<Vec<_>>();
+            for id in child_ids {
+                parent.children.remove(id);
+            }
+        }
         *self.parent.get_mut() = None;
         self.data.clear();
 

@@ -2,6 +2,7 @@ use super::{Mapx, ValueEnDe};
 use crate::basic::mapx_ord::MapxOrd;
 use crate::basic::orphan::Orphan;
 use ruc::*;
+use std::fs;
 
 #[test]
 fn test_insert() {
@@ -110,6 +111,20 @@ fn test_save_and_from_meta() {
     assert!(restored.is_the_same_instance(&hdr));
 }
 
+#[test]
+fn test_from_meta_accepts_legacy_prefix_payload() {
+    let mut hdr: Mapx<u32, String> = Mapx::new();
+    hdr.insert(&1, &"legacy".to_string());
+
+    let id = hdr.instance_id();
+    let legacy_payload = postcard::to_allocvec(&hdr.as_bytes()).unwrap();
+    fs::write(crate::common::vsdb_meta_path(id), legacy_payload).unwrap();
+
+    let restored: Mapx<u32, String> = pnk!(Mapx::from_meta(id));
+    assert_eq!(restored.get(&1), Some("legacy".to_string()));
+    assert!(restored.is_the_same_instance(&hdr));
+}
+
 /// Nested: `Mapx<String, MapxOrd<u32, String>>` — only the outer meta
 /// is saved; restoring it must bring back all inner maps and their data.
 #[test]
@@ -185,12 +200,12 @@ fn test_serde_roundtrip() {
     assert_eq!(restored.get(&3), Some("gamma".into()));
 }
 
-/// Serialized size should be minimal — just the 8-byte prefix.
+/// Serialized size should stay compact.
 #[test]
 fn test_serde_size() {
     let hdr: Mapx<String, String> = Mapx::new();
     let bytes = postcard::to_allocvec(&hdr).unwrap();
-    assert!(bytes.len() <= 10, "expected ≤10 bytes, got {}", bytes.len());
+    assert!(bytes.len() <= 20, "expected ≤20 bytes, got {}", bytes.len());
 }
 
 /// from_meta with a nonexistent ID must return an error.

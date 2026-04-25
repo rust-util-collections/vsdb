@@ -261,20 +261,25 @@ pub(crate) fn prune_neighbors<S: Scalar, D: DistanceMetric<S>>(
     m_max: usize,
     adjacency: &mut MapxRaw,
     get_vector: &dyn Fn(u64) -> Option<Vec<S>>,
-) {
+) -> Vec<u64> {
     let neighbors = get_neighbors(adjacency, layer, node_id);
     if neighbors.len() <= m_max {
-        return;
+        return Vec::new();
     }
     let Some(node_vec) = get_vector(node_id) else {
-        return;
+        return Vec::new();
     };
     let scored: Vec<(S, u64)> = neighbors
         .iter()
         .filter_map(|&n| get_vector(n).map(|v| (D::distance(&node_vec, &v), n)))
         .collect();
     let pruned = select_neighbors_heuristic::<S, D>(&scored, m_max, get_vector);
+    let evicted = neighbors
+        .into_iter()
+        .filter(|n| !pruned.contains(n))
+        .collect();
     set_neighbors(adjacency, layer, node_id, &pruned);
+    evicted
 }
 
 #[cfg(test)]

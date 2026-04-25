@@ -179,9 +179,19 @@ where
     /// Inserts a key-value pair into the DAG map.
     ///
     /// Does not return the old value for performance reasons.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `value` encodes to an empty byte slice, which is reserved
+    /// internally as the deletion tombstone.
     #[inline(always)]
     pub fn insert(&mut self, key: impl AsRef<[u8]>, value: &V) {
-        self.inner.insert(key, value.encode())
+        let encoded = value.encode();
+        assert!(
+            !encoded.is_empty(),
+            "empty encoded value is a tombstone; call remove() instead"
+        );
+        self.inner.insert(key, encoded)
     }
 
     /// Removes a key-value pair from the DAG map.
@@ -213,7 +223,7 @@ where
         self.inner.prune_children_exclude(exclude_targets);
     }
 
-    /// Destroys the DAG map and all its children.
+    /// Destroys the DAG map and all its children, unlinking it from its parent.
     #[inline(always)]
     pub fn destroy(&mut self) {
         self.inner.destroy();
