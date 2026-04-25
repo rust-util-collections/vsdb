@@ -319,16 +319,21 @@ impl DagMapRaw {
             for (k, v) in i.data.iter() {
                 genesis[0].data.insert(k, v);
             }
-            // Destroy side-branch children of intermediate nodes so they
-            // don't become unreachable orphans on disk.
-            for (_, mut child) in i.children.iter_mut() {
-                if !mainline_ids.contains(&child.instance_id()) {
-                    child.destroy();
-                }
-            }
+            // Collect side-branch children first to avoid mutating the
+            // MapxOrd through destroy()'s parent-unlink while iterating it.
+            let side_children: Vec<_> = i
+                .children
+                .iter()
+                .filter_map(|(_, child)| {
+                    (!mainline_ids.contains(&child.instance_id())).then_some(child)
+                })
+                .collect();
             *i.parent.get_mut() = None;
             i.data.clear();
             i.children.clear();
+            for mut child in side_children {
+                child.destroy();
+            }
         }
 
         for (k, v) in self.data.iter() {
