@@ -24,6 +24,13 @@ impl NodeHandle {
             NodeHandle::InMemory(_) => None,
         }
     }
+
+    /// Consumes the handle, returning the owned `Node` by move (no clone).
+    pub fn into_node(self) -> Node {
+        match self {
+            NodeHandle::InMemory(n) | NodeHandle::Cached(_, n) => *n,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]

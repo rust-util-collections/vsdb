@@ -415,14 +415,28 @@ impl DagMapRaw {
                 parent.children.remove(id);
             }
         }
-        *self.parent.get_mut() = None;
+        // NB: do NOT null `self.parent` here. `parent` is a shadow of the
+        // caller's Orphan slot, shared by every sibling created from that
+        // slot; writing `None` into it would orphan all surviving siblings
+        // and detach the parent. The parent→child unlink above already
+        // removes only this node's own entry.
         self.data.clear();
 
-        let mut children = self.children.iter().map(|(_, c)| c).collect::<Vec<_>>();
+        // Clear all descendants iteratively. A recursive walk overflows the
+        // stack on deep DAGs; mirror the iterative, cycle-guarded design used
+        // by `get()` and `prune_mainline`.
+        let mut seen = HashSet::new();
+        seen.insert(self_id);
+        let mut stack = self.children.iter().map(|(_, c)| c).collect::<Vec<_>>();
         self.children.clear(); // optimize for recursive ops
 
-        for c in children.iter_mut() {
-            c.destroy();
+        while let Some(mut node) = stack.pop() {
+            if !seen.insert(node.instance_id()) {
+                continue;
+            }
+            node.data.clear();
+            stack.extend(node.children.iter().map(|(_, c)| c));
+            node.children.clear();
         }
     }
 

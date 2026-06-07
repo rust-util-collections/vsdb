@@ -101,6 +101,46 @@ mod tests {
     }
 
     #[test]
+    fn test_remove_nonexistent_preserves_cached_root() {
+        // After root_hash() the internal nodes are Cached. Removing keys that
+        // don't exist walks Branch/Extension/Leaf no-change paths, which must
+        // re-wrap nodes while preserving their precomputed hashes. A wrong
+        // preserved hash would corrupt the committed root.
+        let mut trie = MptCalc::new();
+        for i in 0u32..200 {
+            trie.insert(&i.to_be_bytes(), &(i * 11).to_be_bytes())
+                .unwrap();
+        }
+        let root = trie.root_hash().unwrap(); // commit → Cached nodes
+
+        for k in [
+            b"missing".as_slice(),
+            &1000u32.to_be_bytes(),
+            &54321u32.to_be_bytes(),
+        ] {
+            trie.remove(k).unwrap();
+        }
+
+        // Root must be unchanged and equal a fresh rebuild of the same data.
+        assert_eq!(trie.root_hash().unwrap(), root);
+        let mut fresh = MptCalc::new();
+        for i in 0u32..200 {
+            fresh
+                .insert(&i.to_be_bytes(), &(i * 11).to_be_bytes())
+                .unwrap();
+        }
+        assert_eq!(fresh.root_hash().unwrap(), root);
+
+        // All original entries must still be present.
+        for i in 0u32..200 {
+            assert_eq!(
+                trie.get(&i.to_be_bytes()).unwrap(),
+                Some((i * 11).to_be_bytes().to_vec())
+            );
+        }
+    }
+
+    #[test]
     fn test_batch_update() {
         let mut trie = MptCalc::new();
 

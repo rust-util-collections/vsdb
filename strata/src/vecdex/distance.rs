@@ -1,6 +1,7 @@
 //! Scalar types and distance metrics for vector similarity search.
 
 use serde::{Deserialize, Serialize, de};
+use std::cmp::Ordering;
 use std::iter::Sum;
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
@@ -27,7 +28,7 @@ pub trait Scalar:
     fn epsilon() -> Self;
     fn one() -> Self;
     fn zero() -> Self;
-    fn total_cmp(&self, other: &Self) -> std::cmp::Ordering;
+    fn total_cmp(&self, other: &Self) -> Ordering;
 }
 
 impl Scalar for f32 {
@@ -48,7 +49,7 @@ impl Scalar for f32 {
         0.0
     }
     #[inline]
-    fn total_cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn total_cmp(&self, other: &Self) -> Ordering {
         f32::total_cmp(self, other)
     }
 }
@@ -71,7 +72,7 @@ impl Scalar for f64 {
         0.0
     }
     #[inline]
-    fn total_cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn total_cmp(&self, other: &Self) -> Ordering {
         f64::total_cmp(self, other)
     }
 }

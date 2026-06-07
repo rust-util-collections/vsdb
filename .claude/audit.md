@@ -8,6 +8,11 @@
 
 ## Won't Fix
 
+### [LOW] common: instance-meta persistence is non-atomic (truncate-in-place write)
+- **Where**: strata/src/common/mod.rs:24-32 (save_instance_meta)
+- **What**: `fs::write` truncates then writes; a crash mid-write leaves a truncated meta file.
+- **Reason**: Pre-existing codebase-wide convention (core/src/basic/mapx_raw/mod.rs save_meta uses the same `fs::write`); cold explicit-save path; the count is independently recoverable via the dirty-flag mechanism. Fixing one site without the matching core change is inconsistent and the churn/risk is disproportionate to a cold-path durability nicety.
+
 ### [LOW] typed-collections: inconsistent decode error handling (unwrap vs pnk!)
 - **Where**: mapx_ord_rawkey/mod.rs, mapx_ord/mod.rs, mapx/mod.rs (various iterator methods)
 - **What**: Value-decode calls use bare `.unwrap()` in some iterator methods and `pnk!()` in others

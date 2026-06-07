@@ -245,30 +245,6 @@ where
     }
 }
 
-/// A batch writer for `MapxOrdRawKey`.
-pub struct MapxOrdRawKeyBatch<'a, V>
-where
-    V: ValueEnDe,
-{
-    inner: &'a mut dyn vsdb_core::common::BatchTrait,
-    _marker: PhantomData<V>,
-}
-
-impl<'a, V> MapxOrdRawKeyBatch<'a, V>
-where
-    V: ValueEnDe,
-{
-    /// Insert a key-value pair into the batch.
-    pub fn insert(&mut self, key: impl AsRef<[u8]>, value: &V) {
-        self.inner.insert(key.as_ref(), &value.encode());
-    }
-
-    /// Remove a key in the batch.
-    pub fn remove(&mut self, key: impl AsRef<[u8]>) {
-        self.inner.remove(key.as_ref());
-    }
-}
-
 /// A batch entry for `MapxOrdRawKey`.
 pub struct MapxOrdRawKeyBatchEntry<'a, V>
 where

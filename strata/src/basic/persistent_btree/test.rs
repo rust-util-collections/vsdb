@@ -783,6 +783,40 @@ fn bulk_load_exactly_max_keys() {
     assert_eq!(tree.iter(root).count(), MAX_KEYS);
 }
 
+#[test]
+fn bulk_load_lone_trailing_child_then_remove() {
+    // Regression: a leaf count ≡ 1 (mod MAX_KEYS+1) once promoted a lone
+    // trailing child verbatim, yielding a mixed-height tree whose remove()
+    // panicked in borrow/merge. 1057 entries → 34 leaves triggers it.
+    setup();
+    let mut tree = PersistentBTree::new();
+    let n = 1057u32;
+    let entries: Vec<_> = (0..n)
+        .map(|i| (i.to_be_bytes().to_vec(), (i * 3).to_be_bytes().to_vec()))
+        .collect();
+    let mut root = tree.bulk_load(entries);
+    assert_eq!(tree.iter(root).count(), n as usize);
+
+    // Remove boundary keys (last, first, middle) — must not panic and must
+    // keep the remaining data intact.
+    let victims: Vec<u32> = vec![n - 1, 0, n / 2, n - 2, 1];
+    for &k in &victims {
+        root = tree.remove(root, &k.to_be_bytes());
+        assert!(tree.get(root, &k.to_be_bytes()).is_none());
+    }
+    assert_eq!(tree.iter(root).count(), n as usize - victims.len());
+    for i in 0..n {
+        if victims.contains(&i) {
+            assert!(tree.get(root, &i.to_be_bytes()).is_none());
+        } else {
+            assert_eq!(
+                tree.get(root, &i.to_be_bytes()).unwrap(),
+                (i * 3).to_be_bytes()
+            );
+        }
+    }
+}
+
 // =====================================================================
 // GC
 // =====================================================================

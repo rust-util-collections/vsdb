@@ -102,6 +102,9 @@ impl MapxRaw {
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
         Self {
+            // SAFETY: forwards this fn's `unsafe` contract — the caller
+            // guarantees the SWMR discipline (no concurrent writes through
+            // the shadow and the original).
             inner: unsafe { self.inner.shadow() },
         }
     }
@@ -393,6 +396,9 @@ impl MapxRaw {
     #[inline(always)]
     pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
         Self {
+            // SAFETY: forwards this fn's `unsafe` contract — the caller
+            // guarantees `s` was produced by `as_bytes()` on the same code
+            // version and that the backing data still exists.
             inner: unsafe { engine::Mapx::from_prefix_slice(s) },
         }
     }
@@ -405,6 +411,8 @@ impl MapxRaw {
     #[deprecated(since = "13.0.0", note = "use `from_bytes` instead")]
     #[inline(always)]
     pub unsafe fn from_prefix_slice(s: impl AsRef<[u8]>) -> Self {
+        // SAFETY: forwards this fn's `unsafe` contract to `from_bytes`, whose
+        // requirements are identical.
         unsafe { Self::from_bytes(s) }
     }
 
@@ -465,6 +473,9 @@ impl MapxRaw {
     pub fn from_meta(instance_id: u64) -> Result<Self> {
         let bytes = fs::read(crate::common::vsdb_meta_path(instance_id)).c(d!())?;
         let prefix = engine::Mapx::decode_trusted_prefix_meta(&bytes).c(d!())?;
+        // SAFETY: `prefix` was decoded from this instance's on-disk meta file
+        // by the trusted decode path, so it is a valid prefix slice for the
+        // same code version.
         Ok(unsafe { Self::from_bytes(prefix) })
     }
 }

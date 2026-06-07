@@ -47,7 +47,7 @@ use vsdb_core::basic::mapx_raw::MapxRaw;
 pub struct HnswConfig {
     /// Max neighbors per node per layer (default 16).
     pub m: usize,
-    /// Max neighbors at the base layer (default 2 * m).
+    /// Max neighbors at the base layer (default 32).
     pub m_max0: usize,
     /// Construction beam width (default 200).
     pub ef_construction: usize,

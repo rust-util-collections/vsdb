@@ -27,6 +27,7 @@ mod test;
 
 use crate::common::error::Result;
 use serde::{Deserialize, Serialize};
+use std::result::Result as StdResult;
 use std::{
     collections::{HashMap, HashSet},
     fmt,
@@ -231,6 +232,14 @@ enum RemoveResult {
 // PersistentBTree
 // =========================================================================
 
+/// In-memory metadata for a single B+ tree node.
+#[derive(Clone, Debug)]
+struct NodeRef {
+    ref_count: u32,
+    /// Child NodeIds (empty for leaf nodes).
+    children: Vec<NodeId>,
+}
+
 /// A persistent (copy-on-write) B+ tree backed by [`MapxRaw`].
 ///
 /// All nodes live in a single flat pool keyed by [`NodeId`]. A "tree
@@ -263,14 +272,6 @@ enum RemoveResult {
 ///
 /// fs::remove_dir_all(&dir).unwrap();
 /// ```
-/// In-memory metadata for a single B+ tree node.
-#[derive(Clone, Debug)]
-struct NodeRef {
-    ref_count: u32,
-    /// Child NodeIds (empty for leaf nodes).
-    children: Vec<NodeId>,
-}
-
 #[derive(Clone, Debug)]
 pub struct PersistentBTree {
     /// Flat node pool.  Key = little-endian NodeId, Value = encoded Node.
@@ -285,7 +286,7 @@ pub struct PersistentBTree {
 }
 
 impl Serialize for PersistentBTree {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
@@ -298,7 +299,7 @@ impl Serialize for PersistentBTree {
 }
 
 impl<'de> Deserialize<'de> for PersistentBTree {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
@@ -311,7 +312,7 @@ impl<'de> Deserialize<'de> for PersistentBTree {
             fn visit_seq<A: serde::de::SeqAccess<'de>>(
                 self,
                 mut seq: A,
-            ) -> std::result::Result<PersistentBTree, A::Error> {
+            ) -> StdResult<PersistentBTree, A::Error> {
                 let nodes = seq
                     .next_element()?
                     .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
@@ -966,11 +967,21 @@ impl PersistentBTree {
         let mut level = leaf_ids;
         while level.len() > 1 {
             let mut next = Vec::new();
-            for chunk in level.chunks(MAX_KEYS + 1) {
-                if chunk.len() == 1 {
-                    next.push(chunk[0]);
-                    continue;
+            let n = level.len();
+            let mut i = 0;
+            while i < n {
+                // Group up to `MAX_KEYS + 1` children per internal node.
+                let mut take = (MAX_KEYS + 1).min(n - i);
+                // Never leave a lone trailing child: promoting a single node
+                // verbatim would keep its lower height while its siblings
+                // become internal nodes one level taller, producing a
+                // mixed-height tree that later panics in remove()'s
+                // borrow/merge. Pull the leftover into this group instead so
+                // every node at this output level has uniform-height children.
+                if n - i - take == 1 {
+                    take -= 1;
                 }
+                let chunk = &level[i..i + take];
                 let mut keys = Vec::with_capacity(chunk.len() - 1);
                 for &cid in &chunk[1..] {
                     keys.push(self.first_key(cid));
@@ -979,6 +990,7 @@ impl PersistentBTree {
                     keys,
                     children: chunk.to_vec(),
                 }));
+                i += take;
             }
             level = next;
         }

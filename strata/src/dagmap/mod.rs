@@ -52,7 +52,16 @@ pub fn gen_dag_map_id_num() -> u128 {
                 Ok(bytes) if bytes.len() == 16 => {
                     u128::from_le_bytes(bytes.try_into().unwrap())
                 }
-                _ => 0,
+                // A present-but-malformed ceiling file must never silently
+                // reset the counter to 0 — that would re-issue IDs that still
+                // key live `children` entries. Fail loudly instead.
+                Ok(bytes) => panic!(
+                    "dag_id_ceiling: corrupt ceiling file ({} bytes, expected 16)",
+                    bytes.len()
+                ),
+                // Absent file: first run, legitimately start from 0.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+                Err(e) => panic!("dag_id_ceiling: read failed: {e}"),
             };
 
             DagIdAllocator {

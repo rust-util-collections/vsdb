@@ -165,6 +165,46 @@ fn data_container() {
 }
 
 #[test]
+fn reverse_paging_reverses_slots_only_not_within_slot() {
+    // A slot is a set of keys (always ascending). Reverse paging must reverse
+    // only the slot order, never the within-slot order, and must return
+    // identical results under both storage layouts (`swap_order`).
+    for swap_order in [false, true] {
+        let mut db: SlotDex<u64, u64> = SlotDex::new(16, swap_order);
+        // slot 5: {10,20,30}; slot 9: {40,50}
+        for k in [10u64, 20, 30] {
+            db.insert(5, k).unwrap();
+        }
+        for k in [40u64, 50] {
+            db.insert(9, k).unwrap();
+        }
+
+        // Ascending: (slot asc, key asc).
+        assert_eq!(
+            db.get_entries_by_page(10, 0, false),
+            vec![10, 20, 30, 40, 50]
+        );
+
+        // Reverse: (slot desc, key asc within slot).
+        assert_eq!(
+            db.get_entries_by_page(10, 0, true),
+            vec![40, 50, 10, 20, 30]
+        );
+
+        // A single full slot in reverse keeps its within-slot ascending order.
+        assert_eq!(
+            db.get_entries_by_page_slot(Some(5), Some(5), 10, 0, true),
+            vec![10, 20, 30]
+        );
+
+        // Reverse pagination membership across the slot boundary.
+        assert_eq!(db.get_entries_by_page(2, 0, true), vec![40, 50]);
+        assert_eq!(db.get_entries_by_page(2, 1, true), vec![10, 20]);
+        assert_eq!(db.get_entries_by_page(2, 2, true), vec![30]);
+    }
+}
+
+#[test]
 fn mutations_after_save_meta_mark_dirty() {
     let mut db: SlotDex<u64, u64> = SlotDex::new(16, false);
     db.insert(1, 10).unwrap();

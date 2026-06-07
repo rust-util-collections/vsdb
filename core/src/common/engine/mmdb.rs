@@ -25,7 +25,7 @@ const PREFIX_ALLOC_BATCH: u64 = 8192;
 const NUM_SHARDS: usize = 16;
 
 /// WriteOptions with WAL fsync enabled.
-/// Used for metadata writes (prefix allocator, max_keylen) that must survive
+/// Used for metadata writes (the prefix allocator) that must survive
 /// process exit without DB::drop() (e.g. Box::leak singleton pattern).
 fn sync_write_opts() -> WriteOptions {
     WriteOptions {
@@ -89,7 +89,7 @@ impl MmDB {
         self.dbs[(prefix % NUM_SHARDS as u64) as usize]
     }
 
-    /// Shard 0 holds meta keys (prefix allocator, max_keylen).
+    /// Shard 0 holds meta keys (the prefix allocator).
     #[inline(always)]
     fn meta_db(&self) -> &'static DB {
         self.dbs[0]

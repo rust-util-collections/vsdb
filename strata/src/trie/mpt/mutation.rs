@@ -16,14 +16,15 @@ impl TrieMut {
 
     pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         let path = Nibbles::from_raw(key, false);
-        let new_root = Self::insert_rec(self.root.clone(), path, value.to_vec())?;
+        let new_root =
+            Self::insert_rec(mem::take(&mut self.root), path, value.to_vec())?;
         self.root = new_root;
         Ok(())
     }
 
     pub fn remove(&mut self, key: &[u8]) -> Result<()> {
         let path = Nibbles::from_raw(key, false);
-        let (new_root, _) = Self::remove_rec(self.root.clone(), path)?;
+        let (new_root, _) = Self::remove_rec(mem::take(&mut self.root), path)?;
         self.root = new_root.unwrap_or_default();
         Ok(())
     }
@@ -55,12 +56,23 @@ impl TrieMut {
         }
     }
 
+    /// Re-wrap a node into a handle, preserving a precomputed hash when the
+    /// node is unchanged so no-change `remove_rec` paths don't force a re-hash.
+    fn rewrap(cached_hash: &Option<Vec<u8>>, node: Node) -> NodeHandle {
+        match cached_hash {
+            Some(h) => NodeHandle::Cached(h.clone(), Box::new(node)),
+            None => NodeHandle::InMemory(Box::new(node)),
+        }
+    }
+
     fn insert_rec(
         node_handle: NodeHandle,
         path: Nibbles,
         value: Vec<u8>,
     ) -> Result<NodeHandle> {
-        let node = Self::resolve(&node_handle);
+        // insert_rec always rebuilds the node, so consume the handle by move
+        // rather than deep-cloning the whole subtree via `resolve`.
+        let node = node_handle.into_node();
 
         match node {
             Node::Null => Ok(NodeHandle::InMemory(Box::new(Node::Leaf { path, value }))),
@@ -193,7 +205,7 @@ impl TrieMut {
                 } else {
                     let idx = path.at(0) as usize;
                     let (_, rest) = path.split_at(1);
-                    let child = children[idx].clone().unwrap_or_default();
+                    let child = children[idx].take().unwrap_or_default();
                     let new_child = Self::insert_rec(child, rest, value)?;
                     children[idx] = Some(new_child);
                     Ok(NodeHandle::InMemory(Box::new(Node::Branch {
@@ -285,17 +297,26 @@ impl TrieMut {
         node_handle: NodeHandle,
         path: Nibbles,
     ) -> Result<(Option<NodeHandle>, bool)> {
-        let node = Self::resolve(&node_handle);
+        // Peek the cached hash so no-change paths can rebuild the original
+        // handle (preserving the precomputed hash) after moving the node out,
+        // instead of deep-cloning the whole subtree via `resolve`.
+        let cached_hash = node_handle.hash().map(|h| h.to_vec());
+        let node = node_handle.into_node();
 
         match node {
             Node::Null => Ok((None, false)),
             Node::Leaf {
-                path: leaf_path, ..
+                path: leaf_path,
+                value,
             } => {
                 if leaf_path == path {
                     Ok((None, true))
                 } else {
-                    Ok((Some(node_handle), false))
+                    let n = Node::Leaf {
+                        path: leaf_path,
+                        value,
+                    };
+                    Ok((Some(Self::rewrap(&cached_hash, n)), false))
                 }
             }
             Node::Extension {
@@ -306,7 +327,11 @@ impl TrieMut {
                     let (_, rest) = path.split_at(ext_path.len());
                     let (new_child, changed) = Self::remove_rec(child, rest)?;
                     if !changed {
-                        return Ok((Some(node_handle), false));
+                        let n = Node::Extension {
+                            path: ext_path,
+                            child: new_child.unwrap_or_default(),
+                        };
+                        return Ok((Some(Self::rewrap(&cached_hash, n)), false));
                     }
 
                     if let Some(c) = new_child {
@@ -319,7 +344,11 @@ impl TrieMut {
                         Ok((None, true))
                     }
                 } else {
-                    Ok((Some(node_handle), false))
+                    let n = Node::Extension {
+                        path: ext_path,
+                        child,
+                    };
+                    Ok((Some(Self::rewrap(&cached_hash, n)), false))
                 }
             }
             Node::Branch {
@@ -334,24 +363,26 @@ impl TrieMut {
                         });
                         Ok((compacted, true))
                     } else {
-                        Ok((Some(node_handle), false))
+                        let n = Node::Branch { children, value };
+                        Ok((Some(Self::rewrap(&cached_hash, n)), false))
                     }
                 } else {
                     let idx = path.at(0) as usize;
                     let (_, rest) = path.split_at(1);
-                    if let Some(child) = &children[idx] {
-                        let (new_child, changed) =
-                            Self::remove_rec(child.clone(), rest)?;
+                    if let Some(child) = children[idx].take() {
+                        let (new_child, changed) = Self::remove_rec(child, rest)?;
+                        children[idx] = new_child;
                         if changed {
-                            children[idx] = new_child;
                             let compacted =
                                 Self::compact(Node::Branch { children, value });
                             Ok((compacted, true))
                         } else {
-                            Ok((Some(node_handle), false))
+                            let n = Node::Branch { children, value };
+                            Ok((Some(Self::rewrap(&cached_hash, n)), false))
                         }
                     } else {
-                        Ok((Some(node_handle), false))
+                        let n = Node::Branch { children, value };
+                        Ok((Some(Self::rewrap(&cached_hash, n)), false))
                     }
                 }
             }

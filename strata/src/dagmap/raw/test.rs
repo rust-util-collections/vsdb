@@ -225,3 +225,57 @@ fn test_prune_with_side_branches() {
     assert!(side.get("k_side").is_none());
     assert!(side2.get("k_side2").is_none());
 }
+
+#[test]
+fn destroy_sibling_preserves_other_siblings_and_parent() {
+    // Regression: destroy() once nulled the *shared* parent slot, orphaning
+    // every sibling created from the same Orphan slot and detaching the
+    // parent. Destroying one child must leave the parent and the other
+    // children intact.
+    let mut p = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
+    p.insert("shared", "pval");
+    let mut p_slot = Orphan::new(Some(p));
+
+    let mut c1 = DagMapRaw::new(&mut p_slot).unwrap();
+    c1.insert("c1", "v1");
+    let c2 = DagMapRaw::new(&mut p_slot).unwrap();
+
+    assert_eq!(c1.get("shared").unwrap().as_slice(), b"pval");
+    assert_eq!(c2.get("shared").unwrap().as_slice(), b"pval");
+
+    c1.destroy();
+    assert!(c1.get("c1").is_none());
+
+    // Parent slot must still hold the parent.
+    assert_eq!(
+        p_slot
+            .get_value()
+            .unwrap()
+            .get("shared")
+            .unwrap()
+            .as_slice(),
+        b"pval"
+    );
+    // Surviving sibling must still reach the inherited parent data.
+    assert_eq!(c2.get("shared").unwrap().as_slice(), b"pval");
+}
+
+#[test]
+fn destroy_deep_child_chain_does_not_overflow_stack() {
+    // Regression: destroy() recursed once per descendant generation and
+    // overflowed the stack on deep DAGs. Build a deep child chain rooted at
+    // `genesis` (clones share storage prefixes) and destroy it iteratively.
+    let mut genesis = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
+    genesis.insert("root", "value");
+
+    let mut cur_slot = Orphan::new(Some(genesis.clone()));
+    for _ in 0..5000 {
+        let child = DagMapRaw::new(&mut cur_slot).unwrap();
+        cur_slot = Orphan::new(Some(child));
+    }
+
+    // `genesis` shares prefixes with the chained clone, so it sees the full
+    // descendant chain. Destroying it must not overflow the stack.
+    genesis.destroy();
+    assert!(genesis.get("root").is_none());
+}

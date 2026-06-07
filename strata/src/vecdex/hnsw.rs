@@ -2,7 +2,7 @@
 
 use super::distance::{DistanceMetric, Scalar};
 use std::cmp::{Ordering, Reverse};
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashSet};
 use vsdb_core::basic::mapx_raw::MapxRaw;
 
 // ---- Ordered scalar wrapper (for BinaryHeap) ----------------------------
@@ -126,7 +126,7 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>>(
 ) -> Vec<(S, u64)> {
     let mut candidates: BinaryHeap<Reverse<(OrdS<S>, u64)>> = BinaryHeap::new();
     let mut result: BinaryHeap<(OrdS<S>, u64)> = BinaryHeap::new();
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = HashSet::new();
 
     let has_filter = filter.is_some();
     let passes = |id: u64| -> bool { filter.is_none_or(|f| f(id)) };
@@ -255,7 +255,7 @@ pub(crate) fn select_neighbors_heuristic<S: Scalar, D: DistanceMetric<S>>(
 
     // If heuristic didn't fill m slots, pad with closest remaining.
     if selected.len() < m {
-        let mut selected_ids: std::collections::HashSet<u64> =
+        let mut selected_ids: HashSet<u64> =
             selected.iter().map(|&(_, id)| id).collect();
         for &(_, cand_id) in &sorted {
             if selected.len() >= m {

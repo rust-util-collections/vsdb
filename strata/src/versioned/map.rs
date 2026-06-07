@@ -10,11 +10,13 @@ use crate::common::error::{Result, VsdbError};
 use crate::{Mapx, MapxOrd, Orphan};
 use ruc::{RucResult, pnk};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
-use std::fmt;
-use std::marker::PhantomData;
-use std::ops::Bound;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+    marker::PhantomData,
+    ops::Bound,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 // =========================================================================
 // BranchState
@@ -430,6 +432,11 @@ where
         }
         let src = self.get_branch(source_branch)?;
 
+        // Mark dirty before any ref-count mutation so a crash mid-update is
+        // repaired by rebuild_ref_counts on recovery (matches commit/merge/
+        // rollback). increment_ref does not touch gc_dirty itself.
+        *self.gc_dirty.get_mut() = true;
+
         let id = self.next_branch.get_value();
         *self.next_branch.get_mut() = id + 1;
 
@@ -445,6 +452,8 @@ where
         self.increment_ref(src.head);
         // New branch's dirty_root references the shared tree root.
         self.tree.acquire_node(src.dirty_root);
+
+        *self.gc_dirty.get_mut() = false;
 
         Ok(id)
     }
@@ -466,6 +475,11 @@ where
         let dead_head = state.head;
         let dead_dirty = state.dirty_root;
 
+        // Mark dirty before removing the branch tables so a crash before the
+        // ref-count cascade is repaired on recovery. decrement_ref is
+        // reentrant-safe (its already_dirty guard won't clear our flag).
+        *self.gc_dirty.get_mut() = true;
+
         self.branch_names.remove(&state.name);
         self.branches.remove(&branch);
 
@@ -473,6 +487,8 @@ where
         self.tree.release_node(dead_dirty);
         // Cascade commit ref counting (may also release commit.root refs).
         self.decrement_ref(dead_head);
+
+        *self.gc_dirty.get_mut() = false;
 
         Ok(())
     }

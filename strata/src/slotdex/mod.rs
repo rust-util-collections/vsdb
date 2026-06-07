@@ -472,39 +472,12 @@ where
     fn offsets_from_the_leftmost_slot(
         &self,
         slot_start: &S, // Included
-        slot_end: &S,   // Included
         page_size: PageSize,
         page_index: PageIndex,
-        reverse: bool,
     ) -> (SkipNum, TakeNum) {
-        if slot_start > slot_end {
-            return (0, 0);
-        }
-
-        if reverse {
-            let mut skip_n = self.distance_to_the_leftmost_slot(slot_end)
-                + self.slot_entry_cnt(slot_end) as Distance
-                - (page_size as Distance) * (1 + page_index as Distance);
-
-            let distance_of_slot_start = self.distance_to_the_leftmost_slot(slot_start);
-
-            let take_n = if distance_of_slot_start <= skip_n {
-                page_size
-            } else {
-                let back_shift = (distance_of_slot_start.saturating_sub(skip_n))
-                    .min(PageSize::MAX as Distance);
-
-                skip_n = distance_of_slot_start;
-
-                page_size.saturating_sub(back_shift as PageSize)
-            };
-
-            (skip_n as SkipNum, take_n as TakeNum)
-        } else {
-            let skip_n = self.distance_to_the_leftmost_slot(slot_start)
-                + (page_size as Distance) * (page_index as Distance);
-            (skip_n as SkipNum, page_size as TakeNum)
-        }
+        let skip_n = self.distance_to_the_leftmost_slot(slot_start)
+            + (page_size as Distance) * (page_index as Distance);
+        (skip_n as SkipNum, page_size as TakeNum)
     }
 
     /// Single-pass page location using in-memory tier caches.
@@ -560,13 +533,13 @@ where
             return vec![];
         }
 
-        let (global_skip_n, take_n) = self.offsets_from_the_leftmost_slot(
-            &slot_start,
-            &slot_end,
-            page_size,
-            page_index,
-            reverse,
-        );
+        if reverse {
+            return self
+                .get_entries_reverse(slot_start, slot_end, page_size, page_index);
+        }
+
+        let (global_skip_n, take_n) =
+            self.offsets_from_the_leftmost_slot(&slot_start, page_size, page_index);
 
         let mut ret = Vec::with_capacity(take_n as usize);
 
@@ -591,8 +564,45 @@ where
             }
         }
 
-        if reverse {
-            ret.reverse();
+        ret
+    }
+
+    /// Reverse-order paging: walk slots from `slot_end` down to `slot_start`
+    /// in descending storage order while keeping each slot's entries in their
+    /// natural ascending key order.
+    ///
+    /// Only the slot order is reversed, not the within-slot order: a slot is a
+    /// set of keys, so its members stay ascending in every view. Reversing the
+    /// whole result vector instead would corrupt within-slot order and shift
+    /// page membership across slot boundaries when a slot holds >1 entry.
+    fn get_entries_reverse(
+        &self,
+        slot_start: S, // Included
+        slot_end: S,   // Included
+        page_size: PageSize,
+        page_index: PageIndex,
+    ) -> Vec<K> {
+        let take_n = page_size as usize;
+        let mut to_skip = (page_size as usize).saturating_mul(page_index as usize);
+        let mut ret = Vec::with_capacity(take_n);
+
+        for (_, entries) in self
+            .data
+            .range((Bound::Included(slot_start), Bound::Included(slot_end)))
+            .rev()
+        {
+            let n = entries.len();
+            if to_skip >= n {
+                to_skip -= n;
+                continue;
+            }
+            for entry in entries.iter().skip(to_skip) {
+                ret.push(entry);
+                if ret.len() == take_n {
+                    return ret;
+                }
+            }
+            to_skip = 0;
         }
 
         ret
