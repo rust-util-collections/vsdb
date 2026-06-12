@@ -5,7 +5,7 @@
 //! search with configurable distance metrics ([`L2`], [`Cosine`],
 //! [`InnerProduct`]).
 //!
-//! For detailed documentation see [VecDex docs](../docs/vecdex.md).
+//! For detailed documentation see [VecDex docs](../../docs/vecdex.md).
 //!
 //! # Quick start
 //!
@@ -224,16 +224,59 @@ where
     D: DistanceMetric<S>,
     S: Scalar,
 {
-    /// If the dirty bit is set, rebuild the count from live data.
+    /// If the dirty bit is set, rebuild the count — and the derived
+    /// metadata that the same crash window invalidates — from live data.
     /// Then set the dirty bit for the current process lifetime.
     /// Called automatically during deserialization.
     fn ensure_count(&mut self) {
         let raw = self.meta.get_value().node_count;
         if dc::is_dirty(raw) {
-            let actual = self.node_to_key.iter().count() as u64;
-            self.meta.get_mut().node_count = dc::set_dirty(actual);
+            // Unclean shutdown.  Data rows are written before the meta
+            // update, so node_count, next_node_id, entry_point and
+            // max_layer may all be stale.  Rebuild them so node ids are
+            // never reused and the entry point references a live node.
+            let mut actual = 0u64;
+            let mut max_id: Option<u64> = None;
+            for (nid, _) in self.node_to_key.iter() {
+                actual += 1;
+                max_id = Some(max_id.map_or(nid, |m| m.max(nid)));
+            }
+            let mut entry: Option<(u64, u8)> = None;
+            for (nid, info) in self.node_info.iter() {
+                max_id = Some(max_id.map_or(nid, |m| m.max(nid)));
+                // A crash mid-remove can leave a node_info row whose
+                // vector is already gone — such a node cannot serve as
+                // the entry point.
+                if self.vectors.get(&nid).is_none() {
+                    continue;
+                }
+                match entry {
+                    Some((_, bl)) if info.max_layer <= bl => {}
+                    _ => entry = Some((nid, info.max_layer)),
+                }
+            }
+            let mut m = self.meta.get_mut();
+            m.node_count = dc::set_dirty(actual);
+            m.next_node_id = m.next_node_id.max(max_id.map_or(0, |i| i + 1));
+            if let Some((ep, ml)) = entry {
+                m.entry_point = Some(ep);
+                m.max_layer = ml;
+            } else {
+                m.entry_point = None;
+                m.max_layer = 0;
+            }
         } else {
             // Clean shutdown — count is trustworthy. Set dirty for this session.
+            self.meta.get_mut().node_count = dc::set_dirty(raw);
+        }
+    }
+
+    /// Sets the persisted dirty bit (idempotent).  Called at the start of
+    /// every mutation so that a crash after [`save_meta`](Self::save_meta)
+    /// is still detected as an unclean shutdown on recovery.
+    fn mark_dirty(&mut self) {
+        let raw = self.meta.get_value().node_count;
+        if !dc::is_dirty(raw) {
             self.meta.get_mut().node_count = dc::set_dirty(raw);
         }
     }
@@ -344,6 +387,7 @@ where
 
     /// Clears all indexed data.
     pub fn clear(&mut self) {
+        self.mark_dirty();
         self.vectors.clear();
         self.adjacency.clear();
         self.key_to_node.clear();
@@ -374,6 +418,8 @@ where
 
         if self.key_to_node.contains_key(key) {
             self.remove(key)?;
+        } else {
+            self.mark_dirty();
         }
 
         // Re-read metadata after potential remove() to avoid stale
@@ -626,6 +672,8 @@ where
         let Some(node_id) = self.key_to_node.get(key) else {
             return Ok(false);
         };
+
+        self.mark_dirty();
 
         let info = self.node_info.get(&node_id).unwrap_or_default();
         let meta = self.meta.get_value().clone();

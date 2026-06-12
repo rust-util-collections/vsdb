@@ -161,7 +161,7 @@ impl<S: Scalar> DistanceMetric<S> for Cosine {
             nb = nb + b[i] * b[i];
         }
         let denom = na.sqrt() * nb.sqrt();
-        if denom < S::epsilon() {
+        if denom == S::zero() {
             S::one()
         } else {
             S::one() - dot / denom

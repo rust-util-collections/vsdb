@@ -66,10 +66,6 @@ static VSDB_CUSTOM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     let mut d = VSDB_BASE_DIR.lock().clone();
     d.push("__CUSTOM__");
     pnk!(fs::create_dir_all(&d));
-    // SAFETY: Called during `LazyLock` init, which runs exactly once and
-    // blocks concurrent accessors. No other threads read this env var
-    // before initialization completes.
-    unsafe { env::set_var("VSDB_CUSTOM_DIR", d.as_os_str()) }
     d
 });
 
@@ -260,10 +256,33 @@ pub fn vsdb_get_base_dir() -> PathBuf {
     VSDB_BASE_DIR.lock().clone()
 }
 
+/// Whether the base directory has been frozen (set manually or locked in
+/// by the first database initialization).
+static BASE_DIR_FROZEN: AtomicBool = AtomicBool::new(false);
+
+/// Freezes the base directory without touching the process environment.
+///
+/// Called by the engine when the database is first opened so that any
+/// later [`vsdb_set_base_dir`] call fails instead of silently diverging
+/// from the directory already in use.  This deliberately performs no
+/// `env::set_var` — it can run at an arbitrary point in a multithreaded
+/// program, where mutating the environment would be unsound.
+#[inline(always)]
+pub(crate) fn vsdb_freeze_base_dir() {
+    BASE_DIR_FROZEN.store(true, Ordering::Release);
+}
+
 /// Sets the base directory path for VSDB manually.
 ///
 /// This function allows you to programmatically set the base directory for VSDB.
 /// It can only be called once, before the database is initialized.
+///
+/// It also publishes the directory through the `VSDB_BASE_DIR`
+/// environment variable (for child processes).  Because `env::set_var`
+/// is unsound while other threads may be reading the environment, call
+/// this **early in `main`, before spawning any threads**.  If you cannot
+/// guarantee that, set the `VSDB_BASE_DIR` environment variable before
+/// process start instead of calling this function.
 ///
 /// # Arguments
 ///
@@ -274,14 +293,13 @@ pub fn vsdb_get_base_dir() -> PathBuf {
 /// This function will return an error if the base directory has already been initialized.
 #[inline(always)]
 pub fn vsdb_set_base_dir(dir: impl AsRef<Path>) -> Result<()> {
-    static HAS_INITED: AtomicBool = AtomicBool::new(false);
-
-    if HAS_INITED.swap(true, Ordering::AcqRel) {
+    if BASE_DIR_FROZEN.swap(true, Ordering::AcqRel) {
         Err(eg!("VSDB has been initialized !!"))
     } else {
-        // SAFETY: Guarded by `HAS_INITED` swap — runs at most once.
-        // Must be called before spawning worker threads; the caller is
-        // responsible for ensuring no concurrent env readers exist.
+        // SAFETY: Guarded by the `BASE_DIR_FROZEN` swap — runs at most
+        // once.  The documented contract above requires the caller to
+        // invoke this before spawning threads, so no concurrent
+        // `getenv`/`setenv` can observe the mutation.
         unsafe { env::set_var(BASE_DIR_VAR, dir.as_ref().as_os_str()) }
         *VSDB_BASE_DIR.lock() = dir.as_ref().to_path_buf();
         Ok(())

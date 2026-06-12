@@ -14,9 +14,13 @@
 //! * **Encoding a valid Rust value should never fail.**  The blanket
 //!   implementations delegate to `postcard::to_allocvec`, which can only
 //!   fail if the `Serialize` impl itself is buggy.  Accordingly,
-//!   [`KeyEnDe::encode`] / [`ValueEnDe::encode`] **panic** on error —
+//!   [`KeyEnDe::encode`](crate::common::ende::KeyEnDe::encode) /
+//!   [`ValueEnDe::encode`](crate::common::ende::ValueEnDe::encode)
+//!   **panic** on error —
 //!   a failure here is a programming bug, not a recoverable runtime
-//!   condition.  Use [`KeyEnDe::try_encode`] / [`ValueEnDe::try_encode`]
+//!   condition.  Use
+//!   [`KeyEnDe::try_encode`](crate::common::ende::KeyEnDe::try_encode) /
+//!   [`ValueEnDe::try_encode`](crate::common::ende::ValueEnDe::try_encode)
 //!   at trust boundaries (e.g. first-time validation of a third-party
 //!   type) where you want a `Result` instead.
 //!
@@ -395,35 +399,6 @@ macro_rules! impl_type {
             }
         }
     };
-    (%$hash: ty) => {
-        impl KeyEnDeOrdered for $hash {
-            #[inline(always)]
-            fn to_bytes(&self) -> RawBytes {
-                self.as_bytes().to_vec()
-            }
-            #[inline(always)]
-            fn from_slice(b: &[u8]) -> Result<Self> {
-                if b.len() != <$hash>::len_bytes() {
-                    return Err(eg!("length mismatch"));
-                }
-                Ok(<$hash>::from_slice(b))
-            }
-        }
-    };
-    (~$big_uint: ty) => {
-        impl KeyEnDeOrdered for $big_uint {
-            #[inline(always)]
-            fn to_bytes(&self) -> RawBytes {
-                let mut r = vec![];
-                self.to_big_endian(&mut r);
-                r
-            }
-            #[inline(always)]
-            fn from_slice(b: &[u8]) -> Result<Self> {
-                Ok(<$big_uint>::from_big_endian(b))
-            }
-        }
-    };
 }
 
 macro_rules! impl_all {
@@ -447,20 +422,6 @@ macro_rules! impl_all {
     (^$t: ty, $(^$tt: ty),+) => {
         impl_all!(^$t);
         impl_all!($(^$tt), +);
-    };
-    (%$t: ty) => {
-        impl_type!(%$t);
-    };
-    (%$t: ty, $(%$tt: ty),+) => {
-        impl_all!(%$t);
-        impl_all!($(%$tt), +);
-    };
-    (~$t: ty) => {
-        impl_type!(~$t);
-    };
-    (~$t: ty, $(~$tt: ty),+) => {
-        impl_all!(~$t);
-        impl_all!($(~$tt), +);
     };
 }
 

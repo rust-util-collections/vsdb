@@ -3,7 +3,11 @@
 //! merge support, modelled after Git semantics.
 //!
 
-use super::{BranchId, Commit, CommitId, NO_COMMIT};
+use super::{
+    BranchId, Commit, CommitId, NO_COMMIT,
+    diff::{DiffEntry, diff_roots},
+    handle::{Branch, BranchMut},
+};
 use crate::basic::persistent_btree::{EMPTY_ROOT, NodeId, PersistentBTree};
 use crate::common::ende::{KeyEnDeOrdered, ValueEnDe};
 use crate::common::error::{Result, VsdbError};
@@ -464,9 +468,8 @@ where
     /// reaches zero, the commit is hard-deleted and the decrement
     /// cascades to its parents.
     ///
-    /// B+ tree node reclamation requires a separate [`gc`](Self::gc)
-    /// call (or happens automatically in
-    /// [`VerMapWithProof::from_map`](crate::trie::VerMapWithProof::from_map)).
+    /// B+ tree nodes are reclaimed inline through the same ref-count
+    /// cascade; [`gc`](Self::gc) is only needed to recover from a crash.
     pub fn delete_branch(&mut self, branch: BranchId) -> Result<()> {
         if branch == self.main_branch.get_value() {
             return Err(VsdbError::CannotDeleteMainBranch);
@@ -792,8 +795,17 @@ where
         let state = self.get_branch(branch)?;
         let _ = self.get_commit_inner(target)?;
 
+        // A branch with no commits has no ancestors — rolling it back to
+        // an arbitrary commit would silently attach it to another
+        // branch's history.
+        if state.head == NO_COMMIT {
+            return Err(VsdbError::Other {
+                detail: "target commit is not an ancestor of this branch's head".into(),
+            });
+        }
+
         // Verify target is reachable from the branch head.
-        if state.head != NO_COMMIT && target != state.head {
+        if target != state.head {
             let mut queue = vec![state.head];
             let mut visited = HashSet::new();
             let mut found = false;
@@ -1101,41 +1113,26 @@ where
 
     /// Computes the diff between two commits.
     ///
-    /// Returns a list of [`DiffEntry`](super::diff::DiffEntry) in
+    /// Returns a list of [`DiffEntry`] in
     /// ascending key order, describing every key that was added, removed,
     /// or modified between `from` and `to`.
-    pub fn diff_commits(
-        &self,
-        from: CommitId,
-        to: CommitId,
-    ) -> Result<Vec<super::diff::DiffEntry>> {
+    pub fn diff_commits(&self, from: CommitId, to: CommitId) -> Result<Vec<DiffEntry>> {
         let from_commit = self.get_commit_inner(from)?;
         let to_commit = self.get_commit_inner(to)?;
-        Ok(super::diff::diff_roots(
-            &self.tree,
-            from_commit.root,
-            to_commit.root,
-        ))
+        Ok(diff_roots(&self.tree, from_commit.root, to_commit.root))
     }
 
     /// Computes the diff of uncommitted (working) changes on `branch`.
     ///
     /// Analogous to `git diff` (unstaged changes relative to HEAD).
-    pub fn diff_uncommitted(
-        &self,
-        branch: BranchId,
-    ) -> Result<Vec<super::diff::DiffEntry>> {
+    pub fn diff_uncommitted(&self, branch: BranchId) -> Result<Vec<DiffEntry>> {
         let state = self.get_branch(branch)?;
         let head_root = if state.head == NO_COMMIT {
             EMPTY_ROOT
         } else {
             self.get_commit_inner(state.head)?.root
         };
-        Ok(super::diff::diff_roots(
-            &self.tree,
-            head_root,
-            state.dirty_root,
-        ))
+        Ok(diff_roots(&self.tree, head_root, state.dirty_root))
     }
 
     // =================================================================
@@ -1154,8 +1151,8 @@ where
     ///   [`rollback_to`](Self::rollback_to)).
     /// - **B+ tree nodes** are registered for deferred disk deletion
     ///   via the storage engine's compaction filter when
-    ///   [`release_node`] drops their reference count to zero.
-    ///   The underlying MMDB engine reclaims disk space
+    ///   [`PersistentBTree::release_node`] drops their reference count
+    ///   to zero.  The underlying MMDB engine reclaims disk space
     ///   during background compaction — no user action required.
     ///
     /// This method is still useful in two scenarios:
@@ -1195,38 +1192,35 @@ where
 
     /// Returns a read-only handle bound to the given branch.
     ///
-    /// All operations on the returned [`Branch`](super::handle::Branch)
+    /// All operations on the returned [`Branch`]
     /// automatically target this branch, removing the need to pass a
     /// `BranchId` on every call.
-    pub fn branch(&self, id: BranchId) -> Result<super::handle::Branch<'_, K, V>> {
+    pub fn branch(&self, id: BranchId) -> Result<Branch<'_, K, V>> {
         self.get_branch(id)?;
-        Ok(super::handle::Branch { map: self, id })
+        Ok(Branch { map: self, id })
     }
 
     /// Returns a mutable handle bound to the given branch.
     ///
-    /// All operations on the returned [`BranchMut`](super::handle::BranchMut)
+    /// All operations on the returned [`BranchMut`]
     /// automatically target this branch.
-    pub fn branch_mut(
-        &mut self,
-        id: BranchId,
-    ) -> Result<super::handle::BranchMut<'_, K, V>> {
+    pub fn branch_mut(&mut self, id: BranchId) -> Result<BranchMut<'_, K, V>> {
         self.get_branch(id)?;
-        Ok(super::handle::BranchMut { map: self, id })
+        Ok(BranchMut { map: self, id })
     }
 
     /// Shortcut for `self.branch(self.main_branch())`.
-    pub fn main(&self) -> super::handle::Branch<'_, K, V> {
-        super::handle::Branch {
+    pub fn main(&self) -> Branch<'_, K, V> {
+        Branch {
             map: self,
             id: self.main_branch(),
         }
     }
 
     /// Shortcut for `self.branch_mut(self.main_branch())`.
-    pub fn main_mut(&mut self) -> super::handle::BranchMut<'_, K, V> {
+    pub fn main_mut(&mut self) -> BranchMut<'_, K, V> {
         let id = self.main_branch();
-        super::handle::BranchMut { map: self, id }
+        BranchMut { map: self, id }
     }
 
     // =================================================================

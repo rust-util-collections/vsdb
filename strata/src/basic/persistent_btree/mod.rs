@@ -373,6 +373,10 @@ impl PersistentBTree {
             .next_id
             .checked_add(1)
             .expect("PersistentBTree: NodeId space exhausted");
+        debug_assert!(
+            self.nodes.get(id.to_le_bytes()).is_none(),
+            "PersistentBTree: NodeId {id} already occupied — allocator regression"
+        );
         self.nodes.insert(id.to_le_bytes(), node.encode());
 
         // Populate in-memory ref tracking.
@@ -1115,18 +1119,29 @@ impl PersistentBTree {
             }
         }
 
-        // Register unreachable nodes for deferred disk deletion.
+        // Register unreachable nodes for deferred disk deletion, and find
+        // the maximum stored NodeId.  After crash recovery from a stale
+        // meta snapshot, `next_id` may lag behind nodes already written to
+        // the engine; allocating over them would mutate live (or pending
+        // lazy-delete) nodes in place and corrupt shared snapshots.
+        let mut max_id = 0;
         let dead_keys: Vec<Vec<u8>> = self
             .nodes
             .iter()
             .filter_map(|(k, _)| {
                 let id = u64::from_le_bytes(k[..8].try_into().unwrap());
+                max_id = max_id.max(id);
                 (!visited.contains(&id)).then_some(k)
             })
             .collect();
         if !dead_keys.is_empty() {
             self.nodes.lazy_delete_batch(dead_keys);
         }
+        self.next_id = self.next_id.max(
+            max_id
+                .checked_add(1)
+                .expect("PersistentBTree: NodeId space exhausted"),
+        );
 
         self.ref_counts = new_refs;
         self.ref_counts_ready = true;
@@ -1139,7 +1154,7 @@ impl PersistentBTree {
     /// Rebuilds the in-memory reference-count map and registers any
     /// unreachable nodes for deferred disk deletion.
     ///
-    /// In normal operation this is **not required** — [`release_node`]
+    /// In normal operation this is **not required** — [`Self::release_node`]
     /// already registers dead nodes for compaction.  Call this only for:
     ///
     /// - **Crash recovery** — when `ref_counts_ready` is false after

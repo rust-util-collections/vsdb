@@ -31,7 +31,7 @@ const DAG_ID_BATCH: u128 = 128;
 /// The ceiling file always stores a value **>= any ID ever returned**.
 /// On recovery the counter resumes from the persisted ceiling.  IDs
 /// between the last returned value and the ceiling are skipped (safe
-/// gap of at most [`DAG_ID_BATCH`] entries).  No ID is ever reused,
+/// gap of at most `DAG_ID_BATCH` entries).  No ID is ever reused,
 /// even after power failure.
 pub fn gen_dag_map_id_num() -> u128 {
     use parking_lot::Mutex;

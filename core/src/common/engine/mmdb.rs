@@ -1,6 +1,6 @@
 use crate::common::{
     BatchTrait, GB, PREFIX_SIZE, Pre, PreBytes, RESERVED_ID_CNT, RawKey, RawValue,
-    vsdb_get_base_dir, vsdb_set_base_dir,
+    vsdb_freeze_base_dir, vsdb_get_base_dir,
 };
 use mmdb::{BidiIterator, CompressionType, DB, DbOptions, WriteBatch, WriteOptions};
 use parking_lot::Mutex;
@@ -43,7 +43,11 @@ pub struct MmDB {
 impl MmDB {
     pub(crate) fn new() -> Result<Self> {
         let base_dir = vsdb_get_base_dir();
-        omit!(vsdb_set_base_dir(&base_dir));
+        // Lock in the base dir so later `vsdb_set_base_dir` calls fail.
+        // Deliberately does NOT mutate the process environment: this runs
+        // lazily on the first DB operation, possibly long after worker
+        // threads were spawned, where `env::set_var` would be unsound.
+        vsdb_freeze_base_dir();
 
         fs::create_dir_all(&base_dir).c(d!())?;
 
@@ -199,6 +203,11 @@ impl MmDB {
     /// Unlike [`remove`](Self::remove), this does **not** write a
     /// tombstone immediately.  The key stays readable until mmdb's
     /// compaction filter physically drops it.
+    ///
+    /// mmdb keeps dead-key registrations in memory only — they are not
+    /// persisted to the WAL or SSTs.  A restart before compaction loses
+    /// them, so deletion is best-effort per process lifetime and callers
+    /// must re-register after recovery.
     pub(crate) fn lazy_delete(&self, meta_prefix: PreBytes, key: &[u8]) {
         let full_key = make_full_key(&meta_prefix, key);
         self.shard(&meta_prefix).lazy_delete(&full_key);

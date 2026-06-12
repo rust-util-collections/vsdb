@@ -71,7 +71,7 @@ macro_rules! impl_slot_type {
             #[inline]
             fn saturating_add(&self, rhs: &Self) -> Self { <$t>::saturating_add(*self, *rhs) }
             #[inline]
-            fn as_i128(&self) -> i128 { *self as i128 }
+            fn as_i128(&self) -> i128 { i128::try_from(*self).unwrap_or(i128::MAX) }
             #[inline]
             fn as_u64(&self) -> u64 { *self as u64 }
         }
@@ -196,11 +196,19 @@ where
     ///
     /// # Arguments
     ///
-    /// * `tier_capacity` - The capacity of each tier, controlling the granularity of the index.
+    /// * `tier_capacity` - The capacity of each tier, controlling the granularity
+    ///   of the index.  Must be at least 2: each tier coarsens slot buckets by
+    ///   this factor, so a capacity of 1 would never terminate tier growth.
     /// * `swap_order` - If `true`, reverses the internal slot order. This can improve
     ///   performance for applications that primarily query in reverse chronological order.
     pub fn new(tier_capacity: S, swap_order: bool) -> Self {
-        assert!(tier_capacity > S::MIN, "SlotDex: tier_capacity must be > 0");
+        // Each tier's floor_base is tier_capacity^(1+idx); growth only
+        // terminates when every new tier strictly coarsens the previous
+        // one, which requires a capacity of at least 2.
+        assert!(
+            tier_capacity.as_i128() >= 2,
+            "SlotDex: tier_capacity must be >= 2"
+        );
 
         Self {
             data: MapxOrd::new(),
@@ -247,8 +255,53 @@ where
     fn ensure_count(&mut self) {
         let raw = self.total.get_value();
         if dc::is_dirty(raw) {
-            let actual: u64 = self.data.iter().map(|(_, d)| d.len() as u64).sum();
-            self.total.set_value(&dc::set_dirty(actual));
+            // Unclean shutdown.  insert()/remove() update several
+            // independent structures (Large ctner maps, ctner records,
+            // tier floor counts, the grand total) without batch
+            // atomicity, so everything derived must be rebuilt from the
+            // backing maps — not just the total.
+            //
+            // 1. Repair each Large ctner's cached `len` from its backing
+            //    map (map writes land before the record write), dropping
+            //    records that turn out to be empty.
+            let mut total: EntryCnt = 0;
+            let mut rewrites: Vec<(S, DataCtner<K>)> = vec![];
+            let mut removals: Vec<S> = vec![];
+            for (slot, mut d) in self.data.iter() {
+                if let DataCtner::Large { map, len } = &mut d {
+                    let actual = map.iter().count();
+                    if actual != *len {
+                        *len = actual;
+                        if actual == 0 {
+                            removals.push(slot);
+                        } else {
+                            total += actual as EntryCnt;
+                            rewrites.push((slot, d));
+                        }
+                        continue;
+                    }
+                }
+                total += d.len() as EntryCnt;
+            }
+            for slot in removals {
+                self.data.remove(&slot);
+            }
+            for (slot, d) in rewrites {
+                self.data.insert(&slot, &d);
+            }
+
+            // 2. Tier floor counts may be skewed by the same crash
+            //    window and would permanently corrupt pagination
+            //    offsets.  Discard the whole tier stack; the next
+            //    insert rebuilds it from a full data scan (queries are
+            //    correct in the tier-less state).
+            self.tiers.iter_mut().for_each(|t| {
+                t.store.clear();
+                *t.entry_count.get_mut() = 0;
+            });
+            self.tiers.clear();
+
+            self.total.set_value(&dc::set_dirty(total));
         } else {
             self.total.set_value(&dc::set_dirty(raw));
         }

@@ -26,7 +26,7 @@ For the versioned storage architecture with diagrams, see [Versioned Module — 
 - **Persistent Storage**: Data is automatically saved to disk and loaded on instantiation.
 - **Typed Keys and Values**: Keys and values are strongly typed and automatically serialized/deserialized.
 - **Git-Model Versioning**: `VerMap` provides branching, commits, three-way merge, rollback, and history — backed by a persistent B+ tree with copy-on-write structural sharing.
-- **Merkle Trie**: Built-in `MptCalc` (Merkle Patricia Trie) and `SmtCalc` (Sparse Merkle Tree) for cryptographic state commitments. `VerMapWithProof` integrates `VerMap` with `MptCalc` for versioned Merkle roots.
+- **Merkle Trie**: Built-in `MptCalc` (Merkle Patricia Trie) and `SmtCalc` (Sparse Merkle Tree) for cryptographic state commitments. `VerMapWithProof` pairs `VerMap` with either back-end for versioned Merkle roots.
 - **Slotdex**: A skip-list-like index (`SlotDex`) for efficient, timestamp-based paged queries.
 - **VecDex**: A persistent approximate nearest-neighbor vector index (`VecDex`) using the HNSW algorithm. Supports L2, Cosine, and InnerProduct metrics with filtered search. See [VecDex docs](docs/vecdex.md).
 
@@ -91,7 +91,9 @@ assert_eq!(map.last(), Some((3, "three".to_string())));
 
 `VerMap` provides Git-style versioned storage with branching, commits, merge, and rollback.
 
-The typical lifecycle is: **create -> write -> commit -> branch -> merge -> gc**.
+The typical lifecycle is: **create -> write -> commit -> branch -> merge -> delete_branch**.
+Garbage collection is automatic: dead commits and B+ tree nodes are reclaimed
+inline via reference counting; `gc()` is only needed for crash recovery.
 
 #### Merge conflict resolution: source wins on conflicts
 
@@ -136,9 +138,9 @@ assert_eq!(m.get(feat, &1).unwrap(), Some("updated".into()));
 m.merge(feat, main).unwrap();
 assert_eq!(m.get(main, &1).unwrap(), Some("updated".into()));
 
-// 6. Clean up: delete the branch, then garbage-collect unreachable data.
+// 6. Clean up: deleting the branch reclaims unreachable commits and
+//    B+ tree nodes automatically — no manual gc() call required.
 m.delete_branch(feat).unwrap();
-m.gc();
 ```
 
 ### MptCalc / SmtCalc (Merkle Trie)
@@ -187,7 +189,7 @@ assert!(SmtCalc::verify_proof(&root32, b"charlie", &proof).unwrap());
 
 ### VerMapWithProof
 
-`VerMapWithProof` integrates `VerMap` with `MptCalc` for versioned Merkle root computation:
+`VerMapWithProof` pairs `VerMap` with a trie back-end (`MptCalc` or `SmtCalc`) for versioned Merkle root computation:
 
 ```rust,ignore
 use vsdb::trie::{MptCalc, VerMapWithProof};

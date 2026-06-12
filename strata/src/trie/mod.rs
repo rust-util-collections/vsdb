@@ -63,7 +63,7 @@ mod smt;
 mod test;
 
 pub use error::{Result, TrieError};
-pub use mpt::MptProof;
+pub use mpt::{MAX_MPT_KEY_LEN, MptProof};
 pub use proof::VerMapWithProof;
 pub use smt::SmtProof;
 
@@ -152,6 +152,10 @@ impl MptCalc {
     }
 
     /// Inserts a key-value pair into the trie.
+    ///
+    /// Returns an error if `key` is longer than [`MAX_MPT_KEY_LEN`] —
+    /// unbounded key lengths would allow adversarial key sets to build
+    /// stack-overflowing path depths.
     pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         let mut trie = TrieMut::new(mem::take(&mut self.root));
         trie.insert(key, value)?;

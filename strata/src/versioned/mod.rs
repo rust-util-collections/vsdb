@@ -5,7 +5,7 @@
 //!
 //! | Git         | vsdb                                |
 //! |-------------|-------------------------------------|
-//! | tree object | [`NodeId`] (root of a B+ tree)      |
+//! | tree object | [`NodeId`](crate::basic::persistent_btree::NodeId) (root of a B+ tree) |
 //! | commit      | [`Commit`]                          |
 //! | ref/branch  | [`BranchId`] → mutable pointer      |
 //! | working dir | uncommitted writes on a branch      |

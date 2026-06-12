@@ -2,8 +2,8 @@
 //! [`VerMapWithProof`] — a versioned KV map with Merkle root computation.
 //!
 //! Combines [`VerMap`] (versioning, branching, merging) with a
-//! [`TrieCalc`](super::TrieCalc) back-end (e.g. [`MptCalc`](super::MptCalc)
-//! or [`SmtCalc`](super::SmtCalc)) to provide cryptographic commitments
+//! [`TrieCalc`] back-end (e.g. [`MptCalc`]
+//! or [`SmtCalc`]) to provide cryptographic commitments
 //! over versioned state.
 //!
 //! The trie is treated as a disposable computation layer: it holds an
@@ -367,10 +367,13 @@ impl<K, V, T: TrieCalc> VerMapWithProof<K, V, T> {
     /// falls back to the default empty trie.
     fn try_load_cache(&mut self) {
         if let Ok((mut trie, sync_tag, saved_hash)) = T::load_cache(self.cache_id) {
-            // Verify the loaded trie produces the same root hash that
-            // was saved.  Discards the cache on any mismatch (tampered
-            // or corrupted file) — the trie will be rebuilt from VerMap
-            // on the next merkle_root() call.
+            // Consistency check between two fields of the cache file: the
+            // header's saved root hash and the root node's stored hash
+            // (root_hash() short-circuits on a committed root, so nothing
+            // is recomputed here).  This catches header/payload mix-ups,
+            // not tampering — a self-attesting file cannot prove its own
+            // integrity; accidental corruption is already rejected by the
+            // file checksum inside load_cache().
             let ok = trie.root_hash().map(|h| h == saved_hash).unwrap_or(false);
             if !ok {
                 return;

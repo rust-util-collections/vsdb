@@ -26,7 +26,7 @@ vsdb/
 make all          # fmt + lint + test
 make test         # cargo test --workspace (release + debug, single-threaded)
 make lint         # cargo clippy --workspace + check tests/benches
-make bench        # criterion benches (core, basic, versioned, slotdex, trie_bench)
+make bench        # criterion benches (core basic, strata basic, versioned, slotdex)
 ```
 
 **Important**: Tests MUST run single-threaded (`--test-threads=1`) due to global MMDB state.
@@ -37,7 +37,7 @@ make bench        # criterion benches (core, basic, versioned, slotdex, trie_ben
 |-----------|-----------|---------|
 | Engine | `core/src/common/engine/mod.rs`, `mmdb.rs` | Mapx, batch ops, prefix alloc, 16-shard routing |
 | MapxRaw | `core/src/basic/mapx_raw/` | Untyped raw KV, prefix isolation |
-| Typed Collections | `strata/src/basic/mapx/`, `mapx_ord/`, `mapx_ord_rawkey/` | Mapx<K,V>, MapxOrd<K,V>, MapxOrdRawKey<V> |
+| Typed Collections | `strata/src/basic/mapx/`, `mapx_ord/`, `mapx_ord_rawkey/`, `orphan/` | Mapx<K,V>, MapxOrd<K,V>, MapxOrdRawKey<V>, Orphan<T> |
 | Persistent B+ Tree | `strata/src/basic/persistent_btree/` | COW B+ tree, structural sharing |
 | Versioning | `strata/src/versioned/` | VerMap, Branch/BranchMut handles, commit DAG, merge |
 | Error types | `strata/src/common/error.rs` | VsdbError enum (thiserror-based) |
@@ -58,7 +58,7 @@ Supporting documentation in `.claude/docs/`:
 - `technical-patterns.md` — cataloged bug patterns for vsdb + mmdb layers
 - `review-core.md` — systematic review methodology
 - `false-positive-guide.md` — rules for filtering spurious findings
-- `patterns/` — per-subsystem review guides (btree, versioning, trie, slotdex, dagmap, engine)
+- `patterns/` — per-subsystem review guides (btree, versioning, trie, slotdex, dagmap, engine, vecdex)
 
 ## Conventions
 
@@ -71,7 +71,8 @@ Supporting documentation in `.claude/docs/`:
 - `VsdbError` (thiserror) for public API errors; `ruc` for internal error chaining
 - `postcard` for serialization (replaced serde_cbor_2 in v12)
 - Tests run single-threaded; use `tempdir` or `/tmp/vsdb_testing` for isolation
-- ~23 unsafe blocks — all require `// SAFETY:` comments
+- ~22 unsafe blocks — all require `// SAFETY:` comments
   - `shadow()`: SWMR contract — caller serializes writes
   - `from_bytes()`: caller provides valid serialized bytes
   - Pointer casts in entry API macros
+  - `env::set_var` in `vsdb_set_base_dir`: caller must invoke before spawning threads

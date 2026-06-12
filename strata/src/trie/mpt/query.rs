@@ -17,8 +17,7 @@ impl<'a> TrieRo<'a> {
         }
 
         let path = Nibbles::from_raw(key, false);
-        let root_node = Self::resolve(self.root);
-        self.step(&root_node, path)
+        self.step(Self::resolve(self.root), path)
     }
 
     fn step(&self, node: &Node, path: Nibbles) -> Result<Option<Vec<u8>>> {
@@ -40,8 +39,7 @@ impl<'a> TrieRo<'a> {
             } => {
                 if path.starts_with(ext_path) {
                     let (_, remaining) = path.split_at(ext_path.len());
-                    let child_node = Self::resolve(child);
-                    self.step(&child_node, remaining)
+                    self.step(Self::resolve(child), remaining)
                 } else {
                     Ok(None)
                 }
@@ -52,9 +50,8 @@ impl<'a> TrieRo<'a> {
                 }
                 let idx = path.at(0) as usize;
                 if let Some(child_handle) = &children[idx] {
-                    let child_node = Self::resolve(child_handle);
                     let (_, remaining) = path.split_at(1);
-                    self.step(&child_node, remaining)
+                    self.step(Self::resolve(child_handle), remaining)
                 } else {
                     Ok(None)
                 }
@@ -62,9 +59,11 @@ impl<'a> TrieRo<'a> {
         }
     }
 
-    fn resolve(handle: &NodeHandle) -> Node {
+    /// Borrows the node behind a handle — read-only traversal must never
+    /// clone subtrees (`Node`'s derived `Clone` is recursive).
+    fn resolve(handle: &NodeHandle) -> &Node {
         match handle {
-            NodeHandle::InMemory(n) | NodeHandle::Cached(_, n) => *n.clone(),
+            NodeHandle::InMemory(n) | NodeHandle::Cached(_, n) => n,
         }
     }
 }

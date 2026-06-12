@@ -9,12 +9,30 @@ pub struct TrieMut {
     root: NodeHandle,
 }
 
+/// Maximum accepted MPT key length, in bytes.
+///
+/// MPT traversal (insert / remove / commit / drop) recurses once per node
+/// on a key's path, and path depth is proportional to the longest shared
+/// key prefix — up to two nibbles' worth of nodes per key byte.  Without
+/// a bound, an adversarial key set (e.g. `[0;1], [0;2], …, [0;N]`) builds
+/// a chain deep enough to overflow the stack, which aborts the process.
+/// Rejecting oversized keys at insertion bounds the depth of every
+/// subsequent traversal to a few thousand frames, safe on default thread
+/// stacks.  (The SMT is immune: its depth is hard-capped at 256 bits.)
+pub const MAX_MPT_KEY_LEN: usize = 1024;
+
 impl TrieMut {
     pub fn new(root: NodeHandle) -> Self {
         Self { root }
     }
 
     pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
+        if key.len() > MAX_MPT_KEY_LEN {
+            return Err(TrieError::InvalidState(format!(
+                "key length {} exceeds MAX_MPT_KEY_LEN ({MAX_MPT_KEY_LEN})",
+                key.len()
+            )));
+        }
         let path = Nibbles::from_raw(key, false);
         let new_root =
             Self::insert_rec(mem::take(&mut self.root), path, value.to_vec())?;
@@ -48,12 +66,6 @@ impl TrieMut {
 
     pub fn into_root(self) -> NodeHandle {
         self.root
-    }
-
-    fn resolve(handle: &NodeHandle) -> Node {
-        match handle {
-            NodeHandle::InMemory(n) | NodeHandle::Cached(_, n) => *n.clone(),
-        }
     }
 
     /// Re-wrap a node into a handle, preserving a precomputed hash when the
@@ -224,10 +236,13 @@ impl TrieMut {
                 Some(NodeHandle::InMemory(Box::new(Node::Leaf { path, value })))
             }
             Node::Extension { path, child } => {
-                let child_node = Self::resolve(&child);
-                match child_node {
+                // Peek the cached hash so the no-merge path can rebuild
+                // the original handle without re-hashing, then consume the
+                // child by move — no subtree clone.
+                let cached_hash = child.hash().map(|h| h.to_vec());
+                match child.into_node() {
                     Node::Extension {
-                        path: ref child_path,
+                        path: child_path,
                         child: grand_child,
                     } => {
                         let mut new_path_data = path.as_slice().to_vec();
@@ -239,7 +254,7 @@ impl TrieMut {
                         })
                     }
                     Node::Leaf {
-                        path: ref child_path,
+                        path: child_path,
                         value,
                     } => {
                         let mut new_path_data = path.as_slice().to_vec();
@@ -250,9 +265,9 @@ impl TrieMut {
                             value,
                         })))
                     }
-                    _ => Some(NodeHandle::InMemory(Box::new(Node::Extension {
+                    other => Some(NodeHandle::InMemory(Box::new(Node::Extension {
                         path,
-                        child,
+                        child: Self::rewrap(&cached_hash, other),
                     }))),
                 }
             }

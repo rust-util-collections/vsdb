@@ -51,11 +51,12 @@ macro_rules! define_map_wrapper {
             /// - All shadows must be dropped before the next write.
             #[inline(always)]
             pub unsafe fn shadow(&self) -> Self {
-                unsafe {
-                    Self {
-                        inner: self.inner.shadow(),
-                        $phantom_field: std::marker::PhantomData,
-                    }
+                Self {
+                    // SAFETY: forwards this fn's `unsafe` contract — the
+                    // caller guarantees the SWMR discipline (no concurrent
+                    // writes through the shadow and the original).
+                    inner: unsafe { self.inner.shadow() },
+                    $phantom_field: std::marker::PhantomData,
                 }
             }
 
@@ -69,11 +70,12 @@ macro_rules! define_map_wrapper {
             /// panics or silent data corruption on subsequent operations.
             #[inline(always)]
             pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
-                unsafe {
-                    Self {
-                        inner: <$inner_type>::from_bytes(s),
-                        $phantom_field: std::marker::PhantomData,
-                    }
+                Self {
+                    // SAFETY: forwards this fn's `unsafe` contract — the
+                    // caller guarantees `s` was produced by `as_bytes()` on
+                    // the same type and code version.
+                    inner: unsafe { <$inner_type>::from_bytes(s) },
+                    $phantom_field: std::marker::PhantomData,
                 }
             }
 
@@ -167,15 +169,27 @@ macro_rules! cow_bytes_bounds {
     ($bounds:expr) => {{
         use std::{borrow::Cow, ops::Bound};
 
-        let l = match ($bounds).start_bound() {
-            Bound::Included(lo) => Bound::Included(Cow::Owned(lo.to_bytes())),
-            Bound::Excluded(lo) => Bound::Excluded(Cow::Owned(lo.to_bytes())),
+        // Bind once: evaluating `$bounds` twice could yield inconsistent
+        // start/end bounds for non-idempotent expressions.
+        let b = &($bounds);
+
+        let l = match b.start_bound() {
+            Bound::Included(lo) => Bound::Included(Cow::Owned(
+                $crate::common::ende::KeyEnDeOrdered::to_bytes(lo),
+            )),
+            Bound::Excluded(lo) => Bound::Excluded(Cow::Owned(
+                $crate::common::ende::KeyEnDeOrdered::to_bytes(lo),
+            )),
             Bound::Unbounded => Bound::Unbounded,
         };
 
-        let h = match ($bounds).end_bound() {
-            Bound::Included(hi) => Bound::Included(Cow::Owned(hi.to_bytes())),
-            Bound::Excluded(hi) => Bound::Excluded(Cow::Owned(hi.to_bytes())),
+        let h = match b.end_bound() {
+            Bound::Included(hi) => Bound::Included(Cow::Owned(
+                $crate::common::ende::KeyEnDeOrdered::to_bytes(hi),
+            )),
+            Bound::Excluded(hi) => Bound::Excluded(Cow::Owned(
+                $crate::common::ende::KeyEnDeOrdered::to_bytes(hi),
+            )),
             Bound::Unbounded => Bound::Unbounded,
         };
 

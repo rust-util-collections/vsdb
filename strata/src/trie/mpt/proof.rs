@@ -88,7 +88,7 @@ fn prove_walk(
 ) -> Result<Option<Vec<u8>>> {
     let node = resolve(handle)?;
 
-    match &node {
+    match node {
         Node::Null => {
             nodes.push(NodeCodec::encode(&Node::Null));
             Ok(None)
@@ -98,7 +98,7 @@ fn prove_walk(
             path: leaf_path,
             value,
         } => {
-            nodes.push(NodeCodec::encode(&node));
+            nodes.push(NodeCodec::encode(node));
             if *leaf_path == path {
                 Ok(Some(value.clone()))
             } else {
@@ -110,7 +110,7 @@ fn prove_walk(
             path: ext_path,
             child,
         } => {
-            nodes.push(NodeCodec::encode(&node));
+            nodes.push(NodeCodec::encode(node));
             if path.starts_with(ext_path) {
                 let (_, remaining) = path.split_at(ext_path.len());
                 prove_walk(child, remaining, nodes)
@@ -120,7 +120,7 @@ fn prove_walk(
         }
 
         Node::Branch { children, value } => {
-            nodes.push(NodeCodec::encode(&node));
+            nodes.push(NodeCodec::encode(node));
             if path.is_empty() {
                 return Ok(value.clone());
             }
@@ -135,18 +135,18 @@ fn prove_walk(
     }
 }
 
-fn resolve(handle: &NodeHandle) -> Result<Node> {
+fn resolve(handle: &NodeHandle) -> Result<&Node> {
     match handle {
         NodeHandle::InMemory(n) => {
             if **n == Node::Null {
-                Ok(Node::Null)
+                Ok(n)
             } else {
                 Err(TrieError::InvalidState(
                     "prove() requires a committed trie — call root_hash() first".into(),
                 ))
             }
         }
-        NodeHandle::Cached(_, n) => Ok(*n.clone()),
+        NodeHandle::Cached(_, n) => Ok(n),
     }
 }
 

@@ -12,7 +12,7 @@ A high-performance, embedded key-value database for Rust with an API that feels 
 
 - **Persistent collections** — `Mapx` (like `HashMap`), `MapxOrd` (like `BTreeMap`), backed by MMDB (pure-Rust LSM-Tree)
 - **Git-model versioning** — `VerMap` provides branching, commits, three-way merge, and rollback over a COW B+ tree with structural sharing; garbage collection is fully automatic via reference counting and MMDB background compaction
-- **Merkle trie** — `MptCalc` (Merkle Patricia Trie) and `SmtCalc` (Sparse Merkle Tree) as stateless computation layers; `VerMapWithProof` integrates `VerMap` with `MptCalc` for versioned 32-byte Merkle root commitments
+- **Merkle trie** — `MptCalc` (Merkle Patricia Trie) and `SmtCalc` (Sparse Merkle Tree) as stateless computation layers; `VerMapWithProof` pairs `VerMap` with either back-end for versioned 32-byte Merkle root commitments
 - **Slot-based index** — `SlotDex` for efficient, timestamp-based paged queries via a skip-list-like tier structure
 - **Vector index** — `VecDex` for approximate nearest-neighbor search via a pure-Rust HNSW implementation; supports L2, Cosine, and InnerProduct metrics with filtered search
 
@@ -52,9 +52,9 @@ m.delete_branch(feat).unwrap();
 
 ```text
 vsdb (workspace)
-+-- core/    vsdb_core   Storage engine (MMDB), MapxRaw, PersistentBTree
++-- core/    vsdb_core   Storage engine (MMDB), MapxRaw, prefix allocation
 +-- strata/  vsdb        High-level crate (the one users depend on)
-     +-- basic/          Mapx, MapxOrd, MapxOrdRawKey, Orphan
+     +-- basic/          Mapx, MapxOrd, MapxOrdRawKey, Orphan, PersistentBTree
      +-- versioned/      VerMap (branch, commit, merge, diff)
      +-- trie/           MptCalc, SmtCalc, VerMapWithProof
      +-- slotdex/        SlotDex
@@ -66,7 +66,7 @@ vsdb (workspace)
 
 | Module | Key types | Purpose |
 |--------|-----------|---------|
-| [`basic`](strata/src/basic) | `Mapx`, `MapxOrd`, `Orphan` | Persistent, typed collections |
+| [`basic`](strata/src/basic) | `Mapx`, `MapxOrd`, `Orphan`, `PersistentBTree` | Persistent, typed collections + COW B+ tree |
 | [`versioned`](strata/src/versioned) | `VerMap`, `BranchId`, `CommitId` | Git-model versioned KV store with COW B+ tree |
 | [`trie`](strata/src/trie) | `MptCalc`, `SmtCalc`, `SmtProof`, `VerMapWithProof` | Stateless Merkle tries + VerMap integration |
 | [`slotdex`](strata/src/slotdex) | `SlotDex` | Skip-list-like index for timestamp-based paged queries |
@@ -93,7 +93,7 @@ vsdb (workspace)
        +----------------+-----------+
 ```
 
-`VerMapWithProof` wraps a `VerMap` and an `MptCalc`. On each `merkle_root()` call it computes an incremental diff from the last sync point and applies it to the trie, avoiding full rebuilds. A disposable on-disk cache makes restarts cheap.
+`VerMapWithProof` wraps a `VerMap` and a trie back-end (`MptCalc` or `SmtCalc`). On each `merkle_root()` call it computes an incremental diff from the last sync point and applies it to the trie, avoiding full rebuilds. A disposable on-disk cache makes restarts cheap.
 
 `SmtCalc` additionally supports `prove()` / `verify_proof()` for constant-time (256-hash) membership and non-membership proofs.
 
@@ -101,6 +101,7 @@ vsdb (workspace)
 
 - [API Examples](strata/docs/api.md)
 - [Versioned Module — Architecture & Internals](strata/docs/versioned.md)
+- [VecDex — HNSW Vector Index](strata/docs/vecdex.md)
 
 ## License
 

@@ -1,6 +1,6 @@
 # vsdb API Examples
 
-This document provides examples for the public APIs in the `vsdb` crate.
+This document provides examples for selected public APIs in the `vsdb` crate.
 
 ## Mapx
 
@@ -9,17 +9,17 @@ This document provides examples for the public APIs in the `vsdb` crate.
 ```rust
 use vsdb::Mapx;
 
-let mut map = Mapx::new();
+let mut map: Mapx<String, String> = Mapx::new();
 
 // Insert some key-value pairs
-map.insert(&"key1", &"value1");
-map.insert(&"key2", &"value2");
+map.insert(&"key1".to_string(), &"value1".to_string());
+map.insert(&"key2".to_string(), &"value2".to_string());
 
 // Get a value
-assert_eq!(map.get(&"key1"), Some("value1".to_string()));
+assert_eq!(map.get(&"key1".to_string()), Some("value1".to_string()));
 
 // Check if a key exists
-assert!(map.contains_key(&"key2"));
+assert!(map.contains_key(&"key2".to_string()));
 
 // Iterate over the key-value pairs
 for (key, value) in map.iter() {
@@ -27,7 +27,7 @@ for (key, value) in map.iter() {
 }
 
 // Remove a key-value pair
-map.remove(&"key1");
+map.remove(&"key1".to_string());
 ```
 
 ## MapxOrd
@@ -37,12 +37,12 @@ map.remove(&"key1");
 ```rust
 use vsdb::MapxOrd;
 
-let mut map = MapxOrd::new();
+let mut map: MapxOrd<i32, String> = MapxOrd::new();
 
 // Insert some key-value pairs
-map.insert(&3, &"three");
-map.insert(&1, &"one");
-map.insert(&2, &"two");
+map.insert(&3, &"three".to_string());
+map.insert(&1, &"one".to_string());
+map.insert(&2, &"two".to_string());
 
 // Get a value
 assert_eq!(map.get(&1), Some("one".to_string()));
@@ -59,7 +59,7 @@ assert_eq!(map.last(), Some((3, "three".to_string())));
 
 ## VerMap
 
-`VerMap` provides Git-style versioned storage with branching, commits, merge, and rollback.
+`VerMap` provides Git-style versioned storage with branching, commits, merge, and rollback (`rollback_to`).
 
 For a detailed architecture guide with diagrams, see [Versioned Module — Architecture & Internals](versioned.md).
 
@@ -88,14 +88,17 @@ assert_eq!(m.get(feat, &1).unwrap(), Some("updated".into()));
 m.merge(feat, main).unwrap();
 assert_eq!(m.get(main, &1).unwrap(), Some("updated".into()));
 
-// 6. Clean up: delete the branch, then garbage-collect unreachable data.
+// 6. Clean up: deleting the branch reclaims unreachable commits and
+//    B+ tree nodes automatically — no manual gc() call required
+//    (gc() exists for crash recovery only).
 m.delete_branch(feat).unwrap();
-m.gc();
 ```
 
 ## MptCalc / SmtCalc (Merkle Trie)
 
-`MptCalc` and `SmtCalc` are stateless, in-memory Merkle trie implementations.
+`MptCalc` and `SmtCalc` are stateless, in-memory Merkle trie implementations:
+they hold an ephemeral trie for root computation while all persistence and
+versioning is handled by an external store (e.g. `VerMap`).
 
 ```rust,ignore
 use vsdb::trie::MptCalc;
@@ -104,6 +107,9 @@ use vsdb::trie::MptCalc;
 let mut mpt = MptCalc::new();
 mpt.insert(b"key1", b"value1").unwrap();
 mpt.insert(b"key2", b"value2").unwrap();
+// MPT keys must be at most 1024 bytes (MAX_MPT_KEY_LEN); insert,
+// batch_update, and from_entries return an error for longer keys.
+// SMT keys are hashed to a fixed 256-bit path and have no length limit.
 
 // Compute the 32-byte Merkle root hash
 let root = mpt.root_hash().unwrap();
@@ -180,7 +186,7 @@ assert_eq!(root.len(), 32);
 ```rust,ignore
 use vsdb::SlotDex;  // SlotDex64<K> alias — slot type is u64
 
-let mut db = SlotDex::<String>::new(10u64, false);
+let mut db = SlotDex::<String>::new(10u64, false); // tier_capacity must be >= 2
 
 // Insert entries into slots (e.g., timestamps)
 db.insert(100, "entry_a".to_string()).unwrap();

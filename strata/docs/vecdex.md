@@ -38,17 +38,29 @@ let restored: VecDex<String, Cosine> = VecDex::from_meta(id).unwrap();
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `new` | `(config: HnswConfig) -> Self` | Create empty index |
-| `insert` | `(&mut self, key: &K, vector: &[f32]) -> Result<()>` | Add or update a vector |
-| `search` | `(&self, query: &[f32], k: usize) -> Result<Vec<(K, f32)>>` | k-NN search |
-| `search_ef` | `(&self, query: &[f32], k: usize, ef: usize) -> Result<Vec<(K, f32)>>` | Search with custom beam width |
-| `search_with_filter` | `(&self, query: &[f32], k: usize, predicate: impl Fn(&K) -> bool) -> Result<Vec<(K, f32)>>` | k-NN search with key predicate |
-| `search_ef_with_filter` | `(&self, query, k, ef, predicate) -> Result<Vec<(K, f32)>>` | Filtered search with custom beam width |
+| `instance_id` | `(&self) -> u64` | Unique persistent instance ID |
+| `insert` | `(&mut self, key: &K, vector: &[S]) -> Result<()>` | Add or update a vector |
+| `insert_batch` | `(&mut self, items: &[(K, Vec<S>)]) -> Result<()>` | Sequential bulk insert |
+| `search` | `(&self, query: &[S], k: usize) -> Result<Vec<(K, S)>>` | k-NN search |
+| `search_ef` | `(&self, query: &[S], k: usize, ef: usize) -> Result<Vec<(K, S)>>` | Search with custom beam width |
+| `search_with_filter` | `(&self, query: &[S], k: usize, predicate: impl Fn(&K) -> bool) -> Result<Vec<(K, S)>>` | k-NN search with key predicate |
+| `search_ef_with_filter` | `(&self, query: &[S], k: usize, ef: usize, predicate: impl Fn(&K) -> bool) -> Result<Vec<(K, S)>>` | Filtered search with custom beam width |
 | `remove` | `(&mut self, key: &K) -> Result<bool>` | Delete by key |
+| `get` | `(&self, key: &K) -> Option<Vec<S>>` | Fetch vector by key |
+| `contains_key` | `(&self, key: &K) -> bool` | Whether a key exists |
+| `keys` | `(&self) -> impl Iterator<Item = K> + '_` | Iterate keys |
+| `iter` | `(&self) -> impl Iterator<Item = (K, Vec<S>)> + '_` | Iterate key/vector pairs |
 | `len` | `(&self) -> u64` | Number of indexed vectors |
 | `is_empty` | `(&self) -> bool` | Whether index is empty |
+| `set_ef_search` | `(&mut self, ef: usize)` | Update the default search beam width |
 | `clear` | `(&mut self)` | Remove all data |
-| `save_meta` | `(&self) -> Result<u64>` | Persist for later recovery |
+| `compact` | `(&mut self) -> Result<()>` | Rebuild graph from existing vectors |
+| `save_meta` | `(&mut self) -> Result<u64>` | Persist for later recovery (clears the dirty bit) |
 | `from_meta` | `(instance_id: u64) -> Result<Self>` | Recover from saved metadata |
+
+After `save_meta`, later mutations set the dirty bit again.  On dirty recovery,
+`from_meta` rebuilds `node_count`, `next_node_id`, `entry_point`, and `max_layer`
+from live data before returning the index.
 
 ## Configuration
 
@@ -83,7 +95,7 @@ recall; increase `m` and `ef_construction` for larger datasets.
 | `Cosine` | `1 - cos(a,b)` | Text embeddings, normalized vectors (most LLM APIs) |
 | `InnerProduct` | `-(a . b)` | Maximum inner product search, pre-normalized data |
 
-Custom metrics can be implemented via the `DistanceMetric` trait.
+Custom metrics can be implemented via the `DistanceMetric<S>` trait.
 
 ## Filtered Search
 
@@ -136,7 +148,9 @@ pub type VecDexCosineF64<K> = VecDex<K, Cosine, f64>;
 
 ## Thread Safety
 
-VecDex is `Send + Sync`.  For concurrent read/write access, wrap in
+VecDex is `Send + Sync` when its generic parameters (`K`, `D`, `S`) are —
+true for all provided metrics and scalar types.
+For concurrent read/write access, wrap it in
 `parking_lot::RwLock<VecDex<K, D>>`.
 
 ---
@@ -157,8 +171,8 @@ VecDex is `Send + Sync`.  For concurrent read/write access, wrap in
 | Configurable M, m_max0, ef_construction, ef_search | Per-index config, ef overridable per-query |
 | Disk persistence via MMDB | All graph data persisted; survives restarts |
 | save_meta / from_meta | Instance recovery from instance ID |
-| Send + Sync | Safe for multi-threaded use |
-| Generic key types | Any `K: KeyEnDe + ValueEnDe + Clone + Eq` |
+| Send + Sync | Safe for multi-threaded use when generic parameters permit |
+| Generic key types | Public methods require `K: KeyEnDe + ValueEnDe + Clone + Eq + Serialize + DeserializeOwned` |
 | Duplicate key handling | Re-insert replaces old vector and rebuilds connections |
 | Criterion benchmarks | Insert and search benches at 1K/5K/10K scales |
 

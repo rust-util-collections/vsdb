@@ -87,10 +87,11 @@ where
     /// dropped before the next write.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
-        unsafe {
-            Self {
-                inner: self.inner.shadow(),
-            }
+        Self {
+            // SAFETY: forwards this fn's `unsafe` contract — the caller
+            // guarantees the SWMR discipline (no concurrent writes through
+            // the shadow and the original).
+            inner: unsafe { self.inner.shadow() },
         }
     }
 
@@ -105,10 +106,11 @@ where
     /// or silent data corruption on subsequent operations.
     #[inline(always)]
     pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
-        unsafe {
-            Self {
-                inner: MapxOrdRawKey::from_bytes(s),
-            }
+        Self {
+            // SAFETY: forwards this fn's `unsafe` contract — the caller
+            // guarantees `s` was produced by `as_bytes()` on the same type
+            // and code version.
+            inner: unsafe { MapxOrdRawKey::from_bytes(s) },
         }
     }
 

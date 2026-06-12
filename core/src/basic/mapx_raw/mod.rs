@@ -336,6 +336,11 @@ impl MapxRaw {
     /// The key remains readable until the underlying storage engine
     /// compacts the relevant level.  Use this for bulk cleanup (e.g.
     /// garbage collection) where immediate visibility is not required.
+    ///
+    /// Registrations are **not crash-durable**: mmdb holds dead-key
+    /// registrations in memory only, so keys still pending at process
+    /// exit survive the restart.  Callers must be able to re-register
+    /// (e.g. by re-running a ref-count rebuild) after recovery.
     #[doc(hidden)]
     #[inline(always)]
     pub fn lazy_delete(&self, key: impl AsRef<[u8]>) {

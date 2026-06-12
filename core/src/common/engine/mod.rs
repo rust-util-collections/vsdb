@@ -216,6 +216,9 @@ impl Mapx {
     }
 
     /// Marks a key for deferred removal via compaction filter.
+    ///
+    /// Not crash-durable: registrations live in engine memory only and
+    /// are lost on restart; callers must re-register after recovery.
     #[inline(always)]
     pub(crate) fn lazy_delete(&self, key: &[u8]) {
         VSDB.db.lazy_delete(self.prefix.to_bytes(), key);
@@ -343,11 +346,23 @@ impl Mapx {
 
 impl Clone for Mapx {
     fn clone(&self) -> Self {
+        // Commit in bounded chunks — a single WriteBatch buffers every
+        // pair in memory, which would OOM on larger-than-RAM maps (same
+        // hazard `clear()` chunks against).  Atomicity is not needed:
+        // the clone target is a brand-new, unobservable prefix.
+        const CLONE_CHUNK: usize = 4096;
+
         let mut new_instance = Self::new();
-        {
+        let mut it = self.iter();
+        loop {
             let mut batch = new_instance.batch_begin();
-            for (k, v) in self.iter() {
+            let mut wrote = false;
+            for (k, v) in it.by_ref().take(CLONE_CHUNK) {
                 batch.insert(&k, &v);
+                wrote = true;
+            }
+            if !wrote {
+                break;
             }
             batch.commit().expect("vsdb: clone failed — I/O error");
         }

@@ -37,7 +37,9 @@ Example for getting and setting the base directory.
 ```rust
 use vsdb_core::{vsdb_set_base_dir, vsdb_get_base_dir};
 
-// Set a custom base directory
+// Set a custom base directory.
+// Call this early in main, before spawning any threads — it mutates
+// the process environment (`VSDB_BASE_DIR`).
 vsdb_set_base_dir("/tmp/my_vsdb_data").unwrap();
 
 // Get the current base directory

@@ -114,13 +114,18 @@ impl<'de> Deserialize<'de> for DagMapRaw {
 impl DagMapRaw {
     /// Creates a new `DagMapRaw`.
     pub fn new(parent: &mut Orphan<Option<Self>>) -> Result<Self> {
+        // Fields are constructed explicitly: `..Default::default()` would
+        // materialize (and immediately discard) a default `parent` Orphan,
+        // which eagerly writes an entry under a fresh engine prefix —
+        // permanently leaking one storage slot per node creation.
         let r = Self {
             // SAFETY: The shadow is serialized (read-only) during
             // p.children.insert() below. No mutation occurs through
             // the shadow; all writes go through `parent`, satisfying
             // the SWMR contract.
             parent: unsafe { parent.shadow() },
-            ..Default::default()
+            data: MapxRaw::new(),
+            children: MapxOrdRawKey::new(),
         };
 
         if let Some(p) = parent.get_mut().as_mut() {
@@ -317,7 +322,14 @@ impl DagMapRaw {
 
         for i in others.iter_mut().rev() {
             for (k, v) in i.data.iter() {
-                genesis[0].data.insert(k, v);
+                // The genesis node is parentless, so a tombstone there is
+                // equivalent to the key being absent — drop tombstones
+                // instead of accumulating dead entries forever.
+                if v.is_empty() {
+                    genesis[0].data.remove(&k);
+                } else {
+                    genesis[0].data.insert(k, v);
+                }
             }
             // Collect side-branch children first to avoid mutating the
             // MapxOrd through destroy()'s parent-unlink while iterating it.
@@ -337,7 +349,12 @@ impl DagMapRaw {
         }
 
         for (k, v) in self.data.iter() {
-            genesis[0].data.insert(k, v);
+            // Same tombstone elision as the mainline merge above.
+            if v.is_empty() {
+                genesis[0].data.remove(&k);
+            } else {
+                genesis[0].data.insert(k, v);
+            }
         }
 
         let mut exclude_targets = vec![];
@@ -461,6 +478,13 @@ pub struct ValueMut<'a> {
 impl Drop for ValueMut<'_> {
     fn drop(&mut self) {
         if self.dirty {
+            // Same invariant as `insert()`: the empty byte string is the
+            // internal deletion tombstone and must not be produced through
+            // the mutable-reference path either.
+            assert!(
+                !self.value.is_empty(),
+                "empty value is a tombstone; call remove() instead"
+            );
             self.inner.clone_from(&self.value);
         }
     }

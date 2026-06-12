@@ -29,7 +29,7 @@ graph TB
 
     subgraph "Version Control"
         BR["BranchState<br/>(name, head, dirty_root)"]
-        CM["Commit<br/>(id, root, parents, timestamp)"]
+        CM["Commit<br/>(id, root, parents, timestamp_us, ref_count)"]
     end
 
     subgraph "Storage Engine"
@@ -58,7 +58,7 @@ graph TB
 block-beta
     columns 1
     block:L1["Layer 1 — User-Facing API"]
-        A["VerMap&lt;K, V&gt;<br/>branch / commit / merge / rollback / gc"]
+        A["VerMap&lt;K, V&gt;<br/>branch / commit / merge / rollback_to / gc"]
     end
     block:L2["Layer 2 — Persistent B+ Tree"]
         B["PersistentBTree<br/>insert / remove / iter / range / bulk_load / gc<br/>Copy-on-Write, structural sharing"]
@@ -79,6 +79,7 @@ block-beta
 | `next_commit` | `Orphan<u64>` | monotonic CommitId allocator |
 | `next_branch` | `Orphan<u64>` | monotonic BranchId allocator |
 | `main_branch` | `Orphan<u64>` | protected main branch ID |
+| `gc_dirty` | `Orphan<bool>` | crash-recovery/ref-count repair flag |
 
 ---
 
@@ -169,7 +170,7 @@ sequenceDiagram
     Note over V: 3. COMMIT
     U->>V: commit(main)
     V->>V: alloc CommitId
-    V->>D: store Commit{root: dirty_root, parents: [head]}
+    V->>D: store Commit{root: dirty_root, parents: [] or [head], ref_count: 1}
     V->>V: head = new CommitId
 
     Note over V: 4. BRANCH
@@ -185,7 +186,7 @@ sequenceDiagram
     V->>D: store merge Commit{parents: [main.head, feat.head]}
 
     Note over V: 6. GC (automatic)
-    Note right of V: Dead commits are already hard-deleted<br/>by ref-count cascade in step 5.
+    Note right of V: Dead commits are hard-deleted<br/>by ref-count cascade during<br/>delete_branch / rollback_to.
     Note right of T: Dead B+ tree nodes are registered<br/>for deferred deletion (lazy_delete).<br/>MMDB reclaims disk space during<br/>background compaction.
 ```
 
@@ -320,8 +321,11 @@ captures the full state of the map at that point in time.
 
 ### Overview
 
-`merge(source, target)` finds the common ancestor, then resolves every key
-across all three versions:
+`merge(&mut self, source: BranchId, target: BranchId) -> Result<CommitId>`
+finds the common ancestor, then resolves every key across all three versions.
+It rejects self-merge, uncommitted source or target branches, and a source
+branch with no commits.  If the target has no commits, it fast-forwards to the
+source head; otherwise it creates a merge commit on the target.
 
 ```mermaid
 graph TB
@@ -456,7 +460,7 @@ Lifecycle management is split into two layers, both fully automatic:
 
 ```mermaid
 flowchart TD
-    Start(["delete_branch / rollback"]) --> RC["Decrement commit ref_count"]
+    Start(["delete_branch / rollback_to"]) --> RC["Decrement commit ref_count"]
     RC --> Dead{"ref_count == 0?"}
     Dead -->|yes| Del["Hard-delete commit"]
     Del --> Rel["release_node(commit.root)"]
@@ -589,5 +593,5 @@ flowchart LR
 | **Isolation** | Each branch has independent `head` + `dirty_root` |
 | **Structural sharing** | COW B+ tree — mutations allocate ~O(log n) nodes |
 | **Merge** | Three-way with sorted iterators; source wins on conflict |
-| **GC** | Fully automatic — commit ref counting + B+ tree lazy deletion via MMDB compaction; `gc()` only for crash recovery |
+| **GC** | Fully automatic — commit ref counting + B+ tree lazy deletion via MMDB compaction; `gc()` is for crash recovery or a forced full B+ tree sweep |
 | **Persistence** | All state stored in MMDB via `MapxRaw` |
