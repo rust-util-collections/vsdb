@@ -95,15 +95,15 @@ If ANY `unsafe` block is added or modified:
 4. For pointer casts: verify no aliasing violation
 5. Verify no undefined behavior
 
-### Task 6: Audit Registry (.claude/audit.md)
+### Task 6: Audit Registry (docs/audit.md)
 
 After completing the analysis:
 
-1. Read `.claude/audit.md` from the project root (create if absent).
+1. Read `docs/audit.md` from the project root (create if absent).
 2. **Prune**: For each entry under `## Open`, verify against the current codebase. Remove entries that are 100% fixed.
 3. **Merge**: Add new findings from this review under `## Open`, deduplicating against existing entries. Sort by severity (CRITICAL → HIGH → MEDIUM → LOW).
 4. **Preserve**: Leave all `## Won't Fix` entries untouched.
-5. Write the updated `.claude/audit.md`.
+5. Write the updated `docs/audit.md`.
 
 The file format:
 

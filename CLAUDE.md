@@ -50,7 +50,7 @@ make bench        # criterion benches (core basic, strata basic, versioned, slot
 ## Commands
 
 - `/x-review` — deep regression analysis (supports: N commits, `all`, hash, range)
-- `/x-fix` — fix audit backlog: resolve `.claude/audit.md` → self-review → commit
+- `/x-fix` — fix audit backlog: resolve `docs/audit.md` → self-review → commit
 - `/x-commit` — self-reviewing commit: review uncommitted changes → fix → commit
 - `/x-overhaul` — full codebase overhaul: review all → fix → commit
 
@@ -59,6 +59,9 @@ Supporting documentation in `.claude/docs/`:
 - `review-core.md` — systematic review methodology
 - `false-positive-guide.md` — rules for filtering spurious findings
 - `patterns/` — per-subsystem review guides (btree, versioning, trie, slotdex, dagmap, engine, vecdex)
+
+Additional documentation in `docs/`:
+- `audit.md` — audit findings registry (tracked by /x-review and /x-fix)
 
 ## Conventions
 

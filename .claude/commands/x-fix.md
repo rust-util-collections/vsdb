@@ -1,23 +1,23 @@
 # Fix Audit Backlog
 
-You are resolving every open finding in `.claude/audit.md`, then self-reviewing and committing the result.
+You are resolving every open finding in `docs/audit.md`, then self-reviewing and committing the result.
 
 **How this differs from `/x-commit`:**
 - `/x-commit` = "I've made changes — review them and commit." (starts from uncommitted diff)
-- `/x-fix` = "Work through the audit backlog — fix, verify, commit." (starts from `.claude/audit.md`)
+- `/x-fix` = "Work through the audit backlog — fix, verify, commit." (starts from `docs/audit.md`)
 
 ## Setup
 
 1. **MANDATORY**: Read `.claude/docs/technical-patterns.md` — bug pattern reference.
 2. Read `.claude/docs/review-core.md` — review methodology.
 3. Read `.claude/docs/false-positive-guide.md` — consult before reporting any finding.
-4. Read `.claude/audit.md` — this is your **primary work list**.
+4. Read `docs/audit.md` — this is your **primary work list**.
 
 ## Phase 1: Fix
 
 ### Task 1: Triage
 
-1. Read `.claude/audit.md`. If no `## Open` entries exist, report "nothing to fix" and stop.
+1. Read `docs/audit.md`. If no `## Open` entries exist, report "nothing to fix" and stop.
 2. Sort open findings by severity: CRITICAL → HIGH → MEDIUM → LOW.
 3. For each finding, read the code at the reported location with full context (100+ lines).
 4. For each affected subsystem, read the corresponding pattern file from `.claude/docs/patterns/`.
@@ -45,7 +45,7 @@ For each open finding, in severity order:
 
 1. Remove all fixed entries from `## Open`.
 2. For entries moved to `## Won't Fix`, add the `**Reason**` field.
-3. Write the updated `.claude/audit.md`.
+3. Write the updated `docs/audit.md`.
 
 ## Phase 2: Self-Review
 
@@ -55,7 +55,7 @@ For each open finding, in severity order:
 4. Cross-reference every finding with `false-positive-guide.md`.
 5. If the review produces **new findings**:
    - Fix them immediately.
-   - Update `.claude/audit.md`.
+   - Update `docs/audit.md`.
    - Repeat until `## Open` has zero entries (or only Won't Fix).
 
 ## Phase 3: Commit

@@ -12,19 +12,19 @@ Execute `/x-review all` — the full audit protocol.
    - Each agent reads all source files in its subsystem, loads the corresponding pattern guide
    - Perform deep analysis: invariants, boundary conditions, failure paths, concurrency, unsafe audit
 3. Aggregate and deduplicate all findings.
-4. Manage `.claude/audit.md` — prune fixed entries, merge new findings sorted by severity.
+4. Manage `docs/audit.md` — prune fixed entries, merge new findings sorted by severity.
 
 ## Phase 2: Fix
 
 Execute the full `/x-fix` protocol.
 
-1. Read `.claude/audit.md`.
+1. Read `docs/audit.md`.
 2. Fix every open finding — 100% resolution is the goal.
 3. Move truly unfixable items to `## Won't Fix` with reasons.
 4. Run `make fmt` and `make lint` to validate.
-5. Update `.claude/audit.md`.
+5. Update `docs/audit.md`.
 
-If fixes introduced new issues, re-review the CHANGED files only (not the full codebase again) and fix any new findings. Iterate until `.claude/audit.md` has zero open entries (or only Won't Fix).
+If fixes introduced new issues, re-review the CHANGED files only (not the full codebase again) and fix any new findings. Iterate until `docs/audit.md` has zero open entries (or only Won't Fix).
 
 ## Phase 3: Commit
 
