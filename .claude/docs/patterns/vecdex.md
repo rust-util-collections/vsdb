@@ -38,7 +38,7 @@ Filtered search must allow non-matching nodes to participate in graph traversal 
 
 ## Common Bug Patterns
 
-### Entry Point Layer Downgrade (fixed in v13.2)
+### Entry Point Layer Downgrade
 On remove of entry point, picking a replacement node without scanning for the global max_layer. Causes higher layers to become unreachable.
 **Trigger**: Remove the entry point when other nodes exist at higher layers.
 
