@@ -49,15 +49,22 @@ use serde::{Serialize, de::DeserializeOwned};
 /// # Warning
 ///
 /// The blanket implementation covers **all** types that implement
-/// [`serde::Serialize`], including `HashMap` and `HashSet`.
-/// These types produce **non-deterministic** byte sequences (iteration
-/// order depends on the random `SipHash` seed).  Using them as VSDB
-/// keys will cause lookups to silently miss after a process restart.
+/// [`serde::Serialize`], so it also covers types whose serialization is
+/// **non-deterministic** or **non-canonical**.  Using such a type as a
+/// VSDB key causes lookups to silently miss.
 ///
-/// Only use types with **deterministic** serialization as keys:
-/// primitive types, `Vec`, `BTreeMap`, `BTreeSet`, tuples, `String`,
-/// and fixed-size arrays are safe.  `HashMap`, `HashSet`, and any
-/// wrapper containing them are **not** safe as key types.
+/// Only use types with **deterministic, canonical** serialization as
+/// keys: integer primitives, `Vec`, `BTreeMap`, `BTreeSet`, tuples,
+/// `String`, and fixed-size arrays are safe.  The following are **not**
+/// safe as key types:
+///
+/// * `HashMap`, `HashSet`, and any wrapper containing them — iteration
+///   order depends on the random `SipHash` seed, so the encoding differs
+///   across process restarts.
+/// * Floating-point types (`f32` / `f64`) and any type containing them —
+///   `+0.0` and `-0.0` are `PartialEq`-equal but encode to different
+///   bytes, and `NaN` never compares equal to itself, so a stored entry
+///   can become unreachable.
 pub trait KeyEn: Sized {
     /// Attempts to encode the key.  Returns `Err` only if the
     /// `Serialize` implementation is broken — see [module-level trust
@@ -84,6 +91,13 @@ pub trait KeyDe: Sized {
 }
 
 /// A trait for both encoding and decoding keys.
+///
+/// # Warning
+///
+/// Key types must serialize **deterministically and canonically**; see
+/// [`KeyEn`] for the list of unsupported types (`HashMap`, `HashSet`,
+/// floats).  For *ordered* collections the key encoding must additionally
+/// be order-preserving — use [`KeyEnDeOrdered`] there.
 pub trait KeyEnDe: Sized {
     /// Attempts to encode the key.  Prefer [`encode`](Self::encode) for
     /// internal VSDB paths; use this at trust boundaries where a `Result`

@@ -292,6 +292,10 @@ where
     pub fn new(config: HnswConfig) -> Self {
         assert!(config.dim > 0, "VecDex: dim must be > 0");
         assert!(config.m >= 2, "VecDex: m must be >= 2");
+        assert!(
+            config.m_max0 >= config.m,
+            "VecDex: m_max0 must be >= m (else base-layer nodes have no edges and become unreachable)"
+        );
         let meta = HnswMeta {
             entry_point: None,
             max_layer: 0,
@@ -675,13 +679,21 @@ where
 
         self.mark_dirty();
 
-        let info = self.node_info.get(&node_id).unwrap_or_default();
         let meta = self.meta.get_value().clone();
+        // A crash between adjacency writes and the node_info write can leave
+        // a node with edges but a missing node_info row.  Fall back to the
+        // global max layer so edge cleanup still covers every layer the node
+        // may have participated in (INV-VD2/INV-VD3).
+        let max_layer = self
+            .node_info
+            .get(&node_id)
+            .map(|i| i.max_layer)
+            .unwrap_or(meta.max_layer);
 
         // Phase 1: Remove edges and collect former neighbors per layer.
         let mut former_neighbors: Vec<Vec<u64>> =
-            Vec::with_capacity(info.max_layer as usize + 1);
-        for l in 0..=info.max_layer {
+            Vec::with_capacity(max_layer as usize + 1);
+        for l in 0..=max_layer {
             let neighbors = get_neighbors(&self.adjacency, l, node_id);
             for &n in &neighbors {
                 let mut n_list = get_neighbors(&self.adjacency, l, n);
@@ -695,7 +707,7 @@ where
         // Phase 2: Reconnect former neighbors (best-effort).
         // Runs before vectors.remove so distance computation still works.
         let get_vec = |id: u64| -> Option<Vec<S>> { self.vectors.get(&id) };
-        for l in 0..=info.max_layer {
+        for l in 0..=max_layer {
             let m_max = if l == 0 { meta.m_max0 } else { meta.m };
             let fns = &former_neighbors[l as usize];
             for &n in fns {
@@ -768,6 +780,12 @@ where
             if m.entry_point == Some(node_id) {
                 let mut best: Option<(u64, u8)> = None;
                 for (nid, info) in self.node_info.iter() {
+                    // Skip any node whose vector is already gone (e.g. a
+                    // crash-induced inconsistency); it cannot serve as the
+                    // entry point.  Mirrors `ensure_count`.
+                    if self.vectors.get(&nid).is_none() {
+                        continue;
+                    }
                     match best {
                         Some((_, bl)) if info.max_layer <= bl => {}
                         _ => best = Some((nid, info.max_layer)),

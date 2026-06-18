@@ -236,8 +236,12 @@ impl MmDB {
         let db_iter = db
             .iter_with_prefix(&meta_prefix, &mmdb::ReadOptions::default())
             .expect("vsdb: mmdb iter_with_prefix failed");
-        let iter =
-            BidiIterator::lazy(db_iter).map(|(k, v)| (k[PREFIX_SIZE..].to_vec(), v));
+        // Defense-in-depth prefix bound (parity with `range`): never surface
+        // keys from an adjacent prefix in the same shard, even if the
+        // engine's prefix iterator were to over-scan its upper boundary.
+        let iter = BidiIterator::lazy(db_iter)
+            .filter(move |(k, _)| k.starts_with(&meta_prefix))
+            .map(|(k, v)| (k[PREFIX_SIZE..].to_vec(), v));
         MmdbIter(Box::new(iter))
     }
 

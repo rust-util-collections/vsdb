@@ -7,16 +7,17 @@ pub struct Nibbles {
 }
 
 impl Nibbles {
-    pub fn from_raw(key: &[u8], is_leaf: bool) -> Self {
+    /// Converts raw key bytes into a nibble path: each byte `b` yields the
+    /// high nibble `b >> 4` followed by the low nibble `b & 0x0F`, so the
+    /// resulting path length is `2 * key.len()`.
+    ///
+    /// Leaf vs. extension nodes are distinguished by the node-type codec
+    /// tag, so no Hex-Prefix terminator nibble is appended.
+    pub fn from_raw(key: &[u8]) -> Self {
         let mut data = Vec::with_capacity(key.len() * 2);
         for &b in key {
             data.push(b >> 4);
             data.push(b & 0x0F);
-        }
-        if is_leaf {
-            // In some MPT implementations, there's a terminator.
-            // But usually we handle leaf vs extension by node type.
-            // We'll keep it simple: raw nibbles.
         }
         Self { data }
     }

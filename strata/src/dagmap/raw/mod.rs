@@ -60,6 +60,13 @@ pub struct DagMapRaw {
 
     // child id --> child instance
     children: MapxOrdRawKey<DagMapRaw>,
+
+    // Runtime-only tombstone. Set by `destroy()` so that reads through a
+    // destroyed handle return `None` instead of falling through to the
+    // (still-shared) parent chain. Not serialized: a destroyed node is
+    // already unlinked from its parent's `children`, so it is unreachable
+    // via normal DAG traversal and is never re-materialized from disk.
+    destroyed: bool,
 }
 
 impl Serialize for DagMapRaw {
@@ -104,6 +111,7 @@ impl<'de> Deserialize<'de> for DagMapRaw {
                     data,
                     parent,
                     children,
+                    destroyed: false,
                 })
             }
         }
@@ -126,6 +134,7 @@ impl DagMapRaw {
             parent: unsafe { parent.shadow() },
             data: MapxRaw::new(),
             children: MapxOrdRawKey::new(),
+            destroyed: false,
         };
 
         if let Some(p) = parent.get_mut().as_mut() {
@@ -159,6 +168,7 @@ impl DagMapRaw {
                 data: self.data.shadow(),
                 parent: self.parent.shadow(),
                 children: self.children.shadow(),
+                destroyed: self.destroyed,
             }
         }
     }
@@ -206,6 +216,9 @@ impl DagMapRaw {
     /// The traversal tracks visited instance IDs to avoid looping forever
     /// if on-disk metadata is corrupt and contains a parent cycle.
     pub fn get(&self, key: impl AsRef<[u8]>) -> Option<RawBytes> {
+        if self.destroyed {
+            return None;
+        }
         let key = key.as_ref();
 
         let mut hdr = self;
@@ -436,7 +449,10 @@ impl DagMapRaw {
         // caller's Orphan slot, shared by every sibling created from that
         // slot; writing `None` into it would orphan all surviving siblings
         // and detach the parent. The parent→child unlink above already
-        // removes only this node's own entry.
+        // removes only this node's own entry. Instead, the per-handle
+        // `destroyed` tombstone makes `get()` short-circuit so this handle
+        // never serves inherited reads through the still-shared parent.
+        self.destroyed = true;
         self.data.clear();
 
         // Clear all descendants iteratively. A recursive walk overflows the

@@ -16,7 +16,7 @@ impl<'a> TrieRo<'a> {
             return Ok(None);
         }
 
-        let path = Nibbles::from_raw(key, false);
+        let path = Nibbles::from_raw(key);
         self.step(Self::resolve(self.root), path)
     }
 

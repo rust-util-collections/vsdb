@@ -15,7 +15,7 @@ use crate::{Mapx, MapxOrd, Orphan};
 use ruc::{RucResult, pnk};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BinaryHeap, HashMap, HashSet},
     fmt,
     marker::PhantomData,
     ops::Bound,
@@ -986,49 +986,63 @@ where
         Ok(id)
     }
 
-    /// Finds the lowest common ancestor of two commits via alternating BFS.
+    /// Finds the lowest (most-recent) common ancestor of two commits.
+    ///
+    /// Walks the commit DAG in **descending `CommitId` order** using a
+    /// max-heap, flagging each commit with the side(s) it is reachable
+    /// from (`a`, `b`, or both).  `CommitId`s are monotonic — a parent is
+    /// always created before its child, so `parent.id < child.id`.  That
+    /// means by the time a commit is popped, every descendant that could
+    /// flag it has already been processed, so the first commit popped with
+    /// **both** flags is the highest-id (i.e. lowest / most-recent) common
+    /// ancestor.
+    ///
+    /// A naive "first BFS intersection" is **not** correct here: a
+    /// criss-cross merge (a merge whose second parent is an older commit)
+    /// introduces a shortcut edge that can surface a *higher* common
+    /// ancestor first.  Feeding that too-old base into `three_way_merge`
+    /// would misclassify a single-sided change as a conflict and silently
+    /// drop it under the source-wins rule.
     fn find_common_ancestor(&self, a: CommitId, b: CommitId) -> Option<CommitId> {
-        let mut visited_a = HashSet::new();
-        let mut visited_b = HashSet::new();
-        let mut queue_a = vec![a];
-        let mut queue_b = vec![b];
+        const FROM_A: u8 = 0b01;
+        const FROM_B: u8 = 0b10;
+        const BOTH: u8 = FROM_A | FROM_B;
 
-        loop {
-            if queue_a.is_empty() && queue_b.is_empty() {
-                return None;
+        fn mark(
+            flags: &mut HashMap<CommitId, u8>,
+            heap: &mut BinaryHeap<CommitId>,
+            id: CommitId,
+            flag: u8,
+        ) {
+            if id == NO_COMMIT {
+                return;
             }
-            // Expand a — reuse the same Vec via drain + extend in place.
-            let drain_end = queue_a.len();
-            for i in 0..drain_end {
-                let id = queue_a[i];
-                if id == NO_COMMIT || !visited_a.insert(id) {
-                    continue;
-                }
-                if visited_b.contains(&id) {
-                    return Some(id);
-                }
-                if let Some(c) = self.commits.get(&id) {
-                    queue_a.extend_from_slice(&c.parents);
-                }
+            let slot = flags.entry(id).or_insert(0);
+            if *slot == 0 {
+                heap.push(id);
             }
-            queue_a.drain(..drain_end);
-
-            // Expand b.
-            let drain_end = queue_b.len();
-            for i in 0..drain_end {
-                let id = queue_b[i];
-                if id == NO_COMMIT || !visited_b.insert(id) {
-                    continue;
-                }
-                if visited_a.contains(&id) {
-                    return Some(id);
-                }
-                if let Some(c) = self.commits.get(&id) {
-                    queue_b.extend_from_slice(&c.parents);
-                }
-            }
-            queue_b.drain(..drain_end);
+            *slot |= flag;
         }
+
+        let mut flags: HashMap<CommitId, u8> = HashMap::new();
+        let mut heap: BinaryHeap<CommitId> = BinaryHeap::new();
+
+        mark(&mut flags, &mut heap, a, FROM_A);
+        mark(&mut flags, &mut heap, b, FROM_B);
+
+        while let Some(id) = heap.pop() {
+            // Every id pushed onto the heap was first inserted into `flags`.
+            let f = flags[&id];
+            if f == BOTH {
+                return Some(id);
+            }
+            if let Some(c) = self.commits.get(&id) {
+                for &parent in &c.parents {
+                    mark(&mut flags, &mut heap, parent, f);
+                }
+            }
+        }
+        None
     }
 
     // =================================================================

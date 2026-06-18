@@ -58,7 +58,7 @@ impl MptProof {
 /// The trie must have been committed (all nodes hashed via `root_hash()`)
 /// before calling.
 pub fn prove(root: &NodeHandle, key: &[u8]) -> Result<MptProof> {
-    let path = Nibbles::from_raw(key, false);
+    let path = Nibbles::from_raw(key);
     let mut nodes = Vec::new();
 
     // Special case: empty trie — root is InMemory(Null).
@@ -185,7 +185,7 @@ pub fn verify_proof(
     }
 
     // Step 2: walk through proof nodes following the key path.
-    let path = Nibbles::from_raw(&proof.key, false);
+    let path = Nibbles::from_raw(&proof.key);
     let mut remaining = path;
     let mut node_idx: usize = 0;
 
@@ -307,7 +307,7 @@ fn decode_node(data: &[u8]) -> Result<DecodedNode> {
         0x02 => {
             // Extension: tag + path + 32-byte child_hash
             let path = decode_path(data, &mut cursor)?;
-            if cursor + 32 > data.len() {
+            if cursor.checked_add(32).is_none_or(|end| end > data.len()) {
                 return Err(TrieError::InvalidState(
                     "extension node truncated: missing child hash".into(),
                 ));
@@ -319,7 +319,7 @@ fn decode_node(data: &[u8]) -> Result<DecodedNode> {
 
         0x03 => {
             // Branch: tag + u16_le bitmap + has_value + [value] + [child_hashes]
-            if cursor + 2 > data.len() {
+            if cursor.checked_add(2).is_none_or(|end| end > data.len()) {
                 return Err(TrieError::InvalidState(
                     "branch node truncated: missing bitmap".into(),
                 ));
@@ -344,7 +344,7 @@ fn decode_node(data: &[u8]) -> Result<DecodedNode> {
             let mut children: [Option<[u8; 32]>; 16] = [None; 16];
             for (i, slot) in children.iter_mut().enumerate() {
                 if bitmap & (1 << i) != 0 {
-                    if cursor + 32 > data.len() {
+                    if cursor.checked_add(32).is_none_or(|end| end > data.len()) {
                         return Err(TrieError::InvalidState(format!(
                             "branch node truncated: missing child hash at index {i}"
                         )));
@@ -392,7 +392,10 @@ fn decode_path(data: &[u8], cursor: &mut usize) -> Result<Nibbles> {
     let nibble_count = decode_varint(data, cursor)?;
     // Nibbles are packed 2 per byte (high nibble first).
     let byte_count = nibble_count.div_ceil(2);
-    if *cursor + byte_count > data.len() {
+    if cursor
+        .checked_add(byte_count)
+        .is_none_or(|end| end > data.len())
+    {
         return Err(TrieError::InvalidState("path data truncated".into()));
     }
     let mut nibbles = Vec::with_capacity(nibble_count);
@@ -411,7 +414,7 @@ fn decode_path(data: &[u8], cursor: &mut usize) -> Result<Nibbles> {
 
 fn decode_bytes(data: &[u8], cursor: &mut usize) -> Result<Vec<u8>> {
     let len = decode_varint(data, cursor)?;
-    if *cursor + len > data.len() {
+    if cursor.checked_add(len).is_none_or(|end| end > data.len()) {
         return Err(TrieError::InvalidState("bytes data truncated".into()));
     }
     let result = data[*cursor..*cursor + len].to_vec();

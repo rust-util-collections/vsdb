@@ -33,7 +33,7 @@ impl TrieMut {
                 key.len()
             )));
         }
-        let path = Nibbles::from_raw(key, false);
+        let path = Nibbles::from_raw(key);
         let new_root =
             Self::insert_rec(mem::take(&mut self.root), path, value.to_vec())?;
         self.root = new_root;
@@ -41,7 +41,7 @@ impl TrieMut {
     }
 
     pub fn remove(&mut self, key: &[u8]) -> Result<()> {
-        let path = Nibbles::from_raw(key, false);
+        let path = Nibbles::from_raw(key);
         let (new_root, _) = Self::remove_rec(mem::take(&mut self.root), path)?;
         self.root = new_root.unwrap_or_default();
         Ok(())

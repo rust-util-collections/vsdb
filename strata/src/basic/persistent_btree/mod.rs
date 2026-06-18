@@ -313,12 +313,27 @@ impl<'de> Deserialize<'de> for PersistentBTree {
                 self,
                 mut seq: A,
             ) -> StdResult<PersistentBTree, A::Error> {
-                let nodes = seq
+                let nodes: MapxRaw = seq
                     .next_element()?
                     .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
-                let next_id = seq
+                let stored_next_id: NodeId = seq
                     .next_element()?
                     .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
+                // Defensively recover `next_id` against a stale snapshot.
+                // If the meta was saved before later allocations were
+                // flushed to the shared node pool, `stored_next_id` may lag
+                // the highest on-disk NodeId.  Allocating over those ids
+                // would overwrite live (or pending lazy-delete) nodes in
+                // place and corrupt shared snapshots (INV-BT1).  Dead ids
+                // are left as a safe gap and reclaimed by a later `gc`.
+                // VerMap recomputes this again in rebuild_ref_counts, but
+                // standalone PersistentBTree users may mutate before any
+                // rebuild, so the floor must be safe immediately.
+                let mut next_id = stored_next_id;
+                for (k, _) in nodes.iter() {
+                    let id = NodeId::from_le_bytes(k[..8].try_into().unwrap());
+                    next_id = next_id.max(id.saturating_add(1));
+                }
                 Ok(PersistentBTree {
                     nodes,
                     next_id,

@@ -261,6 +261,34 @@ fn destroy_sibling_preserves_other_siblings_and_parent() {
 }
 
 #[test]
+fn destroyed_node_does_not_serve_inherited_reads() {
+    // Regression: after destroy(), a handle must not fall through to its
+    // (still-shared) parent and return inherited data.
+    let mut parent = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
+    parent.insert("k", "v");
+    let mut parent_slot = Orphan::new(Some(parent));
+
+    let mut child = DagMapRaw::new(&mut parent_slot).unwrap();
+    // Before destroy the child inherits the parent's value.
+    assert_eq!(child.get("k").unwrap().as_slice(), b"v");
+
+    child.destroy();
+    // After destroy the child must not serve inherited reads.
+    assert!(child.get("k").is_none());
+
+    // The parent itself is untouched.
+    assert_eq!(
+        parent_slot
+            .get_value()
+            .unwrap()
+            .get("k")
+            .unwrap()
+            .as_slice(),
+        b"v"
+    );
+}
+
+#[test]
 fn destroy_deep_child_chain_does_not_overflow_stack() {
     // Regression: destroy() recursed once per descendant generation and
     // overflowed the stack on deep DAGs. Build a deep child chain rooted at

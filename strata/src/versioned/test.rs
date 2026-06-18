@@ -583,6 +583,52 @@ fn merge_both_changed_to_same_value() {
 }
 
 #[test]
+fn merge_criss_cross_uses_lowest_common_ancestor() {
+    // Regression: find_common_ancestor must return the LOWEST common
+    // ancestor, not the first BFS intersection. A criss-cross DAG (two
+    // merges whose second parent is an older commit) creates shortcut
+    // edges that surface a higher ancestor first. Using that too-old base
+    // misclassifies a single-sided change as a conflict and drops it.
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+
+    // g: key1 = 10 (genesis).
+    m.insert(main, &1, &10).unwrap();
+    m.commit(main).unwrap();
+
+    // Branch that stays at g; used as the (old) merge source so the
+    // resulting merge commits get g as their second parent.
+    let src_old = m.create_branch("src_old", main).unwrap();
+
+    // z: key1 = 20 (child of g) — the true lowest common ancestor.
+    m.insert(main, &1, &20).unwrap();
+    m.commit(main).unwrap();
+
+    // feat forks at z.
+    let feat = m.create_branch("feat", main).unwrap();
+
+    // p: child of z on main (unrelated change; key1 stays 20).
+    m.insert(main, &2, &1).unwrap();
+    m.commit(main).unwrap();
+
+    // r: child of z on feat — changes key1 to 30 (target-only vs. z).
+    m.insert(feat, &1, &30).unwrap();
+    m.commit(feat).unwrap();
+
+    // Criss-cross merges: each records the old commit g as a second parent.
+    m.merge(src_old, main).unwrap(); // main head: merge(parents = [p, g])
+    m.merge(src_old, feat).unwrap(); // feat head: merge(parents = [r, g])
+
+    // Final merge. The true LCA is z (key1 = 20), not g (key1 = 10).
+    // Relative to z, key1 changed only on the target side (20 -> 30) and
+    // must be preserved. A too-old base (g) would treat it as a conflict
+    // and let the source overwrite it with 20.
+    m.merge(main, feat).unwrap();
+    assert_eq!(m.get(feat, &1).unwrap(), Some(30));
+}
+
+#[test]
 fn merge_delete_in_source_unchanged_in_target() {
     setup();
     let mut m: VerMap<u32, u32> = VerMap::new();

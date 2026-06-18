@@ -5,8 +5,9 @@
 //! (uncompressed) 256-level binary tree.  Compressed path levels have
 //! `EMPTY_HASH` siblings since only one child is occupied.
 //!
-//! Verification recomputes the root hash bottom-up in exactly 256 hash
-//! operations, independent of tree shape or compression.
+//! Verification recomputes the root hash bottom-up in at most 256 hash
+//! operations (empty/empty levels short-circuit), independent of tree
+//! shape or compression.
 //!
 
 use crate::trie::error::{Result, TrieError};

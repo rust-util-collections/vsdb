@@ -439,6 +439,14 @@ where
     /// # Returns
     ///
     /// A `Vec<K>` containing the entries for the specified page.
+    ///
+    /// # Note
+    ///
+    /// This is **offset-based** pagination (`page_size` × `page_index`),
+    /// like SQL `LIMIT`/`OFFSET`: each call reflects the dataset as it is
+    /// at that moment. If entries are inserted or removed between page
+    /// requests, later pages may skip or repeat entries. Take a snapshot
+    /// (or avoid concurrent mutation) when a stable full scan is required.
     pub fn get_entries_by_page(
         &self,
         page_size: PageSize,
@@ -461,6 +469,11 @@ where
     /// # Returns
     ///
     /// A `Vec<K>` containing the entries for the specified page and slot range.
+    ///
+    /// # Note
+    ///
+    /// Pagination is **offset-based** (see [`get_entries_by_page`]): pages
+    /// are not stable across concurrent inserts/removes between requests.
     pub fn get_entries_by_page_slot(
         &self,
         slot_left_bound: Option<S>,  // Included
