@@ -21,10 +21,18 @@ You are resolving every open finding in `docs/audit.md`, then self-reviewing and
 
 ### Task 1: Triage
 
-1. Read `docs/audit.md`. If no `## Open` entries exist, report "nothing to fix" and stop.
-2. Sort open findings by severity: CRITICAL → HIGH → MEDIUM → LOW.
-3. For each finding, read the code at the reported location with full context (100+ lines).
-4. For each affected subsystem, read the corresponding pattern file from `.claude/docs/patterns/`.
+1. Read `docs/audit.md`.
+2. **Re-evaluate Won't Fix**: For each entry under `## Won't Fix`, re-read the
+   code at the reported location against the **current** codebase.  The
+   "Won't Fix" decision was made at a past point in time — surrounding code
+   may have changed, making a previously-disproportionate fix straightforward,
+   or the finding may no longer apply.  Promote any now-fixable entries to
+   `## Open`; remove any that no longer apply.  Only carry forward entries
+   whose original reasoning still holds against current code.
+3. If no `## Open` entries exist after re-evaluation, report "nothing to fix" and stop.
+4. Sort open findings by severity: CRITICAL → HIGH → MEDIUM → LOW.
+5. For each finding, read the code at the reported location with full context (100+ lines).
+6. For each affected subsystem, read the corresponding pattern file from `.claude/docs/patterns/`.
 
 ### Task 2: Fix
 
