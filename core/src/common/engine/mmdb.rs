@@ -515,26 +515,18 @@ fn mmdb_open(dir: &std::path::Path) -> Result<DB> {
 
         // Write buffer (per-shard)
         write_buffer_size: wr_buffer_size,
-        max_write_buffer_number: 5,
         max_immutable_memtables: 4,
 
         // Block cache + block size (per-shard)
         block_cache_capacity: block_cache_size,
         block_size: 16 * 1024, // 16 KB
 
-        // Memtable prefix bloom
-        memtable_prefix_bloom_ratio: 0.1,
-
         // Compaction tuning
-        level_compaction_dynamic_level_bytes: true,
         l0_compaction_trigger: 8,
         max_subcompactions: 4,
 
         // Single compaction thread per shard — 16 shards give natural parallelism
         max_background_compactions: 1,
-
-        // Concurrent memtable writes
-        allow_concurrent_memtable_write: true,
 
         ..DbOptions::default()
     };

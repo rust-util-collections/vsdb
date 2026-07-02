@@ -13,7 +13,7 @@ All notable changes to this project will be documented in this file.
 - **`vsdb::SlotDex` now names the generic struct** `slotdex::SlotDex<S, K>` instead of silently aliasing `SlotDex64<K>` (the same name previously referred to different types depending on the import path). **Migration**: replace `vsdb::SlotDex<K>` with `vsdb::SlotDex64<K>`.
 - **Internal macros un-exported**: `define_map_wrapper!`, `entry_or_insert_via_mock!`, `cow_bytes_bounds!` (vsdb) and `parse_int!` / `parse_prefix!` (vsdb_core) were implementation details accidentally exported via `#[macro_export]`; they are now crate-private.
 - **`NULL` constant removed** from both crates' root re-exports (it was an empty byte slice with no in-tree users).
-- **mmdb engine updated to 3.3.0.**
+- **mmdb engine updated to 4.0.0** and **`ruc` updated to 11.0.0.** The mmdb 4.0 `DbOptions` dropped the `max_write_buffer_number`, `memtable_prefix_bloom_ratio`, `level_compaction_dynamic_level_bytes`, and `allow_concurrent_memtable_write` tuning knobs (now internal); VSDB no longer sets them and relies on the engine defaults. No on-disk format or public API change.
 - **`SlotDex::new` now asserts `tier_capacity >= 2`** (previously `> 0`). A capacity of 1 could never terminate tier growth, causing unbounded disk/memory usage.
 - **MPT keys are now bounded** — `MptCalc` insert paths reject keys longer than `MAX_MPT_KEY_LEN` (1024 bytes) to prevent stack-overflow crashes from adversarially deep tries. SMT is unaffected (depth hard-capped at 256 bits).
 - **`DagMapRaw` mutable-value tombstone guard** — writing an empty value back through `get_mut()`'s `ValueMut` now panics, matching the existing `insert()` guard (the empty byte string is the internal deletion tombstone).
