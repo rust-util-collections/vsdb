@@ -124,7 +124,7 @@ impl MmDB {
                 if gc == 0 {
                     let _x = LK.lock();
                     if GLOBAL_COUNTER.load(Ordering::Acquire) == 0 {
-                        let ret = crate::parse_prefix!(
+                        let ret = crate::common::parse_prefix!(
                             self.meta_db()
                                 .get(&self.prefix_allocator.key)
                                 .expect("vsdb: meta read failed")
@@ -386,8 +386,10 @@ impl BatchTrait for MmdbBatch<'_> {
     }
 
     #[inline(always)]
-    fn commit(&mut self) -> Result<()> {
+    fn commit(&mut self) -> crate::common::error::Result<()> {
         let batch = std::mem::replace(&mut self.inner, WriteBatch::new());
+        // `.c(d!())` attaches file/line context; the `?` conversion into
+        // `VsdbError` preserves the complete ruc chain.
         self.engine.shard(&self.meta_prefix).write(batch).c(d!())?;
         Ok(())
     }

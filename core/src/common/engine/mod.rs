@@ -13,8 +13,10 @@ type DbIter = self::mmdb::MmdbIter;
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
-use crate::common::{PREFIX_SIZE, PreBytes, RawKey, RawValue, VSDB};
-use ruc::*;
+use crate::common::{
+    PREFIX_SIZE, PreBytes, RawKey, RawValue, VSDB,
+    error::{Result, VsdbError},
+};
 use serde::{Deserialize, Serialize, de};
 use std::{
     borrow::Cow,
@@ -315,27 +317,22 @@ impl Mapx {
 
     pub(crate) fn decode_prefix_meta(meta: &[u8]) -> Result<PreBytes> {
         if meta.len() != MAPX_META_LEN {
-            return Err(eg!(
-                "invalid Mapx metadata length: expected {}, got {}",
-                MAPX_META_LEN,
-                meta.len()
-            ));
+            return Err(VsdbError::Decode {
+                detail: format!(
+                    "invalid Mapx metadata length: expected {}, got {}",
+                    MAPX_META_LEN,
+                    meta.len()
+                ),
+            });
         }
         if &meta[..MAPX_META_MAGIC.len()] != MAPX_META_MAGIC {
-            return Err(eg!("invalid Mapx metadata magic"));
+            return Err(VsdbError::Decode {
+                detail: "invalid Mapx metadata magic".to_owned(),
+            });
         }
         let mut prefix = PreBytes::default();
         prefix.copy_from_slice(&meta[MAPX_META_MAGIC.len()..]);
         Ok(prefix)
-    }
-
-    pub(crate) fn decode_trusted_prefix_meta(meta: &[u8]) -> Result<PreBytes> {
-        if meta.len() == PREFIX_SIZE {
-            let mut prefix = PreBytes::default();
-            prefix.copy_from_slice(meta);
-            return Ok(prefix);
-        }
-        Self::decode_prefix_meta(meta)
     }
 
     #[inline(always)]
@@ -482,16 +479,10 @@ impl<'de> Deserialize<'de> for Mapx {
         deserializer
             .deserialize_byte_buf(SimpleVisitor)
             .and_then(|meta| {
-                let decode = if crate::common::legacy_mapx_meta_decode_enabled() {
-                    Self::decode_trusted_prefix_meta
-                } else {
-                    Self::decode_prefix_meta
-                };
-                let prefix = decode(&meta).map_err(serde::de::Error::custom)?;
-                // SAFETY: `prefix` was just validated by the decode path.
-                // The standard path checks magic + length; the legacy path
-                // (enabled via `with_legacy_mapx_meta_decode`) checks length
-                // only.  In both cases the result is a well-formed 8-byte
+                let prefix =
+                    Self::decode_prefix_meta(&meta).map_err(de::Error::custom)?;
+                // SAFETY: `prefix` was just validated by the decode path
+                // (magic tag + length), so it is a well-formed 8-byte
                 // prefix slice from a trusted source.
                 Ok(unsafe { Self::from_prefix_slice(prefix) })
             })

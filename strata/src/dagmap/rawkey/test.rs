@@ -1,5 +1,5 @@
 use super::*;
-use ruc::*;
+use std::{thread, time::Duration};
 
 macro_rules! s {
     ($i: expr) => {{ $i.as_bytes().to_vec() }};
@@ -7,19 +7,19 @@ macro_rules! s {
 
 #[test]
 fn dagmaprawkey_functions() {
-    let mut i0 = DagMapRawKey::new(&mut Orphan::new(None)).unwrap();
+    let mut i0: DagMapRawKey<Vec<u8>> = DagMapRawKey::new(None);
     i0.insert("k0", &s!("v0"));
     assert_eq!(i0.get("k0").unwrap(), s!("v0"));
     assert!(i0.get("k1").is_none());
-    let mut i0_raw = Orphan::new(Some(i0.into_inner()));
+    let mut i0_raw = i0.into_inner();
 
-    let mut i1 = DagMapRawKey::new(&mut i0_raw).unwrap();
+    let mut i1: DagMapRawKey<Vec<u8>> = DagMapRawKey::new(Some(&mut i0_raw));
     i1.insert("k1", &s!("v1"));
     assert_eq!(i1.get("k1").unwrap(), s!("v1"));
     assert_eq!(i1.get("k0").unwrap(), s!("v0"));
-    let mut i1_raw = Orphan::new(Some(i1.into_inner()));
+    let mut i1_raw = i1.into_inner();
 
-    let mut i2 = DagMapRawKey::new(&mut i1_raw).unwrap();
+    let mut i2: DagMapRawKey<Vec<u8>> = DagMapRawKey::new(Some(&mut i1_raw));
     i2.insert("k2", &s!("v2"));
     assert_eq!(i2.get("k2").unwrap(), s!("v2"));
     assert_eq!(i2.get("k1").unwrap(), s!("v1"));
@@ -37,46 +37,38 @@ fn dagmaprawkey_functions() {
     assert_eq!(i2.get("k1").unwrap(), s!("v1x"));
     assert_eq!(i2.get("k0").unwrap(), s!("v0x"));
 
-    assert!(i1_raw.get_value().unwrap().get("k2").is_none());
-    assert_eq!(
-        i1_raw.get_value().unwrap().get("k1").unwrap(),
-        s!("v1").encode()
-    );
-    assert_eq!(
-        i1_raw.get_value().unwrap().get("k0").unwrap(),
-        s!("v0").encode()
-    );
+    // Overlay isolation: parents never see descendant writes.
+    assert!(i1_raw.get("k2").is_none());
+    assert_eq!(i1_raw.get("k1").unwrap(), s!("v1").encode());
+    assert_eq!(i1_raw.get("k0").unwrap(), s!("v0").encode());
 
-    assert!(i0_raw.get_value().unwrap().get("k2").is_none());
-    assert!(i0_raw.get_value().unwrap().get("k1").is_none());
-    assert_eq!(
-        i0_raw.get_value().unwrap().get("k0").unwrap(),
-        s!("v0").encode()
-    );
+    assert!(i0_raw.get("k2").is_none());
+    assert!(i0_raw.get("k1").is_none());
+    assert_eq!(i0_raw.get("k0").unwrap(), s!("v0").encode());
 
+    // The original owned handles alias the same storage and observe the
+    // post-prune state (`Clone` would deep-copy instead).
     let mut head = i2.prune().unwrap();
-    sleep_ms!(1000);
+    thread::sleep(Duration::from_millis(1000));
 
     assert_eq!(head.get("k2").unwrap(), s!("v2x"));
     assert_eq!(head.get("k1").unwrap(), s!("v1x"));
     assert_eq!(head.get("k0").unwrap(), s!("v0x"));
 
-    assert!(i1_raw.get_value().is_none());
-    assert!(i1_raw.get_value().is_none());
-    assert!(i1_raw.get_value().is_none());
-
-    assert!(i0_raw.get_value().is_none());
-    assert!(i0_raw.get_value().is_none());
-    assert!(i0_raw.get_value().is_none());
+    // The intermediate mainline node was merged into genesis and cleared.
+    assert!(i1_raw.is_dead());
+    // The genesis handle sees the merged result (same storage as `head`).
+    assert_eq!(i0_raw.get("k2").unwrap(), s!("v2x").encode());
 
     // prune with deep stack
     for i in 10u8..=255 {
         head.insert(i.to_be_bytes(), &i.to_be_bytes().to_vec());
-        head = DagMapRawKey::new(&mut Orphan::new(Some(head.into_inner()))).unwrap();
+        let mut raw = head.into_inner();
+        head = DagMapRawKey::new(Some(&mut raw));
     }
 
     let mut head = head.prune().unwrap();
-    sleep_ms!(1000);
+    thread::sleep(Duration::from_millis(1000));
 
     for i in 10u8..=255 {
         assert_eq!(head.get(i.to_be_bytes()).unwrap(), i.to_be_bytes().to_vec());
@@ -96,8 +88,7 @@ fn dagmaprawkey_functions() {
 
 #[test]
 fn test_save_and_from_meta() {
-    let mut dag: DagMapRawKey<Vec<u8>> =
-        DagMapRawKey::new(&mut Orphan::new(None)).unwrap();
+    let mut dag: DagMapRawKey<Vec<u8>> = DagMapRawKey::new(None);
     dag.insert("k1", &s!("v1"));
     dag.insert("k2", &s!("v2"));
 
@@ -112,8 +103,7 @@ fn test_save_and_from_meta() {
 /// Postcard serde roundtrip for DagMapRawKey (delegates to DagMapRaw).
 #[test]
 fn test_serde_roundtrip() {
-    let mut dag: DagMapRawKey<Vec<u8>> =
-        DagMapRawKey::new(&mut Orphan::new(None)).unwrap();
+    let mut dag: DagMapRawKey<Vec<u8>> = DagMapRawKey::new(None);
     dag.insert("x", &s!("X"));
     dag.insert("y", &s!("Y"));
 
@@ -127,7 +117,7 @@ fn test_serde_roundtrip() {
 #[test]
 #[should_panic(expected = "empty encoded value is a tombstone")]
 fn typed_empty_encoding_panics() {
-    let mut dag: DagMapRawKey<()> = DagMapRawKey::new(&mut Orphan::new(None)).unwrap();
+    let mut dag: DagMapRawKey<()> = DagMapRawKey::new(None);
     dag.insert("unit", &());
 }
 
@@ -140,11 +130,11 @@ fn test_from_meta_nonexistent() {
 /// Restore meta with parent-child lineage.
 #[test]
 fn test_meta_with_parent_child() {
-    let mut p = DagMapRawKey::<Vec<u8>>::new(&mut Orphan::new(None)).unwrap();
+    let mut p = DagMapRawKey::<Vec<u8>>::new(None);
     p.insert("pk", &s!("pv"));
 
-    let mut c =
-        DagMapRawKey::<Vec<u8>>::new(&mut Orphan::new(Some(p.into_inner()))).unwrap();
+    let mut p_raw = p.into_inner();
+    let mut c = DagMapRawKey::<Vec<u8>>::new(Some(&mut p_raw));
     c.insert("ck", &s!("cv"));
 
     let id = c.save_meta().unwrap();

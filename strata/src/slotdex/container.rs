@@ -9,7 +9,7 @@ use std::{
     fmt,
 };
 
-use ruc::eg;
+use crate::common::error::{Result, VsdbError};
 
 use crate::{
     KeyEnDeOrdered, MapxOrd, ValueEnDe, basic::mapx_ord::MapxOrdIter as LargeIter,
@@ -57,7 +57,7 @@ impl<K> ValueEnDe for DataCtner<K>
 where
     K: Clone + Ord + KeyEnDeOrdered,
 {
-    fn try_encode(&self) -> ruc::Result<Vec<u8>> {
+    fn try_encode(&self) -> Result<Vec<u8>> {
         match self {
             Self::Small(set) => {
                 let mut buf = vec![TAG_SMALL];
@@ -83,15 +83,19 @@ where
         }
     }
 
-    fn decode(bytes: &[u8]) -> ruc::Result<Self> {
+    fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.is_empty() {
-            return Err(eg!("empty DataCtner bytes"));
+            return Err(VsdbError::Decode {
+                detail: "empty DataCtner bytes".to_owned(),
+            });
         }
         match bytes[0] {
             TAG_SMALL => {
                 let mut off = 1;
                 if bytes.len() < off + 4 {
-                    return Err(eg!("truncated count"));
+                    return Err(VsdbError::Decode {
+                        detail: "truncated count".to_owned(),
+                    });
                 }
                 let count =
                     u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()) as usize;
@@ -99,17 +103,20 @@ where
                 let mut set = BTreeSet::new();
                 for _ in 0..count {
                     if bytes.len() < off + 4 {
-                        return Err(eg!("truncated key len"));
+                        return Err(VsdbError::Decode {
+                            detail: "truncated key len".to_owned(),
+                        });
                     }
                     let klen =
                         u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap())
                             as usize;
                     off += 4;
                     if bytes.len() < off + klen {
-                        return Err(eg!("truncated key data"));
+                        return Err(VsdbError::Decode {
+                            detail: "truncated key data".to_owned(),
+                        });
                     }
-                    let k =
-                        K::from_slice(&bytes[off..off + klen]).map_err(|e| eg!(e))?;
+                    let k = K::from_slice(&bytes[off..off + klen])?;
                     off += klen;
                     set.insert(k);
                 }
@@ -118,25 +125,32 @@ where
             TAG_LARGE => {
                 let mut off = 1;
                 if bytes.len() < off + 4 {
-                    return Err(eg!("truncated handle len"));
+                    return Err(VsdbError::Decode {
+                        detail: "truncated handle len".to_owned(),
+                    });
                 }
                 let hlen =
                     u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()) as usize;
                 off += 4;
                 if bytes.len() < off + hlen {
-                    return Err(eg!("truncated handle data"));
+                    return Err(VsdbError::Decode {
+                        detail: "truncated handle data".to_owned(),
+                    });
                 }
-                let map =
-                    MapxOrd::decode(&bytes[off..off + hlen]).map_err(|e| eg!(e))?;
+                let map = MapxOrd::decode(&bytes[off..off + hlen])?;
                 off += hlen;
                 if bytes.len() < off + 8 {
-                    return Err(eg!("truncated len"));
+                    return Err(VsdbError::Decode {
+                        detail: "truncated len".to_owned(),
+                    });
                 }
                 let len =
                     u64::from_le_bytes(bytes[off..off + 8].try_into().unwrap()) as usize;
                 Ok(Self::Large { map, len })
             }
-            _ => Err(eg!("unknown DataCtner tag")),
+            _ => Err(VsdbError::Decode {
+                detail: "unknown DataCtner tag".to_owned(),
+            }),
         }
     }
 }

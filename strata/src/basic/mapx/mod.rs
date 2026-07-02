@@ -51,10 +51,12 @@ use crate::{
             MapxOrdRawKeyIterMut, ValueMut,
         },
     },
-    common::ende::{KeyEnDe, ValueEnDe},
-    define_map_wrapper,
+    common::{
+        ende::{KeyEnDe, ValueEnDe},
+        error::Result,
+        macros::define_map_wrapper,
+    },
 };
-use ruc::*;
 use std::{
     marker::PhantomData,
     ops::{Deref, DerefMut},
@@ -312,9 +314,12 @@ where
 {
     type Item = (K, ValueIterMut<'a, V>);
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner
-            .next()
-            .map(|(k, v)| (pnk!(<K as KeyEnDe>::decode(&k)), ValueIterMut { inner: v }))
+        self.inner.next().map(|(k, v)| {
+            (
+                <K as KeyEnDe>::decode(&k).unwrap(),
+                ValueIterMut { inner: v },
+            )
+        })
     }
 }
 
@@ -324,9 +329,12 @@ where
     V: ValueEnDe,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.inner
-            .next_back()
-            .map(|(k, v)| (pnk!(<K as KeyEnDe>::decode(&k)), ValueIterMut { inner: v }))
+        self.inner.next_back().map(|(k, v)| {
+            (
+                <K as KeyEnDe>::decode(&k).unwrap(),
+                ValueIterMut { inner: v },
+            )
+        })
     }
 }
 

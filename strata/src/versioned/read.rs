@@ -4,8 +4,6 @@
 
 use std::ops::Bound;
 
-use ruc::{RucResult, pnk};
-
 use crate::{
     common::ende::{KeyEnDeOrdered, ValueEnDe},
     common::error::Result,
@@ -31,7 +29,7 @@ where
         let state = self.get_branch(branch)?;
         let raw = self.tree.get(state.dirty_root, &key.to_bytes());
         match raw {
-            Some(v) => Ok(Some(pnk!(V::decode(&v)))),
+            Some(v) => Ok(Some(V::decode(&v).unwrap())),
             None => Ok(None),
         }
     }
@@ -46,7 +44,7 @@ where
         let commit = self.get_commit_inner(commit_id)?;
         let raw = self.tree.get(commit.root, &key.to_bytes());
         match raw {
-            Some(v) => Ok(Some(pnk!(V::decode(&v)))),
+            Some(v) => Ok(Some(V::decode(&v).unwrap())),
             None => Ok(None),
         }
     }
@@ -68,7 +66,7 @@ where
         Ok(self
             .tree
             .iter(state.dirty_root)
-            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(V::decode(&v)))))
+            .map(|(k, v)| (K::from_slice(&k).unwrap(), V::decode(&v).unwrap())))
     }
 
     /// Iterates entries in `[lo, hi)` on `branch` in ascending key order.
@@ -101,7 +99,7 @@ where
                 lo_raw.as_ref().map(|v| v.as_slice()),
                 hi_raw.as_ref().map(|v| v.as_slice()),
             )
-            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(V::decode(&v)))))
+            .map(|(k, v)| (K::from_slice(&k).unwrap(), V::decode(&v).unwrap())))
     }
 
     /// Iterates all entries at a specific historical commit.
@@ -118,7 +116,7 @@ where
         Ok(self
             .tree
             .iter(commit.root)
-            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(V::decode(&v)))))
+            .map(|(k, v)| (K::from_slice(&k).unwrap(), V::decode(&v).unwrap())))
     }
 
     /// Iterates entries in `[lo, hi)` at a specific historical commit
@@ -152,7 +150,7 @@ where
                 lo_raw.as_ref().map(|v| v.as_slice()),
                 hi_raw.as_ref().map(|v| v.as_slice()),
             )
-            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(V::decode(&v)))))
+            .map(|(k, v)| (K::from_slice(&k).unwrap(), V::decode(&v).unwrap())))
     }
 
     /// Iterates all raw (untyped) key-value pairs on a branch.

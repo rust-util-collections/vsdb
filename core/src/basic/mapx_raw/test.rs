@@ -130,13 +130,19 @@ fn test_save_and_from_meta() {
 }
 
 #[test]
-fn test_from_meta_accepts_legacy_prefix_metadata() {
+fn test_from_meta_rejects_legacy_prefix_metadata() {
+    // Pre-v13.4 meta files stored a bare 8-byte prefix; v14 removed the
+    // legacy acceptance path, so such a file must be rejected.
     let mut hdr = MapxRaw::new();
     hdr.insert([1], [10]);
 
     let id = hdr.instance_id();
     fs::write(crate::common::vsdb_meta_path(id), hdr.as_bytes()).unwrap();
 
+    assert!(MapxRaw::from_meta(id).is_err());
+
+    // Re-saving under the current (magic-tagged) format restores access.
+    let id = pnk!(hdr.save_meta());
     let restored = pnk!(MapxRaw::from_meta(id));
     assert_eq!(restored.get([1]), Some(vec![10]));
     assert!(restored.is_the_same_instance(&hdr));
@@ -183,20 +189,13 @@ fn test_serde_rejects_raw_prefix_bytes() {
 }
 
 #[test]
-fn test_serde_rejects_legacy_prefix_payload_by_default() {
+fn test_serde_rejects_legacy_prefix_payload() {
     let hdr = MapxRaw::new();
+    // A pre-magic (v13 legacy) payload is a bare 8-byte prefix; it must
+    // be rejected unconditionally — the legacy acceptance path was
+    // removed in v14.
     let legacy_payload = postcard::to_allocvec(hdr.as_bytes().as_slice()).unwrap();
     assert!(postcard::from_bytes::<MapxRaw>(&legacy_payload).is_err());
-
-    // SAFETY: `legacy_payload` was produced above by serializing this
-    // same instance's own prefix bytes — a trusted, same-version source.
-    let restored: MapxRaw = unsafe {
-        crate::common::with_legacy_mapx_meta_decode(|| {
-            postcard::from_bytes(&legacy_payload)
-        })
-    }
-    .unwrap();
-    assert!(restored.is_the_same_instance(&hdr));
 }
 
 /// Mutate after restoring from meta — ensures the restored handle is fully live.

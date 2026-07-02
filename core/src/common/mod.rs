@@ -7,12 +7,14 @@
 //!
 
 pub(crate) mod engine;
+/// Structured error types for the VSDB public API.
+pub mod error;
 
 pub use engine::BatchTrait;
+use error::{Result, VsdbError};
 use parking_lot::Mutex;
 use ruc::*;
 use std::{
-    cell::Cell,
     env, fs,
     mem::size_of,
     path::{Path, PathBuf},
@@ -24,9 +26,6 @@ use std::{
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
-
-/// A constant representing a null or empty byte slice.
-pub const NULL: &[u8] = &[];
 
 /// A type alias for a vector of bytes, commonly used for raw data.
 pub type RawBytes = Vec<u8>;
@@ -90,45 +89,6 @@ static VSDB_META_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     d
 });
 
-thread_local! {
-    static LEGACY_MAPX_META_DECODE_DEPTH: Cell<usize> = const { Cell::new(0) };
-}
-
-struct LegacyMapxMetaDecodeGuard;
-
-impl Drop for LegacyMapxMetaDecodeGuard {
-    fn drop(&mut self) {
-        LEGACY_MAPX_META_DECODE_DEPTH.with(|depth| {
-            depth.set(depth.get().saturating_sub(1));
-        });
-    }
-}
-
-/// Runs `f` with legacy (length-only) `Mapx` meta decoding enabled on
-/// the current thread.
-///
-/// # Safety
-///
-/// Inside `f`, deserializing a `Mapx` accepts **any** 8-byte payload as
-/// a raw storage prefix, skipping the magic-tag validation of the
-/// standard meta format.  A forged or corrupted payload therefore
-/// yields a live handle aliasing an arbitrary existing structure's
-/// data.  The caller must guarantee that every byte sequence
-/// deserialized inside `f` was produced by a trusted, same-version
-/// VSDB serializer (e.g. this instance's own meta files).
-#[doc(hidden)]
-pub unsafe fn with_legacy_mapx_meta_decode<T>(f: impl FnOnce() -> T) -> T {
-    LEGACY_MAPX_META_DECODE_DEPTH.with(|depth| {
-        depth.set(depth.get() + 1);
-    });
-    let _guard = LegacyMapxMetaDecodeGuard;
-    f()
-}
-
-pub(crate) fn legacy_mapx_meta_decode_enabled() -> bool {
-    LEGACY_MAPX_META_DECODE_DEPTH.with(|depth| depth.get() > 0)
-}
-
 /// Returns the instance-meta directory path for VSDB.
 ///
 /// This directory (`{system_dir}/__instance_meta__/`) is used to persist
@@ -166,13 +126,13 @@ pub static VSDB: LazyLock<VsDB> = LazyLock::new(|| pnk!(VsDB::new()));
 /// # Panics
 ///
 /// This macro will panic if the byte slice cannot be converted into the specified integer type.
-#[macro_export]
 macro_rules! parse_int {
     ($bytes: expr, $ty: ty) => {{
         let array: [u8; std::mem::size_of::<$ty>()] = $bytes[..].try_into().unwrap();
         <$ty>::from_le_bytes(array)
     }};
 }
+pub(crate) use parse_int;
 
 /// A macro to parse a byte slice into a `Pre` type.
 ///
@@ -183,12 +143,12 @@ macro_rules! parse_int {
 /// # Panics
 ///
 /// This macro will panic if the byte slice cannot be converted into a `Pre` type.
-#[macro_export]
 macro_rules! parse_prefix {
     ($bytes: expr) => {
-        $crate::parse_int!($bytes, $crate::common::Pre)
+        $crate::common::parse_int!($bytes, $crate::common::Pre)
     };
 }
+pub(crate) use parse_prefix;
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -313,7 +273,7 @@ pub(crate) fn vsdb_freeze_base_dir() {
 #[inline(always)]
 pub fn vsdb_set_base_dir(dir: impl AsRef<Path>) -> Result<()> {
     if BASE_DIR_FROZEN.swap(true, Ordering::AcqRel) {
-        Err(eg!("VSDB has been initialized !!"))
+        Err(VsdbError::BaseDirFrozen)
     } else {
         // SAFETY: Guarded by the `BASE_DIR_FROZEN` swap — runs at most
         // once.  The documented contract above requires the caller to

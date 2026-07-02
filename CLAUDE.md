@@ -40,7 +40,7 @@ make bench        # criterion benches (core basic, strata basic, versioned, slot
 | Typed Collections | `strata/src/basic/mapx/`, `mapx_ord/`, `mapx_ord_rawkey/`, `orphan/` | Mapx<K,V>, MapxOrd<K,V>, MapxOrdRawKey<V>, Orphan<T> |
 | Persistent B+ Tree | `strata/src/basic/persistent_btree/` | COW B+ tree, structural sharing |
 | Versioning | `strata/src/versioned/` | VerMap, Branch/BranchMut handles, commit DAG, merge |
-| Error types | `strata/src/common/error.rs` | VsdbError enum (thiserror-based) |
+| Error types | `core/src/common/error.rs` (re-exported via `vsdb::common::error`) | VsdbError enum (thiserror-based), unified across both crates |
 | Merkle Tries | `strata/src/trie/` | MPT (16-ary) + SMT (binary 256-bit) |
 | Slot Index | `strata/src/slotdex/` | Time-slot tier-based indexing |
 | DAG Collections | `strata/src/dagmap/` | DAG-based data structures |
@@ -71,12 +71,11 @@ Additional documentation in `docs/`:
 - **Grouped imports** — merge common prefixes: `use std::sync::{Arc, Mutex};`
 - **Doc-code alignment** — public API changes must update corresponding docs
 - `parking_lot` for Mutex (prefix allocator, VSDB_BASE_DIR global, DagMap ID allocation)
-- `VsdbError` (thiserror) for public API errors; `ruc` for internal error chaining
+- `VsdbError` (thiserror, defined in `vsdb_core`) is the **only** error type in public APIs of both crates; `ruc` is internal-only for error chaining — boundary conversions preserve the complete chain via `stringify_chain`
 - `postcard` for serialization (replaced serde_cbor_2 in v12)
 - Tests run single-threaded; use `tempdir` or `/tmp/vsdb_testing` for isolation
-- ~23 unsafe blocks — all require `// SAFETY:` comments
-  - `shadow()`: SWMR contract — caller serializes writes
+- ~21 unsafe blocks — all require `// SAFETY:` comments
+  - `shadow()`: SWMR contract — caller serializes writes (the ONLY aliasing handle primitive; `Clone` deep-copies storage)
   - `from_bytes()`: caller provides valid serialized bytes
   - Pointer casts in entry API macros
   - `env::set_var` in `vsdb_set_base_dir`: caller must invoke before spawning threads
-  - `with_legacy_mapx_meta_decode`: caller vouches deserialized bytes come from a trusted, same-version VSDB serializer

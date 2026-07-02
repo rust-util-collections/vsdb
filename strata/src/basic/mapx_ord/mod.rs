@@ -52,10 +52,10 @@ use crate::{
     common::{
         RawKey,
         ende::{KeyEnDeOrdered, ValueEnDe},
+        error::Result,
+        macros::{cow_bytes_bounds, define_map_wrapper, entry_or_insert_via_mock},
     },
-    define_map_wrapper,
 };
-use ruc::*;
 use std::{marker::PhantomData, ops::RangeBounds};
 define_map_wrapper! {
     #[doc = "A disk-based, `BTreeMap`-like data structure with typed, ordered keys and values."]
@@ -96,7 +96,7 @@ where
     pub fn get_le(&self, key: &K) -> Option<(K, V)> {
         self.inner
             .get_le(key.to_bytes())
-            .map(|(k, v)| (pnk!(K::from_bytes(k)), v))
+            .map(|(k, v)| (K::from_bytes(k).unwrap(), v))
     }
 
     /// Retrieves the first entry with a key greater than or equal to the given key.
@@ -104,7 +104,7 @@ where
     pub fn get_ge(&self, key: &K) -> Option<(K, V)> {
         self.inner
             .get_ge(key.to_bytes())
-            .map(|(k, v)| (pnk!(K::from_bytes(k)), v))
+            .map(|(k, v)| (K::from_bytes(k).unwrap(), v))
     }
 
     /// Inserts a key-value pair into the map.
@@ -180,7 +180,7 @@ where
     /// Returns an iterator over a range of entries in the map.
     #[inline(always)]
     pub fn range<R: RangeBounds<K>>(&self, bounds: R) -> MapxOrdIter<'_, K, V> {
-        let (l, h) = crate::cow_bytes_bounds!(bounds);
+        let (l, h) = cow_bytes_bounds!(bounds);
 
         MapxOrdIter {
             inner: self.inner.range((l, h)),
@@ -194,7 +194,7 @@ where
         &mut self,
         bounds: R,
     ) -> MapxOrdIterMut<'_, K, V> {
-        let (l, h) = crate::cow_bytes_bounds!(bounds);
+        let (l, h) = cow_bytes_bounds!(bounds);
 
         MapxOrdIterMut {
             inner: self.inner.range_mut((l, h)),
@@ -336,7 +336,9 @@ where
 {
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|(k, v)| (pnk!(K::from_bytes(k)), v))
+        self.inner
+            .next()
+            .map(|(k, v)| (K::from_bytes(k).unwrap(), v))
     }
 }
 
@@ -348,7 +350,7 @@ where
     fn next_back(&mut self) -> Option<Self::Item> {
         self.inner
             .next_back()
-            .map(|(k, v)| (pnk!(K::from_bytes(k)), v))
+            .map(|(k, v)| (K::from_bytes(k).unwrap(), v))
     }
 }
 
@@ -436,7 +438,7 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         self.inner
             .next()
-            .map(|(k, v)| (pnk!(<K as KeyEnDeOrdered>::from_bytes(k)), v))
+            .map(|(k, v)| (<K as KeyEnDeOrdered>::from_bytes(k).unwrap(), v))
     }
 }
 
@@ -448,7 +450,7 @@ where
     fn next_back(&mut self) -> Option<Self::Item> {
         self.inner
             .next_back()
-            .map(|(k, v)| (pnk!(<K as KeyEnDeOrdered>::from_bytes(k)), v))
+            .map(|(k, v)| (<K as KeyEnDeOrdered>::from_bytes(k).unwrap(), v))
     }
 }
 
@@ -473,7 +475,7 @@ where
     /// Ensures a value is in the entry by inserting the default if empty,
     /// and returns a mutable reference to the value.
     pub fn or_insert(self, default: V) -> ValueMut<'a, V> {
-        crate::entry_or_insert_via_mock!(
+        entry_or_insert_via_mock!(
             self,
             MapxOrdRawKey<V>,
             get_mut(&self.key),

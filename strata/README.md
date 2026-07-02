@@ -211,9 +211,9 @@ assert_eq!(root.len(), 32);
 `SlotDex` (in the `slotdex` module) is a skip-list-like data structure for fast, timestamp-based paged queries.
 
 ```rust,ignore
-use vsdb::SlotDex;  // SlotDex64<K> alias — slot type is u64
+use vsdb::SlotDex64;  // SlotDex<u64, K> alias — slot type is u64
 
-let mut db = SlotDex::<String>::new(10u64, false);
+let mut db = SlotDex64::<String>::new(10u64, false);
 
 db.insert(100, "entry_a".to_string()).unwrap();
 db.insert(100, "entry_b".to_string()).unwrap();

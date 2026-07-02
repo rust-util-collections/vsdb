@@ -1,6 +1,21 @@
 //!
 //! Structured error types for the VSDB public API.
 //!
+//! This is the **single error vocabulary** for the whole VSDB ecosystem:
+//! every public API in `vsdb_core` and `vsdb` returns
+//! [`Result<T>`](Result) with [`VsdbError`].
+//!
+//! # Relationship to `ruc`
+//!
+//! Internally VSDB uses `ruc` for error chaining (file/line context per
+//! frame).  At the public boundary those chains are converted into
+//! [`VsdbError`] via [`From<Box<dyn ruc::err::RucError>>`], which
+//! preserves the **complete chain** (every frame, including file/line
+//! annotations) in the `detail` field — no diagnostic information is
+//! lost.  Compared to exposing `ruc::Result` directly, `VsdbError`
+//! additionally offers structured, matchable variants, implements
+//! [`std::error::Error`] (with `source()` for wrapped I/O and codec
+//! errors), and is `Send + Sync`.
 
 use thiserror::Error;
 
@@ -41,9 +56,21 @@ pub enum VsdbError {
         /// The branch ID that has dirty state.
         branch_id: u64,
     },
-    /// Encoding or decoding failed (e.g. postcard serialization).
+    /// The base directory is already frozen — the database has been
+    /// initialized or a derived directory has been materialized — so it
+    /// can no longer be changed.
+    #[error("VSDB base directory is frozen; set it before first use")]
+    BaseDirFrozen,
+    /// Encoding or decoding failed (postcard serialization).
     #[error("encoding error: {0}")]
     Encoding(#[from] postcard::Error),
+    /// Decoding failed in a non-postcard codec (e.g. ordered-key byte
+    /// decoding, instance-meta parsing, container payloads).
+    #[error("decode error: {detail}")]
+    Decode {
+        /// Description of the malformed input.
+        detail: String,
+    },
     /// Storage-layer I/O error.
     #[error("storage error: {0}")]
     Io(#[from] std::io::Error),
@@ -72,6 +99,8 @@ pub type Result<T> = std::result::Result<T, VsdbError>;
 // ---------------------------------------------------------------
 
 impl From<Box<dyn ruc::err::RucError>> for VsdbError {
+    /// Converts an internal `ruc` error chain, preserving **every**
+    /// frame (message + file/line context) via `stringify_chain`.
     fn from(e: Box<dyn ruc::err::RucError>) -> Self {
         Self::Other {
             detail: e.stringify_chain(None),

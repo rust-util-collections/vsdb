@@ -2,10 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [v14.0.0]
 
-### Changed
+### Breaking
 
+- **Unified error type across the whole ecosystem.** `VsdbError` / `Result` now live in `vsdb_core::common::error` (re-exported as `vsdb::common::error`, `vsdb::VsdbError`, `vsdb::Result`). Every public API of **both** crates returns this type — including the `KeyEnDe` / `ValueEnDe` / `KeyEnDeOrdered` encoding traits, collection batch `commit()`, `save_meta` / `from_meta`, and `vsdb_set_base_dir` — all of which previously returned `ruc::Result` (`Box<dyn RucError>`). Implementing the encoding traits for custom types no longer requires a third-party error dependency. `ruc` remains internal-only; boundary conversions preserve the **complete** chain (every frame, with file/line context) via `stringify_chain`, and the new type additionally offers matchable variants (including new `Decode` and `BaseDirFrozen`), `std::error::Error` interop, and `Send + Sync`. The root alias `vsdb::VsdbResult` was renamed to `vsdb::Result`.
+- **Legacy (pre-magic) instance-meta decoding removed.** The `with_legacy_mapx_meta_decode` escape hatch and the length-only prefix decode path are gone; deserialization now unconditionally requires the magic-tagged meta format introduced in v13.4. **Migration**: load and re-save (`save_meta`) any instance metas written by pre-v13.4 releases using a v13 build first.
+- **Deprecated `MapxRaw::from_prefix_slice` / `MapxRaw::as_prefix_slice` removed** (deprecated since 13.0.0). Use `from_bytes` / `as_bytes`.
+- **`DagMapRaw::new` / `DagMapRawKey::new` redesigned**: the signature is now `new(parent: Option<&mut DagMapRaw>) -> Self` (previously `new(&mut Orphan<Option<DagMapRaw>>) -> Result<Self>`). Each node now **owns** its parent slot instead of aliasing a caller-managed `Orphan` shared by all siblings. Consequences: `destroy()` persistently unlinks the node from its parent chain, so stale clones, shadows, and `from_meta`-restored handles can no longer resolve inherited reads through a destroyed node (previously a documented per-handle-tombstone limitation); constructing a node can no longer fail. The on-disk serde format (3-tuple) is unchanged; DAGs whose siblings were created from one shared `Orphan` slot under v13 keep that sharing until the affected nodes are recreated.
+- **`vsdb::SlotDex` now names the generic struct** `slotdex::SlotDex<S, K>` instead of silently aliasing `SlotDex64<K>` (the same name previously referred to different types depending on the import path). **Migration**: replace `vsdb::SlotDex<K>` with `vsdb::SlotDex64<K>`.
+- **Internal macros un-exported**: `define_map_wrapper!`, `entry_or_insert_via_mock!`, `cow_bytes_bounds!` (vsdb) and `parse_int!` / `parse_prefix!` (vsdb_core) were implementation details accidentally exported via `#[macro_export]`; they are now crate-private.
+- **`NULL` constant removed** from both crates' root re-exports (it was an empty byte slice with no in-tree users).
 - **mmdb engine updated to 3.3.0.**
 - **`SlotDex::new` now asserts `tier_capacity >= 2`** (previously `> 0`). A capacity of 1 could never terminate tier growth, causing unbounded disk/memory usage.
 - **MPT keys are now bounded** — `MptCalc` insert paths reject keys longer than `MAX_MPT_KEY_LEN` (1024 bytes) to prevent stack-overflow crashes from adversarially deep tries. SMT is unaffected (depth hard-capped at 256 bits).
@@ -15,7 +22,11 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - **`PersistentBTree` crash recovery could reuse NodeIds** — `rebuild_ref_counts` now advances the node allocator past the maximum stored NodeId, preventing post-recovery allocations from overwriting live nodes (cross-snapshot corruption).
+- **`VerMap` working-state crash window** — `insert`/`remove`/`discard` released the old dirty root before persisting the branch pointer; a crash in that window (with compaction triggered by the release) could leave the durable branch state pointing at physically deleted B+ tree nodes. The branch pointer is now persisted first.
+- **`VecDex` crash recovery hardening** — dirty recovery now reconciles all per-node rows (dropping torn insert/remove leftovers), prefers entry-point candidates that still have base-layer edges (an edge-less node can no longer hide the whole graph), and relinks surviving nodes whose edge writes were lost.
 - **`VecDex`/`SlotDex` crash-recovery completeness** — mutations after `save_meta()` re-set the persisted dirty bit, and recovery now rebuilds all derived metadata (VecDex: `next_node_id`, `entry_point`, `max_layer`; SlotDex: per-tier floor counts and `Large`-container lengths), not just the entry count.
+- **`VerMap::fork_point` / `commit_distance` validated inputs** — two identical nonexistent commit IDs were previously reported as their own fork point / distance 0.
+- **Base-directory freeze covers derived directories** — reading `vsdb_get_custom_dir` / `vsdb_get_system_dir` / `vsdb_get_meta_dir` before `vsdb_set_base_dir` now freezes the base dir, so a later `vsdb_set_base_dir` fails loudly (`VsdbError::BaseDirFrozen`) instead of silently splitting the directory tree across two bases.
 - **Cosine distance small-norm misclassification** — the divide-by-zero guard used machine epsilon as an absolute threshold, classifying all small-magnitude f32 vector pairs (norms ≲ 3.5e-4) as maximally dissimilar. The guard now triggers only on a true zero denominator.
 - **MPT read-path subtree cloning** — `get()`, `prove()`, and extension compaction no longer deep-clone entire subtrees per descent step (O(N) → O(depth) per lookup).
 - **`DagMapRaw::new` storage leak** — one orphaned engine slot was leaked per node creation; prune also no longer accumulates deletion tombstones in the genesis node.

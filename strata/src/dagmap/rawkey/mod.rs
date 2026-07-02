@@ -8,7 +8,7 @@
 //! # Examples
 //!
 //! ```
-//! use vsdb::{DagMapRaw, DagMapRawKey, Orphan};
+//! use vsdb::{DagMapRaw, DagMapRawKey};
 //! use vsdb::{vsdb_set_base_dir, vsdb_get_base_dir};
 //! use std::fs;
 //!
@@ -16,15 +16,15 @@
 //! let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
 //! vsdb_set_base_dir(&dir).unwrap();
 //!
-//! let mut parent = Orphan::new(None);
-//! let mut dag: DagMapRawKey<String> = DagMapRawKey::new(&mut parent).unwrap();
+//! let mut dag: DagMapRawKey<String> = DagMapRawKey::new(None);
 //!
 //! // Insert a value
 //! dag.insert(&[1], &"hello".to_string());
 //! assert_eq!(dag.get(&[1]), Some("hello".to_string()));
 //!
 //! // Create a child
-//! let mut child = DagMapRawKey::new(&mut Orphan::new(Some(dag.into_inner()))).unwrap();
+//! let mut raw = dag.into_inner();
+//! let child: DagMapRawKey<String> = DagMapRawKey::new(Some(&mut raw));
 //! assert_eq!(child.get(&[1]), Some("hello".to_string()));
 //!
 //! // Clean up the directory
@@ -34,9 +34,7 @@
 #[cfg(test)]
 mod test;
 
-use crate::{
-    DagMapId, DagMapRaw, Orphan, ValueEnDe, common::error::Result, dagmap::raw,
-};
+use crate::{DagMapId, DagMapRaw, ValueEnDe, common::error::Result, dagmap::raw};
 use serde::{Deserialize, Serialize};
 use std::{
     marker::PhantomData,
@@ -77,13 +75,15 @@ impl<V> DagMapRawKey<V>
 where
     V: ValueEnDe,
 {
-    /// Creates a new `DagMapRawKey`.
+    /// Creates a new `DagMapRawKey`, optionally attached under `raw_parent`.
+    ///
+    /// See [`DagMapRaw::new`] for the parent-linking semantics.
     #[inline(always)]
-    pub fn new(raw_parent: &mut Orphan<Option<DagMapRaw>>) -> Result<Self> {
-        DagMapRaw::new(raw_parent).map(|inner| Self {
-            inner,
+    pub fn new(raw_parent: Option<&mut DagMapRaw>) -> Self {
+        Self {
+            inner: DagMapRaw::new(raw_parent),
             _p: PhantomData,
-        })
+        }
     }
 
     /// Consumes the `DagMapRawKey` and returns the inner `DagMapRaw`.

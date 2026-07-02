@@ -1,4 +1,8 @@
-#[macro_export]
+//! Internal helper macros for the typed collection wrappers.
+//!
+//! None of these are part of the public API — they are `pub(crate)`
+//! re-exports usable only inside the `vsdb` crate.
+
 macro_rules! define_map_wrapper {
     (
         $(#[$struct_doc:meta])*
@@ -149,8 +153,8 @@ macro_rules! define_map_wrapper {
         }
     };
 }
+pub(crate) use define_map_wrapper;
 
-#[macro_export]
 macro_rules! entry_or_insert_via_mock {
     ($slf:expr, $hdr_ty:ty, $get_mut_call:ident($($get_mut_args:expr),*), $mock_call:ident($($mock_args:expr),*)) => {{
         let hdr = $slf.hdr as *mut $hdr_ty;
@@ -163,8 +167,8 @@ macro_rules! entry_or_insert_via_mock {
         }
     }};
 }
+pub(crate) use entry_or_insert_via_mock;
 
-#[macro_export]
 macro_rules! cow_bytes_bounds {
     ($bounds:expr) => {{
         use std::{borrow::Cow, ops::Bound};
@@ -196,3 +200,4 @@ macro_rules! cow_bytes_bounds {
         (l, h)
     }};
 }
+pub(crate) use cow_bytes_bounds;

@@ -8,6 +8,10 @@
 ## Architecture
 - DAG-based collection: entries can have multiple parents
 - Backed by MapxOrd for storage
+- Each node **owns** its parent slot (`Orphan<Option<DagMapRaw>>`) holding an
+  aliasing shadow of the parent node; `destroy()` nulls that slot
+  persistently, so every handle (clones, shadows, `from_meta` restores)
+  observes the destroyed state
 - Unique ID allocation via `parking_lot::Mutex<DagIdAllocator>` with crash-safe ceiling file
 - Used for graph-like data structures with persistent storage
 
@@ -24,6 +28,14 @@ Parent references must not create cycles. An entry's parents must have been crea
 ### INV-DG3: Orphan Prevention
 Deleting a node that is referenced as a parent by other nodes would create dangling references.
 **Check**: Verify delete either: (1) refuses if node has children, or (2) cascades to children, or (3) explicitly documents dangling is acceptable.
+
+### INV-DG4: Per-Node Parent Slot Ownership
+A node's parent slot must be owned exclusively by that node (allocated in
+`new()`), never shared with siblings. `destroy()` relies on this to unlink
+persistently without orphaning siblings.
+**Check**: Verify `new()` allocates a fresh `Orphan` per node and stores a
+shadow of the parent handle (NOT a `Clone` — `Clone` deep-copies storage).
+Verify `destroy()` nulls only its own slot.
 
 ## Common Bug Patterns
 

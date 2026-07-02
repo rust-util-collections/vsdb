@@ -8,7 +8,7 @@
 //! # Examples
 //!
 //! ```
-//! use vsdb::{DagMapRaw, Orphan};
+//! use vsdb::DagMapRaw;
 //! use vsdb::{vsdb_set_base_dir, vsdb_get_base_dir};
 //! use std::fs;
 //!
@@ -16,15 +16,14 @@
 //! let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
 //! vsdb_set_base_dir(&dir).unwrap();
 //!
-//! let mut parent = Orphan::new(None);
-//! let mut dag = DagMapRaw::new(&mut parent).unwrap();
+//! let mut dag = DagMapRaw::new(None);
 //!
 //! // Insert a value
 //! dag.insert(&[1], &[10]);
 //! assert_eq!(dag.get(&[1]), Some(vec![10]));
 //!
 //! // Create a child
-//! let mut child = DagMapRaw::new(&mut Orphan::new(Some(dag))).unwrap();
+//! let child = DagMapRaw::new(Some(&mut dag));
 //! assert_eq!(child.get(&[1]), Some(vec![10]));
 //!
 //! // Clean up the directory
@@ -57,17 +56,13 @@ type DagHead = DagMapRaw;
 pub struct DagMapRaw {
     data: MapxRaw,
 
+    // Owned by this node.  Holds an aliasing handle of the parent node
+    // (or `None` for a root), so `destroy()` can unlink persistently
+    // without affecting siblings.
     parent: Orphan<Option<DagMapRaw>>,
 
     // child id --> child instance
     children: MapxOrdRawKey<DagMapRaw>,
-
-    // Runtime-only tombstone. Set by `destroy()` so that reads through a
-    // destroyed handle return `None` instead of falling through to the
-    // (still-shared) parent chain. Not serialized: a destroyed node is
-    // already unlinked from its parent's `children`, so it is unreachable
-    // via normal DAG traversal and is never re-materialized from disk.
-    destroyed: bool,
 }
 
 impl Serialize for DagMapRaw {
@@ -112,7 +107,6 @@ impl<'de> Deserialize<'de> for DagMapRaw {
                     data,
                     parent,
                     children,
-                    destroyed: false,
                 })
             }
         }
@@ -121,32 +115,32 @@ impl<'de> Deserialize<'de> for DagMapRaw {
 }
 
 impl DagMapRaw {
-    /// Creates a new `DagMapRaw`.
+    /// Creates a new `DagMapRaw`, optionally attached under `parent`.
     ///
-    /// The new node keeps a live alias of `parent`'s underlying storage
-    /// slot: later writes through `parent` are visible to this node (and
-    /// its descendants) when resolving inherited reads.  Do not repoint
-    /// that slot at this node or one of its descendants — parent chains
+    /// The node stores an aliasing handle of the parent node in its own
+    /// (per-node) parent slot: later mutations of the parent's data are
+    /// visible to this node when resolving inherited reads.  Do not
+    /// attach a node under one of its own descendants — parent chains
     /// are cycle-guarded, so lookups on such a graph degrade to `None`
     /// (and `prune` reports an error) instead of hanging, but the graph
     /// itself is logically invalid.
-    pub fn new(parent: &mut Orphan<Option<Self>>) -> Result<Self> {
+    pub fn new(parent: Option<&mut Self>) -> Self {
         // Fields are constructed explicitly: `..Default::default()` would
         // materialize (and immediately discard) a default `parent` Orphan,
         // which eagerly writes an entry under a fresh engine prefix —
         // permanently leaking one storage slot per node creation.
         let r = Self {
-            // SAFETY: The shadow is serialized (read-only) during
-            // p.children.insert() below. No mutation occurs through
-            // the shadow; all writes go through `parent`, satisfying
-            // the SWMR contract.
-            parent: unsafe { parent.shadow() },
+            // SAFETY: The shadow is serialized (read-only) into the
+            // node's own parent slot right here; no mutation ever goes
+            // through it (all writes go through the caller's handle),
+            // satisfying the SWMR contract.  Note: `Clone` cannot be
+            // used — it deep-copies the storage instead of aliasing it.
+            parent: Orphan::new(parent.as_deref().map(|p| unsafe { p.shadow() })),
             data: MapxRaw::new(),
             children: MapxOrdRawKey::new(),
-            destroyed: false,
         };
 
-        if let Some(p) = parent.get_mut().as_mut() {
+        if let Some(p) = parent {
             let child_id = super::gen_dag_map_id_num().to_le_bytes();
             // gen_dag_map_id_num() is monotonically increasing, so
             // duplicate IDs are impossible under normal operation.
@@ -159,7 +153,7 @@ impl DagMapRaw {
             p.children.insert(child_id, &r);
         }
 
-        Ok(r)
+        r
     }
 
     /// Creates a second handle to the same underlying storage.
@@ -177,7 +171,6 @@ impl DagMapRaw {
                 data: self.data.shadow(),
                 parent: self.parent.shadow(),
                 children: self.children.shadow(),
-                destroyed: self.destroyed,
             }
         }
     }
@@ -225,9 +218,6 @@ impl DagMapRaw {
     /// The traversal tracks visited instance IDs to avoid looping forever
     /// if on-disk metadata is corrupt and contains a parent cycle.
     pub fn get(&self, key: impl AsRef<[u8]>) -> Option<RawBytes> {
-        if self.destroyed {
-            return None;
-        }
         let key = key.as_ref();
 
         let mut hdr = self;
@@ -391,10 +381,13 @@ impl DagMapRaw {
 
         let mut exclude_targets = vec![];
         for (id, mut child) in self.children.iter_mut() {
+            // Reparent: the child's owned parent slot now aliases the
+            // genesis node.
             // SAFETY: The shadow is serialized (read-only) immediately in
-            // the following insert call. No mutation occurs through the
-            // shadow; all writes go through genesis[0], satisfying the
-            // SWMR contract.
+            // the following two insert calls; no mutation occurs through
+            // it (all writes go through genesis[0]), satisfying the SWMR
+            // contract.  `Clone` cannot be used — it deep-copies the
+            // storage instead of aliasing it.
             *child.parent.get_mut() = Some(unsafe { genesis[0].shadow() });
             genesis[0].children.insert(&id, &child);
             exclude_targets.push(id);
@@ -450,17 +443,12 @@ impl DagMapRaw {
     /// Destroys this node and all its descendant children, clearing all data.
     ///
     /// If this node is attached to a parent, it first removes its own child
-    /// entry from the parent's `children` collection.
-    ///
-    /// # Semantics for other handles
-    ///
-    /// The tombstone set by `destroy()` is **per-handle**: it is neither
-    /// shared with pre-existing clones/shadows nor serialized.  A handle
-    /// cloned *before* this call — or restored later via
-    /// [`from_meta`](Self::from_meta) — sees the cleared local data but
-    /// can still resolve inherited reads through the (deliberately
-    /// preserved, sibling-shared) parent link.  Drop stale handles of a
-    /// destroyed node instead of reading through them.
+    /// entry from the parent's `children` collection, then persistently
+    /// nulls its own parent slot.  Because both the data clearing and the
+    /// parent unlink are persisted, **every** handle of this node —
+    /// including clones taken earlier and handles later restored via
+    /// [`from_meta`](Self::from_meta) — observes the destroyed state and
+    /// can no longer resolve inherited reads through the parent chain.
     #[inline(always)]
     pub fn destroy(&mut self) {
         let self_id = self.instance_id();
@@ -474,14 +462,9 @@ impl DagMapRaw {
                 parent.children.remove(id);
             }
         }
-        // NB: do NOT null `self.parent` here. `parent` is a shadow of the
-        // caller's Orphan slot, shared by every sibling created from that
-        // slot; writing `None` into it would orphan all surviving siblings
-        // and detach the parent. The parent→child unlink above already
-        // removes only this node's own entry. Instead, the per-handle
-        // `destroyed` tombstone makes `get()` short-circuit so this handle
-        // never serves inherited reads through the still-shared parent.
-        self.destroyed = true;
+        // The parent slot is owned by this node (never shared with
+        // siblings), so nulling it is a persistent, node-local unlink.
+        *self.parent.get_mut() = None;
         self.data.clear();
 
         // Clear all descendants iteratively. A recursive walk overflows the

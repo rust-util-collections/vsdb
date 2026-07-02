@@ -66,7 +66,6 @@
 #![deny(warnings)]
 #![recursion_limit = "512"]
 
-#[macro_use]
 pub mod common;
 
 /// User-facing, typed data structures (e.g., `Mapx`, `MapxOrd`).
@@ -95,13 +94,11 @@ pub use basic::{
 // Common traits and types — only the three user-facing encoding traits
 // are re-exported.  `KeyEn`/`KeyDe`/`ValueEn`/`ValueDe` remain accessible
 // via `vsdb::common::ende::*` for advanced use cases.
-pub use common::{
-    NULL,
-    ende::{KeyEnDe, KeyEnDeOrdered, ValueEnDe},
-};
+pub use common::ende::{KeyEnDe, KeyEnDeOrdered, ValueEnDe};
 
-// Structured error type
-pub use common::error::{Result as VsdbResult, VsdbError};
+// The unified, structured error type of the whole VSDB ecosystem
+// (defined in `vsdb_core`, shared by both crates).
+pub use common::error::{Result, VsdbError};
 
 // Versioned storage core types (previously not re-exported)
 pub use versioned::diff::DiffEntry;
@@ -115,9 +112,9 @@ pub use dagmap::{DagMapId, raw::DagMapRaw, rawkey::DagMapRawKey};
 // Trie
 pub use trie::{MptCalc, MptProof, SmtCalc, SmtProof, TrieCalc, VerMapWithProof};
 
-// Slotdex — re-export SlotDex64 as SlotDex for backward compatibility;
-// the generic struct is still accessible as `vsdb::slotdex::SlotDex<S, K>`.
-pub use slotdex::{SlotDex32, SlotDex64 as SlotDex, SlotDex64, SlotDex128, SlotType};
+// Slotdex — `SlotDex` is the generic struct (`SlotDex<S, K>`); the
+// width-specific aliases pin the slot type.
+pub use slotdex::{SlotDex, SlotDex32, SlotDex64, SlotDex128, SlotType};
 
 // VecDex — approximate nearest-neighbor vector index.
 pub use vecdex::distance::{Cosine, DistanceMetric, InnerProduct, L2, Scalar};

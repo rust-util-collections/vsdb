@@ -112,7 +112,10 @@ fn test_save_and_from_meta() {
 }
 
 #[test]
-fn test_from_meta_accepts_legacy_prefix_payload() {
+fn test_from_meta_rejects_legacy_prefix_payload() {
+    // The pre-v13.4 meta format was a bare 8-byte prefix; v14 removed the
+    // legacy acceptance path, so such a payload must be rejected instead
+    // of silently forging a handle.
     let mut hdr: Mapx<u32, String> = Mapx::new();
     hdr.insert(&1, &"legacy".to_string());
 
@@ -120,7 +123,11 @@ fn test_from_meta_accepts_legacy_prefix_payload() {
     let legacy_payload = postcard::to_allocvec(&hdr.as_bytes()).unwrap();
     fs::write(crate::common::vsdb_meta_path(id), legacy_payload).unwrap();
 
-    let restored: Mapx<u32, String> = pnk!(Mapx::from_meta(id));
+    assert!(Mapx::<u32, String>::from_meta(id).is_err());
+
+    // Re-saving under the current format restores access.
+    let id = hdr.save_meta().unwrap();
+    let restored: Mapx<u32, String> = Mapx::from_meta(id).unwrap();
     assert_eq!(restored.get(&1), Some("legacy".to_string()));
     assert!(restored.is_the_same_instance(&hdr));
 }

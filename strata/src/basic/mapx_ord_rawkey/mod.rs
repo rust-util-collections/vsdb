@@ -45,9 +45,12 @@
 #[cfg(test)]
 mod test;
 
-use crate::common::{RawKey, ende::ValueEnDe};
-use crate::define_map_wrapper;
-use ruc::*;
+use crate::common::{
+    RawKey,
+    ende::ValueEnDe,
+    error::Result,
+    macros::{define_map_wrapper, entry_or_insert_via_mock},
+};
 use std::{
     borrow::Cow,
     marker::PhantomData,
@@ -334,7 +337,7 @@ where
     /// Ensures a value is in the entry by inserting the default if empty,
     /// and returns a mutable reference to the value.
     pub fn or_insert(self, default: V) -> ValueMut<'a, V> {
-        crate::entry_or_insert_via_mock!(
+        entry_or_insert_via_mock!(
             self,
             MapxOrdRawKey<V>,
             get_mut(self.key),

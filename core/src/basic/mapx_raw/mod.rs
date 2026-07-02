@@ -46,8 +46,7 @@
 #[cfg(test)]
 mod test;
 
-use crate::common::{PreBytes, RawKey, RawValue, engine};
-use ruc::*;
+use crate::common::{PreBytes, RawKey, RawValue, engine, error::Result};
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, fs, ops::RangeBounds};
 
@@ -412,30 +411,10 @@ impl MapxRaw {
         }
     }
 
-    /// Alias for [`from_bytes`](Self::from_bytes).
-    ///
-    /// # Safety
-    ///
-    /// Same as [`from_bytes`](Self::from_bytes).
-    #[deprecated(since = "13.0.0", note = "use `from_bytes` instead")]
-    #[inline(always)]
-    pub unsafe fn from_prefix_slice(s: impl AsRef<[u8]>) -> Self {
-        // SAFETY: forwards this fn's `unsafe` contract to `from_bytes`, whose
-        // requirements are identical.
-        unsafe { Self::from_bytes(s) }
-    }
-
     /// Returns the 8-byte prefix that uniquely identifies this map's
     /// storage namespace.
     #[inline(always)]
     pub fn as_bytes(&self) -> &PreBytes {
-        self.inner.as_prefix_slice()
-    }
-
-    /// Alias for [`as_bytes`](Self::as_bytes).
-    #[deprecated(since = "13.0.0", note = "use `as_bytes` instead")]
-    #[inline(always)]
-    pub fn as_prefix_slice(&self) -> &PreBytes {
         self.inner.as_prefix_slice()
     }
 
@@ -470,8 +449,7 @@ impl MapxRaw {
         fs::write(
             crate::common::vsdb_meta_path(id),
             self.inner.encode_prefix_meta(),
-        )
-        .c(d!())?;
+        )?;
         Ok(id)
     }
 
@@ -480,11 +458,11 @@ impl MapxRaw {
     /// The caller must ensure that the underlying VSDB database still
     /// contains the data referenced by this instance ID.
     pub fn from_meta(instance_id: u64) -> Result<Self> {
-        let bytes = fs::read(crate::common::vsdb_meta_path(instance_id)).c(d!())?;
-        let prefix = engine::Mapx::decode_trusted_prefix_meta(&bytes).c(d!())?;
+        let bytes = fs::read(crate::common::vsdb_meta_path(instance_id))?;
+        let prefix = engine::Mapx::decode_prefix_meta(&bytes)?;
         // SAFETY: `prefix` was decoded from this instance's on-disk meta file
-        // by the trusted decode path, so it is a valid prefix slice for the
-        // same code version.
+        // by the magic-validated decode path, so it is a valid prefix slice
+        // for the same code version.
         Ok(unsafe { Self::from_bytes(prefix) })
     }
 }

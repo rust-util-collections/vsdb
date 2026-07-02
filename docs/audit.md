@@ -3,6 +3,8 @@
 > Auto-managed by /x-review and /x-fix.
 > Last full audit: 2026-07-02 (all 9 subsystems, parallel deep review; every
 > new finding fixed in the same pass — see "Fixed in the last full audit").
+> Followed by the v14.0.0 design-level overhaul (see the section at the end),
+> which additionally resolved four former Won't Fix entries.
 >
 > **Won't Fix ≠ permanent.** Every entry under `## Won't Fix` must be
 > re-evaluated against the current codebase on each audit. Surrounding code
@@ -21,12 +23,7 @@
 ### [HIGH] dagmap: prune_mainline is not crash-atomic
 - **Where**: strata/src/dagmap/raw/mod.rs (prune_mainline)
 - **What**: Pruning merges mainline data into the genesis node and clears the intermediate nodes/side branches step by step across multiple storage prefixes. A crash mid-prune can leave a partially merged genesis and a broken parent chain.
-- **Reason**: The engine has no cross-prefix write transactions, and unlike VerMap's ref-counts the overlay data cleared mid-merge is not reconstructible from surviving state, so a VerMap-style dirty-flag rebuild cannot repair it. A journaled two-phase prune is new infrastructure disproportionate to this cold, explicit maintenance API. The limitation is now documented on `prune` (raw + rawkey), directing callers to snapshot externally first.
-
-### [HIGH] dagmap: destroy() tombstone is per-handle; stale handles can serve inherited reads
-- **Where**: strata/src/dagmap/raw/mod.rs (destroy, `destroyed` field)
-- **What**: `destroy()` cannot null the destroyed node's parent link because the parent `Orphan` slot is shared by every sibling created from it; the tombstone is a runtime-only per-handle flag. Handles cloned before the call — or restored via `from_meta` — see cleared local data but can still resolve inherited reads through the preserved parent link.
-- **Reason**: A structural fix requires per-child parent slots (a storage-layout and serde-format change with data migration) or persisting the tombstone in-band (colliding with legal user keys / breaking the 3-tuple serde format). The semantics are now documented on `destroy` (raw + rawkey); normal DAG traversal never reaches a destroyed node because it is unlinked from its parent's children.
+- **Reason**: The engine has no cross-prefix write transactions, and unlike VerMap's ref-counts the overlay data cleared mid-merge is not reconstructible from surviving state, so a VerMap-style dirty-flag rebuild cannot repair it. A journaled two-phase prune is new infrastructure disproportionate to this cold, explicit maintenance API. The limitation is documented on `prune` (raw + rawkey), directing callers to snapshot externally first.
 
 ### [HIGH] slotdex: offset-based pagination is not stable across inter-page mutation
 - **Where**: strata/src/slotdex/mod.rs:387-440 (get_entries_by_page / get_entries_by_page_slot)
@@ -42,11 +39,6 @@
 - **Where**: core/src/common/engine/mmdb.rs (MmdbBatch::commit), core/src/common/engine/mod.rs (BatchTrait)
 - **What**: `commit` moves the buffered `WriteBatch` into the engine's `write` call; on error the buffered operations are consumed, so a retry on the same batch object commits nothing (and reports success).
 - **Reason**: mmdb's `write(batch)` takes the batch by value, so the operations cannot be restored without cloning every batch on the warm path. Elsewhere in the engine, mmdb write failures are treated as fatal (`.expect`). The public typed wrappers already consume the batch (`commit(self)`), making retry impossible there; the remaining `MapxRaw::batch_entry` trait object now documents the non-retryable contract on both `BatchTrait::commit` and `batch_entry`.
-
-### [MEDIUM] encoding: ruc::Result in public trait signatures forces undocumented dependency on implementors
-- **Where**: strata/src/common/ende.rs:68-165 (KeyEn, KeyDe, ValueEn, ValueDe, KeyEnDe, ValueEnDe, KeyEnDeOrdered traits)
-- **What**: Trait methods return `Result<...>` which resolves to `ruc::Result<T>` = `std::result::Result<T, Box<dyn ruc::err::RucError>>`. The `ruc` crate is not re-exported, so downstream users implementing `KeyEnDeOrdered` for a custom type cannot name the return type.
-- **Reason**: The blanket impls cover most use cases. Changing signatures to use a concrete error type or re-exporting `ruc` is a semver-breaking API change. Downstream users who need custom implementations can add `ruc` as their own dependency. Documenting this in the trait docs would help but doesn't require a code change.
 
 ### [MEDIUM] trie: VerMapWithProof integration layer has zero test coverage
 - **Where**: strata/src/trie/proof.rs (entire file: sync_to_branch, sync_to_commit, try_load_cache, apply_diff, Drop auto-save)
@@ -83,20 +75,10 @@
 - **What**: `fs::write` truncates then writes; a crash mid-write leaves a truncated meta file.
 - **Reason**: Pre-existing codebase-wide convention (core/src/basic/mapx_raw/mod.rs save_meta uses the same `fs::write`); cold explicit-save path; the count is independently recoverable via the dirty-flag mechanism. Fixing one site without the matching core change is inconsistent and the churn/risk is disproportionate to a cold-path durability nicety.
 
-### [LOW] typed-collections: inconsistent decode error handling (unwrap vs pnk!)
-- **Where**: mapx_ord_rawkey/mod.rs, mapx_ord/mod.rs, mapx/mod.rs (various iterator methods)
-- **What**: Value-decode calls use bare `.unwrap()` in some iterator methods and `pnk!()` in others.
-- **Reason**: Cosmetic inconsistency only; both panic on corrupt data with identical outcome. Changing would touch ~15 sites across 3 files with no correctness benefit. Not worth the churn risk.
-
-### [LOW] common/macros: entry_or_insert_via_mock! and cow_bytes_bounds! are unnecessarily #[macro_export]
-- **Where**: strata/src/common/macros.rs:153-198
-- **What**: Helper macros are #[macro_export] making them public, but they are internal implementation details.
-- **Reason**: Rust's #[macro_export] cannot be scoped to pub(crate). Removing export would break cross-module usage within the crate. Renaming to `__` prefix is a semver break for any external user who discovered them.
-
 ### [LOW] error: VsdbError::Trie variant overlap with Other
-- **Where**: strata/src/common/error.rs:50-54
+- **Where**: core/src/common/error.rs (VsdbError)
 - **What**: Merge failures route through VsdbError::Other rather than a dedicated MergeError variant.
-- **Reason**: No correctness impact; callers cannot distinguish merge errors from other errors without string parsing, but no caller currently needs to. Adding a variant is a future enhancement.
+- **Reason**: No correctness impact; callers cannot distinguish merge errors from other errors without string parsing, but no caller currently needs to. The enum is `#[non_exhaustive]`, so a variant can be added compatibly whenever a caller needs it (v14 already added `Decode` and `BaseDirFrozen` this way).
 
 ### [LOW] engine: RESERVED_ID_CNT naming is misleading
 - **Where**: core/src/common/mod.rs:53
@@ -132,3 +114,30 @@
 - **[LOW] slotdex**: the test reference model (`testdb::TestDB`) reversed within-slot order on reverse paging, contradicting SlotDex's documented slots-only reversal; rebuilt as `BTreeMap<slot, BTreeSet<key>>` and the workflow test now covers duplicate-slot entries.
 - **[LOW] dagmap**: undocumented public contracts — `new()`'s live parent-slot alias, `destroy()`'s per-handle tombstone, and `prune()`'s non-atomicity are now documented (raw + rawkey).
 - **[LOW] style**: grouped-import/inline-path violations fixed in slotdex/mod.rs, dagmap/raw/mod.rs, trie/test.rs, vecdex/test.rs; CLAUDE.md unsafe-block inventory updated.
+
+---
+
+## Resolved by the v14.0.0 design overhaul
+
+Former Won't Fix entries whose blocking constraint ("semver-breaking") was
+lifted by the major-version bump:
+
+- **[MEDIUM] encoding: `ruc::Result` in public trait signatures** — all
+  encoding traits (and every other public API of both crates) now return the
+  unified `vsdb_core::common::error::Result`; `ruc` is internal-only.
+- **[HIGH] dagmap: destroy() tombstone was per-handle** — each node now owns
+  its parent slot (`new(Option<&mut Self>)`), so `destroy()` persists the
+  parent unlink; the runtime `destroyed` flag was removed and stale
+  clones/shadows/`from_meta` restores observe the destroyed state.
+- **[LOW] common/macros: internal macros were `#[macro_export]`** —
+  `define_map_wrapper!`, `entry_or_insert_via_mock!`, `cow_bytes_bounds!`
+  (vsdb) and `parse_int!`/`parse_prefix!` (vsdb_core) are now crate-private
+  via the `macro_rules! + pub(crate) use` pattern.
+- **[LOW] typed-collections: unwrap-vs-pnk! decode inconsistency** — all
+  internal trusted-decode sites now use assert-style `.unwrap()` (pnk! left
+  the decode paths together with `ruc`).
+
+Also swept in v14.0.0: the legacy (pre-magic, length-only) instance-meta
+decode path, the deprecated `MapxRaw::from_prefix_slice`/`as_prefix_slice`
+aliases, the unused `NULL` root constant, and the `vsdb::SlotDex` /
+`vsdb::slotdex::SlotDex` same-name-different-type aliasing confusion.

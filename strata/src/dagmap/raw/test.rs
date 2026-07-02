@@ -1,21 +1,19 @@
 use super::*;
-use ruc::*;
+use std::{thread, time::Duration};
 
 #[test]
 fn dagmapraw_functions() {
-    let mut i0 = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
+    let mut i0 = DagMapRaw::new(None);
     i0.insert("k0", "v0");
     assert_eq!(i0.get("k0").unwrap().as_slice(), "v0".as_bytes());
     assert!(i0.get("k1").is_none());
-    let mut i0 = Orphan::new(Some(i0));
 
-    let mut i1 = DagMapRaw::new(&mut i0).unwrap();
+    let mut i1 = DagMapRaw::new(Some(&mut i0));
     i1.insert("k1", "v1");
     assert_eq!(i1.get("k1").unwrap().as_slice(), "v1".as_bytes());
     assert_eq!(i1.get("k0").unwrap().as_slice(), "v0".as_bytes());
-    let mut i1 = Orphan::new(Some(i1));
 
-    let mut i2 = DagMapRaw::new(&mut i1).unwrap();
+    let mut i2 = DagMapRaw::new(Some(&mut i1));
     i2.insert("k2", "v2");
     assert_eq!(i2.get("k2").unwrap().as_slice(), "v2".as_bytes());
     assert_eq!(i2.get("k1").unwrap().as_slice(), "v1".as_bytes());
@@ -33,46 +31,37 @@ fn dagmapraw_functions() {
     assert_eq!(i2.get("k1").unwrap().as_slice(), "v1x".as_bytes());
     assert_eq!(i2.get("k0").unwrap().as_slice(), "v0x".as_bytes());
 
-    assert!(i1.get_value().unwrap().get("k2").is_none());
-    assert_eq!(
-        i1.get_value().unwrap().get("k1").unwrap().as_slice(),
-        "v1".as_bytes()
-    );
-    assert_eq!(
-        i1.get_value().unwrap().get("k0").unwrap().as_slice(),
-        "v0".as_bytes()
-    );
+    // Overlay isolation: parents never see descendant writes.
+    assert!(i1.get("k2").is_none());
+    assert_eq!(i1.get("k1").unwrap().as_slice(), "v1".as_bytes());
+    assert_eq!(i1.get("k0").unwrap().as_slice(), "v0".as_bytes());
 
-    assert!(i0.get_value().unwrap().get("k2").is_none());
-    assert!(i0.get_value().unwrap().get("k1").is_none());
-    assert_eq!(
-        i0.get_value().unwrap().get("k0").unwrap().as_slice(),
-        "v0".as_bytes()
-    );
+    assert!(i0.get("k2").is_none());
+    assert!(i0.get("k1").is_none());
+    assert_eq!(i0.get("k0").unwrap().as_slice(), "v0".as_bytes());
 
+    // The original owned handles alias the same storage and observe the
+    // post-prune state (`Clone` would deep-copy instead).
     let mut head = i2.prune().unwrap();
-    sleep_ms!(1000);
+    thread::sleep(Duration::from_millis(1000));
 
     assert_eq!(head.get("k2").unwrap().as_slice(), "v2x".as_bytes());
     assert_eq!(head.get("k1").unwrap().as_slice(), "v1x".as_bytes());
     assert_eq!(head.get("k0").unwrap().as_slice(), "v0x".as_bytes());
 
-    assert!(i1.get_value().is_none());
-    assert!(i1.get_value().is_none());
-    assert!(i1.get_value().is_none());
-
-    assert!(i0.get_value().is_none());
-    assert!(i0.get_value().is_none());
-    assert!(i0.get_value().is_none());
+    // The intermediate mainline node was merged into genesis and cleared.
+    assert!(i1.is_dead());
+    // The genesis handle sees the merged result (same storage as `head`).
+    assert_eq!(i0.get("k2").unwrap().as_slice(), "v2x".as_bytes());
 
     // prune with deep stack
     for i in 10u8..=255 {
         head.insert(i.to_be_bytes(), i.to_be_bytes());
-        head = DagMapRaw::new(&mut Orphan::new(Some(head))).unwrap();
+        head = DagMapRaw::new(Some(&mut head));
     }
 
     let mut head = head.prune().unwrap();
-    sleep_ms!(1000);
+    thread::sleep(Duration::from_millis(1000));
     assert!(head.parent.get_value().is_none());
     assert!(head.children.iter().next().is_none());
 
@@ -97,7 +86,7 @@ fn dagmapraw_functions() {
 
 #[test]
 fn test_save_and_from_meta() {
-    let mut dag = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
+    let mut dag = DagMapRaw::new(None);
     dag.insert("k1", "v1");
     dag.insert("k2", "v2");
 
@@ -112,7 +101,7 @@ fn test_save_and_from_meta() {
 /// Postcard serde roundtrip for DagMapRaw (hand-written tuple serde, 3 fields).
 #[test]
 fn test_serde_roundtrip() {
-    let mut dag = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
+    let mut dag = DagMapRaw::new(None);
     dag.insert("alpha", "A");
     dag.insert("beta", "B");
 
@@ -132,7 +121,7 @@ fn test_from_meta_nonexistent() {
 /// Restore from meta, mutate, verify shared storage.
 #[test]
 fn test_meta_restore_then_mutate() {
-    let mut dag = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
+    let mut dag = DagMapRaw::new(None);
     dag.insert("k1", "v1");
 
     let id = dag.save_meta().unwrap();
@@ -145,29 +134,27 @@ fn test_meta_restore_then_mutate() {
 #[test]
 #[should_panic(expected = "empty value is a tombstone")]
 fn insert_empty_value_panics() {
-    let mut dag = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
+    let mut dag = DagMapRaw::new(None);
     dag.insert("empty", []);
 }
 
 #[test]
 fn destroy_unlinks_from_parent() {
-    let parent = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
-    let mut parent_slot = Orphan::new(Some(parent));
-    let mut child = DagMapRaw::new(&mut parent_slot).unwrap();
+    let mut parent = DagMapRaw::new(None);
+    let mut child = DagMapRaw::new(Some(&mut parent));
 
-    let parent_handle = parent_slot.get_value().unwrap();
-    assert!(!parent_handle.no_children());
+    assert!(!parent.no_children());
     child.destroy();
-    assert!(parent_handle.no_children());
+    assert!(parent.no_children());
 }
 
 #[test]
 fn deep_acyclic_chain_remains_readable_and_prunable() {
-    let mut head = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
+    let mut head = DagMapRaw::new(None);
     head.insert("root", "value");
 
     for _ in 0..1030 {
-        head = DagMapRaw::new(&mut Orphan::new(Some(head))).unwrap();
+        head = DagMapRaw::new(Some(&mut head));
     }
 
     assert_eq!(head.get("root").unwrap().as_slice(), b"value");
@@ -179,10 +166,10 @@ fn deep_acyclic_chain_remains_readable_and_prunable() {
 /// restore, and verify the lineage is intact.
 #[test]
 fn test_meta_with_parent_child() {
-    let mut i0 = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
+    let mut i0 = DagMapRaw::new(None);
     i0.insert("base", "v0");
 
-    let mut i1 = DagMapRaw::new(&mut Orphan::new(Some(i0))).unwrap();
+    let mut i1 = DagMapRaw::new(Some(&mut i0));
     i1.insert("child", "v1");
 
     let id = i1.save_meta().unwrap();
@@ -196,23 +183,21 @@ fn test_meta_with_parent_child() {
 
 #[test]
 fn test_prune_with_side_branches() {
-    let mut i0 = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
+    let mut i0 = DagMapRaw::new(None);
     i0.insert("k0", "v0");
-    let mut i0_slot = Orphan::new(Some(i0));
 
-    let mid = DagMapRaw::new(&mut i0_slot).unwrap();
-    let mut mid_slot = Orphan::new(Some(mid.clone()));
+    let mut mid = DagMapRaw::new(Some(&mut i0));
 
     // Side-branch child of mid
-    let mut side = DagMapRaw::new(&mut mid_slot).unwrap();
+    let mut side = DagMapRaw::new(Some(&mut mid));
     side.insert("k_side", "v_side");
 
     // Another side-branch child of mid
-    let mut side2 = DagMapRaw::new(&mut mid_slot).unwrap();
+    let mut side2 = DagMapRaw::new(Some(&mut mid));
     side2.insert("k_side2", "v_side2");
 
     // Head node on mainline
-    let mut head = DagMapRaw::new(&mut mid_slot).unwrap();
+    let mut head = DagMapRaw::new(Some(&mut mid));
     head.insert("k_head", "v_head");
 
     // Prune
@@ -228,17 +213,14 @@ fn test_prune_with_side_branches() {
 
 #[test]
 fn destroy_sibling_preserves_other_siblings_and_parent() {
-    // Regression: destroy() once nulled the *shared* parent slot, orphaning
-    // every sibling created from the same Orphan slot and detaching the
-    // parent. Destroying one child must leave the parent and the other
-    // children intact.
-    let mut p = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
+    // Destroying one child must leave the parent and the other children
+    // intact — each node owns its parent slot, so the unlink is local.
+    let mut p = DagMapRaw::new(None);
     p.insert("shared", "pval");
-    let mut p_slot = Orphan::new(Some(p));
 
-    let mut c1 = DagMapRaw::new(&mut p_slot).unwrap();
+    let mut c1 = DagMapRaw::new(Some(&mut p));
     c1.insert("c1", "v1");
-    let c2 = DagMapRaw::new(&mut p_slot).unwrap();
+    let c2 = DagMapRaw::new(Some(&mut p));
 
     assert_eq!(c1.get("shared").unwrap().as_slice(), b"pval");
     assert_eq!(c2.get("shared").unwrap().as_slice(), b"pval");
@@ -246,64 +228,75 @@ fn destroy_sibling_preserves_other_siblings_and_parent() {
     c1.destroy();
     assert!(c1.get("c1").is_none());
 
-    // Parent slot must still hold the parent.
-    assert_eq!(
-        p_slot
-            .get_value()
-            .unwrap()
-            .get("shared")
-            .unwrap()
-            .as_slice(),
-        b"pval"
-    );
+    // Parent must be untouched.
+    assert_eq!(p.get("shared").unwrap().as_slice(), b"pval");
     // Surviving sibling must still reach the inherited parent data.
     assert_eq!(c2.get("shared").unwrap().as_slice(), b"pval");
 }
 
 #[test]
 fn destroyed_node_does_not_serve_inherited_reads() {
-    // Regression: after destroy(), a handle must not fall through to its
-    // (still-shared) parent and return inherited data.
-    let mut parent = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
+    // After destroy(), no handle of the node may fall through to the
+    // parent and return inherited data — the unlink is persisted in the
+    // node's own parent slot, so clones and restored handles see it too.
+    let mut parent = DagMapRaw::new(None);
     parent.insert("k", "v");
-    let mut parent_slot = Orphan::new(Some(parent));
 
-    let mut child = DagMapRaw::new(&mut parent_slot).unwrap();
+    let mut child = DagMapRaw::new(Some(&mut parent));
     // Before destroy the child inherits the parent's value.
     assert_eq!(child.get("k").unwrap().as_slice(), b"v");
 
+    // A shadow (aliasing handle) taken BEFORE the destroy call.
+    // SAFETY: used strictly after the destroy completes; accesses are
+    // sequential on one thread, satisfying SWMR.
+    let stale_alias = unsafe { child.shadow() };
+
     child.destroy();
-    // After destroy the child must not serve inherited reads.
+    // Neither the destroying handle nor the stale alias serves
+    // inherited reads afterwards — the parent unlink is persisted in
+    // the node's own parent slot.
     assert!(child.get("k").is_none());
+    assert!(stale_alias.get("k").is_none());
 
     // The parent itself is untouched.
-    assert_eq!(
-        parent_slot
-            .get_value()
-            .unwrap()
-            .get("k")
-            .unwrap()
-            .as_slice(),
-        b"v"
-    );
+    assert_eq!(parent.get("k").unwrap().as_slice(), b"v");
+}
+
+#[test]
+fn destroy_is_visible_to_meta_restored_handles() {
+    // A handle restored via from_meta AFTER the node was destroyed must
+    // observe the destroyed state (cleared data + nulled parent link).
+    let mut parent = DagMapRaw::new(None);
+    parent.insert("k", "v");
+
+    let mut child = DagMapRaw::new(Some(&mut parent));
+    let id = child.save_meta().unwrap();
+
+    child.destroy();
+
+    let restored = DagMapRaw::from_meta(id).unwrap();
+    assert!(restored.get("k").is_none());
+    assert!(restored.is_dead());
 }
 
 #[test]
 fn destroy_deep_child_chain_does_not_overflow_stack() {
     // Regression: destroy() recursed once per descendant generation and
-    // overflowed the stack on deep DAGs. Build a deep child chain rooted at
-    // `genesis` (clones share storage prefixes) and destroy it iteratively.
-    let mut genesis = DagMapRaw::new(&mut Orphan::new(None)).unwrap();
+    // overflowed the stack on deep DAGs. Build a deep child chain rooted
+    // at `genesis` and destroy it iteratively.
+    let mut genesis = DagMapRaw::new(None);
     genesis.insert("root", "value");
 
-    let mut cur_slot = Orphan::new(Some(genesis.clone()));
+    // SAFETY: the shadow is only used as an attachment cursor while
+    // building the chain; all accesses are sequential on one thread,
+    // satisfying SWMR.
+    let mut cur = unsafe { genesis.shadow() };
     for _ in 0..5000 {
-        let child = DagMapRaw::new(&mut cur_slot).unwrap();
-        cur_slot = Orphan::new(Some(child));
+        cur = DagMapRaw::new(Some(&mut cur));
     }
 
-    // `genesis` shares prefixes with the chained clone, so it sees the full
-    // descendant chain. Destroying it must not overflow the stack.
+    // `genesis` owns the full descendant chain through its children map.
+    // Destroying it must not overflow the stack.
     genesis.destroy();
     assert!(genesis.get("root").is_none());
 }

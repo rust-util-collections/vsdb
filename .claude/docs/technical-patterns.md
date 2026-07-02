@@ -140,7 +140,7 @@ load the relevant guide when those subsystems are affected.
 
 ### 5.2 from_bytes Deserialization of Untrusted Data
 **Pattern**: `unsafe fn from_bytes()` reconstructs a handle from raw bytes without validation. If the bytes are corrupted or from a different version, the handle points to garbage.
-**Where**: Collection `from_bytes()` / `from_prefix_slice()` methods.
+**Where**: Collection `from_bytes()` methods.
 **Impact**: Silently operate on wrong data or panic on access.
 **Check**: Verify callers only pass bytes that were produced by the same code version's `to_bytes()`. Verify no external/untrusted input reaches `from_bytes()`.
 

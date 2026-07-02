@@ -1,14 +1,14 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use rand::random;
 use std::hint::black_box;
-use vsdb::SlotDex;
+use vsdb::SlotDex64;
 
 const DATA_SIZE: u32 = 100_000;
 
 type V = Vec<u8>;
 
-fn slot_db_custom(mn: u64) -> SlotDex<V> {
-    let mut db = SlotDex::new(mn, false);
+fn slot_db_custom(mn: u64) -> SlotDex64<V> {
+    let mut db = SlotDex64::new(mn, false);
 
     (0..DATA_SIZE).for_each(|i| {
         db.insert(i as u64, i.to_be_bytes().to_vec()).unwrap();
@@ -17,12 +17,12 @@ fn slot_db_custom(mn: u64) -> SlotDex<V> {
     db
 }
 
-fn query(db: &SlotDex<V>, page_size: u16) {
+fn query(db: &SlotDex64<V>, page_size: u16) {
     let page_number = random::<u32>() % (DATA_SIZE / (page_size as u32));
     db.get_entries_by_page(page_size, page_number, false);
 }
 
-fn query_reverse(db: &SlotDex<V>, page_size: u16) {
+fn query_reverse(db: &SlotDex64<V>, page_size: u16) {
     let page_number = random::<u32>() % (DATA_SIZE / (page_size as u32));
     db.get_entries_by_page(page_size, page_number, true);
 }
@@ -74,7 +74,7 @@ fn slot_write(c: &mut Criterion) {
         .sample_size(10);
 
     group.bench_function("insert", |b| {
-        let mut db: SlotDex<V> = SlotDex::new(16, false);
+        let mut db: SlotDex64<V> = SlotDex64::new(16, false);
         let mut i = 0u64;
         b.iter(|| {
             db.insert(i, i.to_be_bytes().to_vec()).unwrap();
@@ -84,7 +84,7 @@ fn slot_write(c: &mut Criterion) {
     });
 
     group.bench_function("remove", |b| {
-        let mut db: SlotDex<V> = SlotDex::new(16, false);
+        let mut db: SlotDex64<V> = SlotDex64::new(16, false);
         // Pre-populate
         for i in 0..DATA_SIZE as u64 {
             db.insert(i, i.to_be_bytes().to_vec()).unwrap();

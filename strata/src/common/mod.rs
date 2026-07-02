@@ -2,29 +2,26 @@
 //! # Common Components
 //!
 //! This module provides common components and utilities used throughout the `vsdb` crate.
-//! It re-exports items from `vsdb_core::common` and includes the `ende` module for
-//! encoding and decoding traits.
+//! It re-exports items from `vsdb_core::common` (including the [`error`]
+//! module — the unified error vocabulary of the whole ecosystem) and
+//! includes the `ende` module for encoding and decoding traits.
 //!
 
 /// A module for encoding and decoding traits.
 pub mod ende;
-/// Structured error types for the public API.
-pub mod error;
-pub mod macros;
+pub(crate) mod macros;
 
 pub use vsdb_core::common::*;
 
 pub mod dirty_count;
 
+use error::Result;
 use serde::{Serialize, de::DeserializeOwned};
 use std::fs;
 
 /// Serializes `value` with `postcard` and writes it to the instance-meta
 /// directory under the given `instance_id`.
-pub fn save_instance_meta(
-    instance_id: u64,
-    value: &impl Serialize,
-) -> error::Result<()> {
+pub fn save_instance_meta(instance_id: u64, value: &impl Serialize) -> Result<()> {
     let path = vsdb_meta_path(instance_id);
     let bytes = postcard::to_allocvec(value)?;
     fs::write(&path, bytes)?;
@@ -32,11 +29,11 @@ pub fn save_instance_meta(
 }
 
 /// Reads the meta file for `instance_id` and deserializes it back.
-pub fn load_instance_meta<T: DeserializeOwned>(instance_id: u64) -> error::Result<T> {
+///
+/// Only the current (magic-tagged) meta format is accepted; metas written
+/// by pre-v13.4 code must be re-saved under a v13 release first.
+pub fn load_instance_meta<T: DeserializeOwned>(instance_id: u64) -> Result<T> {
     let path = vsdb_meta_path(instance_id);
     let bytes = fs::read(&path)?;
-    // SAFETY: `bytes` comes from this instance's own meta directory,
-    // written by `save_instance_meta` — a trusted, same-version VSDB
-    // serializer.
-    Ok(unsafe { with_legacy_mapx_meta_decode(|| postcard::from_bytes(&bytes)) }?)
+    Ok(postcard::from_bytes(&bytes)?)
 }

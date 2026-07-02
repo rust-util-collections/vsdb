@@ -25,7 +25,7 @@
 //!   type) where you want a `Result` instead.
 //!
 //! * **Decoding VSDB-written data should never fail.**  VSDB collections
-//!   (`Mapx`, `MapxOrd`, `VerMap`, …) use `pnk!` (assert-like unwrap) on
+//!   (`Mapx`, `MapxOrd`, `VerMap`, …) use assert-style `.unwrap()` on
 //!   `decode` calls for data they wrote themselves.  A decode failure in
 //!   this context indicates data corruption or a schema-incompatible code
 //!   change — neither is automatically recoverable.  The `decode` method
@@ -34,9 +34,16 @@
 //!   [`from_meta`](crate::Mapx::from_meta) reading an on-disk file) use
 //!   `?` to propagate errors normally.
 //!
+//! All fallible methods return [`Result`](crate::common::error::Result)
+//! with the ecosystem-wide [`VsdbError`](crate::common::error::VsdbError),
+//! so implementing these traits for custom types requires no third-party
+//! error dependency.
+//!
 
-use super::RawBytes;
-use ruc::*;
+use super::{
+    RawBytes,
+    error::{Result, VsdbError},
+};
 use std::{fmt, mem::size_of};
 
 use serde::{Serialize, de::DeserializeOwned};
@@ -76,7 +83,7 @@ pub trait KeyEn: Sized {
     /// This is the normal path inside VSDB collections.  A panic here
     /// means the type's `Serialize` impl has a bug.
     fn encode_key(&self) -> RawBytes {
-        pnk!(self.try_encode_key())
+        self.try_encode_key().unwrap()
     }
 }
 
@@ -85,7 +92,7 @@ pub trait KeyDe: Sized {
     /// Decodes a key from a byte slice.
     ///
     /// Returns `Err` when the bytes are invalid.  VSDB collections use
-    /// `pnk!` on this internally because data they wrote is always
+    /// assert-style unwraps on this internally because data they wrote is always
     /// trusted — see [module-level trust model](self).
     fn decode_key(bytes: &[u8]) -> Result<Self>;
 }
@@ -108,13 +115,14 @@ pub trait KeyEnDe: Sized {
     ///
     /// See [`try_encode`](Self::try_encode) for the fallible variant.
     fn encode(&self) -> RawBytes {
-        pnk!(self.try_encode())
+        self.try_encode().unwrap()
     }
 
     /// Decodes a key from a byte slice.
     ///
     /// Returns `Err` when the bytes are invalid.  VSDB collections use
-    /// `pnk!` on this internally for data they wrote themselves.
+    /// assert-style unwraps on this internally for data they wrote
+    /// themselves.
     fn decode(bytes: &[u8]) -> Result<Self>;
 }
 
@@ -129,7 +137,7 @@ pub trait ValueEn: Sized {
     /// This is the normal path inside VSDB collections.  A panic here
     /// means the type's `Serialize` impl has a bug.
     fn encode_value(&self) -> RawBytes {
-        pnk!(self.try_encode_value())
+        self.try_encode_value().unwrap()
     }
 }
 
@@ -138,7 +146,7 @@ pub trait ValueDe: Sized {
     /// Decodes a value from a byte slice.
     ///
     /// Returns `Err` when the bytes are invalid.  VSDB collections use
-    /// `pnk!` on this internally because data they wrote is always
+    /// assert-style unwraps on this internally because data they wrote is always
     /// trusted.
     fn decode_value(bytes: &[u8]) -> Result<Self>;
 }
@@ -154,43 +162,44 @@ pub trait ValueEnDe: Sized {
     ///
     /// See [`try_encode`](Self::try_encode) for the fallible variant.
     fn encode(&self) -> RawBytes {
-        pnk!(self.try_encode())
+        self.try_encode().unwrap()
     }
 
     /// Decodes a value from a byte slice.
     ///
     /// Returns `Err` when the bytes are invalid.  VSDB collections use
-    /// `pnk!` on this internally for data they wrote themselves.
+    /// assert-style unwraps on this internally for data they wrote
+    /// themselves.
     fn decode(bytes: &[u8]) -> Result<Self>;
 }
 
 impl<T: Serialize> KeyEn for T {
     fn try_encode_key(&self) -> Result<RawBytes> {
-        postcard::to_allocvec(self).c(d!())
+        Ok(postcard::to_allocvec(self)?)
     }
 }
 
 impl<T: DeserializeOwned> KeyDe for T {
     fn decode_key(bytes: &[u8]) -> Result<Self> {
-        postcard::from_bytes(bytes).c(d!())
+        Ok(postcard::from_bytes(bytes)?)
     }
 }
 
 impl<T: Serialize> ValueEn for T {
     fn try_encode_value(&self) -> Result<RawBytes> {
-        postcard::to_allocvec(self).c(d!())
+        Ok(postcard::to_allocvec(self)?)
     }
 }
 
 impl<T: DeserializeOwned> ValueDe for T {
     fn decode_value(bytes: &[u8]) -> Result<Self> {
-        postcard::from_bytes(bytes).c(d!())
+        Ok(postcard::from_bytes(bytes)?)
     }
 }
 
 impl<T: KeyEn + KeyDe> KeyEnDe for T {
     fn try_encode(&self) -> Result<RawBytes> {
-        <Self as KeyEn>::try_encode_key(self).c(d!())
+        <Self as KeyEn>::try_encode_key(self)
     }
 
     fn encode(&self) -> RawBytes {
@@ -198,13 +207,13 @@ impl<T: KeyEn + KeyDe> KeyEnDe for T {
     }
 
     fn decode(bytes: &[u8]) -> Result<Self> {
-        <Self as KeyDe>::decode_key(bytes).c(d!())
+        <Self as KeyDe>::decode_key(bytes)
     }
 }
 
 impl<T: ValueEn + ValueDe> ValueEnDe for T {
     fn try_encode(&self) -> Result<RawBytes> {
-        <Self as ValueEn>::try_encode_value(self).c(d!())
+        <Self as ValueEn>::try_encode_value(self)
     }
 
     fn encode(&self) -> RawBytes {
@@ -212,7 +221,7 @@ impl<T: ValueEn + ValueDe> ValueEnDe for T {
     }
 
     fn decode(bytes: &[u8]) -> Result<Self> {
-        <Self as ValueDe>::decode_value(bytes).c(d!())
+        <Self as ValueDe>::decode_value(bytes)
     }
 }
 
@@ -306,12 +315,16 @@ impl KeyEnDeOrdered for String {
 
     #[inline(always)]
     fn from_slice(b: &[u8]) -> Result<Self> {
-        String::from_utf8(b.to_owned()).c(d!())
+        String::from_utf8(b.to_owned()).map_err(|e| VsdbError::Decode {
+            detail: e.to_string(),
+        })
     }
 
     #[inline(always)]
     fn from_bytes(b: RawBytes) -> Result<Self> {
-        String::from_utf8(b).c(d!())
+        String::from_utf8(b).map_err(|e| VsdbError::Decode {
+            detail: e.to_string(),
+        })
     }
 }
 
@@ -325,7 +338,9 @@ macro_rules! impl_type {
             #[inline(always)]
             fn from_slice(b: &[u8]) -> Result<Self> {
                 <[u8; size_of::<$int>()]>::try_from(b)
-                    .c(d!())
+                    .map_err(|e| VsdbError::Decode {
+                        detail: e.to_string(),
+                    })
                     .map(|bytes| <$int>::from_be_bytes(bytes).wrapping_add(<$int>::MIN))
             }
         }
@@ -346,13 +361,19 @@ macro_rules! impl_type {
             #[inline(always)]
             fn from_slice(b: &[u8]) -> Result<Self> {
                 if 0 != b.len() % size_of::<$int>() {
-                    return Err(eg!("invalid bytes"));
+                    return Err(VsdbError::Decode {
+                        detail: "invalid byte length".to_owned(),
+                    });
                 }
                 b.chunks(size_of::<$int>())
                     .map(|i| {
-                        <[u8; size_of::<$int>()]>::try_from(i).c(d!()).map(|bytes| {
-                            <$int>::from_be_bytes(bytes).wrapping_add(<$int>::MIN)
-                        })
+                        <[u8; size_of::<$int>()]>::try_from(i)
+                            .map_err(|e| VsdbError::Decode {
+                                detail: e.to_string(),
+                            })
+                            .map(|bytes| {
+                                <$int>::from_be_bytes(bytes).wrapping_add(<$int>::MIN)
+                            })
                     })
                     .collect()
             }
@@ -394,10 +415,14 @@ macro_rules! impl_type {
             #[inline(always)]
             fn from_slice(b: &[u8]) -> Result<Self> {
                 if 0 != b.len() % size_of::<$int>() {
-                    return Err(eg!("invalid bytes"));
+                    return Err(VsdbError::Decode {
+                        detail: "invalid byte length".to_owned(),
+                    });
                 }
                 if $siz != b.len() / size_of::<$int>() {
-                    return Err(eg!("invalid bytes"));
+                    return Err(VsdbError::Decode {
+                        detail: "invalid element count".to_owned(),
+                    });
                 }
                 let mut res = [0; $siz];
                 b.chunks(size_of::<$int>())
