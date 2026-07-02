@@ -1,0 +1,276 @@
+//! Slot-level data container with inline/small-to-large promotion.
+//!
+//! `DataCtner` starts as an in-memory `BTreeSet` and automatically promotes
+//! to a disk-backed `MapxOrd` when the entry count exceeds
+//! [`INLINE_CAPACITY_THRESHOLD`].
+
+use std::{
+    collections::{BTreeSet, btree_set::Iter as SmallIter},
+    fmt,
+};
+
+use ruc::eg;
+
+use crate::{
+    KeyEnDeOrdered, MapxOrd, ValueEnDe, basic::mapx_ord::MapxOrdIter as LargeIter,
+};
+
+// =========================================================================
+// Constants
+// =========================================================================
+
+/// Number of entries above which a `DataCtner` transitions from inline
+/// `BTreeSet` to disk-backed `MapxOrd`.
+pub(crate) const INLINE_CAPACITY_THRESHOLD: usize = 8;
+
+// Tag bytes for binary encoding
+const TAG_SMALL: u8 = 0;
+const TAG_LARGE: u8 = 1;
+
+// =========================================================================
+// DataCtner
+// =========================================================================
+
+pub(crate) enum DataCtner<K>
+where
+    K: Clone + Ord + KeyEnDeOrdered,
+{
+    Small(BTreeSet<K>),
+    Large { map: MapxOrd<K, ()>, len: usize },
+}
+
+impl<K> fmt::Debug for DataCtner<K>
+where
+    K: Clone + Ord + KeyEnDeOrdered,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Small(s) => f.debug_tuple("Small").field(&s.len()).finish(),
+            Self::Large { len, .. } => {
+                f.debug_struct("Large").field("len", len).finish()
+            }
+        }
+    }
+}
+
+impl<K> ValueEnDe for DataCtner<K>
+where
+    K: Clone + Ord + KeyEnDeOrdered,
+{
+    fn try_encode(&self) -> ruc::Result<Vec<u8>> {
+        match self {
+            Self::Small(set) => {
+                let mut buf = vec![TAG_SMALL];
+                let count = set.len() as u32;
+                buf.extend_from_slice(&count.to_le_bytes());
+                for k in set {
+                    let kb = k.to_bytes();
+                    buf.extend_from_slice(&(kb.len() as u32).to_le_bytes());
+                    buf.extend_from_slice(&kb);
+                }
+                Ok(buf)
+            }
+            Self::Large { map, len } => {
+                // Large variant: only persist the MapxOrd handle + len;
+                // the actual entries live on disk inside MapxOrd already.
+                let mut buf = vec![TAG_LARGE];
+                let handle_bytes = map.encode();
+                buf.extend_from_slice(&(handle_bytes.len() as u32).to_le_bytes());
+                buf.extend_from_slice(&handle_bytes);
+                buf.extend_from_slice(&(*len as u64).to_le_bytes());
+                Ok(buf)
+            }
+        }
+    }
+
+    fn decode(bytes: &[u8]) -> ruc::Result<Self> {
+        if bytes.is_empty() {
+            return Err(eg!("empty DataCtner bytes"));
+        }
+        match bytes[0] {
+            TAG_SMALL => {
+                let mut off = 1;
+                if bytes.len() < off + 4 {
+                    return Err(eg!("truncated count"));
+                }
+                let count =
+                    u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()) as usize;
+                off += 4;
+                let mut set = BTreeSet::new();
+                for _ in 0..count {
+                    if bytes.len() < off + 4 {
+                        return Err(eg!("truncated key len"));
+                    }
+                    let klen =
+                        u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap())
+                            as usize;
+                    off += 4;
+                    if bytes.len() < off + klen {
+                        return Err(eg!("truncated key data"));
+                    }
+                    let k =
+                        K::from_slice(&bytes[off..off + klen]).map_err(|e| eg!(e))?;
+                    off += klen;
+                    set.insert(k);
+                }
+                Ok(Self::Small(set))
+            }
+            TAG_LARGE => {
+                let mut off = 1;
+                if bytes.len() < off + 4 {
+                    return Err(eg!("truncated handle len"));
+                }
+                let hlen =
+                    u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()) as usize;
+                off += 4;
+                if bytes.len() < off + hlen {
+                    return Err(eg!("truncated handle data"));
+                }
+                let map =
+                    MapxOrd::decode(&bytes[off..off + hlen]).map_err(|e| eg!(e))?;
+                off += hlen;
+                if bytes.len() < off + 8 {
+                    return Err(eg!("truncated len"));
+                }
+                let len =
+                    u64::from_le_bytes(bytes[off..off + 8].try_into().unwrap()) as usize;
+                Ok(Self::Large { map, len })
+            }
+            _ => Err(eg!("unknown DataCtner tag")),
+        }
+    }
+}
+
+impl<K> DataCtner<K>
+where
+    K: Clone + Ord + KeyEnDeOrdered,
+{
+    pub(crate) fn new() -> Self {
+        Self::Small(BTreeSet::new())
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::Small(i) => i.len(),
+            Self::Large { len, .. } => *len,
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        0 == self.len()
+    }
+
+    pub(crate) fn clear_storage(&mut self) {
+        if let Self::Large { map, .. } = self {
+            map.clear();
+        }
+    }
+
+    fn try_upgrade(&mut self) {
+        let inner_set = match self {
+            Self::Small(set) if set.len() >= INLINE_CAPACITY_THRESHOLD => set,
+            _ => return,
+        };
+
+        let set_len = inner_set.len();
+        let new_map = inner_set.iter().fold(MapxOrd::new(), |mut acc, k| {
+            acc.insert(k, &());
+            acc
+        });
+
+        *self = Self::Large {
+            map: new_map,
+            len: set_len,
+        };
+    }
+
+    pub(crate) fn insert(&mut self, k: K) -> bool {
+        match self {
+            Self::Small(set) => {
+                // Only upgrade if we're about to exceed the inline threshold with a new key.
+                if set.len() >= INLINE_CAPACITY_THRESHOLD && !set.contains(&k) {
+                    // upgrade in-place (reuse existing helper)
+                    self.try_upgrade();
+                    // self is now Large, fall through by re-calling insert on the new state
+                    return self.insert(k);
+                }
+                set.insert(k)
+            }
+            Self::Large { map, len } => {
+                let existed = map.get(&k).is_some();
+                map.insert(&k, &());
+                if !existed {
+                    *len += 1;
+                }
+                !existed
+            }
+        }
+    }
+
+    pub(crate) fn remove(&mut self, target: &K) -> bool {
+        match self {
+            Self::Small(i) => i.remove(target),
+            Self::Large { map, len } => {
+                let existed = map.get(target).is_some();
+                if existed {
+                    map.remove(target);
+                    *len -= 1;
+                }
+                existed
+            }
+        }
+    }
+
+    pub(crate) fn iter(&self) -> DataCtnerIter<'_, K> {
+        match self {
+            Self::Small(i) => DataCtnerIter::Small(i.iter()),
+            Self::Large { map, .. } => DataCtnerIter::Large(Box::new(map.iter())),
+        }
+    }
+}
+
+impl<K> Default for DataCtner<K>
+where
+    K: Clone + Ord + KeyEnDeOrdered,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// =========================================================================
+// DataCtnerIter
+// =========================================================================
+
+pub(crate) enum DataCtnerIter<'a, K>
+where
+    K: Clone + Ord + KeyEnDeOrdered,
+{
+    Small(SmallIter<'a, K>),
+    Large(Box<LargeIter<'a, K, ()>>),
+}
+
+impl<K> Iterator for DataCtnerIter<'_, K>
+where
+    K: Clone + Ord + KeyEnDeOrdered,
+{
+    type Item = K;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Small(i) => i.next().cloned(),
+            Self::Large(i) => i.next().map(|j| j.0),
+        }
+    }
+}
+
+impl<K> DoubleEndedIterator for DataCtnerIter<'_, K>
+where
+    K: Clone + Ord + KeyEnDeOrdered,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Small(i) => i.next_back().cloned(),
+            Self::Large(i) => i.next_back().map(|j| j.0),
+        }
+    }
+}

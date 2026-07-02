@@ -47,6 +47,9 @@ pub mod handle;
 pub mod map;
 pub mod merge;
 
+mod read;
+mod repair;
+
 #[cfg(test)]
 mod test;
 

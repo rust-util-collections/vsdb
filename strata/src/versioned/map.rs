@@ -12,13 +12,11 @@ use crate::basic::persistent_btree::{EMPTY_ROOT, NodeId, PersistentBTree};
 use crate::common::ende::{KeyEnDeOrdered, ValueEnDe};
 use crate::common::error::{Result, VsdbError};
 use crate::{Mapx, MapxOrd, Orphan};
-use ruc::{RucResult, pnk};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BinaryHeap, HashMap, HashSet},
     fmt,
     marker::PhantomData,
-    ops::Bound,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -27,13 +25,13 @@ use std::{
 // =========================================================================
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct BranchState {
-    name: String,
+pub(crate) struct BranchState {
+    pub(crate) name: String,
     /// The latest commit on this branch.
-    head: CommitId,
+    pub(crate) head: CommitId,
     /// B+ tree root of uncommitted (working) state.
     /// Starts as the root of `head`'s commit; mutations update this.
-    dirty_root: NodeId,
+    pub(crate) dirty_root: NodeId,
 }
 
 // =========================================================================
@@ -114,27 +112,27 @@ struct BranchState {
 #[derive(Clone, Debug)]
 pub struct VerMap<K, V> {
     /// The underlying persistent B+ tree (shared node pool).
-    tree: PersistentBTree,
+    pub(crate) tree: PersistentBTree,
 
     /// CommitId → Commit
-    commits: MapxOrd<u64, Commit>,
+    pub(crate) commits: MapxOrd<u64, Commit>,
 
     /// BranchId → BranchState
-    branches: MapxOrd<u64, BranchState>,
+    pub(crate) branches: MapxOrd<u64, BranchState>,
 
     /// branch name → BranchId
-    branch_names: Mapx<String, u64>,
+    pub(crate) branch_names: Mapx<String, u64>,
 
     /// ID allocators
-    next_commit: Orphan<u64>,
-    next_branch: Orphan<u64>,
+    pub(crate) next_commit: Orphan<u64>,
+    pub(crate) next_branch: Orphan<u64>,
 
     /// The branch currently designated as "main" (protected from deletion).
-    main_branch: Orphan<u64>,
+    pub(crate) main_branch: Orphan<u64>,
 
     /// Set `true` before a ref-count cascade, `false` after.
     /// If `true` on startup → run `rebuild_ref_counts()` to repair.
-    gc_dirty: Orphan<bool>,
+    pub(crate) gc_dirty: Orphan<bool>,
 
     _phantom: PhantomData<(K, V)>,
 }
@@ -219,88 +217,6 @@ impl<'de, K, V> Deserialize<'de> for VerMap<K, V> {
 
 // Separate impl block without K/V trait bounds so that the
 // Deserialize visitor (which has no trait bounds on K/V) can call it.
-impl<K, V> VerMap<K, V> {
-    /// Rebuilds the B+ tree's in-memory ref-count map from the
-    /// current set of live roots (all commit roots + dirty roots).
-    ///
-    /// Called after every deserialization path (serde, from_meta)
-    /// because PersistentBTree's Deserialize sets `ref_counts_ready = false`.
-    fn rebuild_tree_ref_counts(&mut self) {
-        let mut live_roots: Vec<NodeId> =
-            self.commits.iter().map(|(_, c)| c.root).collect();
-        for (_, s) in self.branches.iter() {
-            if s.dirty_root != EMPTY_ROOT {
-                live_roots.push(s.dirty_root);
-            }
-        }
-        self.tree.rebuild_ref_counts(&live_roots);
-    }
-
-    fn repair_commit_ref_counts_if_needed(&mut self) {
-        if self.gc_dirty.get_value()
-            || self.commits.iter().any(|(_, c)| c.ref_count == 0)
-        {
-            self.rebuild_ref_counts();
-        }
-    }
-
-    /// Rebuilds all commit ref_counts from scratch by walking all
-    /// live branches.  Hard-deletes any unreachable commits.
-    ///
-    /// Called on crash recovery (`gc_dirty == true`) or when migrating
-    /// from pre-ref-count data (`ref_count == 0` on all commits).
-    fn rebuild_ref_counts(&mut self) {
-        // 1. Walk all branches to find live commits via BFS.
-        let mut reachable = HashSet::new();
-        let mut ref_counts: HashMap<CommitId, u32> = HashMap::new();
-        let mut queue: Vec<CommitId> = Vec::new();
-
-        // Branch HEADs contribute +1 each.
-        for (_, s) in self.branches.iter() {
-            if s.head != NO_COMMIT {
-                *ref_counts.entry(s.head).or_insert(0) += 1;
-                queue.push(s.head);
-            }
-        }
-
-        // BFS — parent links contribute +1 each.
-        while let Some(id) = queue.pop() {
-            if !reachable.insert(id) {
-                continue;
-            }
-            if let Some(c) = self.commits.get(&id) {
-                for &parent in &c.parents {
-                    if parent != NO_COMMIT {
-                        *ref_counts.entry(parent).or_insert(0) += 1;
-                        queue.push(parent);
-                    }
-                }
-            }
-        }
-
-        // 2. Update ref_counts on all reachable commits.
-        for &id in &reachable {
-            if let Some(mut c) = self.commits.get(&id) {
-                let correct = *ref_counts.get(&id).unwrap_or(&0);
-                if c.ref_count != correct {
-                    c.ref_count = correct;
-                    self.commits.insert(&id, &c);
-                }
-            }
-        }
-
-        // 3. Hard-delete any unreachable commits.
-        let all_ids: Vec<u64> = self.commits.iter().map(|(id, _)| id).collect();
-        for id in all_ids {
-            if !reachable.contains(&id) {
-                self.commits.remove(&id);
-            }
-        }
-
-        // 4. Clear the dirty flag.
-        *self.gc_dirty.get_mut() = false;
-    }
-}
 
 impl<K, V> Default for VerMap<K, V>
 where
@@ -385,13 +301,13 @@ where
     // Internal helpers
     // =================================================================
 
-    fn get_branch(&self, id: BranchId) -> Result<BranchState> {
+    pub(crate) fn get_branch(&self, id: BranchId) -> Result<BranchState> {
         self.branches
             .get(&id)
             .ok_or(VsdbError::BranchNotFound { branch_id: id })
     }
 
-    fn get_commit_inner(&self, id: CommitId) -> Result<Commit> {
+    pub(crate) fn get_commit_inner(&self, id: CommitId) -> Result<Commit> {
         self.commits
             .get(&id)
             .ok_or(VsdbError::CommitNotFound { commit_id: id })
@@ -523,174 +439,6 @@ where
         }
     }
 
-    // =================================================================
-    // Read
-    // =================================================================
-
-    /// Reads a value from the working state of `branch`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the stored bytes cannot be decoded back into `V`.
-    /// This can only happen due to data corruption or a type mismatch
-    /// between the writing and reading code — see the
-    /// [encode/decode trust model](crate::common::ende).
-    pub fn get(&self, branch: BranchId, key: &K) -> Result<Option<V>> {
-        let state = self.get_branch(branch)?;
-        let raw = self.tree.get(state.dirty_root, &key.to_bytes());
-        match raw {
-            Some(v) => Ok(Some(pnk!(V::decode(&v)))),
-            None => Ok(None),
-        }
-    }
-
-    /// Reads a value at a specific historical commit.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the stored bytes cannot be decoded — see
-    /// [`get`](Self::get) for details.
-    pub fn get_at_commit(&self, commit_id: CommitId, key: &K) -> Result<Option<V>> {
-        let commit = self.get_commit_inner(commit_id)?;
-        let raw = self.tree.get(commit.root, &key.to_bytes());
-        match raw {
-            Some(v) => Ok(Some(pnk!(V::decode(&v)))),
-            None => Ok(None),
-        }
-    }
-
-    /// Checks if `key` exists in the working state of `branch`.
-    pub fn contains_key(&self, branch: BranchId, key: &K) -> Result<bool> {
-        let state = self.get_branch(branch)?;
-        Ok(self.tree.contains_key(state.dirty_root, &key.to_bytes()))
-    }
-
-    /// Iterates all entries on `branch` in ascending key order.
-    ///
-    /// # Panics
-    ///
-    /// The returned iterator panics if any stored entry cannot be
-    /// decoded — see [`get`](Self::get) for details.
-    pub fn iter(&self, branch: BranchId) -> Result<impl Iterator<Item = (K, V)> + '_> {
-        let state = self.get_branch(branch)?;
-        Ok(self
-            .tree
-            .iter(state.dirty_root)
-            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(V::decode(&v)))))
-    }
-
-    /// Iterates entries in `[lo, hi)` on `branch` in ascending key order.
-    ///
-    /// # Panics
-    ///
-    /// The returned iterator panics on decode failure — see
-    /// [`get`](Self::get).
-    pub fn range(
-        &self,
-        branch: BranchId,
-        lo: Bound<&K>,
-        hi: Bound<&K>,
-    ) -> Result<impl Iterator<Item = (K, V)> + '_> {
-        let state = self.get_branch(branch)?;
-        let lo_raw = match lo {
-            Bound::Included(k) => Bound::Included(k.to_bytes()),
-            Bound::Excluded(k) => Bound::Excluded(k.to_bytes()),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-        let hi_raw = match hi {
-            Bound::Included(k) => Bound::Included(k.to_bytes()),
-            Bound::Excluded(k) => Bound::Excluded(k.to_bytes()),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-        Ok(self
-            .tree
-            .range(
-                state.dirty_root,
-                lo_raw.as_ref().map(|v| v.as_slice()),
-                hi_raw.as_ref().map(|v| v.as_slice()),
-            )
-            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(V::decode(&v)))))
-    }
-
-    /// Iterates all entries at a specific historical commit.
-    ///
-    /// # Panics
-    ///
-    /// The returned iterator panics on decode failure — see
-    /// [`get`](Self::get).
-    pub fn iter_at_commit(
-        &self,
-        commit_id: CommitId,
-    ) -> Result<impl Iterator<Item = (K, V)> + '_> {
-        let commit = self.get_commit_inner(commit_id)?;
-        Ok(self
-            .tree
-            .iter(commit.root)
-            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(V::decode(&v)))))
-    }
-
-    /// Iterates entries in `[lo, hi)` at a specific historical commit
-    /// in ascending key order.
-    ///
-    /// # Panics
-    ///
-    /// The returned iterator panics on decode failure — see
-    /// [`get`](Self::get).
-    pub fn range_at_commit(
-        &self,
-        commit_id: CommitId,
-        lo: Bound<&K>,
-        hi: Bound<&K>,
-    ) -> Result<impl Iterator<Item = (K, V)> + '_> {
-        let commit = self.get_commit_inner(commit_id)?;
-        let lo_raw = match lo {
-            Bound::Included(k) => Bound::Included(k.to_bytes()),
-            Bound::Excluded(k) => Bound::Excluded(k.to_bytes()),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-        let hi_raw = match hi {
-            Bound::Included(k) => Bound::Included(k.to_bytes()),
-            Bound::Excluded(k) => Bound::Excluded(k.to_bytes()),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-        Ok(self
-            .tree
-            .range(
-                commit.root,
-                lo_raw.as_ref().map(|v| v.as_slice()),
-                hi_raw.as_ref().map(|v| v.as_slice()),
-            )
-            .map(|(k, v)| (pnk!(K::from_slice(&k)), pnk!(V::decode(&v)))))
-    }
-
-    /// Iterates all raw (untyped) key-value pairs on a branch.
-    ///
-    /// Returns `(Vec<u8>, Vec<u8>)` without decoding, useful for
-    /// feeding into external consumers (e.g. MPT hash computation).
-    pub fn raw_iter(
-        &self,
-        branch: BranchId,
-    ) -> Result<impl Iterator<Item = (Vec<u8>, Vec<u8>)> + '_> {
-        let state = self.get_branch(branch)?;
-        Ok(self.tree.iter(state.dirty_root))
-    }
-
-    /// Iterates all raw (untyped) key-value pairs at a historical commit.
-    pub fn raw_iter_at_commit(
-        &self,
-        commit_id: CommitId,
-    ) -> Result<impl Iterator<Item = (Vec<u8>, Vec<u8>)> + '_> {
-        let commit = self.get_commit_inner(commit_id)?;
-        Ok(self.tree.iter(commit.root))
-    }
-
-    /// Checks if `key` exists at a specific historical commit.
-    pub fn contains_key_at_commit(&self, commit_id: CommitId, key: &K) -> Result<bool> {
-        let commit = self.get_commit_inner(commit_id)?;
-        Ok(self.tree.contains_key(commit.root, &key.to_bytes()))
-    }
-
-    // =================================================================
     // Write (working state)
     // =================================================================
 
@@ -916,14 +664,12 @@ where
             });
         }
 
-        // Both branches pointing to the same commit means there is
-        // nothing to merge, and creating a merge commit with duplicate
-        // parents would permanently overcount the commit's ref_count.
+        // Both branches point to the same commit — nothing to merge.
+        // Creating a merge commit with duplicate parents would permanently
+        // overcount the commit's ref_count (GC leak).  Return the existing
+        // commit as a successful no-op instead.
         if src.head == tgt.head {
-            return Err(VsdbError::Other {
-                detail: "branches already point to the same commit — nothing to merge"
-                    .into(),
-            });
+            return Ok(tgt.head);
         }
 
         // Mark dirty before any structural mutation so that crash
