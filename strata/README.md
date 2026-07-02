@@ -39,17 +39,17 @@ For the versioned storage architecture with diagrams, see [Versioned Module — 
 ```rust
 use vsdb::Mapx;
 
-let mut map = Mapx::new();
+let mut map: Mapx<String, String> = Mapx::new();
 
 // Insert some key-value pairs
-map.insert(&"key1", &"value1");
-map.insert(&"key2", &"value2");
+map.insert(&"key1".to_string(), &"value1".to_string());
+map.insert(&"key2".to_string(), &"value2".to_string());
 
 // Get a value
-assert_eq!(map.get(&"key1"), Some("value1".to_string()));
+assert_eq!(map.get(&"key1".to_string()), Some("value1".to_string()));
 
 // Check if a key exists
-assert!(map.contains_key(&"key2"));
+assert!(map.contains_key(&"key2".to_string()));
 
 // Iterate over the key-value pairs
 for (key, value) in map.iter() {
@@ -57,7 +57,7 @@ for (key, value) in map.iter() {
 }
 
 // Remove a key-value pair
-map.remove(&"key1");
+map.remove(&"key1".to_string());
 ```
 
 ### MapxOrd
@@ -67,12 +67,12 @@ map.remove(&"key1");
 ```rust
 use vsdb::MapxOrd;
 
-let mut map = MapxOrd::new();
+let mut map: MapxOrd<i32, String> = MapxOrd::new();
 
 // Insert some key-value pairs
-map.insert(&3, &"three");
-map.insert(&1, &"one");
-map.insert(&2, &"two");
+map.insert(&3, &"three".to_string());
+map.insert(&1, &"one".to_string());
+map.insert(&2, &"two".to_string());
 
 // Get a value
 assert_eq!(map.get(&1), Some("one".to_string()));
