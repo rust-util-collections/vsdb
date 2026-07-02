@@ -483,9 +483,11 @@ impl<'de> Deserialize<'de> for Mapx {
                     Self::decode_prefix_meta
                 };
                 let prefix = decode(&meta).map_err(serde::de::Error::custom)?;
-                // SAFETY: `prefix` was just validated by the decode path
-                // (magic + length checks) of the same code version, so it is
-                // a well-formed prefix slice produced by `encode_prefix_meta`.
+                // SAFETY: `prefix` was just validated by the decode path.
+                // The standard path checks magic + length; the legacy path
+                // (enabled via `with_legacy_mapx_meta_decode`) checks length
+                // only.  In both cases the result is a well-formed 8-byte
+                // prefix slice from a trusted source.
                 Ok(unsafe { Self::from_prefix_slice(prefix) })
             })
     }

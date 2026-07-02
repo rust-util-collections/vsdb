@@ -470,6 +470,10 @@ impl DagMapRaw {
             node.data.clear();
             stack.extend(node.children.iter().map(|(_, c)| c));
             node.children.clear();
+            // Break the upward traversal link so a handle to any
+            // descendant cannot walk through the cleared node to
+            // ancestors above the destroyed subtree.
+            *node.parent.get_mut() = None;
         }
     }
 

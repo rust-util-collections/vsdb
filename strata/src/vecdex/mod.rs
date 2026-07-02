@@ -238,6 +238,12 @@ where
             let mut actual = 0u64;
             let mut max_id: Option<u64> = None;
             for (nid, _) in self.node_to_key.iter() {
+                // A crash mid-insert can leave a node_to_key row whose
+                // vector was never written; skip such orphans so the
+                // count reflects only searchable vectors.
+                if self.vectors.get(&nid).is_none() {
+                    continue;
+                }
                 actual += 1;
                 max_id = Some(max_id.map_or(nid, |m| m.max(nid)));
             }
@@ -295,6 +301,10 @@ where
         assert!(
             config.m_max0 >= config.m,
             "VecDex: m_max0 must be >= m (else base-layer nodes have no edges and become unreachable)"
+        );
+        assert!(
+            config.ef_construction > 0,
+            "VecDex: ef_construction must be > 0 (else search_layer returns no candidates)"
         );
         let meta = HnswMeta {
             entry_point: None,

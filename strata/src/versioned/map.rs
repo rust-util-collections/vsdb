@@ -827,6 +827,11 @@ where
                         .into(),
                 });
             }
+        } else if self.has_uncommitted(branch)? {
+            // Rolling back to the current HEAD discards the dirty_root,
+            // silently losing uncommitted changes.  Reject and tell the
+            // caller to use `discard()` instead.
+            return Err(VsdbError::UncommittedChanges { branch_id: branch });
         }
 
         // Mark dirty before any structural mutation so that crash
@@ -908,6 +913,16 @@ where
         if src.head == NO_COMMIT {
             return Err(VsdbError::Other {
                 detail: format!("source branch {source} has no commits"),
+            });
+        }
+
+        // Both branches pointing to the same commit means there is
+        // nothing to merge, and creating a merge commit with duplicate
+        // parents would permanently overcount the commit's ref_count.
+        if src.head == tgt.head {
+            return Err(VsdbError::Other {
+                detail: "branches already point to the same commit — nothing to merge"
+                    .into(),
             });
         }
 

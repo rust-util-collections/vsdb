@@ -370,19 +370,21 @@ fn decode_node(data: &[u8]) -> Result<DecodedNode> {
 
 fn decode_varint(data: &[u8], cursor: &mut usize) -> Result<usize> {
     let mut result: usize = 0;
-    let mut shift = 0;
+    let mut shift: u32 = 0;
     loop {
         if *cursor >= data.len() {
             return Err(TrieError::InvalidState("varint truncated".into()));
         }
         let byte = data[*cursor];
         *cursor += 1;
-        result |= ((byte & 0x7F) as usize) << shift;
+        result |= ((byte & 0x7F) as usize)
+            .checked_shl(shift)
+            .ok_or_else(|| TrieError::InvalidState("varint overflow".into()))?;
         if byte & 0x80 == 0 {
             return Ok(result);
         }
         shift += 7;
-        if shift >= 64 {
+        if shift >= usize::BITS {
             return Err(TrieError::InvalidState("varint overflow".into()));
         }
     }

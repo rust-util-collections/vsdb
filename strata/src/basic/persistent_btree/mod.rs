@@ -27,11 +27,11 @@ mod test;
 
 use crate::common::error::Result;
 use serde::{Deserialize, Serialize};
-use std::result::Result as StdResult;
 use std::{
     collections::{HashMap, HashSet},
     fmt,
     ops::Bound,
+    result::Result as StdResult,
 };
 use vsdb_core::basic::mapx_raw::MapxRaw;
 
