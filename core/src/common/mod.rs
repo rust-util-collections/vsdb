@@ -63,6 +63,11 @@ static VSDB_BASE_DIR: LazyLock<Mutex<PathBuf>> =
     LazyLock::new(|| Mutex::new(gen_data_dir()));
 
 static VSDB_CUSTOM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
+    // Materializing a derived directory pins it to the current base
+    // dir forever; freeze the base dir so a later `vsdb_set_base_dir`
+    // fails loudly instead of silently splitting the directory tree
+    // across two bases.
+    vsdb_freeze_base_dir();
     let mut d = VSDB_BASE_DIR.lock().clone();
     d.push("__CUSTOM__");
     pnk!(fs::create_dir_all(&d));
@@ -70,6 +75,8 @@ static VSDB_CUSTOM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
 });
 
 static VSDB_SYSTEM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
+    // See VSDB_CUSTOM_DIR: derived paths freeze the base dir.
+    vsdb_freeze_base_dir();
     let mut d = VSDB_BASE_DIR.lock().clone();
     d.push("__SYSTEM__");
     pnk!(fs::create_dir_all(&d));
@@ -97,8 +104,20 @@ impl Drop for LegacyMapxMetaDecodeGuard {
     }
 }
 
+/// Runs `f` with legacy (length-only) `Mapx` meta decoding enabled on
+/// the current thread.
+///
+/// # Safety
+///
+/// Inside `f`, deserializing a `Mapx` accepts **any** 8-byte payload as
+/// a raw storage prefix, skipping the magic-tag validation of the
+/// standard meta format.  A forged or corrupted payload therefore
+/// yields a live handle aliasing an arbitrary existing structure's
+/// data.  The caller must guarantee that every byte sequence
+/// deserialized inside `f` was produced by a trusted, same-version
+/// VSDB serializer (e.g. this instance's own meta files).
 #[doc(hidden)]
-pub fn with_legacy_mapx_meta_decode<T>(f: impl FnOnce() -> T) -> T {
+pub unsafe fn with_legacy_mapx_meta_decode<T>(f: impl FnOnce() -> T) -> T {
     LEGACY_MAPX_META_DECODE_DEPTH.with(|depth| {
         depth.set(depth.get() + 1);
     });

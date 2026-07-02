@@ -1,5 +1,6 @@
 use super::*;
 use distance::{Cosine, InnerProduct, L2};
+use std::collections::{HashSet, VecDeque};
 
 fn setup() {
     let dir = format!("/tmp/vsdb_vecdex_test/{}", rand::random::<u128>());
@@ -239,13 +240,11 @@ fn recall_random_vectors() {
             .map(|(id, v)| (L2::distance(&query, v), *id))
             .collect();
         dists.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let gt: std::collections::HashSet<u64> =
-            dists.iter().take(k).map(|&(_, id)| id).collect();
+        let gt: HashSet<u64> = dists.iter().take(k).map(|&(_, id)| id).collect();
 
         // HNSW result.
         let results = idx.search(&query, k).unwrap();
-        let found: std::collections::HashSet<u64> =
-            results.iter().map(|(key, _)| *key).collect();
+        let found: HashSet<u64> = results.iter().map(|(key, _)| *key).collect();
 
         let hits = gt.intersection(&found).count();
         total_recall += hits as f64 / k as f64;
@@ -618,8 +617,8 @@ fn graph_connectivity_after_deletions() {
 
     // BFS from entry point at layer 0.
     let ep = idx.meta.get_value().entry_point.unwrap();
-    let mut visited = std::collections::HashSet::new();
-    let mut queue = std::collections::VecDeque::new();
+    let mut visited = HashSet::new();
+    let mut queue = VecDeque::new();
     queue.push_back(ep);
     visited.insert(ep);
     while let Some(node) = queue.pop_front() {
@@ -678,12 +677,10 @@ fn compact_improves_or_maintains_recall() {
                 .map(|(id, v)| (L2::distance(&query, v), *id))
                 .collect();
             dists.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let gt: std::collections::HashSet<u32> =
-                dists.iter().take(k).map(|&(_, id)| id).collect();
+            let gt: HashSet<u32> = dists.iter().take(k).map(|&(_, id)| id).collect();
 
             let results = index.search(&query, k).unwrap();
-            let found: std::collections::HashSet<u32> =
-                results.iter().map(|(key, _)| *key).collect();
+            let found: HashSet<u32> = results.iter().map(|(key, _)| *key).collect();
             total += gt.intersection(&found).count() as f64 / k as f64;
         }
         total / queries as f64
@@ -732,12 +729,10 @@ fn recall_large_scale() {
             .map(|(id, v)| (L2::distance(&query, v), *id))
             .collect();
         dists.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let gt: std::collections::HashSet<u64> =
-            dists.iter().take(k).map(|&(_, id)| id).collect();
+        let gt: HashSet<u64> = dists.iter().take(k).map(|&(_, id)| id).collect();
 
         let results = idx.search(&query, k).unwrap();
-        let found: std::collections::HashSet<u64> =
-            results.iter().map(|(key, _)| *key).collect();
+        let found: HashSet<u64> = results.iter().map(|(key, _)| *key).collect();
         total_recall += gt.intersection(&found).count() as f64 / k as f64;
     }
 
@@ -1018,4 +1013,94 @@ fn crash_with_corrupted_count_is_corrected() {
     // Restore — should rebuild to actual count of 10.
     let restored: VecDex<u32, L2> = VecDex::from_meta(id).unwrap();
     assert_eq!(restored.len(), 10);
+}
+
+#[test]
+fn crash_recovery_reconciles_torn_rows() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 2,
+        ..Default::default()
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    for i in 0..4u32 {
+        idx.insert(&i, &[i as f32, 0.0]).unwrap();
+    }
+
+    // Torn insert #1: node_to_key + node_info survived, vector and
+    // key_to_node writes lost.
+    let t1 = idx.meta.get_value().next_node_id;
+    idx.node_to_key.insert(&t1, &100);
+    idx.node_info.insert(&t1, &NodeInfo { max_layer: 0 });
+
+    // Torn insert #2: only the vector write survived.
+    let t2 = t1 + 1;
+    idx.vectors.insert(&t2, &vec![9.0, 9.0]);
+
+    // Torn remove: a key_to_node row outlived its node's other rows.
+    idx.key_to_node.insert(&200, &777);
+
+    // Simulate crash: persist without save_meta (dirty bit stays set).
+    let id = idx.instance_id();
+    crate::common::save_instance_meta(id, &idx).unwrap();
+
+    let restored: VecDex<u32, L2> = VecDex::from_meta(id).unwrap();
+
+    // Torn rows dropped; only complete nodes counted and visible.
+    assert_eq!(restored.len(), 4);
+    assert!(!restored.contains_key(&100));
+    assert!(!restored.contains_key(&200));
+    assert!(restored.node_to_key.get(&t1).is_none());
+    assert!(restored.node_info.get(&t1).is_none());
+    assert!(restored.vectors.get(&t2).is_none());
+
+    // Node ids of dropped rows are never reused.
+    assert!(restored.meta.get_value().next_node_id > 777);
+
+    // The surviving graph stays fully searchable.
+    let res = restored.search(&[0.0, 0.0], 4).unwrap();
+    assert_eq!(res.len(), 4);
+}
+
+#[test]
+fn crash_recovery_relinks_edgeless_node_and_prefers_linked_entry() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 2,
+        ..Default::default()
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    for i in 0..5u32 {
+        idx.insert(&i, &[i as f32, 0.0]).unwrap();
+    }
+
+    // Complete-but-unlinked node (its insert's edge writes were lost),
+    // with a layer high enough that layer-only entry election would
+    // pick it and hide the rest of the graph behind an edge-less
+    // entry point.
+    let nid = idx.meta.get_value().next_node_id;
+    idx.vectors.insert(&nid, &vec![100.0, 0.0]);
+    idx.key_to_node.insert(&100, &nid);
+    idx.node_to_key.insert(&nid, &100);
+    idx.node_info.insert(&nid, &NodeInfo { max_layer: 10 });
+    idx.meta.get_mut().next_node_id = nid + 1;
+
+    // Simulate crash: persist without save_meta (dirty bit stays set).
+    let id = idx.instance_id();
+    crate::common::save_instance_meta(id, &idx).unwrap();
+
+    let restored: VecDex<u32, L2> = VecDex::from_meta(id).unwrap();
+    assert_eq!(restored.len(), 6);
+
+    // The formerly edge-less node was relinked and is now searchable...
+    let res = restored.search(&[100.0, 0.0], 1).unwrap();
+    assert_eq!(res[0].0, 100);
+
+    // ...and every node of the graph remains reachable.
+    let res = restored.search(&[0.0, 0.0], 6).unwrap();
+    assert_eq!(res.len(), 6);
+
+    // Relinking re-raised the entry point to the high-layer node.
+    assert_eq!(restored.meta.get_value().entry_point, Some(nid));
+    assert_eq!(restored.meta.get_value().max_layer, 10);
 }

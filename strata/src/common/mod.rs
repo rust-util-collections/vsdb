@@ -35,7 +35,8 @@ pub fn save_instance_meta(
 pub fn load_instance_meta<T: DeserializeOwned>(instance_id: u64) -> error::Result<T> {
     let path = vsdb_meta_path(instance_id);
     let bytes = fs::read(&path)?;
-    Ok(with_legacy_mapx_meta_decode(|| {
-        postcard::from_bytes(&bytes)
-    })?)
+    // SAFETY: `bytes` comes from this instance's own meta directory,
+    // written by `save_instance_meta` — a trusted, same-version VSDB
+    // serializer.
+    Ok(unsafe { with_legacy_mapx_meta_decode(|| postcard::from_bytes(&bytes)) }?)
 }

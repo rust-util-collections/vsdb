@@ -359,6 +359,10 @@ impl MapxRaw {
     /// This method allows you to perform multiple insert/remove operations
     /// and commit them atomically.
     ///
+    /// A failed [`commit`](crate::common::BatchTrait::commit) consumes the
+    /// buffered operations (none are applied) and is not retryable —
+    /// re-stage the operations on a fresh batch instead.
+    ///
     /// # Examples
     ///
     /// ```

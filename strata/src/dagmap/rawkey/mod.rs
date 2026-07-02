@@ -203,6 +203,9 @@ where
     }
 
     /// Prunes the DAG, merging all nodes in the mainline into the genesis node.
+    ///
+    /// Not crash-atomic — see [`DagMapRaw::prune`] for the crash-safety
+    /// contract.
     #[inline(always)]
     pub fn prune(self) -> Result<DagHead<V>> {
         self.inner.prune().map(|inner| Self {
@@ -224,6 +227,9 @@ where
     }
 
     /// Destroys the DAG map and all its children, unlinking it from its parent.
+    ///
+    /// The tombstone is per-handle — see [`DagMapRaw::destroy`] for the
+    /// semantics regarding pre-existing clones and restored handles.
     #[inline(always)]
     pub fn destroy(&mut self) {
         self.inner.destroy();

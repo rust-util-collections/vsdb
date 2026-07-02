@@ -59,8 +59,11 @@ let restored: VecDex<String, Cosine> = VecDex::from_meta(id).unwrap();
 | `from_meta` | `(instance_id: u64) -> Result<Self>` | Recover from saved metadata |
 
 After `save_meta`, later mutations set the dirty bit again.  On dirty recovery,
-`from_meta` rebuilds `node_count`, `next_node_id`, `entry_point`, and `max_layer`
-from live data before returning the index.
+`from_meta` reconciles all per-node rows before returning the index: torn rows
+left by an interrupted insert/remove are dropped, `node_count`, `next_node_id`,
+`entry_point`, and `max_layer` are rebuilt from live data (preferring an entry
+point that still has base-layer edges), and any surviving node whose edge
+writes were lost is relinked into the graph.
 
 ## Configuration
 

@@ -30,7 +30,17 @@ fn slot_db(mn: u64, swap_order: bool) {
         test_db.insert(i, i);
     });
 
-    assert_eq!(siz(), db.total());
+    // Duplicate-slot entries, inserted in descending key order, so the
+    // reference comparison also covers within-slot ordering (ascending
+    // regardless of insertion order or paging direction).
+    (0..64u64).for_each(|i| {
+        let slot = i % 8;
+        let key = siz() + 1000 - i;
+        db.insert(slot, key).unwrap();
+        test_db.insert(slot, key);
+    });
+
+    assert_eq!(siz() + 64, db.total());
 
     assert_queryable(&db, &test_db, slot_min, slot_max);
 
@@ -490,25 +500,23 @@ fn sparse_slots() {
 }
 
 mod testdb {
-    use std::{
-        collections::BTreeMap,
-        sync::atomic::{AtomicU64, Ordering},
-    };
+    use std::collections::{BTreeMap, BTreeSet};
 
     type PageSize = u16;
     type PageIndex = u32;
 
-    static INNER_ID: AtomicU64 = AtomicU64::new(0);
-
+    /// Reference model mirroring SlotDex's documented ordering contract:
+    /// entries within a slot are an ordered set (always ascending);
+    /// `reverse` reverses the slot order only, never the within-slot
+    /// order.
     #[derive(Default)]
-    pub struct TestDB<T: Clone + Eq> {
-        data: BTreeMap<[u64; 2], T>,
+    pub struct TestDB<T: Clone + Ord> {
+        data: BTreeMap<u64, BTreeSet<T>>,
     }
 
-    impl<T: Clone + Eq> TestDB<T> {
+    impl<T: Clone + Ord> TestDB<T> {
         pub fn insert(&mut self, slot: u64, v: T) {
-            let inner_id = INNER_ID.fetch_add(1, Ordering::Relaxed);
-            self.data.insert([slot, inner_id], v);
+            self.data.entry(slot).or_default().insert(v);
         }
 
         pub fn get_entries_by_page_slot(
@@ -527,17 +535,17 @@ mod testdb {
 
             if reverse {
                 self.data
-                    .range([slot_start, 0]..=[slot_end, u64::MAX])
-                    .map(|(_, v)| v)
+                    .range(slot_start..=slot_end)
                     .rev()
+                    .flat_map(|(_, keys)| keys.iter())
                     .skip(page_size * page_index)
                     .take(page_size)
                     .cloned()
                     .collect()
             } else {
                 self.data
-                    .range([slot_start, 0]..=[slot_end, u64::MAX])
-                    .map(|(_, v)| v)
+                    .range(slot_start..=slot_end)
+                    .flat_map(|(_, keys)| keys.iter())
                     .skip(page_size * page_index)
                     .take(page_size)
                     .cloned()

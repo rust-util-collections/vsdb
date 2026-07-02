@@ -74,8 +74,9 @@ Additional documentation in `docs/`:
 - `VsdbError` (thiserror) for public API errors; `ruc` for internal error chaining
 - `postcard` for serialization (replaced serde_cbor_2 in v12)
 - Tests run single-threaded; use `tempdir` or `/tmp/vsdb_testing` for isolation
-- ~22 unsafe blocks — all require `// SAFETY:` comments
+- ~23 unsafe blocks — all require `// SAFETY:` comments
   - `shadow()`: SWMR contract — caller serializes writes
   - `from_bytes()`: caller provides valid serialized bytes
   - Pointer casts in entry API macros
   - `env::set_var` in `vsdb_set_base_dir`: caller must invoke before spawning threads
+  - `with_legacy_mapx_meta_decode`: caller vouches deserialized bytes come from a trusted, same-version VSDB serializer

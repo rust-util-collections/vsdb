@@ -38,11 +38,12 @@ use crate::{
     DagMapId, MapxOrdRawKey, Orphan,
     common::error::{Result, VsdbError},
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de};
 use std::{
     collections::HashSet,
     fmt,
     ops::{Deref, DerefMut},
+    result::Result as StdResult,
 };
 use vsdb_core::{
     basic::mapx_raw::{self, MapxRaw},
@@ -70,7 +71,7 @@ pub struct DagMapRaw {
 }
 
 impl Serialize for DagMapRaw {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
@@ -84,29 +85,29 @@ impl Serialize for DagMapRaw {
 }
 
 impl<'de> Deserialize<'de> for DagMapRaw {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         struct Vis;
-        impl<'de> serde::de::Visitor<'de> for Vis {
+        impl<'de> de::Visitor<'de> for Vis {
             type Value = DagMapRaw;
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 f.write_str("DagMapRaw")
             }
-            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            fn visit_seq<A: de::SeqAccess<'de>>(
                 self,
                 mut seq: A,
-            ) -> std::result::Result<DagMapRaw, A::Error> {
+            ) -> StdResult<DagMapRaw, A::Error> {
                 let data = seq
                     .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
+                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
                 let parent = seq
                     .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
                 let children = seq
                     .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(2, &self))?;
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
                 Ok(DagMapRaw {
                     data,
                     parent,
@@ -121,6 +122,14 @@ impl<'de> Deserialize<'de> for DagMapRaw {
 
 impl DagMapRaw {
     /// Creates a new `DagMapRaw`.
+    ///
+    /// The new node keeps a live alias of `parent`'s underlying storage
+    /// slot: later writes through `parent` are visible to this node (and
+    /// its descendants) when resolving inherited reads.  Do not repoint
+    /// that slot at this node or one of its descendants — parent chains
+    /// are cycle-guarded, so lookups on such a graph degrade to `None`
+    /// (and `prune` reports an error) instead of hanging, but the graph
+    /// itself is logically invalid.
     pub fn new(parent: &mut Orphan<Option<Self>>) -> Result<Self> {
         // Fields are constructed explicitly: `..Default::default()` would
         // materialize (and immediately discard) a default `parent` Orphan,
@@ -292,6 +301,16 @@ impl DagMapRaw {
     /// Prunes the DAG, merging all nodes in the mainline into the genesis node.
     ///
     /// Returns the new head of the mainline.
+    ///
+    /// # Crash safety
+    ///
+    /// Pruning is a multi-step, multi-instance rewrite and is **not**
+    /// crash-atomic: mainline data is merged into the genesis node and
+    /// the intermediate nodes/side branches are cleared step by step.
+    /// A crash (e.g. `kill -9`) mid-prune can leave a partially merged
+    /// genesis and a broken parent chain.  Callers that must survive a
+    /// crash during prune need an external snapshot/backup taken
+    /// beforehand.
     #[inline(always)]
     pub fn prune(self) -> Result<DagHead> {
         self.prune_mainline()
@@ -432,6 +451,16 @@ impl DagMapRaw {
     ///
     /// If this node is attached to a parent, it first removes its own child
     /// entry from the parent's `children` collection.
+    ///
+    /// # Semantics for other handles
+    ///
+    /// The tombstone set by `destroy()` is **per-handle**: it is neither
+    /// shared with pre-existing clones/shadows nor serialized.  A handle
+    /// cloned *before* this call — or restored later via
+    /// [`from_meta`](Self::from_meta) — sees the cleared local data but
+    /// can still resolve inherited reads through the (deliberately
+    /// preserved, sibling-shared) parent link.  Drop stale handles of a
+    /// destroyed node instead of reading through them.
     #[inline(always)]
     pub fn destroy(&mut self) {
         let self_id = self.instance_id();

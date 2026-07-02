@@ -35,6 +35,11 @@ const MAPX_META_LEN: usize = MAPX_META_MAGIC.len() + PREFIX_SIZE;
 pub trait BatchTrait {
     fn insert(&mut self, key: &[u8], value: &[u8]);
     fn remove(&mut self, key: &[u8]);
+    /// Atomically applies all buffered operations.
+    ///
+    /// On error the buffered operations are consumed and lost (none were
+    /// applied); a failed commit is **not retryable** — re-stage the
+    /// operations on a fresh batch instead.
     fn commit(&mut self) -> Result<()>;
 }
 

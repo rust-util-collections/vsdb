@@ -13,11 +13,12 @@ pub use slot_type::SlotType;
 pub(crate) use tier::Tier;
 
 use crate::{
-    KeyEnDeOrdered, MapxOrd, basic::orphan::Orphan, common::dirty_count as dc,
-    common::error::Result,
+    KeyEnDeOrdered, MapxOrd,
+    basic::orphan::Orphan,
+    common::{dirty_count as dc, error::Result},
 };
-use serde::{Deserialize, Serialize};
-use std::{fmt, marker::PhantomData, ops::Bound};
+use serde::{Deserialize, Serialize, de};
+use std::{fmt, marker::PhantomData, ops::Bound, result::Result as StdResult};
 
 pub(crate) type EntryCnt = u64;
 type SkipNum = EntryCnt;
@@ -56,7 +57,7 @@ where
     S: SlotType,
     K: Clone + Ord + KeyEnDeOrdered,
 {
-    fn serialize<Ser>(&self, serializer: Ser) -> std::result::Result<Ser::Ok, Ser::Error>
+    fn serialize<Ser>(&self, serializer: Ser) -> StdResult<Ser::Ok, Ser::Error>
     where
         Ser: serde::Serializer,
     {
@@ -76,12 +77,12 @@ where
     S: SlotType,
     K: Clone + Ord + KeyEnDeOrdered,
 {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         struct Vis<S, K>(PhantomData<(S, K)>);
-        impl<'de, S, K> serde::de::Visitor<'de> for Vis<S, K>
+        impl<'de, S, K> de::Visitor<'de> for Vis<S, K>
         where
             S: SlotType,
             K: Clone + Ord + KeyEnDeOrdered,
@@ -90,25 +91,25 @@ where
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 f.write_str("SlotDex")
             }
-            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            fn visit_seq<A: de::SeqAccess<'de>>(
                 self,
                 mut seq: A,
-            ) -> std::result::Result<SlotDex<S, K>, A::Error> {
+            ) -> StdResult<SlotDex<S, K>, A::Error> {
                 let data = seq
                     .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
+                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
                 let total = seq
                     .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
                 let tiers = seq
                     .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(2, &self))?;
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
                 let tier_capacity = seq
                     .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(3, &self))?;
+                    .ok_or_else(|| de::Error::invalid_length(3, &self))?;
                 let swap_order = seq
                     .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(4, &self))?;
+                    .ok_or_else(|| de::Error::invalid_length(4, &self))?;
                 let mut me = SlotDex {
                     data,
                     total,

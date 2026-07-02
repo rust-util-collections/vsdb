@@ -1,4 +1,4 @@
-use super::map::VerMap;
+use super::{NO_COMMIT, map::VerMap};
 use crate::common::error::VsdbError;
 use std::ops::Bound;
 
@@ -2657,6 +2657,10 @@ fn fork_point_nonexistent_commit() {
     // Nonexistent commit ID should yield None
     assert_eq!(m.fork_point(c1, 99999), None);
     assert_eq!(m.fork_point(99999, c1), None);
+
+    // Two identical nonexistent IDs must not be reported as their own
+    // fork point.
+    assert_eq!(m.fork_point(99999, 99999), None);
 }
 
 #[test]
@@ -2740,6 +2744,12 @@ fn commit_distance_nonexistent_commit() {
 
     // ancestor is nonexistent (can never be reached)
     assert_eq!(m.commit_distance(c1, 99999), None);
+
+    // Two identical nonexistent IDs must not report distance 0.
+    assert_eq!(m.commit_distance(99999, 99999), None);
+
+    // NO_COMMIT sentinels are not commits either.
+    assert_eq!(m.commit_distance(NO_COMMIT, NO_COMMIT), None);
 }
 
 #[test]

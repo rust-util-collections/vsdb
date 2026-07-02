@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::trie::MptCalc;
+    use std::fs;
 
     #[test]
     fn test_simple_insert_get() {
@@ -362,10 +363,10 @@ mod tests {
         trie.save_cache(cache_id, 1).unwrap();
 
         // Corrupt a byte in the middle of the file.
-        let mut data = std::fs::read(&cache_path).unwrap();
+        let mut data = fs::read(&cache_path).unwrap();
         let mid = data.len() / 2;
         data[mid] ^= 0xFF;
-        std::fs::write(&cache_path, &data).unwrap();
+        fs::write(&cache_path, &data).unwrap();
 
         assert!(MptCalc::load_cache(cache_id).is_err());
     }
@@ -381,8 +382,8 @@ mod tests {
         trie.save_cache(cache_id, 1).unwrap();
 
         // Truncate the file.
-        let data = std::fs::read(&cache_path).unwrap();
-        std::fs::write(&cache_path, &data[..data.len() / 2]).unwrap();
+        let data = fs::read(&cache_path).unwrap();
+        fs::write(&cache_path, &data[..data.len() / 2]).unwrap();
 
         assert!(MptCalc::load_cache(cache_id).is_err());
     }
@@ -533,6 +534,7 @@ mod tests {
 #[cfg(test)]
 mod smt_tests {
     use crate::trie::SmtCalc;
+    use std::fs;
 
     #[test]
     fn test_smt_insert_get() {
@@ -888,11 +890,11 @@ mod smt_tests {
         smt.save_cache(cache_id, 1).unwrap();
 
         // Corrupt a byte in the middle.
-        let mut data = std::fs::read(&path).unwrap();
+        let mut data = fs::read(&path).unwrap();
         if data.len() > 10 {
             data[10] ^= 0xFF;
         }
-        std::fs::write(&path, &data).unwrap();
+        fs::write(&path, &data).unwrap();
 
         assert!(SmtCalc::load_cache(cache_id).is_err());
     }

@@ -34,8 +34,8 @@ use crate::{
 };
 use distance::{DistanceMetric, Scalar};
 use hnsw::{
-    get_neighbors, prune_neighbors, random_layer, remove_adjacency, search_layer,
-    select_neighbors_heuristic, set_neighbors,
+    adj_key, get_neighbors, prune_neighbors, random_layer, remove_adjacency,
+    search_layer, select_neighbors_heuristic, set_neighbors,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -224,56 +224,142 @@ where
     D: DistanceMetric<S>,
     S: Scalar,
 {
-    /// If the dirty bit is set, rebuild the count — and the derived
-    /// metadata that the same crash window invalidates — from live data.
-    /// Then set the dirty bit for the current process lifetime.
-    /// Called automatically during deserialization.
+    /// If the dirty bit is set, reconcile all per-node rows and rebuild
+    /// the derived metadata from live data, then set the dirty bit for
+    /// the current process lifetime.  Called automatically during
+    /// deserialization.
     fn ensure_count(&mut self) {
         let raw = self.meta.get_value().node_count;
         if dc::is_dirty(raw) {
-            // Unclean shutdown.  Data rows are written before the meta
-            // update, so node_count, next_node_id, entry_point and
-            // max_layer may all be stale.  Rebuild them so node ids are
-            // never reused and the entry point references a live node.
-            let mut actual = 0u64;
-            let mut max_id: Option<u64> = None;
-            for (nid, _) in self.node_to_key.iter() {
-                // A crash mid-insert can leave a node_to_key row whose
-                // vector was never written; skip such orphans so the
-                // count reflects only searchable vectors.
-                if self.vectors.get(&nid).is_none() {
-                    continue;
+            self.recover_after_crash();
+        } else {
+            // Clean shutdown — count is trustworthy. Set dirty for this session.
+            self.meta.get_mut().node_count = dc::set_dirty(raw);
+        }
+    }
+
+    /// Crash recovery: the per-node rows (`vectors`, `key_to_node`,
+    /// `node_to_key`, `node_info`, `adjacency`) live under different
+    /// storage prefixes, so an unclean shutdown can persist an arbitrary
+    /// subset of any recent operation's writes.  Recovery restores a
+    /// coherent state:
+    ///
+    /// 1. **Reconcile** — a node is *live* iff all four metadata rows
+    ///    agree; every row of a torn node is dropped (the operation is
+    ///    treated as never having happened).  Stale backlinks pointing
+    ///    at dropped ids are left in place: search cannot enter a node
+    ///    whose vector is gone, so they are inert and are swept out by
+    ///    the normal prune/compact paths.
+    /// 2. **Rebuild meta** — `node_count`, `next_node_id` (ids are never
+    ///    reused, even for dropped rows), and the entry point.  Entry
+    ///    election prefers nodes that still have base-layer edges so a
+    ///    torn, edge-less insert can never become the entry point and
+    ///    hide the rest of the graph.
+    /// 3. **Relink** — a live node without a base-layer adjacency row
+    ///    (its insert's edge writes were lost) is reconnected via
+    ///    [`link_node`](Self::link_node).  Relinking is additive, so a
+    ///    legitimately isolated node is repaired at worst into a better
+    ///    connected one.
+    fn recover_after_crash(&mut self) {
+        // Pass 1: classify nodes; track max id across ALL rows so node
+        // ids are never reused.
+        let mut max_id: Option<u64> = None;
+        let mut live: Vec<(u64, u8)> = Vec::new();
+        let mut torn: HashSet<u64> = HashSet::new();
+
+        for (nid, key) in self.node_to_key.iter() {
+            max_id = Some(max_id.map_or(nid, |m| m.max(nid)));
+            let complete = self.vectors.get(&nid).is_some()
+                && self.key_to_node.get(&key) == Some(nid);
+            match self.node_info.get(&nid) {
+                Some(info) if complete => live.push((nid, info.max_layer)),
+                _ => {
+                    torn.insert(nid);
                 }
-                actual += 1;
-                max_id = Some(max_id.map_or(nid, |m| m.max(nid)));
             }
-            let mut entry: Option<(u64, u8)> = None;
-            for (nid, info) in self.node_info.iter() {
-                max_id = Some(max_id.map_or(nid, |m| m.max(nid)));
-                // A crash mid-remove can leave a node_info row whose
-                // vector is already gone — such a node cannot serve as
-                // the entry point.
-                if self.vectors.get(&nid).is_none() {
-                    continue;
-                }
-                match entry {
-                    Some((_, bl)) if info.max_layer <= bl => {}
-                    _ => entry = Some((nid, info.max_layer)),
-                }
+        }
+        let live_ids: HashSet<u64> = live.iter().map(|&(nid, _)| nid).collect();
+        for (nid, _) in self.node_info.iter() {
+            max_id = Some(max_id.map_or(nid, |m| m.max(nid)));
+            if !live_ids.contains(&nid) {
+                torn.insert(nid);
             }
+        }
+        for (nid, _) in self.vectors.iter() {
+            max_id = Some(max_id.map_or(nid, |m| m.max(nid)));
+            if !live_ids.contains(&nid) {
+                torn.insert(nid);
+            }
+        }
+        // Reverse orphans: key_to_node rows whose forward row disagrees.
+        let mut orphan_keys: Vec<K> = Vec::new();
+        for (key, nid) in self.key_to_node.iter() {
+            max_id = Some(max_id.map_or(nid, |m| m.max(nid)));
+            if self.node_to_key.get(&nid).as_ref() != Some(&key) {
+                orphan_keys.push(key);
+            }
+        }
+
+        // Pass 2: drop every row of torn nodes.  `random_layer` caps
+        // layers at 32, so sweeping 0..=32 covers all possible rows.
+        for &nid in &torn {
+            if let Some(key) = self.node_to_key.get(&nid)
+                && self.key_to_node.get(&key) == Some(nid)
+            {
+                self.key_to_node.remove(&key);
+            }
+            self.node_to_key.remove(&nid);
+            self.node_info.remove(&nid);
+            self.vectors.remove(&nid);
+            for l in 0..=32u8 {
+                remove_adjacency(&mut self.adjacency, l, nid);
+            }
+        }
+        for key in &orphan_keys {
+            self.key_to_node.remove(key);
+        }
+
+        // Pass 3: rebuild derived metadata.  Prefer an entry point that
+        // still has base-layer edges (isolated candidates only matter
+        // when nothing is linked, e.g. a single-node index).
+        let mut entry: Option<(u64, u8, bool)> = None;
+        for &(nid, layer) in &live {
+            let linked = self.adjacency.get(adj_key(0, nid)).is_some();
+            // Tuple order: a linked candidate beats any unlinked one;
+            // among equals, the higher layer wins.
+            let better = match entry {
+                None => true,
+                Some((_, bl, blinked)) => (linked, layer) > (blinked, bl),
+            };
+            if better {
+                entry = Some((nid, layer, linked));
+            }
+        }
+        {
             let mut m = self.meta.get_mut();
-            m.node_count = dc::set_dirty(actual);
+            m.node_count = dc::set_dirty(live.len() as u64);
             m.next_node_id = m.next_node_id.max(max_id.map_or(0, |i| i + 1));
-            if let Some((ep, ml)) = entry {
+            if let Some((ep, ml, _)) = entry {
                 m.entry_point = Some(ep);
                 m.max_layer = ml;
             } else {
                 m.entry_point = None;
                 m.max_layer = 0;
             }
-        } else {
-            // Clean shutdown — count is trustworthy. Set dirty for this session.
-            self.meta.get_mut().node_count = dc::set_dirty(raw);
+        }
+
+        // Pass 4: reconnect live nodes whose edge writes were lost.
+        if live.len() > 1 {
+            let entry_id = entry.map(|(id, _, _)| id);
+            for &(nid, layer) in &live {
+                if Some(nid) == entry_id || self.adjacency.get(adj_key(0, nid)).is_some()
+                {
+                    continue;
+                }
+                if let Some(vector) = self.vectors.get(&nid) {
+                    self.link_node(nid, &vector, layer);
+                }
+            }
         }
     }
 
@@ -284,6 +370,106 @@ where
         let raw = self.meta.get_value().node_count;
         if !dc::is_dirty(raw) {
             self.meta.get_mut().node_count = dc::set_dirty(raw);
+        }
+    }
+
+    /// Wires `node_id` into the HNSW graph (the linking phases of an
+    /// insert): greedy descent from the entry point, then heuristic
+    /// neighbor selection and bidirectional edge creation on every layer
+    /// from `min(node_layer, max_layer)` down to 0, raising the entry
+    /// point afterwards if `node_layer` exceeds the current maximum.
+    ///
+    /// Also used by crash recovery to reconnect a node whose original
+    /// edge writes were lost, so it defends against states a plain
+    /// insert can never see: `node_id` itself is skipped both as a
+    /// descent target and as a neighbor candidate (a partially linked
+    /// node is reachable from the entry point and would otherwise be
+    /// selected as its own nearest neighbor).
+    fn link_node(&mut self, node_id: u64, vector: &[S], node_layer: u8) {
+        let meta = self.meta.get_value().clone();
+        let Some(ep) = meta.entry_point else {
+            let mut m = self.meta.get_mut();
+            m.entry_point = Some(node_id);
+            m.max_layer = node_layer;
+            return;
+        };
+        if ep == node_id {
+            return;
+        }
+
+        let get_vec = |id: u64| -> Option<Vec<S>> { self.vectors.get(&id) };
+        let cur_max = meta.max_layer;
+
+        // Phase 1: Greedy descent from top layer to node_layer + 1.
+        let mut cur_ep = vec![ep];
+        for l in (node_layer.saturating_add(1)..=cur_max).rev() {
+            let res = search_layer::<S, D>(
+                vector,
+                &cur_ep,
+                1,
+                l,
+                &get_vec,
+                &self.adjacency,
+                None,
+            );
+            if let Some(&(_, id)) = res.iter().find(|&&(_, id)| id != node_id) {
+                cur_ep = vec![id];
+            }
+        }
+
+        // Phase 2: Insert at layers node_layer..0 with heuristic selection.
+        let top = node_layer.min(cur_max);
+        for l in (0..=top).rev() {
+            let m_max = if l == 0 { meta.m_max0 } else { meta.m };
+
+            let candidates = search_layer::<S, D>(
+                vector,
+                &cur_ep,
+                meta.ef_construction,
+                l,
+                &get_vec,
+                &self.adjacency,
+                None,
+            );
+            let neighbor_pool: Vec<(S, u64)> = candidates
+                .iter()
+                .copied()
+                .filter(|&(_, id)| id != node_id)
+                .collect();
+
+            let selected =
+                select_neighbors_heuristic::<S, D>(&neighbor_pool, m_max, &get_vec);
+
+            set_neighbors(&mut self.adjacency, l, node_id, &selected);
+
+            for &neighbor in &selected {
+                let mut n_neighbors = get_neighbors(&self.adjacency, l, neighbor);
+                n_neighbors.push(node_id);
+                set_neighbors(&mut self.adjacency, l, neighbor, &n_neighbors);
+                let evicted = prune_neighbors::<S, D>(
+                    neighbor,
+                    l,
+                    m_max,
+                    &mut self.adjacency,
+                    &get_vec,
+                );
+                for evicted_id in evicted {
+                    let mut e_list = get_neighbors(&self.adjacency, l, evicted_id);
+                    e_list.retain(|&x| x != neighbor);
+                    set_neighbors(&mut self.adjacency, l, evicted_id, &e_list);
+                }
+            }
+
+            cur_ep = neighbor_pool.iter().map(|&(_, id)| id).collect();
+            if cur_ep.is_empty() {
+                cur_ep = vec![ep];
+            }
+        }
+
+        if node_layer > cur_max {
+            let mut m = self.meta.get_mut();
+            m.entry_point = Some(node_id);
+            m.max_layer = node_layer;
         }
     }
 }
@@ -436,8 +622,9 @@ where
             self.mark_dirty();
         }
 
-        // Re-read metadata after potential remove() to avoid stale
-        // entry_point / node_count / max_layer from a prior snapshot.
+        // Re-read metadata after potential remove() to avoid a stale
+        // next_node_id from a prior snapshot; the linking phases take
+        // their own fresh snapshot inside `link_node`.
         let meta = self.meta.get_value().clone();
         let node_id = meta.next_node_id;
         let node_layer = random_layer(meta.m);
@@ -458,81 +645,7 @@ where
             m.node_count = dc::inc(m.node_count);
         }
 
-        if meta.entry_point.is_none() {
-            let mut m = self.meta.get_mut();
-            m.entry_point = Some(node_id);
-            m.max_layer = node_layer;
-            return Ok(());
-        }
-
-        let ep = meta.entry_point.unwrap();
-        let vector = vector.to_vec();
-        let get_vec = |id: u64| -> Option<Vec<S>> { self.vectors.get(&id) };
-
-        // Phase 1: Greedy descent from top layer to node_layer + 1.
-        let mut cur_ep = vec![ep];
-        let cur_max = self.meta.get_value().max_layer;
-        for l in (node_layer.saturating_add(1)..=cur_max).rev() {
-            let res = search_layer::<S, D>(
-                &vector,
-                &cur_ep,
-                1,
-                l,
-                &get_vec,
-                &self.adjacency,
-                None,
-            );
-            if let Some(&(_, id)) = res.first() {
-                cur_ep = vec![id];
-            }
-        }
-
-        // Phase 2: Insert at layers node_layer..0 with heuristic selection.
-        let top = node_layer.min(cur_max);
-        for l in (0..=top).rev() {
-            let m_max = if l == 0 { meta.m_max0 } else { meta.m };
-
-            let candidates = search_layer::<S, D>(
-                &vector,
-                &cur_ep,
-                meta.ef_construction,
-                l,
-                &get_vec,
-                &self.adjacency,
-                None,
-            );
-
-            let selected =
-                select_neighbors_heuristic::<S, D>(&candidates, m_max, &get_vec);
-
-            set_neighbors(&mut self.adjacency, l, node_id, &selected);
-
-            for &neighbor in &selected {
-                let mut n_neighbors = get_neighbors(&self.adjacency, l, neighbor);
-                n_neighbors.push(node_id);
-                set_neighbors(&mut self.adjacency, l, neighbor, &n_neighbors);
-                let evicted = prune_neighbors::<S, D>(
-                    neighbor,
-                    l,
-                    m_max,
-                    &mut self.adjacency,
-                    &get_vec,
-                );
-                for evicted_id in evicted {
-                    let mut e_list = get_neighbors(&self.adjacency, l, evicted_id);
-                    e_list.retain(|&x| x != neighbor);
-                    set_neighbors(&mut self.adjacency, l, evicted_id, &e_list);
-                }
-            }
-
-            cur_ep = candidates.iter().map(|&(_, id)| id).collect();
-        }
-
-        if node_layer > cur_max {
-            let mut m = self.meta.get_mut();
-            m.entry_point = Some(node_id);
-            m.max_layer = node_layer;
-        }
+        self.link_node(node_id, vector, node_layer);
 
         Ok(())
     }
@@ -653,8 +766,10 @@ where
             }
         }
 
+        // Saturating: `ef`/`k` are unrestricted public inputs, and the
+        // ×4/×2 filter budget must not overflow for extreme values.
         let search_ef = if predicate.is_some() {
-            (ef * 4).max(k * 2)
+            ef.saturating_mul(4).max(k.saturating_mul(2))
         } else {
             ef.max(k)
         };
@@ -788,20 +903,30 @@ where
             m.node_count = dc::dec(m.node_count);
 
             if m.entry_point == Some(node_id) {
-                let mut best: Option<(u64, u8)> = None;
+                let mut best: Option<(u64, u8, bool)> = None;
                 for (nid, info) in self.node_info.iter() {
                     // Skip any node whose vector is already gone (e.g. a
                     // crash-induced inconsistency); it cannot serve as the
-                    // entry point.  Mirrors `ensure_count`.
+                    // entry point.  Mirrors `recover_after_crash`.
                     if self.vectors.get(&nid).is_none() {
                         continue;
                     }
-                    match best {
-                        Some((_, bl)) if info.max_layer <= bl => {}
-                        _ => best = Some((nid, info.max_layer)),
+                    // Prefer candidates that still have base-layer edges
+                    // so an isolated node cannot become the entry point
+                    // and hide the rest of the graph; among equals the
+                    // higher layer wins.  Mirrors `recover_after_crash`.
+                    let linked = self.adjacency.get(adj_key(0, nid)).is_some();
+                    let better = match best {
+                        None => true,
+                        Some((_, bl, blinked)) => {
+                            (linked, info.max_layer) > (blinked, bl)
+                        }
+                    };
+                    if better {
+                        best = Some((nid, info.max_layer, linked));
                     }
                 }
-                if let Some((new_ep, new_max)) = best {
+                if let Some((new_ep, new_max, _)) = best {
                     m.entry_point = Some(new_ep);
                     m.max_layer = new_max;
                 } else {

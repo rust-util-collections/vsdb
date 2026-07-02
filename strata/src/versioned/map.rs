@@ -448,8 +448,15 @@ where
         let old_root = state.dirty_root;
         state.dirty_root = self.tree.insert(old_root, &key.to_bytes(), &value.encode());
         self.tree.acquire_node(state.dirty_root);
-        self.tree.release_node(old_root);
+        // Persist the branch pointer BEFORE releasing the old root:
+        // `release_node` may register the old root's nodes for physical
+        // deletion (compaction can run immediately), so a crash between
+        // the two steps must never leave the durable branch state
+        // pointing at deleted nodes.  Crash before the insert below
+        // only leaks the new nodes, which the next recovery sweep
+        // (`rebuild_tree_ref_counts`) registers for deletion.
         self.branches.insert(&branch, &state);
+        self.tree.release_node(old_root);
         Ok(())
     }
 
@@ -459,8 +466,10 @@ where
         let old_root = state.dirty_root;
         state.dirty_root = self.tree.remove(old_root, &key.to_bytes());
         self.tree.acquire_node(state.dirty_root);
-        self.tree.release_node(old_root);
+        // Persist before release — see `insert` for the crash-ordering
+        // rationale.
         self.branches.insert(&branch, &state);
+        self.tree.release_node(old_root);
         Ok(())
     }
 
@@ -525,8 +534,10 @@ where
             ..state
         };
         self.tree.acquire_node(root);
-        self.tree.release_node(old_dirty);
+        // Persist before release — see `insert` for the crash-ordering
+        // rationale.
         self.branches.insert(&branch, &new_state);
+        self.tree.release_node(old_dirty);
         Ok(())
     }
 
@@ -769,6 +780,13 @@ where
         const FROM_B: u8 = 0b10;
         const BOTH: u8 = FROM_A | FROM_B;
 
+        // Nonexistent IDs are not DAG nodes; without this guard,
+        // `find_common_ancestor(x, x)` would report a nonexistent `x`
+        // as its own ancestor.
+        if self.commits.get(&a).is_none() || self.commits.get(&b).is_none() {
+            return None;
+        }
+
         fn mark(
             flags: &mut HashMap<CommitId, u8>,
             heap: &mut BinaryHeap<CommitId>,
@@ -835,6 +853,11 @@ where
     /// // The longer fork wins.
     /// ```
     pub fn commit_distance(&self, from: CommitId, ancestor: CommitId) -> Option<u64> {
+        // Both endpoints must be real commits; otherwise
+        // `commit_distance(x, x)` would report distance 0 for a
+        // nonexistent `x`.
+        self.commits.get(&from)?;
+        self.commits.get(&ancestor)?;
         let mut cur = from;
         let mut count = 0u64;
         while cur != ancestor {

@@ -188,9 +188,13 @@ fn test_serde_rejects_legacy_prefix_payload_by_default() {
     let legacy_payload = postcard::to_allocvec(hdr.as_bytes().as_slice()).unwrap();
     assert!(postcard::from_bytes::<MapxRaw>(&legacy_payload).is_err());
 
-    let restored: MapxRaw = crate::common::with_legacy_mapx_meta_decode(|| {
-        postcard::from_bytes(&legacy_payload)
-    })
+    // SAFETY: `legacy_payload` was produced above by serializing this
+    // same instance's own prefix bytes — a trusted, same-version source.
+    let restored: MapxRaw = unsafe {
+        crate::common::with_legacy_mapx_meta_decode(|| {
+            postcard::from_bytes(&legacy_payload)
+        })
+    }
     .unwrap();
     assert!(restored.is_the_same_instance(&hdr));
 }
