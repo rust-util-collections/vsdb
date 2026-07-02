@@ -9,18 +9,23 @@ This document defines the systematic review protocol for VSDB code changes.
 Before analyzing any change, gather context:
 
 1. **Read the diff** — understand every changed line
-2. **Identify affected subsystems** — map changes to:
-   - `core/src/common/engine/` → engine, shard routing
-   - `core/src/basic/mapx_raw/` → raw KV layer
-   - `strata/src/basic/mapx/`, `mapx_ord/`, `mapx_ord_rawkey/` → typed collections
-   - `strata/src/basic/persistent_btree/` → B+ tree
-   - `strata/src/versioned/` → versioning, commit DAG, merge
-   - `strata/src/trie/` → Merkle tries (MPT, SMT)
-   - `strata/src/slotdex/` → slot indexing
-   - `strata/src/dagmap/` → DAG collections
-   - `strata/src/vecdex/` → vector index (HNSW)
-   - `strata/src/common/ende.rs` → encoding/serialization
-3. **Load subsystem patterns** — read the relevant `.claude/docs/patterns/<subsystem>.md`
+2. **Identify affected subsystems** — map changed files using this table.
+   This table is the **single source of truth** for subsystem mapping; commands
+   (`/x-review`, `/x-commit`, `/x-fix`) reference it instead of duplicating it.
+
+   | Changed path | Subsystem | Pattern guide (`.claude/docs/patterns/`) |
+   |--------------|-----------|------------------------------------------|
+   | `core/src/common/engine/`, `core/src/common/mod.rs` | engine, shard routing | `engine.md` |
+   | `core/src/basic/mapx_raw/` | raw KV layer | `engine.md` |
+   | `strata/src/basic/mapx/`, `mapx_ord/`, `mapx_ord_rawkey/`, `orphan/` | typed collections | `engine.md` |
+   | `strata/src/basic/persistent_btree/` | B+ tree (COW) | `btree.md` |
+   | `strata/src/versioned/` | versioning, commit DAG, merge | `versioning.md` |
+   | `strata/src/trie/` | Merkle tries (MPT, SMT) | `trie.md` |
+   | `strata/src/slotdex/` | slot indexing | `slotdex.md` |
+   | `strata/src/dagmap/` | DAG collections | `dagmap.md` |
+   | `strata/src/vecdex/` | vector index (HNSW) | `vecdex.md` |
+   | `strata/src/common/` (ende.rs, error.rs, macros.rs, dirty_count.rs) | encoding & common | *(cross-cutting — no dedicated guide)* |
+3. **Load subsystem patterns** — read the pattern guide for each affected subsystem (skip unaffected ones)
 4. **Check call sites** — use grep/LSP to find all callers of changed functions
 5. **Check related tests** — identify which test files cover the changed code
 
@@ -113,8 +118,7 @@ These are enforced project conventions — violations are findings (severity LOW
 - **Grouped imports**: Common prefixes must be merged — `use std::sync::{Arc, Mutex};` not two separate `use` lines.
 - **Doc-code alignment**: Public API changes must have matching doc comment / README / CLAUDE.md updates. Stale docs are a finding. When a change adds, removes, or renames a public type, module, or subsystem path, also verify:
   - `CLAUDE.md` architecture table (paths, type names, dependency info)
-  - `.claude/docs/review-core.md` subsystem path mappings
-  - `.claude/commands/x-review.md` full-audit subsystem partitioning table
+  - `.claude/docs/review-core.md` Phase 1 subsystem mapping table (the single source of truth)
   - `.claude/docs/patterns/` guides — referenced file lists and invariants
 
 ## Phase 5: Reporting

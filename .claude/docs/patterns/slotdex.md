@@ -28,6 +28,10 @@ Keys at exact tier boundaries must be assigned to exactly one tier (no duplicati
 Paginated queries must not skip or duplicate entries across pages, even if new entries are inserted between page requests.
 **Check**: Verify cursor-based pagination uses a stable key, not an offset index.
 
+### INV-SD5: swap_order Transparency
+`swap_order` is a pure storage-layout optimization (internal slot complement + result reversal). Logical query results MUST be identical for `swap_order=true` vs `false` on the same data.
+**Check**: Any change to query/insert paths must preserve identical logical output under both modes. Verify tests compare both modes against the same reference (see `test.rs` reference-model tests).
+
 ## Common Bug Patterns
 
 ### Tier Boundary Off-By-One
@@ -45,3 +49,4 @@ Querying a tier that has no entries causes an unwrap on None from MapxOrd::iter(
 - [ ] Pagination uses stable cursor, not offset
 - [ ] Empty tier handled gracefully
 - [ ] Insert and query use identical tier computation
+- [ ] swap_order=true and =false produce identical logical results

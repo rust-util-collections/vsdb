@@ -3,6 +3,13 @@
 This document catalogs known bug categories for VSDB and its underlying mmdb engine.
 Load this document FIRST before performing any review or debug analysis.
 
+**Scope note**: This file covers cross-cutting categories (B+ tree, versioning,
+tries, engine, unsafe, encoding). Subsystem-specific invariants and checklists
+live in `.claude/docs/patterns/`:
+`btree.md`, `versioning.md`, `trie.md`, `engine.md`, `slotdex.md`, `dagmap.md`,
+`vecdex.md` — SlotDex, DagMap, and VecDex patterns exist ONLY there, so always
+load the relevant guide when those subsystems are affected.
+
 ---
 
 ## Category 1: B+ Tree (COW) Correctness Bugs

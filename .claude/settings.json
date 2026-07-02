@@ -1,8 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Edit(.claude/audit.md)",
-      "Write(.claude/audit.md)"
+      "Edit(docs/audit.md)",
+      "Write(docs/audit.md)"
     ]
   }
 }

@@ -1,3 +1,7 @@
+---
+description: Fix audit backlog — resolve every open finding in docs/audit.md, self-review, and commit
+---
+
 # Fix Audit Backlog
 
 You are resolving every open finding in `docs/audit.md`, then self-reviewing and committing the result.
@@ -60,21 +64,14 @@ For each open finding, in severity order:
 
 ## Phase 3: Commit
 
-1. Run `make fmt`.
-2. Run `git diff HEAD --stat` and `git log -5 --oneline` to understand scope and style.
-3. Stage all changed files with `git add` (specific files, not `-A`).
-4. Bump patch version if any `.rs` files changed (see `/x-commit` Task 4 for the 3-file version update).
-5. Draft a commit message summarizing the audit fixes.
-6. Commit using a HEREDOC — **do NOT include any co-author line**:
+Execute Tasks 3–5 of `.claude/commands/x-commit.md` (Format & Lint → Bump Patch
+Version → Commit). Key points:
 
-```
-git commit -m "$(cat <<'EOF'
-<commit message here>
-EOF
-)"
-```
-
-7. Run `git status` to verify success.
+1. `make fmt`, then `make lint` if any `.rs` file changed — must pass clean.
+2. Bump patch version if any `.rs` file changed (3-file update: `core/Cargo.toml`,
+   `strata/Cargo.toml`, workspace `Cargo.toml`).
+3. Stage specific files with `git add` (not `-A`), commit via HEREDOC —
+   **no co-author line** — then `git status` to verify success.
 
 ## Output Format
 

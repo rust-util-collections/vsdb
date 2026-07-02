@@ -1,3 +1,7 @@
+---
+description: Self-reviewing commit — review uncommitted changes, fix all findings, format, lint, bump version, commit
+---
+
 # Self-Reviewing Commit for VSDB
 
 You are performing a self-reviewing commit: review all uncommitted changes, fix every issue found, format, and commit.
@@ -14,17 +18,8 @@ You are performing a self-reviewing commit: review all uncommitted changes, fix 
 
 1. Run `git diff HEAD` to collect all uncommitted changes.
 2. If the diff is empty, report "nothing to commit" and stop.
-3. Identify ALL affected subsystems by mapping changed files:
-   - `core/src/common/engine/` → engine, shard routing
-   - `core/src/basic/mapx_raw/` → raw KV layer
-   - `strata/src/basic/mapx/`, `mapx_ord/`, `mapx_ord_rawkey/` → typed collections
-   - `strata/src/basic/persistent_btree/` → B+ tree
-   - `strata/src/versioned/` → versioning, commit DAG, merge
-   - `strata/src/trie/` → Merkle tries
-   - `strata/src/slotdex/` → slot indexing
-   - `strata/src/dagmap/` → DAG collections
-   - `strata/src/vecdex/` → vector index
-   - `strata/src/common/ende.rs` → encoding
+3. Identify ALL affected subsystems using the **subsystem mapping table in
+   `review-core.md` Phase 1** (single source of truth).
 4. For EACH affected subsystem, read the corresponding pattern file from `.claude/docs/patterns/`.
 5. Perform the full regression analysis from review-core.md:
    - **Classify** each change (COW, version DAG, unsafe, control flow, encoding, etc.)
@@ -53,9 +48,17 @@ For EVERY finding from Task 1 (CRITICAL, HIGH, MEDIUM, or LOW):
 3. If new findings emerge from the fixes, fix those too. Iterate until the review is clean.
 4. Report the final list of fixes applied.
 
-### Task 3: Format
+### Task 3: Format & Lint
 
 1. Run `make fmt` to apply code formatting.
+2. If any `.rs` file changed, run `make lint` — it must pass with zero warnings
+   (all warnings are errors). Fix any failures at the source (never `#[allow]`)
+   and re-run until clean.
+3. If the changes touch core logic (not just docs/comments), run the affected
+   subsystem's tests: `cargo test -p vsdb <module> --release -- --test-threads=1`
+   (e.g., `cargo test -p vsdb slotdex --release -- --test-threads=1`).
+   Tests MUST run single-threaded due to global MMDB state.
+   Clean test state before and after: `rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing`.
 
 ### Task 4: Bump Patch Version — MANDATORY
 

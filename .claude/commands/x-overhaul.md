@@ -1,3 +1,7 @@
+---
+description: Full codebase overhaul — audit all source files, fix every finding, and commit
+---
+
 # Full Codebase Audit-Fix-Commit Pipeline
 
 You are performing a full codebase audit: review ALL source files (not just uncommitted changes), fix every finding, and commit.
@@ -28,23 +32,14 @@ If fixes introduced new issues, re-review the CHANGED files only (not the full c
 
 ## Phase 3: Commit
 
-Execute the full commit protocol from `/x-commit`:
+Execute Tasks 3–5 of `.claude/commands/x-commit.md` (Format & Lint → Bump Patch
+Version → Commit). Key points:
 
-1. Bump patch version (Task 4 of x-commit.md) — mandatory if any `.rs` file changed.
-2. Run `make fmt`.
-3. Run `git diff HEAD --stat` and `git log -5 --oneline` to understand scope and style.
-4. Stage all changed files with `git add` (specific files, not `-A`).
-5. Draft a commit message covering the audit scope and fixes applied.
-6. Commit using a HEREDOC — **do NOT include any co-author line**:
-
-```
-git commit -m "$(cat <<'EOF'
-<commit message here>
-EOF
-)"
-```
-
-7. Run `git status` to verify success.
+1. `make fmt`, then `make lint` — must pass clean.
+2. Bump patch version — mandatory if any `.rs` file changed (3-file update).
+3. Draft a commit message covering the audit scope and fixes applied.
+4. Stage specific files with `git add` (not `-A`), commit via HEREDOC —
+   **no co-author line** — then `git status` to verify success.
 
 ## Output Format
 

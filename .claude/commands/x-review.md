@@ -1,3 +1,8 @@
+---
+description: Deep regression review of VSDB changes (latest commit, N commits, hash, range, or full audit)
+argument-hint: "[N | all | <hash> | <hash1>..<hash2>]"
+---
+
 # Deep Regression Analysis for VSDB
 
 You are performing a deep code review of changes to VSDB, a versioned key-value database built on mmdb.
@@ -30,23 +35,10 @@ For `all`, skip to the **Full Audit Protocol** section at the end of this docume
 ### Task 1: Context & Classification
 
 1. Read the full diff carefully
-2. Identify ALL affected subsystems by mapping changed files:
-   - `core/src/common/engine/` → engine, shard routing
-   - `core/src/basic/mapx_raw/` → raw KV layer
-   - `strata/src/basic/mapx/`, `mapx_ord/` → typed collections
-   - `strata/src/basic/persistent_btree/` → B+ tree
-   - `strata/src/versioned/` → versioning, commit DAG, merge
-   - `strata/src/trie/` → Merkle tries
-   - `strata/src/slotdex/` → slot indexing
-   - `strata/src/dagmap/` → DAG collections
-   - `strata/src/common/ende.rs` → encoding
-3. For EACH affected subsystem, read the corresponding pattern file:
-   - `.claude/docs/patterns/btree.md`
-   - `.claude/docs/patterns/versioning.md`
-   - `.claude/docs/patterns/trie.md`
-   - `.claude/docs/patterns/slotdex.md`
-   - `.claude/docs/patterns/dagmap.md`
-   - `.claude/docs/patterns/engine.md`
+2. Identify ALL affected subsystems using the **subsystem mapping table in
+   `review-core.md` Phase 1** (single source of truth)
+3. For EACH affected subsystem, read its pattern guide from `.claude/docs/patterns/`
+   (the table lists which guide covers which subsystem — skip guides for unaffected subsystems)
 4. Classify each change per the review-core methodology
 
 ### Task 2: Deep Regression Analysis
@@ -82,8 +74,7 @@ Check changed files against project style rules:
 4. **Doc-code alignment** — If the change modifies a public function signature, struct field, module structure, or adds/removes/renames a public type or module, verify docs still match. Specifically check:
    - `CLAUDE.md` architecture table (subsystem paths, type names, serialization crate)
    - `CLAUDE.md` conventions (unsafe count, dependency names)
-   - `.claude/docs/review-core.md` subsystem path mappings (Phase 1)
-   - `.claude/commands/x-review.md` full-audit subsystem partitioning table
+   - `.claude/docs/review-core.md` Phase 1 subsystem mapping table (the single source of truth)
    - `.claude/docs/patterns/` guides — referenced file lists and invariants
 
 ### Task 5: Unsafe Code Audit
@@ -174,25 +165,15 @@ When `$ARGUMENTS` is `all`, perform a full codebase audit.
 
 ### Strategy: Parallel Subsystem Audit
 
-Launch **one Agent per subsystem** in parallel. Each agent receives:
-1. The subsystem file list to read
-2. The corresponding pattern file from `.claude/docs/patterns/`
-3. `technical-patterns.md` and `false-positive-guide.md`
-4. The code style rules from Task 4
+Launch **one Agent per subsystem** in parallel — one per row of the subsystem
+mapping table in `review-core.md` Phase 1 (9 agents total; `encoding & common`
+also covers `strata/src/lib.rs` and `strata/src/common/mod.rs`).
 
-### Subsystem Partitioning
-
-| Subsystem | Files | Pattern Guide |
-|-----------|-------|---------------|
-| engine & raw KV | `core/src/common/engine/mod.rs`, `core/src/common/engine/mmdb.rs`, `core/src/common/mod.rs`, `core/src/basic/mapx_raw/` | `engine.md` |
-| typed collections | `strata/src/basic/mapx/`, `strata/src/basic/mapx_ord/`, `strata/src/basic/mapx_ord_rawkey/`, `strata/src/basic/orphan/` | `engine.md` |
-| B+ tree | `strata/src/basic/persistent_btree/` | `btree.md` |
-| versioning | `strata/src/versioned/` (mod.rs, map.rs, handle.rs, diff.rs, merge.rs) | `versioning.md` |
-| Merkle tries | `strata/src/trie/` (mpt/, smt/, node/, nibbles.rs, error.rs, cache.rs, proof.rs) | `trie.md` |
-| slot index | `strata/src/slotdex/` | `slotdex.md` |
-| DAG collections | `strata/src/dagmap/` | `dagmap.md` |
-| vector index | `strata/src/vecdex/` | `vecdex.md` |
-| encoding & common | `strata/src/common/ende.rs`, `strata/src/common/error.rs`, `strata/src/common/mod.rs`, `strata/src/common/macros.rs`, `strata/src/common/dirty_count.rs`, `strata/src/lib.rs` | (cross-cutting) |
+Agents are **stateless** — each prompt must be self-contained and include:
+1. The exact file list for the subsystem (expand the directory paths from the mapping table)
+2. The full content-or-path of the corresponding pattern guide from `.claude/docs/patterns/`
+3. Instructions to read `technical-patterns.md` and `false-positive-guide.md`
+4. The code style rules from Task 4, and the finding output format below
 
 ### Aggregation
 
