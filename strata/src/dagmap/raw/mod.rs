@@ -350,7 +350,11 @@ impl DagMapRaw {
 
         // Phase 1: side branches are doomed by the prune contract — kill
         // them while the mainline is still fully intact.
-        Self::prune_destroy_side_branches(&mut linebuf, &mainline_ids, &pending_reparent);
+        Self::prune_destroy_side_branches(
+            &mut linebuf,
+            &mainline_ids,
+            &pending_reparent,
+        );
 
         // Phase 2: fold the whole mainline into the genesis WITHOUT
         // clearing anything (read-transparent, idempotent).
