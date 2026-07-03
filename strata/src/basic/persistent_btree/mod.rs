@@ -340,31 +340,51 @@ impl PersistentBTree {
         if entries.is_empty() {
             return EMPTY_ROOT;
         }
-        // 1. Pack into leaves.
+        // Split `total` items into chunks of at most `cap`, rebalancing the
+        // trailing pair so no chunk falls below `min` (single-chunk results
+        // are exempt — they become the root, which has no minimum).
+        // `min <= (cap + 1) / 2` guarantees the rebalanced halves fit.
+        fn chunk_sizes(total: usize, cap: usize, min: usize) -> Vec<usize> {
+            debug_assert!(min <= cap.div_ceil(2));
+            let mut sizes = Vec::with_capacity(total.div_ceil(cap));
+            let mut remaining = total;
+            while remaining > cap {
+                sizes.push(cap);
+                remaining -= cap;
+            }
+            if remaining > 0 {
+                sizes.push(remaining);
+            }
+            let n = sizes.len();
+            if n >= 2 && sizes[n - 1] < min {
+                // Merge the trailing chunk with its left sibling and split
+                // evenly: both halves land in `[min, cap]`.
+                let merged = sizes[n - 2] + sizes[n - 1];
+                sizes[n - 2] = merged.div_ceil(2);
+                sizes[n - 1] = merged / 2;
+            }
+            sizes
+        }
+
+        // 1. Pack into leaves (each `MIN_KEYS..=MAX_KEYS`, INV-BT3).
         let mut leaf_ids = Vec::new();
-        for chunk in entries.chunks(MAX_KEYS) {
+        let mut off = 0;
+        for size in chunk_sizes(entries.len(), MAX_KEYS, MIN_KEYS) {
+            let chunk = &entries[off..off + size];
+            off += size;
             let keys = chunk.iter().map(|(k, _)| k.clone()).collect();
             let values = chunk.iter().map(|(_, v)| v.clone()).collect();
             leaf_ids.push(self.alloc(&Node::Leaf { keys, values }));
         }
-        // 2. Build internal levels bottom-up.
+        // 2. Build internal levels bottom-up. Each internal node gets
+        //    `MIN_KEYS + 1 ..= MAX_KEYS + 1` children (uniform height —
+        //    a lone or undersized trailing group would either panic later
+        //    in remove()'s borrow/merge or violate minimum occupancy).
         let mut level = leaf_ids;
         while level.len() > 1 {
             let mut next = Vec::new();
-            let n = level.len();
             let mut i = 0;
-            while i < n {
-                // Group up to `MAX_KEYS + 1` children per internal node.
-                let mut take = (MAX_KEYS + 1).min(n - i);
-                // Never leave a lone trailing child: promoting a single node
-                // verbatim would keep its lower height while its siblings
-                // become internal nodes one level taller, producing a
-                // mixed-height tree that later panics in remove()'s
-                // borrow/merge. Pull the leftover into this group instead so
-                // every node at this output level has uniform-height children.
-                if n - i - take == 1 {
-                    take -= 1;
-                }
+            for take in chunk_sizes(level.len(), MAX_KEYS + 1, MIN_KEYS + 1) {
                 let chunk = &level[i..i + take];
                 let mut keys = Vec::with_capacity(chunk.len() - 1);
                 for &cid in &chunk[1..] {

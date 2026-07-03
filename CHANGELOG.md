@@ -2,18 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
-## [v14.0.3]
+## [v14.0.4]
+
+Consolidates the unpublished v14.0.2/v14.0.3 work (v14.0.1 is the last published release) plus a full sweep of the deferred audit backlog.
 
 ### Breaking
 
-- **Typed-handle instance metadata is envelope-tagged** (introduced across v14.0.2/v14.0.3; on-disk format `VSTYPE02`). Safe restore paths (`serde` / `from_meta`) of `Mapx`, `MapxOrd`, `MapxOrdRawKey`, `Orphan`, `VerMap`, `SlotDex`, `VecDex`, and `DagMapRawKey` now embed and validate an 8-byte hash of the concrete wrapper type (including **all** generic parameters — notably `VerMap<K, V>`'s key/value types, `VecDex`'s distance metric, and `DagMapRawKey<V>`'s value type, none of which occur in any field type), so loading persisted metadata under a different type fails loudly instead of silently misreading data. The tag derives from `std::any::type_name`, so persisted metas are additionally tied to the writing build's type paths/compiler rendering — a false rejection is always safer than type confusion. **Migration**: none; re-create metas with `save_meta` (pre-v14.0.2 typed metas are rejected by the magic check).
-- **Safe prefix restore is validated against the allocator** (v14.0.2, reworked in v14.0.3). `MapxRaw::from_meta` / serde deserialization reject prefixes outside the allocator-issued range and reserve still-pending prefixes so future allocations skip them; `unsafe from_bytes` remains the trusted escape hatch. The v14.0.3 rework removes the per-decode meta-DB read and global-lock reservation: allocator state is mirrored in process atomics, previous-run prefixes (the common restore case) are accepted lock-free without reservation, and the reservation set stays bounded (pending-window registry).
+- **Typed-handle instance metadata is envelope-tagged** (on-disk format `VSTYPE02`). Safe restore paths (`serde` / `from_meta`) of `Mapx`, `MapxOrd`, `MapxOrdRawKey`, `Orphan`, `VerMap`, `SlotDex`, `VecDex`, and `DagMapRawKey` now embed and validate an 8-byte hash of the concrete wrapper type (including **all** generic parameters — notably `VerMap<K, V>`'s key/value types, `VecDex`'s distance metric, and `DagMapRawKey<V>`'s value type, none of which occur in any field type), so loading persisted metadata under a different type fails loudly instead of silently misreading data. The tag derives from `std::any::type_name`, so persisted metas are additionally tied to the writing build's type paths/compiler rendering — a false rejection is always safer than type confusion. **Migration**: none; re-create metas with `save_meta` (older typed metas are rejected by the magic check).
+- **Safe prefix restore is validated against the allocator.** `MapxRaw::from_meta` / serde deserialization reject prefixes outside the allocator-issued range and reserve still-pending prefixes so future allocations skip them; `unsafe from_bytes` remains the trusted escape hatch. The fast path is lock-free: allocator state is mirrored in process atomics, previous-run prefixes (the common restore case) are accepted without reservation, and the reservation set stays bounded (pending-window registry).
+- **SMT internal-node hashing gained a `0x00` domain byte** (leaf/internal domain separation — standard second-preimage hardening). All SMT root hashes and proofs change; the SMT disk-cache format is now v2 and v1 caches are rejected cleanly (the trie rebuilds from authoritative data). MPT is unaffected. Measured cost: ~2% on SMT insert/get/remove (one extra byte per internal-node Keccak input); all other benchmark suites show no change beyond the noise floor.
 
 ### Fixed
 
 - **Accumulated on-disk data no longer degrades small writes into a permanent multi-ms stall.** Root cause was in the mmdb engine (fixed in **mmdb 4.0.4**, now the minimum dependency): a DB opened with a pre-existing L0 backlog — exactly what accumulates across short-lived processes, since collection handles never delete data on drop — never scheduled compaction (the only routine signal was post-flush), so every write slept in the L0-slowdown band against a stale cached file count, and small workloads never flushed to break the loop (measured ~5000 µs/put steady-state vs ~2 µs/put healthy). mmdb now kicks compaction at `DB::open` and from the slowdown path. On the vsdb side, `l0_compaction_trigger` returned to 4 (8 coincided exactly with mmdb's write-slowdown trigger, leaving background compaction no buffer zone to work in).
-- **Merge-base search regained fork-region locality.** The v14.0.2 multi-base merge fix walked the full ancestry of both commits on every merge/fork-point query (O(history) storage reads). Replaced with a git-style "paint down to common" walk (max-heap + STALE propagation) that still returns **all** lowest common ancestors for criss-cross histories but stops at the fork region.
+- **Merge-base search returns all lowest common ancestors with fork-region locality.** Criss-cross histories with multiple merge bases previously could violate the source-wins policy (one base chosen); the interim multi-base fix walked the full ancestry of both commits per merge/fork-point query. The final implementation is a git-style "paint down to common" walk (max-heap + STALE propagation): all merge bases, cost bounded by the fork region.
+- **`PersistentBTree::bulk_load` now meets minimum occupancy (INV-BT3).** The trailing leaf chunk / internal group is rebalanced with its left sibling, so no non-root node is built below `MIN_KEYS` keys (`MIN_KEYS + 1` children).
+- **Instance-meta writes are atomic** (`save_meta` / `save_instance_meta` in both crates): tmp file + fsync + rename replaces truncate-in-place `fs::write`, so a crash mid-save can no longer leave a truncated meta file.
+- **`BitPath::from_packed` normalizes trailing bits** beyond `bit_len` to zero instead of relying on a caller contract.
+- **`VecDex::compact()` pre-validates all vector dimensions** before the irreversible `clear()`, closing the (previously unreachable) mid-rebuild error path.
 - The three-way merge decision matrix is now a single shared function for the single-base and multi-base paths (previously duplicated).
+
+### Changed
+
+- SMT point lookups compare the 32-byte key hash directly at leaves (provably equivalent to the former 256-bit path comparison) instead of materializing a `BitPath` per visit.
+- The MPT and SMT disk caches share one codec-primitive module (`trie/codec_util.rs`) instead of duplicating varint/bytes/checksum helpers; encodings are byte-for-byte unchanged.
+- MPT proof tests now cover divergence inside an Extension node and Extension→Branch→Extension proof chains.
+- Internal rename: `RESERVED_ID_CNT` → `PREFIX_ALLOC_START` (private allocator constant; `BIGGEST_RESERVED_ID` public value unchanged).
 
 ## [v14.0.0]
 

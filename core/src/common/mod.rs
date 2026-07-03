@@ -15,7 +15,7 @@ use error::{Result, VsdbError};
 use parking_lot::Mutex;
 use ruc::*;
 use std::{
-    env, fs,
+    env, fs, io,
     mem::size_of,
     path::{Path, PathBuf},
     sync::{
@@ -48,10 +48,12 @@ pub const MB: u64 = 1 << 20;
 /// A constant representing 1 gigabyte in bytes.
 pub const GB: u64 = 1 << 30;
 
-/// The number of reserved IDs.
-const RESERVED_ID_CNT: Pre = 4096_0000;
+/// The first allocatable prefix: everything below this value is reserved
+/// (never issued by the allocator). Doubles as the allocator's initial
+/// persisted value.
+const PREFIX_ALLOC_START: Pre = 4096_0000;
 /// The biggest reserved ID.
-pub const BIGGEST_RESERVED_ID: Pre = RESERVED_ID_CNT - 1;
+pub const BIGGEST_RESERVED_ID: Pre = PREFIX_ALLOC_START - 1;
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -105,6 +107,24 @@ pub fn vsdb_meta_path(instance_id: u64) -> PathBuf {
     let mut p = VSDB_META_DIR.clone();
     p.push(format!("{:016x}", instance_id));
     p
+}
+
+/// Atomically replaces the file at `path` with `bytes`.
+///
+/// Writes to a sibling `*.tmp` file, fsyncs it, then renames it over the
+/// target — a crash mid-write can never leave a truncated file at `path`
+/// (POSIX `rename` is atomic within a filesystem). Instance metas are
+/// written under the SWMR contract, so the fixed tmp name cannot race.
+pub fn atomic_write_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    {
+        let mut f = fs::File::create(&tmp)?;
+        io::Write::write_all(&mut f, bytes)?;
+        f.sync_all()?;
+    }
+    fs::rename(&tmp, path)
 }
 
 /// The global instance of the VsDB database.

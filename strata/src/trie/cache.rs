@@ -10,17 +10,19 @@
 //! stale, the caller simply rebuilds from the authoritative store.
 //!
 
+use crate::trie::codec_util::{
+    CHECKSUM_LEN, compute_checksum, io_err, read_bytes, read_u8, read_varint,
+    write_bytes, write_varint,
+};
 use crate::trie::error::{Result, TrieError};
 use crate::trie::nibbles::Nibbles;
 use crate::trie::node::{Node, NodeHandle};
-use sha3::{Digest, Keccak256};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
 
 const MAGIC: &[u8; 4] = b"MPTC";
 const VERSION: u8 = 1;
-const CHECKSUM_LEN: usize = 8;
 
 // =========================================================================
 // Public API (called from MptCalc)
@@ -271,53 +273,6 @@ fn deserialize_node(data: &[u8], cursor: &mut usize) -> Result<Node> {
 // Primitive helpers
 // =========================================================================
 
-fn write_varint(buf: &mut Vec<u8>, mut n: usize) {
-    while n >= 0x80 {
-        buf.push(((n as u8) & 0x7F) | 0x80);
-        n >>= 7;
-    }
-    buf.push(n as u8);
-}
-
-fn read_varint(data: &[u8], cursor: &mut usize) -> Result<usize> {
-    let mut n: usize = 0;
-    let mut shift: u32 = 0;
-    loop {
-        if *cursor >= data.len() {
-            return Err(TrieError::InvalidState("varint unexpected EOF".into()));
-        }
-        let b = data[*cursor];
-        *cursor += 1;
-        if shift >= usize::BITS {
-            return Err(TrieError::InvalidState("varint overflow".into()));
-        }
-        let val = ((b & 0x7F) as usize)
-            .checked_shl(shift)
-            .ok_or_else(|| TrieError::InvalidState("varint overflow".into()))?;
-        n |= val;
-        if b & 0x80 == 0 {
-            break;
-        }
-        shift += 7;
-    }
-    Ok(n)
-}
-
-fn write_bytes(buf: &mut Vec<u8>, bytes: &[u8]) {
-    write_varint(buf, bytes.len());
-    buf.extend_from_slice(bytes);
-}
-
-fn read_bytes(data: &[u8], cursor: &mut usize) -> Result<Vec<u8>> {
-    let len = read_varint(data, cursor)?;
-    if *cursor + len > data.len() {
-        return Err(TrieError::InvalidState("bytes unexpected EOF".into()));
-    }
-    let bytes = data[*cursor..*cursor + len].to_vec();
-    *cursor += len;
-    Ok(bytes)
-}
-
 fn write_nibbles(buf: &mut Vec<u8>, nibbles: &Nibbles) {
     let raw = nibbles.as_slice();
     write_varint(buf, raw.len());
@@ -332,25 +287,4 @@ fn read_nibbles(data: &[u8], cursor: &mut usize) -> Result<Nibbles> {
     let raw = data[*cursor..*cursor + len].to_vec();
     *cursor += len;
     Ok(Nibbles::from_nibbles_unsafe(raw))
-}
-
-fn read_u8(data: &[u8], cursor: &mut usize) -> Result<u8> {
-    if *cursor >= data.len() {
-        return Err(TrieError::InvalidState("unexpected EOF".into()));
-    }
-    let v = data[*cursor];
-    *cursor += 1;
-    Ok(v)
-}
-
-fn io_err(e: std::io::Error) -> TrieError {
-    TrieError::InvalidState(format!("I/O error: {e}"))
-}
-
-/// Computes a truncated Keccak256 checksum (first 8 bytes).
-fn compute_checksum(data: &[u8]) -> [u8; CHECKSUM_LEN] {
-    let hash = Keccak256::digest(data);
-    let mut out = [0u8; CHECKSUM_LEN];
-    out.copy_from_slice(&hash[..CHECKSUM_LEN]);
-    out
 }

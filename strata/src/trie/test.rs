@@ -983,6 +983,81 @@ mod mpt_proof_tests {
         }
     }
 
+    /// Non-membership where the queried key's nibble path diverges in the
+    /// MIDDLE of an Extension node's compressed path (not at a Branch).
+    ///
+    /// `0x1234` / `0x1235` share nibbles `[1,2,3]` → Extension([1,2,3]) →
+    /// Branch{4,5}. The absent key `0x1934` departs at the Extension's
+    /// second nibble.
+    #[test]
+    fn test_mpt_proof_nonmembership_diverges_inside_extension() {
+        let mut trie = MptCalc::new();
+        trie.insert(&[0x12, 0x34], b"a").unwrap();
+        trie.insert(&[0x12, 0x35], b"b").unwrap();
+        let root = trie.root_hash().unwrap();
+        let root_hash: [u8; 32] = root.try_into().unwrap();
+
+        for absent in [
+            &[0x19u8, 0x34][..],       // diverges at the Extension's 2nd nibble
+            &[0x12u8, 0x44][..],       // diverges at the Extension's last nibble
+            &[0x12u8, 0x34, 0x56][..], // walks past a leaf
+        ] {
+            let proof = trie.prove(absent).unwrap();
+            assert_eq!(proof.value, None, "key {absent:02x?} must be absent");
+            assert!(
+                MptCalc::verify_proof(&root_hash, absent, &proof).unwrap(),
+                "non-membership proof for {absent:02x?} must verify"
+            );
+        }
+
+        // Present keys still prove correctly against the same root.
+        for (key, val) in [(&[0x12u8, 0x34][..], &b"a"[..]), (&[0x12, 0x35], b"b")] {
+            let proof = trie.prove(key).unwrap();
+            assert_eq!(proof.value.as_deref(), Some(val));
+            assert!(MptCalc::verify_proof(&root_hash, key, &proof).unwrap());
+        }
+    }
+
+    /// Proof path traversing an Extension→Branch→Extension→Branch chain.
+    ///
+    /// Keys `0x11111111` / `0x11111122` / `0x11221111` share nibbles
+    /// `[1,1]` (outer Extension), split at a Branch (1 vs 2), and the
+    /// first two then share `[1,1,1]` again (inner Extension) before a
+    /// second Branch splits them.
+    #[test]
+    fn test_mpt_proof_extension_branch_extension_chain() {
+        let mut trie = MptCalc::new();
+        let keys: [&[u8]; 3] = [
+            &[0x11, 0x11, 0x11, 0x11],
+            &[0x11, 0x11, 0x11, 0x22],
+            &[0x11, 0x22, 0x11, 0x11],
+        ];
+        for (i, key) in keys.iter().enumerate() {
+            trie.insert(key, &[i as u8]).unwrap();
+        }
+        let root = trie.root_hash().unwrap();
+        let root_hash: [u8; 32] = root.try_into().unwrap();
+
+        // Membership through the full chain.
+        for (i, key) in keys.iter().enumerate() {
+            let proof = trie.prove(key).unwrap();
+            assert_eq!(proof.value, Some(vec![i as u8]));
+            assert!(MptCalc::verify_proof(&root_hash, key, &proof).unwrap());
+        }
+
+        // Non-membership diverging inside the INNER extension: shares
+        // [1,1] + branch slot 1 + inner nibbles [1,1] then departs (9).
+        let absent: &[u8] = &[0x11, 0x11, 0x19, 0x11];
+        let proof = trie.prove(absent).unwrap();
+        assert_eq!(proof.value, None);
+        assert!(MptCalc::verify_proof(&root_hash, absent, &proof).unwrap());
+
+        // A tampered value must not verify anywhere along the chain.
+        let mut bad = trie.prove(keys[0]).unwrap();
+        bad.value = Some(vec![0xFF]);
+        assert!(!MptCalc::verify_proof(&root_hash, keys[0], &bad).unwrap_or(false));
+    }
+
     #[test]
     fn test_mpt_proof_nonmembership_empty_trie() {
         let trie = MptCalc::new();

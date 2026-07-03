@@ -974,10 +974,23 @@ where
 
         pairs.shuffle(&mut rand::rng());
 
-        // Note: clear() is irreversible. insert() cannot fail here because
-        // all vectors already passed dimension validation at original
-        // insertion time. If insert semantics ever change to introduce new
-        // error paths, this must become a two-phase commit.
+        // clear() below is irreversible, so anything that could make a
+        // re-insert fail must be rejected BEFORE it. Today that is only a
+        // dimension mismatch (impossible for vectors that passed insert
+        // validation, but cheap to re-check); if insert ever gains new
+        // error paths, this pre-validation must grow with it.
+        let dim = self.meta.get_value().dim;
+        for (_, vec) in &pairs {
+            if vec.len() != dim {
+                return Err(VsdbError::Other {
+                    detail: format!(
+                        "compact: stored vector dimension {} != index dimension {dim}",
+                        vec.len()
+                    ),
+                });
+            }
+        }
+
         self.clear();
 
         for (key, vec) in &pairs {

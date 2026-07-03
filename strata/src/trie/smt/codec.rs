@@ -6,7 +6,11 @@
 //! - **Empty**:    `EMPTY_HASH = [0u8; 32]`
 //! - **Leaf**:     `Keccak256(0x01 || key_hash || value)`
 //! - **Internal**: if both children are empty → `EMPTY_HASH`,
-//!   otherwise `Keccak256(left_hash || right_hash)`
+//!   otherwise `Keccak256(0x00 || left_hash || right_hash)`
+//!
+//! Leaf and internal preimages live in disjoint domains (`0x01` vs
+//! `0x00` tag), the standard second-preimage hardening for Merkle
+//! trees.
 //!
 //! The empty-empty special case ensures that `wrap_hash(EMPTY, path)`
 //! stays `EMPTY` regardless of path length, which is essential for
@@ -35,12 +39,15 @@ pub fn hash_leaf(key_hash: &[u8; 32], value: &[u8]) -> [u8; 32] {
 /// Hashes an internal node.
 ///
 /// If both children are empty, returns `EMPTY_HASH` (preserving the
-/// empty-subtree invariant).  Otherwise `Keccak256(left_hash || right_hash)`.
+/// empty-subtree invariant).  Otherwise `Keccak256(0x00 || left_hash ||
+/// right_hash)` — the `0x00` domain tag keeps internal preimages
+/// disjoint from leaf preimages (`0x01`).
 pub fn hash_internal(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     if *left == EMPTY_HASH && *right == EMPTY_HASH {
         return EMPTY_HASH;
     }
     let mut h = Keccak256::new();
+    h.update([0x00]);
     h.update(left);
     h.update(right);
     h.finalize().into()

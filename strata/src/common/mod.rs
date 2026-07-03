@@ -43,10 +43,13 @@ fn type_tag<T: ?Sized>() -> u64 {
 
 /// Serializes `value` with `postcard` and writes it to the instance-meta
 /// directory under the given `instance_id`.
+///
+/// The write is atomic (tmp + fsync + rename), so a crash mid-save can
+/// never leave a truncated meta file behind.
 pub fn save_instance_meta(instance_id: u64, value: &impl Serialize) -> Result<()> {
     let path = vsdb_meta_path(instance_id);
     let bytes = postcard::to_allocvec(value)?;
-    fs::write(&path, bytes)?;
+    atomic_write_file(&path, &bytes)?;
     Ok(())
 }
 

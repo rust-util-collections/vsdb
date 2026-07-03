@@ -30,12 +30,20 @@ impl BitPath {
 
     /// Creates a path from raw packed bytes and a bit length.
     ///
-    /// The caller must ensure that any trailing bits beyond `bit_len`
-    /// in the last byte are zero.
-    pub fn from_packed(data: Vec<u8>, bit_len: usize) -> Self {
+    /// Trailing bits beyond `bit_len` in the last byte are normalized to
+    /// zero, so equality and prefix comparisons never observe garbage
+    /// carried in from the caller.
+    pub fn from_packed(mut data: Vec<u8>, bit_len: usize) -> Self {
         debug_assert!(
             data.len() == bit_len.div_ceil(8) || (bit_len == 0 && data.is_empty())
         );
+        let rem = bit_len % 8;
+        if rem != 0
+            && let Some(last) = data.last_mut()
+        {
+            // MSB-first packing: keep the high `rem` bits, zero the rest.
+            *last &= 0xFFu8 << (8 - rem);
+        }
         Self { data, bit_len }
     }
 

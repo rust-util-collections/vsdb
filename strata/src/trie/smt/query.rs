@@ -18,11 +18,12 @@ impl<'a> SmtRo<'a> {
     /// Looks up a value by its key hash.
     pub fn get(&self, key_hash: &[u8; 32]) -> Result<Option<Vec<u8>>> {
         let path = BitPath::from_hash(key_hash);
-        Self::step(self.root, &path, 0)
+        Self::step(self.root, key_hash, &path, 0)
     }
 
     fn step(
         handle: &SmtHandle,
+        full_key_hash: &[u8; 32],
         full_path: &BitPath,
         depth: usize,
     ) -> Result<Option<Vec<u8>>> {
@@ -30,11 +31,14 @@ impl<'a> SmtRo<'a> {
         match node {
             SmtNode::Empty => Ok(None),
             SmtNode::Leaf {
-                key_hash, value, ..
+                key_hash: leaf_key_hash,
+                value,
+                ..
             } => {
-                // Check if this leaf is for our key.
-                let leaf_path = BitPath::from_hash(key_hash);
-                if *full_path == leaf_path {
+                // Both paths are full 256-bit `from_hash` expansions, so
+                // path equality is exactly hash equality — compare the 32
+                // bytes directly instead of materializing a BitPath.
+                if leaf_key_hash == full_key_hash {
                     Ok(Some(value.clone()))
                 } else {
                     Ok(None)
@@ -56,7 +60,7 @@ impl<'a> SmtRo<'a> {
 
                 let bit = full_path.bit_at(next_depth);
                 let child = if bit == 0 { left } else { right };
-                Self::step(child, full_path, next_depth + 1)
+                Self::step(child, full_key_hash, full_path, next_depth + 1)
             }
         }
     }

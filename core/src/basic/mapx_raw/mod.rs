@@ -446,9 +446,9 @@ impl MapxRaw {
     /// Returns the `instance_id` that can be passed to `from_meta`.
     pub fn save_meta(&self) -> Result<u64> {
         let id = self.instance_id();
-        fs::write(
-            crate::common::vsdb_meta_path(id),
-            self.inner.encode_prefix_meta(),
+        crate::common::atomic_write_file(
+            &crate::common::vsdb_meta_path(id),
+            &self.inner.encode_prefix_meta(),
         )?;
         Ok(id)
     }

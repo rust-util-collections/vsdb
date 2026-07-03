@@ -1,5 +1,5 @@
 use crate::common::{
-    BatchTrait, GB, PREFIX_SIZE, Pre, PreBytes, RESERVED_ID_CNT, RawKey, RawValue,
+    BatchTrait, GB, PREFIX_ALLOC_START, PREFIX_SIZE, Pre, PreBytes, RawKey, RawValue,
     vsdb_freeze_base_dir, vsdb_get_base_dir,
 };
 use mmdb::{BidiIterator, CompressionType, DB, DbOptions, WriteBatch, WriteOptions};
@@ -29,7 +29,7 @@ thread_local! {
 }
 
 /// Next un-issued batch start. `0` means "not yet initialized from the
-/// persisted allocator value" (real prefixes start at `RESERVED_ID_CNT`).
+/// persisted allocator value" (real prefixes start at `PREFIX_ALLOC_START`).
 static GLOBAL_COUNTER: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
 /// In-memory mirror of the persisted allocator ceiling (always kept in
 /// sync with the on-disk value once initialized).
@@ -240,7 +240,7 @@ impl MmDB {
     /// (serde / `from_meta`), and reserves it when necessary.
     ///
     /// Returns `false` when the prefix lies outside the allocator-issued
-    /// range (`< RESERVED_ID_CNT` or `>= ceiling`) — such metadata cannot
+    /// range (`< PREFIX_ALLOC_START` or `>= ceiling`) — such metadata cannot
     /// come from a legitimately allocated instance.
     ///
     /// Accepted prefixes need a reservation only if the allocator could
@@ -251,7 +251,7 @@ impl MmDB {
     /// decoding cheap and the reservation set bounded.
     pub(crate) fn reserve_recovered_prefix(&self, meta_prefix: PreBytes) -> bool {
         let prefix = Pre::from_le_bytes(meta_prefix);
-        if prefix < RESERVED_ID_CNT {
+        if prefix < PREFIX_ALLOC_START {
             return false;
         }
         self.ensure_alloc_init();
@@ -456,7 +456,7 @@ impl PreAllocator {
             Self {
                 key: META_KEY_PREFIX_ALLOCATOR,
             },
-            (RESERVED_ID_CNT + Pre::MIN).to_le_bytes(),
+            (PREFIX_ALLOC_START + Pre::MIN).to_le_bytes(),
         )
     }
 }

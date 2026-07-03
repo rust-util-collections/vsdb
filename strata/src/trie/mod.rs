@@ -53,6 +53,7 @@
 //! short-circuit — independent of tree shape or compression.
 
 mod cache;
+mod codec_util;
 mod error;
 mod mpt;
 mod nibbles;

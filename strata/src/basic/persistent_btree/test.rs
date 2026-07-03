@@ -677,6 +677,73 @@ fn bulk_load_and_query() {
     assert_eq!(tree.iter(root).count(), 1000);
 }
 
+/// Every non-root node produced by bulk_load must meet minimum occupancy
+/// (INV-BT3): leaves >= MIN_KEYS keys, internals >= MIN_KEYS + 1 children.
+/// Sweeps sizes around every chunk boundary of the first three tree levels,
+/// which previously produced undersized trailing nodes.
+#[test]
+fn bulk_load_meets_minimum_occupancy() {
+    setup();
+
+    fn assert_occupancy(tree: &PersistentBTree, id: NodeId, is_root: bool, n: usize) {
+        match tree.node(id) {
+            Node::Leaf { keys, .. } => {
+                assert!(
+                    is_root || keys.len() >= MIN_KEYS,
+                    "undersized leaf ({} keys) for n={n}",
+                    keys.len()
+                );
+                assert!(keys.len() <= MAX_KEYS);
+            }
+            Node::Internal { keys, children } => {
+                assert!(
+                    is_root || children.len() >= MIN_KEYS + 1,
+                    "undersized internal ({} children) for n={n}",
+                    children.len()
+                );
+                assert!(children.len() <= MAX_KEYS + 1);
+                assert_eq!(keys.len() + 1, children.len());
+                for &c in &children {
+                    assert_occupancy(tree, c, false, n);
+                }
+            }
+        }
+    }
+
+    let boundaries = [
+        MAX_KEYS,
+        MAX_KEYS * (MAX_KEYS + 1),
+        MAX_KEYS * (MAX_KEYS + 1) * (MAX_KEYS + 1),
+    ];
+    let mut sizes = vec![1, 2];
+    for b in boundaries {
+        for d in [-2i64, -1, 0, 1, 2] {
+            let s = b as i64 + d;
+            if s > 0 {
+                sizes.push(s as usize);
+            }
+        }
+    }
+
+    for n in sizes {
+        let mut tree = PersistentBTree::new();
+        let entries: Vec<_> = (0u64..n as u64)
+            .map(|i| (i.to_be_bytes().to_vec(), i.to_le_bytes().to_vec()))
+            .collect();
+        let root = tree.bulk_load(entries.clone());
+        assert_occupancy(&tree, root, true, n);
+        assert_eq!(tree.iter(root).count(), n, "iteration count for n={n}");
+        // Spot-check lookups at the extremes and the middle.
+        for i in [0, n as u64 / 2, n as u64 - 1] {
+            assert_eq!(
+                tree.get(root, &i.to_be_bytes()).unwrap(),
+                i.to_le_bytes().to_vec(),
+                "lookup {i} for n={n}"
+            );
+        }
+    }
+}
+
 #[test]
 fn bulk_load_empty() {
     setup();

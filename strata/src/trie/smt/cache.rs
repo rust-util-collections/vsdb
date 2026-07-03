@@ -5,8 +5,11 @@
 //! instead of MPT nodes.
 //!
 
+use crate::trie::codec_util::{
+    CHECKSUM_LEN, compute_checksum, io_err, read_bytes, read_u8, read_varint,
+    write_bytes, write_varint,
+};
 use crate::trie::error::{Result, TrieError};
-use sha3::{Digest, Keccak256};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -15,8 +18,10 @@ use super::bitpath::BitPath;
 use super::{SmtHandle, SmtNode};
 
 const MAGIC: &[u8; 4] = b"SMTC";
-const VERSION: u8 = 1;
-const CHECKSUM_LEN: usize = 8;
+// v2: internal-node hashing gained a 0x00 domain byte (leaf/internal
+// domain separation) — v1 caches carry incompatible hashes and must be
+// rejected so the trie is rebuilt from authoritative data.
+const VERSION: u8 = 2;
 
 // =========================================================================
 // Public API
@@ -231,53 +236,6 @@ fn deserialize_node(data: &[u8], cursor: &mut usize) -> Result<SmtNode> {
 // Primitive helpers
 // =========================================================================
 
-fn write_varint(buf: &mut Vec<u8>, mut n: usize) {
-    while n >= 0x80 {
-        buf.push(((n as u8) & 0x7F) | 0x80);
-        n >>= 7;
-    }
-    buf.push(n as u8);
-}
-
-fn read_varint(data: &[u8], cursor: &mut usize) -> Result<usize> {
-    let mut n: usize = 0;
-    let mut shift: u32 = 0;
-    loop {
-        if *cursor >= data.len() {
-            return Err(TrieError::InvalidState("varint unexpected EOF".into()));
-        }
-        let b = data[*cursor];
-        *cursor += 1;
-        if shift >= usize::BITS {
-            return Err(TrieError::InvalidState("varint overflow".into()));
-        }
-        let val = ((b & 0x7F) as usize)
-            .checked_shl(shift)
-            .ok_or_else(|| TrieError::InvalidState("varint overflow".into()))?;
-        n |= val;
-        if b & 0x80 == 0 {
-            break;
-        }
-        shift += 7;
-    }
-    Ok(n)
-}
-
-fn write_bytes(buf: &mut Vec<u8>, bytes: &[u8]) {
-    write_varint(buf, bytes.len());
-    buf.extend_from_slice(bytes);
-}
-
-fn read_bytes(data: &[u8], cursor: &mut usize) -> Result<Vec<u8>> {
-    let len = read_varint(data, cursor)?;
-    if *cursor + len > data.len() {
-        return Err(TrieError::InvalidState("bytes unexpected EOF".into()));
-    }
-    let bytes = data[*cursor..*cursor + len].to_vec();
-    *cursor += len;
-    Ok(bytes)
-}
-
 fn write_bitpath(buf: &mut Vec<u8>, path: &BitPath) {
     write_varint(buf, path.len());
     buf.extend_from_slice(path.as_packed());
@@ -292,24 +250,4 @@ fn read_bitpath(data: &[u8], cursor: &mut usize) -> Result<BitPath> {
     let packed = data[*cursor..*cursor + byte_len].to_vec();
     *cursor += byte_len;
     Ok(BitPath::from_packed(packed, bit_len))
-}
-
-fn read_u8(data: &[u8], cursor: &mut usize) -> Result<u8> {
-    if *cursor >= data.len() {
-        return Err(TrieError::InvalidState("unexpected EOF".into()));
-    }
-    let v = data[*cursor];
-    *cursor += 1;
-    Ok(v)
-}
-
-fn io_err(e: std::io::Error) -> TrieError {
-    TrieError::InvalidState(format!("I/O error: {e}"))
-}
-
-fn compute_checksum(data: &[u8]) -> [u8; CHECKSUM_LEN] {
-    let hash = Keccak256::digest(data);
-    let mut out = [0u8; CHECKSUM_LEN];
-    out.copy_from_slice(&hash[..CHECKSUM_LEN]);
-    out
 }
