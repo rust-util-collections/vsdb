@@ -46,7 +46,7 @@ use std::{
 };
 use vsdb_core::{
     basic::mapx_raw::{self, MapxRaw},
-    common::RawBytes,
+    common::{RawBytes, vsdb_flush},
 };
 
 type DagHead = DagMapRaw;
@@ -290,29 +290,105 @@ impl DagMapRaw {
 
     /// Prunes the DAG, merging all nodes in the mainline into the genesis node.
     ///
-    /// Returns the new head of the mainline.
+    /// Returns the new head of the mainline — the genesis node, which keeps
+    /// its instance ID, so metadata saved for the genesis *before* the prune
+    /// still resolves to the merged result afterwards.
     ///
     /// # Crash safety
     ///
-    /// Pruning is a multi-step, multi-instance rewrite and is **not**
-    /// crash-atomic: mainline data is merged into the genesis node and
-    /// the intermediate nodes/side branches are cleared step by step.
-    /// A crash (e.g. `kill -9`) mid-prune can leave a partially merged
-    /// genesis and a broken parent chain.  Callers that must survive a
-    /// crash during prune need an external snapshot/backup taken
-    /// beforehand.
+    /// The prune is ordered as **merge → flush → re-parent → flush → clear**:
+    /// nothing is cleared before the genesis holds the complete merged state
+    /// and every surviving child has been re-pointed at it (the two
+    /// [`vsdb_flush`] barriers pin that ordering across the engine's
+    /// independently-recovered shards).  Because overlay reads resolve
+    /// top-down, the in-place enrichment of the genesis is invisible through
+    /// the head, so a crash (e.g. `kill -9` or power loss) at **any** point
+    /// leaves the canonical access paths — the returned head / the genesis
+    /// (including its pre-prune metadata) and the head's children —
+    /// value-exact: they observe either the complete pre-prune state or the
+    /// complete post-prune state, never a torn mix.
+    ///
+    /// The head and the intermediate mainline nodes are *consumed* by the
+    /// prune (this is the ordinary, non-crash contract as well): handles or
+    /// saved metadata still pointing at them may observe partially cleared
+    /// nodes after a crash and must not be used.  Storage left behind by an
+    /// interrupted prune remains reachable through the genesis' children
+    /// registry and is reclaimed by the next prune's side-branch
+    /// destruction — a crash costs at most temporarily leaked space, never
+    /// corruption.
     #[inline(always)]
     pub fn prune(self) -> Result<DagHead> {
         self.prune_mainline()
     }
 
-    // Return the new head of mainline
+    // Return the new head of mainline (the genesis node).
+    //
+    // The phases below are deliberately ordered so that every crash point
+    // leaves the canonical view (genesis + surviving children) value-exact;
+    // see `prune` for the externally visible contract and each phase
+    // method for the per-phase argument.
     fn prune_mainline(mut self) -> Result<DagHead> {
+        // Phase 0 (read-only): collect the mainline chain.
+        let mut linebuf = self.prune_collect_mainline()?;
+        if linebuf.is_empty() {
+            return Ok(self);
+        }
+
+        // Instance IDs on the mainline path — must not be destroyed.
+        let mainline_ids: Vec<u64> = {
+            let mut ids = vec![self.instance_id()];
+            ids.extend(linebuf.iter().map(|n| n.instance_id()));
+            ids
+        };
+
+        // The head's children are survivors (re-parented in phase 3).
+        // An earlier interrupted prune may have left them
+        // double-registered under the genesis already — phase 1 must
+        // not mistake those registry copies for genesis side branches.
+        let pending_reparent: HashSet<RawBytes> =
+            self.children.iter().map(|(id, _)| id).collect();
+
+        // Phase 1: side branches are doomed by the prune contract — kill
+        // them while the mainline is still fully intact.
+        Self::prune_destroy_side_branches(&mut linebuf, &mainline_ids, &pending_reparent);
+
+        // Phase 2: fold the whole mainline into the genesis WITHOUT
+        // clearing anything (read-transparent, idempotent).
+        self.prune_merge_into_genesis(&mut linebuf);
+
+        // Barrier A: the merged genesis must be durable before any child
+        // is re-pointed at it.  Writes to different engine shards recover
+        // independently, so ordering across prefixes needs an explicit
+        // flush.
+        vsdb_flush();
+
+        // Phase 3: re-point the head's children at the merged genesis.
+        let kept = self.prune_reparent_children(linebuf.last_mut().unwrap());
+
+        // Barrier B: all pointer flips must be durable before the old
+        // chain is torn down.
+        vsdb_flush();
+
+        // Phases 4-5: clear the consumed nodes (head first, then
+        // intermediates newest → oldest).
+        self.prune_clear_consumed(&mut linebuf);
+
+        // Phase 6: drop the now-dead mainline entry from the genesis'
+        // children registry (side branches were already destroyed in
+        // phase 1; the ownership check inside skips foreign residue).
+        let mut genesis = linebuf.pop().unwrap();
+        genesis.prune_children_exclude(&kept);
+
+        Ok(genesis)
+    }
+
+    /// Prune phase 0 (read-only): walk the parent chain and return
+    /// `[parent, grandparent, ..., genesis]`, or an empty vector when
+    /// `self` is parentless.  Fails on parent cycles.
+    fn prune_collect_mainline(&self) -> Result<Vec<Self>> {
         let p = match self.parent.get_value() {
             Some(p) => p,
-            _ => {
-                return Ok(self);
-            }
+            _ => return Ok(vec![]),
         };
 
         let mut seen = HashSet::new();
@@ -330,78 +406,160 @@ impl DagMapRaw {
                 None => break,
             }
         }
+        Ok(linebuf)
+    }
 
-        let mid = linebuf.len() - 1;
-        let (others, genesis) = linebuf.split_at_mut(mid);
-
-        // Instance IDs on the mainline path — must not be destroyed.
-        let mainline_ids: Vec<u64> = {
-            let mut ids = vec![self.instance_id()];
-            ids.extend(others.iter().map(|n| n.instance_id()));
-            ids.push(genesis[0].instance_id());
-            ids
-        };
-
-        for i in others.iter_mut().rev() {
-            for (k, v) in i.data.iter() {
-                // The genesis node is parentless, so a tombstone there is
-                // equivalent to the key being absent — drop tombstones
-                // instead of accumulating dead entries forever.
-                if v.is_empty() {
-                    genesis[0].data.remove(&k);
-                } else {
-                    genesis[0].data.insert(k, v);
-                }
-            }
-            // Collect side-branch children first to avoid mutating the
-            // MapxOrd through destroy()'s parent-unlink while iterating it.
-            let side_children: Vec<_> = i
+    /// Prune phase 1: destroy every non-mainline child (side branch) of
+    /// every chain node, genesis included.
+    ///
+    /// This must happen **before** the genesis is enriched in phase 2: a
+    /// live branch forked below the topmost holder of a key would observe
+    /// the in-place merge.  Destroying branches first keeps every read
+    /// exact until the branch dies — and dying is the prune contract.
+    ///
+    /// Crash mid-phase: the mainline is untouched; a partially destroyed
+    /// branch is an intended deletion that the next prune completes.
+    fn prune_destroy_side_branches(
+        linebuf: &mut [Self],
+        mainline_ids: &[u64],
+        pending_reparent: &HashSet<RawBytes>,
+    ) {
+        for node in linebuf.iter_mut() {
+            let node_id = node.instance_id();
+            // Collect first — destroy() unlinks entries from
+            // `node.children` while we would be iterating it.
+            let doomed: Vec<_> = node
                 .children
                 .iter()
-                .filter_map(|(_, child)| {
-                    (!mainline_ids.contains(&child.instance_id())).then_some(child)
+                .filter(|(id, child)| {
+                    !mainline_ids.contains(&child.instance_id())
+                        && !pending_reparent.contains(id)
                 })
                 .collect();
-            *i.parent.get_mut() = None;
-            i.data.clear();
-            i.children.clear();
-            for mut child in side_children {
-                child.destroy();
+            for (id, mut child) in doomed {
+                // Registry entries are only an index; the child's own
+                // parent slot is the ownership truth.  A child owned by a
+                // *different* live parent (e.g. one already re-pointed at
+                // the genesis by an interrupted prune, still listed under
+                // the old head) must not be destroyed through the stale
+                // registry copy — only the index entry is dropped.
+                if Self::owned_or_residue(node_id, &child) {
+                    child.destroy();
+                }
+                node.children.remove(&id);
             }
         }
+    }
 
-        for (k, v) in self.data.iter() {
-            // Same tombstone elision as the mainline merge above.
+    // Ownership test used by every registry-driven destruction walk.
+    //
+    // `child` may be destroyed on behalf of the node whose instance ID is
+    // `owner_id` iff its own parent slot still points back at that node
+    // (owned), or is `None` (residue of an interrupted clear — live roots
+    // are never listed in any children registry, so a parentless entry is
+    // always reclaimable).  A child owned by a *different* live parent is
+    // foreign: its registry entry is a stale index copy.
+    fn owned_or_residue(owner_id: u64, child: &Self) -> bool {
+        match child.parent.get_value() {
+            None => true,
+            Some(p) => p.instance_id() == owner_id,
+        }
+    }
+
+    /// Prune phase 2: fold every mainline node's data into the genesis,
+    /// oldest → newest, clearing **nothing**.
+    ///
+    /// In-place enrichment of the genesis is invisible to reads through
+    /// the head: overlay resolution stops at the topmost holder of a key,
+    /// and every key written here still has its holder above the genesis.
+    /// Tombstones are elided (the genesis is parentless, so absence is
+    /// equivalent) — equally invisible, since the tombstone-bearing node
+    /// still shadows the key.  Re-running the fold after a crash replays
+    /// the same sequence and converges to the same merged state.
+    fn prune_merge_into_genesis(&self, linebuf: &mut [Self]) {
+        let mid = linebuf.len() - 1;
+        let (others, genesis) = linebuf.split_at_mut(mid);
+        let genesis = &mut genesis[0];
+
+        for i in others.iter().rev() {
+            Self::prune_fold_node(genesis, i);
+        }
+        Self::prune_fold_node(genesis, self);
+    }
+
+    // Merge one mainline node's data into the genesis node.
+    fn prune_fold_node(genesis: &mut Self, src: &Self) {
+        for (k, v) in src.data.iter() {
+            // The genesis node is parentless, so a tombstone there is
+            // equivalent to the key being absent — drop tombstones
+            // instead of accumulating dead entries forever.
             if v.is_empty() {
-                genesis[0].data.remove(&k);
+                genesis.data.remove(&k);
             } else {
-                genesis[0].data.insert(k, v);
+                genesis.data.insert(k, v);
             }
         }
+    }
 
-        let mut exclude_targets = vec![];
+    /// Prune phase 3: re-point every child of the head at the (fully
+    /// merged) genesis and register it there.
+    ///
+    /// Each flip is a single-slot write and is value-exact on both sides:
+    /// `child → old chain` and `child → merged genesis` resolve every key
+    /// identically because phase 2 completed first.  A crash between
+    /// flips therefore leaves every child on a correct view, and the
+    /// whole phase is idempotent.
+    ///
+    /// Returns the IDs of the re-parented children (the survivors of the
+    /// genesis' children registry).
+    fn prune_reparent_children(&mut self, genesis: &mut Self) -> Vec<RawBytes> {
+        let mut kept = vec![];
         for (id, mut child) in self.children.iter_mut() {
             // Reparent: the child's owned parent slot now aliases the
             // genesis node.
             // SAFETY: The shadow is serialized (read-only) immediately in
             // the following two insert calls; no mutation occurs through
-            // it (all writes go through genesis[0]), satisfying the SWMR
+            // it (all writes go through `genesis`), satisfying the SWMR
             // contract.  `Clone` cannot be used — it deep-copies the
             // storage instead of aliasing it.
-            *child.parent.get_mut() = Some(unsafe { genesis[0].shadow() });
-            genesis[0].children.insert(&id, &child);
-            exclude_targets.push(id);
+            *child.parent.get_mut() = Some(unsafe { genesis.shadow() });
+            genesis.children.insert(&id, &child);
+            kept.push(id);
         }
+        kept
+    }
 
-        // clean up
+    /// Prune phases 4-5: clear the consumed nodes — the head first, then
+    /// the intermediates newest → oldest.
+    ///
+    /// Per-node order: **parent → children → data**.  Nulling the head's
+    /// parent first makes interrupted-prune re-entry structurally safe:
+    /// before any clearing starts, re-running `prune` on the head is a
+    /// complete, convergent re-run (refold + idempotent flips); the
+    /// instant clearing starts, the head is parentless and a re-run is
+    /// refused by the early return — a re-fold against a half-cleared
+    /// head (which would resurrect older values over the merged genesis)
+    /// is impossible.
+    ///
+    /// Self-healing invariant: whenever a node still holds data, it is
+    /// reachable through the not-yet-cleared children registry of the
+    /// next-older mainline node (head-side nodes are cleared first) and
+    /// its parent slot is either intact or `None` — both reclaimable by
+    /// the ownership rule ([`owned_or_residue`](Self::owned_or_residue)),
+    /// so the next prune's side-branch destruction sweeps the residue.
+    fn prune_clear_consumed(&mut self, linebuf: &mut [Self]) {
+        let mid = linebuf.len() - 1;
+        let others = &mut linebuf[..mid];
+
         *self.parent.get_mut() = None;
+        self.children.clear();
         self.data.clear();
-        self.children.clear(); // disconnect from the mainline
 
-        genesis[0].prune_children_exclude(&exclude_targets);
-
-        // genesis[0]
-        Ok(linebuf.pop().unwrap())
+        for i in others.iter_mut() {
+            *i.parent.get_mut() = None;
+            i.children.clear();
+            i.data.clear();
+        }
     }
 
     /// Prunes children that are in the `include_targets` list.
@@ -417,6 +575,7 @@ impl DagMapRaw {
     }
 
     fn prune_children(&mut self, targets: &[impl AsRef<DagMapId>], exclude_mode: bool) {
+        let self_id = self.instance_id();
         let targets = targets.iter().map(|i| i.as_ref()).collect::<HashSet<_>>();
 
         let dropped_children = if exclude_mode {
@@ -436,11 +595,18 @@ impl DagMapRaw {
         }
 
         for (_, mut child) in dropped_children.into_iter() {
-            child.destroy();
+            // Only destroy children this node actually owns (or parentless
+            // residue); an entry whose child now lives under a different
+            // parent is a stale index copy left by an interrupted
+            // multi-step operation — dropping the entry above suffices.
+            if Self::owned_or_residue(self_id, &child) {
+                child.destroy();
+            }
         }
     }
 
-    /// Destroys this node and all its descendant children, clearing all data.
+    /// Destroys this node and all its **owned** descendant children,
+    /// clearing all data.
     ///
     /// If this node is attached to a parent, it first removes its own child
     /// entry from the parent's `children` collection, then persistently
@@ -449,6 +615,12 @@ impl DagMapRaw {
     /// including clones taken earlier and handles later restored via
     /// [`from_meta`](Self::from_meta) — observes the destroyed state and
     /// can no longer resolve inherited reads through the parent chain.
+    ///
+    /// The descendant walk follows the children registries but treats each
+    /// child's own parent slot as the ownership truth: an entry whose child
+    /// meanwhile lives under a different parent (a stale index copy left by
+    /// an interrupted multi-step operation such as [`prune`](Self::prune))
+    /// is skipped, never destroyed through the stale path.
     #[inline(always)]
     pub fn destroy(&mut self) {
         let self_id = self.instance_id();
@@ -467,20 +639,31 @@ impl DagMapRaw {
         *self.parent.get_mut() = None;
         self.data.clear();
 
-        // Clear all descendants iteratively. A recursive walk overflows the
-        // stack on deep DAGs; mirror the iterative, cycle-guarded design used
-        // by `get()` and `prune_mainline`.
+        // Clear all owned descendants iteratively. A recursive walk
+        // overflows the stack on deep DAGs; mirror the iterative,
+        // cycle-guarded design used by `get()` and `prune_mainline`.
+        // Each stack entry carries the instance ID of the registry owner
+        // it was discovered under, for the ownership check on pop.
         let mut seen = HashSet::new();
         seen.insert(self_id);
-        let mut stack = self.children.iter().map(|(_, c)| c).collect::<Vec<_>>();
+        let mut stack = self
+            .children
+            .iter()
+            .map(|(_, c)| (self_id, c))
+            .collect::<Vec<_>>();
         self.children.clear(); // optimize for recursive ops
 
-        while let Some(mut node) = stack.pop() {
+        while let Some((owner_id, mut node)) = stack.pop() {
             if !seen.insert(node.instance_id()) {
                 continue;
             }
+            if !Self::owned_or_residue(owner_id, &node) {
+                // Foreign entry (stale index copy) — not ours to destroy.
+                continue;
+            }
+            let node_id = node.instance_id();
             node.data.clear();
-            stack.extend(node.children.iter().map(|(_, c)| c));
+            stack.extend(node.children.iter().map(|(_, c)| (node_id, c)));
             node.children.clear();
             // Break the upward traversal link so a handle to any
             // descendant cannot walk through the cleared node to

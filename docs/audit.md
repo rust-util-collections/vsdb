@@ -7,9 +7,10 @@
 > (SMT domain separation, atomic instance-meta writes, BitPath re-masking,
 > bulk_load minimum occupancy, vecdex compact pre-validation, allocator-const
 > rename, trie codec dedup, MPT proof coverage); one was promoted to Open
-> (dagmap prune crash-atomicity); the remainder stay deferred with reasoning
-> re-verified below. Historical "fixed in ..." logs live in git history and
-> CHANGELOG.md, not in this file.
+> (dagmap prune crash-atomicity) and subsequently fixed the same day via the
+> merge→flush→re-parent→flush→clear phase redesign; the remainder stay
+> deferred with reasoning re-verified below. Historical "fixed in ..." logs
+> live in git history and CHANGELOG.md, not in this file.
 >
 > **Won't Fix ≠ permanent.** Every entry under `## Won't Fix` must be
 > re-evaluated against the current codebase on each audit. Surrounding code
@@ -19,11 +20,7 @@
 
 ## Open
 
-### [HIGH] dagmap: prune_mainline is not crash-atomic
-- **Where**: strata/src/dagmap/raw/mod.rs (prune_mainline)
-- **What**: Pruning merges mainline data into the genesis node and clears the intermediate nodes/side branches step by step across multiple storage prefixes. A crash mid-prune can leave a partially merged genesis and a broken parent chain.
-- **Why**: The engine has no cross-prefix write transactions, and the overlay data cleared mid-merge is not reconstructible from surviving state — a VerMap-style dirty-flag rebuild cannot repair it. The limitation is documented on `prune` (raw + rawkey), directing callers to snapshot externally first.
-- **Suggested fix**: COW rebuild + single-pointer commit: merge the mainline into a **fresh** node (new prefixes) instead of mutating genesis in place; make the sole commit point one atomic engine write (flipping the surviving head's parent slot / published meta); afterwards destroy the old chain (a crash during cleanup leaks storage but never corrupts the DAG — both sides of the flip are self-consistent). Needs a design decision on identity semantics: handles restored from pre-prune metas must observe the post-prune chain, so the genesis instance-id (or its meta) must be preserved or forwarded. Promoted from Won't Fix on 2026-07-03 (alpha policy encourages the fundamental redesign); scheduled as dedicated work — not bundled into a sweep commit.
+*(none)*
 
 ---
 
@@ -57,4 +54,4 @@
 ### [LOW] vecdex: compact() clear/re-insert is not crash-atomic
 - **Where**: strata/src/vecdex/mod.rs (compact)
 - **What**: A process crash (kill -9) between `clear()` and the completion of re-insertion loses the not-yet-reinserted vectors. (The *error-path* variant of this finding — insert failing mid-way — was fixed 2026-07-03 by pre-validating dimensions before the irreversible clear.)
-- **Reason**: compact() is a cold, explicit maintenance API; crash-mid-compact leaves a structurally valid (dirty-flagged, recoverable) index containing the already-reinserted subset. Full crash-atomicity needs the same COW-rebuild + pointer-flip infrastructure as dagmap prune (see Open) and should reuse that design when it lands rather than growing a parallel mechanism.
+- **Reason**: compact() is a cold, explicit maintenance API; crash-mid-compact leaves a structurally valid (dirty-flagged, recoverable) index containing the already-reinserted subset. The dagmap prune fix (merge→flush→re-parent→flush→clear) is not transplantable: it exploits DAG overlay-read transparency, which a flat HNSW graph lacks — crash-atomic compact needs a genuine COW rebuild into fresh prefixes plus an atomic meta flip, a disproportionate mechanism for a cold path. Re-verified 2026-07-03.

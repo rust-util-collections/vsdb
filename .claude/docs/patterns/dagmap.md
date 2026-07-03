@@ -37,6 +37,30 @@ persistently without orphaning siblings.
 shadow of the parent handle (NOT a `Clone` — `Clone` deep-copies storage).
 Verify `destroy()` nulls only its own slot.
 
+### INV-DG5: Registry Is Index, Parent Slot Is Ownership Truth
+A `children` registry entry is only an index; the child's own parent slot
+decides ownership. Interrupted multi-step operations (prune) can leave stale
+double-registrations, so every registry-driven destruction walk must verify
+`child.parent` points back at the walking node (or is `None` — reclaimable
+residue) before destroying.
+**Check**: Verify `destroy()`, `prune_children`, and prune's side-branch
+destruction all gate on the ownership test (`owned_or_residue`); a foreign
+entry must only be dropped from the registry, never destroyed through it.
+
+### INV-DG6: Prune Phase Ordering (Crash Safety)
+`prune_mainline` must be ordered **destroy branches → merge → flush →
+re-parent → flush → clear**, with nothing cleared before the genesis holds
+the complete merged state and all surviving children are re-pointed at it.
+The genesis is enriched **in place** (keeps its instance ID), which is
+invisible through the head because overlay reads resolve top-down.
+The head's per-node clear order is **parent → children → data**: once
+clearing starts, the head is parentless, so re-running prune is refused
+(early return) instead of re-folding against a half-cleared head.
+**Check**: Verify no `clear()`/parent-null precedes the merge+re-parent
+completion; verify the two `vsdb_flush()` barriers (cross-shard WALs recover
+independently); verify a crash at any phase boundary leaves genesis +
+surviving children value-exact (see the `prune_crash_*` tests).
+
 ## Common Bug Patterns
 
 ### ID Counter Rollback on Crash
