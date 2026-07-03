@@ -437,6 +437,17 @@ where
             .unwrap_or(0)
     }
 
+    // Number of entries stored in slots strictly greater than `slot`
+    // (whether the slot itself exists or not).
+    fn distance_to_the_rightmost_slot(&self, slot: &S) -> Distance {
+        if *slot == S::MAX {
+            return 0;
+        }
+        self.total() as Distance
+            - self.distance_to_the_leftmost_slot(slot)
+            - self.slot_entry_cnt(slot) as Distance
+    }
+
     // Exclude the slot itself-owned entries (whether it exists or not)
     fn distance_to_the_leftmost_slot(&self, slot: &S) -> Distance {
         if *slot == S::MIN {
@@ -515,6 +526,48 @@ where
         (slot_start, remaining)
     }
 
+    /// Single-pass reverse page location using in-memory tier caches.
+    ///
+    /// Mirror of [`locate_page_start`](Self::locate_page_start):
+    /// `global_skip_n` counts entries to skip walking from the greatest
+    /// storage slot downward. Returns the upper bound at which the reverse
+    /// data walk must resume, plus the number of entries still to skip
+    /// inside that boundary slot.
+    ///
+    /// Consumed units are cut off with `Bound::Excluded(floor)`: bucket
+    /// floors are left-aligned, so excluding a consumed floor also drops
+    /// every finer-grained bucket (and data slot) belonging to it.
+    fn locate_page_rstart(&self, global_skip_n: EntryCnt) -> (Bound<S>, SkipNum) {
+        let mut slot_end: Bound<S> = Bound::Unbounded;
+        let mut remaining: u64 = global_skip_n;
+
+        for t in self.tiers.iter().rev() {
+            t.ensure_cache();
+            let c = t.cache.lock();
+            for (floor, entry_cnt) in c.range((Bound::Unbounded, slot_end.clone())).rev()
+            {
+                if *entry_cnt > remaining {
+                    break;
+                }
+                slot_end = Bound::Excluded(floor.clone());
+                remaining -= *entry_cnt;
+            }
+        }
+
+        for (slot, entries) in
+            self.data.range((Bound::Unbounded, slot_end.clone())).rev()
+        {
+            let entry_cnt = entries.len() as u64;
+            if entry_cnt > remaining {
+                break;
+            }
+            slot_end = Bound::Excluded(slot);
+            remaining -= entry_cnt;
+        }
+
+        (slot_end, remaining)
+    }
+
     fn get_entries(
         &self,
         slot_start: S, // Included
@@ -569,6 +622,12 @@ where
     /// set of keys, so its members stay ascending in every view. Reversing the
     /// whole result vector instead would corrupt within-slot order and shift
     /// page membership across slot boundaries when a slot holds >1 entry.
+    ///
+    /// The page start is located through
+    /// [`locate_page_rstart`](Self::locate_page_rstart) — the
+    /// tier-accelerated mirror of the forward path — so the raw data walk
+    /// below only touches the slots that actually contribute to the
+    /// returned page.
     fn get_entries_reverse(
         &self,
         slot_start: S, // Included
@@ -576,13 +635,23 @@ where
         page_size: PageSize,
         page_index: PageIndex,
     ) -> Vec<K> {
+        // Skip counted from the greatest storage slot downward; entries in
+        // slots above `slot_end` are prepended to the skip so the locate
+        // walk can start from the global right end and consume whole tier
+        // buckets without range-boundary bookkeeping.
+        let global_skip_n = self.distance_to_the_rightmost_slot(&slot_end)
+            + (page_size as Distance) * (page_index as Distance);
+        let global_skip_n = u64::try_from(global_skip_n).unwrap_or(u64::MAX);
+
+        let (slot_end_actual, local_skip_n) = self.locate_page_rstart(global_skip_n);
+
         let take_n = page_size as usize;
-        let mut to_skip = (page_size as usize).saturating_mul(page_index as usize);
+        let mut to_skip = local_skip_n as usize;
         let mut ret = Vec::with_capacity(take_n);
 
         for (_, entries) in self
             .data
-            .range((Bound::Included(slot_start), Bound::Included(slot_end)))
+            .range((Bound::Included(slot_start), slot_end_actual))
             .rev()
         {
             let n = entries.len();

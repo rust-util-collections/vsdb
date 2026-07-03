@@ -697,7 +697,7 @@ fn bulk_load_meets_minimum_occupancy() {
             }
             Node::Internal { keys, children } => {
                 assert!(
-                    is_root || children.len() >= MIN_KEYS + 1,
+                    is_root || children.len() > MIN_KEYS,
                     "undersized internal ({} children) for n={n}",
                     children.len()
                 );
