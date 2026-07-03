@@ -1,5 +1,6 @@
 use super::*;
 use ruc::*;
+use std::cell::RefCell;
 
 #[test]
 fn test_insert() {
@@ -149,4 +150,17 @@ fn test_meta_restore_then_mutate() {
     restored.insert([2u8], &200);
 
     assert_eq!(hdr.get([2u8]), Some(200));
+}
+
+#[test]
+fn test_get_mut_persists_interior_mutability_change() {
+    let mut hdr: MapxOrdRawKey<RefCell<u32>> = MapxOrdRawKey::new();
+    hdr.insert([1u8], &RefCell::new(10));
+
+    {
+        let value = hdr.get_mut([1u8]).unwrap();
+        *value.borrow_mut() = 20;
+    }
+
+    assert_eq!(*hdr.get([1u8]).unwrap().borrow(), 20);
 }

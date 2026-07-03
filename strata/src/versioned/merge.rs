@@ -42,7 +42,9 @@
 //! [`VerMap::merge(source, target)`](super::map::VerMap::merge).
 //!
 
-use crate::basic::persistent_btree::{NodeId, PersistentBTree};
+use std::collections::BTreeSet;
+
+use crate::basic::persistent_btree::{EMPTY_ROOT, NodeId, PersistentBTree};
 
 /// Performs a three-way merge.
 ///
@@ -154,4 +156,89 @@ pub fn three_way_merge(
 
     // Build the merged tree via bulk load (O(n), optimally packed).
     tree.bulk_load(merged)
+}
+
+/// Performs a three-way merge against one or more merge bases.
+///
+/// When multiple lowest common ancestors exist, keys whose base values differ
+/// are treated as criss-cross conflicts; if source and target differ, source
+/// wins.  Keys whose base values agree use the normal decision matrix.
+pub fn three_way_merge_many_bases(
+    tree: &mut PersistentBTree,
+    ancestor_roots: &[NodeId],
+    source_root: NodeId,
+    target_root: NodeId,
+) -> NodeId {
+    if ancestor_roots.len() <= 1 {
+        return three_way_merge(
+            tree,
+            ancestor_roots.first().copied().unwrap_or(EMPTY_ROOT),
+            source_root,
+            target_root,
+        );
+    }
+
+    if source_root == target_root {
+        return source_root;
+    }
+
+    let mut keys = BTreeSet::new();
+    for root in ancestor_roots
+        .iter()
+        .copied()
+        .chain([source_root, target_root])
+    {
+        for (key, _) in tree.iter(root) {
+            keys.insert(key);
+        }
+    }
+
+    let mut merged = Vec::new();
+    for key in keys {
+        let base_values: Vec<Option<Vec<u8>>> = ancestor_roots
+            .iter()
+            .map(|&root| tree.get(root, &key))
+            .collect();
+        let first_base = base_values.first().cloned().unwrap_or(None);
+        let source = tree.get(source_root, &key);
+        let target = tree.get(target_root, &key);
+
+        let result = if base_values.iter().all(|base| base == &first_base) {
+            decide_owned(first_base.as_deref(), source.as_deref(), target.as_deref())
+        } else {
+            source
+        };
+
+        if let Some(value) = result {
+            merged.push((key, value));
+        }
+    }
+
+    tree.bulk_load(merged)
+}
+
+fn decide_owned(
+    ancestor: Option<&[u8]>,
+    source: Option<&[u8]>,
+    target: Option<&[u8]>,
+) -> Option<Vec<u8>> {
+    match (ancestor, source, target) {
+        (Some(a), Some(s), Some(t)) if a == s && a == t => Some(a.to_vec()),
+        (Some(a), Some(s), Some(t)) if a == t => Some(s.to_vec()),
+        (Some(a), Some(s), Some(t)) if a == s => Some(t.to_vec()),
+        (Some(_), Some(s), Some(t)) if s == t => Some(s.to_vec()),
+        (Some(_), Some(s), Some(_)) => Some(s.to_vec()),
+
+        (Some(a), None, Some(t)) if a == t => None,
+        (Some(a), Some(s), None) if a == s => None,
+        (Some(_), None, Some(_)) => None,
+        (Some(_), Some(s), None) => Some(s.to_vec()),
+        (Some(_), None, None) => None,
+
+        (None, Some(s), None) => Some(s.to_vec()),
+        (None, None, Some(t)) => Some(t.to_vec()),
+        (None, Some(s), Some(t)) if s == t => Some(s.to_vec()),
+        (None, Some(s), Some(_)) => Some(s.to_vec()),
+        (None, None, None) => None,
+    }
 }

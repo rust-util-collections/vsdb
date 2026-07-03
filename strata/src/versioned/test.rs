@@ -629,6 +629,36 @@ fn merge_criss_cross_uses_lowest_common_ancestor() {
 }
 
 #[test]
+fn merge_criss_cross_multiple_bases_keeps_source_wins() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+
+    m.insert(main, &1, &0).unwrap();
+    m.commit(main).unwrap();
+
+    let a = m.create_branch("a", main).unwrap();
+    let b = m.create_branch("b", main).unwrap();
+
+    m.insert(a, &1, &1).unwrap();
+    m.commit(a).unwrap();
+    let a_base = m.create_branch("a_base", a).unwrap();
+
+    m.insert(b, &1, &2).unwrap();
+    m.commit(b).unwrap();
+    let b_base = m.create_branch("b_base", b).unwrap();
+
+    m.merge(b_base, a).unwrap();
+    assert_eq!(m.get(a, &1).unwrap(), Some(2));
+
+    m.merge(a_base, b).unwrap();
+    assert_eq!(m.get(b, &1).unwrap(), Some(1));
+
+    m.merge(a, b).unwrap();
+    assert_eq!(m.get(b, &1).unwrap(), Some(2));
+}
+
+#[test]
 fn merge_delete_in_source_unchanged_in_target() {
     setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
@@ -3614,6 +3644,25 @@ fn test_save_and_from_meta_with_branches() {
     );
 }
 
+#[test]
+fn serde_rebuilds_branch_name_index() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+    let feat = m.create_branch("feature", main).unwrap();
+
+    m.branch_names.remove(&"feature".to_string());
+    assert_eq!(m.branch_id("feature"), None);
+    assert!(matches!(
+        m.create_branch("feature", main),
+        Err(VsdbError::BranchAlreadyExists { .. })
+    ));
+
+    let bytes = postcard::to_allocvec(&m).unwrap();
+    let restored: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
+    assert_eq!(restored.branch_id("feature"), Some(feat));
+}
+
 /// Postcard serde roundtrip: VerMap with data, branches, commits.
 /// This validates the hand-written 8-tuple Serialize/Deserialize impl.
 #[test]
@@ -3656,8 +3705,8 @@ fn test_serde_size() {
     let m: VerMap<u32, u32> = VerMap::new();
     let bytes = postcard::to_allocvec(&m).unwrap();
     assert!(
-        bytes.len() <= 160,
-        "expected ≤160 bytes, got {}",
+        bytes.len() <= 1536,
+        "expected ≤1536 bytes, got {}",
         bytes.len()
     );
 }

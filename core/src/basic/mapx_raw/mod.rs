@@ -459,11 +459,7 @@ impl MapxRaw {
     /// contains the data referenced by this instance ID.
     pub fn from_meta(instance_id: u64) -> Result<Self> {
         let bytes = fs::read(crate::common::vsdb_meta_path(instance_id))?;
-        let prefix = engine::Mapx::decode_prefix_meta(&bytes)?;
-        // SAFETY: `prefix` was decoded from this instance's on-disk meta file
-        // by the magic-validated decode path, so it is a valid prefix slice
-        // for the same code version.
-        Ok(unsafe { Self::from_bytes(prefix) })
+        engine::Mapx::from_prefix_meta(&bytes).map(|inner| Self { inner })
     }
 }
 

@@ -307,6 +307,21 @@ impl Mapx {
         }
     }
 
+    pub(crate) fn from_prefix_meta(meta: &[u8]) -> Result<Self> {
+        let prefix = Self::decode_prefix_meta(meta)?;
+        if !VSDB.db.reserve_recovered_prefix(prefix) {
+            return Err(VsdbError::Decode {
+                detail: format!(
+                    "Mapx metadata prefix {} is outside the allocator-reserved range",
+                    u64::from_le_bytes(prefix)
+                ),
+            });
+        }
+        Ok(Self {
+            prefix: Prefix::Recovered(prefix),
+        })
+    }
+
     #[inline(always)]
     pub(crate) fn encode_prefix_meta(&self) -> Vec<u8> {
         let mut meta = Vec::with_capacity(MAPX_META_LEN);
@@ -478,14 +493,7 @@ impl<'de> Deserialize<'de> for Mapx {
     {
         deserializer
             .deserialize_byte_buf(SimpleVisitor)
-            .and_then(|meta| {
-                let prefix =
-                    Self::decode_prefix_meta(&meta).map_err(de::Error::custom)?;
-                // SAFETY: `prefix` was just validated by the decode path
-                // (magic tag + length), so it is a well-formed 8-byte
-                // prefix slice from a trusted source.
-                Ok(unsafe { Self::from_prefix_slice(prefix) })
-            })
+            .and_then(|meta| Self::from_prefix_meta(&meta).map_err(de::Error::custom))
     }
 }
 

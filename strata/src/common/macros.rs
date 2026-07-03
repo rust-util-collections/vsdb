@@ -24,7 +24,7 @@ macro_rules! define_map_wrapper {
             where
                 S: serde::Serializer,
             {
-                self.inner.serialize(serializer)
+                $crate::common::serialize_typed_handle_meta::<Self, S>(&self.inner, serializer)
             }
         }
 
@@ -33,7 +33,7 @@ macro_rules! define_map_wrapper {
             where
                 D: serde::Deserializer<'de>,
             {
-                <$inner_type as serde::Deserialize>::deserialize(deserializer)
+                $crate::common::deserialize_typed_handle_meta::<Self, $inner_type, D>(deserializer)
                     .map(|inner| Self { inner, $phantom_field: std::marker::PhantomData })
             }
         }

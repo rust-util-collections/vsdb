@@ -1,8 +1,8 @@
 # Audit Findings
 
 > Auto-managed by /x-review and /x-fix.
-> Last full audit: 2026-07-02 (all 9 subsystems, parallel deep review; every
-> new finding fixed in the same pass — see "Fixed in the last full audit").
+> Last full audit: 2026-07-03 (all 9 subsystems, parallel deep review; every
+> new finding fixed in the same pass — see "Fixed in the latest full audit").
 > Followed by the v14.0.0 design-level overhaul (see the section at the end),
 > which additionally resolved four former Won't Fix entries.
 >
@@ -39,11 +39,6 @@
 - **Where**: core/src/common/engine/mmdb.rs (MmdbBatch::commit), core/src/common/engine/mod.rs (BatchTrait)
 - **What**: `commit` moves the buffered `WriteBatch` into the engine's `write` call; on error the buffered operations are consumed, so a retry on the same batch object commits nothing (and reports success).
 - **Reason**: mmdb's `write(batch)` takes the batch by value, so the operations cannot be restored without cloning every batch on the warm path. Elsewhere in the engine, mmdb write failures are treated as fatal (`.expect`). The public typed wrappers already consume the batch (`commit(self)`), making retry impossible there; the remaining `MapxRaw::batch_entry` trait object now documents the non-retryable contract on both `BatchTrait::commit` and `batch_entry`.
-
-### [MEDIUM] trie: VerMapWithProof integration layer has zero test coverage
-- **Where**: strata/src/trie/proof.rs (entire file: sync_to_branch, sync_to_commit, try_load_cache, apply_diff, Drop auto-save)
-- **What**: `VerMapWithProof<K, V, T>` is the primary user-facing entry point for versioned Merkle commitments. It contains nontrivial logic for cache sync, dirty overlay management, incremental diff application, and Drop-based auto-save — none of which are tested. Existing tests only exercise `MptCalc` and `SmtCalc` directly.
-- **Reason**: Feature addition (test coverage), not a bug. The integration logic is straightforward delegation to tested primitives. Adding end-to-end integration tests is desirable future work but doesn't block this audit.
 
 ### [MEDIUM] trie: MPT proof tests lack coverage for complex node type combinations
 - **Where**: strata/src/trie/test.rs (mpt_proof_tests)
@@ -102,7 +97,24 @@
 
 ---
 
-## Fixed in the last full audit (2026-07-02)
+## Fixed in the latest full audit (2026-07-03)
+
+- **[HIGH] engine**: safe `MapxRaw` serde/from_meta could restore allocator-future prefixes and collide with the next allocation. Safe restore now rejects prefixes outside the allocator-reserved range and reserves accepted recovered prefixes so future allocations skip them; unsafe `from_bytes` remains the explicit trusted escape hatch.
+- **[HIGH] typed-collections**: safe restore could type-confuse collection handles by loading one typed wrapper as another. Typed handle metadata now includes and validates the concrete wrapper/type tag.
+- **[HIGH] versioning**: dirty recovery rebuilt commit ref-counts but not the branch-name index. Deserialization now rebuilds `branch_names` from `branches`, and branch creation checks branch names against the branch table as the source of truth.
+- **[HIGH] versioning**: criss-cross histories with multiple merge bases could violate source-wins by choosing one base. Merge now computes all lowest merge bases and treats disagreeing base values as source-wins conflicts.
+- **[HIGH] slotdex**: `save_meta` cleared the dirty bit before writing current metadata, so a crash could make stale tier metadata look clean. Metadata is now written before clearing dirty, and clean restores defensively drop empty tier stacks.
+- **[HIGH] vecdex**: dirty recovery could keep stale adjacency to dropped nodes and reuse ids referenced only by stale edges. Recovery now sanitizes adjacency, tracks adjacency ids for `next_node_id`, and relinks nodes without live base edges.
+- **[MEDIUM] typed-collections**: `Orphan<T>` implemented `Eq` for `T: PartialEq`, allowing `Orphan<f64>` to violate `Eq` reflexivity. The impl now requires `T: Eq`.
+- **[MEDIUM] vecdex**: filtered HNSW search ignored `ef` as a traversal budget and could scan an entire component. Filtered traversal is now bounded by the inflated `ef` visit budget while preserving result-only filtering.
+- **[LOW] dagmap**: `DagMapRawKey::destroy` docs still described obsolete per-handle tombstone semantics. Docs now match persistent parent-slot unlink behavior.
+- **[LOW] engine**: ungrouped `std` imports in `MapxRaw` tests were fixed.
+- **[LOW] typed-collections**: no-op `get_mut()` / `iter_mut()` on `MapxOrdRawKey` rewrote values on drop. Typed mutable wrappers now compare encoded bytes on drop and write back only when the value changed, including safe interior-mutability changes.
+- **[MEDIUM] trie**: the former VerMapWithProof integration test-coverage Won't Fix entry is obsolete; integration coverage now exists in `versioned/test.rs`, so the entry was removed.
+
+---
+
+## Fixed in full audit (2026-07-02)
 
 - **[CRITICAL] versioning**: `insert`/`remove`/`discard` released the old dirty root *before* persisting the updated branch pointer; a crash in that window (with compaction triggered by the release) could leave the durable branch state pointing at physically deleted B+ tree nodes. Fixed by persisting the branch state first (matching the ordering already used by `rollback_to`/`merge`/`branch_delete`).
 - **[HIGH] vecdex**: dirty recovery could elect a torn, edge-less node as the HNSW entry point (hiding the whole graph) and left crash-orphaned nodes permanently unreachable. Recovery now reconciles all per-node rows (dropping torn inserts/removes), prefers linked entry candidates (also in `remove()`'s re-election), and relinks live nodes whose edge writes were lost.

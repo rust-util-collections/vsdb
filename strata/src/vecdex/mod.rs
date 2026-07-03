@@ -34,8 +34,8 @@ use crate::{
 };
 use distance::{DistanceMetric, Scalar};
 use hnsw::{
-    adj_key, get_neighbors, prune_neighbors, random_layer, remove_adjacency,
-    search_layer, select_neighbors_heuristic, set_neighbors,
+    adj_key, decode_neighbors, get_neighbors, prune_neighbors, random_layer,
+    remove_adjacency, search_layer, select_neighbors_heuristic, set_neighbors,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -246,10 +246,8 @@ where
     ///
     /// 1. **Reconcile** — a node is *live* iff all four metadata rows
     ///    agree; every row of a torn node is dropped (the operation is
-    ///    treated as never having happened).  Stale backlinks pointing
-    ///    at dropped ids are left in place: search cannot enter a node
-    ///    whose vector is gone, so they are inert and are swept out by
-    ///    the normal prune/compact paths.
+    ///    treated as never having happened).  Adjacency is then sanitized
+    ///    so no live node is considered connected only through dropped ids.
     /// 2. **Rebuild meta** — `node_count`, `next_node_id` (ids are never
     ///    reused, even for dropped rows), and the entry point.  Entry
     ///    election prefers nodes that still have base-layer edges so a
@@ -319,12 +317,55 @@ where
             self.key_to_node.remove(key);
         }
 
-        // Pass 3: rebuild derived metadata.  Prefer an entry point that
+        // Pass 3: sanitize adjacency.  Track max ids found in adjacency too,
+        // so a clear-crash cannot leave stale edges whose ids are later reused.
+        let mut base_linked = HashSet::new();
+        let adjacency_rows: Vec<_> = self.adjacency.iter().collect();
+        for (key, raw_neighbors) in adjacency_rows {
+            if key.len() != 9 {
+                self.adjacency.remove(&key);
+                continue;
+            }
+
+            let layer = key[0];
+            let mut id = [0u8; 8];
+            id.copy_from_slice(&key[1..9]);
+            let source = u64::from_be_bytes(id);
+            max_id = Some(max_id.map_or(source, |m| m.max(source)));
+
+            let mut neighbors = decode_neighbors(&raw_neighbors);
+            for &neighbor in &neighbors {
+                max_id = Some(max_id.map_or(neighbor, |m| m.max(neighbor)));
+            }
+
+            if !live_ids.contains(&source) {
+                self.adjacency.remove(&key);
+                continue;
+            }
+
+            let before = neighbors.len();
+            neighbors.retain(|nid| *nid != source && live_ids.contains(nid));
+            neighbors.sort_unstable();
+            neighbors.dedup();
+
+            if neighbors.is_empty() {
+                self.adjacency.remove(&key);
+            } else {
+                if neighbors.len() != before {
+                    set_neighbors(&mut self.adjacency, layer, source, &neighbors);
+                }
+                if layer == 0 {
+                    base_linked.insert(source);
+                }
+            }
+        }
+
+        // Pass 4: rebuild derived metadata.  Prefer an entry point that
         // still has base-layer edges (isolated candidates only matter
         // when nothing is linked, e.g. a single-node index).
         let mut entry: Option<(u64, u8, bool)> = None;
         for &(nid, layer) in &live {
-            let linked = self.adjacency.get(adj_key(0, nid)).is_some();
+            let linked = base_linked.contains(&nid);
             // Tuple order: a linked candidate beats any unlinked one;
             // among equals, the higher layer wins.
             let better = match entry {
@@ -348,12 +389,11 @@ where
             }
         }
 
-        // Pass 4: reconnect live nodes whose edge writes were lost.
+        // Pass 5: reconnect live nodes whose edge writes were lost.
         if live.len() > 1 {
             let entry_id = entry.map(|(id, _, _)| id);
             for &(nid, layer) in &live {
-                if Some(nid) == entry_id || self.adjacency.get(adj_key(0, nid)).is_some()
-                {
+                if Some(nid) == entry_id || base_linked.contains(&nid) {
                     continue;
                 }
                 if let Some(vector) = self.vectors.get(&nid) {
@@ -525,13 +565,11 @@ where
     /// Marks a clean shutdown so that the next [`from_meta`](Self::from_meta)
     /// call can skip the count rebuild.
     pub fn save_meta(&mut self) -> Result<u64> {
-        // Clear the dirty bit — signals clean shutdown.
-        let mut m = self.meta.get_mut();
-        m.node_count = dc::clear_dirty(m.node_count);
-        drop(m);
-
         let id = self.instance_id();
         crate::common::save_instance_meta(id, self)?;
+
+        let mut m = self.meta.get_mut();
+        m.node_count = dc::clear_dirty(m.node_count);
         Ok(id)
     }
 
@@ -679,7 +717,8 @@ where
     /// Non-matching nodes still participate in graph traversal to maintain
     /// connectivity, but are excluded from the result set.  Distance-based
     /// pruning is disabled when filtering to avoid missing matches reachable
-    /// only through non-matching bridge nodes.
+    /// only through non-matching bridge nodes; traversal is still bounded by
+    /// an inflated `ef` visit budget.
     ///
     /// For very large indexes or highly selective predicates, use
     /// [`search_ef_with_filter`](Self::search_ef_with_filter) with an

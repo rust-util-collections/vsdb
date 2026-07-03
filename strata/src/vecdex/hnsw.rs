@@ -130,6 +130,7 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>>(
 
     let has_filter = filter.is_some();
     let passes = |id: u64| -> bool { filter.is_none_or(|f| f(id)) };
+    let visit_budget = has_filter.then_some(ef.max(entry_points.len()).max(1));
 
     for &ep in entry_points {
         if let Some(vec) = get_vector(ep) {
@@ -144,6 +145,10 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>>(
 
     let mut neighbor_buf = Vec::new();
     while let Some(Reverse((OrdS(c_dist), c_id))) = candidates.pop() {
+        if visit_budget.is_some_and(|budget| visited.len() >= budget) {
+            break;
+        }
+
         // Standard HNSW early termination: stop when the nearest unvisited
         // candidate is farther than the k-th result.  This is only sound
         // without filtering — when a filter is active, unfiltered bridge nodes
@@ -158,6 +163,9 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>>(
 
         get_neighbors_into(adjacency, layer, c_id, &mut neighbor_buf);
         for &n_id in &neighbor_buf {
+            if visit_budget.is_some_and(|budget| visited.len() >= budget) {
+                break;
+            }
             if !visited.insert(n_id) {
                 continue;
             }

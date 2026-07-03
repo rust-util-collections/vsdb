@@ -313,6 +313,35 @@ fn filtered_search_no_match() {
 }
 
 #[test]
+fn filtered_search_layer_uses_visit_budget() {
+    let mut adjacency = MapxRaw::new();
+    for node in 0..99u64 {
+        hnsw::set_neighbors(&mut adjacency, 0, node, &[node + 1]);
+    }
+
+    let vectors: Vec<Vec<f32>> = (0..100).map(|i| vec![i as f32]).collect();
+    let get_vec = |id: u64| -> Option<Vec<f32>> { vectors.get(id as usize).cloned() };
+    let calls = std::cell::Cell::new(0usize);
+    let reject_all = |_: u64| {
+        calls.set(calls.get() + 1);
+        false
+    };
+
+    let results = hnsw::search_layer::<f32, L2>(
+        &[0.0],
+        &[0],
+        8,
+        0,
+        &get_vec,
+        &adjacency,
+        Some(&reject_all),
+    );
+
+    assert!(results.is_empty());
+    assert!(calls.get() <= 8, "visited {} nodes", calls.get());
+}
+
+#[test]
 fn filtered_search_respects_k() {
     setup();
     let cfg = HnswConfig {
@@ -1103,4 +1132,38 @@ fn crash_recovery_relinks_edgeless_node_and_prefers_linked_entry() {
     // Relinking re-raised the entry point to the high-layer node.
     assert_eq!(restored.meta.get_value().entry_point, Some(nid));
     assert_eq!(restored.meta.get_value().max_layer, 10);
+}
+
+#[test]
+fn crash_recovery_removes_stale_adjacency_to_dropped_nodes() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 2,
+        ..Default::default()
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    for i in 0..6u32 {
+        idx.insert(&i, &[i as f32, 0.0]).unwrap();
+    }
+
+    let live = idx.key_to_node.get(&0).unwrap();
+    idx.node_info.insert(&live, &NodeInfo { max_layer: 10 });
+
+    let stale = idx.meta.get_value().next_node_id + 100;
+    hnsw::set_neighbors(&mut idx.adjacency, 0, live, &[stale]);
+
+    let id = idx.instance_id();
+    crate::common::save_instance_meta(id, &idx).unwrap();
+
+    let restored: VecDex<u32, L2> = VecDex::from_meta(id).unwrap();
+
+    assert!(restored.meta.get_value().next_node_id > stale);
+    for (_, raw_neighbors) in restored.adjacency.iter() {
+        for neighbor in hnsw::decode_neighbors(&raw_neighbors) {
+            assert!(restored.vectors.get(&neighbor).is_some());
+        }
+    }
+
+    let res = restored.search(&[0.0, 0.0], 6).unwrap();
+    assert_eq!(res.len(), 6);
 }

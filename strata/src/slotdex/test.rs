@@ -676,3 +676,31 @@ fn crash_with_corrupted_total_is_corrected() {
     let restored: SlotDex<u64, u64> = SlotDex::from_meta(id).unwrap();
     assert_eq!(restored.total(), 12);
 }
+
+#[test]
+fn clean_restore_drops_empty_tier_metadata() {
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    for i in 0..100u64 {
+        db.insert(i, i).unwrap();
+    }
+    assert!(!db.tiers.is_empty());
+
+    for tier in &mut db.tiers {
+        tier.store.clear();
+        *tier.entry_count.get_mut() = 0;
+        tier.cache.get_mut().clear();
+    }
+    let raw = db.total.get_value();
+    db.total
+        .set_value(&crate::common::dirty_count::clear_dirty(raw));
+
+    let bytes = postcard::to_allocvec(&db).unwrap();
+    let restored: SlotDex<u64, u64> = postcard::from_bytes(&bytes).unwrap();
+
+    assert_eq!(restored.total(), 100);
+    assert!(restored.tiers.is_empty());
+    assert_eq!(
+        restored.get_entries_by_page_slot(Some(90), Some(99), 20, 0, false),
+        (90u64..100).collect::<Vec<_>>()
+    );
+}

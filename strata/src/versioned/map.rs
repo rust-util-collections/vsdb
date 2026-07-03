@@ -14,7 +14,7 @@ use crate::common::error::{Result, VsdbError};
 use crate::{Mapx, MapxOrd, Orphan};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BinaryHeap, HashMap, HashSet},
+    collections::HashSet,
     fmt,
     marker::PhantomData,
     time::{SystemTime, UNIX_EPOCH},
@@ -313,6 +313,10 @@ where
             .ok_or(VsdbError::CommitNotFound { commit_id: id })
     }
 
+    fn branch_name_exists(&self, name: &str) -> bool {
+        self.branches.iter().any(|(_, state)| state.name == name)
+    }
+
     // =================================================================
     // Main branch
     // =================================================================
@@ -345,7 +349,7 @@ where
         name: &str,
         source_branch: BranchId,
     ) -> Result<BranchId> {
-        if self.branch_names.contains_key(&name.to_string()) {
+        if self.branch_name_exists(name) {
             return Err(VsdbError::BranchAlreadyExists {
                 name: name.to_string(),
             });
@@ -709,16 +713,20 @@ where
         let src_commit = self.get_commit_inner(src.head)?;
         let tgt_commit = self.get_commit_inner(tgt.head)?;
 
-        // Find common ancestor.
-        let ancestor_id = self.find_common_ancestor(src.head, tgt.head);
-        let ancestor_root = match ancestor_id {
-            Some(aid) => self.get_commit_inner(aid)?.root,
-            None => EMPTY_ROOT,
+        let ancestor_roots: Vec<NodeId> = self
+            .find_merge_bases(src.head, tgt.head)
+            .into_iter()
+            .map(|aid| self.get_commit_inner(aid).map(|c| c.root))
+            .collect::<Result<_>>()?;
+        let ancestor_roots = if ancestor_roots.is_empty() {
+            vec![EMPTY_ROOT]
+        } else {
+            ancestor_roots
         };
 
-        let merged_root = super::merge::three_way_merge(
+        let merged_root = super::merge::three_way_merge_many_bases(
             &mut self.tree,
-            ancestor_root,
+            &ancestor_roots,
             src_commit.root,
             tgt_commit.root,
         );
@@ -758,70 +766,73 @@ where
         Ok(id)
     }
 
-    /// Finds the lowest (most-recent) common ancestor of two commits.
-    ///
-    /// Walks the commit DAG in **descending `CommitId` order** using a
-    /// max-heap, flagging each commit with the side(s) it is reachable
-    /// from (`a`, `b`, or both).  `CommitId`s are monotonic — a parent is
-    /// always created before its child, so `parent.id < child.id`.  That
-    /// means by the time a commit is popped, every descendant that could
-    /// flag it has already been processed, so the first commit popped with
-    /// **both** flags is the highest-id (i.e. lowest / most-recent) common
-    /// ancestor.
-    ///
-    /// A naive "first BFS intersection" is **not** correct here: a
-    /// criss-cross merge (a merge whose second parent is an older commit)
-    /// introduces a shortcut edge that can surface a *higher* common
-    /// ancestor first.  Feeding that too-old base into `three_way_merge`
-    /// would misclassify a single-sided change as a conflict and silently
-    /// drop it under the source-wins rule.
-    fn find_common_ancestor(&self, a: CommitId, b: CommitId) -> Option<CommitId> {
-        const FROM_A: u8 = 0b01;
-        const FROM_B: u8 = 0b10;
-        const BOTH: u8 = FROM_A | FROM_B;
+    fn ancestors_of(&self, start: CommitId) -> HashSet<CommitId> {
+        let mut out = HashSet::new();
+        let mut stack = vec![start];
+        while let Some(id) = stack.pop() {
+            if id == NO_COMMIT || !out.insert(id) {
+                continue;
+            }
+            if let Some(commit) = self.commits.get(&id) {
+                stack.extend(commit.parents.iter().copied());
+            }
+        }
+        out
+    }
 
-        // Nonexistent IDs are not DAG nodes; without this guard,
-        // `find_common_ancestor(x, x)` would report a nonexistent `x`
-        // as its own ancestor.
+    /// Finds all lowest common ancestors (merge bases) of two commits.
+    ///
+    /// A criss-cross DAG can have multiple incomparable merge bases.  Feeding
+    /// only the highest-id base into a three-way merge can classify a true
+    /// conflict as a target-only change and violate the source-wins policy.
+    fn find_merge_bases(&self, a: CommitId, b: CommitId) -> Vec<CommitId> {
         if self.commits.get(&a).is_none() || self.commits.get(&b).is_none() {
-            return None;
+            return vec![];
         }
 
-        fn mark(
-            flags: &mut HashMap<CommitId, u8>,
-            heap: &mut BinaryHeap<CommitId>,
-            id: CommitId,
-            flag: u8,
-        ) {
-            if id == NO_COMMIT {
-                return;
-            }
-            let slot = flags.entry(id).or_insert(0);
-            if *slot == 0 {
-                heap.push(id);
-            }
-            *slot |= flag;
-        }
+        let ancestors_a = self.ancestors_of(a);
+        let mut common: Vec<CommitId> = self
+            .ancestors_of(b)
+            .into_iter()
+            .filter(|id| ancestors_a.contains(id))
+            .collect();
+        common.sort_unstable_by(|lhs, rhs| rhs.cmp(lhs));
 
-        let mut flags: HashMap<CommitId, u8> = HashMap::new();
-        let mut heap: BinaryHeap<CommitId> = BinaryHeap::new();
+        let common_set: HashSet<CommitId> = common.iter().copied().collect();
+        let mut dominated = HashSet::new();
+        let mut bases = Vec::new();
 
-        mark(&mut flags, &mut heap, a, FROM_A);
-        mark(&mut flags, &mut heap, b, FROM_B);
-
-        while let Some(id) = heap.pop() {
-            // Every id pushed onto the heap was first inserted into `flags`.
-            let f = flags[&id];
-            if f == BOTH {
-                return Some(id);
+        for id in common {
+            if dominated.contains(&id) {
+                continue;
             }
-            if let Some(c) = self.commits.get(&id) {
-                for &parent in &c.parents {
-                    mark(&mut flags, &mut heap, parent, f);
+            bases.push(id);
+
+            let mut stack = self
+                .commits
+                .get(&id)
+                .map(|c| c.parents.clone())
+                .unwrap_or_default();
+            let mut visited = HashSet::new();
+            while let Some(parent) = stack.pop() {
+                if parent == NO_COMMIT || !visited.insert(parent) {
+                    continue;
+                }
+                if common_set.contains(&parent) {
+                    dominated.insert(parent);
+                }
+                if let Some(commit) = self.commits.get(&parent) {
+                    stack.extend(commit.parents.iter().copied());
                 }
             }
         }
-        None
+
+        bases
+    }
+
+    /// Finds one lowest (most-recent) common ancestor of two commits.
+    fn find_common_ancestor(&self, a: CommitId, b: CommitId) -> Option<CommitId> {
+        self.find_merge_bases(a, b).into_iter().max()
     }
 
     // =================================================================

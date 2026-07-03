@@ -8,7 +8,9 @@ use ruc::*;
 use std::{
     borrow::Cow,
     cell::Cell,
-    cmp, fs,
+    cmp,
+    collections::HashSet,
+    fs,
     ops::{Bound, RangeBounds},
     sync::{
         LazyLock,
@@ -19,6 +21,17 @@ use std::{
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 
 const PREFIX_ALLOC_BATCH: u64 = 8192;
+
+thread_local! {
+    static LOCAL_NEXT: Cell<u64> = const { Cell::new(0) };
+    static LOCAL_CEIL: Cell<u64> = const { Cell::new(0) };
+}
+
+static GLOBAL_COUNTER: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
+static GLOBAL_CEILING: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
+static PREFIX_ALLOC_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+static RECOVERED_PREFIXES: LazyLock<Mutex<HashSet<Pre>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 
 /// Number of DB shards. Each prefix is routed to one shard via `prefix % NUM_SHARDS`.
 /// This gives 16 independent write locks, compaction queues, and WALs.
@@ -100,11 +113,15 @@ impl MmDB {
     }
 
     pub(crate) fn alloc_prefix(&self) -> Pre {
-        thread_local! {
-            static LOCAL_NEXT: Cell<u64> = const { Cell::new(0) };
-            static LOCAL_CEIL: Cell<u64> = const { Cell::new(0) };
+        loop {
+            let candidate = self.alloc_prefix_candidate();
+            if !RECOVERED_PREFIXES.lock().remove(&candidate) {
+                return candidate;
+            }
         }
+    }
 
+    fn alloc_prefix_candidate(&self) -> Pre {
         LOCAL_NEXT.with(|next_cell| {
             LOCAL_CEIL.with(|ceil_cell| {
                 let next = next_cell.get();
@@ -114,15 +131,9 @@ impl MmDB {
                     return next;
                 }
 
-                static GLOBAL_COUNTER: LazyLock<AtomicU64> =
-                    LazyLock::new(|| AtomicU64::new(0));
-                static GLOBAL_CEILING: LazyLock<AtomicU64> =
-                    LazyLock::new(|| AtomicU64::new(0));
-                static LK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-
                 let gc = GLOBAL_COUNTER.load(Ordering::Acquire);
                 if gc == 0 {
-                    let _x = LK.lock();
+                    let _x = PREFIX_ALLOC_LOCK.lock();
                     if GLOBAL_COUNTER.load(Ordering::Acquire) == 0 {
                         let ret = crate::common::parse_prefix!(
                             self.meta_db()
@@ -149,7 +160,7 @@ impl MmDB {
 
                 let old_ceil = GLOBAL_CEILING.load(Ordering::Acquire);
                 if batch_end > old_ceil {
-                    let _x = LK.lock();
+                    let _x = PREFIX_ALLOC_LOCK.lock();
                     let old_ceil2 = GLOBAL_CEILING.load(Ordering::Acquire);
                     if batch_end > old_ceil2 {
                         let new_ceil = batch_end + PREFIX_ALLOC_BATCH;
@@ -169,6 +180,25 @@ impl MmDB {
                 batch_start
             })
         })
+    }
+
+    pub(crate) fn reserve_recovered_prefix(&self, meta_prefix: PreBytes) -> bool {
+        let prefix = Pre::from_le_bytes(meta_prefix);
+        if prefix < RESERVED_ID_CNT {
+            return false;
+        }
+        let ceiling = crate::common::parse_prefix!(
+            self.meta_db()
+                .get(&self.prefix_allocator.key)
+                .expect("vsdb: meta read failed")
+                .expect("vsdb: prefix allocator metadata missing")
+        );
+        if prefix < ceiling {
+            RECOVERED_PREFIXES.lock().insert(prefix);
+            true
+        } else {
+            false
+        }
     }
 
     pub(crate) fn flush(&self) {

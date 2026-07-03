@@ -57,7 +57,7 @@ impl<T> Serialize for Orphan<T> {
     where
         S: serde::Serializer,
     {
-        self.inner.serialize(serializer)
+        crate::common::serialize_typed_handle_meta::<Self, S>(&self.inner, serializer)
     }
 }
 
@@ -66,7 +66,10 @@ impl<'de, T> Deserialize<'de> for Orphan<T> {
     where
         D: serde::Deserializer<'de>,
     {
-        MapxOrdRawKey::deserialize(deserializer).map(|inner| Self { inner })
+        crate::common::deserialize_typed_handle_meta::<Self, MapxOrdRawKey<T>, D>(
+            deserializer,
+        )
+        .map(|inner| Self { inner })
     }
 }
 
@@ -168,7 +171,12 @@ where
     /// ```
     pub fn get_mut(&mut self) -> ValueMut<'_, T> {
         let value = self.get_value();
-        ValueMut { hdr: self, value }
+        let original = value.encode();
+        ValueMut {
+            hdr: self,
+            value,
+            original,
+        }
     }
 
     /// Checks if this `Orphan` instance is the same as another.
@@ -221,7 +229,7 @@ impl<T: Default + ValueEnDe> Default for Orphan<T> {
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
-impl<T> Eq for Orphan<T> where T: ValueEnDe + PartialEq {}
+impl<T> Eq for Orphan<T> where T: ValueEnDe + Eq {}
 
 impl<T> PartialEq for Orphan<T>
 where
@@ -358,6 +366,7 @@ where
 {
     hdr: &'a mut Orphan<T>,
     value: T,
+    original: Vec<u8>,
 }
 
 impl<T> Drop for ValueMut<'_, T>
@@ -365,7 +374,10 @@ where
     T: ValueEnDe,
 {
     fn drop(&mut self) {
-        self.hdr.set_value(&self.value);
+        let encoded = self.value.encode();
+        if encoded != self.original {
+            self.hdr.inner.insert([], &self.value);
+        }
     }
 }
 

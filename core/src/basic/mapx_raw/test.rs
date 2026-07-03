@@ -1,7 +1,6 @@
 use super::*;
 use ruc::*;
-use std::fs;
-use std::mem::size_of;
+use std::{fs, mem::size_of};
 
 #[test]
 fn test_insert() {
@@ -196,6 +195,37 @@ fn test_serde_rejects_legacy_prefix_payload() {
     // removed in v14.
     let legacy_payload = postcard::to_allocvec(hdr.as_bytes().as_slice()).unwrap();
     assert!(postcard::from_bytes::<MapxRaw>(&legacy_payload).is_err());
+}
+
+#[test]
+fn test_serde_rejects_allocator_future_prefix() {
+    let mut meta = Vec::new();
+    meta.extend_from_slice(b"VSMAPX01");
+    meta.extend_from_slice(&u64::MAX.to_le_bytes());
+
+    let payload = postcard::to_allocvec(meta.as_slice()).unwrap();
+    assert!(postcard::from_bytes::<MapxRaw>(&payload).is_err());
+}
+
+#[test]
+fn test_serde_reserves_recovered_future_prefix() {
+    let hdr = MapxRaw::new();
+    let future = hdr.instance_id() + 1;
+
+    let mut meta = Vec::new();
+    meta.extend_from_slice(b"VSMAPX01");
+    meta.extend_from_slice(&future.to_le_bytes());
+    let payload = postcard::to_allocvec(meta.as_slice()).unwrap();
+
+    let mut recovered: MapxRaw = postcard::from_bytes(&payload).unwrap();
+    recovered.insert(b"k", b"recovered");
+
+    let mut next = MapxRaw::new();
+    next.insert(b"k", b"next");
+
+    assert_ne!(next.instance_id(), future);
+    assert_eq!(&recovered.get(b"k").unwrap()[..], b"recovered");
+    assert_eq!(&next.get(b"k").unwrap()[..], b"next");
 }
 
 /// Mutate after restoring from meta — ensures the restored handle is fully live.

@@ -2,6 +2,7 @@ use super::{Mapx, ValueEnDe};
 use crate::basic::mapx_ord::MapxOrd;
 use crate::basic::orphan::Orphan;
 use ruc::*;
+use std::cell::RefCell;
 use std::fs;
 
 #[test]
@@ -132,6 +133,15 @@ fn test_from_meta_rejects_legacy_prefix_payload() {
     assert!(restored.is_the_same_instance(&hdr));
 }
 
+#[test]
+fn test_from_meta_rejects_wrong_typed_handle() {
+    let mut hdr: Mapx<u32, u32> = Mapx::new();
+    hdr.insert(&1, &10);
+
+    let id = hdr.save_meta().unwrap();
+    assert!(Mapx::<String, u32>::from_meta(id).is_err());
+}
+
 /// Nested: `Mapx<String, MapxOrd<u32, String>>` — only the outer meta
 /// is saved; restoring it must bring back all inner maps and their data.
 #[test]
@@ -212,7 +222,11 @@ fn test_serde_roundtrip() {
 fn test_serde_size() {
     let hdr: Mapx<String, String> = Mapx::new();
     let bytes = postcard::to_allocvec(&hdr).unwrap();
-    assert!(bytes.len() <= 20, "expected ≤20 bytes, got {}", bytes.len());
+    assert!(
+        bytes.len() <= 256,
+        "expected ≤256 bytes, got {}",
+        bytes.len()
+    );
 }
 
 /// from_meta with a nonexistent ID must return an error.
@@ -285,6 +299,19 @@ fn test_into_iter_mut() {
     for i in 0..5u32 {
         assert_eq!(hdr.get(&i), Some(i + 100));
     }
+}
+
+#[test]
+fn test_get_mut_persists_interior_mutability_change() {
+    let mut hdr: Mapx<u32, RefCell<u32>> = Mapx::new();
+    hdr.insert(&1, &RefCell::new(10));
+
+    {
+        let value = hdr.get_mut(&1).unwrap();
+        *value.borrow_mut() = 20;
+    }
+
+    assert_eq!(*hdr.get(&1).unwrap().borrow(), 20);
 }
 
 #[test]

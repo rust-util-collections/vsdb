@@ -228,8 +228,9 @@ where
 
     /// Destroys the DAG map and all its children, unlinking it from its parent.
     ///
-    /// The tombstone is per-handle — see [`DagMapRaw::destroy`] for the
-    /// semantics regarding pre-existing clones and restored handles.
+    /// The unlink is persisted in this node's parent slot and is visible to
+    /// pre-existing clones, shadows, and handles restored from metadata — see
+    /// [`DagMapRaw::destroy`] for the full semantics.
     #[inline(always)]
     pub fn destroy(&mut self) {
         self.inner.destroy();

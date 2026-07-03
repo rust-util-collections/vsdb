@@ -84,9 +84,14 @@ where
     /// Retrieves a mutable reference to a value in the map.
     #[inline(always)]
     pub fn get_mut(&mut self, key: impl AsRef<[u8]>) -> Option<ValueMut<'_, V>> {
-        self.inner.get_mut(key.as_ref()).map(|inner| ValueMut {
-            value: <V as ValueEnDe>::decode(&inner).unwrap(),
-            inner,
+        self.inner.get_mut(key.as_ref()).map(|inner| {
+            let value = <V as ValueEnDe>::decode(&inner).unwrap();
+            let original = Some(inner.as_slice().to_vec());
+            ValueMut {
+                value,
+                inner,
+                original,
+            }
         })
     }
 
@@ -97,6 +102,7 @@ where
         ValueMut {
             value,
             inner: self.inner.mock_value_mut(key, v),
+            original: None,
         }
     }
 
@@ -288,6 +294,7 @@ where
 {
     value: V,
     inner: mapx_raw::ValueMut<'a>,
+    original: Option<Vec<u8>>,
 }
 
 impl<V> Drop for ValueMut<'_, V>
@@ -295,7 +302,10 @@ where
     V: ValueEnDe,
 {
     fn drop(&mut self) {
-        *self.inner = self.value.encode();
+        let encoded = self.value.encode();
+        if self.original.as_deref() != Some(encoded.as_slice()) {
+            *self.inner = encoded;
+        }
     }
 }
 
@@ -394,11 +404,14 @@ where
     type Item = (RawKey, ValueIterMut<'a, V>);
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next().map(|(k, v)| {
+            let value = <V as ValueEnDe>::decode(&v).unwrap();
+            let original = v.as_slice().to_vec();
             (
                 k,
                 ValueIterMut {
-                    value: <V as ValueEnDe>::decode(&v).unwrap(),
+                    value,
                     inner: v,
+                    original,
                 },
             )
         })
@@ -411,11 +424,14 @@ where
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.inner.next_back().map(|(k, v)| {
+            let value = <V as ValueEnDe>::decode(&v).unwrap();
+            let original = v.as_slice().to_vec();
             (
                 k,
                 ValueIterMut {
-                    value: <V as ValueEnDe>::decode(&v).unwrap(),
+                    value,
                     inner: v,
+                    original,
                 },
             )
         })
@@ -435,6 +451,7 @@ where
     pub(crate) value: V,
     /// The inner mutable reference to the raw value.
     pub(crate) inner: mapx_raw::ValueIterMut<'a>,
+    original: Vec<u8>,
 }
 
 impl<V> Drop for ValueIterMut<'_, V>
@@ -442,7 +459,10 @@ where
     V: ValueEnDe,
 {
     fn drop(&mut self) {
-        *self.inner = self.value.encode();
+        let encoded = self.value.encode();
+        if encoded != self.original {
+            *self.inner = encoded;
+        }
     }
 }
 

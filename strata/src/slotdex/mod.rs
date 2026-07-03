@@ -169,12 +169,14 @@ where
     /// Marks a clean shutdown so that the next [`from_meta`](Self::from_meta)
     /// call can skip the count rebuild.
     pub fn save_meta(&mut self) -> Result<u64> {
-        // Clear dirty bit — signals clean shutdown.
-        let raw = self.total.get_value();
-        self.total.set_value(&dc::clear_dirty(raw));
-
         let id = self.instance_id();
         crate::common::save_instance_meta(id, self)?;
+
+        // Clear dirty only after the latest metadata was persisted.  If a
+        // crash happens before that write, the previous meta still points at
+        // this dirty total and recovery rebuilds derived tier state.
+        let raw = self.total.get_value();
+        self.total.set_value(&dc::clear_dirty(raw));
         Ok(id)
     }
 
@@ -192,7 +194,7 @@ where
     /// Called automatically during deserialization.
     fn ensure_count(&mut self) {
         let raw = self.total.get_value();
-        if dc::is_dirty(raw) {
+        if dc::is_dirty(raw) || self.has_invalid_empty_tier() {
             // Unclean shutdown.  insert()/remove() update several
             // independent structures (Large ctner maps, ctner records,
             // tier floor counts, the grand total) without batch
@@ -219,6 +221,7 @@ where
                         continue;
                     }
                 }
+
                 total += d.len() as EntryCnt;
             }
             for slot in removals {
@@ -243,6 +246,12 @@ where
         } else {
             self.total.set_value(&dc::set_dirty(raw));
         }
+    }
+
+    fn has_invalid_empty_tier(&self) -> bool {
+        self.tiers
+            .iter()
+            .any(|t| t.entry_count.get_value() == 0 || t.store.iter().next().is_none())
     }
 
     /// Inserts a key into a specified slot.

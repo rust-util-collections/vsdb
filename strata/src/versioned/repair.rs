@@ -10,6 +10,16 @@ use super::map::VerMap;
 use super::{CommitId, NO_COMMIT};
 
 impl<K, V> VerMap<K, V> {
+    pub(crate) fn rebuild_branch_name_index(&mut self) {
+        let mut seen = HashSet::new();
+        self.branch_names.clear();
+        for (id, state) in self.branches.iter() {
+            if seen.insert(state.name.clone()) {
+                self.branch_names.insert(&state.name, &id);
+            }
+        }
+    }
+
     /// Rebuilds the B+ tree's in-memory ref-count map from the
     /// current set of live roots (all commit roots + dirty roots).
     ///
@@ -27,6 +37,7 @@ impl<K, V> VerMap<K, V> {
     }
 
     pub(crate) fn repair_commit_ref_counts_if_needed(&mut self) {
+        self.rebuild_branch_name_index();
         if self.gc_dirty.get_value()
             || self.commits.iter().any(|(_, c)| c.ref_count == 0)
         {

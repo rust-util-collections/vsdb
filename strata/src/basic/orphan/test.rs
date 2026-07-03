@@ -1,4 +1,5 @@
 use super::*;
+use std::cell::RefCell;
 
 #[test]
 fn test_compare() {
@@ -92,6 +93,13 @@ fn test_save_and_from_meta() {
     assert!(restored.is_the_same_instance(&o));
 }
 
+#[test]
+fn test_from_meta_rejects_wrong_value_type() {
+    let o = Orphan::new(42u64);
+    let id = o.save_meta().unwrap();
+    assert!(Orphan::<u32>::from_meta(id).is_err());
+}
+
 /// Postcard serde roundtrip for Orphan.
 #[test]
 fn test_serde_roundtrip() {
@@ -107,7 +115,11 @@ fn test_serde_roundtrip() {
 fn test_serde_size() {
     let o = Orphan::new(0u32);
     let bytes = postcard::to_allocvec(&o).unwrap();
-    assert!(bytes.len() <= 20, "expected ≤20 bytes, got {}", bytes.len());
+    assert!(
+        bytes.len() <= 192,
+        "expected ≤192 bytes, got {}",
+        bytes.len()
+    );
 }
 
 /// from_meta with nonexistent ID.
@@ -126,6 +138,18 @@ fn test_meta_restore_then_mutate() {
     *restored.get_mut() = 42;
 
     assert_eq!(o.get_value(), 42);
+}
+
+#[test]
+fn test_get_mut_persists_interior_mutability_change() {
+    let mut o = Orphan::new(RefCell::new(10u32));
+
+    {
+        let value = o.get_mut();
+        *value.borrow_mut() = 20;
+    }
+
+    assert_eq!(*o.get_value().borrow(), 20);
 }
 
 /// ValueEnDe roundtrip for Orphan.
