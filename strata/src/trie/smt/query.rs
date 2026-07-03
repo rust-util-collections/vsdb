@@ -46,9 +46,9 @@ impl<'a> SmtRo<'a> {
             }
             SmtNode::Internal { path, left, right } => {
                 // The internal node's `path` is a compressed prefix.
-                // Check that the remaining key bits match this prefix.
-                let remaining = full_path.slice(depth, full_path.len());
-                if !remaining.starts_with(path) {
+                // Check that the remaining key bits match this prefix
+                // (offset-based compare — no slice materialization).
+                if !full_path.starts_with_from(depth, path) {
                     return Ok(None);
                 }
 

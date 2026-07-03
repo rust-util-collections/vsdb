@@ -3559,7 +3559,7 @@ mod proof_tests {
 
         // Prove membership for key 1
         let proof = vp.prove(&1u32.to_be_bytes()).unwrap();
-        assert!(proof.value.is_some());
+        assert!(proof.value().is_some());
 
         let root_arr: [u8; 32] = root.try_into().unwrap();
         let ok = VpSmt::verify_proof(&root_arr, &1u32.to_be_bytes(), &proof).unwrap();
@@ -3567,7 +3567,7 @@ mod proof_tests {
 
         // Prove non-membership for absent key
         let proof_absent = vp.prove(&999u32.to_be_bytes()).unwrap();
-        assert!(proof_absent.value.is_none());
+        assert!(proof_absent.value().is_none());
         let ok2 = VpSmt::verify_proof(&root_arr, &999u32.to_be_bytes(), &proof_absent)
             .unwrap();
         assert!(ok2);

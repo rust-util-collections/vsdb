@@ -707,13 +707,13 @@ mod smt_tests {
 
         // Membership proof for "alpha".
         let proof = smt.prove(b"alpha").unwrap();
-        assert_eq!(proof.value, Some(b"A".to_vec()));
+        assert_eq!(proof.value(), Some(b"A".as_ref()));
         assert!(SmtCalc::verify_proof(&root32, b"alpha", &proof).unwrap());
         assert!(!SmtCalc::verify_proof(&root32, b"beta", &proof).unwrap());
 
         // Membership proof for "beta".
         let proof = smt.prove(b"beta").unwrap();
-        assert_eq!(proof.value, Some(b"B".to_vec()));
+        assert_eq!(proof.value(), Some(b"B".as_ref()));
         assert!(SmtCalc::verify_proof(&root32, b"beta", &proof).unwrap());
     }
 
@@ -726,7 +726,7 @@ mod smt_tests {
 
         // Non-membership proof for a key that doesn't exist.
         let proof = smt.prove(b"missing").unwrap();
-        assert_eq!(proof.value, None);
+        assert_eq!(proof.value(), None);
         assert!(SmtCalc::verify_proof(&root32, b"missing", &proof).unwrap());
     }
 
@@ -743,7 +743,7 @@ mod smt_tests {
         let root32: [u8; 32] = root.try_into().unwrap();
 
         let proof = smt.prove(b"nonexistent_key").unwrap();
-        assert_eq!(proof.value, None);
+        assert_eq!(proof.value(), None);
         assert!(SmtCalc::verify_proof(&root32, b"nonexistent_key", &proof).unwrap());
     }
 
@@ -766,8 +766,107 @@ mod smt_tests {
         let root32: [u8; 32] = root.try_into().unwrap();
 
         let mut proof = smt.prove(b"key").unwrap();
-        proof.value = Some(b"tampered".to_vec());
+        let (kh, _) = proof.leaf.take().unwrap();
+        proof.leaf = Some((kh, b"tampered".to_vec()));
         assert!(!SmtCalc::verify_proof(&root32, b"key", &proof).unwrap());
+    }
+
+    /// Appending an extra EMPTY sibling relocates the leaf one level
+    /// deeper — depth is bound by the sibling fold, so this must fail.
+    #[test]
+    fn test_smt_proof_depth_extension_fails() {
+        let mut smt = SmtCalc::new();
+        smt.insert(b"alpha", b"A").unwrap();
+        smt.insert(b"beta", b"B").unwrap();
+        let root = smt.root_hash().unwrap();
+        let root32: [u8; 32] = root.try_into().unwrap();
+
+        let mut proof = smt.prove(b"alpha").unwrap();
+        assert!(SmtCalc::verify_proof(&root32, b"alpha", &proof).unwrap());
+
+        proof.siblings.push([0u8; 32]);
+        assert!(!SmtCalc::verify_proof(&root32, b"alpha", &proof).unwrap());
+    }
+
+    /// Truncating the sibling list (claiming a shallower position)
+    /// must fail for the same reason.
+    #[test]
+    fn test_smt_proof_sibling_truncation_fails() {
+        let mut smt = SmtCalc::new();
+        for i in 0u32..20 {
+            smt.insert(&i.to_be_bytes(), &i.to_be_bytes()).unwrap();
+        }
+        let root = smt.root_hash().unwrap();
+        let root32: [u8; 32] = root.try_into().unwrap();
+
+        let mut proof = smt.prove(&3u32.to_be_bytes()).unwrap();
+        assert!(!proof.siblings.is_empty());
+        assert!(SmtCalc::verify_proof(&root32, &3u32.to_be_bytes(), &proof).unwrap());
+
+        proof.siblings.pop();
+        assert!(!SmtCalc::verify_proof(&root32, &3u32.to_be_bytes(), &proof).unwrap());
+    }
+
+    /// A conflicting-leaf non-membership proof must carry a leaf whose
+    /// key hash shares every path bit above the terminal subtree with
+    /// the queried key; substituting an unrelated leaf must fail fast.
+    #[test]
+    fn test_smt_proof_conflicting_leaf_prefix_check() {
+        let mut smt = SmtCalc::new();
+        smt.insert(b"alpha", b"A").unwrap();
+        smt.insert(b"beta", b"B").unwrap();
+        smt.insert(b"gamma", b"C").unwrap();
+        let root = smt.root_hash().unwrap();
+        let root32: [u8; 32] = root.try_into().unwrap();
+
+        // Find an absent key whose proof terminates at a conflicting
+        // leaf (leaf present but different key hash).
+        let mut conflict_proof = None;
+        for i in 0u32..1000 {
+            let key = i.to_be_bytes();
+            let proof = smt.prove(&key).unwrap();
+            if let Some((kh, _)) = &proof.leaf
+                && *kh != proof.key_hash
+            {
+                conflict_proof = Some((key, proof));
+                break;
+            }
+        }
+        let (key, mut proof) =
+            conflict_proof.expect("no conflicting-leaf proof found in 1000 probes");
+        assert_eq!(proof.value(), None);
+        assert!(SmtCalc::verify_proof(&root32, &key, &proof).unwrap());
+
+        // Replace the conflicting leaf with one whose key hash does not
+        // share the required prefix: the verifier must reject it before
+        // any hashing (prefix consistency check).
+        let (_, val) = proof.leaf.take().unwrap();
+        let mut foreign_kh = proof.key_hash;
+        foreign_kh[0] ^= 0x80; // diverges at bit 0
+        proof.leaf = Some((foreign_kh, val));
+        if !proof.siblings.is_empty() {
+            assert!(!SmtCalc::verify_proof(&root32, &key, &proof).unwrap());
+        }
+    }
+
+    /// Proofs must be compact — O(log N) siblings, not 256.
+    #[test]
+    fn test_smt_proof_is_compact() {
+        let mut smt = SmtCalc::new();
+        for i in 0u32..100 {
+            smt.insert(&i.to_be_bytes(), &i.to_be_bytes()).unwrap();
+        }
+        let _ = smt.root_hash().unwrap();
+
+        for i in 0u32..100 {
+            let proof = smt.prove(&i.to_be_bytes()).unwrap();
+            assert!(
+                proof.siblings.len() <= 64,
+                "proof for key {} has {} siblings — expected O(log N)",
+                i,
+                proof.siblings.len()
+            );
+        }
     }
 
     #[test]
@@ -781,7 +880,7 @@ mod smt_tests {
         assert!(SmtCalc::verify_proof(&root32, b"only", &proof).unwrap());
 
         let proof = smt.prove(b"other").unwrap();
-        assert_eq!(proof.value, None);
+        assert_eq!(proof.value(), None);
         assert!(SmtCalc::verify_proof(&root32, b"other", &proof).unwrap());
     }
 
@@ -798,7 +897,7 @@ mod smt_tests {
         // Verify membership for all inserted keys.
         for i in 0..n {
             let proof = smt.prove(&i.to_be_bytes()).unwrap();
-            assert_eq!(proof.value, Some(i.to_be_bytes().to_vec()));
+            assert_eq!(proof.value(), Some(i.to_be_bytes().as_ref()));
             assert!(
                 SmtCalc::verify_proof(&root32, &i.to_be_bytes(), &proof).unwrap(),
                 "membership proof failed for key {}",
@@ -809,7 +908,7 @@ mod smt_tests {
         // Verify non-membership for keys not inserted.
         for i in n..n + 20 {
             let proof = smt.prove(&i.to_be_bytes()).unwrap();
-            assert_eq!(proof.value, None);
+            assert_eq!(proof.value(), None);
             assert!(
                 SmtCalc::verify_proof(&root32, &i.to_be_bytes(), &proof).unwrap(),
                 "non-membership proof failed for key {}",
@@ -829,11 +928,11 @@ mod smt_tests {
         let root32: [u8; 32] = root.try_into().unwrap();
 
         let proof_a = smt.prove(b"a").unwrap();
-        assert_eq!(proof_a.value, None);
+        assert_eq!(proof_a.value(), None);
         assert!(SmtCalc::verify_proof(&root32, b"a", &proof_a).unwrap());
 
         let proof_b = smt.prove(b"b").unwrap();
-        assert_eq!(proof_b.value, Some(b"2".to_vec()));
+        assert_eq!(proof_b.value(), Some(b"2".as_ref()));
         assert!(SmtCalc::verify_proof(&root32, b"b", &proof_b).unwrap());
     }
 
@@ -844,7 +943,7 @@ mod smt_tests {
         let root32: [u8; 32] = root.try_into().unwrap();
 
         let proof = smt.prove(b"anything").unwrap();
-        assert_eq!(proof.value, None);
+        assert_eq!(proof.value(), None);
         assert!(SmtCalc::verify_proof(&root32, b"anything", &proof).unwrap());
     }
 

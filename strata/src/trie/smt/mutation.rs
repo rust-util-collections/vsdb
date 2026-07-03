@@ -90,11 +90,12 @@ fn insert_rec(
             }
 
             // Different keys: find where the remaining paths diverge.
-            let new_remaining = full_path.slice(depth, full_path.len());
-            let common = leaf_path.common_prefix(&new_remaining);
+            // `leaf_path` equals the full path suffix from `depth`, so
+            // comparing it against `full_path[depth..]` needs no slice.
+            let common = full_path.common_prefix_from(depth, &leaf_path);
 
             // Create the new leaf.
-            let new_leaf_path = new_remaining.slice(common + 1, new_remaining.len());
+            let new_leaf_path = full_path.slice(depth + common + 1, full_path.len());
             let new_leaf = SmtHandle::InMemory(Box::new(SmtNode::Leaf {
                 path: new_leaf_path,
                 key_hash,
@@ -110,7 +111,7 @@ fn insert_rec(
             }));
 
             // The divergence bit determines left/right.
-            let new_bit = new_remaining.bit_at(common);
+            let new_bit = full_path.bit_at(depth + common);
             let (left, right) = if new_bit == 0 {
                 (new_leaf, old_leaf)
             } else {
@@ -126,18 +127,16 @@ fn insert_rec(
         }
 
         SmtNode::Internal { path, left, right } => {
-            let remaining = full_path.slice(depth, full_path.len());
-
-            let common = remaining.common_prefix(&path);
+            let common = full_path.common_prefix_from(depth, &path);
 
             if common < path.len() {
                 // Path diverges within the compressed prefix.
                 // Split the internal node.
                 let diverge_bit_in_path = path.bit_at(common);
-                let diverge_bit_in_key = remaining.bit_at(common);
+                let diverge_bit_in_key = full_path.bit_at(depth + common);
 
                 // New leaf for the inserted key.
-                let new_leaf_path = remaining.slice(common + 1, remaining.len());
+                let new_leaf_path = full_path.slice(depth + common + 1, full_path.len());
                 let new_leaf = SmtHandle::InMemory(Box::new(SmtNode::Leaf {
                     path: new_leaf_path,
                     key_hash,
@@ -222,8 +221,7 @@ fn remove_rec(
             // Key matches — fall through to consume the handle.
         }
         SmtNode::Internal { path, .. } => {
-            let remaining = full_path.slice(depth, full_path.len());
-            if !remaining.starts_with(path) {
+            if !full_path.starts_with_from(depth, path) {
                 return Ok(handle);
             }
             let next_depth = depth + path.len();
@@ -335,13 +333,15 @@ fn commit_rec(handle: SmtHandle) -> Result<SmtHandle> {
                     return Ok(SmtHandle::Cached(EMPTY_HASH.to_vec(), node));
                 }
                 SmtNode::Leaf {
-                    ref path,
                     ref key_hash,
                     ref value,
+                    ..
                 } => {
-                    // Hash the leaf, then wrap through its compressed path.
-                    let leaf_h = hash_leaf(key_hash, value);
-                    wrap_hash(leaf_h, path)
+                    // Depth-independent leaf shortcut: a lone-leaf
+                    // subtree commits to the leaf hash directly; the
+                    // residual path is NOT folded into the hash (the
+                    // full key_hash already binds the position).
+                    hash_leaf(key_hash, value)
                 }
                 SmtNode::Internal {
                     ref path,

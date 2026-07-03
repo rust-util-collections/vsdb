@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v14.0.5]
+
+### Breaking
+
+- **SMT hash domain switched to the Diem/JMT leaf-shortcut construction.** A subtree holding exactly one leaf now commits to `Keccak256(0x01 || key_hash || value)` directly — independent of depth — instead of folding the leaf hash through its ~246 residual path levels; internal nodes are unchanged (`Keccak256(0x00 || left || right)`, compressed internal prefixes still wrap through empty siblings). All SMT root hashes change. The SMT disk-cache format is now v3; v2 caches are rejected cleanly and the trie rebuilds from authoritative data. MPT is unaffected. This removes the dominant O(N × 256) hashing term: whole-tree hashing is now O(N) hash operations.
+- **`SmtProof` is now compact (variable-length).** `siblings` holds hashes only from the root down to the terminal lone-leaf/empty subtree on the key's path (O(log N) entries instead of a fixed 256), and the `value: Option<Vec<u8>>` field is replaced by `leaf: Option<([u8; 32], Vec<u8>)>` — the lone leaf occupying the terminal subtree (`leaf.0 == key_hash` ⇒ membership; a different `leaf.0` ⇒ conflicting-leaf non-membership, checked for path-prefix consistency during verification; `None` ⇒ empty-slot non-membership). Use the new `SmtProof::value()` accessor for the proven value. Proof size drops from a fixed 8 KiB to typically well under 1 KiB, and verification folds O(log N) hashes instead of 256.
+
+### Fixed
+
+- **SlotDex reverse paging restored to tier-accelerated complexity** (commit `9758b70`, folded into this release): the v13.4.7 correctness fix had degraded `get_entries_by_page(.., reverse=true)` to a linear reverse scan (~17 ms vs ~10 µs forward at 100k entries). Reverse paging now mirrors the forward path via `locate_page_rstart` — a rightmost-distance offset plus a descending tier-cache locate — returning reverse pages to the 10–35 µs range while preserving the corrected slot-descending / within-slot-ascending semantics.
+- **SMT tree walks no longer materialize a path slice per level.** `insert`/`remove`/`get`/`prove` compared the remaining key path by allocating `full_path.slice(depth, 256)` (a bit-by-bit copy) at every internal node; they now use allocation-free offset-based comparison (`BitPath::common_prefix_from` / `starts_with_from`, byte-wise with unaligned assembly). `BitPath` itself is now a zero-allocation inline `[u8; 32]` (paths never exceed 256 bits — a type invariant), with `slice`/`concat` rewritten from per-bit loops to byte-wise shifts, and the cache deserializer now rejects bit lengths over 256 instead of allocating attacker-controlled buffers. Combined with the hash-domain change: 1000-key insert 4.6 ms → 0.77 ms, remove 9.0 ms → 1.5 ms, get 3.9 ms → 0.41 ms, cold root hash 76.6 ms → 0.93 ms, verify 79 µs → 3.2 µs per proof (reference box).
+- **`mapx / sequential / iter (5k entries)` bench measured an unbounded dataset.** The iterated map had accumulated entries from all preceding timed write benches (hundreds of thousands and growing), so the reported number was meaningless and unreproducible; the bench now iterates a dedicated 5000-entry map.
+
+### Added
+
+- SMT adversarial proof tests: sibling-list depth extension, sibling truncation, conflicting-leaf prefix substitution, proof compactness, plus the existing tamper/wrong-root suite adapted to the new format.
+- Bench symmetry: `smt_batch_update_{100,1000}` and `mpt_prove_100` / `mpt_verify_100` cases in `trie_bench`, with `black_box` hygiene on discarded results.
+
 ## [v14.0.4]
 
 Consolidates the unpublished v14.0.2/v14.0.3 work (v14.0.1 is the last published release) plus a full sweep of the deferred audit backlog.

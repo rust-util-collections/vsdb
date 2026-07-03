@@ -95,7 +95,7 @@ vsdb (workspace)
 
 `VerMapWithProof` wraps a `VerMap` and a trie back-end (`MptCalc` or `SmtCalc`). On each `merkle_root()` call it computes an incremental diff from the last sync point and applies it to the trie, avoiding full rebuilds. A disposable on-disk cache makes restarts cheap.
 
-`SmtCalc` additionally supports `prove()` / `verify_proof()` for constant-time (256-hash) membership and non-membership proofs.
+`SmtCalc` additionally supports `prove()` / `verify_proof()` for compact (O(log N)-hash, Diem/JMT-style) membership and non-membership proofs.
 
 ## Documentation
 

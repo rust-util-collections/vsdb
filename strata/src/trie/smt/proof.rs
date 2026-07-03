@@ -1,13 +1,23 @@
 //!
 //! SMT proof generation and verification.
 //!
-//! Each proof records 256 sibling hashes — one per level of the logical
-//! (uncompressed) 256-level binary tree.  Compressed path levels have
-//! `EMPTY_HASH` siblings since only one child is occupied.
+//! Proofs follow the Diem/JMT construction for a leaf-shortcut hash
+//! domain: `siblings` holds one hash per level from depth 0 (root)
+//! down to the top of the **terminal subtree** on the key's path — the
+//! point where the walk ends at a lone leaf, an empty slot, or a
+//! divergence.  Compressed single-child levels contribute `EMPTY_HASH`
+//! siblings; typical proofs are O(log N) hashes instead of 256.
 //!
-//! Verification recomputes the root hash bottom-up in at most 256 hash
-//! operations (empty/empty levels short-circuit), independent of tree
-//! shape or compression.
+//! The terminal subtree itself is described by `leaf`:
+//! - `Some((kh, v))` with `kh == key_hash` → membership of `v`;
+//! - `Some((kh, v))` with `kh != key_hash` → non-membership: a
+//!   different lone leaf occupies the subtree the key would live in
+//!   (the verifier checks both keys share the first `siblings.len()`
+//!   path bits);
+//! - `None` → non-membership: the key's slot is empty.
+//!
+//! Verification folds the terminal commitment upward along the key's
+//! path bits in `siblings.len()` hash operations.
 //!
 
 use crate::trie::error::{Result, TrieError};
@@ -16,18 +26,33 @@ use super::bitpath::BitPath;
 use super::codec::{hash_internal, hash_leaf, wrap_hash};
 use super::{EMPTY_HASH, SmtHandle, SmtNode, TREE_DEPTH};
 
-/// A complete SMT proof for a single key.
+/// A compact SMT proof for a single key.
 ///
-/// For membership proofs, `value` is `Some(v)`.
-/// For non-membership proofs, `value` is `None`.
+/// `siblings[d]` is the sibling hash at depth `d`; the terminal
+/// subtree (lone leaf or empty slot) sits at depth `siblings.len()`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SmtProof {
     /// The key hash this proof covers.
     pub key_hash: [u8; 32],
-    /// `Some(value)` for membership, `None` for non-membership.
-    pub value: Option<Vec<u8>>,
-    /// 256 sibling hashes, from depth 0 (root level) to depth 255.
+    /// The lone leaf occupying the terminal subtree, if any.
+    ///
+    /// `Some((leaf_key_hash, value))`: membership when
+    /// `leaf_key_hash == key_hash`, otherwise a conflicting leaf
+    /// proving non-membership.  `None`: the slot is empty.
+    pub leaf: Option<([u8; 32], Vec<u8>)>,
+    /// Sibling hashes from depth 0 (root level) to the terminal
+    /// subtree, at most [`TREE_DEPTH`] entries.
     pub siblings: Vec<[u8; 32]>,
+}
+
+impl SmtProof {
+    /// Returns the proven value if this is a membership proof.
+    pub fn value(&self) -> Option<&[u8]> {
+        match &self.leaf {
+            Some((kh, v)) if *kh == self.key_hash => Some(v),
+            _ => None,
+        }
+    }
 }
 
 // =========================================================================
@@ -39,112 +64,80 @@ pub struct SmtProof {
 /// The tree must have been committed (all nodes hashed) before calling.
 pub fn prove(root: &SmtHandle, key_hash: &[u8; 32]) -> Result<SmtProof> {
     let key_path = BitPath::from_hash(key_hash);
-    let mut siblings = vec![EMPTY_HASH; TREE_DEPTH];
-    let value = prove_walk(root, &key_path, key_hash, 0, &mut siblings)?;
-    Ok(SmtProof {
-        key_hash: *key_hash,
-        value,
-        siblings,
-    })
-}
+    let mut siblings: Vec<[u8; 32]> = Vec::new();
+    let mut handle = root;
+    let mut depth = 0usize;
 
-fn prove_walk(
-    handle: &SmtHandle,
-    key_path: &BitPath,
-    key_hash: &[u8; 32],
-    depth: usize,
-    siblings: &mut [[u8; 32]],
-) -> Result<Option<Vec<u8>>> {
-    let node = handle.node();
-
-    match node {
-        SmtNode::Empty => {
-            // Non-membership: everything below is EMPTY (already initialised).
-            Ok(None)
-        }
-
-        SmtNode::Leaf {
-            key_hash: leaf_kh,
-            value,
-            path: _,
-        } => {
-            if leaf_kh == key_hash {
-                // Membership proof.
-                // All siblings from `depth` to 255 are EMPTY_HASH,
-                // which is the correct representation: this leaf is
-                // the sole occupant of this subtree.
-                Ok(Some(value.clone()))
-            } else {
-                // Non-membership: a different leaf occupies part of
-                // this subtree.  We need to place that leaf's hash
-                // as a sibling at the divergence depth.
-                let existing_full = BitPath::from_hash(leaf_kh);
-
-                // Find where the two keys diverge (in absolute depth).
-                let remaining_key = key_path.slice(depth, TREE_DEPTH);
-                let remaining_existing = existing_full.slice(depth, TREE_DEPTH);
-                let common = remaining_key.common_prefix(&remaining_existing);
-
-                let diverge_depth = depth + common;
-                if diverge_depth >= TREE_DEPTH {
-                    return Err(TrieError::InvalidState(
-                        "identical key hashes in non-membership proof".into(),
-                    ));
-                }
-
-                // Compute the existing leaf's subtree hash at one level
-                // below the divergence point, then that becomes the
-                // sibling at the divergence level.
-                let existing_leaf_hash = hash_leaf(leaf_kh, value);
-                let below_diverge = existing_full.slice(diverge_depth + 1, TREE_DEPTH);
-                siblings[diverge_depth] = wrap_hash(existing_leaf_hash, &below_diverge);
-
-                Ok(None)
+    loop {
+        match handle.node() {
+            SmtNode::Empty => {
+                // Only reachable at the root (internal nodes never have
+                // empty children): the whole tree is empty.
+                return Ok(SmtProof {
+                    key_hash: *key_hash,
+                    leaf: None,
+                    siblings,
+                });
             }
-        }
 
-        SmtNode::Internal { path, left, right } => {
-            let remaining = key_path.slice(depth, TREE_DEPTH);
+            SmtNode::Leaf {
+                key_hash: leaf_kh,
+                value,
+                path: _,
+            } => {
+                // The terminal lone-leaf subtree starts here.  Whether
+                // this is membership (leaf_kh == key_hash) or a
+                // conflicting leaf, the proof simply carries it.
+                return Ok(SmtProof {
+                    key_hash: *key_hash,
+                    leaf: Some((*leaf_kh, value.clone())),
+                    siblings,
+                });
+            }
 
-            if !remaining.starts_with(path) {
-                // Path diverges within the compressed prefix.
-                // Compute the subtree hash at the divergence point.
-                let common = remaining.common_prefix(path);
-                let diverge_depth = depth + common;
+            SmtNode::Internal { path, left, right } => {
+                if !key_path.starts_with_from(depth, path) {
+                    // The key diverges inside the compressed prefix:
+                    // its slot below the divergence bit is empty, and
+                    // the sibling there is this internal node's
+                    // remaining chain (which holds >= 2 leaves, so it
+                    // wraps like any internal path).
+                    let common = key_path.common_prefix_from(depth, path);
+                    siblings.resize(depth + common, EMPTY_HASH);
 
-                if diverge_depth >= TREE_DEPTH {
-                    return Err(TrieError::InvalidState(
-                        "depth overflow in divergent path".into(),
-                    ));
+                    let left_h = to_hash32(left.expect_hash()?)?;
+                    let right_h = to_hash32(right.expect_hash()?)?;
+                    let internal_h = hash_internal(&left_h, &right_h);
+                    let suffix = path.slice(common + 1, path.len());
+                    siblings.push(wrap_hash(internal_h, &suffix));
+
+                    return Ok(SmtProof {
+                        key_hash: *key_hash,
+                        leaf: None,
+                        siblings,
+                    });
                 }
 
-                let left_h = to_hash32(left.expect_hash()?)?;
-                let right_h = to_hash32(right.expect_hash()?)?;
-                let internal_h = hash_internal(&left_h, &right_h);
-
-                // Wrap from the split level up to diverge_depth + 1.
-                let suffix = path.slice(common + 1, path.len());
-                siblings[diverge_depth] = wrap_hash(internal_h, &suffix);
-
-                Ok(None)
-            } else {
-                // Full prefix matches.  Compressed levels already have
-                // EMPTY_HASH siblings (correct: single-child chains).
+                // Full prefix match: the compressed levels have empty
+                // siblings, then the split contributes the other child.
                 let split_depth = depth + path.len();
                 if split_depth >= TREE_DEPTH {
                     return Err(TrieError::InvalidState(
                         "SMT depth exceeded 256 bits".into(),
                     ));
                 }
+                siblings.resize(split_depth, EMPTY_HASH);
 
                 let bit = key_path.bit_at(split_depth);
-                if bit == 0 {
-                    siblings[split_depth] = to_hash32(right.expect_hash()?)?;
-                    prove_walk(left, key_path, key_hash, split_depth + 1, siblings)
+                let (next, other) = if bit == 0 {
+                    (left, right)
                 } else {
-                    siblings[split_depth] = to_hash32(left.expect_hash()?)?;
-                    prove_walk(right, key_path, key_hash, split_depth + 1, siblings)
-                }
+                    (right, left)
+                };
+                siblings.push(to_hash32(other.expect_hash()?)?);
+
+                handle = next;
+                depth = split_depth + 1;
             }
         }
     }
@@ -166,9 +159,9 @@ pub fn verify_proof(
         return Ok(false);
     }
 
-    if proof.siblings.len() != TREE_DEPTH {
+    if proof.siblings.len() > TREE_DEPTH {
         return Err(TrieError::InvalidState(format!(
-            "proof must have {} siblings, got {}",
+            "proof must have at most {} siblings, got {}",
             TREE_DEPTH,
             proof.siblings.len()
         )));
@@ -176,14 +169,26 @@ pub fn verify_proof(
 
     let key_path = BitPath::from_hash(&proof.key_hash);
 
-    // Hash at depth 256 (the leaf level).
-    let mut current = match proof.value {
-        Some(ref v) => hash_leaf(&proof.key_hash, v),
+    // Commitment of the terminal subtree at depth `siblings.len()`.
+    let mut current = match &proof.leaf {
         None => EMPTY_HASH,
+        Some((leaf_kh, leaf_val)) => {
+            if leaf_kh != &proof.key_hash {
+                // Conflicting-leaf non-membership: the two keys must
+                // share every path bit above the terminal subtree,
+                // otherwise the fold below would not walk the leaf's
+                // true position.
+                let leaf_path = BitPath::from_hash(leaf_kh);
+                if key_path.common_prefix(&leaf_path) < proof.siblings.len() {
+                    return Ok(false);
+                }
+            }
+            hash_leaf(leaf_kh, leaf_val)
+        }
     };
 
-    // Walk from depth 255 up to depth 0.
-    for depth in (0..TREE_DEPTH).rev() {
+    // Fold upward from the terminal subtree to the root.
+    for depth in (0..proof.siblings.len()).rev() {
         let bit = key_path.bit_at(depth);
         if bit == 0 {
             current = hash_internal(&current, &proof.siblings[depth]);

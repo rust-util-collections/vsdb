@@ -47,10 +47,10 @@
 //!
 //! [`SmtCalc`] additionally supports [`prove`](SmtCalc::prove) and
 //! [`verify_proof`](SmtCalc::verify_proof) for Merkle inclusion and
-//! exclusion proofs.  Each proof carries 256 sibling hashes (one per
-//! level of the logical 256-level binary tree).  Verification recomputes
-//! the root bottom-up in at most 256 hash operations — empty/empty levels
-//! short-circuit — independent of tree shape or compression.
+//! exclusion proofs.  Proofs are compact (Diem/JMT style): sibling
+//! hashes only down to the terminal lone-leaf or empty subtree on the
+//! key's path — O(log N) hashes for N keys — and verification folds
+//! the root in as many hash operations.
 
 mod cache;
 mod codec_util;

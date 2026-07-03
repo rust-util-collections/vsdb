@@ -1,12 +1,15 @@
 //!
-//! Sparse Merkle Tree (SMT) — a fixed-depth binary Merkle tree with
-//! compressed paths.
+//! Sparse Merkle Tree (SMT) — a binary Merkle trie over 256-bit key
+//! hashes with compressed paths and depth-independent leaf commitments
+//! (the Diem/JMT construction).
 //!
 //! All keys are hashed to 256-bit paths via Keccak256 before insertion,
-//! giving a uniform key distribution and a fixed tree depth of 256.
-//! Compressed internal nodes collapse contiguous single-child chains
-//! into a single node with a multi-bit path prefix, keeping average
-//! depth at O(log N).
+//! giving a uniform key distribution.  Compressed internal nodes
+//! collapse contiguous single-child chains into a single node with a
+//! multi-bit path prefix, keeping average depth at O(log N).  A subtree
+//! holding exactly one leaf commits to the leaf hash directly —
+//! independent of depth — so hashing the whole tree costs O(N) hash
+//! operations and proofs stay O(log N).
 //!
 
 pub(crate) mod bitpath;

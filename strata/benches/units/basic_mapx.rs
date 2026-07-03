@@ -54,8 +54,15 @@ fn read_write(c: &mut Criterion) {
     });
 
     group.bench_function(" iter (5k entries) ", |b| {
+        // A dedicated 5k-entry map: `db` above has accumulated an
+        // unbounded number of entries from the timed write benches, so
+        // iterating it would measure an unknown (and growing) dataset.
+        let mut iter_db = Mapx::new();
+        for n in 0..5000usize {
+            iter_db.insert(&[n; 2], &vec![n; 128]);
+        }
         b.iter(|| {
-            let count = db.iter().count();
+            let count = iter_db.iter().count();
             black_box(count);
         })
     });

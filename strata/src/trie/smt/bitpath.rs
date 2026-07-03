@@ -10,49 +10,69 @@
 use std::cmp;
 use std::fmt;
 
-#[derive(Clone, PartialEq, Eq, Hash, Default)]
+/// Maximum number of bits a path can hold (a full 256-bit key hash).
+const MAX_BITS: usize = 256;
+const MAX_BYTES: usize = MAX_BITS / 8;
+
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct BitPath {
-    /// Packed bits, MSB-first within each byte.
-    /// Trailing bits in the last byte (beyond `bit_len`) are always zero.
-    data: Vec<u8>,
-    /// Number of valid bits.
+    /// Packed bits, MSB-first within each byte, stored inline.
+    /// All bits at index >= `bit_len` are always zero — including
+    /// whole trailing bytes — so equality, hashing, and byte-wise
+    /// comparisons never observe garbage.
+    data: [u8; MAX_BYTES],
+    /// Number of valid bits (invariant: <= MAX_BITS).
+    ///
+    /// Every construction path is bounded: `from_hash` is exactly 256,
+    /// `slice`/`concat` operate on fragments of one 256-bit key path,
+    /// and `from_packed` is validated by its callers.
     bit_len: usize,
+}
+
+impl Default for BitPath {
+    fn default() -> Self {
+        Self {
+            data: [0u8; MAX_BYTES],
+            bit_len: 0,
+        }
+    }
 }
 
 impl BitPath {
     /// Creates a 256-bit path from a 32-byte hash.
     pub fn from_hash(hash: &[u8; 32]) -> Self {
         Self {
-            data: hash.to_vec(),
-            bit_len: 256,
+            data: *hash,
+            bit_len: MAX_BITS,
         }
     }
 
     /// Creates a path from raw packed bytes and a bit length.
     ///
-    /// Trailing bits beyond `bit_len` in the last byte are normalized to
-    /// zero, so equality and prefix comparisons never observe garbage
-    /// carried in from the caller.
-    pub fn from_packed(mut data: Vec<u8>, bit_len: usize) -> Self {
-        debug_assert!(
-            data.len() == bit_len.div_ceil(8) || (bit_len == 0 && data.is_empty())
-        );
+    /// `bit_len` must be at most 256 and `data` must hold exactly
+    /// `bit_len.div_ceil(8)` bytes (callers deserializing untrusted
+    /// input must validate first).  Trailing bits beyond `bit_len` in
+    /// the last byte are normalized to zero.
+    pub fn from_packed(data: &[u8], bit_len: usize) -> Self {
+        debug_assert!(bit_len <= MAX_BITS);
+        debug_assert_eq!(data.len(), bit_len.div_ceil(8));
+        let mut buf = [0u8; MAX_BYTES];
+        let byte_len = cmp::min(data.len(), MAX_BYTES);
+        buf[..byte_len].copy_from_slice(&data[..byte_len]);
         let rem = bit_len % 8;
-        if rem != 0
-            && let Some(last) = data.last_mut()
-        {
+        if rem != 0 && byte_len > 0 {
             // MSB-first packing: keep the high `rem` bits, zero the rest.
-            *last &= 0xFFu8 << (8 - rem);
+            buf[bit_len / 8] &= 0xFFu8 << (8 - rem);
         }
-        Self { data, bit_len }
+        Self { data: buf, bit_len }
     }
 
     /// Creates a path from an unpacked slice where each byte is 0 or 1.
     pub fn from_bits(bits: &[u8]) -> Self {
+        debug_assert!(bits.len() <= MAX_BITS);
         debug_assert!(bits.iter().all(|&b| b < 2));
         let bit_len = bits.len();
-        let byte_len = bit_len.div_ceil(8);
-        let mut data = vec![0u8; byte_len];
+        let mut data = [0u8; MAX_BYTES];
         for (i, &bit) in bits.iter().enumerate() {
             if bit == 1 {
                 data[i / 8] |= 0x80 >> (i % 8);
@@ -67,6 +87,7 @@ impl BitPath {
     }
 
     #[inline]
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.bit_len == 0
     }
@@ -80,11 +101,10 @@ impl BitPath {
 
     /// Returns the number of leading bits shared with `other`.
     pub fn common_prefix(&self, other: &BitPath) -> usize {
-        let min_bytes = cmp::min(self.data.len(), other.data.len());
         let min_bits = cmp::min(self.bit_len, other.bit_len);
         let mut matched = 0;
 
-        for i in 0..min_bytes {
+        for i in 0..min_bits.div_ceil(8) {
             let xor = self.data[i] ^ other.data[i];
             if xor == 0 {
                 matched += 8;
@@ -100,6 +120,7 @@ impl BitPath {
     }
 
     /// Returns true if this path starts with `prefix`.
+    #[cfg(test)]
     pub fn starts_with(&self, prefix: &BitPath) -> bool {
         if self.bit_len < prefix.bit_len {
             return false;
@@ -107,7 +128,54 @@ impl BitPath {
         self.common_prefix(prefix) >= prefix.bit_len
     }
 
-    /// Extracts bits [start..end) as a new BitPath.
+    /// Returns the number of leading bits of `other` that match `self`
+    /// starting at bit `offset` — semantically identical to
+    /// `self.slice(offset, self.len()).common_prefix(other)` but without
+    /// materializing the slice (no allocation, byte-wise compare).
+    pub fn common_prefix_from(&self, offset: usize, other: &BitPath) -> usize {
+        debug_assert!(offset <= self.bit_len);
+        let limit = cmp::min(self.bit_len - offset, other.bit_len);
+        if limit == 0 {
+            return 0;
+        }
+
+        let byte_off = offset / 8;
+        let shift = offset % 8;
+        let mut matched = 0usize;
+
+        for (j, &b) in other.data.iter().enumerate().take(limit.div_ceil(8)) {
+            // Assemble the self byte spanning bits [offset+8j, offset+8j+8).
+            let hi = self.data.get(byte_off + j).copied().unwrap_or(0);
+            let a = if shift == 0 {
+                hi
+            } else {
+                let lo = self.data.get(byte_off + j + 1).copied().unwrap_or(0);
+                (hi << shift) | (lo >> (8 - shift))
+            };
+            let xor = a ^ b;
+            if xor == 0 {
+                matched += 8;
+                if matched >= limit {
+                    return limit;
+                }
+            } else {
+                matched += xor.leading_zeros() as usize;
+                return cmp::min(matched, limit);
+            }
+        }
+        limit
+    }
+
+    /// Returns true if `self`, viewed from bit `offset`, starts with
+    /// `prefix` — the allocation-free equivalent of
+    /// `self.slice(offset, self.len()).starts_with(prefix)`.
+    pub fn starts_with_from(&self, offset: usize, prefix: &BitPath) -> bool {
+        debug_assert!(offset <= self.bit_len);
+        self.bit_len - offset >= prefix.bit_len
+            && self.common_prefix_from(offset, prefix) >= prefix.bit_len
+    }
+
+    /// Extracts bits [start..end) as a new BitPath (byte-wise shifts).
     pub fn slice(&self, start: usize, end: usize) -> BitPath {
         debug_assert!(start <= end && end <= self.bit_len);
         let new_len = end - start;
@@ -115,47 +183,56 @@ impl BitPath {
             return BitPath::default();
         }
 
+        let mut data = [0u8; MAX_BYTES];
         let byte_len = new_len.div_ceil(8);
-        let mut data = vec![0u8; byte_len];
-        for i in 0..new_len {
-            let src_idx = start + i;
-            let bit = (self.data[src_idx / 8] >> (7 - (src_idx % 8))) & 1;
-            if bit == 1 {
-                data[i / 8] |= 0x80 >> (i % 8);
+        let s = start / 8;
+        let r = start % 8;
+
+        if r == 0 {
+            data[..byte_len].copy_from_slice(&self.data[s..s + byte_len]);
+        } else {
+            for (j, out) in data.iter_mut().enumerate().take(byte_len) {
+                let hi = self.data[s + j] << r;
+                let lo = self.data.get(s + j + 1).map(|b| b >> (8 - r)).unwrap_or(0);
+                *out = hi | lo;
             }
         }
+
+        // Zero any bits copied in beyond the new length.
+        let rem = new_len % 8;
+        if rem != 0 {
+            data[new_len / 8] &= 0xFFu8 << (8 - rem);
+        }
+
         BitPath {
             data,
             bit_len: new_len,
         }
     }
 
-    /// Concatenates `self` and `other`.
+    /// Concatenates `self` and `other` (byte-wise shifts).
+    ///
+    /// The combined length must stay within 256 bits — guaranteed for
+    /// all callers, which only ever reassemble fragments of a single
+    /// 256-bit key path.
     pub fn concat(&self, other: &BitPath) -> BitPath {
-        if self.is_empty() {
-            return other.clone();
-        }
-        if other.is_empty() {
-            return self.clone();
-        }
-
         let total = self.bit_len + other.bit_len;
-        let byte_len = total.div_ceil(8);
-        let mut data = vec![0u8; byte_len];
+        debug_assert!(total <= MAX_BITS);
 
-        // Copy self bits
-        for i in 0..self.bit_len {
-            let bit = (self.data[i / 8] >> (7 - (i % 8))) & 1;
-            if bit == 1 {
-                data[i / 8] |= 0x80 >> (i % 8);
-            }
-        }
-        // Copy other bits
-        for i in 0..other.bit_len {
-            let dst = self.bit_len + i;
-            let bit = (other.data[i / 8] >> (7 - (i % 8))) & 1;
-            if bit == 1 {
-                data[dst / 8] |= 0x80 >> (dst % 8);
+        // Bits beyond bit_len are always zero, so OR-merging is safe.
+        let mut data = self.data;
+        let s = self.bit_len / 8;
+        let r = self.bit_len % 8;
+        let other_bytes = other.bit_len.div_ceil(8);
+
+        if r == 0 {
+            data[s..s + other_bytes].copy_from_slice(&other.data[..other_bytes]);
+        } else {
+            for (j, &b) in other.data.iter().enumerate().take(other_bytes) {
+                data[s + j] |= b >> r;
+                if let Some(next) = data.get_mut(s + j + 1) {
+                    *next |= b << (8 - r);
+                }
             }
         }
 
@@ -165,9 +242,10 @@ impl BitPath {
         }
     }
 
-    /// Returns the packed byte representation.
+    /// Returns the packed byte representation (exactly
+    /// `len().div_ceil(8)` bytes).
     pub fn as_packed(&self) -> &[u8] {
-        &self.data
+        &self.data[..self.bit_len.div_ceil(8)]
     }
 }
 
@@ -187,6 +265,55 @@ impl fmt::Debug for BitPath {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_common_prefix_from_matches_slice() {
+        let hash: [u8; 32] = [
+            0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF,
+            0xFE, 0xDC, 0xBA, 0x98, 0x76, 0x54, 0x32, 0x10, 0x00, 0xFF, 0x55, 0xAA,
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+        ];
+        let full = BitPath::from_hash(&hash);
+
+        // Cross-check the offset-based primitives against the
+        // slice-materializing reference on a spread of offsets and
+        // probe shapes (aligned, unaligned, empty, diverging).
+        for offset in [0usize, 1, 3, 7, 8, 9, 15, 64, 100, 200, 250, 255, 256] {
+            let reference = full.slice(offset, 256);
+
+            for take in [0usize, 1, 5, 8, 13, 32, 64] {
+                let take = cmp::min(take, 256 - offset);
+                let probe = reference.slice(0, take);
+                assert_eq!(
+                    full.common_prefix_from(offset, &probe),
+                    reference.common_prefix(&probe),
+                    "offset {offset} take {take}"
+                );
+                assert!(full.starts_with_from(offset, &probe));
+
+                // Flip the last bit of a non-empty probe: must diverge
+                // exactly where the reference diverges.
+                if take > 0 {
+                    let mut bits: Vec<u8> = (0..take).map(|i| probe.bit_at(i)).collect();
+                    let last = bits.len() - 1;
+                    bits[last] ^= 1;
+                    let flipped = BitPath::from_bits(&bits);
+                    assert_eq!(
+                        full.common_prefix_from(offset, &flipped),
+                        reference.common_prefix(&flipped),
+                        "flipped offset {offset} take {take}"
+                    );
+                    assert!(!full.starts_with_from(offset, &flipped));
+                }
+            }
+
+            // A probe longer than the remaining bits can never be a prefix.
+            if offset > 0 {
+                let too_long = full.slice(0, 256 - offset + 1);
+                assert!(!full.starts_with_from(offset, &too_long));
+            }
+        }
+    }
 
     #[test]
     fn test_from_hash() {

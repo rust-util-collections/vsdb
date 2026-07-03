@@ -1,4 +1,5 @@
 use criterion::{Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 use vsdb::trie::{MptCalc, SmtCalc};
 
 fn mpt_insert(c: &mut Criterion) {
@@ -176,6 +177,65 @@ fn smt_remove(c: &mut Criterion) {
     });
 }
 
+fn smt_batch_update(c: &mut Criterion) {
+    c.bench_function("smt_batch_update_100", |b| {
+        b.iter(|| {
+            let mut smt = SmtCalc::new();
+            let ops: Vec<(Vec<u8>, Option<Vec<u8>>)> = (0u32..100)
+                .map(|i| (i.to_be_bytes().to_vec(), Some(i.to_be_bytes().to_vec())))
+                .collect();
+            let ops_ref: Vec<(&[u8], Option<&[u8]>)> = ops
+                .iter()
+                .map(|(k, v)| (k.as_slice(), v.as_deref()))
+                .collect();
+            smt.batch_update(&ops_ref).unwrap();
+        });
+    });
+
+    c.bench_function("smt_batch_update_1000", |b| {
+        b.iter(|| {
+            let mut smt = SmtCalc::new();
+            let ops: Vec<(Vec<u8>, Option<Vec<u8>>)> = (0u32..1000)
+                .map(|i| (i.to_be_bytes().to_vec(), Some(i.to_be_bytes().to_vec())))
+                .collect();
+            let ops_ref: Vec<(&[u8], Option<&[u8]>)> = ops
+                .iter()
+                .map(|(k, v)| (k.as_slice(), v.as_deref()))
+                .collect();
+            smt.batch_update(&ops_ref).unwrap();
+        });
+    });
+}
+
+fn mpt_prove_verify(c: &mut Criterion) {
+    let mut mpt = MptCalc::new();
+    for i in 0u32..100 {
+        mpt.insert(&i.to_be_bytes(), &i.to_be_bytes()).unwrap();
+    }
+    let root = mpt.root_hash().unwrap();
+    let root32: [u8; 32] = root.try_into().unwrap();
+
+    c.bench_function("mpt_prove_100", |b| {
+        b.iter(|| {
+            for i in 0u32..100 {
+                black_box(mpt.prove(&i.to_be_bytes()).unwrap());
+            }
+        });
+    });
+
+    let proofs: Vec<_> = (0u32..100)
+        .map(|i| (i.to_be_bytes(), mpt.prove(&i.to_be_bytes()).unwrap()))
+        .collect();
+
+    c.bench_function("mpt_verify_100", |b| {
+        b.iter(|| {
+            for (key, proof) in &proofs {
+                black_box(MptCalc::verify_proof(&root32, key, proof).unwrap());
+            }
+        });
+    });
+}
+
 fn smt_prove_verify(c: &mut Criterion) {
     let mut smt = SmtCalc::new();
     for i in 0u32..100 {
@@ -187,7 +247,7 @@ fn smt_prove_verify(c: &mut Criterion) {
     c.bench_function("smt_prove_100", |b| {
         b.iter(|| {
             for i in 0u32..100 {
-                smt.prove(&i.to_be_bytes()).unwrap();
+                black_box(smt.prove(&i.to_be_bytes()).unwrap());
             }
         });
     });
@@ -199,7 +259,7 @@ fn smt_prove_verify(c: &mut Criterion) {
     c.bench_function("smt_verify_100", |b| {
         b.iter(|| {
             for (key, proof) in &proofs {
-                SmtCalc::verify_proof(&root32, key, proof).unwrap();
+                black_box(SmtCalc::verify_proof(&root32, key, proof).unwrap());
             }
         });
     });
@@ -212,10 +272,12 @@ criterion_group!(
     mpt_get,
     mpt_remove,
     mpt_batch_update,
+    mpt_prove_verify,
     smt_insert,
     smt_root_hash,
     smt_get,
     smt_remove,
+    smt_batch_update,
     smt_prove_verify,
 );
 criterion_main!(benches);

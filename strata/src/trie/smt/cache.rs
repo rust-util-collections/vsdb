@@ -18,10 +18,13 @@ use super::bitpath::BitPath;
 use super::{SmtHandle, SmtNode};
 
 const MAGIC: &[u8; 4] = b"SMTC";
+// v3: leaf-shortcut hash domain (lone-leaf subtrees commit to the leaf
+// hash depth-independently, Diem/JMT style) — v2 caches carry
+// incompatible hashes and must be rejected so the trie is rebuilt from
+// authoritative data.
 // v2: internal-node hashing gained a 0x00 domain byte (leaf/internal
-// domain separation) — v1 caches carry incompatible hashes and must be
-// rejected so the trie is rebuilt from authoritative data.
-const VERSION: u8 = 2;
+// domain separation).
+const VERSION: u8 = 3;
 
 // =========================================================================
 // Public API
@@ -243,11 +246,16 @@ fn write_bitpath(buf: &mut Vec<u8>, path: &BitPath) {
 
 fn read_bitpath(data: &[u8], cursor: &mut usize) -> Result<BitPath> {
     let bit_len = read_varint(data, cursor)?;
+    if bit_len > 256 {
+        return Err(TrieError::InvalidState(format!(
+            "bitpath length {bit_len} exceeds 256 bits"
+        )));
+    }
     let byte_len = bit_len.div_ceil(8);
     if *cursor + byte_len > data.len() {
         return Err(TrieError::InvalidState("bitpath unexpected EOF".into()));
     }
-    let packed = data[*cursor..*cursor + byte_len].to_vec();
+    let packed = &data[*cursor..*cursor + byte_len];
     *cursor += byte_len;
     Ok(BitPath::from_packed(packed, bit_len))
 }
