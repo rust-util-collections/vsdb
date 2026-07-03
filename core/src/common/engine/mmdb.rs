@@ -3,19 +3,20 @@ use crate::common::{
     vsdb_freeze_base_dir, vsdb_get_base_dir,
 };
 use mmdb::{BidiIterator, CompressionType, DB, DbOptions, WriteBatch, WriteOptions};
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use ruc::*;
 use std::{
     borrow::Cow,
     cell::Cell,
     cmp,
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     ops::{Bound, RangeBounds},
     sync::{
         LazyLock,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    thread::{self, ThreadId},
 };
 
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
@@ -27,11 +28,32 @@ thread_local! {
     static LOCAL_CEIL: Cell<u64> = const { Cell::new(0) };
 }
 
+/// Next un-issued batch start. `0` means "not yet initialized from the
+/// persisted allocator value" (real prefixes start at `RESERVED_ID_CNT`).
 static GLOBAL_COUNTER: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
+/// In-memory mirror of the persisted allocator ceiling (always kept in
+/// sync with the on-disk value once initialized).
 static GLOBAL_CEILING: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
+/// The persisted allocator value at process initialization. Every prefix
+/// below it was issued by a previous run and can never be issued again.
+static GLOBAL_FLOOR: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
 static PREFIX_ALLOC_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+/// Per-thread pending allocation windows (`[start, end)` handed out by
+/// `GLOBAL_COUNTER.fetch_add` but not yet fully issued). Refills replace
+/// the same thread's entry; a dead thread's unexhausted window stays
+/// registered forever, which is correct — its prefixes are permanently
+/// un-issued, so treating them as pending is conservative and harmless.
+static PENDING_WINDOWS: LazyLock<RwLock<HashMap<ThreadId, (u64, u64)>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// Prefixes accepted by [`MmDB::reserve_recovered_prefix`] that the
+/// allocator has not issued yet; `alloc_prefix` must skip them.
 static RECOVERED_PREFIXES: LazyLock<Mutex<HashSet<Pre>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
+/// Fast-path guard: `alloc_prefix` only locks `RECOVERED_PREFIXES` after
+/// at least one reservation has been recorded (never in normal operation).
+static RECOVERED_NONEMPTY: AtomicBool = AtomicBool::new(false);
 
 /// Number of DB shards. Each prefix is routed to one shard via `prefix % NUM_SHARDS`.
 /// This gives 16 independent write locks, compaction queues, and WALs.
@@ -115,10 +137,50 @@ impl MmDB {
     pub(crate) fn alloc_prefix(&self) -> Pre {
         loop {
             let candidate = self.alloc_prefix_candidate();
-            if !RECOVERED_PREFIXES.lock().remove(&candidate) {
+            // Normal operation records no reservations, so allocation
+            // stays lock-free here.
+            if !RECOVERED_NONEMPTY.load(Ordering::Acquire) {
                 return candidate;
             }
+            let mut reserved = RECOVERED_PREFIXES.lock();
+            if !reserved.remove(&candidate) {
+                return candidate;
+            }
+            if reserved.is_empty() {
+                RECOVERED_NONEMPTY.store(false, Ordering::Release);
+            }
         }
+    }
+
+    /// Loads the persisted allocator state into the process-wide atomics
+    /// (idempotent). `GLOBAL_FLOOR` snapshots the persisted value at
+    /// initialization: every prefix below it was issued by a previous run.
+    fn ensure_alloc_init(&self) {
+        if GLOBAL_COUNTER.load(Ordering::Acquire) != 0 {
+            return;
+        }
+        let _x = PREFIX_ALLOC_LOCK.lock();
+        if GLOBAL_COUNTER.load(Ordering::Acquire) != 0 {
+            return;
+        }
+        let ret = crate::common::parse_prefix!(
+            self.meta_db()
+                .get(&self.prefix_allocator.key)
+                .expect("vsdb: meta read failed")
+                .unwrap()
+        );
+        let new_ceil = ret + PREFIX_ALLOC_BATCH;
+        self.meta_db()
+            .put_with_options(
+                &sync_write_opts(),
+                &self.prefix_allocator.key,
+                &new_ceil.to_le_bytes(),
+            )
+            .expect("vsdb: meta write failed");
+        GLOBAL_FLOOR.store(ret, Ordering::Release);
+        GLOBAL_CEILING.store(new_ceil, Ordering::Release);
+        // The counter doubles as the init guard — store it last.
+        GLOBAL_COUNTER.store(ret, Ordering::Release);
     }
 
     fn alloc_prefix_candidate(&self) -> Pre {
@@ -131,31 +193,23 @@ impl MmDB {
                     return next;
                 }
 
-                let gc = GLOBAL_COUNTER.load(Ordering::Acquire);
-                if gc == 0 {
-                    let _x = PREFIX_ALLOC_LOCK.lock();
-                    if GLOBAL_COUNTER.load(Ordering::Acquire) == 0 {
-                        let ret = crate::common::parse_prefix!(
-                            self.meta_db()
-                                .get(&self.prefix_allocator.key)
-                                .expect("vsdb: meta read failed")
-                                .unwrap()
-                        );
-                        let new_ceil = ret + PREFIX_ALLOC_BATCH;
-                        self.meta_db()
-                            .put_with_options(
-                                &sync_write_opts(),
-                                &self.prefix_allocator.key,
-                                &new_ceil.to_le_bytes(),
-                            )
-                            .expect("vsdb: meta write failed");
-                        GLOBAL_COUNTER.store(ret, Ordering::Release);
-                        GLOBAL_CEILING.store(new_ceil, Ordering::Release);
-                    }
-                }
+                self.ensure_alloc_init();
 
-                let batch_start =
-                    GLOBAL_COUNTER.fetch_add(PREFIX_ALLOC_BATCH, Ordering::AcqRel);
+                // Claim the next batch and register it as this thread's
+                // pending window in one exclusive section, so that
+                // `reserve_recovered_prefix` (which reads the counter and
+                // the registry under the read lock) can never observe the
+                // advanced counter without the matching window.
+                let batch_start = {
+                    let mut reg = PENDING_WINDOWS.write();
+                    let batch_start =
+                        GLOBAL_COUNTER.fetch_add(PREFIX_ALLOC_BATCH, Ordering::AcqRel);
+                    reg.insert(
+                        thread::current().id(),
+                        (batch_start, batch_start + PREFIX_ALLOC_BATCH),
+                    );
+                    batch_start
+                };
                 let batch_end = batch_start + PREFIX_ALLOC_BATCH;
 
                 let old_ceil = GLOBAL_CEILING.load(Ordering::Acquire);
@@ -182,23 +236,44 @@ impl MmDB {
         })
     }
 
+    /// Validates a prefix recovered through a *safe* restore path
+    /// (serde / `from_meta`), and reserves it when necessary.
+    ///
+    /// Returns `false` when the prefix lies outside the allocator-issued
+    /// range (`< RESERVED_ID_CNT` or `>= ceiling`) — such metadata cannot
+    /// come from a legitimately allocated instance.
+    ///
+    /// Accepted prefixes need a reservation only if the allocator could
+    /// still issue them in this run (`>= counter`, or inside a registered
+    /// pending thread window). Prefixes below the process-start floor —
+    /// the overwhelmingly common case for real restores — are accepted
+    /// with a few atomic loads and no locking, keeping nested-handle
+    /// decoding cheap and the reservation set bounded.
     pub(crate) fn reserve_recovered_prefix(&self, meta_prefix: PreBytes) -> bool {
         let prefix = Pre::from_le_bytes(meta_prefix);
         if prefix < RESERVED_ID_CNT {
             return false;
         }
-        let ceiling = crate::common::parse_prefix!(
-            self.meta_db()
-                .get(&self.prefix_allocator.key)
-                .expect("vsdb: meta read failed")
-                .expect("vsdb: prefix allocator metadata missing")
-        );
-        if prefix < ceiling {
-            RECOVERED_PREFIXES.lock().insert(prefix);
-            true
-        } else {
-            false
+        self.ensure_alloc_init();
+
+        if prefix >= GLOBAL_CEILING.load(Ordering::Acquire) {
+            return false;
         }
+        if prefix < GLOBAL_FLOOR.load(Ordering::Acquire) {
+            // Issued by a previous run — can never be issued again.
+            return true;
+        }
+
+        let pending = {
+            let reg = PENDING_WINDOWS.read();
+            prefix >= GLOBAL_COUNTER.load(Ordering::Acquire)
+                || reg.values().any(|&(s, e)| (s..e).contains(&prefix))
+        };
+        if pending {
+            RECOVERED_PREFIXES.lock().insert(prefix);
+            RECOVERED_NONEMPTY.store(true, Ordering::Release);
+        }
+        true
     }
 
     pub(crate) fn flush(&self) {
@@ -551,8 +626,11 @@ fn mmdb_open(dir: &std::path::Path) -> Result<DB> {
         block_cache_capacity: block_cache_size,
         block_size: 16 * 1024, // 16 KB
 
-        // Compaction tuning
-        l0_compaction_trigger: 8,
+        // Compaction tuning. Keep the compaction trigger well below mmdb's
+        // write-slowdown trigger (8): with both at 8, the instant L0 becomes
+        // compactable every write already pays the slowdown penalty — no
+        // buffer zone for background compaction to work in.
+        l0_compaction_trigger: 4,
         max_subcompactions: 4,
 
         // Single compaction thread per shard — 16 shards give natural parallelism

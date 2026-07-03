@@ -3,8 +3,10 @@
 > Auto-managed by /x-review and /x-fix.
 > Last full audit: 2026-07-03 (all 9 subsystems, parallel deep review; every
 > new finding fixed in the same pass — see "Fixed in the latest full audit").
-> Followed by the v14.0.0 design-level overhaul (see the section at the end),
-> which additionally resolved four former Won't Fix entries.
+> Followed the same day by a regression review of the audit-fix commit itself
+> (see "Fixed in the follow-up regression review"), and earlier by the
+> v14.0.0 design-level overhaul (see the section at the end), which
+> additionally resolved four former Won't Fix entries.
 >
 > **Won't Fix ≠ permanent.** Every entry under `## Won't Fix` must be
 > re-evaluated against the current codebase on each audit. Surrounding code
@@ -94,6 +96,18 @@
 - **Where**: strata/src/vecdex/mod.rs (compact)
 - **What**: `compact()` calls `self.clear()` then re-inserts vectors one at a time. If `insert()` were to fail mid-way, data is unrecoverable (all maps already empty).
 - **Reason**: Currently safe because `insert()` can only fail on dimension mismatch, and all vectors were validated at their original insertion time. Map insertions are infallible. The code comment already acknowledges this fragility and notes the two-phase commit requirement if insert semantics change. Adding recovery infrastructure for a hypothetical future change is over-engineering.
+
+---
+
+## Fixed in the follow-up regression review (2026-07-03, commit 767d70c1)
+
+- **[HIGH] engine**: `reserve_recovered_prefix` performed a meta-DB read plus a global-mutex `HashSet` insert on **every** safe handle decode (including hot nested-value decodes: DagMap parent/child traversal, SlotDex `Large` containers, `Orphan` values), `RECOVERED_PREFIXES` grew unboundedly for the process lifetime, and `alloc_prefix` took a global lock per allocation. Reworked: allocator state (floor/ceiling/counter) is mirrored in process atomics; previous-run prefixes — the common restore case — are validated lock-free with no reservation; only prefixes the allocator could still issue (>= counter, or inside a registered pending thread window) are reserved, keeping the set bounded; allocation checks the set only while it is nonempty (`RECOVERED_NONEMPTY` fast path).
+- **[HIGH] typed-collections**: the type-confusion guard did not cover types whose generic parameters occur in **no field type** — `VerMap<K, V>` (K/V phantom at the storage level), `VecDex<K, D, S>` (metric `D`), and `DagMapRawKey<V>` could still be restored under a different type with silent wrong results or decode panics. The typed-handle envelope now wraps the top-level serde of `VerMap`, `SlotDex`, `VecDex`, and `DagMapRawKey`, tagging the complete concrete type.
+- **[HIGH] versioning**: the multi-base `find_merge_bases` walked the **full ancestry** of both commits (plus a domination sweep) on every merge/fork-point query — O(history) storage reads, versus the previous fork-region-local heap walk. Replaced with a git-style "paint down to common" walk (max-heap in descending CommitId order, FROM_A/FROM_B/STALE flags, terminating when only stale frontier entries remain) that returns all lowest common ancestors with fork-region cost.
+- **[LOW] typed-collections**: the typed-handle envelope embedded the full `type_name` string per persisted handle (~10x meta bloat, string compare per decode); now an 8-byte FNV-1a tag with the `type_name` stability caveat documented on the helpers.
+- **[LOW] versioning**: the three-way merge decision matrix existed twice (`three_way_merge`'s inline match and `decide_owned`) — a silent-divergence risk; extracted into one shared `decide()`.
+- **[LOW] docs**: CLAUDE.md unsafe-block inventory updated (~21 → ~19 after v14.0.2 removed two blocks); CHANGELOG entry added for the v14.0.2/v14.0.3 on-disk meta format break (typed-handle envelope + prefix validation), which had shipped undocumented.
+- **[HIGH] engine (mmdb, field-discovered)**: accumulated on-disk data (handles never delete storage on drop, so every `cargo test` run without the Makefile's cleanup grows the default dir) pushed shard L0 into mmdb's write-slowdown band, and mmdb never scheduled compaction for an inherited backlog — a permanent ~5000 µs/put write stall (observed as a 15+ minute test hang with all compaction threads idle). Root-caused to mmdb and fixed there (v4.0.4: startup compaction kick + slowdown-path signal/refresh, with regression test); vsdb's `l0_compaction_trigger` returned to 4 so the compaction trigger sits below the slowdown trigger (8) again.
 
 ---
 

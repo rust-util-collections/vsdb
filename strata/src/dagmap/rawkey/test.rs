@@ -100,6 +100,17 @@ fn test_save_and_from_meta() {
     assert_eq!(restored.get("k2").unwrap(), s!("v2"));
 }
 
+/// `V` is phantom-only, so this exercises the typed-handle envelope:
+/// restoring under a different value type must fail loudly.
+#[test]
+fn test_from_meta_rejects_wrong_value_type() {
+    let mut dag: DagMapRawKey<Vec<u8>> = DagMapRawKey::new(None);
+    dag.insert("k1", &s!("v1"));
+
+    let id = dag.save_meta().unwrap();
+    assert!(DagMapRawKey::<String>::from_meta(id).is_err());
+}
+
 /// Postcard serde roundtrip for DagMapRawKey (delegates to DagMapRaw).
 #[test]
 fn test_serde_roundtrip() {

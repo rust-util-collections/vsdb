@@ -568,6 +568,18 @@ fn test_save_and_from_meta() {
     assert_eq!(restored.total(), 2);
 }
 
+/// The typed-handle envelope must reject restoring under different
+/// slot/key type parameters.
+#[test]
+fn test_from_meta_rejects_wrong_type_params() {
+    let mut db: SlotDex<u64, u64> = SlotDex::new(16, false);
+    db.insert(10, 100).unwrap();
+
+    let id = db.save_meta().unwrap();
+    assert!(SlotDex::<u32, u64>::from_meta(id).is_err());
+    assert!(SlotDex::<u64, u32>::from_meta(id).is_err());
+}
+
 /// Postcard serde roundtrip for SlotDex (derived serde, but inner types are hand-written).
 #[test]
 fn test_serde_roundtrip() {

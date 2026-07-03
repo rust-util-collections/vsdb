@@ -119,15 +119,20 @@ where
     where
         Ser: serde::Serializer,
     {
-        use serde::ser::SerializeTuple;
-        let mut t = serializer.serialize_tuple(6)?;
-        t.serialize_element(&self.vectors)?;
-        t.serialize_element(&self.adjacency)?;
-        t.serialize_element(&self.key_to_node)?;
-        t.serialize_element(&self.node_to_key)?;
-        t.serialize_element(&self.node_info)?;
-        t.serialize_element(&self.meta)?;
-        t.end()
+        // The distance metric `D` occurs in no field type, so the
+        // typed-handle envelope (tagged with `VecDex<K, D, S>`) is the
+        // only guard against restoring an index under a different metric.
+        crate::common::serialize_typed_handle_meta::<Self, Ser>(
+            &(
+                &self.vectors,
+                &self.adjacency,
+                &self.key_to_node,
+                &self.node_to_key,
+                &self.node_info,
+                &self.meta,
+            ),
+            serializer,
+        )
     }
 }
 
@@ -141,53 +146,29 @@ where
     where
         De: serde::Deserializer<'de>,
     {
-        struct Vis<K, D, S>(PhantomData<(K, D, S)>);
-        impl<'de, K, D, S> serde::de::Visitor<'de> for Vis<K, D, S>
-        where
-            K: KeyEnDe + ValueEnDe + Clone + Eq + Deserialize<'de>,
-            D: DistanceMetric<S>,
-            S: Scalar,
-        {
-            type Value = VecDex<K, D, S>;
-            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str("VecDex")
-            }
-            fn visit_seq<A: serde::de::SeqAccess<'de>>(
-                self,
-                mut seq: A,
-            ) -> std::result::Result<VecDex<K, D, S>, A::Error> {
-                let vectors = seq
-                    .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
-                let adjacency = seq
-                    .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
-                let key_to_node = seq
-                    .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(2, &self))?;
-                let node_to_key = seq
-                    .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(3, &self))?;
-                let node_info = seq
-                    .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(4, &self))?;
-                let meta = seq
-                    .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(5, &self))?;
-                let mut me = VecDex {
-                    vectors,
-                    adjacency,
-                    key_to_node,
-                    node_to_key,
-                    node_info,
-                    meta,
-                    _metric: PhantomData,
-                };
-                me.ensure_count();
-                Ok(me)
-            }
-        }
-        deserializer.deserialize_tuple(6, Vis(PhantomData))
+        type Payload<K, S> = (
+            MapxOrd<u64, Vec<S>>,
+            MapxRaw,
+            Mapx<K, u64>,
+            MapxOrd<u64, K>,
+            MapxOrd<u64, NodeInfo>,
+            Orphan<HnswMeta>,
+        );
+        let (vectors, adjacency, key_to_node, node_to_key, node_info, meta) =
+            crate::common::deserialize_typed_handle_meta::<Self, Payload<K, S>, De>(
+                deserializer,
+            )?;
+        let mut me = VecDex {
+            vectors,
+            adjacency,
+            key_to_node,
+            node_to_key,
+            node_info,
+            meta,
+            _metric: PhantomData,
+        };
+        me.ensure_count();
+        Ok(me)
     }
 }
 

@@ -55,7 +55,10 @@ impl<V> Serialize for DagMapRawKey<V> {
     where
         S: serde::Serializer,
     {
-        self.inner.serialize(serializer)
+        // `V` is phantom-only, so the typed-handle envelope (tagged with
+        // `DagMapRawKey<V>`) is the only guard against restoring the map
+        // under a different value type.
+        crate::common::serialize_typed_handle_meta::<Self, S>(&self.inner, serializer)
     }
 }
 
@@ -64,10 +67,11 @@ impl<'de, V> Deserialize<'de> for DagMapRawKey<V> {
     where
         D: serde::Deserializer<'de>,
     {
-        DagMapRaw::deserialize(deserializer).map(|inner| Self {
-            inner,
-            _p: PhantomData,
-        })
+        crate::common::deserialize_typed_handle_meta::<Self, DagMapRaw, D>(deserializer)
+            .map(|inner| Self {
+                inner,
+                _p: PhantomData,
+            })
     }
 }
 

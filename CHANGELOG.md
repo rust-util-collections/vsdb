@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v14.0.3]
+
+### Breaking
+
+- **Typed-handle instance metadata is envelope-tagged** (introduced across v14.0.2/v14.0.3; on-disk format `VSTYPE02`). Safe restore paths (`serde` / `from_meta`) of `Mapx`, `MapxOrd`, `MapxOrdRawKey`, `Orphan`, `VerMap`, `SlotDex`, `VecDex`, and `DagMapRawKey` now embed and validate an 8-byte hash of the concrete wrapper type (including **all** generic parameters — notably `VerMap<K, V>`'s key/value types, `VecDex`'s distance metric, and `DagMapRawKey<V>`'s value type, none of which occur in any field type), so loading persisted metadata under a different type fails loudly instead of silently misreading data. The tag derives from `std::any::type_name`, so persisted metas are additionally tied to the writing build's type paths/compiler rendering — a false rejection is always safer than type confusion. **Migration**: none; re-create metas with `save_meta` (pre-v14.0.2 typed metas are rejected by the magic check).
+- **Safe prefix restore is validated against the allocator** (v14.0.2, reworked in v14.0.3). `MapxRaw::from_meta` / serde deserialization reject prefixes outside the allocator-issued range and reserve still-pending prefixes so future allocations skip them; `unsafe from_bytes` remains the trusted escape hatch. The v14.0.3 rework removes the per-decode meta-DB read and global-lock reservation: allocator state is mirrored in process atomics, previous-run prefixes (the common restore case) are accepted lock-free without reservation, and the reservation set stays bounded (pending-window registry).
+
+### Fixed
+
+- **Accumulated on-disk data no longer degrades small writes into a permanent multi-ms stall.** Root cause was in the mmdb engine (fixed in **mmdb 4.0.4**, now the minimum dependency): a DB opened with a pre-existing L0 backlog — exactly what accumulates across short-lived processes, since collection handles never delete data on drop — never scheduled compaction (the only routine signal was post-flush), so every write slept in the L0-slowdown band against a stale cached file count, and small workloads never flushed to break the loop (measured ~5000 µs/put steady-state vs ~2 µs/put healthy). mmdb now kicks compaction at `DB::open` and from the slowdown path. On the vsdb side, `l0_compaction_trigger` returned to 4 (8 coincided exactly with mmdb's write-slowdown trigger, leaving background compaction no buffer zone to work in).
+- **Merge-base search regained fork-region locality.** The v14.0.2 multi-base merge fix walked the full ancestry of both commits on every merge/fork-point query (O(history) storage reads). Replaced with a git-style "paint down to common" walk (max-heap + STALE propagation) that still returns **all** lowest common ancestors for criss-cross histories but stops at the fork region.
+- The three-way merge decision matrix is now a single shared function for the single-base and multi-base paths (previously duplicated).
+
 ## [v14.0.0]
 
 ### Breaking

@@ -17,8 +17,8 @@ use crate::{
     basic::orphan::Orphan,
     common::{dirty_count as dc, error::Result},
 };
-use serde::{Deserialize, Serialize, de};
-use std::{fmt, marker::PhantomData, ops::Bound, result::Result as StdResult};
+use serde::{Deserialize, Serialize};
+use std::{ops::Bound, result::Result as StdResult};
 
 pub(crate) type EntryCnt = u64;
 type SkipNum = EntryCnt;
@@ -61,14 +61,16 @@ where
     where
         Ser: serde::Serializer,
     {
-        use serde::ser::SerializeTuple;
-        let mut t = serializer.serialize_tuple(5)?;
-        t.serialize_element(&self.data)?;
-        t.serialize_element(&self.total)?;
-        t.serialize_element(&self.tiers)?;
-        t.serialize_element(&self.tier_capacity)?;
-        t.serialize_element(&self.swap_order)?;
-        t.end()
+        crate::common::serialize_typed_handle_meta::<Self, Ser>(
+            &(
+                &self.data,
+                &self.total,
+                &self.tiers,
+                &self.tier_capacity,
+                &self.swap_order,
+            ),
+            serializer,
+        )
     }
 }
 
@@ -81,47 +83,26 @@ where
     where
         D: serde::Deserializer<'de>,
     {
-        struct Vis<S, K>(PhantomData<(S, K)>);
-        impl<'de, S, K> de::Visitor<'de> for Vis<S, K>
-        where
-            S: SlotType,
-            K: Clone + Ord + KeyEnDeOrdered,
-        {
-            type Value = SlotDex<S, K>;
-            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str("SlotDex")
-            }
-            fn visit_seq<A: de::SeqAccess<'de>>(
-                self,
-                mut seq: A,
-            ) -> StdResult<SlotDex<S, K>, A::Error> {
-                let data = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
-                let total = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                let tiers = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                let tier_capacity = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(3, &self))?;
-                let swap_order = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(4, &self))?;
-                let mut me = SlotDex {
-                    data,
-                    total,
-                    tiers,
-                    tier_capacity,
-                    swap_order,
-                };
-                me.ensure_count();
-                Ok(me)
-            }
-        }
-        deserializer.deserialize_tuple(5, Vis(PhantomData))
+        type Payload<S, K> = (
+            MapxOrd<S, DataCtner<K>>,
+            Orphan<EntryCnt>,
+            Vec<Tier<S>>,
+            S,
+            bool,
+        );
+        let (data, total, tiers, tier_capacity, swap_order) =
+            crate::common::deserialize_typed_handle_meta::<Self, Payload<S, K>, D>(
+                deserializer,
+            )?;
+        let mut me = SlotDex {
+            data,
+            total,
+            tiers,
+            tier_capacity,
+            swap_order,
+        };
+        me.ensure_count();
+        Ok(me)
     }
 }
 

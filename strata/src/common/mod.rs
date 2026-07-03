@@ -19,7 +19,27 @@ use error::Result;
 use serde::{Serialize, de::DeserializeOwned};
 use std::{any::type_name, fmt, fs, result::Result as StdResult};
 
-const TYPED_HANDLE_META_MAGIC: &[u8; 8] = b"VSTYPE01";
+const TYPED_HANDLE_META_MAGIC: &[u8; 8] = b"VSTYPE02";
+const TYPED_HANDLE_TAG_LEN: usize = 8;
+
+/// FNV-1a 64 hash of `T`'s full type path.
+///
+/// The tag inherits `std::any::type_name`'s caveats: it is not guaranteed
+/// stable across compiler versions, and renaming/moving a type (or any of
+/// its generic parameters) changes it. Persisted typed-handle metadata is
+/// therefore tied to the writing build's type layout — an intentional
+/// property: the tag exists to reject cross-type restores, and a false
+/// rejection is always safer than silent type confusion.
+fn type_tag<T: ?Sized>() -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0100_0000_01b3;
+    type_name::<T>()
+        .as_bytes()
+        .iter()
+        .fold(FNV_OFFSET, |h, &b| {
+            (h ^ u64::from(b)).wrapping_mul(FNV_PRIME)
+        })
+}
 
 /// Serializes `value` with `postcard` and writes it to the instance-meta
 /// directory under the given `instance_id`.
@@ -104,24 +124,12 @@ where
 }
 
 fn encode_typed_handle_meta<T: ?Sized>(inner: &impl Serialize) -> Result<Vec<u8>> {
-    let type_name = type_name::<T>().as_bytes();
-    let type_len =
-        u32::try_from(type_name.len()).map_err(|_| error::VsdbError::Decode {
-            detail: "typed handle name is too long".to_owned(),
-        })?;
     let inner = postcard::to_allocvec(inner)?;
-    let inner_len =
-        u32::try_from(inner.len()).map_err(|_| error::VsdbError::Decode {
-            detail: "typed handle payload is too large".to_owned(),
-        })?;
-
     let mut out = Vec::with_capacity(
-        TYPED_HANDLE_META_MAGIC.len() + 4 + type_name.len() + 4 + inner.len(),
+        TYPED_HANDLE_META_MAGIC.len() + TYPED_HANDLE_TAG_LEN + inner.len(),
     );
     out.extend_from_slice(TYPED_HANDLE_META_MAGIC);
-    out.extend_from_slice(&type_len.to_le_bytes());
-    out.extend_from_slice(type_name);
-    out.extend_from_slice(&inner_len.to_le_bytes());
+    out.extend_from_slice(&type_tag::<T>().to_le_bytes());
     out.extend_from_slice(&inner);
     Ok(out)
 }
@@ -131,48 +139,24 @@ where
     T: ?Sized,
     Inner: DeserializeOwned,
 {
-    let mut off = TYPED_HANDLE_META_MAGIC.len();
-    if meta.len() < off || &meta[..off] != TYPED_HANDLE_META_MAGIC {
+    let magic_len = TYPED_HANDLE_META_MAGIC.len();
+    let header_len = magic_len + TYPED_HANDLE_TAG_LEN;
+    if meta.len() < header_len || &meta[..magic_len] != TYPED_HANDLE_META_MAGIC {
         return Err(error::VsdbError::Decode {
             detail: "invalid typed handle metadata magic".to_owned(),
         });
     }
-    if meta.len() < off + 4 {
-        return Err(error::VsdbError::Decode {
-            detail: "truncated typed handle metadata type length".to_owned(),
-        });
-    }
 
-    let type_len = u32::from_le_bytes(meta[off..off + 4].try_into().unwrap()) as usize;
-    off += 4;
-    if meta.len() < off + type_len + 4 {
-        return Err(error::VsdbError::Decode {
-            detail: "truncated typed handle metadata type tag".to_owned(),
-        });
-    }
-
-    let actual = std::str::from_utf8(&meta[off..off + type_len]).map_err(|_| {
-        error::VsdbError::Decode {
-            detail: "typed handle metadata type tag is not UTF-8".to_owned(),
-        }
-    })?;
-    let expected = type_name::<T>();
-    if actual != expected {
+    let found = u64::from_le_bytes(meta[magic_len..header_len].try_into().unwrap());
+    let expected = type_tag::<T>();
+    if found != expected {
         return Err(error::VsdbError::Decode {
             detail: format!(
-                "typed handle mismatch: expected {expected}, found {actual}"
+                "typed handle mismatch: expected {} (tag {expected:016x}), found tag {found:016x}",
+                type_name::<T>()
             ),
         });
     }
-    off += type_len;
 
-    let inner_len = u32::from_le_bytes(meta[off..off + 4].try_into().unwrap()) as usize;
-    off += 4;
-    if meta.len() != off + inner_len {
-        return Err(error::VsdbError::Decode {
-            detail: "invalid typed handle metadata payload length".to_owned(),
-        });
-    }
-
-    Ok(postcard::from_bytes(&meta[off..])?)
+    Ok(postcard::from_bytes(&meta[header_len..])?)
 }

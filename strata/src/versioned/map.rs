@@ -14,8 +14,7 @@ use crate::common::error::{Result, VsdbError};
 use crate::{Mapx, MapxOrd, Orphan};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
-    fmt,
+    collections::{BinaryHeap, HashMap, HashSet},
     marker::PhantomData,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -142,76 +141,67 @@ impl<K, V> Serialize for VerMap<K, V> {
     where
         S: serde::Serializer,
     {
-        use serde::ser::SerializeTuple;
-        let mut t = serializer.serialize_tuple(8)?;
-        t.serialize_element(&self.tree)?;
-        t.serialize_element(&self.commits)?;
-        t.serialize_element(&self.branches)?;
-        t.serialize_element(&self.branch_names)?;
-        t.serialize_element(&self.next_commit)?;
-        t.serialize_element(&self.next_branch)?;
-        t.serialize_element(&self.main_branch)?;
-        t.serialize_element(&self.gc_dirty)?;
-        t.end()
+        // The K/V type parameters do not occur in any field type, so the
+        // typed-handle envelope (tagged with `VerMap<K, V>`) is the only
+        // guard against restoring this map under different K/V.
+        crate::common::serialize_typed_handle_meta::<Self, S>(
+            &(
+                &self.tree,
+                &self.commits,
+                &self.branches,
+                &self.branch_names,
+                &self.next_commit,
+                &self.next_branch,
+                &self.main_branch,
+                &self.gc_dirty,
+            ),
+            serializer,
+        )
     }
 }
+
+type VerMapPayload = (
+    PersistentBTree,
+    MapxOrd<u64, Commit>,
+    MapxOrd<u64, BranchState>,
+    Mapx<String, u64>,
+    Orphan<u64>,
+    Orphan<u64>,
+    Orphan<u64>,
+    Orphan<bool>,
+);
 
 impl<'de, K, V> Deserialize<'de> for VerMap<K, V> {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        struct Vis<K, V>(PhantomData<(K, V)>);
-        impl<'de, K, V> serde::de::Visitor<'de> for Vis<K, V> {
-            type Value = VerMap<K, V>;
-            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str("VerMap")
-            }
-            fn visit_seq<A: serde::de::SeqAccess<'de>>(
-                self,
-                mut seq: A,
-            ) -> std::result::Result<VerMap<K, V>, A::Error> {
-                let tree = seq
-                    .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
-                let commits = seq
-                    .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
-                let branches = seq
-                    .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(2, &self))?;
-                let branch_names = seq
-                    .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(3, &self))?;
-                let next_commit = seq
-                    .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(4, &self))?;
-                let next_branch = seq
-                    .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(5, &self))?;
-                let main_branch = seq
-                    .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(6, &self))?;
-                let gc_dirty = seq
-                    .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(7, &self))?;
-                let mut m = VerMap {
-                    tree,
-                    commits,
-                    branches,
-                    branch_names,
-                    next_commit,
-                    next_branch,
-                    main_branch,
-                    gc_dirty,
-                    _phantom: PhantomData,
-                };
-                m.repair_commit_ref_counts_if_needed();
-                m.rebuild_tree_ref_counts();
-                Ok(m)
-            }
-        }
-        deserializer.deserialize_tuple(8, Vis(PhantomData))
+        let (
+            tree,
+            commits,
+            branches,
+            branch_names,
+            next_commit,
+            next_branch,
+            main_branch,
+            gc_dirty,
+        ) = crate::common::deserialize_typed_handle_meta::<Self, VerMapPayload, D>(
+            deserializer,
+        )?;
+        let mut m = VerMap {
+            tree,
+            commits,
+            branches,
+            branch_names,
+            next_commit,
+            next_branch,
+            main_branch,
+            gc_dirty,
+            _phantom: PhantomData,
+        };
+        m.repair_commit_ref_counts_if_needed();
+        m.rebuild_tree_ref_counts();
+        Ok(m)
     }
 }
 
@@ -766,63 +756,71 @@ where
         Ok(id)
     }
 
-    fn ancestors_of(&self, start: CommitId) -> HashSet<CommitId> {
-        let mut out = HashSet::new();
-        let mut stack = vec![start];
-        while let Some(id) = stack.pop() {
-            if id == NO_COMMIT || !out.insert(id) {
-                continue;
-            }
-            if let Some(commit) = self.commits.get(&id) {
-                stack.extend(commit.parents.iter().copied());
-            }
-        }
-        out
-    }
-
     /// Finds all lowest common ancestors (merge bases) of two commits.
     ///
     /// A criss-cross DAG can have multiple incomparable merge bases.  Feeding
     /// only the highest-id base into a three-way merge can classify a true
     /// conflict as a target-only change and violate the source-wins policy.
+    ///
+    /// Implementation: git-style "paint down to common".  The DAG is walked
+    /// in descending `CommitId` order using a max-heap (`CommitId`s are
+    /// monotonic — a parent is always created before its child), flagging
+    /// each commit with the side(s) it is reachable from.  A commit popped
+    /// with both flags and no `STALE` bit is a merge base; its ancestry is
+    /// then painted `STALE`, so dominated common ancestors are never
+    /// reported.  The walk ends when the frontier holds only stale entries,
+    /// bounding the cost to the fork region instead of the full history.
     fn find_merge_bases(&self, a: CommitId, b: CommitId) -> Vec<CommitId> {
+        const FROM_A: u8 = 0b001;
+        const FROM_B: u8 = 0b010;
+        const BOTH: u8 = FROM_A | FROM_B;
+        const STALE: u8 = 0b100;
+
+        // Nonexistent IDs are not DAG nodes; without this guard,
+        // `find_merge_bases(x, x)` would report a nonexistent `x`
+        // as its own merge base.
         if self.commits.get(&a).is_none() || self.commits.get(&b).is_none() {
             return vec![];
         }
 
-        let ancestors_a = self.ancestors_of(a);
-        let mut common: Vec<CommitId> = self
-            .ancestors_of(b)
-            .into_iter()
-            .filter(|id| ancestors_a.contains(id))
-            .collect();
-        common.sort_unstable_by(|lhs, rhs| rhs.cmp(lhs));
+        fn mark(
+            flags: &mut HashMap<CommitId, u8>,
+            heap: &mut BinaryHeap<CommitId>,
+            id: CommitId,
+            flag: u8,
+        ) {
+            if id == NO_COMMIT {
+                return;
+            }
+            let slot = flags.entry(id).or_insert(0);
+            if *slot == 0 {
+                heap.push(id);
+            }
+            *slot |= flag;
+        }
 
-        let common_set: HashSet<CommitId> = common.iter().copied().collect();
-        let mut dominated = HashSet::new();
+        let mut flags: HashMap<CommitId, u8> = HashMap::new();
+        let mut heap: BinaryHeap<CommitId> = BinaryHeap::new();
         let mut bases = Vec::new();
 
-        for id in common {
-            if dominated.contains(&id) {
-                continue;
-            }
-            bases.push(id);
+        mark(&mut flags, &mut heap, a, FROM_A);
+        mark(&mut flags, &mut heap, b, FROM_B);
 
-            let mut stack = self
-                .commits
-                .get(&id)
-                .map(|c| c.parents.clone())
-                .unwrap_or_default();
-            let mut visited = HashSet::new();
-            while let Some(parent) = stack.pop() {
-                if parent == NO_COMMIT || !visited.insert(parent) {
-                    continue;
+        while heap.iter().any(|id| flags[id] & STALE == 0) {
+            // The loop guard ensures the heap is nonempty.
+            let id = heap.pop().unwrap();
+            // Every id pushed onto the heap was first inserted into `flags`.
+            let mut f = flags[&id];
+            if f & BOTH == BOTH {
+                if f & STALE == 0 {
+                    bases.push(id);
                 }
-                if common_set.contains(&parent) {
-                    dominated.insert(parent);
-                }
-                if let Some(commit) = self.commits.get(&parent) {
-                    stack.extend(commit.parents.iter().copied());
+                // Everything below a common commit is dominated.
+                f |= STALE;
+            }
+            if let Some(c) = self.commits.get(&id) {
+                for &parent in &c.parents {
+                    mark(&mut flags, &mut heap, parent, f);
                 }
             }
         }

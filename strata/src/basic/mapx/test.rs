@@ -222,11 +222,7 @@ fn test_serde_roundtrip() {
 fn test_serde_size() {
     let hdr: Mapx<String, String> = Mapx::new();
     let bytes = postcard::to_allocvec(&hdr).unwrap();
-    assert!(
-        bytes.len() <= 256,
-        "expected ≤256 bytes, got {}",
-        bytes.len()
-    );
+    assert!(bytes.len() <= 64, "expected ≤64 bytes, got {}", bytes.len());
 }
 
 /// from_meta with a nonexistent ID must return an error.

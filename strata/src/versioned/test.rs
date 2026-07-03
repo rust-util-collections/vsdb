@@ -3596,6 +3596,21 @@ fn test_save_and_from_meta() {
     assert_eq!(restored.get(main_r, &2).unwrap(), Some("world".to_string()));
 }
 
+/// K/V do not occur in any field type, so this exercises the typed-handle
+/// envelope: restoring under different type parameters must fail loudly.
+#[test]
+fn test_from_meta_rejects_wrong_key_value_types() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+    m.insert(main, &1, &10).unwrap();
+    m.commit(main).unwrap();
+
+    let id = m.save_meta().unwrap();
+    assert!(VerMap::<String, u32>::from_meta(id).is_err());
+    assert!(VerMap::<u32, String>::from_meta(id).is_err());
+}
+
 /// Multi-branch VerMap: save meta once, restore, verify all branches
 /// and commit history survive — this exercises the full composite
 /// internal structure (PersistentBTree + multiple MapxOrd + Orphan).
@@ -3705,8 +3720,8 @@ fn test_serde_size() {
     let m: VerMap<u32, u32> = VerMap::new();
     let bytes = postcard::to_allocvec(&m).unwrap();
     assert!(
-        bytes.len() <= 1536,
-        "expected ≤1536 bytes, got {}",
+        bytes.len() <= 768,
+        "expected ≤768 bytes, got {}",
         bytes.len()
     );
 }

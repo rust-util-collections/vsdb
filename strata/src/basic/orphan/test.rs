@@ -115,11 +115,7 @@ fn test_serde_roundtrip() {
 fn test_serde_size() {
     let o = Orphan::new(0u32);
     let bytes = postcard::to_allocvec(&o).unwrap();
-    assert!(
-        bytes.len() <= 192,
-        "expected ≤192 bytes, got {}",
-        bytes.len()
-    );
+    assert!(bytes.len() <= 64, "expected ≤64 bytes, got {}", bytes.len());
 }
 
 /// from_meta with nonexistent ID.

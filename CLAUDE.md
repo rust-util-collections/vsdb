@@ -74,7 +74,7 @@ Additional documentation in `docs/`:
 - `VsdbError` (thiserror, defined in `vsdb_core`) is the **only** error type in public APIs of both crates; `ruc` is internal-only for error chaining — boundary conversions preserve the complete chain via `stringify_chain`
 - `postcard` for serialization (replaced serde_cbor_2 in v12)
 - Tests run single-threaded; use `tempdir` or `/tmp/vsdb_testing` for isolation
-- ~21 unsafe blocks — all require `// SAFETY:` comments
+- ~19 unsafe blocks — all require `// SAFETY:` comments
   - `shadow()`: SWMR contract — caller serializes writes (the ONLY aliasing handle primitive; `Clone` deep-copies storage)
   - `from_bytes()`: caller provides valid serialized bytes
   - Pointer casts in entry API macros

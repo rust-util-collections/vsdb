@@ -184,6 +184,25 @@ fn save_meta_restore() {
     assert_eq!(results[0].0, "a");
 }
 
+/// The distance metric occurs in no field type, so this exercises the
+/// typed-handle envelope: restoring an L2-built graph as Cosine would
+/// silently return wrong neighbors — it must fail loudly instead.
+#[test]
+fn from_meta_rejects_wrong_metric_or_key() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 2,
+        ..Default::default()
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    idx.insert(&1, &[1.0, 2.0]).unwrap();
+
+    let id = idx.save_meta().unwrap();
+    assert!(VecDex::<u32, Cosine>::from_meta(id).is_err());
+    assert!(VecDex::<String, L2>::from_meta(id).is_err());
+    assert!(VecDex::<u32, L2, f64>::from_meta(id).is_err());
+}
+
 #[test]
 fn clear_resets_everything() {
     setup();

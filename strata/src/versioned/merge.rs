@@ -113,41 +113,7 @@ pub fn three_way_merge(
         };
 
         // Three-way decision matrix.
-        let result = match (a_val.as_deref(), s_val.as_deref(), t_val.as_deref()) {
-            // Unchanged in both → keep.
-            (Some(a), Some(s), Some(t)) if a == s && a == t => Some(a),
-            // Changed only in source → take source.
-            (Some(a), Some(s), Some(t)) if a == t => Some(s),
-            // Changed only in target → take target.
-            (Some(a), Some(s), Some(t)) if a == s => Some(t),
-            // Changed in both to same value → keep.
-            (Some(_), Some(s), Some(t)) if s == t => Some(s),
-            // Changed in both to different values → source wins.
-            (Some(_), Some(s), Some(_)) => Some(s),
-
-            // Deleted in source, unchanged in target → delete.
-            (Some(a), None, Some(t)) if a == t => None,
-            // Deleted in target, unchanged in source → delete.
-            (Some(a), Some(s), None) if a == s => None,
-            // Deleted in source, changed in target → source wins (delete).
-            (Some(_), None, Some(_)) => None,
-            // Changed in source, deleted in target → source wins (keep change).
-            (Some(_), Some(s), None) => Some(s),
-            // Deleted in both → delete.
-            (Some(_), None, None) => None,
-
-            // Added only in source → take.
-            (None, Some(s), None) => Some(s),
-            // Added only in target → take.
-            (None, None, Some(t)) => Some(t),
-            // Added in both to same value → keep.
-            (None, Some(s), Some(t)) if s == t => Some(s),
-            // Added in both to different values → source wins.
-            (None, Some(s), Some(_)) => Some(s),
-
-            // All absent (shouldn't happen due to loop guard, but be safe).
-            (None, None, None) => None,
-        };
+        let result = decide(a_val.as_deref(), s_val.as_deref(), t_val.as_deref());
 
         if let Some(val) = result {
             merged.push((min_key, val.to_vec()));
@@ -204,7 +170,8 @@ pub fn three_way_merge_many_bases(
         let target = tree.get(target_root, &key);
 
         let result = if base_values.iter().all(|base| base == &first_base) {
-            decide_owned(first_base.as_deref(), source.as_deref(), target.as_deref())
+            decide(first_base.as_deref(), source.as_deref(), target.as_deref())
+                .map(<[u8]>::to_vec)
         } else {
             source
         };
@@ -217,28 +184,47 @@ pub fn three_way_merge_many_bases(
     tree.bulk_load(merged)
 }
 
-fn decide_owned(
-    ancestor: Option<&[u8]>,
-    source: Option<&[u8]>,
-    target: Option<&[u8]>,
-) -> Option<Vec<u8>> {
+/// The shared three-way decision matrix: given the ancestor/source/target
+/// states of one key (`None` = absent), returns the merged state under the
+/// **source-wins** conflict policy.
+fn decide<'a>(
+    ancestor: Option<&'a [u8]>,
+    source: Option<&'a [u8]>,
+    target: Option<&'a [u8]>,
+) -> Option<&'a [u8]> {
     match (ancestor, source, target) {
-        (Some(a), Some(s), Some(t)) if a == s && a == t => Some(a.to_vec()),
-        (Some(a), Some(s), Some(t)) if a == t => Some(s.to_vec()),
-        (Some(a), Some(s), Some(t)) if a == s => Some(t.to_vec()),
-        (Some(_), Some(s), Some(t)) if s == t => Some(s.to_vec()),
-        (Some(_), Some(s), Some(_)) => Some(s.to_vec()),
+        // Unchanged in both → keep.
+        (Some(a), Some(s), Some(t)) if a == s && a == t => Some(a),
+        // Changed only in source → take source.
+        (Some(a), Some(s), Some(t)) if a == t => Some(s),
+        // Changed only in target → take target.
+        (Some(a), Some(s), Some(t)) if a == s => Some(t),
+        // Changed in both to same value → keep.
+        (Some(_), Some(s), Some(t)) if s == t => Some(s),
+        // Changed in both to different values → source wins.
+        (Some(_), Some(s), Some(_)) => Some(s),
 
+        // Deleted in source, unchanged in target → delete.
         (Some(a), None, Some(t)) if a == t => None,
+        // Deleted in target, unchanged in source → delete.
         (Some(a), Some(s), None) if a == s => None,
+        // Deleted in source, changed in target → source wins (delete).
         (Some(_), None, Some(_)) => None,
-        (Some(_), Some(s), None) => Some(s.to_vec()),
+        // Changed in source, deleted in target → source wins (keep change).
+        (Some(_), Some(s), None) => Some(s),
+        // Deleted in both → delete.
         (Some(_), None, None) => None,
 
-        (None, Some(s), None) => Some(s.to_vec()),
-        (None, None, Some(t)) => Some(t.to_vec()),
-        (None, Some(s), Some(t)) if s == t => Some(s.to_vec()),
-        (None, Some(s), Some(_)) => Some(s.to_vec()),
+        // Added only in source → take.
+        (None, Some(s), None) => Some(s),
+        // Added only in target → take.
+        (None, None, Some(t)) => Some(t),
+        // Added in both to same value → keep.
+        (None, Some(s), Some(t)) if s == t => Some(s),
+        // Added in both to different values → source wins.
+        (None, Some(s), Some(_)) => Some(s),
+
+        // All absent (unreachable when callers only pass live keys).
         (None, None, None) => None,
     }
 }
