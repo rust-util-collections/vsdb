@@ -128,6 +128,25 @@ macro_rules! define_map_wrapper {
             ///
             /// The caller must ensure that the underlying VSDB database still
             /// contains the data referenced by this instance ID.
+            ///
+            /// # Aliasing warning
+            ///
+            /// The returned handle is a **full alias** of the original
+            /// instance, not an independent copy — it addresses the exact
+            /// same underlying key range (this is how
+            /// [`instance_id`](Self::instance_id) is recovered: it *is*
+            /// the raw prefix).  If the original handle that produced
+            /// this `instance_id` (or another `from_meta`/`shadow`
+            /// restore of it) is still alive in-process, the same
+            /// Single-Writer-Multiple-Readers (SWMR) discipline
+            /// documented on [`shadow`](Self::shadow) applies across
+            /// **every** live alias: no mutation may occur on any one
+            /// of them while any other is in use for writing.
+            /// `from_meta` is intended to restore a handle after the
+            /// original has gone out of scope (e.g. across a process
+            /// restart); calling it while the original is still live
+            /// requires the same care as `shadow()`, even though this
+            /// function is safe Rust.
             pub fn from_meta(instance_id: u64) -> $crate::common::error::Result<Self> {
                 $crate::common::load_instance_meta(instance_id)
             }

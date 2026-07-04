@@ -170,6 +170,18 @@ where
         }
     }
 
+    /// Returns an iterator over the map's raw keys, in ascending order.
+    ///
+    /// Unlike `iter().map(|(k, _)| k)`, this never decodes `V` — each
+    /// entry's value bytes are skipped entirely instead of being
+    /// decoded and immediately discarded, avoiding wasted work on a hot
+    /// path (this matters most for nested-VSDB-collection value types,
+    /// whose "decode" is itself an engine `deserialize` call).
+    #[inline(always)]
+    pub fn keys(&self) -> impl DoubleEndedIterator<Item = RawKey> + '_ {
+        self.inner.iter().map(|(k, _)| k)
+    }
+
     /// Returns a mutable iterator over the map's entries.
     #[inline(always)]
     pub fn iter_mut(&mut self) -> MapxOrdRawKeyIterMut<'_, V> {
@@ -227,6 +239,10 @@ where
     ///
     /// This method allows you to perform multiple insert/remove operations
     /// and commit them atomically.
+    ///
+    /// A failed [`commit`](vsdb_core::common::BatchTrait::commit) consumes
+    /// the buffered operations (none are applied) and is not retryable —
+    /// re-stage the operations on a fresh batch instead.
     ///
     /// # Examples
     ///

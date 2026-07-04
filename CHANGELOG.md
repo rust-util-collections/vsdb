@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v14.0.6]
+
+Full-codebase audit sweep (9 parallel subsystem reviews) with every finding
+fixed except one documented, deliberate exception.
+
+### Breaking
+
+- **`DagMapRaw`/`DagMapRawKey<V>` no longer implement `Default`.** The derived impl silently performed real disk I/O (an eager write through `Orphan::new()`'s parent slot) on every call, so generic code (`mem::take`, `Option::unwrap_or_default()`, `HashMap::entry().or_default()`) could create orphaned, unreclaimable on-disk state without any visible indication. Use `DagMapRaw::new(None)` / `DagMapRawKey::new(None)` explicitly. **Migration**: replace any `Default::default()`/`mem::take`/`.or_default()` usage on these types with an explicit `new(None)` call.
+- **`TrieCalc`/`MptCalc`/`SmtCalc` now return `vsdb::Result<T>` (`VsdbError`), not the internal `TrieError`.** This closes a gap in the "single error type" invariant (`vsdb_core::common::error::VsdbError` is documented as the only error type across both crates' public APIs). `TrieError` is still exported (`vsdb::trie::TrieError`) for downstream matching via `VsdbError::Trie { detail }`, but is no longer the error type of the trie trait/struct methods themselves. **Migration**: replace `Result<T, vsdb::trie::TrieError>` bounds/matches with `vsdb::Result<T>` / `VsdbError::Trie`.
+- **`vsdb_core::common::atomic_write_file` (and its `vsdb::common` re-export) now returns `Result<()>` (`VsdbError`) instead of `std::io::Result<()>`.** The only other raw-error-type leak found in either crate's public surface. **Migration**: handle `VsdbError::Io` instead of `std::io::Error`.
+
+### Fixed
+
+- **`MptCalc`/`SmtCalc` (`insert`/`remove`/`root_hash`/`batch_update`) no longer silently empty the trie/tree on a rejected mutation.** All four methods `mem::take` the root into a local working value before the fallible operation; previously, on `Err` (concretely reachable via `MptCalc::insert`/`batch_update` when a key exceeds `MAX_MPT_KEY_LEN`, a public 1024-byte constant), the function returned early without restoring `self.root`, permanently replacing the entire trie with an empty one. All eight methods now unconditionally restore `self.root`/`self.trie` from the working value before propagating any error — a rejected `batch_update` still applies operations before the failing one (documented as non-atomic) but never discards unrelated prior state. This also fixes `VerMapWithProof::merkle_root`, which could otherwise silently return the empty-trie root hash for legitimate, unmodified committed data after such a rejection desynced its incremental-sync bookkeeping from the trie's actual content.
+- **`MmDB::new()` no longer leaks already-opened shard handles (and their background compaction threads) if a later shard or the meta-init step fails to open.** Shards are now opened into an owned, non-`'static` `Vec<DB>` first — so a mid-loop failure drops (and cleanly closes) every already-opened shard via normal `Drop` glue — and only `Box::leak`'d after every fallible step has succeeded.
+- **SlotDex crash recovery now eagerly rebuilds the tier-acceleration stack** instead of leaving it empty until the next `insert()`. Previously, `ensure_count()` correctly discarded the (potentially skewed) tier stack on unclean-shutdown detection but deferred rebuilding it, silently degrading every pagination query to an O(N) raw scan (measured ~950–2600× slower at 200k entries) for as long as the process stayed idle or read-only after the crash.
+- **`SmtMut::remove` no longer discards cached ancestor hashes on a no-op removal** (removing a key that shares a path prefix with real data but isn't actually present). Mirrors MPT's existing `rewrap`-based no-change path: `remove_rec` now threads a `changed` flag and restores the prior `Cached` hash when neither child subtree actually changed, instead of unconditionally reconstructing (and later re-hashing) the node via `compact`.
+- **`DagMapRaw::is_dead()` now recognizes tombstoned entries.** `remove()` writes an empty-value tombstone rather than deleting outright (existing, documented convention also used by `get`/`get_mut`); `is_dead()` previously checked only for a literally-empty backing store, so a node whose sole key was removed incorrectly reported `is_dead() == false`.
+- **`Mapx::keys()`/`MapxOrd::keys()` no longer decode values.** Both previously routed through `iter().map(|(k, _)| k)`, which unconditionally decoded `V` per entry (an `engine::Mapx::deserialize` call, including lock acquisition, for nested-VSDB-collection value types) before discarding it. A new `MapxOrdRawKey::keys()` decodes only the raw key bytes; `Mapx`/`MapxOrd::keys()` now build on it, decoding only `K`.
+- **`core/src/common/engine/mmdb.rs`'s `PENDING_WINDOWS` registry no longer grows unboundedly for the life of the process.** A thread-per-task workload (e.g. a thread-per-request server) previously accumulated one entry per historical thread (since `ThreadId`s are never reused and no cleanup path existed). A `thread_local!` guard now removes a thread's entry via `Drop` when that thread exits — always safe, since a dead thread's un-issued batch tail can never be issued by any other thread.
+
+### Added
+
+- `from_prefix_slice` (core engine, `unsafe fn`) now has a `# Safety` doc comment at its definition, matching every other `unsafe fn` in the crate.
+- `Orphan`/`Mapx`/`MapxOrd`/`MapxOrdRawKey`'s `from_meta()` now documents the aliasing hazard it shares with `shadow()` (restoring while the original handle is still live creates a second handle to the same storage) — previously this was undocumented on the one restore path that isn't `unsafe`.
+- Typed collections' `batch_entry()` doc comments now state the raw layer's existing "failed commit is not retryable" caveat.
+- Regression tests: rejected-mutation trie root preservation (MPT insert/batch_update), `VsdbError`-typed trie errors, SMT no-op-remove cache preservation, SlotDex crash-recovery tier rebuild (both the dirty-flag and invalid-empty-tier detection paths), DagMap tombstone-aware `is_dead()`, `keys()` never decoding values (typed collections), and a `PENDING_WINDOWS` thread-exit cleanup test.
+
+### Won't Fix
+
+- **`VecDex::compact()` remains non-atomic across a hard crash** (documented in `docs/audit.md`): a true fix requires a prefix-swap/version-indirection redesign, and a naive version would silently desync any earlier `save_meta`/parent-collection reference to the index — a worse failure mode (silent staleness) than the current rare-crash-window data loss it would trade away.
+
 ## [v14.0.5]
 
 ### Breaking
@@ -10,6 +42,7 @@ All notable changes to this project will be documented in this file.
 - **`SmtProof` is now compact (variable-length).** `siblings` holds hashes only from the root down to the terminal lone-leaf/empty subtree on the key's path (O(log N) entries instead of a fixed 256), and the `value: Option<Vec<u8>>` field is replaced by `leaf: Option<([u8; 32], Vec<u8>)>` — the lone leaf occupying the terminal subtree (`leaf.0 == key_hash` ⇒ membership; a different `leaf.0` ⇒ conflicting-leaf non-membership, checked for path-prefix consistency during verification; `None` ⇒ empty-slot non-membership). Use the new `SmtProof::value()` accessor for the proven value. Proof size drops from a fixed 8 KiB to typically well under 1 KiB, and verification folds O(log N) hashes instead of 256.
 
 ### Fixed
+
 
 - **SlotDex reverse paging restored to tier-accelerated complexity** (commit `9758b70`, folded into this release): the v13.4.7 correctness fix had degraded `get_entries_by_page(.., reverse=true)` to a linear reverse scan (~17 ms vs ~10 µs forward at 100k entries). Reverse paging now mirrors the forward path via `locate_page_rstart` — a rightmost-distance offset plus a descending tier-cache locate — returning reverse pages to the 10–35 µs range while preserving the corrected slot-descending / within-slot-ascending semantics.
 - **SMT tree walks no longer materialize a path slice per level.** `insert`/`remove`/`get`/`prove` compared the remaining key path by allocating `full_path.slice(depth, 256)` (a bit-by-bit copy) at every internal node; they now use allocation-free offset-based comparison (`BitPath::common_prefix_from` / `starts_with_from`, byte-wise with unaligned assembly). `BitPath` itself is now a zero-allocation inline `[u8; 32]` (paths never exceed 256 bits — a type invariant), with `slice`/`concat` rewritten from per-bit loops to byte-wise shifts, and the cache deserializer now rejects bit lengths over 256 instead of allocating attacker-controlled buffers. Combined with the hash-domain change: 1000-key insert 4.6 ms → 0.77 ms, remove 9.0 ms → 1.5 ms, get 3.9 ms → 0.41 ms, cold root hash 76.6 ms → 0.93 ms, verify 79 µs → 3.2 µs per proof (reference box).

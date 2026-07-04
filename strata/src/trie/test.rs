@@ -525,6 +525,59 @@ mod tests {
         assert_eq!(reloaded.get(b"b").unwrap(), Some(b"2".to_vec()));
         assert_eq!(reloaded.get(b"c").unwrap(), Some(b"3".to_vec()));
     }
+
+    #[test]
+    fn test_rejected_insert_preserves_existing_data() {
+        use crate::trie::MAX_MPT_KEY_LEN;
+
+        let mut trie = MptCalc::new();
+        trie.insert(b"short", b"v").unwrap();
+        let root_before = trie.root_hash().unwrap();
+
+        // A key over MAX_MPT_KEY_LEN is rejected; the trie must be
+        // completely unaffected — not silently emptied.
+        let oversized_key = vec![0u8; MAX_MPT_KEY_LEN + 1];
+        assert!(trie.insert(&oversized_key, b"x").is_err());
+
+        assert_eq!(trie.get(b"short").unwrap(), Some(b"v".to_vec()));
+        assert_eq!(trie.root_hash().unwrap(), root_before);
+    }
+
+    #[test]
+    fn test_rejected_batch_update_preserves_existing_data() {
+        use crate::trie::MAX_MPT_KEY_LEN;
+
+        let mut trie = MptCalc::new();
+        trie.insert(b"short", b"v").unwrap();
+        let root_before = trie.root_hash().unwrap();
+
+        // The valid op before the oversized one is applied (batch is
+        // not atomic), but the failure must not wipe out prior state.
+        let oversized_key = vec![0u8; MAX_MPT_KEY_LEN + 1];
+        let ops: Vec<(&[u8], Option<&[u8]>)> =
+            vec![(b"another", Some(b"w")), (&oversized_key, Some(b"x"))];
+        assert!(trie.batch_update(&ops).is_err());
+
+        assert_eq!(trie.get(b"short").unwrap(), Some(b"v".to_vec()));
+        assert_eq!(trie.get(b"another").unwrap(), Some(b"w".to_vec()));
+        assert_ne!(trie.root_hash().unwrap(), root_before);
+    }
+
+    #[test]
+    fn test_trie_calc_errors_use_vsdb_error_not_trie_error() {
+        use crate::VsdbError;
+        use crate::trie::MAX_MPT_KEY_LEN;
+
+        // `TrieCalc`/`MptCalc`/`SmtCalc` must surface the crate-wide
+        // `VsdbError` in their public API (not the internal `TrieError`),
+        // per the "single error type" invariant. This is primarily a
+        // type-level guarantee (this test wouldn't compile otherwise),
+        // but also checks the actual variant produced end-to-end.
+        let mut trie = MptCalc::new();
+        let oversized_key = vec![0u8; MAX_MPT_KEY_LEN + 1];
+        let err: VsdbError = trie.insert(&oversized_key, b"x").unwrap_err();
+        assert!(matches!(err, VsdbError::Trie { .. }));
+    }
 }
 
 // =====================================================================
@@ -568,6 +621,58 @@ mod smt_tests {
         smt.insert(b"a", b"1").unwrap();
         smt.remove(b"zzz").unwrap();
         assert_eq!(smt.get(b"a").unwrap(), Some(b"1".to_vec()));
+    }
+
+    #[test]
+    fn test_smt_remove_nonexistent_preserves_cached_root() {
+        // After root_hash() the internal nodes are Cached. Removing keys
+        // that don't exist must walk the Internal no-change path (fast-path
+        // peek didn't catch it because the path prefix matched even
+        // though the leaf key didn't), which has to re-wrap nodes while
+        // preserving their precomputed hashes rather than unconditionally
+        // rebuilding via `compact` — a correctness bug would corrupt the
+        // committed root; a preserved-hash regression would just force
+        // wasteful re-hashing (checked below via the internal `root`
+        // field, since both would compute the same *value*).
+        let mut smt = SmtCalc::new();
+        for i in 0u32..200 {
+            smt.insert(&i.to_be_bytes(), &(i * 11).to_be_bytes())
+                .unwrap();
+        }
+        let root = smt.root_hash().unwrap(); // commit → Cached nodes
+
+        for k in [
+            b"missing".as_slice(),
+            &1000u32.to_be_bytes(),
+            &54321u32.to_be_bytes(),
+        ] {
+            smt.remove(k).unwrap();
+        }
+
+        // Root must be unchanged and equal a fresh rebuild of the same data.
+        assert_eq!(smt.root_hash().unwrap(), root);
+        let mut fresh = SmtCalc::new();
+        for i in 0u32..200 {
+            fresh
+                .insert(&i.to_be_bytes(), &(i * 11).to_be_bytes())
+                .unwrap();
+        }
+        assert_eq!(fresh.root_hash().unwrap(), root);
+
+        // All original entries must still be present.
+        for i in 0u32..200 {
+            assert_eq!(
+                smt.get(&i.to_be_bytes()).unwrap(),
+                Some((i * 11).to_be_bytes().to_vec())
+            );
+        }
+
+        // White-box: the no-op removes must not have discarded the
+        // Cached status of the (already-committed) root — a no-op
+        // remove that unconditionally reconstructs via `compact` would
+        // leave the root `InMemory` again, forcing a full ancestor
+        // re-hash on the next `root_hash()` call.
+        assert!(matches!(smt.root, crate::trie::smt::SmtHandle::Cached(..)));
     }
 
     #[test]

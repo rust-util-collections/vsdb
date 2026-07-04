@@ -297,6 +297,19 @@ impl Mapx {
         }
     }
 
+    /// # Safety
+    ///
+    /// `s` must be exactly [`PREFIX_SIZE`] bytes encoding a `u64` prefix
+    /// (little-endian) that the caller is entitled to treat as uniquely
+    /// owned — i.e. produced by [`as_prefix_slice`](Self::as_prefix_slice)
+    /// (or equivalent) on a valid instance, with no other live handle
+    /// concurrently using the same prefix. Passing a prefix that is
+    /// still owned by another live handle causes two independently
+    /// type-checked handles to alias the same underlying key range — a
+    /// logical data race indistinguishable from [`shadow`](Self::shadow)
+    /// misuse, even though this function performs no memory-unsafe
+    /// operation itself (a length mismatch panics via `copy_from_slice`,
+    /// it never reads out of bounds).
     #[inline(always)]
     pub(crate) unsafe fn from_prefix_slice(s: impl AsRef<[u8]>) -> Self {
         debug_assert_eq!(s.as_ref().len(), PREFIX_SIZE);

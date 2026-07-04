@@ -64,13 +64,14 @@ mod smt;
 #[cfg(test)]
 mod test;
 
-pub use error::{Result, TrieError};
+pub use error::TrieError;
 pub use mpt::{MAX_MPT_KEY_LEN, MptProof};
 pub use proof::VerMapWithProof;
 pub use smt::SmtProof;
 
 use std::mem;
 
+use crate::common::error::Result;
 use mpt::{TrieMut, TrieRo};
 use node::NodeHandle;
 use vsdb_core::common::vsdb_get_system_dir;
@@ -150,54 +151,68 @@ impl MptCalc {
     /// Looks up a value by key.
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let trie = TrieRo::new(&self.root);
-        trie.get(key)
+        Ok(trie.get(key)?)
     }
 
     /// Inserts a key-value pair into the trie.
     ///
     /// Returns an error if `key` is longer than [`MAX_MPT_KEY_LEN`] —
     /// unbounded key lengths would allow adversarial key sets to build
-    /// stack-overflowing path depths.
+    /// stack-overflowing path depths.  `self`'s root is always restored
+    /// before returning, so a rejected insert never loses trie data.
     pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         let mut trie = TrieMut::new(mem::take(&mut self.root));
-        trie.insert(key, value)?;
+        let result = trie.insert(key, value);
         self.root = trie.into_root();
-        Ok(())
+        Ok(result?)
     }
 
     /// Removes a key from the trie.
+    ///
+    /// `self`'s root is always restored before returning, so a rejected
+    /// remove never loses trie data.
     pub fn remove(&mut self, key: &[u8]) -> Result<()> {
         let mut trie = TrieMut::new(mem::take(&mut self.root));
-        trie.remove(key)?;
+        let result = trie.remove(key);
         self.root = trie.into_root();
-        Ok(())
+        Ok(result?)
     }
 
     /// Computes and returns the 32-byte Merkle root hash.
     ///
     /// Internally caches node hashes so that a subsequent call without
-    /// intervening mutations is essentially free.
+    /// intervening mutations is essentially free.  `self`'s root is
+    /// always restored before returning, so a rejected commit never
+    /// loses trie data.
     pub fn root_hash(&mut self) -> Result<Vec<u8>> {
-        let trie = TrieMut::new(mem::take(&mut self.root));
-        let (hash, new_root) = trie.commit()?;
-        self.root = new_root;
-        Ok(hash)
+        let mut trie = TrieMut::new(mem::take(&mut self.root));
+        let hash = trie.commit();
+        self.root = trie.into_root();
+        Ok(hash?)
     }
 
     /// Applies a batch of insert/remove operations.
     ///
     /// Each entry is `(key, Some(value))` for insert or `(key, None)` for remove.
+    /// `self`'s root is always restored before returning — even if an
+    /// operation partway through the batch fails — so a rejected batch
+    /// never loses trie data (the batch is not atomic: operations before
+    /// the failure remain applied).
     pub fn batch_update(&mut self, ops: &[(&[u8], Option<&[u8]>)]) -> Result<()> {
         let mut trie = TrieMut::new(mem::take(&mut self.root));
+        let mut result = Ok(());
         for (key, val) in ops {
-            if let Some(v) = val {
-                trie.insert(key, v)?;
+            result = if let Some(v) = val {
+                trie.insert(key, v)
             } else {
-                trie.remove(key)?;
+                trie.remove(key)
+            };
+            if result.is_err() {
+                break;
             }
         }
         self.root = trie.into_root();
-        Ok(())
+        Ok(result?)
     }
 
     // =================================================================
@@ -209,7 +224,7 @@ impl MptCalc {
     /// The tree must be committed (call [`root_hash`](Self::root_hash)
     /// first) for proof generation to work.
     pub fn prove(&self, key: &[u8]) -> Result<MptProof> {
-        mpt::proof::prove(&self.root, key)
+        Ok(mpt::proof::prove(&self.root, key)?)
     }
 
     /// Verifies an MPT proof against a root hash for a specific key.
@@ -220,7 +235,7 @@ impl MptCalc {
         expected_key: &[u8],
         proof: &MptProof,
     ) -> Result<bool> {
-        mpt::proof::verify_proof(root_hash, expected_key, proof)
+        Ok(mpt::proof::verify_proof(root_hash, expected_key, proof)?)
     }
 
     // =================================================================
@@ -239,7 +254,7 @@ impl MptCalc {
     pub fn save_cache(&mut self, cache_id: u64, sync_tag: u64) -> Result<()> {
         let hash = self.root_hash()?;
         let path = vsdb_get_system_dir().join(format!("mpt_cache_{}.bin", cache_id));
-        cache::save_to_file(&self.root, sync_tag, &hash, &path)
+        Ok(cache::save_to_file(&self.root, sync_tag, &hash, &path)?)
     }
 
     /// Loads a previously saved trie from a file.
@@ -332,50 +347,67 @@ impl SmtCalc {
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let key_hash = Self::hash_key(key);
         let ro = smt::query::SmtRo::new(&self.root);
-        ro.get(&key_hash)
+        Ok(ro.get(&key_hash)?)
     }
 
     /// Inserts a key-value pair.
+    ///
+    /// `self`'s root is always restored before returning, so a rejected
+    /// insert never loses tree data.
     pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         let key_hash = Self::hash_key(key);
         let mut m = smt::mutation::SmtMut::new(mem::take(&mut self.root));
-        m.insert(&key_hash, value)?;
+        let result = m.insert(&key_hash, value);
         self.root = m.into_root();
-        Ok(())
+        Ok(result?)
     }
 
     /// Removes a key.
+    ///
+    /// `self`'s root is always restored before returning, so a rejected
+    /// remove never loses tree data.
     pub fn remove(&mut self, key: &[u8]) -> Result<()> {
         let key_hash = Self::hash_key(key);
         let mut m = smt::mutation::SmtMut::new(mem::take(&mut self.root));
-        m.remove(&key_hash)?;
+        let result = m.remove(&key_hash);
         self.root = m.into_root();
-        Ok(())
+        Ok(result?)
     }
 
     /// Computes the 32-byte Merkle root hash.
     ///
     /// Caches node hashes so repeated calls without mutations are free.
+    /// `self`'s root is always restored before returning, so a rejected
+    /// commit never loses tree data.
     pub fn root_hash(&mut self) -> Result<Vec<u8>> {
-        let m = smt::mutation::SmtMut::new(mem::take(&mut self.root));
-        let (hash, new_root) = m.commit()?;
-        self.root = new_root;
-        Ok(hash)
+        let mut m = smt::mutation::SmtMut::new(mem::take(&mut self.root));
+        let hash = m.commit();
+        self.root = m.into_root();
+        Ok(hash?)
     }
 
     /// Applies a batch of insert/remove operations.
+    ///
+    /// `self`'s root is always restored before returning — even if an
+    /// operation partway through the batch fails — so a rejected batch
+    /// never loses tree data (the batch is not atomic: operations before
+    /// the failure remain applied).
     pub fn batch_update(&mut self, ops: &[(&[u8], Option<&[u8]>)]) -> Result<()> {
         let mut m = smt::mutation::SmtMut::new(mem::take(&mut self.root));
+        let mut result = Ok(());
         for (key, val) in ops {
             let key_hash = Self::hash_key(key);
-            if let Some(v) = val {
-                m.insert(&key_hash, v)?;
+            result = if let Some(v) = val {
+                m.insert(&key_hash, v)
             } else {
-                m.remove(&key_hash)?;
+                m.remove(&key_hash)
+            };
+            if result.is_err() {
+                break;
             }
         }
         self.root = m.into_root();
-        Ok(())
+        Ok(result?)
     }
 
     /// Generates a Merkle proof for the given key.
@@ -384,7 +416,7 @@ impl SmtCalc {
     /// first) for proof generation to work.
     pub fn prove(&self, key: &[u8]) -> Result<SmtProof> {
         let key_hash = Self::hash_key(key);
-        smt::proof::prove(&self.root, &key_hash)
+        Ok(smt::proof::prove(&self.root, &key_hash)?)
     }
 
     /// Verifies a proof against a root hash and expected key.
@@ -394,7 +426,11 @@ impl SmtCalc {
         proof: &SmtProof,
     ) -> Result<bool> {
         let expected_key_hash = Self::hash_key(expected_key);
-        smt::proof::verify_proof(root_hash, &expected_key_hash, proof)
+        Ok(smt::proof::verify_proof(
+            root_hash,
+            &expected_key_hash,
+            proof,
+        )?)
     }
 
     // =================================================================
@@ -405,7 +441,9 @@ impl SmtCalc {
     pub fn save_cache(&mut self, cache_id: u64, sync_tag: u64) -> Result<()> {
         let hash = self.root_hash()?;
         let path = vsdb_get_system_dir().join(format!("smt_cache_{}.bin", cache_id));
-        smt::cache::save_to_file(&self.root, sync_tag, &hash, &path)
+        Ok(smt::cache::save_to_file(
+            &self.root, sync_tag, &hash, &path,
+        )?)
     }
 
     /// Loads a previously saved SMT from a file.

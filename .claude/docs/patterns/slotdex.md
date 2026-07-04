@@ -25,8 +25,8 @@ Keys at exact tier boundaries must be assigned to exactly one tier (no duplicati
 **Check**: Verify boundary is inclusive on one side and exclusive on the other, consistently.
 
 ### INV-SD4: Pagination Consistency
-Paginated queries must not skip or duplicate entries across pages, even if new entries are inserted between page requests.
-**Check**: Verify cursor-based pagination uses a stable key, not an offset index.
+Pagination is **offset-based** by design (`page_size * page_index`, like SQL `LIMIT`/`OFFSET`), not cursor-based — recomputed fresh via `locate_page_start`/`locate_page_rstart` on every call. Within a single call, a page must be internally consistent (no off-by-one, no skip/duplicate). Across separate calls, pages are NOT guaranteed stable if entries are inserted/removed between requests — this is the documented, accepted contract (see the doc comments on `get_entries_by_page`/`get_entries_by_page_slot`), not a bug.
+**Check**: Verify a single page request returns the correct, contiguous slice of the *current* data (no internal off-by-one). Do not flag the offset-based (vs. cursor-based) design itself as a violation.
 
 ### INV-SD5: swap_order Transparency
 `swap_order` is a pure storage-layout optimization (internal slot complement + result reversal). Logical query results MUST be identical for `swap_order=true` vs `false` on the same data.
@@ -46,7 +46,7 @@ Querying a tier that has no entries causes an unwrap on None from MapxOrd::iter(
 - [ ] SlotType::tier() is deterministic and pure
 - [ ] Range queries span all intersected tiers
 - [ ] Tier boundaries: no gaps, no overlaps
-- [ ] Pagination uses stable cursor, not offset
+- [ ] Pagination is internally consistent per call (offset-based by design; not required to be stable across concurrent mutation)
 - [ ] Empty tier handled gracefully
 - [ ] Insert and query use identical tier computation
 - [ ] swap_order=true and =false produce identical logical results

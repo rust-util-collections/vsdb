@@ -214,18 +214,59 @@ where
 
             // 2. Tier floor counts may be skewed by the same crash
             //    window and would permanently corrupt pagination
-            //    offsets.  Discard the whole tier stack; the next
-            //    insert rebuilds it from a full data scan (queries are
-            //    correct in the tier-less state).
+            //    offsets.  Discard the whole tier stack, then eagerly
+            //    rebuild it right here from a full data scan — leaving
+            //    the tier-less state in place until "the next insert"
+            //    (as before) would silently degrade every pagination
+            //    query to an O(N) raw scan (instead of the intended
+            //    O(tiers * tier_capacity) walk) for however long the
+            //    process stays idle or read-only after an unclean
+            //    shutdown.
             self.tiers.iter_mut().for_each(|t| {
                 t.store.clear();
                 *t.entry_count.get_mut() = 0;
             });
             self.tiers.clear();
+            self.rebuild_tier_stack();
 
             self.total.set_value(&dc::set_dirty(total));
         } else {
             self.total.set_value(&dc::set_dirty(raw));
+        }
+    }
+
+    /// Rebuilds the full tier-acceleration stack from a full scan of
+    /// `self.data`, mirroring the depth the stack would have reached via
+    /// ordinary incremental inserts.
+    ///
+    /// Used after crash recovery clears the stack (see [`Self::ensure_count`]),
+    /// so pagination doesn't silently regress to an O(N) raw scan until
+    /// some future write happens to trigger `ensure_tier_capacity`.
+    /// Requires `self.tiers` to already be empty; a no-op on an empty
+    /// `self.data` (leaving `self.tiers` empty, matching the state of a
+    /// freshly created, never-written-to `SlotDex` rather than
+    /// introducing a spurious zero-entry tier that `has_invalid_empty_tier`
+    /// would then flag on the next reload).
+    fn rebuild_tier_stack(&mut self) {
+        debug_assert!(self.tiers.is_empty());
+        if self.data.iter().next().is_none() {
+            return;
+        }
+        loop {
+            self.ensure_tier_capacity();
+            // `ensure_tier_capacity` pushes at most one tier per call:
+            // the first call always pushes (empty-stack branch), and
+            // each subsequent call pushes again only if the current top
+            // tier still exceeds capacity — so this converges in the
+            // same number of iterations the stack would have reached
+            // organically.
+            let top = self
+                .tiers
+                .last_mut()
+                .expect("just pushed by ensure_tier_capacity");
+            if (top.len() as i128) <= self.tier_capacity.as_i128() {
+                break;
+            }
         }
     }
 

@@ -23,9 +23,34 @@ const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 
 const PREFIX_ALLOC_BATCH: u64 = 8192;
 
+/// Thread-local guard that removes this thread's [`PENDING_WINDOWS`]
+/// entry on thread exit. Registered (via `.with(|_| {})`) the first
+/// time a thread claims a batch; its `Drop` impl runs during that
+/// thread's TLS teardown, so a dead thread's entry is reclaimed
+/// automatically instead of staying registered for the life of the
+/// process (a `ThreadId` is never reused, so without this the registry
+/// would grow by one entry per historical thread in a thread-per-task
+/// workload).
+///
+/// This is always safe to remove eagerly, regardless of whether the
+/// thread's window was fully issued before it exited: the window's
+/// un-issued tail can never be issued by *any* thread (only the
+/// now-gone thread's `LOCAL_NEXT`/`LOCAL_CEIL` could have continued
+/// issuing from it — `GLOBAL_COUNTER` has already moved past the whole
+/// batch), so there is nothing left for `reserve_recovered_prefix` to
+/// protect once the owning thread is gone.
+struct PendingWindowGuard;
+
+impl Drop for PendingWindowGuard {
+    fn drop(&mut self) {
+        PENDING_WINDOWS.write().remove(&thread::current().id());
+    }
+}
+
 thread_local! {
     static LOCAL_NEXT: Cell<u64> = const { Cell::new(0) };
     static LOCAL_CEIL: Cell<u64> = const { Cell::new(0) };
+    static PENDING_WINDOW_GUARD: PendingWindowGuard = const { PendingWindowGuard };
 }
 
 /// Next un-issued batch start. `0` means "not yet initialized from the
@@ -41,9 +66,10 @@ static PREFIX_ALLOC_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()))
 
 /// Per-thread pending allocation windows (`[start, end)` handed out by
 /// `GLOBAL_COUNTER.fetch_add` but not yet fully issued). Refills replace
-/// the same thread's entry; a dead thread's unexhausted window stays
-/// registered forever, which is correct — its prefixes are permanently
-/// un-issued, so treating them as pending is conservative and harmless.
+/// the same thread's entry; a live thread's entry is removed by
+/// [`PendingWindowGuard`] when that thread exits, so the registry stays
+/// bounded by the number of currently-live threads that have allocated
+/// at least one prefix batch (not one entry per historical thread).
 static PENDING_WINDOWS: LazyLock<RwLock<HashMap<ThreadId, (u64, u64)>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
@@ -89,24 +115,28 @@ impl MmDB {
         let dir = base_dir.join("mmdb");
         fs::create_dir_all(&dir).c(d!())?;
 
-        // Open NUM_SHARDS independent DB instances
-        let mut dbs_vec: Vec<&'static DB> = Vec::with_capacity(NUM_SHARDS);
+        // Open NUM_SHARDS independent DB instances into an owned,
+        // non-`'static` Vec first. If a later shard (or the meta-init
+        // step below) fails, this Vec's normal Drop glue closes every
+        // already-opened shard (flushing its WAL and joining its
+        // compaction thread) via the `?` early return, instead of
+        // leaking them. Shards are only promoted to `'static` — via
+        // `Box::leak` — after every fallible step below has succeeded,
+        // so a partial-init failure can never leave leaked, unreachable
+        // shard handles behind.
+        let mut dbs_vec: Vec<DB> = Vec::with_capacity(NUM_SHARDS);
         for i in 0..NUM_SHARDS {
             let shard_dir = dir.join(format!("shard_{:02}", i));
             fs::create_dir_all(&shard_dir).c(d!())?;
             let db = mmdb_open(&shard_dir)?;
-            let db: &'static DB = Box::leak(Box::new(db));
             dbs_vec.push(db);
         }
-        let dbs: [&'static DB; NUM_SHARDS] =
-            dbs_vec.try_into().ok().expect("shard count mismatch");
 
         // Meta keys live in shard 0
-        let meta_db = dbs[0];
         let (prefix_allocator, initial_value) = PreAllocator::init();
 
-        if meta_db.get(&prefix_allocator.key).c(d!())?.is_none() {
-            meta_db
+        if dbs_vec[0].get(&prefix_allocator.key).c(d!())?.is_none() {
+            dbs_vec[0]
                 .put_with_options(
                     &sync_write_opts(),
                     &prefix_allocator.key,
@@ -114,6 +144,15 @@ impl MmDB {
                 )
                 .c(d!())?;
         }
+
+        // Every fallible step has succeeded: safe to leak now.
+        let dbs: [&'static DB; NUM_SHARDS] = dbs_vec
+            .into_iter()
+            .map(|db| -> &'static DB { Box::leak(Box::new(db)) })
+            .collect::<Vec<_>>()
+            .try_into()
+            .ok()
+            .expect("shard count mismatch");
 
         Ok(MmDB {
             dbs,
@@ -194,6 +233,14 @@ impl MmDB {
                 }
 
                 self.ensure_alloc_init();
+
+                // Ensure this thread's cleanup guard is registered
+                // before taking a batch, so the corresponding
+                // `PENDING_WINDOWS` entry inserted below is guaranteed
+                // to be removed when the thread exits (bounding the
+                // registry to currently-live threads instead of every
+                // thread that ever allocated a prefix).
+                PENDING_WINDOW_GUARD.with(|_| {});
 
                 // Claim the next batch and register it as this thread's
                 // pending window in one exclusive section, so that
@@ -701,5 +748,30 @@ mod tests {
         assert_eq!(entries[1].0, b"k2".to_vec());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pending_window_guard_reclaims_entry_on_thread_exit() {
+        // Directly exercises the Drop-based cleanup mechanism (without
+        // needing a full `MmDB`/DB setup): a thread that registers a
+        // `PENDING_WINDOWS` entry and touches its cleanup guard must
+        // have that entry removed once the thread exits — otherwise
+        // the registry would grow by one entry per historical thread
+        // for the life of the process.
+        let before = PENDING_WINDOWS.read().len();
+
+        let handle = thread::spawn(|| {
+            let id = thread::current().id();
+            PENDING_WINDOWS.write().insert(id, (0, 1));
+            // Registers this thread's `PendingWindowGuard`, whose
+            // `Drop` removes the entry above on thread exit.
+            PENDING_WINDOW_GUARD.with(|_| {});
+            assert!(PENDING_WINDOWS.read().contains_key(&id));
+            id
+        });
+        let spawned_id = handle.join().unwrap();
+
+        assert!(!PENDING_WINDOWS.read().contains_key(&spawned_id));
+        assert_eq!(PENDING_WINDOWS.read().len(), before);
     }
 }

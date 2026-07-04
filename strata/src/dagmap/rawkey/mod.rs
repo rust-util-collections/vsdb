@@ -44,7 +44,13 @@ use std::{
 type DagHead<V> = DagMapRawKey<V>;
 
 /// A raw-key, disk-based, directed acyclic graph (DAG) map.
-#[derive(Clone, Debug, Default)]
+///
+/// Deliberately does **not** implement [`Default`] — see
+/// [`DagMapRaw`]'s documentation for why: construction always performs
+/// real disk I/O, so a `Default` impl would let generic code
+/// (`mem::take`, `.or_default()`, `.unwrap_or_default()`) create
+/// orphaned on-disk state invisibly. Use [`Self::new`] explicitly.
+#[derive(Clone, Debug)]
 pub struct DagMapRawKey<V> {
     inner: DagMapRaw,
     _p: PhantomData<V>,

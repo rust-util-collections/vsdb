@@ -168,6 +168,10 @@ where
     /// This method allows you to perform multiple insert/remove operations
     /// and commit them atomically.
     ///
+    /// A failed [`commit`](vsdb_core::common::BatchTrait::commit) consumes
+    /// the buffered operations (none are applied) and is not retryable —
+    /// re-stage the operations on a fresh batch instead.
+    ///
     /// # Examples
     ///
     /// ```
@@ -193,9 +197,14 @@ where
     }
 
     /// Returns an iterator over the map's keys.
+    ///
+    /// Decodes only `K` — unlike `iter().map(|(k, _)| k)`, the value
+    /// bytes are never decoded and discarded (see
+    /// `MapxOrdRawKey::keys`'s doc comment for why this matters for
+    /// nested-VSDB-collection value types).
     #[inline(always)]
-    pub fn keys(&self) -> impl Iterator<Item = K> + '_ {
-        self.iter().map(|(k, _)| k)
+    pub fn keys(&self) -> impl DoubleEndedIterator<Item = K> + '_ {
+        self.inner.keys().map(|k| K::decode(&k).unwrap())
     }
 }
 

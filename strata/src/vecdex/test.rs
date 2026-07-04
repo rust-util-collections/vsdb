@@ -339,7 +339,9 @@ fn filtered_search_layer_uses_visit_budget() {
     }
 
     let vectors: Vec<Vec<f32>> = (0..100).map(|i| vec![i as f32]).collect();
-    let get_vec = |id: u64| -> Option<Vec<f32>> { vectors.get(id as usize).cloned() };
+    let get_vec = |id: u64| -> Option<std::rc::Rc<Vec<f32>>> {
+        vectors.get(id as usize).cloned().map(std::rc::Rc::new)
+    };
     let calls = std::cell::Cell::new(0usize);
     let reject_all = |_: u64| {
         calls.set(calls.get() + 1);

@@ -115,7 +115,7 @@ pub fn vsdb_meta_path(instance_id: u64) -> PathBuf {
 /// target — a crash mid-write can never leave a truncated file at `path`
 /// (POSIX `rename` is atomic within a filesystem). Instance metas are
 /// written under the SWMR contract, so the fixed tmp name cannot race.
-pub fn atomic_write_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub fn atomic_write_file(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
@@ -124,7 +124,8 @@ pub fn atomic_write_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         io::Write::write_all(&mut f, bytes)?;
         f.sync_all()?;
     }
-    fs::rename(&tmp, path)
+    fs::rename(&tmp, path)?;
+    Ok(())
 }
 
 /// The global instance of the VsDB database.

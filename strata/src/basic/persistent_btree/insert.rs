@@ -3,8 +3,7 @@
 //! Every insertion allocates new nodes along the path from leaf to root,
 //! leaving previous versions intact (copy-on-write).
 
-use super::{EMPTY_ROOT, MAX_KEYS, PersistentBTree};
-use super::{InsertResult, Node, NodeId};
+use super::{EMPTY_ROOT, InsertResult, MAX_KEYS, Node, NodeId, PersistentBTree};
 
 impl PersistentBTree {
     /// Inserts `(key, value)`, returning the **new root**.

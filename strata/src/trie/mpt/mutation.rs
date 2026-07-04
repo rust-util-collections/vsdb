@@ -47,20 +47,34 @@ impl TrieMut {
         Ok(())
     }
 
-    /// Hash the entire trie and return `(root_hash, hashed_root)`.
-    pub fn commit(self) -> Result<(Vec<u8>, NodeHandle)> {
-        let root = self.root;
+    /// Hashes the entire trie in place and returns the 32-byte root hash.
+    ///
+    /// `self`'s root is always restored to the best-available state
+    /// before returning — on success it holds the freshly hashed root;
+    /// on failure (defensive-only; unreachable given `commit_rec`'s
+    /// current totality) it is restored to whatever `commit_rec` handed
+    /// back rather than left empty, so a rejected commit never silently
+    /// discards trie data.
+    pub fn commit(&mut self) -> Result<Vec<u8>> {
+        let root = mem::take(&mut self.root);
 
         if matches!(&root, NodeHandle::InMemory(n) if **n == Node::Null) {
-            return Ok((vec![0u8; 32], root));
+            self.root = root;
+            return Ok(vec![0u8; 32]);
         }
 
-        let root_handle = Self::commit_rec(root)?;
-        match &root_handle {
-            NodeHandle::Cached(h, _) => Ok((h.clone(), root_handle)),
-            NodeHandle::InMemory(_) => Err(TrieError::InvalidState(
-                "Root should be hashed after commit".into(),
-            )),
+        match Self::commit_rec(root) {
+            Ok(root_handle) => {
+                let result = match &root_handle {
+                    NodeHandle::Cached(h, _) => Ok(h.clone()),
+                    NodeHandle::InMemory(_) => Err(TrieError::InvalidState(
+                        "Root should be hashed after commit".into(),
+                    )),
+                };
+                self.root = root_handle;
+                result
+            }
+            Err(e) => Err(e),
         }
     }
 

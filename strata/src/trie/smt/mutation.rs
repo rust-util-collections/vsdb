@@ -34,16 +34,30 @@ impl SmtMut {
 
     pub fn remove(&mut self, key_hash: &[u8; 32]) -> Result<()> {
         let full_path = BitPath::from_hash(key_hash);
-        let new_root = remove_rec(mem::take(&mut self.root), &full_path, 0, key_hash)?;
+        let (new_root, _changed) =
+            remove_rec(mem::take(&mut self.root), &full_path, 0, key_hash)?;
         self.root = new_root;
         Ok(())
     }
 
-    /// Hash the entire tree. Returns `(root_hash, hashed_root)`.
-    pub fn commit(self) -> Result<(Vec<u8>, SmtHandle)> {
-        let root = commit_rec(self.root)?;
-        let hash = root.expect_hash()?.to_vec();
-        Ok((hash, root))
+    /// Hashes the entire tree in place and returns the 32-byte root hash.
+    ///
+    /// `self`'s root is always restored before returning — on success it
+    /// holds the freshly hashed root; on failure (defensive-only; the
+    /// SMT's 256-bit depth cap makes `commit_rec` failure unreachable in
+    /// practice) it is restored to whatever `commit_rec` handed back
+    /// rather than left empty, so a rejected commit never silently
+    /// discards tree data.
+    pub fn commit(&mut self) -> Result<Vec<u8>> {
+        let root = mem::take(&mut self.root);
+        match commit_rec(root) {
+            Ok(root) => {
+                let result = root.expect_hash().map(<[u8]>::to_vec);
+                self.root = root;
+                result
+            }
+            Err(e) => Err(e),
+        }
     }
 
     pub fn into_root(self) -> SmtHandle {
@@ -201,39 +215,53 @@ fn insert_rec(
 // Remove
 // =========================================================================
 
+/// Re-wraps a node into a handle, preserving a precomputed hash when the
+/// node is unchanged — mirrors MPT's `TrieMut::rewrap` — so a no-change
+/// `remove_rec` path doesn't force a re-hash of the whole ancestor chain.
+fn rewrap(cached_hash: &Option<Vec<u8>>, node: SmtNode) -> SmtHandle {
+    match cached_hash {
+        Some(h) => SmtHandle::Cached(h.clone(), Box::new(node)),
+        None => SmtHandle::InMemory(Box::new(node)),
+    }
+}
+
 fn remove_rec(
     handle: SmtHandle,
     full_path: &BitPath,
     depth: usize,
     key_hash: &[u8; 32],
-) -> Result<SmtHandle> {
+) -> Result<(SmtHandle, bool)> {
     // Fast-path: inspect the node without consuming the handle.
     // If the key is not in this subtree, return the original handle
     // unchanged — preserving any Cached hash.
     match handle.node() {
-        SmtNode::Empty => return Ok(handle),
+        SmtNode::Empty => return Ok((handle, false)),
         SmtNode::Leaf {
             key_hash: leaf_kh, ..
         } => {
             if leaf_kh != key_hash {
-                return Ok(handle);
+                return Ok((handle, false));
             }
             // Key matches — fall through to consume the handle.
         }
         SmtNode::Internal { path, .. } => {
             if !full_path.starts_with_from(depth, path) {
-                return Ok(handle);
+                return Ok((handle, false));
             }
             let next_depth = depth + path.len();
             if next_depth >= full_path.len() {
-                return Ok(handle);
+                return Ok((handle, false));
             }
             // Path matches — fall through to consume the handle.
         }
     }
 
-    // Past here the node is consumed because we know removal will
-    // modify this subtree.
+    // Past here the node *may* be modified — peek its cached hash
+    // first (before consuming) so the Internal case below can restore
+    // it if neither child subtree actually changed: the fast-path
+    // check above only guarantees the key's path is *plausible*
+    // through this node, not that the key truly exists deeper down.
+    let cached_hash = handle.hash().map(|h| h.to_vec());
     let node = handle.into_node();
 
     match node {
@@ -241,7 +269,7 @@ fn remove_rec(
 
         SmtNode::Leaf { .. } => {
             // Key matched — delete by returning empty.
-            Ok(SmtHandle::default())
+            Ok((SmtHandle::default(), true))
         }
 
         SmtNode::Internal { path, left, right } => {
@@ -249,15 +277,30 @@ fn remove_rec(
             let bit = full_path.bit_at(next_depth);
             let child_depth = next_depth + 1;
 
-            let (new_left, new_right) = if bit == 0 {
-                let new_left = remove_rec(left, full_path, child_depth, key_hash)?;
-                (new_left, right)
+            let (new_left, new_right, changed) = if bit == 0 {
+                let (new_left, changed) =
+                    remove_rec(left, full_path, child_depth, key_hash)?;
+                (new_left, right, changed)
             } else {
-                let new_right = remove_rec(right, full_path, child_depth, key_hash)?;
-                (left, new_right)
+                let (new_right, changed) =
+                    remove_rec(right, full_path, child_depth, key_hash)?;
+                (left, new_right, changed)
             };
 
-            compact(path, new_left, new_right)
+            if !changed {
+                // Neither child actually changed — restore this node's
+                // Cached hash instead of unconditionally reconstructing
+                // it via `compact` (which would force a re-hash of the
+                // whole ancestor chain on the next `commit`).
+                let n = SmtNode::Internal {
+                    path,
+                    left: new_left,
+                    right: new_right,
+                };
+                return Ok((rewrap(&cached_hash, n), false));
+            }
+
+            Ok((compact(path, new_left, new_right)?, true))
         }
     }
 }

@@ -11,7 +11,7 @@
 //! time.  A transparent on-disk cache avoids full rebuilds on restart.
 
 use crate::common::ende::{KeyEnDeOrdered, ValueEnDe};
-use crate::common::error::{Result, VsdbError};
+use crate::common::error::Result;
 use crate::versioned::diff::DiffEntry;
 use crate::versioned::map::VerMap;
 use crate::versioned::{BranchId, CommitId};
@@ -152,18 +152,18 @@ where
 
             if head_id == Some(sync_id) && !has_dirty {
                 // Trie matches the branch HEAD exactly.
-                return self.trie.root_hash().map_err(VsdbError::from);
+                return self.trie.root_hash();
             }
         }
 
         self.sync_to_branch(branch)?;
-        self.trie.root_hash().map_err(VsdbError::from)
+        self.trie.root_hash()
     }
 
     /// Computes the Merkle root hash for a specific historical commit.
     pub fn merkle_root_at_commit(&mut self, commit: CommitId) -> Result<Vec<u8>> {
         self.sync_to_commit(commit)?;
-        self.trie.root_hash().map_err(VsdbError::from)
+        self.trie.root_hash()
     }
 
     // =================================================================
@@ -260,7 +260,7 @@ where
     /// Full rebuild: clear trie and re-insert all entries at `commit`.
     fn full_rebuild_commit(&mut self, commit: CommitId) -> Result<()> {
         let entries: Vec<_> = self.map.raw_iter_at_commit(commit)?.collect();
-        self.trie = T::from_entries(entries).map_err(VsdbError::from)?;
+        self.trie = T::from_entries(entries)?;
         Ok(())
     }
 
@@ -278,7 +278,7 @@ where
                 }
             })
             .collect();
-        self.trie.batch_update(&ops).map_err(VsdbError::from)
+        self.trie.batch_update(&ops)
     }
 }
 
@@ -296,7 +296,7 @@ where
     /// The trie must be synced (call [`merkle_root`](Self::merkle_root)
     /// first) for proof generation to work.
     pub fn prove(&self, key: &[u8]) -> Result<SmtProof> {
-        self.trie.prove(key).map_err(VsdbError::from)
+        self.trie.prove(key)
     }
 
     /// Verifies a proof against a root hash and expected key.
@@ -305,7 +305,7 @@ where
         expected_key: &[u8],
         proof: &SmtProof,
     ) -> Result<bool> {
-        SmtCalc::verify_proof(root_hash, expected_key, proof).map_err(VsdbError::from)
+        SmtCalc::verify_proof(root_hash, expected_key, proof)
     }
 }
 
@@ -323,7 +323,7 @@ where
     /// The trie must be synced (call [`merkle_root`](Self::merkle_root)
     /// first) for proof generation to work.
     pub fn prove_mpt(&self, key: &K) -> Result<MptProof> {
-        self.trie.prove(&key.to_bytes()).map_err(VsdbError::from)
+        self.trie.prove(&key.to_bytes())
     }
 
     /// Verifies an MPT proof against a root hash for a specific key.
@@ -335,7 +335,7 @@ where
         expected_key: &[u8],
         proof: &MptProof,
     ) -> Result<bool> {
-        MptCalc::verify_proof(root_hash, expected_key, proof).map_err(VsdbError::from)
+        MptCalc::verify_proof(root_hash, expected_key, proof)
     }
 }
 

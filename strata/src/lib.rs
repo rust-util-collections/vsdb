@@ -101,10 +101,12 @@ pub use common::ende::{KeyEnDe, KeyEnDeOrdered, ValueEnDe};
 pub use common::error::{Result, VsdbError};
 
 // Versioned storage core types (previously not re-exported)
-pub use versioned::diff::DiffEntry;
-pub use versioned::handle::{Branch, BranchMut};
-pub use versioned::map::VerMap;
-pub use versioned::{BranchId, Commit, CommitId, NO_COMMIT};
+pub use versioned::{
+    BranchId, Commit, CommitId, NO_COMMIT,
+    diff::DiffEntry,
+    handle::{Branch, BranchMut},
+    map::VerMap,
+};
 
 // DAG-related structures
 pub use dagmap::{DagMapId, raw::DagMapRaw, rawkey::DagMapRawKey};
@@ -117,15 +119,14 @@ pub use trie::{MptCalc, MptProof, SmtCalc, SmtProof, TrieCalc, VerMapWithProof};
 pub use slotdex::{SlotDex, SlotDex32, SlotDex64, SlotDex128, SlotType};
 
 // VecDex — approximate nearest-neighbor vector index.
-pub use vecdex::distance::{Cosine, DistanceMetric, InnerProduct, L2, Scalar};
 pub use vecdex::{
     HnswConfig, VecDex, VecDexCosine, VecDexCosineF64, VecDexL2, VecDexL2F64,
+    distance::{Cosine, DistanceMetric, InnerProduct, L2, Scalar},
 };
 
 // Re-export vsdb_core crate for advanced users, plus the user-facing
 // environment management functions.
-pub use vsdb_core;
-pub use vsdb_core::{vsdb_flush, vsdb_get_base_dir, vsdb_set_base_dir};
+pub use vsdb_core::{self, vsdb_flush, vsdb_get_base_dir, vsdb_set_base_dir};
 
 // Persistent B+ tree (moved from vsdb_core).
 pub use basic::persistent_btree::PersistentBTree;

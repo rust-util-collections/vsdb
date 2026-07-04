@@ -52,7 +52,18 @@ use vsdb_core::{
 type DagHead = DagMapRaw;
 
 /// A raw, disk-based, directed acyclic graph (DAG) map.
-#[derive(Clone, Debug, Default)]
+///
+/// Deliberately does **not** implement [`Default`]: every `DagMapRaw`
+/// is a real, disk-backed structure — `Orphan::new()`'s eager write for
+/// the `parent` slot means construction always allocates engine
+/// prefixes and performs a disk write.  A derived or `new(None)`-backed
+/// `Default` would make that cost invisible at every call site that
+/// generically constructs "an empty value" (`Option::unwrap_or_default()`,
+/// `HashMap::entry().or_default()`, and especially `std::mem::take`,
+/// whose entire idiom relies on `Default` being a cheap, side-effect-free
+/// placeholder) — silently creating orphaned, unreachable disk state one
+/// call at a time. Use [`Self::new`] explicitly instead.
+#[derive(Clone, Debug)]
 pub struct DagMapRaw {
     data: MapxRaw,
 
@@ -199,10 +210,17 @@ impl DagMapRaw {
         crate::common::load_instance_meta(instance_id)
     }
 
-    /// Checks if the DAG map is dead (i.e., has no data, parent, or children).
+    /// Checks if the DAG map is dead (i.e., has no live data, parent, or children).
+    ///
+    /// `remove()` writes an empty-value tombstone rather than deleting
+    /// the entry outright (see [`Self::insert`]'s doc comment), so a
+    /// plain "is the backing store empty" check would incorrectly
+    /// return `false` for a node whose only key was removed. This
+    /// matches [`Self::get`]/[`Self::get_mut`]'s convention of treating
+    /// an empty value as absent.
     #[inline(always)]
     pub fn is_dead(&self) -> bool {
-        self.data.iter().next().is_none()
+        self.data.iter().all(|(_, v)| v.is_empty())
             && self.parent.get_value().is_none()
             && self.no_children()
     }

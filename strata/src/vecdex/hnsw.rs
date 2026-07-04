@@ -3,6 +3,7 @@
 use super::distance::{DistanceMetric, Scalar};
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashSet};
+use std::rc::Rc;
 use vsdb_core::basic::mapx_raw::MapxRaw;
 
 // ---- Ordered scalar wrapper (for BinaryHeap) ----------------------------
@@ -120,7 +121,7 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>>(
     entry_points: &[u64],
     ef: usize,
     layer: u8,
-    get_vector: &dyn Fn(u64) -> Option<Vec<S>>,
+    get_vector: &dyn Fn(u64) -> Option<Rc<Vec<S>>>,
     adjacency: &MapxRaw,
     filter: Option<&dyn Fn(u64) -> bool>,
 ) -> Vec<(S, u64)> {
@@ -229,13 +230,13 @@ pub(crate) fn select_neighbors_simple<S: Scalar>(
 pub(crate) fn select_neighbors_heuristic<S: Scalar, D: DistanceMetric<S>>(
     candidates: &[(S, u64)],
     m: usize,
-    get_vector: &dyn Fn(u64) -> Option<Vec<S>>,
+    get_vector: &dyn Fn(u64) -> Option<Rc<Vec<S>>>,
 ) -> Vec<u64> {
     let mut sorted: Vec<_> = candidates.to_vec();
     sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
 
     let mut selected: Vec<(S, u64)> = Vec::with_capacity(m);
-    let mut selected_vecs: Vec<Vec<S>> = Vec::with_capacity(m);
+    let mut selected_vecs: Vec<Rc<Vec<S>>> = Vec::with_capacity(m);
 
     for &(dist_to_query, cand_id) in &sorted {
         if selected.len() >= m {
@@ -285,7 +286,7 @@ pub(crate) fn prune_neighbors<S: Scalar, D: DistanceMetric<S>>(
     layer: u8,
     m_max: usize,
     adjacency: &mut MapxRaw,
-    get_vector: &dyn Fn(u64) -> Option<Vec<S>>,
+    get_vector: &dyn Fn(u64) -> Option<Rc<Vec<S>>>,
 ) -> Vec<u64> {
     let neighbors = get_neighbors(adjacency, layer, node_id);
     if neighbors.len() <= m_max {

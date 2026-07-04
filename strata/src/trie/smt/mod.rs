@@ -62,6 +62,16 @@ impl SmtHandle {
         }
     }
 
+    /// Returns the precomputed hash, if any (`None` for an in-memory,
+    /// not-yet-hashed node). Used to preserve a node's `Cached` status
+    /// across a no-op mutation (see `remove_rec`'s use of `rewrap`).
+    pub fn hash(&self) -> Option<&[u8]> {
+        match self {
+            SmtHandle::Cached(h, _) => Some(h),
+            SmtHandle::InMemory(_) => None,
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         matches!(self.node(), SmtNode::Empty)
     }

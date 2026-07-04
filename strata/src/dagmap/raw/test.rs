@@ -501,3 +501,31 @@ fn destroy_does_not_follow_stale_foreign_registry_entries() {
     assert_eq!(child.get("p").unwrap().as_slice(), b"pv");
     assert!(!real_parent.no_children());
 }
+
+#[test]
+fn is_dead_recognizes_tombstoned_entries() {
+    // `remove()` writes an empty-value tombstone rather than physically
+    // deleting the entry (see `insert`'s doc comment on the tombstone
+    // convention), so `is_dead()` must not be fooled by a backing store
+    // that still has iterable (but empty) entries.
+    let mut node = DagMapRaw::new(None);
+    assert!(node.is_dead());
+
+    node.insert("only", "v");
+    assert!(!node.is_dead());
+    assert_eq!(node.get("only").unwrap().as_slice(), b"v");
+
+    node.remove("only");
+    assert!(node.get("only").is_none());
+    // The tombstone left `node.data` non-empty (one empty-value entry),
+    // but the node has no live data, parent, or children.
+    assert!(node.is_dead());
+
+    // Multiple keys, only some removed: still not dead.
+    node.insert("a", "va");
+    node.insert("b", "vb");
+    node.remove("a");
+    assert!(!node.is_dead());
+    node.remove("b");
+    assert!(node.is_dead());
+}

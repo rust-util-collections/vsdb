@@ -58,6 +58,19 @@ fn test_iter() {
 }
 
 #[test]
+fn test_keys() {
+    let mut hdr: MapxOrdRawKey<usize> = MapxOrdRawKey::new();
+    hdr.insert([3], &3);
+    hdr.insert([1], &1);
+    hdr.insert([2], &2);
+    // Raw keys in ascending byte order.
+    let keys: Vec<Vec<u8>> = hdr.keys().collect();
+    assert_eq!(keys, vec![vec![1u8], vec![2u8], vec![3u8]]);
+    assert_eq!(hdr.keys().next_back(), Some(vec![3u8]));
+    assert_eq!(hdr.keys().count(), hdr.iter().count());
+}
+
+#[test]
 fn test_first_last() {
     let mut hdr: MapxOrdRawKey<usize> = MapxOrdRawKey::new();
     let max = 100;

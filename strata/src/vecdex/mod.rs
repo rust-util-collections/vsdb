@@ -40,6 +40,7 @@ use hnsw::{
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
+use std::rc::Rc;
 use vsdb_core::basic::mapx_raw::MapxRaw;
 
 /// Configuration for a [`VecDex`].
@@ -418,7 +419,8 @@ where
             return;
         }
 
-        let get_vec = |id: u64| -> Option<Vec<S>> { self.vectors.get(&id) };
+        let get_vec =
+            |id: u64| -> Option<Rc<Vec<S>>> { self.vectors.get(&id).map(Rc::new) };
         let cur_max = meta.max_layer;
 
         // Phase 1: Greedy descent from top layer to node_layer + 1.
@@ -751,13 +753,18 @@ where
             return Ok(vec![]);
         }
 
-        let cache = std::cell::RefCell::new(HashMap::<u64, Vec<S>>::new());
-        let get_vec = |id: u64| -> Option<Vec<S>> {
+        let cache = std::cell::RefCell::new(HashMap::<u64, Rc<Vec<S>>>::new());
+        let get_vec = |id: u64| -> Option<Rc<Vec<S>>> {
             if let Some(v) = cache.borrow().get(&id) {
-                return Some(v.clone());
+                // Cheap refcount bump — no vector data is copied, unlike
+                // the pre-Rc version's full-vector `.clone()` on every
+                // cache hit (this closure's entry point is looked up
+                // repeatedly per query, e.g. once as the layer-0 entry
+                // point right after the layer-descent loop ends).
+                return Some(Rc::clone(v));
             }
-            let v = self.vectors.get(&id)?;
-            cache.borrow_mut().insert(id, v.clone());
+            let v = Rc::new(self.vectors.get(&id)?);
+            cache.borrow_mut().insert(id, Rc::clone(&v));
             Some(v)
         };
 
@@ -851,7 +858,8 @@ where
 
         // Phase 2: Reconnect former neighbors (best-effort).
         // Runs before vectors.remove so distance computation still works.
-        let get_vec = |id: u64| -> Option<Vec<S>> { self.vectors.get(&id) };
+        let get_vec =
+            |id: u64| -> Option<Rc<Vec<S>>> { self.vectors.get(&id).map(Rc::new) };
         for l in 0..=max_layer {
             let m_max = if l == 0 { meta.m_max0 } else { meta.m };
             let fns = &former_neighbors[l as usize];

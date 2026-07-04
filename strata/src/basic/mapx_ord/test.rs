@@ -196,6 +196,41 @@ fn test_keys_empty() {
     assert_eq!(hdr.keys().count(), 0);
 }
 
+#[test]
+fn test_keys_never_decodes_values() {
+    // A value type whose `decode` panics unconditionally — `encode` is
+    // a normal, valid encoding, so inserts succeed and the on-disk
+    // bytes are well-formed; only `decode` is instrumented to detect
+    // whether `keys()` ever touches the value bytes.
+    #[derive(Clone, Debug)]
+    struct PanicsOnDecode(u32);
+
+    impl crate::common::ende::ValueEnDe for PanicsOnDecode {
+        fn try_encode(&self) -> crate::common::error::Result<Vec<u8>> {
+            Ok(self.0.to_le_bytes().to_vec())
+        }
+        fn decode(_bytes: &[u8]) -> crate::common::error::Result<Self> {
+            panic!("keys() must never decode values");
+        }
+    }
+
+    let mut hdr: MapxOrd<u32, PanicsOnDecode> = MapxOrd::new();
+    hdr.insert(&30, &PanicsOnDecode(300));
+    hdr.insert(&10, &PanicsOnDecode(100));
+    hdr.insert(&20, &PanicsOnDecode(200));
+
+    // Must not panic: keys() decodes only K.
+    let keys: Vec<u32> = hdr.keys().collect();
+    assert_eq!(keys, vec![10, 20, 30]);
+
+    // Control: iterating full entries DOES decode V and panics,
+    // confirming the test type is wired correctly.
+    let panicked =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hdr.iter().count()))
+            .is_err();
+    assert!(panicked, "expected iter() to decode V and panic");
+}
+
 // =====================================================================
 // Persistence
 // =====================================================================

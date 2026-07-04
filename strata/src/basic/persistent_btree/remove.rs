@@ -4,8 +4,7 @@
 //! with underflow handled via borrow-left, borrow-right, and merge.
 //! Previous versions are left intact (copy-on-write).
 
-use super::{EMPTY_ROOT, Node, NodeId, RemoveResult};
-use super::{MIN_KEYS, PersistentBTree};
+use super::{EMPTY_ROOT, MIN_KEYS, Node, NodeId, PersistentBTree, RemoveResult};
 
 impl PersistentBTree {
     /// Removes `key`, returning the **new root**.

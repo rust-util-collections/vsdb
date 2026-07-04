@@ -690,7 +690,7 @@ fn crash_with_corrupted_total_is_corrected() {
 }
 
 #[test]
-fn clean_restore_drops_empty_tier_metadata() {
+fn clean_restore_rebuilds_empty_tier_metadata() {
     let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
     for i in 0..100u64 {
         db.insert(i, i).unwrap();
@@ -710,9 +710,51 @@ fn clean_restore_drops_empty_tier_metadata() {
     let restored: SlotDex<u64, u64> = postcard::from_bytes(&bytes).unwrap();
 
     assert_eq!(restored.total(), 100);
-    assert!(restored.tiers.is_empty());
+    // The corrupted tier metadata is detected (`has_invalid_empty_tier`)
+    // even though the dirty bit was cleared, and the tier stack is now
+    // eagerly rebuilt from a full data scan during restore instead of
+    // being left in the tier-less state — which would otherwise
+    // silently degrade every pagination query to an O(N) raw scan
+    // until some future write happened to trigger a rebuild.
+    assert!(!restored.tiers.is_empty());
+    assert!(!restored.has_invalid_empty_tier());
     assert_eq!(
         restored.get_entries_by_page_slot(Some(90), Some(99), 20, 0, false),
         (90u64..100).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn dirty_restore_rebuilds_tier_metadata_eagerly() {
+    // Same corruption as `clean_restore_rebuilds_empty_tier_metadata`,
+    // but going through the actual dirty-flag path (the real unclean-
+    // shutdown signal) instead of the `has_invalid_empty_tier` fallback.
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    for i in 0..500u64 {
+        db.insert(i, i).unwrap();
+    }
+    assert!(!db.tiers.is_empty());
+
+    for tier in &mut db.tiers {
+        tier.store.clear();
+        *tier.entry_count.get_mut() = 0;
+        tier.cache.get_mut().clear();
+    }
+    db.tiers.clear();
+    let raw = db.total.get_value();
+    db.total
+        .set_value(&crate::common::dirty_count::set_dirty(raw));
+
+    let bytes = postcard::to_allocvec(&db).unwrap();
+    let restored: SlotDex<u64, u64> = postcard::from_bytes(&bytes).unwrap();
+
+    assert_eq!(restored.total(), 500);
+    assert!(!restored.tiers.is_empty());
+    assert!(!restored.has_invalid_empty_tier());
+    // A deep reverse page must still be fast (tier-accelerated) right
+    // after restore, not fall back to a raw O(N) scan.
+    assert_eq!(
+        restored.get_entries_by_page_slot(Some(0), Some(499), 20, 0, true),
+        (480u64..500).rev().collect::<Vec<_>>()
     );
 }
