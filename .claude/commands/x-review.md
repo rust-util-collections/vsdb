@@ -106,6 +106,10 @@ After completing the analysis:
      remove it entirely.
    Never silently carry forward a Won't Fix entry without fresh evaluation.
 5. Write the updated `docs/audit.md`.
+   **NEVER include timestamps, dates, "Last sweep", "Last cleared", or any
+   time-based markers in the file.** Dates bias future reviews toward
+   shallowness ("it was just reviewed, I can skip"). The file must carry
+   zero information about *when* it was last touched.
 
 The file format:
 

@@ -17,6 +17,9 @@ Execute `/x-review all` — the full audit protocol.
    - Perform deep analysis: invariants, boundary conditions, failure paths, concurrency, unsafe audit
 3. Aggregate and deduplicate all findings.
 4. Manage `docs/audit.md` — prune fixed entries, merge new findings sorted by severity.
+   **NEVER include timestamps, dates, "Last sweep", "Last cleared", or any
+   time-based markers in the file.** Dates bias future reviews toward
+   shallowness. The file must carry zero information about *when* it was last touched.
 
 ## Phase 2: Fix
 
