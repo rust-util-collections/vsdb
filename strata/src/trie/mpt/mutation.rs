@@ -49,12 +49,12 @@ impl TrieMut {
 
     /// Hashes the entire trie in place and returns the 32-byte root hash.
     ///
-    /// `self`'s root is always restored to the best-available state
-    /// before returning — on success it holds the freshly hashed root;
-    /// on failure (defensive-only; unreachable given `commit_rec`'s
-    /// current totality) it is restored to whatever `commit_rec` handed
-    /// back rather than left empty, so a rejected commit never silently
-    /// discards trie data.
+    /// On success `self`'s root holds the freshly hashed trie, so a
+    /// subsequent call without intervening mutations is essentially
+    /// free.  No failure path can discard trie data: `commit_rec` is
+    /// total (node encoding and hashing are infallible — its `Result`
+    /// type only propagates child recursion), and the defensive
+    /// root-not-hashed check below restores the root before erroring.
     pub fn commit(&mut self) -> Result<Vec<u8>> {
         let root = mem::take(&mut self.root);
 

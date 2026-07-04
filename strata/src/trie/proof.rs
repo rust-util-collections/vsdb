@@ -199,9 +199,21 @@ where
 
         // Then, apply any uncommitted changes.
         if self.map.has_uncommitted(branch)? {
-            self.trie_at_head = Some(self.trie.clone());
             let diff = self.map.diff_uncommitted(branch)?;
-            self.apply_diff(&diff)?;
+            let snapshot = self.trie.clone();
+            if let Err(e) = self.apply_diff(&diff) {
+                // `batch_update` is not atomic: operations before the
+                // failing one are already applied.  Restore the clean
+                // HEAD snapshot so the trie keeps matching
+                // `sync_commit` — otherwise a later
+                // `merkle_root_at_commit(HEAD)` would short-circuit on
+                // the still-valid bookkeeping and silently serve a
+                // root over the partially applied dirty overlay.
+                self.trie = snapshot;
+                self.trie_at_head = None;
+                return Err(e);
+            }
+            self.trie_at_head = Some(snapshot);
             self.dirty_applied = true;
         } else {
             self.trie_at_head = None;
@@ -235,7 +247,32 @@ where
             Some(current) => {
                 // Try incremental diff.
                 match self.map.diff_commits(current, target) {
-                    Ok(diff) => self.apply_diff(&diff)?,
+                    Ok(diff) => {
+                        if let Err(e) = self.apply_diff(&diff) {
+                            // `batch_update` is not atomic: operations
+                            // before the failing one remain applied, so
+                            // the trie no longer matches ANY commit.
+                            // Poison the sync state — `sync_commit`
+                            // must never keep claiming `current`, or a
+                            // later `merkle_root_at_commit(current)`
+                            // (or a `merkle_root` after rolling the
+                            // branch back) would short-circuit and
+                            // silently serve a root over the partial
+                            // state.  The next sync performs a full
+                            // rebuild instead.
+                            self.trie = T::default();
+                            self.trie_at_head = None;
+                            self.sync_commit = None;
+                            self.sync_branch = None;
+                            self.dirty_applied = false;
+                            return Err(e);
+                        }
+                    }
+                    // On a diff failure nothing was applied yet: fall
+                    // back to a full rebuild.  `full_rebuild_commit`
+                    // only assigns `self.trie` on success, so its
+                    // failure leaves the (still `current`-consistent)
+                    // trie and bookkeeping untouched.
                     Err(_) => self.full_rebuild_commit(target)?,
                 }
             }

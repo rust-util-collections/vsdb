@@ -3572,6 +3572,87 @@ mod proof_tests {
             .unwrap();
         assert!(ok2);
     }
+
+    /// A failed incremental sync (rejected op mid-diff) must not leave
+    /// the sync bookkeeping claiming the trie still matches the
+    /// previously synced commit: `batch_update` is not atomic, so the
+    /// trie holds a partially applied diff at that point.  Historical
+    /// roots must remain exact afterwards (regression: the poisoned
+    /// state previously short-circuited in `sync_to_commit` and
+    /// silently served a wrong root for C1).
+    #[test]
+    fn test_failed_incremental_sync_preserves_historical_roots() {
+        type VpRaw = VerMapWithProof<Vec<u8>, String, MptCalc>;
+        let mut vp = VpRaw::new();
+        let main = vp.map().main_branch();
+
+        vp.map_mut().insert(main, &vec![1u8], &"a".into()).unwrap();
+        vp.map_mut().insert(main, &vec![2u8], &"b".into()).unwrap();
+        let c1 = vp.map_mut().commit(main).unwrap();
+        let root_c1 = vp.merkle_root(main).unwrap();
+
+        // C2: a normal key (applies fine) plus a key over
+        // MAX_MPT_KEY_LEN (rejected by the MPT, but accepted by the
+        // VerMap layer, which imposes no key-length limit).
+        vp.map_mut().insert(main, &vec![0u8], &"z".into()).unwrap();
+        let oversized = vec![3u8; crate::trie::MAX_MPT_KEY_LEN + 1];
+        vp.map_mut()
+            .insert(main, &oversized, &"big".into())
+            .unwrap();
+        let _c2 = vp.map_mut().commit(main).unwrap();
+
+        // The C1→C2 incremental sync must surface the rejection.
+        assert!(vp.merkle_root(main).is_err());
+
+        // The root for C1 must still be exact — not a hash over
+        // C1-plus-partially-applied-C2-diff.
+        assert_eq!(vp.merkle_root_at_commit(c1).unwrap(), root_c1);
+    }
+
+    /// Same desync through the uncommitted-changes path: a failed
+    /// dirty-overlay application must restore the clean HEAD snapshot,
+    /// so the root reported for the HEAD commit stays exact.
+    #[test]
+    fn test_failed_dirty_sync_preserves_committed_root() {
+        type VpRaw = VerMapWithProof<Vec<u8>, String, MptCalc>;
+        let mut vp = VpRaw::new();
+        let main = vp.map().main_branch();
+
+        vp.map_mut().insert(main, &vec![1u8], &"a".into()).unwrap();
+        let c1 = vp.map_mut().commit(main).unwrap();
+        let root_c1 = vp.merkle_root(main).unwrap();
+
+        // Uncommitted: a normal key plus an oversized key.
+        vp.map_mut().insert(main, &vec![0u8], &"z".into()).unwrap();
+        let oversized = vec![3u8; crate::trie::MAX_MPT_KEY_LEN + 1];
+        vp.map_mut()
+            .insert(main, &oversized, &"big".into())
+            .unwrap();
+
+        assert!(vp.merkle_root(main).is_err());
+
+        // Root at the committed HEAD must be unaffected by the
+        // partially applied (then rolled back) dirty overlay.
+        assert_eq!(vp.merkle_root_at_commit(c1).unwrap(), root_c1);
+
+        // Dropping the oversized key from the dirty set makes the
+        // overlay applicable again; the dirty root must now reflect
+        // exactly C1 + {[0]:"z"}, i.e. re-syncing works after failure.
+        vp.map_mut().remove(main, &oversized).unwrap();
+        let dirty_root = vp.merkle_root(main).unwrap();
+        let mut reference = MptCalc::new();
+        // Keys are KeyEnDeOrdered-encoded (raw bytes for Vec<u8>);
+        // values are ValueEnDe-encoded (postcard) — mirror the map's
+        // trie encoding exactly.
+        use crate::common::ende::ValueEnDe;
+        reference
+            .insert(&[1u8], &String::from("a").try_encode().unwrap())
+            .unwrap();
+        reference
+            .insert(&[0u8], &String::from("z").try_encode().unwrap())
+            .unwrap();
+        assert_eq!(dirty_root, reference.root_hash().unwrap());
+    }
 }
 
 // =====================================================================

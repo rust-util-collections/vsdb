@@ -1406,3 +1406,170 @@ mod mpt_proof_tests {
         assert!(!MptCalc::verify_proof(&root_hash, b"wrong_key", &proof).unwrap());
     }
 }
+
+// =====================================================================
+// Cache deserializer structural validation
+//
+// The cache files are a trust boundary: a checksum-valid but malformed
+// file must not be able to drive the tree walkers into states organic
+// trees can never reach (over-256-bit SMT descents that drop the
+// consumed working tree, out-of-range MPT nibbles that panic on branch
+// indexing, or zero-progress nesting that overflows the stack).  These
+// tests craft such trees in memory, serialize them through the real
+// writer (so checksums/framing are valid), and assert the loader
+// rejects them — while organically built trees keep round-tripping
+// (covered by the pre-existing roundtrip tests).
+// =====================================================================
+
+#[cfg(test)]
+mod cache_validation_tests {
+    use crate::trie::cache as mpt_cache;
+    use crate::trie::nibbles::Nibbles;
+    use crate::trie::node::{Node, NodeHandle};
+    use crate::trie::smt::bitpath::BitPath;
+    use crate::trie::smt::cache as smt_cache;
+    use crate::trie::smt::{SmtHandle, SmtNode};
+
+    fn smt_load(root: &SmtHandle) -> crate::trie::error::Result<SmtHandle> {
+        let mut buf = Vec::new();
+        smt_cache::save(root, 0, &[0u8; 32], &mut buf).unwrap();
+        smt_cache::load(&mut buf.as_slice()).map(|(h, _, _)| h)
+    }
+
+    fn mpt_load(root: &NodeHandle) -> crate::trie::error::Result<NodeHandle> {
+        let mut buf = Vec::new();
+        mpt_cache::save(root, 0, &[0u8; 32], &mut buf).unwrap();
+        mpt_cache::load(&mut buf.as_slice()).map(|(h, _, _)| h)
+    }
+
+    fn smt_leaf(key_hash: [u8; 32], path: BitPath) -> SmtHandle {
+        SmtHandle::InMemory(Box::new(SmtNode::Leaf {
+            path,
+            key_hash,
+            value: b"v".to_vec(),
+        }))
+    }
+
+    #[test]
+    fn smt_rejects_cumulative_depth_over_256() {
+        // Two nested internals whose combined paths exceed a 256-bit
+        // key path.  Before validation, loading this and inserting a
+        // key descending through it hit insert_rec's depth rejection —
+        // *after* the working tree had been consumed — silently
+        // emptying the whole tree.
+        let deep_child = SmtHandle::InMemory(Box::new(SmtNode::Internal {
+            path: BitPath::from_bits(&[0; 200]),
+            left: SmtHandle::default(),
+            right: SmtHandle::default(),
+        }));
+        let root = SmtHandle::InMemory(Box::new(SmtNode::Internal {
+            path: BitPath::from_bits(&[0; 200]),
+            left: deep_child,
+            right: SmtHandle::default(),
+        }));
+        assert!(smt_load(&root).is_err());
+    }
+
+    #[test]
+    fn smt_rejects_leaf_incoherent_with_key_hash() {
+        // Leaf path shorter than the remaining key path.
+        let short = smt_leaf([0xAB; 32], BitPath::from_bits(&[1; 100]));
+        assert!(smt_load(&short).is_err());
+
+        // Right length, but positioned on a path that doesn't match
+        // the leaf's own key hash.
+        let mispositioned = smt_leaf([0xAB; 32], BitPath::from_hash(&[0xCD; 32]));
+        assert!(smt_load(&mispositioned).is_err());
+
+        // Coherent leaf loads fine.
+        let coherent = smt_leaf([0xAB; 32], BitPath::from_hash(&[0xAB; 32]));
+        assert!(smt_load(&coherent).is_ok());
+    }
+
+    #[test]
+    fn smt_rejects_bad_cached_hash_length() {
+        // A non-32-byte Cached hash would surface deep inside
+        // commit_rec (whose failure drops the consumed working tree).
+        let root = SmtHandle::Cached(vec![0u8; 5], Box::new(SmtNode::Empty));
+        assert!(smt_load(&root).is_err());
+
+        let ok = SmtHandle::Cached(vec![0u8; 32], Box::new(SmtNode::Empty));
+        assert!(smt_load(&ok).is_ok());
+    }
+
+    #[test]
+    fn mpt_rejects_cumulative_path_over_key_length_cap() {
+        // Three nested 1000-nibble extensions: 3000 nibbles > the
+        // 2 * MAX_MPT_KEY_LEN = 2048 bound organic insertion enforces.
+        // Such a trie bypasses the insertion-time stack-depth cap.
+        let mut h = NodeHandle::InMemory(Box::new(Node::Leaf {
+            path: Nibbles::from_nibbles_unsafe(vec![]),
+            value: b"v".to_vec(),
+        }));
+        for _ in 0..3 {
+            h = NodeHandle::InMemory(Box::new(Node::Extension {
+                path: Nibbles::from_nibbles_unsafe(vec![0u8; 1000]),
+                child: h,
+            }));
+        }
+        assert!(mpt_load(&h).is_err());
+    }
+
+    #[test]
+    fn mpt_rejects_empty_extension_path() {
+        // Organic extensions are never empty; a crafted chain of empty
+        // ones makes zero progress against the nibble budget, so the
+        // walkers (and the deserializer itself) would recurse once per
+        // node with nothing bounding the nesting.  Rejecting the first
+        // empty extension is what keeps the nibble budget a real
+        // recursion bound.
+        let mut h = NodeHandle::InMemory(Box::new(Node::Leaf {
+            path: Nibbles::from_nibbles_unsafe(vec![]),
+            value: b"v".to_vec(),
+        }));
+        for _ in 0..3 {
+            h = NodeHandle::InMemory(Box::new(Node::Extension {
+                path: Nibbles::from_nibbles_unsafe(vec![]),
+                child: h,
+            }));
+        }
+        assert!(mpt_load(&h).is_err());
+    }
+
+    #[test]
+    fn mpt_rejects_out_of_range_nibble_values() {
+        // Branch children are indexed by nibble value; a nibble > 0x0F
+        // from a malformed file would panic on `children[idx]`.
+        // `Nibbles` can't even represent one (debug-asserted), so
+        // patch the serialized payload directly and re-checksum —
+        // exactly what a hand-crafted file could contain.
+        use crate::trie::codec_util::{CHECKSUM_LEN, compute_checksum};
+
+        let root = NodeHandle::InMemory(Box::new(Node::Leaf {
+            path: Nibbles::from_nibbles_unsafe(vec![0x0A]),
+            value: b"v".to_vec(),
+        }));
+        let mut buf = Vec::new();
+        mpt_cache::save(&root, 0, &[0u8; 32], &mut buf).unwrap();
+
+        // Sanity: the loader accepts the untampered file.
+        assert!(mpt_cache::load(&mut buf.as_slice()).is_ok());
+
+        let payload_len = buf.len() - CHECKSUM_LEN;
+        let idx = buf[..payload_len].iter().rposition(|&b| b == 0x0A).unwrap();
+        buf[idx] = 0x1F;
+        let checksum = compute_checksum(&buf[..payload_len]);
+        buf[payload_len..].copy_from_slice(&checksum);
+
+        assert!(mpt_cache::load(&mut buf.as_slice()).is_err());
+    }
+
+    #[test]
+    fn mpt_rejects_bad_cached_hash_length() {
+        let root = NodeHandle::Cached(vec![0u8; 5], Box::new(Node::Null));
+        assert!(mpt_load(&root).is_err());
+
+        let ok = NodeHandle::Cached(vec![0u8; 32], Box::new(Node::Null));
+        assert!(mpt_load(&ok).is_ok());
+    }
+}

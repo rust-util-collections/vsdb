@@ -42,12 +42,14 @@ impl SmtMut {
 
     /// Hashes the entire tree in place and returns the 32-byte root hash.
     ///
-    /// `self`'s root is always restored before returning — on success it
-    /// holds the freshly hashed root; on failure (defensive-only; the
-    /// SMT's 256-bit depth cap makes `commit_rec` failure unreachable in
-    /// practice) it is restored to whatever `commit_rec` handed back
-    /// rather than left empty, so a rejected commit never silently
-    /// discards tree data.
+    /// On success `self`'s root holds the freshly hashed tree, so a
+    /// subsequent call without intervening mutations is essentially
+    /// free.  `commit_rec` can only fail on a `Cached` hash whose
+    /// length isn't 32 bytes — a state neither mutation (all hashes are
+    /// Keccak-256 outputs) nor cache loading (the deserializer rejects
+    /// non-32-byte cached hashes) can produce — so the defensive error
+    /// arm below, which would drop the already-consumed working tree,
+    /// is unreachable.
     pub fn commit(&mut self) -> Result<Vec<u8>> {
         let root = mem::take(&mut self.root);
         match commit_rec(root) {
@@ -183,6 +185,13 @@ fn insert_rec(
                 // Full prefix matches. Descend into the appropriate child.
                 let next_depth = depth + path.len();
                 if next_depth >= full_path.len() {
+                    // Defensive only: organic trees cannot reach this
+                    // (two distinct 256-bit key hashes always diverge
+                    // within 256 bits), and the cache deserializer
+                    // rejects trees whose cumulative depth could.  If
+                    // it ever fired, the consumed working tree would be
+                    // dropped — `SmtMut::insert` cannot restore what
+                    // `insert_rec` has already moved out of.
                     return Err(TrieError::InvalidState(
                         "SMT depth exceeded 256 bits".into(),
                     ));

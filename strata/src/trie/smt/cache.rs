@@ -110,7 +110,7 @@ pub(crate) fn load(r: &mut impl Read) -> Result<(SmtHandle, u64, Vec<u8>)> {
     let root_hash = payload[cursor..cursor + hash_len].to_vec();
     cursor += hash_len;
 
-    let root = deserialize_handle(payload, &mut cursor)?;
+    let root = deserialize_handle(payload, &mut cursor, &BitPath::default())?;
     Ok((root, sync_tag, root_hash))
 }
 
@@ -184,16 +184,46 @@ fn serialize_node(buf: &mut Vec<u8>, node: &SmtNode) {
 // Deserialization
 // =========================================================================
 
-fn deserialize_handle(data: &[u8], cursor: &mut usize) -> Result<SmtHandle> {
+/// Number of bits in a full SMT key path (Keccak-256 key hash).
+const FULL_PATH_BITS: usize = 256;
+/// Byte length of every node hash (Keccak-256 output).
+const NODE_HASH_LEN: usize = 32;
+
+/// Deserializes one handle, validating the whole-tree structure that
+/// per-node checks cannot see.
+///
+/// `prefix` is the routing path accumulated from the root down to this
+/// node (internal-node paths plus one branch bit per level).  The
+/// mutation/query walkers assume every loaded tree is *canonically
+/// positioned* — leaves sit exactly at their key hash's path,
+/// cumulative depth never exceeds 256 bits, and cached hashes are
+/// 32 bytes.  A checksum-valid but malformed file violating any of
+/// these could otherwise drive the walkers into states organic trees
+/// can never reach (an insert-depth rejection that drops the consumed
+/// working tree, out-of-range path arithmetic, or a bad hash length
+/// surfacing as a `commit` failure), so such files are rejected here,
+/// at the trust boundary — the cache is disposable and the caller
+/// simply rebuilds from authoritative data.
+fn deserialize_handle(
+    data: &[u8],
+    cursor: &mut usize,
+    prefix: &BitPath,
+) -> Result<SmtHandle> {
     let tag = read_u8(data, cursor)?;
     match tag {
         HANDLE_INMEMORY => {
-            let node = deserialize_node(data, cursor)?;
+            let node = deserialize_node(data, cursor, prefix)?;
             Ok(SmtHandle::InMemory(Box::new(node)))
         }
         HANDLE_CACHED => {
             let hash = read_bytes(data, cursor)?;
-            let node = deserialize_node(data, cursor)?;
+            if hash.len() != NODE_HASH_LEN {
+                return Err(TrieError::InvalidState(format!(
+                    "SMT cache: cached hash length {} != {NODE_HASH_LEN}",
+                    hash.len()
+                )));
+            }
+            let node = deserialize_node(data, cursor, prefix)?;
             Ok(SmtHandle::Cached(hash, Box::new(node)))
         }
         _ => Err(TrieError::InvalidState(format!(
@@ -202,7 +232,11 @@ fn deserialize_handle(data: &[u8], cursor: &mut usize) -> Result<SmtHandle> {
     }
 }
 
-fn deserialize_node(data: &[u8], cursor: &mut usize) -> Result<SmtNode> {
+fn deserialize_node(
+    data: &[u8],
+    cursor: &mut usize,
+    prefix: &BitPath,
+) -> Result<SmtNode> {
     let tag = read_u8(data, cursor)?;
     match tag {
         NODE_EMPTY => Ok(SmtNode::Empty),
@@ -217,6 +251,16 @@ fn deserialize_node(data: &[u8], cursor: &mut usize) -> Result<SmtNode> {
             key_hash.copy_from_slice(&data[*cursor..*cursor + 32]);
             *cursor += 32;
             let value = read_bytes(data, cursor)?;
+            // A leaf's routing position plus its residual path must
+            // reconstruct its key hash exactly (this is how insert
+            // places leaves, and what every walker assumes).
+            if prefix.len() + path.len() != FULL_PATH_BITS
+                || BitPath::from_hash(&key_hash) != prefix.concat(&path)
+            {
+                return Err(TrieError::InvalidState(
+                    "SMT cache: leaf position incoherent with its key hash".into(),
+                ));
+            }
             Ok(SmtNode::Leaf {
                 path,
                 key_hash,
@@ -225,8 +269,26 @@ fn deserialize_node(data: &[u8], cursor: &mut usize) -> Result<SmtNode> {
         }
         NODE_INTERNAL => {
             let path = read_bitpath(data, cursor)?;
-            let left = deserialize_handle(data, cursor)?;
-            let right = deserialize_handle(data, cursor)?;
+            // Children live one branch bit below the compressed path;
+            // that bit must still fit inside a 256-bit key path.  This
+            // also bounds the deserializer's own recursion (every
+            // level consumes at least the branch bit).
+            if prefix.len() + path.len() >= FULL_PATH_BITS {
+                return Err(TrieError::InvalidState(
+                    "SMT cache: cumulative node depth exceeds 256 bits".into(),
+                ));
+            }
+            let child_base = prefix.concat(&path);
+            let left = deserialize_handle(
+                data,
+                cursor,
+                &child_base.concat(&BitPath::from_bits(&[0])),
+            )?;
+            let right = deserialize_handle(
+                data,
+                cursor,
+                &child_base.concat(&BitPath::from_bits(&[1])),
+            )?;
             Ok(SmtNode::Internal { path, left, right })
         }
         _ => Err(TrieError::InvalidState(format!(

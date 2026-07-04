@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v14.0.7]
+
+Fixes for the two findings the v14.0.6 post-release review surfaced (both
+residuals of the bug class that release addressed).
+
+### Fixed
+
+- **`VerMapWithProof` no longer serves a silently wrong Merkle root after a failed sync.** `batch_update` is documented non-atomic, so a diff whose op is rejected partway (concretely: a committed or uncommitted key over `MAX_MPT_KEY_LEN` with `T = MptCalc` — the `VerMap` layer imposes no key-length limit) left the trie holding a partially applied diff while the sync bookkeeping still claimed the previously synced commit. A later `merkle_root_at_commit(C1)` (or `merkle_root` after rolling the branch back to C1) short-circuited on that stale claim and returned a root over C1-plus-partial-diff data — no error, wrong root (empirically confirmed via both the committed-diff and dirty-overlay paths; v14.0.6 had fixed only the emptied-trie variant of this desync). `sync_to_commit` now poisons the sync state (default trie, no synced commit) on a failed incremental application, forcing a full rebuild on the next sync; `sync_to_branch` restores the clean HEAD snapshot taken just before the dirty overlay, so the trie keeps matching `sync_commit` exactly. Regression tests cover both paths, including re-syncing successfully after the failure.
+- **Trie cache deserializers now validate whole-tree structure, closing the crafted-cache gap in v14.0.6's root-preservation guarantee.** Per-node checks (path ≤ 256 bits, file checksum) could not see cross-node violations, so a checksum-valid but malformed cache file could load trees the walkers can't handle: an SMT whose cumulative descent depth exceeds 256 bits made a later `insert` fail *after* consuming the working tree — silently emptying the whole tree one layer below v14.0.6's `SmtCalc`-level restore (its "a rejected insert never loses tree data" guarantee) — and mispositioned leaves could drive path arithmetic out of range (a release-mode panic); an MPT cache bypassed the insertion-time `MAX_MPT_KEY_LEN` stack-depth cap entirely, and out-of-range nibble values (> `0x0F`) panicked on branch-child indexing. The SMT deserializer now threads the routing prefix down the tree and rejects any leaf whose position+path doesn't reconstruct its own key hash exactly, any internal node pushing cumulative depth past 256 bits, and any cached hash that isn't 32 bytes; the MPT deserializer enforces the cumulative nibble budget (`2 * MAX_MPT_KEY_LEN`), rejects empty extension paths (organic tries never produce them; they were the only zero-progress construct, so the nibble budget is now a real recursion bound), out-of-range nibble values, and non-32-byte cached hashes. Accepted trees are exactly the canonically-positioned ones organic mutation builds; valid caches round-trip unchanged (no format/version change). The `commit()` doc comments on both tries were also corrected — they claimed the root is "restored" on a `commit_rec` failure, but that error arm drops the consumed working tree; it is now genuinely unreachable (MPT `commit_rec` is total; the SMT's only failure input — a bad cached hash length — is rejected at load).
+
 ## [v14.0.6]
 
 Full-codebase audit sweep (9 parallel subsystem reviews) with every finding

@@ -15,6 +15,7 @@ use crate::trie::codec_util::{
     write_bytes, write_varint,
 };
 use crate::trie::error::{Result, TrieError};
+use crate::trie::mpt::MAX_MPT_KEY_LEN;
 use crate::trie::nibbles::Nibbles;
 use crate::trie::node::{Node, NodeHandle};
 use std::fs::File;
@@ -23,6 +24,16 @@ use std::path::Path;
 
 const MAGIC: &[u8; 4] = b"MPTC";
 const VERSION: u8 = 1;
+
+/// Maximum cumulative nibbles consumed from the root down to any node —
+/// the deepest position an organic trie can reach, since insertion
+/// rejects keys over [`MAX_MPT_KEY_LEN`] bytes (2 nibbles per byte).
+///
+/// Together with the empty-extension rejection below (every level
+/// consumes at least one nibble), this also bounds the deserializer's
+/// recursion — and every later tree walk — to the same depth organic
+/// tries are already documented to stay within.
+const MAX_TOTAL_NIBBLES: usize = 2 * MAX_MPT_KEY_LEN;
 
 // =========================================================================
 // Public API (called from MptCalc)
@@ -110,7 +121,7 @@ pub(crate) fn load(r: &mut impl Read) -> Result<(NodeHandle, u64, Vec<u8>)> {
     let root_hash = payload[cursor..cursor + hash_len].to_vec();
     cursor += hash_len;
 
-    let root = deserialize_handle(payload, &mut cursor)?;
+    let root = deserialize_handle(payload, &mut cursor, 0)?;
     Ok((root, sync_tag, root_hash))
 }
 
@@ -206,16 +217,39 @@ fn serialize_node(buf: &mut Vec<u8>, node: &Node) {
 // Deserialization
 // =========================================================================
 
-fn deserialize_handle(data: &[u8], cursor: &mut usize) -> Result<NodeHandle> {
+/// Deserializes one handle, validating whole-tree structure that
+/// per-node checks cannot see.
+///
+/// `consumed` is the number of nibbles consumed from the root down to
+/// this node.  The tree walkers (insert / remove / commit / `Drop`
+/// glue) recurse per level and index branch children by nibble value,
+/// assuming every loaded trie stays within the bounds organic
+/// insertion enforces ([`MAX_MPT_KEY_LEN`], non-empty extensions,
+/// nibble values < 16).  A checksum-valid but malformed file violating
+/// those bounds could otherwise overflow the stack or panic on child
+/// indexing, so it is rejected here, at the trust boundary — the cache
+/// is disposable and the caller simply rebuilds from authoritative
+/// data.
+fn deserialize_handle(
+    data: &[u8],
+    cursor: &mut usize,
+    consumed: usize,
+) -> Result<NodeHandle> {
     let tag = read_u8(data, cursor)?;
     match tag {
         HANDLE_INMEMORY => {
-            let node = deserialize_node(data, cursor)?;
+            let node = deserialize_node(data, cursor, consumed)?;
             Ok(NodeHandle::InMemory(Box::new(node)))
         }
         HANDLE_CACHED => {
             let hash = read_bytes(data, cursor)?;
-            let node = deserialize_node(data, cursor)?;
+            if hash.len() != 32 {
+                return Err(TrieError::InvalidState(format!(
+                    "MPT cache: cached hash length {} != 32",
+                    hash.len()
+                )));
+            }
+            let node = deserialize_node(data, cursor, consumed)?;
             Ok(NodeHandle::Cached(hash, Box::new(node)))
         }
         _ => Err(TrieError::InvalidState(format!(
@@ -224,18 +258,30 @@ fn deserialize_handle(data: &[u8], cursor: &mut usize) -> Result<NodeHandle> {
     }
 }
 
-fn deserialize_node(data: &[u8], cursor: &mut usize) -> Result<Node> {
+fn deserialize_node(data: &[u8], cursor: &mut usize, consumed: usize) -> Result<Node> {
     let tag = read_u8(data, cursor)?;
     match tag {
         NODE_NULL => Ok(Node::Null),
         NODE_LEAF => {
             let path = read_nibbles(data, cursor)?;
+            check_nibble_budget(consumed, path.len())?;
             let value = read_bytes(data, cursor)?;
             Ok(Node::Leaf { path, value })
         }
         NODE_EXT => {
             let path = read_nibbles(data, cursor)?;
-            let child = deserialize_handle(data, cursor)?;
+            // Organic extensions are never empty (every construction
+            // site guards or merges paths).  An empty one makes zero
+            // progress, so a crafted chain of them would recurse — in
+            // the walkers and in this deserializer — without ever
+            // exhausting the nibble budget.
+            if path.is_empty() {
+                return Err(TrieError::InvalidState(
+                    "MPT cache: empty extension path".into(),
+                ));
+            }
+            check_nibble_budget(consumed, path.len())?;
+            let child = deserialize_handle(data, cursor, consumed + path.len())?;
             Ok(Node::Extension { path, child })
         }
         NODE_BRANCH => {
@@ -254,19 +300,33 @@ fn deserialize_node(data: &[u8], cursor: &mut usize) -> Result<Node> {
                 None
             };
 
+            // Descending into a child consumes the routing nibble.
+            check_nibble_budget(consumed, 1)?;
+
             let mut children: Box<[Option<NodeHandle>; 16]> = Box::new([
                 None, None, None, None, None, None, None, None, None, None, None, None,
                 None, None, None, None,
             ]);
             for i in 0..16 {
                 if (bitmap & (1 << i)) != 0 {
-                    children[i] = Some(deserialize_handle(data, cursor)?);
+                    children[i] = Some(deserialize_handle(data, cursor, consumed + 1)?);
                 }
             }
             Ok(Node::Branch { children, value })
         }
         _ => Err(TrieError::InvalidState(format!("invalid node tag: {tag}"))),
     }
+}
+
+/// Rejects a node whose path would push the cumulative consumed-nibble
+/// count past what any organically inserted key can reach.
+fn check_nibble_budget(consumed: usize, additional: usize) -> Result<()> {
+    if consumed + additional > MAX_TOTAL_NIBBLES {
+        return Err(TrieError::InvalidState(
+            "MPT cache: cumulative path length exceeds MAX_MPT_KEY_LEN".into(),
+        ));
+    }
+    Ok(())
 }
 
 // =========================================================================
@@ -286,5 +346,12 @@ fn read_nibbles(data: &[u8], cursor: &mut usize) -> Result<Nibbles> {
     }
     let raw = data[*cursor..*cursor + len].to_vec();
     *cursor += len;
+    // Branch children are indexed by nibble value — an out-of-range
+    // nibble from a malformed file would panic on `children[idx]`.
+    if raw.iter().any(|&n| n > 0x0F) {
+        return Err(TrieError::InvalidState(
+            "MPT cache: nibble value out of range".into(),
+        ));
+    }
     Ok(Nibbles::from_nibbles_unsafe(raw))
 }
