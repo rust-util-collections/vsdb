@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v14.0.10]
+
+### Fixed
+
+- **Write buffers now scale with a detected memory limit (follow-up to
+  v14.0.9).** v14.0.9 clamped the sizing INPUT to the cgroup/env budget,
+  but the write-buffer branch for budgets <= 16 GB is a fixed
+  `1 GB / NUM_SHARDS` floor, and each shard holds one active memtable
+  plus up to `max_immutable_memtables` (4) frozen ones -- a worst-case
+  memtable footprint of ~5 GB regardless of a 2-3 GB ceiling. An ingest
+  burst under such a limit pinned anonymous memory at the throttle line
+  (`memory.high`), and the resulting reclaim pressure slowed the very
+  flush threads that are the only way out: the process wedged at the
+  limit with tens of thousands of `memory.events: high` entries
+  (reproduced empirically; the v14.0.9 clamp alone shrank the block
+  cache but not this). When (and only when) a limit tightened the
+  budget, the per-shard write buffer is now additionally capped at
+  `budget / 8 / NUM_SHARDS` (floor 4 MB), bounding the worst-case
+  memtable footprint at ~5/8 of budget alongside the block cache's 1/8.
+  Unconstrained hosts keep the legacy sizing byte-for-byte.
+
 ## [v14.0.9]
 
 ### Fixed
