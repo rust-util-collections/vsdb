@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v14.0.9]
+
+### Fixed
+
+- **Engine cache sizing now respects the process's cgroup memory limit.**
+  `mmdb_open` sized write buffers and the block cache from host-wide
+  `MemAvailable` alone, so a process running under a systemd
+  `MemoryHigh`/`MemoryMax` drop-in or a container memory limit computed
+  budgets from memory it is not allowed to use -- on a 32 GB host with a
+  12.8 GB cgroup ceiling, engine caches alone (~7.5 GB) grew the process
+  to the OOM-kill line during bulk ingest (observed in production as
+  unbounded-looking anonymous-memory growth of a service holding a
+  1.2 GB store). The budget is now
+  `min(host MemAvailable, cgroup limit, VSDB_MEM_BUDGET_MB)`: the cgroup
+  walk covers v2 (`memory.max` + `memory.high`, unified hierarchy) and
+  v1 (`memory.limit_in_bytes`), takes the tightest ancestor limit
+  (limits are hierarchical), and treats `max`/PAGE_COUNTER_MAX-style
+  sentinels as unlimited; the new `VSDB_MEM_BUDGET_MB` env var is an
+  explicit highest-precedence bound for operators who want engine
+  memory below any detected limit.
+
 ## [v14.0.8]
 
 ### Fixed

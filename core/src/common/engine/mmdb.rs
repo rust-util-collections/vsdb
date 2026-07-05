@@ -589,11 +589,89 @@ fn check_bound_hi(full_key: &[u8], bound: &Bound<Vec<u8>>) -> bool {
     }
 }
 
+/// The memory ceiling imposed on THIS process by its cgroup, if any.
+///
+/// systemd resource limits (`MemoryHigh`/`MemoryMax`) and container
+/// runtimes express themselves as cgroup memory controllers; a process
+/// running under one sees whole-host numbers in `/proc/meminfo`, so
+/// cache sizing must clamp to the controller's limit or the engine's
+/// caches alone can exceed the OOM-kill line. Returns the tightest
+/// limit found walking from this process's cgroup up to the root
+/// (limits are hierarchical: an ancestor's ceiling binds every
+/// descendant), or `None` when unlimited/undetectable (non-Linux,
+/// no cgroup, or all-`max` paths).
+#[cfg(target_os = "linux")]
+fn cgroup_mem_limit_bytes() -> Option<usize> {
+    fn parse_limit(s: &str) -> Option<usize> {
+        let t = s.trim();
+        if t.is_empty() || t == "max" {
+            return None;
+        }
+        // v1 reports "no limit" as a platform-dependent huge number
+        // (PAGE_COUNTER_MAX); treat anything >= 2^60 as unlimited.
+        t.parse::<usize>().ok().filter(|&v| v < (1usize << 60))
+    }
+
+    // /proc/self/cgroup line: `0::/system.slice/foo.service` (v2) or
+    // `N:memory:/path` (v1).
+    let cg = fs::read_to_string("/proc/self/cgroup").ok()?;
+    let mut tightest: Option<usize> = None;
+    let mut consider = |v: usize| {
+        tightest = Some(tightest.map_or(v, |t| cmp::min(t, v)));
+    };
+
+    for line in cg.lines() {
+        let mut parts = line.splitn(3, ':');
+        let (Some(_), Some(controllers), Some(path)) =
+            (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        let (mount, files): (&str, &[&str]) = if controllers.is_empty() {
+            // v2 unified hierarchy: memory.max is the hard (OOM) line;
+            // memory.high is the throttle line -- respect the tighter.
+            ("/sys/fs/cgroup", &["memory.max", "memory.high"])
+        } else if controllers.split(',').any(|c| c == "memory") {
+            ("/sys/fs/cgroup/memory", &["memory.limit_in_bytes"])
+        } else {
+            continue;
+        };
+
+        // Walk this cgroup and every ancestor up to the mount root.
+        let mut rel = path.trim_start_matches('/');
+        loop {
+            for f in files {
+                let p = if rel.is_empty() {
+                    format!("{mount}/{f}")
+                } else {
+                    format!("{mount}/{rel}/{f}")
+                };
+                if let Some(v) =
+                    fs::read_to_string(p).ok().as_deref().and_then(parse_limit)
+                {
+                    consider(v);
+                }
+            }
+            match rel.rfind('/') {
+                Some(i) => rel = &rel[..i],
+                None if !rel.is_empty() => rel = "",
+                None => break,
+            }
+        }
+    }
+    tightest
+}
+
+#[cfg(not(target_os = "linux"))]
+fn cgroup_mem_limit_bytes() -> Option<usize> {
+    None
+}
+
 fn mmdb_open(dir: &std::path::Path) -> Result<DB> {
     const G: usize = GB as usize;
 
     // Detect available physical memory (platform-specific).
-    let avail_mem_bytes: usize = {
+    let host_avail_bytes: usize = {
         #[cfg(target_os = "linux")]
         {
             fs::read_to_string("/proc/meminfo")
@@ -635,6 +713,28 @@ fn mmdb_open(dir: &std::path::Path) -> Result<DB> {
         {
             G
         }
+    };
+
+    // The effective budget is the smallest of: host MemAvailable, this
+    // process's own cgroup memory ceiling (a containerized/systemd-limited
+    // process must not size caches off whole-host numbers -- the sum of
+    // write buffers + block cache would land right at the cgroup's kill
+    // line), and an explicit `VSDB_MEM_BUDGET_MB` override (highest
+    // precedence bound; useful when the operator wants engine memory well
+    // below any detected limit).
+    let avail_mem_bytes = {
+        let mut budget = host_avail_bytes;
+        if let Some(limit) = cgroup_mem_limit_bytes() {
+            budget = cmp::min(budget, limit);
+        }
+        if let Some(v) = std::env::var("VSDB_MEM_BUDGET_MB")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .and_then(|mb| mb.checked_mul(1024 * 1024))
+        {
+            budget = cmp::min(budget, v);
+        }
+        budget
     };
 
     // Per-shard sizes: divide totals by NUM_SHARDS
@@ -693,6 +793,23 @@ fn mmdb_open(dir: &std::path::Path) -> Result<DB> {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn cgroup_mem_limit_is_sane_or_absent() {
+        // Non-Linux platforms must report None; on Linux the walk must
+        // not panic and any detected limit must be a real bound (the
+        // parser rejects v1's PAGE_COUNTER_MAX-style "unlimited"
+        // sentinels), never zero.
+        match cgroup_mem_limit_bytes() {
+            None => {}
+            Some(v) => {
+                assert!(v > 0);
+                assert!(v < (1usize << 60));
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        assert!(cgroup_mem_limit_bytes().is_none());
+    }
 
     fn tmp_dir(tag: &str) -> std::path::PathBuf {
         let nanos = SystemTime::now()
