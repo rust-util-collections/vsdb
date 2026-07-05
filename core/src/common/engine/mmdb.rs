@@ -722,23 +722,45 @@ fn mmdb_open(dir: &std::path::Path) -> Result<DB> {
     // line), and an explicit `VSDB_MEM_BUDGET_MB` override (highest
     // precedence bound; useful when the operator wants engine memory well
     // below any detected limit).
+    let mut budget_limited = false;
     let avail_mem_bytes = {
         let mut budget = host_avail_bytes;
         if let Some(limit) = cgroup_mem_limit_bytes() {
-            budget = cmp::min(budget, limit);
+            if limit < budget {
+                budget = limit;
+                budget_limited = true;
+            }
         }
         if let Some(v) = std::env::var("VSDB_MEM_BUDGET_MB")
             .ok()
             .and_then(|v| v.trim().parse::<usize>().ok())
             .and_then(|mb| mb.checked_mul(1024 * 1024))
         {
-            budget = cmp::min(budget, v);
+            if v < budget {
+                budget = v;
+                budget_limited = true;
+            }
         }
         budget
     };
 
-    // Per-shard sizes: divide totals by NUM_SHARDS
-    let wr_buffer_size = cmp::min(
+    // Per-shard sizes: divide totals by NUM_SHARDS.
+    //
+    // Under a DETECTED limit (cgroup or env override) the write-buffer
+    // term must also scale with the budget: each shard can hold one
+    // active memtable plus `max_immutable_memtables` frozen ones
+    // awaiting flush, so the worst-case memtable footprint is
+    // wr_buffer_size * (1 + max_immutable) * NUM_SHARDS. With the
+    // legacy fixed floor (GB / NUM_SHARDS) that worst case is ~5 GB
+    // regardless of any 2-3 GB ceiling -- an ingest burst then pins
+    // anonymous memory at the throttle line, and the reclaim pressure
+    // slows the very flush threads that are the only way out (observed
+    // as a service wedged at memory.high with tens of thousands of
+    // memory.events:high). budget/8 across all shards keeps the worst
+    // case (5x active) at ~5/8 of budget, leaving the rest for the
+    // block cache (budget/8) and per-connection transients. On
+    // unconstrained hosts the sizing is unchanged.
+    let legacy_wr = cmp::min(
         if avail_mem_bytes > 16 * G {
             avail_mem_bytes / 4 / NUM_SHARDS
         } else {
@@ -746,6 +768,14 @@ fn mmdb_open(dir: &std::path::Path) -> Result<DB> {
         },
         512 * 1024 * 1024,
     );
+    let wr_buffer_size = if budget_limited {
+        cmp::max(
+            cmp::min(legacy_wr, avail_mem_bytes / 8 / NUM_SHARDS),
+            4 * 1024 * 1024,
+        )
+    } else {
+        legacy_wr
+    };
 
     let block_cache_size = (avail_mem_bytes as u64) / 8 / NUM_SHARDS as u64;
 
