@@ -725,21 +725,20 @@ fn mmdb_open(dir: &std::path::Path) -> Result<DB> {
     let mut budget_limited = false;
     let avail_mem_bytes = {
         let mut budget = host_avail_bytes;
-        if let Some(limit) = cgroup_mem_limit_bytes() {
-            if limit < budget {
-                budget = limit;
-                budget_limited = true;
-            }
+        if let Some(limit) = cgroup_mem_limit_bytes()
+            && limit < budget
+        {
+            budget = limit;
+            budget_limited = true;
         }
         if let Some(v) = std::env::var("VSDB_MEM_BUDGET_MB")
             .ok()
             .and_then(|v| v.trim().parse::<usize>().ok())
             .and_then(|mb| mb.checked_mul(1024 * 1024))
+            && v < budget
         {
-            if v < budget {
-                budget = v;
-                budget_limited = true;
-            }
+            budget = v;
+            budget_limited = true;
         }
         budget
     };
