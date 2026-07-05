@@ -99,9 +99,10 @@ vsdb (workspace)
 
 ## Documentation
 
-- [API Examples](strata/docs/api.md)
+- [API Examples](strata/docs/api.md) — Mapx, MapxOrd, VerMap, MptCalc/SmtCalc, VerMapWithProof, SlotDex
 - [Versioned Module — Architecture & Internals](strata/docs/versioned.md)
 - [VecDex — HNSW Vector Index](strata/docs/vecdex.md)
+- [Changelog](CHANGELOG.md)
 
 ## License
 

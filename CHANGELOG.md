@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v14.0.8]
+
+### Fixed
+
+- **Safety comments relaxed to per-key granularity.** The `shadow()` SAFETY
+  comments and docs incorrectly claimed a global single-writer constraint
+  (SWMR / "all shadows must be dropped before the next write"). The actual
+  contract is per-key: concurrent writers on disjoint keys are safe — the
+  engine provides snapshot isolation and per-key shard routing.
+- **`from_bytes()` no longer requires "same code version".** The doc comments
+  incorrectly required the same code version for deserialization.
+  `from_prefix_slice` performs no memory-unsafe operation itself; the real
+  requirement is unique ownership of the prefix bytes.
+
 ## [v14.0.7]
 
 Fixes for the two findings the v14.0.6 post-release review surfaced (both
