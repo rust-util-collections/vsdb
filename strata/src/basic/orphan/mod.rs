@@ -84,35 +84,32 @@ where
     ///
     /// # Safety
     ///
-    /// The caller must enforce Single-Writer-Multiple-Readers (SWMR):
-    /// no mutation (`set_value`, `get_mut`) may occur on the original
-    /// **or** any shadow while any shadow exists.  All shadows must be
-    /// dropped before the next write.
+    /// The caller must ensure no concurrent writes to the same key
+    /// through any handle.  Multiple writers on disjoint keys are safe.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
         Self {
             // SAFETY: forwards this fn's `unsafe` contract — the caller
-            // guarantees the SWMR discipline (no concurrent writes through
-            // the shadow and the original).
+            // guarantees no concurrent writes to the same key through
+            // any handle.
             inner: unsafe { self.inner.shadow() },
         }
     }
 
     /// Reconstructs an `Orphan` from a byte slice previously produced by
-    /// [`as_bytes`](Self::as_bytes) on a valid instance of the same type
-    /// and code version.
+    /// [`as_bytes`](Self::as_bytes) on a valid instance of the same type.
     ///
     /// # Safety
     ///
-    /// Passing any other bytes (corrupted, truncated, or from a different
-    /// type / code version) is undefined behavior and may cause panics
+    /// The caller must ensure that `s` encodes a prefix they have unique
+    /// ownership of.  Passing arbitrary bytes (corrupted, truncated, or
+    /// from a different type) is undefined behavior and may cause panics
     /// or silent data corruption on subsequent operations.
     #[inline(always)]
     pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
         Self {
             // SAFETY: forwards this fn's `unsafe` contract — the caller
-            // guarantees `s` was produced by `as_bytes()` on the same type
-            // and code version.
+            // guarantees `s` encodes a uniquely-owned prefix.
             inner: unsafe { MapxOrdRawKey::from_bytes(s) },
         }
     }
@@ -214,10 +211,9 @@ where
     /// recovered: it *is* the raw prefix). If the original handle that
     /// produced this `instance_id` (or another `from_meta`/`shadow`
     /// restore of it) is still alive in-process, the same
-    /// Single-Writer-Multiple-Readers (SWMR) discipline documented on
+    /// no-concurrent-writes-to-the-same-key discipline documented on
     /// [`shadow`](Self::shadow) applies across **every** live alias: no
-    /// mutation may occur on any one of them while any other is in use
-    /// for writing. `from_meta` is intended to restore a handle after
+    /// concurrent writes to the same key through any handle. `from_meta` is intended to restore a handle after
     /// the original has gone out of scope (e.g. across a process
     /// restart); calling it while the original is still live requires
     /// the same care as `shadow()`, even though this function is safe

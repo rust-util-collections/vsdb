@@ -113,10 +113,9 @@ impl Mapx {
     // bypasses the borrow checker's exclusivity guarantee.
     //
     // Callers MUST ensure:
-    // - No concurrent reads and writes to the same key.
+    // - No concurrent writes to the same key through any handle.
+    //   Multiple writers on disjoint keys are safe.
     // - No concurrent iteration and mutation.
-    // - Essentially, the caller must uphold single-writer semantics
-    //   externally.
     pub(crate) unsafe fn shadow(&self) -> Self {
         Self {
             prefix: Prefix::from_bytes(self.prefix.to_bytes()),

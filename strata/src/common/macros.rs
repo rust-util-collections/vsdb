@@ -45,20 +45,16 @@ macro_rules! define_map_wrapper {
             /// # Safety
             ///
             /// Creates a second handle to the same underlying storage, bypassing
-            /// Rust's aliasing guarantees.  The caller **must** enforce
-            /// Single-Writer-Multiple-Readers (SWMR) for the entire lifetime
-            /// of the shadow:
-            ///
-            /// - No `insert`, `remove`, `set_value`, or other mutation may occur
-            ///   on the original **or** any other shadow while the shadow exists.
-            /// - Multiple concurrent *reads* are permitted.
-            /// - All shadows must be dropped before the next write.
+            /// Rust's aliasing guarantees.  The caller **must** ensure no
+            /// concurrent writes to the same key through any handle.  Multiple
+            /// writers on disjoint keys are safe.  Concurrent reads alongside
+            /// writes are safe (the engine provides snapshot isolation).
             #[inline(always)]
             pub unsafe fn shadow(&self) -> Self {
                 Self {
                     // SAFETY: forwards this fn's `unsafe` contract — the
-                    // caller guarantees the SWMR discipline (no concurrent
-                    // writes through the shadow and the original).
+                    // caller guarantees no concurrent writes to the same
+                    // key through any handle.
                     inner: unsafe { self.inner.shadow() },
                     $phantom_field: std::marker::PhantomData,
                 }
@@ -68,16 +64,16 @@ macro_rules! define_map_wrapper {
             ///
             /// Reconstructs a handle from a raw byte slice that was previously
             /// produced by [`as_bytes`](Self::as_bytes) on a valid instance of
-            /// the **same type and code version**.  Passing any other bytes
-            /// (corrupted, truncated, from a different type, or from an
-            /// incompatible code version) is undefined behavior and may cause
-            /// panics or silent data corruption on subsequent operations.
+            /// the **same type**.  The caller must ensure `s` encodes a prefix
+            /// they have unique ownership of.  Passing arbitrary bytes
+            /// (corrupted, truncated, or from a different type) is undefined
+            /// behavior and may cause panics or silent data corruption on
+            /// subsequent operations.
             #[inline(always)]
             pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
                 Self {
                     // SAFETY: forwards this fn's `unsafe` contract — the
-                    // caller guarantees `s` was produced by `as_bytes()` on
-                    // the same type and code version.
+                    // caller guarantees `s` encodes a uniquely-owned prefix.
                     inner: unsafe { <$inner_type>::from_bytes(s) },
                     $phantom_field: std::marker::PhantomData,
                 }
@@ -138,10 +134,10 @@ macro_rules! define_map_wrapper {
             /// the raw prefix).  If the original handle that produced
             /// this `instance_id` (or another `from_meta`/`shadow`
             /// restore of it) is still alive in-process, the same
-            /// Single-Writer-Multiple-Readers (SWMR) discipline
+            /// no-concurrent-writes-to-the-same-key discipline
             /// documented on [`shadow`](Self::shadow) applies across
-            /// **every** live alias: no mutation may occur on any one
-            /// of them while any other is in use for writing.
+            /// **every** live alias: no concurrent writes to the same
+            /// key through any handle.
             /// `from_meta` is intended to restore a handle after the
             /// original has gone out of scope (e.g. across a process
             /// restart); calling it while the original is still live

@@ -129,7 +129,7 @@ where
     pub unsafe fn insert_encoded_value(&mut self, key: &K, value: impl AsRef<[u8]>) {
         // SAFETY: forwards this fn's `unsafe` contract — the caller
         // guarantees `value` is the exact `ValueEnDe::encode` output for
-        // this value type and code version.
+        // this value type.
         unsafe { self.inner.insert_encoded_value(key.to_bytes(), value) }
     }
 

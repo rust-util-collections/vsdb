@@ -106,10 +106,12 @@ where
     ///
     /// # Safety
     ///
-    /// This API breaks Rust's semantic safety guarantees. Use only in a race-free environment.
+    /// This API breaks Rust's semantic safety guarantees. The caller must
+    /// ensure no concurrent writes to the same key through any handle.
     #[inline(always)]
     pub unsafe fn shadow_inner(&self) -> DagMapRaw {
-        // SAFETY: Caller enforces SWMR — only one writer at a time.
+        // SAFETY: forwards this fn's `unsafe` contract — the caller
+        // guarantees no concurrent writes to the same key.
         unsafe { self.inner.shadow() }
     }
 
@@ -117,10 +119,12 @@ where
     ///
     /// # Safety
     ///
-    /// This API breaks Rust's semantic safety guarantees. Use only in a race-free environment.
+    /// This API breaks Rust's semantic safety guarantees. The caller must
+    /// ensure no concurrent writes to the same key through any handle.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> DagMapRawKey<V> {
-        // SAFETY: Caller enforces SWMR — only one writer at a time.
+        // SAFETY: forwards this fn's `unsafe` contract — the caller
+        // guarantees no concurrent writes to the same key.
         unsafe {
             Self {
                 inner: self.shadow_inner(),

@@ -95,15 +95,17 @@ impl MapxRaw {
     ///
     /// # Safety
     ///
-    /// This API breaks the semantic safety guarantees of Rust's ownership and borrowing rules.
-    /// It is safe to use in a race-free environment where you can guarantee that no two
-    /// threads will access the same data concurrently.
+    /// This API breaks the semantic safety guarantees of Rust's ownership and
+    /// borrowing rules.  The caller must ensure no concurrent writes to the
+    /// same key through any handle.  Multiple writers on disjoint keys are
+    /// safe.  Concurrent reads alongside writes are safe (the engine provides
+    /// snapshot isolation).
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
         Self {
             // SAFETY: forwards this fn's `unsafe` contract — the caller
-            // guarantees the SWMR discipline (no concurrent writes through
-            // the shadow and the original).
+            // guarantees no concurrent writes to the same key through
+            // any handle.
             inner: unsafe { self.inner.shadow() },
         }
     }
@@ -397,16 +399,16 @@ impl MapxRaw {
     ///
     /// # Safety
     ///
-    /// The caller must ensure that `s` was produced by [`as_bytes`](Self::as_bytes)
-    /// on a valid instance of the **same code version**, and that the
-    /// underlying VSDB database still contains the data for this prefix.
-    /// Passing arbitrary bytes is undefined behavior.
+    /// The caller must ensure that `s` encodes a prefix they have unique
+    /// ownership of and that the underlying VSDB database still contains
+    /// the data for this prefix.  Passing arbitrary bytes is undefined
+    /// behavior.
     #[inline(always)]
     pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
         Self {
             // SAFETY: forwards this fn's `unsafe` contract — the caller
-            // guarantees `s` was produced by `as_bytes()` on the same code
-            // version and that the backing data still exists.
+            // guarantees `s` encodes a uniquely-owned prefix and that the
+            // backing data still exists.
             inner: unsafe { engine::Mapx::from_prefix_slice(s) },
         }
     }

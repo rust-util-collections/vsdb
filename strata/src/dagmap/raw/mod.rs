@@ -171,10 +171,10 @@ impl DagMapRaw {
     ///
     /// # Safety
     ///
-    /// The caller must enforce Single-Writer-Multiple-Readers (SWMR):
-    /// no mutation (`insert`, `remove`, `destroy`) may occur on the
-    /// original **or** any shadow while any shadow exists.  All shadows
-    /// must be dropped before the next write.
+    /// The caller must ensure no concurrent writes to the same key
+    /// through any handle.  Multiple writers on disjoint keys are safe.
+    /// Note: structural mutations (`destroy`, reparenting) have
+    /// cross-key side effects — only one such operation at a time.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
         unsafe {
