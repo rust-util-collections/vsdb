@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v14.0.14]
+
+### Changed
+
+- **B+ tree node writes are batched per operation.** `PersistentBTree`
+  now stages the COW node group of each `insert`/`remove`/`bulk_load`
+  in a write buffer and lands it through ONE engine write batch at the
+  end of the operation, instead of one engine put per node — per-node
+  shard-lock/WAL overhead is paid once per operation, and the node
+  group becomes all-or-nothing (a torn, partially-written path-copy
+  can no longer appear on disk; previously it was benign but had to be
+  swept by recovery). Intra-operation churn (split/borrow/merge
+  intermediates) is discarded from the buffer and never reaches the
+  engine at all. `bulk_load` flushes in bounded chunks, so its buffer
+  cannot grow with the dataset. No API or crash-ordering change:
+  the buffer is always drained before a root escapes to the caller,
+  so branch state still lands strictly after the nodes it references.
+  Versioned write benches improve ~10-20% (insert −20%, merge −12%);
+  read paths are untouched apart from one branch on an empty map.
+
 ## [v14.0.13]
 
 ### Added
