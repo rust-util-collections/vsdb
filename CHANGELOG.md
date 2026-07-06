@@ -2,6 +2,66 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v15.0.0]
+
+### Changed (BREAKING)
+
+- **SlotDex and VecDex are single-handle, crash-atomic structures.**
+  All persistent state of each instance now lives in ONE `MapxRaw`
+  handle, namespaced by a leading tag byte, and every mutation stages
+  its rows through a read-your-writes overlay (`common/staged.rs`) and
+  commits them in ONE atomic engine write batch. A crash can no longer
+  leave either structure internally inconsistent, at any point.
+  - SlotDex: entry rows (`0x00|slot|key`), level count rows
+    (`0x01|level|floor`, level 0 = per-slot counts, levels >= 1 = the
+    tier stack), grand total (`0x02`). The per-slot `DataCtner`
+    (Small/Large) container model and the per-tier nested handles are
+    gone; tier growth writes ordinary data rows.
+  - VecDex: vectors (`0x00`), adjacency (`0x01`), key mappings
+    (`0x02`/`0x03`), node info (`0x04`), graph state (`0x05`). The six
+    separate handles are gone; the crash reconcile/relink pass
+    (`recover_after_crash`) is gone because torn states are no longer
+    representable.
+- **The bit-63 dirty-count protocol is removed** (`common/dirty_count`
+  module deleted). Counts are stored as plain values; crash consistency
+  comes from mutation atomicity, not from a dirty flag + rebuild.
+- **`save_meta` is uniform pure persistence again.** SlotDex and VecDex
+  `save_meta` now take `&self`, have no side effects, and their
+  serialized handle metadata is **create-time constant** (single prefix
+  plus creation-time config): saving once at creation is sufficient for
+  the lifetime of the instance, matching every other handle type. A
+  top-level application struct that embeds these structures no longer
+  needs periodic metadata re-saves or shutdown-time save cascades.
+- **Persisted-layout compatibility:** SlotDex/VecDex metadata written by
+  v14 and earlier is rejected on restore (explicit layout-version check;
+  the old multi-handle payload cannot be decoded positionally). There is
+  no in-place upgrade path — rebuild the index from source data.
+- `hnsw::search_layer`/`get_neighbors` now read adjacency through the
+  `AdjRead` abstraction (raw store on search paths, staged transaction
+  on mutation paths); the adjacency compound key gained the namespace
+  tag byte (10 bytes total).
+
+### Performance (measured, 100k-entry SlotDex / 10k x dim-128 VecDex)
+
+- SlotDex `insert` −53%, `remove` −64% (one write batch replaces
+  multiple engine puts).
+- SlotDex reverse paging −16..−65% for `tier_capacity >= 8` (engine
+  reverse iterators are avoided entirely: descending walks now chunk
+  forward scans off the in-memory level-1 anchors and reverse them in
+  memory); `tier_capacity = 4` is neutral. Forward paging: large pages
+  −2..−11%, small pages up to +18% at some capacities (fixed per-query
+  iterator-creation cost over fewer, cheaper rows; low single-digit
+  microseconds absolute).
+- VecDex `insert` −33% wall-clock on a clean engine (the per-transaction
+  decoded-vector cache removes redundant postcard decodes; one batch
+  replaces dozens of puts). `insert_batch` now stages chunks of 64
+  inserts per atomic batch.
+- VecDex `search` on a flushed engine: unchanged (within noise). While
+  a large unflushed write backlog sits in the single shard, search
+  latency is ~2-3x the old multi-handle layout (transient read
+  amplification; cleared by `vsdb_flush()` / memtable rotation) — flush
+  after bulk loads, as write-cycle-flushing applications already do.
+
 ## [v14.0.14]
 
 ### Changed

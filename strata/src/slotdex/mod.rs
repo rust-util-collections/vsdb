@@ -3,22 +3,48 @@
 //! [`SlotDex`] is a skip-list-like data structure ideal for indexing and
 //! querying large datasets where entries are associated with a slot
 //! (e.g., a timestamp or sequence number).
+//!
+//! # Storage model (single-handle, crash-atomic)
+//!
+//! All persistent state lives in **one** [`MapxRaw`] handle, namespaced
+//! by a leading tag byte:
+//!
+//! ```text
+//! [0x00 | slot_be | key_be]      -> []        one row per entry
+//! [0x01 | level:u8 | floor_be]   -> u64 LE    bucket counts
+//! [0x02]                         -> u64 LE    grand total
+//! ```
+//!
+//! Level `0` holds per-slot entry counts; level `l >= 1` coarsens slots
+//! by `tier_capacity^l` (the tier acceleration stack). Because every
+//! mutation stages its rows and commits them through a single engine
+//! write batch, on-disk state is always internally consistent — there is
+//! no dirty flag and no rebuild-on-recovery path.
+//!
+//! The serialized form of a `SlotDex` (its typed handle metadata) is the
+//! raw prefix of the single handle plus the two creation-time constants
+//! `tier_capacity` and `swap_order`. It is **create-time constant**:
+//! growing or shrinking the tier stack only writes ordinary data rows,
+//! never new handles, so the metadata saved once at creation stays valid
+//! for the lifetime of the instance.
 
-mod container;
 mod slot_type;
-mod tier;
 
-pub(crate) use container::DataCtner;
 pub use slot_type::SlotType;
-pub(crate) use tier::Tier;
 
 use crate::{
-    KeyEnDeOrdered, MapxOrd,
-    basic::orphan::Orphan,
-    common::{dirty_count as dc, error::Result},
+    KeyEnDeOrdered,
+    common::{
+        error::Result,
+        staged::{StagedRows, prefix_successor},
+    },
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, ops::Bound, result::Result as StdResult};
+use std::{
+    borrow::Cow, collections::BTreeMap, fmt, marker::PhantomData, ops::Bound,
+    result::Result as StdResult,
+};
+use vsdb_core::basic::mapx_raw::MapxRaw;
 
 pub(crate) type EntryCnt = u64;
 type SkipNum = EntryCnt;
@@ -30,27 +56,185 @@ type Distance = i128;
 type PageSize = u16;
 type PageIndex = u32;
 
+// Namespace tags (first key byte).
+const TAG_ENTRY: u8 = 0x00;
+const TAG_LEVEL: u8 = 0x01;
+const TAG_TOTAL: u8 = 0x02;
+
+/// Serialized-payload layout version. Guards against positionally
+/// decoding metadata written by the pre-single-handle layout (which
+/// began with a different field sequence).
+const LAYOUT_VERSION: u8 = 2;
+
 /// A skip-list-like data structure for fast, timestamp-based paged queries.
 ///
 /// `SlotDex` organizes data into "slots" (e.g., timestamps or sequence numbers),
-/// which are then grouped into tiers. This hierarchical structure allows for
-/// rapid seeking and counting, making it highly efficient for pagination and
-/// range queries over large datasets.
+/// which are then grouped into tier levels. This hierarchical structure allows
+/// for rapid seeking and counting, making it highly efficient for pagination
+/// and range queries over large datasets.
 ///
 /// The slot type `S` must implement [`SlotType`]; built-in support covers
 /// `u32`, `u64`, and `u128`.
-#[derive(Debug)]
+///
+/// Every mutation is applied through a single atomic engine write batch,
+/// so a crash can never leave the index internally inconsistent.
 pub struct SlotDex<S, K>
 where
     S: SlotType,
     K: Clone + Ord + KeyEnDeOrdered,
 {
-    data: MapxOrd<S, DataCtner<K>>,
-    total: Orphan<EntryCnt>,
-    tiers: Vec<Tier<S>>,
+    store: MapxRaw,
     tier_capacity: S,
     swap_order: bool,
+    /// In-memory mirror of the persisted total row.
+    total_cache: EntryCnt,
+    /// In-memory caches of the tier levels (`levels[i]` = level `i + 1`).
+    /// Hydrated from the store on open; level 0 (per-slot counts) is
+    /// walked on disk and never cached.
+    levels: Vec<Level<S>>,
+    _p: PhantomData<K>,
 }
+
+/// In-memory cache of one tier level (level index >= 1).
+struct Level<S> {
+    floor_base: S,
+    buckets: BTreeMap<S, EntryCnt>,
+}
+
+impl<S: SlotType> Level<S> {
+    fn new(level: u8, tier_capacity: &S) -> Self {
+        Self {
+            floor_base: floor_base_of(level, tier_capacity),
+            buckets: BTreeMap::new(),
+        }
+    }
+}
+
+/// `tier_capacity^level`, saturating to `S::MAX` on overflow (a tier
+/// whose base saturates coarsens everything into a single bucket, which
+/// terminates growth naturally).
+fn floor_base_of<S: SlotType>(level: u8, tier_capacity: &S) -> S {
+    tier_capacity
+        .checked_pow(level as u32)
+        .filter(|v| *v != S::MIN)
+        .unwrap_or(S::MAX)
+}
+
+// =========================================================================
+// Key codecs
+// =========================================================================
+
+fn entry_key<S: SlotType, K: KeyEnDeOrdered>(slot: &S, k: &K) -> Vec<u8> {
+    let s = slot.to_bytes();
+    let kb = k.to_bytes();
+    let mut v = Vec::with_capacity(1 + s.len() + kb.len());
+    v.push(TAG_ENTRY);
+    v.extend_from_slice(&s);
+    v.extend_from_slice(&kb);
+    v
+}
+
+fn level_key<S: SlotType>(level: u8, floor: &S) -> Vec<u8> {
+    let f = floor.to_bytes();
+    let mut v = Vec::with_capacity(2 + f.len());
+    v.push(TAG_LEVEL);
+    v.push(level);
+    v.extend_from_slice(&f);
+    v
+}
+
+fn level_prefix(level: u8) -> Vec<u8> {
+    vec![TAG_LEVEL, level]
+}
+
+const TOTAL_KEY: [u8; 1] = [TAG_TOTAL];
+
+fn encode_cnt(v: EntryCnt) -> [u8; 8] {
+    v.to_le_bytes()
+}
+
+fn decode_cnt(raw: &[u8]) -> EntryCnt {
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&raw[..8]);
+    EntryCnt::from_le_bytes(b)
+}
+
+// =========================================================================
+// Raw-bound helpers
+// =========================================================================
+
+fn bound_to_raw(b: Bound<Vec<u8>>) -> Bound<Cow<'static, [u8]>> {
+    match b {
+        Bound::Included(v) => Bound::Included(Cow::Owned(v)),
+        Bound::Excluded(v) => Bound::Excluded(Cow::Owned(v)),
+        Bound::Unbounded => Bound::Unbounded,
+    }
+}
+
+/// Translate a slot-space bound into a raw lower bound over entry rows.
+fn entry_lower_bound<S: SlotType>(b: &Bound<S>) -> Option<Bound<Vec<u8>>> {
+    match b {
+        Bound::Unbounded => {
+            let mut v = vec![TAG_ENTRY];
+            v.extend_from_slice(&S::MIN.to_bytes());
+            Some(Bound::Included(v))
+        }
+        Bound::Included(s) => {
+            let mut v = vec![TAG_ENTRY];
+            v.extend_from_slice(&s.to_bytes());
+            Some(Bound::Included(v))
+        }
+        // Excluding slot `s` means starting at slot `s + 1`; the encoded
+        // successor of the slot bytes is exactly that (fixed-width
+        // order-preserving encoding). All-0xFF means `s == S::MAX`, so
+        // the range is empty.
+        Bound::Excluded(s) => {
+            let succ = prefix_successor(&s.to_bytes())?;
+            let mut v = vec![TAG_ENTRY];
+            v.extend_from_slice(&succ);
+            Some(Bound::Included(v))
+        }
+    }
+}
+
+/// Translate a slot-space bound into a raw upper bound over entry rows.
+fn entry_upper_bound<S: SlotType>(b: &Bound<S>) -> Bound<Vec<u8>> {
+    match b {
+        Bound::Unbounded => Bound::Excluded(vec![TAG_ENTRY + 1]),
+        // Including slot `s` means including every `[TAG|s|k]` row; the
+        // exclusive raw bound is the successor of the `[TAG|s]` prefix
+        // (all-0xFF cannot happen: the prefix starts with TAG_ENTRY = 0).
+        Bound::Included(s) => {
+            let mut v = vec![TAG_ENTRY];
+            v.extend_from_slice(&s.to_bytes());
+            Bound::Excluded(prefix_successor(&v).expect("prefix starts with 0x00"))
+        }
+        Bound::Excluded(s) => {
+            let mut v = vec![TAG_ENTRY];
+            v.extend_from_slice(&s.to_bytes());
+            Bound::Excluded(v)
+        }
+    }
+}
+
+fn decode_entry_row<S: SlotType, K: KeyEnDeOrdered>(raw_key: &[u8]) -> (S, K) {
+    let slot_len = S::MIN.to_bytes().len();
+    let slot = S::from_bytes(raw_key[1..1 + slot_len].to_vec())
+        .expect("SlotDex: corrupt entry-row slot bytes");
+    let k = K::from_bytes(raw_key[1 + slot_len..].to_vec())
+        .expect("SlotDex: corrupt entry-row key bytes");
+    (slot, k)
+}
+
+fn decode_level_row<S: SlotType>(raw_key: &[u8], raw_val: &[u8]) -> (S, EntryCnt) {
+    let floor = S::from_bytes(raw_key[2..].to_vec())
+        .expect("SlotDex: corrupt level-row floor bytes");
+    (floor, decode_cnt(raw_val))
+}
+
+// =========================================================================
+// Serde: typed handle metadata (create-time constant)
+// =========================================================================
 
 impl<S, K> Serialize for SlotDex<S, K>
 where
@@ -63,9 +247,8 @@ where
     {
         crate::common::serialize_typed_handle_meta::<Self, Ser>(
             &(
-                &self.data,
-                &self.total,
-                &self.tiers,
+                LAYOUT_VERSION,
+                &self.store,
                 &self.tier_capacity,
                 &self.swap_order,
             ),
@@ -83,26 +266,33 @@ where
     where
         D: serde::Deserializer<'de>,
     {
-        type Payload<S, K> = (
-            MapxOrd<S, DataCtner<K>>,
-            Orphan<EntryCnt>,
-            Vec<Tier<S>>,
-            S,
-            bool,
-        );
-        let (data, total, tiers, tier_capacity, swap_order) =
-            crate::common::deserialize_typed_handle_meta::<Self, Payload<S, K>, D>(
-                deserializer,
-            )?;
-        let mut me = SlotDex {
-            data,
-            total,
-            tiers,
-            tier_capacity,
-            swap_order,
-        };
-        me.ensure_count();
-        Ok(me)
+        let (version, store, tier_capacity, swap_order) =
+            crate::common::deserialize_typed_handle_meta::<
+                Self,
+                (u8, MapxRaw, S, bool),
+                D,
+            >(deserializer)?;
+        if version != LAYOUT_VERSION {
+            return Err(serde::de::Error::custom(format!(
+                "SlotDex: unsupported layout version {version} (expected {LAYOUT_VERSION})"
+            )));
+        }
+        Ok(Self::hydrate(store, tier_capacity, swap_order))
+    }
+}
+
+impl<S, K> fmt::Debug for SlotDex<S, K>
+where
+    S: SlotType,
+    K: Clone + Ord + KeyEnDeOrdered,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SlotDex")
+            .field("total", &self.total_cache)
+            .field("levels", &self.levels.len())
+            .field("tier_capacity", &self.tier_capacity)
+            .field("swap_order", &self.swap_order)
+            .finish()
     }
 }
 
@@ -121,8 +311,8 @@ where
     /// * `swap_order` - If `true`, reverses the internal slot order. This can improve
     ///   performance for applications that primarily query in reverse chronological order.
     pub fn new(tier_capacity: S, swap_order: bool) -> Self {
-        // Each tier's floor_base is tier_capacity^(1+idx); growth only
-        // terminates when every new tier strictly coarsens the previous
+        // Each level's floor_base is tier_capacity^level; growth only
+        // terminates when every new level strictly coarsens the previous
         // one, which requires a capacity of at least 2.
         assert!(
             tier_capacity.as_i128() >= 2,
@@ -130,185 +320,152 @@ where
         );
 
         Self {
-            data: MapxOrd::new(),
-            total: Orphan::new(dc::set_dirty(0)),
-            tiers: vec![],
+            store: MapxRaw::new(),
             tier_capacity,
             swap_order,
+            total_cache: 0,
+            levels: vec![],
+            _p: PhantomData,
+        }
+    }
+
+    /// Reconnects to an existing store and rebuilds the in-memory caches
+    /// (total mirror + tier level caches) from its rows.
+    fn hydrate(store: MapxRaw, tier_capacity: S, swap_order: bool) -> Self {
+        let total_cache = store.get(TOTAL_KEY).map(|v| decode_cnt(&v)).unwrap_or(0);
+
+        // Levels are contiguous from 1 by construction; stop at the first
+        // level with no rows.
+        let mut levels = vec![];
+        for level in 1..=u8::MAX {
+            let prefix = level_prefix(level);
+            let lo = Bound::Included(Cow::Owned(prefix.clone()));
+            let hi = bound_to_raw(
+                prefix_successor(&prefix)
+                    .map(Bound::Excluded)
+                    .expect("prefix starts with 0x01"),
+            );
+            let mut cache = Level::new(level, &tier_capacity);
+            let mut empty = true;
+            for (rk, rv) in store.range((lo, hi)) {
+                let (floor, cnt) = decode_level_row::<S>(&rk, &rv);
+                cache.buckets.insert(floor, cnt);
+                empty = false;
+            }
+            if empty {
+                break;
+            }
+            levels.push(cache);
+        }
+
+        Self {
+            store,
+            tier_capacity,
+            swap_order,
+            total_cache,
+            levels,
+            _p: PhantomData,
         }
     }
 
     /// Returns the unique instance ID of this `SlotDex`.
     #[inline(always)]
     pub fn instance_id(&self) -> u64 {
-        self.data.instance_id()
+        self.store.instance_id()
     }
 
     /// Persists this instance's metadata to disk so that it can be
     /// recovered later via [`from_meta`](Self::from_meta).
     ///
-    /// Marks a clean shutdown so that the next [`from_meta`](Self::from_meta)
-    /// call can skip the count rebuild.
-    pub fn save_meta(&mut self) -> Result<u64> {
+    /// The metadata is create-time constant (single handle + two config
+    /// values), so calling this once after creation is sufficient for
+    /// the lifetime of the instance.
+    ///
+    /// Returns the `instance_id` that should be passed to `from_meta`.
+    pub fn save_meta(&self) -> Result<u64> {
         let id = self.instance_id();
         crate::common::save_instance_meta(id, self)?;
-
-        // Clear dirty only after the latest metadata was persisted.  If a
-        // crash happens before that write, the previous meta still points at
-        // this dirty total and recovery rebuilds derived tier state.
-        let raw = self.total.get_value();
-        self.total.set_value(&dc::clear_dirty(raw));
         Ok(id)
     }
 
     /// Recovers a `SlotDex` instance from previously saved metadata.
     ///
-    /// If the previous session did not call [`save_meta`](Self::save_meta)
-    /// (unclean shutdown), the total count is automatically rebuilt from
-    /// the live data.
+    /// Every mutation is applied atomically, so the recovered state is
+    /// always internally consistent — there is no rebuild path.
     pub fn from_meta(instance_id: u64) -> Result<Self> {
         crate::common::load_instance_meta(instance_id)
     }
 
-    /// If the dirty bit is set, rebuild the count from live data.
-    /// Then set the dirty bit for the current process lifetime.
-    /// Called automatically during deserialization.
-    fn ensure_count(&mut self) {
-        let raw = self.total.get_value();
-        if dc::is_dirty(raw) || self.has_invalid_empty_tier() {
-            // Unclean shutdown.  insert()/remove() update several
-            // independent structures (Large ctner maps, ctner records,
-            // tier floor counts, the grand total) without batch
-            // atomicity, so everything derived must be rebuilt from the
-            // backing maps — not just the total.
-            //
-            // 1. Repair each Large ctner's cached `len` from its backing
-            //    map (map writes land before the record write), dropping
-            //    records that turn out to be empty.
-            let mut total: EntryCnt = 0;
-            let mut rewrites: Vec<(S, DataCtner<K>)> = vec![];
-            let mut removals: Vec<S> = vec![];
-            for (slot, mut d) in self.data.iter() {
-                if let DataCtner::Large { map, len } = &mut d {
-                    let actual = map.iter().count();
-                    if actual != *len {
-                        *len = actual;
-                        if actual == 0 {
-                            removals.push(slot);
-                        } else {
-                            total += actual as EntryCnt;
-                            rewrites.push((slot, d));
-                        }
-                        continue;
-                    }
-                }
-
-                total += d.len() as EntryCnt;
-            }
-            for slot in removals {
-                self.data.remove(&slot);
-            }
-            for (slot, d) in rewrites {
-                self.data.insert(&slot, &d);
-            }
-
-            // 2. Tier floor counts may be skewed by the same crash
-            //    window and would permanently corrupt pagination
-            //    offsets.  Discard the whole tier stack, then eagerly
-            //    rebuild it right here from a full data scan — leaving
-            //    the tier-less state in place until "the next insert"
-            //    (as before) would silently degrade every pagination
-            //    query to an O(N) raw scan (instead of the intended
-            //    O(tiers * tier_capacity) walk) for however long the
-            //    process stays idle or read-only after an unclean
-            //    shutdown.
-            self.tiers.iter_mut().for_each(|t| {
-                t.store.clear();
-                *t.entry_count.get_mut() = 0;
-            });
-            self.tiers.clear();
-            self.rebuild_tier_stack();
-
-            self.total.set_value(&dc::set_dirty(total));
-        } else {
-            self.total.set_value(&dc::set_dirty(raw));
-        }
-    }
-
-    /// Rebuilds the full tier-acceleration stack from a full scan of
-    /// `self.data`, mirroring the depth the stack would have reached via
-    /// ordinary incremental inserts.
-    ///
-    /// Used after crash recovery clears the stack (see [`Self::ensure_count`]),
-    /// so pagination doesn't silently regress to an O(N) raw scan until
-    /// some future write happens to trigger `ensure_tier_capacity`.
-    /// Requires `self.tiers` to already be empty; a no-op on an empty
-    /// `self.data` (leaving `self.tiers` empty, matching the state of a
-    /// freshly created, never-written-to `SlotDex` rather than
-    /// introducing a spurious zero-entry tier that `has_invalid_empty_tier`
-    /// would then flag on the next reload).
-    fn rebuild_tier_stack(&mut self) {
-        debug_assert!(self.tiers.is_empty());
-        if self.data.iter().next().is_none() {
-            return;
-        }
-        loop {
-            self.ensure_tier_capacity();
-            // `ensure_tier_capacity` pushes at most one tier per call:
-            // the first call always pushes (empty-stack branch), and
-            // each subsequent call pushes again only if the current top
-            // tier still exceeds capacity — so this converges in the
-            // same number of iterations the stack would have reached
-            // organically.
-            let top = self
-                .tiers
-                .last_mut()
-                .expect("just pushed by ensure_tier_capacity");
-            if (top.len() as i128) <= self.tier_capacity.as_i128() {
-                break;
-            }
-        }
-    }
-
-    fn has_invalid_empty_tier(&self) -> bool {
-        self.tiers
-            .iter()
-            .any(|t| t.entry_count.get_value() == 0 || t.store.iter().next().is_none())
-    }
+    // =====================================================================
+    // Mutations
+    // =====================================================================
 
     /// Inserts a key into a specified slot.
+    ///
+    /// The entry row, the per-slot count, every tier bucket count, any
+    /// tier-growth rows, and the grand total are committed through one
+    /// atomic engine batch.
     ///
     /// # Arguments
     ///
     /// * `slot` - The slot to insert the key into (e.g., a timestamp).
     /// * `k` - The key to insert.
+    ///
+    /// # Errors
+    ///
+    /// If the batch commit fails, neither the on-disk state nor the
+    /// in-memory caches are modified.
     pub fn insert(&mut self, slot: S, k: K) -> Result<()> {
         let slot = self.to_storage_slot(slot);
 
-        self.mark_dirty();
-        self.ensure_tier_capacity();
-
-        let mut ctner = self.data.get(&slot).unwrap_or_default();
-        if ctner.insert(k) {
-            self.data.insert(&slot, &ctner);
-            self.tiers.iter_mut().for_each(|t| {
-                t.ensure_cache();
-                let slot_floor = slot.floor_align(&t.floor_base);
-                let c = t.cache.get_mut();
-                let mut v = c.get(&slot_floor).copied().unwrap_or(0);
-                if 0 == v {
-                    *t.entry_count.get_mut() += 1;
-                    if let Some(l) = t.len_cache.as_mut() {
-                        *l += 1;
-                    }
-                }
-                v += 1;
-                c.insert(slot_floor.clone(), v);
-                t.store.insert(&slot_floor, &v);
-            });
-            let t = self.total.get_value();
-            self.total.set_value(&dc::inc(t));
+        let ekey = entry_key(&slot, &k);
+        if self.store.contains_key(&ekey) {
+            return Ok(());
         }
+
+        let mut staged = StagedRows::new();
+        let grown = self.stage_level_growth(&mut staged);
+
+        staged.put(ekey, vec![]);
+        let slot_cnt = self.slot_entry_cnt(&slot);
+        staged.put(level_key(0, &slot), encode_cnt(slot_cnt + 1).to_vec());
+
+        // Bucket increments for every level, including a just-staged one.
+        let mut bumps: Vec<(usize, S, EntryCnt)> = Vec::with_capacity(self.levels.len());
+        for (i, lv) in self.levels.iter().enumerate() {
+            let floor = slot.floor_align(&lv.floor_base);
+            let base = lv.buckets.get(&floor).copied().unwrap_or(0);
+            staged.put(
+                level_key(i as u8 + 1, &floor),
+                encode_cnt(base + 1).to_vec(),
+            );
+            bumps.push((i, floor, base + 1));
+        }
+        if let Some(grown) = grown.as_ref() {
+            let floor = slot.floor_align(&grown.floor_base);
+            let base = grown.buckets.get(&floor).copied().unwrap_or(0);
+            staged.put(
+                level_key(self.levels.len() as u8 + 1, &floor),
+                encode_cnt(base + 1).to_vec(),
+            );
+        }
+
+        staged.put(
+            TOTAL_KEY.to_vec(),
+            encode_cnt(self.total_cache + 1).to_vec(),
+        );
+        staged.commit(&mut self.store)?;
+
+        // Disk state is committed; now apply the same changes to the caches.
+        if let Some(mut grown) = grown {
+            let floor = slot.floor_align(&grown.floor_base);
+            *grown.buckets.entry(floor).or_insert(0) += 1;
+            self.levels.push(grown);
+        }
+        for (i, floor, v) in bumps {
+            self.levels[i].buckets.insert(floor, v);
+        }
+        self.total_cache += 1;
 
         Ok(())
     }
@@ -316,26 +473,22 @@ where
     /// Inserts many `(slot, key)` pairs at once.
     ///
     /// Semantically identical to calling [`insert`](Self::insert) per
-    /// pair, but engine writes are amortized: keys are grouped by slot so
-    /// each touched container is loaded and persisted exactly once, and
-    /// the container records plus per-tier counters are flushed through
-    /// one write batch per underlying collection instead of one engine
-    /// put per key. The entry total is updated once per call.
+    /// pair, but all rows — entries, per-slot counts, tier buckets,
+    /// growth rows, and the total — are committed through **one** atomic
+    /// engine batch for the whole call.
     ///
     /// Intended for bulk loads (imports, index rebuilds) where the
-    /// per-key write amplification of `insert` dominates.
+    /// per-key commit cost of `insert` dominates.
     ///
     /// # Errors
     ///
-    /// If a batch commit fails, on-disk state may be missing part of the
-    /// batch while in-memory tier caches already include it. The dirty
-    /// flag set at entry stays set in that case, so the next recovery
-    /// rebuilds consistent state from the primary data.
+    /// If the batch commit fails, neither the on-disk state nor the
+    /// in-memory caches are modified.
     pub fn insert_batch<I>(&mut self, items: I) -> Result<()>
     where
         I: IntoIterator<Item = (S, K)>,
     {
-        // Group by storage slot so each container is touched once.
+        // Group by storage slot so each slot's rows are staged once.
         let mut groups: BTreeMap<S, Vec<K>> = BTreeMap::new();
         for (slot, k) in items {
             groups
@@ -346,44 +499,55 @@ where
         if groups.is_empty() {
             return Ok(());
         }
-        self.mark_dirty();
 
+        let mut staged = StagedRows::new();
+        // Levels staged for growth during this batch (appended to
+        // `self.levels` only after the commit succeeds).
+        let mut grown: Vec<Level<S>> = vec![];
+        // Cache deltas: (level_idx, floor) -> new count, applied on success.
+        let mut bumps: BTreeMap<(usize, S), EntryCnt> = BTreeMap::new();
         let mut total_added: EntryCnt = 0;
-        // Staged engine writes, committed in one batch per collection.
-        let mut staged_data: Vec<(S, DataCtner<K>)> = Vec::with_capacity(groups.len());
-        let mut staged_tiers: Vec<BTreeMap<S, EntryCnt>> = Vec::new();
 
         for (slot, ks) in groups {
             // Same growth cadence as serial `insert`: one capacity check
             // per touched slot (a slot adds at most one new floor entry
-            // per tier, so per-key checks are redundant). A tier pushed
-            // mid-batch is built from the top tier's cache, which is
-            // updated eagerly below and therefore already current.
-            self.ensure_tier_capacity();
-            if staged_tiers.len() < self.tiers.len() {
-                staged_tiers.resize_with(self.tiers.len(), BTreeMap::new);
+            // per level, so per-key checks are redundant).
+            if let Some(lv) = self.stage_level_growth_over(&mut staged, &grown, &bumps) {
+                grown.push(lv);
             }
 
-            let mut ctner = self.data.get(&slot).unwrap_or_default();
-            let added = ctner.insert_batch(ks)? as EntryCnt;
+            let mut added: EntryCnt = 0;
+            for k in ks {
+                let ekey = entry_key(&slot, &k);
+                if staged.get_over(&self.store, &ekey).is_some() {
+                    continue;
+                }
+                staged.put(ekey, vec![]);
+                added += 1;
+            }
             if 0 == added {
                 continue;
             }
-            staged_data.push((slot.clone(), ctner));
-            for (t, staged) in self.tiers.iter_mut().zip(staged_tiers.iter_mut()) {
-                t.ensure_cache();
-                let slot_floor = slot.floor_align(&t.floor_base);
-                let c = t.cache.get_mut();
-                let mut v = c.get(&slot_floor).copied().unwrap_or(0);
-                if 0 == v {
-                    *t.entry_count.get_mut() += 1;
-                    if let Some(l) = t.len_cache.as_mut() {
-                        *l += 1;
-                    }
-                }
-                v += added;
-                c.insert(slot_floor.clone(), v);
-                staged.insert(slot_floor, v);
+
+            let slot_cnt = self.slot_entry_cnt(&slot);
+            staged.put(level_key(0, &slot), encode_cnt(slot_cnt + added).to_vec());
+
+            for (i, lv) in self
+                .levels
+                .iter()
+                .map(|l| (&l.floor_base, &l.buckets))
+                .chain(grown.iter().map(|l| (&l.floor_base, &l.buckets)))
+                .enumerate()
+            {
+                let (floor_base, buckets) = lv;
+                let floor = slot.floor_align(floor_base);
+                let v = bumps
+                    .get(&(i, floor.clone()))
+                    .copied()
+                    .unwrap_or_else(|| buckets.get(&floor).copied().unwrap_or(0))
+                    + added;
+                staged.put(level_key(i as u8 + 1, &floor), encode_cnt(v).to_vec());
+                bumps.insert((i, floor), v);
             }
             total_added += added;
         }
@@ -392,112 +556,302 @@ where
             return Ok(());
         }
 
-        let mut db = self.data.batch_entry();
-        for (slot, ctner) in &staged_data {
-            db.insert(slot, ctner);
-        }
-        db.commit()?;
+        staged.put(
+            TOTAL_KEY.to_vec(),
+            encode_cnt(self.total_cache + total_added).to_vec(),
+        );
+        staged.commit(&mut self.store)?;
 
-        for (t, staged) in self.tiers.iter_mut().zip(staged_tiers.iter()) {
-            if staged.is_empty() {
-                continue;
-            }
-            let mut tb = t.store.batch_entry();
-            for (floor, v) in staged {
-                tb.insert(floor, v);
-            }
-            tb.commit()?;
+        self.levels.extend(grown);
+        for ((i, floor), v) in bumps {
+            self.levels[i].buckets.insert(floor, v);
         }
-
-        let t = self.total.get_value();
-        self.total.set_value(&dc::inc_by(t, total_added));
+        self.total_cache += total_added;
 
         Ok(())
     }
 
     /// Removes a key from a specified slot.
     ///
+    /// All row updates are committed through one atomic engine batch.
+    ///
     /// # Arguments
     ///
     /// * `slot` - The slot to remove the key from.
     /// * `k` - The key to remove.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the engine-level batch commit fails (matching the
+    /// behavior of the plain collection types on engine write failure);
+    /// nothing is applied in that case.
     pub fn remove(&mut self, slot: S, k: &K) {
         let slot = self.to_storage_slot(slot);
 
-        let mut d = match self.data.get(&slot) {
-            Some(d) => d,
-            _ => return,
-        };
-
-        self.mark_dirty();
-        let exist = d.remove(k);
-        let empty = d.is_empty();
-        if empty {
-            self.data.remove(&slot);
-        } else if exist {
-            self.data.insert(&slot, &d);
+        let ekey = entry_key(&slot, k);
+        if !self.store.contains_key(&ekey) {
+            return;
         }
 
-        if exist {
-            // Shrink degenerate top tiers (structural maintenance).
-            loop {
-                let dominated = self.tiers.last_mut().is_some_and(|top| {
-                    if top.len() < 2 {
-                        top.store.clear();
-                        *top.entry_count.get_mut() = 0;
-                        top.cache.get_mut().clear();
-                        true
-                    } else {
-                        false
-                    }
-                });
-                if dominated {
-                    self.tiers.pop();
-                } else {
-                    break;
+        let mut staged = StagedRows::new();
+        staged.del(ekey);
+
+        // Shrink degenerate top levels (structural maintenance), based on
+        // the pre-removal state.
+        let mut kept = self.levels.len();
+        while kept > 0 && self.levels[kept - 1].buckets.len() < 2 {
+            // `self.levels[i]` is level `i + 1`, so the top being
+            // dropped is level `kept`.
+            for floor in self.levels[kept - 1].buckets.keys() {
+                staged.del(level_key(kept as u8, floor));
+            }
+            kept -= 1;
+        }
+
+        let slot_cnt = self.slot_entry_cnt(&slot);
+        if slot_cnt <= 1 {
+            staged.del(level_key(0, &slot));
+        } else {
+            staged.put(level_key(0, &slot), encode_cnt(slot_cnt - 1).to_vec());
+        }
+
+        let mut decs: Vec<(usize, S, Option<EntryCnt>)> = Vec::with_capacity(kept);
+        for (i, lv) in self.levels.iter().take(kept).enumerate() {
+            let floor = slot.floor_align(&lv.floor_base);
+            let cnt = match lv.buckets.get(&floor).copied() {
+                Some(n) => n,
+                None => continue,
+            };
+            if cnt <= 1 {
+                staged.del(level_key(i as u8 + 1, &floor));
+                decs.push((i, floor, None));
+            } else {
+                staged.put(level_key(i as u8 + 1, &floor), encode_cnt(cnt - 1).to_vec());
+                decs.push((i, floor, Some(cnt - 1)));
+            }
+        }
+
+        staged.put(
+            TOTAL_KEY.to_vec(),
+            encode_cnt(self.total_cache.saturating_sub(1)).to_vec(),
+        );
+        staged
+            .commit(&mut self.store)
+            .expect("vsdb: SlotDex remove batch commit failed");
+
+        self.levels.truncate(kept);
+        for (i, floor, v) in decs {
+            match v {
+                Some(v) => {
+                    self.levels[i].buckets.insert(floor, v);
+                }
+                None => {
+                    self.levels[i].buckets.remove(&floor);
                 }
             }
-
-            self.tiers.iter_mut().for_each(|t| {
-                t.ensure_cache();
-                let slot_floor = slot.floor_align(&t.floor_base);
-                let c = t.cache.get_mut();
-                let cnt = match c.get(&slot_floor).copied() {
-                    Some(n) => n,
-                    None => return,
-                };
-                if 1 == cnt {
-                    c.remove(&slot_floor);
-                    t.store.remove(&slot_floor);
-                    t.dec_len();
-                } else {
-                    let new_cnt = cnt - 1;
-                    c.insert(slot_floor.clone(), new_cnt);
-                    t.store.insert(&slot_floor, &new_cnt);
-                }
-            });
-            let t = self.total.get_value();
-            self.total.set_value(&dc::dec(t));
         }
+        self.total_cache = self.total_cache.saturating_sub(1);
     }
 
-    /// Clears the `SlotDex`, removing all entries and tiers.
+    /// Clears the `SlotDex`, removing all entries and tier levels.
+    ///
+    /// This wipes the whole underlying key range in one engine-level
+    /// operation and resets the in-memory caches.
     pub fn clear(&mut self) {
-        self.mark_dirty();
-        for mut ctner in self.data.values_mut() {
-            ctner.clear_storage();
-        }
-        self.total.set_value(&dc::zero(self.total.get_value()));
-        self.data.clear();
-
-        self.tiers.iter_mut().for_each(|t| {
-            t.store.clear();
-            *t.entry_count.get_mut() = 0;
-            t.cache.get_mut().clear();
-        });
-
-        self.tiers.clear();
+        self.store.clear();
+        self.levels.clear();
+        self.total_cache = 0;
     }
+
+    // =====================================================================
+    // Tier growth
+    // =====================================================================
+
+    /// If the top level (or level 0 when no tiers exist yet) exceeds
+    /// `tier_capacity` buckets, build the next coarser level from it and
+    /// stage its rows. Returns the new level's cache; the caller pushes
+    /// it onto `self.levels` after the batch commits.
+    fn stage_level_growth(&self, staged: &mut StagedRows) -> Option<Level<S>> {
+        self.stage_level_growth_over(staged, &[], &BTreeMap::new())
+    }
+
+    /// Growth check that also sees levels grown earlier in the same
+    /// (not-yet-committed) bulk operation, plus pending bucket updates.
+    fn stage_level_growth_over(
+        &self,
+        staged: &mut StagedRows,
+        grown: &[Level<S>],
+        bumps: &BTreeMap<(usize, S), EntryCnt>,
+    ) -> Option<Level<S>> {
+        let n = self.levels.len() + grown.len();
+        let new_level_no = n as u8 + 1;
+
+        let mut newtop = Level::new(new_level_no, &self.tier_capacity);
+        if let Some(top) = grown.last().or_else(|| self.levels.last()) {
+            let top_idx = n - 1;
+            // Merged view of the top level: committed buckets overlaid
+            // with this operation's pending updates.
+            let mut view = top.buckets.clone();
+            for ((i, floor), v) in bumps {
+                if *i == top_idx {
+                    view.insert(floor.clone(), *v);
+                }
+            }
+            if view.len() as i128 <= self.tier_capacity.as_i128() {
+                return None;
+            }
+            for (slot, cnt) in view {
+                let floor = slot.floor_align(&newtop.floor_base);
+                *newtop.buckets.entry(floor).or_insert(0) += cnt;
+            }
+        } else {
+            // No tiers yet: build level 1 from the per-slot count rows.
+            for (rk, rv) in self.level0_range(Bound::Unbounded, Bound::Unbounded) {
+                let (slot, cnt) = decode_level_row::<S>(&rk, &rv);
+                let floor = slot.floor_align(&newtop.floor_base);
+                *newtop.buckets.entry(floor).or_insert(0) += cnt;
+            }
+        }
+
+        for (floor, cnt) in &newtop.buckets {
+            staged.put(level_key(new_level_no, floor), encode_cnt(*cnt).to_vec());
+        }
+        Some(newtop)
+    }
+
+    // =====================================================================
+    // Disk walks (level 0 and entry rows)
+    // =====================================================================
+
+    /// Range over the per-slot count rows (level 0), bounds in slot space.
+    fn level0_range(
+        &self,
+        lo: Bound<S>,
+        hi: Bound<S>,
+    ) -> impl DoubleEndedIterator<
+        Item = (vsdb_core::common::RawKey, vsdb_core::common::RawValue),
+    > + '_ {
+        let lo = match &lo {
+            Bound::Unbounded => Bound::Included(level_key(0, &S::MIN)),
+            Bound::Included(s) => Bound::Included(level_key(0, s)),
+            Bound::Excluded(s) => Bound::Excluded(level_key(0, s)),
+        };
+        let hi = match &hi {
+            Bound::Unbounded => Bound::Excluded(level_prefix(1)),
+            Bound::Included(s) => Bound::Included(level_key(0, s)),
+            Bound::Excluded(s) => Bound::Excluded(level_key(0, s)),
+        };
+        self.store.range((bound_to_raw(lo), bound_to_raw(hi)))
+    }
+
+    /// Range over entry rows, bounds in slot space. `None` means the
+    /// range is empty (an `Excluded(S::MAX)` lower bound).
+    fn entry_range(
+        &self,
+        lo: Bound<S>,
+        hi: Bound<S>,
+    ) -> Option<
+        impl DoubleEndedIterator<
+            Item = (vsdb_core::common::RawKey, vsdb_core::common::RawValue),
+        > + '_,
+    > {
+        let lo = entry_lower_bound(&lo)?;
+        let hi = entry_upper_bound(&hi);
+        Some(self.store.range((bound_to_raw(lo), bound_to_raw(hi))))
+    }
+
+    fn slot_entry_cnt(&self, slot: &S) -> EntryCnt {
+        self.store
+            .get(level_key(0, slot))
+            .map(|v| decode_cnt(&v))
+            .unwrap_or(0)
+    }
+
+    /// Descending walk over the per-slot count rows without any engine
+    /// reverse iterator (mmdb backward resolution costs ~two orders of
+    /// magnitude more per iterator than forward streaming).
+    ///
+    /// The level-1 bucket cache partitions slot space into chunks that
+    /// each hold at most `tier_capacity` populated slots; the floors
+    /// strictly above the window's lower bound serve as split points
+    /// (descending, in memory). Each chunk is forward-scanned and
+    /// reversed in memory, yielding the same stream as
+    /// `level0_range(lo, hi).rev()`. Returns early when `visit` returns
+    /// `false`.
+    fn level0_walk_desc(
+        &self,
+        lo: Bound<S>,
+        hi: Bound<S>,
+        mut visit: impl FnMut(S, EntryCnt) -> bool,
+    ) {
+        // Split points: level-1 floors strictly above the lower bound,
+        // within the upper bound, descending. For small tier capacities
+        // the floors are thinned so each chunk spans ~32 slots — engine
+        // iterator creation dominates tiny chunks, so fewer, larger
+        // forward scans win even with the in-memory reversal.
+        let splits: Vec<S> = match self.levels.first() {
+            Some(l1) => {
+                let above_lo = match &lo {
+                    Bound::Included(s) | Bound::Excluded(s) => {
+                        Bound::Excluded(s.clone())
+                    }
+                    Bound::Unbounded => Bound::Unbounded,
+                };
+                // `BTreeMap::range` panics on inverted windows (the engine
+                // ranges below just yield nothing) — guard explicitly.
+                let nonempty = match (&above_lo, &hi) {
+                    (Bound::Unbounded, _) | (_, Bound::Unbounded) => true,
+                    (
+                        Bound::Included(a) | Bound::Excluded(a),
+                        Bound::Included(b) | Bound::Excluded(b),
+                    ) => a < b,
+                };
+                if nonempty {
+                    let stride =
+                        (32 / self.tier_capacity.as_i128()).clamp(1, 32) as usize;
+                    l1.buckets
+                        .range((above_lo, hi.clone()))
+                        .rev()
+                        .map(|(f, _)| f.clone())
+                        .skip(stride - 1)
+                        .step_by(stride)
+                        .collect()
+                } else {
+                    vec![]
+                }
+            }
+            None => vec![],
+        };
+
+        let mut buf: Vec<(S, EntryCnt)> = vec![];
+        let mut upper = hi;
+        for split in splits {
+            buf.clear();
+            for (rk, rv) in self.level0_range(Bound::Included(split.clone()), upper) {
+                buf.push(decode_level_row::<S>(&rk, &rv));
+            }
+            for (slot, cnt) in buf.drain(..).rev() {
+                if !visit(slot, cnt) {
+                    return;
+                }
+            }
+            upper = Bound::Excluded(split);
+        }
+        // Bottom chunk: from the window's own lower bound.
+        buf.clear();
+        for (rk, rv) in self.level0_range(lo, upper) {
+            buf.push(decode_level_row::<S>(&rk, &rv));
+        }
+        for (slot, cnt) in buf.drain(..).rev() {
+            if !visit(slot, cnt) {
+                return;
+            }
+        }
+    }
+
+    // =====================================================================
+    // Queries
+    // =====================================================================
 
     /// Retrieves entries by page, a common use case for web services.
     ///
@@ -573,13 +927,6 @@ where
         )
     }
 
-    fn slot_entry_cnt(&self, slot: &S) -> EntryCnt {
-        self.data
-            .get(slot)
-            .map(|d| d.len() as EntryCnt)
-            .unwrap_or(0)
-    }
-
     // Number of entries stored in slots strictly greater than `slot`
     // (whether the slot itself exists or not).
     fn distance_to_the_rightmost_slot(&self, slot: &S) -> Distance {
@@ -598,21 +945,18 @@ where
         }
         let mut left_bound = S::MIN;
         let mut ret = 0;
-        for t in self.tiers.iter().rev() {
-            t.ensure_cache();
-            let right_bound = slot.floor_align(&t.floor_base);
-            ret += t
-                .cache
-                .lock()
+        for lv in self.levels.iter().rev() {
+            let right_bound = slot.floor_align(&lv.floor_base);
+            ret += lv
+                .buckets
                 .range(left_bound.clone()..right_bound.clone())
                 .map(|(_, cnt)| *cnt as Distance)
                 .sum::<Distance>();
-            left_bound = right_bound
+            left_bound = right_bound;
         }
         ret += self
-            .data
-            .range(left_bound..slot.clone())
-            .map(|(_, d)| d.len() as Distance)
+            .level0_range(Bound::Included(left_bound), Bound::Excluded(slot.clone()))
+            .map(|(_, v)| decode_cnt(&v) as Distance)
             .sum::<Distance>();
         ret
     }
@@ -628,15 +972,17 @@ where
         (skip_n as SkipNum, page_size as TakeNum)
     }
 
-    /// Single-pass page location using in-memory tier caches.
+    /// Single-pass page location using the in-memory level caches plus a
+    /// bounded walk over the per-slot count rows.
     fn locate_page_start(&self, global_skip_n: EntryCnt) -> (Bound<S>, SkipNum) {
         let mut slot_start = Bound::Included(S::MIN);
         let mut remaining: u64 = global_skip_n;
 
-        for t in self.tiers.iter().rev() {
-            t.ensure_cache();
-            let c = t.cache.lock();
-            let mut hdr = c.range((slot_start.clone(), Bound::Unbounded)).peekable();
+        for lv in self.levels.iter().rev() {
+            let mut hdr = lv
+                .buckets
+                .range((slot_start.clone(), Bound::Unbounded))
+                .peekable();
             while let Some(entry_cnt) = hdr.next().map(|(_, cnt)| *cnt) {
                 if entry_cnt > remaining {
                     break;
@@ -651,16 +997,20 @@ where
         }
 
         let mut hdr = self
-            .data
-            .range((slot_start.clone(), Bound::Unbounded))
+            .level0_range(slot_start.clone(), Bound::Unbounded)
             .peekable();
-        while let Some(entry_cnt) = hdr.next().map(|(_, entries)| entries.len() as u64) {
+        while let Some(entry_cnt) = hdr.next().map(|(_, v)| decode_cnt(&v)) {
             if entry_cnt > remaining {
                 break;
             } else {
                 slot_start = hdr
                     .peek()
-                    .map(|(s, _)| Bound::Included((*s).clone()))
+                    .map(|(rk, _)| {
+                        Bound::Included(
+                            S::from_bytes(rk[2..].to_vec())
+                                .expect("SlotDex: corrupt level-row floor bytes"),
+                        )
+                    })
                     .unwrap_or(Bound::Excluded(S::MAX));
                 remaining -= entry_cnt;
             }
@@ -669,13 +1019,13 @@ where
         (slot_start, remaining)
     }
 
-    /// Single-pass reverse page location using in-memory tier caches.
+    /// Single-pass reverse page location.
     ///
     /// Mirror of [`locate_page_start`](Self::locate_page_start):
     /// `global_skip_n` counts entries to skip walking from the greatest
     /// storage slot downward. Returns the upper bound at which the reverse
-    /// data walk must resume, plus the number of entries still to skip
-    /// inside that boundary slot.
+    /// entry walk must resume, plus the number of entries still to skip
+    /// inside that boundary region.
     ///
     /// Consumed units are cut off with `Bound::Excluded(floor)`: bucket
     /// floors are left-aligned, so excluding a consumed floor also drops
@@ -684,10 +1034,9 @@ where
         let mut slot_end: Bound<S> = Bound::Unbounded;
         let mut remaining: u64 = global_skip_n;
 
-        for t in self.tiers.iter().rev() {
-            t.ensure_cache();
-            let c = t.cache.lock();
-            for (floor, entry_cnt) in c.range((Bound::Unbounded, slot_end.clone())).rev()
+        for lv in self.levels.iter().rev() {
+            for (floor, entry_cnt) in
+                lv.buckets.range((Bound::Unbounded, slot_end.clone())).rev()
             {
                 if *entry_cnt > remaining {
                     break;
@@ -697,18 +1046,22 @@ where
             }
         }
 
-        for (slot, entries) in
-            self.data.range((Bound::Unbounded, slot_end.clone())).rev()
-        {
-            let entry_cnt = entries.len() as u64;
-            if entry_cnt > remaining {
-                break;
-            }
-            slot_end = Bound::Excluded(slot);
-            remaining -= entry_cnt;
-        }
+        let mut slot_end_cell = slot_end;
+        let mut remaining_cell = remaining;
+        self.level0_walk_desc(
+            Bound::Unbounded,
+            slot_end_cell.clone(),
+            |slot, entry_cnt| {
+                if entry_cnt > remaining_cell {
+                    return false;
+                }
+                slot_end_cell = Bound::Excluded(slot);
+                remaining_cell -= entry_cnt;
+                true
+            },
+        );
 
-        (slot_end, remaining)
+        (slot_end_cell, remaining_cell)
     }
 
     fn get_entries(
@@ -731,30 +1084,17 @@ where
         let (global_skip_n, take_n) =
             self.offsets_from_the_leftmost_slot(&slot_start, page_size, page_index);
 
-        let mut ret = Vec::with_capacity(take_n as usize);
-
         let (slot_start_actual, local_skip_n) = self.locate_page_start(global_skip_n);
 
-        let mut skip_n = local_skip_n as usize;
-        let take_n = take_n as usize;
+        let iter = match self.entry_range(slot_start_actual, Bound::Included(slot_end)) {
+            Some(iter) => iter,
+            None => return vec![],
+        };
 
-        for (_, entries) in self
-            .data
-            .range((slot_start_actual, Bound::Included(slot_end)))
-        {
-            entries
-                .iter()
-                .skip(skip_n)
-                .take(take_n - ret.len())
-                .for_each(|entry| ret.push(entry));
-            skip_n = 0;
-            if ret.len() >= take_n {
-                assert_eq!(ret.len(), take_n);
-                break;
-            }
-        }
-
-        ret
+        iter.skip(local_skip_n as usize)
+            .take(take_n as usize)
+            .map(|(rk, _)| decode_entry_row::<S, K>(&rk).1)
+            .collect()
     }
 
     /// Reverse-order paging: walk slots from `slot_end` down to `slot_start`
@@ -768,9 +1108,12 @@ where
     ///
     /// The page start is located through
     /// [`locate_page_rstart`](Self::locate_page_rstart) — the
-    /// tier-accelerated mirror of the forward path — so the raw data walk
-    /// below only touches the slots that actually contribute to the
-    /// returned page.
+    /// tier-accelerated mirror of the forward path. The contributing slots
+    /// are then planned from one reverse walk over the per-slot count rows
+    /// (no entry data touched), and the entries are fetched with **one**
+    /// forward scan over the contiguous slot interval of the page — engine
+    /// iterators are expensive, so the per-slot range construction this
+    /// replaces dominated the whole query.
     fn get_entries_reverse(
         &self,
         slot_start: S, // Included
@@ -788,29 +1131,76 @@ where
 
         let (slot_end_actual, local_skip_n) = self.locate_page_rstart(global_skip_n);
 
-        let take_n = page_size as usize;
         let mut to_skip = local_skip_n as usize;
-        let mut ret = Vec::with_capacity(take_n);
+        let mut remaining = page_size as usize;
 
-        for (_, entries) in self
-            .data
-            .range((Bound::Included(slot_start), slot_end_actual))
-            .rev()
-        {
-            let n = entries.len();
-            if to_skip >= n {
-                to_skip -= n;
-                continue;
-            }
-            for entry in entries.iter().skip(to_skip) {
-                ret.push(entry);
-                if ret.len() == take_n {
-                    return ret;
+        // Plan the contributing slots (descending) from the count rows:
+        // (slot, skip inside the slot, take from the slot).
+        let mut plan: Vec<(S, usize, usize)> = vec![];
+        self.level0_walk_desc(
+            Bound::Included(slot_start.clone()),
+            slot_end_actual,
+            |slot, n| {
+                let n = n as usize;
+                if to_skip >= n {
+                    to_skip -= n;
+                    return true;
+                }
+                let take = (n - to_skip).min(remaining);
+                plan.push((slot, to_skip, take));
+                remaining -= take;
+                to_skip = 0;
+                remaining > 0
+            },
+        );
+        let Some((last, _, _)) = plan.last() else {
+            return vec![];
+        };
+
+        // One forward entry scan over the page's contiguous slot interval,
+        // split into per-slot segments.
+        let lo = last.clone();
+        let hi = plan[0].0.clone();
+        let iter = match self.entry_range(Bound::Included(lo), Bound::Included(hi)) {
+            Some(iter) => iter,
+            None => return vec![],
+        };
+        let mut segments: BTreeMap<S, Vec<K>> =
+            plan.iter().map(|(s, ..)| (s.clone(), vec![])).collect();
+        let quota: BTreeMap<S, (usize, usize)> = plan
+            .iter()
+            .map(|(s, skip, take)| (s.clone(), (*skip, *take)))
+            .collect();
+        let mut cur: Option<(S, usize, usize, usize)> = None; // slot, skip, take, seen
+        for (rk, _) in iter {
+            let (slot, k) = decode_entry_row::<S, K>(&rk);
+            match &mut cur {
+                Some((s, skip, take, seen)) if *s == slot => {
+                    *seen += 1;
+                    if *seen > *skip && segments[s].len() < *take {
+                        segments.get_mut(s).expect("planned").push(k);
+                    }
+                }
+                _ => {
+                    let Some(&(skip, take)) = quota.get(&slot) else {
+                        // A slot inside the interval that contributes
+                        // nothing (fully consumed by the skip).
+                        cur = Some((slot, usize::MAX, 0, 0));
+                        continue;
+                    };
+                    if skip == 0 && take > 0 {
+                        segments.get_mut(&slot).expect("planned").push(k);
+                    }
+                    cur = Some((slot, skip, take, 1));
                 }
             }
-            to_skip = 0;
         }
 
+        // Emit slot groups in descending slot order, ascending within.
+        let mut ret = Vec::with_capacity(page_size as usize);
+        for (slot, ..) in &plan {
+            ret.extend(segments.remove(slot).expect("planned"));
+        }
         ret
     }
 
@@ -855,76 +1245,18 @@ where
         let slot_end = slot_end.unwrap_or(S::MAX);
 
         if S::MIN == slot_start && S::MAX == slot_end {
-            dc::count(self.total.get_value())
+            self.total_cache
         } else {
             self.entry_cnt_within_two_slots(slot_start, slot_end)
         }
     }
 
     /// Returns the total number of entries in the `SlotDex`.
-    ///
-    /// Automatically rebuilt from disk on recovery after an unclean
-    /// shutdown (see [`from_meta`](Self::from_meta)).
     pub fn total(&self) -> EntryCnt {
         self.total_by_slot(None, None)
     }
 
     // --- Private Helper Methods ---
-
-    fn mark_dirty(&mut self) {
-        let raw = self.total.get_value();
-        self.total.set_value(&dc::set_dirty(raw));
-    }
-
-    // Ensure there is enough tier capacity to cover the new slot.
-    fn ensure_tier_capacity(&mut self) {
-        let tiers_len = self.tiers.len();
-        if let Some(top) = self.tiers.last_mut() {
-            if (top.len() as i128) <= self.tier_capacity.as_i128() {
-                return;
-            }
-            top.ensure_cache();
-            let entries: Vec<(S, EntryCnt)> = top
-                .cache
-                .get_mut()
-                .iter()
-                .map(|(k, v)| (k.clone(), *v))
-                .collect();
-            let mut newtop = Tier::new(tiers_len as u32, &self.tier_capacity);
-            for (slot, cnt) in entries {
-                let slot_floor = slot.floor_align(&newtop.floor_base);
-                let c = newtop.cache.get_mut();
-                let v = c.get(&slot_floor).copied().unwrap_or(0);
-                if 0 == v {
-                    *newtop.entry_count.get_mut() += 1;
-                    if let Some(l) = newtop.len_cache.as_mut() {
-                        *l += 1;
-                    }
-                }
-                let new_v = v + cnt;
-                c.insert(slot_floor.clone(), new_v);
-                newtop.store.insert(&slot_floor, &new_v);
-            }
-            self.tiers.push(newtop);
-        } else {
-            let mut newtop = Tier::new(tiers_len as u32, &self.tier_capacity);
-            for (slot, entries) in self.data.iter() {
-                let slot_floor = slot.floor_align(&newtop.floor_base);
-                let c = newtop.cache.get_mut();
-                let v = c.get(&slot_floor).copied().unwrap_or(0);
-                if 0 == v {
-                    *newtop.entry_count.get_mut() += 1;
-                    if let Some(l) = newtop.len_cache.as_mut() {
-                        *l += 1;
-                    }
-                }
-                let new_v = v + entries.len() as EntryCnt;
-                c.insert(slot_floor.clone(), new_v);
-                newtop.store.insert(&slot_floor, &new_v);
-            }
-            self.tiers.push(newtop);
-        }
-    }
 
     // Convert a logical slot (user perspective) to a storage slot (internal key).
     #[inline(always)]

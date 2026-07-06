@@ -24,7 +24,7 @@ Before analyzing any change, gather context:
    | `strata/src/slotdex/` | slot indexing | `slotdex.md` |
    | `strata/src/dagmap/` | DAG collections | `dagmap.md` |
    | `strata/src/vecdex/` | vector index (HNSW) | `vecdex.md` |
-   | `strata/src/common/` (ende.rs, macros.rs, dirty_count.rs), `core/src/common/error.rs` | encoding & common | *(cross-cutting — no dedicated guide)* |
+   | `strata/src/common/` (ende.rs, macros.rs, staged.rs), `core/src/common/error.rs` | encoding & common | *(cross-cutting — no dedicated guide)* |
 3. **Load subsystem patterns** — read the pattern guide for each affected subsystem (skip unaffected ones)
 4. **Check call sites** — use grep/LSP to find all callers of changed functions
 5. **Check related tests** — identify which test files cover the changed code

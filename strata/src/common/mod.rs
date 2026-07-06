@@ -10,10 +10,9 @@
 /// A module for encoding and decoding traits.
 pub mod ende;
 pub(crate) mod macros;
+pub(crate) mod staged;
 
 pub use vsdb_core::common::*;
-
-pub mod dirty_count;
 
 use error::Result;
 use serde::{Serialize, de::DeserializeOwned};

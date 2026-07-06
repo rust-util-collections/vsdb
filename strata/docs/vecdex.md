@@ -40,7 +40,7 @@ let restored: VecDex<String, Cosine> = VecDex::from_meta(id).unwrap();
 | `new` | `(config: HnswConfig) -> Self` | Create empty index |
 | `instance_id` | `(&self) -> u64` | Unique persistent instance ID |
 | `insert` | `(&mut self, key: &K, vector: &[S]) -> Result<()>` | Add or update a vector |
-| `insert_batch` | `(&mut self, items: &[(K, Vec<S>)]) -> Result<()>` | Sequential bulk insert |
+| `insert_batch` | `(&mut self, items: &[(K, Vec<S>)]) -> Result<()>` | Chunked bulk insert (one atomic batch per chunk) |
 | `search` | `(&self, query: &[S], k: usize) -> Result<Vec<(K, S)>>` | k-NN search |
 | `search_ef` | `(&self, query: &[S], k: usize, ef: usize) -> Result<Vec<(K, S)>>` | Search with custom beam width |
 | `search_with_filter` | `(&self, query: &[S], k: usize, predicate: impl Fn(&K) -> bool) -> Result<Vec<(K, S)>>` | k-NN search with key predicate |
@@ -55,15 +55,13 @@ let restored: VecDex<String, Cosine> = VecDex::from_meta(id).unwrap();
 | `set_ef_search` | `(&mut self, ef: usize)` | Update the default search beam width |
 | `clear` | `(&mut self)` | Remove all data |
 | `compact` | `(&mut self) -> Result<()>` | Rebuild graph from existing vectors |
-| `save_meta` | `(&mut self) -> Result<u64>` | Persist for later recovery (clears the dirty bit) |
+| `save_meta` | `(&self) -> Result<u64>` | Persist metadata for later recovery (create-time constant; saving once after creation suffices) |
 | `from_meta` | `(instance_id: u64) -> Result<Self>` | Recover from saved metadata |
 
-After `save_meta`, later mutations set the dirty bit again.  On dirty recovery,
-`from_meta` reconciles all per-node rows before returning the index: torn rows
-left by an interrupted insert/remove are dropped, `node_count`, `next_node_id`,
-`entry_point`, and `max_layer` are rebuilt from live data (preferring an entry
-point that still has base-layer edges), and any surviving node whose edge
-writes were lost is relinked into the graph.
+Every mutation (insert, remove, `set_ef_search`, the graph state) is committed
+through a single atomic engine write batch, so a crash can never leave the
+index internally inconsistent: `from_meta` always returns a coherent index and
+never needs to reconcile or rebuild anything.
 
 ## Configuration
 
@@ -120,22 +118,27 @@ To compensate for selective filters, the search internally expands `ef` to
 
 ## Storage Architecture
 
-VecDex maps the HNSW graph onto VSDB's core storage primitives:
+All persistent state lives in **one** `MapxRaw` handle, namespaced by a
+leading tag byte:
 
 ```text
 VecDex<K, D, S = f32>
-  vectors:      MapxOrd<u64, Vec<S>>       node_id -> vector data
-  adjacency:    MapxRaw                     (layer || node_id) -> neighbor_ids
-  key_to_node:  Mapx<K, u64>               user key -> node_id
-  node_to_key:  MapxOrd<u64, K>            node_id -> user key
-  node_info:    MapxOrd<u64, NodeInfo>     node_id -> layer info
-  meta:         Orphan<HnswMeta>           entry point, counters, config
+  [0x00 | node_id BE]          -> vector data (postcard Vec<S>)
+  [0x01 | layer | node_id BE]  -> neighbor ids (packed u64 LE)
+  [0x02 | key bytes]           -> node_id (u64 LE)
+  [0x03 | node_id BE]          -> user key bytes
+  [0x04 | node_id BE]          -> node max layer
+  [0x05]                       -> graph state (entry point, counters)
 ```
 
-Adjacency compound key: `[layer: u8][node_id: u64 BE]` = 9 bytes.
-Neighbor lists: packed little-endian `u64` arrays.
+Because every mutation stages its rows and commits them in a single
+atomic engine write batch, on-disk state is always internally
+consistent — there is no dirty flag and no rebuild-on-recovery path.
+The serialized handle metadata (single prefix + creation `HnswConfig`)
+is create-time constant.
 
-All data is persisted to MMDB (LSM-Tree) via the standard 16-shard routing.
+All data is persisted to MMDB (LSM-Tree); a single-handle index lives in
+one shard, which is what makes the whole-mutation write batch atomic.
 
 ## Type Aliases
 

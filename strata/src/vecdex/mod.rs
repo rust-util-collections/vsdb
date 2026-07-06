@@ -7,6 +7,31 @@
 //!
 //! For detailed documentation see [VecDex docs](../../docs/vecdex.md).
 //!
+//! # Storage model (single-handle, crash-atomic)
+//!
+//! All persistent state lives in **one** [`MapxRaw`] handle, namespaced
+//! by a leading tag byte:
+//!
+//! ```text
+//! [0x00 | node_id BE]            -> vector (postcard Vec<S>)
+//! [0x01 | layer | node_id BE]    -> packed u64 LE neighbor list
+//! [0x02 | key bytes]             -> node_id u64 LE
+//! [0x03 | node_id BE]            -> key bytes
+//! [0x04 | node_id BE]            -> node max_layer (postcard)
+//! [0x05]                         -> graph state (postcard)
+//! ```
+//!
+//! Every mutation stages its rows through a read-your-writes overlay and
+//! commits them in a **single atomic engine write batch**, so on-disk
+//! state is always internally consistent: there is no dirty flag, no
+//! reconcile pass, and no rebuild-on-recovery path.
+//!
+//! The serialized form of a `VecDex` (its typed handle metadata) is the
+//! raw prefix of the single handle plus the creation-time [`HnswConfig`].
+//! It is **create-time constant**: graph growth only writes ordinary
+//! data rows, so metadata saved once at creation stays valid for the
+//! lifetime of the instance.
+//!
 //! # Quick start
 //!
 //! ```ignore
@@ -25,23 +50,35 @@
 pub mod distance;
 mod hnsw;
 
-use crate::{
-    Mapx, MapxOrd,
-    basic::orphan::Orphan,
-    common::dirty_count as dc,
-    common::ende::{KeyEnDe, ValueEnDe},
-    common::error::{Result, VsdbError},
+use crate::common::{
+    ende::{KeyEnDe, ValueEnDe},
+    error::{Result, VsdbError},
+    staged::StagedRows,
 };
 use distance::{DistanceMetric, Scalar};
 use hnsw::{
-    adj_key, decode_neighbors, get_neighbors, prune_neighbors, random_layer,
-    remove_adjacency, search_layer, select_neighbors_heuristic, set_neighbors,
+    AdjRead, adj_key, encode_neighbors, get_neighbors, prune_selection, random_layer,
+    search_layer, select_neighbors_heuristic,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::rc::Rc;
 use vsdb_core::basic::mapx_raw::MapxRaw;
+
+// Namespace tags (first key byte).
+const TAG_VEC: u8 = 0x00;
+pub(crate) const TAG_ADJ: u8 = 0x01;
+const TAG_KEY2NODE: u8 = 0x02;
+const TAG_NODE2KEY: u8 = 0x03;
+const TAG_INFO: u8 = 0x04;
+const TAG_STATE: u8 = 0x05;
+
+const STATE_KEY: [u8; 1] = [TAG_STATE];
+
+/// Serialized-payload layout version. Guards against positionally
+/// decoding metadata written by the pre-single-handle layout.
+const LAYOUT_VERSION: u8 = 2;
 
 /// Configuration for a [`VecDex`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -70,22 +107,157 @@ impl Default for HnswConfig {
     }
 }
 
+/// Mutable graph state, persisted as an ordinary data row and mirrored
+/// in memory.  `node_count` is a plain count — crash consistency comes
+/// from atomic mutation batches, not from a dirty flag.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-struct HnswMeta {
+struct GraphState {
     entry_point: Option<u64>,
     max_layer: u8,
     node_count: u64,
     next_node_id: u64,
-    m: usize,
-    m_max0: usize,
-    ef_construction: usize,
     ef_search: usize,
-    dim: usize,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-struct NodeInfo {
-    max_layer: u8,
+// =========================================================================
+// Key codecs
+// =========================================================================
+
+#[inline]
+fn node_key(tag: u8, node_id: u64) -> [u8; 9] {
+    let mut buf = [0u8; 9];
+    buf[0] = tag;
+    buf[1..9].copy_from_slice(&node_id.to_be_bytes());
+    buf
+}
+
+fn user_key(key_bytes: &[u8]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(1 + key_bytes.len());
+    v.push(TAG_KEY2NODE);
+    v.extend_from_slice(key_bytes);
+    v
+}
+
+fn decode_node_id(raw: &[u8]) -> u64 {
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&raw[..8]);
+    u64::from_le_bytes(b)
+}
+
+// =========================================================================
+// Mutation transaction
+// =========================================================================
+
+/// One mutation's staged rows plus a working copy of the graph state.
+/// Reads observe the operation's own uncommitted writes.
+struct Txn<'a, S> {
+    store: &'a MapxRaw,
+    rows: StagedRows,
+    state: GraphState,
+    /// Per-transaction decoded-vector cache: HNSW linking re-reads the
+    /// same vectors many times across layers/heuristics; decoding each
+    /// row once per transaction removes the dominant redundant cost.
+    vec_cache: std::cell::RefCell<HashMap<u64, Rc<Vec<S>>>>,
+}
+
+impl<S> AdjRead for Txn<'_, S> {
+    #[inline]
+    fn adj_row(&self, key: &[u8]) -> Option<Vec<u8>> {
+        self.rows.get_over(self.store, key)
+    }
+}
+
+impl<'a, S: Scalar> Txn<'a, S> {
+    fn new(store: &'a MapxRaw, state: GraphState) -> Self {
+        Self {
+            store,
+            rows: StagedRows::new(),
+            state,
+            vec_cache: std::cell::RefCell::new(HashMap::new()),
+        }
+    }
+
+    fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
+        self.rows.get_over(self.store, key)
+    }
+
+    fn read_vec(&self, node_id: u64) -> Option<Rc<Vec<S>>> {
+        if let Some(v) = self.vec_cache.borrow().get(&node_id) {
+            return Some(Rc::clone(v));
+        }
+        let raw = self.get(&node_key(TAG_VEC, node_id))?;
+        let v = Rc::new(decode_value::<Vec<S>>(&raw));
+        self.vec_cache.borrow_mut().insert(node_id, Rc::clone(&v));
+        Some(v)
+    }
+
+    /// Stages a vector row and pre-warms the decode cache.
+    fn put_vec(&mut self, node_id: u64, vector: &[S]) {
+        let v: Vec<S> = vector.to_vec();
+        self.rows
+            .put(node_key(TAG_VEC, node_id).to_vec(), encode_value(&v));
+        self.vec_cache.get_mut().insert(node_id, Rc::new(v));
+    }
+
+    fn del_vec(&mut self, node_id: u64) {
+        self.rows.del(node_key(TAG_VEC, node_id).to_vec());
+        self.vec_cache.get_mut().remove(&node_id);
+    }
+
+    fn set_neighbors(&mut self, layer: u8, node_id: u64, neighbors: &[u64]) {
+        let key = adj_key(layer, node_id).to_vec();
+        if neighbors.is_empty() {
+            self.rows.del(key);
+        } else {
+            self.rows.put(key, encode_neighbors(neighbors));
+        }
+    }
+
+    fn remove_adjacency(&mut self, layer: u8, node_id: u64) {
+        self.rows.del(adj_key(layer, node_id).to_vec());
+    }
+
+    /// Applies the pruning result of
+    /// [`prune_selection`](hnsw::prune_selection) for `(node, layer)` and
+    /// detaches the evicted back-edges, mirroring the insert-time
+    /// neighbor-eviction protocol. Returns the evicted ids.
+    fn prune_and_detach<D: DistanceMetric<S>>(
+        &mut self,
+        node_id: u64,
+        layer: u8,
+        m_max: usize,
+        keep: Option<u64>,
+    ) -> bool {
+        let pruned = {
+            let gv = |id: u64| self.read_vec(id);
+            prune_selection::<S, D, Self>(node_id, layer, m_max, self, &gv)
+        };
+        let Some((pruned, evicted)) = pruned else {
+            return true;
+        };
+        self.set_neighbors(layer, node_id, &pruned);
+        let kept = keep.is_none_or(|k| !evicted.contains(&k));
+        for evicted_id in evicted {
+            let mut e_list = get_neighbors(self, layer, evicted_id);
+            e_list.retain(|&x| x != node_id);
+            self.set_neighbors(layer, evicted_id, &e_list);
+        }
+        kept
+    }
+
+    /// Stages the state row and hands the parts back for commit.
+    fn finish(mut self) -> (StagedRows, GraphState) {
+        self.rows.put(STATE_KEY.to_vec(), encode_value(&self.state));
+        (self.rows, self.state)
+    }
+}
+
+fn encode_value<T: ValueEnDe>(v: &T) -> Vec<u8> {
+    v.encode()
+}
+
+fn decode_value<T: ValueEnDe>(raw: &[u8]) -> T {
+    T::decode(raw).expect("VecDex: corrupt row payload")
 }
 
 /// A persistent, disk-backed approximate nearest-neighbor index
@@ -96,23 +268,24 @@ struct NodeInfo {
 /// - `D`: distance metric ([`L2`](distance::L2), [`Cosine`](distance::Cosine),
 ///   [`InnerProduct`](distance::InnerProduct)).
 /// - `S`: scalar type for vector components (`f32` or `f64`, default `f32`).
+///
+/// Every mutation is applied through a single atomic engine write batch,
+/// so a crash can never leave the index internally inconsistent.
 pub struct VecDex<K, D, S: Scalar = f32>
 where
     K: KeyEnDe + ValueEnDe + Clone + Eq,
     D: DistanceMetric<S>,
 {
-    vectors: MapxOrd<u64, Vec<S>>,
-    adjacency: MapxRaw,
-    key_to_node: Mapx<K, u64>,
-    node_to_key: MapxOrd<u64, K>,
-    node_info: MapxOrd<u64, NodeInfo>,
-    meta: Orphan<HnswMeta>,
-    _metric: PhantomData<D>,
+    store: MapxRaw,
+    config: HnswConfig,
+    /// In-memory mirror of the persisted graph-state row.
+    state: GraphState,
+    _p: PhantomData<(K, D, S)>,
 }
 
 impl<K, D, S> Serialize for VecDex<K, D, S>
 where
-    K: KeyEnDe + ValueEnDe + Clone + Eq + Serialize,
+    K: KeyEnDe + ValueEnDe + Clone + Eq,
     D: DistanceMetric<S>,
     S: Scalar,
 {
@@ -124,14 +297,7 @@ where
         // typed-handle envelope (tagged with `VecDex<K, D, S>`) is the
         // only guard against restoring an index under a different metric.
         crate::common::serialize_typed_handle_meta::<Self, Ser>(
-            &(
-                &self.vectors,
-                &self.adjacency,
-                &self.key_to_node,
-                &self.node_to_key,
-                &self.node_info,
-                &self.meta,
-            ),
+            &(LAYOUT_VERSION, &self.store, &self.config),
             serializer,
         )
     }
@@ -139,7 +305,7 @@ where
 
 impl<'de, K, D, S> Deserialize<'de> for VecDex<K, D, S>
 where
-    K: KeyEnDe + ValueEnDe + Clone + Eq + Deserialize<'de>,
+    K: KeyEnDe + ValueEnDe + Clone + Eq,
     D: DistanceMetric<S>,
     S: Scalar,
 {
@@ -147,29 +313,17 @@ where
     where
         De: serde::Deserializer<'de>,
     {
-        type Payload<K, S> = (
-            MapxOrd<u64, Vec<S>>,
-            MapxRaw,
-            Mapx<K, u64>,
-            MapxOrd<u64, K>,
-            MapxOrd<u64, NodeInfo>,
-            Orphan<HnswMeta>,
-        );
-        let (vectors, adjacency, key_to_node, node_to_key, node_info, meta) =
-            crate::common::deserialize_typed_handle_meta::<Self, Payload<K, S>, De>(
-                deserializer,
-            )?;
-        let mut me = VecDex {
-            vectors,
-            adjacency,
-            key_to_node,
-            node_to_key,
-            node_info,
-            meta,
-            _metric: PhantomData,
-        };
-        me.ensure_count();
-        Ok(me)
+        let (version, store, config) = crate::common::deserialize_typed_handle_meta::<
+            Self,
+            (u8, MapxRaw, HnswConfig),
+            De,
+        >(deserializer)?;
+        if version != LAYOUT_VERSION {
+            return Err(serde::de::Error::custom(format!(
+                "VecDex: unsupported layout version {version} (expected {LAYOUT_VERSION})"
+            )));
+        }
+        Ok(Self::hydrate(store, config))
     }
 }
 
@@ -180,11 +334,10 @@ where
     S: Scalar,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let m = self.meta.get_value();
         f.debug_struct("VecDex")
-            .field("node_count", &m.node_count)
-            .field("dim", &m.dim)
-            .field("max_layer", &m.max_layer)
+            .field("node_count", &self.state.node_count)
+            .field("dim", &self.config.dim)
+            .field("max_layer", &self.state.max_layer)
             .finish()
     }
 }
@@ -197,309 +350,9 @@ pub type VecDexCosine<K> = VecDex<K, distance::Cosine>;
 pub type VecDexL2F64<K> = VecDex<K, distance::L2, f64>;
 pub type VecDexCosineF64<K> = VecDex<K, distance::Cosine, f64>;
 
-// Separate impl block without Serialize/DeserializeOwned bounds so that
-// the hand-written Deserialize visitor (which only has `K: Deserialize`)
-// can call ensure_count().
 impl<K, D, S> VecDex<K, D, S>
 where
     K: KeyEnDe + ValueEnDe + Clone + Eq,
-    D: DistanceMetric<S>,
-    S: Scalar,
-{
-    /// If the dirty bit is set, reconcile all per-node rows and rebuild
-    /// the derived metadata from live data, then set the dirty bit for
-    /// the current process lifetime.  Called automatically during
-    /// deserialization.
-    fn ensure_count(&mut self) {
-        let raw = self.meta.get_value().node_count;
-        if dc::is_dirty(raw) {
-            self.recover_after_crash();
-        } else {
-            // Clean shutdown — count is trustworthy. Set dirty for this session.
-            self.meta.get_mut().node_count = dc::set_dirty(raw);
-        }
-    }
-
-    /// Crash recovery: the per-node rows (`vectors`, `key_to_node`,
-    /// `node_to_key`, `node_info`, `adjacency`) live under different
-    /// storage prefixes, so an unclean shutdown can persist an arbitrary
-    /// subset of any recent operation's writes.  Recovery restores a
-    /// coherent state:
-    ///
-    /// 1. **Reconcile** — a node is *live* iff all four metadata rows
-    ///    agree; every row of a torn node is dropped (the operation is
-    ///    treated as never having happened).  Adjacency is then sanitized
-    ///    so no live node is considered connected only through dropped ids.
-    /// 2. **Rebuild meta** — `node_count`, `next_node_id` (ids are never
-    ///    reused, even for dropped rows), and the entry point.  Entry
-    ///    election prefers nodes that still have base-layer edges so a
-    ///    torn, edge-less insert can never become the entry point and
-    ///    hide the rest of the graph.
-    /// 3. **Relink** — a live node without a base-layer adjacency row
-    ///    (its insert's edge writes were lost) is reconnected via
-    ///    [`link_node`](Self::link_node).  Relinking is additive, so a
-    ///    legitimately isolated node is repaired at worst into a better
-    ///    connected one.
-    fn recover_after_crash(&mut self) {
-        // Pass 1: classify nodes; track max id across ALL rows so node
-        // ids are never reused.
-        let mut max_id: Option<u64> = None;
-        let mut live: Vec<(u64, u8)> = Vec::new();
-        let mut torn: HashSet<u64> = HashSet::new();
-
-        for (nid, key) in self.node_to_key.iter() {
-            max_id = Some(max_id.map_or(nid, |m| m.max(nid)));
-            let complete = self.vectors.get(&nid).is_some()
-                && self.key_to_node.get(&key) == Some(nid);
-            match self.node_info.get(&nid) {
-                Some(info) if complete => live.push((nid, info.max_layer)),
-                _ => {
-                    torn.insert(nid);
-                }
-            }
-        }
-        let live_ids: HashSet<u64> = live.iter().map(|&(nid, _)| nid).collect();
-        for (nid, _) in self.node_info.iter() {
-            max_id = Some(max_id.map_or(nid, |m| m.max(nid)));
-            if !live_ids.contains(&nid) {
-                torn.insert(nid);
-            }
-        }
-        for (nid, _) in self.vectors.iter() {
-            max_id = Some(max_id.map_or(nid, |m| m.max(nid)));
-            if !live_ids.contains(&nid) {
-                torn.insert(nid);
-            }
-        }
-        // Reverse orphans: key_to_node rows whose forward row disagrees.
-        let mut orphan_keys: Vec<K> = Vec::new();
-        for (key, nid) in self.key_to_node.iter() {
-            max_id = Some(max_id.map_or(nid, |m| m.max(nid)));
-            if self.node_to_key.get(&nid).as_ref() != Some(&key) {
-                orphan_keys.push(key);
-            }
-        }
-
-        // Pass 2: drop every row of torn nodes.  `random_layer` caps
-        // layers at 32, so sweeping 0..=32 covers all possible rows.
-        for &nid in &torn {
-            if let Some(key) = self.node_to_key.get(&nid)
-                && self.key_to_node.get(&key) == Some(nid)
-            {
-                self.key_to_node.remove(&key);
-            }
-            self.node_to_key.remove(&nid);
-            self.node_info.remove(&nid);
-            self.vectors.remove(&nid);
-            for l in 0..=32u8 {
-                remove_adjacency(&mut self.adjacency, l, nid);
-            }
-        }
-        for key in &orphan_keys {
-            self.key_to_node.remove(key);
-        }
-
-        // Pass 3: sanitize adjacency.  Track max ids found in adjacency too,
-        // so a clear-crash cannot leave stale edges whose ids are later reused.
-        let mut base_linked = HashSet::new();
-        let adjacency_rows: Vec<_> = self.adjacency.iter().collect();
-        for (key, raw_neighbors) in adjacency_rows {
-            if key.len() != 9 {
-                self.adjacency.remove(&key);
-                continue;
-            }
-
-            let layer = key[0];
-            let mut id = [0u8; 8];
-            id.copy_from_slice(&key[1..9]);
-            let source = u64::from_be_bytes(id);
-            max_id = Some(max_id.map_or(source, |m| m.max(source)));
-
-            let mut neighbors = decode_neighbors(&raw_neighbors);
-            for &neighbor in &neighbors {
-                max_id = Some(max_id.map_or(neighbor, |m| m.max(neighbor)));
-            }
-
-            if !live_ids.contains(&source) {
-                self.adjacency.remove(&key);
-                continue;
-            }
-
-            let before = neighbors.len();
-            neighbors.retain(|nid| *nid != source && live_ids.contains(nid));
-            neighbors.sort_unstable();
-            neighbors.dedup();
-
-            if neighbors.is_empty() {
-                self.adjacency.remove(&key);
-            } else {
-                if neighbors.len() != before {
-                    set_neighbors(&mut self.adjacency, layer, source, &neighbors);
-                }
-                if layer == 0 {
-                    base_linked.insert(source);
-                }
-            }
-        }
-
-        // Pass 4: rebuild derived metadata.  Prefer an entry point that
-        // still has base-layer edges (isolated candidates only matter
-        // when nothing is linked, e.g. a single-node index).
-        let mut entry: Option<(u64, u8, bool)> = None;
-        for &(nid, layer) in &live {
-            let linked = base_linked.contains(&nid);
-            // Tuple order: a linked candidate beats any unlinked one;
-            // among equals, the higher layer wins.
-            let better = match entry {
-                None => true,
-                Some((_, bl, blinked)) => (linked, layer) > (blinked, bl),
-            };
-            if better {
-                entry = Some((nid, layer, linked));
-            }
-        }
-        {
-            let mut m = self.meta.get_mut();
-            m.node_count = dc::set_dirty(live.len() as u64);
-            m.next_node_id = m.next_node_id.max(max_id.map_or(0, |i| i + 1));
-            if let Some((ep, ml, _)) = entry {
-                m.entry_point = Some(ep);
-                m.max_layer = ml;
-            } else {
-                m.entry_point = None;
-                m.max_layer = 0;
-            }
-        }
-
-        // Pass 5: reconnect live nodes whose edge writes were lost.
-        if live.len() > 1 {
-            let entry_id = entry.map(|(id, _, _)| id);
-            for &(nid, layer) in &live {
-                if Some(nid) == entry_id || base_linked.contains(&nid) {
-                    continue;
-                }
-                if let Some(vector) = self.vectors.get(&nid) {
-                    self.link_node(nid, &vector, layer);
-                }
-            }
-        }
-    }
-
-    /// Sets the persisted dirty bit (idempotent).  Called at the start of
-    /// every mutation so that a crash after [`save_meta`](Self::save_meta)
-    /// is still detected as an unclean shutdown on recovery.
-    fn mark_dirty(&mut self) {
-        let raw = self.meta.get_value().node_count;
-        if !dc::is_dirty(raw) {
-            self.meta.get_mut().node_count = dc::set_dirty(raw);
-        }
-    }
-
-    /// Wires `node_id` into the HNSW graph (the linking phases of an
-    /// insert): greedy descent from the entry point, then heuristic
-    /// neighbor selection and bidirectional edge creation on every layer
-    /// from `min(node_layer, max_layer)` down to 0, raising the entry
-    /// point afterwards if `node_layer` exceeds the current maximum.
-    ///
-    /// Also used by crash recovery to reconnect a node whose original
-    /// edge writes were lost, so it defends against states a plain
-    /// insert can never see: `node_id` itself is skipped both as a
-    /// descent target and as a neighbor candidate (a partially linked
-    /// node is reachable from the entry point and would otherwise be
-    /// selected as its own nearest neighbor).
-    fn link_node(&mut self, node_id: u64, vector: &[S], node_layer: u8) {
-        let meta = self.meta.get_value().clone();
-        let Some(ep) = meta.entry_point else {
-            let mut m = self.meta.get_mut();
-            m.entry_point = Some(node_id);
-            m.max_layer = node_layer;
-            return;
-        };
-        if ep == node_id {
-            return;
-        }
-
-        let get_vec =
-            |id: u64| -> Option<Rc<Vec<S>>> { self.vectors.get(&id).map(Rc::new) };
-        let cur_max = meta.max_layer;
-
-        // Phase 1: Greedy descent from top layer to node_layer + 1.
-        let mut cur_ep = vec![ep];
-        for l in (node_layer.saturating_add(1)..=cur_max).rev() {
-            let res = search_layer::<S, D>(
-                vector,
-                &cur_ep,
-                1,
-                l,
-                &get_vec,
-                &self.adjacency,
-                None,
-            );
-            if let Some(&(_, id)) = res.iter().find(|&&(_, id)| id != node_id) {
-                cur_ep = vec![id];
-            }
-        }
-
-        // Phase 2: Insert at layers node_layer..0 with heuristic selection.
-        let top = node_layer.min(cur_max);
-        for l in (0..=top).rev() {
-            let m_max = if l == 0 { meta.m_max0 } else { meta.m };
-
-            let candidates = search_layer::<S, D>(
-                vector,
-                &cur_ep,
-                meta.ef_construction,
-                l,
-                &get_vec,
-                &self.adjacency,
-                None,
-            );
-            let neighbor_pool: Vec<(S, u64)> = candidates
-                .iter()
-                .copied()
-                .filter(|&(_, id)| id != node_id)
-                .collect();
-
-            let selected =
-                select_neighbors_heuristic::<S, D>(&neighbor_pool, m_max, &get_vec);
-
-            set_neighbors(&mut self.adjacency, l, node_id, &selected);
-
-            for &neighbor in &selected {
-                let mut n_neighbors = get_neighbors(&self.adjacency, l, neighbor);
-                n_neighbors.push(node_id);
-                set_neighbors(&mut self.adjacency, l, neighbor, &n_neighbors);
-                let evicted = prune_neighbors::<S, D>(
-                    neighbor,
-                    l,
-                    m_max,
-                    &mut self.adjacency,
-                    &get_vec,
-                );
-                for evicted_id in evicted {
-                    let mut e_list = get_neighbors(&self.adjacency, l, evicted_id);
-                    e_list.retain(|&x| x != neighbor);
-                    set_neighbors(&mut self.adjacency, l, evicted_id, &e_list);
-                }
-            }
-
-            cur_ep = neighbor_pool.iter().map(|&(_, id)| id).collect();
-            if cur_ep.is_empty() {
-                cur_ep = vec![ep];
-            }
-        }
-
-        if node_layer > cur_max {
-            let mut m = self.meta.get_mut();
-            m.entry_point = Some(node_id);
-            m.max_layer = node_layer;
-        }
-    }
-}
-
-impl<K, D, S> VecDex<K, D, S>
-where
-    K: KeyEnDe + ValueEnDe + Clone + Eq + Serialize + serde::de::DeserializeOwned,
     D: DistanceMetric<S>,
     S: Scalar,
 {
@@ -515,62 +368,65 @@ where
             config.ef_construction > 0,
             "VecDex: ef_construction must be > 0 (else search_layer returns no candidates)"
         );
-        let meta = HnswMeta {
-            entry_point: None,
-            max_layer: 0,
-            node_count: dc::set_dirty(0),
-            next_node_id: 0,
-            m: config.m,
-            m_max0: config.m_max0,
-            ef_construction: config.ef_construction,
+        let state = GraphState {
             ef_search: config.ef_search,
-            dim: config.dim,
+            ..GraphState::default()
         };
         Self {
-            vectors: MapxOrd::new(),
-            adjacency: MapxRaw::new(),
-            key_to_node: Mapx::new(),
-            node_to_key: MapxOrd::new(),
-            node_info: MapxOrd::new(),
-            meta: Orphan::new(meta),
-            _metric: PhantomData,
+            store: MapxRaw::new(),
+            config,
+            state,
+            _p: PhantomData,
+        }
+    }
+
+    /// Reconnects to an existing store and reads the persisted graph
+    /// state (absent on a never-mutated index).
+    fn hydrate(store: MapxRaw, config: HnswConfig) -> Self {
+        let state = store
+            .get(STATE_KEY)
+            .map(|raw| decode_value::<GraphState>(&raw))
+            .unwrap_or_else(|| GraphState {
+                ef_search: config.ef_search,
+                ..GraphState::default()
+            });
+        Self {
+            store,
+            config,
+            state,
+            _p: PhantomData,
         }
     }
 
     /// Returns the unique instance ID.
     #[inline(always)]
     pub fn instance_id(&self) -> u64 {
-        self.vectors.instance_id()
+        self.store.instance_id()
     }
 
-    /// Persists metadata for later recovery via [`from_meta`](Self::from_meta).
+    /// Persists this instance's metadata to disk so that it can be
+    /// recovered later via [`from_meta`](Self::from_meta).
     ///
-    /// Marks a clean shutdown so that the next [`from_meta`](Self::from_meta)
-    /// call can skip the count rebuild.
-    pub fn save_meta(&mut self) -> Result<u64> {
+    /// The metadata is create-time constant (single handle + creation
+    /// config), so calling this once after creation is sufficient for
+    /// the lifetime of the instance.
+    pub fn save_meta(&self) -> Result<u64> {
         let id = self.instance_id();
         crate::common::save_instance_meta(id, self)?;
-
-        let mut m = self.meta.get_mut();
-        m.node_count = dc::clear_dirty(m.node_count);
         Ok(id)
     }
 
     /// Recovers a `VecDex` from previously saved metadata.
     ///
-    /// If the previous session did not call [`save_meta`](Self::save_meta)
-    /// (unclean shutdown), the node count is automatically rebuilt from
-    /// the live data.
+    /// Every mutation is applied atomically, so the recovered state is
+    /// always internally consistent — there is no rebuild path.
     pub fn from_meta(instance_id: u64) -> Result<Self> {
         crate::common::load_instance_meta(instance_id)
     }
 
     /// Returns the number of indexed vectors.
-    ///
-    /// Automatically rebuilt from disk on recovery after an unclean
-    /// shutdown (see [`from_meta`](Self::from_meta)).
     pub fn len(&self) -> u64 {
-        dc::count(self.meta.get_value().node_count)
+        self.state.node_count
     }
 
     /// Returns `true` if the index contains no vectors.
@@ -579,115 +435,285 @@ where
     }
 
     /// Updates the default search beam width.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the engine-level commit fails (matching the behavior of
+    /// the plain collection types on engine write failure).
     pub fn set_ef_search(&mut self, ef: usize) {
-        self.meta.get_mut().ef_search = ef;
+        let mut txn: Txn<'_, S> = Txn::new(&self.store, self.state.clone());
+        txn.state.ef_search = ef;
+        let (rows, state) = txn.finish();
+        rows.commit(&mut self.store)
+            .expect("vsdb: VecDex set_ef_search commit failed");
+        self.state = state;
     }
 
     /// Returns the vector associated with the given key, if it exists.
     pub fn get(&self, key: &K) -> Option<Vec<S>> {
-        let node_id = self.key_to_node.get(key)?;
-        self.vectors.get(&node_id)
+        let node_id = decode_node_id(&self.store.get(user_key(&KeyEnDe::encode(key)))?);
+        self.store
+            .get(node_key(TAG_VEC, node_id))
+            .map(|raw| decode_value::<Vec<S>>(&raw))
     }
 
     /// Returns `true` if the index contains the given key.
     pub fn contains_key(&self, key: &K) -> bool {
-        self.key_to_node.contains_key(key)
+        self.store.contains_key(user_key(&KeyEnDe::encode(key)))
     }
 
     /// Returns an iterator over all indexed keys.
     pub fn keys(&self) -> impl Iterator<Item = K> + '_ {
-        self.key_to_node.keys()
+        self.scan_tag(TAG_KEY2NODE).map(|(raw_key, _)| {
+            <K as KeyEnDe>::decode(&raw_key[1..]).expect("VecDex: corrupt key bytes")
+        })
     }
 
     /// Returns an iterator over all (key, vector) pairs.
     pub fn iter(&self) -> impl Iterator<Item = (K, Vec<S>)> + '_ {
-        self.node_to_key
-            .iter()
-            .filter_map(|(node_id, key)| self.vectors.get(&node_id).map(|v| (key, v)))
+        self.scan_tag(TAG_NODE2KEY)
+            .filter_map(|(raw_key, raw_val)| {
+                let mut b = [0u8; 8];
+                b.copy_from_slice(&raw_key[1..9]);
+                let node_id = u64::from_be_bytes(b);
+                let key = decode_value::<K>(&raw_val);
+                self.store
+                    .get(node_key(TAG_VEC, node_id))
+                    .map(|raw| (key, decode_value::<Vec<S>>(&raw)))
+            })
+    }
+
+    fn scan_tag(
+        &self,
+        tag: u8,
+    ) -> impl Iterator<Item = (vsdb_core::common::RawKey, vsdb_core::common::RawValue)> + '_
+    {
+        use std::{borrow::Cow, ops::Bound};
+        self.store.range((
+            Bound::Included(Cow::Owned(vec![tag])),
+            Bound::Excluded(Cow::Owned(vec![tag + 1])),
+        ))
     }
 
     /// Clears all indexed data.
+    ///
+    /// This wipes the whole underlying key range in one engine-level
+    /// operation and resets the in-memory state.
     pub fn clear(&mut self) {
-        self.mark_dirty();
-        self.vectors.clear();
-        self.adjacency.clear();
-        self.key_to_node.clear();
-        self.node_to_key.clear();
-        self.node_info.clear();
-        let mut m = self.meta.get_mut();
-        m.entry_point = None;
-        m.max_layer = 0;
-        m.node_count = dc::zero(m.node_count);
-        m.next_node_id = 0;
+        self.store.clear();
+        self.state = GraphState {
+            ef_search: self.state.ef_search,
+            ..GraphState::default()
+        };
     }
 
     /// Inserts a vector associated with a user key.
     ///
     /// If the key already exists, the old vector is replaced and the
-    /// graph connections are rebuilt.
+    /// graph connections are rebuilt (two atomic operations: the removal
+    /// of the old node, then the insert of the new one — each leaves the
+    /// index in a consistent state).
+    ///
+    /// All rows of the insert proper — the vector, both key mappings,
+    /// the node info, every adjacency update, and the graph state — are
+    /// committed through one atomic engine batch.
+    ///
+    /// # Errors
+    ///
+    /// If the vector dimension mismatches the index configuration, or if
+    /// the batch commit fails (in which case neither the on-disk state
+    /// nor the in-memory state is modified).
     pub fn insert(&mut self, key: &K, vector: &[S]) -> Result<()> {
-        let dim = self.meta.get_value().dim;
-        if vector.len() != dim {
+        if vector.len() != self.config.dim {
             return Err(VsdbError::Other {
                 detail: format!(
                     "dimension mismatch: expected {}, got {}",
-                    dim,
+                    self.config.dim,
                     vector.len()
                 ),
             });
         }
 
-        if self.key_to_node.contains_key(key) {
+        if self.contains_key(key) {
             self.remove(key)?;
-        } else {
-            self.mark_dirty();
         }
 
-        // Re-read metadata after potential remove() to avoid a stale
-        // next_node_id from a prior snapshot; the linking phases take
-        // their own fresh snapshot inside `link_node`.
-        let meta = self.meta.get_value().clone();
-        let node_id = meta.next_node_id;
-        let node_layer = random_layer(meta.m);
+        let mut txn = Txn::new(&self.store, self.state.clone());
+        Self::stage_insert(&mut txn, &self.config, key, vector);
+        let (rows, state) = txn.finish();
+        rows.commit(&mut self.store)?;
+        self.state = state;
+        Ok(())
+    }
 
-        self.vectors.insert(&node_id, &vector.to_vec());
-        self.key_to_node.insert(key, &node_id);
-        self.node_to_key.insert(&node_id, key);
-        self.node_info.insert(
-            &node_id,
-            &NodeInfo {
-                max_layer: node_layer,
-            },
+    /// Stages one whole insert (rows + graph linking) into `txn`.
+    fn stage_insert(txn: &mut Txn<'_, S>, config: &HnswConfig, key: &K, vector: &[S]) {
+        let node_id = txn.state.next_node_id;
+        let node_layer = random_layer(config.m);
+
+        txn.put_vec(node_id, vector);
+        txn.rows.put(
+            user_key(&KeyEnDe::encode(key)),
+            node_id.to_le_bytes().to_vec(),
+        );
+        txn.rows
+            .put(node_key(TAG_NODE2KEY, node_id).to_vec(), encode_value(key));
+        txn.rows.put(
+            node_key(TAG_INFO, node_id).to_vec(),
+            encode_value(&node_layer),
         );
 
-        {
-            let mut m = self.meta.get_mut();
-            m.next_node_id = node_id + 1;
-            m.node_count = dc::inc(m.node_count);
-        }
+        txn.state.next_node_id = node_id + 1;
+        txn.state.node_count += 1;
 
-        self.link_node(node_id, vector, node_layer);
-
-        Ok(())
+        Self::link_node(txn, config, node_id, vector, node_layer);
     }
 
     /// Inserts a batch of (key, vector) pairs.
     ///
-    /// Equivalent to calling [`insert`](Self::insert) in a loop but
-    /// provides a clear semantic entry point for bulk loading.
+    /// Semantically equivalent to calling [`insert`](Self::insert) in a
+    /// loop, but the inserts are staged in chunks that share one
+    /// transaction (and thus one atomic engine write batch) each —
+    /// amortizing the per-commit cost, which dominates bulk loads.
     ///
-    /// Note: inserts are sequential; no batch-level optimization is applied.
+    /// Pre-existing keys are replaced (their removals are individually
+    /// atomic), and duplicate keys inside `items` collapse to the last
+    /// occurrence.
     pub fn insert_batch(&mut self, items: &[(K, Vec<S>)]) -> Result<()> {
-        for (key, vec) in items {
-            self.insert(key, vec)?;
+        // Bounded chunks keep the staged set (and the engine batch)
+        // at a sane size for arbitrarily large bulk loads.
+        const CHUNK: usize = 64;
+
+        for (_, vec) in items {
+            if vec.len() != self.config.dim {
+                return Err(VsdbError::Other {
+                    detail: format!(
+                        "dimension mismatch: expected {}, got {}",
+                        self.config.dim,
+                        vec.len()
+                    ),
+                });
+            }
+        }
+
+        // Last occurrence of each key wins (matching the final state of
+        // a serial insert loop), preserving the order of survivors.
+        let mut seen: HashSet<Vec<u8>> = HashSet::with_capacity(items.len());
+        let mut dedup: Vec<&(K, Vec<S>)> = Vec::with_capacity(items.len());
+        for item in items.iter().rev() {
+            if seen.insert(KeyEnDe::encode(&item.0)) {
+                dedup.push(item);
+            }
+        }
+        dedup.reverse();
+
+        for (key, _) in &dedup {
+            if self.contains_key(key) {
+                self.remove(key)?;
+            }
+        }
+
+        for chunk in dedup.chunks(CHUNK) {
+            let mut txn = Txn::new(&self.store, self.state.clone());
+            for (key, vec) in chunk {
+                Self::stage_insert(&mut txn, &self.config, key, vec);
+            }
+            let (rows, state) = txn.finish();
+            rows.commit(&mut self.store)?;
+            self.state = state;
         }
         Ok(())
     }
 
+    /// Wires `node_id` into the HNSW graph (the linking phases of an
+    /// insert): greedy descent from the entry point, then heuristic
+    /// neighbor selection and bidirectional edge creation on every layer
+    /// from `min(node_layer, max_layer)` down to 0, raising the entry
+    /// point afterwards if `node_layer` exceeds the current maximum.
+    ///
+    /// All reads observe the transaction's own staged writes.
+    fn link_node(
+        txn: &mut Txn<'_, S>,
+        config: &HnswConfig,
+        node_id: u64,
+        vector: &[S],
+        node_layer: u8,
+    ) {
+        let Some(ep) = txn.state.entry_point else {
+            txn.state.entry_point = Some(node_id);
+            txn.state.max_layer = node_layer;
+            return;
+        };
+        if ep == node_id {
+            return;
+        }
+
+        let cur_max = txn.state.max_layer;
+
+        // Phase 1: Greedy descent from top layer to node_layer + 1.
+        let mut cur_ep = vec![ep];
+        for l in (node_layer.saturating_add(1)..=cur_max).rev() {
+            let res = {
+                let gv = |id: u64| txn.read_vec(id);
+                search_layer::<S, D, _>(vector, &cur_ep, 1, l, &gv, txn, None)
+            };
+            if let Some(&(_, id)) = res.iter().find(|&&(_, id)| id != node_id) {
+                cur_ep = vec![id];
+            }
+        }
+
+        // Phase 2: Insert at layers node_layer..0 with heuristic selection.
+        let top = node_layer.min(cur_max);
+        for l in (0..=top).rev() {
+            let m_max = if l == 0 { config.m_max0 } else { config.m };
+
+            let candidates = {
+                let gv = |id: u64| txn.read_vec(id);
+                search_layer::<S, D, _>(
+                    vector,
+                    &cur_ep,
+                    config.ef_construction,
+                    l,
+                    &gv,
+                    txn,
+                    None,
+                )
+            };
+            let neighbor_pool: Vec<(S, u64)> = candidates
+                .iter()
+                .copied()
+                .filter(|&(_, id)| id != node_id)
+                .collect();
+
+            let selected = {
+                let gv = |id: u64| txn.read_vec(id);
+                select_neighbors_heuristic::<S, D>(&neighbor_pool, m_max, &gv)
+            };
+
+            txn.set_neighbors(l, node_id, &selected);
+
+            for &neighbor in &selected {
+                let mut n_neighbors = get_neighbors(txn, l, neighbor);
+                n_neighbors.push(node_id);
+                txn.set_neighbors(l, neighbor, &n_neighbors);
+                txn.prune_and_detach::<D>(neighbor, l, m_max, None);
+            }
+
+            cur_ep = neighbor_pool.iter().map(|&(_, id)| id).collect();
+            if cur_ep.is_empty() {
+                cur_ep = vec![ep];
+            }
+        }
+
+        if node_layer > cur_max {
+            txn.state.entry_point = Some(node_id);
+            txn.state.max_layer = node_layer;
+        }
+    }
+
     /// Searches for the `k` nearest neighbors of the query vector.
     pub fn search(&self, query: &[S], k: usize) -> Result<Vec<(K, S)>> {
-        let ef = self.meta.get_value().ef_search;
-        self.search_internal(query, k, ef, None)
+        self.search_internal(query, k, self.state.ef_search, None)
     }
 
     /// Searches with a custom `ef` (beam width) for recall/speed tradeoff.
@@ -712,8 +738,7 @@ where
         k: usize,
         predicate: impl Fn(&K) -> bool,
     ) -> Result<Vec<(K, S)>> {
-        let ef = self.meta.get_value().ef_search;
-        self.search_internal(query, k, ef, Some(&predicate))
+        self.search_internal(query, k, self.state.ef_search, Some(&predicate))
     }
 
     /// Filtered search with a custom `ef` (beam width).
@@ -727,6 +752,22 @@ where
         self.search_internal(query, k, ef, Some(&predicate))
     }
 
+    fn node_user_key(&self, node_id: u64) -> Option<K> {
+        self.store
+            .get(node_key(TAG_NODE2KEY, node_id))
+            .map(|raw| decode_value::<K>(&raw))
+    }
+
+    /// Iterates `(node_id, max_layer)` over the committed node-info rows.
+    #[cfg(test)]
+    fn node_layers(&self) -> impl Iterator<Item = (u64, u8)> + '_ {
+        self.scan_tag(TAG_INFO).map(|(raw_key, raw_val)| {
+            let mut b = [0u8; 8];
+            b.copy_from_slice(&raw_key[1..9]);
+            (u64::from_be_bytes(b), decode_value::<u8>(&raw_val))
+        })
+    }
+
     fn search_internal(
         &self,
         query: &[S],
@@ -734,18 +775,17 @@ where
         ef: usize,
         predicate: Option<&dyn Fn(&K) -> bool>,
     ) -> Result<Vec<(K, S)>> {
-        let meta = self.meta.get_value().clone();
-        if query.len() != meta.dim {
+        if query.len() != self.config.dim {
             return Err(VsdbError::Other {
                 detail: format!(
                     "dimension mismatch: expected {}, got {}",
-                    meta.dim,
+                    self.config.dim,
                     query.len()
                 ),
             });
         }
 
-        let Some(ep) = meta.entry_point else {
+        let Some(ep) = self.state.entry_point else {
             return Ok(vec![]);
         };
 
@@ -763,7 +803,8 @@ where
                 // point right after the layer-descent loop ends).
                 return Some(Rc::clone(v));
             }
-            let v = Rc::new(self.vectors.get(&id)?);
+            let raw = self.store.get(node_key(TAG_VEC, id))?;
+            let v = Rc::new(decode_value::<Vec<S>>(&raw));
             cache.borrow_mut().insert(id, Rc::clone(&v));
             Some(v)
         };
@@ -771,21 +812,21 @@ where
         let node_filter: Option<Box<dyn Fn(u64) -> bool + '_>> =
             predicate.map(|pred| -> Box<dyn Fn(u64) -> bool + '_> {
                 Box::new(move |node_id: u64| {
-                    self.node_to_key.get(&node_id).is_some_and(|k| pred(&k))
+                    self.node_user_key(node_id).is_some_and(|k| pred(&k))
                 })
             });
         let filter_ref: Option<&dyn Fn(u64) -> bool> =
             node_filter.as_ref().map(|f| f.as_ref());
 
         let mut cur_ep = vec![ep];
-        for l in (1..=meta.max_layer).rev() {
-            let res = search_layer::<S, D>(
+        for l in (1..=self.state.max_layer).rev() {
+            let res = search_layer::<S, D, _>(
                 query,
                 &cur_ep,
                 1,
                 l,
                 &get_vec,
-                &self.adjacency,
+                &self.store,
                 None,
             );
             if let Some(&(_, id)) = res.first() {
@@ -800,19 +841,19 @@ where
         } else {
             ef.max(k)
         };
-        let results = search_layer::<S, D>(
+        let results = search_layer::<S, D, _>(
             query,
             &cur_ep,
             search_ef,
             0,
             &get_vec,
-            &self.adjacency,
+            &self.store,
             filter_ref,
         );
 
         let mut out = Vec::with_capacity(k.min(results.len()));
         for (dist, node_id) in results.into_iter().take(k) {
-            if let Some(key) = self.node_to_key.get(&node_id) {
+            if let Some(key) = self.node_user_key(node_id) {
                 out.push((key, dist));
             }
         }
@@ -823,48 +864,53 @@ where
     /// Removes a vector by user key. Returns `true` if the key existed.
     ///
     /// Former neighbors of the removed node are reconnected to each
-    /// other (best-effort) to preserve graph connectivity.
+    /// other (best-effort) to preserve graph connectivity.  Every row
+    /// update — edge rewires, row removals, and the graph state — is
+    /// committed through one atomic engine batch.
+    ///
+    /// # Errors
+    ///
+    /// If the batch commit fails, neither the on-disk state nor the
+    /// in-memory state is modified.
     pub fn remove(&mut self, key: &K) -> Result<bool> {
-        let Some(node_id) = self.key_to_node.get(key) else {
+        let Some(raw) = self.store.get(user_key(&KeyEnDe::encode(key))) else {
             return Ok(false);
         };
+        let node_id = decode_node_id(&raw);
 
-        self.mark_dirty();
+        let mut txn = Txn::new(&self.store, self.state.clone());
 
-        let meta = self.meta.get_value().clone();
-        // A crash between adjacency writes and the node_info write can leave
-        // a node with edges but a missing node_info row.  Fall back to the
-        // global max layer so edge cleanup still covers every layer the node
-        // may have participated in (INV-VD2/INV-VD3).
-        let max_layer = self
-            .node_info
-            .get(&node_id)
-            .map(|i| i.max_layer)
-            .unwrap_or(meta.max_layer);
+        let max_layer = txn
+            .get(&node_key(TAG_INFO, node_id))
+            .map(|raw| decode_value::<u8>(&raw))
+            .unwrap_or(txn.state.max_layer);
 
         // Phase 1: Remove edges and collect former neighbors per layer.
         let mut former_neighbors: Vec<Vec<u64>> =
             Vec::with_capacity(max_layer as usize + 1);
         for l in 0..=max_layer {
-            let neighbors = get_neighbors(&self.adjacency, l, node_id);
+            let neighbors = get_neighbors(&txn, l, node_id);
             for &n in &neighbors {
-                let mut n_list = get_neighbors(&self.adjacency, l, n);
+                let mut n_list = get_neighbors(&txn, l, n);
                 n_list.retain(|&x| x != node_id);
-                set_neighbors(&mut self.adjacency, l, n, &n_list);
+                txn.set_neighbors(l, n, &n_list);
             }
-            remove_adjacency(&mut self.adjacency, l, node_id);
+            txn.remove_adjacency(l, node_id);
             former_neighbors.push(neighbors);
         }
 
         // Phase 2: Reconnect former neighbors (best-effort).
-        // Runs before vectors.remove so distance computation still works.
-        let get_vec =
-            |id: u64| -> Option<Rc<Vec<S>>> { self.vectors.get(&id).map(Rc::new) };
+        // Runs before the vector row is removed so distance computation
+        // still works.
         for l in 0..=max_layer {
-            let m_max = if l == 0 { meta.m_max0 } else { meta.m };
+            let m_max = if l == 0 {
+                self.config.m_max0
+            } else {
+                self.config.m
+            };
             let fns = &former_neighbors[l as usize];
             for &n in fns {
-                let cur = get_neighbors(&self.adjacency, l, n);
+                let cur = get_neighbors(&txn, l, n);
                 if cur.len() >= m_max {
                     continue;
                 }
@@ -878,92 +924,72 @@ where
                     if candidate == n || cur_set.contains(&candidate) {
                         continue;
                     }
-                    let mut n_list = get_neighbors(&self.adjacency, l, n);
+                    let mut n_list = get_neighbors(&txn, l, n);
                     n_list.push(candidate);
-                    set_neighbors(&mut self.adjacency, l, n, &n_list);
+                    txn.set_neighbors(l, n, &n_list);
 
-                    let mut c_list = get_neighbors(&self.adjacency, l, candidate);
+                    let mut c_list = get_neighbors(&txn, l, candidate);
                     c_list.push(n);
-                    set_neighbors(&mut self.adjacency, l, candidate, &c_list);
-                    let evicted = prune_neighbors::<S, D>(
-                        candidate,
-                        l,
-                        m_max,
-                        &mut self.adjacency,
-                        &get_vec,
-                    );
+                    txn.set_neighbors(l, candidate, &c_list);
 
-                    let kept_n = !evicted.contains(&n);
-                    for evicted_id in evicted {
-                        let mut e_list = get_neighbors(&self.adjacency, l, evicted_id);
-                        e_list.retain(|&x| x != candidate);
-                        set_neighbors(&mut self.adjacency, l, evicted_id, &e_list);
-                    }
-                    if kept_n {
+                    if txn.prune_and_detach::<D>(candidate, l, m_max, Some(n)) {
                         added += 1;
                     }
                 }
                 if added > 0 {
-                    let evicted = prune_neighbors::<S, D>(
-                        n,
-                        l,
-                        m_max,
-                        &mut self.adjacency,
-                        &get_vec,
-                    );
-                    for evicted_id in evicted {
-                        let mut e_list = get_neighbors(&self.adjacency, l, evicted_id);
-                        e_list.retain(|&x| x != n);
-                        set_neighbors(&mut self.adjacency, l, evicted_id, &e_list);
-                    }
+                    txn.prune_and_detach::<D>(n, l, m_max, None);
                 }
             }
         }
 
-        // Phase 3: Clean up maps and metadata.
-        self.vectors.remove(&node_id);
-        self.key_to_node.remove(key);
-        self.node_to_key.remove(&node_id);
-        self.node_info.remove(&node_id);
+        // Phase 3: Clean up rows and state.
+        txn.del_vec(node_id);
+        txn.rows.del(user_key(&KeyEnDe::encode(key)));
+        txn.rows.del(node_key(TAG_NODE2KEY, node_id).to_vec());
+        txn.rows.del(node_key(TAG_INFO, node_id).to_vec());
 
-        {
-            let mut m = self.meta.get_mut();
-            m.node_count = dc::dec(m.node_count);
+        txn.state.node_count = txn.state.node_count.saturating_sub(1);
 
-            if m.entry_point == Some(node_id) {
-                let mut best: Option<(u64, u8, bool)> = None;
-                for (nid, info) in self.node_info.iter() {
-                    // Skip any node whose vector is already gone (e.g. a
-                    // crash-induced inconsistency); it cannot serve as the
-                    // entry point.  Mirrors `recover_after_crash`.
-                    if self.vectors.get(&nid).is_none() {
-                        continue;
-                    }
-                    // Prefer candidates that still have base-layer edges
-                    // so an isolated node cannot become the entry point
-                    // and hide the rest of the graph; among equals the
-                    // higher layer wins.  Mirrors `recover_after_crash`.
-                    let linked = self.adjacency.get(adj_key(0, nid)).is_some();
-                    let better = match best {
-                        None => true,
-                        Some((_, bl, blinked)) => {
-                            (linked, info.max_layer) > (blinked, bl)
-                        }
-                    };
-                    if better {
-                        best = Some((nid, info.max_layer, linked));
-                    }
+        if txn.state.entry_point == Some(node_id) {
+            // Re-elect: prefer candidates that still have base-layer
+            // edges so an isolated node cannot become the entry point
+            // and hide the rest of the graph; among equals the higher
+            // layer wins.
+            let mut best: Option<(u64, u8, bool)> = None;
+            let info_rows: Vec<(u64, u8)> = txn
+                .rows
+                .scan_prefix(txn.store, &[TAG_INFO])
+                .map(|(raw_key, raw_val)| {
+                    let mut b = [0u8; 8];
+                    b.copy_from_slice(&raw_key[1..9]);
+                    (u64::from_be_bytes(b), decode_value::<u8>(&raw_val))
+                })
+                .collect();
+            for (nid, layer) in info_rows {
+                if txn.get(&node_key(TAG_VEC, nid)).is_none() {
+                    continue;
                 }
-                if let Some((new_ep, new_max, _)) = best {
-                    m.entry_point = Some(new_ep);
-                    m.max_layer = new_max;
-                } else {
-                    m.entry_point = None;
-                    m.max_layer = 0;
+                let linked = txn.adj_row(&adj_key(0, nid)).is_some();
+                let better = match best {
+                    None => true,
+                    Some((_, bl, blinked)) => (linked, layer) > (blinked, bl),
+                };
+                if better {
+                    best = Some((nid, layer, linked));
                 }
+            }
+            if let Some((new_ep, new_max, _)) = best {
+                txn.state.entry_point = Some(new_ep);
+                txn.state.max_layer = new_max;
+            } else {
+                txn.state.entry_point = None;
+                txn.state.max_layer = 0;
             }
         }
 
+        let (rows, state) = txn.finish();
+        rows.commit(&mut self.store)?;
+        self.state = state;
         Ok(true)
     }
 
@@ -974,11 +1000,7 @@ where
     pub fn compact(&mut self) -> Result<()> {
         use rand::seq::SliceRandom;
 
-        let mut pairs: Vec<(K, Vec<S>)> = self
-            .node_to_key
-            .iter()
-            .filter_map(|(node_id, key)| self.vectors.get(&node_id).map(|v| (key, v)))
-            .collect();
+        let mut pairs: Vec<(K, Vec<S>)> = self.iter().collect();
 
         pairs.shuffle(&mut rand::rng());
 
@@ -987,13 +1009,13 @@ where
         // dimension mismatch (impossible for vectors that passed insert
         // validation, but cheap to re-check); if insert ever gains new
         // error paths, this pre-validation must grow with it.
-        let dim = self.meta.get_value().dim;
         for (_, vec) in &pairs {
-            if vec.len() != dim {
+            if vec.len() != self.config.dim {
                 return Err(VsdbError::Other {
                     detail: format!(
-                        "compact: stored vector dimension {} != index dimension {dim}",
-                        vec.len()
+                        "compact: stored vector dimension {} != index dimension {}",
+                        vec.len(),
+                        self.config.dim
                     ),
                 });
             }

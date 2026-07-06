@@ -8,8 +8,9 @@
 
 ## Architecture
 - HNSW (Hierarchical Navigable Small World) graph with multi-layer skip-list structure
-- Persistent storage via VSDB primitives: MapxOrd (vectors, node_to_key), Mapx (key_to_node), MapxRaw (adjacency), Orphan (metadata)
-- Adjacency compound key: `[layer: u8][node_id: u64 BE]` = 9 bytes
+- Single-handle storage: everything lives in one `MapxRaw`, namespaced by a leading tag byte (`0x00` vectors, `0x01` adjacency, `0x02` key→node, `0x03` node→key, `0x04` node info, `0x05` graph state)
+- Every mutation is staged through a read-your-writes overlay (`common/staged.rs`) and committed in one atomic engine write batch — no dirty flag, no crash-recovery reconcile
+- Adjacency compound key: `[TAG_ADJ][layer: u8][node_id: u64 BE]` = 10 bytes
 - Neighbor lists: packed little-endian u64 arrays
 - Algorithm 4 connectivity-aware neighbor selection (heuristic)
 - Generic over Scalar (f32/f64), DistanceMetric, and key type K

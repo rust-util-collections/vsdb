@@ -13,10 +13,10 @@ where
     D: DistanceMetric<S>,
     S: Scalar,
 {
-    for (node, info) in idx.node_info.iter() {
-        for layer in 0..=info.max_layer {
-            for neighbor in hnsw::get_neighbors(&idx.adjacency, layer, node) {
-                let reverse = hnsw::get_neighbors(&idx.adjacency, layer, neighbor);
+    for (node, node_max) in idx.node_layers() {
+        for layer in 0..=node_max {
+            for neighbor in hnsw::get_neighbors(&idx.store, layer, node) {
+                let reverse = hnsw::get_neighbors(&idx.store, layer, neighbor);
                 assert!(
                     reverse.contains(&node),
                     "missing reverse edge layer {layer}: {neighbor} -> {node}"
@@ -335,7 +335,7 @@ fn filtered_search_no_match() {
 fn filtered_search_layer_uses_visit_budget() {
     let mut adjacency = MapxRaw::new();
     for node in 0..99u64 {
-        hnsw::set_neighbors(&mut adjacency, 0, node, &[node + 1]);
+        adjacency.insert(hnsw::adj_key(0, node), hnsw::encode_neighbors(&[node + 1]));
     }
 
     let vectors: Vec<Vec<f32>> = (0..100).map(|i| vec![i as f32]).collect();
@@ -348,7 +348,7 @@ fn filtered_search_layer_uses_visit_budget() {
         false
     };
 
-    let results = hnsw::search_layer::<f32, L2>(
+    let results = hnsw::search_layer::<f32, L2, _>(
         &[0.0],
         &[0],
         8,
@@ -492,18 +492,13 @@ fn remove_entry_point_preserves_max_layer() {
     }
 
     // Record the entry point and remove it.
-    let meta_before = idx.meta.get_value().clone();
+    let meta_before = idx.state.clone();
     let ep = meta_before.entry_point.unwrap();
     idx.remove(&(ep as u32)).unwrap();
 
     // After removal, max_layer should still reflect the true global max.
-    let meta_after = idx.meta.get_value().clone();
-    let actual_max = idx
-        .node_info
-        .iter()
-        .map(|(_, info)| info.max_layer)
-        .max()
-        .unwrap_or(0);
+    let meta_after = idx.state.clone();
+    let actual_max = idx.node_layers().map(|(_, l)| l).max().unwrap_or(0);
     assert_eq!(
         meta_after.max_layer, actual_max,
         "max_layer should equal the true global maximum layer"
@@ -553,7 +548,7 @@ fn update_entry_point_vector() {
         idx.insert(&i, &[i as f32, 0.0]).unwrap();
     }
 
-    let ep = idx.meta.get_value().entry_point.unwrap();
+    let ep = idx.state.entry_point.unwrap();
     // Re-insert the entry point with a far-away vector.
     idx.insert(&(ep as u32), &[100.0, 100.0]).unwrap();
     assert_eq!(idx.len(), 10);
@@ -583,20 +578,15 @@ fn consecutive_entry_point_removals() {
 
     // Repeatedly remove the entry point.
     for _ in 0..10 {
-        let meta = idx.meta.get_value().clone();
+        let meta = idx.state.clone();
         if meta.entry_point.is_none() {
             break;
         }
         let ep = meta.entry_point.unwrap();
         idx.remove(&(ep as u32)).unwrap();
 
-        let after = idx.meta.get_value().clone();
-        let actual_max = idx
-            .node_info
-            .iter()
-            .map(|(_, info)| info.max_layer)
-            .max()
-            .unwrap_or(0);
+        let after = idx.state.clone();
+        let actual_max = idx.node_layers().map(|(_, l)| l).max().unwrap_or(0);
         assert_eq!(after.max_layer, actual_max);
     }
 }
@@ -650,7 +640,7 @@ fn graph_connectivity_after_deletions() {
     assert_bidirectional(&idx);
 
     // Remove 10 nodes that are NOT the entry point.
-    let ep = idx.meta.get_value().entry_point.unwrap();
+    let ep = idx.state.entry_point.unwrap();
     let mut removed = 0;
     for i in 0..50u32 {
         if i as u64 == ep {
@@ -666,13 +656,13 @@ fn graph_connectivity_after_deletions() {
     let remaining = idx.len() as usize;
 
     // BFS from entry point at layer 0.
-    let ep = idx.meta.get_value().entry_point.unwrap();
+    let ep = idx.state.entry_point.unwrap();
     let mut visited = HashSet::new();
     let mut queue = VecDeque::new();
     queue.push_back(ep);
     visited.insert(ep);
     while let Some(node) = queue.pop_front() {
-        let neighbors = hnsw::get_neighbors(&idx.adjacency, 0, node);
+        let neighbors = hnsw::get_neighbors(&idx.store, 0, node);
         for n in neighbors {
             if visited.insert(n) {
                 queue.push_back(n);
@@ -968,11 +958,10 @@ fn set_ef_search_works() {
     let results = idx.search(&[0.0, 0.0], 1).unwrap();
     assert_eq!(results.len(), 1);
 }
-
-// ---- Dirty-flag crash recovery tests ----
+// ---- Restore consistency tests (atomic single-handle model) ----
 
 #[test]
-fn clean_shutdown_skips_rebuild() {
+fn restore_after_save_meta() {
     setup();
     let cfg = HnswConfig {
         dim: 2,
@@ -983,21 +972,13 @@ fn clean_shutdown_skips_rebuild() {
         idx.insert(&i, &[i as f32, 0.0]).unwrap();
     }
 
-    // Clean shutdown: save_meta clears the dirty bit.
     let id = idx.save_meta().unwrap();
-    let raw = idx.meta.get_value().node_count;
-    assert!(
-        !crate::common::dirty_count::is_dirty(raw),
-        "dirty bit should be cleared after save_meta"
-    );
-
-    // Restore — count should be correct without rebuild.
     let restored: VecDex<u32, L2> = VecDex::from_meta(id).unwrap();
     assert_eq!(restored.len(), 5);
 }
 
 #[test]
-fn crash_recovery_rebuilds_count() {
+fn restore_without_explicit_save_is_consistent() {
     setup();
     let cfg = HnswConfig {
         dim: 2,
@@ -1008,155 +989,73 @@ fn crash_recovery_rebuilds_count() {
         idx.insert(&i, &[i as f32, 0.0]).unwrap();
     }
 
-    // Simulate crash: persist without calling save_meta (dirty bit stays set).
+    // No clean-shutdown protocol exists: persisting the (constant)
+    // metadata at any point yields a fully consistent restore, because
+    // every mutation was committed atomically.
     let id = idx.instance_id();
     crate::common::save_instance_meta(id, &idx).unwrap();
-    let raw = idx.meta.get_value().node_count;
-    assert!(
-        crate::common::dirty_count::is_dirty(raw),
-        "dirty bit should be set during operation"
-    );
 
-    // Restore — ensure_count should detect dirty and rebuild.
     let restored: VecDex<u32, L2> = VecDex::from_meta(id).unwrap();
     assert_eq!(restored.len(), 7);
+    assert_eq!(restored.state.next_node_id, idx.state.next_node_id);
+    assert_eq!(restored.state.entry_point, idx.state.entry_point);
+    let results = restored.search(&[3.0, 0.0], 3).unwrap();
+    assert_eq!(results.len(), 3);
+    assert_eq!(results[0].0, 3);
 }
 
 #[test]
-fn serde_roundtrip_triggers_ensure_count() {
+fn hdr_meta_is_create_time_constant() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 4,
+        ..Default::default()
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let at_creation = postcard::to_allocvec(&idx).unwrap();
+
+    for i in 0..64u32 {
+        let v: Vec<f32> = (0..4).map(|d| (i * 4 + d) as f32).collect();
+        idx.insert(&i, &v).unwrap();
+    }
+    assert_eq!(at_creation, postcard::to_allocvec(&idx).unwrap());
+
+    for i in 0..32u32 {
+        idx.remove(&i).unwrap();
+    }
+    assert_eq!(at_creation, postcard::to_allocvec(&idx).unwrap());
+
+    idx.clear();
+    assert_eq!(at_creation, postcard::to_allocvec(&idx).unwrap());
+}
+
+#[test]
+fn serde_roundtrip_preserves_graph_state() {
     setup();
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()
     };
     let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
-    idx.insert(&1, &[1.0, 0.0]).unwrap();
-    idx.insert(&2, &[2.0, 0.0]).unwrap();
+    for i in 0..12u32 {
+        idx.insert(&i, &[i as f32, 1.0]).unwrap();
+    }
+    idx.remove(&3).unwrap();
 
-    // Serialize while dirty (no save_meta).
     let bytes = postcard::to_allocvec(&idx).unwrap();
-
-    // Deserialize — should trigger ensure_count via hand-written Deserialize.
     let restored: VecDex<u32, L2> = postcard::from_bytes(&bytes).unwrap();
-    assert_eq!(restored.len(), 2);
+
+    assert_eq!(restored.len(), 11);
+    assert_eq!(restored.state.entry_point, idx.state.entry_point);
+    assert_eq!(restored.state.max_layer, idx.state.max_layer);
+    assert_eq!(restored.state.next_node_id, idx.state.next_node_id);
+    assert_bidirectional(&restored);
+    let results = restored.search(&[7.0, 1.0], 2).unwrap();
+    assert_eq!(results[0].0, 7);
 }
 
 #[test]
-fn crash_with_corrupted_count_is_corrected() {
-    setup();
-    let cfg = HnswConfig {
-        dim: 2,
-        ..Default::default()
-    };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
-    for i in 0..10u32 {
-        idx.insert(&i, &[i as f32, 0.0]).unwrap();
-    }
-
-    // Corrupt count: set dirty + wrong count.
-    idx.meta.get_mut().node_count = crate::common::dirty_count::set_dirty(999);
-
-    // Persist the corrupted state.
-    let id = idx.instance_id();
-    crate::common::save_instance_meta(id, &idx).unwrap();
-
-    // Restore — should rebuild to actual count of 10.
-    let restored: VecDex<u32, L2> = VecDex::from_meta(id).unwrap();
-    assert_eq!(restored.len(), 10);
-}
-
-#[test]
-fn crash_recovery_reconciles_torn_rows() {
-    setup();
-    let cfg = HnswConfig {
-        dim: 2,
-        ..Default::default()
-    };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
-    for i in 0..4u32 {
-        idx.insert(&i, &[i as f32, 0.0]).unwrap();
-    }
-
-    // Torn insert #1: node_to_key + node_info survived, vector and
-    // key_to_node writes lost.
-    let t1 = idx.meta.get_value().next_node_id;
-    idx.node_to_key.insert(&t1, &100);
-    idx.node_info.insert(&t1, &NodeInfo { max_layer: 0 });
-
-    // Torn insert #2: only the vector write survived.
-    let t2 = t1 + 1;
-    idx.vectors.insert(&t2, &vec![9.0, 9.0]);
-
-    // Torn remove: a key_to_node row outlived its node's other rows.
-    idx.key_to_node.insert(&200, &777);
-
-    // Simulate crash: persist without save_meta (dirty bit stays set).
-    let id = idx.instance_id();
-    crate::common::save_instance_meta(id, &idx).unwrap();
-
-    let restored: VecDex<u32, L2> = VecDex::from_meta(id).unwrap();
-
-    // Torn rows dropped; only complete nodes counted and visible.
-    assert_eq!(restored.len(), 4);
-    assert!(!restored.contains_key(&100));
-    assert!(!restored.contains_key(&200));
-    assert!(restored.node_to_key.get(&t1).is_none());
-    assert!(restored.node_info.get(&t1).is_none());
-    assert!(restored.vectors.get(&t2).is_none());
-
-    // Node ids of dropped rows are never reused.
-    assert!(restored.meta.get_value().next_node_id > 777);
-
-    // The surviving graph stays fully searchable.
-    let res = restored.search(&[0.0, 0.0], 4).unwrap();
-    assert_eq!(res.len(), 4);
-}
-
-#[test]
-fn crash_recovery_relinks_edgeless_node_and_prefers_linked_entry() {
-    setup();
-    let cfg = HnswConfig {
-        dim: 2,
-        ..Default::default()
-    };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
-    for i in 0..5u32 {
-        idx.insert(&i, &[i as f32, 0.0]).unwrap();
-    }
-
-    // Complete-but-unlinked node (its insert's edge writes were lost),
-    // with a layer high enough that layer-only entry election would
-    // pick it and hide the rest of the graph behind an edge-less
-    // entry point.
-    let nid = idx.meta.get_value().next_node_id;
-    idx.vectors.insert(&nid, &vec![100.0, 0.0]);
-    idx.key_to_node.insert(&100, &nid);
-    idx.node_to_key.insert(&nid, &100);
-    idx.node_info.insert(&nid, &NodeInfo { max_layer: 10 });
-    idx.meta.get_mut().next_node_id = nid + 1;
-
-    // Simulate crash: persist without save_meta (dirty bit stays set).
-    let id = idx.instance_id();
-    crate::common::save_instance_meta(id, &idx).unwrap();
-
-    let restored: VecDex<u32, L2> = VecDex::from_meta(id).unwrap();
-    assert_eq!(restored.len(), 6);
-
-    // The formerly edge-less node was relinked and is now searchable...
-    let res = restored.search(&[100.0, 0.0], 1).unwrap();
-    assert_eq!(res[0].0, 100);
-
-    // ...and every node of the graph remains reachable.
-    let res = restored.search(&[0.0, 0.0], 6).unwrap();
-    assert_eq!(res.len(), 6);
-
-    // Relinking re-raised the entry point to the high-layer node.
-    assert_eq!(restored.meta.get_value().entry_point, Some(nid));
-    assert_eq!(restored.meta.get_value().max_layer, 10);
-}
-
-#[test]
-fn crash_recovery_removes_stale_adjacency_to_dropped_nodes() {
+fn node_ids_are_never_reused_across_restores() {
     setup();
     let cfg = HnswConfig {
         dim: 2,
@@ -1166,25 +1065,13 @@ fn crash_recovery_removes_stale_adjacency_to_dropped_nodes() {
     for i in 0..6u32 {
         idx.insert(&i, &[i as f32, 0.0]).unwrap();
     }
+    let next_before = idx.state.next_node_id;
+    idx.remove(&5).unwrap();
 
-    let live = idx.key_to_node.get(&0).unwrap();
-    idx.node_info.insert(&live, &NodeInfo { max_layer: 10 });
+    let bytes = postcard::to_allocvec(&idx).unwrap();
+    let mut restored: VecDex<u32, L2> = postcard::from_bytes(&bytes).unwrap();
+    assert_eq!(restored.state.next_node_id, next_before);
 
-    let stale = idx.meta.get_value().next_node_id + 100;
-    hnsw::set_neighbors(&mut idx.adjacency, 0, live, &[stale]);
-
-    let id = idx.instance_id();
-    crate::common::save_instance_meta(id, &idx).unwrap();
-
-    let restored: VecDex<u32, L2> = VecDex::from_meta(id).unwrap();
-
-    assert!(restored.meta.get_value().next_node_id > stale);
-    for (_, raw_neighbors) in restored.adjacency.iter() {
-        for neighbor in hnsw::decode_neighbors(&raw_neighbors) {
-            assert!(restored.vectors.get(&neighbor).is_some());
-        }
-    }
-
-    let res = restored.search(&[0.0, 0.0], 6).unwrap();
-    assert_eq!(res.len(), 6);
+    restored.insert(&100, &[100.0, 0.0]).unwrap();
+    assert!(restored.state.next_node_id > next_before);
 }
