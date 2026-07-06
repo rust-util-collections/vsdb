@@ -18,7 +18,7 @@ use crate::{
     common::{dirty_count as dc, error::Result},
 };
 use serde::{Deserialize, Serialize};
-use std::{ops::Bound, result::Result as StdResult};
+use std::{collections::BTreeMap, ops::Bound, result::Result as StdResult};
 
 pub(crate) type EntryCnt = u64;
 type SkipNum = EntryCnt;
@@ -309,6 +309,108 @@ where
             let t = self.total.get_value();
             self.total.set_value(&dc::inc(t));
         }
+
+        Ok(())
+    }
+
+    /// Inserts many `(slot, key)` pairs at once.
+    ///
+    /// Semantically identical to calling [`insert`](Self::insert) per
+    /// pair, but engine writes are amortized: keys are grouped by slot so
+    /// each touched container is loaded and persisted exactly once, and
+    /// the container records plus per-tier counters are flushed through
+    /// one write batch per underlying collection instead of one engine
+    /// put per key. The entry total is updated once per call.
+    ///
+    /// Intended for bulk loads (imports, index rebuilds) where the
+    /// per-key write amplification of `insert` dominates.
+    ///
+    /// # Errors
+    ///
+    /// If a batch commit fails, on-disk state may be missing part of the
+    /// batch while in-memory tier caches already include it. The dirty
+    /// flag set at entry stays set in that case, so the next recovery
+    /// rebuilds consistent state from the primary data.
+    pub fn insert_batch<I>(&mut self, items: I) -> Result<()>
+    where
+        I: IntoIterator<Item = (S, K)>,
+    {
+        // Group by storage slot so each container is touched once.
+        let mut groups: BTreeMap<S, Vec<K>> = BTreeMap::new();
+        for (slot, k) in items {
+            groups
+                .entry(self.to_storage_slot(slot))
+                .or_default()
+                .push(k);
+        }
+        if groups.is_empty() {
+            return Ok(());
+        }
+        self.mark_dirty();
+
+        let mut total_added: EntryCnt = 0;
+        // Staged engine writes, committed in one batch per collection.
+        let mut staged_data: Vec<(S, DataCtner<K>)> = Vec::with_capacity(groups.len());
+        let mut staged_tiers: Vec<BTreeMap<S, EntryCnt>> = Vec::new();
+
+        for (slot, ks) in groups {
+            // Same growth cadence as serial `insert`: one capacity check
+            // per touched slot (a slot adds at most one new floor entry
+            // per tier, so per-key checks are redundant). A tier pushed
+            // mid-batch is built from the top tier's cache, which is
+            // updated eagerly below and therefore already current.
+            self.ensure_tier_capacity();
+            if staged_tiers.len() < self.tiers.len() {
+                staged_tiers.resize_with(self.tiers.len(), BTreeMap::new);
+            }
+
+            let mut ctner = self.data.get(&slot).unwrap_or_default();
+            let added = ctner.insert_batch(ks)? as EntryCnt;
+            if 0 == added {
+                continue;
+            }
+            staged_data.push((slot.clone(), ctner));
+            for (t, staged) in self.tiers.iter_mut().zip(staged_tiers.iter_mut()) {
+                t.ensure_cache();
+                let slot_floor = slot.floor_align(&t.floor_base);
+                let c = t.cache.get_mut();
+                let mut v = c.get(&slot_floor).copied().unwrap_or(0);
+                if 0 == v {
+                    *t.entry_count.get_mut() += 1;
+                    if let Some(l) = t.len_cache.as_mut() {
+                        *l += 1;
+                    }
+                }
+                v += added;
+                c.insert(slot_floor.clone(), v);
+                staged.insert(slot_floor, v);
+            }
+            total_added += added;
+        }
+
+        if 0 == total_added {
+            return Ok(());
+        }
+
+        let mut db = self.data.batch_entry();
+        for (slot, ctner) in &staged_data {
+            db.insert(slot, ctner);
+        }
+        db.commit()?;
+
+        for (t, staged) in self.tiers.iter_mut().zip(staged_tiers.iter()) {
+            if staged.is_empty() {
+                continue;
+            }
+            let mut tb = t.store.batch_entry();
+            for (floor, v) in staged {
+                tb.insert(floor, v);
+            }
+            tb.commit()?;
+        }
+
+        let t = self.total.get_value();
+        self.total.set_value(&dc::inc_by(t, total_added));
 
         Ok(())
     }

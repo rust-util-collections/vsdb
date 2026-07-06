@@ -490,8 +490,16 @@ where
             vec![state.head]
         };
 
-        // ref_count = 1: the branch HEAD that will point here.
-        // Old HEAD: net 0 (loses branch-HEAD, gains parent-link).
+        // ref_count accounting for this operation:
+        //   - new commit = 1: the branch HEAD moves onto it below.
+        //   - old HEAD   = net 0: it loses this branch's HEAD (-1) but
+        //     gains a parent-link from the new commit (+1), so its
+        //     stored count is deliberately left untouched.  This pairing
+        //     is load-bearing — if commit() ever stops listing the old
+        //     HEAD in `parents` (or the HEAD moves anywhere other than
+        //     onto a child of the old HEAD), the old HEAD's count must
+        //     be adjusted explicitly.  INV-V1 is pinned mechanically by
+        //     the `ref_counts_match_ground_truth_recount` test.
         let commit = Commit {
             id,
             root: state.dirty_root,
@@ -585,6 +593,12 @@ where
             // silently losing uncommitted changes.  Reject and tell the
             // caller to use `discard()` instead.
             return Err(VsdbError::UncommittedChanges { branch_id: branch });
+        } else {
+            // target == head with a clean working state: a complete
+            // no-op.  Return before the mutation path below — setting
+            // gc_dirty and rewriting identical state would only widen
+            // the crash-recovery window for zero effect.
+            return Ok(());
         }
 
         // Mark dirty before any structural mutation so that crash
@@ -684,6 +698,16 @@ where
 
         if tgt.head == NO_COMMIT {
             // Target is empty — just fast-forward.
+            //
+            // Precondition: `head == NO_COMMIT` ⟺ the branch has never
+            // committed.  Branch creation copies the source's head (so a
+            // NO_COMMIT head is only inherited from another never-committed
+            // branch), `commit` moves the head onto a real commit and never
+            // back, and `rollback_to` rejects NO_COMMIT heads outright.
+            // The target therefore has NO history at all, so adopting the
+            // source's chain wholesale cannot discard or cross-link any
+            // target history (INV-V2); `get_commit_inner` just above
+            // guarantees the adopted head is a real commit.
             let src_commit = self.get_commit_inner(src.head)?;
             let new_state = BranchState {
                 head: src.head,

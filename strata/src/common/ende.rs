@@ -288,7 +288,7 @@ impl KeyEnDeOrdered for Box<[u8]> {
 
     #[inline(always)]
     fn into_bytes(self) -> RawBytes {
-        self.to_vec()
+        self.into_vec()
     }
 
     #[inline(always)]
@@ -310,7 +310,9 @@ impl KeyEnDeOrdered for String {
 
     #[inline(always)]
     fn into_bytes(self) -> RawBytes {
-        self.into_bytes()
+        // Qualified call: the inherent `String::into_bytes` is intended
+        // here, not this trait method (which would recurse).
+        String::into_bytes(self)
     }
 
     #[inline(always)]
@@ -355,10 +357,6 @@ macro_rules! impl_type {
                     .collect::<Vec<_>>()
             }
             #[inline(always)]
-            fn into_bytes(self) -> RawBytes {
-                self.to_bytes()
-            }
-            #[inline(always)]
             fn from_slice(b: &[u8]) -> Result<Self> {
                 if 0 != b.len() % size_of::<$int>() {
                     return Err(VsdbError::Decode {
@@ -377,10 +375,6 @@ macro_rules! impl_type {
                     })
                     .collect()
             }
-            #[inline(always)]
-            fn from_bytes(b: RawBytes) -> Result<Self> {
-                Self::from_slice(&b)
-            }
         }
     };
     (^$int: ty) => {
@@ -390,16 +384,8 @@ macro_rules! impl_type {
                 KeyEnDeOrdered::to_bytes(&self.to_vec())
             }
             #[inline(always)]
-            fn into_bytes(self) -> RawBytes {
-                KeyEnDeOrdered::into_bytes(self.to_vec())
-            }
-            #[inline(always)]
             fn from_slice(b: &[u8]) -> Result<Self> {
                 <Vec<$int> as KeyEnDeOrdered>::from_slice(b).map(|b| b.into())
-            }
-            #[inline(always)]
-            fn from_bytes(b: RawBytes) -> Result<Self> {
-                <Vec<$int> as KeyEnDeOrdered>::from_bytes(b).map(|b| b.into())
             }
         }
     };

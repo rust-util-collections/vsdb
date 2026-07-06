@@ -78,6 +78,20 @@ impl Serialize for MapxRaw {
 }
 
 impl<'de> Deserialize<'de> for MapxRaw {
+    /// # Aliasing warning
+    ///
+    /// Deserialization does **not** create an independent copy — the
+    /// restored handle reconnects to the exact same underlying key
+    /// range that produced the serialized metadata (the payload is the
+    /// instance's raw prefix, not its contents).  This is semantically
+    /// equivalent to [`shadow`](MapxRaw::shadow), reachable through
+    /// safe code: if the original handle (or any other restore of it)
+    /// is still alive in-process, the same SWMR discipline applies
+    /// across every live alias — no concurrent writes to the same key
+    /// through any handle.  Deserialization is intended to restore a
+    /// handle after the original has gone out of scope (e.g. across a
+    /// process restart); deserializing while the original is still
+    /// live requires the same care as `shadow()`.
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,

@@ -248,3 +248,45 @@ fn test_meta_restore_then_mutate() {
     assert!(hdr.get(b"k1").is_none());
     assert_eq!(&hdr.get(b"k2").unwrap()[..], b"v2");
 }
+
+/// INV-E3 (prefix scoping): two independently created instances must be
+/// fully isolated — no operation through one handle may ever observe or
+/// affect the other's data, even for identical keys.
+#[test]
+fn test_prefix_isolation_between_instances() {
+    let mut a = MapxRaw::new();
+    let mut b = MapxRaw::new();
+    assert!(!a.is_the_same_instance(&b));
+
+    // Same keys, different values, interleaved writes.
+    for i in 0u64..100 {
+        a.insert(to_bytes(i), to_bytes(i));
+        b.insert(to_bytes(i), to_bytes(i + 1000));
+    }
+    for i in 0u64..100 {
+        assert_eq!(to_u64(&pnk!(a.get(to_bytes(i)))), i);
+        assert_eq!(to_u64(&pnk!(b.get(to_bytes(i)))), i + 1000);
+    }
+
+    // A key present in only one instance is invisible to the other.
+    a.insert(to_bytes(500), to_bytes(500));
+    assert!(b.get(to_bytes(500)).is_none());
+
+    // Removal through one handle never affects the other.
+    a.remove(to_bytes(0));
+    assert!(a.get(to_bytes(0)).is_none());
+    assert_eq!(to_u64(&pnk!(b.get(to_bytes(0)))), 1000);
+
+    // Iteration is scoped: each handle sees exactly its own entries.
+    assert_eq!(a.iter().count(), 100); // 1..=99 plus key 500
+    assert_eq!(b.iter().count(), 100);
+    for (_, v) in b.iter() {
+        assert!(to_u64(&v) >= 1000);
+    }
+
+    // clear() is scoped to the instance.
+    b.clear();
+    assert!(b.iter().next().is_none());
+    assert_eq!(a.iter().count(), 100);
+    assert_eq!(to_u64(&pnk!(a.get(to_bytes(1)))), 1);
+}

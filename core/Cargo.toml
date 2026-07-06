@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_core"
-version = "14.0.12"
+version = "14.0.13"
 authors = ["hui.fan@mail.ru"]
 edition = "2024"
 description = "A std-collection-like database"
@@ -13,7 +13,6 @@ license = "MIT"
 [dependencies]
 ruc = { workspace = true }
 serde = { workspace = true }
-rand = { workspace = true }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
 postcard = { workspace = true }
@@ -24,7 +23,7 @@ mmdb = { workspace = true }
 default = []
 
 [dev-dependencies]
-hex = { workspace = true }
+rand = { workspace = true }
 criterion = { workspace = true }
 
 [[bench]]

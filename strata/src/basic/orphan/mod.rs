@@ -295,11 +295,16 @@ where
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
+// Arithmetic / bit / negation operators only need `ValueEnDe` plus the
+// corresponding `std::ops` trait on `T` — requiring `Ord + Eq` here
+// would rule out types like `f64` (only `PartialOrd`/`PartialEq`) even
+// though the operations themselves are well-defined.  The comparison
+// impls above keep their own tighter bounds.
 macro_rules! impl_ops {
     ($ops: tt, $fn: tt, $op: tt) => {
         impl<T> $ops for Orphan<T>
         where
-            T: ValueEnDe + Ord + Eq + $ops<Output = T>,
+            T: ValueEnDe + $ops<Output = T>,
         {
             type Output = T;
             fn $fn(self, other: Self) -> Self::Output {
@@ -309,7 +314,7 @@ macro_rules! impl_ops {
 
         impl<T> $ops<T> for Orphan<T>
         where
-            T: ValueEnDe + Ord + Eq + $ops<Output = T>,
+            T: ValueEnDe + $ops<Output = T>,
         {
             type Output = T;
             fn $fn(self, other: T) -> Self::Output {
@@ -322,7 +327,7 @@ macro_rules! impl_ops {
 
         impl<T> $ops_assign for Orphan<T>
         where
-            T: ValueEnDe + Ord + Eq + $ops_assign,
+            T: ValueEnDe + $ops_assign,
         {
             fn $fn_assign(&mut self, other: Self) {
                 *self.get_mut() $op_assign other.get_value();
@@ -331,7 +336,7 @@ macro_rules! impl_ops {
 
         impl<T> $ops_assign<T> for Orphan<T>
         where
-            T: ValueEnDe + Ord + Eq + $ops_assign,
+            T: ValueEnDe + $ops_assign,
         {
             fn $fn_assign(&mut self, other: T) {
                 *self.get_mut() $op_assign other;
@@ -341,7 +346,7 @@ macro_rules! impl_ops {
     (@$ops: tt, $fn: tt, $op: tt) => {
         impl<T> $ops for Orphan<T>
         where
-            T: ValueEnDe + Ord + Eq + $ops<Output = T>,
+            T: ValueEnDe + $ops<Output = T>,
         {
             type Output = T;
             fn $fn(self) -> Self::Output {

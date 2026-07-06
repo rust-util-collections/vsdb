@@ -207,4 +207,9 @@ assert_eq!(entries.len(), 3);
 // Remove
 db.remove(100, &"entry_a".to_string());
 assert_eq!(db.total(), 3);
+
+// Bulk insertion (amortizes engine writes; ideal for imports/rebuilds)
+db.insert_batch([(400u64, "entry_e".to_string()), (400, "entry_f".to_string())])
+    .unwrap();
+assert_eq!(db.total(), 5);
 ```

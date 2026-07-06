@@ -1022,4 +1022,89 @@ mod tests {
         assert!(!PENDING_WINDOWS.read().contains_key(&spawned_id));
         assert_eq!(PENDING_WINDOWS.read().len(), before);
     }
+
+    // ---- Prefix allocator (INV-E1: prefix uniqueness) ----
+    //
+    // These tests go through the process-global `VSDB` singleton — the
+    // allocator's state (counter, ceiling, thread windows) is global by
+    // design, so an isolated `MmDB` cannot exercise the real code path.
+    // The test binary runs single-threaded (`--test-threads=1`), so no
+    // other test allocates concurrently.
+
+    /// Per-thread allocations must be strictly increasing — across
+    /// thread-local batch refills too (the loop spans several
+    /// `PREFIX_ALLOC_BATCH` windows).  A repeat or regression would
+    /// alias two instances' key ranges.
+    #[test]
+    fn prefix_allocator_unique_and_monotonic_per_thread() {
+        let db = &crate::common::VSDB.db;
+        let mut prev = db.alloc_prefix();
+        assert!(prev >= PREFIX_ALLOC_START);
+        for _ in 0..(2 * PREFIX_ALLOC_BATCH + 8) {
+            let next = db.alloc_prefix();
+            assert!(next > prev, "allocator regressed: {next} after {prev}");
+            prev = next;
+        }
+    }
+
+    /// Concurrent allocators must never issue the same prefix twice.
+    /// Each thread allocates more than one batch, so window refills
+    /// interleave with other threads claiming from `GLOBAL_COUNTER`.
+    #[test]
+    fn prefix_allocator_multithread_uniqueness() {
+        const THREADS: usize = 8;
+        let per_thread = (PREFIX_ALLOC_BATCH + 16) as usize;
+
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                thread::spawn(move || {
+                    let db = &crate::common::VSDB.db;
+                    (0..per_thread)
+                        .map(|_| db.alloc_prefix())
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+
+        let mut seen = HashSet::with_capacity(THREADS * per_thread);
+        for h in handles {
+            for p in h.join().unwrap() {
+                assert!(p >= PREFIX_ALLOC_START);
+                assert!(seen.insert(p), "prefix {p} issued twice");
+            }
+        }
+    }
+
+    /// Crash safety of the allocator counter: the durably persisted
+    /// ceiling must stay strictly above every issued prefix at all
+    /// times.  A restarted process resumes issuing at the persisted
+    /// value (`ensure_alloc_init`), so anything below it can never be
+    /// issued again — provided this invariant never lapses, a crash at
+    /// any point cannot lead to prefix reuse.
+    #[test]
+    fn prefix_allocator_persisted_ceiling_covers_issued() {
+        let db = &crate::common::VSDB.db;
+        let persisted_ceiling = || -> Pre {
+            crate::common::parse_prefix!(
+                db.meta_db()
+                    .get(&db.prefix_allocator.key)
+                    .expect("meta read failed")
+                    .expect("allocator key missing")
+            )
+        };
+
+        // Spans a batch refill, so the ceiling-bump-then-issue ordering
+        // inside `alloc_prefix_candidate` is exercised, not just the
+        // fast path within an already-covered window.
+        for _ in 0..(PREFIX_ALLOC_BATCH + 16) {
+            let p = db.alloc_prefix();
+            let ceil = GLOBAL_CEILING.load(Ordering::Acquire);
+            assert!(ceil > p, "in-memory ceiling {ceil} not above issued {p}");
+        }
+        // The in-memory mirror is kept in sync with the durable value;
+        // checking the disk once after the loop (plus the mirror on
+        // every iteration) keeps the test fast without weakening it.
+        let disk = persisted_ceiling();
+        assert_eq!(disk, GLOBAL_CEILING.load(Ordering::Acquire));
+    }
 }

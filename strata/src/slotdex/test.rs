@@ -499,6 +499,107 @@ fn sparse_slots() {
     assert_eq!(result, vec![2, 3]);
 }
 
+/// `insert_batch` must be observationally identical to per-key `insert`,
+/// across container promotion, tier growth, duplicates, and both slot
+/// orders. Compare a batch-built dex against a serially built one on
+/// every read surface.
+#[test]
+fn insert_batch_equivalence_with_serial() {
+    for swap_order in [false, true] {
+        let mut serial: SlotDex<u64, u64> = SlotDex::new(8, swap_order);
+        let mut batched: SlotDex<u64, u64> = SlotDex::new(8, swap_order);
+
+        // Mixed workload: hot slot 3 crosses the inline-container
+        // threshold (promotion), 300 distinct slots force tier growth,
+        // duplicates appear both within one batch and across batches.
+        let mut ops: Vec<(u64, u64)> = Vec::new();
+        for i in 0u64..300 {
+            ops.push((i, i));
+        }
+        for k in 0u64..40 {
+            ops.push((3, 10_000 + k));
+        }
+        ops.push((3, 10_000)); // duplicate within the same batch
+        ops.push((7, 7)); // duplicate of the i-loop entry
+
+        for &(s, k) in &ops {
+            serial.insert(s, k).unwrap();
+        }
+        // Split into uneven chunks so batch boundaries land mid-slot.
+        for chunk in ops.chunks(17) {
+            batched.insert_batch(chunk.iter().copied()).unwrap();
+        }
+
+        assert_eq!(serial.total(), batched.total());
+        assert_eq!(serial.tiers.len(), batched.tiers.len());
+        let total = serial.total();
+        for reverse in [false, true] {
+            let mut off = 0u32;
+            while u64::from(off) * 50 < total {
+                assert_eq!(
+                    serial.get_entries_by_page(50, off, reverse),
+                    batched.get_entries_by_page(50, off, reverse),
+                    "page {off} reverse={reverse} swap_order={swap_order}"
+                );
+                off += 1;
+            }
+        }
+        assert_eq!(
+            serial.total_by_slot(Some(2), Some(5)),
+            batched.total_by_slot(Some(2), Some(5))
+        );
+        assert_eq!(
+            serial.entry_cnt_within_two_slots(0, 150),
+            batched.entry_cnt_within_two_slots(0, 150)
+        );
+    }
+}
+
+#[test]
+fn insert_batch_empty_and_all_duplicates() {
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    db.insert_batch(std::iter::empty()).unwrap();
+    assert_eq!(db.total(), 0);
+
+    db.insert_batch([(0u64, 1u64), (0, 2)]).unwrap();
+    assert_eq!(db.total(), 2);
+
+    // Re-inserting the same pairs must be a no-op for the total.
+    db.insert_batch([(0u64, 1u64), (0, 2)]).unwrap();
+    assert_eq!(db.total(), 2);
+    assert_eq!(db.get_entries_by_page(10, 0, false), vec![1, 2]);
+}
+
+#[test]
+fn insert_batch_interleaved_with_serial_ops() {
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    let mut reference = testdb::TestDB::default();
+
+    db.insert_batch((0u64..50).map(|i| (i / 4, i))).unwrap();
+    (0u64..50).for_each(|i| reference.insert(i / 4, i));
+
+    db.insert(100, 999).unwrap();
+    reference.insert(100, 999);
+    db.remove(0, &1);
+    reference.remove(0, &1);
+
+    db.insert_batch([(0u64, 1u64), (200, 2000)]).unwrap();
+    reference.insert(0, 1);
+    reference.insert(200, 2000);
+
+    assert_eq!(db.total(), reference.total());
+    let mut page = 0u32;
+    loop {
+        let got = db.get_entries_by_page(16, page, false);
+        let want = reference.get_entries_by_page_slot(None, None, 16, page, false);
+        assert_eq!(got, want, "page {page}");
+        if got.is_empty() {
+            break;
+        }
+        page += 1;
+    }
+}
+
 mod testdb {
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -517,6 +618,19 @@ mod testdb {
     impl<T: Clone + Ord> TestDB<T> {
         pub fn insert(&mut self, slot: u64, v: T) {
             self.data.entry(slot).or_default().insert(v);
+        }
+
+        pub fn remove(&mut self, slot: u64, v: &T) {
+            if let Some(set) = self.data.get_mut(&slot) {
+                set.remove(v);
+                if set.is_empty() {
+                    self.data.remove(&slot);
+                }
+            }
+        }
+
+        pub fn total(&self) -> u64 {
+            self.data.values().map(|s| s.len() as u64).sum()
         }
 
         pub fn get_entries_by_page_slot(

@@ -20,5 +20,4 @@ mmdb = "4.0"
 vsdb_core = { path = "core", version = "14.0", default-features = false }
 
 criterion = "0.8"
-hex = "0.4"
 rand = "0.10"

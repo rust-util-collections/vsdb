@@ -1572,4 +1572,75 @@ mod cache_validation_tests {
         let ok = NodeHandle::Cached(vec![0u8; 32], Box::new(Node::Null));
         assert!(mpt_load(&ok).is_ok());
     }
+
+    #[test]
+    fn mpt_rejects_inmemory_child_under_cached_parent() {
+        // `commit_rec` skips Cached subtrees, so an InMemory child under
+        // a Cached parent is never re-hashed by `root_hash()`; encoding
+        // the parent (e.g. in `prove`) would then panic on the child's
+        // missing hash.  Organic saves always commit first, so this
+        // shape only comes from a crafted file — reject at load.
+        let in_mem_leaf = NodeHandle::InMemory(Box::new(Node::Leaf {
+            path: Nibbles::from_nibbles_unsafe(vec![0x01]),
+            value: b"v".to_vec(),
+        }));
+
+        // Cached extension → InMemory child.
+        let ext = NodeHandle::Cached(
+            vec![0u8; 32],
+            Box::new(Node::Extension {
+                path: Nibbles::from_nibbles_unsafe(vec![0x0A]),
+                child: in_mem_leaf.clone(),
+            }),
+        );
+        assert!(mpt_load(&ext).is_err());
+
+        // Cached branch → InMemory child.
+        let mut children: Box<[Option<NodeHandle>; 16]> = Default::default();
+        children[3] = Some(in_mem_leaf);
+        let branch = NodeHandle::Cached(
+            vec![0u8; 32],
+            Box::new(Node::Branch {
+                children,
+                value: None,
+            }),
+        );
+        assert!(mpt_load(&branch).is_err());
+
+        // Deeper mix: Cached → Cached → InMemory is caught at the
+        // intermediate Cached parent.
+        let deep = NodeHandle::Cached(
+            vec![1u8; 32],
+            Box::new(Node::Extension {
+                path: Nibbles::from_nibbles_unsafe(vec![0x02]),
+                child: NodeHandle::Cached(
+                    vec![2u8; 32],
+                    Box::new(Node::Extension {
+                        path: Nibbles::from_nibbles_unsafe(vec![0x03]),
+                        child: NodeHandle::InMemory(Box::new(Node::Leaf {
+                            path: Nibbles::from_nibbles_unsafe(vec![0x04]),
+                            value: b"v".to_vec(),
+                        })),
+                    }),
+                ),
+            }),
+        );
+        assert!(mpt_load(&deep).is_err());
+
+        // Fully-Cached counterpart still loads.
+        let all_cached = NodeHandle::Cached(
+            vec![0u8; 32],
+            Box::new(Node::Extension {
+                path: Nibbles::from_nibbles_unsafe(vec![0x0A]),
+                child: NodeHandle::Cached(
+                    vec![0u8; 32],
+                    Box::new(Node::Leaf {
+                        path: Nibbles::from_nibbles_unsafe(vec![0x01]),
+                        value: b"v".to_vec(),
+                    }),
+                ),
+            }),
+        );
+        assert!(mpt_load(&all_cached).is_ok());
+    }
 }
