@@ -722,13 +722,22 @@ fn mmdb_open(dir: &std::path::Path) -> Result<DB> {
     // line), and an explicit `VSDB_MEM_BUDGET_MB` override (highest
     // precedence bound; useful when the operator wants engine memory well
     // below any detected limit).
+    //
+    // A DETECTED cgroup limit is derated to 3/4 before use: memory.high
+    // is a throttle line, not a quota -- an engine sized exactly to it
+    // reaches steady state pinned AT the line, where every allocation
+    // pays reclaim-stall latency (observed in production: 9.6G peak
+    // against a 9626M MemoryHigh, sync stalled for most of an hour and
+    // a SIGTERM drain could not finish inside the unit's stop timeout).
+    // The explicit env override is applied verbatim -- the operator
+    // asked for that exact number.
     let mut budget_limited = false;
     let avail_mem_bytes = {
         let mut budget = host_avail_bytes;
         if let Some(limit) = cgroup_mem_limit_bytes()
-            && limit < budget
+            && limit / 4 * 3 < budget
         {
-            budget = limit;
+            budget = limit / 4 * 3;
             budget_limited = true;
         }
         if let Some(v) = std::env::var("VSDB_MEM_BUDGET_MB")

@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v14.0.11]
+
+### Fixed
+
+- **Detected cgroup limits are derated to 3/4 before sizing engine
+  memory.** `memory.high` is a throttle line, not a quota: an engine
+  budgeted exactly to it reaches steady state pinned AT the line, where
+  every allocation pays reclaim-stall latency. Observed in production:
+  a follower under a 9626M `MemoryHigh` peaked at exactly 9.6G, its
+  ingest pipeline stalled for most of an hour, and a SIGTERM drain
+  could not complete inside the unit's stop timeout (SIGKILL -> dirty
+  store -> minutes-long derived-state rebuild on next boot). The
+  explicit `VSDB_MEM_BUDGET_MB` override is still applied verbatim --
+  the operator asked for that exact number.
+
 ## [v14.0.10]
 
 ### Fixed
