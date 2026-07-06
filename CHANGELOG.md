@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v14.0.12]
+
+### Fixed
+
+- **`VSDB_MEM_BUDGET_MB` is now truly authoritative (fixes the
+  "verbatim" claim of v14.0.11).** The explicit override still
+  participated in a min-fold against the already-derated detected
+  limits, so an operator budget ABOVE the derated cgroup number was
+  silently discarded (asking for 1700 MB inside a 2 GiB cgroup
+  yielded 1536 MB). When set and non-zero it now replaces all
+  detection -- host reading included: the operator asked for that
+  exact number. Zero or unrepresentably-large values are ignored.
+- **A cgroup file reporting `0` can no longer zero the engine
+  budget.** The limit parser accepted a literal `0`, which the
+  hierarchical min-fold then propagated into a zero budget and a
+  zero-capacity block cache (mmdb treats capacity 0 as "caching
+  disabled entirely"); `0` is now treated as undetectable, like
+  `max`.
+- **The block cache is floored at 4 MiB per shard**, mirroring the
+  existing 4 MiB write-buffer floor, so degenerate budgets degrade
+  to a small-but-functional cache instead of a disabled one.
+
+### Changed
+
+- Memory detection (host reading, cgroup walk, env override) runs
+  once per process instead of once per shard: all 16 shards now size
+  off the same numbers (the host reading is a moment-in-time value
+  that could drift between shard opens).
+- The budget computation is a pure function (`effective_mem_budget`)
+  with unit tests pinning the semantics -- including the deliberate
+  min-fold of derated detected limits: a cgroup line within 4/3 of
+  the host reading must still cap the budget AND flip conservative
+  write-buffer scaling, otherwise worst-case memtables (budget/4 per
+  shard x5) can overshoot the line wholesale (host 24G under a 30G
+  `memory.high` would size 30G of worst-case memtables), re-opening
+  the v14.0.10 incident class.
+
 ## [v14.0.11]
 
 ### Fixed
