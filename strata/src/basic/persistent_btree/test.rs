@@ -1203,3 +1203,86 @@ fn test_serde_roundtrip_multi_version() {
     assert_eq!(restored.get(fork_b, b"b_only").unwrap(), b"2");
     assert!(restored.get(fork_b, b"a_only").is_none());
 }
+
+// =====================================================================
+// Write-buffer (per-operation batch flush) paths
+// =====================================================================
+
+/// Underflow repair reads back nodes allocated earlier in the same
+/// remove operation (through the write buffer), and discards
+/// intra-operation churn from the buffer before it ever reaches the
+/// engine.  Drive borrow-left/borrow-right/merge chains hard and verify
+/// the surviving version is complete while a pre-existing version stays
+/// byte-identical (COW through the buffered path, INV-BT1).
+#[test]
+fn write_buffer_underflow_readback_and_cow() {
+    setup();
+    let mut tree = PersistentBTree::new();
+
+    // Deep enough for multi-level underflow cascades.
+    let n = 4000u32;
+    let mut root = EMPTY_ROOT;
+    for i in 0..n {
+        root = tree.insert(root, &i.to_be_bytes(), &(i * 7).to_be_bytes());
+    }
+    let snapshot = root;
+
+    // Remove three quarters of the keys in an order that exercises
+    // borrow-left, borrow-right, and merge (front, back, interleaved).
+    let mut cur = root;
+    for i in 0..n {
+        if i % 4 != 0 {
+            cur = tree.remove(cur, &i.to_be_bytes());
+        }
+    }
+
+    // Survivors are exact; removed keys are gone.
+    for i in 0..n {
+        let got = tree.get(cur, &i.to_be_bytes());
+        if i % 4 == 0 {
+            assert_eq!(got.unwrap(), (i * 7).to_be_bytes());
+        } else {
+            assert!(got.is_none(), "key {i} should be removed");
+        }
+    }
+    assert_eq!(tree.iter(cur).count(), (n as usize).div_ceil(4));
+
+    // The pre-removal snapshot is untouched.
+    assert_eq!(tree.iter(snapshot).count(), n as usize);
+    for i in (0..n).step_by(97) {
+        assert_eq!(
+            tree.get(snapshot, &i.to_be_bytes()).unwrap(),
+            (i * 7).to_be_bytes()
+        );
+    }
+}
+
+/// bulk_load buffers node writes and flushes in bounded chunks; a load
+/// large enough to cross the flush threshold several times must produce
+/// a tree whose separator keys (computed via first_key read-back across
+/// flushed and still-buffered nodes) route every lookup correctly.
+#[test]
+fn write_buffer_bulk_load_across_flush_chunks() {
+    setup();
+    let mut tree = PersistentBTree::new();
+
+    // > 1250 leaves at MAX_KEYS=32/leaf — crosses the 1024-node flush
+    // threshold within the leaf loop and again in the internal levels.
+    let n = 40_000u32;
+    let entries: Vec<_> = (0..n)
+        .map(|i| (i.to_be_bytes().to_vec(), i.to_le_bytes().to_vec()))
+        .collect();
+    let root = tree.bulk_load(entries);
+
+    assert_eq!(tree.iter(root).count(), n as usize);
+    // Spot-check routing through every region, including chunk edges.
+    for i in (0..n).step_by(509).chain([0, 1, n - 2, n - 1]) {
+        assert_eq!(tree.get(root, &i.to_be_bytes()).unwrap(), i.to_le_bytes());
+    }
+    // Iteration is ordered and gap-free.
+    let mut prev = None;
+    for (k, _) in tree.iter(root) {
+        assert!(prev.as_ref() < Some(&k), "iteration order violated");
+        prev = Some(k);
+    }
+}

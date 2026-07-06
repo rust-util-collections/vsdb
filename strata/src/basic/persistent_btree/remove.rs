@@ -14,10 +14,14 @@ impl PersistentBTree {
         if root == EMPTY_ROOT {
             return EMPTY_ROOT;
         }
-        match self.remove_rec(root, key) {
+        let new_root = match self.remove_rec(root, key) {
             RemoveResult::NotFound => root,
             RemoveResult::Done(r) | RemoveResult::Underflow(r) => self.shrink_root(r),
-        }
+        };
+        // One engine write batch for the whole path-copy node group
+        // (a NotFound flush is a no-op — nothing was allocated).
+        self.flush_pending();
+        new_root
     }
 
     fn shrink_root(&mut self, root: NodeId) -> NodeId {
@@ -68,8 +72,16 @@ impl PersistentBTree {
                 cr.ref_count = cr.ref_count.saturating_sub(1);
             }
         }
-        self.nodes
-            .lazy_delete_batch(vec![nid.to_le_bytes().to_vec()]);
+        // Intra-operation churn (split/borrow/merge intermediates) is
+        // still in the write buffer: drop it there and it never reaches
+        // the engine.  Nodes from earlier operations (or flushed earlier
+        // in bulk_load) are on disk and go through the usual deferred
+        // deletion.  NodeIds are never reused, so a lazy-delete
+        // registration can never shadow a future write of the same key.
+        if self.pending.remove(&nid).is_none() {
+            self.nodes
+                .lazy_delete_batch(vec![nid.to_le_bytes().to_vec()]);
+        }
     }
 
     fn remove_rec(&mut self, id: NodeId, key: &[u8]) -> RemoveResult {

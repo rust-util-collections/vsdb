@@ -9,6 +9,10 @@
 - Structural sharing: unchanged subtrees shared across versions
 - Backed by MapxRaw (untyped KV → MMDB)
 - Node types: Internal (keys + child NodeIds) and Leaf (keys + values)
+- Per-operation write buffer: `alloc` stages encoded nodes in `pending`;
+  each public mutating op (`insert`/`remove`/`bulk_load`) drains it via
+  ONE engine write batch before returning (`flush_pending`); `node()`
+  reads through the buffer; intra-op discarded churn never hits disk
 
 ## Critical Invariants
 
@@ -33,6 +37,10 @@ Two versions that share a subtree must see identical data for that subtree. If v
 ### INV-BT5: GC Reachability
 A node is garbage if no live commit's root tree can reach it. GC must not collect reachable nodes.
 **Check**: Verify GC traverses from ALL live commit roots, not just the latest.
+
+### INV-BT6: Write Buffer Drained Between Operations
+`pending` is non-empty ONLY inside a mutating operation. Every public mutating entry point must flush before returning; anything that runs between operations (serialize, Clone, `release_node`, `gc`, iteration) may assume an empty buffer. A root NodeId must never escape to a caller (or be persisted into VerMap branch state) while any node it references is still buffered.
+**Check**: Every `return` path of `insert`/`remove`/`bulk_load` passes through `flush_pending`. New mutating entry points must do the same. `node()` must consult the buffer before the engine (remove-underflow and `bulk_load` read back same-op nodes). `discard_node` must drop in-buffer nodes instead of lazy-deleting them.
 
 ## Common Bug Patterns
 
@@ -59,3 +67,4 @@ Delete cascades underflow but merge doesn't properly redistribute or combine nod
 - [ ] GC considers all live commit roots
 - [ ] Node encode/decode round-trips correctly (hand-written codec)
 - [ ] Empty tree / single-entry edge cases handled
+- [ ] Write buffer flushed on every mutating return path (INV-BT6)

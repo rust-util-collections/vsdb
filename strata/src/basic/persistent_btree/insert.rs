@@ -10,19 +10,25 @@ impl PersistentBTree {
     ///
     /// The old root (and every version that references it) is unaffected.
     pub fn insert(&mut self, root: NodeId, key: &[u8], value: &[u8]) -> NodeId {
-        if root == EMPTY_ROOT {
-            return self.alloc(&Node::Leaf {
+        let new_root = if root == EMPTY_ROOT {
+            self.alloc(&Node::Leaf {
                 keys: vec![key.to_vec()],
                 values: vec![value.to_vec()],
-            });
-        }
-        match self.insert_rec(root, key, value) {
-            InsertResult::Updated(r) => r,
-            InsertResult::Split { left, sep, right } => self.alloc(&Node::Internal {
-                keys: vec![sep],
-                children: vec![left, right],
-            }),
-        }
+            })
+        } else {
+            match self.insert_rec(root, key, value) {
+                InsertResult::Updated(r) => r,
+                InsertResult::Split { left, sep, right } => {
+                    self.alloc(&Node::Internal {
+                        keys: vec![sep],
+                        children: vec![left, right],
+                    })
+                }
+            }
+        };
+        // One engine write batch for the whole path-copy node group.
+        self.flush_pending();
+        new_root
     }
 
     fn insert_rec(&mut self, id: NodeId, key: &[u8], value: &[u8]) -> InsertResult {

@@ -94,6 +94,25 @@ pub struct PersistentBTree {
     pub(crate) ref_counts: HashMap<NodeId, NodeRef>,
     /// Whether `ref_counts` has been populated (false after deserialization).
     pub(crate) ref_counts_ready: bool,
+    /// Write buffer for the mutating operation currently in flight.
+    ///
+    /// `alloc` stages encoded nodes here instead of issuing one engine
+    /// put per node; each public mutating entry point (`insert`,
+    /// `remove`, `bulk_load`) drains it through a single engine write
+    /// batch before returning (`flush_pending`), so per-node engine
+    /// overhead (shard lock, WAL record) is paid once per operation and
+    /// the operation's node group lands atomically.  `node()` reads
+    /// through the buffer, because the remove/underflow and `bulk_load`
+    /// paths read back nodes allocated earlier in the same operation.
+    /// Nodes discarded before the flush (intra-operation churn from
+    /// split/borrow/merge) are dropped from the buffer and never reach
+    /// the engine at all.
+    ///
+    /// **Empty between operations** — every public mutating method
+    /// flushes before returning, so serialization (which cannot run
+    /// concurrently with a `&mut self` operation) never observes
+    /// buffered nodes, and `Clone` only ever copies an empty map.
+    pending: HashMap<NodeId, Vec<u8>>,
 }
 
 impl Serialize for PersistentBTree {
@@ -101,6 +120,14 @@ impl Serialize for PersistentBTree {
     where
         S: serde::Serializer,
     {
+        // The write buffer is drained by every mutating entry point
+        // before it returns, so a serialization (which cannot overlap a
+        // `&mut self` operation) must never observe buffered nodes —
+        // they would be silently dropped from the snapshot.
+        debug_assert!(
+            self.pending.is_empty(),
+            "PersistentBTree serialized with a non-empty write buffer"
+        );
         use serde::ser::SerializeTuple;
         let mut t = serializer.serialize_tuple(2)?;
         t.serialize_element(&self.nodes)?;
@@ -150,6 +177,7 @@ impl<'de> Deserialize<'de> for PersistentBTree {
                     next_id,
                     ref_counts: Default::default(),
                     ref_counts_ready: false,
+                    pending: Default::default(),
                 })
             }
         }
@@ -188,10 +216,18 @@ impl PersistentBTree {
             next_id: 1, // 0 is EMPTY_ROOT sentinel
             ref_counts: HashMap::new(),
             ref_counts_ready: true, // empty tree — nothing to rebuild
+            pending: HashMap::new(),
         }
     }
 
     // ----- low-level helpers -----
+
+    /// Number of buffered nodes above which `bulk_load` flushes
+    /// mid-operation, bounding the write buffer's memory footprint
+    /// (the same larger-than-RAM hazard `Mapx::clear`/`Clone` chunk
+    /// against).  Path-copying operations (`insert`/`remove`) stay far
+    /// below this — they buffer O(depth) nodes.
+    const PENDING_FLUSH_THRESHOLD: usize = 1024;
 
     fn alloc(&mut self, node: &Node) -> NodeId {
         let id = self.next_id;
@@ -200,10 +236,11 @@ impl PersistentBTree {
             .checked_add(1)
             .expect("PersistentBTree: NodeId space exhausted");
         debug_assert!(
-            self.nodes.get(id.to_le_bytes()).is_none(),
+            !self.pending.contains_key(&id)
+                && self.nodes.get(id.to_le_bytes()).is_none(),
             "PersistentBTree: NodeId {id} already occupied — allocator regression"
         );
-        self.nodes.insert(id.to_le_bytes(), node.encode());
+        self.pending.insert(id, node.encode());
 
         // Populate in-memory ref tracking.
         if self.ref_counts_ready {
@@ -231,11 +268,41 @@ impl PersistentBTree {
     }
 
     fn node(&self, id: NodeId) -> Node {
+        // Read-through for nodes allocated earlier in the operation in
+        // flight (remove's underflow repair and bulk_load's first_key
+        // descend into them).  The emptiness guard keeps the read-only
+        // hot path (get / iter) at a single branch — the buffer is only
+        // non-empty inside a mutating operation.
+        if !self.pending.is_empty()
+            && let Some(raw) = self.pending.get(&id)
+        {
+            return Node::decode(raw);
+        }
         let raw = self
             .nodes
             .get(id.to_le_bytes())
             .unwrap_or_else(|| panic!("PersistentBTree: missing node {id}"));
         Node::decode(&raw)
+    }
+
+    /// Drains the write buffer into a single engine write batch.
+    ///
+    /// Called by every public mutating entry point before it returns,
+    /// and mid-`bulk_load` at [`Self::PENDING_FLUSH_THRESHOLD`].  An
+    /// engine-level commit failure panics, matching the per-put
+    /// failure behavior this replaces (mutating signatures are
+    /// infallible); nothing from the batch lands in that case.
+    fn flush_pending(&mut self) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let mut batch = self.nodes.batch_entry();
+        for (id, raw) in self.pending.drain() {
+            batch.insert(&id.to_le_bytes(), &raw);
+        }
+        batch
+            .commit()
+            .expect("vsdb: node flush failed during btree write");
     }
 
     /// Binary-search `keys` for `target`.  Returns child index to descend.
@@ -375,6 +442,12 @@ impl PersistentBTree {
             let keys = chunk.iter().map(|(k, _)| k.clone()).collect();
             let values = chunk.iter().map(|(_, v)| v.clone()).collect();
             leaf_ids.push(self.alloc(&Node::Leaf { keys, values }));
+            // Bound the write buffer on larger-than-RAM loads; flushed
+            // nodes stay readable through the engine, so `first_key`'s
+            // read-back below works across flush boundaries.
+            if self.pending.len() >= Self::PENDING_FLUSH_THRESHOLD {
+                self.flush_pending();
+            }
         }
         // 2. Build internal levels bottom-up. Each internal node gets
         //    `MIN_KEYS + 1 ..= MAX_KEYS + 1` children (uniform height —
@@ -394,10 +467,14 @@ impl PersistentBTree {
                     keys,
                     children: chunk.to_vec(),
                 }));
+                if self.pending.len() >= Self::PENDING_FLUSH_THRESHOLD {
+                    self.flush_pending();
+                }
                 i += take;
             }
             level = next;
         }
+        self.flush_pending();
         level[0]
     }
 
@@ -434,6 +511,13 @@ impl PersistentBTree {
         if id == EMPTY_ROOT || !self.ref_counts_ready {
             return;
         }
+        // Callers (VerMap) only release between tree operations; the
+        // write buffer must already be drained, otherwise the cascade
+        // below would lazy-delete keys the buffer has not written yet.
+        debug_assert!(
+            self.pending.is_empty(),
+            "release_node called with a non-empty write buffer"
+        );
         let mut dead_keys = Vec::new();
         let mut work = vec![id];
         while let Some(nid) = work.pop() {
