@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v14.0.13]
+
+### Added
+
+- **`SlotDex::insert_batch`** — bulk insertion that is observationally
+  identical to per-pair `insert` but amortizes engine writes: keys are
+  grouped per slot, each touched container is loaded/persisted once,
+  and container records plus per-tier counters are flushed through one
+  write batch per collection. Intended for imports and index rebuilds.
+- Missing invariant tests from the full audit: prefix-allocator
+  uniqueness/monotonicity/ceiling-persistence (INV-E1), `MapxRaw`
+  prefix isolation (INV-E3), VerMap rollback isolation (INV-V4), and a
+  ground-truth ref-count recount (INV-V1).
+
+### Fixed
+
+- **MPT cache loader rejects mixed `Cached`/`InMemory` trees.** A
+  checksum-valid but crafted cache file could place an unhashed
+  (`InMemory`) child under a `Cached` parent; `commit_rec` skips
+  `Cached` subtrees, so the child was never re-hashed and `prove()`
+  panicked on its missing hash. Rejected at the load trust boundary,
+  like the other cache-shape validations.
+- `rollback_to` targeting the current head with a clean working state
+  is now an early-return no-op instead of a full rewrite cycle that
+  set `gc_dirty` and re-wrote identical state.
+- `merge_empty_source_fails` test used a branch ID from the wrong
+  `VerMap` instance (worked only by coincidence of ID layouts).
+
+### Changed
+
+- `Orphan` arithmetic/bit/negation operator impls no longer require
+  `Ord + Eq`, so `f64` (and other `PartialOrd`-only types) can use
+  `+`, `-`, `*`, `/`, unary `-`, etc.
+- Serde deserialization of collection handles is now documented as an
+  aliasing operation (same SWMR obligations as `shadow()`); the
+  fast-forward precondition of `merge` and the net-zero ref-count
+  convention of `commit()` are documented at the code site.
+- `rand` moved from `vsdb_core`'s `[dependencies]` to
+  `[dev-dependencies]` (only tests/benches use it); unused `hex`
+  dev-dependency removed workspace-wide.
+
 ## [v14.0.12]
 
 ### Fixed

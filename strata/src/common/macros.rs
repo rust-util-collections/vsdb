@@ -173,9 +173,13 @@ pub(crate) use define_map_wrapper;
 macro_rules! entry_or_insert_via_mock {
     ($slf:expr, $hdr_ty:ty, $get_mut_call:ident($($get_mut_args:expr),*), $mock_call:ident($($mock_args:expr),*)) => {{
         let hdr = $slf.hdr as *mut $hdr_ty;
-        // SAFETY: `hdr` is derived from `$slf.hdr: &'a mut $hdr_ty`.
+        // SAFETY: `hdr` is cast straight from `$slf.hdr: &'a mut $hdr_ty`,
+        // so it is non-null, aligned, and carries that exclusive
+        // borrow's provenance for the full lifetime `'a`; nothing else
+        // touches `$slf.hdr` between the cast and the last use below.
         // The two dereferences are in mutually exclusive match arms and
-        // never coexist; no aliasing occurs.
+        // never coexist; each reborrows exclusively within `'a`, so no
+        // aliasing occurs.
         match unsafe { &mut *hdr }.$get_mut_call($($get_mut_args),*) {
             Some(v) => v,
             _ => unsafe { &mut *hdr }.$mock_call($($mock_args),*),

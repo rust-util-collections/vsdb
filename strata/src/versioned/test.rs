@@ -848,9 +848,9 @@ fn merge_empty_source_fails() {
 
     // To test truly no commit, we need a branch created before any commits.
     let mut m2: VerMap<u32, u32> = VerMap::new();
-    let main = m.main_branch();
-    let b = m2.create_branch("empty", main).unwrap();
-    assert!(m2.merge(b, main).is_err());
+    let main2 = m2.main_branch();
+    let b = m2.create_branch("empty", main2).unwrap();
+    assert!(m2.merge(b, main2).is_err());
 
     // Also test: feat -> main should work normally.
     m.merge(feat, main).unwrap();
@@ -1433,6 +1433,128 @@ fn rollback_decrements_abandoned_commits() {
     // c2 and c3 were exclusively on this branch → deleted.
     assert!(m.get_commit(c2).is_none());
     assert!(m.get_commit(c3).is_none());
+}
+
+/// INV-V4 (rollback isolation): rolling back one branch must not touch
+/// another branch's data or commit chain — including when both branches
+/// point at the very same commit.
+#[test]
+fn rollback_preserves_other_branch_data() {
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+
+    m.insert(main, &1, &10).unwrap();
+    let c1 = m.commit(main).unwrap();
+    m.insert(main, &2, &20).unwrap();
+    let c2 = m.commit(main).unwrap();
+
+    // Fork after c2, then advance the fork.
+    let feat = m.create_branch("feat", main).unwrap();
+    m.insert(feat, &3, &30).unwrap();
+    let c3 = m.commit(feat).unwrap();
+
+    // Roll main back past c2.  feat's chain still references c2, so it
+    // must survive the ref-count cascade.
+    m.rollback_to(main, c1).unwrap();
+
+    // Main observes exactly the c1 state.
+    assert_eq!(m.get(main, &1).unwrap(), Some(10));
+    assert_eq!(m.get(main, &2).unwrap(), None);
+
+    // feat's data, historical snapshots, and commit chain are untouched.
+    assert_eq!(m.get(feat, &1).unwrap(), Some(10));
+    assert_eq!(m.get(feat, &2).unwrap(), Some(20));
+    assert_eq!(m.get(feat, &3).unwrap(), Some(30));
+    assert!(m.get_commit(c2).is_some());
+    assert_eq!(m.get_at_commit(c2, &2).unwrap(), Some(20));
+    let chain: Vec<_> = m.log(feat).unwrap().iter().map(|c| c.id).collect();
+    assert_eq!(chain, vec![c3, c2, c1]);
+
+    // Two branches pointing at the SAME commit: roll one back, the
+    // other keeps its head commit and data.
+    let twin = m.create_branch("twin", feat).unwrap(); // twin head == c3
+    m.rollback_to(feat, c1).unwrap();
+    assert!(m.get_commit(c3).is_some());
+    assert_eq!(m.get(twin, &3).unwrap(), Some(30));
+    assert_eq!(m.get_at_commit(c3, &3).unwrap(), Some(30));
+    // feat itself is back at c1.
+    assert_eq!(m.get(feat, &2).unwrap(), None);
+    assert_eq!(m.get(feat, &3).unwrap(), None);
+}
+
+/// INV-V1 (ref-count balance): after arbitrary commit / branch / merge /
+/// rollback / delete sequences, every stored `ref_count` must equal a
+/// from-scratch recount of its references (branch HEADs + parent links)
+/// — the same ground truth crash recovery's `rebuild_ref_counts`
+/// recomputes.  This mechanically pins the implicit net-zero convention
+/// `commit()` relies on for the old HEAD (it loses a branch-HEAD but
+/// gains a parent-link, so its stored count is never touched).
+#[test]
+fn ref_counts_match_ground_truth_recount() {
+    fn assert_ref_counts_consistent(m: &VerMap<u32, u32>) {
+        use std::collections::HashMap;
+
+        let mut expected: HashMap<u64, u32> = HashMap::new();
+        for (_, s) in m.branches.iter() {
+            if s.head != NO_COMMIT {
+                *expected.entry(s.head).or_insert(0) += 1;
+            }
+        }
+        for (_, c) in m.commits.iter() {
+            for &p in &c.parents {
+                if p != NO_COMMIT {
+                    *expected.entry(p).or_insert(0) += 1;
+                }
+            }
+        }
+
+        for (id, c) in m.commits.iter() {
+            assert_eq!(
+                c.ref_count,
+                *expected.get(&id).unwrap_or(&0),
+                "commit {id}: stored ref_count diverges from recount"
+            );
+        }
+        // Every referenced commit must still exist (no dangling refs).
+        for (id, n) in expected {
+            assert!(
+                n == 0 || m.commits.get(&id).is_some(),
+                "dangling reference to deleted commit {id}"
+            );
+        }
+    }
+
+    setup();
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+
+    // Plain commit chain (exercises the old-HEAD net-zero convention).
+    m.insert(main, &1, &10).unwrap();
+    m.commit(main).unwrap();
+    m.insert(main, &2, &20).unwrap();
+    let c2 = m.commit(main).unwrap();
+    assert_ref_counts_consistent(&m);
+
+    // Branch + divergence on both sides.
+    let feat = m.create_branch("feat", main).unwrap();
+    m.insert(feat, &3, &30).unwrap();
+    m.commit(feat).unwrap();
+    m.insert(main, &4, &40).unwrap();
+    m.commit(main).unwrap();
+    assert_ref_counts_consistent(&m);
+
+    // Merge (two-parent commit).
+    m.merge(feat, main).unwrap();
+    assert_ref_counts_consistent(&m);
+
+    // Rollback (cascading deletion of exclusively-owned commits).
+    m.rollback_to(feat, c2).unwrap();
+    assert_ref_counts_consistent(&m);
+
+    // Branch deletion.
+    m.delete_branch(feat).unwrap();
+    assert_ref_counts_consistent(&m);
 }
 
 #[test]

@@ -250,6 +250,31 @@ fn deserialize_handle(
                 )));
             }
             let node = deserialize_node(data, cursor, consumed)?;
+            // A `Cached` parent must not hold `InMemory` children:
+            // `commit_rec` skips `Cached` subtrees wholesale, so such a
+            // child would never be (re-)hashed by `root_hash()`, and
+            // `NodeCodec::encode` on the parent later panics on the
+            // child's missing hash (e.g. in `prove`).  Organic saves
+            // can never produce this shape — `save_cache` commits the
+            // whole tree first — so it is rejected here, at the trust
+            // boundary.  Checking direct children is sufficient: every
+            // deeper `Cached`→`InMemory` edge is caught by the same
+            // check when its own parent handle is deserialized.
+            let mixed = match &node {
+                Node::Extension { child, .. } => {
+                    matches!(child, NodeHandle::InMemory(_))
+                }
+                Node::Branch { children, .. } => children
+                    .iter()
+                    .flatten()
+                    .any(|c| matches!(c, NodeHandle::InMemory(_))),
+                Node::Null | Node::Leaf { .. } => false,
+            };
+            if mixed {
+                return Err(TrieError::InvalidState(
+                    "MPT cache: unhashed (InMemory) child under a Cached parent".into(),
+                ));
+            }
             Ok(NodeHandle::Cached(hash, Box::new(node)))
         }
         _ => Err(TrieError::InvalidState(format!(

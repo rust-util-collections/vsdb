@@ -221,6 +221,62 @@ where
         }
     }
 
+    /// Insert many keys at once, returning how many were newly added.
+    ///
+    /// Semantically identical to calling [`insert`](Self::insert) per key
+    /// (same promotion point, same dedup), but the `Large` variant stages
+    /// all new keys into a single engine write batch instead of one
+    /// engine put per key.
+    pub(crate) fn insert_batch(&mut self, ks: Vec<K>) -> Result<usize> {
+        let mut added = 0usize;
+        let mut idx = 0usize;
+        // Small phase: absorb keys inline until promotion triggers.
+        while idx < ks.len() {
+            let promote = match self {
+                Self::Small(set) => {
+                    let k = &ks[idx];
+                    if set.len() >= INLINE_CAPACITY_THRESHOLD && !set.contains(k) {
+                        true
+                    } else {
+                        if set.insert(k.clone()) {
+                            added += 1;
+                        }
+                        idx += 1;
+                        false
+                    }
+                }
+                Self::Large { .. } => break,
+            };
+            if promote {
+                self.try_upgrade();
+            }
+        }
+        if idx >= ks.len() {
+            return Ok(added);
+        }
+        let Self::Large { map, len } = self else {
+            unreachable!("promoted to Large above")
+        };
+        // Two passes: existence checks first (a live batch holds the
+        // map's &mut borrow), then one batched write for the new keys.
+        let mut new_keys = BTreeSet::new();
+        for k in &ks[idx..] {
+            if !new_keys.contains(k) && map.get(k).is_none() {
+                new_keys.insert(k.clone());
+            }
+        }
+        if !new_keys.is_empty() {
+            let mut b = map.batch_entry();
+            for k in &new_keys {
+                b.insert(k, &());
+            }
+            b.commit()?;
+            *len += new_keys.len();
+            added += new_keys.len();
+        }
+        Ok(added)
+    }
+
     pub(crate) fn remove(&mut self, target: &K) -> bool {
         match self {
             Self::Small(i) => i.remove(target),

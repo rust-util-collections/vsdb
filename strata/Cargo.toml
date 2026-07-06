@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "14.0.12"
+version = "14.0.13"
 authors = ["hui.fan@mail.ru"]
 edition = "2024"
 description = "A std-collection-like database"
@@ -27,7 +27,6 @@ thiserror = { workspace = true }
 rand = { workspace = true }
 
 [dev-dependencies]
-hex = { workspace = true }
 criterion = { workspace = true }
 
 [features]

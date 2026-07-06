@@ -499,6 +499,12 @@ impl Serialize for Mapx {
 }
 
 impl<'de> Deserialize<'de> for Mapx {
+    // Deserialization restores a handle to the SAME underlying prefix
+    // (a shallow alias, like `shadow()`), not an independent copy.
+    // The SWMR obligations of every alias-producing path are documented
+    // on the public wrappers' `Deserialize`/`from_meta` impls; the
+    // prefix itself is validated against the allocator-reserved range
+    // by `from_prefix_meta`.
     fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
     where
         D: serde::Deserializer<'de>,

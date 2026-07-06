@@ -35,6 +35,9 @@ fn concurrent_independent_writes(c: &mut Criterion) {
                 let mut handles = vec![];
 
                 for tid in 0..num_threads {
+                    // SAFETY: SWMR upheld — each thread writes only keys
+                    // tagged with its own `tid` in the top 16 bits, so no
+                    // two handles ever write the same key.
                     let mut db_shadow = unsafe { db.shadow() };
                     let bar = barrier.clone();
                     handles.push(std::thread::spawn(move || {
@@ -126,6 +129,9 @@ fn concurrent_shadow_hotspot_writes(c: &mut Criterion) {
                 let mut handles = vec![];
 
                 for i in 0..num_threads {
+                    // SAFETY: SWMR upheld — each thread writes only keys
+                    // tagged with its own `i` in the top 16 bits, so no
+                    // two handles ever write the same key.
                     let mut db_shadow = unsafe { db.shadow() };
                     let bar = barrier.clone();
                     handles.push(std::thread::spawn(move || {
@@ -178,6 +184,8 @@ fn concurrent_reads(c: &mut Criterion) {
                 let mut handles = vec![];
 
                 for tid in 0..num_threads {
+                    // SAFETY: SWMR upheld — read-only handle; no thread
+                    // writes through any handle during the benchmark.
                     let db_shadow = unsafe { db.shadow() };
                     let bar = barrier.clone();
                     handles.push(std::thread::spawn(move || {
@@ -232,6 +240,9 @@ fn concurrent_mixed_read_write(c: &mut Criterion) {
                     let mut handles = vec![];
 
                     for tid in 0..num_readers {
+                        // SAFETY: SWMR upheld — read-only handle; the
+                        // engine provides snapshot isolation for reads
+                        // running alongside the writer threads below.
                         let db_shadow = unsafe { db.shadow() };
                         let bar = barrier.clone();
                         handles.push(std::thread::spawn(move || {
@@ -246,6 +257,10 @@ fn concurrent_mixed_read_write(c: &mut Criterion) {
                     }
 
                     for wid in 0..num_writers {
+                        // SAFETY: SWMR upheld — each writer's keys carry
+                        // `wid + num_readers` (>= 1) in the top 16 bits:
+                        // disjoint from every other writer and from the
+                        // preloaded 0-prefixed keys the readers touch.
                         let mut db_shadow = unsafe { db.shadow() };
                         let bar = barrier.clone();
                         handles.push(std::thread::spawn(move || {

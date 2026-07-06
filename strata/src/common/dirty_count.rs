@@ -40,6 +40,12 @@ pub fn inc(raw: u64) -> u64 {
     count(raw).saturating_add(1).min(COUNT_MASK) | (raw & DIRTY_BIT)
 }
 
+/// Increment the count by `n`, preserving the dirty flag.
+#[inline(always)]
+pub fn inc_by(raw: u64, n: u64) -> u64 {
+    count(raw).saturating_add(n).min(COUNT_MASK) | (raw & DIRTY_BIT)
+}
+
 /// Decrement the count by 1 (saturating), preserving the dirty flag.
 #[inline(always)]
 pub fn dec(raw: u64) -> u64 {
@@ -92,6 +98,24 @@ mod tests {
         let dirty = set_dirty(5);
         assert_eq!(count(inc(dirty)), 6);
         assert!(is_dirty(inc(dirty)));
+    }
+
+    #[test]
+    fn inc_by_preserves_dirty_and_saturates() {
+        assert_eq!(inc_by(5, 10), 15);
+        assert!(!is_dirty(inc_by(5, 10)));
+
+        let dirty = set_dirty(5);
+        assert_eq!(count(inc_by(dirty, 10)), 15);
+        assert!(is_dirty(inc_by(dirty, 10)));
+
+        let clean = inc_by(COUNT_MASK - 1, u64::MAX);
+        assert_eq!(count(clean), COUNT_MASK);
+        assert!(!is_dirty(clean));
+
+        let dirty = inc_by(set_dirty(COUNT_MASK - 1), u64::MAX);
+        assert_eq!(count(dirty), COUNT_MASK);
+        assert!(is_dirty(dirty));
     }
 
     #[test]
