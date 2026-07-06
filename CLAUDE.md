@@ -42,10 +42,11 @@ make bench        # criterion benches (core basic, strata basic, versioned, slot
 | Versioning | `strata/src/versioned/` | VerMap, Branch/BranchMut handles, commit DAG, merge |
 | Error types | `core/src/common/error.rs` (re-exported via `vsdb::common::error`) | VsdbError enum (thiserror-based), unified across both crates |
 | Merkle Tries | `strata/src/trie/` | MPT (16-ary) + SMT (binary 256-bit) |
-| Slot Index | `strata/src/slotdex/` | Time-slot tier-based indexing |
+| Slot Index | `strata/src/slotdex/` | Time-slot tier-based indexing (single-handle, crash-atomic) |
 | DAG Collections | `strata/src/dagmap/` | DAG-based data structures |
-| Vector Index | `strata/src/vecdex/` | VecDex, HNSW ANN search, distance metrics |
+| Vector Index | `strata/src/vecdex/` | VecDex, HNSW ANN search, distance metrics (single-handle, crash-atomic) |
 | Encoding | `strata/src/common/ende.rs` | postcard-based KeyEnDe/ValueEnDe |
+| Staged mutation | `strata/src/common/staged.rs` | read-your-writes overlay + one atomic write batch per mutation (SlotDex/VecDex) |
 
 ## Commands
 

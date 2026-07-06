@@ -35,14 +35,31 @@ pub(crate) fn random_layer(m: usize) -> u8 {
     l.min(32)
 }
 
+// ---- Adjacency read abstraction ------------------------------------------
+
+/// Read access to adjacency rows.  Implemented by the raw store (for
+/// search paths) and by the staged transaction (for mutation paths,
+/// where reads must observe the operation's own uncommitted writes).
+pub(crate) trait AdjRead {
+    fn adj_row(&self, key: &[u8]) -> Option<Vec<u8>>;
+}
+
+impl AdjRead for MapxRaw {
+    #[inline]
+    fn adj_row(&self, key: &[u8]) -> Option<Vec<u8>> {
+        self.get(key)
+    }
+}
+
 // ---- Adjacency key encoding --------------------------------------------
 
-/// Compound key: `[layer: u8][node_id: u64 BE]` = 9 bytes.
+/// Compound key: `[TAG_ADJ][layer: u8][node_id: u64 BE]` = 10 bytes.
 #[inline]
-pub(crate) fn adj_key(layer: u8, node_id: u64) -> [u8; 9] {
-    let mut buf = [0u8; 9];
-    buf[0] = layer;
-    buf[1..9].copy_from_slice(&node_id.to_be_bytes());
+pub(crate) fn adj_key(layer: u8, node_id: u64) -> [u8; 10] {
+    let mut buf = [0u8; 10];
+    buf[0] = super::TAG_ADJ;
+    buf[1] = layer;
+    buf[2..10].copy_from_slice(&node_id.to_be_bytes());
     buf
 }
 
@@ -64,48 +81,31 @@ pub(crate) fn decode_neighbors(bytes: &[u8]) -> Vec<u64> {
 }
 
 /// Get neighbors of a node at a given layer.
-pub(crate) fn get_neighbors(adjacency: &MapxRaw, layer: u8, node_id: u64) -> Vec<u64> {
+pub(crate) fn get_neighbors<A: AdjRead + ?Sized>(
+    adj: &A,
+    layer: u8,
+    node_id: u64,
+) -> Vec<u64> {
     let key = adj_key(layer, node_id);
-    adjacency
-        .get(key)
+    adj.adj_row(&key)
         .map(|v| decode_neighbors(&v))
         .unwrap_or_default()
 }
 
 /// Decode neighbors into a reusable buffer, avoiding allocation on hot paths.
-pub(crate) fn get_neighbors_into(
-    adjacency: &MapxRaw,
+pub(crate) fn get_neighbors_into<A: AdjRead + ?Sized>(
+    adj: &A,
     layer: u8,
     node_id: u64,
     buf: &mut Vec<u64>,
 ) {
     buf.clear();
     let key = adj_key(layer, node_id);
-    if let Some(v) = adjacency.get(key) {
+    if let Some(v) = adj.adj_row(&key) {
         for chunk in v.chunks_exact(8) {
             buf.push(u64::from_le_bytes(chunk.try_into().unwrap()));
         }
     }
-}
-
-/// Set neighbors of a node at a given layer.
-pub(crate) fn set_neighbors(
-    adjacency: &mut MapxRaw,
-    layer: u8,
-    node_id: u64,
-    neighbors: &[u64],
-) {
-    let key = adj_key(layer, node_id);
-    if neighbors.is_empty() {
-        adjacency.remove(key);
-    } else {
-        adjacency.insert(key, encode_neighbors(neighbors));
-    }
-}
-
-/// Remove a node's adjacency entry at a given layer.
-pub(crate) fn remove_adjacency(adjacency: &mut MapxRaw, layer: u8, node_id: u64) {
-    adjacency.remove(adj_key(layer, node_id));
 }
 
 // ---- Graph search ------------------------------------------------------
@@ -116,13 +116,13 @@ pub(crate) fn remove_adjacency(adjacency: &mut MapxRaw, layer: u8, node_id: u64)
 /// toward the result set.  Rejected nodes still participate in graph traversal.
 /// Distance-based pruning is disabled when filtering to avoid missing
 /// filter-passing nodes that are reachable only through unfiltered bridge nodes.
-pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>>(
+pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>, A: AdjRead + ?Sized>(
     query: &[S],
     entry_points: &[u64],
     ef: usize,
     layer: u8,
     get_vector: &dyn Fn(u64) -> Option<Rc<Vec<S>>>,
-    adjacency: &MapxRaw,
+    adj: &A,
     filter: Option<&dyn Fn(u64) -> bool>,
 ) -> Vec<(S, u64)> {
     let mut candidates: BinaryHeap<Reverse<(OrdS<S>, u64)>> = BinaryHeap::new();
@@ -162,7 +162,7 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>>(
             break;
         }
 
-        get_neighbors_into(adjacency, layer, c_id, &mut neighbor_buf);
+        get_neighbors_into(adj, layer, c_id, &mut neighbor_buf);
         for &n_id in &neighbor_buf {
             if visit_budget.is_some_and(|budget| visited.len() >= budget) {
                 break;
@@ -280,21 +280,23 @@ pub(crate) fn select_neighbors_heuristic<S: Scalar, D: DistanceMetric<S>>(
 }
 
 /// Prune a neighbor list to at most `m_max` entries using the diversity
-/// heuristic (Algorithm 4), matching the selection strategy used during insert.
-pub(crate) fn prune_neighbors<S: Scalar, D: DistanceMetric<S>>(
+/// heuristic (Algorithm 4), matching the selection strategy used during
+/// insert.
+///
+/// Pure computation: returns `None` when nothing needs pruning, else
+/// `(pruned_list, evicted_ids)` for the caller to write back.
+pub(crate) fn prune_selection<S: Scalar, D: DistanceMetric<S>, A: AdjRead + ?Sized>(
     node_id: u64,
     layer: u8,
     m_max: usize,
-    adjacency: &mut MapxRaw,
+    adj: &A,
     get_vector: &dyn Fn(u64) -> Option<Rc<Vec<S>>>,
-) -> Vec<u64> {
-    let neighbors = get_neighbors(adjacency, layer, node_id);
+) -> Option<(Vec<u64>, Vec<u64>)> {
+    let neighbors = get_neighbors(adj, layer, node_id);
     if neighbors.len() <= m_max {
-        return Vec::new();
+        return None;
     }
-    let Some(node_vec) = get_vector(node_id) else {
-        return Vec::new();
-    };
+    let node_vec = get_vector(node_id)?;
     let scored: Vec<(S, u64)> = neighbors
         .iter()
         .filter_map(|&n| get_vector(n).map(|v| (D::distance(&node_vec, &v), n)))
@@ -304,8 +306,7 @@ pub(crate) fn prune_neighbors<S: Scalar, D: DistanceMetric<S>>(
         .into_iter()
         .filter(|n| !pruned.contains(n))
         .collect();
-    set_neighbors(adjacency, layer, node_id, &pruned);
-    evicted
+    Some((pruned, evicted))
 }
 
 #[cfg(test)]
@@ -315,8 +316,9 @@ mod tests {
     #[test]
     fn adj_key_roundtrip() {
         let key = adj_key(3, 0xDEAD_BEEF_CAFE_BABE);
-        assert_eq!(key[0], 3);
-        let id = u64::from_be_bytes(key[1..9].try_into().unwrap());
+        assert_eq!(key[0], super::super::TAG_ADJ);
+        assert_eq!(key[1], 3);
+        let id = u64::from_be_bytes(key[2..10].try_into().unwrap());
         assert_eq!(id, 0xDEAD_BEEF_CAFE_BABE);
     }
 

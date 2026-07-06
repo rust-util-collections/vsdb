@@ -6,8 +6,10 @@
 
 ## Architecture
 - Tier-based indexing for timestamp/slot-based queries
+- Single-handle storage: entry rows (`0x00|slot|key`), level count rows (`0x01|level|floor`; level 0 = per-slot counts), and the grand total (`0x02`) all live in one `MapxRaw`
+- Every mutation is staged and committed in one atomic engine write batch — no dirty flag, no rebuild-on-recovery; the serialized handle metadata is create-time constant
 - SlotType trait: maps application slots to tiers
-- Each tier is a MapxOrd range, enabling efficient paged queries
+- Tier levels >= 1 are cached in memory (hydrated on open); level 0 is walked on disk
 - Used for time-series and DEX order-book patterns
 
 ## Critical Invariants

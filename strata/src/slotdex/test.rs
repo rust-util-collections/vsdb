@@ -142,36 +142,29 @@ const fn siz() -> u64 {
 }
 
 #[test]
-fn data_container() {
+fn single_handle_rows() {
     let mut db: SlotDex<u64, u32> = SlotDex::new(16, false);
-
-    db.insert(0, 0).unwrap();
-
-    assert!(matches!(
-        db.data.iter().next().unwrap().1,
-        DataCtner::Small(_)
-    ));
 
     (0..100u32).for_each(|i| {
         db.insert(0, i).unwrap();
     });
 
-    assert!(matches!(
-        db.data.iter().next().unwrap().1,
-        DataCtner::Large { .. }
-    ));
-    assert_eq!(db.data.iter().count(), 1);
-    assert_eq!(db.data.first().unwrap().1.len(), 100);
-    assert_eq!(db.data.first().unwrap().1.iter().next().unwrap(), 0);
-    assert_eq!(db.data.first().unwrap().1.iter().last().unwrap(), 99);
+    assert_eq!(db.total(), 100);
+    // One slot holding 100 entries: within-slot order is ascending key order.
+    let all = db.get_entries_by_page(200, 0, false);
+    assert_eq!(all.len(), 100);
+    assert_eq!(all.first().copied().unwrap(), 0);
+    assert_eq!(all.last().copied().unwrap(), 99);
 
-    let DataCtner::Large { map, .. } = db.data.get(&0).unwrap() else {
-        panic!("slot 0 should use large container");
-    };
+    // Everything lives in a single handle: entry rows + per-slot count
+    // row + tier level rows + the total row, nothing else.
+    let rows = db.store.iter().count();
+    let level_rows: usize = db.levels.iter().map(|l| l.buckets.len()).sum();
+    assert_eq!(rows, 100 + 1 + level_rows + 1);
+
     db.clear();
     assert_eq!(db.total(), 0);
-    assert!(db.data.iter().next().is_none());
-    assert!(map.iter().next().is_none());
+    assert!(db.store.iter().next().is_none());
 }
 
 #[test]
@@ -215,26 +208,30 @@ fn reverse_paging_reverses_slots_only_not_within_slot() {
 }
 
 #[test]
-fn mutations_after_save_meta_mark_dirty() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(16, false);
-    db.insert(1, 10).unwrap();
-    let _ = db.save_meta().unwrap();
-    assert!(!crate::common::dirty_count::is_dirty(db.total.get_value()));
+fn hdr_meta_is_create_time_constant() {
+    // The serialized handle metadata must never change after creation:
+    // tier growth, removals, and clears only write ordinary data rows.
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    let at_creation = postcard::to_allocvec(&db).unwrap();
 
-    db.insert(2, 20).unwrap();
-    assert!(crate::common::dirty_count::is_dirty(db.total.get_value()));
+    for i in 0..500u64 {
+        db.insert(i, i).unwrap();
+    }
+    assert!(!db.levels.is_empty(), "growth must have happened");
+    assert_eq!(at_creation, postcard::to_allocvec(&db).unwrap());
 
-    let _ = db.save_meta().unwrap();
-    assert!(!crate::common::dirty_count::is_dirty(db.total.get_value()));
-
-    db.remove(1, &10);
-    assert!(crate::common::dirty_count::is_dirty(db.total.get_value()));
-
-    let _ = db.save_meta().unwrap();
-    assert!(!crate::common::dirty_count::is_dirty(db.total.get_value()));
+    for i in 0..400u64 {
+        db.remove(i, &i);
+    }
+    assert_eq!(at_creation, postcard::to_allocvec(&db).unwrap());
 
     db.clear();
-    assert!(crate::common::dirty_count::is_dirty(db.total.get_value()));
+    assert_eq!(at_creation, postcard::to_allocvec(&db).unwrap());
+
+    // save_meta is idempotent pure persistence on a shared reference.
+    let id1 = db.save_meta().unwrap();
+    let id2 = db.save_meta().unwrap();
+    assert_eq!(id1, id2);
 }
 
 // ---- Deterministic edge-case tests for in-memory tier cache ----
@@ -407,7 +404,7 @@ fn tier_growth_and_shrink() {
     for i in 0u64..100 {
         db.insert(i, i).unwrap();
     }
-    let tier_count_after_insert = db.tiers.len();
+    let tier_count_after_insert = db.levels.len();
     assert!(tier_count_after_insert >= 1, "should have at least 1 tier");
 
     // Verify queries still work
@@ -473,7 +470,7 @@ fn large_tier_capacity() {
         db.insert(i, i).unwrap();
     }
     // With capacity 64, 200 entries should create at least 1 tier
-    assert!(!db.tiers.is_empty());
+    assert!(!db.levels.is_empty());
 
     let page = db.get_entries_by_page(20, 5, false);
     assert_eq!(page, (100u64..120).collect::<Vec<_>>());
@@ -531,7 +528,7 @@ fn insert_batch_equivalence_with_serial() {
         }
 
         assert_eq!(serial.total(), batched.total());
-        assert_eq!(serial.tiers.len(), batched.tiers.len());
+        assert_eq!(serial.levels.len(), batched.levels.len());
         let total = serial.total();
         for reverse in [false, true] {
             let mut off = 0u32;
@@ -739,28 +736,18 @@ fn test_meta_restore_with_data() {
     assert_eq!(entries_p4.len(), 20);
 }
 
-// ---- Dirty-flag crash recovery tests ----
+// ---- Restore consistency tests (atomic single-handle model) ----
 
 #[test]
-fn clean_shutdown_preserves_total() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(10, false);
-    for i in 0..20u64 {
-        db.insert(i, i).unwrap();
-    }
-
-    let id = db.save_meta().unwrap();
-    let restored: SlotDex<u64, u64> = SlotDex::from_meta(id).unwrap();
-    assert_eq!(restored.total(), 20);
-}
-
-#[test]
-fn crash_recovery_rebuilds_total() {
+fn restore_without_save_meta_preserves_total() {
     let mut db: SlotDex<u64, u64> = SlotDex::new(10, false);
     for i in 0..15u64 {
         db.insert(i, i * 10).unwrap();
     }
 
-    // Simulate crash: persist without calling save_meta.
+    // No clean-shutdown protocol exists: persisting the (constant)
+    // metadata at any point yields a fully consistent restore, because
+    // every mutation was committed atomically.
     let id = db.instance_id();
     crate::common::save_instance_meta(id, &db).unwrap();
 
@@ -769,106 +756,65 @@ fn crash_recovery_rebuilds_total() {
 }
 
 #[test]
-fn serde_roundtrip_triggers_ensure_count() {
+fn serde_roundtrip_rehydrates_caches() {
     let mut db: SlotDex<u64, u64> = SlotDex::new(10, false);
     for i in 0..8u64 {
         db.insert(i, i).unwrap();
     }
 
-    // Serialize while dirty (no save_meta).
     let bytes = postcard::to_allocvec(&db).unwrap();
-
-    // Deserialize — should trigger ensure_count.
     let restored: SlotDex<u64, u64> = postcard::from_bytes(&bytes).unwrap();
     assert_eq!(restored.total(), 8);
+    assert_eq!(restored.levels.len(), db.levels.len());
+    for (a, b) in restored.levels.iter().zip(db.levels.iter()) {
+        assert_eq!(a.floor_base, b.floor_base);
+        assert_eq!(a.buckets, b.buckets);
+    }
 }
 
 #[test]
-fn crash_with_corrupted_total_is_corrected() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(10, false);
-    for i in 0..12u64 {
-        db.insert(i, i * 100).unwrap();
-    }
-
-    // Corrupt total: set dirty + wrong count.
-    db.total
-        .set_value(&crate::common::dirty_count::set_dirty(999));
-
-    // Persist the corrupted state.
-    let id = db.instance_id();
-    crate::common::save_instance_meta(id, &db).unwrap();
-
-    // Restore — should rebuild to actual count of 12.
-    let restored: SlotDex<u64, u64> = SlotDex::from_meta(id).unwrap();
-    assert_eq!(restored.total(), 12);
-}
-
-#[test]
-fn clean_restore_rebuilds_empty_tier_metadata() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
-    for i in 0..100u64 {
-        db.insert(i, i).unwrap();
-    }
-    assert!(!db.tiers.is_empty());
-
-    for tier in &mut db.tiers {
-        tier.store.clear();
-        *tier.entry_count.get_mut() = 0;
-        tier.cache.get_mut().clear();
-    }
-    let raw = db.total.get_value();
-    db.total
-        .set_value(&crate::common::dirty_count::clear_dirty(raw));
-
-    let bytes = postcard::to_allocvec(&db).unwrap();
-    let restored: SlotDex<u64, u64> = postcard::from_bytes(&bytes).unwrap();
-
-    assert_eq!(restored.total(), 100);
-    // The corrupted tier metadata is detected (`has_invalid_empty_tier`)
-    // even though the dirty bit was cleared, and the tier stack is now
-    // eagerly rebuilt from a full data scan during restore instead of
-    // being left in the tier-less state — which would otherwise
-    // silently degrade every pagination query to an O(N) raw scan
-    // until some future write happened to trigger a rebuild.
-    assert!(!restored.tiers.is_empty());
-    assert!(!restored.has_invalid_empty_tier());
-    assert_eq!(
-        restored.get_entries_by_page_slot(Some(90), Some(99), 20, 0, false),
-        (90u64..100).collect::<Vec<_>>()
-    );
-}
-
-#[test]
-fn dirty_restore_rebuilds_tier_metadata_eagerly() {
-    // Same corruption as `clean_restore_rebuilds_empty_tier_metadata`,
-    // but going through the actual dirty-flag path (the real unclean-
-    // shutdown signal) instead of the `has_invalid_empty_tier` fallback.
+fn restore_keeps_tier_acceleration() {
     let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
     for i in 0..500u64 {
         db.insert(i, i).unwrap();
     }
-    assert!(!db.tiers.is_empty());
-
-    for tier in &mut db.tiers {
-        tier.store.clear();
-        *tier.entry_count.get_mut() = 0;
-        tier.cache.get_mut().clear();
-    }
-    db.tiers.clear();
-    let raw = db.total.get_value();
-    db.total
-        .set_value(&crate::common::dirty_count::set_dirty(raw));
+    assert!(!db.levels.is_empty());
 
     let bytes = postcard::to_allocvec(&db).unwrap();
     let restored: SlotDex<u64, u64> = postcard::from_bytes(&bytes).unwrap();
 
     assert_eq!(restored.total(), 500);
-    assert!(!restored.tiers.is_empty());
-    assert!(!restored.has_invalid_empty_tier());
-    // A deep reverse page must still be fast (tier-accelerated) right
-    // after restore, not fall back to a raw O(N) scan.
+    // The tier stack is hydrated from its persisted rows, so deep pages
+    // are tier-accelerated immediately after restore.
+    assert!(!restored.levels.is_empty());
+    assert_eq!(
+        restored.get_entries_by_page_slot(Some(90), Some(99), 20, 0, false),
+        (90u64..100).collect::<Vec<_>>()
+    );
     assert_eq!(
         restored.get_entries_by_page_slot(Some(0), Some(499), 20, 0, true),
         (480u64..500).rev().collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn restore_after_interleaved_mutations_matches_reference() {
+    let mut db: SlotDex<u64, u64> = SlotDex::new(4, false);
+    let mut reference: Vec<(u64, u64)> = vec![];
+    for i in 0..200u64 {
+        db.insert(i % 37, i).unwrap();
+        reference.push((i % 37, i));
+        if i % 3 == 0 {
+            let (s, k) = reference.remove((i as usize * 7) % reference.len());
+            db.remove(s, &k);
+        }
+    }
+    reference.sort();
+
+    let bytes = postcard::to_allocvec(&db).unwrap();
+    let restored: SlotDex<u64, u64> = postcard::from_bytes(&bytes).unwrap();
+
+    assert_eq!(restored.total(), reference.len() as u64);
+    let all = restored.get_entries_by_page(u16::MAX, 0, false);
+    assert_eq!(all, reference.iter().map(|(_, k)| *k).collect::<Vec<_>>());
 }
