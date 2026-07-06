@@ -1,117 +1,110 @@
 ---
 description: Deep regression review of VSDB changes (latest commit, N commits, hash, range, or full audit)
-argument-hint: "[N | all | <hash> | <hash1>..<hash2>]"
+argument-hint: "[N | all | <hash> | <hash1>..<hash2>] [--fix]"
 ---
 
 # Deep Regression Analysis for VSDB
 
 You are performing a deep code review of changes to VSDB, a versioned key-value database built on mmdb.
+This review combines VSDB-specific pattern analysis with Claude Code's multi-agent review architecture.
 
 ## Setup
 
-1. **MANDATORY**: Read `.claude/docs/technical-patterns.md` first — this is your bug pattern reference.
-2. Read `.claude/docs/review-core.md` — this is your review methodology.
+1. **MANDATORY**: Read `.claude/docs/technical-patterns.md` first — your bug pattern reference.
+2. Read `.claude/docs/review-core.md` — review methodology and subsystem mapping.
 3. Read `.claude/docs/false-positive-guide.md` — consult before reporting any finding.
 
 ## Input
 
 Arguments: `$ARGUMENTS`
 
-Parse the arguments to determine review scope:
+Parse to determine scope; `--fix` flag means apply verified fixes after review.
+Use the session's current effort level (no explicit override — review depth scales with it naturally).
 
-| Input | Scope | How |
-|-------|-------|-----|
-| *(empty)* | Latest commit | `git diff HEAD~1`, `git log -1` |
-| `N` (integer) | Last N commits | `git diff HEAD~N`, `git log -N --oneline` |
-| `all` | Full codebase audit | Read all source files by subsystem (see Full Audit Protocol below) |
-| `<commit hash>` | Specific commit | `git diff <hash>~1 <hash>` |
-| `<hash1>..<hash2>` | Commit range | `git diff <hash1> <hash2>` |
+| Input | Scope |
+|-------|-------|
+| *(empty)* | Latest commit |
+| `N` (integer) | Last N commits |
+| `all` | Full codebase audit |
+| `<commit hash>` | Specific commit |
+| `<hash1>..<hash2>` | Commit range |
 
-For diff-based reviews (everything except `all`), proceed to the Execution Protocol below.
-For `all`, skip to the **Full Audit Protocol** section at the end of this document.
+Skip to **Full Audit Protocol** for `all`; otherwise use the Execution Protocol below.
 
-## Execution Protocol
+## Execution Protocol (diff-based reviews)
 
-### Task 1: Context & Classification
+### Phase 1: Context & Classification
 
-1. Read the full diff carefully
-2. Identify ALL affected subsystems using the **subsystem mapping table in
-   `review-core.md` Phase 1** (single source of truth)
-3. For EACH affected subsystem, read its pattern guide from `.claude/docs/patterns/`
-   (the table lists which guide covers which subsystem — skip guides for unaffected subsystems)
-4. Classify each change per the review-core methodology
+1. Read the full diff (`git diff <range>`)
+2. Identify ALL affected subsystems using the **subsystem mapping table in `review-core.md` Phase 1**
+3. For each affected subsystem, read its pattern guide from `.claude/docs/patterns/`
+4. Classify each change per `review-core.md` Phase 2 (COW, unsafe, control flow, error handling, etc.)
 
-### Task 2: Deep Regression Analysis
+### Phase 2: Parallel Multi-Agent Review
 
-For each HIGH or CRITICAL classified change:
+Launch **4 review agents in parallel**, each focusing on a different dimension.
+Each agent receives: the full diff, the PR/summary context, the list of affected subsystems,
+and the relevant pattern guide excerpts.
 
-1. **Read the surrounding code** — at least 50 lines of context around each change
-2. **Trace call sites** — use grep/LSP to find all callers of changed functions
-3. **Check invariants** — verify each invariant from review-core.md Phase 3.1
-4. **Boundary conditions** — check edge cases from review-core.md Phase 3.2
-5. **Failure paths** — analyze error handling per review-core.md Phase 3.3
-6. **Concurrency** — verify SWMR contract per review-core.md Phase 3.4
+**Agent 1 — Correctness Bugs** (deep context read):
+Scan for bugs that require understanding surrounding code. Focus on:
+- COW violations, ref-count imbalance, B+ tree invariants (technical-patterns.md Categories 1-2)
+- Merkle proof errors, encoding round-trip breakage (Categories 3, 6)
+- Prefix collision, shard routing mismatch (Category 4)
+- Error handling gaps: partial failure leaving inconsistent state
+- Concurrency: SWMR contract violations in unsafe/shadow code
+- Only flag issues with concrete failure scenarios (see false-positive-guide.md)
 
-For each finding:
-- Cross-reference with `technical-patterns.md` — which pattern does it match?
-- Cross-reference with `false-positive-guide.md` — is this a known false positive?
-- Only report if you have **concrete evidence**
+**Agent 2 — Diff-Only Bugs** (diff surface scan):
+Scan ONLY the diff lines without reading extra context. Flag:
+- Syntax errors, type errors, missing imports (will not compile)
+- Clear logic errors visible in the diff alone (inverted conditions, off-by-one)
+- Unreachable code, dead branches introduced by the change
+- Missing `// SAFETY:` comment on new unsafe blocks
+- Ignore anything that requires surrounding code to validate
 
-### Task 3: Cross-Cutting Analysis
-
+**Agent 3 — Cross-Cutting & Performance** (context-aware):
 Check every change for:
-1. **Crash safety** — what happens if `kill -9` hits at this exact line? Is dirty flag set?
-2. **Performance** — does this add overhead to hot paths?
-3. **API compatibility** — does this change observable behavior?
+- Crash safety: if `kill -9` hits at this line, is dirty flag set? Is state recoverable?
+- Performance: does this add serialization/clone/allocation on hot paths (get, iter, B+ tree lookup)?
+- API compatibility: does this change observable behavior for existing callers?
+- Resource lifecycle: are prefixes, NodeIds, handles properly released on error paths?
 
-### Task 4: Code Style Enforcement
+**Agent 4 — Code Style & Conventions** (project rules):
+Check changed files against:
+- No `#[allow(...)]` — fix warnings, don't suppress
+- Prefer imports over inline paths (3+ uses of same path in a file → add `use`)
+- Import grouping: merge common prefixes (`use std::sync::{Arc, Mutex};`)
+- Doc-code alignment: public API changes must update docs (CLAUDE.md, review-core.md, pattern guides)
+- Unsafe audit: every `unsafe` block must have accurate `// SAFETY:` comment; `shadow()` callers must enforce SWMR
 
-Check changed files against project style rules:
+**CRITICAL: Only report HIGH SIGNAL issues.** Flag only:
+- Code that will definitely fail to compile
+- Code that will definitely produce wrong results
+- Clear invariant violations from technical-patterns.md
+- Concrete crash/leak/corruption scenarios
 
-1. **No lint suppression** — `#[allow(...)]` is forbidden. All warnings must be fixed at the source.
-2. **Prefer imports over inline paths** — Avoid inline `std::foo::Bar::new()` when the same path appears 3+ times in a file. Function-body `use` (scoped imports) are fine. 1-2 inline uses are acceptable.
-3. **Import grouping** — Imports with common prefix must be merged: `use std::sync::{Arc, Mutex};`
-4. **Doc-code alignment** — If the change modifies a public function signature, struct field, module structure, or adds/removes/renames a public type or module, verify docs still match. Specifically check:
-   - `CLAUDE.md` architecture table (subsystem paths, type names, serialization crate)
-   - `CLAUDE.md` conventions (unsafe count, dependency names)
-   - `.claude/docs/review-core.md` Phase 1 subsystem mapping table (the single source of truth)
-   - `.claude/docs/patterns/` guides — referenced file lists and invariants
+Do NOT flag: style preferences, "consider" suggestions without concrete downside, issues a linter catches, issues matching false-positive-guide.md patterns.
 
-### Task 5: Unsafe Code Audit
+### Phase 3: Verification
 
-If ANY `unsafe` block is added or modified:
-1. Verify SAFETY comment exists and is accurate
-2. For `shadow()`: verify SWMR enforcement at call site
-3. For `from_bytes()`: verify input comes from trusted source
-4. For pointer casts: verify no aliasing violation
-5. Verify no undefined behavior
+For each finding from Phase 2 agents, launch a **verification agent** that:
+1. Re-reads the reported code location with full context
+2. Attempts to CONFIRM or REFUTE the finding against actual code
+3. Cross-references with `false-positive-guide.md`
+4. Returns only CONFIRMED findings with concrete evidence
 
-### Task 6: Audit Registry (docs/audit.md)
+Filter out any finding not confirmed by its verification agent.
 
-After completing the analysis:
+### Phase 4: Audit Registry
 
-1. Read `docs/audit.md` from the project root (create if absent).
-2. **Prune**: For each entry under `## Open`, verify against the current codebase. Remove entries that are 100% fixed.
-3. **Merge**: Add new findings from this review under `## Open`, deduplicating against existing entries. Sort by severity (CRITICAL → HIGH → MEDIUM → LOW).
-4. **Re-evaluate Won't Fix**: For each entry under `## Won't Fix`, re-read the
-   code at the reported location and assess whether the reasoning still holds
-   against the **current** codebase.  The "Won't Fix" label is a snapshot
-   judgment made at a past point in time — surrounding code may have changed,
-   new callers may have been added, or a previously-disproportionate fix may
-   now be straightforward.  For each entry:
-   - If the original reason still holds → leave it in place.
-   - If the code has changed such that the finding is now fixable with
-     reasonable effort → promote it to `## Open` with an updated assessment.
-   - If the code has changed such that the finding is no longer applicable →
-     remove it entirely.
-   Never silently carry forward a Won't Fix entry without fresh evaluation.
-5. Write the updated `docs/audit.md`.
-   **NEVER include timestamps, dates, "Last sweep", "Last cleared", or any
-   time-based markers in the file.** Dates bias future reviews toward
-   shallowness ("it was just reviewed, I can skip"). The file must carry
-   zero information about *when* it was last touched.
+1. Read `docs/audit.md` (create if absent)
+2. **Prune**: Remove `## Open` entries that are 100% fixed in current code
+3. **Merge**: Add confirmed findings under `## Open`, deduplicating against existing entries. Sort by severity (CRITICAL → HIGH → MEDIUM → LOW)
+4. **Re-evaluate Won't Fix**: For each `## Won't Fix` entry, re-read the code. Promote to `## Open` if now fixable; remove if no longer applicable; keep if reason still holds
+5. Write updated `docs/audit.md`. **Never include timestamps, dates, or time-based markers.**
 
-The file format:
+Format:
 
 ```markdown
 # Audit Findings
@@ -136,80 +129,50 @@ The file format:
 - **Reason**: why this cannot or should not be fixed
 ```
 
-## Output Format
+### Phase 5: Report
 
-Report findings as:
+Use the **ReportFindings** tool with the confirmed findings. Then output a terminal summary:
 
 ```
 ## Review Summary
 
-**Commit**: <hash> <subject>
-**Subsystems**: <list of affected subsystems>
-**Risk Level**: CRITICAL / HIGH / MEDIUM / LOW
+**Scope**: <commits/diff description>
+**Subsystems**: <list>
+**Findings**: N (X critical, Y high, Z medium, W low)
 
 ## Findings
-
-### [SEVERITY] subsystem: one-line summary
-
-**Where**: file:line_range
-**What**: Description
-**Why**: Invariant/pattern violated (cite technical-patterns.md)
-**Fix**: Suggested fix or questions
-
----
-
-(repeat for each finding)
-
-## No Issues Found
-
-(list areas checked where no issues were found, to demonstrate coverage)
+(one line per finding with severity and location)
 ```
 
-If zero findings after full analysis, report:
-```
-## Review Summary
-**Result**: LGTM — no regressions found
-**Coverage**: <list of subsystems and invariants checked>
-```
+If zero findings: `**Result**: LGTM — no regressions found. Coverage: <subsystems and invariants checked>.`
+
+### Phase 6: Fix (if --fix)
+
+If `--fix` was passed and findings exist:
+1. Apply each fix to the working tree
+2. Re-report findings via ReportFindings with `outcome` set (`fixed`, `skipped`, `no_change_needed`)
 
 ---
 
 ## Full Audit Protocol (for `all` mode)
 
-When `$ARGUMENTS` is `all`, perform a full codebase audit.
-
 ### Strategy: Parallel Subsystem Audit
 
-Launch **one Agent per subsystem** in parallel — one per row of the subsystem
-mapping table in `review-core.md` Phase 1 (9 agents total; `encoding & common`
-also covers `strata/src/lib.rs` and `strata/src/common/mod.rs`).
+Launch **one Agent per subsystem** in parallel, using the subsystem mapping table in `review-core.md` Phase 1 (9 agents).
 
-Agents are **stateless** — each prompt must be self-contained and include:
-1. The exact file list for the subsystem (expand the directory paths from the mapping table)
-2. The full content-or-path of the corresponding pattern guide from `.claude/docs/patterns/`
+Each agent's prompt must be self-contained and include:
+1. Exact file list for the subsystem (expand directory paths from the mapping table)
+2. Full content of the corresponding pattern guide from `.claude/docs/patterns/`
 3. Instructions to read `technical-patterns.md` and `false-positive-guide.md`
-4. The code style rules from Task 4, and the finding output format below
+4. The code style rules from Agent 4
+5. High-signal-only rule: flag only confirmed bugs, not style preferences
 
 ### Aggregation
 
 After all agents complete:
 1. Collect all findings
-2. Deduplicate cross-subsystem findings
-3. Sort by severity: CRITICAL → HIGH → MEDIUM → LOW
-4. Output a unified audit report:
-
-```
-## Full Audit Report
-
-**Scope**: All source files
-**Subsystems Audited**: <list>
-**Total Findings**: N (X critical, Y high, Z medium, W low)
-
-## Findings
-
-(sorted by severity, grouped by subsystem)
-
-## Clean Areas
-
-(subsystems with no findings — list what was checked)
-```
+2. Launch verification agents for each finding (Phase 3)
+3. Deduplicate cross-subsystem findings
+4. Update audit registry (Phase 4)
+5. Report with ReportFindings + terminal summary (Phase 5)
+6. Fix if --fix (Phase 6)
