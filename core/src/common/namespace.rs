@@ -393,8 +393,22 @@ impl Namespace {
         reg.entries.push(rec.clone());
         save_registry(&reg)?;
 
-        let ns = open_record_locked(&base, &rec, &root)?;
-        Ok(ns)
+        match open_record_locked(&base, &rec, &root) {
+            Ok(ns) => Ok(ns),
+            Err(e) => {
+                // Non-crash open failure (bad path, disk full, …): roll
+                // the entry back so a failed `create` leaves no registry
+                // residue. `next_id` deliberately stays advanced — ids
+                // are never reused, and a burnt id is free. If the
+                // rollback write itself fails we are simply in the
+                // crash-equivalent state documented above: the entry is
+                // visible in `vsdb_ns_list()`, re-openable via `open`
+                // and reclaimable via `destroy`.
+                reg.entries.retain(|r| r.id != rec.id);
+                let _ = save_registry(&reg);
+                Err(e)
+            }
+        }
     }
 
     /// Opens an already-registered namespace by its stable id — the

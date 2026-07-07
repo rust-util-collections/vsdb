@@ -317,6 +317,9 @@ impl Mapx {
     /// Same contract as `from_prefix_slice_in`.
     #[inline(always)]
     pub(crate) unsafe fn from_prefix_slice(s: impl AsRef<[u8]>) -> Self {
+        // SAFETY: forwards this fn's `unsafe` contract verbatim — the
+        // caller guarantees a uniquely-owned prefix whose data lives in
+        // the current ambient namespace.
         unsafe { Self::from_prefix_slice_in(&Namespace::current(), s) }
     }
 

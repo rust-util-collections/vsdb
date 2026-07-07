@@ -132,6 +132,24 @@ fn namespace_lifecycle() {
         .is_err()
     );
 
+    // Failed-create rollback: point the root at an existing FILE, so
+    // validation passes (absolute, non-overlapping) but the engine
+    // open fails on create_dir_all. The registry must not retain the
+    // burnt entry.
+    let blocker = format!("{dir}_blocker");
+    std::fs::write(&blocker, b"x").unwrap();
+    let before: Vec<_> = vsdb_ns_list().unwrap().iter().map(|i| i.id).collect();
+    assert!(
+        Namespace::create_with(NamespaceOpts {
+            path: Some(std::path::PathBuf::from(&blocker)),
+            ..Default::default()
+        })
+        .is_err()
+    );
+    let after: Vec<_> = vsdb_ns_list().unwrap().iter().map(|i| i.id).collect();
+    assert_eq!(before, after);
+    std::fs::remove_file(&blocker).ok();
+
     // ---- cross-namespace handles coexist in one container ----
     let all: Vec<MapxRaw> = vec![m0, m1, m2, m4];
     let hits = all.iter().filter(|m| m.get(b"k").is_some()).count();
