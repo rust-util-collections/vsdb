@@ -2,7 +2,7 @@ use crate::common::{
     BatchTrait, GB, PREFIX_ALLOC_START, PREFIX_SIZE, Pre, PreBytes, RawKey, RawValue,
     vsdb_freeze_base_dir, vsdb_get_base_dir,
 };
-use mmdb::{BidiIterator, CompressionType, DB, DbOptions, WriteBatch, WriteOptions};
+use mmdb::{BidiIterator, CompressionType, DB, DbOptions, WriteBatch};
 use parking_lot::{Mutex, RwLock};
 use ruc::*;
 use std::{
@@ -11,7 +11,9 @@ use std::{
     cmp,
     collections::{HashMap, HashSet},
     fs,
+    io::{self, Write},
     ops::{Bound, RangeBounds},
+    path::{Path, PathBuf},
     sync::{
         LazyLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -19,22 +21,32 @@ use std::{
     thread::{self, ThreadId},
 };
 
+/// Legacy (pre-v16) location of the prefix-allocator ceiling: a meta key
+/// in shard 0. Read once at open for the take-max migration; never
+/// written again (v16+ persists the ceiling in [`PREFIX_CEILING_REL_PATH`]).
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 
-/// On-disk format-version marker, relative to the VSDB base dir.
+/// v16+ location of the prefix-allocator ceiling, relative to the VSDB
+/// base dir: an 8-byte little-endian `u64`, written durably via
+/// tmp/fsync/rename plus a parent-dir fsync. Living outside the shard
+/// DBs, it keeps prefix allocation independent of the default engine —
+/// a prerequisite for namespaces sharing one global allocator.
+const PREFIX_CEILING_REL_PATH: &str = "__SYSTEM__/__prefix_ceiling__";
+
+/// On-disk format-version marker, relative to the VSDB base dir
+/// (ASCII decimal).
 ///
-/// This release (format 15) never writes the marker — its absence *is*
-/// the v15 signature. Newer releases (v16+, whose on-disk layout
-/// diverges, e.g. the prefix-allocator ceiling relocation) write their
-/// format number here (ASCII decimal) so that older binaries refuse to
-/// open the dataset instead of silently corrupting it: a v15 allocator
-/// reading a stale shard-0 ceiling would re-issue prefixes already used
-/// by the newer layout — duplicate handles over live data. Loud refusal
-/// is the only safe answer (downgrade is unsupported by policy).
+/// Format 16 relocated the prefix-allocator ceiling out of shard 0; the
+/// marker is written durably at open, *before* the file-based allocator
+/// can issue anything, so a v15.0.2+ binary pointed at this dataset
+/// refuses to open instead of reading the stale shard-0 ceiling and
+/// re-issuing prefixes already used by the new layout (silent data
+/// corruption). Absence of the marker means a pre-v16 dataset.
 const FORMAT_VERSION_REL_PATH: &str = "__SYSTEM__/format_version";
 
-/// The newest on-disk format this binary understands.
-const SUPPORTED_FORMAT_VERSION: u64 = 15;
+/// The on-disk format this binary reads and writes. Anything newer is
+/// refused at open (downgrade is unsupported by policy — fail loudly).
+const SUPPORTED_FORMAT_VERSION: u64 = 16;
 
 const PREFIX_ALLOC_BATCH: u64 = 8192;
 
@@ -100,18 +112,9 @@ static RECOVERED_NONEMPTY: AtomicBool = AtomicBool::new(false);
 /// This gives 16 independent write locks, compaction queues, and WALs.
 const NUM_SHARDS: usize = 16;
 
-/// WriteOptions with WAL fsync enabled.
-/// Used for metadata writes (the prefix allocator) that must survive
-/// process exit without DB::drop() (e.g. Box::leak singleton pattern).
-fn sync_write_opts() -> WriteOptions {
-    WriteOptions {
-        sync: true,
-        ..Default::default()
-    }
-}
-
 pub struct MmDB {
-    /// Sharded DB handlers. Meta keys live in shard 0.
+    /// Sharded DB handlers. Shard 0 additionally holds the read-only
+    /// legacy allocator key from pre-v16 datasets.
     dbs: [&'static DB; NUM_SHARDS],
     prefix_allocator: PreAllocator,
 }
@@ -149,18 +152,36 @@ impl MmDB {
             dbs_vec.push(db);
         }
 
-        // Meta keys live in shard 0
-        let (prefix_allocator, initial_value) = PreAllocator::init();
+        // Meta/allocator state migration + init — ordering is
+        // crash-safety-critical:
+        //
+        // 1. take-max(ceiling file, legacy shard-0 key, ALLOC_START) and
+        //    persist it to the ceiling file (durable before use). Run at
+        //    EVERY open, not only the first: if a pre-tripwire v15 binary
+        //    advanced the legacy key after this dataset was migrated, the
+        //    max-fold re-absorbs it instead of re-issuing its prefixes.
+        // 2. only then mark the dataset as format 16. A crash between
+        //    (1) and (2) is safe in both directions: no allocation has
+        //    happened yet, so file == max(legacy, ...) with zero
+        //    divergence — a v15 binary opening next still allocates
+        //    correctly from the legacy key, and the next v16 open
+        //    max-folds again.
+        //
+        // The legacy shard-0 key is never written again.
+        let prefix_allocator = PreAllocator::new(&base_dir);
+        fs::create_dir_all(prefix_allocator.file.parent().expect("has parent"))
+            .c(d!())?;
 
-        if dbs_vec[0].get(&prefix_allocator.key).c(d!())?.is_none() {
-            dbs_vec[0]
-                .put_with_options(
-                    &sync_write_opts(),
-                    &prefix_allocator.key,
-                    &initial_value,
-                )
-                .c(d!())?;
+        let legacy = dbs_vec[0]
+            .get(&META_KEY_PREFIX_ALLOCATOR)
+            .c(d!())?
+            .map(|v| crate::common::parse_prefix!(v));
+        let filed = read_ceiling_file(&prefix_allocator.file)?;
+        let ceiling = effective_initial_ceiling(filed, legacy);
+        if filed != Some(ceiling) {
+            write_file_durable(&prefix_allocator.file, &ceiling.to_le_bytes())?;
         }
+        write_format_marker(&base_dir)?;
 
         // Every fallible step has succeeded: safe to leak now.
         let dbs: [&'static DB; NUM_SHARDS] = dbs_vec
@@ -182,12 +203,6 @@ impl MmDB {
     fn shard(&self, meta_prefix: &PreBytes) -> &'static DB {
         let prefix = u64::from_le_bytes(*meta_prefix);
         self.dbs[(prefix % NUM_SHARDS as u64) as usize]
-    }
-
-    /// Shard 0 holds meta keys (the prefix allocator).
-    #[inline(always)]
-    fn meta_db(&self) -> &'static DB {
-        self.dbs[0]
     }
 
     pub(crate) fn alloc_prefix(&self) -> Pre {
@@ -219,20 +234,12 @@ impl MmDB {
         if GLOBAL_COUNTER.load(Ordering::Acquire) != 0 {
             return;
         }
-        let ret = crate::common::parse_prefix!(
-            self.meta_db()
-                .get(&self.prefix_allocator.key)
-                .expect("vsdb: meta read failed")
-                .unwrap()
-        );
+        let ret = read_ceiling_file(&self.prefix_allocator.file)
+            .expect("vsdb: allocator ceiling read failed")
+            .expect("vsdb: allocator ceiling file missing");
         let new_ceil = ret + PREFIX_ALLOC_BATCH;
-        self.meta_db()
-            .put_with_options(
-                &sync_write_opts(),
-                &self.prefix_allocator.key,
-                &new_ceil.to_le_bytes(),
-            )
-            .expect("vsdb: meta write failed");
+        write_file_durable(&self.prefix_allocator.file, &new_ceil.to_le_bytes())
+            .expect("vsdb: allocator ceiling write failed");
         GLOBAL_FLOOR.store(ret, Ordering::Release);
         GLOBAL_CEILING.store(new_ceil, Ordering::Release);
         // The counter doubles as the init guard — store it last.
@@ -282,13 +289,11 @@ impl MmDB {
                     let old_ceil2 = GLOBAL_CEILING.load(Ordering::Acquire);
                     if batch_end > old_ceil2 {
                         let new_ceil = batch_end + PREFIX_ALLOC_BATCH;
-                        self.meta_db()
-                            .put_with_options(
-                                &sync_write_opts(),
-                                &self.prefix_allocator.key,
-                                &new_ceil.to_le_bytes(),
-                            )
-                            .expect("vsdb: meta write failed");
+                        write_file_durable(
+                            &self.prefix_allocator.file,
+                            &new_ceil.to_le_bytes(),
+                        )
+                        .expect("vsdb: allocator ceiling write failed");
                         GLOBAL_CEILING.store(new_ceil, Ordering::Release);
                     }
                 }
@@ -521,18 +526,82 @@ impl DoubleEndedIterator for MmdbIter {
 // ---- Batch ----
 
 struct PreAllocator {
-    key: [u8; 1],
+    /// v16+ ceiling location: durable file under `{base}/__SYSTEM__/`.
+    file: PathBuf,
 }
 
 impl PreAllocator {
-    const fn init() -> (Self, PreBytes) {
-        (
-            Self {
-                key: META_KEY_PREFIX_ALLOCATOR,
-            },
-            (PREFIX_ALLOC_START + Pre::MIN).to_le_bytes(),
-        )
+    fn new(base_dir: &Path) -> Self {
+        Self {
+            file: base_dir.join(PREFIX_CEILING_REL_PATH),
+        }
     }
+}
+
+/// The initial allocator ceiling for this open: the max of the v16 file
+/// value, the pre-v16 legacy shard-0 value, and the allocation floor.
+/// Pure take-max — folding in a stale source can only raise the ceiling
+/// (wasting at most one gap of ids), never lower it below anything
+/// already issued.
+fn effective_initial_ceiling(filed: Option<Pre>, legacy: Option<Pre>) -> Pre {
+    filed
+        .unwrap_or(0)
+        .max(legacy.unwrap_or(0))
+        .max(PREFIX_ALLOC_START)
+}
+
+/// Reads the ceiling file: 8-byte little-endian `u64`.
+///
+/// `None` when absent (fresh or pre-v16 dataset). Any other read/format
+/// problem is an error — the ceiling guards prefix uniqueness, so a
+/// truncated or padded file must abort the open, never be guessed at.
+fn read_ceiling_file(path: &Path) -> Result<Option<Pre>> {
+    match fs::read(path) {
+        Ok(bytes) if bytes.len() == PREFIX_SIZE => {
+            Ok(Some(crate::common::parse_prefix!(bytes)))
+        }
+        Ok(bytes) => Err(eg!(format!(
+            "corrupt allocator ceiling file {} ({} bytes, expected {})",
+            path.display(),
+            bytes.len(),
+            PREFIX_SIZE
+        ))),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).c(d!()),
+    }
+}
+
+/// Durable file replacement: tmp, fsync, rename, then parent-dir fsync.
+///
+/// The parent-dir fsync matters: without it a power loss can drop the
+/// rename itself, and a regressed allocator ceiling means prefix reuse —
+/// silent data corruption. (The plain `atomic_write_file` used for
+/// instance metas skips the dir fsync; the allocator cannot.)
+fn write_file_durable(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    {
+        let mut f = fs::File::create(&tmp).c(d!())?;
+        f.write_all(bytes).c(d!())?;
+        f.sync_all().c(d!())?;
+    }
+    fs::rename(&tmp, path).c(d!())?;
+    if let Some(parent) = path.parent() {
+        fs::File::open(parent).c(d!())?.sync_all().c(d!())?;
+    }
+    Ok(())
+}
+
+/// Marks the dataset as [`SUPPORTED_FORMAT_VERSION`] (idempotent).
+fn write_format_marker(base_dir: &Path) -> Result<()> {
+    let path = base_dir.join(FORMAT_VERSION_REL_PATH);
+    if let Ok(s) = fs::read_to_string(&path)
+        && s.trim().parse::<u64>() == Ok(SUPPORTED_FORMAT_VERSION)
+    {
+        return Ok(());
+    }
+    write_file_durable(&path, SUPPORTED_FORMAT_VERSION.to_string().as_bytes())
 }
 
 pub struct MmdbBatch<'a> {
@@ -835,11 +904,12 @@ static MEM_BUDGET: LazyLock<(usize, bool)> = LazyLock::new(|| {
 
 /// Refuses to open a dataset marked with a newer on-disk format.
 ///
-/// Absent marker ⇒ v15-or-older layout ⇒ proceed. Any marker naming a
-/// format above [`SUPPORTED_FORMAT_VERSION`] — or an unreadable one
-/// (v15 never writes this file, so garbage still means "a newer release
-/// touched this dataset") — aborts the open with a descriptive error.
-fn check_format_version(base_dir: &std::path::Path) -> Result<()> {
+/// Absent marker ⇒ pre-v16 layout ⇒ proceed (the take-max migration in
+/// [`MmDB::new`] handles it). A marker naming a format above
+/// [`SUPPORTED_FORMAT_VERSION`] — or an unreadable one (conservative:
+/// the marker guards against silent corruption, so garbage aborts) —
+/// fails the open with a descriptive error.
+fn check_format_version(base_dir: &Path) -> Result<()> {
     let path = base_dir.join(FORMAT_VERSION_REL_PATH);
     let raw = match fs::read_to_string(&path) {
         Ok(s) => s,
@@ -848,8 +918,7 @@ fn check_format_version(base_dir: &std::path::Path) -> Result<()> {
     };
     let ver = raw.trim().parse::<u64>().map_err(|_| {
         eg!(format!(
-            "unreadable format marker {} (content: {:?}); \
-             this dataset was touched by a newer, incompatible vsdb release",
+            "unreadable format marker {} (content: {:?}); refusing to open",
             path.display(),
             raw
         ))
@@ -867,7 +936,7 @@ fn check_format_version(base_dir: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-fn mmdb_open(dir: &std::path::Path) -> Result<DB> {
+fn mmdb_open(dir: &Path) -> Result<DB> {
     let (mem_budget, budget_limited) = *MEM_BUDGET;
 
     // Per-shard sizes: divide totals by NUM_SHARDS.
@@ -1030,27 +1099,82 @@ mod tests {
         let base = tmp_dir("format-ver");
         fs::create_dir_all(&base).unwrap();
 
-        // Absent marker = v15-or-older dataset: accepted.
+        // Absent marker = pre-v16 dataset: accepted (migration path).
         assert!(check_format_version(&base).is_ok());
 
         fs::create_dir_all(base.join("__SYSTEM__")).unwrap();
         let marker = base.join(FORMAT_VERSION_REL_PATH);
 
         // Current-or-older format numbers: accepted.
-        fs::write(&marker, "15").unwrap();
+        fs::write(&marker, "16").unwrap();
         assert!(check_format_version(&base).is_ok());
-        fs::write(&marker, "3\n").unwrap();
+        fs::write(&marker, "15\n").unwrap();
         assert!(check_format_version(&base).is_ok());
 
         // Newer format: refused loudly.
-        fs::write(&marker, "16").unwrap();
+        fs::write(&marker, "17").unwrap();
         assert!(check_format_version(&base).is_err());
 
-        // Unreadable marker (v15 never writes one, so garbage means a
-        // newer release touched the dataset): refused.
+        // Unreadable marker: refused (conservative).
         fs::write(&marker, "garbage").unwrap();
         assert!(check_format_version(&base).is_err());
 
+        // The writer marks exactly the supported version, idempotently,
+        // and the result round-trips through the checker.
+        fs::remove_file(&marker).unwrap();
+        write_format_marker(&base).unwrap();
+        write_format_marker(&base).unwrap();
+        assert_eq!(
+            fs::read_to_string(&marker).unwrap(),
+            SUPPORTED_FORMAT_VERSION.to_string()
+        );
+        assert!(check_format_version(&base).is_ok());
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn ceiling_migration_take_max() {
+        // Pure fold semantics.
+        assert_eq!(effective_initial_ceiling(None, None), PREFIX_ALLOC_START);
+        assert_eq!(
+            effective_initial_ceiling(None, Some(PREFIX_ALLOC_START + 7)),
+            PREFIX_ALLOC_START + 7
+        );
+        assert_eq!(
+            effective_initial_ceiling(Some(PREFIX_ALLOC_START + 9), None),
+            PREFIX_ALLOC_START + 9
+        );
+        // A legacy value above the file value (pre-tripwire v15 binary
+        // ran after migration) is re-absorbed, never ignored.
+        assert_eq!(
+            effective_initial_ceiling(
+                Some(PREFIX_ALLOC_START + 100),
+                Some(PREFIX_ALLOC_START + 200)
+            ),
+            PREFIX_ALLOC_START + 200
+        );
+        assert_eq!(
+            effective_initial_ceiling(
+                Some(PREFIX_ALLOC_START + 200),
+                Some(PREFIX_ALLOC_START + 100)
+            ),
+            PREFIX_ALLOC_START + 200
+        );
+
+        // File round-trip: durable write, exact-size read, corruption
+        // and absence both surface correctly.
+        let base = tmp_dir("ceiling-file");
+        fs::create_dir_all(&base).unwrap();
+        let f = base.join("__prefix_ceiling__");
+        assert_eq!(read_ceiling_file(&f).unwrap(), None);
+        write_file_durable(&f, &(PREFIX_ALLOC_START + 42).to_le_bytes()).unwrap();
+        assert_eq!(
+            read_ceiling_file(&f).unwrap(),
+            Some(PREFIX_ALLOC_START + 42)
+        );
+        fs::write(&f, [0u8; 3]).unwrap();
+        assert!(read_ceiling_file(&f).is_err());
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -1197,12 +1321,9 @@ mod tests {
     fn prefix_allocator_persisted_ceiling_covers_issued() {
         let db = &crate::common::VSDB.db;
         let persisted_ceiling = || -> Pre {
-            crate::common::parse_prefix!(
-                db.meta_db()
-                    .get(&db.prefix_allocator.key)
-                    .expect("meta read failed")
-                    .expect("allocator key missing")
-            )
+            read_ceiling_file(&db.prefix_allocator.file)
+                .expect("ceiling read failed")
+                .expect("ceiling file missing")
         };
 
         // Spans a batch refill, so the ceiling-bump-then-issue ordering

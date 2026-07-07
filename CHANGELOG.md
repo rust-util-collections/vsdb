@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v16.0.0] (in development)
+
+Design: `docs/proposals/namespaces.md` (rev 10).
+
+### Changed (P0 — allocator persistence relocation)
+
+- **The prefix-allocator ceiling now lives outside the shard DBs**, in
+  `{base_dir}/__SYSTEM__/__prefix_ceiling__` (8-byte LE `u64`, written
+  durably: tmp + fsync + rename + parent-dir fsync). This decouples
+  prefix allocation from the default engine — the prerequisite for
+  namespaces sharing one global allocator.
+  - **Upgrade is automatic and idempotent**: at every open the ceiling
+    is take-max-folded from the file, the legacy shard-0 key, and the
+    allocation floor, then persisted; the legacy key is never written
+    again. A pre-tripwire v15 binary that advanced the legacy key after
+    migration is re-absorbed by the max-fold instead of causing prefix
+    reuse.
+  - The dataset is marked `__SYSTEM__/format_version = 16` durably at
+    open, *before* the file-based allocator can issue anything, so
+    v15.0.2+ binaries refuse the dataset cleanly (downgrade is
+    unsupported by policy; see v15.0.2 notes).
+  - `SUPPORTED_FORMAT_VERSION = 16`; datasets marked newer are refused.
+
 ## [v15.0.2]
 
 ### Added
