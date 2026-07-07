@@ -1,6 +1,6 @@
 # RFC: Namespaces — Multiple Engine Instances per Process
 
-- **Status**: draft, rev 10 (original bullets evaluated in §5; rev 2: one
+- **Status**: implemented (v16.0.0–v16.0.2); P3 items remain future work. Final design: rev 10 (original bullets evaluated in §5; rev 2: one
   **global** prefix allocator, not per-namespace — §4.6; rev 3: downgrade
   support dropped — §7; rev 4: single-process contract — §4.7; rev 5: meta =
   optional `ns_id` suffix — §4.3; rev 6: ns path optional, derived — §4.1;
@@ -558,12 +558,16 @@ namespaces × shards × write-buffer sizing must fit CI memory — hence
 
 ## 10. Open Questions
 
-1. Default `shards` for *new* namespaces: mirror the default ns (16) or a
-   leaner 4 (most non-default namespaces are secondary datasets)? Leaning 4 —
-   constraint zero says users must not need to think about this knob, so the
-   default should favor the lightweight many-namespaces pattern.
-2. Default `mem_budget_mb` for new namespaces: fixed constant vs
-   `default-formula / 4`? Needs a benchmark during P1.
-3. Should `VSDB_MEM_BUDGET_MB` optionally cap the *sum* across namespaces
-   (soft ledger with a warning log), or stay default-ns-only? Leaning
-   default-ns-only + documentation.
+All three were settled during implementation:
+
+1. ~~Default `shards` for new namespaces~~ — **4** (`DEFAULT_NS_SHARDS`),
+   favoring the lightweight many-namespaces pattern per constraint zero;
+   the default namespace stays pinned at 16.
+2. ~~Default `mem_budget_mb`~~ — **fixed 512 MB** (`DEFAULT_NS_BUDGET_MB`),
+   always treated as a binding limit so opening N namespaces cannot
+   silently multiply the process footprint. Tunable per-namespace via
+   `NamespaceOpts`; revisit the constant if benchmarks ever show it
+   binding badly for common secondary datasets.
+3. ~~`VSDB_MEM_BUDGET_MB` sum-cap across namespaces~~ — **default-ns-only**,
+   documented (§4.4): the process owner is responsible for the sum;
+   VSDB never auto-rebalances budgets at runtime.
