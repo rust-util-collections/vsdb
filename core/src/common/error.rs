@@ -74,6 +74,12 @@ pub enum VsdbError {
     /// Storage-layer I/O error.
     #[error("storage error: {0}")]
     Io(#[from] std::io::Error),
+    /// Namespace management error (registry, placement, lifecycle).
+    #[error("namespace error: {detail}")]
+    Namespace {
+        /// Description of the failure.
+        detail: String,
+    },
     /// Trie operation error.
     #[error("trie error: {detail}")]
     Trie {

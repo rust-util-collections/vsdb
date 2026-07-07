@@ -33,7 +33,7 @@ mod types;
 
 pub use iter::BTreeIter;
 
-use crate::common::error::Result;
+use crate::common::{InstanceId, error::Result};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -187,7 +187,7 @@ impl<'de> Deserialize<'de> for PersistentBTree {
 
 impl PersistentBTree {
     /// Returns the unique instance ID of this `PersistentBTree`.
-    pub fn instance_id(&self) -> u64 {
+    pub fn instance_id(&self) -> InstanceId {
         self.nodes.instance_id()
     }
 
@@ -195,7 +195,7 @@ impl PersistentBTree {
     /// recovered later via [`from_meta`](Self::from_meta).
     ///
     /// Returns the `instance_id` that should be passed to `from_meta`.
-    pub fn save_meta(&self) -> Result<u64> {
+    pub fn save_meta(&self) -> Result<InstanceId> {
         let id = self.instance_id();
         crate::common::save_instance_meta(id, self)?;
         Ok(id)
@@ -205,11 +205,20 @@ impl PersistentBTree {
     ///
     /// The caller must ensure that the underlying VSDB database still
     /// contains the data referenced by this instance ID.
-    pub fn from_meta(instance_id: u64) -> Result<Self> {
-        crate::common::load_instance_meta(instance_id)
+    pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
+        crate::common::load_instance_meta(instance_id.into())
     }
 
     /// Creates a new, empty persistent B+ tree.
+    pub fn new_in(ns: &crate::common::Namespace) -> Self {
+        ns.scope(Self::new)
+    }
+
+    /// The namespace this tree lives in.
+    pub fn namespace(&self) -> crate::common::Namespace {
+        self.nodes.namespace()
+    }
+
     pub fn new() -> Self {
         Self {
             nodes: MapxRaw::new(),

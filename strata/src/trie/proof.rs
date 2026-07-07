@@ -81,7 +81,7 @@ where
     /// Creates a new `VerMapWithProof` with a fresh VerMap.
     pub fn new() -> Self {
         let map = VerMap::new();
-        let cache_id = map.instance_id();
+        let cache_id = map.instance_id().map_id;
         let mut this = Self {
             map,
             trie: T::default(),
@@ -102,7 +102,7 @@ where
     /// B+ tree cleanup, then attempts to restore the trie cache.
     pub fn from_map(mut map: VerMap<K, V>) -> Self {
         map.gc();
-        let cache_id = map.instance_id();
+        let cache_id = map.instance_id().map_id;
         let mut this = Self {
             map,
             trie: T::default(),
@@ -288,7 +288,11 @@ where
         // committed state (before any dirty overlay is applied).
         // This avoids an expensive clone in `Drop`.
         self.cache_dirty = true;
-        if self.trie.save_cache(self.cache_id, target).is_ok() {
+        if self
+            .trie
+            .save_cache(&self.map.namespace().system_dir(), self.cache_id, target)
+            .is_ok()
+        {
             self.cache_dirty = false;
         }
         Ok(())
@@ -403,7 +407,9 @@ impl<K, V, T: TrieCalc> VerMapWithProof<K, V, T> {
     /// On failure (missing file, corruption, version mismatch), silently
     /// falls back to the default empty trie.
     fn try_load_cache(&mut self) {
-        if let Ok((mut trie, sync_tag, saved_hash)) = T::load_cache(self.cache_id) {
+        if let Ok((mut trie, sync_tag, saved_hash)) =
+            T::load_cache(&self.map.namespace().system_dir(), self.cache_id)
+        {
             // Consistency check between two fields of the cache file: the
             // header's saved root hash and the root node's stored hash
             // (root_hash() short-circuits on a committed root, so nothing
@@ -444,7 +450,9 @@ impl<K, V, T: TrieCalc> VerMapWithProof<K, V, T> {
             return;
         }
 
-        let _ = self.trie.save_cache(self.cache_id, tag);
+        let _ =
+            self.trie
+                .save_cache(&self.map.namespace().system_dir(), self.cache_id, tag);
     }
 }
 

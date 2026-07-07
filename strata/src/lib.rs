@@ -126,7 +126,11 @@ pub use vecdex::{
 
 // Re-export vsdb_core crate for advanced users, plus the user-facing
 // environment management functions.
-pub use vsdb_core::{self, vsdb_flush, vsdb_get_base_dir, vsdb_set_base_dir};
+pub use vsdb_core::{
+    self, DEFAULT_NS_ID, InstanceId, Namespace, NamespaceOpts, NsId, NsInfo, vsdb_flush,
+    vsdb_get_base_dir, vsdb_ns_destroy, vsdb_ns_list, vsdb_ns_relocate,
+    vsdb_set_base_dir,
+};
 
 // Persistent B+ tree (moved from vsdb_core).
 pub use basic::persistent_btree::PersistentBTree;

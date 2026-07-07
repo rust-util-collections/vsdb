@@ -34,7 +34,11 @@
 #[cfg(test)]
 mod test;
 
-use crate::{DagMapId, DagMapRaw, ValueEnDe, common::error::Result, dagmap::raw};
+use crate::{
+    DagMapId, DagMapRaw, ValueEnDe,
+    common::{InstanceId, error::Result},
+    dagmap::raw,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     marker::PhantomData,
@@ -89,6 +93,20 @@ where
     ///
     /// See [`DagMapRaw::new`] for the parent-linking semantics.
     #[inline(always)]
+    /// [`new`](Self::new) placed in `ns` — every internal component
+    /// lands in the same namespace (a composite never spans namespaces).
+    pub fn new_in(
+        ns: &crate::common::Namespace,
+        raw_parent: Option<&mut DagMapRaw>,
+    ) -> Self {
+        ns.scope(|| Self::new(raw_parent))
+    }
+
+    /// The namespace this structure lives in.
+    pub fn namespace(&self) -> crate::common::Namespace {
+        self.inner.namespace()
+    }
+
     pub fn new(raw_parent: Option<&mut DagMapRaw>) -> Self {
         Self {
             inner: DagMapRaw::new(raw_parent),
@@ -135,7 +153,7 @@ where
 
     /// Returns the unique instance ID of this `DagMapRawKey`.
     #[inline(always)]
-    pub fn instance_id(&self) -> u64 {
+    pub fn instance_id(&self) -> InstanceId {
         self.inner.instance_id()
     }
 
@@ -143,7 +161,7 @@ where
     /// recovered later via [`from_meta`](Self::from_meta).
     ///
     /// Returns the `instance_id` that should be passed to `from_meta`.
-    pub fn save_meta(&self) -> Result<u64> {
+    pub fn save_meta(&self) -> Result<InstanceId> {
         let id = self.instance_id();
         crate::common::save_instance_meta(id, self)?;
         Ok(id)
@@ -153,8 +171,8 @@ where
     ///
     /// The caller must ensure that the underlying VSDB database still
     /// contains the data referenced by this instance ID.
-    pub fn from_meta(instance_id: u64) -> Result<Self> {
-        crate::common::load_instance_meta(instance_id)
+    pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
+        crate::common::load_instance_meta(instance_id.into())
     }
 
     /// Checks if the DAG map is dead.

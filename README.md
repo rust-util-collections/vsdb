@@ -15,6 +15,7 @@ A high-performance, embedded key-value database for Rust with an API that feels 
 - **Merkle trie** — `MptCalc` (Merkle Patricia Trie) and `SmtCalc` (Sparse Merkle Tree) as stateless computation layers; `VerMapWithProof` pairs `VerMap` with either back-end for versioned 32-byte Merkle root commitments
 - **Slot-based index** — `SlotDex` for efficient, timestamp-based paged queries via a skip-list-like tier structure
 - **Vector index** — `VecDex` for approximate nearest-neighbor search via a pure-Rust HNSW implementation; supports L2, Cosine, and InnerProduct metrics with filtered search
+- **Namespaces** — anonymous placement groups: independently-rooted engine instances in one process (own dir/volume, shards, WALs, memory budget), with O(1) whole-namespace destroy; plain `new()` is untouched, placement is expressed through the object graph
 
 ## Quick start
 
@@ -47,6 +48,35 @@ m.delete_branch(feat).unwrap();
 // Dead commits and B+ tree nodes are reclaimed automatically —
 // no manual gc() call required.
 ```
+
+### Namespaces
+
+```rust
+use vsdb::{Namespace, basic::mapx::Mapx};
+
+// Everyday tier: zero parameters, no names, no paths.
+let cold = Namespace::create().unwrap();
+
+// Place a whole subsystem with one line (creation-time only —
+// reads/writes/deserialization always route via the handle itself):
+let mut archive: Mapx<u64, String> = cold.scope(|| Mapx::new());
+
+// Co-location: "put this data together with that data".
+let mut index = Mapx::<u64, u64>::new_in(&archive.namespace());
+
+// Recovery rides the identifiers you already persist:
+let id = archive.save_meta().unwrap();          // InstanceId, e.g. "42@1"
+let restored: Mapx<u64, String> = Mapx::from_meta(id).unwrap();
+
+// Advanced tier (opt-in): explicit volume, shard count, memory budget.
+// Namespace::create_with(NamespaceOpts { path, shards, mem_budget_mb })
+// Admin: vsdb_ns_list() / vsdb_ns_destroy(id) / vsdb_ns_relocate(id, path)
+```
+
+`Mapx::new()` still targets the implicit default namespace — existing
+code needs zero changes. Cross-namespace atomic transactions do not
+exist (separate WALs); a composite structure (`VerMap`, `SlotDex`, …)
+always lives wholly inside one namespace.
 
 ## Architecture
 

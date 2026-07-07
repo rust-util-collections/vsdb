@@ -7,6 +7,7 @@ mod mmdb;
 /////////////////////////////////////////////////////////////////////////////
 
 pub(crate) use self::mmdb::MmDB as Engine;
+pub(crate) use self::mmdb::{EngineSizing, write_file_durable};
 
 type DbIter = self::mmdb::MmdbIter;
 
@@ -14,8 +15,9 @@ type DbIter = self::mmdb::MmdbIter;
 /////////////////////////////////////////////////////////////////////////////
 
 use crate::common::{
-    PREFIX_SIZE, PreBytes, RawKey, RawValue, VSDB,
+    PREFIX_SIZE, PreBytes, RawKey, RawValue,
     error::{Result, VsdbError},
+    namespace::{DEFAULT_NS_ID, Namespace},
 };
 use serde::{Deserialize, Serialize, de};
 use std::{
@@ -24,11 +26,17 @@ use std::{
     marker::PhantomData,
     ops::{Deref, DerefMut, RangeBounds},
     result::Result as StdResult,
-    sync::LazyLock,
+    sync::OnceLock,
 };
 
 const MAPX_META_MAGIC: &[u8; 8] = b"VSMAPX01";
+/// Meta without the namespace suffix — the pre-v16 wire format,
+/// still written verbatim for default-namespace handles.
 const MAPX_META_LEN: usize = MAPX_META_MAGIC.len() + PREFIX_SIZE;
+/// Meta with the trailing `ns_id` (non-default namespaces only).
+/// The suffix *is* an `Option<NsId>` encoded by presence: absent ⇔
+/// `None` ⇔ default namespace.
+const MAPX_META_NS_LEN: usize = MAPX_META_LEN + size_of::<u64>();
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -50,57 +58,46 @@ pub trait BatchTrait {
 
 #[derive(Debug)]
 pub(crate) struct Mapx {
-    // the unique ID of each instance
+    // the unique ID of each instance (within its namespace's engine;
+    // prefixes are globally unique across namespaces by construction)
     prefix: Prefix,
+    // the owning namespace, captured eagerly at creation (ambient
+    // scope must be read at creation time, never at first use)
+    ns: Namespace,
 }
 
 #[derive(Debug)]
 enum Prefix {
     Recovered(PreBytes),
-    Created(LazyLock<PreBytes>),
+    /// Allocation is deferred to first use so that constructing an
+    /// empty handle never burns an id; the id itself comes from the
+    /// process-global allocator (namespace-independent).
+    Created(OnceLock<PreBytes>),
 }
 
-impl Prefix {
+impl Mapx {
     #[inline(always)]
-    fn as_bytes(&self) -> &PreBytes {
-        match self {
-            Self::Recovered(bytes) => bytes,
-            Self::Created(lc) => LazyLock::force(lc),
+    fn prefix_bytes(&self) -> PreBytes {
+        match &self.prefix {
+            Prefix::Recovered(bytes) => *bytes,
+            Prefix::Created(cell) => *cell.get_or_init(|| {
+                let prefix = self.ns.engine().alloc_prefix();
+                let prefix_bytes = prefix.to_le_bytes();
+                debug_assert!(self.ns.engine().iter(prefix_bytes).next().is_none());
+                prefix_bytes
+            }),
         }
-    }
-
-    #[inline(always)]
-    fn to_bytes(&self) -> PreBytes {
-        *self.as_bytes()
     }
 
     /// Force the prefix to be materialized (if lazily created)
     /// and return the bytes. Converts `Created` → `Recovered`
-    /// so subsequent calls avoid re-forcing the LazyLock.
+    /// so subsequent calls take the branch-free path.
     fn materialize(&mut self) -> PreBytes {
-        match self {
-            Self::Recovered(bytes) => *bytes,
-            Self::Created(lc) => {
-                let b = *LazyLock::force(lc);
-                *self = Self::Recovered(b);
-                b
-            }
+        let b = self.prefix_bytes();
+        if matches!(self.prefix, Prefix::Created(_)) {
+            self.prefix = Prefix::Recovered(b);
         }
-    }
-
-    #[inline(always)]
-    fn from_bytes(b: PreBytes) -> Self {
-        Self::Recovered(b)
-    }
-
-    #[inline(always)]
-    fn create() -> Self {
-        Self::Created(LazyLock::new(|| {
-            let prefix = VSDB.db.alloc_prefix();
-            let prefix_bytes = prefix.to_le_bytes();
-            debug_assert!(VSDB.db.iter(prefix_bytes).next().is_none());
-            prefix_bytes
-        }))
+        b
     }
 }
 
@@ -118,25 +115,38 @@ impl Mapx {
     // - No concurrent iteration and mutation.
     pub(crate) unsafe fn shadow(&self) -> Self {
         Self {
-            prefix: Prefix::from_bytes(self.prefix.to_bytes()),
+            prefix: Prefix::Recovered(self.prefix_bytes()),
+            ns: self.ns.clone(),
         }
     }
 
     #[inline(always)]
     pub(crate) fn new() -> Self {
+        Self::new_in(&Namespace::current())
+    }
+
+    #[inline(always)]
+    pub(crate) fn new_in(ns: &Namespace) -> Self {
         Self {
-            prefix: Prefix::create(),
+            prefix: Prefix::Created(OnceLock::new()),
+            ns: ns.clone(),
         }
+    }
+
+    /// The owning namespace (cheap `Arc` clone).
+    #[inline(always)]
+    pub(crate) fn namespace(&self) -> Namespace {
+        self.ns.clone()
     }
 
     #[inline(always)]
     pub(crate) fn get(&self, key: &[u8]) -> Option<RawValue> {
-        VSDB.db.get(self.prefix.to_bytes(), key)
+        self.ns.engine().get(self.prefix_bytes(), key)
     }
 
     #[inline(always)]
     pub(crate) fn get_mut(&mut self, key: &[u8]) -> Option<ValueMut<'_>> {
-        let v = VSDB.db.get(self.prefix.materialize(), key)?;
+        let v = self.ns.engine().get(self.materialize(), key)?;
 
         Some(ValueMut {
             key: key.to_vec(),
@@ -163,7 +173,7 @@ impl Mapx {
     #[inline(always)]
     pub(crate) fn iter(&self) -> MapxIter<'_> {
         MapxIter {
-            db_iter: VSDB.db.iter(self.prefix.to_bytes()),
+            db_iter: self.ns.engine().iter(self.prefix_bytes()),
             _marker: PhantomData,
         }
     }
@@ -171,7 +181,7 @@ impl Mapx {
     #[inline(always)]
     pub(crate) fn iter_mut(&mut self) -> MapxIterMut<'_> {
         MapxIterMut {
-            db_iter: VSDB.db.iter(self.prefix.materialize()),
+            db_iter: self.ns.engine().iter(self.materialize()),
             hdr: self,
         }
     }
@@ -182,7 +192,7 @@ impl Mapx {
         bounds: R,
     ) -> MapxIter<'a> {
         MapxIter {
-            db_iter: VSDB.db.range(self.prefix.to_bytes(), bounds),
+            db_iter: self.ns.engine().range(self.prefix_bytes(), bounds),
             _marker: PhantomData,
         }
     }
@@ -193,7 +203,7 @@ impl Mapx {
         bounds: R,
     ) -> MapxIter<'a> {
         MapxIter {
-            db_iter: VSDB.db.range(self.prefix.to_bytes(), bounds),
+            db_iter: self.ns.engine().range(self.prefix_bytes(), bounds),
             _marker: PhantomData,
         }
     }
@@ -204,21 +214,21 @@ impl Mapx {
         bounds: R,
     ) -> MapxIterMut<'a> {
         MapxIterMut {
-            db_iter: VSDB.db.range(self.prefix.materialize(), bounds),
+            db_iter: self.ns.engine().range(self.materialize(), bounds),
             hdr: self,
         }
     }
 
     #[inline(always)]
     pub(crate) fn insert(&mut self, key: &[u8], value: &[u8]) {
-        let prefix = self.prefix.materialize();
-        VSDB.db.insert(prefix, key, value);
+        let prefix = self.materialize();
+        self.ns.engine().insert(prefix, key, value);
     }
 
     #[inline(always)]
     pub(crate) fn remove(&mut self, key: &[u8]) {
-        let prefix = self.prefix.materialize();
-        VSDB.db.remove(prefix, key);
+        let prefix = self.materialize();
+        self.ns.engine().remove(prefix, key);
     }
 
     /// Marks a key for deferred removal via compaction filter.
@@ -227,7 +237,7 @@ impl Mapx {
     /// are lost on restart; callers must re-register after recovery.
     #[inline(always)]
     pub(crate) fn lazy_delete(&self, key: &[u8]) {
-        VSDB.db.lazy_delete(self.prefix.to_bytes(), key);
+        self.ns.engine().lazy_delete(self.prefix_bytes(), key);
     }
 
     /// Batch version of [`lazy_delete`](Self::lazy_delete).
@@ -236,13 +246,15 @@ impl Mapx {
         &self,
         keys: impl IntoIterator<Item = impl AsRef<[u8]>>,
     ) {
-        VSDB.db.lazy_delete_batch(self.prefix.to_bytes(), keys);
+        self.ns
+            .engine()
+            .lazy_delete_batch(self.prefix_bytes(), keys);
     }
 
     #[inline(always)]
     pub(crate) fn batch_begin(&mut self) -> Box<dyn BatchTrait + '_> {
-        let prefix = self.prefix.materialize();
-        VSDB.db.batch_begin(prefix)
+        let prefix = self.materialize();
+        self.ns.engine().batch_begin(prefix)
     }
 
     /// A write batch pre-staged with the removal of every existing entry
@@ -251,8 +263,8 @@ impl Mapx {
     /// included — commits in one atomic engine write batch.
     #[inline(always)]
     pub(crate) fn batch_begin_wiped(&mut self) -> Box<dyn BatchTrait + '_> {
-        let prefix = self.prefix.materialize();
-        VSDB.db.batch_begin_wiped(prefix)
+        let prefix = self.materialize();
+        self.ns.engine().batch_begin_wiped(prefix)
     }
 
     #[inline(always)]
@@ -279,19 +291,45 @@ impl Mapx {
     /// misuse, even though this function performs no memory-unsafe
     /// operation itself (a length mismatch panics via `copy_from_slice`,
     /// it never reads out of bounds).
+    ///
+    /// The handle is bound to `ns`; the caller must additionally
+    /// guarantee the prefix's data lives in that namespace's engine (a
+    /// raw prefix carries no namespace information of its own).
     #[inline(always)]
-    pub(crate) unsafe fn from_prefix_slice(s: impl AsRef<[u8]>) -> Self {
+    pub(crate) unsafe fn from_prefix_slice_in(
+        ns: &Namespace,
+        s: impl AsRef<[u8]>,
+    ) -> Self {
         debug_assert_eq!(s.as_ref().len(), PREFIX_SIZE);
         let mut prefix = PreBytes::default();
         prefix.copy_from_slice(s.as_ref());
         Self {
             prefix: Prefix::Recovered(prefix),
+            ns: ns.clone(),
         }
     }
 
+    /// [`from_prefix_slice_in`](Self::from_prefix_slice_in) bound to the
+    /// current ambient namespace ([`Namespace::current`]).
+    ///
+    /// # Safety
+    ///
+    /// Same contract as `from_prefix_slice_in`.
+    #[inline(always)]
+    pub(crate) unsafe fn from_prefix_slice(s: impl AsRef<[u8]>) -> Self {
+        unsafe { Self::from_prefix_slice_in(&Namespace::current(), s) }
+    }
+
     pub(crate) fn from_prefix_meta(meta: &[u8]) -> Result<Self> {
-        let prefix = Self::decode_prefix_meta(meta)?;
-        if !VSDB.db.reserve_recovered_prefix(prefix) {
+        let (prefix, ns_id) = Self::decode_prefix_meta(meta)?;
+        // Resolve the owning namespace first (auto-opens it through the
+        // registry); prefix recovery then reserves on the one global
+        // allocator, exactly as pre-v16.
+        let ns = match ns_id {
+            None => Namespace::default_ns(),
+            Some(id) => Namespace::open(id)?,
+        };
+        if !ns.engine().reserve_recovered_prefix(prefix) {
             return Err(VsdbError::Decode {
                 detail: format!(
                     "Mapx metadata prefix {} is outside the allocator-reserved range",
@@ -301,23 +339,36 @@ impl Mapx {
         }
         Ok(Self {
             prefix: Prefix::Recovered(prefix),
+            ns,
         })
     }
 
+    /// `"VSMAPX01" ‖ prefix_le(8)` for default-namespace handles —
+    /// byte-identical to the pre-v16 format — with the owning `ns_id`
+    /// appended (8 bytes LE) for non-default namespaces.
     #[inline(always)]
     pub(crate) fn encode_prefix_meta(&self) -> Vec<u8> {
-        let mut meta = Vec::with_capacity(MAPX_META_LEN);
+        let mut meta = Vec::with_capacity(MAPX_META_NS_LEN);
         meta.extend_from_slice(MAPX_META_MAGIC);
-        meta.extend_from_slice(&self.prefix.to_bytes());
+        meta.extend_from_slice(&self.prefix_bytes());
+        let ns_id = self.ns.id();
+        if ns_id != DEFAULT_NS_ID {
+            meta.extend_from_slice(&ns_id.to_le_bytes());
+        }
         meta
     }
 
-    pub(crate) fn decode_prefix_meta(meta: &[u8]) -> Result<PreBytes> {
-        if meta.len() != MAPX_META_LEN {
+    /// Decodes the meta into `(prefix, Option<ns_id>)` — the suffix is
+    /// an `Option` encoded by presence: 16 bytes ⇒ `None` (default
+    /// namespace, the pre-v16 wire format verbatim), 24 bytes ⇒
+    /// `Some(ns_id)`, anything else ⇒ error.
+    pub(crate) fn decode_prefix_meta(meta: &[u8]) -> Result<(PreBytes, Option<u64>)> {
+        if meta.len() != MAPX_META_LEN && meta.len() != MAPX_META_NS_LEN {
             return Err(VsdbError::Decode {
                 detail: format!(
-                    "invalid Mapx metadata length: expected {}, got {}",
+                    "invalid Mapx metadata length: expected {} or {}, got {}",
                     MAPX_META_LEN,
+                    MAPX_META_NS_LEN,
                     meta.len()
                 ),
             });
@@ -328,18 +379,30 @@ impl Mapx {
             });
         }
         let mut prefix = PreBytes::default();
-        prefix.copy_from_slice(&meta[MAPX_META_MAGIC.len()..]);
-        Ok(prefix)
+        prefix.copy_from_slice(&meta[MAPX_META_MAGIC.len()..MAPX_META_LEN]);
+        let ns_id = (meta.len() == MAPX_META_NS_LEN).then(|| {
+            let mut b = [0u8; 8];
+            b.copy_from_slice(&meta[MAPX_META_LEN..]);
+            u64::from_le_bytes(b)
+        });
+        Ok((prefix, ns_id))
     }
 
     #[inline(always)]
     pub(crate) fn as_prefix_slice(&self) -> &PreBytes {
-        self.prefix.as_bytes()
+        match &self.prefix {
+            Prefix::Recovered(bytes) => bytes,
+            Prefix::Created(cell) => {
+                self.prefix_bytes();
+                cell.get().expect("just initialized")
+            }
+        }
     }
 
     #[inline(always)]
     pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
-        self.prefix.to_bytes() == other_hdr.prefix.to_bytes()
+        self.ns.id() == other_hdr.ns.id()
+            && self.prefix_bytes() == other_hdr.prefix_bytes()
     }
 }
 
@@ -349,9 +412,13 @@ impl Clone for Mapx {
         // pair in memory, which would OOM on larger-than-RAM maps (same
         // hazard `clear()` chunks against).  Atomicity is not needed:
         // the clone target is a brand-new, unobservable prefix.
+        //
+        // The copy lands in the SAME namespace as the source — a deep
+        // copy is co-located with its original, never re-placed by the
+        // ambient scope.
         const CLONE_CHUNK: usize = 4096;
 
-        let mut new_instance = Self::new();
+        let mut new_instance = Self::new_in(&self.ns);
         let mut it = self.iter();
         loop {
             let mut batch = new_instance.batch_begin();
@@ -371,8 +438,8 @@ impl Clone for Mapx {
 
 impl PartialEq for Mapx {
     fn eq(&self, other: &Mapx) -> bool {
-        // Short-circuit: if both point to the same prefix, they are identical
-        if self.prefix.to_bytes() == other.prefix.to_bytes() {
+        // Short-circuit: two handles on the same instance are identical
+        if self.is_the_same_instance(other) {
             return true;
         }
 
@@ -530,7 +597,8 @@ impl<'a> Iterator for MapxIterMut<'a> {
         let (k, v) = self.db_iter.next()?;
 
         let vmut = ValueIterMut {
-            prefix: self.hdr.prefix.to_bytes(),
+            engine: self.hdr.ns.engine(),
+            prefix: self.hdr.prefix_bytes(),
             key: k.clone(),
             value: v,
             dirty: false,
@@ -546,7 +614,8 @@ impl<'a> DoubleEndedIterator for MapxIterMut<'a> {
         let (k, v) = self.db_iter.next_back()?;
 
         let vmut = ValueIterMut {
-            prefix: self.hdr.prefix.to_bytes(),
+            engine: self.hdr.ns.engine(),
+            prefix: self.hdr.prefix_bytes(),
             key: k.clone(),
             value: v,
             dirty: false,
@@ -557,8 +626,8 @@ impl<'a> DoubleEndedIterator for MapxIterMut<'a> {
     }
 }
 
-#[derive(Debug)]
 pub struct ValueIterMut<'a> {
+    engine: &'static Engine,
     prefix: PreBytes,
     key: RawKey,
     value: RawValue,
@@ -566,10 +635,21 @@ pub struct ValueIterMut<'a> {
     _marker: PhantomData<&'a mut ()>,
 }
 
+impl fmt::Debug for ValueIterMut<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ValueIterMut")
+            .field("prefix", &self.prefix)
+            .field("key", &self.key)
+            .field("value", &self.value)
+            .field("dirty", &self.dirty)
+            .finish()
+    }
+}
+
 impl Drop for ValueIterMut<'_> {
     fn drop(&mut self) {
         if self.dirty {
-            VSDB.db.insert(self.prefix, &self.key, &self.value);
+            self.engine.insert(self.prefix, &self.key, &self.value);
         }
     }
 }

@@ -122,7 +122,7 @@ fn test_from_meta_rejects_legacy_prefix_payload() {
 
     let id = hdr.instance_id();
     let legacy_payload = postcard::to_allocvec(&hdr.as_bytes()).unwrap();
-    fs::write(crate::common::vsdb_meta_path(id), legacy_payload).unwrap();
+    fs::write(crate::common::vsdb_meta_path(id.map_id), legacy_payload).unwrap();
 
     assert!(Mapx::<u32, String>::from_meta(id).is_err());
 

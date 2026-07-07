@@ -108,18 +108,31 @@ static RECOVERED_PREFIXES: LazyLock<Mutex<HashSet<Pre>>> =
 /// at least one reservation has been recorded (never in normal operation).
 static RECOVERED_NONEMPTY: AtomicBool = AtomicBool::new(false);
 
-/// Number of DB shards. Each prefix is routed to one shard via `prefix % NUM_SHARDS`.
-/// This gives 16 independent write locks, compaction queues, and WALs.
+/// Number of DB shards in the DEFAULT namespace. Pinned forever: each
+/// prefix is routed to one shard via `prefix % shard_count`, so changing
+/// the count under an existing dataset would silently re-route every
+/// prefix. Non-default namespaces persist their own creation-time count
+/// in the namespace registry.
 const NUM_SHARDS: usize = 16;
 
+/// Serializes writers of the small `__SYSTEM__` meta files (allocator
+/// ceiling, format marker). `write_file_durable` stages through a fixed
+/// sibling `*.tmp` name, so two concurrent writers of the same path
+/// could interleave create/truncate/rename into a torn result; every
+/// writer takes this lock first. Lock order: `PREFIX_ALLOC_LOCK` (if
+/// held at all) strictly before this one.
+static SYS_META_LOCK: Mutex<()> = Mutex::new(());
+
 pub struct MmDB {
-    /// Sharded DB handlers. Shard 0 additionally holds the read-only
-    /// legacy allocator key from pre-v16 datasets.
-    dbs: [&'static DB; NUM_SHARDS],
-    prefix_allocator: PreAllocator,
+    /// Sharded DB handlers (`shards` of them). In the default namespace,
+    /// shard 0 additionally holds the read-only legacy allocator key
+    /// from pre-v16 datasets.
+    dbs: Box<[&'static DB]>,
 }
 
 impl MmDB {
+    /// Opens the DEFAULT-namespace engine rooted at the global base dir,
+    /// running the pre-v16 allocator-ceiling migration.
     pub(crate) fn new() -> Result<Self> {
         let base_dir = vsdb_get_base_dir();
         // Lock in the base dir so later `vsdb_set_base_dir` calls fail.
@@ -128,221 +141,89 @@ impl MmDB {
         // threads were spawned, where `env::set_var` would be unsound.
         vsdb_freeze_base_dir();
 
-        fs::create_dir_all(&base_dir).c(d!())?;
+        let this =
+            Self::open_at(&base_dir, NUM_SHARDS, EngineSizing::from_process_budget())?;
 
-        check_format_version(&base_dir).c(d!())?;
-
-        let dir = base_dir.join("mmdb");
-        fs::create_dir_all(&dir).c(d!())?;
-
-        // Open NUM_SHARDS independent DB instances into an owned,
-        // non-`'static` Vec first. If a later shard (or the meta-init
-        // step below) fails, this Vec's normal Drop glue closes every
-        // already-opened shard (flushing its WAL and joining its
-        // compaction thread) via the `?` early return, instead of
-        // leaking them. Shards are only promoted to `'static` — via
-        // `Box::leak` — after every fallible step below has succeeded,
-        // so a partial-init failure can never leave leaked, unreachable
-        // shard handles behind.
-        let mut dbs_vec: Vec<DB> = Vec::with_capacity(NUM_SHARDS);
-        for i in 0..NUM_SHARDS {
-            let shard_dir = dir.join(format!("shard_{:02}", i));
-            fs::create_dir_all(&shard_dir).c(d!())?;
-            let db = mmdb_open(&shard_dir)?;
-            dbs_vec.push(db);
-        }
-
-        // Meta/allocator state migration + init — ordering is
-        // crash-safety-critical:
-        //
-        // 1. take-max(ceiling file, legacy shard-0 key, ALLOC_START) and
-        //    persist it to the ceiling file (durable before use). Run at
-        //    EVERY open, not only the first: if a pre-tripwire v15 binary
-        //    advanced the legacy key after this dataset was migrated, the
-        //    max-fold re-absorbs it instead of re-issuing its prefixes.
-        // 2. only then mark the dataset as format 16. A crash between
-        //    (1) and (2) is safe in both directions: no allocation has
-        //    happened yet, so file == max(legacy, ...) with zero
-        //    divergence — a v15 binary opening next still allocates
-        //    correctly from the legacy key, and the next v16 open
-        //    max-folds again.
-        //
-        // The legacy shard-0 key is never written again.
-        let prefix_allocator = PreAllocator::new(&base_dir);
-        fs::create_dir_all(prefix_allocator.file.parent().expect("has parent"))
-            .c(d!())?;
-
-        let legacy = dbs_vec[0]
+        // Absorb a pre-v16 ceiling (legacy shard-0 key) into the ceiling
+        // file — see `migrate_ceiling` for the crash-safety argument.
+        // The legacy key itself is never written again.
+        let legacy = this.dbs[0]
             .get(&META_KEY_PREFIX_ALLOCATOR)
             .c(d!())?
             .map(|v| crate::common::parse_prefix!(v));
-        let filed = read_ceiling_file(&prefix_allocator.file)?;
-        let ceiling = effective_initial_ceiling(filed, legacy);
-        if filed != Some(ceiling) {
-            write_file_durable(&prefix_allocator.file, &ceiling.to_le_bytes())?;
+        migrate_ceiling(&base_dir, legacy)?;
+
+        Ok(this)
+    }
+
+    /// Opens an engine instance rooted at `root` with `shards` shards.
+    ///
+    /// Namespace-generic: refuses datasets marked with a newer on-disk
+    /// format, validates the persisted shard layout (a mismatched count
+    /// would silently re-route every prefix), and writes the format
+    /// marker. Does NOT perform the legacy shard-0 migration — only the
+    /// default namespace can carry pre-v16 state (see [`MmDB::new`]).
+    pub(crate) fn open_at(
+        root: &Path,
+        shards: usize,
+        sizing: EngineSizing,
+    ) -> Result<Self> {
+        debug_assert!((1..=64).contains(&shards));
+        fs::create_dir_all(root).c(d!())?;
+
+        check_format_version(root).c(d!())?;
+
+        let dir = root.join("mmdb");
+        fs::create_dir_all(&dir).c(d!())?;
+        validate_shard_layout(&dir, shards)?;
+
+        // Open the shards into an owned, non-`'static` Vec first. If a
+        // later shard (or any meta-init step below) fails, this Vec's
+        // normal Drop glue closes every already-opened shard (flushing
+        // its WAL and joining its compaction thread) via the `?` early
+        // return, instead of leaking them. Shards are only promoted to
+        // `'static` — via `Box::leak` — after every fallible step has
+        // succeeded, so a partial-init failure can never leave leaked,
+        // unreachable shard handles behind.
+        let mut dbs_vec: Vec<DB> = Vec::with_capacity(shards);
+        for i in 0..shards {
+            let shard_dir = dir.join(format!("shard_{:02}", i));
+            fs::create_dir_all(&shard_dir).c(d!())?;
+            let db = mmdb_open(&shard_dir, shards, sizing)?;
+            dbs_vec.push(db);
         }
-        write_format_marker(&base_dir)?;
+
+        // Mark the root's on-disk format so an older binary pointed at
+        // it (base dir or namespace root alike) refuses to open.
+        write_format_marker(root)?;
 
         // Every fallible step has succeeded: safe to leak now.
-        let dbs: [&'static DB; NUM_SHARDS] = dbs_vec
+        let dbs: Box<[&'static DB]> = dbs_vec
             .into_iter()
             .map(|db| -> &'static DB { Box::leak(Box::new(db)) })
-            .collect::<Vec<_>>()
-            .try_into()
-            .ok()
-            .expect("shard count mismatch");
+            .collect();
 
-        Ok(MmDB {
-            dbs,
-            prefix_allocator,
-        })
+        Ok(MmDB { dbs })
     }
 
     /// Route a prefix to its shard.
     #[inline(always)]
     fn shard(&self, meta_prefix: &PreBytes) -> &'static DB {
         let prefix = u64::from_le_bytes(*meta_prefix);
-        self.dbs[(prefix % NUM_SHARDS as u64) as usize]
+        self.dbs[(prefix % self.dbs.len() as u64) as usize]
     }
 
+    /// See the module-level [`alloc_prefix`] — kept as a method so the
+    /// typed layer keeps calling through its engine handle.
+    #[inline(always)]
     pub(crate) fn alloc_prefix(&self) -> Pre {
-        loop {
-            let candidate = self.alloc_prefix_candidate();
-            // Normal operation records no reservations, so allocation
-            // stays lock-free here.
-            if !RECOVERED_NONEMPTY.load(Ordering::Acquire) {
-                return candidate;
-            }
-            let mut reserved = RECOVERED_PREFIXES.lock();
-            if !reserved.remove(&candidate) {
-                return candidate;
-            }
-            if reserved.is_empty() {
-                RECOVERED_NONEMPTY.store(false, Ordering::Release);
-            }
-        }
+        alloc_prefix()
     }
 
-    /// Loads the persisted allocator state into the process-wide atomics
-    /// (idempotent). `GLOBAL_FLOOR` snapshots the persisted value at
-    /// initialization: every prefix below it was issued by a previous run.
-    fn ensure_alloc_init(&self) {
-        if GLOBAL_COUNTER.load(Ordering::Acquire) != 0 {
-            return;
-        }
-        let _x = PREFIX_ALLOC_LOCK.lock();
-        if GLOBAL_COUNTER.load(Ordering::Acquire) != 0 {
-            return;
-        }
-        let ret = read_ceiling_file(&self.prefix_allocator.file)
-            .expect("vsdb: allocator ceiling read failed")
-            .expect("vsdb: allocator ceiling file missing");
-        let new_ceil = ret + PREFIX_ALLOC_BATCH;
-        write_file_durable(&self.prefix_allocator.file, &new_ceil.to_le_bytes())
-            .expect("vsdb: allocator ceiling write failed");
-        GLOBAL_FLOOR.store(ret, Ordering::Release);
-        GLOBAL_CEILING.store(new_ceil, Ordering::Release);
-        // The counter doubles as the init guard — store it last.
-        GLOBAL_COUNTER.store(ret, Ordering::Release);
-    }
-
-    fn alloc_prefix_candidate(&self) -> Pre {
-        LOCAL_NEXT.with(|next_cell| {
-            LOCAL_CEIL.with(|ceil_cell| {
-                let next = next_cell.get();
-                let ceil = ceil_cell.get();
-                if next > 0 && next < ceil {
-                    next_cell.set(next + 1);
-                    return next;
-                }
-
-                self.ensure_alloc_init();
-
-                // Ensure this thread's cleanup guard is registered
-                // before taking a batch, so the corresponding
-                // `PENDING_WINDOWS` entry inserted below is guaranteed
-                // to be removed when the thread exits (bounding the
-                // registry to currently-live threads instead of every
-                // thread that ever allocated a prefix).
-                PENDING_WINDOW_GUARD.with(|_| {});
-
-                // Claim the next batch and register it as this thread's
-                // pending window in one exclusive section, so that
-                // `reserve_recovered_prefix` (which reads the counter and
-                // the registry under the read lock) can never observe the
-                // advanced counter without the matching window.
-                let batch_start = {
-                    let mut reg = PENDING_WINDOWS.write();
-                    let batch_start =
-                        GLOBAL_COUNTER.fetch_add(PREFIX_ALLOC_BATCH, Ordering::AcqRel);
-                    reg.insert(
-                        thread::current().id(),
-                        (batch_start, batch_start + PREFIX_ALLOC_BATCH),
-                    );
-                    batch_start
-                };
-                let batch_end = batch_start + PREFIX_ALLOC_BATCH;
-
-                let old_ceil = GLOBAL_CEILING.load(Ordering::Acquire);
-                if batch_end > old_ceil {
-                    let _x = PREFIX_ALLOC_LOCK.lock();
-                    let old_ceil2 = GLOBAL_CEILING.load(Ordering::Acquire);
-                    if batch_end > old_ceil2 {
-                        let new_ceil = batch_end + PREFIX_ALLOC_BATCH;
-                        write_file_durable(
-                            &self.prefix_allocator.file,
-                            &new_ceil.to_le_bytes(),
-                        )
-                        .expect("vsdb: allocator ceiling write failed");
-                        GLOBAL_CEILING.store(new_ceil, Ordering::Release);
-                    }
-                }
-
-                next_cell.set(batch_start + 1);
-                ceil_cell.set(batch_end);
-                batch_start
-            })
-        })
-    }
-
-    /// Validates a prefix recovered through a *safe* restore path
-    /// (serde / `from_meta`), and reserves it when necessary.
-    ///
-    /// Returns `false` when the prefix lies outside the allocator-issued
-    /// range (`< PREFIX_ALLOC_START` or `>= ceiling`) — such metadata cannot
-    /// come from a legitimately allocated instance.
-    ///
-    /// Accepted prefixes need a reservation only if the allocator could
-    /// still issue them in this run (`>= counter`, or inside a registered
-    /// pending thread window). Prefixes below the process-start floor —
-    /// the overwhelmingly common case for real restores — are accepted
-    /// with a few atomic loads and no locking, keeping nested-handle
-    /// decoding cheap and the reservation set bounded.
+    /// See the module-level [`reserve_recovered_prefix`].
+    #[inline(always)]
     pub(crate) fn reserve_recovered_prefix(&self, meta_prefix: PreBytes) -> bool {
-        let prefix = Pre::from_le_bytes(meta_prefix);
-        if prefix < PREFIX_ALLOC_START {
-            return false;
-        }
-        self.ensure_alloc_init();
-
-        if prefix >= GLOBAL_CEILING.load(Ordering::Acquire) {
-            return false;
-        }
-        if prefix < GLOBAL_FLOOR.load(Ordering::Acquire) {
-            // Issued by a previous run — can never be issued again.
-            return true;
-        }
-
-        let pending = {
-            let reg = PENDING_WINDOWS.read();
-            prefix >= GLOBAL_COUNTER.load(Ordering::Acquire)
-                || reg.values().any(|&(s, e)| (s..e).contains(&prefix))
-        };
-        if pending {
-            RECOVERED_PREFIXES.lock().insert(prefix);
-            RECOVERED_NONEMPTY.store(true, Ordering::Release);
-        }
-        true
+        reserve_recovered_prefix(meta_prefix)
     }
 
     pub(crate) fn flush(&self) {
@@ -523,20 +404,215 @@ impl DoubleEndedIterator for MmdbIter {
     }
 }
 
-// ---- Batch ----
+// ---- Global prefix allocator (all namespaces) ----
+//
+// ONE allocator serves every engine instance in the process, so prefixes
+// are unique across all namespaces by construction. Backing store: the
+// ceiling file under the DEFAULT base dir. Free functions — the engine
+// handles delegate here.
 
-struct PreAllocator {
-    /// v16+ ceiling location: durable file under `{base}/__SYSTEM__/`.
-    file: PathBuf,
+/// The allocator's durable backing store, always under the default base
+/// dir (namespace roots never carry allocator state).
+fn ceiling_file_path() -> PathBuf {
+    vsdb_get_base_dir().join(PREFIX_CEILING_REL_PATH)
 }
 
-impl PreAllocator {
-    fn new(base_dir: &Path) -> Self {
-        Self {
-            file: base_dir.join(PREFIX_CEILING_REL_PATH),
+/// Folds `legacy` (the pre-v16 shard-0 value, when present) and the
+/// allocation floor into the ceiling file — idempotent take-max, run
+/// under [`SYS_META_LOCK`].
+///
+/// Crash-safety of the fold-then-mark sequence in [`MmDB::new`]: a crash
+/// after this write but before the format marker lands is safe in both
+/// directions — no allocation has happened yet, so the file equals
+/// max(legacy, ...) with zero divergence; a v15 binary opening next
+/// still allocates correctly from the legacy key, and the next v16 open
+/// max-folds again (that is also why the fold runs at EVERY open: a
+/// pre-tripwire v15 binary advancing the legacy key after migration is
+/// re-absorbed instead of causing prefix reuse).
+///
+/// Never races a ceiling bump: bumps require the allocator to be
+/// initialized (`GLOBAL_COUNTER != 0`), and every path that initializes
+/// it either runs this fold first ([`MmDB::new`] → first allocation) or
+/// holds `PREFIX_ALLOC_LOCK` around the fold (`ensure_alloc_init`).
+fn migrate_ceiling(base_dir: &Path, legacy: Option<Pre>) -> Result<()> {
+    let _g = SYS_META_LOCK.lock();
+    let file = base_dir.join(PREFIX_CEILING_REL_PATH);
+    fs::create_dir_all(file.parent().expect("has parent")).c(d!())?;
+    let filed = read_ceiling_file(&file)?;
+    let ceiling = effective_initial_ceiling(filed, legacy);
+    if filed != Some(ceiling) {
+        write_file_durable(&file, &ceiling.to_le_bytes())?;
+    }
+    Ok(())
+}
+
+/// Allocates a fresh, never-before-issued prefix.
+pub(crate) fn alloc_prefix() -> Pre {
+    loop {
+        let candidate = alloc_prefix_candidate();
+        // Normal operation records no reservations, so allocation
+        // stays lock-free here.
+        if !RECOVERED_NONEMPTY.load(Ordering::Acquire) {
+            return candidate;
+        }
+        let mut reserved = RECOVERED_PREFIXES.lock();
+        if !reserved.remove(&candidate) {
+            return candidate;
+        }
+        if reserved.is_empty() {
+            RECOVERED_NONEMPTY.store(false, Ordering::Release);
         }
     }
 }
+
+/// Loads the persisted allocator state into the process-wide atomics
+/// (idempotent). `GLOBAL_FLOOR` snapshots the persisted value at
+/// initialization: every prefix below it was issued by a previous run.
+fn ensure_alloc_init() {
+    if GLOBAL_COUNTER.load(Ordering::Acquire) != 0 {
+        return;
+    }
+    let _x = PREFIX_ALLOC_LOCK.lock();
+    if GLOBAL_COUNTER.load(Ordering::Acquire) != 0 {
+        return;
+    }
+    let base_dir = vsdb_get_base_dir();
+    let file = base_dir.join(PREFIX_CEILING_REL_PATH);
+    let ret =
+        match read_ceiling_file(&file).expect("vsdb: allocator ceiling read failed") {
+            Some(v) => v,
+            None if base_dir.join("mmdb").exists() => {
+                // A pre-v16 dataset sits at the default base and no v16
+                // open has migrated it yet (we were reached through a
+                // non-default namespace). The authoritative ceiling still
+                // lives in the legacy shard-0 key: force the default
+                // engine open — its init runs the take-max fold exactly
+                // once. Never re-entrant: engine init allocates nothing,
+                // and every other allocating thread is blocked on
+                // `PREFIX_ALLOC_LOCK` (held here) or sees the counter
+                // still zero.
+                LazyLock::force(&crate::common::VSDB);
+                read_ceiling_file(&file)
+                    .expect("vsdb: allocator ceiling read failed")
+                    .expect("vsdb: default-engine migration must create the ceiling")
+            }
+            None => {
+                // Fresh universe: initialize the backing store.
+                migrate_ceiling(&base_dir, None)
+                    .expect("vsdb: allocator ceiling init failed");
+                PREFIX_ALLOC_START
+            }
+        };
+    let new_ceil = ret + PREFIX_ALLOC_BATCH;
+    {
+        let _g = SYS_META_LOCK.lock();
+        write_file_durable(&file, &new_ceil.to_le_bytes())
+            .expect("vsdb: allocator ceiling write failed");
+    }
+    GLOBAL_FLOOR.store(ret, Ordering::Release);
+    GLOBAL_CEILING.store(new_ceil, Ordering::Release);
+    // The counter doubles as the init guard — store it last.
+    GLOBAL_COUNTER.store(ret, Ordering::Release);
+}
+
+fn alloc_prefix_candidate() -> Pre {
+    LOCAL_NEXT.with(|next_cell| {
+        LOCAL_CEIL.with(|ceil_cell| {
+            let next = next_cell.get();
+            let ceil = ceil_cell.get();
+            if next > 0 && next < ceil {
+                next_cell.set(next + 1);
+                return next;
+            }
+
+            ensure_alloc_init();
+
+            // Ensure this thread's cleanup guard is registered
+            // before taking a batch, so the corresponding
+            // `PENDING_WINDOWS` entry inserted below is guaranteed
+            // to be removed when the thread exits (bounding the
+            // registry to currently-live threads instead of every
+            // thread that ever allocated a prefix).
+            PENDING_WINDOW_GUARD.with(|_| {});
+
+            // Claim the next batch and register it as this thread's
+            // pending window in one exclusive section, so that
+            // `reserve_recovered_prefix` (which reads the counter and
+            // the registry under the read lock) can never observe the
+            // advanced counter without the matching window.
+            let batch_start = {
+                let mut reg = PENDING_WINDOWS.write();
+                let batch_start =
+                    GLOBAL_COUNTER.fetch_add(PREFIX_ALLOC_BATCH, Ordering::AcqRel);
+                reg.insert(
+                    thread::current().id(),
+                    (batch_start, batch_start + PREFIX_ALLOC_BATCH),
+                );
+                batch_start
+            };
+            let batch_end = batch_start + PREFIX_ALLOC_BATCH;
+
+            let old_ceil = GLOBAL_CEILING.load(Ordering::Acquire);
+            if batch_end > old_ceil {
+                let _x = PREFIX_ALLOC_LOCK.lock();
+                let old_ceil2 = GLOBAL_CEILING.load(Ordering::Acquire);
+                if batch_end > old_ceil2 {
+                    let new_ceil = batch_end + PREFIX_ALLOC_BATCH;
+                    let _g = SYS_META_LOCK.lock();
+                    write_file_durable(&ceiling_file_path(), &new_ceil.to_le_bytes())
+                        .expect("vsdb: allocator ceiling write failed");
+                    GLOBAL_CEILING.store(new_ceil, Ordering::Release);
+                }
+            }
+
+            next_cell.set(batch_start + 1);
+            ceil_cell.set(batch_end);
+            batch_start
+        })
+    })
+}
+
+/// Validates a prefix recovered through a *safe* restore path
+/// (serde / `from_meta`), and reserves it when necessary.
+///
+/// Returns `false` when the prefix lies outside the allocator-issued
+/// range (`< PREFIX_ALLOC_START` or `>= ceiling`) — such metadata cannot
+/// come from a legitimately allocated instance.
+///
+/// Accepted prefixes need a reservation only if the allocator could
+/// still issue them in this run (`>= counter`, or inside a registered
+/// pending thread window). Prefixes below the process-start floor —
+/// the overwhelmingly common case for real restores — are accepted
+/// with a few atomic loads and no locking, keeping nested-handle
+/// decoding cheap and the reservation set bounded.
+pub(crate) fn reserve_recovered_prefix(meta_prefix: PreBytes) -> bool {
+    let prefix = Pre::from_le_bytes(meta_prefix);
+    if prefix < PREFIX_ALLOC_START {
+        return false;
+    }
+    ensure_alloc_init();
+
+    if prefix >= GLOBAL_CEILING.load(Ordering::Acquire) {
+        return false;
+    }
+    if prefix < GLOBAL_FLOOR.load(Ordering::Acquire) {
+        // Issued by a previous run — can never be issued again.
+        return true;
+    }
+
+    let pending = {
+        let reg = PENDING_WINDOWS.read();
+        prefix >= GLOBAL_COUNTER.load(Ordering::Acquire)
+            || reg.values().any(|&(s, e)| (s..e).contains(&prefix))
+    };
+    if pending {
+        RECOVERED_PREFIXES.lock().insert(prefix);
+        RECOVERED_NONEMPTY.store(true, Ordering::Release);
+    }
+    true
+}
+
+// ---- Batch ----
 
 /// The initial allocator ceiling for this open: the max of the v16 file
 /// value, the pre-v16 legacy shard-0 value, and the allocation floor.
@@ -577,7 +653,7 @@ fn read_ceiling_file(path: &Path) -> Result<Option<Pre>> {
 /// rename itself, and a regressed allocator ceiling means prefix reuse —
 /// silent data corruption. (The plain `atomic_write_file` used for
 /// instance metas skips the dir fsync; the allocator cannot.)
-fn write_file_durable(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_file_durable(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
@@ -593,15 +669,49 @@ fn write_file_durable(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Marks the dataset as [`SUPPORTED_FORMAT_VERSION`] (idempotent).
+/// Marks the dataset as [`SUPPORTED_FORMAT_VERSION`] (idempotent,
+/// serialized by [`SYS_META_LOCK`]).
 fn write_format_marker(base_dir: &Path) -> Result<()> {
+    let _g = SYS_META_LOCK.lock();
     let path = base_dir.join(FORMAT_VERSION_REL_PATH);
     if let Ok(s) = fs::read_to_string(&path)
         && s.trim().parse::<u64>() == Ok(SUPPORTED_FORMAT_VERSION)
     {
         return Ok(());
     }
+    fs::create_dir_all(path.parent().expect("has parent")).c(d!())?;
     write_file_durable(&path, SUPPORTED_FORMAT_VERSION.to_string().as_bytes())
+}
+
+/// Rejects opening an existing dataset with the wrong shard count —
+/// routing is `prefix % shard_count`, so a mismatch would silently
+/// re-route every prefix to the wrong shard.
+fn validate_shard_layout(mmdb_dir: &Path, shards: usize) -> Result<()> {
+    let mut existing = 0usize;
+    match fs::read_dir(mmdb_dir) {
+        Ok(entries) => {
+            for e in entries {
+                let e = e.c(d!())?;
+                if e.file_name().to_string_lossy().starts_with("shard_")
+                    && e.path().is_dir()
+                {
+                    existing += 1;
+                }
+            }
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err).c(d!()),
+    }
+    if existing != 0 && existing != shards {
+        return Err(eg!(format!(
+            "shard-count mismatch at {}: dataset has {} shards, \
+             open requested {} — the count is fixed at creation",
+            mmdb_dir.display(),
+            existing,
+            shards
+        )));
+    }
+    Ok(())
 }
 
 pub struct MmdbBatch<'a> {
@@ -936,17 +1046,51 @@ fn check_format_version(base_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn mmdb_open(dir: &Path) -> Result<DB> {
-    let (mem_budget, budget_limited) = *MEM_BUDGET;
+/// Engine memory sizing, resolved before shards open.
+///
+/// The default namespace sizes from the process-wide budget pipeline
+/// ([`MEM_BUDGET`]: env override / cgroup / host reading). Non-default
+/// namespaces size from an explicit per-namespace budget so that opening
+/// N namespaces cannot silently multiply the process footprint.
+#[derive(Clone, Copy)]
+pub(crate) struct EngineSizing {
+    mem_budget: usize,
+    budget_limited: bool,
+}
 
-    // Per-shard sizes: divide totals by NUM_SHARDS.
+impl EngineSizing {
+    /// The v15-parity sizing used by the default namespace.
+    pub(crate) fn from_process_budget() -> Self {
+        let (mem_budget, budget_limited) = *MEM_BUDGET;
+        Self {
+            mem_budget,
+            budget_limited,
+        }
+    }
+
+    /// Explicit budget (always treated as a binding limit).
+    pub(crate) fn from_budget_mb(mb: usize) -> Self {
+        Self {
+            mem_budget: mb.saturating_mul(1024 * 1024).max(8 * 1024 * 1024),
+            budget_limited: true,
+        }
+    }
+}
+
+fn mmdb_open(dir: &Path, shards: usize, sizing: EngineSizing) -> Result<DB> {
+    let EngineSizing {
+        mem_budget,
+        budget_limited,
+    } = sizing;
+
+    // Per-shard sizes: divide totals by the shard count.
     //
     // Under a DETECTED limit (cgroup or env override) the write-buffer
     // term must also scale with the budget: each shard can hold one
     // active memtable plus `max_immutable_memtables` frozen ones
     // awaiting flush, so the worst-case memtable footprint is
-    // wr_buffer_size * (1 + max_immutable) * NUM_SHARDS. With the
-    // legacy fixed floor (GB / NUM_SHARDS) that worst case is ~5 GB
+    // wr_buffer_size * (1 + max_immutable) * shards. With the
+    // legacy fixed floor (GB / shards) that worst case is ~5 GB
     // regardless of any 2-3 GB ceiling -- an ingest burst then pins
     // anonymous memory at the throttle line, and the reclaim pressure
     // slows the very flush threads that are the only way out (observed
@@ -957,15 +1101,15 @@ fn mmdb_open(dir: &Path) -> Result<DB> {
     // unconstrained hosts the sizing is unchanged.
     let legacy_wr = cmp::min(
         if mem_budget > 16 * G {
-            mem_budget / 4 / NUM_SHARDS
+            mem_budget / 4 / shards
         } else {
-            G / NUM_SHARDS
+            G / shards
         },
         512 * 1024 * 1024,
     );
     let wr_buffer_size = if budget_limited {
         cmp::max(
-            cmp::min(legacy_wr, mem_budget / 8 / NUM_SHARDS),
+            cmp::min(legacy_wr, mem_budget / 8 / shards),
             4 * 1024 * 1024,
         )
     } else {
@@ -977,9 +1121,9 @@ fn mmdb_open(dir: &Path) -> Result<DB> {
     // `block_cache_capacity: 0`, which mmdb treats as "caching
     // disabled entirely".
     let block_cache_size =
-        cmp::max((mem_budget as u64) / 8 / NUM_SHARDS as u64, 4 * 1024 * 1024);
+        cmp::max((mem_budget as u64) / 8 / shards as u64, 4 * 1024 * 1024);
 
-    // Single compaction thread per shard (16 shards = 16 parallel compactions)
+    // Single compaction thread per shard (N shards = N parallel compactions)
     let opts = DbOptions {
         create_if_missing: true,
         prefix_len: PREFIX_SIZE,
@@ -1010,7 +1154,7 @@ fn mmdb_open(dir: &Path) -> Result<DB> {
         l0_compaction_trigger: 4,
         max_subcompactions: 4,
 
-        // Single compaction thread per shard — 16 shards give natural parallelism
+        // Single compaction thread per shard — shard fan-out gives natural parallelism
         max_background_compactions: 1,
 
         ..DbOptions::default()
@@ -1189,7 +1333,8 @@ mod tests {
     #[test]
     fn mmdb_basic_get_put_delete() {
         let dir = tmp_dir("basic");
-        let db = mmdb_open(&dir).unwrap();
+        let db =
+            mmdb_open(&dir, NUM_SHARDS, EngineSizing::from_process_budget()).unwrap();
         let db: &'static DB = Box::leak(Box::new(db));
 
         db.put(b"hello", b"world").unwrap();
@@ -1204,7 +1349,8 @@ mod tests {
     #[test]
     fn mmdb_prefix_iteration() {
         let dir = tmp_dir("prefix-iter");
-        let db = mmdb_open(&dir).unwrap();
+        let db =
+            mmdb_open(&dir, NUM_SHARDS, EngineSizing::from_process_budget()).unwrap();
 
         let prefix_a: PreBytes = 1_u64.to_le_bytes();
         let prefix_b: PreBytes = 2_u64.to_le_bytes();
@@ -1321,7 +1467,7 @@ mod tests {
     fn prefix_allocator_persisted_ceiling_covers_issued() {
         let db = &crate::common::VSDB.db;
         let persisted_ceiling = || -> Pre {
-            read_ceiling_file(&db.prefix_allocator.file)
+            read_ceiling_file(&ceiling_file_path())
                 .expect("ceiling read failed")
                 .expect("ceiling file missing")
         };

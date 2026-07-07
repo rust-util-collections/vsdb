@@ -448,7 +448,7 @@ fn prune_interrupted_before_clear_residue_is_reclaimed_by_next_prune() {
 
     // Crash right after phase 3: merge + re-parent done, clears never ran.
     let mut linebuf = head.prune_collect_mainline().unwrap();
-    let mainline_ids: Vec<u64> = {
+    let mainline_ids: Vec<InstanceId> = {
         let mut ids = vec![head.instance_id()];
         ids.extend(linebuf.iter().map(|n| n.instance_id()));
         ids

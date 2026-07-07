@@ -1,0 +1,644 @@
+//!
+//! # Namespaces — anonymous placement groups
+//!
+//! A [`Namespace`] is an independently-rooted engine instance: its own
+//! base dir, mmdb shards, and `__SYSTEM__` tree. Collections created in
+//! different namespaces share no data-path state (no WAL, compaction
+//! queue, or memtable budget contention); the only shared components are
+//! cold-path metadata (the global prefix allocator and the registry).
+//!
+//! Design: `docs/proposals/namespaces.md`. The load-bearing rules:
+//!
+//! * **Anonymous placement groups.** Users never name a namespace, never
+//!   persist an id for one, never pass a path on the normal tier. The
+//!   everyday primitive is *co-location*: `existing.namespace()` +
+//!   `new_in`/[`Namespace::scope`].
+//! * **`NsId` is a routing token**, not a user-facing name: it surfaces
+//!   only at the admin tier ([`vsdb_ns_list`]/[`vsdb_ns_destroy`]/
+//!   [`vsdb_ns_relocate`], epoch-rotation bookkeeping).
+//! * **Path is configuration, not identity**: stored only in the
+//!   registry; omitted, it derives from the id under
+//!   `{default_base}/__NAMESPACES__/{ns_id:016x}` and is recorded as
+//!   derived (`None`), so the whole universe stays movable as one tree.
+//! * **One universe = one process**: registry mutations are serialized
+//!   by an in-process mutex; there is no cross-process coordination
+//!   anywhere (mmdb's per-shard LOCK rejects double-opens).
+//!
+
+use crate::common::{
+    VSDB,
+    engine::{Engine, EngineSizing, write_file_durable},
+    error::{Result, VsdbError},
+    vsdb_freeze_base_dir, vsdb_get_base_dir,
+};
+use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    fmt, fs,
+    path::{Component, Path, PathBuf},
+    str::FromStr,
+    sync::{Arc, LazyLock},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+/// A namespace identifier: small, stable, allocated once at creation,
+/// never reused.
+pub type NsId = u64;
+
+/// The default namespace's id — a fixed constant, never allocated,
+/// never present in the registry, never looked up.
+pub const DEFAULT_NS_ID: NsId = 0;
+
+/// Registry file, relative to the default base dir. Maps every
+/// non-default `NsId` to its configuration.
+const NS_REGISTRY_REL_PATH: &str = "__SYSTEM__/__namespaces__";
+
+/// Parent dir (relative to the default base dir) of derived namespace
+/// roots — namespaces created without an explicit path.
+const NS_DERIVED_DIR: &str = "__NAMESPACES__";
+
+/// Default shard count for non-default namespaces (the default
+/// namespace is pinned to 16 forever). Leaner than the default ns:
+/// most non-default namespaces are secondary datasets, and per-shard
+/// cost is a compaction thread + WAL + memtable set + file handles.
+const DEFAULT_NS_SHARDS: usize = 4;
+
+/// Default memory budget for non-default namespaces, in MB. Deliberately
+/// small and fixed: opening N namespaces must not silently multiply the
+/// process footprint (the process-wide budget pipeline applies to the
+/// default namespace only).
+const DEFAULT_NS_BUDGET_MB: usize = 512;
+
+/////////////////////////////////////////////////////////////////////////////
+
+/// The complete public identity of a collection instance — the same
+/// shape at every layer: in-memory comparison, the persisted meta bytes,
+/// and this token. `ns: None` ⇔ default namespace ⇔ the 16-byte meta
+/// form; a bare `u64` converts losslessly (`From<u64>` ⇒ `ns: None`).
+///
+/// `Display`/`FromStr` round-trip as `"42"` (default ns) or `"42@7"`
+/// (ns 7) — config/log friendly.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+)]
+pub struct InstanceId {
+    /// The storage prefix — what pre-v16 releases called `instance_id`.
+    pub map_id: u64,
+    /// The owning namespace; `None` = default namespace.
+    pub ns: Option<NsId>,
+}
+
+impl From<u64> for InstanceId {
+    fn from(map_id: u64) -> Self {
+        Self { map_id, ns: None }
+    }
+}
+
+impl fmt::Display for InstanceId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.ns {
+            None => write!(f, "{}", self.map_id),
+            Some(ns) => write!(f, "{}@{}", self.map_id, ns),
+        }
+    }
+}
+
+impl FromStr for InstanceId {
+    type Err = VsdbError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let parse = |v: &str, what: &str| {
+            v.parse::<u64>().map_err(|_| VsdbError::Decode {
+                detail: format!("invalid InstanceId {what}: {v:?}"),
+            })
+        };
+        match s.split_once('@') {
+            None => Ok(Self {
+                map_id: parse(s, "map_id")?,
+                ns: None,
+            }),
+            Some((m, n)) => Ok(Self {
+                map_id: parse(m, "map_id")?,
+                ns: Some(parse(n, "ns_id")?),
+            }),
+        }
+    }
+}
+
+/////////////////////////////////////////////////////////////////////////////
+
+/// Creation-time options; persisted in the registry. Everything is
+/// defaulted — this struct exists for the advanced tier.
+#[derive(Clone, Debug)]
+pub struct NamespaceOpts {
+    /// `None` ⇒ derived under `{default_base}/__NAMESPACES__/`, recorded
+    /// as derived so the whole universe stays movable as one tree.
+    /// `Some` ⇒ explicit root (e.g. a dir on another volume), stored
+    /// absolute and pinned ([`vsdb_ns_relocate`] to move). Rejected if
+    /// it nests inside the default base dir or another registered
+    /// namespace root (or vice versa).
+    pub path: Option<PathBuf>,
+    /// Shard count, fixed at creation (routing is `prefix % shards`).
+    /// Clamped to `1..=64`.
+    pub shards: usize,
+    /// Memory budget in MB; `None` ⇒ a conservative fixed default.
+    pub mem_budget_mb: Option<usize>,
+}
+
+impl Default for NamespaceOpts {
+    fn default() -> Self {
+        Self {
+            path: None,
+            shards: DEFAULT_NS_SHARDS,
+            mem_budget_mb: None,
+        }
+    }
+}
+
+/// A registry entry as reported by [`vsdb_ns_list`].
+#[derive(Clone, Debug)]
+pub struct NsInfo {
+    /// The namespace id.
+    pub id: NsId,
+    /// The resolved root directory.
+    pub path: PathBuf,
+    /// Whether `path` was explicit (`true`) or derived from the id.
+    pub pinned: bool,
+    /// Shard count fixed at creation.
+    pub shards: usize,
+    /// Creation time (unix seconds).
+    pub created_at: u64,
+}
+
+/////////////////////////////////////////////////////////////////////////////
+
+/// Persisted registry record (postcard).
+#[derive(Serialize, Deserialize, Clone)]
+struct NsRecord {
+    id: NsId,
+    /// Explicit root as UTF-8, or `None` = derived from the id.
+    path: Option<String>,
+    shards: u32,
+    mem_budget_mb: Option<u64>,
+    created_at: u64,
+}
+
+/// The whole registry file (postcard). `next_id` starts at 1 and never
+/// decreases — ids are never reused, even across destroys.
+#[derive(Serialize, Deserialize)]
+struct RegistryFile {
+    next_id: NsId,
+    entries: Vec<NsRecord>,
+}
+
+impl Default for RegistryFile {
+    fn default() -> Self {
+        Self {
+            next_id: 1,
+            entries: Vec::new(),
+        }
+    }
+}
+
+/// Serializes every registry read-modify-write AND namespace open, so
+/// two threads opening the same id cannot race into a double engine
+/// open (mmdb's shard LOCK would fail the loser anyway — this keeps the
+/// path clean instead of error-driven). Cold path only.
+static REGISTRY_LOCK: Mutex<()> = Mutex::new(());
+
+/// Every non-default namespace opened by this process, by id.
+/// Engines are leak-forever (same model as the default engine), so
+/// entries are never removed.
+static OPEN_NAMESPACES: LazyLock<Mutex<HashMap<NsId, Namespace>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// The default namespace handle (wraps the global engine).
+static DEFAULT_NS: LazyLock<Namespace> = LazyLock::new(|| {
+    Namespace(Arc::new(NsInner {
+        id: DEFAULT_NS_ID,
+        path: vsdb_get_base_dir(),
+        engine: &LazyLock::force(&VSDB).db,
+    }))
+});
+
+thread_local! {
+    /// The ambient-placement stack driven by [`Namespace::scope`].
+    static NS_STACK: RefCell<Vec<Namespace>> = const { RefCell::new(Vec::new()) };
+}
+
+fn registry_path() -> PathBuf {
+    vsdb_get_base_dir().join(NS_REGISTRY_REL_PATH)
+}
+
+fn load_registry() -> Result<RegistryFile> {
+    match fs::read(registry_path()) {
+        Ok(bytes) => Ok(postcard::from_bytes(&bytes)?),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Ok(RegistryFile::default())
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Persists the registry durably (tmp + fsync + rename + parent-dir
+/// fsync — losing the rename on power loss would orphan every
+/// registered namespace root). Caller holds [`REGISTRY_LOCK`].
+fn save_registry(reg: &RegistryFile) -> Result<()> {
+    let path = registry_path();
+    fs::create_dir_all(path.parent().expect("has parent"))?;
+    let bytes = postcard::to_allocvec(reg)?;
+    write_file_durable(&path, &bytes).map_err(VsdbError::from)
+}
+
+/// Resolves a record's root dir.
+fn resolve_root(base: &Path, rec: &NsRecord) -> PathBuf {
+    match &rec.path {
+        Some(p) => PathBuf::from(p),
+        None => base.join(NS_DERIVED_DIR).join(format!("{:016x}", rec.id)),
+    }
+}
+
+/// Lexical is-prefix check on normalized components (no filesystem
+/// access — roots may not exist yet).
+fn path_contains(outer: &Path, inner: &Path) -> bool {
+    let o: Vec<Component<'_>> = outer.components().collect();
+    let i: Vec<Component<'_>> = inner.components().collect();
+    i.len() >= o.len() && i[..o.len()] == o[..]
+}
+
+fn ns_err(detail: impl Into<String>) -> VsdbError {
+    VsdbError::Namespace {
+        detail: detail.into(),
+    }
+}
+
+/// Validates an explicit root against the default base and every other
+/// registered root: no nesting in either direction.
+fn validate_explicit_root(
+    base: &Path,
+    reg: &RegistryFile,
+    candidate: &Path,
+) -> Result<()> {
+    if !candidate.is_absolute() {
+        return Err(ns_err(format!(
+            "namespace path must be absolute: {}",
+            candidate.display()
+        )));
+    }
+    if candidate.as_os_str().to_str().is_none() {
+        return Err(ns_err(format!(
+            "namespace path must be valid UTF-8: {}",
+            candidate.display()
+        )));
+    }
+    if path_contains(base, candidate) || path_contains(candidate, base) {
+        return Err(ns_err(format!(
+            "namespace path {} overlaps the default base dir {}",
+            candidate.display(),
+            base.display()
+        )));
+    }
+    for rec in &reg.entries {
+        let other = resolve_root(base, rec);
+        if path_contains(&other, candidate) || path_contains(candidate, &other) {
+            return Err(ns_err(format!(
+                "namespace path {} overlaps namespace {}'s root {}",
+                candidate.display(),
+                rec.id,
+                other.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn sizing_for(mem_budget_mb: Option<usize>) -> EngineSizing {
+    EngineSizing::from_budget_mb(mem_budget_mb.unwrap_or(DEFAULT_NS_BUDGET_MB))
+}
+
+/////////////////////////////////////////////////////////////////////////////
+
+struct NsInner {
+    id: NsId,
+    path: PathBuf,
+    engine: &'static Engine,
+}
+
+/// A cheap, cloneable handle to an engine instance (an *anonymous
+/// placement group*). See the module docs for the design rules.
+#[derive(Clone)]
+pub struct Namespace(Arc<NsInner>);
+
+impl fmt::Debug for Namespace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Namespace")
+            .field("id", &self.0.id)
+            .field("path", &self.0.path)
+            .finish()
+    }
+}
+
+impl Namespace {
+    /// The implicit default namespace (the global engine). Infallible,
+    /// registry-independent.
+    pub fn default_ns() -> Namespace {
+        DEFAULT_NS.clone()
+    }
+
+    /// Starts a NEW placement group: a fresh `NsId` on every call, root
+    /// derived from the id — collision-free (ids are never reused).
+    /// Zero parameters; tuning lives in [`Self::create_with`].
+    pub fn create() -> Result<Namespace> {
+        Self::create_with(NamespaceOpts::default())
+    }
+
+    /// [`Self::create`] with explicit options (volume placement, shard
+    /// count, memory budget).
+    pub fn create_with(opts: NamespaceOpts) -> Result<Namespace> {
+        // The registry materializes under the default base dir, pinning
+        // it — same rule as every other derived path.
+        vsdb_freeze_base_dir();
+        let base = vsdb_get_base_dir();
+        let shards = opts.shards.clamp(1, 64);
+
+        let _g = REGISTRY_LOCK.lock();
+        let mut reg = load_registry()?;
+
+        if let Some(p) = &opts.path {
+            validate_explicit_root(&base, &reg, p)?;
+        }
+
+        let id = reg.next_id;
+        let rec = NsRecord {
+            id,
+            path: opts
+                .path
+                .as_ref()
+                .map(|p| p.to_str().expect("validated UTF-8").to_owned()),
+            shards: shards as u32,
+            mem_budget_mb: opts.mem_budget_mb.map(|v| v as u64),
+            created_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        };
+        let root = resolve_root(&base, &rec);
+
+        // Reserve the id durably BEFORE opening the engine: a crash
+        // after this point leaves a registered-but-empty namespace
+        // (re-openable, destroyable), never an unreachable orphan dir.
+        reg.next_id += 1;
+        reg.entries.push(rec.clone());
+        save_registry(&reg)?;
+
+        let ns = open_record_locked(&base, &rec, &root)?;
+        Ok(ns)
+    }
+
+    /// Opens an already-registered namespace by its stable id — the
+    /// admin tier ([`vsdb_ns_list`], epoch-rotation bookkeeping).
+    /// Normal flows never call this: deserialization and `from_meta`
+    /// auto-open namespaces via the ids embedded in metas.
+    ///
+    /// `open(DEFAULT_NS_ID)` short-circuits to [`Self::default_ns`]
+    /// without touching the registry. Idempotent in-process.
+    pub fn open(id: NsId) -> Result<Namespace> {
+        if id == DEFAULT_NS_ID {
+            return Ok(Self::default_ns());
+        }
+        if let Some(ns) = OPEN_NAMESPACES.lock().get(&id) {
+            return Ok(ns.clone());
+        }
+        let base = vsdb_get_base_dir();
+
+        let _g = REGISTRY_LOCK.lock();
+        // Re-check under the lock: a racing open may have finished.
+        if let Some(ns) = OPEN_NAMESPACES.lock().get(&id) {
+            return Ok(ns.clone());
+        }
+        let reg = load_registry()?;
+        let rec = reg.entries.iter().find(|r| r.id == id).ok_or_else(|| {
+            ns_err(format!(
+                "namespace {id} is not registered (destroyed, or from \
+                 another universe)"
+            ))
+        })?;
+        let root = resolve_root(&base, rec);
+        open_record_locked(&base, rec, &root)
+    }
+
+    /// Scoped ambient placement: inside `f`, plain `MapxXXX::new()`
+    /// creates its storage in `self`.
+    ///
+    /// **Placement only, never routing**: the ambient namespace is
+    /// consulted at exactly one instant — collection creation. It never
+    /// affects reads, writes, deserialization, or `from_meta` (those
+    /// take the namespace from the handle/meta itself). Thread-local
+    /// and nestable; popped on unwind; **not inherited by spawned
+    /// threads** (pass handles or use `new_in` across threads).
+    pub fn scope<R>(&self, f: impl FnOnce() -> R) -> R {
+        /// Popped on drop so a panic inside `f` unwinds the stack too.
+        struct PopGuard;
+        impl Drop for PopGuard {
+            fn drop(&mut self) {
+                NS_STACK.with(|s| {
+                    s.borrow_mut().pop();
+                });
+            }
+        }
+        NS_STACK.with(|s| s.borrow_mut().push(self.clone()));
+        let _guard = PopGuard;
+        f()
+    }
+
+    /// The top of this thread's scope stack; the default namespace when
+    /// empty. (`MapxXXX::new()` ≡ `new_in(&Namespace::current())`.)
+    pub fn current() -> Namespace {
+        NS_STACK
+            .with(|s| s.borrow().last().cloned())
+            .unwrap_or_else(Self::default_ns)
+    }
+
+    /// This namespace's id — a getter; an input only at the admin tier.
+    pub fn id(&self) -> NsId {
+        self.0.id
+    }
+
+    /// The root directory of this namespace.
+    pub fn path(&self) -> &Path {
+        &self.0.path
+    }
+
+    /// This namespace's `__SYSTEM__` dir (internal metadata: instance
+    /// metas, trie caches). Reserved for VSDB internal use.
+    pub fn system_dir(&self) -> PathBuf {
+        self.0.path.join("__SYSTEM__")
+    }
+
+    /// This namespace's instance-meta dir
+    /// (`{root}/__SYSTEM__/__instance_meta__/`).
+    pub fn meta_dir(&self) -> PathBuf {
+        self.system_dir().join("__instance_meta__")
+    }
+
+    /// This namespace's user-facing scratch dir (`{root}/__CUSTOM__/`).
+    pub fn custom_dir(&self) -> PathBuf {
+        self.0.path.join("__CUSTOM__")
+    }
+
+    /// The meta file path for `map_id` inside this namespace's tree.
+    /// (Identical to the legacy `vsdb_meta_path` for the default
+    /// namespace, whose root IS the base dir.)
+    pub(crate) fn meta_path(&self, map_id: u64) -> PathBuf {
+        let mut p = self.meta_dir();
+        p.push(format!("{:016x}", map_id));
+        p
+    }
+
+    /// Flushes this namespace's engine to disk.
+    pub fn flush(&self) {
+        self.0.engine.flush()
+    }
+
+    /// The engine backing this namespace (crate-internal routing).
+    #[inline(always)]
+    pub(crate) fn engine(&self) -> &'static Engine {
+        self.0.engine
+    }
+}
+
+/// Opens the engine for `rec` and caches the handle. Caller holds
+/// [`REGISTRY_LOCK`] (serializes double-opens).
+fn open_record_locked(_base: &Path, rec: &NsRecord, root: &Path) -> Result<Namespace> {
+    let sizing = sizing_for(rec.mem_budget_mb.map(|v| v as usize));
+    let engine =
+        Engine::open_at(root, rec.shards as usize, sizing).map_err(VsdbError::from)?;
+    let ns = Namespace(Arc::new(NsInner {
+        id: rec.id,
+        path: root.to_path_buf(),
+        engine: Box::leak(Box::new(engine)),
+    }));
+    OPEN_NAMESPACES.lock().insert(rec.id, ns.clone());
+    Ok(ns)
+}
+
+/////////////////////////////////////////////////////////////////////////////
+
+/// Lists every registered (non-default) namespace.
+pub fn vsdb_ns_list() -> Result<Vec<NsInfo>> {
+    let base = vsdb_get_base_dir();
+    let _g = REGISTRY_LOCK.lock();
+    let reg = load_registry()?;
+    Ok(reg
+        .entries
+        .iter()
+        .map(|rec| NsInfo {
+            id: rec.id,
+            path: resolve_root(&base, rec),
+            pinned: rec.path.is_some(),
+            shards: rec.shards as usize,
+            created_at: rec.created_at,
+        })
+        .collect())
+}
+
+/// Destroys a namespace: removes its registry entry, then deletes its
+/// whole directory tree — O(1) bulk reclaim.
+///
+/// The target must not be open in this process (engines are
+/// leak-forever; see the design doc). A crash between the registry
+/// update and the tree removal leaves an orphaned-but-harmless dir.
+pub fn vsdb_ns_destroy(id: NsId) -> Result<()> {
+    if id == DEFAULT_NS_ID {
+        return Err(ns_err("the default namespace cannot be destroyed"));
+    }
+    if OPEN_NAMESPACES.lock().contains_key(&id) {
+        return Err(ns_err(format!(
+            "namespace {id} is open in this process; destroy requires a \
+             not-open target"
+        )));
+    }
+    let base = vsdb_get_base_dir();
+    let _g = REGISTRY_LOCK.lock();
+    let mut reg = load_registry()?;
+    let Some(pos) = reg.entries.iter().position(|r| r.id == id) else {
+        return Err(ns_err(format!("namespace {id} is not registered")));
+    };
+    let root = resolve_root(&base, &reg.entries[pos]);
+    reg.entries.remove(pos);
+    save_registry(&reg)?;
+    match fs::remove_dir_all(&root) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Re-points a namespace at a new root directory (e.g. after moving a
+/// volume). Updates the registry only — **moving the data is the
+/// operator's job**, done before calling this.
+///
+/// The target must not be open in this process.
+pub fn vsdb_ns_relocate(id: NsId, new_path: impl AsRef<Path>) -> Result<()> {
+    if id == DEFAULT_NS_ID {
+        return Err(ns_err(
+            "the default namespace's root is the base dir; relocate it \
+             via VSDB_BASE_DIR / vsdb_set_base_dir before first use",
+        ));
+    }
+    if OPEN_NAMESPACES.lock().contains_key(&id) {
+        return Err(ns_err(format!(
+            "namespace {id} is open in this process; relocate requires a \
+             not-open target"
+        )));
+    }
+    let base = vsdb_get_base_dir();
+    let new_path = new_path.as_ref();
+
+    let _g = REGISTRY_LOCK.lock();
+    let mut reg = load_registry()?;
+    if !reg.entries.iter().any(|r| r.id == id) {
+        return Err(ns_err(format!("namespace {id} is not registered")));
+    }
+    // Validate against every OTHER root (skip the record being moved).
+    let mut probe = reg.clone_without(id);
+    validate_explicit_root(&base, &probe, new_path)?;
+    drop(probe.entries.drain(..));
+
+    let rec = reg
+        .entries
+        .iter_mut()
+        .find(|r| r.id == id)
+        .expect("checked above");
+    rec.path = Some(
+        new_path
+            .to_str()
+            .expect("validated UTF-8 in validate_explicit_root")
+            .to_owned(),
+    );
+    save_registry(&reg)
+}
+
+impl RegistryFile {
+    fn clone_without(&self, id: NsId) -> RegistryFile {
+        RegistryFile {
+            next_id: self.next_id,
+            entries: self
+                .entries
+                .iter()
+                .filter(|r| r.id != id)
+                .cloned()
+                .collect(),
+        }
+    }
+}
+
+/// Flushes every open non-default namespace (the default engine is
+/// flushed separately by `vsdb_flush`).
+pub(crate) fn flush_all_open() {
+    for ns in OPEN_NAMESPACES.lock().values() {
+        ns.flush();
+    }
+}

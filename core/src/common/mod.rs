@@ -9,9 +9,15 @@
 pub(crate) mod engine;
 /// Structured error types for the VSDB public API.
 pub mod error;
+/// Namespaces: anonymous placement groups (independent engine instances).
+pub mod namespace;
 
 pub use engine::BatchTrait;
 use error::{Result, VsdbError};
+pub use namespace::{
+    DEFAULT_NS_ID, InstanceId, Namespace, NamespaceOpts, NsId, NsInfo, vsdb_ns_destroy,
+    vsdb_ns_list, vsdb_ns_relocate,
+};
 use parking_lot::Mutex;
 use ruc::*;
 use std::{
@@ -306,7 +312,8 @@ pub fn vsdb_set_base_dir(dir: impl AsRef<Path>) -> Result<()> {
     }
 }
 
-/// Flushes all data to disk.
+/// Flushes all data to disk — the default namespace and every open
+/// non-default namespace.
 ///
 /// This function triggers a flush operation on the underlying database,
 /// ensuring that all pending writes are persisted to disk. This operation
@@ -314,4 +321,5 @@ pub fn vsdb_set_base_dir(dir: impl AsRef<Path>) -> Result<()> {
 #[inline(always)]
 pub fn vsdb_flush() {
     VSDB.flush();
+    namespace::flush_all_open();
 }

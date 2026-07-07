@@ -46,7 +46,9 @@
 #[cfg(test)]
 mod test;
 
-use crate::common::{PreBytes, RawKey, RawValue, engine, error::Result};
+use crate::common::{
+    InstanceId, Namespace, PreBytes, RawKey, RawValue, engine, error::Result,
+};
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, fs, ops::RangeBounds};
 
@@ -124,16 +126,32 @@ impl MapxRaw {
         }
     }
 
-    /// Creates a new, empty `MapxRaw`.
-    ///
-    /// # Returns
-    ///
-    /// A new `MapxRaw` instance.
+    /// Creates a new, empty `MapxRaw` in the current ambient namespace
+    /// ([`Namespace::current`]; the default namespace unless inside a
+    /// [`Namespace::scope`] block).
     #[inline(always)]
     pub fn new() -> Self {
         MapxRaw {
             inner: engine::Mapx::new(),
         }
+    }
+
+    /// Creates a new, empty `MapxRaw` placed in `ns` — the explicit
+    /// form of the ambient-scope placement performed by
+    /// [`new`](Self::new) (naming mirrors `Box::new_in`).
+    #[inline(always)]
+    pub fn new_in(ns: &Namespace) -> Self {
+        MapxRaw {
+            inner: engine::Mapx::new_in(ns),
+        }
+    }
+
+    /// The namespace this map lives in — THE co-location primitive:
+    /// `MapxRaw::new_in(&existing.namespace())` places new data
+    /// together with `existing`.
+    #[inline(always)]
+    pub fn namespace(&self) -> Namespace {
+        self.inner.namespace()
     }
 
     /// Retrieves a value from the map corresponding to the given key.
@@ -448,21 +466,37 @@ impl MapxRaw {
     }
 
     /// Reconstructs a `MapxRaw` from the 8-byte prefix previously
-    /// obtained via [`as_bytes`](Self::as_bytes).
+    /// obtained via [`as_bytes`](Self::as_bytes), bound to the current
+    /// ambient namespace ([`Namespace::current`]).
     ///
     /// # Safety
     ///
     /// The caller must ensure that `s` encodes a prefix they have unique
-    /// ownership of and that the underlying VSDB database still contains
-    /// the data for this prefix.  Passing arbitrary bytes is undefined
-    /// behavior.
+    /// ownership of and that the *ambient namespace's* engine still
+    /// contains the data for this prefix (a raw prefix carries no
+    /// namespace information of its own).  Passing arbitrary bytes is
+    /// undefined behavior.
     #[inline(always)]
     pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
         Self {
             // SAFETY: forwards this fn's `unsafe` contract — the caller
             // guarantees `s` encodes a uniquely-owned prefix and that the
-            // backing data still exists.
+            // backing data still exists in the ambient namespace.
             inner: unsafe { engine::Mapx::from_prefix_slice(s) },
+        }
+    }
+
+    /// [`from_bytes`](Self::from_bytes) bound to an explicit namespace.
+    ///
+    /// # Safety
+    ///
+    /// Same contract as `from_bytes`, with the data required to live in
+    /// `ns`'s engine.
+    #[inline(always)]
+    pub unsafe fn from_bytes_in(ns: &Namespace, s: impl AsRef<[u8]>) -> Self {
+        Self {
+            // SAFETY: forwards this fn's `unsafe` contract.
+            inner: unsafe { engine::Mapx::from_prefix_slice_in(ns, s) },
         }
     }
 
@@ -473,11 +507,18 @@ impl MapxRaw {
         self.inner.as_prefix_slice()
     }
 
-    /// Returns the unique instance ID of this `MapxRaw`.
-    pub fn instance_id(&self) -> u64 {
+    /// Returns the complete public identity of this `MapxRaw`:
+    /// `{ map_id, ns }` — the same shape as the persisted meta bytes
+    /// (`ns: None` ⇔ default namespace).  A pre-v16 bare `u64` id equals
+    /// `InstanceId::from(u64)`.
+    pub fn instance_id(&self) -> InstanceId {
         let mut bytes = [0u8; 8];
         bytes.copy_from_slice(self.as_bytes());
-        u64::from_le_bytes(bytes)
+        let ns_id = self.inner.namespace().id();
+        InstanceId {
+            map_id: u64::from_le_bytes(bytes),
+            ns: (ns_id != crate::common::DEFAULT_NS_ID).then_some(ns_id),
+        }
     }
 
     /// Checks if this `MapxRaw` instance is the same as another.
@@ -494,26 +535,36 @@ impl MapxRaw {
         self.inner.is_the_same_instance(&other_hdr.inner)
     }
 
-    /// Persists this instance's metadata to the
+    /// Persists this instance's metadata into its owning namespace's
     /// instance-meta directory so that it can be recovered later via
     /// [`from_meta`](Self::from_meta).
     ///
-    /// Returns the `instance_id` that can be passed to `from_meta`.
-    pub fn save_meta(&self) -> Result<u64> {
+    /// Returns the [`InstanceId`] that can be passed to `from_meta`.
+    pub fn save_meta(&self) -> Result<InstanceId> {
         let id = self.instance_id();
-        crate::common::atomic_write_file(
-            &crate::common::vsdb_meta_path(id),
-            &self.inner.encode_prefix_meta(),
-        )?;
+        let path = self.namespace().meta_path(id.map_id);
+        fs::create_dir_all(path.parent().expect("has parent"))?;
+        crate::common::atomic_write_file(&path, &self.inner.encode_prefix_meta())?;
         Ok(id)
     }
 
     /// Recovers a `MapxRaw` instance from previously saved metadata.
     ///
+    /// Accepts anything convertible into an [`InstanceId`] — including a
+    /// bare pre-v16 `u64` (⇒ default namespace). Resolution is
+    /// deterministic, never a search: the token's `ns` names the meta
+    /// directory (`None` ⇒ the default namespace's — its id is a fixed
+    /// constant, there is nothing to look up); a miss is a clean error.
+    ///
     /// The caller must ensure that the underlying VSDB database still
     /// contains the data referenced by this instance ID.
-    pub fn from_meta(instance_id: u64) -> Result<Self> {
-        let bytes = fs::read(crate::common::vsdb_meta_path(instance_id))?;
+    pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
+        let id = instance_id.into();
+        let ns = match id.ns {
+            None => Namespace::default_ns(),
+            Some(n) => Namespace::open(n)?,
+        };
+        let bytes = fs::read(ns.meta_path(id.map_id))?;
         engine::Mapx::from_prefix_meta(&bytes).map(|inner| Self { inner })
     }
 }

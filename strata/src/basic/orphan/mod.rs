@@ -29,7 +29,7 @@
 #[cfg(test)]
 mod test;
 
-use crate::common::error::Result;
+use crate::common::{InstanceId, error::Result};
 use crate::{ValueEnDe, basic::mapx_ord_rawkey::MapxOrdRawKey};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -120,6 +120,16 @@ where
         self.inner.as_bytes()
     }
 
+    /// [`new`](Self::new) placed in `ns`.
+    pub fn new_in(ns: &crate::common::Namespace, v: T) -> Self {
+        ns.scope(|| Self::new(v))
+    }
+
+    /// The namespace this value lives in.
+    pub fn namespace(&self) -> crate::common::Namespace {
+        self.inner.namespace()
+    }
+
     /// Creates a new `Orphan` with an initial value.
     pub fn new(v: T) -> Self {
         let mut hdr = MapxOrdRawKey::new();
@@ -184,7 +194,7 @@ where
 
     /// Returns the unique instance ID of this `Orphan`.
     #[inline(always)]
-    pub fn instance_id(&self) -> u64 {
+    pub fn instance_id(&self) -> InstanceId {
         self.inner.instance_id()
     }
 
@@ -192,7 +202,7 @@ where
     /// recovered later via [`from_meta`](Self::from_meta).
     ///
     /// Returns the `instance_id` that should be passed to `from_meta`.
-    pub fn save_meta(&self) -> Result<u64> {
+    pub fn save_meta(&self) -> Result<InstanceId> {
         let id = self.instance_id();
         crate::common::save_instance_meta(id, self)?;
         Ok(id)
@@ -218,8 +228,8 @@ where
     /// restart); calling it while the original is still live requires
     /// the same care as `shadow()`, even though this function is safe
     /// Rust.
-    pub fn from_meta(instance_id: u64) -> Result<Self> {
-        crate::common::load_instance_meta(instance_id)
+    pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
+        crate::common::load_instance_meta(instance_id.into())
     }
 }
 

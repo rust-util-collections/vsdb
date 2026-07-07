@@ -10,7 +10,10 @@ use super::{
 };
 use crate::basic::persistent_btree::{EMPTY_ROOT, NodeId, PersistentBTree};
 use crate::common::ende::{KeyEnDeOrdered, ValueEnDe};
-use crate::common::error::{Result, VsdbError};
+use crate::common::{
+    InstanceId,
+    error::{Result, VsdbError},
+};
 use crate::{Mapx, MapxOrd, Orphan};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -218,6 +221,13 @@ where
     }
 }
 
+impl<K, V> VerMap<K, V> {
+    /// The namespace this map lives in.
+    pub fn namespace(&self) -> crate::common::Namespace {
+        self.tree.namespace()
+    }
+}
+
 impl<K, V> VerMap<K, V>
 where
     K: KeyEnDeOrdered,
@@ -230,8 +240,15 @@ where
         Self::new_with_main("main")
     }
 
+    /// [`new`](Self::new) placed in `ns` — every internal component of
+    /// the map lands in the same namespace (a composite never spans
+    /// namespaces).
+    pub fn new_in(ns: &crate::common::Namespace) -> Self {
+        ns.scope(Self::new)
+    }
+
     /// Returns the unique instance ID of this `VerMap`.
-    pub fn instance_id(&self) -> u64 {
+    pub fn instance_id(&self) -> InstanceId {
         self.tree.instance_id()
     }
 
@@ -239,7 +256,7 @@ where
     /// recovered later via [`from_meta`](Self::from_meta).
     ///
     /// Returns the `instance_id` that should be passed to `from_meta`.
-    pub fn save_meta(&self) -> Result<u64> {
+    pub fn save_meta(&self) -> Result<InstanceId> {
         let id = self.instance_id();
         crate::common::save_instance_meta(id, self)?;
         Ok(id)
@@ -249,9 +266,9 @@ where
     ///
     /// The caller must ensure that the underlying VSDB database still
     /// contains the data referenced by this instance ID.
-    pub fn from_meta(instance_id: u64) -> Result<Self> {
+    pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
         // Deserialize already calls rebuild_tree_ref_counts().
-        crate::common::load_instance_meta(instance_id)
+        crate::common::load_instance_meta(instance_id.into())
     }
 
     /// Creates a new, empty versioned map whose initial branch has the

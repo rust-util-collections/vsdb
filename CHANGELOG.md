@@ -6,6 +6,49 @@ All notable changes to this project will be documented in this file.
 
 Design: `docs/proposals/namespaces.md` (rev 10).
 
+### Added (P1 — namespaces)
+
+- **Namespaces: anonymous placement groups.** A `Namespace` is an
+  independently-rooted engine instance (own dir tree — placeable on its
+  own volume, own shards/WALs/compactions/memtable budget). Users never
+  name one, never pass a path on the normal tier; the everyday primitive
+  is co-location: `existing.namespace()` + `new_in`/`ns.scope(..)`.
+  - `Namespace::{create, create_with, open, default_ns, current, scope,
+    id, path, flush, system_dir, meta_dir, custom_dir}`;
+    `NamespaceOpts { path, shards, mem_budget_mb }` (everything
+    defaulted; explicit roots validated against nesting).
+  - Admin tier: `vsdb_ns_list / vsdb_ns_destroy / vsdb_ns_relocate`
+    (not-open-only; destroy = registry removal + `rm -rf` — O(1) bulk
+    reclaim; relocate updates the registry pointer only).
+  - Registry: `{base}/__SYSTEM__/__namespaces__` (postcard, durable
+    atomic writes); derived roots under
+    `{base}/__NAMESPACES__/{ns_id:016x}` recorded base-relative so the
+    whole universe stays movable as one tree. Ids are never reused;
+    `DEFAULT_NS_ID = 0` is a fixed constant — never registered, never
+    looked up.
+  - Every collection (`MapxRaw` → typed wrappers → `Orphan`,
+    `PersistentBTree`, `VerMap`, tries-with-proof, `SlotDex`, `VecDex`,
+    `DagMapRaw`/`DagMapRawKey`) gains `new_in(&ns, ..)` + `namespace()`;
+    plain `new()` places into `Namespace::current()` (ambient scope,
+    creation-time only — never routing). A composite and all its
+    internal maps live in exactly one namespace.
+  - **One global prefix allocator** serves all namespaces: prefixes (=
+    `map_id`s) stay unique across the whole registry by construction.
+  - Per-namespace `__SYSTEM__` tree: instance metas and MPT/SMT cache
+    files live beside their data (`destroy` reclaims them together);
+    the `TrieCache` trait now takes the cache dir explicitly.
+- **`InstanceId { map_id, ns: Option<NsId> }`** — the complete public
+  identity, mirroring the persisted meta bytes (`ns: None` ⇔ default
+  namespace ⇔ the 16-byte pre-v16 meta form). `Display`/`FromStr` as
+  `"42"` / `"42@7"`. `instance_id()`/`save_meta()` now return it;
+  `from_meta(impl Into<InstanceId>)` still accepts bare `u64` ids
+  (⇒ default namespace) — stored pre-v16 tokens keep working, and
+  resolution is deterministic (never a search).
+- **Meta wire format: optional `ns_id` suffix.** Default-namespace
+  handles serialize byte-identically to v15 (`"VSMAPX01" ‖ prefix`,
+  16 B); non-default handles append `ns_id_le` (24 B). One magic, no
+  format versions; v15 data decodes as `None` verbatim.
+
 ### Changed (P0 — allocator persistence relocation)
 
 - **The prefix-allocator ceiling now lives outside the shard DBs**, in

@@ -35,6 +35,7 @@ pub use slot_type::SlotType;
 use crate::{
     KeyEnDeOrdered,
     common::{
+        InstanceId,
         error::Result,
         staged::{StagedRows, prefix_successor},
     },
@@ -301,6 +302,21 @@ where
     S: SlotType,
     K: Clone + Ord + KeyEnDeOrdered,
 {
+    /// [`new`](Self::new) placed in `ns` — every internal component
+    /// lands in the same namespace (a composite never spans namespaces).
+    pub fn new_in(
+        ns: &crate::common::Namespace,
+        tier_capacity: S,
+        swap_order: bool,
+    ) -> Self {
+        ns.scope(|| Self::new(tier_capacity, swap_order))
+    }
+
+    /// The namespace this structure lives in.
+    pub fn namespace(&self) -> crate::common::Namespace {
+        self.store.namespace()
+    }
+
     /// Creates a new `SlotDex`.
     ///
     /// # Arguments
@@ -370,7 +386,7 @@ where
 
     /// Returns the unique instance ID of this `SlotDex`.
     #[inline(always)]
-    pub fn instance_id(&self) -> u64 {
+    pub fn instance_id(&self) -> InstanceId {
         self.store.instance_id()
     }
 
@@ -382,7 +398,7 @@ where
     /// the lifetime of the instance.
     ///
     /// Returns the `instance_id` that should be passed to `from_meta`.
-    pub fn save_meta(&self) -> Result<u64> {
+    pub fn save_meta(&self) -> Result<InstanceId> {
         let id = self.instance_id();
         crate::common::save_instance_meta(id, self)?;
         Ok(id)
@@ -392,8 +408,8 @@ where
     ///
     /// Every mutation is applied atomically, so the recovered state is
     /// always internally consistent — there is no rebuild path.
-    pub fn from_meta(instance_id: u64) -> Result<Self> {
-        crate::common::load_instance_meta(instance_id)
+    pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
+        crate::common::load_instance_meta(instance_id.into())
     }
 
     // =====================================================================

@@ -35,7 +35,10 @@ mod test;
 
 use crate::{
     DagMapId, MapxOrdRawKey, Orphan,
-    common::error::{Result, VsdbError},
+    common::{
+        InstanceId,
+        error::{Result, VsdbError},
+    },
 };
 use serde::{Deserialize, Serialize, de};
 use std::{
@@ -126,6 +129,17 @@ impl<'de> Deserialize<'de> for DagMapRaw {
 }
 
 impl DagMapRaw {
+    /// [`new`](Self::new) placed in `ns` — every internal component
+    /// lands in the same namespace (a composite never spans namespaces).
+    pub fn new_in(ns: &crate::common::Namespace, parent: Option<&mut Self>) -> Self {
+        ns.scope(|| Self::new(parent))
+    }
+
+    /// The namespace this structure lives in.
+    pub fn namespace(&self) -> crate::common::Namespace {
+        self.data.namespace()
+    }
+
     /// Creates a new `DagMapRaw`, optionally attached under `parent`.
     ///
     /// The node stores an aliasing handle of the parent node in its own
@@ -188,7 +202,7 @@ impl DagMapRaw {
 
     /// Returns the unique instance ID of this `DagMapRaw`.
     #[inline(always)]
-    pub fn instance_id(&self) -> u64 {
+    pub fn instance_id(&self) -> InstanceId {
         self.data.instance_id()
     }
 
@@ -196,7 +210,7 @@ impl DagMapRaw {
     /// recovered later via [`from_meta`](Self::from_meta).
     ///
     /// Returns the `instance_id` that should be passed to `from_meta`.
-    pub fn save_meta(&self) -> Result<u64> {
+    pub fn save_meta(&self) -> Result<InstanceId> {
         let id = self.instance_id();
         crate::common::save_instance_meta(id, self)?;
         Ok(id)
@@ -206,8 +220,8 @@ impl DagMapRaw {
     ///
     /// The caller must ensure that the underlying VSDB database still
     /// contains the data referenced by this instance ID.
-    pub fn from_meta(instance_id: u64) -> Result<Self> {
-        crate::common::load_instance_meta(instance_id)
+    pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
+        crate::common::load_instance_meta(instance_id.into())
     }
 
     /// Checks if the DAG map is dead (i.e., has no live data, parent, or children).
@@ -353,7 +367,7 @@ impl DagMapRaw {
         }
 
         // Instance IDs on the mainline path — must not be destroyed.
-        let mainline_ids: Vec<u64> = {
+        let mainline_ids: Vec<InstanceId> = {
             let mut ids = vec![self.instance_id()];
             ids.extend(linebuf.iter().map(|n| n.instance_id()));
             ids
@@ -443,7 +457,7 @@ impl DagMapRaw {
     /// branch is an intended deletion that the next prune completes.
     fn prune_destroy_side_branches(
         linebuf: &mut [Self],
-        mainline_ids: &[u64],
+        mainline_ids: &[InstanceId],
         pending_reparent: &HashSet<RawBytes>,
     ) {
         for node in linebuf.iter_mut() {
@@ -481,7 +495,7 @@ impl DagMapRaw {
     // are never listed in any children registry, so a parentless entry is
     // always reclaimable).  A child owned by a *different* live parent is
     // foreign: its registry entry is a stale index copy.
-    fn owned_or_residue(owner_id: u64, child: &Self) -> bool {
+    fn owned_or_residue(owner_id: InstanceId, child: &Self) -> bool {
         match child.parent.get_value() {
             None => true,
             Some(p) => p.instance_id() == owner_id,

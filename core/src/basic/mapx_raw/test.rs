@@ -192,7 +192,7 @@ fn test_from_meta_rejects_legacy_prefix_metadata() {
     hdr.insert([1], [10]);
 
     let id = hdr.instance_id();
-    fs::write(crate::common::vsdb_meta_path(id), hdr.as_bytes()).unwrap();
+    fs::write(crate::common::vsdb_meta_path(id.map_id), hdr.as_bytes()).unwrap();
 
     assert!(MapxRaw::from_meta(id).is_err());
 
@@ -266,7 +266,7 @@ fn test_serde_rejects_allocator_future_prefix() {
 #[test]
 fn test_serde_reserves_recovered_future_prefix() {
     let hdr = MapxRaw::new();
-    let future = hdr.instance_id() + 1;
+    let future = hdr.instance_id().map_id + 1;
 
     let mut meta = Vec::new();
     meta.extend_from_slice(b"VSMAPX01");
@@ -279,7 +279,7 @@ fn test_serde_reserves_recovered_future_prefix() {
     let mut next = MapxRaw::new();
     next.insert(b"k", b"next");
 
-    assert_ne!(next.instance_id(), future);
+    assert_ne!(next.instance_id().map_id, future);
     assert_eq!(&recovered.get(b"k").unwrap()[..], b"recovered");
     assert_eq!(&next.get(b"k").unwrap()[..], b"next");
 }

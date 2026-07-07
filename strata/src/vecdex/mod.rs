@@ -51,6 +51,7 @@ pub mod distance;
 mod hnsw;
 
 use crate::common::{
+    InstanceId,
     ende::{KeyEnDe, ValueEnDe},
     error::{Result, VsdbError},
     staged::StagedRows,
@@ -360,6 +361,17 @@ where
     D: DistanceMetric<S>,
     S: Scalar,
 {
+    /// [`new`](Self::new) placed in `ns` — every internal component
+    /// lands in the same namespace (a composite never spans namespaces).
+    pub fn new_in(ns: &crate::common::Namespace, config: HnswConfig) -> Self {
+        ns.scope(|| Self::new(config))
+    }
+
+    /// The namespace this structure lives in.
+    pub fn namespace(&self) -> crate::common::Namespace {
+        self.store.namespace()
+    }
+
     /// Creates a new, empty `VecDex` with the given configuration.
     pub fn new(config: HnswConfig) -> Self {
         assert!(config.dim > 0, "VecDex: dim must be > 0");
@@ -404,7 +416,7 @@ where
 
     /// Returns the unique instance ID.
     #[inline(always)]
-    pub fn instance_id(&self) -> u64 {
+    pub fn instance_id(&self) -> InstanceId {
         self.store.instance_id()
     }
 
@@ -414,7 +426,7 @@ where
     /// The metadata is create-time constant (single handle + creation
     /// config), so calling this once after creation is sufficient for
     /// the lifetime of the instance.
-    pub fn save_meta(&self) -> Result<u64> {
+    pub fn save_meta(&self) -> Result<InstanceId> {
         let id = self.instance_id();
         crate::common::save_instance_meta(id, self)?;
         Ok(id)
@@ -424,8 +436,8 @@ where
     ///
     /// Every mutation is applied atomically, so the recovered state is
     /// always internally consistent — there is no rebuild path.
-    pub fn from_meta(instance_id: u64) -> Result<Self> {
-        crate::common::load_instance_meta(instance_id)
+    pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
+        crate::common::load_instance_meta(instance_id.into())
     }
 
     /// Returns the number of indexed vectors.

@@ -40,24 +40,35 @@ fn type_tag<T: ?Sized>() -> u64 {
         })
 }
 
-/// Serializes `value` with `postcard` and writes it to the instance-meta
-/// directory under the given `instance_id`.
+/// Serializes `value` with `postcard` and writes it to the owning
+/// namespace's instance-meta directory under `id.map_id`.
 ///
 /// The write is atomic (tmp + fsync + rename), so a crash mid-save can
 /// never leave a truncated meta file behind.
-pub fn save_instance_meta(instance_id: u64, value: &impl Serialize) -> Result<()> {
-    let path = vsdb_meta_path(instance_id);
+pub fn save_instance_meta(id: InstanceId, value: &impl Serialize) -> Result<()> {
+    let ns = match id.ns {
+        None => Namespace::default_ns(),
+        Some(n) => Namespace::open(n)?,
+    };
+    let path = ns.meta_dir().join(format!("{:016x}", id.map_id));
+    fs::create_dir_all(path.parent().expect("has parent"))?;
     let bytes = postcard::to_allocvec(value)?;
     atomic_write_file(&path, &bytes)?;
     Ok(())
 }
 
-/// Reads the meta file for `instance_id` and deserializes it back.
+/// Reads the meta file for `id` and deserializes it back.
 ///
-/// Only the current (magic-tagged) meta format is accepted; metas written
-/// by pre-v13.4 code must be re-saved under a v13 release first.
-pub fn load_instance_meta<T: DeserializeOwned>(instance_id: u64) -> Result<T> {
-    let path = vsdb_meta_path(instance_id);
+/// Resolution is deterministic, never a search: `id.ns` names the meta
+/// directory (`None` ⇒ the default namespace's). Only the current
+/// (magic-tagged) meta format is accepted; metas written by pre-v13.4
+/// code must be re-saved under a v13 release first.
+pub fn load_instance_meta<T: DeserializeOwned>(id: InstanceId) -> Result<T> {
+    let ns = match id.ns {
+        None => Namespace::default_ns(),
+        Some(n) => Namespace::open(n)?,
+    };
+    let path = ns.meta_dir().join(format!("{:016x}", id.map_id));
     let bytes = fs::read(&path)?;
     Ok(postcard::from_bytes(&bytes)?)
 }

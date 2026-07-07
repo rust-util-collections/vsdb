@@ -84,12 +84,33 @@ macro_rules! define_map_wrapper {
                 self.inner.as_bytes()
             }
 
+            /// Creates a new instance in the current ambient namespace
+            /// ([`Namespace::current`](vsdb_core::Namespace::current)).
             #[inline(always)]
             pub fn new() -> Self {
                 Self {
                     inner: <$inner_type>::new(),
                     $phantom_field: std::marker::PhantomData,
                 }
+            }
+
+            /// Creates a new instance placed in `ns` — the explicit form
+            /// of the ambient-scope placement performed by
+            /// [`new`](Self::new).
+            #[inline(always)]
+            pub fn new_in(ns: &$crate::common::Namespace) -> Self {
+                Self {
+                    inner: <$inner_type>::new_in(ns),
+                    $phantom_field: std::marker::PhantomData,
+                }
+            }
+
+            /// The namespace this structure lives in — the co-location
+            /// primitive: `new_in(&existing.namespace())` places new
+            /// data together with `existing`.
+            #[inline(always)]
+            pub fn namespace(&self) -> $crate::common::Namespace {
+                self.inner.namespace()
             }
 
             #[inline(always)]
@@ -102,19 +123,27 @@ macro_rules! define_map_wrapper {
                 self.inner.is_the_same_instance(&other_hdr.inner)
             }
 
-            /// Returns the unique instance ID of this data structure.
+            /// Returns the complete public identity of this instance:
+            /// `{ map_id, ns }` (`ns: None` ⇔ default namespace). A
+            /// pre-v16 bare `u64` id equals `InstanceId::from(u64)`.
             #[inline(always)]
-            pub fn instance_id(&self) -> u64 {
+            pub fn instance_id(&self) -> $crate::common::InstanceId {
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(self.as_bytes());
-                u64::from_le_bytes(bytes)
+                let ns_id = self.namespace().id();
+                $crate::common::InstanceId {
+                    map_id: u64::from_le_bytes(bytes),
+                    ns: (ns_id != $crate::common::DEFAULT_NS_ID).then_some(ns_id),
+                }
             }
 
-            /// Persists this instance's metadata to disk so that it can be
-            /// recovered later via [`from_meta`](Self::from_meta).
+            /// Persists this instance's metadata to disk (in its owning
+            /// namespace's meta directory) so that it can be recovered
+            /// later via [`from_meta`](Self::from_meta).
             ///
-            /// Returns the `instance_id` that should be passed to `from_meta`.
-            pub fn save_meta(&self) -> $crate::common::error::Result<u64> {
+            /// Returns the [`InstanceId`](vsdb_core::InstanceId) that
+            /// should be passed to `from_meta`.
+            pub fn save_meta(&self) -> $crate::common::error::Result<$crate::common::InstanceId> {
                 let id = self.instance_id();
                 $crate::common::save_instance_meta(id, self)?;
                 Ok(id)
@@ -143,8 +172,10 @@ macro_rules! define_map_wrapper {
             /// restart); calling it while the original is still live
             /// requires the same care as `shadow()`, even though this
             /// function is safe Rust.
-            pub fn from_meta(instance_id: u64) -> $crate::common::error::Result<Self> {
-                $crate::common::load_instance_meta(instance_id)
+            pub fn from_meta(
+                instance_id: impl Into<$crate::common::InstanceId>,
+            ) -> $crate::common::error::Result<Self> {
+                $crate::common::load_instance_meta(instance_id.into())
             }
         }
 
