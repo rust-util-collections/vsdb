@@ -488,6 +488,22 @@ registries), which already works today. Consequences:
 - **P3 (optional, separate RFC)**: in-process `close()` — requires migrating
   `&'static DB` to `Arc<DB>` and making iterators own their engine reference
   (C1); whole-ns `merge`; cross-ns map-copy convenience helpers.
+  *Post-implementation review narrowed the motivation*: its ONLY remaining
+  driver is resource bounding at very large open-namespace counts
+  (thousands — each open ns parks `shards` condvar-waiting compaction
+  threads plus fds; idle cost is a few KB per thread, so dozens-to-hundreds
+  of namespaces need nothing). Runtime relocation ("close → move files →
+  reopen without restart") is rejected outright — moving live database
+  files is operationally unacceptable; `relocate` stays what it is: an
+  offline registry-pointer repair after an operator has moved the data.
+  In-process rotation-destroy is served well enough by restart windows.
+  `destroy` itself stays (deliberately, despite ns skeletons being cheap):
+  it is the O(1) bulk-reclaim primitive for time-partitioned data
+  (tombstone + compaction reclaim is hours and write-amplification), and
+  the only registry-consistent removal path — a manual `rm -rf` of a root
+  with a live registry entry would silently resurrect as an EMPTY
+  namespace on the next `open(id)`. No further namespace self-management
+  APIs will be added.
 
 ---
 
