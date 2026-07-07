@@ -1,9 +1,11 @@
 //! Core HNSW algorithm: layer assignment, graph search, neighbor selection.
 
 use super::distance::{DistanceMetric, Scalar};
-use std::cmp::{Ordering, Reverse};
-use std::collections::{BinaryHeap, HashSet};
-use std::rc::Rc;
+use std::{
+    cmp::{Ordering, Reverse},
+    collections::{BinaryHeap, HashSet},
+    rc::Rc,
+};
 use vsdb_core::basic::mapx_raw::MapxRaw;
 
 // ---- Ordered scalar wrapper (for BinaryHeap) ----------------------------
