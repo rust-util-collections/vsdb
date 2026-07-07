@@ -97,7 +97,10 @@ static VSDB_META_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     d
 });
 
-/// Returns the instance-meta directory path for VSDB.
+/// Returns the instance-meta directory path of the **default
+/// namespace** (its root is the base dir, so this equals
+/// `Namespace::default_ns().meta_dir()`; non-default namespaces keep
+/// their metas under their own roots — use [`Namespace::meta_dir`]).
 ///
 /// This directory (`{system_dir}/__instance_meta__/`) is used to persist
 /// lightweight metadata (e.g. serialized handles) for individual VSDB
@@ -107,7 +110,9 @@ pub fn vsdb_get_meta_dir() -> &'static Path {
     VSDB_META_DIR.as_path()
 }
 
-/// Returns the meta file path for a given instance ID.
+/// Returns the **default-namespace** meta file path for a given map ID
+/// (a bare `u64` can only ever address a default-namespace instance;
+/// namespace-resident metas live under [`Namespace::meta_dir`]).
 #[inline(always)]
 pub fn vsdb_meta_path(instance_id: u64) -> PathBuf {
     let mut p = VSDB_META_DIR.clone();
@@ -226,7 +231,9 @@ fn gen_data_dir() -> PathBuf {
     PathBuf::from(d)
 }
 
-/// Returns the custom directory path for VSDB.
+/// Returns the custom directory path of the **default namespace**
+/// (≡ `Namespace::default_ns().custom_dir()`; each namespace has its
+/// own `__CUSTOM__` under its root — see [`Namespace::custom_dir`]).
 ///
 /// This directory (`{base_dir}/__CUSTOM__/`) is available for users to store
 /// application-specific files alongside the VSDB data directory.
@@ -239,7 +246,12 @@ pub fn vsdb_get_custom_dir() -> &'static Path {
     VSDB_CUSTOM_DIR.as_path()
 }
 
-/// Returns the internal system directory path for VSDB.
+/// Returns the internal system directory path of the **default
+/// namespace** (≡ `Namespace::default_ns().system_dir()`; each
+/// namespace has its own `__SYSTEM__` under its root — see
+/// [`Namespace::system_dir`]). Also home to the registry-wide state
+/// that deliberately stays global: the namespace registry, the prefix
+/// allocator ceiling, and the DagMap ID counter.
 ///
 /// This directory (`{base_dir}/__SYSTEM__/`) is reserved for VSDB internal use
 /// (instance metadata, trie caches, ID counters). Not intended for external use.
