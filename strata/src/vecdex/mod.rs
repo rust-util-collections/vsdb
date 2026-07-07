@@ -61,9 +61,12 @@ use hnsw::{
     search_layer, select_neighbors_heuristic,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
-use std::marker::PhantomData;
-use std::rc::Rc;
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    marker::PhantomData,
+    rc::Rc,
+};
 use vsdb_core::basic::mapx_raw::MapxRaw;
 
 // Namespace tags (first key byte).
@@ -157,7 +160,7 @@ struct Txn<'a, S> {
     /// Per-transaction decoded-vector cache: HNSW linking re-reads the
     /// same vectors many times across layers/heuristics; decoding each
     /// row once per transaction removes the dominant redundant cost.
-    vec_cache: std::cell::RefCell<HashMap<u64, Rc<Vec<S>>>>,
+    vec_cache: RefCell<HashMap<u64, Rc<Vec<S>>>>,
 }
 
 impl<S> AdjRead for Txn<'_, S> {
@@ -173,7 +176,7 @@ impl<'a, S: Scalar> Txn<'a, S> {
             store,
             rows: StagedRows::new(),
             state,
-            vec_cache: std::cell::RefCell::new(HashMap::new()),
+            vec_cache: RefCell::new(HashMap::new()),
         }
     }
 
@@ -220,7 +223,8 @@ impl<'a, S: Scalar> Txn<'a, S> {
     /// Applies the pruning result of
     /// [`prune_selection`](hnsw::prune_selection) for `(node, layer)` and
     /// detaches the evicted back-edges, mirroring the insert-time
-    /// neighbor-eviction protocol. Returns the evicted ids.
+    /// neighbor-eviction protocol. Returns whether `keep` survived the
+    /// pruning (`true` when `keep` is `None` or was not evicted).
     fn prune_and_detach<D: DistanceMetric<S>>(
         &mut self,
         node_id: u64,
@@ -497,14 +501,28 @@ where
 
     /// Clears all indexed data.
     ///
-    /// This wipes the whole underlying key range in one engine-level
-    /// operation and resets the in-memory state.
+    /// The wipe (one engine-level range tombstone) and the reset graph
+    /// state row — which preserves the live `ef_search`, also across a
+    /// later restore — commit in **one atomic engine write batch**: a
+    /// crash can never expose a partially-cleared index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the engine-level commit fails (matching the behavior of
+    /// the plain collection types on engine write failure).
     pub fn clear(&mut self) {
-        self.store.clear();
-        self.state = GraphState {
-            ef_search: self.state.ef_search,
-            ..GraphState::default()
-        };
+        let mut txn: Txn<'_, S> = Txn::new(
+            &self.store,
+            GraphState {
+                ef_search: self.state.ef_search,
+                ..GraphState::default()
+            },
+        );
+        txn.rows.wipe();
+        let (rows, state) = txn.finish();
+        rows.commit(&mut self.store)
+            .expect("vsdb: VecDex clear commit failed");
+        self.state = state;
     }
 
     /// Inserts a vector associated with a user key.
@@ -793,7 +811,7 @@ where
             return Ok(vec![]);
         }
 
-        let cache = std::cell::RefCell::new(HashMap::<u64, Rc<Vec<S>>>::new());
+        let cache = RefCell::new(HashMap::<u64, Rc<Vec<S>>>::new());
         let get_vec = |id: u64| -> Option<Rc<Vec<S>>> {
             if let Some(v) = cache.borrow().get(&id) {
                 // Cheap refcount bump — no vector data is copied, unlike
@@ -997,6 +1015,14 @@ where
     ///
     /// Useful after many deletions to restore graph quality and recall.
     /// Vectors are re-inserted in random order for better graph quality.
+    ///
+    /// The whole rebuild is staged through one wiped transaction: the
+    /// range tombstone and every row of the new graph commit in a
+    /// **single atomic engine write batch**, so a crash (or an error
+    /// return) leaves either the old graph or the new one — never
+    /// anything in between.  This is a cold maintenance API: the new
+    /// graph is staged in memory before the commit, so expect transient
+    /// memory proportional to the index size.
     pub fn compact(&mut self) -> Result<()> {
         use rand::seq::SliceRandom;
 
@@ -1004,11 +1030,10 @@ where
 
         pairs.shuffle(&mut rand::rng());
 
-        // clear() below is irreversible, so anything that could make a
-        // re-insert fail must be rejected BEFORE it. Today that is only a
-        // dimension mismatch (impossible for vectors that passed insert
-        // validation, but cheap to re-check); if insert ever gains new
-        // error paths, this pre-validation must grow with it.
+        // Defense-in-depth: impossible for vectors that passed insert
+        // validation, but `stage_insert` below performs no per-insert
+        // dimension check, so re-check before rebuilding. An error here
+        // (or anywhere before the commit) leaves the store untouched.
         for (_, vec) in &pairs {
             if vec.len() != self.config.dim {
                 return Err(VsdbError::Other {
@@ -1021,11 +1046,20 @@ where
             }
         }
 
-        self.clear();
-
+        let mut txn = Txn::new(
+            &self.store,
+            GraphState {
+                ef_search: self.state.ef_search,
+                ..GraphState::default()
+            },
+        );
+        txn.rows.wipe();
         for (key, vec) in &pairs {
-            self.insert(key, vec)?;
+            Self::stage_insert(&mut txn, &self.config, key, vec);
         }
+        let (rows, state) = txn.finish();
+        rows.commit(&mut self.store)?;
+        self.state = state;
 
         Ok(())
     }

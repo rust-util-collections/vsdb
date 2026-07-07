@@ -2,6 +2,42 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v15.0.1]
+
+### Fixed
+
+- **`clear()` is now crash-atomic everywhere — the v15 single-batch
+  contract holds for every mutation, wipes included.** The engine-level
+  `clear()` (all collection types) previously deleted rows in chunked
+  batches; a hard crash mid-clear could leave a partially-cleared
+  namespace that hydration silently trusted (stale SlotDex totals/tiers,
+  stale VecDex graph state over missing rows). It is now **one write
+  batch containing a single range tombstone** covering the whole prefix:
+  all-or-nothing (even across a crash) and O(1) instead of O(n).
+  - New primitive: `MapxRaw::batch_entry_wiped()` — a batch pre-staged
+    with the whole-range wipe; operations added afterwards apply on top
+    of it and the whole set commits atomically.
+  - `StagedRows::wipe()` — a wiped overlay reads the committed store as
+    empty and commits the tombstone plus all staged rows in one batch.
+- **`VecDex::compact()` is atomic.** The rebuild is staged through one
+  wiped transaction and commits in a single engine write batch: a crash
+  (or error) leaves either the old graph or the new one, never anything
+  in between. The former crash window (wipe applied, re-inserts pending)
+  is gone.
+- **`VecDex::clear()` persists the preserved `ef_search`.** The reset
+  graph state row (carrying the live `ef_search`) commits in the same
+  atomic batch as the wipe, so a post-clear restore no longer silently
+  reverts to the creation-time value.
+
+### Changed
+
+- `VecDex` `Txn` decoded-vector cache and search-path cache now use an
+  imported `RefCell`; staged/vecdex import groups tidied.
+- Docs: slotdex pattern guide file list and stale multi-handle bug
+  pattern refreshed; vecdex pattern guide compact section matches the
+  atomic rebuild; `prune_and_detach` doc describes its actual return
+  value.
+
 ## [v15.0.0]
 
 ### Changed (BREAKING)

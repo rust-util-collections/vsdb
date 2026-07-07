@@ -463,6 +463,16 @@ impl MmDB {
     ) -> Box<dyn BatchTrait + 'a> {
         Box::new(MmdbBatch::new(meta_prefix, self))
     }
+
+    /// Like [`batch_begin`](Self::batch_begin), but the batch is
+    /// pre-staged with the removal of every existing key of the prefix
+    /// (one range tombstone). See `MmdbBatch::new_wiped`.
+    pub(crate) fn batch_begin_wiped<'a>(
+        &'a self,
+        meta_prefix: PreBytes,
+    ) -> Box<dyn BatchTrait + 'a> {
+        Box::new(MmdbBatch::new_wiped(meta_prefix, self))
+    }
 }
 
 // ---- Iterator ----
@@ -521,6 +531,28 @@ impl<'a> MmdbBatch<'a> {
             meta_prefix,
             engine,
         }
+    }
+
+    /// A batch whose first entry is a range tombstone covering the whole
+    /// prefix namespace. Entries within one batch carry position-based
+    /// sequence numbers, so operations added afterwards apply on top of
+    /// the wipe, and the whole set commits atomically.
+    fn new_wiped(meta_prefix: PreBytes, engine: &'a MmDB) -> Self {
+        let mut b = Self::new(meta_prefix, engine);
+        match prefix_successor(&meta_prefix) {
+            Some(end) => b.inner.delete_range(&meta_prefix, &end),
+            None => {
+                // Unreachable in practice (an all-0xFF prefix would require
+                // exhausting the u64 prefix space), but stay correct: stage
+                // an individual delete for every existing key. Sound under
+                // the SWMR contract — no other writer can add keys between
+                // building and committing the batch.
+                for (k, _) in engine.iter(meta_prefix) {
+                    b.remove(&k);
+                }
+            }
+        }
+        b
     }
 }
 
