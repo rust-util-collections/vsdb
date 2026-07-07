@@ -319,13 +319,23 @@ Every namespace gets its own base-dir subtree, same layout as today
 {ns_path}/__SYSTEM__/format_version           (ASCII "16"; see §7 tripwire)
 {ns_path}/__SYSTEM__/__instance_meta__/{prefix:016x}
 {ns_path}/__SYSTEM__/mpt_cache_{id}.bin, smt_cache_{id}.bin
-{ns_path}/__CUSTOM__/
 ```
 
-`vsdb_get_system_dir()`/`vsdb_get_meta_dir()`/`vsdb_get_custom_dir()` keep
-returning default-ns paths; ns-aware variants (`ns.system_dir()`, …) are added
+Deliberately absent: a per-ns `__CUSTOM__`. The custom dir is the
+**app-level bootstrap anchor** — the place users keep their serialized
+app state (top-level handles), which may reference *any* namespace.
+Namespaces are reached through handles and handles are bootstrapped from
+the custom dir, so a per-ns location would be circular — and
+`destroy(ns)` would silently delete the app's root pointer. There is
+exactly one custom dir per universe: `{default_base}/__CUSTOM__`
+(`vsdb_get_custom_dir()`); users who want ns-local scratch files can use
+`ns.path()` directly.
+
+`vsdb_get_system_dir()`/`vsdb_get_meta_dir()` keep returning default-ns
+paths; ns-aware variants (`ns.system_dir()`, `ns.meta_dir()`) are added
 and strata call sites for instance metas and trie caches route through the
-owning handle's namespace. The DagMap ID allocator (`dag_id_ceiling`) is a
+owning handle's namespace. `vsdb_get_custom_dir()` stays universe-global
+(see above). The DagMap ID allocator (`dag_id_ceiling`) is a
 pure ID space like the prefix allocator and stays global in the default tree,
 untouched.
 

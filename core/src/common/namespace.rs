@@ -483,16 +483,6 @@ impl Namespace {
         self.system_dir().join("__instance_meta__")
     }
 
-    /// This namespace's user-facing scratch dir (`{root}/__CUSTOM__/`),
-    /// created on first access — same contract as the legacy
-    /// `vsdb_get_custom_dir()` (which is this method on the default
-    /// namespace).
-    pub fn custom_dir(&self) -> PathBuf {
-        let d = self.0.path.join("__CUSTOM__");
-        fs::create_dir_all(&d).expect("vsdb: custom dir creation failed");
-        d
-    }
-
     /// The meta file path for `map_id` inside this namespace's tree.
     /// (Identical to the legacy `vsdb_meta_path` for the default
     /// namespace, whose root IS the base dir.)

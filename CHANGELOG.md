@@ -14,7 +14,7 @@ Design: `docs/proposals/namespaces.md` (rev 10).
   name one, never pass a path on the normal tier; the everyday primitive
   is co-location: `existing.namespace()` + `new_in`/`ns.scope(..)`.
   - `Namespace::{create, create_with, open, default_ns, current, scope,
-    id, path, flush, system_dir, meta_dir, custom_dir}`;
+    id, path, flush, system_dir, meta_dir}`;
     `NamespaceOpts { path, shards, mem_budget_mb }` (everything
     defaulted; explicit roots validated against nesting).
   - Admin tier: `vsdb_ns_list / vsdb_ns_destroy / vsdb_ns_relocate`

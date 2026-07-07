@@ -10,7 +10,11 @@
 
 ## Open
 
-*(none)*
+### [LOW] namespace: create_with consumes id on engine-open failure with no automatic rollback
+- **Where**: `core/src/common/namespace.rs:359-398`
+- **What**: When `open_record_locked` fails at line 396, the registry was already persisted with the new entry and incremented `next_id` (line 392-394). The error propagates to the caller via `?`, but the namespace id is permanently consumed and the caller does not receive it. Partially-created engine directories may remain on disk.
+- **Why**: A disk-full or permission error during `Engine::open_at` leaves a registered-but-empty namespace that the caller cannot identify without scanning `vsdb_ns_list()`. The namespace IS re-openable and destroyable (the design intent for crash recovery), but on a non-crash failure the caller has no id to pass to `open()` or `destroy()`.
+- **Suggested fix**: Catch the error from `open_record_locked` and roll back the registry entry inline (pop the just-pushed record, decrement `next_id`, re-save the registry, best-effort `remove_dir_all` on the root). The `REGISTRY_LOCK` is already held so this is safe and atomic. Alternatively, return the consumed id alongside the error so the caller can retry or destroy.
 
 ---
 

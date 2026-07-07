@@ -231,12 +231,21 @@ fn gen_data_dir() -> PathBuf {
     PathBuf::from(d)
 }
 
-/// Returns the custom directory path of the **default namespace**
-/// (≡ `Namespace::default_ns().custom_dir()`; each namespace has its
-/// own `__CUSTOM__` under its root — see [`Namespace::custom_dir`]).
+/// Returns the custom directory path for VSDB — the **app-level
+/// bootstrap anchor**, deliberately one per universe (NOT per
+/// namespace).
 ///
-/// This directory (`{base_dir}/__CUSTOM__/`) is available for users to store
-/// application-specific files alongside the VSDB data directory.
+/// This directory (`{base_dir}/__CUSTOM__/`) is available for users to
+/// store application-specific files alongside the VSDB data directory —
+/// typically the serialized app state holding the top-level collection
+/// handles. Those handles may live in *any* namespace (their metas
+/// embed the owning `ns_id`, and deserialization auto-opens it), so
+/// this blob is the app's index over the whole universe. That is why
+/// the dir does not split per namespace: namespaces are reached
+/// *through* handles, and the handles are bootstrapped from here — a
+/// per-namespace location would be circular, and `vsdb_ns_destroy`
+/// would silently take the app's root pointer with it. Users need to
+/// remember exactly one thing: the base dir.
 ///
 /// # Returns
 ///
