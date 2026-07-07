@@ -226,6 +226,38 @@ fn clear_resets_everything() {
 }
 
 #[test]
+fn clear_preserves_ef_search_across_restore() {
+    setup();
+    let cfg = HnswConfig {
+        dim: 2,
+        ..Default::default()
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let id = idx.save_meta().unwrap();
+
+    for i in 0..20u32 {
+        idx.insert(&i, &[i as f32, 0.0]).unwrap();
+    }
+    idx.set_ef_search(123);
+    idx.clear();
+    assert!(idx.is_empty());
+    assert_eq!(idx.state.ef_search, 123);
+    drop(idx);
+
+    // The cleared state row (including the live ef_search) is part of
+    // the same atomic batch as the wipe, so a restore observes it.
+    let mut restored: VecDex<u32, L2> = VecDex::from_meta(id).unwrap();
+    assert!(restored.is_empty());
+    assert_eq!(restored.state.ef_search, 123);
+    assert!(restored.search(&[0.0, 0.0], 1).unwrap().is_empty());
+
+    // Fully usable after clear + restore.
+    restored.insert(&7, &[7.0, 0.0]).unwrap();
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored.search(&[7.0, 0.0], 1).unwrap()[0].0, 7);
+}
+
+#[test]
 fn recall_random_vectors() {
     setup();
     let cfg = HnswConfig {
@@ -417,6 +449,7 @@ fn compact_restores_search() {
         ..Default::default()
     };
     let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let id = idx.save_meta().unwrap();
 
     for i in 0..20u32 {
         idx.insert(&i, &[i as f32, 0.0]).unwrap();
@@ -435,6 +468,19 @@ fn compact_restores_search() {
     // Search still works correctly.
     let results = idx.search(&[15.0, 0.0], 1).unwrap();
     assert_eq!(results[0].0, 15);
+
+    // The rebuilt graph maintains its invariants and survives a restore
+    // through the create-time metadata (saved before the compact).
+    assert_bidirectional(&idx);
+    let expected: Vec<(u32, Vec<f32>)> = idx.iter().collect();
+    drop(idx);
+
+    let restored: VecDex<u32, L2> = VecDex::from_meta(id).unwrap();
+    assert_eq!(restored.len(), 10);
+    let got: Vec<(u32, Vec<f32>)> = restored.iter().collect();
+    assert_eq!(got, expected);
+    assert_bidirectional(&restored);
+    assert_eq!(restored.search(&[15.0, 0.0], 1).unwrap()[0].0, 15);
 }
 
 #[test]

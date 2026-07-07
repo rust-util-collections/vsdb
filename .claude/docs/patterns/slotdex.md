@@ -1,7 +1,8 @@
 # SlotDex Subsystem Review Patterns
 
 ## Files
-- `strata/src/slotdex/mod.rs` — SlotDex<S, K>, SlotType trait
+- `strata/src/slotdex/mod.rs` — SlotDex<S, K>, storage layout, tier cache
+- `strata/src/slotdex/slot_type.rs` — SlotType trait (u32/u64/u128 impls)
 - `strata/src/slotdex/test.rs` — tests
 
 ## Architecture
@@ -40,9 +41,12 @@ Pagination is **offset-based** by design (`page_size * page_index`, like SQL `LI
 Key at exact tier boundary is missed by both the lower and upper tier query.
 **Trigger**: Query tier T1 with `key < boundary` and tier T2 with `key >= boundary`, but the boundary key itself falls through.
 
-### Empty Tier Panic
-Querying a tier that has no entries causes an unwrap on None from MapxOrd::iter().
-**Check**: Verify empty tier returns empty iterator, not error.
+### Empty Range Handling
+Queries over a slot range with no entries (or an entirely empty index) must
+return an empty result, not panic — check the count-row walk and the entry
+scan against absent rows.
+**Check**: Verify empty index / empty range returns empty results on every
+query path (forward, reverse, per-slot).
 
 ## Review Checklist
 - [ ] SlotType::tier() is deterministic and pure

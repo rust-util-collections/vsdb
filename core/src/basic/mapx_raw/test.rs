@@ -105,6 +105,62 @@ fn test_batch() {
     }
 }
 
+#[test]
+fn test_batch_wiped() {
+    let mut hdr = MapxRaw::new();
+    let max = 100u64;
+
+    for i in 0..max {
+        hdr.insert(to_bytes(i), to_bytes(i));
+    }
+
+    // The wipe and the new rows commit in one atomic batch: pre-existing
+    // keys vanish, keys staged after the wipe survive it.
+    {
+        let mut batch = hdr.batch_entry_wiped();
+        batch.insert(&to_bytes(7), &to_bytes(70));
+        batch.insert(&to_bytes(max + 1), &to_bytes(71));
+        batch.commit().unwrap();
+    }
+
+    assert_eq!(hdr.iter().count(), 2);
+    assert_eq!(&pnk!(hdr.get(to_bytes(7)))[..], &to_bytes(70)[..]);
+    assert_eq!(&pnk!(hdr.get(to_bytes(max + 1)))[..], &to_bytes(71)[..]);
+    for i in (0..max).filter(|&i| i != 7) {
+        assert!(hdr.get(to_bytes(i)).is_none());
+    }
+
+    // A bare wiped batch behaves like clear().
+    hdr.batch_entry_wiped().commit().unwrap();
+    assert_eq!(hdr.iter().count(), 0);
+
+    // The map remains fully usable afterwards.
+    hdr.insert(to_bytes(1), to_bytes(2));
+    assert_eq!(&pnk!(hdr.get(to_bytes(1)))[..], &to_bytes(2)[..]);
+}
+
+#[test]
+fn test_clear_large() {
+    let mut hdr = MapxRaw::new();
+    // Well above the old 4096-key chunk size: the whole wipe must land
+    // in one atomic batch (a single range tombstone).
+    let max = 5000u64;
+    for i in 0..max {
+        hdr.insert(to_bytes(i), to_bytes(i));
+    }
+
+    hdr.clear();
+    assert_eq!(hdr.iter().count(), 0);
+    assert!(hdr.get(to_bytes(0)).is_none());
+    assert!(hdr.get(to_bytes(max - 1)).is_none());
+
+    // Writes after the clear are visible (they carry higher seqnums
+    // than the tombstone).
+    hdr.insert(to_bytes(3), to_bytes(4));
+    assert_eq!(hdr.iter().count(), 1);
+    assert_eq!(&pnk!(hdr.get(to_bytes(3)))[..], &to_bytes(4)[..]);
+}
+
 fn to_u64(bytes: &[u8]) -> u64 {
     u64::from_be_bytes(<[u8; size_of::<u64>()]>::try_from(bytes).unwrap())
 }

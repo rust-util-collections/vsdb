@@ -655,8 +655,9 @@ where
 
     /// Clears the `SlotDex`, removing all entries and tier levels.
     ///
-    /// This wipes the whole underlying key range in one engine-level
-    /// operation and resets the in-memory caches.
+    /// The wipe is a **single atomic engine write batch** (one
+    /// engine-level range tombstone), so a crash can never expose a
+    /// partially-cleared index; the in-memory caches are reset to match.
     pub fn clear(&mut self) {
         self.store.clear();
         self.levels.clear();

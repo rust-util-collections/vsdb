@@ -48,8 +48,11 @@ After bidirectional edge insertion, a node may exceed m_max neighbors. prune_nei
 **Check**: Verify prune is called after every bidirectional edge creation.
 
 ### Stale Metadata After Compact
-compact() clears and re-inserts all vectors. If any intermediate error occurs, metadata may be inconsistent.
-**Check**: Verify compact collects all pairs before clearing. Verify error propagation.
+compact() rebuilds the whole graph through one wiped transaction: the range
+tombstone and every new row commit in a single atomic batch, so a crash or
+an error return leaves either the old graph or the new one.
+**Check**: Verify the rebuild stays inside one wiped `StagedRows` commit —
+any intermediate direct-store write reintroduces the torn-compact window.
 
 ## Review Checklist
 - [ ] Entry point always at global max_layer (INV-VD1)

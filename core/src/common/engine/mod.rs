@@ -22,7 +22,7 @@ use std::{
     borrow::Cow,
     fmt,
     marker::PhantomData,
-    ops::{Bound, Deref, DerefMut, RangeBounds},
+    ops::{Deref, DerefMut, RangeBounds},
     result::Result as StdResult,
     sync::LazyLock,
 };
@@ -245,55 +245,25 @@ impl Mapx {
         VSDB.db.batch_begin(prefix)
     }
 
+    /// A write batch pre-staged with the removal of every existing entry
+    /// of this map (one engine-level range tombstone). Operations added
+    /// afterwards apply on top of the wipe; the whole set — wipe
+    /// included — commits in one atomic engine write batch.
+    #[inline(always)]
+    pub(crate) fn batch_begin_wiped(&mut self) -> Box<dyn BatchTrait + '_> {
+        let prefix = self.prefix.materialize();
+        VSDB.db.batch_begin_wiped(prefix)
+    }
+
     #[inline(always)]
     pub(crate) fn clear(&mut self) {
-        // Avoid collecting all keys into memory at once.
-        // Instead, delete in chunks using repeated range scans.
-        //
-        // Important: we do not delete while holding an iterator alive.
-        // Each loop creates a fresh iterator starting strictly after `last_key`.
-        //
-        // NOTE: This operation is NOT atomic. Concurrent readers (e.g.
-        // via `shadow()`) may observe a partially-cleared state.
-        const CLEAR_CHUNK: usize = 4096;
-
-        let prefix = self.prefix.materialize();
-        let mut last_key: Option<RawKey> = None;
-
-        loop {
-            let mut it = match &last_key {
-                None => VSDB.db.iter(prefix),
-                Some(k) => VSDB.db.range(
-                    prefix,
-                    (Bound::Excluded(Cow::Owned(k.clone())), Bound::Unbounded),
-                ),
-            };
-
-            let mut keys = Vec::with_capacity(CLEAR_CHUNK);
-            for _ in 0..CLEAR_CHUNK {
-                let Some((k, _)) = it.next() else {
-                    break;
-                };
-                last_key = Some(k.clone());
-                keys.push(k);
-            }
-
-            // Drop the iterator before mutating the DB to avoid
-            // holding a read snapshot across the batch delete.
-            drop(it);
-
-            if keys.is_empty() {
-                break;
-            }
-
-            let mut batch = VSDB.db.batch_begin(prefix);
-            for k in keys.iter() {
-                batch.remove(k);
-            }
-            batch
-                .commit()
-                .expect("vsdb: batch delete failed during clear");
-        }
+        // One batch containing a single range tombstone covering the whole
+        // prefix: atomic (all-or-nothing, even across a crash) and O(1),
+        // unlike a chunked scan-and-delete loop. Concurrent readers (e.g.
+        // via `shadow()`) can never observe a partially-cleared state.
+        self.batch_begin_wiped()
+            .commit()
+            .expect("vsdb: batch delete failed during clear");
     }
 
     /// # Safety

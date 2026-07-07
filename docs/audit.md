@@ -40,8 +40,3 @@
 - **Where**: `core/src/common/engine/mmdb.rs` (`MEM_BUDGET`)
 - **What**: Operators cannot see which constraint bound the budget or the resulting per-shard sizes.
 - **Reason**: `vsdb_core` has no logging facade and is a library — unconditional `eprintln!` from a storage engine at first use is worse than silence. Revisit if a logging facade is ever adopted workspace-wide.
-
-### [MEDIUM] vecdex: `compact()` is not atomic across a hard process crash, losing not-yet-reinserted vectors
-- **Where**: `strata/src/vecdex/mod.rs` (`compact`)
-- **What**: `compact()` collects and validates all pairs before calling `clear()`, but `clear()` is irreversible and the re-insertion loop spans many individual mutations. A `kill -9` between `clear()` and loop completion permanently loses not-yet-reinserted pairs.
-- **Reason**: A true fix requires rebuilding into fresh prefixes and atomically flipping a pointer — but `VecDex` has no indirection layer, and a bare field swap would silently desync any earlier `save_meta`/parent-collection snapshot from the live handle. That failure mode (silent staleness in the common, non-crash case) is worse than the current rare-crash-window data loss. `compact()` is also explicitly documented as a cold, explicit maintenance API.

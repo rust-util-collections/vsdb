@@ -62,7 +62,7 @@ Identify the invariants that the changed code must maintain:
 - **Shard consistency**: Read and write paths compute the same shard for the same prefix
 - **Encoding round-trip**: `decode(encode(x)) == x` for all valid inputs
 - **Proof soundness**: A valid proof must verify; an invalid proof must not
-- **Dirty flag**: Set before mutation, cleared after completion
+- **Dirty flag** (VerMap only): Set before mutation, cleared after completion. SlotDex/VecDex achieve crash consistency through atomic single-handle write batches; they have no dirty flag
 
 ### 3.2 Boundary Condition Analysis
 Check edge cases specific to the change:

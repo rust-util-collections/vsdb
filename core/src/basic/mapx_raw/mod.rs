@@ -402,7 +402,46 @@ impl MapxRaw {
         self.inner.batch_begin()
     }
 
+    /// Start a batch operation pre-staged with the removal of **every**
+    /// existing entry of this map (one engine-level range tombstone).
+    ///
+    /// Operations added afterwards apply on top of the wipe, and the
+    /// whole set — wipe included — commits in one atomic engine write
+    /// batch: observers see either the pre-batch state or the fully
+    /// applied result, never anything in between (even across a crash).
+    ///
+    /// The wipe belongs to the buffered operations: like them, it is
+    /// consumed by the first [`commit`](crate::common::BatchTrait::commit)
+    /// and does not re-arm afterwards.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use vsdb_core::basic::mapx_raw::MapxRaw;
+    /// use vsdb_core::vsdb_set_base_dir;
+    ///
+    /// vsdb_set_base_dir("/tmp/vsdb_core_mapx_raw_batch_entry_wiped").unwrap();
+    /// let mut map = MapxRaw::new();
+    /// map.insert([1], [10]);
+    ///
+    /// {
+    ///     let mut batch = map.batch_entry_wiped();
+    ///     batch.insert(&[2], &[20]);
+    ///     batch.commit().unwrap();
+    /// }
+    ///
+    /// assert_eq!(map.get(&[1]), None);
+    /// assert_eq!(map.get(&[2]), Some(vec![20]));
+    /// ```
+    #[inline(always)]
+    pub fn batch_entry_wiped(&mut self) -> Box<dyn crate::common::BatchTrait + '_> {
+        self.inner.batch_begin_wiped()
+    }
+
     /// Clears the map, removing all key-value pairs.
+    ///
+    /// The wipe is a single atomic engine write batch (one range
+    /// tombstone): all-or-nothing, even across a crash.
     #[inline(always)]
     pub fn clear(&mut self) {
         self.inner.clear();
