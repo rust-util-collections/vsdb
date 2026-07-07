@@ -514,11 +514,7 @@ impl MapxRaw {
     pub fn instance_id(&self) -> InstanceId {
         let mut bytes = [0u8; 8];
         bytes.copy_from_slice(self.as_bytes());
-        let ns_id = self.inner.namespace().id();
-        InstanceId {
-            map_id: u64::from_le_bytes(bytes),
-            ns: (ns_id != crate::common::DEFAULT_NS_ID).then_some(ns_id),
-        }
+        InstanceId::new(u64::from_le_bytes(bytes), self.inner.namespace().id())
     }
 
     /// Checks if this `MapxRaw` instance is the same as another.

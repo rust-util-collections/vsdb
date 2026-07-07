@@ -50,7 +50,7 @@ pub fn save_instance_meta(id: InstanceId, value: &impl Serialize) -> Result<()> 
         None => Namespace::default_ns(),
         Some(n) => Namespace::open(n)?,
     };
-    let path = ns.meta_dir().join(format!("{:016x}", id.map_id));
+    let path = ns.meta_path(id.map_id);
     fs::create_dir_all(path.parent().expect("has parent"))?;
     let bytes = postcard::to_allocvec(value)?;
     atomic_write_file(&path, &bytes)?;
@@ -68,7 +68,7 @@ pub fn load_instance_meta<T: DeserializeOwned>(id: InstanceId) -> Result<T> {
         None => Namespace::default_ns(),
         Some(n) => Namespace::open(n)?,
     };
-    let path = ns.meta_dir().join(format!("{:016x}", id.map_id));
+    let path = ns.meta_path(id.map_id);
     let bytes = fs::read(&path)?;
     Ok(postcard::from_bytes(&bytes)?)
 }

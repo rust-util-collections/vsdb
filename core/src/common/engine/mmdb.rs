@@ -48,6 +48,17 @@ const FORMAT_VERSION_REL_PATH: &str = "__SYSTEM__/format_version";
 /// refused at open (downgrade is unsupported by policy — fail loudly).
 const SUPPORTED_FORMAT_VERSION: u64 = 16;
 
+/// Initialization sentinel, relative to an engine root.
+///
+/// Written durably BEFORE the first shard of a brand-new root is
+/// created and removed after the format marker lands, it lets a later
+/// open distinguish "a create crashed mid-way — safe to resume, no
+/// allocation ever targeted this root" from "a previously working
+/// dataset is missing shard dirs — damaged, refuse loudly". Without it
+/// the two states are indistinguishable and either roots get bricked
+/// or damaged datasets get silently reinitialized.
+const INIT_SENTINEL_REL_PATH: &str = "__SYSTEM__/__initializing__";
+
 const PREFIX_ALLOC_BATCH: u64 = 8192;
 
 /// Thread-local guard that removes this thread's [`PENDING_WINDOWS`]
@@ -175,8 +186,20 @@ impl MmDB {
 
         let dir = root.join("mmdb");
         fs::create_dir_all(&dir).c(d!())?;
+
         let marker_present = root.join(FORMAT_VERSION_REL_PATH).exists();
-        validate_shard_layout(&dir, shards, marker_present)?;
+        let sentinel_path = root.join(INIT_SENTINEL_REL_PATH);
+        let scan = scan_shard_layout(&dir, shards)?;
+        validate_shard_layout(&dir, shards, marker_present, &sentinel_path, &scan)?;
+
+        // Brand-new root: raise the initialization sentinel durably
+        // BEFORE the first shard dir exists, so a crash mid-creation is
+        // provably a resumable create (see INIT_SENTINEL_REL_PATH).
+        if !marker_present && scan.present == 0 && !sentinel_path.exists() {
+            let _g = SYS_META_LOCK.lock();
+            fs::create_dir_all(sentinel_path.parent().expect("has parent")).c(d!())?;
+            write_file_durable(&sentinel_path, b"1")?;
+        }
 
         // Open the shards into an owned, non-`'static` Vec first. If a
         // later shard (or any meta-init step below) fails, this Vec's
@@ -197,6 +220,15 @@ impl MmDB {
         // Mark the root's on-disk format so an older binary pointed at
         // it (base dir or namespace root alike) refuses to open.
         write_format_marker(root)?;
+        // Initialization is complete and durably marked: retire the
+        // sentinel (best-effort — a stale sentinel next to a marker is
+        // cleaned up here on the next open, and the marker-present
+        // validation path never consults it).
+        match fs::remove_file(&sentinel_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).c(d!()),
+        }
 
         // Every fallible step has succeeded: safe to leak now.
         let dbs: Box<[&'static DB]> = dbs_vec
@@ -650,6 +682,14 @@ fn read_ceiling_file(path: &Path) -> Result<Option<Pre>> {
 
 /// Durable file replacement: tmp, fsync, rename, then parent-dir fsync.
 ///
+/// **Locking contract**: staging goes through a fixed sibling `*.tmp`
+/// name, so concurrent writers of the SAME path would interleave
+/// create/truncate/rename into a torn result — every caller must hold
+/// the lock guarding that file's class first ([`SYS_META_LOCK`] for
+/// allocator/marker/sentinel files, `REGISTRY_LOCK` for the namespace
+/// registry). Not taken here: several callers already hold their lock
+/// (parking_lot mutexes are non-reentrant).
+///
 /// The parent-dir fsync matters: without it a power loss can drop the
 /// rename itself, and a regressed allocator ceiling means prefix reuse —
 /// silent data corruption. (The plain `atomic_write_file` used for
@@ -684,57 +724,109 @@ fn write_format_marker(base_dir: &Path) -> Result<()> {
     write_file_durable(&path, SUPPORTED_FORMAT_VERSION.to_string().as_bytes())
 }
 
-/// Rejects opening an existing dataset with the wrong shard count —
-/// routing is `prefix % shard_count`, so a mismatch would silently
-/// re-route every prefix to the wrong shard.
-///
-/// Completion-aware (`marker_present` = the root's format marker,
-/// which [`MmDB::open_at`] writes only AFTER every shard exists):
-///
-/// * marker present ⇒ initialization completed ⇒ any count mismatch is
-///   corruption/misconfiguration ⇒ reject.
-/// * marker absent + `existing < shards` ⇒ a create crashed mid-way
-///   through shard creation; the remaining shard dirs are created
-///   idempotently by the caller (`create_if_missing`), so reopening
-///   COMPLETES the initialization instead of bricking the root.
-///   (A pre-v16 default base has no marker but always has exactly 16
-///   shards, and the default namespace is pinned to 16 — it takes the
-///   `existing == shards` path, never this one.)
-/// * `existing > shards` ⇒ reject unconditionally: fewer handles than
-///   shard dirs would re-route prefixes even without a marker.
-fn validate_shard_layout(
-    mmdb_dir: &Path,
-    shards: usize,
-    marker_present: bool,
-) -> Result<()> {
-    let mut existing = 0usize;
+/// Exact shard-set scan of `mmdb_dir` for an expected count of
+/// `shards`: how many of the expected `shard_00..shard_{N-1}` dirs are
+/// present, and whether any unexpected `shard_*` entry exists (wrong
+/// index, non-directory, or misnamed) — counting prefixes alone would
+/// let `shard_backup` + `shard_00` masquerade as a complete 2-shard set.
+struct ShardScan {
+    present: usize,
+    unexpected: Option<String>,
+}
+
+fn scan_shard_layout(mmdb_dir: &Path, shards: usize) -> Result<ShardScan> {
+    let mut present = 0usize;
+    let mut unexpected = None;
+    let expected: HashSet<String> =
+        (0..shards).map(|i| format!("shard_{:02}", i)).collect();
     match fs::read_dir(mmdb_dir) {
         Ok(entries) => {
             for e in entries {
                 let e = e.c(d!())?;
-                if e.file_name().to_string_lossy().starts_with("shard_")
-                    && e.path().is_dir()
-                {
-                    existing += 1;
+                let name = e.file_name().to_string_lossy().into_owned();
+                if !name.starts_with("shard_") {
+                    continue;
+                }
+                if expected.contains(&name) && e.path().is_dir() {
+                    present += 1;
+                } else if unexpected.is_none() {
+                    unexpected = Some(name);
                 }
             }
         }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
         Err(err) => return Err(err).c(d!()),
     }
-    if existing == 0 || existing == shards {
+    Ok(ShardScan {
+        present,
+        unexpected,
+    })
+}
+
+/// Rejects opening a root whose shard layout contradicts its lifecycle
+/// state — routing is `prefix % shard_count`, so opening a wrong or
+/// incomplete shard set silently re-routes (or loses) prefixes.
+///
+/// Three states, keyed on the format marker (written only AFTER every
+/// shard exists) and the initialization sentinel (written durably
+/// BEFORE the first shard of a brand-new root):
+///
+/// * **Marker present** ⇒ initialization once completed ⇒ the exact
+///   expected shard set must exist — anything else (including ZERO
+///   shard dirs: e.g. a manually deleted `mmdb/`) is damage and is
+///   refused, never silently reinitialized.
+/// * **Sentinel present (no marker)** ⇒ provably a create that crashed
+///   mid-way; no allocation ever targeted the root ⇒ resumable: the
+///   missing shard dirs are created idempotently by the caller.
+/// * **Neither** ⇒ only two shapes are legitimate: a brand-new root
+///   (zero shards) or a complete pre-v16/pre-sentinel dataset (exact
+///   set, e.g. a legacy 16/16 default base awaiting migration). A
+///   partial set here is a damaged dataset — missing shard dirs mean
+///   silent data loss if "resumed" — and is refused.
+fn validate_shard_layout(
+    mmdb_dir: &Path,
+    shards: usize,
+    marker_present: bool,
+    sentinel_path: &Path,
+    scan: &ShardScan,
+) -> Result<()> {
+    if let Some(name) = &scan.unexpected {
+        return Err(eg!(format!(
+            "unexpected shard entry {:?} at {} (expected exactly \
+             shard_00..shard_{:02})",
+            name,
+            mmdb_dir.display(),
+            shards - 1
+        )));
+    }
+    if marker_present {
+        if scan.present != shards {
+            return Err(eg!(format!(
+                "damaged dataset at {}: initialization completed (format \
+                 marker present) but only {} of {} shard dirs exist — \
+                 refusing to reinitialize over it",
+                mmdb_dir.display(),
+                scan.present,
+                shards
+            )));
+        }
         return Ok(());
     }
-    if !marker_present && existing < shards {
-        // Incomplete initialization — completing it is safe: no format
-        // marker means no allocation has ever targeted this root.
+    if sentinel_path.exists() {
+        // Resumable create-crash; present <= shards is guaranteed by
+        // the exact-set scan above.
+        return Ok(());
+    }
+    if scan.present == 0 || scan.present == shards {
         return Ok(());
     }
     Err(eg!(format!(
-        "shard-count mismatch at {}: dataset has {} shards, \
-         open requested {} — the count is fixed at creation",
+        "damaged dataset at {}: {} of {} shard dirs exist with no \
+         initialization sentinel — missing shards would mean silent \
+         data loss; refusing to open (an interrupted pre-16.0.2 create \
+         can be reclaimed via vsdb_ns_destroy)",
         mmdb_dir.display(),
-        existing,
+        scan.present,
         shards
     )))
 }
@@ -1348,30 +1440,55 @@ mod tests {
     }
 
     #[test]
-    fn shard_layout_completion_aware() {
+    fn shard_layout_lifecycle_states() {
         let base = tmp_dir("shard-layout");
         let mmdb_dir = base.join("mmdb");
+        let sentinel = base.join(INIT_SENTINEL_REL_PATH);
+        let check = |shards: usize, marker: bool| {
+            scan_shard_layout(&mmdb_dir, shards).and_then(|scan| {
+                validate_shard_layout(&mmdb_dir, shards, marker, &sentinel, &scan)
+            })
+        };
 
-        // Absent dir: fresh root, fine either way.
-        assert!(validate_shard_layout(&mmdb_dir, 4, false).is_ok());
+        // Absent dir: brand-new root, fine without a marker; with a
+        // marker it is damage (a completed dataset lost its mmdb dir)
+        // and must NOT be silently reinitialized.
+        assert!(check(4, false).is_ok());
+        assert!(check(4, true).is_err());
 
-        // Half-created WITHOUT a marker (create crashed mid-way):
-        // resumable — reopening completes the initialization.
+        // Partial set, no marker, NO sentinel: a damaged dataset (e.g.
+        // a legacy 16-shard base missing dirs) — refused, because
+        // "resuming" it would silently lose the missing shards' data.
         fs::create_dir_all(mmdb_dir.join("shard_00")).unwrap();
-        assert!(validate_shard_layout(&mmdb_dir, 4, false).is_ok());
-        // The same layout WITH a marker is corruption: rejected.
-        assert!(validate_shard_layout(&mmdb_dir, 4, true).is_err());
+        assert!(check(4, false).is_err());
+        // The same partial set WITH the sentinel is a provable
+        // create-crash: resumable.
+        fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
+        fs::write(&sentinel, "1").unwrap();
+        assert!(check(4, false).is_ok());
+        fs::remove_file(&sentinel).unwrap();
 
         // Exact match: fine with and without the marker (the pre-v16
         // default base is exactly the marker-less equal case).
         fs::create_dir_all(mmdb_dir.join("shard_01")).unwrap();
-        assert!(validate_shard_layout(&mmdb_dir, 2, false).is_ok());
-        assert!(validate_shard_layout(&mmdb_dir, 2, true).is_ok());
+        assert!(check(2, false).is_ok());
+        assert!(check(2, true).is_ok());
 
-        // More shard dirs than requested: rejected unconditionally
-        // (fewer handles than dirs would re-route prefixes).
-        assert!(validate_shard_layout(&mmdb_dir, 1, false).is_err());
-        assert!(validate_shard_layout(&mmdb_dir, 1, true).is_err());
+        // Marker present + missing shards: damage, refused.
+        assert!(check(4, true).is_err());
+
+        // More shard dirs than expected = unexpected names: refused
+        // unconditionally (shard_01 is not in a 1-shard set).
+        assert!(check(1, false).is_err());
+        assert!(check(1, true).is_err());
+
+        // Non-directory entry occupying an expected name: refused.
+        fs::write(mmdb_dir.join("shard_02"), "junk").unwrap();
+        assert!(check(3, false).is_err());
+        // Misnamed shard entry: refused even when the count matches.
+        fs::remove_file(mmdb_dir.join("shard_02")).unwrap();
+        fs::create_dir_all(mmdb_dir.join("shard_zz")).unwrap();
+        assert!(check(2, false).is_err());
 
         let _ = fs::remove_dir_all(&base);
     }

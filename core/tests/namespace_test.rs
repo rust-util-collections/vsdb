@@ -5,7 +5,7 @@
 //! sub-scenarios run sequentially inside one body (same pattern as the
 //! other integration tests).
 
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 use vsdb_core::{
     DEFAULT_NS_ID, InstanceId, Namespace, NamespaceOpts, basic::mapx_raw::MapxRaw,
     vsdb_ns_destroy, vsdb_ns_list, vsdb_ns_relocate,
@@ -145,12 +145,10 @@ fn namespace_lifecycle() {
         .is_err()
     );
 
-    // Failed-create rollback: point the root at an existing FILE, so
-    // validation passes (absolute, non-overlapping) but the engine
-    // open fails on create_dir_all. The registry must not retain the
-    // burnt entry.
+    // Failed-create, pre-registry path: a FILE at the root path fails
+    // the adoptable check before anything is persisted.
     let blocker = format!("{dir}_blocker");
-    std::fs::write(&blocker, b"x").unwrap();
+    fs::write(&blocker, b"x").unwrap();
     let before: Vec<_> = vsdb_ns_list().unwrap().iter().map(|i| i.id).collect();
     assert!(
         Namespace::create_with(NamespaceOpts {
@@ -161,13 +159,51 @@ fn namespace_lifecycle() {
     );
     let after: Vec<_> = vsdb_ns_list().unwrap().iter().map(|i| i.id).collect();
     assert_eq!(before, after);
-    std::fs::remove_file(&blocker).ok();
+    fs::remove_file(&blocker).ok();
+
+    // Failed-create, POST-registry rollback path: the root passes
+    // validation (absent, under a read-only parent) but the engine
+    // open fails on create_dir_all — the just-persisted entry must be
+    // rolled back, the root left clean, and the same path immediately
+    // retryable once the obstacle is gone.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let ro_parent = format!("{dir}_ro_parent");
+        fs::create_dir_all(&ro_parent).unwrap();
+        fs::set_permissions(&ro_parent, fs::Permissions::from_mode(0o555)).unwrap();
+        let target = format!("{ro_parent}/ns_root");
+        let before: Vec<_> = vsdb_ns_list().unwrap().iter().map(|i| i.id).collect();
+        let attempt = Namespace::create_with(NamespaceOpts {
+            path: Some(PathBuf::from(&target)),
+            shards: 1,
+            ..Default::default()
+        });
+        if attempt.is_err() {
+            // (Running as root would let the create succeed — only
+            // assert the rollback contract when the failure occurred.)
+            let after: Vec<_> = vsdb_ns_list().unwrap().iter().map(|i| i.id).collect();
+            assert_eq!(before, after, "failed create must roll back");
+            assert!(!PathBuf::from(&target).exists(), "root left clean");
+            // Retry succeeds once the parent is writable again.
+            fs::set_permissions(&ro_parent, fs::Permissions::from_mode(0o755)).unwrap();
+            let retried = Namespace::create_with(NamespaceOpts {
+                path: Some(PathBuf::from(&target)),
+                shards: 1,
+                ..Default::default()
+            })
+            .unwrap();
+            assert_eq!(retried.path(), std::path::Path::new(&target));
+        } else {
+            fs::set_permissions(&ro_parent, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
 
     // Adopting an existing non-empty dir as an explicit root is refused
     // (foreign prefixes have unknown provenance; destroy would take the
     // dir's other contents with it).
     let occupied = format!("{dir}_occupied");
-    std::fs::create_dir_all(format!("{occupied}/stuff")).unwrap();
+    fs::create_dir_all(format!("{occupied}/stuff")).unwrap();
     assert!(
         Namespace::create_with(NamespaceOpts {
             path: Some(PathBuf::from(&occupied)),
@@ -177,7 +213,7 @@ fn namespace_lifecycle() {
     );
     // An existing but EMPTY dir is fine (e.g. a fresh mount point).
     let empty_mnt = format!("{dir}_mnt");
-    std::fs::create_dir_all(&empty_mnt).unwrap();
+    fs::create_dir_all(&empty_mnt).unwrap();
     let mnt_ns = Namespace::create_with(NamespaceOpts {
         path: Some(PathBuf::from(&empty_mnt)),
         shards: 1,
@@ -193,12 +229,15 @@ fn namespace_lifecycle() {
         })
         .is_err()
     );
-    std::fs::remove_dir_all(&occupied).ok();
+    fs::remove_dir_all(&occupied).ok();
 
     // ---- cross-namespace handles coexist in one container ----
     let all: Vec<MapxRaw> = vec![m0, m1, m2, m4];
     let hits = all.iter().filter(|m| m.get(b"k").is_some()).count();
     assert_eq!(hits, 2);
 
-    std::fs::remove_dir_all(&dir).ok();
+    fs::remove_dir_all(&dir).ok();
+    // Sibling scratch dirs created by the sub-scenarios above.
+    fs::remove_dir_all(format!("{dir}_mnt")).ok();
+    fs::remove_dir_all(format!("{dir}_ro_parent")).ok();
 }

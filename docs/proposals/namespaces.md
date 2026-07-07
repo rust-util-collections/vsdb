@@ -433,8 +433,8 @@ registries), which already works today. Consequences:
 - **Destroy / relocate** require the target namespace to be *not open in this
   process* (checked against the in-process open-namespace table): update the
   registry, then act (destroy: remove registry entry → delete tree; a crash
-  in between leaves an orphaned-but-harmless dir, re-attachable or manually
-  removable).
+  in between leaves an orphaned-but-harmless dir, manually removable —
+  re-attachment is excluded along with all foreign-root adoption, §9).
 - Opening any non-default namespace materializes the registry under the
   default base dir and therefore freezes it (same rule as today's derived
   dirs); programs that want a custom default base must call

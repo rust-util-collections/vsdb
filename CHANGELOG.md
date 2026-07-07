@@ -37,7 +37,28 @@ registry: `docs/audit.md`).
   can no longer make `destroy` skip a genuinely owned child.
 - **`InstanceId` canonical form**: `"42@0"` and wire-level
   `Some(DEFAULT_NS_ID)` fold to `ns: None` at parse/deserialize time —
-  `Eq`/`Hash` are reliable for API-obtained tokens.
+  `Eq`/`Hash` are reliable for API-obtained tokens; new canonical
+  constructor `InstanceId::new(map_id, ns)`.
+- **Shard-layout lifecycle hardening** (follow-up review of the initial
+  completion-aware rule): brand-new roots raise a durable
+  `__SYSTEM__/__initializing__` sentinel before the first shard dir and
+  retire it after the format marker — resumability now requires proof.
+  A marker-present root missing shard dirs (even all of them) is
+  damage and refused, never silently reinitialized; a partial set with
+  neither sentinel nor marker (e.g. a corrupted legacy base) is
+  refused instead of "resumed" into silent data loss; the scan checks
+  the exact expected shard set (misnamed/non-dir `shard_*` entries are
+  rejected, not counted).
+- **Create rollback also clears the root**: a failed `create` leaves an
+  explicit path immediately retryable (pre-existing empty dirs are
+  emptied, never deleted) and no unregistered residue under derived
+  roots.
+- **Registry robustness**: an out-of-range shard count in a (damaged)
+  registry entry is refused cleanly instead of reaching `prefix % 0`;
+  `vsdb_ns_list` freezes the base dir like every other registry reader.
+- **`flush_all_open` no longer holds the namespace table lock across
+  engine flushes**; `Namespace::meta_path` is public and is the single
+  source of truth for instance-meta naming (strata reuses it).
 
 ### Documentation
 

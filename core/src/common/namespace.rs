@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
     collections::HashMap,
-    fmt, fs,
+    fmt, fs, io,
     path::{Component, Path, PathBuf},
     str::FromStr,
     sync::{Arc, LazyLock},
@@ -105,6 +105,18 @@ pub struct InstanceId {
 struct InstanceIdWire {
     map_id: u64,
     ns: Option<NsId>,
+}
+
+impl InstanceId {
+    /// Canonical constructor: `DEFAULT_NS_ID` folds to `ns: None`.
+    /// The single construction point handles use — keeps canonical-form
+    /// logic out of every call site.
+    pub fn new(map_id: u64, ns: NsId) -> Self {
+        Self {
+            map_id,
+            ns: (ns != DEFAULT_NS_ID).then_some(ns),
+        }
+    }
 }
 
 impl From<InstanceIdWire> for InstanceId {
@@ -263,9 +275,7 @@ fn registry_path() -> PathBuf {
 fn load_registry() -> Result<RegistryFile> {
     match fs::read(registry_path()) {
         Ok(bytes) => Ok(postcard::from_bytes(&bytes)?),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            Ok(RegistryFile::default())
-        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(RegistryFile::default()),
         Err(e) => Err(e.into()),
     }
 }
@@ -383,7 +393,8 @@ fn validate_explicit_root(
     Ok(())
 }
 
-/// A brand-new explicit root must be nonexistent or an empty dir.
+/// A brand-new explicit root must be nonexistent or an empty dir;
+/// returns whether it pre-existed (as an empty dir).
 ///
 /// Adopting an existing non-empty directory is refused: a foreign
 /// dataset's prefixes have unknown provenance (the allocator ceiling
@@ -391,9 +402,9 @@ fn validate_explicit_root(
 /// collide with the adopted data — and `destroy` would later delete
 /// whatever else lived there. Importing/attaching foreign roots is an
 /// explicit non-goal (see docs/proposals/namespaces.md §9).
-fn ensure_root_adoptable(root: &Path) -> Result<()> {
+fn ensure_root_adoptable(root: &Path) -> Result<bool> {
     match fs::read_dir(root) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
         Ok(mut entries) => {
             if entries.next().is_some() {
                 Err(ns_err(format!(
@@ -402,10 +413,34 @@ fn ensure_root_adoptable(root: &Path) -> Result<()> {
                     root.display()
                 )))
             } else {
-                Ok(())
+                Ok(true)
             }
         }
         Err(e) => Err(e.into()),
+    }
+}
+
+/// Best-effort removal of a root a failed `create` (partially) filled,
+/// so the same path is immediately retryable and no unregistered
+/// VSDB-owned residue survives. Safe by construction: the adoptable
+/// check proved the root was absent or empty before we touched it —
+/// everything inside is ours. The dir itself is removed only if we
+/// created it (`preexisted == false`), so a user-supplied mount point
+/// is emptied, never deleted.
+fn cleanup_failed_root(root: &Path, preexisted: bool) {
+    if preexisted {
+        if let Ok(entries) = fs::read_dir(root) {
+            for e in entries.flatten() {
+                let p = e.path();
+                let _ = if p.is_dir() {
+                    fs::remove_dir_all(&p)
+                } else {
+                    fs::remove_file(&p)
+                };
+            }
+        }
+    } else {
+        let _ = fs::remove_dir_all(root);
     }
 }
 
@@ -461,9 +496,12 @@ impl Namespace {
         let _g = REGISTRY_LOCK.lock();
         let mut reg = load_registry()?;
 
+        // Derived roots (id-named, fresh id) never pre-exist; explicit
+        // roots may pre-exist as an empty dir (e.g. a mount point).
+        let mut root_preexisted = false;
         if let Some(p) = &opts.path {
             validate_explicit_root(&base, &reg, p)?;
-            ensure_root_adoptable(p)?;
+            root_preexisted = ensure_root_adoptable(p)?;
         }
 
         let id = reg.next_id;
@@ -502,6 +540,12 @@ impl Namespace {
                 // and reclaimable via `destroy`.
                 reg.entries.retain(|r| r.id != rec.id);
                 let _ = save_registry(&reg);
+                // …and clear whatever the failed open left under the
+                // root: an explicit path stays immediately retryable
+                // (the adoptable check would otherwise refuse the now
+                // non-empty dir forever), and a derived root leaves no
+                // unregistered, never-reusable VSDB-owned residue.
+                cleanup_failed_root(&root, root_preexisted);
                 Err(e)
             }
         }
@@ -599,10 +643,11 @@ impl Namespace {
         self.system_dir().join("__instance_meta__")
     }
 
-    /// The meta file path for `map_id` inside this namespace's tree.
-    /// (Identical to the legacy `vsdb_meta_path` for the default
-    /// namespace, whose root IS the base dir.)
-    pub(crate) fn meta_path(&self, map_id: u64) -> PathBuf {
+    /// The meta file path for `map_id` inside this namespace's tree —
+    /// the single source of truth for instance-meta naming (identical
+    /// to the legacy `vsdb_meta_path` for the default namespace, whose
+    /// root IS the base dir).
+    pub fn meta_path(&self, map_id: u64) -> PathBuf {
         let mut p = self.meta_dir();
         p.push(format!("{:016x}", map_id));
         p
@@ -623,9 +668,20 @@ impl Namespace {
 /// Opens the engine for `rec` and caches the handle. Caller holds
 /// [`REGISTRY_LOCK`] (serializes double-opens).
 fn open_record_locked(_base: &Path, rec: &NsRecord, root: &Path) -> Result<Namespace> {
+    // Registry entries are written pre-clamped, so an out-of-range
+    // count means corruption or hand-editing. Refuse cleanly here —
+    // `shards == 0` would otherwise reach `prefix % 0` (a panic) on
+    // the first routed operation.
+    let shards = rec.shards as usize;
+    if !(1..=64).contains(&shards) {
+        return Err(ns_err(format!(
+            "registry entry for namespace {} carries an invalid shard \
+             count ({}); the registry file is damaged",
+            rec.id, rec.shards
+        )));
+    }
     let sizing = sizing_for(rec.mem_budget_mb.map(|v| v as usize));
-    let engine =
-        Engine::open_at(root, rec.shards as usize, sizing).map_err(VsdbError::from)?;
+    let engine = Engine::open_at(root, shards, sizing).map_err(VsdbError::from)?;
     let ns = Namespace(Arc::new(NsInner {
         id: rec.id,
         path: root.to_path_buf(),
@@ -639,6 +695,10 @@ fn open_record_locked(_base: &Path, rec: &NsRecord, root: &Path) -> Result<Names
 
 /// Lists every registered (non-default) namespace.
 pub fn vsdb_ns_list() -> Result<Vec<NsInfo>> {
+    // Reading the registry materializes base-dir-derived paths — same
+    // freeze contract as open/destroy/relocate, so the returned roots
+    // cannot be split from the universe by a later `vsdb_set_base_dir`.
+    vsdb_freeze_base_dir();
     let base = vsdb_get_base_dir();
     let _g = REGISTRY_LOCK.lock();
     let reg = load_registry()?;
@@ -687,7 +747,7 @@ pub fn vsdb_ns_destroy(id: NsId) -> Result<()> {
     save_registry(&reg)?;
     match fs::remove_dir_all(&root) {
         Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e.into()),
     }
 }
@@ -755,8 +815,13 @@ impl RegistryFile {
 
 /// Flushes every open non-default namespace (the default engine is
 /// flushed separately by `vsdb_flush`).
+///
+/// Handles are cloned out first: engine flushes can take seconds, and
+/// holding the table lock across them would block every concurrent
+/// `Namespace::open`/meta restore.
 pub(crate) fn flush_all_open() {
-    for ns in OPEN_NAMESPACES.lock().values() {
+    let handles: Vec<Namespace> = OPEN_NAMESPACES.lock().values().cloned().collect();
+    for ns in handles {
         ns.flush();
     }
 }

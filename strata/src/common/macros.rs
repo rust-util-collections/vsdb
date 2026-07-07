@@ -130,11 +130,10 @@ macro_rules! define_map_wrapper {
             pub fn instance_id(&self) -> $crate::common::InstanceId {
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(self.as_bytes());
-                let ns_id = self.namespace().id();
-                $crate::common::InstanceId {
-                    map_id: u64::from_le_bytes(bytes),
-                    ns: (ns_id != $crate::common::DEFAULT_NS_ID).then_some(ns_id),
-                }
+                $crate::common::InstanceId::new(
+                    u64::from_le_bytes(bytes),
+                    self.namespace().id(),
+                )
             }
 
             /// Persists this instance's metadata to disk (in its owning

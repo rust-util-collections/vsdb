@@ -16,6 +16,119 @@
 
 ## Resolved
 
+### [HIGH] namespace: unvalidated registry shard count can panic on `prefix % 0`
+- **Where**: `core/src/common/namespace.rs` (`open_record_locked`)
+- **Resolution** *(third-party review)*: registry entries are written
+  pre-clamped, so an out-of-range `shards` means file corruption or
+  hand-editing; `open_record_locked` now refuses `0` / `>64` with a clean
+  "registry damaged" error instead of letting `shards == 0` reach
+  `prefix % 0` (a release-mode panic) on the first routed operation.
+
+### [MEDIUM] namespace: `vsdb_ns_list` missing the base-dir freeze
+- **Where**: `core/src/common/namespace.rs` (`vsdb_ns_list`)
+- **Resolution** *(third-party review)*: `list` reads the registry and
+  materializes base-derived root paths — it now freezes the base dir first,
+  the same contract as open/destroy/relocate, so returned roots cannot be
+  split from the universe by a later `vsdb_set_base_dir`.
+
+### [LOW] identity: `InstanceId` construction duplicated at call sites
+- **Where**: `core/src/common/namespace.rs` (`InstanceId::new`),
+  `core/src/basic/mapx_raw/mod.rs`, `strata/src/common/macros.rs`
+- **Resolution** *(third-party review; reported as "fields silently
+  dropped", which is inaccurate — struct literals are exhaustive, so a new
+  field is a compile error — but the duplication was real)*: added the
+  canonical constructor `InstanceId::new(map_id, ns)` (folds
+  `DEFAULT_NS_ID` to `None`) and routed both handle-side construction
+  sites through it.
+
+### [LOW] strata: instance-meta path building duplicated across the crate boundary
+- **Where**: `strata/src/common/mod.rs`, `core/src/common/namespace.rs`
+- **Resolution** *(third-party review)*: `Namespace::meta_path` is now
+  `pub` (the single source of truth for meta naming) and strata's
+  `save_instance_meta`/`load_instance_meta` call it instead of re-joining
+  `meta_dir()` + a hand-formatted name.
+
+### [LOW] engine: `write_file_durable` lock discipline was implicit
+- **Where**: `core/src/common/engine/mmdb.rs` (`write_file_durable`)
+- **Resolution** *(third-party review)*: the caller-must-hold-the-class-lock
+  contract (SYS_META_LOCK for allocator/marker/sentinel files,
+  REGISTRY_LOCK for the registry) is now documented on the function.
+  Internalizing the lock is not possible: several callers already hold it
+  and parking_lot mutexes are non-reentrant.
+
+### [LOW] namespace: `flush_all_open` held the table lock across engine flushes
+- **Where**: `core/src/common/namespace.rs` (`flush_all_open`)
+- **Resolution** *(third-party review)*: handles are cloned out first;
+  flushes (which can take seconds) no longer block concurrent
+  `Namespace::open`/meta restores on `OPEN_NAMESPACES`.
+
+### [LOW] tests: `namespace_lifecycle` leaked sibling scratch dirs
+- **Where**: `core/tests/namespace_test.rs`
+- **Resolution** *(third-party review)*: `{dir}_mnt` and `{dir}_ro_parent`
+  are removed in the teardown alongside the main dir.
+
+### [HIGH] engine: marker-present roots with missing shard dirs can be silently reinitialized
+- **Where**: `core/src/common/engine/mmdb.rs` (`validate_shard_layout`)
+- **Resolution**: Marker-present validation is now strict equality on the
+  exact expected shard set — including ZERO shard dirs (e.g. a manually
+  deleted `mmdb/`), which previously matched the "fresh root" arm and was
+  silently reinitialized over. Damage is refused loudly. Pinned by
+  `shard_layout_lifecycle_states`.
+
+### [HIGH] engine: corrupt marker-absent legacy roots with missing shards were treated as resumable
+- **Where**: `core/src/common/engine/mmdb.rs` (`INIT_SENTINEL_REL_PATH`, `open_at`, `validate_shard_layout`)
+- **Resolution**: "Resumable" now requires proof, not inference: brand-new
+  roots raise a durable `__SYSTEM__/__initializing__` sentinel BEFORE the
+  first shard dir exists (retired after the format marker lands). Partial
+  shard sets are resumable only under the sentinel; a partial set with
+  neither sentinel nor marker (e.g. a legacy 16-shard base missing dirs) is
+  damage — "resuming" it would present silent data loss as success — and is
+  refused with destroy-and-recreate guidance. Pinned by
+  `shard_layout_lifecycle_states`.
+
+### [MEDIUM] engine: shard validation counted prefixes instead of the exact shard set
+- **Where**: `core/src/common/engine/mmdb.rs` (`scan_shard_layout`)
+- **Resolution**: The scan now checks the exact expected names
+  (`shard_00..shard_{N-1}`, each a directory) and rejects any unexpected
+  `shard_*` entry (wrong index, misnamed, or non-directory) — `shard_backup`
+  + `shard_00` can no longer masquerade as a complete 2-shard set.
+
+### [MEDIUM] namespace: failed explicit create could leave an unretryable root
+- **Where**: `core/src/common/namespace.rs` (`cleanup_failed_root`)
+- **Resolution**: The create rollback now also clears the root the failed
+  open (partially) filled. Safe by construction: the adoptable check proved
+  the root was absent or empty beforehand — everything inside is ours. A
+  pre-existing empty dir (mount point) is emptied but kept; a dir we created
+  is removed. The same path is immediately retryable. Covered by the
+  read-only-parent retry sub-scenario in `namespace_lifecycle`.
+
+### [MEDIUM] namespace: derived-root create failure could leave unregistered VSDB-owned residue
+- **Where**: `core/src/common/namespace.rs` (`cleanup_failed_root`)
+- **Resolution**: Same cleanup applies to derived roots
+  (`__NAMESPACES__/{id}` is always VSDB-created): after rollback nothing
+  unreachable survives under an id that will never be issued again.
+
+### [LOW] docs: RFC still called destroy-crash orphan roots "re-attachable"
+- **Where**: `docs/proposals/namespaces.md` §4.7
+- **Resolution**: Reworded — orphaned dirs are manually removable;
+  re-attachment is excluded along with all foreign-root adoption (§9).
+
+### [LOW] tests: rollback test missed the post-registry-save rollback path
+- **Where**: `core/tests/namespace_test.rs`
+- **Resolution**: The FILE-blocker case now documents that it exercises the
+  pre-registry refusal; a new unix sub-scenario (read-only parent) forces the
+  failure AFTER the registry save, asserting rollback, a clean root, and a
+  successful retry of the same path once writable.
+
+### [LOW] tests: repeated inline `std::fs` paths
+- **Where**: `core/tests/namespace_test.rs`
+- **Resolution**: `use std::{fs, path::PathBuf};` — inline paths replaced.
+
+### [LOW] namespace: repeated inline `ErrorKind::NotFound` path
+- **Where**: `core/src/common/namespace.rs`
+- **Resolution**: `io` added to the std import group; all three call sites
+  use `io::ErrorKind::NotFound`.
+
 ### [CRITICAL] namespace/engine: namespace open can run before the default allocator base is frozen
 - **Where**: `core/src/common/namespace.rs` (`open`, `vsdb_ns_destroy`, `vsdb_ns_relocate`)
 - **Resolution**: `Namespace::open` (and the admin fns) now call
@@ -57,9 +170,12 @@
   completes initialization — safe, no allocation ever targeted the root);
   marker present + any mismatch, or `existing > shards` in any state, stays
   rejected. The pre-v16 default base (marker-less, exactly 16/16) takes the
-  equal path. Pinned by `shard_layout_completion_aware`. (Note: the original
-  finding's "cannot be destroyed" clause was wrong — destroy never opens the
-  engine — but the unreopenable-and-uncompletable half remains valid.)
+  equal path. A follow-up review found remaining marker-present,
+  corrupt-legacy, and exact-shard-set edge cases; those are resolved by the
+  initialization-sentinel redesign (see the two HIGH entries and the MEDIUM
+  exact-set entry above) — resumability is now gated on explicit proof, and
+  the original completion-aware test was superseded by
+  `shard_layout_lifecycle_states`.
 
 ### [HIGH] dagmap: parented construction can split one DAG across namespaces
 - **Where**: `strata/src/dagmap/raw/mod.rs`, `strata/src/dagmap/rawkey/mod.rs`
@@ -109,10 +225,9 @@
   registry entry back inline (under the already-held `REGISTRY_LOCK`) before
   propagating the error — a failed `create` leaves no registry residue.
   `next_id` deliberately stays advanced (ids are never reused; a burnt id is
-  free). A failed rollback write can still leave a visible registry entry;
-  the partial-shard crash/idempotence window is tracked separately under
-  `## Open`. Covered by `namespace_lifecycle` (failed-create rollback
-  sub-scenario).
+  free). Follow-up review found that the rollback can leave newly-created root
+  contents behind and that the current test no longer exercises the post-save
+  rollback arm; those narrower regressions are tracked under `## Open`.
 
 ### [LOW] engine: missing `// SAFETY:` comment on inner unsafe block in `from_prefix_slice`
 - **Where**: `core/src/common/engine/mod.rs` (`from_prefix_slice`)
@@ -123,6 +238,25 @@
 ---
 
 ## Won't Fix
+
+### [REJECTED] engine: "`OnceLock::get_or_init` can run `alloc_prefix` twice under concurrent reads"
+- **Where**: `core/src/common/engine/mod.rs` (`Mapx::prefix_bytes`)
+- **What**: Third-party review claimed concurrent shared-handle reads could
+  both enter the `OnceLock` initializer and leak a prefix id.
+- **Reason**: False — `std::sync::OnceLock::get_or_init` documents that when
+  many threads call it concurrently, **exactly one** initializing closure
+  runs (competing callers block until it completes). No double allocation is
+  possible; a leaked id would in any case be waste, not corruption.
+
+### [REJECTED] namespace: "`DEFAULT_NS_ID` guard copy-pasted in 3 admin functions"
+- **Where**: `core/src/common/namespace.rs` (`open`, `vsdb_ns_destroy`, `vsdb_ns_relocate`)
+- **What**: Third-party review proposed extracting the three `id ==
+  DEFAULT_NS_ID` guards into a shared helper.
+- **Reason**: The three guards have deliberately different semantics — `open`
+  short-circuits to `default_ns()` (success), destroy/relocate return
+  distinct, context-specific errors with actionable guidance. A shared
+  helper would need flags/closures to reproduce the divergence: DRY for
+  DRY's sake, net readability loss for three 3-line guards.
 
 ### [REJECTED] dagmap: "public `Orphan::get_mut()` allows cycle creation"
 - **Where**: `strata/src/dagmap/raw/mod.rs` (`parent` field), `strata/src/basic/orphan/mod.rs` (`get_mut`)
