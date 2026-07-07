@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v16.0.2]
+
+### Changed
+
+- **The test suite runs in parallel** — `--test-threads=1` is gone
+  (RFC P2). Isolation comes from globally-unique prefixes (every
+  collection instance owns a disjoint key range, in any namespace), so
+  data-level cross-test interference is impossible by construction.
+  Enabling changes:
+  - lib tests no longer call `vsdb_set_base_dir` per test (racing
+    `env::set_var` is unsound); they use the default base, wiped by
+    `make test` between profiles.
+  - multi-test integration binaries serialize their base-dir pick
+    behind a `Once`.
+  - global-allocator assertions are race-tolerant: they bound the
+    test's OWN issued prefixes against monotone global state instead
+    of demanding exact equality between racy snapshots.
+
 ## [v16.0.1]
 
 Post-release audit fixes (all findings from the v16.0.0 deep review;

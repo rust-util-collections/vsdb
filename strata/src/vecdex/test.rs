@@ -2,11 +2,6 @@ use super::*;
 use distance::{Cosine, InnerProduct, L2};
 use std::collections::{HashSet, VecDeque};
 
-fn setup() {
-    let dir = format!("/tmp/vsdb_vecdex_test/{}", rand::random::<u128>());
-    let _ = vsdb_core::vsdb_set_base_dir(&dir);
-}
-
 fn assert_bidirectional<K, D, S>(idx: &VecDex<K, D, S>)
 where
     K: KeyEnDe + ValueEnDe + Clone + Eq,
@@ -28,7 +23,6 @@ where
 
 #[test]
 fn basic_insert_search_l2() {
-    setup();
     let cfg = HnswConfig {
         dim: 3,
         ..Default::default()
@@ -49,7 +43,6 @@ fn basic_insert_search_l2() {
 
 #[test]
 fn basic_insert_search_cosine() {
-    setup();
     let cfg = HnswConfig {
         dim: 3,
         ..Default::default()
@@ -66,7 +59,6 @@ fn basic_insert_search_cosine() {
 
 #[test]
 fn basic_insert_search_inner_product() {
-    setup();
     let cfg = HnswConfig {
         dim: 3,
         ..Default::default()
@@ -84,7 +76,6 @@ fn basic_insert_search_inner_product() {
 
 #[test]
 fn search_empty_index() {
-    setup();
     let cfg = HnswConfig {
         dim: 4,
         ..Default::default()
@@ -96,7 +87,6 @@ fn search_empty_index() {
 
 #[test]
 fn dimension_mismatch() {
-    setup();
     let cfg = HnswConfig {
         dim: 3,
         ..Default::default()
@@ -109,7 +99,6 @@ fn dimension_mismatch() {
 
 #[test]
 fn remove_and_search() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()
@@ -133,7 +122,6 @@ fn remove_and_search() {
 
 #[test]
 fn remove_nonexistent() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()
@@ -145,7 +133,6 @@ fn remove_nonexistent() {
 
 #[test]
 fn duplicate_key_update() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()
@@ -166,7 +153,6 @@ fn duplicate_key_update() {
 
 #[test]
 fn save_meta_restore() {
-    setup();
     let cfg = HnswConfig {
         dim: 3,
         ..Default::default()
@@ -189,7 +175,6 @@ fn save_meta_restore() {
 /// silently return wrong neighbors — it must fail loudly instead.
 #[test]
 fn from_meta_rejects_wrong_metric_or_key() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()
@@ -205,7 +190,6 @@ fn from_meta_rejects_wrong_metric_or_key() {
 
 #[test]
 fn clear_resets_everything() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()
@@ -227,7 +211,6 @@ fn clear_resets_everything() {
 
 #[test]
 fn clear_preserves_ef_search_across_restore() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()
@@ -259,7 +242,6 @@ fn clear_preserves_ef_search_across_restore() {
 
 #[test]
 fn recall_random_vectors() {
-    setup();
     let cfg = HnswConfig {
         dim: 32,
         m: 16,
@@ -320,7 +302,6 @@ fn recall_random_vectors() {
 
 #[test]
 fn filtered_search_basic() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()
@@ -346,7 +327,6 @@ fn filtered_search_basic() {
 
 #[test]
 fn filtered_search_no_match() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()
@@ -396,7 +376,6 @@ fn filtered_search_layer_uses_visit_budget() {
 
 #[test]
 fn filtered_search_respects_k() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()
@@ -425,7 +404,6 @@ fn filtered_search_respects_k() {
 
 #[test]
 fn f64_basic() {
-    setup();
     let cfg = HnswConfig {
         dim: 3,
         ..Default::default()
@@ -443,7 +421,6 @@ fn f64_basic() {
 
 #[test]
 fn compact_restores_search() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()
@@ -485,7 +462,6 @@ fn compact_restores_search() {
 
 #[test]
 fn insert_batch_works() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()
@@ -503,7 +479,6 @@ fn insert_batch_works() {
 
 #[test]
 fn k_larger_than_index_size() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()
@@ -522,7 +497,6 @@ fn k_larger_than_index_size() {
 
 #[test]
 fn remove_entry_point_preserves_max_layer() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         m: 4,
@@ -559,7 +533,6 @@ fn remove_entry_point_preserves_max_layer() {
 
 #[test]
 fn single_node_duplicate_key_update() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()
@@ -583,7 +556,6 @@ fn single_node_duplicate_key_update() {
 
 #[test]
 fn update_entry_point_vector() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()
@@ -608,7 +580,6 @@ fn update_entry_point_vector() {
 
 #[test]
 fn consecutive_entry_point_removals() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         m: 4,
@@ -641,7 +612,6 @@ fn consecutive_entry_point_removals() {
 
 #[test]
 fn remove_all_then_reinsert() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()
@@ -670,7 +640,6 @@ fn remove_all_then_reinsert() {
 
 #[test]
 fn graph_connectivity_after_deletions() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         m: 8,
@@ -728,7 +697,6 @@ fn graph_connectivity_after_deletions() {
 
 #[test]
 fn compact_improves_or_maintains_recall() {
-    setup();
     let dim = 16;
     let cfg = HnswConfig {
         dim,
@@ -786,7 +754,6 @@ fn compact_improves_or_maintains_recall() {
 
 #[test]
 fn recall_large_scale() {
-    setup();
     let dim = 32;
     let cfg = HnswConfig {
         dim,
@@ -833,7 +800,6 @@ fn recall_large_scale() {
 
 #[test]
 fn search_ef_variants() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()
@@ -861,7 +827,6 @@ fn search_ef_variants() {
 
 #[test]
 fn cosine_zero_vector() {
-    setup();
     let cfg = HnswConfig {
         dim: 3,
         ..Default::default()
@@ -880,7 +845,6 @@ fn cosine_zero_vector() {
 
 #[test]
 fn compact_empty_noop() {
-    setup();
     let cfg = HnswConfig {
         dim: 3,
         ..Default::default()
@@ -894,7 +858,6 @@ fn compact_empty_noop() {
 
 #[test]
 fn minimum_m_config() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         m: 2,
@@ -916,7 +879,6 @@ fn minimum_m_config() {
 #[test]
 #[should_panic(expected = "m must be >= 2")]
 fn m_one_panics() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         m: 1,
@@ -931,7 +893,6 @@ fn m_one_panics() {
 
 #[test]
 fn serde_roundtrip() {
-    setup();
     let cfg = HnswConfig {
         dim: 3,
         ..Default::default()
@@ -952,7 +913,6 @@ fn serde_roundtrip() {
 
 #[test]
 fn get_and_contains_key() {
-    setup();
     let cfg = HnswConfig {
         dim: 3,
         ..Default::default()
@@ -970,7 +930,6 @@ fn get_and_contains_key() {
 
 #[test]
 fn keys_and_iter() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()
@@ -991,7 +950,6 @@ fn keys_and_iter() {
 
 #[test]
 fn set_ef_search_works() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         ef_search: 50,
@@ -1008,7 +966,6 @@ fn set_ef_search_works() {
 
 #[test]
 fn restore_after_save_meta() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()
@@ -1025,7 +982,6 @@ fn restore_after_save_meta() {
 
 #[test]
 fn restore_without_explicit_save_is_consistent() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()
@@ -1052,7 +1008,6 @@ fn restore_without_explicit_save_is_consistent() {
 
 #[test]
 fn hdr_meta_is_create_time_constant() {
-    setup();
     let cfg = HnswConfig {
         dim: 4,
         ..Default::default()
@@ -1077,7 +1032,6 @@ fn hdr_meta_is_create_time_constant() {
 
 #[test]
 fn serde_roundtrip_preserves_graph_state() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()
@@ -1102,7 +1056,6 @@ fn serde_roundtrip_preserves_graph_state() {
 
 #[test]
 fn node_ids_are_never_reused_across_restores() {
-    setup();
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()

@@ -16,13 +16,24 @@ fn gen_sample(idx: usize) -> SampleBlock {
     }
 }
 
+/// One process-wide base-dir pick: `vsdb_set_base_dir` publishes via
+/// `env::set_var`, which is unsound to race — serialize it behind a
+/// `Once` so parallel tests in this binary cannot touch the env
+/// concurrently (losers reuse the winner's dir; data stays disjoint
+/// via globally-unique prefixes).
+fn setup() {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let _ =
+            vsdb_set_base_dir(format!("/tmp/vsdb_testing/{}", rand::random::<u64>()));
+    });
+}
+
 #[test]
 fn basic_cases() {
+    setup();
     let cnt = 200;
-    info_omit!(vsdb_set_base_dir(format!(
-        "/tmp/vsdb_testing/{}",
-        rand::random::<u64>()
-    )));
 
     let hdr = {
         let mut hdr_i = MapxOrd::new();
@@ -86,6 +97,7 @@ fn basic_cases() {
 
 #[test]
 fn negative_int_range() {
+    setup();
     macro_rules! run {
         ($int: ty) => {
             let mut hdr = MapxOrd::<$int, $int>::new();

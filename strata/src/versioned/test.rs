@@ -2,18 +2,12 @@ use super::{NO_COMMIT, map::VerMap};
 use crate::common::error::VsdbError;
 use std::ops::Bound;
 
-fn setup() {
-    let dir = format!("/tmp/vsdb_versioned_test/{}", rand::random::<u128>());
-    let _ = vsdb_core::vsdb_set_base_dir(&dir);
-}
-
 // =====================================================================
 // Basic CRUD
 // =====================================================================
 
 #[test]
 fn basic_insert_get() {
-    setup();
     let mut m: VerMap<u32, String> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &"hello".into()).unwrap();
@@ -23,7 +17,6 @@ fn basic_insert_get() {
 
 #[test]
 fn basic_remove() {
-    setup();
     let mut m: VerMap<u32, String> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &"hello".into()).unwrap();
@@ -33,7 +26,6 @@ fn basic_remove() {
 
 #[test]
 fn contains_key() {
-    setup();
     let mut m: VerMap<u32, u64> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &42, &999).unwrap();
@@ -43,7 +35,6 @@ fn contains_key() {
 
 #[test]
 fn insert_overwrite() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &100).unwrap();
@@ -53,7 +44,6 @@ fn insert_overwrite() {
 
 #[test]
 fn remove_nonexistent_key() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &100).unwrap();
@@ -65,7 +55,6 @@ fn remove_nonexistent_key() {
 
 #[test]
 fn get_on_empty_map() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     assert_eq!(m.get(main, &1).unwrap(), None);
@@ -73,7 +62,6 @@ fn get_on_empty_map() {
 
 #[test]
 fn contains_key_on_empty_map() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     assert!(!m.contains_key(main, &1).unwrap());
@@ -81,7 +69,6 @@ fn contains_key_on_empty_map() {
 
 #[test]
 fn get_on_invalid_branch() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
     assert!(m.get(999, &1).is_err());
@@ -89,7 +76,6 @@ fn get_on_invalid_branch() {
 
 #[test]
 fn insert_on_invalid_branch() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
     assert!(m.insert(999, &1, &1).is_err());
@@ -97,7 +83,6 @@ fn insert_on_invalid_branch() {
 
 #[test]
 fn many_keys_crud() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     for i in 0..200u32 {
@@ -125,7 +110,6 @@ fn many_keys_crud() {
 
 #[test]
 fn commit_and_rollback() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -144,7 +128,6 @@ fn commit_and_rollback() {
 
 #[test]
 fn discard_uncommitted() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -160,7 +143,6 @@ fn discard_uncommitted() {
 
 #[test]
 fn discard_on_fresh_branch_no_commits() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -175,7 +157,6 @@ fn discard_on_fresh_branch_no_commits() {
 
 #[test]
 fn read_historical_commit() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -191,7 +172,6 @@ fn read_historical_commit() {
 
 #[test]
 fn get_at_commit_invalid_id() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
     assert!(m.get_at_commit(999, &1).is_err());
@@ -199,7 +179,6 @@ fn get_at_commit_invalid_id() {
 
 #[test]
 fn rollback_then_continue_committing() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -226,7 +205,6 @@ fn rollback_then_continue_committing() {
 
 #[test]
 fn rollback_to_first_commit() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -244,7 +222,6 @@ fn rollback_to_first_commit() {
 
 #[test]
 fn multiple_rollbacks() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -266,7 +243,6 @@ fn multiple_rollbacks() {
 
 #[test]
 fn empty_commit_no_changes() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -283,7 +259,6 @@ fn empty_commit_no_changes() {
 
 #[test]
 fn head_commit_returns_latest() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -300,7 +275,6 @@ fn head_commit_returns_latest() {
 
 #[test]
 fn head_commit_invalid_branch() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
     assert!(m.head_commit(999).is_err());
@@ -312,7 +286,6 @@ fn head_commit_invalid_branch() {
 
 #[test]
 fn branch_isolation() {
-    setup();
     let mut m: VerMap<u32, String> = VerMap::new();
     let main = m.main_branch();
 
@@ -332,7 +305,6 @@ fn branch_isolation() {
 
 #[test]
 fn branch_inherits_uncommitted_state() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -349,7 +321,6 @@ fn branch_inherits_uncommitted_state() {
 
 #[test]
 fn branch_from_branch() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -374,7 +345,6 @@ fn branch_from_branch() {
 
 #[test]
 fn multiple_branches_from_same_point() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -397,7 +367,6 @@ fn multiple_branches_from_same_point() {
 
 #[test]
 fn delete_branch() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     let b = m.create_branch("temp", main).unwrap();
@@ -407,7 +376,6 @@ fn delete_branch() {
 
 #[test]
 fn cannot_delete_main() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     assert!(m.delete_branch(main).is_err());
@@ -415,7 +383,6 @@ fn cannot_delete_main() {
 
 #[test]
 fn duplicate_branch_name_fails() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.create_branch("feat", main).unwrap();
@@ -424,7 +391,6 @@ fn duplicate_branch_name_fails() {
 
 #[test]
 fn delete_branch_then_reuse_name() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -442,7 +408,6 @@ fn delete_branch_then_reuse_name() {
 
 #[test]
 fn create_branch_from_invalid_source() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
     assert!(m.create_branch("bad", 999).is_err());
@@ -450,7 +415,6 @@ fn create_branch_from_invalid_source() {
 
 #[test]
 fn list_branches() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.create_branch("dev", main).unwrap();
@@ -460,7 +424,6 @@ fn list_branches() {
 
 #[test]
 fn list_branches_after_delete() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     let b = m.create_branch("temp", main).unwrap();
@@ -472,7 +435,6 @@ fn list_branches_after_delete() {
 
 #[test]
 fn list_many_branches() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     for i in 0..20 {
@@ -487,7 +449,6 @@ fn list_many_branches() {
 
 #[test]
 fn merge_fast_forward() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -505,7 +466,6 @@ fn merge_fast_forward() {
 
 #[test]
 fn merge_diverged() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -540,7 +500,6 @@ fn merge_diverged() {
 
 #[test]
 fn merge_conflict_source_wins() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -562,7 +521,6 @@ fn merge_conflict_source_wins() {
 
 #[test]
 fn merge_both_changed_to_same_value() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -589,7 +547,6 @@ fn merge_criss_cross_uses_lowest_common_ancestor() {
     // merges whose second parent is an older commit) creates shortcut
     // edges that surface a higher ancestor first. Using that too-old base
     // misclassifies a single-sided change as a conflict and drops it.
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -630,7 +587,6 @@ fn merge_criss_cross_uses_lowest_common_ancestor() {
 
 #[test]
 fn merge_criss_cross_multiple_bases_keeps_source_wins() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -660,7 +616,6 @@ fn merge_criss_cross_multiple_bases_keeps_source_wins() {
 
 #[test]
 fn merge_delete_in_source_unchanged_in_target() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -682,7 +637,6 @@ fn merge_delete_in_source_unchanged_in_target() {
 
 #[test]
 fn merge_delete_in_target_unchanged_in_source() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -704,7 +658,6 @@ fn merge_delete_in_target_unchanged_in_source() {
 
 #[test]
 fn merge_delete_in_both() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -727,7 +680,6 @@ fn merge_delete_in_both() {
 
 #[test]
 fn merge_delete_source_changed_target() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -750,7 +702,6 @@ fn merge_delete_source_changed_target() {
 
 #[test]
 fn merge_changed_source_delete_target() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -773,7 +724,6 @@ fn merge_changed_source_delete_target() {
 
 #[test]
 fn merge_add_in_both_same_value() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -795,7 +745,6 @@ fn merge_add_in_both_same_value() {
 
 #[test]
 fn merge_add_in_both_different_values() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -818,7 +767,6 @@ fn merge_add_in_both_different_values() {
 
 #[test]
 fn merge_into_empty_target() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -833,7 +781,6 @@ fn merge_into_empty_target() {
 
 #[test]
 fn merge_empty_source_fails() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -859,7 +806,6 @@ fn merge_empty_source_fails() {
 
 #[test]
 fn merge_into_non_main_branch() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -882,7 +828,6 @@ fn merge_into_non_main_branch() {
 
 #[test]
 fn merge_creates_merge_commit_with_two_parents() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -904,7 +849,6 @@ fn merge_creates_merge_commit_with_two_parents() {
 
 #[test]
 fn sequential_merges() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -930,7 +874,6 @@ fn sequential_merges() {
 
 #[test]
 fn merge_large_diverged() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -967,7 +910,6 @@ fn merge_large_diverged() {
 
 #[test]
 fn merge_with_mixed_add_delete_change() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -1008,7 +950,6 @@ fn merge_with_mixed_add_delete_change() {
 
 #[test]
 fn iter_ordered() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     for i in (0u32..50).rev() {
@@ -1024,7 +965,6 @@ fn iter_ordered() {
 
 #[test]
 fn iter_empty_map() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     let items: Vec<(u32, u32)> = m.iter(main).unwrap().collect();
@@ -1033,7 +973,6 @@ fn iter_empty_map() {
 
 #[test]
 fn iter_after_commit() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &10).unwrap();
@@ -1046,7 +985,6 @@ fn iter_after_commit() {
 
 #[test]
 fn iter_on_branch() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -1067,7 +1005,6 @@ fn iter_on_branch() {
 
 #[test]
 fn iter_invalid_branch() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
     assert!(m.iter(999).is_err());
@@ -1079,7 +1016,6 @@ fn iter_invalid_branch() {
 
 #[test]
 fn commit_log() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &1).unwrap();
@@ -1098,7 +1034,6 @@ fn commit_log() {
 
 #[test]
 fn log_empty_branch() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     let log = m.log(main).unwrap();
@@ -1107,7 +1042,6 @@ fn log_empty_branch() {
 
 #[test]
 fn log_invalid_branch() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
     assert!(m.log(999).is_err());
@@ -1115,7 +1049,6 @@ fn log_invalid_branch() {
 
 #[test]
 fn log_single_commit() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &1).unwrap();
@@ -1128,7 +1061,6 @@ fn log_single_commit() {
 
 #[test]
 fn log_branch_has_own_history() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -1152,7 +1084,6 @@ fn log_branch_has_own_history() {
 
 #[test]
 fn log_after_merge_follows_first_parent() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -1182,7 +1113,6 @@ fn log_after_merge_follows_first_parent() {
 
 #[test]
 fn gc_reclaims_deleted_branch() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &1).unwrap();
@@ -1201,7 +1131,6 @@ fn gc_reclaims_deleted_branch() {
 
 #[test]
 fn gc_preserves_shared_ancestor_commits() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -1228,7 +1157,6 @@ fn gc_preserves_shared_ancestor_commits() {
 
 #[test]
 fn gc_with_uncommitted_dirty_state() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -1247,7 +1175,6 @@ fn gc_with_uncommitted_dirty_state() {
 
 #[test]
 fn gc_multiple_times_is_idempotent() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -1272,7 +1199,6 @@ fn gc_multiple_times_is_idempotent() {
 
 #[test]
 fn delete_branch_refcount_cleanup() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -1293,7 +1219,6 @@ fn delete_branch_refcount_cleanup() {
 
 #[test]
 fn delete_branch_preserves_shared_ancestors() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -1317,7 +1242,6 @@ fn delete_branch_preserves_shared_ancestors() {
 
 #[test]
 fn delete_branch_multiple_branches_cleanup() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -1337,7 +1261,6 @@ fn delete_branch_multiple_branches_cleanup() {
 
 #[test]
 fn gc_idempotent() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -1357,7 +1280,6 @@ fn gc_idempotent() {
 
 #[test]
 fn refcount_after_create_branch() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -1373,7 +1295,6 @@ fn refcount_after_create_branch() {
 
 #[test]
 fn refcount_after_commit() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -1392,7 +1313,6 @@ fn refcount_after_commit() {
 
 #[test]
 fn refcount_cascade_long_chain() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -1414,7 +1334,6 @@ fn refcount_cascade_long_chain() {
 
 #[test]
 fn rollback_decrements_abandoned_commits() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -1440,7 +1359,6 @@ fn rollback_decrements_abandoned_commits() {
 /// point at the very same commit.
 #[test]
 fn rollback_preserves_other_branch_data() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -1525,7 +1443,6 @@ fn ref_counts_match_ground_truth_recount() {
         }
     }
 
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -1562,7 +1479,6 @@ fn gc_after_serialize_roundtrip() {
     // After serialize→deserialize, ref_counts are preserved and gc()
     // is idempotent.  The deserialized map also has ref_counts_ready=false
     // on the B+ tree (serde skip), so gc() rebuilds the node ref map.
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -1600,7 +1516,6 @@ fn gc_after_serialize_roundtrip() {
 
 #[test]
 fn stress_versioned() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     let n = 500u32;
@@ -1628,7 +1543,6 @@ fn stress_versioned() {
 
 #[test]
 fn stress_many_commits() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     let mut commits = Vec::new();
@@ -1650,7 +1564,6 @@ fn stress_many_commits() {
 
 #[test]
 fn stress_many_branches_and_gc() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -1689,7 +1602,6 @@ fn stress_many_branches_and_gc() {
 
 #[test]
 fn branch_id_main() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     assert_eq!(m.branch_id("main"), Some(main));
@@ -1697,7 +1609,6 @@ fn branch_id_main() {
 
 #[test]
 fn branch_id_custom_branch() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     let feat = m.create_branch("feature", main).unwrap();
@@ -1706,7 +1617,6 @@ fn branch_id_custom_branch() {
 
 #[test]
 fn branch_id_nonexistent() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
     assert_eq!(m.branch_id("no_such_branch"), None);
@@ -1714,7 +1624,6 @@ fn branch_id_nonexistent() {
 
 #[test]
 fn branch_id_after_delete() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     let b = m.create_branch("temp", main).unwrap();
@@ -1725,7 +1634,6 @@ fn branch_id_after_delete() {
 
 #[test]
 fn branch_id_reused_name() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     let b1 = m.create_branch("reuse", main).unwrap();
@@ -1739,7 +1647,6 @@ fn branch_id_reused_name() {
 
 #[test]
 fn branch_name_main() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     assert_eq!(m.branch_name(main), Some("main".to_string()));
@@ -1747,7 +1654,6 @@ fn branch_name_main() {
 
 #[test]
 fn branch_name_custom() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     let feat = m.create_branch("my-feature", main).unwrap();
@@ -1756,7 +1662,6 @@ fn branch_name_custom() {
 
 #[test]
 fn branch_name_nonexistent() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
     assert_eq!(m.branch_name(999), None);
@@ -1764,7 +1669,6 @@ fn branch_name_nonexistent() {
 
 #[test]
 fn branch_name_after_delete() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     let b = m.create_branch("ephemeral", main).unwrap();
@@ -1775,7 +1679,6 @@ fn branch_name_after_delete() {
 
 #[test]
 fn branch_id_and_name_roundtrip() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     let names = ["alpha", "beta", "gamma"];
@@ -1792,7 +1695,6 @@ fn branch_id_and_name_roundtrip() {
 
 #[test]
 fn has_uncommitted_fresh_map() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     // No commits and no inserts → no uncommitted changes.
@@ -1801,7 +1703,6 @@ fn has_uncommitted_fresh_map() {
 
 #[test]
 fn has_uncommitted_after_insert() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &10).unwrap();
@@ -1810,7 +1711,6 @@ fn has_uncommitted_after_insert() {
 
 #[test]
 fn has_uncommitted_after_commit() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &10).unwrap();
@@ -1820,7 +1720,6 @@ fn has_uncommitted_after_commit() {
 
 #[test]
 fn has_uncommitted_after_commit_then_modify() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &10).unwrap();
@@ -1831,7 +1730,6 @@ fn has_uncommitted_after_commit_then_modify() {
 
 #[test]
 fn has_uncommitted_after_discard() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &10).unwrap();
@@ -1844,7 +1742,6 @@ fn has_uncommitted_after_discard() {
 
 #[test]
 fn has_uncommitted_on_new_branch() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &10).unwrap();
@@ -1858,7 +1755,6 @@ fn has_uncommitted_on_new_branch() {
 
 #[test]
 fn has_uncommitted_invalid_branch() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
     assert!(m.has_uncommitted(999).is_err());
@@ -1868,7 +1764,6 @@ fn has_uncommitted_invalid_branch() {
 
 #[test]
 fn range_full_unbounded() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     for i in 1..=5u32 {
@@ -1885,7 +1780,6 @@ fn range_full_unbounded() {
 
 #[test]
 fn range_included_both() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     for i in 1..=10u32 {
@@ -1902,7 +1796,6 @@ fn range_included_both() {
 
 #[test]
 fn range_excluded_both() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     for i in 1..=10u32 {
@@ -1919,7 +1812,6 @@ fn range_excluded_both() {
 
 #[test]
 fn range_included_lo_excluded_hi() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     for i in 1..=10u32 {
@@ -1937,7 +1829,6 @@ fn range_included_lo_excluded_hi() {
 
 #[test]
 fn range_excluded_lo_included_hi() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     for i in 1..=10u32 {
@@ -1955,7 +1846,6 @@ fn range_excluded_lo_included_hi() {
 
 #[test]
 fn range_unbounded_lo() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     for i in 1..=10u32 {
@@ -1973,7 +1863,6 @@ fn range_unbounded_lo() {
 
 #[test]
 fn range_unbounded_hi() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     for i in 1..=10u32 {
@@ -1991,7 +1880,6 @@ fn range_unbounded_hi() {
 
 #[test]
 fn range_empty_result() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     for i in 1..=5u32 {
@@ -2007,7 +1895,6 @@ fn range_empty_result() {
 
 #[test]
 fn range_empty_map() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     let items: Vec<_> = m
@@ -2019,7 +1906,6 @@ fn range_empty_map() {
 
 #[test]
 fn range_on_branch() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     for i in 1..=10u32 {
@@ -2050,7 +1936,6 @@ fn range_on_branch() {
 
 #[test]
 fn range_invalid_branch() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
     assert!(m.range(999, Bound::Unbounded, Bound::Unbounded).is_err());
@@ -2058,7 +1943,6 @@ fn range_invalid_branch() {
 
 #[test]
 fn range_single_key() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     for i in 1..=10u32 {
@@ -2077,7 +1961,6 @@ fn range_single_key() {
 
 #[test]
 fn iter_at_commit_basic() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &10).unwrap();
@@ -2100,7 +1983,6 @@ fn iter_at_commit_basic() {
 
 #[test]
 fn iter_at_commit_after_remove() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &10).unwrap();
@@ -2120,7 +2002,6 @@ fn iter_at_commit_after_remove() {
 
 #[test]
 fn iter_at_commit_on_branch_commit() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &10).unwrap();
@@ -2137,7 +2018,6 @@ fn iter_at_commit_on_branch_commit() {
 
 #[test]
 fn iter_at_commit_invalid() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
     assert!(m.iter_at_commit(999).is_err());
@@ -2145,7 +2025,6 @@ fn iter_at_commit_invalid() {
 
 #[test]
 fn iter_at_commit_ordered() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     // Insert in reverse order.
@@ -2165,7 +2044,6 @@ fn iter_at_commit_ordered() {
 
 #[test]
 fn iter_at_commit_empty_tree() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     // Commit with nothing in it (empty tree).
@@ -2182,7 +2060,6 @@ fn iter_at_commit_empty_tree() {
 
 #[test]
 fn range_at_commit_basic() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2206,7 +2083,6 @@ fn range_at_commit_basic() {
 
 #[test]
 fn range_at_commit_empty_range() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2222,7 +2098,6 @@ fn range_at_commit_empty_range() {
 
 #[test]
 fn range_at_commit_unbounded() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2248,7 +2123,6 @@ fn range_at_commit_unbounded() {
 
 #[test]
 fn range_at_commit_invalid_commit() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
     assert!(
@@ -2259,7 +2133,6 @@ fn range_at_commit_invalid_commit() {
 
 #[test]
 fn range_at_commit_on_branch() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2283,7 +2156,6 @@ fn range_at_commit_on_branch() {
 
 #[test]
 fn contains_key_at_commit_basic() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2305,7 +2177,6 @@ fn contains_key_at_commit_basic() {
 
 #[test]
 fn contains_key_at_commit_nonexistent_key() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2317,7 +2188,6 @@ fn contains_key_at_commit_nonexistent_key() {
 
 #[test]
 fn contains_key_at_commit_invalid_commit() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
     assert!(m.contains_key_at_commit(999, &1).is_err());
@@ -2325,7 +2195,6 @@ fn contains_key_at_commit_invalid_commit() {
 
 #[test]
 fn contains_key_at_commit_on_branch() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2348,7 +2217,6 @@ fn contains_key_at_commit_on_branch() {
 
 #[test]
 fn get_commit_basic() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &10).unwrap();
@@ -2362,7 +2230,6 @@ fn get_commit_basic() {
 
 #[test]
 fn get_commit_nonexistent() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
     assert!(m.get_commit(999).is_none());
@@ -2370,7 +2237,6 @@ fn get_commit_nonexistent() {
 
 #[test]
 fn get_commit_with_parent() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &10).unwrap();
@@ -2386,7 +2252,6 @@ fn get_commit_with_parent() {
 
 #[test]
 fn get_commit_merge_commit() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2408,7 +2273,6 @@ fn get_commit_merge_commit() {
 
 #[test]
 fn get_commit_timestamp_uss_increase() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &1).unwrap();
@@ -2423,7 +2287,6 @@ fn get_commit_timestamp_uss_increase() {
 
 #[test]
 fn get_commit_matches_head_commit() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &10).unwrap();
@@ -2442,7 +2305,6 @@ fn get_commit_matches_head_commit() {
 
 #[test]
 fn string_keys_and_values() {
-    setup();
     let mut m: VerMap<String, String> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &"hello".to_string(), &"world".to_string())
@@ -2456,7 +2318,6 @@ fn string_keys_and_values() {
 
 #[test]
 fn u64_keys() {
-    setup();
     let mut m: VerMap<u64, u64> = VerMap::new();
     let main = m.main_branch();
     let max = u64::MAX;
@@ -2482,7 +2343,6 @@ fn u64_keys() {
 
 #[test]
 fn main_branch_default_is_one() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     assert_eq!(main, 1);
@@ -2490,7 +2350,6 @@ fn main_branch_default_is_one() {
 
 #[test]
 fn new_with_main_custom_name() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new_with_main("genesis");
     let main = m.main_branch();
 
@@ -2507,7 +2366,6 @@ fn new_with_main_custom_name() {
 
 #[test]
 fn new_with_main_cannot_delete_initial() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new_with_main("canonical");
     let main = m.main_branch();
     // Cannot remove the initial main, regardless of name.
@@ -2516,7 +2374,6 @@ fn new_with_main_cannot_delete_initial() {
 
 #[test]
 fn set_main_branch_switches_protection() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     let old_main = main;
@@ -2539,7 +2396,6 @@ fn set_main_branch_switches_protection() {
 
 #[test]
 fn set_main_branch_nonexistent_fails() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
     assert!(m.set_main_branch(999).is_err());
@@ -2547,7 +2403,6 @@ fn set_main_branch_nonexistent_fails() {
 
 #[test]
 fn set_main_branch_idempotent() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     // Setting main to itself is a no-op.
@@ -2557,7 +2412,6 @@ fn set_main_branch_idempotent() {
 
 #[test]
 fn set_main_branch_persists_across_operations() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2586,7 +2440,6 @@ fn set_main_branch_persists_across_operations() {
 
 #[test]
 fn set_main_branch_divergent_switch() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2627,7 +2480,6 @@ fn set_main_branch_divergent_switch() {
 
 #[test]
 fn fork_point_basic_diverge() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2661,7 +2513,6 @@ fn fork_point_basic_diverge() {
 
 #[test]
 fn fork_point_same_commit() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2674,7 +2525,6 @@ fn fork_point_same_commit() {
 
 #[test]
 fn fork_point_linear_ancestor() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2696,7 +2546,6 @@ fn fork_point_linear_ancestor() {
 
 #[test]
 fn fork_point_after_merge() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2726,7 +2575,6 @@ fn fork_point_after_merge() {
 
 #[test]
 fn fork_point_multiple_forks() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2778,7 +2626,6 @@ fn fork_point_multiple_forks() {
 
 #[test]
 fn fork_point_symmetric() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2799,7 +2646,6 @@ fn fork_point_symmetric() {
 
 #[test]
 fn fork_point_nonexistent_commit() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2817,7 +2663,6 @@ fn fork_point_nonexistent_commit() {
 
 #[test]
 fn commit_distance_self_is_zero() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2832,7 +2677,6 @@ fn commit_distance_self_is_zero() {
 
 #[test]
 fn commit_distance_linear_chain() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2858,7 +2702,6 @@ fn commit_distance_linear_chain() {
 
 #[test]
 fn commit_distance_not_ancestor_returns_none() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2884,7 +2727,6 @@ fn commit_distance_not_ancestor_returns_none() {
 
 #[test]
 fn commit_distance_nonexistent_commit() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2906,7 +2748,6 @@ fn commit_distance_nonexistent_commit() {
 
 #[test]
 fn commit_distance_after_merge_follows_first_parent() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2941,7 +2782,6 @@ fn commit_distance_after_merge_follows_first_parent() {
 
 #[test]
 fn longest_branch_scenario() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -2997,7 +2837,6 @@ fn longest_branch_scenario() {
 
 #[test]
 fn fork_point_deep_chain() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -3033,7 +2872,6 @@ fn fork_point_deep_chain() {
 
 #[test]
 fn diff_commits_basic() {
-    setup();
     let mut m: VerMap<u32, String> = VerMap::new();
     let main = m.main_branch();
 
@@ -3064,7 +2902,6 @@ fn diff_commits_basic() {
 
 #[test]
 fn diff_commits_identical() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -3077,7 +2914,6 @@ fn diff_commits_identical() {
 
 #[test]
 fn diff_uncommitted_changes() {
-    setup();
     let mut m: VerMap<u32, String> = VerMap::new();
     let main = m.main_branch();
 
@@ -3103,7 +2939,6 @@ fn diff_uncommitted_changes() {
 
 #[test]
 fn diff_uncommitted_no_changes() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -3116,7 +2951,6 @@ fn diff_uncommitted_no_changes() {
 
 #[test]
 fn diff_from_empty() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -3135,7 +2969,6 @@ fn diff_from_empty() {
 
 #[test]
 fn diff_across_branches() {
-    setup();
     let mut m: VerMap<u32, String> = VerMap::new();
     let main = m.main_branch();
 
@@ -3164,7 +2997,6 @@ fn diff_across_branches() {
 
 #[test]
 fn diff_large_dataset() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -3209,7 +3041,6 @@ fn diff_large_dataset() {
 
 #[test]
 fn diff_all_removed() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -3232,7 +3063,6 @@ fn diff_all_removed() {
 
 #[test]
 fn diff_reverse_direction() {
-    setup();
     let mut m: VerMap<u32, String> = VerMap::new();
     let main = m.main_branch();
 
@@ -3783,7 +3613,6 @@ mod proof_tests {
 
 #[test]
 fn test_save_and_from_meta() {
-    setup();
     let mut m: VerMap<u32, String> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &"hello".into()).unwrap();
@@ -3803,7 +3632,6 @@ fn test_save_and_from_meta() {
 /// envelope: restoring under different type parameters must fail loudly.
 #[test]
 fn test_from_meta_rejects_wrong_key_value_types() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &10).unwrap();
@@ -3819,7 +3647,6 @@ fn test_from_meta_rejects_wrong_key_value_types() {
 /// internal structure (PersistentBTree + multiple MapxOrd + Orphan).
 #[test]
 fn test_save_and_from_meta_with_branches() {
-    setup();
     let mut m: VerMap<u32, String> = VerMap::new();
     let main = m.main_branch();
 
@@ -3864,7 +3691,6 @@ fn test_save_and_from_meta_with_branches() {
 
 #[test]
 fn serde_rebuilds_branch_name_index() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     let feat = m.create_branch("feature", main).unwrap();
@@ -3885,7 +3711,6 @@ fn serde_rebuilds_branch_name_index() {
 /// This validates the hand-written 8-tuple Serialize/Deserialize impl.
 #[test]
 fn test_serde_roundtrip_full() {
-    setup();
     let mut m: VerMap<u64, String> = VerMap::new();
     let main = m.main_branch();
 
@@ -3919,7 +3744,6 @@ fn test_serde_roundtrip_full() {
 /// Serialized size should remain compact enough for metadata persistence.
 #[test]
 fn test_serde_size() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let bytes = postcard::to_allocvec(&m).unwrap();
     assert!(
@@ -3932,14 +3756,12 @@ fn test_serde_size() {
 /// from_meta nonexistent.
 #[test]
 fn test_from_meta_nonexistent() {
-    setup();
     assert!(VerMap::<u32, u32>::from_meta(u64::MAX).is_err());
 }
 
 /// Restore from meta, continue committing and branching.
 #[test]
 fn test_meta_restore_then_continue() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &10).unwrap();
@@ -3972,7 +3794,6 @@ fn test_meta_restore_then_continue() {
 /// Double save-restore: save, restore, mutate, save again, restore again.
 #[test]
 fn test_double_save_restore() {
-    setup();
     let mut m: VerMap<u32, String> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &"first".into()).unwrap();
@@ -3998,7 +3819,6 @@ fn test_double_save_restore() {
 
 #[test]
 fn error_branch_not_found() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let err = m.get(9999, &1).unwrap_err();
     assert!(
@@ -4009,7 +3829,6 @@ fn error_branch_not_found() {
 
 #[test]
 fn error_commit_not_found() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let err = m.get_at_commit(9999, &1).unwrap_err();
     assert!(
@@ -4020,7 +3839,6 @@ fn error_commit_not_found() {
 
 #[test]
 fn error_branch_already_exists() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     let err = m.create_branch("main", main).unwrap_err();
@@ -4032,7 +3850,6 @@ fn error_branch_already_exists() {
 
 #[test]
 fn error_cannot_delete_main() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     let err = m.delete_branch(main).unwrap_err();
@@ -4044,7 +3861,6 @@ fn error_cannot_delete_main() {
 
 #[test]
 fn error_uncommitted_changes_on_merge() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &10).unwrap();
@@ -4063,7 +3879,6 @@ fn error_uncommitted_changes_on_merge() {
 
 #[test]
 fn error_display_preserves_context() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let err = m.get(9999, &1).unwrap_err();
     let msg = err.to_string();
@@ -4079,7 +3894,6 @@ fn error_display_preserves_context() {
 
 #[test]
 fn handle_main_read() {
-    setup();
     let mut m: VerMap<u32, String> = VerMap::new();
     let main_id = m.main_branch();
     m.insert(main_id, &1, &"hello".into()).unwrap();
@@ -4094,7 +3908,6 @@ fn handle_main_read() {
 
 #[test]
 fn handle_main_mut_write() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     {
         let mut main = m.main_mut();
@@ -4109,7 +3922,6 @@ fn handle_main_mut_write() {
 
 #[test]
 fn handle_branch_read_write() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &1, &100).unwrap();
@@ -4129,7 +3941,6 @@ fn handle_branch_read_write() {
 
 #[test]
 fn handle_iter() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     {
         let mut main = m.main_mut();
@@ -4146,7 +3957,6 @@ fn handle_iter() {
 
 #[test]
 fn handle_range() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     {
         let mut main = m.main_mut();
@@ -4166,7 +3976,6 @@ fn handle_range() {
 
 #[test]
 fn handle_has_uncommitted() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     assert!(!m.main().has_uncommitted().unwrap());
     m.main_mut().insert(&1, &10).unwrap();
@@ -4175,7 +3984,6 @@ fn handle_has_uncommitted() {
 
 #[test]
 fn handle_discard() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     {
         let mut main = m.main_mut();
@@ -4190,7 +3998,6 @@ fn handle_discard() {
 
 #[test]
 fn handle_rollback() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     let c1;
     {
@@ -4207,7 +4014,6 @@ fn handle_rollback() {
 
 #[test]
 fn handle_log_and_head_commit() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     {
         let mut main = m.main_mut();
@@ -4225,7 +4031,6 @@ fn handle_log_and_head_commit() {
 
 #[test]
 fn handle_diff_uncommitted() {
-    setup();
     let mut m: VerMap<u32, u32> = VerMap::new();
     {
         let mut main = m.main_mut();
@@ -4239,7 +4044,6 @@ fn handle_diff_uncommitted() {
 
 #[test]
 fn handle_invalid_branch_returns_error() {
-    setup();
     let m: VerMap<u32, u32> = VerMap::new();
     let err = m.branch(9999).unwrap_err();
     assert!(matches!(err, VsdbError::BranchNotFound { .. }));

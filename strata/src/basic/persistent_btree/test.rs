@@ -1,18 +1,11 @@
 use super::*;
 
-// Ensure a fresh, isolated DB dir for each test.
-fn setup() {
-    let dir = format!("/tmp/vsdb_btree_test/{}", rand::random::<u128>());
-    let _ = vsdb_core::vsdb_set_base_dir(&dir);
-}
-
 // =====================================================================
 // Basic operations
 // =====================================================================
 
 #[test]
 fn empty_tree() {
-    setup();
     let tree = PersistentBTree::new();
     assert!(tree.get(EMPTY_ROOT, b"x").is_none());
     assert!(!tree.contains_key(EMPTY_ROOT, b"x"));
@@ -21,7 +14,6 @@ fn empty_tree() {
 
 #[test]
 fn insert_and_get() {
-    setup();
     let mut tree = PersistentBTree::new();
     let r = tree.insert(EMPTY_ROOT, b"key1", b"val1");
     assert_eq!(tree.get(r, b"key1").unwrap(), b"val1");
@@ -30,7 +22,6 @@ fn insert_and_get() {
 
 #[test]
 fn insert_overwrite() {
-    setup();
     let mut tree = PersistentBTree::new();
     let r1 = tree.insert(EMPTY_ROOT, b"k", b"v1");
     let r2 = tree.insert(r1, b"k", b"v2");
@@ -40,7 +31,6 @@ fn insert_overwrite() {
 
 #[test]
 fn insert_multiple_keys() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut r = EMPTY_ROOT;
     r = tree.insert(r, b"charlie", b"3");
@@ -55,7 +45,6 @@ fn insert_multiple_keys() {
 
 #[test]
 fn insert_overwrite_preserves_other_keys() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut r = EMPTY_ROOT;
     r = tree.insert(r, b"a", b"1");
@@ -75,7 +64,6 @@ fn insert_overwrite_preserves_other_keys() {
 
 #[test]
 fn insert_same_key_many_times() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut r = EMPTY_ROOT;
     let mut versions = Vec::new();
@@ -92,7 +80,6 @@ fn insert_same_key_many_times() {
 
 #[test]
 fn remove_basic() {
-    setup();
     let mut tree = PersistentBTree::new();
     let r = tree.insert(EMPTY_ROOT, b"a", b"1");
     let r = tree.insert(r, b"b", b"2");
@@ -106,7 +93,6 @@ fn remove_basic() {
 
 #[test]
 fn remove_nonexistent_key() {
-    setup();
     let mut tree = PersistentBTree::new();
     let r = tree.insert(EMPTY_ROOT, b"a", b"1");
     let r2 = tree.remove(r, b"zzz");
@@ -115,7 +101,6 @@ fn remove_nonexistent_key() {
 
 #[test]
 fn remove_from_empty_tree() {
-    setup();
     let mut tree = PersistentBTree::new();
     let r = tree.remove(EMPTY_ROOT, b"anything");
     assert_eq!(r, EMPTY_ROOT);
@@ -123,7 +108,6 @@ fn remove_from_empty_tree() {
 
 #[test]
 fn remove_until_empty() {
-    setup();
     let mut tree = PersistentBTree::new();
     let r = tree.insert(EMPTY_ROOT, b"a", b"1");
     let r = tree.remove(r, b"a");
@@ -132,7 +116,6 @@ fn remove_until_empty() {
 
 #[test]
 fn remove_multiple_until_empty() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut r = EMPTY_ROOT;
     r = tree.insert(r, b"a", b"1");
@@ -149,7 +132,6 @@ fn remove_multiple_until_empty() {
 
 #[test]
 fn remove_first_key() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut r = EMPTY_ROOT;
     for i in 0u32..100 {
@@ -164,7 +146,6 @@ fn remove_first_key() {
 
 #[test]
 fn remove_last_key() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut r = EMPTY_ROOT;
     for i in 0u32..100 {
@@ -179,7 +160,6 @@ fn remove_last_key() {
 
 #[test]
 fn remove_in_reverse_order() {
-    setup();
     let mut tree = PersistentBTree::new();
     let n = 500u32;
     let mut r = EMPTY_ROOT;
@@ -195,7 +175,6 @@ fn remove_in_reverse_order() {
 
 #[test]
 fn remove_in_random_order() {
-    setup();
     let mut tree = PersistentBTree::new();
     let n = 300u32;
     let mut r = EMPTY_ROOT;
@@ -220,7 +199,6 @@ fn remove_in_random_order() {
 
 #[test]
 fn interleaved_insert_remove() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut r = EMPTY_ROOT;
 
@@ -249,7 +227,6 @@ fn interleaved_insert_remove() {
 
 #[test]
 fn fork_versions() {
-    setup();
     let mut tree = PersistentBTree::new();
     let base = tree.insert(EMPTY_ROOT, b"x", b"0");
 
@@ -263,7 +240,6 @@ fn fork_versions() {
 
 #[test]
 fn fork_many_versions() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut base = EMPTY_ROOT;
     for i in 0u32..50 {
@@ -298,7 +274,6 @@ fn fork_many_versions() {
 
 #[test]
 fn deep_version_chain() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut versions = vec![EMPTY_ROOT];
 
@@ -321,7 +296,6 @@ fn deep_version_chain() {
 
 #[test]
 fn large_keys_and_values() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut r = EMPTY_ROOT;
 
@@ -346,7 +320,6 @@ fn large_keys_and_values() {
 
 #[test]
 fn empty_key_and_value() {
-    setup();
     let mut tree = PersistentBTree::new();
     let r = tree.insert(EMPTY_ROOT, b"", b"");
     assert_eq!(tree.get(r, b"").unwrap(), b"");
@@ -355,7 +328,6 @@ fn empty_key_and_value() {
 
 #[test]
 fn single_byte_keys_full_range() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut r = EMPTY_ROOT;
     // Insert all 256 possible single-byte keys.
@@ -376,7 +348,6 @@ fn single_byte_keys_full_range() {
 
 #[test]
 fn iter_order() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut r = EMPTY_ROOT;
     // Insert in reverse order to exercise sorting.
@@ -395,7 +366,6 @@ fn iter_order() {
 
 #[test]
 fn iter_single_element() {
-    setup();
     let mut tree = PersistentBTree::new();
     let r = tree.insert(EMPTY_ROOT, b"only", b"one");
     let items: Vec<_> = tree.iter(r).collect();
@@ -405,7 +375,6 @@ fn iter_single_element() {
 
 #[test]
 fn iter_after_removes() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut r = EMPTY_ROOT;
     for i in 0u32..10 {
@@ -429,7 +398,6 @@ fn iter_after_removes() {
 
 #[test]
 fn range_iteration() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut r = EMPTY_ROOT;
     for i in 0u32..50 {
@@ -448,7 +416,6 @@ fn range_iteration() {
 
 #[test]
 fn range_included_both() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut r = EMPTY_ROOT;
     for i in 0u32..50 {
@@ -464,7 +431,6 @@ fn range_included_both() {
 
 #[test]
 fn range_excluded_both() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut r = EMPTY_ROOT;
     for i in 0u32..50 {
@@ -480,7 +446,6 @@ fn range_excluded_both() {
 
 #[test]
 fn range_unbounded_lo() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut r = EMPTY_ROOT;
     for i in 0u32..50 {
@@ -495,7 +460,6 @@ fn range_unbounded_lo() {
 
 #[test]
 fn range_unbounded_hi() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut r = EMPTY_ROOT;
     for i in 0u32..50 {
@@ -510,7 +474,6 @@ fn range_unbounded_hi() {
 
 #[test]
 fn range_empty_result() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut r = EMPTY_ROOT;
     for i in 0u32..10 {
@@ -527,7 +490,6 @@ fn range_empty_result() {
 
 #[test]
 fn range_single_key_match() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut r = EMPTY_ROOT;
     for i in 0u32..50 {
@@ -543,7 +505,6 @@ fn range_single_key_match() {
 
 #[test]
 fn range_on_empty_tree() {
-    setup();
     let tree = PersistentBTree::new();
     let items: Vec<_> = tree
         .range(EMPTY_ROOT, Bound::Unbounded, Bound::Unbounded)
@@ -553,7 +514,6 @@ fn range_on_empty_tree() {
 
 #[test]
 fn range_full_unbounded() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut r = EMPTY_ROOT;
     for i in 0u32..100 {
@@ -569,7 +529,6 @@ fn range_full_unbounded() {
 
 #[test]
 fn insert_triggers_leaf_split() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut r = EMPTY_ROOT;
     // Insert exactly MAX_KEYS + 1 to trigger a split.
@@ -586,7 +545,6 @@ fn insert_triggers_leaf_split() {
 
 #[test]
 fn insert_triggers_multi_level_splits() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut r = EMPTY_ROOT;
     // Enough entries to force at least 3 levels.
@@ -616,7 +574,6 @@ fn insert_triggers_multi_level_splits() {
 
 #[test]
 fn many_inserts_and_removes() {
-    setup();
     let mut tree = PersistentBTree::new();
     let n = 2000u32;
     let mut root = EMPTY_ROOT;
@@ -664,7 +621,6 @@ fn many_inserts_and_removes() {
 
 #[test]
 fn bulk_load_and_query() {
-    setup();
     let mut tree = PersistentBTree::new();
     let entries: Vec<_> = (0u32..1000)
         .map(|i| (i.to_be_bytes().to_vec(), (i * 3).to_be_bytes().to_vec()))
@@ -683,8 +639,6 @@ fn bulk_load_and_query() {
 /// which previously produced undersized trailing nodes.
 #[test]
 fn bulk_load_meets_minimum_occupancy() {
-    setup();
-
     fn assert_occupancy(tree: &PersistentBTree, id: NodeId, is_root: bool, n: usize) {
         match tree.node(id) {
             Node::Leaf { keys, .. } => {
@@ -746,7 +700,6 @@ fn bulk_load_meets_minimum_occupancy() {
 
 #[test]
 fn bulk_load_empty() {
-    setup();
     let mut tree = PersistentBTree::new();
     let root = tree.bulk_load(Vec::<(Vec<u8>, Vec<u8>)>::new());
     assert_eq!(root, EMPTY_ROOT);
@@ -754,7 +707,6 @@ fn bulk_load_empty() {
 
 #[test]
 fn bulk_load_single_entry() {
-    setup();
     let mut tree = PersistentBTree::new();
     let root = tree.bulk_load(vec![(b"only".to_vec(), b"one".to_vec())]);
     assert_eq!(tree.get(root, b"only").unwrap(), b"one");
@@ -763,7 +715,6 @@ fn bulk_load_single_entry() {
 
 #[test]
 fn bulk_load_coalesces_duplicate_keys() {
-    setup();
     let mut tree = PersistentBTree::new();
     let root = tree.bulk_load(vec![
         (b"a".to_vec(), b"old".to_vec()),
@@ -782,7 +733,6 @@ fn bulk_load_coalesces_duplicate_keys() {
 #[test]
 #[should_panic(expected = "PersistentBTree::bulk_load entries must be sorted by key")]
 fn bulk_load_rejects_unsorted_keys() {
-    setup();
     let mut tree = PersistentBTree::new();
     let _ = tree.bulk_load(vec![
         (b"b".to_vec(), b"bee".to_vec()),
@@ -792,7 +742,6 @@ fn bulk_load_rejects_unsorted_keys() {
 
 #[test]
 fn bulk_load_then_modify() {
-    setup();
     let mut tree = PersistentBTree::new();
     let entries: Vec<_> = (0u32..500)
         .map(|i| (i.to_be_bytes().to_vec(), i.to_be_bytes().to_vec()))
@@ -818,7 +767,6 @@ fn bulk_load_then_modify() {
 
 #[test]
 fn bulk_load_matches_sequential_insert() {
-    setup();
     let mut tree = PersistentBTree::new();
     let entries: Vec<_> = (0u32..200)
         .map(|i| (i.to_be_bytes().to_vec(), (i * 7).to_be_bytes().to_vec()))
@@ -841,7 +789,6 @@ fn bulk_load_matches_sequential_insert() {
 
 #[test]
 fn bulk_load_exactly_max_keys() {
-    setup();
     let mut tree = PersistentBTree::new();
     let entries: Vec<_> = (0..MAX_KEYS)
         .map(|i| ((i as u32).to_be_bytes().to_vec(), vec![i as u8]))
@@ -855,7 +802,6 @@ fn bulk_load_lone_trailing_child_then_remove() {
     // Regression: a leaf count ≡ 1 (mod MAX_KEYS+1) once promoted a lone
     // trailing child verbatim, yielding a mixed-height tree whose remove()
     // panicked in borrow/merge. 1057 entries → 34 leaves triggers it.
-    setup();
     let mut tree = PersistentBTree::new();
     let n = 1057u32;
     let entries: Vec<_> = (0..n)
@@ -890,7 +836,6 @@ fn bulk_load_lone_trailing_child_then_remove() {
 
 #[test]
 fn gc_removes_unreachable() {
-    setup();
     let mut tree = PersistentBTree::new();
     let r1 = tree.insert(EMPTY_ROOT, b"a", b"1");
     let _r2 = tree.insert(r1, b"b", b"2");
@@ -906,7 +851,6 @@ fn gc_removes_unreachable() {
 
 #[test]
 fn gc_multiple_live_roots() {
-    setup();
     let mut tree = PersistentBTree::new();
     let base = tree.insert(EMPTY_ROOT, b"shared", b"data");
     let v1 = tree.insert(base, b"v1", b"yes");
@@ -924,7 +868,6 @@ fn gc_multiple_live_roots() {
 
 #[test]
 fn gc_with_empty_root_in_live_set() {
-    setup();
     let mut tree = PersistentBTree::new();
     let r = tree.insert(EMPTY_ROOT, b"a", b"1");
     // EMPTY_ROOT in the live set should be harmless.
@@ -934,7 +877,6 @@ fn gc_with_empty_root_in_live_set() {
 
 #[test]
 fn gc_large_tree_with_diverged_versions() {
-    setup();
     let mut tree = PersistentBTree::new();
 
     // Build a base tree with many entries (forces multi-level structure).
@@ -1039,7 +981,6 @@ fn node_large_encode_decode() {
 
 #[test]
 fn default_creates_empty_tree() {
-    setup();
     let tree = PersistentBTree::default();
     assert!(tree.get(EMPTY_ROOT, b"anything").is_none());
 }
@@ -1050,7 +991,6 @@ fn default_creates_empty_tree() {
 
 #[test]
 fn stress_sequential_insert_random_access() {
-    setup();
     let mut tree = PersistentBTree::new();
     let n = 5000u32;
     let mut root = EMPTY_ROOT;
@@ -1070,7 +1010,6 @@ fn stress_sequential_insert_random_access() {
 
 #[test]
 fn stress_reverse_insert_order() {
-    setup();
     let mut tree = PersistentBTree::new();
     let n = 3000u32;
     let mut root = EMPTY_ROOT;
@@ -1091,14 +1030,12 @@ fn stress_reverse_insert_order() {
 
 #[test]
 fn contains_key_empty_tree() {
-    setup();
     let tree = PersistentBTree::new();
     assert!(!tree.contains_key(EMPTY_ROOT, b"anything"));
 }
 
 #[test]
 fn contains_key_after_insert_and_remove() {
-    setup();
     let mut tree = PersistentBTree::new();
     let r1 = tree.insert(EMPTY_ROOT, b"key", b"val");
     assert!(tree.contains_key(r1, b"key"));
@@ -1110,7 +1047,6 @@ fn contains_key_after_insert_and_remove() {
 
 #[test]
 fn test_save_and_from_meta() {
-    setup();
     let mut tree = PersistentBTree::new();
     let r = tree.insert(EMPTY_ROOT, b"alice", b"100");
     let r = tree.insert(r, b"bob", b"200");
@@ -1126,7 +1062,6 @@ fn test_save_and_from_meta() {
 /// Postcard serde roundtrip for PersistentBTree (hand-written tuple serde).
 #[test]
 fn test_serde_roundtrip() {
-    setup();
     let mut tree = PersistentBTree::new();
     let mut root = EMPTY_ROOT;
     for i in 0u32..100 {
@@ -1147,7 +1082,6 @@ fn test_serde_roundtrip() {
 /// Serialized size: nodes handle metadata + next_id (varint) should stay small.
 #[test]
 fn test_serde_size() {
-    setup();
     let tree = PersistentBTree::new();
     let bytes = postcard::to_allocvec(&tree).unwrap();
     assert!(bytes.len() <= 24, "expected ≤24 bytes, got {}", bytes.len());
@@ -1156,14 +1090,12 @@ fn test_serde_size() {
 /// from_meta nonexistent.
 #[test]
 fn test_from_meta_nonexistent() {
-    setup();
     assert!(PersistentBTree::from_meta(u64::MAX).is_err());
 }
 
 /// Restore from meta, insert more data, verify old roots still work.
 #[test]
 fn test_meta_restore_then_mutate() {
-    setup();
     let mut tree = PersistentBTree::new();
     let r1 = tree.insert(EMPTY_ROOT, b"k1", b"v1");
 
@@ -1185,7 +1117,6 @@ fn test_meta_restore_then_mutate() {
 /// serialize a tree with diverged versions, deserialize, check both.
 #[test]
 fn test_serde_roundtrip_multi_version() {
-    setup();
     let mut tree = PersistentBTree::new();
     let base = tree.insert(EMPTY_ROOT, b"shared", b"base");
 
@@ -1216,7 +1147,6 @@ fn test_serde_roundtrip_multi_version() {
 /// byte-identical (COW through the buffered path, INV-BT1).
 #[test]
 fn write_buffer_underflow_readback_and_cow() {
-    setup();
     let mut tree = PersistentBTree::new();
 
     // Deep enough for multi-level underflow cascades.
@@ -1263,7 +1193,6 @@ fn write_buffer_underflow_readback_and_cow() {
 /// flushed and still-buffered nodes) route every lookup correctly.
 #[test]
 fn write_buffer_bulk_load_across_flush_chunks() {
-    setup();
     let mut tree = PersistentBTree::new();
 
     // > 1250 leaves at MAX_KEYS=32/leaf — crosses the 1024-node flush

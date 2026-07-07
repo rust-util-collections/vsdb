@@ -25,12 +25,12 @@ vsdb/
 
 ```bash
 make all          # fmt + lint + test
-make test         # cargo test --workspace (release + debug, single-threaded)
+make test         # cargo test --workspace (release + debug, parallel)
 make lint         # cargo clippy --workspace + check tests/benches
 make bench        # criterion benches (core basic, strata basic, versioned, slotdex)
 ```
 
-**Important**: Tests MUST run single-threaded (`--test-threads=1`) due to global MMDB state.
+**Important**: Tests run in PARALLEL (v16.0.2+). Test data stays disjoint via globally-unique prefixes; tests must not assert on cross-test global state (exact allocator values, registry sizes) and must serialize any `vsdb_set_base_dir` behind a `Once` (env mutation is unsound to race).
 
 ## Architecture
 
@@ -76,7 +76,7 @@ Additional documentation in `docs/`:
 - `parking_lot` for Mutex (prefix allocator, VSDB_BASE_DIR global, DagMap ID allocation)
 - `VsdbError` (thiserror, defined in `vsdb_core`) is the **only** error type in public APIs of both crates; `ruc` is internal-only for error chaining — boundary conversions preserve the complete chain via `stringify_chain`
 - `postcard` for serialization (replaced serde_cbor_2 in v12)
-- Tests run single-threaded; use `tempdir` or `/tmp/vsdb_testing` for isolation
+- Tests run in parallel; isolation comes from globally-unique prefixes (plus `tempdir`/`/tmp/vsdb_testing` for file-level scratch); global-state assertions must be race-tolerant
 - ~22 unsafe blocks in library code (plus ~5 in benches) — all require `// SAFETY:` comments
   - `shadow()`: SWMR contract — caller serializes writes (the ONLY aliasing handle primitive; `Clone` deep-copies storage)
   - `from_bytes()`: caller provides valid serialized bytes

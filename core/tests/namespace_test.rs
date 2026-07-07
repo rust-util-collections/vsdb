@@ -1,7 +1,7 @@
 //! Namespace lifecycle integration tests.
 //!
-//! One `#[test]` only: the suite runs single-threaded, but every test in
-//! this FILE shares the process-global default engine and registry, so
+//! One `#[test]` only: every test in this FILE would share the
+//! process-global default engine, registry, and base-dir freeze, so
 //! sub-scenarios run sequentially inside one body (same pattern as the
 //! other integration tests).
 

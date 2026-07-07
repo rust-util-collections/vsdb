@@ -478,10 +478,13 @@ registries), which already works today. Consequences:
   `new_in`/`namespace()`/universal `from_meta` across all collections;
   scoped ambient placement (`scope`, thread-local stack);
   mgmt APIs; C9 doc rename; README/CHANGELOG.
-- **P2 — test-suite migration**: wrap each test body in an anonymous
-  namespace scope (`Namespace::create()?.scope(..)` via a tiny test-harness
-  helper — test bodies and their plain `new()` calls stay untouched); then
-  evaluate dropping `--test-threads=1`.
+- **P2 — test-suite migration** *(done in v16.0.2, simpler than
+  planned)*: per-test namespace scopes proved unnecessary — globally
+  unique prefixes already make test data disjoint by construction. The
+  actual blockers were env mutation (`vsdb_set_base_dir` per lib test —
+  removed; integration binaries serialize theirs behind a `Once`) and a
+  few exact-value global-allocator assertions (made race-tolerant).
+  `--test-threads=1` dropped.
 - **P3 (optional, separate RFC)**: in-process `close()` — requires migrating
   `&'static DB` to `Arc<DB>` and making iterators own their engine reference
   (C1); whole-ns `merge`; cross-ns map-copy convenience helpers.

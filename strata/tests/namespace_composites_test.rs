@@ -1,7 +1,7 @@
 //! Composite structures × namespaces integration.
 //!
-//! Single `#[test]`: sub-scenarios share the process-global registry and
-//! run sequentially (suite is single-threaded).
+//! Single `#[test]`: sub-scenarios share the process-global registry
+//! and base-dir freeze, so they run sequentially inside one body.
 
 use vsdb::{
     DEFAULT_NS_ID, MapxOrd, Namespace, Orphan, SlotDex, VerMap, basic::mapx::Mapx,
