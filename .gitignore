@@ -32,3 +32,8 @@ log_tester.tar.gz*
 .copilot
 .aider
 .gemini
+
+# review/agent scratch artifacts — never commit
+.review_scratch/
+.diff_review_tmp.diff
+**/_scratch_*.rs
