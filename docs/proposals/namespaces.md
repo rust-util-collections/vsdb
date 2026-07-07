@@ -485,9 +485,11 @@ registries), which already works today. Consequences:
   removed; integration binaries serialize theirs behind a `Once`) and a
   few exact-value global-allocator assertions (made race-tolerant).
   `--test-threads=1` dropped.
-- **P3 (optional, separate RFC)**: in-process `close()` — requires migrating
-  `&'static DB` to `Arc<DB>` and making iterators own their engine reference
-  (C1); whole-ns `merge`; cross-ns map-copy convenience helpers.
+- **P3 (optional, separate RFC)**: in-process `close()` — designed in
+  [ns-close.md](./ns-close.md) (ownership-inverted engine lifecycle: no
+  `Arc<DB>` migration needed after all; both `Box::leak` sites deleted,
+  lifetime-honest borrows, refuse-don't-poison `vsdb_ns_close`); whole-ns
+  `merge`; cross-ns map-copy convenience helpers.
   *Post-implementation review narrowed the motivation*: its ONLY remaining
   driver is resource bounding at very large open-namespace counts
   (thousands — each open ns parks `shards` condvar-waiting compaction
