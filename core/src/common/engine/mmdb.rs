@@ -21,6 +21,21 @@ use std::{
 
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
 
+/// On-disk format-version marker, relative to the VSDB base dir.
+///
+/// This release (format 15) never writes the marker — its absence *is*
+/// the v15 signature. Newer releases (v16+, whose on-disk layout
+/// diverges, e.g. the prefix-allocator ceiling relocation) write their
+/// format number here (ASCII decimal) so that older binaries refuse to
+/// open the dataset instead of silently corrupting it: a v15 allocator
+/// reading a stale shard-0 ceiling would re-issue prefixes already used
+/// by the newer layout — duplicate handles over live data. Loud refusal
+/// is the only safe answer (downgrade is unsupported by policy).
+const FORMAT_VERSION_REL_PATH: &str = "__SYSTEM__/format_version";
+
+/// The newest on-disk format this binary understands.
+const SUPPORTED_FORMAT_VERSION: u64 = 15;
+
 const PREFIX_ALLOC_BATCH: u64 = 8192;
 
 /// Thread-local guard that removes this thread's [`PENDING_WINDOWS`]
@@ -111,6 +126,8 @@ impl MmDB {
         vsdb_freeze_base_dir();
 
         fs::create_dir_all(&base_dir).c(d!())?;
+
+        check_format_version(&base_dir).c(d!())?;
 
         let dir = base_dir.join("mmdb");
         fs::create_dir_all(&dir).c(d!())?;
@@ -477,7 +494,7 @@ impl MmDB {
 
 // ---- Iterator ----
 
-/// A lazy, bidirectional iterator over key-value pairs in a single prefix namespace.
+/// A lazy, bidirectional iterator over key-value pairs in a single prefix range.
 ///
 /// Wraps a boxed `DoubleEndedIterator` so that the concrete streaming type
 /// (e.g. `Map<Filter<BidiIterator, _>, _>`) is hidden behind a stable ABI.
@@ -534,7 +551,7 @@ impl<'a> MmdbBatch<'a> {
     }
 
     /// A batch whose first entry is a range tombstone covering the whole
-    /// prefix namespace. Entries within one batch carry position-based
+    /// prefix range. Entries within one batch carry position-based
     /// sequence numbers, so operations added afterwards apply on top of
     /// the wipe, and the whole set commits atomically.
     fn new_wiped(meta_prefix: PreBytes, engine: &'a MmDB) -> Self {
@@ -816,6 +833,40 @@ static MEM_BUDGET: LazyLock<(usize, bool)> = LazyLock::new(|| {
     effective_mem_budget(host_avail_bytes, cgroup_mem_limit_bytes(), env_budget_mb)
 });
 
+/// Refuses to open a dataset marked with a newer on-disk format.
+///
+/// Absent marker ⇒ v15-or-older layout ⇒ proceed. Any marker naming a
+/// format above [`SUPPORTED_FORMAT_VERSION`] — or an unreadable one
+/// (v15 never writes this file, so garbage still means "a newer release
+/// touched this dataset") — aborts the open with a descriptive error.
+fn check_format_version(base_dir: &std::path::Path) -> Result<()> {
+    let path = base_dir.join(FORMAT_VERSION_REL_PATH);
+    let raw = match fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e).c(d!()),
+    };
+    let ver = raw.trim().parse::<u64>().map_err(|_| {
+        eg!(format!(
+            "unreadable format marker {} (content: {:?}); \
+             this dataset was touched by a newer, incompatible vsdb release",
+            path.display(),
+            raw
+        ))
+    })?;
+    if ver > SUPPORTED_FORMAT_VERSION {
+        return Err(eg!(format!(
+            "this dataset uses on-disk format {} (marker: {}), but this \
+             binary supports at most format {}; downgrade is not supported — \
+             export the data with the newer release instead",
+            ver,
+            path.display(),
+            SUPPORTED_FORMAT_VERSION
+        )));
+    }
+    Ok(())
+}
+
 fn mmdb_open(dir: &std::path::Path) -> Result<DB> {
     let (mem_budget, budget_limited) = *MEM_BUDGET;
 
@@ -972,6 +1023,35 @@ mod tests {
         }
         #[cfg(not(target_os = "linux"))]
         assert!(cgroup_mem_limit_bytes().is_none());
+    }
+
+    #[test]
+    fn format_version_tripwire() {
+        let base = tmp_dir("format-ver");
+        fs::create_dir_all(&base).unwrap();
+
+        // Absent marker = v15-or-older dataset: accepted.
+        assert!(check_format_version(&base).is_ok());
+
+        fs::create_dir_all(base.join("__SYSTEM__")).unwrap();
+        let marker = base.join(FORMAT_VERSION_REL_PATH);
+
+        // Current-or-older format numbers: accepted.
+        fs::write(&marker, "15").unwrap();
+        assert!(check_format_version(&base).is_ok());
+        fs::write(&marker, "3\n").unwrap();
+        assert!(check_format_version(&base).is_ok());
+
+        // Newer format: refused loudly.
+        fs::write(&marker, "16").unwrap();
+        assert!(check_format_version(&base).is_err());
+
+        // Unreadable marker (v15 never writes one, so garbage means a
+        // newer release touched the dataset): refused.
+        fs::write(&marker, "garbage").unwrap();
+        assert!(check_format_version(&base).is_err());
+
+        let _ = fs::remove_dir_all(&base);
     }
 
     fn tmp_dir(tag: &str) -> std::path::PathBuf {

@@ -6,7 +6,7 @@
 //!
 //! # Storage model (single-handle, crash-atomic)
 //!
-//! All persistent state lives in **one** [`MapxRaw`] handle, namespaced
+//! All persistent state lives in **one** [`MapxRaw`] handle, partitioned
 //! by a leading tag byte:
 //!
 //! ```text

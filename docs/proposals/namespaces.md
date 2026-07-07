@@ -316,6 +316,7 @@ Every namespace gets its own base-dir subtree, same layout as today
 
 ```text
 {ns_path}/mmdb/shard_NN/...
+{ns_path}/__SYSTEM__/format_version           (ASCII "16"; see §7 tripwire)
 {ns_path}/__SYSTEM__/__instance_meta__/{prefix:016x}
 {ns_path}/__SYSTEM__/mpt_cache_{id}.bin, smt_cache_{id}.bin
 {ns_path}/__CUSTOM__/
@@ -456,8 +457,10 @@ registries), which already works today. Consequences:
 - **P0 — allocator persistence relocation** (shippable alone, no API change):
   ceiling moves shard-0 → the `__prefix_ceiling__` file, with the
   idempotent take-max upgrade migration (§4.6); the legacy key is never
-  written again. Every piece of in-memory allocator machinery stays
-  byte-identical.
+  written again. The `format_version` marker (`16`) is written durably
+  before the file-based allocator issues anything (see §7 — the marker
+  ships its v15-side check as a v15.0.2 pre-release). Every piece of
+  in-memory allocator machinery stays byte-identical.
 - **P1 — namespaces**: `Namespace`/`NsId`/registry; optional-`ns_id` meta
   codec; core `Mapx` ns field + routing; per-ns `__SYSTEM__` tree and
   strata call-site rerouting (instance metas, trie caches; the DagMap ID
@@ -492,10 +495,17 @@ registries), which already works today. Consequences:
 - **Downgrade: unsupported, by decision.** Once v16 has written, pointing a
   v15 binary at the dataset is out of contract — the storage layer carries
   zero rollback machinery (no dual-writes, no legacy-format guarantees).
-  Failure is still clean, not silent: 24-byte metas hit v15's strict
-  16-byte length check ⇒ `Decode` error. Going back = application-level
-  export (iterate the maps,
-  write into a fresh v15 dataset); the engine does not carry that burden.
+  Failure is still clean, not silent, via two tripwires: 24-byte metas hit
+  v15's strict 16-byte length check ⇒ `Decode` error; and — covering
+  default-ns-only datasets, whose metas stay 16 B — v15.0.2+ checks the
+  `__SYSTEM__/format_version` marker (ASCII decimal; v16 writes `16` into
+  every namespace tree it opens, durably *before* any divergent state such
+  as file-based allocator windows) and refuses anything newer at open.
+  The last v15 release is therefore the designated safe landing point for
+  an out-of-contract rollback attempt; pre-marker v15 binaries are
+  unprotected — unavoidable, they validate nothing. Going back =
+  application-level export (iterate the maps, write into a fresh v15
+  dataset); the engine does not carry that burden.
 
 ---
 

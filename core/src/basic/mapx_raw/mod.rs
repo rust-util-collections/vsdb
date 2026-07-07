@@ -467,7 +467,7 @@ impl MapxRaw {
     }
 
     /// Returns the 8-byte prefix that uniquely identifies this map's
-    /// storage namespace.
+    /// storage prefix range.
     #[inline(always)]
     pub fn as_bytes(&self) -> &PreBytes {
         self.inner.as_prefix_slice()
