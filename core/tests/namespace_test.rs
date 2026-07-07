@@ -5,6 +5,7 @@
 //! sub-scenarios run sequentially inside one body (same pattern as the
 //! other integration tests).
 
+use std::path::PathBuf;
 use vsdb_core::{
     DEFAULT_NS_ID, InstanceId, Namespace, NamespaceOpts, basic::mapx_raw::MapxRaw,
     vsdb_ns_destroy, vsdb_ns_list, vsdb_ns_relocate,
@@ -86,6 +87,18 @@ fn namespace_lifecycle() {
     // InstanceId string round-trip.
     assert_eq!(id1.to_string().parse::<InstanceId>().unwrap(), id1);
     assert_eq!(id0.to_string().parse::<InstanceId>().unwrap(), id0);
+    // "@0" is a non-canonical spelling of the default namespace: both
+    // parsing and deserialization fold it to `ns: None`.
+    let noncanon = format!("{}@0", id0.map_id).parse::<InstanceId>().unwrap();
+    assert_eq!(noncanon, id0);
+    assert_eq!(noncanon.ns, None);
+    let wire = postcard::to_allocvec(&InstanceId {
+        map_id: id0.map_id,
+        ns: Some(DEFAULT_NS_ID),
+    })
+    .unwrap();
+    let decoded: InstanceId = postcard::from_bytes(&wire).unwrap();
+    assert_eq!(decoded, id0);
 
     // ---- registry / admin tier ----
     let infos = vsdb_ns_list().unwrap();
@@ -118,7 +131,7 @@ fn namespace_lifecycle() {
     // Explicit-path validation: overlapping the base dir is rejected.
     assert!(
         Namespace::create_with(NamespaceOpts {
-            path: Some(std::path::PathBuf::from(&dir)),
+            path: Some(PathBuf::from(&dir)),
             ..Default::default()
         })
         .is_err()
@@ -126,7 +139,7 @@ fn namespace_lifecycle() {
     // Relative paths are rejected.
     assert!(
         Namespace::create_with(NamespaceOpts {
-            path: Some(std::path::PathBuf::from("relative/dir")),
+            path: Some(PathBuf::from("relative/dir")),
             ..Default::default()
         })
         .is_err()
@@ -141,7 +154,7 @@ fn namespace_lifecycle() {
     let before: Vec<_> = vsdb_ns_list().unwrap().iter().map(|i| i.id).collect();
     assert!(
         Namespace::create_with(NamespaceOpts {
-            path: Some(std::path::PathBuf::from(&blocker)),
+            path: Some(PathBuf::from(&blocker)),
             ..Default::default()
         })
         .is_err()
@@ -149,6 +162,38 @@ fn namespace_lifecycle() {
     let after: Vec<_> = vsdb_ns_list().unwrap().iter().map(|i| i.id).collect();
     assert_eq!(before, after);
     std::fs::remove_file(&blocker).ok();
+
+    // Adopting an existing non-empty dir as an explicit root is refused
+    // (foreign prefixes have unknown provenance; destroy would take the
+    // dir's other contents with it).
+    let occupied = format!("{dir}_occupied");
+    std::fs::create_dir_all(format!("{occupied}/stuff")).unwrap();
+    assert!(
+        Namespace::create_with(NamespaceOpts {
+            path: Some(PathBuf::from(&occupied)),
+            ..Default::default()
+        })
+        .is_err()
+    );
+    // An existing but EMPTY dir is fine (e.g. a fresh mount point).
+    let empty_mnt = format!("{dir}_mnt");
+    std::fs::create_dir_all(&empty_mnt).unwrap();
+    let mnt_ns = Namespace::create_with(NamespaceOpts {
+        path: Some(PathBuf::from(&empty_mnt)),
+        shards: 1,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(mnt_ns.path(), std::path::Path::new(&empty_mnt));
+    // Paths containing `..` are rejected outright.
+    assert!(
+        Namespace::create_with(NamespaceOpts {
+            path: Some(PathBuf::from(format!("{empty_mnt}/../sneaky"))),
+            ..Default::default()
+        })
+        .is_err()
+    );
+    std::fs::remove_dir_all(&occupied).ok();
 
     // ---- cross-namespace handles coexist in one container ----
     let all: Vec<MapxRaw> = vec![m0, m1, m2, m4];

@@ -175,7 +175,8 @@ impl MmDB {
 
         let dir = root.join("mmdb");
         fs::create_dir_all(&dir).c(d!())?;
-        validate_shard_layout(&dir, shards)?;
+        let marker_present = root.join(FORMAT_VERSION_REL_PATH).exists();
+        validate_shard_layout(&dir, shards, marker_present)?;
 
         // Open the shards into an owned, non-`'static` Vec first. If a
         // later shard (or any meta-init step below) fails, this Vec's
@@ -686,7 +687,26 @@ fn write_format_marker(base_dir: &Path) -> Result<()> {
 /// Rejects opening an existing dataset with the wrong shard count —
 /// routing is `prefix % shard_count`, so a mismatch would silently
 /// re-route every prefix to the wrong shard.
-fn validate_shard_layout(mmdb_dir: &Path, shards: usize) -> Result<()> {
+///
+/// Completion-aware (`marker_present` = the root's format marker,
+/// which [`MmDB::open_at`] writes only AFTER every shard exists):
+///
+/// * marker present ⇒ initialization completed ⇒ any count mismatch is
+///   corruption/misconfiguration ⇒ reject.
+/// * marker absent + `existing < shards` ⇒ a create crashed mid-way
+///   through shard creation; the remaining shard dirs are created
+///   idempotently by the caller (`create_if_missing`), so reopening
+///   COMPLETES the initialization instead of bricking the root.
+///   (A pre-v16 default base has no marker but always has exactly 16
+///   shards, and the default namespace is pinned to 16 — it takes the
+///   `existing == shards` path, never this one.)
+/// * `existing > shards` ⇒ reject unconditionally: fewer handles than
+///   shard dirs would re-route prefixes even without a marker.
+fn validate_shard_layout(
+    mmdb_dir: &Path,
+    shards: usize,
+    marker_present: bool,
+) -> Result<()> {
     let mut existing = 0usize;
     match fs::read_dir(mmdb_dir) {
         Ok(entries) => {
@@ -702,16 +722,21 @@ fn validate_shard_layout(mmdb_dir: &Path, shards: usize) -> Result<()> {
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(err) => return Err(err).c(d!()),
     }
-    if existing != 0 && existing != shards {
-        return Err(eg!(format!(
-            "shard-count mismatch at {}: dataset has {} shards, \
-             open requested {} — the count is fixed at creation",
-            mmdb_dir.display(),
-            existing,
-            shards
-        )));
+    if existing == 0 || existing == shards {
+        return Ok(());
     }
-    Ok(())
+    if !marker_present && existing < shards {
+        // Incomplete initialization — completing it is safe: no format
+        // marker means no allocation has ever targeted this root.
+        return Ok(());
+    }
+    Err(eg!(format!(
+        "shard-count mismatch at {}: dataset has {} shards, \
+         open requested {} — the count is fixed at creation",
+        mmdb_dir.display(),
+        existing,
+        shards
+    )))
 }
 
 pub struct MmdbBatch<'a> {
@@ -1319,6 +1344,35 @@ mod tests {
         );
         fs::write(&f, [0u8; 3]).unwrap();
         assert!(read_ceiling_file(&f).is_err());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn shard_layout_completion_aware() {
+        let base = tmp_dir("shard-layout");
+        let mmdb_dir = base.join("mmdb");
+
+        // Absent dir: fresh root, fine either way.
+        assert!(validate_shard_layout(&mmdb_dir, 4, false).is_ok());
+
+        // Half-created WITHOUT a marker (create crashed mid-way):
+        // resumable — reopening completes the initialization.
+        fs::create_dir_all(mmdb_dir.join("shard_00")).unwrap();
+        assert!(validate_shard_layout(&mmdb_dir, 4, false).is_ok());
+        // The same layout WITH a marker is corruption: rejected.
+        assert!(validate_shard_layout(&mmdb_dir, 4, true).is_err());
+
+        // Exact match: fine with and without the marker (the pre-v16
+        // default base is exactly the marker-less equal case).
+        fs::create_dir_all(mmdb_dir.join("shard_01")).unwrap();
+        assert!(validate_shard_layout(&mmdb_dir, 2, false).is_ok());
+        assert!(validate_shard_layout(&mmdb_dir, 2, true).is_ok());
+
+        // More shard dirs than requested: rejected unconditionally
+        // (fewer handles than dirs would re-route prefixes).
+        assert!(validate_shard_layout(&mmdb_dir, 1, false).is_err());
+        assert!(validate_shard_layout(&mmdb_dir, 1, true).is_err());
+
         let _ = fs::remove_dir_all(&base);
     }
 

@@ -2,7 +2,51 @@
 
 All notable changes to this project will be documented in this file.
 
-## [v16.0.0] (in development)
+## [v16.0.1]
+
+Post-release audit fixes (all findings from the v16.0.0 deep review;
+registry: `docs/audit.md`).
+
+### Fixed
+
+- **Namespace lifecycle TOCTOU**: the not-open check of
+  `vsdb_ns_destroy`/`vsdb_ns_relocate` now runs under `REGISTRY_LOCK`
+  (the same lock `open` holds while caching a live engine), so a racing
+  open can no longer have its root deleted or repointed underneath it.
+- **Base-dir freeze gap**: `Namespace::open` (and the admin fns) freeze
+  the base dir before reading the registry — a later
+  `vsdb_set_base_dir` fails loudly instead of moving the global
+  allocator's backing store to another universe under live namespaces.
+- **Explicit-root validation hardened**: `.`/`..` components rejected;
+  overlap checks run on physically normalized paths (symlinked
+  spellings of the base or another root are caught); adopting an
+  existing non-empty dir is refused (foreign prefix provenance;
+  importing/attaching stays an explicit non-goal — RFC §9). Empty dirs
+  (fresh mount points) remain accepted.
+- **Crash-resumable namespace creation**: shard-layout validation is
+  completion-aware (keyed on the format marker, which is written only
+  after every shard exists): a create that crashed mid-way is completed
+  on the next open instead of bricking the root; genuine mismatches
+  stay rejected.
+- **DagMap cross-namespace split**: parented construction always
+  inherits the parent's namespace (ambient scope overridden;
+  mismatched explicit `new_in` is debug-asserted) — one DAG never
+  spans namespaces.
+- **DagMap destroy ownership order** (INV-DG5): the ownership check
+  runs before duplicate suppression, so a stale foreign registry entry
+  can no longer make `destroy` skip a genuinely owned child.
+- **`InstanceId` canonical form**: `"42@0"` and wire-level
+  `Some(DEFAULT_NS_ID)` fold to `ns: None` at parse/deserialize time —
+  `Eq`/`Hash` are reliable for API-obtained tokens.
+
+### Documentation
+
+- RFC `save_as_meta` → the implemented `save_meta`; namespace subsystem
+  added to `CLAUDE.md`, review-core mapping, and the engine pattern
+  guide (per-namespace engines, global allocator, marker semantics,
+  REGISTRY_LOCK rule).
+
+## [v16.0.0]
 
 Design: `docs/proposals/namespaces.md` (rev 10).
 

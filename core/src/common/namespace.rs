@@ -80,14 +80,40 @@ const DEFAULT_NS_BUDGET_MB: usize = 512;
 ///
 /// `Display`/`FromStr` round-trip as `"42"` (default ns) or `"42@7"`
 /// (ns 7) — config/log friendly.
+///
+/// **Canonical form**: the default namespace is spelled `ns: None`,
+/// never `Some(DEFAULT_NS_ID)`. Every constructor under this type's
+/// control (`From<u64>`, `FromStr`, `Deserialize`, and the handles'
+/// `instance_id()`) canonicalizes, so `Eq`/`Hash` are reliable for
+/// tokens obtained through the API. Routing treats both spellings as
+/// the default namespace regardless.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
 )]
+#[serde(from = "InstanceIdWire")]
 pub struct InstanceId {
     /// The storage prefix — what pre-v16 releases called `instance_id`.
     pub map_id: u64,
-    /// The owning namespace; `None` = default namespace.
+    /// The owning namespace; `None` = default namespace (canonical —
+    /// see the type docs).
     pub ns: Option<NsId>,
+}
+
+/// Wire-side mirror of [`InstanceId`]: deserialization funnels through
+/// it so a non-canonical `Some(DEFAULT_NS_ID)` folds to `None`.
+#[derive(Deserialize)]
+struct InstanceIdWire {
+    map_id: u64,
+    ns: Option<NsId>,
+}
+
+impl From<InstanceIdWire> for InstanceId {
+    fn from(w: InstanceIdWire) -> Self {
+        Self {
+            map_id: w.map_id,
+            ns: w.ns.filter(|&n| n != DEFAULT_NS_ID),
+        }
+    }
 }
 
 impl From<u64> for InstanceId {
@@ -121,7 +147,9 @@ impl FromStr for InstanceId {
             }),
             Some((m, n)) => Ok(Self {
                 map_id: parse(m, "map_id")?,
-                ns: Some(parse(n, "ns_id")?),
+                // "42@0" is a non-canonical spelling of the default
+                // namespace: fold it, don't reject it.
+                ns: Some(parse(n, "ns_id")?).filter(|&n| n != DEFAULT_NS_ID),
             }),
         }
     }
@@ -260,12 +288,37 @@ fn resolve_root(base: &Path, rec: &NsRecord) -> PathBuf {
     }
 }
 
-/// Lexical is-prefix check on normalized components (no filesystem
-/// access — roots may not exist yet).
+/// Lexical is-prefix check on components.
 fn path_contains(outer: &Path, inner: &Path) -> bool {
     let o: Vec<Component<'_>> = outer.components().collect();
     let i: Vec<Component<'_>> = inner.components().collect();
     i.len() >= o.len() && i[..o.len()] == o[..]
+}
+
+/// Best-effort physical normalization for overlap checks: canonicalize
+/// the deepest EXISTING ancestor (resolving symlinks), then re-append
+/// the not-yet-existing lexical tail. Falls back to the input when no
+/// ancestor exists (then the lexical check still applies).
+fn normalize_physical(p: &Path) -> PathBuf {
+    let mut existing = p;
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    loop {
+        match existing.canonicalize() {
+            Ok(mut c) => {
+                for seg in tail.iter().rev() {
+                    c.push(seg);
+                }
+                return c;
+            }
+            Err(_) => match (existing.parent(), existing.file_name()) {
+                (Some(parent), Some(name)) => {
+                    tail.push(name.to_owned());
+                    existing = parent;
+                }
+                _ => return p.to_path_buf(),
+            },
+        }
+    }
 }
 
 fn ns_err(detail: impl Into<String>) -> VsdbError {
@@ -276,6 +329,12 @@ fn ns_err(detail: impl Into<String>) -> VsdbError {
 
 /// Validates an explicit root against the default base and every other
 /// registered root: no nesting in either direction.
+///
+/// Alias-hardened: `.`/`..` components are rejected outright, and the
+/// overlap comparison runs on physically normalized paths (symlinked
+/// spellings of the base or of another root are caught). Symlinks
+/// created *after* registration are out of scope — that is filesystem
+/// administration, not addressing.
 fn validate_explicit_root(
     base: &Path,
     reg: &RegistryFile,
@@ -293,7 +352,18 @@ fn validate_explicit_root(
             candidate.display()
         )));
     }
-    if path_contains(base, candidate) || path_contains(candidate, base) {
+    if candidate
+        .components()
+        .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
+    {
+        return Err(ns_err(format!(
+            "namespace path must not contain `.`/`..` components: {}",
+            candidate.display()
+        )));
+    }
+    let cand_norm = normalize_physical(candidate);
+    let base_norm = normalize_physical(base);
+    if path_contains(&base_norm, &cand_norm) || path_contains(&cand_norm, &base_norm) {
         return Err(ns_err(format!(
             "namespace path {} overlaps the default base dir {}",
             candidate.display(),
@@ -301,17 +371,42 @@ fn validate_explicit_root(
         )));
     }
     for rec in &reg.entries {
-        let other = resolve_root(base, rec);
-        if path_contains(&other, candidate) || path_contains(candidate, &other) {
+        let other = normalize_physical(&resolve_root(base, rec));
+        if path_contains(&other, &cand_norm) || path_contains(&cand_norm, &other) {
             return Err(ns_err(format!(
-                "namespace path {} overlaps namespace {}'s root {}",
+                "namespace path {} overlaps namespace {}'s root",
                 candidate.display(),
                 rec.id,
-                other.display()
             )));
         }
     }
     Ok(())
+}
+
+/// A brand-new explicit root must be nonexistent or an empty dir.
+///
+/// Adopting an existing non-empty directory is refused: a foreign
+/// dataset's prefixes have unknown provenance (the allocator ceiling
+/// lives under THIS universe's default base), so new allocations could
+/// collide with the adopted data — and `destroy` would later delete
+/// whatever else lived there. Importing/attaching foreign roots is an
+/// explicit non-goal (see docs/proposals/namespaces.md §9).
+fn ensure_root_adoptable(root: &Path) -> Result<()> {
+    match fs::read_dir(root) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(mut entries) => {
+            if entries.next().is_some() {
+                Err(ns_err(format!(
+                    "explicit namespace root {} already exists and is not \
+                     empty; importing foreign data dirs is unsupported",
+                    root.display()
+                )))
+            } else {
+                Ok(())
+            }
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 fn sizing_for(mem_budget_mb: Option<usize>) -> EngineSizing {
@@ -368,6 +463,7 @@ impl Namespace {
 
         if let Some(p) = &opts.path {
             validate_explicit_root(&base, &reg, p)?;
+            ensure_root_adoptable(p)?;
         }
 
         let id = reg.next_id;
@@ -425,6 +521,12 @@ impl Namespace {
         if let Some(ns) = OPEN_NAMESPACES.lock().get(&id) {
             return Ok(ns.clone());
         }
+        // Reading the registry materializes a base-dir-derived path:
+        // freeze the base dir (same contract as every other derived
+        // path) so a later `vsdb_set_base_dir` fails loudly instead of
+        // moving the allocator's backing store to another universe
+        // under this already-open namespace.
+        vsdb_freeze_base_dir();
         let base = vsdb_get_base_dir();
 
         let _g = REGISTRY_LOCK.lock();
@@ -563,14 +665,19 @@ pub fn vsdb_ns_destroy(id: NsId) -> Result<()> {
     if id == DEFAULT_NS_ID {
         return Err(ns_err("the default namespace cannot be destroyed"));
     }
+    vsdb_freeze_base_dir();
+    let base = vsdb_get_base_dir();
+    let _g = REGISTRY_LOCK.lock();
+    // The not-open check MUST run under REGISTRY_LOCK: `open` inserts
+    // into OPEN_NAMESPACES while holding it, so checking here closes
+    // the TOCTOU window where a racing open could cache a live engine
+    // whose root we are about to delete.
     if OPEN_NAMESPACES.lock().contains_key(&id) {
         return Err(ns_err(format!(
             "namespace {id} is open in this process; destroy requires a \
              not-open target"
         )));
     }
-    let base = vsdb_get_base_dir();
-    let _g = REGISTRY_LOCK.lock();
     let mut reg = load_registry()?;
     let Some(pos) = reg.entries.iter().position(|r| r.id == id) else {
         return Err(ns_err(format!("namespace {id} is not registered")));
@@ -597,16 +704,18 @@ pub fn vsdb_ns_relocate(id: NsId, new_path: impl AsRef<Path>) -> Result<()> {
              via VSDB_BASE_DIR / vsdb_set_base_dir before first use",
         ));
     }
+    vsdb_freeze_base_dir();
+    let base = vsdb_get_base_dir();
+    let new_path = new_path.as_ref();
+
+    let _g = REGISTRY_LOCK.lock();
+    // Under REGISTRY_LOCK for the same TOCTOU reason as destroy.
     if OPEN_NAMESPACES.lock().contains_key(&id) {
         return Err(ns_err(format!(
             "namespace {id} is open in this process; relocate requires a \
              not-open target"
         )));
     }
-    let base = vsdb_get_base_dir();
-    let new_path = new_path.as_ref();
-
-    let _g = REGISTRY_LOCK.lock();
     let mut reg = load_registry()?;
     if !reg.entries.iter().any(|r| r.id == id) {
         return Err(ns_err(format!("namespace {id} is not registered")));

@@ -131,7 +131,19 @@ impl<'de> Deserialize<'de> for DagMapRaw {
 impl DagMapRaw {
     /// [`new`](Self::new) placed in `ns` — every internal component
     /// lands in the same namespace (a composite never spans namespaces).
+    ///
+    /// With a parent, the child ALWAYS inherits the parent's namespace
+    /// (one DAG = one namespace); passing a different `ns` here is a
+    /// caller bug (`debug_assert`ed, ignored in release).
     pub fn new_in(ns: &crate::common::Namespace, parent: Option<&mut Self>) -> Self {
+        if let Some(p) = &parent {
+            debug_assert_eq!(
+                ns.id(),
+                p.namespace().id(),
+                "a DAG never spans namespaces: child must live in its \
+                 parent's namespace"
+            );
+        }
         ns.scope(|| Self::new(parent))
     }
 
@@ -149,7 +161,22 @@ impl DagMapRaw {
     /// are cycle-guarded, so lookups on such a graph degrade to `None`
     /// (and `prune` reports an error) instead of hanging, but the graph
     /// itself is logically invalid.
+    ///
+    /// Parented construction inherits the **parent's namespace**,
+    /// overriding any ambient scope: one DAG never spans namespaces
+    /// (destroying/relocating either side would otherwise leave
+    /// dangling cross-engine references).
     pub fn new(parent: Option<&mut Self>) -> Self {
+        match parent {
+            Some(p) => {
+                let ns = p.namespace();
+                ns.scope(|| Self::build(Some(p)))
+            }
+            None => Self::build(None),
+        }
+    }
+
+    fn build(parent: Option<&mut Self>) -> Self {
         // Fields are constructed explicitly: `..Default::default()` would
         // materialize (and immediately discard) a default `parent` Orphan,
         // which eagerly writes an entry under a fresh engine prefix —
@@ -690,11 +717,16 @@ impl DagMapRaw {
         self.children.clear(); // optimize for recursive ops
 
         while let Some((owner_id, mut node)) = stack.pop() {
-            if !seen.insert(node.instance_id()) {
+            // Ownership FIRST, duplicate-suppression second: a foreign
+            // entry (stale index copy owned by a different live parent)
+            // must not poison `seen` — otherwise the true owned entry
+            // for the same node, popped later, would be skipped and the
+            // node would survive destruction (INV-DG5).
+            if !Self::owned_or_residue(owner_id, &node) {
+                // Foreign entry — not ours to destroy.
                 continue;
             }
-            if !Self::owned_or_residue(owner_id, &node) {
-                // Foreign entry (stale index copy) — not ours to destroy.
+            if !seen.insert(node.instance_id()) {
                 continue;
             }
             let node_id = node.instance_id();

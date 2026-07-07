@@ -2,16 +2,32 @@
 
 ## Files
 - `core/src/common/engine/mod.rs` — engine::Mapx, batch ops, prefix allocation, shard routing
-- `core/src/common/engine/mmdb.rs` — MMDB integration, 16-shard DB instances
-- `core/src/common/mod.rs` — VSDB singleton, paths, config
+- `core/src/common/engine/mmdb.rs` — MMDB integration, per-namespace shard sets, global allocator backing store, format marker
+- `core/src/common/namespace.rs` — Namespace handle, registry, InstanceId, ambient scope, lifecycle
+- `core/src/common/mod.rs` — VSDB singleton (default namespace), paths, config
 - `core/src/basic/mapx_raw/mod.rs` — MapxRaw (untyped KV, prefix-scoped)
 
 ## Architecture
-- 16 independent MMDB instances (shards)
-- Each data structure gets a unique u64 prefix via PreAllocator
-- Shard selection: `prefix_bytes % 16` (or similar routing)
+- One engine instance per NAMESPACE; each = N independent MMDB shards
+  (default namespace pinned to 16; non-default counts are creation-time
+  persisted in the registry and validated at open)
+- ONE process-global prefix allocator serves every namespace: prefixes
+  are unique across the whole registry by construction; backing store is
+  `{default_base}/__SYSTEM__/__prefix_ceiling__` (durable file, take-max
+  fold from the legacy shard-0 key at default-engine open)
+- Each data structure gets a unique u64 prefix; shard selection:
+  `prefix % shard_count` within its owning namespace's engine
 - All keys stored as: `[prefix_8_bytes][user_key_bytes]`
-- Global singleton: `Box::leak` for 'static lifetime
+- Handles carry their `Namespace` (Arc); ambient scope affects CREATION
+  only, never routing; metas embed `ns_id` as an optional 8-byte suffix
+  (absent ⇔ default namespace, byte-identical to pre-v16)
+- Engines leak-forever (`Box::leak`); registry mutations + namespace
+  opens serialize on `REGISTRY_LOCK` (not-open checks for
+  destroy/relocate must run UNDER it — TOCTOU)
+- `__SYSTEM__/format_version` marker: written after shard creation
+  completes; older binaries refuse newer formats; shard-layout
+  validation is completion-aware (marker absent + fewer shards than
+  requested = resumable half-created root)
 - WriteBatch per-shard for atomic multi-key operations
 
 ## Critical Invariants

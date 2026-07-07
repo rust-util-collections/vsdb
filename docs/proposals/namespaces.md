@@ -192,7 +192,7 @@ impl MapxXXX {
     pub fn namespace(&self) -> Namespace;  // THE co-location primitive: "put with this"
 
     pub fn instance_id(&self) -> InstanceId;      // complete address (rev 9)
-    pub fn save_as_meta(&self) -> Result<InstanceId>;
+    pub fn save_meta(&self) -> Result<InstanceId>;
 
     /// `Into` accepts bare u64 (⇒ ns: None) — every existing call site
     /// compiles unchanged. Resolution is deterministic, never a search:
@@ -219,7 +219,7 @@ Notes:
   Recovery rides what users already persist today: serialized handles (metas
   embed `ns_id`, §4.3) or bare `instance_id`s (accepted via `From<u64>`).
   The richer `InstanceId` is what new code *receives* from
-  `save_as_meta()`/`instance_id()` — a complete, direct-addressing token —
+  `save_meta()`/`instance_id()` — a complete, direct-addressing token —
   but it is never a required input shape; `NsId` alone is readable (`id()`)
   and never demanded on any normal path.
 - **Scope invariant — placement only, never routing.** The ambient scope is
@@ -496,7 +496,7 @@ registries), which already works today. Consequences:
   the meta *read* grammar widens, core `Mapx` layout changes, and the
   resource model gains new knobs; semver-major is the honest choice
   (matching the notes' instinct). The only source-breaking change on the
-  unaware tier: `instance_id()`/`save_as_meta()` now return `InstanceId`
+  unaware tier: `instance_id()`/`save_meta()` now return `InstanceId`
   instead of `u64` (compile-time, mechanical migration; stored u64 tokens
   keep working — no data impact).
 - **Upgrade (v15 → v16)**: data dirs open as the default namespace after one

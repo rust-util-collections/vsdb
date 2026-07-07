@@ -89,16 +89,24 @@ impl<V> DagMapRawKey<V>
 where
     V: ValueEnDe,
 {
-    /// Creates a new `DagMapRawKey`, optionally attached under `raw_parent`.
-    ///
-    /// See [`DagMapRaw::new`] for the parent-linking semantics.
-    #[inline(always)]
     /// [`new`](Self::new) placed in `ns` — every internal component
     /// lands in the same namespace (a composite never spans namespaces).
+    ///
+    /// With a parent, the child ALWAYS inherits the parent's namespace
+    /// (see [`DagMapRaw::new`]); a mismatched `ns` is a caller bug
+    /// (`debug_assert`ed, ignored in release).
     pub fn new_in(
         ns: &crate::common::Namespace,
         raw_parent: Option<&mut DagMapRaw>,
     ) -> Self {
+        if let Some(p) = &raw_parent {
+            debug_assert_eq!(
+                ns.id(),
+                p.namespace().id(),
+                "a DAG never spans namespaces: child must live in its \
+                 parent's namespace"
+            );
+        }
         ns.scope(|| Self::new(raw_parent))
     }
 
@@ -107,6 +115,11 @@ where
         self.inner.namespace()
     }
 
+    /// Creates a new `DagMapRawKey`, optionally attached under `raw_parent`.
+    ///
+    /// See [`DagMapRaw::new`] for the parent-linking semantics
+    /// (parented construction inherits the parent's namespace).
+    #[inline(always)]
     pub fn new(raw_parent: Option<&mut DagMapRaw>) -> Self {
         Self {
             inner: DagMapRaw::new(raw_parent),

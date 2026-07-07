@@ -16,6 +16,7 @@ Before analyzing any change, gather context:
    | Changed path | Subsystem | Pattern guide (`.claude/docs/patterns/`) |
    |--------------|-----------|------------------------------------------|
    | `core/src/common/engine/`, `core/src/common/mod.rs` | engine, shard routing | `engine.md` |
+   | `core/src/common/namespace.rs` | namespaces (registry, lifecycle, InstanceId, scope) | `engine.md` |
    | `core/src/basic/mapx_raw/` | raw KV layer | `engine.md` |
    | `strata/src/basic/mapx/`, `mapx_ord/`, `mapx_ord_rawkey/`, `orphan/` | typed collections | `engine.md` |
    | `strata/src/basic/persistent_btree/` | B+ tree (COW) | `btree.md` |
