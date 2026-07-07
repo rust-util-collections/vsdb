@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v15.0.2]
+
+### Added
+
+- **On-disk format-version tripwire.** Opening a dataset now checks
+  `{base_dir}/__SYSTEM__/format_version` (ASCII decimal, written by
+  v16+; v15 itself writes nothing — absence is the v15 signature) and
+  refuses to open anything newer than format 15 with a descriptive
+  error. Rationale: a future layout (v16 relocates the prefix-allocator
+  ceiling out of shard 0) would leave the legacy shard-0 ceiling stale;
+  a v15 binary reading it would re-issue already-used prefixes —
+  silent data corruption. Downgrade stays unsupported by policy; this
+  makes the violation fail loudly instead of silently, and makes
+  v15.0.2+ the safe landing point for out-of-contract rollbacks.
+  (Design: `docs/proposals/namespaces.md` §7.)
+
+### Changed
+
+- Doc terminology: per-prefix key ranges are now called "prefix
+  ranges" (previously "prefix namespaces"), freeing the term
+  *namespace* for the upcoming v16 feature.
+
 ## [v15.0.1]
 
 ### Fixed
