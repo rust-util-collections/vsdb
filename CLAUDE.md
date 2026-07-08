@@ -27,7 +27,7 @@ vsdb/
 make all          # fmt + lint + test
 make test         # cargo test --workspace (release + debug, parallel)
 make lint         # cargo clippy --workspace + check tests/benches
-make bench        # criterion benches (core basic, strata basic, versioned, slotdex)
+make bench        # criterion benches (core basic + cache_pool Q1 gate, strata basic, versioned, slotdex)
 ```
 
 **Important**: Tests run in PARALLEL (v16.0.2+). Test data stays disjoint via globally-unique prefixes; tests must not assert on cross-test global state (exact allocator values, registry sizes) and must serialize any `vsdb_set_base_dir` behind a `Once` (env mutation is unsound to race).
@@ -36,7 +36,7 @@ make bench        # criterion benches (core basic, strata basic, versioned, slot
 
 | Subsystem | Key files | Purpose |
 |-----------|-----------|---------|
-| Engine | `core/src/common/engine/mod.rs`, `mmdb.rs` | Mapx, batch ops, GLOBAL prefix alloc (all namespaces), per-ns shard routing, format marker |
+| Engine | `core/src/common/engine/mod.rs`, `mmdb.rs` | Mapx, batch ops, GLOBAL prefix alloc (all namespaces), per-ns shard routing, per-engine block-cache pool (shards share one `BlockCachePool`), format marker |
 | Namespaces | `core/src/common/namespace.rs` | Namespace handle, registry, InstanceId, ambient scope, lifecycle (create/open/close/destroy/relocate); engines owned by `Arc<NsInner>`, no leak |
 | MapxRaw | `core/src/basic/mapx_raw/` | Untyped raw KV, prefix isolation |
 | Typed Collections | `strata/src/basic/mapx/`, `mapx_ord/`, `mapx_ord_rawkey/`, `orphan/` | Mapx<K,V>, MapxOrd<K,V>, MapxOrdRawKey<V>, Orphan<T> |

@@ -1,21 +1,23 @@
 # RFC: Shared Memory Pools — Injectable Cache & Write-Buffer Accounting
 
-- **Status**: draft, rev 2 — vsdb side **not scheduled**; revisit when
-  the trigger conditions in §8 are met. **mmdb-side mechanism (steps
-  1–3) is implemented and shipped in mmdb v4.1.0** (`BlockCachePool` +
-  per-member `BlockCache` views, detach lifecycle,
-  `DbOptions::block_cache` injection — all `None`-default, zero
-  behavior change for non-sharing callers; one design delta from this
-  doc: pinned entries stayed *member-local* rather than pool-level, so
-  one member's pins add zero lock traffic to other members' `get` fast
-  paths). Rev 2 is a source-verified deep dive: every mechanism claim
-  in §3 was checked against mmdb 4.0.10 / vsdb v16.2.0, the pool
-  topology is decomposed (§4.0 — the per-engine tier turns out to need
-  **no** isolation trade at all), and the mmdb-side change surface is
-  specified to implementation granularity (§4.1, §4.2).
-  **Pragmatic sequencing in §9.0**: step 0 + the Q1 benchmark are
-  recommended *now* (pre-commitment); vsdb wiring (steps 4–5) is the
-  recommended first batch; tier (ii) and phase 2 are deferred.
+- **Status**: draft, rev 2 — **phase 1 tier (i) implemented end-to-end**:
+  mmdb-side mechanism (steps 1–3) shipped in mmdb v4.1.0
+  (`BlockCachePool` + per-member `BlockCache` views, detach lifecycle,
+  `DbOptions::block_cache` injection — all `None`-default; two design
+  deltas from this doc: pinned entries stayed *member-local*, and the
+  pool's LRU store is a 64-way `SegmentedCache` after the Q1 benchmark
+  caught read-op-bookkeeping contention). vsdb-side wiring (steps 0 + 4)
+  shipped in vsdb v16.3.0: per-engine pool for every engine +
+  `Namespace::shard_properties` telemetry. **Q1 gate passed**
+  (`core/benches/cache_pool.rs`, 64 MB budget, SST-backed reads):
+  skew −72%/−81% (1t/8t), uniform parity within noise (p > 0.6).
+  Remaining: step 5 (production soak), tier (ii) and phase 2 —
+  deferred per §9.0. Rev 2 is a source-verified deep dive: every
+  mechanism claim in §3 was checked against mmdb 4.0.10 / vsdb
+  v16.2.0, the pool topology is decomposed (§4.0 — the per-engine tier
+  turns out to need **no** isolation trade at all), and the mmdb-side
+  change surface is specified to implementation granularity
+  (§4.1, §4.2).
 - **Prerequisites**: [namespaces.md](./namespaces.md) (implemented,
   v16.0.0+), [ns-close.md](./ns-close.md) (implemented, v16.1.0 —
   engine lifetimes are now dynamic, which this design must respect)
@@ -527,12 +529,12 @@ regression on a representative skewed workload:
 
 | Step | When | Layer | Content | Risk |
 |------|------|-------|---------|------|
-| 0 | **now** | vsdb | **Measurement pre-work** (may ship any time, independently): property passthrough `Engine → DB::property` for per-shard cache hit/miss; optional aggregate helper | trivial |
+| 0 | **✅ done (vsdb v16.3.0)** | vsdb | **Measurement pre-work**: `Namespace::shard_properties` — per-shard `DB::get_property` passthrough for cache hit/miss telemetry | trivial |
 | 1 | **✅ done (mmdb v4.1.0)** | mmdb | `BlockCachePool` + façade `BlockCache` view: key namespacing `(member, file, offset)`, **sharded** `file_offsets`, per-member pinned-bytes counter; *delta vs. plan: pinned entries kept member-local (zero cross-member lock traffic on the pinned fast path)* | correctness-critical, mechanical; call-site blast radius ≈ 0 (§4.1) |
 | 2 | **✅ done (mmdb v4.1.0)** | mmdb | Detach lifecycle: idempotent `detach()` from `close` + `Drop`, batched invalidation + single maintenance pass, cache-bypass mode for detached views | low |
 | 3 | **✅ done (mmdb v4.1.0)** | mmdb | `DbOptions.block_cache: Option<Arc<BlockCachePool>>` injection; capacity-precedence docs; contention benchmark (§10 Q1) gating defaults | low |
-| 4 | first batch | vsdb | Tier (i): per-engine pool in `Engine::open_at` (all namespaces, default included) | low |
-| 5 | first batch | — | Soak: per-shard hit-rate/eviction telemetry vs static split (uses step 0) | — |
+| 4 | **✅ done (vsdb v16.3.0)** | vsdb | Tier (i): per-engine pool in `Engine::open_at` (all namespaces, default included); Q1 gate passed — skew −72%/−81%, uniform noise (`core/benches/cache_pool.rs`, A/B protocol documented in the bench) | low |
+| 5 | remaining | — | Soak: per-shard hit-rate/eviction telemetry vs static split in a real deployment (uses step 0) | — |
 | 6 | **deferred** (trigger 2/3) | vsdb | Tier (ii): opt-in ns-tier pool + budget-semantics contract note | medium |
 | 7 | **deferred hard** (write-side evidence) | mmdb | Phase 2 WBM baseline: accounting hooks, self-flush trigger, bounded poison-aware soft stall, attach/detach lifecycle | high — full crash-safety & error-policy re-audit of the write path |
 | 8 | **deferred hard** (with 7) | vsdb | Phase 2 wiring + budget semantics change (ceiling → floor/weight), CHANGELOG contract note | medium |

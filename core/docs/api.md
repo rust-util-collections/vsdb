@@ -115,4 +115,13 @@ vsdb_ns_destroy(ns.id()).unwrap();
 // Data movement is the operator's job; the target must hold
 // an initialized dataset (format marker + per-shard CURRENT anchors).
 vsdb_ns_relocate(ns2.id(), "/mnt/archive/db").unwrap();
+
+// Per-shard engine telemetry (mmdb property names), one reading per
+// shard in shard order — e.g. cache hit/miss counters. Each engine's
+// shards share one block-cache pool, so a hot collection (one
+// collection = one shard) can use the engine's whole cache slice.
+let ns4 = Namespace::create().unwrap();
+let hits = ns4.shard_properties("stats.block_cache_hits");
+let misses = ns4.shard_properties("stats.block_cache_misses");
+assert_eq!(hits.len(), misses.len());
 ```

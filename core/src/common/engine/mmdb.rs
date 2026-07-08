@@ -2,7 +2,7 @@ use crate::common::{
     BatchTrait, GB, PREFIX_ALLOC_START, PREFIX_SIZE, Pre, PreBytes, RawKey, RawValue,
     vsdb_freeze_base_dir, vsdb_get_base_dir,
 };
-use mmdb::{BidiIterator, CompressionType, DB, DbOptions, WriteBatch};
+use mmdb::{BidiIterator, BlockCachePool, CompressionType, DB, DbOptions, WriteBatch};
 use parking_lot::{Mutex, RwLock};
 use ruc::*;
 use std::{
@@ -15,7 +15,7 @@ use std::{
     ops::{Bound, RangeBounds},
     path::{Path, PathBuf},
     sync::{
-        LazyLock,
+        Arc, LazyLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread::{self, ThreadId},
@@ -208,11 +208,23 @@ impl MmDB {
         // every already-opened shard (flushing its WAL and joining its
         // compaction thread) via the `?` early return — the same Drop
         // glue that later powers `MmDB::close`.
+        //
+        // One block-cache pool per ENGINE, shared by its shards
+        // (shared-mem-pool RFC tier (i)): the shards are one tenant —
+        // same dataset, same budget — so pooling their cache slice
+        // trades no isolation, while a hot shard (one collection lives
+        // entirely inside one shard: `prefix % shards` routing) can now
+        // use the whole slice instead of `1/shards` of it. The capacity
+        // is exactly the sum of the per-shard capacities of the static
+        // split, so engine totals are unchanged.
+        let pool = Arc::new(BlockCachePool::new(
+            shards as u64 * per_shard_block_cache_size(&sizing, shards),
+        ));
         let mut dbs_vec: Vec<DB> = Vec::with_capacity(shards);
         for i in 0..shards {
             let shard_dir = dir.join(format!("shard_{:02}", i));
             fs::create_dir_all(&shard_dir).c(d!())?;
-            let db = mmdb_open(&shard_dir, shards, sizing)?;
+            let db = mmdb_open(&shard_dir, shards, sizing, &pool)?;
             dbs_vec.push(db);
         }
 
@@ -277,6 +289,19 @@ impl MmDB {
         for db in &self.dbs {
             db.flush().expect("vsdb: mmdb flush failed");
         }
+    }
+
+    /// One engine-property reading per shard, in shard order
+    /// (measurement pre-work of the shared-mem-pool RFC, step 0).
+    ///
+    /// Property names are mmdb's `DB::get_property` names; `None` marks
+    /// a name unknown to the engine. Per-shard cache telemetry stays
+    /// meaningful under the engine-level cache pool: hit/miss counters
+    /// are counted per shard at the read site, while
+    /// `"block-cache-usage"` reports the pool-wide total from every
+    /// shard (all shards of one engine share one pool by design).
+    pub(crate) fn shard_properties(&self, name: &str) -> Vec<Option<String>> {
+        self.dbs.iter().map(|db| db.get_property(name)).collect()
     }
 
     pub(crate) fn get(&self, meta_prefix: PreBytes, key: &[u8]) -> Option<RawValue> {
@@ -1236,7 +1261,28 @@ impl EngineSizing {
     }
 }
 
-fn mmdb_open(dir: &Path, shards: usize, sizing: EngineSizing) -> Result<DB> {
+/// Per-shard block-cache capacity under the static split — kept as its
+/// own function because the engine-level pool (tier (i)) must size
+/// itself to exactly `shards ×` this value so pooling changes cache
+/// *allocation*, never engine totals.
+///
+/// Floored alongside the write-buffer floor in `mmdb_open`: a
+/// degenerate budget must degrade to a small-but-functional cache,
+/// never to `block_cache_capacity: 0`, which mmdb treats as "caching
+/// disabled entirely".
+fn per_shard_block_cache_size(sizing: &EngineSizing, shards: usize) -> u64 {
+    cmp::max(
+        (sizing.mem_budget as u64) / 8 / shards as u64,
+        4 * 1024 * 1024,
+    )
+}
+
+fn mmdb_open(
+    dir: &Path,
+    shards: usize,
+    sizing: EngineSizing,
+    pool: &Arc<BlockCachePool>,
+) -> Result<DB> {
     let EngineSizing {
         mem_budget,
         budget_limited,
@@ -1275,12 +1321,11 @@ fn mmdb_open(dir: &Path, shards: usize, sizing: EngineSizing) -> Result<DB> {
         legacy_wr
     };
 
-    // Floored alongside the write-buffer floor above: a degenerate
-    // budget must degrade to a small-but-functional cache, never to
-    // `block_cache_capacity: 0`, which mmdb treats as "caching
-    // disabled entirely".
-    let block_cache_size =
-        cmp::max((mem_budget as u64) / 8 / shards as u64, 4 * 1024 * 1024);
+    // Per-shard capacity of the static split — retained in the options
+    // as belt-and-braces (mmdb documents it as IGNORED when a shared
+    // pool is attached; if the pool wiring were ever removed, each
+    // shard would fall back to exactly this private capacity).
+    let block_cache_size = per_shard_block_cache_size(&sizing, shards);
 
     // Single compaction thread per shard (N shards = N parallel compactions)
     let opts = DbOptions {
@@ -1302,7 +1347,9 @@ fn mmdb_open(dir: &Path, shards: usize, sizing: EngineSizing) -> Result<DB> {
         write_buffer_size: wr_buffer_size,
         max_immutable_memtables: 4,
 
-        // Block cache + block size (per-shard)
+        // Block cache: one pool per engine, shared by its shards (the
+        // per-shard capacity above is documentation/fallback only).
+        block_cache: Some(pool.clone()),
         block_cache_capacity: block_cache_size,
         block_size: 16 * 1024, // 16 KB
 
@@ -1546,8 +1593,13 @@ mod tests {
     #[test]
     fn mmdb_basic_get_put_delete() {
         let dir = tmp_dir("basic");
-        let db =
-            mmdb_open(&dir, NUM_SHARDS, EngineSizing::from_process_budget()).unwrap();
+        let db = mmdb_open(
+            &dir,
+            NUM_SHARDS,
+            EngineSizing::from_process_budget(),
+            &Arc::new(BlockCachePool::new(64 * 1024 * 1024)),
+        )
+        .unwrap();
 
         db.put(b"hello", b"world").unwrap();
         assert_eq!(db.get(b"hello").unwrap(), Some(b"world".to_vec()));
@@ -1561,8 +1613,13 @@ mod tests {
     #[test]
     fn mmdb_prefix_iteration() {
         let dir = tmp_dir("prefix-iter");
-        let db =
-            mmdb_open(&dir, NUM_SHARDS, EngineSizing::from_process_budget()).unwrap();
+        let db = mmdb_open(
+            &dir,
+            NUM_SHARDS,
+            EngineSizing::from_process_budget(),
+            &Arc::new(BlockCachePool::new(64 * 1024 * 1024)),
+        )
+        .unwrap();
 
         let prefix_a: PreBytes = 1_u64.to_le_bytes();
         let prefix_b: PreBytes = 2_u64.to_le_bytes();

@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v16.3.0]
+
+Per-engine block-cache pool + cache telemetry (shared-mem-pool RFC
+tier (i), steps 0 + 4; mechanism shipped in mmdb v4.1.0).
+
+### Added
+
+- **Per-engine block-cache pool**: every engine (default namespace and
+  every non-default namespace alike) now shares ONE `BlockCachePool`
+  across its shards instead of statically splitting the cache slice
+  per shard. Since routing is `prefix % shards`, a collection lives
+  entirely inside one shard — under the old split a single hot map
+  could only ever use `1/shards` of the engine's cache. The pool's
+  capacity is exactly the sum of the former per-shard capacities, so
+  engine memory totals are unchanged; this is a pure reallocation.
+  Measured (Q1 gate benchmark, 64 MB budget, SST-backed random reads):
+  skewed load (one hot map) **−72% (1 thread) / −81% (8 threads)**
+  read latency; uniform all-shard load: parity within noise (after
+  the pool's LRU store was 64-way segmented in mmdb — see mmdb
+  v4.1.0). No isolation trade: the shards of one engine are one
+  tenant (same dataset, same budget).
+- **Per-shard property passthrough** (`Namespace::shard_properties`):
+  one engine-property reading per shard in shard order (mmdb
+  `DB::get_property` names) — the observability tier the RFC's
+  trigger conditions require. Per-shard cache hit/miss counters stay
+  per-shard under the pool (counted at each shard's read site);
+  `"block-cache-usage"` reports the engine-wide pool total plus the
+  shard's own pins.
+- **`cache_pool` criterion bench** (`core/benches/cache_pool.rs`): the
+  Q1 gate — skew and uniform read scenarios at 1/8 threads with a
+  documented A/B protocol against the private-split baseline.
+
 ## [v16.2.1]
 
 Hardening follow-ups from the post-v16.2.0 review — no on-disk format

@@ -665,6 +665,33 @@ impl Namespace {
         self.0.engine.flush()
     }
 
+    /// One engine-property reading per shard, in shard order — the
+    /// observability tier for capacity planning and cache telemetry.
+    ///
+    /// Property names are the storage engine's (mmdb `DB::get_property`)
+    /// names; unknown names yield `None` per shard. The ones that
+    /// matter for cache telemetry:
+    ///
+    /// - `"stats.block_cache_hits"` / `"stats.block_cache_misses"` —
+    ///   per-shard counters (counted at each shard's read site, so
+    ///   per-shard hit rates stay meaningful under the shared
+    ///   per-engine cache pool);
+    /// - `"stats.cache_hit_rate"` — per-shard rate in `[0, 1]`;
+    /// - `"block-cache-usage"` — approximate entry count of the
+    ///   engine's cache **pool** plus that shard's own pinned entries
+    ///   (all shards of one engine share one pool, so the dominant term
+    ///   is the same engine-wide total in every shard's reading).
+    ///
+    /// ```ignore
+    /// let ns = Namespace::default_ns();
+    /// let hits = ns.shard_properties("stats.block_cache_hits");
+    /// let misses = ns.shard_properties("stats.block_cache_misses");
+    /// // hits.len() == misses.len() == the engine's shard count
+    /// ```
+    pub fn shard_properties(&self, name: &str) -> Vec<Option<String>> {
+        self.0.engine.shard_properties(name)
+    }
+
     /// The engine backing this namespace (crate-internal routing).
     ///
     /// A plain borrow of the `Arc`-owned engine: it cannot outlive the

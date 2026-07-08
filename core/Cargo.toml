@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_core"
-version = "16.2.1"
+version = "16.3.0"
 authors = ["hui.fan@mail.ru"]
 edition = "2024"
 description = "A std-collection-like database"
@@ -28,4 +28,8 @@ criterion = { workspace = true }
 
 [[bench]]
 name = "basic"
+harness = false
+
+[[bench]]
+name = "cache_pool"
 harness = false

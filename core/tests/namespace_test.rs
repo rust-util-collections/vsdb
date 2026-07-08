@@ -308,6 +308,57 @@ fn namespace_lifecycle() {
     assert!(vsdb_ns_close(DEFAULT_NS_ID).is_err());
     assert!(vsdb_ns_close(u64::MAX).is_err());
 
+    // ---- per-shard property passthrough + engine-level cache pool ----
+    // A fresh namespace owns a private engine, so its telemetry is
+    // fully isolated from every other test in this process.
+    let t = Namespace::create_with(NamespaceOpts {
+        shards: 2,
+        ..Default::default()
+    })
+    .unwrap();
+    let tid = t.id();
+    let mut tm = MapxRaw::new_in(&t);
+    // One map = one prefix = one shard; values sized so the shard's
+    // SST spans many 16 KB blocks (only the first L0 block is pinned,
+    // so cold reads of the rest must MISS, repeat reads must HIT).
+    for i in 0..128u16 {
+        tm.insert(i.to_be_bytes(), [7u8; 4096]);
+    }
+    // Push the rows into SSTs so reads exercise the block cache.
+    t.flush();
+    for _ in 0..2 {
+        for i in 0..128u16 {
+            assert!(tm.get(i.to_be_bytes()).is_some());
+        }
+    }
+    // Shard-ordered readings, one per shard.
+    let hits = t.shard_properties("stats.block_cache_hits");
+    let misses = t.shard_properties("stats.block_cache_misses");
+    assert_eq!(hits.len(), 2);
+    assert_eq!(misses.len(), 2);
+    let sum = |v: &[Option<String>]| -> u64 {
+        v.iter()
+            .map(|s| s.as_deref().unwrap().parse::<u64>().unwrap())
+            .sum()
+    };
+    // First SST read misses, repeat reads hit — both counters moved.
+    assert!(sum(&misses) >= 1, "expected at least one cache miss");
+    assert!(sum(&hits) >= 1, "expected at least one cache hit");
+    // The cache pool is engine-level: usage readings are pool totals
+    // (plus per-shard pins) and must parse on every shard.
+    let usage = t.shard_properties("block-cache-usage");
+    assert!(
+        usage
+            .iter()
+            .all(|s| s.as_deref().unwrap().parse::<u64>().is_ok())
+    );
+    // Unknown names yield None per shard, never a panic.
+    assert_eq!(t.shard_properties("no-such-property"), vec![None, None]);
+    drop(tm);
+    drop(t);
+    vsdb_ns_close(tid).unwrap();
+    vsdb_ns_destroy(tid).unwrap();
+
     // ---- consuming close: Namespace::close(self) ----
     // Refusal returns the handle for continued use.
     let expect_refused = |r: std::result::Result<
