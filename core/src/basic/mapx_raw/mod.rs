@@ -166,8 +166,9 @@ impl MapxRaw {
     /// # Errors
     ///
     /// If an engine-level write fails.  The partially-written target is
-    /// abandoned as unreferenced, invisible garbage (the same residue a
-    /// mid-`clone()` panic leaves behind).
+    /// reclaimed with a best-effort O(1) wipe; only if that wipe also
+    /// fails is it abandoned as unreferenced, invisible garbage (the
+    /// same residue a mid-`clone()` panic leaves behind).
     pub fn clone_in(&self, ns: &Namespace) -> Result<Self> {
         Ok(MapxRaw {
             inner: self.inner.clone_in(ns)?,

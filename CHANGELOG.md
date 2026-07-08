@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v16.2.1]
+
+Hardening follow-ups from the post-v16.2.0 review — no on-disk format
+changes (`VecDexDyn`'s new manual serde impls are byte-identical to
+the derived encoding they replace).
+
+### Fixed
+
+- **`clone_in` error path reclaims its partial target**: a failed
+  chunk commit now triggers a best-effort wipe — one O(1) range
+  tombstone, committed before the error propagates — so a failed or
+  retried clone no longer accumulates unreferenced garbage under
+  never-returned prefixes. Only if the wipe itself also fails does
+  the old residue behavior remain (documented).
+- **`VecDexDyn` metric discriminant frozen**: manual
+  `Serialize`/`Deserialize` impls over explicit, append-only wire
+  tags replace the derived impls, decoupling the persisted metric tag
+  from enum source order — reordering or inserting variants can never
+  re-interpret existing metas, and an unknown tag is refused outright.
+  Byte-identical to v16.2.0 metas; pinned by a wire-stability test.
+- **`VecDexDyn::keys`/`iter` no longer box**: both return
+  `impl Iterator` via an internal enum wrapper — zero heap
+  allocation, matching `VecDex`'s iterator signatures (the cost-model
+  doc now notes iterators dispatch per item).
+
+### Internal
+
+- `vsdb_ns_close` and `Namespace::close` now share one close-protocol
+  implementation (`ns_close_impl`) — behavior and error messages
+  unchanged, future close hardening lands in exactly one place.
+- New tests: `VecDexDyn` wire-tag stability + unknown-tag rejection,
+  and `f64` end-to-end dynamic-dispatch coverage (search, meta
+  round-trip, scalar-width cross-rejection).
+
 ## [v16.2.0]
 
 Three small backlog items shipped — all purely additive (no breaking

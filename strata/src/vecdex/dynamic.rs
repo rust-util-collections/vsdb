@@ -9,17 +9,22 @@
 //! Enum dispatch happens **once per public operation** (one `match`),
 //! after which the statically monomorphized `VecDex` code runs
 //! unchanged — the distance loops themselves are never dynamically
-//! dispatched.  Plain `VecDex` is untouched: code that pins its metric
-//! at compile time pays nothing for this type's existence.
+//! dispatched.  The iterators ([`keys`](VecDexDyn::keys) /
+//! [`iter`](VecDexDyn::iter)) dispatch per *item* through the same
+//! single `match` (an internal enum wrapper — no boxing, no heap
+//! allocation).  Plain `VecDex` is untouched: code that pins its
+//! metric at compile time pays nothing for this type's existence.
 //!
 //! # Persistence
 //!
 //! A `VecDexDyn` serializes as the metric tag plus the inner `VecDex`
 //! metadata, so [`from_meta`](VecDexDyn::from_meta) restores the
-//! creation-time metric without the caller re-stating it.  The formats
-//! are deliberately distinct: a meta saved through `VecDex<K, D, S>`
-//! cannot be loaded as `VecDexDyn<K, S>` or vice versa — pick one
-//! handle type per index and stay with it.
+//! creation-time metric without the caller re-stating it.  The metric
+//! tag is a hand-frozen wire constant, not a source-order variant
+//! index — reorganizing the enum cannot re-interpret existing metas.
+//! The formats are deliberately distinct: a meta saved through
+//! `VecDex<K, D, S>` cannot be loaded as `VecDexDyn<K, S>` or vice
+//! versa — pick one handle type per index and stay with it.
 
 use super::{
     HnswConfig, VecDex,
@@ -30,8 +35,8 @@ use crate::common::{
     ende::{KeyEnDe, ValueEnDe},
     error::Result,
 };
-use serde::{Deserialize, Serialize};
-use std::fmt;
+use serde::{Deserialize, Serialize, de, ser::SerializeTuple};
+use std::{fmt, marker::PhantomData, result::Result as StdResult};
 
 /// Runs `$body` once with `$idx` bound to the active variant's inner
 /// [`VecDex`] — the single dispatch point of every delegated method.
@@ -44,6 +49,16 @@ macro_rules! dispatch {
         }
     };
 }
+
+/// Frozen wire tags — the persisted metric discriminant, decoupled
+/// from the enum's source order so that reordering variants (or
+/// inserting a new one anywhere) can never re-interpret existing
+/// metas.  **Append-only**: a new metric takes the next fresh value;
+/// existing values are permanent.  Byte-identical to the postcard
+/// variant indices the derived impls wrote through v16.2.0.
+const WIRE_TAG_L2: u8 = 0;
+const WIRE_TAG_COSINE: u8 = 1;
+const WIRE_TAG_INNER_PRODUCT: u8 = 2;
 
 /// A [`VecDex`] whose distance metric is selected at **runtime** via
 /// [`MetricKind`] — for callers that decide the metric from
@@ -63,8 +78,6 @@ macro_rules! dispatch {
 /// assert_eq!(results[0].0, "doc-a");
 /// assert_eq!(idx.metric(), MetricKind::Cosine);
 /// ```
-#[derive(Serialize, Deserialize)]
-#[serde(bound = "K: KeyEnDe + ValueEnDe + Clone + Eq, S: Scalar")]
 pub enum VecDexDyn<K, S: Scalar = f32>
 where
     K: KeyEnDe + ValueEnDe + Clone + Eq,
@@ -75,6 +88,86 @@ where
     Cosine(VecDex<K, Cosine, S>),
     /// Negated inner product.
     InnerProduct(VecDex<K, InnerProduct, S>),
+}
+
+impl<K, S> Serialize for VecDexDyn<K, S>
+where
+    K: KeyEnDe + ValueEnDe + Clone + Eq,
+    S: Scalar,
+{
+    fn serialize<Ser>(&self, serializer: Ser) -> StdResult<Ser::Ok, Ser::Error>
+    where
+        Ser: serde::Serializer,
+    {
+        let mut tup = serializer.serialize_tuple(2)?;
+        match self {
+            Self::L2(idx) => {
+                tup.serialize_element(&WIRE_TAG_L2)?;
+                tup.serialize_element(idx)?;
+            }
+            Self::Cosine(idx) => {
+                tup.serialize_element(&WIRE_TAG_COSINE)?;
+                tup.serialize_element(idx)?;
+            }
+            Self::InnerProduct(idx) => {
+                tup.serialize_element(&WIRE_TAG_INNER_PRODUCT)?;
+                tup.serialize_element(idx)?;
+            }
+        }
+        tup.end()
+    }
+}
+
+impl<'de, K, S> Deserialize<'de> for VecDexDyn<K, S>
+where
+    K: KeyEnDe + ValueEnDe + Clone + Eq,
+    S: Scalar,
+{
+    fn deserialize<De>(deserializer: De) -> StdResult<Self, De::Error>
+    where
+        De: serde::Deserializer<'de>,
+    {
+        struct DynVisitor<K, S>(PhantomData<(K, S)>);
+
+        impl<'de, K, S> de::Visitor<'de> for DynVisitor<K, S>
+        where
+            K: KeyEnDe + ValueEnDe + Clone + Eq,
+            S: Scalar,
+        {
+            type Value = VecDexDyn<K, S>;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a VecDexDyn meta (metric wire tag + inner VecDex)")
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> StdResult<Self::Value, A::Error>
+            where
+                A: de::SeqAccess<'de>,
+            {
+                let truncated = || de::Error::custom("VecDexDyn: truncated meta");
+                let tag: u8 = seq.next_element()?.ok_or_else(truncated)?;
+                Ok(match tag {
+                    WIRE_TAG_L2 => {
+                        VecDexDyn::L2(seq.next_element()?.ok_or_else(truncated)?)
+                    }
+                    WIRE_TAG_COSINE => {
+                        VecDexDyn::Cosine(seq.next_element()?.ok_or_else(truncated)?)
+                    }
+                    WIRE_TAG_INNER_PRODUCT => VecDexDyn::InnerProduct(
+                        seq.next_element()?.ok_or_else(truncated)?,
+                    ),
+                    other => {
+                        return Err(de::Error::custom(format!(
+                            "VecDexDyn: unknown metric wire tag {other} \
+                             (meta written by a newer version?)"
+                        )));
+                    }
+                })
+            }
+        }
+
+        deserializer.deserialize_tuple(2, DynVisitor(PhantomData))
+    }
 }
 
 impl<K, S> fmt::Debug for VecDexDyn<K, S>
@@ -172,13 +265,21 @@ where
     }
 
     /// Returns an iterator over all indexed keys.
-    pub fn keys(&self) -> Box<dyn Iterator<Item = K> + '_> {
-        dispatch!(self, idx => Box::new(idx.keys()))
+    pub fn keys(&self) -> impl Iterator<Item = K> + '_ {
+        match self {
+            Self::L2(idx) => DynIter::L2(idx.keys()),
+            Self::Cosine(idx) => DynIter::Cosine(idx.keys()),
+            Self::InnerProduct(idx) => DynIter::InnerProduct(idx.keys()),
+        }
     }
 
     /// Returns an iterator over all (key, vector) pairs.
-    pub fn iter(&self) -> Box<dyn Iterator<Item = (K, Vec<S>)> + '_> {
-        dispatch!(self, idx => Box::new(idx.iter()))
+    pub fn iter(&self) -> impl Iterator<Item = (K, Vec<S>)> + '_ {
+        match self {
+            Self::L2(idx) => DynIter::L2(idx.iter()),
+            Self::Cosine(idx) => DynIter::Cosine(idx.iter()),
+            Self::InnerProduct(idx) => DynIter::InnerProduct(idx.iter()),
+        }
     }
 
     /// Clears all indexed data (see [`VecDex::clear`], panics included).
@@ -240,5 +341,41 @@ where
     /// [`VecDex::compact`]).
     pub fn compact(&mut self) -> Result<()> {
         dispatch!(self, idx => idx.compact())
+    }
+}
+
+/// Zero-allocation iterator over the active variant's inner iterator —
+/// what [`VecDexDyn::keys`]/[`VecDexDyn::iter`] return as
+/// `impl Iterator`, mirroring `VecDex`'s unboxed iterator API.  Each
+/// `next` pays the same single `match` every other delegated
+/// operation pays once per call.
+enum DynIter<A, B, C> {
+    L2(A),
+    Cosine(B),
+    InnerProduct(C),
+}
+
+impl<T, A, B, C> Iterator for DynIter<A, B, C>
+where
+    A: Iterator<Item = T>,
+    B: Iterator<Item = T>,
+    C: Iterator<Item = T>,
+{
+    type Item = T;
+
+    fn next(&mut self) -> Option<T> {
+        match self {
+            Self::L2(it) => it.next(),
+            Self::Cosine(it) => it.next(),
+            Self::InnerProduct(it) => it.next(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::L2(it) => it.size_hint(),
+            Self::Cosine(it) => it.size_hint(),
+            Self::InnerProduct(it) => it.size_hint(),
+        }
     }
 }

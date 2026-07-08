@@ -16,6 +16,64 @@
 
 ## Resolved
 
+### [MEDIUM] engine: `clone_in` error path abandoned committed chunks as unreclaimable garbage
+- **Where**: `core/src/common/engine/mod.rs` (`Mapx::clone_in`)
+- **Resolution** *(post-v16.2.0 review)*: a failed chunk commit now
+  triggers a best-effort wipe of the partial target — one O(1) range
+  tombstone (`batch_begin_wiped`, the same primitive `clear()` uses)
+  committed before the error propagates — so a failed or *retried*
+  clone (each retry allocates a fresh prefix) no longer accumulates
+  invisible garbage under never-returned prefixes.  The tombstone is
+  tiny enough to stand a chance exactly where a 4096-pair data batch
+  just failed (e.g. disk-full); if the wipe itself also fails, the
+  residue matches the old documented contract.  Since `Clone` panics
+  *after* `clone_in` returns `Err`, the panic path is cleaned up too.
+  Doc comments updated at the engine, `MapxRaw`, and typed-wrapper
+  levels.
+
+### [MEDIUM] vecdex: `VecDexDyn`'s persisted discriminant followed enum source order
+- **Where**: `strata/src/vecdex/dynamic.rs`
+- **Resolution** *(post-v16.2.0 review)*: the derived
+  `Serialize`/`Deserialize` impls (postcard = variant-*index* tagged,
+  so inserting or reordering variants would silently re-map existing
+  metas) were replaced with manual impls over explicit **frozen wire
+  tags** (`WIRE_TAG_L2 = 0`, `WIRE_TAG_COSINE = 1`,
+  `WIRE_TAG_INNER_PRODUCT = 2`), documented append-only.  The encoding
+  is byte-identical to what the derived impls wrote in v16.2.0 (a
+  `u8` 0/1/2 is the same single byte as postcard's varint variant
+  index), so existing metas load unchanged — verified by
+  `dyn_wire_tags_are_frozen`, which pins each metric's first meta byte
+  and rejects an out-of-range tag outright instead of mis-decoding it
+  as some existing variant's payload.
+
+### [LOW] namespace: `Namespace::close(self)` duplicated the whole close protocol of `vsdb_ns_close`
+- **Where**: `core/src/common/namespace.rs`
+- **Resolution** *(post-v16.2.0 review)*: a single
+  `ns_close_impl(id, caller_handle: Option<Namespace>)` now owns the
+  protocol (default-ns guard → `REGISTRY_LOCK` → table lock →
+  ref-accounting with `accounted = 1 + consumed-handle` → entry
+  removal → out-of-lock engine teardown); both public entry points are
+  one-line wrappers and both refusal messages are preserved verbatim
+  (the consuming form's "other" qualifier included).  Future hardening
+  of the close protocol now has exactly one place to land.
+
+### [LOW] vecdex: `VecDexDyn::keys`/`iter` boxed their iterators
+- **Where**: `strata/src/vecdex/dynamic.rs`
+- **Resolution** *(post-v16.2.0 review)*: `Box<dyn Iterator>` (a heap
+  allocation per call, and a signature mismatch against the "mirrors
+  `VecDex` one-to-one" contract) replaced by a private three-variant
+  enum iterator (`DynIter`) returned as `impl Iterator` — zero
+  allocation, `size_hint` forwarded.  The cost-model doc now states
+  that iterators dispatch per *item* through the same single `match`.
+
+### [LOW] vecdex: no dynamic-dispatch coverage for the non-default scalar (`f64`)
+- **Where**: `strata/src/vecdex/test.rs`
+- **Resolution** *(post-v16.2.0 review)*: added `dyn_f64_end_to_end` —
+  Cosine/`f64` insert + search through the dispatch layer,
+  `save_meta`/`from_meta` round-trip, and scalar-width
+  cross-rejection (an `f64` dyn meta refuses to load as the `f32`
+  default or as any static handle).
+
 ### [MEDIUM] namespace: `root_holds_dataset` validates structure, not content — a fabricated or partially-destroyed skeleton still bypasses `vsdb_ns_relocate`'s new check
 - **Where**: `core/src/common/engine/mmdb.rs` (`root_holds_dataset`), `core/src/common/namespace.rs` (`vsdb_ns_relocate`)
 - **Resolution**: The check now requires mmdb's `CURRENT` manifest anchor
@@ -330,6 +388,45 @@
 ---
 
 ## Won't Fix
+
+### [REJECTED] vecdex: "renaming a `VecDexDyn` variant breaks persisted metas"
+- **Where**: `strata/src/vecdex/dynamic.rs`
+- **What**: Third-party review claimed a variant rename (e.g. `L2` →
+  `Euclidean`) invalidates saved metas because "postcard's
+  externally-tagged enum encoding expects the key 'L2'".
+- **Reason**: False premise — postcard is a non-self-describing,
+  index-tagged format: `serialize_newtype_variant` writes only the
+  numeric variant index; variant *names* never reach the wire
+  (externally-tagged string keys are serde_json behavior). Renames
+  were format-compatible before and remain so; with the frozen wire
+  tags shipped for the reorder finding, the on-disk mapping is now
+  pinned by explicit constants regardless of any source refactor.
+
+### [REJECTED] namespace: "`close(self)` drops the handle inside the table-lock scope unnecessarily"
+- **Where**: `core/src/common/namespace.rs` (`ns_close_impl`)
+- **What**: Proposed deferring the consumed handle's drop past the
+  `OPEN_NAMESPACES` lock release, like the engine teardown.
+- **Reason**: The drop *is* the exclusivity-accounting step: releasing
+  the consumed handle's ref under the table lock (an O(1) atomic
+  decrement, count 2→1) is what entitles the removed entry to
+  `Arc::try_unwrap` as the sole strong ref. The slow part — engine
+  teardown — already runs outside the table lock. Deferring the
+  decrement would buy nanoseconds of lock-hold time in exchange for a
+  second post-lock unwrap dance. Documented at the shared impl.
+
+### [REJECTED] vecdex: "`dispatch!` pattern bindings can shadow same-named caller variables"
+- **Where**: `strata/src/vecdex/dynamic.rs` (`dispatch!`)
+- **What**: Hypothesized `let idx = precompute();
+  dispatch!(self, idx => idx.search(idx, k))` silently passing the
+  inner `VecDex` as the query.
+- **Reason**: FP-6 — the finding's own scenario does not compile (the
+  shadowing binding is a `&VecDex`, not a `&[S]`; every such misuse is
+  a type error, and the inner handle type coincides with no query/key
+  parameter type in the API). The caller writes the binding identifier
+  explicitly at the call site (`idx =>`) — the exact semantics of a
+  closure parameter `|idx| ...`, where shadowing is equally visible
+  and equally the caller's own choice. `macro_rules!` hygiene is not
+  involved for identifiers the caller passes in.
 
 ### [REJECTED] engine: "`OnceLock::get_or_init` can run `alloc_prefix` twice under concurrent reads"
 - **Where**: `core/src/common/engine/mod.rs` (`Mapx::prefix_bytes`)

@@ -1200,3 +1200,73 @@ fn dyn_rejects_static_meta() {
     // A static VecDex meta must not silently load as VecDexDyn.
     assert!(VecDexDyn::<u32>::from_meta(id).is_err());
 }
+
+#[test]
+fn dyn_wire_tags_are_frozen() {
+    // The first meta byte is the metric's frozen wire tag: the on-disk
+    // discriminant is pinned by explicit constants, never by enum
+    // source order. Reordering variants must fail THIS test, not
+    // silently re-interpret persisted metas.
+    let cfg = || HnswConfig {
+        dim: 2,
+        ..Default::default()
+    };
+    for (metric, tag) in [
+        (MetricKind::L2, 0u8),
+        (MetricKind::Cosine, 1),
+        (MetricKind::InnerProduct, 2),
+    ] {
+        let idx = VecDexDyn::<u32>::new(metric, cfg());
+        let bytes = postcard::to_allocvec(&idx).unwrap();
+        assert_eq!(bytes[0], tag, "wire tag drifted for {metric:?}");
+        let restored: VecDexDyn<u32> = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(restored.metric(), metric);
+    }
+
+    // An out-of-range tag is refused outright (e.g. a meta written by
+    // a newer version with more metrics) instead of being
+    // mis-decoded as some existing variant's payload.
+    assert!(postcard::from_bytes::<VecDexDyn<u32>>(&[9]).is_err());
+}
+
+#[test]
+fn dyn_f64_end_to_end() {
+    let cfg = HnswConfig {
+        dim: 3,
+        ..Default::default()
+    };
+    // Cosine on f64 exercises the norm computations through the
+    // dispatch layer with the non-default scalar.
+    let mut idx: VecDexDyn<String, f64> = VecDexDyn::new(MetricKind::Cosine, cfg);
+    idx.insert(&"aligned".into(), &[10.0_f64, 0.0, 0.0])
+        .unwrap();
+    idx.insert(&"orthogonal".into(), &[0.0_f64, 3.0, 0.0])
+        .unwrap();
+    idx.insert(&"diagonal".into(), &[1.0_f64, 1.0, 0.0])
+        .unwrap();
+
+    let r = idx.search(&[1.0_f64, 0.0, 0.0], 3).unwrap();
+    assert_eq!(r.len(), 3);
+    assert_eq!(r[0].0, "aligned");
+    assert!(r[0].1.abs() < 1e-12);
+
+    let id = idx.save_meta().unwrap();
+    drop(idx);
+
+    let restored: VecDexDyn<String, f64> = VecDexDyn::from_meta(id).unwrap();
+    assert_eq!(restored.metric(), MetricKind::Cosine);
+    assert_eq!(restored.len(), 3);
+    assert_eq!(
+        restored.get(&"diagonal".into()).unwrap(),
+        vec![1.0, 1.0, 0.0]
+    );
+    assert_eq!(
+        restored.search(&[0.0_f64, 1.0, 0.0], 1).unwrap()[0].0,
+        "orthogonal"
+    );
+
+    // The scalar width is part of the typed-handle tag: an f64 dyn
+    // meta must not load under f32, nor as any static handle.
+    assert!(VecDexDyn::<String>::from_meta(id).is_err());
+    assert!(VecDex::<String, Cosine, f64>::from_meta(id).is_err());
+}

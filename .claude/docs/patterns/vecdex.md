@@ -3,7 +3,8 @@
 ## Files
 - `strata/src/vecdex/mod.rs` — VecDex<K, D, S> struct, public API, search_internal
 - `strata/src/vecdex/hnsw.rs` — HNSW core: search_layer, neighbor selection, adjacency encoding
-- `strata/src/vecdex/distance.rs` — Scalar trait, DistanceMetric trait, L2/Cosine/InnerProduct
+- `strata/src/vecdex/distance.rs` — Scalar trait, DistanceMetric trait, L2/Cosine/InnerProduct, MetricKind
+- `strata/src/vecdex/dynamic.rs` — VecDexDyn runtime-metric wrapper: enum dispatch, frozen wire tags (append-only, never reorder), DynIter
 - `strata/src/vecdex/test.rs` — unit tests
 
 ## Architecture

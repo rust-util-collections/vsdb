@@ -703,46 +703,7 @@ impl Namespace {
     /// }
     /// ```
     pub fn close(self) -> std::result::Result<(), (Option<Namespace>, VsdbError)> {
-        let id = self.0.id;
-        if id == DEFAULT_NS_ID {
-            return Err((Some(self), ns_err("the default namespace cannot be closed")));
-        }
-        let _g = REGISTRY_LOCK.lock();
-        let ns_owned = {
-            let mut open = OPEN_NAMESPACES.lock();
-            let Some(entry) = open.get(&id) else {
-                // Unreachable through safe use (a live handle pins its
-                // table entry: removal proves exclusivity first), kept
-                // as a defensive error path rather than a panic.
-                return Err((
-                    Some(self),
-                    ns_err(format!("namespace {id} is not open in this process")),
-                ));
-            };
-            // A live handle is always a clone of the current table
-            // entry: the entry can only be replaced by a successful
-            // close, which proves no external handle existed.
-            debug_assert!(Arc::ptr_eq(&entry.0, &self.0));
-            // Strong refs accounted here: the table's entry + `self`.
-            // Stable while both locks are held — see `vsdb_ns_close`.
-            let others = Arc::strong_count(&entry.0) - 2;
-            if others > 0 {
-                return Err((
-                    Some(self),
-                    ns_err(format!(
-                        "namespace {id} still has {others} other live handle(s); \
-                         drop every collection handle and `Namespace` clone first"
-                    )),
-                ));
-            }
-            // Provably exclusive; release `self`'s ref (count 2 -> 1)
-            // and take sole ownership through the table's entry.
-            drop(self);
-            open.remove(&id).expect("present: checked above")
-        };
-        let inner = Arc::try_unwrap(ns_owned.0)
-            .unwrap_or_else(|_| unreachable!("count was 1 under both locks"));
-        inner.engine.close().map_err(|e| (None, VsdbError::from(e)))
+        ns_close_impl(self.0.id, Some(self))
     }
 }
 
@@ -933,38 +894,87 @@ pub fn vsdb_ns_relocate(id: NsId, new_path: impl AsRef<Path>) -> Result<()> {
 /// The handle-consuming form is [`Namespace::close`], which accounts
 /// for the handle it consumes and returns it on refusal.
 pub fn vsdb_ns_close(id: NsId) -> Result<()> {
+    // No handle is consumed, so the refusal side never carries one.
+    ns_close_impl(id, None).map_err(|(_, e)| e)
+}
+
+/// The close protocol shared by [`vsdb_ns_close`] and
+/// [`Namespace::close`]: prove exclusivity under [`REGISTRY_LOCK`] +
+/// the table lock, remove the table entry, then tear the engine down.
+///
+/// `caller_handle` is the handle a consuming caller accounts for
+/// (`None` for the free function).  Once exclusivity is proven it is
+/// dropped **under the table lock** — that 2→1 atomic decrement is the
+/// accounting step itself, entitling the removed entry to
+/// `Arc::try_unwrap` as the sole strong ref.  The (possibly slow)
+/// engine teardown runs after the table lock is released, so unrelated
+/// namespaces' cache hits never block on it; `REGISTRY_LOCK` keeps
+/// serializing open/create/destroy of THIS id until the teardown
+/// finished.
+///
+/// On refusal the consumed handle (if any) is returned intact; past
+/// the point of no return the error side is always `(None, e)`.
+fn ns_close_impl(
+    id: NsId,
+    caller_handle: Option<Namespace>,
+) -> std::result::Result<(), (Option<Namespace>, VsdbError)> {
     if id == DEFAULT_NS_ID {
-        return Err(ns_err("the default namespace cannot be closed"));
+        return Err((
+            caller_handle,
+            ns_err("the default namespace cannot be closed"),
+        ));
     }
     let _g = REGISTRY_LOCK.lock();
-    let ns = {
+    let ns_owned = {
         let mut open = OPEN_NAMESPACES.lock();
         let Some(entry) = open.get(&id) else {
-            return Err(ns_err(format!(
-                "namespace {id} is not open in this process"
-            )));
+            // For a consuming caller this arm is unreachable through
+            // safe use (a live handle pins its table entry: removal
+            // proves exclusivity first) — kept as a defensive error
+            // path rather than a panic.
+            return Err((
+                caller_handle,
+                ns_err(format!("namespace {id} is not open in this process")),
+            ));
         };
-        // The table's own strong ref is the `- 1`. Stable while both
-        // locks are held: cloning requires an existing `Namespace`, and
-        // a count of 1 proves none exists outside the table (the other
-        // cloning paths — `open`'s cache hit and `flush_all_open` —
-        // block on the table lock).
-        let live = Arc::strong_count(&entry.0) - 1;
-        if live > 0 {
-            return Err(ns_err(format!(
-                "namespace {id} still has {live} live handle(s); drop \
-                 every collection handle and `Namespace` clone first"
-            )));
+        // A consumed handle is always a clone of the current table
+        // entry: the entry can only be replaced by a successful close,
+        // which proves no external handle existed.
+        if let Some(h) = &caller_handle {
+            debug_assert!(Arc::ptr_eq(&entry.0, &h.0));
         }
+        // Strong refs accounted here: the table's entry, plus the
+        // consumed handle if any.  Stable while both locks are held:
+        // cloning requires an existing `Namespace`, and the other
+        // cloning paths — `open`'s cache hit and `flush_all_open` —
+        // block on the table lock.
+        let accounted = 1 + usize::from(caller_handle.is_some());
+        let others = Arc::strong_count(&entry.0) - accounted;
+        if others > 0 {
+            let qualifier = if caller_handle.is_some() {
+                "other "
+            } else {
+                ""
+            };
+            return Err((
+                caller_handle,
+                ns_err(format!(
+                    "namespace {id} still has {others} {qualifier}live handle(s); \
+                     drop every collection handle and `Namespace` clone first"
+                )),
+            ));
+        }
+        // Provably exclusive; release the consumed handle's ref and
+        // take sole ownership through the table's entry.
+        drop(caller_handle);
         open.remove(&id).expect("present: checked above")
         // The table lock is released here — the (possibly slow) engine
         // teardown below must not block unrelated namespaces' cache
-        // hits; REGISTRY_LOCK keeps serializing open/create/destroy of
-        // THIS id until the teardown finished.
+        // hits.
     };
-    let inner = Arc::try_unwrap(ns.0)
+    let inner = Arc::try_unwrap(ns_owned.0)
         .unwrap_or_else(|_| unreachable!("count was 1 under both locks"));
-    inner.engine.close().map_err(VsdbError::from)
+    inner.engine.close().map_err(|e| (None, VsdbError::from(e)))
 }
 
 impl RegistryFile {

@@ -417,13 +417,18 @@ impl Mapx {
     /// `clone_in(&self.ns)`).
     ///
     /// Commits in bounded chunks — a single WriteBatch buffers every
-    /// pair in memory, which would OOM on larger-than-RAM maps (same
-    /// hazard `clear()` chunks against).  Atomicity is not needed:
-    /// the clone target is a brand-new, unobservable prefix.
+    /// pair in memory, which would OOM on larger-than-RAM maps.
+    /// Atomicity is not needed: the clone target is a brand-new,
+    /// unobservable prefix.
     ///
-    /// On error the partially-written target stays behind as
-    /// unreferenced garbage under a never-returned prefix (invisible to
-    /// every handle; the same residue a mid-`clone()` panic leaves).
+    /// On error the chunks already committed are reclaimed with a
+    /// best-effort wipe (one O(1) range tombstone — tiny enough to
+    /// stand a chance where a full data batch just failed, e.g. on a
+    /// full disk), so a failed or retried clone does not accumulate
+    /// garbage under never-returned prefixes.  Only if the wipe itself
+    /// also fails does the partial target stay behind as unreferenced,
+    /// invisible garbage (the same residue a mid-`clone()` panic
+    /// leaves).
     pub(crate) fn clone_in(&self, ns: &Namespace) -> Result<Self> {
         const CLONE_CHUNK: usize = 4096;
 
@@ -439,7 +444,13 @@ impl Mapx {
             if !wrote {
                 break;
             }
-            batch.commit()?;
+            if let Err(e) = batch.commit() {
+                drop(batch);
+                // Reclaim the committed chunks; a wipe failure changes
+                // nothing for the caller — the original error wins.
+                let _ = new_instance.batch_begin_wiped().commit();
+                return Err(e);
+            }
         }
         Ok(new_instance)
     }
