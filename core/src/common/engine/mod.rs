@@ -411,21 +411,23 @@ impl Mapx {
         self.ns.id() == other_hdr.ns.id()
             && self.prefix_bytes() == other_hdr.prefix_bytes()
     }
-}
 
-impl Clone for Mapx {
-    fn clone(&self) -> Self {
-        // Commit in bounded chunks — a single WriteBatch buffers every
-        // pair in memory, which would OOM on larger-than-RAM maps (same
-        // hazard `clear()` chunks against).  Atomicity is not needed:
-        // the clone target is a brand-new, unobservable prefix.
-        //
-        // The copy lands in the SAME namespace as the source — a deep
-        // copy is co-located with its original, never re-placed by the
-        // ambient scope.
+    /// Deep-copies every pair into a brand-new instance placed in `ns` —
+    /// the cross-namespace form of [`Clone`] (`clone()` ≡
+    /// `clone_in(&self.ns)`).
+    ///
+    /// Commits in bounded chunks — a single WriteBatch buffers every
+    /// pair in memory, which would OOM on larger-than-RAM maps (same
+    /// hazard `clear()` chunks against).  Atomicity is not needed:
+    /// the clone target is a brand-new, unobservable prefix.
+    ///
+    /// On error the partially-written target stays behind as
+    /// unreferenced garbage under a never-returned prefix (invisible to
+    /// every handle; the same residue a mid-`clone()` panic leaves).
+    pub(crate) fn clone_in(&self, ns: &Namespace) -> Result<Self> {
         const CLONE_CHUNK: usize = 4096;
 
-        let mut new_instance = Self::new_in(&self.ns);
+        let mut new_instance = Self::new_in(ns);
         let mut it = self.iter();
         loop {
             let mut batch = new_instance.batch_begin();
@@ -437,9 +439,19 @@ impl Clone for Mapx {
             if !wrote {
                 break;
             }
-            batch.commit().expect("vsdb: clone failed — I/O error");
+            batch.commit()?;
         }
-        new_instance
+        Ok(new_instance)
+    }
+}
+
+impl Clone for Mapx {
+    fn clone(&self) -> Self {
+        // The copy lands in the SAME namespace as the source — a deep
+        // copy is co-located with its original, never re-placed by the
+        // ambient scope.
+        self.clone_in(&self.ns)
+            .expect("vsdb: clone failed — I/O error")
     }
 }
 

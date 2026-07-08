@@ -93,6 +93,20 @@ for info in &all {
 // Requires all client handles dropped — reopen is restart-equivalent.
 vsdb_ns_close(ns.id()).unwrap();
 
+// Consuming form: the handle itself is accounted for; refusal hands
+// it back so a live namespace is never invalidated.
+let ns3 = Namespace::create().unwrap();
+match ns3.close() {
+    Ok(()) => {}                       // closed
+    Err((Some(ns3), _e)) => { /* refused — `ns3` is still usable */ }
+    Err((None, _e)) => { /* closed, but teardown reported an error */ }
+}
+
+// Cross-namespace deep copy: the counterpart of `Clone` that picks
+// the target namespace (chunked; never whole-map in memory).
+let src = MapxRaw::new_in(&ns2);
+let copy = src.clone_in(&Namespace::default_ns()).unwrap();
+
 // Destroy: O(1) bulk reclaim of the entire directory tree.
 // Requires the namespace be not-open.
 vsdb_ns_destroy(ns.id()).unwrap();

@@ -4,8 +4,9 @@
 //! and base-dir freeze, so they run sequentially inside one body.
 
 use vsdb::{
-    DEFAULT_NS_ID, MapxOrd, Namespace, Orphan, SlotDex, VerMap, basic::mapx::Mapx,
-    vsdb_ns_close, vsdb_ns_destroy, vsdb_set_base_dir,
+    DEFAULT_NS_ID, HnswConfig, MapxOrd, MetricKind, Namespace, Orphan, SlotDex,
+    VecDexDyn, VerMap, basic::mapx::Mapx, vsdb_ns_close, vsdb_ns_destroy,
+    vsdb_set_base_dir,
 };
 
 #[test]
@@ -60,6 +61,42 @@ fn composites_in_namespaces() {
 
     // Default behavior untouched.
     assert_eq!(Mapx::<u8, u8>::new().namespace().id(), DEFAULT_NS_ID);
+
+    // ---- cross-namespace copy helpers (clone_in) ----
+    // ns → default, through the typed wrapper chain.
+    let mut m_copy = m.clone_in(&Namespace::default_ns()).unwrap();
+    assert_eq!(m_copy.namespace().id(), DEFAULT_NS_ID);
+    assert_eq!(m_copy.get(&1).unwrap(), "one");
+    m_copy.insert(&2, &"copy-only".to_owned());
+    assert!(m.get(&2).is_none()); // source untouched
+    // default → ns direction.
+    let d_copy = d.clone_in(&ns).unwrap();
+    assert_eq!(d_copy.namespace().id(), ns.id());
+    assert_eq!(d_copy.get(&7).unwrap(), 70);
+    // Orphan follows the same pattern.
+    let o_copy = o.clone_in(&Namespace::default_ns()).unwrap();
+    assert_eq!(o_copy.namespace().id(), DEFAULT_NS_ID);
+    assert_eq!(o_copy.get_value(), 42);
+
+    // ---- runtime-metric VecDex placed via new_in ----
+    let mut vd: VecDexDyn<String> = VecDexDyn::new_in(
+        &ns,
+        MetricKind::Cosine,
+        HnswConfig {
+            dim: 2,
+            ..Default::default()
+        },
+    );
+    assert_eq!(vd.namespace().id(), ns.id());
+    assert_eq!(vd.metric(), MetricKind::Cosine);
+    vd.insert(&"a".to_owned(), &[1.0, 0.0]).unwrap();
+    let vdid = vd.save_meta().unwrap();
+    assert_eq!(vdid.ns, Some(ns.id()));
+    drop(vd);
+    let vd: VecDexDyn<String> = VecDexDyn::from_meta(vdid).unwrap();
+    assert_eq!(vd.metric(), MetricKind::Cosine);
+    assert_eq!(vd.search(&[1.0, 0.0], 1).unwrap()[0].0, "a");
+    drop(vd);
 
     // ---- in-process close through the typed layer ----
     let e = Namespace::create().unwrap();

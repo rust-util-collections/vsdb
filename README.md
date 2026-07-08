@@ -101,7 +101,7 @@ vsdb (workspace)
 | [`trie`](strata/src/trie) | `MptCalc`, `SmtCalc`, `SmtProof`, `VerMapWithProof` | Stateless Merkle tries + VerMap integration |
 | [`slotdex`](strata/src/slotdex) | `SlotDex` | Skip-list-like index for timestamp-based paged queries |
 | [`dagmap`](strata/src/dagmap) | `DagMapRaw`, `DagMapRawKey` | DAG-based collections |
-| [`vecdex`](strata/src/vecdex) | `VecDex`, `HnswConfig` | Approximate nearest-neighbor vector index (HNSW) |
+| [`vecdex`](strata/src/vecdex) | `VecDex`, `VecDexDyn`, `HnswConfig` | Approximate nearest-neighbor vector index (HNSW); metric compile-time or runtime-selected |
 
 ### Trie + VerMap integration
 

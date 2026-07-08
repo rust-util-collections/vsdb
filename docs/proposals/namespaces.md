@@ -1,8 +1,9 @@
 # RFC: Namespaces — Multiple Engine Instances per Process
 
 - **Status**: implemented (v16.0.0–v16.0.2); in-process `close()` shipped in
-  v16.1.0 ([ns-close.md](./ns-close.md)); remaining P3: whole-ns `merge`,
-  cross-ns copy helpers. Final design: rev 10 (original bullets evaluated in §5; rev 2: one
+  v16.1.0 ([ns-close.md](./ns-close.md)); cross-ns copy helpers (`clone_in`)
+  and consuming `Namespace::close(self)` shipped in v16.2.0; remaining P3:
+  whole-ns `merge`. Final design: rev 10 (original bullets evaluated in §5; rev 2: one
   **global** prefix allocator, not per-namespace — §4.6; rev 3: downgrade
   support dropped — §7; rev 4: single-process contract — §4.7; rev 5: meta =
   optional `ns_id` suffix — §4.3; rev 6: ns path optional, derived — §4.1;
@@ -453,7 +454,7 @@ registries), which already works today. Consequences:
 | 5.1 | Embed the ns in the Map, self-contained, set once at creation | **Accept.** Realized as `ns: Namespace` field + optional `ns_id` meta suffix (§4.3). |
 | 5.2 | `Option<NamespaceId>` field + serde attributes for compat | **Accept — at the byte level** (rev 5). Not literally a serde field: metas are hand-encoded bytes (C3), and a postcard `Option` tag would perturb existing bytes. But the shape is exactly the note's: optional trailing `ns_id`, absent = `None` = default ns; v15 bytes decode as `None` verbatim; default-ns writes stay byte-identical (§4.3). |
 | 5.3 | Keep `new()`, add `new_with_ns`, add `new_inner(Option<ns>)` | **Accept, simplified.** `new()` + `new_in(&ns)`; no `new_inner` layer needed. |
-| 5.4 | Auto-create ns on first use; mgmt APIs (`merge`/`destroy`); `get_ns()` | **Mostly accept.** `create()` makes cheap creation literally parameterless (rev 6); `namespace()` getter; `destroy`/`relocate` not-open-only (§4.7). **`merge` deferred** (§9): global prefix uniqueness (§4.6) removes the ID-reconciliation blocker, but the resumable crash-consistent copy protocol it needs is P3 scope; per-map cross-ns copy already works today (iterate + insert, Clone-style chunking). |
+| 5.4 | Auto-create ns on first use; mgmt APIs (`merge`/`destroy`); `get_ns()` | **Mostly accept.** `create()` makes cheap creation literally parameterless (rev 6); `namespace()` getter; `destroy`/`relocate` not-open-only (§4.7). **`merge` deferred** (§9): global prefix uniqueness (§4.6) removes the ID-reconciliation blocker, but the resumable crash-consistent copy protocol it needs is P3 scope; per-map cross-ns copy is first-class since v16.2.0 (`clone_in(&ns)`, Clone-style chunking). |
 | 5.5 | Each ns has its own basedir; default ns needs no id; default behavior identical to current VSDB | **Accept.** Core of the design. |
 | 5.6 | First `new_with_ns(ns_id)` … later: "the param should be a path, not an id" | **Both, split by role.** Path = configuration (registry-only, relocatable, and since rev 6 *optional* — omitted, it derives from the id, §4.1); `NsId` = persisted identity (in metas). Callers pass neither raw ids nor raw paths at map creation — they pass a `Namespace` handle. This dissolves the id-vs-path dilemma. |
 | 5.7 | Mixing namespaces in one structure, e.g. `Vec<Mapx…>` | **Accept.** Every handle self-routes, so heterogeneous containers work naturally. One *composite* (VerMap etc.) stays wholly inside one ns (§4.1 invariant). |
@@ -489,8 +490,12 @@ registries), which already works today. Consequences:
   removed; integration binaries serialize theirs behind a `Once`) and a
   few exact-value global-allocator assertions (made race-tolerant).
   `--test-threads=1` dropped.
-- **P3 (remaining work)**: whole-ns `merge`; cross-ns map-copy convenience
-  helpers. In-process `close()` originally targeted P3 but shipped in
+- **P3 (remaining work)**: whole-ns `merge`. Cross-ns map-copy convenience
+  helpers shipped in v16.2.0: `clone_in(&ns)` on `MapxRaw` and the typed
+  wrappers (`Mapx`/`MapxOrd`/`MapxOrdRawKey`/`Orphan`) — the
+  cross-namespace form of `Clone` (chunked, never whole-map in memory),
+  mirroring `new` vs `new_in`. In-process `close()` originally targeted
+  P3 but shipped in
   v16.1.0 ([ns-close.md](./ns-close.md)) — the ownership inversion
   removed both `Box::leak` sites, engines are owned by their `Arc<NsInner>`,
   and `vsdb_ns_close` provides the in-process epoch-rotation loop
@@ -562,7 +567,8 @@ allocator values, registry sizes) and must serialize any
   `vsdb_ns_close` provides the in-process epoch-rotation loop.
 - **Whole-namespace merge** — the ID-reconciliation blocker is gone (§4.6:
   same-registry prefixes never collide), but the resumable crash-consistent
-  bulk-copy protocol it needs is P3 scope; per-map copy suffices meanwhile.
+  bulk-copy protocol it needs is P3 scope; per-map copy is covered since
+  v16.2.0 by the `clone_in(&ns)` helpers.
 - **Importing/attaching a namespace dir created under a different registry** —
   foreign prefixes came from a foreign allocator; attach must first raise the
   local ceiling above the import's maximum used prefix. P3, with merge.

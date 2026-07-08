@@ -100,6 +100,33 @@ fn namespace_lifecycle() {
     let decoded: InstanceId = postcard::from_bytes(&wire).unwrap();
     assert_eq!(decoded, id0);
 
+    // ---- cross-namespace deep copy (clone_in) ----
+    // ns → default: the copy is a brand-new instance placed in the
+    // target namespace, byte-identical in content, fully independent.
+    let mut copy = m1.clone_in(&Namespace::default_ns()).unwrap();
+    assert_eq!(copy.namespace().id(), DEFAULT_NS_ID);
+    assert_eq!(copy.instance_id().ns, None);
+    assert_eq!(&copy.get(b"k").unwrap()[..], b"ns");
+    assert!(!copy.is_the_same_instance(&m1));
+    copy.insert(b"copy-only", b"y");
+    assert!(m1.get(b"copy-only").is_none()); // source untouched
+    drop(copy);
+    // Same-namespace clone_in ≡ Clone (co-located deep copy).
+    let same = m1.clone_in(&m1.namespace()).unwrap();
+    assert_eq!(same.namespace().id(), ns.id());
+    assert_eq!(&same.get(b"k").unwrap()[..], b"ns");
+    assert!(!same.is_the_same_instance(&m1));
+    drop(same);
+    // Crosses the 4096-pair chunk boundary (two batch commits).
+    let mut big = MapxRaw::new_in(&ns);
+    for i in 0..4100u16 {
+        big.insert(i.to_be_bytes(), b"v");
+    }
+    let big_copy = big.clone_in(&Namespace::default_ns()).unwrap();
+    assert_eq!(big_copy.iter().count(), 4100);
+    assert_eq!(big_copy.namespace().id(), DEFAULT_NS_ID);
+    drop((big, big_copy));
+
     // ---- registry / admin tier ----
     let infos = vsdb_ns_list().unwrap();
     assert!(infos.iter().any(|i| i.id == ns.id() && !i.pinned));
@@ -280,6 +307,45 @@ fn namespace_lifecycle() {
     // The default namespace is never closeable; unknown ids error.
     assert!(vsdb_ns_close(DEFAULT_NS_ID).is_err());
     assert!(vsdb_ns_close(u64::MAX).is_err());
+
+    // ---- consuming close: Namespace::close(self) ----
+    // Refusal returns the handle for continued use.
+    let expect_refused = |r: std::result::Result<
+        (),
+        (Option<Namespace>, vsdb_core::VsdbError),
+    >| match r {
+        Err((Some(h), _)) => h,
+        _ => panic!("close must be refused and hand the handle back"),
+    };
+    let c = Namespace::create_with(NamespaceOpts {
+        shards: 1,
+        ..Default::default()
+    })
+    .unwrap();
+    let cid = c.id();
+    // Another `Namespace` clone blocks the consuming form.
+    let extra = c.clone();
+    let c = expect_refused(c.close());
+    assert_eq!(c.id(), cid);
+    drop(extra);
+    // A collection handle blocks it too — and the returned handle
+    // stays fully usable.
+    let mut cm = MapxRaw::new_in(&c);
+    cm.insert(b"c", b"v");
+    let c = expect_refused(c.close());
+    assert_eq!(MapxRaw::new_in(&c).namespace().id(), cid);
+    drop(cm);
+    // Sole handle ⇒ consumed and fully closed; the id-addressed form
+    // then sees a not-open namespace.
+    c.close().unwrap();
+    assert!(vsdb_ns_close(cid).is_err());
+    // Restart-equivalent reopen, then reclaim.
+    let re = Namespace::open(cid).unwrap();
+    re.close().unwrap();
+    vsdb_ns_destroy(cid).unwrap();
+    // The default namespace refuses the consuming form, handle back.
+    let d = expect_refused(Namespace::default_ns().close());
+    assert_eq!(d.id(), DEFAULT_NS_ID);
 
     // ---- relocate refuses an unpopulated target ----
     // (write → close → relocate-to-empty-dir must FAIL: repointing the

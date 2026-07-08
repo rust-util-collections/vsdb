@@ -284,6 +284,10 @@ zero in mmdb.
 
 ## 9. Open questions
 
-None blocking. Deferred niceties: a consuming `Namespace::close(self)`
-sugar (needs an ergonomic story for returning the handle on refusal), and
-whole-ns `merge` (unrelated, stays P3 in namespaces.md).
+None blocking. The consuming `Namespace::close(self)` sugar shipped in
+v16.2.0 — the ergonomic story settled on
+`Result<(), (Option<Namespace>, VsdbError)>`: refusal hands the consumed
+handle back (`Some`), a teardown error after the point of no return
+yields `None` (the namespace is no longer open, exactly like
+`vsdb_ns_close` returning an error). Whole-ns `merge` remains P3 in
+namespaces.md.

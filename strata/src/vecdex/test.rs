@@ -1,5 +1,5 @@
 use super::*;
-use distance::{Cosine, InnerProduct, L2};
+use distance::{Cosine, InnerProduct, L2, MetricKind};
 use std::collections::{HashSet, VecDeque};
 
 fn assert_bidirectional<K, D, S>(idx: &VecDex<K, D, S>)
@@ -1073,4 +1073,130 @@ fn node_ids_are_never_reused_across_restores() {
 
     restored.insert(&100, &[100.0, 0.0]).unwrap();
     assert!(restored.state.next_node_id > next_before);
+}
+
+// =========================================================================
+// VecDexDyn — runtime metric selection
+// =========================================================================
+
+#[test]
+fn dyn_metric_semantics_match_static() {
+    let cfg = || HnswConfig {
+        dim: 3,
+        ..Default::default()
+    };
+
+    // L2: nearest by squared euclidean distance.
+    let mut idx = VecDexDyn::<String>::new(MetricKind::L2, cfg());
+    assert_eq!(idx.metric(), MetricKind::L2);
+    idx.insert(&"near".into(), &[1.0, 0.0, 0.0]).unwrap();
+    idx.insert(&"far".into(), &[3.0, 0.0, 0.0]).unwrap();
+    let r = idx.search(&[0.0, 0.0, 0.0], 2).unwrap();
+    assert_eq!(r[0].0, "near");
+    assert_eq!(r[0].1, 1.0);
+    assert_eq!(r[1].1, 9.0);
+
+    // Cosine: alignment beats magnitude.
+    let mut idx = VecDexDyn::<String>::new(MetricKind::Cosine, cfg());
+    assert_eq!(idx.metric(), MetricKind::Cosine);
+    idx.insert(&"aligned".into(), &[5.0, 0.0, 0.0]).unwrap();
+    idx.insert(&"orthogonal".into(), &[0.0, 1.0, 0.0]).unwrap();
+    let r = idx.search(&[1.0, 0.0, 0.0], 2).unwrap();
+    assert_eq!(r[0].0, "aligned");
+    assert!(r[0].1.abs() < 1e-6);
+
+    // InnerProduct: larger dot product ranks first.
+    let mut idx = VecDexDyn::<String>::new(MetricKind::InnerProduct, cfg());
+    assert_eq!(idx.metric(), MetricKind::InnerProduct);
+    idx.insert(&"big".into(), &[5.0, 0.0, 0.0]).unwrap();
+    idx.insert(&"small".into(), &[1.0, 0.0, 0.0]).unwrap();
+    let r = idx.search(&[1.0, 0.0, 0.0], 2).unwrap();
+    assert_eq!(r[0].0, "big");
+    assert_eq!(r[0].1, -5.0);
+}
+
+#[test]
+fn dyn_full_api_delegation() {
+    let cfg = HnswConfig {
+        dim: 2,
+        ..Default::default()
+    };
+    let mut idx: VecDexDyn<u32> = VecDexDyn::new(MetricKind::L2, cfg);
+    assert!(idx.is_empty());
+
+    idx.insert_batch(&[
+        (1, vec![1.0, 0.0]),
+        (2, vec![2.0, 0.0]),
+        (3, vec![3.0, 0.0]),
+    ])
+    .unwrap();
+    assert_eq!(idx.len(), 3);
+    assert!(idx.contains_key(&2));
+    assert_eq!(idx.get(&2).unwrap(), vec![2.0, 0.0]);
+    assert_eq!(idx.keys().collect::<HashSet<_>>(), HashSet::from([1, 2, 3]));
+    assert_eq!(idx.iter().count(), 3);
+
+    // Dimension mismatch surfaces through the dispatch layer.
+    assert!(idx.insert(&9, &[1.0]).is_err());
+    assert!(idx.search(&[1.0], 1).is_err());
+
+    idx.set_ef_search(64);
+    assert_eq!(idx.search_ef(&[1.0, 0.0], 1, 32).unwrap()[0].0, 1);
+    let filtered = idx.search_with_filter(&[1.0, 0.0], 3, |k| *k != 1).unwrap();
+    assert!(filtered.iter().all(|(k, _)| *k != 1));
+    let filtered = idx
+        .search_ef_with_filter(&[1.0, 0.0], 3, 32, |k| *k == 3)
+        .unwrap();
+    assert_eq!(filtered[0].0, 3);
+
+    assert!(idx.remove(&3).unwrap());
+    assert!(!idx.remove(&3).unwrap());
+    assert_eq!(idx.len(), 2);
+
+    idx.compact().unwrap();
+    assert_eq!(idx.search(&[1.0, 0.0], 1).unwrap()[0].0, 1);
+
+    idx.clear();
+    assert!(idx.is_empty());
+    idx.insert(&7, &[7.0, 0.0]).unwrap();
+    assert_eq!(idx.len(), 1);
+}
+
+#[test]
+fn dyn_save_meta_restores_metric() {
+    let cfg = HnswConfig {
+        dim: 2,
+        ..Default::default()
+    };
+    let mut idx: VecDexDyn<u32> = VecDexDyn::new(MetricKind::InnerProduct, cfg);
+    idx.insert(&1, &[1.0, 2.0]).unwrap();
+    idx.insert(&2, &[3.0, 4.0]).unwrap();
+    let id = idx.save_meta().unwrap();
+    drop(idx);
+
+    // The metric survives the round-trip without being re-stated.
+    let restored: VecDexDyn<u32> = VecDexDyn::from_meta(id).unwrap();
+    assert_eq!(restored.metric(), MetricKind::InnerProduct);
+    assert_eq!(restored.len(), 2);
+    assert_eq!(restored.search(&[1.0, 1.0], 1).unwrap()[0].0, 2);
+
+    // The formats are deliberately distinct: dyn metas do not load as
+    // static handles (any metric), nor under another key type.
+    assert!(VecDex::<u32, InnerProduct>::from_meta(id).is_err());
+    assert!(VecDex::<u32, L2>::from_meta(id).is_err());
+    assert!(VecDexDyn::<String>::from_meta(id).is_err());
+}
+
+#[test]
+fn dyn_rejects_static_meta() {
+    let cfg = HnswConfig {
+        dim: 2,
+        ..Default::default()
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    idx.insert(&1, &[1.0, 2.0]).unwrap();
+    let id = idx.save_meta().unwrap();
+
+    // A static VecDex meta must not silently load as VecDexDyn.
+    assert!(VecDexDyn::<u32>::from_meta(id).is_err());
 }

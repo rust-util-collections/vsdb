@@ -88,6 +88,24 @@ pub trait DistanceMetric<S: Scalar = f32>:
     fn distance(a: &[S], b: &[S]) -> S;
 }
 
+/// A runtime-selected distance metric — the value-level counterpart of
+/// the compile-time [`DistanceMetric`] types, consumed by
+/// [`VecDexDyn`](super::VecDexDyn).
+///
+/// Selecting through `MetricKind` costs one enum dispatch per public
+/// operation; the distance loops themselves stay the statically
+/// monomorphized implementations of [`L2`], [`Cosine`], and
+/// [`InnerProduct`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum MetricKind {
+    /// Euclidean (L2) squared distance — [`L2`].
+    L2,
+    /// Cosine distance — [`Cosine`].
+    Cosine,
+    /// Negated inner product — [`InnerProduct`].
+    InnerProduct,
+}
+
 /// Euclidean (L2) squared distance.
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub struct L2;

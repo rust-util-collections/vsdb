@@ -48,7 +48,10 @@
 //! ```
 
 pub mod distance;
+mod dynamic;
 mod hnsw;
+
+pub use dynamic::VecDexDyn;
 
 use crate::common::{
     InstanceId,
@@ -1081,6 +1084,8 @@ fn _assert_send_sync() {
     fn require<T: Send + Sync>() {}
     require::<VecDex<String, distance::L2>>();
     require::<VecDex<String, distance::L2, f64>>();
+    require::<VecDexDyn<String>>();
+    require::<VecDexDyn<String, f64>>();
 }
 
 #[cfg(test)]

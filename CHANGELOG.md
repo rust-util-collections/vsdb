@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v16.2.0]
+
+Three small backlog items shipped — all purely additive (no breaking
+changes, no hot-path modifications).
+
+### Added
+
+- **Cross-namespace copy helpers** (`clone_in`, namespaces RFC P3):
+  `MapxRaw`, `Mapx`, `MapxOrd`, `MapxOrdRawKey`, and `Orphan` gain
+  `clone_in(&ns) -> Result<Self>` — the cross-namespace form of
+  `Clone`, mirroring `new` vs `new_in`. The copy runs in bounded
+  chunks (never buffering the whole map in memory); on error the
+  partially-written target is abandoned as unreferenced, invisible
+  garbage. `Clone` for the engine map now delegates to the same code
+  path pinned to the source's namespace — behavior unchanged
+  (identical chunking and panic message).
+- **Consuming `Namespace::close(self)`** (ns-close RFC §9 deferred
+  nicety): the handle-consuming form of `vsdb_ns_close`. The consumed
+  handle is accounted for — no separate `drop(ns)` needed first.
+  Refusal (other live handles, or the default namespace) returns
+  `Err((Some(handle), e))` with the handle intact for continued use;
+  a teardown error after the point of no return yields
+  `Err((None, e))` (the namespace is no longer open, matching
+  `vsdb_ns_close` error semantics).
+- **Runtime distance-metric selection for VecDex** (`VecDexDyn`,
+  vecdex backlog P3): `VecDexDyn<K, S>` selects the metric at
+  construction via the new `distance::MetricKind` enum
+  (`L2`/`Cosine`/`InnerProduct`) and mirrors the full `VecDex` API
+  one-to-one. Enum dispatch happens once per public operation; the
+  distance loops stay statically monomorphized, so per-query
+  performance matches the equivalent `VecDex`. The metric is
+  persisted in the instance meta and restored by `from_meta` without
+  being re-stated; `VecDex` and `VecDexDyn` meta formats are
+  deliberately distinct and refuse to cross-load.
+
 ## [v16.1.1]
 
 Post-release audit fixes (registry: `docs/audit.md`).

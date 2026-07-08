@@ -19,7 +19,7 @@
 | `MptCalc` / `SmtCalc` | Merkle Patricia Trie and Sparse Merkle Tree for cryptographic state commitments |
 | `VerMapWithProof<K, V, T>` | VerMap + trie integration for versioned Merkle roots |
 | `SlotDex<S, K>` | Timestamp-based paged index with skip-list-like tier acceleration |
-| `VecDex<K, D>` | HNSW approximate nearest-neighbor vector search (L2, Cosine, InnerProduct) |
+| `VecDex<K, D>` | HNSW approximate nearest-neighbor vector search (L2, Cosine, InnerProduct; `VecDexDyn` for runtime metric selection) |
 | `DagMapRaw` / `DagMapRawKey<V>` | DAG-based collections |
 
 ## Installation

@@ -154,6 +154,22 @@ where
         self.inner.namespace()
     }
 
+    /// Deep-copies this value into a brand-new instance placed in `ns`
+    /// — the cross-namespace form of `Clone` (mirroring
+    /// [`new`](Self::new) vs [`new_in`](Self::new_in)).
+    ///
+    /// # Errors
+    ///
+    /// If an engine-level write fails.
+    pub fn clone_in(
+        &self,
+        ns: &crate::common::Namespace,
+    ) -> crate::common::error::Result<Self> {
+        Ok(Self {
+            inner: self.inner.clone_in(ns)?,
+        })
+    }
+
     /// Creates a new `Orphan` with an initial value.
     pub fn new(v: T) -> Self {
         let mut hdr = MapxOrdRawKey::new();

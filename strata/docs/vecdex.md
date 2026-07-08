@@ -100,6 +100,28 @@ recall; increase `m` and `ef_construction` for larger datasets.
 
 Custom metrics can be implemented via the `DistanceMetric<S>` trait.
 
+### Runtime metric selection
+
+When the metric is decided from configuration or user input instead of
+at compile time, use `VecDexDyn<K, S>` with `MetricKind`:
+
+```rust
+use vsdb::vecdex::{VecDexDyn, HnswConfig, distance::MetricKind};
+
+let cfg = HnswConfig { dim: 4, ..Default::default() };
+let mut idx: VecDexDyn<String> = VecDexDyn::new(MetricKind::Cosine, cfg);
+idx.insert(&"doc-a".into(), &[0.1, 0.2, 0.3, 0.4]).unwrap();
+assert_eq!(idx.metric(), MetricKind::Cosine);
+```
+
+`VecDexDyn` mirrors the full `VecDex` API one-to-one and persists the
+metric choice inside its metadata, so `from_meta` restores it without
+the caller re-stating it.  Cost: one enum dispatch per public
+operation — the distance loops stay statically monomorphized, so
+search/insert performance is identical to the equivalent `VecDex`.
+The meta formats are deliberately distinct: a `VecDex<K, D, S>` meta
+does not load as `VecDexDyn<K, S>` or vice versa.
+
 ## Filtered Search
 
 `search_with_filter` evaluates a predicate on each candidate's key *during*
@@ -182,6 +204,7 @@ For concurrent read/write access, wrap it in
 | Send + Sync | Safe for multi-threaded use when generic parameters permit |
 | Generic key types | Public methods require `K: KeyEnDe + ValueEnDe + Clone + Eq + Serialize + DeserializeOwned` |
 | Duplicate key handling | Re-insert replaces old vector and rebuilds connections |
+| Runtime metric selection | `VecDexDyn<K, S>` + `MetricKind` — metric chosen at construction, persisted in meta; one enum dispatch per operation, distance loops stay monomorphized |
 | Criterion benchmarks | Insert and search benches at 1K/5K/10K scales |
 
 ### Planned (not yet implemented)
@@ -191,5 +214,4 @@ For concurrent read/write access, wrap it in
 | SIMD-optimized distance | P2 | Architecture-specific SIMD for distance computation |
 | f16 / i8 quantized vectors | P3 | Reduced storage and faster distance for large indices |
 | Multi-vector per key | P3 | Store multiple embeddings per key (e.g., chunked documents) |
-| Runtime metric selection | P3 | Select distance metric at runtime instead of compile-time generic |
 | VerMap integration | P3 | Versioned vector index with branching and merge |

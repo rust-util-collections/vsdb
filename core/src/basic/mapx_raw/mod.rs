@@ -154,6 +154,26 @@ impl MapxRaw {
         self.inner.namespace()
     }
 
+    /// Deep-copies every entry into a brand-new instance placed in `ns`
+    /// — the cross-namespace form of [`Clone`] (`clone()` copies into
+    /// the *source's* namespace; `clone_in` chooses the target instead,
+    /// mirroring [`new`](Self::new) vs [`new_in`](Self::new_in)).
+    ///
+    /// The copy runs in bounded chunks (never buffering the whole map
+    /// in memory) and needs no atomicity: the target is a brand-new,
+    /// unobservable instance until returned.
+    ///
+    /// # Errors
+    ///
+    /// If an engine-level write fails.  The partially-written target is
+    /// abandoned as unreferenced, invisible garbage (the same residue a
+    /// mid-`clone()` panic leaves behind).
+    pub fn clone_in(&self, ns: &Namespace) -> Result<Self> {
+        Ok(MapxRaw {
+            inner: self.inner.clone_in(ns)?,
+        })
+    }
+
     /// Retrieves a value from the map corresponding to the given key.
     ///
     /// # Arguments

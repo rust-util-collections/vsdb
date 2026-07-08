@@ -674,6 +674,76 @@ impl Namespace {
     pub(crate) fn engine(&self) -> &Engine {
         &self.0.engine
     }
+
+    /// Consuming form of [`vsdb_ns_close`]: closes this namespace,
+    /// releasing **all** of its resources (see `vsdb_ns_close` for the
+    /// full contract — flush-first teardown, registry untouched,
+    /// re-openable afterwards).
+    ///
+    /// `self` must be the *last* live handle: every collection handle,
+    /// iterator, and other `Namespace` clone must already be dropped.
+    /// The consumed `self` itself is accounted for — unlike
+    /// `vsdb_ns_close(id)`, no separate `drop(ns)` is needed first.
+    ///
+    /// # Errors
+    ///
+    /// - `Err((Some(handle), e))` — the close was **refused** (other
+    ///   live handles, or the default namespace): nothing happened, and
+    ///   the consumed handle is returned for continued use.
+    /// - `Err((None, e))` — the close **ran** but the engine teardown
+    ///   reported an error while flushing/syncing: the namespace is no
+    ///   longer open (same terminal state as `vsdb_ns_close` returning
+    ///   an error), so there is no handle to give back.
+    ///
+    /// ```ignore
+    /// match ns.close() {
+    ///     Ok(()) => {}
+    ///     Err((Some(ns), e)) => { /* refused — `ns` is still usable */ }
+    ///     Err((None, e)) => { /* closed, but teardown reported `e` */ }
+    /// }
+    /// ```
+    pub fn close(self) -> std::result::Result<(), (Option<Namespace>, VsdbError)> {
+        let id = self.0.id;
+        if id == DEFAULT_NS_ID {
+            return Err((Some(self), ns_err("the default namespace cannot be closed")));
+        }
+        let _g = REGISTRY_LOCK.lock();
+        let ns_owned = {
+            let mut open = OPEN_NAMESPACES.lock();
+            let Some(entry) = open.get(&id) else {
+                // Unreachable through safe use (a live handle pins its
+                // table entry: removal proves exclusivity first), kept
+                // as a defensive error path rather than a panic.
+                return Err((
+                    Some(self),
+                    ns_err(format!("namespace {id} is not open in this process")),
+                ));
+            };
+            // A live handle is always a clone of the current table
+            // entry: the entry can only be replaced by a successful
+            // close, which proves no external handle existed.
+            debug_assert!(Arc::ptr_eq(&entry.0, &self.0));
+            // Strong refs accounted here: the table's entry + `self`.
+            // Stable while both locks are held — see `vsdb_ns_close`.
+            let others = Arc::strong_count(&entry.0) - 2;
+            if others > 0 {
+                return Err((
+                    Some(self),
+                    ns_err(format!(
+                        "namespace {id} still has {others} other live handle(s); \
+                         drop every collection handle and `Namespace` clone first"
+                    )),
+                ));
+            }
+            // Provably exclusive; release `self`'s ref (count 2 -> 1)
+            // and take sole ownership through the table's entry.
+            drop(self);
+            open.remove(&id).expect("present: checked above")
+        };
+        let inner = Arc::try_unwrap(ns_owned.0)
+            .unwrap_or_else(|_| unreachable!("count was 1 under both locks"));
+        inner.engine.close().map_err(|e| (None, VsdbError::from(e)))
+    }
 }
 
 /// The record's shard count, bounds-checked. Registry entries are
@@ -859,6 +929,9 @@ pub fn vsdb_ns_relocate(id: NsId, new_path: impl AsRef<Path>) -> Result<()> {
 /// namespace handle: one may outlive a `close` and keep yielding its
 /// (consistent, stale) snapshot. Memory-safe by construction; don't
 /// rely on it observing the close.
+///
+/// The handle-consuming form is [`Namespace::close`], which accounts
+/// for the handle it consumes and returns it on refusal.
 pub fn vsdb_ns_close(id: NsId) -> Result<()> {
     if id == DEFAULT_NS_ID {
         return Err(ns_err("the default namespace cannot be closed"));

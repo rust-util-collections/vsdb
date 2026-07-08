@@ -41,9 +41,17 @@ let fast = Namespace::create_with(NamespaceOpts {
 }).unwrap();
 let hot: MapxOrd<i32, String> = MapxOrd::new_in(&fast);
 
+// ---- Cross-namespace copy: `clone_in` (the `Clone` counterpart) ----
+
+// Deep-copies into a brand-new instance placed in the target namespace
+// (chunked; never whole-map in memory). Available on MapxRaw, Mapx,
+// MapxOrd, MapxOrdRawKey, and Orphan.
+let archive_copy = archive.clone_in(&Namespace::default_ns()).unwrap();
+
 // Admin functions (from vsdb_core, re-exported by vsdb):
 //   vsdb_ns_list() -> Result<Vec<NsInfo>>
 //   vsdb_ns_close(id) -> Result<()>
+//   ns.close()       -> consuming form; refusal returns the handle
 //   vsdb_ns_destroy(id) -> Result<()>
 //   vsdb_ns_relocate(id, new_path) -> Result<()>
 ```

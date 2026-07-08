@@ -120,8 +120,8 @@ pub use slotdex::{SlotDex, SlotDex32, SlotDex64, SlotDex128, SlotType};
 
 // VecDex — approximate nearest-neighbor vector index.
 pub use vecdex::{
-    HnswConfig, VecDex, VecDexCosine, VecDexCosineF64, VecDexL2, VecDexL2F64,
-    distance::{Cosine, DistanceMetric, InnerProduct, L2, Scalar},
+    HnswConfig, VecDex, VecDexCosine, VecDexCosineF64, VecDexDyn, VecDexL2, VecDexL2F64,
+    distance::{Cosine, DistanceMetric, InnerProduct, L2, MetricKind, Scalar},
 };
 
 // Re-export vsdb_core crate for advanced users, plus the user-facing
