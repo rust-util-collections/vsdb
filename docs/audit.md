@@ -16,6 +16,22 @@
 
 ## Resolved
 
+### [LOW] docs: CLAUDE.md not updated for `VecDexDyn` and `clone_in`
+- **Where**: `CLAUDE.md` (Architecture table "Vector Index" row; top feature-bullet list)
+- **What**: This diff adds a new public type `VecDexDyn` (+ `MetricKind`, `strata/src/vecdex/dynamic.rs`) and a new `clone_in(&Namespace)` method spanning `MapxRaw`/`Mapx`/`MapxOrd`/`MapxOrdRawKey`/`Orphan`. `README.md:104` and `strata/README.md:22` were updated in the same diff to mention `VecDexDyn`, but `CLAUDE.md`'s Vector Index table row and Namespaces bullet were not touched (confirmed: `CLAUDE.md` has zero diff in this commit range, and contains no occurrence of `VecDexDyn`, `MetricKind`, or `clone_in`).
+- **Why**: Violates this repo's own "Doc-code alignment" convention (public API changes must update corresponding docs, `CLAUDE.md` included) — the same convention already enforced by the "namespace architecture is missing from review/project docs" resolved entry below.
+- **Suggested fix**: Add `VecDexDyn`/`MetricKind` to the Vector Index row, and mention `clone_in` in the Namespaces bullet (or a new row), mirroring the wording already added to `README.md`/`strata/README.md`.
+- **Resolution**: Fixed — CLAUDE.md Vector-index bullet and Architecture-table row now name `VecDexDyn`/`MetricKind`; the Namespaces bullet now names `clone_in(&ns)` and the consuming `Namespace::close(self)`.
+
+### [LOW] vecdex: pattern guide's Critical Invariants/Bug Patterns not updated for `VecDexDyn`'s frozen-wire-tag invariant
+- **Where**: `.claude/docs/patterns/vecdex.md` (Critical Invariants / Common Bug Patterns / Review Checklist sections)
+- **What**: The Files list was updated to mention `dynamic.rs`/`VecDexDyn`'s frozen wire tags and `DynIter`, but no corresponding invariant, Common Bug Pattern entry, or Review Checklist line was added for "wire tags must stay frozen/append-only, never re-derived from enum/derive variant order" — the exact bug class just fixed in this diff (see the "persisted discriminant followed enum source order" entry below).
+- **Why**: This pattern guide is the designated authoritative source for catching regressions of this exact class in future reviews; the Files list alone doesn't carry the checkable invariant forward.
+- **Suggested fix**: Add "INV-VD6: Frozen Wire Tags" to Critical Invariants (wire tags are explicit append-only constants, never derived variant/enum order), plus a matching Common Bug Pattern and Review Checklist line.
+- **Resolution**: Fixed — added INV-VD6 (Frozen Wire Tags, aligned with the actual `WIRE_TAG_*` manual-serde implementation and `MetricKind`'s derive status), a "Wire-Tag Drift" Common Bug Pattern, and a matching Review Checklist line.
+
+---
+
 ### [MEDIUM] engine: `clone_in` error path abandoned committed chunks as unreclaimable garbage
 - **Where**: `core/src/common/engine/mod.rs` (`Mapx::clone_in`)
 - **Resolution** *(post-v16.2.0 review)*: a failed chunk commit now
@@ -437,15 +453,18 @@
   runs (competing callers block until it completes). No double allocation is
   possible; a leaked id would in any case be waste, not corruption.
 
-### [REJECTED] namespace: "`DEFAULT_NS_ID` guard copy-pasted in 3 admin functions"
-- **Where**: `core/src/common/namespace.rs` (`open`, `vsdb_ns_destroy`, `vsdb_ns_relocate`)
-- **What**: Third-party review proposed extracting the three `id ==
-  DEFAULT_NS_ID` guards into a shared helper.
-- **Reason**: The three guards have deliberately different semantics — `open`
-  short-circuits to `default_ns()` (success), destroy/relocate return
-  distinct, context-specific errors with actionable guidance. A shared
-  helper would need flags/closures to reproduce the divergence: DRY for
-  DRY's sake, net readability loss for three 3-line guards.
+### [REJECTED] namespace: "`DEFAULT_NS_ID` guard copy-pasted in admin functions"
+- **Where**: `core/src/common/namespace.rs` (`open`, `vsdb_ns_destroy`,
+  `vsdb_ns_relocate`, `ns_close_impl`)
+- **What**: Third-party review proposed extracting the `id ==
+  DEFAULT_NS_ID` guards into a shared helper. Originally raised against
+  3 sites; `ns_close_impl` (v16.2.1, shared by `vsdb_ns_close` and
+  `Namespace::close`) is a 4th guard of the same shape, re-checked here.
+- **Reason**: The guards have deliberately different semantics — `open`
+  short-circuits to `default_ns()` (success), destroy/relocate/close each
+  return distinct, context-specific errors with actionable guidance. A
+  shared helper would need flags/closures to reproduce the divergence: DRY
+  for DRY's sake, net readability loss for four 3-line guards.
 
 ### [REJECTED] dagmap: "public `Orphan::get_mut()` allows cycle creation"
 - **Where**: `strata/src/dagmap/raw/mod.rs` (`parent` field), `strata/src/basic/orphan/mod.rs` (`get_mut`)

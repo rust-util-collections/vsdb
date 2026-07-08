@@ -38,11 +38,36 @@ All vectors in the index must have dimension == `meta.dim`. Query vectors must a
 Filtered search must allow non-matching nodes to participate in graph traversal (as candidates) while excluding them from the result set.
 **Check**: Verify search_layer's filter only gates result insertion, not candidate expansion.
 
+### INV-VD6: Frozen Wire Tags
+`VecDexDyn`'s persisted metric discriminant is an **explicit,
+append-only wire constant** (`WIRE_TAG_*` in `dynamic.rs`, written by
+manual serde impls) — never derived from enum variant order
+(`#[derive(Serialize)]` on an enum tags by source order, so any
+reorder/insert silently re-maps every persisted meta to the wrong
+metric). New metrics append a new tag; existing tags are frozen
+forever. `MetricKind` itself is derive-serialized and not part of
+vsdb's on-disk meta, but it is `pub + Serialize`: its variant order is
+API surface for user-persisted configs and gets the same append-only
+discipline.
+**Check**: Verify `dynamic.rs` serde impls map variants to the
+hard-coded `WIRE_TAG_*` constants, with decode rejecting unknown tags
+loudly. Any new variant must take the next unused tag, and a
+round-trip test must pin every existing tag value.
+
 ## Common Bug Patterns
 
 ### Entry Point Layer Downgrade
 On remove of entry point, picking a replacement node without scanning for the global max_layer. Causes higher layers to become unreachable.
 **Trigger**: Remove the entry point when other nodes exist at higher layers.
+
+### Wire-Tag Drift
+Re-deriving `VecDexDyn`/`MetricKind` serde impls (or "cleaning up" the
+manual impls into derives) re-couples the persisted discriminant to enum
+source order. Old metas then decode under the wrong metric — searches
+return wrong-distance results with no error.
+**Trigger**: Any edit that touches variant order, adds a variant without
+appending a new tag, or replaces the manual serde impls with derives
+(INV-VD6).
 
 ### Neighbor Count Overflow
 After bidirectional edge insertion, a node may exceed m_max neighbors. prune_neighbors must be called.
@@ -61,6 +86,7 @@ any intermediate direct-store write reintroduces the torn-compact window.
 - [ ] key_to_node / node_to_key / node_info consistent (INV-VD3)
 - [ ] Dimension validated on insert and search (INV-VD4)
 - [ ] Filter does not block graph traversal (INV-VD5)
+- [ ] VecDexDyn/MetricKind wire tags frozen, append-only, never derive-ordered (INV-VD6)
 - [ ] prune_neighbors called after edge insertion
 - [ ] compact preserves all data
 - [ ] Send + Sync assertion present

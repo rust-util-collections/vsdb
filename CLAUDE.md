@@ -8,8 +8,8 @@ VSDB is a high-performance embedded key-value database for Rust that provides:
 - **Merkle tries** (MPT + SMT) for stateless cryptographic commitments
 - **Slot-based indexing** (SlotDex) for timestamp-paged queries
 - **DAG-based collections** (DagMap) for graph-like data
-- **Vector index** (VecDex) — pure-Rust HNSW for approximate nearest-neighbor search
-- **Namespaces** — anonymous placement groups: independently-rooted engine instances in one process (own dir/volume, shards, WALs, memory budget); co-location via `handle.namespace()` + `new_in`/`ns.scope(..)`; in-process `close` (full resource reclaim) and O(1) whole-namespace destroy — the epoch-rotation loop needs no restart
+- **Vector index** (VecDex) — pure-Rust HNSW for approximate nearest-neighbor search; `VecDexDyn` + `MetricKind` select the distance metric at runtime (enum dispatch, metric persisted in meta)
+- **Namespaces** — anonymous placement groups: independently-rooted engine instances in one process (own dir/volume, shards, WALs, memory budget); co-location via `handle.namespace()` + `new_in`/`ns.scope(..)`; cross-ns deep copy via `clone_in(&ns)` (MapxRaw and typed wrappers); in-process `close` (full resource reclaim; consuming `Namespace::close(self)` returns the handle on refusal) and O(1) whole-namespace destroy — the epoch-rotation loop needs no restart
 
 Built exclusively on [mmdb](https://github.com/rust-util-collections/mmdb) (pure-Rust LSM-Tree engine). The default namespace uses 16-shard prefix-based routing (pinned); non-default namespaces persist their own creation-time shard count.
 
@@ -46,7 +46,7 @@ make bench        # criterion benches (core basic, strata basic, versioned, slot
 | Merkle Tries | `strata/src/trie/` | MPT (16-ary) + SMT (binary 256-bit) |
 | Slot Index | `strata/src/slotdex/` | Time-slot tier-based indexing (single-handle, crash-atomic) |
 | DAG Collections | `strata/src/dagmap/` | DAG-based data structures |
-| Vector Index | `strata/src/vecdex/` | VecDex, HNSW ANN search, distance metrics (single-handle, crash-atomic) |
+| Vector Index | `strata/src/vecdex/` | VecDex + VecDexDyn (runtime `MetricKind`), HNSW ANN search, distance metrics (single-handle, crash-atomic) |
 | Encoding | `strata/src/common/ende.rs` | postcard-based KeyEnDe/ValueEnDe |
 | Staged mutation | `strata/src/common/staged.rs` | read-your-writes overlay + one atomic write batch per mutation (SlotDex/VecDex) |
 
