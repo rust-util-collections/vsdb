@@ -1,13 +1,20 @@
 # RFC: Shared Memory Pools — Injectable Cache & Write-Buffer Accounting
 
-- **Status**: draft, rev 2 — **not scheduled**; revisit when the trigger
-  conditions in §8 are met. Rev 2 is a source-verified deep dive: every
-  mechanism claim in §3 was checked against mmdb 4.0.10 / vsdb v16.2.0,
-  the pool topology is decomposed (§4.0 — the per-engine tier turns out
-  to need **no** isolation trade at all), and the mmdb-side change
-  surface is specified to implementation granularity (§4.1, §4.2).
+- **Status**: draft, rev 2 — vsdb side **not scheduled**; revisit when
+  the trigger conditions in §8 are met. **mmdb-side mechanism (steps
+  1–3) is implemented and shipped in mmdb v4.1.0** (`BlockCachePool` +
+  per-member `BlockCache` views, detach lifecycle,
+  `DbOptions::block_cache` injection — all `None`-default, zero
+  behavior change for non-sharing callers; one design delta from this
+  doc: pinned entries stayed *member-local* rather than pool-level, so
+  one member's pins add zero lock traffic to other members' `get` fast
+  paths). Rev 2 is a source-verified deep dive: every mechanism claim
+  in §3 was checked against mmdb 4.0.10 / vsdb v16.2.0, the pool
+  topology is decomposed (§4.0 — the per-engine tier turns out to need
+  **no** isolation trade at all), and the mmdb-side change surface is
+  specified to implementation granularity (§4.1, §4.2).
   **Pragmatic sequencing in §9.0**: step 0 + the Q1 benchmark are
-  recommended *now* (pre-commitment); phase 1 + tier (i) is the
+  recommended *now* (pre-commitment); vsdb wiring (steps 4–5) is the
   recommended first batch; tier (ii) and phase 2 are deferred.
 - **Prerequisites**: [namespaces.md](./namespaces.md) (implemented,
   v16.0.0+), [ns-close.md](./ns-close.md) (implemented, v16.1.0 —
@@ -521,9 +528,9 @@ regression on a representative skewed workload:
 | Step | When | Layer | Content | Risk |
 |------|------|-------|---------|------|
 | 0 | **now** | vsdb | **Measurement pre-work** (may ship any time, independently): property passthrough `Engine → DB::property` for per-shard cache hit/miss; optional aggregate helper | trivial |
-| 1 | first batch | mmdb | `BlockCachePool` + façade `BlockCache` view: key namespacing `(member, file, offset)`, **sharded** `file_offsets`, per-member pinned-bytes counter | correctness-critical, mechanical; call-site blast radius ≈ 0 (§4.1) |
-| 2 | first batch | mmdb | Detach lifecycle: idempotent `detach()` from `close` + `Drop`, batched invalidation + single maintenance pass, cache-bypass mode for detached views | low |
-| 3 | first batch | mmdb | `DbOptions.block_cache: Option<Arc<BlockCachePool>>` injection; capacity-precedence docs; contention benchmark (§10 Q1) gating defaults | low |
+| 1 | **✅ done (mmdb v4.1.0)** | mmdb | `BlockCachePool` + façade `BlockCache` view: key namespacing `(member, file, offset)`, **sharded** `file_offsets`, per-member pinned-bytes counter; *delta vs. plan: pinned entries kept member-local (zero cross-member lock traffic on the pinned fast path)* | correctness-critical, mechanical; call-site blast radius ≈ 0 (§4.1) |
+| 2 | **✅ done (mmdb v4.1.0)** | mmdb | Detach lifecycle: idempotent `detach()` from `close` + `Drop`, batched invalidation + single maintenance pass, cache-bypass mode for detached views | low |
+| 3 | **✅ done (mmdb v4.1.0)** | mmdb | `DbOptions.block_cache: Option<Arc<BlockCachePool>>` injection; capacity-precedence docs; contention benchmark (§10 Q1) gating defaults | low |
 | 4 | first batch | vsdb | Tier (i): per-engine pool in `Engine::open_at` (all namespaces, default included) | low |
 | 5 | first batch | — | Soak: per-shard hit-rate/eviction telemetry vs static split (uses step 0) | — |
 | 6 | **deferred** (trigger 2/3) | vsdb | Tier (ii): opt-in ns-tier pool + budget-semantics contract note | medium |
