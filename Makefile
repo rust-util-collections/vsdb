@@ -19,6 +19,8 @@ bench:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo bench -p vsdb_core --bench basic
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
+	cargo bench -p vsdb_core --bench cache_pool
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo bench -p vsdb --bench basic
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo bench -p vsdb --bench versioned
@@ -26,6 +28,8 @@ bench:
 	cargo bench -p vsdb --bench slotdex
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo bench -p vsdb --bench trie_bench
+	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
+	cargo bench -p vsdb --bench vecdex
 
 # ---- Utilities ----
 

@@ -27,7 +27,7 @@ vsdb/
 make all          # fmt + lint + test
 make test         # cargo test --workspace (release + debug, parallel)
 make lint         # cargo clippy --workspace + check tests/benches
-make bench        # criterion benches (core basic + cache_pool Q1 gate, strata basic, versioned, slotdex)
+make bench        # criterion benches (core: basic + cache_pool; strata: basic, versioned, slotdex, trie_bench, vecdex)
 ```
 
 **Important**: Tests run in PARALLEL (v16.0.2+). Test data stays disjoint via globally-unique prefixes; tests must not assert on cross-test global state (exact allocator values, registry sizes) and must serialize any `vsdb_set_base_dir` behind a `Once` (env mutation is unsound to race).
@@ -77,7 +77,7 @@ Additional documentation in `docs/`:
 - `VsdbError` (thiserror, defined in `vsdb_core`) is the **only** error type in public APIs of both crates; `ruc` is internal-only for error chaining — boundary conversions preserve the complete chain via `stringify_chain`
 - `postcard` for serialization (replaced serde_cbor_2 in v12)
 - Tests run in parallel; isolation comes from globally-unique prefixes (plus `tempdir`/`/tmp/vsdb_testing` for file-level scratch); global-state assertions must be race-tolerant
-- ~22 unsafe blocks in library code (plus ~5 in benches) — all require `// SAFETY:` comments
+- ~26 unsafe blocks in library code (plus ~6 in benches) — all require `// SAFETY:` comments
   - `shadow()`: SWMR contract — caller serializes writes (the ONLY aliasing handle primitive; `Clone` deep-copies storage)
   - `from_bytes()`: caller provides valid serialized bytes
   - Pointer casts in entry API macros
