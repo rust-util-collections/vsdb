@@ -26,7 +26,7 @@
 //!
 
 use crate::common::{
-    engine::{Engine, EngineSizing, write_file_durable},
+    engine::{Engine, EngineSizing, root_holds_dataset, write_file_durable},
     error::{Result, VsdbError},
     vsdb_freeze_base_dir, vsdb_get_base_dir,
 };
@@ -788,13 +788,33 @@ pub fn vsdb_ns_relocate(id: NsId, new_path: impl AsRef<Path>) -> Result<()> {
         )));
     }
     let mut reg = load_registry()?;
-    if !reg.entries.iter().any(|r| r.id == id) {
+    let Some(rec_shards) = reg
+        .entries
+        .iter()
+        .find(|r| r.id == id)
+        .map(|r| r.shards as usize)
+    else {
         return Err(ns_err(format!("namespace {id} is not registered")));
-    }
+    };
     // Validate against every OTHER root (skip the record being moved).
     let mut probe = reg.clone_without(id);
     validate_explicit_root(&base, &probe, new_path)?;
     drop(probe.entries.drain(..));
+
+    // The registry only re-points; moving the data is the operator's
+    // job — done BEFORE calling this. Repointing at a dir that does not
+    // hold this namespace's dataset (marker + exact shard dirs) would
+    // durably orphan the real data with zero errors: the next `open`
+    // would silently initialize a fresh, empty root. Refuse instead.
+    if !root_holds_dataset(new_path, rec_shards) {
+        return Err(ns_err(format!(
+            "relocate target {} does not contain namespace {id}'s \
+             dataset (expected an initialized root with {rec_shards} \
+             shard dir(s) and a format marker); move the data there \
+             first, then relocate",
+            new_path.display(),
+        )));
+    }
 
     let rec = reg
         .entries

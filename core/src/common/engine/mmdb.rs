@@ -464,18 +464,32 @@ fn ceiling_file_path() -> PathBuf {
     vsdb_get_base_dir().join(PREFIX_CEILING_REL_PATH)
 }
 
+/// Whether `root` holds a fully-initialized dataset with exactly the
+/// expected shard layout: format marker present plus every
+/// `mmdb/shard_XX` dir. Used by `vsdb_ns_relocate` to refuse a target
+/// the operator has not actually moved the data to.
+pub(crate) fn root_holds_dataset(root: &Path, shards: usize) -> bool {
+    root.join(FORMAT_VERSION_REL_PATH).is_file()
+        && (0..shards).all(|i| root.join("mmdb").join(format!("shard_{i:02}")).is_dir())
+}
+
 /// Folds `legacy` (the pre-v16 shard-0 value, when present) and the
 /// allocation floor into the ceiling file — idempotent take-max, run
 /// under [`SYS_META_LOCK`].
 ///
-/// Crash-safety of the fold-then-mark sequence in [`MmDB::new`]: a crash
-/// after this write but before the format marker lands is safe in both
-/// directions — no allocation has happened yet, so the file equals
-/// max(legacy, ...) with zero divergence; a v15 binary opening next
-/// still allocates correctly from the legacy key, and the next v16 open
-/// max-folds again (that is also why the fold runs at EVERY open: a
+/// Crash-safety around [`MmDB::new`]'s sequence — which is
+/// mark-then-fold: `open_at` writes the format marker before this fold
+/// runs. The order is safe because nothing gates on it: a crash after
+/// the marker but before the fold leaves a marked dataset with no
+/// ceiling file, and every allocation path funnels through
+/// `ensure_alloc_init`, which refuses to issue anything until a fold
+/// has produced the file (re-running it here on the next open, or
+/// running it itself for a fresh universe). The legacy shard-0 key is
+/// preserved forever and the fold is idempotent take-max, so repeated
+/// folds never regress (that is also why the fold runs at EVERY open: a
 /// pre-tripwire v15 binary advancing the legacy key after migration is
-/// re-absorbed instead of causing prefix reuse).
+/// re-absorbed instead of causing prefix reuse; post-marker, the v15
+/// tripwire refuses the dataset outright).
 ///
 /// Never races a ceiling bump: bumps require the allocator to be
 /// initialized (`GLOBAL_COUNTER != 0`), and every path that initializes

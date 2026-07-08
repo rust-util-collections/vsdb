@@ -37,8 +37,10 @@ let restored: VecDex<String, Cosine> = VecDex::from_meta(id).unwrap();
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `new` | `(config: HnswConfig) -> Self` | Create empty index |
-| `instance_id` | `(&self) -> u64` | Unique persistent instance ID |
+| `new` | `(config: HnswConfig) -> Self` | Create empty index (in the current ambient namespace) |
+| `new_in` | `(ns: &Namespace, config: HnswConfig) -> Self` | Create empty index placed in `ns` |
+| `namespace` | `(&self) -> Namespace` | The namespace this index lives in |
+| `instance_id` | `(&self) -> InstanceId` | Complete persistent identity (`map_id` + owning namespace) |
 | `insert` | `(&mut self, key: &K, vector: &[S]) -> Result<()>` | Add or update a vector |
 | `insert_batch` | `(&mut self, items: &[(K, Vec<S>)]) -> Result<()>` | Chunked bulk insert (one atomic batch per chunk) |
 | `search` | `(&self, query: &[S], k: usize) -> Result<Vec<(K, S)>>` | k-NN search |
@@ -55,8 +57,8 @@ let restored: VecDex<String, Cosine> = VecDex::from_meta(id).unwrap();
 | `set_ef_search` | `(&mut self, ef: usize)` | Update the default search beam width |
 | `clear` | `(&mut self)` | Remove all data |
 | `compact` | `(&mut self) -> Result<()>` | Rebuild graph from existing vectors |
-| `save_meta` | `(&self) -> Result<u64>` | Persist metadata for later recovery (create-time constant; saving once after creation suffices) |
-| `from_meta` | `(instance_id: u64) -> Result<Self>` | Recover from saved metadata |
+| `save_meta` | `(&self) -> Result<InstanceId>` | Persist metadata for later recovery (create-time constant; saving once after creation suffices) |
+| `from_meta` | `(instance_id: impl Into<InstanceId>) -> Result<Self>` | Recover from saved metadata (a bare `u64` works for default-namespace instances) |
 
 Every mutation (insert, remove, `set_ef_search`, the graph state) is committed
 through a single atomic engine write batch, so a crash can never leave the

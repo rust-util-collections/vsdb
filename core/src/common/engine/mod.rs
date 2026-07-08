@@ -6,8 +6,9 @@ mod mmdb;
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
-pub(crate) use self::mmdb::MmDB as Engine;
-pub(crate) use self::mmdb::{EngineSizing, write_file_durable};
+pub(crate) use self::mmdb::{
+    EngineSizing, MmDB as Engine, root_holds_dataset, write_file_durable,
+};
 
 type DbIter = self::mmdb::MmdbIter;
 

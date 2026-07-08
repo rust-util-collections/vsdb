@@ -139,16 +139,19 @@ Design: `docs/proposals/namespaces.md` (rev 10).
     `DEFAULT_NS_ID = 0` is a fixed constant — never registered, never
     looked up.
   - Every collection (`MapxRaw` → typed wrappers → `Orphan`,
-    `PersistentBTree`, `VerMap`, tries-with-proof, `SlotDex`, `VecDex`,
+    `PersistentBTree`, `VerMap`, `SlotDex`, `VecDex`,
     `DagMapRaw`/`DagMapRawKey`) gains `new_in(&ns, ..)` + `namespace()`;
     plain `new()` places into `Namespace::current()` (ambient scope,
     creation-time only — never routing). A composite and all its
-    internal maps live in exactly one namespace.
+    internal maps live in exactly one namespace. The one exception is
+    `VerMapWithProof`, which is placed via
+    `from_map(VerMap::new_in(&ns))` and exposes its namespace via
+    `.map().namespace()`.
   - **One global prefix allocator** serves all namespaces: prefixes (=
     `map_id`s) stay unique across the whole registry by construction.
   - Per-namespace `__SYSTEM__` tree: instance metas and MPT/SMT cache
     files live beside their data (`destroy` reclaims them together);
-    the `TrieCache` trait now takes the cache dir explicitly.
+    the `TrieCalc` trait now takes the cache dir explicitly.
 - **`InstanceId { map_id, ns: Option<NsId> }`** — the complete public
   identity, mirroring the persisted meta bytes (`ns: None` ⇔ default
   namespace ⇔ the 16-byte pre-v16 meta form). `Display`/`FromStr` as

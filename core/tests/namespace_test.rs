@@ -281,6 +281,39 @@ fn namespace_lifecycle() {
     assert!(vsdb_ns_close(DEFAULT_NS_ID).is_err());
     assert!(vsdb_ns_close(u64::MAX).is_err());
 
+    // ---- relocate refuses an unpopulated target ----
+    // (write → close → relocate-to-empty-dir must FAIL: repointing the
+    // registry at a dir without the dataset would silently orphan the
+    // real data; after physically moving the tree, relocate succeeds
+    // and the data is reachable at the new root.)
+    let r = Namespace::create_with(NamespaceOpts {
+        shards: 2,
+        ..Default::default()
+    })
+    .unwrap();
+    let rid = r.id();
+    let old_root = r.path().to_path_buf();
+    let mut rm = MapxRaw::new_in(&r);
+    rm.insert(b"moved", b"yes");
+    let rmid = rm.save_meta().unwrap();
+    drop((rm, r));
+    vsdb_ns_close(rid).unwrap();
+
+    let new_root = format!("{dir}_relocated");
+    fs::create_dir_all(&new_root).unwrap();
+    // Empty target: refused (the data has not been moved).
+    assert!(vsdb_ns_relocate(rid, &new_root).is_err());
+    // Move the tree for real, then relocate: accepted.
+    fs::remove_dir_all(&new_root).unwrap();
+    fs::rename(&old_root, &new_root).unwrap();
+    vsdb_ns_relocate(rid, &new_root).unwrap();
+    let rm = MapxRaw::from_meta(rmid).unwrap();
+    assert_eq!(&rm.get(b"moved").unwrap()[..], b"yes");
+    drop(rm);
+    vsdb_ns_close(rid).unwrap();
+    vsdb_ns_destroy(rid).unwrap();
+    assert!(!PathBuf::from(&new_root).exists());
+
     fs::remove_dir_all(&dir).ok();
     // Sibling scratch dirs created by the sub-scenarios above.
     fs::remove_dir_all(format!("{dir}_mnt")).ok();

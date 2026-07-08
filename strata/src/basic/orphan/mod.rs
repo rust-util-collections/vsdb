@@ -102,15 +102,39 @@ where
     /// # Safety
     ///
     /// The caller must ensure that `s` encodes a prefix they have unique
-    /// ownership of.  Passing arbitrary bytes (corrupted, truncated, or
-    /// from a different type) is undefined behavior and may cause panics
-    /// or silent data corruption on subsequent operations.
+    /// ownership of, and that the *current ambient namespace's* engine
+    /// ([`Namespace::current`](crate::common::Namespace::current)) still
+    /// contains the data for this prefix — a raw prefix carries no
+    /// namespace information of its own (use
+    /// [`from_bytes_in`](Self::from_bytes_in) to bind an explicit
+    /// namespace instead).  Passing arbitrary bytes (corrupted,
+    /// truncated, or from a different type) is undefined behavior and
+    /// may cause panics or silent data corruption on subsequent
+    /// operations.
     #[inline(always)]
     pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
         Self {
             // SAFETY: forwards this fn's `unsafe` contract — the caller
-            // guarantees `s` encodes a uniquely-owned prefix.
+            // guarantees `s` encodes a uniquely-owned prefix whose data
+            // lives in the ambient namespace.
             inner: unsafe { MapxOrdRawKey::from_bytes(s) },
+        }
+    }
+
+    /// [`from_bytes`](Self::from_bytes) bound to an explicit namespace.
+    ///
+    /// # Safety
+    ///
+    /// Same contract as `from_bytes`, with the data required to live in
+    /// `ns`'s engine.
+    #[inline(always)]
+    pub unsafe fn from_bytes_in(
+        ns: &crate::common::Namespace,
+        s: impl AsRef<[u8]>,
+    ) -> Self {
+        Self {
+            // SAFETY: forwards this fn's `unsafe` contract.
+            inner: unsafe { MapxOrdRawKey::from_bytes_in(ns, s) },
         }
     }
 

@@ -69,12 +69,11 @@ pub use mpt::{MAX_MPT_KEY_LEN, MptProof};
 pub use proof::VerMapWithProof;
 pub use smt::SmtProof;
 
-use std::mem;
+use std::{mem, path::Path};
 
 use crate::common::error::Result;
 use mpt::{TrieMut, TrieRo};
 use node::NodeHandle;
-use std::path::Path;
 
 /// Common interface for stateless, in-memory Merkle trie engines.
 ///

@@ -16,6 +16,67 @@
 
 ## Resolved
 
+### [HIGH] namespace: `vsdb_ns_relocate` accepts an unpopulated target, silently orphaning data
+- **Where**: `core/src/common/namespace.rs` (`vsdb_ns_relocate`), `core/src/common/engine/mmdb.rs` (`root_holds_dataset`)
+- **Resolution** *(post-v16.1.0 review)*: relocate now refuses a target that
+  does not already hold this namespace's dataset — `root_holds_dataset`
+  requires the format marker plus exactly the record's shard dirs before
+  `save_registry` runs, so "relocate before moving the data" fails loudly
+  instead of durably repointing the registry at an empty dir (whose next
+  `open` would silently initialize a fresh root, orphaning the real data).
+  Regression test covers both arms in-process (thanks to `vsdb_ns_close`):
+  write → close → relocate-to-empty is refused; `fs::rename` the tree →
+  relocate succeeds → the persisted `InstanceId` resolves and the data is
+  visible at the new root.
+
+### [MEDIUM] strata: `from_bytes` on typed wrappers doesn't document its new ambient-namespace dependency
+- **Where**: `strata/src/common/macros.rs` (`define_map_wrapper!`), `strata/src/basic/orphan/mod.rs`
+- **Resolution** *(post-v16.1.0 review)*: the wrapper-level safety docs now
+  state the ambient-namespace binding (mirroring `MapxRaw::from_bytes`'s
+  wording: a raw prefix carries no namespace information of its own), and
+  `from_bytes_in(ns, s)` was added to `define_map_wrapper!` (covering
+  `Mapx`/`MapxOrd`/`MapxOrdRawKey`) and `Orphan` for parity with `MapxRaw` —
+  the whole delegation chain terminates at `MapxRaw::from_bytes_in`.
+
+### [MEDIUM] docs: CHANGELOG.md claims `VerMapWithProof` gains `new_in`/`namespace()`, but it has neither
+- **Where**: `CHANGELOG.md` (`[v16.0.0]` collection list)
+- **Resolution** *(post-v16.1.0 review)*: bullet corrected — the collection
+  list drops "tries-with-proof" and names the exception explicitly:
+  `VerMapWithProof` is placed via `from_map(VerMap::new_in(&ns))` and
+  exposes its namespace via `.map().namespace()`.
+
+### [LOW] docs: `strata/docs/vecdex.md` API table stale after the `InstanceId` migration
+- **Where**: `strata/docs/vecdex.md` (API Reference table)
+- **Resolution** *(post-v16.1.0 review)*: `instance_id`/`save_meta` now
+  documented as returning `InstanceId`, `from_meta` as taking
+  `impl Into<InstanceId>` (bare `u64` still works for default-namespace
+  instances); `new_in` and `namespace` rows added.
+
+### [LOW] docs: CHANGELOG.md refers to a nonexistent `TrieCache` trait
+- **Where**: `CHANGELOG.md`
+- **Resolution** *(post-v16.1.0 review)*: s/`TrieCache`/`TrieCalc`/ — the
+  actual trait whose `save_cache`/`load_cache` take the cache dir.
+
+### [LOW] style: ungrouped `use self::mmdb::…` imports
+- **Where**: `core/src/common/engine/mod.rs`
+- **Resolution** *(post-v16.1.0 review)*: merged into one grouped
+  `pub(crate) use self::mmdb::{…}` (which also exports the new
+  `root_holds_dataset`).
+
+### [LOW] style: ungrouped `std::` imports in trie/mod.rs
+- **Where**: `strata/src/trie/mod.rs`
+- **Resolution** *(post-v16.1.0 review)*: merged into `use std::{mem, path::Path};`.
+
+### [LOW] engine: `migrate_ceiling` doc describes the wrong call order relative to `open_at`
+- **Where**: `core/src/common/engine/mmdb.rs` (`migrate_ceiling` doc comment)
+- **Resolution** *(post-v16.1.0 review)*: doc rewritten to describe the
+  actual mark-then-fold order (`open_at` writes the marker before the fold)
+  and why it is safe: every allocation path funnels through
+  `ensure_alloc_init`, which refuses to issue prefixes until a fold has
+  produced the ceiling file; the legacy key is preserved forever and the
+  fold is idempotent take-max, so no crash point between marker and fold
+  can lead to prefix reuse.
+
 ### [HIGH] namespace: unvalidated registry shard count can panic on `prefix % 0`
 - **Where**: `core/src/common/namespace.rs` (`open_record_locked`)
 - **Resolution** *(third-party review)*: registry entries are written
@@ -225,9 +286,11 @@
   registry entry back inline (under the already-held `REGISTRY_LOCK`) before
   propagating the error — a failed `create` leaves no registry residue.
   `next_id` deliberately stays advanced (ids are never reused; a burnt id is
-  free). Follow-up review found that the rollback can leave newly-created root
-  contents behind and that the current test no longer exercises the post-save
-  rollback arm; those narrower regressions are tracked under `## Open`.
+  free). The two narrower follow-up regressions (rollback leaving
+  newly-created root contents behind; the test not exercising the post-save
+  rollback arm) are both closed: `cleanup_failed_root` now clears whatever
+  the failed open left under the root, and `namespace_test.rs`'s read-only-parent
+  sub-scenario exercises the post-save rollback path.
 
 ### [LOW] engine: missing `// SAFETY:` comment on inner unsafe block in `from_prefix_slice`
 - **Where**: `core/src/common/engine/mod.rs` (`from_prefix_slice`)
