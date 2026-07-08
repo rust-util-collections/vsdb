@@ -146,7 +146,8 @@ impl Mapx {
 
     #[inline(always)]
     pub(crate) fn get_mut(&mut self, key: &[u8]) -> Option<ValueMut<'_>> {
-        let v = self.ns.engine().get(self.materialize(), key)?;
+        let prefix = self.materialize();
+        let v = self.ns.engine().get(prefix, key)?;
 
         Some(ValueMut {
             key: key.to_vec(),
@@ -180,8 +181,9 @@ impl Mapx {
 
     #[inline(always)]
     pub(crate) fn iter_mut(&mut self) -> MapxIterMut<'_> {
+        let prefix = self.materialize();
         MapxIterMut {
-            db_iter: self.ns.engine().iter(self.materialize()),
+            db_iter: self.ns.engine().iter(prefix),
             hdr: self,
         }
     }
@@ -213,8 +215,9 @@ impl Mapx {
         &'a mut self,
         bounds: R,
     ) -> MapxIterMut<'a> {
+        let prefix = self.materialize();
         MapxIterMut {
-            db_iter: self.ns.engine().range(self.materialize(), bounds),
+            db_iter: self.ns.engine().range(prefix, bounds),
             hdr: self,
         }
     }
@@ -600,7 +603,7 @@ impl<'a> Iterator for MapxIterMut<'a> {
         let (k, v) = self.db_iter.next()?;
 
         let vmut = ValueIterMut {
-            engine: self.hdr.ns.engine(),
+            ns: self.hdr.ns.clone(),
             prefix: self.hdr.prefix_bytes(),
             key: k.clone(),
             value: v,
@@ -617,7 +620,7 @@ impl<'a> DoubleEndedIterator for MapxIterMut<'a> {
         let (k, v) = self.db_iter.next_back()?;
 
         let vmut = ValueIterMut {
-            engine: self.hdr.ns.engine(),
+            ns: self.hdr.ns.clone(),
             prefix: self.hdr.prefix_bytes(),
             key: k.clone(),
             value: v,
@@ -630,7 +633,10 @@ impl<'a> DoubleEndedIterator for MapxIterMut<'a> {
 }
 
 pub struct ValueIterMut<'a> {
-    engine: &'static Engine,
+    // The owning namespace (an `Arc` clone), not a bare engine
+    // reference: engines are owned by their `NsInner` (no leak), so a
+    // stored reference must ride with its anchor.
+    ns: Namespace,
     prefix: PreBytes,
     key: RawKey,
     value: RawValue,
@@ -652,7 +658,7 @@ impl fmt::Debug for ValueIterMut<'_> {
 impl Drop for ValueIterMut<'_> {
     fn drop(&mut self) {
         if self.dirty {
-            self.engine.insert(self.prefix, &self.key, &self.value);
+            self.ns.engine().insert(self.prefix, &self.key, &self.value);
         }
     }
 }

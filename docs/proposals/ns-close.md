@@ -1,7 +1,6 @@
 # RFC: In-Process Namespace Close — Ownership-Inverted Engine Lifecycle
 
-- **Status**: draft — design accepted 2026-07-08, not yet implemented
-- **Target**: v16.1.0 (minor bump: one new public API, zero breaking changes)
+- **Status**: implemented (v16.1.0)
 - **Prerequisite**: [namespaces.md](./namespaces.md) (implemented, v16.0.0+)
 - **Supersedes**: the P3 `close()` sketch in namespaces.md §6, which assumed a
   `&'static DB` → `Arc<DB>` migration. That migration is **not needed**.
@@ -102,21 +101,27 @@ The complete production `'static` surface is six sites, all in `vsdb_core`
 |---|------|-------|-------|
 | 1 | `NsInner.engine` (namespace.rs:456) | `&'static Engine` + `Box::leak` (namespace.rs:688) | `engine: Engine` (owned inline; `Arc` heap allocation pins the address) |
 | 2 | `Namespace::engine()` (namespace.rs:663) | `-> &'static Engine` | `-> &Engine` (borrow of `self`) |
-| 3 | `ValueIterMut.engine` (engine/mod.rs:633) | `&'static Engine` (struct already has `<'a>`) | `&'a Engine` |
+| 3 | `ValueIterMut.engine` (engine/mod.rs:633) | `&'static Engine` | `ns: Namespace` (`Arc` clone — a streaming iterator's `&mut self` cannot reborrow its handle for `'a`, so the stored reference rides with its anchor instead) |
 | 4 | `MmDB.dbs` (mmdb.rs:141) | `Box<[&'static DB]>` + per-shard `Box::leak` (mmdb.rs:236) | `Box<[DB]>` (owned) |
 | 5 | `MmDB::shard()` (mmdb.rs:244) | `-> &'static DB` | `-> &DB` |
-| 6 | `MmdbIter` (mmdb.rs:422) | `Box<dyn …>` (implicit `+ 'static`) | `MmdbIter<'a>(Box<dyn … + 'a>)` |
+| 6 | `MmdbIter` (mmdb.rs:422) | `Box<dyn …>` (implicit `+ 'static`) | **unchanged** — mmdb's `DBIterator` is fully-owning (no lifetime parameter; it pins its SST/memtable sources via internal refcounts), so the boxed iterator never borrows the `DB` and `range_detached` keeps its detached semantics |
 
 Both `Box::leak` sites are deleted. Engine teardown becomes a plain drop
 cascade: last `Arc<NsInner>` → `NsInner` → `Engine` → each `DB` (whose
 `Drop` joins compaction threads and releases the flock).
 
-The lifetime plumbing is mechanical: `MapxIter<'a>` / `MapxIterMut<'a>`
-already carry lifetimes (engine/mod.rs:561, 585); public iterators already
-carry lifetimes (`MapxRawIter<'_>`, mapx_raw/mod.rs:264). Only `MmdbIter`
-gains a parameter, threaded through `type DbIter` (engine/mod.rs:12).
-The test-only leak (mmdb.rs:1509) becomes a plain owned binding — tests
-improve for free.
+No lifetime plumbing was needed beyond two borrowck-friendly
+`materialize()` hoists: public iterators already carry lifetimes
+(`MapxRawIter<'_>`, mapx_raw/mod.rs:264) and the engine-level iterators
+(`MapxIter<'a>`/`MapxIterMut<'a>`, engine/mod.rs:561, 585) bind them via
+`PhantomData`. The test-only leak (mmdb.rs:1509) became a plain owned
+binding — tests improve for free.
+
+A consequence of #6 worth stating: a detached snapshot iterator holds its
+engine sources via mmdb-internal refcounts, not through the `Namespace`
+handle, so one may outlive a `close()` and keep yielding its (consistent,
+stale) snapshot. Memory-safe by construction; documented on
+[`vsdb_ns_close`].
 
 ### 3.2 Default namespace uniformity
 
@@ -255,8 +260,8 @@ exist (close is deterministic-or-refused). Reopen after close
 ## 8. Implementation plan
 
 1. **Ownership inversion** (core/engine): `MmDB { dbs: Box<[DB]> }`,
-   `shard() -> &DB`, `MmdbIter<'a>`, delete the per-shard leak; thread the
-   lifetime through `DbIter`/`MapxIter`/`MapxIterMut`/`ValueIterMut`.
+   `shard() -> &DB`, delete the per-shard leak (`MmdbIter` needs no
+   change — see §3.1 #6).
 2. **Namespace ownership** (core/namespace): `NsInner { engine: Engine }`,
    `engine() -> &Engine`, delete the leak; move default-engine ownership
    into `DEFAULT_NS`, delegate `VSDB`.

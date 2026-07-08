@@ -5,7 +5,7 @@
 
 use vsdb::{
     DEFAULT_NS_ID, MapxOrd, Namespace, Orphan, SlotDex, VerMap, basic::mapx::Mapx,
-    vsdb_set_base_dir,
+    vsdb_ns_close, vsdb_ns_destroy, vsdb_set_base_dir,
 };
 
 #[test]
@@ -60,6 +60,24 @@ fn composites_in_namespaces() {
 
     // Default behavior untouched.
     assert_eq!(Mapx::<u8, u8>::new().namespace().id(), DEFAULT_NS_ID);
+
+    // ---- in-process close through the typed layer ----
+    let e = Namespace::create().unwrap();
+    let eid = e.id();
+    let mut cm: Mapx<u64, String> = Mapx::new_in(&e);
+    cm.insert(&1, &"epoch".to_owned());
+    let cid = cm.save_meta().unwrap();
+    // Typed handles pin the namespace: refused while any is alive.
+    assert!(vsdb_ns_close(eid).is_err());
+    drop(cm);
+    drop(e);
+    vsdb_ns_close(eid).unwrap();
+    // Reopen through the persisted meta — restart-equivalent recovery.
+    let cm: Mapx<u64, String> = Mapx::from_meta(cid).unwrap();
+    assert_eq!(cm.get(&1).unwrap(), "epoch");
+    drop(cm);
+    vsdb_ns_close(eid).unwrap();
+    vsdb_ns_destroy(eid).unwrap();
 
     std::fs::remove_dir_all(&dir).ok();
 }

@@ -21,8 +21,12 @@
 - Handles carry their `Namespace` (Arc); ambient scope affects CREATION
   only, never routing; metas embed `ns_id` as an optional 8-byte suffix
   (absent ⇔ default namespace, byte-identical to pre-v16)
-- Engines leak-forever (`Box::leak`); registry mutations + namespace
-  opens serialize on `REGISTRY_LOCK` (not-open checks for
+- Engines are OWNED by their `Arc<NsInner>` (no `Box::leak` anywhere,
+  v16.1.0+): `vsdb_ns_close` proves exclusivity (strong_count == 1 under
+  REGISTRY_LOCK + table lock), removes the entry, per-shard `DB::close`
+  (flush + WAL sync, errors surface), then the drop cascade joins
+  compaction threads and releases LOCK files; registry mutations +
+  namespace opens serialize on `REGISTRY_LOCK` (not-open checks for
   destroy/relocate must run UNDER it — TOCTOU)
 - `__SYSTEM__/format_version` marker: written after shard creation
   completes; older binaries refuse newer formats; shard-layout

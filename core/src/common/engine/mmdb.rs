@@ -135,10 +135,12 @@ const NUM_SHARDS: usize = 16;
 static SYS_META_LOCK: Mutex<()> = Mutex::new(());
 
 pub struct MmDB {
-    /// Sharded DB handlers (`shards` of them). In the default namespace,
-    /// shard 0 additionally holds the read-only legacy allocator key
-    /// from pre-v16 datasets.
-    dbs: Box<[&'static DB]>,
+    /// Sharded DB handlers (`shards` of them), owned by this engine —
+    /// dropping the engine closes every shard (flushing its WAL, joining
+    /// its compaction threads, releasing its LOCK file). In the default
+    /// namespace, shard 0 additionally holds the read-only legacy
+    /// allocator key from pre-v16 datasets.
+    dbs: Box<[DB]>,
 }
 
 impl MmDB {
@@ -201,14 +203,11 @@ impl MmDB {
             write_file_durable(&sentinel_path, b"1")?;
         }
 
-        // Open the shards into an owned, non-`'static` Vec first. If a
-        // later shard (or any meta-init step below) fails, this Vec's
-        // normal Drop glue closes every already-opened shard (flushing
-        // its WAL and joining its compaction thread) via the `?` early
-        // return, instead of leaking them. Shards are only promoted to
-        // `'static` — via `Box::leak` — after every fallible step has
-        // succeeded, so a partial-init failure can never leave leaked,
-        // unreachable shard handles behind.
+        // Shards are owned all the way through: if a later shard (or any
+        // meta-init step below) fails, this Vec's normal Drop glue closes
+        // every already-opened shard (flushing its WAL and joining its
+        // compaction thread) via the `?` early return — the same Drop
+        // glue that later powers `MmDB::close`.
         let mut dbs_vec: Vec<DB> = Vec::with_capacity(shards);
         for i in 0..shards {
             let shard_dir = dir.join(format!("shard_{:02}", i));
@@ -230,20 +229,35 @@ impl MmDB {
             Err(e) => return Err(e).c(d!()),
         }
 
-        // Every fallible step has succeeded: safe to leak now.
-        let dbs: Box<[&'static DB]> = dbs_vec
-            .into_iter()
-            .map(|db| -> &'static DB { Box::leak(Box::new(db)) })
-            .collect();
+        Ok(MmDB {
+            dbs: dbs_vec.into_boxed_slice(),
+        })
+    }
 
-        Ok(MmDB { dbs })
+    /// Cleanly closes every shard and consumes the engine.
+    ///
+    /// `DB::close` flushes the active memtable and syncs the WAL,
+    /// surfacing errors that plain `Drop` would swallow; the subsequent
+    /// drop of each shard then joins its compaction threads and releases
+    /// its LOCK file. All shards are closed even if one errors; the
+    /// first error is returned.
+    pub(crate) fn close(self) -> Result<()> {
+        let mut ret = Ok(());
+        for db in &self.dbs {
+            if let Err(e) = db.close()
+                && ret.is_ok()
+            {
+                ret = Err(e).c(d!());
+            }
+        }
+        ret
     }
 
     /// Route a prefix to its shard.
     #[inline(always)]
-    fn shard(&self, meta_prefix: &PreBytes) -> &'static DB {
+    fn shard(&self, meta_prefix: &PreBytes) -> &DB {
         let prefix = u64::from_le_bytes(*meta_prefix);
-        self.dbs[(prefix % self.dbs.len() as u64) as usize]
+        &self.dbs[(prefix % self.dbs.len() as u64) as usize]
     }
 
     /// See the module-level [`alloc_prefix`] — kept as a method so the
@@ -334,7 +348,7 @@ impl MmDB {
     }
 
     pub(crate) fn range<'a, R: RangeBounds<Cow<'a, [u8]>>>(
-        &'a self,
+        &self,
         meta_prefix: PreBytes,
         bounds: R,
     ) -> MmdbIter {
@@ -1506,7 +1520,6 @@ mod tests {
         let dir = tmp_dir("basic");
         let db =
             mmdb_open(&dir, NUM_SHARDS, EngineSizing::from_process_budget()).unwrap();
-        let db: &'static DB = Box::leak(Box::new(db));
 
         db.put(b"hello", b"world").unwrap();
         assert_eq!(db.get(b"hello").unwrap(), Some(b"world".to_vec()));
@@ -1590,7 +1603,7 @@ mod tests {
     /// alias two instances' key ranges.
     #[test]
     fn prefix_allocator_unique_and_monotonic_per_thread() {
-        let db = &crate::common::VSDB.db;
+        let db = crate::common::VSDB.engine();
         let mut prev = db.alloc_prefix();
         assert!(prev >= PREFIX_ALLOC_START);
         for _ in 0..(2 * PREFIX_ALLOC_BATCH + 8) {
@@ -1611,7 +1624,7 @@ mod tests {
         let handles: Vec<_> = (0..THREADS)
             .map(|_| {
                 thread::spawn(move || {
-                    let db = &crate::common::VSDB.db;
+                    let db = crate::common::VSDB.engine();
                     (0..per_thread)
                         .map(|_| db.alloc_prefix())
                         .collect::<Vec<_>>()
@@ -1641,7 +1654,7 @@ mod tests {
     /// exact equality between snapshots.
     #[test]
     fn prefix_allocator_persisted_ceiling_covers_issued() {
-        let db = &crate::common::VSDB.db;
+        let db = crate::common::VSDB.engine();
         let persisted_ceiling = || -> Pre {
             read_ceiling_file(&ceiling_file_path())
                 .expect("ceiling read failed")

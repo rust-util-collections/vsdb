@@ -37,7 +37,7 @@ pub use common::{
     BatchTrait, DEFAULT_NS_ID, GB, InstanceId, KB, MB, Namespace, NamespaceOpts, NsId,
     NsInfo, RawBytes, RawKey, RawValue, vsdb_flush, vsdb_get_base_dir,
     vsdb_get_custom_dir, vsdb_get_meta_dir, vsdb_get_system_dir, vsdb_meta_path,
-    vsdb_ns_destroy, vsdb_ns_list, vsdb_ns_relocate, vsdb_set_base_dir,
+    vsdb_ns_close, vsdb_ns_destroy, vsdb_ns_list, vsdb_ns_relocate, vsdb_set_base_dir,
 };
 
 /// The unified, structured error type of the VSDB ecosystem.

@@ -8,7 +8,7 @@
 use std::{fs, path::PathBuf};
 use vsdb_core::{
     DEFAULT_NS_ID, InstanceId, Namespace, NamespaceOpts, basic::mapx_raw::MapxRaw,
-    vsdb_ns_destroy, vsdb_ns_list, vsdb_ns_relocate,
+    vsdb_ns_close, vsdb_ns_destroy, vsdb_ns_list, vsdb_ns_relocate,
 };
 
 #[test]
@@ -235,6 +235,51 @@ fn namespace_lifecycle() {
     let all: Vec<MapxRaw> = vec![m0, m1, m2, m4];
     let hits = all.iter().filter(|m| m.get(b"k").is_some()).count();
     assert_eq!(hits, 2);
+
+    // ---- in-process close: the epoch-rotation loop ----
+    // Two full epochs of create → fill → drop handles → close →
+    // (reopen → close →) destroy, without a process restart.
+    for epoch in 0..2u8 {
+        let e = Namespace::create_with(NamespaceOpts {
+            shards: 2,
+            ..Default::default()
+        })
+        .unwrap();
+        let eid = e.id();
+        let epath = e.path().to_path_buf();
+        let mut m = MapxRaw::new_in(&e);
+        m.insert(b"epoch", [epoch]);
+        let mid = m.save_meta().unwrap();
+
+        // Refusal matrix: close never invalidates a live handle.
+        assert!(vsdb_ns_close(eid).is_err()); // `e` + `m` alive
+        drop(m);
+        assert!(vsdb_ns_close(eid).is_err()); // `e` alive
+        e.scope(|| {
+            // The ambient-scope stack holds a clone too.
+            assert!(vsdb_ns_close(eid).is_err());
+        });
+        drop(e);
+
+        // Every handle gone ⇒ full teardown (threads, fds, LOCKs).
+        vsdb_ns_close(eid).unwrap();
+        assert!(vsdb_ns_close(eid).is_err()); // not open anymore
+
+        // LOCK files were released ⇒ in-process reopen works, and a
+        // persisted InstanceId resolves exactly as after a restart.
+        let m = MapxRaw::from_meta(mid).unwrap();
+        assert_eq!(&m.get(b"epoch").unwrap()[..], [epoch]);
+        drop(m);
+        vsdb_ns_close(eid).unwrap();
+
+        // destroy composes with close: O(1) bulk reclaim, no restart.
+        vsdb_ns_destroy(eid).unwrap();
+        assert!(!epath.exists());
+        assert!(Namespace::open(eid).is_err()); // registry entry gone
+    }
+    // The default namespace is never closeable; unknown ids error.
+    assert!(vsdb_ns_close(DEFAULT_NS_ID).is_err());
+    assert!(vsdb_ns_close(u64::MAX).is_err());
 
     fs::remove_dir_all(&dir).ok();
     // Sibling scratch dirs created by the sub-scenarios above.

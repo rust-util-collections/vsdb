@@ -1,6 +1,8 @@
 # RFC: Namespaces — Multiple Engine Instances per Process
 
-- **Status**: implemented (v16.0.0–v16.0.2); P3 items remain future work. Final design: rev 10 (original bullets evaluated in §5; rev 2: one
+- **Status**: implemented (v16.0.0–v16.0.2); in-process `close()` shipped in
+  v16.1.0 ([ns-close.md](./ns-close.md)); remaining P3: whole-ns `merge`,
+  cross-ns copy helpers. Final design: rev 10 (original bullets evaluated in §5; rev 2: one
   **global** prefix allocator, not per-namespace — §4.6; rev 3: downgrade
   support dropped — §7; rev 4: single-process contract — §4.7; rev 5: meta =
   optional `ns_id` suffix — §4.3; rev 6: ns path optional, derived — §4.1;
@@ -61,7 +63,7 @@ These facts shape the design; each was checked against the code.
 
 | # | Fact | Where | Consequence |
 |---|------|-------|-------------|
-| C1 | One global engine: `pub static VSDB: LazyLock<VsDB>`; shards are `[&'static DB; 16]` via `Box::leak` | `core/src/common/mod.rs:135`, `engine/mmdb.rs:100` | Engines are leak-forever; iterators (`MmdbIter(Box<dyn DoubleEndedIterator>)`, no lifetime) silently depend on `'static`. In-process `close()` requires an `Arc` migration → deferred (§9). |
+| C1 | One global engine: `pub static VSDB: LazyLock<VsDB>`; shards are `[&'static DB; 16]` via `Box::leak` | `core/src/common/mod.rs:135`, `engine/mmdb.rs:100` | Engines are leak-forever; iterators (`MmdbIter(Box<dyn DoubleEndedIterator>)`, no lifetime) silently depend on `'static`. In-process `close()` was deferred (§9) on the assumption it required an `Arc` migration — later disproved: [ns-close.md](./ns-close.md) (v16.1.0) removed the leak entirely with plain `Arc`-owned engines. |
 | C2 | Prefix allocator state is **module-global** (`GLOBAL_COUNTER/CEILING/FLOOR`, `PENDING_WINDOWS`, `RECOVERED_PREFIXES`, `thread_local LOCAL_NEXT/LOCAL_CEIL`); the ceiling persists in default shard 0 | `engine/mmdb.rs:50-82, 136-146` | **Stays global by design** (§4.6): one allocator serves all namespaces, so prefixes are unique across the whole registry and none of the in-memory machinery changes. Only the ceiling's *persistence* moves out of shard 0, to decouple allocation from the default engine. |
 | C3 | Handle meta is hand-encoded, not a serde struct: `"VSMAPX01" ‖ prefix_le(8)` = 16 bytes | `engine/mod.rs:30, 308-333` | The `Option<NamespaceId>` idea cannot be a serde field (there is no struct), but it applies at the **byte level**: an optional trailing `ns_id`, absent ⇔ `None` ⇔ default ns (§4.3). Strata's `VSTYPE02` typed wrapper transports the inner bytes opaquely — unaffected. |
 | C4 | Shard routing is `prefix % NUM_SHARDS`, `NUM_SHARDS = 16` hard-coded | `engine/mmdb.rs:84-86, 165-167` | Shard count must become a **per-namespace, creation-time-persisted** property: changing it under an existing dir silently re-routes every prefix. |
@@ -428,8 +430,10 @@ registries), which already works today. Consequences:
   races between out-of-contract processes are not defended beyond
   `atomic_write_file`'s all-or-nothing rename (a torn registry can never be
   observed; a lost entry leaves an orphaned-but-intact dir).
-- **Open** = leak-forever within the process (same model as today, C1);
-  in-process `close()` is explicitly deferred (§9).
+- **Open** = held for the process lifetime by default; in-process
+  `close()` (v16.1.0) fully reclaims an idle namespace — see
+  [ns-close.md](./ns-close.md) (engines are owned by their `Arc<NsInner>`,
+  dropped after an exclusivity proof; no leak anywhere).
 - **Destroy / relocate** require the target namespace to be *not open in this
   process* (checked against the in-process open-namespace table): update the
   registry, then act (destroy: remove registry entry → delete tree; a crash

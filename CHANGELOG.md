@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v16.1.0]
+
+In-process namespace `close()` — the ownership-inverted engine
+lifecycle (RFC: `docs/proposals/ns-close.md`).
+
+### Added
+
+- **`vsdb_ns_close(id)`**: closes an open namespace, releasing **all**
+  of its resources — engine memory, compaction threads, fds, and mmdb
+  `LOCK` files — without a process restart. Active memtables are
+  flushed and WALs synced first (errors surface, unlike a plain drop).
+  Refuse-don't-poison: it succeeds only when every handle (collections,
+  iterators, `Namespace` clones) is gone, otherwise it returns an error
+  naming the live-handle count; a live handle is never invalidated.
+  The registry entry survives: re-open via `Namespace::open`
+  (restart-equivalent recovery) or reclaim via `vsdb_ns_destroy` —
+  `create → fill → close → destroy` is the in-process epoch-rotation
+  loop.
+
+### Changed
+
+- **Engines are owned, not leaked**: both `Box::leak` sites are gone.
+  `NsInner` owns its `Engine`, `MmDB` owns its shard `DB`s
+  (`Box<[DB]>`), and every engine reference is a plain borrow bounded
+  by a live handle — the soundness invariant moved from review
+  discipline into the type system. The default engine is owned by the
+  default `Namespace` (a static, so it still lives for the whole
+  process); the public `VSDB` singleton delegates to it.
+
 ## [v16.0.2]
 
 ### Changed

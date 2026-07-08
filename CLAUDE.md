@@ -9,7 +9,7 @@ VSDB is a high-performance embedded key-value database for Rust that provides:
 - **Slot-based indexing** (SlotDex) for timestamp-paged queries
 - **DAG-based collections** (DagMap) for graph-like data
 - **Vector index** (VecDex) — pure-Rust HNSW for approximate nearest-neighbor search
-- **Namespaces** — anonymous placement groups: independently-rooted engine instances in one process (own dir/volume, shards, WALs, memory budget); co-location via `handle.namespace()` + `new_in`/`ns.scope(..)`; O(1) whole-namespace destroy
+- **Namespaces** — anonymous placement groups: independently-rooted engine instances in one process (own dir/volume, shards, WALs, memory budget); co-location via `handle.namespace()` + `new_in`/`ns.scope(..)`; in-process `close` (full resource reclaim) and O(1) whole-namespace destroy — the epoch-rotation loop needs no restart
 
 Built exclusively on [mmdb](https://github.com/rust-util-collections/mmdb) (pure-Rust LSM-Tree engine). The default namespace uses 16-shard prefix-based routing (pinned); non-default namespaces persist their own creation-time shard count.
 
@@ -37,7 +37,7 @@ make bench        # criterion benches (core basic, strata basic, versioned, slot
 | Subsystem | Key files | Purpose |
 |-----------|-----------|---------|
 | Engine | `core/src/common/engine/mod.rs`, `mmdb.rs` | Mapx, batch ops, GLOBAL prefix alloc (all namespaces), per-ns shard routing, format marker |
-| Namespaces | `core/src/common/namespace.rs` | Namespace handle, registry, InstanceId, ambient scope, lifecycle (create/open/destroy/relocate) |
+| Namespaces | `core/src/common/namespace.rs` | Namespace handle, registry, InstanceId, ambient scope, lifecycle (create/open/close/destroy/relocate); engines owned by `Arc<NsInner>`, no leak |
 | MapxRaw | `core/src/basic/mapx_raw/` | Untyped raw KV, prefix isolation |
 | Typed Collections | `strata/src/basic/mapx/`, `mapx_ord/`, `mapx_ord_rawkey/`, `orphan/` | Mapx<K,V>, MapxOrd<K,V>, MapxOrdRawKey<V>, Orphan<T> |
 | Persistent B+ Tree | `strata/src/basic/persistent_btree/` | COW B+ tree, structural sharing |

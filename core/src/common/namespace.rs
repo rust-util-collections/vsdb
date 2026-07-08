@@ -26,12 +26,12 @@
 //!
 
 use crate::common::{
-    VSDB,
     engine::{Engine, EngineSizing, write_file_durable},
     error::{Result, VsdbError},
     vsdb_freeze_base_dir, vsdb_get_base_dir,
 };
 use parking_lot::Mutex;
+use ruc::pnk;
 use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
@@ -248,18 +248,21 @@ impl Default for RegistryFile {
 /// path clean instead of error-driven). Cold path only.
 static REGISTRY_LOCK: Mutex<()> = Mutex::new(());
 
-/// Every non-default namespace opened by this process, by id.
-/// Engines are leak-forever (same model as the default engine), so
-/// entries are never removed.
+/// Every non-default namespace open in this process, by id. Each entry
+/// holds one strong `Arc`; [`vsdb_ns_close`] removes an entry only
+/// after proving it is the *last* strong reference, so a removal is
+/// always immediately followed by the engine's teardown.
 static OPEN_NAMESPACES: LazyLock<Mutex<HashMap<NsId, Namespace>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// The default namespace handle (wraps the global engine).
+/// The default namespace: the owner of the default engine. A static
+/// never drops, so the default engine lives for the whole process —
+/// which is exactly why the default namespace is not closeable.
 static DEFAULT_NS: LazyLock<Namespace> = LazyLock::new(|| {
     Namespace(Arc::new(NsInner {
         id: DEFAULT_NS_ID,
         path: vsdb_get_base_dir(),
-        engine: &LazyLock::force(&VSDB).db,
+        engine: pnk!(Engine::new()),
     }))
 });
 
@@ -453,7 +456,11 @@ fn sizing_for(mem_budget_mb: Option<usize>) -> EngineSizing {
 struct NsInner {
     id: NsId,
     path: PathBuf,
-    engine: &'static Engine,
+    /// The engine, owned: when the last `Arc<NsInner>` drops (only ever
+    /// via [`vsdb_ns_close`], which proves exclusivity first), the
+    /// engine drops with it — flushing WALs, joining compaction
+    /// threads, and releasing LOCK files.
+    engine: Engine,
 }
 
 /// A cheap, cloneable handle to an engine instance (an *anonymous
@@ -659,9 +666,13 @@ impl Namespace {
     }
 
     /// The engine backing this namespace (crate-internal routing).
+    ///
+    /// A plain borrow of the `Arc`-owned engine: it cannot outlive the
+    /// handle it came from, so no reference can survive a
+    /// [`vsdb_ns_close`] (which requires every handle gone first).
     #[inline(always)]
-    pub(crate) fn engine(&self) -> &'static Engine {
-        self.0.engine
+    pub(crate) fn engine(&self) -> &Engine {
+        &self.0.engine
     }
 }
 
@@ -685,7 +696,7 @@ fn open_record_locked(_base: &Path, rec: &NsRecord, root: &Path) -> Result<Names
     let ns = Namespace(Arc::new(NsInner {
         id: rec.id,
         path: root.to_path_buf(),
-        engine: Box::leak(Box::new(engine)),
+        engine,
     }));
     OPEN_NAMESPACES.lock().insert(rec.id, ns.clone());
     Ok(ns)
@@ -718,9 +729,9 @@ pub fn vsdb_ns_list() -> Result<Vec<NsInfo>> {
 /// Destroys a namespace: removes its registry entry, then deletes its
 /// whole directory tree — O(1) bulk reclaim.
 ///
-/// The target must not be open in this process (engines are
-/// leak-forever; see the design doc). A crash between the registry
-/// update and the tree removal leaves an orphaned-but-harmless dir.
+/// The target must not be open in this process ([`vsdb_ns_close`] it
+/// first). A crash between the registry update and the tree removal
+/// leaves an orphaned-but-harmless dir.
 pub fn vsdb_ns_destroy(id: NsId) -> Result<()> {
     if id == DEFAULT_NS_ID {
         return Err(ns_err("the default namespace cannot be destroyed"));
@@ -797,6 +808,62 @@ pub fn vsdb_ns_relocate(id: NsId, new_path: impl AsRef<Path>) -> Result<()> {
             .to_owned(),
     );
     save_registry(&reg)
+}
+
+/// Closes an open namespace, releasing **all** of its resources: engine
+/// memory, compaction threads, fds, and mmdb `LOCK` files. The active
+/// memtables are flushed and the WALs synced first (errors surface
+/// here, unlike a plain drop).
+///
+/// Refused unless every handle is gone: all collection handles,
+/// iterators, and `Namespace` clones must be dropped first — `close`
+/// either reclaims a provably-unreferenced namespace or returns an
+/// error naming the live-handle count; it never invalidates a live
+/// handle. Refused for the default namespace.
+///
+/// The registry entry is untouched: a closed namespace can be re-opened
+/// via [`Namespace::open`] (restart-equivalent recovery) or reclaimed
+/// via [`vsdb_ns_destroy`] — `create → fill → close → destroy` is the
+/// in-process epoch-rotation loop.
+///
+/// Detached snapshot iterators (e.g. `MapxRaw::range_detached`) hold
+/// their engine sources via internal refcounts, not through the
+/// namespace handle: one may outlive a `close` and keep yielding its
+/// (consistent, stale) snapshot. Memory-safe by construction; don't
+/// rely on it observing the close.
+pub fn vsdb_ns_close(id: NsId) -> Result<()> {
+    if id == DEFAULT_NS_ID {
+        return Err(ns_err("the default namespace cannot be closed"));
+    }
+    let _g = REGISTRY_LOCK.lock();
+    let ns = {
+        let mut open = OPEN_NAMESPACES.lock();
+        let Some(entry) = open.get(&id) else {
+            return Err(ns_err(format!(
+                "namespace {id} is not open in this process"
+            )));
+        };
+        // The table's own strong ref is the `- 1`. Stable while both
+        // locks are held: cloning requires an existing `Namespace`, and
+        // a count of 1 proves none exists outside the table (the other
+        // cloning paths — `open`'s cache hit and `flush_all_open` —
+        // block on the table lock).
+        let live = Arc::strong_count(&entry.0) - 1;
+        if live > 0 {
+            return Err(ns_err(format!(
+                "namespace {id} still has {live} live handle(s); drop \
+                 every collection handle and `Namespace` clone first"
+            )));
+        }
+        open.remove(&id).expect("present: checked above")
+        // The table lock is released here — the (possibly slow) engine
+        // teardown below must not block unrelated namespaces' cache
+        // hits; REGISTRY_LOCK keeps serializing open/create/destroy of
+        // THIS id until the teardown finished.
+    };
+    let inner = Arc::try_unwrap(ns.0)
+        .unwrap_or_else(|_| unreachable!("count was 1 under both locks"));
+    inner.engine.close().map_err(VsdbError::from)
 }
 
 impl RegistryFile {

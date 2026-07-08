@@ -15,8 +15,8 @@ pub mod namespace;
 pub use engine::BatchTrait;
 use error::{Result, VsdbError};
 pub use namespace::{
-    DEFAULT_NS_ID, InstanceId, Namespace, NamespaceOpts, NsId, NsInfo, vsdb_ns_destroy,
-    vsdb_ns_list, vsdb_ns_relocate,
+    DEFAULT_NS_ID, InstanceId, Namespace, NamespaceOpts, NsId, NsInfo, vsdb_ns_close,
+    vsdb_ns_destroy, vsdb_ns_list, vsdb_ns_relocate,
 };
 use parking_lot::Mutex;
 use ruc::*;
@@ -187,25 +187,33 @@ pub(crate) use parse_prefix;
 
 /// A struct representing the VsDB database.
 ///
-/// This struct encapsulates the underlying storage engine and provides a
-/// high-level interface for interacting with the database.
+/// This struct provides a high-level interface for interacting with the
+/// database. It is a thin delegate over the default namespace, which
+/// owns the actual default engine (see `namespace::DEFAULT_NS`).
 ///
 /// The storage engine is MMDB, a pure-Rust LSM-Tree engine.
 pub struct VsDB {
-    db: engine::Engine,
+    ns: namespace::Namespace,
 }
 
 impl VsDB {
     #[inline(always)]
     fn new() -> Result<Self> {
         Ok(Self {
-            db: engine::Engine::new().c(d!())?,
+            ns: namespace::Namespace::default_ns(),
         })
     }
 
     #[inline(always)]
     fn flush(&self) {
-        self.db.flush()
+        self.ns.flush()
+    }
+
+    /// The default engine (test-only: the allocator tests exercise
+    /// engine-handle allocation through the process-global singleton).
+    #[cfg(test)]
+    pub(crate) fn engine(&self) -> &engine::Engine {
+        self.ns.engine()
     }
 }
 

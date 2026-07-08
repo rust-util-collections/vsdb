@@ -128,7 +128,7 @@ pub use vecdex::{
 // environment management functions.
 pub use vsdb_core::{
     self, DEFAULT_NS_ID, InstanceId, Namespace, NamespaceOpts, NsId, NsInfo, vsdb_flush,
-    vsdb_get_base_dir, vsdb_ns_destroy, vsdb_ns_list, vsdb_ns_relocate,
+    vsdb_get_base_dir, vsdb_ns_close, vsdb_ns_destroy, vsdb_ns_list, vsdb_ns_relocate,
     vsdb_set_base_dir,
 };
 
