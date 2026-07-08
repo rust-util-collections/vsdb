@@ -2,6 +2,51 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v16.3.1]
+
+Full-codebase audit: 8 confirmed correctness/crash-safety findings fixed
+across engine, versioning, dagmap, vecdex, slotdex, and typed collections,
+plus style/doc cleanup. No on-disk format changes.
+
+### Fixed
+
+- **Prefix allocator no longer leaks reservations**: `reserve_recovered_prefix`
+  now tracks each thread's *live* issuance cursor (not just its batch's static
+  bounds), so recovering an already-issued prefix within the same still-open
+  allocation window is correctly recognized as never-recurring instead of
+  being reserved forever — fixes an unbounded `RECOVERED_PREFIXES` growth and
+  a permanent `alloc_prefix()` slow-path regression triggered by ordinary
+  save/reload round-trips.
+- **`rollback_to` rejects uncommitted changes to a strict ancestor**: the
+  uncommitted-changes guard previously only fired when rolling back to the
+  current HEAD; rolling back to an older commit silently discarded
+  uncommitted work. Now guarded unconditionally, matching `merge()`.
+- **`VecDex::remove` no longer deflates `max_layer`**: entry-point
+  re-election (which still prefers linked candidates) is now decoupled from
+  `max_layer` assignment, which always reflects the true global maximum
+  layer among live nodes — previously a low-layer linked node could win
+  re-election and its own layer would overwrite `max_layer`, making real
+  upper-layer subgraphs silently unreachable.
+- **`DagMap::prune` flush barriers are namespace-scoped**: replaced the
+  global `vsdb_flush()` (which flushes every open namespace in the process)
+  with `self.namespace().flush()` — a transient flush failure in an
+  unrelated namespace could previously panic a `prune()` on a healthy one.
+- **`DagMapRaw::destroy`/`prune_children` clear before unregistering**:
+  reordered so a node (and its owned descendants) is fully cleared before
+  its entry is removed from the parent's registry — the previous ordering
+  could leak a subtree's storage permanently if a crash landed between the
+  two steps.
+- **`SlotDex` no longer promotes a premature tier on the first insert**: the
+  "no tiers yet" growth path now gates on `tier_capacity` exactly like the
+  "tiers already exist" path, instead of promoting unconditionally.
+- **`Mapx`/`MapxOrd`/`MapxOrdRawKey` `PartialEq` compares decoded values**:
+  replaced the derived, byte-level comparison (which disagreed with
+  `f64`'s own equality for `-0.0`/NaN) with hand-written impls that decode
+  values before comparing, matching `Orphan`'s existing behavior.
+- **`BranchMut` exposes `head_commit`/`log`/`diff_uncommitted`**: these were
+  missing despite the type's own doc comment promising "all `Branch` read
+  methods plus write operations."
+
 ## [v16.3.0]
 
 Per-engine block-cache pool + cache telemetry (shared-mem-pool RFC

@@ -2,8 +2,7 @@
 //! Read-only SMT traversal.
 //!
 
-use super::bitpath::BitPath;
-use super::{SmtHandle, SmtNode};
+use super::{SmtHandle, SmtNode, bitpath::BitPath};
 use crate::trie::error::Result;
 
 pub struct SmtRo<'a> {

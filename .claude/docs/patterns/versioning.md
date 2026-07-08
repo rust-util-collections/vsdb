@@ -2,9 +2,12 @@
 
 ## Files
 - `strata/src/versioned/mod.rs` — VerMap core, BranchState, Commit types
-- `strata/src/versioned/map.rs` — VerMap<K,V> implementation (1200+ lines)
+- `strata/src/versioned/map.rs` — VerMap<K,V> implementation (core insert/commit/merge/rollback/gc logic)
 - `strata/src/versioned/diff.rs` — incremental diff computation
 - `strata/src/versioned/merge.rs` — three-way merge algorithm
+- `strata/src/versioned/handle.rs` — `Branch`/`BranchMut` ergonomic branch handles (`BranchMut` must expose every `Branch` read method plus write ops — see its doc comment)
+- `strata/src/versioned/read.rs` — read-path query operations (get/contains_key/iter/range)
+- `strata/src/versioned/repair.rs` — ref-count recovery / rebuild after a dirty-flag-marked crash
 
 ## Architecture
 - Git-model: branches point to commits, commits form a DAG
@@ -55,13 +58,19 @@ Key modified on source branch but not on target. Merge should keep source value 
 Ref-count reaches 0 while another branch still references the commit indirectly (through a child commit's parent link).
 **Trigger**: Complex merge/rollback sequence leaves a commit reachable only through parent links, not branch pointers.
 
+### Rollback/Merge Guard Asymmetry
+`rollback_to` and `merge` both mutate `dirty_root`/branch state and must reject the operation when the affected branch has uncommitted changes — silently discarding them is data loss. A guard added for only ONE code path of a multi-branch function (e.g. only the `target == head` arm of `rollback_to`, leaving the `target == ancestor` arm unguarded) is easy to miss in review since each arm looks locally correct.
+**Trigger**: Insert uncommitted changes → roll back to a commit that is a strict ancestor of head (not head itself) → the uncommitted edit is silently overwritten and `Ok(())` is returned instead of `VsdbError::UncommittedChanges`.
+
 ## Review Checklist
 - [ ] Ref-count incremented on: branch create, merge (new commit references parents)
 - [ ] Ref-count decremented on: branch delete, rollback (skipped commits), GC cascade
 - [ ] Merge uses common ancestor for diff base, not branch tips
 - [ ] Source-wins policy applied correctly for conflicts
 - [ ] Rollback only affects the rolled-back branch's ref-count contributions
+- [ ] Rollback rejects uncommitted changes on EVERY code path (target == head AND target == a strict ancestor), not just one arm — mirror `merge()`'s unconditional guard
 - [ ] Dirty flag set before GC/merge, cleared after
 - [ ] Commit data is immutable after creation
 - [ ] No-op merge handled (source == target, or no diffs)
 - [ ] Fast-forward merge handled (source is ancestor of target)
+- [ ] `BranchMut` (handle.rs) exposes every read method `Branch` has, per its own doc comment ("provides all `Branch` read methods plus write operations") — check the two impl blocks stay in sync when either gains a new read method

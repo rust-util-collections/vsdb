@@ -10,11 +10,13 @@
 //! in-memory trie that can be rebuilt from any VerMap snapshot at any
 //! time.  A transparent on-disk cache avoids full rebuilds on restart.
 
-use crate::common::ende::{KeyEnDeOrdered, ValueEnDe};
-use crate::common::error::Result;
-use crate::versioned::diff::DiffEntry;
-use crate::versioned::map::VerMap;
-use crate::versioned::{BranchId, CommitId};
+use crate::{
+    common::{
+        ende::{KeyEnDeOrdered, ValueEnDe},
+        error::Result,
+    },
+    versioned::{BranchId, CommitId, diff::DiffEntry, map::VerMap},
+};
 
 use super::{MptCalc, MptProof, SmtCalc, SmtProof, TrieCalc};
 

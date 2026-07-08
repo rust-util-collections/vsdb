@@ -529,6 +529,81 @@ fn remove_entry_point_preserves_max_layer() {
     assert_eq!(results.len(), 5);
 }
 
+/// Regression: entry-point re-election on `remove()` must never deflate
+/// `max_layer` below the TRUE global maximum layer among live nodes,
+/// even when the node chosen as the new entry point (which correctly
+/// prefers linked candidates, so an isolated node can't hide the graph)
+/// sits at a lower layer than an isolated node holding the real maximum.
+///
+/// Before the fix, the candidate comparison `(linked, layer)` put
+/// `linked` first, so ANY linked node beat ANY unlinked node regardless
+/// of layer, and the winning candidate's own (lower) layer was written
+/// straight into `max_layer` instead of a true max scan. Organic HNSW
+/// graphs (random layer assignment) rarely produce this adversarial
+/// shape, so the graph below is constructed directly — bypassing
+/// `insert()`'s random layer roll — to pin the exact scenario.
+#[test]
+fn remove_entry_point_does_not_deflate_max_layer_below_isolated_high_layer_node() {
+    let cfg = HnswConfig {
+        dim: 2,
+        ..Default::default()
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+
+    // node 0 "hi": true global max layer (4), but ISOLATED — no edges at
+    // any layer.
+    // node 1 "low": layer 1, linked to node 2 at layer 0.
+    // node 2 "helper": layer 0, linked to node 1 at layer 0.
+    // node 3 "ep": layer 5, current entry point (isolated; its own
+    // connectivity doesn't matter since it's the one being removed).
+    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state.clone());
+    for (node_id, key, layer, vec) in [
+        (0u64, 0u32, 4u8, [0.0f32, 0.0]),
+        (1, 1, 1, [1.0, 0.0]),
+        (2, 2, 0, [2.0, 0.0]),
+        (3, 3, 5, [3.0, 0.0]),
+    ] {
+        txn.put_vec(node_id, &vec);
+        txn.rows
+            .put(node_key(TAG_NODE2KEY, node_id).to_vec(), encode_value(&key));
+        txn.rows
+            .put(node_key(TAG_INFO, node_id).to_vec(), encode_value(&layer));
+        txn.rows.put(
+            user_key(&KeyEnDe::encode(&key)),
+            node_id.to_le_bytes().to_vec(),
+        );
+    }
+    // Bidirectional edge: low (1) <-> helper (2) at layer 0.
+    txn.set_neighbors(0, 1, &[2]);
+    txn.set_neighbors(0, 2, &[1]);
+
+    txn.state.entry_point = Some(3);
+    txn.state.max_layer = 5;
+    txn.state.node_count = 4;
+    txn.state.next_node_id = 4;
+
+    let (rows, state) = txn.finish();
+    rows.commit(&mut idx.store).unwrap();
+    idx.state = state;
+
+    // Sanity: the constructed graph matches the intended shape before
+    // removal.
+    assert_eq!(idx.node_layers().map(|(_, l)| l).max(), Some(5));
+
+    idx.remove(&3).unwrap();
+
+    let true_max = idx.node_layers().map(|(_, l)| l).max().unwrap_or(0);
+    assert_eq!(
+        true_max, 4,
+        "sanity: node 0 (\"hi\") must survive at layer 4"
+    );
+    assert_eq!(
+        idx.state.max_layer, true_max,
+        "max_layer must reflect the true global max even though the \
+         re-elected entry point (node 1, layer 1, linked) sits lower"
+    );
+}
+
 // ---- T-1: Single-node duplicate-key update (regression for stale-metadata fix) ----
 
 #[test]

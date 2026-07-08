@@ -221,6 +221,40 @@ where
     }
 }
 
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
+
+// Hand-written rather than `#[derive(PartialEq, Eq)]`: a derive would
+// compare the *encoded* bytes of both `K` and `V` (postcard encoding is
+// not injective on decoded value in general — e.g. `0.0_f64` and
+// `-0.0_f64` encode to different bytes despite comparing equal, while
+// distinct NaN bit patterns can compare unequal despite identical
+// bytes), silently diverging from `K`/`V`'s own logical `PartialEq`.
+// Comparing through `self.inner` (raw key bytes + *decoded* `V`)
+// side-steps needing `K: PartialEq` at all — `K`'s encoding is already
+// required to be deterministic and injective for the map's basic
+// correctness, so byte-identical keys are logically identical keys —
+// while still fixing the decoded-value comparison for `V`.
+impl<K, V> PartialEq for Mapx<K, V>
+where
+    K: KeyEnDe,
+    V: ValueEnDe + PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.inner.iter().eq(other.inner.iter())
+    }
+}
+
+impl<K, V> Eq for Mapx<K, V>
+where
+    K: KeyEnDe,
+    V: ValueEnDe + Eq,
+{
+}
+
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
+
 impl<'a, K, V> IntoIterator for &'a mut Mapx<K, V>
 where
     K: KeyEnDe,

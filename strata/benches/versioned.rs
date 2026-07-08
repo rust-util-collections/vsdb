@@ -1,9 +1,9 @@
-#![allow(warnings)]
-
 use criterion::{Criterion, criterion_group, criterion_main};
-use std::ops::Bound;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use vsdb::versioned::BranchId;
+use std::{
+    ops::Bound,
+    sync::atomic::{AtomicUsize, Ordering},
+    time::Duration,
+};
 use vsdb::versioned::map::VerMap;
 
 fn setup() {
@@ -18,7 +18,7 @@ fn setup() {
 fn single_branch_crud(c: &mut Criterion) {
     let mut group = c.benchmark_group("vsdb::versioned / single_branch");
     group
-        .measurement_time(std::time::Duration::from_secs(3))
+        .measurement_time(Duration::from_secs(3))
         .sample_size(10);
 
     setup();
@@ -82,7 +82,7 @@ fn single_branch_crud(c: &mut Criterion) {
 fn commit_rollback(c: &mut Criterion) {
     let mut group = c.benchmark_group("vsdb::versioned / commit_rollback");
     group
-        .measurement_time(std::time::Duration::from_secs(3))
+        .measurement_time(Duration::from_secs(3))
         .sample_size(10);
 
     setup();
@@ -149,7 +149,7 @@ fn commit_rollback(c: &mut Criterion) {
 fn branching(c: &mut Criterion) {
     let mut group = c.benchmark_group("vsdb::versioned / branching");
     group
-        .measurement_time(std::time::Duration::from_secs(3))
+        .measurement_time(Duration::from_secs(3))
         .sample_size(10);
 
     setup();
@@ -196,7 +196,7 @@ fn branching(c: &mut Criterion) {
 fn iteration(c: &mut Criterion) {
     let mut group = c.benchmark_group("vsdb::versioned / iteration");
     group
-        .measurement_time(std::time::Duration::from_secs(3))
+        .measurement_time(Duration::from_secs(3))
         .sample_size(10);
 
     setup();
@@ -246,7 +246,7 @@ fn iteration(c: &mut Criterion) {
 fn historical(c: &mut Criterion) {
     let mut group = c.benchmark_group("vsdb::versioned / historical");
     group
-        .measurement_time(std::time::Duration::from_secs(3))
+        .measurement_time(Duration::from_secs(3))
         .sample_size(10);
 
     setup();
@@ -297,7 +297,7 @@ fn historical(c: &mut Criterion) {
 fn merge_bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("vsdb::versioned / merge");
     group
-        .measurement_time(std::time::Duration::from_secs(5))
+        .measurement_time(Duration::from_secs(5))
         .sample_size(10);
 
     setup();
@@ -344,7 +344,7 @@ fn merge_bench(c: &mut Criterion) {
 fn gc_bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("vsdb::versioned / gc");
     group
-        .measurement_time(std::time::Duration::from_secs(5))
+        .measurement_time(Duration::from_secs(5))
         .sample_size(10);
 
     setup();

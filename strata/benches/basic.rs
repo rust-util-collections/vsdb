@@ -1,5 +1,3 @@
-#![allow(warnings)]
-
 mod units;
 
 criterion::criterion_main! {

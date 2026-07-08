@@ -270,6 +270,31 @@ where
     }
 }
 
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+
+// Hand-written rather than `#[derive(PartialEq, Eq)]`: a derive would
+// compare the *encoded* bytes of `V` (postcard encoding is not
+// injective on decoded value in general — e.g. `0.0_f64` and
+// `-0.0_f64` encode to different bytes despite comparing equal, while
+// distinct NaN bit patterns can compare unequal despite identical
+// bytes), silently diverging from `V`'s own logical `PartialEq`.
+// `self.iter()` already decodes `V` (there is no `K` to decode here —
+// keys are raw bytes), so comparing through it fixes the mismatch.
+impl<V> PartialEq for MapxOrdRawKey<V>
+where
+    V: ValueEnDe + PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.iter().eq(other.iter())
+    }
+}
+
+impl<V> Eq for MapxOrdRawKey<V> where V: ValueEnDe + Eq {}
+
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+
 /// A batch entry for `MapxOrdRawKey`.
 pub struct MapxOrdRawKeyBatchEntry<'a, V>
 where

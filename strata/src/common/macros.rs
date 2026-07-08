@@ -13,7 +13,7 @@ macro_rules! define_map_wrapper {
         where $($trait_bounds:tt)+
     ) => {
         $(#[$struct_doc])*
-        #[derive(PartialEq, Eq, Debug)]
+        #[derive(Debug)]
         $vis struct $wrapper_name<$($wrapper_generics),*> {
             $inner_vis inner: $inner_type,
             $phantom_field: $phantom_type,

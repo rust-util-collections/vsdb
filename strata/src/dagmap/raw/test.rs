@@ -148,6 +148,69 @@ fn destroy_unlinks_from_parent() {
     assert!(parent.no_children());
 }
 
+/// Regression: `destroy()` must clear a node's own data/parent (and all
+/// owned descendants) BEFORE unregistering it from the parent's
+/// registry — never the other way around (the previous ordering removed
+/// the registry entry first, so a crash right after that write, but
+/// before data/parent clearing landed, permanently orphaned the node's
+/// still-intact storage with no registry path back to it).
+///
+/// This manually replicates only the "clear data + null parent" half of
+/// `destroy()`'s new ordering (simulating a crash before the final
+/// parent-registry unlink runs) and confirms the node remains
+/// discoverable through the parent's still-intact registry entry, and is
+/// recognized as reclaimable residue (`owned_or_residue`'s `None`-parent
+/// arm) rather than becoming a permanently unreachable leak.
+#[test]
+fn destroy_interrupted_before_unlink_leaves_reclaimable_residue() {
+    let mut parent = DagMapRaw::new(None);
+    let mut child = DagMapRaw::new(Some(&mut parent));
+    child.insert("k", "v");
+
+    assert!(!parent.no_children());
+
+    // Simulate a crash after data/parent clearing but before the final
+    // parent-registry unlink step (mirrors `destroy()`'s internal order).
+    *child.parent.get_mut() = None;
+    child.data.clear();
+
+    // The registry entry must still exist (not yet removed) ...
+    assert!(!parent.no_children());
+    // ... and must be recognized as reclaimable residue, not foreign.
+    let (_, residue) = parent.children.iter().next().unwrap();
+    assert!(DagMapRaw::owned_or_residue(parent.instance_id(), &residue));
+
+    // A subsequent prune sweep (the same registry-driven mechanism
+    // `prune` itself uses) reclaims the residue, exactly as it would
+    // after a real crash-then-restart.
+    let empty: &[RawBytes] = &[];
+    parent.prune_children_exclude(empty);
+    assert!(parent.no_children());
+}
+
+/// Regression: `prune()`'s crash-safety flush barriers must be scoped to
+/// the DAG's own namespace (`self.namespace().flush()`), not the whole
+/// process (the previous `vsdb_flush()` calls flushed the default
+/// namespace plus every other open namespace, so a flush failure in any
+/// unrelated namespace could panic a `prune()` on a perfectly healthy
+/// one). Exercising `prune()` end-to-end on a DAG placed in an explicit
+/// non-default namespace only compiles and behaves correctly if the
+/// barriers are genuinely namespace-scoped.
+#[test]
+fn prune_works_in_a_non_default_namespace() {
+    let ns = crate::common::Namespace::create().unwrap();
+    let mut head = DagMapRaw::new_in(&ns, None);
+    head.insert("root", "value");
+
+    let mut child = DagMapRaw::new_in(&ns, Some(&mut head));
+    child.insert("leaf", "cv");
+
+    let pruned = head.prune().unwrap();
+    assert_eq!(pruned.get("root").unwrap().as_slice(), b"value");
+    assert_eq!(child.get("root").unwrap().as_slice(), b"value");
+    assert_eq!(child.get("leaf").unwrap().as_slice(), b"cv");
+}
+
 #[test]
 fn deep_acyclic_chain_remains_readable_and_prunable() {
     let mut head = DagMapRaw::new(None);

@@ -8,13 +8,15 @@ use super::{
     diff::{DiffEntry, diff_roots},
     handle::{Branch, BranchMut},
 };
-use crate::basic::persistent_btree::{EMPTY_ROOT, NodeId, PersistentBTree};
-use crate::common::ende::{KeyEnDeOrdered, ValueEnDe};
-use crate::common::{
-    InstanceId,
-    error::{Result, VsdbError},
+use crate::{
+    Mapx, MapxOrd, Orphan,
+    basic::persistent_btree::{EMPTY_ROOT, NodeId, PersistentBTree},
+    common::{
+        InstanceId,
+        ende::{KeyEnDeOrdered, ValueEnDe},
+        error::{Result, VsdbError},
+    },
 };
-use crate::{Mapx, MapxOrd, Orphan};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BinaryHeap, HashMap, HashSet},
@@ -582,8 +584,28 @@ where
             });
         }
 
+        // Rolling back — whether to the current HEAD or to a strict
+        // ancestor — always overwrites `dirty_root`, silently losing any
+        // uncommitted changes.  Reject unconditionally (matching
+        // `merge()`'s unconditional guard) and tell the caller to use
+        // `discard()` instead. This check must run before the
+        // target-vs-head branching below, not just the `target ==
+        // state.head` arm — an ancestor target must not bypass it.
+        if self.has_uncommitted(branch)? {
+            return Err(VsdbError::UncommittedChanges { branch_id: branch });
+        }
+
+        if target == state.head {
+            // target == head with a clean working state (uncommitted
+            // changes are already ruled out above): a complete no-op.
+            // Return before the mutation path below — setting gc_dirty
+            // and rewriting identical state would only widen the
+            // crash-recovery window for zero effect.
+            return Ok(());
+        }
+
         // Verify target is reachable from the branch head.
-        if target != state.head {
+        {
             let mut queue = vec![state.head];
             let mut visited = HashSet::new();
             let mut found = false;
@@ -605,17 +627,6 @@ where
                         .into(),
                 });
             }
-        } else if self.has_uncommitted(branch)? {
-            // Rolling back to the current HEAD discards the dirty_root,
-            // silently losing uncommitted changes.  Reject and tell the
-            // caller to use `discard()` instead.
-            return Err(VsdbError::UncommittedChanges { branch_id: branch });
-        } else {
-            // target == head with a clean working state: a complete
-            // no-op.  Return before the mutation path below — setting
-            // gc_dirty and rewriting identical state would only widen
-            // the crash-recovery window for zero effect.
-            return Ok(());
         }
 
         // Mark dirty before any structural mutation so that crash

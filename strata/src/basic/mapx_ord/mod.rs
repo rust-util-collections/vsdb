@@ -281,6 +281,40 @@ where
     }
 }
 
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
+
+// Hand-written rather than `#[derive(PartialEq, Eq)]`: a derive would
+// compare the *encoded* bytes of `V` (postcard encoding is not
+// injective on decoded value in general — e.g. `0.0_f64` and
+// `-0.0_f64` encode to different bytes despite comparing equal, while
+// distinct NaN bit patterns can compare unequal despite identical
+// bytes), silently diverging from `V`'s own logical `PartialEq`.
+// Comparing through `self.inner` (raw key bytes + *decoded* `V`) needs
+// no `K: PartialEq` bound — `KeyEnDeOrdered` already requires `Eq`, but
+// comparing encoded bytes directly avoids a decode round-trip, matching
+// this file's existing preference for skipping unnecessary `K` decodes
+// (see `keys()`'s doc comment above).
+impl<K, V> PartialEq for MapxOrd<K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe + PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.inner.iter().eq(other.inner.iter())
+    }
+}
+
+impl<K, V> Eq for MapxOrd<K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe + Eq,
+{
+}
+
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
+
 impl<'a, K, V> IntoIterator for &'a mut MapxOrd<K, V>
 where
     K: KeyEnDeOrdered,

@@ -1,8 +1,5 @@
 use criterion::{Criterion, criterion_group};
-use std::{
-    sync::atomic::{AtomicUsize, Ordering},
-    time::Duration,
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use vsdb::basic::mapx::Mapx;
 
 fn batch_vs_normal_write(c: &mut Criterion) {

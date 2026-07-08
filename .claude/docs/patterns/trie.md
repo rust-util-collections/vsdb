@@ -8,6 +8,7 @@
 - `strata/src/trie/nibbles.rs` — Nibble path representation (MPT key paths)
 - `strata/src/trie/error.rs` — Trie error types
 - `strata/src/trie/cache.rs` — disk cache for trie snapshots
+- `strata/src/trie/codec_util.rs` — shared checksum/varint codec helpers used by both `cache.rs` and `smt/cache.rs` (INV-T7 cache trust-boundary validation)
 - `strata/src/trie/proof.rs` — VerMapWithProof integration
 
 ## Architecture

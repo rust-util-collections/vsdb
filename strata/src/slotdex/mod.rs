@@ -722,9 +722,18 @@ where
                 *newtop.buckets.entry(floor).or_insert(0) += cnt;
             }
         } else {
-            // No tiers yet: build level 1 from the per-slot count rows.
-            for (rk, rv) in self.level0_range(Bound::Unbounded, Bound::Unbounded) {
-                let (slot, cnt) = decode_level_row::<S>(&rk, &rv);
+            // No tiers yet: level 0 acts as the current "top" tier — gate
+            // on ITS bucket count exactly like the branch above gates on
+            // `view.len()`, instead of unconditionally promoting on the
+            // very first insert regardless of `tier_capacity`.
+            let level0_rows: Vec<_> = self
+                .level0_range(Bound::Unbounded, Bound::Unbounded)
+                .map(|(rk, rv)| decode_level_row::<S>(&rk, &rv))
+                .collect();
+            if level0_rows.len() as i128 <= self.tier_capacity.as_i128() {
+                return None;
+            }
+            for (slot, cnt) in level0_rows {
                 let floor = slot.floor_align(&newtop.floor_base);
                 *newtop.buckets.entry(floor).or_insert(0) += cnt;
             }

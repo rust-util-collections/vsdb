@@ -32,8 +32,7 @@
 
 use sha3::{Digest, Keccak256};
 
-use super::EMPTY_HASH;
-use super::bitpath::BitPath;
+use super::{EMPTY_HASH, bitpath::BitPath};
 
 /// Hashes a leaf: `Keccak256(0x01 || key_hash || value)`.
 pub fn hash_leaf(key_hash: &[u8; 32], value: &[u8]) -> [u8; 32] {

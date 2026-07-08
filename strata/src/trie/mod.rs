@@ -74,6 +74,7 @@ use std::{mem, path::Path};
 use crate::common::error::Result;
 use mpt::{TrieMut, TrieRo};
 use node::NodeHandle;
+use smt::mutation::SmtMut;
 
 /// Common interface for stateless, in-memory Merkle trie engines.
 ///
@@ -360,7 +361,7 @@ impl SmtCalc {
     /// insert never loses tree data.
     pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         let key_hash = Self::hash_key(key);
-        let mut m = smt::mutation::SmtMut::new(mem::take(&mut self.root));
+        let mut m = SmtMut::new(mem::take(&mut self.root));
         let result = m.insert(&key_hash, value);
         self.root = m.into_root();
         Ok(result?)
@@ -372,7 +373,7 @@ impl SmtCalc {
     /// remove never loses tree data.
     pub fn remove(&mut self, key: &[u8]) -> Result<()> {
         let key_hash = Self::hash_key(key);
-        let mut m = smt::mutation::SmtMut::new(mem::take(&mut self.root));
+        let mut m = SmtMut::new(mem::take(&mut self.root));
         let result = m.remove(&key_hash);
         self.root = m.into_root();
         Ok(result?)
@@ -384,7 +385,7 @@ impl SmtCalc {
     /// `self`'s root is always restored before returning, so a rejected
     /// commit never loses tree data.
     pub fn root_hash(&mut self) -> Result<Vec<u8>> {
-        let mut m = smt::mutation::SmtMut::new(mem::take(&mut self.root));
+        let mut m = SmtMut::new(mem::take(&mut self.root));
         let hash = m.commit();
         self.root = m.into_root();
         Ok(hash?)
@@ -397,7 +398,7 @@ impl SmtCalc {
     /// never loses tree data (the batch is not atomic: operations before
     /// the failure remain applied).
     pub fn batch_update(&mut self, ops: &[(&[u8], Option<&[u8]>)]) -> Result<()> {
-        let mut m = smt::mutation::SmtMut::new(mem::take(&mut self.root));
+        let mut m = SmtMut::new(mem::take(&mut self.root));
         let mut result = Ok(());
         for (key, val) in ops {
             let key_hash = Self::hash_key(key);

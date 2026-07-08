@@ -1,13 +1,17 @@
-use criterion::{Criterion, black_box, criterion_group};
-use rand::{Rng, RngExt};
-use std::ops::Bound;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use criterion::{Criterion, criterion_group};
+use rand::RngExt;
+use std::{
+    hint::black_box,
+    ops::Bound,
+    sync::atomic::{AtomicUsize, Ordering},
+    time::Duration,
+};
 use vsdb::{ValueEnDe, basic::mapx_ord::MapxOrd};
 
 fn read_write(c: &mut Criterion) {
     let mut group = c.benchmark_group("vsdb::mapx_ord / sequential");
     group
-        .measurement_time(std::time::Duration::from_secs(3))
+        .measurement_time(Duration::from_secs(3))
         .sample_size(10);
 
     let i = AtomicUsize::new(0);
@@ -52,7 +56,7 @@ fn read_write(c: &mut Criterion) {
 fn random_read_write(c: &mut Criterion) {
     let mut group = c.benchmark_group("vsdb::mapx_ord / random");
     group
-        .measurement_time(std::time::Duration::from_secs(3))
+        .measurement_time(Duration::from_secs(3))
         .sample_size(10);
 
     let mut rng = rand::rng();
@@ -80,7 +84,7 @@ fn random_read_write(c: &mut Criterion) {
 fn ordered_ops(c: &mut Criterion) {
     let mut group = c.benchmark_group("vsdb::mapx_ord / ordered");
     group
-        .measurement_time(std::time::Duration::from_secs(3))
+        .measurement_time(Duration::from_secs(3))
         .sample_size(10);
 
     // Pre-populate with 10000 sparse keys (0, 3, 6, 9, ...)

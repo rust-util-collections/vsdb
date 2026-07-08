@@ -1,9 +1,7 @@
 use super::{Mapx, ValueEnDe};
-use crate::basic::mapx_ord::MapxOrd;
-use crate::basic::orphan::Orphan;
+use crate::basic::{mapx_ord::MapxOrd, orphan::Orphan};
 use ruc::*;
-use std::cell::RefCell;
-use std::fs;
+use std::{cell::RefCell, fs};
 
 #[test]
 fn test_insert() {
@@ -352,4 +350,40 @@ fn test_deep_triple_nesting() {
     let r_inner = r_mid.get(&"a".into()).unwrap();
     assert_eq!(r_inner.get(&1), Some(111));
     assert_eq!(r_inner.get(&2), Some(222));
+}
+
+// =====================================================================
+// PartialEq (regression: must compare *decoded* values, not raw bytes)
+// =====================================================================
+
+/// `0.0_f64 == -0.0_f64` decodes equal despite encoding to different
+/// bytes — `Mapx`'s `PartialEq` must agree with `f64`'s own, not a
+/// byte-level comparison.
+#[test]
+fn test_partial_eq_decodes_values_not_bytes() {
+    let mut m1: Mapx<u32, f64> = Mapx::new();
+    m1.insert(&1, &0.0_f64);
+
+    let mut m2: Mapx<u32, f64> = Mapx::new();
+    m2.insert(&1, &-0.0_f64);
+
+    assert_eq!(0.0_f64, -0.0_f64);
+    assert_eq!(
+        m1, m2,
+        "maps holding decode-equal values must compare equal"
+    );
+}
+
+/// Conversely, two bit-identical NaNs decode as *unequal* per IEEE-754
+/// (`NaN != NaN`) — a byte-derived `PartialEq` would wrongly call them
+/// equal.
+#[test]
+fn test_partial_eq_nan_values_are_never_equal() {
+    let mut m1: Mapx<u32, f64> = Mapx::new();
+    m1.insert(&1, &f64::NAN);
+
+    let mut m2: Mapx<u32, f64> = Mapx::new();
+    m2.insert(&1, &f64::NAN);
+
+    assert_ne!(m1, m2, "NaN must never compare equal, even to itself");
 }

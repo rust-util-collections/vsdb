@@ -6,9 +6,11 @@ use std::mem;
 
 use crate::trie::error::{Result, TrieError};
 
-use super::bitpath::BitPath;
-use super::codec::{hash_internal, hash_leaf, wrap_hash};
-use super::{EMPTY_HASH, SmtHandle, SmtNode};
+use super::{
+    EMPTY_HASH, SmtHandle, SmtNode,
+    bitpath::BitPath,
+    codec::{hash_internal, hash_leaf, wrap_hash},
+};
 
 pub struct SmtMut {
     root: SmtHandle,

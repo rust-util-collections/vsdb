@@ -1,9 +1,11 @@
 //! Scalar types and distance metrics for vector similarity search.
 
 use serde::{Deserialize, Serialize, de};
-use std::cmp::Ordering;
-use std::iter::Sum;
-use std::ops::{Add, Div, Mul, Neg, Sub};
+use std::{
+    cmp::Ordering,
+    iter::Sum,
+    ops::{Add, Div, Mul, Neg, Sub},
+};
 
 /// A floating-point scalar suitable for vector components.
 ///

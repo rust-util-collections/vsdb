@@ -5,17 +5,20 @@
 //! instead of MPT nodes.
 //!
 
-use crate::trie::codec_util::{
-    CHECKSUM_LEN, compute_checksum, io_err, read_bytes, read_u8, read_varint,
-    write_bytes, write_varint,
+use crate::trie::{
+    codec_util::{
+        CHECKSUM_LEN, compute_checksum, io_err, read_bytes, read_u8, read_varint,
+        write_bytes, write_varint,
+    },
+    error::{Result, TrieError},
 };
-use crate::trie::error::{Result, TrieError};
-use std::fs::File;
-use std::io::{Read, Write};
-use std::path::Path;
+use std::{
+    fs::File,
+    io::{Read, Write},
+    path::Path,
+};
 
-use super::bitpath::BitPath;
-use super::{SmtHandle, SmtNode};
+use super::{SmtHandle, SmtNode, bitpath::BitPath};
 
 const MAGIC: &[u8; 4] = b"SMTC";
 // v3: leaf-shortcut hash domain (lone-leaf subtrees commit to the leaf

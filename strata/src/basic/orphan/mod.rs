@@ -29,8 +29,11 @@
 #[cfg(test)]
 mod test;
 
-use crate::common::{InstanceId, error::Result};
-use crate::{ValueEnDe, basic::mapx_ord_rawkey::MapxOrdRawKey};
+use crate::{
+    ValueEnDe,
+    basic::mapx_ord_rawkey::MapxOrdRawKey,
+    common::{InstanceId, Namespace, error::Result},
+};
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
@@ -128,10 +131,7 @@ where
     /// Same contract as `from_bytes`, with the data required to live in
     /// `ns`'s engine.
     #[inline(always)]
-    pub unsafe fn from_bytes_in(
-        ns: &crate::common::Namespace,
-        s: impl AsRef<[u8]>,
-    ) -> Self {
+    pub unsafe fn from_bytes_in(ns: &Namespace, s: impl AsRef<[u8]>) -> Self {
         Self {
             // SAFETY: forwards this fn's `unsafe` contract.
             inner: unsafe { MapxOrdRawKey::from_bytes_in(ns, s) },
@@ -145,12 +145,12 @@ where
     }
 
     /// [`new`](Self::new) placed in `ns`.
-    pub fn new_in(ns: &crate::common::Namespace, v: T) -> Self {
+    pub fn new_in(ns: &Namespace, v: T) -> Self {
         ns.scope(|| Self::new(v))
     }
 
     /// The namespace this value lives in.
-    pub fn namespace(&self) -> crate::common::Namespace {
+    pub fn namespace(&self) -> Namespace {
         self.inner.namespace()
     }
 
@@ -161,10 +161,7 @@ where
     /// # Errors
     ///
     /// If an engine-level write fails.
-    pub fn clone_in(
-        &self,
-        ns: &crate::common::Namespace,
-    ) -> crate::common::error::Result<Self> {
+    pub fn clone_in(&self, ns: &Namespace) -> Result<Self> {
         Ok(Self {
             inner: self.inner.clone_in(ns)?,
         })

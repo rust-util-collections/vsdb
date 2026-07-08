@@ -10,17 +10,21 @@
 //! stale, the caller simply rebuilds from the authoritative store.
 //!
 
-use crate::trie::codec_util::{
-    CHECKSUM_LEN, compute_checksum, io_err, read_bytes, read_u8, read_varint,
-    write_bytes, write_varint,
+use crate::trie::{
+    codec_util::{
+        CHECKSUM_LEN, compute_checksum, io_err, read_bytes, read_u8, read_varint,
+        write_bytes, write_varint,
+    },
+    error::{Result, TrieError},
+    mpt::MAX_MPT_KEY_LEN,
+    nibbles::Nibbles,
+    node::{Node, NodeHandle},
 };
-use crate::trie::error::{Result, TrieError};
-use crate::trie::mpt::MAX_MPT_KEY_LEN;
-use crate::trie::nibbles::Nibbles;
-use crate::trie::node::{Node, NodeHandle};
-use std::fs::File;
-use std::io::{Read, Write};
-use std::path::Path;
+use std::{
+    fs::File,
+    io::{Read, Write},
+    path::Path,
+};
 
 const MAGIC: &[u8; 4] = b"MPTC";
 const VERSION: u8 = 1;

@@ -3877,6 +3877,34 @@ fn error_uncommitted_changes_on_merge() {
     );
 }
 
+/// Regression: `rollback_to` must reject uncommitted changes even when
+/// `target` is a strict ancestor of the current head, not just when
+/// `target == head`. Before the fix, only the `target == head` arm
+/// checked `has_uncommitted`, so rolling back to an older commit
+/// silently discarded any uncommitted work.
+#[test]
+fn error_uncommitted_changes_on_rollback_to_ancestor() {
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+
+    m.insert(main, &1, &10).unwrap();
+    let c1 = m.commit(main).unwrap();
+
+    m.insert(main, &1, &20).unwrap();
+    m.commit(main).unwrap();
+
+    // Uncommitted edit on top of the current (second) commit.
+    m.insert(main, &1, &999).unwrap();
+
+    let err = m.rollback_to(main, c1).unwrap_err();
+    assert!(
+        matches!(err, VsdbError::UncommittedChanges { .. }),
+        "expected UncommittedChanges, got: {err:?}"
+    );
+    // The uncommitted value must survive the rejected rollback.
+    assert_eq!(m.get(main, &1).unwrap(), Some(999));
+}
+
 #[test]
 fn error_display_preserves_context() {
     let m: VerMap<u32, u32> = VerMap::new();
@@ -4015,14 +4043,16 @@ fn handle_rollback() {
 #[test]
 fn handle_log_and_head_commit() {
     let mut m: VerMap<u32, u32> = VerMap::new();
-    {
-        let mut main = m.main_mut();
-        main.insert(&1, &10).unwrap();
-        main.commit().unwrap();
-        main.insert(&2, &20).unwrap();
-        main.commit().unwrap();
-    }
-    let main = m.main();
+    let mut main = m.main_mut();
+    main.insert(&1, &10).unwrap();
+    main.commit().unwrap();
+    main.insert(&2, &20).unwrap();
+    main.commit().unwrap();
+
+    // Regression: `BranchMut` must expose `log`/`head_commit` directly
+    // (its doc comment promises "all `Branch` read methods"), without
+    // requiring the caller to drop the mutable handle and reacquire a
+    // read-only `Branch` via `m.main()`.
     let log = main.log().unwrap();
     assert_eq!(log.len(), 2);
     let head = main.head_commit().unwrap().unwrap();
@@ -4032,13 +4062,13 @@ fn handle_log_and_head_commit() {
 #[test]
 fn handle_diff_uncommitted() {
     let mut m: VerMap<u32, u32> = VerMap::new();
-    {
-        let mut main = m.main_mut();
-        main.insert(&1, &10).unwrap();
-        main.commit().unwrap();
-        main.insert(&2, &20).unwrap();
-    }
-    let diff = m.main().diff_uncommitted().unwrap();
+    let mut main = m.main_mut();
+    main.insert(&1, &10).unwrap();
+    main.commit().unwrap();
+    main.insert(&2, &20).unwrap();
+
+    // Regression: available directly on `BranchMut`, no reacquire needed.
+    let diff = main.diff_uncommitted().unwrap();
     assert_eq!(diff.len(), 1);
 }
 

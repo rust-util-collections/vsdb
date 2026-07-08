@@ -1,5 +1,7 @@
-use std::sync::{Arc, Barrier};
-use std::time::Instant;
+use std::{
+    sync::{Arc, Barrier},
+    time::Instant,
+};
 
 fn main() {
     let thread_counts = [2, 4, 8, 16];

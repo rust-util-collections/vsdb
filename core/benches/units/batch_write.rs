@@ -1,12 +1,12 @@
-use criterion::{Criterion, black_box, criterion_group};
-use std::time::Duration;
+use criterion::{Criterion, criterion_group};
+use std::{hint::black_box, time::Duration};
 use vsdb_core::MapxRaw;
 
 // Benchmark single insert operations
 fn single_inserts(c: &mut Criterion) {
     let mut group = c.benchmark_group("vsdb_core::mapx_raw / batch_write");
     group
-        .measurement_time(std::time::Duration::from_secs(3))
+        .measurement_time(Duration::from_secs(3))
         .sample_size(10);
 
     group.bench_function(" single inserts (1000 ops) ", |b| {
@@ -15,7 +15,7 @@ fn single_inserts(c: &mut Criterion) {
             for i in 0usize..1000 {
                 let key = i.to_be_bytes();
                 let value = (i * 2).to_be_bytes();
-                db.insert(&key, &value);
+                db.insert(key, value);
             }
             black_box(db);
         })
@@ -28,7 +28,7 @@ fn single_inserts(c: &mut Criterion) {
 fn mixed_workload(c: &mut Criterion) {
     let mut group = c.benchmark_group("vsdb_core::mapx_raw / mixed");
     group
-        .measurement_time(std::time::Duration::from_secs(3))
+        .measurement_time(Duration::from_secs(3))
         .sample_size(10);
 
     group.bench_function(" 80% read / 20% write (1000 ops) ", |b| {
@@ -38,7 +38,7 @@ fn mixed_workload(c: &mut Criterion) {
             for i in 0usize..800 {
                 let key = i.to_be_bytes();
                 let value = i.to_be_bytes();
-                db.insert(&key, &value);
+                db.insert(key, value);
             }
 
             // Mixed workload
@@ -47,11 +47,11 @@ fn mixed_workload(c: &mut Criterion) {
                     // 20% writes
                     let key = (800 + i / 5).to_be_bytes();
                     let value = i.to_be_bytes();
-                    db.insert(&key, &value);
+                    db.insert(key, value);
                 } else {
                     // 80% reads
                     let key = (i % 800).to_be_bytes();
-                    black_box(db.get(&key));
+                    black_box(db.get(key));
                 }
             }
             black_box(db);
@@ -65,7 +65,7 @@ fn mixed_workload(c: &mut Criterion) {
 fn range_scans(c: &mut Criterion) {
     let mut group = c.benchmark_group("vsdb_core::mapx_raw / range_scan");
     group
-        .measurement_time(std::time::Duration::from_secs(3))
+        .measurement_time(Duration::from_secs(3))
         .sample_size(10);
 
     let mut db = MapxRaw::new();
@@ -73,7 +73,7 @@ fn range_scans(c: &mut Criterion) {
     for i in 0u64..10000u64 {
         let key = i.to_be_bytes();
         let value = i.to_be_bytes();
-        db.insert(&key, &value);
+        db.insert(key, value);
     }
 
     group.bench_function(" scan 100 entries ", |b| {

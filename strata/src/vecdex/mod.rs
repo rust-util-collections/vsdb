@@ -987,8 +987,14 @@ where
             // Re-elect: prefer candidates that still have base-layer
             // edges so an isolated node cannot become the entry point
             // and hide the rest of the graph; among equals the higher
-            // layer wins.
+            // layer wins. This choice is independent of `max_layer`
+            // below: per INV-VD1, `max_layer` must always equal the
+            // TRUE global maximum `node_info.max_layer` among live
+            // nodes, even when the node elected as the new entry point
+            // itself sits at a lower layer (e.g. the only node at the
+            // true max layer is currently unlinked at layer 0).
             let mut best: Option<(u64, u8, bool)> = None;
+            let mut true_max: Option<u8> = None;
             let info_rows: Vec<(u64, u8)> = txn
                 .rows
                 .scan_prefix(txn.store, &[TAG_INFO])
@@ -1002,6 +1008,7 @@ where
                 if txn.get(&node_key(TAG_VEC, nid)).is_none() {
                     continue;
                 }
+                true_max = Some(true_max.map_or(layer, |m: u8| m.max(layer)));
                 let linked = txn.adj_row(&adj_key(0, nid)).is_some();
                 let better = match best {
                     None => true,
@@ -1011,12 +1018,15 @@ where
                     best = Some((nid, layer, linked));
                 }
             }
-            if let Some((new_ep, new_max, _)) = best {
-                txn.state.entry_point = Some(new_ep);
-                txn.state.max_layer = new_max;
-            } else {
-                txn.state.entry_point = None;
-                txn.state.max_layer = 0;
+            match (best, true_max) {
+                (Some((new_ep, _, _)), Some(new_max)) => {
+                    txn.state.entry_point = Some(new_ep);
+                    txn.state.max_layer = new_max;
+                }
+                _ => {
+                    txn.state.entry_point = None;
+                    txn.state.max_layer = 0;
+                }
             }
         }
 

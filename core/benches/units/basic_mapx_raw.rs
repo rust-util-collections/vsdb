@@ -1,9 +1,6 @@
 use criterion::{Criterion, criterion_group};
-use rand::{Rng, RngExt};
-use std::{
-    sync::atomic::{AtomicUsize, Ordering},
-    time::Duration,
-};
+use rand::RngExt;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use vsdb_core::MapxRaw;
 
 fn read_write(c: &mut Criterion) {
@@ -18,14 +15,14 @@ fn read_write(c: &mut Criterion) {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::SeqCst);
             let val = n.to_be_bytes();
-            db.insert(&val, &val);
+            db.insert(val, val);
         })
     });
 
     group.bench_function(" read ", |b| {
         b.iter(|| {
             let n = i.fetch_sub(1, Ordering::SeqCst);
-            db.get(&n.to_be_bytes());
+            db.get(n.to_be_bytes());
         })
     });
     group.finish();
@@ -44,7 +41,7 @@ fn random_read_write(c: &mut Criterion) {
         b.iter(|| {
             let n = rng.random::<u64>() as usize;
             let key = n.to_be_bytes();
-            db.insert(&key, &key);
+            db.insert(key, key);
             keys.push(key);
         })
     });

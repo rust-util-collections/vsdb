@@ -1,6 +1,9 @@
 use criterion::{Criterion, criterion_group};
-use std::sync::{Arc, Barrier};
-use std::time::Instant;
+use std::{
+    sync::{Arc, Barrier},
+    thread,
+    time::Instant,
+};
 use vsdb::basic::mapx::Mapx;
 
 #[inline(always)]
@@ -40,13 +43,13 @@ fn concurrent_independent_writes(c: &mut Criterion) {
                     // two handles ever write the same key.
                     let mut db_shadow = unsafe { db.shadow() };
                     let bar = barrier.clone();
-                    handles.push(std::thread::spawn(move || {
+                    handles.push(thread::spawn(move || {
                         let value = vec![0u8; 64];
                         bar.wait();
 
                         // Disjoint key ranges by thread id.
                         for j in 0..iters {
-                            let k = ((tid as u64) << 48) | (j as u64);
+                            let k = ((tid as u64) << 48) | j;
                             db_shadow.insert(&k.to_be_bytes(), &value);
                         }
 
@@ -87,11 +90,11 @@ fn concurrent_hotspot_writes(c: &mut Criterion) {
                 for i in 0..num_threads {
                     let mut db = shared_db.clone();
                     let bar = barrier.clone();
-                    handles.push(std::thread::spawn(move || {
+                    handles.push(thread::spawn(move || {
                         let value = vec![0u8; 64];
                         bar.wait();
                         for j in 0..iters {
-                            let k = ((i as u64) << 48) | (j as u64);
+                            let k = ((i as u64) << 48) | j;
                             db.insert(&k.to_be_bytes(), &value);
                         }
                         bar.wait();
@@ -134,11 +137,11 @@ fn concurrent_shadow_hotspot_writes(c: &mut Criterion) {
                     // two handles ever write the same key.
                     let mut db_shadow = unsafe { db.shadow() };
                     let bar = barrier.clone();
-                    handles.push(std::thread::spawn(move || {
+                    handles.push(thread::spawn(move || {
                         let value = vec![0u8; 64];
                         bar.wait();
                         for j in 0..iters {
-                            let k = ((i as u64) << 48) | (j as u64);
+                            let k = ((i as u64) << 48) | j;
                             db_shadow.insert(&k.to_be_bytes(), &value);
                         }
                         bar.wait();
@@ -188,7 +191,7 @@ fn concurrent_reads(c: &mut Criterion) {
                     // writes through any handle during the benchmark.
                     let db_shadow = unsafe { db.shadow() };
                     let bar = barrier.clone();
-                    handles.push(std::thread::spawn(move || {
+                    handles.push(thread::spawn(move || {
                         let mut rng = 0x9E3779B97F4A7C15_u64 ^ (tid as u64);
                         bar.wait();
                         for _ in 0..iters {
@@ -245,7 +248,7 @@ fn concurrent_mixed_read_write(c: &mut Criterion) {
                         // running alongside the writer threads below.
                         let db_shadow = unsafe { db.shadow() };
                         let bar = barrier.clone();
-                        handles.push(std::thread::spawn(move || {
+                        handles.push(thread::spawn(move || {
                             let mut rng = 0xD1B54A32D192ED03_u64 ^ (tid as u64);
                             bar.wait();
                             for _ in 0..iters {
@@ -263,7 +266,7 @@ fn concurrent_mixed_read_write(c: &mut Criterion) {
                         // preloaded 0-prefixed keys the readers touch.
                         let mut db_shadow = unsafe { db.shadow() };
                         let bar = barrier.clone();
-                        handles.push(std::thread::spawn(move || {
+                        handles.push(thread::spawn(move || {
                             let value = vec![0u8; 64];
                             bar.wait();
                             for j in 0..iters {

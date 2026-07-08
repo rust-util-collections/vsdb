@@ -247,3 +247,38 @@ fn test_valueende_roundtrip() {
     assert!(decoded.is_the_same_instance(&m));
     assert_eq!(decoded.get(&5), Some("five".into()));
 }
+
+// =====================================================================
+// PartialEq (regression: must compare *decoded* values, not raw bytes)
+// =====================================================================
+
+/// `0.0_f64 == -0.0_f64` decodes equal despite encoding to different
+/// bytes — `MapxOrd`'s `PartialEq` must agree with `f64`'s own, not a
+/// byte-level comparison.
+#[test]
+fn test_partial_eq_decodes_values_not_bytes() {
+    let mut m1: MapxOrd<u32, f64> = MapxOrd::new();
+    m1.insert(&1, &0.0_f64);
+
+    let mut m2: MapxOrd<u32, f64> = MapxOrd::new();
+    m2.insert(&1, &-0.0_f64);
+
+    assert_eq!(
+        m1, m2,
+        "maps holding decode-equal values must compare equal"
+    );
+}
+
+/// Conversely, two bit-identical NaNs decode as *unequal* per IEEE-754
+/// (`NaN != NaN`) — a byte-derived `PartialEq` would wrongly call them
+/// equal.
+#[test]
+fn test_partial_eq_nan_values_are_never_equal() {
+    let mut m1: MapxOrd<u32, f64> = MapxOrd::new();
+    m1.insert(&1, &f64::NAN);
+
+    let mut m2: MapxOrd<u32, f64> = MapxOrd::new();
+    m2.insert(&1, &f64::NAN);
+
+    assert_ne!(m1, m2, "NaN must never compare equal, even to itself");
+}

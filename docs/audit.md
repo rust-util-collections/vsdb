@@ -16,6 +16,63 @@
 
 ## Resolved
 
+### [HIGH] engine: `reserve_recovered_prefix` permanently leaks entries into `RECOVERED_PREFIXES`
+- **Where**: `core/src/common/engine/mmdb.rs` (`reserve_recovered_prefix`, `alloc_prefix_candidate`, `PENDING_WINDOWS`)
+- **Resolution** *(full-codebase audit)*: `PENDING_WINDOWS`' value changed from a static `(batch_start, batch_end)` range to a `PendingWindow = (Arc<AtomicU64>, u64)` — a live, shared cursor plus the batch end. The cursor is updated on every local issuance (both the thread-local fast path and on each new batch claim, still inside the `PENDING_WINDOWS` write lock alongside `GLOBAL_COUNTER.fetch_add` so readers never observe a mismatched counter/cursor pair). `reserve_recovered_prefix` now checks `prefix >= cursor.load(Acquire) && prefix < end` instead of blind `(start..end)` range membership, so an already-issued value in a still-open batch is correctly recognized as never-recurring and is no longer reserved. Added `reserve_recovered_prefix_ignores_already_issued_in_window_value` regression test (white-box, inside `mmdb.rs`'s own test module) plus fixed the one test directly constructing the old tuple shape.
+
+### [HIGH] versioning: `rollback_to()` silently discards uncommitted changes when target is a strict ancestor
+- **Where**: `strata/src/versioned/map.rs` (`rollback_to`)
+- **Resolution** *(full-codebase audit)*: the `has_uncommitted(branch)?` guard now runs unconditionally before the target-vs-head branching (matching `merge()`'s unconditional guard on both sides), with the `target == state.head` no-op fast path checked afterward. Added `error_uncommitted_changes_on_rollback_to_ancestor` regression test asserting the ancestor-rollback path now rejects uncommitted changes and preserves the uncommitted value.
+
+### [HIGH] vecdex: entry-point re-election after `remove()` can permanently deflate `meta.max_layer`
+- **Where**: `strata/src/vecdex/mod.rs` (`remove()`)
+- **Resolution** *(full-codebase audit)*: entry-point election (which still prefers linked candidates, unchanged) and `max_layer` assignment are now decoupled — a separate `true_max` accumulator scans every live node's layer during the same pass, and `state.max_layer` is always set to this true maximum regardless of which node wins entry-point election. Added `remove_entry_point_does_not_deflate_max_layer_below_isolated_high_layer_node`, a deterministically-constructed adversarial graph (hand-written rows bypassing random layer assignment) that reproduced `left: 1, right: 4` against the pre-fix code and passes now.
+
+### [HIGH] dagmap: `prune_mainline`'s crash-safety barriers call the global `vsdb_flush()` instead of namespace-scoped `Namespace::flush()`
+- **Where**: `strata/src/dagmap/raw/mod.rs` (`prune_mainline`, Barrier A/B)
+- **Resolution** *(full-codebase audit)*: both barriers now call `self.namespace().flush()` (removed the now-unused `vsdb_flush` import); doc comments updated to reference `Namespace::flush`. Added `prune_works_in_a_non_default_namespace`, exercising `prune()` end-to-end on a DAG placed in an explicit non-default namespace via `Namespace::create()`.
+
+### [MEDIUM] typed-collections: derived `PartialEq` compares raw encoded bytes, not decoded values
+- **Where**: `strata/src/common/macros.rs` (`define_map_wrapper!`), `strata/src/basic/{mapx,mapx_ord,mapx_ord_rawkey}/mod.rs`
+- **Resolution** *(full-codebase audit)*: the macro's derive is now `#[derive(Debug)]` only; each of the three wrapper types gets a hand-written `PartialEq`/`Eq` impl. `Mapx`/`MapxOrd` compare via `self.inner.iter().eq(other.inner.iter())` (raw key bytes + *decoded* `V`, requiring only `V: PartialEq` — looser than the derive's old `K: PartialEq + V: PartialEq`, since encoded-key-byte equality is already equivalent to decoded-key equality for a correctly-deterministic `KeyEnDe`/`KeyEnDeOrdered` impl). `MapxOrdRawKey` compares via `self.iter().eq(other.iter())` (no `K` to decode). Added `test_partial_eq_decodes_values_not_bytes`/`test_partial_eq_nan_values_are_never_equal` to all three wrapper types' test files (6 new tests total).
+
+### [MEDIUM] dagmap: `destroy()` removes the parent's registry entry before clearing/self-unlinking
+- **Where**: `strata/src/dagmap/raw/mod.rs` (`destroy()`, `prune_children`)
+- **Resolution** *(full-codebase audit)*: `destroy()` now captures the parent handle first, then nulls its own parent slot and clears its data, then clears all owned descendants via a two-pass walk (pass 1 clears every descendant's `data`/`parent` while leaving every `children` registry — including `self.children` — untouched so the not-yet-visited tail of the walk stays discoverable; pass 2 clears the now-purely-cosmetic registries in any order), and only as the LAST step removes its own entry from the parent's registry. `prune_children` reordered analogously: destroy each dropped child (if owned/residue) before dropping its own registry index entry, instead of batch-removing all entries upfront. Added `destroy_interrupted_before_unlink_leaves_reclaimable_residue`, simulating a crash between data-clearing and registry-unlink and confirming the node stays discoverable/reclaimable via `owned_or_residue`.
+
+### [MEDIUM] slotdex: level-1 tier is created unconditionally on the first insert, bypassing `tier_capacity`
+- **Where**: `strata/src/slotdex/mod.rs` (`stage_level_growth_over`)
+- **Resolution** *(full-codebase audit)*: the "no tiers yet" branch now collects level-0 rows first and returns `None` (no promotion) when that count does not exceed `tier_capacity`, mirroring the existing gate in the "tiers already exist" branch. Added `first_inserts_within_capacity_create_no_premature_tier` (covers both `insert` and `insert_batch`) and strengthened `sparse_slots` with a `db.levels.is_empty()` assertion.
+
+### [MEDIUM] versioning: `BranchMut` is missing 3 read methods that its own doc comment promises
+- **Where**: `strata/src/versioned/handle.rs`
+- **Resolution** *(full-codebase audit)*: added `head_commit()`, `log()`, `diff_uncommitted()` to `BranchMut`, delegating identically to the other 7 read methods. Updated `handle_log_and_head_commit`/`handle_diff_uncommitted` tests to call these directly on the `BranchMut` handle instead of dropping it and reacquiring a read-only `Branch` via `m.main()`.
+
+### [MEDIUM] style: blanket `#![allow(warnings)]` suppresses all lints in 5 bench entry points
+- **Where**: `core/benches/{cache_pool,basic}.rs`, `strata/benches/{basic,versioned,vecdex}.rs`
+- **Resolution** *(full-codebase audit)*: removed all 5 occurrences; fixed the warnings that surfaced at the source (unused imports across several `benches/units/*.rs` files, `manual_is_multiple_of` and `needless_borrows_for_generic_args`/`unnecessary_cast` clippy lints, deprecated `criterion::black_box` replaced with `std::hint::black_box`).
+
+### [MEDIUM] doc: `versioning.md` pattern guide's Files list is stale
+- **Where**: `.claude/docs/patterns/versioning.md`
+- **Resolution** *(full-codebase audit)*: added `handle.rs`/`read.rs`/`repair.rs` bullets; removed the stale "(1200+ lines)" claim; added a "Rollback/Merge Guard Asymmetry" bug pattern and matching Review Checklist items for the rollback/BranchMut findings above.
+
+### [LOW] engine: self-contradictory test-threading comment
+- **Where**: `core/src/common/engine/mmdb.rs`
+- **Resolution** *(full-codebase audit)*: replaced the stale "runs single-threaded" claim with wording consistent with the already-correct "race-tolerant... suite runs multithreaded" comment 54 lines below.
+
+### [LOW] doc: `trie.md` pattern guide's Files list omits `codec_util.rs`
+- **Where**: `.claude/docs/patterns/trie.md`
+- **Resolution** *(full-codebase audit)*: added a Files-list bullet for `codec_util.rs`.
+
+### [LOW] style: inline path repetition (3+ uses of same path without a `use` import) across multiple files
+- **Where**: `core/benches/units/batch_write.rs`, `core/build.rs`, `strata/src/common/macros.rs`, `strata/src/basic/orphan/mod.rs`, `strata/src/trie/mod.rs`, `core/src/common/engine/mmdb.rs`, `strata/benches/vecdex.rs`, `strata/benches/units/concurrent.rs`, `strata/benches/units/basic_mapx_ord.rs`
+- **Resolution** *(full-codebase audit)*: added the appropriate `use` import to each file (or wired up an already-present-but-unused one) and replaced every fully-qualified inline occurrence with the bare name.
+
+### [LOW] style: ungrouped imports (multiple separate `use` lines from the same root that should be merged)
+- **Where**: ~25 files across `strata/src/{trie,versioned,basic,vecdex}`, `strata/benches/`, `strata/tests/`
+- **Resolution** *(full-codebase audit)*: merged every listed file's same-root `use` lines (`std::`, `vsdb::`, `crate::`, `super::`) into single grouped blocks, preserving the exact same imported item sets.
+
+
 ### [LOW] docs: CLAUDE.md not updated for `VecDexDyn` and `clone_in`
 - **Where**: `CLAUDE.md` (Architecture table "Vector Index" row; top feature-bullet list)
 - **What**: This diff adds a new public type `VecDexDyn` (+ `MetricKind`, `strata/src/vecdex/dynamic.rs`) and a new `clone_in(&Namespace)` method spanning `MapxRaw`/`Mapx`/`MapxOrd`/`MapxOrdRawKey`/`Orphan`. `README.md:104` and `strata/README.md:22` were updated in the same diff to mention `VecDexDyn`, but `CLAUDE.md`'s Vector Index table row and Namespaces bullet were not touched (confirmed: `CLAUDE.md` has zero diff in this commit range, and contains no occurrence of `VecDexDyn`, `MetricKind`, or `clone_in`).

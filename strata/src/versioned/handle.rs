@@ -14,11 +14,13 @@
 
 use std::ops::Bound;
 
-use crate::common::{
-    ende::{KeyEnDeOrdered, ValueEnDe},
-    error::Result,
+use crate::{
+    common::{
+        ende::{KeyEnDeOrdered, ValueEnDe},
+        error::Result,
+    },
+    versioned::{BranchId, CommitId, diff::DiffEntry, map::VerMap},
 };
-use crate::versioned::{BranchId, CommitId, diff::DiffEntry, map::VerMap};
 
 /// Read-only handle bound to a specific branch.
 ///
@@ -143,6 +145,21 @@ where
     /// Returns `true` if the branch has uncommitted changes.
     pub fn has_uncommitted(&self) -> Result<bool> {
         self.map.has_uncommitted(self.id)
+    }
+
+    /// Returns the head commit on this branch, if any.
+    pub fn head_commit(&self) -> Result<Option<crate::versioned::Commit>> {
+        self.map.head_commit(self.id)
+    }
+
+    /// Walks the first-parent commit history from head to root.
+    pub fn log(&self) -> Result<Vec<crate::versioned::Commit>> {
+        self.map.log(self.id)
+    }
+
+    /// Computes the diff of uncommitted changes relative to HEAD.
+    pub fn diff_uncommitted(&self) -> Result<Vec<DiffEntry>> {
+        self.map.diff_uncommitted(self.id)
     }
 
     // ---- Write methods ----

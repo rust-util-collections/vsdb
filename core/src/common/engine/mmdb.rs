@@ -88,6 +88,12 @@ impl Drop for PendingWindowGuard {
 thread_local! {
     static LOCAL_NEXT: Cell<u64> = const { Cell::new(0) };
     static LOCAL_CEIL: Cell<u64> = const { Cell::new(0) };
+    /// Shared with this thread's [`PENDING_WINDOWS`] entry so
+    /// `reserve_recovered_prefix` (possibly running on another thread)
+    /// can see this thread's live position within its still-open batch,
+    /// not just the batch's static bounds. Reused across this thread's
+    /// batches — only the value is reset on every new batch claim.
+    static LOCAL_CURSOR: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
     static PENDING_WINDOW_GUARD: PendingWindowGuard = const { PendingWindowGuard };
 }
 
@@ -102,13 +108,26 @@ static GLOBAL_CEILING: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0))
 static GLOBAL_FLOOR: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
 static PREFIX_ALLOC_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-/// Per-thread pending allocation windows (`[start, end)` handed out by
-/// `GLOBAL_COUNTER.fetch_add` but not yet fully issued). Refills replace
-/// the same thread's entry; a live thread's entry is removed by
-/// [`PendingWindowGuard`] when that thread exits, so the registry stays
-/// bounded by the number of currently-live threads that have allocated
-/// at least one prefix batch (not one entry per historical thread).
-static PENDING_WINDOWS: LazyLock<RwLock<HashMap<ThreadId, (u64, u64)>>> =
+/// A thread's live position within its still-open batch: a shared
+/// cursor (the next value this thread will hand out — mirrors
+/// `LOCAL_NEXT`, updated on every local issuance) paired with the
+/// batch's exclusive end (`GLOBAL_COUNTER.fetch_add`'s claimed upper
+/// bound).
+type PendingWindow = (Arc<AtomicU64>, u64);
+
+/// Per-thread pending allocation windows. Only `[cursor, end)` is truly
+/// un-issued: values below `cursor` were already handed out earlier in
+/// this same still-open batch and can never recur as a future
+/// `alloc_prefix` candidate, so `reserve_recovered_prefix` must not
+/// treat them as pending — doing so would permanently leak the entry
+/// (nothing removes an already-issued value from `RECOVERED_PREFIXES`,
+/// since it can never be regenerated to be matched and evicted).
+/// Refills replace the same thread's entry; a live thread's entry is
+/// removed by [`PendingWindowGuard`] when that thread exits, so the
+/// registry stays bounded by the number of currently-live threads that
+/// have allocated at least one prefix batch (not one entry per
+/// historical thread).
+static PENDING_WINDOWS: LazyLock<RwLock<HashMap<ThreadId, PendingWindow>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
 /// Prefixes accepted by [`MmDB::reserve_recovered_prefix`] that the
@@ -622,6 +641,10 @@ fn alloc_prefix_candidate() -> Pre {
             let ceil = ceil_cell.get();
             if next > 0 && next < ceil {
                 next_cell.set(next + 1);
+                // Keep the shared cursor in lock-step with `next_cell`
+                // so `reserve_recovered_prefix` immediately sees this
+                // value as already-issued from this point on.
+                LOCAL_CURSOR.with(|cursor| cursor.store(next + 1, Ordering::Release));
                 return next;
             }
 
@@ -635,18 +658,22 @@ fn alloc_prefix_candidate() -> Pre {
             // thread that ever allocated a prefix).
             PENDING_WINDOW_GUARD.with(|_| {});
 
-            // Claim the next batch and register it as this thread's
-            // pending window in one exclusive section, so that
-            // `reserve_recovered_prefix` (which reads the counter and
-            // the registry under the read lock) can never observe the
-            // advanced counter without the matching window.
+            // Claim the next batch and register it — cursor already
+            // advanced past `batch_start`, which is issued below — as
+            // this thread's pending window in one exclusive section, so
+            // that `reserve_recovered_prefix` (which reads the counter
+            // and the registry under the read lock) can never observe
+            // the advanced counter without the matching, correctly
+            // positioned window.
             let batch_start = {
                 let mut reg = PENDING_WINDOWS.write();
                 let batch_start =
                     GLOBAL_COUNTER.fetch_add(PREFIX_ALLOC_BATCH, Ordering::AcqRel);
+                let cursor = LOCAL_CURSOR.with(|c| c.clone());
+                cursor.store(batch_start + 1, Ordering::Release);
                 reg.insert(
                     thread::current().id(),
-                    (batch_start, batch_start + PREFIX_ALLOC_BATCH),
+                    (cursor, batch_start + PREFIX_ALLOC_BATCH),
                 );
                 batch_start
             };
@@ -680,11 +707,17 @@ fn alloc_prefix_candidate() -> Pre {
 /// come from a legitimately allocated instance.
 ///
 /// Accepted prefixes need a reservation only if the allocator could
-/// still issue them in this run (`>= counter`, or inside a registered
-/// pending thread window). Prefixes below the process-start floor —
-/// the overwhelmingly common case for real restores — are accepted
-/// with a few atomic loads and no locking, keeping nested-handle
-/// decoding cheap and the reservation set bounded.
+/// still issue them in this run: `>= counter` (not yet claimed by any
+/// batch), or at-or-past a registered thread's *live cursor* but still
+/// below that window's end. Values below a thread's cursor were already
+/// issued earlier in this same still-open batch and must NOT be
+/// reserved — they can never recur as a future `alloc_prefix`
+/// candidate, so reserving one would sit in `RECOVERED_PREFIXES`
+/// forever (never matched, never evicted). Prefixes below the
+/// process-start floor — the overwhelmingly common case for real
+/// restores — are accepted with a few atomic loads and no locking,
+/// keeping nested-handle decoding cheap and the reservation set
+/// bounded.
 pub(crate) fn reserve_recovered_prefix(meta_prefix: PreBytes) -> bool {
     let prefix = Pre::from_le_bytes(meta_prefix);
     if prefix < PREFIX_ALLOC_START {
@@ -703,7 +736,9 @@ pub(crate) fn reserve_recovered_prefix(meta_prefix: PreBytes) -> bool {
     let pending = {
         let reg = PENDING_WINDOWS.read();
         prefix >= GLOBAL_COUNTER.load(Ordering::Acquire)
-            || reg.values().any(|&(s, e)| (s..e).contains(&prefix))
+            || reg.values().any(|(cursor, end)| {
+                prefix >= cursor.load(Ordering::Acquire) && prefix < *end
+            })
     };
     if pending {
         RECOVERED_PREFIXES.lock().insert(prefix);
@@ -1659,7 +1694,9 @@ mod tests {
         // for the life of the process.
         let handle = thread::spawn(|| {
             let id = thread::current().id();
-            PENDING_WINDOWS.write().insert(id, (0, 1));
+            PENDING_WINDOWS
+                .write()
+                .insert(id, (Arc::new(AtomicU64::new(0)), 1));
             // Registers this thread's `PendingWindowGuard`, whose
             // `Drop` removes the entry above on thread exit.
             PENDING_WINDOW_GUARD.with(|_| {});
@@ -1679,8 +1716,33 @@ mod tests {
     // These tests go through the process-global `VSDB` singleton — the
     // allocator's state (counter, ceiling, thread windows) is global by
     // design, so an isolated `MmDB` cannot exercise the real code path.
-    // The test binary runs single-threaded (`--test-threads=1`), so no
-    // other test allocates concurrently.
+    // The suite runs multithreaded (no `--test-threads=1`), so other
+    // tests may allocate concurrently — assertions below are written to
+    // be race-tolerant rather than assuming isolation.
+
+    /// Regression test: reserving a prefix already issued earlier in
+    /// the calling thread's own still-open batch must be a no-op. Such
+    /// a value can never recur as a future `alloc_prefix` candidate (the
+    /// per-thread cursor only advances), so reserving it would insert a
+    /// permanent, never-evicted entry into `RECOVERED_PREFIXES` —
+    /// degrading every subsequent `alloc_prefix()` call in the process
+    /// to the mutex+hashset slow path forever.
+    #[test]
+    fn reserve_recovered_prefix_ignores_already_issued_in_window_value() {
+        let db = crate::common::VSDB.engine();
+        let issued = db.alloc_prefix();
+
+        assert!(
+            db.reserve_recovered_prefix(issued.to_le_bytes()),
+            "an in-range prefix must still validate as accepted"
+        );
+        assert!(
+            !RECOVERED_PREFIXES.lock().contains(&issued),
+            "an already-issued, same-window prefix must never be \
+             reserved: it can never recur as a future candidate, so \
+             reserving it would leak permanently"
+        );
+    }
 
     /// Per-thread allocations must be strictly increasing — across
     /// thread-local batch refills too (the loop spans several

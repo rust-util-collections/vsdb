@@ -488,12 +488,46 @@ fn sparse_slots() {
         db.insert(s, i as u64).unwrap();
     }
     assert_eq!(db.total(), 5);
+    // Regression: 5 distinct slots is within `tier_capacity` (8), so no
+    // tier should have been promoted yet — `stage_level_growth_over`'s
+    // "no tiers yet" branch used to promote unconditionally on the very
+    // first insert, bypassing this capacity gate entirely.
+    assert!(
+        db.levels.is_empty(),
+        "should not promote a tier below capacity"
+    );
 
     let result = db.get_entries_by_page(10, 0, false);
     assert_eq!(result, vec![0, 1, 2, 3, 4]);
 
     let result = db.get_entries_by_page(2, 1, false);
     assert_eq!(result, vec![2, 3]);
+}
+
+/// Regression: a fresh `SlotDex` must NOT create a premature tier on its
+/// very first insert(s) when the entry count stays within
+/// `tier_capacity` — `stage_level_growth_over`'s "no tiers yet" branch
+/// used to promote unconditionally, bypassing the same capacity gate the
+/// "tiers already exist" branch already enforced (defeating
+/// `tier_capacity` for every fresh instance's first insert).
+#[test]
+fn first_inserts_within_capacity_create_no_premature_tier() {
+    let mut db: SlotDex<u64, u64> = SlotDex::new(1_000_000, false);
+    assert!(db.levels.is_empty());
+
+    db.insert(1, 1).unwrap();
+    assert!(
+        db.levels.is_empty(),
+        "a single insert must not create a tier when tier_capacity is huge"
+    );
+
+    // insert_batch shares the same growth-check code path.
+    let mut db2: SlotDex<u64, u64> = SlotDex::new(1_000_000, false);
+    db2.insert_batch(vec![(1, 1)]).unwrap();
+    assert!(
+        db2.levels.is_empty(),
+        "insert_batch must not create a tier when tier_capacity is huge"
+    );
 }
 
 /// `insert_batch` must be observationally identical to per-key `insert`,

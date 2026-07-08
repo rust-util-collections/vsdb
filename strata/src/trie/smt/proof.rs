@@ -22,9 +22,11 @@
 
 use crate::trie::error::{Result, TrieError};
 
-use super::bitpath::BitPath;
-use super::codec::{hash_internal, hash_leaf, wrap_hash};
-use super::{EMPTY_HASH, SmtHandle, SmtNode, TREE_DEPTH};
+use super::{
+    EMPTY_HASH, SmtHandle, SmtNode, TREE_DEPTH,
+    bitpath::BitPath,
+    codec::{hash_internal, hash_leaf, wrap_hash},
+};
 
 /// A compact SMT proof for a single key.
 ///

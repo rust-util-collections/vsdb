@@ -1,5 +1,4 @@
-use vsdb::Mapx;
-use vsdb::vsdb_set_base_dir;
+use vsdb::{Mapx, vsdb_set_base_dir};
 
 #[test]
 fn test_batch_entry_basic() {

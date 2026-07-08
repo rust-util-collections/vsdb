@@ -6,8 +6,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::basic::persistent_btree::{EMPTY_ROOT, NodeId};
 
-use super::map::VerMap;
-use super::{CommitId, NO_COMMIT};
+use super::{CommitId, NO_COMMIT, map::VerMap};
 
 impl<K, V> VerMap<K, V> {
     pub(crate) fn rebuild_branch_name_index(&mut self) {

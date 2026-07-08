@@ -7,9 +7,11 @@
 
 use sha3::{Digest, Keccak256};
 
-use crate::trie::error::{Result, TrieError};
-use crate::trie::nibbles::Nibbles;
-use crate::trie::node::{Node, NodeCodec, NodeHandle};
+use crate::trie::{
+    error::{Result, TrieError},
+    nibbles::Nibbles,
+    node::{Node, NodeCodec, NodeHandle},
+};
 
 /// A Merkle Patricia Trie proof for a single key.
 ///

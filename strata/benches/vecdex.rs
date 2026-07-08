@@ -1,8 +1,6 @@
-#![allow(warnings)]
-
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use rand::random;
-use std::hint::black_box;
+use std::{hint::black_box, time::Duration};
 use vsdb::vecdex::{HnswConfig, VecDex, distance::L2};
 
 const DIM: usize = 128;
@@ -29,7 +27,7 @@ fn build_index(n: u64) -> VecDex<u64, L2> {
 fn bench_insert(c: &mut Criterion) {
     let mut group = c.benchmark_group("vecdex/insert");
     group
-        .measurement_time(std::time::Duration::from_secs(5))
+        .measurement_time(Duration::from_secs(5))
         .sample_size(10);
 
     for &n in &[1_000u64, 5_000, 10_000] {
@@ -61,7 +59,7 @@ fn bench_insert(c: &mut Criterion) {
 fn bench_search(c: &mut Criterion) {
     let mut group = c.benchmark_group("vecdex/search");
     group
-        .measurement_time(std::time::Duration::from_secs(5))
+        .measurement_time(Duration::from_secs(5))
         .sample_size(20);
 
     for &n in &[1_000u64, 5_000, 10_000] {
@@ -86,7 +84,7 @@ fn bench_search(c: &mut Criterion) {
 fn bench_filtered_search(c: &mut Criterion) {
     let mut group = c.benchmark_group("vecdex/filtered_search");
     group
-        .measurement_time(std::time::Duration::from_secs(5))
+        .measurement_time(Duration::from_secs(5))
         .sample_size(20);
 
     let idx = build_index(5_000);
@@ -95,7 +93,7 @@ fn bench_filtered_search(c: &mut Criterion) {
         b.iter(|| {
             let q = random_vec();
             black_box(
-                idx.search_with_filter(&q, 10, |k: &u64| k % 2 == 0)
+                idx.search_with_filter(&q, 10, |k: &u64| k.is_multiple_of(2))
                     .unwrap(),
             );
         });
@@ -105,7 +103,7 @@ fn bench_filtered_search(c: &mut Criterion) {
         b.iter(|| {
             let q = random_vec();
             black_box(
-                idx.search_with_filter(&q, 10, |k: &u64| k % 10 == 0)
+                idx.search_with_filter(&q, 10, |k: &u64| k.is_multiple_of(10))
                     .unwrap(),
             );
         });

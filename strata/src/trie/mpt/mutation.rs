@@ -1,8 +1,10 @@
 use std::mem;
 
-use crate::trie::error::{Result, TrieError};
-use crate::trie::nibbles::Nibbles;
-use crate::trie::node::{Node, NodeCodec, NodeHandle};
+use crate::trie::{
+    error::{Result, TrieError},
+    nibbles::Nibbles,
+    node::{Node, NodeCodec, NodeHandle},
+};
 use sha3::{Digest, Keccak256};
 
 pub struct TrieMut {

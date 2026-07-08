@@ -4,13 +4,12 @@
 
 use std::ops::Bound;
 
-use crate::{
-    common::ende::{KeyEnDeOrdered, ValueEnDe},
-    common::error::Result,
+use crate::common::{
+    ende::{KeyEnDeOrdered, ValueEnDe},
+    error::Result,
 };
 
-use super::map::VerMap;
-use super::{BranchId, CommitId};
+use super::{BranchId, CommitId, map::VerMap};
 
 impl<K, V> VerMap<K, V>
 where

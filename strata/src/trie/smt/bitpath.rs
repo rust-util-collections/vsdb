@@ -7,8 +7,7 @@
 //! than 4-bit nibbles.
 //!
 
-use std::cmp;
-use std::fmt;
+use std::{cmp, fmt};
 
 /// Maximum number of bits a path can hold (a full 256-bit key hash).
 const MAX_BITS: usize = 256;

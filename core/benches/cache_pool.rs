@@ -1,4 +1,3 @@
-#![allow(warnings)]
 //! Q1 gate for the engine-level block-cache pool (shared-mem-pool RFC
 //! §10 Q1): measures SST-backed random point-reads under a bounded
 //! budget in the two load shapes that matter —
@@ -18,7 +17,7 @@
 //!      `cargo bench -p vsdb_core --bench cache_pool -- --baseline private`
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use rand::{Rng, RngExt};
+use rand::RngExt;
 use std::{hint::black_box, thread, time::Duration};
 use vsdb_core::{MapxRaw, Namespace};
 

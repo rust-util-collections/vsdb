@@ -49,7 +49,7 @@ use std::{
 };
 use vsdb_core::{
     basic::mapx_raw::{self, MapxRaw},
-    common::{RawBytes, vsdb_flush},
+    common::RawBytes,
 };
 
 type DagHead = DagMapRaw;
@@ -358,7 +358,8 @@ impl DagMapRaw {
     /// The prune is ordered as **merge → flush → re-parent → flush → clear**:
     /// nothing is cleared before the genesis holds the complete merged state
     /// and every surviving child has been re-pointed at it (the two
-    /// [`vsdb_flush`] barriers pin that ordering across the engine's
+    /// [`Namespace::flush`](crate::common::Namespace::flush) barriers, scoped
+    /// to this DAG's own namespace, pin that ordering across the engine's
     /// independently-recovered shards).  Because overlay reads resolve
     /// top-down, the in-place enrichment of the genesis is invisible through
     /// the head, so a crash (e.g. `kill -9` or power loss) at **any** point
@@ -420,17 +421,20 @@ impl DagMapRaw {
         self.prune_merge_into_genesis(&mut linebuf);
 
         // Barrier A: the merged genesis must be durable before any child
-        // is re-pointed at it.  Writes to different engine shards recover
-        // independently, so ordering across prefixes needs an explicit
-        // flush.
-        vsdb_flush();
+        // is re-pointed at it. Writes to different shards *within this
+        // DAG's namespace* recover independently, so ordering across
+        // prefixes needs an explicit flush — scoped to this namespace
+        // (a DAG never spans namespaces, see `new_in`), not the whole
+        // process: a transient flush failure in some unrelated open
+        // namespace must not be able to panic a prune() on a healthy one.
+        self.namespace().flush();
 
         // Phase 3: re-point the head's children at the merged genesis.
         let kept = self.prune_reparent_children(linebuf.last_mut().unwrap());
 
         // Barrier B: all pointer flips must be durable before the old
         // chain is torn down.
-        vsdb_flush();
+        self.namespace().flush();
 
         // Phases 4-5: clear the consumed nodes (head first, then
         // intermediates newest → oldest).
@@ -653,31 +657,55 @@ impl DagMapRaw {
                 .collect::<Vec<_>>()
         };
 
-        for (id, _) in dropped_children.iter() {
-            self.children.remove(id);
-        }
-
-        for (_, mut child) in dropped_children.into_iter() {
+        // Destroy each owned child fully — `destroy()` clears it (and its
+        // descendants) before removing its own registry entry — and only
+        // THEN drop the index entry here. Removing every entry upfront
+        // (the previous ordering) let a crash strand not-yet-destroyed
+        // children with fully intact data and no registry path back to
+        // them; per-child destroy-then-drop keeps every not-yet-processed
+        // entry discoverable through this still-intact registry.
+        for (id, mut child) in dropped_children.into_iter() {
             // Only destroy children this node actually owns (or parentless
             // residue); an entry whose child now lives under a different
             // parent is a stale index copy left by an interrupted
-            // multi-step operation — dropping the entry above suffices.
+            // multi-step operation — dropping the entry below suffices.
             if Self::owned_or_residue(self_id, &child) {
                 child.destroy();
             }
+            self.children.remove(&id);
         }
     }
 
     /// Destroys this node and all its **owned** descendant children,
     /// clearing all data.
     ///
-    /// If this node is attached to a parent, it first removes its own child
-    /// entry from the parent's `children` collection, then persistently
-    /// nulls its own parent slot.  Because both the data clearing and the
+    /// If this node is attached to a parent, it persistently nulls its own
+    /// parent slot and clears its data and descendants **first**, and only
+    /// as the **last** step removes its own child entry from the parent's
+    /// `children` collection. Because both the data clearing and the
     /// parent unlink are persisted, **every** handle of this node —
     /// including clones taken earlier and handles later restored via
     /// [`from_meta`](Self::from_meta) — observes the destroyed state and
     /// can no longer resolve inherited reads through the parent chain.
+    ///
+    /// # Crash safety
+    ///
+    /// This ordering mirrors [`prune_clear_consumed`](Self::prune_clear_consumed)'s
+    /// self-healing pattern: nothing is unregistered from the parent's
+    /// registry until this node (and everything beneath it) is already
+    /// fully cleared. Each step is an independent write to a different
+    /// engine prefix that can recover independently after a crash — if the
+    /// registry removal happened *first* (the previous, unsafe ordering),
+    /// a crash right after it becomes durable but before the data/parent
+    /// clearing lands would make this node permanently unreachable via any
+    /// registry-driven walk while its storage remained fully allocated on
+    /// disk (a leak with no recovery path, since discovery is entirely
+    /// registry-driven). With the registry entry removed last, a crash at
+    /// any earlier point still leaves this node discoverable — and safely
+    /// reclaimable, since [`owned_or_residue`](Self::owned_or_residue)'s
+    /// residue arm accepts a `None` parent slot — through the parent's
+    /// still-intact registry entry, so a retried `destroy()` or a
+    /// subsequent `prune()` converges instead of leaking.
     ///
     /// The descendant walk follows the children registries but treats each
     /// child's own parent slot as the ownership truth: an entry whose child
@@ -687,16 +715,12 @@ impl DagMapRaw {
     #[inline(always)]
     pub fn destroy(&mut self) {
         let self_id = self.instance_id();
-        if let Some(mut parent) = self.parent.get_value() {
-            let child_ids = parent
-                .children
-                .iter()
-                .filter_map(|(id, child)| (child.instance_id() == self_id).then_some(id))
-                .collect::<Vec<_>>();
-            for id in child_ids {
-                parent.children.remove(id);
-            }
-        }
+
+        // Captured now (before nulling below) so the parent's registry
+        // can be updated as the LAST step, once this node is fully
+        // cleared — see "Crash safety" above.
+        let parent = self.parent.get_value();
+
         // The parent slot is owned by this node (never shared with
         // siblings), so nulling it is a persistent, node-local unlink.
         *self.parent.get_mut() = None;
@@ -707,6 +731,21 @@ impl DagMapRaw {
         // cycle-guarded design used by `get()` and `prune_mainline`.
         // Each stack entry carries the instance ID of the registry owner
         // it was discovered under, for the ownership check on pop.
+        //
+        // Two passes, in this order, are required for the same crash
+        // safety reason as above: pass 1 clears every owned descendant's
+        // `data`/`parent` but leaves every `children` registry (including
+        // `self.children`) untouched, so the not-yet-visited tail of
+        // `stack` stays fully discoverable through its immediate
+        // ancestor's still-intact registry for the whole pass. Only once
+        // EVERY descendant's data is already gone does pass 2 clear the
+        // (by then purely cosmetic — no live data can be lost through
+        // them any more) children registries; interrupting pass 2 can
+        // leave stale-but-harmless entries pointing at already-empty
+        // nodes, never a loss. The previous single-pass version cleared
+        // each node's `children` immediately after reading it, so a
+        // crash between that clear and the next stack pop orphaned
+        // still-intact grandchildren with no recovery path.
         let mut seen = HashSet::new();
         seen.insert(self_id);
         let mut stack = self
@@ -714,8 +753,8 @@ impl DagMapRaw {
             .iter()
             .map(|(_, c)| (self_id, c))
             .collect::<Vec<_>>();
-        self.children.clear(); // optimize for recursive ops
 
+        let mut owned = Vec::new();
         while let Some((owner_id, mut node)) = stack.pop() {
             // Ownership FIRST, duplicate-suppression second: a foreign
             // entry (stale index copy owned by a different live parent)
@@ -731,12 +770,33 @@ impl DagMapRaw {
             }
             let node_id = node.instance_id();
             node.data.clear();
-            stack.extend(node.children.iter().map(|(_, c)| (node_id, c)));
-            node.children.clear();
             // Break the upward traversal link so a handle to any
             // descendant cannot walk through the cleared node to
             // ancestors above the destroyed subtree.
             *node.parent.get_mut() = None;
+            stack.extend(node.children.iter().map(|(_, c)| (node_id, c)));
+            owned.push(node);
+        }
+
+        // Pass 2: every owned descendant's data is already gone, so
+        // clearing the children registries in any order — even if
+        // interrupted — can no longer lose live data.
+        self.children.clear();
+        for mut node in owned {
+            node.children.clear();
+        }
+
+        // Only now — after `self` and everything beneath it is fully
+        // cleared — unregister `self` from the parent's registry.
+        if let Some(mut parent) = parent {
+            let child_ids = parent
+                .children
+                .iter()
+                .filter_map(|(id, child)| (child.instance_id() == self_id).then_some(id))
+                .collect::<Vec<_>>();
+            for id in child_ids {
+                parent.children.remove(id);
+            }
         }
     }
 

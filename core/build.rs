@@ -1,6 +1,8 @@
+use std::env::var;
+
 fn main() {
     // C++ linker flags are only needed for the RocksDB backend.
-    if std::env::var("CARGO_FEATURE_BACKEND_ROCKSDB").is_err() {
+    if var("CARGO_FEATURE_BACKEND_ROCKSDB").is_err() {
         return;
     }
 
@@ -10,8 +12,8 @@ fn main() {
     // Without it, any binary target (test, bench, bin) fails to link
     // C++ standard library symbols.  We patch it up here.
     println!("cargo:rerun-if-env-changed=ROCKSDB_LIB_DIR");
-    if std::env::var("ROCKSDB_LIB_DIR").is_ok() {
-        let target = std::env::var("TARGET").unwrap_or_default();
+    if var("ROCKSDB_LIB_DIR").is_ok() {
+        let target = var("TARGET").unwrap_or_default();
         if target.contains("musl") {
             // On musl (Alpine Linux) platforms, we do not use the cached rocksdb lib.
             // So we don't need to link `stdc++` manually.

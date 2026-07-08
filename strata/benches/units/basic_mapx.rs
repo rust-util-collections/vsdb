@@ -1,7 +1,10 @@
-use criterion::{Criterion, black_box, criterion_group};
-use rand::{Rng, RngExt};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use vsdb::{ValueEnDe, basic::mapx::Mapx};
+use criterion::{Criterion, criterion_group};
+use rand::RngExt;
+use std::{
+    hint::black_box,
+    sync::atomic::{AtomicUsize, Ordering},
+};
+use vsdb::basic::mapx::Mapx;
 
 fn read_write(c: &mut Criterion) {
     let mut group = c.benchmark_group("vsdb::mapx / sequential");
