@@ -2,6 +2,59 @@
 
 This document provides examples for selected public APIs in the `vsdb` crate.
 
+## Namespaces
+
+All collection types support namespaces — independently-rooted engine instances
+for physical placement, hard isolation, and O(1) bulk reclaim.  Everyday code
+stays parameterless; placement is expressed through the object graph.
+
+```rust
+use vsdb::{Namespace, NamespaceOpts, basic::mapx::Mapx, basic::mapx_ord::MapxOrd};
+
+// ---- Everyday tier: zero parameters, no names, no paths ----
+
+let cold = Namespace::create().unwrap();
+
+// Ambient placement: everything created inside scope() lands in `cold`.
+let archive: Mapx<u64, String> = cold.scope(|| Mapx::new());
+
+// Co-location: "put this data together with that data".
+let index = Mapx::<u64, u64>::new_in(&archive.namespace());
+assert_eq!(archive.namespace().id(), index.namespace().id());
+
+// ---- Persist and recover via InstanceId ----
+
+let id = archive.save_meta().unwrap();
+// id.to_string() => "42@1"  (map 42 in namespace 1)
+let restored: Mapx<u64, String> = Mapx::from_meta(id).unwrap();
+
+// Bare u64 from pre-namespace code still works — targets the default namespace.
+let old_id: u64 = archive.instance_id().into();
+let from_old: Mapx<u64, String> = Mapx::from_meta(old_id).unwrap();
+
+// ---- Advanced tier (opt-in): explicit volume, shards, budget ----
+
+let fast = Namespace::create_with(NamespaceOpts {
+    path: Some("/mnt/nvme/vsdb".into()),
+    shards: 8,
+    mem_budget_mb: 2048,
+}).unwrap();
+let hot: MapxOrd<i32, String> = MapxOrd::new_in(&fast);
+
+// Admin functions (from vsdb_core, re-exported by vsdb):
+//   vsdb_ns_list() -> Result<Vec<NsInfo>>
+//   vsdb_ns_close(id) -> Result<()>
+//   vsdb_ns_destroy(id) -> Result<()>
+//   vsdb_ns_relocate(id, new_path) -> Result<()>
+```
+
+Key rules:
+- `Mapx::new()` targets the implicit default namespace — existing code needs zero changes.
+- A composite structure (`VerMap`, `SlotDex`, …) always lives wholly inside one namespace.
+- Cross-namespace atomic transactions do not exist (separate WALs).
+- Reads, writes, and deserialization always route via the handle's own namespace —
+  ambient scope affects creation only.
+
 ## Mapx
 
 `Mapx` is a hash map-like data structure that stores key-value pairs.

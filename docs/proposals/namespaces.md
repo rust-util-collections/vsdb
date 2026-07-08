@@ -489,26 +489,18 @@ registries), which already works today. Consequences:
   removed; integration binaries serialize theirs behind a `Once`) and a
   few exact-value global-allocator assertions (made race-tolerant).
   `--test-threads=1` dropped.
-- **P3 (optional, separate RFC)**: in-process `close()` — designed in
-  [ns-close.md](./ns-close.md) (ownership-inverted engine lifecycle: no
-  `Arc<DB>` migration needed after all; both `Box::leak` sites deleted,
-  lifetime-honest borrows, refuse-don't-poison `vsdb_ns_close`); whole-ns
-  `merge`; cross-ns map-copy convenience helpers.
-  *Post-implementation review narrowed the motivation*: its ONLY remaining
-  driver is resource bounding at very large open-namespace counts
-  (thousands — each open ns parks `shards` condvar-waiting compaction
-  threads plus fds; idle cost is a few KB per thread, so dozens-to-hundreds
-  of namespaces need nothing). Runtime relocation ("close → move files →
-  reopen without restart") is rejected outright — moving live database
-  files is operationally unacceptable; `relocate` stays what it is: an
-  offline registry-pointer repair after an operator has moved the data.
-  In-process rotation-destroy is served well enough by restart windows.
-  `destroy` itself stays (deliberately, despite ns skeletons being cheap):
-  it is the O(1) bulk-reclaim primitive for time-partitioned data
-  (tombstone + compaction reclaim is hours and write-amplification), and
-  the only registry-consistent removal path — a manual `rm -rf` of a root
-  with a live registry entry would silently resurrect as an EMPTY
-  namespace on the next `open(id)`. No further namespace self-management
+- **P3 (remaining work)**: whole-ns `merge`; cross-ns map-copy convenience
+  helpers. In-process `close()` originally targeted P3 but shipped in
+  v16.1.0 ([ns-close.md](./ns-close.md)) — the ownership inversion
+  removed both `Box::leak` sites, engines are owned by their `Arc<NsInner>`,
+  and `vsdb_ns_close` provides the in-process epoch-rotation loop
+  (`create → fill → close → destroy`) without restart. Runtime
+  relocation ("close → move files → reopen without restart") is
+  rejected — moving live database files is operationally unacceptable;
+  `relocate` stays what it is: an offline registry-pointer repair after
+  an operator has moved the data. `destroy` remains the O(1) bulk-reclaim
+  primitive for time-partitioned data (tombstone + compaction reclaim is
+  hours and write-amplification). No further namespace self-management
   APIs will be added.
 
 ---
@@ -546,15 +538,16 @@ registries), which already works today. Consequences:
 
 ## 8. Test-Suite Impact
 
-Per-test `Namespace::create()?.scope(..)` — parameterless, wrapped by a
-harness helper so test bodies keep their plain `new()` calls — gives
-each test a private
-engine, meta dir, and caches, with globally-unique prefixes (§4.6) — no
-cross-test bleed even within one process. Remaining truly-global surfaces (`vsdb_set_base_dir` freeze
-semantics, `VSDB_MEM_BUDGET_MB` parsing, default-ns singletons) keep a small
-serial test group. Parallelism math to validate during P2: N concurrent test
-namespaces × shards × write-buffer sizing must fit CI memory — hence
-`shards: 1` + minimal budgets as the test-namespace default.
+Globally-unique prefixes (§4.6) make test data disjoint by construction —
+no per-test namespace ceremony needed; test bodies keep their plain
+`new()` calls and the prefix allocator guarantees zero cross-test bleed.
+The actual blockers to parallel execution were env mutation
+(`vsdb_set_base_dir` per lib test — removed; integration binaries
+serialize theirs behind a `Once`) and a few exact-value global-allocator
+assertions (made race-tolerant). `--test-threads=1` was dropped in
+v16.0.2. Tests must not assert on cross-test global state (exact
+allocator values, registry sizes) and must serialize any
+`vsdb_set_base_dir` behind a `Once` (env mutation is unsound to race).
 
 ---
 
@@ -563,8 +556,10 @@ namespaces × shards × write-buffer sizing must fit CI memory — hence
 - **Cross-namespace atomic transactions** — separate WALs; physically
   impossible without a coordination layer. Document prominently. (Per-map
   atomicity is unaffected, C8.)
-- **In-process namespace close/reopen** — blocked on the `'static`→`Arc`
-  iterator refactor (C1); P3.
+- **In-process namespace close/reopen** — shipped in v16.1.0
+  ([ns-close.md](./ns-close.md)); the ownership inversion removed both
+  `Box::leak` sites, engines are owned by their `Arc<NsInner>`, and
+  `vsdb_ns_close` provides the in-process epoch-rotation loop.
 - **Whole-namespace merge** — the ID-reconciliation blocker is gone (§4.6:
   same-registry prefixes never collide), but the resumable crash-consistent
   bulk-copy protocol it needs is P3 scope; per-map copy suffices meanwhile.

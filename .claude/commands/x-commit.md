@@ -55,10 +55,11 @@ For EVERY finding from Task 1 (CRITICAL, HIGH, MEDIUM, or LOW):
    (all warnings are errors). Fix any failures at the source (never `#[allow]`)
    and re-run until clean.
 3. If the changes touch core logic (not just docs/comments), run the affected
-   subsystem's tests: `cargo test -p vsdb <module> --release -- --test-threads=1`
-   (e.g., `cargo test -p vsdb slotdex --release -- --test-threads=1`).
-   Tests MUST run single-threaded due to global MMDB state.
-   Clean test state before and after: `rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing`.
+   subsystem's tests: `cargo test -p vsdb <module> --release`
+   (e.g., `cargo test -p vsdb slotdex --release`).
+   Tests run in parallel (v16.0.2+); test data stays disjoint via globally-unique
+   prefixes. Clean test state before and after:
+   `rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing`.
 
 ### Task 4: Bump Patch Version — MANDATORY
 
@@ -66,7 +67,7 @@ For EVERY finding from Task 1 (CRITICAL, HIGH, MEDIUM, or LOW):
 
 1. Run `git diff HEAD --name-only` — if it lists any `.rs` file, a version bump is required. Skip this task ONLY if every changed file is a non-code file (`.md`, `.toml` version-only, etc.).
 2. Read `core/Cargo.toml` line 3 to get the current `version = "X.Y.Z"`.
-3. Compute `NEW = X.Y.(Z+1)` (e.g., `13.4.0` → `13.4.1`).
+3. Compute `NEW = X.Y.(Z+1)` (e.g., `16.1.1` → `16.1.2`).
 4. Update these three locations with the NEW version:
    - `core/Cargo.toml` — `version = "NEW"`
    - `strata/Cargo.toml` — `version = "NEW"`
