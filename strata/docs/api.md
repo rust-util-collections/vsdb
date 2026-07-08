@@ -62,6 +62,12 @@ Key rules:
 - Cross-namespace atomic transactions do not exist (separate WALs).
 - Reads, writes, and deserialization always route via the handle's own namespace —
   ambient scope affects creation only.
+- Memory budgets are static and per-engine: the default namespace auto-sizes
+  from the host/cgroup (¾-derated), every other namespace defaults to a fixed
+  512 MB. Deployments that open many namespaces should pin the default engine
+  with `VSDB_MEM_BUDGET_MB` (applied verbatim) and give each namespace an
+  explicit `NamespaceOpts { mem_budget_mb, .. }` so the sum stays inside the
+  process's memory line.
 
 ## Mapx
 
