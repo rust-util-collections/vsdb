@@ -19,7 +19,7 @@ use crate::{
         ende::{KeyEnDeOrdered, ValueEnDe},
         error::Result,
     },
-    versioned::{BranchId, CommitId, diff::DiffEntry, map::VerMap},
+    versioned::{BranchId, Commit, CommitId, diff::DiffEntry, map::VerMap},
 };
 
 /// Read-only handle bound to a specific branch.
@@ -76,12 +76,12 @@ where
     }
 
     /// Returns the head commit on this branch, if any.
-    pub fn head_commit(&self) -> Result<Option<crate::versioned::Commit>> {
+    pub fn head_commit(&self) -> Result<Option<Commit>> {
         self.map.head_commit(self.id)
     }
 
     /// Walks the first-parent commit history from head to root.
-    pub fn log(&self) -> Result<Vec<crate::versioned::Commit>> {
+    pub fn log(&self) -> Result<Vec<Commit>> {
         self.map.log(self.id)
     }
 
@@ -148,12 +148,12 @@ where
     }
 
     /// Returns the head commit on this branch, if any.
-    pub fn head_commit(&self) -> Result<Option<crate::versioned::Commit>> {
+    pub fn head_commit(&self) -> Result<Option<Commit>> {
         self.map.head_commit(self.id)
     }
 
     /// Walks the first-parent commit history from head to root.
-    pub fn log(&self) -> Result<Vec<crate::versioned::Commit>> {
+    pub fn log(&self) -> Result<Vec<Commit>> {
         self.map.log(self.id)
     }
 

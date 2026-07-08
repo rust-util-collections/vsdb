@@ -93,6 +93,13 @@ where
     /// Hydrated from the store on open; level 0 (per-slot counts) is
     /// walked on disk and never cached.
     levels: Vec<Level<S>>,
+    /// In-memory count of the committed level-0 rows (distinct populated
+    /// slots). Consulted only by the "no tiers yet" growth gate, so it is
+    /// kept exact whenever `levels` is empty (seeded on open / re-seeded
+    /// when tier truncation empties `levels`; both scans are bounded —
+    /// a tier-less committed index never exceeds `tier_capacity + 1`
+    /// slot rows) and may go stale while tiers exist.
+    slot_rows: EntryCnt,
     _p: PhantomData<K>,
 }
 
@@ -341,6 +348,7 @@ where
             swap_order,
             total_cache: 0,
             levels: vec![],
+            slot_rows: 0,
             _p: PhantomData,
         }
     }
@@ -374,12 +382,25 @@ where
             levels.push(cache);
         }
 
+        // The growth gate reads `slot_rows` only while `levels` is empty;
+        // seed it exactly for that state (bounded: a tier-less committed
+        // index holds at most `tier_capacity + 1` slot rows). With tiers
+        // present the mirror is unused until a truncation re-seeds it.
+        let slot_rows = if levels.is_empty() {
+            let lo = bound_to_raw(Bound::Included(level_key(0, &S::MIN)));
+            let hi = bound_to_raw(Bound::Excluded(level_prefix(1)));
+            store.range((lo, hi)).count() as EntryCnt
+        } else {
+            0
+        };
+
         Self {
             store,
             tier_capacity,
             swap_order,
             total_cache,
             levels,
+            slot_rows,
             _p: PhantomData,
         }
     }
@@ -481,6 +502,9 @@ where
         for (i, floor, v) in bumps {
             self.levels[i].buckets.insert(floor, v);
         }
+        if 0 == slot_cnt {
+            self.slot_rows += 1;
+        }
         self.total_cache += 1;
 
         Ok(())
@@ -522,13 +546,21 @@ where
         let mut grown: Vec<Level<S>> = vec![];
         // Cache deltas: (level_idx, floor) -> new count, applied on success.
         let mut bumps: BTreeMap<(usize, S), EntryCnt> = BTreeMap::new();
+        // Level-0 rows newly staged by earlier groups of this batch:
+        // keeps the no-tiers growth gate in step with serial cadence.
+        let mut pending_slot_rows: EntryCnt = 0;
         let mut total_added: EntryCnt = 0;
 
         for (slot, ks) in groups {
             // Same growth cadence as serial `insert`: one capacity check
             // per touched slot (a slot adds at most one new floor entry
             // per level, so per-key checks are redundant).
-            if let Some(lv) = self.stage_level_growth_over(&mut staged, &grown, &bumps) {
+            if let Some(lv) = self.stage_level_growth_over(
+                &mut staged,
+                &grown,
+                &bumps,
+                pending_slot_rows,
+            ) {
                 grown.push(lv);
             }
 
@@ -547,6 +579,9 @@ where
 
             let slot_cnt = self.slot_entry_cnt(&slot);
             staged.put(level_key(0, &slot), encode_cnt(slot_cnt + added).to_vec());
+            if 0 == slot_cnt {
+                pending_slot_rows += 1;
+            }
 
             for (i, lv) in self
                 .levels
@@ -582,6 +617,7 @@ where
         for ((i, floor), v) in bumps {
             self.levels[i].buckets.insert(floor, v);
         }
+        self.slot_rows += pending_slot_rows;
         self.total_cache += total_added;
 
         Ok(())
@@ -655,6 +691,7 @@ where
             .commit(&mut self.store)
             .expect("vsdb: SlotDex remove batch commit failed");
 
+        let had_tiers = !self.levels.is_empty();
         self.levels.truncate(kept);
         for (i, floor, v) in decs {
             match v {
@@ -665,6 +702,19 @@ where
                     self.levels[i].buckets.remove(&floor);
                 }
             }
+        }
+        if 0 == kept && had_tiers {
+            // Truncation just re-entered the tier-less state, where the
+            // growth gate relies on `slot_rows` being exact — re-seed it
+            // from the committed rows. Bounded: dropping level 1 required
+            // it to hold at most one bucket, i.e. every populated slot
+            // lies within one `tier_capacity`-wide window.
+            self.slot_rows = self
+                .level0_range(Bound::Unbounded, Bound::Unbounded)
+                .count() as EntryCnt;
+        } else if slot_cnt <= 1 {
+            // This remove deleted the slot's level-0 row.
+            self.slot_rows = self.slot_rows.saturating_sub(1);
         }
         self.total_cache = self.total_cache.saturating_sub(1);
     }
@@ -677,6 +727,7 @@ where
     pub fn clear(&mut self) {
         self.store.clear();
         self.levels.clear();
+        self.slot_rows = 0;
         self.total_cache = 0;
     }
 
@@ -689,16 +740,20 @@ where
     /// stage its rows. Returns the new level's cache; the caller pushes
     /// it onto `self.levels` after the batch commits.
     fn stage_level_growth(&self, staged: &mut StagedRows) -> Option<Level<S>> {
-        self.stage_level_growth_over(staged, &[], &BTreeMap::new())
+        self.stage_level_growth_over(staged, &[], &BTreeMap::new(), 0)
     }
 
     /// Growth check that also sees levels grown earlier in the same
     /// (not-yet-committed) bulk operation, plus pending bucket updates.
+    /// `pending_slot_rows` is the number of level-0 rows staged earlier
+    /// in the same operation (0 outside `insert_batch`), so a single
+    /// bulk load promotes tiers mid-batch exactly like serial inserts.
     fn stage_level_growth_over(
         &self,
         staged: &mut StagedRows,
         grown: &[Level<S>],
         bumps: &BTreeMap<(usize, S), EntryCnt>,
+        pending_slot_rows: EntryCnt,
     ) -> Option<Level<S>> {
         let n = self.levels.len() + grown.len();
         let new_level_no = n as u8 + 1;
@@ -723,17 +778,18 @@ where
             }
         } else {
             // No tiers yet: level 0 acts as the current "top" tier — gate
-            // on ITS bucket count exactly like the branch above gates on
-            // `view.len()`, instead of unconditionally promoting on the
-            // very first insert regardless of `tier_capacity`.
-            let level0_rows: Vec<_> = self
-                .level0_range(Bound::Unbounded, Bound::Unbounded)
-                .map(|(rk, rv)| decode_level_row::<S>(&rk, &rv))
-                .collect();
-            if level0_rows.len() as i128 <= self.tier_capacity.as_i128() {
+            // on ITS row count exactly like the branch above gates on
+            // `view.len()`. The count is O(1): the committed mirror
+            // (`slot_rows`, exact while tier-less) plus the rows staged
+            // earlier in this same operation. On promotion, build the new
+            // level from the merged (committed ⊕ staged) level-0 stream,
+            // so counts staged by a bulk load are folded in correctly.
+            let rows = self.slot_rows + pending_slot_rows;
+            if rows as i128 <= self.tier_capacity.as_i128() {
                 return None;
             }
-            for (slot, cnt) in level0_rows {
+            for (rk, rv) in staged.scan_prefix(&self.store, &level_prefix(0)) {
+                let (slot, cnt) = decode_level_row::<S>(&rk, &rv);
                 let floor = slot.floor_align(&newtop.floor_base);
                 *newtop.buckets.entry(floor).or_insert(0) += cnt;
             }

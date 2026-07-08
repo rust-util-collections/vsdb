@@ -218,6 +218,9 @@ impl DagMapRaw {
     /// cross-key side effects — only one such operation at a time.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
+        // SAFETY: forwards this fn's `unsafe` contract — the caller
+        // guarantees no concurrent writes to the same key (and only one
+        // structural mutation at a time), per the doc comment above.
         unsafe {
             Self {
                 data: self.data.shadow(),

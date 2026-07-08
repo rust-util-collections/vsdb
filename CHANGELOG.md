@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v16.3.2]
+
+Post-v16.3.1 review fixes (the reviewed commit was never published):
+the new SlotDex tier-capacity gate is now O(1) and bulk-load-aware,
+plus style/doc alignment. mmdb upgraded to v4.2. No on-disk format
+changes.
+
+### Changed
+
+- **mmdb upgraded to v4.2.**
+
+### Fixed
+
+- **`SlotDex` bulk loads grow tiers mid-batch**: v16.3.1's "no tiers yet"
+  capacity gate counted only *committed* level-0 rows, which do not advance
+  inside a single `insert_batch` — one bulk load of N ≫ `tier_capacity`
+  distinct slots into a fresh index built **zero** tier levels, silently
+  degrading every subsequent paged/count query to the O(N) level-0 walk
+  (persisting across reopen, never healing on a read-mostly index). The gate
+  now also counts rows staged earlier in the same batch and, on promotion,
+  builds the new level from the merged committed ⊕ staged level-0 stream —
+  restoring exact serial-`insert` cadence, as the batch-equivalence test now
+  verifies with a single whole-workload batch.
+- **`SlotDex` growth gate is O(1)**: the same v16.3.1 gate re-scanned (and
+  materialized) every committed level-0 row on each insert while the index
+  was tier-less. The gate now reads `slot_rows`, an in-memory mirror of the
+  committed level-0 row count, maintained on each mutation's 0↔1 slot-row
+  transition and re-derived from committed rows whenever the index (re)enters
+  the tier-less state — at open (`hydrate`) and after `remove`'s tier
+  truncation, both provably bounded scans.
+
+### Style
+
+- Hoisted repeated inline paths to imports (`Commit` in
+  `versioned/handle.rs`, `VSDB` in `engine/mmdb.rs`); added the missing
+  `// SAFETY:` comment on `DagMapRaw::shadow()`'s inner unsafe block;
+  updated `dagmap.md` INV-DG6 to the namespace-scoped flush barriers.
+
 ## [v16.3.1]
 
 Full-codebase audit: 8 confirmed correctness/crash-safety findings fixed

@@ -16,6 +16,32 @@
 
 ## Resolved
 
+### [HIGH] slotdex: `insert_batch` on a tier-less index never promotes tiers within the batch
+- **Where**: `strata/src/slotdex/mod.rs` (`stage_level_growth_over` "no tiers yet" branch, `insert_batch`)
+- **What**: The capacity gate added by the v16.3.1 audit fix counted only *committed* level-0 rows (`level0_range` reads `self.store` directly; `bumps` only carries level ≥ 1 keys), while nothing commits until the end of the batch. A single `insert_batch` of N ≫ `tier_capacity` distinct slots into a fresh (or tier-truncated) index therefore built **zero** tier levels — on exactly its documented workload ("bulk loads: imports, index rebuilds") — leaving every paged/count query on the O(N) level-0 walk. The state persisted across `save_meta`/`from_meta` (hydrate has no rebuild path) and never healed on a read-mostly index. Contradicted the in-code "Same growth cadence as serial `insert`" claim; the chunked equivalence test masked it (inter-chunk commits healed the tiers).
+- **Resolution** *(post-v16.3.1 review)*: `stage_level_growth_over` takes a `pending_slot_rows` parameter (level-0 rows staged by earlier groups of the same batch) and gates on `slot_rows + pending_slot_rows`; on promotion the new level is built from the merged committed ⊕ staged level-0 stream via `StagedRows::scan_prefix`, so mid-batch tier growth is byte-identical to serial cadence. `insert_batch_equivalence_with_serial` now also drives a third instance with the whole workload as ONE batch and asserts tier parity plus `!levels.is_empty()`; added `bulk_load_tiers_persist_across_reopen` (save/reload round trip keeps the batch-built tiers).
+
+### [MEDIUM] slotdex: no-tiers growth gate re-scanned all committed level-0 rows on every insert
+- **Where**: `strata/src/slotdex/mod.rs` (`stage_level_growth_over` "no tiers yet" branch)
+- **What**: The same v16.3.1 gate implemented its count as `level0_range(Unbounded, Unbounded).map(decode).collect::<Vec<_>>()` on every growth check — an engine-iterator scan + per-row decode + Vec materialization per insert while `levels` is empty (fresh index below capacity, or after `remove()`'s truncation cascade). Bounded by ~`tier_capacity + 1` rows in legitimate serial states, but per-insert-forever for below-capacity indexes and unbounded for large-capacity configs (the regression test itself models `tier_capacity = 1_000_000`).
+- **Resolution** *(post-v16.3.1 review)*: added a `slot_rows` in-memory mirror of the committed level-0 row count — O(1) gate reads. Maintained on every mutation's 0→1/1→0 slot-row transition (`insert`, `insert_batch`, `remove`, `clear`); seeded exactly by `hydrate` when (and only when) the index opens tier-less (bounded scan: a legitimate tier-less committed index holds ≤ `tier_capacity + 1` slot rows); re-seeded by `remove` when tier truncation re-enters the tier-less state (bounded: dropping level 1 requires ≤ 1 bucket ⇒ all slots within one capacity-wide window). Crash-safe by construction: the mirror is derived, never persisted, and rebuilt from committed rows on open. Added `growth_gate_survives_tier_truncation`.
+
+### [LOW] versioning: 4× inline `crate::versioned::Commit` in handle.rs
+- **Where**: `strata/src/versioned/handle.rs` (`Branch::head_commit/log`, `BranchMut::head_commit/log`)
+- **Resolution** *(post-v16.3.1 review)*: added `Commit` to the existing `use crate::{… versioned::{…}}` group; all four signatures now use the imported name.
+
+### [LOW] engine: 5× inline `crate::common::VSDB` in mmdb.rs
+- **Where**: `core/src/common/engine/mmdb.rs` (`prefix_ceiling_next` lib path + 4 uses in `mod tests`)
+- **Resolution** *(post-v16.3.1 review)*: added `VSDB` to the top-level `use crate::common::{…}` group (tests inherit via `use super::*`); all five uses now reference the imported name.
+
+### [LOW] dagmap: inner `unsafe` block in `DagMapRaw::shadow()` lacked a `// SAFETY:` comment
+- **Where**: `strata/src/dagmap/raw/mod.rs` (`shadow()`)
+- **Resolution** *(post-v16.3.1 review)*: added the standard forwarding comment (mirroring `dagmap/rawkey/mod.rs`): the caller guarantees no concurrent same-key writes and at most one structural mutation at a time, per the method's `# Safety` doc.
+
+### [LOW] doc: dagmap.md INV-DG6 still referenced the removed global `vsdb_flush()` barriers
+- **Where**: `.claude/docs/patterns/dagmap.md` (INV-DG6 Check clause)
+- **Resolution** *(post-v16.3.1 review)*: updated to `self.namespace().flush()` with the scoping rationale (a composite never spans namespaces), matching the v16.3.1 code change in `prune_mainline`.
+
 ### [HIGH] engine: `reserve_recovered_prefix` permanently leaks entries into `RECOVERED_PREFIXES`
 - **Where**: `core/src/common/engine/mmdb.rs` (`reserve_recovered_prefix`, `alloc_prefix_candidate`, `PENDING_WINDOWS`)
 - **Resolution** *(full-codebase audit)*: `PENDING_WINDOWS`' value changed from a static `(batch_start, batch_end)` range to a `PendingWindow = (Arc<AtomicU64>, u64)` — a live, shared cursor plus the batch end. The cursor is updated on every local issuance (both the thread-local fast path and on each new batch claim, still inside the `PENDING_WINDOWS` write lock alongside `GLOBAL_COUNTER.fetch_add` so readers never observe a mismatched counter/cursor pair). `reserve_recovered_prefix` now checks `prefix >= cursor.load(Acquire) && prefix < end` instead of blind `(start..end)` range membership, so an already-issued value in a still-open batch is correctly recognized as never-recurring and is no longer reserved. Added `reserve_recovered_prefix_ignores_already_issued_in_window_value` regression test (white-box, inside `mmdb.rs`'s own test module) plus fixed the one test directly constructing the old tuple shape.

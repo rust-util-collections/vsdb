@@ -533,12 +533,16 @@ fn first_inserts_within_capacity_create_no_premature_tier() {
 /// `insert_batch` must be observationally identical to per-key `insert`,
 /// across container promotion, tier growth, duplicates, and both slot
 /// orders. Compare a batch-built dex against a serially built one on
-/// every read surface.
+/// every read surface — both chunked (batch boundaries mid-slot) and as
+/// one single bulk load (regression: the no-tiers growth gate used to
+/// see only committed rows, so a single batch into a fresh index never
+/// promoted any tier, leaving every query on the level-0 slow path).
 #[test]
 fn insert_batch_equivalence_with_serial() {
     for swap_order in [false, true] {
         let mut serial: SlotDex<u64, u64> = SlotDex::new(8, swap_order);
         let mut batched: SlotDex<u64, u64> = SlotDex::new(8, swap_order);
+        let mut bulk: SlotDex<u64, u64> = SlotDex::new(8, swap_order);
 
         // Mixed workload: hot slot 3 crosses the inline-container
         // threshold (promotion), 300 distinct slots force tier growth,
@@ -560,9 +564,15 @@ fn insert_batch_equivalence_with_serial() {
         for chunk in ops.chunks(17) {
             batched.insert_batch(chunk.iter().copied()).unwrap();
         }
+        // The whole workload as ONE batch: tier growth must happen
+        // mid-batch, exactly as if the pairs were inserted serially.
+        bulk.insert_batch(ops.iter().copied()).unwrap();
 
         assert_eq!(serial.total(), batched.total());
         assert_eq!(serial.levels.len(), batched.levels.len());
+        assert_eq!(serial.total(), bulk.total());
+        assert_eq!(serial.levels.len(), bulk.levels.len());
+        assert!(!bulk.levels.is_empty(), "bulk load must build tiers");
         let total = serial.total();
         for reverse in [false, true] {
             let mut off = 0u32;
@@ -571,6 +581,11 @@ fn insert_batch_equivalence_with_serial() {
                     serial.get_entries_by_page(50, off, reverse),
                     batched.get_entries_by_page(50, off, reverse),
                     "page {off} reverse={reverse} swap_order={swap_order}"
+                );
+                assert_eq!(
+                    serial.get_entries_by_page(50, off, reverse),
+                    bulk.get_entries_by_page(50, off, reverse),
+                    "bulk page {off} reverse={reverse} swap_order={swap_order}"
                 );
                 off += 1;
             }
@@ -583,7 +598,68 @@ fn insert_batch_equivalence_with_serial() {
             serial.entry_cnt_within_two_slots(0, 150),
             batched.entry_cnt_within_two_slots(0, 150)
         );
+        assert_eq!(
+            serial.total_by_slot(Some(2), Some(5)),
+            bulk.total_by_slot(Some(2), Some(5))
+        );
+        assert_eq!(
+            serial.entry_cnt_within_two_slots(0, 150),
+            bulk.entry_cnt_within_two_slots(0, 150)
+        );
     }
+}
+
+/// Regression: tiers built inside one `insert_batch` must survive a
+/// `save_meta`/`from_meta` round trip — `hydrate` has no rebuild path,
+/// so a bulk-loaded index that persisted without tier rows would be
+/// stuck on the level-0 slow path forever.
+#[test]
+fn bulk_load_tiers_persist_across_reopen() {
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    db.insert_batch((0u64..100).map(|i| (i, i))).unwrap();
+    assert!(!db.levels.is_empty());
+    let levels = db.levels.len();
+
+    let id = db.save_meta().unwrap();
+    let db2: SlotDex<u64, u64> = SlotDex::from_meta(id).unwrap();
+    assert_eq!(db2.levels.len(), levels);
+    assert_eq!(db2.total(), 100);
+    assert_eq!(
+        db2.get_entries_by_page(10, 3, false),
+        (30u64..40).collect::<Vec<_>>()
+    );
+}
+
+/// Regression: after `remove` truncates every tier away, the growth
+/// gate's committed-row mirror must be re-seeded so later inserts still
+/// promote at the same cadence as on a fresh instance.
+#[test]
+fn growth_gate_survives_tier_truncation() {
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    for i in 0u64..20 {
+        db.insert(i, i).unwrap();
+    }
+    assert!(!db.levels.is_empty());
+
+    // Remove down to a single slot, then remove that one too: the final
+    // remove sees a degenerate (single-bucket) top level, and the
+    // truncation cascade drops every tier.
+    for i in 1u64..20 {
+        db.remove(i, &i);
+    }
+    db.remove(0, &0);
+    assert!(db.levels.is_empty(), "tiers should be truncated away");
+    assert_eq!(db.total(), 0);
+
+    // Growing past capacity again must re-promote a tier.
+    for i in 100u64..120 {
+        db.insert(i, i).unwrap();
+    }
+    assert!(!db.levels.is_empty(), "growth gate must re-arm");
+    assert_eq!(
+        db.get_entries_by_page(30, 0, false),
+        (100u64..120).collect::<Vec<_>>()
+    );
 }
 
 #[test]

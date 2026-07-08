@@ -57,8 +57,9 @@ The head's per-node clear order is **parent → children → data**: once
 clearing starts, the head is parentless, so re-running prune is refused
 (early return) instead of re-folding against a half-cleared head.
 **Check**: Verify no `clear()`/parent-null precedes the merge+re-parent
-completion; verify the two `vsdb_flush()` barriers (cross-shard WALs recover
-independently); verify a crash at any phase boundary leaves genesis +
+completion; verify the two `self.namespace().flush()` barriers (scoped to the
+DAG's own engine — a composite never spans namespaces — with cross-shard WALs
+recovering independently); verify a crash at any phase boundary leaves genesis +
 surviving children value-exact (see the `prune_crash_*` tests).
 
 ## Common Bug Patterns

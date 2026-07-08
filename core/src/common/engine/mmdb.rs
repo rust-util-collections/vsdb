@@ -1,6 +1,6 @@
 use crate::common::{
     BatchTrait, GB, PREFIX_ALLOC_START, PREFIX_SIZE, Pre, PreBytes, RawKey, RawValue,
-    vsdb_freeze_base_dir, vsdb_get_base_dir,
+    VSDB, vsdb_freeze_base_dir, vsdb_get_base_dir,
 };
 use mmdb::{BidiIterator, BlockCachePool, CompressionType, DB, DbOptions, WriteBatch};
 use parking_lot::{Mutex, RwLock};
@@ -610,7 +610,7 @@ fn ensure_alloc_init() {
                 // and every other allocating thread is blocked on
                 // `PREFIX_ALLOC_LOCK` (held here) or sees the counter
                 // still zero.
-                LazyLock::force(&crate::common::VSDB);
+                LazyLock::force(&VSDB);
                 read_ceiling_file(&file)
                     .expect("vsdb: allocator ceiling read failed")
                     .expect("vsdb: default-engine migration must create the ceiling")
@@ -1729,7 +1729,7 @@ mod tests {
     /// to the mutex+hashset slow path forever.
     #[test]
     fn reserve_recovered_prefix_ignores_already_issued_in_window_value() {
-        let db = crate::common::VSDB.engine();
+        let db = VSDB.engine();
         let issued = db.alloc_prefix();
 
         assert!(
@@ -1750,7 +1750,7 @@ mod tests {
     /// alias two instances' key ranges.
     #[test]
     fn prefix_allocator_unique_and_monotonic_per_thread() {
-        let db = crate::common::VSDB.engine();
+        let db = VSDB.engine();
         let mut prev = db.alloc_prefix();
         assert!(prev >= PREFIX_ALLOC_START);
         for _ in 0..(2 * PREFIX_ALLOC_BATCH + 8) {
@@ -1771,7 +1771,7 @@ mod tests {
         let handles: Vec<_> = (0..THREADS)
             .map(|_| {
                 thread::spawn(move || {
-                    let db = crate::common::VSDB.engine();
+                    let db = VSDB.engine();
                     (0..per_thread)
                         .map(|_| db.alloc_prefix())
                         .collect::<Vec<_>>()
@@ -1801,7 +1801,7 @@ mod tests {
     /// exact equality between snapshots.
     #[test]
     fn prefix_allocator_persisted_ceiling_covers_issued() {
-        let db = crate::common::VSDB.engine();
+        let db = VSDB.engine();
         let persisted_ceiling = || -> Pre {
             read_ceiling_file(&ceiling_file_path())
                 .expect("ceiling read failed")
