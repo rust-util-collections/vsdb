@@ -16,6 +16,35 @@
 
 ## Resolved
 
+### [MEDIUM] namespace: `root_holds_dataset` validates structure, not content — a fabricated or partially-destroyed skeleton still bypasses `vsdb_ns_relocate`'s new check
+- **Where**: `core/src/common/engine/mmdb.rs` (`root_holds_dataset`), `core/src/common/namespace.rs` (`vsdb_ns_relocate`)
+- **Resolution**: The check now requires mmdb's `CURRENT` manifest anchor
+  inside every expected shard dir, not merely the dirs' existence.
+  `CURRENT` is exactly mmdb's own recover-vs-create test at open (absent ⇒
+  the shard is silently recreated fresh — the precise loss shape being
+  refused), so the guard now asks the semantically right question: "would
+  every shard take the *recover* path?". Zero false positives: the format
+  marker is written only after every shard opened, and each open creates
+  `CURRENT` — verified against mmdb source (`version_set.rs::open_with_cache`)
+  and empirically on a fresh zero-data namespace. Bare skeletons (marker +
+  empty shard dirs — a "prepared" volume, or a copy interrupted before any
+  shard content landed) are refused; pinned by a new fabricated-skeleton
+  arm in `namespace_lifecycle`. Doc comment, error message, and
+  `vsdb_ns_relocate`'s public doc were reworded to state exactly what is
+  (and is not) verified: which *dataset* lives there cannot be checked —
+  roots carry no namespace id — so moving the right data remains the
+  operator's documented contract, same trust boundary as `destroy`.
+
+### [LOW] namespace: `vsdb_ns_relocate` doesn't bounds-check the registered shard count before calling `root_holds_dataset`
+- **Where**: `core/src/common/namespace.rs` (`validated_shards`)
+- **Resolution**: The `1..=64` registry-damage guard was extracted from
+  `open_record_locked` into `validated_shards(rec)` (identical semantics at
+  both sites, unlike the deliberately-divergent DEFAULT_NS_ID guards) and
+  relocate now validates through it before probing the target — a corrupt
+  `shards == 0` fails loudly as registry damage instead of vacuously
+  passing `(0..0).all(..)` and degrading the dataset check to
+  marker-only.
+
 ### [HIGH] namespace: `vsdb_ns_relocate` accepts an unpopulated target, silently orphaning data
 - **Where**: `core/src/common/namespace.rs` (`vsdb_ns_relocate`), `core/src/common/engine/mmdb.rs` (`root_holds_dataset`)
 - **Resolution** *(post-v16.1.0 review)*: relocate now refuses a target that

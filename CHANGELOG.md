@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v16.1.1]
+
+Post-release audit fixes (registry: `docs/audit.md`).
+
+### Fixed
+
+- **`vsdb_ns_relocate` dataset check hardened**: the target must now
+  hold mmdb's `CURRENT` manifest anchor in every expected shard dir,
+  not merely the shard dirs themselves. `CURRENT` is exactly mmdb's
+  recover-vs-create test at open (absent ⇒ a shard is silently
+  recreated fresh), so the guard now asks the semantically right
+  question — "would every shard take the *recover* path?" — refusing
+  bare skeletons (a "prepared" volume, or a copy interrupted before
+  any shard content landed) in addition to empty dirs. Which *dataset*
+  lives there still cannot be verified (roots carry no namespace id);
+  moving the right data remains the operator's documented contract.
+- **Relocate validates the registered shard count**: the `1..=64`
+  registry-damage guard (previously only in the open path, now shared
+  via `validated_shards`) runs before the dataset probe — a corrupt
+  `shards == 0` fails loudly instead of vacuously passing the
+  per-shard checks and degrading the guard to marker-only.
+
 ## [v16.1.0]
 
 In-process namespace `close()` — the ownership-inverted engine

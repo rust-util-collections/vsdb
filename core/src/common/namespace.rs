@@ -676,13 +676,12 @@ impl Namespace {
     }
 }
 
-/// Opens the engine for `rec` and caches the handle. Caller holds
-/// [`REGISTRY_LOCK`] (serializes double-opens).
-fn open_record_locked(_base: &Path, rec: &NsRecord, root: &Path) -> Result<Namespace> {
-    // Registry entries are written pre-clamped, so an out-of-range
-    // count means corruption or hand-editing. Refuse cleanly here —
-    // `shards == 0` would otherwise reach `prefix % 0` (a panic) on
-    // the first routed operation.
+/// The record's shard count, bounds-checked. Registry entries are
+/// written pre-clamped, so an out-of-range count means corruption or
+/// hand-editing — refuse cleanly: `shards == 0` would otherwise reach
+/// `prefix % 0` (a release-mode panic) on the first routed operation,
+/// and would vacuously pass `root_holds_dataset`'s per-shard checks.
+fn validated_shards(rec: &NsRecord) -> Result<usize> {
     let shards = rec.shards as usize;
     if !(1..=64).contains(&shards) {
         return Err(ns_err(format!(
@@ -691,6 +690,13 @@ fn open_record_locked(_base: &Path, rec: &NsRecord, root: &Path) -> Result<Names
             rec.id, rec.shards
         )));
     }
+    Ok(shards)
+}
+
+/// Opens the engine for `rec` and caches the handle. Caller holds
+/// [`REGISTRY_LOCK`] (serializes double-opens).
+fn open_record_locked(_base: &Path, rec: &NsRecord, root: &Path) -> Result<Namespace> {
+    let shards = validated_shards(rec)?;
     let sizing = sizing_for(rec.mem_budget_mb.map(|v| v as usize));
     let engine = Engine::open_at(root, shards, sizing).map_err(VsdbError::from)?;
     let ns = Namespace(Arc::new(NsInner {
@@ -765,7 +771,11 @@ pub fn vsdb_ns_destroy(id: NsId) -> Result<()> {
 
 /// Re-points a namespace at a new root directory (e.g. after moving a
 /// volume). Updates the registry only — **moving the data is the
-/// operator's job**, done before calling this.
+/// operator's job**, done before calling this. A target that does not
+/// already hold an initialized dataset (format marker + per-shard
+/// engine anchors) is refused: repointing at it would durably orphan
+/// the real data behind a silent success. Whether it is the *right*
+/// dataset cannot be verified — roots carry no namespace id.
 ///
 /// The target must not be open in this process.
 pub fn vsdb_ns_relocate(id: NsId, new_path: impl AsRef<Path>) -> Result<()> {
@@ -788,14 +798,10 @@ pub fn vsdb_ns_relocate(id: NsId, new_path: impl AsRef<Path>) -> Result<()> {
         )));
     }
     let mut reg = load_registry()?;
-    let Some(rec_shards) = reg
-        .entries
-        .iter()
-        .find(|r| r.id == id)
-        .map(|r| r.shards as usize)
-    else {
+    let Some(rec) = reg.entries.iter().find(|r| r.id == id) else {
         return Err(ns_err(format!("namespace {id} is not registered")));
     };
+    let rec_shards = validated_shards(rec)?;
     // Validate against every OTHER root (skip the record being moved).
     let mut probe = reg.clone_without(id);
     validate_explicit_root(&base, &probe, new_path)?;
@@ -803,15 +809,17 @@ pub fn vsdb_ns_relocate(id: NsId, new_path: impl AsRef<Path>) -> Result<()> {
 
     // The registry only re-points; moving the data is the operator's
     // job — done BEFORE calling this. Repointing at a dir that does not
-    // hold this namespace's dataset (marker + exact shard dirs) would
-    // durably orphan the real data with zero errors: the next `open`
-    // would silently initialize a fresh, empty root. Refuse instead.
+    // hold an initialized dataset (marker + per-shard engine anchors)
+    // would durably orphan the real data with zero errors: the next
+    // `open` would silently initialize a fresh, empty root. Refuse
+    // instead. (Which dataset lives there cannot be verified — roots
+    // carry no namespace id; that part stays on the operator.)
     if !root_holds_dataset(new_path, rec_shards) {
         return Err(ns_err(format!(
-            "relocate target {} does not contain namespace {id}'s \
-             dataset (expected an initialized root with {rec_shards} \
-             shard dir(s) and a format marker); move the data there \
-             first, then relocate",
+            "relocate target {} does not hold an initialized dataset \
+             (expected a format marker and {rec_shards} shard dir(s) \
+             each containing engine files); move namespace {id}'s data \
+             there first, then relocate",
             new_path.display(),
         )));
     }

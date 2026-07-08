@@ -303,6 +303,14 @@ fn namespace_lifecycle() {
     fs::create_dir_all(&new_root).unwrap();
     // Empty target: refused (the data has not been moved).
     assert!(vsdb_ns_relocate(rid, &new_root).is_err());
+    // Bare skeleton (marker + empty shard dirs, no engine anchors —
+    // e.g. a provisioning script "prepared" the volume, or a copy was
+    // interrupted before any shard content landed): still refused.
+    fs::create_dir_all(format!("{new_root}/__SYSTEM__")).unwrap();
+    fs::write(format!("{new_root}/__SYSTEM__/format_version"), "16").unwrap();
+    fs::create_dir_all(format!("{new_root}/mmdb/shard_00")).unwrap();
+    fs::create_dir_all(format!("{new_root}/mmdb/shard_01")).unwrap();
+    assert!(vsdb_ns_relocate(rid, &new_root).is_err());
     // Move the tree for real, then relocate: accepted.
     fs::remove_dir_all(&new_root).unwrap();
     fs::rename(&old_root, &new_root).unwrap();

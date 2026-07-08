@@ -464,13 +464,27 @@ fn ceiling_file_path() -> PathBuf {
     vsdb_get_base_dir().join(PREFIX_CEILING_REL_PATH)
 }
 
-/// Whether `root` holds a fully-initialized dataset with exactly the
-/// expected shard layout: format marker present plus every
-/// `mmdb/shard_XX` dir. Used by `vsdb_ns_relocate` to refuse a target
-/// the operator has not actually moved the data to.
+/// Whether `root` holds an initialized dataset with the expected shard
+/// layout: format marker present plus, in every `mmdb/shard_XX` dir,
+/// mmdb's `CURRENT` manifest anchor. `CURRENT` is exactly mmdb's own
+/// recover-vs-create test at open — absent, a shard is silently
+/// (re)created fresh — so requiring it here means "every shard would
+/// take the *recover* path". No false positives: the marker is written
+/// only after every shard opened, and each open creates `CURRENT`.
+///
+/// Used by `vsdb_ns_relocate` to refuse a target the operator has not
+/// actually moved the data to (empty dir, bare skeleton, or a partial
+/// copy that lacks the anchors). Content beyond these anchors is NOT
+/// verified — roots carry no namespace id, so moving the *right*
+/// dataset remains the operator's contract.
 pub(crate) fn root_holds_dataset(root: &Path, shards: usize) -> bool {
     root.join(FORMAT_VERSION_REL_PATH).is_file()
-        && (0..shards).all(|i| root.join("mmdb").join(format!("shard_{i:02}")).is_dir())
+        && (0..shards).all(|i| {
+            root.join("mmdb")
+                .join(format!("shard_{i:02}"))
+                .join("CURRENT")
+                .is_file()
+        })
 }
 
 /// Folds `legacy` (the pre-v16 shard-0 value, when present) and the
