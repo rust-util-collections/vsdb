@@ -6,6 +6,9 @@
   the pool topology is decomposed (§4.0 — the per-engine tier turns out
   to need **no** isolation trade at all), and the mmdb-side change
   surface is specified to implementation granularity (§4.1, §4.2).
+  **Pragmatic sequencing in §9.0**: step 0 + the Q1 benchmark are
+  recommended *now* (pre-commitment); phase 1 + tier (i) is the
+  recommended first batch; tier (ii) and phase 2 are deferred.
 - **Prerequisites**: [namespaces.md](./namespaces.md) (implemented,
   v16.0.0+), [ns-close.md](./ns-close.md) (implemented, v16.1.0 —
   engine lifetimes are now dynamic, which this design must respect)
@@ -470,17 +473,62 @@ phase 2 only on renewed, write-side evidence.
 
 ## 9. Implementation plan (when triggered)
 
-| Step | Layer | Content | Risk |
-|------|-------|---------|------|
-| 0 | vsdb | **Measurement pre-work** (may ship any time, independently): property passthrough `Engine → DB::property` for per-shard cache hit/miss; optional aggregate helper | trivial |
-| 1 | mmdb | `BlockCachePool` + façade `BlockCache` view: key namespacing `(member, file, offset)`, **sharded** `file_offsets`, per-member pinned-bytes counter | correctness-critical, mechanical; call-site blast radius ≈ 0 (§4.1) |
-| 2 | mmdb | Detach lifecycle: idempotent `detach()` from `close` + `Drop`, batched invalidation + single maintenance pass, cache-bypass mode for detached views | low |
-| 3 | mmdb | `DbOptions.block_cache: Option<Arc<BlockCachePool>>` injection; capacity-precedence docs; contention benchmark (§10 Q1) gating defaults | low |
-| 4 | vsdb | Tier (i): per-engine pool in `Engine::open_at` (all namespaces, default included) | low |
-| 5 | — | Soak: per-shard hit-rate/eviction telemetry vs static split (uses step 0) | — |
-| 6 | vsdb | Tier (ii): opt-in ns-tier pool + budget-semantics contract note | medium |
-| 7 | mmdb | Phase 2 WBM baseline: accounting hooks, self-flush trigger, bounded poison-aware soft stall, attach/detach lifecycle | high — full crash-safety & error-policy re-audit of the write path |
-| 8 | vsdb | Phase 2 wiring + budget semantics change (ceiling → floor/weight), CHANGELOG contract note | medium |
+### 9.0 Pragmatic cut — recommended first vs. deferred
+
+The net-effect analysis (2026-07) splits the plan into three buckets
+by benefit sign and risk shape:
+
+**Do now — pre-commitment work, shippable anytime, no trigger
+needed:**
+
+- **Step 0** (vsdb property passthrough). Trivial, zero risk,
+  independently useful for ops, and §8 trigger 1 is *unevaluable*
+  without it. Implementing measurement is not implementing the
+  feature.
+- **The §10 Q1 contention microbenchmark.** Analysis, not commitment:
+  it decides whether tier (i) can ever be default-on, and picks
+  FO_SHARDS. Cheap to build against a prototype pool outside the
+  engine.
+
+**First implementation batch — steps 1–5 (phase 1 + tier (i)), once
+trigger 1 fires** *or* the Q1 benchmark shows no uniform-load
+regression on a representative skewed workload:
+
+- This is the only bucket whose net effect is
+  **positive-or-neutral on every axis**: no isolation trade (one
+  tenant), no write-path change, no crash-semantics change, no
+  on-disk change, identical memory totals; the sole residual risks
+  are implementation-time key-isolation correctness (small, audited,
+  volatile state) and the uniform-load contention question that the
+  Q1 benchmark exists to retire. Cost #1 is structural
+  (`prefix % shards`), so the payoff does not depend on an exotic
+  workload materializing.
+
+**Deferred — explicitly not in the first batch:**
+
+- **Step 6, tier (ii)** (ns-tier pool): wait for §8 trigger 2/3. It
+  buys elasticity with a real (if confined and opt-in) noisy-neighbor
+  trade, and its stability upside (hard cache cap for the ns tier)
+  only matters to deployments that actually run many namespaces.
+- **Steps 7–8, phase 2 WBM**: hard-deferred until renewed
+  *write-side* evidence. Highest variance in the whole design —
+  touches the most heavily audited code (write path, bg_error /
+  MANIFEST-poison interplay), and its soft stall makes the ceiling
+  best-effort rather than guaranteed. Expected-positive for rotation
+  ingest, but the expectation is not worth the audit cost until the
+  pressure is observed.
+
+| Step | When | Layer | Content | Risk |
+|------|------|-------|---------|------|
+| 0 | **now** | vsdb | **Measurement pre-work** (may ship any time, independently): property passthrough `Engine → DB::property` for per-shard cache hit/miss; optional aggregate helper | trivial |
+| 1 | first batch | mmdb | `BlockCachePool` + façade `BlockCache` view: key namespacing `(member, file, offset)`, **sharded** `file_offsets`, per-member pinned-bytes counter | correctness-critical, mechanical; call-site blast radius ≈ 0 (§4.1) |
+| 2 | first batch | mmdb | Detach lifecycle: idempotent `detach()` from `close` + `Drop`, batched invalidation + single maintenance pass, cache-bypass mode for detached views | low |
+| 3 | first batch | mmdb | `DbOptions.block_cache: Option<Arc<BlockCachePool>>` injection; capacity-precedence docs; contention benchmark (§10 Q1) gating defaults | low |
+| 4 | first batch | vsdb | Tier (i): per-engine pool in `Engine::open_at` (all namespaces, default included) | low |
+| 5 | first batch | — | Soak: per-shard hit-rate/eviction telemetry vs static split (uses step 0) | — |
+| 6 | **deferred** (trigger 2/3) | vsdb | Tier (ii): opt-in ns-tier pool + budget-semantics contract note | medium |
+| 7 | **deferred hard** (write-side evidence) | mmdb | Phase 2 WBM baseline: accounting hooks, self-flush trigger, bounded poison-aware soft stall, attach/detach lifecycle | high — full crash-safety & error-policy re-audit of the write path |
+| 8 | **deferred hard** (with 7) | vsdb | Phase 2 wiring + budget semantics change (ceiling → floor/weight), CHANGELOG contract note | medium |
 
 Each mmdb step lands with `None`-default compatibility so vsdb can
 pin/roll back independently.
