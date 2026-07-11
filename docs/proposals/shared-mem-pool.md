@@ -224,12 +224,10 @@ materially shape the design.
 
 ### vsdb side
 
-- **(new) Trigger condition 1 (§8) is not currently measurable.**
-  mmdb exposes per-shard `stats.block_cache_hits/misses` via
-  `DB::property`, but vsdb's engine layer (`core/src/common/engine/`)
-  exposes **no property passthrough** — an operator cannot read
-  per-shard hit rates through vsdb at all. Measurement infrastructure
-  is pre-work (§9 step 0), independent of any pooling decision.
+- **Resolved in v16.3.0:** `Namespace::shard_properties` exposes mmdb
+  properties per shard, including cache hits/misses and hit rate. Trigger
+  condition 1 (§8) is measurable; the remaining work is production soak, not
+  telemetry plumbing.
 
 ## 4. Design
 
@@ -464,11 +462,11 @@ Secondary costs, updated by the deep dive:
 
 Do **not** implement on speculation. Start when any of:
 
-1. **Measured intra-engine cache skew**: per-shard
-   `stats.block_cache_hits/misses` show sustained hit-rate divergence
-   across shards of one engine under a real workload. ⚠ Requires §9
-   step 0 first — vsdb currently exposes no property passthrough, so
-   this evidence **cannot be collected today**.
+1. **Measured intra-engine cache skew / production soak**: per-shard
+   `stats.block_cache_hits/misses` from `Namespace::shard_properties` show
+   sustained hit-rate divergence across shards of one engine under a real
+   workload. Tier (i) already shipped; this evidence now governs tuning and
+   whether any broader sharing tier is justified.
 2. **Measured rotation pressure**: an epoch-rotation deployment where
    the filling namespace's flush/stall behavior is budget-bound
    (memtable churn at 512 MB-scale budgets) while process memory sits
@@ -544,17 +542,12 @@ pin/roll back independently.
 
 ## 10. Open questions
 
-Rev 2 resolved three of the original four (former Q1 → §4.0 topology
-decomposition; former Q2 → pinning is bounded at ~200 KB/shard by
-`l0_stop_trigger`, counter without cap; former Q3 → self-flush, victim
-selection needs a flush executor that is out of baseline). Remaining:
+The Q1 fan-in gate is resolved: the benchmark selected a 64-way
+`SegmentedCache`, and per-engine tier (i) shipped as the default in v16.3.0.
+Remaining:
 
-1. **Pool contention under fan-in** (sharpened from former Q4): does
-   one moka instance + FO_SHARDS-way `file_offsets` hold up under
-   16–64 members × N threads, measured on the read-miss path and
-   eviction-listener path specifically? Benchmark before step 3
-   finalizes; also picks FO_SHARDS (16 vs 32) and decides whether
-   tier (i) can become the default rather than opt-in.
+1. **Production soak**: confirm the benchmark's skew win and uniform-load
+   parity under real datasets using the shipped per-shard telemetry.
 2. **Per-member `entry_count` derivation cost**: scanning the
    member's `file_offsets` shards on a property query is O(member's
    files); confirm this is acceptable for monitoring cadence or add a

@@ -11,12 +11,6 @@
 
 ## Open
 
-### [LOW] docs: shared-memory-pool proposal contradicts shipped status
-- **Where**: `docs/proposals/shared-mem-pool.md:3-20`, `docs/proposals/shared-mem-pool.md:225-232`, `docs/proposals/shared-mem-pool.md:463-471`, `docs/proposals/shared-mem-pool.md:530-560`
-- **What**: the status/table say telemetry and the Q1 gate shipped, while later sections still say telemetry is unavailable and Q1 unresolved.
-- **Why**: maintainers can repeat completed work or treat a passed rollout gate as open.
-- **Suggested fix**: mark those statements historical/resolved and leave only soak, tier (ii), and phase 2 open.
-
 ### [LOW] CI: formatting is not enforced
 - **Where**: `.github/workflows/rust.yml:18-22`
 - **What**: CI runs lint/tests but omits `cargo fmt --all -- --check`, despite the canonical commit gate requiring it.
