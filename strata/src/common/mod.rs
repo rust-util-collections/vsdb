@@ -61,8 +61,9 @@ pub fn save_instance_meta(id: InstanceId, value: &impl Serialize) -> Result<()> 
 ///
 /// Resolution is deterministic, never a search: `id.ns` names the meta
 /// directory (`None` ⇒ the default namespace's). Only the current
-/// (magic-tagged) meta format is accepted; metas written by pre-v13.4
-/// code must be re-saved under a v13 release first.
+/// (magic-tagged) meta format is accepted. Older formats require logical
+/// export with their last compatible reader and reimport into a fresh
+/// current dataset; see `CHANGELOG.md`'s migration section.
 pub fn load_instance_meta<T: DeserializeOwned>(id: InstanceId) -> Result<T> {
     let ns = match id.ns {
         None => Namespace::default_ns(),

@@ -11,12 +11,6 @@
 
 ## Open
 
-### [MEDIUM] compatibility: historical persisted-data breaks lack an executable migration path
-- **Where**: `CHANGELOG.md:744-748`, `CHANGELOG.md:799-803`, `CHANGELOG.md:805-811`, `CHANGELOG.md:825-830`, `strata/src/common/mod.rs:60-66`
-- **What**: codec and typed-meta breaks identify incompatibility but omit exact last-readable versions, export/import steps, backup/rollback guidance, and direct-open behavior.
-- **Why**: users cannot safely upgrade old datasets from msgpack, CBOR, or pre-`VSTYPE02` metadata by following the current documentation.
-- **Suggested fix**: document full old-version logical export into a fresh current namespace/base directory, validation, and rollback; correct the stale v13 re-save claim.
-
 ### [LOW] docs: namespace examples violate current identity and lifecycle contracts
 - **Where**: `core/docs/api.md:70-117`, `strata/docs/api.md:25-33`
 - **What**: one example closes/destroys/relocates namespaces while handles remain live; another claims a non-default `InstanceId` converts into legacy `u64`.

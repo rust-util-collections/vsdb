@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## Legacy persisted-data migration
+
+Current releases do not perform an in-place migration from the historical
+msgpack, CBOR, pre-magic handle, or pre-`VSTYPE02` typed-meta formats. Do not
+point a current binary at the only copy of an old dataset.
+
+1. Back up the complete old default base directory plus every explicitly
+   rooted namespace. Keep the old binary and dependency lockfile for rollback.
+2. Open a copy with the last release that can read it: v9.1.0 for msgpack,
+   v11.0.0 for CBOR, a compatible v13 build for pre-v13.4 handle metadata, or
+   v14.0.1 for postcard metadata predating `VSTYPE02`.
+3. Export logical contents through that release's public APIs into a neutral
+   application format. Export every required versioned branch/snapshot and DAG
+   relationship, not only the current key/value view.
+4. Start the current release with a fresh base directory/fresh namespaces,
+   recreate the collections, import the logical data, and save new
+   `InstanceId` metadata. Do not copy old instance-meta, trie-cache, registry,
+   allocator, or engine-system files into the new dataset.
+5. Validate counts, representative reads/ranges/searches, branch heads, and
+   Merkle roots where applicable before switching traffic. Roll back by
+   restoring the untouched backup and old binary; never downgrade a dataset
+   after the current release has written to it.
+
+If the old reader is unavailable, there is no safe generic recovery path:
+restore that toolchain first or recover from an application-level export.
+
 ## [v16.3.2]
 
 Post-v16.3.1 review fixes (the reviewed commit was never published):
@@ -743,7 +769,7 @@ Consolidates the unpublished v14.0.2/v14.0.3 work (v14.0.1 is the last published
 
 ### Breaking
 
-- **Typed-handle instance metadata is envelope-tagged** (on-disk format `VSTYPE02`). Safe restore paths (`serde` / `from_meta`) of `Mapx`, `MapxOrd`, `MapxOrdRawKey`, `Orphan`, `VerMap`, `SlotDex`, `VecDex`, and `DagMapRawKey` now embed and validate an 8-byte hash of the concrete wrapper type (including **all** generic parameters — notably `VerMap<K, V>`'s key/value types, `VecDex`'s distance metric, and `DagMapRawKey<V>`'s value type, none of which occur in any field type), so loading persisted metadata under a different type fails loudly instead of silently misreading data. The tag derives from `std::any::type_name`, so persisted metas are additionally tied to the writing build's type paths/compiler rendering — a false rejection is always safer than type confusion. **Migration**: none; re-create metas with `save_meta` (older typed metas are rejected by the magic check).
+- **Typed-handle instance metadata is envelope-tagged** (on-disk format `VSTYPE02`). Safe restore paths (`serde` / `from_meta`) of `Mapx`, `MapxOrd`, `MapxOrdRawKey`, `Orphan`, `VerMap`, `SlotDex`, `VecDex`, and `DagMapRawKey` now embed and validate an 8-byte hash of the concrete wrapper type (including **all** generic parameters — notably `VerMap<K, V>`'s key/value types, `VecDex`'s distance metric, and `DagMapRawKey<V>`'s value type, none of which occur in any field type), so loading persisted metadata under a different type fails loudly instead of silently misreading data. The tag derives from `std::any::type_name`, so persisted metas are additionally tied to the writing build's type paths/compiler rendering — a false rejection is always safer than type confusion. **Migration**: older typed metas are rejected; follow [Legacy persisted-data migration](#legacy-persisted-data-migration) and export with the old reader before reimporting into a fresh dataset.
 - **Safe prefix restore is validated against the allocator.** `MapxRaw::from_meta` / serde deserialization reject prefixes outside the allocator-issued range and reserve still-pending prefixes so future allocations skip them; `unsafe from_bytes` remains the trusted escape hatch. The fast path is lock-free: allocator state is mirrored in process atomics, previous-run prefixes (the common restore case) are accepted without reservation, and the reservation set stays bounded (pending-window registry).
 - **SMT internal-node hashing gained a `0x00` domain byte** (leaf/internal domain separation — standard second-preimage hardening). All SMT root hashes and proofs change; the SMT disk-cache format is now v2 and v1 caches are rejected cleanly (the trie rebuilds from authoritative data). MPT is unaffected. Measured cost: ~2% on SMT insert/get/remove (one extra byte per internal-node Keccak input); all other benchmark suites show no change beyond the noise floor.
 
@@ -770,7 +796,7 @@ Consolidates the unpublished v14.0.2/v14.0.3 work (v14.0.1 is the last published
 ### Breaking
 
 - **Unified error type across the whole ecosystem.** `VsdbError` / `Result` now live in `vsdb_core::common::error` (re-exported as `vsdb::common::error`, `vsdb::VsdbError`, `vsdb::Result`). Every public API of **both** crates returns this type — including the `KeyEnDe` / `ValueEnDe` / `KeyEnDeOrdered` encoding traits, collection batch `commit()`, `save_meta` / `from_meta`, and `vsdb_set_base_dir` — all of which previously returned `ruc::Result` (`Box<dyn RucError>`). Implementing the encoding traits for custom types no longer requires a third-party error dependency. `ruc` remains internal-only; boundary conversions preserve the **complete** chain (every frame, with file/line context) via `stringify_chain`, and the new type additionally offers matchable variants (including new `Decode` and `BaseDirFrozen`), `std::error::Error` interop, and `Send + Sync`. The root alias `vsdb::VsdbResult` was renamed to `vsdb::Result`.
-- **Legacy (pre-magic) instance-meta decoding removed.** The `with_legacy_mapx_meta_decode` escape hatch and the length-only prefix decode path are gone; deserialization now unconditionally requires the magic-tagged meta format introduced in v13.4. **Migration**: load and re-save (`save_meta`) any instance metas written by pre-v13.4 releases using a v13 build first.
+- **Legacy (pre-magic) instance-meta decoding removed.** The `with_legacy_mapx_meta_decode` escape hatch and the length-only prefix decode path are gone; deserialization now unconditionally requires the magic-tagged meta format introduced in v13.4. **Migration**: use a compatible v13 reader to export logical data, then follow [Legacy persisted-data migration](#legacy-persisted-data-migration); merely re-saving a v13 meta does not produce the later `VSTYPE02` envelope.
 - **Deprecated `MapxRaw::from_prefix_slice` / `MapxRaw::as_prefix_slice` removed** (deprecated since 13.0.0). Use `from_bytes` / `as_bytes`.
 - **`DagMapRaw::new` / `DagMapRawKey::new` redesigned**: the signature is now `new(parent: Option<&mut DagMapRaw>) -> Self` (previously `new(&mut Orphan<Option<DagMapRaw>>) -> Result<Self>`). Each node now **owns** its parent slot instead of aliasing a caller-managed `Orphan` shared by all siblings. Consequences: `destroy()` persistently unlinks the node from its parent chain, so stale clones, shadows, and `from_meta`-restored handles can no longer resolve inherited reads through a destroyed node (previously a documented per-handle-tombstone limitation); constructing a node can no longer fail. The on-disk serde format (3-tuple) is unchanged; DAGs whose siblings were created from one shared `Orphan` slot under v13 keep that sharing until the affected nodes are recreated.
 - **`vsdb::SlotDex` now names the generic struct** `slotdex::SlotDex<S, K>` instead of silently aliasing `SlotDex64<K>` (the same name previously referred to different types depending on the import path). **Migration**: replace `vsdb::SlotDex<K>` with `vsdb::SlotDex64<K>`.
@@ -800,7 +826,7 @@ Consolidates the unpublished v14.0.2/v14.0.3 work (v14.0.1 is the last published
 
 ### Breaking
 
-- **Replaced CBOR codec with postcard** — `serde_cbor_2` has been removed and replaced with `postcard` as the sole serialization codec. Existing data serialized with CBOR is incompatible; a migration step is required.
+- **Replaced CBOR codec with postcard** — `serde_cbor_2` has been removed and replaced with `postcard` as the sole serialization codec. Existing data serialized with CBOR is incompatible; export it with v11.0.0 and follow [Legacy persisted-data migration](#legacy-persisted-data-migration).
 
 ## [v11.0.0]
 
@@ -826,7 +852,7 @@ Consolidates the unpublished v14.0.2/v14.0.3 work (v14.0.1 is the last published
 
 ### Breaking
 
-- **Removed msgpack codec** — CBOR (`serde_cbor_2`) is now the only serde encoding. Existing data serialized with msgpack is incompatible; a migration step is required.
+- **Removed msgpack codec** — CBOR (`serde_cbor_2`) is now the only serde encoding. Existing data serialized with msgpack is incompatible; export it with v9.1.0 and follow [Legacy persisted-data migration](#legacy-persisted-data-migration).
 - **Default backend for `vsdb` crate** — `backend_mmdb` is now enabled by default so that `vsdb = "10.0.0"` works out of the box without a C/C++ toolchain (previously required explicit feature selection).
 
 ### Added
