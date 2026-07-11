@@ -6,7 +6,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
 };
-use vsdb::{ValueEnDe, basic::mapx_ord::MapxOrd};
+use vsdb::basic::mapx_ord::MapxOrd;
 
 fn read_write(c: &mut Criterion) {
     let mut group = c.benchmark_group("vsdb::mapx_ord / sequential");
@@ -15,29 +15,26 @@ fn read_write(c: &mut Criterion) {
         .sample_size(10);
 
     let i = AtomicUsize::new(0);
-    let mut db = MapxOrd::new();
+    let mut db: MapxOrd<usize, usize> = MapxOrd::new();
 
     group.bench_function(" write ", |b| {
         b.iter(|| {
             let n = i.fetch_add(1, Ordering::SeqCst);
-            let key = <usize as ValueEnDe>::encode(&n);
-            db.insert(&key, &n);
+            db.insert(&n, &n);
         })
     });
 
     group.bench_function(" read ", |b| {
         b.iter(|| {
             let n = i.fetch_sub(1, Ordering::SeqCst);
-            let key = <usize as ValueEnDe>::encode(&n);
-            black_box(db.get(&key));
+            black_box(db.get(&n));
         })
     });
 
     // Pre-populate for remove
     let base = i.load(Ordering::SeqCst);
     for n in base..(base + 5000) {
-        let key = <usize as ValueEnDe>::encode(&n);
-        db.insert(&key, &n);
+        db.insert(&n, &n);
     }
     i.store(base + 5000, Ordering::SeqCst);
 
@@ -45,8 +42,7 @@ fn read_write(c: &mut Criterion) {
         let rm = AtomicUsize::new(i.load(Ordering::SeqCst));
         b.iter(|| {
             let n = rm.fetch_sub(1, Ordering::SeqCst);
-            let key = <usize as ValueEnDe>::encode(&n);
-            db.remove(&key);
+            db.remove(&n);
         })
     });
 
@@ -60,14 +56,13 @@ fn random_read_write(c: &mut Criterion) {
         .sample_size(10);
 
     let mut rng = rand::rng();
-    let mut db = MapxOrd::new();
+    let mut db: MapxOrd<usize, usize> = MapxOrd::new();
     let mut keys = vec![];
     group.bench_function(" random write ", |b| {
         b.iter(|| {
             let n = rng.random::<u64>() as usize;
-            let key = <usize as ValueEnDe>::encode(&n);
-            db.insert(&key, &n);
-            keys.push(key);
+            db.insert(&n, &n);
+            keys.push(n);
         })
     });
 
@@ -88,11 +83,10 @@ fn ordered_ops(c: &mut Criterion) {
         .sample_size(10);
 
     // Pre-populate with 10000 sparse keys (0, 3, 6, 9, ...)
-    let mut db = MapxOrd::new();
+    let mut db: MapxOrd<usize, usize> = MapxOrd::new();
     for n in 0..10_000usize {
         let key_val = n * 3;
-        let key = <usize as ValueEnDe>::encode(&key_val);
-        db.insert(&key, &key_val);
+        db.insert(&key_val, &key_val);
     }
 
     group.bench_function(" get_le ", |b| {
@@ -100,8 +94,7 @@ fn ordered_ops(c: &mut Criterion) {
         b.iter(|| {
             // Query keys that fall between sparse entries
             i = (i + 7) % 30_000;
-            let key = <usize as ValueEnDe>::encode(&i);
-            black_box(db.get_le(&key));
+            black_box(db.get_le(&i));
         })
     });
 
@@ -109,18 +102,19 @@ fn ordered_ops(c: &mut Criterion) {
         let mut i = 1usize;
         b.iter(|| {
             i = (i + 7) % 30_000;
-            let key = <usize as ValueEnDe>::encode(&i);
-            black_box(db.get_ge(&key));
+            black_box(db.get_ge(&i));
         })
     });
 
     group.bench_function(" range [1000, 2000) (1k keys) ", |b| {
-        let lo = <usize as ValueEnDe>::encode(&3000usize); // key_val 3000 => index 1000
-        let hi = <usize as ValueEnDe>::encode(&6000usize); // key_val 6000 => index 2000
+        let lo = 3000usize; // key_val 3000 => index 1000
+        let hi = 6000usize; // key_val 6000 => index 2000
+        assert_eq!(
+            db.range((Bound::Included(lo), Bound::Excluded(hi))).count(),
+            1000
+        );
         b.iter(|| {
-            let count = db
-                .range((Bound::Included(lo.clone()), Bound::Excluded(hi.clone())))
-                .count();
+            let count = db.range((Bound::Included(lo), Bound::Excluded(hi))).count();
             black_box(count);
         })
     });

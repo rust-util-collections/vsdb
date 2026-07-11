@@ -11,12 +11,6 @@
 
 ## Open
 
-### [LOW] bench: ordered operations use non-order-preserving postcard bytes
-- **Where**: `strata/benches/units/basic_mapx_ord.rs:17-50`, `strata/benches/units/basic_mapx_ord.rs:84-126`
-- **What**: inferred `MapxOrd<Vec<u8>, usize>` orders postcard varints lexicographically while labels describe numeric ordering/ranges.
-- **Why**: `get_le`, `get_ge`, and the claimed 1,000-key range measure a different ordering and row count.
-- **Suggested fix**: benchmark `MapxOrd<usize, usize>` with ordered-key encoding and assert the prepared range size.
-
 ### [LOW] bench: read/remove workloads decay into misses and no-ops
 - **Where**: `strata/benches/units/basic_mapx.rs:25-29`, `strata/benches/units/basic_mapx.rs:73-78`, `strata/benches/units/basic_mapx_ord.rs:28-50`
 - **What**: decrementing counters start one past the last inserted key and eventually underflow or exhaust the finite removal set.
