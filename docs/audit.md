@@ -11,12 +11,6 @@
 
 ## Open
 
-### [MEDIUM] tests: staged unit tests race process-environment mutation
-- **Where**: `strata/src/common/staged.rs:185-235`
-- **What**: two parallel library tests call `vsdb_set_base_dir` after the test harness has spawned threads.
-- **Why**: the successful call performs `env::set_var`, violating its documented safety precondition and permitting undefined/flaky test behavior.
-- **Suggested fix**: remove the per-test base-dir mutation and rely on globally unique prefixes.
-
 ### [MEDIUM] dagmap: selective prune APIs expose no usable child ID
 - **Where**: `strata/src/dagmap/raw/mod.rs:195-205`, `strata/src/dagmap/raw/mod.rs:635-660`, `strata/src/dagmap/rawkey/mod.rs:258-270`
 - **What**: include/exclude pruning requires hidden 16-byte registry IDs that construction never returns and no public method exposes.

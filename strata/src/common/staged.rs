@@ -188,12 +188,6 @@ mod tests {
 
     #[test]
     fn merge_scan_overlay_semantics() {
-        // The base dir may already be set (and frozen) by another test
-        // in the same process; any writable location works here.
-        let _ = vsdb_core::vsdb_set_base_dir(format!(
-            "/tmp/vsdb_testing/{}",
-            rand::random::<u128>()
-        ));
         let mut store = MapxRaw::new();
         store.insert([1u8, 1], [10u8]);
         store.insert([1u8, 2], [20u8]);
@@ -228,10 +222,6 @@ mod tests {
 
     #[test]
     fn wipe_semantics() {
-        let _ = vsdb_core::vsdb_set_base_dir(format!(
-            "/tmp/vsdb_testing/{}",
-            rand::random::<u128>()
-        ));
         let mut store = MapxRaw::new();
         store.insert([1u8, 1], [10u8]);
         store.insert([1u8, 2], [20u8]);
