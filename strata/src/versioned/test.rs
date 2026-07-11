@@ -1476,9 +1476,8 @@ fn ref_counts_match_ground_truth_recount() {
 
 #[test]
 fn gc_after_serialize_roundtrip() {
-    // After serialize→deserialize, ref_counts are preserved and gc()
-    // is idempotent.  The deserialized map also has ref_counts_ready=false
-    // on the B+ tree (serde skip), so gc() rebuilds the node ref map.
+    // After serialize→deserialize, commit ref_counts are preserved and gc()
+    // is idempotent. The restored B+ tree runtime rebuilds its node refs.
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
 
@@ -3739,6 +3738,30 @@ fn test_serde_roundtrip_full() {
     // Verify iteration order
     let keys: Vec<u64> = restored.iter(main).unwrap().map(|(k, _)| k).collect();
     assert_eq!(keys, (0..20).collect::<Vec<u64>>());
+}
+
+#[test]
+fn restored_aliases_preserve_committed_snapshots() {
+    let mut original: VerMap<u32, u32> = VerMap::new();
+    let main = original.main_branch();
+    original.insert(main, &0, &10).unwrap();
+    original.commit(main).unwrap();
+    let bytes = postcard::to_allocvec(&original).unwrap();
+
+    let mut a: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
+    let mut b: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
+
+    a.insert(main, &1, &11).unwrap();
+    let a_commit = a.commit(main).unwrap();
+    b.insert(main, &2, &12).unwrap();
+    b.commit(main).unwrap();
+
+    assert_eq!(a.get_at_commit(a_commit, &0).unwrap(), Some(10));
+    assert_eq!(a.get_at_commit(a_commit, &1).unwrap(), Some(11));
+    assert_eq!(a.get_at_commit(a_commit, &2).unwrap(), None);
+    b.gc();
+    assert_eq!(b.get_at_commit(a_commit, &0).unwrap(), Some(10));
+    assert_eq!(b.get_at_commit(a_commit, &1).unwrap(), Some(11));
 }
 
 /// Serialized size should remain compact enough for metadata persistence.

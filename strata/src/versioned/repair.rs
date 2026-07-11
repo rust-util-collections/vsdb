@@ -22,8 +22,8 @@ impl<K, V> VerMap<K, V> {
     /// Rebuilds the B+ tree's in-memory ref-count map from the
     /// current set of live roots (all commit roots + dirty roots).
     ///
-    /// Called after every deserialization path (serde, from_meta)
-    /// because PersistentBTree's Deserialize sets `ref_counts_ready = false`.
+    /// Called after every deserialization path (serde, from_meta) because a
+    /// newly restored node-pool runtime starts without reference counts.
     pub(crate) fn rebuild_tree_ref_counts(&mut self) {
         let mut live_roots: Vec<NodeId> =
             self.commits.iter().map(|(_, c)| c.root).collect();

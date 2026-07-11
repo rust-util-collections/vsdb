@@ -1113,6 +1113,26 @@ fn test_meta_restore_then_mutate() {
     assert_eq!(restored.get(r2, b"k2").unwrap(), b"v2");
 }
 
+#[test]
+fn restored_aliases_share_runtime_state() {
+    let mut tree = PersistentBTree::new();
+    let base = tree.insert(EMPTY_ROOT, b"base", b"v0");
+    let bytes = postcard::to_allocvec(&tree).unwrap();
+
+    let mut a: PersistentBTree = postcard::from_bytes(&bytes).unwrap();
+    let mut b: PersistentBTree = postcard::from_bytes(&bytes).unwrap();
+
+    let a_root = a.insert(base, b"a", b"va");
+    let b_root = b.insert(base, b"b", b"vb");
+
+    assert_eq!(a.get(a_root, b"base"), Some(b"v0".to_vec()));
+    assert_eq!(a.get(a_root, b"a"), Some(b"va".to_vec()));
+    assert_eq!(a.get(a_root, b"b"), None);
+    assert_eq!(b.get(b_root, b"base"), Some(b"v0".to_vec()));
+    assert_eq!(b.get(b_root, b"a"), None);
+    assert_eq!(b.get(b_root, b"b"), Some(b"vb".to_vec()));
+}
+
 /// Serde roundtrip preserves multi-version data:
 /// serialize a tree with diverged versions, deserialize, check both.
 #[test]

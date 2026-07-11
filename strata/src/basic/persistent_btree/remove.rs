@@ -51,20 +51,21 @@ impl PersistentBTree {
     /// Undoes the ref_count increments that `alloc` applied to its
     /// children and registers the node for deferred disk deletion.
     pub(crate) fn discard_node(&mut self, nid: NodeId) {
-        if !self.ref_counts_ready {
+        let mut refs = self.runtime.refs.lock();
+        if !refs.ready {
             return;
         }
         // Guard: only discard truly unreferenced nodes.  In merge
         // paths the discarded NodeId may be a shared sibling from a
         // prior version (ref_count > 0) — leave those alone.
-        match self.ref_counts.get(&nid) {
+        match refs.counts.get(&nid) {
             Some(nr) if nr.ref_count > 0 => return,
             None => return,
             _ => {}
         }
-        let nr = self.ref_counts.remove(&nid).unwrap();
+        let nr = refs.counts.remove(&nid).unwrap();
         for &child in &nr.children {
-            if let Some(cr) = self.ref_counts.get_mut(&child) {
+            if let Some(cr) = refs.counts.get_mut(&child) {
                 debug_assert!(
                     cr.ref_count > 0,
                     "discard_node: child {child} already at ref_count=0"

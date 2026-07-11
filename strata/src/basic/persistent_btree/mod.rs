@@ -34,12 +34,17 @@ mod types;
 pub use iter::BTreeIter;
 
 use crate::common::{InstanceId, error::Result};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     fmt,
     ops::Bound,
     result::Result as StdResult,
+    sync::{
+        Arc, LazyLock, Weak,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 use vsdb_core::basic::mapx_raw::MapxRaw;
 
@@ -50,6 +55,42 @@ pub(crate) use types::{InsertResult, LeafState, NodeRef, RemoveResult};
 // =========================================================================
 // PersistentBTree
 // =========================================================================
+
+#[derive(Debug)]
+struct RefState {
+    counts: HashMap<NodeId, NodeRef>,
+    ready: bool,
+}
+
+#[derive(Debug)]
+struct TreeRuntime {
+    next_id: AtomicU64,
+    refs: Mutex<RefState>,
+}
+
+static TREE_RUNTIMES: LazyLock<Mutex<HashMap<InstanceId, Weak<TreeRuntime>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn tree_runtime(
+    id: InstanceId,
+    next_id_floor: NodeId,
+    initial_refs: RefState,
+) -> Arc<TreeRuntime> {
+    let mut runtimes = TREE_RUNTIMES.lock();
+    if let Some(runtime) = runtimes.get(&id).and_then(Weak::upgrade) {
+        runtime.next_id.fetch_max(next_id_floor, Ordering::AcqRel);
+        return runtime;
+    }
+    if runtimes.len() >= 1024 {
+        runtimes.retain(|_, runtime| runtime.strong_count() > 0);
+    }
+    let runtime = Arc::new(TreeRuntime {
+        next_id: AtomicU64::new(next_id_floor),
+        refs: Mutex::new(initial_refs),
+    });
+    runtimes.insert(id, Arc::downgrade(&runtime));
+    runtime
+}
 
 /// A persistent (copy-on-write) B+ tree backed by [`MapxRaw`].
 ///
@@ -83,17 +124,13 @@ pub(crate) use types::{InsertResult, LeafState, NodeRef, RemoveResult};
 ///
 /// fs::remove_dir_all(&dir).unwrap();
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct PersistentBTree {
     /// Flat node pool.  Key = little-endian NodeId, Value = encoded Node.
     pub(crate) nodes: MapxRaw,
-    /// Next node ID to allocate (monotonically increasing).
-    next_id: NodeId,
-    /// In-memory reference counts and cached children lists.
-    /// Rebuilt from disk by [`rebuild_ref_counts`].
-    pub(crate) ref_counts: HashMap<NodeId, NodeRef>,
-    /// Whether `ref_counts` has been populated (false after deserialization).
-    pub(crate) ref_counts_ready: bool,
+    /// Process-local allocator and reference-count state shared by every
+    /// alias of this node pool.
+    runtime: Arc<TreeRuntime>,
     /// Write buffer for the mutating operation currently in flight.
     ///
     /// `alloc` stages encoded nodes here instead of issuing one engine
@@ -131,7 +168,7 @@ impl Serialize for PersistentBTree {
         use serde::ser::SerializeTuple;
         let mut t = serializer.serialize_tuple(2)?;
         t.serialize_element(&self.nodes)?;
-        t.serialize_element(&self.next_id)?;
+        t.serialize_element(&self.runtime.next_id.load(Ordering::Acquire))?;
         t.end()
     }
 }
@@ -172,11 +209,17 @@ impl<'de> Deserialize<'de> for PersistentBTree {
                     let id = NodeId::from_le_bytes(k[..8].try_into().unwrap());
                     next_id = next_id.max(id.saturating_add(1));
                 }
+                let runtime = tree_runtime(
+                    nodes.instance_id(),
+                    next_id,
+                    RefState {
+                        counts: HashMap::new(),
+                        ready: false,
+                    },
+                );
                 Ok(PersistentBTree {
                     nodes,
-                    next_id,
-                    ref_counts: Default::default(),
-                    ref_counts_ready: false,
+                    runtime,
                     pending: Default::default(),
                 })
             }
@@ -220,11 +263,18 @@ impl PersistentBTree {
     }
 
     pub fn new() -> Self {
+        let nodes = MapxRaw::new();
+        let runtime = tree_runtime(
+            nodes.instance_id(),
+            1,
+            RefState {
+                counts: HashMap::new(),
+                ready: true,
+            },
+        );
         Self {
-            nodes: MapxRaw::new(),
-            next_id: 1, // 0 is EMPTY_ROOT sentinel
-            ref_counts: HashMap::new(),
-            ref_counts_ready: true, // empty tree — nothing to rebuild
+            nodes,
+            runtime,
             pending: HashMap::new(),
         }
     }
@@ -239,10 +289,12 @@ impl PersistentBTree {
     const PENDING_FLUSH_THRESHOLD: usize = 1024;
 
     fn alloc(&mut self, node: &Node) -> NodeId {
-        let id = self.next_id;
-        self.next_id = self
+        let id = self
+            .runtime
             .next_id
-            .checked_add(1)
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |next_id| {
+                next_id.checked_add(1)
+            })
             .expect("PersistentBTree: NodeId space exhausted");
         debug_assert!(
             !self.pending.contains_key(&id)
@@ -252,11 +304,12 @@ impl PersistentBTree {
         self.pending.insert(id, node.encode());
 
         // Populate in-memory ref tracking.
-        if self.ref_counts_ready {
+        let mut refs = self.runtime.refs.lock();
+        if refs.ready {
             let children = match node {
                 Node::Internal { children, .. } => {
                     for &child in children {
-                        if let Some(cr) = self.ref_counts.get_mut(&child) {
+                        if let Some(cr) = refs.counts.get_mut(&child) {
                             cr.ref_count += 1;
                         }
                     }
@@ -264,7 +317,7 @@ impl PersistentBTree {
                 }
                 Node::Leaf { .. } => Vec::new(),
             };
-            self.ref_counts.insert(
+            refs.counts.insert(
                 id,
                 NodeRef {
                     ref_count: 0,
@@ -504,10 +557,14 @@ impl PersistentBTree {
 
     /// Increments the in-memory reference count for `id`.
     pub fn acquire_node(&mut self, id: NodeId) {
-        if id == EMPTY_ROOT || !self.ref_counts_ready {
+        if id == EMPTY_ROOT {
             return;
         }
-        if let Some(nr) = self.ref_counts.get_mut(&id) {
+        let mut refs = self.runtime.refs.lock();
+        if !refs.ready {
+            return;
+        }
+        if let Some(nr) = refs.counts.get_mut(&id) {
             nr.ref_count += 1;
         }
     }
@@ -517,7 +574,11 @@ impl PersistentBTree {
     /// from the in-memory map, and registers the node for deferred disk
     /// deletion via the storage engine's compaction filter.
     pub fn release_node(&mut self, id: NodeId) {
-        if id == EMPTY_ROOT || !self.ref_counts_ready {
+        if id == EMPTY_ROOT {
+            return;
+        }
+        let mut refs = self.runtime.refs.lock();
+        if !refs.ready {
             return;
         }
         // Callers (VerMap) only release between tree operations; the
@@ -533,7 +594,7 @@ impl PersistentBTree {
             if nid == EMPTY_ROOT {
                 continue;
             }
-            let Some(nr) = self.ref_counts.get_mut(&nid) else {
+            let Some(nr) = refs.counts.get_mut(&nid) else {
                 continue;
             };
             debug_assert!(
@@ -546,7 +607,7 @@ impl PersistentBTree {
             nr.ref_count -= 1;
             if nr.ref_count == 0 {
                 let children = std::mem::take(&mut nr.children);
-                self.ref_counts.remove(&nid);
+                refs.counts.remove(&nid);
                 dead_keys.push(nid.to_le_bytes().to_vec());
                 work.extend(children);
             }
@@ -630,14 +691,16 @@ impl PersistentBTree {
         if !dead_keys.is_empty() {
             self.nodes.lazy_delete_batch(dead_keys);
         }
-        self.next_id = self.next_id.max(
+        self.runtime.next_id.fetch_max(
             max_id
                 .checked_add(1)
                 .expect("PersistentBTree: NodeId space exhausted"),
+            Ordering::AcqRel,
         );
 
-        self.ref_counts = new_refs;
-        self.ref_counts_ready = true;
+        let mut refs = self.runtime.refs.lock();
+        refs.counts = new_refs;
+        refs.ready = true;
     }
 
     // =================================================================
@@ -650,8 +713,8 @@ impl PersistentBTree {
     /// In normal operation this is **not required** — [`Self::release_node`]
     /// already registers dead nodes for compaction.  Call this only for:
     ///
-    /// - **Crash recovery** — when `ref_counts_ready` is false after
-    ///   deserialization or an interrupted cascade.
+    /// - **Crash recovery** — when runtime reference counts are unavailable
+    ///   after deserialization or an interrupted cascade.
     /// - **Forced full sweep** — when you want to guarantee that every
     ///   unreachable node is registered, even if a prior `release_node`
     ///   cascade was incomplete.
@@ -663,5 +726,29 @@ impl PersistentBTree {
 impl Default for PersistentBTree {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Clone for PersistentBTree {
+    fn clone(&self) -> Self {
+        debug_assert!(
+            self.pending.is_empty(),
+            "PersistentBTree cloned with a non-empty write buffer"
+        );
+        let nodes = self.nodes.clone();
+        let refs = self.runtime.refs.lock();
+        let runtime = tree_runtime(
+            nodes.instance_id(),
+            self.runtime.next_id.load(Ordering::Acquire),
+            RefState {
+                counts: refs.counts.clone(),
+                ready: refs.ready,
+            },
+        );
+        Self {
+            nodes,
+            runtime,
+            pending: HashMap::new(),
+        }
     }
 }

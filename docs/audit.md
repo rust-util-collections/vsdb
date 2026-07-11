@@ -11,12 +11,6 @@
 
 ## Open
 
-### [CRITICAL] persistent-btree: restored aliases do not share allocator/ref-count runtime state
-- **Where**: `strata/src/basic/persistent_btree/mod.rs:86-180`, `strata/src/basic/persistent_btree/mod.rs:241-277`, `strata/src/basic/persistent_btree/mod.rs:505-640`
-- **What**: each safely restored alias owns an independent `next_id` and in-memory ref-count map even though all aliases address the same node pool.
-- **Why**: two aliases restored before either mutates can sequentially allocate the same `NodeId`; release builds overwrite an immutable node, while stale ref-count state can later register live nodes for deletion.
-- **Suggested fix**: share allocator/ref-count runtime state by node-pool `InstanceId` while preserving deep-copy `Clone`; add alternating-mutation regressions for standalone trees and `VerMap`.
-
 ### [CRITICAL] dagmap: legacy `id_num` is ignored when initializing `dag_id_ceiling`
 - **Where**: `strata/src/dagmap/mod.rs:47-81`, `strata/src/dagmap/raw/mod.rs:195-205`
 - **What**: an absent `dag_id_ceiling` unconditionally restarts allocation at zero even when a pre-ceiling `__SYSTEM__/id_num` counter and live child IDs exist.
