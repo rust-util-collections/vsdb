@@ -91,10 +91,23 @@ impl DagIdAllocator {
             Err(e) => panic!("legacy dag id counter: read failed: {e}"),
         };
         // Pre-ceiling releases serialized `Orphan<u128>` transparently as
-        // its inner MapxRaw handle. Decode that exact wire shape, then read
-        // the counter value from the still-live legacy slot.
-        let legacy: MapxRaw = postcard::from_bytes(&bytes)
+        // the old Mapx byte-string wire shape: a raw 8-byte prefix, before
+        // VSMAPX01 metadata existed.
+        let prefix: Vec<u8> = postcard::from_bytes(&bytes)
             .unwrap_or_else(|e| panic!("legacy dag id counter: invalid handle: {e}"));
+        if prefix.len() != 8 {
+            panic!(
+                "legacy dag id counter: invalid prefix length {}",
+                prefix.len()
+            );
+        }
+        // SAFETY: `id_num` is the process-global system counter written by
+        // pre-ceiling VSDB releases. Its prefix is default-namespace data,
+        // remains uniquely owned by this migration path, and the old engine
+        // dataset is still present because the caller is opening it now.
+        let legacy = unsafe {
+            MapxRaw::from_bytes_in(&vsdb_core::Namespace::default_ns(), &prefix)
+        };
         let raw = legacy
             .get([])
             .unwrap_or_else(|| panic!("legacy dag id counter: missing value"));
@@ -161,16 +174,32 @@ pub fn gen_dag_map_id_num() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Serialize;
 
     #[test]
     fn legacy_counter_is_folded_into_new_ceiling() {
+        struct LegacyMapxMeta<'a>(&'a [u8]);
+
+        impl Serialize for LegacyMapxMeta<'_> {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                serializer.serialize_bytes(self.0)
+            }
+        }
+
         let mut legacy = MapxRaw::new();
         legacy.insert([], 321u128.encode());
 
         let dir = std::env::temp_dir()
             .join(format!("vsdb_dag_id_migration_{}", rand::random::<u128>()));
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("id_num"), postcard::to_allocvec(&legacy).unwrap()).unwrap();
+        fs::write(
+            dir.join("id_num"),
+            postcard::to_allocvec(&LegacyMapxMeta(legacy.as_bytes())).unwrap(),
+        )
+        .unwrap();
 
         let mut alloc = DagIdAllocator::init_at(&dir);
         assert_eq!(alloc.next, 321);
