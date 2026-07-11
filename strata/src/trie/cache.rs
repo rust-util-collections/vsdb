@@ -12,14 +12,16 @@
 
 use crate::trie::{
     codec_util::{
-        CHECKSUM_LEN, compute_checksum, io_err, read_bytes, read_u8, read_varint,
-        write_bytes, write_varint,
+        CHECKSUM_LEN, checked_end, compute_checksum, io_err, read_bytes,
+        read_cache_bytes, read_u8, read_varint, validate_cache_file_size, write_bytes,
+        write_varint,
     },
     error::{Result, TrieError},
     mpt::MAX_MPT_KEY_LEN,
     nibbles::Nibbles,
-    node::{Node, NodeHandle},
+    node::{Node, NodeCodec, NodeHandle},
 };
+use sha3::{Digest, Keccak256};
 use std::{
     fs::File,
     io::{Read, Write},
@@ -72,8 +74,7 @@ pub(crate) fn save(
 ///
 /// Returns `(root_handle, sync_tag, root_hash)`.
 pub(crate) fn load(r: &mut impl Read) -> Result<(NodeHandle, u64, Vec<u8>)> {
-    let mut all_data = Vec::new();
-    r.read_to_end(&mut all_data).map_err(io_err)?;
+    let all_data = read_cache_bytes(r)?;
 
     if all_data.len() < CHECKSUM_LEN {
         return Err(TrieError::InvalidState("cache file too short".into()));
@@ -100,32 +101,35 @@ pub(crate) fn load(r: &mut impl Read) -> Result<(NodeHandle, u64, Vec<u8>)> {
 
     let mut cursor = 5;
 
-    if cursor + 8 > payload.len() {
-        return Err(TrieError::InvalidState(
-            "unexpected EOF reading sync_tag".into(),
-        ));
-    }
-    let sync_tag = u64::from_le_bytes(payload[cursor..cursor + 8].try_into().unwrap());
-    cursor += 8;
+    let end = checked_end(cursor, 8, payload.len(), "sync_tag")?;
+    let sync_tag = u64::from_le_bytes(payload[cursor..end].try_into().unwrap());
+    cursor = end;
 
-    if cursor + 4 > payload.len() {
-        return Err(TrieError::InvalidState(
-            "unexpected EOF reading hash_len".into(),
-        ));
+    let end = checked_end(cursor, 4, payload.len(), "hash_len")?;
+    let hash_len = u32::from_le_bytes(payload[cursor..end].try_into().unwrap()) as usize;
+    cursor = end;
+    if hash_len != 32 {
+        return Err(TrieError::InvalidState(format!(
+            "cache root hash length {hash_len} != 32"
+        )));
     }
-    let hash_len =
-        u32::from_le_bytes(payload[cursor..cursor + 4].try_into().unwrap()) as usize;
-    cursor += 4;
 
-    if cursor + hash_len > payload.len() {
-        return Err(TrieError::InvalidState(
-            "unexpected EOF reading root_hash".into(),
-        ));
-    }
-    let root_hash = payload[cursor..cursor + hash_len].to_vec();
-    cursor += hash_len;
+    let end = checked_end(cursor, hash_len, payload.len(), "root_hash")?;
+    let root_hash = payload[cursor..end].to_vec();
+    cursor = end;
 
     let root = deserialize_handle(payload, &mut cursor, 0)?;
+    if cursor != payload.len() {
+        return Err(TrieError::InvalidState(
+            "trailing bytes after MPT cache root".into(),
+        ));
+    }
+    let computed = validate_cached_handle(&root, true)?;
+    if root_hash.as_slice() != computed {
+        return Err(TrieError::InvalidState(
+            "MPT cache root hash does not match the tree".into(),
+        ));
+    }
     Ok((root, sync_tag, root_hash))
 }
 
@@ -142,6 +146,7 @@ pub(crate) fn save_to_file(
 
 /// Convenience: load from a file path.
 pub(crate) fn load_from_file(path: &Path) -> Result<(NodeHandle, u64, Vec<u8>)> {
+    validate_cache_file_size(path)?;
     let mut f = File::open(path).map_err(io_err)?;
     load(&mut f)
 }
@@ -245,6 +250,7 @@ fn deserialize_handle(
             let node = deserialize_node(data, cursor, consumed)?;
             Ok(NodeHandle::InMemory(Box::new(node)))
         }
+
         HANDLE_CACHED => {
             let hash = read_bytes(data, cursor)?;
             if hash.len() != 32 {
@@ -285,6 +291,62 @@ fn deserialize_handle(
             "invalid handle tag: {tag}"
         ))),
     }
+}
+
+fn validate_cached_handle(handle: &NodeHandle, is_root: bool) -> Result<[u8; 32]> {
+    let (stored, node) = match handle {
+        NodeHandle::InMemory(node) if is_root && **node == Node::Null => {
+            return Ok([0u8; 32]);
+        }
+        NodeHandle::InMemory(_) => {
+            return Err(TrieError::InvalidState(
+                "MPT cache contains an unhashed node".into(),
+            ));
+        }
+        NodeHandle::Cached(stored, node) => (stored, node),
+    };
+    let stored: [u8; 32] = stored.as_slice().try_into().map_err(|_| {
+        TrieError::InvalidState("MPT cache has a bad hash length".into())
+    })?;
+
+    match node.as_ref() {
+        Node::Null => {
+            return Err(TrieError::InvalidState(if is_root {
+                "MPT cache contains a non-canonical cached empty root".into()
+            } else {
+                "MPT cache contains a nested Null node".into()
+            }));
+        }
+        Node::Leaf { .. } => {}
+        Node::Extension { child, .. } => {
+            validate_cached_handle(child, false)?;
+            if !matches!(child, NodeHandle::Cached(_, child) if matches!(child.as_ref(), Node::Branch { .. }))
+            {
+                return Err(TrieError::InvalidState(
+                    "MPT cache contains a non-canonical extension child".into(),
+                ));
+            }
+        }
+        Node::Branch { children, value } => {
+            let child_count = children.iter().flatten().count();
+            if child_count == 0 || (child_count == 1 && value.is_none()) {
+                return Err(TrieError::InvalidState(
+                    "MPT cache contains a non-canonical branch".into(),
+                ));
+            }
+            for child in children.iter().flatten() {
+                validate_cached_handle(child, false)?;
+            }
+        }
+    }
+
+    let computed: [u8; 32] = Keccak256::digest(NodeCodec::encode(node)).into();
+    if stored != computed {
+        return Err(TrieError::InvalidState(
+            "MPT cache contains an incorrect cached hash".into(),
+        ));
+    }
+    Ok(computed)
 }
 
 fn deserialize_node(data: &[u8], cursor: &mut usize, consumed: usize) -> Result<Node> {
@@ -370,11 +432,9 @@ fn write_nibbles(buf: &mut Vec<u8>, nibbles: &Nibbles) {
 
 fn read_nibbles(data: &[u8], cursor: &mut usize) -> Result<Nibbles> {
     let len = read_varint(data, cursor)?;
-    if *cursor + len > data.len() {
-        return Err(TrieError::InvalidState("nibbles unexpected EOF".into()));
-    }
-    let raw = data[*cursor..*cursor + len].to_vec();
-    *cursor += len;
+    let end = checked_end(*cursor, len, data.len(), "nibbles")?;
+    let raw = data[*cursor..end].to_vec();
+    *cursor = end;
     // Branch children are indexed by nibble value — an out-of-range
     // nibble from a malformed file would panic on `children[idx]`.
     if raw.iter().any(|&n| n > 0x0F) {

@@ -1461,21 +1461,28 @@ mod mpt_proof_tests {
 #[cfg(test)]
 mod cache_validation_tests {
     use crate::trie::cache as mpt_cache;
+    use crate::trie::codec_util::{
+        CHECKSUM_LEN, MAX_CACHE_FILE_BYTES, compute_checksum, read_bytes,
+    };
     use crate::trie::nibbles::Nibbles;
-    use crate::trie::node::{Node, NodeHandle};
+    use crate::trie::node::{Node, NodeCodec, NodeHandle};
     use crate::trie::smt::bitpath::BitPath;
     use crate::trie::smt::cache as smt_cache;
-    use crate::trie::smt::{SmtHandle, SmtNode};
+    use crate::trie::smt::codec::{hash_internal, hash_leaf, wrap_hash};
+    use crate::trie::smt::{EMPTY_HASH, SmtHandle, SmtNode};
+    use sha3::{Digest, Keccak256};
 
     fn smt_load(root: &SmtHandle) -> crate::trie::error::Result<SmtHandle> {
         let mut buf = Vec::new();
-        smt_cache::save(root, 0, &[0u8; 32], &mut buf).unwrap();
+        let root_hash = root.hash().map_or_else(|| vec![0u8; 32], ToOwned::to_owned);
+        smt_cache::save(root, 0, &root_hash, &mut buf).unwrap();
         smt_cache::load(&mut buf.as_slice()).map(|(h, _, _)| h)
     }
 
     fn mpt_load(root: &NodeHandle) -> crate::trie::error::Result<NodeHandle> {
         let mut buf = Vec::new();
-        mpt_cache::save(root, 0, &[0u8; 32], &mut buf).unwrap();
+        let root_hash = root.hash().map_or_else(|| vec![0u8; 32], ToOwned::to_owned);
+        mpt_cache::save(root, 0, &root_hash, &mut buf).unwrap();
         mpt_cache::load(&mut buf.as_slice()).map(|(h, _, _)| h)
     }
 
@@ -1485,6 +1492,23 @@ mod cache_validation_tests {
             key_hash,
             value: b"v".to_vec(),
         }))
+    }
+
+    fn smt_cached_leaf(key_hash: [u8; 32], path: BitPath) -> SmtHandle {
+        let value = b"v".to_vec();
+        SmtHandle::Cached(
+            hash_leaf(&key_hash, &value).to_vec(),
+            Box::new(SmtNode::Leaf {
+                path,
+                key_hash,
+                value,
+            }),
+        )
+    }
+
+    fn mpt_cached(node: Node) -> NodeHandle {
+        let hash = Keccak256::digest(NodeCodec::encode(&node)).to_vec();
+        NodeHandle::Cached(hash, Box::new(node))
     }
 
     #[test]
@@ -1519,7 +1543,7 @@ mod cache_validation_tests {
         assert!(smt_load(&mispositioned).is_err());
 
         // Coherent leaf loads fine.
-        let coherent = smt_leaf([0xAB; 32], BitPath::from_hash(&[0xAB; 32]));
+        let coherent = smt_cached_leaf([0xAB; 32], BitPath::from_hash(&[0xAB; 32]));
         assert!(smt_load(&coherent).is_ok());
     }
 
@@ -1580,14 +1604,12 @@ mod cache_validation_tests {
         // `Nibbles` can't even represent one (debug-asserted), so
         // patch the serialized payload directly and re-checksum —
         // exactly what a hand-crafted file could contain.
-        use crate::trie::codec_util::{CHECKSUM_LEN, compute_checksum};
-
-        let root = NodeHandle::InMemory(Box::new(Node::Leaf {
+        let root = mpt_cached(Node::Leaf {
             path: Nibbles::from_nibbles_unsafe(vec![0x0A]),
             value: b"v".to_vec(),
-        }));
+        });
         let mut buf = Vec::new();
-        mpt_cache::save(&root, 0, &[0u8; 32], &mut buf).unwrap();
+        mpt_cache::save(&root, 0, root.hash().unwrap(), &mut buf).unwrap();
 
         // Sanity: the loader accepts the untampered file.
         assert!(mpt_cache::load(&mut buf.as_slice()).is_ok());
@@ -1606,7 +1628,10 @@ mod cache_validation_tests {
         let root = NodeHandle::Cached(vec![0u8; 5], Box::new(Node::Null));
         assert!(mpt_load(&root).is_err());
 
-        let ok = NodeHandle::Cached(vec![0u8; 32], Box::new(Node::Null));
+        let ok = mpt_cached(Node::Leaf {
+            path: Nibbles::default(),
+            value: b"v".to_vec(),
+        });
         assert!(mpt_load(&ok).is_ok());
     }
 
@@ -1664,7 +1689,8 @@ mod cache_validation_tests {
         );
         assert!(mpt_load(&deep).is_err());
 
-        // Fully-Cached counterpart still loads.
+        // Fully-Cached is not enough: extension→leaf is noncanonical and
+        // must be compacted into one leaf.
         let all_cached = NodeHandle::Cached(
             vec![0u8; 32],
             Box::new(Node::Extension {
@@ -1678,6 +1704,93 @@ mod cache_validation_tests {
                 ),
             }),
         );
-        assert!(mpt_load(&all_cached).is_ok());
+        assert!(mpt_load(&all_cached).is_err());
+    }
+
+    #[test]
+    fn caches_reject_noncanonical_shapes_and_wrong_hashes() {
+        let mut children: Box<[Option<NodeHandle>; 16]> = Default::default();
+        children[3] = Some(mpt_cached(Node::Leaf {
+            path: Nibbles::from_nibbles_unsafe(vec![4]),
+            value: b"v".to_vec(),
+        }));
+        let branch = mpt_cached(Node::Branch {
+            children,
+            value: None,
+        });
+        assert!(mpt_load(&branch).is_err());
+
+        let key_hash = [0u8; 32];
+        let left = smt_cached_leaf(key_hash, BitPath::from_bits(&[0; 255]));
+        let left_hash: [u8; 32] = left.hash().unwrap().try_into().unwrap();
+        let right = SmtHandle::Cached(EMPTY_HASH.to_vec(), Box::new(SmtNode::Empty));
+        let root_hash =
+            wrap_hash(hash_internal(&left_hash, &EMPTY_HASH), &BitPath::default());
+        let single_child = SmtHandle::Cached(
+            root_hash.to_vec(),
+            Box::new(SmtNode::Internal {
+                path: BitPath::default(),
+                left,
+                right,
+            }),
+        );
+        assert!(smt_load(&single_child).is_err());
+
+        let right_key_hash = {
+            let mut hash = [0u8; 32];
+            hash[0] = 0x80;
+            hash
+        };
+        let mixed = SmtHandle::Cached(
+            vec![0u8; 32],
+            Box::new(SmtNode::Internal {
+                path: BitPath::default(),
+                left: smt_cached_leaf(key_hash, BitPath::from_bits(&[0; 255])),
+                right: SmtHandle::InMemory(Box::new(SmtNode::Leaf {
+                    path: BitPath::from_bits(&[0; 255]),
+                    key_hash: right_key_hash,
+                    value: b"v".to_vec(),
+                })),
+            }),
+        );
+        assert!(smt_load(&mixed).is_err());
+
+        let wrong_hash = SmtHandle::Cached(
+            [9u8; 32].to_vec(),
+            Box::new(SmtNode::Leaf {
+                path: BitPath::from_hash(&key_hash),
+                key_hash,
+                value: b"v".to_vec(),
+            }),
+        );
+        assert!(smt_load(&wrong_hash).is_err());
+    }
+
+    #[test]
+    fn caches_reject_overflow_lengths_trailing_bytes_and_oversize_files() {
+        let mut cursor = 0;
+        let maximal_varint =
+            [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01];
+        assert!(read_bytes(&maximal_varint, &mut cursor).is_err());
+
+        let root = mpt_cached(Node::Leaf {
+            path: Nibbles::default(),
+            value: b"v".to_vec(),
+        });
+        let mut buf = Vec::new();
+        mpt_cache::save(&root, 0, root.hash().unwrap(), &mut buf).unwrap();
+        let payload_len = buf.len() - CHECKSUM_LEN;
+        buf.insert(payload_len, 0xAA);
+        let checksum = compute_checksum(&buf[..=payload_len]);
+        buf[payload_len + 1..].copy_from_slice(&checksum);
+        assert!(mpt_cache::load(&mut buf.as_slice()).is_err());
+
+        let path = std::env::temp_dir()
+            .join(format!("vsdb_oversize_cache_{}", rand::random::<u128>()));
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_CACHE_FILE_BYTES + 1).unwrap();
+        drop(file);
+        assert!(mpt_cache::load_from_file(&path).is_err());
+        std::fs::remove_file(path).unwrap();
     }
 }

@@ -45,6 +45,9 @@ For a key NOT in the trie, the proof must demonstrate that the key's path leads 
 
 ### INV-T7: Cache Files Are a Trust Boundary
 The walkers (insert/remove/get/commit/Drop) assume every in-memory tree is canonically shaped — SMT leaves positioned exactly at their key hash's 256-bit path, MPT within `MAX_MPT_KEY_LEN` depth with non-empty extensions and nibble values < 16, cached hashes 32 bytes. Organic mutation guarantees this; loaded cache files do NOT. Both cache deserializers must validate whole-tree structure (cumulative depth/nibble budget, leaf position coherence, hash lengths), not just per-node fields — a checksum only protects against accidental corruption, not malformed content.
+Canonical occupancy/compression and every cached hash must be recomputed, mixed
+cached/in-memory trees and trailing bytes rejected, length arithmetic checked,
+and oversized files refused before allocation.
 **Check**: Any new node field or structural assumption in a walker needs a matching deserializer-side validation. Failed sync/mutation paths must never leave a `mem::take`n root unrestored or sync bookkeeping claiming a commit the trie doesn't hold (see `VerMapWithProof::sync_to_commit`'s poison-on-failure).
 
 ## Common Bug Patterns

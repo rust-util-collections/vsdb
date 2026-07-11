@@ -11,12 +11,6 @@
 
 ## Open
 
-### [HIGH] trie: cache trust-boundary validation is incomplete
-- **Where**: `strata/src/trie/cache.rs:71-147`, `strata/src/trie/cache.rs:224-385`, `strata/src/trie/codec_util.rs:24-60`, `strata/src/trie/smt/cache.rs:60-132`, `strata/src/trie/smt/cache.rs:195-325`
-- **What**: loaders accept noncanonical tree shapes and self-attested cached hashes, SMT permits cached parents with unhashed children, length arithmetic can overflow, and files are read without a size bound.
-- **Why**: checksum-valid malformed caches can return a wrong root, make later proofs fail, panic during parsing, or exhaust memory instead of falling back to authoritative rebuild.
-- **Suggested fix**: enforce canonical shape, recompute every cached hash, reject mixed handle state/trailing bytes, harden varints and checked ranges, and cap cache-file size before allocation.
-
 ### [MEDIUM] persistent-btree: deserialized deletes flush discarded temporary nodes
 - **Where**: `strata/src/basic/persistent_btree/remove.rs:27-84`, `strata/src/basic/persistent_btree/mod.rs:175-180`
 - **What**: `discard_node` returns immediately while ref counts are unavailable, even when the node is a current-operation entry in `pending`.

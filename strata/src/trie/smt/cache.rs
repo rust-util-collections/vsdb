@@ -7,8 +7,9 @@
 
 use crate::trie::{
     codec_util::{
-        CHECKSUM_LEN, compute_checksum, io_err, read_bytes, read_u8, read_varint,
-        write_bytes, write_varint,
+        CHECKSUM_LEN, checked_end, compute_checksum, io_err, read_bytes,
+        read_cache_bytes, read_u8, read_varint, validate_cache_file_size, write_bytes,
+        write_varint,
     },
     error::{Result, TrieError},
 };
@@ -18,7 +19,11 @@ use std::{
     path::Path,
 };
 
-use super::{SmtHandle, SmtNode, bitpath::BitPath};
+use super::{
+    EMPTY_HASH, SmtHandle, SmtNode,
+    bitpath::BitPath,
+    codec::{hash_internal, hash_leaf, wrap_hash},
+};
 
 const MAGIC: &[u8; 4] = b"SMTC";
 // v3: leaf-shortcut hash domain (lone-leaf subtrees commit to the leaf
@@ -58,8 +63,7 @@ pub(crate) fn save(
 }
 
 pub(crate) fn load(r: &mut impl Read) -> Result<(SmtHandle, u64, Vec<u8>)> {
-    let mut all_data = Vec::new();
-    r.read_to_end(&mut all_data).map_err(io_err)?;
+    let all_data = read_cache_bytes(r)?;
 
     if all_data.len() < CHECKSUM_LEN {
         return Err(TrieError::InvalidState("SMT cache file too short".into()));
@@ -88,32 +92,35 @@ pub(crate) fn load(r: &mut impl Read) -> Result<(SmtHandle, u64, Vec<u8>)> {
 
     let mut cursor = 5;
 
-    if cursor + 8 > payload.len() {
-        return Err(TrieError::InvalidState(
-            "unexpected EOF reading sync_tag".into(),
-        ));
-    }
-    let sync_tag = u64::from_le_bytes(payload[cursor..cursor + 8].try_into().unwrap());
-    cursor += 8;
+    let end = checked_end(cursor, 8, payload.len(), "sync_tag")?;
+    let sync_tag = u64::from_le_bytes(payload[cursor..end].try_into().unwrap());
+    cursor = end;
 
-    if cursor + 4 > payload.len() {
-        return Err(TrieError::InvalidState(
-            "unexpected EOF reading hash_len".into(),
-        ));
+    let end = checked_end(cursor, 4, payload.len(), "hash_len")?;
+    let hash_len = u32::from_le_bytes(payload[cursor..end].try_into().unwrap()) as usize;
+    cursor = end;
+    if hash_len != 32 {
+        return Err(TrieError::InvalidState(format!(
+            "SMT cache root hash length {hash_len} != 32"
+        )));
     }
-    let hash_len =
-        u32::from_le_bytes(payload[cursor..cursor + 4].try_into().unwrap()) as usize;
-    cursor += 4;
 
-    if cursor + hash_len > payload.len() {
-        return Err(TrieError::InvalidState(
-            "unexpected EOF reading root_hash".into(),
-        ));
-    }
-    let root_hash = payload[cursor..cursor + hash_len].to_vec();
-    cursor += hash_len;
+    let end = checked_end(cursor, hash_len, payload.len(), "root_hash")?;
+    let root_hash = payload[cursor..end].to_vec();
+    cursor = end;
 
     let root = deserialize_handle(payload, &mut cursor, &BitPath::default())?;
+    if cursor != payload.len() {
+        return Err(TrieError::InvalidState(
+            "trailing bytes after SMT cache root".into(),
+        ));
+    }
+    let computed = validate_cached_handle(&root, true)?;
+    if root_hash.as_slice() != computed {
+        return Err(TrieError::InvalidState(
+            "SMT cache root hash does not match the tree".into(),
+        ));
+    }
     Ok((root, sync_tag, root_hash))
 }
 
@@ -128,6 +135,7 @@ pub(crate) fn save_to_file(
 }
 
 pub(crate) fn load_from_file(path: &Path) -> Result<(SmtHandle, u64, Vec<u8>)> {
+    validate_cache_file_size(path)?;
     let mut f = File::open(path).map_err(io_err)?;
     load(&mut f)
 }
@@ -218,6 +226,7 @@ fn deserialize_handle(
             let node = deserialize_node(data, cursor, prefix)?;
             Ok(SmtHandle::InMemory(Box::new(node)))
         }
+
         HANDLE_CACHED => {
             let hash = read_bytes(data, cursor)?;
             if hash.len() != NODE_HASH_LEN {
@@ -235,6 +244,48 @@ fn deserialize_handle(
     }
 }
 
+fn validate_cached_handle(handle: &SmtHandle, is_root: bool) -> Result<[u8; 32]> {
+    let SmtHandle::Cached(stored, node) = handle else {
+        return Err(TrieError::InvalidState(
+            "SMT cache contains an unhashed node".into(),
+        ));
+    };
+    let stored: [u8; 32] = stored.as_slice().try_into().map_err(|_| {
+        TrieError::InvalidState("SMT cache has a bad hash length".into())
+    })?;
+
+    let computed = match node.as_ref() {
+        SmtNode::Empty => {
+            if !is_root {
+                return Err(TrieError::InvalidState(
+                    "SMT cache contains an empty internal child".into(),
+                ));
+            }
+            EMPTY_HASH
+        }
+        SmtNode::Leaf {
+            key_hash, value, ..
+        } => hash_leaf(key_hash, value),
+        SmtNode::Internal { path, left, right } => {
+            if left.is_empty() || right.is_empty() {
+                return Err(TrieError::InvalidState(
+                    "SMT cache contains a non-canonical single-child internal node"
+                        .into(),
+                ));
+            }
+            let left_hash = validate_cached_handle(left, false)?;
+            let right_hash = validate_cached_handle(right, false)?;
+            wrap_hash(hash_internal(&left_hash, &right_hash), path)
+        }
+    };
+    if stored != computed {
+        return Err(TrieError::InvalidState(
+            "SMT cache contains an incorrect cached hash".into(),
+        ));
+    }
+    Ok(computed)
+}
+
 fn deserialize_node(
     data: &[u8],
     cursor: &mut usize,
@@ -245,14 +296,10 @@ fn deserialize_node(
         NODE_EMPTY => Ok(SmtNode::Empty),
         NODE_LEAF => {
             let path = read_bitpath(data, cursor)?;
-            if *cursor + 32 > data.len() {
-                return Err(TrieError::InvalidState(
-                    "unexpected EOF reading key_hash".into(),
-                ));
-            }
+            let end = checked_end(*cursor, 32, data.len(), "key_hash")?;
             let mut key_hash = [0u8; 32];
-            key_hash.copy_from_slice(&data[*cursor..*cursor + 32]);
-            *cursor += 32;
+            key_hash.copy_from_slice(&data[*cursor..end]);
+            *cursor = end;
             let value = read_bytes(data, cursor)?;
             // A leaf's routing position plus its residual path must
             // reconstruct its key hash exactly (this is how insert
@@ -317,10 +364,8 @@ fn read_bitpath(data: &[u8], cursor: &mut usize) -> Result<BitPath> {
         )));
     }
     let byte_len = bit_len.div_ceil(8);
-    if *cursor + byte_len > data.len() {
-        return Err(TrieError::InvalidState("bitpath unexpected EOF".into()));
-    }
-    let packed = &data[*cursor..*cursor + byte_len];
-    *cursor += byte_len;
+    let end = checked_end(*cursor, byte_len, data.len(), "bitpath")?;
+    let packed = &data[*cursor..end];
+    *cursor = end;
     Ok(BitPath::from_packed(packed, bit_len))
 }
