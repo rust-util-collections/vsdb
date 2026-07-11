@@ -49,18 +49,21 @@ entry must only be dropped from the registry, never destroyed through it.
 
 ### INV-DG6: Prune Phase Ordering (Crash Safety)
 `prune_mainline` must be ordered **destroy branches → merge → flush →
-re-parent → flush → clear**, with nothing cleared before the genesis holds
-the complete merged state and all surviving children are re-pointed at it.
+re-parent → flush → clear → flush → unregister**, with nothing cleared before
+the genesis holds the complete merged state and all surviving children are
+re-pointed at it, and no discoverability entry removed before destructive
+clears are durable.
 The genesis is enriched **in place** (keeps its instance ID), which is
 invisible through the head because overlay reads resolve top-down.
 The head's per-node clear order is **parent → children → data**: once
 clearing starts, the head is parentless, so re-running prune is refused
 (early return) instead of re-folding against a half-cleared head.
 **Check**: Verify no `clear()`/parent-null precedes the merge+re-parent
-completion; verify the two `self.namespace().flush()` barriers (scoped to the
+completion; verify all three `self.namespace().flush()` barriers (scoped to the
 DAG's own engine — a composite never spans namespaces — with cross-shard WALs
-recovering independently); verify a crash at any phase boundary leaves genesis +
-surviving children value-exact (see the `prune_crash_*` tests).
+recovering independently), including the clear-before-unregister barrier;
+verify a crash at any phase boundary leaves genesis + surviving children
+value-exact (see the `prune_crash_*` tests).
 
 ## Common Bug Patterns
 

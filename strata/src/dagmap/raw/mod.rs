@@ -444,6 +444,11 @@ impl DagMapRaw {
         // intermediates newest → oldest).
         self.prune_clear_consumed(&mut linebuf);
 
+        // Barrier C: the consumed nodes' data/parent clears must be
+        // durable before phase 6 removes their last discoverability
+        // entries from the genesis registry.
+        self.namespace().flush();
+
         // Phase 6: drop the now-dead mainline entry from the genesis'
         // children registry (side branches were already destroyed in
         // phase 1; the ownership check inside skips foreign residue).
@@ -603,7 +608,7 @@ impl DagMapRaw {
     /// Prune phases 4-5: clear the consumed nodes — the head first, then
     /// the intermediates newest → oldest.
     ///
-    /// Per-node order: **parent → children → data**.  Nulling the head's
+    /// Per-node order: **parent → children → data**. Nulling the head's
     /// parent first makes interrupted-prune re-entry structurally safe:
     /// before any clearing starts, re-running `prune` on the head is a
     /// complete, convergent re-run (refold + idempotent flips); the
@@ -618,6 +623,8 @@ impl DagMapRaw {
     /// its parent slot is either intact or `None` — both reclaimable by
     /// the ownership rule ([`owned_or_residue`](Self::owned_or_residue)),
     /// so the next prune's side-branch destruction sweeps the residue.
+    /// The caller flushes immediately after this phase, before phase 6
+    /// unregisters the consumed chain.
     fn prune_clear_consumed(&mut self, linebuf: &mut [Self]) {
         let mid = linebuf.len() - 1;
         let others = &mut linebuf[..mid];
@@ -711,6 +718,9 @@ impl DagMapRaw {
     /// still-intact registry entry, so a retried `destroy()` or a
     /// subsequent `prune()` converges instead of leaking.
     ///
+    /// A namespace flush separates the data/parent pass from registry
+    /// clearing, making this ordering durable across independent shard WALs.
+    ///
     /// The descendant walk follows the children registries but treats each
     /// child's own parent slot as the ownership truth: an entry whose child
     /// meanwhile lives under a different parent (a stale index copy left by
@@ -781,6 +791,12 @@ impl DagMapRaw {
             stack.extend(node.children.iter().map(|(_, c)| (node_id, c)));
             owned.push(node);
         }
+
+        // Data and parent slots may live on different shards from their
+        // registries. Make every destructive clear durable before any
+        // registry entry can disappear on a later independently-recovered
+        // WAL.
+        self.namespace().flush();
 
         // Pass 2: every owned descendant's data is already gone, so
         // clearing the children registries in any order — even if

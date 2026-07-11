@@ -11,12 +11,6 @@
 
 ## Open
 
-### [HIGH] dagmap: teardown ordering lacks durable cross-shard barriers
-- **Where**: `strata/src/dagmap/raw/mod.rs:602-632`, `strata/src/dagmap/raw/mod.rs:647-679`, `strata/src/dagmap/raw/mod.rs:682-803`
-- **What**: destroy/prune clearing relies on call order, but data/parent clears and later registry removals can land in different unsynced shard WALs.
-- **Why**: after power loss, unregistering can be durable while earlier clears are lost, permanently hiding live storage from every registry-driven cleanup path.
-- **Suggested fix**: flush the namespace after all owned data/parent slots are cleared and before discoverability registries are removed; add restart-oriented phase tests.
-
 ### [HIGH] dagmap: deserialization accepts mixed-namespace components
 - **Where**: `strata/src/dagmap/raw/mod.rs:82-127`, `strata/src/dagmap/raw/mod.rs:131-152`
 - **What**: `DagMapRaw` assembles `data`, `parent`, and `children` handles without verifying that they belong to one namespace.
