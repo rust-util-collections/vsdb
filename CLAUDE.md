@@ -32,6 +32,10 @@ make bench        # criterion benches (core: basic + cache_pool; strata: basic, 
 
 **Important**: Tests run in PARALLEL (v16.0.2+). Test data stays disjoint via globally-unique prefixes; tests must not assert on cross-test global state (exact allocator values, registry sizes) and must serialize any `vsdb_set_base_dir` behind a `Once` (env mutation is unsound to race).
 
+`make test` is the manual/CI convenience target and performs global cleanup.
+Automation skills use direct `cargo test --workspace --tests` commands instead,
+so they never delete `$HOME/.vsdb` or shared `/tmp/vsdb_testing`.
+
 ## Architecture
 
 | Subsystem | Key files | Purpose |
@@ -50,7 +54,10 @@ make bench        # criterion benches (core: basic + cache_pool; strata: basic, 
 | Encoding | `strata/src/common/ende.rs` | postcard-based KeyEnDe/ValueEnDe |
 | Staged mutation | `strata/src/common/staged.rs` | read-your-writes overlay + one atomic write batch per mutation (SlotDex/VecDex) |
 
-## Commands
+## Skills
+
+Project skills live under `.claude/skills/<name>/SKILL.md` and are
+user-invocable only.
 
 - `/x-review` — deep regression analysis (supports: N commits, `all`, hash, range)
 - `/x-fix` — fix audit backlog: resolve `docs/audit.md` → self-review → commit
@@ -58,13 +65,16 @@ make bench        # criterion benches (core: basic + cache_pool; strata: basic, 
 - `/x-overhaul` — full codebase overhaul: review all → fix → commit
 
 Supporting documentation in `.claude/docs/`:
+- `workflow-policy.md` — shared-worktree safety and one-issue-one-commit policy
+- `commit-protocol.md` — atomic validation/commit and lockstep version procedure
+- `compatibility-policy.md` — public/on-disk breaks and required migration paths
 - `technical-patterns.md` — cataloged bug patterns for vsdb + mmdb layers
-- `review-core.md` — systematic review methodology
+- `review-core.md` — systematic methodology + canonical subsystem map
 - `false-positive-guide.md` — rules for filtering spurious findings
 - `patterns/` — per-subsystem review guides (btree, versioning, trie, slotdex, dagmap, engine, vecdex)
 
 Additional documentation in `docs/`:
-- `audit.md` — audit findings registry (tracked by /x-review and /x-fix)
+- `audit.md` — Open, Won't Fix, and Rejected registry (tracked by /x-review and /x-fix)
 
 ## Conventions
 
@@ -77,7 +87,9 @@ Additional documentation in `docs/`:
 - `VsdbError` (thiserror, defined in `vsdb_core`) is the **only** error type in public APIs of both crates; `ruc` is internal-only for error chaining — boundary conversions preserve the complete chain via `stringify_chain`
 - `postcard` for serialization (replaced serde_cbor_2 in v12)
 - Tests run in parallel; isolation comes from globally-unique prefixes (plus `tempdir`/`/tmp/vsdb_testing` for file-level scratch); global-state assertions must be race-tolerant
-- ~26 unsafe blocks in library code (plus ~6 in benches) — all require `// SAFETY:` comments
+- Unsafe code is concentrated in handle reconstruction/shadowing, entry APIs,
+  DagMap aliases, trie internals, and concurrent benches; derive the live
+  inventory during review and require accurate `// SAFETY:` contracts
   - `shadow()`: SWMR contract — caller serializes writes (the ONLY aliasing handle primitive; `Clone` deep-copies storage)
   - `from_bytes()`: caller provides valid serialized bytes
   - Pointer casts in entry API macros
