@@ -98,3 +98,4 @@ Additional documentation in `docs/`:
     correct type and namespace
   - Pointer casts in entry API macros
   - `env::set_var` in `vsdb_set_base_dir`: caller must invoke before spawning threads
+- **No Co-Authored-By in commits** — never add `Co-Authored-By:` or similar trailers to commit messages; project commits are authored only by the human contributor
