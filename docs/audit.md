@@ -11,12 +11,6 @@
 
 ## Open
 
-### [LOW] CI: formatting is not enforced
-- **Where**: `.github/workflows/rust.yml:18-22`
-- **What**: CI runs lint/tests but omits `cargo fmt --all -- --check`, despite the canonical commit gate requiring it.
-- **Why**: unformatted Rust can merge while CI passes.
-- **Suggested fix**: add a non-mutating formatting step.
-
 ### [LOW] docs: crate README license links are broken
 - **Where**: `core/README.md:5`, `strata/README.md:5`
 - **What**: both use `../../LICENSE`, which resolves outside the repository.

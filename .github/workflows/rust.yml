@@ -15,6 +15,9 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Check formatting
+      run: rustup update stable; rustup component add rustfmt; cargo fmt --all -- --check
+
     - name: Build
       run: rustup update stable; rustup component add clippy; make lint
 
