@@ -235,7 +235,8 @@ where
     /// Recovers a `VecDexDyn` from previously saved metadata; the
     /// creation-time metric is restored from the meta itself.
     pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
-        crate::common::load_instance_meta(instance_id.into())
+        let id = instance_id.into();
+        crate::common::load_instance_meta_checked(id, Self::instance_id)
     }
 
     /// Returns the number of indexed vectors.

@@ -11,12 +11,6 @@
 
 ## Open
 
-### [HIGH] metadata: `from_meta` does not bind payload identity to the requested `InstanceId`
-- **Where**: `core/src/basic/mapx_raw/mod.rs:555-586`, `strata/src/common/mod.rs:43-74`, `strata/src/common/macros.rs:205-229`, composite `from_meta` implementations
-- **What**: a valid same-type metadata payload copied under another instance's filename is accepted without comparing its embedded prefix/namespace to the requested token.
-- **Why**: callers can silently restore and mutate a different collection, including one in another namespace.
-- **Suggested fix**: require canonical payload identity to equal the requested `InstanceId` before returning every raw, typed, or composite handle; add same- and cross-namespace swap tests.
-
 ### [HIGH] vecdex: reciprocal pruning can isolate inserts and violate entry-point invariants
 - **Where**: `strata/src/vecdex/mod.rs:661-745`, `strata/src/vecdex/mod.rs:986-1031`, `strata/src/vecdex/hnsw.rs:284-311`
 - **What**: every selected neighbor may prune the newly inserted node and detach the reciprocal edge; re-election can then choose a lower-layer linked node while retaining a higher `max_layer`.

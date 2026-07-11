@@ -73,6 +73,25 @@ pub fn load_instance_meta<T: DeserializeOwned>(id: InstanceId) -> Result<T> {
     Ok(postcard::from_bytes(&bytes)?)
 }
 
+pub(crate) fn load_instance_meta_checked<T>(
+    id: InstanceId,
+    instance_id: impl FnOnce(&T) -> InstanceId,
+) -> Result<T>
+where
+    T: DeserializeOwned,
+{
+    let value = load_instance_meta(id)?;
+    let found = instance_id(&value);
+    if found != id {
+        return Err(error::VsdbError::Decode {
+            detail: format!(
+                "metadata identity mismatch: requested {id}, payload names {found}"
+            ),
+        });
+    }
+    Ok(value)
+}
+
 pub(crate) fn serialize_typed_handle_meta<T, Ser>(
     inner: &impl Serialize,
     serializer: Ser,

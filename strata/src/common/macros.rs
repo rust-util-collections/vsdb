@@ -225,7 +225,8 @@ macro_rules! define_map_wrapper {
             pub fn from_meta(
                 instance_id: impl Into<$crate::common::InstanceId>,
             ) -> $crate::common::error::Result<Self> {
-                $crate::common::load_instance_meta(instance_id.into())
+                let id = instance_id.into();
+                $crate::common::load_instance_meta_checked(id, Self::instance_id)
             }
         }
 

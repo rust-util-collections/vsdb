@@ -185,7 +185,8 @@ where
     /// The caller must ensure that the underlying VSDB database still
     /// contains the data referenced by this instance ID.
     pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
-        crate::common::load_instance_meta(instance_id.into())
+        let id = instance_id.into();
+        crate::common::load_instance_meta_checked(id, Self::instance_id)
     }
 
     /// Checks if the DAG map is dead.

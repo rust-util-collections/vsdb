@@ -185,6 +185,19 @@ fn test_save_and_from_meta() {
 }
 
 #[test]
+fn test_from_meta_rejects_misaddressed_payload() {
+    let a = MapxRaw::new();
+    let b = MapxRaw::new();
+    let a_id = a.save_meta().unwrap();
+    let b_id = b.save_meta().unwrap();
+    let ns = a.namespace();
+    let b_meta = fs::read(ns.meta_path(b_id.map_id)).unwrap();
+    fs::write(ns.meta_path(a_id.map_id), b_meta).unwrap();
+
+    assert!(MapxRaw::from_meta(a_id).is_err());
+}
+
+#[test]
 fn test_from_meta_rejects_legacy_prefix_metadata() {
     // Pre-v13.4 meta files stored a bare 8-byte prefix; v14 removed the
     // legacy acceptance path, so such a file must be rejected.

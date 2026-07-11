@@ -47,7 +47,8 @@
 mod test;
 
 use crate::common::{
-    InstanceId, Namespace, PreBytes, RawKey, RawValue, engine, error::Result,
+    DEFAULT_NS_ID, InstanceId, Namespace, PreBytes, RawKey, RawValue, engine,
+    error::{Result, VsdbError},
 };
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, fs, ops::RangeBounds};
@@ -582,6 +583,18 @@ impl MapxRaw {
             Some(n) => Namespace::open(n)?,
         };
         let bytes = fs::read(ns.meta_path(id.map_id))?;
+        let (prefix, embedded_ns) = engine::Mapx::decode_prefix_meta(&bytes)?;
+        let found = InstanceId::new(
+            u64::from_le_bytes(prefix),
+            embedded_ns.unwrap_or(DEFAULT_NS_ID),
+        );
+        if found != id {
+            return Err(VsdbError::Decode {
+                detail: format!(
+                    "metadata identity mismatch: requested {id}, payload names {found}"
+                ),
+            });
+        }
         engine::Mapx::from_prefix_meta(&bytes).map(|inner| Self { inner })
     }
 }

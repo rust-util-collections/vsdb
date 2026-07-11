@@ -111,6 +111,16 @@ fn test_save_and_from_meta() {
 }
 
 #[test]
+fn test_from_meta_rejects_misaddressed_typed_payload() {
+    let a: Mapx<u32, String> = Mapx::new();
+    let b: Mapx<u32, String> = Mapx::new();
+    let id = a.instance_id();
+    crate::common::save_instance_meta(id, &b).unwrap();
+
+    assert!(Mapx::<u32, String>::from_meta(id).is_err());
+}
+
+#[test]
 fn test_from_meta_rejects_legacy_prefix_payload() {
     // The pre-v13.4 meta format was a bare 8-byte prefix; v14 removed the
     // legacy acceptance path, so such a payload must be rejected instead
