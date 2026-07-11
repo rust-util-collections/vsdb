@@ -83,9 +83,9 @@ Every candidate finding includes:
 
 Discard preferences, unsupported speculation, and false-positive-guide matches.
 
-### Phase 3: Adversarial verification
+### Phase 3: Critical verification
 
-The orchestrator re-reads and actively refutes every candidate. Use one
+The orchestrator re-reads and actively tries to disprove every candidate. Use one
 independent read-only verifier only when control flow or an invariant remains
 genuinely ambiguous; correlated agent majority voting is not proof.
 

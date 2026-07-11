@@ -171,7 +171,7 @@ Algorithm (all under `REGISTRY_LOCK`, serializing against
 ```
 
 **Check-before-remove** (step 3 before step 4) eliminates any
-reinsert-on-failure dance. The count check is TOCTOU-free: cloning an `Arc`
+reinsert-on-failure dance. The count check is free of check-then-act races: cloning an `Arc`
 requires an existing reference, and `count == 1` proves the registry holds
 the only one; concurrent `open(id)` is excluded by `REGISTRY_LOCK`.
 

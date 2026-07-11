@@ -27,7 +27,7 @@
   (flush + WAL sync, errors surface), then the drop cascade joins
   compaction threads and releases LOCK files; registry mutations +
   namespace opens serialize on `REGISTRY_LOCK` (not-open checks for
-  destroy/relocate must run UNDER it — TOCTOU)
+  destroy/relocate must run UNDER it — check-then-act)
 - `__SYSTEM__/format_version` marker: written after shard creation
   completes; older binaries refuse newer formats; shard-layout
   validation is completion-aware (marker absent + fewer shards than

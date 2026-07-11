@@ -149,7 +149,7 @@ materially shape the design.
   — all six iterator call sites route through it), pinning into
   `pin_metadata_in_cache` (one site), invalidation into ~8 sites
   (`db.rs` ×6, `compaction/leveled.rs` ×2). This makes a **per-DB
-  façade** (§4.1) a zero-blast-radius refactor: consumers keep their
+  façade** (§4.1) a zero-impact-scope refactor: consumers keep their
   field type and calls.
 - **(new) `file_offsets` is a single `Mutex<HashMap>` per cache**
   (`block_cache.rs:19,44`), taken on **every insert** (read-miss path)
@@ -270,7 +270,7 @@ addresses cost #1 and the read half of #2.
 *becomes the per-member view*; the pool is a new type. Consumers
 (`TableReader`, `TableCache`, compaction, `db.rs` teardown paths)
 keep their `Arc<BlockCache>` fields and five-method call surface
-unchanged — the entire external blast radius is `DB::open`
+unchanged — the entire external impact scope is `DB::open`
 construction, `DbOptions`, and close/drop detach.
 
 ```rust
@@ -418,7 +418,7 @@ Secondary costs, updated by the deep dive:
   designs around (sharding); both still need the §10 Q1 benchmark.
 - Detach cost on close: a member sweep of the pool (rare, batched,
   single maintenance pass) replaces dropping a private cache (free).
-- A wider blast radius for any cache bug: one poisoned pool = every
+- A wider impact scope for any cache bug: one poisoned pool = every
   member namespace. The façade keeps the correctness-critical surface
   (key namespacing) small and mechanically auditable.
 
@@ -528,7 +528,7 @@ regression on a representative skewed workload:
 | Step | When | Layer | Content | Risk |
 |------|------|-------|---------|------|
 | 0 | **✅ done (vsdb v16.3.0)** | vsdb | **Measurement pre-work**: `Namespace::shard_properties` — per-shard `DB::get_property` passthrough for cache hit/miss telemetry | trivial |
-| 1 | **✅ done (mmdb v4.1.0)** | mmdb | `BlockCachePool` + façade `BlockCache` view: key namespacing `(member, file, offset)`, **sharded** `file_offsets`, per-member pinned-bytes counter; *delta vs. plan: pinned entries kept member-local (zero cross-member lock traffic on the pinned fast path)* | correctness-critical, mechanical; call-site blast radius ≈ 0 (§4.1) |
+| 1 | **✅ done (mmdb v4.1.0)** | mmdb | `BlockCachePool` + façade `BlockCache` view: key namespacing `(member, file, offset)`, **sharded** `file_offsets`, per-member pinned-bytes counter; *delta vs. plan: pinned entries kept member-local (zero cross-member lock traffic on the pinned fast path)* | correctness-critical, mechanical; call-site impact scope ≈ 0 (§4.1) |
 | 2 | **✅ done (mmdb v4.1.0)** | mmdb | Detach lifecycle: idempotent `detach()` from `close` + `Drop`, batched invalidation + single maintenance pass, cache-bypass mode for detached views | low |
 | 3 | **✅ done (mmdb v4.1.0)** | mmdb | `DbOptions.block_cache: Option<Arc<BlockCachePool>>` injection; capacity-precedence docs; contention benchmark (§10 Q1) gating defaults | low |
 | 4 | **✅ done (vsdb v16.3.0)** | vsdb | Tier (i): per-engine pool in `Engine::open_at` (all namespaces, default included); Q1 gate passed — skew −72%/−81%, uniform noise (`core/benches/cache_pool.rs`, A/B protocol documented in the bench) | low |
