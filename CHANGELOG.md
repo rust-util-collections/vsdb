@@ -2,6 +2,55 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v16.3.3]
+
+Full-repository audit fixes across engine lifecycle, persistent collections,
+DagMap, SlotDex, VecDex, and trie caches. Valid existing formats remain
+compatible; malformed or incomplete state now fails loudly instead of being
+silently adopted.
+
+### Fixed
+
+- **Restored B+ tree / `VerMap` aliases share runtime allocator and node
+  reference state**, preventing sequential safe restores from reusing a live
+  `NodeId` or deleting another alias's committed snapshot. Standalone restored
+  deletes also stop flushing discarded temporary nodes.
+- **Completed namespace roots are validated strictly**: exact shard set,
+  supported format marker, and every MMDB `CURRENT` anchor. A new additive
+  pending/established sidecar prevents an established missing root from being
+  recreated as an empty database; valid legacy registry records migrate on
+  first open.
+- **`from_meta` binds payload identity to the requested canonical
+  `InstanceId`**, including the documented `Some(DEFAULT_NS_ID)` spelling.
+- **DagMap migration and teardown hardening**: the authentic pre-ceiling
+  `id_num` wire format is max-folded into `dag_id_ceiling`; destructive clears
+  are flushed before registries unlink them; mixed-namespace serde payloads
+  are rejected.
+- **VecDex preserves HNSW reachability and atomic replacement**: pruning keeps
+  a reciprocal edge, entry-point repair selects/reconnects a true-max-layer
+  node, and remove+insert replacements commit in one transaction/chunk.
+- **SlotDex bulk insertion follows exact serial tier-growth cadence**, including
+  multiple unique keys in the slot that crosses a growth boundary.
+- **Trie cache loading revalidates the complete trust boundary**: canonical
+  shape, cached hashes, handle state, trailing bytes, checked varints/ranges,
+  and a 512 MiB pre-allocation limit.
+- Parallel staged-row tests no longer mutate the process environment.
+
+### Added
+
+- `VerMapWithProof<_, _, SmtCalc>::prove_key` /
+  `verify_key_proof` encode typed keys exactly as the committed `VerMap`.
+- `DagMapRaw` and `DagMapRawKey` expose `child_ids` / `child_id` for selective
+  pruning.
+
+### Documentation and tooling
+
+- Added concrete legacy export/reimport, backup, validation, and rollback
+  guidance.
+- Corrected namespace examples, review invariants, shared-cache proposal
+  status, crate license links, and benchmark workload semantics.
+- CI now enforces `cargo fmt --all -- --check`.
+
 ## Legacy persisted-data migration
 
 Current releases do not perform an in-place migration from the historical
