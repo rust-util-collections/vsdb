@@ -45,15 +45,17 @@ Follow `/x-fix`:
 
 The goal is sound dispositions, not a cosmetic zero count at any cost.
 
-## Phase 3: Final gate and version
+## Phase 3: Final gate, version, and tag
 
 Run the final workspace gate. Fix regressions in new focused commits. Apply one
 lockstep version bump for the pipeline: patch for compatible changes, or a major
-bump plus concrete migration documentation for an accepted break.
+bump plus concrete migration documentation for an accepted break. Create the
+annotated release tag as directed by the protocol.
 
-If nothing changed, create no empty commit or version bump.
+If nothing changed, create no empty commit, version bump, or tag.
 
 ## Output
 
 Report coverage, dispositions, validations, compatibility/migration result,
-every commit hash/subject, version, and untouched baseline.
+every commit hash/subject, version and release-tag result, and untouched
+baseline.

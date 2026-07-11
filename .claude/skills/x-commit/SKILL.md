@@ -58,12 +58,14 @@ Apply `.claude/docs/commit-protocol.md`: run unit-appropriate deterministic
 checks/tests, stage exact paths/hunks, inspect the cached diff, and create one
 new commit. Never amend an earlier commit.
 
-### 4. Final gate and version
+### 4. Final gate, version, and tag
 
 After all behavior commits, run the final workspace gate and single lockstep
-version policy. Any regression found later is fixed in a new focused commit.
+version-and-release-tag policy. Any regression found later is fixed in a new
+focused commit.
 
 ## Output
 
 Report reviewed files/subsystems, findings fixed, validations, compatibility
-result, every commit hash/subject, version result, and untouched baseline work.
+result, every commit hash/subject, version and release-tag result, and
+untouched baseline work.

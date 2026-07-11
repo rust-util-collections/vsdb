@@ -55,11 +55,11 @@ never run in parallel.
 3. Stop on unsafe baseline overlap or repeated no-progress validation failure;
    never stash, reset, or rewrite prior commits.
 
-### 4. Final gate and version
+### 4. Final gate, version, and tag
 
-Run the final workspace gate. If Rust source changed, apply the lockstep version
-policy once for the invocation. A breaking change requires the major-version
-and migration protocol.
+Run the final workspace gate. If Rust source changed, apply the lockstep
+version-and-release-tag policy once for the invocation. A breaking change
+requires the major-version and migration protocol.
 
 `docs/audit.md` ends with no unresolved `Open` entry unless execution is blocked
 and reported. Never add a `Resolved` history section or freshness markers.
@@ -67,4 +67,5 @@ and reported. Never add a `Resolved` history section or freshness markers.
 ## Output
 
 Report initial dispositions, fixes, rejected/deferred entries, validations,
-compatibility result, every commit hash/subject, version, and untouched baseline.
+compatibility result, every commit hash/subject, version and release-tag
+result, and untouched baseline.

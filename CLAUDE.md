@@ -66,7 +66,7 @@ user-invocable only.
 
 Supporting documentation in `.claude/docs/`:
 - `workflow-policy.md` — shared-worktree safety and one-issue-one-commit policy
-- `commit-protocol.md` — atomic validation/commit and lockstep version procedure
+- `commit-protocol.md` — atomic validation/commit and lockstep version + release tag procedure
 - `compatibility-policy.md` — public/on-disk breaks and required migration paths
 - `technical-patterns.md` — cataloged bug patterns for vsdb + mmdb layers
 - `review-core.md` — systematic methodology + canonical subsystem map

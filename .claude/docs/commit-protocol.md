@@ -54,7 +54,7 @@ After the final behavior change:
 Run once per unchanged final code state. Fix a regression in a new atomic commit
 and repeat. Documentation-only workflows skip Rust validation.
 
-## Lockstep version
+## Lockstep version and release tag
 
 If tracked Rust source changed, bump exactly once from the invocation-start
 `HEAD` version:
@@ -77,10 +77,11 @@ Create an annotated git tag pointing at the release commit:
 `git tag -a "vX.Y.Z" -m "vX.Y.Z"` (using the lockstep version). The tag must
 use the `v` prefix.
 
-`Cargo.lock` is intentionally ignored; do not force-add it. Skip the bump when
-no Rust source changed and never create an empty commit.
+`Cargo.lock` is intentionally ignored; do not force-add it. Skip the bump and
+tag when no Rust source changed and never create an empty commit.
 
 ## Final state
 
-Report all new commit hashes/subjects, compatibility result, and version.
+Report all new commit hashes/subjects, compatibility result, version, and
+release tag.
 Invocation-owned work must be committed; unrelated baseline work stays intact.
