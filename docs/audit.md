@@ -11,12 +11,6 @@
 
 ## Open
 
-### [HIGH] namespace: established roots can be silently recreated after disappearance
-- **Where**: `core/src/common/namespace.rs:217-234`, `core/src/common/namespace.rs:500-559`, `core/src/common/namespace.rs:568-597`
-- **What**: the registry does not distinguish a pending create from a namespace whose root previously completed.
-- **Why**: if an established closed root is moved or lost, `Namespace::open` recreates the old path as a fresh empty database instead of reporting the missing dataset.
-- **Suggested fix**: persist pending/established lifecycle state outside the positional registry format; only pending records may initialize an absent root, and valid legacy roots should migrate to established state.
-
 ### [HIGH] metadata: `from_meta` does not bind payload identity to the requested `InstanceId`
 - **Where**: `core/src/basic/mapx_raw/mod.rs:555-586`, `strata/src/common/mod.rs:43-74`, `strata/src/common/macros.rs:205-229`, composite `from_meta` implementations
 - **What**: a valid same-type metadata payload copied under another instance's filename is accepted without comparing its embedded prefix/namespace to the requested token.

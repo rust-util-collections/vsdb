@@ -55,6 +55,10 @@ pub const DEFAULT_NS_ID: NsId = 0;
 /// non-default `NsId` to its configuration.
 const NS_REGISTRY_REL_PATH: &str = "__SYSTEM__/__namespaces__";
 
+/// Per-record lifecycle state, kept outside the positional postcard
+/// registry so old registry files remain byte-compatible.
+const NS_STATE_DIR_REL_PATH: &str = "__SYSTEM__/__namespace_state__";
+
 /// Parent dir (relative to the default base dir) of derived namespace
 /// roots — namespaces created without an explicit path.
 const NS_DERIVED_DIR: &str = "__NAMESPACES__";
@@ -233,6 +237,12 @@ struct RegistryFile {
     entries: Vec<NsRecord>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NsLifecycleState {
+    Pending,
+    Established,
+}
+
 impl Default for RegistryFile {
     fn default() -> Self {
         Self {
@@ -273,6 +283,46 @@ thread_local! {
 
 fn registry_path() -> PathBuf {
     vsdb_get_base_dir().join(NS_REGISTRY_REL_PATH)
+}
+
+fn lifecycle_path(base: &Path, id: NsId) -> PathBuf {
+    base.join(NS_STATE_DIR_REL_PATH).join(format!("{id:016x}"))
+}
+
+fn load_lifecycle(base: &Path, id: NsId) -> Result<Option<NsLifecycleState>> {
+    match fs::read(lifecycle_path(base, id)) {
+        Ok(bytes) if bytes.as_slice() == b"P" => Ok(Some(NsLifecycleState::Pending)),
+        Ok(bytes) if bytes.as_slice() == b"E" => Ok(Some(NsLifecycleState::Established)),
+        Ok(bytes) => Err(ns_err(format!(
+            "namespace {id} has corrupt lifecycle state bytes: {bytes:?}"
+        ))),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn save_lifecycle(base: &Path, id: NsId, state: NsLifecycleState) -> Result<()> {
+    let byte = match state {
+        NsLifecycleState::Pending => b"P",
+        NsLifecycleState::Established => b"E",
+    };
+    let path = lifecycle_path(base, id);
+    fs::create_dir_all(path.parent().expect("has parent"))?;
+    write_file_durable(&path, byte).map_err(VsdbError::from)
+}
+
+fn remove_lifecycle(base: &Path, id: NsId) -> Result<()> {
+    let path = lifecycle_path(base, id);
+    match fs::remove_file(&path) {
+        Ok(()) => {
+            if let Some(parent) = path.parent() {
+                fs::File::open(parent)?.sync_all()?;
+            }
+            Ok(())
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
 }
 
 fn load_registry() -> Result<RegistryFile> {
@@ -527,12 +577,16 @@ impl Namespace {
         };
         let root = resolve_root(&base, &rec);
 
-        // Reserve the id durably BEFORE opening the engine: a crash
-        // after this point leaves a registered-but-empty namespace
-        // (re-openable, destroyable), never an unreachable orphan dir.
+        // Reserve the id and a pending lifecycle record durably BEFORE
+        // opening the engine. Only this state may initialize an absent
+        // root; established records must never silently recreate data.
+        save_lifecycle(&base, id, NsLifecycleState::Pending)?;
         reg.next_id += 1;
         reg.entries.push(rec.clone());
-        save_registry(&reg)?;
+        if let Err(e) = save_registry(&reg) {
+            let _ = remove_lifecycle(&base, id);
+            return Err(e);
+        }
 
         match open_record_locked(&base, &rec, &root) {
             Ok(ns) => Ok(ns),
@@ -546,13 +600,16 @@ impl Namespace {
                 // visible in `vsdb_ns_list()`, re-openable via `open`
                 // and reclaimable via `destroy`.
                 reg.entries.retain(|r| r.id != rec.id);
-                let _ = save_registry(&reg);
+                let rolled_back = save_registry(&reg).is_ok();
                 // …and clear whatever the failed open left under the
                 // root: an explicit path stays immediately retryable
                 // (the adoptable check would otherwise refuse the now
                 // non-empty dir forever), and a derived root leaves no
                 // unregistered, never-reusable VSDB-owned residue.
                 cleanup_failed_root(&root, root_preexisted);
+                if rolled_back {
+                    let _ = remove_lifecycle(&base, rec.id);
+                }
                 Err(e)
             }
         }
@@ -753,10 +810,21 @@ fn validated_shards(rec: &NsRecord) -> Result<usize> {
 
 /// Opens the engine for `rec` and caches the handle. Caller holds
 /// [`REGISTRY_LOCK`] (serializes double-opens).
-fn open_record_locked(_base: &Path, rec: &NsRecord, root: &Path) -> Result<Namespace> {
+fn open_record_locked(base: &Path, rec: &NsRecord, root: &Path) -> Result<Namespace> {
     let shards = validated_shards(rec)?;
+    let lifecycle = load_lifecycle(base, rec.id)?;
+    if lifecycle != Some(NsLifecycleState::Pending) {
+        // `None` is a legacy record from before lifecycle sidecars. A
+        // complete root migrates in place; an absent legacy root is
+        // ambiguous (old established data vs. interrupted creation), so
+        // fail loudly instead of manufacturing an empty replacement.
+        validate_completed_dataset(root, shards, true).map_err(VsdbError::from)?;
+    }
     let sizing = sizing_for(rec.mem_budget_mb.map(|v| v as usize));
     let engine = Engine::open_at(root, shards, sizing).map_err(VsdbError::from)?;
+    if lifecycle != Some(NsLifecycleState::Established) {
+        save_lifecycle(base, rec.id, NsLifecycleState::Established)?;
+    }
     let ns = Namespace(Arc::new(NsInner {
         id: rec.id,
         path: root.to_path_buf(),
@@ -820,6 +888,7 @@ pub fn vsdb_ns_destroy(id: NsId) -> Result<()> {
     let root = resolve_root(&base, &reg.entries[pos]);
     reg.entries.remove(pos);
     save_registry(&reg)?;
+    let _ = remove_lifecycle(&base, id);
     match fs::remove_dir_all(&root) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),

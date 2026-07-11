@@ -440,6 +440,12 @@ registries), which already works today. Consequences:
   registry, then act (destroy: remove registry entry → delete tree; a crash
   in between leaves an orphaned-but-harmless dir, manually removable —
   re-attachment is excluded along with all foreign-root adoption, §9).
+- A byte-sized lifecycle sidecar under `__SYSTEM__/__namespace_state__/`
+  distinguishes a pending create from an established registry record without
+  changing the positional postcard registry. Only pending records may
+  initialize an absent root; established (and legacy sidecar-less) records
+  require a complete marked dataset. Valid legacy roots are promoted to
+  established on first open.
 - Opening any non-default namespace materializes the registry under the
   default base dir and therefore freezes it (same rule as today's derived
   dirs); programs that want a custom default base must call

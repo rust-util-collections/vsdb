@@ -398,6 +398,21 @@ fn namespace_lifecycle() {
     let d = expect_refused(Namespace::default_ns().close());
     assert_eq!(d.id(), DEFAULT_NS_ID);
 
+    // ---- legacy registry records migrate to established sidecars ----
+    let legacy = Namespace::create().unwrap();
+    let legacy_id = legacy.id();
+    let lifecycle = PathBuf::from(&dir)
+        .join("__SYSTEM__/__namespace_state__")
+        .join(format!("{legacy_id:016x}"));
+    assert!(lifecycle.is_file());
+    legacy.close().unwrap();
+    fs::remove_file(&lifecycle).unwrap();
+    let legacy = Namespace::open(legacy_id).unwrap();
+    assert!(lifecycle.is_file());
+    legacy.close().unwrap();
+    vsdb_ns_destroy(legacy_id).unwrap();
+    assert!(!lifecycle.exists());
+
     // ---- relocate refuses an unpopulated target ----
     // (write → close → relocate-to-empty-dir must FAIL: repointing the
     // registry at a dir without the dataset would silently orphan the
@@ -431,6 +446,10 @@ fn namespace_lifecycle() {
     // Move the tree for real, then relocate: accepted.
     fs::remove_dir_all(&new_root).unwrap();
     fs::rename(&old_root, &new_root).unwrap();
+    // Crash-window simulation: the registry still points at the old path.
+    // An established namespace must fail instead of recreating it empty.
+    assert!(Namespace::open(rid).is_err());
+    assert!(!old_root.exists());
     fs::create_dir_all(format!("{new_root}/mmdb/shard_02")).unwrap();
     fs::write(
         format!("{new_root}/mmdb/shard_02/CURRENT"),
