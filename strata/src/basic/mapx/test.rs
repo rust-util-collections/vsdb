@@ -1,5 +1,8 @@
 use super::{Mapx, ValueEnDe};
-use crate::basic::{mapx_ord::MapxOrd, orphan::Orphan};
+use crate::{
+    DEFAULT_NS_ID, InstanceId,
+    basic::{mapx_ord::MapxOrd, orphan::Orphan},
+};
 use ruc::*;
 use std::{cell::RefCell, fs};
 
@@ -118,6 +121,22 @@ fn test_from_meta_rejects_misaddressed_typed_payload() {
     crate::common::save_instance_meta(id, &b).unwrap();
 
     assert!(Mapx::<u32, String>::from_meta(id).is_err());
+}
+
+#[test]
+fn test_from_meta_canonicalizes_default_namespace_id() {
+    let map: Mapx<u32, String> = Mapx::new();
+    let id = map.save_meta().unwrap();
+    let noncanonical = InstanceId {
+        map_id: id.map_id,
+        ns: Some(DEFAULT_NS_ID),
+    };
+
+    assert!(
+        Mapx::<u32, String>::from_meta(noncanonical)
+            .unwrap()
+            .is_the_same_instance(&map)
+    );
 }
 
 #[test]

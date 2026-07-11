@@ -81,6 +81,7 @@ pub(crate) fn load_instance_meta_checked<T>(
 where
     T: DeserializeOwned,
 {
+    let id = InstanceId::new(id.map_id, id.ns.unwrap_or(DEFAULT_NS_ID));
     let value = load_instance_meta(id)?;
     let found = instance_id(&value);
     if found != id {

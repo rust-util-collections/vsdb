@@ -578,6 +578,7 @@ impl MapxRaw {
     /// contains the data referenced by this instance ID.
     pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
         let id = instance_id.into();
+        let id = InstanceId::new(id.map_id, id.ns.unwrap_or(DEFAULT_NS_ID));
         let ns = match id.ns {
             None => Namespace::default_ns(),
             Some(n) => Namespace::open(n)?,

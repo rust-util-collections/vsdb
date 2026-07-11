@@ -198,6 +198,22 @@ fn test_from_meta_rejects_misaddressed_payload() {
 }
 
 #[test]
+fn test_from_meta_canonicalizes_default_namespace_id() {
+    let map = MapxRaw::new();
+    let id = map.save_meta().unwrap();
+    let noncanonical = InstanceId {
+        map_id: id.map_id,
+        ns: Some(DEFAULT_NS_ID),
+    };
+
+    assert!(
+        MapxRaw::from_meta(noncanonical)
+            .unwrap()
+            .is_the_same_instance(&map)
+    );
+}
+
+#[test]
 fn test_from_meta_rejects_legacy_prefix_metadata() {
     // Pre-v13.4 meta files stored a bare 8-byte prefix; v14 removed the
     // legacy acceptance path, so such a file must be rejected.
