@@ -10,12 +10,17 @@ Before reporting any finding, check it against this guide. If a finding matches 
 **Rule**: If the code is safe Rust (no `unsafe` block), the borrow checker prevents these at compile time. Only report memory safety issues inside `unsafe` blocks or when raw pointers are involved.
 **Exception**: Logical use-after-free (e.g., using a NodeId after the node has been GC'd) is still valid even in safe code.
 
-## FP-2: SWMR Contract is Caller's Responsibility
+## FP-2: Alias Exclusion Is Caller's Responsibility
 
 **Pattern**: Reporting a data race in `shadow()` or mutable collection access.
-**Rule**: VSDB explicitly documents that callers must enforce single-writer, multi-reader. If a `shadow()` call has a `// SAFETY:` comment citing SWMR enforcement, do not report it as a race. Only report if:
-1. The safety comment's SWMR claim is contradicted by the call site (e.g., no lock visible)
-2. Two shadow handles are used for concurrent writes without serialization
+**Rule**: VSDB documents exclusion at the affected key/operation granularity.
+Plain map aliases may write disjoint keys concurrently; same-key writes are
+forbidden. Structural multi-key operations may require one writer for the
+whole structure. If a `shadow()` call's `// SAFETY:` comment establishes the
+relevant exclusion, do not report a race. Only report if:
+1. The safety comment's exclusion claim is contradicted by the call site
+2. Writers overlap on the same key or on a structural operation that requires
+   broader serialization
 
 ## FP-3: Prefix Isolation Makes Cross-Structure Interference Impossible
 

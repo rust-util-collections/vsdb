@@ -36,8 +36,12 @@ Rolling back branch B to an older commit must not affect any other branch's data
 **Check**: Verify rollback only decrements ref-counts for commits that lose THIS branch's reference. Do not decrement if other branches still reference them.
 
 ### INV-V5: Dirty Flag Lifecycle
-`dirty = true` BEFORE starting a destructive operation (GC, merge). `dirty = false` AFTER completion. On recovery, if dirty is true, repair is needed.
-**Check**: Verify dirty flag is set atomically before the first mutation and cleared after the last. Verify crash between set and clear triggers recovery.
+`dirty = true` before non-idempotent commit/ref-count mutations and `false`
+after completion. On recovery, `true` triggers a recount. The public `gc()`
+path is itself the idempotent repair/full sweep and does not set a fresh flag.
+**Check**: Verify commit, merge, branch creation/deletion, and rollback set the
+flag before the first ref-count mutation and clear it after the last; verify a
+crash between them triggers recovery.
 
 ### INV-V6: Commit Immutability
 Once a commit is created, its data (snapshot pointer, parent list) must never change.
@@ -69,7 +73,7 @@ Ref-count reaches 0 while another branch still references the commit indirectly 
 - [ ] Source-wins policy applied correctly for conflicts
 - [ ] Rollback only affects the rolled-back branch's ref-count contributions
 - [ ] Rollback rejects uncommitted changes on EVERY code path (target == head AND target == a strict ancestor), not just one arm — mirror `merge()`'s unconditional guard
-- [ ] Dirty flag set before GC/merge, cleared after
+- [ ] Dirty flag brackets every non-idempotent commit/ref-count cascade; `gc()` remains an idempotent repair/sweep
 - [ ] Commit data is immutable after creation
 - [ ] No-op merge handled (source == target, or no diffs)
 - [ ] Fast-forward merge handled (source is ancestor of target)

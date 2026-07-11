@@ -90,7 +90,11 @@ Additional documentation in `docs/`:
 - Unsafe code is concentrated in handle reconstruction/shadowing, entry APIs,
   DagMap aliases, trie internals, and concurrent benches; derive the live
   inventory during review and require accurate `// SAFETY:` contracts
-  - `shadow()`: SWMR contract — caller serializes writes (the ONLY aliasing handle primitive; `Clone` deep-copies storage)
-  - `from_bytes()`: caller provides valid serialized bytes
+  - `shadow()`: aliasing contract — no concurrent writes to the same storage
+    key; disjoint-key raw/typed map writes are allowed, while structural
+    multi-key operations require their documented broader serialization
+    (`Clone` deep-copies storage)
+  - `from_bytes()`: caller provides a valid uniquely-owned prefix for the
+    correct type and namespace
   - Pointer casts in entry API macros
   - `env::set_var` in `vsdb_set_base_dir`: caller must invoke before spawning threads

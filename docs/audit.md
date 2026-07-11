@@ -11,12 +11,6 @@
 
 ## Open
 
-### [LOW] review-docs: alias, raw-restore, and GC guidance is stale
-- **Where**: `CLAUDE.md:90-96`, `.claude/docs/technical-patterns.md:73-77`, `.claude/docs/technical-patterns.md:148-160`, `.claude/docs/false-positive-guide.md:13-18`, `.claude/docs/patterns/versioning.md:38-40`
-- **What**: review rules still require global writer serialization, same-version raw bytes, and a dirty marker around idempotent full GC.
-- **Why**: current public contracts permit disjoint-key writers, define raw restore by prefix/type/namespace validity, and use `gc_dirty` only around non-idempotent ref-count cascades.
-- **Suggested fix**: align the review guides with the current per-key, restore-validity, and dirty-state contracts.
-
 ### [LOW] docs: shared-memory-pool proposal contradicts shipped status
 - **Where**: `docs/proposals/shared-mem-pool.md:3-20`, `docs/proposals/shared-mem-pool.md:225-232`, `docs/proposals/shared-mem-pool.md:463-471`, `docs/proposals/shared-mem-pool.md:530-560`
 - **What**: the status/table say telemetry and the Q1 gate shipped, while later sections still say telemetry is unavailable and Q1 unresolved.

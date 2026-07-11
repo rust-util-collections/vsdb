@@ -71,10 +71,13 @@ No data key appears in both leaves.
 **Check**: Rollback must only decrement ref-counts for commits that are no longer reachable from ANY branch, not just the rolled-back branch.
 
 ### 2.5 Dirty Flag Not Set on Crash
-**Pattern**: A versioning operation (commit, merge, GC) crashes mid-way but the dirty flag was never set, so recovery doesn't detect the inconsistency.
+**Pattern**: A non-idempotent commit/ref-count cascade crashes mid-way but the
+dirty flag was never set, so recovery doesn't detect the imbalance.
 **Where**: `strata/src/versioned/` — dirty flag management.
 **Impact**: Silently corrupt version DAG after crash.
-**Check**: Dirty flag must be set BEFORE the operation begins, and cleared AFTER it completes atomically.
+**Check**: Set the flag before commit/merge/branch-create/branch-delete/rollback
+ref-count mutations and clear it after completion. `gc()` itself is an idempotent
+recount/full sweep and does not need to set a new dirty flag.
 
 ---
 
@@ -148,16 +151,26 @@ an engine for that id.
 ## Category 5: Unsafe Code Bugs
 
 ### 5.1 Shadow Handle Data Race
-**Pattern**: `shadow()` creates a second handle to the same underlying storage. If the caller doesn't enforce single-writer exclusion, two writers mutate concurrently.
+**Pattern**: `shadow()` creates a second handle to the same underlying storage.
+Concurrent writes to the same key, or overlapping structural multi-key
+operations, violate the aliasing contract.
 **Where**: All collection types with `pub unsafe fn shadow(&self)`.
 **Impact**: Data corruption, torn writes, inconsistent B+ tree structure.
-**Check**: Every `shadow()` call site must have documented SWMR enforcement. Verify the caller holds an exclusive lock or uses a single-writer architecture.
+**Check**: Verify same-key writes are excluded. Disjoint-key writes on plain
+maps are supported; structural operations (DagMap teardown/reparenting,
+composite metadata changes, etc.) need the broader serialization documented by
+their own rustdoc.
 
 ### 5.2 from_bytes Deserialization of Untrusted Data
-**Pattern**: `unsafe fn from_bytes()` reconstructs a handle from raw bytes without validation. If the bytes are corrupted or from a different version, the handle points to garbage.
+**Pattern**: `unsafe fn from_bytes()` reconstructs a handle from raw bytes
+without validation. If the bytes are corrupted, wrong-type, wrong-namespace,
+or name a prefix the caller does not uniquely own, the handle points to the
+wrong storage.
 **Where**: Collection `from_bytes()` methods.
 **Impact**: Silently operate on wrong data or panic on access.
-**Check**: Verify callers only pass bytes that were produced by the same code version's `to_bytes()`. Verify no external/untrusted input reaches `from_bytes()`.
+**Check**: Verify bytes came from the same handle type, the prefix is valid and
+uniquely owned, and the selected ambient/explicit namespace still contains its
+data. Verify no external/untrusted input reaches `from_bytes()`.
 
 ### 5.3 Raw Pointer Cast in Entry API
 **Pattern**: `self.hdr as *mut MapxRaw` creates a mutable pointer from a shared reference. If two threads use the entry API simultaneously, this is UB (aliasing violation).
