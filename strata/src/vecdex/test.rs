@@ -152,6 +152,41 @@ fn duplicate_key_update() {
 }
 
 #[test]
+fn replacement_is_staged_without_mutating_committed_state() {
+    let cfg = HnswConfig {
+        dim: 2,
+        ..Default::default()
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg.clone());
+    idx.insert(&7, &[1.0, 1.0]).unwrap();
+    let old_node = decode_node_id(
+        &idx.store
+            .get(user_key(&KeyEnDe::encode(&7u32)))
+            .expect("old key mapping"),
+    );
+
+    let mut txn = Txn::new(&idx.store, idx.state.clone());
+    assert!(VecDex::<u32, L2>::stage_remove(&mut txn, &cfg, &7));
+    VecDex::<u32, L2>::stage_insert(&mut txn, &cfg, &7, &[9.0, 9.0]);
+
+    assert_eq!(
+        decode_node_id(
+            &idx.store
+                .get(user_key(&KeyEnDe::encode(&7u32)))
+                .expect("committed mapping remains visible"),
+        ),
+        old_node
+    );
+    assert_eq!(idx.get(&7), Some(vec![1.0, 1.0]));
+
+    let (rows, state) = txn.finish();
+    rows.commit(&mut idx.store).unwrap();
+    idx.state = state;
+    assert_eq!(idx.get(&7), Some(vec![9.0, 9.0]));
+    assert_eq!(idx.len(), 1);
+}
+
+#[test]
 fn save_meta_restore() {
     let cfg = HnswConfig {
         dim: 3,

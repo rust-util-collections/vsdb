@@ -553,10 +553,8 @@ where
 
     /// Inserts a vector associated with a user key.
     ///
-    /// If the key already exists, the old vector is replaced and the
-    /// graph connections are rebuilt (two atomic operations: the removal
-    /// of the old node, then the insert of the new one — each leaves the
-    /// index in a consistent state).
+    /// If the key already exists, removal of the old node and insertion
+    /// of the replacement are staged in the same atomic batch.
     ///
     /// All rows of the insert proper — the vector, both key mappings,
     /// the node info, every adjacency update, and the graph state — are
@@ -578,11 +576,8 @@ where
             });
         }
 
-        if self.contains_key(key) {
-            self.remove(key)?;
-        }
-
         let mut txn = Txn::new(&self.store, self.state.clone());
+        Self::stage_remove(&mut txn, &self.config, key);
         Self::stage_insert(&mut txn, &self.config, key, vector);
         let (rows, state) = txn.finish();
         rows.commit(&mut self.store)?;
@@ -620,9 +615,9 @@ where
     /// transaction (and thus one atomic engine write batch) each —
     /// amortizing the per-commit cost, which dominates bulk loads.
     ///
-    /// Pre-existing keys are replaced (their removals are individually
-    /// atomic), and duplicate keys inside `items` collapse to the last
-    /// occurrence.
+    /// Pre-existing keys are removed and reinserted inside their chunk's
+    /// atomic transaction, and duplicate keys inside `items` collapse to
+    /// the last occurrence.
     pub fn insert_batch(&mut self, items: &[(K, Vec<S>)]) -> Result<()> {
         // Bounded chunks keep the staged set (and the engine batch)
         // at a sane size for arbitrarily large bulk loads.
@@ -651,15 +646,10 @@ where
         }
         dedup.reverse();
 
-        for (key, _) in &dedup {
-            if self.contains_key(key) {
-                self.remove(key)?;
-            }
-        }
-
         for chunk in dedup.chunks(CHUNK) {
             let mut txn = Txn::new(&self.store, self.state.clone());
             for (key, vec) in chunk {
+                Self::stage_remove(&mut txn, &self.config, key);
                 Self::stage_insert(&mut txn, &self.config, key, vec);
             }
             let (rows, state) = txn.finish();
@@ -921,13 +911,22 @@ where
     /// If the batch commit fails, neither the on-disk state nor the
     /// in-memory state is modified.
     pub fn remove(&mut self, key: &K) -> Result<bool> {
-        let Some(raw) = self.store.get(user_key(&KeyEnDe::encode(key))) else {
+        let mut txn = Txn::new(&self.store, self.state.clone());
+        if !Self::stage_remove(&mut txn, &self.config, key) {
             return Ok(false);
+        }
+        let (rows, state) = txn.finish();
+        rows.commit(&mut self.store)?;
+        self.state = state;
+        Ok(true)
+    }
+
+    fn stage_remove(txn: &mut Txn<'_, S>, config: &HnswConfig, key: &K) -> bool {
+        let encoded_key = KeyEnDe::encode(key);
+        let Some(raw) = txn.get(&user_key(&encoded_key)) else {
+            return false;
         };
         let node_id = decode_node_id(&raw);
-
-        let mut txn = Txn::new(&self.store, self.state.clone());
-
         let max_layer = txn
             .get(&node_key(TAG_INFO, node_id))
             .map(|raw| decode_value::<u8>(&raw))
@@ -937,9 +936,9 @@ where
         let mut former_neighbors: Vec<Vec<u64>> =
             Vec::with_capacity(max_layer as usize + 1);
         for l in 0..=max_layer {
-            let neighbors = get_neighbors(&txn, l, node_id);
+            let neighbors = get_neighbors(&*txn, l, node_id);
             for &n in &neighbors {
-                let mut n_list = get_neighbors(&txn, l, n);
+                let mut n_list = get_neighbors(&*txn, l, n);
                 n_list.retain(|&x| x != node_id);
                 txn.set_neighbors(l, n, &n_list);
             }
@@ -951,14 +950,10 @@ where
         // Runs before the vector row is removed so distance computation
         // still works.
         for l in 0..=max_layer {
-            let m_max = if l == 0 {
-                self.config.m_max0
-            } else {
-                self.config.m
-            };
+            let m_max = if l == 0 { config.m_max0 } else { config.m };
             let fns = &former_neighbors[l as usize];
             for &n in fns {
-                let cur = get_neighbors(&txn, l, n);
+                let cur = get_neighbors(&*txn, l, n);
                 if cur.len() >= m_max {
                     continue;
                 }
@@ -973,11 +968,11 @@ where
                     if candidate == n || cur_set.contains(&candidate) {
                         continue;
                     }
-                    let mut n_list = get_neighbors(&txn, l, n);
+                    let mut n_list = get_neighbors(&*txn, l, n);
                     n_list.push(candidate);
                     txn.set_neighbors(l, n, &n_list);
 
-                    let mut c_list = get_neighbors(&txn, l, candidate);
+                    let mut c_list = get_neighbors(&*txn, l, candidate);
                     c_list.push(n);
                     txn.set_neighbors(l, candidate, &c_list);
 
@@ -994,20 +989,16 @@ where
 
         // Phase 3: Clean up rows and state.
         txn.del_vec(node_id);
-        txn.rows.del(user_key(&KeyEnDe::encode(key)));
+        txn.rows.del(user_key(&encoded_key));
         txn.rows.del(node_key(TAG_NODE2KEY, node_id).to_vec());
         txn.rows.del(node_key(TAG_INFO, node_id).to_vec());
 
         txn.state.node_count = txn.state.node_count.saturating_sub(1);
 
         if txn.state.entry_point == Some(node_id) || max_layer == txn.state.max_layer {
-            Self::repair_entry_point(&mut txn, &self.config);
+            Self::repair_entry_point(txn, config);
         }
-
-        let (rows, state) = txn.finish();
-        rows.commit(&mut self.store)?;
-        self.state = state;
-        Ok(true)
+        true
     }
 
     fn repair_entry_point(txn: &mut Txn<'_, S>, config: &HnswConfig) {

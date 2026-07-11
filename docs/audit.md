@@ -11,12 +11,6 @@
 
 ## Open
 
-### [HIGH] vecdex: replacement is not one atomic mutation
-- **Where**: `strata/src/vecdex/mod.rs:543-579`, `strata/src/vecdex/mod.rs:605-658`, `strata/src/vecdex/mod.rs:897-1036`
-- **What**: replacing an existing key commits `remove` before staging the new insert; batch replacement removes all old keys before their chunks are attempted.
-- **Why**: a crash or second commit failure returns an error after the old value is already gone, and later batch chunks can lose keys they never replaced.
-- **Suggested fix**: extract staged removal and combine remove+insert in the same transaction/chunk; retain bounded independent chunk commits.
-
 ### [HIGH] dagmap: teardown ordering lacks durable cross-shard barriers
 - **Where**: `strata/src/dagmap/raw/mod.rs:602-632`, `strata/src/dagmap/raw/mod.rs:647-679`, `strata/src/dagmap/raw/mod.rs:682-803`
 - **What**: destroy/prune clearing relies on call order, but data/parent clears and later registry removals can land in different unsynced shard WALs.
