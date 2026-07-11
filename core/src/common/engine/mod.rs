@@ -7,7 +7,7 @@ mod mmdb;
 /////////////////////////////////////////////////////////////////////////////
 
 pub(crate) use self::mmdb::{
-    EngineSizing, MmDB as Engine, root_holds_dataset, write_file_durable,
+    EngineSizing, MmDB as Engine, validate_completed_dataset, write_file_durable,
 };
 
 type DbIter = self::mmdb::MmdbIter;

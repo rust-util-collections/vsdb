@@ -431,6 +431,17 @@ fn namespace_lifecycle() {
     // Move the tree for real, then relocate: accepted.
     fs::remove_dir_all(&new_root).unwrap();
     fs::rename(&old_root, &new_root).unwrap();
+    fs::create_dir_all(format!("{new_root}/mmdb/shard_02")).unwrap();
+    fs::write(
+        format!("{new_root}/mmdb/shard_02/CURRENT"),
+        "MANIFEST-000001",
+    )
+    .unwrap();
+    assert!(vsdb_ns_relocate(rid, &new_root).is_err());
+    fs::remove_dir_all(format!("{new_root}/mmdb/shard_02")).unwrap();
+    fs::write(format!("{new_root}/__SYSTEM__/format_version"), "17").unwrap();
+    assert!(vsdb_ns_relocate(rid, &new_root).is_err());
+    fs::write(format!("{new_root}/__SYSTEM__/format_version"), "16").unwrap();
     vsdb_ns_relocate(rid, &new_root).unwrap();
     let rm = MapxRaw::from_meta(rmid).unwrap();
     assert_eq!(&rm.get(b"moved").unwrap()[..], b"yes");

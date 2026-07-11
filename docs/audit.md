@@ -11,12 +11,6 @@
 
 ## Open
 
-### [CRITICAL] engine: completed-root validation can reopen a missing shard as empty
-- **Where**: `core/src/common/engine/mmdb.rs:198-247`, `core/src/common/engine/mmdb.rs:511-531`, `core/src/common/engine/mmdb.rs:829-934`, `core/src/common/namespace.rs:868-896`
-- **What**: open validates completed shard directory names but not each shard's MMDB `CURRENT` anchor; relocation checks anchors but not the exact shard set or marker contents.
-- **Why**: a marked shard directory missing `CURRENT` is silently recreated by MMDB, while relocation can report success for a target that the next open rejects.
-- **Suggested fix**: share a strict, non-mutating completed-dataset validator across open and relocate; require exact shards, supported marker, and every `CURRENT` anchor.
-
 ### [HIGH] namespace: established roots can be silently recreated after disappearance
 - **Where**: `core/src/common/namespace.rs:217-234`, `core/src/common/namespace.rs:500-559`, `core/src/common/namespace.rs:568-597`
 - **What**: the registry does not distinguish a pending create from a namespace whose root previously completed.

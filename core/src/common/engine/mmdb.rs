@@ -508,27 +508,43 @@ fn ceiling_file_path() -> PathBuf {
     vsdb_get_base_dir().join(PREFIX_CEILING_REL_PATH)
 }
 
-/// Whether `root` holds an initialized dataset with the expected shard
-/// layout: format marker present plus, in every `mmdb/shard_XX` dir,
-/// mmdb's `CURRENT` manifest anchor. `CURRENT` is exactly mmdb's own
-/// recover-vs-create test at open — absent, a shard is silently
-/// (re)created fresh — so requiring it here means "every shard would
-/// take the *recover* path". No false positives: the marker is written
-/// only after every shard opened, and each open creates `CURRENT`.
+/// Strictly validates a completed dataset without opening or mutating it.
 ///
-/// Used by `vsdb_ns_relocate` to refuse a target the operator has not
-/// actually moved the data to (empty dir, bare skeleton, or a partial
-/// copy that lacks the anchors). Content beyond these anchors is NOT
-/// verified — roots carry no namespace id, so moving the *right*
-/// dataset remains the operator's contract.
-pub(crate) fn root_holds_dataset(root: &Path, shards: usize) -> bool {
-    root.join(FORMAT_VERSION_REL_PATH).is_file()
-        && (0..shards).all(|i| {
-            root.join("mmdb")
-                .join(format!("shard_{i:02}"))
-                .join("CURRENT")
-                .is_file()
-        })
+/// `CURRENT` is MMDB's recover-vs-create discriminator: a missing anchor
+/// would make `DB::open` silently create an empty shard. Exact shard names,
+/// marker compatibility, and every anchor must therefore agree before a
+/// completed root is adopted or accepted as a relocation target.
+pub(crate) fn validate_completed_dataset(
+    root: &Path,
+    shards: usize,
+    require_marker: bool,
+) -> Result<()> {
+    check_format_version(root)?;
+    let marker_present = root.join(FORMAT_VERSION_REL_PATH).is_file();
+    if require_marker && !marker_present {
+        return Err(eg!(format!(
+            "dataset at {} has no format marker",
+            root.display()
+        )));
+    }
+    let mmdb_dir = root.join("mmdb");
+    let scan = scan_shard_layout(&mmdb_dir, shards)?;
+    validate_shard_layout(
+        &mmdb_dir,
+        shards,
+        marker_present,
+        &root.join(INIT_SENTINEL_REL_PATH),
+        &scan,
+    )?;
+    if scan.present != shards {
+        return Err(eg!(format!(
+            "dataset at {} is not complete: found {} of {} shard dirs",
+            root.display(),
+            scan.present,
+            shards
+        )));
+    }
+    validate_shard_anchors(&mmdb_dir, shards)
 }
 
 /// Folds `legacy` (the pre-v16 shard-0 value, when present) and the
@@ -849,6 +865,7 @@ fn scan_shard_layout(mmdb_dir: &Path, shards: usize) -> Result<ShardScan> {
                 if !name.starts_with("shard_") {
                     continue;
                 }
+
                 if expected.contains(&name) && e.path().is_dir() {
                     present += 1;
                 } else if unexpected.is_none() {
@@ -863,6 +880,20 @@ fn scan_shard_layout(mmdb_dir: &Path, shards: usize) -> Result<ShardScan> {
         present,
         unexpected,
     })
+}
+
+fn validate_shard_anchors(mmdb_dir: &Path, shards: usize) -> Result<()> {
+    for i in 0..shards {
+        let current = mmdb_dir.join(format!("shard_{i:02}")).join("CURRENT");
+        if !current.is_file() {
+            return Err(eg!(format!(
+                "damaged dataset at {}: shard_{i:02} has no MMDB CURRENT \
+                 anchor — refusing to recreate it as an empty shard",
+                mmdb_dir.display()
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Rejects opening a root whose shard layout contradicts its lifecycle
@@ -912,15 +943,18 @@ fn validate_shard_layout(
                 shards
             )));
         }
-        return Ok(());
+        return validate_shard_anchors(mmdb_dir, shards);
     }
     if sentinel_path.exists() {
         // Resumable create-crash; present <= shards is guaranteed by
         // the exact-set scan above.
         return Ok(());
     }
-    if scan.present == 0 || scan.present == shards {
+    if scan.present == 0 {
         return Ok(());
+    }
+    if scan.present == shards {
+        return validate_shard_anchors(mmdb_dir, shards);
     }
     Err(eg!(format!(
         "damaged dataset at {}: {} of {} shard dirs exist with no \
@@ -1592,11 +1626,17 @@ mod tests {
         assert!(check(4, false).is_ok());
         fs::remove_file(&sentinel).unwrap();
 
-        // Exact match: fine with and without the marker (the pre-v16
-        // default base is exactly the marker-less equal case).
+        // Exact match is complete only when every shard carries MMDB's
+        // recover-vs-create anchor.
         fs::create_dir_all(mmdb_dir.join("shard_01")).unwrap();
+        fs::write(mmdb_dir.join("shard_00/CURRENT"), "MANIFEST-000001").unwrap();
+        fs::write(mmdb_dir.join("shard_01/CURRENT"), "MANIFEST-000001").unwrap();
         assert!(check(2, false).is_ok());
         assert!(check(2, true).is_ok());
+        fs::remove_file(mmdb_dir.join("shard_01/CURRENT")).unwrap();
+        assert!(check(2, false).is_err());
+        assert!(check(2, true).is_err());
+        fs::write(mmdb_dir.join("shard_01/CURRENT"), "MANIFEST-000001").unwrap();
 
         // Marker present + missing shards: damage, refused.
         assert!(check(4, true).is_err());

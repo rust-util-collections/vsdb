@@ -26,7 +26,7 @@
 //!
 
 use crate::common::{
-    engine::{Engine, EngineSizing, root_holds_dataset, write_file_durable},
+    engine::{Engine, EngineSizing, validate_completed_dataset, write_file_durable},
     error::{Result, VsdbError},
     vsdb_freeze_base_dir, vsdb_get_base_dir,
 };
@@ -738,7 +738,7 @@ impl Namespace {
 /// written pre-clamped, so an out-of-range count means corruption or
 /// hand-editing — refuse cleanly: `shards == 0` would otherwise reach
 /// `prefix % 0` (a release-mode panic) on the first routed operation,
-/// and would vacuously pass `root_holds_dataset`'s per-shard checks.
+/// and would vacuously pass completed-dataset per-shard checks.
 fn validated_shards(rec: &NsRecord) -> Result<usize> {
     let shards = rec.shards as usize;
     if !(1..=64).contains(&shards) {
@@ -872,15 +872,7 @@ pub fn vsdb_ns_relocate(id: NsId, new_path: impl AsRef<Path>) -> Result<()> {
     // `open` would silently initialize a fresh, empty root. Refuse
     // instead. (Which dataset lives there cannot be verified — roots
     // carry no namespace id; that part stays on the operator.)
-    if !root_holds_dataset(new_path, rec_shards) {
-        return Err(ns_err(format!(
-            "relocate target {} does not hold an initialized dataset \
-             (expected a format marker and {rec_shards} shard dir(s) \
-             each containing engine files); move namespace {id}'s data \
-             there first, then relocate",
-            new_path.display(),
-        )));
-    }
+    validate_completed_dataset(new_path, rec_shards, true).map_err(VsdbError::from)?;
 
     let rec = reg
         .entries
