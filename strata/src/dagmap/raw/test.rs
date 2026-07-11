@@ -132,6 +132,17 @@ fn test_meta_restore_then_mutate() {
 }
 
 #[test]
+fn serde_rejects_mixed_namespace_components() {
+    let ns = crate::Namespace::create().unwrap();
+    let data = MapxRaw::new();
+    let parent: Orphan<Option<DagMapRaw>> = Orphan::new_in(&ns, None);
+    let children: MapxOrdRawKey<DagMapRaw> = MapxOrdRawKey::new();
+    let bytes = postcard::to_allocvec(&(data, parent, children)).unwrap();
+
+    assert!(postcard::from_bytes::<DagMapRaw>(&bytes).is_err());
+}
+
+#[test]
 #[should_panic(expected = "empty value is a tombstone")]
 fn insert_empty_value_panics() {
     let mut dag = DagMapRaw::new(None);

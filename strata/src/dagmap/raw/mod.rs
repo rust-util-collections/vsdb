@@ -108,15 +108,21 @@ impl<'de> Deserialize<'de> for DagMapRaw {
                 self,
                 mut seq: A,
             ) -> StdResult<DagMapRaw, A::Error> {
-                let data = seq
+                let data: MapxRaw = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(0, &self))?;
-                let parent = seq
+                let parent: Orphan<Option<DagMapRaw>> = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                let children = seq
+                let children: MapxOrdRawKey<DagMapRaw> = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                let ns = data.namespace().id();
+                if parent.namespace().id() != ns || children.namespace().id() != ns {
+                    return Err(de::Error::custom(
+                        "DagMapRaw components belong to different namespaces",
+                    ));
+                }
                 Ok(DagMapRaw {
                     data,
                     parent,

@@ -11,12 +11,6 @@
 
 ## Open
 
-### [HIGH] dagmap: deserialization accepts mixed-namespace components
-- **Where**: `strata/src/dagmap/raw/mod.rs:82-127`, `strata/src/dagmap/raw/mod.rs:131-152`
-- **What**: `DagMapRaw` assembles `data`, `parent`, and `children` handles without verifying that they belong to one namespace.
-- **Why**: malformed safe serde input bypasses the constructor invariant, and prune flushes only `data`'s engine while mutating components in other engines.
-- **Suggested fix**: reject deserialized composites whose component namespace IDs differ; add mixed-namespace serde tests.
-
 ### [HIGH] trie: typed SMT proof APIs accept ambiguous raw key bytes
 - **Where**: `strata/src/trie/proof.rs:332-352`, `strata/src/common/ende.rs:333-348`
 - **What**: `VerMapWithProof<K, V, SmtCalc>::prove` accepts `&[u8]` even though the committed trie uses `K::to_bytes()`.
