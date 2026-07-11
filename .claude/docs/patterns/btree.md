@@ -10,9 +10,10 @@
 - Backed by MapxRaw (untyped KV → MMDB)
 - Node types: Internal (keys + child NodeIds) and Leaf (keys + values)
 - Per-operation write buffer: `alloc` stages encoded nodes in `pending`;
-  each public mutating op (`insert`/`remove`/`bulk_load`) drains it via
-  ONE engine write batch before returning (`flush_pending`); `node()`
-  reads through the buffer; intra-op discarded churn never hits disk
+  `insert`/`remove` drain it before return, while large `bulk_load` operations
+  additionally flush bounded intermediate batches at
+  `PENDING_FLUSH_THRESHOLD`; `node()` reads through the buffer and intra-op
+  discarded churn never hits disk
 
 ## Critical Invariants
 
@@ -26,9 +27,11 @@ Across parent-child: all keys in `children[i]` < `keys[i]` <= all keys in `child
 **Check**: Verify insert/split/merge maintain ordering. Pay special attention to the median key during splits.
 
 ### INV-BT3: Node Occupancy
-Internal nodes: min ceil(B/2) children (except root). Leaf nodes: min ceil(B/2) keys (except root).
-Max 2*B keys per node.
-**Check**: Verify split triggers at 2*B+1 and merge triggers below ceil(B/2). Verify root is exempt from minimum.
+Every non-root internal or leaf node has `B..=2B` keys (16..=32).
+Internal nodes have one more child than key. The root is exempt from the
+minimum.
+**Check**: Verify split triggers at `2B+1`, rebalance/merge triggers below `B`,
+and root contraction preserves the exception.
 
 ### INV-BT4: Structural Sharing Correctness
 Two versions that share a subtree must see identical data for that subtree. If version V1 modifies node N, V1 gets a new copy N'; V2 still sees the original N.
@@ -39,15 +42,22 @@ A node is garbage if no live commit's root tree can reach it. GC must not collec
 **Check**: Verify GC traverses from ALL live commit roots, not just the latest.
 
 ### INV-BT6: Write Buffer Drained Between Operations
-`pending` is non-empty ONLY inside a mutating operation. Every public mutating entry point must flush before returning; anything that runs between operations (serialize, Clone, `release_node`, `gc`, iteration) may assume an empty buffer. A root NodeId must never escape to a caller (or be persisted into VerMap branch state) while any node it references is still buffered.
-**Check**: Every `return` path of `insert`/`remove`/`bulk_load` passes through `flush_pending`. New mutating entry points must do the same. `node()` must consult the buffer before the engine (remove-underflow and `bulk_load` read back same-op nodes). `discard_node` must drop in-buffer nodes instead of lazy-deleting them.
+`pending` is non-empty only inside mutation. Every public mutator flushes before
+return; `bulk_load` may also flush intermediate chunks. A root NodeId must never
+escape or enter VerMap branch state while any referenced node is still buffered.
+**Check**: Every return path flushes the final pending nodes; intermediate
+bulk-load flushes do not expose the root. `node()` consults the buffer before
+engine storage and `discard_node` drops buffered nodes instead of lazy-deleting.
 
 ## Common Bug Patterns
 
 ### Split Median Misplacement (technical-patterns.md 1.2)
-The median key is included in both left and right children after split.
-**Trigger**: Insert into a full node → split → median duplicated.
-**Check**: After split, median must be in exactly ONE location (promoted to parent or kept in one child, not both).
+Split treats leaf and internal separators identically.
+**Trigger**: Insert into a full node → split → internal separator remains in a
+child, or leaf separator is removed from the right leaf.
+**Check**: Internal separator is parent-only; leaf separator is copied to the
+parent and remains as the right leaf's first data key. Data keys never appear in
+both leaves.
 
 ### In-Place Node Mutation (technical-patterns.md 1.1)
 A hot path writes directly to node storage without allocating a new NodeId.
@@ -68,3 +78,4 @@ Delete cascades underflow but merge doesn't properly redistribute or combine nod
 - [ ] Node encode/decode round-trips correctly (hand-written codec)
 - [ ] Empty tree / single-entry edge cases handled
 - [ ] Write buffer flushed on every mutating return path (INV-BT6)
+- [ ] `bulk_load` intermediate flushes keep the not-yet-final root unobservable

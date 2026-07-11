@@ -21,10 +21,14 @@ load the relevant guide when those subsystems are affected.
 **Check**: Every mutation path must allocate a new NodeId and return it up the call stack. The old NodeId must remain untouched.
 
 ### 1.2 Node Split Boundary Error
-**Pattern**: When a B+ tree node exceeds capacity (B=16, max 32 keys), the split produces an incorrect median key, or the median is placed in both children.
+**Pattern**: When a node exceeds capacity (B=16, max 32 keys), split separator
+placement violates internal-vs-leaf semantics.
 **Where**: `persistent_btree/` — split logic.
 **Impact**: Key ordering violation, duplicate keys across children, or missing keys.
-**Check**: After split, left child's max key < median < right child's min key. No key appears in both children.
+**Check**: Internal split promotes and removes the separator from both child
+key arrays. Leaf split copies the right leaf's first key into the parent, so
+`left.max < separator == right.min`; that parent/right duplication is required.
+No data key appears in both leaves.
 
 ### 1.3 Structural Sharing Leak
 **Pattern**: After a node is modified (COW), the old node is not reachable from any live commit but is never garbage-collected.
@@ -106,21 +110,32 @@ load the relevant guide when those subsystems are affected.
 
 ### 4.1 Prefix Collision
 **Pattern**: Two different data structures are assigned the same u64 prefix, causing their keys to collide in the same MMDB shard.
-**Where**: `core/src/common/` — PreAllocator, prefix assignment.
+**Where**: `core/src/common/engine/mmdb.rs` — `alloc_prefix()`,
+`alloc_prefix_candidate()`, thread-local batch cursors, durable ceiling, and
+recovered-prefix reservation.
 **Impact**: Data corruption — one structure reads/overwrites another's data.
-**Check**: Verify prefix allocator is monotonic and never recycles a prefix that is still in use.
+**Check**: Verify global floor/ceiling and local cursors move only forward,
+ceiling durability precedes issuance, recovered prefixes cannot recur, and
+prefixes are never reused.
 
 ### 4.2 Shard Routing Mismatch
-**Pattern**: Write goes to shard `prefix % 16` but read computes a different shard (e.g., using the full key hash instead of the prefix).
+**Pattern**: Write uses `prefix % shard_count` but read computes a different
+shard (16 is pinned only for the default namespace; other namespace counts are
+persisted at creation).
 **Where**: `core/src/common/engine/mmdb.rs` — shard selection.
 **Impact**: Read returns None for an existing key.
-**Check**: Verify both read and write paths compute shard index identically: `prefix_bytes % NUM_SHARDS`.
+**Check**: Verify read/write/delete/iter all route with the owning engine's
+actual shard count (`self.dbs.len()`), never a hardcoded default.
 
-### 4.3 MMDB Singleton Initialization Race
-**Pattern**: Two threads call vsdb init simultaneously, both try to open MMDB, one creates the singleton while the other gets a partially-initialized reference.
-**Where**: `core/src/common/` — global DB initialization.
-**Impact**: Crash or undefined behavior from partially-initialized DB.
-**Check**: Verify initialization uses `Once` or equivalent single-init guarantee.
+### 4.3 Namespace Engine Double-Open
+**Pattern**: Two threads initialize the default engine or open the same
+non-default namespace concurrently and create two engines for one root.
+**Where**: `core/src/common/mod.rs`, `core/src/common/namespace.rs`.
+**Impact**: Lock-file conflict, split in-process state, or partially initialized
+handle publication.
+**Check**: Default namespace uses one-time initialization. Non-default opens
+re-check `OPEN_NAMESPACES` while holding `REGISTRY_LOCK` before opening/caching
+an engine for that id.
 
 ### 4.4 WriteBatch Cross-Shard Atomicity
 **Pattern**: A logical operation spans multiple prefixes (different shards). If only some shard writes succeed, the operation is partially applied.
@@ -164,10 +179,22 @@ load the relevant guide when those subsystems are affected.
 **Pattern**: A new version of postcard (or a changed type definition) produces different bytes for the same logical data, making existing on-disk data unreadable.
 **Where**: Any Serialize/Deserialize type used as a key or value.
 **Impact**: Data loss on upgrade — existing entries become invisible.
-**Check**: Verify postcard version is pinned in Cargo.toml. Verify struct changes use `#[serde(default)]` for backward compatibility.
+**Check**: Verify postcard stays pinned and persisted layouts use explicit
+version/tag/envelope discipline with old-fixture tests. Do not assume
+`#[serde(default)]` alone makes a postcard sequence layout backward compatible.
+Follow `compatibility-policy.md`.
 
 ### 6.3 Node Encoding Mismatch
 **Pattern**: B+ tree or trie node encoding (hand-written, not postcard) has a write/read asymmetry. The encoder writes fields in one order, the decoder reads in another.
 **Where**: `persistent_btree/` node codec, `trie/node/` codec.
 **Impact**: Corrupted nodes on read — keys and children misaligned.
 **Check**: Verify encode and decode process fields in identical order. Verify round-trip tests exist.
+
+### 6.4 Encoded-Byte Equality Replaces Value Equality
+**Pattern**: A typed collection derives `PartialEq`, causing its raw encoded
+storage wrapper to compare bytes instead of decoded values.
+**Where**: typed collection wrappers generated by `strata/src/common/macros.rs`.
+**Impact**: Equality violates `V: PartialEq` semantics (notably NaN/non-canonical
+encodings) and may impose unnecessary key equality bounds.
+**Check**: Typed wrapper equality iterates matching raw keys but compares
+decoded values. Keep regression tests for non-reflexive values such as NaN.

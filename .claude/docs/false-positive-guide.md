@@ -44,7 +44,12 @@ Before reporting any finding, check it against this guide. If a finding matches 
 ## FP-7: Test-Only Code Held to Production Standards
 
 **Pattern**: Reporting error handling, performance, or resource management issues in test code.
-**Rule**: Test code has different standards. Tests may use `unwrap()`, hardcoded paths, single-threaded assumptions. Only report if the test itself is incorrect (testing the wrong thing).
+**Rule**: Test code may use `unwrap()` and isolated hardcoded scratch paths.
+Tests run in parallel, so they may NOT assume process-global allocator,
+registry, base-dir, or environment state is exclusive. Serialize
+`vsdb_set_base_dir`/environment mutation and make global-state assertions
+race-tolerant. Report a test only when it is incorrect or unsafe under this
+documented parallel model.
 
 ## FP-8: Intentional Unsafe with Safety Comment
 
@@ -85,3 +90,37 @@ Only report performance issues on hot/warm paths.
 1. The root changes WITHOUT any underlying data change (spurious root update)
 2. The root does NOT change when data DID change (missed update)
 3. Two different datasets produce the same root (collision — catastrophic)
+
+## FP-13: Audit Disposition Skipped Without Relevant Re-evaluation
+
+**Pattern**: Treating `Won't Fix` or `Rejected` as permanent, or requiring every
+narrow review to re-audit every unrelated entry.
+**Rule**: Re-evaluate an entry when its code, callers, assumptions, or subsystem
+is in scope; a full audit checks all entries. A narrow review may leave
+unrelated entries untouched.
+**When to report**: An in-scope entry is carried forward without checking its
+reason. Never add re-check dates/freshness markers to `docs/audit.md`.
+
+## FP-14: Fresh Batch/Transaction Per Bulk Chunk
+
+**Pattern**: Reporting a newly-created batch/transaction per chunk as needless
+allocation.
+**Rule**: `Mapx::clone_in` and chunked bulk mutation paths intentionally create
+a fresh batch/transaction per bounded chunk. This bounds memory and makes each
+chunk's commit independently atomic; reusing a committed transaction is not an
+optimization.
+**When to report**: The chunk size is unbounded, committed state leaks between
+chunks, cleanup/retry semantics are wrong, or a documented whole-operation
+atomicity promise is violated.
+
+## FP-15: Namespace Close Holds the Registry Lock Through Teardown
+
+**Pattern**: Reporting that `ns_close_impl` unnecessarily retains
+`REGISTRY_LOCK` while `engine.close()` flushes and joins threads.
+**Rule**: The separate `OPEN_NAMESPACES` table lock is released before teardown,
+so unrelated cache hits proceed. `REGISTRY_LOCK` intentionally serializes
+open/create/destroy/relocate until teardown completes, preventing the same
+namespace root from being reopened while its old engine still owns locks/files.
+**When to report**: A concrete deadlock cycle exists, the table lock spans
+teardown, or a replacement protocol preserves same-id lifecycle exclusion with
+a smaller critical section.

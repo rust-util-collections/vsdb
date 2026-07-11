@@ -21,8 +21,8 @@
 - Handles carry their `Namespace` (Arc); ambient scope affects CREATION
   only, never routing; metas embed `ns_id` as an optional 8-byte suffix
   (absent ⇔ default namespace, byte-identical to pre-v16)
-- Engines are OWNED by their `Arc<NsInner>` (no `Box::leak` anywhere,
-  v16.1.0+): `vsdb_ns_close` proves exclusivity (strong_count == 1 under
+- Engines are owned by their `Arc<NsInner>` (no `Box::leak`):
+  `vsdb_ns_close` proves exclusivity (strong_count == 1 under
   REGISTRY_LOCK + table lock), removes the entry, per-shard `DB::close`
   (flush + WAL sync, errors surface), then the drop cascade joins
   compaction threads and releases LOCK files; registry mutations +
@@ -32,13 +32,17 @@
   completes; older binaries refuse newer formats; shard-layout
   validation is completion-aware (marker absent + fewer shards than
   requested = resumable half-created root)
+- One `BlockCachePool` per engine: all of that engine's MMDB shards share
+  capacity, while mmdb member IDs isolate same-numbered SST files
 - WriteBatch per-shard for atomic multi-key operations
 
 ## Critical Invariants
 
 ### INV-E1: Prefix Uniqueness
 No two live data structures may share the same u64 prefix.
-**Check**: Verify PreAllocator is monotonically increasing and atomic. Verify freed prefixes are not reallocated while any reference exists.
+**Check**: Verify `alloc_prefix()`/`alloc_prefix_candidate()` coordinate the
+global floor/ceiling, thread-local issuance cursors, durable ceiling file, and
+recovered-prefix reservations monotonically. Prefixes are never reused.
 
 ### INV-E2: Shard Routing Consistency
 Read and write paths must compute the same shard for the same prefix.
@@ -48,9 +52,11 @@ Read and write paths must compute the same shard for the same prefix.
 All keys for a data structure must be prefixed with its u64 prefix. A structure must never read or write keys with a different prefix.
 **Check**: Verify key construction always prepends the correct prefix. Verify iteration bounds are prefix-scoped.
 
-### INV-E4: Singleton Safety
-The MMDB singleton must be initialized exactly once. Concurrent init attempts must block or fail, never produce two instances.
-**Check**: Verify init uses `std::sync::Once`, `OnceLock`, or equivalent.
+### INV-E4: Per-Namespace Engine Uniqueness
+The default engine initializes once. A non-default namespace id has at most one
+open engine in-process.
+**Check**: Verify default one-time initialization and the
+`REGISTRY_LOCK` + under-lock `OPEN_NAMESPACES` re-check for non-default opens.
 
 ### INV-E5: Shard Independence
 Operations on shard S1 must not affect shard S2. A WriteBatch on one shard must not leak entries to another.
@@ -60,11 +66,47 @@ Operations on shard S1 must not affect shard S2. A WriteBatch on one shard must 
 `iter()` on a MapxRaw must return only keys with the matching prefix, even if MMDB's underlying iterator sees keys from adjacent prefixes.
 **Check**: Verify iterator uses prefix-bounded seek and stops at prefix boundary.
 
+### INV-E7: Namespace Lifecycle Exclusion
+Open/create/destroy/relocate/close for one namespace id/root must not overlap in
+a way that produces two engines or mutates an open root.
+**Check**: `REGISTRY_LOCK` covers registry read-modify-write and same-id engine
+open/teardown. Destroy/relocate perform the not-open check under it.
+`OPEN_NAMESPACES`' table lock is released before slow close teardown.
+
+### INV-E8: Format Marker and Shard Completeness
+A marked root is complete and must contain exactly its recorded shard set.
+Marker-absent roots are resumable only when their partial layout is a valid
+prefix of creation; malformed/extra/missing layouts reject loudly.
+**Check**: Validate shard count bounds, exact shard identities, each shard's
+MMDB `CURRENT` anchor, and marker version before adopting an existing root.
+
+### INV-E9: Namespace Identity and Placement
+Handles route through their owned `Namespace`; ambient scope affects creation
+only. Serialized metadata's optional namespace suffix is absent exactly for the
+canonical default namespace.
+**Check**: `from_meta`/`from_bytes_in` and `InstanceId` normalization cannot
+silently redirect an existing handle to ambient/default storage.
+
+### INV-E10: Per-Engine Cache-Pool Wiring
+Every MMDB shard of one engine attaches to the same per-engine
+`BlockCachePool`; different engines do not accidentally share pool identity.
+**Check**: Pool capacity is allocated once per engine, each shard gets a member
+view, and telemetry reports the intended shard/pool properties.
+
+### INV-E11: Cross-Namespace Clone Cleanup
+`clone_in` copies into a fresh, unobservable prefix in bounded independent
+batches. On a failed chunk, already-committed target rows must be reclaimed
+best-effort before returning the original error.
+**Check**: Each chunk uses a fresh batch, the source remains unchanged, and the
+error path applies one O(1) wiped batch to the partial target without replacing
+the primary failure.
+
 ## Common Bug Patterns
 
 ### Prefix Collision (technical-patterns.md 4.1)
 Two data structures allocated the same prefix.
-**Trigger**: PreAllocator counter reset after crash, or concurrent allocation without synchronization.
+**Trigger**: Durable ceiling/floor regresses, a recovered prefix is not
+reserved, or a local batch cursor issues outside its claimed window.
 
 ### Cross-Shard Read (technical-patterns.md 4.2)
 Write goes to shard A, read checks shard B.
@@ -74,16 +116,28 @@ Write goes to shard A, read checks shard B.
 Iterator scans past the prefix boundary and returns keys belonging to a different structure.
 **Trigger**: No upper-bound set on iterator, or upper-bound computed incorrectly (e.g., prefix+1 overflows for prefix=u64::MAX).
 
-### Singleton Double Init
-Two threads race to initialize the DB, both succeed, creating two independent MMDB instances. Writes go to one, reads to the other.
-**Check**: Verify atomic initialization guarantee.
+### Same-Namespace Double Open
+Two threads race to open one namespace root and both create engines.
+**Check**: Verify default one-time initialization and serialized, re-checked
+non-default open.
+
+### Partial Root Adopted as Complete
+Open/create accepts a marker/layout combination that cannot represent a
+completed or safely resumable namespace and silently initializes missing data.
+**Check**: Treat format marker and exact shard/MMDB anchors as the completion
+proof; malformed legacy roots fail instead of being "repaired" by creation.
 
 ## Review Checklist
-- [ ] PreAllocator is monotonic and atomic (never reuses live prefix)
+- [ ] Prefix allocator floor/ceiling/local cursors are monotonic; durable ceiling precedes issuance
 - [ ] Shard routing identical on read/write/delete/iter paths
 - [ ] All keys prefixed with structure's u64 prefix
-- [ ] Singleton initialized exactly once (Once or equivalent)
+- [ ] Default initializes once; each non-default namespace id has one cached engine
 - [ ] WriteBatch is per-shard, no cross-shard batches
 - [ ] Iterator bounded by prefix (seek + upper bound)
 - [ ] prefix=u64::MAX edge case handled for upper bound computation
-- [ ] Global state cleanup on close/shutdown
+- [ ] Non-default close reclaims its engine; default process-global state remains intentional
+- [ ] Namespace open/create/destroy/relocate/close serialize under lifecycle protocol
+- [ ] Format marker, shard count/set, and per-shard MMDB anchors agree
+- [ ] Handle namespace ownership is independent of ambient creation scope
+- [ ] One BlockCachePool is shared by all shards of one engine only
+- [ ] `clone_in` uses bounded fresh batches and wipes partial target on error

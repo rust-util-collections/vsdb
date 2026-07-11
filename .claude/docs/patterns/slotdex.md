@@ -11,6 +11,8 @@
 - Every mutation is staged and committed in one atomic engine write batch — no dirty flag, no rebuild-on-recovery; the serialized handle metadata is create-time constant
 - SlotType trait: maps application slots to tiers
 - Tier levels >= 1 are cached in memory (hydrated on open); level 0 is walked on disk
+- `slot_rows` is a derived O(1) mirror used only while no tier exists; bulk
+  staging adds `pending_slot_rows` so one large batch promotes at serial cadence
 - Used for time-series and DEX order-book patterns
 
 ## Critical Invariants
@@ -35,6 +37,16 @@ Pagination is **offset-based** by design (`page_size * page_index`, like SQL `LI
 `swap_order` is a pure storage-layout optimization (internal slot complement + result reversal). Logical query results MUST be identical for `swap_order=true` vs `false` on the same data.
 **Check**: Any change to query/insert paths must preserve identical logical output under both modes. Verify tests compare both modes against the same reference (see `test.rs` reference-model tests).
 
+### INV-SD6: Tier-Less Growth Accounting
+While `levels` is empty, `slot_rows` exactly mirrors committed level-0 row
+count. It may be stale while tiers exist because no reader uses it then.
+`insert_batch` adds not-yet-committed `pending_slot_rows`, and promotion builds
+from the merged committed + staged level-0 stream.
+**Check**: Hydration and tier-truncating removal re-seed the mirror only on
+re-entry to the tier-less state (both scans bounded by `tier_capacity + 1`).
+Serial insert, one-shot bulk insert, chunked bulk insert, and reopen must produce
+equivalent tier growth.
+
 ## Common Bug Patterns
 
 ### Tier Boundary Off-By-One
@@ -48,6 +60,12 @@ scan against absent rows.
 **Check**: Verify empty index / empty range returns empty results on every
 query path (forward, reverse, per-slot).
 
+### Bulk Load Never Promotes
+A tier-less one-shot `insert_batch` gates only on committed rows, so pending
+slots never cross capacity and the index remains a permanent O(N) level-0 walk.
+**Check**: Growth uses `slot_rows + pending_slot_rows` and builds the new level
+through `StagedRows::scan_prefix`.
+
 ## Review Checklist
 - [ ] SlotType::tier() is deterministic and pure
 - [ ] Range queries span all intersected tiers
@@ -56,3 +74,5 @@ query path (forward, reverse, per-slot).
 - [ ] Empty tier handled gracefully
 - [ ] Insert and query use identical tier computation
 - [ ] swap_order=true and =false produce identical logical results
+- [ ] `slot_rows` is exact whenever tier-less and never read while tiers exist
+- [ ] one-shot bulk load promotes tiers with the same cadence as serial inserts
