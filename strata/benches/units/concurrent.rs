@@ -74,8 +74,8 @@ fn concurrent_independent_writes(c: &mut Criterion) {
     group.finish();
 }
 
-fn concurrent_hotspot_writes(c: &mut Criterion) {
-    let mut group = c.benchmark_group("vsdb::concurrent / hotspot_writes");
+fn concurrent_cloned_map_writes(c: &mut Criterion) {
+    let mut group = c.benchmark_group("vsdb::concurrent / cloned_map_writes");
     group.sample_size(10);
 
     let thread_counts = [2, 4, 8, 16];
@@ -83,12 +83,15 @@ fn concurrent_hotspot_writes(c: &mut Criterion) {
     for &num_threads in &thread_counts {
         group.bench_function(format!("{} threads", num_threads), |b| {
             b.iter_custom(|iters| {
-                let shared_db: Mapx<[u8; 8], Vec<u8>> = Mapx::new();
+                // `Clone` deep-copies into a fresh prefix. This workload
+                // intentionally measures concurrent writes to independent
+                // maps that share only engine-level resources.
+                let template: Mapx<[u8; 8], Vec<u8>> = Mapx::new();
                 let barrier = Arc::new(Barrier::new(num_threads as usize + 1));
                 let mut handles = vec![];
 
                 for i in 0..num_threads {
-                    let mut db = shared_db.clone();
+                    let mut db = template.clone();
                     let bar = barrier.clone();
                     handles.push(thread::spawn(move || {
                         let value = vec![0u8; 64];
@@ -299,7 +302,7 @@ fn concurrent_mixed_read_write(c: &mut Criterion) {
 criterion_group!(
     benches,
     concurrent_independent_writes,
-    concurrent_hotspot_writes,
+    concurrent_cloned_map_writes,
     concurrent_shadow_hotspot_writes,
     concurrent_reads,
     concurrent_mixed_read_write,

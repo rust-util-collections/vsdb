@@ -11,12 +11,6 @@
 
 ## Open
 
-### [LOW] bench: `hotspot_writes` measures independent cloned maps
-- **Where**: `strata/benches/units/concurrent.rs:77-118`
-- **What**: each worker deep-clones `shared_db`, allocating a fresh prefix before timing.
-- **Why**: the benchmark label implies one contended map but records writes to independent maps.
-- **Suggested fix**: either rename/document the independent-clone workload or use verified disjoint-key shadows for a shared-map benchmark.
-
 ### [LOW] bench: ordered operations use non-order-preserving postcard bytes
 - **Where**: `strata/benches/units/basic_mapx_ord.rs:17-50`, `strata/benches/units/basic_mapx_ord.rs:84-126`
 - **What**: inferred `MapxOrd<Vec<u8>, usize>` orders postcard varints lexicographically while labels describe numeric ordering/ranges.
