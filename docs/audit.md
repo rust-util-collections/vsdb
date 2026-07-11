@@ -11,12 +11,6 @@
 
 ## Open
 
-### [LOW] docs: crate README license links are broken
-- **Where**: `core/README.md:5`, `strata/README.md:5`
-- **What**: both use `../../LICENSE`, which resolves outside the repository.
-- **Why**: the license badges link to a nonexistent target.
-- **Suggested fix**: link to `../LICENSE`.
-
 ### [LOW] bench: `hotspot_writes` measures independent cloned maps
 - **Where**: `strata/benches/units/concurrent.rs:77-118`
 - **What**: each worker deep-clones `shared_db`, allocating a fresh prefix before timing.

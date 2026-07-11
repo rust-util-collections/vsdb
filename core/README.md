@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/vsdb_core.svg)](https://crates.io/crates/vsdb_core)
 [![Docs.rs](https://docs.rs/vsdb_core/badge.svg)](https://docs.rs/vsdb_core)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](../../LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
 [![Rust](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml/badge.svg)](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml)
 
 > `vsdb_core` provides the low-level building blocks for `vsdb`.
