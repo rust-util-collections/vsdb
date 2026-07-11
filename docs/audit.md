@@ -11,12 +11,6 @@
 
 ## Open
 
-### [LOW] docs: namespace examples violate current identity and lifecycle contracts
-- **Where**: `core/docs/api.md:70-117`, `strata/docs/api.md:25-33`
-- **What**: one example closes/destroys/relocates namespaces while handles remain live; another claims a non-default `InstanceId` converts into legacy `u64`.
-- **Why**: the examples panic/fail to compile or would redirect lookup to the default namespace.
-- **Suggested fix**: split lifecycle examples with explicit drops and physical movement, and demonstrate legacy `u64` only for a genuine default-namespace token.
-
 ### [LOW] review-docs: alias, raw-restore, and GC guidance is stale
 - **Where**: `CLAUDE.md:90-96`, `.claude/docs/technical-patterns.md:73-77`, `.claude/docs/technical-patterns.md:148-160`, `.claude/docs/false-positive-guide.md:13-18`, `.claude/docs/patterns/versioning.md:38-40`
 - **What**: review rules still require global writer serialization, same-version raw bytes, and a dirty marker around idempotent full GC.

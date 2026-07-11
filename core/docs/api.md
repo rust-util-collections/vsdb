@@ -74,7 +74,7 @@ let ns2 = Namespace::create_with(NamespaceOpts {
 }).unwrap();
 
 // Create a MapxRaw in an explicit namespace.
-let map = MapxRaw::new_in(&ns);
+let mut map = MapxRaw::new_in(&ns);
 map.insert(b"k", b"v");
 assert_eq!(map.namespace().id(), ns.id());
 
@@ -82,6 +82,7 @@ assert_eq!(map.namespace().id(), ns.id());
 let id: InstanceId = map.save_meta().unwrap();
 // id.to_string() => e.g. "42@1" (map 42 in namespace 1)
 let restored = MapxRaw::from_meta(id).unwrap();
+let ns_id = ns.id();
 
 // Admin tier: list, close, destroy, relocate.
 let all = vsdb_ns_list().unwrap();
@@ -91,7 +92,8 @@ for info in &all {
 
 // Close: flush and release resources (engine threads, LOCK files).
 // Requires all client handles dropped — reopen is restart-equivalent.
-vsdb_ns_close(ns.id()).unwrap();
+drop((restored, map, ns));
+vsdb_ns_close(ns_id).unwrap();
 
 // Consuming form: the handle itself is accounted for; refusal hands
 // it back so a live namespace is never invalidated.
@@ -109,12 +111,17 @@ let copy = src.clone_in(&Namespace::default_ns()).unwrap();
 
 // Destroy: O(1) bulk reclaim of the entire directory tree.
 // Requires the namespace be not-open.
-vsdb_ns_destroy(ns.id()).unwrap();
+vsdb_ns_destroy(ns_id).unwrap();
 
 // Relocate: re-point a namespace at a new root directory.
 // Data movement is the operator's job; the target must hold
 // an initialized dataset (format marker + per-shard CURRENT anchors).
-vsdb_ns_relocate(ns2.id(), "/mnt/archive/db").unwrap();
+let ns2_id = ns2.id();
+let old_root = ns2.path().to_owned();
+drop((src, ns2));
+vsdb_ns_close(ns2_id).unwrap();
+std::fs::rename(old_root, "/mnt/archive/db").unwrap();
+vsdb_ns_relocate(ns2_id, "/mnt/archive/db").unwrap();
 
 // Per-shard engine telemetry (mmdb property names), one reading per
 // shard in shard order — e.g. cache hit/miss counters. Each engine's

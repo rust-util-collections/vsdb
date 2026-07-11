@@ -28,8 +28,9 @@ let id = archive.save_meta().unwrap();
 // id.to_string() => "42@1"  (map 42 in namespace 1)
 let restored: Mapx<u64, String> = Mapx::from_meta(id).unwrap();
 
-// Bare u64 from pre-namespace code still works — targets the default namespace.
-let old_id: u64 = archive.instance_id().into();
+// Bare u64 from pre-namespace code still works for default-namespace maps.
+let legacy: Mapx<u64, String> = Mapx::new();
+let old_id = legacy.save_meta().unwrap().map_id;
 let from_old: Mapx<u64, String> = Mapx::from_meta(old_id).unwrap();
 
 // ---- Advanced tier (opt-in): explicit volume, shards, budget ----
