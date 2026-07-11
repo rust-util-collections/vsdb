@@ -11,11 +11,7 @@
 
 ## Open
 
-### [LOW] bench: read/remove workloads decay into misses and no-ops
-- **Where**: `strata/benches/units/basic_mapx.rs:25-29`, `strata/benches/units/basic_mapx.rs:73-78`, `strata/benches/units/basic_mapx_ord.rs:28-50`
-- **What**: decrementing counters start one past the last inserted key and eventually underflow or exhaust the finite removal set.
-- **Why**: timings increasingly measure absent-key reads/removes rather than the labeled successful operations.
-- **Suggested fix**: cycle reads over a fixed populated range and replenish/setup successful removals per iteration.
+*(none)*
 
 ---
 

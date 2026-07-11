@@ -4,7 +4,7 @@ use std::{
     hint::black_box,
     ops::Bound,
     sync::atomic::{AtomicUsize, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use vsdb::basic::mapx_ord::MapxOrd;
 
@@ -24,25 +24,31 @@ fn read_write(c: &mut Criterion) {
         })
     });
 
-    group.bench_function(" read ", |b| {
+    let mut read_db: MapxOrd<usize, usize> = MapxOrd::new();
+    for n in 0..5000usize {
+        read_db.insert(&n, &n);
+    }
+    let mut read_n = 0usize;
+    group.bench_function(" read (hit) ", |b| {
         b.iter(|| {
-            let n = i.fetch_sub(1, Ordering::SeqCst);
-            black_box(db.get(&n));
+            let n = read_n;
+            read_n = (read_n + 1) % 5000;
+            black_box(read_db.get(&n));
         })
     });
 
-    // Pre-populate for remove
-    let base = i.load(Ordering::SeqCst);
-    for n in base..(base + 5000) {
-        db.insert(&n, &n);
-    }
-    i.store(base + 5000, Ordering::SeqCst);
-
-    group.bench_function(" remove ", |b| {
-        let rm = AtomicUsize::new(i.load(Ordering::SeqCst));
-        b.iter(|| {
-            let n = rm.fetch_sub(1, Ordering::SeqCst);
-            db.remove(&n);
+    group.bench_function(" remove (hit) ", |b| {
+        b.iter_custom(|iters| {
+            let mut remove_db: MapxOrd<usize, usize> = MapxOrd::new();
+            for n in 0..iters {
+                let n = n as usize;
+                remove_db.insert(&n, &n);
+            }
+            let start = Instant::now();
+            for n in 0..iters {
+                black_box(remove_db.remove(&(n as usize)));
+            }
+            start.elapsed()
         })
     });
 

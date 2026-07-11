@@ -3,6 +3,7 @@ use rand::RngExt;
 use std::{
     hint::black_box,
     sync::atomic::{AtomicUsize, Ordering},
+    time::Instant,
 };
 use vsdb::basic::mapx::Mapx;
 
@@ -22,10 +23,16 @@ fn read_write(c: &mut Criterion) {
         })
     });
 
-    group.bench_function(" read ", |b| {
+    let mut read_db = Mapx::new();
+    for n in 0..5000usize {
+        read_db.insert(&[n; 2], &vec![n; 128]);
+    }
+    let mut read_n = 0usize;
+    group.bench_function(" read (hit) ", |b| {
         b.iter(|| {
-            let n = i.fetch_sub(1, Ordering::SeqCst);
-            black_box(db.get(&[n; 2]));
+            let n = read_n;
+            read_n = (read_n + 1) % 5000;
+            black_box(read_db.get(&[n; 2]));
         })
     });
 
@@ -70,11 +77,19 @@ fn read_write(c: &mut Criterion) {
         })
     });
 
-    group.bench_function(" remove ", |b| {
-        let rm = AtomicUsize::new(i.load(Ordering::SeqCst));
-        b.iter(|| {
-            let n = rm.fetch_sub(1, Ordering::SeqCst);
-            db.remove(&[n; 2]);
+    group.bench_function(" remove (hit) ", |b| {
+        b.iter_custom(|iters| {
+            let mut remove_db = Mapx::new();
+            for n in 0..iters {
+                let n = n as usize;
+                remove_db.insert(&[n; 2], &vec![n; 128]);
+            }
+            let start = Instant::now();
+            for n in 0..iters {
+                let n = n as usize;
+                black_box(remove_db.remove(&[n; 2]));
+            }
+            start.elapsed()
         })
     });
 
