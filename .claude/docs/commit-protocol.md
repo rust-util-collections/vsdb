@@ -73,6 +73,9 @@ Both crates remain lockstep. If the intended target already exists in baseline,
 verify it instead of incrementing again. Run
 `cargo metadata --no-deps --format-version 1`, stage the three manifests
 explicitly, inspect the cached diff, and commit release metadata separately.
+Create an annotated git tag pointing at the release commit:
+`git tag -a "vX.Y.Z" -m "vX.Y.Z"` (using the lockstep version). The tag must
+use the `v` prefix.
 
 `Cargo.lock` is intentionally ignored; do not force-add it. Skip the bump when
 no Rust source changed and never create an empty commit.
