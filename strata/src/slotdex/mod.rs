@@ -529,18 +529,6 @@ where
     where
         I: IntoIterator<Item = (S, K)>,
     {
-        // Group by storage slot so each slot's rows are staged once.
-        let mut groups: BTreeMap<S, Vec<K>> = BTreeMap::new();
-        for (slot, k) in items {
-            groups
-                .entry(self.to_storage_slot(slot))
-                .or_default()
-                .push(k);
-        }
-        if groups.is_empty() {
-            return Ok(());
-        }
-
         let mut staged = StagedRows::new();
         // Levels staged for growth during this batch (appended to
         // `self.levels` only after the commit succeeds).
@@ -552,10 +540,15 @@ where
         let mut pending_slot_rows: EntryCnt = 0;
         let mut total_added: EntryCnt = 0;
 
-        for (slot, ks) in groups {
-            // Same growth cadence as serial `insert`: one capacity check
-            // per touched slot (a slot adds at most one new floor entry
-            // per level, so per-key checks are redundant).
+        for (slot, k) in items {
+            let slot = self.to_storage_slot(slot);
+            let ekey = entry_key(&slot, &k);
+            if staged.get_over(&self.store, &ekey).is_some() {
+                continue;
+            }
+
+            // Match serial `insert` exactly: each unique key observes the
+            // tiers and bucket counts staged by every earlier key.
             if let Some(lv) = self.stage_level_growth_over(
                 &mut staged,
                 &grown,
@@ -565,21 +558,13 @@ where
                 grown.push(lv);
             }
 
-            let mut added: EntryCnt = 0;
-            for k in ks {
-                let ekey = entry_key(&slot, &k);
-                if staged.get_over(&self.store, &ekey).is_some() {
-                    continue;
-                }
-                staged.put(ekey, vec![]);
-                added += 1;
-            }
-            if 0 == added {
-                continue;
-            }
-
-            let slot_cnt = self.slot_entry_cnt(&slot);
-            staged.put(level_key(0, &slot), encode_cnt(slot_cnt + added).to_vec());
+            staged.put(ekey, vec![]);
+            let slot_key = level_key(0, &slot);
+            let slot_cnt = staged
+                .get_over(&self.store, &slot_key)
+                .map(|raw| decode_cnt(&raw))
+                .unwrap_or(0);
+            staged.put(slot_key, encode_cnt(slot_cnt + 1).to_vec());
             if 0 == slot_cnt {
                 pending_slot_rows += 1;
             }
@@ -597,11 +582,11 @@ where
                     .get(&(i, floor.clone()))
                     .copied()
                     .unwrap_or_else(|| buckets.get(&floor).copied().unwrap_or(0))
-                    + added;
+                    + 1;
                 staged.put(level_key(i as u8 + 1, &floor), encode_cnt(v).to_vec());
                 bumps.insert((i, floor), v);
             }
-            total_added += added;
+            total_added += 1;
         }
 
         if 0 == total_added {

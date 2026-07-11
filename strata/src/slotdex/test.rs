@@ -609,6 +609,43 @@ fn insert_batch_equivalence_with_serial() {
     }
 }
 
+#[test]
+fn insert_batch_checks_growth_before_each_unique_key() {
+    for swap_order in [false, true] {
+        let mut serial: SlotDex<u64, u64> = SlotDex::new(2, swap_order);
+        let mut bulk: SlotDex<u64, u64> = SlotDex::new(2, swap_order);
+        let mut chunked: SlotDex<u64, u64> = SlotDex::new(2, swap_order);
+
+        for slot in 0..4 {
+            serial.insert(slot, slot).unwrap();
+            bulk.insert(slot, slot).unwrap();
+            chunked.insert(slot, slot).unwrap();
+        }
+
+        serial.insert(4, 40).unwrap();
+        serial.insert(4, 41).unwrap();
+        bulk.insert_batch([(4, 40), (4, 41)]).unwrap();
+        chunked.insert_batch([(4, 40)]).unwrap();
+        chunked.insert_batch([(4, 41)]).unwrap();
+
+        assert_eq!(serial.levels.len(), 2);
+        assert_eq!(bulk.levels.len(), serial.levels.len());
+        assert_eq!(chunked.levels.len(), serial.levels.len());
+        assert_eq!(
+            bulk.get_entries_by_page(16, 0, false),
+            serial.get_entries_by_page(16, 0, false)
+        );
+
+        let bytes = postcard::to_allocvec(&bulk).unwrap();
+        let reopened: SlotDex<u64, u64> = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.levels.len(), serial.levels.len());
+        assert_eq!(
+            reopened.get_entries_by_page(16, 0, false),
+            serial.get_entries_by_page(16, 0, false)
+        );
+    }
+}
+
 /// Regression: tiers built inside one `insert_batch` must survive a
 /// `save_meta`/`from_meta` round trip — `hydrate` has no rebuild path,
 /// so a bulk-loaded index that persisted without tier rows would be

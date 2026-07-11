@@ -11,12 +11,6 @@
 
 ## Open
 
-### [MEDIUM] slotdex: `insert_batch` does not preserve serial tier-growth cadence
-- **Where**: `strata/src/slotdex/mod.rs:513-623`, `strata/src/slotdex/mod.rs:746-801`
-- **What**: bulk insertion groups by slot and checks growth once per group, while serial insertion checks before every unique key.
-- **Why**: the first key in a slot can create a new top-level bucket and make the second key require another tier; one-shot bulk then persists fewer levels than serial/chunked insertion.
-- **Suggested fix**: simulate unique inserts in original order inside one staged batch, including per-key growth/count overlays; extend serial/bulk/reopen equivalence tests.
-
 ### [MEDIUM] tests: staged unit tests race process-environment mutation
 - **Where**: `strata/src/common/staged.rs:185-235`
 - **What**: two parallel library tests call `vsdb_set_base_dir` after the test harness has spawned threads.
