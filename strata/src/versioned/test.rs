@@ -3509,19 +3509,35 @@ mod proof_tests {
         assert_eq!(root.len(), 32);
 
         // Prove membership for key 1
-        let proof = vp.prove(&1u32.to_be_bytes()).unwrap();
+        let proof = vp.prove_key(&1).unwrap();
         assert!(proof.value().is_some());
 
         let root_arr: [u8; 32] = root.try_into().unwrap();
-        let ok = VpSmt::verify_proof(&root_arr, &1u32.to_be_bytes(), &proof).unwrap();
+        let ok = VpSmt::verify_key_proof(&root_arr, &1, &proof).unwrap();
         assert!(ok);
 
         // Prove non-membership for absent key
-        let proof_absent = vp.prove(&999u32.to_be_bytes()).unwrap();
+        let proof_absent = vp.prove_key(&999).unwrap();
         assert!(proof_absent.value().is_none());
-        let ok2 = VpSmt::verify_proof(&root_arr, &999u32.to_be_bytes(), &proof_absent)
-            .unwrap();
+        let ok2 = VpSmt::verify_key_proof(&root_arr, &999, &proof_absent).unwrap();
         assert!(ok2);
+    }
+
+    #[test]
+    fn test_smt_typed_proof_uses_ordered_signed_encoding() {
+        use crate::trie::SmtCalc;
+
+        type VpSmt = VerMapWithProof<i32, String, SmtCalc>;
+
+        let mut vp = VpSmt::new();
+        let main = vp.map().main_branch();
+        vp.map_mut().insert(main, &-1, &"negative".into()).unwrap();
+        vp.map_mut().commit(main).unwrap();
+
+        let root: [u8; 32] = vp.merkle_root(main).unwrap().try_into().unwrap();
+        let proof = vp.prove_key(&-1).unwrap();
+        assert!(proof.value().is_some());
+        assert!(VpSmt::verify_key_proof(&root, &-1, &proof).unwrap());
     }
 
     /// A failed incremental sync (rejected op mid-diff) must not leave

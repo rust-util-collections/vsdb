@@ -11,12 +11,6 @@
 
 ## Open
 
-### [HIGH] trie: typed SMT proof APIs accept ambiguous raw key bytes
-- **Where**: `strata/src/trie/proof.rs:332-352`, `strata/src/common/ende.rs:333-348`
-- **What**: `VerMapWithProof<K, V, SmtCalc>::prove` accepts `&[u8]` even though the committed trie uses `K::to_bytes()`.
-- **Why**: for ordered encodings such as negative signed integers, natural bytes differ from stored bytes and yield a valid non-membership proof for a present logical key.
-- **Suggested fix**: add typed proof/verification methods that encode `&K`, make raw-byte requirements explicit, and cover a negative signed-key membership proof.
-
 ### [HIGH] trie: cache trust-boundary validation is incomplete
 - **Where**: `strata/src/trie/cache.rs:71-147`, `strata/src/trie/cache.rs:224-385`, `strata/src/trie/codec_util.rs:24-60`, `strata/src/trie/smt/cache.rs:60-132`, `strata/src/trie/smt/cache.rs:195-325`
 - **What**: loaders accept noncanonical tree shapes and self-attested cached hashes, SMT permits cached parents with unhashed children, length arithmetic can overflow, and files are read without a size bound.

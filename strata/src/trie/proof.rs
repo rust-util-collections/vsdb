@@ -334,21 +334,38 @@ where
     K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
-    /// Generates a Merkle proof for the given key.
+    /// Generates a Merkle proof for exact ordered-key bytes.
     ///
     /// The trie must be synced (call [`merkle_root`](Self::merkle_root)
-    /// first) for proof generation to work.
+    /// first) for proof generation to work. The bytes must be exactly
+    /// [`KeyEnDeOrdered::to_bytes`] for the logical key; prefer
+    /// [`prove_key`](Self::prove_key) when a typed key is available.
     pub fn prove(&self, key: &[u8]) -> Result<SmtProof> {
         self.trie.prove(key)
     }
 
-    /// Verifies a proof against a root hash and expected key.
+    /// Generates a Merkle proof for a typed key using the same ordered
+    /// encoding committed by the underlying `VerMap`.
+    pub fn prove_key(&self, key: &K) -> Result<SmtProof> {
+        self.trie.prove(&key.to_bytes())
+    }
+
+    /// Verifies a proof against a root hash and exact ordered-key bytes.
     pub fn verify_proof(
         root_hash: &[u8; 32],
         expected_key: &[u8],
         proof: &SmtProof,
     ) -> Result<bool> {
         SmtCalc::verify_proof(root_hash, expected_key, proof)
+    }
+
+    /// Verifies a proof against a typed key using its ordered encoding.
+    pub fn verify_key_proof(
+        root_hash: &[u8; 32],
+        expected_key: &K,
+        proof: &SmtProof,
+    ) -> Result<bool> {
+        SmtCalc::verify_proof(root_hash, &expected_key.to_bytes(), proof)
     }
 }
 
