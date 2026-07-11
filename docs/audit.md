@@ -11,12 +11,6 @@
 
 ## Open
 
-### [CRITICAL] dagmap: legacy `id_num` is ignored when initializing `dag_id_ceiling`
-- **Where**: `strata/src/dagmap/mod.rs:47-81`, `strata/src/dagmap/raw/mod.rs:195-205`
-- **What**: an absent `dag_id_ceiling` unconditionally restarts allocation at zero even when a pre-ceiling `__SYSTEM__/id_num` counter and live child IDs exist.
-- **Why**: the first new child can reuse an existing registry ID; the duplicate check is debug-only and release builds overwrite the old child registration.
-- **Suggested fix**: decode and max-fold the legacy counter before issuing any new ID, persist the new ceiling first, and add an old-format fixture.
-
 ### [CRITICAL] engine: completed-root validation can reopen a missing shard as empty
 - **Where**: `core/src/common/engine/mmdb.rs:198-247`, `core/src/common/engine/mmdb.rs:511-531`, `core/src/common/engine/mmdb.rs:829-934`, `core/src/common/namespace.rs:868-896`
 - **What**: open validates completed shard directory names but not each shard's MMDB `CURRENT` anchor; relocation checks anchors but not the exact shard set or marker contents.
