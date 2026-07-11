@@ -282,6 +282,25 @@ impl DagMapRaw {
         self.children.inner.iter().next().is_none()
     }
 
+    /// Returns the internal registry IDs of all direct children.
+    ///
+    /// These are the IDs accepted by
+    /// [`prune_children_include`](Self::prune_children_include) and
+    /// [`prune_children_exclude`](Self::prune_children_exclude); they are
+    /// distinct from each child's storage [`InstanceId`].
+    pub fn child_ids(&self) -> Vec<RawBytes> {
+        self.children.keys().collect()
+    }
+
+    /// Returns this parent's registry ID for `child`, if it is currently
+    /// registered as a direct child.
+    pub fn child_id(&self, child: &Self) -> Option<RawBytes> {
+        let child = child.instance_id();
+        self.children
+            .iter()
+            .find_map(|(id, entry)| (entry.instance_id() == child).then_some(id))
+    }
+
     /// Retrieves a value from the DAG map, traversing up to the parent if necessary.
     ///
     /// The traversal tracks visited instance IDs to avoid looping forever

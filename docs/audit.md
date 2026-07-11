@@ -11,12 +11,6 @@
 
 ## Open
 
-### [MEDIUM] dagmap: selective prune APIs expose no usable child ID
-- **Where**: `strata/src/dagmap/raw/mod.rs:195-205`, `strata/src/dagmap/raw/mod.rs:635-660`, `strata/src/dagmap/rawkey/mod.rs:258-270`
-- **What**: include/exclude pruning requires hidden 16-byte registry IDs that construction never returns and no public method exposes.
-- **Why**: callers cannot reliably retain or remove a chosen child; its public `InstanceId` is a different identifier.
-- **Suggested fix**: expose child-registry IDs or add instance-based selection helpers, with non-empty include/exclude tests.
-
 ### [MEDIUM] compatibility: historical persisted-data breaks lack an executable migration path
 - **Where**: `CHANGELOG.md:744-748`, `CHANGELOG.md:799-803`, `CHANGELOG.md:805-811`, `CHANGELOG.md:825-830`, `strata/src/common/mod.rs:60-66`
 - **What**: codec and typed-meta breaks identify incompatibility but omit exact last-readable versions, export/import steps, backup/rollback guidance, and direct-open behavior.

@@ -309,6 +309,23 @@ fn destroy_sibling_preserves_other_siblings_and_parent() {
 }
 
 #[test]
+fn selective_prune_ids_are_publicly_discoverable() {
+    let mut parent = DagMapRaw::new(None);
+    let child1 = DagMapRaw::new(Some(&mut parent));
+    let child2 = DagMapRaw::new(Some(&mut parent));
+
+    let id1 = parent.child_id(&child1).unwrap();
+    let id2 = parent.child_id(&child2).unwrap();
+    assert_ne!(id1, id2);
+    assert_eq!(parent.child_ids().len(), 2);
+
+    parent.prune_children_include(&[id1]);
+    assert!(child1.is_dead());
+    assert!(!child2.is_dead());
+    assert_eq!(parent.child_ids(), vec![id2]);
+}
+
+#[test]
 fn destroyed_node_does_not_serve_inherited_reads() {
     // After destroy(), no handle of the node may fall through to the
     // parent and return inherited data — the unlink is persisted in the

@@ -44,6 +44,7 @@ use std::{
     marker::PhantomData,
     ops::{Deref, DerefMut},
 };
+use vsdb_core::common::RawBytes;
 
 type DagHead<V> = DagMapRawKey<V>;
 
@@ -199,6 +200,16 @@ where
     #[inline(always)]
     pub fn no_children(&self) -> bool {
         self.inner.no_children()
+    }
+
+    /// Returns the registry IDs accepted by the selective child-prune APIs.
+    pub fn child_ids(&self) -> Vec<RawBytes> {
+        self.inner.child_ids()
+    }
+
+    /// Returns this parent's registry ID for `child`, if present.
+    pub fn child_id(&self, child: &Self) -> Option<RawBytes> {
+        self.inner.child_id(&child.inner)
     }
 
     /// Retrieves a value from the DAG map.
