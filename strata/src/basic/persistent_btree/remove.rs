@@ -53,6 +53,10 @@ impl PersistentBTree {
     pub(crate) fn discard_node(&mut self, nid: NodeId) {
         let mut refs = self.runtime.refs.lock();
         if !refs.ready {
+            // Even without a reconstructed on-disk ownership map, a
+            // pending entry is known to have been allocated by this
+            // operation and can be dropped safely before it is flushed.
+            self.pending.remove(&nid);
             return;
         }
         // Guard: only discard truly unreferenced nodes.  In merge

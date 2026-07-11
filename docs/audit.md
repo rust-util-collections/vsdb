@@ -11,12 +11,6 @@
 
 ## Open
 
-### [MEDIUM] persistent-btree: deserialized deletes flush discarded temporary nodes
-- **Where**: `strata/src/basic/persistent_btree/remove.rs:27-84`, `strata/src/basic/persistent_btree/mod.rs:175-180`
-- **What**: `discard_node` returns immediately while ref counts are unavailable, even when the node is a current-operation entry in `pending`.
-- **Why**: singleton/root contraction and underflow churn after standalone restore persist unreachable nodes instead of dropping them from the write buffer.
-- **Suggested fix**: remove current-operation pending nodes before the not-ready return; retain conservative handling for unknown on-disk nodes.
-
 ### [MEDIUM] slotdex: `insert_batch` does not preserve serial tier-growth cadence
 - **Where**: `strata/src/slotdex/mod.rs:513-623`, `strata/src/slotdex/mod.rs:746-801`
 - **What**: bulk insertion groups by slot and checks growth once per group, while serial insertion checks before every unique key.

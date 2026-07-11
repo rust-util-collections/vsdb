@@ -1133,6 +1133,19 @@ fn restored_aliases_share_runtime_state() {
     assert_eq!(b.get(b_root, b"b"), Some(b"vb".to_vec()));
 }
 
+#[test]
+fn restored_delete_does_not_flush_discarded_pending_nodes() {
+    let mut tree = PersistentBTree::new();
+    let root = tree.insert(EMPTY_ROOT, b"k", b"v");
+    let bytes = postcard::to_allocvec(&tree).unwrap();
+    drop(tree);
+
+    let mut restored: PersistentBTree = postcard::from_bytes(&bytes).unwrap();
+    let stored_before = restored.nodes.iter().count();
+    assert_eq!(restored.remove(root, b"k"), EMPTY_ROOT);
+    assert_eq!(restored.nodes.iter().count(), stored_before);
+}
+
 /// Serde roundtrip preserves multi-version data:
 /// serialize a tree with diverged versions, deserialize, check both.
 #[test]
