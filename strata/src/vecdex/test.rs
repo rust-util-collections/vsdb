@@ -529,21 +529,13 @@ fn remove_entry_point_preserves_max_layer() {
     assert_eq!(results.len(), 5);
 }
 
-/// Regression: entry-point re-election on `remove()` must never deflate
-/// `max_layer` below the TRUE global maximum layer among live nodes,
-/// even when the node chosen as the new entry point (which correctly
-/// prefers linked candidates, so an isolated node can't hide the graph)
-/// sits at a lower layer than an isolated node holding the real maximum.
+/// Regression: entry-point re-election must choose a true-max-layer node
+/// and reconnect it when legacy state left it isolated.
 ///
-/// Before the fix, the candidate comparison `(linked, layer)` put
-/// `linked` first, so ANY linked node beat ANY unlinked node regardless
-/// of layer, and the winning candidate's own (lower) layer was written
-/// straight into `max_layer` instead of a true max scan. Organic HNSW
-/// graphs (random layer assignment) rarely produce this adversarial
-/// shape, so the graph below is constructed directly — bypassing
-/// `insert()`'s random layer roll — to pin the exact scenario.
+/// The graph below is constructed directly to model an index written by
+/// the old pruning/re-election protocol.
 #[test]
-fn remove_entry_point_does_not_deflate_max_layer_below_isolated_high_layer_node() {
+fn remove_entry_point_reconnects_isolated_true_max_node() {
     let cfg = HnswConfig {
         dim: 2,
         ..Default::default()
@@ -599,9 +591,77 @@ fn remove_entry_point_does_not_deflate_max_layer_below_isolated_high_layer_node(
     );
     assert_eq!(
         idx.state.max_layer, true_max,
-        "max_layer must reflect the true global max even though the \
-         re-elected entry point (node 1, layer 1, linked) sits lower"
+        "max_layer must reflect the true global max"
     );
+    assert_eq!(idx.state.entry_point, Some(0));
+    assert!(!hnsw::get_neighbors(&idx.store, 0, 0).is_empty());
+    assert_bidirectional(&idx);
+    assert_eq!(idx.search(&[1.0, 0.0], 3).unwrap().len(), 3);
+}
+
+#[test]
+fn saturated_neighbor_pruning_keeps_new_entry_point_reachable() {
+    let cfg = HnswConfig {
+        dim: 2,
+        m: 2,
+        m_max0: 2,
+        ef_construction: 20,
+        ef_search: 20,
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg.clone());
+    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state.clone());
+
+    for (node_id, value) in [(0, [0.0, 0.0]), (1, [0.1, 0.0]), (2, [0.2, 0.0])] {
+        txn.put_vec(node_id, &value);
+        txn.rows.put(
+            node_key(TAG_NODE2KEY, node_id).to_vec(),
+            encode_value(&(node_id as u32)),
+        );
+        txn.rows
+            .put(node_key(TAG_INFO, node_id).to_vec(), encode_value(&0u8));
+        txn.rows.put(
+            user_key(&KeyEnDe::encode(&(node_id as u32))),
+            node_id.to_le_bytes().to_vec(),
+        );
+    }
+    txn.set_neighbors(0, 0, &[1, 2]);
+    txn.set_neighbors(0, 1, &[0, 2]);
+    txn.set_neighbors(0, 2, &[0, 1]);
+    txn.state.entry_point = Some(0);
+    txn.state.max_layer = 0;
+    txn.state.node_count = 3;
+    txn.state.next_node_id = 3;
+
+    let new_id = 3;
+    let new_key = 3u32;
+    let new_vec = [100.0, 0.0];
+    txn.put_vec(new_id, &new_vec);
+    txn.rows.put(
+        node_key(TAG_NODE2KEY, new_id).to_vec(),
+        encode_value(&new_key),
+    );
+    txn.rows
+        .put(node_key(TAG_INFO, new_id).to_vec(), encode_value(&1u8));
+    txn.rows.put(
+        user_key(&KeyEnDe::encode(&new_key)),
+        new_id.to_le_bytes().to_vec(),
+    );
+    txn.state.node_count += 1;
+    txn.state.next_node_id += 1;
+    VecDex::<u32, L2>::link_node(&mut txn, &cfg, new_id, &new_vec, 1);
+
+    let (rows, state) = txn.finish();
+    rows.commit(&mut idx.store).unwrap();
+    idx.state = state;
+
+    assert_eq!(idx.state.entry_point, Some(new_id));
+    assert_eq!(idx.state.max_layer, 1);
+    assert!(
+        !hnsw::get_neighbors(&idx.store, 0, new_id).is_empty(),
+        "the promoted node must retain a reciprocal base-layer edge"
+    );
+    assert_bidirectional(&idx);
+    assert_eq!(idx.search(&[0.1, 0.0], 4).unwrap().len(), 4);
 }
 
 // ---- T-1: Single-node duplicate-key update (regression for stale-metadata fix) ----

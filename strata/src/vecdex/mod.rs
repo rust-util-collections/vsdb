@@ -227,8 +227,8 @@ impl<'a, S: Scalar> Txn<'a, S> {
     /// Applies the pruning result of
     /// [`prune_selection`](hnsw::prune_selection) for `(node, layer)` and
     /// detaches the evicted back-edges, mirroring the insert-time
-    /// neighbor-eviction protocol. Returns whether `keep` survived the
-    /// pruning (`true` when `keep` is `None` or was not evicted).
+    /// neighbor-eviction protocol. When `keep` is present, it is retained
+    /// by displacing the heuristic's last choice if necessary.
     fn prune_and_detach<D: DistanceMetric<S>>(
         &mut self,
         node_id: u64,
@@ -240,9 +240,19 @@ impl<'a, S: Scalar> Txn<'a, S> {
             let gv = |id: u64| self.read_vec(id);
             prune_selection::<S, D, Self>(node_id, layer, m_max, self, &gv)
         };
-        let Some((pruned, evicted)) = pruned else {
+        let Some((mut pruned, mut evicted)) = pruned else {
             return true;
         };
+        if let Some(keep_id) = keep
+            && evicted.contains(&keep_id)
+            && let Some(pos) = pruned.iter().rposition(|&id| id != keep_id)
+        {
+            let displaced = std::mem::replace(&mut pruned[pos], keep_id);
+            evicted.retain(|&id| id != keep_id);
+            if !evicted.contains(&displaced) {
+                evicted.push(displaced);
+            }
+        }
         self.set_neighbors(layer, node_id, &pruned);
         let kept = keep.is_none_or(|k| !evicted.contains(&k));
         for evicted_id in evicted {
@@ -726,11 +736,15 @@ where
 
             txn.set_neighbors(l, node_id, &selected);
 
-            for &neighbor in &selected {
+            for (i, &neighbor) in selected.iter().enumerate() {
                 let mut n_neighbors = get_neighbors(txn, l, neighbor);
                 n_neighbors.push(node_id);
                 txn.set_neighbors(l, neighbor, &n_neighbors);
-                txn.prune_and_detach::<D>(neighbor, l, m_max, None);
+                // At least one reciprocal edge per linked layer must
+                // survive pruning; otherwise every neighbor can evict the
+                // new node and commit an unreachable entry point.
+                let keep = (i == 0).then_some(node_id);
+                txn.prune_and_detach::<D>(neighbor, l, m_max, keep);
             }
 
             cur_ep = neighbor_pool.iter().map(|&(_, id)| id).collect();
@@ -951,6 +965,7 @@ where
                 let slots = m_max - cur.len();
                 let cur_set: HashSet<u64> = cur.iter().copied().collect();
                 let mut added = 0usize;
+                let mut keep = None;
                 for &candidate in fns {
                     if added >= slots {
                         break;
@@ -967,11 +982,12 @@ where
                     txn.set_neighbors(l, candidate, &c_list);
 
                     if txn.prune_and_detach::<D>(candidate, l, m_max, Some(n)) {
+                        keep.get_or_insert(candidate);
                         added += 1;
                     }
                 }
                 if added > 0 {
-                    txn.prune_and_detach::<D>(n, l, m_max, None);
+                    txn.prune_and_detach::<D>(n, l, m_max, keep);
                 }
             }
         }
@@ -984,57 +1000,73 @@ where
 
         txn.state.node_count = txn.state.node_count.saturating_sub(1);
 
-        if txn.state.entry_point == Some(node_id) {
-            // Re-elect: prefer candidates that still have base-layer
-            // edges so an isolated node cannot become the entry point
-            // and hide the rest of the graph; among equals the higher
-            // layer wins. This choice is independent of `max_layer`
-            // below: per INV-VD1, `max_layer` must always equal the
-            // TRUE global maximum `node_info.max_layer` among live
-            // nodes, even when the node elected as the new entry point
-            // itself sits at a lower layer (e.g. the only node at the
-            // true max layer is currently unlinked at layer 0).
-            let mut best: Option<(u64, u8, bool)> = None;
-            let mut true_max: Option<u8> = None;
-            let info_rows: Vec<(u64, u8)> = txn
-                .rows
-                .scan_prefix(txn.store, &[TAG_INFO])
-                .map(|(raw_key, raw_val)| {
-                    let mut b = [0u8; 8];
-                    b.copy_from_slice(&raw_key[1..9]);
-                    (u64::from_be_bytes(b), decode_value::<u8>(&raw_val))
-                })
-                .collect();
-            for (nid, layer) in info_rows {
-                if txn.get(&node_key(TAG_VEC, nid)).is_none() {
-                    continue;
-                }
-                true_max = Some(true_max.map_or(layer, |m: u8| m.max(layer)));
-                let linked = txn.adj_row(&adj_key(0, nid)).is_some();
-                let better = match best {
-                    None => true,
-                    Some((_, bl, blinked)) => (linked, layer) > (blinked, bl),
-                };
-                if better {
-                    best = Some((nid, layer, linked));
-                }
-            }
-            match (best, true_max) {
-                (Some((new_ep, _, _)), Some(new_max)) => {
-                    txn.state.entry_point = Some(new_ep);
-                    txn.state.max_layer = new_max;
-                }
-                _ => {
-                    txn.state.entry_point = None;
-                    txn.state.max_layer = 0;
-                }
-            }
+        if txn.state.entry_point == Some(node_id) || max_layer == txn.state.max_layer {
+            Self::repair_entry_point(&mut txn, &self.config);
         }
 
         let (rows, state) = txn.finish();
         rows.commit(&mut self.store)?;
         self.state = state;
         Ok(true)
+    }
+
+    fn repair_entry_point(txn: &mut Txn<'_, S>, config: &HnswConfig) {
+        let live: Vec<(u64, u8)> = txn
+            .rows
+            .scan_prefix(txn.store, &[TAG_INFO])
+            .filter_map(|(raw_key, raw_val)| {
+                let mut b = [0u8; 8];
+                b.copy_from_slice(&raw_key[1..9]);
+                let id = u64::from_be_bytes(b);
+                txn.get(&node_key(TAG_VEC, id))
+                    .is_some()
+                    .then(|| (id, decode_value::<u8>(&raw_val)))
+            })
+            .collect();
+        let Some(true_max) = live.iter().map(|(_, layer)| *layer).max() else {
+            txn.state.entry_point = None;
+            txn.state.max_layer = 0;
+            return;
+        };
+
+        let has_live_base_edge = |id: u64| {
+            get_neighbors(txn, 0, id)
+                .into_iter()
+                .any(|neighbor| txn.get(&node_key(TAG_VEC, neighbor)).is_some())
+        };
+        let new_ep = live
+            .iter()
+            .filter(|(_, layer)| *layer == true_max)
+            .max_by_key(|(id, _)| has_live_base_edge(*id))
+            .map(|(id, _)| *id)
+            .expect("true maximum came from a live node");
+
+        if live.len() > 1 && !has_live_base_edge(new_ep) {
+            let ep_vec = txn
+                .read_vec(new_ep)
+                .expect("live entry-point candidate has a vector");
+            let nearest = live
+                .iter()
+                .filter(|(id, _)| *id != new_ep)
+                .filter_map(|(id, _)| {
+                    txn.read_vec(*id)
+                        .map(|vector| (D::distance(&ep_vec, &vector), *id))
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, id)| id);
+            if let Some(neighbor) = nearest {
+                txn.set_neighbors(0, new_ep, &[neighbor]);
+                let mut reverse = get_neighbors(txn, 0, neighbor);
+                if !reverse.contains(&new_ep) {
+                    reverse.push(new_ep);
+                    txn.set_neighbors(0, neighbor, &reverse);
+                }
+                txn.prune_and_detach::<D>(neighbor, 0, config.m_max0, Some(new_ep));
+            }
+        }
+
+        txn.state.entry_point = Some(new_ep);
+        txn.state.max_layer = true_max;
     }
 
     /// Rebuilds the HNSW graph from the existing vectors.

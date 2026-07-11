@@ -11,12 +11,6 @@
 
 ## Open
 
-### [HIGH] vecdex: reciprocal pruning can isolate inserts and violate entry-point invariants
-- **Where**: `strata/src/vecdex/mod.rs:661-745`, `strata/src/vecdex/mod.rs:986-1031`, `strata/src/vecdex/hnsw.rs:284-311`
-- **What**: every selected neighbor may prune the newly inserted node and detach the reciprocal edge; re-election can then choose a lower-layer linked node while retaining a higher `max_layer`.
-- **Why**: a committed node can become unreachable, and a promoted isolated node can hide the existing graph; search may start from a node absent from the recorded top layers.
-- **Suggested fix**: preserve at least one reciprocal edge per linked layer, re-elect only a true-max-layer entry point, and reconnect an isolated winner before commit.
-
 ### [HIGH] vecdex: replacement is not one atomic mutation
 - **Where**: `strata/src/vecdex/mod.rs:543-579`, `strata/src/vecdex/mod.rs:605-658`, `strata/src/vecdex/mod.rs:897-1036`
 - **What**: replacing an existing key commits `remove` before staging the new insert; batch replacement removes all old keys before their chunks are attempted.
