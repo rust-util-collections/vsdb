@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v16.3.4]
+
+### Changed
+
+- **The default namespace now sizes from a fixed 2 GiB memory budget**;
+  non-default namespaces keep their fixed 512 MB default. The library no
+  longer sizes itself from the host's available RAM or its cgroup limits
+  — a moment-in-time host reading baked deployment noise into engine
+  sizing and made footprints unpredictable across machines. Every budget
+  is now a binding limit, so write-buffer sizing always scales with it
+  (the `budget_limited` distinction is gone). Applications that can
+  afford more memory should raise `VSDB_MEM_BUDGET_MB` (applied
+  verbatim, as before): a larger budget enlarges the block cache and
+  write buffers, which directly improves performance.
+- The historical dynamic detection (host `MemAvailable` min-folded with
+  a ¾-derated cgroup limit) moved into the benchmark support code
+  (`benches/units/legacy_budget.rs` in both crates): benches export the
+  computed value through `VSDB_MEM_BUDGET_MB` at startup, so results
+  stay comparable with releases that auto-sized from the host. An
+  operator-provided `VSDB_MEM_BUDGET_MB` still wins there too.
+
 ## [v16.3.3]
 
 Full-repository audit fixes across engine lifecycle, persistent collections,
