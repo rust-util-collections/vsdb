@@ -1,4 +1,4 @@
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group};
 use rand::random;
 use std::{hint::black_box, time::Duration};
 use vsdb::vecdex::{HnswConfig, VecDex, distance::L2};
@@ -113,4 +113,14 @@ fn bench_filtered_search(c: &mut Criterion) {
 }
 
 criterion_group!(benches, bench_insert, bench_search, bench_filtered_search);
-criterion_main!(benches);
+
+#[path = "units/legacy_budget.rs"]
+mod legacy_budget;
+
+// Custom main (instead of `criterion_main!`): the legacy dynamic
+// budget must be exported before the first engine touch.
+fn main() {
+    legacy_budget::apply();
+    benches();
+    Criterion::default().configure_from_args().final_summary();
+}

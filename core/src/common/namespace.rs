@@ -71,8 +71,8 @@ const DEFAULT_NS_SHARDS: usize = 4;
 
 /// Default memory budget for non-default namespaces, in MB. Deliberately
 /// small and fixed: opening N namespaces must not silently multiply the
-/// process footprint (the process-wide budget pipeline applies to the
-/// default namespace only).
+/// process footprint (the default namespace has its own fixed 2 GiB
+/// default, raised only via `VSDB_MEM_BUDGET_MB`).
 const DEFAULT_NS_BUDGET_MB: usize = 512;
 
 /////////////////////////////////////////////////////////////////////////////

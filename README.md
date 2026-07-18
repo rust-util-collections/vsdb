@@ -78,6 +78,24 @@ code needs zero changes. Cross-namespace atomic transactions do not
 exist (separate WALs); a composite structure (`VerMap`, `SlotDex`, …)
 always lives wholly inside one namespace.
 
+### Memory sizing
+
+Memory budgets are fixed and predictable: the default namespace uses
+2 GiB, every other namespace 512 MB (per-namespace override via
+`NamespaceOpts { mem_budget_mb, .. }`). vsdb never sizes itself from
+the host's RAM or its cgroup.
+
+Applications that can afford more memory should raise the budget of the
+default engine through the `VSDB_MEM_BUDGET_MB` environment variable
+(applied verbatim; set before the first database touch). **A larger
+budget enlarges the block cache and write buffers, which directly
+improves read and write performance** — give vsdb as much memory as the
+deployment can spare.
+
+```bash
+VSDB_MEM_BUDGET_MB=8192 ./your-app   # 8 GiB for the default engine
+```
+
 ## Architecture
 
 ```text

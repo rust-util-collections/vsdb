@@ -1,4 +1,4 @@
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group};
 use rand::random;
 use std::hint::black_box;
 use vsdb::SlotDex64;
@@ -103,4 +103,14 @@ fn slot_write(c: &mut Criterion) {
 criterion_group!(
     benches, slot_64, slot_32, slot_16, slot_8, slot_4, slot_write
 );
-criterion_main!(benches);
+
+#[path = "units/legacy_budget.rs"]
+mod legacy_budget;
+
+// Custom main (instead of `criterion_main!`): the legacy dynamic
+// budget must be exported before the first engine touch.
+fn main() {
+    legacy_budget::apply();
+    benches();
+    Criterion::default().configure_from_args().final_summary();
+}

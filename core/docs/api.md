@@ -47,6 +47,23 @@ let dir = vsdb_get_base_dir();
 assert_eq!(dir.to_str().unwrap(), "/tmp/my_vsdb_data");
 ```
 
+## Memory budget
+
+The default namespace sizes its caches from a fixed 2 GiB budget; every
+other namespace defaults to a fixed 512 MB (per-namespace override via
+`NamespaceOpts { mem_budget_mb, .. }`).  vsdb never sizes itself from the
+host's RAM or its cgroup.
+
+Applications that can afford more memory should raise the default
+engine's budget through the `VSDB_MEM_BUDGET_MB` environment variable
+(applied verbatim, in MB; set before the first database touch): a larger
+budget enlarges the block cache and write buffers, which directly
+improves read and write performance.
+
+```bash
+VSDB_MEM_BUDGET_MB=8192 ./your-app   # 8 GiB for the default engine
+```
+
 ## Namespaces
 
 `vsdb_core` provides the namespace subsystem — independently-rooted engine

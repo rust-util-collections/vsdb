@@ -1070,199 +1070,44 @@ fn check_bound_hi(full_key: &[u8], bound: &Bound<Vec<u8>>) -> bool {
     }
 }
 
-/// The memory ceiling imposed on THIS process by its cgroup, if any.
-///
-/// systemd resource limits (`MemoryHigh`/`MemoryMax`) and container
-/// runtimes express themselves as cgroup memory controllers; a process
-/// running under one sees whole-host numbers in `/proc/meminfo`, so
-/// cache sizing must clamp to the controller's limit or the engine's
-/// caches alone can exceed the OOM-kill line. Returns the tightest
-/// limit found walking from this process's cgroup up to the root
-/// (limits are hierarchical: an ancestor's ceiling binds every
-/// descendant), or `None` when unlimited/undetectable (non-Linux,
-/// no cgroup, or all-`max` paths).
-#[cfg(target_os = "linux")]
-fn cgroup_mem_limit_bytes() -> Option<usize> {
-    fn parse_limit(s: &str) -> Option<usize> {
-        let t = s.trim();
-        if t.is_empty() || t == "max" {
-            return None;
-        }
-        // v1 reports "no limit" as a platform-dependent huge number
-        // (PAGE_COUNTER_MAX); treat anything >= 2^60 as unlimited.
-        // A literal `0` is likewise treated as undetectable rather
-        // than as a limit: folding it into the min would zero the
-        // whole budget (and with it the block cache), and a cgroup
-        // that truly enforced 0 could not be running this process.
-        t.parse::<usize>()
-            .ok()
-            .filter(|&v| v > 0 && v < (1usize << 60))
-    }
-
-    // /proc/self/cgroup line: `0::/system.slice/foo.service` (v2) or
-    // `N:memory:/path` (v1).
-    let cg = fs::read_to_string("/proc/self/cgroup").ok()?;
-    let mut tightest: Option<usize> = None;
-    let mut consider = |v: usize| {
-        tightest = Some(tightest.map_or(v, |t| cmp::min(t, v)));
-    };
-
-    for line in cg.lines() {
-        let mut parts = line.splitn(3, ':');
-        let (Some(_), Some(controllers), Some(path)) =
-            (parts.next(), parts.next(), parts.next())
-        else {
-            continue;
-        };
-        let (mount, files): (&str, &[&str]) = if controllers.is_empty() {
-            // v2 unified hierarchy: memory.max is the hard (OOM) line;
-            // memory.high is the throttle line -- respect the tighter.
-            ("/sys/fs/cgroup", &["memory.max", "memory.high"])
-        } else if controllers.split(',').any(|c| c == "memory") {
-            ("/sys/fs/cgroup/memory", &["memory.limit_in_bytes"])
-        } else {
-            continue;
-        };
-
-        // Walk this cgroup and every ancestor up to the mount root.
-        let mut rel = path.trim_start_matches('/');
-        loop {
-            for f in files {
-                let p = if rel.is_empty() {
-                    format!("{mount}/{f}")
-                } else {
-                    format!("{mount}/{rel}/{f}")
-                };
-                if let Some(v) =
-                    fs::read_to_string(p).ok().as_deref().and_then(parse_limit)
-                {
-                    consider(v);
-                }
-            }
-            match rel.rfind('/') {
-                Some(i) => rel = &rel[..i],
-                None if !rel.is_empty() => rel = "",
-                None => break,
-            }
-        }
-    }
-    tightest
-}
-
-#[cfg(not(target_os = "linux"))]
-fn cgroup_mem_limit_bytes() -> Option<usize> {
-    None
-}
-
 const G: usize = GB as usize;
 
-/// Resolve the effective engine memory budget from its three sources,
-/// returning `(budget_bytes, budget_limited)`; `budget_limited`
-/// reports that a hard, process-scoped ceiling (explicit override or
-/// detected cgroup limit) bounds the budget, so write-buffer sizing
-/// must scale with it (see `mmdb_open`).
+/// Default memory budget for the DEFAULT namespace, in MB: a fixed
+/// 2 GiB. vsdb deliberately does NOT size itself from the host's RAM
+/// or its cgroup: the library cannot know how much of either belongs
+/// to it, and a moment-in-time reading bakes deployment noise into
+/// engine sizing. A fixed, conservative default keeps the footprint
+/// predictable everywhere; applications that can afford more memory
+/// should raise `VSDB_MEM_BUDGET_MB` — a larger budget enlarges the
+/// block cache and write buffers, which improves performance.
+const DEFAULT_MEM_BUDGET_MB: usize = 2048;
+
+/// Resolve the effective DEFAULT-namespace budget in bytes.
 ///
-/// - `env_budget_mb` (`VSDB_MEM_BUDGET_MB`), when present and
-///   non-zero, is applied verbatim and overrides all detection, the
-///   host reading included -- the operator asked for that exact
-///   number; it is the escape hatch from every heuristic below.
-/// - A DETECTED cgroup limit contributes `limit * 3/4` to a min-fold
-///   with the host reading. Derated, because `memory.high` is a
-///   throttle line, not a quota -- an engine sized exactly to it
-///   reaches steady state pinned AT the line, where every allocation
-///   pays reclaim-stall latency (observed in production: 9.6G peak
-///   against a 9626M MemoryHigh, sync stalled for most of an hour
-///   and a SIGTERM drain could not finish inside the unit's stop
-///   timeout) -- and sitting at `memory.max`/v1 `limit_in_bytes` is
-///   the OOM-kill line itself.
+/// - `env_budget_mb` (`VSDB_MEM_BUDGET_MB`), when present, non-zero,
+///   and expressible in bytes, is applied verbatim — the operator
+///   asked for that exact number; it is the ONLY way to grow (or
+///   shrink) the default engine's memory.
+/// - Otherwise the fixed [`DEFAULT_MEM_BUDGET_MB`] default stands.
 ///
-///   The min-fold is deliberate; do NOT "compare the raw limit and
-///   derate only when the cgroup is the binding constraint". A line
-///   within 4/3 of the host reading would then leave
-///   `budget_limited` unset, and the unconstrained write-buffer path
-///   (budget/4 per shard, x5 worst-case memtables) can overshoot
-///   the line wholesale: host 24G under a 30G `memory.high` would
-///   size 30G of worst-case memtables. The host reading is a soft,
-///   moment-in-time number; a cgroup line is a standing
-///   throttle/kill threshold and always binds conservatively.
-/// - Otherwise the host reading stands, unconstrained.
-fn effective_mem_budget(
-    host_avail_bytes: usize,
-    detected_limit: Option<usize>,
-    env_budget_mb: Option<usize>,
-) -> (usize, bool) {
-    if let Some(v) = env_budget_mb
+/// Every budget is a binding limit: write-buffer sizing scales with
+/// it (see `mmdb_open`).
+fn effective_mem_budget(env_budget_mb: Option<usize>) -> usize {
+    env_budget_mb
         .filter(|&mb| mb > 0)
         .and_then(|mb| mb.checked_mul(1024 * 1024))
-    {
-        return (v, true);
-    }
-    match detected_limit
-        .map(|limit| limit / 4 * 3)
-        .filter(|&derated| derated < host_avail_bytes)
-    {
-        Some(derated) => (derated, true),
-        None => (host_avail_bytes, false),
-    }
+        .unwrap_or(DEFAULT_MEM_BUDGET_MB * 1024 * 1024)
 }
 
 /// The effective budget for this process, computed once: every shard
-/// must size off the same numbers (the host reading is a
-/// moment-in-time value that can drift between shard opens), and
-/// `MmDB::new` opens `NUM_SHARDS` shards -- re-reading
-/// `/proc/meminfo`, re-walking the cgroup hierarchy, and re-parsing
-/// the env override per shard would be redundant.
-static MEM_BUDGET: LazyLock<(usize, bool)> = LazyLock::new(|| {
-    // Detect available physical memory (platform-specific).
-    let host_avail_bytes: usize = {
-        #[cfg(target_os = "linux")]
-        {
-            fs::read_to_string("/proc/meminfo")
-                .ok()
-                .and_then(|s| {
-                    s.lines()
-                        .find(|l| l.contains("MemAvailable"))
-                        .and_then(|l| {
-                            l.replace(|ch: char| !ch.is_numeric(), "")
-                                .parse::<usize>()
-                                .ok()
-                        })
-                })
-                .unwrap_or(G / 1024)
-                * 1024
-        }
-        #[cfg(any(target_os = "freebsd", target_os = "macos"))]
-        {
-            // FreeBSD: hw.physmem, macOS: hw.memsize (both return bytes)
-            let key = if cfg!(target_os = "freebsd") {
-                "hw.physmem"
-            } else {
-                "hw.memsize"
-            };
-            std::process::Command::new("sysctl")
-                .arg("-n")
-                .arg(key)
-                .output()
-                .ok()
-                .and_then(|o| String::from_utf8(o.stdout).ok())
-                .and_then(|s| s.trim().parse::<usize>().ok())
-                .unwrap_or(G)
-        }
-        #[cfg(not(any(
-            target_os = "linux",
-            target_os = "freebsd",
-            target_os = "macos"
-        )))]
-        {
-            G
-        }
-    };
-
+/// must size off the same number, and `MmDB::new` opens `NUM_SHARDS`
+/// shards -- re-parsing the env override per shard would be redundant.
+static MEM_BUDGET: LazyLock<usize> = LazyLock::new(|| {
     let env_budget_mb = std::env::var("VSDB_MEM_BUDGET_MB")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok());
 
-    effective_mem_budget(host_avail_bytes, cgroup_mem_limit_bytes(), env_budget_mb)
+    effective_mem_budget(env_budget_mb)
 });
 
 /// Refuses to open a dataset marked with a newer on-disk format.
@@ -1301,31 +1146,28 @@ fn check_format_version(base_dir: &Path) -> Result<()> {
 
 /// Engine memory sizing, resolved before shards open.
 ///
-/// The default namespace sizes from the process-wide budget pipeline
-/// ([`MEM_BUDGET`]: env override / cgroup / host reading). Non-default
+/// The default namespace sizes from [`MEM_BUDGET`]
+/// (`VSDB_MEM_BUDGET_MB` override / fixed 2 GiB default). Non-default
 /// namespaces size from an explicit per-namespace budget so that opening
-/// N namespaces cannot silently multiply the process footprint.
+/// N namespaces cannot silently multiply the process footprint. Every
+/// budget is a binding limit; nothing sizes from the host or its cgroup.
 #[derive(Clone, Copy)]
 pub(crate) struct EngineSizing {
     mem_budget: usize,
-    budget_limited: bool,
 }
 
 impl EngineSizing {
-    /// The v15-parity sizing used by the default namespace.
+    /// The sizing used by the default namespace.
     pub(crate) fn from_process_budget() -> Self {
-        let (mem_budget, budget_limited) = *MEM_BUDGET;
         Self {
-            mem_budget,
-            budget_limited,
+            mem_budget: *MEM_BUDGET,
         }
     }
 
-    /// Explicit budget (always treated as a binding limit).
+    /// Explicit budget.
     pub(crate) fn from_budget_mb(mb: usize) -> Self {
         Self {
             mem_budget: mb.saturating_mul(1024 * 1024).max(8 * 1024 * 1024),
-            budget_limited: true,
         }
     }
 }
@@ -1352,27 +1194,25 @@ fn mmdb_open(
     sizing: EngineSizing,
     pool: &Arc<BlockCachePool>,
 ) -> Result<DB> {
-    let EngineSizing {
-        mem_budget,
-        budget_limited,
-    } = sizing;
+    let EngineSizing { mem_budget } = sizing;
 
     // Per-shard sizes: divide totals by the shard count.
     //
-    // Under a DETECTED limit (cgroup or env override) the write-buffer
-    // term must also scale with the budget: each shard can hold one
-    // active memtable plus `max_immutable_memtables` frozen ones
-    // awaiting flush, so the worst-case memtable footprint is
-    // wr_buffer_size * (1 + max_immutable) * shards. With the
-    // legacy fixed floor (GB / shards) that worst case is ~5 GB
-    // regardless of any 2-3 GB ceiling -- an ingest burst then pins
-    // anonymous memory at the throttle line, and the reclaim pressure
-    // slows the very flush threads that are the only way out (observed
-    // as a service wedged at memory.high with tens of thousands of
-    // memory.events:high). budget/8 across all shards keeps the worst
-    // case (5x active) at ~5/8 of budget, leaving the rest for the
-    // block cache (budget/8) and per-connection transients. On
-    // unconstrained hosts the sizing is unchanged.
+    // Every budget is a binding limit, so the write-buffer term must
+    // scale with it: each shard can hold one active memtable plus
+    // `max_immutable_memtables` frozen ones awaiting flush, so the
+    // worst-case memtable footprint is wr_buffer_size *
+    // (1 + max_immutable) * shards. budget/8 across all shards keeps
+    // that worst case (5x active) at ~5/8 of budget, leaving the rest
+    // for the block cache (budget/8) and per-connection transients —
+    // sizing memtables above the budget instead pins anonymous memory
+    // at the memory line during ingest bursts, and the reclaim
+    // pressure slows the very flush threads that are the only way out
+    // (observed as a service wedged at memory.high with tens of
+    // thousands of memory.events:high). The first term keeps the
+    // historical shape (G/shards, opening to budget/4/shards past
+    // 16 G, capped at 512 MB) so large explicit budgets size exactly
+    // like the old host-derived path.
     let legacy_wr = cmp::min(
         if mem_budget > 16 * G {
             mem_budget / 4 / shards
@@ -1381,14 +1221,10 @@ fn mmdb_open(
         },
         512 * 1024 * 1024,
     );
-    let wr_buffer_size = if budget_limited {
-        cmp::max(
-            cmp::min(legacy_wr, mem_budget / 8 / shards),
-            4 * 1024 * 1024,
-        )
-    } else {
-        legacy_wr
-    };
+    let wr_buffer_size = cmp::max(
+        cmp::min(legacy_wr, mem_budget / 8 / shards),
+        4 * 1024 * 1024,
+    );
 
     // Per-shard capacity of the static split — retained in the options
     // as belt-and-braces (mmdb documents it as IGNORED when a shared
@@ -1447,70 +1283,18 @@ mod tests {
     fn effective_mem_budget_semantics() {
         const MB: usize = 1024 * 1024;
 
-        // Unconstrained host: the host reading stands.
-        assert_eq!(effective_mem_budget(8 * G, None, None), (8 * G, false));
+        // No override: the fixed 2 GiB default stands.
+        assert_eq!(effective_mem_budget(None), 2 * G);
 
-        // Binding cgroup limit: derated to 3/4 and flagged.
-        assert_eq!(
-            effective_mem_budget(8 * G, Some(4 * G), None),
-            (3 * G, true)
-        );
-
-        // Distant cgroup line: the host reading wins the min-fold and
-        // sizing stays unconstrained.
-        assert_eq!(
-            effective_mem_budget(8 * G, Some(100 * G), None),
-            (8 * G, false)
-        );
-
-        // Near-host cgroup line (host < limit < 4/3 * host): the
-        // derated limit still wins AND flips conservative sizing.
-        // Deliberate -- see `effective_mem_budget` docs: comparing the
-        // raw limit instead would size 30G of worst-case memtables
-        // under this 30G line.
-        assert_eq!(
-            effective_mem_budget(24 * G, Some(30 * G), None),
-            (30 * G / 4 * 3, true)
-        );
-
-        // The explicit override is verbatim and authoritative: it
-        // beats a TIGHTER derated cgroup budget (1700 MB inside a
-        // 2 GiB cgroup means 1700 MB, not 1536 MB)...
-        assert_eq!(
-            effective_mem_budget(8 * G, Some(2 * G), Some(1700)),
-            (1700 * MB, true)
-        );
-        // ...and the host reading in both directions.
-        assert_eq!(
-            effective_mem_budget(8 * G, None, Some(512)),
-            (512 * MB, true)
-        );
-        assert_eq!(effective_mem_budget(G, None, Some(4096)), (4 * G, true));
+        // The explicit override is verbatim and authoritative, in
+        // both directions.
+        assert_eq!(effective_mem_budget(Some(512)), 512 * MB);
+        assert_eq!(effective_mem_budget(Some(64 * 1024)), 64 * G);
 
         // Degenerate overrides (zero, or too large to express in
         // bytes) are ignored, not applied.
-        assert_eq!(effective_mem_budget(8 * G, None, Some(0)), (8 * G, false));
-        assert_eq!(
-            effective_mem_budget(8 * G, Some(4 * G), Some(usize::MAX)),
-            (3 * G, true)
-        );
-    }
-
-    #[test]
-    fn cgroup_mem_limit_is_sane_or_absent() {
-        // Non-Linux platforms must report None; on Linux the walk must
-        // not panic and any detected limit must be a real bound (the
-        // parser rejects v1's PAGE_COUNTER_MAX-style "unlimited"
-        // sentinels), never zero.
-        match cgroup_mem_limit_bytes() {
-            None => {}
-            Some(v) => {
-                assert!(v > 0);
-                assert!(v < (1usize << 60));
-            }
-        }
-        #[cfg(not(target_os = "linux"))]
-        assert!(cgroup_mem_limit_bytes().is_none());
+        assert_eq!(effective_mem_budget(Some(0)), 2 * G);
+        assert_eq!(effective_mem_budget(Some(usize::MAX)), 2 * G);
     }
 
     #[test]

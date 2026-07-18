@@ -1,4 +1,4 @@
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group};
 use std::hint::black_box;
 use vsdb::trie::{MptCalc, SmtCalc};
 
@@ -280,4 +280,14 @@ criterion_group!(
     smt_batch_update,
     smt_prove_verify,
 );
-criterion_main!(benches);
+
+#[path = "units/legacy_budget.rs"]
+mod legacy_budget;
+
+// Custom main (instead of `criterion_main!`): the legacy dynamic
+// budget must be exported before the first engine touch.
+fn main() {
+    legacy_budget::apply();
+    benches();
+    Criterion::default().configure_from_args().final_summary();
+}

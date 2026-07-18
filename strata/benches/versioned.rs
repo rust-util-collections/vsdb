@@ -1,4 +1,4 @@
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group};
 use std::{
     ops::Bound,
     sync::atomic::{AtomicUsize, Ordering},
@@ -390,4 +390,13 @@ criterion_group!(
     gc_bench,
 );
 
-criterion_main!(benches);
+#[path = "units/legacy_budget.rs"]
+mod legacy_budget;
+
+// Custom main (instead of `criterion_main!`): the legacy dynamic
+// budget must be exported before the first engine touch.
+fn main() {
+    legacy_budget::apply();
+    benches();
+    Criterion::default().configure_from_args().final_summary();
+}
