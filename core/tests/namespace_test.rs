@@ -136,7 +136,12 @@ fn namespace_lifecycle() {
     let fat_copy = fat.clone_in(&Namespace::default_ns()).unwrap();
     assert_eq!(fat_copy.iter().count(), 7);
     for i in 0..7u8 {
-        assert_eq!(fat_copy.get([i]).unwrap().len(), 3 * 1024 * 1024);
+        // Full-content check (not just length): a copy that preserved
+        // sizes but corrupted bytes must fail here.
+        assert!(
+            fat_copy.get([i]).unwrap()[..] == vec![i; 3 * 1024 * 1024][..],
+            "fat value {i} corrupted by clone_in"
+        );
     }
     drop((fat, fat_copy));
 
