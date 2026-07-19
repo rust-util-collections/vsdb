@@ -446,6 +446,10 @@ impl PersistentBTree {
     ///
     /// Much faster than inserting one-by-one, and produces an optimally
     /// packed tree.
+    ///
+    /// The whole input is collected into memory first (validated and
+    /// deduplicated), so peak memory is proportional to the total size
+    /// of `entries`.
     pub fn bulk_load(
         &mut self,
         entries: impl IntoIterator<Item = (Vec<u8>, Vec<u8>)>,

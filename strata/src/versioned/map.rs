@@ -688,6 +688,15 @@ where
     /// If `target` has no commits, performs a fast-forward (no merge commit
     /// is created).  Otherwise creates a merge commit on `target` with two
     /// parents.
+    ///
+    /// # Transient memory
+    ///
+    /// Unless a fast path applies (either side unchanged), the merged
+    /// result is materialized in memory before being bulk-loaded into a
+    /// new tree: peak usage is proportional to the union of keys
+    /// reachable from the two branch heads (and, for criss-cross
+    /// histories, the merge bases). Merging branches whose combined
+    /// live data exceeds available memory is not supported.
     pub fn merge(&mut self, source: BranchId, target: BranchId) -> Result<CommitId> {
         if source == target {
             return Err(VsdbError::Other {
