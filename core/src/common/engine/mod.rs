@@ -50,7 +50,9 @@ pub trait BatchTrait {
     ///
     /// On error the buffered operations are consumed and lost (none were
     /// applied); a failed commit is **not retryable** — re-stage the
-    /// operations on a fresh batch instead.
+    /// operations on a fresh batch instead. Engine-side entry-size
+    /// rejections (keys over 8 MiB, entries over ~64 MiB) are reported
+    /// here.
     fn commit(&mut self) -> Result<()>;
 }
 

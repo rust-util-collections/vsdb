@@ -365,6 +365,15 @@ impl MapxRaw {
     ///
     /// Does not return the old value for performance reasons.
     ///
+    /// # Size limits
+    ///
+    /// The storage engine validates every write before WAL/memtable
+    /// admission: keys are capped at 8 MiB and whole entries
+    /// (key + value) at ~64 MiB. A direct `insert` treats engine
+    /// rejection as fatal and panics; staging the same entry through
+    /// [`batch_begin`](Self::batch_begin) surfaces the rejection as an
+    /// `Err` from `commit` instead.
+    ///
     /// # Arguments
     ///
     /// * `key` - The key to insert.
