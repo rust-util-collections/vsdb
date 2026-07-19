@@ -17,6 +17,20 @@
 
 ## Won't Fix
 
+### [MEDIUM] versioned: three-way merge materializes the merged result in memory
+- **Where**: `strata/src/versioned/merge.rs` (`three_way_merge`, `three_way_merge_many_bases`), `strata/src/basic/persistent_btree/mod.rs` (`bulk_load`)
+- **What**: merge collects every merged `(key, value)` pair into a `Vec` and `bulk_load` re-collects its input, so `VerMap::merge` peaks at memory proportional to the union of live keys across both branches; merging branches whose combined live data exceeds available memory aborts the process.
+- **Reason**: a streaming merge requires an incremental bulk-loader driven by a merged iterator — a substantial B+ tree rewrite not justified until larger-than-RAM merges are a real workload. The transient cost is documented on both public APIs.
+
+---
+
+### [LOW] engine: lazy-delete auto-sweep threshold stays disabled
+- **Where**: `core/src/common/engine/mmdb.rs` (`mmdb_open`), mmdb `DbOptions::lazy_delete_compaction_threshold`
+- **What**: keys registered via `lazy_delete` are physically dropped only when organic compaction rewrites their level; registrations resting in cold levels can outlive the process (registrations are memory-only and documented best-effort).
+- **Reason**: mmdb documents the auto-sweep as holding the DB's write-serializing lock for each level's full rewrite — enabling it by default trades unbounded write stalls for space reclaim. Correctness never depends on physical removal (dead B+ tree nodes are unreachable by id), and administrative `compact()` remains available.
+
+---
+
 ### [MEDIUM] dagmap: serde decomposition can expose the private parent slot
 - **Where**: `strata/src/dagmap/raw/mod.rs:70-127`, `strata/src/basic/orphan/mod.rs:199-224`
 - **What**: callers can deserialize `DagMapRaw`'s public tuple representation into its public component types, retain an alias to the private parent `Orphan`, and later create a parent cycle through safe APIs.
@@ -39,6 +53,62 @@
 ---
 
 ## Rejected
+
+### collections: "unbounded growth of caller-retained data is a leak"
+- **Where**: `strata/src/versioned/map.rs` (`commit`, `create_branch`, `log`, `list_branches`, `gc`), `strata/src/dagmap/raw/mod.rs`, `strata/src/vecdex/mod.rs`, `strata/src/slotdex/mod.rs`, `strata/src/trie/mod.rs` (`MptCalc`/`SmtCalc`)
+- **Claim**: commits, branches, DAG children, HNSW nodes, SlotDex tiers, and in-memory trie keys need built-in caps, TTLs, or auto-expiry; `log`/`list_branches`/`gc` collecting proportional-to-history vectors can OOM.
+- **Reason**: collections store exactly what callers insert and retain — a cap turns valid writes into artificial failures, and auto-expiry would silently destroy committed history (unreferenced VerMap commits are already hard-deleted immediately by the `delete_branch`/`rollback_to` ref-count cascade). Traversals, listing, and GC are cold paths doing O(retained data) work; SlotDex tier count is bounded by the slot type's bit width (`floor_base_of` saturates); `MptCalc`/`SmtCalc` are documented in-memory calculators.
+
+---
+
+### engine/strata: "atomic batch staging is unbounded"
+- **Where**: `core/src/common/engine/mod.rs` (`BatchTrait`), `core/src/common/engine/mmdb.rs` (`MmdbBatch`), `strata/src/slotdex/mod.rs` (`insert_batch`), `strata/src/vecdex/mod.rs` (`insert_batch`)
+- **Claim**: batches accumulate every staged operation in memory with no entry cap, so huge batches OOM.
+- **Reason**: staging-then-commit is the documented atomicity contract, and memory is proportional to caller-supplied input under the caller's control (chunk the input for bounded memory). Auto-splitting inside the library would silently break the promised whole-batch atomicity. VecDex chunks internally because its documented contract is per-chunk atomicity; its dedup pass holds references plus encoded keys, again O(input).
+
+---
+
+### namespace/meta: "postcard deserialization of registry/meta files is a memory bomb"
+- **Where**: `core/src/common/namespace.rs` (`load_registry`), `strata/src/common/mod.rs` (`load_instance_meta`)
+- **Claim**: `fs::read` + `postcard::from_bytes` without a file-size cap lets a crafted registry or instance meta allocate unboundedly.
+- **Reason**: postcard parses sequences element-by-element from the input, so decode cost and allocation are bounded by the actual file size (serde caps `Vec` preallocation; a small file cannot decode into millions of records), and file size is proportional to namespaces/instances actually created. Files under the base dir sit inside the process's own trust boundary; malformed bytes yield a clean `Decode` error.
+
+---
+
+### namespace: "the default namespace taxes non-default users; namespace count needs a cap"
+- **Where**: `core/src/common/namespace.rs` (`DEFAULT_NS`, `create_with`, `open`)
+- **Claim**: `DEFAULT_NS` never drops, so every process pays for the default engine; unlimited `create`/`open` multiplies memory budgets until OOM.
+- **Reason**: `DEFAULT_NS` is a `LazyLock` — non-default-only workloads never force it on v16 datasets (the allocator reads the ceiling file directly; the default engine is forced only for pre-v16 migration). Each non-default namespace is an explicit admin-tier act with an explicit, persisted per-namespace budget; a process-level cap would break the supported epoch-rotation pattern while defending only against the operator's own deliberate calls.
+
+---
+
+### engine: "mmdb-inherited defaults leak resources"
+- **Where**: mmdb `options.rs`, mmdb `manifest/version_set.rs`
+- **Claim**: the MANIFEST grows monotonically without compaction; per-level SST limits are soft; the disabled compaction rate limiter starves foreground reads.
+- **Reason**: mmdb rotates the MANIFEST via `maybe_compact_manifest()` (full-snapshot rewrite past an edit threshold), so monotonic growth is factually wrong. L0 backpressure exists (`l0_slowdown_trigger`/`l0_stop_trigger` write stalls). The rate-limiter default is a deliberate tuning choice, and vsdb already bounds compaction to one background thread per shard.
+
+---
+
+### engine: "Drop skips the flush that close() performs"
+- **Where**: `core/src/common/engine/mmdb.rs` (`MmDB::close` vs engine drop)
+- **Claim**: dropping an engine can lose buffered writes because only `close()` flushes.
+- **Reason**: every applied write is WAL-durable before its `put` returns, and mmdb's `DB::drop` additionally syncs the WAL best-effort — a drop-without-close loses no committed data; recovery replays the WAL. `close()` exists to surface sync errors, not to add durability.
+
+---
+
+### engine: "no key/value size validation at the vsdb boundary"
+- **Where**: `core/src/basic/mapx_raw/mod.rs` (`insert`), `core/src/common/engine/mmdb.rs` (`MmDB::insert`)
+- **Claim**: absent vsdb-side checks, oversized values reach the memtable and OOM.
+- **Reason**: mmdb validates every write (8 MiB key cap, ~64 MiB entry cap) before WAL/memtable admission and rejects with a descriptive error; nothing oversized is ever buffered. The boundary behavior is documented on `MapxRaw::insert` and `BatchTrait::commit`: direct ops panic under the fatal-write convention, batch commits surface `Err`.
+
+---
+
+### namespace: "`mem_budget_mb: usize::MAX` overflows sizing arithmetic"
+- **Where**: `core/src/common/namespace.rs` (`sizing_for`), `core/src/common/engine/mmdb.rs` (`EngineSizing::from_budget_mb`, `effective_mem_budget`)
+- **Claim**: a huge budget overflows the megabyte-to-byte conversion or allocates giant structures up front.
+- **Reason**: both paths use `checked_mul`/`saturating_mul` (covered by `effective_mem_budget_semantics`); write buffers stay clamped by the 512 MiB legacy cap, and the block-cache figure is an eviction *limit*, never a preallocation. A giant budget is an explicit operator request for an effectively unbounded cache, not an overflow.
+
+---
 
 ### vecdex: "renaming a `VecDexDyn` variant breaks persisted metas"
 - **Where**: `strata/src/vecdex/dynamic.rs`
