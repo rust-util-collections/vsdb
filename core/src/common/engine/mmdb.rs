@@ -586,8 +586,14 @@ pub(crate) fn alloc_prefix() -> Pre {
     loop {
         let candidate = alloc_prefix_candidate();
         // Normal operation records no reservations, so allocation
-        // stays lock-free here.
-        if !RECOVERED_NONEMPTY.load(Ordering::Acquire) {
+        // stays lock-free here. `SeqCst` pairs with the `SeqCst`
+        // cursor store in `alloc_prefix_candidate` and the flag
+        // store + cursor loads in `reserve_recovered_prefix`: of the
+        // two racing sides, at least one must observe the other
+        // (Dekker), so a candidate issued concurrently with a
+        // reservation is either checked against the set here or its
+        // cursor advance is caught by the reserver's verify step.
+        if !RECOVERED_NONEMPTY.load(Ordering::SeqCst) {
             return candidate;
         }
         let mut reserved = RECOVERED_PREFIXES.lock();
@@ -595,7 +601,7 @@ pub(crate) fn alloc_prefix() -> Pre {
             return candidate;
         }
         if reserved.is_empty() {
-            RECOVERED_NONEMPTY.store(false, Ordering::Release);
+            RECOVERED_NONEMPTY.store(false, Ordering::SeqCst);
         }
     }
 }
@@ -659,8 +665,11 @@ fn alloc_prefix_candidate() -> Pre {
                 next_cell.set(next + 1);
                 // Keep the shared cursor in lock-step with `next_cell`
                 // so `reserve_recovered_prefix` immediately sees this
-                // value as already-issued from this point on.
-                LOCAL_CURSOR.with(|cursor| cursor.store(next + 1, Ordering::Release));
+                // value as already-issued from this point on. `SeqCst`
+                // pairs with the `SeqCst` flag load in `alloc_prefix`
+                // and the flag store + cursor loads in
+                // `reserve_recovered_prefix` (see `alloc_prefix`).
+                LOCAL_CURSOR.with(|cursor| cursor.store(next + 1, Ordering::SeqCst));
                 return next;
             }
 
@@ -720,7 +729,10 @@ fn alloc_prefix_candidate() -> Pre {
 ///
 /// Returns `false` when the prefix lies outside the allocator-issued
 /// range (`< PREFIX_ALLOC_START` or `>= ceiling`) — such metadata cannot
-/// come from a legitimately allocated instance.
+/// come from a legitimately allocated instance — or when the verify
+/// step below proves the prefix was issued to a fresh instance while
+/// the reservation was being recorded (accepting it would alias two
+/// live instances, violating INV-E1).
 ///
 /// Accepted prefixes need a reservation only if the allocator could
 /// still issue them in this run: `>= counter` (not yet claimed by any
@@ -734,6 +746,26 @@ fn alloc_prefix_candidate() -> Pre {
 /// restores — are accepted with a few atomic loads and no locking,
 /// keeping nested-handle decoding cheap and the reservation set
 /// bounded.
+///
+/// # Synchronization
+///
+/// The whole evaluate → reserve → verify sequence runs under one
+/// [`PENDING_WINDOWS`] read acquisition: batch claims (the only
+/// writers of `GLOBAL_COUNTER`) and thread-exit window removals take
+/// the write lock, so the counter and the window set are frozen for
+/// the duration. Without the hold, a deschedule between evaluating
+/// and inserting lets the allocator claim batches and issue `prefix`
+/// to a new instance first — a prefix collision — while the late
+/// insert leaves a permanent, never-evicted entry that degrades every
+/// later `alloc_prefix` to the locked slow path.
+///
+/// Live-window *cursors* keep advancing lock-free, so after the
+/// insert the window clause is re-checked (the mutex is held
+/// throughout, so the allocator cannot consume the entry mid-verify):
+/// a cursor that moved past `prefix` means the fast path issued it
+/// without having seen the reservation — the dead entry is evicted
+/// and the restore rejected. The `SeqCst` pairing described in
+/// [`alloc_prefix`] guarantees the two sides cannot miss each other.
 pub(crate) fn reserve_recovered_prefix(meta_prefix: PreBytes) -> bool {
     let prefix = Pre::from_le_bytes(meta_prefix);
     if prefix < PREFIX_ALLOC_START {
@@ -749,18 +781,41 @@ pub(crate) fn reserve_recovered_prefix(meta_prefix: PreBytes) -> bool {
         return true;
     }
 
-    let pending = {
-        let reg = PENDING_WINDOWS.read();
+    let reg = PENDING_WINDOWS.read();
+    let unissued = || {
+        // The counter clause cannot change while `reg` is held (its
+        // only writer runs under the write lock); only live cursors
+        // move, monotonically forward.
         prefix >= GLOBAL_COUNTER.load(Ordering::Acquire)
             || reg.values().any(|(cursor, end)| {
-                prefix >= cursor.load(Ordering::Acquire) && prefix < *end
+                prefix >= cursor.load(Ordering::SeqCst) && prefix < *end
             })
     };
-    if pending {
-        RECOVERED_PREFIXES.lock().insert(prefix);
-        RECOVERED_NONEMPTY.store(true, Ordering::Release);
+
+    if !unissued() {
+        // Already issued in this run — the same-run save/restore flow.
+        // The allocator can never produce it again, so no reservation
+        // is needed (recording one would leak the entry permanently).
+        return true;
     }
-    true
+
+    let mut reserved = RECOVERED_PREFIXES.lock();
+    reserved.insert(prefix);
+    RECOVERED_NONEMPTY.store(true, Ordering::SeqCst);
+
+    if unissued() {
+        return true;
+    }
+    // A live window's fast path issued `prefix` to a fresh instance
+    // before the reservation landed (it cannot have *consumed* the
+    // reservation instead: the set mutex has been held since the
+    // insert). Evict the dead entry — nothing would ever match it —
+    // and reject the restore.
+    reserved.remove(&prefix);
+    if reserved.is_empty() {
+        RECOVERED_NONEMPTY.store(false, Ordering::SeqCst);
+    }
+    false
 }
 
 // ---- Batch ----
@@ -1566,6 +1621,34 @@ mod tests {
              reserved: it can never recur as a future candidate, so \
              reserving it would leak permanently"
         );
+    }
+
+    /// Reserving a not-yet-issued prefix must divert the allocator
+    /// around it: the reservation is matched (and consumed) at
+    /// candidate-generation time, so the reserved value is never
+    /// returned to any caller. Race-tolerant: `future` is derived from
+    /// this thread's own just-issued value, so it lies inside this
+    /// thread's still-open window (other tests' allocations come from
+    /// disjoint batches) unless the window boundary happens to fall in
+    /// between — in which case the loop below simply never generates
+    /// `future` and the assertion stays vacuously true.
+    #[test]
+    fn reserve_recovered_prefix_diverts_allocator_around_reservation() {
+        let db = VSDB.engine();
+        let p0 = db.alloc_prefix();
+        let future = p0 + 3;
+
+        assert!(
+            db.reserve_recovered_prefix(future.to_le_bytes()),
+            "an in-range, un-issued prefix must be accepted and reserved"
+        );
+        for _ in 0..8 {
+            let p = db.alloc_prefix();
+            assert_ne!(
+                p, future,
+                "allocator issued a prefix that was reserved as recovered"
+            );
+        }
     }
 
     /// Per-thread allocations must be strictly increasing — across

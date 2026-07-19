@@ -339,7 +339,8 @@ impl Mapx {
         if !ns.engine().reserve_recovered_prefix(prefix) {
             return Err(VsdbError::Decode {
                 detail: format!(
-                    "Mapx metadata prefix {} is outside the allocator-reserved range",
+                    "Mapx metadata prefix {} is outside the allocator-issued \
+                     range or collides with a concurrently issued prefix",
                     u64::from_le_bytes(prefix)
                 ),
             });
