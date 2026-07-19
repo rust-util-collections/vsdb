@@ -126,6 +126,19 @@ fn namespace_lifecycle() {
     assert_eq!(big_copy.iter().count(), 4100);
     assert_eq!(big_copy.namespace().id(), DEFAULT_NS_ID);
     drop((big, big_copy));
+    // Crosses the 16 MiB per-chunk byte bound long before the 4096-pair
+    // count bound (7 × 3 MiB values ⇒ two batch commits), so the clone
+    // must flush by staged bytes and still copy every pair intact.
+    let mut fat = MapxRaw::new_in(&ns);
+    for i in 0..7u8 {
+        fat.insert([i], vec![i; 3 * 1024 * 1024]);
+    }
+    let fat_copy = fat.clone_in(&Namespace::default_ns()).unwrap();
+    assert_eq!(fat_copy.iter().count(), 7);
+    for i in 0..7u8 {
+        assert_eq!(fat_copy.get([i]).unwrap().len(), 3 * 1024 * 1024);
+    }
+    drop((fat, fat_copy));
 
     // ---- registry / admin tier ----
     let infos = vsdb_ns_list().unwrap();

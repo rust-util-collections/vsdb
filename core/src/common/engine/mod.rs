@@ -418,9 +418,11 @@ impl Mapx {
     /// `clone_in(&self.ns)`).
     ///
     /// Commits in bounded chunks — a single WriteBatch buffers every
-    /// pair in memory, which would OOM on larger-than-RAM maps.
-    /// Atomicity is not needed: the clone target is a brand-new,
-    /// unobservable prefix.
+    /// pair in memory, which would OOM on larger-than-RAM maps. Chunks
+    /// are bounded by entry count AND by staged bytes: the engine
+    /// accepts entries up to ~64 MiB each, so a count-only bound could
+    /// still stage hundreds of GiB in one batch. Atomicity is not
+    /// needed: the clone target is a brand-new, unobservable prefix.
     ///
     /// On error the chunks already committed are reclaimed with a
     /// best-effort wipe (one O(1) range tombstone — tiny enough to
@@ -432,15 +434,23 @@ impl Mapx {
     /// leaves).
     pub(crate) fn clone_in(&self, ns: &Namespace) -> Result<Self> {
         const CLONE_CHUNK: usize = 4096;
+        const CLONE_CHUNK_BYTES: usize = 16 * 1024 * 1024;
 
         let mut new_instance = Self::new_in(ns);
         let mut it = self.iter();
         loop {
             let mut batch = new_instance.batch_begin();
             let mut wrote = false;
-            for (k, v) in it.by_ref().take(CLONE_CHUNK) {
+            let mut entries = 0usize;
+            let mut bytes = 0usize;
+            for (k, v) in it.by_ref() {
+                entries += 1;
+                bytes += k.len() + v.len();
                 batch.insert(&k, &v);
                 wrote = true;
+                if entries >= CLONE_CHUNK || bytes >= CLONE_CHUNK_BYTES {
+                    break;
+                }
             }
             if !wrote {
                 break;
