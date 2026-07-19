@@ -440,22 +440,19 @@ impl Mapx {
 
         let mut new_instance = Self::new_in(ns);
         let mut it = self.iter();
-        loop {
+        // Pull the chunk's first pair before opening a batch, so an
+        // exhausted iterator ends the loop without staging an empty
+        // batch just to drop it.
+        while let Some((k, v)) = it.next() {
             let mut batch = new_instance.batch_begin();
-            let mut wrote = false;
-            let mut entries = 0usize;
-            let mut bytes = 0usize;
-            for (k, v) in it.by_ref() {
+            let mut entries = 1usize;
+            let mut bytes = k.len() + v.len();
+            batch.insert(&k, &v);
+            while entries < CLONE_CHUNK && bytes < CLONE_CHUNK_BYTES {
+                let Some((k, v)) = it.next() else { break };
                 entries += 1;
                 bytes += k.len() + v.len();
                 batch.insert(&k, &v);
-                wrote = true;
-                if entries >= CLONE_CHUNK || bytes >= CLONE_CHUNK_BYTES {
-                    break;
-                }
-            }
-            if !wrote {
-                break;
             }
             if let Err(e) = batch.commit() {
                 drop(batch);
