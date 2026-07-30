@@ -251,14 +251,10 @@ impl MmDB {
         // it (base dir or namespace root alike) refuses to open.
         write_format_marker(root)?;
         // Initialization is complete and durably marked: retire the
-        // sentinel (best-effort — a stale sentinel next to a marker is
-        // cleaned up here on the next open, and the marker-present
-        // validation path never consults it).
-        match fs::remove_file(&sentinel_path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e).c(d!()),
-        }
+        // sentinel best-effort. Marker-present validation never consults
+        // it, so a stuck/unremovable sentinel must not brick reopen of an
+        // already-complete root.
+        let _ = fs::remove_file(&sentinel_path);
 
         Ok(MmDB {
             dbs: dbs_vec.into_boxed_slice(),
@@ -1434,6 +1430,29 @@ mod tests {
         fs::write(&f, [0u8; 3]).unwrap();
         assert!(read_ceiling_file(&f).is_err());
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn open_at_succeeds_when_sentinel_unremovable() {
+        // After the format marker lands the sentinel is advisory. A
+        // directory at the sentinel path makes `remove_file` fail
+        // (IsADirectory) while leaving a complete marked root — open
+        // must still succeed and serve data.
+        let root = tmp_dir("stuck-sentinel");
+        let shards = 2;
+        let sizing = EngineSizing::from_budget_mb(64);
+        let db = MmDB::open_at(&root, shards, sizing).unwrap();
+        let prefix = 1u64.to_le_bytes();
+        db.insert(prefix, b"k", b"v");
+        db.close().unwrap();
+
+        let sentinel = root.join(INIT_SENTINEL_REL_PATH);
+        fs::create_dir_all(&sentinel).unwrap();
+
+        let db = MmDB::open_at(&root, shards, sizing).unwrap();
+        assert_eq!(db.get(prefix, b"k").as_deref(), Some(&b"v"[..]));
+        db.close().unwrap();
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

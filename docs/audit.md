@@ -11,12 +11,6 @@
 
 ## Open
 
-### [MEDIUM] engine: sentinel retire is fail-hard after a durable format marker
-- **Where**: `core/src/common/engine/mmdb.rs` (`MmDB::open_at`, sentinel `remove_file` after `write_format_marker`)
-- **What**: After shards open and the format marker is written successfully, `fs::remove_file` on `__SYSTEM__/__initializing__` returns `Err` on any failure other than `NotFound`, aborting open even though the root is already a complete marked dataset. A stuck/unremovable sentinel bricks every subsequent open (default path via `DEFAULT_NS` → `pnk!(Engine::new())` aborts process init).
-- **Why**: Comments and E8 mark the sentinel as advisory once the marker exists (`validate_shard_layout` never consults it when `marker_present`); cleanup is documented best-effort but coded fail-hard.
-- **Suggested fix**: After a successful marker write (or whenever marker guarantees completeness), ignore all sentinel-removal errors. Regression: complete root with marker + stuck sentinel must open and serve data.
-
 ### [LOW] public/build: crate root still documents SlotDex/VecDex dirty-flag recovery
 - **Where**: `strata/src/lib.rs` (crate-level `//!` on why core maps omit `len()`)
 - **What**: Docs claim SlotDex/VecDex rebuild counts via a dirty-flag mechanism after unclean shutdown. Actual model is one atomic staged engine batch per mutation (`StagedRows`); counts/state are durable with the data; hydrate only rebuilds in-memory caches.
