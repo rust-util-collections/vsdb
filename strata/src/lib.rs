@@ -22,9 +22,11 @@
 //! `len()`.
 //!
 //! Higher-level structures ([`VecDex`], [`SlotDex`]) **do** maintain a
-//! count because they fully control their own insert/remove paths.
-//! A dirty-flag mechanism automatically rebuilds the count from live
-//! data on recovery after an unclean shutdown.
+//! count because they fully control their own insert/remove paths:
+//! every mutation stages data and the durable count into one atomic
+//! engine write batch (`StagedRows`), so on-disk state stays consistent
+//! across crashes. Hydrate rebuilds only in-memory caches from those
+//! durable rows — there is no dirty-flag rebuild-on-recovery path.
 //!
 //! ## Application-layer counting
 //!

@@ -11,11 +11,7 @@
 
 ## Open
 
-### [LOW] public/build: crate root still documents SlotDex/VecDex dirty-flag recovery
-- **Where**: `strata/src/lib.rs` (crate-level `//!` on why core maps omit `len()`)
-- **What**: Docs claim SlotDex/VecDex rebuild counts via a dirty-flag mechanism after unclean shutdown. Actual model is one atomic staged engine batch per mutation (`StagedRows`); counts/state are durable with the data; hydrate only rebuilds in-memory caches.
-- **Why**: Review-core doc-code alignment / D-API. Wrong crash model pushes callers toward half-state healing that does not exist.
-- **Suggested fix**: Describe the staged-batch crash-atomic model; point at SlotDex/VecDex module headers / `staged.rs`.
+*(none)*
 
 ---
 
