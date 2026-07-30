@@ -11,7 +11,17 @@
 
 ## Open
 
-*(none)*
+### [MEDIUM] engine: sentinel retire is fail-hard after a durable format marker
+- **Where**: `core/src/common/engine/mmdb.rs` (`MmDB::open_at`, sentinel `remove_file` after `write_format_marker`)
+- **What**: After shards open and the format marker is written successfully, `fs::remove_file` on `__SYSTEM__/__initializing__` returns `Err` on any failure other than `NotFound`, aborting open even though the root is already a complete marked dataset. A stuck/unremovable sentinel bricks every subsequent open (default path via `DEFAULT_NS` → `pnk!(Engine::new())` aborts process init).
+- **Why**: Comments and E8 mark the sentinel as advisory once the marker exists (`validate_shard_layout` never consults it when `marker_present`); cleanup is documented best-effort but coded fail-hard.
+- **Suggested fix**: After a successful marker write (or whenever marker guarantees completeness), ignore all sentinel-removal errors. Regression: complete root with marker + stuck sentinel must open and serve data.
+
+### [LOW] public/build: crate root still documents SlotDex/VecDex dirty-flag recovery
+- **Where**: `strata/src/lib.rs` (crate-level `//!` on why core maps omit `len()`)
+- **What**: Docs claim SlotDex/VecDex rebuild counts via a dirty-flag mechanism after unclean shutdown. Actual model is one atomic staged engine batch per mutation (`StagedRows`); counts/state are durable with the data; hydrate only rebuilds in-memory caches.
+- **Why**: Review-core doc-code alignment / D-API. Wrong crash model pushes callers toward half-state healing that does not exist.
+- **Suggested fix**: Describe the staged-batch crash-atomic model; point at SlotDex/VecDex module headers / `staged.rs`.
 
 ---
 
@@ -32,9 +42,9 @@
 ---
 
 ### [MEDIUM] dagmap: serde decomposition can expose the private parent slot
-- **Where**: `strata/src/dagmap/raw/mod.rs:70-127`, `strata/src/basic/orphan/mod.rs:199-224`
-- **What**: callers can deserialize `DagMapRaw`'s public tuple representation into its public component types, retain an alias to the private parent `Orphan`, and later create a parent cycle through safe APIs.
-- **Reason**: preventing deliberate representation decomposition requires a breaking redesign that no longer serializes recoverable component handles. Current cycle guards bound the result to failed lookups/prune errors rather than hangs or memory unsafety; keep this debt visible until a broader DagMap format redesign is justified.
+- **Where**: `strata/src/dagmap/raw/mod.rs`, `strata/src/basic/orphan/mod.rs`
+- **What**: callers can deserialize `DagMapRaw`'s public tuple representation into its public component types, retain an alias to the private parent `Orphan`, and later create a parent cycle through safe APIs. The same deliberate decomposition can also plant a foreign registry entry that `owned_or_residue`'s `None`-parent residue arm treats as reclaimable, so a later destroy/prune walk can wipe a live root (`parent == None`) — value loss under representation abuse, not hang/UB.
+- **Reason**: preventing deliberate representation decomposition requires a breaking redesign that no longer serializes recoverable component handles. Current guards bound casual misuse to failed lookups/prune errors rather than hangs or memory unsafety; keep this debt visible until a broader DagMap format redesign is justified.
 
 ---
 
@@ -146,13 +156,13 @@
 ---
 
 ### engine: "derated cgroup comparison undercuts host when cgroup is not binding"
-- **Where**: `core/src/common/engine/mmdb.rs` (`effective_mem_budget`)
+- **Where**: `core/src/common/engine/mmdb.rs` (`effective_mem_budget`) — historical; default budget no longer uses cgroup/host
 - **Claim**: Derating should occur only when the raw cgroup limit is below host memory.
-- **Reason**: That change can leave `budget_limited` unset and let unconstrained write-buffer sizing cross the cgroup limit. The current min-fold is deliberately conservative and covered by semantic tests.
+- **Reason**: Obsolete against current code: default engine budget is fixed 2 GiB / `VSDB_MEM_BUDGET_MB` only (`effective_mem_budget` no longer folds cgroup/host). Cgroup derating remains only in bench `legacy_budget` code. The prior min-fold rationale no longer applies to library open paths.
 
 ---
 
 ### engine: "derating should apply to `memory.high`, not `memory.max`"
-- **Where**: `core/src/common/engine/mmdb.rs` (`cgroup_mem_limit_bytes`)
+- **Where**: `core/src/common/engine/mmdb.rs` (`cgroup_mem_limit_bytes`) — historical; symbol removed from library
 - **Claim**: A hard cgroup maximum is safe to budget at 100%.
-- **Reason**: `memory.max` is the OOM-kill boundary and still induces reclaim/stall near the limit. Headroom below a kill line is at least as necessary as below a throttle line.
+- **Reason**: Obsolete against current code: `cgroup_mem_limit_bytes` is not in `core/src`; library default budget no longer reads cgroup limits. Keep as permanent reject of the recurring claim if reintroduced without evidence.
