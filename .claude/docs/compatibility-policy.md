@@ -1,42 +1,34 @@
 # Compatibility and Migration Policy
 
-VSDB persists handles, metadata, keys, values, graph/tree nodes, namespace
-registry state, and format markers. Compatibility is a correctness property.
+VSDB persists handles, metadata, keys/values, graph/tree nodes, namespace
+registry state, and format markers. Compatibility is correctness.
 
 ## Default
 
-Preserve public API behavior and existing on-disk data by default. Persisted
-tags, magic bytes, key layouts, enum discriminants, and metadata envelopes are
-wire protocol:
+Preserve public API and existing on-disk data. Persisted tags, magic, key
+layouts, enum discriminants, and metadata envelopes are wire:
 
-- existing tags/meanings are frozen;
-- new variants/fields use append-only versioning or explicit new tags;
-- never rely on source enum order for persisted discriminants;
-- add old-fixture decode and round-trip tests for format changes.
+- existing tag meanings frozen;
+- new fields/variants: append-only or explicit new tags;
+- never trust source enum order for on-disk discriminants;
+- format changes need old-fixture decode + round-trip tests.
 
-## Accepted breaking changes
+## Accepted breaks
 
-A break is allowed when it is genuinely necessary or compatibility cost is
-disproportionate. It must not ship as an undocumented patch-level surprise.
+Only when necessary or compatibility cost is disproportionate — never as an
+undocumented patch surprise.
 
-1. Bump both crates to the next major version in lockstep and update the
-   workspace `vsdb_core` dependency.
-2. Document the exact broken API or persisted format and affected old versions
-   in `CHANGELOG.md` plus the relevant public/migration documentation.
-3. State what happens when the new version sees old data: reject loudly,
-   migrate in place, or require export/reimport.
-4. Provide a concrete migration procedure, including backup/rollback guidance
-   and any required old-version export step.
-5. Add tests proving both the intended rejection/migration and new-format
-   stability.
+1. Major bump both crates lockstep; update workspace `vsdb_core` dep.
+2. Document broken API/format and affected old versions in `CHANGELOG.md` + public migration docs.
+3. State old-data behavior: hard reject, in-place migrate, or export/reimport.
+4. Concrete migration (backup/rollback; any old-version export step).
+5. Tests for rejection/migration and new-format stability.
 
-If no safe automated migration exists, say so explicitly and prescribe full
-read/export with the old version followed by import into a fresh new-version
-namespace/base directory.
+If no safe auto-migration: say so; require old-version full export then import into a fresh new-version root.
 
 ## Review questions
 
-- Can an old handle/meta/data directory be opened safely?
-- Can an old binary misread new data instead of rejecting it?
-- Are public behavior changes observable to existing callers?
-- Are all format/tag constants and migration docs updated together?
+- Old handle/meta/dir opens safely?
+- Old binary misreads new data instead of rejecting?
+- Public behavior change observable to callers?
+- All tag constants + migration docs updated together?

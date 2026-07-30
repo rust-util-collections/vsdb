@@ -1,75 +1,34 @@
-# Merkle Trie Subsystem Review Patterns
+# Merkle Trie Review Patterns
 
-## Files
-- `strata/src/trie/mod.rs` — MptCalc, SmtCalc, TrieCalc trait
-- `strata/src/trie/mpt/` — Merkle Patricia Trie (16-ary, nibble-based)
-- `strata/src/trie/smt/` — Sparse Merkle Tree (binary, 256-bit paths)
-- `strata/src/trie/node/` — trie node codecs
-- `strata/src/trie/nibbles.rs` — Nibble path representation (MPT key paths)
-- `strata/src/trie/error.rs` — Trie error types
-- `strata/src/trie/cache.rs` — disk cache for trie snapshots
-- `strata/src/trie/codec_util.rs` — shared checksum/varint codec helpers used by both `cache.rs` and `smt/cache.rs` (INV-T7 cache trust-boundary validation)
-- `strata/src/trie/proof.rs` — VerMapWithProof integration
+**Files:** `trie/{mod,mpt,smt,node,nibbles,error,cache,codec_util,proof}.rs`.
 
-## Architecture
-- **MPT**: 16-ary nibble-based trie. Path = key nibbles (4-bit each). Nodes: Branch (16 children), Extension (shared prefix), Leaf (value).
-- **SMT**: Binary trie with 256-bit paths. Empty subtrees hash to a known default. Constant-depth proofs.
-- Both are **stateless** computation layers — ephemeral in-memory, backed by disk cache.
-- Integrated with VerMap via VerMapWithProof for version-aware Merkle commitments.
+**Arch:** MPT 16-ary nibble; SMT binary 256-bit + empty defaults; stateless compute
++ disk cache; VerMapWithProof integration.
 
-## Critical Invariants
+## Invariants
 
-### INV-T1: Proof Soundness
-A proof generated for key K with root R must verify successfully against R. Conversely, a proof for a different key or root must fail.
-**Check**: Verify proof generation and verification use identical: (1) node encoding, (2) hash function, (3) path computation.
+**T1 Proof sound** — prove/verify same encode, hash, path; wrong key/root fails.
+**T2 MPT nibbles** — high `>>4`, low `&0x0F`; path len 2×bytes; consistent all ops.
+**T3 SMT defaults** — level L = hash(def[L+1]||def[L+1]); identical everywhere.
+**T4 Hash det** — same logical state → same root; extensions max-compressed.
+**T5 Cache version** — key (branch, commit); miss recomputes, never silent stale.
+**T6 Non-exist proofs** — empty slot **or** divergent extension/branch.
+**T7 Cache trust boundary** — loaders validate whole-tree shape (depth/nibble budget,
+leaf placement, hash len), recompute cached hashes, reject trailing/mixed/oversize;
+checksum ≠ structure guarantee. Walker assumptions need matching deserialize checks.
+Failed sync must not leave take’d root unrestored / false commit bookkeeping.
 
-### INV-T2: Nibble Path Correctness (MPT)
-Key bytes → nibble path: `byte[i]` produces nibbles `byte[i] >> 4` (high) then `byte[i] & 0x0F` (low). Path length = 2 * key_byte_length.
-**Check**: Verify nibble extraction is consistent across all MPT operations (insert, get, prove, verify).
+## Bugs
 
-### INV-T3: SMT Default Hash Consistency
-Empty subtrees at each level hash to a well-known default. The default at level L is `hash(default[L+1] || default[L+1])`.
-**Check**: Verify default hashes are computed identically everywhere — build, prove, verify, cache restore. Must be compile-time constants or identically computed.
+**Nibble swap** · prove/verify serialize order drift · cache root for wrong commit.
 
-### INV-T4: Hash Determinism
-The same logical trie state must always produce the same root hash, regardless of insertion order or intermediate states.
-**Check**: Verify node canonical form — no ambiguous representations. Extension nodes must be maximally compressed.
+## Checklist
 
-### INV-T5: Cache Versioning
-Trie cache entries must be keyed by (branch, commit_id) to prevent stale reads.
-**Check**: Verify cache invalidation or versioning on new commits. A cache miss must trigger recomputation, not return stale data.
-
-### INV-T6: Non-Existence Proof Correctness
-For a key NOT in the trie, the proof must demonstrate that the key's path leads to an empty slot or a different key.
-**Check**: Verify non-existence proofs handle both cases: (1) path terminates at empty, (2) path diverges at an extension/branch node.
-
-### INV-T7: Cache Files Are a Trust Boundary
-The walkers (insert/remove/get/commit/Drop) assume every in-memory tree is canonically shaped — SMT leaves positioned exactly at their key hash's 256-bit path, MPT within `MAX_MPT_KEY_LEN` depth with non-empty extensions and nibble values < 16, cached hashes 32 bytes. Organic mutation guarantees this; loaded cache files do NOT. Both cache deserializers must validate whole-tree structure (cumulative depth/nibble budget, leaf position coherence, hash lengths), not just per-node fields — a checksum only protects against accidental corruption, not malformed content.
-Canonical occupancy/compression and every cached hash must be recomputed, mixed
-cached/in-memory trees and trailing bytes rejected, length arithmetic checked,
-and oversized files refused before allocation.
-**Check**: Any new node field or structural assumption in a walker needs a matching deserializer-side validation. Failed sync/mutation paths must never leave a `mem::take`n root unrestored or sync bookkeeping claiming a commit the trie doesn't hold (see `VerMapWithProof::sync_to_commit`'s poison-on-failure).
-
-## Common Bug Patterns
-
-### Nibble Inversion (technical-patterns.md 3.2)
-High and low nibbles swapped: `byte & 0x0F` used for high nibble instead of `byte >> 4`.
-**Impact**: Every key maps to the wrong trie path. Proofs generated with one convention fail with the other.
-
-### Proof Serialization Mismatch (technical-patterns.md 3.1)
-Proof prover serializes nodes in one order, verifier expects another.
-**Trigger**: Upgrade changes node encoding without migrating existing proofs.
-
-### Cache Stale After Commit (technical-patterns.md 3.4)
-Cache returns Merkle root from commit C1 when asked for commit C2.
-**Trigger**: Insert keys → commit C1 → cache root → insert more → commit C2 → cache still returns C1 root.
-
-## Review Checklist
-- [ ] Proof generation and verification use identical code paths for hashing/encoding
-- [ ] Nibble extraction consistent: high = `>> 4`, low = `& 0x0F`
-- [ ] SMT default hashes are constants, identical across all usage sites
-- [ ] Root hash is deterministic (canonical node representation)
-- [ ] Cache keyed by (branch, commit) — stale entries impossible
-- [ ] Non-existence proofs handle both empty-slot and divergent-path cases
-- [ ] sha3/keccak hash used consistently (no accidental sha256 mix)
-- [ ] Extension node compaction — no two consecutive extension nodes
+- [ ] Prove/verify same hash/encode paths
+- [ ] Nibble order consistent
+- [ ] SMT defaults const/identical
+- [ ] Deterministic canonical roots
+- [ ] Cache keyed; no stale
+- [ ] Non-exist both cases
+- [ ] Consistent keccak (no accidental sha256 mix)
+- [ ] No consecutive bare extensions

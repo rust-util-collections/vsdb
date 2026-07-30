@@ -62,19 +62,20 @@ user-invocable only.
 - `/x-review` — deep regression analysis (supports: N commits, `all`, hash, range)
 - `/x-fix` — fix audit backlog: resolve `docs/audit.md` → self-review → commit
 - `/x-commit` — self-reviewing commit: review uncommitted changes → fix → commit
-- `/x-overhaul` — full codebase overhaul: review all → fix → commit
+- `/x-overhaul` — audit-fix-commit pipeline (full repo or scoped like `/x-review`)
 
-Supporting documentation in `.claude/docs/`:
-- `workflow-policy.md` — shared-worktree safety and one-issue-one-commit policy
-- `commit-protocol.md` — atomic validation/commit and lockstep version + release tag procedure
-- `compatibility-policy.md` — public/on-disk breaks and required migration paths
-- `technical-patterns.md` — cataloged bug patterns for vsdb + mmdb layers
-- `review-core.md` — systematic methodology + canonical subsystem map
-- `false-positive-guide.md` — rules for filtering spurious findings
-- `patterns/` — per-subsystem review guides (btree, versioning, trie, slotdex, dagmap, engine, vecdex)
+Supporting docs (`.claude/docs/`):
+- `workflow-policy.md` — worktree safety, one-issue-one-commit
+- `pragmatic-engineering.md` — root goal, low variance
+- `commit-protocol.md` — validate → commit → lockstep version/tag
+- `compatibility-policy.md` — public/on-disk breaks + migration
+- `technical-patterns.md` / `design-patterns.md` — bug catalog + D-\* design lens
+- `review-core.md` — evidence standard + Subsystem Map
+- `false-positive-guide.md` — suppress noise
+- `patterns/*` — per-subsystem checklists
 
-Additional documentation in `docs/`:
-- `audit.md` — Open, Won't Fix, and Rejected registry (tracked by /x-review and /x-fix)
+Additional docs in `docs/`:
+- `audit.md` — Open /Won't Fix / Rejected (managed by `/x-review`, `/x-fix`)
 
 ## Conventions
 

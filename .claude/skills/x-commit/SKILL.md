@@ -6,66 +6,48 @@ disable-model-invocation: true
 
 # Self-Reviewing Commit for VSDB
 
-Review all intended worktree changes, fix confirmed defects, validate them, and
-create local commits. Never push.
+Review owned worktree changes → fix confirmed defects → validate → local commits.
+Never push. User-invoked only. New commits only (no amend/rebase/force-push).
 
 ## Setup
 
-1. Read `.claude/docs/workflow-policy.md`.
-2. Read `.claude/docs/commit-protocol.md`.
-3. Read `.claude/docs/review-core.md`,
-   `.claude/docs/technical-patterns.md`, and
-   `.claude/docs/false-positive-guide.md`.
-4. Read `.claude/docs/compatibility-policy.md` for public or persisted changes.
-5. Run the workflow preflight and record the commit-protocol invocation ledger.
+Read `workflow-policy.md`, `commit-protocol.md`, `pragmatic-engineering.md`,
+`review-core.md`, `technical-patterns.md`, `false-positive-guide.md`;
+public/persisted → `compatibility-policy.md`; design-shaped → `design-patterns.md`.
+Preflight + ledger (incl. **frozen paths**).
 
 ## Protocol
 
-### 1. Establish scope
+### 1. Scope
 
-1. Read `git status --short`, staged and unstaged diffs, and every intended
-   untracked file. `git diff HEAD` alone omits untracked files.
-2. If no intended changes exist, report "nothing to commit" and stop.
-3. Partition the worktree into commit units before editing:
-   - one independent issue, root cause, or behavior change per unit;
-   - required tests, docs, migration guidance, and audit update stay with it;
-   - preserve pre-staged boundaries unless the user explicitly changes scope.
-4. Stop if unrelated changes overlap inseparably; never stash, revert, or
-   absorb them.
-5. When multiple pre-existing units coexist, use the disposable-worktree
-   procedure for isolated validation rather than claiming the combined tree
-   proves each commit independently.
+1. `git status --short`, full diffs, intended untracked (`git diff HEAD` misses untracked).
+2. Nothing intended → “nothing to commit”, stop.
+3. Freeze owned paths before edit; later stage freeze + this-invocation fix/format only.
+4. Split coherent units: one issue/root cause/behavior each; tests/docs/migration/audit stay with unit;
+   keep pre-staged boundaries unless user changes them.
+5. Unrelated same-hunk overlap → stop (no stash/revert/absorb).
+6. Multi-unit tree: combined validation ≠ per-unit proof — disposable worktree when isolation matters.
 
-### 2. Review and fix
+### 2. Review and fix (per unit)
 
-For each unit:
+Map guides → full functions/callers/errors/tests → COW/ref-count, DAG, trie proof,
+prefix/shard, SWMR/unsafe, staged mutation, resources, quantified hot-path,
+placeholders, design (if any) → classify public/on-disk compatibility
+(`compatibility-policy.md`; never hide a break in a patch) → refute via FP guide
+→ fix completely + regression → re-review until clean. No-progress → stop and report.
 
-1. Map files through the Subsystem Map and load relevant guides.
-2. Read complete functions, callers, error/crash paths, and tests.
-3. Check COW/ref-count, DAG, trie proof, prefix/shard, SWMR/unsafe,
-   staged-mutation, resource, and hot-path invariants as applicable.
-4. Classify public/on-disk compatibility. A necessary break follows
-   `compatibility-policy.md`; never hide it inside a patch release.
-5. Refute candidates using the false-positive guide.
-6. Fix retained defects completely and add focused regression coverage.
-7. Re-review until clean; stop on repeated no-progress failure.
+Investigate parallel OK; edit/commit sequential.
 
-Read-only investigation may run in parallel. Edits and commits are sequential.
+### 3. Validate and commit
 
-### 3. Validate and commit each unit
+`commit-protocol.md` per unit: format, lint, targeted tests (no `/home` cleanup),
+exact stage, inspect cached diff, one new commit. Never amend.
 
-Apply `.claude/docs/commit-protocol.md`: run unit-appropriate deterministic
-checks/tests, stage exact paths/hunks, inspect the cached diff, and create one
-new commit. Never amend an earlier commit.
+### 4. Final gate, version, tag
 
-### 4. Final gate, version, and tag
-
-After all behavior commits, run the final workspace gate and single lockstep
-version-and-release-tag policy. Any regression found later is fixed in a new
-focused commit.
+After behavior commits: full workspace gate + single lockstep version-and-tag
+policy (major + migration if break). Post-commit regression → new focused commit.
 
 ## Output
 
-Report reviewed files/subsystems, findings fixed, validations, compatibility
-result, every commit hash/subject, version and release-tag result, and
-untouched baseline work.
+Files/subsystems, fixes, validations, compatibility, hashes/subjects, version/tag, untouched baseline.

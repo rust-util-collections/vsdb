@@ -1,81 +1,35 @@
-# Persistent B+ Tree Subsystem Review Patterns
+# B+ Tree Review Patterns
 
-## Files
-- `strata/src/basic/persistent_btree/` — COW B+ tree with structural sharing
+**Files:** `strata/src/basic/persistent_btree/`.
 
-## Architecture
-- B=16 (max 32 keys per node), ~4 levels for 1M entries
-- Copy-on-write: every mutation allocates a new NodeId
-- Structural sharing: unchanged subtrees shared across versions
-- Backed by MapxRaw (untyped KV → MMDB)
-- Node types: Internal (keys + child NodeIds) and Leaf (keys + values)
-- Per-operation write buffer: `alloc` stages encoded nodes in `pending`;
-  `insert`/`remove` drain it before return, while large `bulk_load` operations
-  additionally flush bounded intermediate batches at
-  `PENDING_FLUSH_THRESHOLD`; `node()` reads through the buffer and intra-op
-  discarded churn never hits disk
+**Arch:** B=16 (max 32 keys); COW new NodeId every mutate; structural sharing;
+on MapxRaw. `pending` write buffer: public mutators flush before return;
+`bulk_load` may flush intermediate at threshold — root never escapes while
+referenced nodes buffered.
 
-## Critical Invariants
+## Invariants
 
-### INV-BT1: Copy-On-Write Integrity
-Every mutation (insert, delete, update) must allocate a NEW NodeId for every modified node on the path from leaf to root. The old NodeId must remain immutable.
-**Check**: Verify no mutation path writes to an existing NodeId. Every modified node returns a new NodeId up the call chain.
+**BT1 COW** — every mutate path new NodeId up to root; no write to old id.
+**BT2 Order** — in-node increasing; parent-child `child[i] < key[i] ≤ child[i+1]`.
+**BT3 Occupancy** — non-root `B..=2B` keys; internal children = keys+1; root min exempt.
+**BT4 Sharing** — other versions keep old nodes intact.
+**BT5 GC** — collect only unreachable from **all** live commit roots.
+**BT6 pending** — empty between ops; every return flushes finals; bulk intermediate flush does not publish unfinal root; `node()` prefers buffer; `discard_node` drops buffered.
 
-### INV-BT2: Key Ordering
-Within each node: `keys[i] < keys[i+1]` for all i.
-Across parent-child: all keys in `children[i]` < `keys[i]` <= all keys in `children[i+1]`.
-**Check**: Verify insert/split/merge maintain ordering. Pay special attention to the median key during splits.
+## Bugs
 
-### INV-BT3: Node Occupancy
-Every non-root internal or leaf node has `B..=2B` keys (16..=32).
-Internal nodes have one more child than key. The root is exempt from the
-minimum.
-**Check**: Verify split triggers at `2B+1`, rebalance/merge triggers below `B`,
-and root contraction preserves the exception.
+**Split median** — internal sep parent-only; leaf sep stays as right first key.
+**In-place mutate** — grep direct storage writes on mut paths.
+**Underflow chain** — after mass delete.
 
-### INV-BT4: Structural Sharing Correctness
-Two versions that share a subtree must see identical data for that subtree. If version V1 modifies node N, V1 gets a new copy N'; V2 still sees the original N.
-**Check**: Verify no path reaches a shared node and modifies it. Verify Arc/reference counting prevents premature deallocation.
+## Checklist
 
-### INV-BT5: GC Reachability
-A node is garbage if no live commit's root tree can reach it. GC must not collect reachable nodes.
-**Check**: Verify GC traverses from ALL live commit roots, not just the latest.
-
-### INV-BT6: Write Buffer Drained Between Operations
-`pending` is non-empty only inside mutation. Every public mutator flushes before
-return; `bulk_load` may also flush intermediate chunks. A root NodeId must never
-escape or enter VerMap branch state while any referenced node is still buffered.
-**Check**: Every return path flushes the final pending nodes; intermediate
-bulk-load flushes do not expose the root. `node()` consults the buffer before
-engine storage and `discard_node` drops buffered nodes instead of lazy-deleting.
-
-## Common Bug Patterns
-
-### Split Median Misplacement (technical-patterns.md 1.2)
-Split treats leaf and internal separators identically.
-**Trigger**: Insert into a full node → split → internal separator remains in a
-child, or leaf separator is removed from the right leaf.
-**Check**: Internal separator is parent-only; leaf separator is copied to the
-parent and remains as the right leaf's first data key. Data keys never appear in
-both leaves.
-
-### In-Place Node Mutation (technical-patterns.md 1.1)
-A hot path writes directly to node storage without allocating a new NodeId.
-**Trigger**: Any mutation path that skips COW allocation.
-**Check**: Grep for direct storage writes in mutation paths.
-
-### Unbalanced Tree After Merge
-Delete cascades underflow but merge doesn't properly redistribute or combine nodes.
-**Trigger**: Delete many keys from one side of the tree → underflow chain.
-
-## Review Checklist
-- [ ] Every mutation path allocates new NodeIds (no in-place writes)
-- [ ] Split produces correct median — not duplicated, not lost
-- [ ] Key ordering maintained after insert, delete, split, merge
-- [ ] Node occupancy bounds respected (except root)
-- [ ] Structural sharing: old NodeIds never modified
-- [ ] GC considers all live commit roots
-- [ ] Node encode/decode round-trips correctly (hand-written codec)
-- [ ] Empty tree / single-entry edge cases handled
-- [ ] Write buffer flushed on every mutating return path (INV-BT6)
-- [ ] `bulk_load` intermediate flushes keep the not-yet-final root unobservable
+- [ ] New NodeIds on all mut paths
+- [ ] Split separator rules (internal vs leaf)
+- [ ] Order after insert/delete/split/merge
+- [ ] Occupancy + root exception
+- [ ] No mutate shared nodes
+- [ ] GC all roots
+- [ ] Codec round-trip
+- [ ] Empty/single-entry edges
+- [ ] Buffer flush on every mut return; bulk root unobservable mid-way

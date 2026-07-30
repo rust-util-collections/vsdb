@@ -1,80 +1,35 @@
-# Versioning Subsystem Review Patterns
+# Versioning Review Patterns
 
-## Files
-- `strata/src/versioned/mod.rs` — VerMap core, BranchState, Commit types
-- `strata/src/versioned/map.rs` — VerMap<K,V> implementation (core insert/commit/merge/rollback/gc logic)
-- `strata/src/versioned/diff.rs` — incremental diff computation
-- `strata/src/versioned/merge.rs` — three-way merge algorithm
-- `strata/src/versioned/handle.rs` — `Branch`/`BranchMut` ergonomic branch handles (`BranchMut` must expose every `Branch` read method plus write ops — see its doc comment)
-- `strata/src/versioned/read.rs` — read-path query operations (get/contains_key/iter/range)
-- `strata/src/versioned/repair.rs` — ref-count recovery / rebuild after a dirty-flag-marked crash
+**Files:** `versioned/{mod,map,diff,merge,handle,read,repair}.rs`.
 
-## Architecture
-- Git-model: branches point to commits, commits form a DAG
-- Commits are immutable once created
-- Branches are mutable pointers (move forward on commit, backward on rollback)
-- Three-way merge: find common ancestor, diff both branches, source-wins on conflict
-- Reference counting for garbage collection
-- Dirty flag for crash recovery of GC operations
+**Arch:** Git-model branches→commits DAG; commits immutable; source-wins 3-way
+merge; ref-counts + dirty flag for cascade crash recover. `BranchMut` must mirror
+all `Branch` reads + writes.
 
-## Critical Invariants
+## Invariants
 
-### INV-V1: Ref-Count Balance
-For every commit: `ref_count == number_of_branches_pointing_to_it + number_of_child_commits_referencing_it_as_parent`.
-**Check**: Every branch create/delete and commit/merge operation must adjust ref-counts correctly. Verify both increment and decrement paths.
+**V1 Ref balance** — `ref = branch_ptrs + child_commits_naming_as_parent`.
+**V2 Acyclic** — parents earlier existing commits.
+**V3 Source-wins** — both modified since **common ancestor** → source value.
+**V4 Rollback** — only this branch’s ref contributions; other branches untouched.
+**V5 Dirty** — true before non-idempotent ref cascade (commit/merge/branch±/rollback), false after; recovery recounts. `gc()` idempotent — no new flag.
+**V6 Commit immutable** after create.
 
-### INV-V2: DAG Acyclicity
-The commit DAG must be a directed acyclic graph. A commit's parents must have been created before it.
-**Check**: Verify merge creates a commit with two existing parents. Verify no operation can create a cycle.
+## Bugs
 
-### INV-V3: Source-Wins Merge Policy
-When merging source into target, for keys modified on both branches since their common ancestor, the source value wins.
-**Check**: Verify merge.rs conflict resolution logic. Verify "modified on both" detection uses the common ancestor as base, not the branch tips.
+**Ref leak** — delete branch without dec.
+**Merge drop** — keyed on source only keeps base.
+**Live GC** — zero refs while still parent-linked.
+**Rollback/merge guard asymmetry** — uncommitted changes must reject on **all** arms (`target==head` and strict-ancestor), like merge.
 
-### INV-V4: Rollback Preserves Other Branches
-Rolling back branch B to an older commit must not affect any other branch's data or ref-counts (except for the commits between old and new position that may lose one reference).
-**Check**: Verify rollback only decrements ref-counts for commits that lose THIS branch's reference. Do not decrement if other branches still reference them.
+## Checklist
 
-### INV-V5: Dirty Flag Lifecycle
-`dirty = true` before non-idempotent commit/ref-count mutations and `false`
-after completion. On recovery, `true` triggers a recount. The public `gc()`
-path is itself the idempotent repair/full sweep and does not set a fresh flag.
-**Check**: Verify commit, merge, branch creation/deletion, and rollback set the
-flag before the first ref-count mutation and clear it after the last; verify a
-crash between them triggers recovery.
-
-### INV-V6: Commit Immutability
-Once a commit is created, its data (snapshot pointer, parent list) must never change.
-**Check**: Verify no code path modifies a commit struct after creation.
-
-## Common Bug Patterns
-
-### Ref-Count Leak (technical-patterns.md 2.1)
-Branch is deleted but its commit's ref-count is not decremented.
-**Trigger**: Create branch B2 from main → delete B2 → commit's ref-count still shows 2.
-**Impact**: Commit never GC'd, disk grows forever.
-
-### Merge Loses Data (technical-patterns.md 2.2)
-Key modified on source branch but not on target. Merge should keep source value but keeps base value instead.
-**Trigger**: Common ancestor has key=v0. Source modifies to v1. Target doesn't touch it. After merge, key=v0 instead of v1.
-
-### GC Deletes Live Commit (technical-patterns.md 2.1)
-Ref-count reaches 0 while another branch still references the commit indirectly (through a child commit's parent link).
-**Trigger**: Complex merge/rollback sequence leaves a commit reachable only through parent links, not branch pointers.
-
-### Rollback/Merge Guard Asymmetry
-`rollback_to` and `merge` both mutate `dirty_root`/branch state and must reject the operation when the affected branch has uncommitted changes — silently discarding them is data loss. A guard added for only ONE code path of a multi-branch function (e.g. only the `target == head` arm of `rollback_to`, leaving the `target == ancestor` arm unguarded) is easy to miss in review since each arm looks locally correct.
-**Trigger**: Insert uncommitted changes → roll back to a commit that is a strict ancestor of head (not head itself) → the uncommitted edit is silently overwritten and `Ok(())` is returned instead of `VsdbError::UncommittedChanges`.
-
-## Review Checklist
-- [ ] Ref-count incremented on: branch create, merge (new commit references parents)
-- [ ] Ref-count decremented on: branch delete, rollback (skipped commits), GC cascade
-- [ ] Merge uses common ancestor for diff base, not branch tips
-- [ ] Source-wins policy applied correctly for conflicts
-- [ ] Rollback only affects the rolled-back branch's ref-count contributions
-- [ ] Rollback rejects uncommitted changes on EVERY code path (target == head AND target == a strict ancestor), not just one arm — mirror `merge()`'s unconditional guard
-- [ ] Dirty flag brackets every non-idempotent commit/ref-count cascade; `gc()` remains an idempotent repair/sweep
-- [ ] Commit data is immutable after creation
-- [ ] No-op merge handled (source == target, or no diffs)
-- [ ] Fast-forward merge handled (source is ancestor of target)
-- [ ] `BranchMut` (handle.rs) exposes every read method `Branch` has, per its own doc comment ("provides all `Branch` read methods plus write operations") — check the two impl blocks stay in sync when either gains a new read method
+- [ ] Inc on branch create / new commit parents
+- [ ] Dec on branch delete / rollback skips / GC cascade
+- [ ] Merge diffs from common ancestor
+- [ ] Source-wins on conflicts
+- [ ] Rollback multi-path uncommitted guard
+- [ ] Dirty brackets cascades; gc stays idempotent
+- [ ] No post-create commit mutate
+- [ ] No-op and fast-forward merges
+- [ ] BranchMut ≈ Branch reads kept in sync

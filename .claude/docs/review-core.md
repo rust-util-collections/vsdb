@@ -1,147 +1,119 @@
-# VSDB Review Core Methodology
+# VSDB Review Core
 
-This document defines the evidence standard and canonical subsystem mapping for
-VSDB reviews.
+Evidence standard and subsystem map. Apply `pragmatic-engineering.md`: only
+findings/process that remove a concrete failure mode.
 
-## 1. Context and coverage
+## 1. Context
 
-Before analysis:
+1. Full diff + surrounding functions.
+2. Map each changed code file via Subsystem Map; load guides, callers, tests.
+3. Design-shaped / multi-subsystem diffs → also `design-patterns.md`.
+4. Public API / serialized meta / durable KRT / ns layout / format markers →
+   `compatibility-policy.md`.
+5. Full audit → tracked-file ledger first (no static/size guesses).
 
-1. Read the complete diff and surrounding functions.
-2. Map every changed code file through the Subsystem Map.
-3. Read all mapped guides, callers, and directly relevant tests.
-4. For a full audit, build a tracked-file ledger first; do not rely on static
-   enumerations, approximate sizes, or agent claims of coverage.
+### Subsystem Map
 
-### Subsystem Map (single source of truth)
+One primary row per Rust file. Unsafe, compatibility, public-doc checks are overlays.
 
-Commands/skills reference this table instead of duplicating mappings. Every
-Rust source file has one primary row; unsafe, compatibility, and public-doc
-checks are overlays.
+| Subsystem | Files | Guides |
+|-----------|-------|--------|
+| engine/shard/prefix | `core/.../engine/**`, `core/.../mod.rs`, `core/.../mapx_raw/**` | `patterns/engine.md`, `technical-patterns.md` |
+| namespaces | `core/.../namespace.rs` | `patterns/engine.md`, `compatibility-policy.md` |
+| typed collections | `strata/.../mapx/**`, `mapx_ord/**`, `mapx_ord_rawkey/**`, `orphan/**` | `patterns/engine.md`, `technical-patterns.md` |
+| B+ tree | `strata/.../persistent_btree/**` | `patterns/btree.md` |
+| versioning | `strata/.../versioned/**` | `patterns/versioning.md` |
+| tries | `strata/.../trie/**` | `patterns/trie.md` |
+| SlotDex | `strata/.../slotdex/**` | `patterns/slotdex.md` |
+| DagMap | `strata/.../dagmap/**` | `patterns/dagmap.md` |
+| VecDex | `strata/.../vecdex/**` | `patterns/vecdex.md` |
+| encoding/staged | `strata/.../common/**`, `core/.../error.rs` | `technical-patterns.md`, `compatibility-policy.md` |
+| public/build | both `lib.rs`/`basic/mod.rs`, root+crate `Cargo.toml`, `core/build.rs` | `compatibility-policy.md`, `technical-patterns.md` |
 
-| Subsystem | File patterns | Pattern guide(s) |
-|-----------|---------------|------------------|
-| engine/shard/prefix | `core/src/common/engine/**/*.rs`, `core/src/common/mod.rs`, `core/src/basic/mapx_raw/**/*.rs` | `patterns/engine.md`, `technical-patterns.md` |
-| namespaces | `core/src/common/namespace.rs` | `patterns/engine.md`, `compatibility-policy.md` |
-| typed collections | `strata/src/basic/mapx/**/*.rs`, `strata/src/basic/mapx_ord/**/*.rs`, `strata/src/basic/mapx_ord_rawkey/**/*.rs`, `strata/src/basic/orphan/**/*.rs` | `patterns/engine.md`, `technical-patterns.md` |
-| persistent B+ tree | `strata/src/basic/persistent_btree/**/*.rs` | `patterns/btree.md` |
-| versioning | `strata/src/versioned/**/*.rs` | `patterns/versioning.md` |
-| Merkle tries | `strata/src/trie/**/*.rs` | `patterns/trie.md` |
-| SlotDex | `strata/src/slotdex/**/*.rs` | `patterns/slotdex.md` |
-| DagMap | `strata/src/dagmap/**/*.rs` | `patterns/dagmap.md` |
-| VecDex | `strata/src/vecdex/**/*.rs` | `patterns/vecdex.md` |
-| encoding/staged mutation | `strata/src/common/**/*.rs`, `core/src/common/error.rs` | `technical-patterns.md`, `compatibility-policy.md` |
-| public/module/build boundaries | `core/src/lib.rs`, `core/src/basic/mod.rs`, `strata/src/lib.rs`, `strata/src/basic/mod.rs`, `Cargo.toml`, `core/Cargo.toml`, `strata/Cargo.toml`, `core/build.rs` | `compatibility-policy.md`, `technical-patterns.md` |
+Guides under `.claude/docs/patterns/`. Tests/benches/CI/README/CHANGELOG/`.claude`
+→ map to the behavior they cover.
 
-Guides live in `.claude/docs/patterns/`. Tests, benches, CI, README/CHANGELOG,
-and `.claude/` are supporting surfaces: map them to the behavior they specify.
+## 2. Risk (effort, not a finding)
 
-## 2. Risk classification
+| Class | Examples | Default |
+|-------|----------|---------|
+| COW/DAG/unsafe | node replace, refs, merge/rollback, shadow/casts | CRITICAL |
+| Persisted format | meta, tags, keys, codecs, ns layout | CRITICAL |
+| Proof/routing/crash | Merkle, prefix/shards, staged/dirty | HIGH |
+| Control/resource/API | lifecycle, cleanup, public behavior | HIGH |
+| Errors | propagate, partial fail, retry | MEDIUM |
+| Perf | serialization/alloc/locks on hot paths | context |
+| Tests/docs/config | coverage/alignment | LOW unless wrong |
 
-| Category | Examples | Default risk |
-|----------|----------|--------------|
-| COW/version DAG/unsafe | node replacement, refs, merge/rollback, shadow/raw casts | CRITICAL |
-| Persisted format | metadata, tags, keys, node codecs, namespace layout | CRITICAL |
-| Proof/routing/crash safety | Merkle proofs, prefix/shards, staged/dirty protocols | HIGH |
-| Control/resource/API | branches, lifecycle, cleanup, public behavior | HIGH |
-| Error handling | propagation, partial failure, retry/fail-stop | MEDIUM |
-| Performance | serialization/allocation/locking on hot paths | context-dependent |
-| Tests/docs/config | contract/coverage alignment | LOW unless behavior is wrong |
+## 3. Evidence
 
-Classification allocates review effort; it is not itself a finding.
+1. Name the invariant (mapped guide).
+2. Realistic trigger (input, order, crash, old-data fixture).
+3. Trace callers, cleanup, crate boundaries, guards.
+4. Outcome: wrong value, loss, corruption, panic, UB, leak, deadlock,
+   compatibility reject/misdecode, or **quantified** hot-path cost.
+5. Smallest regression test that fails pre-fix.
 
-## 3. Evidence protocol
+**Boundaries:** empty/single entry, B+ occupancy/split, ancestor/no-op merge,
+proof edges, tier/layer edges, prefix 0/`u64::MAX`, ns shard counts, bad meta,
+partial I/O.
 
-For each risky change:
+**Concurrency/unsafe:** Derive SWMR/locks from code. `// SAFETY:` is a claim.
+Check alias life, write exclusion, process-global env, allocator, lifecycle serialize.
 
-1. **Invariant**: cite the mapped guide.
-2. **Trigger**: construct realistic input, ordering, crash point, or old-data
-   fixture.
-3. **Trace**: follow callers, cleanup, cross-crate boundaries, and guards.
-4. **Outcome**: state wrong value, data loss, corruption, panic, UB, leak,
-   deadlock, compatibility rejection/misdecode, or quantified regression.
-5. **Regression test**: identify the smallest test that fails before the fix.
+**Crash:** Do not mix recovery models —
+VerMap dirty flag; SlotDex/VecDex one staged batch; B+ bulk_load may flush internal
+batches (no root escapes while nodes buffered); ns/allocator need documented
+sync/rename order.
 
-### Boundary conditions
+**Compatibility:** `compatibility-policy.md`. Old data preserve/reject/migrate
+intentionally. Breaks → major + concrete migration.
 
-Check empty/single entry, B+ tree occupancy/split thresholds, ancestor/no-op
-merges, proof path boundaries, tier/layer boundaries, prefix 0/u64::MAX,
-namespace shard counts, malformed metadata, and partial I/O/commit failure.
+**Perf:** Hot/warm only; quantify. Cold init micro-opts are not findings.
 
-### Concurrency and unsafe
+**Design:** Locks, ownership, queues, multi-step install, degrade, public/on-disk
+→ applicable D-\* in `design-patterns.md`; skip empty families.
 
-Derive the real SWMR and lock protocol from current code. A `// SAFETY:` comment
-is a claim to verify, not proof. Check alias lifetime, write exclusion,
-process-global environment mutation, allocator locks/atomics, and lifecycle
-serialization.
+**Placeholder (CRITICAL in non-test prod when it ships behavior):**
+`todo!` / `unimplemented!` / stand-in `unreachable!`; dummy returns where real
+work is required; `// TODO|FIXME|HACK` for unfinished required behavior;
+`if false` / `#[cfg(any())]` around incomplete required paths. Grep before
+calling dead code. Cleanup-only → LOW/skip.
 
-### Crash safety
+## 4. Deterministic / style
 
-Distinguish protocols:
+fmt / compile / clippy → tools. Still LOW if tools miss:
 
-- VerMap uses dirty-state detection/repair around multi-step operations.
-- SlotDex/VecDex use one staged read-your-writes batch per mutation.
-- B+ tree bulk load may flush internal node batches before returning; no root
-  may escape while referenced nodes remain buffered.
-- Namespace/allocator durable files require their documented sync/rename order.
+- no `#[allow(...)]`
+- import repeated paths; group same-root imports
+- public docs + this map + guides stay aligned
+- every unsafe has accurate `// SAFETY:`
 
-Do not apply one subsystem's recovery model to another.
+## 5. Audit (`docs/audit.md`)
 
-### Compatibility
-
-For public or persisted changes, apply `compatibility-policy.md`. Prove old data
-is preserved/rejected/migrated intentionally. Breaking changes require a major
-version and concrete migration path.
-
-### Performance
-
-Require hot/warm-path evidence and quantify work. Cold initialization or
-administrative micro-optimizations are not findings.
-
-## 4. Deterministic and convention checks
-
-Formatting, compilation, and Clippy belong to tools, not speculative agents.
-Repository-specific conventions not enforced automatically remain LOW findings:
-
-- no `#[allow(...)]`;
-- import repeated inline paths and group all same-root imports;
-- public API changes update docs, this map, and pattern guides;
-- every unsafe operation has an accurate `// SAFETY:` contract.
-
-## 5. Audit registry
-
-Consult `docs/audit.md`:
-
-- verify/prune relevant `Open` entries;
-- re-evaluate in-scope `Won't Fix`/`Rejected` entries; full audit checks all;
-- keep real disproportionate defects/debt under `Won't Fix` with reason;
-- keep only recurring/material disproven claims under `Rejected`;
-- remove resolved entries rather than accumulating history;
-- never add dates or freshness markers.
-
-### Finding format
+- Prune fixed in-scope Open (history → Git/CHANGELOG, not a Resolved section).
+- Re-check intersecting Won't Fix / Rejected; full audit → all.
+- Real but disproportionate → Won't Fix + reason.
+- Material disproven → Rejected (no severity). Drop routine noise.
+- No dates/freshness markers.
 
 ```text
 [SEVERITY] subsystem: summary
 WHERE: file:line_range
-TRIGGER: concrete input/order/crash/old-data state
-OUTCOME: observable incorrect behavior
-WHY: violated invariant and failed guard
-FIX: minimal safe direction, regression test, migration impact
+TRIGGER: input/order/crash/old-data
+OUTCOME: observable wrong behavior
+WHY: invariant + why guards fail
+FIX: minimal direction + regression + migration impact
 ```
 
-### Severity
+- **CRITICAL**: loss/corruption, UB, unsound proof, cross-structure contamination, silent persisted misread
+- **HIGH**: wrong results, deadlock, realistic crash/exhaustion, material hot-path hit
+- **MEDIUM**: edge bug, error-policy gap, bounded leak
+- **LOW**: convention/docs with real cost
 
-- **CRITICAL**: data loss/corruption, UB, proof unsoundness, cross-structure
-  contamination, or silent persisted-data misinterpretation.
-- **HIGH**: incorrect results, deadlock, realistic crash/resource exhaustion,
-  or material hot-path regression.
-- **MEDIUM**: reachable edge bug, error-policy gap, or bounded leak.
-- **LOW**: convention/documentation/clarity defect with concrete cost.
-
-Observations/questions may appear in reports but never under `Open`.
+Observations ≠ Open.
 
 ## Quality gate
 
-Retain only findings with concrete trigger and outcome. Refute against
-`false-positive-guide.md`. Agent votes and pattern-name matches are not evidence.
+Concrete trigger + outcome only. Refute via `false-positive-guide.md`. Agent
+agreement and pattern IDs are not proof.

@@ -1,61 +1,58 @@
 ---
 name: x-overhaul
-description: Audit the full VSDB repository, resolve every finding safely, and create atomic local commits. Use only when the user explicitly invokes /x-overhaul.
+description: Audit VSDB (full repo or scoped range), resolve findings safely, and create atomic local commits. Use only when the user explicitly invokes /x-overhaul.
+argument-hint: "[N | all | staged | worktree | <hash> | <hash1>..<hash2>]"
 disable-model-invocation: true
 ---
 
-# Full VSDB Audit-Fix-Commit Pipeline
+# VSDB Audit-Fix-Commit Pipeline
 
-Audit the complete repository, explicitly disposition every confirmed finding,
-fix actionable findings, and create local commits. Never push.
+Review scope → dispose every confirmed finding → fix actionable → local commits.
+Unlike `/x-review`, always fixes and commits (no `--fix`). Never push.
+User-invoked only. New commits only.
+
+## Input
+
+`$ARGUMENTS` — same scopes as `/x-review` without `--fix`:
+
+| Input | Scope |
+|-------|-------|
+| *(empty)* or `all` | Full repo (default) |
+| `N` / `staged` / `worktree` / hash / range | Diff-bound |
+
+Non-full: fix only findings rooted in that diff. Post-fix re-review = files
+this run changed.
 
 ## Setup
 
-1. Read `.claude/docs/workflow-policy.md` and run preflight.
-2. Read `.claude/skills/x-review/SKILL.md`,
-   `.claude/skills/x-fix/SKILL.md`,
-   `.claude/docs/commit-protocol.md`, and
-   `.claude/docs/compatibility-policy.md`.
-3. Record the commit-protocol invocation ledger before mutation.
+Preflight (`workflow-policy.md`); `pragmatic-engineering.md`; read `x-review` +
+`x-fix` skills + `commit-protocol.md` + `compatibility-policy.md`; ledger before mutations.
 
-## Phase 1: Full review
+## Phase 1 — Review
 
-Follow `/x-review all` without `--fix`:
+`/x-review <scope>` without `--fix`:
 
-1. Build a tracked-file ledger for both crates' source/tests/benches/build
-   scripts, manifests/CI, public docs, and `.claude/`.
-2. Give read-only agents disjoint subsystem ownership; every Rust source file
-   is accounted for exactly once in the depth pass.
-3. Run focused cross-subsystem/completeness passes only for remaining gaps.
-4. Verify and deduplicate candidates, including public/on-disk compatibility.
-5. Fully re-evaluate all existing `Open`, `Won't Fix`, and `Rejected` entries.
-6. If `docs/audit.md` changed, commit that review inventory as one
-   documentation-only unit before fixes. It is a review snapshot, not a batched
-   fix commit.
+1. Coverage: full ledger (`all`) or diff+callers.
+2. Agents with disjoint ownership when needed; `all` → each Rust file once in depth.
+3. Cross-subsystem / design / completeness only for depth gaps.
+4. Verify + dedupe (incl. public/on-disk compatibility).
+5. Update `docs/audit.md` (`all` re-evals all sections; narrow scopes prune/merge
+   in-scope without dropping unrelated Open unless proven fixed). No timestamps.
+6. If registry changed → docs-only inventory commit before fixes (may list many findings).
 
-## Phase 2: Resolve findings
+## Phase 2 — Resolve
 
-Follow `/x-fix`:
+Full `/x-fix` on Phase-1 (and still-applicable Open) findings: severity order;
+safe complete fix or Won't Fix/Rejected; one root cause per commit; mutations
+sequential; re-review changed files only. Correctness > open-count cosmetics.
+Out-of-scope Open untouched.
 
-1. Process findings sequentially by severity.
-2. Resolve each safely/completely, or record justified `Won't Fix`/`Rejected`.
-3. Enforce one independent finding/root cause per validated commit.
-4. Keep mutations sequential; parallelism is read-only investigation/validation.
-5. Re-review changed files and process new findings through the same loop.
+## Phase 3 — Gate, version, tag
 
-The goal is sound dispositions, not a cosmetic zero count at any cost.
-
-## Phase 3: Final gate, version, and tag
-
-Run the final workspace gate. Fix regressions in new focused commits. Apply one
-lockstep version bump for the pipeline: patch for compatible changes, or a major
-bump plus concrete migration documentation for an accepted break. Create the
-annotated release tag as directed by the protocol.
-
-If nothing changed, create no empty commit, version bump, or tag.
+Final gate; regressions in new commits. Rust changed → one lockstep bump
+(patch or major+migration) + separate release commit + annotated tag.
+Nothing changed → no empty commit/bump/tag.
 
 ## Output
 
-Report coverage, dispositions, validations, compatibility/migration result,
-every commit hash/subject, version and release-tag result, and untouched
-baseline.
+Scope, coverage, dispositions, validations, compatibility/migration, hashes/subjects, version/tag, baseline left alone.

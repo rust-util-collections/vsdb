@@ -1,63 +1,63 @@
 # Workflow Safety and Atomic Commit Policy
 
-Canonical safety policy for `/x-review`, `/x-commit`, `/x-fix`, and
-`/x-overhaul`.
+SSOT safety for `/x-review`, `/x-commit`, `/x-fix`, `/x-overhaul`. Skills must
+not weaken it. See also `pragmatic-engineering.md`.
+
+**Hard rules:** user-invoked only · local commits only (never push) · no history
+rewrite · one independent issue per commit.
 
 ## 1. Preflight
 
-Before mutation or commit:
+Before mutate/commit:
 
-1. Record `git status --short`, branch, and `HEAD`.
-2. Separate staged, unstaged, and untracked baseline changes.
-3. Stop for an in-progress merge/rebase/cherry-pick or detached `HEAD` unless
-   the user resolves it explicitly.
-4. Define invocation-owned files/hunks. Existing unrelated work remains owned
-   by its author.
+1. Record `git status --short`, branch, `HEAD`.
+2. Separate staged / unstaged / untracked baseline.
+3. Stop on merge/rebase/cherry-pick or detached HEAD unless the user resolves it.
+4. Define this invocation’s owned files/hunks; baseline stays with its author.
+5. **Commit workflows:** freeze owned paths (+ planned units) before review edits.
+   Stage only freeze set + this invocation’s fix/format paths — never paths that
+   appeared later from concurrent work.
 
-A globally clean tree is optional; a clean ownership boundary is mandatory.
+Dirty tree OK; clear ownership required.
 
 ## 2. Preserve existing work
 
-- Never use `git stash`, `git clean`, `git checkout --`, `git restore`, or
-  destructive `git reset` to manufacture a clean tree.
-- Never revert, overwrite, stage, or commit unrelated baseline changes.
-- Stop when required work overlaps an existing change inseparably.
-- Review agents are read-only. Parallelize only independent investigation or
-  validation; edits and commits in one worktree are sequential.
+- No `stash` / `clean` / `checkout --` / `restore` / destructive `reset` to fake a clean tree.
+- Never touch unrelated baseline (revert, overwrite, stage, commit).
+- If a needed fix overlaps baseline and cannot be separated safely → stop and report.
+- Review agents read-only. Parallelism: investigation/validation only. Edits and
+  commits on one tree: sequential.
 
-## 3. Atomic commits
+## 3. Atomic commit units
 
-One independent issue, root cause, or behavior change gets one commit.
+One issue / root cause / behavior change → one commit.
 
-- Include required tests, public/migration docs, and audit update.
-- Same-root symptoms may share a commit; unrelated cleanup may not.
-- Stage exact paths/hunks, never `git add -A`; inspect `git diff --cached`.
-- Create new commits only. Never amend, rebase, rewrite/reset history, filter
-  history, or force-push.
-- These workflows create local commits only and never push.
+- Bundle only its tests, public/migration docs, and audit update.
+- Multiple symptoms only if same root cause.
+- No drive-by cleanup, format churn, or refactors.
+- Stage exact paths/hunks (`git add -A` forbidden). Inspect `git diff --cached` before every commit.
+- New commits only — no amend, rebase, history rewrite, or force-push. No remote push.
 
-## 4. Safe validation
+## 4. Validation and failure
 
-- Run the smallest relevant validation before each unit and the workspace gate
-  once after the final behavior change.
-- A dirty-tree validation covers everything present. When other units could
-  affect the result, validate `HEAD` plus only the candidate unit in a
-  disposable worktree/copy. Never use a stash; remove temporary worktrees.
-- VSDB tests already isolate data with globally unique prefixes. Automated
-  skills must not delete `$HOME/.vsdb` or shared `/tmp/vsdb_testing`; use direct
-  Cargo test commands rather than cleanup-bearing `make test`.
-- If Cargo discovers an unexpected test source, check `git ls-files` and
-  `git status` before attributing its failure. Ignore—but never delete—another
-  session's untracked/ignored scratch test.
-- Fix unit-caused failures. Report proven pre-existing failures without
-  claiming success.
-- Stop a repeated no-progress failure loop and report the blocker.
+- Smallest relevant checks per unit; workspace gate once after last behavior change.
+- Dirty-tree validation covers everything present. If other units can interfere,
+  validate `HEAD` + only the candidate in a disposable worktree (no stash);
+  remove it after.
+- VSDB tests isolate via unique prefixes. Skills must **not** delete `$HOME/.vsdb`
+  or shared `/tmp/vsdb_testing`; use direct Cargo tests, not cleanup-bearing
+  `make test`.
+- Unexpected test discovery: check `git ls-files` / `git status` before blame;
+  never delete another session’s scratch test.
+- Unit-caused failure → fix before commit. Pre-existing → report with evidence.
+- Same failure repeats with no progress → stop and report.
 
 ## 5. Audit dispositions
 
-- `Open`: confirmed actionable defect/debt.
-- `Won't Fix`: confirmed defect/debt whose safe fix is disproportionate.
-- `Rejected`: recurring/material claim disproven by current code; not severity.
+| state | meaning |
+|-------|---------|
+| Open | confirmed, actionable |
+| Won't Fix | real; safe fix currently disproportionate |
+| Rejected | material claim disproven (not a severity). Skip routine noise. |
 
-Resolved history belongs in Git/CHANGELOG. Audit entries contain no dates or
-freshness markers.
+Resolved history lives in Git/CHANGELOG. Evidence only — no dates or “last reviewed”.

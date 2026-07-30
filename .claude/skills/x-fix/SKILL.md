@@ -6,66 +6,45 @@ disable-model-invocation: true
 
 # Fix the VSDB Audit Backlog
 
-Resolve every actionable `docs/audit.md` entry, self-review the fixes, and
-create local commits. Never push.
+Clear actionable `docs/audit.md` Open → self-review → local commits. Never push.
+User-invoked only. New commits only.
 
 ## Setup
 
-1. Read `.claude/docs/workflow-policy.md`,
-   `.claude/docs/commit-protocol.md`,
-   `.claude/docs/compatibility-policy.md`,
-   `.claude/docs/review-core.md`,
-   `.claude/docs/technical-patterns.md`, and
-   `.claude/docs/false-positive-guide.md`.
-2. Run preflight and record the commit-protocol invocation ledger.
-3. Read `docs/audit.md`. If `Open` is empty, report "nothing to fix" and stop.
+Read `workflow-policy.md`, `commit-protocol.md`, `compatibility-policy.md`,
+`pragmatic-engineering.md`, `review-core.md`, `technical-patterns.md`,
+`false-positive-guide.md`. Preflight + ledger (freeze paths as work proceeds).
+Empty Open → “nothing to fix”.
 
 ## Protocol
 
-### 1. Triage
+### 1. Triage (CRITICAL → LOW)
 
-Process CRITICAL → HIGH → MEDIUM → LOW. Before editing each finding:
+Per entry before edit: code/callers/tests + guides (+ `design-patterns.md` if design);
+reproduce from current code; dedupe root causes; false → Rejected; real but unsafe/disproportionate → Won't Fix + reason.
 
-1. Re-read cited code, callers, tests, and mapped guides.
-2. Reproduce its trigger from current code.
-3. Deduplicate entries sharing one root cause.
-4. Move a disproven recurring claim to `Rejected` with evidence.
-5. Move a real but currently disproportionate issue to `Won't Fix` with reason.
+### 2. One finding → one commit (blocking)
 
-### 2. Fix one finding, then commit it
+1. Root-cause fix + focused regression.
+2. Trace SWMR, COW, crash, cleanup, compatibility.
+3. Drop that Open entry (code + tests + migration docs + registry = unit).
+4. Per-unit validation (`commit-protocol.md`).
+5. Stage freeze + fix paths; inspect cached; commit before next.
 
-**One finding/root cause per commit is blocking.**
-
-1. Implement the complete root-cause fix.
-2. Add focused regression coverage.
-3. Trace SWMR, COW, crash, cleanup, and compatibility effects.
-4. Remove that `Open` entry; code, tests, migration docs, and registry update
-   form one commit unit.
-5. Run per-unit validation, stage exact paths/hunks, inspect the cached diff,
-   and commit before starting the next finding.
-
-A registry-only disposition for one finding is one unit. Mutating fix agents
-never run in parallel.
+Registry-only disposition = one unit. Same root cause may batch symptoms. Mutating
+agents never parallel (read/validate may).
 
 ### 3. Self-review
 
-1. Review `starting_HEAD..HEAD` plus remaining worktree changes using
-   `/x-review` evidence/verification rules.
-2. Process each newly confirmed issue through the same one-finding loop.
-3. Stop on unsafe baseline overlap or repeated no-progress validation failure;
-   never stash, reset, or rewrite prior commits.
+Review `starting_HEAD..HEAD` + remaining worktree via `/x-review` evidence rules.
+New confirmed → Open → same one-finding loop. Stop on no-progress or baseline overlap.
 
-### 4. Final gate, version, and tag
+### 4. Final gate, version, tag
 
-Run the final workspace gate. If Rust source changed, apply the lockstep
-version-and-release-tag policy once for the invocation. A breaking change
-requires the major-version and migration protocol.
-
-`docs/audit.md` ends with no unresolved `Open` entry unless execution is blocked
-and reported. Never add a `Resolved` history section or freshness markers.
+Full gate once. Rust source changed → lockstep version-and-tag once for the invocation
+(major + migration if break). Finish with no Open unless blocked (report blocker).
+No Resolved section or dates in audit.
 
 ## Output
 
-Report initial dispositions, fixes, rejected/deferred entries, validations,
-compatibility result, every commit hash/subject, version and release-tag
-result, and untouched baseline.
+Dispositions, fixes, Rejected/Won't Fix, validations, compatibility, hashes/subjects, version/tag, baseline left alone.
