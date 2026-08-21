@@ -51,8 +51,8 @@ pub trait BatchTrait {
     /// On error the buffered operations are consumed and lost (none were
     /// applied); a failed commit is **not retryable** — re-stage the
     /// operations on a fresh batch instead. Engine-side entry-size
-    /// rejections (keys over 8 MiB, entries over ~64 MiB) are reported
-    /// here.
+    /// rejections (keys over 8 MiB, entries over ~64 MiB) and
+    /// [`VsdbError::ReadOnly`] are reported here.
     fn commit(&mut self) -> Result<()>;
 }
 
@@ -130,6 +130,10 @@ impl Mapx {
 
     #[inline(always)]
     pub(crate) fn new_in(ns: &Namespace) -> Self {
+        assert!(
+            !ns.is_read_only(),
+            "vsdb: cannot create a collection in read-only mode"
+        );
         Self {
             prefix: Prefix::Created(OnceLock::new()),
             ns: ns.clone(),
@@ -243,6 +247,9 @@ impl Mapx {
     /// are lost on restart; callers must re-register after recovery.
     #[inline(always)]
     pub(crate) fn lazy_delete(&self, key: &[u8]) {
+        if self.ns.is_read_only() {
+            return;
+        }
         self.ns.engine().lazy_delete(self.prefix_bytes(), key);
     }
 
@@ -252,6 +259,9 @@ impl Mapx {
         &self,
         keys: impl IntoIterator<Item = impl AsRef<[u8]>>,
     ) {
+        if self.ns.is_read_only() {
+            return;
+        }
         self.ns
             .engine()
             .lazy_delete_batch(self.prefix_bytes(), keys);
@@ -437,6 +447,12 @@ impl Mapx {
     pub(crate) fn clone_in(&self, ns: &Namespace) -> Result<Self> {
         const CLONE_CHUNK: usize = 4096;
         const CLONE_CHUNK_BYTES: usize = 16 * 1024 * 1024;
+
+        if ns.is_read_only() {
+            return Err(VsdbError::ReadOnly {
+                operation: "collection clone",
+            });
+        }
 
         let mut new_instance = Self::new_in(ns);
         let mut it = self.iter();

@@ -165,6 +165,11 @@ impl DagIdAllocator {
 /// gap of at most `DAG_ID_BATCH` entries).  No ID is ever reused,
 /// even after power failure.
 pub fn gen_dag_map_id_num() -> u128 {
+    assert_ne!(
+        vsdb_core::OpenMode::ReadOnly,
+        vsdb_core::vsdb_open_mode(),
+        "vsdb: DAG id allocation is unavailable in read-only mode"
+    );
     static ALLOC: LazyLock<Mutex<DagIdAllocator>> =
         LazyLock::new(|| Mutex::new(DagIdAllocator::init()));
 

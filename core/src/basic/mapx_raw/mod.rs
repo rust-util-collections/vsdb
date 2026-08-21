@@ -130,6 +130,11 @@ impl MapxRaw {
     /// Creates a new, empty `MapxRaw` in the current ambient namespace
     /// ([`Namespace::current`]; the default namespace unless inside a
     /// [`Namespace::scope`] block).
+    ///
+    /// # Panics
+    ///
+    /// Panics in read-only mode. Restore an existing handle with
+    /// [`from_meta`](Self::from_meta) instead.
     #[inline(always)]
     pub fn new() -> Self {
         MapxRaw {
@@ -140,6 +145,10 @@ impl MapxRaw {
     /// Creates a new, empty `MapxRaw` placed in `ns` — the explicit
     /// form of the ambient-scope placement performed by
     /// [`new`](Self::new) (naming mirrors `Box::new_in`).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `ns` is read-only.
     #[inline(always)]
     pub fn new_in(ns: &Namespace) -> Self {
         MapxRaw {
@@ -166,7 +175,8 @@ impl MapxRaw {
     ///
     /// # Errors
     ///
-    /// If an engine-level write fails.  The partially-written target is
+    /// Returns [`VsdbError::ReadOnly`] if `ns` is read-only, or an
+    /// engine-level write error. The partially-written target is
     /// reclaimed with a best-effort O(1) wipe; only if that wipe also
     /// fails is it abandoned as unreferenced, invisible garbage (the
     /// same residue a mid-`clone()` panic leaves behind).
@@ -371,13 +381,17 @@ impl MapxRaw {
     /// admission: keys are capped at 8 MiB and whole entries
     /// (key + value) at ~64 MiB. A direct `insert` treats engine
     /// rejection as fatal and panics; staging the same entry through
-    /// [`batch_begin`](Self::batch_begin) surfaces the rejection as an
+    /// [`batch_entry`](Self::batch_entry) surfaces the rejection as an
     /// `Err` from `commit` instead.
     ///
     /// # Arguments
     ///
     /// * `key` - The key to insert.
     /// * `value` - The value to associate with the key.
+    ///
+    /// # Panics
+    ///
+    /// Panics in read-only mode or if the engine rejects the write.
     #[inline(always)]
     pub fn insert(&mut self, key: impl AsRef<[u8]>, value: impl AsRef<[u8]>) {
         self.inner.insert(key.as_ref(), value.as_ref())
@@ -390,6 +404,10 @@ impl MapxRaw {
     /// # Arguments
     ///
     /// * `key` - The key to remove.
+    ///
+    /// # Panics
+    ///
+    /// Panics in read-only mode or if the engine rejects the write.
     #[inline(always)]
     pub fn remove(&mut self, key: impl AsRef<[u8]>) {
         self.inner.remove(key.as_ref())
@@ -405,13 +423,15 @@ impl MapxRaw {
     /// registrations in memory only, so keys still pending at process
     /// exit survive the restart.  Callers must be able to re-register
     /// (e.g. by re-running a ref-count rebuild) after recovery.
+    /// In read-only mode this operation is a no-op.
     #[doc(hidden)]
     #[inline(always)]
     pub fn lazy_delete(&self, key: impl AsRef<[u8]>) {
         self.inner.lazy_delete(key.as_ref())
     }
 
-    /// Batch version of [`lazy_delete`](Self::lazy_delete).
+    /// Batch version of [`lazy_delete`](Self::lazy_delete). In read-only
+    /// mode this operation is a no-op.
     #[doc(hidden)]
     #[inline(always)]
     pub fn lazy_delete_batch(&self, keys: impl IntoIterator<Item = impl AsRef<[u8]>>) {
@@ -491,6 +511,10 @@ impl MapxRaw {
     ///
     /// The wipe is a single atomic engine write batch (one range
     /// tombstone): all-or-nothing, even across a crash.
+    ///
+    /// # Panics
+    ///
+    /// Panics in read-only mode or if the engine rejects the batch.
     #[inline(always)]
     pub fn clear(&mut self) {
         self.inner.clear();
@@ -567,7 +591,17 @@ impl MapxRaw {
     /// [`from_meta`](Self::from_meta).
     ///
     /// Returns the [`InstanceId`] that can be passed to `from_meta`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VsdbError::ReadOnly`] in read-only mode, or an I/O/encoding
+    /// error if the metadata cannot be written.
     pub fn save_meta(&self) -> Result<InstanceId> {
+        if self.namespace().is_read_only() {
+            return Err(VsdbError::ReadOnly {
+                operation: "metadata save",
+            });
+        }
         let id = self.instance_id();
         let path = self.namespace().meta_path(id.map_id);
         fs::create_dir_all(path.parent().expect("has parent"))?;

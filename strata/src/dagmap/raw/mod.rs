@@ -36,7 +36,7 @@ mod test;
 use crate::{
     DagMapId, MapxOrdRawKey, Orphan,
     common::{
-        InstanceId,
+        InstanceId, ensure_writable,
         error::{Result, VsdbError},
     },
 };
@@ -407,6 +407,7 @@ impl DagMapRaw {
     /// corruption.
     #[inline(always)]
     pub fn prune(self) -> Result<DagHead> {
+        ensure_writable(&self.namespace(), "DAG pruning")?;
         self.prune_mainline()
     }
 
@@ -726,7 +727,7 @@ impl DagMapRaw {
     ///
     /// # Crash safety
     ///
-    /// This ordering mirrors [`prune_clear_consumed`](Self::prune_clear_consumed)'s
+    /// This ordering mirrors `prune_clear_consumed`'s
     /// self-healing pattern: nothing is unregistered from the parent's
     /// registry until this node (and everything beneath it) is already
     /// fully cleared. Each step is an independent write to a different
@@ -738,7 +739,7 @@ impl DagMapRaw {
     /// disk (a leak with no recovery path, since discovery is entirely
     /// registry-driven). With the registry entry removed last, a crash at
     /// any earlier point still leaves this node discoverable — and safely
-    /// reclaimable, since [`owned_or_residue`](Self::owned_or_residue)'s
+    /// reclaimable, since `owned_or_residue`'s
     /// residue arm accepts a `None` parent slot — through the parent's
     /// still-intact registry entry, so a retried `destroy()` or a
     /// subsequent `prune()` converges instead of leaking.

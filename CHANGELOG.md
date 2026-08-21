@@ -2,6 +2,49 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v16.3.8]
+
+### Added
+
+- **Process-wide read-only mode.** Call
+  `vsdb_configure(VsdbOptions::read_only(path))` before any other VSDB API,
+  then restore existing handles with `from_meta` or serde. The default and all
+  non-default namespaces open with the same capability. Point/range/history
+  reads, namespace inspection, vector search, Merkle proof/root computation,
+  and in-memory recovery of committed residual WAL records are supported
+  without changing the database tree.
+- `OpenMode`, `VsdbOptions`, `vsdb_configure`, `vsdb_open_mode`,
+  `Namespace::is_read_only`, and the structured `VsdbError::ReadOnly`
+  capability error are available from both crates' primary exports.
+
+### Changed
+
+- **mmdb upgraded to v4.3.0.** VSDB uses its native read-only open path, which
+  takes shared shard locks on Unix, recovers WAL state in memory, starts no
+  compaction workers, and leaves MANIFEST/WAL/SST files untouched.
+- Fallible write APIs reject read-only use before side effects. Historical
+  infallible collection mutations remain fail-fast and panic; maintenance-only
+  flush, deferred-delete, `VerMap::gc`, and automatic trie-cache writes are
+  no-ops, while explicit MPT/SMT cache saves return the capability error.
+  Creating a new collection now fails immediately instead of producing a
+  lazily unusable handle, and `clone_in` returns `VsdbError::ReadOnly` even for
+  an empty source.
+- `VerMap` restore no longer attempts durable branch/ref-count repair in
+  read-only mode; authoritative branch-table lookup and in-memory B+ tree
+  runtime reconstruction keep queries available without writes.
+- The minimum supported Rust version is now 1.89, matching mmdb 4.3.0.
+
+### Compatibility
+
+- The API change is additive and the VSDB on-disk format is unchanged.
+  Existing supported datasets remain writable as before. Read-only opens do
+  not persist format/allocator/lifecycle migrations or VSDB repair metadata;
+  datasets that require such maintenance should be opened writable on a
+  backup or staging copy before taking the immutable reader snapshot.
+- Added a complete [read-only deployment guide](strata/docs/read-only.md) covering
+  handle preparation, operation behavior, namespace scope, Unix locking,
+  filesystem snapshots, permissions, WAL recovery, and upgrade constraints.
+
 ## [v16.3.4]
 
 ### Changed

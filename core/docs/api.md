@@ -47,6 +47,48 @@ let dir = vsdb_get_base_dir();
 assert_eq!(dir.to_str().unwrap(), "/tmp/my_vsdb_data");
 ```
 
+## Read-only mode
+
+Read-only access is configured once for the whole process, before any other
+VSDB API. Restore a handle saved by an earlier writable process; do not create
+a new collection:
+
+```rust,no_run
+use vsdb_core::{
+    InstanceId, MapxRaw, OpenMode, VsdbError, VsdbOptions, vsdb_configure,
+    vsdb_open_mode,
+};
+
+# fn main() -> vsdb_core::Result<()> {
+vsdb_configure(VsdbOptions::read_only("/srv/my-app/vsdb"))?;
+assert_eq!(vsdb_open_mode(), OpenMode::ReadOnly);
+
+let id: InstanceId = "40960000".parse()?;
+let mut map = MapxRaw::from_meta(id)?;
+assert!(map.namespace().is_read_only());
+let _value = map.get(b"key");
+
+// Batches expose the capability failure without panicking.
+let mut batch = map.batch_entry();
+batch.insert(b"key", b"new value");
+assert!(matches!(
+    batch.commit(),
+    Err(VsdbError::ReadOnly { .. })
+));
+# Ok(())
+# }
+```
+
+The mode automatically applies to non-default namespaces opened while
+restoring handles. Point reads, ranges, iterators, properties, and in-memory
+WAL recovery are supported. Metadata saves, namespace administration writes,
+cloning, and batch commits return `VsdbError::ReadOnly`; infallible direct
+mutation APIs panic; flush and deferred-delete maintenance calls are no-ops.
+
+See the [complete read-only mode guide](read-only.md) for process
+locking, immutable snapshots, filesystem permissions, and upgrade/recovery
+constraints.
+
 ## Memory budget
 
 The default namespace sizes its caches from a fixed 2 GiB budget; every

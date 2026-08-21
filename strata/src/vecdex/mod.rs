@@ -9,7 +9,7 @@
 //!
 //! # Storage model (single-handle, crash-atomic)
 //!
-//! All persistent state lives in **one** [`MapxRaw`] handle, partitioned
+//! All persistent state lives in **one** [`vsdb_core::MapxRaw`] handle, partitioned
 //! by a leading tag byte:
 //!
 //! ```text
@@ -56,6 +56,7 @@ pub use dynamic::VecDexDyn;
 use crate::common::{
     InstanceId,
     ende::{KeyEnDe, ValueEnDe},
+    ensure_writable,
     error::{Result, VsdbError},
     staged::StagedRows,
 };
@@ -566,6 +567,7 @@ where
     /// the batch commit fails (in which case neither the on-disk state
     /// nor the in-memory state is modified).
     pub fn insert(&mut self, key: &K, vector: &[S]) -> Result<()> {
+        ensure_writable(&self.namespace(), "vector index insert")?;
         if vector.len() != self.config.dim {
             return Err(VsdbError::Other {
                 detail: format!(
@@ -619,6 +621,7 @@ where
     /// atomic transaction, and duplicate keys inside `items` collapse to
     /// the last occurrence.
     pub fn insert_batch(&mut self, items: &[(K, Vec<S>)]) -> Result<()> {
+        ensure_writable(&self.namespace(), "vector index batch insert")?;
         // Bounded chunks keep the staged set (and the engine batch)
         // at a sane size for arbitrarily large bulk loads.
         const CHUNK: usize = 64;
@@ -911,6 +914,7 @@ where
     /// If the batch commit fails, neither the on-disk state nor the
     /// in-memory state is modified.
     pub fn remove(&mut self, key: &K) -> Result<bool> {
+        ensure_writable(&self.namespace(), "vector index remove")?;
         let mut txn = Txn::new(&self.store, self.state.clone());
         if !Self::stage_remove(&mut txn, &self.config, key) {
             return Ok(false);
@@ -1073,6 +1077,7 @@ where
     /// graph is staged in memory before the commit, so expect transient
     /// memory proportional to the index size.
     pub fn compact(&mut self) -> Result<()> {
+        ensure_writable(&self.namespace(), "vector index compaction")?;
         use rand::seq::SliceRandom;
 
         let mut pairs: Vec<(K, Vec<S>)> = self.iter().collect();

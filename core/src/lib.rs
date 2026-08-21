@@ -8,6 +8,27 @@
 //! ## Storage backend
 //!
 //! The storage engine is MMDB, a pure-Rust LSM-Tree engine.
+//!
+//! ## Read-only mode
+//!
+//! Configure read-only access before any other VSDB API, then restore handles
+//! saved by a writable process:
+//!
+//! ```no_run
+//! use vsdb_core::{InstanceId, MapxRaw, VsdbOptions, vsdb_configure};
+//!
+//! # fn main() -> vsdb_core::Result<()> {
+//! vsdb_configure(VsdbOptions::read_only("/srv/my-app/vsdb"))?;
+//! let id: InstanceId = "40960000".parse()?;
+//! let map = MapxRaw::from_meta(id)?;
+//! assert!(map.namespace().is_read_only());
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! The setting is one-shot and process-wide, including every namespace.
+//! Queries and in-memory WAL recovery do not change the database tree;
+//! creation and mutation are unavailable.
 
 #![deny(warnings)]
 #![recursion_limit = "512"]
@@ -35,9 +56,10 @@ pub use basic::mapx_raw::MapxRaw;
 /// the database environment (e.g., `vsdb_flush`, `vsdb_set_base_dir`).
 pub use common::{
     BatchTrait, DEFAULT_NS_ID, GB, InstanceId, KB, MB, Namespace, NamespaceOpts, NsId,
-    NsInfo, RawBytes, RawKey, RawValue, vsdb_flush, vsdb_get_base_dir,
-    vsdb_get_custom_dir, vsdb_get_meta_dir, vsdb_get_system_dir, vsdb_meta_path,
-    vsdb_ns_close, vsdb_ns_destroy, vsdb_ns_list, vsdb_ns_relocate, vsdb_set_base_dir,
+    NsInfo, OpenMode, RawBytes, RawKey, RawValue, VsdbOptions, vsdb_configure,
+    vsdb_flush, vsdb_get_base_dir, vsdb_get_custom_dir, vsdb_get_meta_dir,
+    vsdb_get_system_dir, vsdb_meta_path, vsdb_ns_close, vsdb_ns_destroy, vsdb_ns_list,
+    vsdb_ns_relocate, vsdb_open_mode, vsdb_set_base_dir,
 };
 
 /// The unified, structured error type of the VSDB ecosystem.

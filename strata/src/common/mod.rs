@@ -21,6 +21,22 @@ use std::{any::type_name, fmt, fs, result::Result as StdResult};
 const TYPED_HANDLE_META_MAGIC: &[u8; 8] = b"VSTYPE02";
 const TYPED_HANDLE_TAG_LEN: usize = 8;
 
+pub(crate) fn ensure_writable(ns: &Namespace, operation: &'static str) -> Result<()> {
+    if ns.is_read_only() {
+        Err(error::VsdbError::ReadOnly { operation })
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn ensure_process_writable(operation: &'static str) -> Result<()> {
+    if vsdb_open_mode() == OpenMode::ReadOnly {
+        Err(error::VsdbError::ReadOnly { operation })
+    } else {
+        Ok(())
+    }
+}
+
 /// FNV-1a 64 hash of `T`'s full type path.
 ///
 /// The tag inherits `std::any::type_name`'s caveats: it is not guaranteed
@@ -45,11 +61,17 @@ fn type_tag<T: ?Sized>() -> u64 {
 ///
 /// The write is atomic (tmp + fsync + rename), so a crash mid-save can
 /// never leave a truncated meta file behind.
+///
+/// # Errors
+///
+/// Returns [`error::VsdbError::ReadOnly`] in read-only mode, or an
+/// encoding/storage error.
 pub fn save_instance_meta(id: InstanceId, value: &impl Serialize) -> Result<()> {
     let ns = match id.ns {
         None => Namespace::default_ns(),
         Some(n) => Namespace::open(n)?,
     };
+    ensure_writable(&ns, "metadata save")?;
     let path = ns.meta_path(id.map_id);
     fs::create_dir_all(path.parent().expect("has parent"))?;
     let bytes = postcard::to_allocvec(value)?;

@@ -1,6 +1,6 @@
 use crate::common::{
     BatchTrait, GB, PREFIX_ALLOC_START, PREFIX_SIZE, Pre, PreBytes, RawKey, RawValue,
-    VSDB, vsdb_freeze_base_dir, vsdb_get_base_dir,
+    VSDB, vsdb_freeze_base_dir, vsdb_get_base_dir, vsdb_is_read_only,
 };
 use mmdb::{BidiIterator, BlockCachePool, CompressionType, DB, DbOptions, WriteBatch};
 use parking_lot::{Mutex, RwLock};
@@ -155,16 +155,23 @@ static SYS_META_LOCK: Mutex<()> = Mutex::new(());
 
 pub struct MmDB {
     /// Sharded DB handlers (`shards` of them), owned by this engine —
-    /// dropping the engine closes every shard (flushing its WAL, joining
-    /// its compaction threads, releasing its LOCK file). In the default
-    /// namespace, shard 0 additionally holds the read-only legacy
-    /// allocator key from pre-v16 datasets.
+    /// dropping the engine closes every shard (flushing writable state,
+    /// joining compaction threads, and releasing LOCK files). In the
+    /// default namespace, shard 0 additionally holds the legacy allocator
+    /// key from pre-v16 datasets.
     dbs: Box<[DB]>,
+    read_only: bool,
 }
 
 impl MmDB {
-    /// Opens the DEFAULT-namespace engine rooted at the global base dir,
-    /// running the pre-v16 allocator-ceiling migration.
+    #[inline(always)]
+    pub(crate) fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    /// Opens the DEFAULT-namespace engine rooted at the global base dir.
+    /// Writable opens migrate the pre-v16 allocator ceiling; read-only
+    /// opens fold it into memory without modifying the store.
     pub(crate) fn new() -> Result<Self> {
         let base_dir = vsdb_get_base_dir();
         // Lock in the base dir so later `vsdb_set_base_dir` calls fail.
@@ -183,7 +190,11 @@ impl MmDB {
             .get(&META_KEY_PREFIX_ALLOCATOR)
             .c(d!())?
             .map(|v| crate::common::parse_prefix!(v));
-        migrate_ceiling(&base_dir, legacy)?;
+        if this.read_only {
+            initialize_read_only_allocator(&base_dir, legacy)?;
+        } else {
+            migrate_ceiling(&base_dir, legacy)?;
+        }
 
         Ok(this)
     }
@@ -193,33 +204,44 @@ impl MmDB {
     /// Namespace-generic: refuses datasets marked with a newer on-disk
     /// format, validates the persisted shard layout (a mismatched count
     /// would silently re-route every prefix), and writes the format
-    /// marker. Does NOT perform the legacy shard-0 migration — only the
-    /// default namespace can carry pre-v16 state (see [`MmDB::new`]).
+    /// marker on writable opens. Does NOT perform the legacy shard-0
+    /// migration — only the default namespace can carry pre-v16 state
+    /// (see [`MmDB::new`]). Read-only opens only validate existing state.
     pub(crate) fn open_at(
         root: &Path,
         shards: usize,
         sizing: EngineSizing,
     ) -> Result<Self> {
         debug_assert!((1..=64).contains(&shards));
-        fs::create_dir_all(root).c(d!())?;
-
-        check_format_version(root).c(d!())?;
-
+        let read_only = vsdb_is_read_only();
         let dir = root.join("mmdb");
-        fs::create_dir_all(&dir).c(d!())?;
-
-        let marker_present = root.join(FORMAT_VERSION_REL_PATH).exists();
         let sentinel_path = root.join(INIT_SENTINEL_REL_PATH);
-        let scan = scan_shard_layout(&dir, shards)?;
-        validate_shard_layout(&dir, shards, marker_present, &sentinel_path, &scan)?;
+        if read_only {
+            if sentinel_path.exists() {
+                return Err(eg!(format!(
+                    "dataset at {} has an initialization sentinel and cannot be opened read-only",
+                    root.display()
+                )));
+            }
+            validate_completed_dataset(root, shards, false)?;
+        } else {
+            fs::create_dir_all(root).c(d!())?;
+            check_format_version(root).c(d!())?;
+            fs::create_dir_all(&dir).c(d!())?;
 
-        // Brand-new root: raise the initialization sentinel durably
-        // BEFORE the first shard dir exists, so a crash mid-creation is
-        // provably a resumable create (see INIT_SENTINEL_REL_PATH).
-        if !marker_present && scan.present == 0 && !sentinel_path.exists() {
-            let _g = SYS_META_LOCK.lock();
-            fs::create_dir_all(sentinel_path.parent().expect("has parent")).c(d!())?;
-            write_file_durable(&sentinel_path, b"1")?;
+            let marker_present = root.join(FORMAT_VERSION_REL_PATH).exists();
+            let scan = scan_shard_layout(&dir, shards)?;
+            validate_shard_layout(&dir, shards, marker_present, &sentinel_path, &scan)?;
+
+            // Brand-new root: raise the initialization sentinel durably
+            // BEFORE the first shard dir exists, so a crash mid-creation is
+            // provably a resumable create (see INIT_SENTINEL_REL_PATH).
+            if !marker_present && scan.present == 0 && !sentinel_path.exists() {
+                let _g = SYS_META_LOCK.lock();
+                fs::create_dir_all(sentinel_path.parent().expect("has parent"))
+                    .c(d!())?;
+                write_file_durable(&sentinel_path, b"1")?;
+            }
         }
 
         // Shards are owned all the way through: if a later shard (or any
@@ -242,31 +264,37 @@ impl MmDB {
         let mut dbs_vec: Vec<DB> = Vec::with_capacity(shards);
         for i in 0..shards {
             let shard_dir = dir.join(format!("shard_{:02}", i));
-            fs::create_dir_all(&shard_dir).c(d!())?;
+            if !read_only {
+                fs::create_dir_all(&shard_dir).c(d!())?;
+            }
             let db = mmdb_open(&shard_dir, shards, sizing, &pool)?;
             dbs_vec.push(db);
         }
 
-        // Mark the root's on-disk format so an older binary pointed at
-        // it (base dir or namespace root alike) refuses to open.
-        write_format_marker(root)?;
-        // Initialization is complete and durably marked: retire the
-        // sentinel best-effort. Marker-present validation never consults
-        // it, so a stuck/unremovable sentinel must not brick reopen of an
-        // already-complete root.
-        let _ = fs::remove_file(&sentinel_path);
+        if !read_only {
+            // Mark the root's on-disk format so an older binary pointed at
+            // it (base dir or namespace root alike) refuses to open.
+            write_format_marker(root)?;
+            // Initialization is complete and durably marked: retire the
+            // sentinel best-effort. Marker-present validation never consults
+            // it, so a stuck/unremovable sentinel must not brick reopen of an
+            // already-complete root.
+            let _ = fs::remove_file(&sentinel_path);
+        }
 
         Ok(MmDB {
             dbs: dbs_vec.into_boxed_slice(),
+            read_only,
         })
     }
 
     /// Cleanly closes every shard and consumes the engine.
     ///
-    /// `DB::close` flushes the active memtable and syncs the WAL,
-    /// surfacing errors that plain `Drop` would swallow; the subsequent
-    /// drop of each shard then joins its compaction threads and releases
-    /// its LOCK file. All shards are closed even if one errors; the
+    /// For writable shards, `DB::close` flushes the active memtable and
+    /// syncs the WAL, surfacing errors that plain `Drop` would swallow.
+    /// Read-only shards release resources without flushing or syncing.
+    /// The subsequent drop releases each shard's LOCK file and joins any
+    /// compaction threads. All shards are closed even if one errors; the
     /// first error is returned.
     pub(crate) fn close(self) -> Result<()> {
         let mut ret = Ok(());
@@ -291,6 +319,10 @@ impl MmDB {
     /// typed layer keeps calling through its engine handle.
     #[inline(always)]
     pub(crate) fn alloc_prefix(&self) -> Pre {
+        assert!(
+            !self.read_only,
+            "vsdb: cannot allocate a collection prefix in read-only mode"
+        );
         alloc_prefix()
     }
 
@@ -301,6 +333,9 @@ impl MmDB {
     }
 
     pub(crate) fn flush(&self) {
+        if self.read_only {
+            return;
+        }
         for db in &self.dbs {
             db.flush().expect("vsdb: mmdb flush failed");
         }
@@ -327,6 +362,10 @@ impl MmDB {
     }
 
     pub(crate) fn insert(&self, meta_prefix: PreBytes, key: &[u8], value: &[u8]) {
+        assert!(
+            !self.read_only,
+            "vsdb: insert is unavailable in read-only mode"
+        );
         let full_key = make_full_key(&meta_prefix, key);
         self.shard(&meta_prefix)
             .put(&full_key, value)
@@ -334,6 +373,10 @@ impl MmDB {
     }
 
     pub(crate) fn remove(&self, meta_prefix: PreBytes, key: &[u8]) {
+        assert!(
+            !self.read_only,
+            "vsdb: remove is unavailable in read-only mode"
+        );
         let full_key = make_full_key(&meta_prefix, key);
         self.shard(&meta_prefix)
             .delete(&full_key)
@@ -351,6 +394,9 @@ impl MmDB {
     /// them, so deletion is best-effort per process lifetime and callers
     /// must re-register after recovery.
     pub(crate) fn lazy_delete(&self, meta_prefix: PreBytes, key: &[u8]) {
+        if self.read_only {
+            return;
+        }
         let full_key = make_full_key(&meta_prefix, key);
         self.shard(&meta_prefix).lazy_delete(&full_key);
     }
@@ -365,6 +411,9 @@ impl MmDB {
         meta_prefix: PreBytes,
         keys: impl IntoIterator<Item = impl AsRef<[u8]>>,
     ) {
+        if self.read_only {
+            return;
+        }
         let shard = self.shard(&meta_prefix);
         let full_keys: Vec<Vec<u8>> = keys
             .into_iter()
@@ -577,8 +626,27 @@ fn migrate_ceiling(base_dir: &Path, legacy: Option<Pre>) -> Result<()> {
     Ok(())
 }
 
+/// Initializes allocator validation state without reserving a new allocation
+/// window or modifying the ceiling file. A read-only process never allocates,
+/// so every prefix below the durable ceiling is already outside its candidate
+/// space and can be restored without an in-process reservation.
+fn initialize_read_only_allocator(base_dir: &Path, legacy: Option<Pre>) -> Result<()> {
+    let _x = PREFIX_ALLOC_LOCK.lock();
+    let filed = read_ceiling_file(&base_dir.join(PREFIX_CEILING_REL_PATH))?;
+    let ceiling = effective_initial_ceiling(filed, legacy)
+        .max(GLOBAL_CEILING.load(Ordering::Acquire));
+    GLOBAL_FLOOR.store(ceiling, Ordering::Release);
+    GLOBAL_CEILING.store(ceiling, Ordering::Release);
+    GLOBAL_COUNTER.store(ceiling, Ordering::Release);
+    Ok(())
+}
+
 /// Allocates a fresh, never-before-issued prefix.
 pub(crate) fn alloc_prefix() -> Pre {
+    assert!(
+        !vsdb_is_read_only(),
+        "vsdb: cannot allocate a collection prefix in read-only mode"
+    );
     loop {
         let candidate = alloc_prefix_candidate();
         // Normal operation records no reservations, so allocation
@@ -611,6 +679,30 @@ fn ensure_alloc_init() {
     }
     let _x = PREFIX_ALLOC_LOCK.lock();
     if GLOBAL_COUNTER.load(Ordering::Acquire) != 0 {
+        return;
+    }
+    if vsdb_is_read_only() {
+        let base_dir = vsdb_get_base_dir();
+        let filed = read_ceiling_file(&base_dir.join(PREFIX_CEILING_REL_PATH))
+            .expect("vsdb: allocator ceiling read failed");
+        if let Some(ceiling) = filed {
+            let ceiling = ceiling.max(PREFIX_ALLOC_START);
+            GLOBAL_FLOOR.store(ceiling, Ordering::Release);
+            GLOBAL_CEILING.store(ceiling, Ordering::Release);
+            GLOBAL_COUNTER.store(ceiling, Ordering::Release);
+        } else if base_dir.join("mmdb").exists() {
+            drop(_x);
+            LazyLock::force(&VSDB);
+            assert_ne!(
+                GLOBAL_COUNTER.load(Ordering::Acquire),
+                0,
+                "vsdb: read-only allocator validation state was not initialized"
+            );
+        } else {
+            GLOBAL_FLOOR.store(PREFIX_ALLOC_START, Ordering::Release);
+            GLOBAL_CEILING.store(PREFIX_ALLOC_START, Ordering::Release);
+            GLOBAL_COUNTER.store(PREFIX_ALLOC_START, Ordering::Release);
+        }
         return;
     }
     let base_dir = vsdb_get_base_dir();
@@ -1072,6 +1164,11 @@ impl BatchTrait for MmdbBatch<'_> {
     #[inline(always)]
     fn commit(&mut self) -> crate::common::error::Result<()> {
         let batch = std::mem::replace(&mut self.inner, WriteBatch::new());
+        if self.engine.read_only {
+            return Err(crate::common::error::VsdbError::ReadOnly {
+                operation: "batch commit",
+            });
+        }
         // `.c(d!())` attaches file/line context; the `?` conversion into
         // `VsdbError` preserves the complete ruc chain.
         self.engine.shard(&self.meta_prefix).write(batch).c(d!())?;
@@ -1246,6 +1343,7 @@ fn mmdb_open(
     pool: &Arc<BlockCachePool>,
 ) -> Result<DB> {
     let EngineSizing { mem_budget } = sizing;
+    let read_only = vsdb_is_read_only();
 
     // Per-shard sizes: divide totals by the shard count.
     //
@@ -1283,9 +1381,10 @@ fn mmdb_open(
     // shard would fall back to exactly this private capacity).
     let block_cache_size = per_shard_block_cache_size(&sizing, shards);
 
-    // Single compaction thread per shard (N shards = N parallel compactions)
+    // Writable opens use one compaction thread per shard. MMDB's native
+    // read-only open overrides this to zero and starts no background worker.
     let opts = DbOptions {
-        create_if_missing: true,
+        create_if_missing: !read_only,
         prefix_len: PREFIX_SIZE,
 
         // Per-level compression: LZ4 for L0-L1, ZSTD for L2+
@@ -1322,7 +1421,11 @@ fn mmdb_open(
         ..DbOptions::default()
     };
 
-    DB::open(opts, dir).c(d!())
+    if read_only {
+        DB::open_read_only_with_options(opts, dir).c(d!())
+    } else {
+        DB::open(opts, dir).c(d!())
+    }
 }
 
 #[cfg(test)]

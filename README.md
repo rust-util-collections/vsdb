@@ -2,7 +2,7 @@
 [![Crates.io](https://img.shields.io/crates/v/vsdb.svg)](https://crates.io/crates/vsdb)
 [![Docs.rs](https://docs.rs/vsdb/badge.svg)](https://docs.rs/vsdb)
 [![Rust](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml/badge.svg)](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml)
-[![Minimum rustc version](https://img.shields.io/badge/rustc-1.85+-lightgray.svg)](https://github.com/rust-util-collections/vsdb)
+[![Minimum rustc version](https://img.shields.io/badge/rustc-1.89+-lightgray.svg)](https://github.com/rust-util-collections/vsdb)
 
 # vsdb
 
@@ -78,6 +78,34 @@ code needs zero changes. Cross-namespace atomic transactions do not
 exist (separate WALs); a composite structure (`VerMap`, `SlotDex`, …)
 always lives wholly inside one namespace.
 
+### Read-only mode
+
+Open an existing VSDB universe without changing its directories, including
+when the tree is mounted read-only:
+
+```rust,no_run
+use vsdb::{InstanceId, Mapx, VsdbOptions, vsdb_configure};
+
+# fn main() -> vsdb::Result<()> {
+vsdb_configure(VsdbOptions::read_only("/srv/my-app/vsdb"))?;
+
+// An earlier writable process created the map and persisted this token.
+let id: InstanceId = "40960000".parse()?;
+let map = Mapx::<String, String>::from_meta(id)?;
+for (key, value) in map.iter() {
+    println!("{key}: {value}");
+}
+# Ok(())
+# }
+```
+
+Configuration is one-shot and process-wide: call it before any other VSDB
+access, and every automatically opened namespace inherits read-only mode.
+Reads include in-memory WAL recovery; creation and mutation are unavailable,
+while maintenance writes such as flushes and automatic trie-cache saves are
+skipped. See the [read-only mode guide](strata/docs/read-only.md) for locking,
+snapshots, error/panic behavior, and recovery constraints.
+
 ### Memory sizing
 
 Memory budgets are fixed and predictable: the default namespace uses
@@ -148,6 +176,7 @@ vsdb (workspace)
 ## Documentation
 
 - [API Examples](strata/docs/api.md) — Mapx, MapxOrd, VerMap, MptCalc/SmtCalc, VerMapWithProof, SlotDex
+- [Read-only Mode](strata/docs/read-only.md) — configuration, supported operations, locking, and snapshots
 - [Versioned Module — Architecture & Internals](strata/docs/versioned.md)
 - [VecDex — HNSW Vector Index](strata/docs/vecdex.md)
 - [Changelog](CHANGELOG.md)

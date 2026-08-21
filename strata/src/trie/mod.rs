@@ -71,7 +71,7 @@ pub use smt::SmtProof;
 
 use std::{mem, path::Path};
 
-use crate::common::error::Result;
+use crate::common::{ensure_process_writable, error::Result};
 use mpt::{TrieMut, TrieRo};
 use node::NodeHandle;
 use smt::mutation::SmtMut;
@@ -251,12 +251,19 @@ impl MptCalc {
     ///
     /// The cache is **disposable**: if the file is lost or corrupted,
     /// the trie can always be rebuilt from the authoritative store.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VsdbError::ReadOnly`](vsdb_core::VsdbError::ReadOnly) when
+    /// VSDB was configured read-only, or a trie/I/O error if serialization
+    /// fails.
     pub fn save_cache(
         &mut self,
         dir: &Path,
         cache_id: u64,
         sync_tag: u64,
     ) -> Result<()> {
+        ensure_process_writable("MPT cache save")?;
         let hash = self.root_hash()?;
         let path = dir.join(format!("mpt_cache_{}.bin", cache_id));
         Ok(cache::save_to_file(&self.root, sync_tag, &hash, &path)?)
@@ -443,12 +450,19 @@ impl SmtCalc {
     // =================================================================
 
     /// Saves the SMT to a file for fast restoration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VsdbError::ReadOnly`](vsdb_core::VsdbError::ReadOnly) when
+    /// VSDB was configured read-only, or a trie/I/O error if serialization
+    /// fails.
     pub fn save_cache(
         &mut self,
         dir: &Path,
         cache_id: u64,
         sync_tag: u64,
     ) -> Result<()> {
+        ensure_process_writable("SMT cache save")?;
         let hash = self.root_hash()?;
         let path = dir.join(format!("smt_cache_{}.bin", cache_id));
         Ok(smt::cache::save_to_file(

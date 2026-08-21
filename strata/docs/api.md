@@ -72,6 +72,46 @@ Key rules:
   `NamespaceOpts { mem_budget_mb, .. }` so the sum stays inside the process's
   memory line.
 
+## Read-only mode
+
+Configure read-only access once at process startup, then restore handles saved
+by an earlier writer:
+
+```rust,no_run
+use vsdb::{
+    InstanceId, Mapx, OpenMode, VerMap, VsdbError, VsdbOptions,
+    vsdb_configure, vsdb_open_mode,
+};
+
+# fn main() -> vsdb::Result<()> {
+vsdb_configure(VsdbOptions::read_only("/srv/my-app/vsdb"))?;
+assert_eq!(vsdb_open_mode(), OpenMode::ReadOnly);
+
+let map_id: InstanceId = "40960000".parse()?;
+let map = Mapx::<String, String>::from_meta(map_id)?;
+assert!(map.namespace().is_read_only());
+let _ = map.get(&"key".to_owned());
+
+let versioned_id: InstanceId = "40960001".parse()?;
+let mut history = VerMap::<u64, String>::from_meta(versioned_id)?;
+let main = history.branch_id("main").unwrap();
+let _ = history.get(main, &7)?;
+assert!(matches!(
+    history.insert(main, &8, &"blocked".to_owned()),
+    Err(VsdbError::ReadOnly { .. })
+));
+# Ok(())
+# }
+```
+
+The setting covers every namespace opened by the process. Query APIs and
+in-memory WAL recovery are supported without filesystem changes. Fallible
+write APIs return `VsdbError::ReadOnly`, infallible collection mutations panic,
+maintenance-only flush/GC/automatic cache writes are skipped, and explicit
+trie-cache saves return the capability error. See the
+[read-only mode guide](read-only.md) for the full operation matrix,
+locking and snapshot rules, and recovery constraints.
+
 ## Mapx
 
 `Mapx` is a hash map-like data structure that stores key-value pairs.

@@ -49,7 +49,8 @@ use super::{MptCalc, MptProof, SmtCalc, SmtProof, TrieCalc};
 ///   inside [`merkle_root`](Self::merkle_root) (specifically, after
 ///   `sync_to_commit` completes).  Errors are silently ignored because
 ///   the cache is **disposable**: the authoritative data lives in the
-///   underlying [`VerMap`].
+///   underlying [`VerMap`]. Auto-save is disabled when the map's namespace
+///   is read-only; a missing/stale cache is rebuilt in memory only.
 ///
 /// No manual `save_cache` / `load_cache` calls are needed.
 pub struct VerMapWithProof<K, V, T: TrieCalc> {
@@ -290,10 +291,11 @@ where
         // committed state (before any dirty overlay is applied).
         // This avoids an expensive clone in `Drop`.
         self.cache_dirty = true;
-        if self
-            .trie
-            .save_cache(&self.map.namespace().system_dir(), self.cache_id, target)
-            .is_ok()
+        if !self.map.namespace().is_read_only()
+            && self
+                .trie
+                .save_cache(&self.map.namespace().system_dir(), self.cache_id, target)
+                .is_ok()
         {
             self.cache_dirty = false;
         }
@@ -455,6 +457,9 @@ impl<K, V, T: TrieCalc> VerMapWithProof<K, V, T> {
     /// `sync_to_commit`, so this is a no-op.  It only fires when
     /// `cache_dirty` is still set (e.g. the eager save failed).
     fn try_save_cache(&mut self) {
+        if self.map.namespace().is_read_only() {
+            return;
+        }
         let Some(tag) = self.sync_commit else {
             return;
         };

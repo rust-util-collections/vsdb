@@ -36,6 +36,13 @@ impl<K, V> VerMap<K, V> {
     }
 
     pub(crate) fn repair_commit_ref_counts_if_needed(&mut self) {
+        // Read-only restores must not rewrite the branch-name index or
+        // crash-recovery metadata. Queries use the authoritative branch
+        // table directly where needed, while tree runtime state is rebuilt
+        // separately below without changing durable data.
+        if self.namespace().is_read_only() {
+            return;
+        }
         self.rebuild_branch_name_index();
         if self.gc_dirty.get_value()
             || self.commits.iter().any(|(_, c)| c.ref_count == 0)

@@ -3,6 +3,7 @@ name = "vsdb"
 version = "16.3.7"
 authors = ["hui.fan@mail.ru"]
 edition = "2024"
+rust-version = "1.89"
 description = "A std-collection-like database"
 homepage = "https://github.com/rust-util-collections/vsdb"
 repository = "https://github.com/rust-util-collections/vsdb/tree/master/strata"

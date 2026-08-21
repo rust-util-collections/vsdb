@@ -6,7 +6,7 @@
 //!
 //! # Storage model (single-handle, crash-atomic)
 //!
-//! All persistent state lives in **one** [`MapxRaw`] handle, partitioned
+//! All persistent state lives in **one** [`vsdb_core::MapxRaw`] handle, partitioned
 //! by a leading tag byte:
 //!
 //! ```text
@@ -35,7 +35,7 @@ pub use slot_type::SlotType;
 use crate::{
     KeyEnDeOrdered,
     common::{
-        InstanceId,
+        InstanceId, ensure_writable,
         error::Result,
         staged::{StagedRows, prefix_successor},
     },
@@ -454,6 +454,7 @@ where
     /// If the batch commit fails, neither the on-disk state nor the
     /// in-memory caches are modified.
     pub fn insert(&mut self, slot: S, k: K) -> Result<()> {
+        ensure_writable(&self.namespace(), "slot index insert")?;
         let slot = self.to_storage_slot(slot);
 
         let ekey = entry_key(&slot, &k);
@@ -529,6 +530,7 @@ where
     where
         I: IntoIterator<Item = (S, K)>,
     {
+        ensure_writable(&self.namespace(), "slot index batch insert")?;
         let mut staged = StagedRows::new();
         // Levels staged for growth during this batch (appended to
         // `self.levels` only after the commit succeeds).
@@ -965,7 +967,7 @@ where
     ///
     /// # Note
     ///
-    /// Pagination is **offset-based** (see [`get_entries_by_page`]): pages
+    /// Pagination is **offset-based** (see [`Self::get_entries_by_page`]): pages
     /// are not stable across concurrent inserts/removes between requests.
     pub fn get_entries_by_page_slot(
         &self,

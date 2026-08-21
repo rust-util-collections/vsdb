@@ -75,6 +75,14 @@ pub(crate) struct BranchState {
 ///    storage engine's background compaction.  [`gc`](Self::gc) is only
 ///    needed for crash recovery or a forced full sweep.
 ///
+/// # Read-only mode
+///
+/// A restored `VerMap` remains fully queryable in process-wide read-only
+/// mode, including branch lookup, historical reads, diffs, and logs. Mutating
+/// methods that return `Result` fail with [`VsdbError::ReadOnly`], and
+/// [`gc`](Self::gc) becomes a no-op because it cannot persist repairs or
+/// deferred-deletion registrations.
+///
 /// # Quick start
 ///
 /// ```
@@ -228,6 +236,10 @@ impl<K, V> VerMap<K, V> {
     pub fn namespace(&self) -> crate::common::Namespace {
         self.tree.namespace()
     }
+
+    fn ensure_writable(&self, operation: &'static str) -> Result<()> {
+        crate::common::ensure_writable(&self.namespace(), operation)
+    }
 }
 
 impl<K, V> VerMap<K, V>
@@ -341,6 +353,7 @@ where
     /// The previous main branch becomes an ordinary branch (deletable).
     /// The new main branch is protected from deletion.
     pub fn set_main_branch(&mut self, branch: BranchId) -> Result<()> {
+        self.ensure_writable("main branch update")?;
         self.get_branch(branch)?;
         *self.main_branch.get_mut() = branch;
         Ok(())
@@ -359,6 +372,7 @@ where
         name: &str,
         source_branch: BranchId,
     ) -> Result<BranchId> {
+        self.ensure_writable("branch creation")?;
         if self.branch_name_exists(name) {
             return Err(VsdbError::BranchAlreadyExists {
                 name: name.to_string(),
@@ -401,6 +415,7 @@ where
     /// B+ tree nodes are reclaimed inline through the same ref-count
     /// cascade; [`gc`](Self::gc) is only needed to recover from a crash.
     pub fn delete_branch(&mut self, branch: BranchId) -> Result<()> {
+        self.ensure_writable("branch deletion")?;
         if branch == self.main_branch.get_value() {
             return Err(VsdbError::CannotDeleteMainBranch);
         }
@@ -433,7 +448,13 @@ where
 
     /// Looks up a branch by name, returning its ID if it exists.
     pub fn branch_id(&self, name: &str) -> Option<BranchId> {
-        self.branch_names.get(&name.to_string())
+        if self.namespace().is_read_only() {
+            self.branches
+                .iter()
+                .find_map(|(id, state)| (state.name == name).then_some(id))
+        } else {
+            self.branch_names.get(&name.to_string())
+        }
     }
 
     /// Returns the name of a branch given its ID.
@@ -458,6 +479,7 @@ where
 
     /// Inserts a key-value pair into the working state of `branch`.
     pub fn insert(&mut self, branch: BranchId, key: &K, value: &V) -> Result<()> {
+        self.ensure_writable("versioned map insert")?;
         let mut state = self.get_branch(branch)?;
         let old_root = state.dirty_root;
         state.dirty_root = self.tree.insert(old_root, &key.to_bytes(), &value.encode());
@@ -476,6 +498,7 @@ where
 
     /// Removes a key from the working state of `branch`.
     pub fn remove(&mut self, branch: BranchId, key: &K) -> Result<()> {
+        self.ensure_writable("versioned map remove")?;
         let mut state = self.get_branch(branch)?;
         let old_root = state.dirty_root;
         state.dirty_root = self.tree.remove(old_root, &key.to_bytes());
@@ -494,6 +517,7 @@ where
     /// Commits the current working state of `branch`, creating a new
     /// immutable [`Commit`].  Returns the commit ID.
     pub fn commit(&mut self, branch: BranchId) -> Result<CommitId> {
+        self.ensure_writable("versioned map commit")?;
         let state = self.get_branch(branch)?;
 
         // Mark dirty before any structural mutation so that crash
@@ -544,6 +568,7 @@ where
     /// Discards uncommitted changes, resetting the working state to the
     /// branch head.
     pub fn discard(&mut self, branch: BranchId) -> Result<()> {
+        self.ensure_writable("working-state discard")?;
         let state = self.get_branch(branch)?;
         let old_dirty = state.dirty_root;
         let root = if state.head == NO_COMMIT {
@@ -573,6 +598,7 @@ where
     /// Call [`gc`](Self::gc) only to recover from a crash or force a full
     /// B+ tree sweep.
     pub fn rollback_to(&mut self, branch: BranchId, target: CommitId) -> Result<()> {
+        self.ensure_writable("branch rollback")?;
         let state = self.get_branch(branch)?;
         let _ = self.get_commit_inner(target)?;
 
@@ -698,6 +724,7 @@ where
     /// histories, the merge bases). Merging branches whose combined
     /// live data exceeds available memory is not supported.
     pub fn merge(&mut self, source: BranchId, target: BranchId) -> Result<CommitId> {
+        self.ensure_writable("branch merge")?;
         if source == target {
             return Err(VsdbError::Other {
                 detail: "cannot merge a branch into itself".into(),
@@ -1032,7 +1059,13 @@ where
     /// 2. **Forced full sweep** — guarantees that every unreachable
     ///    B+ tree node is registered for compaction, even if a prior
     ///    cascade was incomplete.
+    ///
+    /// This is a no-op in read-only mode: recovery metadata cannot be
+    /// rewritten and deferred deletions cannot be registered there.
     pub fn gc(&mut self) {
+        if self.namespace().is_read_only() {
+            return;
+        }
         // 1. Crash recovery: rebuild ref counts if the dirty flag is
         //    set, or if any commit has ref_count == 0 (migration from
         //    pre-ref-count data).

@@ -28,7 +28,7 @@
 use crate::common::{
     engine::{Engine, EngineSizing, validate_completed_dataset, write_file_durable},
     error::{Result, VsdbError},
-    vsdb_freeze_base_dir, vsdb_get_base_dir,
+    vsdb_freeze_base_dir, vsdb_get_base_dir, vsdb_is_read_only,
 };
 use parking_lot::Mutex;
 use ruc::pnk;
@@ -508,8 +508,8 @@ struct NsInner {
     path: PathBuf,
     /// The engine, owned: when the last `Arc<NsInner>` drops (only ever
     /// via [`vsdb_ns_close`], which proves exclusivity first), the
-    /// engine drops with it — flushing WALs, joining compaction
-    /// threads, and releasing LOCK files.
+    /// engine drops with it — flushing writable state, joining any
+    /// compaction threads, and releasing LOCK files.
     engine: Engine,
 }
 
@@ -528,22 +528,50 @@ impl fmt::Debug for Namespace {
 }
 
 impl Namespace {
-    /// The implicit default namespace (the global engine). Infallible,
-    /// registry-independent.
+    /// The implicit default namespace (the global engine), independent of the
+    /// non-default namespace registry.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the default engine cannot open its configured dataset. In
+    /// read-only mode the dataset must already be complete and supported.
     pub fn default_ns() -> Namespace {
         DEFAULT_NS.clone()
+    }
+
+    /// Whether this namespace was opened without write capability.
+    ///
+    /// Open mode is process-wide, so every namespace in one process reports
+    /// the same value.
+    #[inline(always)]
+    pub fn is_read_only(&self) -> bool {
+        self.0.engine.is_read_only()
     }
 
     /// Starts a NEW placement group: a fresh `NsId` on every call, root
     /// derived from the id — collision-free (ids are never reused).
     /// Zero parameters; tuning lives in [`Self::create_with`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VsdbError::ReadOnly`] in read-only mode.
     pub fn create() -> Result<Namespace> {
         Self::create_with(NamespaceOpts::default())
     }
 
     /// [`Self::create`] with explicit options (volume placement, shard
     /// count, memory budget).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VsdbError::ReadOnly`] in read-only mode, or a storage/
+    /// namespace error if the requested placement cannot be created.
     pub fn create_with(opts: NamespaceOpts) -> Result<Namespace> {
+        if vsdb_is_read_only() {
+            return Err(VsdbError::ReadOnly {
+                operation: "namespace creation",
+            });
+        }
         // The registry materializes under the default base dir, pinning
         // it — same rule as every other derived path.
         vsdb_freeze_base_dir();
@@ -621,7 +649,9 @@ impl Namespace {
     /// auto-open namespaces via the ids embedded in metas.
     ///
     /// `open(DEFAULT_NS_ID)` short-circuits to [`Self::default_ns`]
-    /// without touching the registry. Idempotent in-process.
+    /// without touching the registry. Idempotent in-process. In read-only
+    /// mode this validates and opens the existing namespace without writing
+    /// lifecycle state or format metadata; pending/incomplete roots fail.
     pub fn open(id: NsId) -> Result<Namespace> {
         if id == DEFAULT_NS_ID {
             return Ok(Self::default_ns());
@@ -717,9 +747,12 @@ impl Namespace {
         p
     }
 
-    /// Flushes this namespace's engine to disk.
+    /// Flushes this namespace's engine to disk. This is a no-op for a
+    /// read-only namespace.
     pub fn flush(&self) {
-        self.0.engine.flush()
+        if !self.is_read_only() {
+            self.0.engine.flush()
+        }
     }
 
     /// One engine-property reading per shard, in shard order — the
@@ -813,6 +846,12 @@ fn validated_shards(rec: &NsRecord) -> Result<usize> {
 fn open_record_locked(base: &Path, rec: &NsRecord, root: &Path) -> Result<Namespace> {
     let shards = validated_shards(rec)?;
     let lifecycle = load_lifecycle(base, rec.id)?;
+    if vsdb_is_read_only() && lifecycle == Some(NsLifecycleState::Pending) {
+        return Err(ns_err(format!(
+            "namespace {} is pending initialization and cannot be opened read-only",
+            rec.id
+        )));
+    }
     if lifecycle != Some(NsLifecycleState::Pending) {
         // `None` is a legacy record from before lifecycle sidecars. A
         // complete root migrates in place; an absent legacy root is
@@ -822,7 +861,7 @@ fn open_record_locked(base: &Path, rec: &NsRecord, root: &Path) -> Result<Namesp
     }
     let sizing = sizing_for(rec.mem_budget_mb.map(|v| v as usize));
     let engine = Engine::open_at(root, shards, sizing).map_err(VsdbError::from)?;
-    if lifecycle != Some(NsLifecycleState::Established) {
+    if !vsdb_is_read_only() && lifecycle != Some(NsLifecycleState::Established) {
         save_lifecycle(base, rec.id, NsLifecycleState::Established)?;
     }
     let ns = Namespace(Arc::new(NsInner {
@@ -865,6 +904,11 @@ pub fn vsdb_ns_list() -> Result<Vec<NsInfo>> {
 /// first). A crash between the registry update and the tree removal
 /// leaves an orphaned-but-harmless dir.
 pub fn vsdb_ns_destroy(id: NsId) -> Result<()> {
+    if vsdb_is_read_only() {
+        return Err(VsdbError::ReadOnly {
+            operation: "namespace destruction",
+        });
+    }
     if id == DEFAULT_NS_ID {
         return Err(ns_err("the default namespace cannot be destroyed"));
     }
@@ -906,6 +950,11 @@ pub fn vsdb_ns_destroy(id: NsId) -> Result<()> {
 ///
 /// The target must not be open in this process.
 pub fn vsdb_ns_relocate(id: NsId, new_path: impl AsRef<Path>) -> Result<()> {
+    if vsdb_is_read_only() {
+        return Err(VsdbError::ReadOnly {
+            operation: "namespace relocation",
+        });
+    }
     if id == DEFAULT_NS_ID {
         return Err(ns_err(
             "the default namespace's root is the base dir; relocate it \

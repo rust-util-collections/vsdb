@@ -111,6 +111,11 @@ macro_rules! define_map_wrapper {
 
             /// Creates a new instance in the current ambient namespace
             /// ([`Namespace::current`](vsdb_core::Namespace::current)).
+            ///
+            /// # Panics
+            ///
+            /// Panics in read-only mode. Restore an existing handle with
+            /// [`from_meta`](Self::from_meta) instead.
             #[inline(always)]
             pub fn new() -> Self {
                 Self {
@@ -122,6 +127,10 @@ macro_rules! define_map_wrapper {
             /// Creates a new instance placed in `ns` — the explicit form
             /// of the ambient-scope placement performed by
             /// [`new`](Self::new).
+            ///
+            /// # Panics
+            ///
+            /// Panics if `ns` is read-only.
             #[inline(always)]
             pub fn new_in(ns: &$crate::common::Namespace) -> Self {
                 Self {
@@ -149,8 +158,9 @@ macro_rules! define_map_wrapper {
             ///
             /// # Errors
             ///
-            /// If an engine-level write fails.  The partially-written
-            /// target is reclaimed with a best-effort O(1) wipe; only
+            /// Returns [`VsdbError::ReadOnly`](vsdb_core::VsdbError::ReadOnly)
+            /// if `ns` is read-only, or an engine-level write error. The
+            /// partially-written target is reclaimed with a best-effort O(1) wipe; only
             /// if that wipe also fails is it abandoned as unreferenced,
             /// invisible garbage (the same residue a mid-`clone()`
             /// panic leaves behind).
@@ -164,6 +174,9 @@ macro_rules! define_map_wrapper {
                 })
             }
 
+            /// # Panics
+            ///
+            /// Panics in read-only mode or if the engine rejects the batch.
             #[inline(always)]
             pub fn clear(&mut self) {
                 self.inner.clear();
@@ -193,6 +206,12 @@ macro_rules! define_map_wrapper {
             ///
             /// Returns the [`InstanceId`](vsdb_core::InstanceId) that
             /// should be passed to `from_meta`.
+            ///
+            /// # Errors
+            ///
+            /// Returns [`VsdbError::ReadOnly`](vsdb_core::VsdbError::ReadOnly)
+            /// in read-only mode, or an I/O/encoding error if the metadata
+            /// cannot be written.
             pub fn save_meta(&self) -> $crate::common::error::Result<$crate::common::InstanceId> {
                 let id = self.instance_id();
                 $crate::common::save_instance_meta(id, self)?;

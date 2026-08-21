@@ -21,6 +21,15 @@ cargo add vsdb_core
 
 For detailed API examples, see [API Examples](docs/api.md).
 
+## Read-only access
+
+Call `vsdb_configure(VsdbOptions::read_only(path))` before any other VSDB API,
+then restore existing `MapxRaw` handles with `from_meta` or serde. The setting
+is one-shot and process-wide, including every namespace. Reads and in-memory
+WAL recovery leave the database tree unchanged; creation and mutation are
+unavailable. See the [read-only mode guide](docs/read-only.md) for complete
+semantics and deployment guidance.
+
 ## Storage Engine
 
 The storage backend is MMDB, a pure-Rust LSM-Tree engine.

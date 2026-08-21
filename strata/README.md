@@ -38,11 +38,26 @@ map.insert(&"key".to_string(), &"value".to_string());
 assert_eq!(map.get(&"key".to_string()), Some("value".to_string()));
 ```
 
+## Read-only access
+
+Use `vsdb_configure(VsdbOptions::read_only(path))` at process startup, then
+restore handles saved by a writer with `from_meta` or serde. The mode covers
+the default namespace and every non-default namespace opened in that process;
+it performs reads and WAL recovery without modifying the database tree.
+
+Collection creation and mutation are unavailable. Fallible write APIs return
+`VsdbError::ReadOnly`; legacy infallible mutation APIs panic; maintenance-only
+flush, GC, deferred-delete, and automatic trie-cache writes are skipped;
+explicit trie-cache saves return the capability error. See
+the [read-only mode guide](docs/read-only.md) for a complete example,
+locking rules, immutable-snapshot requirements, and the exact API behavior.
+
 For detailed examples covering all collection types (VerMap, Merkle tries, VecDex, SlotDex, and more), see the **[API Examples](docs/api.md)**.
 
 ## Documentation
 
 - [API Examples](docs/api.md) — code examples for all collection types
+- [Read-only Mode](docs/read-only.md) — configuration, supported operations, locking, and snapshots
 - [Versioned Module — Architecture & Internals](docs/versioned.md) — COW B+ tree, commit DAG, three-way merge, automatic GC
 - [VecDex — HNSW Vector Index](docs/vecdex.md) — configuration, distance metrics, filtered search, storage architecture
 

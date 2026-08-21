@@ -26,7 +26,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         LazyLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
 };
 
@@ -77,7 +77,9 @@ static VSDB_CUSTOM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     vsdb_freeze_base_dir();
     let mut d = VSDB_BASE_DIR.lock().clone();
     d.push("__CUSTOM__");
-    pnk!(fs::create_dir_all(&d));
+    if !vsdb_is_read_only() {
+        pnk!(fs::create_dir_all(&d));
+    }
     d
 });
 
@@ -86,14 +88,18 @@ static VSDB_SYSTEM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     vsdb_freeze_base_dir();
     let mut d = VSDB_BASE_DIR.lock().clone();
     d.push("__SYSTEM__");
-    pnk!(fs::create_dir_all(&d));
+    if !vsdb_is_read_only() {
+        pnk!(fs::create_dir_all(&d));
+    }
     d
 });
 
 static VSDB_META_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     let mut d = VSDB_SYSTEM_DIR.clone();
     d.push("__instance_meta__");
-    pnk!(fs::create_dir_all(&d));
+    if !vsdb_is_read_only() {
+        pnk!(fs::create_dir_all(&d));
+    }
     d
 });
 
@@ -105,6 +111,7 @@ static VSDB_META_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
 /// This directory (`{system_dir}/__instance_meta__/`) is used to persist
 /// lightweight metadata (e.g. serialized handles) for individual VSDB
 /// instances, keyed by their unique `instance_id`.
+/// In read-only mode this returns the path without creating the directory.
 #[inline(always)]
 pub fn vsdb_get_meta_dir() -> &'static Path {
     VSDB_META_DIR.as_path()
@@ -126,7 +133,17 @@ pub fn vsdb_meta_path(instance_id: u64) -> PathBuf {
 /// target — a crash mid-write can never leave a truncated file at `path`
 /// (POSIX `rename` is atomic within a filesystem). Instance metas are
 /// written under the SWMR contract, so the fixed tmp name cannot race.
+///
+/// # Errors
+///
+/// Returns [`VsdbError::ReadOnly`] before touching the filesystem in
+/// read-only mode, or a storage error if the replacement fails.
 pub fn atomic_write_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    if vsdb_is_read_only() {
+        return Err(VsdbError::ReadOnly {
+            operation: "atomic file write",
+        });
+    }
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
@@ -235,7 +252,9 @@ fn gen_data_dir() -> PathBuf {
             );
             s
         });
-    pnk!(fs::create_dir_all(&d));
+    if !vsdb_is_read_only() {
+        pnk!(fs::create_dir_all(&d));
+    }
     PathBuf::from(d)
 }
 
@@ -255,6 +274,8 @@ fn gen_data_dir() -> PathBuf {
 /// would silently take the app's root pointer with it. Users need to
 /// remember exactly one thing: the base dir.
 ///
+/// In read-only mode this returns the path without creating the directory.
+///
 /// # Returns
 ///
 /// A `&'static Path` to the custom directory.
@@ -272,6 +293,7 @@ pub fn vsdb_get_custom_dir() -> &'static Path {
 ///
 /// This directory (`{base_dir}/__SYSTEM__/`) is reserved for VSDB internal use
 /// (instance metadata, trie caches, ID counters). Not intended for external use.
+/// In read-only mode this returns the path without creating the directory.
 #[inline(always)]
 pub fn vsdb_get_system_dir() -> &'static Path {
     VSDB_SYSTEM_DIR.as_path()
@@ -295,6 +317,79 @@ pub fn vsdb_get_base_dir() -> PathBuf {
 /// by the first database initialization).
 static BASE_DIR_FROZEN: AtomicBool = AtomicBool::new(false);
 
+/// Access capability selected for the whole VSDB universe in this process.
+///
+/// VSDB handles persist namespace ids but not an open mode, so the mode is
+/// deliberately process-wide: automatic namespace opens during deserialization
+/// cannot accidentally regain write capability. The selection is one-shot;
+/// separate reader and writer processes are required for different modes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum OpenMode {
+    /// Normal read-write operation.
+    #[default]
+    ReadWrite = 0,
+    /// Open existing data without modifying the store.
+    ///
+    /// Existing handles can be restored and queried, including data recovered
+    /// from residual WAL records in memory. No directory, format marker,
+    /// allocator state, metadata, WAL, SST, or automatic trie cache is written.
+    ReadOnly = 1,
+}
+
+/// One-shot process configuration for a VSDB universe.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct VsdbOptions {
+    /// Root of the default namespace and universe-wide metadata.
+    pub base_dir: PathBuf,
+    /// Capability used by the default and every non-default namespace.
+    pub open_mode: OpenMode,
+}
+
+impl VsdbOptions {
+    /// Configures a normal read-write universe at `base_dir`.
+    pub fn new(base_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            base_dir: base_dir.into(),
+            open_mode: OpenMode::ReadWrite,
+        }
+    }
+
+    /// Configures an existing universe for read-only access.
+    ///
+    /// The database must already be complete. All namespaces opened by the
+    /// process inherit this capability; per-namespace mixed modes are not
+    /// supported.
+    pub fn read_only(base_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            base_dir: base_dir.into(),
+            open_mode: OpenMode::ReadOnly,
+        }
+    }
+}
+
+static OPEN_MODE: AtomicU8 = AtomicU8::new(OpenMode::ReadWrite as u8);
+
+/// Returns the process-wide access mode.
+///
+/// The default is [`OpenMode::ReadWrite`] until [`vsdb_configure`] selects a
+/// mode. Calling this getter does not freeze the configuration.
+#[inline(always)]
+pub fn vsdb_open_mode() -> OpenMode {
+    if OPEN_MODE.load(Ordering::Acquire) == OpenMode::ReadOnly as u8 {
+        OpenMode::ReadOnly
+    } else {
+        OpenMode::ReadWrite
+    }
+}
+
+#[inline(always)]
+pub(crate) fn vsdb_is_read_only() -> bool {
+    vsdb_open_mode() == OpenMode::ReadOnly
+}
+
 /// Freezes the base directory without touching the process environment.
 ///
 /// Called by the engine when the database is first opened so that any
@@ -305,6 +400,45 @@ static BASE_DIR_FROZEN: AtomicBool = AtomicBool::new(false);
 #[inline(always)]
 pub(crate) fn vsdb_freeze_base_dir() {
     BASE_DIR_FROZEN.store(true, Ordering::Release);
+}
+
+/// Selects the base directory and access capability before first use.
+///
+/// This is the entry point for [`OpenMode::ReadOnly`]. The choice is one-shot
+/// and process-wide: it applies to the default namespace and every
+/// non-default namespace opened through a restored handle. Call it at the
+/// start of `main`, before spawning threads and before any other VSDB API.
+///
+/// Read-only mode opens only complete existing datasets. Reads and in-memory
+/// WAL recovery are supported without filesystem changes. Fallible write
+/// operations return [`VsdbError::ReadOnly`]; legacy infallible collection
+/// mutations panic; maintenance-only flush and deferred-delete calls are
+/// no-ops.
+///
+/// Like [`vsdb_set_base_dir`], this publishes `VSDB_BASE_DIR` in the process
+/// environment for child processes.
+///
+/// # Errors
+///
+/// Returns [`VsdbError::BaseDirFrozen`] if configuration was already selected
+/// or any API that materializes/freezes a VSDB path was used first.
+///
+/// # Safety contract
+///
+/// Updating a process environment with concurrently running threads is not
+/// safe. The caller must invoke this during single-threaded startup, before
+/// spawning threads.
+pub fn vsdb_configure(options: VsdbOptions) -> Result<()> {
+    if BASE_DIR_FROZEN.swap(true, Ordering::AcqRel) {
+        return Err(VsdbError::BaseDirFrozen);
+    }
+
+    OPEN_MODE.store(options.open_mode as u8, Ordering::Release);
+    // SAFETY: guarded by the one-shot freeze above; the public contract
+    // requires configuration before other threads can access the environment.
+    unsafe { env::set_var(BASE_DIR_VAR, &options.base_dir) }
+    *VSDB_BASE_DIR.lock() = options.base_dir;
+    Ok(())
 }
 
 /// Sets the base directory path for VSDB manually.
@@ -328,17 +462,7 @@ pub(crate) fn vsdb_freeze_base_dir() {
 /// This function will return an error if the base directory has already been initialized.
 #[inline(always)]
 pub fn vsdb_set_base_dir(dir: impl AsRef<Path>) -> Result<()> {
-    if BASE_DIR_FROZEN.swap(true, Ordering::AcqRel) {
-        Err(VsdbError::BaseDirFrozen)
-    } else {
-        // SAFETY: Guarded by the `BASE_DIR_FROZEN` swap — runs at most
-        // once.  The documented contract above requires the caller to
-        // invoke this before spawning threads, so no concurrent
-        // `getenv`/`setenv` can observe the mutation.
-        unsafe { env::set_var(BASE_DIR_VAR, dir.as_ref().as_os_str()) }
-        *VSDB_BASE_DIR.lock() = dir.as_ref().to_path_buf();
-        Ok(())
-    }
+    vsdb_configure(VsdbOptions::new(dir.as_ref()))
 }
 
 /// Flushes all data to disk — the default namespace and every open
@@ -347,8 +471,12 @@ pub fn vsdb_set_base_dir(dir: impl AsRef<Path>) -> Result<()> {
 /// This function triggers a flush operation on the underlying database,
 /// ensuring that all pending writes are persisted to disk. This operation
 /// may take a long time to complete, depending on the amount of data to be flushed.
+/// It is a no-op when [`vsdb_open_mode`] is [`OpenMode::ReadOnly`].
 #[inline(always)]
 pub fn vsdb_flush() {
+    if vsdb_is_read_only() {
+        return;
+    }
     VSDB.flush();
     namespace::flush_all_open();
 }

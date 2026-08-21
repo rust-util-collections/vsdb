@@ -12,6 +12,27 @@
 //!
 //! This crate is the primary entry point for most users.
 //!
+//! # Read-only mode
+//!
+//! Configure read-only access before any other VSDB API, then restore handles
+//! saved by a writable process:
+//!
+//! ```no_run
+//! use vsdb::{InstanceId, Mapx, VsdbOptions, vsdb_configure};
+//!
+//! # fn main() -> vsdb::Result<()> {
+//! vsdb_configure(VsdbOptions::read_only("/srv/my-app/vsdb"))?;
+//! let id: InstanceId = "40960000".parse()?;
+//! let map = Mapx::<String, String>::from_meta(id)?;
+//! assert!(map.namespace().is_read_only());
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! The setting is one-shot and process-wide, including every namespace.
+//! Query APIs and in-memory WAL recovery leave the database tree unchanged;
+//! creation and mutation are unavailable.
+//!
 //! # Why core collections don't have `len()`
 //!
 //! The underlying LSM-Tree engine (mmdb) does not support atomic
@@ -129,9 +150,9 @@ pub use vecdex::{
 // Re-export vsdb_core crate for advanced users, plus the user-facing
 // environment management functions.
 pub use vsdb_core::{
-    self, DEFAULT_NS_ID, InstanceId, Namespace, NamespaceOpts, NsId, NsInfo, vsdb_flush,
-    vsdb_get_base_dir, vsdb_ns_close, vsdb_ns_destroy, vsdb_ns_list, vsdb_ns_relocate,
-    vsdb_set_base_dir,
+    self, DEFAULT_NS_ID, InstanceId, Namespace, NamespaceOpts, NsId, NsInfo, OpenMode,
+    VsdbOptions, vsdb_configure, vsdb_flush, vsdb_get_base_dir, vsdb_ns_close,
+    vsdb_ns_destroy, vsdb_ns_list, vsdb_ns_relocate, vsdb_open_mode, vsdb_set_base_dir,
 };
 
 // Persistent B+ tree (moved from vsdb_core).

@@ -43,7 +43,7 @@ pub struct SmtProof {
     /// proving non-membership.  `None`: the slot is empty.
     pub leaf: Option<([u8; 32], Vec<u8>)>,
     /// Sibling hashes from depth 0 (root level) to the terminal
-    /// subtree, at most [`TREE_DEPTH`] entries.
+    /// subtree, at most `TREE_DEPTH` entries.
     pub siblings: Vec<[u8; 32]>,
 }
 

@@ -61,6 +61,13 @@ pub enum VsdbError {
     /// can no longer be changed.
     #[error("VSDB base directory is frozen; set it before first use")]
     BaseDirFrozen,
+    /// The requested operation requires write capability, but this
+    /// process opened its VSDB universe in read-only mode.
+    #[error("operation {operation} is unavailable in read-only mode")]
+    ReadOnly {
+        /// The operation rejected before performing any side effect.
+        operation: &'static str,
+    },
     /// Encoding or decoding failed (postcard serialization).
     #[error("encoding error: {0}")]
     Encoding(#[from] postcard::Error),
