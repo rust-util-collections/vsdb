@@ -1,10 +1,14 @@
 use criterion::{Criterion, criterion_group};
 use std::{
+    hint::black_box,
     ops::Bound,
     sync::atomic::{AtomicUsize, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use vsdb::versioned::map::VerMap;
+
+const READ_ENTRIES: u64 = 5_000;
+const REMOVE_BATCH_SIZE: u64 = 1_024;
 
 fn setup() {
     let dir = format!("/tmp/vsdb_bench_versioned/{}", rand::random::<u128>());
@@ -33,42 +37,61 @@ fn single_branch_crud(c: &mut Criterion) {
         })
     });
 
-    // Commit so reads hit committed data.
-    m.commit(main).unwrap();
+    // Read fixtures are fixed even when Criterion skips the insert benchmark.
+    let mut read_map: VerMap<u64, Vec<u8>> = VerMap::new();
+    let read_main = read_map.main_branch();
+    for n in 0..READ_ENTRIES {
+        read_map.insert(read_main, &n, &vec![0u8; 128]).unwrap();
+    }
+    read_map.commit(read_main).unwrap();
 
     group.bench_function("get (hit)", |b| {
-        let max = counter.load(Ordering::SeqCst) as u64;
         let mut i = 0u64;
         b.iter(|| {
-            i = (i + 1) % max;
-            m.get(main, &i).unwrap();
+            i = (i + 1) % READ_ENTRIES;
+            black_box(read_map.get(read_main, &i).unwrap());
         })
     });
 
     group.bench_function("get (miss)", |b| {
-        let base = counter.load(Ordering::SeqCst) as u64 + 1_000_000;
         let mut i = 0u64;
         b.iter(|| {
-            i += 1;
-            m.get(main, &(base + i)).unwrap();
+            i = (i + 1) % READ_ENTRIES;
+            black_box(read_map.get(read_main, &(READ_ENTRIES + i)).unwrap());
         })
     });
 
     group.bench_function("contains_key", |b| {
-        let max = counter.load(Ordering::SeqCst) as u64;
         let mut i = 0u64;
         b.iter(|| {
-            i = (i + 1) % max;
-            m.contains_key(main, &i).unwrap();
+            i = (i + 1) % READ_ENTRIES;
+            black_box(read_map.contains_key(read_main, &i).unwrap());
         })
     });
 
     group.bench_function("remove", |b| {
-        // Remove from a high range that was previously inserted.
-        let rm = AtomicUsize::new(counter.load(Ordering::SeqCst));
-        b.iter(|| {
-            let n = rm.fetch_sub(1, Ordering::SeqCst) as u64;
-            m.remove(main, &n).unwrap();
+        let mut remove_map: VerMap<u64, Vec<u8>> = VerMap::new();
+        let remove_main = remove_map.main_branch();
+        for n in 0..REMOVE_BATCH_SIZE {
+            remove_map.insert(remove_main, &n, &vec![0u8; 128]).unwrap();
+        }
+        remove_map.commit(remove_main).unwrap();
+        b.iter_custom(|iters| {
+            let mut elapsed = Duration::ZERO;
+            let mut remaining = iters;
+            while remaining > 0 {
+                let count = remaining.min(REMOVE_BATCH_SIZE);
+                // Restore the same committed fixture outside timing instead
+                // of retaining another history snapshot for every batch.
+                remove_map.discard(remove_main).unwrap();
+                let start = Instant::now();
+                for n in 0..count {
+                    remove_map.remove(remove_main, black_box(&n)).unwrap();
+                }
+                elapsed += start.elapsed();
+                remaining -= count;
+            }
+            elapsed
         })
     });
 

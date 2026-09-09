@@ -8,6 +8,8 @@ use std::{
 };
 use vsdb::basic::mapx_ord::MapxOrd;
 
+const REMOVE_BATCH_SIZE: u64 = 1_024;
+
 fn read_write(c: &mut Criterion) {
     let mut group = c.benchmark_group("vsdb::mapx_ord / sequential");
     group
@@ -38,17 +40,23 @@ fn read_write(c: &mut Criterion) {
     });
 
     group.bench_function(" remove (hit) ", |b| {
+        let mut remove_db: MapxOrd<usize, usize> = MapxOrd::new();
         b.iter_custom(|iters| {
-            let mut remove_db: MapxOrd<usize, usize> = MapxOrd::new();
-            for n in 0..iters {
-                let n = n as usize;
-                remove_db.insert(&n, &n);
+            let mut elapsed = Duration::ZERO;
+            let mut remaining = iters;
+            while remaining > 0 {
+                let count = remaining.min(REMOVE_BATCH_SIZE) as usize;
+                for n in 0..count {
+                    remove_db.insert(&n, &n);
+                }
+                let start = Instant::now();
+                for n in 0..count {
+                    remove_db.remove(black_box(&n));
+                }
+                elapsed += start.elapsed();
+                remaining -= count as u64;
             }
-            let start = Instant::now();
-            for n in 0..iters {
-                black_box(remove_db.remove(&(n as usize)));
-            }
-            start.elapsed()
+            elapsed
         })
     });
 
@@ -63,19 +71,25 @@ fn random_read_write(c: &mut Criterion) {
 
     let mut rng = rand::rng();
     let mut db: MapxOrd<usize, usize> = MapxOrd::new();
-    let mut keys = vec![];
     group.bench_function(" random write ", |b| {
         b.iter(|| {
             let n = rng.random::<u64>() as usize;
             db.insert(&n, &n);
-            keys.push(n);
         })
     });
 
     group.bench_function(" random read ", |b| {
+        let mut read_db: MapxOrd<usize, usize> = MapxOrd::new();
+        let keys: Vec<_> = (0..5000)
+            .map(|_| {
+                let n = rng.random::<u64>() as usize;
+                read_db.insert(&n, &n);
+                n
+            })
+            .collect();
         b.iter(|| {
-            let index: usize = rng.random_range(0..keys.len());
-            black_box(keys.get(index).map(|key| db.get(key)));
+            let index = rng.random_range(0..keys.len());
+            black_box(read_db.get(&keys[index]));
         })
     });
 

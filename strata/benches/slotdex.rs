@@ -1,9 +1,13 @@
 use criterion::{Criterion, criterion_group};
 use rand::random;
-use std::hint::black_box;
+use std::{
+    hint::black_box,
+    time::{Duration, Instant},
+};
 use vsdb::SlotDex64;
 
 const DATA_SIZE: u32 = 100_000;
+const REMOVE_BATCH_SIZE: u64 = 1_024;
 
 type V = Vec<u8>;
 
@@ -85,14 +89,24 @@ fn slot_write(c: &mut Criterion) {
 
     group.bench_function("remove", |b| {
         let mut db: SlotDex64<V> = SlotDex64::new(16, false);
-        // Pre-populate
-        for i in 0..DATA_SIZE as u64 {
-            db.insert(i, i.to_be_bytes().to_vec()).unwrap();
-        }
-        let mut i = 0u64;
-        b.iter(|| {
-            db.remove(i, &i.to_be_bytes().to_vec());
-            i += 1;
+        b.iter_custom(|iters| {
+            let mut elapsed = Duration::ZERO;
+            let mut remaining = iters;
+            while remaining > 0 {
+                let count = remaining.min(REMOVE_BATCH_SIZE);
+                let entries: Vec<_> =
+                    (0..count).map(|i| (i, i.to_be_bytes().to_vec())).collect();
+                for (i, value) in &entries {
+                    db.insert(*i, value.clone()).unwrap();
+                }
+                let start = Instant::now();
+                for (i, value) in &entries {
+                    db.remove(black_box(*i), black_box(value));
+                }
+                elapsed += start.elapsed();
+                remaining -= count;
+            }
+            elapsed
         });
         db.clear();
     });

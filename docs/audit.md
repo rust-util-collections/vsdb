@@ -11,12 +11,6 @@
 
 ## Open
 
-### [MEDIUM] benchmarks: read and removal fixtures depend on other timed workloads
-- **Where**: `core/benches/units/basic_mapx_raw.rs`, `strata/benches/units/basic_mapx.rs`, `strata/benches/units/basic_mapx_ord.rs`, `strata/benches/versioned.rs`, `strata/benches/slotdex.rs`
-- **What**: name-filtered random reads and versioned hit queries start from an empty sibling-write fixture and panic; sequential reads/removes can exhaust their fixture and measure misses.
-- **Why**: Criterion filters workloads independently and chooses independent iteration counts. A sibling benchmark is not fixture setup.
-- **Suggested fix**: independent nonempty read fixtures and fresh removal data outside timing; run each affected workload using Criterion test mode.
-
 ### [LOW] benchmarks: warm trie root timing includes a complete tree clone
 - **Where**: `strata/benches/trie_bench.rs` (MPT/SMT warm root benchmarks)
 - **What**: each supposedly warm root query clones and drops the full tree inside the measured closure.

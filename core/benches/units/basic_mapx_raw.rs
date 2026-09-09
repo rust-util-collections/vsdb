@@ -1,7 +1,12 @@
 use criterion::{Criterion, criterion_group};
 use rand::RngExt;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    hint::black_box,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 use vsdb_core::MapxRaw;
+
+const READ_ENTRIES: usize = 5_000;
 
 fn read_write(c: &mut Criterion) {
     let mut group = c.benchmark_group("vsdb_core::mapx_raw / sequential");
@@ -20,9 +25,15 @@ fn read_write(c: &mut Criterion) {
     });
 
     group.bench_function(" read ", |b| {
+        let mut read_db = MapxRaw::new();
+        for n in 0..READ_ENTRIES {
+            read_db.insert(n.to_be_bytes(), n.to_be_bytes());
+        }
+        let mut read_n = 0usize;
         b.iter(|| {
-            let n = i.fetch_sub(1, Ordering::SeqCst);
-            db.get(n.to_be_bytes());
+            let n = read_n;
+            read_n = (read_n + 1) % READ_ENTRIES;
+            black_box(read_db.get(n.to_be_bytes()));
         })
     });
     group.finish();
@@ -36,20 +47,26 @@ fn random_read_write(c: &mut Criterion) {
 
     let mut rng = rand::rng();
     let mut db = MapxRaw::new();
-    let mut keys = vec![];
     group.bench_function(" random write ", |b| {
         b.iter(|| {
             let n = rng.random::<u64>() as usize;
             let key = n.to_be_bytes();
             db.insert(key, key);
-            keys.push(key);
         })
     });
 
     group.bench_function(" random read ", |b| {
+        let mut read_db = MapxRaw::new();
+        let keys: Vec<_> = (0..READ_ENTRIES)
+            .map(|_| {
+                let key = (rng.random::<u64>() as usize).to_be_bytes();
+                read_db.insert(key, key);
+                key
+            })
+            .collect();
         b.iter(|| {
-            let index: usize = rng.random_range(0..keys.len());
-            keys.get(index).map(|key| db.get(key));
+            let index = rng.random_range(0..keys.len());
+            black_box(read_db.get(keys[index]));
         })
     });
     group.finish();

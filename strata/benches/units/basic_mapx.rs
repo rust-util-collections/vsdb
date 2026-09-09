@@ -3,9 +3,11 @@ use rand::RngExt;
 use std::{
     hint::black_box,
     sync::atomic::{AtomicUsize, Ordering},
-    time::Instant,
+    time::{Duration, Instant},
 };
 use vsdb::basic::mapx::Mapx;
+
+const REMOVE_BATCH_SIZE: u64 = 1_024;
 
 fn read_write(c: &mut Criterion) {
     let mut group = c.benchmark_group("vsdb::mapx / sequential");
@@ -47,19 +49,11 @@ fn read_write(c: &mut Criterion) {
         })
     });
 
-    // Pre-populate for contains_key / remove / iter
-    let base = i.load(Ordering::SeqCst);
-    for n in base..(base + 5000) {
-        db.insert(&[n; 2], &vec![n; 128]);
-    }
-    i.store(base + 5000, Ordering::SeqCst);
-
     group.bench_function(" contains_key ", |b| {
-        let max = i.load(Ordering::SeqCst);
         let mut k = 0usize;
         b.iter(|| {
-            k = (k + 1) % max;
-            black_box(db.contains_key(&[k; 2]));
+            k = (k + 1) % 5000;
+            black_box(read_db.contains_key(&[k; 2]));
         })
     });
 
@@ -78,18 +72,23 @@ fn read_write(c: &mut Criterion) {
     });
 
     group.bench_function(" remove (hit) ", |b| {
+        let mut remove_db = Mapx::new();
         b.iter_custom(|iters| {
-            let mut remove_db = Mapx::new();
-            for n in 0..iters {
-                let n = n as usize;
-                remove_db.insert(&[n; 2], &vec![n; 128]);
+            let mut elapsed = Duration::ZERO;
+            let mut remaining = iters;
+            while remaining > 0 {
+                let count = remaining.min(REMOVE_BATCH_SIZE) as usize;
+                for n in 0..count {
+                    remove_db.insert(&[n; 2], &vec![n; 128]);
+                }
+                let start = Instant::now();
+                for n in 0..count {
+                    remove_db.remove(black_box(&[n; 2]));
+                }
+                elapsed += start.elapsed();
+                remaining -= count as u64;
             }
-            let start = Instant::now();
-            for n in 0..iters {
-                let n = n as usize;
-                black_box(remove_db.remove(&[n; 2]));
-            }
-            start.elapsed()
+            elapsed
         })
     });
 
@@ -104,20 +103,27 @@ fn random_read_write(c: &mut Criterion) {
 
     let mut rng = rand::rng();
     let mut db = Mapx::new();
-    let mut keys = vec![];
     group.bench_function(" random write ", |b| {
         b.iter(|| {
             let n = rng.random::<u64>() as usize;
             let key = [n; 2];
             db.insert(&key, &vec![n; 128]);
-            keys.push(key);
         })
     });
 
     group.bench_function(" random read ", |b| {
+        let mut read_db = Mapx::new();
+        let keys: Vec<_> = (0..5000)
+            .map(|_| {
+                let n = rng.random::<u64>() as usize;
+                let key = [n; 2];
+                read_db.insert(&key, &vec![n; 128]);
+                key
+            })
+            .collect();
         b.iter(|| {
-            let index: usize = rng.random_range(0..keys.len());
-            black_box(keys.get(index).map(|key| db.get(key)));
+            let index = rng.random_range(0..keys.len());
+            black_box(read_db.get(&keys[index]));
         })
     });
     group.finish();

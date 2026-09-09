@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Give read benchmarks independent fixtures and replenish removal fixtures outside timing, so filtered and long-running workloads keep measuring hits.
+
 - Keep cosine distance finite and scale invariant for finite extreme-magnitude f32/f64 vectors while retaining the ordinary fast path.
 
 - Allow read-only access to fully initialized datasets with a stale initialization sentinel, without changing any files.
