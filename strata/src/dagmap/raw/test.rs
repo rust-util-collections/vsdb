@@ -434,19 +434,20 @@ fn prune_crash_mid_merge_head_view_is_exact_and_rerun_converges() {
     let (genesis, i1, head) = build_prune_fixture();
 
     // Simulate a crash in the middle of phase 2: only the oldest
-    // mainline node (i1) has been folded into the genesis; nothing
+    // mainline node (i1) has been staged; nothing
     // cleared, children not yet re-parented.
-    let mut linebuf = head.prune_collect_mainline().unwrap();
+    let linebuf = head.prune_collect_mainline().unwrap();
     assert_eq!(linebuf.len(), 2); // [i1, genesis]
-    let (folded, genesis_part) = linebuf.split_at_mut(1);
-    DagMapRaw::prune_fold_node(&mut genesis_part[0], &folded[0]);
+    let mut staged = StagedRows::new();
+    DagMapRaw::prune_fold_node(&mut staged, &linebuf[0]);
 
     // The head's view must be exactly the pre-prune view: overlay
     // resolution stops above the genesis for every folded key.
     assert_merged_view(&head); // (pre-prune view == merged view by construction)
-    // The tombstone fold already dropped `kg` from the genesis, which is
-    // read-equivalent (i1 still shadows it) …
-    assert!(genesis.data.get("kg").is_none());
+    // Before publication the genesis retains its complete original view.
+    assert_eq!(genesis.get("kg").as_deref(), Some(b"doomed".as_slice()));
+    assert!(genesis.get("k1").is_none());
+    drop(staged); // abandoned batch: no durable changes
     assert!(head.get("kg").is_none());
     // … and non-folded nodes still hold their own data.
     assert_eq!(i1.data.get("k1").unwrap().as_slice(), b"v1");
@@ -467,7 +468,7 @@ fn prune_crash_after_merge_genesis_meta_sees_merged_state() {
     // Freeze right after phase 2 (merge complete, nothing cleared,
     // children not yet re-parented).
     let mut linebuf = head.prune_collect_mainline().unwrap();
-    head.prune_merge_into_genesis(&mut linebuf);
+    head.prune_merge_into_genesis(&mut linebuf).unwrap();
 
     // The genesis — under its pre-prune instance ID — already serves the
     // complete merged view; the head still serves its exact view too.
@@ -482,6 +483,29 @@ fn prune_crash_after_merge_genesis_meta_sees_merged_state() {
 }
 
 #[test]
+fn prune_retry_does_not_regress_reparented_child() {
+    let (_genesis, _i1, mut head) = build_prune_fixture();
+    let mut child = DagMapRaw::new(Some(&mut head));
+    let child_id = head.child_id(&child).unwrap();
+    let mut linebuf = head.prune_collect_mainline().unwrap();
+    head.prune_merge_into_genesis(&mut linebuf).unwrap();
+    let genesis = linebuf.last_mut().unwrap();
+    // SAFETY: serialized immediately; all accesses are sequential.
+    *child.parent.get_mut() = Some(unsafe { genesis.shadow() });
+    genesis.children.insert(child_id, &child);
+    assert_merged_view(&child);
+
+    // A second interruption while retrying the oldest part of the fold
+    // must not roll back values already visible through the new parent.
+    let mut staged = StagedRows::new();
+    DagMapRaw::prune_fold_node(&mut staged, &linebuf[0]);
+    assert_merged_view(&child);
+    drop(staged);
+    assert_merged_view(&head.prune().unwrap());
+    assert_merged_view(&child);
+}
+
+#[test]
 fn prune_crash_mid_reparent_both_children_views_exact() {
     let (_genesis, _i1, mut head) = build_prune_fixture();
 
@@ -492,7 +516,7 @@ fn prune_crash_mid_reparent_both_children_views_exact() {
 
     // Phases 0-2, then flip ONLY c1 (simulated crash inside phase 3).
     let mut linebuf = head.prune_collect_mainline().unwrap();
-    head.prune_merge_into_genesis(&mut linebuf);
+    head.prune_merge_into_genesis(&mut linebuf).unwrap();
     let genesis = linebuf.last_mut().unwrap();
     // Exactly what phase 3 does for one child: re-point the parent slot
     // and re-register under the genesis with the child's REAL registry id.
@@ -547,7 +571,7 @@ fn prune_interrupted_before_clear_residue_is_reclaimed_by_next_prune() {
     let pending: std::collections::HashSet<vsdb_core::common::RawBytes> =
         head.children.iter().map(|(id, _)| id).collect();
     DagMapRaw::prune_destroy_side_branches(&mut linebuf, &mainline_ids, &pending);
-    head.prune_merge_into_genesis(&mut linebuf);
+    head.prune_merge_into_genesis(&mut linebuf).unwrap();
     head.prune_reparent_children(linebuf.last_mut().unwrap());
 
     // Canonical recovery point: the surviving child (now under genesis).

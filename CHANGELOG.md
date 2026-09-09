@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v16.3.9]
+
+### Fixed
+
+- DagMap publishes a whole mainline merge atomically, so an interrupted prune
+  and its retries cannot expose intermediate ancestor values through genesis
+  metadata or already re-parented children. Staging uses memory proportional
+  to the distinct keys changed by the consumed mainline; APIs and stored
+  formats remain compatible.
+
 ## [v16.3.8]
 
 ### Added

@@ -17,12 +17,6 @@
 - **Why**: component prefixes can occupy different shards. `gc_dirty` repairs counts only over a complete graph; a missing new HEAD hides its already-durable ancestors and recovery can delete those ancestors as unreachable. ID counters and main-branch changes need the same ordering discipline.
 - **Suggested fix**: per-shard WAL durability fences before reference publication and reclamation, durable dirty brackets/counters, and fail-closed recovery for incomplete graphs; validate durable ordering without equating process termination with power loss.
 
-### [CRITICAL] dagmap: retried mainline merge exposes intermediate values to surviving children
-- **Where**: `strata/src/dagmap/raw/mod.rs` (`prune_merge_into_genesis`, `prune_fold_node`)
-- **What**: the genesis is overwritten one row at a time. An interrupted merge leaves its saved handle with a mixed snapshot; after a prior partial reparent, retrying the fold can replace a surviving child's newest inherited value with an intermediate ancestor's value.
-- **Why**: `pending_reparent` prevents destroying survivors, but neither it nor the final flush prevents a second crash while older rows have overwritten the genesis and head rows have not yet restored them.
-- **Suggested fix**: stage the entire oldest-to-head fold in one atomic genesis batch; test abandoned staging and retry after partial reparent. Keep existing namespace flush barriers and tombstone precedence.
-
 ### [HIGH] engine: streaming iterator failures are hidden as end of data
 - **Where**: `core/src/common/engine/mmdb.rs` (`iter`, `range`, `MmdbIter`)
 - **What**: boxing the filtered `BidiIterator` discards access to its error status; lazy SST read failures become ordinary iterator exhaustion.

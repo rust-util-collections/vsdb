@@ -16,9 +16,11 @@ parent slot is ownership truth.
 **DG4 Parent slot ownership** — fresh Orphan per `new()`; shadow parent; destroy only own slot.
 **DG5 Registry vs ownership** — walks gate on `child.parent` points back (or None residue);
 foreign registry entries dropped only, never destroyed via foreign walk.
-**DG6 Prune crash order** — destroy branches → merge → flush → re-parent → flush →
+**DG6 Prune crash order** — destroy branches → atomic whole-mainline merge → flush → re-parent → flush →
 clear → flush → unregister. Clear order parent→children→data so re-prune refuses half-head.
 In-place genesis enrich. Flushes scoped to DAG ns. Crash at phase boundary keeps value-exact survivors (`prune_crash_*`).
+Merge staging must also preserve children already re-parented by a prior
+interrupted prune; never publish intermediate ancestor values during retry.
 
 ## Bugs
 

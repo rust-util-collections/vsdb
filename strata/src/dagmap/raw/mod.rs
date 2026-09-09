@@ -38,6 +38,7 @@ use crate::{
     common::{
         InstanceId, ensure_writable,
         error::{Result, VsdbError},
+        staged::StagedRows,
     },
 };
 use serde::{Deserialize, Serialize, de};
@@ -405,6 +406,12 @@ impl DagMapRaw {
     /// registry and is reclaimed by the next prune's side-branch
     /// destruction — a crash costs at most temporarily leaked space, never
     /// corruption.
+    ///
+    /// The complete mainline fold is staged in memory and published as one
+    /// atomic batch. Temporary memory is proportional to the distinct keys
+    /// changed by the consumed mainline nodes. This also keeps children
+    /// already re-parented by an interrupted prune on a complete snapshot
+    /// while a retry is being prepared.
     #[inline(always)]
     pub fn prune(self) -> Result<DagHead> {
         ensure_writable(&self.namespace(), "DAG pruning")?;
@@ -448,7 +455,7 @@ impl DagMapRaw {
 
         // Phase 2: fold the whole mainline into the genesis WITHOUT
         // clearing anything (read-transparent, idempotent).
-        self.prune_merge_into_genesis(&mut linebuf);
+        self.prune_merge_into_genesis(&mut linebuf)?;
 
         // Barrier A: the merged genesis must be durable before any child
         // is re-pointed at it. Writes to different shards *within this
@@ -571,34 +578,33 @@ impl DagMapRaw {
     /// Prune phase 2: fold every mainline node's data into the genesis,
     /// oldest → newest, clearing **nothing**.
     ///
-    /// In-place enrichment of the genesis is invisible to reads through
-    /// the head: overlay resolution stops at the topmost holder of a key,
-    /// and every key written here still has its holder above the genesis.
-    /// Tombstones are elided (the genesis is parentless, so absence is
-    /// equivalent) — equally invisible, since the tombstone-bearing node
-    /// still shadows the key.  Re-running the fold after a crash replays
-    /// the same sequence and converges to the same merged state.
-    fn prune_merge_into_genesis(&self, linebuf: &mut [Self]) {
+    /// Publish the whole fold atomically: a child already re-parented by
+    /// an interrupted prune reads directly through the genesis, so a retry
+    /// must never expose older ancestor values before the head overrides
+    /// them. Tombstones become deletes because the genesis is parentless.
+    fn prune_merge_into_genesis(&self, linebuf: &mut [Self]) -> Result<()> {
         let mid = linebuf.len() - 1;
         let (others, genesis) = linebuf.split_at_mut(mid);
         let genesis = &mut genesis[0];
 
+        let mut staged = StagedRows::new();
         for i in others.iter().rev() {
-            Self::prune_fold_node(genesis, i);
+            Self::prune_fold_node(&mut staged, i);
         }
-        Self::prune_fold_node(genesis, self);
+        Self::prune_fold_node(&mut staged, self);
+        staged.commit(&mut genesis.data)
     }
 
-    // Merge one mainline node's data into the genesis node.
-    fn prune_fold_node(genesis: &mut Self, src: &Self) {
+    // Stage one node in oldest-to-newest order; the latest value wins.
+    fn prune_fold_node(staged: &mut StagedRows, src: &Self) {
         for (k, v) in src.data.iter() {
             // The genesis node is parentless, so a tombstone there is
             // equivalent to the key being absent — drop tombstones
             // instead of accumulating dead entries forever.
             if v.is_empty() {
-                genesis.data.remove(&k);
+                staged.del(k);
             } else {
-                genesis.data.insert(k, v);
+                staged.put(k, v);
             }
         }
     }
