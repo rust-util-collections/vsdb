@@ -20,20 +20,29 @@ User-invoked only. New commits only.
 | *(empty)* or `all` | Full repo (default) |
 | `N` / `staged` / `worktree` / hash / range | Diff-bound |
 
-Non-full: fix only findings rooted in that diff. Post-fix re-review = files
-this run changed.
+Non-full: fix only still-present findings rooted in that diff. Related callers,
+tests, and contracts are evidence scope, not permission for unrelated fixes.
 
 ## Setup
 
-Preflight (`workflow-policy.md`); `pragmatic-engineering.md`; read `x-review` +
-`x-fix` skills + `commit-protocol.md` + `compatibility-policy.md`; ledger before mutations.
+Preflight (`../../docs/workflow-policy.md`); read
+`../../docs/pragmatic-engineering.md`, `../x-review/SKILL.md`,
+`../x-fix/SKILL.md`, `../../docs/commit-protocol.md`, and
+`../../docs/compatibility-policy.md`; ledger before mutations.
+
+This skill owns one invocation: one starting HEAD, scope, ownership ledger,
+final gate, and release decision. Reuse the review and fix protocols below;
+do not launch nested standalone workflows or repeat their finalization.
+Pass `all` explicitly to the review protocol when input is empty.
 
 ## Phase 1 — Review
 
-`/x-review <scope>` without `--fix`:
+Apply the `x-review` evidence and registry protocol without code fixes:
 
 1. Coverage: full ledger (`all`) or diff+callers.
-2. Agents with disjoint ownership when needed; `all` → each Rust file once in depth.
+2. Read-only agents with disjoint ownership when useful; otherwise review directly.
+   `all` → each Rust file once in depth. Record reviewed paths/invariants and any
+   coverage gaps; searches and passing tests alone do not establish depth.
 3. Cross-subsystem / design / completeness only for depth gaps.
 4. Verify + dedupe (incl. public/on-disk compatibility).
 5. Update `docs/audit.md` (`all` re-evals all sections; narrow scopes prune/merge
@@ -42,16 +51,26 @@ Preflight (`workflow-policy.md`); `pragmatic-engineering.md`; read `x-review` +
 
 ## Phase 2 — Resolve
 
-Full `/x-fix` on Phase-1 (and still-applicable Open) findings: severity order;
-safe complete fix or Won't Fix/Rejected; one root cause per commit; mutations
-sequential; re-review changed files only. Correctness > open-count cosmetics.
-Out-of-scope Open untouched.
+Apply `x-fix` triage, atomic fix/commit, and self-review to Phase-1 findings and
+still-applicable **in-scope** Open entries. Resolve in severity order; mutations
+sequential. Re-review each fix plus affected callers, failure paths, tests, and
+public/persisted contracts; use the invocation diff to catch interactions.
+
+Won't Fix requires a real defect and a reason the safe fix is disproportionate;
+Rejected requires refutation. Blocked or unverified fixes remain Open with the
+blocker recorded. Continue independent safe units; report remaining Open and
+coverage gaps honestly. Out-of-scope Open stays untouched.
 
 ## Phase 3 — Gate, version, tag
 
-Final gate; regressions in new commits. Rust changed → one lockstep bump
-(patch or major+migration) + separate release commit + annotated tag.
-Nothing changed → no empty commit/bump/tag.
+Run the final gate from `commit-protocol.md` once per stable code state; an
+`all` audit runs it even when no Rust fix was needed. Reuse checks already passed
+on the same state. Regressions → new atomic fixes + affected checks again.
+
+Only after required validation passes and no in-scope Open or coverage gap
+remains: Rust changed → one lockstep bump (patch or major+migration), separate
+release commit, annotated tag. Incomplete run → preserve validated local commits
+and report blockers; no release. Nothing changed → no empty commit/bump/tag.
 
 ## Output
 

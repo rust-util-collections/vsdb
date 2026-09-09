@@ -20,8 +20,10 @@ Keep the ledger across commits. Stage only freeze set + this-invocation fix/form
 1. One issue/root cause/behavior change + its tests/docs/migration/audit only.
 2. Checks:
    - Docs/config only: `git diff --check` + structure sanity; skip Rust gates.
-   - Rust: `cargo fmt --all -- --check`; if needed, `make fmt` only on owned paths (inspect).
-   - Rust: `make lint` — no `#[allow(...)]`.
+   - Rust: `cargo fmt --all -- --check`; if needed, format only owned files and
+     inspect the diff (`make fmt` formats the workspace, not an owned path set).
+   - Rust: targeted package lint/check for the affected targets — no `#[allow(...)]`;
+     the final gate runs workspace `make lint`. Reuse results on unchanged code.
 3. Smallest proving tests (no global cleanup):
    - core → `cargo test -p vsdb_core <filter>`;
    - strata → `cargo test -p vsdb <filter>`;
@@ -44,7 +46,10 @@ After last behavior commit (once per stable code state):
 3. `cargo test --workspace --tests`
 4. `cargo test --workspace --release --tests`
 
-Regression → new atomic commit, then re-run. Docs-only: skip Rust gates.
+Regression → new atomic commit, then re-run affected checks. Reuse completed
+checks on the same code/manifest state; do not repeat a gate just because another
+skill composed this protocol. Docs-only: skip Rust gates unless the caller is
+performing a full audit. A required failing/blocked check prevents release.
 
 ## Lockstep version and release tag
 
@@ -56,8 +61,13 @@ If any tracked `.rs` changed in this invocation, bump **once** from start-HEAD v
 Update exactly: `core/Cargo.toml`, `strata/Cargo.toml`, root workspace
 `vsdb_core` dep — lockstep. Baseline already at target → verify only.
 
-Then: `cargo metadata --no-deps --format-version 1` → stage three manifests →
-inspect → separate release commit → annotated tag `vX.Y.Z` on that commit.
+Before editing, verify all three versions agree and the target tag is absent.
+Unexpected version changes or an existing target tag → report the conflict;
+never overwrite a tag or lower a version.
+
+Then: `cargo metadata --no-deps --format-version 1` → verify both package versions
+and the workspace dependency → stage three manifests → inspect → separate
+release commit → annotated tag `vX.Y.Z` on that commit. Verify tag type and target.
 
 Skip when no Rust source changed. No empty commits. Do not force-add `Cargo.lock`.
 

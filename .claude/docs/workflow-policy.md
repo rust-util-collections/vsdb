@@ -17,6 +17,8 @@ Before mutate/commit:
 5. **Commit workflows:** freeze owned paths (+ planned units) before review edits.
    Stage only freeze set + this invocation’s fix/format paths — never paths that
    appeared later from concurrent work.
+   Register newly discovered fix paths before editing, after checking their
+   current diffs against the baseline; a new path is not automatically owned.
 
 Dirty tree OK; clear ownership required.
 

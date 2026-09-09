@@ -16,12 +16,18 @@ Read `workflow-policy.md`, `commit-protocol.md`, `compatibility-policy.md`,
 `false-positive-guide.md`. Preflight + ledger (freeze paths as work proceeds).
 Empty Open → “nothing to fix”.
 
+When composed by `x-overhaul`, inherit its scope, starting HEAD, and ledger;
+run steps 1–3 only. The parent owns the final gate and release. Empty in-scope
+Open skips fixes, not the parent's remaining audit or validation.
+
 ## Protocol
 
 ### 1. Triage (CRITICAL → LOW)
 
 Per entry before edit: code/callers/tests + guides (+ `design-patterns.md` if design);
-reproduce from current code; dedupe root causes; false → Rejected; real but unsafe/disproportionate → Won't Fix + reason.
+reproduce from current code; dedupe root causes; false → Rejected; real and
+disproportionate to fix safely → Won't Fix + reason. Missing evidence, failed
+validation, or ownership overlap is a blocker, not a disposition: leave Open.
 
 ### 2. One finding → one commit (blocking)
 
@@ -41,8 +47,9 @@ New confirmed → Open → same one-finding loop. Stop on no-progress or baselin
 
 ### 4. Final gate, version, tag
 
-Full gate once. Rust source changed → lockstep version-and-tag once for the invocation
-(major + migration if break). Finish with no Open unless blocked (report blocker).
+Full gate once. Required checks pass and no in-scope Open remains → lockstep
+version-and-tag once if Rust source changed (major + migration if break).
+Blocked → retain validated local commits and report remaining Open; no release.
 No Resolved section or dates in audit.
 
 ## Output
