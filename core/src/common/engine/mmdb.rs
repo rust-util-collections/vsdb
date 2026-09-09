@@ -225,12 +225,9 @@ impl MmDB {
         let dir = root.join("mmdb");
         let sentinel_path = root.join(INIT_SENTINEL_REL_PATH);
         if read_only {
-            if sentinel_path.exists() {
-                return Err(eg!(format!(
-                    "dataset at {} has an initialization sentinel and cannot be opened read-only",
-                    root.display()
-                )));
-            }
+            // The completion marker is published durably before best-effort
+            // sentinel removal. A leftover sentinel is advisory once the
+            // marker and exact shard layout validate; readers never unlink it.
             validate_completed_dataset(root, shards, false)?;
         } else {
             fs::create_dir_all(root).c(d!())?;

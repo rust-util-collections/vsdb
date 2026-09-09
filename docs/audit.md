@@ -11,12 +11,6 @@
 
 ## Open
 
-### [MEDIUM] engine: read-only open rejects completed datasets with an advisory initialization sentinel
-- **Where**: `core/src/common/engine/mmdb.rs` (`open_at`)
-- **What**: read-only open rejects any initialization sentinel even if the format marker and all shard anchors prove initialization completed.
-- **Why**: writable initialization durably publishes the marker before best-effort sentinel removal. A crash or failed unlink therefore bricks an otherwise valid read-only snapshot.
-- **Suggested fix**: rely on completed-dataset validation; retain strict rejection of partial roots and verify no files change when a completed root retains its sentinel.
-
 ### [MEDIUM] vecdex: cosine distance overflows or underflows on finite vectors
 - **Where**: `strata/src/vecdex/distance.rs` (`Cosine::distance`)
 - **What**: unscaled squared norms/dot products make a nonzero vector's distance from itself NaN at `[1e20_f32, 0]` or 1 at `[1e-30_f32, 0]`.

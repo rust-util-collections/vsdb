@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Allow read-only access to fully initialized datasets with a stale initialization sentinel, without changing any files.
+
 - Surface streaming storage read errors in both scan directions instead of returning truncated results as successful exhaustion.
 
 - Fence VerMap shard WALs before publishing references or reclaiming nodes; reject incomplete reachable history before recovery deletes data.

@@ -109,6 +109,30 @@ fn read_only_universe_reads_without_changing_store() {
 }
 
 #[test]
+fn read_only_completed_datasets_accept_stale_initialization_sentinels() {
+    let base = env::temp_dir().join(format!(
+        "vsdb_read_only_sentinel_{}",
+        rand::random::<u128>()
+    ));
+    run_helper("read_only_writer_helper", &base);
+    let markers: Vec<_> = tree_contents(&base)
+        .into_keys()
+        .filter(|path| path.ends_with("__SYSTEM__/format_version"))
+        .collect();
+    assert_eq!(markers.len(), 2, "cover default and non-default roots");
+    for marker in markers {
+        fs::write(base.join(marker).with_file_name("__initializing__"), b"1").unwrap();
+    }
+    let before = tree_contents(&base);
+    make_tree_read_only(&base);
+    run_helper("read_only_reader_helper", &base);
+    let after = tree_contents(&base);
+    make_tree_writable(&base);
+    assert_eq!(before, after);
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
 #[ignore]
 fn read_only_missing_dataset_helper() {
     let Some(base) = helper_base() else {
