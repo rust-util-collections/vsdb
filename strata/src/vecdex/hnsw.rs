@@ -77,8 +77,10 @@ pub(crate) fn encode_neighbors(neighbors: &[u64]) -> Vec<u8> {
 /// Decode neighbor list from raw bytes.
 pub(crate) fn decode_neighbors(bytes: &[u8]) -> Vec<u64> {
     bytes
-        .chunks_exact(8)
-        .map(|chunk| u64::from_le_bytes(chunk.try_into().unwrap()))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|chunk| u64::from_le_bytes(*chunk))
         .collect()
 }
 
@@ -104,8 +106,8 @@ pub(crate) fn get_neighbors_into<A: AdjRead + ?Sized>(
     buf.clear();
     let key = adj_key(layer, node_id);
     if let Some(v) = adj.adj_row(&key) {
-        for chunk in v.chunks_exact(8) {
-            buf.push(u64::from_le_bytes(chunk.try_into().unwrap()));
+        for chunk in v.as_chunks::<8>().0 {
+            buf.push(u64::from_le_bytes(*chunk));
         }
     }
 }
