@@ -11,12 +11,7 @@
 
 ## Open
 
-### [LOW] workflow: SMT review checklist describes a different empty-subtree model
-- **Where**: `.claude/docs/patterns/trie.md` (T3)
-- **What**: the checklist requires level-dependent default hashes, whereas the current JMT-style SMT uses one `EMPTY_HASH` at every empty depth.
-- **Why**: the stale invariant encourages false findings against valid proofs and hashes.
-- **Suggested fix**: align T3 with `strata/src/trie/smt/codec.rs` and its proof verification rules.
-
+*(none)*
 
 ---
 

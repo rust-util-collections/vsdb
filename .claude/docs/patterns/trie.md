@@ -9,7 +9,7 @@
 
 **T1 Proof sound** — prove/verify same encode, hash, path; wrong key/root fails.
 **T2 MPT nibbles** — high `>>4`, low `&0x0F`; path len 2×bytes; consistent all ops.
-**T3 SMT defaults** — level L = hash(def[L+1]||def[L+1]); identical everywhere.
+**T3 SMT defaults** — JMT-style compressed tree: every empty subtree is `EMPTY_HASH = [0; 32]`, at every depth; `hash_internal(EMPTY_HASH, EMPTY_HASH)` returns `EMPTY_HASH`. Construction and proof folding must use the same rule.
 **T4 Hash det** — same logical state → same root; extensions max-compressed.
 **T5 Cache version** — key (branch, commit); miss recomputes, never silent stale.
 **T6 Non-exist proofs** — empty slot **or** divergent extension/branch.
