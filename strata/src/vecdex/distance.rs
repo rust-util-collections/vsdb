@@ -180,6 +180,19 @@ impl<S: Scalar> DistanceMetric<S> for Cosine {
             na = na + a[i] * a[i];
             nb = nb + b[i] * b[i];
         }
+        // Preserve the existing fast path for ordinary squared norms.
+        // For f32/f64 these conservative bounds stay far from underflow
+        // and overflow, including the final product of square roots.
+        // Epsilon is already part of Scalar; no new trait methods or
+        // scalar-width assumptions are needed by the fallback below.
+        let norm_min = S::epsilon() * S::epsilon();
+        let norm_max = S::one() / norm_min;
+        if (na < norm_min || nb < norm_min || na > norm_max || nb > norm_max)
+            && let Some(distance) = scaled_cosine_distance(a, b)
+        {
+            return distance;
+        }
+
         let denom = na.sqrt() * nb.sqrt();
         if denom == S::zero() {
             S::one()
@@ -187,6 +200,48 @@ impl<S: Scalar> DistanceMetric<S> for Cosine {
             S::one() - dot / denom
         }
     }
+}
+
+/// Computes cosine after independently rescaling both finite vectors.
+///
+/// Every component then has magnitude <= 1 and each nonzero vector has
+/// at least one component of magnitude 1. The dot product and squared
+/// norms therefore remain representable for any in-memory f32/f64 slice,
+/// even when the original squares overflowed or underflowed.
+///
+/// Nonfinite inputs return None so the caller retains the existing
+/// arithmetic behavior for them instead of defining a new input policy.
+fn scaled_cosine_distance<S: Scalar>(a: &[S], b: &[S]) -> Option<S> {
+    let zero = S::zero();
+    let (mut scale_a, mut scale_b) = (zero, zero);
+    for (&x, &y) in a.iter().zip(b) {
+        // Finite scalars multiplied by zero produce signed zero; NaN
+        // and either infinity do not. Scalar has no is_finite/abs API.
+        if x * zero != zero || y * zero != zero {
+            return None;
+        }
+        let abs_x = if x < zero { -x } else { x };
+        let abs_y = if y < zero { -y } else { y };
+        if abs_x > scale_a {
+            scale_a = abs_x;
+        }
+        if abs_y > scale_b {
+            scale_b = abs_y;
+        }
+    }
+    if scale_a == zero || scale_b == zero {
+        return Some(S::one());
+    }
+
+    let (mut dot, mut norm_a, mut norm_b) = (zero, zero, zero);
+    for (&x, &y) in a.iter().zip(b) {
+        let x = x / scale_a;
+        let y = y / scale_b;
+        dot = dot + x * y;
+        norm_a = norm_a + x * x;
+        norm_b = norm_b + y * y;
+    }
+    Some(S::one() - dot / (norm_a.sqrt() * norm_b.sqrt()))
 }
 
 /// Inner product distance: `-(a . b)`.

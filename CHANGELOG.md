@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Keep cosine distance finite and scale invariant for finite extreme-magnitude f32/f64 vectors while retaining the ordinary fast path.
+
 - Allow read-only access to fully initialized datasets with a stale initialization sentinel, without changing any files.
 
 - Surface streaming storage read errors in both scan directions instead of returning truncated results as successful exhaustion.

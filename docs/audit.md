@@ -11,12 +11,6 @@
 
 ## Open
 
-### [MEDIUM] vecdex: cosine distance overflows or underflows on finite vectors
-- **Where**: `strata/src/vecdex/distance.rs` (`Cosine::distance`)
-- **What**: unscaled squared norms/dot products make a nonzero vector's distance from itself NaN at `[1e20_f32, 0]` or 1 at `[1e-30_f32, 0]`.
-- **Why**: finite scale-invariant inputs have a representable cosine distance, but the intermediate products do not. The API requires no normalization.
-- **Suggested fix**: safely rescale exceptional inputs before accumulation while retaining the ordinary fast path and zero-vector semantics; cover f32/f64, signs and mixed magnitudes.
-
 ### [MEDIUM] benchmarks: read and removal fixtures depend on other timed workloads
 - **Where**: `core/benches/units/basic_mapx_raw.rs`, `strata/benches/units/basic_mapx.rs`, `strata/benches/units/basic_mapx_ord.rs`, `strata/benches/versioned.rs`, `strata/benches/slotdex.rs`
 - **What**: name-filtered random reads and versioned hit queries start from an empty sibling-write fixture and panic; sequential reads/removes can exhaust their fixture and measure misses.

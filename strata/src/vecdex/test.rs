@@ -1011,6 +1011,120 @@ fn cosine_zero_vector() {
     assert_eq!(results.len(), 2);
 }
 
+#[test]
+fn cosine_finite_extreme_scales_f32() {
+    let assert_distance = |a: &[f32], b: &[f32], expected: f32| {
+        let distance = Cosine::distance(a, b);
+        assert!(
+            distance.is_finite() && (distance - expected).abs() <= 1e-6,
+            "cosine({a:?}, {b:?}) = {distance}, expected {expected}"
+        );
+    };
+    let scales = [
+        (1.0, 1.0),
+        (1e20, 1e20),
+        (1e-30, 1e-30),
+        (1e20, 1e-30),
+        (1e-30, 1e20),
+        // Norm-square fast-path endpoints and their outer neighbors.
+        (f32::EPSILON, 1.0),
+        (f32::from_bits(f32::EPSILON.to_bits() - 1), 1.0),
+        (1.0 / f32::EPSILON, 1.0),
+        (f32::from_bits((1.0 / f32::EPSILON).to_bits() + 1), 1.0),
+        (f32::MAX, f32::MAX),
+        (f32::MIN_POSITIVE, f32::MIN_POSITIVE),
+        (f32::from_bits(1), f32::from_bits(1)),
+        (f32::MAX, f32::from_bits(1)),
+    ];
+    // Exercise the tail loop, the unrolled loop, and both together.
+    for len in [2, 4, 5] {
+        let zero = vec![0.0; len];
+        for (scale_a, scale_b) in scales {
+            let mut a = zero.clone();
+            let mut b = zero.clone();
+            a[0] = scale_a;
+            b[0] = scale_b;
+            assert_distance(&a, &b, 0.0);
+            b[0] = -scale_b;
+            assert_distance(&a, &b, 2.0);
+            b[0] = 0.0;
+            b[1] = scale_b;
+            assert_distance(&a, &b, 1.0);
+            assert_distance(&a, &zero, 1.0);
+            assert_distance(&zero, &a, 1.0);
+        }
+        assert_distance(&zero, &zero, 1.0);
+    }
+
+    // A non-axis-aligned angle must also survive independently chosen
+    // scales; using one shared scale would underflow the smaller vector.
+    for (scale_a, scale_b) in [(1.0, 1.0), (1e20, 1e-30), (1e-30, 1e20)] {
+        assert_distance(
+            &[3.0 * scale_a, 4.0 * scale_a],
+            &[4.0 * scale_b, 3.0 * scale_b],
+            1.0 - 24.0 / 25.0,
+        );
+    }
+    assert_distance(&[1e20, 1e-30], &[1e-30, 1e20], 1.0);
+}
+
+#[test]
+fn cosine_finite_extreme_scales_f64() {
+    let assert_distance = |a: &[f64], b: &[f64], expected: f64| {
+        let distance = Cosine::distance(a, b);
+        assert!(
+            distance.is_finite() && (distance - expected).abs() <= 1e-12,
+            "cosine({a:?}, {b:?}) = {distance}, expected {expected}"
+        );
+    };
+    let scales = [
+        (1.0, 1.0),
+        (1e200, 1e200),
+        (1e-200, 1e-200),
+        (1e200, 1e-200),
+        (1e-200, 1e200),
+        // Norm-square fast-path endpoints and their outer neighbors.
+        (f64::EPSILON, 1.0),
+        (f64::from_bits(f64::EPSILON.to_bits() - 1), 1.0),
+        (1.0 / f64::EPSILON, 1.0),
+        (f64::from_bits((1.0 / f64::EPSILON).to_bits() + 1), 1.0),
+        (f64::MAX, f64::MAX),
+        (f64::MIN_POSITIVE, f64::MIN_POSITIVE),
+        (f64::from_bits(1), f64::from_bits(1)),
+        (f64::MAX, f64::from_bits(1)),
+    ];
+    // Exercise the tail loop, the unrolled loop, and both together.
+    for len in [2, 4, 5] {
+        let zero = vec![0.0; len];
+        for (scale_a, scale_b) in scales {
+            let mut a = zero.clone();
+            let mut b = zero.clone();
+            a[0] = scale_a;
+            b[0] = scale_b;
+            assert_distance(&a, &b, 0.0);
+            b[0] = -scale_b;
+            assert_distance(&a, &b, 2.0);
+            b[0] = 0.0;
+            b[1] = scale_b;
+            assert_distance(&a, &b, 1.0);
+            assert_distance(&a, &zero, 1.0);
+            assert_distance(&zero, &a, 1.0);
+        }
+        assert_distance(&zero, &zero, 1.0);
+    }
+
+    // A non-axis-aligned angle must also survive independently chosen
+    // scales; using one shared scale would underflow the smaller vector.
+    for (scale_a, scale_b) in [(1.0, 1.0), (1e200, 1e-200), (1e-200, 1e200)] {
+        assert_distance(
+            &[3.0 * scale_a, 4.0 * scale_a],
+            &[4.0 * scale_b, 3.0 * scale_b],
+            1.0 - 24.0 / 25.0,
+        );
+    }
+    assert_distance(&[1e200, 1e-200], &[1e-200, 1e200], 1.0);
+}
+
 // ---- T-10: Compact empty index ----
 
 #[test]
