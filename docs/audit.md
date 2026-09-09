@@ -11,12 +11,6 @@
 
 ## Open
 
-### [LOW] benchmarks: warm trie root timing includes a complete tree clone
-- **Where**: `strata/benches/trie_bench.rs` (MPT/SMT warm root benchmarks)
-- **What**: each supposedly warm root query clones and drops the full tree inside the measured closure.
-- **Why**: O(tree size) setup obscures the cached root operation the benchmark names.
-- **Suggested fix**: query the already-warmed tree directly inside timing and verify both filtered workloads.
-
 ### [LOW] docs: namespace budget examples use the wrong field type
 - **Where**: `core/docs/api.md`, `strata/docs/api.md` (`NamespaceOpts` examples)
 - **What**: examples pass integer budgets where the public field is `Option<usize>`, so copied examples do not compile.

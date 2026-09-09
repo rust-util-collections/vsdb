@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Measure warm MPT/SMT root lookups without cloning and dropping the whole tree inside the timed operation.
+
 - Give read benchmarks independent fixtures and replenish removal fixtures outside timing, so filtered and long-running workloads keep measuring hits.
 
 - Keep cosine distance finite and scale invariant for finite extreme-magnitude f32/f64 vectors while retaining the ordinary fast path.

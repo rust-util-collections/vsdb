@@ -39,10 +39,7 @@ fn mpt_root_hash(c: &mut Criterion) {
     let mut warm = mpt.clone();
     warm.root_hash().unwrap();
     c.bench_function("mpt_root_hash_1000_warm", |b| {
-        b.iter(|| {
-            let mut m = warm.clone();
-            m.root_hash().unwrap()
-        });
+        b.iter(|| warm.root_hash().unwrap());
     });
 }
 
@@ -141,10 +138,7 @@ fn smt_root_hash(c: &mut Criterion) {
     let mut warm = smt.clone();
     warm.root_hash().unwrap();
     c.bench_function("smt_root_hash_1000_warm", |b| {
-        b.iter(|| {
-            let mut s = warm.clone();
-            s.root_hash().unwrap()
-        });
+        b.iter(|| warm.root_hash().unwrap());
     });
 }
 
