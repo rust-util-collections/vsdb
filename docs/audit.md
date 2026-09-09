@@ -47,7 +47,7 @@
 
 ### [LOW] engine: 16 GiB write-buffer threshold is a sizing cliff
 - **Where**: `core/src/common/engine/mmdb.rs` (`mmdb_open`, `legacy_wr`)
-- **What**: `legacy_wr` switches from `budget/4/NUM_SHARDS` to a fixed `1G/NUM_SHARDS` floor at the 16 GiB budget boundary.
+- **What**: `legacy_wr` uses `1 GiB / shards` up to and including a 16 GiB budget, then switches to `budget / 4 / shards`; the later `budget / 8 / shards` clamp makes a default 16-shard active buffer jump from 64 MiB to approximately 128 MiB just above the boundary.
 - **Reason**: This is a pre-existing tuning discontinuity, not a correctness issue; the low side is conservative. Smoothing it changes sizing for every unconstrained host and requires a dedicated tuning campaign.
 
 ---
@@ -78,7 +78,7 @@
 ### namespace/meta: "postcard deserialization of registry/meta files is a memory bomb"
 - **Where**: `core/src/common/namespace.rs` (`load_registry`), `strata/src/common/mod.rs` (`load_instance_meta`)
 - **Claim**: `fs::read` + `postcard::from_bytes` without a file-size cap lets a crafted registry or instance meta allocate unboundedly.
-- **Reason**: postcard parses sequences element-by-element from the input, so decode cost and allocation are bounded by the actual file size (serde caps `Vec` preallocation; a small file cannot decode into millions of records), and file size is proportional to namespaces/instances actually created. Files under the base dir sit inside the process's own trust boundary; malformed bytes yield a clean `Decode` error.
+- **Reason**: postcard parses sequences element-by-element from the input, so decode cost and allocation are bounded by the actual file size (serde caps `Vec` preallocation; a small file cannot decode into millions of records), and file size is proportional to namespaces/instances actually created. Files under the base dir sit inside the process's own trust boundary; malformed bytes yield a clean decoding/encoding error.
 
 ---
 
@@ -99,14 +99,14 @@
 ### engine: "Drop skips the flush that close() performs"
 - **Where**: `core/src/common/engine/mmdb.rs` (`MmDB::close` vs engine drop)
 - **Claim**: dropping an engine can lose buffered writes because only `close()` flushes.
-- **Reason**: ordinary writes flush WAL bytes to the OS before returning; they are recoverable after a process crash, but are not individually fsynced against power loss. mmdb's `DB::drop` attempts WAL sync best-effort; `close()` additionally surfaces flush/sync errors. This rejects the claim that Drop entirely skips WAL sync, not the distinct cross-shard durability-ordering defect in VerMap.
+- **Reason**: ordinary writes flush WAL bytes to the OS before returning; they are recoverable after a process crash, but are not individually fsynced against power loss. mmdb's `DB::drop` attempts WAL sync best-effort; `close()` additionally surfaces flush/sync errors. This rejects the claim that Drop entirely skips WAL sync; Drop alone does not establish cross-shard durability ordering, which VerMap now fences explicitly.
 
 ---
 
 ### engine: "no key/value size validation at the vsdb boundary"
 - **Where**: `core/src/basic/mapx_raw/mod.rs` (`insert`), `core/src/common/engine/mmdb.rs` (`MmDB::insert`)
 - **Claim**: absent vsdb-side checks, oversized values reach the memtable and OOM.
-- **Reason**: mmdb validates every write (8 MiB key cap, ~64 MiB entry cap) before WAL/memtable admission and rejects with a descriptive error; nothing oversized is ever buffered. The boundary behavior is documented on `MapxRaw::insert` and `BatchTrait::commit`: direct ops panic under the fatal-write convention, batch commits surface `Err`.
+- **Reason**: mmdb validates every write (8 MiB key cap, ~64 MiB entry cap) before WAL/memtable admission and rejects with a descriptive error; oversized entries are never admitted to the WAL or memtable, although a caller-owned WriteBatch may copy them during staging. The boundary behavior is documented on `MapxRaw::insert` and `BatchTrait::commit`: direct ops panic under the fatal-write convention, batch commits surface `Err`.
 
 ---
 
