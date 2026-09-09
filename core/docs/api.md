@@ -134,7 +134,7 @@ let ns = Namespace::create().unwrap();
 let ns2 = Namespace::create_with(NamespaceOpts {
     path: Some("/mnt/fast/db".into()),
     shards: 8,
-    mem_budget_mb: 1024,
+    mem_budget_mb: Some(1024),
 }).unwrap();
 
 // Create a MapxRaw in an explicit namespace.

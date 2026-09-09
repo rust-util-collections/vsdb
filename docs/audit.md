@@ -11,12 +11,6 @@
 
 ## Open
 
-### [LOW] docs: namespace budget examples use the wrong field type
-- **Where**: `core/docs/api.md`, `strata/docs/api.md` (`NamespaceOpts` examples)
-- **What**: examples pass integer budgets where the public field is `Option<usize>`, so copied examples do not compile.
-- **Why**: the examples were not updated when optional budgets became the API.
-- **Suggested fix**: wrap explicit budgets in `Some(...)` and check against the current struct.
-
 ### [LOW] docs: cached index recovery omits the live-handle ownership restriction
 - **Where**: `strata/src/slotdex/mod.rs`, `strata/src/vecdex/mod.rs`, `strata/src/vecdex/dynamic.rs` (serde/from_meta contracts)
 - **What**: restored aliases rebuild independent in-memory state while sharing storage. Alternating writes through live handles can overwrite counters/node IDs; readers can also retain stale caches.

@@ -38,7 +38,7 @@ let from_old: Mapx<u64, String> = Mapx::from_meta(old_id).unwrap();
 let fast = Namespace::create_with(NamespaceOpts {
     path: Some("/mnt/nvme/vsdb".into()),
     shards: 8,
-    mem_budget_mb: 2048,
+    mem_budget_mb: Some(2048),
 }).unwrap();
 let hot: MapxOrd<i32, String> = MapxOrd::new_in(&fast);
 
