@@ -438,7 +438,7 @@ impl MmDB {
         // Defense-in-depth prefix bound (parity with `range`): never surface
         // keys from an adjacent prefix in the same shard, even if the
         // engine's prefix iterator were to over-scan its upper boundary.
-        let iter = BidiIterator::lazy(db_iter)
+        let iter = CheckedBidiIter(BidiIterator::lazy(db_iter))
             .filter(move |(k, _)| k.starts_with(&meta_prefix))
             .map(|(k, v)| (k[PREFIX_SIZE..].to_vec(), v));
         MmdbIter(Box::new(iter))
@@ -513,7 +513,7 @@ impl MmDB {
             db_iter.seek(lo);
         }
 
-        let iter = BidiIterator::lazy(db_iter)
+        let iter = CheckedBidiIter(BidiIterator::lazy(db_iter))
             .filter(move |(k, _)| {
                 k.starts_with(&meta_prefix)
                     && check_bound_lo(k.as_slice(), &lo_full)
@@ -544,10 +544,40 @@ impl MmDB {
 
 // ---- Iterator ----
 
+// Check before filtering/type erasure: a failed source can coexist with an
+// item from another source, so inspect errors after every advance, not only EOF.
+struct CheckedBidiIter(BidiIterator);
+
+impl CheckedBidiIter {
+    fn check_error(&self) {
+        if let Some(error) = self.0.error() {
+            panic!("vsdb: mmdb iteration failed: {error}");
+        }
+    }
+}
+
+impl Iterator for CheckedBidiIter {
+    type Item = (RawKey, RawValue);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = self.0.next();
+        self.check_error();
+        item
+    }
+}
+
+impl DoubleEndedIterator for CheckedBidiIter {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        let item = self.0.next_back();
+        self.check_error();
+        item
+    }
+}
+
 /// A lazy, bidirectional iterator over key-value pairs in a single prefix range.
 ///
 /// Wraps a boxed `DoubleEndedIterator` so that the concrete streaming type
-/// (e.g. `Map<Filter<BidiIterator, _>, _>`) is hidden behind a stable ABI.
+/// (e.g. `Map<Filter<CheckedBidiIter, _>, _>`) is hidden behind a stable ABI.
 /// No entries are collected into memory upfront; data flows from mmdb's
 /// streaming SST/memtable sources one item at a time.
 pub struct MmdbIter(Box<dyn DoubleEndedIterator<Item = (RawKey, RawValue)>>);
@@ -1459,7 +1489,84 @@ fn mmdb_open(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{
+        panic::{AssertUnwindSafe, catch_unwind},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    #[test]
+    fn streaming_scans_surface_late_block_corruption() {
+        let dir = tmp_dir("iterator-corruption");
+        let prefix = 42u64.to_be_bytes();
+        let opts = DbOptions {
+            create_if_missing: true,
+            prefix_len: PREFIX_SIZE,
+            block_size: 1024,
+            block_cache_capacity: 0,
+            pin_l0_filter_and_index_blocks_in_cache: false,
+            compression: CompressionType::None,
+            ..DbOptions::default()
+        };
+        let db = DB::open(opts.clone(), &dir).unwrap();
+        for i in 0..64u8 {
+            db.put(&make_full_key(&prefix, &[i]), &[i; 256]).unwrap();
+        }
+        db.flush().unwrap();
+        db.close().unwrap();
+        drop(db);
+
+        // Damage only a middle value in this test's uncompressed SST. The
+        // footer/index and end blocks remain readable, so both directions
+        // can start successfully before encountering a checksum failure.
+        let ssts: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "sst"))
+            .collect();
+        assert_eq!(ssts.len(), 1);
+        let mut bytes = fs::read(&ssts[0]).unwrap();
+        let offset = bytes.windows(256).position(|v| v == [32u8; 256]).unwrap();
+        bytes[offset + 128] ^= 1;
+        fs::write(&ssts[0], bytes).unwrap();
+
+        let engine = MmDB {
+            dbs: vec![DB::open_read_only_with_options(opts, &dir).unwrap()]
+                .into_boxed_slice(),
+            read_only: true,
+        };
+        for use_range in [false, true] {
+            for reverse in [false, true] {
+                let mut seen = 0;
+                let failure = catch_unwind(AssertUnwindSafe(|| {
+                    let mut iter = if use_range {
+                        engine.range(prefix, ..)
+                    } else {
+                        engine.iter(prefix)
+                    };
+                    while if reverse {
+                        iter.next_back()
+                    } else {
+                        iter.next()
+                    }
+                    .is_some()
+                    {
+                        seen += 1;
+                    }
+                }));
+                assert!(seen > 0, "failure must occur after successful reads");
+                let error =
+                    failure.expect_err("corrupt scan must not finish successfully");
+                let message = error
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| error.downcast_ref::<&str>().copied())
+                    .unwrap();
+                assert!(message.contains("vsdb: mmdb iteration failed"), "{message}");
+            }
+        }
+        drop(engine);
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn effective_mem_budget_semantics() {

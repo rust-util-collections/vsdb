@@ -11,12 +11,6 @@
 
 ## Open
 
-### [HIGH] engine: streaming iterator failures are hidden as end of data
-- **Where**: `core/src/common/engine/mmdb.rs` (`iter`, `range`, `MmdbIter`)
-- **What**: boxing the filtered `BidiIterator` discards access to its error status; lazy SST read failures become ordinary iterator exhaustion.
-- **Why**: a corrupted later SST block can silently truncate scans and make `clone_in` report a successful incomplete copy. mmdb requires callers to inspect iterator errors.
-- **Suggested fix**: check the underlying error on both iteration directions before filtering/mapping, preserving the raw-read fail-fast convention; test real late-block corruption.
-
 ### [MEDIUM] engine: read-only open rejects completed datasets with an advisory initialization sentinel
 - **Where**: `core/src/common/engine/mmdb.rs` (`open_at`)
 - **What**: read-only open rejects any initialization sentinel even if the format marker and all shard anchors prove initialization completed.

@@ -23,6 +23,8 @@ One `BlockCachePool` per engine. WriteBatch per-shard.
 **E10 Cache pool** — all shards of one engine share one pool; engines don’t share identity.
 **E11 clone_in** — fresh unobservable prefix; bounded independent batches; failed chunk best-effort wipe target without masking primary Err.
 
+**E12 Scan errors** — inspect streaming iterator errors before filter/map erases the source; both directions fail fast instead of returning successful partial data.
+
 ## Bugs
 
 **Collision** — ceiling/floor regress, unrecovered reserve, cursor outside window.
@@ -43,3 +45,4 @@ One `BlockCachePool` per engine. WriteBatch per-shard.
 - [ ] Handle ns independent of ambient create
 - [ ] One pool per engine
 - [ ] clone_in chunk+wipe on error
+- [ ] Late SST read failures surface in both scan directions
