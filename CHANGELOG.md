@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Document the single-active-instance requirement for restored SlotDex/VecDex handles; independent aliases still do not share runtime caches.
+
 - Measure warm MPT/SMT root lookups without cloning and dropping the whole tree inside the timed operation.
 
 - Give read benchmarks independent fixtures and replenish removal fixtures outside timing, so filtered and long-running workloads keep measuring hits.

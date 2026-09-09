@@ -11,12 +11,6 @@
 
 ## Open
 
-### [LOW] docs: cached index recovery omits the live-handle ownership restriction
-- **Where**: `strata/src/slotdex/mod.rs`, `strata/src/vecdex/mod.rs`, `strata/src/vecdex/dynamic.rs` (serde/from_meta contracts)
-- **What**: restored aliases rebuild independent in-memory state while sharing storage. Alternating writes through live handles can overwrite counters/node IDs; readers can also retain stale caches.
-- **Why**: the raw-map same-key concurrent-write rule is insufficient for these cached composite structures, and their public restore documentation states no stricter restriction.
-- **Suggested fix**: document that recovery replaces the active handle and every access must share one live instance while mutations occur; retain the underlying alias limitation explicitly as debt if shared runtime state is disproportionate.
-
 ### [LOW] workflow: SMT review checklist describes a different empty-subtree model
 - **Where**: `.claude/docs/patterns/trie.md` (T3)
 - **What**: the checklist requires level-dependent default hashes, whereas the current JMT-style SMT uses one `EMPTY_HASH` at every empty depth.
@@ -27,6 +21,13 @@
 ---
 
 ## Won't Fix
+
+### [MEDIUM] cached indexes: independently restored handles do not share runtime caches
+- **Where**: `strata/src/slotdex/mod.rs`, `strata/src/vecdex/mod.rs`, `strata/src/vecdex/dynamic.rs`
+- **What**: serde/from_meta restores the same backing store with separate cached totals, tiers or graph state. Alternating writes through those handles can overwrite counters or node IDs; independent readers can observe stale cached state after another handle mutates.
+- **Reason**: sharing or invalidating all generic cached state requires a runtime ownership/cache redesign, or reloading index state on ordinary operations with material cost. Recovery is intended to replace the active handle. Public struct and recovery docs now require all access during mutation to use one live instance (shared behind a lock when needed); multiple independent immutable readers remain supported. This documents the current limitation rather than claiming alias coherence is fixed.
+
+---
 
 ### [MEDIUM] versioned: three-way merge materializes the merged result in memory
 - **Where**: `strata/src/versioned/merge.rs` (`three_way_merge`, `three_way_merge_many_bases`), `strata/src/basic/persistent_btree/mod.rs` (`bulk_load`)

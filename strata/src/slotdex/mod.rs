@@ -79,6 +79,18 @@ const LAYOUT_VERSION: u8 = 2;
 ///
 /// Every mutation is applied through a single atomic engine write batch,
 /// so a crash can never leave the index internally inconsistent.
+///
+/// # Handle ownership
+///
+/// Serde deserialization and [`from_meta`](Self::from_meta) restore a handle
+/// to the same storage, with independent in-memory caches. Recovery replaces
+/// the active handle: retire the previous handle before using the restored one
+/// for mutations. Alternating writes through restored aliases can corrupt
+/// counters or index state, even when those writes are serialized.
+///
+/// While mutations occur, route every read and write through one live instance
+/// (for example, share it behind a `Mutex` or `RwLock`). Multiple independent
+/// handles may read the same index only while no handle mutates it.
 pub struct SlotDex<S, K>
 where
     S: SlotType,
@@ -429,6 +441,10 @@ where
     ///
     /// Every mutation is applied atomically, so the recovered state is
     /// always internally consistent — there is no rebuild path.
+    ///
+    /// This replaces the active handle; it does not share caches with existing
+    /// aliases. The [handle ownership contract](Self#handle-ownership) also
+    /// applies to direct serde deserialization.
     pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
         let id = instance_id.into();
         crate::common::load_instance_meta_checked(id, Self::instance_id)

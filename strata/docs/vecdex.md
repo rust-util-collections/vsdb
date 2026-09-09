@@ -30,8 +30,17 @@ let results = idx.search_with_filter(&query_vec, 10, |k| k.starts_with("doc-"))
 
 // Persist and reload
 let id = idx.save_meta().unwrap();
+drop(idx); // Recovery replaces the active handle.
 let restored: VecDex<String, Cosine> = VecDex::from_meta(id).unwrap();
 ```
+
+Recovery through serde or `from_meta` creates independent in-memory caches over
+the same storage. Retire the previous active handle before mutating a restored
+one. During mutation, route all reads and writes through one shared instance
+(e.g. behind a `Mutex` or `RwLock`); alternating writes through separate restored
+handles can corrupt index state even without concurrent calls. Multiple
+independent handles are supported for reads only while the index is immutable.
+This also applies to `VecDexDyn`.
 
 ## API Reference
 

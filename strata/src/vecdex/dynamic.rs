@@ -65,7 +65,9 @@ const WIRE_TAG_INNER_PRODUCT: u8 = 2;
 /// configuration or user input instead of pinning it in the type.
 ///
 /// The full `VecDex` API is mirrored one-to-one; see [`VecDex`] for
-/// the semantics of each operation.
+/// the semantics of each operation, including its [handle ownership
+/// contract](VecDex#handle-ownership). Serde/from_meta recovery replaces the
+/// active instance; independently restored aliases do not share cached state.
 ///
 /// ```ignore
 /// use vsdb::vecdex::{HnswConfig, VecDexDyn, distance::MetricKind};
@@ -234,6 +236,10 @@ where
 
     /// Recovers a `VecDexDyn` from previously saved metadata; the
     /// creation-time metric is restored from the meta itself.
+    ///
+    /// Retire any previous active handle before mutating the restored index;
+    /// the [VecDex ownership contract](VecDex#handle-ownership) also applies
+    /// to this wrapper and to direct serde deserialization.
     pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
         let id = instance_id.into();
         crate::common::load_instance_meta_checked(id, Self::instance_id)
