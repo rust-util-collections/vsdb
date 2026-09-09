@@ -11,7 +11,66 @@
 
 ## Open
 
-*(none)*
+### [CRITICAL] versioned: independent shard WALs can publish references before their targets are durable
+- **Where**: `strata/src/versioned/map.rs` (root/commit/branch publication, counters and ref-count cascade), `strata/src/versioned/repair.rs` (`rebuild_ref_counts`)
+- **What**: ordinary mmdb writes flush userspace buffers but do not fsync. A power loss can preserve a new branch HEAD while losing its commit row, or preserve an old branch root after its nodes have been retired.
+- **Why**: component prefixes can occupy different shards. `gc_dirty` repairs counts only over a complete graph; a missing new HEAD hides its already-durable ancestors and recovery can delete those ancestors as unreachable. ID counters and main-branch changes need the same ordering discipline.
+- **Suggested fix**: per-shard WAL durability fences before reference publication and reclamation, durable dirty brackets/counters, and fail-closed recovery for incomplete graphs; validate durable ordering without equating process termination with power loss.
+
+### [CRITICAL] dagmap: retried mainline merge exposes intermediate values to surviving children
+- **Where**: `strata/src/dagmap/raw/mod.rs` (`prune_merge_into_genesis`, `prune_fold_node`)
+- **What**: the genesis is overwritten one row at a time. An interrupted merge leaves its saved handle with a mixed snapshot; after a prior partial reparent, retrying the fold can replace a surviving child's newest inherited value with an intermediate ancestor's value.
+- **Why**: `pending_reparent` prevents destroying survivors, but neither it nor the final flush prevents a second crash while older rows have overwritten the genesis and head rows have not yet restored them.
+- **Suggested fix**: stage the entire oldest-to-head fold in one atomic genesis batch; test abandoned staging and retry after partial reparent. Keep existing namespace flush barriers and tombstone precedence.
+
+### [HIGH] engine: streaming iterator failures are hidden as end of data
+- **Where**: `core/src/common/engine/mmdb.rs` (`iter`, `range`, `MmdbIter`)
+- **What**: boxing the filtered `BidiIterator` discards access to its error status; lazy SST read failures become ordinary iterator exhaustion.
+- **Why**: a corrupted later SST block can silently truncate scans and make `clone_in` report a successful incomplete copy. mmdb requires callers to inspect iterator errors.
+- **Suggested fix**: check the underlying error on both iteration directions before filtering/mapping, preserving the raw-read fail-fast convention; test real late-block corruption.
+
+### [MEDIUM] engine: read-only open rejects completed datasets with an advisory initialization sentinel
+- **Where**: `core/src/common/engine/mmdb.rs` (`open_at`)
+- **What**: read-only open rejects any initialization sentinel even if the format marker and all shard anchors prove initialization completed.
+- **Why**: writable initialization durably publishes the marker before best-effort sentinel removal. A crash or failed unlink therefore bricks an otherwise valid read-only snapshot.
+- **Suggested fix**: rely on completed-dataset validation; retain strict rejection of partial roots and verify no files change when a completed root retains its sentinel.
+
+### [MEDIUM] vecdex: cosine distance overflows or underflows on finite vectors
+- **Where**: `strata/src/vecdex/distance.rs` (`Cosine::distance`)
+- **What**: unscaled squared norms/dot products make a nonzero vector's distance from itself NaN at `[1e20_f32, 0]` or 1 at `[1e-30_f32, 0]`.
+- **Why**: finite scale-invariant inputs have a representable cosine distance, but the intermediate products do not. The API requires no normalization.
+- **Suggested fix**: safely rescale exceptional inputs before accumulation while retaining the ordinary fast path and zero-vector semantics; cover f32/f64, signs and mixed magnitudes.
+
+### [MEDIUM] benchmarks: read and removal fixtures depend on other timed workloads
+- **Where**: `core/benches/units/basic_mapx_raw.rs`, `strata/benches/units/basic_mapx.rs`, `strata/benches/units/basic_mapx_ord.rs`, `strata/benches/versioned.rs`, `strata/benches/slotdex.rs`
+- **What**: name-filtered random reads and versioned hit queries start from an empty sibling-write fixture and panic; sequential reads/removes can exhaust their fixture and measure misses.
+- **Why**: Criterion filters workloads independently and chooses independent iteration counts. A sibling benchmark is not fixture setup.
+- **Suggested fix**: independent nonempty read fixtures and fresh removal data outside timing; run each affected workload using Criterion test mode.
+
+### [LOW] benchmarks: warm trie root timing includes a complete tree clone
+- **Where**: `strata/benches/trie_bench.rs` (MPT/SMT warm root benchmarks)
+- **What**: each supposedly warm root query clones and drops the full tree inside the measured closure.
+- **Why**: O(tree size) setup obscures the cached root operation the benchmark names.
+- **Suggested fix**: query the already-warmed tree directly inside timing and verify both filtered workloads.
+
+### [LOW] docs: namespace budget examples use the wrong field type
+- **Where**: `core/docs/api.md`, `strata/docs/api.md` (`NamespaceOpts` examples)
+- **What**: examples pass integer budgets where the public field is `Option<usize>`, so copied examples do not compile.
+- **Why**: the examples were not updated when optional budgets became the API.
+- **Suggested fix**: wrap explicit budgets in `Some(...)` and check against the current struct.
+
+### [LOW] docs: cached index recovery omits the live-handle ownership restriction
+- **Where**: `strata/src/slotdex/mod.rs`, `strata/src/vecdex/mod.rs`, `strata/src/vecdex/dynamic.rs` (serde/from_meta contracts)
+- **What**: restored aliases rebuild independent in-memory state while sharing storage. Alternating writes through live handles can overwrite counters/node IDs; readers can also retain stale caches.
+- **Why**: the raw-map same-key concurrent-write rule is insufficient for these cached composite structures, and their public restore documentation states no stricter restriction.
+- **Suggested fix**: document that recovery replaces the active handle and every access must share one live instance while mutations occur; retain the underlying alias limitation explicitly as debt if shared runtime state is disproportionate.
+
+### [LOW] workflow: SMT review checklist describes a different empty-subtree model
+- **Where**: `.claude/docs/patterns/trie.md` (T3)
+- **What**: the checklist requires level-dependent default hashes, whereas the current JMT-style SMT uses one `EMPTY_HASH` at every empty depth.
+- **Why**: the stale invariant encourages false findings against valid proofs and hashes.
+- **Suggested fix**: align T3 with `strata/src/trie/smt/codec.rs` and its proof verification rules.
+
 
 ---
 
@@ -92,7 +151,7 @@
 ### engine: "Drop skips the flush that close() performs"
 - **Where**: `core/src/common/engine/mmdb.rs` (`MmDB::close` vs engine drop)
 - **Claim**: dropping an engine can lose buffered writes because only `close()` flushes.
-- **Reason**: every applied write is WAL-durable before its `put` returns, and mmdb's `DB::drop` additionally syncs the WAL best-effort — a drop-without-close loses no committed data; recovery replays the WAL. `close()` exists to surface sync errors, not to add durability.
+- **Reason**: ordinary writes flush WAL bytes to the OS before returning; they are recoverable after a process crash, but are not individually fsynced against power loss. mmdb's `DB::drop` attempts WAL sync best-effort; `close()` additionally surfaces flush/sync errors. This rejects the claim that Drop entirely skips WAL sync, not the distinct cross-shard durability-ordering defect in VerMap.
 
 ---
 
