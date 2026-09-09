@@ -147,6 +147,10 @@ macro_rules! define_map_wrapper {
                 self.inner.namespace()
             }
 
+            pub(crate) fn sync_wal(&self) {
+                self.inner.sync_wal();
+            }
+
             /// Deep-copies every entry into a brand-new instance placed
             /// in `ns` — the cross-namespace form of `Clone` (`clone()`
             /// copies into the *source's* namespace; `clone_in` chooses

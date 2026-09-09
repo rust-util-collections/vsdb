@@ -3,6 +3,24 @@ use ruc::*;
 use std::{fs, mem::size_of};
 
 #[test]
+fn wal_sync_preserves_empty_keys_and_prefix_isolation() {
+    let mut map = MapxRaw::new();
+    let mut other = MapxRaw::new_in(&map.namespace());
+    map.insert([], b"empty-key-value");
+    map.insert([1], b"one-byte-user-key");
+    other.insert([], b"other-prefix");
+    map.sync_wal();
+    map.sync_wal();
+    assert_eq!(map.iter().count(), 2);
+    assert_eq!(map.get([]).as_deref(), Some(b"empty-key-value".as_slice()));
+    assert_eq!(
+        map.get([1]).as_deref(),
+        Some(b"one-byte-user-key".as_slice())
+    );
+    assert_eq!(other.get([]).as_deref(), Some(b"other-prefix".as_slice()));
+}
+
+#[test]
 fn test_insert() {
     let mut hdr = MapxRaw::new();
     let max = 100;

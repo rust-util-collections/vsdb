@@ -1,6 +1,9 @@
 use super::{NO_COMMIT, map::VerMap};
 use crate::common::error::VsdbError;
-use std::ops::Bound;
+use std::{
+    ops::Bound,
+    panic::{AssertUnwindSafe, catch_unwind},
+};
 
 // =====================================================================
 // Basic CRUD
@@ -4118,4 +4121,129 @@ fn handle_invalid_branch_returns_error() {
     assert!(matches!(err, VsdbError::BranchNotFound { .. }));
     // main() never errors (main branch always exists)
     let _ = m.main();
+}
+
+/// An incomplete HEAD cannot prove that previously durable commits are dead.
+/// Check both marker states: ordinary restore/GC must validate even when clean.
+#[test]
+fn missing_head_recovery_preserves_durable_history() {
+    for dirty in [false, true] {
+        let mut m: VerMap<u32, u32> = VerMap::new();
+        let main = m.main_branch();
+        m.insert(main, &1, &10).unwrap();
+        let c1 = m.commit(main).unwrap();
+        m.namespace().flush();
+
+        let missing = c1 + 10_000;
+        let mut state = m.branches.get(&main).unwrap();
+        state.head = missing;
+        m.branches.insert(&main, &state);
+        *m.gc_dirty.get_mut() = dirty;
+        let bytes = postcard::to_allocvec(&m).unwrap();
+
+        assert!(matches!(
+            m.validate_commit_graph(),
+            Err(VsdbError::CommitNotFound { commit_id }) if commit_id == missing
+        ));
+        assert!(postcard::from_bytes::<VerMap<u32, u32>>(&bytes).is_err());
+        assert_eq!(m.get_at_commit(c1, &1).unwrap(), Some(10));
+        assert_eq!(m.gc_dirty.get_value(), dirty);
+
+        let result = catch_unwind(AssertUnwindSafe(|| m.gc()));
+        assert!(result.is_err());
+        assert_eq!(m.get_at_commit(c1, &1).unwrap(), Some(10));
+        assert_eq!(m.gc_dirty.get_value(), dirty);
+    }
+}
+
+/// A missing interior parent must not make the durable tail of a branch
+/// look like orphaned history when restoration or explicit GC walks it.
+#[test]
+fn missing_parent_recovery_preserves_durable_history() {
+    for dirty in [false, true] {
+        let mut m: VerMap<u32, u32> = VerMap::new();
+        let main = m.main_branch();
+        m.insert(main, &1, &10).unwrap();
+        let c1 = m.commit(main).unwrap();
+        m.insert(main, &2, &20).unwrap();
+        let c2 = m.commit(main).unwrap();
+        m.insert(main, &3, &30).unwrap();
+        let c3 = m.commit(main).unwrap();
+        m.namespace().flush();
+
+        // Model a recovered shard with the reachable c2 record absent.
+        m.commits.remove(&c2);
+        *m.gc_dirty.get_mut() = dirty;
+        let bytes = postcard::to_allocvec(&m).unwrap();
+
+        assert!(matches!(
+            m.validate_commit_graph(),
+            Err(VsdbError::CommitNotFound { commit_id }) if commit_id == c2
+        ));
+        assert!(postcard::from_bytes::<VerMap<u32, u32>>(&bytes).is_err());
+        assert_eq!(m.get_at_commit(c1, &1).unwrap(), Some(10));
+        assert_eq!(m.get_at_commit(c3, &3).unwrap(), Some(30));
+        assert_eq!(m.gc_dirty.get_value(), dirty);
+
+        let result = catch_unwind(AssertUnwindSafe(|| m.gc()));
+        assert!(result.is_err());
+        assert_eq!(m.get_at_commit(c1, &1).unwrap(), Some(10));
+        assert_eq!(m.get_at_commit(c3, &3).unwrap(), Some(30));
+        assert_eq!(m.gc_dirty.get_value(), dirty);
+    }
+}
+
+#[test]
+fn zero_count_restore_repairs_branch_references() {
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+    m.insert(main, &1, &10).unwrap();
+    let commit = m.commit(main).unwrap();
+    let fork = m.create_branch("fork", main).unwrap();
+    let mut row = m.get_commit(commit).unwrap();
+    row.ref_count = 0;
+    m.commits.insert(&commit, &row);
+    assert!(!m.gc_dirty.get_value());
+
+    let bytes = postcard::to_allocvec(&m).unwrap();
+    let restored: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
+    assert_eq!(restored.get_commit(commit).unwrap().ref_count, 2);
+    assert!(!restored.gc_dirty.get_value());
+    assert_eq!(restored.get(main, &1).unwrap(), Some(10));
+    assert_eq!(restored.get(fork, &1).unwrap(), Some(10));
+}
+
+#[test]
+fn deep_clone_preserves_independent_history_and_branch_lifecycle() {
+    let mut original: VerMap<u32, u32> = VerMap::new();
+    let main = original.main_branch();
+    original.insert(main, &1, &10).unwrap();
+    let c1 = original.commit(main).unwrap();
+    let fork = original.create_branch("fork", main).unwrap();
+    original.insert(fork, &2, &20).unwrap();
+    let c2 = original.commit(fork).unwrap();
+
+    let mut cloned = original.clone();
+    assert_ne!(cloned.instance_id(), original.instance_id());
+    cloned.set_main_branch(fork).unwrap();
+    cloned.delete_branch(main).unwrap();
+    cloned.insert(fork, &3, &30).unwrap();
+    let c3 = cloned.commit(fork).unwrap();
+    let next_branch = cloned.create_branch("next", fork).unwrap();
+    assert!(c3 > c2);
+    assert!(next_branch > fork);
+
+    let id = cloned.save_meta().unwrap();
+    drop(cloned);
+    let restored: VerMap<u32, u32> = VerMap::from_meta(id).unwrap();
+    assert_eq!(restored.main_branch(), fork);
+    assert_eq!(restored.branch_id("main"), None);
+    assert_eq!(restored.get_at_commit(c1, &1).unwrap(), Some(10));
+    assert_eq!(restored.get_commit(c3).unwrap().parents, vec![c2]);
+    assert_eq!(restored.get(next_branch, &3).unwrap(), Some(30));
+
+    assert_eq!(original.main_branch(), main);
+    assert!(original.get_commit(c3).is_none());
+    assert_eq!(original.branch_id("next"), None);
+    assert_eq!(original.get(fork, &3).unwrap(), None);
 }

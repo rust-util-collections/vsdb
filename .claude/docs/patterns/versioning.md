@@ -12,8 +12,9 @@ all `Branch` reads + writes.
 **V2 Acyclic** — parents earlier existing commits.
 **V3 Source-wins** — both modified since **common ancestor** → source value.
 **V4 Rollback** — only this branch’s ref contributions; other branches untouched.
-**V5 Dirty** — true before non-idempotent ref cascade (commit/merge/branch±/rollback), false after; recovery recounts. `gc()` idempotent — no new flag.
+**V5 Dirty** — durably true before non-idempotent ref cascade (commit/merge/branch±/rollback), durably false after all participating shards are fenced; recovery recounts only after validating every reachable commit. `gc()` idempotent — no new flag.
 **V6 Commit immutable** after create.
+**V7 Durable references** — fence nodes before publishing roots; fence commits before publishing HEAD; fence branch/commit removal before retiring roots. Persist allocator advancement before returning an ID and main-branch changes before deleting the old main. Program order across shard WALs alone is insufficient.
 
 ## Bugs
 
@@ -30,6 +31,8 @@ all `Branch` reads + writes.
 - [ ] Source-wins on conflicts
 - [ ] Rollback multi-path uncommitted guard
 - [ ] Dirty brackets cascades; gc stays idempotent
+- [ ] Incomplete reachable history fails before destructive repair, even when clean
+- [ ] Publication/reclamation fences include construction, deep clone and restore
 - [ ] No post-create commit mutate
 - [ ] No-op and fast-forward merges
 - [ ] BranchMut ≈ Branch reads kept in sync

@@ -413,6 +413,23 @@ impl MapxRaw {
         self.inner.remove(key.as_ref())
     }
 
+    /// Makes prior successful writes to this map's shard durable against
+    /// power loss, without forcing a memtable flush. Other maps on the same
+    /// shard are synchronized too; other shards are unaffected.
+    ///
+    /// Ordinary inserts and batch commits are WAL-backed but do not fsync
+    /// individually. Use this fence before publishing a reference from a
+    /// different shard, and fence removal of that reference before reclaiming
+    /// the referenced data. It does not make multiple shards transactional.
+    /// Like namespace flush, this maintenance operation is a no-op read-only.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the storage engine cannot synchronize its WAL.
+    pub fn sync_wal(&self) {
+        self.inner.sync_wal();
+    }
+
     /// Marks a key for deferred removal via the compaction filter.
     ///
     /// The key remains readable until the underlying storage engine

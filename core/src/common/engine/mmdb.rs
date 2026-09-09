@@ -2,7 +2,10 @@ use crate::common::{
     BatchTrait, GB, PREFIX_ALLOC_START, PREFIX_SIZE, Pre, PreBytes, RawKey, RawValue,
     VSDB, vsdb_freeze_base_dir, vsdb_get_base_dir, vsdb_is_read_only,
 };
-use mmdb::{BidiIterator, BlockCachePool, CompressionType, DB, DbOptions, WriteBatch};
+use mmdb::{
+    BidiIterator, BlockCachePool, CompressionType, DB, DbOptions, WriteBatch,
+    WriteOptions,
+};
 use parking_lot::{Mutex, RwLock};
 use ruc::*;
 use std::{
@@ -25,6 +28,11 @@ use std::{
 /// in shard 0. Read once at open for the take-max migration; never
 /// written again (v16+ persists the ceiling in [`PREFIX_CEILING_REL_PATH`]).
 const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
+
+/// A synchronous deletion of this reserved system key fences a shard's WAL.
+/// Collection keys include an eight-byte prefix, so this one-byte key cannot
+/// overlap user data (including an empty user key) or the legacy allocator.
+const META_KEY_WAL_FENCE: [u8; 1] = [1];
 
 /// v16+ location of the prefix-allocator ceiling, relative to the VSDB
 /// base dir: an 8-byte little-endian `u64`, written durably via
@@ -434,6 +442,26 @@ impl MmDB {
             .filter(move |(k, _)| k.starts_with(&meta_prefix))
             .map(|(k, v)| (k[PREFIX_SIZE..].to_vec(), v));
         MmdbIter(Box::new(iter))
+    }
+
+    pub(crate) fn sync_wal(&self, meta_prefix: PreBytes) {
+        if self.read_only {
+            return;
+        }
+        // mmdb has no standalone WAL-sync API and skips empty batches.
+        // A real synchronous deletion syncs prior successful writes on this
+        // shard without forcing the active memtable into an SST. Earlier
+        // rotated WALs have already been durably installed as SSTs before
+        // their successful write requests return.
+        self.shard(&meta_prefix)
+            .delete_with_options(
+                &WriteOptions {
+                    sync: true,
+                    ..WriteOptions::default()
+                },
+                &META_KEY_WAL_FENCE,
+            )
+            .expect("vsdb: mmdb WAL synchronization failed");
     }
 
     pub(crate) fn range<'a, R: RangeBounds<Cow<'a, [u8]>>>(

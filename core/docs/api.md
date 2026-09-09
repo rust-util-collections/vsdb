@@ -30,6 +30,11 @@ map.remove(b"key1");
 assert!(!map.contains_key(b"key1"));
 ```
 
+Ordinary writes are WAL-backed but are not individually fsynced against power
+loss. `map.sync_wal()` makes prior successful writes to the owning shard durable
+without forcing a memtable flush. Other shards require their own fences; this
+does not create a cross-shard transaction. The call is a no-op in read-only mode.
+
 ## Utility Functions
 
 Example for getting and setting the base directory.

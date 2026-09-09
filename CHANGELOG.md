@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Fence VerMap shard WALs before publishing references or reclaiming nodes; reject incomplete reachable history before recovery deletes data.
+
 - DagMap publishes a whole mainline merge atomically, so an interrupted prune
   and its retries cannot expose intermediate ancestor values through genesis
   metadata or already re-parented children. Staging uses memory proportional

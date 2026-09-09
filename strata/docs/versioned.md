@@ -14,6 +14,7 @@ the Git-model versioned storage engine in `vsdb`.
 - [Copy-on-Write & Structural Sharing](#copy-on-write--structural-sharing)
 - [Commit DAG](#commit-dag)
 - [Three-Way Merge Algorithm](#three-way-merge-algorithm)
+- [Durability and Recovery](#durability-and-recovery)
 - [Garbage Collection](#garbage-collection)
 - [Fork Point & Commit Distance](#fork-point--commit-distance)
 
@@ -430,6 +431,40 @@ Full table:
 | _absent_ | **S** | **T** | **S** | conflict → source wins |
 
 The caller controls priority by choosing which branch to pass as `source` vs `target`.
+
+---
+
+## Durability and Recovery
+
+VerMap components may occupy different engine shards, each with its own WAL.
+An atomic node batch alone does not order its durability against a branch or
+commit record. Mutations therefore synchronize the relevant shard WALs at
+these boundaries:
+
+1. Advance and synchronize an ID allocator before publishing its new ID.
+2. Synchronize new tree nodes before publishing a root in a commit or branch.
+3. Synchronize a new commit record before publishing a branch HEAD that names it.
+4. Synchronize removed branch/commit references before releasing their tree roots
+   for physical reclamation.
+5. Synchronize `gc_dirty = true` before count changes, and synchronize the
+   completed metadata changes before clearing and synchronizing the flag.
+
+The fences use the owning shards and do not force a namespace-wide memtable
+flush. A commit deletion cascade synchronizes its metadata once before releasing
+its collected dead roots. New maps and deep clones synchronize their initialized
+component graph before returning; promoting a main branch synchronizes the new
+pointer before the previous main can be deleted.
+
+Recovery validates every branch HEAD and reachable commit parent before any
+orphan cleanup, including when the dirty flag is clear. A missing reachable
+commit causes restoration to fail instead of deleting older history as
+unreachable. `gc()` fails before deleting commits on the same incomplete graph.
+These checks cannot reconstruct records already lost by older versions: preserve
+a damaged dataset and recover from a complete backup.
+
+Read-only restoration performs the validation and rebuilds runtime state without
+writing WAL fences or repair metadata. See the [read-only guide](read-only.md)
+for preparing snapshots that require maintenance recovery.
 
 ---
 

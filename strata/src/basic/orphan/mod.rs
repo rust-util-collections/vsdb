@@ -154,6 +154,10 @@ where
         self.inner.namespace()
     }
 
+    pub(crate) fn sync_wal(&self) {
+        self.inner.sync_wal();
+    }
+
     /// Deep-copies this value into a brand-new instance placed in `ns`
     /// — the cross-namespace form of `Clone` (mirroring
     /// [`new`](Self::new) vs [`new_in`](Self::new_in)).

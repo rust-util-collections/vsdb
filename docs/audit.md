@@ -11,12 +11,6 @@
 
 ## Open
 
-### [CRITICAL] versioned: independent shard WALs can publish references before their targets are durable
-- **Where**: `strata/src/versioned/map.rs` (root/commit/branch publication, counters and ref-count cascade), `strata/src/versioned/repair.rs` (`rebuild_ref_counts`)
-- **What**: ordinary mmdb writes flush userspace buffers but do not fsync. A power loss can preserve a new branch HEAD while losing its commit row, or preserve an old branch root after its nodes have been retired.
-- **Why**: component prefixes can occupy different shards. `gc_dirty` repairs counts only over a complete graph; a missing new HEAD hides its already-durable ancestors and recovery can delete those ancestors as unreachable. ID counters and main-branch changes need the same ordering discipline.
-- **Suggested fix**: per-shard WAL durability fences before reference publication and reclamation, durable dirty brackets/counters, and fail-closed recovery for incomplete graphs; validate durable ordering without equating process termination with power loss.
-
 ### [HIGH] engine: streaming iterator failures are hidden as end of data
 - **Where**: `core/src/common/engine/mmdb.rs` (`iter`, `range`, `MmdbIter`)
 - **What**: boxing the filtered `BidiIterator` discards access to its error status; lazy SST read failures become ordinary iterator exhaustion.

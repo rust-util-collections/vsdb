@@ -190,6 +190,8 @@ fn read_only_reader_helper() {
     assert_eq!(Some(b"wal-value".to_vec()), default_map.get(b"wal-key"));
 
     namespaced_map.lazy_delete(b"namespace-key");
+    namespaced_map.sync_wal();
+    default_map.sync_wal();
     vsdb_flush();
 
     assert!(matches!(

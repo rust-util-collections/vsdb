@@ -146,6 +146,12 @@ impl Mapx {
         self.ns.clone()
     }
 
+    pub(crate) fn sync_wal(&self) {
+        if !self.ns.is_read_only() {
+            self.ns.engine().sync_wal(self.prefix_bytes());
+        }
+    }
+
     #[inline(always)]
     pub(crate) fn get(&self, key: &[u8]) -> Option<RawValue> {
         self.ns.engine().get(self.prefix_bytes(), key)

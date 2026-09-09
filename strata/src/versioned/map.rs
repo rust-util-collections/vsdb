@@ -75,6 +75,14 @@ pub(crate) struct BranchState {
 ///    storage engine's background compaction.  [`gc`](Self::gc) is only
 ///    needed for crash recovery or a forced full sweep.
 ///
+/// # Durability and recovery
+///
+/// Mutations synchronize the owning shard WALs before publishing new roots or
+/// commits, and before retiring storage whose references have been removed.
+/// Reference-count changes have a durable dirty marker until their completion.
+/// Restoration validates all reachable commit records before reclaiming any
+/// history; a missing HEAD or parent produces a deserialization error.
+///
 /// # Read-only mode
 ///
 /// A restored `VerMap` remains fully queryable in process-wide read-only
@@ -121,7 +129,7 @@ pub(crate) struct BranchState {
 ///
 /// fs::remove_dir_all(&dir).unwrap();
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct VerMap<K, V> {
     /// The underlying persistent B+ tree (shared node pool).
     pub(crate) tree: PersistentBTree,
@@ -147,6 +155,27 @@ pub struct VerMap<K, V> {
     pub(crate) gc_dirty: Orphan<bool>,
 
     _phantom: PhantomData<(K, V)>,
+}
+
+// Keep the same K/V bounds as the former derived Clone implementation.
+impl<K: Clone, V: Clone> Clone for VerMap<K, V> {
+    fn clone(&self) -> Self {
+        let cloned = Self {
+            tree: self.tree.clone(),
+            commits: self.commits.clone(),
+            branches: self.branches.clone(),
+            branch_names: self.branch_names.clone(),
+            next_commit: self.next_commit.clone(),
+            next_branch: self.next_branch.clone(),
+            main_branch: self.main_branch.clone(),
+            gc_dirty: self.gc_dirty.clone(),
+            _phantom: PhantomData,
+        };
+        // Deep copies use ordinary batches on independent component shards.
+        // Establish their durable graph before the new handle can escape.
+        cloned.sync_storage();
+        cloned
+    }
 }
 
 impl<K, V> Serialize for VerMap<K, V> {
@@ -212,7 +241,8 @@ impl<'de, K, V> Deserialize<'de> for VerMap<K, V> {
             gc_dirty,
             _phantom: PhantomData,
         };
-        m.repair_commit_ref_counts_if_needed();
+        m.repair_commit_ref_counts_if_needed()
+            .map_err(serde::de::Error::custom)?;
         m.rebuild_tree_ref_counts();
         Ok(m)
     }
@@ -239,6 +269,35 @@ impl<K, V> VerMap<K, V> {
 
     fn ensure_writable(&self, operation: &'static str) -> Result<()> {
         crate::common::ensure_writable(&self.namespace(), operation)
+    }
+
+    /// Establishes the component graph before a new/restored handle escapes
+    /// or a full node sweep can retire storage. These are WAL fences, not
+    /// namespace-wide memtable flushes. Read-only restoration never writes.
+    pub(crate) fn sync_storage(&self) {
+        if self.namespace().is_read_only() {
+            return;
+        }
+        self.tree.nodes.sync_wal();
+        self.next_commit.sync_wal();
+        self.next_branch.sync_wal();
+        self.commits.sync_wal();
+        self.branches.sync_wal();
+        self.branch_names.sync_wal();
+        self.main_branch.sync_wal();
+        self.gc_dirty.sync_wal();
+    }
+
+    pub(crate) fn begin_ref_update(&mut self) {
+        *self.gc_dirty.get_mut() = true;
+        self.gc_dirty.sync_wal();
+    }
+
+    /// Call only after every changed branch/commit row is durable and all
+    /// reference withdrawals preceded any physical node retirement.
+    pub(crate) fn end_ref_update(&mut self) {
+        *self.gc_dirty.get_mut() = false;
+        self.gc_dirty.sync_wal();
     }
 }
 
@@ -306,7 +365,7 @@ where
         branches.insert(&initial_id, &main);
         branch_names.insert(&name.to_string(), &initial_id);
 
-        Self {
+        let map = Self {
             tree: PersistentBTree::new(),
             commits: MapxOrd::new(),
             branches,
@@ -316,7 +375,11 @@ where
             main_branch: Orphan::new(initial_id),
             gc_dirty: Orphan::new(false),
             _phantom: PhantomData,
-        }
+        };
+        // Initial Orphan slots and branch metadata must survive alongside
+        // metadata saved immediately after construction.
+        map.sync_storage();
+        map
     }
 
     // =================================================================
@@ -356,6 +419,9 @@ where
         self.ensure_writable("main branch update")?;
         self.get_branch(branch)?;
         *self.main_branch.get_mut() = branch;
+        // A later delete of the old main must not leave the durable main
+        // pointer referring to that deleted branch.
+        self.main_branch.sync_wal();
         Ok(())
     }
 
@@ -383,10 +449,12 @@ where
         // Mark dirty before any ref-count mutation so a crash mid-update is
         // repaired by rebuild_ref_counts on recovery (matches commit/merge/
         // rollback). increment_ref does not touch gc_dirty itself.
-        *self.gc_dirty.get_mut() = true;
+        self.begin_ref_update();
 
         let id = self.next_branch.get_value();
         *self.next_branch.get_mut() = id + 1;
+        // Persist the allocator before a row can make this ID observable.
+        self.next_branch.sync_wal();
 
         let state = BranchState {
             name: name.into(),
@@ -401,7 +469,10 @@ where
         // New branch's dirty_root references the shared tree root.
         self.tree.acquire_node(src.dirty_root);
 
-        *self.gc_dirty.get_mut() = false;
+        self.commits.sync_wal();
+        self.branches.sync_wal();
+        self.branch_names.sync_wal();
+        self.end_ref_update();
 
         Ok(id)
     }
@@ -426,17 +497,20 @@ where
         // Mark dirty before removing the branch tables so a crash before the
         // ref-count cascade is repaired on recovery. decrement_ref is
         // reentrant-safe (its already_dirty guard won't clear our flag).
-        *self.gc_dirty.get_mut() = true;
+        self.begin_ref_update();
 
         self.branch_names.remove(&state.name);
         self.branches.remove(&branch);
+        // Old roots cannot be retired while the durable branch still owns them.
+        self.branches.sync_wal();
+        self.branch_names.sync_wal();
 
         // Release tree root ref from the branch's dirty_root.
         self.tree.release_node(dead_dirty);
         // Cascade commit ref counting (may also release commit.root refs).
         self.decrement_ref(dead_head);
 
-        *self.gc_dirty.get_mut() = false;
+        self.end_ref_update();
 
         Ok(())
     }
@@ -483,6 +557,9 @@ where
         let mut state = self.get_branch(branch)?;
         let old_root = state.dirty_root;
         state.dirty_root = self.tree.insert(old_root, &key.to_bytes(), &value.encode());
+        // The node batch is atomic, but its independent shard WAL needs a
+        // durability fence before a branch can publish the new root.
+        self.tree.nodes.sync_wal();
         self.tree.acquire_node(state.dirty_root);
         // Persist the branch pointer BEFORE releasing the old root:
         // `release_node` may register the old root's nodes for physical
@@ -492,6 +569,7 @@ where
         // only leaks the new nodes, which the next recovery sweep
         // (`rebuild_tree_ref_counts`) registers for deletion.
         self.branches.insert(&branch, &state);
+        self.branches.sync_wal();
         self.tree.release_node(old_root);
         Ok(())
     }
@@ -502,10 +580,15 @@ where
         let mut state = self.get_branch(branch)?;
         let old_root = state.dirty_root;
         state.dirty_root = self.tree.remove(old_root, &key.to_bytes());
+        if state.dirty_root == old_root {
+            return Ok(());
+        }
+        self.tree.nodes.sync_wal();
         self.tree.acquire_node(state.dirty_root);
         // Persist before release — see `insert` for the crash-ordering
         // rationale.
         self.branches.insert(&branch, &state);
+        self.branches.sync_wal();
         self.tree.release_node(old_root);
         Ok(())
     }
@@ -523,10 +606,11 @@ where
         // Mark dirty before any structural mutation so that crash
         // recovery (gc → rebuild_ref_counts) will repair orphaned
         // commits or imbalanced ref-counts.
-        *self.gc_dirty.get_mut() = true;
+        self.begin_ref_update();
 
         let id = self.next_commit.get_value();
         *self.next_commit.get_mut() = id + 1;
+        self.next_commit.sync_wal();
 
         let parents = if state.head == NO_COMMIT {
             vec![]
@@ -552,6 +636,8 @@ where
             ref_count: 1,
         };
         self.commits.insert(&id, &commit);
+        // A durable branch HEAD must never name a missing commit record.
+        self.commits.sync_wal();
 
         // commit.root now also references dirty_root → acquire.
         self.tree.acquire_node(state.dirty_root);
@@ -559,8 +645,9 @@ where
         // Update branch head; dirty_root stays the same (it IS the snapshot).
         let new_state = BranchState { head: id, ..state };
         self.branches.insert(&branch, &new_state);
+        self.branches.sync_wal();
 
-        *self.gc_dirty.get_mut() = false;
+        self.end_ref_update();
 
         Ok(id)
     }
@@ -584,6 +671,7 @@ where
         // Persist before release — see `insert` for the crash-ordering
         // rationale.
         self.branches.insert(&branch, &new_state);
+        self.branches.sync_wal();
         self.tree.release_node(old_dirty);
         Ok(())
     }
@@ -659,7 +747,7 @@ where
         // Mark dirty before any structural mutation so that crash
         // recovery (gc → rebuild_ref_counts) will repair orphaned
         // commits or imbalanced ref-counts.
-        *self.gc_dirty.get_mut() = true;
+        self.begin_ref_update();
 
         let commit = self.get_commit_inner(target)?;
         let old_head = state.head;
@@ -670,6 +758,7 @@ where
             dirty_root: commit.root,
         };
         self.branches.insert(&branch, &new_state);
+        self.branches.sync_wal();
 
         // Tree root: dirty_root changes to commit.root.
         self.tree.acquire_node(commit.root);
@@ -680,7 +769,7 @@ where
         self.increment_ref(target);
         self.decrement_ref(old_head);
 
-        *self.gc_dirty.get_mut() = false;
+        self.end_ref_update();
 
         Ok(())
     }
@@ -759,7 +848,7 @@ where
         // Mark dirty before any structural mutation so that crash
         // recovery (gc → rebuild_ref_counts) will repair orphaned
         // commits or imbalanced ref-counts.
-        *self.gc_dirty.get_mut() = true;
+        self.begin_ref_update();
 
         if tgt.head == NO_COMMIT {
             // Target is empty — just fast-forward.
@@ -780,12 +869,14 @@ where
                 ..tgt
             };
             self.branches.insert(&target, &new_state);
+            self.branches.sync_wal();
             // Target branch HEAD now points to src.head → +1 ref.
             self.increment_ref(src.head);
             // Tree root: dirty_root changes to src_commit.root.
             self.tree.acquire_node(src_commit.root);
             self.tree.release_node(tgt.dirty_root);
-            *self.gc_dirty.get_mut() = false;
+            self.commits.sync_wal();
+            self.end_ref_update();
             return Ok(src.head);
         }
 
@@ -810,9 +901,13 @@ where
             tgt_commit.root,
         );
 
+        // Make the complete merged tree durable before publishing its root.
+        self.tree.nodes.sync_wal();
+
         // Create merge commit.
         let id = self.next_commit.get_value();
         *self.next_commit.get_mut() = id + 1;
+        self.next_commit.sync_wal();
 
         // ref_count = 1: the target branch HEAD.
         // tgt.head: net 0 (loses branch-HEAD, gains parent-link).
@@ -825,6 +920,8 @@ where
             ref_count: 1,
         };
         self.commits.insert(&id, &commit);
+        self.increment_ref(src.head);
+        self.commits.sync_wal();
 
         let new_state = BranchState {
             head: id,
@@ -832,15 +929,14 @@ where
             ..tgt
         };
         self.branches.insert(&target, &new_state);
+        self.branches.sync_wal();
 
         // Tree root: commit.root + dirty_root both reference merged_root.
         self.tree.acquire_node(merged_root); // commit.root
         self.tree.acquire_node(merged_root); // dirty_root
         self.tree.release_node(tgt.dirty_root); // old target dirty
 
-        self.increment_ref(src.head);
-
-        *self.gc_dirty.get_mut() = false;
+        self.end_ref_update();
 
         Ok(id)
     }
@@ -1062,18 +1158,30 @@ where
     ///
     /// This is a no-op in read-only mode: recovery metadata cannot be
     /// rewritten and deferred deletions cannot be registered there.
+    ///
+    /// # Panics
+    ///
+    /// Panics before removing any commits if a reachable HEAD or parent
+    /// record is missing. Storage synchronization failures also panic.
     pub fn gc(&mut self) {
         if self.namespace().is_read_only() {
             return;
         }
+        // Validate even a clean graph before any deletion/sweep. A missing
+        // HEAD/parent must not turn older durable history into "orphans".
+        self.validate_commit_graph()
+            .expect("VerMap: incomplete commit graph during gc");
+
         // 1. Crash recovery: rebuild ref counts if the dirty flag is
         //    set, or if any commit has ref_count == 0 (migration from
         //    pre-ref-count data).
         if self.gc_dirty.get_value()
             || self.commits.iter().any(|(_, c)| c.ref_count == 0)
         {
-            self.rebuild_ref_counts();
+            self.rebuild_ref_counts()
+                .expect("VerMap: incomplete commit graph during gc");
         }
+        self.sync_storage();
 
         // 2. Collect live roots from all commits + dirty roots.
         let mut live_roots: Vec<NodeId> =
@@ -1149,8 +1257,11 @@ where
         }
 
         let already_dirty = self.gc_dirty.get_value();
-        *self.gc_dirty.get_mut() = true;
+        if !already_dirty {
+            self.begin_ref_update();
+        }
 
+        let mut dead_roots = Vec::new();
         let mut work = vec![commit_id];
         while let Some(id) = work.pop() {
             if id == NO_COMMIT {
@@ -1162,8 +1273,9 @@ where
             c.ref_count = c.ref_count.saturating_sub(1);
             if c.ref_count == 0 {
                 let parents = c.parents.clone();
-                // Release the B+ tree root owned by this commit.
-                self.tree.release_node(c.root);
+                // Retire roots only after the whole commit cascade is durable.
+                // One fence per cascade avoids one fsync per deleted commit.
+                dead_roots.push(c.root);
                 self.commits.remove(&id);
                 work.extend(parents);
             } else {
@@ -1171,8 +1283,13 @@ where
             }
         }
 
+        self.commits.sync_wal();
+        for root in dead_roots {
+            self.tree.release_node(root);
+        }
+
         if !already_dirty {
-            *self.gc_dirty.get_mut() = false;
+            self.end_ref_update();
         }
     }
 }
