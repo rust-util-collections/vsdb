@@ -553,6 +553,63 @@ fn prune_crash_mid_reparent_both_children_views_exact() {
     assert_eq!(c2.get("k1").unwrap().as_slice(), b"v1x");
 }
 
+/// Run prune through reparent, then write the clearing marker the
+/// production path fences before any clear. Tests then tear one side
+/// of that clear and retry `prune`.
+fn prepare_marked_clear(head: &mut DagMapRaw) {
+    let mut linebuf = head.prune_collect_mainline().unwrap();
+    let mainline_ids: Vec<InstanceId> = {
+        let mut ids = vec![head.instance_id()];
+        ids.extend(linebuf.iter().map(|n| n.instance_id()));
+        ids
+    };
+    let pending: std::collections::HashSet<vsdb_core::common::RawBytes> =
+        head.children.iter().map(|(id, _)| id).collect();
+    DagMapRaw::prune_destroy_side_branches(&mut linebuf, &mainline_ids, &pending);
+    head.prune_merge_into_genesis(&mut linebuf).unwrap();
+    head.prune_reparent_children(linebuf.last_mut().unwrap());
+    head.mark_consumed_clearing(&mut linebuf);
+}
+
+#[test]
+fn prune_retry_after_parent_null_returns_genesis() {
+    let (genesis, i1, mut head) = build_prune_fixture();
+    let genesis_id = genesis.instance_id();
+    let mut child = DagMapRaw::new(Some(&mut head));
+    child.insert("c", "cv");
+    prepare_marked_clear(&mut head);
+
+    // Parent-null landed; children and data did not.
+    *head.parent.get_mut() = None;
+
+    let pruned = head.prune().unwrap();
+    assert_eq!(pruned.instance_id(), genesis_id);
+    assert_merged_view(&pruned);
+    assert_eq!(child.get("c").unwrap().as_slice(), b"cv");
+    assert_eq!(child.get("k2").unwrap().as_slice(), b"v2");
+    assert!(i1.is_dead());
+}
+
+#[test]
+fn prune_retry_after_data_clear_does_not_regress_genesis() {
+    let (genesis, i1, mut head) = build_prune_fixture();
+    let genesis_id = genesis.instance_id();
+    let mut child = DagMapRaw::new(Some(&mut head));
+    child.insert("c", "cv");
+    prepare_marked_clear(&mut head);
+
+    // Inverse tear: data and children clears landed, parent-null did not.
+    head.children.clear();
+    head.data.clear();
+
+    let pruned = head.prune().unwrap();
+    assert_eq!(pruned.instance_id(), genesis_id);
+    assert_merged_view(&pruned);
+    assert_merged_view(&child);
+    assert_eq!(child.get("c").unwrap().as_slice(), b"cv");
+    assert!(i1.is_dead());
+}
+
 #[test]
 fn prune_interrupted_before_clear_residue_is_reclaimed_by_next_prune() {
     let (genesis, i1, mut head) = build_prune_fixture();

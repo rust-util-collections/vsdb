@@ -55,6 +55,12 @@ use vsdb_core::{
 
 type DagHead = DagMapRaw;
 
+/// Side key in a consumed node's parent `Orphan`. Invisible to
+/// `get_value` (which reads `[]`). Written only after merge and reparent
+/// are durable, and names the genesis so a retry can finish the clear
+/// without re-folding. Old readers ignore the extra key.
+const PRUNE_CLEARING_KEY: &[u8] = &[1];
+
 /// A raw, disk-based, directed acyclic graph (DAG) map.
 ///
 /// Deliberately does **not** implement [`Default`]: every `DagMapRaw`
@@ -385,12 +391,13 @@ impl DagMapRaw {
     ///
     /// # Crash safety
     ///
-    /// The prune is ordered as **merge → flush → re-parent → flush → clear**:
-    /// nothing is cleared before the genesis holds the complete merged state
-    /// and every surviving child has been re-pointed at it (the two
+    /// The prune is ordered as **merge → flush → re-parent → flush → mark
+    /// → flush → clear**. Nothing is cleared before the genesis holds the
+    /// complete merged state, every surviving child has been re-pointed at
+    /// it, and each consumed node durably records that genesis (the
     /// [`Namespace::flush`](crate::common::Namespace::flush) barriers, scoped
     /// to this DAG's own namespace, pin that ordering across the engine's
-    /// independently-recovered shards).  Because overlay reads resolve
+    /// independently-recovered shards). Because overlay reads resolve
     /// top-down, the in-place enrichment of the genesis is invisible through
     /// the head, so a crash (e.g. `kill -9` or power loss) at **any** point
     /// leaves the canonical access paths — the returned head / the genesis
@@ -399,13 +406,15 @@ impl DagMapRaw {
     /// complete post-prune state, never a torn mix.
     ///
     /// The head and the intermediate mainline nodes are *consumed* by the
-    /// prune (this is the ordinary, non-crash contract as well): handles or
-    /// saved metadata still pointing at them may observe partially cleared
-    /// nodes after a crash and must not be used.  Storage left behind by an
-    /// interrupted prune remains reachable through the genesis' children
-    /// registry and is reclaimed by the next prune's side-branch
-    /// destruction — a crash costs at most temporarily leaked space, never
-    /// corruption.
+    /// prune (this is the ordinary, non-crash contract as well). A retry of
+    /// `prune` on a consumed head whose clearing marker is durable does not
+    /// re-fold and does not destroy survivors; it finishes the clear and
+    /// returns the genesis. Reads through a consumed handle during the clear
+    /// may observe a partially cleared node — prefer the genesis id. A
+    /// parentless node with no marker is already a genesis and is returned
+    /// unchanged. Storage left behind by an interrupted prune remains
+    /// reachable through the genesis' children registry and is reclaimed by
+    /// the retry or by the next prune's side-branch destruction.
     ///
     /// The complete mainline fold is staged in memory and published as one
     /// atomic batch. Temporary memory is proportional to the distinct keys
@@ -425,6 +434,13 @@ impl DagMapRaw {
     // see `prune` for the externally visible contract and each phase
     // method for the per-phase argument.
     fn prune_mainline(mut self) -> Result<DagHead> {
+        // A durable clearing marker means merge + reparent already
+        // committed. Finish the teardown; do not re-fold a possibly
+        // half-cleared head over the genesis.
+        if let Some(genesis) = self.prune_clearing_target() {
+            return self.finish_interrupted_clear(genesis);
+        }
+
         // Phase 0 (read-only): collect the mainline chain.
         let mut linebuf = self.prune_collect_mainline()?;
         if linebuf.is_empty() {
@@ -471,6 +487,13 @@ impl DagMapRaw {
 
         // Barrier B: all pointer flips must be durable before the old
         // chain is torn down.
+        self.namespace().flush();
+
+        // Name the genesis on every consumed node, then fence that write
+        // before any clear. Parent, children, and data are different
+        // prefixes; program order across shards is not power-loss order.
+        // Retry keys off this marker, not off the parent slot.
+        self.mark_consumed_clearing(&mut linebuf);
         self.namespace().flush();
 
         // Phases 4-5: clear the consumed nodes (head first, then
@@ -637,24 +660,113 @@ impl DagMapRaw {
         kept
     }
 
+    /// The genesis named by this node's durable clearing marker, if any.
+    fn prune_clearing_target(&self) -> Option<Self> {
+        self.parent.get_aux(PRUNE_CLEARING_KEY).flatten()
+    }
+
+    /// Record the genesis on the head and every intermediate. The genesis
+    /// itself is not marked — a parentless unmarked node is a real root.
+    fn mark_consumed_clearing(&mut self, linebuf: &mut [Self]) {
+        let genesis = linebuf.last().unwrap();
+        let marker = {
+            // SAFETY: the shadow is encoded into consumed nodes' parent
+            // slots as a handle alias and only read on retry. No write
+            // goes through it. `Clone` would deep-copy genesis storage.
+            Some(unsafe { genesis.shadow() })
+        };
+        self.parent.set_aux(PRUNE_CLEARING_KEY, &marker);
+        let last = linebuf.len() - 1;
+        for node in &mut linebuf[..last] {
+            node.parent.set_aux(PRUNE_CLEARING_KEY, &marker);
+        }
+    }
+
+    fn clear_consumed_fields(&mut self) {
+        *self.parent.get_mut() = None;
+        self.children.clear();
+        self.data.clear();
+    }
+
+    /// Retry path once the clearing marker is durable.
+    ///
+    /// Does not re-fold and does not run side-branch destruction: the head's
+    /// children registry may already be empty, and survivors are registered
+    /// on the genesis. Marked mainline nodes are cleared; unmarked children
+    /// whose parent points at the genesis are kept.
+    fn finish_interrupted_clear(mut self, mut genesis: Self) -> Result<DagHead> {
+        if !self.no_children() {
+            self.prune_reparent_children(&mut genesis);
+        }
+        Self::clear_marked_reachable(&mut genesis);
+        self.clear_consumed_fields();
+        self.namespace().flush();
+        let kept = Self::survivor_ids(&genesis);
+        genesis.prune_children_exclude(&kept);
+        Ok(genesis)
+    }
+
+    fn survivor_ids(genesis: &Self) -> Vec<RawBytes> {
+        let genesis_id = genesis.instance_id();
+        genesis
+            .children
+            .iter()
+            .filter(|(_, child)| {
+                !child.parent.has_aux(PRUNE_CLEARING_KEY)
+                    && child
+                        .parent
+                        .get_value()
+                        .is_some_and(|p| p.instance_id() == genesis_id)
+            })
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    /// Clear every marked descendant reachable from `root`'s children
+    /// registry, then drop those registry entries. Iterative: a mainline
+    /// can be deeper than the stack allows.
+    fn clear_marked_reachable(root: &mut Self) {
+        let mut frontier: Vec<Self> = root
+            .children
+            .iter()
+            .filter(|(_, child)| child.parent.has_aux(PRUNE_CLEARING_KEY))
+            .map(|(_, child)| child)
+            .collect();
+        let mut marked = Vec::new();
+        while let Some(node) = frontier.pop() {
+            frontier.extend(
+                node.children
+                    .iter()
+                    .filter(|(_, child)| child.parent.has_aux(PRUNE_CLEARING_KEY))
+                    .map(|(_, child)| child),
+            );
+            marked.push(node);
+        }
+        let mut drop_from_root = Vec::new();
+        for mut node in marked {
+            // Direct children stay listed on `root` until removed here.
+            // Deeper nodes are unlinked when their parent's children map
+            // is cleared below. Match by instance id so a torn parent-null
+            // still drops the registry entry.
+            if let Some(id) = root.child_id(&node) {
+                drop_from_root.push(id);
+            }
+            node.clear_consumed_fields();
+        }
+        for id in drop_from_root {
+            root.children.remove(&id);
+        }
+    }
+
     /// Prune phases 4-5: clear the consumed nodes — the head first, then
     /// the intermediates newest → oldest.
     ///
-    /// Per-node order: **parent → children → data**. Nulling the head's
-    /// parent first makes interrupted-prune re-entry structurally safe:
-    /// before any clearing starts, re-running `prune` on the head is a
-    /// complete, convergent re-run (refold + idempotent flips); the
-    /// instant clearing starts, the head is parentless and a re-run is
-    /// refused by the early return — a re-fold against a half-cleared
-    /// head (which would resurrect older values over the merged genesis)
-    /// is impossible.
+    /// The clearing marker (already durable) is what makes a retry safe.
+    /// Parent, children, and data live on different prefixes, so their
+    /// write order is not a power-loss order and must not be the safety
+    /// mechanism. The marker is left in place: a later `prune` on the
+    /// consumed head still resolves to the genesis.
     ///
-    /// Self-healing invariant: whenever a node still holds data, it is
-    /// reachable through the not-yet-cleared children registry of the
-    /// next-older mainline node (head-side nodes are cleared first) and
-    /// its parent slot is either intact or `None` — both reclaimable by
-    /// the ownership rule ([`owned_or_residue`](Self::owned_or_residue)),
-    /// so the next prune's side-branch destruction sweeps the residue.
     /// The caller flushes immediately after this phase, before phase 6
     /// unregisters the consumed chain.
     fn prune_clear_consumed(&mut self, linebuf: &mut [Self]) {

@@ -12,14 +12,6 @@
 
 ## Open
 
-### [CRITICAL] dagmap: interrupted prune clear can adopt the wrong head or corrupt genesis
-- **Where**: `strata/src/dagmap/raw/mod.rs` (`prune_mainline`, `prune_clear_consumed`, `prune_collect_mainline`)
-- **What**: after the merge and reparent barriers, `prune_clear_consumed` nulls the parent slot, clears the children registry, and clears data as three independent prefix writes with no durability fence between them. A parentless retry returns `Ok(self)`.
-- **Why**: those prefixes route to different shards. Ordinary writes reach the OS page cache but are not fsynced, and the prune contract includes power loss. A later shard's clear can become durable while the parent-null does not. Retry then treats the head as still linked, sees an empty `pending_reparent`, destroys children already reparented onto genesis, and republishes a fold that is missing the cleared head's overrides. The inverse window (parent-null durable, later clears not) makes retry return the consumed head as if it were the genesis, so ancestor keys disappear from the only handle a crashed caller can restore. The early return was meant to refuse that re-fold; `Ok(self)` is not a refusal and is indistinguishable from pruning a real genesis.
-- **Suggested fix**: before any clear, durably record a clearing marker that names the genesis on each consumed node, and fence that write. Retry on a marked head must not re-fold or destroy survivors; it finishes the clear and returns the genesis. A parentless unmarked node remains a real genesis.
-
----
-
 ### [HIGH] collections: get_mut write-back treats unstable encodings as edits
 - **Where**: `strata/src/basic/mapx_ord_rawkey/mod.rs` (`ValueMut::drop`, `ValueIterMut::drop`), `strata/src/basic/orphan/mod.rs` (`ValueMut::drop`); reached by `Mapx` and `MapxOrd`
 - **What**: dropping a mutable guard writes the value back whenever `encode()` differs from the stored bytes, including when the caller did not change the value.

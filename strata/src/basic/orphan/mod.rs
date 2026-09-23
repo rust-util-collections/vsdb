@@ -188,6 +188,25 @@ where
         self.inner.insert([], v);
     }
 
+    /// Reads a side key. The value slot is `[]`; aux keys must be non-empty
+    /// so old readers of [`get_value`](Self::get_value) ignore them.
+    pub(crate) fn get_aux(&self, key: &[u8]) -> Option<T> {
+        debug_assert!(!key.is_empty());
+        self.inner.get(key)
+    }
+
+    /// Whether `key` is present. Does not decode the value.
+    pub(crate) fn has_aux(&self, key: &[u8]) -> bool {
+        debug_assert!(!key.is_empty());
+        self.inner.contains_key(key)
+    }
+
+    /// Writes a side key. See [`get_aux`](Self::get_aux).
+    pub(crate) fn set_aux(&mut self, key: &[u8], value: &T) {
+        debug_assert!(!key.is_empty());
+        self.inner.insert(key, value);
+    }
+
     /// Checks if the `Orphan` is uninitialized.
     pub fn is_uninitialized(&self) -> bool {
         self.inner.get([]).is_none()
