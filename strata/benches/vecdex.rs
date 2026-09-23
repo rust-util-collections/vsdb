@@ -121,6 +121,9 @@ mod legacy_budget;
 // budget must be exported before the first engine touch.
 fn main() {
     legacy_budget::apply();
+    // Isolate from $HOME/.vsdb before the first engine touch.
+    let dir = format!("/tmp/vsdb_bench_vecdex_{}", random::<u128>());
+    vsdb::vsdb_set_base_dir(&dir).unwrap();
     benches();
     Criterion::default().configure_from_args().final_summary();
 }

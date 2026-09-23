@@ -12,14 +12,6 @@
 
 ## Open
 
-### [MEDIUM] benches: engine benches write the default dataset
-- **Where**: `strata/benches/basic.rs`, `strata/benches/slotdex.rs`, `strata/benches/vecdex.rs`, `core/benches/basic.rs`
-- **What**: these entry points open collections without `vsdb_set_base_dir`, so they allocate prefixes and write into `$HOME/.vsdb` when `VSDB_BASE_DIR` is unset.
-- **Why**: `versioned` and `cache_pool` already isolate under `/tmp`. A normal `cargo bench` otherwise contends with a live default-namespace process and mixes bench data into the user's database. Timings also depend on whatever else is already in that tree.
-- **Suggested fix**: set a unique `/tmp` base directory at bench startup, before the first engine touch.
-
----
-
 ### [LOW] dagmap: DagMapRawKey::shadow omits structural exclusion
 - **Where**: `strata/src/dagmap/rawkey/mod.rs` (`shadow`, `shadow_inner`)
 - **What**: the wrapper `unsafe` contract only forbids concurrent writes to the same key. The callee `DagMapRaw::shadow` also forbids concurrent structural mutations (`destroy`, `prune`, reparent).
