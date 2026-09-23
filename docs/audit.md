@@ -12,11 +12,7 @@
 
 ## Open
 
-### [LOW] common: load_instance_meta docs claim a format gate it does not enforce
-- **Where**: `strata/src/common/mod.rs` (`load_instance_meta`)
-- **What**: the doc says only the magic-tagged meta format is accepted. The function is a raw `postcard::from_bytes`. Magic and type-tag checks run in typed-handle decode, which `from_meta` uses.
-- **Why**: a caller treating this public loader as the migration gate accepts a legacy prefix payload whenever `T`'s postcard decode succeeds.
-- **Suggested fix**: correct the doc. Do not reject non-handle payloads here; `save_instance_meta` does not add magic.
+*(none)*
 
 ---
 

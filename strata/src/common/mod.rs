@@ -79,13 +79,15 @@ pub fn save_instance_meta(id: InstanceId, value: &impl Serialize) -> Result<()> 
     Ok(())
 }
 
-/// Reads the meta file for `id` and deserializes it back.
+/// Reads the meta file for `id` and deserializes it as `T`.
 ///
 /// Resolution is deterministic, never a search: `id.ns` names the meta
-/// directory (`None` ⇒ the default namespace's). Only the current
-/// (magic-tagged) meta format is accepted. Older formats require logical
-/// export with their last compatible reader and reimport into a fresh
-/// current dataset; see `CHANGELOG.md`'s migration section.
+/// directory (`None` ⇒ the default namespace's). This function does not
+/// itself require the typed-handle magic or type tag. Those gates run
+/// when `T` is a collection handle (`from_meta` / `Deserialize`). A
+/// non-handle payload written by [`save_instance_meta`] is returned as
+/// postcard decodes it. Typed-handle restore rejects a legacy prefix
+/// payload; see `CHANGELOG.md`.
 pub fn load_instance_meta<T: DeserializeOwned>(id: InstanceId) -> Result<T> {
     let ns = match id.ns {
         None => Namespace::default_ns(),

@@ -152,6 +152,9 @@ fn test_from_meta_rejects_legacy_prefix_payload() {
     fs::write(crate::common::vsdb_meta_path(id.map_id), legacy_payload).unwrap();
 
     assert!(Mapx::<u32, String>::from_meta(id).is_err());
+    // The generic loader is not the magic gate; a legacy prefix payload
+    // still decodes as raw bytes.
+    assert!(crate::common::load_instance_meta::<Vec<u8>>(id).is_ok());
 
     // Re-saving under the current format restores access.
     let id = hdr.save_meta().unwrap();
