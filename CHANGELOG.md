@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v16.3.10]
+
+### Fixed
+
+- DagMap prune writes a durable clearing marker before it tears down the mainline. A retry returns the genesis and does not re-fold a half-cleared head or destroy children already re-parented onto it. Existing handles stay readable; the marker is an extra key old readers ignore.
+- `get_mut` and `iter_mut` no longer rewrite storage when a value encoding is unstable and the caller did not change the value, so a non-mutating guard does not panic in read-only mode. Interior edits of round-tripping values still persist.
+- A retried `destroy` unlinks the node from its parent after a crash that already nulled the parent slot.
+- Engine benchmarks isolate their data under `/tmp` instead of writing the default dataset.
+
+### Changed
+
+- `DagMapRawKey::shadow` documents the same structural-exclusion rule as `DagMapRaw::shadow`.
+- `load_instance_meta` no longer claims to enforce the typed-handle magic gate. `from_meta` still rejects a legacy prefix payload.
+
 ## [v16.3.9]
 
 ### Fixed
