@@ -212,3 +212,85 @@ fn test_partial_eq_nan_values_are_never_equal() {
 
     assert_ne!(m1, m2, "NaN must never compare equal, even to itself");
 }
+
+// =====================================================================
+// get_mut write-back (unstable encodings must not look like edits)
+// =====================================================================
+
+struct Drift(u32);
+
+impl crate::common::ende::ValueEn for Drift {
+    fn try_encode_value(&self) -> crate::common::error::Result<Vec<u8>> {
+        static TAG: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+        let tag = TAG.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(postcard::to_allocvec(&(self.0, tag))?)
+    }
+}
+
+impl crate::common::ende::ValueDe for Drift {
+    fn decode_value(bytes: &[u8]) -> crate::common::error::Result<Self> {
+        let (n, _tag): (u32, u32) = postcard::from_bytes(bytes)?;
+        Ok(Drift(n))
+    }
+}
+
+#[test]
+fn get_mut_does_not_rewrite_non_idempotent_encoding() {
+    let mut map: MapxOrdRawKey<Drift> = MapxOrdRawKey::new();
+    map.insert([1], &Drift(7));
+    let before = map.inner.get([1]).unwrap();
+
+    {
+        let guard = map.get_mut([1]).unwrap();
+        assert_eq!(guard.0, 7);
+    }
+    assert_eq!(
+        map.inner.get([1]).unwrap(),
+        before,
+        "non-mutating get_mut must not rewrite an unstable encoding"
+    );
+
+    {
+        let mut guard = map.get_mut([1]).unwrap();
+        guard.0 = 8;
+    }
+    assert_eq!(map.get([1]).unwrap().0, 8);
+
+    let before = map.inner.get([1]).unwrap();
+    for (_k, v) in map.iter_mut() {
+        assert_eq!(v.0, 8);
+    }
+    assert_eq!(map.inner.get([1]).unwrap(), before);
+}
+
+#[test]
+fn get_mut_does_not_rewrite_hashmap_encoding() {
+    use std::collections::HashMap;
+
+    let mut map: MapxOrdRawKey<HashMap<u32, u32>> = MapxOrdRawKey::new();
+    let mut saw_unstable = false;
+    for seed in 0..32u32 {
+        let mut value = HashMap::new();
+        value.insert(seed, 1);
+        value.insert(seed.wrapping_add(10), 2);
+        value.insert(seed.wrapping_add(20), 3);
+        let key = seed.to_be_bytes();
+        map.insert(key, &value);
+        let before = map.inner.get(key).unwrap();
+        let round_trip = <HashMap<u32, u32> as ValueEnDe>::decode(&before)
+            .unwrap()
+            .encode();
+        if round_trip != before {
+            saw_unstable = true;
+        }
+        {
+            let guard = map.get_mut(key).unwrap();
+            assert_eq!(guard.get(&seed), Some(&1));
+        }
+        assert_eq!(map.inner.get(key).unwrap(), before);
+    }
+    assert!(
+        saw_unstable,
+        "HashMap postcard encoding did not drift; the regression would not fire"
+    );
+}

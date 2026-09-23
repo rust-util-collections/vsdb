@@ -12,14 +12,6 @@
 
 ## Open
 
-### [HIGH] collections: get_mut write-back treats unstable encodings as edits
-- **Where**: `strata/src/basic/mapx_ord_rawkey/mod.rs` (`ValueMut::drop`, `ValueIterMut::drop`), `strata/src/basic/orphan/mod.rs` (`ValueMut::drop`); reached by `Mapx` and `MapxOrd`
-- **What**: dropping a mutable guard writes the value back whenever `encode()` differs from the stored bytes, including when the caller did not change the value.
-- **Why**: postcard of `HashMap`/`HashSet` (legal `ValueEnDe` values) is not a round-trip. A non-mutating `get_mut`/`iter_mut` therefore rewrites storage. In read-only mode that rewrite hits the infallible insert assert and panics. The byte check exists so `RefCell` interior edits persist; it is not logical equality.
-- **Suggested fix**: write back a `DerefMut` edit always, and an interior edit only when the stored bytes round-trip. A non-mutating guard over an unstable encoding must leave the bytes unchanged and must not panic in read-only. Do not add a `PartialEq` bound.
-
----
-
 ### [MEDIUM] dagmap: retried destroy does not unlink from the parent
 - **Where**: `strata/src/dagmap/raw/mod.rs` (`destroy`)
 - **What**: `destroy` captures the parent handle, nulls the parent slot, flushes, then unlinks. A retry after that flush sees `parent == None` and skips the unlink.
@@ -97,6 +89,13 @@
 ---
 
 ## Rejected
+
+### collections: "Orphan get_mut rewrites unstable encodings the same way as MapxOrdRawKey"
+- **Where**: `strata/src/basic/orphan/mod.rs` (`ValueMut::drop`)
+- **Claim**: dropping an unchanged `Orphan` guard writes when the value encoding is not a stored-byte round-trip, including `HashMap`.
+- **Reason**: `Orphan::get_mut` snapshots `value.encode()` after decode, not the stored bytes. A second encode of that same instance matches, so a `HashMap` value is not rewritten. `MapxOrdRawKey` compared against the stored bytes and did rewrite; that path writes back only a real edit.
+
+---
 
 ### collections: "unbounded growth of caller-retained data is a leak"
 - **Where**: `strata/src/versioned/map.rs` (`commit`, `create_branch`, `log`, `list_branches`, `gc`), `strata/src/dagmap/raw/mod.rs`, `strata/src/vecdex/mod.rs`, `strata/src/slotdex/mod.rs`, `strata/src/trie/mod.rs` (`MptCalc`/`SmtCalc`)

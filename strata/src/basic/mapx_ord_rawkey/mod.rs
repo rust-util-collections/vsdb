@@ -82,15 +82,28 @@ where
     }
 
     /// Retrieves a mutable reference to a value in the map.
+    ///
+    /// Dropping the guard does not rewrite storage unless the value changed.
+    /// A `DerefMut` edit always persists. An interior edit (for example
+    /// through `RefCell`) persists when the stored encoding round-trips;
+    /// a non-mutating guard over a non-round-trip encoding such as `HashMap`
+    /// leaves the bytes unchanged and does not panic in read-only mode.
     #[inline(always)]
     pub fn get_mut(&mut self, key: impl AsRef<[u8]>) -> Option<ValueMut<'_, V>> {
         self.inner.get_mut(key.as_ref()).map(|inner| {
             let value = <V as ValueEnDe>::decode(&inner).unwrap();
+            // Snapshot this instance's encoding. A later encode of the same
+            // instance matches unless the value changed; comparing against
+            // the stored bytes does not, because decode builds a new
+            // `HashMap` with a different iteration order.
+            let snapshot = value.encode();
             let original = Some(inner.as_slice().to_vec());
             ValueMut {
                 value,
                 inner,
                 original,
+                snapshot,
+                dirty: false,
             }
         })
     }
@@ -103,6 +116,8 @@ where
             value,
             inner: self.inner.mock_value_mut(key, v),
             original: None,
+            snapshot: Vec::new(),
+            dirty: true,
         }
     }
 
@@ -335,7 +350,44 @@ where
 {
     value: V,
     inner: mapx_raw::ValueMut<'a>,
+    /// Stored bytes. `None` is a mocked insert and must be written.
     original: Option<Vec<u8>>,
+    /// `encode()` of `value` at guard creation. Same-instance encodes match
+    /// unless the value changed, even when they differ from `original`.
+    snapshot: Vec<u8>,
+    dirty: bool,
+}
+
+impl<V> ValueMut<'_, V>
+where
+    V: ValueEnDe,
+{
+    /// Bytes to write, or `None` when the guard must not touch storage.
+    fn replacement(&mut self) -> Option<Vec<u8>> {
+        let now = self.value.encode();
+        let Some(original) = self.original.as_deref() else {
+            return Some(now);
+        };
+        if now.as_slice() == self.snapshot.as_slice() {
+            // This instance still encodes as it did at creation. Do not
+            // replace stored bytes that were produced by a different
+            // instance (unstable `HashMap` order).
+            return None;
+        }
+        if self.dirty {
+            return (now.as_slice() != original).then_some(now);
+        }
+        // Not a `DerefMut` edit. A second encode that matches `now` means
+        // the value changed and the encoder is idempotent (interior
+        // mutation). A second encode that differs is a non-idempotent
+        // encoder, not a value change.
+        let again = self.value.encode();
+        if again.as_slice() == now.as_slice() && now.as_slice() != original {
+            Some(now)
+        } else {
+            None
+        }
+    }
 }
 
 impl<V> Drop for ValueMut<'_, V>
@@ -343,8 +395,7 @@ where
     V: ValueEnDe,
 {
     fn drop(&mut self) {
-        let encoded = self.value.encode();
-        if self.original.as_deref() != Some(encoded.as_slice()) {
+        if let Some(encoded) = self.replacement() {
             *self.inner = encoded;
         }
     }
@@ -365,6 +416,7 @@ where
     V: ValueEnDe,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
+        self.dirty = true;
         &mut self.value
     }
 }
@@ -447,12 +499,15 @@ where
         self.inner.next().map(|(k, v)| {
             let value = <V as ValueEnDe>::decode(&v).unwrap();
             let original = v.as_slice().to_vec();
+            let snapshot = value.encode();
             (
                 k,
                 ValueIterMut {
                     value,
                     inner: v,
                     original,
+                    snapshot,
+                    dirty: false,
                 },
             )
         })
@@ -467,12 +522,15 @@ where
         self.inner.next_back().map(|(k, v)| {
             let value = <V as ValueEnDe>::decode(&v).unwrap();
             let original = v.as_slice().to_vec();
+            let snapshot = value.encode();
             (
                 k,
                 ValueIterMut {
                     value,
                     inner: v,
                     original,
+                    snapshot,
+                    dirty: false,
                 },
             )
         })
@@ -493,6 +551,8 @@ where
     /// The inner mutable reference to the raw value.
     pub(crate) inner: mapx_raw::ValueIterMut<'a>,
     original: Vec<u8>,
+    snapshot: Vec<u8>,
+    dirty: bool,
 }
 
 impl<V> Drop for ValueIterMut<'_, V>
@@ -500,9 +560,21 @@ where
     V: ValueEnDe,
 {
     fn drop(&mut self) {
-        let encoded = self.value.encode();
-        if encoded != self.original {
-            *self.inner = encoded;
+        let now = self.value.encode();
+        if now.as_slice() == self.snapshot.as_slice() {
+            return;
+        }
+        if self.dirty {
+            if now.as_slice() != self.original.as_slice() {
+                *self.inner = now;
+            }
+            return;
+        }
+        let again = self.value.encode();
+        if again.as_slice() == now.as_slice()
+            && now.as_slice() != self.original.as_slice()
+        {
+            *self.inner = now;
         }
     }
 }
@@ -522,6 +594,7 @@ where
     V: ValueEnDe,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
+        self.dirty = true;
         &mut self.value
     }
 }
