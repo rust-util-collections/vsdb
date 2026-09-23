@@ -12,7 +12,51 @@
 
 ## Open
 
-*(none)*
+### [CRITICAL] dagmap: interrupted prune clear can adopt the wrong head or corrupt genesis
+- **Where**: `strata/src/dagmap/raw/mod.rs` (`prune_mainline`, `prune_clear_consumed`, `prune_collect_mainline`)
+- **What**: after the merge and reparent barriers, `prune_clear_consumed` nulls the parent slot, clears the children registry, and clears data as three independent prefix writes with no durability fence between them. A parentless retry returns `Ok(self)`.
+- **Why**: those prefixes route to different shards. Ordinary writes reach the OS page cache but are not fsynced, and the prune contract includes power loss. A later shard's clear can become durable while the parent-null does not. Retry then treats the head as still linked, sees an empty `pending_reparent`, destroys children already reparented onto genesis, and republishes a fold that is missing the cleared head's overrides. The inverse window (parent-null durable, later clears not) makes retry return the consumed head as if it were the genesis, so ancestor keys disappear from the only handle a crashed caller can restore. The early return was meant to refuse that re-fold; `Ok(self)` is not a refusal and is indistinguishable from pruning a real genesis.
+- **Suggested fix**: before any clear, durably record a clearing marker that names the genesis on each consumed node, and fence that write. Retry on a marked head must not re-fold or destroy survivors; it finishes the clear and returns the genesis. A parentless unmarked node remains a real genesis.
+
+---
+
+### [HIGH] collections: get_mut write-back treats unstable encodings as edits
+- **Where**: `strata/src/basic/mapx_ord_rawkey/mod.rs` (`ValueMut::drop`, `ValueIterMut::drop`), `strata/src/basic/orphan/mod.rs` (`ValueMut::drop`); reached by `Mapx` and `MapxOrd`
+- **What**: dropping a mutable guard writes the value back whenever `encode()` differs from the stored bytes, including when the caller did not change the value.
+- **Why**: postcard of `HashMap`/`HashSet` (legal `ValueEnDe` values) is not a round-trip. A non-mutating `get_mut`/`iter_mut` therefore rewrites storage. In read-only mode that rewrite hits the infallible insert assert and panics. The byte check exists so `RefCell` interior edits persist; it is not logical equality.
+- **Suggested fix**: write back a `DerefMut` edit always, and an interior edit only when the stored bytes round-trip. A non-mutating guard over an unstable encoding must leave the bytes unchanged and must not panic in read-only. Do not add a `PartialEq` bound.
+
+---
+
+### [MEDIUM] dagmap: retried destroy does not unlink from the parent
+- **Where**: `strata/src/dagmap/raw/mod.rs` (`destroy`)
+- **What**: `destroy` captures the parent handle, nulls the parent slot, flushes, then unlinks. A retry after that flush sees `parent == None` and skips the unlink.
+- **Why**: the only durable copy of the parent handle was the slot that was overwritten. The crash comment says a retried `destroy()` converges; `no_children()` stays false and the dead child remains listed until some other prune walk drops it.
+- **Suggested fix**: persist the parent handle under a side key in the same `Orphan` before nulling the slot, and unlink through that key on retry. Old readers ignore the extra key.
+
+---
+
+### [MEDIUM] benches: engine benches write the default dataset
+- **Where**: `strata/benches/basic.rs`, `strata/benches/slotdex.rs`, `strata/benches/vecdex.rs`, `core/benches/basic.rs`
+- **What**: these entry points open collections without `vsdb_set_base_dir`, so they allocate prefixes and write into `$HOME/.vsdb` when `VSDB_BASE_DIR` is unset.
+- **Why**: `versioned` and `cache_pool` already isolate under `/tmp`. A normal `cargo bench` otherwise contends with a live default-namespace process and mixes bench data into the user's database. Timings also depend on whatever else is already in that tree.
+- **Suggested fix**: set a unique `/tmp` base directory at bench startup, before the first engine touch.
+
+---
+
+### [LOW] dagmap: DagMapRawKey::shadow omits structural exclusion
+- **Where**: `strata/src/dagmap/rawkey/mod.rs` (`shadow`, `shadow_inner`)
+- **What**: the wrapper `unsafe` contract only forbids concurrent writes to the same key. The callee `DagMapRaw::shadow` also forbids concurrent structural mutations (`destroy`, `prune`, reparent).
+- **Why**: a caller who follows only the wrapper can run two structural updates through shadowed handles. The `SAFETY` comment does not match the call.
+- **Suggested fix**: copy the structural exclusion into both wrapper docs and `SAFETY` comments.
+
+---
+
+### [LOW] common: load_instance_meta docs claim a format gate it does not enforce
+- **Where**: `strata/src/common/mod.rs` (`load_instance_meta`)
+- **What**: the doc says only the magic-tagged meta format is accepted. The function is a raw `postcard::from_bytes`. Magic and type-tag checks run in typed-handle decode, which `from_meta` uses.
+- **Why**: a caller treating this public loader as the migration gate accepts a legacy prefix payload whenever `T`'s postcard decode succeeds.
+- **Suggested fix**: correct the doc. Do not reject non-handle payloads here; `save_instance_meta` does not add magic.
 
 ---
 
@@ -42,7 +86,7 @@
 ### [MEDIUM] dagmap: serde decomposition can expose the private parent slot
 - **Where**: `strata/src/dagmap/raw/mod.rs`, `strata/src/basic/orphan/mod.rs`
 - **What**: callers can deserialize `DagMapRaw`'s public tuple representation into its public component types, retain an alias to the private parent `Orphan`, and later create a parent cycle through safe APIs. The same deliberate decomposition can also plant a foreign registry entry that `owned_or_residue`'s `None`-parent residue arm treats as reclaimable, so a later destroy/prune walk can wipe a live root (`parent == None`) — value loss under representation abuse, not hang/UB.
-- **Reason**: preventing deliberate representation decomposition requires a breaking redesign that no longer serializes recoverable component handles. Current guards bound casual misuse to failed lookups/prune errors rather than hangs or memory unsafety; keep this debt visible until a broader DagMap format redesign is justified.
+- **Reason**: stopping deliberate decomposition requires a handle format that old bytes cannot decode into the public component types. A tombstone that treats `None` as residue only when present would stop the planted-root wipe, but a crash on the current build can already have `parent == None` with data still intact and no tombstone; requiring the tombstone would skip that residue and, if the registry entry is then dropped, make it unreachable. That recovery regression is not an acceptable silent patch. Casual misuse still cannot hang or cause memory unsafety. Keep the debt until a DagMap format redesign.
 
 ---
 
