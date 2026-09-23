@@ -61,6 +61,10 @@ type DagHead = DagMapRaw;
 /// without re-folding. Old readers ignore the extra key.
 const PRUNE_CLEARING_KEY: &[u8] = &[1];
 
+/// Side key in the parent `Orphan` holding the parent handle across a
+/// `destroy` that has already nulled the value slot. Old readers ignore it.
+const DESTROY_PARENT_KEY: &[u8] = &[2];
+
 /// A raw, disk-based, directed acyclic graph (DAG) map.
 ///
 /// Deliberately does **not** implement [`Default`]: every `DagMapRaw`
@@ -874,10 +878,19 @@ impl DagMapRaw {
     pub fn destroy(&mut self) {
         let self_id = self.instance_id();
 
-        // Captured now (before nulling below) so the parent's registry
-        // can be updated as the LAST step, once this node is fully
-        // cleared — see "Crash safety" above.
-        let parent = self.parent.get_value();
+        // The in-memory parent handle does not survive a crash. Persist
+        // it under a side key and fence that write before nulling the
+        // value slot, so a retry can still unlink. `get_value` decodes a
+        // handle alias; `Clone` would deep-copy the parent.
+        if let Some(parent) = self.parent.get_value() {
+            self.parent.set_aux(DESTROY_PARENT_KEY, &Some(parent));
+            self.parent.sync_wal();
+        }
+        let parent = self
+            .parent
+            .get_aux(DESTROY_PARENT_KEY)
+            .flatten()
+            .or_else(|| self.parent.get_value());
 
         // The parent slot is owned by this node (never shared with
         // siblings), so nulling it is a persistent, node-local unlink.

@@ -173,6 +173,27 @@ fn destroy_unlinks_from_parent() {
 /// recognized as reclaimable residue (`owned_or_residue`'s `None`-parent
 /// arm) rather than becoming a permanently unreachable leak.
 #[test]
+fn destroy_retry_after_parent_null_unlinks() {
+    let mut parent = DagMapRaw::new(None);
+    let mut child = DagMapRaw::new(Some(&mut parent));
+    child.insert("k", "v");
+
+    // Crash after the side key is durable and the slot is nulled, before
+    // the parent registry unlink.
+    let linked = child.parent.get_value().unwrap();
+    child
+        .parent
+        .set_aux(super::DESTROY_PARENT_KEY, &Some(linked));
+    *child.parent.get_mut() = None;
+    child.data.clear();
+    assert!(!parent.no_children());
+
+    child.destroy();
+    assert!(parent.no_children());
+    assert!(child.get("k").is_none());
+}
+
+#[test]
 fn destroy_interrupted_before_unlink_leaves_reclaimable_residue() {
     let mut parent = DagMapRaw::new(None);
     let mut child = DagMapRaw::new(Some(&mut parent));

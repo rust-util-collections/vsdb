@@ -12,14 +12,6 @@
 
 ## Open
 
-### [MEDIUM] dagmap: retried destroy does not unlink from the parent
-- **Where**: `strata/src/dagmap/raw/mod.rs` (`destroy`)
-- **What**: `destroy` captures the parent handle, nulls the parent slot, flushes, then unlinks. A retry after that flush sees `parent == None` and skips the unlink.
-- **Why**: the only durable copy of the parent handle was the slot that was overwritten. The crash comment says a retried `destroy()` converges; `no_children()` stays false and the dead child remains listed until some other prune walk drops it.
-- **Suggested fix**: persist the parent handle under a side key in the same `Orphan` before nulling the slot, and unlink through that key on retry. Old readers ignore the extra key.
-
----
-
 ### [MEDIUM] benches: engine benches write the default dataset
 - **Where**: `strata/benches/basic.rs`, `strata/benches/slotdex.rs`, `strata/benches/vecdex.rs`, `core/benches/basic.rs`
 - **What**: these entry points open collections without `vsdb_set_base_dir`, so they allocate prefixes and write into `$HOME/.vsdb` when `VSDB_BASE_DIR` is unset.
