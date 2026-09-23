@@ -12,14 +12,6 @@
 
 ## Open
 
-### [LOW] dagmap: DagMapRawKey::shadow omits structural exclusion
-- **Where**: `strata/src/dagmap/rawkey/mod.rs` (`shadow`, `shadow_inner`)
-- **What**: the wrapper `unsafe` contract only forbids concurrent writes to the same key. The callee `DagMapRaw::shadow` also forbids concurrent structural mutations (`destroy`, `prune`, reparent).
-- **Why**: a caller who follows only the wrapper can run two structural updates through shadowed handles. The `SAFETY` comment does not match the call.
-- **Suggested fix**: copy the structural exclusion into both wrapper docs and `SAFETY` comments.
-
----
-
 ### [LOW] common: load_instance_meta docs claim a format gate it does not enforce
 - **Where**: `strata/src/common/mod.rs` (`load_instance_meta`)
 - **What**: the doc says only the magic-tagged meta format is accepted. The function is a raw `postcard::from_bytes`. Magic and type-tag checks run in typed-handle decode, which `from_meta` uses.

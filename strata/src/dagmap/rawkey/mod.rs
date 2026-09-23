@@ -140,10 +140,14 @@ where
     ///
     /// This API breaks Rust's semantic safety guarantees. The caller must
     /// ensure no concurrent writes to the same key through any handle.
+    /// Multiple writers on disjoint keys are safe. Structural mutations
+    /// (`destroy`, `prune`, reparenting) have cross-key side effects —
+    /// only one such operation at a time.
     #[inline(always)]
     pub unsafe fn shadow_inner(&self) -> DagMapRaw {
         // SAFETY: forwards this fn's `unsafe` contract — the caller
-        // guarantees no concurrent writes to the same key.
+        // guarantees no concurrent writes to the same key, and only one
+        // structural mutation at a time.
         unsafe { self.inner.shadow() }
     }
 
@@ -153,10 +157,14 @@ where
     ///
     /// This API breaks Rust's semantic safety guarantees. The caller must
     /// ensure no concurrent writes to the same key through any handle.
+    /// Multiple writers on disjoint keys are safe. Structural mutations
+    /// (`destroy`, `prune`, reparenting) have cross-key side effects —
+    /// only one such operation at a time.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> DagMapRawKey<V> {
         // SAFETY: forwards this fn's `unsafe` contract — the caller
-        // guarantees no concurrent writes to the same key.
+        // guarantees no concurrent writes to the same key, and only one
+        // structural mutation at a time.
         unsafe {
             Self {
                 inner: self.shadow_inner(),
