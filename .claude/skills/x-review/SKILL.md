@@ -7,15 +7,17 @@ disable-model-invocation: true
 
 # Deep Regression Review for VSDB
 
-High-signal review. Code read-only unless `--fix`; may update only
-`docs/audit.md`. Never commit or push. User-invoked only.
+High-signal review. Code read-only unless `--fix`. `docs/audit.md` is the registry
+exception: updating it is not a code write. Merge it; do not revert unrelated edits.
+Never commit or push. User-invoked only.
 
 ## Setup
 
-Read: `workflow-policy.md`, `pragmatic-engineering.md`, `technical-patterns.md`,
-`review-core.md` (Subsystem Map), `false-positive-guide.md`. Public/persisted
-change → `compatibility-policy.md`. Design-shaped / multi-subsystem →
-`design-patterns.md`.
+Read: `.claude/docs/workflow-policy.md`, `.claude/docs/pragmatic-engineering.md`,
+`.claude/docs/technical-patterns.md`, `.claude/docs/review-core.md` (Subsystem Map),
+`.claude/docs/false-positive-guide.md`. Public/persisted change →
+`.claude/docs/compatibility-policy.md`. Design-shaped / multi-subsystem →
+`.claude/docs/design-patterns.md`.
 
 ## Input
 
@@ -38,7 +40,7 @@ fixes after report. Historical scope: only still-present HEAD defects.
 
 ### Phase 1 — Scope
 
-1. Worktree baseline (`workflow-policy.md`).
+1. Worktree baseline (`.claude/docs/workflow-policy.md`).
 2. Changed files + full diff + callers/tests. `worktree` includes untracked.
    `all` → ledger: both crates’ source/tests/benches, manifests/CI, public docs, `.claude/`.
 3. Map via Subsystem Map; load guides.

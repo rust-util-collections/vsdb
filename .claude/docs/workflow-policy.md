@@ -4,7 +4,7 @@ SSOT safety for `/x-review`, `/x-commit`, `/x-fix`, `/x-overhaul`. Skills must
 not weaken it. See also `pragmatic-engineering.md`.
 
 **Hard rules:** user-invoked only · local commits only (never push) · no history
-rewrite · one independent issue per commit.
+rewrite · one independent issue per commit · no auto tag · no autonomous major.
 
 ## 1. Preflight
 
@@ -26,6 +26,8 @@ Dirty tree OK; clear ownership required.
 
 - No `stash` / `clean` / `checkout --` / `restore` / destructive `reset` to fake a clean tree.
 - Never touch unrelated baseline (revert, overwrite, stage, commit).
+- `docs/audit.md` is the registry exception: every skill may update it, including a
+  read-only review. That is not a code write. Merge; do not revert unrelated edits there.
 - If a needed fix overlaps baseline and cannot be separated safely → stop and report.
 - Review agents read-only. Parallelism: investigation/validation only. Edits and
   commits on one tree: sequential.
@@ -46,9 +48,11 @@ One issue / root cause / behavior change → one commit.
 - Dirty-tree validation covers everything present. If other units can interfere,
   validate `HEAD` + only the candidate in a disposable worktree (no stash);
   remove it after.
-- VSDB tests isolate via unique prefixes. Skills must **not** delete `$HOME/.vsdb`
-  or shared `/tmp/vsdb_testing`; use direct Cargo tests, not cleanup-bearing
-  `make test`.
+- VSDB tests isolate via unique prefixes. The agent uses bare Cargo (`cargo test`,
+  `cargo clippy`, `cargo check`, `cargo fmt`), not `make test` / `make all` /
+  `make bench` / `make lint` / `make fmt`, unless the user explicitly asks for that
+  target. `make test`, `make all`, and `make bench` also delete `$HOME/.vsdb` or
+  shared `/tmp/vsdb_testing`.
 - Unexpected test discovery: check `git ls-files` / `git status` before blame;
   never delete another session’s scratch test.
 - Unit-caused failure → fix before commit. Pre-existing → report with evidence.

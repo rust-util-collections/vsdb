@@ -67,7 +67,7 @@ batches (no root escapes while nodes buffered); ns/allocator need documented
 sync/rename order.
 
 **Compatibility:** `compatibility-policy.md`. Old data preserve/reject/migrate
-intentionally. Breaks → major + concrete migration.
+intentionally. A break needs explicit user acceptance before any major bump.
 
 **Perf:** Hot/warm only; quantify. Cold init micro-opts are not findings.
 

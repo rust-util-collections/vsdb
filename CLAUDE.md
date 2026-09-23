@@ -32,9 +32,9 @@ make bench        # criterion benches (core: basic + cache_pool; strata: basic, 
 
 **Important**: Tests run in PARALLEL (v16.0.2+). Test data stays disjoint via globally-unique prefixes; tests must not assert on cross-test global state (exact allocator values, registry sizes) and must serialize any `vsdb_set_base_dir` behind a `Once` (env mutation is unsound to race).
 
-`make test` is the manual/CI convenience target and performs global cleanup.
-Automation skills use direct `cargo test --workspace --tests` commands instead,
-so they never delete `$HOME/.vsdb` or shared `/tmp/vsdb_testing`.
+`make test` / `make all` / `make bench` are manual/CI convenience targets and
+perform global cleanup. The agent uses bare Cargo unless you explicitly ask for
+a make target, so it does not delete `$HOME/.vsdb` or shared `/tmp/vsdb_testing`.
 
 ## Architecture
 
@@ -59,15 +59,15 @@ so they never delete `$HOME/.vsdb` or shared `/tmp/vsdb_testing`.
 Project skills live under `.claude/skills/<name>/SKILL.md` and are
 user-invocable only.
 
-- `/x-review` — deep regression analysis (supports: N commits, `all`, hash, range)
-- `/x-fix` — fix audit backlog: resolve `docs/audit.md` → self-review → commit
-- `/x-commit` — self-reviewing commit: review uncommitted changes → fix → commit
-- `/x-overhaul` — audit-fix-commit pipeline (full repo or scoped like `/x-review`)
+- `/x-review` — regression review. Empty = latest commit. Also: N, `all`, `staged`, `worktree`, hash, range, `--fix`. Code read-only; `docs/audit.md` is the registry exception
+- `/x-fix` — clear `docs/audit.md` Open, one finding per commit; resumable patch bump, no tag
+- `/x-commit` — review worktree → fix → commit. Unfixed defects go to `docs/audit.md`
+- `/x-overhaul` — same scopes as `/x-review` (empty = latest commit; `all` = full repo), then fix and local commits
 
 Supporting docs (`.claude/docs/`):
 - `workflow-policy.md` — worktree safety, one-issue-one-commit
 - `pragmatic-engineering.md` — root goal, low variance
-- `commit-protocol.md` — validate → commit → lockstep version/tag
+- `commit-protocol.md` — validate → commit → resumable patch bump (no tag, no autonomous major)
 - `compatibility-policy.md` — public/on-disk breaks + migration
 - `technical-patterns.md` / `design-patterns.md` — bug catalog + D-\* design lens
 - `review-core.md` — evidence standard + Subsystem Map
@@ -75,7 +75,7 @@ Supporting docs (`.claude/docs/`):
 - `patterns/*` — per-subsystem checklists
 
 Additional docs in `docs/`:
-- `audit.md` — Open /Won't Fix / Rejected (managed by `/x-review`, `/x-fix`)
+- `audit.md` — Open / Won't Fix / Rejected (managed by the four skills; registry writes are not code writes)
 
 ## Conventions
 

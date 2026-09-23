@@ -16,7 +16,9 @@ layouts, enum discriminants, and metadata envelopes are wire:
 ## Accepted breaks
 
 Only when necessary or compatibility cost is disproportionate — never as an
-undocumented patch surprise.
+undocumented patch surprise. An agent must not decide the break is accepted.
+Until the user explicitly accepts it in this conversation, do not ship it and do
+not major-bump; leave it Open.
 
 1. Major bump both crates lockstep; update workspace `vsdb_core` dep.
 2. Document broken API/format and affected old versions in `CHANGELOG.md` + public migration docs.

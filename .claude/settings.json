@@ -1,8 +1,14 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false
+  },
   "permissions": {
     "allow": [
       "Edit(docs/audit.md)",
+      "Edit(CHANGELOG.md)",
       "Edit(Cargo.toml)",
       "Edit(core/Cargo.toml)",
       "Edit(strata/Cargo.toml)",
@@ -21,11 +27,12 @@
       "Bash(git status:*)",
       "Bash(git show:*)",
       "Bash(git blame:*)",
-      "Bash(git branch:*)",
-      "Bash(git rev-parse:*)"
+      "Bash(git rev-parse:*)",
+      "Bash(git branch)"
     ],
     "deny": [
       "Bash(make clean_all)",
+      "Bash(git push *)",
       "Bash(git stash)",
       "Bash(git stash:*)",
       "Bash(git clean)",
@@ -47,16 +54,6 @@
       "Bash(git reset --hard:*)",
       "Bash(git reset --soft)",
       "Bash(git reset --soft:*)",
-      "Bash(git push --force)",
-      "Bash(git push --force *)",
-      "Bash(git push * --force)",
-      "Bash(git push * --force *)",
-      "Bash(git push -f)",
-      "Bash(git push -f *)",
-      "Bash(git push * -f)",
-      "Bash(git push * -f *)",
-      "Bash(git push --force-with-lease:*)",
-      "Bash(git push * --force-with-lease:*)",
       "Bash(git filter-branch:*)",
       "Bash(git replace:*)"
     ]

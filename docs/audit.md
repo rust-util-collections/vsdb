@@ -1,6 +1,7 @@
 # Audit Findings
 
-> Auto-managed by /x-review and /x-fix.
+> Auto-managed by /x-review, /x-fix, /x-commit, and /x-overhaul.
+> Registry edits are not code writes.
 >
 > **Won't Fix is not permanent.** Re-evaluate an entry when a review touches
 > its code, callers, assumptions, or subsystem; a full audit checks every entry.
