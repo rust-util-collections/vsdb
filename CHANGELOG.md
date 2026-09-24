@@ -15,17 +15,24 @@ metadata written by v17 and rejects it with an error.
 - **Configuration**: `vsdb_set_base_dir` is removed; configure with
   `vsdb_configure(VsdbOptions::new(dir))`. `vsdb_configure` no longer writes
   `VSDB_BASE_DIR` into the process environment (that `env::set_var` was
-  unsound once other threads exist), so it is safe from any thread.
-- **Namespace administration** moved onto `Namespace`; the engine singleton
-  (`VSDB`, `VsDB`) and the default-namespace path helpers are internal.
+  unsound once other threads exist), so it is safe from any thread. A child
+  process that should share the universe gets it explicitly:
+  `Command::new(..).env("VSDB_BASE_DIR", vsdb_get_base_dir())`.
+- **Namespace administration** moved onto `Namespace`
+  (`list` / `destroy` / `relocate` / `close_by_id`). The engine singleton
+  `VSDB` / `VsDB` (which had no public methods) is internal. The path-only
+  helpers `vsdb_get_base_dir`, `vsdb_get_custom_dir`, `vsdb_get_system_dir`,
+  `vsdb_get_meta_dir` and `vsdb_meta_path` are unchanged.
 - **Write batches**: `batch_entry()` / `batch_entry_wiped()` are `batch()` /
   `batch_wiped()`, returning concrete batch types whose `commit(self)`
-  consumes the batch; `BatchTrait` is removed.
+  consumes the batch (start a new `batch()` for the next group);
+  `BatchTrait` is removed — `MapxRawBatch` is the raw batch type.
 - **Raw handle constructors**: the typed maps and `Orphan` no longer expose
   `unsafe fn from_bytes` / `from_bytes_in` / `as_bytes`, and `MapxRaw` drops
   the ambient-namespace `from_bytes` (they skipped payload validation and
   prefix reservation). Persist handles through serde or `save_meta` /
-  `from_meta`.
+  `from_meta`; `instance_id()` is the compact identity. Viewing an existing
+  `MapxRaw`'s storage through a typed map is no longer possible.
 - **VerMap**:
   - `BranchId` / `CommitId` are newtypes (`from_raw` / `raw`) instead of
     `u64` aliases, so they cannot be swapped; `NO_COMMIT` is internal.
@@ -34,10 +41,17 @@ metadata written by v17 and rejects it with an error.
     `range` takes any `RangeBounds` like `BTreeMap::range`.
   - The `Branch` / `BranchMut` handles and `branch()` / `branch_mut()` /
     `main()` / `main_mut()` are removed (every operation has one form).
-  - `diff_commits` / `diff_uncommitted` return decoded `DiffEntry<K, V>`.
-  - `Commit` exposes `id()`, `parents()`, `timestamp_us()`.
+  - `diff_commits` / `diff_uncommitted` return decoded `DiffEntry<K, V>`;
+    stored bytes remain available through `Snapshot::raw_iter` (which
+    replaces `raw_iter` / `raw_iter_at_commit`).
+  - `Commit` exposes `id()`, `parents()`, `timestamp_us()`; the internal
+    `root` / `ref_count` fields are no longer public.
   - `gc()` returns `Result` instead of panicking on a damaged commit graph.
-  - The node-level `versioned::{diff, merge}` functions are crate-private.
+- **PersistentBTree**: the free functions `versioned::diff::diff_roots` and
+  `versioned::merge::{three_way_merge, three_way_merge_many_bases}` become
+  the methods `PersistentBTree::diff(old, new) -> Vec<TreeDiff>` and
+  `PersistentBTree::merge(bases, source, target)`; `TreeDiff` is the
+  stored-bytes diff entry.
 - **SlotDex**: `page(slots, page_size, page_index, Order)` and
   `count(slots)` replace `get_entries_by_page`, `get_entries_by_page_slot`,
   `entry_cnt_within_two_slots` and `total_by_slot`; `slots` is any
@@ -81,7 +95,6 @@ metadata written by v17 and rejects it with an error.
 | `vsdb_set_base_dir(dir)` | `vsdb_configure(VsdbOptions::new(dir))` |
 | env `VSDB_MEM_BUDGET_MB` (set via `set_var`) | `VsdbOptions::new(dir).with_mem_budget_mb(mb)` |
 | `vsdb_ns_list()` / `vsdb_ns_destroy(id)` / `vsdb_ns_relocate(id, p)` / `vsdb_ns_close(id)` | `Namespace::list()` / `Namespace::destroy(id)` / `Namespace::relocate(id, p)` / `Namespace::close_by_id(id)` |
-| `vsdb_get_system_dir()` / `vsdb_get_meta_dir()` / `vsdb_meta_path(id)` | `Namespace::default_ns().system_dir()` / `.meta_dir()` / `.meta_path(id)` |
 | `m.batch_entry()` / `m.batch_entry_wiped()` | `m.batch()` / `m.batch_wiped()` |
 | `MapxBatchEntry` / `MapxOrdBatchEntry` / `MapxOrdRawKeyBatchEntry` | `MapxBatch` / `MapxOrdBatch` / `MapxOrdRawKeyBatch` |
 | `unsafe { T::from_bytes(b) }` / `h.as_bytes()` | serde, or `h.save_meta()` + `T::from_meta(id)` |
@@ -89,6 +102,11 @@ metadata written by v17 and rejects it with an error.
 | `let b: BranchId = 3;` | `BranchId::from_raw(3)`; `id.raw()` for the number |
 | `m.get_at_commit(c, &k)?` | `m.at(c)?.get(&k)` |
 | `m.iter_at_commit(c)?` / `m.range_at_commit(c, lo, hi)?` | `m.at(c)?.iter()` / `m.at(c)?.range(lo..hi)` |
+| `m.raw_iter(b)?` / `m.raw_iter_at_commit(c)?` | `m.snapshot(b)?.raw_iter()` / `m.at(c)?.raw_iter()` |
+| `diff_roots(&tree, a, b)` / `three_way_merge(&mut tree, base, s, t)` | `tree.diff(a, b)` / `tree.merge(&[base], s, t)` |
+| `versioned::diff::DiffEntry` (bytes) | `versioned::DiffEntry<K, V>` (decoded); `basic::persistent_btree::TreeDiff` for bytes |
+| `Box<dyn BatchTrait>` | `MapxRawBatch` |
+| child processes inheriting `VSDB_BASE_DIR` | `Command::new(..).env("VSDB_BASE_DIR", vsdb_get_base_dir())` |
 | `m.range(b, Bound::Included(&x), Bound::Excluded(&y))?` | `m.range(b, x..y)?` |
 | `m.main_mut().insert(&k, &v)?` / `m.branch(b)?.get(&k)?` | `m.insert(m.main_branch(), &k, &v)?` / `m.get(b, &k)?` |
 | `commit.id` / `commit.parents` / `commit.timestamp_us` | `commit.id()` / `commit.parents()` / `commit.timestamp_us()` |
