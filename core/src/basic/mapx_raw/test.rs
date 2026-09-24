@@ -93,7 +93,7 @@ fn test_batch() {
     let max = 100u64;
 
     {
-        let mut batch = hdr.batch_entry();
+        let mut batch = hdr.batch();
         for i in 0..max {
             let key = to_bytes(i);
             let value = to_bytes(max + i);
@@ -109,7 +109,7 @@ fn test_batch() {
     }
 
     {
-        let mut batch = hdr.batch_entry();
+        let mut batch = hdr.batch();
         for i in 0..max {
             let key = to_bytes(i);
             batch.remove(&key);
@@ -135,7 +135,7 @@ fn test_batch_wiped() {
     // The wipe and the new rows commit in one atomic batch: pre-existing
     // keys vanish, keys staged after the wipe survive it.
     {
-        let mut batch = hdr.batch_entry_wiped();
+        let mut batch = hdr.batch_wiped();
         batch.insert(&to_bytes(7), &to_bytes(70));
         batch.insert(&to_bytes(max + 1), &to_bytes(71));
         batch.commit().unwrap();
@@ -149,7 +149,7 @@ fn test_batch_wiped() {
     }
 
     // A bare wiped batch behaves like clear().
-    hdr.batch_entry_wiped().commit().unwrap();
+    hdr.batch_wiped().commit().unwrap();
     assert_eq!(hdr.iter().count(), 0);
 
     // The map remains fully usable afterwards.

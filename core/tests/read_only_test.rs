@@ -236,7 +236,7 @@ fn read_only_reader_helper() {
     ));
 
     {
-        let mut batch = default_map.batch_entry();
+        let mut batch = default_map.batch();
         batch.insert(b"blocked-batch-key", b"blocked-batch-value");
         assert!(matches!(batch.commit(), Err(VsdbError::ReadOnly { .. })));
     }

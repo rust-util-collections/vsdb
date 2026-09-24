@@ -7,7 +7,8 @@ mod mmdb;
 /////////////////////////////////////////////////////////////////////////////
 
 pub(crate) use self::mmdb::{
-    EngineSizing, MmDB as Engine, validate_completed_dataset, write_file_durable,
+    EngineSizing, MmDB as Engine, MmdbBatch as Batch, validate_completed_dataset,
+    write_file_durable,
 };
 
 type DbIter = self::mmdb::MmdbIter;
@@ -64,20 +65,6 @@ impl UnwindMark {
     fn interrupted(self) -> bool {
         !self.0 && thread::panicking()
     }
-}
-
-/// Trait for batch write operations
-pub trait BatchTrait {
-    fn insert(&mut self, key: &[u8], value: &[u8]);
-    fn remove(&mut self, key: &[u8]);
-    /// Atomically applies all buffered operations.
-    ///
-    /// On error the buffered operations are consumed and lost (none were
-    /// applied); a failed commit is **not retryable** — re-stage the
-    /// operations on a fresh batch instead. Engine-side entry-size
-    /// rejections (keys over 8 MiB, entries over ~64 MiB) and
-    /// [`VsdbError::ReadOnly`] are reported here.
-    fn commit(&mut self) -> Result<()>;
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -300,7 +287,7 @@ impl Mapx {
     }
 
     #[inline(always)]
-    pub(crate) fn batch_begin(&mut self) -> Box<dyn BatchTrait + '_> {
+    pub(crate) fn batch_begin(&mut self) -> Batch<'_> {
         let prefix = self.materialize();
         self.ns.engine().batch_begin(prefix)
     }
@@ -310,7 +297,7 @@ impl Mapx {
     /// afterwards apply on top of the wipe; the whole set — wipe
     /// included — commits in one atomic engine write batch.
     #[inline(always)]
-    pub(crate) fn batch_begin_wiped(&mut self) -> Box<dyn BatchTrait + '_> {
+    pub(crate) fn batch_begin_wiped(&mut self) -> Batch<'_> {
         let prefix = self.materialize();
         self.ns.engine().batch_begin_wiped(prefix)
     }
@@ -544,7 +531,6 @@ impl Mapx {
                 batch.insert(&k, &v);
             }
             if let Err(e) = batch.commit() {
-                drop(batch);
                 // Reclaim the committed chunks; a wipe failure changes
                 // nothing for the caller — the original error wins.
                 let _ = new_instance.batch_begin_wiped().commit();

@@ -40,7 +40,7 @@ fn read_write(c: &mut Criterion) {
 
     group.bench_function(" batch write (100 items) ", |b| {
         b.iter(|| {
-            let mut batch = db.batch_entry();
+            let mut batch = db.batch();
             for _ in 0..100 {
                 let n = i.fetch_add(1, Ordering::SeqCst);
                 batch.insert(&[n; 2], &vec![n; 128]);

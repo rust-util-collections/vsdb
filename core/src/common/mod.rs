@@ -12,7 +12,6 @@ pub mod error;
 /// Namespaces: anonymous placement groups (independent engine instances).
 pub mod namespace;
 
-pub use engine::BatchTrait;
 use error::{Result, VsdbError};
 pub use namespace::{DEFAULT_NS_ID, InstanceId, Namespace, NamespaceOpts, NsId, NsInfo};
 use parking_lot::Mutex;

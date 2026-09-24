@@ -55,9 +55,9 @@ pub use basic::mapx_raw::MapxRaw;
 /// raw data types (`RawBytes`, `RawKey`, `RawValue`), and functions for managing
 /// the database environment (e.g., `vsdb_flush`, `vsdb_configure`).
 pub use common::{
-    BatchTrait, DEFAULT_NS_ID, GB, InstanceId, KB, MB, Namespace, NamespaceOpts, NsId,
-    NsInfo, OpenMode, RawBytes, RawKey, RawValue, VsdbOptions, vsdb_configure,
-    vsdb_flush, vsdb_get_base_dir, vsdb_get_custom_dir, vsdb_open_mode,
+    DEFAULT_NS_ID, GB, InstanceId, KB, MB, Namespace, NamespaceOpts, NsId, NsInfo,
+    OpenMode, RawBytes, RawKey, RawValue, VsdbOptions, vsdb_configure, vsdb_flush,
+    vsdb_get_base_dir, vsdb_get_custom_dir, vsdb_open_mode,
 };
 
 /// The unified, structured error type of the VSDB ecosystem.

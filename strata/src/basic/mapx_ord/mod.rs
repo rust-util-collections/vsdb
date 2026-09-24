@@ -46,7 +46,7 @@ mod test;
 
 use crate::{
     basic::mapx_ord_rawkey::{
-        MapxOrdRawKey, MapxOrdRawKeyBatchEntry, MapxOrdRawKeyIter, MapxOrdRawKeyIterMut,
+        MapxOrdRawKey, MapxOrdRawKeyBatch, MapxOrdRawKeyIter, MapxOrdRawKeyIterMut,
         ValueIterMut, ValueMut,
     },
     common::{
@@ -227,7 +227,7 @@ where
     /// This method allows you to perform multiple insert/remove operations
     /// and commit them atomically.
     ///
-    /// A failed [`commit`](vsdb_core::common::BatchTrait::commit) consumes
+    /// A failed [`commit`](MapxOrdBatch::commit) consumes
     /// the buffered operations (none are applied) and is not retryable —
     /// re-stage the operations on a fresh batch instead.
     ///
@@ -237,10 +237,10 @@ where
     /// use vsdb::basic::mapx_ord::MapxOrd;
     /// use vsdb::{VsdbOptions, vsdb_configure};
     ///
-    /// vsdb_configure(VsdbOptions::new("/tmp/vsdb_mapx_ord_batch_entry")).unwrap();
+    /// vsdb_configure(VsdbOptions::new("/tmp/vsdb_mapx_ord_batch")).unwrap();
     /// let mut map: MapxOrd<u32, String> = MapxOrd::new();
     ///
-    /// let mut batch = map.batch_entry();
+    /// let mut batch = map.batch();
     /// batch.insert(&1, &"one".to_string());
     /// batch.insert(&2, &"two".to_string());
     /// batch.commit().unwrap();
@@ -249,9 +249,9 @@ where
     /// assert_eq!(map.get(&2), Some("two".to_string()));
     /// ```
     #[inline(always)]
-    pub fn batch_entry(&mut self) -> MapxOrdBatchEntry<'_, K, V> {
-        MapxOrdBatchEntry {
-            inner: self.inner.batch_entry(),
+    pub fn batch(&mut self) -> MapxOrdBatch<'_, K, V> {
+        MapxOrdBatch {
+            inner: self.inner.batch(),
             _marker: PhantomData,
         }
     }
@@ -329,16 +329,16 @@ where
 }
 
 /// A batch entry for `MapxOrd`.
-pub struct MapxOrdBatchEntry<'a, K, V>
+pub struct MapxOrdBatch<'a, K, V>
 where
     K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
-    inner: MapxOrdRawKeyBatchEntry<'a, V>,
+    inner: MapxOrdRawKeyBatch<'a, V>,
     _marker: PhantomData<K>,
 }
 
-impl<'a, K, V> MapxOrdBatchEntry<'a, K, V>
+impl<'a, K, V> MapxOrdBatch<'a, K, V>
 where
     K: KeyEnDeOrdered,
     V: ValueEnDe,

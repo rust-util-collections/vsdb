@@ -24,7 +24,7 @@ fn batch_vs_normal_write(c: &mut Criterion) {
     // Case 2: Batch write 100 items (entry struct)
     group.bench_function(" batch entry 100 ", |b| {
         b.iter(|| {
-            let mut batch = db.batch_entry();
+            let mut batch = db.batch();
             for _ in 0..100 {
                 let n = i.fetch_add(1, Ordering::Relaxed);
                 batch.insert(&n, &n);

@@ -74,7 +74,7 @@ assert!(map.namespace().is_read_only());
 let _value = map.get(b"key");
 
 // Batches expose the capability failure without panicking.
-let mut batch = map.batch_entry();
+let mut batch = map.batch();
 batch.insert(b"key", b"new value");
 assert!(matches!(
     batch.commit(),

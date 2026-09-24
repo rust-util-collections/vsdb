@@ -47,7 +47,7 @@ use crate::{
     basic::{
         mapx_ord::{Entry, MapxOrdValues, MapxOrdValuesMut},
         mapx_ord_rawkey::{
-            self, MapxOrdRawKey, MapxOrdRawKeyBatchEntry, MapxOrdRawKeyIter,
+            self, MapxOrdRawKey, MapxOrdRawKeyBatch, MapxOrdRawKeyIter,
             MapxOrdRawKeyIterMut, ValueMut,
         },
     },
@@ -168,7 +168,7 @@ where
     /// This method allows you to perform multiple insert/remove operations
     /// and commit them atomically.
     ///
-    /// A failed [`commit`](vsdb_core::common::BatchTrait::commit) consumes
+    /// A failed [`commit`](MapxBatch::commit) consumes
     /// the buffered operations (none are applied) and is not retryable —
     /// re-stage the operations on a fresh batch instead.
     ///
@@ -177,10 +177,10 @@ where
     /// ```
     /// use vsdb::{Mapx, VsdbOptions, vsdb_configure};
     ///
-    /// vsdb_configure(VsdbOptions::new("/tmp/vsdb_mapx_batch_entry")).unwrap();
+    /// vsdb_configure(VsdbOptions::new("/tmp/vsdb_mapx_batch")).unwrap();
     /// let mut map = Mapx::new();
     ///
-    /// let mut batch = map.batch_entry();
+    /// let mut batch = map.batch();
     /// batch.insert(&1, &"one".to_string());
     /// batch.insert(&2, &"two".to_string());
     /// batch.commit().unwrap();
@@ -189,9 +189,9 @@ where
     /// assert_eq!(map.get(&2), Some("two".to_string()));
     /// ```
     #[inline(always)]
-    pub fn batch_entry(&mut self) -> MapxBatchEntry<'_, K, V> {
-        MapxBatchEntry {
-            inner: self.inner.batch_entry(),
+    pub fn batch(&mut self) -> MapxBatch<'_, K, V> {
+        MapxBatch {
+            inner: self.inner.batch(),
             _marker: PhantomData,
         }
     }
@@ -269,16 +269,16 @@ where
 }
 
 /// A batch entry for `Mapx`.
-pub struct MapxBatchEntry<'a, K, V>
+pub struct MapxBatch<'a, K, V>
 where
     K: KeyEnDe,
     V: ValueEnDe,
 {
-    inner: MapxOrdRawKeyBatchEntry<'a, V>,
+    inner: MapxOrdRawKeyBatch<'a, V>,
     _marker: PhantomData<K>,
 }
 
-impl<'a, K, V> MapxBatchEntry<'a, K, V>
+impl<'a, K, V> MapxBatch<'a, K, V>
 where
     K: KeyEnDe,
     V: ValueEnDe,

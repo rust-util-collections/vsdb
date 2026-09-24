@@ -421,7 +421,7 @@ impl MapxRaw {
     /// admission: keys are capped at 8 MiB and whole entries
     /// (key + value) at ~64 MiB. A direct `insert` treats engine
     /// rejection as fatal and panics; staging the same entry through
-    /// [`batch_entry`](Self::batch_entry) surfaces the rejection as an
+    /// [`batch`](Self::batch) surfaces the rejection as an
     /// `Err` from `commit` instead.
     ///
     /// # Arguments
@@ -495,14 +495,11 @@ impl MapxRaw {
         self.inner.lazy_delete_batch(keys)
     }
 
-    /// Start a batch operation.
+    /// Starts a write batch.
     ///
-    /// This method allows you to perform multiple insert/remove operations
-    /// and commit them atomically.
-    ///
-    /// A failed [`commit`](crate::common::BatchTrait::commit) consumes the
-    /// buffered operations (none are applied) and is not retryable —
-    /// re-stage the operations on a fresh batch instead.
+    /// Buffered insert/remove operations are applied atomically by
+    /// [`MapxRawBatch::commit`], which consumes the batch: on error none
+    /// of them was applied — re-stage them on a fresh batch.
     ///
     /// # Examples
     ///
@@ -510,11 +507,11 @@ impl MapxRaw {
     /// use vsdb_core::basic::mapx_raw::MapxRaw;
     /// use vsdb_core::{VsdbOptions, vsdb_configure};
     ///
-    /// vsdb_configure(VsdbOptions::new("/tmp/vsdb_core_mapx_raw_batch_entry")).unwrap();
+    /// vsdb_configure(VsdbOptions::new("/tmp/vsdb_core_mapx_raw_batch")).unwrap();
     /// let mut map = MapxRaw::new();
     ///
     /// {
-    ///     let mut batch = map.batch_entry();
+    ///     let mut batch = map.batch();
     ///     batch.insert(&[1], &[10]);
     ///     batch.insert(&[2], &[20]);
     ///     batch.commit().unwrap();
@@ -524,8 +521,10 @@ impl MapxRaw {
     /// assert_eq!(map.get(&[2]), Some(vec![20]));
     /// ```
     #[inline(always)]
-    pub fn batch_entry(&mut self) -> Box<dyn crate::common::BatchTrait + '_> {
-        self.inner.batch_begin()
+    pub fn batch(&mut self) -> MapxRawBatch<'_> {
+        MapxRawBatch {
+            inner: self.inner.batch_begin(),
+        }
     }
 
     /// Start a batch operation pre-staged with the removal of **every**
@@ -537,8 +536,7 @@ impl MapxRaw {
     /// applied result, never anything in between (even across a crash).
     ///
     /// The wipe belongs to the buffered operations: like them, it is
-    /// consumed by the first [`commit`](crate::common::BatchTrait::commit)
-    /// and does not re-arm afterwards.
+    /// applied (or, on error, discarded) by [`MapxRawBatch::commit`].
     ///
     /// # Examples
     ///
@@ -546,12 +544,12 @@ impl MapxRaw {
     /// use vsdb_core::basic::mapx_raw::MapxRaw;
     /// use vsdb_core::{VsdbOptions, vsdb_configure};
     ///
-    /// vsdb_configure(VsdbOptions::new("/tmp/vsdb_core_mapx_raw_batch_entry_wiped")).unwrap();
+    /// vsdb_configure(VsdbOptions::new("/tmp/vsdb_core_mapx_raw_batch_wiped")).unwrap();
     /// let mut map = MapxRaw::new();
     /// map.insert([1], [10]);
     ///
     /// {
-    ///     let mut batch = map.batch_entry_wiped();
+    ///     let mut batch = map.batch_wiped();
     ///     batch.insert(&[2], &[20]);
     ///     batch.commit().unwrap();
     /// }
@@ -560,8 +558,10 @@ impl MapxRaw {
     /// assert_eq!(map.get(&[2]), Some(vec![20]));
     /// ```
     #[inline(always)]
-    pub fn batch_entry_wiped(&mut self) -> Box<dyn crate::common::BatchTrait + '_> {
-        self.inner.batch_begin_wiped()
+    pub fn batch_wiped(&mut self) -> MapxRawBatch<'_> {
+        MapxRawBatch {
+            inner: self.inner.batch_begin_wiped(),
+        }
     }
 
     /// Clears the map, removing all key-value pairs.
@@ -708,6 +708,38 @@ impl Default for MapxRaw {
     /// A new `MapxRaw` instance.
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// An atomic write batch over one [`MapxRaw`], from [`MapxRaw::batch`] or
+/// [`MapxRaw::batch_wiped`].
+pub struct MapxRawBatch<'a> {
+    inner: engine::Batch<'a>,
+}
+
+impl MapxRawBatch<'_> {
+    /// Buffers an insert.
+    #[inline(always)]
+    pub fn insert(&mut self, key: impl AsRef<[u8]>, value: impl AsRef<[u8]>) {
+        self.inner.insert(key.as_ref(), value.as_ref());
+    }
+
+    /// Buffers a removal.
+    #[inline(always)]
+    pub fn remove(&mut self, key: impl AsRef<[u8]>) {
+        self.inner.remove(key.as_ref());
+    }
+
+    /// Applies every buffered operation atomically, consuming the batch.
+    ///
+    /// # Errors
+    ///
+    /// On error none of the operations was applied. Engine-side size
+    /// rejections (keys over 8 MiB, entries over ~64 MiB) and
+    /// [`VsdbError::ReadOnly`] are reported here.
+    #[inline(always)]
+    pub fn commit(self) -> Result<()> {
+        self.inner.commit()
     }
 }
 

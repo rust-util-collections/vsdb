@@ -257,7 +257,7 @@ where
     /// This method allows you to perform multiple insert/remove operations
     /// and commit them atomically.
     ///
-    /// A failed [`commit`](vsdb_core::common::BatchTrait::commit) consumes
+    /// A failed [`commit`](MapxOrdRawKeyBatch::commit) consumes
     /// the buffered operations (none are applied) and is not retryable —
     /// re-stage the operations on a fresh batch instead.
     ///
@@ -267,10 +267,10 @@ where
     /// use vsdb::basic::mapx_ord_rawkey::MapxOrdRawKey;
     /// use vsdb::{VsdbOptions, vsdb_configure};
     ///
-    /// vsdb_configure(VsdbOptions::new("/tmp/vsdb_mapx_ord_rawkey_batch_entry")).unwrap();
+    /// vsdb_configure(VsdbOptions::new("/tmp/vsdb_mapx_ord_rawkey_batch")).unwrap();
     /// let mut map: MapxOrdRawKey<String> = MapxOrdRawKey::new();
     ///
-    /// let mut batch = map.batch_entry();
+    /// let mut batch = map.batch();
     /// batch.insert(&[1], &"one".to_string());
     /// batch.insert(&[2], &"two".to_string());
     /// batch.commit().unwrap();
@@ -279,9 +279,9 @@ where
     /// assert_eq!(map.get(&[2]), Some("two".to_string()));
     /// ```
     #[inline(always)]
-    pub fn batch_entry(&mut self) -> MapxOrdRawKeyBatchEntry<'_, V> {
-        MapxOrdRawKeyBatchEntry {
-            inner: self.inner.batch_entry(),
+    pub fn batch(&mut self) -> MapxOrdRawKeyBatch<'_, V> {
+        MapxOrdRawKeyBatch {
+            inner: self.inner.batch(),
             _marker: PhantomData,
         }
     }
@@ -313,15 +313,15 @@ impl<V> Eq for MapxOrdRawKey<V> where V: ValueEnDe + Eq {}
 /////////////////////////////////////////////////////////////////////////////
 
 /// A batch entry for `MapxOrdRawKey`.
-pub struct MapxOrdRawKeyBatchEntry<'a, V>
+pub struct MapxOrdRawKeyBatch<'a, V>
 where
     V: ValueEnDe,
 {
-    inner: Box<dyn vsdb_core::common::BatchTrait + 'a>,
+    inner: vsdb_core::basic::mapx_raw::MapxRawBatch<'a>,
     _marker: PhantomData<V>,
 }
 
-impl<'a, V> MapxOrdRawKeyBatchEntry<'a, V>
+impl<'a, V> MapxOrdRawKeyBatch<'a, V>
 where
     V: ValueEnDe,
 {
@@ -336,7 +336,7 @@ where
     }
 
     /// Commit the batch.
-    pub fn commit(mut self) -> Result<()> {
+    pub fn commit(self) -> Result<()> {
         self.inner.commit()
     }
 }

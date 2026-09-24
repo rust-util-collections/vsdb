@@ -1,6 +1,6 @@
 use crate::common::{
-    BatchTrait, GB, PREFIX_ALLOC_START, PREFIX_SIZE, Pre, PreBytes, RawKey, RawValue,
-    VSDB, configured_mem_budget_mb, vsdb_freeze_base_dir, vsdb_get_base_dir,
+    GB, PREFIX_ALLOC_START, PREFIX_SIZE, Pre, PreBytes, RawKey, RawValue, VSDB,
+    configured_mem_budget_mb, vsdb_freeze_base_dir, vsdb_get_base_dir,
     vsdb_is_read_only,
 };
 use mmdb::{
@@ -528,21 +528,15 @@ impl MmDB {
         MmdbIter(Box::new(iter))
     }
 
-    pub(crate) fn batch_begin<'a>(
-        &'a self,
-        meta_prefix: PreBytes,
-    ) -> Box<dyn BatchTrait + 'a> {
-        Box::new(MmdbBatch::new(meta_prefix, self))
+    pub(crate) fn batch_begin(&self, meta_prefix: PreBytes) -> MmdbBatch<'_> {
+        MmdbBatch::new(meta_prefix, self)
     }
 
     /// Like [`batch_begin`](Self::batch_begin), but the batch is
     /// pre-staged with the removal of every existing key of the prefix
     /// (one range tombstone). See `MmdbBatch::new_wiped`.
-    pub(crate) fn batch_begin_wiped<'a>(
-        &'a self,
-        meta_prefix: PreBytes,
-    ) -> Box<dyn BatchTrait + 'a> {
-        Box::new(MmdbBatch::new_wiped(meta_prefix, self))
+    pub(crate) fn batch_begin_wiped(&self, meta_prefix: PreBytes) -> MmdbBatch<'_> {
+        MmdbBatch::new_wiped(meta_prefix, self)
     }
 }
 
@@ -1172,7 +1166,8 @@ fn validate_shard_layout(
     )))
 }
 
-pub struct MmdbBatch<'a> {
+/// An atomic write batch over one prefix (hence one shard).
+pub(crate) struct MmdbBatch<'a> {
     inner: WriteBatch,
     meta_prefix: PreBytes,
     engine: &'a MmDB,
@@ -1210,22 +1205,24 @@ impl<'a> MmdbBatch<'a> {
     }
 }
 
-impl BatchTrait for MmdbBatch<'_> {
+impl MmdbBatch<'_> {
     #[inline(always)]
-    fn insert(&mut self, key: &[u8], value: &[u8]) {
+    pub(crate) fn insert(&mut self, key: &[u8], value: &[u8]) {
         let full_key = make_full_key(&self.meta_prefix, key);
         self.inner.put(&full_key, value);
     }
 
     #[inline(always)]
-    fn remove(&mut self, key: &[u8]) {
+    pub(crate) fn remove(&mut self, key: &[u8]) {
         let full_key = make_full_key(&self.meta_prefix, key);
         self.inner.delete(&full_key);
     }
 
+    /// Applies every buffered operation atomically. The batch is consumed
+    /// either way: on error nothing was applied.
     #[inline(always)]
-    fn commit(&mut self) -> crate::common::error::Result<()> {
-        let batch = std::mem::replace(&mut self.inner, WriteBatch::new());
+    pub(crate) fn commit(self) -> crate::common::error::Result<()> {
+        let batch = self.inner;
         if self.engine.read_only {
             return Err(crate::common::error::VsdbError::ReadOnly {
                 operation: "batch commit",

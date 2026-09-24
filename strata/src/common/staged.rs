@@ -111,9 +111,9 @@ impl StagedRows {
             return Ok(());
         }
         let mut batch = if self.wiped {
-            store.batch_entry_wiped()
+            store.batch_wiped()
         } else {
-            store.batch_entry()
+            store.batch()
         };
         for (k, v) in &self.rows {
             match v {

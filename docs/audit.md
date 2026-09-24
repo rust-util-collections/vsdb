@@ -70,7 +70,7 @@
 ---
 
 ### engine/strata: "atomic batch staging is unbounded"
-- **Where**: `core/src/common/engine/mod.rs` (`BatchTrait`), `core/src/common/engine/mmdb.rs` (`MmdbBatch`), `strata/src/slotdex/mod.rs` (`insert_batch`), `strata/src/vecdex/mod.rs` (`insert_batch`)
+- **Where**: `core/src/common/engine/mod.rs` (`MapxRawBatch`), `core/src/common/engine/mmdb.rs` (`MmdbBatch`), `strata/src/slotdex/mod.rs` (`insert_batch`), `strata/src/vecdex/mod.rs` (`insert_batch`)
 - **Claim**: batches accumulate every staged operation in memory with no entry cap, so huge batches OOM.
 - **Reason**: staging-then-commit is the documented atomicity contract, and memory is proportional to caller-supplied input under the caller's control (chunk the input for bounded memory). Auto-splitting inside the library would silently break the promised whole-batch atomicity. VecDex chunks internally because its documented contract is per-chunk atomicity; its dedup pass holds references plus encoded keys, again O(input).
 
@@ -107,7 +107,7 @@
 ### engine: "no key/value size validation at the vsdb boundary"
 - **Where**: `core/src/basic/mapx_raw/mod.rs` (`insert`), `core/src/common/engine/mmdb.rs` (`MmDB::insert`)
 - **Claim**: absent vsdb-side checks, oversized values reach the memtable and OOM.
-- **Reason**: mmdb validates every write (8 MiB key cap, ~64 MiB entry cap) before WAL/memtable admission and rejects with a descriptive error; oversized entries are never admitted to the WAL or memtable, although a caller-owned WriteBatch may copy them during staging. The boundary behavior is documented on `MapxRaw::insert` and `BatchTrait::commit`: direct ops panic under the fatal-write convention, batch commits surface `Err`.
+- **Reason**: mmdb validates every write (8 MiB key cap, ~64 MiB entry cap) before WAL/memtable admission and rejects with a descriptive error; oversized entries are never admitted to the WAL or memtable, although a caller-owned WriteBatch may copy them during staging. The boundary behavior is documented on `MapxRaw::insert` and `MapxRawBatch::commit`: direct ops panic under the fatal-write convention, batch commits surface `Err`.
 
 ---
 

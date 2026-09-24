@@ -405,7 +405,7 @@ impl PersistentBTree {
         if self.pending.is_empty() {
             return;
         }
-        let mut batch = self.nodes.batch_entry();
+        let mut batch = self.nodes.batch();
         for (id, raw) in self.pending.drain() {
             batch.insert(&id.to_le_bytes(), &raw);
         }
