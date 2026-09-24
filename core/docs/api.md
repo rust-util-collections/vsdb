@@ -122,13 +122,7 @@ shards, and memory budget.  All collection types (`MapxRaw` included) gain
 `new_in` for explicit placement and `namespace()` for querying ownership.
 
 ```rust
-use vsdb_core::{
-    MapxRaw,
-    common::{
-        Namespace, NamespaceOpts, InstanceId, DEFAULT_NS_ID,
-        Namespace::list, Namespace::close_by_id, Namespace::destroy, Namespace::relocate,
-    },
-};
+use vsdb_core::{InstanceId, MapxRaw, Namespace, NamespaceOpts};
 
 // Create a namespace — parameterless, gives a fresh anonymous placement group.
 let ns = Namespace::create().unwrap();

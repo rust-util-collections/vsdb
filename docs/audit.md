@@ -20,14 +20,6 @@
 
 ---
 
-### [LOW] docs: namespace example imports associated functions as modules
-- **Where**: `core/docs/api.md` (Namespaces)
-- **What**: the example imports `Namespace::list`, `close_by_id`, `destroy`, and `relocate` inside a `use` declaration, which Rust rejects.
-- **Why**: `Namespace` is a struct; the example's qualified calls already provide the correct syntax.
-- **Suggested fix**: remove the invalid imports and compile-check the example; no compatibility impact.
-
----
-
 ### [LOW] docs: configuration example claims environment mutation
 - **Where**: `core/docs/api.md` (Utility Functions)
 - **What**: the guide says `vsdb_configure` writes `VSDB_BASE_DIR` and must precede thread creation, contrary to v17 behavior.
