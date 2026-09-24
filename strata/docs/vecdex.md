@@ -146,12 +146,13 @@ let results = idx.search_with_filter(&query, 10, |k: &String| {
 }).unwrap();
 ```
 
-The search keeps expanding until it holds `max(ef * 4, k * 2)` passing
-candidates and every remaining frontier node is farther than the worst of
-them, so a selective predicate costs more visited nodes instead of fewer
-results. A predicate that almost nothing satisfies is bounded by a visit
-cap of `max(64 × that ef, 4096)` evaluated nodes; beyond it, results can
-be incomplete — scan the matching keys directly for such filters.
+The search keeps expanding until it holds `max(ef, k)` passing candidates
+and every remaining frontier node is farther than the worst of them, so a
+selective predicate costs more visited nodes (roughly ∝ 1 / selectivity)
+instead of fewer results. A predicate that almost nothing satisfies is
+bounded by a visit cap of `max(64 × max(ef, k), 4096)` evaluated nodes;
+beyond it, results can be incomplete — scan the matching keys directly for
+such filters.
 
 ## Storage Architecture
 

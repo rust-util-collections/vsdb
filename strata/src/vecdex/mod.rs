@@ -782,11 +782,11 @@ where
     ///
     /// Non-matching nodes still participate in graph traversal to maintain
     /// connectivity, but are excluded from the result set. The search keeps
-    /// expanding until it holds `max(4·ef, 2·k)` matching candidates and the
+    /// expanding until it holds `max(ef, k)` matching candidates and the
     /// frontier is farther than the worst of them, so a selective predicate
-    /// costs more visited nodes rather than fewer results; a predicate that
-    /// almost nothing satisfies stops at a visit cap of
-    /// `max(64 × that ef, 4096)` evaluated nodes.
+    /// costs more visited nodes (roughly ∝ 1 / selectivity) rather than
+    /// fewer results; a predicate that almost nothing satisfies stops at a
+    /// visit cap of `max(64 × max(ef, k), 4096)` evaluated nodes.
     ///
     /// Use [`search_ef_with_filter`](Self::search_ef_with_filter) to trade
     /// recall against work explicitly.
@@ -892,13 +892,9 @@ where
             }
         }
 
-        // Saturating: `ef`/`k` are unrestricted public inputs, and the
-        // ×4/×2 filter inflation must not overflow for extreme values.
-        let search_ef = if predicate.is_some() {
-            ef.saturating_mul(4).max(k.saturating_mul(2))
-        } else {
-            ef.max(k)
-        };
+        // A filter needs no beam inflation: the layer search keeps
+        // expanding until it holds `search_ef` *passing* results.
+        let search_ef = ef.max(k);
         let results = search_layer::<S, D, _>(
             query,
             &cur_ep,
