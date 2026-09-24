@@ -35,7 +35,7 @@ pub use slot_type::SlotType;
 use crate::{
     KeyEnDeOrdered,
     common::{
-        InstanceId, ensure_writable,
+        InstanceId, ensure_process_writable, ensure_writable,
         error::{Result, VsdbError},
         staged::{StagedRows, prefix_successor},
     },
@@ -352,11 +352,8 @@ where
     ///
     /// # Errors
     ///
-    /// [`VsdbError::InvalidConfig`] if `tier_capacity < 2`.
-    ///
-    /// # Panics
-    ///
-    /// Panics in read-only mode (no storage can be allocated).
+    /// [`VsdbError::InvalidConfig`] if `tier_capacity < 2`, or
+    /// [`VsdbError::ReadOnly`] in read-only mode.
     pub fn new(tier_capacity: S, swap_order: bool) -> Result<Self> {
         // Each level's floor_base is tier_capacity^level; growth only
         // terminates when every new level strictly coarsens the previous
@@ -366,6 +363,7 @@ where
                 detail: "SlotDex tier_capacity must be >= 2".to_owned(),
             });
         }
+        ensure_process_writable("slot index new")?;
 
         Ok(Self {
             store: MapxRaw::new(),

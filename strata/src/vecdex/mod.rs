@@ -56,7 +56,7 @@ pub use dynamic::VecDexDyn;
 use crate::common::{
     InstanceId,
     ende::{KeyEnDe, ValueEnDe},
-    ensure_writable,
+    ensure_process_writable, ensure_writable,
     error::{Result, VsdbError},
     staged::StagedRows,
 };
@@ -429,13 +429,10 @@ where
     /// [`VsdbError::InvalidConfig`] unless `dim > 0`, `m >= 2`,
     /// `m_max0 >= m` (else base-layer nodes have no edges and become
     /// unreachable) and `ef_construction > 0` (else a layer search returns
-    /// no candidates).
-    ///
-    /// # Panics
-    ///
-    /// Panics in read-only mode (no storage can be allocated).
+    /// no candidates). [`VsdbError::ReadOnly`] in read-only mode.
     pub fn new(config: HnswConfig) -> Result<Self> {
         config.validate()?;
+        ensure_process_writable("vector index new")?;
         let state = GraphState {
             ef_search: config.ef_search,
             ..GraphState::default()

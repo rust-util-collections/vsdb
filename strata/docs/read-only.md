@@ -86,12 +86,13 @@ effect:
 - explicit MPT/SMT cache saves;
 - namespace create, destroy, and relocate;
 - engine batch commits and `clone_in`;
+- fallible `SlotDex`, `VecDex`, and `VecDexDyn` constructors (`new` / `new_in`);
 - fallible mutations on `VerMap`, SlotDex, VecDex, and DAG pruning.
 
 Existing collection APIs such as `Mapx::insert`, `remove`, and `clear` predate
 fallible mutation results. They fail fast with a panic in read-only mode, as
-they do for other fatal engine write failures. Creating a new collection and
-the deep-copying `Clone` implementations also panic. Restore an existing
+they do for other fatal engine write failures. Infallible collection
+constructors and the deep-copying `Clone` implementations also panic. Restore an existing
 handle instead, and check the mode before entering code that uses these
 infallible write APIs.
 

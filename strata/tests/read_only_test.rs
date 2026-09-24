@@ -8,8 +8,9 @@ use std::{
     process::Command,
 };
 use vsdb::{
-    InstanceId, Mapx, MptCalc, OpenMode, VerMap, VerMapWithProof, VsdbError,
-    VsdbOptions, vsdb_configure, vsdb_flush, vsdb_get_base_dir, vsdb_open_mode,
+    HnswConfig, InstanceId, Mapx, MetricKind, MptCalc, OpenMode, SlotDex, VecDexDyn,
+    VecDexL2, VerMap, VerMapWithProof, VsdbError, VsdbOptions, vsdb_configure,
+    vsdb_flush, vsdb_get_base_dir, vsdb_open_mode,
 };
 
 const HELPER_BASE: &str = "VSDB_STRATA_READ_ONLY_HELPER_BASE";
@@ -142,6 +143,40 @@ fn read_only_reader_helper() {
     assert!(map.namespace().is_read_only());
     assert_eq!(Some("typed-value".to_owned()), map.get(&7));
     assert!(matches!(map.save_meta(), Err(VsdbError::ReadOnly { .. })));
+
+    // These constructors already return Result, so capability errors must
+    // not fall through to the infallible raw collection's assertion.
+    let ns = map.namespace();
+    assert!(matches!(
+        SlotDex::<u64, u64>::new(64, false),
+        Err(VsdbError::ReadOnly { .. })
+    ));
+    assert!(matches!(
+        SlotDex::<u64, u64>::new_in(&ns, 64, false),
+        Err(VsdbError::ReadOnly { .. })
+    ));
+    let config = HnswConfig {
+        dim: 4,
+        ..Default::default()
+    };
+    assert!(matches!(
+        VecDexL2::<u64>::new(config.clone()),
+        Err(VsdbError::ReadOnly { .. })
+    ));
+    assert!(matches!(
+        VecDexL2::<u64>::new_in(&ns, config.clone()),
+        Err(VsdbError::ReadOnly { .. })
+    ));
+    for metric in [MetricKind::L2, MetricKind::Cosine, MetricKind::InnerProduct] {
+        assert!(matches!(
+            VecDexDyn::<u64>::new(metric, config.clone()),
+            Err(VsdbError::ReadOnly { .. })
+        ));
+        assert!(matches!(
+            VecDexDyn::<u64>::new_in(&ns, metric, config.clone()),
+            Err(VsdbError::ReadOnly { .. })
+        ));
+    }
 
     let mut standalone_trie = MptCalc::new();
     assert!(matches!(

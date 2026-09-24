@@ -191,7 +191,7 @@ where
     S: Scalar,
 {
     /// Creates a new, empty index using `metric`; otherwise identical
-    /// to [`VecDex::new`] (same config validation, errors and panics).
+    /// to [`VecDex::new`] (same config validation and errors).
     pub fn new(metric: MetricKind, config: HnswConfig) -> Result<Self> {
         Ok(match metric {
             MetricKind::L2 => Self::L2(VecDex::new(config)?),
