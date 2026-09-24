@@ -28,6 +28,14 @@
 
 ---
 
+### [HIGH] versioned: snapshots do not retain their captured tree roots
+- **Where**: `strata/src/versioned/read.rs` (`Snapshot`), `strata/src/basic/persistent_btree/mod.rs` (reference counts and reclamation)
+- **What**: a live working or historical snapshot can lose its nodes when a separately restored alias changes the branch or removes the last persistent reference to its commit. Subsequent compaction makes snapshot reads panic with a missing-node error.
+- **Why**: the view captures only a root ID; alias-shared reference counts and recovery sweeps include persistent roots but no live snapshot ownership. Iterators can also outlive the temporary snapshot that created them.
+- **Suggested fix**: share runtime root leases across snapshots and their iterators, preserve them during recount, and release them through the existing durability-aware reclamation path. Regress alias mutation, restoration/GC, rollback, iterator lifetimes, and release; no wire change.
+
+---
+
 ### [MEDIUM] configuration: explicit roots still initialize an unused default directory
 - **Where**: `core/src/common/mod.rs` (`vsdb_configure`, `gen_data_dir`)
 - **What**: configuring a writable explicit root panics when the environment-selected default path cannot be created.
