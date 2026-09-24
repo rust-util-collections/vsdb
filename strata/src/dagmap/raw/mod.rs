@@ -687,10 +687,29 @@ impl DagMapRaw {
         }
     }
 
-    fn clear_consumed_fields(&mut self) {
+    fn clear_consumed_data(&mut self) {
         *self.parent.get_mut() = None;
-        self.children.clear();
         self.data.clear();
+        #[cfg(test)]
+        test::after_clear_step();
+    }
+
+    /// Keep every discovery edge until all consumed data is durably gone.
+    /// Clearing an ancestor's children earlier can strand a not-yet-cleared
+    /// descendant on interruption, even though every node has a marker.
+    fn clear_consumed_nodes(&mut self, others: &mut [Self]) {
+        self.clear_consumed_data();
+        for node in others.iter_mut() {
+            node.clear_consumed_data();
+        }
+        // Parent/data/children prefixes can recover on different shards.
+        // Program order alone cannot keep the discovery edges intact.
+        self.namespace().flush();
+        for node in std::iter::once(self).chain(others.iter_mut()) {
+            node.children.clear();
+            #[cfg(test)]
+            test::after_clear_step();
+        }
     }
 
     /// Retry path once the clearing marker is durable.
@@ -703,8 +722,7 @@ impl DagMapRaw {
         if !self.no_children() {
             self.prune_reparent_children(&mut genesis);
         }
-        Self::clear_marked_reachable(&mut genesis);
-        self.clear_consumed_fields();
+        self.clear_marked_reachable(&mut genesis);
         self.namespace().flush();
         let kept = Self::survivor_ids(&genesis);
         genesis.prune_children_exclude(&kept);
@@ -730,7 +748,7 @@ impl DagMapRaw {
     /// Clear every marked descendant reachable from `root`'s children
     /// registry, then drop those registry entries. Iterative: a mainline
     /// can be deeper than the stack allows.
-    fn clear_marked_reachable(root: &mut Self) {
+    fn clear_marked_reachable(&mut self, root: &mut Self) {
         let mut frontier: Vec<Self> = root
             .children
             .iter()
@@ -747,24 +765,25 @@ impl DagMapRaw {
             );
             marked.push(node);
         }
-        let mut drop_from_root = Vec::new();
-        for mut node in marked {
-            // Direct children stay listed on `root` until removed here.
-            // Deeper nodes are unlinked when their parent's children map
-            // is cleared below. Match by instance id so a torn parent-null
-            // still drops the registry entry.
-            if let Some(id) = root.child_id(&node) {
-                drop_from_root.push(id);
-            }
-            node.clear_consumed_fields();
-        }
+        // Match by instance id so a torn parent-null still drops the
+        // registry entry. The head is cleared through `self` below.
+        let drop_from_root: Vec<_> = marked
+            .iter()
+            .filter_map(|node| root.child_id(node))
+            .collect();
+        let head_id = self.instance_id();
+        marked.retain(|node| node.instance_id() != head_id);
+        // Descendants before ancestors, as in prune_clear_consumed, so
+        // an interrupted registry pass also keeps its unfinished tail
+        // discoverable when writes have survived in program order.
+        marked.reverse();
+        self.clear_consumed_nodes(&mut marked);
         for id in drop_from_root {
             root.children.remove(&id);
         }
     }
 
-    /// Prune phases 4-5: clear the consumed nodes — the head first, then
-    /// the intermediates newest → oldest.
+    /// Prune phases 4-5: clear data/parents, flush, then clear registries.
     ///
     /// The clearing marker (already durable) is what makes a retry safe.
     /// Parent, children, and data live on different prefixes, so their
@@ -776,17 +795,7 @@ impl DagMapRaw {
     /// unregisters the consumed chain.
     fn prune_clear_consumed(&mut self, linebuf: &mut [Self]) {
         let mid = linebuf.len() - 1;
-        let others = &mut linebuf[..mid];
-
-        *self.parent.get_mut() = None;
-        self.children.clear();
-        self.data.clear();
-
-        for i in others.iter_mut() {
-            *i.parent.get_mut() = None;
-            i.children.clear();
-            i.data.clear();
-        }
+        self.clear_consumed_nodes(&mut linebuf[..mid]);
     }
 
     /// Prunes children that are in the `include_targets` list.

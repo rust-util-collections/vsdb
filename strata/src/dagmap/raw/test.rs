@@ -592,6 +592,84 @@ fn prepare_marked_clear(head: &mut DagMapRaw) {
     head.mark_consumed_clearing(&mut linebuf);
 }
 
+thread_local! {
+    static CLEAR_STEPS_LEFT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+pub(super) fn after_clear_step() {
+    CLEAR_STEPS_LEFT.with(|steps| {
+        if let Some(left) = steps.get() {
+            steps.set(left.checked_sub(1));
+            assert!(left > 0, "interrupted consumed-node cleanup");
+        }
+    });
+}
+
+#[test]
+fn prune_cleanup_survives_repeated_interruptions() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    for already_marked in [false, true] {
+        for cut in 0..8 {
+            let mut ancestors = vec![DagMapRaw::new(None)];
+            for i in 1..5u8 {
+                let mut node = DagMapRaw::new(ancestors.last_mut());
+                node.insert([i], [i]);
+                ancestors.push(node);
+            }
+            let mut head = ancestors.pop().unwrap();
+            let mut survivor = DagMapRaw::new(Some(&mut head));
+            survivor.insert("survivor", "value");
+            if already_marked {
+                prepare_marked_clear(&mut head);
+            }
+            let head_id = head.save_meta().unwrap();
+            head.namespace().flush();
+
+            // Interrupt normal cleanup or its retry after each data or
+            // registry clear, then restore the consumed head.
+            CLEAR_STEPS_LEFT.with(|steps| steps.set(Some(cut)));
+            let interrupted = catch_unwind(AssertUnwindSafe(|| head.prune()));
+            CLEAR_STEPS_LEFT.with(|steps| steps.set(None));
+            assert!(interrupted.is_err(), "cleanup cut {cut} was not reached");
+            ancestors[0].namespace().flush();
+
+            if cut < 4 {
+                // No discovery edge may disappear during the data pass.
+                for node in &ancestors {
+                    assert!(!node.no_children());
+                }
+            } else {
+                // Once registry removal starts, even a different shard's
+                // early unlink cannot strand any user data.
+                for node in &ancestors[1..] {
+                    assert!(node.data.iter().next().is_none());
+                    assert!(node.parent.get_value().is_none());
+                }
+            }
+
+            let recovered = DagMapRaw::from_meta(head_id).unwrap().prune().unwrap();
+            assert_eq!(recovered.instance_id(), ancestors[0].instance_id());
+            for i in 1..5u8 {
+                assert_eq!(recovered.get([i]), Some(vec![i]));
+                assert_eq!(survivor.get([i]), Some(vec![i]));
+            }
+            assert_eq!(
+                survivor.get("survivor").as_deref(),
+                Some(b"value".as_slice())
+            );
+            for node in &ancestors[1..] {
+                assert!(node.is_dead(), "cut {cut} stranded an intermediate node");
+                assert!(node.no_children());
+            }
+            let head = DagMapRaw::from_meta(head_id).unwrap();
+            assert!(head.is_dead());
+            assert!(head.no_children());
+            assert_eq!(recovered.children.iter().count(), 1);
+        }
+    }
+}
+
 #[test]
 fn prune_retry_after_parent_null_returns_genesis() {
     let (genesis, i1, mut head) = build_prune_fixture();
