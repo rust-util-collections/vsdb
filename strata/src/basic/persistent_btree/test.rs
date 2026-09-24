@@ -1248,3 +1248,233 @@ fn write_buffer_bulk_load_across_flush_chunks() {
         prev = Some(k);
     }
 }
+
+// =====================================================================
+// Structural diff and merge replay
+// =====================================================================
+
+mod diff_merge {
+    use super::*;
+    use crate::versioned::{
+        diff::{DiffEntry, diff_roots},
+        merge::{three_way_merge, three_way_merge_many_bases},
+    };
+    use std::collections::BTreeMap;
+
+    /// Deterministic xorshift64, so failures reproduce from the seed.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn below(&mut self, n: u64) -> u64 {
+            self.next() % n
+        }
+    }
+
+    fn key(i: u64) -> Vec<u8> {
+        (i as u32).to_be_bytes().to_vec()
+    }
+
+    /// Applies `ops` random inserts/removes (key space `0..space`) on top
+    /// of `base` and returns the new version holding one owned reference.
+    fn derive(
+        tree: &mut PersistentBTree,
+        base: NodeId,
+        ops: u64,
+        space: u64,
+        rng: &mut Rng,
+    ) -> NodeId {
+        let mut cur = base;
+        for _ in 0..ops {
+            let k = key(rng.below(space));
+            let next = if rng.below(4) == 0 {
+                tree.remove(cur, &k)
+            } else {
+                tree.insert(cur, &k, &rng.next().to_le_bytes())
+            };
+            if next != cur {
+                tree.acquire_node(next);
+                if cur != base {
+                    tree.release_node(cur);
+                }
+                cur = next;
+            }
+        }
+        if cur == base {
+            tree.acquire_node(cur);
+        }
+        cur
+    }
+
+    fn contents(tree: &PersistentBTree, root: NodeId) -> BTreeMap<Vec<u8>, Vec<u8>> {
+        tree.iter(root).collect()
+    }
+
+    fn naive_diff(tree: &PersistentBTree, old: NodeId, new: NodeId) -> Vec<DiffEntry> {
+        let (a, b) = (contents(tree, old), contents(tree, new));
+        let mut keys: Vec<&Vec<u8>> = a.keys().chain(b.keys()).collect();
+        keys.sort();
+        keys.dedup();
+        keys.into_iter()
+            .filter_map(|k| match (a.get(k), b.get(k)) {
+                (Some(v), None) => Some(DiffEntry::Removed {
+                    key: k.clone(),
+                    value: v.clone(),
+                }),
+                (None, Some(v)) => Some(DiffEntry::Added {
+                    key: k.clone(),
+                    value: v.clone(),
+                }),
+                (Some(o), Some(n)) if o != n => Some(DiffEntry::Modified {
+                    key: k.clone(),
+                    old_value: o.clone(),
+                    new_value: n.clone(),
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Per-key source-wins reference (the documented decision matrix).
+    fn reference_merge(
+        tree: &PersistentBTree,
+        bases: &[NodeId],
+        source: NodeId,
+        target: NodeId,
+    ) -> BTreeMap<Vec<u8>, Vec<u8>> {
+        let bs: Vec<_> = bases.iter().map(|&b| contents(tree, b)).collect();
+        let (s, t) = (contents(tree, source), contents(tree, target));
+        let mut keys: Vec<Vec<u8>> = bs
+            .iter()
+            .flat_map(|b| b.keys().cloned())
+            .chain(s.keys().cloned())
+            .chain(t.keys().cloned())
+            .collect();
+        keys.sort();
+        keys.dedup();
+        keys.into_iter()
+            .filter_map(|k| {
+                let sv = s.get(&k);
+                let agree = bs.windows(2).all(|w| w[0].get(&k) == w[1].get(&k));
+                let base = bs.first().and_then(|b| b.get(&k));
+                let v = if agree && sv == base { t.get(&k) } else { sv };
+                v.map(|v| (k, v.clone()))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn diff_matches_full_scan() {
+        for seed in 1..=12u64 {
+            let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            let mut tree = PersistentBTree::new();
+            let space = [40, 600, 3000][(seed % 3) as usize];
+            let base = derive(&mut tree, EMPTY_ROOT, space, space, &mut rng);
+            // Small and large deltas, including root splits/collapses.
+            let a = derive(&mut tree, base, 1 + rng.below(8), space, &mut rng);
+            let b = derive(&mut tree, base, space / 2, space, &mut rng);
+            let c = derive(&mut tree, b, space * 2, space, &mut rng);
+            for (x, y) in [
+                (base, a),
+                (a, base),
+                (a, b),
+                (b, c),
+                (c, base),
+                (EMPTY_ROOT, a),
+                (a, EMPTY_ROOT),
+                (a, a),
+            ] {
+                assert_eq!(
+                    diff_roots(&tree, x, y),
+                    naive_diff(&tree, x, y),
+                    "seed {seed}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn diff_skips_shared_subtrees() {
+        let mut rng = Rng(7);
+        let mut tree = PersistentBTree::new();
+        let base = derive(&mut tree, EMPTY_ROOT, 20_000, 1 << 30, &mut rng);
+        assert!(tree.height(base) >= 2);
+        let changed = tree.insert(base, &key(12_345), b"new");
+        tree.acquire_node(changed);
+
+        NODE_READS.with(|c| c.set(0));
+        let d = diff_roots(&tree, base, changed);
+        let reads = NODE_READS.with(|c| c.get());
+        assert_eq!(d.len(), 1);
+        // Two root-to-leaf paths plus the height probes — not a full scan
+        // of the ~1000 leaves.
+        assert!(
+            reads <= 4 * (tree.height(base) as u64 + 2),
+            "read {reads} nodes"
+        );
+    }
+
+    #[test]
+    fn merge_matches_decision_matrix_and_keeps_refs_exact() {
+        for seed in 1..=12u64 {
+            let mut rng = Rng(seed.wrapping_mul(0xD1B5_4A32_D192_ED03));
+            let mut tree = PersistentBTree::new();
+            let space = [30, 500, 2500][(seed % 3) as usize];
+            let base = derive(&mut tree, EMPTY_ROOT, space, space, &mut rng);
+            let src = derive(&mut tree, base, 1 + rng.below(space), space, &mut rng);
+            let tgt = derive(&mut tree, base, 1 + rng.below(space), space, &mut rng);
+
+            let expected = reference_merge(&tree, &[base], src, tgt);
+            let merged = three_way_merge(&mut tree, base, src, tgt);
+            tree.acquire_node(merged);
+            assert_eq!(contents(&tree, merged), expected, "seed {seed}");
+            tree.assert_refs_match_recount(&[base, src, tgt, merged]);
+
+            // Criss-cross: two disagreeing bases.
+            let b2 = derive(&mut tree, base, 1 + rng.below(space), space, &mut rng);
+            let expected = reference_merge(&tree, &[base, b2], src, tgt);
+            let merged2 = three_way_merge_many_bases(&mut tree, &[base, b2], src, tgt);
+            tree.acquire_node(merged2);
+            assert_eq!(
+                contents(&tree, merged2),
+                expected,
+                "seed {seed} (many bases)"
+            );
+            tree.assert_refs_match_recount(&[base, src, tgt, merged, b2, merged2]);
+
+            // Releasing every version reclaims every node.
+            for r in [merged2, b2, merged, tgt, src, base] {
+                tree.release_node(r);
+            }
+            tree.assert_refs_match_recount(&[]);
+        }
+    }
+
+    #[test]
+    fn merge_shares_untouched_target_subtrees() {
+        let mut rng = Rng(11);
+        let mut tree = PersistentBTree::new();
+        let base = derive(&mut tree, EMPTY_ROOT, 5_000, 1 << 30, &mut rng);
+        let src = tree.insert(base, &key(1), b"s");
+        tree.acquire_node(src);
+        let tgt = tree.insert(base, &key(u32::MAX as u64), b"t");
+        tree.acquire_node(tgt);
+
+        let before = tree.nodes.iter().count();
+        let merged = three_way_merge(&mut tree, base, src, tgt);
+        tree.acquire_node(merged);
+        let written = tree.nodes.iter().count() - before;
+        assert_eq!(tree.get(merged, &key(1)).unwrap(), b"s");
+        assert_eq!(tree.get(merged, &key(u32::MAX as u64)).unwrap(), b"t");
+        // One path copy, not a rebuilt tree.
+        assert!(
+            written <= tree.height(merged) as usize + 1,
+            "wrote {written} nodes"
+        );
+        tree.assert_refs_match_recount(&[base, src, tgt, merged]);
+    }
+}

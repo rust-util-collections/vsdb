@@ -25,13 +25,6 @@
 
 ---
 
-### [MEDIUM] versioned: three-way merge materializes the merged result in memory
-- **Where**: `strata/src/versioned/merge.rs` (`three_way_merge`, `three_way_merge_many_bases`), `strata/src/basic/persistent_btree/mod.rs` (`bulk_load`)
-- **What**: merge collects every merged `(key, value)` pair into a `Vec` and `bulk_load` re-collects its input, so `VerMap::merge` peaks at memory proportional to the union of live keys across both branches; merging branches whose combined live data exceeds available memory aborts the process.
-- **Reason**: a streaming merge requires an incremental bulk-loader driven by a merged iterator — a substantial B+ tree rewrite not justified until larger-than-RAM merges are a real workload. The transient cost is documented on both public APIs.
-
----
-
 ### [LOW] engine: lazy-delete auto-sweep threshold stays disabled
 - **Where**: `core/src/common/engine/mmdb.rs` (`mmdb_open`), mmdb `DbOptions::lazy_delete_compaction_threshold`
 - **What**: keys registered via `lazy_delete` are physically dropped only when organic compaction rewrites their level; registrations resting in cold levels can outlive the process (registrations are memory-only and documented best-effort).

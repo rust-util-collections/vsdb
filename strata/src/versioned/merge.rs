@@ -42,8 +42,20 @@
 //! [`VerMap::merge(source, target)`](super::map::VerMap::merge).
 //!
 
-use std::collections::BTreeSet;
+//! ## Implementation: replay the source delta onto the target
+//!
+//! Every row of the matrix reduces to one rule: a key whose source state
+//! differs from the ancestor takes the source state (added, modified, or
+//! deleted); every other key keeps the target state. The merge therefore
+//! computes `diff(ancestor → source)` — which skips shared subtrees — and
+//! applies exactly those keys to the target tree by copy-on-write. Cost
+//! and memory are proportional to the source-side delta, and the result
+//! shares every untouched subtree with the target.
+//!
 
+use std::collections::BTreeMap;
+
+use super::diff::{DiffEntry, diff_walk};
 use crate::basic::persistent_btree::{EMPTY_ROOT, NodeId, PersistentBTree};
 
 /// Performs a three-way merge.
@@ -53,6 +65,10 @@ use crate::basic::persistent_btree::{EMPTY_ROOT, NodeId, PersistentBTree};
 ///
 /// See the [module-level documentation](self) for the full decision
 /// matrix.
+///
+/// Like [`PersistentBTree::bulk_load`], a newly built result root is
+/// returned **unowned**: the caller adopts it with
+/// [`PersistentBTree::acquire_node`].
 pub fn three_way_merge(
     tree: &mut PersistentBTree,
     ancestor_root: NodeId,
@@ -73,55 +89,8 @@ pub fn three_way_merge(
         return source_root;
     }
 
-    // Full three-way: iterate all three trees in sorted order.
-    let mut iter_a = tree.iter(ancestor_root).peekable();
-    let mut iter_s = tree.iter(source_root).peekable();
-    let mut iter_t = tree.iter(target_root).peekable();
-
-    let mut merged: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
-
-    loop {
-        // Pick the smallest key across the three iterators.
-        let ka = iter_a.peek().map(|(k, _)| k.as_slice());
-        let ks = iter_s.peek().map(|(k, _)| k.as_slice());
-        let kt = iter_t.peek().map(|(k, _)| k.as_slice());
-
-        // All exhausted?
-        if ka.is_none() && ks.is_none() && kt.is_none() {
-            break;
-        }
-
-        let min_key = [ka, ks, kt].into_iter().flatten().min().unwrap().to_vec();
-
-        let a_val = if ka == Some(min_key.as_slice()) {
-            let (_, v) = iter_a.next().unwrap();
-            Some(v)
-        } else {
-            None
-        };
-        let s_val = if ks == Some(min_key.as_slice()) {
-            let (_, v) = iter_s.next().unwrap();
-            Some(v)
-        } else {
-            None
-        };
-        let t_val = if kt == Some(min_key.as_slice()) {
-            let (_, v) = iter_t.next().unwrap();
-            Some(v)
-        } else {
-            None
-        };
-
-        // Three-way decision matrix.
-        let result = decide(a_val.as_deref(), s_val.as_deref(), t_val.as_deref());
-
-        if let Some(val) = result {
-            merged.push((min_key, val.to_vec()));
-        }
-    }
-
-    // Build the merged tree via bulk load (O(n), optimally packed).
-    tree.bulk_load(merged)
+    let changes = source_changes(tree, &[ancestor_root], source_root);
+    replay(tree, target_root, changes)
 }
 
 /// Performs a three-way merge against one or more merge bases.
@@ -129,6 +98,10 @@ pub fn three_way_merge(
 /// When multiple lowest common ancestors exist, keys whose base values differ
 /// are treated as criss-cross conflicts; if source and target differ, source
 /// wins.  Keys whose base values agree use the normal decision matrix.
+///
+/// A key whose bases disagree necessarily differs from at least one base
+/// on the source side, so replaying the union of the per-base source
+/// deltas yields exactly that rule.
 pub fn three_way_merge_many_bases(
     tree: &mut PersistentBTree,
     ancestor_roots: &[NodeId],
@@ -148,83 +121,73 @@ pub fn three_way_merge_many_bases(
         return source_root;
     }
 
-    let mut keys = BTreeSet::new();
-    for root in ancestor_roots
-        .iter()
-        .copied()
-        .chain([source_root, target_root])
-    {
-        for (key, _) in tree.iter(root) {
-            keys.insert(key);
-        }
-    }
-
-    let mut merged = Vec::new();
-    for key in keys {
-        let base_values: Vec<Option<Vec<u8>>> = ancestor_roots
-            .iter()
-            .map(|&root| tree.get(root, &key))
-            .collect();
-        let first_base = base_values.first().cloned().unwrap_or(None);
-        let source = tree.get(source_root, &key);
-        let target = tree.get(target_root, &key);
-
-        let result = if base_values.iter().all(|base| base == &first_base) {
-            decide(first_base.as_deref(), source.as_deref(), target.as_deref())
-                .map(<[u8]>::to_vec)
-        } else {
-            source
-        };
-
-        if let Some(value) = result {
-            merged.push((key, value));
-        }
-    }
-
-    tree.bulk_load(merged)
+    let changes = source_changes(tree, ancestor_roots, source_root);
+    replay(tree, target_root, changes)
 }
 
-/// The shared three-way decision matrix: given the ancestor/source/target
-/// states of one key (`None` = absent), returns the merged state under the
-/// **source-wins** conflict policy.
-fn decide<'a>(
-    ancestor: Option<&'a [u8]>,
-    source: Option<&'a [u8]>,
-    target: Option<&'a [u8]>,
-) -> Option<&'a [u8]> {
-    match (ancestor, source, target) {
-        // Unchanged in both → keep.
-        (Some(a), Some(s), Some(t)) if a == s && a == t => Some(a),
-        // Changed only in source → take source.
-        (Some(a), Some(s), Some(t)) if a == t => Some(s),
-        // Changed only in target → take target.
-        (Some(a), Some(s), Some(t)) if a == s => Some(t),
-        // Changed in both to same value → keep.
-        (Some(_), Some(s), Some(t)) if s == t => Some(s),
-        // Changed in both to different values → source wins.
-        (Some(_), Some(s), Some(_)) => Some(s),
-
-        // Deleted in source, unchanged in target → delete.
-        (Some(a), None, Some(t)) if a == t => None,
-        // Deleted in target, unchanged in source → delete.
-        (Some(a), Some(s), None) if a == s => None,
-        // Deleted in source, changed in target → source wins (delete).
-        (Some(_), None, Some(_)) => None,
-        // Changed in source, deleted in target → source wins (keep change).
-        (Some(_), Some(s), None) => Some(s),
-        // Deleted in both → delete.
-        (Some(_), None, None) => None,
-
-        // Added only in source → take.
-        (None, Some(s), None) => Some(s),
-        // Added only in target → take.
-        (None, None, Some(t)) => Some(t),
-        // Added in both to same value → keep.
-        (None, Some(s), Some(t)) if s == t => Some(s),
-        // Added in both to different values → source wins.
-        (None, Some(s), Some(_)) => Some(s),
-
-        // All absent (unreachable when callers only pass live keys).
-        (None, None, None) => None,
+/// Every key where `source` differs from any of `bases`, mapped to the
+/// source state (`None` = absent), in ascending key order.
+fn source_changes(
+    tree: &PersistentBTree,
+    bases: &[NodeId],
+    source: NodeId,
+) -> BTreeMap<Vec<u8>, Option<Vec<u8>>> {
+    let mut changes = BTreeMap::new();
+    for &base in bases {
+        diff_walk(tree, base, source, |entry| match entry {
+            DiffEntry::Added { key, value }
+            | DiffEntry::Modified {
+                key,
+                new_value: value,
+                ..
+            } => {
+                changes.insert(key, Some(value));
+            }
+            DiffEntry::Removed { key, .. } => {
+                changes.insert(key, None);
+            }
+        });
     }
+    changes
+}
+
+/// Applies `changes` to `target_root` by copy-on-write and returns the
+/// resulting root (unowned when newly built; `target_root` itself when
+/// nothing changed).
+///
+/// All steps share one write buffer: each intermediate version is held
+/// only until the next one exists, and its superseded nodes are dropped
+/// from the buffer before they reach the engine — only nodes reachable
+/// from the final root are written.
+fn replay(
+    tree: &mut PersistentBTree,
+    target_root: NodeId,
+    changes: BTreeMap<Vec<u8>, Option<Vec<u8>>>,
+) -> NodeId {
+    let mut root = target_root;
+    for (key, state) in changes {
+        // Each key is applied once, so `root` still holds the target
+        // state for it.
+        if tree.get(root, &key) == state {
+            continue;
+        }
+        let next = match &state {
+            Some(value) => tree.insert_buffered(root, &key, value),
+            None => tree.remove_buffered(root, &key),
+        };
+        if next == root {
+            continue;
+        }
+        tree.acquire_node(next);
+        if root != target_root {
+            tree.release_buffered(root);
+        }
+        root = next;
+        tree.flush_pending_if_large();
+    }
+    tree.flush_pending();
+    if root != target_root {
+        tree.disown_node(root);
+    }
+    root
 }

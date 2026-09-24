@@ -11,17 +11,23 @@ impl PersistentBTree {
     ///
     /// If the key is absent the original `root` is returned (no allocation).
     pub fn remove(&mut self, root: NodeId, key: &[u8]) -> NodeId {
-        if root == EMPTY_ROOT {
-            return EMPTY_ROOT;
-        }
-        let new_root = match self.remove_rec(root, key) {
-            RemoveResult::NotFound => root,
-            RemoveResult::Done(r) | RemoveResult::Underflow(r) => self.shrink_root(r),
-        };
+        let new_root = self.remove_buffered(root, key);
         // One engine write batch for the whole path-copy node group
         // (a NotFound flush is a no-op — nothing was allocated).
         self.flush_pending();
         new_root
+    }
+
+    /// [`remove`](Self::remove) without draining the write buffer; same
+    /// contract as [`insert_buffered`](Self::insert_buffered).
+    pub(crate) fn remove_buffered(&mut self, root: NodeId, key: &[u8]) -> NodeId {
+        if root == EMPTY_ROOT {
+            return EMPTY_ROOT;
+        }
+        match self.remove_rec(root, key) {
+            RemoveResult::NotFound => root,
+            RemoveResult::Done(r) | RemoveResult::Underflow(r) => self.shrink_root(r),
+        }
     }
 
     fn shrink_root(&mut self, root: NodeId) -> NodeId {

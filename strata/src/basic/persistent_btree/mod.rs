@@ -56,6 +56,12 @@ pub(crate) use types::{InsertResult, LeafState, NodeRef, RemoveResult};
 // PersistentBTree
 // =========================================================================
 
+#[cfg(test)]
+thread_local! {
+    /// Node decodes performed by this thread (test instrumentation).
+    pub(crate) static NODE_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 #[derive(Debug)]
 struct RefState {
     counts: HashMap<NodeId, NodeRef>,
@@ -330,7 +336,9 @@ impl PersistentBTree {
         id
     }
 
-    fn node(&self, id: NodeId) -> Node {
+    pub(crate) fn node(&self, id: NodeId) -> Node {
+        #[cfg(test)]
+        NODE_READS.with(|c| c.set(c.get() + 1));
         // Read-through for nodes allocated earlier in the operation in
         // flight (remove's underflow repair and bulk_load's first_key
         // descend into them).  The emptiness guard keeps the read-only
@@ -355,7 +363,7 @@ impl PersistentBTree {
     /// engine-level commit failure panics, matching the per-put
     /// failure behavior this replaces (mutating signatures are
     /// infallible); nothing from the batch lands in that case.
-    fn flush_pending(&mut self) {
+    pub(crate) fn flush_pending(&mut self) {
         if self.pending.is_empty() {
             return;
         }
@@ -579,6 +587,20 @@ impl PersistentBTree {
     /// from the in-memory map, and registers the node for deferred disk
     /// deletion via the storage engine's compaction filter.
     pub fn release_node(&mut self, id: NodeId) {
+        // Callers (VerMap) only release between tree operations; the
+        // write buffer must already be drained.
+        debug_assert!(
+            self.pending.is_empty(),
+            "release_node called with a non-empty write buffer"
+        );
+        self.release_buffered(id);
+    }
+
+    /// [`release_node`](Self::release_node) inside a buffered multi-step
+    /// operation: a node that dies while still in the write buffer is
+    /// dropped there and never reaches the engine; flushed ones take the
+    /// usual deferred deletion.
+    pub(crate) fn release_buffered(&mut self, id: NodeId) {
         if id == EMPTY_ROOT {
             return;
         }
@@ -586,13 +608,6 @@ impl PersistentBTree {
         if !refs.ready {
             return;
         }
-        // Callers (VerMap) only release between tree operations; the
-        // write buffer must already be drained, otherwise the cascade
-        // below would lazy-delete keys the buffer has not written yet.
-        debug_assert!(
-            self.pending.is_empty(),
-            "release_node called with a non-empty write buffer"
-        );
         let mut dead_keys = Vec::new();
         let mut work = vec![id];
         while let Some(nid) = work.pop() {
@@ -613,13 +628,57 @@ impl PersistentBTree {
             if nr.ref_count == 0 {
                 let children = std::mem::take(&mut nr.children);
                 refs.counts.remove(&nid);
-                dead_keys.push(nid.to_le_bytes().to_vec());
+                if self.pending.remove(&nid).is_none() {
+                    dead_keys.push(nid.to_le_bytes().to_vec());
+                }
                 work.extend(children);
             }
         }
         if !dead_keys.is_empty() {
             self.nodes.lazy_delete_batch(dead_keys);
         }
+    }
+
+    /// Drops one reference taken with [`acquire_node`](Self::acquire_node)
+    /// **without** reclaiming the node at zero: it stays alive as an
+    /// unowned fresh root (like a [`bulk_load`](Self::bulk_load) result)
+    /// for the caller to adopt.
+    pub(crate) fn disown_node(&mut self, id: NodeId) {
+        if id == EMPTY_ROOT {
+            return;
+        }
+        let mut refs = self.runtime.refs.lock();
+        if !refs.ready {
+            return;
+        }
+        if let Some(nr) = refs.counts.get_mut(&id) {
+            debug_assert!(nr.ref_count > 0, "disown_node on unowned node {id}");
+            nr.ref_count = nr.ref_count.saturating_sub(1);
+        }
+    }
+
+    /// Flushes the write buffer once it reaches the bulk threshold, bounding
+    /// memory during a buffered multi-step operation.
+    pub(crate) fn flush_pending_if_large(&mut self) {
+        if self.pending.len() >= Self::PENDING_FLUSH_THRESHOLD {
+            self.flush_pending();
+        }
+    }
+
+    /// Number of internal levels above the leaves (0 for a leaf root).
+    pub(crate) fn height(&self, root: NodeId) -> u32 {
+        let mut h = 0;
+        let mut cur = root;
+        while cur != EMPTY_ROOT {
+            match self.node(cur) {
+                Node::Leaf { .. } => break,
+                Node::Internal { children, .. } => {
+                    h += 1;
+                    cur = children[0];
+                }
+            }
+        }
+        h
     }
 
     /// Rebuilds the in-memory reference-count map from scratch by
@@ -725,6 +784,45 @@ impl PersistentBTree {
     ///   cascade was incomplete.
     pub fn gc(&mut self, live_roots: &[NodeId]) {
         self.rebuild_ref_counts(live_roots);
+    }
+
+    /// Asserts the incremental reference counts equal a from-scratch
+    /// recount for `owned` (one entry per acquired root reference): every
+    /// reachable node is tracked with its exact parent + root count, and
+    /// nothing unreachable is still tracked.
+    #[cfg(test)]
+    pub(crate) fn assert_refs_match_recount(&self, owned: &[NodeId]) {
+        let mut expected: HashMap<NodeId, u32> = HashMap::new();
+        let mut seen = HashSet::new();
+        let mut queue = Vec::new();
+        for &root in owned {
+            if root != EMPTY_ROOT {
+                *expected.entry(root).or_insert(0) += 1;
+                queue.push(root);
+            }
+        }
+        while let Some(id) = queue.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            if let Node::Internal { children, .. } = self.node(id) {
+                for c in children {
+                    *expected.entry(c).or_insert(0) += 1;
+                    queue.push(c);
+                }
+            }
+        }
+        let refs = self.runtime.refs.lock();
+        assert!(refs.ready);
+        let actual: HashMap<NodeId, u32> = refs
+            .counts
+            .iter()
+            .map(|(&id, nr)| (id, nr.ref_count))
+            .collect();
+        assert_eq!(
+            actual, expected,
+            "incremental ref counts diverge from recount"
+        );
     }
 }
 

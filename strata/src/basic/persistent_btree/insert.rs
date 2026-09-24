@@ -10,7 +10,23 @@ impl PersistentBTree {
     ///
     /// The old root (and every version that references it) is unaffected.
     pub fn insert(&mut self, root: NodeId, key: &[u8], value: &[u8]) -> NodeId {
-        let new_root = if root == EMPTY_ROOT {
+        let new_root = self.insert_buffered(root, key, value);
+        // One engine write batch for the whole path-copy node group.
+        self.flush_pending();
+        new_root
+    }
+
+    /// [`insert`](Self::insert) without draining the write buffer: the new
+    /// path stays in `pending` so a multi-step operation can discard its
+    /// own intermediate versions before they ever reach the engine. The
+    /// caller must [`flush_pending`](Self::flush_pending) before returning.
+    pub(crate) fn insert_buffered(
+        &mut self,
+        root: NodeId,
+        key: &[u8],
+        value: &[u8],
+    ) -> NodeId {
+        if root == EMPTY_ROOT {
             self.alloc(&Node::Leaf {
                 keys: vec![key.to_vec()],
                 values: vec![value.to_vec()],
@@ -25,10 +41,7 @@ impl PersistentBTree {
                     })
                 }
             }
-        };
-        // One engine write batch for the whole path-copy node group.
-        self.flush_pending();
-        new_root
+        }
     }
 
     fn insert_rec(&mut self, id: NodeId, key: &[u8], value: &[u8]) -> InsertResult {

@@ -366,23 +366,30 @@ flowchart TD
 
 ### Full Three-Way Merge Process
 
+Every row of the conflict matrix below reduces to one rule: a key whose
+source state differs from the ancestor takes the source state; every other
+key keeps the target state. The merge therefore replays the source-side
+delta onto the target tree instead of rebuilding it:
+
 ```mermaid
 flowchart TD
-    Start(["Full three-way merge"]) --> Iters["Create 3 sorted iterators:<br/>ancestor, source, target"]
-    Iters --> Loop{"More keys?"}
-    Loop -->|No| Build["bulk_load(merged_entries)<br/>→ new B+ tree root"]
-    Loop -->|Yes| Peek["Peek smallest key<br/>across all 3 iterators"]
-    Peek --> Extract["Extract values:<br/>a_val, s_val, t_val<br/>(None if key absent)"]
-    Extract --> Decide["Apply decision matrix"]
-    Decide --> Emit{"Result?"}
-    Emit -->|"Some(v)"| Add["Add (key, v) to merged"]
-    Emit -->|"None"| Skip["Key deleted"]
-    Add --> Loop
-    Skip --> Loop
-    Build --> MergeCommit["Create merge commit<br/>parents: [target.head, source.head]"]
+    Start(["Full three-way merge"]) --> Diff["diff(ancestor → source)<br/>(one per merge base; union)<br/>skips shared subtrees"]
+    Diff --> Loop{"More changed keys?"}
+    Loop -->|Yes| Same{"target already<br/>has source state?"}
+    Same -->|Yes| Loop
+    Same -->|No| Apply["COW insert / remove<br/>on the running root"]
+    Apply --> Loop
+    Loop -->|No| MergeCommit["Create merge commit<br/>parents: [target.head, source.head]"]
 
     style MergeCommit fill:#c62,color:#fff
 ```
+
+Cost and memory are proportional to the source-side delta (changed keys ×
+tree depth), not to the size of either branch, and the merged tree shares
+every untouched subtree with the target. All replay steps share one write
+buffer, so intermediate versions are discarded before they reach the
+engine. `diff_commits` / `diff_uncommitted` use the same shared-subtree
+skipping walk.
 
 ### Conflict Resolution Matrix
 

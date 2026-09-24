@@ -804,14 +804,13 @@ where
     /// is created).  Otherwise creates a merge commit on `target` with two
     /// parents.
     ///
-    /// # Transient memory
+    /// # Cost
     ///
-    /// Unless a fast path applies (either side unchanged), the merged
-    /// result is materialized in memory before being bulk-loaded into a
-    /// new tree: peak usage is proportional to the union of keys
-    /// reachable from the two branch heads (and, for criss-cross
-    /// histories, the merge bases). Merging branches whose combined
-    /// live data exceeds available memory is not supported.
+    /// The merge replays the source-side delta (keys changed since the
+    /// merge bases) onto the target tree by copy-on-write: time and
+    /// transient memory are proportional to that delta, not to the size
+    /// of either branch, and untouched subtrees stay shared with the
+    /// target.
     pub fn merge(&mut self, source: BranchId, target: BranchId) -> Result<CommitId> {
         self.ensure_writable("branch merge")?;
         if source == target {
