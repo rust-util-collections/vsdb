@@ -34,13 +34,10 @@ for (key, value) in map.iter() {
 # }
 ```
 
-Normal writable programs may keep using `vsdb_configure(VsdbOptions::new(path))`. The
-equivalent options-based form is `vsdb_configure(VsdbOptions::new(path))`.
+Normal writable programs configure with `vsdb_configure(VsdbOptions::new(path))`.
 
-`vsdb_configure` is one-shot. Call it at the start of `main`, before spawning
-threads and before any database, namespace, or derived-directory function is
-used. It also publishes `VSDB_BASE_DIR` to child processes, matching
-`vsdb_set_base_dir`.
+`vsdb_configure` is one-shot. Call it before any database, namespace, or
+derived-directory function is used. It never touches the process environment.
 
 ## Preparing handles in the writer
 

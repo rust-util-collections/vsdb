@@ -65,8 +65,8 @@ Key rules:
   ambient scope affects creation only.
 - Memory budgets are static and per-engine: the default namespace defaults to
   a fixed 2 GiB, every other namespace to a fixed 512 MB — nothing sizes from
-  the host's RAM or its cgroup. `VSDB_MEM_BUDGET_MB` (applied verbatim) sets
-  the default engine's budget; a larger budget enlarges the block cache and
+  the host's RAM or its cgroup. `VsdbOptions::with_mem_budget_mb` (or the
+  `VSDB_MEM_BUDGET_MB` env var; applied verbatim) sets the default engine's budget; a larger budget enlarges the block cache and
   write buffers, which directly improves performance. Deployments that open
   many namespaces should give each an explicit
   `NamespaceOpts { mem_budget_mb, .. }` so the sum stays inside the process's

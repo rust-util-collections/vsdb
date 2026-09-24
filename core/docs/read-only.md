@@ -28,12 +28,10 @@ assert_eq!(map.get(b"answer"), Some(b"42".to_vec()));
 
 `vsdb_configure` is one-shot and process-wide. It covers the default namespace
 and every non-default namespace restored in that process. Different modes need
-separate processes. Writable callers may continue to use
-`vsdb_configure(VsdbOptions::new(path))`; its options-based equivalent is
+separate processes; writable programs configure with
 `vsdb_configure(VsdbOptions::new(path))`.
 
-Call configuration during single-threaded startup. Like `vsdb_set_base_dir`,
-it publishes `VSDB_BASE_DIR` for child processes.
+Call it before any other VSDB API. It never touches the process environment.
 
 ## Prepare the handle while writable
 
