@@ -28,6 +28,7 @@ use std::{
     ops::{Deref, DerefMut, RangeBounds},
     result::Result as StdResult,
     sync::OnceLock,
+    thread,
 };
 
 const MAPX_META_MAGIC: &[u8; 8] = b"VSMAPX01";
@@ -41,6 +42,29 @@ const MAPX_META_NS_LEN: usize = MAPX_META_LEN + size_of::<u64>();
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
+
+/// Whether the thread was already unwinding when a write-back guard was
+/// created.
+///
+/// A panic that begins while a guard is alive means its buffered edit may
+/// be half-done: the guard discards it instead of persisting it (which also
+/// avoids a second panic, and thus an abort, while unwinding). A guard
+/// created during unwinding — e.g. inside a `Drop` — writes normally.
+#[derive(Clone, Copy, Debug)]
+struct UnwindMark(bool);
+
+impl UnwindMark {
+    #[inline(always)]
+    fn new() -> Self {
+        Self(thread::panicking())
+    }
+
+    /// True when a panic began after this mark was taken.
+    #[inline(always)]
+    fn interrupted(self) -> bool {
+        !self.0 && thread::panicking()
+    }
+}
 
 /// Trait for batch write operations
 pub trait BatchTrait {
@@ -166,6 +190,7 @@ impl Mapx {
             key: key.to_vec(),
             value: v,
             dirty: false,
+            unwind: UnwindMark::new(),
             hdr: self,
         })
     }
@@ -180,6 +205,7 @@ impl Mapx {
             key,
             value,
             dirty: true,
+            unwind: UnwindMark::new(),
             hdr: self,
         }
     }
@@ -664,6 +690,7 @@ impl<'a> Iterator for MapxIterMut<'a> {
             key: k.clone(),
             value: v,
             dirty: false,
+            unwind: UnwindMark::new(),
             _marker: PhantomData,
         };
 
@@ -681,6 +708,7 @@ impl<'a> DoubleEndedIterator for MapxIterMut<'a> {
             key: k.clone(),
             value: v,
             dirty: false,
+            unwind: UnwindMark::new(),
             _marker: PhantomData,
         };
 
@@ -697,6 +725,7 @@ pub struct ValueIterMut<'a> {
     key: RawKey,
     value: RawValue,
     dirty: bool,
+    unwind: UnwindMark,
     _marker: PhantomData<&'a mut ()>,
 }
 
@@ -713,7 +742,7 @@ impl fmt::Debug for ValueIterMut<'_> {
 
 impl Drop for ValueIterMut<'_> {
     fn drop(&mut self) {
-        if self.dirty {
+        if self.dirty && !self.unwind.interrupted() {
             self.ns.engine().insert(self.prefix, &self.key, &self.value);
         }
     }
@@ -741,12 +770,13 @@ pub struct ValueMut<'a> {
     key: RawKey,
     value: RawValue,
     dirty: bool,
+    unwind: UnwindMark,
     hdr: &'a mut Mapx,
 }
 
 impl Drop for ValueMut<'_> {
     fn drop(&mut self) {
-        if self.dirty {
+        if self.dirty && !self.unwind.interrupted() {
             self.hdr.insert(&self.key[..], &self.value[..]);
         }
     }

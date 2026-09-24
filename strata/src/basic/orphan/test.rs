@@ -174,3 +174,20 @@ fn test_orphan_of_mapx_serde_roundtrip() {
     assert_eq!(inner.get(&1), Some("one".into()));
     assert_eq!(inner.get(&2), Some("two".into()));
 }
+
+#[test]
+fn get_mut_discards_edit_interrupted_by_panic() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let mut o = Orphan::new(vec![1u8, 2, 3]);
+    let r = catch_unwind(AssertUnwindSafe(|| {
+        let mut g = o.get_mut();
+        g.push(4);
+        panic!("interrupted edit");
+    }));
+    assert!(r.is_err());
+    assert_eq!(o.get_value(), vec![1, 2, 3]);
+
+    o.get_mut().push(4);
+    assert_eq!(o.get_value(), vec![1, 2, 3, 4]);
+}

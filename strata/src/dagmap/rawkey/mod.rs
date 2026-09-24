@@ -36,7 +36,7 @@ mod test;
 
 use crate::{
     DagMapId, DagMapRaw, ValueEnDe,
-    common::{InstanceId, error::Result},
+    common::{InstanceId, UnwindMark, error::Result},
     dagmap::raw,
 };
 use serde::{Deserialize, Serialize};
@@ -237,6 +237,7 @@ where
             value: <V as ValueEnDe>::decode(&inner).unwrap(),
             inner,
             dirty: false,
+            unwind: UnwindMark::new(),
         })
     }
 
@@ -319,6 +320,7 @@ where
     value: V,
     inner: raw::ValueMut<'a>,
     dirty: bool,
+    unwind: UnwindMark,
 }
 
 impl<V> Drop for ValueMut<'_, V>
@@ -326,7 +328,7 @@ where
     V: ValueEnDe,
 {
     fn drop(&mut self) {
-        if self.dirty {
+        if self.dirty && !self.unwind.interrupted() {
             *self.inner = self.value.encode();
         }
     }

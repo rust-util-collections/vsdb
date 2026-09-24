@@ -32,7 +32,7 @@ mod test;
 use crate::{
     ValueEnDe,
     basic::mapx_ord_rawkey::MapxOrdRawKey,
-    common::{InstanceId, Namespace, error::Result},
+    common::{InstanceId, Namespace, UnwindMark, error::Result},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -243,6 +243,7 @@ where
             hdr: self,
             value,
             original,
+            unwind: UnwindMark::new(),
         }
     }
 
@@ -448,7 +449,8 @@ impl_ops!(@Neg, neg, -);
 /// A mutable reference to the value of an `Orphan`.
 ///
 /// This struct is returned by `get_mut()` and ensures that any changes to the
-/// value are written back to disk when it is dropped.
+/// value are written back to disk when it is dropped. A panic that starts
+/// while the guard is alive discards the edit instead.
 pub struct ValueMut<'a, T>
 where
     T: ValueEnDe,
@@ -456,6 +458,7 @@ where
     hdr: &'a mut Orphan<T>,
     value: T,
     original: Vec<u8>,
+    unwind: UnwindMark,
 }
 
 impl<T> Drop for ValueMut<'_, T>
@@ -463,6 +466,9 @@ where
     T: ValueEnDe,
 {
     fn drop(&mut self) {
+        if self.unwind.interrupted() {
+            return;
+        }
         let encoded = self.value.encode();
         if encoded != self.original {
             self.hdr.inner.insert([], &self.value);

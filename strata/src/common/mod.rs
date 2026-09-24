@@ -16,10 +16,33 @@ pub use vsdb_core::common::*;
 
 use error::Result;
 use serde::{Serialize, de::DeserializeOwned};
-use std::{any::type_name, fmt, fs, result::Result as StdResult};
+use std::{any::type_name, fmt, fs, result::Result as StdResult, thread};
 
 const TYPED_HANDLE_META_MAGIC: &[u8; 8] = b"VSTYPE02";
 const TYPED_HANDLE_TAG_LEN: usize = 8;
+
+/// Whether the thread was already unwinding when a write-back guard was
+/// created.
+///
+/// A panic that begins while a guard is alive means its buffered edit may
+/// be half-done: the guard discards it instead of persisting it (which also
+/// avoids encoding user values, or a second panic, while unwinding). A guard
+/// created during unwinding — e.g. inside a `Drop` — writes normally.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct UnwindMark(bool);
+
+impl UnwindMark {
+    #[inline(always)]
+    pub(crate) fn new() -> Self {
+        Self(thread::panicking())
+    }
+
+    /// True when a panic began after this mark was taken.
+    #[inline(always)]
+    pub(crate) fn interrupted(self) -> bool {
+        !self.0 && thread::panicking()
+    }
+}
 
 pub(crate) fn ensure_writable(ns: &Namespace, operation: &'static str) -> Result<()> {
     if ns.is_read_only() {

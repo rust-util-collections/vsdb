@@ -393,3 +393,58 @@ fn test_prefix_isolation_between_instances() {
     assert_eq!(a.iter().count(), 100);
     assert_eq!(to_u64(&pnk!(a.get(to_bytes(1)))), 1);
 }
+
+#[test]
+fn guards_discard_edits_interrupted_by_panic() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let mut map = MapxRaw::new();
+    map.insert([1], b"one");
+    map.insert([2], b"two");
+
+    let r = catch_unwind(AssertUnwindSafe(|| {
+        let mut g = map.get_mut([1]).unwrap();
+        *g = b"half-done".to_vec();
+        panic!("interrupted edit");
+    }));
+    assert!(r.is_err());
+    assert_eq!(map.get([1]).as_deref(), Some(b"one".as_slice()));
+
+    let r = catch_unwind(AssertUnwindSafe(|| {
+        let mut it = map.iter_mut();
+        let (_, mut v) = it.next().unwrap();
+        *v = b"half-done".to_vec();
+        panic!("interrupted iteration");
+    }));
+    assert!(r.is_err());
+    assert_eq!(map.get([1]).as_deref(), Some(b"one".as_slice()));
+
+    let r = catch_unwind(AssertUnwindSafe(|| {
+        let _g = map.entry(&[3]).or_insert(b"three");
+        panic!("interrupted insert");
+    }));
+    assert!(r.is_err());
+    assert!(map.get([3]).is_none());
+}
+
+#[test]
+fn guard_created_while_unwinding_still_writes() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    struct EditOnDrop<'a>(&'a mut MapxRaw);
+    impl Drop for EditOnDrop<'_> {
+        fn drop(&mut self) {
+            let mut g = self.0.get_mut([1]).unwrap();
+            *g = b"cleanup".to_vec();
+        }
+    }
+
+    let mut map = MapxRaw::new();
+    map.insert([1], b"one");
+    let r = catch_unwind(AssertUnwindSafe(|| {
+        let _cleanup = EditOnDrop(&mut map);
+        panic!("unwind through a cleanup guard");
+    }));
+    assert!(r.is_err());
+    assert_eq!(map.get([1]).as_deref(), Some(b"cleanup".as_slice()));
+}

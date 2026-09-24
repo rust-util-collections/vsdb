@@ -722,3 +722,20 @@ fn is_dead_recognizes_tombstoned_entries() {
     node.remove("b");
     assert!(node.is_dead());
 }
+
+#[test]
+fn get_mut_tombstone_edit_during_panic_does_not_abort() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let mut d = DagMapRaw::new(None);
+    d.insert("k", "v");
+    // Before the fix, the guard's tombstone assert fired while unwinding:
+    // a second panic, i.e. a process abort.
+    let r = catch_unwind(AssertUnwindSafe(|| {
+        let mut g = d.get_mut("k").unwrap();
+        g.clear();
+        panic!("interrupted edit");
+    }));
+    assert!(r.is_err());
+    assert_eq!(d.get("k").unwrap().as_slice(), b"v");
+}

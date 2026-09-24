@@ -294,3 +294,46 @@ fn get_mut_does_not_rewrite_hashmap_encoding() {
         "HashMap postcard encoding did not drift; the regression would not fire"
     );
 }
+
+#[test]
+fn guards_discard_edits_interrupted_by_panic() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    struct Acct {
+        a: u64,
+        b: u64,
+    }
+
+    let mut map: MapxOrdRawKey<Acct> = MapxOrdRawKey::new();
+    map.insert([1], &Acct { a: 1, b: 1 });
+
+    // A half-finished two-field update must not become durable.
+    let r = catch_unwind(AssertUnwindSafe(|| {
+        let mut g = map.get_mut([1]).unwrap();
+        g.a = 100;
+        panic!("interrupted before b was updated");
+    }));
+    assert!(r.is_err());
+    assert_eq!(map.get([1]), Some(Acct { a: 1, b: 1 }));
+
+    let r = catch_unwind(AssertUnwindSafe(|| {
+        let mut it = map.iter_mut();
+        let (_, mut v) = it.next().unwrap();
+        v.a = 100;
+        panic!("interrupted iteration");
+    }));
+    assert!(r.is_err());
+    assert_eq!(map.get([1]), Some(Acct { a: 1, b: 1 }));
+
+    let r = catch_unwind(AssertUnwindSafe(|| {
+        let _g = map.entry(&[2][..]).or_insert(Acct { a: 2, b: 2 });
+        panic!("interrupted insert");
+    }));
+    assert!(r.is_err());
+    assert!(map.get([2]).is_none());
+
+    // Completed edits still persist.
+    map.get_mut([1]).unwrap().a = 7;
+    assert_eq!(map.get([1]), Some(Acct { a: 7, b: 1 }));
+}

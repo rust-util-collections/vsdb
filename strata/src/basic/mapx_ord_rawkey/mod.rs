@@ -46,7 +46,7 @@
 mod test;
 
 use crate::common::{
-    RawKey,
+    RawKey, UnwindMark,
     ende::ValueEnDe,
     error::Result,
     macros::{define_map_wrapper, entry_or_insert_via_mock},
@@ -104,6 +104,7 @@ where
                 original,
                 snapshot,
                 dirty: false,
+                unwind: UnwindMark::new(),
             }
         })
     }
@@ -118,6 +119,7 @@ where
             original: None,
             snapshot: Vec::new(),
             dirty: true,
+            unwind: UnwindMark::new(),
         }
     }
 
@@ -343,6 +345,10 @@ where
 /////////////////////////////////////////////////////////////////////////////
 
 /// A mutable reference to a value in a `MapxOrdRawKey`.
+///
+/// Edits are written back when the guard drops. A panic that starts while
+/// the guard is alive discards the edit instead of persisting a half-done
+/// value.
 #[derive(Debug)]
 pub struct ValueMut<'a, V>
 where
@@ -356,6 +362,7 @@ where
     /// unless the value changed, even when they differ from `original`.
     snapshot: Vec<u8>,
     dirty: bool,
+    unwind: UnwindMark,
 }
 
 impl<V> ValueMut<'_, V>
@@ -395,6 +402,9 @@ where
     V: ValueEnDe,
 {
     fn drop(&mut self) {
+        if self.unwind.interrupted() {
+            return;
+        }
         if let Some(encoded) = self.replacement() {
             *self.inner = encoded;
         }
@@ -508,6 +518,7 @@ where
                     original,
                     snapshot,
                     dirty: false,
+                    unwind: UnwindMark::new(),
                 },
             )
         })
@@ -531,6 +542,7 @@ where
                     original,
                     snapshot,
                     dirty: false,
+                    unwind: UnwindMark::new(),
                 },
             )
         })
@@ -541,6 +553,8 @@ where
 /////////////////////////////////////////////////////////////////////////////
 
 /// A mutable reference to a value in a `MapxOrdRawKey` iterator.
+///
+/// Same write-back rule as [`ValueMut`]: a panic during the edit discards it.
 #[derive(Debug)]
 pub struct ValueIterMut<'a, V>
 where
@@ -553,6 +567,7 @@ where
     original: Vec<u8>,
     snapshot: Vec<u8>,
     dirty: bool,
+    unwind: UnwindMark,
 }
 
 impl<V> Drop for ValueIterMut<'_, V>
@@ -560,6 +575,9 @@ where
     V: ValueEnDe,
 {
     fn drop(&mut self) {
+        if self.unwind.interrupted() {
+            return;
+        }
         let now = self.value.encode();
         if now.as_slice() == self.snapshot.as_slice() {
             return;

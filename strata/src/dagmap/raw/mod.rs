@@ -36,7 +36,7 @@ mod test;
 use crate::{
     DagMapId, MapxOrdRawKey, Orphan,
     common::{
-        InstanceId, ensure_writable,
+        InstanceId, UnwindMark, ensure_writable,
         error::{Result, VsdbError},
         staged::StagedRows,
     },
@@ -357,6 +357,7 @@ impl DagMapRaw {
                 value: inner.clone(),
                 inner,
                 dirty: false,
+                unwind: UnwindMark::new(),
             })
         })
     }
@@ -993,11 +994,12 @@ pub struct ValueMut<'a> {
     value: RawBytes,
     inner: mapx_raw::ValueMut<'a>,
     dirty: bool,
+    unwind: UnwindMark,
 }
 
 impl Drop for ValueMut<'_> {
     fn drop(&mut self) {
-        if self.dirty {
+        if self.dirty && !self.unwind.interrupted() {
             // Same invariant as `insert()`: the empty byte string is the
             // internal deletion tombstone and must not be produced through
             // the mutable-reference path either.
