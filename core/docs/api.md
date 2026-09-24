@@ -123,7 +123,7 @@ use vsdb_core::{
     MapxRaw,
     common::{
         Namespace, NamespaceOpts, InstanceId, DEFAULT_NS_ID,
-        vsdb_ns_list, vsdb_ns_close, vsdb_ns_destroy, vsdb_ns_relocate,
+        Namespace::list, Namespace::close_by_id, Namespace::destroy, Namespace::relocate,
     },
 };
 
@@ -149,7 +149,7 @@ let restored = MapxRaw::from_meta(id).unwrap();
 let ns_id = ns.id();
 
 // Admin tier: list, close, destroy, relocate.
-let all = vsdb_ns_list().unwrap();
+let all = Namespace::list().unwrap();
 for info in &all {
     println!("ns {} at {:?}, {} shards", info.id, info.path, info.shards);
 }
@@ -157,7 +157,7 @@ for info in &all {
 // Close: flush and release resources (engine threads, LOCK files).
 // Requires all client handles dropped — reopen is restart-equivalent.
 drop((restored, map, ns));
-vsdb_ns_close(ns_id).unwrap();
+Namespace::close_by_id(ns_id).unwrap();
 
 // Consuming form: the handle itself is accounted for; refusal hands
 // it back so a live namespace is never invalidated.
@@ -175,7 +175,7 @@ let copy = src.clone_in(&Namespace::default_ns()).unwrap();
 
 // Destroy: O(1) bulk reclaim of the entire directory tree.
 // Requires the namespace be not-open.
-vsdb_ns_destroy(ns_id).unwrap();
+Namespace::destroy(ns_id).unwrap();
 
 // Relocate: re-point a namespace at a new root directory.
 // Data movement is the operator's job; the target must hold
@@ -183,9 +183,9 @@ vsdb_ns_destroy(ns_id).unwrap();
 let ns2_id = ns2.id();
 let old_root = ns2.path().to_owned();
 drop((src, ns2));
-vsdb_ns_close(ns2_id).unwrap();
+Namespace::close_by_id(ns2_id).unwrap();
 std::fs::rename(old_root, "/mnt/archive/db").unwrap();
-vsdb_ns_relocate(ns2_id, "/mnt/archive/db").unwrap();
+Namespace::relocate(ns2_id, "/mnt/archive/db").unwrap();
 
 // Per-shard engine telemetry (mmdb property names), one reading per
 // shard in shard order — e.g. cache hit/miss counters. Each engine's

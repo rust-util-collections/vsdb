@@ -70,7 +70,7 @@ let restored: Mapx<u64, String> = Mapx::from_meta(id).unwrap();
 
 // Advanced tier (opt-in): explicit volume, shard count, memory budget.
 // Namespace::create_with(NamespaceOpts { path, shards, mem_budget_mb })
-// Admin: vsdb_ns_list() / vsdb_ns_destroy(id) / vsdb_ns_relocate(id, path)
+// Admin: Namespace::list() / Namespace::destroy(id) / Namespace::relocate(id, path)
 ```
 
 `Mapx::new()` still targets the implicit default namespace — existing

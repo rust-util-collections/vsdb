@@ -239,7 +239,9 @@ fn test_from_meta_rejects_legacy_prefix_metadata() {
     hdr.insert([1], [10]);
 
     let id = hdr.instance_id();
-    fs::write(crate::common::vsdb_meta_path(id.map_id), hdr.as_bytes()).unwrap();
+    let path = crate::common::Namespace::default_ns().meta_path(id.map_id);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, hdr.as_bytes()).unwrap();
 
     assert!(MapxRaw::from_meta(id).is_err());
 

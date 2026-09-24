@@ -50,11 +50,11 @@ let hot: MapxOrd<i32, String> = MapxOrd::new_in(&fast);
 let archive_copy = archive.clone_in(&Namespace::default_ns()).unwrap();
 
 // Admin functions (from vsdb_core, re-exported by vsdb):
-//   vsdb_ns_list() -> Result<Vec<NsInfo>>
-//   vsdb_ns_close(id) -> Result<()>
+//   Namespace::list() -> Result<Vec<NsInfo>>
+//   Namespace::close_by_id(id) -> Result<()>
 //   ns.close()       -> consuming form; refusal returns the handle
-//   vsdb_ns_destroy(id) -> Result<()>
-//   vsdb_ns_relocate(id, new_path) -> Result<()>
+//   Namespace::destroy(id) -> Result<()>
+//   Namespace::relocate(id, new_path) -> Result<()>
 ```
 
 Key rules:

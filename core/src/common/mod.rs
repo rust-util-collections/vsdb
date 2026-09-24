@@ -14,10 +14,7 @@ pub mod namespace;
 
 pub use engine::BatchTrait;
 use error::{Result, VsdbError};
-pub use namespace::{
-    DEFAULT_NS_ID, InstanceId, Namespace, NamespaceOpts, NsId, NsInfo, vsdb_ns_close,
-    vsdb_ns_destroy, vsdb_ns_list, vsdb_ns_relocate,
-};
+pub use namespace::{DEFAULT_NS_ID, InstanceId, Namespace, NamespaceOpts, NsId, NsInfo};
 use parking_lot::Mutex;
 use ruc::*;
 use std::{
@@ -83,50 +80,6 @@ static VSDB_CUSTOM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     d
 });
 
-static VSDB_SYSTEM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
-    // See VSDB_CUSTOM_DIR: derived paths freeze the base dir.
-    vsdb_freeze_base_dir();
-    let mut d = VSDB_BASE_DIR.lock().clone();
-    d.push("__SYSTEM__");
-    if !vsdb_is_read_only() {
-        pnk!(fs::create_dir_all(&d));
-    }
-    d
-});
-
-static VSDB_META_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
-    let mut d = VSDB_SYSTEM_DIR.clone();
-    d.push("__instance_meta__");
-    if !vsdb_is_read_only() {
-        pnk!(fs::create_dir_all(&d));
-    }
-    d
-});
-
-/// Returns the instance-meta directory path of the **default
-/// namespace** (its root is the base dir, so this equals
-/// `Namespace::default_ns().meta_dir()`; non-default namespaces keep
-/// their metas under their own roots — use [`Namespace::meta_dir`]).
-///
-/// This directory (`{system_dir}/__instance_meta__/`) is used to persist
-/// lightweight metadata (e.g. serialized handles) for individual VSDB
-/// instances, keyed by their unique `instance_id`.
-/// In read-only mode this returns the path without creating the directory.
-#[inline(always)]
-pub fn vsdb_get_meta_dir() -> &'static Path {
-    VSDB_META_DIR.as_path()
-}
-
-/// Returns the **default-namespace** meta file path for a given map ID
-/// (a bare `u64` can only ever address a default-namespace instance;
-/// namespace-resident metas live under [`Namespace::meta_dir`]).
-#[inline(always)]
-pub fn vsdb_meta_path(instance_id: u64) -> PathBuf {
-    let mut p = VSDB_META_DIR.clone();
-    p.push(format!("{:016x}", instance_id));
-    p
-}
-
 /// Atomically and durably replaces the file at `path` with `bytes`.
 ///
 /// Writes to a sibling `*.tmp` file, fsyncs it, renames it over the
@@ -168,7 +121,7 @@ pub fn atomic_write_file(path: &Path, bytes: &[u8]) -> Result<()> {
 ///
 /// This static variable is lazily initialized and provides a single point of
 /// access to the underlying database.
-pub static VSDB: LazyLock<VsDB> = LazyLock::new(|| pnk!(VsDB::new()));
+pub(crate) static VSDB: LazyLock<VsDB> = LazyLock::new(|| pnk!(VsDB::new()));
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -217,7 +170,7 @@ pub(crate) use parse_prefix;
 /// owns the actual default engine (see `namespace::DEFAULT_NS`).
 ///
 /// The storage engine is MMDB, a pure-Rust LSM-Tree engine.
-pub struct VsDB {
+pub(crate) struct VsDB {
     ns: namespace::Namespace,
 }
 
@@ -278,33 +231,15 @@ fn gen_data_dir() -> PathBuf {
 /// this blob is the app's index over the whole universe. That is why
 /// the dir does not split per namespace: namespaces are reached
 /// *through* handles, and the handles are bootstrapped from here — a
-/// per-namespace location would be circular, and `vsdb_ns_destroy`
+/// per-namespace location would be circular, and [`Namespace::destroy`]
 /// would silently take the app's root pointer with it. Users need to
-/// remember exactly one thing: the base dir.
+/// remember exactly one thing: the base dir. Backing up or relocating
+/// the base dir carries these files with the data they point into.
 ///
 /// In read-only mode this returns the path without creating the directory.
-///
-/// # Returns
-///
-/// A `&'static Path` to the custom directory.
 #[inline(always)]
 pub fn vsdb_get_custom_dir() -> &'static Path {
     VSDB_CUSTOM_DIR.as_path()
-}
-
-/// Returns the internal system directory path of the **default
-/// namespace** (≡ `Namespace::default_ns().system_dir()`; each
-/// namespace has its own `__SYSTEM__` under its root — see
-/// [`Namespace::system_dir`]). Also home to the registry-wide state
-/// that deliberately stays global: the namespace registry, the prefix
-/// allocator ceiling, and the DagMap ID counter.
-///
-/// This directory (`{base_dir}/__SYSTEM__/`) is reserved for VSDB internal use
-/// (instance metadata, trie caches, ID counters). Not intended for external use.
-/// In read-only mode this returns the path without creating the directory.
-#[inline(always)]
-pub fn vsdb_get_system_dir() -> &'static Path {
-    VSDB_SYSTEM_DIR.as_path()
 }
 
 /// Returns the base directory path for VSDB.

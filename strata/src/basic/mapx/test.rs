@@ -149,7 +149,9 @@ fn test_from_meta_rejects_legacy_prefix_payload() {
 
     let id = hdr.instance_id();
     let legacy_payload = postcard::to_allocvec(&hdr.as_bytes()).unwrap();
-    fs::write(crate::common::vsdb_meta_path(id.map_id), legacy_payload).unwrap();
+    let path = crate::common::Namespace::default_ns().meta_path(id.map_id);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, legacy_payload).unwrap();
 
     assert!(Mapx::<u32, String>::from_meta(id).is_err());
     // The generic loader is not the magic gate; a legacy prefix payload

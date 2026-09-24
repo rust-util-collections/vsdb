@@ -37,7 +37,12 @@ struct DagIdAllocator {
 
 impl DagIdAllocator {
     fn init() -> Self {
-        Self::init_at(vsdb_core::common::vsdb_get_system_dir())
+        // Registry-wide state: always the default namespace's system dir.
+        let dir = vsdb_core::Namespace::default_ns().system_dir();
+        if vsdb_core::vsdb_open_mode() != vsdb_core::OpenMode::ReadOnly {
+            fs::create_dir_all(&dir).expect("dag_id_ceiling: create system dir failed");
+        }
+        Self::init_at(&dir)
     }
 
     fn init_at(base: &Path) -> Self {

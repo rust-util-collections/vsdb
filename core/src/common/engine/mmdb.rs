@@ -1165,7 +1165,7 @@ fn validate_shard_layout(
         "damaged dataset at {}: {} of {} shard dirs exist with no \
          initialization sentinel — missing shards would mean silent \
          data loss; refusing to open (an interrupted pre-16.0.2 create \
-         can be reclaimed via vsdb_ns_destroy)",
+         can be reclaimed via Namespace::destroy)",
         mmdb_dir.display(),
         scan.present,
         shards

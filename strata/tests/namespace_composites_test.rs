@@ -5,8 +5,7 @@
 
 use vsdb::{
     DEFAULT_NS_ID, HnswConfig, MapxOrd, MetricKind, Namespace, Orphan, SlotDex,
-    VecDexDyn, VerMap, VsdbOptions, basic::mapx::Mapx, vsdb_configure, vsdb_ns_close,
-    vsdb_ns_destroy,
+    VecDexDyn, VerMap, VsdbOptions, basic::mapx::Mapx, vsdb_configure,
 };
 
 #[test]
@@ -105,16 +104,16 @@ fn composites_in_namespaces() {
     cm.insert(&1, &"epoch".to_owned());
     let cid = cm.save_meta().unwrap();
     // Typed handles pin the namespace: refused while any is alive.
-    assert!(vsdb_ns_close(eid).is_err());
+    assert!(Namespace::close_by_id(eid).is_err());
     drop(cm);
     drop(e);
-    vsdb_ns_close(eid).unwrap();
+    Namespace::close_by_id(eid).unwrap();
     // Reopen through the persisted meta — restart-equivalent recovery.
     let cm: Mapx<u64, String> = Mapx::from_meta(cid).unwrap();
     assert_eq!(cm.get(&1).unwrap(), "epoch");
     drop(cm);
-    vsdb_ns_close(eid).unwrap();
-    vsdb_ns_destroy(eid).unwrap();
+    Namespace::close_by_id(eid).unwrap();
+    Namespace::destroy(eid).unwrap();
 
     std::fs::remove_dir_all(&dir).ok();
 }

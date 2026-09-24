@@ -8,7 +8,6 @@
 use std::{fs, path::PathBuf};
 use vsdb_core::{
     DEFAULT_NS_ID, InstanceId, Namespace, NamespaceOpts, basic::mapx_raw::MapxRaw,
-    vsdb_ns_close, vsdb_ns_destroy, vsdb_ns_list, vsdb_ns_relocate,
 };
 
 #[test]
@@ -146,7 +145,7 @@ fn namespace_lifecycle() {
     drop((fat, fat_copy));
 
     // ---- registry / admin tier ----
-    let infos = vsdb_ns_list().unwrap();
+    let infos = Namespace::list().unwrap();
     assert!(infos.iter().any(|i| i.id == ns.id() && !i.pinned));
     // Ids are never reused and open() is idempotent.
     assert_eq!(Namespace::open(ns.id()).unwrap().id(), ns.id());
@@ -154,10 +153,10 @@ fn namespace_lifecycle() {
     assert!(Namespace::open(u64::MAX).is_err());
 
     // Open namespaces refuse destroy/relocate; unknown ids error.
-    assert!(vsdb_ns_destroy(ns.id()).is_err());
-    assert!(vsdb_ns_destroy(DEFAULT_NS_ID).is_err());
-    assert!(vsdb_ns_relocate(ns.id(), "/tmp/x").is_err());
-    assert!(vsdb_ns_destroy(u64::MAX).is_err());
+    assert!(Namespace::destroy(ns.id()).is_err());
+    assert!(Namespace::destroy(DEFAULT_NS_ID).is_err());
+    assert!(Namespace::relocate(ns.id(), "/tmp/x").is_err());
+    assert!(Namespace::destroy(u64::MAX).is_err());
 
     // Destroying a never-opened namespace reclaims its whole tree.
     // (Register one through a scope-free create in a helper process
@@ -171,7 +170,7 @@ fn namespace_lifecycle() {
     .unwrap();
     let victim_id = victim.id();
     // Still open in this process ⇒ refused.
-    assert!(vsdb_ns_destroy(victim_id).is_err());
+    assert!(Namespace::destroy(victim_id).is_err());
 
     // Explicit-path validation: overlapping the base dir is rejected.
     assert!(
@@ -194,7 +193,7 @@ fn namespace_lifecycle() {
     // the adoptable check before anything is persisted.
     let blocker = format!("{dir}_blocker");
     fs::write(&blocker, b"x").unwrap();
-    let before: Vec<_> = vsdb_ns_list().unwrap().iter().map(|i| i.id).collect();
+    let before: Vec<_> = Namespace::list().unwrap().iter().map(|i| i.id).collect();
     assert!(
         Namespace::create_with(NamespaceOpts {
             path: Some(PathBuf::from(&blocker)),
@@ -202,7 +201,7 @@ fn namespace_lifecycle() {
         })
         .is_err()
     );
-    let after: Vec<_> = vsdb_ns_list().unwrap().iter().map(|i| i.id).collect();
+    let after: Vec<_> = Namespace::list().unwrap().iter().map(|i| i.id).collect();
     assert_eq!(before, after);
     fs::remove_file(&blocker).ok();
 
@@ -218,7 +217,7 @@ fn namespace_lifecycle() {
         fs::create_dir_all(&ro_parent).unwrap();
         fs::set_permissions(&ro_parent, fs::Permissions::from_mode(0o555)).unwrap();
         let target = format!("{ro_parent}/ns_root");
-        let before: Vec<_> = vsdb_ns_list().unwrap().iter().map(|i| i.id).collect();
+        let before: Vec<_> = Namespace::list().unwrap().iter().map(|i| i.id).collect();
         let attempt = Namespace::create_with(NamespaceOpts {
             path: Some(PathBuf::from(&target)),
             shards: 1,
@@ -227,7 +226,8 @@ fn namespace_lifecycle() {
         if attempt.is_err() {
             // (Running as root would let the create succeed — only
             // assert the rollback contract when the failure occurred.)
-            let after: Vec<_> = vsdb_ns_list().unwrap().iter().map(|i| i.id).collect();
+            let after: Vec<_> =
+                Namespace::list().unwrap().iter().map(|i| i.id).collect();
             assert_eq!(before, after, "failed create must roll back");
             assert!(!PathBuf::from(&target).exists(), "root left clean");
             // Retry succeeds once the parent is writable again.
@@ -297,34 +297,34 @@ fn namespace_lifecycle() {
         let mid = m.save_meta().unwrap();
 
         // Refusal matrix: close never invalidates a live handle.
-        assert!(vsdb_ns_close(eid).is_err()); // `e` + `m` alive
+        assert!(Namespace::close_by_id(eid).is_err()); // `e` + `m` alive
         drop(m);
-        assert!(vsdb_ns_close(eid).is_err()); // `e` alive
+        assert!(Namespace::close_by_id(eid).is_err()); // `e` alive
         e.scope(|| {
             // The ambient-scope stack holds a clone too.
-            assert!(vsdb_ns_close(eid).is_err());
+            assert!(Namespace::close_by_id(eid).is_err());
         });
         drop(e);
 
         // Every handle gone ⇒ full teardown (threads, fds, LOCKs).
-        vsdb_ns_close(eid).unwrap();
-        assert!(vsdb_ns_close(eid).is_err()); // not open anymore
+        Namespace::close_by_id(eid).unwrap();
+        assert!(Namespace::close_by_id(eid).is_err()); // not open anymore
 
         // LOCK files were released ⇒ in-process reopen works, and a
         // persisted InstanceId resolves exactly as after a restart.
         let m = MapxRaw::from_meta(mid).unwrap();
         assert_eq!(&m.get(b"epoch").unwrap()[..], [epoch]);
         drop(m);
-        vsdb_ns_close(eid).unwrap();
+        Namespace::close_by_id(eid).unwrap();
 
         // destroy composes with close: O(1) bulk reclaim, no restart.
-        vsdb_ns_destroy(eid).unwrap();
+        Namespace::destroy(eid).unwrap();
         assert!(!epath.exists());
         assert!(Namespace::open(eid).is_err()); // registry entry gone
     }
     // The default namespace is never closeable; unknown ids error.
-    assert!(vsdb_ns_close(DEFAULT_NS_ID).is_err());
-    assert!(vsdb_ns_close(u64::MAX).is_err());
+    assert!(Namespace::close_by_id(DEFAULT_NS_ID).is_err());
+    assert!(Namespace::close_by_id(u64::MAX).is_err());
 
     // ---- per-shard property passthrough + engine-level cache pool ----
     // A fresh namespace owns a private engine, so its telemetry is
@@ -374,8 +374,8 @@ fn namespace_lifecycle() {
     assert_eq!(t.shard_properties("no-such-property"), vec![None, None]);
     drop(tm);
     drop(t);
-    vsdb_ns_close(tid).unwrap();
-    vsdb_ns_destroy(tid).unwrap();
+    Namespace::close_by_id(tid).unwrap();
+    Namespace::destroy(tid).unwrap();
 
     // ---- consuming close: Namespace::close(self) ----
     // Refusal returns the handle for continued use.
@@ -407,11 +407,11 @@ fn namespace_lifecycle() {
     // Sole handle ⇒ consumed and fully closed; the id-addressed form
     // then sees a not-open namespace.
     c.close().unwrap();
-    assert!(vsdb_ns_close(cid).is_err());
+    assert!(Namespace::close_by_id(cid).is_err());
     // Restart-equivalent reopen, then reclaim.
     let re = Namespace::open(cid).unwrap();
     re.close().unwrap();
-    vsdb_ns_destroy(cid).unwrap();
+    Namespace::destroy(cid).unwrap();
     // The default namespace refuses the consuming form, handle back.
     let d = expect_refused(Namespace::default_ns().close());
     assert_eq!(d.id(), DEFAULT_NS_ID);
@@ -428,7 +428,7 @@ fn namespace_lifecycle() {
     let legacy = Namespace::open(legacy_id).unwrap();
     assert!(lifecycle.is_file());
     legacy.close().unwrap();
-    vsdb_ns_destroy(legacy_id).unwrap();
+    Namespace::destroy(legacy_id).unwrap();
     assert!(!lifecycle.exists());
 
     // ---- relocate refuses an unpopulated target ----
@@ -447,12 +447,12 @@ fn namespace_lifecycle() {
     rm.insert(b"moved", b"yes");
     let rmid = rm.save_meta().unwrap();
     drop((rm, r));
-    vsdb_ns_close(rid).unwrap();
+    Namespace::close_by_id(rid).unwrap();
 
     let new_root = format!("{dir}_relocated");
     fs::create_dir_all(&new_root).unwrap();
     // Empty target: refused (the data has not been moved).
-    assert!(vsdb_ns_relocate(rid, &new_root).is_err());
+    assert!(Namespace::relocate(rid, &new_root).is_err());
     // Bare skeleton (marker + empty shard dirs, no engine anchors —
     // e.g. a provisioning script "prepared" the volume, or a copy was
     // interrupted before any shard content landed): still refused.
@@ -460,7 +460,7 @@ fn namespace_lifecycle() {
     fs::write(format!("{new_root}/__SYSTEM__/format_version"), "16").unwrap();
     fs::create_dir_all(format!("{new_root}/mmdb/shard_00")).unwrap();
     fs::create_dir_all(format!("{new_root}/mmdb/shard_01")).unwrap();
-    assert!(vsdb_ns_relocate(rid, &new_root).is_err());
+    assert!(Namespace::relocate(rid, &new_root).is_err());
     // Move the tree for real, then relocate: accepted.
     fs::remove_dir_all(&new_root).unwrap();
     fs::rename(&old_root, &new_root).unwrap();
@@ -474,17 +474,17 @@ fn namespace_lifecycle() {
         "MANIFEST-000001",
     )
     .unwrap();
-    assert!(vsdb_ns_relocate(rid, &new_root).is_err());
+    assert!(Namespace::relocate(rid, &new_root).is_err());
     fs::remove_dir_all(format!("{new_root}/mmdb/shard_02")).unwrap();
     fs::write(format!("{new_root}/__SYSTEM__/format_version"), "17").unwrap();
-    assert!(vsdb_ns_relocate(rid, &new_root).is_err());
+    assert!(Namespace::relocate(rid, &new_root).is_err());
     fs::write(format!("{new_root}/__SYSTEM__/format_version"), "16").unwrap();
-    vsdb_ns_relocate(rid, &new_root).unwrap();
+    Namespace::relocate(rid, &new_root).unwrap();
     let rm = MapxRaw::from_meta(rmid).unwrap();
     assert_eq!(&rm.get(b"moved").unwrap()[..], b"yes");
     drop(rm);
-    vsdb_ns_close(rid).unwrap();
-    vsdb_ns_destroy(rid).unwrap();
+    Namespace::close_by_id(rid).unwrap();
+    Namespace::destroy(rid).unwrap();
     assert!(!PathBuf::from(&new_root).exists());
 
     fs::remove_dir_all(&dir).ok();

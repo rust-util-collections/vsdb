@@ -264,7 +264,8 @@ mod tests {
     #[test]
     fn test_cache_save_load_roundtrip() {
         let cache_id = 1001;
-        let _cache_path = vsdb_core::common::vsdb_get_system_dir()
+        let _cache_path = &vsdb_core::Namespace::default_ns()
+            .system_dir()
             .join(format!("mpt_cache_{}.bin", cache_id));
 
         let mut trie = MptCalc::new();
@@ -273,12 +274,18 @@ mod tests {
         trie.insert(b"key", b"value").unwrap();
         let root = trie.root_hash().unwrap();
 
-        trie.save_cache(vsdb_core::common::vsdb_get_system_dir(), cache_id, 42)
-            .unwrap();
+        trie.save_cache(
+            &vsdb_core::Namespace::default_ns().system_dir(),
+            cache_id,
+            42,
+        )
+        .unwrap();
 
-        let (loaded, sync_tag, loaded_root) =
-            MptCalc::load_cache(vsdb_core::common::vsdb_get_system_dir(), cache_id)
-                .unwrap();
+        let (loaded, sync_tag, loaded_root) = MptCalc::load_cache(
+            &vsdb_core::Namespace::default_ns().system_dir(),
+            cache_id,
+        )
+        .unwrap();
         assert_eq!(sync_tag, 42);
         assert_eq!(loaded_root, root);
         assert_eq!(loaded.get(b"hello").unwrap(), Some(b"world".to_vec()));
@@ -290,19 +297,26 @@ mod tests {
     #[test]
     fn test_cache_incremental_after_load() {
         let cache_id = 1002;
-        let _cache_path = vsdb_core::common::vsdb_get_system_dir()
+        let _cache_path = &vsdb_core::Namespace::default_ns()
+            .system_dir()
             .join(format!("mpt_cache_{}.bin", cache_id));
 
         let mut trie = MptCalc::new();
         trie.insert(b"a", b"1").unwrap();
         trie.insert(b"b", b"2").unwrap();
-        trie.save_cache(vsdb_core::common::vsdb_get_system_dir(), cache_id, 1)
-            .unwrap();
+        trie.save_cache(
+            &vsdb_core::Namespace::default_ns().system_dir(),
+            cache_id,
+            1,
+        )
+        .unwrap();
 
         // Load and apply incremental changes.
-        let (mut loaded, _, _) =
-            MptCalc::load_cache(vsdb_core::common::vsdb_get_system_dir(), cache_id)
-                .unwrap();
+        let (mut loaded, _, _) = MptCalc::load_cache(
+            &vsdb_core::Namespace::default_ns().system_dir(),
+            cache_id,
+        )
+        .unwrap();
         loaded.insert(b"c", b"3").unwrap();
         loaded.remove(b"a").unwrap();
 
@@ -320,16 +334,23 @@ mod tests {
     #[test]
     fn test_cache_empty_trie() {
         let cache_id = 1003;
-        let _cache_path = vsdb_core::common::vsdb_get_system_dir()
+        let _cache_path = &vsdb_core::Namespace::default_ns()
+            .system_dir()
             .join(format!("mpt_cache_{}.bin", cache_id));
 
         let mut trie = MptCalc::new();
-        trie.save_cache(vsdb_core::common::vsdb_get_system_dir(), cache_id, 0)
-            .unwrap();
+        trie.save_cache(
+            &vsdb_core::Namespace::default_ns().system_dir(),
+            cache_id,
+            0,
+        )
+        .unwrap();
 
-        let (loaded, sync_tag, root_hash) =
-            MptCalc::load_cache(vsdb_core::common::vsdb_get_system_dir(), cache_id)
-                .unwrap();
+        let (loaded, sync_tag, root_hash) = MptCalc::load_cache(
+            &vsdb_core::Namespace::default_ns().system_dir(),
+            cache_id,
+        )
+        .unwrap();
         assert_eq!(sync_tag, 0);
         assert_eq!(root_hash, vec![0u8; 32]);
         assert_eq!(loaded.get(b"anything").unwrap(), None);
@@ -338,7 +359,8 @@ mod tests {
     #[test]
     fn test_cache_many_keys() {
         let cache_id = 1004;
-        let _cache_path = vsdb_core::common::vsdb_get_system_dir()
+        let _cache_path = &vsdb_core::Namespace::default_ns()
+            .system_dir()
             .join(format!("mpt_cache_{}.bin", cache_id));
 
         let mut trie = MptCalc::new();
@@ -347,12 +369,18 @@ mod tests {
                 .unwrap();
         }
         let root = trie.root_hash().unwrap();
-        trie.save_cache(vsdb_core::common::vsdb_get_system_dir(), cache_id, 99)
-            .unwrap();
+        trie.save_cache(
+            &vsdb_core::Namespace::default_ns().system_dir(),
+            cache_id,
+            99,
+        )
+        .unwrap();
 
-        let (mut loaded, _, loaded_root) =
-            MptCalc::load_cache(vsdb_core::common::vsdb_get_system_dir(), cache_id)
-                .unwrap();
+        let (mut loaded, _, loaded_root) = MptCalc::load_cache(
+            &vsdb_core::Namespace::default_ns().system_dir(),
+            cache_id,
+        )
+        .unwrap();
         assert_eq!(loaded_root, root);
 
         for i in 0u32..200 {
@@ -367,13 +395,18 @@ mod tests {
     #[test]
     fn test_cache_corrupted_data() {
         let cache_id = 1005;
-        let cache_path = vsdb_core::common::vsdb_get_system_dir()
+        let cache_path = &vsdb_core::Namespace::default_ns()
+            .system_dir()
             .join(format!("mpt_cache_{}.bin", cache_id));
 
         let mut trie = MptCalc::new();
         trie.insert(b"hello", b"world").unwrap();
-        trie.save_cache(vsdb_core::common::vsdb_get_system_dir(), cache_id, 1)
-            .unwrap();
+        trie.save_cache(
+            &vsdb_core::Namespace::default_ns().system_dir(),
+            cache_id,
+            1,
+        )
+        .unwrap();
 
         // Corrupt a byte in the middle of the file.
         let mut data = fs::read(&cache_path).unwrap();
@@ -382,29 +415,40 @@ mod tests {
         fs::write(&cache_path, &data).unwrap();
 
         assert!(
-            MptCalc::load_cache(vsdb_core::common::vsdb_get_system_dir(), cache_id)
-                .is_err()
+            MptCalc::load_cache(
+                &vsdb_core::Namespace::default_ns().system_dir(),
+                cache_id
+            )
+            .is_err()
         );
     }
 
     #[test]
     fn test_cache_truncated_file() {
         let cache_id = 1006;
-        let cache_path = vsdb_core::common::vsdb_get_system_dir()
+        let cache_path = &vsdb_core::Namespace::default_ns()
+            .system_dir()
             .join(format!("mpt_cache_{}.bin", cache_id));
 
         let mut trie = MptCalc::new();
         trie.insert(b"key", b"val").unwrap();
-        trie.save_cache(vsdb_core::common::vsdb_get_system_dir(), cache_id, 1)
-            .unwrap();
+        trie.save_cache(
+            &vsdb_core::Namespace::default_ns().system_dir(),
+            cache_id,
+            1,
+        )
+        .unwrap();
 
         // Truncate the file.
         let data = fs::read(&cache_path).unwrap();
         fs::write(&cache_path, &data[..data.len() / 2]).unwrap();
 
         assert!(
-            MptCalc::load_cache(vsdb_core::common::vsdb_get_system_dir(), cache_id)
-                .is_err()
+            MptCalc::load_cache(
+                &vsdb_core::Namespace::default_ns().system_dir(),
+                cache_id
+            )
+            .is_err()
         );
     }
 
@@ -521,31 +565,44 @@ mod tests {
     #[test]
     fn test_cache_save_load_preserves_hash_after_mutation() {
         let cache_id = 1007;
-        let _cache_path = vsdb_core::common::vsdb_get_system_dir()
+        let _cache_path = &vsdb_core::Namespace::default_ns()
+            .system_dir()
             .join(format!("mpt_cache_{}.bin", cache_id));
 
         let mut trie = MptCalc::new();
         trie.insert(b"a", b"1").unwrap();
         trie.insert(b"b", b"2").unwrap();
-        trie.save_cache(vsdb_core::common::vsdb_get_system_dir(), cache_id, 10)
-            .unwrap();
+        trie.save_cache(
+            &vsdb_core::Namespace::default_ns().system_dir(),
+            cache_id,
+            10,
+        )
+        .unwrap();
 
-        let (mut loaded, _, _) =
-            MptCalc::load_cache(vsdb_core::common::vsdb_get_system_dir(), cache_id)
-                .unwrap();
+        let (mut loaded, _, _) = MptCalc::load_cache(
+            &vsdb_core::Namespace::default_ns().system_dir(),
+            cache_id,
+        )
+        .unwrap();
 
         // Mutate, then save again.
         loaded.insert(b"c", b"3").unwrap();
         loaded.remove(b"a").unwrap();
         let h_mutated = loaded.root_hash().unwrap();
         loaded
-            .save_cache(vsdb_core::common::vsdb_get_system_dir(), cache_id, 20)
+            .save_cache(
+                &vsdb_core::Namespace::default_ns().system_dir(),
+                cache_id,
+                20,
+            )
             .unwrap();
 
         // Reload and verify.
-        let (mut reloaded, tag, _) =
-            MptCalc::load_cache(vsdb_core::common::vsdb_get_system_dir(), cache_id)
-                .unwrap();
+        let (mut reloaded, tag, _) = MptCalc::load_cache(
+            &vsdb_core::Namespace::default_ns().system_dir(),
+            cache_id,
+        )
+        .unwrap();
         assert_eq!(tag, 20);
         assert_eq!(reloaded.root_hash().unwrap(), h_mutated);
         assert_eq!(reloaded.get(b"a").unwrap(), None);
@@ -1086,7 +1143,8 @@ mod smt_tests {
     #[test]
     fn test_smt_cache_roundtrip() {
         let cache_id = 1008;
-        let _path = vsdb_core::common::vsdb_get_system_dir()
+        let _path = &vsdb_core::Namespace::default_ns()
+            .system_dir()
             .join(format!("smt_cache_{}.bin", cache_id));
 
         let mut smt = SmtCalc::new();
@@ -1094,12 +1152,18 @@ mod smt_tests {
             smt.insert(&i.to_be_bytes(), &i.to_be_bytes()).unwrap();
         }
         let h1 = smt.root_hash().unwrap();
-        smt.save_cache(vsdb_core::common::vsdb_get_system_dir(), cache_id, 42)
-            .unwrap();
+        smt.save_cache(
+            &vsdb_core::Namespace::default_ns().system_dir(),
+            cache_id,
+            42,
+        )
+        .unwrap();
 
-        let (mut loaded, tag, h2) =
-            SmtCalc::load_cache(vsdb_core::common::vsdb_get_system_dir(), cache_id)
-                .unwrap();
+        let (mut loaded, tag, h2) = SmtCalc::load_cache(
+            &vsdb_core::Namespace::default_ns().system_dir(),
+            cache_id,
+        )
+        .unwrap();
         assert_eq!(tag, 42);
         assert_eq!(h1, h2);
 
@@ -1116,13 +1180,18 @@ mod smt_tests {
     #[test]
     fn test_smt_cache_corrupted() {
         let cache_id = 1009;
-        let path = vsdb_core::common::vsdb_get_system_dir()
+        let path = &vsdb_core::Namespace::default_ns()
+            .system_dir()
             .join(format!("smt_cache_{}.bin", cache_id));
 
         let mut smt = SmtCalc::new();
         smt.insert(b"k", b"v").unwrap();
-        smt.save_cache(vsdb_core::common::vsdb_get_system_dir(), cache_id, 1)
-            .unwrap();
+        smt.save_cache(
+            &vsdb_core::Namespace::default_ns().system_dir(),
+            cache_id,
+            1,
+        )
+        .unwrap();
 
         // Corrupt a byte in the middle.
         let mut data = fs::read(&path).unwrap();
@@ -1132,26 +1201,36 @@ mod smt_tests {
         fs::write(&path, &data).unwrap();
 
         assert!(
-            SmtCalc::load_cache(vsdb_core::common::vsdb_get_system_dir(), cache_id)
-                .is_err()
+            SmtCalc::load_cache(
+                &vsdb_core::Namespace::default_ns().system_dir(),
+                cache_id
+            )
+            .is_err()
         );
     }
 
     #[test]
     fn test_smt_cache_incremental() {
         let cache_id = 1010;
-        let _path = vsdb_core::common::vsdb_get_system_dir()
+        let _path = &vsdb_core::Namespace::default_ns()
+            .system_dir()
             .join(format!("smt_cache_{}.bin", cache_id));
 
         let mut smt = SmtCalc::new();
         smt.insert(b"a", b"1").unwrap();
         smt.insert(b"b", b"2").unwrap();
-        smt.save_cache(vsdb_core::common::vsdb_get_system_dir(), cache_id, 10)
-            .unwrap();
+        smt.save_cache(
+            &vsdb_core::Namespace::default_ns().system_dir(),
+            cache_id,
+            10,
+        )
+        .unwrap();
 
-        let (mut loaded, _, _) =
-            SmtCalc::load_cache(vsdb_core::common::vsdb_get_system_dir(), cache_id)
-                .unwrap();
+        let (mut loaded, _, _) = SmtCalc::load_cache(
+            &vsdb_core::Namespace::default_ns().system_dir(),
+            cache_id,
+        )
+        .unwrap();
         loaded.insert(b"c", b"3").unwrap();
         let h = loaded.root_hash().unwrap();
 

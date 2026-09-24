@@ -14,8 +14,8 @@
 //!   everyday primitive is *co-location*: `existing.namespace()` +
 //!   `new_in`/[`Namespace::scope`].
 //! * **`NsId` is a routing token**, not a user-facing name: it surfaces
-//!   only at the admin tier ([`vsdb_ns_list`]/[`vsdb_ns_destroy`]/
-//!   [`vsdb_ns_relocate`], epoch-rotation bookkeeping).
+//!   only at the admin tier ([`Namespace::list`]/[`Namespace::destroy`]/
+//!   [`Namespace::relocate`], epoch-rotation bookkeeping).
 //! * **Path is configuration, not identity**: stored only in the
 //!   registry; omitted, it derives from the id under
 //!   `{default_base}/__NAMESPACES__/{ns_id:016x}` and is recorded as
@@ -180,7 +180,7 @@ pub struct NamespaceOpts {
     /// `None` ⇒ derived under `{default_base}/__NAMESPACES__/`, recorded
     /// as derived so the whole universe stays movable as one tree.
     /// `Some` ⇒ explicit root (e.g. a dir on another volume), stored
-    /// absolute and pinned ([`vsdb_ns_relocate`] to move). Rejected if
+    /// absolute and pinned ([`Namespace::relocate`] to move). Rejected if
     /// it nests inside the default base dir or another registered
     /// namespace root (or vice versa).
     pub path: Option<PathBuf>,
@@ -201,7 +201,7 @@ impl Default for NamespaceOpts {
     }
 }
 
-/// A registry entry as reported by [`vsdb_ns_list`].
+/// A registry entry as reported by [`Namespace::list`].
 #[derive(Clone, Debug)]
 pub struct NsInfo {
     /// The namespace id.
@@ -259,7 +259,7 @@ impl Default for RegistryFile {
 static REGISTRY_LOCK: Mutex<()> = Mutex::new(());
 
 /// Every non-default namespace open in this process, by id. Each entry
-/// holds one strong `Arc`; [`vsdb_ns_close`] removes an entry only
+/// holds one strong `Arc`; [`Namespace::close_by_id`] removes an entry only
 /// after proving it is the *last* strong reference, so a removal is
 /// always immediately followed by the engine's teardown.
 static OPEN_NAMESPACES: LazyLock<Mutex<HashMap<NsId, Namespace>>> =
@@ -507,7 +507,7 @@ struct NsInner {
     id: NsId,
     path: PathBuf,
     /// The engine, owned: when the last `Arc<NsInner>` drops (only ever
-    /// via [`vsdb_ns_close`], which proves exclusivity first), the
+    /// via [`Namespace::close_by_id`], which proves exclusivity first), the
     /// engine drops with it — flushing writable state, joining any
     /// compaction threads, and releasing LOCK files.
     engine: Engine,
@@ -625,7 +625,7 @@ impl Namespace {
                 // are never reused, and a burnt id is free. If the
                 // rollback write itself fails we are simply in the
                 // crash-equivalent state documented above: the entry is
-                // visible in `vsdb_ns_list()`, re-openable via `open`
+                // visible in `Namespace::list()`, re-openable via `open`
                 // and reclaimable via `destroy`.
                 reg.entries.retain(|r| r.id != rec.id);
                 let rolled_back = save_registry(&reg).is_ok();
@@ -644,7 +644,7 @@ impl Namespace {
     }
 
     /// Opens an already-registered namespace by its stable id — the
-    /// admin tier ([`vsdb_ns_list`], epoch-rotation bookkeeping).
+    /// admin tier ([`Namespace::list`], epoch-rotation bookkeeping).
     /// Normal flows never call this: deserialization and `from_meta`
     /// auto-open namespaces via the ids embedded in metas.
     ///
@@ -738,9 +738,8 @@ impl Namespace {
     }
 
     /// The meta file path for `map_id` inside this namespace's tree —
-    /// the single source of truth for instance-meta naming (identical
-    /// to the legacy `vsdb_meta_path` for the default namespace, whose
-    /// root IS the base dir).
+    /// the single source of truth for instance-meta naming (the default
+    /// namespace's root is the base dir).
     pub fn meta_path(&self, map_id: u64) -> PathBuf {
         let mut p = self.meta_dir();
         p.push(format!("{:016x}", map_id));
@@ -786,21 +785,21 @@ impl Namespace {
     ///
     /// A plain borrow of the `Arc`-owned engine: it cannot outlive the
     /// handle it came from, so no reference can survive a
-    /// [`vsdb_ns_close`] (which requires every handle gone first).
+    /// [`Namespace::close_by_id`] (which requires every handle gone first).
     #[inline(always)]
     pub(crate) fn engine(&self) -> &Engine {
         &self.0.engine
     }
 
-    /// Consuming form of [`vsdb_ns_close`]: closes this namespace,
-    /// releasing **all** of its resources (see `vsdb_ns_close` for the
+    /// Consuming form of [`Namespace::close_by_id`]: closes this namespace,
+    /// releasing **all** of its resources (see `Namespace::close_by_id` for the
     /// full contract — flush-first teardown, registry untouched,
     /// re-openable afterwards).
     ///
     /// `self` must be the *last* live handle: every collection handle,
     /// iterator, and other `Namespace` clone must already be dropped.
     /// The consumed `self` itself is accounted for — unlike
-    /// `vsdb_ns_close(id)`, no separate `drop(ns)` is needed first.
+    /// `Namespace::close_by_id(id)`, no separate `drop(ns)` is needed first.
     ///
     /// # Errors
     ///
@@ -809,7 +808,7 @@ impl Namespace {
     ///   the consumed handle is returned for continued use.
     /// - `Err((None, e))` — the close **ran** but the engine teardown
     ///   reported an error while flushing/syncing: the namespace is no
-    ///   longer open (same terminal state as `vsdb_ns_close` returning
+    ///   longer open (same terminal state as `Namespace::close_by_id` returning
     ///   an error), so there is no handle to give back.
     ///
     /// ```ignore
@@ -875,167 +874,171 @@ fn open_record_locked(base: &Path, rec: &NsRecord, root: &Path) -> Result<Namesp
 
 /////////////////////////////////////////////////////////////////////////////
 
-/// Lists every registered (non-default) namespace.
-pub fn vsdb_ns_list() -> Result<Vec<NsInfo>> {
-    // Reading the registry materializes base-dir-derived paths — same
-    // freeze contract as open/destroy/relocate, so the returned roots
-    // cannot be split from the universe by a later `vsdb_configure`.
-    vsdb_freeze_base_dir();
-    let base = vsdb_get_base_dir();
-    let _g = REGISTRY_LOCK.lock();
-    let reg = load_registry()?;
-    Ok(reg
-        .entries
-        .iter()
-        .map(|rec| NsInfo {
-            id: rec.id,
-            path: resolve_root(&base, rec),
-            pinned: rec.path.is_some(),
-            shards: rec.shards as usize,
-            created_at: rec.created_at,
-        })
-        .collect())
+/// Registry administration.
+impl Namespace {
+    /// Lists every registered (non-default) namespace.
+    pub fn list() -> Result<Vec<NsInfo>> {
+        // Reading the registry materializes base-dir-derived paths — same
+        // freeze contract as open/destroy/relocate, so the returned roots
+        // cannot be split from the universe by a later `vsdb_configure`.
+        vsdb_freeze_base_dir();
+        let base = vsdb_get_base_dir();
+        let _g = REGISTRY_LOCK.lock();
+        let reg = load_registry()?;
+        Ok(reg
+            .entries
+            .iter()
+            .map(|rec| NsInfo {
+                id: rec.id,
+                path: resolve_root(&base, rec),
+                pinned: rec.path.is_some(),
+                shards: rec.shards as usize,
+                created_at: rec.created_at,
+            })
+            .collect())
+    }
+
+    /// Destroys a namespace: removes its registry entry, then deletes its
+    /// whole directory tree — O(1) bulk reclaim.
+    ///
+    /// The target must not be open in this process ([`Namespace::close_by_id`] it
+    /// first). A crash between the registry update and the tree removal
+    /// leaves an orphaned-but-harmless dir.
+    pub fn destroy(id: NsId) -> Result<()> {
+        if vsdb_is_read_only() {
+            return Err(VsdbError::ReadOnly {
+                operation: "namespace destruction",
+            });
+        }
+        if id == DEFAULT_NS_ID {
+            return Err(ns_err("the default namespace cannot be destroyed"));
+        }
+        vsdb_freeze_base_dir();
+        let base = vsdb_get_base_dir();
+        let _g = REGISTRY_LOCK.lock();
+        // The not-open check MUST run under REGISTRY_LOCK: `open` inserts
+        // into OPEN_NAMESPACES while holding it, so checking here closes
+        // the TOCTOU window where a racing open could cache a live engine
+        // whose root we are about to delete.
+        if OPEN_NAMESPACES.lock().contains_key(&id) {
+            return Err(ns_err(format!(
+                "namespace {id} is open in this process; destroy requires a \
+                 not-open target"
+            )));
+        }
+        let mut reg = load_registry()?;
+        let Some(pos) = reg.entries.iter().position(|r| r.id == id) else {
+            return Err(ns_err(format!("namespace {id} is not registered")));
+        };
+        let root = resolve_root(&base, &reg.entries[pos]);
+        reg.entries.remove(pos);
+        save_registry(&reg)?;
+        let _ = remove_lifecycle(&base, id);
+        match fs::remove_dir_all(&root) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Re-points a namespace at a new root directory (e.g. after moving a
+    /// volume). Updates the registry only — **moving the data is the
+    /// operator's job**, done before calling this. A target that does not
+    /// already hold an initialized dataset (format marker + per-shard
+    /// engine anchors) is refused: repointing at it would durably orphan
+    /// the real data behind a silent success. Whether it is the *right*
+    /// dataset cannot be verified — roots carry no namespace id.
+    ///
+    /// The target must not be open in this process.
+    pub fn relocate(id: NsId, new_path: impl AsRef<Path>) -> Result<()> {
+        if vsdb_is_read_only() {
+            return Err(VsdbError::ReadOnly {
+                operation: "namespace relocation",
+            });
+        }
+        if id == DEFAULT_NS_ID {
+            return Err(ns_err(
+                "the default namespace's root is the base dir; relocate it \
+                 via VSDB_BASE_DIR / vsdb_configure before first use",
+            ));
+        }
+        vsdb_freeze_base_dir();
+        let base = vsdb_get_base_dir();
+        let new_path = new_path.as_ref();
+
+        let _g = REGISTRY_LOCK.lock();
+        // Under REGISTRY_LOCK for the same TOCTOU reason as destroy.
+        if OPEN_NAMESPACES.lock().contains_key(&id) {
+            return Err(ns_err(format!(
+                "namespace {id} is open in this process; relocate requires a \
+                 not-open target"
+            )));
+        }
+        let mut reg = load_registry()?;
+        let Some(rec) = reg.entries.iter().find(|r| r.id == id) else {
+            return Err(ns_err(format!("namespace {id} is not registered")));
+        };
+        let rec_shards = validated_shards(rec)?;
+        // Validate against every OTHER root (skip the record being moved).
+        let mut probe = reg.clone_without(id);
+        validate_explicit_root(&base, &probe, new_path)?;
+        drop(probe.entries.drain(..));
+
+        // The registry only re-points; moving the data is the operator's
+        // job — done BEFORE calling this. Repointing at a dir that does not
+        // hold an initialized dataset (marker + per-shard engine anchors)
+        // would durably orphan the real data with zero errors: the next
+        // `open` would silently initialize a fresh, empty root. Refuse
+        // instead. (Which dataset lives there cannot be verified — roots
+        // carry no namespace id; that part stays on the operator.)
+        validate_completed_dataset(new_path, rec_shards, true)
+            .map_err(VsdbError::from)?;
+
+        let rec = reg
+            .entries
+            .iter_mut()
+            .find(|r| r.id == id)
+            .expect("checked above");
+        rec.path = Some(
+            new_path
+                .to_str()
+                .expect("validated UTF-8 in validate_explicit_root")
+                .to_owned(),
+        );
+        save_registry(&reg)
+    }
+
+    /// Closes an open namespace, releasing **all** of its resources: engine
+    /// memory, compaction threads, fds, and mmdb `LOCK` files. The active
+    /// memtables are flushed and the WALs synced first (errors surface
+    /// here, unlike a plain drop).
+    ///
+    /// Refused unless every handle is gone: all collection handles,
+    /// iterators, and `Namespace` clones must be dropped first — `close`
+    /// either reclaims a provably-unreferenced namespace or returns an
+    /// error naming the live-handle count; it never invalidates a live
+    /// handle. Refused for the default namespace.
+    ///
+    /// The registry entry is untouched: a closed namespace can be re-opened
+    /// via [`Namespace::open`] (restart-equivalent recovery) or reclaimed
+    /// via [`Namespace::destroy`] — `create → fill → close → destroy` is the
+    /// in-process epoch-rotation loop.
+    ///
+    /// Detached snapshot iterators (e.g. `MapxRaw::range_detached`) hold
+    /// their engine sources via internal refcounts, not through the
+    /// namespace handle: one may outlive a `close` and keep yielding its
+    /// (consistent, stale) snapshot. Memory-safe by construction; don't
+    /// rely on it observing the close.
+    ///
+    /// The handle-consuming form is [`Namespace::close`], which accounts
+    /// for the handle it consumes and returns it on refusal.
+    pub fn close_by_id(id: NsId) -> Result<()> {
+        // No handle is consumed, so the refusal side never carries one.
+        ns_close_impl(id, None).map_err(|(_, e)| e)
+    }
 }
 
-/// Destroys a namespace: removes its registry entry, then deletes its
-/// whole directory tree — O(1) bulk reclaim.
-///
-/// The target must not be open in this process ([`vsdb_ns_close`] it
-/// first). A crash between the registry update and the tree removal
-/// leaves an orphaned-but-harmless dir.
-pub fn vsdb_ns_destroy(id: NsId) -> Result<()> {
-    if vsdb_is_read_only() {
-        return Err(VsdbError::ReadOnly {
-            operation: "namespace destruction",
-        });
-    }
-    if id == DEFAULT_NS_ID {
-        return Err(ns_err("the default namespace cannot be destroyed"));
-    }
-    vsdb_freeze_base_dir();
-    let base = vsdb_get_base_dir();
-    let _g = REGISTRY_LOCK.lock();
-    // The not-open check MUST run under REGISTRY_LOCK: `open` inserts
-    // into OPEN_NAMESPACES while holding it, so checking here closes
-    // the TOCTOU window where a racing open could cache a live engine
-    // whose root we are about to delete.
-    if OPEN_NAMESPACES.lock().contains_key(&id) {
-        return Err(ns_err(format!(
-            "namespace {id} is open in this process; destroy requires a \
-             not-open target"
-        )));
-    }
-    let mut reg = load_registry()?;
-    let Some(pos) = reg.entries.iter().position(|r| r.id == id) else {
-        return Err(ns_err(format!("namespace {id} is not registered")));
-    };
-    let root = resolve_root(&base, &reg.entries[pos]);
-    reg.entries.remove(pos);
-    save_registry(&reg)?;
-    let _ = remove_lifecycle(&base, id);
-    match fs::remove_dir_all(&root) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.into()),
-    }
-}
-
-/// Re-points a namespace at a new root directory (e.g. after moving a
-/// volume). Updates the registry only — **moving the data is the
-/// operator's job**, done before calling this. A target that does not
-/// already hold an initialized dataset (format marker + per-shard
-/// engine anchors) is refused: repointing at it would durably orphan
-/// the real data behind a silent success. Whether it is the *right*
-/// dataset cannot be verified — roots carry no namespace id.
-///
-/// The target must not be open in this process.
-pub fn vsdb_ns_relocate(id: NsId, new_path: impl AsRef<Path>) -> Result<()> {
-    if vsdb_is_read_only() {
-        return Err(VsdbError::ReadOnly {
-            operation: "namespace relocation",
-        });
-    }
-    if id == DEFAULT_NS_ID {
-        return Err(ns_err(
-            "the default namespace's root is the base dir; relocate it \
-             via VSDB_BASE_DIR / vsdb_configure before first use",
-        ));
-    }
-    vsdb_freeze_base_dir();
-    let base = vsdb_get_base_dir();
-    let new_path = new_path.as_ref();
-
-    let _g = REGISTRY_LOCK.lock();
-    // Under REGISTRY_LOCK for the same TOCTOU reason as destroy.
-    if OPEN_NAMESPACES.lock().contains_key(&id) {
-        return Err(ns_err(format!(
-            "namespace {id} is open in this process; relocate requires a \
-             not-open target"
-        )));
-    }
-    let mut reg = load_registry()?;
-    let Some(rec) = reg.entries.iter().find(|r| r.id == id) else {
-        return Err(ns_err(format!("namespace {id} is not registered")));
-    };
-    let rec_shards = validated_shards(rec)?;
-    // Validate against every OTHER root (skip the record being moved).
-    let mut probe = reg.clone_without(id);
-    validate_explicit_root(&base, &probe, new_path)?;
-    drop(probe.entries.drain(..));
-
-    // The registry only re-points; moving the data is the operator's
-    // job — done BEFORE calling this. Repointing at a dir that does not
-    // hold an initialized dataset (marker + per-shard engine anchors)
-    // would durably orphan the real data with zero errors: the next
-    // `open` would silently initialize a fresh, empty root. Refuse
-    // instead. (Which dataset lives there cannot be verified — roots
-    // carry no namespace id; that part stays on the operator.)
-    validate_completed_dataset(new_path, rec_shards, true).map_err(VsdbError::from)?;
-
-    let rec = reg
-        .entries
-        .iter_mut()
-        .find(|r| r.id == id)
-        .expect("checked above");
-    rec.path = Some(
-        new_path
-            .to_str()
-            .expect("validated UTF-8 in validate_explicit_root")
-            .to_owned(),
-    );
-    save_registry(&reg)
-}
-
-/// Closes an open namespace, releasing **all** of its resources: engine
-/// memory, compaction threads, fds, and mmdb `LOCK` files. The active
-/// memtables are flushed and the WALs synced first (errors surface
-/// here, unlike a plain drop).
-///
-/// Refused unless every handle is gone: all collection handles,
-/// iterators, and `Namespace` clones must be dropped first — `close`
-/// either reclaims a provably-unreferenced namespace or returns an
-/// error naming the live-handle count; it never invalidates a live
-/// handle. Refused for the default namespace.
-///
-/// The registry entry is untouched: a closed namespace can be re-opened
-/// via [`Namespace::open`] (restart-equivalent recovery) or reclaimed
-/// via [`vsdb_ns_destroy`] — `create → fill → close → destroy` is the
-/// in-process epoch-rotation loop.
-///
-/// Detached snapshot iterators (e.g. `MapxRaw::range_detached`) hold
-/// their engine sources via internal refcounts, not through the
-/// namespace handle: one may outlive a `close` and keep yielding its
-/// (consistent, stale) snapshot. Memory-safe by construction; don't
-/// rely on it observing the close.
-///
-/// The handle-consuming form is [`Namespace::close`], which accounts
-/// for the handle it consumes and returns it on refusal.
-pub fn vsdb_ns_close(id: NsId) -> Result<()> {
-    // No handle is consumed, so the refusal side never carries one.
-    ns_close_impl(id, None).map_err(|(_, e)| e)
-}
-
-/// The close protocol shared by [`vsdb_ns_close`] and
+/// The close protocol shared by [`Namespace::close_by_id`] and
 /// [`Namespace::close`]: prove exclusivity under [`REGISTRY_LOCK`] +
 /// the table lock, remove the table entry, then tear the engine down.
 ///
