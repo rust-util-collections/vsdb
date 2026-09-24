@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v17.0.1]
+
+No public API or storage-format changes; no migration is required.
+
+### Fixed
+
+- `DagMap` deep clones remap the connected graph, including recovery links,
+  so pruning or destroying a copy cannot alter the original graph.
+- `VerMap` snapshots and their iterators retain captured tree nodes across
+  restored-alias writes, rollback, branch deletion, garbage collection and
+  recovery. Deep copies exclude readers belonging to the original map.
+- `VerMapWithProof` invalidates cached trie state when its underlying map is
+  replaced and keeps cache writes and retries tied to the owning map identity.
+- Reverse `SlotDex` pages stop at their planned quotas and skip unused boundary
+  tails while preserving ascending keys within each slot.
+- Explicit configuration no longer creates an unused environment-selected
+  default directory, avoiding a panic when that path is invalid.
+- API examples use valid namespace imports, explain explicit child-process
+  environment propagation, and show current trie cache arguments and save timing.
+
+### Changed
+
+- Merge benchmark samples vary their values so both branches retain 100 changed
+  keys in every sample.
+- The B+ tree sharing test measures allocated node IDs, avoiding count underflow
+  when background compaction removes old rows.
+
 ## [v17.0.0]
 
 A public-API cleanup release. **Stored data is not affected**: v17 opens,
