@@ -12,7 +12,19 @@
 
 ## Open
 
-*(none)*
+### [HIGH] collections: Mapx slice queries against `[u8; N]` keys miss or delete a different key
+- **Where**: `strata/src/basic/mapx/mod.rs` (`get`, `get_mut`, `contains_key`, `remove`)
+- **What**: `Mapx<[u8; N], V>` stores `K::encode()` (postcard tuple: N raw bytes). Those methods accept `K: Borrow<Q>, Q: KeyRef`, and `[u8; N]: Borrow<[u8]>`, so a slice calls `[u8]::key_bytes` (postcard byte string: varint length plus bytes). An equal-length slice always misses. A shorter slice can name another key: `insert(&[0x01, 0x00], …)` then `get`/`remove` of `&[0x00]` addresses that entry, because both encodings are `01 00`. `get_mut` returns a write-back guard for that other key.
+- **Why**: technical-patterns 3.5. The method docs advertise borrowed lookup like `HashMap::get`, and `KeyEn` calls fixed arrays safe keys. `HashMap` compares through `Borrow`; this bound does not prove encoding identity. `KeyRef for [u8]` is correct for `Vec<u8>` and `Box<[u8]>` only. `MapxOrd` is unaffected (both sides are raw bytes). Owned `&[u8; N]` lookups already match. Batch insert/remove take `&K` and use `encode()`. No on-disk layout change.
+- **Suggested fix**: Stop treating unconstrained `Borrow + KeyRef` as encoding identity. For `[u8; N]`, an equal-length slice is the raw N bytes; any other length is a miss and must not be length-prefixed (that encoding is what collides). Keep `String`/`str` and `Vec<u8>`/`[u8]`. Regression: `Mapx<[u8; 2], u32>` — `get(&[0x01, 0x00][..])` hits; `get`/`remove` of `&[0x00][..]` does not see or delete `[0x01, 0x00]`. Bugfix only; no migration.
+
+---
+
+### [HIGH] dagmap: prune retry treats a partial clearing-marker set as finished
+- **Where**: `strata/src/dagmap/raw/mod.rs` (`mark_consumed_clearing`, `prune`, `finish_interrupted_clear`, `survivor_ids`)
+- **What**: `mark_consumed_clearing` writes the head marker, then each intermediate, as separate puts. A default put flushes the WAL to the OS before returning, so `kill -9` after the head `set_aux` returns and before the next `set_aux` is issued recovers only the head marker. Parent slots are still intact (clear has not started; the re-parent flush already returned). `prune` then takes `finish_interrupted_clear` and does not mark unmarked ancestors. `clear_marked_reachable` only walks children that already have the marker, so an unmarked intermediate hides the rest of the chain. `survivor_ids` keeps that intermediate because it has no marker and its parent is genesis. `genesis.prune()` is a no-op (parentless, unmarked). The intermediate stays a live child and serves its pre-fold values (`k1=v1` while genesis has `k1=v1x` in `build_prune_fixture`).
+- **Why**: DG6 — once the clearing marker is the retry key, retry must finish the clear. Existing interruption tests cut only `after_clear_step`, which runs after every marker write and the mark flush, so they never enter this window. Writing intermediates first is not enough: `namespace().flush()` syncs shards one at a time, so power loss during that flush can persist the head's shard and drop another. Same-shard program order does not help the `kill -9` window, because the second put was never issued.
+- **Suggested fix**: In `finish_interrupted_clear`, before any clear, walk the parent chain from `self` to the marker genesis (cycle-guarded), `set_aux(PRUNE_CLEARING_KEY)` on every non-genesis ancestor, flush, then the existing clear. If a parent slot is already `None`, clear has started, which is only after a completed mark flush, so every intermediate marker is already durable. Test: after merge and re-parent, set the marker on the head only; `head.prune()` must return genesis, the intermediate must be dead, and `i1.get("k1")` must not be `v1`. Same aux key `&[1]`; no migration.
 
 ---
 
@@ -164,3 +176,10 @@
 - **Where**: `core/src/common/engine/mmdb.rs` (`cgroup_mem_limit_bytes`) — historical; symbol removed from library
 - **Claim**: A hard cgroup maximum is safe to budget at 100%.
 - **Reason**: Obsolete against current code: `cgroup_mem_limit_bytes` is not in `core/src`; library default budget no longer reads cgroup limits. Keep as permanent reject of the recurring claim if reintroduced without evidence.
+
+---
+
+### namespace: "destroy must restore the registry when directory removal returns an error"
+- **Where**: `core/src/common/namespace.rs` (`Namespace::destroy`)
+- **Claim**: Unregistering before `remove_dir_all`, then returning that I/O error, strands an intact tree (`EACCES`) or reports failure after a mount-point wipe (`EBUSY`), and retry cannot finish the destroy.
+- **Reason**: The documented order is registry update, then tree removal. A crash in that window leaves an orphaned directory that is manually removable; re-attachment is an explicit non-goal. An I/O error after the registry commit is that same durable state, not a rollback obligation. Restoring the record after a failed `remove_dir_all` can re-register a half-deleted tree (children already unlinked, then `rmdir` fails), which a later open would treat as a live dataset. `cleanup_failed_root` is safe only because create proved the root was empty before it wrote anything.
