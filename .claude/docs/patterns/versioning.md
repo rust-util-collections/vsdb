@@ -1,10 +1,13 @@
 # Versioning Review Patterns
 
-**Files:** `strata/src/versioned/{mod,map,diff,merge,handle,read,repair,test}.rs`.
+**Files:** `strata/src/versioned/{mod,map,diff,read,repair,test}.rs`; the node-level
+diff / three-way merge they call live in `persistent_btree/{diff,merge}.rs` (`patterns/btree.md`).
 
 **Arch:** Git-model branches→commits DAG; commits immutable; source-wins 3-way
-merge; ref-counts + dirty flag for cascade crash recover. Reads go through a
-`Snapshot` (captured root): `at(commit)` / `snapshot(branch)`; branch-id reads delegate to it.
+merge (`tree.merge` replays the source delta onto the target); ref-counts + dirty
+flag for cascade crash recover. Reads go through a `Snapshot` (captured root):
+`at(commit)` / `snapshot(branch)`; branch-id reads delegate to it. `BranchId` /
+`CommitId` are serde-transparent newtypes; component tables keep `u64` keys.
 
 ## Invariants
 
@@ -16,10 +19,18 @@ merge; ref-counts + dirty flag for cascade crash recover. Reads go through a
 **V6 Commit immutable** after create — id/root/parents/timestamp; only `ref_count` is rewritten.
 **V7 Durable references** — order nodes before publishing roots; commits before publishing HEAD; branch/commit rewrite or removal before retiring old roots; allocator advancement before returning an ID; main-branch changes before deleting the old main. Co-located maps (one shard, one WAL): program order provides this — `fence()` is a no-op, history ops `settle()` with one sync, and released nodes are registered only after a sync (deferred queue). Per-shard (legacy) maps: program order across shard WALs is insufficient — every `fence()` syncs.
 
+**V8 Handle compat** — v16 VSTYPE02 metas embed component handles tagged by their
+**full** type paths: `PersistentBTree`, `MapxOrd<u64, Commit>`,
+`MapxOrd<u64, BranchState>`, `Mapx<String, u64>`, `Orphan<u64>`, `Orphan<bool>`, and
+the paths of `versioned::Commit` / `versioned::map::BranchState`, are frozen (no key
+newtypes, no moves/renames). Field types may change only if the serde encoding stays
+identical (`#[serde(transparent)]`).
+
 ## Bugs
 
 **Ref leak** — delete branch without dec. Check zero **after** dec.
-**Merge drop** — keyed on source only keeps base; conflict resolved to base/target instead of source (`merge.rs`).
+**Merge drop** — keyed on source only keeps base; conflict resolved to base/target instead of source (`persistent_btree/merge.rs`).
+**Result ownership** — `tree.merge` returns an **unowned** fresh root (or an existing one); the caller acquires it for every reference it publishes (commit root + dirty root).
 **Live GC** — zero refs while still parent-linked.
 **Rollback/merge guard asymmetry** — uncommitted changes must reject on **all** arms (`target==head` and strict-ancestor), like merge.
 
@@ -35,4 +46,6 @@ merge; ref-counts + dirty flag for cascade crash recover. Reads go through a
 - [ ] Publication/reclamation fences include construction, deep clone and restore
 - [ ] New components co-located with the node pool; no lazy-delete before a sync on co-located maps
 - [ ] No post-create commit mutate except `ref_count`
+- [ ] Component type params / type paths unchanged (V8); ids stay transparent newtypes
+- [ ] Errors typed (`NotAncestor` / `SelfMerge` / `NoCommits` / `CommitNotFound`); `gc()` returns them, never panics on a damaged graph
 - [ ] Merge shapes: same head → no-op; FF only into empty target; target-ancestor → 2-parent commit

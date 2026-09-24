@@ -40,18 +40,18 @@ a make target, so it does not delete `$HOME/.vsdb` or shared `/tmp/vsdb_testing`
 
 | Subsystem | Key files | Purpose |
 |-----------|-----------|---------|
-| Engine | `core/src/common/engine/mod.rs`, `mmdb.rs` | Mapx, batch ops, GLOBAL prefix alloc (all namespaces), per-ns shard routing, per-engine block-cache pool (shards share one `BlockCachePool`), format marker |
+| Engine | `core/src/common/engine/mod.rs`, `mmdb.rs` | Mapx, single-prefix batches, GLOBAL prefix alloc (all namespaces), shard co-location (`new_colocated`), per-ns shard routing, per-engine block-cache pool (shards share one `BlockCachePool`), format marker |
 | Namespaces | `core/src/common/namespace.rs` | Namespace handle, registry, InstanceId, ambient scope, lifecycle (create/open/close/destroy/relocate); engines owned by `Arc<NsInner>`, no leak |
 | MapxRaw | `core/src/basic/mapx_raw/` | Untyped raw KV, prefix isolation |
 | Typed Collections | `strata/src/basic/mapx/`, `mapx_ord/`, `mapx_ord_rawkey/`, `orphan/` | Mapx<K,V>, MapxOrd<K,V>, MapxOrdRawKey<V>, Orphan<T> |
-| Persistent B+ Tree | `strata/src/basic/persistent_btree/` | COW B+ tree, structural sharing |
-| Versioning | `strata/src/versioned/` | VerMap, Snapshot views, commit DAG, merge |
+| Persistent B+ Tree | `strata/src/basic/persistent_btree/` | COW B+ tree, structural sharing, shared-subtree diff + delta-replay three-way merge, deferred reclamation |
+| Versioning | `strata/src/versioned/` | VerMap (components co-located on one shard WAL), Snapshot views, typed ids/diffs, commit DAG |
 | Error types | `core/src/common/error.rs` (re-exported via `vsdb::common::error`) | VsdbError enum (thiserror-based), unified across both crates |
 | Merkle Tries | `strata/src/trie/` | MPT (16-ary) + SMT (binary 256-bit) |
 | Slot Index | `strata/src/slotdex/` | Time-slot tier-based indexing (single-handle, crash-atomic) |
-| DAG Collections | `strata/src/dagmap/` | DAG-based data structures |
+| DAG Collections | `strata/src/dagmap/` | Single-parent overlay trees (`DagMapRaw` / `DagMapRawKey`): child reads fall back to ancestors; prune folds a mainline |
 | Vector Index | `strata/src/vecdex/` | VecDex + VecDexDyn (runtime `MetricKind`), HNSW ANN search, distance metrics (single-handle, crash-atomic) |
-| Encoding | `strata/src/common/ende.rs` | postcard-based KeyEnDe/ValueEnDe |
+| Encoding | `strata/src/common/ende.rs`, `common/mod.rs` | postcard-based KeyEnDe/ValueEnDe, borrowed-key `KeyRef`/`OrderedKeyRef`, typed-handle envelope (`VSTYPE03`, reads `VSTYPE02`) |
 | Staged mutation | `strata/src/common/staged.rs` | read-your-writes overlay + one atomic write batch per mutation (SlotDex/VecDex) |
 
 ## Skills

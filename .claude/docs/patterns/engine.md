@@ -25,6 +25,15 @@ One `BlockCachePool` per engine. A WriteBatch is bound to one prefix (⇒ one sh
 **E10 Cache pool** — all shards of one engine share one pool; engines don’t share identity.
 **E11 clone_in** — fresh unobservable prefix; bounded independent batches; failed chunk best-effort wipe target without masking primary Err.
 
+**E13 Co-location** — `new_colocated` allocates until the prefix hits the anchor's shard
+(skipped prefixes are burned, never reissued); `is_colocated_with` = same ns + same shard.
+A composite may drop cross-component fences only when **every** component is
+co-located, re-checked on restore; otherwise keep the per-shard fences.
+**E14 Path-only helpers** — `vsdb_get_{base,custom,system,meta}_dir` / `vsdb_meta_path`
+resolve paths without opening an engine; `Namespace::default_ns()` opens the default
+engine — never use it just for a path. `vsdb_configure` never mutates the environment;
+default budget = `VsdbOptions::mem_budget_mb` > `VSDB_MEM_BUDGET_MB` > 2 GiB.
+
 **E12 Scan errors** — inspect streaming iterator errors before filter/map erases the source; both directions fail fast instead of returning successful partial data.
 
 ## Bugs
@@ -48,3 +57,5 @@ One `BlockCachePool` per engine. A WriteBatch is bound to one prefix (⇒ one sh
 - [ ] One pool per engine
 - [ ] clone_in chunk+wipe on error
 - [ ] Late SST read failures surface in both scan directions
+- [ ] Co-location checked on restore before skipping fences
+- [ ] No engine open for path-only needs

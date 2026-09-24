@@ -16,6 +16,11 @@ tier-less; bulk uses `pending_slot_rows`.
 **SD5 swap_order** — layout only; logical results byte-equal true↔false.
 **SD6 Tier-less growth** — empty `levels` ⇒ `slot_rows` exact L0 count; may be stale once tiers exist (unused). Bulk adds pending; promote merges committed+staged. Hydrate/trunc re-seed mirror only re-entering tier-less. Serial/bulk/reopen same growth cadence.
 
+**SD7 Range API** — `page(slots, size, idx, Order)` / `count(slots)` map `RangeBounds` to
+inclusive `Option` bounds: `Excluded` via `checked_succ` / `checked_pred` (overflow ⇒
+empty), `Unbounded` ⇒ `None` (never `MIN`/`MAX`: `swap_order` transforms bounds),
+inverted ⇒ empty. Results must equal the inclusive internal API.
+
 ## Bugs
 
 **Boundary off-by-one** · empty range / empty index panics · bulk never promotes (gate only committed).

@@ -18,7 +18,7 @@ Read/write/delete/iter use owning engine’s `dbs.len()`, never hardcoded defaul
 Default one-time init; non-default re-check `OPEN_NAMESPACES` under `REGISTRY_LOCK`.
 
 ### 1.4 Cross-prefix atomicity
-Engine batches are single-prefix. Logical multi-prefix atomicity needs single-handle staging (SlotDex/VecDex) or dirty-flag/root-last recovery (VerMap) — never an assumed shared batch.
+Engine batches are single-prefix. Logical multi-prefix atomicity needs single-handle staging (SlotDex/VecDex), co-location on one shard WAL (program order = crash order) plus dirty-flag recovery and deferred reclamation (VerMap), or per-shard fences (legacy VerMap) — never an assumed shared batch.
 
 ## 2. Unsafe
 
@@ -44,3 +44,9 @@ Hand codecs encode/decode field order match + round-trip tests.
 
 ### 3.4 Encoded-byte equality
 Typed wrappers compare **decoded** values (NaN/non-canonical). Not raw bytes.
+
+### 3.5 Borrowed key forms
+`KeyRef` / `OrderedKeyRef` impls must encode byte-identically to the owning key type (`str` ≡ `String`, `[u8]` ≡ `Vec<u8>`), or `get(&q)` silently misses.
+
+### 3.6 Handle type tags
+`VSTYPE03` path-free tags; `VSTYPE02` still read with full-path tags — see `compatibility-policy.md`.

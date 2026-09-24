@@ -63,7 +63,8 @@ passed on its code state. A required failing/blocked check prevents release.
 
 A patch bump is **owed** when tracked `.rs` changed after the latest commit that
 changed `version = ` in `core/Cargo.toml`, including `.rs` this invocation will
-commit. Docs-only does not owe a bump. Do not create a git tag. Never push.
+commit. Docs-only does not owe a bump. Do not create a git tag unless the user
+explicitly asks for one (annotated `vX.Y.Z` on the release commit). Never push.
 
 ```bash
 base=$(git log -1 --format=%H -G'^version = ' -- core/Cargo.toml)

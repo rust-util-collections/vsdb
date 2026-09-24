@@ -13,7 +13,10 @@ wire tags for metric.
 **VD2 Bidirectional edges** — L edges mutual; remove both sides.
 **VD3 Maps inverse** — key↔node↔info consistent through insert/remove/compact.
 **VD4 Dim** — all vectors and queries == `meta.dim`.
-**VD5 Filter traversal** — filter gates results only, not expansion.
+**VD5 Filter traversal** — filter gates results only, not expansion; termination and
+pruning compare against the **passing** results (`ef = max(ef, k)`, no inflation);
+`filter_visit_cap = max(64·ef, 4096)` evaluated nodes bounds near-empty predicates.
+Recall at low selectivity is tested — a fixed visit budget is the known regression.
 **VD6 Frozen wire tags** — `WIRE_TAG_*` append-only manual serde; never derive enum order.
 New metric = new tag; unknown tag hard fail. `MetricKind` derives serde (variant index =
 public wire for callers, not the meta format) → append only, never reorder.
@@ -28,7 +31,8 @@ public wire for callers, not the meta format) → append only, never reorder.
 - [ ] Bidirectional edges + prune after insert
 - [ ] Map triple consistency
 - [ ] Dim checks
-- [ ] Filter doesn’t block traversal
+- [ ] Filter doesn’t block traversal; low-selectivity recall test still passes
+- [ ] Dimension / config errors are `DimensionMismatch` / `InvalidConfig`, not panics
 - [ ] Wire tags frozen/append-only + round-trip pins
 - [ ] Compact single wiped staged commit
 - [ ] Send+Sync; Scalar ops cover metrics

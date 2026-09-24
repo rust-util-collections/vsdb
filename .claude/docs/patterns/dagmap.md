@@ -10,7 +10,9 @@ parking_lot Mutex + crash-safe global `dag_id_ceiling` file (system dir; folds l
 ## Invariants
 
 **DG1 IDs** — monotonic, never reuse; mutex covers full alloc; ceiling before issue
-(tmp→fsync→rename→dir fsync). Gaps ≤ batch OK.
+(tmp→fsync→rename→dir fsync). Gaps ≤ batch OK. The ceiling lives in the default
+system dir, resolved path-only (`vsdb_get_system_dir`) — never via
+`Namespace::default_ns()`, which would open the default engine for namespace-only users.
 **DG2 Acyclic** — parent exists; no node becomes its own ancestor.
 **DG3 Orphans** — delete refuses children / cascades / documents dangling.
 **DG4 Parent slot ownership** — fresh Orphan per `new()`; shadow parent. `destroy`: save

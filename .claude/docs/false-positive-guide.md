@@ -85,3 +85,19 @@ same-id reopen while old engine still owns files. **Keep:** real deadlock cycle,
 ## FP-17: Design ID is not a finding
 
 D-\* labels need trigger + outcome. Prefer subsystem guides when they already catalog the bug.
+
+## FP-18: Snapshot sees its captured state
+
+A `Snapshot` (`at` / `snapshot`) reads the root captured at creation; not seeing
+later writes is the contract. **Keep:** a snapshot that changes under it.
+
+## FP-19: Working-state durability on co-located VerMaps
+
+`insert` / `remove` / `discard` do not fsync; history ops end with one WAL sync.
+Losing unsynced working state on power loss is by design. **Keep:** a crash
+leaving inconsistent state, or a history op returning before its sync.
+
+## FP-20: Same-name types share a `VSTYPE03` tag
+
+Path-free tags accept `a::Row` as `b::Row` by design (moves stay restorable).
+**Keep:** different generic parameters or wrappers sharing a tag.

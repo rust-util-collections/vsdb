@@ -13,6 +13,17 @@ layouts, enum discriminants, and metadata envelopes are wire:
 - never trust source enum order for on-disk discriminants;
 - format changes need old-fixture decode + round-trip tests.
 
+## Typed-handle tags
+
+Typed handles serialize as magic + 8-byte type tag + payload.
+
+- `VSTYPE03` (v17+) tags the **module-path-free** type name (`Mapx<String, User>`):
+  moving a type is safe, renaming it or its parameters is not.
+- `VSTYPE02` (v16) metas are still restored, checked against the **full**
+  `type_name` — so wrapper types and every type used inside built-in handles'
+  parameters keep their paths while v16 data may exist.
+- A new envelope needs a new magic; keep reading the old ones.
+
 ## Accepted breaks
 
 Only when necessary or compatibility cost is disproportionate — never as an

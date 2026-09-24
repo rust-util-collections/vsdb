@@ -22,7 +22,7 @@ One primary row per Rust file. Unsafe, compatibility, public-doc checks are over
 | namespaces | `core/.../namespace.rs` | `patterns/engine.md`, `compatibility-policy.md` |
 | typed collections | `strata/.../mapx/**`, `mapx_ord/**`, `mapx_ord_rawkey/**`, `orphan/**` | `patterns/engine.md`, `technical-patterns.md` |
 | B+ tree | `strata/.../persistent_btree/**` | `patterns/btree.md` |
-| versioning | `strata/.../versioned/**` | `patterns/versioning.md` |
+| versioning | `strata/.../versioned/**` | `patterns/versioning.md`, `patterns/btree.md` (diff/merge) |
 | tries | `strata/.../trie/**` | `patterns/trie.md` |
 | SlotDex | `strata/.../slotdex/**` | `patterns/slotdex.md` |
 | DagMap | `strata/.../dagmap/**` | `patterns/dagmap.md` |
