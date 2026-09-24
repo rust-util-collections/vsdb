@@ -42,14 +42,17 @@ Example for getting and setting the base directory.
 ```rust
 use vsdb_core::{VsdbOptions, vsdb_configure, vsdb_get_base_dir};
 
-// Set a custom base directory.
-// Call this early in main, before spawning any threads — it mutates
-// the process environment (`VSDB_BASE_DIR`).
+// Configure before the first VSDB access.
+// This selects the path without changing the process environment.
 vsdb_configure(VsdbOptions::new("/tmp/my_vsdb_data")).unwrap();
 
 // Get the current base directory
 let dir = vsdb_get_base_dir();
 assert_eq!(dir.to_str().unwrap(), "/tmp/my_vsdb_data");
+
+// Pass the selected path explicitly when launching a child process.
+let mut child = std::process::Command::new("my-worker");
+child.env("VSDB_BASE_DIR", &dir);
 ```
 
 ## Read-only mode

@@ -20,14 +20,6 @@
 
 ---
 
-### [LOW] docs: configuration example claims environment mutation
-- **Where**: `core/docs/api.md` (Utility Functions)
-- **What**: the guide says `vsdb_configure` writes `VSDB_BASE_DIR` and must precede thread creation, contrary to v17 behavior.
-- **Why**: callers may expect child processes to inherit a configured root automatically and open the wrong dataset.
-- **Suggested fix**: describe configuration before first VSDB use and explicit child-process environment propagation; no compatibility impact.
-
----
-
 ### [LOW] docs: trie cache example uses obsolete signatures and save timing
 - **Where**: `strata/docs/api.md` (MptCalc / SmtCalc, VerMapWithProof)
 - **What**: the manual cache examples omit the directory argument, and the wrapper example says caching saves on Drop although normal saves occur during committed synchronization.
