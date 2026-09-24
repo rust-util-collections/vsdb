@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v17.0.2]
+
+Pre-release corrections; v17 has not been published. No v16 data migration
+is required. Development-only short-name `VSTYPE03` handles are rejected.
+
+### Fixed
+
+- Typed-handle tags retain fully qualified type names. The unpublished
+  short-name experiment let different modules' same-named types restore as
+  each other, permitting silent wrong-type reads and writes when their
+  encoded bytes overlapped. Moving a persisted type requires an explicit
+  migration; existing v16 handles remain supported.
+- `SlotDex`, `VecDex`, and `VecDexDyn` constructors return `ReadOnly` in
+  read-only mode instead of panicking through the raw collection constructor.
 ## [v17.0.1]
 
 No public API or storage-format changes; no migration is required.
@@ -98,12 +112,11 @@ metadata written by v17 and rejects it with an error.
 
 ### Changed
 
-- Typed-handle metadata is tagged by the type name **without module paths**
-  (`VSTYPE03`, e.g. `Mapx<String, User>`). Moving a key/value type to another
-  module, a dependency reorganizing its internals, or rustc rendering paths
-  differently no longer makes saved handles unrestorable (previously every
-  such handle — including handles stored inside values — failed to decode).
-  `VSTYPE02` metadata from v16 is still restored and upgrades when re-saved.
+- Typed-handle metadata uses the `VSTYPE03` envelope and the **fully qualified**
+  Rust type name. Module paths and generic parameters distinguish unrelated
+  types; moving a persisted type requires an explicit migration. This is an
+  identity guard, not automatic schema validation. `VSTYPE02` metadata from
+  v16 is still restored and upgrades when re-saved.
 - Errors are typed: `NotAncestor`, `SelfMerge`, `NoCommits`,
   `DimensionMismatch { expected, found }`, `InvalidConfig`, and `Corrupt`
   replace the corresponding `Other` strings.
