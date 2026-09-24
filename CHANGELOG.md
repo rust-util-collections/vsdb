@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v16.3.11]
+
+### Fixed
+
+- Write-back guards (`get_mut`, `iter_mut`, `entry().or_insert`, `Orphan::get_mut`, DagMap guards) discard their edit when a panic starts while they are alive, instead of persisting a half-finished value. A failing write or DagMap's tombstone check during unwinding no longer aborts the process. Guards created during unwinding (e.g. inside a `Drop`) still write normally.
+- `save_meta` (`atomic_write_file`) fsyncs the parent directory after the rename, so a power loss can no longer drop a meta save that returned `Ok` and leave the collection unreachable.
+- VecDex filtered search keeps expanding until it holds `max(ef, k)` matching candidates instead of stopping after a fixed number of visited nodes. The old budget made recall collapse with selectivity (recall@10 was 0.05–0.22 even at 50% selectivity on 5k×128-d vectors; a 1% filter returned 2–4 of 10 hits); it is now 0.96–1.0. A predicate that almost nothing satisfies stops at a visit cap of `max(64 × max(ef, k), 4096)` evaluated nodes. Unfiltered search is unchanged.
+
+### Changed
+
+- New `VerMap`s place all components on one engine shard, so one WAL orders them: working-state operations (`insert`, `remove`, `discard`) no longer fsync, and history operations (`commit`, `merge`, branch create/delete, `rollback_to`, `set_main_branch`) end with a single WAL sync and are durable when they return. Released tree nodes are registered for deletion only after a sync. Measured: `insert` 1.33 ms → 37 µs, `insert` + `commit` 4.42 ms → 0.79 ms, `discard` 1.37 s → 20 ms. The on-disk format is unchanged in both directions: maps created by earlier versions keep their per-shard layout and fences, and `clone()` produces a co-located copy.
+- `VerMap::merge` replays the source-side delta onto the target by copy-on-write instead of rebuilding the merged tree from every live key, and `diff_commits` / `diff_uncommitted` (and the `VerMapWithProof` sync built on them) skip subtrees the snapshots share. Cost and transient memory follow the change set, not the branch size (100k keys, 10 changed per side: merge 134 ms → 5 ms, diff 44 ms → 0.05 ms), and the merged tree shares every untouched subtree with the target.
+- VecDex filtered search no longer inflates the beam to `max(4·ef, 2·k)`; with the fixed termination that halves its latency at equal or better recall. `search_ef_with_filter` still trades recall for work explicitly.
+
+### Added
+
+- `MapxRaw::new_colocated`, `MapxRaw::is_colocated_with`, and `MapxRaw::clone_colocated`: create or copy maps on the same engine shard, whose combined write order is also their crash order.
+
 ## [v16.3.10]
 
 ### Fixed
