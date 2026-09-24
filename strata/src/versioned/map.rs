@@ -347,9 +347,10 @@ impl<K, V> VerMap<K, V> {
             .ok_or(VsdbError::CommitNotFound { commit_id: id.0 })
     }
 
-    /// Raw-bytes diff between two commits (see
-    /// [`diff_commits`](VerMap::diff_commits)).
-    pub(crate) fn raw_diff_commits(
+    /// [`diff_commits`](VerMap::diff_commits) as stored bytes (keys in
+    /// their `KeyEnDeOrdered` encoding, values in their `ValueEnDe`
+    /// encoding) — e.g. to update an external hash structure incrementally.
+    pub fn raw_diff_commits(
         &self,
         from: CommitId,
         to: CommitId,
@@ -359,12 +360,9 @@ impl<K, V> VerMap<K, V> {
         Ok(self.tree.diff(from_commit.root, to_commit.root))
     }
 
-    /// Raw-bytes diff of `branch`'s working state against its head (see
-    /// [`diff_uncommitted`](VerMap::diff_uncommitted)).
-    pub(crate) fn raw_diff_uncommitted(
-        &self,
-        branch: BranchId,
-    ) -> Result<Vec<TreeDiff>> {
+    /// [`diff_uncommitted`](VerMap::diff_uncommitted) as stored bytes (see
+    /// [`raw_diff_commits`](VerMap::raw_diff_commits)).
+    pub fn raw_diff_uncommitted(&self, branch: BranchId) -> Result<Vec<TreeDiff>> {
         let state = self.get_branch(branch)?;
         let head_root = if state.head == NO_COMMIT {
             EMPTY_ROOT

@@ -4276,6 +4276,17 @@ fn raw_iter_yields_the_stored_encodings() {
         ]
     );
     assert_eq!(m.snapshot(main).unwrap().raw_iter().count(), 2);
+
+    m.insert(main, &3, &"c".into()).unwrap();
+    assert_eq!(
+        m.raw_diff_uncommitted(main).unwrap(),
+        vec![crate::basic::persistent_btree::TreeDiff::Added {
+            key: 3u32.to_bytes(),
+            value: "c".to_string().encode()
+        }]
+    );
+    let c2 = m.commit(main).unwrap();
+    assert_eq!(m.raw_diff_commits(c, c2).unwrap().len(), 1);
 }
 
 #[test]

@@ -42,8 +42,9 @@ metadata written by v17 and rejects it with an error.
   - The `Branch` / `BranchMut` handles and `branch()` / `branch_mut()` /
     `main()` / `main_mut()` are removed (every operation has one form).
   - `diff_commits` / `diff_uncommitted` return decoded `DiffEntry<K, V>`;
-    stored bytes remain available through `Snapshot::raw_iter` (which
-    replaces `raw_iter` / `raw_iter_at_commit`).
+    the stored-bytes forms are `raw_diff_commits` / `raw_diff_uncommitted`
+    (`TreeDiff`), and `Snapshot::raw_iter` replaces `raw_iter` /
+    `raw_iter_at_commit`.
   - `Commit` exposes `id()`, `parents()`, `timestamp_us()`; the internal
     `root` / `ref_count` fields are no longer public.
   - `gc()` returns `Result` instead of panicking on a damaged commit graph.
@@ -104,7 +105,7 @@ metadata written by v17 and rejects it with an error.
 | `m.iter_at_commit(c)?` / `m.range_at_commit(c, lo, hi)?` | `m.at(c)?.iter()` / `m.at(c)?.range(lo..hi)` |
 | `m.raw_iter(b)?` / `m.raw_iter_at_commit(c)?` | `m.snapshot(b)?.raw_iter()` / `m.at(c)?.raw_iter()` |
 | `diff_roots(&tree, a, b)` / `three_way_merge(&mut tree, base, s, t)` | `tree.diff(a, b)` / `tree.merge(&[base], s, t)` |
-| `versioned::diff::DiffEntry` (bytes) | `versioned::DiffEntry<K, V>` (decoded); `basic::persistent_btree::TreeDiff` for bytes |
+| `m.diff_commits(a, b)?` → bytes `DiffEntry` | `m.diff_commits(a, b)?` → decoded `DiffEntry<K, V>`, or `m.raw_diff_commits(a, b)?` → bytes `TreeDiff` |
 | `Box<dyn BatchTrait>` | `MapxRawBatch` |
 | child processes inheriting `VSDB_BASE_DIR` | `Command::new(..).env("VSDB_BASE_DIR", vsdb_get_base_dir())` |
 | `m.range(b, Bound::Included(&x), Bound::Excluded(&y))?` | `m.range(b, x..y)?` |
