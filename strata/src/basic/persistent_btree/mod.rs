@@ -69,6 +69,82 @@ thread_local! {
 struct RefState {
     counts: HashMap<NodeId, NodeRef>,
     ready: bool,
+    /// One reference per live snapshot lease, shared by its iterators.
+    pins: HashMap<NodeId, u32>,
+    /// Released keys waiting for a WAL sync, shared by every pool alias.
+    deferred: Option<Vec<Vec<u8>>>,
+}
+
+impl RefState {
+    fn release(&mut self, id: NodeId) -> Vec<NodeId> {
+        let mut dead = Vec::new();
+        if id == EMPTY_ROOT || !self.ready {
+            return dead;
+        }
+        let mut work = vec![id];
+        while let Some(nid) = work.pop() {
+            let Some(nr) = self.counts.get_mut(&nid) else {
+                continue;
+            };
+            debug_assert!(nr.ref_count > 0, "release of unowned node {nid}");
+            if nr.ref_count == 0 {
+                continue;
+            }
+            nr.ref_count -= 1;
+            if nr.ref_count == 0 {
+                work.extend(std::mem::take(&mut nr.children));
+                self.counts.remove(&nid);
+                dead.push(nid);
+            }
+        }
+        dead
+    }
+
+    /// Return only keys that may be registered without another owner sync.
+    fn defer_or_return(&mut self, keys: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
+        if let Some(queue) = self.deferred.as_mut() {
+            queue.extend(keys);
+            Vec::new()
+        } else {
+            keys
+        }
+    }
+}
+
+/// Owns a captured root independently of the map borrow. Keeping this type
+/// lifetime-free preserves last-use borrowing of Snapshot.
+/// Its Arc is shared by the snapshot and every iterator derived from it.
+pub(crate) struct RootLease {
+    pub(crate) root: NodeId,
+    runtime: Arc<TreeRuntime>,
+    nodes: MapxRaw,
+}
+
+impl Drop for RootLease {
+    fn drop(&mut self) {
+        if self.root == EMPTY_ROOT {
+            return;
+        }
+        let immediate = {
+            let mut refs = self.runtime.refs.lock();
+            let pins = refs.pins.get_mut(&self.root).expect("missing snapshot pin");
+            *pins -= 1;
+            if *pins == 0 {
+                refs.pins.remove(&self.root);
+            }
+            // A captured root only reaches published, already-flushed nodes;
+            // unlike release_buffered, this path has no pending entries.
+            let dead = refs
+                .release(self.root)
+                .into_iter()
+                .map(|id| id.to_le_bytes().to_vec())
+                .collect();
+            refs.defer_or_return(dead)
+        };
+        if !immediate.is_empty() {
+            self.nodes.lazy_delete_batch(immediate);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -159,11 +235,6 @@ pub struct PersistentBTree {
     /// concurrently with a `&mut self` operation) never observes
     /// buffered nodes, and `Clone` only ever copies an empty map.
     pending: HashMap<NodeId, Vec<u8>>,
-    /// `Some` once the owner opted into deferred reclamation
-    /// ([`defer_reclaim`](Self::defer_reclaim)): keys of nodes whose last
-    /// reference was released, waiting for the owner's next WAL sync
-    /// before physical deletion is registered.
-    deferred: Option<Vec<Vec<u8>>>,
 }
 
 impl Serialize for PersistentBTree {
@@ -229,13 +300,14 @@ impl<'de> Deserialize<'de> for PersistentBTree {
                     RefState {
                         counts: HashMap::new(),
                         ready: false,
+                        pins: HashMap::new(),
+                        deferred: None,
                     },
                 );
                 Ok(PersistentBTree {
                     nodes,
                     runtime,
                     pending: Default::default(),
-                    deferred: None,
                 })
             }
         }
@@ -286,17 +358,19 @@ impl PersistentBTree {
             RefState {
                 counts: HashMap::new(),
                 ready: true,
+                pins: HashMap::new(),
+                deferred: None,
             },
         );
         Self {
             nodes,
             runtime,
             pending: HashMap::new(),
-            deferred: None,
         }
     }
 
-    /// Switches this handle to deferred reclamation.
+    /// Switches this node pool, including every alias and snapshot lease,
+    /// to deferred reclamation.
     ///
     /// By default a node whose last reference is released is registered
     /// for physical deletion immediately, which is only safe once the
@@ -308,23 +382,65 @@ impl PersistentBTree {
     /// the next [`rebuild_ref_counts`](Self::rebuild_ref_counts) sweeps
     /// every unreachable node.
     pub(crate) fn defer_reclaim(&mut self) {
-        self.deferred.get_or_insert_with(Vec::new);
+        self.runtime
+            .refs
+            .lock()
+            .deferred
+            .get_or_insert_with(Vec::new);
     }
 
     /// Number of released nodes waiting for registration.
     pub(crate) fn deferred_reclaims(&self) -> usize {
-        self.deferred.as_ref().map_or(0, Vec::len)
+        self.runtime
+            .refs
+            .lock()
+            .deferred
+            .as_ref()
+            .map_or(0, Vec::len)
     }
 
     /// Registers the queued nodes for physical deletion. Call only after
     /// the writes that released them are durable.
     pub(crate) fn register_deferred_reclaims(&mut self) {
-        if let Some(q) = self.deferred.as_mut()
-            && !q.is_empty()
-        {
-            let keys = std::mem::take(q);
+        let keys = self
+            .runtime
+            .refs
+            .lock()
+            .deferred
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default();
+        if !keys.is_empty() {
             self.nodes.lazy_delete_batch(keys);
         }
+    }
+
+    /// Capture and retain a published root while releases/recounts are
+    /// excluded. Reading the owning row under this lock closes the gap
+    /// between observing its root and acquiring the reader reference.
+    pub(crate) fn lease_root(
+        &self,
+        resolve: impl FnOnce() -> Result<NodeId>,
+    ) -> Result<Arc<RootLease>> {
+        let mut refs = self.runtime.refs.lock();
+        let root = resolve()?;
+        if root != EMPTY_ROOT {
+            assert!(refs.ready, "snapshot requires initialized tree references");
+            refs.counts
+                .get_mut(&root)
+                .expect("untracked snapshot root")
+                .ref_count += 1;
+            *refs.pins.entry(root).or_insert(0) += 1;
+        }
+        drop(refs);
+        Ok(Arc::new(RootLease {
+            root,
+            runtime: Arc::clone(&self.runtime),
+            // SAFETY: this handle only registers deletion of immutable nodes
+            // after their final reference is released. NodeIds are never
+            // reused, and co-located owners defer registration until WAL sync.
+            nodes: unsafe { self.nodes.shadow() },
+        }))
     }
 
     // ----- low-level helpers -----
@@ -645,42 +761,18 @@ impl PersistentBTree {
         if id == EMPTY_ROOT {
             return;
         }
-        let mut refs = self.runtime.refs.lock();
-        if !refs.ready {
-            return;
-        }
-        let mut dead_keys = Vec::new();
-        let mut work = vec![id];
-        while let Some(nid) = work.pop() {
-            if nid == EMPTY_ROOT {
-                continue;
-            }
-            let Some(nr) = refs.counts.get_mut(&nid) else {
-                continue;
-            };
-            debug_assert!(
-                nr.ref_count > 0,
-                "release_node called on node {nid} with ref_count=0"
-            );
-            if nr.ref_count == 0 {
-                continue;
-            }
-            nr.ref_count -= 1;
-            if nr.ref_count == 0 {
-                let children = std::mem::take(&mut nr.children);
-                refs.counts.remove(&nid);
-                if self.pending.remove(&nid).is_none() {
-                    dead_keys.push(nid.to_le_bytes().to_vec());
-                }
-                work.extend(children);
-            }
-        }
-        drop(refs);
-        if !dead_keys.is_empty() {
-            match self.deferred.as_mut() {
-                Some(q) => q.extend(dead_keys),
-                None => self.nodes.lazy_delete_batch(dead_keys),
-            }
+        let immediate = {
+            let mut refs = self.runtime.refs.lock();
+            let dead_keys = refs
+                .release(id)
+                .into_iter()
+                .filter(|nid| self.pending.remove(nid).is_none())
+                .map(|nid| nid.to_le_bytes().to_vec())
+                .collect();
+            refs.defer_or_return(dead_keys)
+        };
+        if !immediate.is_empty() {
+            self.nodes.lazy_delete_batch(immediate);
         }
     }
 
@@ -727,10 +819,14 @@ impl PersistentBTree {
     }
 
     /// Rebuilds the in-memory reference-count map from scratch by
-    /// walking all nodes reachable from `live_roots`.
+    /// walking all nodes reachable from `live_roots` and live snapshot leases.
     ///
     /// Also registers unreachable nodes for deferred disk deletion.
     pub fn rebuild_ref_counts(&mut self, live_roots: &[NodeId]) {
+        // A lease must not appear/disappear between pin seeding and the
+        // sweep/count replacement. Readers of already-leased nodes need no
+        // reference lock and can continue during this maintenance walk.
+        let mut refs = self.runtime.refs.lock();
         let mut new_refs: HashMap<NodeId, NodeRef> = HashMap::new();
         let mut visited = HashSet::new();
 
@@ -747,6 +843,17 @@ impl PersistentBTree {
                     .ref_count += 1;
                 queue.push(root);
             }
+        }
+
+        for (&root, &pins) in &refs.pins {
+            new_refs
+                .entry(root)
+                .or_insert_with(|| NodeRef {
+                    ref_count: 0,
+                    children: Vec::new(),
+                })
+                .ref_count += pins;
+            queue.push(root);
         }
 
         // BFS: walk all reachable nodes, count parent→child references.
@@ -807,7 +914,6 @@ impl PersistentBTree {
             Ordering::AcqRel,
         );
 
-        let mut refs = self.runtime.refs.lock();
         refs.counts = new_refs;
         refs.ready = true;
     }
@@ -885,19 +991,30 @@ impl Clone for PersistentBTree {
         );
         let nodes = self.nodes.clone();
         let refs = self.runtime.refs.lock();
+        let mut counts = refs.counts.clone();
+        // Reader leases belong to the original pool. Any resulting zero-ref
+        // root remains unowned, as with standalone mutation results; VerMap's
+        // clone recounts from its copied persistent graph before returning.
+        for (&root, &pins) in &refs.pins {
+            let count = &mut counts.get_mut(&root).expect("untracked pin").ref_count;
+            *count = count
+                .checked_sub(pins)
+                .expect("pin count exceeds references");
+        }
         let runtime = tree_runtime(
             nodes.instance_id(),
             self.runtime.next_id.load(Ordering::Acquire),
             RefState {
-                counts: refs.counts.clone(),
+                counts,
                 ready: refs.ready,
+                pins: HashMap::new(),
+                deferred: None,
             },
         );
         Self {
             nodes,
             runtime,
             pending: HashMap::new(),
-            deferred: None,
         }
     }
 }

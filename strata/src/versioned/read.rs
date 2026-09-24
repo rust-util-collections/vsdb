@@ -1,14 +1,15 @@
 //! Read operations for VerMap: branch reads and [`Snapshot`] views.
 //!
-//! Pure read path — none of these methods mutate state.
+//! Capturing views retains runtime roots; reads do not change persisted map state.
 
 use std::{
     borrow::Borrow,
     ops::{Bound, RangeBounds},
+    sync::Arc,
 };
 
 use crate::{
-    basic::persistent_btree::NodeId,
+    basic::persistent_btree::RootLease,
     common::{
         ende::{KeyEnDeOrdered, OrderedKeyRef, ValueEnDe},
         error::Result,
@@ -21,8 +22,11 @@ use super::{BranchId, CommitId, map::VerMap};
 /// ([`VerMap::at`]) or a branch's working state as of when the view was
 /// taken ([`VerMap::snapshot`]).
 ///
-/// The view holds the state's tree root, so its reads cannot fail on a
-/// missing branch or commit and never see later writes.
+/// The view retains the state's tree root, so its reads cannot fail on a
+/// missing branch or commit and never see later writes, including mutations
+/// through a restored alias. Derived iterators share that retention even
+/// after the view is dropped. Nodes remain live until the view and all its
+/// iterators are dropped.
 ///
 /// # Panics
 ///
@@ -32,7 +36,26 @@ use super::{BranchId, CommitId, map::VerMap};
 /// [encode/decode trust model](crate::common::ende)).
 pub struct Snapshot<'a, K, V> {
     map: &'a VerMap<K, V>,
-    root: NodeId,
+    lease: Arc<RootLease>,
+}
+
+// The lease owns its node-pool handle; retaining it does not borrow the view.
+// An iterator can outlive the temporary Snapshot that created it.
+struct PinnedIter<I> {
+    inner: I,
+    _lease: Arc<RootLease>,
+}
+
+impl<I: Iterator> Iterator for PinnedIter<I> {
+    type Item = I::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
 }
 
 impl<'a, K, V> Snapshot<'a, K, V>
@@ -49,7 +72,7 @@ where
     {
         self.map
             .tree
-            .get(self.root, &key.ordered_key_bytes())
+            .get(self.lease.root, &key.ordered_key_bytes())
             .map(|v| V::decode(&v).unwrap())
     }
 
@@ -61,12 +84,16 @@ where
     {
         self.map
             .tree
-            .contains_key(self.root, &key.ordered_key_bytes())
+            .contains_key(self.lease.root, &key.ordered_key_bytes())
     }
 
     /// Iterates all entries in ascending key order.
     pub fn iter(&self) -> impl Iterator<Item = (K, V)> + use<'a, K, V> {
-        self.map.tree.iter(self.root).map(decode_entry)
+        PinnedIter {
+            inner: self.map.tree.iter(self.lease.root),
+            _lease: Arc::clone(&self.lease),
+        }
+        .map(decode_entry)
     }
 
     /// Iterates the entries within `range` in ascending key order.
@@ -76,10 +103,14 @@ where
     ) -> impl Iterator<Item = (K, V)> + use<'a, K, V, R> {
         let lo = encode_bound(range.start_bound());
         let hi = encode_bound(range.end_bound());
-        self.map
-            .tree
-            .range(self.root, as_slice(&lo), as_slice(&hi))
-            .map(decode_entry)
+        PinnedIter {
+            inner: self
+                .map
+                .tree
+                .range(self.lease.root, as_slice(&lo), as_slice(&hi)),
+            _lease: Arc::clone(&self.lease),
+        }
+        .map(decode_entry)
     }
 
     /// Iterates the stored `(key, value)` bytes in ascending key order,
@@ -89,7 +120,10 @@ where
     /// [`ValueEnDe`] encoding of `V`; the same state always yields the
     /// same bytes.
     pub fn raw_iter(&self) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + use<'a, K, V> {
-        self.map.tree.iter(self.root)
+        PinnedIter {
+            inner: self.map.tree.iter(self.lease.root),
+            _lease: Arc::clone(&self.lease),
+        }
     }
 }
 
@@ -105,8 +139,10 @@ where
     /// [`VsdbError::CommitNotFound`](crate::VsdbError::CommitNotFound) if the
     /// commit does not exist (it may have been reclaimed).
     pub fn at(&self, commit: CommitId) -> Result<Snapshot<'_, K, V>> {
-        let root = self.get_commit_inner(commit)?.root;
-        Ok(Snapshot { map: self, root })
+        let lease = self
+            .tree
+            .lease_root(|| Ok(self.get_commit_inner(commit)?.root))?;
+        Ok(Snapshot { map: self, lease })
     }
 
     /// A view of `branch`'s working state (including uncommitted changes)
@@ -117,8 +153,10 @@ where
     /// [`VsdbError::BranchNotFound`](crate::VsdbError::BranchNotFound) if the
     /// branch does not exist.
     pub fn snapshot(&self, branch: BranchId) -> Result<Snapshot<'_, K, V>> {
-        let root = self.get_branch(branch)?.dirty_root;
-        Ok(Snapshot { map: self, root })
+        let lease = self
+            .tree
+            .lease_root(|| Ok(self.get_branch(branch)?.dirty_root))?;
+        Ok(Snapshot { map: self, lease })
     }
 
     /// Reads a value from the working state of `branch`.

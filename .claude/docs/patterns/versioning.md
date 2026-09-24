@@ -5,7 +5,7 @@ diff / three-way merge they call live in `persistent_btree/{diff,merge}.rs` (`pa
 
 **Arch:** Git-model branches→commits DAG; commits immutable; source-wins 3-way
 merge (`tree.merge` replays the source delta onto the target); ref-counts + dirty
-flag for cascade crash recover. Reads go through a `Snapshot` (captured root):
+flag for cascade crash recover. Reads go through a `Snapshot` (leased root):
 `at(commit)` / `snapshot(branch)`; branch-id reads delegate to it. `BranchId` /
 `CommitId` are serde-transparent newtypes; component tables keep `u64` keys.
 
@@ -26,11 +26,18 @@ the paths of `versioned::Commit` / `versioned::map::BranchState`, are frozen (no
 newtypes, no moves/renames). Field types may change only if the serde encoding stays
 identical (`#[serde(transparent)]`).
 
+**V9 Snapshot lifetime** — snapshot/iterator leases retain tree roots across alias
+mutation, rollback, branch deletion and recount. Leases own no borrowed lifetime, so
+Snapshot keeps last-use borrow compatibility; derived iterators retain the lease after
+the view drops. Pins are runtime-only, do not retain commit records, and are excluded
+from deep copies. Reclamation after final drop uses the pool-shared deferred queue.
+
 ## Bugs
 
 **Ref leak** — delete branch without dec. Check zero **after** dec.
 **Merge drop** — keyed on source only keeps base; conflict resolved to base/target instead of source (`persistent_btree/merge.rs`).
-**Result ownership** — `tree.merge` returns an **unowned** fresh root (or an existing one); the caller acquires it for every reference it publishes (commit root + dirty root).
+**Result ownership** — `tree.merge` returns an **unowned** fresh root (or an existing one); the caller acquires it for every reference (commit root + dirty root) **before**
+publishing either row, so a reader lease cannot drop an otherwise unowned result.
 **Live GC** — zero refs while still parent-linked.
 **Rollback/merge guard asymmetry** — uncommitted changes must reject on **all** arms (`target==head` and strict-ancestor), like merge.
 
@@ -49,3 +56,5 @@ identical (`#[serde(transparent)]`).
 - [ ] Component type params / type paths unchanged (V8); ids stay transparent newtypes
 - [ ] Errors typed (`NotAncestor` / `SelfMerge` / `NoCommits` / `CommitNotFound`); `gc()` returns them, never panics on a damaged graph
 - [ ] Merge shapes: same head → no-op; FF only into empty target; target-ancestor → 2-parent commit
+- [ ] Snapshot and iterator roots survive alias writes/GC/restore; final drop releases once
+- [ ] Recount preserves all live pins; clone owns only its copied persistent graph

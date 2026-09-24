@@ -316,6 +316,16 @@ graph RL
 Each commit's `root` field is a **snapshot** — an immutable B+ tree root that
 captures the full state of the map at that point in time.
 
+`at(commit)` and `snapshot(branch)` return a read-only view that retains its
+captured tree root. Later changes through a restored alias, including rollback
+and branch deletion, do not change the view. Its iterators share that retention
+and can outlive the view itself. Capturing a view updates only runtime ownership;
+it does not write persistent state or copy entries. Iteration remains streaming.
+
+A view keeps its tree nodes alive until it and all its iterators are dropped. It
+does not keep the commit record or branch alive, so a later `at(commit)` can fail
+for a deleted commit even while an existing view still reads its contents.
+
 ---
 
 ## Three-Way Merge Algorithm
@@ -465,7 +475,10 @@ one WAL sync, so they are durable when they return. Nodes released by an
 operation are registered for physical deletion only after the next such sync
 (or once the release queue grows large), so compaction can never delete nodes
 that a not-yet-durable operation stopped referencing. An unregistered release
-is not a leak: the next restore's sweep reclaims every unreachable node.
+is not a leak: the next restore's sweep reclaims every unreachable node. The
+release queue is shared by restored aliases and their live views. Dropping the
+last view or iterator can queue more nodes; those entries wait for the next
+sync and registration, or a later recovery sweep.
 
 **Per-shard layout (maps created by earlier versions).** Components occupy
 different shards, each with its own WAL, so an atomic node batch alone does
@@ -475,7 +488,8 @@ namespace-wide memtable flush). Such maps keep working unchanged; `clone()`
 produces a co-located copy.
 
 New maps and deep clones synchronize their initialized component graph before
-returning.
+returning. A deep clone has independent ownership and does not inherit views of
+the original map.
 
 Recovery validates every branch HEAD and reachable commit parent before any
 orphan cleanup, including when the dirty flag is clear. A missing reachable
@@ -506,8 +520,10 @@ Lifecycle management is split into two layers, both fully automatic:
 
 2. **B+ tree node ref counting + lazy deletion** — `PersistentBTree`
    maintains an in-memory `HashMap<NodeId, NodeRef>` that tracks
-   per-node reference counts.  When a commit root is released and a
-   node's count reaches zero, it is:
+   per-node reference counts shared by aliases. Roots are owned by commits,
+   branch working states, and live view leases. Both recovery and `gc()`
+   preserve these leases. When an owner releases its root and a node's
+   count reaches zero, it is:
    - cascade-removed from the in-memory ref map, **and**
    - registered for deferred disk deletion via the MMDB storage
      engine's compaction filter (`lazy_delete`).
@@ -562,8 +578,9 @@ After `delete_branch(feat)`:
 - Ref-count cascade immediately deletes **c4** (ref 1→0) and
   **c3** (ref 1→0).
 - **c1** drops from ref=2 to ref=1 (still alive via c2).
-- B+ tree nodes from c3/c4 are released from the in-memory ref map
-  **and** registered for deferred disk deletion via `lazy_delete`.
+- B+ tree nodes from c3/c4 with no remaining owner (including live views)
+  are released from the in-memory ref map **and** registered for deferred
+  disk deletion via `lazy_delete`.
 - MMDB background compaction reclaims disk space automatically.
 
 ---

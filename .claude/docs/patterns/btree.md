@@ -15,7 +15,7 @@ crate-internal forms for multi-step operations.
 **BT2 Order** — in-node increasing; parent-child `child[i] < key[i] ≤ child[i+1]`.
 **BT3 Occupancy** — non-root `B..=2B` keys; internal children = keys+1; root min exempt.
 **BT4 Sharing** — other versions keep old nodes intact.
-**BT5 Reclaim** — `release_node` ref-0 cascade lazy-deletes; `gc()` = full rebuild; live set = **all** commit roots + branch `dirty_root`s.
+**BT5 Reclaim** — `release_node` ref-0 cascade lazy-deletes; `gc()` = full rebuild; live set = **all** commit roots + branch `dirty_root`s + runtime snapshot leases.
 **BT6 pending** — empty between ops; every return flushes finals; bulk intermediate flush does not publish unfinal root; `node()` prefers buffer; `discard_node` ref-0 only: buffered → dropped, flushed → lazy-deleted.
 
 **BT7 Diff** — skip a front pair only when both are the **same NodeId** (identical key
@@ -26,8 +26,15 @@ source-wins matrix); each step acquires the new root and `release_buffered`s the
 **intermediate** (never the target); the final root is `disown_node`d → returned unowned;
 dead intermediates drop from `pending` before reaching the engine.
 **BT9 Deferred reclaim** — after `defer_reclaim()`, released keys queue instead of
-lazy-deleting; the owner registers them only after its WAL sync. Default (standalone
-tree) stays immediate. Unregistered keys are swept by the next `rebuild_ref_counts`.
+lazy-deleting; the queue and mode are shared by pool aliases and reader leases. The
+owner drains it only after its WAL sync; a later lease drop waits for the next drain.
+Default (standalone tree) stays immediate. Unregistered keys are swept by the next
+`rebuild_ref_counts`.
+**BT10 Reader ownership** — capture the published root and acquire its pin under the
+shared ref lock; the snapshot and derived iterators share one owned lease. Last drop
+cascades through the same deferred queue. Recount holds the lock through pin seeding,
+sweep and count replacement; each independent lease adds one root reference. Deep
+copies exclude source leases; VerMap then recounts its copied persistent roots.
 
 ## Bugs
 
@@ -43,9 +50,10 @@ tree) stays immediate. Unregistered keys are swept by the next `rebuild_ref_coun
 - [ ] Order after insert/delete/split/merge
 - [ ] Occupancy + root exception
 - [ ] No mutate shared nodes
-- [ ] GC live set = commit roots + dirty roots
+- [ ] GC live set = commit roots + dirty roots + live snapshot leases
 - [ ] Codec round-trip
 - [ ] Empty/single-entry edges
 - [ ] Buffer flush on every mut return; bulk root unobservable mid-way
 - [ ] Diff/merge property tests vs full-scan / decision-matrix references; ref counts == recount after merges
 - [ ] Deferred owners never lazy-delete before a sync
+- [ ] Snapshot capture/drop, alias recovery and clone preserve reader ownership

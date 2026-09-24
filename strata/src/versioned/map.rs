@@ -187,7 +187,7 @@ impl<K: Clone, V: Clone> Clone for VerMap<K, V> {
         let next_branch = copy(self.next_branch.clone_colocated(anchor));
         let main_branch = copy(self.main_branch.clone_colocated(anchor));
         let gc_dirty = copy(self.gc_dirty.clone_colocated(anchor));
-        let cloned = Self {
+        let mut cloned = Self {
             tree,
             commits,
             branches,
@@ -199,8 +199,9 @@ impl<K: Clone, V: Clone> Clone for VerMap<K, V> {
             colocated: true,
             _phantom: PhantomData,
         };
-        // Establish the copy's durable graph before the new handle escapes.
-        cloned.sync_storage();
+        // Establish the copy's durable graph and exclude reader leases that
+        // belong only to the original map before the new handle escapes.
+        cloned.rebuild_tree_ref_counts();
         cloned
     }
 }
@@ -1080,6 +1081,12 @@ where
         // Order the complete merged tree before publishing its root.
         self.fence(|m| m.tree.nodes.sync_wal());
 
+        // Acquire both owners before readers can observe either published
+        // root. A short-lived snapshot must not release an unowned merge
+        // result back to zero while publication is still in progress.
+        self.tree.acquire_node(merged_root); // commit.root
+        self.tree.acquire_node(merged_root); // dirty_root
+
         // Create merge commit.
         let id = CommitId(self.next_commit.get_value());
         *self.next_commit.get_mut() = id.0 + 1;
@@ -1107,9 +1114,6 @@ where
         self.branches.insert(&target.0, &new_state);
         self.fence(|m| m.branches.sync_wal());
 
-        // Tree root: commit.root + dirty_root both reference merged_root.
-        self.tree.acquire_node(merged_root); // commit.root
-        self.tree.acquire_node(merged_root); // dirty_root
         self.tree.release_node(tgt.dirty_root); // old target dirty
 
         self.end_ref_update();

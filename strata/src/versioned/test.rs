@@ -4311,3 +4311,228 @@ fn standalone_tree_diff_and_merge_are_public() {
     let all: Vec<_> = t.iter(merged).map(|(k, _)| k).collect();
     assert_eq!(all, vec![b"k".to_vec(), b"s".to_vec(), b"t".to_vec()]);
 }
+
+// Snapshot roots are runtime owners, including readers restored as aliases.
+fn assert_tree_owners(m: &VerMap<u32, u32>, leased_roots: &[u64]) {
+    let mut roots: Vec<_> = m.commits.iter().map(|(_, c)| c.root).collect();
+    roots.extend(m.branches.iter().map(|(_, b)| b.dirty_root));
+    roots.extend_from_slice(leased_roots);
+    m.tree.assert_refs_match_recount(&roots);
+}
+
+#[test]
+fn snapshot_leases_survive_alias_mutation_and_recounts() {
+    let mut original: VerMap<u32, u32> = VerMap::new();
+    let main = original.main_branch();
+    for key in 0..128 {
+        original.insert(main, &key, &(key + 1)).unwrap();
+    }
+    let root = original.get_branch(main).unwrap().dirty_root;
+    let bytes = postcard::to_allocvec(&original).unwrap();
+    let mut alias: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
+    let view = original.snapshot(main).unwrap();
+
+    alias.insert(main, &64, &9999).unwrap();
+    alias.commit(main).unwrap();
+    // The old working root has no persistent owner. Without a lease its
+    // count vanishes here, allowing compaction to remove the captured state.
+    assert_tree_owners(&alias, &[root]);
+    alias.gc().unwrap();
+    assert_tree_owners(&alias, &[root]);
+    let restored: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
+    assert_tree_owners(&restored, &[root]);
+    assert_eq!(view.get(&64), Some(65));
+    assert_eq!(
+        view.iter().collect::<Vec<_>>(),
+        (0..128).map(|k| (k, k + 1)).collect::<Vec<_>>()
+    );
+    drop(view);
+    assert_tree_owners(&alias, &[]);
+}
+
+#[test]
+fn snapshot_iterators_keep_the_shared_lease_after_view_drop() {
+    let mut original: VerMap<u32, u32> = VerMap::new();
+    let main = original.main_branch();
+    for key in 0..128 {
+        original.insert(main, &key, &(key + 1)).unwrap();
+    }
+    let root = original.get_branch(main).unwrap().dirty_root;
+    let bytes = postcard::to_allocvec(&original).unwrap();
+    let mut alias: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
+    let view = original.snapshot(main).unwrap();
+    let mut typed = view.iter();
+    let raw = view.raw_iter();
+    let range = view.range(20..40);
+    assert_eq!(typed.next(), Some((0, 1)));
+    drop(view);
+
+    alias.insert(main, &64, &9999).unwrap();
+    alias.commit(main).unwrap();
+    alias.gc().unwrap();
+    // All three iterators share one lease, even though the view is gone.
+    assert_tree_owners(&alias, &[root]);
+    assert_eq!(
+        typed.collect::<Vec<_>>(),
+        (1..128).map(|k| (k, k + 1)).collect::<Vec<_>>()
+    );
+    assert_eq!(raw.count(), 128);
+    assert_eq!(
+        range.collect::<Vec<_>>(),
+        (20..40).map(|k| (k, k + 1)).collect::<Vec<_>>()
+    );
+    assert_tree_owners(&alias, &[]);
+}
+
+#[test]
+fn historical_snapshot_retains_deleted_branch_state() {
+    let mut original: VerMap<u32, u32> = VerMap::new();
+    let main = original.main_branch();
+    let fork = original.create_branch("fork", main).unwrap();
+    original.insert(fork, &1, &10).unwrap();
+    let commit = original.commit(fork).unwrap();
+    let root = original.get_commit(commit).unwrap().root;
+    let bytes = postcard::to_allocvec(&original).unwrap();
+    let mut alias: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
+    let view = original.at(commit).unwrap();
+    alias.delete_branch(fork).unwrap();
+    alias.gc().unwrap();
+    assert!(alias.get_commit(commit).is_none());
+    assert_tree_owners(&alias, &[root]);
+    assert_eq!(view.get(&1), Some(10));
+    drop(view);
+    assert_tree_owners(&alias, &[]);
+}
+
+#[test]
+fn snapshot_releases_use_the_alias_shared_deferred_queue() {
+    for settle_before_drop in [false, true] {
+        let mut original: VerMap<u32, u32> = VerMap::new();
+        let main = original.main_branch();
+        original.insert(main, &1, &10).unwrap();
+        let bytes = postcard::to_allocvec(&original).unwrap();
+        let mut alias: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
+        let view = original.snapshot(main).unwrap();
+        alias.remove(main, &1).unwrap();
+        assert_eq!(alias.tree.deferred_reclaims(), 0);
+        if settle_before_drop {
+            alias.settle();
+        }
+        drop(view);
+        assert_tree_owners(&alias, &[]);
+        assert_eq!(original.tree.deferred_reclaims(), 1);
+        assert_eq!(alias.tree.deferred_reclaims(), 1);
+        alias.settle();
+        assert_eq!(original.tree.deferred_reclaims(), 0);
+    }
+}
+
+#[test]
+fn snapshot_last_use_preserves_existing_borrowing() {
+    let mut map: VerMap<u32, u32> = VerMap::new();
+    let main = map.main_branch();
+    map.insert(main, &1, &10).unwrap();
+    let commit = map.commit(main).unwrap();
+    let view = map.snapshot(main).unwrap();
+    assert_eq!(view.get(&1), Some(10));
+    // These mutations must compile without explicit drops of Snapshot views.
+    map.insert(main, &1, &20).unwrap();
+    let mut entries = map.iter(main).unwrap();
+    assert_eq!(entries.next(), Some((1, 20)));
+    drop(entries);
+    map.insert(main, &1, &30).unwrap();
+    let historical = map.at(commit).unwrap();
+    assert_eq!(historical.get(&1), Some(10));
+    map.remove(main, &1).unwrap();
+}
+
+#[test]
+fn deep_clone_excludes_original_snapshot_leases() {
+    let mut original: VerMap<u32, u32> = VerMap::new();
+    let main = original.main_branch();
+    original.insert(main, &1, &10).unwrap();
+    let root = original.get_branch(main).unwrap().dirty_root;
+    let view = original.snapshot(main).unwrap();
+    assert_eq!(view.get(&1), Some(10));
+    original.insert(main, &1, &20).unwrap();
+    original.commit(main).unwrap();
+    // A reader's last-use borrow may end before its lifetime-free lease
+    // drops. The copy must own only its own committed and working roots.
+    let copy = original.clone();
+    assert_tree_owners(&copy, &[]);
+    assert_eq!(copy.get(main, &1).unwrap(), Some(20));
+    // Last use ended the borrow, but lexical destruction retains the lease.
+    assert_tree_owners(&original, &[root]);
+}
+
+#[test]
+fn snapshot_leases_survive_rollback_and_discard() {
+    let mut original: VerMap<u32, u32> = VerMap::new();
+    let main = original.main_branch();
+    original.insert(main, &1, &10).unwrap();
+    let base = original.commit(main).unwrap();
+    original.insert(main, &1, &20).unwrap();
+    let tail = original.commit(main).unwrap();
+    let tail_root = original.get_commit(tail).unwrap().root;
+    let bytes = postcard::to_allocvec(&original).unwrap();
+    let mut alias: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
+    let historical = original.at(tail).unwrap();
+
+    alias.rollback_to(main, base).unwrap();
+    assert!(alias.get_commit(tail).is_none());
+    alias.insert(main, &1, &30).unwrap();
+    let working_root = alias.get_branch(main).unwrap().dirty_root;
+    let working = original.snapshot(main).unwrap();
+    alias.discard(main).unwrap();
+    alias.gc().unwrap();
+    assert_tree_owners(&alias, &[tail_root, working_root]);
+    assert_eq!(historical.get(&1), Some(20));
+    assert_eq!(working.get(&1), Some(30));
+    assert_eq!(alias.get(main, &1).unwrap(), Some(10));
+    drop((historical, working));
+    assert_tree_owners(&alias, &[]);
+}
+
+#[test]
+fn snapshot_lease_drop_can_race_recount_and_settle() {
+    for keep_second_view in [false, true] {
+        let mut original: VerMap<u32, u32> = VerMap::new();
+        let main = original.main_branch();
+        for key in 0..128 {
+            original.insert(main, &key, &key).unwrap();
+        }
+        let root = original.get_branch(main).unwrap().dirty_root;
+        let bytes = postcard::to_allocvec(&original).unwrap();
+        let mut alias: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
+        let first = original.snapshot(main).unwrap();
+        let second = keep_second_view.then(|| original.snapshot(main).unwrap());
+        alias.discard(main).unwrap();
+        alias.gc().unwrap();
+        let roots = if keep_second_view {
+            vec![root, root]
+        } else {
+            vec![root]
+        };
+        assert_tree_owners(&alias, &roots);
+
+        let start = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                start.wait();
+                drop(first);
+            });
+            start.wait();
+            alias.gc().unwrap();
+            alias.settle();
+        });
+        if let Some(second) = second {
+            assert_tree_owners(&alias, &[root]);
+            assert_eq!(second.iter().count(), 128);
+            drop(second);
+            assert!(alias.tree.deferred_reclaims() > 0);
+        }
+        assert_tree_owners(&alias, &[]);
+        alias.settle();
+        assert_eq!(alias.tree.deferred_reclaims(), 0);
+    }
+}
