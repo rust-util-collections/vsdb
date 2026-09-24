@@ -1,0 +1,647 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 284b35c..796d724 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -38,7 +38,7 @@ postcard = { version = "1.1.3", features = ["alloc"] }
+ blake3 = "1.8.7"
+ ed25519-dalek = { version = "3.0.0", features = ["serde", "rand_core", "batch"] }
+ rand = "0.10.3"
+-vsdb = "16.3.9"
++vsdb = { version = "17.0.3", path = "../vsdb/strata" }
+ litep2p = "0.15.2"
+ async-trait = "0.1.92"
+ futures = "0.3.34"
+diff --git a/crates/hotmint-storage/README.md b/crates/hotmint-storage/README.md
+index b05b268..9367cc8 100644
+--- a/crates/hotmint-storage/README.md
++++ b/crates/hotmint-storage/README.md
+@@ -63,10 +63,10 @@ if let Some(h) = pstate.load_last_committed_height() {
+ ### Data Directory
+
+ The storage backends explicitly use the default vsdb namespace configured by
+-`vsdb_set_base_dir`. Their sidecar metadata continues to store 64-bit map IDs;
++`vsdb_configure`. Their sidecar metadata continues to store 64-bit map IDs;
+ ambient namespace scopes do not change where these backends create collections.
+
+-vsdb stores data in the process working directory by default. Configure a custom location via environment variable or programmatically:
++vsdb stores data under `$HOME/.vsdb` by default. Configure a custom location via environment variable or programmatically:
+
+ ```bash
+ export VSDB_BASE_DIR=/var/lib/hotmint/data
+@@ -74,7 +74,7 @@ export VSDB_BASE_DIR=/var/lib/hotmint/data
+
+ ```rust
+ // must be called before any vsdb operation, can only be called once
+-vsdb::vsdb_set_base_dir("/var/lib/hotmint/data").unwrap();
++vsdb::vsdb_configure(vsdb::VsdbOptions::new("/var/lib/hotmint/data")).unwrap();
+ ```
+
+ ## License
+diff --git a/crates/hotmint-storage/src/block_store.rs b/crates/hotmint-storage/src/block_store.rs
+index dd47cb3..197c15e 100644
+--- a/crates/hotmint-storage/src/block_store.rs
++++ b/crates/hotmint-storage/src/block_store.rs
+@@ -22,7 +22,7 @@ pub struct VsdbBlockStore {
+ impl VsdbBlockStore {
+     /// Opens an existing block store or creates a fresh one.
+     ///
+-    /// Must be called after [`vsdb::vsdb_set_base_dir`].
++    /// Must be called after [`vsdb::vsdb_configure`].
+     /// The instance IDs of the internal collections are stored in
+     /// `data_dir/block_store.meta`. On first run the file is created;
+     /// on subsequent runs the collections are recovered from saved IDs.
+diff --git a/crates/hotmint-storage/src/consensus_state.rs b/crates/hotmint-storage/src/consensus_state.rs
+index 7a3e780..58ebbba 100644
+--- a/crates/hotmint-storage/src/consensus_state.rs
++++ b/crates/hotmint-storage/src/consensus_state.rs
+@@ -35,7 +35,7 @@ pub struct PersistentConsensusState {
+ impl PersistentConsensusState {
+     /// Opens an existing consensus state store or creates a fresh one.
+     ///
+-    /// Must be called after [`vsdb::vsdb_set_base_dir`].
++    /// Must be called after [`vsdb::vsdb_configure`].
+     /// The instance ID of the internal collection is stored in
+     /// `data_dir/consensus_state.meta` (8 bytes: one little-endian u64).
+     /// On first run the file is created; on subsequent runs the collection
+diff --git a/crates/hotmint-storage/src/evidence_store.rs b/crates/hotmint-storage/src/evidence_store.rs
+index 8c0ced9..3a5a4ce 100644
+--- a/crates/hotmint-storage/src/evidence_store.rs
++++ b/crates/hotmint-storage/src/evidence_store.rs
+@@ -80,7 +80,7 @@ pub struct PersistentEvidenceStore {
+
+ impl PersistentEvidenceStore {
+     /// Open an existing store or create a new one.
+-    /// Must be called after `vsdb::vsdb_set_base_dir`.
++    /// Must be called after `vsdb::vsdb_configure`.
+     pub fn open(data_dir: &Path) -> Result<Self> {
+         let meta_path = data_dir.join(META_FILE);
+         if meta_path.exists() {
+diff --git a/crates/hotmint-storage/tests/reopen.rs b/crates/hotmint-storage/tests/reopen.rs
+index 3eaef9a..7bbe982 100644
+--- a/crates/hotmint-storage/tests/reopen.rs
++++ b/crates/hotmint-storage/tests/reopen.rs
+@@ -11,7 +11,7 @@ use hotmint_types::{
+ #[test]
+ fn stores_reopen_after_creation_inside_an_ambient_namespace() {
+     let dir = tempfile::tempdir().unwrap();
+-    vsdb::vsdb_set_base_dir(dir.path().join("db")).unwrap();
++    vsdb::vsdb_configure(vsdb::VsdbOptions::new(dir.path().join("db"))).unwrap();
+     let namespace = vsdb::Namespace::create().unwrap();
+     namespace.scope(|| {
+         let mut blocks = VsdbBlockStore::open(dir.path()).unwrap();
+diff --git a/crates/hotmint/src/bin/node.rs b/crates/hotmint/src/bin/node.rs
+index 70beddd..bfd89c3 100644
+--- a/crates/hotmint/src/bin/node.rs
++++ b/crates/hotmint/src/bin/node.rs
+@@ -290,7 +290,7 @@ async fn run_node(
+
+     // 5. Set up persistent storage
+     fs::create_dir_all(&data_dir).c(d!("create data dir"))?;
+-    vsdb::vsdb_set_base_dir(&data_dir).c(d!("set vsdb base dir"))?;
++    vsdb::vsdb_configure(vsdb::VsdbOptions::new(&data_dir)).c(d!("set vsdb base dir"))?;
+
+     let store: Arc<parking_lot::RwLock<Box<dyn BlockStore>>> = Arc::new(parking_lot::RwLock::new(
+         Box::new(VsdbBlockStore::open(&data_dir).c(d!("open block store"))?),
+diff --git a/examples/cluster-node/src/main.rs b/examples/cluster-node/src/main.rs
+index d78446f..32dae1f 100644
+--- a/examples/cluster-node/src/main.rs
++++ b/examples/cluster-node/src/main.rs
+@@ -90,7 +90,7 @@ async fn run(home: &std::path::Path) -> Result<()> {
+
+     // Storage
+     std::fs::create_dir_all(&data_dir).c(d!("create data dir"))?;
+-    vsdb::vsdb_set_base_dir(&data_dir).c(d!("set vsdb base dir"))?;
++    vsdb::vsdb_configure(vsdb::VsdbOptions::new(&data_dir)).c(d!("set vsdb base dir"))?;
+
+     let store: Arc<parking_lot::RwLock<Box<dyn BlockStore>>> =
+         Arc::new(parking_lot::RwLock::new(Box::new(VsdbBlockStore::new())));
+diff --git a/examples/utxo-chain/src/bench.rs b/examples/utxo-chain/src/bench.rs
+index 7bc2972..d3bb609 100644
+--- a/examples/utxo-chain/src/bench.rs
++++ b/examples/utxo-chain/src/bench.rs
+@@ -40,7 +40,7 @@ fn main() {
+     // Initialize vsdb for the bench process itself (if needed by UTXO lib).
+     let vsdb_dir = base_dir.join("vsdb");
+     let _ = std::fs::create_dir_all(&vsdb_dir);
+-    vsdb::vsdb_set_base_dir(&vsdb_dir).unwrap();
++    vsdb::vsdb_configure(vsdb::VsdbOptions::new(&vsdb_dir)).unwrap();
+
+     let ports = hotmint_mgmt::find_free_ports((NUM_VALIDATORS * 2) as usize);
+     let p2p_base = ports[0];
+diff --git a/examples/utxo-chain/src/utxo_app.rs b/examples/utxo-chain/src/utxo_app.rs
+index ea16766..9be98ae 100644
+--- a/examples/utxo-chain/src/utxo_app.rs
++++ b/examples/utxo-chain/src/utxo_app.rs
+@@ -54,7 +54,7 @@ impl Default for UtxoConfig {
+ /// - Persistent state via vsdb `VerMapWithProof` with SMT proofs
+ /// - Address-indexed UTXO queries via `SlotDex`
+ ///
+-/// **Prerequisite:** `vsdb::vsdb_set_base_dir()` must be called before
++/// **Prerequisite:** `vsdb::vsdb_configure()` must be called before
+ /// constructing this type.
+ pub struct UtxoApplication {
+     state: Mutex<UtxoState>,
+diff --git a/examples/utxo-chain/src/utxo_state.rs b/examples/utxo-chain/src/utxo_state.rs
+index 154ed8c..e678c9a 100644
+--- a/examples/utxo-chain/src/utxo_state.rs
++++ b/examples/utxo-chain/src/utxo_state.rs
+@@ -1,4 +1,5 @@
+ use ruc::*;
++use vsdb::slotdex::Order;
+ use vsdb::versioned::BranchId;
+ use vsdb::{Orphan, SlotDex128, SmtCalc, SmtProof, VerMapWithProof};
+
+@@ -18,7 +19,7 @@ fn addr_slot(pubkey_hash: &[u8; 32]) -> u128 {
+ /// total supply tracking. All operations are synchronous and expect
+ /// the caller to hold the appropriate lock.
+ ///
+-/// **Prerequisite:** `vsdb::vsdb_set_base_dir()` must be called before
++/// **Prerequisite:** `vsdb::vsdb_configure()` must be called before
+ /// constructing this type.
+ pub struct UtxoState {
+     /// Primary UTXO set with Sparse Merkle Tree commitment.
+@@ -44,7 +45,7 @@ impl UtxoState {
+         let main_branch = utxos.map().main_branch();
+         Self {
+             utxos,
+-            addr_index: SlotDex128::new(8, false),
++            addr_index: SlotDex128::new(8, false).expect("valid address index configuration"),
+             total_supply: Orphan::new(0),
+             main_branch,
+         }
+@@ -68,7 +69,9 @@ impl UtxoState {
+                 supply = supply.saturating_sub(spent_output.value);
+                 let _ = self.utxos.map_mut().remove(branch, &key);
+                 let slot = addr_slot(&spent_output.pubkey_hash);
+-                self.addr_index.remove(slot, &key);
++                self.addr_index
++                    .remove(slot, &key)
++                    .expect("writable address index");
+             }
+         }
+
+@@ -134,7 +137,7 @@ impl UtxoState {
+     ) -> Vec<OutPoint> {
+         let slot = addr_slot(pubkey_hash);
+         self.addr_index
+-            .get_entries_by_page_slot(Some(slot), Some(slot), page_size, page_index, false)
++            .page(slot..=slot, page_size, page_index, Order::Asc)
+             .into_iter()
+             .map(|key| OutPoint::from_key(&key))
+             .collect()
+@@ -143,9 +146,7 @@ impl UtxoState {
+     /// Get the total balance for an address (sum of all its UTXO values).
+     pub fn get_balance(&self, pubkey_hash: &[u8; 32]) -> u64 {
+         let slot = addr_slot(pubkey_hash);
+-        let keys =
+-            self.addr_index
+-                .get_entries_by_page_slot(Some(slot), Some(slot), u16::MAX, 0, false);
++        let keys = self.addr_index.page(slot..=slot, u16::MAX, 0, Order::Asc);
+         let branch = self.main_branch;
+         keys.iter()
+             .filter_map(|key| self.utxos.map().get(branch, key).ok().flatten())
+diff --git a/crates/hotmint-storage/tests/vsdb_process.rs b/crates/hotmint-storage/tests/vsdb_process.rs
+new file mode 100644
+index 0000000..5247941
+--- /dev/null
++++ b/crates/hotmint-storage/tests/vsdb_process.rs
+@@ -0,0 +1,165 @@
++//! Cross-process probe; the same store operations run against v16 and v17.
++use hotmint_consensus::{evidence_store::EvidenceStore, store::BlockStore};
++use hotmint_storage::{
++    block_store::VsdbBlockStore, consensus_state::PersistentConsensusState,
++    evidence_store::PersistentEvidenceStore,
++};
++use hotmint_types::{
++    AggregateSignature, Block, BlockHash, EndBlockResponse, Epoch, EpochNumber, Height,
++    QuorumCertificate, Signature, ValidatorId, ValidatorSet, ViewNumber,
++    evidence::EquivocationProof, vote::VoteType,
++};
++use std::{path::Path, process::Command};
++
++fn block(n: u64) -> Block {
++    let hash = |x: u64| BlockHash(*blake3::hash(&x.to_le_bytes()).as_bytes());
++    Block {
++        height: Height(n),
++        parent_hash: if n == 1 {
++            Block::genesis().hash
++        } else {
++            hash(n - 1)
++        },
++        view: ViewNumber(n),
++        proposer: ValidatorId(n % 4),
++        timestamp: n * 100,
++        payload: n.to_le_bytes().to_vec(),
++        app_hash: hash(n + 1000),
++        evidence: vec![],
++        hash: hash(n),
++    }
++}
++fn qc(b: &Block) -> QuorumCertificate {
++    QuorumCertificate {
++        block_hash: b.hash,
++        view: b.view,
++        aggregate_signature: AggregateSignature::new(4),
++        epoch: EpochNumber(0),
++    }
++}
++fn evidence(n: u64) -> EquivocationProof {
++    EquivocationProof {
++        validator: ValidatorId(n),
++        view: ViewNumber(n),
++        vote_type: VoteType::Vote,
++        epoch: EpochNumber(0),
++        block_hash_a: BlockHash([1; 32]),
++        signature_a: Signature(vec![1; 64]),
++        extension_a: None,
++        block_hash_b: BlockHash([2; 32]),
++        signature_b: Signature(vec![2; 64]),
++        extension_b: None,
++    }
++}
++fn phase(dir: &Path, phase: &str) {
++    let options = if phase == "read-only" {
++        vsdb::VsdbOptions::read_only(dir.join("db"))
++    } else {
++        vsdb::VsdbOptions::new(dir.join("db"))
++    };
++    vsdb::vsdb_configure(options).unwrap();
++    let mut blocks = VsdbBlockStore::open(dir).unwrap();
++    let mut state = PersistentConsensusState::open(dir).unwrap();
++    let mut proofs = PersistentEvidenceStore::open(dir).unwrap();
++    if phase == "seed" || phase == "append" {
++        let (lo, hi) = if phase == "seed" {
++            (1, 128)
++        } else {
++            (129, 129)
++        };
++        for n in lo..=hi {
++            let b = block(n);
++            blocks.put_block(b.clone());
++            blocks.put_commit_qc(Height(n), qc(&b));
++            blocks.put_tx_index(b.hash.0, Height(n), (n % 8) as u32);
++            blocks.put_block_results(
++                Height(n),
++                EndBlockResponse {
++                    app_hash: b.app_hash,
++                    ..Default::default()
++                },
++            );
++        }
++        state.save_current_view(ViewNumber(hi + 1));
++        state.save_locked_qc(&qc(&block(hi)));
++        state.save_highest_qc(&qc(&block(hi)));
++        state.save_last_committed_height(Height(hi));
++        state.save_last_app_hash(block(hi).app_hash);
++        state.save_current_epoch(&Epoch::genesis(ValidatorSet::new(vec![])));
++        state.save_previous_epoch(Some(&Epoch::genesis(ValidatorSet::new(vec![]))));
++        state.save_pending_epoch(Some(&Epoch::genesis(ValidatorSet::new(vec![]))));
++        if phase == "seed" {
++            proofs.put_evidence(evidence(1));
++            proofs.put_evidence(evidence(2));
++        } else {
++            proofs.mark_committed(ViewNumber(1), ValidatorId(1));
++            proofs.put_evidence(evidence(3));
++            state.save_pending_epoch(None);
++        }
++        blocks.flush();
++        state.flush();
++        proofs.flush();
++    }
++    let hi = if phase == "append" || phase == "read-appended" {
++        129
++    } else {
++        128
++    };
++    assert_eq!(blocks.tip_height(), Height(hi));
++    for n in 1..=hi {
++        let b = block(n);
++        assert_eq!(
++            postcard::to_allocvec(&blocks.get_block(&b.hash).unwrap()).unwrap(),
++            postcard::to_allocvec(&b).unwrap()
++        );
++        assert_eq!(blocks.get_block_by_height(Height(n)).unwrap().hash, b.hash);
++        assert_eq!(blocks.get_commit_qc(Height(n)).unwrap().block_hash, b.hash);
++        assert_eq!(
++            blocks.get_tx_location(&b.hash.0),
++            Some((Height(n), (n % 8) as u32))
++        );
++        assert_eq!(
++            blocks.get_block_results(Height(n)).unwrap().app_hash,
++            b.app_hash
++        );
++    }
++    assert_eq!(blocks.get_blocks_in_range(Height(17), Height(31)).len(), 15);
++    assert_eq!(state.load_current_view(), Some(ViewNumber(hi + 1)));
++    assert_eq!(state.load_locked_qc().unwrap().block_hash, block(hi).hash);
++    assert_eq!(state.load_highest_qc().unwrap().block_hash, block(hi).hash);
++    assert_eq!(state.load_last_committed_height(), Some(Height(hi)));
++    assert_eq!(state.load_last_app_hash(), Some(block(hi).app_hash));
++    assert_eq!(state.load_current_epoch().unwrap().number, EpochNumber(0));
++    assert!(state.load_previous_epoch().is_some());
++    assert_eq!(state.load_pending_epoch().is_some(), hi == 128);
++    let mut pending: Vec<_> = proofs.get_pending().iter().map(|p| p.validator.0).collect();
++    pending.sort();
++    assert_eq!(pending, if hi == 128 { vec![1, 2] } else { vec![2, 3] });
++    println!("PROBE phase={phase} height={hi}");
++    // Simulate an exit that skips Rust destructors after explicit durability.
++    std::process::exit(0);
++}
++#[test]
++fn storage_process_boundary() {
++    if let Ok(action) = std::env::var("HOTMINT_VSDB_PHASE") {
++        phase(
++            Path::new(&std::env::var("HOTMINT_VSDB_DIR").unwrap()),
++            &action,
++        );
++    }
++    let dir = tempfile::tempdir().unwrap();
++    for action in ["seed", "read", "read-only", "append", "read-appended"] {
++        let result = Command::new(std::env::current_exe().unwrap())
++            .args(["--exact", "storage_process_boundary", "--nocapture"])
++            .env("HOTMINT_VSDB_PHASE", action)
++            .env("HOTMINT_VSDB_DIR", dir.path())
++            .output()
++            .unwrap();
++        assert!(
++            result.status.success(),
++            "{action}: {}{}",
++            String::from_utf8_lossy(&result.stdout),
++            String::from_utf8_lossy(&result.stderr)
++        );
++    }
++}
+diff --git a/examples/utxo-chain/tests/vsdb_history.rs b/examples/utxo-chain/tests/vsdb_history.rs
+new file mode 100644
+index 0000000..f3b81f8
+--- /dev/null
++++ b/examples/utxo-chain/tests/vsdb_history.rs
+@@ -0,0 +1,110 @@
++//! Real Hotmint key/value types persisted through VSDB version changes.
++use std::{path::PathBuf, process::Command};
++use utxo_chain::{OutPoint, TxOutput};
++use vsdb::{SmtCalc, VerMap, VerMapWithProof};
++
++fn key(n: u8) -> [u8; 36] {
++    OutPoint {
++        txid: [n; 32],
++        vout: n as u32,
++    }
++    .to_key()
++}
++fn phase(dir: PathBuf, phase: &str) {
++    let mut proof = if phase == "seed" {
++        VerMapWithProof::<[u8; 36], TxOutput, SmtCalc>::new()
++    } else {
++        let bytes = std::fs::read(dir.join("map-id")).unwrap();
++        let id = u64::from_le_bytes(bytes.try_into().unwrap());
++        VerMapWithProof::from_map(VerMap::from_meta(id).unwrap())
++    };
++    let branch = proof.map().main_branch();
++    if phase == "seed" {
++        for n in 0..64 {
++            proof
++                .map_mut()
++                .insert(
++                    branch,
++                    &key(n),
++                    &TxOutput {
++                        value: n as u64 + 100,
++                        pubkey_hash: [n % 4; 32],
++                    },
++                )
++                .unwrap();
++        }
++        proof.map_mut().commit(branch).unwrap();
++        let id = proof.map().save_meta().unwrap().map_id;
++        std::fs::write(dir.join("map-id"), id.to_le_bytes()).unwrap();
++    }
++    if phase == "append" {
++        proof.map_mut().remove(branch, &key(0)).unwrap();
++        proof
++            .map_mut()
++            .insert(
++                branch,
++                &key(64),
++                &TxOutput {
++                    value: 100,
++                    pubkey_hash: [0; 32],
++                },
++            )
++            .unwrap();
++        proof.map_mut().commit(branch).unwrap();
++    }
++    let added = phase == "append" || phase == "read-appended";
++    let mut oracle = SmtCalc::from_entries((u8::from(added)..64 + u8::from(added)).map(|n| {
++        (
++            key(n).to_vec(),
++            postcard::to_allocvec(&TxOutput {
++                value: if n == 64 { 100 } else { n as u64 + 100 },
++                pubkey_hash: [n % 4; 32],
++            })
++            .unwrap(),
++        )
++    }))
++    .unwrap();
++    let root: [u8; 32] = proof.merkle_root(branch).unwrap().try_into().unwrap();
++    assert_eq!(root.as_slice(), oracle.root_hash().unwrap());
++    for n in 0..=64 {
++        let p = proof.prove(&key(n)).unwrap();
++        assert!(SmtCalc::verify_proof(&root, &key(n), &p).unwrap());
++        assert_eq!(p.value().is_some(), if added { n > 0 } else { n < 64 });
++    }
++    let root_file = dir.join(if added { "root-after" } else { "root-before" });
++    if phase == "seed" || phase == "append" {
++        std::fs::write(root_file, root).unwrap();
++    } else {
++        assert_eq!(std::fs::read(root_file).unwrap(), root);
++    }
++    vsdb::vsdb_flush();
++    println!("HISTORY phase={phase} root={root:02x?}");
++    std::process::exit(0);
++}
++#[test]
++fn versioned_utxo_process_boundary() {
++    if let Ok(action) = std::env::var("HOTMINT_VSDB_PHASE") {
++        phase(
++            PathBuf::from(std::env::var("HOTMINT_VSDB_DIR").unwrap()),
++            &action,
++        );
++    }
++    let dir = std::env::temp_dir().join(format!("hotmint-vsdb-history-{}", std::process::id()));
++    std::fs::create_dir(&dir).unwrap();
++    for action in ["seed", "read", "append", "read-appended"] {
++        let out = Command::new(std::env::current_exe().unwrap())
++            .args(["--exact", "versioned_utxo_process_boundary", "--nocapture"])
++            .env("HOTMINT_VSDB_PHASE", action)
++            .env("HOTMINT_VSDB_DIR", &dir)
++            .env("VSDB_BASE_DIR", dir.join("db"))
++            .output()
++            .unwrap();
++        assert!(
++            out.status.success(),
++            "{action}: {}{}",
++            String::from_utf8_lossy(&out.stdout),
++            String::from_utf8_lossy(&out.stderr)
++        );
++    }
++    std::fs::remove_dir_all(dir).unwrap();
++}
+diff --git a/examples/utxo-chain/tests/vsdb_workload.rs b/examples/utxo-chain/tests/vsdb_workload.rs
+new file mode 100644
+index 0000000..fde42b7
+--- /dev/null
++++ b/examples/utxo-chain/tests/vsdb_workload.rs
+@@ -0,0 +1,152 @@
++//! Workload shared by the v16 baseline and local v17 evaluation.
++use std::{collections::BTreeMap, time::Instant};
++use utxo_chain::{OutPoint, TxInput, TxOutput, UtxoTx, utxo_state::UtxoState};
++use vsdb::SmtCalc;
++
++fn outpoint(n: u64) -> OutPoint {
++    OutPoint {
++        txid: *blake3::hash(&n.to_le_bytes()).as_bytes(),
++        vout: 0,
++    }
++}
++
++fn spend(old: OutPoint, owner: u8) -> UtxoTx {
++    UtxoTx {
++        inputs: vec![TxInput {
++            prev_out: old,
++            signature: vec![],
++            pubkey: [0; 32],
++        }],
++        outputs: vec![TxOutput {
++            value: 100,
++            pubkey_hash: [owner; 32],
++        }],
++    }
++}
++
++#[test]
++fn utxo_spends_pages_roots_and_proofs_match_an_independent_model() {
++    let mut state = UtxoState::new();
++    let mut expected = BTreeMap::new();
++    for n in 0..128 {
++        let point = outpoint(n);
++        let output = TxOutput {
++            value: 100,
++            pubkey_hash: [(n % 4) as u8; 32],
++        };
++        state.insert_genesis_utxo(point.txid, point.vout, output.clone());
++        expected.insert(point.to_key(), output);
++    }
++    for block in 0..9 {
++        if block > 0 {
++            for n in (block - 1) * 8..block * 8 {
++                let old = outpoint(n);
++                let new = outpoint(1000 + n);
++                let tx = spend(old.clone(), ((n + 1) % 4) as u8);
++                state.apply_tx(&tx, &new.txid);
++                expected.remove(&old.to_key());
++                expected.insert(new.to_key(), tx.outputs[0].clone());
++                assert!(state.get_utxo(&old).is_none());
++            }
++        }
++        // Check the dirty state too, then the committed state.
++        let mut oracle = SmtCalc::from_entries(
++            expected
++                .iter()
++                .map(|(k, v)| (k.to_vec(), postcard::to_allocvec(v).unwrap())),
++        )
++        .unwrap();
++        let expected_root = oracle.root_hash().unwrap();
++        assert_eq!(state.utxo_root().unwrap(), expected_root);
++        state.commit().unwrap();
++        let root: [u8; 32] = state.utxo_root().unwrap().try_into().unwrap();
++        assert_eq!(root.as_slice(), expected_root);
++        assert_eq!(state.total_supply(), 12_800);
++        for owner in 0..4 {
++            let keys: Vec<_> = expected
++                .iter()
++                .filter(|(_, v)| v.pubkey_hash == [owner; 32])
++                .map(|(k, _)| *k)
++                .collect();
++            assert_eq!(state.get_balance(&[owner; 32]), keys.len() as u64 * 100);
++            for (page, chunk) in keys.chunks(7).enumerate() {
++                assert_eq!(
++                    state
++                        .get_utxos_by_address(&[owner; 32], page as u32, 7)
++                        .iter()
++                        .map(OutPoint::to_key)
++                        .collect::<Vec<_>>(),
++                    chunk
++                );
++            }
++            assert!(
++                state
++                    .get_utxos_by_address(&[owner; 32], keys.len().div_ceil(7) as u32, 7)
++                    .is_empty()
++            );
++        }
++        for n in [0, 63, 127, 1000, 1063, 9999] {
++            let key = outpoint(n).to_key();
++            let proof = state.prove_utxo(&OutPoint::from_key(&key)).unwrap();
++            assert!(SmtCalc::verify_proof(&root, &key, &proof).unwrap());
++            assert_eq!(
++                proof.value(),
++                expected
++                    .get(&key)
++                    .map(|v| postcard::to_allocvec(v).unwrap())
++                    .as_deref()
++            );
++        }
++    }
++}
++
++#[test]
++#[ignore = "explicit release-mode performance probe"]
++fn utxo_block_cost() {
++    let sizes: Vec<u64> = std::env::var("HOTMINT_UTXO_SIZES")
++        .unwrap_or_else(|_| "128,2048,8192".into())
++        .split(',')
++        .map(|s| s.parse().unwrap())
++        .collect();
++    for size in sizes {
++        let mut state = UtxoState::new();
++        let started = Instant::now();
++        for n in 0..size {
++            let point = outpoint(n);
++            state.insert_genesis_utxo(
++                point.txid,
++                0,
++                TxOutput {
++                    value: 100,
++                    pubkey_hash: [1; 32],
++                },
++            );
++        }
++        state.commit().unwrap();
++        state.utxo_root().unwrap();
++        let setup_us = started.elapsed().as_micros();
++        let mut mutation = Vec::new();
++        let mut commit = Vec::new();
++        let mut root = Vec::new();
++        for n in 0..20 {
++            let started = Instant::now();
++            state.apply_tx(&spend(outpoint(n), 2), &outpoint(size + n).txid);
++            mutation.push(started.elapsed().as_micros());
++            let started = Instant::now();
++            state.commit().unwrap();
++            commit.push(started.elapsed().as_micros());
++            let started = Instant::now();
++            let hash: [u8; 32] = state.utxo_root().unwrap().try_into().unwrap();
++            root.push(started.elapsed().as_micros());
++            let point = outpoint(size + n);
++            assert!(
++                SmtCalc::verify_proof(&hash, &point.to_key(), &state.prove_utxo(&point).unwrap())
++                    .unwrap()
++            );
++        }
++        println!(
++            "PERF {}",
++            serde_json::json!({"rows":size,"setup_us":setup_us,"mutation_us":mutation,"commit_us":commit,"root_us":root})
++        );
++    }
++}

@@ -12,7 +12,7 @@ stateless compute + disk cache; VerMapWithProof integration.
 **T2 MPT nibbles** — high `>>4`, low `&0x0F`; path len 2×bytes; consistent all ops.
 **T3 SMT defaults** — JMT-style compressed tree: every empty subtree is `EMPTY_HASH = [0; 32]`, at every depth; `hash_internal(EMPTY_HASH, EMPTY_HASH)` returns `EMPTY_HASH`. Construction and proof folding must use the same rule.
 **T4 Hash det** — same logical state → same root; extensions max-compressed.
-**T5 Cache version** — one file per map (`{mpt,smt}_cache_<map_id>.bin`) stamped with the synced CommitId; in-memory sync point = (owning InstanceId, branch, commit, dirty applied). Map replacement invalidates all cached state before sync shortcuts; Drop never saves across an identity mismatch. Stamp/root mismatch or diff failure → rebuild, never silent stale.
+**T5 Cache version** — one file per map (`{mpt,smt}_cache_<map_id>.bin`) stamped with the synced CommitId; in-memory sync point = (owning InstanceId, branch, commit, dirty applied). Map replacement invalidates all cached state before sync shortcuts; a cached historical root still requires a live commit. `save_cache(commit)` is the only wrapper cache-write boundary; root calculation and Drop never save implicitly. Stamp/root mismatch or diff failure → rebuild, never silent stale.
 **T6 Non-exist proofs** — MPT: empty slot, leaf-path mismatch, or divergent extension. SMT: empty subtree or a foreign lone leaf sharing the proven prefix.
 **T7 Cache trust boundary** — loaders validate whole-tree shape (depth/nibble budget,
 leaf placement, hash len), recompute cached hashes, reject trailing/mixed/oversize;
