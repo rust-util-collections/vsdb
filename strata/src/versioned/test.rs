@@ -4258,3 +4258,45 @@ fn history_errors_are_matchable() {
             if commit_id == on_feat.raw() && branch_id == main.raw()
     ));
 }
+
+#[test]
+fn raw_iter_yields_the_stored_encodings() {
+    use crate::common::ende::{KeyEnDeOrdered, ValueEnDe};
+    let mut m: VerMap<u32, String> = VerMap::new();
+    let main = m.main_branch();
+    m.insert(main, &2, &"b".into()).unwrap();
+    m.insert(main, &1, &"a".into()).unwrap();
+    let c = m.commit(main).unwrap();
+    let raw: Vec<_> = m.at(c).unwrap().raw_iter().collect();
+    assert_eq!(
+        raw,
+        vec![
+            (1u32.to_bytes(), "a".to_string().encode()),
+            (2u32.to_bytes(), "b".to_string().encode()),
+        ]
+    );
+    assert_eq!(m.snapshot(main).unwrap().raw_iter().count(), 2);
+}
+
+#[test]
+fn standalone_tree_diff_and_merge_are_public() {
+    use crate::basic::persistent_btree::{EMPTY_ROOT, PersistentBTree, TreeDiff};
+    let mut t = PersistentBTree::new();
+    let base = t.insert(EMPTY_ROOT, b"k", b"0");
+    t.acquire_node(base);
+    let src = t.insert(base, b"s", b"1");
+    t.acquire_node(src);
+    let tgt = t.insert(base, b"t", b"2");
+    t.acquire_node(tgt);
+    assert_eq!(
+        t.diff(base, src),
+        vec![TreeDiff::Added {
+            key: b"s".to_vec(),
+            value: b"1".to_vec()
+        }]
+    );
+    let merged = t.merge(&[base], src, tgt);
+    t.acquire_node(merged);
+    let all: Vec<_> = t.iter(merged).map(|(k, _)| k).collect();
+    assert_eq!(all, vec![b"k".to_vec(), b"s".to_vec(), b"t".to_vec()]);
+}

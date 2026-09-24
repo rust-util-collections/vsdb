@@ -25,12 +25,15 @@
 #[cfg(test)]
 mod test;
 
+mod diff;
 mod insert;
 mod iter;
+mod merge;
 mod nodes;
 mod remove;
 mod types;
 
+pub use diff::TreeDiff;
 pub use iter::BTreeIter;
 
 use crate::common::{InstanceId, error::Result};

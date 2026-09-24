@@ -11,11 +11,12 @@
 //! time.  A transparent on-disk cache avoids full rebuilds on restart.
 
 use crate::{
+    basic::persistent_btree::TreeDiff,
     common::{
         ende::{KeyEnDeOrdered, ValueEnDe},
         error::Result,
     },
-    versioned::{BranchId, CommitId, diff::RawDiff, map::VerMap},
+    versioned::{BranchId, CommitId, map::VerMap},
 };
 
 use super::{MptCalc, MptProof, SmtCalc, SmtProof, TrieCalc};
@@ -314,15 +315,15 @@ where
     }
 
     /// Apply a diff to the current trie.
-    fn apply_diff(&mut self, diff: &[RawDiff]) -> Result<()> {
+    fn apply_diff(&mut self, diff: &[TreeDiff]) -> Result<()> {
         let ops: Vec<(&[u8], Option<&[u8]>)> = diff
             .iter()
             .map(|entry| match entry {
-                RawDiff::Added { key, value } => {
+                TreeDiff::Added { key, value } => {
                     (key.as_slice(), Some(value.as_slice()))
                 }
-                RawDiff::Removed { key, .. } => (key.as_slice(), None),
-                RawDiff::Modified { key, new_value, .. } => {
+                TreeDiff::Removed { key, .. } => (key.as_slice(), None),
+                TreeDiff::Modified { key, new_value, .. } => {
                     (key.as_slice(), Some(new_value.as_slice()))
                 }
             })

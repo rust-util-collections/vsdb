@@ -3,13 +3,10 @@
 //! merge support, modelled after Git semantics.
 //!
 
-use super::{
-    BranchId, Commit, CommitId, NO_COMMIT,
-    diff::{DiffEntry, RawDiff, diff_roots},
-};
+use super::{BranchId, Commit, CommitId, NO_COMMIT, diff::DiffEntry};
 use crate::{
     Mapx, MapxOrd, Orphan,
-    basic::persistent_btree::{EMPTY_ROOT, NodeId, PersistentBTree},
+    basic::persistent_btree::{EMPTY_ROOT, NodeId, PersistentBTree, TreeDiff},
     common::{
         Colocate, InstanceId,
         ende::{KeyEnDeOrdered, OrderedKeyRef, ValueEnDe},
@@ -356,22 +353,25 @@ impl<K, V> VerMap<K, V> {
         &self,
         from: CommitId,
         to: CommitId,
-    ) -> Result<Vec<RawDiff>> {
+    ) -> Result<Vec<TreeDiff>> {
         let from_commit = self.get_commit_inner(from)?;
         let to_commit = self.get_commit_inner(to)?;
-        Ok(diff_roots(&self.tree, from_commit.root, to_commit.root))
+        Ok(self.tree.diff(from_commit.root, to_commit.root))
     }
 
     /// Raw-bytes diff of `branch`'s working state against its head (see
     /// [`diff_uncommitted`](VerMap::diff_uncommitted)).
-    pub(crate) fn raw_diff_uncommitted(&self, branch: BranchId) -> Result<Vec<RawDiff>> {
+    pub(crate) fn raw_diff_uncommitted(
+        &self,
+        branch: BranchId,
+    ) -> Result<Vec<TreeDiff>> {
         let state = self.get_branch(branch)?;
         let head_root = if state.head == NO_COMMIT {
             EMPTY_ROOT
         } else {
             self.get_commit_inner(state.head)?.root
         };
-        Ok(diff_roots(&self.tree, head_root, state.dirty_root))
+        Ok(self.tree.diff(head_root, state.dirty_root))
     }
 
     pub(crate) fn begin_ref_update(&mut self) {
@@ -1075,12 +1075,9 @@ where
             ancestor_roots
         };
 
-        let merged_root = super::merge::three_way_merge_many_bases(
-            &mut self.tree,
-            &ancestor_roots,
-            src_commit.root,
-            tgt_commit.root,
-        );
+        let merged_root =
+            self.tree
+                .merge(&ancestor_roots, src_commit.root, tgt_commit.root);
 
         // Order the complete merged tree before publishing its root.
         self.fence(|m| m.tree.nodes.sync_wal());

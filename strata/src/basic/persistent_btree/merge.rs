@@ -39,7 +39,7 @@
 //! single-sided or non-conflicting updates determined by ancestor
 //! comparison. The caller controls priority by choosing which branch
 //! to pass as `source` vs `target` in
-//! [`VerMap::merge(source, target)`](super::map::VerMap::merge).
+//! [`VerMap::merge(source, target)`](crate::versioned::map::VerMap::merge).
 //!
 
 //! ## Implementation: replay the source delta onto the target
@@ -55,8 +55,10 @@
 
 use std::collections::BTreeMap;
 
-use super::diff::{RawDiff, diff_walk};
-use crate::basic::persistent_btree::{EMPTY_ROOT, NodeId, PersistentBTree};
+use super::{
+    EMPTY_ROOT, NodeId, PersistentBTree,
+    diff::{TreeDiff, diff_walk},
+};
 
 /// Performs a three-way merge.
 ///
@@ -69,7 +71,7 @@ use crate::basic::persistent_btree::{EMPTY_ROOT, NodeId, PersistentBTree};
 /// Like [`PersistentBTree::bulk_load`], a newly built result root is
 /// returned **unowned**: the caller adopts it with
 /// [`PersistentBTree::acquire_node`].
-pub(crate) fn three_way_merge(
+fn three_way_merge(
     tree: &mut PersistentBTree,
     ancestor_root: NodeId,
     source_root: NodeId,
@@ -102,7 +104,7 @@ pub(crate) fn three_way_merge(
 /// A key whose bases disagree necessarily differs from at least one base
 /// on the source side, so replaying the union of the per-base source
 /// deltas yields exactly that rule.
-pub(crate) fn three_way_merge_many_bases(
+fn three_way_merge_many_bases(
     tree: &mut PersistentBTree,
     ancestor_roots: &[NodeId],
     source_root: NodeId,
@@ -135,15 +137,15 @@ fn source_changes(
     let mut changes = BTreeMap::new();
     for &base in bases {
         diff_walk(tree, base, source, |entry| match entry {
-            RawDiff::Added { key, value }
-            | RawDiff::Modified {
+            TreeDiff::Added { key, value }
+            | TreeDiff::Modified {
                 key,
                 new_value: value,
                 ..
             } => {
                 changes.insert(key, Some(value));
             }
-            RawDiff::Removed { key, .. } => {
+            TreeDiff::Removed { key, .. } => {
                 changes.insert(key, None);
             }
         });
@@ -190,4 +192,22 @@ fn replay(
         tree.disown_node(root);
     }
     root
+}
+
+impl PersistentBTree {
+    /// Three-way merge of `source` into `target` against one or more merge
+    /// bases, **source wins** on conflicts (a deletion counts as a change;
+    /// see [`VerMap::merge`](crate::versioned::map::VerMap::merge) for the
+    /// full decision table). With several bases, a key whose bases
+    /// disagree takes the source state.
+    ///
+    /// The source-side delta is replayed onto `target` by copy-on-write:
+    /// cost and memory follow the change set, and untouched subtrees stay
+    /// shared with `target`. A newly built result root is returned
+    /// **unowned** (like [`bulk_load`](Self::bulk_load)) — adopt it with
+    /// [`acquire_node`](Self::acquire_node); when nothing changes, an
+    /// existing root (`target` or `source`) is returned as is.
+    pub fn merge(&mut self, bases: &[NodeId], source: NodeId, target: NodeId) -> NodeId {
+        three_way_merge_many_bases(self, bases, source, target)
+    }
 }

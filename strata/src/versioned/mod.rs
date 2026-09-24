@@ -44,7 +44,6 @@
 
 pub(crate) mod diff;
 pub mod map;
-pub(crate) mod merge;
 
 mod read;
 mod repair;

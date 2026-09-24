@@ -1255,10 +1255,6 @@ fn write_buffer_bulk_load_across_flush_chunks() {
 
 mod diff_merge {
     use super::*;
-    use crate::versioned::{
-        diff::{RawDiff, diff_roots},
-        merge::{three_way_merge, three_way_merge_many_bases},
-    };
     use std::collections::BTreeMap;
 
     /// Deterministic xorshift64, so failures reproduce from the seed.
@@ -1314,22 +1310,22 @@ mod diff_merge {
         tree.iter(root).collect()
     }
 
-    fn naive_diff(tree: &PersistentBTree, old: NodeId, new: NodeId) -> Vec<RawDiff> {
+    fn naive_diff(tree: &PersistentBTree, old: NodeId, new: NodeId) -> Vec<TreeDiff> {
         let (a, b) = (contents(tree, old), contents(tree, new));
         let mut keys: Vec<&Vec<u8>> = a.keys().chain(b.keys()).collect();
         keys.sort();
         keys.dedup();
         keys.into_iter()
             .filter_map(|k| match (a.get(k), b.get(k)) {
-                (Some(v), None) => Some(RawDiff::Removed {
+                (Some(v), None) => Some(TreeDiff::Removed {
                     key: k.clone(),
                     value: v.clone(),
                 }),
-                (None, Some(v)) => Some(RawDiff::Added {
+                (None, Some(v)) => Some(TreeDiff::Added {
                     key: k.clone(),
                     value: v.clone(),
                 }),
-                (Some(o), Some(n)) if o != n => Some(RawDiff::Modified {
+                (Some(o), Some(n)) if o != n => Some(TreeDiff::Modified {
                     key: k.clone(),
                     old_value: o.clone(),
                     new_value: n.clone(),
@@ -1388,11 +1384,7 @@ mod diff_merge {
                 (a, EMPTY_ROOT),
                 (a, a),
             ] {
-                assert_eq!(
-                    diff_roots(&tree, x, y),
-                    naive_diff(&tree, x, y),
-                    "seed {seed}"
-                );
+                assert_eq!(tree.diff(x, y), naive_diff(&tree, x, y), "seed {seed}");
             }
         }
     }
@@ -1407,7 +1399,7 @@ mod diff_merge {
         tree.acquire_node(changed);
 
         NODE_READS.with(|c| c.set(0));
-        let d = diff_roots(&tree, base, changed);
+        let d = tree.diff(base, changed);
         let reads = NODE_READS.with(|c| c.get());
         assert_eq!(d.len(), 1);
         // Two root-to-leaf paths plus the height probes — not a full scan
@@ -1429,7 +1421,7 @@ mod diff_merge {
             let tgt = derive(&mut tree, base, 1 + rng.below(space), space, &mut rng);
 
             let expected = reference_merge(&tree, &[base], src, tgt);
-            let merged = three_way_merge(&mut tree, base, src, tgt);
+            let merged = tree.merge(&[base], src, tgt);
             tree.acquire_node(merged);
             assert_eq!(contents(&tree, merged), expected, "seed {seed}");
             tree.assert_refs_match_recount(&[base, src, tgt, merged]);
@@ -1437,7 +1429,7 @@ mod diff_merge {
             // Criss-cross: two disagreeing bases.
             let b2 = derive(&mut tree, base, 1 + rng.below(space), space, &mut rng);
             let expected = reference_merge(&tree, &[base, b2], src, tgt);
-            let merged2 = three_way_merge_many_bases(&mut tree, &[base, b2], src, tgt);
+            let merged2 = tree.merge(&[base, b2], src, tgt);
             tree.acquire_node(merged2);
             assert_eq!(
                 contents(&tree, merged2),
@@ -1465,7 +1457,7 @@ mod diff_merge {
         tree.acquire_node(tgt);
 
         let before = tree.nodes.iter().count();
-        let merged = three_way_merge(&mut tree, base, src, tgt);
+        let merged = tree.merge(&[base], src, tgt);
         tree.acquire_node(merged);
         let written = tree.nodes.iter().count() - before;
         assert_eq!(tree.get(merged, &key(1)).unwrap(), b"s");

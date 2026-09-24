@@ -82,10 +82,13 @@ where
             .map(decode_entry)
     }
 
-    /// Iterates raw `(key, value)` bytes without decoding.
-    pub(crate) fn raw_iter(
-        &self,
-    ) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + use<'a, K, V> {
+    /// Iterates the stored `(key, value)` bytes in ascending key order,
+    /// without decoding — e.g. to feed an external hasher or exporter.
+    ///
+    /// Keys are the [`KeyEnDeOrdered`] encoding of `K`, values the
+    /// [`ValueEnDe`] encoding of `V`; the same state always yields the
+    /// same bytes.
+    pub fn raw_iter(&self) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + use<'a, K, V> {
         self.map.tree.iter(self.root)
     }
 }
