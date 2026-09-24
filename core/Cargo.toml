@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_core"
-version = "17.0.2"
+version = "17.0.3"
 authors = ["hui.fan@mail.ru"]
 edition = "2024"
 rust-version = "1.89"

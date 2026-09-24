@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v17.0.3]
+
+Pre-release v17 corrections from Hotmint integration testing. No persisted
+collection layout changes; existing trie cache files remain readable.
+
+### Fixed
+
+- Merkle root queries reject reclaimed commits even when an in-memory or
+  on-disk trie cache still names that commit. Both MPT and SMT now return
+  `CommitNotFound` consistently with the underlying versioned map.
+
+### Changed
+
+- `VerMapWithProof` saves its disposable disk cache only through the explicit
+  `save_cache(commit)` checkpoint. Root calculation and `Drop` no longer
+  serialize the whole state or hide cache I/O failures. Applications choose
+  checkpoint frequency and handle errors; construction still loads existing
+  caches and catches up or rebuilds when necessary. Call `merkle_root(branch)`
+  after saving a historical commit before proving the branch's working state.
+
 ## [v17.0.2]
 
 Pre-release corrections; v17 has not been published. No v16 data migration
