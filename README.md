@@ -102,8 +102,8 @@ for (key, value) in map.iter() {
 Configuration is one-shot and process-wide: call it before any other VSDB
 access, and every automatically opened namespace inherits read-only mode.
 Reads include in-memory WAL recovery; creation and mutation are unavailable,
-while maintenance writes such as flushes and automatic trie-cache saves are
-skipped. See the [read-only mode guide](strata/docs/read-only.md) for locking,
+while maintenance writes such as flushes are skipped. Explicit trie-cache
+saves return a read-only error. See the [read-only mode guide](strata/docs/read-only.md) for locking,
 snapshots, error/panic behavior, and recovery constraints.
 
 ### Memory sizing
@@ -172,7 +172,7 @@ vsdb (workspace)
        +----------------+-----------+
 ```
 
-`VerMapWithProof` wraps a `VerMap` and a trie back-end (`MptCalc` or `SmtCalc`). On each `merkle_root()` call it computes an incremental diff from the last sync point and applies it to the trie, avoiding full rebuilds. A disposable on-disk cache makes restarts cheap.
+`VerMapWithProof` wraps a `VerMap` and a trie back-end (`MptCalc` or `SmtCalc`). On each `merkle_root()` call it computes an incremental diff from the last sync point and applies it to the trie, avoiding full rebuilds. An optional `save_cache(commit)` checkpoint makes restarts cheaper; construction loads it automatically. Root computation and `Drop` never rewrite the full cache.
 
 `SmtCalc` additionally supports `prove()` / `verify_proof()` for compact (O(log N)-hash, Diem/JMT-style) membership and non-membership proofs.
 

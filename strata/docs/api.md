@@ -115,7 +115,7 @@ assert!(matches!(
 The setting covers every namespace opened by the process. Query APIs and
 in-memory WAL recovery are supported without filesystem changes. Fallible
 write APIs return `VsdbError::ReadOnly`, infallible collection mutations panic,
-maintenance-only flush/GC/automatic cache writes are skipped, and explicit
+maintenance-only flush/GC writes are skipped, and explicit
 trie-cache saves return the capability error. See the
 [read-only mode guide](read-only.md) for the full operation matrix,
 locking and snapshot rules, and recovery constraints.
@@ -293,16 +293,23 @@ let main = vmp.map().main_branch();
 
 // Write data and commit
 vmp.map_mut().insert(main, &b"key1".to_vec(), &b"val1".to_vec()).unwrap();
-vmp.map_mut().commit(main).unwrap();
+let commit = vmp.map_mut().commit(main).unwrap();
 
 // Compute the Merkle root (incrementally maintained)
 let root = vmp.merkle_root(main).unwrap();
 assert_eq!(root.len(), 32);
 
-// Committed trie state is cached during synchronization; Drop retries failed saves.
-// Construction automatically loads an available cache.
-// No manual save_cache / load_cache calls needed.
+// Optional application checkpoint: serializes the entire trie, so do this
+// periodically rather than on every block. Errors are returned to the caller.
+vmp.save_cache(commit).unwrap();
+// Construction automatically loads an available cache; missing/stale caches
+// are rebuilt/caught up. Root calculation and Drop never save cache files.
 ```
+
+`save_cache(commit)` synchronizes proofs to the selected committed state,
+excluding dirty changes. Call `merkle_root(branch)` again before proving the
+branch working state. Historical root queries return `CommitNotFound` for
+reclaimed commits, even if a matching trie cache remains.
 
 ## Slotdex
 

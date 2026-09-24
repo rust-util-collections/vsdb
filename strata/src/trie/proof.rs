@@ -15,6 +15,7 @@ use crate::{
     common::{
         InstanceId,
         ende::{KeyEnDeOrdered, ValueEnDe},
+        ensure_writable,
         error::{Result, VsdbError},
     },
     versioned::{BranchId, CommitId, map::VerMap},
@@ -38,23 +39,17 @@ use super::{MptCalc, MptProof, SmtCalc, SmtProof, TrieCalc};
 ///    apply diff incrementally.
 /// 3. Otherwise → full rebuild from the store's iterator.
 ///
-/// # Automatic cache lifecycle
+/// # Disposable disk cache
 ///
-/// The in-memory trie is transparently cached to disk so that process
-/// restarts only require an incremental diff rather than a full rebuild.
+/// Construction attempts to load an existing cache. A missing, stale, or
+/// corrupt cache is rebuilt from the underlying `VerMap` on the next root
+/// calculation. Root calculation and `Drop` never write cache files.
 ///
-/// - **Auto-load** — when created via [`new`](Self::new) or
-///   [`from_map`](Self::from_map), the constructor silently attempts to
-///   restore a previous cache file.  On miss or corruption it falls back
-///   to a full rebuild on the next [`merkle_root`](Self::merkle_root) call.
-/// - **Auto-save** — the committed trie state is persisted eagerly
-///   inside [`merkle_root`](Self::merkle_root) (specifically, after
-///   `sync_to_commit` completes).  Errors are silently ignored because
-///   the cache is **disposable**: the authoritative data lives in the
-///   underlying [`VerMap`]. Auto-save is disabled when the map's namespace
-///   is read-only; a missing/stale cache is rebuilt in memory only.
-///
-/// No manual `save_cache` / `load_cache` calls are needed.
+/// Call [`save_cache`](Self::save_cache) with a committed snapshot at an
+/// application-chosen checkpoint. Saving serializes the entire trie, so doing
+/// it on every block would turn incremental root calculation into O(total
+/// state) work. Cache errors are returned to the caller; the authoritative
+/// data remains in `VerMap` and does not depend on a successful cache save.
 pub struct VerMapWithProof<K, V, T: TrieCalc> {
     map: VerMap<K, V>,
     trie: T,
@@ -71,10 +66,6 @@ pub struct VerMapWithProof<K, V, T: TrieCalc> {
     /// branch IDs are only unique within this instance. Also supplies the
     /// cache filename, provided the underlying map has not been replaced.
     cache_instance: InstanceId,
-    /// Whether the committed trie state has changed since the last
-    /// save/load.  Avoids pointless re-serialization in read-only
-    /// scenarios.
-    cache_dirty: bool,
 }
 
 impl<K, V, T> VerMapWithProof<K, V, T>
@@ -95,7 +86,6 @@ where
             sync_branch: None,
             dirty_applied: false,
             cache_instance,
-            cache_dirty: false,
         };
         this.try_load_cache();
         this
@@ -116,7 +106,6 @@ where
             sync_branch: None,
             dirty_applied: false,
             cache_instance,
-            cache_dirty: false,
         };
         this.try_load_cache();
         this
@@ -171,6 +160,27 @@ where
     pub fn merkle_root_at_commit(&mut self, commit: CommitId) -> Result<Vec<u8>> {
         self.sync_to_commit(commit)?;
         self.trie.root_hash()
+    }
+
+    /// Saves the trie for `commit` as a disposable restart cache.
+    ///
+    /// Synchronizes to that historical commit first, so subsequent proof
+    /// calls describe `commit`, without any uncommitted overlay. Call
+    /// [`merkle_root`](Self::merkle_root) again to prove a branch's working
+    /// state. Saving costs O(total state); choose checkpoints according to
+    /// the acceptable restart/rebuild cost, rather than saving every block.
+    ///
+    /// Cache I/O errors are returned. Losing or skipping this cache never
+    /// loses map data. Returns [`VsdbError::ReadOnly`] in read-only mode and
+    /// [`VsdbError::CommitNotFound`] if the commit has been reclaimed.
+    pub fn save_cache(&mut self, commit: CommitId) -> Result<()> {
+        ensure_writable(&self.map.namespace(), "versioned trie cache save")?;
+        self.sync_to_commit(commit)?;
+        self.trie.save_cache(
+            &self.map.namespace().system_dir(),
+            self.cache_instance.map_id,
+            commit.raw(),
+        )
     }
 
     // =================================================================
@@ -299,22 +309,6 @@ where
         self.sync_commit = Some(target);
         self.sync_branch = None;
 
-        // Eagerly persist the cache while the trie is in a clean
-        // committed state (before any dirty overlay is applied).
-        // This avoids an expensive clone in `Drop`.
-        self.cache_dirty = true;
-        if !self.map.namespace().is_read_only()
-            && self
-                .trie
-                .save_cache(
-                    &self.map.namespace().system_dir(),
-                    self.cache_instance.map_id,
-                    target.raw(),
-                )
-                .is_ok()
-        {
-            self.cache_dirty = false;
-        }
         Ok(())
     }
 
@@ -429,11 +423,7 @@ where
 }
 
 // =================================================================
-// Internal cache lifecycle (auto-load / auto-save)
-//
-// These methods live in a separate impl block with minimal bounds
-// (only `T: TrieCalc`) so they can be called from the `Drop` impl,
-// which cannot carry `K`/`V` trait bounds.
+// Internal cache identity and loading
 // =================================================================
 
 impl<K, V, T: TrieCalc> VerMapWithProof<K, V, T> {
@@ -448,7 +438,6 @@ impl<K, V, T: TrieCalc> VerMapWithProof<K, V, T> {
             self.sync_commit = None;
             self.sync_branch = None;
             self.dirty_applied = false;
-            self.cache_dirty = false;
             self.cache_instance = current;
         }
     }
@@ -480,54 +469,6 @@ impl<K, V, T: TrieCalc> VerMapWithProof<K, V, T> {
             self.sync_commit = Some(CommitId::from_raw(sync_tag));
             self.sync_branch = None;
             self.dirty_applied = false;
-            self.cache_dirty = false;
-        }
-    }
-
-    /// Saves the committed trie state to disk.  Called from `Drop`.
-    ///
-    /// Normally the cache is already persisted eagerly in
-    /// `sync_to_commit`, so this is a no-op.  It only fires when
-    /// `cache_dirty` is still set (e.g. the eager save failed).
-    fn try_save_cache(&mut self) {
-        // Replacement may be followed immediately by Drop, without another
-        // synchronization. A pending retry still belongs to the previous map.
-        if self.map.instance_id() != self.cache_instance {
-            return;
-        }
-        if self.map.namespace().is_read_only() {
-            return;
-        }
-        let Some(tag) = self.sync_commit else {
-            return;
-        };
-
-        // If a dirty overlay is applied we cannot save the trie as-is
-        // (it includes uncommitted data).  Restoring from trie_at_head
-        // would require a clone.  Since the eager save already ran
-        // (and presumably succeeded — cache_dirty would be false),
-        // reaching here with dirty_applied=true means the eager save
-        // failed.  Skip rather than clone in the destructor.
-        if self.dirty_applied {
-            return;
-        }
-
-        let _ = self.trie.save_cache(
-            &self.map.namespace().system_dir(),
-            self.cache_instance.map_id,
-            tag.raw(),
-        );
-    }
-}
-
-// =================================================================
-// Drop — auto-save cache on handle destruction
-// =================================================================
-
-impl<K, V, T: TrieCalc> Drop for VerMapWithProof<K, V, T> {
-    fn drop(&mut self) {
-        if self.cache_dirty {
-            self.try_save_cache();
         }
     }
 }

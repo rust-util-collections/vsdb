@@ -81,9 +81,12 @@ mod replacement_tests {
             .namespace()
             .system_dir()
             .join(format!("{kind}_cache_{}.bin", old_id.map_id));
-        // Force eager save to fail, leaving a pending destructor retry.
+        // A failed explicit save must not leave a destructor retry.
         std::fs::create_dir(&old_path).unwrap();
-        proof.merkle_root(proof.map().main_branch()).unwrap();
+        let branch = proof.map().main_branch();
+        let commit = proof.map().head_commit(branch).unwrap().unwrap().id();
+        proof.merkle_root(branch).unwrap();
+        assert!(proof.save_cache(commit).is_err());
         std::fs::remove_dir(&old_path).unwrap();
 
         let replacement = committed_map(&ns, 2);
@@ -96,6 +99,8 @@ mod replacement_tests {
         *proof.map_mut() = replacement;
         if resync {
             assert_eq!(proof.merkle_root(branch).unwrap(), expected);
+            let commit = proof.map().head_commit(branch).unwrap().unwrap().id();
+            proof.save_cache(commit).unwrap();
             let (_, _, saved) = T::load_cache(&ns.system_dir(), new_id.map_id).unwrap();
             assert_eq!(saved, expected);
         }

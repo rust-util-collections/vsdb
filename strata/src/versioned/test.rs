@@ -3198,7 +3198,7 @@ mod proof_tests {
     }
 
     #[test]
-    fn test_auto_cache_save_load() {
+    fn test_explicit_cache_save_load() {
         let map_bytes;
         let hash1;
 
@@ -3214,7 +3214,7 @@ mod proof_tests {
             // to the same persistent data (simulates process restart).
             map_bytes = postcard::to_allocvec(vp.map()).unwrap();
 
-            // Cache is saved eagerly inside merkle_root → sync_to_commit.
+            vp.save_cache(_c1).unwrap();
         }
 
         {
@@ -3223,7 +3223,7 @@ mod proof_tests {
             let map: Vm = postcard::from_bytes(&map_bytes).unwrap();
             let br = map.main_branch();
 
-            // from_map auto-loads the cache saved by the previous sync.
+            // from_map auto-loads the cache saved at the explicit checkpoint.
             let mut vp = Vp::from_map(map);
 
             // merkle_root should produce the same hash — from cache, not
@@ -3234,8 +3234,8 @@ mod proof_tests {
     }
 
     #[test]
-    fn test_auto_cache_dirty_flag() {
-        // Read-only usage: cache_dirty should remain false, no re-save.
+    fn test_loaded_cache_root_is_unchanged() {
+        // Loading a checkpoint and querying it preserves its root.
         let map_bytes;
         let hash1;
 
@@ -3246,7 +3246,7 @@ mod proof_tests {
             let _c1 = vp.map_mut().commit(main).unwrap();
             hash1 = vp.merkle_root(main).unwrap();
             map_bytes = postcard::to_allocvec(vp.map()).unwrap();
-            // Cache was saved eagerly in sync_to_commit.
+            vp.save_cache(_c1).unwrap();
         }
 
         {
@@ -3255,13 +3255,11 @@ mod proof_tests {
             let mut vp = Vp::from_map(map);
 
             // Trie was loaded from cache.  Calling merkle_root on the
-            // same commit should be a cache hit — no trie mutation, so
-            // cache_dirty stays false.
+            // same commit should be a cache hit.
             let h = vp.merkle_root(br).unwrap();
             assert_eq!(hash1, h);
 
-            // Drop here.  cache_dirty should be false → no disk write.
-            // (We can't easily observe this, but at least verify no crash.)
+            // No implicit save on Drop.
         }
     }
 
@@ -3278,7 +3276,7 @@ mod proof_tests {
             let _c1 = vp.map_mut().commit(main).unwrap();
             hash1 = vp.merkle_root(main).unwrap();
             map_bytes = postcard::to_allocvec(vp.map()).unwrap();
-            // Cache was saved eagerly at commit c1.
+            vp.save_cache(_c1).unwrap();
         }
 
         // Mutate the map WITHOUT a VerMapWithProof wrapper (simulates

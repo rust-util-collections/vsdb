@@ -105,8 +105,9 @@ if vsdb_open_mode() == OpenMode::ReadOnly {
 ```
 
 `vsdb_flush`, `Namespace::flush`, deferred `lazy_delete` registration,
-`VerMap::gc`, and automatic trie-cache saves are no-ops. Explicit MPT/SMT
-cache saves return `VsdbError::ReadOnly`. These operations are maintenance
+and `VerMap::gc` are no-ops. Explicit MPT/SMT and `VerMapWithProof`
+cache saves return `VsdbError::ReadOnly`. Root computation and `Drop` do not
+save caches in either mode. These operations are maintenance
 only; skipping them does not change logical read results.
 
 ## Filesystem and process rules

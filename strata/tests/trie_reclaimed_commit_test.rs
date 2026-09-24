@@ -8,6 +8,7 @@ fn reclaimed_commit<T: TrieCalc>() {
     proof.map_mut().insert(branch, &1, &200).unwrap();
     let removed = proof.map_mut().commit(branch).unwrap();
     proof.merkle_root_at_commit(removed).unwrap();
+    proof.save_cache(removed).unwrap();
     let id = proof.map().save_meta().unwrap();
     proof.map_mut().rollback_to(branch, first).unwrap();
     assert!(matches!(

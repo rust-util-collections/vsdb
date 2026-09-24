@@ -197,4 +197,9 @@ fn read_only_reader_helper() {
 
     let mut proof = VerMapWithProof::<u64, String, MptCalc>::from_map(versioned);
     assert_eq!(expected_root, proof.merkle_root(main).unwrap());
+    let commit = proof.map().head_commit(main).unwrap().unwrap().id();
+    assert!(matches!(
+        proof.save_cache(commit),
+        Err(VsdbError::ReadOnly { .. })
+    ));
 }

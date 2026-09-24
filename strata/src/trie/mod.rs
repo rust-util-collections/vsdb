@@ -27,8 +27,8 @@
 //!   | rollback    |      |             |
 //!   +-------------+      +-------------+
 //!        |                  |         ^
-//!        |           eager save    auto-load
-//!        |           on sync      on new/from_map
+//!        |           checkpoint    auto-load
+//!        |           on request   on new/from_map
 //!        |                  |         |
 //!        |                +--v--------+-+
 //!        |                | disk cache  | (disposable)
@@ -39,9 +39,9 @@
 //! 2. **`MptCalc` / `SmtCalc`** mirrors the current state as an
 //!    in-memory trie, synchronized via full rebuild or incremental diff.
 //! 3. **`root_hash()`** returns the 32-byte Merkle commitment.
-//! 4. **Automatic cache** — on construction, the trie is silently
-//!    restored from a previous cache file; after each commit sync,
-//!    the clean state is eagerly saved.  No manual calls required.
+//! 4. **Disposable cache** — construction attempts to restore a previous
+//!    checkpoint. Call `VerMapWithProof::save_cache(commit)` to save one
+//!    explicitly; root calculations and handle destruction never write it.
 //!
 //! # SMT proofs
 //!
