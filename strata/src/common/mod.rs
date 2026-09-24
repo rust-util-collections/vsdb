@@ -114,21 +114,20 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 /// structure and type names still separate `Mapx<u32, _>` from
 /// `Mapx<u64, _>` and `Mapx` from `MapxOrd`.
 fn stable_type_name(full: &str) -> String {
+    map_type_paths(full, |path| path.rsplit("::").next().unwrap_or(""))
+}
+
+fn map_type_paths(full: &str, mut map: impl FnMut(&str) -> &str) -> String {
     let mut out = String::with_capacity(full.len());
-    let mut path = String::new();
-    let flush = |path: &mut String, out: &mut String| {
-        out.push_str(path.rsplit("::").next().unwrap_or(""));
-        path.clear();
-    };
-    for c in full.chars() {
-        if c.is_alphanumeric() || c == '_' || c == ':' {
-            path.push(c);
-        } else {
-            flush(&mut path, &mut out);
+    let mut start = 0;
+    for (i, c) in full.char_indices() {
+        if !(c.is_alphanumeric() || c == '_' || c == ':') {
+            out.push_str(map(&full[start..i]));
             out.push(c);
+            start = i + c.len_utf8();
         }
     }
-    flush(&mut path, &mut out);
+    out.push_str(map(&full[start..]));
     out
 }
 
@@ -142,10 +141,25 @@ fn type_tag<T: ?Sized>() -> u64 {
     fnv1a64(stable_type_name(type_name::<T>()).as_bytes())
 }
 
-/// Type tag of v16's `VSTYPE02` envelope: the hash of the full
-/// `type_name`. Checked only when restoring such legacy metadata.
+/// The full type name as rendered by v16, where the versioning ids were
+/// aliases of `u64`. Match complete paths only: unrelated user types and
+/// names such as `CommitIdExtra` must keep their original tags.
+fn legacy_type_name(full: &str) -> String {
+    use crate::versioned::{BranchId, CommitId};
+
+    map_type_paths(full, |path| {
+        if path == type_name::<BranchId>() || path == type_name::<CommitId>() {
+            "u64"
+        } else {
+            path
+        }
+    })
+}
+
+/// Type tag of v16's `VSTYPE02` envelope. The transparent id newtypes
+/// retain their old alias tags here; `VSTYPE03` keeps them distinct.
 fn legacy_type_tag<T: ?Sized>() -> u64 {
-    fnv1a64(type_name::<T>().as_bytes())
+    fnv1a64(legacy_type_name(type_name::<T>()).as_bytes())
 }
 
 /// Serializes `value` with `postcard` and writes it to the owning
@@ -394,5 +408,79 @@ mod type_tag_test {
         let upgraded: Vec<u8> =
             postcard::from_bytes(&postcard::to_allocvec(&restored).unwrap()).unwrap();
         assert_eq!(&upgraded[..8], TYPED_HANDLE_META_MAGIC);
+    }
+
+    /// v16's encoder, deliberately using the unmodified full type name.
+    /// Nest these envelopes to reproduce every layer of a v16 handle.
+    fn v16_meta<T>(inner: &impl Serialize) -> Vec<u8> {
+        let mut meta = b"VSTYPE02".to_vec();
+        meta.extend_from_slice(&fnv1a64(type_name::<T>().as_bytes()).to_le_bytes());
+        meta.extend_from_slice(&postcard::to_allocvec(inner).unwrap());
+        meta
+    }
+
+    #[test]
+    fn legacy_handles_restore_versioning_id_aliases() {
+        use crate::{
+            Mapx, MapxOrdRawKey, Orphan,
+            versioned::{BranchId, CommitId},
+        };
+
+        // Mapx<String, CommitId> was Mapx<String, u64> in v16,
+        // including its inner MapxOrdRawKey's tag.
+        let mut raw = MapxRaw::new();
+        raw.insert(postcard::to_allocvec("tip").unwrap(), [7]);
+        let inner = v16_meta::<MapxOrdRawKey<u64>>(&raw);
+        let outer = v16_meta::<Mapx<String, u64>>(&inner);
+        let bytes = postcard::to_allocvec(&outer).unwrap();
+        let restored: Mapx<String, CommitId> = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(restored.get("tip"), Some(CommitId::from_raw(7)));
+
+        // Aliases can occur in keys, nested parameters, and Orphans too.
+        let mut raw = MapxRaw::new();
+        raw.insert([3, 5], postcard::to_allocvec(&vec![7u64, 9]).unwrap());
+        let inner = v16_meta::<MapxOrdRawKey<Vec<u64>>>(&raw);
+        let outer = v16_meta::<Mapx<(u64, u64), Vec<u64>>>(&inner);
+        let bytes = postcard::to_allocvec(&outer).unwrap();
+        let restored: Mapx<(BranchId, CommitId), Vec<CommitId>> =
+            postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(
+            restored.get(&(BranchId::from_raw(3), CommitId::from_raw(5))),
+            Some(vec![CommitId::from_raw(7), CommitId::from_raw(9)])
+        );
+
+        let mut raw = MapxRaw::new();
+        raw.insert([], [11]);
+        let inner = v16_meta::<MapxOrdRawKey<u64>>(&raw);
+        let outer = v16_meta::<Orphan<u64>>(&inner);
+        let bytes = postcard::to_allocvec(&outer).unwrap();
+        let restored: Orphan<BranchId> = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(restored.get_value(), BranchId::from_raw(11));
+
+        // Saving upgrades the envelope without weakening current tags.
+        let upgraded = postcard::to_allocvec(&restored).unwrap();
+        let reopened: Orphan<BranchId> = postcard::from_bytes(&upgraded).unwrap();
+        assert_eq!(reopened.get_value(), BranchId::from_raw(11));
+        assert!(postcard::from_bytes::<Orphan<CommitId>>(&upgraded).is_err());
+        assert!(postcard::from_bytes::<Orphan<u64>>(&upgraded).is_err());
+        assert!(postcard::from_bytes::<Orphan<u32>>(&bytes).is_err());
+    }
+
+    #[test]
+    fn legacy_id_aliases_match_only_complete_library_type_paths() {
+        use crate::versioned::CommitId;
+
+        let id = type_name::<CommitId>();
+        assert_eq!(
+            legacy_type_name(&format!("({id}, [{id}; 2])")),
+            "(u64, [u64; 2])"
+        );
+        for unrelated in [
+            format!("{id}Extra"),
+            format!("app::{id}"),
+            "app::CommitId".into(),
+        ] {
+            assert_eq!(legacy_type_name(&unrelated), unrelated);
+        }
     }
 }

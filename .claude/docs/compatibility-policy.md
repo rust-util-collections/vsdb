@@ -22,6 +22,9 @@ Typed handles serialize as magic + 8-byte type tag + payload.
 - `VSTYPE02` (v16) metas are still restored, checked against the **full**
   `type_name` — so wrapper types and every type used inside built-in handles'
   parameters keep their paths while v16 data may exist.
+  The library's transparent `BranchId` / `CommitId` newtypes use their v16
+  `u64` alias names for this legacy check, including nested parameters;
+  `VSTYPE03` continues to distinguish both ids from each other and from `u64`.
 - A new envelope needs a new magic; keep reading the old ones.
 
 ## Accepted breaks
