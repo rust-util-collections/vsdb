@@ -114,12 +114,25 @@ pub(crate) fn get_neighbors_into<A: AdjRead + ?Sized>(
 
 // ---- Graph search ------------------------------------------------------
 
+/// Upper bound on the nodes a filtered layer search evaluates.
+///
+/// A filtered search keeps expanding until it holds `ef` passing nodes, so a
+/// predicate that (almost) nothing satisfies would otherwise walk the whole
+/// connected graph. The cap bounds that worst case while leaving ordinary
+/// selectivities untouched.
+pub(crate) fn filter_visit_cap(ef: usize) -> usize {
+    ef.saturating_mul(64).max(4096)
+}
+
 /// Greedy search within a single layer, returning the `ef` closest nodes.
 ///
-/// When `filter` is `Some`, only nodes accepted by the predicate are counted
-/// toward the result set.  Rejected nodes still participate in graph traversal.
-/// Distance-based pruning is disabled when filtering to avoid missing
-/// filter-passing nodes that are reachable only through unfiltered bridge nodes.
+/// When `filter` is `Some`, only nodes accepted by the predicate enter the
+/// result set; rejected nodes still participate in graph traversal. The
+/// frontier and termination rules are the standard ones evaluated against
+/// the *passing* results, so the search keeps expanding (through rejected
+/// bridge nodes) until it holds `ef` passing nodes and every remaining
+/// candidate is farther than the worst of them — at most
+/// [`filter_visit_cap`] evaluated nodes.
 pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>, A: AdjRead + ?Sized>(
     query: &[S],
     entry_points: &[u64],
@@ -133,9 +146,8 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>, A: AdjRead + ?Sized>
     let mut result: BinaryHeap<(OrdS<S>, u64)> = BinaryHeap::new();
     let mut visited = HashSet::new();
 
-    let has_filter = filter.is_some();
     let passes = |id: u64| -> bool { filter.is_none_or(|f| f(id)) };
-    let visit_budget = has_filter.then_some(ef.max(entry_points.len()).max(1));
+    let visit_cap = filter.map(|_| filter_visit_cap(ef));
 
     for &ep in entry_points {
         if let Some(vec) = get_vector(ep) {
@@ -149,27 +161,20 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>, A: AdjRead + ?Sized>
     }
 
     let mut neighbor_buf = Vec::new();
-    while let Some(Reverse((OrdS(c_dist), c_id))) = candidates.pop() {
-        if visit_budget.is_some_and(|budget| visited.len() >= budget) {
-            break;
-        }
-
-        // Standard HNSW early termination: stop when the nearest unvisited
-        // candidate is farther than the k-th result.  This is only sound
-        // without filtering — when a filter is active, unfiltered bridge nodes
-        // can connect to closer filter-passing neighbors, so we skip it.
-        if !has_filter
+    'search: while let Some(Reverse((OrdS(c_dist), c_id))) = candidates.pop() {
+        // Stop when the nearest unexpanded candidate is farther than the
+        // worst of `ef` results.
+        if result.len() >= ef
             && let Some(&(OrdS(f_dist), _)) = result.peek()
             && c_dist.total_cmp(&f_dist) == Ordering::Greater
-            && result.len() >= ef
         {
             break;
         }
 
         get_neighbors_into(adj, layer, c_id, &mut neighbor_buf);
         for &n_id in &neighbor_buf {
-            if visit_budget.is_some_and(|budget| visited.len() >= budget) {
-                break;
+            if visit_cap.is_some_and(|cap| visited.len() >= cap) {
+                break 'search;
             }
             if !visited.insert(n_id) {
                 continue;
@@ -179,29 +184,21 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>, A: AdjRead + ?Sized>
             };
             let n_dist = D::distance(query, &n_vec);
 
-            let should_add = if has_filter {
-                // When filtering, add every unvisited neighbor to the candidate
-                // pool.  The visited set and natural distance decay bound the
-                // search; the caller's inflated `ef` budgets the work.
-                true
-            } else {
-                // Standard HNSW pruning: skip neighbors that are farther than
-                // the worst result when we already have enough results.
-                let result_full = result.len() >= ef;
-                let worse_than_worst = result_full
-                    && result.peek().is_some_and(|&(OrdS(f), _)| {
-                        n_dist.total_cmp(&f) != Ordering::Less
-                    });
-                !worse_than_worst
-            };
+            // Skip neighbors farther than the worst result once `ef`
+            // results are held.
+            let worse_than_worst = result.len() >= ef
+                && result
+                    .peek()
+                    .is_some_and(|&(OrdS(f), _)| n_dist.total_cmp(&f) != Ordering::Less);
+            if worse_than_worst {
+                continue;
+            }
 
-            if should_add {
-                candidates.push(Reverse((OrdS(n_dist), n_id)));
-                if passes(n_id) {
-                    result.push((OrdS(n_dist), n_id));
-                    if result.len() > ef {
-                        result.pop();
-                    }
+            candidates.push(Reverse((OrdS(n_dist), n_id)));
+            if passes(n_id) {
+                result.push((OrdS(n_dist), n_id));
+                if result.len() > ef {
+                    result.pop();
                 }
             }
         }

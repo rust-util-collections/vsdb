@@ -781,14 +781,15 @@ where
     /// Searches with a key predicate evaluated during beam search.
     ///
     /// Non-matching nodes still participate in graph traversal to maintain
-    /// connectivity, but are excluded from the result set.  Distance-based
-    /// pruning is disabled when filtering to avoid missing matches reachable
-    /// only through non-matching bridge nodes; traversal is still bounded by
-    /// an inflated `ef` visit budget.
+    /// connectivity, but are excluded from the result set. The search keeps
+    /// expanding until it holds `max(4·ef, 2·k)` matching candidates and the
+    /// frontier is farther than the worst of them, so a selective predicate
+    /// costs more visited nodes rather than fewer results; a predicate that
+    /// almost nothing satisfies stops at a visit cap of
+    /// `max(64 × that ef, 4096)` evaluated nodes.
     ///
-    /// For very large indexes or highly selective predicates, use
-    /// [`search_ef_with_filter`](Self::search_ef_with_filter) with an
-    /// increased `ef` to collect more candidate results.
+    /// Use [`search_ef_with_filter`](Self::search_ef_with_filter) to trade
+    /// recall against work explicitly.
     pub fn search_with_filter(
         &self,
         query: &[S],
@@ -892,7 +893,7 @@ where
         }
 
         // Saturating: `ef`/`k` are unrestricted public inputs, and the
-        // ×4/×2 filter budget must not overflow for extreme values.
+        // ×4/×2 filter inflation must not overflow for extreme values.
         let search_ef = if predicate.is_some() {
             ef.saturating_mul(4).max(k.saturating_mul(2))
         } else {

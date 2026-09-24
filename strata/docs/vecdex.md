@@ -146,8 +146,12 @@ let results = idx.search_with_filter(&query, 10, |k: &String| {
 }).unwrap();
 ```
 
-To compensate for selective filters, the search internally expands `ef` to
-`max(ef * 4, k * 2)` to maintain graph exploration breadth.
+The search keeps expanding until it holds `max(ef * 4, k * 2)` passing
+candidates and every remaining frontier node is farther than the worst of
+them, so a selective predicate costs more visited nodes instead of fewer
+results. A predicate that almost nothing satisfies is bounded by a visit
+cap of `max(64 × that ef, 4096)` evaluated nodes; beyond it, results can
+be incomplete — scan the matching keys directly for such filters.
 
 ## Storage Architecture
 

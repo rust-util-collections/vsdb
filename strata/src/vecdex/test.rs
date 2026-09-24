@@ -379,13 +379,17 @@ fn filtered_search_no_match() {
 }
 
 #[test]
-fn filtered_search_layer_uses_visit_budget() {
+fn filtered_search_layer_caps_visits() {
+    // A reject-all filter never fills the result set; the search must stop
+    // at the visit cap instead of walking the whole (chain) graph.
+    let cap = hnsw::filter_visit_cap(8);
+    let len = cap as u64 + 100;
     let mut adjacency = MapxRaw::new();
-    for node in 0..99u64 {
+    for node in 0..len - 1 {
         adjacency.insert(hnsw::adj_key(0, node), hnsw::encode_neighbors(&[node + 1]));
     }
 
-    let vectors: Vec<Vec<f32>> = (0..100).map(|i| vec![i as f32]).collect();
+    let vectors: Vec<Vec<f32>> = (0..len).map(|i| vec![i as f32]).collect();
     let get_vec = |id: u64| -> Option<std::rc::Rc<Vec<f32>>> {
         vectors.get(id as usize).cloned().map(std::rc::Rc::new)
     };
@@ -406,7 +410,8 @@ fn filtered_search_layer_uses_visit_budget() {
     );
 
     assert!(results.is_empty());
-    assert!(calls.get() <= 8, "visited {} nodes", calls.get());
+    assert!(calls.get() <= cap, "visited {} nodes", calls.get());
+    assert!(calls.get() > 8, "stopped at the old ef-sized budget");
 }
 
 #[test]
@@ -1553,4 +1558,51 @@ fn dyn_f64_end_to_end() {
     // meta must not load under f32, nor as any static handle.
     assert!(VecDexDyn::<String>::from_meta(id).is_err());
     assert!(VecDex::<String, Cosine, f64>::from_meta(id).is_err());
+}
+
+#[test]
+fn filtered_search_keeps_recall_under_selective_filters() {
+    let dim = 8;
+    let cfg = HnswConfig {
+        dim,
+        ..Default::default()
+    };
+    let mut idx: VecDex<u64, L2> = VecDex::new(cfg);
+
+    // 1% of keys pass the filter.
+    let n = 1500u64;
+    let vecs: Vec<(u64, Vec<f32>)> = (0..n)
+        .map(|i| (i, (0..dim).map(|_| rand::random::<f32>()).collect()))
+        .collect();
+    idx.insert_batch(&vecs).unwrap();
+    let passes = |k: &u64| k.is_multiple_of(100);
+
+    let k = 10;
+    let queries = 5;
+    let mut total_recall = 0.0f64;
+    for _ in 0..queries {
+        let query: Vec<f32> = (0..dim).map(|_| rand::random::<f32>()).collect();
+        let mut gt: Vec<(f32, u64)> = vecs
+            .iter()
+            .filter(|(key, _)| passes(key))
+            .map(|(key, v)| (L2::distance(&query, v), *key))
+            .collect();
+        gt.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let gt: HashSet<u64> = gt.iter().take(k).map(|&(_, key)| key).collect();
+
+        let results = idx.search_with_filter(&query, k, passes).unwrap();
+        assert_eq!(
+            results.len(),
+            k,
+            "selective filter truncated the result set"
+        );
+        assert!(results.iter().all(|(key, _)| passes(key)));
+        let found: HashSet<u64> = results.iter().map(|(key, _)| *key).collect();
+        total_recall += gt.intersection(&found).count() as f64 / k as f64;
+    }
+    let avg_recall = total_recall / queries as f64;
+    assert!(
+        avg_recall >= 0.8,
+        "filtered recall@{k} = {avg_recall:.2}, expected >= 0.8"
+    );
 }
