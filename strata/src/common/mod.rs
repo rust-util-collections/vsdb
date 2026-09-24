@@ -20,7 +20,13 @@ use error::Result;
 use serde::{Serialize, de::DeserializeOwned};
 use std::{any::type_name, fmt, fs, result::Result as StdResult, thread};
 
-const TYPED_HANDLE_META_MAGIC: &[u8; 8] = b"VSTYPE02";
+/// Typed-handle envelope: magic + 8-byte type tag + postcard payload.
+///
+/// `VSTYPE03` tags hash the module-path-free type name (see
+/// [`stable_type_name`]); `VSTYPE02` (v16) tags hashed the full
+/// `type_name`, and are still accepted on restore.
+const TYPED_HANDLE_META_MAGIC: &[u8; 8] = b"VSTYPE03";
+const LEGACY_TYPED_HANDLE_META_MAGIC: &[u8; 8] = b"VSTYPE02";
 const TYPED_HANDLE_TAG_LEN: usize = 8;
 
 /// Whether the thread was already unwinding when a write-back guard was
@@ -90,23 +96,56 @@ pub(crate) fn ensure_process_writable(operation: &'static str) -> Result<()> {
     }
 }
 
-/// FNV-1a 64 hash of `T`'s full type path.
-///
-/// The tag inherits `std::any::type_name`'s caveats: it is not guaranteed
-/// stable across compiler versions, and renaming/moving a type (or any of
-/// its generic parameters) changes it. Persisted typed-handle metadata is
-/// therefore tied to the writing build's type layout — an intentional
-/// property: the tag exists to reject cross-type restores, and a false
-/// rejection is always safer than silent type confusion.
-fn type_tag<T: ?Sized>() -> u64 {
+fn fnv1a64(bytes: &[u8]) -> u64 {
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0100_0000_01b3;
-    type_name::<T>()
-        .as_bytes()
-        .iter()
-        .fold(FNV_OFFSET, |h, &b| {
-            (h ^ u64::from(b)).wrapping_mul(FNV_PRIME)
-        })
+    bytes.iter().fold(FNV_OFFSET, |h, &b| {
+        (h ^ u64::from(b)).wrapping_mul(FNV_PRIME)
+    })
+}
+
+/// `type_name` with every path reduced to its last segment:
+/// `vsdb::basic::mapx::Mapx<alloc::string::String, app::model::User>`
+/// becomes `Mapx<String, User>`.
+///
+/// Module paths are what change when code is refactored, when a
+/// dependency reorganizes its internals, or when rustc renders paths
+/// differently — none of which changes what is stored. The generic
+/// structure and type names still separate `Mapx<u32, _>` from
+/// `Mapx<u64, _>` and `Mapx` from `MapxOrd`.
+fn stable_type_name(full: &str) -> String {
+    let mut out = String::with_capacity(full.len());
+    let mut path = String::new();
+    let flush = |path: &mut String, out: &mut String| {
+        out.push_str(path.rsplit("::").next().unwrap_or(""));
+        path.clear();
+    };
+    for c in full.chars() {
+        if c.is_alphanumeric() || c == '_' || c == ':' {
+            path.push(c);
+        } else {
+            flush(&mut path, &mut out);
+            out.push(c);
+        }
+    }
+    flush(&mut path, &mut out);
+    out
+}
+
+/// Type tag written by this version: the hash of [`stable_type_name`].
+///
+/// The tag exists to reject restoring a handle as the wrong type (a false
+/// rejection is always safer than silent type confusion). Two same-named
+/// types from different modules share a tag; restoring one as the other
+/// is a caller bug the tag no longer catches.
+fn type_tag<T: ?Sized>() -> u64 {
+    fnv1a64(stable_type_name(type_name::<T>()).as_bytes())
+}
+
+/// Type tag of v16's `VSTYPE02` envelope: the hash of the full
+/// `type_name`. Checked only when restoring such legacy metadata.
+fn legacy_type_tag<T: ?Sized>() -> u64 {
+    fnv1a64(type_name::<T>().as_bytes())
 }
 
 /// Serializes `value` with `postcard` and writes it to the owning
@@ -252,14 +291,22 @@ where
 {
     let magic_len = TYPED_HANDLE_META_MAGIC.len();
     let header_len = magic_len + TYPED_HANDLE_TAG_LEN;
-    if meta.len() < header_len || &meta[..magic_len] != TYPED_HANDLE_META_MAGIC {
+    if meta.len() < header_len {
         return Err(error::VsdbError::Decode {
             detail: "invalid typed handle metadata magic".to_owned(),
         });
     }
+    let expected = match &meta[..magic_len] {
+        m if m == TYPED_HANDLE_META_MAGIC => type_tag::<T>(),
+        m if m == LEGACY_TYPED_HANDLE_META_MAGIC => legacy_type_tag::<T>(),
+        _ => {
+            return Err(error::VsdbError::Decode {
+                detail: "invalid typed handle metadata magic".to_owned(),
+            });
+        }
+    };
 
     let found = u64::from_le_bytes(meta[magic_len..header_len].try_into().unwrap());
-    let expected = type_tag::<T>();
     if found != expected {
         return Err(error::VsdbError::Decode {
             detail: format!(
@@ -270,4 +317,82 @@ where
     }
 
     Ok(postcard::from_bytes(&meta[header_len..])?)
+}
+
+#[cfg(test)]
+mod type_tag_test {
+    use super::*;
+
+    #[test]
+    fn stable_names_drop_module_paths_only() {
+        assert_eq!(
+            stable_type_name(
+                "vsdb::basic::mapx::Mapx<alloc::string::String, app::model::User>"
+            ),
+            "Mapx<String, User>"
+        );
+        assert_eq!(
+            stable_type_name("(u32, alloc::vec::Vec<u8>, [u8; 32], &str)"),
+            "(u32, Vec<u8>, [u8; 32], &str)"
+        );
+        assert_eq!(stable_type_name("u64"), "u64");
+    }
+
+    mod a {
+        #[derive(serde::Serialize, serde::Deserialize)]
+        pub struct Row(pub u32);
+    }
+    mod b {
+        #[derive(serde::Serialize, serde::Deserialize)]
+        pub struct Row(pub u32);
+    }
+
+    #[test]
+    fn tags_survive_moves_but_separate_types() {
+        use crate::{Mapx, MapxOrd};
+        // A type moved to another module keeps its tag...
+        assert_eq!(
+            type_tag::<Mapx<u32, a::Row>>(),
+            type_tag::<Mapx<u32, b::Row>>()
+        );
+        // ...while different parameters or wrappers still differ.
+        assert_ne!(
+            type_tag::<Mapx<u32, a::Row>>(),
+            type_tag::<Mapx<u64, a::Row>>()
+        );
+        assert_ne!(
+            type_tag::<Mapx<u32, u32>>(),
+            type_tag::<MapxOrd<u32, u32>>()
+        );
+        // The legacy tag is the full-path hash.
+        assert_ne!(
+            legacy_type_tag::<Mapx<u32, a::Row>>(),
+            legacy_type_tag::<Mapx<u32, b::Row>>()
+        );
+    }
+
+    #[test]
+    fn legacy_vstype02_envelope_still_restores() {
+        use crate::Mapx;
+        let mut m: Mapx<u32, String> = Mapx::new();
+        m.insert(&1, &"one".to_string());
+        let current = postcard::to_allocvec(&m).unwrap();
+
+        // Rebuild the same handle in v16's envelope.
+        let meta: Vec<u8> = postcard::from_bytes(&current).unwrap();
+        assert_eq!(&meta[..8], TYPED_HANDLE_META_MAGIC);
+        let mut legacy = LEGACY_TYPED_HANDLE_META_MAGIC.to_vec();
+        legacy.extend_from_slice(&legacy_type_tag::<Mapx<u32, String>>().to_le_bytes());
+        legacy.extend_from_slice(&meta[16..]);
+        let legacy = postcard::to_allocvec(&legacy).unwrap();
+
+        let restored: Mapx<u32, String> = postcard::from_bytes(&legacy).unwrap();
+        assert_eq!(restored.get(&1), Some("one".to_string()));
+        // The legacy envelope still rejects a different type.
+        assert!(postcard::from_bytes::<Mapx<u64, String>>(&legacy).is_err());
+        // Re-serializing upgrades it to the current envelope.
+        let upgraded: Vec<u8> =
+            postcard::from_bytes(&postcard::to_allocvec(&restored).unwrap()).unwrap();
+        assert_eq!(&upgraded[..8], TYPED_HANDLE_META_MAGIC);
+    }
 }
