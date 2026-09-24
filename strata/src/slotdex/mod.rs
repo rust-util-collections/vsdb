@@ -1219,10 +1219,10 @@ where
     /// [`locate_page_rstart`](Self::locate_page_rstart) — the
     /// tier-accelerated mirror of the forward path. The contributing slots
     /// are then planned from one reverse walk over the per-slot count rows
-    /// (no entry data touched), and the entries are fetched with **one**
-    /// forward scan over the contiguous slot interval of the page — engine
-    /// iterators are expensive, so the per-slot range construction this
-    /// replaces dominated the whole query.
+    /// (no entry data touched). Entries are fetched with one forward scan
+    /// over the page's contiguous slot interval. A second range is needed
+    /// only to skip an unused tail in the lowest slot of a multi-slot page;
+    /// this bounds boundary work without constructing a range per slot.
     fn get_entries_reverse(
         &self,
         slot_start: S, // Included
@@ -1244,8 +1244,8 @@ where
         let mut remaining = page_size as usize;
 
         // Plan the contributing slots (descending) from the count rows:
-        // (slot, skip inside the slot, take from the slot).
-        let mut plan: Vec<(S, usize, usize)> = vec![];
+        // (slot, skip inside the slot, take from the slot, slot total).
+        let mut plan: Vec<(S, usize, usize, usize)> = vec![];
         self.level0_walk_desc(
             Bound::Included(slot_start.clone()),
             slot_end_actual,
@@ -1256,59 +1256,52 @@ where
                     return true;
                 }
                 let take = (n - to_skip).min(remaining);
-                plan.push((slot, to_skip, take));
+                plan.push((slot, to_skip, take, n));
                 remaining -= take;
                 to_skip = 0;
                 remaining > 0
             },
         );
-        let Some((last, _, _)) = plan.last() else {
+        let Some((last, _, take, count)) = plan.last() else {
             return vec![];
         };
 
-        // One forward entry scan over the page's contiguous slot interval,
-        // split into per-slot segments.
+        // Consume each planned quota in ascending storage order. All slots
+        // except the lowest boundary are consumed through their final entry.
+        // If that boundary is partial, seek past its unused tail once instead
+        // of scanning it before reaching the remaining contributing slots.
         let lo = last.clone();
         let hi = plan[0].0.clone();
-        let iter = match self.entry_range(Bound::Included(lo), Bound::Included(hi)) {
+        let split_low = plan.len() > 1 && take < count;
+        let mut iter = match self
+            .entry_range(Bound::Included(lo.clone()), Bound::Included(hi.clone()))
+        {
             Some(iter) => iter,
             None => return vec![],
         };
-        let mut segments: BTreeMap<S, Vec<K>> =
-            plan.iter().map(|(s, ..)| (s.clone(), vec![])).collect();
-        let quota: BTreeMap<S, (usize, usize)> = plan
-            .iter()
-            .map(|(s, skip, take)| (s.clone(), (*skip, *take)))
-            .collect();
-        let mut cur: Option<(S, usize, usize, usize)> = None; // slot, skip, take, seen
-        for (rk, _) in iter {
-            let (slot, k) = decode_entry_row::<S, K>(&rk);
-            match &mut cur {
-                Some((s, skip, take, seen)) if *s == slot => {
-                    *seen += 1;
-                    if *seen > *skip && segments[s].len() < *take {
-                        segments.get_mut(s).expect("planned").push(k);
-                    }
-                }
-                _ => {
-                    let Some(&(skip, take)) = quota.get(&slot) else {
-                        // A slot inside the interval that contributes
-                        // nothing (fully consumed by the skip).
-                        cur = Some((slot, usize::MAX, 0, 0));
-                        continue;
-                    };
-                    if skip == 0 && take > 0 {
-                        segments.get_mut(&slot).expect("planned").push(k);
-                    }
-                    cur = Some((slot, skip, take, 1));
-                }
+        let mut segments = Vec::with_capacity(plan.len());
+        for (i, (_, skip, take, _)) in plan.iter().rev().enumerate() {
+            segments.push(
+                iter.by_ref()
+                    .skip(*skip)
+                    .take(*take)
+                    .map(|(rk, _)| decode_entry_row::<S, K>(&rk).1)
+                    .collect::<Vec<_>>(),
+            );
+            if i == 0 && split_low {
+                iter = self
+                    .entry_range(
+                        Bound::Excluded(lo.clone()),
+                        Bound::Included(hi.clone()),
+                    )
+                    .expect("distinct planned boundary slots");
             }
         }
 
         // Emit slot groups in descending slot order, ascending within.
         let mut ret = Vec::with_capacity(page_size as usize);
-        for (slot, ..) in &plan {
-            ret.extend(segments.remove(slot).expect("planned"));
+        for segment in segments.into_iter().rev() {
+            ret.extend(segment);
         }
         ret
     }

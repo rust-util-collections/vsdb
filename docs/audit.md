@@ -12,14 +12,6 @@
 
 ## Open
 
-### [HIGH] slotdex: reverse pages scan entire populated boundary slots
-- **Where**: `strata/src/slotdex/mod.rs` (`get_entries_reverse`)
-- **What**: a ten-entry reverse page from one slot containing 100,000 keys reads and decodes all 100,000 keys. A warm release measurement took about 20 ms versus 7 microseconds for the forward page; `swap_order` flips the affected public direction.
-- **Why**: the contiguous scan continues after planned per-slot quotas are filled, including unused tails of partially selected boundary slots.
-- **Suggested fix**: stop at fulfilled quotas and skip unused boundary tails while retaining ascending keys within each slot. Regress bounded decode counts and page membership across slots; no API/format change.
-
----
-
 ### [MEDIUM] configuration: explicit roots still initialize an unused default directory
 - **Where**: `core/src/common/mod.rs` (`vsdb_configure`, `gen_data_dir`)
 - **What**: configuring a writable explicit root panics when the environment-selected default path cannot be created.

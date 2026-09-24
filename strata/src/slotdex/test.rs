@@ -1034,3 +1034,83 @@ fn range_queries_match_the_inclusive_api() {
         );
     }
 }
+
+#[test]
+fn reverse_paging_bounds_hot_slot_decoding() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static DECODES: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct CountingKey(u64);
+
+    impl KeyEnDeOrdered for CountingKey {
+        fn to_bytes(&self) -> Vec<u8> {
+            self.0.to_be_bytes().to_vec()
+        }
+
+        fn from_slice(bytes: &[u8]) -> Result<Self> {
+            DECODES.fetch_add(1, Ordering::Relaxed);
+            u64::from_slice(bytes).map(Self)
+        }
+    }
+
+    for swap in [false, true] {
+        let mut sd = SlotDex64::<CountingKey>::new(16, swap).unwrap();
+        sd.insert_batch((0..10_000).map(|key| (0, CountingKey(key))))
+            .unwrap();
+
+        // A page entirely inside a hot slot must stop at its quota, including
+        // when tier counts locate its start in the middle of that slot.
+        for order in [Order::Asc, Order::Desc] {
+            for page_index in [0, 100] {
+                DECODES.store(0, Ordering::Relaxed);
+                let got = sd.page(0..=0, 10, page_index, order);
+                let start = u64::from(page_index) * 10;
+                let expected = (start..start + 10).map(CountingKey).collect::<Vec<_>>();
+                assert_eq!(got, expected, "swap={swap}, order={order:?}");
+                assert_eq!(DECODES.load(Ordering::Relaxed), got.len());
+            }
+        }
+
+        // Two small slots between hot slots force a three-slot page whose
+        // lowest storage boundary has a large unused tail. Seeking past that
+        // tail must preserve ascending key order inside every slot.
+        for (slot, keys) in [
+            (1, 10_000..10_003),
+            (2, 20_000..20_003),
+            (3, 30_000..40_000),
+        ] {
+            sd.insert_batch(keys.map(|key| (slot, CountingKey(key))))
+                .unwrap();
+        }
+        for order in [Order::Asc, Order::Desc] {
+            let mut slots =
+                vec![0..10_000, 10_000..10_003, 20_000..20_003, 30_000..40_000];
+            if order == Order::Desc {
+                slots.reverse();
+            }
+            let reference = slots
+                .into_iter()
+                .flatten()
+                .map(CountingKey)
+                .collect::<Vec<_>>();
+            for page_index in [0, 999, 1000, 1001, 2000, 2001] {
+                DECODES.store(0, Ordering::Relaxed);
+                let got = sd.page(0..=3, 10, page_index, order);
+                let start = page_index as usize * 10;
+                let expected = reference
+                    .iter()
+                    .skip(start)
+                    .take(10)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    got, expected,
+                    "swap={swap}, order={order:?}, page={page_index}"
+                );
+                assert_eq!(DECODES.load(Ordering::Relaxed), got.len());
+            }
+        }
+    }
+}

@@ -12,7 +12,7 @@ tier-less; bulk uses `pending_slot_rows`.
 **SD1 Tier map pure** — bucket = `slot.floor_align(floor_base)`, `floor_base = cap^level` via saturating `floor_base_of`; no hidden state.
 **SD2 Cross-tier query** — spans all intersected tiers.
 **SD3 Boundaries** — each slot in exactly one bucket per level (insert bumps every level); consistent half-open.
-**SD4 Pagination** — offset-based by design (`page*size`); internal consistency per call; cross-call stability under concurrent mut is **not** required (documented).
+**SD4 Pagination** — offset-based by design (`page*size`); internal consistency per call; cross-call stability under concurrent mut is **not** required (documented). Reverse paging reverses slot groups only, preserving ascending keys within each slot. Consume planned quotas without scanning unused boundary tails; use one entry range, or two when a partial lowest boundary precedes other contributing slots.
 **SD5 swap_order** — layout only; logical results byte-equal true↔false.
 **SD6 Tier-less growth** — empty `levels` ⇒ `slot_rows` exact L0 count; may be stale once tiers exist (unused). Bulk adds pending; promote merges committed+staged. Hydrate/trunc re-seed mirror only re-entering tier-less. Serial/bulk/reopen same growth cadence.
 
@@ -30,7 +30,7 @@ inverted ⇒ empty. Results must equal the inclusive internal API.
 - [ ] Pure `floor_align` / `floor_base_of`
 - [ ] Ranges cover all tiers
 - [ ] No gap/overlap at bounds
-- [ ] Page internal consistency (offset design OK)
+- [ ] Page internal consistency (offset design OK); bounded boundary scans and ascending within-slot keys
 - [ ] Empty handled
 - [ ] Insert = query floor formula
 - [ ] swap_order parity
