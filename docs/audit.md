@@ -60,6 +60,14 @@
 
 ---
 
+### [LOW] tests: merge sharing measurement can underflow during compaction
+- **Where**: `strata/src/basic/persistent_btree/test.rs` (`merge_shares_untouched_target_subtrees`)
+- **What**: the package suite can panic subtracting physical node counts even when the merge is correct; an isolated rerun passes.
+- **Why**: background compaction removes previously released nodes between the two counts, so their difference is not a measure of new allocations.
+- **Suggested fix**: measure the monotonic node allocator delta for this private tree; preserve the path-copy bound and content/reference checks.
+
+---
+
 ## Won't Fix
 
 ### [MEDIUM] cached indexes: independently restored handles do not share runtime caches
