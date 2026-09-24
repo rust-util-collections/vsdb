@@ -55,6 +55,8 @@ type DagHead<V> = DagMapRawKey<V>;
 /// real disk I/O, so a `Default` impl would let generic code
 /// (`mem::take`, `.or_default()`, `.unwrap_or_default()`) create
 /// orphaned on-disk state invisibly. Use [`Self::new`] explicitly.
+/// [`Clone`] copies the complete connected graph independently, as described
+/// by [`DagMapRaw`].
 #[derive(Clone, Debug)]
 pub struct DagMapRawKey<V> {
     inner: DagMapRaw,
@@ -294,7 +296,7 @@ where
     /// Destroys the DAG map and all its children, unlinking it from its parent.
     ///
     /// The unlink is persisted in this node's parent slot and is visible to
-    /// pre-existing clones, shadows, and handles restored from metadata — see
+    /// pre-existing shadows and handles restored from metadata — see
     /// [`DagMapRaw::destroy`] for the full semantics.
     #[inline(always)]
     pub fn destroy(&mut self) {

@@ -43,7 +43,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize, de};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fmt,
     ops::{Deref, DerefMut},
     result::Result as StdResult,
@@ -77,7 +77,12 @@ const DESTROY_PARENT_KEY: &[u8] = &[2];
 /// whose entire idiom relies on `Default` being a cheap, side-effect-free
 /// placeholder) — silently creating orphaned, unreachable disk state one
 /// call at a time. Use [`Self::new`] explicitly instead.
-#[derive(Clone, Debug)]
+///
+/// [`Clone`] deep-copies the connected graph, including ancestors, siblings,
+/// descendants, and recovery links, into fresh storage in the same namespace.
+/// Structural operations on the copy never affect the original graph. Its
+/// cost is proportional to that graph's retained data and nodes.
+#[derive(Debug)]
 pub struct DagMapRaw {
     data: MapxRaw,
 
@@ -88,6 +93,66 @@ pub struct DagMapRaw {
 
     // child id --> child instance
     children: MapxOrdRawKey<DagMapRaw>,
+}
+
+impl Clone for DagMapRaw {
+    fn clone(&self) -> Self {
+        let requested = self.instance_id();
+        let mut sources = HashMap::new();
+        // SAFETY: this alias is only read while discovering the source graph.
+        // All writes below target newly allocated, independent prefixes.
+        let mut pending = vec![unsafe { self.shadow() }];
+        while let Some(node) = pending.pop() {
+            let id = node.instance_id();
+            if sources.contains_key(&id) {
+                continue;
+            }
+            pending.extend(node.parent.get_value());
+            pending.extend(node.children.iter().map(|(_, child)| child));
+            for key in [PRUNE_CLEARING_KEY, DESTROY_PARENT_KEY] {
+                pending.extend(node.parent.get_aux(key).flatten());
+            }
+            sources.insert(id, node);
+        }
+
+        // Allocate every identity before copying edges. Recovery can leave
+        // duplicate discovery links or links back to an already visited node.
+        let mut copies: HashMap<_, _> = sources
+            .iter()
+            .map(|(&id, source)| {
+                let ns = source.namespace();
+                (
+                    id,
+                    Self {
+                        data: source.data.clone(),
+                        parent: Orphan::new_in(&ns, None),
+                        children: MapxOrdRawKey::new_in(&ns),
+                    },
+                )
+            })
+            .collect();
+        let remap = |node: Self| {
+            // SAFETY: remapped aliases are serialized as graph edges only;
+            // no writes occur through these temporary handles.
+            unsafe { copies[&node.instance_id()].shadow() }
+        };
+        for (id, source) in &sources {
+            // SAFETY: only this handle mutates this fresh node's metadata.
+            // Other aliases are serialized into edges, never used to mutate.
+            let mut copy = unsafe { copies[id].shadow() };
+            copy.parent
+                .set_value(&source.parent.get_value().map(&remap));
+            for (key, child) in source.children.iter() {
+                copy.children.insert(key, &remap(child));
+            }
+            for key in [PRUNE_CLEARING_KEY, DESTROY_PARENT_KEY] {
+                if let Some(target) = source.parent.get_aux(key) {
+                    copy.parent.set_aux(key, &target.map(&remap));
+                }
+            }
+        }
+        copies.remove(&requested).expect("source node was copied")
+    }
 }
 
 impl Serialize for DagMapRaw {
@@ -853,7 +918,7 @@ impl DagMapRaw {
     /// as the **last** step removes its own child entry from the parent's
     /// `children` collection. Because both the data clearing and the
     /// parent unlink are persisted, **every** handle of this node —
-    /// including clones taken earlier and handles later restored via
+    /// including shadows taken earlier and handles later restored via
     /// [`from_meta`](Self::from_meta) — observes the destroyed state and
     /// can no longer resolve inherited reads through the parent chain.
     ///

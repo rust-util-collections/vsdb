@@ -817,3 +817,49 @@ fn get_mut_tombstone_edit_during_panic_does_not_abort() {
     assert!(r.is_err());
     assert_eq!(d.get("k").unwrap().as_slice(), b"v");
 }
+#[test]
+fn clone_prune_preserves_original_graph() {
+    let mut root = DagMapRaw::new(None);
+    root.insert(b"inherited", b"root");
+    let mut head = DagMapRaw::new(Some(&mut root));
+    head.insert(b"head", b"value");
+    let mut child = DagMapRaw::new(Some(&mut head));
+    child.insert(b"child", b"value");
+    let child_id = head.child_id(&child).unwrap();
+
+    let copy = head.clone();
+    assert_ne!(copy.instance_id(), head.instance_id());
+    assert_eq!(copy.namespace().id(), head.namespace().id());
+    assert_eq!(copy.get(b"inherited"), Some(b"root".to_vec()));
+    assert_eq!(copy.child_ids(), vec![child_id.clone()]);
+    let copied_child = copy.children.get(&child_id).unwrap();
+    assert_ne!(copied_child.instance_id(), child.instance_id());
+
+    let mut copied_root = copy.prune().unwrap();
+    assert_ne!(copied_root.instance_id(), root.instance_id());
+    assert_eq!(copied_child.get(b"head"), Some(b"value".to_vec()));
+    assert_eq!(copied_child.get(b"child"), Some(b"value".to_vec()));
+    assert_eq!(head.get(b"head"), Some(b"value".to_vec()));
+    assert_eq!(child.get(b"child"), Some(b"value".to_vec()));
+    assert!(root.child_id(&head).is_some());
+
+    copied_root.destroy();
+    assert!(copied_child.is_dead());
+    assert_eq!(child.get(b"child"), Some(b"value".to_vec()));
+    assert_eq!(child.get(b"inherited"), Some(b"root".to_vec()));
+}
+
+#[test]
+fn clone_remaps_prune_recovery_markers() {
+    let mut root = DagMapRaw::new(None);
+    let mut head = DagMapRaw::new(Some(&mut root));
+    head.insert(b"key", b"value");
+    let bytes = postcard::to_allocvec(&head).unwrap();
+    let original_root = head.prune().unwrap();
+    let consumed: DagMapRaw = postcard::from_bytes(&bytes).unwrap();
+
+    let copied_root = consumed.clone().prune().unwrap();
+    assert_ne!(copied_root.instance_id(), original_root.instance_id());
+    assert_eq!(copied_root.get(b"key"), Some(b"value".to_vec()));
+    assert_eq!(original_root.get(b"key"), Some(b"value".to_vec()));
+}

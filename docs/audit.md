@@ -12,14 +12,6 @@
 
 ## Open
 
-### [CRITICAL] dagmap: derived clones retain links into the original graph
-- **Where**: `strata/src/dagmap/raw/mod.rs` (`Clone`, `prune_mainline`)
-- **What**: cloning a parented node copies its component maps but leaves parent, child, and recovery-marker values pointing into the original graph. Pruning the clone of a head with a child destroys the original head as a side branch and erases the child's data.
-- **Why**: fresh component prefixes do not establish independent graph ownership; structural operations follow the copied aliases.
-- **Suggested fix**: iteratively deep-copy the connected graph and remap every structural reference, including recovery markers. Regress clone/prune/destroy isolation and copied recovery paths; preserve the wire format.
-
----
-
 ### [CRITICAL] trie: map replacement reuses another map's Merkle state
 - **Where**: `strata/src/trie/proof.rs` (`map_mut`, `merkle_root`, `sync_to_commit`, cache lifecycle)
 - **What**: replacing the underlying map through `*wrapper.map_mut() = replacement` preserves the old trie and cache identity. Independent maps reuse branch and commit numbers, so root queries can return the old map's root and proofs.
