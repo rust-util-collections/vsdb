@@ -45,7 +45,7 @@ fn composites_in_namespaces() {
     assert_eq!(vm2.get(vm2.main_branch(), &1).unwrap(), Some(10));
 
     // Scoped ambient placement covers whole subsystems.
-    let sd = ns.scope(|| SlotDex::<u64, u64>::new(16, false));
+    let sd = ns.scope(|| SlotDex::<u64, u64>::new(16, false).unwrap());
     assert_eq!(sd.namespace().id(), ns.id());
 
     let o = Orphan::new_in(&ns, 42u64);
@@ -85,7 +85,8 @@ fn composites_in_namespaces() {
             dim: 2,
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     assert_eq!(vd.namespace().id(), ns.id());
     assert_eq!(vd.metric(), MetricKind::Cosine);
     vd.insert(&"a".to_owned(), &[1.0, 0.0]).unwrap();

@@ -534,7 +534,7 @@ impl DagMapRaw {
         loop {
             let current_id = linebuf.last().unwrap().instance_id();
             if !seen.insert(current_id) {
-                return Err(VsdbError::Other {
+                return Err(VsdbError::Corrupt {
                     detail: "DAG mainline contains a parent cycle".to_owned(),
                 });
             }

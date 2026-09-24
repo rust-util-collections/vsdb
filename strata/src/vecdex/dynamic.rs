@@ -73,7 +73,7 @@ const WIRE_TAG_INNER_PRODUCT: u8 = 2;
 /// use vsdb::vecdex::{HnswConfig, VecDexDyn, distance::MetricKind};
 ///
 /// let cfg = HnswConfig { dim: 4, ..Default::default() };
-/// let mut idx: VecDexDyn<String> = VecDexDyn::new(MetricKind::Cosine, cfg);
+/// let mut idx: VecDexDyn<String> = VecDexDyn::new(MetricKind::Cosine, cfg).unwrap();
 ///
 /// idx.insert(&"doc-a".into(), &[0.1, 0.2, 0.3, 0.4]).unwrap();
 /// let results = idx.search(&[0.1, 0.2, 0.3, 0.4], 1).unwrap();
@@ -191,18 +191,22 @@ where
     S: Scalar,
 {
     /// Creates a new, empty index using `metric`; otherwise identical
-    /// to [`VecDex::new`] (same config validation and panics).
-    pub fn new(metric: MetricKind, config: HnswConfig) -> Self {
-        match metric {
-            MetricKind::L2 => Self::L2(VecDex::new(config)),
-            MetricKind::Cosine => Self::Cosine(VecDex::new(config)),
-            MetricKind::InnerProduct => Self::InnerProduct(VecDex::new(config)),
-        }
+    /// to [`VecDex::new`] (same config validation, errors and panics).
+    pub fn new(metric: MetricKind, config: HnswConfig) -> Result<Self> {
+        Ok(match metric {
+            MetricKind::L2 => Self::L2(VecDex::new(config)?),
+            MetricKind::Cosine => Self::Cosine(VecDex::new(config)?),
+            MetricKind::InnerProduct => Self::InnerProduct(VecDex::new(config)?),
+        })
     }
 
     /// [`new`](Self::new) placed in `ns` — every internal component
     /// lands in the same namespace (a composite never spans namespaces).
-    pub fn new_in(ns: &Namespace, metric: MetricKind, config: HnswConfig) -> Self {
+    pub fn new_in(
+        ns: &Namespace,
+        metric: MetricKind,
+        config: HnswConfig,
+    ) -> Result<Self> {
         ns.scope(|| Self::new(metric, config))
     }
 
@@ -256,8 +260,8 @@ where
     }
 
     /// Updates the default search beam width (see
-    /// [`VecDex::set_ef_search`], panics included).
-    pub fn set_ef_search(&mut self, ef: usize) {
+    /// [`VecDex::set_ef_search`]).
+    pub fn set_ef_search(&mut self, ef: usize) -> Result<()> {
         dispatch!(self, idx => idx.set_ef_search(ef))
     }
 
@@ -289,8 +293,8 @@ where
         }
     }
 
-    /// Clears all indexed data (see [`VecDex::clear`], panics included).
-    pub fn clear(&mut self) {
+    /// Clears all indexed data (see [`VecDex::clear`]).
+    pub fn clear(&mut self) -> Result<()> {
         dispatch!(self, idx => idx.clear())
     }
 

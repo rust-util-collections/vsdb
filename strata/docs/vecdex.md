@@ -13,7 +13,7 @@ embedding-based retrieval.
 use vsdb::vecdex::{VecDex, HnswConfig, distance::Cosine};
 
 let cfg = HnswConfig { dim: 768, ..Default::default() };
-let mut idx: VecDex<String, Cosine> = VecDex::new(cfg);
+let mut idx: VecDex<String, Cosine> = VecDex::new(cfg).unwrap();
 
 idx.insert(&"doc-a".into(), &embedding_a).unwrap();
 idx.insert(&"doc-b".into(), &embedding_b).unwrap();
@@ -46,8 +46,8 @@ This also applies to `VecDexDyn`.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `new` | `(config: HnswConfig) -> Self` | Create empty index (in the current ambient namespace) |
-| `new_in` | `(ns: &Namespace, config: HnswConfig) -> Self` | Create empty index placed in `ns` |
+| `new` | `(config: HnswConfig) -> Result<Self>` | Create empty index (in the current ambient namespace); `InvalidConfig` on a bad config |
+| `new_in` | `(ns: &Namespace, config: HnswConfig) -> Result<Self>` | Create empty index placed in `ns` |
 | `namespace` | `(&self) -> Namespace` | The namespace this index lives in |
 | `instance_id` | `(&self) -> InstanceId` | Complete persistent identity (`map_id` + owning namespace) |
 | `insert` | `(&mut self, key: &K, vector: &[S]) -> Result<()>` | Add or update a vector |
@@ -63,8 +63,8 @@ This also applies to `VecDexDyn`.
 | `iter` | `(&self) -> impl Iterator<Item = (K, Vec<S>)> + '_` | Iterate key/vector pairs |
 | `len` | `(&self) -> u64` | Number of indexed vectors |
 | `is_empty` | `(&self) -> bool` | Whether index is empty |
-| `set_ef_search` | `(&mut self, ef: usize)` | Update the default search beam width |
-| `clear` | `(&mut self)` | Remove all data |
+| `set_ef_search` | `(&mut self, ef: usize) -> Result<()>` | Update the default search beam width |
+| `clear` | `(&mut self) -> Result<()>` | Remove all data |
 | `compact` | `(&mut self) -> Result<()>` | Rebuild graph from existing vectors |
 | `save_meta` | `(&self) -> Result<InstanceId>` | Persist metadata for later recovery (create-time constant; saving once after creation suffices) |
 | `from_meta` | `(instance_id: impl Into<InstanceId>) -> Result<Self>` | Recover from saved metadata (a bare `u64` works for default-namespace instances) |
@@ -118,7 +118,7 @@ at compile time, use `VecDexDyn<K, S>` with `MetricKind`:
 use vsdb::vecdex::{VecDexDyn, HnswConfig, distance::MetricKind};
 
 let cfg = HnswConfig { dim: 4, ..Default::default() };
-let mut idx: VecDexDyn<String> = VecDexDyn::new(MetricKind::Cosine, cfg);
+let mut idx: VecDexDyn<String> = VecDexDyn::new(MetricKind::Cosine, cfg).unwrap();
 idx.insert(&"doc-a".into(), &[0.1, 0.2, 0.3, 0.4]).unwrap();
 assert_eq!(idx.metric(), MetricKind::Cosine);
 ```

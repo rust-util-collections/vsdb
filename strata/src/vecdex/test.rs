@@ -27,7 +27,7 @@ fn basic_insert_search_l2() {
         dim: 3,
         ..Default::default()
     };
-    let mut idx: VecDex<String, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<String, L2> = VecDex::new(cfg).unwrap();
 
     idx.insert(&"a".into(), &[1.0, 0.0, 0.0]).unwrap();
     idx.insert(&"b".into(), &[0.0, 1.0, 0.0]).unwrap();
@@ -47,7 +47,7 @@ fn basic_insert_search_cosine() {
         dim: 3,
         ..Default::default()
     };
-    let mut idx: VecDex<String, Cosine> = VecDex::new(cfg);
+    let mut idx: VecDex<String, Cosine> = VecDex::new(cfg).unwrap();
 
     idx.insert(&"a".into(), &[1.0, 0.0, 0.0]).unwrap();
     idx.insert(&"b".into(), &[0.0, 1.0, 0.0]).unwrap();
@@ -63,7 +63,7 @@ fn basic_insert_search_inner_product() {
         dim: 3,
         ..Default::default()
     };
-    let mut idx: VecDex<String, InnerProduct> = VecDex::new(cfg);
+    let mut idx: VecDex<String, InnerProduct> = VecDex::new(cfg).unwrap();
 
     idx.insert(&"a".into(), &[1.0, 0.0, 0.0]).unwrap();
     idx.insert(&"b".into(), &[0.0, 1.0, 0.0]).unwrap();
@@ -80,7 +80,7 @@ fn search_empty_index() {
         dim: 4,
         ..Default::default()
     };
-    let idx: VecDex<u64, L2> = VecDex::new(cfg);
+    let idx: VecDex<u64, L2> = VecDex::new(cfg).unwrap();
     let results = idx.search(&[0.0; 4], 5).unwrap();
     assert!(results.is_empty());
 }
@@ -91,7 +91,7 @@ fn dimension_mismatch() {
         dim: 3,
         ..Default::default()
     };
-    let mut idx: VecDex<u64, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u64, L2> = VecDex::new(cfg).unwrap();
     assert!(idx.insert(&1, &[0.0, 0.0]).is_err());
     idx.insert(&1, &[0.0, 0.0, 0.0]).unwrap();
     assert!(idx.search(&[0.0, 0.0], 1).is_err());
@@ -103,7 +103,7 @@ fn remove_and_search() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<String, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<String, L2> = VecDex::new(cfg).unwrap();
 
     idx.insert(&"a".into(), &[0.0, 0.0]).unwrap();
     idx.insert(&"b".into(), &[1.0, 1.0]).unwrap();
@@ -126,7 +126,7 @@ fn remove_nonexistent() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<String, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<String, L2> = VecDex::new(cfg).unwrap();
     let removed = idx.remove(&"nope".into()).unwrap();
     assert!(!removed);
 }
@@ -137,7 +137,7 @@ fn duplicate_key_update() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<String, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<String, L2> = VecDex::new(cfg).unwrap();
 
     idx.insert(&"a".into(), &[0.0, 0.0]).unwrap();
     idx.insert(&"b".into(), &[10.0, 10.0]).unwrap();
@@ -157,7 +157,7 @@ fn replacement_is_staged_without_mutating_committed_state() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg.clone());
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg.clone()).unwrap();
     idx.insert(&7, &[1.0, 1.0]).unwrap();
     let old_node = decode_node_id(
         &idx.store
@@ -192,7 +192,7 @@ fn save_meta_restore() {
         dim: 3,
         ..Default::default()
     };
-    let mut idx: VecDex<String, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<String, L2> = VecDex::new(cfg).unwrap();
     idx.insert(&"a".into(), &[1.0, 2.0, 3.0]).unwrap();
     idx.insert(&"b".into(), &[4.0, 5.0, 6.0]).unwrap();
 
@@ -214,7 +214,7 @@ fn from_meta_rejects_wrong_metric_or_key() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
     idx.insert(&1, &[1.0, 2.0]).unwrap();
 
     let id = idx.save_meta().unwrap();
@@ -229,12 +229,12 @@ fn clear_resets_everything() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
     idx.insert(&1, &[0.0, 0.0]).unwrap();
     idx.insert(&2, &[1.0, 1.0]).unwrap();
     assert_eq!(idx.len(), 2);
 
-    idx.clear();
+    idx.clear().unwrap();
     assert_eq!(idx.len(), 0);
     assert!(idx.is_empty());
     assert!(idx.search(&[0.0, 0.0], 1).unwrap().is_empty());
@@ -250,14 +250,14 @@ fn clear_preserves_ef_search_across_restore() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
     let id = idx.save_meta().unwrap();
 
     for i in 0..20u32 {
         idx.insert(&i, &[i as f32, 0.0]).unwrap();
     }
-    idx.set_ef_search(123);
-    idx.clear();
+    idx.set_ef_search(123).unwrap();
+    idx.clear().unwrap();
     assert!(idx.is_empty());
     assert_eq!(idx.state.ef_search, 123);
     drop(idx);
@@ -284,7 +284,7 @@ fn recall_random_vectors() {
         ef_construction: 200,
         ef_search: 100,
     };
-    let mut idx: VecDex<u64, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u64, L2> = VecDex::new(cfg).unwrap();
 
     let n = 200;
     let k = 5;
@@ -341,7 +341,7 @@ fn filtered_search_basic() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<String, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<String, L2> = VecDex::new(cfg).unwrap();
 
     idx.insert(&"cat-a".into(), &[0.0, 0.0]).unwrap();
     idx.insert(&"cat-b".into(), &[0.1, 0.1]).unwrap();
@@ -366,7 +366,7 @@ fn filtered_search_no_match() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<String, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<String, L2> = VecDex::new(cfg).unwrap();
 
     idx.insert(&"a".into(), &[0.0, 0.0]).unwrap();
     idx.insert(&"b".into(), &[1.0, 1.0]).unwrap();
@@ -420,7 +420,7 @@ fn filtered_search_respects_k() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
 
     // Even keys near origin, odd keys far away.
     for i in 0..20u32 {
@@ -448,7 +448,7 @@ fn f64_basic() {
         dim: 3,
         ..Default::default()
     };
-    let mut idx: VecDex<String, L2, f64> = VecDex::new(cfg);
+    let mut idx: VecDex<String, L2, f64> = VecDex::new(cfg).unwrap();
 
     idx.insert(&"a".into(), &[1.0_f64, 0.0, 0.0]).unwrap();
     idx.insert(&"b".into(), &[0.0_f64, 1.0, 0.0]).unwrap();
@@ -465,7 +465,7 @@ fn compact_restores_search() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
     let id = idx.save_meta().unwrap();
 
     for i in 0..20u32 {
@@ -506,7 +506,7 @@ fn insert_batch_works() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
 
     let items: Vec<(u32, Vec<f32>)> =
         (0..10u32).map(|i| (i, vec![i as f32, 0.0])).collect();
@@ -523,7 +523,7 @@ fn k_larger_than_index_size() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
 
     idx.insert(&1, &[0.0, 0.0]).unwrap();
     idx.insert(&2, &[1.0, 1.0]).unwrap();
@@ -544,7 +544,7 @@ fn remove_entry_point_preserves_max_layer() {
         ef_construction: 50,
         ef_search: 50,
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
 
     // Insert enough nodes that some land on higher layers.
     for i in 0..50u32 {
@@ -580,7 +580,7 @@ fn remove_entry_point_reconnects_isolated_true_max_node() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
 
     // node 0 "hi": true global max layer (4), but ISOLATED — no edges at
     // any layer.
@@ -648,7 +648,7 @@ fn saturated_neighbor_pruning_keeps_new_entry_point_reachable() {
         ef_construction: 20,
         ef_search: 20,
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg.clone());
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg.clone()).unwrap();
     let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state.clone());
 
     for (node_id, value) in [(0, [0.0, 0.0]), (1, [0.1, 0.0]), (2, [0.2, 0.0])] {
@@ -712,7 +712,7 @@ fn single_node_duplicate_key_update() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<String, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<String, L2> = VecDex::new(cfg).unwrap();
 
     idx.insert(&"only".into(), &[0.0, 0.0]).unwrap();
     assert_eq!(idx.len(), 1);
@@ -735,7 +735,7 @@ fn update_entry_point_vector() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
 
     for i in 0..10u32 {
         idx.insert(&i, &[i as f32, 0.0]).unwrap();
@@ -762,7 +762,7 @@ fn consecutive_entry_point_removals() {
         ef_construction: 50,
         ef_search: 50,
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
 
     for i in 0..20u32 {
         idx.insert(&i, &[i as f32, 0.0]).unwrap();
@@ -791,7 +791,7 @@ fn remove_all_then_reinsert() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
 
     for i in 0..10u32 {
         idx.insert(&i, &[i as f32, 0.0]).unwrap();
@@ -822,7 +822,7 @@ fn graph_connectivity_after_deletions() {
         ef_construction: 100,
         ef_search: 50,
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
 
     for i in 0..50u32 {
         idx.insert(&i, &[i as f32, (i as f32 * 0.3).sin()]).unwrap();
@@ -880,7 +880,7 @@ fn compact_improves_or_maintains_recall() {
         ef_construction: 100,
         ef_search: 100,
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
 
     let mut vecs = Vec::new();
     for i in 0..100u32 {
@@ -937,7 +937,7 @@ fn recall_large_scale() {
         ef_construction: 200,
         ef_search: 100,
     };
-    let mut idx: VecDex<u64, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u64, L2> = VecDex::new(cfg).unwrap();
 
     let n = 500;
     let k = 10;
@@ -979,7 +979,7 @@ fn search_ef_variants() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
 
     for i in 0..20u32 {
         idx.insert(&i, &[i as f32, 0.0]).unwrap();
@@ -1006,7 +1006,7 @@ fn cosine_zero_vector() {
         dim: 3,
         ..Default::default()
     };
-    let mut idx: VecDex<String, Cosine> = VecDex::new(cfg);
+    let mut idx: VecDex<String, Cosine> = VecDex::new(cfg).unwrap();
 
     idx.insert(&"zero".into(), &[0.0, 0.0, 0.0]).unwrap();
     idx.insert(&"one".into(), &[1.0, 0.0, 0.0]).unwrap();
@@ -1138,7 +1138,7 @@ fn compact_empty_noop() {
         dim: 3,
         ..Default::default()
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
     idx.compact().unwrap();
     assert_eq!(idx.len(), 0);
 }
@@ -1154,7 +1154,7 @@ fn minimum_m_config() {
         ef_construction: 50,
         ef_search: 50,
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
 
     for i in 0..10u32 {
         idx.insert(&i, &[i as f32, 0.0]).unwrap();
@@ -1166,16 +1166,49 @@ fn minimum_m_config() {
 }
 
 #[test]
-#[should_panic(expected = "m must be >= 2")]
-fn m_one_panics() {
-    let cfg = HnswConfig {
+fn invalid_configs_are_rejected() {
+    let ok = HnswConfig {
         dim: 2,
-        m: 1,
+        m: 2,
         m_max0: 2,
         ef_construction: 50,
         ef_search: 50,
     };
-    let _: VecDex<u32, L2> = VecDex::new(cfg);
+    for bad in [
+        HnswConfig {
+            dim: 0,
+            ..ok.clone()
+        },
+        HnswConfig { m: 1, ..ok.clone() },
+        HnswConfig {
+            m_max0: 1,
+            ..ok.clone()
+        },
+        HnswConfig {
+            ef_construction: 0,
+            ..ok.clone()
+        },
+    ] {
+        assert!(matches!(
+            VecDex::<u32, L2>::new(bad),
+            Err(VsdbError::InvalidConfig { .. })
+        ));
+    }
+    let mut idx: VecDex<u32, L2> = VecDex::new(ok).unwrap();
+    assert!(matches!(
+        idx.insert(&1, &[1.0]),
+        Err(VsdbError::DimensionMismatch {
+            expected: 2,
+            found: 1
+        })
+    ));
+    assert!(matches!(
+        idx.search(&[1.0, 2.0, 3.0], 1),
+        Err(VsdbError::DimensionMismatch {
+            expected: 2,
+            found: 3
+        })
+    ));
 }
 
 // ---- T-12: Serde roundtrip ----
@@ -1186,7 +1219,7 @@ fn serde_roundtrip() {
         dim: 3,
         ..Default::default()
     };
-    let mut idx: VecDex<String, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<String, L2> = VecDex::new(cfg).unwrap();
     idx.insert(&"a".into(), &[1.0, 2.0, 3.0]).unwrap();
     idx.insert(&"b".into(), &[4.0, 5.0, 6.0]).unwrap();
 
@@ -1206,7 +1239,7 @@ fn get_and_contains_key() {
         dim: 3,
         ..Default::default()
     };
-    let mut idx: VecDex<String, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<String, L2> = VecDex::new(cfg).unwrap();
     idx.insert(&"a".into(), &[1.0, 2.0, 3.0]).unwrap();
 
     assert!(idx.contains_key(&"a".into()));
@@ -1223,7 +1256,7 @@ fn keys_and_iter() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
     idx.insert(&1, &[1.0, 0.0]).unwrap();
     idx.insert(&2, &[0.0, 1.0]).unwrap();
 
@@ -1244,9 +1277,9 @@ fn set_ef_search_works() {
         ef_search: 50,
         ..Default::default()
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
     idx.insert(&1, &[0.0, 0.0]).unwrap();
-    idx.set_ef_search(200);
+    idx.set_ef_search(200).unwrap();
 
     let results = idx.search(&[0.0, 0.0], 1).unwrap();
     assert_eq!(results.len(), 1);
@@ -1259,7 +1292,7 @@ fn restore_after_save_meta() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
     for i in 0..5u32 {
         idx.insert(&i, &[i as f32, 0.0]).unwrap();
     }
@@ -1275,7 +1308,7 @@ fn restore_without_explicit_save_is_consistent() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
     for i in 0..7u32 {
         idx.insert(&i, &[i as f32, 0.0]).unwrap();
     }
@@ -1301,7 +1334,7 @@ fn hdr_meta_is_create_time_constant() {
         dim: 4,
         ..Default::default()
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
     let at_creation = postcard::to_allocvec(&idx).unwrap();
 
     for i in 0..64u32 {
@@ -1315,7 +1348,7 @@ fn hdr_meta_is_create_time_constant() {
     }
     assert_eq!(at_creation, postcard::to_allocvec(&idx).unwrap());
 
-    idx.clear();
+    idx.clear().unwrap();
     assert_eq!(at_creation, postcard::to_allocvec(&idx).unwrap());
 }
 
@@ -1325,7 +1358,7 @@ fn serde_roundtrip_preserves_graph_state() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
     for i in 0..12u32 {
         idx.insert(&i, &[i as f32, 1.0]).unwrap();
     }
@@ -1349,7 +1382,7 @@ fn node_ids_are_never_reused_across_restores() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
     for i in 0..6u32 {
         idx.insert(&i, &[i as f32, 0.0]).unwrap();
     }
@@ -1376,7 +1409,7 @@ fn dyn_metric_semantics_match_static() {
     };
 
     // L2: nearest by squared euclidean distance.
-    let mut idx = VecDexDyn::<String>::new(MetricKind::L2, cfg());
+    let mut idx = VecDexDyn::<String>::new(MetricKind::L2, cfg()).unwrap();
     assert_eq!(idx.metric(), MetricKind::L2);
     idx.insert(&"near".into(), &[1.0, 0.0, 0.0]).unwrap();
     idx.insert(&"far".into(), &[3.0, 0.0, 0.0]).unwrap();
@@ -1386,7 +1419,7 @@ fn dyn_metric_semantics_match_static() {
     assert_eq!(r[1].1, 9.0);
 
     // Cosine: alignment beats magnitude.
-    let mut idx = VecDexDyn::<String>::new(MetricKind::Cosine, cfg());
+    let mut idx = VecDexDyn::<String>::new(MetricKind::Cosine, cfg()).unwrap();
     assert_eq!(idx.metric(), MetricKind::Cosine);
     idx.insert(&"aligned".into(), &[5.0, 0.0, 0.0]).unwrap();
     idx.insert(&"orthogonal".into(), &[0.0, 1.0, 0.0]).unwrap();
@@ -1395,7 +1428,7 @@ fn dyn_metric_semantics_match_static() {
     assert!(r[0].1.abs() < 1e-6);
 
     // InnerProduct: larger dot product ranks first.
-    let mut idx = VecDexDyn::<String>::new(MetricKind::InnerProduct, cfg());
+    let mut idx = VecDexDyn::<String>::new(MetricKind::InnerProduct, cfg()).unwrap();
     assert_eq!(idx.metric(), MetricKind::InnerProduct);
     idx.insert(&"big".into(), &[5.0, 0.0, 0.0]).unwrap();
     idx.insert(&"small".into(), &[1.0, 0.0, 0.0]).unwrap();
@@ -1410,7 +1443,7 @@ fn dyn_full_api_delegation() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDexDyn<u32> = VecDexDyn::new(MetricKind::L2, cfg);
+    let mut idx: VecDexDyn<u32> = VecDexDyn::new(MetricKind::L2, cfg).unwrap();
     assert!(idx.is_empty());
 
     idx.insert_batch(&[
@@ -1429,7 +1462,7 @@ fn dyn_full_api_delegation() {
     assert!(idx.insert(&9, &[1.0]).is_err());
     assert!(idx.search(&[1.0], 1).is_err());
 
-    idx.set_ef_search(64);
+    idx.set_ef_search(64).unwrap();
     assert_eq!(idx.search_ef(&[1.0, 0.0], 1, 32).unwrap()[0].0, 1);
     let filtered = idx.search_with_filter(&[1.0, 0.0], 3, |k| *k != 1).unwrap();
     assert!(filtered.iter().all(|(k, _)| *k != 1));
@@ -1445,7 +1478,7 @@ fn dyn_full_api_delegation() {
     idx.compact().unwrap();
     assert_eq!(idx.search(&[1.0, 0.0], 1).unwrap()[0].0, 1);
 
-    idx.clear();
+    idx.clear().unwrap();
     assert!(idx.is_empty());
     idx.insert(&7, &[7.0, 0.0]).unwrap();
     assert_eq!(idx.len(), 1);
@@ -1457,7 +1490,7 @@ fn dyn_save_meta_restores_metric() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDexDyn<u32> = VecDexDyn::new(MetricKind::InnerProduct, cfg);
+    let mut idx: VecDexDyn<u32> = VecDexDyn::new(MetricKind::InnerProduct, cfg).unwrap();
     idx.insert(&1, &[1.0, 2.0]).unwrap();
     idx.insert(&2, &[3.0, 4.0]).unwrap();
     let id = idx.save_meta().unwrap();
@@ -1482,7 +1515,7 @@ fn dyn_rejects_static_meta() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDex<u32, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
     idx.insert(&1, &[1.0, 2.0]).unwrap();
     let id = idx.save_meta().unwrap();
 
@@ -1505,7 +1538,7 @@ fn dyn_wire_tags_are_frozen() {
         (MetricKind::Cosine, 1),
         (MetricKind::InnerProduct, 2),
     ] {
-        let idx = VecDexDyn::<u32>::new(metric, cfg());
+        let idx = VecDexDyn::<u32>::new(metric, cfg()).unwrap();
         let bytes = postcard::to_allocvec(&idx).unwrap();
         assert_eq!(bytes[0], tag, "wire tag drifted for {metric:?}");
         let restored: VecDexDyn<u32> = postcard::from_bytes(&bytes).unwrap();
@@ -1526,7 +1559,8 @@ fn dyn_f64_end_to_end() {
     };
     // Cosine on f64 exercises the norm computations through the
     // dispatch layer with the non-default scalar.
-    let mut idx: VecDexDyn<String, f64> = VecDexDyn::new(MetricKind::Cosine, cfg);
+    let mut idx: VecDexDyn<String, f64> =
+        VecDexDyn::new(MetricKind::Cosine, cfg).unwrap();
     idx.insert(&"aligned".into(), &[10.0_f64, 0.0, 0.0])
         .unwrap();
     idx.insert(&"orthogonal".into(), &[0.0_f64, 3.0, 0.0])
@@ -1567,7 +1601,7 @@ fn filtered_search_keeps_recall_under_selective_filters() {
         dim,
         ..Default::default()
     };
-    let mut idx: VecDex<u64, L2> = VecDex::new(cfg);
+    let mut idx: VecDex<u64, L2> = VecDex::new(cfg).unwrap();
 
     // 1% of keys pass the filter.
     let n = 1500u64;

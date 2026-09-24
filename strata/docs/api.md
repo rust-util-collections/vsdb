@@ -296,7 +296,7 @@ assert_eq!(root.len(), 32);
 ```rust,ignore
 use vsdb::SlotDex64;  // SlotDex<u64, K> alias — slot type is u64
 
-let mut db = SlotDex64::<String>::new(10u64, false); // tier_capacity must be >= 2
+let mut db = SlotDex64::<String>::new(10u64, false).unwrap(); // tier_capacity must be >= 2
 
 // Insert entries into slots (e.g., timestamps)
 db.insert(100, "entry_a".to_string()).unwrap();
@@ -315,7 +315,7 @@ let entries = db.get_entries_by_page_slot(Some(100), Some(200), 10, 0, false);
 assert_eq!(entries.len(), 3);
 
 // Remove
-db.remove(100, &"entry_a".to_string());
+db.remove(100, &"entry_a".to_string()).unwrap();
 assert_eq!(db.total(), 3);
 
 // Bulk insertion (amortizes engine writes; ideal for imports/rebuilds)

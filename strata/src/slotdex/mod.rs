@@ -36,7 +36,7 @@ use crate::{
     KeyEnDeOrdered,
     common::{
         InstanceId, ensure_writable,
-        error::Result,
+        error::{Result, VsdbError},
         staged::{StagedRows, prefix_successor},
     },
 };
@@ -327,7 +327,7 @@ where
         ns: &crate::common::Namespace,
         tier_capacity: S,
         swap_order: bool,
-    ) -> Self {
+    ) -> Result<Self> {
         ns.scope(|| Self::new(tier_capacity, swap_order))
     }
 
@@ -345,16 +345,25 @@ where
     ///   this factor, so a capacity of 1 would never terminate tier growth.
     /// * `swap_order` - If `true`, reverses the internal slot order. This can improve
     ///   performance for applications that primarily query in reverse chronological order.
-    pub fn new(tier_capacity: S, swap_order: bool) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// [`VsdbError::InvalidConfig`] if `tier_capacity < 2`.
+    ///
+    /// # Panics
+    ///
+    /// Panics in read-only mode (no storage can be allocated).
+    pub fn new(tier_capacity: S, swap_order: bool) -> Result<Self> {
         // Each level's floor_base is tier_capacity^level; growth only
         // terminates when every new level strictly coarsens the previous
         // one, which requires a capacity of at least 2.
-        assert!(
-            tier_capacity.as_i128() >= 2,
-            "SlotDex: tier_capacity must be >= 2"
-        );
+        if tier_capacity.as_i128() < 2 {
+            return Err(VsdbError::InvalidConfig {
+                detail: "SlotDex tier_capacity must be >= 2".to_owned(),
+            });
+        }
 
-        Self {
+        Ok(Self {
             store: MapxRaw::new(),
             tier_capacity,
             swap_order,
@@ -362,7 +371,7 @@ where
             levels: vec![],
             slot_rows: 0,
             _p: PhantomData,
-        }
+        })
     }
 
     /// Reconnects to an existing store and rebuilds the in-memory caches
@@ -636,17 +645,20 @@ where
     /// * `slot` - The slot to remove the key from.
     /// * `k` - The key to remove.
     ///
-    /// # Panics
+    /// Removing an absent key is a no-op.
     ///
-    /// Panics if the engine-level batch commit fails (matching the
-    /// behavior of the plain collection types on engine write failure);
-    /// nothing is applied in that case.
-    pub fn remove(&mut self, slot: S, k: &K) {
+    /// # Errors
+    ///
+    /// [`VsdbError::ReadOnly`] in read-only mode, or the batch commit
+    /// error; in both cases neither the on-disk state nor the in-memory
+    /// caches are modified.
+    pub fn remove(&mut self, slot: S, k: &K) -> Result<()> {
+        ensure_writable(&self.namespace(), "slot index remove")?;
         let slot = self.to_storage_slot(slot);
 
         let ekey = entry_key(&slot, k);
         if !self.store.contains_key(&ekey) {
-            return;
+            return Ok(());
         }
 
         let mut staged = StagedRows::new();
@@ -691,9 +703,7 @@ where
             TOTAL_KEY.to_vec(),
             encode_cnt(self.total_cache.saturating_sub(1)).to_vec(),
         );
-        staged
-            .commit(&mut self.store)
-            .expect("vsdb: SlotDex remove batch commit failed");
+        staged.commit(&mut self.store)?;
 
         let had_tiers = !self.levels.is_empty();
         self.levels.truncate(kept);
@@ -721,6 +731,7 @@ where
             self.slot_rows = self.slot_rows.saturating_sub(1);
         }
         self.total_cache = self.total_cache.saturating_sub(1);
+        Ok(())
     }
 
     /// Clears the `SlotDex`, removing all entries and tier levels.
@@ -728,11 +739,18 @@ where
     /// The wipe is a **single atomic engine write batch** (one
     /// engine-level range tombstone), so a crash can never expose a
     /// partially-cleared index; the in-memory caches are reset to match.
-    pub fn clear(&mut self) {
-        self.store.clear();
+    ///
+    /// # Errors
+    ///
+    /// [`VsdbError::ReadOnly`] in read-only mode, or the batch commit
+    /// error; nothing is modified in either case.
+    pub fn clear(&mut self) -> Result<()> {
+        ensure_writable(&self.namespace(), "slot index clear")?;
+        self.store.batch_wiped().commit()?;
         self.levels.clear();
         self.slot_rows = 0;
         self.total_cache = 0;
+        Ok(())
     }
 
     // =====================================================================

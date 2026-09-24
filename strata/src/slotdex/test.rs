@@ -16,7 +16,7 @@ fn workflow_swap_order() {
 }
 
 fn slot_db(mn: u64, swap_order: bool) {
-    let mut db = SlotDex::new(mn, swap_order);
+    let mut db = SlotDex::new(mn, swap_order).unwrap();
     let mut test_db = testdb::TestDB::default();
 
     let mut slot_min = u64::MAX;
@@ -44,7 +44,7 @@ fn slot_db(mn: u64, swap_order: bool) {
 
     assert_queryable(&db, &test_db, slot_min, slot_max);
 
-    db.clear();
+    db.clear().unwrap();
     assert_eq!(0, db.total());
     assert!(db.get_entries_by_page(10, 0, true).is_empty());
     assert!(db.get_entries_by_page(10, 0, false).is_empty());
@@ -143,7 +143,7 @@ const fn siz() -> u64 {
 
 #[test]
 fn single_handle_rows() {
-    let mut db: SlotDex<u64, u32> = SlotDex::new(16, false);
+    let mut db: SlotDex<u64, u32> = SlotDex::new(16, false).unwrap();
 
     (0..100u32).for_each(|i| {
         db.insert(0, i).unwrap();
@@ -162,7 +162,7 @@ fn single_handle_rows() {
     let level_rows: usize = db.levels.iter().map(|l| l.buckets.len()).sum();
     assert_eq!(rows, 100 + 1 + level_rows + 1);
 
-    db.clear();
+    db.clear().unwrap();
     assert_eq!(db.total(), 0);
     assert!(db.store.iter().next().is_none());
 }
@@ -173,7 +173,7 @@ fn reverse_paging_reverses_slots_only_not_within_slot() {
     // only the slot order, never the within-slot order, and must return
     // identical results under both storage layouts (`swap_order`).
     for swap_order in [false, true] {
-        let mut db: SlotDex<u64, u64> = SlotDex::new(16, swap_order);
+        let mut db: SlotDex<u64, u64> = SlotDex::new(16, swap_order).unwrap();
         // slot 5: {10,20,30}; slot 9: {40,50}
         for k in [10u64, 20, 30] {
             db.insert(5, k).unwrap();
@@ -211,7 +211,7 @@ fn reverse_paging_reverses_slots_only_not_within_slot() {
 fn hdr_meta_is_create_time_constant() {
     // The serialized handle metadata must never change after creation:
     // tier growth, removals, and clears only write ordinary data rows.
-    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false).unwrap();
     let at_creation = postcard::to_allocvec(&db).unwrap();
 
     for i in 0..500u64 {
@@ -221,11 +221,11 @@ fn hdr_meta_is_create_time_constant() {
     assert_eq!(at_creation, postcard::to_allocvec(&db).unwrap());
 
     for i in 0..400u64 {
-        db.remove(i, &i);
+        db.remove(i, &i).unwrap();
     }
     assert_eq!(at_creation, postcard::to_allocvec(&db).unwrap());
 
-    db.clear();
+    db.clear().unwrap();
     assert_eq!(at_creation, postcard::to_allocvec(&db).unwrap());
 
     // save_meta is idempotent pure persistence on a shared reference.
@@ -238,7 +238,7 @@ fn hdr_meta_is_create_time_constant() {
 
 #[test]
 fn empty_db_queries() {
-    let db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    let db: SlotDex<u64, u64> = SlotDex::new(8, false).unwrap();
     assert_eq!(db.total(), 0);
     assert!(db.get_entries_by_page(10, 0, false).is_empty());
     assert!(db.get_entries_by_page(10, 0, true).is_empty());
@@ -249,7 +249,7 @@ fn empty_db_queries() {
 
 #[test]
 fn single_entry() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false).unwrap();
     db.insert(42, 100).unwrap();
 
     assert_eq!(db.total(), 1);
@@ -264,16 +264,16 @@ fn single_entry() {
 
 #[test]
 fn insert_remove_reinsert() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false).unwrap();
     db.insert(0, 10).unwrap();
     db.insert(0, 20).unwrap();
     assert_eq!(db.total(), 2);
 
-    db.remove(0, &10);
+    db.remove(0, &10).unwrap();
     assert_eq!(db.total(), 1);
     assert_eq!(db.get_entries_by_page(10, 0, false), vec![20]);
 
-    db.remove(0, &20);
+    db.remove(0, &20).unwrap();
     assert_eq!(db.total(), 0);
     assert!(db.get_entries_by_page(10, 0, false).is_empty());
 
@@ -285,17 +285,17 @@ fn insert_remove_reinsert() {
 
 #[test]
 fn remove_nonexistent_is_noop() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false).unwrap();
     db.insert(0, 1).unwrap();
-    db.remove(0, &999); // does not exist
+    db.remove(0, &999).unwrap(); // does not exist
     assert_eq!(db.total(), 1);
-    db.remove(1, &1); // wrong slot
+    db.remove(1, &1).unwrap(); // wrong slot
     assert_eq!(db.total(), 1);
 }
 
 #[test]
 fn duplicate_insert_is_noop() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false).unwrap();
     db.insert(0, 1).unwrap();
     db.insert(0, 1).unwrap(); // duplicate
     assert_eq!(db.total(), 1);
@@ -303,7 +303,7 @@ fn duplicate_insert_is_noop() {
 
 #[test]
 fn page_boundaries_exact() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(64, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(64, false).unwrap();
     // Insert exactly 20 entries: slots 0..20, key = slot
     for i in 0u64..20 {
         db.insert(i, i).unwrap();
@@ -330,7 +330,7 @@ fn page_boundaries_exact() {
 
 #[test]
 fn page_size_larger_than_total() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false).unwrap();
     for i in 0u64..3 {
         db.insert(i, i).unwrap();
     }
@@ -343,7 +343,7 @@ fn page_size_larger_than_total() {
 
 #[test]
 fn slot_range_query() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false).unwrap();
     for i in 0u64..100 {
         db.insert(i, i).unwrap();
     }
@@ -362,7 +362,7 @@ fn slot_range_query() {
 
 #[test]
 fn entry_cnt_within_range() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false).unwrap();
     for i in 0u64..100 {
         db.insert(i, i).unwrap();
     }
@@ -376,7 +376,7 @@ fn entry_cnt_within_range() {
 
 #[test]
 fn multiple_entries_per_slot() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false).unwrap();
     // Slot 0 gets 5 entries, slot 1 gets 3 entries
     for i in 0u64..5 {
         db.insert(0, i).unwrap();
@@ -399,7 +399,7 @@ fn multiple_entries_per_slot() {
 
 #[test]
 fn tier_growth_and_shrink() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false).unwrap();
     // Insert enough to trigger tier creation (> 8 distinct slot floors)
     for i in 0u64..100 {
         db.insert(i, i).unwrap();
@@ -415,7 +415,7 @@ fn tier_growth_and_shrink() {
 
     // Remove most entries
     for i in 0u64..95 {
-        db.remove(i, &i);
+        db.remove(i, &i).unwrap();
     }
     assert_eq!(db.total(), 5);
     assert_eq!(
@@ -426,7 +426,7 @@ fn tier_growth_and_shrink() {
 
 #[test]
 fn swap_order_basic() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(8, true);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, true).unwrap();
     for i in 0u64..10 {
         db.insert(i, i).unwrap();
     }
@@ -442,13 +442,13 @@ fn swap_order_basic() {
 
 #[test]
 fn clear_and_reuse() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false).unwrap();
     for i in 0u64..50 {
         db.insert(i, i).unwrap();
     }
     assert_eq!(db.total(), 50);
 
-    db.clear();
+    db.clear().unwrap();
     assert_eq!(db.total(), 0);
     assert!(db.get_entries_by_page(10, 0, false).is_empty());
 
@@ -465,7 +465,7 @@ fn clear_and_reuse() {
 
 #[test]
 fn large_tier_capacity() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(64, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(64, false).unwrap();
     for i in 0u64..200 {
         db.insert(i, i).unwrap();
     }
@@ -481,7 +481,7 @@ fn large_tier_capacity() {
 
 #[test]
 fn sparse_slots() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false).unwrap();
     // Widely spaced slots
     let slots = [0, 100, 10000, 1000000, u64::MAX / 2];
     for (i, &s) in slots.iter().enumerate() {
@@ -512,7 +512,7 @@ fn sparse_slots() {
 /// `tier_capacity` for every fresh instance's first insert).
 #[test]
 fn first_inserts_within_capacity_create_no_premature_tier() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(1_000_000, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(1_000_000, false).unwrap();
     assert!(db.levels.is_empty());
 
     db.insert(1, 1).unwrap();
@@ -522,7 +522,7 @@ fn first_inserts_within_capacity_create_no_premature_tier() {
     );
 
     // insert_batch shares the same growth-check code path.
-    let mut db2: SlotDex<u64, u64> = SlotDex::new(1_000_000, false);
+    let mut db2: SlotDex<u64, u64> = SlotDex::new(1_000_000, false).unwrap();
     db2.insert_batch(vec![(1, 1)]).unwrap();
     assert!(
         db2.levels.is_empty(),
@@ -540,9 +540,9 @@ fn first_inserts_within_capacity_create_no_premature_tier() {
 #[test]
 fn insert_batch_equivalence_with_serial() {
     for swap_order in [false, true] {
-        let mut serial: SlotDex<u64, u64> = SlotDex::new(8, swap_order);
-        let mut batched: SlotDex<u64, u64> = SlotDex::new(8, swap_order);
-        let mut bulk: SlotDex<u64, u64> = SlotDex::new(8, swap_order);
+        let mut serial: SlotDex<u64, u64> = SlotDex::new(8, swap_order).unwrap();
+        let mut batched: SlotDex<u64, u64> = SlotDex::new(8, swap_order).unwrap();
+        let mut bulk: SlotDex<u64, u64> = SlotDex::new(8, swap_order).unwrap();
 
         // Mixed workload: hot slot 3 crosses the inline-container
         // threshold (promotion), 300 distinct slots force tier growth,
@@ -612,9 +612,9 @@ fn insert_batch_equivalence_with_serial() {
 #[test]
 fn insert_batch_checks_growth_before_each_unique_key() {
     for swap_order in [false, true] {
-        let mut serial: SlotDex<u64, u64> = SlotDex::new(2, swap_order);
-        let mut bulk: SlotDex<u64, u64> = SlotDex::new(2, swap_order);
-        let mut chunked: SlotDex<u64, u64> = SlotDex::new(2, swap_order);
+        let mut serial: SlotDex<u64, u64> = SlotDex::new(2, swap_order).unwrap();
+        let mut bulk: SlotDex<u64, u64> = SlotDex::new(2, swap_order).unwrap();
+        let mut chunked: SlotDex<u64, u64> = SlotDex::new(2, swap_order).unwrap();
 
         for slot in 0..4 {
             serial.insert(slot, slot).unwrap();
@@ -652,7 +652,7 @@ fn insert_batch_checks_growth_before_each_unique_key() {
 /// stuck on the level-0 slow path forever.
 #[test]
 fn bulk_load_tiers_persist_across_reopen() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false).unwrap();
     db.insert_batch((0u64..100).map(|i| (i, i))).unwrap();
     assert!(!db.levels.is_empty());
     let levels = db.levels.len();
@@ -672,7 +672,7 @@ fn bulk_load_tiers_persist_across_reopen() {
 /// promote at the same cadence as on a fresh instance.
 #[test]
 fn growth_gate_survives_tier_truncation() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false).unwrap();
     for i in 0u64..20 {
         db.insert(i, i).unwrap();
     }
@@ -682,9 +682,9 @@ fn growth_gate_survives_tier_truncation() {
     // remove sees a degenerate (single-bucket) top level, and the
     // truncation cascade drops every tier.
     for i in 1u64..20 {
-        db.remove(i, &i);
+        db.remove(i, &i).unwrap();
     }
-    db.remove(0, &0);
+    db.remove(0, &0).unwrap();
     assert!(db.levels.is_empty(), "tiers should be truncated away");
     assert_eq!(db.total(), 0);
 
@@ -701,7 +701,7 @@ fn growth_gate_survives_tier_truncation() {
 
 #[test]
 fn insert_batch_empty_and_all_duplicates() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false).unwrap();
     db.insert_batch(std::iter::empty()).unwrap();
     assert_eq!(db.total(), 0);
 
@@ -716,7 +716,7 @@ fn insert_batch_empty_and_all_duplicates() {
 
 #[test]
 fn insert_batch_interleaved_with_serial_ops() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false).unwrap();
     let mut reference = testdb::TestDB::default();
 
     db.insert_batch((0u64..50).map(|i| (i / 4, i))).unwrap();
@@ -724,7 +724,7 @@ fn insert_batch_interleaved_with_serial_ops() {
 
     db.insert(100, 999).unwrap();
     reference.insert(100, 999);
-    db.remove(0, &1);
+    db.remove(0, &1).unwrap();
     reference.remove(0, &1);
 
     db.insert_batch([(0u64, 1u64), (200, 2000)]).unwrap();
@@ -815,7 +815,7 @@ mod testdb {
 
 #[test]
 fn test_save_and_from_meta() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(16, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(16, false).unwrap();
     db.insert(10, 100).unwrap();
     db.insert(20, 200).unwrap();
 
@@ -830,7 +830,7 @@ fn test_save_and_from_meta() {
 /// slot/key type parameters.
 #[test]
 fn test_from_meta_rejects_wrong_type_params() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(16, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(16, false).unwrap();
     db.insert(10, 100).unwrap();
 
     let id = db.save_meta().unwrap();
@@ -841,7 +841,7 @@ fn test_from_meta_rejects_wrong_type_params() {
 /// Postcard serde roundtrip for SlotDex (derived serde, but inner types are hand-written).
 #[test]
 fn test_serde_roundtrip() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(16, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(16, false).unwrap();
     for i in 1..=50 {
         db.insert(i, i * 10).unwrap();
     }
@@ -865,7 +865,7 @@ fn test_from_meta_nonexistent() {
 /// Restore from meta with substantial data, verify queries work.
 #[test]
 fn test_meta_restore_with_data() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(16, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(16, false).unwrap();
     for i in 0..100 {
         db.insert(i, i * 3).unwrap();
     }
@@ -887,7 +887,7 @@ fn test_meta_restore_with_data() {
 
 #[test]
 fn restore_without_save_meta_preserves_total() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(10, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(10, false).unwrap();
     for i in 0..15u64 {
         db.insert(i, i * 10).unwrap();
     }
@@ -904,7 +904,7 @@ fn restore_without_save_meta_preserves_total() {
 
 #[test]
 fn serde_roundtrip_rehydrates_caches() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(10, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(10, false).unwrap();
     for i in 0..8u64 {
         db.insert(i, i).unwrap();
     }
@@ -921,7 +921,7 @@ fn serde_roundtrip_rehydrates_caches() {
 
 #[test]
 fn restore_keeps_tier_acceleration() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(8, false).unwrap();
     for i in 0..500u64 {
         db.insert(i, i).unwrap();
     }
@@ -946,14 +946,14 @@ fn restore_keeps_tier_acceleration() {
 
 #[test]
 fn restore_after_interleaved_mutations_matches_reference() {
-    let mut db: SlotDex<u64, u64> = SlotDex::new(4, false);
+    let mut db: SlotDex<u64, u64> = SlotDex::new(4, false).unwrap();
     let mut reference: Vec<(u64, u64)> = vec![];
     for i in 0..200u64 {
         db.insert(i % 37, i).unwrap();
         reference.push((i % 37, i));
         if i % 3 == 0 {
             let (s, k) = reference.remove((i as usize * 7) % reference.len());
-            db.remove(s, &k);
+            db.remove(s, &k).unwrap();
         }
     }
     reference.sort();
@@ -964,4 +964,20 @@ fn restore_after_interleaved_mutations_matches_reference() {
     assert_eq!(restored.total(), reference.len() as u64);
     let all = restored.get_entries_by_page(u16::MAX, 0, false);
     assert_eq!(all, reference.iter().map(|(_, k)| *k).collect::<Vec<_>>());
+}
+
+#[test]
+fn tier_capacity_below_two_is_rejected() {
+    assert!(matches!(
+        SlotDex64::<u64>::new(1, false),
+        Err(crate::common::error::VsdbError::InvalidConfig { .. })
+    ));
+    let mut sd = SlotDex64::<u64>::new(2, false).unwrap();
+    sd.insert(1, 10).unwrap();
+    sd.remove(1, &10).unwrap();
+    // Absent keys are a no-op, not an error.
+    sd.remove(1, &10).unwrap();
+    sd.insert(2, 20).unwrap();
+    sd.clear().unwrap();
+    assert_eq!(sd.total(), 0);
 }

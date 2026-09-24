@@ -17,7 +17,7 @@ fn build_index(n: u64) -> VecDex<u64, L2> {
         ef_construction: 100,
         ef_search: 50,
     };
-    let mut idx = VecDex::new(cfg);
+    let mut idx = VecDex::new(cfg).unwrap();
     for i in 0..n {
         idx.insert(&i, &random_vec()).unwrap();
     }
@@ -41,13 +41,13 @@ fn bench_insert(c: &mut Criterion) {
                         ef_construction: 100,
                         ef_search: 50,
                     };
-                    VecDex::<u64, L2>::new(cfg)
+                    VecDex::<u64, L2>::new(cfg).unwrap()
                 },
                 |mut idx| {
                     for i in 0..n {
                         idx.insert(&i, &random_vec()).unwrap();
                     }
-                    idx.clear();
+                    idx.clear().unwrap();
                 },
             );
         });

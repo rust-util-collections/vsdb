@@ -38,7 +38,7 @@
 //! use vsdb::vecdex::{VecDex, HnswConfig, distance::Cosine};
 //!
 //! let cfg = HnswConfig { dim: 4, ..Default::default() };
-//! let mut idx: VecDex<String, Cosine> = VecDex::new(cfg);
+//! let mut idx: VecDex<String, Cosine> = VecDex::new(cfg).unwrap();
 //!
 //! idx.insert(&"doc-a".into(), &[0.1, 0.2, 0.3, 0.4]).unwrap();
 //! idx.insert(&"doc-b".into(), &[0.5, 0.6, 0.7, 0.8]).unwrap();
@@ -101,6 +101,30 @@ pub struct HnswConfig {
     pub ef_search: usize,
     /// Vector dimensionality.
     pub dim: usize,
+}
+
+impl HnswConfig {
+    /// Rejects configurations under which the graph cannot work.
+    pub(crate) fn validate(&self) -> Result<()> {
+        let invalid = |detail: &str| {
+            Err(VsdbError::InvalidConfig {
+                detail: format!("VecDex: {detail}"),
+            })
+        };
+        if self.dim == 0 {
+            return invalid("dim must be > 0");
+        }
+        if self.m < 2 {
+            return invalid("m must be >= 2");
+        }
+        if self.m_max0 < self.m {
+            return invalid("m_max0 must be >= m");
+        }
+        if self.ef_construction == 0 {
+            return invalid("ef_construction must be > 0");
+        }
+        Ok(())
+    }
 }
 
 impl Default for HnswConfig {
@@ -389,7 +413,7 @@ where
 {
     /// [`new`](Self::new) placed in `ns` — every internal component
     /// lands in the same namespace (a composite never spans namespaces).
-    pub fn new_in(ns: &crate::common::Namespace, config: HnswConfig) -> Self {
+    pub fn new_in(ns: &crate::common::Namespace, config: HnswConfig) -> Result<Self> {
         ns.scope(|| Self::new(config))
     }
 
@@ -399,27 +423,29 @@ where
     }
 
     /// Creates a new, empty `VecDex` with the given configuration.
-    pub fn new(config: HnswConfig) -> Self {
-        assert!(config.dim > 0, "VecDex: dim must be > 0");
-        assert!(config.m >= 2, "VecDex: m must be >= 2");
-        assert!(
-            config.m_max0 >= config.m,
-            "VecDex: m_max0 must be >= m (else base-layer nodes have no edges and become unreachable)"
-        );
-        assert!(
-            config.ef_construction > 0,
-            "VecDex: ef_construction must be > 0 (else search_layer returns no candidates)"
-        );
+    ///
+    /// # Errors
+    ///
+    /// [`VsdbError::InvalidConfig`] unless `dim > 0`, `m >= 2`,
+    /// `m_max0 >= m` (else base-layer nodes have no edges and become
+    /// unreachable) and `ef_construction > 0` (else a layer search returns
+    /// no candidates).
+    ///
+    /// # Panics
+    ///
+    /// Panics in read-only mode (no storage can be allocated).
+    pub fn new(config: HnswConfig) -> Result<Self> {
+        config.validate()?;
         let state = GraphState {
             ef_search: config.ef_search,
             ..GraphState::default()
         };
-        Self {
+        Ok(Self {
             store: MapxRaw::new(),
             config,
             state,
             _p: PhantomData,
-        }
+        })
     }
 
     /// Reconnects to an existing store and reads the persisted graph
@@ -481,19 +507,20 @@ where
         self.len() == 0
     }
 
-    /// Updates the default search beam width.
+    /// Updates the default search beam width (persisted).
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the engine-level commit fails (matching the behavior of
-    /// the plain collection types on engine write failure).
-    pub fn set_ef_search(&mut self, ef: usize) {
+    /// [`VsdbError::ReadOnly`] in read-only mode, or the commit error;
+    /// nothing changes in either case.
+    pub fn set_ef_search(&mut self, ef: usize) -> Result<()> {
+        ensure_writable(&self.namespace(), "vector index ef update")?;
         let mut txn: Txn<'_, S> = Txn::new(&self.store, self.state.clone());
         txn.state.ef_search = ef;
         let (rows, state) = txn.finish();
-        rows.commit(&mut self.store)
-            .expect("vsdb: VecDex set_ef_search commit failed");
+        rows.commit(&mut self.store)?;
         self.state = state;
+        Ok(())
     }
 
     /// Returns the vector associated with the given key, if it exists.
@@ -549,11 +576,12 @@ where
     /// later restore — commit in **one atomic engine write batch**: a
     /// crash can never expose a partially-cleared index.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the engine-level commit fails (matching the behavior of
-    /// the plain collection types on engine write failure).
-    pub fn clear(&mut self) {
+    /// [`VsdbError::ReadOnly`] in read-only mode, or the commit error;
+    /// nothing changes in either case.
+    pub fn clear(&mut self) -> Result<()> {
+        ensure_writable(&self.namespace(), "vector index clear")?;
         let mut txn: Txn<'_, S> = Txn::new(
             &self.store,
             GraphState {
@@ -563,9 +591,9 @@ where
         );
         txn.rows.wipe();
         let (rows, state) = txn.finish();
-        rows.commit(&mut self.store)
-            .expect("vsdb: VecDex clear commit failed");
+        rows.commit(&mut self.store)?;
         self.state = state;
+        Ok(())
     }
 
     /// Inserts a vector associated with a user key.
@@ -585,12 +613,9 @@ where
     pub fn insert(&mut self, key: &K, vector: &[S]) -> Result<()> {
         ensure_writable(&self.namespace(), "vector index insert")?;
         if vector.len() != self.config.dim {
-            return Err(VsdbError::Other {
-                detail: format!(
-                    "dimension mismatch: expected {}, got {}",
-                    self.config.dim,
-                    vector.len()
-                ),
+            return Err(VsdbError::DimensionMismatch {
+                expected: self.config.dim,
+                found: vector.len(),
             });
         }
 
@@ -644,12 +669,9 @@ where
 
         for (_, vec) in items {
             if vec.len() != self.config.dim {
-                return Err(VsdbError::Other {
-                    detail: format!(
-                        "dimension mismatch: expected {}, got {}",
-                        self.config.dim,
-                        vec.len()
-                    ),
+                return Err(VsdbError::DimensionMismatch {
+                    expected: self.config.dim,
+                    found: vec.len(),
                 });
             }
         }
@@ -834,12 +856,9 @@ where
         predicate: Option<&dyn Fn(&K) -> bool>,
     ) -> Result<Vec<(K, S)>> {
         if query.len() != self.config.dim {
-            return Err(VsdbError::Other {
-                detail: format!(
-                    "dimension mismatch: expected {}, got {}",
-                    self.config.dim,
-                    query.len()
-                ),
+            return Err(VsdbError::DimensionMismatch {
+                expected: self.config.dim,
+                found: query.len(),
             });
         }
 
@@ -1103,7 +1122,7 @@ where
         // (or anywhere before the commit) leaves the store untouched.
         for (_, vec) in &pairs {
             if vec.len() != self.config.dim {
-                return Err(VsdbError::Other {
+                return Err(VsdbError::Corrupt {
                     detail: format!(
                         "compact: stored vector dimension {} != index dimension {}",
                         vec.len(),

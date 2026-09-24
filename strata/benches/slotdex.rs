@@ -12,7 +12,7 @@ const REMOVE_BATCH_SIZE: u64 = 1_024;
 type V = Vec<u8>;
 
 fn slot_db_custom(mn: u64) -> SlotDex64<V> {
-    let mut db = SlotDex64::new(mn, false);
+    let mut db = SlotDex64::new(mn, false).unwrap();
 
     (0..DATA_SIZE).for_each(|i| {
         db.insert(i as u64, i.to_be_bytes().to_vec()).unwrap();
@@ -52,7 +52,7 @@ fn slot_query(c: &mut Criterion, tier: u64) {
     }
 
     group.finish();
-    db.clear();
+    db.clear().unwrap();
 }
 
 fn slot_4(c: &mut Criterion) {
@@ -78,17 +78,17 @@ fn slot_write(c: &mut Criterion) {
         .sample_size(10);
 
     group.bench_function("insert", |b| {
-        let mut db: SlotDex64<V> = SlotDex64::new(16, false);
+        let mut db: SlotDex64<V> = SlotDex64::new(16, false).unwrap();
         let mut i = 0u64;
         b.iter(|| {
             db.insert(i, i.to_be_bytes().to_vec()).unwrap();
             i += 1;
         });
-        db.clear();
+        db.clear().unwrap();
     });
 
     group.bench_function("remove", |b| {
-        let mut db: SlotDex64<V> = SlotDex64::new(16, false);
+        let mut db: SlotDex64<V> = SlotDex64::new(16, false).unwrap();
         b.iter_custom(|iters| {
             let mut elapsed = Duration::ZERO;
             let mut remaining = iters;
@@ -101,14 +101,14 @@ fn slot_write(c: &mut Criterion) {
                 }
                 let start = Instant::now();
                 for (i, value) in &entries {
-                    db.remove(black_box(*i), black_box(value));
+                    db.remove(black_box(*i), black_box(value)).unwrap();
                 }
                 elapsed += start.elapsed();
                 remaining -= count;
             }
             elapsed
         });
-        db.clear();
+        db.clear().unwrap();
     });
 
     group.finish();
