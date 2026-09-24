@@ -2,6 +2,104 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v17.0.0]
+
+A public-API cleanup release. **Stored data is not affected**: v17 opens,
+reads and writes every v16 dataset as-is, with no migration step. Only
+source code calling the removed or changed APIs needs updating (see the
+table below). Downgrading is not supported — v16 cannot read handle
+metadata written by v17 and rejects it with an error.
+
+### Breaking
+
+- **Configuration**: `vsdb_set_base_dir` is removed; configure with
+  `vsdb_configure(VsdbOptions::new(dir))`. `vsdb_configure` no longer writes
+  `VSDB_BASE_DIR` into the process environment (that `env::set_var` was
+  unsound once other threads exist), so it is safe from any thread.
+- **Namespace administration** moved onto `Namespace`; the engine singleton
+  (`VSDB`, `VsDB`) and the default-namespace path helpers are internal.
+- **Write batches**: `batch_entry()` / `batch_entry_wiped()` are `batch()` /
+  `batch_wiped()`, returning concrete batch types whose `commit(self)`
+  consumes the batch; `BatchTrait` is removed.
+- **Raw handle constructors**: the typed maps and `Orphan` no longer expose
+  `unsafe fn from_bytes` / `from_bytes_in` / `as_bytes`, and `MapxRaw` drops
+  the ambient-namespace `from_bytes` (they skipped payload validation and
+  prefix reservation). Persist handles through serde or `save_meta` /
+  `from_meta`.
+- **VerMap**:
+  - `BranchId` / `CommitId` are newtypes (`from_raw` / `raw`) instead of
+    `u64` aliases, so they cannot be swapped; `NO_COMMIT` is internal.
+  - `at(commit)` / `snapshot(branch)` return a `Snapshot` view (`get`,
+    `contains_key`, `iter`, `range`) that replaces the `*_at_commit` methods;
+    `range` takes any `RangeBounds` like `BTreeMap::range`.
+  - The `Branch` / `BranchMut` handles and `branch()` / `branch_mut()` /
+    `main()` / `main_mut()` are removed (every operation has one form).
+  - `diff_commits` / `diff_uncommitted` return decoded `DiffEntry<K, V>`.
+  - `Commit` exposes `id()`, `parents()`, `timestamp_us()`.
+  - `gc()` returns `Result` instead of panicking on a damaged commit graph.
+  - The node-level `versioned::{diff, merge}` functions are crate-private.
+- **SlotDex**: `page(slots, page_size, page_index, Order)` and
+  `count(slots)` replace `get_entries_by_page`, `get_entries_by_page_slot`,
+  `entry_cnt_within_two_slots` and `total_by_slot`; `slots` is any
+  `RangeBounds` over the slot type and `slotdex::Order::{Asc, Desc}` replaces
+  the positional `bool`. `SlotType` gains `checked_succ` / `checked_pred`.
+- **Fallible index operations**: `SlotDex::remove` / `clear` and
+  `VecDex(Dyn)::set_ef_search` / `clear` return `Result` (and reject
+  read-only mode with `ReadOnly`) instead of panicking; `SlotDex::new` /
+  `new_in` and `VecDex(Dyn)::new` / `new_in` return `InvalidConfig` instead
+  of asserting.
+- **Borrowed-key lookups**: `get`, `get_mut`, `contains_key`, `remove` (and
+  `MapxOrd::get_le` / `get_ge`, `VerMap` / `Snapshot` reads) take `&Q` where
+  `K: Borrow<Q>`, like `HashMap::get`. Passing `&K` still works; only calls
+  that relied on `&K` to infer a conversion (`get(&"k".into())`) must pass
+  the borrowed form (`get("k")`).
+
+### Changed
+
+- Typed-handle metadata is tagged by the type name **without module paths**
+  (`VSTYPE03`, e.g. `Mapx<String, User>`). Moving a key/value type to another
+  module, a dependency reorganizing its internals, or rustc rendering paths
+  differently no longer makes saved handles unrestorable (previously every
+  such handle — including handles stored inside values — failed to decode).
+  `VSTYPE02` metadata from v16 is still restored and upgrades when re-saved.
+- Errors are typed: `NotAncestor`, `SelfMerge`, `NoCommits`,
+  `DimensionMismatch { expected, found }`, `InvalidConfig`, and `Corrupt`
+  replace the corresponding `Other` strings.
+- `VerMapWithProof::from_map` no longer repeats the restore-time sweep.
+
+### Added
+
+- `VsdbOptions::with_mem_budget_mb` sets the default namespace's memory
+  budget without the `VSDB_MEM_BUDGET_MB` environment variable (still
+  honored when no budget is configured).
+- `vsdb_get_custom_dir` is re-exported by `vsdb`.
+
+### Migration
+
+| v16 | v17 |
+|---|---|
+| `vsdb_set_base_dir(dir)` | `vsdb_configure(VsdbOptions::new(dir))` |
+| env `VSDB_MEM_BUDGET_MB` (set via `set_var`) | `VsdbOptions::new(dir).with_mem_budget_mb(mb)` |
+| `vsdb_ns_list()` / `vsdb_ns_destroy(id)` / `vsdb_ns_relocate(id, p)` / `vsdb_ns_close(id)` | `Namespace::list()` / `Namespace::destroy(id)` / `Namespace::relocate(id, p)` / `Namespace::close_by_id(id)` |
+| `vsdb_get_system_dir()` / `vsdb_get_meta_dir()` / `vsdb_meta_path(id)` | `Namespace::default_ns().system_dir()` / `.meta_dir()` / `.meta_path(id)` |
+| `m.batch_entry()` / `m.batch_entry_wiped()` | `m.batch()` / `m.batch_wiped()` |
+| `MapxBatchEntry` / `MapxOrdBatchEntry` / `MapxOrdRawKeyBatchEntry` | `MapxBatch` / `MapxOrdBatch` / `MapxOrdRawKeyBatch` |
+| `unsafe { T::from_bytes(b) }` / `h.as_bytes()` | serde, or `h.save_meta()` + `T::from_meta(id)` |
+| `m.get(&"k".to_string())` | `m.get("k")` (the old form still compiles) |
+| `let b: BranchId = 3;` | `BranchId::from_raw(3)`; `id.raw()` for the number |
+| `m.get_at_commit(c, &k)?` | `m.at(c)?.get(&k)` |
+| `m.iter_at_commit(c)?` / `m.range_at_commit(c, lo, hi)?` | `m.at(c)?.iter()` / `m.at(c)?.range(lo..hi)` |
+| `m.range(b, Bound::Included(&x), Bound::Excluded(&y))?` | `m.range(b, x..y)?` |
+| `m.main_mut().insert(&k, &v)?` / `m.branch(b)?.get(&k)?` | `m.insert(m.main_branch(), &k, &v)?` / `m.get(b, &k)?` |
+| `commit.id` / `commit.parents` / `commit.timestamp_us` | `commit.id()` / `commit.parents()` / `commit.timestamp_us()` |
+| `m.gc();` | `m.gc()?;` |
+| `sd.get_entries_by_page(n, i, true)` | `sd.page(.., n, i, Order::Desc)` |
+| `sd.get_entries_by_page_slot(Some(a), Some(b), n, i, false)` | `sd.page(a..=b, n, i, Order::Asc)` |
+| `sd.total_by_slot(Some(a), Some(b))` | `sd.count(a..=b)` |
+| `SlotDex::new(cap, swap)` / `VecDex::new(cfg)` | `...::new(...)?` |
+| `sd.remove(s, &k);` / `sd.clear();` / `idx.clear();` / `idx.set_ef_search(ef);` | `...?` |
+| `Err(VsdbError::Other { .. })` for rollback / merge / dimension errors | `NotAncestor` / `SelfMerge` / `NoCommits` / `DimensionMismatch` |
+
 ## [v16.3.11]
 
 ### Fixed
