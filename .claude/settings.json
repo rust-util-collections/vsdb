@@ -28,6 +28,10 @@
       "Bash(git show:*)",
       "Bash(git blame:*)",
       "Bash(git rev-parse:*)",
+      "Bash(git rev-list:*)",
+      "Bash(git merge-base:*)",
+      "Bash(git ls-files:*)",
+      "Bash(git worktree list)",
       "Bash(git branch)"
     ],
     "deny": [
@@ -38,6 +42,7 @@
       "Bash(git clean)",
       "Bash(git clean:*)",
       "Bash(git checkout --:*)",
+      "Bash(git checkout .)",
       "Bash(git restore:*)",
       "Bash(git add -A)",
       "Bash(git add -A:*)",
@@ -54,6 +59,8 @@
       "Bash(git reset --hard:*)",
       "Bash(git reset --soft)",
       "Bash(git reset --soft:*)",
+      "Bash(git rebase)",
+      "Bash(git rebase:*)",
       "Bash(git filter-branch:*)",
       "Bash(git replace:*)"
     ]
