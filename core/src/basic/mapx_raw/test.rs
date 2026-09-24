@@ -97,7 +97,7 @@ fn test_batch() {
         for i in 0..max {
             let key = to_bytes(i);
             let value = to_bytes(max + i);
-            batch.insert(&key, &value);
+            batch.insert(key, value);
         }
         batch.commit().unwrap();
     }
@@ -112,7 +112,7 @@ fn test_batch() {
         let mut batch = hdr.batch();
         for i in 0..max {
             let key = to_bytes(i);
-            batch.remove(&key);
+            batch.remove(key);
         }
         batch.commit().unwrap();
     }
@@ -136,8 +136,8 @@ fn test_batch_wiped() {
     // keys vanish, keys staged after the wipe survive it.
     {
         let mut batch = hdr.batch_wiped();
-        batch.insert(&to_bytes(7), &to_bytes(70));
-        batch.insert(&to_bytes(max + 1), &to_bytes(71));
+        batch.insert(to_bytes(7), to_bytes(70));
+        batch.insert(to_bytes(max + 1), to_bytes(71));
         batch.commit().unwrap();
     }
 

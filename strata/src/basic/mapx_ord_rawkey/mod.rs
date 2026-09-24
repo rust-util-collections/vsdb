@@ -327,7 +327,7 @@ where
 {
     /// Insert a key-value pair into the batch.
     pub fn insert(&mut self, key: impl AsRef<[u8]>, value: &V) {
-        self.inner.insert(key.as_ref(), &value.encode());
+        self.inner.insert(key.as_ref(), value.encode());
     }
 
     /// Remove a key in the batch.

@@ -409,10 +409,10 @@ mod tests {
         .unwrap();
 
         // Corrupt a byte in the middle of the file.
-        let mut data = fs::read(&cache_path).unwrap();
+        let mut data = fs::read(cache_path).unwrap();
         let mid = data.len() / 2;
         data[mid] ^= 0xFF;
-        fs::write(&cache_path, &data).unwrap();
+        fs::write(cache_path, &data).unwrap();
 
         assert!(
             MptCalc::load_cache(
@@ -440,8 +440,8 @@ mod tests {
         .unwrap();
 
         // Truncate the file.
-        let data = fs::read(&cache_path).unwrap();
-        fs::write(&cache_path, &data[..data.len() / 2]).unwrap();
+        let data = fs::read(cache_path).unwrap();
+        fs::write(cache_path, &data[..data.len() / 2]).unwrap();
 
         assert!(
             MptCalc::load_cache(
@@ -1194,11 +1194,11 @@ mod smt_tests {
         .unwrap();
 
         // Corrupt a byte in the middle.
-        let mut data = fs::read(&path).unwrap();
+        let mut data = fs::read(path).unwrap();
         if data.len() > 10 {
             data[10] ^= 0xFF;
         }
-        fs::write(&path, &data).unwrap();
+        fs::write(path, &data).unwrap();
 
         assert!(
             SmtCalc::load_cache(
