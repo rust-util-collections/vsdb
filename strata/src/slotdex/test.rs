@@ -1016,7 +1016,9 @@ fn range_queries_match_the_inclusive_api() {
         assert_eq!(sd.count(..10), 30);
         // Empty and inverted ranges.
         assert_eq!(sd.count(20..20), 0);
-        assert!(sd.page(20..10, 5, 0, Order::Asc).is_empty());
+        // An inverted range (start > end) is empty, not a panic.
+        let inverted = (std::ops::Bound::Included(20), std::ops::Bound::Included(10));
+        assert!(sd.page(inverted, 5, 0, Order::Asc).is_empty());
         assert_eq!(sd.count(u64::MAX..), 0);
         assert!(
             sd.page(
