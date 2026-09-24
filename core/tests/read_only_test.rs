@@ -10,7 +10,8 @@ use std::{
 };
 use vsdb_core::{
     InstanceId, MapxRaw, Namespace, OpenMode, VsdbError, VsdbOptions, vsdb_configure,
-    vsdb_flush, vsdb_get_base_dir, vsdb_get_custom_dir, vsdb_open_mode,
+    vsdb_flush, vsdb_get_base_dir, vsdb_get_custom_dir, vsdb_get_meta_dir,
+    vsdb_get_system_dir, vsdb_open_mode,
 };
 
 const HELPER_BASE: &str = "VSDB_READ_ONLY_HELPER_BASE";
@@ -142,6 +143,11 @@ fn read_only_missing_dataset_helper() {
     // Resolving derived paths must not create them in read-only mode.
     assert_eq!(vsdb_get_base_dir(), base);
     assert_eq!(vsdb_get_custom_dir(), base.join("__CUSTOM__"));
+    assert_eq!(vsdb_get_system_dir(), base.join("__SYSTEM__"));
+    assert_eq!(
+        vsdb_get_meta_dir(),
+        base.join("__SYSTEM__/__instance_meta__")
+    );
     assert!(!base.exists());
 
     let open = catch_unwind(Namespace::default_ns);

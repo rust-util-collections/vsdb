@@ -65,6 +65,26 @@ const BASE_DIR_VAR: &str = "VSDB_BASE_DIR";
 static VSDB_BASE_DIR: LazyLock<Mutex<PathBuf>> =
     LazyLock::new(|| Mutex::new(gen_data_dir()));
 
+static VSDB_SYSTEM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
+    // See VSDB_CUSTOM_DIR: derived paths freeze the base dir.
+    vsdb_freeze_base_dir();
+    let mut d = VSDB_BASE_DIR.lock().clone();
+    d.push("__SYSTEM__");
+    if !vsdb_is_read_only() {
+        pnk!(fs::create_dir_all(&d));
+    }
+    d
+});
+
+static VSDB_META_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
+    let mut d = VSDB_SYSTEM_DIR.clone();
+    d.push("__instance_meta__");
+    if !vsdb_is_read_only() {
+        pnk!(fs::create_dir_all(&d));
+    }
+    d
+});
+
 static VSDB_CUSTOM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     // Materializing a derived directory pins it to the current base
     // dir forever; freeze the base dir so a later `vsdb_configure`
@@ -239,6 +259,45 @@ fn gen_data_dir() -> PathBuf {
 #[inline(always)]
 pub fn vsdb_get_custom_dir() -> &'static Path {
     VSDB_CUSTOM_DIR.as_path()
+}
+
+/// Returns the internal system directory path of the **default
+/// namespace** (`{base_dir}/__SYSTEM__/`; each namespace has its own
+/// `__SYSTEM__` under its root — see [`Namespace::system_dir`]). Also home
+/// to the registry-wide state that deliberately stays global: the
+/// namespace registry, the prefix allocator ceiling, and the DagMap ID
+/// counter.
+///
+/// Reserved for VSDB internal use (instance metadata, trie caches, ID
+/// counters). Unlike `Namespace::default_ns().system_dir()`, this only
+/// resolves the path: it never opens the default engine. In read-only mode
+/// it returns the path without creating the directory.
+#[inline(always)]
+pub fn vsdb_get_system_dir() -> &'static Path {
+    VSDB_SYSTEM_DIR.as_path()
+}
+
+/// Returns the instance-meta directory path of the **default namespace**
+/// (`{system_dir}/__instance_meta__/`; non-default namespaces keep their
+/// metas under their own roots — see [`Namespace::meta_dir`]).
+///
+/// Holds lightweight metadata (serialized handles) keyed by map id. Like
+/// [`vsdb_get_system_dir`], this never opens the default engine; in
+/// read-only mode it returns the path without creating the directory.
+#[inline(always)]
+pub fn vsdb_get_meta_dir() -> &'static Path {
+    VSDB_META_DIR.as_path()
+}
+
+/// Returns the **default-namespace** meta file path for a given map id (a
+/// bare `u64` can only ever address a default-namespace instance;
+/// namespace-resident metas live under [`Namespace::meta_dir`]). Never
+/// opens the default engine.
+#[inline(always)]
+pub fn vsdb_meta_path(instance_id: u64) -> PathBuf {
+    let mut p = VSDB_META_DIR.clone();
+    p.push(format!("{:016x}", instance_id));
+    p
 }
 
 /// Returns the base directory path for VSDB.
