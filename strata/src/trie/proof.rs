@@ -13,6 +13,7 @@
 use crate::{
     basic::persistent_btree::TreeDiff,
     common::{
+        InstanceId,
         ende::{KeyEnDeOrdered, ValueEnDe},
         error::Result,
     },
@@ -66,10 +67,10 @@ pub struct VerMapWithProof<K, V, T: TrieCalc> {
     sync_branch: Option<BranchId>,
     /// Whether uncommitted (dirty) changes have been applied on top of HEAD.
     dirty_applied: bool,
-    /// Unique storage prefix of the underlying map, used for cache file naming.
-    /// Stored here so that `Drop` can save the cache without needing
-    /// `K`/`V` trait bounds.
-    cache_id: u64,
+    /// Map identity owning all trie and synchronization state. Commit and
+    /// branch IDs are only unique within this instance. Also supplies the
+    /// cache filename, provided the underlying map has not been replaced.
+    cache_instance: InstanceId,
     /// Whether the committed trie state has changed since the last
     /// save/load.  Avoids pointless re-serialization in read-only
     /// scenarios.
@@ -85,7 +86,7 @@ where
     /// Creates a new `VerMapWithProof` with a fresh VerMap.
     pub fn new() -> Self {
         let map = VerMap::new();
-        let cache_id = map.instance_id().map_id;
+        let cache_instance = map.instance_id();
         let mut this = Self {
             map,
             trie: T::default(),
@@ -93,7 +94,7 @@ where
             sync_commit: None,
             sync_branch: None,
             dirty_applied: false,
-            cache_id,
+            cache_instance,
             cache_dirty: false,
         };
         this.try_load_cache();
@@ -106,7 +107,7 @@ where
     /// interrupted ref-count cascade and rebuilds node references), so
     /// no extra sweep runs here.
     pub fn from_map(map: VerMap<K, V>) -> Self {
-        let cache_id = map.instance_id().map_id;
+        let cache_instance = map.instance_id();
         let mut this = Self {
             map,
             trie: T::default(),
@@ -114,7 +115,7 @@ where
             sync_commit: None,
             sync_branch: None,
             dirty_applied: false,
-            cache_id,
+            cache_instance,
             cache_dirty: false,
         };
         this.try_load_cache();
@@ -130,7 +131,8 @@ where
     ///
     /// Mutations through this reference will **not** automatically
     /// update the trie — call [`merkle_root`](Self::merkle_root) to
-    /// resynchronize.
+    /// resynchronize. Replacing the map through this reference also
+    /// invalidates the old trie and cache identity at the next synchronization.
     pub fn map_mut(&mut self) -> &mut VerMap<K, V> {
         &mut self.map
     }
@@ -144,6 +146,7 @@ where
     /// Includes uncommitted changes.  Performs an incremental diff
     /// update when possible, falling back to a full rebuild otherwise.
     pub fn merkle_root(&mut self, branch: BranchId) -> Result<Vec<u8>> {
+        self.reset_if_map_replaced();
         // Fast path: same branch, synced to HEAD, no uncommitted changes,
         // and no dirty overlay currently applied.
         if self.sync_branch == Some(branch)
@@ -230,6 +233,7 @@ where
 
     /// Synchronizes the trie to a specific commit.
     fn sync_to_commit(&mut self, target: CommitId) -> Result<()> {
+        self.reset_if_map_replaced();
         if self.sync_commit == Some(target) && !self.dirty_applied {
             return Ok(());
         }
@@ -297,7 +301,7 @@ where
                 .trie
                 .save_cache(
                     &self.map.namespace().system_dir(),
-                    self.cache_id,
+                    self.cache_instance.map_id,
                     target.raw(),
                 )
                 .is_ok()
@@ -426,6 +430,22 @@ where
 // =================================================================
 
 impl<K, V, T: TrieCalc> VerMapWithProof<K, V, T> {
+    /// A mutable map reference permits replacing the entire handle. Preserve
+    /// incremental synchronization for ordinary edits, but never compare
+    /// local branch/commit IDs across different maps.
+    fn reset_if_map_replaced(&mut self) {
+        let current = self.map.instance_id();
+        if current != self.cache_instance {
+            self.trie = T::default();
+            self.trie_at_head = None;
+            self.sync_commit = None;
+            self.sync_branch = None;
+            self.dirty_applied = false;
+            self.cache_dirty = false;
+            self.cache_instance = current;
+        }
+    }
+
     /// Attempts to restore a previously saved trie from disk.
     ///
     /// On success, sets `sync_commit` so that the next `merkle_root`
@@ -433,9 +453,10 @@ impl<K, V, T: TrieCalc> VerMapWithProof<K, V, T> {
     /// On failure (missing file, corruption, version mismatch), silently
     /// falls back to the default empty trie.
     fn try_load_cache(&mut self) {
-        if let Ok((mut trie, sync_tag, saved_hash)) =
-            T::load_cache(&self.map.namespace().system_dir(), self.cache_id)
-        {
+        if let Ok((mut trie, sync_tag, saved_hash)) = T::load_cache(
+            &self.map.namespace().system_dir(),
+            self.cache_instance.map_id,
+        ) {
             // Consistency check between two fields of the cache file: the
             // header's saved root hash and the root node's stored hash
             // (root_hash() short-circuits on a committed root, so nothing
@@ -462,6 +483,11 @@ impl<K, V, T: TrieCalc> VerMapWithProof<K, V, T> {
     /// `sync_to_commit`, so this is a no-op.  It only fires when
     /// `cache_dirty` is still set (e.g. the eager save failed).
     fn try_save_cache(&mut self) {
+        // Replacement may be followed immediately by Drop, without another
+        // synchronization. A pending retry still belongs to the previous map.
+        if self.map.instance_id() != self.cache_instance {
+            return;
+        }
         if self.map.namespace().is_read_only() {
             return;
         }
@@ -481,7 +507,7 @@ impl<K, V, T: TrieCalc> VerMapWithProof<K, V, T> {
 
         let _ = self.trie.save_cache(
             &self.map.namespace().system_dir(),
-            self.cache_id,
+            self.cache_instance.map_id,
             tag.raw(),
         );
     }

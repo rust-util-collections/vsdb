@@ -12,14 +12,6 @@
 
 ## Open
 
-### [CRITICAL] trie: map replacement reuses another map's Merkle state
-- **Where**: `strata/src/trie/proof.rs` (`map_mut`, `merkle_root`, `sync_to_commit`, cache lifecycle)
-- **What**: replacing the underlying map through `*wrapper.map_mut() = replacement` preserves the old trie and cache identity. Independent maps reuse branch and commit numbers, so root queries can return the old map's root and proofs.
-- **Why**: sync shortcuts compare local commit/branch IDs without the owning instance identity; cache saves also retain the old filename.
-- **Suggested fix**: bind all cached state to the complete `InstanceId`, invalidate on replacement before shortcuts, and skip stale destructor saves. Regress branch/historical roots, dirty overlays, and cache placement; no format change.
-
----
-
 ### [HIGH] slotdex: reverse pages scan entire populated boundary slots
 - **Where**: `strata/src/slotdex/mod.rs` (`get_entries_reverse`)
 - **What**: a ten-entry reverse page from one slot containing 100,000 keys reads and decodes all 100,000 keys. A warm release measurement took about 20 ms versus 7 microseconds for the forward page; `swap_order` flips the affected public direction.

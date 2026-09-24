@@ -1,4 +1,130 @@
 #[cfg(test)]
+mod replacement_tests {
+    use crate::{
+        Namespace, VerMap,
+        trie::{MptCalc, SmtCalc, TrieCalc, VerMapWithProof},
+    };
+
+    fn committed_map(ns: &Namespace, key: u32) -> VerMap<u32, u32> {
+        let mut map = VerMap::new_in(ns);
+        let branch = map.main_branch();
+        map.insert(branch, &key, &(key * 10)).unwrap();
+        map.commit(branch).unwrap();
+        map
+    }
+
+    fn replacement_roots<T: TrieCalc>() {
+        let ns = Namespace::default_ns();
+        for historical in [false, true] {
+            for dirty in [false, true] {
+                let mut proof =
+                    VerMapWithProof::<_, _, T>::from_map(committed_map(&ns, 1));
+                let branch = proof.map().main_branch();
+                let old_root = proof.merkle_root(branch).unwrap();
+                if dirty {
+                    proof.map_mut().insert(branch, &3, &30).unwrap();
+                    proof.merkle_root(branch).unwrap();
+                }
+
+                let mut replacement = committed_map(&ns, 2);
+                let target = replacement.head_commit(branch).unwrap().unwrap().id;
+                assert_eq!(target, proof.map().head_commit(branch).unwrap().unwrap().id);
+                if dirty {
+                    replacement.insert(branch, &4, &40).unwrap();
+                }
+                let expected = {
+                    let snapshot = if historical {
+                        replacement.at(target).unwrap()
+                    } else {
+                        replacement.snapshot(branch).unwrap()
+                    };
+                    T::from_entries(snapshot.raw_iter())
+                        .unwrap()
+                        .root_hash()
+                        .unwrap()
+                };
+                assert_ne!(expected, old_root);
+                *proof.map_mut() = replacement;
+                let actual = if historical {
+                    proof.merkle_root_at_commit(target).unwrap()
+                } else {
+                    proof.merkle_root(branch).unwrap()
+                };
+                assert_eq!(actual, expected, "historical={historical}, dirty={dirty}");
+                assert_eq!(
+                    proof.merkle_root(branch).unwrap(),
+                    T::from_entries(proof.map().snapshot(branch).unwrap().raw_iter())
+                        .unwrap()
+                        .root_hash()
+                        .unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn map_replacement_resynchronizes_roots_and_dirty_overlays() {
+        replacement_roots::<MptCalc>();
+        replacement_roots::<SmtCalc>();
+    }
+
+    fn replacement_cache<T: TrieCalc>(kind: &str, resync: bool) {
+        let ns = Namespace::create().unwrap();
+        let ns_id = ns.id();
+        let mut proof = VerMapWithProof::<_, _, T>::from_map(committed_map(
+            &Namespace::default_ns(),
+            1,
+        ));
+        let old_id = proof.map().instance_id();
+        let old_path = proof
+            .map()
+            .namespace()
+            .system_dir()
+            .join(format!("{kind}_cache_{}.bin", old_id.map_id));
+        // Force eager save to fail, leaving a pending destructor retry.
+        std::fs::create_dir(&old_path).unwrap();
+        proof.merkle_root(proof.map().main_branch()).unwrap();
+        std::fs::remove_dir(&old_path).unwrap();
+
+        let replacement = committed_map(&ns, 2);
+        let new_id = replacement.instance_id();
+        let branch = replacement.main_branch();
+        let expected = T::from_entries(replacement.snapshot(branch).unwrap().raw_iter())
+            .unwrap()
+            .root_hash()
+            .unwrap();
+        *proof.map_mut() = replacement;
+        if resync {
+            assert_eq!(proof.merkle_root(branch).unwrap(), expected);
+            let (_, _, saved) = T::load_cache(&ns.system_dir(), new_id.map_id).unwrap();
+            assert_eq!(saved, expected);
+        }
+        drop(proof);
+        assert!(
+            !old_path.exists(),
+            "replacement must not retry the old cache save"
+        );
+        assert!(
+            !ns.system_dir()
+                .join(format!("{kind}_cache_{}.bin", old_id.map_id))
+                .exists(),
+            "old trie must not be saved under the replacement namespace"
+        );
+        drop(ns);
+        Namespace::close_by_id(ns_id).unwrap();
+        Namespace::destroy(ns_id).unwrap();
+    }
+
+    #[test]
+    fn map_replacement_rebinds_cache_and_skips_stale_drop_saves() {
+        for resync in [false, true] {
+            replacement_cache::<MptCalc>("mpt", resync);
+            replacement_cache::<SmtCalc>("smt", resync);
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use crate::trie::MptCalc;
     use std::fs;

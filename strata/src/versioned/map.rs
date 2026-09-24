@@ -305,6 +305,11 @@ where
 }
 
 impl<K, V> VerMap<K, V> {
+    /// Returns the unique instance ID of this `VerMap`.
+    pub fn instance_id(&self) -> InstanceId {
+        self.tree.instance_id()
+    }
+
     /// The namespace this map lives in.
     pub fn namespace(&self) -> crate::common::Namespace {
         self.tree.namespace()
@@ -432,11 +437,6 @@ where
     /// namespaces).
     pub fn new_in(ns: &crate::common::Namespace) -> Self {
         ns.scope(Self::new)
-    }
-
-    /// Returns the unique instance ID of this `VerMap`.
-    pub fn instance_id(&self) -> InstanceId {
-        self.tree.instance_id()
     }
 
     /// Persists this instance's metadata to disk so that it can be
