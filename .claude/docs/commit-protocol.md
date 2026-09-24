@@ -18,6 +18,8 @@ Keep the ledger across commits. Stage only freeze set + this-invocation fix/form
 ## Per-unit validate and commit
 
 1. One issue/root cause/behavior change + its tests/docs/migration/audit only.
+   Agent-written units leave `CHANGELOG.md` to the release commit; a user’s own
+   CHANGELOG edit stays with the unit it documents.
 2. Checks:
    - Docs/config only: `git diff --check` + structure sanity; skip Rust gates.
    - Rust: `cargo fmt --all -- --check`; if needed, format only owned files and
@@ -30,8 +32,11 @@ Keep the ledger across commits. Stage only freeze set + this-invocation fix/form
    - cross-crate / public / persisted → package suites or
      `cargo test --workspace --tests`.
 4. On fail: fix if unit-caused; else report pre-existing with evidence.
-5. Stage exact freeze + unit fix/format paths — never `git add -A`.
-6. `git diff --cached` = exactly one unit, no baseline/post-freeze paths.
+5. Stage exact freeze + unit fix/format paths — never `git add -A`. Index already
+   holds baseline → do not stage; `git commit --only -F - -- <unit paths>` commits
+   exactly those paths and leaves the baseline staged.
+6. `git diff --cached` (or, with `--only`, `git diff HEAD -- <unit paths>`) =
+   exactly one unit, no baseline/post-freeze paths.
 7. Match repo commit style; HEREDOC multi-line; no co-author/generated-by.
 8. Verify commit; compare `git status --short` to baseline.
 
@@ -51,13 +56,21 @@ After last behavior commit (once per stable code state):
 Regression → new atomic commit, then re-run affected checks. Reuse completed
 checks on the same code/manifest state; do not repeat a gate just because another
 skill composed this protocol. Docs-only: skip Rust gates unless the caller is
-performing a full audit. A required failing/blocked check prevents release.
+performing a full audit or a bump is owed — a release always needs the full gate
+passed on its code state. A required failing/blocked check prevents release.
 
 ## Lockstep version (no tag)
 
 A patch bump is **owed** when tracked `.rs` changed after the latest commit that
 changed `version = ` in `core/Cargo.toml`, including `.rs` this invocation will
 commit. Docs-only does not owe a bump. Do not create a git tag. Never push.
+
+```bash
+base=$(git log -1 --format=%H -G'^version = ' -- core/Cargo.toml)
+git diff --name-only "$base" HEAD -- '*.rs'   # non-empty → owed
+```
+
+Re-run after the last behavior commit; that result decides, not the ledger’s.
 
 Bump only after the required gate passes and no in-scope Open or coverage gap
 remains. If blocked, keep the validated commits and report; the owed bump stays
@@ -74,11 +87,16 @@ uncommitted and Open. If they already accepted it, bump `(X+1).0.0` instead of
 the patch, and put the migration in the behavior commits
 (`.claude/docs/compatibility-policy.md`).
 
-Release commit updates exactly `core/Cargo.toml`, `strata/Cargo.toml`, the root
-`vsdb_core` dep, and `CHANGELOG.md` when `## [vX.Y.Z]` is missing. Summarize the
-unreleased behavior commits; do not invent entries or duplicate an existing
-section. Then `cargo metadata --no-deps --format-version 1` must show both package
-versions and the workspace dependency. No empty commit. Do not force-add `Cargo.lock`.
+Release commit `chore: bump version to X.Y.Z` updates exactly `core/Cargo.toml`,
+`strata/Cargo.toml`, the root `vsdb_core` dep, and `CHANGELOG.md` when
+`## [vX.Y.Z]` is missing at HEAD (an owned uncommitted draft is completed, not
+duplicated). Any of those files with unowned baseline edits → stop and report;
+never sweep them. The section summarizes user-visible changes in
+`git log "$base"..HEAD`, grouped under the `###` headings prior sections use
+(Fixed / Changed / Added / Breaking …); do not invent entries or duplicate an
+existing section. Then `cargo metadata --no-deps --format-version 1` must show
+both package versions and the workspace dependency. No empty commit. Do not
+force-add `Cargo.lock`.
 
 ## Final state
 

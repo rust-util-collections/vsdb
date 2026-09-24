@@ -9,6 +9,10 @@ disable-model-invocation: true
 Clear actionable `docs/audit.md` Open → self-review → local commits. Never push.
 No tag. No autonomous major. User-invoked only. New commits only.
 
+## Input
+
+None. Non-empty `$ARGUMENTS` → reject; never guess a filter.
+
 ## Setup
 
 Read `.claude/docs/workflow-policy.md`, `.claude/docs/commit-protocol.md`,
@@ -46,7 +50,8 @@ agents never parallel (read/validate may).
 
 ### 3. Self-review
 
-Review `starting_HEAD..HEAD` + remaining worktree via `/x-review` evidence rules.
+Review `starting_HEAD..HEAD` + this invocation’s uncommitted paths with
+`review-core.md` §3 evidence and the FP guide; registry per §5.
 New confirmed → Open → same one-finding loop. Stop on no-progress or baseline overlap.
 
 ### 4. Final gate and version
@@ -54,7 +59,7 @@ New confirmed → Open → same one-finding loop. Stop on no-progress or baselin
 `.claude/docs/commit-protocol.md` once. Required checks pass and no in-scope Open
 remains → the owed bump. No tag. No autonomous major.
 Blocked → retain validated local commits and report remaining Open; the owed bump
-stays for the next run. No Resolved section or dates in audit.
+stays for the next run.
 
 ## Output
 

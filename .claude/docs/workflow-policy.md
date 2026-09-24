@@ -47,7 +47,14 @@ One issue / root cause / behavior change → one commit.
 - Smallest relevant checks per unit; workspace gate once after last behavior change.
 - Dirty-tree validation covers everything present. If other units can interfere,
   validate `HEAD` + only the candidate in a disposable worktree (no stash);
-  remove it after.
+  remove it after:
+
+  ```bash
+  wt=$(mktemp -d /tmp/vsdb-wt.XXXXXX); git worktree add --detach "$wt" HEAD
+  git diff HEAD -- <unit paths> | git -C "$wt" apply --index  # copy unit's untracked files too
+  (cd "$wt" && CARGO_TARGET_DIR="$OLDPWD/target" cargo test -p <pkg> <filter>)
+  git worktree remove --force "$wt"
+  ```
 - VSDB tests isolate via unique prefixes. The agent uses bare Cargo (`cargo test`,
   `cargo clippy`, `cargo check`, `cargo fmt`), not `make test` / `make all` /
   `make bench` / `make lint` / `make fmt`, unless the user explicitly asks for that
@@ -66,4 +73,4 @@ One issue / root cause / behavior change → one commit.
 | Won't Fix | real; safe fix currently disproportionate |
 | Rejected | material claim disproven (not a severity). Skip routine noise. |
 
-Resolved history lives in Git/CHANGELOG. Evidence only — no dates or “last reviewed”.
+Registry rules and entry shape: `review-core.md` §5.

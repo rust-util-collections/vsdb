@@ -21,7 +21,8 @@ Until the user explicitly accepts it in this conversation, do not ship it and do
 not major-bump; leave it Open.
 
 1. Major bump both crates lockstep; update workspace `vsdb_core` dep.
-2. Document broken API/format and affected old versions in `CHANGELOG.md` + public migration docs.
+2. Document broken API/format and affected old versions: public migration docs in
+   the behavior commit; `CHANGELOG.md` in the release commit (`commit-protocol.md`).
 3. State old-data behavior: hard reject, in-place migrate, or export/reimport.
 4. Concrete migration (backup/rollback; any old-version export step).
 5. Tests for rejection/migration and new-format stability.

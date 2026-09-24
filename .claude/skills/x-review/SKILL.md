@@ -21,20 +21,22 @@ Read: `.claude/docs/workflow-policy.md`, `.claude/docs/pragmatic-engineering.md`
 
 ## Input
 
-`$ARGUMENTS` — one optional scope + optional `--fix`:
+`$ARGUMENTS` — at most one scope + optional `--fix`:
 
-| Input | Scope |
-|-------|-------|
-| *(empty)* | Latest commit |
-| `N` | Last N commits (positive int) |
-| `staged` | `git diff --cached` |
-| `worktree` | Staged + unstaged + untracked |
-| `all` | Full repo |
-| `<hash>` | One commit |
-| `<hash1>..<hash2>` | Range |
+| Input | Scope | Evidence |
+|-------|-------|----------|
+| *(empty)* | Latest commit | as `<hash>` = `HEAD` |
+| `N` | Last N commits | `git log HEAD~N..HEAD` + `git diff HEAD~N HEAD` |
+| `staged` | Index | `git diff --cached` |
+| `worktree` | Staged + unstaged + untracked | `git diff HEAD` + `git ls-files --others --exclude-standard` |
+| `all` | Full repo | tracked-file ledger (`git ls-files`) |
+| `<hash>` | One commit | `git show <hash>`; merge → `git diff <hash>^1 <hash>` |
+| `<a>..<b>` | Range | `git log <a>..<b>` + `git diff <a>...<b>` |
 
-Validate revs with Git. Reject bad args; never guess. `--fix`: apply confirmed
-fixes after report. Historical scope: only still-present HEAD defects.
+Resolve every rev (incl. `HEAD~N`) with `git rev-parse --verify --quiet '<rev>^{commit}'`.
+An all-digit token is `N`; if it also resolves as a commit, ask. Reject anything
+else; never guess. `--fix`: apply confirmed fixes after the report. Historical
+scope: report only defects still present at HEAD.
 
 ## Protocol
 
@@ -78,31 +80,7 @@ Diff: every changed file, public/persisted contract, failure path, relevant test
 
 ### Phase 5 — Audit registry
 
-Update `docs/audit.md` from current code:
-
-1. Prune fixed/obsolete Open (history → Git/CHANGELOG, not Resolved section).
-2. Add confirmed Open, dedupe, CRITICAL→LOW.
-3. Re-check intersecting Won't Fix (`all` → all).
-4. Disproportionate real → Won't Fix + Reason.
-5. Material disproven → Rejected (no severity); drop routine noise.
-6. No dates/freshness markers.
-
-```markdown
-## Open
-### [SEVERITY] subsystem: summary
-- **Where**: file:line_range
-- **What**: defect
-- **Why**: trigger, outcome, invariant
-- **Suggested fix**: direction
-
-## Won't Fix
-### [SEVERITY] subsystem: summary
-- **Where** / **What** / **Reason**
-
-## Rejected
-### subsystem: claim
-- **Where** / **Claim** / **Reason**
-```
+Update `docs/audit.md` per `review-core.md` §5 (scope rules, shape, severity).
 
 ### Phase 6 — Report
 
@@ -111,6 +89,7 @@ Zero → say so + what was covered.
 
 ### Phase 7 — `--fix` only
 
-Sequential fixes; preserve baseline; stop on unsafe overlap. Regression tests +
-smallest validate per fix; re-review; update audit. No version/commit/push —
-user runs `/x-commit` after inspect.
+Sequential fixes; preserve baseline; stop on unsafe overlap. Regression test +
+per-unit checks from `.claude/docs/commit-protocol.md` steps 2–4 per fix (no
+staging); re-review; update audit. No version/commit/push — user runs
+`/x-commit` after inspect.

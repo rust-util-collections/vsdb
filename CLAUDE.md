@@ -61,16 +61,16 @@ user-invocable only.
 
 - `/x-review` — regression review. Empty = latest commit. Also: N, `all`, `staged`, `worktree`, hash, range, `--fix`. Code read-only; `docs/audit.md` is the registry exception
 - `/x-fix` — clear `docs/audit.md` Open, one finding per commit; resumable patch bump, no tag
-- `/x-commit` — review worktree → fix → commit. Unfixed defects go to `docs/audit.md`
-- `/x-overhaul` — same scopes as `/x-review` (empty = latest commit; `all` = full repo), then fix and local commits
+- `/x-commit` — review worktree (optional pathspecs) → fix → commit. Unfixed defects go to `docs/audit.md`
+- `/x-overhaul` — same scopes as `/x-review` (empty = latest commit; `all` = full repo; `staged`/`worktree` commit that work), then fix and local commits
 
 Supporting docs (`.claude/docs/`):
 - `workflow-policy.md` — worktree safety, one-issue-one-commit
 - `pragmatic-engineering.md` — root goal, low variance
-- `commit-protocol.md` — validate → commit → resumable patch bump (no tag, no autonomous major)
+- `commit-protocol.md` — validate → commit → resumable patch bump (no tag, no autonomous major); CHANGELOG written by the release commit
 - `compatibility-policy.md` — public/on-disk breaks + migration
 - `technical-patterns.md` / `design-patterns.md` — bug catalog + D-\* design lens
-- `review-core.md` — evidence standard + Subsystem Map
+- `review-core.md` — evidence standard + Subsystem Map + audit registry rules/shape (SSOT)
 - `false-positive-guide.md` — suppress noise
 - `patterns/*` — per-subsystem checklists
 

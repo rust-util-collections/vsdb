@@ -33,17 +33,19 @@ One primary row per Rust file. Unsafe, compatibility, public-doc checks are over
 Guides under `.claude/docs/patterns/`. Tests/benches/CI/README/CHANGELOG/`.claude`
 → map to the behavior they cover.
 
-## 2. Risk (effort, not a finding)
+## 2. Review depth (effort, not severity)
 
-| Class | Examples | Default |
-|-------|----------|---------|
-| COW/DAG/unsafe | node replace, refs, merge/rollback, shadow/casts | CRITICAL |
-| Persisted format | meta, tags, keys, codecs, ns layout | CRITICAL |
-| Proof/routing/crash | Merkle, prefix/shards, staged/dirty | HIGH |
-| Control/resource/API | lifecycle, cleanup, public behavior | HIGH |
-| Errors | propagate, partial fail, retry | MEDIUM |
-| Perf | serialization/alloc/locks on hot paths | context |
-| Tests/docs/config | coverage/alignment | LOW unless wrong |
+Depth sets how hard to look. Finding severity comes only from §5 outcomes.
+
+| Class | Examples | Depth |
+|-------|----------|-------|
+| COW/DAG/unsafe | node replace, refs, merge/rollback, shadow/casts | deepest |
+| Persisted format | meta, tags, keys, codecs, ns layout | deepest |
+| Proof/routing/crash | Merkle, prefix/shards, staged/dirty | deep |
+| Control/resource/API | lifecycle, cleanup, public behavior | deep |
+| Errors | propagate, partial fail, retry | standard |
+| Perf | serialization/alloc/locks on hot paths | quantify first |
+| Tests/docs/config | coverage/alignment | light unless wrong |
 
 ## 3. Evidence
 
@@ -89,22 +91,38 @@ fmt / compile / clippy → tools. Still LOW if tools miss:
 - public docs + this map + guides stay aligned
 - every unsafe has accurate `// SAFETY:`
 
-## 5. Audit (`docs/audit.md`)
+## 5. Audit registry (`docs/audit.md`) — SSOT
 
-- Prune fixed in-scope Open (history → Git/CHANGELOG, not a Resolved section).
-- Re-check intersecting Won't Fix / Rejected; full audit → all.
-- Real but disproportionate → Won't Fix + reason.
-- Material disproven → Rejected (no severity). Drop routine noise.
-- No dates/freshness markers.
+Every skill that writes the registry uses these rules and this shape. State
+meanings: `workflow-policy.md` §5. Decide from current code, not prior entry text.
 
-```text
-[SEVERITY] subsystem: summary
-WHERE: file:line_range
-TRIGGER: input/order/crash/old-data
-OUTCOME: observable wrong behavior
-WHY: invariant + why guards fail
-FIX: minimal direction + regression + migration impact
+1. Prune Open proven fixed/obsolete. Narrow scope: in-scope entries only; unrelated
+   Open stays unless proven fixed. History → Git/CHANGELOG, never a Resolved section.
+2. Add confirmed findings to Open; dedupe by root cause; order CRITICAL → LOW.
+3. Re-check Won't Fix / Rejected whose code, callers, or assumptions intersect the
+   scope; full audit → all (FP-13).
+4. Real but safe fix disproportionate → Won't Fix + Reason. Material claim
+   disproven → Rejected (no severity). Routine noise → no entry.
+5. No dates, freshness markers, or “last reviewed”. Separate entries with `---`.
+
+```markdown
+## Open
+### [SEVERITY] subsystem: summary
+- **Where**: `path` (`fn`) — add lines only when the fn is ambiguous
+- **What**: defect + realistic trigger (input/order/crash/old data)
+- **Why**: observable outcome; invariant; why guards fail
+- **Suggested fix**: direction + regression test + migration impact
+
+## Won't Fix
+### [SEVERITY] subsystem: summary
+- **Where** / **What** / **Reason**
+
+## Rejected
+### subsystem: "claim"
+- **Where** / **Claim** / **Reason**
 ```
+
+Severity:
 
 - **CRITICAL**: loss/corruption, UB, unsound proof, cross-structure contamination, silent persisted misread
 - **HIGH**: wrong results, deadlock, realistic crash/exhaustion, material hot-path hit
