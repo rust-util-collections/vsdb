@@ -1456,15 +1456,17 @@ mod diff_merge {
         let tgt = tree.insert(base, &key(u32::MAX as u64), b"t");
         tree.acquire_node(tgt);
 
-        let before = tree.nodes.iter().count();
+        // Physical row counts can shrink during background compaction.
+        // This tree's monotonic allocator counts only newly allocated nodes.
+        let before = tree.runtime.next_id.load(Ordering::Acquire);
         let merged = tree.merge(&[base], src, tgt);
         tree.acquire_node(merged);
-        let written = tree.nodes.iter().count() - before;
+        let written = tree.runtime.next_id.load(Ordering::Acquire) - before;
         assert_eq!(tree.get(merged, &key(1)).unwrap(), b"s");
         assert_eq!(tree.get(merged, &key(u32::MAX as u64)).unwrap(), b"t");
         // One path copy, not a rebuilt tree.
         assert!(
-            written <= tree.height(merged) as usize + 1,
+            written <= u64::from(tree.height(merged)) + 1,
             "wrote {written} nodes"
         );
         tree.assert_refs_match_recount(&[base, src, tgt, merged]);
