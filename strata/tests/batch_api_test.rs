@@ -1,4 +1,4 @@
-use vsdb::{Mapx, vsdb_set_base_dir};
+use vsdb::{Mapx, VsdbOptions, vsdb_configure};
 
 #[test]
 fn test_batch_entry_basic() {
@@ -6,7 +6,7 @@ fn test_batch_entry_basic() {
         "/tmp/vsdb_testing/batch_api_test_{}",
         rand::random::<u128>()
     );
-    vsdb_set_base_dir(&dir).unwrap();
+    vsdb_configure(VsdbOptions::new(&dir)).unwrap();
 
     let mut map = Mapx::new();
 

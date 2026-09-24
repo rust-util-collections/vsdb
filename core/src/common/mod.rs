@@ -26,7 +26,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         LazyLock,
-        atomic::{AtomicBool, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
     },
 };
 
@@ -71,7 +71,7 @@ static VSDB_BASE_DIR: LazyLock<Mutex<PathBuf>> =
 
 static VSDB_CUSTOM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     // Materializing a derived directory pins it to the current base
-    // dir forever; freeze the base dir so a later `vsdb_set_base_dir`
+    // dir forever; freeze the base dir so a later `vsdb_configure`
     // fails loudly instead of silently splitting the directory tree
     // across two bases.
     vsdb_freeze_base_dir();
@@ -354,6 +354,13 @@ pub struct VsdbOptions {
     pub base_dir: PathBuf,
     /// Capability used by the default and every non-default namespace.
     pub open_mode: OpenMode,
+    /// Memory budget of the **default** namespace's engine, in MB.
+    ///
+    /// `None` falls back to the `VSDB_MEM_BUDGET_MB` environment variable,
+    /// then to the fixed 2 GiB default. A larger budget enlarges the block
+    /// cache and write buffers. Non-default namespaces size from their own
+    /// [`NamespaceOpts::mem_budget_mb`].
+    pub mem_budget_mb: Option<usize>,
 }
 
 impl VsdbOptions {
@@ -362,6 +369,7 @@ impl VsdbOptions {
         Self {
             base_dir: base_dir.into(),
             open_mode: OpenMode::ReadWrite,
+            mem_budget_mb: None,
         }
     }
 
@@ -372,9 +380,27 @@ impl VsdbOptions {
     /// supported.
     pub fn read_only(base_dir: impl Into<PathBuf>) -> Self {
         Self {
-            base_dir: base_dir.into(),
             open_mode: OpenMode::ReadOnly,
+            ..Self::new(base_dir)
         }
+    }
+
+    /// Sets the default namespace's memory budget, in MB (see
+    /// [`mem_budget_mb`](Self::mem_budget_mb)).
+    pub fn with_mem_budget_mb(mut self, mb: usize) -> Self {
+        self.mem_budget_mb = Some(mb);
+        self
+    }
+}
+
+/// Budget selected through [`VsdbOptions::mem_budget_mb`] (0 = unset).
+static CONFIGURED_MEM_BUDGET_MB: AtomicUsize = AtomicUsize::new(0);
+
+/// The default namespace's configured budget, if [`vsdb_configure`] set one.
+pub(crate) fn configured_mem_budget_mb() -> Option<usize> {
+    match CONFIGURED_MEM_BUDGET_MB.load(Ordering::Acquire) {
+        0 => None,
+        mb => Some(mb),
     }
 }
 
@@ -401,21 +427,21 @@ pub(crate) fn vsdb_is_read_only() -> bool {
 /// Freezes the base directory without touching the process environment.
 ///
 /// Called by the engine when the database is first opened so that any
-/// later [`vsdb_set_base_dir`] call fails instead of silently diverging
-/// from the directory already in use.  This deliberately performs no
-/// `env::set_var` — it can run at an arbitrary point in a multithreaded
-/// program, where mutating the environment would be unsound.
+/// later [`vsdb_configure`] call fails instead of silently diverging from
+/// the directory already in use.
 #[inline(always)]
 pub(crate) fn vsdb_freeze_base_dir() {
     BASE_DIR_FROZEN.store(true, Ordering::Release);
 }
 
-/// Selects the base directory and access capability before first use.
+/// Selects the base directory, access capability, and default-namespace
+/// memory budget before first use.
 ///
-/// This is the entry point for [`OpenMode::ReadOnly`]. The choice is one-shot
-/// and process-wide: it applies to the default namespace and every
-/// non-default namespace opened through a restored handle. Call it at the
-/// start of `main`, before spawning threads and before any other VSDB API.
+/// The choice is one-shot and process-wide: it applies to the default
+/// namespace and every non-default namespace opened through a restored
+/// handle. Call it before any other VSDB API; without it the base directory
+/// comes from the `VSDB_BASE_DIR` environment variable (read, never
+/// written) or defaults to `$HOME/.vsdb`.
 ///
 /// Read-only mode opens only complete existing datasets. Reads and in-memory
 /// WAL recovery are supported without filesystem changes. Fallible write
@@ -423,54 +449,23 @@ pub(crate) fn vsdb_freeze_base_dir() {
 /// mutations panic; maintenance-only flush and deferred-delete calls are
 /// no-ops.
 ///
-/// Like [`vsdb_set_base_dir`], this publishes `VSDB_BASE_DIR` in the process
-/// environment for child processes.
+/// It never touches the process environment, so it is safe to call from
+/// any thread.
 ///
 /// # Errors
 ///
 /// Returns [`VsdbError::BaseDirFrozen`] if configuration was already selected
 /// or any API that materializes/freezes a VSDB path was used first.
-///
-/// # Safety contract
-///
-/// Updating a process environment with concurrently running threads is not
-/// safe. The caller must invoke this during single-threaded startup, before
-/// spawning threads.
 pub fn vsdb_configure(options: VsdbOptions) -> Result<()> {
     if BASE_DIR_FROZEN.swap(true, Ordering::AcqRel) {
         return Err(VsdbError::BaseDirFrozen);
     }
 
     OPEN_MODE.store(options.open_mode as u8, Ordering::Release);
-    // SAFETY: guarded by the one-shot freeze above; the public contract
-    // requires configuration before other threads can access the environment.
-    unsafe { env::set_var(BASE_DIR_VAR, &options.base_dir) }
+    CONFIGURED_MEM_BUDGET_MB
+        .store(options.mem_budget_mb.unwrap_or(0), Ordering::Release);
     *VSDB_BASE_DIR.lock() = options.base_dir;
     Ok(())
-}
-
-/// Sets the base directory path for VSDB manually.
-///
-/// This function allows you to programmatically set the base directory for VSDB.
-/// It can only be called once, before the database is initialized.
-///
-/// It also publishes the directory through the `VSDB_BASE_DIR`
-/// environment variable (for child processes).  Because `env::set_var`
-/// is unsound while other threads may be reading the environment, call
-/// this **early in `main`, before spawning any threads**.  If you cannot
-/// guarantee that, set the `VSDB_BASE_DIR` environment variable before
-/// process start instead of calling this function.
-///
-/// # Arguments
-///
-/// * `dir` - An object that can be converted into a `Path`.
-///
-/// # Errors
-///
-/// This function will return an error if the base directory has already been initialized.
-#[inline(always)]
-pub fn vsdb_set_base_dir(dir: impl AsRef<Path>) -> Result<()> {
-    vsdb_configure(VsdbOptions::new(dir.as_ref()))
 }
 
 /// Flushes all data to disk — the default namespace and every open

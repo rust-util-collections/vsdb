@@ -1,14 +1,14 @@
 use ruc::*;
 use std::borrow::Cow;
-use vsdb_core::{MapxRaw, vsdb_set_base_dir};
+use vsdb_core::{MapxRaw, VsdbOptions, vsdb_configure};
 
 #[test]
 fn basic_cases() {
     let cnt = 200;
-    info_omit!(vsdb_set_base_dir(format!(
+    info_omit!(vsdb_configure(VsdbOptions::new(format!(
         "/tmp/vsdb_testing/{}",
         rand::random::<u64>()
-    )));
+    ))));
 
     let hdr = {
         let mut hdr_i = MapxRaw::new();

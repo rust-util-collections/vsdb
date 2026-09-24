@@ -1,17 +1,17 @@
 use serde::{Deserialize, Serialize};
-use vsdb::{basic::orphan::Orphan, vsdb_set_base_dir};
+use vsdb::{VsdbOptions, basic::orphan::Orphan, vsdb_configure};
 
-/// One process-wide base-dir pick: `vsdb_set_base_dir` publishes via
-/// `env::set_var`, which is unsound to race — serialize it behind a
-/// `Once` so parallel tests in this binary cannot touch the env
-/// concurrently (losers reuse the winner's dir; data stays disjoint
+/// One process-wide base-dir pick: `vsdb_configure` is one-shot, so the
+/// first test configures and the rest reuse that dir (data stays disjoint
 /// via globally-unique prefixes).
 fn setup() {
     use std::sync::Once;
     static INIT: Once = Once::new();
     INIT.call_once(|| {
-        let _ =
-            vsdb_set_base_dir(format!("/tmp/vsdb_testing/{}", rand::random::<u64>()));
+        let _ = vsdb_configure(VsdbOptions::new(format!(
+            "/tmp/vsdb_testing/{}",
+            rand::random::<u64>()
+        )));
     });
 }
 

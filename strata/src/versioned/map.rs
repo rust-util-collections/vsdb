@@ -103,11 +103,11 @@ pub(crate) struct BranchState {
 /// ```
 /// use vsdb::versioned::map::VerMap;
 /// use vsdb::versioned::NO_COMMIT;
-/// use vsdb::{vsdb_set_base_dir, vsdb_get_base_dir};
+/// use vsdb::{VsdbOptions, vsdb_configure, vsdb_get_base_dir};
 /// use std::fs;
 ///
 /// let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
-/// vsdb_set_base_dir(&dir).unwrap();
+/// vsdb_configure(VsdbOptions::new(&dir)).unwrap();
 ///
 /// let mut m: VerMap<u32, String> = VerMap::new();
 /// let main = m.main_branch();

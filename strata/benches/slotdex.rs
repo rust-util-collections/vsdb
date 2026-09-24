@@ -121,13 +121,16 @@ criterion_group!(
 #[path = "units/legacy_budget.rs"]
 mod legacy_budget;
 
-// Custom main (instead of `criterion_main!`): the legacy dynamic
-// budget must be exported before the first engine touch.
+// Custom main (instead of `criterion_main!`): the data dir and legacy
+// dynamic budget must be configured before the first engine touch.
 fn main() {
-    legacy_budget::apply();
     // Isolate from $HOME/.vsdb before the first engine touch.
-    let dir = format!("/tmp/vsdb_bench_slotdex_{}", random::<u128>());
-    vsdb::vsdb_set_base_dir(&dir).unwrap();
+    let dir = format!("/tmp/vsdb_bench_slotdex_{}", rand::random::<u128>());
+    let mut opts = vsdb::VsdbOptions::new(&dir);
+    if let Some(mb) = legacy_budget::budget_mb() {
+        opts = opts.with_mem_budget_mb(mb);
+    }
+    vsdb::vsdb_configure(opts).unwrap();
     benches();
     Criterion::default().configure_from_args().final_summary();
 }

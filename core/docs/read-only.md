@@ -29,7 +29,7 @@ assert_eq!(map.get(b"answer"), Some(b"42".to_vec()));
 `vsdb_configure` is one-shot and process-wide. It covers the default namespace
 and every non-default namespace restored in that process. Different modes need
 separate processes. Writable callers may continue to use
-`vsdb_set_base_dir(path)`; its options-based equivalent is
+`vsdb_configure(VsdbOptions::new(path))`; its options-based equivalent is
 `vsdb_configure(VsdbOptions::new(path))`.
 
 Call configuration during single-threaded startup. Like `vsdb_set_base_dir`,

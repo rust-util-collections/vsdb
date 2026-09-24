@@ -1,12 +1,15 @@
 mod units;
 
-// Custom main (instead of `criterion_main!`): the legacy dynamic
-// budget must be exported before the first engine touch.
+// Custom main (instead of `criterion_main!`): the data dir and legacy
+// dynamic budget must be configured before the first engine touch.
 fn main() {
-    units::legacy_budget::apply();
     // Isolate from $HOME/.vsdb before the first engine touch.
     let dir = format!("/tmp/vsdb_bench_basic_{}", rand::random::<u128>());
-    vsdb::vsdb_set_base_dir(&dir).unwrap();
+    let mut opts = vsdb::VsdbOptions::new(&dir);
+    if let Some(mb) = units::legacy_budget::budget_mb() {
+        opts = opts.with_mem_budget_mb(mb);
+    }
+    vsdb::vsdb_configure(opts).unwrap();
     units::basic_mapx::benches();
     units::basic_mapx_ord::benches();
     units::batch_vs_normal::benches();

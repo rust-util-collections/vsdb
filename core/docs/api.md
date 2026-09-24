@@ -8,10 +8,10 @@ This document provides examples for the public APIs in the `vsdb_core` crate.
 
 ```rust
 use vsdb_core::MapxRaw;
-use vsdb_core::common::{vsdb_set_base_dir, vsdb_get_base_dir};
+use vsdb_core::common::{VsdbOptions, vsdb_configure, vsdb_get_base_dir};
 
 // It's recommended to set a base directory for the database.
-// vsdb_set_base_dir("/tmp/vsdb_core_test").unwrap();
+// vsdb_configure(VsdbOptions::new("/tmp/vsdb_core_test")).unwrap();
 
 let mut map = MapxRaw::new();
 
@@ -40,12 +40,12 @@ does not create a cross-shard transaction. The call is a no-op in read-only mode
 Example for getting and setting the base directory.
 
 ```rust
-use vsdb_core::{vsdb_set_base_dir, vsdb_get_base_dir};
+use vsdb_core::{VsdbOptions, vsdb_configure, vsdb_get_base_dir};
 
 // Set a custom base directory.
 // Call this early in main, before spawning any threads — it mutates
 // the process environment (`VSDB_BASE_DIR`).
-vsdb_set_base_dir("/tmp/my_vsdb_data").unwrap();
+vsdb_configure(VsdbOptions::new("/tmp/my_vsdb_data")).unwrap();
 
 // Get the current base directory
 let dir = vsdb_get_base_dir();

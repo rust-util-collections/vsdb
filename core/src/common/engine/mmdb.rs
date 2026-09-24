@@ -1,6 +1,7 @@
 use crate::common::{
     BatchTrait, GB, PREFIX_ALLOC_START, PREFIX_SIZE, Pre, PreBytes, RawKey, RawValue,
-    VSDB, vsdb_freeze_base_dir, vsdb_get_base_dir, vsdb_is_read_only,
+    VSDB, configured_mem_budget_mb, vsdb_freeze_base_dir, vsdb_get_base_dir,
+    vsdb_is_read_only,
 };
 use mmdb::{
     BidiIterator, BlockCachePool, CompressionType, DB, DbOptions, WriteBatch,
@@ -182,7 +183,7 @@ impl MmDB {
     /// opens fold it into memory without modifying the store.
     pub(crate) fn new() -> Result<Self> {
         let base_dir = vsdb_get_base_dir();
-        // Lock in the base dir so later `vsdb_set_base_dir` calls fail.
+        // Lock in the base dir so later `vsdb_configure` calls fail.
         // Deliberately does NOT mutate the process environment: this runs
         // lazily on the first DB operation, possibly long after worker
         // threads were spawned, where `env::set_var` would be unsound.
@@ -1287,22 +1288,23 @@ const G: usize = GB as usize;
 /// to it, and a moment-in-time reading bakes deployment noise into
 /// engine sizing. A fixed, conservative default keeps the footprint
 /// predictable everywhere; applications that can afford more memory
-/// should raise `VSDB_MEM_BUDGET_MB` — a larger budget enlarges the
-/// block cache and write buffers, which improves performance.
+/// should raise it (`VsdbOptions::with_mem_budget_mb` or
+/// `VSDB_MEM_BUDGET_MB`) — a larger budget enlarges the block cache and
+/// write buffers, which improves performance.
 const DEFAULT_MEM_BUDGET_MB: usize = 2048;
 
 /// Resolve the effective DEFAULT-namespace budget in bytes.
 ///
-/// - `env_budget_mb` (`VSDB_MEM_BUDGET_MB`), when present, non-zero,
-///   and expressible in bytes, is applied verbatim — the operator
-///   asked for that exact number; it is the ONLY way to grow (or
-///   shrink) the default engine's memory.
+/// - `budget_mb` (`VsdbOptions::mem_budget_mb`, else `VSDB_MEM_BUDGET_MB`),
+///   when present, non-zero, and expressible in bytes, is applied
+///   verbatim — the operator asked for that exact number; it is the ONLY
+///   way to grow (or shrink) the default engine's memory.
 /// - Otherwise the fixed [`DEFAULT_MEM_BUDGET_MB`] default stands.
 ///
 /// Every budget is a binding limit: write-buffer sizing scales with
 /// it (see `mmdb_open`).
-fn effective_mem_budget(env_budget_mb: Option<usize>) -> usize {
-    env_budget_mb
+fn effective_mem_budget(budget_mb: Option<usize>) -> usize {
+    budget_mb
         .filter(|&mb| mb > 0)
         .and_then(|mb| mb.checked_mul(1024 * 1024))
         .unwrap_or(DEFAULT_MEM_BUDGET_MB * 1024 * 1024)
@@ -1312,11 +1314,13 @@ fn effective_mem_budget(env_budget_mb: Option<usize>) -> usize {
 /// must size off the same number, and `MmDB::new` opens `NUM_SHARDS`
 /// shards -- re-parsing the env override per shard would be redundant.
 static MEM_BUDGET: LazyLock<usize> = LazyLock::new(|| {
-    let env_budget_mb = std::env::var("VSDB_MEM_BUDGET_MB")
-        .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok());
+    let budget_mb = configured_mem_budget_mb().or_else(|| {
+        std::env::var("VSDB_MEM_BUDGET_MB")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+    });
 
-    effective_mem_budget(env_budget_mb)
+    effective_mem_budget(budget_mb)
 });
 
 /// Refuses to open a dataset marked with a newer on-disk format.

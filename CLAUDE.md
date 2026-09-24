@@ -30,7 +30,7 @@ make lint         # cargo clippy --workspace + check tests/benches
 make bench        # criterion benches (core: basic + cache_pool; strata: basic, versioned, slotdex, trie_bench, vecdex)
 ```
 
-**Important**: Tests run in PARALLEL (v16.0.2+). Test data stays disjoint via globally-unique prefixes; tests must not assert on cross-test global state (exact allocator values, registry sizes) and must serialize any `vsdb_set_base_dir` behind a `Once` (env mutation is unsound to race).
+**Important**: Tests run in PARALLEL (v16.0.2+). Test data stays disjoint via globally-unique prefixes; tests must not assert on cross-test global state (exact allocator values, registry sizes) and must configure the base dir once per binary (`vsdb_configure` is one-shot; put it behind a `Once`).
 
 `make test` / `make all` / `make bench` are manual/CI convenience targets and
 perform global cleanup. The agent uses bare Cargo unless you explicitly ask for
@@ -98,5 +98,4 @@ Additional docs in `docs/`:
   - `from_bytes()`: caller provides a valid uniquely-owned prefix for the
     correct type and namespace
   - Pointer casts in entry API macros
-  - `env::set_var` in `vsdb_set_base_dir`: caller must invoke before spawning threads
 - **No Co-Authored-By in commits** — never add `Co-Authored-By:` or similar trailers to commit messages; project commits are authored only by the human contributor

@@ -14,7 +14,7 @@ use vsdb_core::{
 #[test]
 fn namespace_lifecycle() {
     let dir = format!("/tmp/vsdb_testing/ns_lifecycle_{}", rand::random::<u128>());
-    vsdb_core::vsdb_set_base_dir(&dir).unwrap();
+    vsdb_core::vsdb_configure(vsdb_core::VsdbOptions::new(&dir)).unwrap();
 
     // ---- default namespace: fixed id, zero ceremony ----
     let d = Namespace::default_ns();

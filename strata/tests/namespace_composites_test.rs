@@ -5,14 +5,14 @@
 
 use vsdb::{
     DEFAULT_NS_ID, HnswConfig, MapxOrd, MetricKind, Namespace, Orphan, SlotDex,
-    VecDexDyn, VerMap, basic::mapx::Mapx, vsdb_ns_close, vsdb_ns_destroy,
-    vsdb_set_base_dir,
+    VecDexDyn, VerMap, VsdbOptions, basic::mapx::Mapx, vsdb_configure, vsdb_ns_close,
+    vsdb_ns_destroy,
 };
 
 #[test]
 fn composites_in_namespaces() {
     let dir = format!("/tmp/vsdb_testing/ns_strata_{}", rand::random::<u128>());
-    vsdb_set_base_dir(&dir).unwrap();
+    vsdb_configure(VsdbOptions::new(&dir)).unwrap();
 
     let ns = Namespace::create().unwrap();
 

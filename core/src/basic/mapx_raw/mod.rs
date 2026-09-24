@@ -9,12 +9,12 @@
 //!
 //! ```
 //! use vsdb_core::basic::mapx_raw::MapxRaw;
-//! use vsdb_core::{vsdb_set_base_dir, vsdb_get_base_dir};
+//! use vsdb_core::{VsdbOptions, vsdb_configure, vsdb_get_base_dir};
 //! use std::fs;
 //!
 //! // It's recommended to use a temporary directory for testing
 //! let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
-//! vsdb_set_base_dir(&dir).unwrap();
+//! vsdb_configure(VsdbOptions::new(&dir)).unwrap();
 //!
 //! let mut m = MapxRaw::new();
 //!
@@ -508,9 +508,9 @@ impl MapxRaw {
     ///
     /// ```
     /// use vsdb_core::basic::mapx_raw::MapxRaw;
-    /// use vsdb_core::vsdb_set_base_dir;
+    /// use vsdb_core::{VsdbOptions, vsdb_configure};
     ///
-    /// vsdb_set_base_dir("/tmp/vsdb_core_mapx_raw_batch_entry").unwrap();
+    /// vsdb_configure(VsdbOptions::new("/tmp/vsdb_core_mapx_raw_batch_entry")).unwrap();
     /// let mut map = MapxRaw::new();
     ///
     /// {
@@ -544,9 +544,9 @@ impl MapxRaw {
     ///
     /// ```
     /// use vsdb_core::basic::mapx_raw::MapxRaw;
-    /// use vsdb_core::vsdb_set_base_dir;
+    /// use vsdb_core::{VsdbOptions, vsdb_configure};
     ///
-    /// vsdb_set_base_dir("/tmp/vsdb_core_mapx_raw_batch_entry_wiped").unwrap();
+    /// vsdb_configure(VsdbOptions::new("/tmp/vsdb_core_mapx_raw_batch_entry_wiped")).unwrap();
     /// let mut map = MapxRaw::new();
     /// map.insert([1], [10]);
     ///

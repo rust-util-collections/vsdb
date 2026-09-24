@@ -3,20 +3,17 @@
 //!
 //! Benchmarks keep the old sizing — the host's available memory
 //! min-folded with a ¾-derated cgroup limit — by computing it at
-//! startup and exporting it through `VSDB_MEM_BUDGET_MB`, so results
-//! stay comparable with releases that auto-sized from the host. An
-//! operator-provided `VSDB_MEM_BUDGET_MB` always wins.
+//! startup and passing it through `VsdbOptions::with_mem_budget_mb`, so
+//! results stay comparable with releases that auto-sized from the host.
+//! An operator-provided `VSDB_MEM_BUDGET_MB` always wins.
 
 const G: usize = 1024 * 1024 * 1024;
 
-/// Compute the legacy dynamic budget and export it via
-/// `VSDB_MEM_BUDGET_MB` (no-op when the variable is already set).
-///
-/// Must run at bench startup, before the first engine touch and
-/// before any thread exists (`std::env::set_var` contract).
-pub fn apply() {
+/// The legacy dynamic budget in MB, or `None` when the operator already
+/// set `VSDB_MEM_BUDGET_MB` (which the engine then reads itself).
+pub fn budget_mb() -> Option<usize> {
     if std::env::var_os("VSDB_MEM_BUDGET_MB").is_some() {
-        return;
+        return None;
     }
     let host = host_avail_bytes();
     // A detected cgroup limit contributes `limit * 3/4` to a min-fold
@@ -29,11 +26,7 @@ pub fn apply() {
         Some(derated) => derated,
         None => host,
     };
-    let mb = (budget / (1024 * 1024)).max(1);
-    // SAFETY: executed at bench startup, before the first engine touch
-    // and before any thread exists — the same contract
-    // `vsdb_set_base_dir` documents.
-    unsafe { std::env::set_var("VSDB_MEM_BUDGET_MB", mb.to_string()) };
+    Some((budget / (1024 * 1024)).max(1))
 }
 
 /// Available physical memory (platform-specific), in bytes.

@@ -34,7 +34,7 @@ for (key, value) in map.iter() {
 # }
 ```
 
-Normal writable programs may keep using `vsdb_set_base_dir(path)`. The
+Normal writable programs may keep using `vsdb_configure(VsdbOptions::new(path))`. The
 equivalent options-based form is `vsdb_configure(VsdbOptions::new(path))`.
 
 `vsdb_configure` is one-shot. Call it at the start of `main`, before spawning

@@ -34,7 +34,7 @@ No pure “consider”. Need wrong result, crash, or leak scenario.
 ## FP-7: Test code / parallel model
 
 Tests may unwrap and use isolated scratch paths. Parallel: do not assume exclusive
-global allocator/registry/base-dir/env. Serialize `vsdb_set_base_dir`/env mutation;
+global allocator/registry/base-dir. Configure the base dir once (`vsdb_configure` is one-shot);
 race-tolerant global assertions. **Keep:** incorrect or parallel-unsafe tests.
 
 ## FP-8: Documented unsafe

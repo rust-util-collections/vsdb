@@ -31,12 +31,10 @@ const READS: usize = 8_192;
 
 fn setup() -> (MapxRaw, Vec<MapxRaw>) {
     // Pin the budget so cache capacity is the differentiator, not the
-    // host's RAM. SAFETY: executed at bench startup, before the first
-    // engine touch and before any thread exists — the same contract
-    // `vsdb_set_base_dir` documents.
-    unsafe { std::env::set_var("VSDB_MEM_BUDGET_MB", "64") };
+    // host's RAM.
     let dir = format!("/tmp/vsdb_bench_cache_pool_{}", rand::rng().random::<u64>());
-    vsdb_core::vsdb_set_base_dir(&dir).unwrap();
+    vsdb_core::vsdb_configure(vsdb_core::VsdbOptions::new(&dir).with_mem_budget_mb(64))
+        .unwrap();
 
     let mut rng = rand::rng();
     let mut val = [0u8; VAL];

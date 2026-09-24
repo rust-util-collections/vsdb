@@ -10,11 +10,6 @@ use vsdb::versioned::map::VerMap;
 const READ_ENTRIES: u64 = 5_000;
 const REMOVE_BATCH_SIZE: u64 = 1_024;
 
-fn setup() {
-    let dir = format!("/tmp/vsdb_bench_versioned/{}", rand::random::<u128>());
-    let _ = vsdb_core::vsdb_set_base_dir(&dir);
-}
-
 // =====================================================================
 // Single-branch CRUD
 // =====================================================================
@@ -24,8 +19,6 @@ fn single_branch_crud(c: &mut Criterion) {
     group
         .measurement_time(Duration::from_secs(3))
         .sample_size(10);
-
-    setup();
     let counter = AtomicUsize::new(0);
     let mut m: VerMap<u64, Vec<u8>> = VerMap::new();
     let main = m.main_branch();
@@ -107,8 +100,6 @@ fn commit_rollback(c: &mut Criterion) {
     group
         .measurement_time(Duration::from_secs(3))
         .sample_size(10);
-
-    setup();
     let mut m: VerMap<u64, Vec<u8>> = VerMap::new();
     let main = m.main_branch();
     let counter = AtomicUsize::new(0);
@@ -174,8 +165,6 @@ fn branching(c: &mut Criterion) {
     group
         .measurement_time(Duration::from_secs(3))
         .sample_size(10);
-
-    setup();
     let mut m: VerMap<u64, Vec<u8>> = VerMap::new();
     let main = m.main_branch();
 
@@ -221,8 +210,6 @@ fn iteration(c: &mut Criterion) {
     group
         .measurement_time(Duration::from_secs(3))
         .sample_size(10);
-
-    setup();
     let mut m: VerMap<u64, Vec<u8>> = VerMap::new();
     let main = m.main_branch();
 
@@ -271,8 +258,6 @@ fn historical(c: &mut Criterion) {
     group
         .measurement_time(Duration::from_secs(3))
         .sample_size(10);
-
-    setup();
     let mut m: VerMap<u64, Vec<u8>> = VerMap::new();
     let main = m.main_branch();
 
@@ -322,8 +307,6 @@ fn merge_bench(c: &mut Criterion) {
     group
         .measurement_time(Duration::from_secs(5))
         .sample_size(10);
-
-    setup();
     let mut m: VerMap<u64, Vec<u8>> = VerMap::new();
     let main = m.main_branch();
 
@@ -369,8 +352,6 @@ fn gc_bench(c: &mut Criterion) {
     group
         .measurement_time(Duration::from_secs(5))
         .sample_size(10);
-
-    setup();
     let mut m: VerMap<u64, Vec<u8>> = VerMap::new();
     let main = m.main_branch();
 
@@ -416,10 +397,16 @@ criterion_group!(
 #[path = "units/legacy_budget.rs"]
 mod legacy_budget;
 
-// Custom main (instead of `criterion_main!`): the legacy dynamic
-// budget must be exported before the first engine touch.
+// Custom main (instead of `criterion_main!`): the data dir and legacy
+// dynamic budget must be configured before the first engine touch.
 fn main() {
-    legacy_budget::apply();
+    // Isolate from $HOME/.vsdb before the first engine touch.
+    let dir = format!("/tmp/vsdb_bench_versioned_{}", rand::random::<u128>());
+    let mut opts = vsdb::VsdbOptions::new(&dir);
+    if let Some(mb) = legacy_budget::budget_mb() {
+        opts = opts.with_mem_budget_mb(mb);
+    }
+    vsdb::vsdb_configure(opts).unwrap();
     benches();
     Criterion::default().configure_from_args().final_summary();
 }

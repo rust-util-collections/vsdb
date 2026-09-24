@@ -661,7 +661,7 @@ impl Namespace {
         }
         // Reading the registry materializes a base-dir-derived path:
         // freeze the base dir (same contract as every other derived
-        // path) so a later `vsdb_set_base_dir` fails loudly instead of
+        // path) so a later `vsdb_configure` fails loudly instead of
         // moving the allocator's backing store to another universe
         // under this already-open namespace.
         vsdb_freeze_base_dir();
@@ -879,7 +879,7 @@ fn open_record_locked(base: &Path, rec: &NsRecord, root: &Path) -> Result<Namesp
 pub fn vsdb_ns_list() -> Result<Vec<NsInfo>> {
     // Reading the registry materializes base-dir-derived paths — same
     // freeze contract as open/destroy/relocate, so the returned roots
-    // cannot be split from the universe by a later `vsdb_set_base_dir`.
+    // cannot be split from the universe by a later `vsdb_configure`.
     vsdb_freeze_base_dir();
     let base = vsdb_get_base_dir();
     let _g = REGISTRY_LOCK.lock();
@@ -958,7 +958,7 @@ pub fn vsdb_ns_relocate(id: NsId, new_path: impl AsRef<Path>) -> Result<()> {
     if id == DEFAULT_NS_ID {
         return Err(ns_err(
             "the default namespace's root is the base dir; relocate it \
-             via VSDB_BASE_DIR / vsdb_set_base_dir before first use",
+             via VSDB_BASE_DIR / vsdb_configure before first use",
         ));
     }
     vsdb_freeze_base_dir();

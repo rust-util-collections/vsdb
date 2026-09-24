@@ -8,12 +8,12 @@
 //! # Examples
 //!
 //! ```
-//! use vsdb::{Mapx, vsdb_set_base_dir, vsdb_get_base_dir};
+//! use vsdb::{Mapx, VsdbOptions, vsdb_configure, vsdb_get_base_dir};
 //! use std::fs;
 //!
 //! // It's recommended to use a temporary directory for testing
 //! let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
-//! vsdb_set_base_dir(&dir).unwrap();
+//! vsdb_configure(VsdbOptions::new(&dir)).unwrap();
 //!
 //! let mut m: Mapx<i32, String> = Mapx::new();
 //!
@@ -175,9 +175,9 @@ where
     /// # Examples
     ///
     /// ```
-    /// use vsdb::{Mapx, vsdb_set_base_dir};
+    /// use vsdb::{Mapx, VsdbOptions, vsdb_configure};
     ///
-    /// vsdb_set_base_dir("/tmp/vsdb_mapx_batch_entry").unwrap();
+    /// vsdb_configure(VsdbOptions::new("/tmp/vsdb_mapx_batch_entry")).unwrap();
     /// let mut map = Mapx::new();
     ///
     /// let mut batch = map.batch_entry();

@@ -9,12 +9,12 @@
 //!
 //! ```
 //! use vsdb::basic::orphan::Orphan;
-//! use vsdb::{vsdb_set_base_dir, vsdb_get_base_dir};
+//! use vsdb::{VsdbOptions, vsdb_configure, vsdb_get_base_dir};
 //! use std::fs;
 //!
 //! // It's recommended to use a temporary directory for testing
 //! let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
-//! vsdb_set_base_dir(&dir).unwrap();
+//! vsdb_configure(VsdbOptions::new(&dir)).unwrap();
 //!
 //! let mut o = Orphan::new(10);
 //! assert_eq!(o.get_value(), 10);
@@ -247,10 +247,10 @@ where
     ///
     /// ```
     /// # use vsdb::basic::orphan::Orphan;
-    /// # use vsdb::{vsdb_set_base_dir, vsdb_get_base_dir};
+    /// # use vsdb::{VsdbOptions, vsdb_configure, vsdb_get_base_dir};
     /// # use std::fs;
     /// # let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
-    /// # vsdb_set_base_dir(&dir).unwrap();
+    /// # vsdb_configure(VsdbOptions::new(&dir)).unwrap();
     /// let mut o = Orphan::new(10);
     /// *o.get_mut() = 20;
     /// assert_eq!(o.get_value(), 20);
