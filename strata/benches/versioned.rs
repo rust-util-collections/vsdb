@@ -315,16 +315,20 @@ fn merge_bench(c: &mut Criterion) {
         b.iter(|| {
             let n = branch_counter.fetch_add(1, Ordering::SeqCst) as u64;
             let br = m.create_branch(&format!("mg{n}"), main).unwrap();
+            // Alternate values so every sample changes both sides from
+            // their common ancestor, including after the previous merge.
+            let source_value = 1 + (n % 2) as u8;
+            let target_value = 3 + (n % 2) as u8;
 
             // Feature changes keys 0..100.
             for i in 0..100u64 {
-                m.insert(br, &i, &vec![1u8; 64]).unwrap();
+                m.insert(br, &i, &vec![source_value; 64]).unwrap();
             }
             m.commit(br).unwrap();
 
             // Main changes keys 100..200.
             for i in 100..200u64 {
-                m.insert(main, &i, &vec![2u8; 64]).unwrap();
+                m.insert(main, &i, &vec![target_value; 64]).unwrap();
             }
             m.commit(main).unwrap();
 

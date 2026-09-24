@@ -12,14 +12,6 @@
 
 ## Open
 
-### [LOW] benchmarks: repeated merge samples contain no changes
-- **Where**: `strata/benches/versioned.rs` (`merge_bench`)
-- **What**: every iteration writes the same values to the same keys; after the first merge, both branches' changes equal their base despite the advertised 100 changes per side.
-- **Why**: measured samples exercise empty delta replay and cannot assess merge work over changed keys.
-- **Suggested fix**: vary values between iterations and verify both deltas outside timing; no compatibility impact.
-
----
-
 ### [LOW] docs: trie cache example uses obsolete signatures and save timing
 - **Where**: `strata/docs/api.md` (MptCalc / SmtCalc, VerMapWithProof)
 - **What**: the manual cache examples omit the directory argument, and the wrapper example says caching saves on Drop although normal saves occur during committed synchronization.
