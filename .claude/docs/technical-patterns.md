@@ -25,7 +25,7 @@ Engine batches are single-prefix. Logical multi-prefix atomicity needs single-ha
 ### 2.1 shadow() race
 Same-key concurrent write or overlapping structural multi-key ops violate alias contract. Disjoint plain-map keys OK.
 
-### 2.2 from_bytes untrusted
+### 2.2 MapxRaw::from_bytes_in untrusted
 Require same type, unique prefix ownership, correct namespace; no external untrusted bytes.
 
 ### 2.3 Entry API cast

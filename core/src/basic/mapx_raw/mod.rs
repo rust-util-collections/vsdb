@@ -577,33 +577,19 @@ impl MapxRaw {
         self.inner.clear();
     }
 
-    /// Reconstructs a `MapxRaw` from the 8-byte prefix previously
-    /// obtained via [`as_bytes`](Self::as_bytes), bound to the current
-    /// ambient namespace ([`Namespace::current`]).
+    /// Reconstructs a `MapxRaw` in `ns` from the 8-byte prefix previously
+    /// obtained via [`as_bytes`](Self::as_bytes).
+    ///
+    /// Prefer [`from_meta`](Self::from_meta) or serde: both validate the
+    /// payload and reserve the prefix against reallocation. This raw form
+    /// exists for layered crates migrating their own legacy formats.
     ///
     /// # Safety
     ///
     /// The caller must ensure that `s` encodes a prefix they have unique
-    /// ownership of and that the *ambient namespace's* engine still
-    /// contains the data for this prefix (a raw prefix carries no
-    /// namespace information of its own).  Passing arbitrary bytes is
-    /// undefined behavior.
-    #[inline(always)]
-    pub unsafe fn from_bytes(s: impl AsRef<[u8]>) -> Self {
-        Self {
-            // SAFETY: forwards this fn's `unsafe` contract — the caller
-            // guarantees `s` encodes a uniquely-owned prefix and that the
-            // backing data still exists in the ambient namespace.
-            inner: unsafe { engine::Mapx::from_prefix_slice(s) },
-        }
-    }
-
-    /// [`from_bytes`](Self::from_bytes) bound to an explicit namespace.
-    ///
-    /// # Safety
-    ///
-    /// Same contract as `from_bytes`, with the data required to live in
-    /// `ns`'s engine.
+    /// ownership of, issued by this universe's allocator, and that `ns`'s
+    /// engine still contains the data for it. Arbitrary bytes can alias
+    /// another collection's storage.
     #[inline(always)]
     pub unsafe fn from_bytes_in(ns: &Namespace, s: impl AsRef<[u8]>) -> Self {
         Self {

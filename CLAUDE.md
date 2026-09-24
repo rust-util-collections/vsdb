@@ -95,7 +95,8 @@ Additional docs in `docs/`:
     key; disjoint-key raw/typed map writes are allowed, while structural
     multi-key operations require their documented broader serialization
     (`Clone` deep-copies storage)
-  - `from_bytes()`: caller provides a valid uniquely-owned prefix for the
-    correct type and namespace
+  - `MapxRaw::from_bytes_in()` (core raw layer only; typed wrappers have
+    no raw-byte constructors): caller provides a valid uniquely-owned prefix
+    issued by this universe, in the named namespace
   - Pointer casts in entry API macros
 - **No Co-Authored-By in commits** — never add `Co-Authored-By:` or similar trailers to commit messages; project commits are authored only by the human contributor

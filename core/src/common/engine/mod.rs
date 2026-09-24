@@ -344,20 +344,6 @@ impl Mapx {
         }
     }
 
-    /// [`from_prefix_slice_in`](Self::from_prefix_slice_in) bound to the
-    /// current ambient namespace ([`Namespace::current`]).
-    ///
-    /// # Safety
-    ///
-    /// Same contract as `from_prefix_slice_in`.
-    #[inline(always)]
-    pub(crate) unsafe fn from_prefix_slice(s: impl AsRef<[u8]>) -> Self {
-        // SAFETY: forwards this fn's `unsafe` contract verbatim — the
-        // caller guarantees a uniquely-owned prefix whose data lives in
-        // the current ambient namespace.
-        unsafe { Self::from_prefix_slice_in(&Namespace::current(), s) }
-    }
-
     pub(crate) fn from_prefix_meta(meta: &[u8]) -> Result<Self> {
         let (prefix, ns_id) = Self::decode_prefix_meta(meta)?;
         // Resolve the owning namespace first (auto-opens it through the

@@ -6,8 +6,8 @@
 creation-persisted). One process-global prefix allocator
 (`{base}/__SYSTEM__/__prefix_ceiling__`). Key = `[prefix_u64][user]`; reserved
 1-byte system keys `[0]` (legacy ceiling) / `[1]` (WAL fence) cannot collide.
-Handles own `Namespace` Arc — ambient scope is read at create and by unsafe
-non-`_in` `from_bytes`, never by ops/serde/`from_meta`. Engines in `Arc<NsInner>`
+Handles own `Namespace` Arc — ambient scope is read at create only, never by
+ops/serde/`from_meta`/`from_bytes_in`. Engines in `Arc<NsInner>`
 (no leak); close under lifecycle locks. Format marker after shards complete.
 One `BlockCachePool` per engine. A WriteBatch is bound to one prefix (⇒ one shard).
 
@@ -21,7 +21,7 @@ One `BlockCachePool` per engine. A WriteBatch is bound to one prefix (⇒ one sh
 **E6 Iter prefix bound** — stop at prefix end (incl. `u64::MAX` upper-bound care).
 **E7 Lifecycle exclusion** — open/create/destroy/relocate/close serialize properly; table lock released before slow teardown.
 **E8 Format/shards** — marked root = exact shard set + CURRENT anchors. No marker: 0 shards, exact set + CURRENT, or partial only with the `__SYSTEM__/__initializing__` sentinel; stray `shard_*` refused.
-**E9 Identity** — route via owned Namespace; meta ns suffix absent ⇔ default; no ambient redirect of existing handles (only unsafe non-`_in` `from_bytes` reads ambient).
+**E9 Identity** — route via owned Namespace; meta ns suffix absent ⇔ default; no ambient redirect of existing handles.
 **E10 Cache pool** — all shards of one engine share one pool; engines don’t share identity.
 **E11 clone_in** — fresh unobservable prefix; bounded independent batches; failed chunk best-effort wipe target without masking primary Err.
 
