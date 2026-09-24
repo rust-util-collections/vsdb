@@ -97,7 +97,10 @@ later writes is the contract. **Keep:** a snapshot that changes under it.
 Losing unsynced working state on power loss is by design. **Keep:** a crash
 leaving inconsistent state, or a history op returning before its sync.
 
-## FP-20: Same-name types share a `VSTYPE03` tag
+## FP-20: Typed-handle identity is not schema reflection
 
-Path-free tags accept `a::Row` as `b::Row` by design (moves stay restorable).
-**Keep:** different generic parameters or wrappers sharing a tag.
+Tags distinguish fully qualified Rust types, not field layouts. A schema
+change under the same qualified name requires an application migration.
+**Keep:** unrelated same-named types from different modules restoring as each
+other. The pre-release short-name experiment was removed after reproducing
+silent wrong-type writes; it is no longer an accepted exception.

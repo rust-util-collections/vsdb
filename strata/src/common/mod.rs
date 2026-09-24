@@ -22,9 +22,8 @@ use std::{any::type_name, fmt, fs, result::Result as StdResult, thread};
 
 /// Typed-handle envelope: magic + 8-byte type tag + postcard payload.
 ///
-/// `VSTYPE03` tags hash the module-path-free type name (see
-/// [`stable_type_name`]); `VSTYPE02` (v16) tags hashed the full
-/// `type_name`, and are still accepted on restore.
+/// `VSTYPE03` tags hash the fully qualified Rust type name. `VSTYPE02`
+/// (v16) is still accepted, with the old versioning-id aliases restored.
 const TYPED_HANDLE_META_MAGIC: &[u8; 8] = b"VSTYPE03";
 const LEGACY_TYPED_HANDLE_META_MAGIC: &[u8; 8] = b"VSTYPE02";
 const TYPED_HANDLE_TAG_LEN: usize = 8;
@@ -104,19 +103,6 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     })
 }
 
-/// `type_name` with every path reduced to its last segment:
-/// `vsdb::basic::mapx::Mapx<alloc::string::String, app::model::User>`
-/// becomes `Mapx<String, User>`.
-///
-/// Module paths are what change when code is refactored, when a
-/// dependency reorganizes its internals, or when rustc renders paths
-/// differently — none of which changes what is stored. The generic
-/// structure and type names still separate `Mapx<u32, _>` from
-/// `Mapx<u64, _>` and `Mapx` from `MapxOrd`.
-fn stable_type_name(full: &str) -> String {
-    map_type_paths(full, |path| path.rsplit("::").next().unwrap_or(""))
-}
-
 fn map_type_paths(full: &str, mut map: impl FnMut(&str) -> &str) -> String {
     let mut out = String::with_capacity(full.len());
     let mut start = 0;
@@ -131,14 +117,16 @@ fn map_type_paths(full: &str, mut map: impl FnMut(&str) -> &str) -> String {
     out
 }
 
-/// Type tag written by this version: the hash of [`stable_type_name`].
+/// Type tag written by this version: the hash of the full Rust type name.
 ///
 /// The tag exists to reject restoring a handle as the wrong type (a false
-/// rejection is always safer than silent type confusion). Two same-named
-/// types from different modules share a tag; restoring one as the other
-/// is a caller bug the tag no longer catches.
+/// rejection is safer than silent type confusion). Module paths must stay:
+/// unrelated same-named types can have different schemas whose encoded bytes
+/// happen to overlap. Moving a persisted type therefore needs an explicit
+/// migration. This is an identity check, not a schema fingerprint: changing
+/// fields while retaining the same type name still requires schema versioning.
 fn type_tag<T: ?Sized>() -> u64 {
-    fnv1a64(stable_type_name(type_name::<T>()).as_bytes())
+    fnv1a64(type_name::<T>().as_bytes())
 }
 
 /// The full type name as rendered by v16, where the versioning ids were
@@ -337,21 +325,6 @@ where
 mod type_tag_test {
     use super::*;
 
-    #[test]
-    fn stable_names_drop_module_paths_only() {
-        assert_eq!(
-            stable_type_name(
-                "vsdb::basic::mapx::Mapx<alloc::string::String, app::model::User>"
-            ),
-            "Mapx<String, User>"
-        );
-        assert_eq!(
-            stable_type_name("(u32, alloc::vec::Vec<u8>, [u8; 32], &str)"),
-            "(u32, Vec<u8>, [u8; 32], &str)"
-        );
-        assert_eq!(stable_type_name("u64"), "u64");
-    }
-
     mod a {
         #[derive(serde::Serialize, serde::Deserialize)]
         pub struct Row(pub u32);
@@ -362,14 +335,14 @@ mod type_tag_test {
     }
 
     #[test]
-    fn tags_survive_moves_but_separate_types() {
+    fn tags_distinguish_qualified_types_and_parameters() {
         use crate::{Mapx, MapxOrd};
-        // A type moved to another module keeps its tag...
-        assert_eq!(
+        // Same leaf name and shape are insufficient to establish identity.
+        assert_ne!(
             type_tag::<Mapx<u32, a::Row>>(),
             type_tag::<Mapx<u32, b::Row>>()
         );
-        // ...while different parameters or wrappers still differ.
+        // Different parameters and collection wrappers also differ.
         assert_ne!(
             type_tag::<Mapx<u32, a::Row>>(),
             type_tag::<Mapx<u64, a::Row>>()

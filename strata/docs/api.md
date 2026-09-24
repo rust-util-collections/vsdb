@@ -57,6 +57,14 @@ let archive_copy = archive.clone_in(&Namespace::default_ns()).unwrap();
 //   Namespace::relocate(id, new_path) -> Result<()>
 ```
 
+Typed handles restored by serde or `from_meta` check a tag of the fully
+qualified Rust type name, including generic parameters. Unrelated types with
+the same short name are rejected. Moving or renaming a persisted type requires
+an explicit migration; a type alias referring to the original type is fine.
+This check is not a schema fingerprint: changing fields under the same type
+name still requires application schema versioning and conversion. v16
+`VSTYPE02` handles remain readable; new handles use `VSTYPE03`.
+
 Key rules:
 - `Mapx::new()` targets the implicit default namespace — existing code needs zero changes.
 - A composite structure (`VerMap`, `SlotDex`, …) always lives wholly inside one namespace.

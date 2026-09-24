@@ -49,4 +49,6 @@ Typed wrappers compare **decoded** values (NaN/non-canonical). Not raw bytes.
 `KeyRef` / `OrderedKeyRef` impls must encode byte-identically to the owning key type (`str` ≡ `String`, `[u8]` ≡ `Vec<u8>`), or `get(&q)` silently misses.
 
 ### 3.6 Handle type tags
-`VSTYPE03` path-free tags; `VSTYPE02` still read with full-path tags — see `compatibility-policy.md`.
+`VSTYPE03` fully qualified type tags; `VSTYPE02` still read with its legacy
+full-path tags and versioning-id aliases. Type identity is not a schema
+fingerprint — see `compatibility-policy.md`.

@@ -17,8 +17,12 @@ layouts, enum discriminants, and metadata envelopes are wire:
 
 Typed handles serialize as magic + 8-byte type tag + payload.
 
-- `VSTYPE03` (v17+) tags the **module-path-free** type name (`Mapx<String, User>`):
-  moving a type is safe, renaming it or its parameters is not.
+- `VSTYPE03` (v17+) tags the **fully qualified** Rust type name, including
+  every generic parameter. Same-named types in different modules must not
+  share a tag. Moving or renaming a persisted type needs an explicit migration;
+  type aliases that still refer to the original type retain its identity.
+- Tags check nominal identity, not schema: field/layout changes under the
+  same name still require application schema versioning and conversion.
 - `VSTYPE02` (v16) metas are still restored, checked against the **full**
   `type_name` — so wrapper types and every type used inside built-in handles'
   parameters keep their paths while v16 data may exist.
@@ -26,6 +30,11 @@ Typed handles serialize as magic + 8-byte type tag + payload.
   `u64` alias names for this legacy check, including nested parameters;
   `VSTYPE03` continues to distinguish both ids from each other and from `u64`.
 - A new envelope needs a new magic; keep reading the old ones.
+
+The short-name `VSTYPE03` experiment was removed before v17 publication
+(owner-authorized pre-release redesign, 2026-09-24). Its development-only
+metadata is not a supported format; do not add a permissive fallback that
+reintroduces wrong-type restoration.
 
 ## Accepted breaks
 
