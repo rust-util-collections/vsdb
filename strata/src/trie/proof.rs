@@ -15,7 +15,7 @@ use crate::{
     common::{
         InstanceId,
         ende::{KeyEnDeOrdered, ValueEnDe},
-        error::Result,
+        error::{Result, VsdbError},
     },
     versioned::{BranchId, CommitId, map::VerMap},
 };
@@ -234,6 +234,13 @@ where
     /// Synchronizes the trie to a specific commit.
     fn sync_to_commit(&mut self, target: CommitId) -> Result<()> {
         self.reset_if_map_replaced();
+        // A cache is not a retained Snapshot. Rollback or branch deletion can
+        // reclaim its commit, even while the trie (or a disk cache) survives.
+        if self.map.get_commit(target).is_none() {
+            return Err(VsdbError::CommitNotFound {
+                commit_id: target.raw(),
+            });
+        }
         if self.sync_commit == Some(target) && !self.dirty_applied {
             return Ok(());
         }
