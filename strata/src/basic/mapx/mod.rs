@@ -52,12 +52,13 @@ use crate::{
         },
     },
     common::{
-        ende::{KeyEnDe, ValueEnDe},
+        ende::{KeyEnDe, KeyRef, ValueEnDe},
         error::Result,
         macros::define_map_wrapper,
     },
 };
 use std::{
+    borrow::Borrow,
     marker::PhantomData,
     ops::{Deref, DerefMut},
 };
@@ -86,21 +87,38 @@ where
     V: ValueEnDe,
 {
     /// Retrieves a value from the map for a given key.
+    ///
+    /// The key may be any borrowed form of `K` (`&str` for `String` keys,
+    /// `&[u8]` for `Vec<u8>` keys), like `HashMap::get`.
     #[inline(always)]
-    pub fn get(&self, key: &K) -> Option<V> {
-        self.inner.get(key.encode())
+    pub fn get<Q>(&self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: KeyRef + ?Sized,
+    {
+        self.inner.get(key.key_bytes())
     }
 
-    /// Retrieves a mutable reference to a value in the map.
+    /// Retrieves a mutable reference to a value in the map (borrowed key
+    /// forms as in [`get`](Self::get)).
     #[inline(always)]
-    pub fn get_mut(&mut self, key: &K) -> Option<ValueMut<'_, V>> {
-        self.inner.get_mut(key.encode())
+    pub fn get_mut<Q>(&mut self, key: &Q) -> Option<ValueMut<'_, V>>
+    where
+        K: Borrow<Q>,
+        Q: KeyRef + ?Sized,
+    {
+        self.inner.get_mut(key.key_bytes())
     }
 
-    /// Checks if the map contains a value for the specified key.
+    /// Checks if the map contains a value for the specified key (borrowed
+    /// key forms as in [`get`](Self::get)).
     #[inline(always)]
-    pub fn contains_key(&self, key: &K) -> bool {
-        self.inner.contains_key(key.encode())
+    pub fn contains_key<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: KeyRef + ?Sized,
+    {
+        self.inner.contains_key(key.key_bytes())
     }
 
     /// Inserts a key-value pair into the map.
@@ -155,12 +173,17 @@ where
         }
     }
 
-    /// Removes a key from the map.
+    /// Removes a key from the map (borrowed key forms as in
+    /// [`get`](Self::get)).
     ///
     /// Does not return the old value for performance reasons.
     #[inline(always)]
-    pub fn remove(&mut self, key: &K) {
-        self.inner.remove(key.encode())
+    pub fn remove<Q>(&mut self, key: &Q)
+    where
+        K: Borrow<Q>,
+        Q: KeyRef + ?Sized,
+    {
+        self.inner.remove(key.key_bytes())
     }
 
     /// Start a batch operation.

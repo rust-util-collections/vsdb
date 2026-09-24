@@ -35,7 +35,7 @@ use vsdb::Mapx;
 
 let mut map: Mapx<String, String> = Mapx::new();
 map.insert(&"key".to_string(), &"value".to_string());
-assert_eq!(map.get(&"key".to_string()), Some("value".to_string()));
+assert_eq!(map.get("key"), Some("value".to_string()));
 ```
 
 ## Read-only access

@@ -228,6 +228,68 @@ impl<T: ValueEn + ValueDe> ValueEnDe for T {
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
+/// Encoding of a borrowed key form for lookups in maps with [`KeyEnDe`]
+/// keys — `map.get(&q)` where `K: Borrow<Q>`, like `HashMap::get`.
+///
+/// Implemented for every `KeyEnDe` type (encoding itself) and for `str`
+/// and `[u8]`, whose encodings are byte-identical to `String`'s and
+/// `Vec<u8>`'s. An implementation for another borrowed form must encode
+/// exactly as its owner does, or lookups miss.
+pub trait KeyRef {
+    /// The stored-key bytes this value addresses.
+    fn key_bytes(&self) -> RawBytes;
+}
+
+impl<T: KeyEnDe> KeyRef for T {
+    #[inline(always)]
+    fn key_bytes(&self) -> RawBytes {
+        self.encode()
+    }
+}
+
+impl KeyRef for str {
+    #[inline(always)]
+    fn key_bytes(&self) -> RawBytes {
+        postcard::to_allocvec(self).unwrap()
+    }
+}
+
+impl KeyRef for [u8] {
+    #[inline(always)]
+    fn key_bytes(&self) -> RawBytes {
+        postcard::to_allocvec(self).unwrap()
+    }
+}
+
+/// [`KeyRef`] for maps with [`KeyEnDeOrdered`] keys (`MapxOrd`,
+/// `VerMap`): every `KeyEnDeOrdered` type, plus `str` and `[u8]`, whose
+/// ordered encodings equal `String`'s and `Vec<u8>`'s.
+pub trait OrderedKeyRef {
+    /// The stored-key bytes this value addresses.
+    fn ordered_key_bytes(&self) -> RawBytes;
+}
+
+impl<T: KeyEnDeOrdered> OrderedKeyRef for T {
+    #[inline(always)]
+    fn ordered_key_bytes(&self) -> RawBytes {
+        self.to_bytes()
+    }
+}
+
+impl OrderedKeyRef for str {
+    #[inline(always)]
+    fn ordered_key_bytes(&self) -> RawBytes {
+        self.as_bytes().to_vec()
+    }
+}
+
+impl OrderedKeyRef for [u8] {
+    #[inline(always)]
+    fn ordered_key_bytes(&self) -> RawBytes {
+        self.to_vec()
+    }
+}
+
 /// A trait for keys that maintain their order when serialized.
 ///
 /// This trait is crucial for ordered data structures like `MapxOrd`, ensuring that
@@ -498,3 +560,20 @@ impl_array!(
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+mod borrowed_key_test {
+    use super::*;
+
+    #[test]
+    fn borrowed_forms_encode_like_their_owners() {
+        let s = String::from("héllo");
+        assert_eq!(s.key_bytes(), "héllo".key_bytes());
+        assert_eq!(s.ordered_key_bytes(), "héllo".ordered_key_bytes());
+        let v: Vec<u8> = vec![0, 1, 200, 255];
+        assert_eq!(v.key_bytes(), v[..].key_bytes());
+        assert_eq!(v.ordered_key_bytes(), v[..].ordered_key_bytes());
+        let b: Box<[u8]> = v.clone().into_boxed_slice();
+        assert_eq!(b.ordered_key_bytes(), v[..].ordered_key_bytes());
+    }
+}

@@ -12,12 +12,13 @@ use crate::{
     basic::persistent_btree::{EMPTY_ROOT, NodeId, PersistentBTree},
     common::{
         Colocate, InstanceId,
-        ende::{KeyEnDeOrdered, ValueEnDe},
+        ende::{KeyEnDeOrdered, OrderedKeyRef, ValueEnDe},
         error::{Result, VsdbError},
     },
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    borrow::Borrow,
     collections::{BinaryHeap, HashMap, HashSet},
     marker::PhantomData,
     time::{SystemTime, UNIX_EPOCH},
@@ -740,11 +741,15 @@ where
     }
 
     /// Removes a key from the working state of `branch`.
-    pub fn remove(&mut self, branch: BranchId, key: &K) -> Result<()> {
+    pub fn remove<Q>(&mut self, branch: BranchId, key: &Q) -> Result<()>
+    where
+        K: Borrow<Q>,
+        Q: OrderedKeyRef + ?Sized,
+    {
         self.ensure_writable("versioned map remove")?;
         let mut state = self.get_branch(branch)?;
         let old_root = state.dirty_root;
-        state.dirty_root = self.tree.remove(old_root, &key.to_bytes());
+        state.dirty_root = self.tree.remove(old_root, &key.ordered_key_bytes());
         if state.dirty_root == old_root {
             return Ok(());
         }

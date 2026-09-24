@@ -126,10 +126,10 @@ map.insert(&"key1".to_string(), &"value1".to_string());
 map.insert(&"key2".to_string(), &"value2".to_string());
 
 // Get a value
-assert_eq!(map.get(&"key1".to_string()), Some("value1".to_string()));
+assert_eq!(map.get("key1"), Some("value1".to_string()));
 
 // Check if a key exists
-assert!(map.contains_key(&"key2".to_string()));
+assert!(map.contains_key("key2"));
 
 // Iterate over the key-value pairs
 for (key, value) in map.iter() {
@@ -137,7 +137,7 @@ for (key, value) in map.iter() {
 }
 
 // Remove a key-value pair
-map.remove(&"key1".to_string());
+map.remove("key1");
 ```
 
 ## MapxOrd

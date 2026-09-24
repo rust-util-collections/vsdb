@@ -51,12 +51,12 @@ use crate::{
     },
     common::{
         RawKey,
-        ende::{KeyEnDeOrdered, ValueEnDe},
+        ende::{KeyEnDeOrdered, OrderedKeyRef, ValueEnDe},
         error::Result,
         macros::{cow_bytes_bounds, define_map_wrapper, entry_or_insert_via_mock},
     },
 };
-use std::{marker::PhantomData, ops::RangeBounds};
+use std::{borrow::Borrow, marker::PhantomData, ops::RangeBounds};
 define_map_wrapper! {
     #[doc = "A disk-based, `BTreeMap`-like data structure with typed, ordered keys and values."]
     #[doc = ""]
@@ -74,36 +74,63 @@ where
     V: ValueEnDe,
 {
     /// Retrieves a value from the map for a given key.
+    ///
+    /// The key may be any borrowed form of `K` (`&str` for `String` keys,
+    /// `&[u8]` for `Vec<u8>` keys), like `BTreeMap::get`.
     #[inline(always)]
-    pub fn get(&self, key: &K) -> Option<V> {
-        self.inner.get(key.to_bytes())
+    pub fn get<Q>(&self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: OrderedKeyRef + ?Sized,
+    {
+        self.inner.get(key.ordered_key_bytes())
     }
 
-    /// Retrieves a mutable reference to a value in the map.
+    /// Retrieves a mutable reference to a value in the map (borrowed key
+    /// forms as in [`get`](Self::get)).
     #[inline(always)]
-    pub fn get_mut(&mut self, key: &K) -> Option<ValueMut<'_, V>> {
-        self.inner.get_mut(key.to_bytes())
+    pub fn get_mut<Q>(&mut self, key: &Q) -> Option<ValueMut<'_, V>>
+    where
+        K: Borrow<Q>,
+        Q: OrderedKeyRef + ?Sized,
+    {
+        self.inner.get_mut(key.ordered_key_bytes())
     }
 
-    /// Checks if the map contains a value for the specified key.
+    /// Checks if the map contains a value for the specified key (borrowed
+    /// key forms as in [`get`](Self::get)).
     #[inline(always)]
-    pub fn contains_key(&self, key: &K) -> bool {
-        self.inner.contains_key(key.to_bytes())
+    pub fn contains_key<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: OrderedKeyRef + ?Sized,
+    {
+        self.inner.contains_key(key.ordered_key_bytes())
     }
 
-    /// Retrieves the last entry with a key less than or equal to the given key.
+    /// Retrieves the last entry with a key less than or equal to the given
+    /// key (borrowed key forms as in [`get`](Self::get)).
     #[inline(always)]
-    pub fn get_le(&self, key: &K) -> Option<(K, V)> {
+    pub fn get_le<Q>(&self, key: &Q) -> Option<(K, V)>
+    where
+        K: Borrow<Q>,
+        Q: OrderedKeyRef + ?Sized,
+    {
         self.inner
-            .get_le(key.to_bytes())
+            .get_le(key.ordered_key_bytes())
             .map(|(k, v)| (K::from_bytes(k).unwrap(), v))
     }
 
-    /// Retrieves the first entry with a key greater than or equal to the given key.
+    /// Retrieves the first entry with a key greater than or equal to the
+    /// given key (borrowed key forms as in [`get`](Self::get)).
     #[inline(always)]
-    pub fn get_ge(&self, key: &K) -> Option<(K, V)> {
+    pub fn get_ge<Q>(&self, key: &Q) -> Option<(K, V)>
+    where
+        K: Borrow<Q>,
+        Q: OrderedKeyRef + ?Sized,
+    {
         self.inner
-            .get_ge(key.to_bytes())
+            .get_ge(key.ordered_key_bytes())
             .map(|(k, v)| (K::from_bytes(k).unwrap(), v))
     }
 
@@ -214,12 +241,17 @@ where
         self.iter().next_back()
     }
 
-    /// Removes a key from the map.
+    /// Removes a key from the map (borrowed key forms as in
+    /// [`get`](Self::get)).
     ///
     /// Does not return the old value for performance reasons.
     #[inline(always)]
-    pub fn remove(&mut self, key: &K) {
-        self.inner.remove(key.to_bytes())
+    pub fn remove<Q>(&mut self, key: &Q)
+    where
+        K: Borrow<Q>,
+        Q: OrderedKeyRef + ?Sized,
+    {
+        self.inner.remove(key.ordered_key_bytes())
     }
 
     /// Start a batch operation.

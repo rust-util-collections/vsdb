@@ -380,8 +380,8 @@ fn test_deep_triple_nesting() {
     let id = pnk!(outer.save_meta());
     let restored: Mapx<String, Mapx<String, Mapx<u32, u64>>> = pnk!(Mapx::from_meta(id));
 
-    let r_mid = restored.get(&"top".into()).unwrap();
-    let r_inner = r_mid.get(&"a".into()).unwrap();
+    let r_mid = restored.get("top").unwrap();
+    let r_inner = r_mid.get("a").unwrap();
     assert_eq!(r_inner.get(&1), Some(111));
     assert_eq!(r_inner.get(&2), Some(222));
 }

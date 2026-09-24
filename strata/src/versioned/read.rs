@@ -2,12 +2,15 @@
 //!
 //! Pure read path — none of these methods mutate state.
 
-use std::ops::{Bound, RangeBounds};
+use std::{
+    borrow::Borrow,
+    ops::{Bound, RangeBounds},
+};
 
 use crate::{
     basic::persistent_btree::NodeId,
     common::{
-        ende::{KeyEnDeOrdered, ValueEnDe},
+        ende::{KeyEnDeOrdered, OrderedKeyRef, ValueEnDe},
         error::Result,
     },
 };
@@ -37,17 +40,28 @@ where
     K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
-    /// Reads the value stored under `key`.
-    pub fn get(&self, key: &K) -> Option<V> {
+    /// Reads the value stored under `key` (any borrowed form of `K`, e.g.
+    /// `&str` for `String` keys).
+    pub fn get<Q>(&self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: OrderedKeyRef + ?Sized,
+    {
         self.map
             .tree
-            .get(self.root, &key.to_bytes())
+            .get(self.root, &key.ordered_key_bytes())
             .map(|v| V::decode(&v).unwrap())
     }
 
-    /// Whether `key` is present.
-    pub fn contains_key(&self, key: &K) -> bool {
-        self.map.tree.contains_key(self.root, &key.to_bytes())
+    /// Whether `key` is present (borrowed forms as in [`get`](Self::get)).
+    pub fn contains_key<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: OrderedKeyRef + ?Sized,
+    {
+        self.map
+            .tree
+            .contains_key(self.root, &key.ordered_key_bytes())
     }
 
     /// Iterates all entries in ascending key order.
@@ -110,12 +124,20 @@ where
     ///
     /// Panics if the stored bytes cannot be decoded back into `V` — see
     /// [`Snapshot`].
-    pub fn get(&self, branch: BranchId, key: &K) -> Result<Option<V>> {
+    pub fn get<Q>(&self, branch: BranchId, key: &Q) -> Result<Option<V>>
+    where
+        K: Borrow<Q>,
+        Q: OrderedKeyRef + ?Sized,
+    {
         Ok(self.snapshot(branch)?.get(key))
     }
 
     /// Checks if `key` exists in the working state of `branch`.
-    pub fn contains_key(&self, branch: BranchId, key: &K) -> Result<bool> {
+    pub fn contains_key<Q>(&self, branch: BranchId, key: &Q) -> Result<bool>
+    where
+        K: Borrow<Q>,
+        Q: OrderedKeyRef + ?Sized,
+    {
         Ok(self.snapshot(branch)?.contains_key(key))
     }
 
