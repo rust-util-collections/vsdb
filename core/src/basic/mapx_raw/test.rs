@@ -448,3 +448,15 @@ fn guard_created_while_unwinding_still_writes() {
     assert!(r.is_err());
     assert_eq!(map.get([1]).as_deref(), Some(b"cleanup".as_slice()));
 }
+
+#[test]
+fn atomic_write_file_replaces_without_leftovers() {
+    let dir = format!("/tmp/vsdb_testing/atomic_write_{}", rand::random::<u64>());
+    fs::create_dir_all(&dir).unwrap();
+    let path = std::path::Path::new(&dir).join("meta.bin");
+    crate::common::atomic_write_file(&path, b"first").unwrap();
+    crate::common::atomic_write_file(&path, b"second").unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"second");
+    assert!(!path.with_extension("bin.tmp").exists());
+    fs::remove_dir_all(&dir).unwrap();
+}

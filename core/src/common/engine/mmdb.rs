@@ -1008,8 +1008,8 @@ fn read_ceiling_file(path: &Path) -> Result<Option<Pre>> {
 ///
 /// The parent-dir fsync matters: without it a power loss can drop the
 /// rename itself, and a regressed allocator ceiling means prefix reuse —
-/// silent data corruption. (The plain `atomic_write_file` used for
-/// instance metas skips the dir fsync; the allocator cannot.)
+/// silent data corruption. (The public `atomic_write_file` used for
+/// instance metas performs the same dir fsync.)
 pub(crate) fn write_file_durable(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");

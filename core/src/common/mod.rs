@@ -127,12 +127,15 @@ pub fn vsdb_meta_path(instance_id: u64) -> PathBuf {
     p
 }
 
-/// Atomically replaces the file at `path` with `bytes`.
+/// Atomically and durably replaces the file at `path` with `bytes`.
 ///
-/// Writes to a sibling `*.tmp` file, fsyncs it, then renames it over the
-/// target — a crash mid-write can never leave a truncated file at `path`
-/// (POSIX `rename` is atomic within a filesystem). Instance metas are
-/// written under the SWMR contract, so the fixed tmp name cannot race.
+/// Writes to a sibling `*.tmp` file, fsyncs it, renames it over the
+/// target, then fsyncs the parent directory — a crash mid-write can never
+/// leave a truncated file at `path` (POSIX `rename` is atomic within a
+/// filesystem), and a returned `Ok` survives power loss (without the
+/// directory fsync the rename itself could be lost, making a freshly saved
+/// instance unreachable). Instance metas are written under the SWMR
+/// contract, so the fixed tmp name cannot race.
 ///
 /// # Errors
 ///
@@ -153,6 +156,11 @@ pub fn atomic_write_file(path: &Path, bytes: &[u8]) -> Result<()> {
         f.sync_all()?;
     }
     fs::rename(&tmp, path)?;
+    let parent = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    fs::File::open(parent)?.sync_all()?;
     Ok(())
 }
 
