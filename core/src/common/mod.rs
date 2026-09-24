@@ -232,9 +232,8 @@ fn gen_data_dir() -> PathBuf {
             );
             s
         });
-    if !vsdb_is_read_only() {
-        pnk!(fs::create_dir_all(&d));
-    }
+    // Resolving the default must not create it: explicit configuration
+    // initializes this lazy value before assigning the selected path.
     PathBuf::from(d)
 }
 

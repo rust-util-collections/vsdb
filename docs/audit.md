@@ -12,14 +12,6 @@
 
 ## Open
 
-### [MEDIUM] configuration: explicit roots still initialize an unused default directory
-- **Where**: `core/src/common/mod.rs` (`vsdb_configure`, `gen_data_dir`)
-- **What**: configuring a writable explicit root panics when the environment-selected default path cannot be created.
-- **Why**: assigning the configured path first forces a lazy initializer that creates the unused default directory.
-- **Suggested fix**: keep default-path resolution free of filesystem writes. Regress explicit configuration in an isolated subprocess with an invalid environment default; no API/format change.
-
----
-
 ### [LOW] benchmarks: repeated merge samples contain no changes
 - **Where**: `strata/benches/versioned.rs` (`merge_bench`)
 - **What**: every iteration writes the same values to the same keys; after the first merge, both branches' changes equal their base despite the advertised 100 changes per side.
