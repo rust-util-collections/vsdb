@@ -82,6 +82,16 @@ metadata written by v17 and rejects it with an error.
   replace the corresponding `Other` strings.
 - `VerMapWithProof::from_map` no longer repeats the restore-time sweep.
 
+### Fixed
+
+- Legacy `VSTYPE02` handles containing `BranchId` or `CommitId` restore using
+  their former `u64` alias tags, including nested generic parameters.
+  `VSTYPE03` continues to distinguish the two id types from each other and
+  from `u64`.
+- DagMap prune keeps child discovery links until every consumed node's
+  data and parent clears are durable. Interrupted cleanup retries no longer
+  strand uncleared descendant storage.
+
 ### Added
 
 - `VsdbOptions::with_mem_budget_mb` sets the default namespace's memory
