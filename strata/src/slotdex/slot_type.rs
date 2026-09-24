@@ -42,6 +42,12 @@ pub trait SlotType:
 
     /// Widen to `u64` for entry-count arithmetic.
     fn as_u64(&self) -> u64;
+
+    /// The next value, or `None` at [`MAX`](Self::MAX).
+    fn checked_succ(&self) -> Option<Self>;
+
+    /// The previous value, or `None` at [`MIN`](Self::MIN).
+    fn checked_pred(&self) -> Option<Self>;
 }
 
 macro_rules! impl_slot_type {
@@ -61,6 +67,10 @@ macro_rules! impl_slot_type {
             fn as_i128(&self) -> i128 { i128::try_from(*self).unwrap_or(i128::MAX) }
             #[inline]
             fn as_u64(&self) -> u64 { *self as u64 }
+            #[inline]
+            fn checked_succ(&self) -> Option<Self> { self.checked_add(1) }
+            #[inline]
+            fn checked_pred(&self) -> Option<Self> { self.checked_sub(1) }
         }
     )+ };
 }

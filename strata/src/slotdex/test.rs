@@ -981,3 +981,54 @@ fn tier_capacity_below_two_is_rejected() {
     sd.clear().unwrap();
     assert_eq!(sd.total(), 0);
 }
+
+#[test]
+fn range_queries_match_the_inclusive_api() {
+    for swap in [false, true] {
+        let mut sd = SlotDex64::<u64>::new(4, swap).unwrap();
+        for i in 0..300u64 {
+            sd.insert(i / 3, i).unwrap();
+        }
+        for order in [Order::Asc, Order::Desc] {
+            let desc = order == Order::Desc;
+            for idx in 0..4 {
+                assert_eq!(
+                    sd.page(.., 25, idx, order),
+                    sd.get_entries_by_page(25, idx, desc)
+                );
+                assert_eq!(
+                    sd.page(10..=40, 7, idx, order),
+                    sd.get_entries_by_page_slot(Some(10), Some(40), 7, idx, desc)
+                );
+                assert_eq!(
+                    sd.page(10..40, 7, idx, order),
+                    sd.get_entries_by_page_slot(Some(10), Some(39), 7, idx, desc)
+                );
+                assert_eq!(
+                    sd.page(90.., 7, idx, order),
+                    sd.get_entries_by_page_slot(Some(90), None, 7, idx, desc)
+                );
+            }
+        }
+        assert_eq!(sd.count(..), 300);
+        assert_eq!(sd.count(10..=19), 30);
+        assert_eq!(sd.count(10..20), 30);
+        assert_eq!(sd.count(..10), 30);
+        // Empty and inverted ranges.
+        assert_eq!(sd.count(20..20), 0);
+        assert!(sd.page(20..10, 5, 0, Order::Asc).is_empty());
+        assert_eq!(sd.count(u64::MAX..), 0);
+        assert!(
+            sd.page(
+                (
+                    std::ops::Bound::Excluded(u64::MAX),
+                    std::ops::Bound::Unbounded
+                ),
+                5,
+                0,
+                Order::Asc
+            )
+            .is_empty()
+        );
+    }
+}

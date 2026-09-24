@@ -294,7 +294,7 @@ assert_eq!(root.len(), 32);
 `SlotDex` (in the `slotdex` module) is a skip-list-like index for efficient, timestamp-based paged queries.
 
 ```rust,ignore
-use vsdb::SlotDex64;  // SlotDex<u64, K> alias — slot type is u64
+use vsdb::{SlotDex64, slotdex::Order};  // SlotDex<u64, K> alias — slot type is u64
 
 let mut db = SlotDex64::<String>::new(10u64, false).unwrap(); // tier_capacity must be >= 2
 
@@ -307,12 +307,13 @@ db.insert(300, "entry_d".to_string()).unwrap();
 assert_eq!(db.total(), 4);
 
 // Paged queries
-let page = db.get_entries_by_page(2, 0, true);  // page_size=2, page_index=0, reverse=true
+let page = db.page(.., 2, 0, Order::Desc);  // any slot range, page_size=2, page_index=0
 assert_eq!(page, vec!["entry_d".to_string(), "entry_c".to_string()]);
 
 // Slot-range queries
-let entries = db.get_entries_by_page_slot(Some(100), Some(200), 10, 0, false);
+let entries = db.page(100..=200, 10, 0, Order::Asc);
 assert_eq!(entries.len(), 3);
+assert_eq!(db.count(100..300), 3);
 
 // Remove
 db.remove(100, &"entry_a".to_string()).unwrap();

@@ -42,7 +42,11 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    borrow::Cow, collections::BTreeMap, fmt, marker::PhantomData, ops::Bound,
+    borrow::Cow,
+    collections::BTreeMap,
+    fmt,
+    marker::PhantomData,
+    ops::{Bound, RangeBounds},
     result::Result as StdResult,
 };
 use vsdb_core::basic::mapx_raw::MapxRaw;
@@ -976,7 +980,8 @@ where
     /// at that moment. If entries are inserted or removed between page
     /// requests, later pages may skip or repeat entries. Take a snapshot
     /// (or avoid concurrent mutation) when a stable full scan is required.
-    pub fn get_entries_by_page(
+    #[cfg(test)]
+    pub(crate) fn get_entries_by_page(
         &self,
         page_size: PageSize,
         page_index: PageIndex, // Start from 0
@@ -1001,9 +1006,9 @@ where
     ///
     /// # Note
     ///
-    /// Pagination is **offset-based** (see [`Self::get_entries_by_page`]): pages
+    /// Pagination is **offset-based** (see [`Self::page`]): pages
     /// are not stable across concurrent inserts/removes between requests.
-    pub fn get_entries_by_page_slot(
+    pub(crate) fn get_entries_by_page_slot(
         &self,
         slot_left_bound: Option<S>,  // Included
         slot_right_bound: Option<S>, // Included
@@ -1320,7 +1325,11 @@ where
     /// # Returns
     ///
     /// The total number of entries (`EntryCnt`) within the specified range.
-    pub fn entry_cnt_within_two_slots(&self, slot_start: S, slot_end: S) -> EntryCnt {
+    pub(crate) fn entry_cnt_within_two_slots(
+        &self,
+        slot_start: S,
+        slot_end: S,
+    ) -> EntryCnt {
         let (slot_min, slot_max, _) =
             self.transform_range(Some(slot_start), Some(slot_end));
 
@@ -1344,7 +1353,11 @@ where
     /// # Returns
     ///
     /// The total number of entries (`EntryCnt`) in the given range.
-    pub fn total_by_slot(&self, slot_start: Option<S>, slot_end: Option<S>) -> EntryCnt {
+    pub(crate) fn total_by_slot(
+        &self,
+        slot_start: Option<S>,
+        slot_end: Option<S>,
+    ) -> EntryCnt {
         let slot_start = slot_start.unwrap_or(S::MIN);
         let slot_end = slot_end.unwrap_or(S::MAX);
 
@@ -1358,6 +1371,44 @@ where
     /// Returns the total number of entries in the `SlotDex`.
     pub fn total(&self) -> EntryCnt {
         self.total_by_slot(None, None)
+    }
+
+    /// One page of the entries whose slot lies in `slots`, in slot order
+    /// (`order`), entries within a slot in key order.
+    ///
+    /// `slots` is any range over the slot type, like `BTreeMap::range`:
+    /// `..`, `100..=200`, `start..`, and so on.
+    ///
+    /// Pagination is **offset-based** (`page_size × page_index`), like SQL
+    /// `LIMIT`/`OFFSET`: each call reflects the index as it is at that
+    /// moment, so pages can skip or repeat entries when the index changes
+    /// between calls. Locating a page costs O(levels × tier_capacity), not
+    /// O(offset).
+    pub fn page(
+        &self,
+        slots: impl RangeBounds<S>,
+        page_size: PageSize,
+        page_index: PageIndex,
+        order: Order,
+    ) -> Vec<K> {
+        match inclusive_slots(&slots) {
+            Some((lo, hi)) => self.get_entries_by_page_slot(
+                lo,
+                hi,
+                page_size,
+                page_index,
+                order == Order::Desc,
+            ),
+            None => Vec::new(),
+        }
+    }
+
+    /// Number of entries whose slot lies in `slots`.
+    pub fn count(&self, slots: impl RangeBounds<S>) -> EntryCnt {
+        match inclusive_slots(&slots) {
+            Some((lo, hi)) => self.total_by_slot(lo, hi),
+            None => 0,
+        }
     }
 
     // --- Private Helper Methods ---
@@ -1397,6 +1448,37 @@ where
 pub type SlotDex32<K> = SlotDex<u32, K>;
 /// Convenience alias for `SlotDex<u64, K>`.
 pub type SlotDex64<K> = SlotDex<u64, K>;
+
+/// Slot order of a [`SlotDex::page`] query.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Order {
+    /// Smallest slot first.
+    #[default]
+    Asc,
+    /// Largest slot first.
+    Desc,
+}
+
+/// A slot range as inclusive `Option` bounds (`None` = open), or `None`
+/// if the range is empty.
+fn inclusive_slots<S: SlotType>(
+    slots: &impl RangeBounds<S>,
+) -> Option<(Option<S>, Option<S>)> {
+    let lo = match slots.start_bound() {
+        Bound::Included(s) => Some(s.clone()),
+        Bound::Excluded(s) => Some(s.checked_succ()?),
+        Bound::Unbounded => None,
+    };
+    let hi = match slots.end_bound() {
+        Bound::Included(s) => Some(s.clone()),
+        Bound::Excluded(s) => Some(s.checked_pred()?),
+        Bound::Unbounded => None,
+    };
+    match (&lo, &hi) {
+        (Some(l), Some(h)) if l > h => None,
+        _ => Some((lo, hi)),
+    }
+}
 /// Convenience alias for `SlotDex<u128, K>`.
 pub type SlotDex128<K> = SlotDex<u128, K>;
 

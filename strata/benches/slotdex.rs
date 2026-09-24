@@ -4,7 +4,7 @@ use std::{
     hint::black_box,
     time::{Duration, Instant},
 };
-use vsdb::SlotDex64;
+use vsdb::{SlotDex64, slotdex::Order};
 
 const DATA_SIZE: u32 = 100_000;
 const REMOVE_BATCH_SIZE: u64 = 1_024;
@@ -23,12 +23,12 @@ fn slot_db_custom(mn: u64) -> SlotDex64<V> {
 
 fn query(db: &SlotDex64<V>, page_size: u16) {
     let page_number = random::<u32>() % (DATA_SIZE / (page_size as u32));
-    db.get_entries_by_page(page_size, page_number, false);
+    db.page(.., page_size, page_number, Order::Asc);
 }
 
 fn query_reverse(db: &SlotDex64<V>, page_size: u16) {
     let page_number = random::<u32>() % (DATA_SIZE / (page_size as u32));
-    db.get_entries_by_page(page_size, page_number, true);
+    db.page(.., page_size, page_number, Order::Desc);
 }
 
 fn slot_query(c: &mut Criterion, tier: u64) {
