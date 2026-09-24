@@ -16,7 +16,7 @@ same-key or structural multi-key ops need documented broader serialize.
 ## FP-3: Prefix isolation
 
 Structures use unique u64 prefixes. Cross-structure interference needs a concrete
-prefix collision (tech 4.1) — not assumed.
+prefix collision (`technical-patterns.md` 1.1) — not assumed.
 
 ## FP-4: unwrap/expect on proven state
 
@@ -43,12 +43,17 @@ Read `// SAFETY:`. **Keep:** broken prereqs, invalidated assumptions, missing/va
 
 ## FP-9: Perf off hot path
 
-**Hot:** get, iter next, B+ point lookup, trie hash. **Warm:** commit, merge loop, split/merge.
-**Cold:** branch create/delete, GC, init, rollback. Perf only on hot/warm with evidence.
+**Hot:** get/contains, insert/remove/batch, iter/range next, B+ lookup, HNSW search,
+SlotDex page, trie hash. **Warm:** commit, merge loop, split/merge, HNSW insert,
+prove/verify, trie batch update. **Cold:** branch create/delete, rollback, discard,
+GC, init. Perf only on hot/warm with evidence (benches under `*/benches/`).
 
 ## FP-10: COW alloc by design
 
-New node on mutation is required. **Keep:** in-place mutate (no new NodeId), or double COW for one logical op.
+New node on mutation is required. Remove’s underflow path re-allocates a leaf it
+just copied (borrow/merge) and discards the first copy; merge rebuilds via
+`bulk_load` without sharing — both by design. **Keep:** in-place mutate (no new
+NodeId), or a superseded intra-op node that is never discarded.
 
 ## FP-11: Ref-count wrong granularity
 

@@ -18,7 +18,7 @@ One primary row per Rust file. Unsafe, compatibility, public-doc checks are over
 
 | Subsystem | Files | Guides |
 |-----------|-------|--------|
-| engine/shard/prefix | `core/.../engine/**`, `core/.../mod.rs`, `core/.../mapx_raw/**` | `patterns/engine.md`, `technical-patterns.md` |
+| engine/shard/prefix | `core/.../engine/**`, `core/src/common/mod.rs`, `core/.../mapx_raw/**` | `patterns/engine.md`, `technical-patterns.md` |
 | namespaces | `core/.../namespace.rs` | `patterns/engine.md`, `compatibility-policy.md` |
 | typed collections | `strata/.../mapx/**`, `mapx_ord/**`, `mapx_ord_rawkey/**`, `orphan/**` | `patterns/engine.md`, `technical-patterns.md` |
 | B+ tree | `strata/.../persistent_btree/**` | `patterns/btree.md` |

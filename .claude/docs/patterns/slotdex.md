@@ -9,9 +9,9 @@ tier-less; bulk uses `pending_slot_rows`.
 
 ## Invariants
 
-**SD1 Tier map pure** — `SlotType::tier` deterministic, no hidden state.
+**SD1 Tier map pure** — bucket = `slot.floor_align(floor_base)`, `floor_base = cap^level` via saturating `floor_base_of`; no hidden state.
 **SD2 Cross-tier query** — spans all intersected tiers.
-**SD3 Boundaries** — each key one tier; consistent half-open.
+**SD3 Boundaries** — each slot in exactly one bucket per level (insert bumps every level); consistent half-open.
 **SD4 Pagination** — offset-based by design (`page*size`); internal consistency per call; cross-call stability under concurrent mut is **not** required (documented).
 **SD5 swap_order** — layout only; logical results byte-equal true↔false.
 **SD6 Tier-less growth** — empty `levels` ⇒ `slot_rows` exact L0 count; may be stale once tiers exist (unused). Bulk adds pending; promote merges committed+staged. Hydrate/trunc re-seed mirror only re-entering tier-less. Serial/bulk/reopen same growth cadence.
@@ -22,11 +22,11 @@ tier-less; bulk uses `pending_slot_rows`.
 
 ## Checklist
 
-- [ ] Pure deterministic tier()
+- [ ] Pure `floor_align` / `floor_base_of`
 - [ ] Ranges cover all tiers
 - [ ] No gap/overlap at bounds
 - [ ] Page internal consistency (offset design OK)
 - [ ] Empty handled
-- [ ] Insert=query tier formula
+- [ ] Insert = query floor formula
 - [ ] swap_order parity
 - [ ] slot_rows rules + bulk promote cadence

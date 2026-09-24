@@ -15,7 +15,8 @@ wire tags for metric.
 **VD4 Dim** — all vectors and queries == `meta.dim`.
 **VD5 Filter traversal** — filter gates results only, not expansion.
 **VD6 Frozen wire tags** — `WIRE_TAG_*` append-only manual serde; never derive enum order.
-New metric = new tag; unknown tag hard fail. `MetricKind` pub Serialize → same discipline.
+New metric = new tag; unknown tag hard fail. `MetricKind` derives serde (variant index =
+public wire for callers, not the meta format) → append only, never reorder.
 
 ## Bugs
 
