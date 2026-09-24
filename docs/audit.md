@@ -12,7 +12,67 @@
 
 ## Open
 
-*(none)*
+### [CRITICAL] dagmap: derived clones retain links into the original graph
+- **Where**: `strata/src/dagmap/raw/mod.rs` (`Clone`, `prune_mainline`)
+- **What**: cloning a parented node copies its component maps but leaves parent, child, and recovery-marker values pointing into the original graph. Pruning the clone of a head with a child destroys the original head as a side branch and erases the child's data.
+- **Why**: fresh component prefixes do not establish independent graph ownership; structural operations follow the copied aliases.
+- **Suggested fix**: iteratively deep-copy the connected graph and remap every structural reference, including recovery markers. Regress clone/prune/destroy isolation and copied recovery paths; preserve the wire format.
+
+---
+
+### [CRITICAL] trie: map replacement reuses another map's Merkle state
+- **Where**: `strata/src/trie/proof.rs` (`map_mut`, `merkle_root`, `sync_to_commit`, cache lifecycle)
+- **What**: replacing the underlying map through `*wrapper.map_mut() = replacement` preserves the old trie and cache identity. Independent maps reuse branch and commit numbers, so root queries can return the old map's root and proofs.
+- **Why**: sync shortcuts compare local commit/branch IDs without the owning instance identity; cache saves also retain the old filename.
+- **Suggested fix**: bind all cached state to the complete `InstanceId`, invalidate on replacement before shortcuts, and skip stale destructor saves. Regress branch/historical roots, dirty overlays, and cache placement; no format change.
+
+---
+
+### [HIGH] slotdex: reverse pages scan entire populated boundary slots
+- **Where**: `strata/src/slotdex/mod.rs` (`get_entries_reverse`)
+- **What**: a ten-entry reverse page from one slot containing 100,000 keys reads and decodes all 100,000 keys. A warm release measurement took about 20 ms versus 7 microseconds for the forward page; `swap_order` flips the affected public direction.
+- **Why**: the contiguous scan continues after planned per-slot quotas are filled, including unused tails of partially selected boundary slots.
+- **Suggested fix**: stop at fulfilled quotas and skip unused boundary tails while retaining ascending keys within each slot. Regress bounded decode counts and page membership across slots; no API/format change.
+
+---
+
+### [MEDIUM] configuration: explicit roots still initialize an unused default directory
+- **Where**: `core/src/common/mod.rs` (`vsdb_configure`, `gen_data_dir`)
+- **What**: configuring a writable explicit root panics when the environment-selected default path cannot be created.
+- **Why**: assigning the configured path first forces a lazy initializer that creates the unused default directory.
+- **Suggested fix**: keep default-path resolution free of filesystem writes. Regress explicit configuration in an isolated subprocess with an invalid environment default; no API/format change.
+
+---
+
+### [LOW] benchmarks: repeated merge samples contain no changes
+- **Where**: `strata/benches/versioned.rs` (`merge_bench`)
+- **What**: every iteration writes the same values to the same keys; after the first merge, both branches' changes equal their base despite the advertised 100 changes per side.
+- **Why**: measured samples exercise empty delta replay and cannot assess merge work over changed keys.
+- **Suggested fix**: vary values between iterations and verify both deltas outside timing; no compatibility impact.
+
+---
+
+### [LOW] docs: namespace example imports associated functions as modules
+- **Where**: `core/docs/api.md` (Namespaces)
+- **What**: the example imports `Namespace::list`, `close_by_id`, `destroy`, and `relocate` inside a `use` declaration, which Rust rejects.
+- **Why**: `Namespace` is a struct; the example's qualified calls already provide the correct syntax.
+- **Suggested fix**: remove the invalid imports and compile-check the example; no compatibility impact.
+
+---
+
+### [LOW] docs: configuration example claims environment mutation
+- **Where**: `core/docs/api.md` (Utility Functions)
+- **What**: the guide says `vsdb_configure` writes `VSDB_BASE_DIR` and must precede thread creation, contrary to v17 behavior.
+- **Why**: callers may expect child processes to inherit a configured root automatically and open the wrong dataset.
+- **Suggested fix**: describe configuration before first VSDB use and explicit child-process environment propagation; no compatibility impact.
+
+---
+
+### [LOW] docs: trie cache example uses obsolete signatures and save timing
+- **Where**: `strata/docs/api.md` (MptCalc / SmtCalc, VerMapWithProof)
+- **What**: the manual cache examples omit the directory argument, and the wrapper example says caching saves on Drop although normal saves occur during committed synchronization.
+- **Why**: copied manual calls do not compile and the lifecycle description misstates when cache files are written.
+- **Suggested fix**: show current cache signatures and eager-save behavior; no compatibility impact.
 
 ---
 
