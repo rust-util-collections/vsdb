@@ -12,11 +12,7 @@
 
 ## Open
 
-### [LOW] docs: trie cache example uses obsolete signatures and save timing
-- **Where**: `strata/docs/api.md` (MptCalc / SmtCalc, VerMapWithProof)
-- **What**: the manual cache examples omit the directory argument, and the wrapper example says caching saves on Drop although normal saves occur during committed synchronization.
-- **Why**: copied manual calls do not compile and the lifecycle description misstates when cache files are written.
-- **Suggested fix**: show current cache signatures and eager-save behavior; no compatibility impact.
+*(none)*
 
 ---
 

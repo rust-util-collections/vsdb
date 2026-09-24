@@ -239,8 +239,14 @@ mpt.batch_update(&[
 ]).unwrap();
 
 // Disposable cache (low-level API, used internally by VerMapWithProof):
-// mpt.save_cache(cache_id, sync_tag).unwrap();
-// let (loaded, tag, hash) = MptCalc::load_cache(cache_id).unwrap();
+let cache_dir = std::path::Path::new("/tmp/vsdb_trie_cache");
+std::fs::create_dir_all(cache_dir).unwrap();
+let cache_id = 1;
+let sync_tag = 0;
+mpt.save_cache(cache_dir, cache_id, sync_tag).unwrap();
+let (mut loaded, tag, hash) = MptCalc::load_cache(cache_dir, cache_id).unwrap();
+assert_eq!(tag, sync_tag);
+assert_eq!(loaded.root_hash().unwrap(), hash);
 // When using VerMapWithProof, caching is fully automatic.
 ```
 
@@ -285,7 +291,8 @@ vmp.map_mut().commit(main).unwrap();
 let root = vmp.merkle_root(main).unwrap();
 assert_eq!(root.len(), 32);
 
-// Cache is auto-saved on Drop and auto-loaded on construction.
+// Committed trie state is cached during synchronization; Drop retries failed saves.
+// Construction automatically loads an available cache.
 // No manual save_cache / load_cache calls needed.
 ```
 
