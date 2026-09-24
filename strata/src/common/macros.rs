@@ -253,6 +253,32 @@ macro_rules! define_map_wrapper {
             }
         }
 
+        impl<$($wrapper_generics),*> $crate::common::Colocate for $wrapper_name<$($wrapper_generics),*>
+        {
+            #[inline(always)]
+            fn new_colocated(anchor: &vsdb_core::MapxRaw) -> Self {
+                Self {
+                    inner: <$inner_type as $crate::common::Colocate>::new_colocated(anchor),
+                    $phantom_field: std::marker::PhantomData,
+                }
+            }
+
+            #[inline(always)]
+            fn raw(&self) -> &vsdb_core::MapxRaw {
+                $crate::common::Colocate::raw(&self.inner)
+            }
+
+            fn clone_colocated(
+                &self,
+                anchor: &vsdb_core::MapxRaw,
+            ) -> $crate::common::error::Result<Self> {
+                Ok(Self {
+                    inner: $crate::common::Colocate::clone_colocated(&self.inner, anchor)?,
+                    $phantom_field: std::marker::PhantomData,
+                })
+            }
+        }
+
         impl<$($wrapper_generics),*> Clone for $wrapper_name<$($wrapper_generics),*>
         {
             fn clone(&self) -> Self {

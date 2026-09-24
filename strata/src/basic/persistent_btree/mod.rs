@@ -156,6 +156,11 @@ pub struct PersistentBTree {
     /// concurrently with a `&mut self` operation) never observes
     /// buffered nodes, and `Clone` only ever copies an empty map.
     pending: HashMap<NodeId, Vec<u8>>,
+    /// `Some` once the owner opted into deferred reclamation
+    /// ([`defer_reclaim`](Self::defer_reclaim)): keys of nodes whose last
+    /// reference was released, waiting for the owner's next WAL sync
+    /// before physical deletion is registered.
+    deferred: Option<Vec<Vec<u8>>>,
 }
 
 impl Serialize for PersistentBTree {
@@ -227,6 +232,7 @@ impl<'de> Deserialize<'de> for PersistentBTree {
                     nodes,
                     runtime,
                     pending: Default::default(),
+                    deferred: None,
                 })
             }
         }
@@ -283,6 +289,38 @@ impl PersistentBTree {
             nodes,
             runtime,
             pending: HashMap::new(),
+            deferred: None,
+        }
+    }
+
+    /// Switches this handle to deferred reclamation.
+    ///
+    /// By default a node whose last reference is released is registered
+    /// for physical deletion immediately, which is only safe once the
+    /// write that dropped that reference is durable — a caller that fences
+    /// its own WAL first (or never publishes roots) needs nothing else.
+    /// An owner that does *not* sync before releasing opts in here and
+    /// calls [`register_deferred_reclaims`](Self::register_deferred_reclaims)
+    /// after each of its WAL syncs.  Unregistered keys are not a leak:
+    /// the next [`rebuild_ref_counts`](Self::rebuild_ref_counts) sweeps
+    /// every unreachable node.
+    pub(crate) fn defer_reclaim(&mut self) {
+        self.deferred.get_or_insert_with(Vec::new);
+    }
+
+    /// Number of released nodes waiting for registration.
+    pub(crate) fn deferred_reclaims(&self) -> usize {
+        self.deferred.as_ref().map_or(0, Vec::len)
+    }
+
+    /// Registers the queued nodes for physical deletion. Call only after
+    /// the writes that released them are durable.
+    pub(crate) fn register_deferred_reclaims(&mut self) {
+        if let Some(q) = self.deferred.as_mut()
+            && !q.is_empty()
+        {
+            let keys = std::mem::take(q);
+            self.nodes.lazy_delete_batch(keys);
         }
     }
 
@@ -634,8 +672,12 @@ impl PersistentBTree {
                 work.extend(children);
             }
         }
+        drop(refs);
         if !dead_keys.is_empty() {
-            self.nodes.lazy_delete_batch(dead_keys);
+            match self.deferred.as_mut() {
+                Some(q) => q.extend(dead_keys),
+                None => self.nodes.lazy_delete_batch(dead_keys),
+            }
         }
     }
 
@@ -852,6 +894,7 @@ impl Clone for PersistentBTree {
             nodes,
             runtime,
             pending: HashMap::new(),
+            deferred: None,
         }
     }
 }

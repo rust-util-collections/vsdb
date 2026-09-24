@@ -477,16 +477,57 @@ impl Mapx {
     /// invisible garbage (the same residue a mid-`clone()` panic
     /// leaves).
     pub(crate) fn clone_in(&self, ns: &Namespace) -> Result<Self> {
-        const CLONE_CHUNK: usize = 4096;
-        const CLONE_CHUNK_BYTES: usize = 16 * 1024 * 1024;
-
         if ns.is_read_only() {
             return Err(VsdbError::ReadOnly {
                 operation: "collection clone",
             });
         }
+        self.copy_into(Self::new_in(ns))
+    }
 
-        let mut new_instance = Self::new_in(ns);
+    /// Deep copy into a fresh instance co-located with `anchor` (see
+    /// [`new_colocated`](Self::new_colocated)); same chunking and error
+    /// cleanup as [`clone_in`](Self::clone_in).
+    pub(crate) fn clone_colocated(&self, anchor: &Self) -> Result<Self> {
+        if anchor.ns.is_read_only() {
+            return Err(VsdbError::ReadOnly {
+                operation: "collection clone",
+            });
+        }
+        self.copy_into(anchor.new_colocated())
+    }
+
+    /// A fresh, empty map in `self`'s namespace whose prefix routes to
+    /// the same engine shard as `self`, so writes to both land in one
+    /// WAL. Prefixes skipped while searching for that shard are simply
+    /// never used (they are never reissued either).
+    pub(crate) fn new_colocated(&self) -> Self {
+        let anchor = self.prefix_bytes();
+        let engine = self.ns.engine();
+        let shard = engine.shard_of(&anchor);
+        loop {
+            let prefix = engine.alloc_prefix().to_le_bytes();
+            if engine.shard_of(&prefix) == shard {
+                return Self {
+                    prefix: Prefix::Recovered(prefix),
+                    ns: self.ns.clone(),
+                };
+            }
+        }
+    }
+
+    /// Whether `self` and `other` live in the same namespace and route to
+    /// the same engine shard (one WAL, one crash order).
+    pub(crate) fn is_colocated_with(&self, other: &Self) -> bool {
+        self.ns.id() == other.ns.id()
+            && self.ns.engine().shard_of(&self.prefix_bytes())
+                == self.ns.engine().shard_of(&other.prefix_bytes())
+    }
+
+    fn copy_into(&self, mut new_instance: Self) -> Result<Self> {
+        const CLONE_CHUNK: usize = 4096;
+        const CLONE_CHUNK_BYTES: usize = 16 * 1024 * 1024;
+
         let mut it = self.iter();
         // Pull the chunk's first pair before opening a batch, so an
         // exhausted iterator ends the loop without staging an empty

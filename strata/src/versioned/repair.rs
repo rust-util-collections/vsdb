@@ -31,6 +31,7 @@ impl<K, V> VerMap<K, V> {
         // No old durable pointer may survive a sweep that retires its nodes.
         // The helper is a no-op for read-only restoration.
         self.sync_storage();
+        self.tree.register_deferred_reclaims();
         let mut live_roots: Vec<NodeId> =
             self.commits.iter().map(|(_, c)| c.root).collect();
         for (_, s) in self.branches.iter() {
@@ -107,9 +108,11 @@ impl<K, V> VerMap<K, V> {
         // A legacy zero-count repair may begin with a false marker. Pin true
         // before changing counts, and settle the graph before deleting rows.
         self.begin_ref_update();
-        self.tree.nodes.sync_wal();
-        self.commits.sync_wal();
-        self.branches.sync_wal();
+        self.fence(|m| {
+            m.tree.nodes.sync_wal();
+            m.commits.sync_wal();
+            m.branches.sync_wal();
+        });
 
         for (&id, &correct) in &ref_counts {
             // The full graph was validated above and structural writers are
@@ -129,7 +132,7 @@ impl<K, V> VerMap<K, V> {
         }
 
         // A durable false marker must never outlive unsynced count repairs.
-        self.commits.sync_wal();
+        self.fence(|m| m.commits.sync_wal());
         self.end_ref_update();
         Ok(())
     }

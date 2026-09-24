@@ -443,24 +443,39 @@ The caller controls priority by choosing which branch to pass as `source` vs `ta
 
 ## Durability and Recovery
 
-VerMap components may occupy different engine shards, each with its own WAL.
-An atomic node batch alone does not order its durability against a branch or
-commit record. Mutations therefore synchronize the relevant shard WALs at
-these boundaries:
+A VerMap is eight components (node pool, commits, branches, branch names,
+two ID allocators, the main pointer, and the `gc_dirty` flag). The ordering
+rules below keep every crash state recoverable:
 
-1. Advance and synchronize an ID allocator before publishing its new ID.
-2. Synchronize new tree nodes before publishing a root in a commit or branch.
-3. Synchronize a new commit record before publishing a branch HEAD that names it.
-4. Synchronize removed branch/commit references before releasing their tree roots
+1. Advance an ID allocator before publishing its new ID.
+2. Write new tree nodes before publishing a root in a commit or branch.
+3. Write a new commit record before publishing a branch HEAD that names it.
+4. Remove branch/commit references before their tree roots become eligible
    for physical reclamation.
-5. Synchronize `gc_dirty = true` before count changes, and synchronize the
-   completed metadata changes before clearing and synchronizing the flag.
+5. Set `gc_dirty = true` before count changes, and clear it only after the
+   completed metadata changes.
 
-The fences use the owning shards and do not force a namespace-wide memtable
-flush. A commit deletion cascade synchronizes its metadata once before releasing
-its collected dead roots. New maps and deep clones synchronize their initialized
-component graph before returning; promoting a main branch synchronizes the new
-pointer before the previous main can be deleted.
+**Co-located layout (maps created by v16.3.11+, and every deep clone).** All
+components are allocated on the node pool's engine shard, so they share one
+WAL: its program order *is* the crash order (a crash keeps a prefix), and
+rules 1–5 need no fsync. Working-state operations (`insert`, `remove`,
+`discard`) issue no sync at all; history operations (`commit`, `merge`,
+`create_branch`, `delete_branch`, `rollback_to`, `set_main_branch`) end with
+one WAL sync, so they are durable when they return. Nodes released by an
+operation are registered for physical deletion only after the next such sync
+(or once the release queue grows large), so compaction can never delete nodes
+that a not-yet-durable operation stopped referencing. An unregistered release
+is not a leak: the next restore's sweep reclaims every unreachable node.
+
+**Per-shard layout (maps created by earlier versions).** Components occupy
+different shards, each with its own WAL, so an atomic node batch alone does
+not order its durability against a branch or commit record. Every rule above
+is enforced by synchronizing the relevant shard WAL at that boundary (no
+namespace-wide memtable flush). Such maps keep working unchanged; `clone()`
+produces a co-located copy.
+
+New maps and deep clones synchronize their initialized component graph before
+returning.
 
 Recovery validates every branch HEAD and reachable commit parent before any
 orphan cleanup, including when the dirty flag is clear. A missing reachable

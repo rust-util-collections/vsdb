@@ -14,6 +14,8 @@ pub(crate) mod staged;
 
 pub use vsdb_core::common::*;
 
+use vsdb_core::MapxRaw;
+
 use error::Result;
 use serde::{Serialize, de::DeserializeOwned};
 use std::{any::type_name, fmt, fs, result::Result as StdResult, thread};
@@ -41,6 +43,34 @@ impl UnwindMark {
     #[inline(always)]
     pub(crate) fn interrupted(self) -> bool {
         !self.0 && thread::panicking()
+    }
+}
+
+/// Storage handles that can be placed on the same engine shard as an
+/// anchor map (see [`MapxRaw::new_colocated`]), so a composite built from
+/// them shares one WAL and one crash order.
+pub(crate) trait Colocate: Sized {
+    /// A fresh, empty instance co-located with `anchor`.
+    fn new_colocated(anchor: &MapxRaw) -> Self;
+    /// The underlying raw map.
+    fn raw(&self) -> &MapxRaw;
+    /// A deep copy co-located with `anchor`.
+    fn clone_colocated(&self, anchor: &MapxRaw) -> Result<Self>;
+}
+
+impl Colocate for MapxRaw {
+    #[inline(always)]
+    fn new_colocated(anchor: &MapxRaw) -> Self {
+        anchor.new_colocated()
+    }
+
+    #[inline(always)]
+    fn raw(&self) -> &MapxRaw {
+        self
+    }
+
+    fn clone_colocated(&self, anchor: &MapxRaw) -> Result<Self> {
+        MapxRaw::clone_colocated(self, anchor)
     }
 }
 

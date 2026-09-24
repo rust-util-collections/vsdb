@@ -14,7 +14,7 @@ merge; ref-counts + dirty flag for cascade crash recover. `Branch` is read-only;
 **V4 Rollback** — only this branch’s ref contributions; other branches untouched. Inc target **before** dec old HEAD.
 **V5 Dirty** — durably true before non-idempotent ref cascade (commit/merge/branch±/rollback), durably false after all participating shards are fenced; recovery recounts only after validating every reachable commit. `gc()` idempotent; its recount (dirty **or** any ref 0) brackets itself with the flag.
 **V6 Commit immutable** after create — id/root/parents/timestamp; only `ref_count` is rewritten.
-**V7 Durable references** — fence nodes before publishing roots; fence commits before publishing HEAD; fence branch/commit rewrite or removal before retiring old roots. Persist allocator advancement before returning an ID and main-branch changes before deleting the old main. Program order across shard WALs alone is insufficient.
+**V7 Durable references** — order nodes before publishing roots; commits before publishing HEAD; branch/commit rewrite or removal before retiring old roots; allocator advancement before returning an ID; main-branch changes before deleting the old main. Co-located maps (one shard, one WAL): program order provides this — `fence()` is a no-op, history ops `settle()` with one sync, and released nodes are registered only after a sync (deferred queue). Per-shard (legacy) maps: program order across shard WALs is insufficient — every `fence()` syncs.
 
 ## Bugs
 
@@ -33,6 +33,7 @@ merge; ref-counts + dirty flag for cascade crash recover. `Branch` is read-only;
 - [ ] Dirty brackets cascades; gc stays idempotent
 - [ ] Incomplete reachable history fails before destructive repair, even when clean
 - [ ] Publication/reclamation fences include construction, deep clone and restore
+- [ ] New components co-located with the node pool; no lazy-delete before a sync on co-located maps
 - [ ] No post-create commit mutate except `ref_count`
 - [ ] Merge shapes: same head → no-op; FF only into empty target; target-ancestor → 2-parent commit
 - [ ] BranchMut ≈ Branch reads kept in sync

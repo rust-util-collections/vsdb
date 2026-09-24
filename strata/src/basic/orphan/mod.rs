@@ -32,7 +32,7 @@ mod test;
 use crate::{
     ValueEnDe,
     basic::mapx_ord_rawkey::MapxOrdRawKey,
-    common::{InstanceId, Namespace, UnwindMark, error::Result},
+    common::{Colocate, InstanceId, Namespace, UnwindMark, error::Result},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -43,6 +43,7 @@ use std::{
         ShlAssign, Shr, ShrAssign, Sub, SubAssign,
     },
 };
+use vsdb_core::MapxRaw;
 
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
@@ -176,6 +177,25 @@ where
         let mut hdr = MapxOrdRawKey::new();
         hdr.insert([], &v);
         Self { inner: hdr }
+    }
+
+    /// [`new`](Self::new) on the same engine shard as `anchor`.
+    pub(crate) fn new_colocated(anchor: &MapxRaw, v: T) -> Self {
+        let mut hdr: MapxOrdRawKey<T> = Colocate::new_colocated(anchor);
+        hdr.insert([], &v);
+        Self { inner: hdr }
+    }
+
+    /// A deep copy on the same engine shard as `anchor`.
+    pub(crate) fn clone_colocated(&self, anchor: &MapxRaw) -> Result<Self> {
+        Ok(Self {
+            inner: Colocate::clone_colocated(&self.inner, anchor)?,
+        })
+    }
+
+    /// The underlying raw map.
+    pub(crate) fn raw(&self) -> &MapxRaw {
+        Colocate::raw(&self.inner)
     }
 
     /// Retrieves a clone of the inner value.

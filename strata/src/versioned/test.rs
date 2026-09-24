@@ -4247,3 +4247,92 @@ fn deep_clone_preserves_independent_history_and_branch_lifecycle() {
     assert_eq!(original.branch_id("next"), None);
     assert_eq!(original.get(fork, &3).unwrap(), None);
 }
+
+// =====================================================================
+// Co-located layout (one WAL for every component)
+// =====================================================================
+
+fn components_colocated<K, V>(m: &VerMap<K, V>) -> bool {
+    use crate::common::Colocate;
+    let anchor = &m.tree.nodes;
+    [
+        m.commits.raw(),
+        m.branches.raw(),
+        m.branch_names.raw(),
+        m.next_commit.raw(),
+        m.next_branch.raw(),
+        m.main_branch.raw(),
+        m.gc_dirty.raw(),
+    ]
+    .into_iter()
+    .all(|c| c.is_colocated_with(anchor))
+}
+
+#[test]
+fn new_map_is_colocated_and_restores_colocated() {
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    assert!(m.colocated && components_colocated(&m));
+    let main = m.main_branch();
+    m.insert(main, &1, &1).unwrap();
+    m.commit(main).unwrap();
+
+    let bytes = postcard::to_allocvec(&m).unwrap();
+    let r: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
+    assert!(r.colocated);
+    assert_eq!(r.get(main, &1).unwrap(), Some(1));
+}
+
+#[test]
+fn working_state_reclaims_wait_for_the_next_settle() {
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+    for i in 0..64 {
+        m.insert(main, &i, &i).unwrap();
+    }
+    // Overwrites release the previous working roots; without a sync their
+    // nodes must not be registered for physical deletion yet.
+    m.insert(main, &0, &100).unwrap();
+    assert!(m.tree.deferred_reclaims() > 0);
+    m.commit(main).unwrap();
+    assert_eq!(m.tree.deferred_reclaims(), 0);
+    assert_eq!(m.get(main, &0).unwrap(), Some(100));
+}
+
+#[test]
+fn legacy_layout_keeps_per_shard_fences_and_clone_upgrades_it() {
+    let mut m: VerMap<u32, u32> = VerMap::with_legacy_layout();
+    assert!(!m.colocated && !components_colocated(&m));
+    let main = m.main_branch();
+    for i in 0..50 {
+        m.insert(main, &i, &i).unwrap();
+    }
+    let c1 = m.commit(main).unwrap();
+    let feat = m.create_branch("feat", main).unwrap();
+    m.insert(feat, &7, &70).unwrap();
+    m.remove(feat, &8).unwrap();
+    m.commit(feat).unwrap();
+    m.insert(main, &9, &90).unwrap();
+    m.commit(main).unwrap();
+    m.merge(feat, main).unwrap();
+    // Immediate reclamation: every step was fenced.
+    assert_eq!(m.tree.deferred_reclaims(), 0);
+
+    // Restoring keeps the legacy layout (and its fences).
+    let bytes = postcard::to_allocvec(&m).unwrap();
+    let mut r: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
+    assert!(!r.colocated);
+    assert_eq!(r.get(main, &7).unwrap(), Some(70));
+    assert_eq!(r.get(main, &8).unwrap(), None);
+    assert_eq!(r.get(main, &9).unwrap(), Some(90));
+    r.delete_branch(feat).unwrap();
+    r.rollback_to(main, c1).unwrap();
+    assert_eq!(r.get(main, &7).unwrap(), Some(7));
+
+    // A deep copy is always co-located.
+    let c = r.clone();
+    assert!(c.colocated && components_colocated(&c));
+    assert_eq!(c.get(main, &7).unwrap(), Some(7));
+    let bytes = postcard::to_allocvec(&c).unwrap();
+    let c2: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
+    assert!(c2.colocated);
+}

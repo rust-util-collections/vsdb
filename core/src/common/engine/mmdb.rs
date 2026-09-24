@@ -313,11 +313,17 @@ impl MmDB {
         ret
     }
 
+    /// Index of the shard a prefix routes to.
+    #[inline(always)]
+    pub(crate) fn shard_of(&self, meta_prefix: &PreBytes) -> usize {
+        let prefix = u64::from_le_bytes(*meta_prefix);
+        (prefix % self.dbs.len() as u64) as usize
+    }
+
     /// Route a prefix to its shard.
     #[inline(always)]
     fn shard(&self, meta_prefix: &PreBytes) -> &DB {
-        let prefix = u64::from_le_bytes(*meta_prefix);
-        &self.dbs[(prefix % self.dbs.len() as u64) as usize]
+        &self.dbs[self.shard_of(meta_prefix)]
     }
 
     /// See the module-level [`alloc_prefix`] — kept as a method so the

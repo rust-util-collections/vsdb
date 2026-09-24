@@ -186,6 +186,46 @@ impl MapxRaw {
         })
     }
 
+    /// Creates a fresh, empty map in this map's namespace whose storage
+    /// routes to the **same engine shard**.
+    ///
+    /// Co-located maps share one write-ahead log, so their combined write
+    /// order is also their crash order: after a crash, the surviving
+    /// writes across all of them are a prefix of the order in which they
+    /// were issued. A composite structure built from co-located maps can
+    /// therefore rely on program order where it would otherwise need a
+    /// WAL fence between maps.
+    ///
+    /// # Panics
+    ///
+    /// Panics in read-only mode (no prefix can be allocated).
+    pub fn new_colocated(&self) -> Self {
+        MapxRaw {
+            inner: self.inner.new_colocated(),
+        }
+    }
+
+    /// Whether `self` and `other` are co-located: same namespace, same
+    /// engine shard (see [`new_colocated`](Self::new_colocated)).
+    pub fn is_colocated_with(&self, other: &Self) -> bool {
+        self.inner.is_colocated_with(&other.inner)
+    }
+
+    /// Deep-copies every entry into a fresh instance co-located with
+    /// `anchor` — the co-located form of [`Clone`], with the same chunked
+    /// copy and error cleanup as [`clone_in`](Self::clone_in).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VsdbError::ReadOnly`] in read-only mode, or an
+    /// engine-level write error (the partial target is wiped as in
+    /// `clone_in`).
+    pub fn clone_colocated(&self, anchor: &Self) -> Result<Self> {
+        Ok(MapxRaw {
+            inner: self.inner.clone_colocated(&anchor.inner)?,
+        })
+    }
+
     /// Retrieves a value from the map corresponding to the given key.
     ///
     /// # Arguments

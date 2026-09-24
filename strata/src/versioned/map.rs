@@ -12,7 +12,7 @@ use crate::{
     Mapx, MapxOrd, Orphan,
     basic::persistent_btree::{EMPTY_ROOT, NodeId, PersistentBTree},
     common::{
-        InstanceId,
+        Colocate, InstanceId,
         ende::{KeyEnDeOrdered, ValueEnDe},
         error::{Result, VsdbError},
     },
@@ -77,9 +77,16 @@ pub(crate) struct BranchState {
 ///
 /// # Durability and recovery
 ///
-/// Mutations synchronize the owning shard WALs before publishing new roots or
-/// commits, and before retiring storage whose references have been removed.
-/// Reference-count changes have a durable dirty marker until their completion.
+/// Every component of a map created by this version shares one engine
+/// shard, so one WAL orders all of its writes: working-state changes
+/// (`insert`, `remove`, `discard`) issue no fsync, and history operations
+/// (`commit`, `merge`, branch create/delete, `rollback_to`,
+/// `set_main_branch`) end with a single WAL sync — they are durable when they
+/// return. Released tree nodes are registered for physical deletion only
+/// after the next sync. Maps created by earlier versions keep their
+/// per-shard layout and synchronize each shard WAL at every publication
+/// boundary instead; [`Clone`] produces a co-located copy.
+/// Reference-count changes carry a dirty marker until their completion.
 /// Restoration validates all reachable commit records before reclaiming any
 /// history; a missing HEAD or parent produces a deserialization error.
 ///
@@ -154,25 +161,49 @@ pub struct VerMap<K, V> {
     /// If `true` on startup → run `rebuild_ref_counts()` to repair.
     pub(crate) gc_dirty: Orphan<bool>,
 
+    /// Every component routes to the node pool's engine shard, so one WAL
+    /// orders all of their writes (runtime property, recomputed on
+    /// restore; maps created before co-location keep per-shard fences).
+    pub(crate) colocated: bool,
+
     _phantom: PhantomData<(K, V)>,
 }
 
+/// Released nodes queued before a working-state operation forces a WAL
+/// sync to register them (bounds the queue when no commit comes).
+const RECLAIM_BACKLOG: usize = 16 * 1024;
+
 // Keep the same K/V bounds as the former derived Clone implementation.
 impl<K: Clone, V: Clone> Clone for VerMap<K, V> {
+    /// Deep copy. The copy is always co-located (one WAL for all of its
+    /// components), including a copy of a map created before co-location.
     fn clone(&self) -> Self {
+        let mut tree = self.tree.clone();
+        tree.defer_reclaim();
+        let anchor = &tree.nodes;
+        fn copy<T>(r: Result<T>) -> T {
+            r.expect("vsdb: clone failed — I/O error")
+        }
+        let commits = copy(self.commits.clone_colocated(anchor));
+        let branches = copy(self.branches.clone_colocated(anchor));
+        let branch_names = copy(self.branch_names.clone_colocated(anchor));
+        let next_commit = copy(self.next_commit.clone_colocated(anchor));
+        let next_branch = copy(self.next_branch.clone_colocated(anchor));
+        let main_branch = copy(self.main_branch.clone_colocated(anchor));
+        let gc_dirty = copy(self.gc_dirty.clone_colocated(anchor));
         let cloned = Self {
-            tree: self.tree.clone(),
-            commits: self.commits.clone(),
-            branches: self.branches.clone(),
-            branch_names: self.branch_names.clone(),
-            next_commit: self.next_commit.clone(),
-            next_branch: self.next_branch.clone(),
-            main_branch: self.main_branch.clone(),
-            gc_dirty: self.gc_dirty.clone(),
+            tree,
+            commits,
+            branches,
+            branch_names,
+            next_commit,
+            next_branch,
+            main_branch,
+            gc_dirty,
+            colocated: true,
             _phantom: PhantomData,
         };
-        // Deep copies use ordinary batches on independent component shards.
-        // Establish their durable graph before the new handle can escape.
+        // Establish the copy's durable graph before the new handle escapes.
         cloned.sync_storage();
         cloned
     }
@@ -239,8 +270,24 @@ impl<'de, K, V> Deserialize<'de> for VerMap<K, V> {
             next_branch,
             main_branch,
             gc_dirty,
+            colocated: false,
             _phantom: PhantomData,
         };
+        let anchor = &m.tree.nodes;
+        m.colocated = [
+            m.commits.raw(),
+            m.branches.raw(),
+            m.branch_names.raw(),
+            m.next_commit.raw(),
+            m.next_branch.raw(),
+            m.main_branch.raw(),
+            m.gc_dirty.raw(),
+        ]
+        .into_iter()
+        .all(|component| component.is_colocated_with(anchor));
+        if m.colocated {
+            m.tree.defer_reclaim();
+        }
         m.repair_commit_ref_counts_if_needed()
             .map_err(serde::de::Error::custom)?;
         m.rebuild_tree_ref_counts();
@@ -279,6 +326,10 @@ impl<K, V> VerMap<K, V> {
             return;
         }
         self.tree.nodes.sync_wal();
+        if self.colocated {
+            // One shard, one WAL: the sync above covers every component.
+            return;
+        }
         self.next_commit.sync_wal();
         self.next_branch.sync_wal();
         self.commits.sync_wal();
@@ -290,14 +341,44 @@ impl<K, V> VerMap<K, V> {
 
     pub(crate) fn begin_ref_update(&mut self) {
         *self.gc_dirty.get_mut() = true;
-        self.gc_dirty.sync_wal();
+        self.fence(|m| m.gc_dirty.sync_wal());
     }
 
-    /// Call only after every changed branch/commit row is durable and all
-    /// reference withdrawals preceded any physical node retirement.
+    /// Call only after every changed branch/commit row is ordered before
+    /// it and all reference withdrawals preceded any physical node
+    /// retirement.
     pub(crate) fn end_ref_update(&mut self) {
         *self.gc_dirty.get_mut() = false;
-        self.gc_dirty.sync_wal();
+        self.fence(|m| m.gc_dirty.sync_wal());
+    }
+
+    /// Orders every write issued so far to one component before any later
+    /// write to another. Co-located components share one WAL, whose
+    /// program order already provides that (a crash keeps a prefix of
+    /// it); otherwise the component's own shard WAL must be synced.
+    #[inline]
+    pub(crate) fn fence(&self, sync: impl FnOnce(&Self)) {
+        if !self.colocated {
+            sync(self);
+        }
+    }
+
+    /// Ends a history-changing operation: makes it durable (one WAL sync
+    /// when co-located; per-shard layouts fenced every step already), then
+    /// registers the nodes it released for physical deletion.
+    pub(crate) fn settle(&mut self) {
+        if self.colocated && !self.namespace().is_read_only() {
+            self.tree.nodes.sync_wal();
+            self.tree.register_deferred_reclaims();
+        }
+    }
+
+    /// Working-state operations skip the sync; their released nodes wait
+    /// for the next [`settle`](Self::settle) unless the queue grows large.
+    fn settle_if_backlogged(&mut self) {
+        if self.tree.deferred_reclaims() >= RECLAIM_BACKLOG {
+            self.settle();
+        }
     }
 }
 
@@ -352,8 +433,13 @@ where
     /// and cannot be deleted until another branch is promoted via
     /// [`set_main_branch`](Self::set_main_branch).
     pub fn new_with_main(name: &str) -> Self {
-        let mut branches: MapxOrd<u64, BranchState> = MapxOrd::new();
-        let mut branch_names: Mapx<String, u64> = Mapx::new();
+        // Every component shares the node pool's shard (one WAL), so
+        // operations need no fence between components.
+        let mut tree = PersistentBTree::new();
+        tree.defer_reclaim();
+        let anchor = &tree.nodes;
+        let mut branches: MapxOrd<u64, BranchState> = Colocate::new_colocated(anchor);
+        let mut branch_names: Mapx<String, u64> = Colocate::new_colocated(anchor);
 
         let initial_id: BranchId = 1;
 
@@ -365,19 +451,66 @@ where
         branches.insert(&initial_id, &main);
         branch_names.insert(&name.to_string(), &initial_id);
 
+        let commits = Colocate::new_colocated(anchor);
+        let next_commit = Orphan::new_colocated(anchor, 1); // 0 = NO_COMMIT
+        let next_branch = Orphan::new_colocated(anchor, initial_id + 1);
+        let main_branch = Orphan::new_colocated(anchor, initial_id);
+        let gc_dirty = Orphan::new_colocated(anchor, false);
         let map = Self {
-            tree: PersistentBTree::new(),
-            commits: MapxOrd::new(),
+            tree,
+            commits,
             branches,
             branch_names,
-            next_commit: Orphan::new(1), // 0 = NO_COMMIT
-            next_branch: Orphan::new(initial_id + 1),
-            main_branch: Orphan::new(initial_id),
-            gc_dirty: Orphan::new(false),
+            next_commit,
+            next_branch,
+            main_branch,
+            gc_dirty,
+            colocated: true,
             _phantom: PhantomData,
         };
         // Initial Orphan slots and branch metadata must survive alongside
         // metadata saved immediately after construction.
+        map.sync_storage();
+        map
+    }
+
+    /// A map in the pre-co-location layout: every component on its own
+    /// prefix, generally on different shards (pinned by tests of the
+    /// per-shard fence path and of `clone` upgrading it).
+    #[cfg(test)]
+    pub(crate) fn with_legacy_layout() -> Self {
+        let tree = PersistentBTree::new();
+        let anchor = tree.nodes.clone();
+        // Force at least one component onto another shard.
+        let commits = loop {
+            let c: MapxOrd<u64, Commit> = MapxOrd::new();
+            if !c.raw().is_colocated_with(&anchor) {
+                break c;
+            }
+        };
+        let mut branches: MapxOrd<u64, BranchState> = MapxOrd::new();
+        let mut branch_names: Mapx<String, u64> = Mapx::new();
+        branches.insert(
+            &1,
+            &BranchState {
+                name: "main".into(),
+                head: NO_COMMIT,
+                dirty_root: EMPTY_ROOT,
+            },
+        );
+        branch_names.insert(&"main".to_string(), &1);
+        let map = Self {
+            tree,
+            commits,
+            branches,
+            branch_names,
+            next_commit: Orphan::new(1),
+            next_branch: Orphan::new(2),
+            main_branch: Orphan::new(1),
+            gc_dirty: Orphan::new(false),
+            colocated: false,
+            _phantom: PhantomData,
+        };
         map.sync_storage();
         map
     }
@@ -421,7 +554,8 @@ where
         *self.main_branch.get_mut() = branch;
         // A later delete of the old main must not leave the durable main
         // pointer referring to that deleted branch.
-        self.main_branch.sync_wal();
+        self.fence(|m| m.main_branch.sync_wal());
+        self.settle();
         Ok(())
     }
 
@@ -454,7 +588,7 @@ where
         let id = self.next_branch.get_value();
         *self.next_branch.get_mut() = id + 1;
         // Persist the allocator before a row can make this ID observable.
-        self.next_branch.sync_wal();
+        self.fence(|m| m.next_branch.sync_wal());
 
         let state = BranchState {
             name: name.into(),
@@ -469,10 +603,13 @@ where
         // New branch's dirty_root references the shared tree root.
         self.tree.acquire_node(src.dirty_root);
 
-        self.commits.sync_wal();
-        self.branches.sync_wal();
-        self.branch_names.sync_wal();
+        self.fence(|m| {
+            m.commits.sync_wal();
+            m.branches.sync_wal();
+            m.branch_names.sync_wal();
+        });
         self.end_ref_update();
+        self.settle();
 
         Ok(id)
     }
@@ -502,8 +639,10 @@ where
         self.branch_names.remove(&state.name);
         self.branches.remove(&branch);
         // Old roots cannot be retired while the durable branch still owns them.
-        self.branches.sync_wal();
-        self.branch_names.sync_wal();
+        self.fence(|m| {
+            m.branches.sync_wal();
+            m.branch_names.sync_wal();
+        });
 
         // Release tree root ref from the branch's dirty_root.
         self.tree.release_node(dead_dirty);
@@ -511,6 +650,7 @@ where
         self.decrement_ref(dead_head);
 
         self.end_ref_update();
+        self.settle();
 
         Ok(())
     }
@@ -557,20 +697,20 @@ where
         let mut state = self.get_branch(branch)?;
         let old_root = state.dirty_root;
         state.dirty_root = self.tree.insert(old_root, &key.to_bytes(), &value.encode());
-        // The node batch is atomic, but its independent shard WAL needs a
-        // durability fence before a branch can publish the new root.
-        self.tree.nodes.sync_wal();
+        // The node batch is atomic, but it must be ordered before the
+        // branch row that publishes the new root.
+        self.fence(|m| m.tree.nodes.sync_wal());
         self.tree.acquire_node(state.dirty_root);
-        // Persist the branch pointer BEFORE releasing the old root:
-        // `release_node` may register the old root's nodes for physical
-        // deletion (compaction can run immediately), so a crash between
-        // the two steps must never leave the durable branch state
-        // pointing at deleted nodes.  Crash before the insert below
-        // only leaks the new nodes, which the next recovery sweep
-        // (`rebuild_tree_ref_counts`) registers for deletion.
+        // Persist the branch pointer BEFORE retiring the old root: a
+        // crash must never leave the durable branch state pointing at
+        // deleted nodes (co-located maps defer the physical-deletion
+        // registration to the next sync instead).  Crash before the
+        // insert below only leaks the new nodes, which the next recovery
+        // sweep (`rebuild_tree_ref_counts`) registers for deletion.
         self.branches.insert(&branch, &state);
-        self.branches.sync_wal();
+        self.fence(|m| m.branches.sync_wal());
         self.tree.release_node(old_root);
+        self.settle_if_backlogged();
         Ok(())
     }
 
@@ -583,13 +723,14 @@ where
         if state.dirty_root == old_root {
             return Ok(());
         }
-        self.tree.nodes.sync_wal();
+        self.fence(|m| m.tree.nodes.sync_wal());
         self.tree.acquire_node(state.dirty_root);
         // Persist before release — see `insert` for the crash-ordering
         // rationale.
         self.branches.insert(&branch, &state);
-        self.branches.sync_wal();
+        self.fence(|m| m.branches.sync_wal());
         self.tree.release_node(old_root);
+        self.settle_if_backlogged();
         Ok(())
     }
 
@@ -610,7 +751,7 @@ where
 
         let id = self.next_commit.get_value();
         *self.next_commit.get_mut() = id + 1;
-        self.next_commit.sync_wal();
+        self.fence(|m| m.next_commit.sync_wal());
 
         let parents = if state.head == NO_COMMIT {
             vec![]
@@ -637,7 +778,7 @@ where
         };
         self.commits.insert(&id, &commit);
         // A durable branch HEAD must never name a missing commit record.
-        self.commits.sync_wal();
+        self.fence(|m| m.commits.sync_wal());
 
         // commit.root now also references dirty_root → acquire.
         self.tree.acquire_node(state.dirty_root);
@@ -645,9 +786,10 @@ where
         // Update branch head; dirty_root stays the same (it IS the snapshot).
         let new_state = BranchState { head: id, ..state };
         self.branches.insert(&branch, &new_state);
-        self.branches.sync_wal();
+        self.fence(|m| m.branches.sync_wal());
 
         self.end_ref_update();
+        self.settle();
 
         Ok(id)
     }
@@ -671,8 +813,9 @@ where
         // Persist before release — see `insert` for the crash-ordering
         // rationale.
         self.branches.insert(&branch, &new_state);
-        self.branches.sync_wal();
+        self.fence(|m| m.branches.sync_wal());
         self.tree.release_node(old_dirty);
+        self.settle_if_backlogged();
         Ok(())
     }
 
@@ -758,7 +901,7 @@ where
             dirty_root: commit.root,
         };
         self.branches.insert(&branch, &new_state);
-        self.branches.sync_wal();
+        self.fence(|m| m.branches.sync_wal());
 
         // Tree root: dirty_root changes to commit.root.
         self.tree.acquire_node(commit.root);
@@ -770,6 +913,7 @@ where
         self.decrement_ref(old_head);
 
         self.end_ref_update();
+        self.settle();
 
         Ok(())
     }
@@ -868,14 +1012,15 @@ where
                 ..tgt
             };
             self.branches.insert(&target, &new_state);
-            self.branches.sync_wal();
+            self.fence(|m| m.branches.sync_wal());
             // Target branch HEAD now points to src.head → +1 ref.
             self.increment_ref(src.head);
             // Tree root: dirty_root changes to src_commit.root.
             self.tree.acquire_node(src_commit.root);
             self.tree.release_node(tgt.dirty_root);
-            self.commits.sync_wal();
+            self.fence(|m| m.commits.sync_wal());
             self.end_ref_update();
+            self.settle();
             return Ok(src.head);
         }
 
@@ -900,13 +1045,13 @@ where
             tgt_commit.root,
         );
 
-        // Make the complete merged tree durable before publishing its root.
-        self.tree.nodes.sync_wal();
+        // Order the complete merged tree before publishing its root.
+        self.fence(|m| m.tree.nodes.sync_wal());
 
         // Create merge commit.
         let id = self.next_commit.get_value();
         *self.next_commit.get_mut() = id + 1;
-        self.next_commit.sync_wal();
+        self.fence(|m| m.next_commit.sync_wal());
 
         // ref_count = 1: the target branch HEAD.
         // tgt.head: net 0 (loses branch-HEAD, gains parent-link).
@@ -920,7 +1065,7 @@ where
         };
         self.commits.insert(&id, &commit);
         self.increment_ref(src.head);
-        self.commits.sync_wal();
+        self.fence(|m| m.commits.sync_wal());
 
         let new_state = BranchState {
             head: id,
@@ -928,7 +1073,7 @@ where
             ..tgt
         };
         self.branches.insert(&target, &new_state);
-        self.branches.sync_wal();
+        self.fence(|m| m.branches.sync_wal());
 
         // Tree root: commit.root + dirty_root both reference merged_root.
         self.tree.acquire_node(merged_root); // commit.root
@@ -936,6 +1081,7 @@ where
         self.tree.release_node(tgt.dirty_root); // old target dirty
 
         self.end_ref_update();
+        self.settle();
 
         Ok(id)
     }
@@ -1181,6 +1327,9 @@ where
                 .expect("VerMap: incomplete commit graph during gc");
         }
         self.sync_storage();
+        // Everything released so far is durable now; the sweep below
+        // would find those nodes unreachable anyway.
+        self.tree.register_deferred_reclaims();
 
         // 2. Collect live roots from all commits + dirty roots.
         let mut live_roots: Vec<NodeId> =
@@ -1282,7 +1431,7 @@ where
             }
         }
 
-        self.commits.sync_wal();
+        self.fence(|m| m.commits.sync_wal());
         for root in dead_roots {
             self.tree.release_node(root);
         }
