@@ -1,9 +1,6 @@
-use super::{NO_COMMIT, map::VerMap};
+use super::{BranchId, CommitId, DiffEntry, NO_COMMIT, map::VerMap};
 use crate::common::error::VsdbError;
-use std::{
-    ops::Bound,
-    panic::{AssertUnwindSafe, catch_unwind},
-};
+use std::ops::Bound;
 
 // =====================================================================
 // Basic CRUD
@@ -74,14 +71,14 @@ fn contains_key_on_empty_map() {
 fn get_on_invalid_branch() {
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
-    assert!(m.get(999, &1).is_err());
+    assert!(m.get(BranchId::from_raw(999), &1).is_err());
 }
 
 #[test]
 fn insert_on_invalid_branch() {
     let mut m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
-    assert!(m.insert(999, &1, &1).is_err());
+    assert!(m.insert(BranchId::from_raw(999), &1, &1).is_err());
 }
 
 #[test]
@@ -169,15 +166,15 @@ fn read_historical_commit() {
     m.insert(main, &1, &20).unwrap();
     let c2 = m.commit(main).unwrap();
 
-    assert_eq!(m.get_at_commit(c1, &1).unwrap(), Some(10));
-    assert_eq!(m.get_at_commit(c2, &1).unwrap(), Some(20));
+    assert_eq!(m.at(c1).map(|s| s.get(&1)).unwrap(), Some(10));
+    assert_eq!(m.at(c2).map(|s| s.get(&1)).unwrap(), Some(20));
 }
 
 #[test]
 fn get_at_commit_invalid_id() {
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
-    assert!(m.get_at_commit(999, &1).is_err());
+    assert!(m.at(CommitId::from_raw(999)).map(|s| s.get(&1)).is_err());
 }
 
 #[test]
@@ -203,7 +200,7 @@ fn rollback_then_continue_committing() {
     let c_new = m.commit(main).unwrap();
 
     assert_eq!(m.get(main, &1).unwrap(), Some(999));
-    assert_eq!(m.get_at_commit(c_new, &1).unwrap(), Some(999));
+    assert_eq!(m.at(c_new).map(|s| s.get(&1)).unwrap(), Some(999));
 }
 
 #[test]
@@ -256,8 +253,8 @@ fn empty_commit_no_changes() {
     let c2 = m.commit(main).unwrap();
 
     assert_ne!(c1, c2);
-    assert_eq!(m.get_at_commit(c1, &1).unwrap(), Some(10));
-    assert_eq!(m.get_at_commit(c2, &1).unwrap(), Some(10));
+    assert_eq!(m.at(c1).map(|s| s.get(&1)).unwrap(), Some(10));
+    assert_eq!(m.at(c2).map(|s| s.get(&1)).unwrap(), Some(10));
 }
 
 #[test]
@@ -280,7 +277,7 @@ fn head_commit_returns_latest() {
 fn head_commit_invalid_branch() {
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
-    assert!(m.head_commit(999).is_err());
+    assert!(m.head_commit(BranchId::from_raw(999)).is_err());
 }
 
 // =====================================================================
@@ -413,7 +410,7 @@ fn delete_branch_then_reuse_name() {
 fn create_branch_from_invalid_source() {
     let mut m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
-    assert!(m.create_branch("bad", 999).is_err());
+    assert!(m.create_branch("bad", BranchId::from_raw(999)).is_err());
 }
 
 #[test]
@@ -1010,7 +1007,7 @@ fn iter_on_branch() {
 fn iter_invalid_branch() {
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
-    assert!(m.iter(999).is_err());
+    assert!(m.iter(BranchId::from_raw(999)).is_err());
 }
 
 // =====================================================================
@@ -1047,7 +1044,7 @@ fn log_empty_branch() {
 fn log_invalid_branch() {
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
-    assert!(m.log(999).is_err());
+    assert!(m.log(BranchId::from_raw(999)).is_err());
 }
 
 #[test]
@@ -1126,7 +1123,7 @@ fn gc_reclaims_deleted_branch() {
     m.commit(feat).unwrap();
     m.delete_branch(feat).unwrap();
 
-    m.gc();
+    m.gc().unwrap();
 
     // Main data unaffected.
     assert_eq!(m.get(main, &1).unwrap(), Some(1));
@@ -1147,7 +1144,7 @@ fn gc_preserves_shared_ancestor_commits() {
     m.insert(main, &3, &30).unwrap();
     m.commit(main).unwrap();
 
-    m.gc();
+    m.gc().unwrap();
 
     // Both branches' data intact.
     assert_eq!(m.get(main, &1).unwrap(), Some(10));
@@ -1155,7 +1152,7 @@ fn gc_preserves_shared_ancestor_commits() {
     assert_eq!(m.get(feat, &1).unwrap(), Some(10));
     assert_eq!(m.get(feat, &2).unwrap(), Some(20));
     // Shared ancestor commit survives.
-    assert_eq!(m.get_at_commit(c1, &1).unwrap(), Some(10));
+    assert_eq!(m.at(c1).map(|s| s.get(&1)).unwrap(), Some(10));
 }
 
 #[test]
@@ -1170,7 +1167,7 @@ fn gc_with_uncommitted_dirty_state() {
     m.insert(main, &2, &20).unwrap();
 
     // GC should preserve dirty root.
-    m.gc();
+    m.gc().unwrap();
 
     assert_eq!(m.get(main, &1).unwrap(), Some(10));
     assert_eq!(m.get(main, &2).unwrap(), Some(20));
@@ -1189,9 +1186,9 @@ fn gc_multiple_times_is_idempotent() {
     m.commit(feat).unwrap();
     m.delete_branch(feat).unwrap();
 
-    m.gc();
-    m.gc();
-    m.gc();
+    m.gc().unwrap();
+    m.gc().unwrap();
+    m.gc().unwrap();
 
     assert_eq!(m.get(main, &1).unwrap(), Some(10));
 }
@@ -1240,7 +1237,7 @@ fn delete_branch_preserves_shared_ancestors() {
 
     assert_eq!(m.get(main, &1).unwrap(), Some(10));
     assert_eq!(m.get(main, &3).unwrap(), Some(30));
-    assert_eq!(m.get_at_commit(c1, &1).unwrap(), Some(10));
+    assert_eq!(m.at(c1).map(|s| s.get(&1)).unwrap(), Some(10));
 }
 
 #[test]
@@ -1275,8 +1272,8 @@ fn gc_idempotent() {
     m.commit(feat).unwrap();
     m.delete_branch(feat).unwrap();
 
-    m.gc();
-    m.gc();
+    m.gc().unwrap();
+    m.gc().unwrap();
 
     assert_eq!(m.get(main, &1).unwrap(), Some(10));
 }
@@ -1388,7 +1385,7 @@ fn rollback_preserves_other_branch_data() {
     assert_eq!(m.get(feat, &2).unwrap(), Some(20));
     assert_eq!(m.get(feat, &3).unwrap(), Some(30));
     assert!(m.get_commit(c2).is_some());
-    assert_eq!(m.get_at_commit(c2, &2).unwrap(), Some(20));
+    assert_eq!(m.at(c2).map(|s| s.get(&2)).unwrap(), Some(20));
     let chain: Vec<_> = m.log(feat).unwrap().iter().map(|c| c.id).collect();
     assert_eq!(chain, vec![c3, c2, c1]);
 
@@ -1398,7 +1395,7 @@ fn rollback_preserves_other_branch_data() {
     m.rollback_to(feat, c1).unwrap();
     assert!(m.get_commit(c3).is_some());
     assert_eq!(m.get(twin, &3).unwrap(), Some(30));
-    assert_eq!(m.get_at_commit(c3, &3).unwrap(), Some(30));
+    assert_eq!(m.at(c3).map(|s| s.get(&3)).unwrap(), Some(30));
     // feat itself is back at c1.
     assert_eq!(m.get(feat, &2).unwrap(), None);
     assert_eq!(m.get(feat, &3).unwrap(), None);
@@ -1419,13 +1416,13 @@ fn ref_counts_match_ground_truth_recount() {
         let mut expected: HashMap<u64, u32> = HashMap::new();
         for (_, s) in m.branches.iter() {
             if s.head != NO_COMMIT {
-                *expected.entry(s.head).or_insert(0) += 1;
+                *expected.entry(s.head.0).or_insert(0) += 1;
             }
         }
         for (_, c) in m.commits.iter() {
             for &p in &c.parents {
                 if p != NO_COMMIT {
-                    *expected.entry(p).or_insert(0) += 1;
+                    *expected.entry(p.0).or_insert(0) += 1;
                 }
             }
         }
@@ -1495,7 +1492,7 @@ fn gc_after_serialize_roundtrip() {
     let mut m2: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
 
     // gc() rebuilds the in-memory node ref counts and leaves data intact.
-    m2.gc();
+    m2.gc().unwrap();
 
     assert_eq!(m2.get(main, &1).unwrap(), Some(10));
     assert_eq!(m2.get(feat, &2).unwrap(), Some(20));
@@ -1535,7 +1532,7 @@ fn stress_versioned() {
 
     // Main still has original values.
     for i in 0..n {
-        assert_eq!(m.get_at_commit(c1, &i).unwrap(), Some(i));
+        assert_eq!(m.at(c1).map(|s| s.get(&i)).unwrap(), Some(i));
     }
     // Feature has updated values.
     for i in 0..n {
@@ -1557,10 +1554,10 @@ fn stress_many_commits() {
     // Each commit i should have keys 0..=i.
     for (i, &cid) in commits.iter().enumerate() {
         for j in 0..=(i as u32) {
-            assert_eq!(m.get_at_commit(cid, &j).unwrap(), Some(j));
+            assert_eq!(m.at(cid).map(|s| s.get(&j)).unwrap(), Some(j));
         }
         // Key i+1 should not exist at this commit.
-        assert_eq!(m.get_at_commit(cid, &(i as u32 + 1)).unwrap(), None);
+        assert_eq!(m.at(cid).map(|s| s.get(&(i as u32 + 1))).unwrap(), None);
     }
 }
 
@@ -1581,7 +1578,7 @@ fn stress_many_branches_and_gc() {
         m.delete_branch(b).unwrap();
     }
 
-    m.gc();
+    m.gc().unwrap();
 
     // Main unaffected.
     assert_eq!(m.get(main, &0).unwrap(), Some(0));
@@ -1666,7 +1663,7 @@ fn branch_name_custom() {
 fn branch_name_nonexistent() {
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
-    assert_eq!(m.branch_name(999), None);
+    assert_eq!(m.branch_name(BranchId::from_raw(999)), None);
 }
 
 #[test]
@@ -1759,7 +1756,7 @@ fn has_uncommitted_on_new_branch() {
 fn has_uncommitted_invalid_branch() {
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
-    assert!(m.has_uncommitted(999).is_err());
+    assert!(m.has_uncommitted(BranchId::from_raw(999)).is_err());
 }
 
 // --- range ---
@@ -1771,10 +1768,7 @@ fn range_full_unbounded() {
     for i in 1..=5u32 {
         m.insert(main, &i, &(i * 10)).unwrap();
     }
-    let items: Vec<_> = m
-        .range(main, Bound::Unbounded, Bound::Unbounded)
-        .unwrap()
-        .collect();
+    let items: Vec<_> = m.range(main, ..).unwrap().collect();
     assert_eq!(items.len(), 5);
     assert_eq!(items[0], (1, 10));
     assert_eq!(items[4], (5, 50));
@@ -1788,7 +1782,7 @@ fn range_included_both() {
         m.insert(main, &i, &(i * 10)).unwrap();
     }
     let items: Vec<_> = m
-        .range(main, Bound::Included(&3), Bound::Included(&7))
+        .range(main, (Bound::Included(&3), Bound::Included(&7)))
         .unwrap()
         .collect();
     assert_eq!(items.len(), 5);
@@ -1804,7 +1798,7 @@ fn range_excluded_both() {
         m.insert(main, &i, &(i * 10)).unwrap();
     }
     let items: Vec<_> = m
-        .range(main, Bound::Excluded(&3), Bound::Excluded(&7))
+        .range(main, (Bound::Excluded(&3), Bound::Excluded(&7)))
         .unwrap()
         .collect();
     assert_eq!(items.len(), 3); // 4, 5, 6
@@ -1821,7 +1815,7 @@ fn range_included_lo_excluded_hi() {
     }
     // [3, 7) → 3, 4, 5, 6
     let items: Vec<_> = m
-        .range(main, Bound::Included(&3), Bound::Excluded(&7))
+        .range(main, (Bound::Included(&3), Bound::Excluded(&7)))
         .unwrap()
         .collect();
     assert_eq!(items.len(), 4);
@@ -1838,7 +1832,7 @@ fn range_excluded_lo_included_hi() {
     }
     // (3, 7] → 4, 5, 6, 7
     let items: Vec<_> = m
-        .range(main, Bound::Excluded(&3), Bound::Included(&7))
+        .range(main, (Bound::Excluded(&3), Bound::Included(&7)))
         .unwrap()
         .collect();
     assert_eq!(items.len(), 4);
@@ -1855,7 +1849,7 @@ fn range_unbounded_lo() {
     }
     // [.., 5] → 1, 2, 3, 4, 5
     let items: Vec<_> = m
-        .range(main, Bound::Unbounded, Bound::Included(&5))
+        .range(main, (Bound::Unbounded, Bound::Included(&5)))
         .unwrap()
         .collect();
     assert_eq!(items.len(), 5);
@@ -1872,7 +1866,7 @@ fn range_unbounded_hi() {
     }
     // [6, ..] → 6, 7, 8, 9, 10
     let items: Vec<_> = m
-        .range(main, Bound::Included(&6), Bound::Unbounded)
+        .range(main, (Bound::Included(&6), Bound::Unbounded))
         .unwrap()
         .collect();
     assert_eq!(items.len(), 5);
@@ -1889,7 +1883,7 @@ fn range_empty_result() {
     }
     // Range with no matching keys.
     let items: Vec<_> = m
-        .range(main, Bound::Included(&100), Bound::Included(&200))
+        .range(main, (Bound::Included(&100), Bound::Included(&200)))
         .unwrap()
         .collect();
     assert!(items.is_empty());
@@ -1899,10 +1893,7 @@ fn range_empty_result() {
 fn range_empty_map() {
     let m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
-    let items: Vec<_> = m
-        .range(main, Bound::Unbounded, Bound::Unbounded)
-        .unwrap()
-        .collect();
+    let items: Vec<_> = m.range(main, ..).unwrap().collect();
     assert!(items.is_empty());
 }
 
@@ -1921,7 +1912,7 @@ fn range_on_branch() {
 
     // Range on feat should see all 12 keys.
     let items: Vec<_> = m
-        .range(feat, Bound::Included(&9), Bound::Unbounded)
+        .range(feat, (Bound::Included(&9), Bound::Unbounded))
         .unwrap()
         .collect();
     assert_eq!(items.len(), 4); // 9, 10, 11, 12
@@ -1930,7 +1921,7 @@ fn range_on_branch() {
 
     // Range on main should only see 10 keys.
     let main_items: Vec<_> = m
-        .range(main, Bound::Included(&9), Bound::Unbounded)
+        .range(main, (Bound::Included(&9), Bound::Unbounded))
         .unwrap()
         .collect();
     assert_eq!(main_items.len(), 2); // 9, 10
@@ -1940,7 +1931,7 @@ fn range_on_branch() {
 fn range_invalid_branch() {
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
-    assert!(m.range(999, Bound::Unbounded, Bound::Unbounded).is_err());
+    assert!(m.range(BranchId::from_raw(999), ..).is_err());
 }
 
 #[test]
@@ -1952,7 +1943,7 @@ fn range_single_key() {
     }
     // Exact single key: [5, 5]
     let items: Vec<_> = m
-        .range(main, Bound::Included(&5), Bound::Included(&5))
+        .range(main, (Bound::Included(&5), Bound::Included(&5)))
         .unwrap()
         .collect();
     assert_eq!(items.len(), 1);
@@ -1973,12 +1964,12 @@ fn iter_at_commit_basic() {
     let c2 = m.commit(main).unwrap();
 
     // c1 should have 2 entries.
-    let items1: Vec<_> = m.iter_at_commit(c1).unwrap().collect();
+    let items1: Vec<_> = m.at(c1).map(|s| s.iter()).unwrap().collect();
     assert_eq!(items1.len(), 2);
     assert_eq!(items1, vec![(1, 10), (2, 20)]);
 
     // c2 should have 3 entries.
-    let items2: Vec<_> = m.iter_at_commit(c2).unwrap().collect();
+    let items2: Vec<_> = m.at(c2).map(|s| s.iter()).unwrap().collect();
     assert_eq!(items2.len(), 3);
     assert_eq!(items2, vec![(1, 10), (2, 20), (3, 30)]);
 }
@@ -1994,10 +1985,10 @@ fn iter_at_commit_after_remove() {
     m.remove(main, &1).unwrap();
     let c2 = m.commit(main).unwrap();
 
-    let items1: Vec<_> = m.iter_at_commit(c1).unwrap().collect();
+    let items1: Vec<_> = m.at(c1).map(|s| s.iter()).unwrap().collect();
     assert_eq!(items1.len(), 2);
 
-    let items2: Vec<_> = m.iter_at_commit(c2).unwrap().collect();
+    let items2: Vec<_> = m.at(c2).map(|s| s.iter()).unwrap().collect();
     assert_eq!(items2.len(), 1);
     assert_eq!(items2[0], (2, 20));
 }
@@ -2014,7 +2005,7 @@ fn iter_at_commit_on_branch_commit() {
     let fc = m.commit(feat).unwrap();
 
     // iter_at_commit works with any commit, regardless of branch.
-    let items: Vec<_> = m.iter_at_commit(fc).unwrap().collect();
+    let items: Vec<_> = m.at(fc).map(|s| s.iter()).unwrap().collect();
     assert_eq!(items, vec![(1, 10), (2, 20)]);
 }
 
@@ -2022,7 +2013,7 @@ fn iter_at_commit_on_branch_commit() {
 fn iter_at_commit_invalid() {
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
-    assert!(m.iter_at_commit(999).is_err());
+    assert!(m.at(CommitId::from_raw(999)).map(|s| s.iter()).is_err());
 }
 
 #[test]
@@ -2035,7 +2026,7 @@ fn iter_at_commit_ordered() {
     }
     let c = m.commit(main).unwrap();
 
-    let items: Vec<_> = m.iter_at_commit(c).unwrap().collect();
+    let items: Vec<_> = m.at(c).map(|s| s.iter()).unwrap().collect();
     assert_eq!(items.len(), 50);
     for (idx, (k, v)) in items.iter().enumerate() {
         let expected_key = (idx + 1) as u32;
@@ -2054,7 +2045,7 @@ fn iter_at_commit_empty_tree() {
     m.remove(main, &1).unwrap();
     let c = m.commit(main).unwrap();
 
-    let items: Vec<_> = m.iter_at_commit(c).unwrap().collect();
+    let items: Vec<_> = m.at(c).map(|s| s.iter()).unwrap().collect();
     assert!(items.is_empty());
 }
 
@@ -2077,7 +2068,8 @@ fn range_at_commit_basic() {
 
     // range_at_commit sees c1's state, not the latest.
     let items: Vec<(u32, u32)> = m
-        .range_at_commit(c1, Bound::Included(&3), Bound::Excluded(&7))
+        .at(c1)
+        .map(|s| s.range((Bound::Included(&3), Bound::Excluded(&7))))
         .unwrap()
         .collect();
     assert_eq!(items, vec![(3, 30), (4, 40), (5, 50), (6, 60)]);
@@ -2092,7 +2084,8 @@ fn range_at_commit_empty_range() {
     let c = m.commit(main).unwrap();
 
     let items: Vec<(u32, u32)> = m
-        .range_at_commit(c, Bound::Included(&100), Bound::Excluded(&200))
+        .at(c)
+        .map(|s| s.range((Bound::Included(&100), Bound::Excluded(&200))))
         .unwrap()
         .collect();
     assert!(items.is_empty());
@@ -2109,15 +2102,13 @@ fn range_at_commit_unbounded() {
     let c = m.commit(main).unwrap();
 
     // Unbounded on both sides = full scan (same as iter_at_commit).
-    let items: Vec<(u32, u32)> = m
-        .range_at_commit(c, Bound::Unbounded, Bound::Unbounded)
-        .unwrap()
-        .collect();
+    let items: Vec<(u32, u32)> = m.at(c).map(|s| s.range(..)).unwrap().collect();
     assert_eq!(items.len(), 5);
 
     // Lower-bounded only.
     let items: Vec<(u32, u32)> = m
-        .range_at_commit(c, Bound::Excluded(&3), Bound::Unbounded)
+        .at(c)
+        .map(|s| s.range((Bound::Excluded(&3), Bound::Unbounded)))
         .unwrap()
         .collect();
     assert_eq!(items, vec![(4, 4), (5, 5)]);
@@ -2127,10 +2118,7 @@ fn range_at_commit_unbounded() {
 fn range_at_commit_invalid_commit() {
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
-    assert!(
-        m.range_at_commit(999, Bound::Unbounded, Bound::Unbounded)
-            .is_err()
-    );
+    assert!(m.at(CommitId::from_raw(999)).map(|s| s.range(..)).is_err());
 }
 
 #[test]
@@ -2148,7 +2136,8 @@ fn range_at_commit_on_branch() {
     let fc = m.commit(fork).unwrap();
 
     let items: Vec<(u32, u32)> = m
-        .range_at_commit(fc, Bound::Included(&2), Bound::Included(&4))
+        .at(fc)
+        .map(|s| s.range((Bound::Included(&2), Bound::Included(&4))))
         .unwrap()
         .collect();
     assert_eq!(items, vec![(2, 20), (3, 30), (4, 40)]);
@@ -2169,12 +2158,12 @@ fn contains_key_at_commit_basic() {
     let c2 = m.commit(main).unwrap();
 
     // At c1: key 1 exists, key 2 does not.
-    assert!(m.contains_key_at_commit(c1, &1).unwrap());
-    assert!(!m.contains_key_at_commit(c1, &2).unwrap());
+    assert!(m.at(c1).map(|s| s.contains_key(&1)).unwrap());
+    assert!(!m.at(c1).map(|s| s.contains_key(&2)).unwrap());
 
     // At c2: key 1 was removed, key 2 was added.
-    assert!(!m.contains_key_at_commit(c2, &1).unwrap());
-    assert!(m.contains_key_at_commit(c2, &2).unwrap());
+    assert!(!m.at(c2).map(|s| s.contains_key(&1)).unwrap());
+    assert!(m.at(c2).map(|s| s.contains_key(&2)).unwrap());
 }
 
 #[test]
@@ -2185,14 +2174,18 @@ fn contains_key_at_commit_nonexistent_key() {
     m.insert(main, &1, &1).unwrap();
     let c = m.commit(main).unwrap();
 
-    assert!(!m.contains_key_at_commit(c, &999).unwrap());
+    assert!(!m.at(c).map(|s| s.contains_key(&999)).unwrap());
 }
 
 #[test]
 fn contains_key_at_commit_invalid_commit() {
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
-    assert!(m.contains_key_at_commit(999, &1).is_err());
+    assert!(
+        m.at(CommitId::from_raw(999))
+            .map(|s| s.contains_key(&1))
+            .is_err()
+    );
 }
 
 #[test]
@@ -2208,13 +2201,13 @@ fn contains_key_at_commit_on_branch() {
     let fc = m.commit(fork).unwrap();
 
     // Fork commit has both keys.
-    assert!(m.contains_key_at_commit(fc, &1).unwrap());
-    assert!(m.contains_key_at_commit(fc, &2).unwrap());
+    assert!(m.at(fc).map(|s| s.contains_key(&1)).unwrap());
+    assert!(m.at(fc).map(|s| s.contains_key(&2)).unwrap());
 
     // Main's latest commit does not have key 2.
     let mc = m.head_commit(main).unwrap().unwrap().id;
-    assert!(m.contains_key_at_commit(mc, &1).unwrap());
-    assert!(!m.contains_key_at_commit(mc, &2).unwrap());
+    assert!(m.at(mc).map(|s| s.contains_key(&1)).unwrap());
+    assert!(!m.at(mc).map(|s| s.contains_key(&2)).unwrap());
 }
 
 #[test]
@@ -2234,7 +2227,7 @@ fn get_commit_basic() {
 fn get_commit_nonexistent() {
     let m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
-    assert!(m.get_commit(999).is_none());
+    assert!(m.get_commit(CommitId::from_raw(999)).is_none());
 }
 
 #[test]
@@ -2347,7 +2340,7 @@ fn u64_keys() {
 fn main_branch_default_is_one() {
     let m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
-    assert_eq!(main, 1);
+    assert_eq!(main, BranchId::from_raw(1));
 }
 
 #[test]
@@ -2400,7 +2393,7 @@ fn set_main_branch_switches_protection() {
 fn set_main_branch_nonexistent_fails() {
     let mut m: VerMap<u32, u32> = VerMap::new();
     let _main = m.main_branch();
-    assert!(m.set_main_branch(999).is_err());
+    assert!(m.set_main_branch(BranchId::from_raw(999)).is_err());
 }
 
 #[test]
@@ -2655,12 +2648,15 @@ fn fork_point_nonexistent_commit() {
     let c1 = m.commit(main).unwrap();
 
     // Nonexistent commit ID should yield None
-    assert_eq!(m.fork_point(c1, 99999), None);
-    assert_eq!(m.fork_point(99999, c1), None);
+    assert_eq!(m.fork_point(c1, CommitId::from_raw(99999)), None);
+    assert_eq!(m.fork_point(CommitId::from_raw(99999), c1), None);
 
     // Two identical nonexistent IDs must not be reported as their own
     // fork point.
-    assert_eq!(m.fork_point(99999, 99999), None);
+    assert_eq!(
+        m.fork_point(CommitId::from_raw(99999), CommitId::from_raw(99999)),
+        None
+    );
 }
 
 #[test]
@@ -2736,13 +2732,16 @@ fn commit_distance_nonexistent_commit() {
     let c1 = m.commit(main).unwrap();
 
     // from is nonexistent
-    assert_eq!(m.commit_distance(99999, c1), None);
+    assert_eq!(m.commit_distance(CommitId::from_raw(99999), c1), None);
 
     // ancestor is nonexistent (can never be reached)
-    assert_eq!(m.commit_distance(c1, 99999), None);
+    assert_eq!(m.commit_distance(c1, CommitId::from_raw(99999)), None);
 
     // Two identical nonexistent IDs must not report distance 0.
-    assert_eq!(m.commit_distance(99999, 99999), None);
+    assert_eq!(
+        m.commit_distance(CommitId::from_raw(99999), CommitId::from_raw(99999)),
+        None
+    );
 
     // NO_COMMIT sentinels are not commits either.
     assert_eq!(m.commit_distance(NO_COMMIT, NO_COMMIT), None);
@@ -2891,15 +2890,9 @@ fn diff_commits_basic() {
 
     use super::diff::DiffEntry;
     // Diff is in ascending key order.
-    assert!(
-        matches!(&diff[0], DiffEntry::Removed { key, .. } if key == &1u32.to_be_bytes())
-    );
-    assert!(
-        matches!(&diff[1], DiffEntry::Modified { key, .. } if key == &2u32.to_be_bytes())
-    );
-    assert!(
-        matches!(&diff[2], DiffEntry::Added { key, .. } if key == &3u32.to_be_bytes())
-    );
+    assert!(matches!(&diff[0], DiffEntry::Removed { key, .. } if *key == 1));
+    assert!(matches!(&diff[1], DiffEntry::Modified { key, .. } if *key == 2));
+    assert!(matches!(&diff[2], DiffEntry::Added { key, .. } if *key == 3));
 }
 
 #[test]
@@ -2931,12 +2924,8 @@ fn diff_uncommitted_changes() {
     assert_eq!(diff.len(), 2);
 
     use super::diff::DiffEntry;
-    assert!(
-        matches!(&diff[0], DiffEntry::Removed { key, .. } if key == &1u32.to_be_bytes())
-    );
-    assert!(
-        matches!(&diff[1], DiffEntry::Added { key, .. } if key == &3u32.to_be_bytes())
-    );
+    assert!(matches!(&diff[0], DiffEntry::Removed { key, .. } if *key == 1));
+    assert!(matches!(&diff[1], DiffEntry::Added { key, .. } if *key == 3));
 }
 
 #[test]
@@ -2989,12 +2978,8 @@ fn diff_across_branches() {
     assert_eq!(diff.len(), 2);
 
     use super::diff::DiffEntry;
-    assert!(
-        matches!(&diff[0], DiffEntry::Modified { key, .. } if key == &1u32.to_be_bytes())
-    );
-    assert!(
-        matches!(&diff[1], DiffEntry::Added { key, .. } if key == &3u32.to_be_bytes())
-    );
+    assert!(matches!(&diff[0], DiffEntry::Modified { key, .. } if *key == 1));
+    assert!(matches!(&diff[1], DiffEntry::Added { key, .. } if *key == 3));
 }
 
 #[test]
@@ -3700,9 +3685,12 @@ fn test_save_and_from_meta_with_branches() {
     assert_eq!(restored.get(feat_r, &3).unwrap(), Some("v3-feat".into()));
 
     // Historical snapshot at c1
-    assert_eq!(restored.get_at_commit(c1, &1).unwrap(), Some("v1".into()));
     assert_eq!(
-        restored.get_at_commit(c2, &1).unwrap(),
+        restored.at(c1).map(|s| s.get(&1)).unwrap(),
+        Some("v1".into())
+    );
+    assert_eq!(
+        restored.at(c2).map(|s| s.get(&1)).unwrap(),
         Some("v1-feat".into())
     );
 }
@@ -3775,12 +3763,12 @@ fn restored_aliases_preserve_committed_snapshots() {
     b.insert(main, &2, &12).unwrap();
     b.commit(main).unwrap();
 
-    assert_eq!(a.get_at_commit(a_commit, &0).unwrap(), Some(10));
-    assert_eq!(a.get_at_commit(a_commit, &1).unwrap(), Some(11));
-    assert_eq!(a.get_at_commit(a_commit, &2).unwrap(), None);
-    b.gc();
-    assert_eq!(b.get_at_commit(a_commit, &0).unwrap(), Some(10));
-    assert_eq!(b.get_at_commit(a_commit, &1).unwrap(), Some(11));
+    assert_eq!(a.at(a_commit).map(|s| s.get(&0)).unwrap(), Some(10));
+    assert_eq!(a.at(a_commit).map(|s| s.get(&1)).unwrap(), Some(11));
+    assert_eq!(a.at(a_commit).map(|s| s.get(&2)).unwrap(), None);
+    b.gc().unwrap();
+    assert_eq!(b.at(a_commit).map(|s| s.get(&0)).unwrap(), Some(10));
+    assert_eq!(b.at(a_commit).map(|s| s.get(&1)).unwrap(), Some(11));
 }
 
 /// Serialized size should remain compact enough for metadata persistence.
@@ -3828,7 +3816,7 @@ fn test_meta_restore_then_continue() {
 
     // GC on restored handle
     restored.delete_branch(dev).unwrap();
-    restored.gc();
+    restored.gc().unwrap();
     assert_eq!(restored.get(main, &1).unwrap(), Some(10));
     assert_eq!(restored.get(main, &2).unwrap(), Some(20));
 }
@@ -3862,7 +3850,7 @@ fn test_double_save_restore() {
 #[test]
 fn error_branch_not_found() {
     let m: VerMap<u32, u32> = VerMap::new();
-    let err = m.get(9999, &1).unwrap_err();
+    let err = m.get(BranchId::from_raw(9999), &1).unwrap_err();
     assert!(
         matches!(err, VsdbError::BranchNotFound { branch_id: 9999 }),
         "expected BranchNotFound, got: {err:?}"
@@ -3872,7 +3860,10 @@ fn error_branch_not_found() {
 #[test]
 fn error_commit_not_found() {
     let m: VerMap<u32, u32> = VerMap::new();
-    let err = m.get_at_commit(9999, &1).unwrap_err();
+    let err = m
+        .at(CommitId::from_raw(9999))
+        .map(|s| s.get(&1))
+        .unwrap_err();
     assert!(
         matches!(err, VsdbError::CommitNotFound { commit_id: 9999 }),
         "expected CommitNotFound, got: {err:?}"
@@ -3950,7 +3941,7 @@ fn error_uncommitted_changes_on_rollback_to_ancestor() {
 #[test]
 fn error_display_preserves_context() {
     let m: VerMap<u32, u32> = VerMap::new();
-    let err = m.get(9999, &1).unwrap_err();
+    let err = m.get(BranchId::from_raw(9999), &1).unwrap_err();
     let msg = err.to_string();
     assert!(
         msg.contains("9999"),
@@ -3959,172 +3950,80 @@ fn error_display_preserves_context() {
 }
 
 // =====================================================================
-// Branch / BranchMut handles
+// Snapshot views
 // =====================================================================
 
 #[test]
-fn handle_main_read() {
+fn snapshot_views_are_immutable_states() {
     let mut m: VerMap<u32, String> = VerMap::new();
-    let main_id = m.main_branch();
-    m.insert(main_id, &1, &"hello".into()).unwrap();
-
-    let br = m.main();
-    assert_eq!(br.id(), main_id);
-    assert_eq!(br.name(), Some("main".to_string()));
-    assert_eq!(br.get(&1).unwrap(), Some("hello".to_string()));
-    assert!(br.contains_key(&1).unwrap());
-    assert!(!br.contains_key(&2).unwrap());
-}
-
-#[test]
-fn handle_main_mut_write() {
-    let mut m: VerMap<u32, u32> = VerMap::new();
-    {
-        let mut main = m.main_mut();
-        main.insert(&1, &10).unwrap();
-        main.insert(&2, &20).unwrap();
-        let c = main.commit().unwrap();
-        assert!(c > 0);
-    }
-    assert_eq!(m.get(m.main_branch(), &1).unwrap(), Some(10));
-    assert_eq!(m.get(m.main_branch(), &2).unwrap(), Some(20));
-}
-
-#[test]
-fn handle_branch_read_write() {
-    let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();
-    m.insert(main, &1, &100).unwrap();
-    m.commit(main).unwrap();
-
-    let feat = m.create_branch("feat", main).unwrap();
-    {
-        let mut handle = m.branch_mut(feat).unwrap();
-        handle.insert(&2, &200).unwrap();
-        handle.commit().unwrap();
+    for i in 0..10u32 {
+        m.insert(main, &i, &format!("v{i}")).unwrap();
     }
+    let c1 = m.commit(main).unwrap();
+    m.insert(main, &3, &"changed".into()).unwrap();
+    m.remove(main, &4).unwrap();
 
-    let handle = m.branch(feat).unwrap();
-    assert_eq!(handle.get(&1).unwrap(), Some(100));
-    assert_eq!(handle.get(&2).unwrap(), Some(200));
+    let at_c1 = m.at(c1).unwrap();
+    assert_eq!(at_c1.get(&3), Some("v3".into()));
+    assert!(at_c1.contains_key(&4));
+    assert_eq!(at_c1.iter().count(), 10);
+    let keys: Vec<u32> = at_c1.range(2..5).map(|(k, _)| k).collect();
+    assert_eq!(keys, vec![2, 3, 4]);
+    let keys: Vec<u32> = at_c1.range(..=1).map(|(k, _)| k).collect();
+    assert_eq!(keys, vec![0, 1]);
+
+    let working = m.snapshot(main).unwrap();
+    assert_eq!(working.get(&3), Some("changed".into()));
+    assert!(!working.contains_key(&4));
+    assert_eq!(m.range(main, 3..).unwrap().count(), 6);
 }
 
 #[test]
-fn handle_iter() {
-    let mut m: VerMap<u32, u32> = VerMap::new();
-    {
-        let mut main = m.main_mut();
-        for i in 1..=5 {
-            main.insert(&i, &(i * 10)).unwrap();
-        }
-    }
-    let main = m.main();
-    let entries: Vec<_> = main.iter().unwrap().collect();
-    assert_eq!(entries.len(), 5);
-    assert_eq!(entries[0], (1, 10));
-    assert_eq!(entries[4], (5, 50));
-}
-
-#[test]
-fn handle_range() {
-    let mut m: VerMap<u32, u32> = VerMap::new();
-    {
-        let mut main = m.main_mut();
-        for i in 1..=10 {
-            main.insert(&i, &(i * 10)).unwrap();
-        }
-    }
-    let main = m.main();
-    let entries: Vec<_> = main
-        .range(Bound::Included(&3), Bound::Excluded(&7))
-        .unwrap()
-        .collect();
-    assert_eq!(entries.len(), 4);
-    assert_eq!(entries[0].0, 3);
-    assert_eq!(entries[3].0, 6);
-}
-
-#[test]
-fn handle_has_uncommitted() {
-    let mut m: VerMap<u32, u32> = VerMap::new();
-    assert!(!m.main().has_uncommitted().unwrap());
-    m.main_mut().insert(&1, &10).unwrap();
-    assert!(m.main().has_uncommitted().unwrap());
-}
-
-#[test]
-fn handle_discard() {
-    let mut m: VerMap<u32, u32> = VerMap::new();
-    {
-        let mut main = m.main_mut();
-        main.insert(&1, &10).unwrap();
-        main.commit().unwrap();
-        main.insert(&2, &20).unwrap();
-        main.discard().unwrap();
-    }
-    assert_eq!(m.get(m.main_branch(), &1).unwrap(), Some(10));
-    assert_eq!(m.get(m.main_branch(), &2).unwrap(), None);
-}
-
-#[test]
-fn handle_rollback() {
-    let mut m: VerMap<u32, u32> = VerMap::new();
-    let c1;
-    {
-        let mut main = m.main_mut();
-        main.insert(&1, &10).unwrap();
-        c1 = main.commit().unwrap();
-        main.insert(&2, &20).unwrap();
-        main.commit().unwrap();
-        main.rollback_to(c1).unwrap();
-    }
-    assert_eq!(m.get(m.main_branch(), &1).unwrap(), Some(10));
-    assert_eq!(m.get(m.main_branch(), &2).unwrap(), None);
-}
-
-#[test]
-fn handle_log_and_head_commit() {
-    let mut m: VerMap<u32, u32> = VerMap::new();
-    let mut main = m.main_mut();
-    main.insert(&1, &10).unwrap();
-    main.commit().unwrap();
-    main.insert(&2, &20).unwrap();
-    main.commit().unwrap();
-
-    // Regression: `BranchMut` must expose `log`/`head_commit` directly
-    // (its doc comment promises "all `Branch` read methods"), without
-    // requiring the caller to drop the mutable handle and reacquire a
-    // read-only `Branch` via `m.main()`.
-    let log = main.log().unwrap();
-    assert_eq!(log.len(), 2);
-    let head = main.head_commit().unwrap().unwrap();
-    assert_eq!(head.id, log[0].id);
-}
-
-#[test]
-fn handle_diff_uncommitted() {
-    let mut m: VerMap<u32, u32> = VerMap::new();
-    let mut main = m.main_mut();
-    main.insert(&1, &10).unwrap();
-    main.commit().unwrap();
-    main.insert(&2, &20).unwrap();
-
-    // Regression: available directly on `BranchMut`, no reacquire needed.
-    let diff = main.diff_uncommitted().unwrap();
-    assert_eq!(diff.len(), 1);
-}
-
-#[test]
-fn handle_invalid_branch_returns_error() {
+fn views_of_missing_ids_are_typed_errors() {
     let m: VerMap<u32, u32> = VerMap::new();
-    let err = m.branch(9999).unwrap_err();
-    assert!(matches!(err, VsdbError::BranchNotFound { .. }));
-    // main() never errors (main branch always exists)
-    let _ = m.main();
+    assert!(matches!(
+        m.at(CommitId::from_raw(42)),
+        Err(VsdbError::CommitNotFound { commit_id: 42 })
+    ));
+    assert!(matches!(
+        m.snapshot(BranchId::from_raw(42)),
+        Err(VsdbError::BranchNotFound { branch_id: 42 })
+    ));
 }
 
-/// An incomplete HEAD cannot prove that previously durable commits are dead.
-/// Check both marker states: ordinary restore/GC must validate even when clean.
+#[test]
+fn typed_diff_decodes_keys_and_values() {
+    let mut m: VerMap<u32, String> = VerMap::new();
+    let main = m.main_branch();
+    m.insert(main, &1, &"a".into()).unwrap();
+    m.insert(main, &2, &"b".into()).unwrap();
+    let c1 = m.commit(main).unwrap();
+    m.insert(main, &2, &"B".into()).unwrap();
+    m.remove(main, &1).unwrap();
+    m.insert(main, &3, &"c".into()).unwrap();
+    assert_eq!(
+        m.diff_uncommitted(main).unwrap(),
+        vec![
+            DiffEntry::Removed {
+                key: 1,
+                value: "a".into()
+            },
+            DiffEntry::Modified {
+                key: 2,
+                old_value: "b".into(),
+                new_value: "B".into()
+            },
+            DiffEntry::Added {
+                key: 3,
+                value: "c".into()
+            },
+        ]
+    );
+    let c2 = m.commit(main).unwrap();
+    assert_eq!(m.diff_commits(c1, c2).unwrap().len(), 3);
+}
+
 #[test]
 fn missing_head_recovery_preserves_durable_history() {
     for dirty in [false, true] {
@@ -4134,24 +4033,23 @@ fn missing_head_recovery_preserves_durable_history() {
         let c1 = m.commit(main).unwrap();
         m.namespace().flush();
 
-        let missing = c1 + 10_000;
-        let mut state = m.branches.get(&main).unwrap();
+        let missing = CommitId::from_raw(c1.raw() + 10_000);
+        let mut state = m.branches.get(&main.0).unwrap();
         state.head = missing;
-        m.branches.insert(&main, &state);
+        m.branches.insert(&main.0, &state);
         *m.gc_dirty.get_mut() = dirty;
         let bytes = postcard::to_allocvec(&m).unwrap();
 
         assert!(matches!(
             m.validate_commit_graph(),
-            Err(VsdbError::CommitNotFound { commit_id }) if commit_id == missing
+            Err(VsdbError::CommitNotFound { commit_id }) if commit_id == missing.0
         ));
         assert!(postcard::from_bytes::<VerMap<u32, u32>>(&bytes).is_err());
-        assert_eq!(m.get_at_commit(c1, &1).unwrap(), Some(10));
+        assert_eq!(m.at(c1).map(|s| s.get(&1)).unwrap(), Some(10));
         assert_eq!(m.gc_dirty.get_value(), dirty);
 
-        let result = catch_unwind(AssertUnwindSafe(|| m.gc()));
-        assert!(result.is_err());
-        assert_eq!(m.get_at_commit(c1, &1).unwrap(), Some(10));
+        assert!(matches!(m.gc(), Err(VsdbError::CommitNotFound { .. })));
+        assert_eq!(m.at(c1).map(|s| s.get(&1)).unwrap(), Some(10));
         assert_eq!(m.gc_dirty.get_value(), dirty);
     }
 }
@@ -4172,23 +4070,22 @@ fn missing_parent_recovery_preserves_durable_history() {
         m.namespace().flush();
 
         // Model a recovered shard with the reachable c2 record absent.
-        m.commits.remove(&c2);
+        m.commits.remove(&c2.0);
         *m.gc_dirty.get_mut() = dirty;
         let bytes = postcard::to_allocvec(&m).unwrap();
 
         assert!(matches!(
             m.validate_commit_graph(),
-            Err(VsdbError::CommitNotFound { commit_id }) if commit_id == c2
+            Err(VsdbError::CommitNotFound { commit_id }) if commit_id == c2.0
         ));
         assert!(postcard::from_bytes::<VerMap<u32, u32>>(&bytes).is_err());
-        assert_eq!(m.get_at_commit(c1, &1).unwrap(), Some(10));
-        assert_eq!(m.get_at_commit(c3, &3).unwrap(), Some(30));
+        assert_eq!(m.at(c1).map(|s| s.get(&1)).unwrap(), Some(10));
+        assert_eq!(m.at(c3).map(|s| s.get(&3)).unwrap(), Some(30));
         assert_eq!(m.gc_dirty.get_value(), dirty);
 
-        let result = catch_unwind(AssertUnwindSafe(|| m.gc()));
-        assert!(result.is_err());
-        assert_eq!(m.get_at_commit(c1, &1).unwrap(), Some(10));
-        assert_eq!(m.get_at_commit(c3, &3).unwrap(), Some(30));
+        assert!(matches!(m.gc(), Err(VsdbError::CommitNotFound { .. })));
+        assert_eq!(m.at(c1).map(|s| s.get(&1)).unwrap(), Some(10));
+        assert_eq!(m.at(c3).map(|s| s.get(&3)).unwrap(), Some(30));
         assert_eq!(m.gc_dirty.get_value(), dirty);
     }
 }
@@ -4202,7 +4099,7 @@ fn zero_count_restore_repairs_branch_references() {
     let fork = m.create_branch("fork", main).unwrap();
     let mut row = m.get_commit(commit).unwrap();
     row.ref_count = 0;
-    m.commits.insert(&commit, &row);
+    m.commits.insert(&commit.0, &row);
     assert!(!m.gc_dirty.get_value());
 
     let bytes = postcard::to_allocvec(&m).unwrap();
@@ -4238,7 +4135,7 @@ fn deep_clone_preserves_independent_history_and_branch_lifecycle() {
     let restored: VerMap<u32, u32> = VerMap::from_meta(id).unwrap();
     assert_eq!(restored.main_branch(), fork);
     assert_eq!(restored.branch_id("main"), None);
-    assert_eq!(restored.get_at_commit(c1, &1).unwrap(), Some(10));
+    assert_eq!(restored.at(c1).map(|s| s.get(&1)).unwrap(), Some(10));
     assert_eq!(restored.get_commit(c3).unwrap().parents, vec![c2]);
     assert_eq!(restored.get(next_branch, &3).unwrap(), Some(30));
 
@@ -4335,4 +4232,29 @@ fn legacy_layout_keeps_per_shard_fences_and_clone_upgrades_it() {
     let bytes = postcard::to_allocvec(&c).unwrap();
     let c2: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
     assert!(c2.colocated);
+}
+
+#[test]
+fn history_errors_are_matchable() {
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+    let feat = m.create_branch("feat", main).unwrap();
+    // Neither branch has a commit yet.
+    assert!(matches!(
+        m.merge(feat, main),
+        Err(VsdbError::NoCommits { branch_id }) if branch_id == feat.raw()
+    ));
+    assert!(matches!(
+        m.merge(main, main),
+        Err(VsdbError::SelfMerge { branch_id }) if branch_id == main.raw()
+    ));
+    m.insert(feat, &1, &1).unwrap();
+    let on_feat = m.commit(feat).unwrap();
+    m.insert(main, &2, &2).unwrap();
+    m.commit(main).unwrap();
+    assert!(matches!(
+        m.rollback_to(main, on_feat),
+        Err(VsdbError::NotAncestor { commit_id, branch_id })
+            if commit_id == on_feat.raw() && branch_id == main.raw()
+    ));
 }

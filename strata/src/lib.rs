@@ -124,12 +124,7 @@ pub use common::ende::{KeyEnDe, KeyEnDeOrdered, ValueEnDe};
 pub use common::error::{Result, VsdbError};
 
 // Versioned storage core types (previously not re-exported)
-pub use versioned::{
-    BranchId, Commit, CommitId, NO_COMMIT,
-    diff::DiffEntry,
-    handle::{Branch, BranchMut},
-    map::VerMap,
-};
+pub use versioned::{BranchId, Commit, CommitId, DiffEntry, Snapshot, map::VerMap};
 
 // DAG-related structures
 pub use dagmap::{DagMapId, raw::DagMapRaw, rawkey::DagMapRawKey};

@@ -15,7 +15,7 @@ use crate::{
         ende::{KeyEnDeOrdered, ValueEnDe},
         error::Result,
     },
-    versioned::{BranchId, CommitId, diff::DiffEntry, map::VerMap},
+    versioned::{BranchId, CommitId, diff::RawDiff, map::VerMap},
 };
 
 use super::{MptCalc, MptProof, SmtCalc, SmtProof, TrieCalc};
@@ -99,12 +99,12 @@ where
         this
     }
 
-    /// Wraps an existing `VerMap`.
+    /// Wraps an existing `VerMap` and attempts to restore the trie cache.
     ///
-    /// Runs [`gc`](VerMap::gc) for crash recovery (if needed) and
-    /// B+ tree cleanup, then attempts to restore the trie cache.
-    pub fn from_map(mut map: VerMap<K, V>) -> Self {
-        map.gc();
+    /// A `VerMap` handle is already recovered (restoring one repairs an
+    /// interrupted ref-count cascade and rebuilds node references), so
+    /// no extra sweep runs here.
+    pub fn from_map(map: VerMap<K, V>) -> Self {
         let cache_id = map.instance_id().map_id;
         let mut this = Self {
             map,
@@ -202,7 +202,7 @@ where
 
         // Then, apply any uncommitted changes.
         if self.map.has_uncommitted(branch)? {
-            let diff = self.map.diff_uncommitted(branch)?;
+            let diff = self.map.raw_diff_uncommitted(branch)?;
             let snapshot = self.trie.clone();
             if let Err(e) = self.apply_diff(&diff) {
                 // `batch_update` is not atomic: operations before the
@@ -249,7 +249,7 @@ where
         match self.sync_commit {
             Some(current) => {
                 // Try incremental diff.
-                match self.map.diff_commits(current, target) {
+                match self.map.raw_diff_commits(current, target) {
                     Ok(diff) => {
                         if let Err(e) = self.apply_diff(&diff) {
                             // `batch_update` is not atomic: operations
@@ -294,7 +294,11 @@ where
         if !self.map.namespace().is_read_only()
             && self
                 .trie
-                .save_cache(&self.map.namespace().system_dir(), self.cache_id, target)
+                .save_cache(
+                    &self.map.namespace().system_dir(),
+                    self.cache_id,
+                    target.raw(),
+                )
                 .is_ok()
         {
             self.cache_dirty = false;
@@ -304,21 +308,21 @@ where
 
     /// Full rebuild: clear trie and re-insert all entries at `commit`.
     fn full_rebuild_commit(&mut self, commit: CommitId) -> Result<()> {
-        let entries: Vec<_> = self.map.raw_iter_at_commit(commit)?.collect();
+        let entries: Vec<_> = self.map.at(commit)?.raw_iter().collect();
         self.trie = T::from_entries(entries)?;
         Ok(())
     }
 
     /// Apply a diff to the current trie.
-    fn apply_diff(&mut self, diff: &[DiffEntry]) -> Result<()> {
+    fn apply_diff(&mut self, diff: &[RawDiff]) -> Result<()> {
         let ops: Vec<(&[u8], Option<&[u8]>)> = diff
             .iter()
             .map(|entry| match entry {
-                DiffEntry::Added { key, value } => {
+                RawDiff::Added { key, value } => {
                     (key.as_slice(), Some(value.as_slice()))
                 }
-                DiffEntry::Removed { key, .. } => (key.as_slice(), None),
-                DiffEntry::Modified { key, new_value, .. } => {
+                RawDiff::Removed { key, .. } => (key.as_slice(), None),
+                RawDiff::Modified { key, new_value, .. } => {
                     (key.as_slice(), Some(new_value.as_slice()))
                 }
             })
@@ -444,7 +448,7 @@ impl<K, V, T: TrieCalc> VerMapWithProof<K, V, T> {
             }
             self.trie = trie;
             self.trie_at_head = None;
-            self.sync_commit = Some(sync_tag);
+            self.sync_commit = Some(CommitId::from_raw(sync_tag));
             self.sync_branch = None;
             self.dirty_applied = false;
             self.cache_dirty = false;
@@ -474,9 +478,11 @@ impl<K, V, T: TrieCalc> VerMapWithProof<K, V, T> {
             return;
         }
 
-        let _ =
-            self.trie
-                .save_cache(&self.map.namespace().system_dir(), self.cache_id, tag);
+        let _ = self.trie.save_cache(
+            &self.map.namespace().system_dir(),
+            self.cache_id,
+            tag.raw(),
+        );
     }
 }
 

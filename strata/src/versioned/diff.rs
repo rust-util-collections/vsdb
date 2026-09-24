@@ -11,12 +11,58 @@
 //! O(size of the trees).
 //!
 
-use crate::basic::persistent_btree::{EMPTY_ROOT, Node, NodeId, PersistentBTree};
+use crate::{
+    basic::persistent_btree::{EMPTY_ROOT, Node, NodeId, PersistentBTree},
+    common::ende::{KeyEnDeOrdered, ValueEnDe},
+};
 use std::cmp::Ordering;
 
-/// A single difference between two snapshots.
+/// A single difference between two map states, decoded.
+///
+/// Produced by [`VerMap::diff_commits`](super::map::VerMap::diff_commits)
+/// and [`VerMap::diff_uncommitted`](super::map::VerMap::diff_uncommitted)
+/// in ascending key order.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum DiffEntry {
+pub enum DiffEntry<K, V> {
+    /// Present in the newer state only.
+    Added { key: K, value: V },
+    /// Present in the older state only.
+    Removed { key: K, value: V },
+    /// Present in both with different values.
+    Modified { key: K, old_value: V, new_value: V },
+}
+
+impl<K: KeyEnDeOrdered, V: ValueEnDe> DiffEntry<K, V> {
+    /// Decodes a raw entry; panics on undecodable bytes like every other
+    /// typed read (see the [encode/decode trust model](crate::common::ende)).
+    pub(crate) fn decode(raw: RawDiff) -> Self {
+        let k = |b: Vec<u8>| K::from_bytes(b).unwrap();
+        let v = |b: Vec<u8>| V::decode(&b).unwrap();
+        match raw {
+            RawDiff::Added { key, value } => Self::Added {
+                key: k(key),
+                value: v(value),
+            },
+            RawDiff::Removed { key, value } => Self::Removed {
+                key: k(key),
+                value: v(value),
+            },
+            RawDiff::Modified {
+                key,
+                old_value,
+                new_value,
+            } => Self::Modified {
+                key: k(key),
+                old_value: v(old_value),
+                new_value: v(new_value),
+            },
+        }
+    }
+}
+
+/// A single difference between two snapshots, as stored bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RawDiff {
     /// Key was added (exists in `new` but not `old`).
     Added { key: Vec<u8>, value: Vec<u8> },
     /// Key was removed (exists in `old` but not `new`).
@@ -31,14 +77,14 @@ pub enum DiffEntry {
 
 /// Computes the diff between two B+ tree snapshots.
 ///
-/// Returns a list of [`DiffEntry`] in ascending key order, describing
+/// Returns a list of [`RawDiff`] in ascending key order, describing
 /// every key that was added, removed, or modified between `old_root`
 /// and `new_root`.
-pub fn diff_roots(
+pub(crate) fn diff_roots(
     tree: &PersistentBTree,
     old_root: NodeId,
     new_root: NodeId,
-) -> Vec<DiffEntry> {
+) -> Vec<RawDiff> {
     let mut result = Vec::new();
     diff_walk(tree, old_root, new_root, |e| result.push(e));
     result
@@ -110,7 +156,7 @@ pub(crate) fn diff_walk(
     tree: &PersistentBTree,
     old_root: NodeId,
     new_root: NodeId,
-    mut emit: impl FnMut(DiffEntry),
+    mut emit: impl FnMut(RawDiff),
 ) {
     if old_root == new_root {
         return;
@@ -155,17 +201,17 @@ pub(crate) fn diff_walk(
             }
             Step::Removed | Step::Compare(Ordering::Less) => {
                 let (key, value) = old.pop_entry();
-                emit(DiffEntry::Removed { key, value });
+                emit(RawDiff::Removed { key, value });
             }
             Step::Added | Step::Compare(Ordering::Greater) => {
                 let (key, value) = new.pop_entry();
-                emit(DiffEntry::Added { key, value });
+                emit(RawDiff::Added { key, value });
             }
             Step::Compare(Ordering::Equal) => {
                 let (key, old_value) = old.pop_entry();
                 let (_, new_value) = new.pop_entry();
                 if old_value != new_value {
-                    emit(DiffEntry::Modified {
+                    emit(RawDiff::Modified {
                         key,
                         old_value,
                         new_value,

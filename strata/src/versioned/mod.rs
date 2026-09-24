@@ -42,55 +42,109 @@
 //! module for details.
 //!
 
-pub mod diff;
-pub mod handle;
+pub(crate) mod diff;
 pub mod map;
-pub mod merge;
+pub(crate) mod merge;
 
 mod read;
 mod repair;
+
+pub use diff::DiffEntry;
+pub use read::Snapshot;
 
 #[cfg(test)]
 mod test;
 
 use crate::basic::persistent_btree::NodeId;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 // =========================================================================
 // ID types
 // =========================================================================
 
-/// Identifies a commit in the history DAG.
-pub type CommitId = u64;
+macro_rules! define_id {
+    ($(#[$doc:meta])* $name:ident) => {
+        $(#[$doc])*
+        #[derive(
+            Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+        )]
+        #[serde(transparent)]
+        pub struct $name(u64);
 
-/// Identifies a branch.
-pub type BranchId = u64;
+        impl $name {
+            /// Rebuilds an id from [`raw`](Self::raw) (e.g. one persisted
+            /// by the application). Lookups reject ids that do not exist.
+            pub const fn from_raw(raw: u64) -> Self {
+                Self(raw)
+            }
+
+            /// The numeric value, stable across restarts.
+            pub const fn raw(self) -> u64 {
+                self.0
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                fmt::Display::fmt(&self.0, f)
+            }
+        }
+    };
+}
+
+define_id! {
+    /// Identifies a commit in the history DAG.
+    ///
+    /// A distinct type from [`BranchId`], so the two cannot be swapped;
+    /// persisted exactly like the `u64` it wraps.
+    CommitId
+}
+
+define_id! {
+    /// Identifies a branch.
+    ///
+    /// A distinct type from [`CommitId`], so the two cannot be swapped;
+    /// persisted exactly like the `u64` it wraps.
+    BranchId
+}
 
 /// Sentinel: no commit yet.
-pub const NO_COMMIT: CommitId = 0;
+pub(crate) const NO_COMMIT: CommitId = CommitId(0);
 
 // =========================================================================
 // Commit
 // =========================================================================
 
 /// An immutable snapshot in the version history.
-///
-/// Each commit records the complete state of the map (as a B+ tree root)
-/// plus parent linkage and a reference count for automatic lifecycle
-/// management.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Commit {
-    /// Unique identifier.
-    pub id: CommitId,
+    pub(crate) id: CommitId,
     /// The B+ tree root that holds the **complete** map state at this point.
-    pub root: NodeId,
-    /// Parent commit(s).  Empty for the initial commit, two entries for a merge.
-    pub parents: Vec<CommitId>,
-    /// Wall-clock microseconds since epoch (informational only).
-    pub timestamp_us: u64,
+    pub(crate) root: NodeId,
+    pub(crate) parents: Vec<CommitId>,
+    pub(crate) timestamp_us: u64,
     /// Number of references: branch HEADs pointing at this commit
     /// plus child commits listing it in their `parents` array.
     /// When this reaches zero the commit is automatically deleted.
     #[serde(default)]
-    pub ref_count: u32,
+    pub(crate) ref_count: u32,
+}
+
+impl Commit {
+    /// This commit's id.
+    pub fn id(&self) -> CommitId {
+        self.id
+    }
+
+    /// Parent commit(s): empty for a branch's first commit, two for a merge.
+    pub fn parents(&self) -> &[CommitId] {
+        &self.parents
+    }
+
+    /// Wall-clock microseconds since the Unix epoch at creation
+    /// (informational only; never used for ordering).
+    pub fn timestamp_us(&self) -> u64 {
+        self.timestamp_us
+    }
 }

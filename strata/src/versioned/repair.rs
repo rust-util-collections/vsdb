@@ -84,8 +84,8 @@ impl<K, V> VerMap<K, V> {
             }
             let c = self
                 .commits
-                .get(&id)
-                .ok_or(VsdbError::CommitNotFound { commit_id: id })?;
+                .get(&id.0)
+                .ok_or(VsdbError::CommitNotFound { commit_id: id.0 })?;
             for &parent in &c.parents {
                 if parent != NO_COMMIT {
                     *ref_counts.entry(parent).or_insert(0) += 1;
@@ -117,17 +117,21 @@ impl<K, V> VerMap<K, V> {
         for (&id, &correct) in &ref_counts {
             // The full graph was validated above and structural writers are
             // serialized, so every reachable commit still exists.
-            let mut c = self.commits.get(&id).expect("validated commit disappeared");
+            let mut c = self
+                .commits
+                .get(&id.0)
+                .expect("validated commit disappeared");
             if c.ref_count != correct {
                 c.ref_count = correct;
-                self.commits.insert(&id, &c);
+                self.commits.insert(&id.0, &c);
             }
         }
 
-        let all_ids: Vec<u64> = self.commits.iter().map(|(id, _)| id).collect();
+        let all_ids: Vec<CommitId> =
+            self.commits.iter().map(|(id, _)| CommitId(id)).collect();
         for id in all_ids {
             if !ref_counts.contains_key(&id) {
-                self.commits.remove(&id);
+                self.commits.remove(&id.0);
             }
         }
 

@@ -55,7 +55,7 @@
 
 use std::collections::BTreeMap;
 
-use super::diff::{DiffEntry, diff_walk};
+use super::diff::{RawDiff, diff_walk};
 use crate::basic::persistent_btree::{EMPTY_ROOT, NodeId, PersistentBTree};
 
 /// Performs a three-way merge.
@@ -69,7 +69,7 @@ use crate::basic::persistent_btree::{EMPTY_ROOT, NodeId, PersistentBTree};
 /// Like [`PersistentBTree::bulk_load`], a newly built result root is
 /// returned **unowned**: the caller adopts it with
 /// [`PersistentBTree::acquire_node`].
-pub fn three_way_merge(
+pub(crate) fn three_way_merge(
     tree: &mut PersistentBTree,
     ancestor_root: NodeId,
     source_root: NodeId,
@@ -102,7 +102,7 @@ pub fn three_way_merge(
 /// A key whose bases disagree necessarily differs from at least one base
 /// on the source side, so replaying the union of the per-base source
 /// deltas yields exactly that rule.
-pub fn three_way_merge_many_bases(
+pub(crate) fn three_way_merge_many_bases(
     tree: &mut PersistentBTree,
     ancestor_roots: &[NodeId],
     source_root: NodeId,
@@ -135,15 +135,15 @@ fn source_changes(
     let mut changes = BTreeMap::new();
     for &base in bases {
         diff_walk(tree, base, source, |entry| match entry {
-            DiffEntry::Added { key, value }
-            | DiffEntry::Modified {
+            RawDiff::Added { key, value }
+            | RawDiff::Modified {
                 key,
                 new_value: value,
                 ..
             } => {
                 changes.insert(key, Some(value));
             }
-            DiffEntry::Removed { key, .. } => {
+            RawDiff::Removed { key, .. } => {
                 changes.insert(key, None);
             }
         });

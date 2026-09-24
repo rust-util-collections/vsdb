@@ -3,8 +3,8 @@
 **Files:** `strata/src/versioned/{mod,map,diff,merge,handle,read,repair,test}.rs`.
 
 **Arch:** Git-model branches→commits DAG; commits immutable; source-wins 3-way
-merge; ref-counts + dirty flag for cascade crash recover. `Branch` is read-only;
-`BranchMut` = every `Branch` read + branch-local writes — keep the read sets in sync.
+merge; ref-counts + dirty flag for cascade crash recover. Reads go through a
+`Snapshot` (captured root): `at(commit)` / `snapshot(branch)`; branch-id reads delegate to it.
 
 ## Invariants
 
@@ -36,4 +36,3 @@ merge; ref-counts + dirty flag for cascade crash recover. `Branch` is read-only;
 - [ ] New components co-located with the node pool; no lazy-delete before a sync on co-located maps
 - [ ] No post-create commit mutate except `ref_count`
 - [ ] Merge shapes: same head → no-op; FF only into empty target; target-ancestor → 2-parent commit
-- [ ] BranchMut ≈ Branch reads kept in sync

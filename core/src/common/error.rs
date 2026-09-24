@@ -56,6 +56,46 @@ pub enum VsdbError {
         /// The branch ID that has dirty state.
         branch_id: u64,
     },
+    /// The target commit is not an ancestor of the branch head.
+    #[error("commit {commit_id} is not an ancestor of branch {branch_id}")]
+    NotAncestor {
+        /// The requested target commit.
+        commit_id: u64,
+        /// The branch whose history was searched.
+        branch_id: u64,
+    },
+    /// A branch was merged into itself.
+    #[error("cannot merge branch {branch_id} into itself")]
+    SelfMerge {
+        /// The branch passed as both source and target.
+        branch_id: u64,
+    },
+    /// The operation needs a branch with at least one commit.
+    #[error("branch {branch_id} has no commits")]
+    NoCommits {
+        /// The branch without history.
+        branch_id: u64,
+    },
+    /// A vector's length differs from the index dimension.
+    #[error("dimension mismatch: expected {expected}, got {found}")]
+    DimensionMismatch {
+        /// The configured dimension.
+        expected: usize,
+        /// The length that was passed or stored.
+        found: usize,
+    },
+    /// A configuration value is out of range.
+    #[error("invalid configuration: {detail}")]
+    InvalidConfig {
+        /// Which value is invalid and why.
+        detail: String,
+    },
+    /// Stored data violates a structural invariant.
+    #[error("corrupt data: {detail}")]
+    Corrupt {
+        /// The violated invariant.
+        detail: String,
+    },
     /// The base directory is already frozen — the database has been
     /// initialized or a derived directory has been materialized — so it
     /// can no longer be changed.

@@ -35,14 +35,14 @@ fn composites_in_namespaces() {
     // ---- composite invariant: every internal map lands in one ns ----
     let mut vm: VerMap<u64, u64> = VerMap::new_in(&ns);
     assert_eq!(vm.namespace().id(), ns.id());
-    let mut b = vm.main_mut();
-    b.insert(&1, &10).unwrap();
-    b.commit().unwrap();
-    assert_eq!(vm.main().get(&1).unwrap(), Some(10));
+    let main = vm.main_branch();
+    vm.insert(main, &1, &10).unwrap();
+    vm.commit(main).unwrap();
+    assert_eq!(vm.get(main, &1).unwrap(), Some(10));
     let vmid = vm.save_meta().unwrap();
     assert_eq!(vmid.ns, Some(ns.id()));
     let vm2: VerMap<u64, u64> = VerMap::from_meta(vmid).unwrap();
-    assert_eq!(vm2.main().get(&1).unwrap(), Some(10));
+    assert_eq!(vm2.get(vm2.main_branch(), &1).unwrap(), Some(10));
 
     // Scoped ambient placement covers whole subsystems.
     let sd = ns.scope(|| SlotDex::<u64, u64>::new(16, false));

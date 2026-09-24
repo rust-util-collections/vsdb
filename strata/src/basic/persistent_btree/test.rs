@@ -1256,7 +1256,7 @@ fn write_buffer_bulk_load_across_flush_chunks() {
 mod diff_merge {
     use super::*;
     use crate::versioned::{
-        diff::{DiffEntry, diff_roots},
+        diff::{RawDiff, diff_roots},
         merge::{three_way_merge, three_way_merge_many_bases},
     };
     use std::collections::BTreeMap;
@@ -1314,22 +1314,22 @@ mod diff_merge {
         tree.iter(root).collect()
     }
 
-    fn naive_diff(tree: &PersistentBTree, old: NodeId, new: NodeId) -> Vec<DiffEntry> {
+    fn naive_diff(tree: &PersistentBTree, old: NodeId, new: NodeId) -> Vec<RawDiff> {
         let (a, b) = (contents(tree, old), contents(tree, new));
         let mut keys: Vec<&Vec<u8>> = a.keys().chain(b.keys()).collect();
         keys.sort();
         keys.dedup();
         keys.into_iter()
             .filter_map(|k| match (a.get(k), b.get(k)) {
-                (Some(v), None) => Some(DiffEntry::Removed {
+                (Some(v), None) => Some(RawDiff::Removed {
                     key: k.clone(),
                     value: v.clone(),
                 }),
-                (None, Some(v)) => Some(DiffEntry::Added {
+                (None, Some(v)) => Some(RawDiff::Added {
                     key: k.clone(),
                     value: v.clone(),
                 }),
-                (Some(o), Some(n)) if o != n => Some(DiffEntry::Modified {
+                (Some(o), Some(n)) if o != n => Some(RawDiff::Modified {
                     key: k.clone(),
                     old_value: o.clone(),
                     new_value: n.clone(),

@@ -1,7 +1,6 @@
 use criterion::{Criterion, criterion_group};
 use std::{
     hint::black_box,
-    ops::Bound,
     sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, Instant},
 };
@@ -228,20 +227,14 @@ fn iteration(c: &mut Criterion) {
 
     group.bench_function("range [1000, 2000) (1k keys)", |b| {
         b.iter(|| {
-            let count = m
-                .range(main, Bound::Included(&1000), Bound::Excluded(&2000))
-                .unwrap()
-                .count();
+            let count = m.range(main, 1000..2000).unwrap().count();
             assert_eq!(count, 1000);
         })
     });
 
     group.bench_function("range [0, 100) (100 keys)", |b| {
         b.iter(|| {
-            let count = m
-                .range(main, Bound::Included(&0), Bound::Excluded(&100))
-                .unwrap()
-                .count();
+            let count = m.range(main, 0..100).unwrap().count();
             assert_eq!(count, 100);
         })
     });
@@ -276,21 +269,21 @@ fn historical(c: &mut Criterion) {
         b.iter(|| {
             let c_idx = i % commits.len();
             let key = (c_idx as u64) * 50; // first key of that commit
-            m.get_at_commit(commits[c_idx], &key).unwrap();
+            m.at(commits[c_idx]).unwrap().get(&key);
             i += 1;
         })
     });
 
     group.bench_function("iter_at_commit (oldest, 50 keys)", |b| {
         b.iter(|| {
-            let count = m.iter_at_commit(commits[0]).unwrap().count();
+            let count = m.at(commits[0]).unwrap().iter().count();
             assert_eq!(count, 50);
         })
     });
 
     group.bench_function("iter_at_commit (latest, 1000 keys)", |b| {
         b.iter(|| {
-            let count = m.iter_at_commit(*commits.last().unwrap()).unwrap().count();
+            let count = m.at(*commits.last().unwrap()).unwrap().iter().count();
             assert_eq!(count, 1000);
         })
     });
@@ -376,7 +369,7 @@ fn gc_bench(c: &mut Criterion) {
 
     group.bench_function("gc (50 commits + 20 deleted branches)", |b| {
         b.iter(|| {
-            m.gc();
+            m.gc().unwrap();
         })
     });
 

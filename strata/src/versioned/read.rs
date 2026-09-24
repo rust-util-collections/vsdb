@@ -1,181 +1,161 @@
-//! Read operations for VerMap: get, contains_key, iter, range.
+//! Read operations for VerMap: branch reads and [`Snapshot`] views.
 //!
 //! Pure read path — none of these methods mutate state.
 
-use std::ops::Bound;
+use std::ops::{Bound, RangeBounds};
 
-use crate::common::{
-    ende::{KeyEnDeOrdered, ValueEnDe},
-    error::Result,
+use crate::{
+    basic::persistent_btree::NodeId,
+    common::{
+        ende::{KeyEnDeOrdered, ValueEnDe},
+        error::Result,
+    },
 };
 
 use super::{BranchId, CommitId, map::VerMap};
+
+/// A read-only view of one immutable map state: a historical commit
+/// ([`VerMap::at`]) or a branch's working state as of when the view was
+/// taken ([`VerMap::snapshot`]).
+///
+/// The view holds the state's tree root, so its reads cannot fail on a
+/// missing branch or commit and never see later writes.
+///
+/// # Panics
+///
+/// Reads panic if stored bytes cannot be decoded back into `K`/`V` —
+/// only possible on data corruption or a type mismatch between the
+/// writing and reading code (see the
+/// [encode/decode trust model](crate::common::ende)).
+pub struct Snapshot<'a, K, V> {
+    map: &'a VerMap<K, V>,
+    root: NodeId,
+}
+
+impl<'a, K, V> Snapshot<'a, K, V>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+{
+    /// Reads the value stored under `key`.
+    pub fn get(&self, key: &K) -> Option<V> {
+        self.map
+            .tree
+            .get(self.root, &key.to_bytes())
+            .map(|v| V::decode(&v).unwrap())
+    }
+
+    /// Whether `key` is present.
+    pub fn contains_key(&self, key: &K) -> bool {
+        self.map.tree.contains_key(self.root, &key.to_bytes())
+    }
+
+    /// Iterates all entries in ascending key order.
+    pub fn iter(&self) -> impl Iterator<Item = (K, V)> + use<'a, K, V> {
+        self.map.tree.iter(self.root).map(decode_entry)
+    }
+
+    /// Iterates the entries within `range` in ascending key order.
+    pub fn range<R: RangeBounds<K>>(
+        &self,
+        range: R,
+    ) -> impl Iterator<Item = (K, V)> + use<'a, K, V, R> {
+        let lo = encode_bound(range.start_bound());
+        let hi = encode_bound(range.end_bound());
+        self.map
+            .tree
+            .range(self.root, as_slice(&lo), as_slice(&hi))
+            .map(decode_entry)
+    }
+
+    /// Iterates raw `(key, value)` bytes without decoding.
+    pub(crate) fn raw_iter(
+        &self,
+    ) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + use<'a, K, V> {
+        self.map.tree.iter(self.root)
+    }
+}
 
 impl<K, V> VerMap<K, V>
 where
     K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
+    /// A view of the immutable state recorded by `commit`.
+    ///
+    /// # Errors
+    ///
+    /// [`VsdbError::CommitNotFound`](crate::VsdbError::CommitNotFound) if the
+    /// commit does not exist (it may have been reclaimed).
+    pub fn at(&self, commit: CommitId) -> Result<Snapshot<'_, K, V>> {
+        let root = self.get_commit_inner(commit)?.root;
+        Ok(Snapshot { map: self, root })
+    }
+
+    /// A view of `branch`'s working state (including uncommitted changes)
+    /// as of now.
+    ///
+    /// # Errors
+    ///
+    /// [`VsdbError::BranchNotFound`](crate::VsdbError::BranchNotFound) if the
+    /// branch does not exist.
+    pub fn snapshot(&self, branch: BranchId) -> Result<Snapshot<'_, K, V>> {
+        let root = self.get_branch(branch)?.dirty_root;
+        Ok(Snapshot { map: self, root })
+    }
+
     /// Reads a value from the working state of `branch`.
     ///
     /// # Panics
     ///
-    /// Panics if the stored bytes cannot be decoded back into `V`.
-    /// This can only happen due to data corruption or a type mismatch
-    /// between the writing and reading code — see the
-    /// [encode/decode trust model](crate::common::ende).
+    /// Panics if the stored bytes cannot be decoded back into `V` — see
+    /// [`Snapshot`].
     pub fn get(&self, branch: BranchId, key: &K) -> Result<Option<V>> {
-        let state = self.get_branch(branch)?;
-        let raw = self.tree.get(state.dirty_root, &key.to_bytes());
-        match raw {
-            Some(v) => Ok(Some(V::decode(&v).unwrap())),
-            None => Ok(None),
-        }
-    }
-
-    /// Reads a value at a specific historical commit.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the stored bytes cannot be decoded — see
-    /// [`get`](Self::get) for details.
-    pub fn get_at_commit(&self, commit_id: CommitId, key: &K) -> Result<Option<V>> {
-        let commit = self.get_commit_inner(commit_id)?;
-        let raw = self.tree.get(commit.root, &key.to_bytes());
-        match raw {
-            Some(v) => Ok(Some(V::decode(&v).unwrap())),
-            None => Ok(None),
-        }
+        Ok(self.snapshot(branch)?.get(key))
     }
 
     /// Checks if `key` exists in the working state of `branch`.
     pub fn contains_key(&self, branch: BranchId, key: &K) -> Result<bool> {
-        let state = self.get_branch(branch)?;
-        Ok(self.tree.contains_key(state.dirty_root, &key.to_bytes()))
+        Ok(self.snapshot(branch)?.contains_key(key))
     }
 
     /// Iterates all entries on `branch` in ascending key order.
     ///
     /// # Panics
     ///
-    /// The returned iterator panics if any stored entry cannot be
-    /// decoded — see [`get`](Self::get) for details.
+    /// The returned iterator panics if a stored entry cannot be decoded —
+    /// see [`Snapshot`].
     pub fn iter(&self, branch: BranchId) -> Result<impl Iterator<Item = (K, V)> + '_> {
-        let state = self.get_branch(branch)?;
-        Ok(self
-            .tree
-            .iter(state.dirty_root)
-            .map(|(k, v)| (K::from_slice(&k).unwrap(), V::decode(&v).unwrap())))
+        Ok(self.snapshot(branch)?.iter())
     }
 
-    /// Iterates entries in `[lo, hi)` on `branch` in ascending key order.
+    /// Iterates the entries of `branch` within `range` in ascending key
+    /// order.
     ///
     /// # Panics
     ///
-    /// The returned iterator panics on decode failure — see
-    /// [`get`](Self::get).
-    pub fn range(
+    /// The returned iterator panics on decode failure — see [`Snapshot`].
+    pub fn range<R: RangeBounds<K>>(
         &self,
         branch: BranchId,
-        lo: Bound<&K>,
-        hi: Bound<&K>,
-    ) -> Result<impl Iterator<Item = (K, V)> + '_> {
-        let state = self.get_branch(branch)?;
-        let lo_raw = match lo {
-            Bound::Included(k) => Bound::Included(k.to_bytes()),
-            Bound::Excluded(k) => Bound::Excluded(k.to_bytes()),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-        let hi_raw = match hi {
-            Bound::Included(k) => Bound::Included(k.to_bytes()),
-            Bound::Excluded(k) => Bound::Excluded(k.to_bytes()),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-        Ok(self
-            .tree
-            .range(
-                state.dirty_root,
-                lo_raw.as_ref().map(|v| v.as_slice()),
-                hi_raw.as_ref().map(|v| v.as_slice()),
-            )
-            .map(|(k, v)| (K::from_slice(&k).unwrap(), V::decode(&v).unwrap())))
+        range: R,
+    ) -> Result<impl Iterator<Item = (K, V)> + use<'_, K, V, R>> {
+        Ok(self.snapshot(branch)?.range(range))
     }
+}
 
-    /// Iterates all entries at a specific historical commit.
-    ///
-    /// # Panics
-    ///
-    /// The returned iterator panics on decode failure — see
-    /// [`get`](Self::get).
-    pub fn iter_at_commit(
-        &self,
-        commit_id: CommitId,
-    ) -> Result<impl Iterator<Item = (K, V)> + '_> {
-        let commit = self.get_commit_inner(commit_id)?;
-        Ok(self
-            .tree
-            .iter(commit.root)
-            .map(|(k, v)| (K::from_slice(&k).unwrap(), V::decode(&v).unwrap())))
-    }
+fn decode_entry<K: KeyEnDeOrdered, V: ValueEnDe>((k, v): (Vec<u8>, Vec<u8>)) -> (K, V) {
+    (K::from_slice(&k).unwrap(), V::decode(&v).unwrap())
+}
 
-    /// Iterates entries in `[lo, hi)` at a specific historical commit
-    /// in ascending key order.
-    ///
-    /// # Panics
-    ///
-    /// The returned iterator panics on decode failure — see
-    /// [`get`](Self::get).
-    pub fn range_at_commit(
-        &self,
-        commit_id: CommitId,
-        lo: Bound<&K>,
-        hi: Bound<&K>,
-    ) -> Result<impl Iterator<Item = (K, V)> + '_> {
-        let commit = self.get_commit_inner(commit_id)?;
-        let lo_raw = match lo {
-            Bound::Included(k) => Bound::Included(k.to_bytes()),
-            Bound::Excluded(k) => Bound::Excluded(k.to_bytes()),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-        let hi_raw = match hi {
-            Bound::Included(k) => Bound::Included(k.to_bytes()),
-            Bound::Excluded(k) => Bound::Excluded(k.to_bytes()),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-        Ok(self
-            .tree
-            .range(
-                commit.root,
-                lo_raw.as_ref().map(|v| v.as_slice()),
-                hi_raw.as_ref().map(|v| v.as_slice()),
-            )
-            .map(|(k, v)| (K::from_slice(&k).unwrap(), V::decode(&v).unwrap())))
+fn encode_bound<K: KeyEnDeOrdered>(b: Bound<&K>) -> Bound<Vec<u8>> {
+    match b {
+        Bound::Included(k) => Bound::Included(k.to_bytes()),
+        Bound::Excluded(k) => Bound::Excluded(k.to_bytes()),
+        Bound::Unbounded => Bound::Unbounded,
     }
+}
 
-    /// Iterates all raw (untyped) key-value pairs on a branch.
-    ///
-    /// Returns `(Vec<u8>, Vec<u8>)` without decoding, useful for
-    /// feeding into external consumers (e.g. MPT hash computation).
-    pub fn raw_iter(
-        &self,
-        branch: BranchId,
-    ) -> Result<impl Iterator<Item = (Vec<u8>, Vec<u8>)> + '_> {
-        let state = self.get_branch(branch)?;
-        Ok(self.tree.iter(state.dirty_root))
-    }
-
-    /// Iterates all raw (untyped) key-value pairs at a historical commit.
-    pub fn raw_iter_at_commit(
-        &self,
-        commit_id: CommitId,
-    ) -> Result<impl Iterator<Item = (Vec<u8>, Vec<u8>)> + '_> {
-        let commit = self.get_commit_inner(commit_id)?;
-        Ok(self.tree.iter(commit.root))
-    }
-
-    /// Checks if `key` exists at a specific historical commit.
-    pub fn contains_key_at_commit(&self, commit_id: CommitId, key: &K) -> Result<bool> {
-        let commit = self.get_commit_inner(commit_id)?;
-        Ok(self.tree.contains_key(commit.root, &key.to_bytes()))
-    }
+fn as_slice(b: &Bound<Vec<u8>>) -> Bound<&[u8]> {
+    b.as_ref().map(Vec::as_slice)
 }

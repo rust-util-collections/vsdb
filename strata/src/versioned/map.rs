@@ -5,8 +5,7 @@
 
 use super::{
     BranchId, Commit, CommitId, NO_COMMIT,
-    diff::{DiffEntry, diff_roots},
-    handle::{Branch, BranchMut},
+    diff::{DiffEntry, RawDiff, diff_roots},
 };
 use crate::{
     Mapx, MapxOrd, Orphan,
@@ -68,7 +67,7 @@ pub(crate) struct BranchState {
 ///    deleted the key.
 /// 6. **Rollback** — `rollback_to` rewinds a branch to an earlier commit;
 ///    `discard` throws away uncommitted changes.
-/// 7. **History** — `log`, `get_at_commit`, `iter_at_commit` let you
+/// 7. **History** — `log`, and [`at`](Self::at) snapshots of any commit, let you
 ///    inspect any historical snapshot.
 /// 8. **GC** — garbage collection is automatic: commits are deleted via
 ///    reference counting and dead B+ tree nodes are reclaimed by the
@@ -102,7 +101,6 @@ pub(crate) struct BranchState {
 ///
 /// ```
 /// use vsdb::versioned::map::VerMap;
-/// use vsdb::versioned::NO_COMMIT;
 /// use vsdb::{VsdbOptions, vsdb_configure, vsdb_get_base_dir};
 /// use std::fs;
 ///
@@ -339,6 +337,42 @@ impl<K, V> VerMap<K, V> {
         self.gc_dirty.sync_wal();
     }
 
+    pub(crate) fn get_branch(&self, id: BranchId) -> Result<BranchState> {
+        self.branches
+            .get(&id.0)
+            .ok_or(VsdbError::BranchNotFound { branch_id: id.0 })
+    }
+
+    pub(crate) fn get_commit_inner(&self, id: CommitId) -> Result<Commit> {
+        self.commits
+            .get(&id.0)
+            .ok_or(VsdbError::CommitNotFound { commit_id: id.0 })
+    }
+
+    /// Raw-bytes diff between two commits (see
+    /// [`diff_commits`](VerMap::diff_commits)).
+    pub(crate) fn raw_diff_commits(
+        &self,
+        from: CommitId,
+        to: CommitId,
+    ) -> Result<Vec<RawDiff>> {
+        let from_commit = self.get_commit_inner(from)?;
+        let to_commit = self.get_commit_inner(to)?;
+        Ok(diff_roots(&self.tree, from_commit.root, to_commit.root))
+    }
+
+    /// Raw-bytes diff of `branch`'s working state against its head (see
+    /// [`diff_uncommitted`](VerMap::diff_uncommitted)).
+    pub(crate) fn raw_diff_uncommitted(&self, branch: BranchId) -> Result<Vec<RawDiff>> {
+        let state = self.get_branch(branch)?;
+        let head_root = if state.head == NO_COMMIT {
+            EMPTY_ROOT
+        } else {
+            self.get_commit_inner(state.head)?.root
+        };
+        Ok(diff_roots(&self.tree, head_root, state.dirty_root))
+    }
+
     pub(crate) fn begin_ref_update(&mut self) {
         *self.gc_dirty.get_mut() = true;
         self.fence(|m| m.gc_dirty.sync_wal());
@@ -441,20 +475,20 @@ where
         let mut branches: MapxOrd<u64, BranchState> = Colocate::new_colocated(anchor);
         let mut branch_names: Mapx<String, u64> = Colocate::new_colocated(anchor);
 
-        let initial_id: BranchId = 1;
+        let initial_id = BranchId(1);
 
         let main = BranchState {
             name: name.into(),
             head: NO_COMMIT,
             dirty_root: EMPTY_ROOT,
         };
-        branches.insert(&initial_id, &main);
-        branch_names.insert(&name.to_string(), &initial_id);
+        branches.insert(&initial_id.0, &main);
+        branch_names.insert(&name.to_string(), &initial_id.0);
 
         let commits = Colocate::new_colocated(anchor);
-        let next_commit = Orphan::new_colocated(anchor, 1); // 0 = NO_COMMIT
-        let next_branch = Orphan::new_colocated(anchor, initial_id + 1);
-        let main_branch = Orphan::new_colocated(anchor, initial_id);
+        let next_commit = Orphan::new_colocated(anchor, NO_COMMIT.0 + 1);
+        let next_branch = Orphan::new_colocated(anchor, initial_id.0 + 1);
+        let main_branch = Orphan::new_colocated(anchor, initial_id.0);
         let gc_dirty = Orphan::new_colocated(anchor, false);
         let map = Self {
             tree,
@@ -519,18 +553,6 @@ where
     // Internal helpers
     // =================================================================
 
-    pub(crate) fn get_branch(&self, id: BranchId) -> Result<BranchState> {
-        self.branches
-            .get(&id)
-            .ok_or(VsdbError::BranchNotFound { branch_id: id })
-    }
-
-    pub(crate) fn get_commit_inner(&self, id: CommitId) -> Result<Commit> {
-        self.commits
-            .get(&id)
-            .ok_or(VsdbError::CommitNotFound { commit_id: id })
-    }
-
     fn branch_name_exists(&self, name: &str) -> bool {
         self.branches.iter().any(|(_, state)| state.name == name)
     }
@@ -541,7 +563,7 @@ where
 
     /// Returns the [`BranchId`] of the current main branch.
     pub fn main_branch(&self) -> BranchId {
-        self.main_branch.get_value()
+        BranchId(self.main_branch.get_value())
     }
 
     /// Designates `branch` as the new main branch.
@@ -551,7 +573,7 @@ where
     pub fn set_main_branch(&mut self, branch: BranchId) -> Result<()> {
         self.ensure_writable("main branch update")?;
         self.get_branch(branch)?;
-        *self.main_branch.get_mut() = branch;
+        *self.main_branch.get_mut() = branch.0;
         // A later delete of the old main must not leave the durable main
         // pointer referring to that deleted branch.
         self.fence(|m| m.main_branch.sync_wal());
@@ -585,8 +607,8 @@ where
         // rollback). increment_ref does not touch gc_dirty itself.
         self.begin_ref_update();
 
-        let id = self.next_branch.get_value();
-        *self.next_branch.get_mut() = id + 1;
+        let id = BranchId(self.next_branch.get_value());
+        *self.next_branch.get_mut() = id.0 + 1;
         // Persist the allocator before a row can make this ID observable.
         self.fence(|m| m.next_branch.sync_wal());
 
@@ -595,8 +617,8 @@ where
             head: src.head,
             dirty_root: src.dirty_root,
         };
-        self.branches.insert(&id, &state);
-        self.branch_names.insert(&name.to_string(), &id);
+        self.branches.insert(&id.0, &state);
+        self.branch_names.insert(&name.to_string(), &id.0);
 
         // New branch HEAD adds a reference to the shared commit.
         self.increment_ref(src.head);
@@ -624,7 +646,7 @@ where
     /// cascade; [`gc`](Self::gc) is only needed to recover from a crash.
     pub fn delete_branch(&mut self, branch: BranchId) -> Result<()> {
         self.ensure_writable("branch deletion")?;
-        if branch == self.main_branch.get_value() {
+        if branch == self.main_branch() {
             return Err(VsdbError::CannotDeleteMainBranch);
         }
         let state = self.get_branch(branch)?;
@@ -637,7 +659,7 @@ where
         self.begin_ref_update();
 
         self.branch_names.remove(&state.name);
-        self.branches.remove(&branch);
+        self.branches.remove(&branch.0);
         // Old roots cannot be retired while the durable branch still owns them.
         self.fence(|m| {
             m.branches.sync_wal();
@@ -657,7 +679,10 @@ where
 
     /// Lists all branches as `(BranchId, name)`.
     pub fn list_branches(&self) -> Vec<(BranchId, String)> {
-        self.branches.iter().map(|(id, s)| (id, s.name)).collect()
+        self.branches
+            .iter()
+            .map(|(id, s)| (BranchId(id), s.name))
+            .collect()
     }
 
     /// Looks up a branch by name, returning its ID if it exists.
@@ -665,15 +690,15 @@ where
         if self.namespace().is_read_only() {
             self.branches
                 .iter()
-                .find_map(|(id, state)| (state.name == name).then_some(id))
+                .find_map(|(id, state)| (state.name == name).then_some(BranchId(id)))
         } else {
-            self.branch_names.get(&name.to_string())
+            self.branch_names.get(&name.to_string()).map(BranchId)
         }
     }
 
     /// Returns the name of a branch given its ID.
     pub fn branch_name(&self, branch: BranchId) -> Option<String> {
-        self.branches.get(&branch).map(|s| s.name)
+        self.branches.get(&branch.0).map(|s| s.name)
     }
 
     /// Returns `true` if the branch has uncommitted changes (dirty state
@@ -707,7 +732,7 @@ where
         // registration to the next sync instead).  Crash before the
         // insert below only leaks the new nodes, which the next recovery
         // sweep (`rebuild_tree_ref_counts`) registers for deletion.
-        self.branches.insert(&branch, &state);
+        self.branches.insert(&branch.0, &state);
         self.fence(|m| m.branches.sync_wal());
         self.tree.release_node(old_root);
         self.settle_if_backlogged();
@@ -727,7 +752,7 @@ where
         self.tree.acquire_node(state.dirty_root);
         // Persist before release — see `insert` for the crash-ordering
         // rationale.
-        self.branches.insert(&branch, &state);
+        self.branches.insert(&branch.0, &state);
         self.fence(|m| m.branches.sync_wal());
         self.tree.release_node(old_root);
         self.settle_if_backlogged();
@@ -749,8 +774,8 @@ where
         // commits or imbalanced ref-counts.
         self.begin_ref_update();
 
-        let id = self.next_commit.get_value();
-        *self.next_commit.get_mut() = id + 1;
+        let id = CommitId(self.next_commit.get_value());
+        *self.next_commit.get_mut() = id.0 + 1;
         self.fence(|m| m.next_commit.sync_wal());
 
         let parents = if state.head == NO_COMMIT {
@@ -776,7 +801,7 @@ where
             timestamp_us: now_us(),
             ref_count: 1,
         };
-        self.commits.insert(&id, &commit);
+        self.commits.insert(&id.0, &commit);
         // A durable branch HEAD must never name a missing commit record.
         self.fence(|m| m.commits.sync_wal());
 
@@ -785,7 +810,7 @@ where
 
         // Update branch head; dirty_root stays the same (it IS the snapshot).
         let new_state = BranchState { head: id, ..state };
-        self.branches.insert(&branch, &new_state);
+        self.branches.insert(&branch.0, &new_state);
         self.fence(|m| m.branches.sync_wal());
 
         self.end_ref_update();
@@ -812,7 +837,7 @@ where
         self.tree.acquire_node(root);
         // Persist before release — see `insert` for the crash-ordering
         // rationale.
-        self.branches.insert(&branch, &new_state);
+        self.branches.insert(&branch.0, &new_state);
         self.fence(|m| m.branches.sync_wal());
         self.tree.release_node(old_dirty);
         self.settle_if_backlogged();
@@ -837,8 +862,9 @@ where
         // an arbitrary commit would silently attach it to another
         // branch's history.
         if state.head == NO_COMMIT {
-            return Err(VsdbError::Other {
-                detail: "target commit is not an ancestor of this branch's head".into(),
+            return Err(VsdbError::NotAncestor {
+                commit_id: target.0,
+                branch_id: branch.0,
             });
         }
 
@@ -850,7 +876,9 @@ where
         // target-vs-head branching below, not just the `target ==
         // state.head` arm — an ancestor target must not bypass it.
         if self.has_uncommitted(branch)? {
-            return Err(VsdbError::UncommittedChanges { branch_id: branch });
+            return Err(VsdbError::UncommittedChanges {
+                branch_id: branch.0,
+            });
         }
 
         if target == state.head {
@@ -875,14 +903,14 @@ where
                     found = true;
                     break;
                 }
-                if let Some(c) = self.commits.get(&cur) {
+                if let Some(c) = self.commits.get(&cur.0) {
                     queue.extend_from_slice(&c.parents);
                 }
             }
             if !found {
-                return Err(VsdbError::Other {
-                    detail: "target commit is not an ancestor of this branch's head"
-                        .into(),
+                return Err(VsdbError::NotAncestor {
+                    commit_id: target.0,
+                    branch_id: branch.0,
                 });
             }
         }
@@ -900,7 +928,7 @@ where
             head: target,
             dirty_root: commit.root,
         };
-        self.branches.insert(&branch, &new_state);
+        self.branches.insert(&branch.0, &new_state);
         self.fence(|m| m.branches.sync_wal());
 
         // Tree root: dirty_root changes to commit.root.
@@ -958,25 +986,29 @@ where
     pub fn merge(&mut self, source: BranchId, target: BranchId) -> Result<CommitId> {
         self.ensure_writable("branch merge")?;
         if source == target {
-            return Err(VsdbError::Other {
-                detail: "cannot merge a branch into itself".into(),
+            return Err(VsdbError::SelfMerge {
+                branch_id: source.0,
             });
         }
 
         // Reject if either branch has uncommitted changes.
         if self.has_uncommitted(source)? {
-            return Err(VsdbError::UncommittedChanges { branch_id: source });
+            return Err(VsdbError::UncommittedChanges {
+                branch_id: source.0,
+            });
         }
         if self.has_uncommitted(target)? {
-            return Err(VsdbError::UncommittedChanges { branch_id: target });
+            return Err(VsdbError::UncommittedChanges {
+                branch_id: target.0,
+            });
         }
 
         let src = self.get_branch(source)?;
         let tgt = self.get_branch(target)?;
 
         if src.head == NO_COMMIT {
-            return Err(VsdbError::Other {
-                detail: format!("source branch {source} has no commits"),
+            return Err(VsdbError::NoCommits {
+                branch_id: source.0,
             });
         }
 
@@ -1011,7 +1043,7 @@ where
                 dirty_root: src_commit.root,
                 ..tgt
             };
-            self.branches.insert(&target, &new_state);
+            self.branches.insert(&target.0, &new_state);
             self.fence(|m| m.branches.sync_wal());
             // Target branch HEAD now points to src.head → +1 ref.
             self.increment_ref(src.head);
@@ -1049,8 +1081,8 @@ where
         self.fence(|m| m.tree.nodes.sync_wal());
 
         // Create merge commit.
-        let id = self.next_commit.get_value();
-        *self.next_commit.get_mut() = id + 1;
+        let id = CommitId(self.next_commit.get_value());
+        *self.next_commit.get_mut() = id.0 + 1;
         self.fence(|m| m.next_commit.sync_wal());
 
         // ref_count = 1: the target branch HEAD.
@@ -1063,7 +1095,7 @@ where
             timestamp_us: now_us(),
             ref_count: 1,
         };
-        self.commits.insert(&id, &commit);
+        self.commits.insert(&id.0, &commit);
         self.increment_ref(src.head);
         self.fence(|m| m.commits.sync_wal());
 
@@ -1072,7 +1104,7 @@ where
             dirty_root: merged_root,
             ..tgt
         };
-        self.branches.insert(&target, &new_state);
+        self.branches.insert(&target.0, &new_state);
         self.fence(|m| m.branches.sync_wal());
 
         // Tree root: commit.root + dirty_root both reference merged_root.
@@ -1109,7 +1141,7 @@ where
         // Nonexistent IDs are not DAG nodes; without this guard,
         // `find_merge_bases(x, x)` would report a nonexistent `x`
         // as its own merge base.
-        if self.commits.get(&a).is_none() || self.commits.get(&b).is_none() {
+        if self.commits.get(&a.0).is_none() || self.commits.get(&b.0).is_none() {
             return vec![];
         }
 
@@ -1148,7 +1180,7 @@ where
                 // Everything below a common commit is dominated.
                 f |= STALE;
             }
-            if let Some(c) = self.commits.get(&id) {
+            if let Some(c) = self.commits.get(&id.0) {
                 for &parent in &c.parents {
                     mark(&mut flags, &mut heap, parent, f);
                 }
@@ -1195,15 +1227,15 @@ where
         // Both endpoints must be real commits; otherwise
         // `commit_distance(x, x)` would report distance 0 for a
         // nonexistent `x`.
-        self.commits.get(&from)?;
-        self.commits.get(&ancestor)?;
+        self.commits.get(&from.0)?;
+        self.commits.get(&ancestor.0)?;
         let mut cur = from;
         let mut count = 0u64;
         while cur != ancestor {
             if cur == NO_COMMIT {
                 return None;
             }
-            let c = self.commits.get(&cur)?;
+            let c = self.commits.get(&cur.0)?;
             cur = c.parents.first().copied().unwrap_or(NO_COMMIT);
             count += 1;
         }
@@ -1212,7 +1244,7 @@ where
 
     /// Retrieves a commit by its ID.
     pub fn get_commit(&self, commit_id: CommitId) -> Option<Commit> {
-        self.commits.get(&commit_id)
+        self.commits.get(&commit_id.0)
     }
 
     /// Returns the commit at the head of `branch`.
@@ -1221,7 +1253,7 @@ where
         if state.head == NO_COMMIT {
             Ok(None)
         } else {
-            Ok(self.commits.get(&state.head))
+            Ok(self.commits.get(&state.head.0))
         }
     }
 
@@ -1234,7 +1266,7 @@ where
         let mut result = Vec::new();
         let mut cur = state.head;
         while cur != NO_COMMIT {
-            if let Some(c) = self.commits.get(&cur) {
+            if let Some(c) = self.commits.get(&cur.0) {
                 cur = c.parents.first().copied().unwrap_or(NO_COMMIT);
                 result.push(c);
             } else {
@@ -1250,26 +1282,37 @@ where
 
     /// Computes the diff between two commits.
     ///
-    /// Returns a list of [`DiffEntry`] in
-    /// ascending key order, describing every key that was added, removed,
-    /// or modified between `from` and `to`.
-    pub fn diff_commits(&self, from: CommitId, to: CommitId) -> Result<Vec<DiffEntry>> {
-        let from_commit = self.get_commit_inner(from)?;
-        let to_commit = self.get_commit_inner(to)?;
-        Ok(diff_roots(&self.tree, from_commit.root, to_commit.root))
+    /// Returns every key that was added, removed, or modified between
+    /// `from` and `to`, in ascending key order. Subtrees the two commits
+    /// share are skipped, so the cost follows the size of the change.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a changed entry cannot be decoded — see [`Snapshot`](super::Snapshot).
+    pub fn diff_commits(
+        &self,
+        from: CommitId,
+        to: CommitId,
+    ) -> Result<Vec<DiffEntry<K, V>>> {
+        Ok(self
+            .raw_diff_commits(from, to)?
+            .into_iter()
+            .map(DiffEntry::decode)
+            .collect())
     }
 
-    /// Computes the diff of uncommitted (working) changes on `branch`.
+    /// Computes the diff of uncommitted (working) changes on `branch`,
+    /// relative to its head commit — analogous to `git diff`.
     ///
-    /// Analogous to `git diff` (unstaged changes relative to HEAD).
-    pub fn diff_uncommitted(&self, branch: BranchId) -> Result<Vec<DiffEntry>> {
-        let state = self.get_branch(branch)?;
-        let head_root = if state.head == NO_COMMIT {
-            EMPTY_ROOT
-        } else {
-            self.get_commit_inner(state.head)?.root
-        };
-        Ok(diff_roots(&self.tree, head_root, state.dirty_root))
+    /// # Panics
+    ///
+    /// Panics if a changed entry cannot be decoded — see [`Snapshot`](super::Snapshot).
+    pub fn diff_uncommitted(&self, branch: BranchId) -> Result<Vec<DiffEntry<K, V>>> {
+        Ok(self
+            .raw_diff_uncommitted(branch)?
+            .into_iter()
+            .map(DiffEntry::decode)
+            .collect())
     }
 
     // =================================================================
@@ -1304,18 +1347,22 @@ where
     /// This is a no-op in read-only mode: recovery metadata cannot be
     /// rewritten and deferred deletions cannot be registered there.
     ///
+    /// # Errors
+    ///
+    /// [`VsdbError::CommitNotFound`] — before removing anything — if a
+    /// reachable HEAD or parent record is missing (the graph is damaged;
+    /// deleting "orphans" would destroy older history).
+    ///
     /// # Panics
     ///
-    /// Panics before removing any commits if a reachable HEAD or parent
-    /// record is missing. Storage synchronization failures also panic.
-    pub fn gc(&mut self) {
+    /// Storage synchronization failures panic.
+    pub fn gc(&mut self) -> Result<()> {
         if self.namespace().is_read_only() {
-            return;
+            return Ok(());
         }
         // Validate even a clean graph before any deletion/sweep. A missing
         // HEAD/parent must not turn older durable history into "orphans".
-        self.validate_commit_graph()
-            .expect("VerMap: incomplete commit graph during gc");
+        self.validate_commit_graph()?;
 
         // 1. Crash recovery: rebuild ref counts if the dirty flag is
         //    set, or if any commit has ref_count == 0 (migration from
@@ -1323,8 +1370,7 @@ where
         if self.gc_dirty.get_value()
             || self.commits.iter().any(|(_, c)| c.ref_count == 0)
         {
-            self.rebuild_ref_counts()
-                .expect("VerMap: incomplete commit graph during gc");
+            self.rebuild_ref_counts()?;
         }
         self.sync_storage();
         // Everything released so far is durable now; the sweep below
@@ -1342,43 +1388,7 @@ where
 
         // 3. GC the B+ tree node pool.
         self.tree.gc(&live_roots);
-    }
-
-    // =================================================================
-    // Branch handles
-    // =================================================================
-
-    /// Returns a read-only handle bound to the given branch.
-    ///
-    /// All operations on the returned [`Branch`]
-    /// automatically target this branch, removing the need to pass a
-    /// `BranchId` on every call.
-    pub fn branch(&self, id: BranchId) -> Result<Branch<'_, K, V>> {
-        self.get_branch(id)?;
-        Ok(Branch { map: self, id })
-    }
-
-    /// Returns a mutable handle bound to the given branch.
-    ///
-    /// All operations on the returned [`BranchMut`]
-    /// automatically target this branch.
-    pub fn branch_mut(&mut self, id: BranchId) -> Result<BranchMut<'_, K, V>> {
-        self.get_branch(id)?;
-        Ok(BranchMut { map: self, id })
-    }
-
-    /// Shortcut for `self.branch(self.main_branch())`.
-    pub fn main(&self) -> Branch<'_, K, V> {
-        Branch {
-            map: self,
-            id: self.main_branch(),
-        }
-    }
-
-    /// Shortcut for `self.branch_mut(self.main_branch())`.
-    pub fn main_mut(&mut self) -> BranchMut<'_, K, V> {
-        let id = self.main_branch();
-        BranchMut { map: self, id }
+        Ok(())
     }
 
     // =================================================================
@@ -1390,9 +1400,9 @@ where
         if commit_id == NO_COMMIT {
             return;
         }
-        if let Some(mut c) = self.commits.get(&commit_id) {
+        if let Some(mut c) = self.commits.get(&commit_id.0) {
             c.ref_count += 1;
-            self.commits.insert(&commit_id, &c);
+            self.commits.insert(&commit_id.0, &c);
         }
     }
 
@@ -1415,7 +1425,7 @@ where
             if id == NO_COMMIT {
                 continue;
             }
-            let Some(mut c) = self.commits.get(&id) else {
+            let Some(mut c) = self.commits.get(&id.0) else {
                 continue; // already deleted (crash recovery case)
             };
             c.ref_count = c.ref_count.saturating_sub(1);
@@ -1424,10 +1434,10 @@ where
                 // Retire roots only after the whole commit cascade is durable.
                 // One fence per cascade avoids one fsync per deleted commit.
                 dead_roots.push(c.root);
-                self.commits.remove(&id);
+                self.commits.remove(&id.0);
                 work.extend(parents);
             } else {
-                self.commits.insert(&id, &c);
+                self.commits.insert(&id.0, &c);
             }
         }
 
