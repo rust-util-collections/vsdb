@@ -54,7 +54,10 @@ pub use read::Snapshot;
 #[cfg(test)]
 mod test;
 
-use crate::basic::persistent_btree::NodeId;
+use crate::{
+    basic::persistent_btree::NodeId,
+    common::{RawBytes, ende::KeyEnDeOrdered, error::Result},
+};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -89,6 +92,16 @@ macro_rules! define_id {
                 fmt::Display::fmt(&self.0, f)
             }
         }
+
+        impl KeyEnDeOrdered for $name {
+            fn to_bytes(&self) -> RawBytes {
+                self.0.to_bytes()
+            }
+
+            fn from_slice(bytes: &[u8]) -> Result<Self> {
+                u64::from_slice(bytes).map(Self)
+            }
+        }
     };
 }
 
@@ -96,7 +109,8 @@ define_id! {
     /// Identifies a commit in the history DAG.
     ///
     /// A distinct type from [`BranchId`], so the two cannot be swapped;
-    /// persisted exactly like the `u64` it wraps.
+    /// persisted exactly like the `u64` it wraps. As an ordered collection
+    /// key, it uses the same big-endian encoding as `u64`.
     CommitId
 }
 
@@ -104,7 +118,8 @@ define_id! {
     /// Identifies a branch.
     ///
     /// A distinct type from [`CommitId`], so the two cannot be swapped;
-    /// persisted exactly like the `u64` it wraps.
+    /// persisted exactly like the `u64` it wraps. As an ordered collection
+    /// key, it uses the same big-endian encoding as `u64`.
     BranchId
 }
 

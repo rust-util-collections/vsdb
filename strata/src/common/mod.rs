@@ -440,6 +440,55 @@ mod type_tag_test {
     }
 
     #[test]
+    fn legacy_ordered_handles_restore_versioning_id_aliases() {
+        use crate::{
+            MapxOrd, MapxOrdRawKey,
+            common::ende::KeyEnDeOrdered,
+            versioned::{BranchId, CommitId},
+        };
+
+        fn check<Id: KeyEnDeOrdered, Other>(id: fn(u64) -> Id) {
+            let mut raw = MapxRaw::new();
+            // Encode v16's u64 keys directly, independent of the new ID codec.
+            for (key, value) in [(256u64, 3u8), (1, 1), (255, 2)] {
+                raw.insert(key.to_be_bytes(), [value]);
+            }
+            let inner = v16_meta::<MapxOrdRawKey<u8>>(&raw);
+            let outer = v16_meta::<MapxOrd<u64, u8>>(&inner);
+            let bytes = postcard::to_allocvec(&outer).unwrap();
+            let mut restored: MapxOrd<Id, u8> = postcard::from_bytes(&bytes).unwrap();
+
+            assert_eq!(restored.get(&id(256)), Some(3));
+            assert_eq!(
+                restored.iter().collect::<Vec<_>>(),
+                vec![(id(1), 1), (id(255), 2), (id(256), 3)]
+            );
+            assert_eq!(
+                restored.range(id(255)..=id(256)).collect::<Vec<_>>(),
+                vec![(id(255), 2), (id(256), 3)]
+            );
+
+            restored.insert(&id(257), &4);
+            restored.insert(&id(255), &5);
+            assert_eq!(raw.get(257u64.to_be_bytes()), Some(vec![4]));
+            assert_eq!(raw.get(255u64.to_be_bytes()), Some(vec![5]));
+            let upgraded = postcard::to_allocvec(&restored).unwrap();
+            let meta: Vec<u8> = postcard::from_bytes(&upgraded).unwrap();
+            assert_eq!(&meta[..8], TYPED_HANDLE_META_MAGIC);
+            let reopened: MapxOrd<Id, u8> = postcard::from_bytes(&upgraded).unwrap();
+            assert_eq!(
+                reopened.iter().collect::<Vec<_>>(),
+                vec![(id(1), 1), (id(255), 5), (id(256), 3), (id(257), 4)]
+            );
+            assert!(postcard::from_bytes::<MapxOrd<Other, u8>>(&upgraded).is_err());
+            assert!(postcard::from_bytes::<MapxOrd<u64, u8>>(&upgraded).is_err());
+        }
+
+        check::<BranchId, CommitId>(BranchId::from_raw);
+        check::<CommitId, BranchId>(CommitId::from_raw);
+    }
+
+    #[test]
     fn legacy_id_aliases_match_only_complete_library_type_paths() {
         use crate::versioned::CommitId;
 

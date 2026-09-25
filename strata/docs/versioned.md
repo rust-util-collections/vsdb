@@ -87,6 +87,8 @@ block-beta
 ## Core Data Structures
 
 `BranchId` and `CommitId` are distinct serde-transparent `u64` newtypes.
+Both implement `KeyEnDeOrdered`, so they can key `MapxOrd`, `VerMap`, and
+`SlotDex` with the same big-endian key encoding as their former `u64` aliases.
 Persisted component table keys remain `u64` for v16 handle compatibility.
 
 ### Commit

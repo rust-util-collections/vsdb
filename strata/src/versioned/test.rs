@@ -2,6 +2,49 @@ use super::{BranchId, CommitId, DiffEntry, NO_COMMIT, map::VerMap};
 use crate::common::error::VsdbError;
 use std::ops::Bound;
 
+#[test]
+fn versioning_ids_are_ordered_keys() {
+    use crate::KeyEnDeOrdered;
+
+    fn check<K: KeyEnDeOrdered>(id: fn(u64) -> K) {
+        let mut map = VerMap::<K, u64>::new();
+        let main = map.main_branch();
+        for raw in [u64::MAX, 256, 1, 255, 0] {
+            map.insert(main, &id(raw), &raw).unwrap();
+        }
+        let commit = map.commit(main).unwrap();
+        let meta = map.save_meta().unwrap();
+        drop(map);
+
+        let mut restored = VerMap::<K, u64>::from_meta(meta).unwrap();
+        let snapshot = restored.at(commit).unwrap();
+        let ordered = [0, 1, 255, 256, u64::MAX];
+        assert_eq!(
+            snapshot.iter().collect::<Vec<_>>(),
+            ordered.map(|raw| (id(raw), raw))
+        );
+        assert_eq!(
+            snapshot.range(id(255)..=id(256)).collect::<Vec<_>>(),
+            vec![(id(255), 255), (id(256), 256)]
+        );
+        assert_eq!(
+            snapshot.raw_iter().map(|(key, _)| key).collect::<Vec<_>>(),
+            ordered.map(|raw| raw.to_be_bytes().to_vec())
+        );
+        drop(snapshot);
+        restored.remove(main, &id(255)).unwrap();
+        assert_eq!(restored.get(main, &id(255)).unwrap(), None);
+        assert_eq!(restored.at(commit).unwrap().get(&id(255)), Some(255));
+
+        for invalid in [&[][..], &[0; 7][..], &[0; 9][..]] {
+            assert!(K::from_slice(invalid).is_err());
+        }
+    }
+
+    check(BranchId::from_raw);
+    check(CommitId::from_raw);
+}
+
 // =====================================================================
 // Basic CRUD
 // =====================================================================
