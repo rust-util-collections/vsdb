@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v17.0.7]
+
+Existing APIs and stored data remain compatible; no data migration is required.
+
+### Added
+
+- MPT and SMT proofs support serde and versioned `to_bytes` / `from_bytes`
+  transport. Kind/version mismatches, incomplete frames and trailing bytes
+  are rejected. Proof verification still requires the expected root and key;
+  existing database and trie-cache formats are unchanged.
+- `try_sync_wal` exposes fallible durability fences on raw and typed maps,
+  `Orphan`, and `Namespace`, without forcing memtable flushes. Collection
+  fences cover one shard; namespace fences cover all its shards and retain
+  per-shard failure semantics. Read-only calls are no-ops.
+- `VerMapWithProof::prove_at` and `prove_at_commit` return a `ProofWithRoot`
+  for the explicitly selected working branch or historical commit, for both
+  MPT and SMT. Earlier root queries or cache saves do not choose their context.
+- `SlotDex::iter(range, order)` streams complete ranges without a page-size
+  ceiling, preserving ascending keys within each slot and decoding on demand.
+
+### Fixed
+
+- Immutable map iterators pin their committed sequence while acquiring
+  retained sources. Iterator views survive subsequent writes, clears and
+  flushes; public and internal alias documentation now agree on concurrent
+  immutable iteration with a coordinated writer.
+
 ## [v17.0.6]
 
 No public API or storage-format changes; no data migration is required.
