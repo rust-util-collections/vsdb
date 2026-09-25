@@ -191,3 +191,33 @@ fn get_mut_discards_edit_interrupted_by_panic() {
     o.get_mut().push(4);
     assert_eq!(o.get_value(), vec![1, 2, 3, 4]);
 }
+
+#[test]
+fn unchanged_guard_preserves_non_idempotent_encoding() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    struct Drift(u32);
+    impl ValueEnDe for Drift {
+        fn try_encode(&self) -> Result<Vec<u8>> {
+            static TAG: AtomicU32 = AtomicU32::new(0);
+            Ok(postcard::to_allocvec(&(
+                self.0,
+                TAG.fetch_add(1, Ordering::Relaxed),
+            ))?)
+        }
+        fn decode(bytes: &[u8]) -> Result<Self> {
+            let (value, _tag): (u32, u32) = postcard::from_bytes(bytes)?;
+            Ok(Self(value))
+        }
+    }
+
+    let mut value = Orphan::new(Drift(7));
+    let before = value.raw().get([]).unwrap();
+    {
+        let guard = value.get_mut();
+        assert_eq!(guard.0, 7);
+    }
+    assert_eq!(value.raw().get([]).unwrap(), before);
+    value.get_mut().0 = 8;
+    assert_eq!(value.get_value().0, 8);
+}

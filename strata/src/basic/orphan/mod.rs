@@ -31,8 +31,8 @@ mod test;
 
 use crate::{
     ValueEnDe,
-    basic::mapx_ord_rawkey::MapxOrdRawKey,
-    common::{Colocate, InstanceId, Namespace, UnwindMark, error::Result},
+    basic::mapx_ord_rawkey::{self, MapxOrdRawKey},
+    common::{Colocate, InstanceId, Namespace, error::Result},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -197,6 +197,9 @@ where
     /// Retrieves a mutable handler for the value.
     ///
     /// This is the recommended way to modify the value.
+    /// An untouched guard preserves stored bytes, including for values whose
+    /// encodings vary between calls. Write-back follows the same rules as
+    /// [`MapxOrdRawKey::get_mut`].
     ///
     /// # Example
     ///
@@ -212,13 +215,8 @@ where
     /// # fs::remove_dir_all(vsdb_get_base_dir()).unwrap();
     /// ```
     pub fn get_mut(&mut self) -> ValueMut<'_, T> {
-        let value = self.get_value();
-        let original = value.encode();
         ValueMut {
-            hdr: self,
-            value,
-            original,
-            unwind: UnwindMark::new(),
+            inner: self.inner.get_mut([]).unwrap(),
         }
     }
 
@@ -430,25 +428,7 @@ pub struct ValueMut<'a, T>
 where
     T: ValueEnDe,
 {
-    hdr: &'a mut Orphan<T>,
-    value: T,
-    original: Vec<u8>,
-    unwind: UnwindMark,
-}
-
-impl<T> Drop for ValueMut<'_, T>
-where
-    T: ValueEnDe,
-{
-    fn drop(&mut self) {
-        if self.unwind.interrupted() {
-            return;
-        }
-        let encoded = self.value.encode();
-        if encoded != self.original {
-            self.hdr.inner.insert([], &self.value);
-        }
-    }
+    inner: mapx_ord_rawkey::ValueMut<'a, T>,
 }
 
 impl<T> Deref for ValueMut<'_, T>
@@ -457,7 +437,7 @@ where
 {
     type Target = T;
     fn deref(&self) -> &Self::Target {
-        &self.value
+        &self.inner
     }
 }
 
@@ -466,7 +446,7 @@ where
     T: ValueEnDe,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.value
+        &mut self.inner
     }
 }
 

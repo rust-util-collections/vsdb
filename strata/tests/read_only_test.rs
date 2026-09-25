@@ -8,12 +8,32 @@ use std::{
     process::Command,
 };
 use vsdb::{
-    HnswConfig, InstanceId, Mapx, MetricKind, MptCalc, OpenMode, SlotDex, VecDexDyn,
-    VecDexL2, VerMap, VerMapWithProof, VsdbError, VsdbOptions, vsdb_configure,
-    vsdb_flush, vsdb_get_base_dir, vsdb_open_mode,
+    HnswConfig, InstanceId, Mapx, MetricKind, MptCalc, OpenMode, Orphan, SlotDex,
+    VecDexDyn, VecDexL2, VerMap, VerMapWithProof, VsdbError, VsdbOptions,
+    vsdb_configure, vsdb_flush, vsdb_get_base_dir, vsdb_open_mode,
 };
 
 const HELPER_BASE: &str = "VSDB_STRATA_READ_ONLY_HELPER_BASE";
+
+// A value codec may include a fresh serialization tag without changing
+// its logical value. Reading a guard must not turn that into a write.
+struct TaggedValue(u32);
+
+impl vsdb::ValueEnDe for TaggedValue {
+    fn try_encode(&self) -> vsdb::Result<Vec<u8>> {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static TAG: AtomicU32 = AtomicU32::new(0);
+        Ok(postcard::to_allocvec(&(
+            self.0,
+            TAG.fetch_add(1, Ordering::Relaxed),
+        ))?)
+    }
+
+    fn decode(bytes: &[u8]) -> vsdb::Result<Self> {
+        let (value, _tag): (u32, u32) = postcard::from_bytes(bytes)?;
+        Ok(Self(value))
+    }
+}
 
 fn helper_base() -> Option<PathBuf> {
     env::var_os(HELPER_BASE).map(PathBuf::from)
@@ -99,6 +119,7 @@ fn read_only_writer_helper() {
     let mut map = Mapx::<u64, String>::new();
     map.insert(&7, &"typed-value".to_owned());
     let map_id = map.save_meta().unwrap();
+    let orphan_id = Orphan::new(TaggedValue(42)).save_meta().unwrap();
 
     let mut versioned = VerMap::<u64, String>::new();
     let main = versioned.main_branch();
@@ -121,7 +142,8 @@ fn read_only_writer_helper() {
         fs::remove_file(cache_path).unwrap();
     }
 
-    let state = postcard::to_allocvec(&(map_id, versioned_id, expected_root)).unwrap();
+    let state = postcard::to_allocvec(&(map_id, orphan_id, versioned_id, expected_root))
+        .unwrap();
     fs::write(base.join("read-only-strata-state"), state).unwrap();
     vsdb_flush();
 }
@@ -136,13 +158,23 @@ fn read_only_reader_helper() {
     assert_eq!(OpenMode::ReadOnly, vsdb_open_mode());
 
     let state = fs::read(base.join("read-only-strata-state")).unwrap();
-    let (map_id, versioned_id, expected_root): (InstanceId, InstanceId, Vec<u8>) =
-        postcard::from_bytes(&state).unwrap();
+    let (map_id, orphan_id, versioned_id, expected_root): (
+        InstanceId,
+        InstanceId,
+        InstanceId,
+        Vec<u8>,
+    ) = postcard::from_bytes(&state).unwrap();
 
     let map = Mapx::<u64, String>::from_meta(map_id).unwrap();
     assert!(map.namespace().is_read_only());
     assert_eq!(Some("typed-value".to_owned()), map.get(&7));
     assert!(matches!(map.save_meta(), Err(VsdbError::ReadOnly { .. })));
+
+    let mut orphan = Orphan::<TaggedValue>::from_meta(orphan_id).unwrap();
+    {
+        let guard = orphan.get_mut();
+        assert_eq!(guard.0, 42);
+    }
 
     // These constructors already return Result, so capability errors must
     // not fall through to the infallible raw collection's assertion.

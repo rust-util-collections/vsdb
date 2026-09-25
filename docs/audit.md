@@ -11,14 +11,6 @@
 
 ## Open
 
-### [MEDIUM] Orphan: unchanged guards write values with varying encodings
-- **Where**: `strata/src/basic/orphan/mod.rs` (`get_mut`, `ValueMut::drop`)
-- **What**: a valid value codec that emits a fresh serialization tag on each encode makes an untouched guard look modified. Dropping that guard rewrites storage or panics in a read-only process.
-- **Why**: Orphan compares two encodings without the mutable-access and encoding-stability checks already used by its underlying typed map. Value codecs need not be deterministic.
-- **Suggested fix**: delegate to the existing typed-map guard; test unchanged bytes, real edits, interior edits, unwind and read-only access. No API or storage-format change.
-
----
-
 ### [MEDIUM] DagMap: marked registry cycles prevent prune retry from completing
 - **Where**: `strata/src/dagmap/raw/mod.rs` (`clear_marked_reachable`)
 - **What**: the public serde component representation permits adding a self-reference to a consumed head's children registry. Retrying prune repeatedly expands that marked node.
