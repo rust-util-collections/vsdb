@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v17.0.8]
+
+Existing APIs and VSDB storage formats remain compatible; no VSDB data
+migration is required. Ordinary write durability defaults are unchanged.
+
+### Added
+
+- Raw and ordinary typed collection batches expose `commit_sync()`, which
+  synchronizes the owning shard WAL before atomic publication. Empty batches
+  remain no-ops; this adds no cross-collection or cross-shard transaction.
+- `MapxRaw::read_view()` captures one committed state for repeated point and
+  range reads. Its borrowed lifetime retains the engine snapshot; derived
+  iterators borrow the view.
+- `MapxRaw::reader()` creates an immutable handle for concurrent reads while
+  the original map remains writable, without application-side mutable aliases.
+  Reader clones share identity and retain namespace ownership; ordinary map
+  clones still deep-copy. Fatal engine read faults retain panic behavior.
+
+### Changed
+
+- Batch documentation distinguishes preflight rejection from persistence
+  failures whose WAL data may appear after recovery; ambiguous failures must
+  not be retried automatically.
+
 ## [v17.0.7]
 
 Existing APIs and stored data remain compatible; no data migration is required.
