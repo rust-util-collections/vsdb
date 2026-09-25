@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v17.0.5]
+
+No public API or storage-format changes; no data migration is required.
+
+### Fixed
+
+- MPT operations, cloning, cache loading and destruction handle the full
+  supported key depth on ordinary worker stacks. Root hashes and cache bytes
+  remain unchanged.
+- Untouched `Orphan` mutable guards preserve stored bytes when a value codec
+  varies its encoding between calls, including in read-only mode.
+- `DagMap` prune retries visit each marked node once even when restored
+  component handles contain repeated registry links.
+
+### Changed
+
+- Clarified that each `SlotDex::insert_batch` call commits one atomic batch;
+  callers can split large imports across calls to bound temporary memory.
+- Aligned guides with namespace lifecycle, memory sizing, explicit trie
+  checkpoints and ownership of restored index handles.
+
 ## [v17.0.4]
 
 No storage-format changes; no data migration is required.
