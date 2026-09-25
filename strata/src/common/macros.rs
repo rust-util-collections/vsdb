@@ -47,8 +47,12 @@ macro_rules! define_map_wrapper {
             /// Creates a second handle to the same underlying storage, bypassing
             /// Rust's aliasing guarantees.  The caller **must** ensure no
             /// concurrent writes to the same key through any handle.  Multiple
-            /// writers on disjoint keys are safe.  Concurrent reads alongside
-            /// writes are safe (the engine provides snapshot isolation).
+            /// writers on disjoint keys are safe. Concurrent immutable reads,
+            /// including iteration, may run alongside writes. Each iterator
+            /// retains the committed view captured when it is created, across
+            /// later writes, clears and flushes. Separate reads/iterators can
+            /// observe different views. Mutable iteration remains a write and
+            /// requires the same exclusion of other writers.
             #[inline(always)]
             pub unsafe fn shadow(&self) -> Self {
                 Self {

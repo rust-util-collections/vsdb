@@ -115,8 +115,11 @@ impl MapxRaw {
     /// This API breaks the semantic safety guarantees of Rust's ownership and
     /// borrowing rules.  The caller must ensure no concurrent writes to the
     /// same key through any handle.  Multiple writers on disjoint keys are
-    /// safe.  Concurrent reads alongside writes are safe (the engine provides
-    /// snapshot isolation).
+    /// safe. Concurrent immutable reads and iteration alongside writes are
+    /// supported. Each iterator retains the committed view captured when it
+    /// is created, including across later writes, clears and flushes. Separate
+    /// reads/iterators can observe different views. Mutable iteration remains
+    /// a write operation and requires the same exclusion of other writers.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
         Self {
@@ -329,6 +332,9 @@ impl MapxRaw {
 
     /// Returns an iterator over the map's entries.
     ///
+    /// The iterator retains its creation-time committed view. Later writes
+    /// through another handle do not change the entries it returns.
+    ///
     /// # Returns
     ///
     /// A `MapxRawIter` that iterates over the key-value pairs.
@@ -338,6 +344,8 @@ impl MapxRaw {
     }
 
     /// Returns an iterator over a range of entries in the map.
+    ///
+    /// Retains one creation-time committed view, like [`iter`](Self::iter).
     ///
     /// # Arguments
     ///

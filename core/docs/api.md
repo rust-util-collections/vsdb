@@ -38,6 +38,25 @@ does not create a cross-shard transaction. The call is a no-op in read-only mode
 shards of one namespace; it returns the first error and does not make the
 namespace's collections transactional. Neither form forces a memtable flush.
 
+## Immutable iteration alongside writes
+
+An immutable `iter` or `range` retains one committed view captured when the
+iterator is created. Writes, clears and flushes through another handle do not
+change that view. Separate queries can see different states. The `shadow`
+contract permits these reads while retaining its exclusion of competing
+writers to the same key; mutable iteration is a write operation.
+
+The raw map also offers `range_detached`, which releases the borrow of the map:
+
+```rust
+use vsdb_core::MapxRaw;
+let mut map = MapxRaw::new();
+map.insert(b"key", b"before");
+let mut view = map.range_detached(..);
+map.insert(b"key", b"after");
+assert_eq!(view.next().unwrap().1, b"before");
+```
+
 ## Utility Functions
 
 Example for getting and setting the base directory.

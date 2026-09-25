@@ -436,8 +436,11 @@ impl MmDB {
 
     pub(crate) fn iter(&self, meta_prefix: PreBytes) -> MmdbIter {
         let db = self.shard(&meta_prefix);
+        // Pin the sequence while capturing iterator sources. Compaction must
+        // retain this view until the iterator owns its memtables/table readers.
+        let snapshot = db.snapshot();
         let db_iter = db
-            .iter_with_prefix(&meta_prefix, &mmdb::ReadOptions::default())
+            .iter_with_prefix(&meta_prefix, &snapshot.read_options())
             .expect("vsdb: mmdb iter_with_prefix failed");
         // Defense-in-depth prefix bound (parity with `range`): never surface
         // keys from an adjacent prefix in the same shard, even if the
@@ -523,9 +526,12 @@ impl MmDB {
             (None, None) => None,
         };
 
+        // The temporary snapshot bridges sequence selection and source capture.
+        // The returned iterator then retains its sources independently.
+        let snapshot = db.snapshot();
         let mut db_iter = db
             .iter_with_range(
-                &mmdb::ReadOptions::default(),
+                &snapshot.read_options(),
                 start_hint.as_deref(),
                 end_hint.as_deref(),
             )

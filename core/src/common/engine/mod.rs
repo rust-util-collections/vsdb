@@ -126,7 +126,9 @@ impl Mapx {
     // Callers MUST ensure:
     // - No concurrent writes to the same key through any handle.
     //   Multiple writers on disjoint keys are safe.
-    // - No concurrent iteration and mutation.
+    // Immutable reads, including iteration, may run alongside writes. Each
+    // iterator retains one committed view; separate reads can see newer views.
+    // Mutable iteration is a write and follows the same key exclusion rule.
     pub(crate) unsafe fn shadow(&self) -> Self {
         Self {
             prefix: Prefix::Recovered(self.prefix_bytes()),

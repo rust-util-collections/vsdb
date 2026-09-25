@@ -25,6 +25,17 @@ shards synchronized. These calls do not provide cross-collection transactions.
 They are no-ops in read-only mode. The collection-level `sync_wal()` form
 panics on errors; ordinary inserts and batch commits do not fsync individually.
 
+## Basic collection read views
+
+Immutable `iter` and `range` on `Mapx`, `MapxOrd` and `MapxOrdRawKey` retain a
+committed view captured at iterator creation. A read-only use of a `shadow`
+handle may therefore keep a range iterator while the sole writer updates the
+map. Later writes, clears and flushes do not alter that iterator's results.
+Separate point reads or iterators can observe different views; this does not
+give a shared snapshot across collections. Mutable iteration still requires
+coordination with every other writer to its keys. Composite indexes retain
+their single-active-handle contract described below.
+
 ## Namespaces
 
 Persistent collections support namespaces — independently-rooted engine instances
