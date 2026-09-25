@@ -35,10 +35,9 @@ const VERSION: u8 = 1;
 /// the deepest position an organic trie can reach, since insertion
 /// rejects keys over [`MAX_MPT_KEY_LEN`] bytes (2 nibbles per byte).
 ///
-/// Together with the empty-extension rejection below (every level
-/// consumes at least one nibble), this also bounds the deserializer's
-/// recursion — and every later tree walk — to the same depth organic
-/// tries are already documented to stay within.
+/// The decoder tracks this budget explicitly while parsing iteratively.
+/// Accepted cache paths therefore match the public insertion limit without
+/// placing one call frame on the worker stack for every node.
 const MAX_TOTAL_NIBBLES: usize = 2 * MAX_MPT_KEY_LEN;
 
 // =========================================================================
@@ -167,246 +166,226 @@ const NODE_BRANCH: u8 = 0x03;
 
 fn serialize_handle(handle: &NodeHandle) -> Vec<u8> {
     let mut buf = Vec::new();
-    match handle {
-        NodeHandle::InMemory(node) => {
-            buf.push(HANDLE_INMEMORY);
-            serialize_node(&mut buf, node);
+    let mut pending = vec![handle];
+    while let Some(handle) = pending.pop() {
+        match handle.hash() {
+            Some(hash) => {
+                buf.push(HANDLE_CACHED);
+                write_bytes(&mut buf, hash);
+            }
+            None => buf.push(HANDLE_INMEMORY),
         }
-        NodeHandle::Cached(hash, node) => {
-            buf.push(HANDLE_CACHED);
-            write_bytes(&mut buf, hash);
-            serialize_node(&mut buf, node);
+        match handle.node() {
+            Node::Null => buf.push(NODE_NULL),
+            Node::Leaf { path, value } => {
+                buf.push(NODE_LEAF);
+                write_nibbles(&mut buf, path);
+                write_bytes(&mut buf, value);
+            }
+            Node::Extension { path, child } => {
+                buf.push(NODE_EXT);
+                write_nibbles(&mut buf, path);
+                pending.push(child);
+            }
+            Node::Branch { children, value } => {
+                buf.push(NODE_BRANCH);
+                let mut bitmap: u16 = 0;
+                for (i, child) in children.iter().enumerate() {
+                    if child.is_some() {
+                        bitmap |= 1 << i;
+                    }
+                }
+                buf.extend_from_slice(&bitmap.to_le_bytes());
+                match value {
+                    Some(value) => {
+                        buf.push(1);
+                        write_bytes(&mut buf, value);
+                    }
+                    None => buf.push(0),
+                }
+                pending.extend(children.iter().rev().flatten());
+            }
         }
     }
     buf
-}
-
-fn serialize_node(buf: &mut Vec<u8>, node: &Node) {
-    match node {
-        Node::Null => buf.push(NODE_NULL),
-        Node::Leaf { path, value } => {
-            buf.push(NODE_LEAF);
-            write_nibbles(buf, path);
-            write_bytes(buf, value);
-        }
-        Node::Extension { path, child } => {
-            buf.push(NODE_EXT);
-            write_nibbles(buf, path);
-            let child_data = serialize_handle(child);
-            buf.extend_from_slice(&child_data);
-        }
-        Node::Branch { children, value } => {
-            buf.push(NODE_BRANCH);
-
-            let mut bitmap: u16 = 0;
-            for (i, c) in children.iter().enumerate() {
-                if c.is_some() {
-                    bitmap |= 1 << i;
-                }
-            }
-            buf.extend_from_slice(&bitmap.to_le_bytes());
-
-            match value {
-                Some(v) => {
-                    buf.push(1);
-                    write_bytes(buf, v);
-                }
-                None => buf.push(0),
-            }
-
-            for child in children.iter().flatten() {
-                let child_data = serialize_handle(child);
-                buf.extend_from_slice(&child_data);
-            }
-        }
-    }
 }
 
 // =========================================================================
 // Deserialization
 // =========================================================================
 
-/// Deserializes one handle, validating whole-tree structure that
-/// per-node checks cannot see.
-///
-/// `consumed` is the number of nibbles consumed from the root down to
-/// this node.  The tree walkers (insert / remove / commit / `Drop`
-/// glue) recurse per level and index branch children by nibble value,
-/// assuming every loaded trie stays within the bounds organic
-/// insertion enforces ([`MAX_MPT_KEY_LEN`], non-empty extensions,
-/// nibble values < 16).  A checksum-valid but malformed file violating
-/// those bounds could otherwise overflow the stack or panic on child
-/// indexing, so it is rejected here, at the trust boundary — the cache
-/// is disposable and the caller simply rebuilds from authoritative
-/// data.
+/// Parses the preorder wire format into shallow nodes, then attaches each
+/// child to its parent in reverse order. No recursive decoder or recursive
+/// cleanup is needed, including for incomplete or invalid trees.
 fn deserialize_handle(
     data: &[u8],
     cursor: &mut usize,
     consumed: usize,
 ) -> Result<NodeHandle> {
-    let tag = read_u8(data, cursor)?;
-    match tag {
-        HANDLE_INMEMORY => {
-            let node = deserialize_node(data, cursor, consumed)?;
-            Ok(NodeHandle::InMemory(Box::new(node)))
-        }
-
-        HANDLE_CACHED => {
-            let hash = read_bytes(data, cursor)?;
-            if hash.len() != 32 {
+    struct Decoded {
+        hash: Option<Vec<u8>>,
+        node: Node,
+        parent: Option<(usize, usize)>,
+    }
+    let mut pending = vec![(None, consumed)];
+    let mut decoded: Vec<Decoded> = Vec::new();
+    while let Some((parent, consumed)) = pending.pop() {
+        let tag = read_u8(data, cursor)?;
+        let hash = match tag {
+            HANDLE_INMEMORY => None,
+            HANDLE_CACHED => {
+                let hash = read_bytes(data, cursor)?;
+                if hash.len() != 32 {
+                    return Err(TrieError::InvalidState(format!(
+                        "MPT cache: cached hash length {} != 32",
+                        hash.len()
+                    )));
+                }
+                Some(hash)
+            }
+            _ => {
                 return Err(TrieError::InvalidState(format!(
-                    "MPT cache: cached hash length {} != 32",
-                    hash.len()
+                    "invalid handle tag: {tag}"
                 )));
             }
-            let node = deserialize_node(data, cursor, consumed)?;
-            // A `Cached` parent must not hold `InMemory` children:
-            // `commit_rec` skips `Cached` subtrees wholesale, so such a
-            // child would never be (re-)hashed by `root_hash()`, and
-            // `NodeCodec::encode` on the parent later panics on the
-            // child's missing hash (e.g. in `prove`).  Organic saves
-            // can never produce this shape — `save_cache` commits the
-            // whole tree first — so it is rejected here, at the trust
-            // boundary.  Checking direct children is sufficient: every
-            // deeper `Cached`→`InMemory` edge is caught by the same
-            // check when its own parent handle is deserialized.
-            let mixed = match &node {
-                Node::Extension { child, .. } => {
-                    matches!(child, NodeHandle::InMemory(_))
+        };
+        let index = decoded.len();
+        let node = match read_u8(data, cursor)? {
+            NODE_NULL => Node::Null,
+            NODE_LEAF => {
+                let path = read_nibbles(data, cursor)?;
+                check_nibble_budget(consumed, path.len())?;
+                Node::Leaf {
+                    path,
+                    value: read_bytes(data, cursor)?,
                 }
-                Node::Branch { children, .. } => children
-                    .iter()
-                    .flatten()
-                    .any(|c| matches!(c, NodeHandle::InMemory(_))),
-                Node::Null | Node::Leaf { .. } => false,
-            };
-            if mixed {
+            }
+            NODE_EXT => {
+                let path = read_nibbles(data, cursor)?;
+                if path.is_empty() {
+                    return Err(TrieError::InvalidState(
+                        "MPT cache: empty extension path".into(),
+                    ));
+                }
+                check_nibble_budget(consumed, path.len())?;
+                pending.push((Some((index, 0)), consumed + path.len()));
+                Node::Extension {
+                    path,
+                    child: NodeHandle::default(),
+                }
+            }
+            NODE_BRANCH => {
+                let end = checked_end(*cursor, 2, data.len(), "branch bitmap")?;
+                let bitmap = u16::from_le_bytes(data[*cursor..end].try_into().unwrap());
+                *cursor = end;
+                let value = if read_u8(data, cursor)? == 1 {
+                    Some(read_bytes(data, cursor)?)
+                } else {
+                    None
+                };
+                check_nibble_budget(consumed, 1)?;
+                for i in (0..16).rev() {
+                    if bitmap & (1 << i) != 0 {
+                        pending.push((Some((index, i)), consumed + 1));
+                    }
+                }
+                Node::Branch {
+                    children: Box::new(std::array::from_fn(|_| None)),
+                    value,
+                }
+            }
+            tag => {
+                return Err(TrieError::InvalidState(format!("invalid node tag: {tag}")));
+            }
+        };
+        decoded.push(Decoded { hash, node, parent });
+    }
+    while let Some(Decoded { hash, node, parent }) = decoded.pop() {
+        // Cached subtrees are skipped by the hasher, so an unhashed child
+        // under a cached parent must still be rejected at this boundary.
+        let mixed = match &node {
+            Node::Extension { child, .. } => child.hash().is_none(),
+            Node::Branch { children, .. } => {
+                children.iter().flatten().any(|c| c.hash().is_none())
+            }
+            _ => false,
+        };
+        let handle = match hash {
+            Some(_) if mixed => {
                 return Err(TrieError::InvalidState(
                     "MPT cache: unhashed (InMemory) child under a Cached parent".into(),
                 ));
             }
-            Ok(NodeHandle::Cached(hash, Box::new(node)))
+            Some(hash) => NodeHandle::Cached(hash, Box::new(node)),
+            None => NodeHandle::InMemory(Box::new(node)),
+        };
+        let Some((index, slot)) = parent else {
+            return Ok(handle);
+        };
+        match &mut decoded[index].node {
+            Node::Extension { child, .. } => *child = handle,
+            Node::Branch { children, .. } => children[slot] = Some(handle),
+            _ => unreachable!("only extensions and branches schedule children"),
         }
-        _ => Err(TrieError::InvalidState(format!(
-            "invalid handle tag: {tag}"
-        ))),
     }
+    unreachable!("the parser always schedules a root")
 }
 
 fn validate_cached_handle(handle: &NodeHandle, is_root: bool) -> Result<[u8; 32]> {
-    let (stored, node) = match handle {
-        NodeHandle::InMemory(node) if is_root && **node == Node::Null => {
-            return Ok([0u8; 32]);
+    let mut pending = vec![(handle, is_root)];
+    let mut root_hash = [0u8; 32];
+    while let Some((handle, is_root)) = pending.pop() {
+        let (stored, node) = match handle {
+            NodeHandle::InMemory(node) if is_root && **node == Node::Null => continue,
+            NodeHandle::InMemory(_) => {
+                return Err(TrieError::InvalidState(
+                    "MPT cache contains an unhashed node".into(),
+                ));
+            }
+            NodeHandle::Cached(stored, node) => (stored, node),
+        };
+        let stored: [u8; 32] = stored.as_slice().try_into().map_err(|_| {
+            TrieError::InvalidState("MPT cache has a bad hash length".into())
+        })?;
+        match node.as_ref() {
+            Node::Null => {
+                return Err(TrieError::InvalidState(if is_root {
+                    "MPT cache contains a non-canonical cached empty root".into()
+                } else {
+                    "MPT cache contains a nested Null node".into()
+                }));
+            }
+            Node::Leaf { .. } => {}
+            Node::Extension { child, .. } => {
+                if !matches!(child, NodeHandle::Cached(_, child) if matches!(child.as_ref(), Node::Branch { .. }))
+                {
+                    return Err(TrieError::InvalidState(
+                        "MPT cache contains a non-canonical extension child".into(),
+                    ));
+                }
+                pending.push((child, false));
+            }
+            Node::Branch { children, value } => {
+                let count = children.iter().flatten().count();
+                if count == 0 || (count == 1 && value.is_none()) {
+                    return Err(TrieError::InvalidState(
+                        "MPT cache contains a non-canonical branch".into(),
+                    ));
+                }
+                pending.extend(children.iter().flatten().map(|c| (c, false)));
+            }
         }
-        NodeHandle::InMemory(_) => {
+        let computed: [u8; 32] = Keccak256::digest(NodeCodec::encode(node)).into();
+        if stored != computed {
             return Err(TrieError::InvalidState(
-                "MPT cache contains an unhashed node".into(),
+                "MPT cache contains an incorrect cached hash".into(),
             ));
         }
-        NodeHandle::Cached(stored, node) => (stored, node),
-    };
-    let stored: [u8; 32] = stored.as_slice().try_into().map_err(|_| {
-        TrieError::InvalidState("MPT cache has a bad hash length".into())
-    })?;
-
-    match node.as_ref() {
-        Node::Null => {
-            return Err(TrieError::InvalidState(if is_root {
-                "MPT cache contains a non-canonical cached empty root".into()
-            } else {
-                "MPT cache contains a nested Null node".into()
-            }));
-        }
-        Node::Leaf { .. } => {}
-        Node::Extension { child, .. } => {
-            validate_cached_handle(child, false)?;
-            if !matches!(child, NodeHandle::Cached(_, child) if matches!(child.as_ref(), Node::Branch { .. }))
-            {
-                return Err(TrieError::InvalidState(
-                    "MPT cache contains a non-canonical extension child".into(),
-                ));
-            }
-        }
-        Node::Branch { children, value } => {
-            let child_count = children.iter().flatten().count();
-            if child_count == 0 || (child_count == 1 && value.is_none()) {
-                return Err(TrieError::InvalidState(
-                    "MPT cache contains a non-canonical branch".into(),
-                ));
-            }
-            for child in children.iter().flatten() {
-                validate_cached_handle(child, false)?;
-            }
+        if is_root {
+            root_hash = computed;
         }
     }
-
-    let computed: [u8; 32] = Keccak256::digest(NodeCodec::encode(node)).into();
-    if stored != computed {
-        return Err(TrieError::InvalidState(
-            "MPT cache contains an incorrect cached hash".into(),
-        ));
-    }
-    Ok(computed)
-}
-
-fn deserialize_node(data: &[u8], cursor: &mut usize, consumed: usize) -> Result<Node> {
-    let tag = read_u8(data, cursor)?;
-    match tag {
-        NODE_NULL => Ok(Node::Null),
-        NODE_LEAF => {
-            let path = read_nibbles(data, cursor)?;
-            check_nibble_budget(consumed, path.len())?;
-            let value = read_bytes(data, cursor)?;
-            Ok(Node::Leaf { path, value })
-        }
-        NODE_EXT => {
-            let path = read_nibbles(data, cursor)?;
-            // Organic extensions are never empty (every construction
-            // site guards or merges paths).  An empty one makes zero
-            // progress, so a crafted chain of them would recurse — in
-            // the walkers and in this deserializer — without ever
-            // exhausting the nibble budget.
-            if path.is_empty() {
-                return Err(TrieError::InvalidState(
-                    "MPT cache: empty extension path".into(),
-                ));
-            }
-            check_nibble_budget(consumed, path.len())?;
-            let child = deserialize_handle(data, cursor, consumed + path.len())?;
-            Ok(Node::Extension { path, child })
-        }
-        NODE_BRANCH => {
-            if *cursor + 2 > data.len() {
-                return Err(TrieError::InvalidState(
-                    "unexpected EOF in branch bitmap".into(),
-                ));
-            }
-            let bitmap = u16::from_le_bytes([data[*cursor], data[*cursor + 1]]);
-            *cursor += 2;
-
-            let has_value = read_u8(data, cursor)?;
-            let value = if has_value == 1 {
-                Some(read_bytes(data, cursor)?)
-            } else {
-                None
-            };
-
-            // Descending into a child consumes the routing nibble.
-            check_nibble_budget(consumed, 1)?;
-
-            let mut children: Box<[Option<NodeHandle>; 16]> = Box::new([
-                None, None, None, None, None, None, None, None, None, None, None, None,
-                None, None, None, None,
-            ]);
-            for i in 0..16 {
-                if (bitmap & (1 << i)) != 0 {
-                    children[i] = Some(deserialize_handle(data, cursor, consumed + 1)?);
-                }
-            }
-            Ok(Node::Branch { children, value })
-        }
-        _ => Err(TrieError::InvalidState(format!("invalid node tag: {tag}"))),
-    }
+    Ok(root_hash)
 }
 
 /// Rejects a node whose path would push the cumulative consumed-nibble

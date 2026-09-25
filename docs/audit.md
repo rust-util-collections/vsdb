@@ -11,14 +11,6 @@
 
 ## Open
 
-### [HIGH] MPT: accepted prefix keys exceed a default worker stack
-- **Where**: `strata/src/trie/mpt/mutation.rs` (`insert_rec`), related MPT traversal and cache helpers, `strata/src/trie/node/mod.rs`
-- **What**: inserting increasing zero-prefix keys of lengths 1 through 200 on a standard worker thread aborts in a debug build. Every key satisfies the public 1024-byte limit.
-- **Why**: the key limit bounds node depth but not stack bytes. Recursive insertion uses large frames; other traversal, cloning, destruction and cache paths also recurse over the same tree.
-- **Suggested fix**: use explicit traversal stacks throughout the accepted-tree lifecycle. Exercise the 1024-byte boundary on a 2 MiB worker, including updates, proofs, clone/drop and cache round trips. Preserve accepted keys, root hashes and cache encoding; no migration.
-
----
-
 ### [MEDIUM] Orphan: unchanged guards write values with varying encodings
 - **Where**: `strata/src/basic/orphan/mod.rs` (`get_mut`, `ValueMut::drop`)
 - **What**: a valid value codec that emits a fresh serialization tag on each encode makes an untouched guard look modified. Dropping that guard rewrites storage or panics in a read-only process.

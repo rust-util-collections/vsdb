@@ -22,47 +22,45 @@ impl<'a> TrieRo<'a> {
         self.step(Self::resolve(self.root), path)
     }
 
-    fn step(&self, node: &Node, path: Nibbles) -> Result<Option<Vec<u8>>> {
-        match node {
-            Node::Null => Ok(None),
-            Node::Leaf {
-                path: leaf_path,
-                value,
-            } => {
-                if *leaf_path == path {
-                    Ok(Some(value.clone()))
-                } else {
-                    Ok(None)
+    fn step(&self, mut node: &Node, mut path: Nibbles) -> Result<Option<Vec<u8>>> {
+        loop {
+            match node {
+                Node::Null => return Ok(None),
+                Node::Leaf {
+                    path: leaf_path,
+                    value,
+                } => {
+                    return Ok((*leaf_path == path).then(|| value.clone()));
                 }
-            }
-            Node::Extension {
-                path: ext_path,
-                child,
-            } => {
-                if path.starts_with(ext_path) {
+                Node::Extension {
+                    path: ext_path,
+                    child,
+                } => {
+                    if !path.starts_with(ext_path) {
+                        return Ok(None);
+                    }
                     let (_, remaining) = path.split_at(ext_path.len());
-                    self.step(Self::resolve(child), remaining)
-                } else {
-                    Ok(None)
+                    path = remaining;
+                    node = Self::resolve(child);
                 }
-            }
-            Node::Branch { children, value } => {
-                if path.is_empty() {
-                    return Ok(value.clone());
-                }
-                let idx = path.at(0) as usize;
-                if let Some(child_handle) = &children[idx] {
+                Node::Branch { children, value } => {
+                    if path.is_empty() {
+                        return Ok(value.clone());
+                    }
+                    let index = path.at(0) as usize;
+                    let Some(child) = &children[index] else {
+                        return Ok(None);
+                    };
                     let (_, remaining) = path.split_at(1);
-                    self.step(Self::resolve(child_handle), remaining)
-                } else {
-                    Ok(None)
+                    path = remaining;
+                    node = Self::resolve(child);
                 }
             }
         }
     }
 
     /// Borrows the node behind a handle — read-only traversal must never
-    /// clone subtrees (`Node`'s derived `Clone` is recursive).
+    /// clone subtrees (cloning is unnecessary for reads).
     fn resolve(handle: &NodeHandle) -> &Node {
         match handle {
             NodeHandle::InMemory(n) | NodeHandle::Cached(_, n) => n,

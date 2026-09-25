@@ -2004,3 +2004,98 @@ mod cache_validation_tests {
         std::fs::remove_file(path).unwrap();
     }
 }
+
+mod mpt_stack_tests {
+    use crate::trie::{MAX_MPT_KEY_LEN, MptCalc, cache, codec_util::compute_checksum};
+    use sha3::{Digest, Sha3_256};
+    use std::{io::Cursor, thread};
+
+    #[test]
+    fn mpt_full_key_depth_lifecycle_on_worker_stack() {
+        thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                let mut trie = MptCalc::new();
+                for n in 1..=MAX_MPT_KEY_LEN {
+                    trie.insert(&vec![0; n], b"x").unwrap();
+                }
+                // Clone both unhashed and hashed trees at the full supported depth.
+                let mut copy = trie.clone();
+                let root = trie.root_hash().unwrap();
+                // Captured from v17.0.4 on a larger worker stack, before the
+                // traversal change. Root and cache bytes must remain compatible.
+                assert_eq!(root, ROOT_FIXTURE);
+                assert_eq!(copy.root_hash().unwrap(), root);
+                drop(copy);
+                drop(trie.clone());
+
+                let key = vec![0; MAX_MPT_KEY_LEN];
+                assert_eq!(trie.get(&key).unwrap().as_deref(), Some(b"x".as_slice()));
+                let proof = trie.prove(&key).unwrap();
+                let root_array = root.as_slice().try_into().unwrap();
+                assert!(MptCalc::verify_proof(root_array, &key, &proof).unwrap());
+                let mut absent = key.clone();
+                *absent.last_mut().unwrap() = 1;
+                let proof = trie.prove(&absent).unwrap();
+                assert_eq!(proof.value(), None);
+                assert!(MptCalc::verify_proof(root_array, &absent, &proof).unwrap());
+                trie.remove(&absent).unwrap();
+                // A no-op removal keeps cached hashes ready for proof generation.
+                assert!(trie.prove(&key).is_ok());
+                assert_eq!(trie.root_hash().unwrap(), root);
+
+                let mut bytes = Vec::new();
+                cache::save(&trie.root, 7, &root, &mut bytes).unwrap();
+                let digest: [u8; 32] = Sha3_256::digest(&bytes).into();
+                assert_eq!(digest, CACHE_FIXTURE);
+                let (restored, tag, hash) =
+                    cache::load(&mut Cursor::new(&bytes)).unwrap();
+                assert_eq!(tag, 7);
+                assert_eq!(hash, root);
+                let mut loaded = MptCalc { root: restored };
+                assert_eq!(loaded.get(&key).unwrap(), trie.get(&key).unwrap());
+
+                // A rejected partial cache must also release its nodes without
+                // recursing through a full-depth tree.
+                let mut truncated = bytes[..bytes.len() - 34].to_vec();
+                truncated.extend_from_slice(&compute_checksum(&truncated));
+                assert!(cache::load(&mut Cursor::new(truncated)).is_err());
+
+                loaded.insert(&key, b"changed").unwrap();
+                loaded.remove(&vec![0; MAX_MPT_KEY_LEN / 2]).unwrap();
+                let mut reference = MptCalc::from_entries(
+                    (1..=MAX_MPT_KEY_LEN)
+                        .filter(|&n| n != MAX_MPT_KEY_LEN / 2)
+                        .map(|n| {
+                            (
+                                vec![0; n],
+                                if n == MAX_MPT_KEY_LEN {
+                                    b"changed".as_slice()
+                                } else {
+                                    b"x".as_slice()
+                                },
+                            )
+                        }),
+                )
+                .unwrap();
+                assert_eq!(loaded.root_hash().unwrap(), reference.root_hash().unwrap());
+                for n in (1..=MAX_MPT_KEY_LEN).rev() {
+                    loaded.remove(&vec![0; n]).unwrap();
+                }
+                assert_eq!(loaded.root_hash().unwrap(), vec![0; 32]);
+                assert_eq!(loaded.get(&key).unwrap(), None);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    const ROOT_FIXTURE: [u8; 32] = [
+        130, 151, 203, 199, 90, 252, 122, 210, 142, 178, 103, 81, 50, 196, 96, 44, 80,
+        161, 82, 79, 186, 168, 188, 218, 238, 156, 42, 95, 195, 88, 239, 235,
+    ];
+    const CACHE_FIXTURE: [u8; 32] = [
+        182, 228, 3, 77, 164, 40, 150, 72, 140, 132, 207, 176, 214, 49, 60, 159, 234,
+        73, 226, 187, 98, 130, 110, 55, 200, 23, 11, 146, 143, 59, 65, 114,
+    ];
+}

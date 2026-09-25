@@ -13,14 +13,10 @@ pub struct TrieMut {
 
 /// Maximum accepted MPT key length, in bytes.
 ///
-/// MPT traversal (insert / remove / commit / drop) recurses once per node
-/// on a key's path, and path depth is proportional to the longest shared
-/// key prefix — up to two nibbles' worth of nodes per key byte.  Without
-/// a bound, an adversarial key set (e.g. `[0;1], [0;2], …, [0;N]`) builds
-/// a chain deep enough to overflow the stack, which aborts the process.
-/// Rejecting oversized keys at insertion bounds the depth of every
-/// subsequent traversal to a few thousand frames, safe on default thread
-/// stacks.  (The SMT is immune: its depth is hard-capped at 256 bits.)
+/// Each key occupies at most two path nibbles per byte. Traversal,
+/// cloning, cache loading and destruction use explicit work stacks, so
+/// accepted prefix-heavy trees do not consume one call frame per node.
+/// This bound also limits the paths accepted by the cache decoder.
 pub const MAX_MPT_KEY_LEN: usize = 1024;
 
 impl TrieMut {
@@ -37,14 +33,14 @@ impl TrieMut {
         }
         let path = Nibbles::from_raw(key);
         let new_root =
-            Self::insert_rec(mem::take(&mut self.root), path, value.to_vec())?;
+            Self::insert_node(mem::take(&mut self.root), path, value.to_vec())?;
         self.root = new_root;
         Ok(())
     }
 
     pub fn remove(&mut self, key: &[u8]) -> Result<()> {
         let path = Nibbles::from_raw(key);
-        let (new_root, _) = Self::remove_rec(mem::take(&mut self.root), path)?;
+        let (new_root, _) = Self::remove_node(mem::take(&mut self.root), path)?;
         self.root = new_root.unwrap_or_default();
         Ok(())
     }
@@ -53,9 +49,9 @@ impl TrieMut {
     ///
     /// On success `self`'s root holds the freshly hashed trie, so a
     /// subsequent call without intervening mutations is essentially
-    /// free.  No failure path can discard trie data: `commit_rec` is
+    /// free.  No failure path can discard trie data: `commit_nodes` is
     /// total (node encoding and hashing are infallible — its `Result`
-    /// type only propagates child recursion), and the defensive
+    /// type is retained for the caller), and the defensive
     /// root-not-hashed check below restores the root before erroring.
     pub fn commit(&mut self) -> Result<Vec<u8>> {
         let root = mem::take(&mut self.root);
@@ -65,7 +61,7 @@ impl TrieMut {
             return Ok(vec![0u8; 32]);
         }
 
-        match Self::commit_rec(root) {
+        match Self::commit_nodes(root) {
             Ok(root_handle) => {
                 let result = match &root_handle {
                     NodeHandle::Cached(h, _) => Ok(h.clone()),
@@ -85,7 +81,7 @@ impl TrieMut {
     }
 
     /// Re-wrap a node into a handle, preserving a precomputed hash when the
-    /// node is unchanged so no-change `remove_rec` paths don't force a re-hash.
+    /// node is unchanged so no-change `remove_node` paths don't force a re-hash.
     fn rewrap(cached_hash: &Option<Vec<u8>>, node: Node) -> NodeHandle {
         match cached_hash {
             Some(h) => NodeHandle::Cached(h.clone(), Box::new(node)),
@@ -93,15 +89,47 @@ impl TrieMut {
         }
     }
 
-    fn insert_rec(
-        node_handle: NodeHandle,
-        path: Nibbles,
+    fn insert_node(
+        mut handle: NodeHandle,
+        mut path: Nibbles,
         value: Vec<u8>,
     ) -> Result<NodeHandle> {
-        // insert_rec always rebuilds the node, so consume the handle by move
-        // rather than deep-cloning the whole subtree via `resolve`.
-        let node = node_handle.into_node();
+        let mut ancestors = Vec::new();
+        let mut root = loop {
+            let mut node = handle.into_node();
+            match &mut node {
+                Node::Extension {
+                    path: prefix,
+                    child,
+                } if path.starts_with(prefix) => {
+                    let (_, rest) = path.split_at(prefix.len());
+                    handle = mem::take(child);
+                    path = rest;
+                    ancestors.push((node, 0));
+                }
+                Node::Branch { children, .. } if !path.is_empty() => {
+                    let index = path.at(0) as usize;
+                    let (_, rest) = path.split_at(1);
+                    handle = children[index].take().unwrap_or_default();
+                    path = rest;
+                    ancestors.push((node, index));
+                }
+                _ => break Self::insert_terminal(node, path, value)?,
+            }
+        };
+        for (mut node, index) in ancestors.into_iter().rev() {
+            match &mut node {
+                Node::Extension { child, .. } => *child = root,
+                Node::Branch { children, .. } => children[index] = Some(root),
+                _ => unreachable!("only ancestors are retained"),
+            }
+            root = NodeHandle::InMemory(Box::new(node));
+        }
+        Ok(root)
+    }
 
+    /// Splits/replaces the terminal node after iterative descent.
+    fn insert_terminal(node: Node, path: Nibbles, value: Vec<u8>) -> Result<NodeHandle> {
         match node {
             Node::Null => Ok(NodeHandle::InMemory(Box::new(Node::Leaf { path, value }))),
             Node::Leaf {
@@ -166,282 +194,249 @@ impl TrieMut {
             } => {
                 let common = path.common_prefix(&ext_path);
 
-                if common == ext_path.len() {
-                    let (_, rest) = path.split_at(common);
-                    let new_child = Self::insert_rec(child, rest, value)?;
+                let (common_path, _) = ext_path.split_at(common);
+                let idx_ext = ext_path.at(common) as usize;
+                let (_, rest_ext) = ext_path.split_at(common + 1);
+
+                let mut children: Box<[Option<NodeHandle>; 16]> = Box::new([
+                    None, None, None, None, None, None, None, None, None, None, None,
+                    None, None, None, None, None,
+                ]);
+
+                let old_branch_child = if rest_ext.is_empty() {
+                    child
+                } else {
+                    NodeHandle::InMemory(Box::new(Node::Extension {
+                        path: rest_ext,
+                        child,
+                    }))
+                };
+                children[idx_ext] = Some(old_branch_child);
+
+                let mut branch_value = None;
+                if common == path.len() {
+                    branch_value = Some(value);
+                } else {
+                    let idx_new = path.at(common) as usize;
+                    let (_, rest_new) = path.split_at(common + 1);
+                    children[idx_new] =
+                        Some(NodeHandle::InMemory(Box::new(Node::Leaf {
+                            path: rest_new,
+                            value,
+                        })));
+                }
+
+                let branch = NodeHandle::InMemory(Box::new(Node::Branch {
+                    children,
+                    value: branch_value,
+                }));
+
+                if common > 0 {
                     Ok(NodeHandle::InMemory(Box::new(Node::Extension {
-                        path: ext_path,
-                        child: new_child,
+                        path: common_path,
+                        child: branch,
                     })))
                 } else {
-                    let (common_path, _) = ext_path.split_at(common);
-                    let idx_ext = ext_path.at(common) as usize;
-                    let (_, rest_ext) = ext_path.split_at(common + 1);
-
-                    let mut children: Box<[Option<NodeHandle>; 16]> = Box::new([
-                        None, None, None, None, None, None, None, None, None, None,
-                        None, None, None, None, None, None,
-                    ]);
-
-                    let old_branch_child = if rest_ext.is_empty() {
-                        child
-                    } else {
-                        NodeHandle::InMemory(Box::new(Node::Extension {
-                            path: rest_ext,
-                            child,
-                        }))
-                    };
-                    children[idx_ext] = Some(old_branch_child);
-
-                    let mut branch_value = None;
-                    if common == path.len() {
-                        branch_value = Some(value);
-                    } else {
-                        let idx_new = path.at(common) as usize;
-                        let (_, rest_new) = path.split_at(common + 1);
-                        children[idx_new] =
-                            Some(NodeHandle::InMemory(Box::new(Node::Leaf {
-                                path: rest_new,
-                                value,
-                            })));
-                    }
-
-                    let branch = NodeHandle::InMemory(Box::new(Node::Branch {
-                        children,
-                        value: branch_value,
-                    }));
-
-                    if common > 0 {
-                        Ok(NodeHandle::InMemory(Box::new(Node::Extension {
-                            path: common_path,
-                            child: branch,
-                        })))
-                    } else {
-                        Ok(branch)
-                    }
+                    Ok(branch)
                 }
             }
-            Node::Branch {
-                mut children,
-                value: b_value,
-            } => {
-                if path.is_empty() {
-                    Ok(NodeHandle::InMemory(Box::new(Node::Branch {
-                        children,
-                        value: Some(value),
-                    })))
-                } else {
-                    let idx = path.at(0) as usize;
-                    let (_, rest) = path.split_at(1);
-                    let child = children[idx].take().unwrap_or_default();
-                    let new_child = Self::insert_rec(child, rest, value)?;
-                    children[idx] = Some(new_child);
-                    Ok(NodeHandle::InMemory(Box::new(Node::Branch {
-                        children,
-                        value: b_value,
-                    })))
-                }
+            Node::Branch { children, .. } => {
+                Ok(NodeHandle::InMemory(Box::new(Node::Branch {
+                    children,
+                    value: Some(value),
+                })))
             }
         }
     }
 
-    fn compact(node: Node) -> Option<NodeHandle> {
-        match node {
-            Node::Null => None,
-            Node::Leaf { path, value } => {
-                Some(NodeHandle::InMemory(Box::new(Node::Leaf { path, value })))
-            }
-            Node::Extension { path, child } => {
-                // Peek the cached hash so the no-merge path can rebuild
-                // the original handle without re-hashing, then consume the
-                // child by move — no subtree clone.
-                let cached_hash = child.hash().map(|h| h.to_vec());
-                match child.into_node() {
-                    Node::Extension {
-                        path: child_path,
-                        child: grand_child,
-                    } => {
-                        let mut new_path_data = path.as_slice().to_vec();
-                        new_path_data.extend_from_slice(child_path.as_slice());
-                        let new_path = Nibbles::from_nibbles_unsafe(new_path_data);
-                        Self::compact(Node::Extension {
-                            path: new_path,
+    fn compact(mut node: Node) -> Option<NodeHandle> {
+        loop {
+            return match node {
+                Node::Null => None,
+                Node::Leaf { path, value } => {
+                    Some(NodeHandle::InMemory(Box::new(Node::Leaf { path, value })))
+                }
+                Node::Extension { path, child } => {
+                    // Peek the cached hash so the no-merge path can rebuild
+                    // the original handle without re-hashing, then consume the
+                    // child by move — no subtree clone.
+                    let cached_hash = child.hash().map(|h| h.to_vec());
+                    match child.into_node() {
+                        Node::Extension {
+                            path: child_path,
                             child: grand_child,
-                        })
+                        } => {
+                            let mut new_path_data = path.as_slice().to_vec();
+                            new_path_data.extend_from_slice(child_path.as_slice());
+                            let new_path = Nibbles::from_nibbles_unsafe(new_path_data);
+                            node = Node::Extension {
+                                path: new_path,
+                                child: grand_child,
+                            };
+                            continue;
+                        }
+                        Node::Leaf {
+                            path: child_path,
+                            value,
+                        } => {
+                            let mut new_path_data = path.as_slice().to_vec();
+                            new_path_data.extend_from_slice(child_path.as_slice());
+                            let new_path = Nibbles::from_nibbles_unsafe(new_path_data);
+                            Some(NodeHandle::InMemory(Box::new(Node::Leaf {
+                                path: new_path,
+                                value,
+                            })))
+                        }
+                        other => Some(NodeHandle::InMemory(Box::new(Node::Extension {
+                            path,
+                            child: Self::rewrap(&cached_hash, other),
+                        }))),
                     }
-                    Node::Leaf {
-                        path: child_path,
-                        value,
-                    } => {
-                        let mut new_path_data = path.as_slice().to_vec();
-                        new_path_data.extend_from_slice(child_path.as_slice());
-                        let new_path = Nibbles::from_nibbles_unsafe(new_path_data);
-                        Some(NodeHandle::InMemory(Box::new(Node::Leaf {
-                            path: new_path,
+                }
+                Node::Branch {
+                    mut children,
+                    value,
+                } => {
+                    let mut num_children = 0;
+                    let mut last_idx = 0;
+                    for (i, c) in children.iter().enumerate() {
+                        if c.is_some() {
+                            num_children += 1;
+                            last_idx = i;
+                        }
+                    }
+
+                    if num_children == 0 {
+                        value.map(|v| {
+                            NodeHandle::InMemory(Box::new(Node::Leaf {
+                                path: Nibbles::default(),
+                                value: v,
+                            }))
+                        })
+                    } else if num_children == 1 && value.is_none() {
+                        let remaining_child = children[last_idx].take().unwrap();
+                        let ext_path =
+                            Nibbles::from_nibbles_unsafe(vec![last_idx as u8]);
+                        node = Node::Extension {
+                            path: ext_path,
+                            child: remaining_child,
+                        };
+                        continue;
+                    } else {
+                        Some(NodeHandle::InMemory(Box::new(Node::Branch {
+                            children,
                             value,
                         })))
                     }
-                    other => Some(NodeHandle::InMemory(Box::new(Node::Extension {
-                        path,
-                        child: Self::rewrap(&cached_hash, other),
-                    }))),
                 }
-            }
-            Node::Branch {
-                mut children,
-                value,
-            } => {
-                let mut num_children = 0;
-                let mut last_idx = 0;
-                for (i, c) in children.iter().enumerate() {
-                    if c.is_some() {
-                        num_children += 1;
-                        last_idx = i;
-                    }
-                }
-
-                if num_children == 0 {
-                    value.map(|v| {
-                        NodeHandle::InMemory(Box::new(Node::Leaf {
-                            path: Nibbles::default(),
-                            value: v,
-                        }))
-                    })
-                } else if num_children == 1 && value.is_none() {
-                    let remaining_child = children[last_idx].take().unwrap();
-                    let ext_path = Nibbles::from_nibbles_unsafe(vec![last_idx as u8]);
-                    Self::compact(Node::Extension {
-                        path: ext_path,
-                        child: remaining_child,
-                    })
-                } else {
-                    Some(NodeHandle::InMemory(Box::new(Node::Branch {
-                        children,
-                        value,
-                    })))
-                }
-            }
+            };
         }
     }
 
-    fn remove_rec(
-        node_handle: NodeHandle,
-        path: Nibbles,
+    fn remove_node(
+        mut handle: NodeHandle,
+        mut path: Nibbles,
     ) -> Result<(Option<NodeHandle>, bool)> {
-        // Peek the cached hash so no-change paths can rebuild the original
-        // handle (preserving the precomputed hash) after moving the node out,
-        // instead of deep-cloning the whole subtree via `resolve`.
-        let cached_hash = node_handle.hash().map(|h| h.to_vec());
-        let node = node_handle.into_node();
-
-        match node {
-            Node::Null => Ok((None, false)),
-            Node::Leaf {
-                path: leaf_path,
-                value,
-            } => {
-                if leaf_path == path {
-                    Ok((None, true))
-                } else {
-                    let n = Node::Leaf {
-                        path: leaf_path,
-                        value,
-                    };
-                    Ok((Some(Self::rewrap(&cached_hash, n)), false))
+        let mut ancestors = Vec::new();
+        let (mut root, changed) = loop {
+            let cached_hash = handle.hash().map(|h| h.to_vec());
+            let mut node = handle.into_node();
+            match &mut node {
+                Node::Extension {
+                    path: prefix,
+                    child,
+                } if path.starts_with(prefix) => {
+                    let (_, rest) = path.split_at(prefix.len());
+                    handle = mem::take(child);
+                    path = rest;
+                    ancestors.push((node, 0, cached_hash));
+                    continue;
                 }
-            }
-            Node::Extension {
-                path: ext_path,
-                child,
-            } => {
-                if path.starts_with(&ext_path) {
-                    let (_, rest) = path.split_at(ext_path.len());
-                    let (new_child, changed) = Self::remove_rec(child, rest)?;
-                    if !changed {
-                        let n = Node::Extension {
-                            path: ext_path,
-                            child: new_child.unwrap_or_default(),
-                        };
-                        return Ok((Some(Self::rewrap(&cached_hash, n)), false));
-                    }
-
-                    if let Some(c) = new_child {
-                        let compacted = Self::compact(Node::Extension {
-                            path: ext_path,
-                            child: c,
-                        });
-                        Ok((compacted, true))
-                    } else {
-                        Ok((None, true))
-                    }
-                } else {
-                    let n = Node::Extension {
-                        path: ext_path,
-                        child,
-                    };
-                    Ok((Some(Self::rewrap(&cached_hash, n)), false))
-                }
-            }
-            Node::Branch {
-                mut children,
-                value,
-            } => {
-                if path.is_empty() {
-                    if value.is_some() {
-                        let compacted = Self::compact(Node::Branch {
-                            children,
-                            value: None,
-                        });
-                        Ok((compacted, true))
-                    } else {
-                        let n = Node::Branch { children, value };
-                        Ok((Some(Self::rewrap(&cached_hash, n)), false))
-                    }
-                } else {
-                    let idx = path.at(0) as usize;
-                    let (_, rest) = path.split_at(1);
-                    if let Some(child) = children[idx].take() {
-                        let (new_child, changed) = Self::remove_rec(child, rest)?;
-                        children[idx] = new_child;
-                        if changed {
-                            let compacted =
-                                Self::compact(Node::Branch { children, value });
-                            Ok((compacted, true))
-                        } else {
-                            let n = Node::Branch { children, value };
-                            Ok((Some(Self::rewrap(&cached_hash, n)), false))
-                        }
-                    } else {
-                        let n = Node::Branch { children, value };
-                        Ok((Some(Self::rewrap(&cached_hash, n)), false))
+                Node::Branch { children, .. } if !path.is_empty() => {
+                    let index = path.at(0) as usize;
+                    if let Some(child) = children[index].take() {
+                        let (_, rest) = path.split_at(1);
+                        handle = child;
+                        path = rest;
+                        ancestors.push((node, index, cached_hash));
+                        continue;
                     }
                 }
+                _ => {}
             }
+            break match node {
+                Node::Null => (None, false),
+                Node::Leaf { path: ref leaf, .. } if *leaf == path => (None, true),
+                Node::Branch {
+                    children,
+                    value: Some(_),
+                } if path.is_empty() => (
+                    Self::compact(Node::Branch {
+                        children,
+                        value: None,
+                    }),
+                    true,
+                ),
+                node => (Some(Self::rewrap(&cached_hash, node)), false),
+            };
+        };
+        for (mut node, index, cached_hash) in ancestors.into_iter().rev() {
+            match &mut node {
+                Node::Extension { child, .. } => {
+                    let Some(replacement) = root else { continue };
+                    *child = replacement;
+                }
+                Node::Branch { children, .. } => children[index] = root,
+                _ => unreachable!("only ancestors are retained"),
+            }
+            root = if changed {
+                Self::compact(node)
+            } else {
+                Some(Self::rewrap(&cached_hash, node))
+            };
         }
+        Ok((root, changed))
     }
 
-    fn commit_rec(handle: NodeHandle) -> Result<NodeHandle> {
-        match handle {
-            NodeHandle::InMemory(mut node) => {
-                match *node {
-                    Node::Extension { ref mut child, .. } => {
-                        *child = Self::commit_rec(mem::take(child))?;
-                    }
-                    Node::Branch {
-                        ref mut children, ..
-                    } => {
-                        for child in children.iter_mut().flatten() {
-                            *child = Self::commit_rec(mem::take(child))?;
-                        }
-                    }
-                    _ => {}
-                }
-
-                let encoded = NodeCodec::encode(&node);
-                let hash = Keccak256::digest(&encoded).to_vec();
-                Ok(NodeHandle::Cached(hash, node))
-            }
-            h => Ok(h),
+    fn commit_nodes(handle: NodeHandle) -> Result<NodeHandle> {
+        enum Work {
+            Visit(NodeHandle),
+            Finish(Node),
         }
+        let mut pending = vec![Work::Visit(handle)];
+        let mut ready = Vec::new();
+        while let Some(work) = pending.pop() {
+            match work {
+                Work::Visit(handle) if handle.hash().is_some() => ready.push(handle),
+                Work::Visit(handle) => {
+                    let mut node = handle.into_node();
+                    let children: Vec<_> = match &mut node {
+                        Node::Extension { child, .. } => vec![mem::take(child)],
+                        Node::Branch { children, .. } => {
+                            children.iter_mut().flatten().map(mem::take).collect()
+                        }
+                        _ => Vec::new(),
+                    };
+                    pending.push(Work::Finish(node));
+                    pending.extend(children.into_iter().rev().map(Work::Visit));
+                }
+                Work::Finish(mut node) => {
+                    match &mut node {
+                        Node::Extension { child, .. } => {
+                            *child = ready.pop().expect("visited child")
+                        }
+                        Node::Branch { children, .. } => {
+                            for child in children.iter_mut().rev().flatten() {
+                                *child = ready.pop().expect("visited child");
+                            }
+                        }
+                        _ => {}
+                    }
+                    let hash = Keccak256::digest(NodeCodec::encode(&node)).to_vec();
+                    ready.push(NodeHandle::Cached(hash, Box::new(node)));
+                }
+            }
+        }
+        Ok(ready.pop().expect("visited root"))
     }
 }

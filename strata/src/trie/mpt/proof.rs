@@ -84,54 +84,43 @@ pub fn prove(root: &NodeHandle, key: &[u8]) -> Result<MptProof> {
 }
 
 fn prove_walk(
-    handle: &NodeHandle,
-    path: Nibbles,
+    mut handle: &NodeHandle,
+    mut path: Nibbles,
     nodes: &mut Vec<Vec<u8>>,
 ) -> Result<Option<Vec<u8>>> {
-    let node = resolve(handle)?;
-
-    match node {
-        Node::Null => {
-            nodes.push(NodeCodec::encode(&Node::Null));
-            Ok(None)
-        }
-
-        Node::Leaf {
-            path: leaf_path,
-            value,
-        } => {
-            nodes.push(NodeCodec::encode(node));
-            if *leaf_path == path {
-                Ok(Some(value.clone()))
-            } else {
-                Ok(None)
+    loop {
+        let node = resolve(handle)?;
+        nodes.push(NodeCodec::encode(node));
+        match node {
+            Node::Null => return Ok(None),
+            Node::Leaf {
+                path: leaf_path,
+                value,
+            } => {
+                return Ok((*leaf_path == path).then(|| value.clone()));
             }
-        }
-
-        Node::Extension {
-            path: ext_path,
-            child,
-        } => {
-            nodes.push(NodeCodec::encode(node));
-            if path.starts_with(ext_path) {
+            Node::Extension {
+                path: ext_path,
+                child,
+            } => {
+                if !path.starts_with(ext_path) {
+                    return Ok(None);
+                }
                 let (_, remaining) = path.split_at(ext_path.len());
-                prove_walk(child, remaining, nodes)
-            } else {
-                Ok(None) // non-membership: path diverges in extension
+                path = remaining;
+                handle = child;
             }
-        }
-
-        Node::Branch { children, value } => {
-            nodes.push(NodeCodec::encode(node));
-            if path.is_empty() {
-                return Ok(value.clone());
-            }
-            let idx = path.at(0) as usize;
-            if let Some(child) = &children[idx] {
+            Node::Branch { children, value } => {
+                if path.is_empty() {
+                    return Ok(value.clone());
+                }
+                let index = path.at(0) as usize;
+                let Some(child) = &children[index] else {
+                    return Ok(None);
+                };
                 let (_, remaining) = path.split_at(1);
-                prove_walk(child, remaining, nodes)
-            } else {
-                Ok(None) // non-membership: no child at this nibble
+                path = remaining;
+                handle = child;
             }
         }
     }
