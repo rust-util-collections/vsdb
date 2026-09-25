@@ -835,7 +835,11 @@ impl DagMapRaw {
             .map(|(_, child)| child)
             .collect();
         let mut marked = Vec::new();
+        let mut seen = HashSet::new();
         while let Some(node) = frontier.pop() {
+            if !seen.insert(node.instance_id()) {
+                continue;
+            }
             frontier.extend(
                 node.children
                     .iter()

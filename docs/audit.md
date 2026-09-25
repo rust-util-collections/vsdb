@@ -11,14 +11,6 @@
 
 ## Open
 
-### [MEDIUM] DagMap: marked registry cycles prevent prune retry from completing
-- **Where**: `strata/src/dagmap/raw/mod.rs` (`clear_marked_reachable`)
-- **What**: the public serde component representation permits adding a self-reference to a consumed head's children registry. Retrying prune repeatedly expands that marked node.
-- **Why**: this recovery traversal has no visited set, unlike other graph walks. The resulting loop retains duplicate handles indefinitely. Ordinary construction and supported crash states do not create this cycle.
-- **Suggested fix**: visit each instance once before expanding marked children; test a consumed head with a repeated registry link and preserve surviving data. This runtime guard needs no migration and does not resolve the separate component-representation limitation below.
-
----
-
 ### [LOW] SlotDex: bulk documentation promises chunked commits
 - **Where**: `strata/src/slotdex/mod.rs` (module documentation), `strata/docs/api.md` (Slotdex)
 - **What**: the overview and API guide describe bulk insertion as chunked, although `insert_batch` stages and commits the entire call in one atomic batch.

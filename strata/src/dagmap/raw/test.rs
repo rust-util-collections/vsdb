@@ -914,3 +914,32 @@ fn clone_remaps_prune_recovery_markers() {
     assert_eq!(copied_root.get(b"key"), Some(b"value".to_vec()));
     assert_eq!(original_root.get(b"key"), Some(b"value".to_vec()));
 }
+
+#[test]
+fn prune_retry_visits_repeated_marked_nodes_once() {
+    let mut genesis = DagMapRaw::new(None);
+    genesis.insert(b"base", b"base-value");
+    let mut head = DagMapRaw::new(Some(&mut genesis));
+    head.insert(b"head", b"head-value");
+    let survivor = DagMapRaw::new(Some(&mut head));
+    let bytes = postcard::to_allocvec(&head).unwrap();
+    let expected = head.prune().unwrap().instance_id();
+
+    // Component deserialization can retain a registry alias. A repeated
+    // marked entry must not prevent an already-completed prune from retrying.
+    let consumed: DagMapRaw = postcard::from_bytes(&bytes).unwrap();
+    let (_, _, mut children): (
+        MapxRaw,
+        Orphan<Option<DagMapRaw>>,
+        MapxOrdRawKey<DagMapRaw>,
+    ) = postcard::from_bytes(&bytes).unwrap();
+    children.insert(b"repeat-a", &consumed);
+    children.insert(b"repeat-b", &consumed);
+
+    let recovered = consumed.prune().unwrap();
+    assert_eq!(recovered.instance_id(), expected);
+    assert_eq!(recovered.get(b"base").unwrap(), b"base-value");
+    assert_eq!(recovered.get(b"head").unwrap(), b"head-value");
+    assert_eq!(survivor.get(b"head").unwrap(), b"head-value");
+    assert!(children.iter().next().is_none());
+}
