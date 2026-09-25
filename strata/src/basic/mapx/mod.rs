@@ -52,6 +52,7 @@ use crate::{
         },
     },
     common::{
+        RawBytes,
         ende::{KeyEnDe, KeyRef, ValueEnDe},
         error::Result,
         macros::define_map_wrapper,
@@ -88,15 +89,17 @@ where
 {
     /// Retrieves a value from the map for a given key.
     ///
-    /// The key may be any borrowed form of `K` (`&str` for `String` keys,
-    /// `&[u8]` for `Vec<u8>` keys), like `HashMap::get`.
+    /// Supports `&str` for `String` keys and `&[u8]` for `Vec<u8>`,
+    /// `Box<[u8]>`, or `[u8; N]` keys. Array queries must have length `N`;
+    /// other lengths miss. Other borrowed forms must satisfy [`KeyRef`]'s
+    /// encoding contract.
     #[inline(always)]
     pub fn get<Q>(&self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
         Q: KeyRef + ?Sized,
     {
-        self.inner.get(key.key_bytes())
+        self.inner.get(Self::query_bytes(key)?)
     }
 
     /// Retrieves a mutable reference to a value in the map (borrowed key
@@ -107,7 +110,7 @@ where
         K: Borrow<Q>,
         Q: KeyRef + ?Sized,
     {
-        self.inner.get_mut(key.key_bytes())
+        self.inner.get_mut(Self::query_bytes(key)?)
     }
 
     /// Checks if the map contains a value for the specified key (borrowed
@@ -118,7 +121,7 @@ where
         K: Borrow<Q>,
         Q: KeyRef + ?Sized,
     {
-        self.inner.contains_key(key.key_bytes())
+        Self::query_bytes(key).is_some_and(|bytes| self.inner.contains_key(bytes))
     }
 
     /// Inserts a key-value pair into the map.
@@ -183,7 +186,32 @@ where
         K: Borrow<Q>,
         Q: KeyRef + ?Sized,
     {
-        self.inner.remove(key.key_bytes())
+        if let Some(bytes) = Self::query_bytes(key) {
+            self.inner.remove(bytes);
+        }
+    }
+
+    fn query_bytes<Q>(key: &Q) -> Option<RawBytes>
+    where
+        K: Borrow<Q>,
+        Q: KeyRef + ?Sized,
+    {
+        let Some(slice) = key.as_byte_slice() else {
+            return Some(key.key_bytes());
+        };
+        // Borrow alone does not imply identical encodings: arrays encode
+        // as tuples, while Vec/Box slices encode with a length prefix.
+        // Resolve through K and verify its borrowed contents before any
+        // storage access. Decoders may accept trailing bytes, so successful
+        // decoding alone cannot establish that this is the requested key.
+        let matches = |owned: &K| owned.borrow().as_byte_slice() == Some(slice);
+        if let Ok(owned) = K::decode(slice)
+            && matches(&owned)
+        {
+            return Some(owned.encode());
+        }
+        let owned = K::decode(&key.key_bytes()).ok()?;
+        matches(&owned).then(|| owned.encode())
     }
 
     /// Start a batch operation.

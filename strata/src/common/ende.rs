@@ -233,11 +233,22 @@ impl<T: ValueEn + ValueDe> ValueEnDe for T {
 ///
 /// Implemented for every `KeyEnDe` type (encoding itself) and for `str`
 /// and `[u8]`, whose encodings are byte-identical to `String`'s and
-/// `Vec<u8>`'s. An implementation for another borrowed form must encode
-/// exactly as its owner does, or lookups miss.
+/// `Vec<u8>`'s. Byte slices also expose their contents so `Mapx` can resolve
+/// them against the owning key codec (fixed arrays have no length prefix).
+/// An implementation for another borrowed form must encode exactly as its
+/// owner does, or lookups can miss or address another key.
 pub trait KeyRef {
     /// The stored-key bytes this value addresses.
     fn key_bytes(&self) -> RawBytes;
+
+    /// Byte-slice contents, when this is a borrowed byte-slice query.
+    ///
+    /// Unlike [`key_bytes`](Self::key_bytes), these bytes have no length
+    /// prefix. Maps validate them against the owning key before encoding it.
+    /// Other borrowed forms use the default encoding contract above.
+    fn as_byte_slice(&self) -> Option<&[u8]> {
+        None
+    }
 }
 
 impl<T: KeyEnDe> KeyRef for T {
@@ -258,6 +269,11 @@ impl KeyRef for [u8] {
     #[inline(always)]
     fn key_bytes(&self) -> RawBytes {
         postcard::to_allocvec(self).unwrap()
+    }
+
+    #[inline(always)]
+    fn as_byte_slice(&self) -> Option<&[u8]> {
+        Some(self)
     }
 }
 

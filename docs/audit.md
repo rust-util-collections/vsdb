@@ -12,14 +12,6 @@
 
 ## Open
 
-### [HIGH] collections: Mapx slice queries against `[u8; N]` keys miss or delete a different key
-- **Where**: `strata/src/basic/mapx/mod.rs` (`get`, `get_mut`, `contains_key`, `remove`)
-- **What**: `Mapx<[u8; N], V>` stores `K::encode()` (postcard tuple: N raw bytes). Those methods accept `K: Borrow<Q>, Q: KeyRef`, and `[u8; N]: Borrow<[u8]>`, so a slice calls `[u8]::key_bytes` (postcard byte string: varint length plus bytes). An equal-length slice always misses. A shorter slice can name another key: `insert(&[0x01, 0x00], …)` then `get`/`remove` of `&[0x00]` addresses that entry, because both encodings are `01 00`. `get_mut` returns a write-back guard for that other key.
-- **Why**: technical-patterns 3.5. The method docs advertise borrowed lookup like `HashMap::get`, and `KeyEn` calls fixed arrays safe keys. `HashMap` compares through `Borrow`; this bound does not prove encoding identity. `KeyRef for [u8]` is correct for `Vec<u8>` and `Box<[u8]>` only. `MapxOrd` is unaffected (both sides are raw bytes). Owned `&[u8; N]` lookups already match. Batch insert/remove take `&K` and use `encode()`. No on-disk layout change.
-- **Suggested fix**: Stop treating unconstrained `Borrow + KeyRef` as encoding identity. For `[u8; N]`, an equal-length slice is the raw N bytes; any other length is a miss and must not be length-prefixed (that encoding is what collides). Keep `String`/`str` and `Vec<u8>`/`[u8]`. Regression: `Mapx<[u8; 2], u32>` — `get(&[0x01, 0x00][..])` hits; `get`/`remove` of `&[0x00][..]` does not see or delete `[0x01, 0x00]`. Bugfix only; no migration.
-
----
-
 ### [HIGH] dagmap: prune retry treats a partial clearing-marker set as finished
 - **Where**: `strata/src/dagmap/raw/mod.rs` (`mark_consumed_clearing`, `prune`, `finish_interrupted_clear`, `survivor_ids`)
 - **What**: `mark_consumed_clearing` writes the head marker, then each intermediate, as separate puts. A default put flushes the WAL to the OS before returning, so `kill -9` after the head `set_aux` returns and before the next `set_aux` is issued recovers only the head marker. Parent slots are still intact (clear has not started; the re-parent flush already returned). `prune` then takes `finish_interrupted_clear` and does not mark unmarked ancestors. `clear_marked_reachable` only walks children that already have the marker, so an unmarked intermediate hides the rest of the chain. `survivor_ids` keeps that intermediate because it has no marker and its parent is genesis. `genesis.prune()` is a no-op (parentless, unmarked). The intermediate stays a live child and serves its pre-fold values (`k1=v1` while genesis has `k1=v1x` in `build_prune_fixture`).
