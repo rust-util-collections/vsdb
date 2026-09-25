@@ -79,7 +79,20 @@ impl<'de> Deserialize<'de> for SmtProof {
     }
 }
 
-fn decode<T: de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
+fn decode<T: de::DeserializeOwned>(bytes: &[u8], expected: &[u8; 8]) -> Result<T> {
+    let tag = bytes
+        .get(..expected.len())
+        .ok_or_else(|| VsdbError::Decode {
+            detail: "incomplete proof format header".into(),
+        })?;
+    if tag != expected {
+        return Err(VsdbError::Decode {
+            detail: format!(
+                "unsupported proof format {tag:?}; expected {}",
+                String::from_utf8_lossy(expected),
+            ),
+        });
+    }
     let (proof, remaining) = postcard::take_from_bytes(bytes)?;
     if !remaining.is_empty() {
         return Err(VsdbError::Decode {
@@ -104,7 +117,7 @@ impl MptProof {
     /// Call [`MptCalc::verify_proof`](super::MptCalc::verify_proof) with the
     /// expected root and key before relying on the decoded value.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        decode(bytes)
+        decode(bytes, &MPT_FORMAT)
     }
 }
 
@@ -123,6 +136,6 @@ impl SmtProof {
     /// Call [`SmtCalc::verify_proof`](super::SmtCalc::verify_proof) with the
     /// expected root and key before relying on the decoded value.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        decode(bytes)
+        decode(bytes, &SMT_FORMAT)
     }
 }

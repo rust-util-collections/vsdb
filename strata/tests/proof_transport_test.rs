@@ -1,5 +1,5 @@
 use std::{env, fs, process::Command};
-use vsdb::{MptCalc, MptProof, SmtCalc, SmtProof};
+use vsdb::{MptCalc, MptProof, SmtCalc, SmtProof, VsdbError};
 
 #[test]
 fn proof_transport_across_processes() {
@@ -110,8 +110,12 @@ fn proof_transport_fixtures_and_frame_errors() {
         }
         let mut future = bytes.clone();
         future[7] = b'2';
-        assert!(MptProof::from_bytes(&future).is_err());
-        assert!(SmtProof::from_bytes(&future).is_err());
+        assert!(
+            matches!(MptProof::from_bytes(&future), Err(VsdbError::Decode { detail }) if detail.contains("unsupported proof format"))
+        );
+        assert!(
+            matches!(SmtProof::from_bytes(&future), Err(VsdbError::Decode { detail }) if detail.contains("unsupported proof format"))
+        );
         let mut trailing = bytes;
         trailing.push(0);
         assert!(MptProof::from_bytes(&trailing).is_err());
