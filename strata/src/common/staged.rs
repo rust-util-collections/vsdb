@@ -105,8 +105,9 @@ impl StagedRows {
     /// Commits every staged row (and the wipe, if staged) through a
     /// single engine write batch.
     ///
-    /// On success the staged set has been applied atomically; on error
-    /// nothing was applied (the batch is all-or-nothing).
+    /// On success the staged set has been applied atomically. Preflight
+    /// rejection leaves it unapplied; persistence errors can leave recoverable
+    /// WAL data, so callers must not automatically retry ambiguous failures.
     pub(crate) fn commit(self, store: &mut MapxRaw) -> Result<()> {
         if self.rows.is_empty() && !self.wiped {
             return Ok(());

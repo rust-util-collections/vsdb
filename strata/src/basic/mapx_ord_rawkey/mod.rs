@@ -258,8 +258,9 @@ where
     /// and commit them atomically.
     ///
     /// A failed [`commit`](MapxOrdRawKeyBatch::commit) consumes
-    /// the buffered operations (none are applied) and is not retryable —
-    /// re-stage the operations on a fresh batch instead.
+    /// the buffered operations. Preflight rejections leave them unapplied;
+    /// persistence errors can be ambiguous after recovery and must not be
+    /// retried automatically.
     ///
     /// # Examples
     ///

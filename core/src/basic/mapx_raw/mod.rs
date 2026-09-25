@@ -569,8 +569,9 @@ impl MapxRaw {
     /// Starts a write batch.
     ///
     /// Buffered insert/remove operations are applied atomically by
-    /// [`MapxRawBatch::commit`], which consumes the batch: on error none
-    /// of them was applied — re-stage them on a fresh batch.
+    /// [`MapxRawBatch::commit`], which consumes the batch. Preflight rejection
+    /// leaves it unapplied; persistence failures can be ambiguous after
+    /// recovery and must not be retried automatically.
     ///
     /// # Examples
     ///
@@ -607,7 +608,8 @@ impl MapxRaw {
     /// applied result, never anything in between (even across a crash).
     ///
     /// The wipe belongs to the buffered operations: like them, it is
-    /// applied (or, on error, discarded) by [`MapxRawBatch::commit`].
+    /// applied by [`MapxRawBatch::commit`]. Persistence failures may be
+    /// ambiguous after recovery; dropping an uncommitted batch discards it.
     ///
     /// # Examples
     ///
