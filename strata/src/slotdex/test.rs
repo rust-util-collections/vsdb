@@ -1063,6 +1063,14 @@ fn reverse_paging_bounds_hot_slot_decoding() {
         // A page entirely inside a hot slot must stop at its quota, including
         // when tier counts locate its start in the middle of that slot.
         for order in [Order::Asc, Order::Desc] {
+            DECODES.store(0, Ordering::Relaxed);
+            let stream = sd.iter(0..=0, order);
+            assert_eq!(DECODES.load(Ordering::Relaxed), 0);
+            assert_eq!(
+                stream.take(10).collect::<Vec<_>>(),
+                (0..10).map(CountingKey).collect::<Vec<_>>()
+            );
+            assert_eq!(DECODES.load(Ordering::Relaxed), 10);
             for page_index in [0, 100] {
                 DECODES.store(0, Ordering::Relaxed);
                 let got = sd.page(0..=0, 10, page_index, order);

@@ -449,6 +449,23 @@ assert_eq!(db.total(), 5);
 ```
 
 `Order` controls slot order; keys within a slot retain ascending key order.
+For a complete range scan or aggregation, use `iter(slots, order)`:
+
+```rust
+use vsdb::{SlotDex64, slotdex::Order};
+let mut index = SlotDex64::<u64>::new(8, false).unwrap();
+index.insert_batch((0..70_000).map(|key| (100, key))).unwrap();
+assert_eq!(index.iter(100..=100, Order::Asc).count(), 70_000);
+let first_ten: Vec<_> = index.iter(.., Order::Desc).take(10).collect();
+assert_eq!(first_ten, (0..10).collect::<Vec<_>>());
+```
+
+The iterator decodes keys on demand and has no `u16` page-size ceiling. It keeps
+ascending keys within each slot in both slot orders. Keep the index's single
+active handle for the entire iteration; restored aliases must not mutate it.
+Use `page` when seeking directly to an offset, and `count` for a row count that
+does not need to decode the keys.
+
 SlotDex stores counts and rows together in one atomic batch per mutation,
 including the entire `insert_batch` call. Split large imports across calls
 to bound temporary memory; earlier calls remain committed if a later call

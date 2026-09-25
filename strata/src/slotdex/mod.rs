@@ -1404,6 +1404,58 @@ where
         }
     }
 
+    /// Streams every key whose slot lies in `slots`, without a page-size limit.
+    ///
+    /// Slots follow `order`; keys within each slot are always ascending, as in
+    /// [`page`](Self::page). Keys are decoded as they are requested, so `take`,
+    /// `fold`, and aggregation do not buffer the whole range. Storage-order
+    /// traversal uses one entry scan; the opposite order seeks once per slot.
+    ///
+    /// The iterator borrows this index. Keep the single-active-handle contract
+    /// while it is alive, including when another handle was restored by serde.
+    pub fn iter(
+        &self,
+        slots: impl RangeBounds<S>,
+        order: Order,
+    ) -> impl Iterator<Item = K> + '_ {
+        let slot_len = S::MIN.to_bytes().len();
+        inclusive_slots(&slots)
+            .into_iter()
+            .flat_map(move |(lo, hi)| {
+                let (lo, hi, swapped) = self.transform_range(lo, hi);
+                let reverse = (order == Order::Desc) ^ swapped;
+                let forward = (!reverse)
+                    .then(|| {
+                        self.entry_range(
+                            Bound::Included(lo.clone()),
+                            Bound::Included(hi.clone()),
+                        )
+                    })
+                    .flatten()
+                    .into_iter()
+                    .flatten();
+                let mut slot_rows = reverse.then(|| {
+                    self.level0_range(Bound::Included(lo), Bound::Included(hi))
+                });
+                let backward =
+                    std::iter::from_fn(move || slot_rows.as_mut()?.next_back())
+                        .flat_map(move |(key, value)| {
+                            let slot = decode_level_row::<S>(&key, &value).0;
+                            self.entry_range(
+                                Bound::Included(slot.clone()),
+                                Bound::Included(slot),
+                            )
+                            .into_iter()
+                            .flatten()
+                        });
+                forward.chain(backward)
+            })
+            .map(move |(key, _)| {
+                K::from_slice(&key[1 + slot_len..])
+                    .expect("SlotDex: corrupt entry-row key bytes")
+            })
+    }
+
     /// Number of entries whose slot lies in `slots`.
     pub fn count(&self, slots: impl RangeBounds<S>) -> EntryCnt {
         match inclusive_slots(&slots) {
@@ -1450,7 +1502,7 @@ pub type SlotDex32<K> = SlotDex<u32, K>;
 /// Convenience alias for `SlotDex<u64, K>`.
 pub type SlotDex64<K> = SlotDex<u64, K>;
 
-/// Slot order of a [`SlotDex::page`] query.
+/// Slot order used by [`SlotDex::page`] and [`SlotDex::iter`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Order {
     /// Smallest slot first.
