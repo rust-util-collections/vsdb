@@ -470,6 +470,15 @@ impl MapxRaw {
         self.inner.sync_wal();
     }
 
+    /// Fallible form of [`sync_wal`](Self::sync_wal).
+    ///
+    /// Makes prior successful writes on this map's shard durable without
+    /// flushing its memtable. Other shards are unaffected. Returns engine
+    /// synchronization errors to the caller; a read-only handle is a no-op.
+    pub fn try_sync_wal(&self) -> Result<()> {
+        self.inner.try_sync_wal()
+    }
+
     /// Marks a key for deferred removal via the compaction filter.
     ///
     /// The key remains readable until the underlying storage engine

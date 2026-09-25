@@ -103,8 +103,26 @@ macro_rules! define_map_wrapper {
                 self.inner.namespace()
             }
 
-            pub(crate) fn sync_wal(&self) {
+            /// Makes prior successful writes on this map's shard durable
+            /// without forcing a memtable flush. Other maps on that shard
+            /// are synchronized too; other shards are unaffected.
+            ///
+            /// A read-only handle is a no-op. This is not a transaction
+            /// across collections. Prefer [`try_sync_wal`](Self::try_sync_wal)
+            /// to handle synchronization errors.
+            ///
+            /// # Panics
+            ///
+            /// Panics if the engine cannot synchronize its WAL.
+            pub fn sync_wal(&self) {
                 self.inner.sync_wal();
+            }
+
+            /// Fallible form of [`sync_wal`](Self::sync_wal), returning engine
+            /// synchronization errors without forcing a memtable flush.
+            /// A read-only handle is a no-op.
+            pub fn try_sync_wal(&self) -> $crate::common::error::Result<()> {
+                self.inner.try_sync_wal()
             }
 
             /// Deep-copies every entry into a brand-new instance placed

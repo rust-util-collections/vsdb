@@ -31,9 +31,12 @@ assert!(!map.contains_key(b"key1"));
 ```
 
 Ordinary writes are WAL-backed but are not individually fsynced against power
-loss. `map.sync_wal()` makes prior successful writes to the owning shard durable
+loss. `map.try_sync_wal()?` makes prior successful writes to the owning shard durable
 without forcing a memtable flush. Other shards require their own fences; this
 does not create a cross-shard transaction. The call is a no-op in read-only mode.
+`map.sync_wal()` retains the panic-on-error form. `ns.try_sync_wal()?` fences all
+shards of one namespace; it returns the first error and does not make the
+namespace's collections transactional. Neither form forces a memtable flush.
 
 ## Utility Functions
 

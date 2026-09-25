@@ -163,6 +163,22 @@ impl Mapx {
         }
     }
 
+    pub(crate) fn try_sync_wal(&self) -> Result<()> {
+        if self.ns.is_read_only() {
+            return Ok(());
+        }
+        // An untouched handle has no writes or assigned shard to fence.
+        // Do not turn this fallible operation into an infallible prefix allocation.
+        let prefix = match &self.prefix {
+            Prefix::Recovered(bytes) => Some(*bytes),
+            Prefix::Created(cell) => cell.get().copied(),
+        };
+        match prefix {
+            Some(prefix) => self.ns.engine().try_sync_wal(prefix),
+            None => Ok(()),
+        }
+    }
+
     #[inline(always)]
     pub(crate) fn get(&self, key: &[u8]) -> Option<RawValue> {
         self.ns.engine().get(self.prefix_bytes(), key)

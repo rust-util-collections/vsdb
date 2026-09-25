@@ -168,9 +168,12 @@ fn read_only_reader_helper() {
     let map = Mapx::<u64, String>::from_meta(map_id).unwrap();
     assert!(map.namespace().is_read_only());
     assert_eq!(Some("typed-value".to_owned()), map.get(&7));
+    map.try_sync_wal().unwrap();
+    map.namespace().try_sync_wal().unwrap();
     assert!(matches!(map.save_meta(), Err(VsdbError::ReadOnly { .. })));
 
     let mut orphan = Orphan::<TaggedValue>::from_meta(orphan_id).unwrap();
+    orphan.try_sync_wal().unwrap();
     {
         let guard = orphan.get_mut();
         assert_eq!(guard.0, 42);

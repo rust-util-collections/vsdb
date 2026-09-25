@@ -1,7 +1,7 @@
 use crate::common::{
     GB, PREFIX_ALLOC_START, PREFIX_SIZE, Pre, PreBytes, RawKey, RawValue, VSDB,
-    configured_mem_budget_mb, vsdb_freeze_base_dir, vsdb_get_base_dir,
-    vsdb_is_read_only,
+    configured_mem_budget_mb, error::Result as VsdbResult, vsdb_freeze_base_dir,
+    vsdb_get_base_dir, vsdb_is_read_only,
 };
 use mmdb::{
     BidiIterator, BlockCachePool, CompressionType, DB, DbOptions, WriteBatch,
@@ -449,23 +449,41 @@ impl MmDB {
     }
 
     pub(crate) fn sync_wal(&self, meta_prefix: PreBytes) {
+        self.try_sync_wal(meta_prefix)
+            .expect("vsdb: mmdb WAL synchronization failed");
+    }
+
+    pub(crate) fn try_sync_wal(&self, meta_prefix: PreBytes) -> VsdbResult<()> {
         if self.read_only {
-            return;
+            return Ok(());
         }
+        Self::sync_db_wal(self.shard(&meta_prefix))
+    }
+
+    pub(crate) fn try_sync_all_wals(&self) -> VsdbResult<()> {
+        if !self.read_only {
+            for db in &self.dbs {
+                Self::sync_db_wal(db)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn sync_db_wal(db: &DB) -> VsdbResult<()> {
         // mmdb has no standalone WAL-sync API and skips empty batches.
         // A real synchronous deletion syncs prior successful writes on this
         // shard without forcing the active memtable into an SST. Earlier
         // rotated WALs have already been durably installed as SSTs before
         // their successful write requests return.
-        self.shard(&meta_prefix)
-            .delete_with_options(
-                &WriteOptions {
-                    sync: true,
-                    ..WriteOptions::default()
-                },
-                &META_KEY_WAL_FENCE,
-            )
-            .expect("vsdb: mmdb WAL synchronization failed");
+        db.delete_with_options(
+            &WriteOptions {
+                sync: true,
+                ..WriteOptions::default()
+            },
+            &META_KEY_WAL_FENCE,
+        )
+        .c(d!("synchronize shard WAL"))?;
+        Ok(())
     }
 
     pub(crate) fn range<'a, R: RangeBounds<Cow<'a, [u8]>>>(
@@ -1221,7 +1239,7 @@ impl MmdbBatch<'_> {
     /// Applies every buffered operation atomically. The batch is consumed
     /// either way: on error nothing was applied.
     #[inline(always)]
-    pub(crate) fn commit(self) -> crate::common::error::Result<()> {
+    pub(crate) fn commit(self) -> VsdbResult<()> {
         let batch = self.inner;
         if self.engine.read_only {
             return Err(crate::common::error::VsdbError::ReadOnly {

@@ -110,8 +110,21 @@ where
         self.inner.namespace()
     }
 
-    pub(crate) fn sync_wal(&self) {
+    /// Makes prior successful writes to this value's shard durable without
+    /// forcing a memtable flush. Other maps on that shard are synchronized too;
+    /// other shards are unaffected. A read-only handle is a no-op.
+    ///
+    /// # Panics
+    ///
+    /// Panics on engine synchronization errors. Use
+    /// [`try_sync_wal`](Self::try_sync_wal) to handle them.
+    pub fn sync_wal(&self) {
         self.inner.sync_wal();
+    }
+
+    /// Fallible form of [`sync_wal`](Self::sync_wal).
+    pub fn try_sync_wal(&self) -> Result<()> {
+        self.inner.try_sync_wal()
     }
 
     /// Deep-copies this value into a brand-new instance placed in `ns`

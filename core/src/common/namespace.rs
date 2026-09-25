@@ -757,6 +757,17 @@ impl Namespace {
         }
     }
 
+    /// Makes prior successful writes to every shard in this namespace durable
+    /// without forcing memtable flushes. A read-only namespace is a no-op.
+    ///
+    /// Returns the first engine synchronization error. Earlier shards may
+    /// already be synchronized when a later shard fails; this is a durability
+    /// fence, not a transaction across collections or shards. Other namespaces
+    /// are unaffected.
+    pub fn try_sync_wal(&self) -> Result<()> {
+        self.0.engine.try_sync_all_wals()
+    }
+
     /// One engine-property reading per shard, in shard order — the
     /// observability tier for capacity planning and cache telemetry.
     ///

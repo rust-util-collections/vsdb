@@ -2,6 +2,29 @@
 
 This document provides examples for selected public APIs in the `vsdb` crate.
 
+## Durability fences
+
+`Mapx`, `MapxOrd`, `MapxOrdRawKey`, and `Orphan` expose `try_sync_wal()`:
+
+```rust
+use vsdb::MapxOrd;
+# fn main() -> vsdb::Result<()> {
+let mut state = MapxOrd::<u64, String>::new();
+state.insert(&1, &"accepted".to_owned());
+state.try_sync_wal()?;
+# Ok(())
+# }
+```
+
+The fence makes prior successful writes on the collection's shard durable
+without forcing a memtable flush; it returns synchronization errors. Other
+shards need their own fences. Use `collection.namespace().try_sync_wal()?` to
+cover every shard of that namespace, including composite indexes such as
+`SlotDex`. Shards synchronize sequentially, so an error can leave earlier
+shards synchronized. These calls do not provide cross-collection transactions.
+They are no-ops in read-only mode. The collection-level `sync_wal()` form
+panics on errors; ordinary inserts and batch commits do not fsync individually.
+
 ## Namespaces
 
 Persistent collections support namespaces — independently-rooted engine instances
