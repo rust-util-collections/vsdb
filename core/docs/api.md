@@ -99,32 +99,32 @@ constraints.
 
 ## Memory budget
 
-The default namespace sizes its caches from a fixed 2 GiB budget; every
-other namespace defaults to a fixed 512 MB (per-namespace override via
-`NamespaceOpts { mem_budget_mb, .. }`).  vsdb never sizes itself from the
-host's RAM or its cgroup.
+The default namespace uses a fixed 2 GiB sizing input. Configure it before
+the first VSDB access; an explicit nonzero value takes precedence over
+`VSDB_MEM_BUDGET_MB`:
 
-Applications that can afford more memory should raise the default
-engine's budget (applied verbatim, in MB; configure before the first
-database touch): a larger budget enlarges the block cache and write
-buffers, which directly improves read and write performance.
+```rust,no_run
+use vsdb_core::{VsdbOptions, vsdb_configure};
 
-```rust,ignore
-// 8 GiB for the default engine
-vsdb_configure(VsdbOptions::new("/data/vsdb").with_mem_budget_mb(8192))?;
+vsdb_configure(VsdbOptions::new("/data/vsdb").with_mem_budget_mb(8192)).unwrap();
 ```
 
-Without an explicit budget, the `VSDB_MEM_BUDGET_MB` environment variable
-is honored (`VSDB_MEM_BUDGET_MB=8192 ./your-app`).
+Non-default namespaces use `NamespaceOpts::mem_budget_mb` and default to
+512 MiB each. All MB-named options use binary MiB; there is no host-RAM or
+cgroup detection. Budgets size caches and write buffers with floors and caps;
+they do not bound process RSS. Allow headroom for pinned blocks, metadata,
+and application allocations, and measure workload performance when tuning.
+See the [memory design](../../docs/proposals/shared-mem-pool.md).
 
 ## Namespaces
 
 `vsdb_core` provides the namespace subsystem — independently-rooted engine
 instances that coexist in one process, each with its own base dir, mmdb
-shards, and memory budget.  All collection types (`MapxRaw` included) gain
+shards, and memory budget.  Persistent collections such as `MapxRaw` expose
 `new_in` for explicit placement and `namespace()` for querying ownership.
+Placement in one namespace does not guarantee placement on the same shard.
 
-```rust
+```rust,no_run
 use vsdb_core::{InstanceId, MapxRaw, Namespace, NamespaceOpts};
 
 // Create a namespace — parameterless, gives a fresh anonymous placement group.
@@ -173,7 +173,8 @@ match ns3.close() {
 let src = MapxRaw::new_in(&ns2);
 let copy = src.clone_in(&Namespace::default_ns()).unwrap();
 
-// Destroy: O(1) bulk reclaim of the entire directory tree.
+// Destroy: remove the whole directory tree without per-key traversal.
+// Filesystem work scales with the number of files/directories.
 // Requires the namespace be not-open.
 Namespace::destroy(ns_id).unwrap();
 

@@ -4,21 +4,23 @@ This document provides examples for selected public APIs in the `vsdb` crate.
 
 ## Namespaces
 
-All collection types support namespaces — independently-rooted engine instances
-for physical placement, hard isolation, and O(1) bulk reclaim.  Everyday code
-stays parameterless; placement is expressed through the object graph.
+Persistent collections support namespaces — independently-rooted engine instances
+for physical placement and whole-directory removal without per-key traversal.
+In-memory `MptCalc` / `SmtCalc` need no namespace; `VerMapWithProof` inherits
+placement from its wrapped `VerMap`. Everyday constructors stay parameterless.
 
-```rust
+```rust,no_run
 use vsdb::{Namespace, NamespaceOpts, basic::mapx::Mapx, basic::mapx_ord::MapxOrd};
 
 // ---- Everyday tier: zero parameters, no names, no paths ----
 
 let cold = Namespace::create().unwrap();
 
-// Ambient placement: everything created inside scope() lands in `cold`.
+// Ambient placement: ordinary new() calls inside scope() use `cold`.
+// Explicit new_in() and DagMap children use their explicit/parent namespace.
 let archive: Mapx<u64, String> = cold.scope(|| Mapx::new());
 
-// Co-location: "put this data together with that data".
+// Same namespace placement (not necessarily the same shard).
 let index = Mapx::<u64, u64>::new_in(&archive.namespace());
 assert_eq!(archive.namespace().id(), index.namespace().id());
 
@@ -66,19 +68,19 @@ name still requires application schema versioning and conversion. v16
 `VSTYPE02` handles remain readable; new handles use `VSTYPE03`.
 
 Key rules:
-- `Mapx::new()` targets the implicit default namespace — existing code needs zero changes.
+- `Mapx::new()` uses the current creation scope, or the default namespace outside one.
+- Two `new_in(&ns)` calls can route to different shards; namespace placement alone does not provide a shared WAL.
 - A composite structure (`VerMap`, `SlotDex`, …) always lives wholly inside one namespace.
 - Cross-namespace atomic transactions do not exist (separate WALs).
 - Reads, writes, and deserialization always route via the handle's own namespace —
   ambient scope affects creation only.
-- Memory budgets are static and per-engine: the default namespace defaults to
-  a fixed 2 GiB, every other namespace to a fixed 512 MB — nothing sizes from
-  the host's RAM or its cgroup. `VsdbOptions::with_mem_budget_mb` (or the
-  `VSDB_MEM_BUDGET_MB` env var; applied verbatim) sets the default engine's budget; a larger budget enlarges the block cache and
-  write buffers, which directly improves performance. Deployments that open
-  many namespaces should give each an explicit
-  `NamespaceOpts { mem_budget_mb, .. }` so the sum stays inside the process's
-  memory line.
+- Memory sizing defaults to 2 GiB for the default namespace and 512 MiB for
+  each non-default namespace, without host-RAM/cgroup detection.
+  A nonzero `VsdbOptions::with_mem_budget_mb` (then `VSDB_MEM_BUDGET_MB`) configures the
+  default engine; `NamespaceOpts::mem_budget_mb` configures others. Units are
+  binary MiB. These inputs are not hard RSS limits: floors, caps, pinned
+  blocks, and runtime metadata affect actual memory use. See the
+  [memory design](../../docs/proposals/shared-mem-pool.md).
 
 ## Read-only mode
 
@@ -148,6 +150,25 @@ for (key, value) in map.iter() {
 map.remove("key1");
 ```
 
+Borrowed lookups use the stored key type's encoding. `String` accepts `str`;
+byte keys (`Vec<u8>`, `Box<[u8]>`, `[u8; N]`) accept byte slices for `get`,
+`get_mut`, `contains_key`, and `remove`. Array lookups validate the full slice,
+including its length:
+
+```rust
+use vsdb::Mapx;
+
+let mut map = Mapx::<[u8; 2], u64>::new();
+map.insert(&[1, 0], &7);
+assert_eq!(map.get(&[1, 0][..]), Some(7));
+assert_eq!(map.get(&[0][..]), None);
+```
+
+Mapx normalizes byte-slice queries through the owning key codec because
+postcard encodes arrays differently from variable-length byte sequences.
+Other custom `KeyRef` forms must encode identically to their owning type.
+Ordered maps instead use `OrderedKeyRef` / `KeyEnDeOrdered` encodings.
+
 ## MapxOrd
 
 `MapxOrd` is a B-tree map-like data structure that stores key-value pairs in a sorted order.
@@ -208,7 +229,8 @@ assert_eq!(m.get(main, &1).unwrap(), Some("updated".into()));
 
 // 6. Clean up: deleting the branch reclaims unreachable commits and
 //    B+ tree nodes automatically — no manual gc() call required
-//    (gc() exists for crash recovery only).
+//    (gc() also supports an explicit full node sweep).
+//    Physical disk reclamation waits for compaction and is best-effort.
 m.delete_branch(feat).unwrap();
 ```
 
@@ -218,7 +240,7 @@ m.delete_branch(feat).unwrap();
 they hold an ephemeral trie for root computation while all persistence and
 versioning is handled by an external store (e.g. `VerMap`).
 
-```rust,ignore
+```rust
 use vsdb::trie::MptCalc;
 
 // Build a trie
@@ -247,7 +269,8 @@ mpt.batch_update(&[
 ]).unwrap();
 
 // Disposable cache (low-level API, used internally by VerMapWithProof):
-let cache_dir = std::path::Path::new("/tmp/vsdb_trie_cache");
+let cache_root = std::env::temp_dir().join(format!("vsdb-trie-example-{}", std::process::id()));
+let cache_dir = cache_root.as_path();
 std::fs::create_dir_all(cache_dir).unwrap();
 let cache_id = 1;
 let sync_tag = 0;
@@ -255,12 +278,13 @@ mpt.save_cache(cache_dir, cache_id, sync_tag).unwrap();
 let (mut loaded, tag, hash) = MptCalc::load_cache(cache_dir, cache_id).unwrap();
 assert_eq!(tag, sync_tag);
 assert_eq!(loaded.root_hash().unwrap(), hash);
-// When using VerMapWithProof, caching is fully automatic.
+// VerMapWithProof loads a cache automatically; saving requires save_cache(commit).
+std::fs::remove_dir_all(cache_dir).unwrap();
 ```
 
 ### SmtCalc with Proofs
 
-```rust,ignore
+```rust
 use vsdb::trie::SmtCalc;
 
 let mut smt = SmtCalc::new();
@@ -285,7 +309,7 @@ assert!(SmtCalc::verify_proof(&root32, b"charlie", &proof).unwrap());
 
 Integrates `VerMap` with `MptCalc` for versioned Merkle root computation.
 
-```rust,ignore
+```rust
 use vsdb::trie::{MptCalc, VerMapWithProof};
 
 let mut vmp: VerMapWithProof<Vec<u8>, Vec<u8>, MptCalc> = VerMapWithProof::new();
@@ -315,7 +339,7 @@ reclaimed commits, even if a matching trie cache remains.
 
 `SlotDex` (in the `slotdex` module) is a skip-list-like index for efficient, timestamp-based paged queries.
 
-```rust,ignore
+```rust
 use vsdb::{SlotDex64, slotdex::Order};  // SlotDex<u64, K> alias — slot type is u64
 
 let mut db = SlotDex64::<String>::new(10u64, false).unwrap(); // tier_capacity must be >= 2
@@ -346,3 +370,15 @@ db.insert_batch([(400u64, "entry_e".to_string()), (400, "entry_f".to_string())])
     .unwrap();
 assert_eq!(db.total(), 5);
 ```
+
+`Order` controls slot order; keys within a slot retain ascending key order.
+SlotDex stores counts and rows together in atomic batches (bulk insertion
+commits one chunk at a time). Restoring through serde or `from_meta` creates
+independent runtime caches: retire the old active handle before mutation and
+route reads/writes through one shared instance. Sequential writes through
+separate restored handles can also invalidate cached state.
+
+## VecDex
+
+See the [VecDex guide](vecdex.md) for runnable examples, runtime metric
+selection, filtered search, and recovery/ownership rules.

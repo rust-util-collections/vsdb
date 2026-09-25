@@ -2,7 +2,8 @@
 
 VecDex is a persistent, disk-backed vector index using the HNSW (Hierarchical
 Navigable Small World) algorithm.  It is built entirely in Rust on top of VSDB's
-storage primitives, with no C/C++ dependencies.
+storage primitives. The storage backend currently depends on native Zstd
+compression; its bundled `zstd-sys` build requires a C toolchain.
 
 Use cases: AI rigs, RAG pipelines, semantic search, recommendation engines,
 embedding-based retrieval.
@@ -12,7 +13,10 @@ embedding-based retrieval.
 ```rust
 use vsdb::vecdex::{VecDex, HnswConfig, distance::Cosine};
 
-let cfg = HnswConfig { dim: 768, ..Default::default() };
+let cfg = HnswConfig { dim: 4, ..Default::default() };
+let embedding_a = [0.1, 0.2, 0.3, 0.4];
+let embedding_b = [0.4, 0.3, 0.2, 0.1];
+let query_vec = [0.1, 0.2, 0.3, 0.5];
 let mut idx: VecDex<String, Cosine> = VecDex::new(cfg).unwrap();
 
 idx.insert(&"doc-a".into(), &embedding_a).unwrap();
@@ -46,7 +50,7 @@ This also applies to `VecDexDyn`.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `new` | `(config: HnswConfig) -> Result<Self>` | Create empty index (in the current ambient namespace); `InvalidConfig` on a bad config |
+| `new` | `(config: HnswConfig) -> Result<Self>` | Create empty index (in the current ambient namespace); `InvalidConfig` on a bad config; `ReadOnly` in read-only mode |
 | `new_in` | `(ns: &Namespace, config: HnswConfig) -> Result<Self>` | Create empty index placed in `ns` |
 | `namespace` | `(&self) -> Namespace` | The namespace this index lives in |
 | `instance_id` | `(&self) -> InstanceId` | Complete persistent identity (`map_id` + owning namespace) |
@@ -69,10 +73,12 @@ This also applies to `VecDexDyn`.
 | `save_meta` | `(&self) -> Result<InstanceId>` | Persist metadata for later recovery (create-time constant; saving once after creation suffices) |
 | `from_meta` | `(instance_id: impl Into<InstanceId>) -> Result<Self>` | Recover from saved metadata (a bare `u64` works for default-namespace instances) |
 
-Every mutation (insert, remove, `set_ef_search`, the graph state) is committed
-through a single atomic engine write batch, so a crash can never leave the
-index internally inconsistent: `from_meta` always returns a coherent index and
-never needs to reconcile or rebuild anything.
+Rows, counters, and graph state for each mutation are committed in one atomic
+engine batch. `insert_batch` commits one chunk at a time: a later error can
+leave earlier chunks committed. Recovery rebuilds in-memory caches from the
+durable rows without rebuilding the graph. Atomicity does not imply an fsync
+per operation; power loss can lose an unfenced batch. These guarantees require
+the single-active-handle ownership rule above and intact storage.
 
 ## Configuration
 
@@ -95,9 +101,9 @@ pub struct HnswConfig {
 | `ef_search` | Better recall, slower search | Faster search | m .. 10*m |
 | `dim` | — | — | Set to match your embedding model |
 
-For most use cases, the defaults (`m=16, ef_construction=200, ef_search=50`)
-work well up to ~100K vectors.  Increase `ef_search` at query time for higher
-recall; increase `m` and `ef_construction` for larger datasets.
+Use the defaults as a starting point and measure recall against an exact
+search on representative vectors. Increasing `ef_search` trades query work
+for recall; `m` and `ef_construction` also affect build cost and graph size.
 
 ## Distance Metrics
 
@@ -126,8 +132,8 @@ assert_eq!(idx.metric(), MetricKind::Cosine);
 `VecDexDyn` mirrors the full `VecDex` API one-to-one and persists the
 metric choice inside its metadata, so `from_meta` restores it without
 the caller re-stating it.  Cost: one enum dispatch per public
-operation — the distance loops stay statically monomorphized, so
-search/insert performance is identical to the equivalent `VecDex`.
+operation; the distance loops remain statically monomorphized. Benchmark
+the selected workload if dispatch overhead matters.
 The meta formats are deliberately distinct: a `VecDex<K, D, S>` meta
 does not load as `VecDexDyn<K, S>` or vice versa.
 
@@ -136,10 +142,17 @@ does not load as `VecDexDyn<K, S>` or vice versa.
 `search_with_filter` evaluates a predicate on each candidate's key *during*
 the HNSW beam search, not as a post-filter.  Non-matching nodes still
 participate in graph traversal (maintaining connectivity) but are excluded
-from the final result set.  This gives much better recall than over-fetching
-and post-filtering, especially with selective predicates.
+from the final result set. This can improve recall over over-fetching and
+post-filtering; recall still depends on the graph, predicate, and search budget.
 
 ```rust
+use vsdb::vecdex::{VecDex, HnswConfig, distance::Cosine};
+
+let mut idx: VecDex<String, Cosine> =
+    VecDex::new(HnswConfig { dim: 4, ..Default::default() }).unwrap();
+idx.insert(&"session-42/doc-a".into(), &[0.1, 0.2, 0.3, 0.4]).unwrap();
+let query = [0.1, 0.2, 0.3, 0.5];
+
 // Find 10 nearest vectors whose key starts with "session-42"
 let results = idx.search_with_filter(&query, 10, |k: &String| {
     k.starts_with("session-42")
@@ -148,9 +161,10 @@ let results = idx.search_with_filter(&query, 10, |k: &String| {
 
 The search keeps expanding until it holds `max(ef, k)` passing candidates
 and every remaining frontier node is farther than the worst of them, so a
-selective predicate costs more visited nodes (roughly ∝ 1 / selectivity)
-instead of fewer results. A predicate that almost nothing satisfies is
-bounded by a visit cap of `max(64 × max(ef, k), 4096)` evaluated nodes;
+selective predicate can require visiting more nodes. The frontier can still
+be exhausted before enough matching candidates are found. A predicate that
+almost nothing satisfies is bounded by a visit cap of
+`max(64 × max(ef, k), 4096)` evaluated nodes;
 beyond it, results can be incomplete — scan the matching keys directly for
 such filters.
 
@@ -166,12 +180,12 @@ VecDex<K, D, S = f32>
   [0x02 | key bytes]           -> node_id (u64 LE)
   [0x03 | node_id BE]          -> user key bytes
   [0x04 | node_id BE]          -> node max layer
-  [0x05]                       -> graph state (entry point, counters)
+  [0x05]                       -> graph state (entry point, counters, ef_search)
 ```
 
-Because every mutation stages its rows and commits them in a single
-atomic engine write batch, on-disk state is always internally
-consistent — there is no dirty flag and no rebuild-on-recovery path.
+Each mutation or bulk-insert chunk stages related rows in one atomic batch.
+There is no dirty flag or graph-rebuild recovery path; runtime caches are
+hydrated on open. The ownership and durability limits above still apply.
 The serialized handle metadata (single prefix + creation `HnswConfig`)
 is create-time constant.
 
@@ -181,6 +195,8 @@ one shard, which is what makes the whole-mutation write batch atomic.
 ## Type Aliases
 
 ```rust
+use vsdb::vecdex::{VecDex, distance::{L2, Cosine}};
+
 // f32 (default)
 pub type VecDexL2<K> = VecDex<K, L2>;
 pub type VecDexCosine<K> = VecDex<K, Cosine>;

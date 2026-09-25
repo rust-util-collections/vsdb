@@ -71,6 +71,9 @@ One issue / root cause / behavior change → one commit.
 |-------|---------|
 | Open | confirmed, actionable |
 | Won't Fix | real; safe fix currently disproportionate |
-| Rejected | material claim disproven (not a severity). Skip routine noise. |
+
+Disproven entries are removed, not retained in a Rejected section. Record a
+useful refutation in the review output or commit history; routine noise needs
+no registry entry.
 
 Registry rules and entry shape: `review-core.md` §5.

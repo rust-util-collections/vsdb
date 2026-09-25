@@ -1,8 +1,12 @@
-# Hotmint integration assessment of unpublished VSDB v17
+# Hotmint integration assessment — v17.0.3 historical snapshot
 
 Date: 2026-09-24. Scope: migrate the local Hotmint workspace, exercise real
 storage and UTXO code, and fix demonstrated VSDB problems before v17 is
-published. Production data was not used.
+published at the time of the assessment. Production data was not used.
+
+This report preserves the recorded baselines and measurements; it is not a
+validation report for the current HEAD. For current behavior, see the
+[API guide](../../strata/docs/api.md) and [changelog](../../CHANGELOG.md).
 
 ## Result
 
@@ -51,8 +55,8 @@ Dynamic configuration or read-only application flows should propagate VSDB's
 `Result` instead. This does not require suppressing compiler warnings.
 
 The Hotmint adaptation and three new integration test files are preserved in
-[hotmint.patch](hotmint-v17/hotmint.patch). They are also present, uncommitted,
-in the sibling Hotmint worktree. Only VSDB is committed and pushed by this task.
+[hotmint.patch](hotmint-v17/hotmint.patch), against the recorded Hotmint
+baseline. The artifact does not describe the current sibling worktree state.
 
 ## Correctness and persistence evidence
 
@@ -166,7 +170,9 @@ are marked ignored). Strict rustdoc and formatting checks pass.
 
 Raw sample arrays, test summaries, command descriptions, log checksums and
 cross-version outcomes are in [results.json](hotmint-v17/results.json).
-Runtime logs remain in `/tmp/hotmint-vsdb17-eval` on the evaluation host.
+Runtime logs were collected under `/tmp/hotmint-vsdb17-eval` on the evaluation
+host; they are not bundled or guaranteed to remain there. The tracked results
+retain the recorded checksums and summaries.
 
 ## Reproducing the core checks
 

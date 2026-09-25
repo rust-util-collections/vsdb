@@ -11,8 +11,8 @@
 //!
 //! * **Anonymous placement groups.** Users never name a namespace, never
 //!   persist an id for one, never pass a path on the normal tier. The
-//!   everyday primitive is *co-location*: `existing.namespace()` +
-//!   `new_in`/[`Namespace::scope`].
+//!   everyday primitive is namespace placement: `existing.namespace()` +
+//!   `new_in`/[`Namespace::scope`]. This alone does not select the same shard.
 //! * **`NsId` is a routing token**, not a user-facing name: it surfaces
 //!   only at the admin tier ([`Namespace::list`]/[`Namespace::destroy`]/
 //!   [`Namespace::relocate`], epoch-rotation bookkeeping).
@@ -20,9 +20,10 @@
 //!   registry; omitted, it derives from the id under
 //!   `{default_base}/__NAMESPACES__/{ns_id:016x}` and is recorded as
 //!   derived (`None`), so the whole universe stays movable as one tree.
-//! * **One universe = one process**: registry mutations are serialized
-//!   by an in-process mutex; there is no cross-process coordination
-//!   anywhere (mmdb's per-shard LOCK rejects double-opens).
+//! * **One writable process per universe**: registry and allocator mutation
+//!   use in-process locks. Multiple read-only processes can inspect an
+//!   immutable universe; Unix shard locks are shared for readers and
+//!   exclusive for a writer when a LOCK file is present.
 //!
 
 use crate::common::{
@@ -70,9 +71,10 @@ const NS_DERIVED_DIR: &str = "__NAMESPACES__";
 const DEFAULT_NS_SHARDS: usize = 4;
 
 /// Default memory budget for non-default namespaces, in MB. Deliberately
-/// small and fixed: opening N namespaces must not silently multiply the
-/// process footprint (the default namespace has its own fixed 2 GiB
-/// default, raised only via `VSDB_MEM_BUDGET_MB`).
+/// small and fixed so each new namespace does not receive a host-sized
+/// allowance. Each open namespace still adds memory costs. The default
+/// namespace uses 2 GiB unless configured through `VsdbOptions` or
+/// `VSDB_MEM_BUDGET_MB`; neither budget is a hard RSS limit.
 const DEFAULT_NS_BUDGET_MB: usize = 512;
 
 /////////////////////////////////////////////////////////////////////////////
@@ -187,7 +189,8 @@ pub struct NamespaceOpts {
     /// Shard count, fixed at creation (routing is `prefix % shards`).
     /// Clamped to `1..=64`.
     pub shards: usize,
-    /// Memory budget in MB; `None` ⇒ a conservative fixed default.
+    /// Memory sizing input in MiB; `None` ⇒ 512 MiB. Cache/buffer floors
+    /// and caps apply; this is not a hard RSS limit.
     pub mem_budget_mb: Option<usize>,
 }
 
@@ -454,7 +457,7 @@ fn validate_explicit_root(
 /// lives under THIS universe's default base), so new allocations could
 /// collide with the adopted data — and `destroy` would later delete
 /// whatever else lived there. Importing/attaching foreign roots is an
-/// explicit non-goal (see docs/proposals/namespaces.md §9).
+/// explicit non-goal (see the deferred-work section of docs/proposals/namespaces.md).
 fn ensure_root_adoptable(root: &Path) -> Result<bool> {
     match fs::read_dir(root) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
@@ -792,7 +795,7 @@ impl Namespace {
     }
 
     /// Consuming form of [`Namespace::close_by_id`]: closes this namespace,
-    /// releasing **all** of its resources (see `Namespace::close_by_id` for the
+    /// releasing engine-owned resources (see `Namespace::close_by_id` for the
     /// full contract — flush-first teardown, registry untouched,
     /// re-openable afterwards).
     ///
@@ -808,8 +811,8 @@ impl Namespace {
     ///   the consumed handle is returned for continued use.
     /// - `Err((None, e))` — the close **ran** but the engine teardown
     ///   reported an error while flushing/syncing: the namespace is no
-    ///   longer open (same terminal state as `Namespace::close_by_id` returning
-    ///   an error), so there is no handle to give back.
+    ///   longer open, so there is no handle to give back. In contrast, a
+    ///   precondition error from `close_by_id` performs no engine teardown.
     ///
     /// ```ignore
     /// match ns.close() {
@@ -899,7 +902,8 @@ impl Namespace {
     }
 
     /// Destroys a namespace: removes its registry entry, then deletes its
-    /// whole directory tree — O(1) bulk reclaim.
+    /// whole directory tree without per-key traversal. Filesystem work scales
+    /// with the number of files and directories.
     ///
     /// The target must not be open in this process ([`Namespace::close_by_id`] it
     /// first). A crash between the registry update and the tree removal
@@ -1008,8 +1012,9 @@ impl Namespace {
         save_registry(&reg)
     }
 
-    /// Closes an open namespace, releasing **all** of its resources: engine
-    /// memory, compaction threads, fds, and mmdb `LOCK` files. The active
+    /// Closes an open namespace, releasing engine-owned memory, workers,
+    /// file handles, and mmdb locks. Detached snapshots can retain their
+    /// own source resources, as described below. The active
     /// memtables are flushed and the WALs synced first (errors surface
     /// here, unlike a plain drop).
     ///

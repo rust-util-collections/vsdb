@@ -1283,11 +1283,10 @@ const G: usize = GB as usize;
 /// 2 GiB. vsdb deliberately does NOT size itself from the host's RAM
 /// or its cgroup: the library cannot know how much of either belongs
 /// to it, and a moment-in-time reading bakes deployment noise into
-/// engine sizing. A fixed, conservative default keeps the footprint
-/// predictable everywhere; applications that can afford more memory
-/// should raise it (`VsdbOptions::with_mem_budget_mb` or
-/// `VSDB_MEM_BUDGET_MB`) — a larger budget enlarges the block cache and
-/// write buffers, which improves performance.
+/// engine sizing. A fixed default makes the sizing input predictable;
+/// applications can tune it with `VsdbOptions::with_mem_budget_mb` or
+/// `VSDB_MEM_BUDGET_MB`. Floors/caps and allocations outside those caches
+/// mean it is not a hard RSS limit; performance depends on the workload.
 const DEFAULT_MEM_BUDGET_MB: usize = 2048;
 
 /// Resolve the effective DEFAULT-namespace budget in bytes.
@@ -1298,8 +1297,8 @@ const DEFAULT_MEM_BUDGET_MB: usize = 2048;
 ///   way to grow (or shrink) the default engine's memory.
 /// - Otherwise the fixed [`DEFAULT_MEM_BUDGET_MB`] default stands.
 ///
-/// Every budget is a binding limit: write-buffer sizing scales with
-/// it (see `mmdb_open`).
+/// Cache and write-buffer sizing derive from this input, subject to
+/// floors and caps (see `mmdb_open`); it is not a hard memory limit.
 fn effective_mem_budget(budget_mb: Option<usize>) -> usize {
     budget_mb
         .filter(|&mb| mb > 0)
@@ -1358,9 +1357,10 @@ fn check_format_version(base_dir: &Path) -> Result<()> {
 ///
 /// The default namespace sizes from [`MEM_BUDGET`]
 /// (`VSDB_MEM_BUDGET_MB` override / fixed 2 GiB default). Non-default
-/// namespaces size from an explicit per-namespace budget so that opening
-/// N namespaces cannot silently multiply the process footprint. Every
-/// budget is a binding limit; nothing sizes from the host or its cgroup.
+/// namespaces use their own input (512 MiB by default), so each new engine
+/// adds a bounded sizing allowance rather than a host-sized one. Every
+/// budget is a sizing input with floors/caps; nothing sizes from the host
+/// or its cgroup, and total RSS is not bounded by this input.
 #[derive(Clone, Copy)]
 pub(crate) struct EngineSizing {
     mem_budget: usize,
@@ -1409,8 +1409,8 @@ fn mmdb_open(
 
     // Per-shard sizes: divide totals by the shard count.
     //
-    // Every budget is a binding limit, so the write-buffer term must
-    // scale with it: each shard can hold one active memtable plus
+    // The write-buffer term scales with the requested budget (subject
+    // to the floor below): each shard can hold one active memtable plus
     // `max_immutable_memtables` frozen ones awaiting flush, so the
     // worst-case memtable footprint is wr_buffer_size *
     // (1 + max_immutable) * shards. budget/8 across all shards keeps

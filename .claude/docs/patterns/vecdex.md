@@ -3,7 +3,7 @@
 **Files:** `vecdex/{mod,hnsw,distance,dynamic,test}.rs`.
 
 **Arch:** HNSW multi-layer; one MapxRaw tags `0x00`..`0x05`; staged overlay + one
-atomic batch/mutation. Adj key `[TAG][layer u8][node u64 BE]`. LE u64 neighbor
+atomic batch per mutation/chunk. Adj key `[TAG][layer u8][node u64 BE]`. LE u64 neighbor
 packs. Alg-4 heuristic prune. Generic Scalar/Distance/K. `VecDexDyn` + manual
 wire tags for metric.
 
@@ -36,3 +36,11 @@ public wire for callers, not the meta format) → append only, never reorder.
 - [ ] Wire tags frozen/append-only + round-trip pins
 - [ ] Compact single wiped staged commit
 - [ ] Send+Sync; Scalar ops cover metrics
+
+## Restored-handle ownership
+
+Serde / `from_meta` rebuild independent runtime caches over the same rows.
+Retire the prior active handle before mutation and route all reads/writes
+through one shared instance while mutable. Alternating writes through separate
+restored handles can corrupt state even when calls are sequential. Independent
+read handles are supported only while the underlying index stays immutable.

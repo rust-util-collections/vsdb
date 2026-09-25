@@ -25,8 +25,9 @@ impl PersistentBTree {
     /// at `old_root` and `new_root`, in ascending key order.
     ///
     /// Versions share unchanged subtrees by `NodeId` (ids are never
-    /// reused), and the walk skips every shared subtree: the cost is
-    /// O(changed keys × depth × fanout) node reads, not O(tree size).
+    /// reused), and the walk skips every shared subtree. Work depends on
+    /// unshared paths; independently built equal-content trees can still
+    /// require a full walk. The output contains only changed keys.
     pub fn diff(&self, old_root: NodeId, new_root: NodeId) -> Vec<TreeDiff> {
         let mut result = Vec::new();
         diff_walk(self, old_root, new_root, |e| result.push(e));

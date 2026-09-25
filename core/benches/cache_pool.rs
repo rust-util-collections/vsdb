@@ -1,5 +1,5 @@
-//! Q1 gate for the engine-level block-cache pool (shared-mem-pool RFC
-//! §10 Q1): measures SST-backed random point-reads under a bounded
+//! Q1 gate for the engine-level block-cache pool (the telemetry section of
+//! docs/proposals/shared-mem-pool.md): measures SST-backed random point-reads under a bounded
 //! budget in the two load shapes that matter —
 //!
 //! - **skew**: one hot map = one hot shard (`prefix % shards` routing

@@ -48,9 +48,10 @@
 //! differs from the ancestor takes the source state (added, modified, or
 //! deleted); every other key keeps the target state. The merge therefore
 //! computes `diff(ancestor → source)` — which skips shared subtrees — and
-//! applies exactly those keys to the target tree by copy-on-write. Cost
-//! and memory are proportional to the source-side delta, and the result
-//! shares every untouched subtree with the target.
+//! applies exactly those keys to the target tree by copy-on-write. Replay
+//! work and buffering follow the changed paths. Diff traversal depends on
+//! structural sharing and can scan an entire unshared tree; untouched
+//! subtrees of the target remain shared where the COW paths permit it.
 //!
 
 use std::collections::BTreeMap;

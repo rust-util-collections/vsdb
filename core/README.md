@@ -9,7 +9,7 @@
 
 This crate contains the foundational components of `vsdb`, including:
 - **Raw Data Structures**: Untyped, high-performance data structures like `MapxRaw` that operate on raw bytes.
-- **Utilities**: Shared functions for environment management, such as setting the database directory.
+- **Utilities**: Process-wide database path/mode configuration, namespaces, and storage maintenance. Configuration does not change environment variables.
 
 Most users should use the `vsdb` crate instead, which provides high-level, typed APIs.
 

@@ -3,7 +3,7 @@
 **Files:** `slotdex/{mod,slot_type,test}.rs`.
 
 **Arch:** Tier index for slot/time queries. One MapxRaw: entries `0x00|slot|key`,
-counts `0x01|level|floor`, total `0x02`. One staged atomic batch per mutation
+counts `0x01|level|floor`, total `0x02`. One staged atomic batch per mutation/chunk
 (no dirty flag). Tiers ≥1 memory-cached; L0 on disk. `slot_rows` O(1) mirror when
 tier-less; bulk uses `pending_slot_rows`.
 
@@ -35,3 +35,11 @@ inverted ⇒ empty. Results must equal the inclusive internal API.
 - [ ] Insert = query floor formula
 - [ ] swap_order parity
 - [ ] slot_rows rules + bulk promote cadence
+
+## Restored-handle ownership
+
+Serde / `from_meta` rebuild independent runtime caches over the same rows.
+Retire the prior active handle before mutation and route all reads/writes
+through one shared instance while mutable. Alternating writes through separate
+restored handles can corrupt state even when calls are sequential. Independent
+read handles are supported only while the underlying index stays immutable.

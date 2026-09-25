@@ -16,10 +16,12 @@
 //! ```
 //!
 //! Level `0` holds per-slot entry counts; level `l >= 1` coarsens slots
-//! by `tier_capacity^l` (the tier acceleration stack). Because every
-//! mutation stages its rows and commits them through a single engine
-//! write batch, on-disk state is always internally consistent — there is
-//! no dirty flag and no rebuild-on-recovery path.
+//! by `tier_capacity^l` (the tier acceleration stack). Each mutation or
+//! bulk-insert chunk commits related rows in one atomic engine batch.
+//! Recovery hydrates runtime caches; it does not rebuild persistent counts.
+//! Earlier chunks can remain committed after a later error. Atomicity does
+//! not imply an fsync per call, and consistency requires the single-active-
+//! handle contract below.
 //!
 //! The serialized form of a `SlotDex` (its typed handle metadata) is the
 //! raw prefix of the single handle plus the two creation-time constants
@@ -450,8 +452,9 @@ where
 
     /// Recovers a `SlotDex` instance from previously saved metadata.
     ///
-    /// Every mutation is applied atomically, so the recovered state is
-    /// always internally consistent — there is no rebuild path.
+    /// Restores runtime caches from persisted rows and counts. Each mutation
+    /// or bulk-insert chunk commits those rows together; recovery does not
+    /// rebuild persistent counts.
     ///
     /// This replaces the active handle; it does not share caches with existing
     /// aliases. The [handle ownership contract](Self#handle-ownership) also

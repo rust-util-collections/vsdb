@@ -977,16 +977,17 @@ where
     /// `source` vs `target`.
     ///
     /// If `target` has no commits, performs a fast-forward (no merge commit
-    /// is created).  Otherwise creates a merge commit on `target` with two
-    /// parents.
+    /// is created). Equal source/target heads return the existing commit.
+    /// Other successful merges create a two-parent commit on `target`.
     ///
     /// # Cost
     ///
     /// The merge replays the source-side delta (keys changed since the
-    /// merge bases) onto the target tree by copy-on-write: time and
-    /// transient memory are proportional to that delta, not to the size
-    /// of either branch, and untouched subtrees stay shared with the
-    /// target.
+    /// merge bases) onto the target tree by copy-on-write. Replay work and
+    /// buffering follow changed paths; diff traversal skips shared NodeIds
+    /// but can scan the full tree when versions share no nodes. Finding
+    /// merge bases also walks commit history. Unaffected target subtrees
+    /// remain shared where COW paths permit it.
     pub fn merge(&mut self, source: BranchId, target: BranchId) -> Result<CommitId> {
         self.ensure_writable("branch merge")?;
         if source == target {
@@ -1203,7 +1204,9 @@ where
     // History
     // =================================================================
 
-    /// Returns the lowest common ancestor (fork point) of two commits.
+    /// Returns one lowest common ancestor (fork point) of two commits.
+    /// If there are several merge bases, selects the one with the greatest ID;
+    /// merge itself considers all lowest common ancestors.
     ///
     /// Useful for branching scenarios: given two divergent tips, this finds
     /// the commit where they diverged.  Returns `None` only if the two

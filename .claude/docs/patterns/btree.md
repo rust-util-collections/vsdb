@@ -20,7 +20,9 @@ crate-internal forms for multi-step operations.
 
 **BT7 Diff** — skip a front pair only when both are the **same NodeId** (identical key
 set); otherwise expand the taller side (height hints affect speed only); entries compare
-key-wise. Cost O(changes × depth × fanout); results equal a full-scan diff.
+key-wise. Shared NodeIds enable pruning; independently built equal-content
+trees may require a full walk. Delta-sized cost depends on structural sharing;
+results must equal a full-scan diff.
 **BT8 Merge replay** — result = target + ∪ `diff(base_i, source)` source states (the whole
 source-wins matrix); each step acquires the new root and `release_buffered`s the previous
 **intermediate** (never the target); the final root is `disown_node`d → returned unowned;

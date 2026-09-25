@@ -1,7 +1,7 @@
 //!
 //! Typed diff entries for [`VerMap`](super::map::VerMap), decoded from the
-//! tree-level [`TreeDiff`] (which skips shared subtrees, so a diff costs
-//! O(changed keys × depth × fanout) node reads).
+//! tree-level [`TreeDiff`]. The walk skips shared NodeIds; independently
+//! built trees can still require a full traversal even with equal contents.
 //!
 
 use crate::{

@@ -65,8 +65,10 @@ Root must change with data. **Keep:** change with no data change; no change when
 
 ## FP-13: Disposition without re-check
 
-Won't Fix/Rejected not permanent. Re-check when code/callers/assumptions/subsystem
-in scope; full audit → all. Carry-forward without check → LOW process. No freshness dates.
+Won't Fix decisions and prior refutations are not permanent. Disproven entries
+are removed from the registry; re-check a prior claim when relevant code,
+callers, or assumptions change. Full audit → re-check every retained entry.
+Carry-forward without checking → LOW process. No freshness dates.
 
 ## FP-14: Fresh batch per bulk chunk
 

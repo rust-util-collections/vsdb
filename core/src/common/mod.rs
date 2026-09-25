@@ -334,7 +334,7 @@ pub enum OpenMode {
     ///
     /// Existing handles can be restored and queried, including data recovered
     /// from residual WAL records in memory. No directory, format marker,
-    /// allocator state, metadata, WAL, SST, or automatic trie cache is written.
+    /// allocator state, metadata, WAL, SST, or trie cache is written.
     ReadOnly = 1,
 }
 
@@ -346,12 +346,12 @@ pub struct VsdbOptions {
     pub base_dir: PathBuf,
     /// Capability used by the default and every non-default namespace.
     pub open_mode: OpenMode,
-    /// Memory budget of the **default** namespace's engine, in MB.
+    /// Memory sizing input of the **default** namespace's engine, in MiB.
     ///
-    /// `None` falls back to the `VSDB_MEM_BUDGET_MB` environment variable,
-    /// then to the fixed 2 GiB default. A larger budget enlarges the block
-    /// cache and write buffers. Non-default namespaces size from their own
-    /// [`NamespaceOpts::mem_budget_mb`].
+    /// `None` or zero falls back to the `VSDB_MEM_BUDGET_MB` environment
+    /// variable, then to the fixed 2 GiB default. Cache and write-buffer
+    /// sizes derive from this input with floors and caps; it is not a hard
+    /// RSS limit. Non-default namespaces use [`NamespaceOpts::mem_budget_mb`].
     pub mem_budget_mb: Option<usize>,
 }
 
@@ -377,7 +377,7 @@ impl VsdbOptions {
         }
     }
 
-    /// Sets the default namespace's memory budget, in MB (see
+    /// Sets the default namespace's memory sizing input, in MiB (see
     /// [`mem_budget_mb`](Self::mem_budget_mb)).
     pub fn with_mem_budget_mb(mut self, mb: usize) -> Self {
         self.mem_budget_mb = Some(mb);

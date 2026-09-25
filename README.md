@@ -11,11 +11,11 @@ A high-performance, embedded key-value database for Rust with an API that feels 
 ## What it does
 
 - **Persistent collections** — `Mapx` (like `HashMap`), `MapxOrd` (like `BTreeMap`), backed by MMDB (pure-Rust LSM-Tree)
-- **Git-model versioning** — `VerMap` provides branching, commits, three-way merge, and rollback over a COW B+ tree with structural sharing; garbage collection is fully automatic via reference counting and MMDB background compaction
+- **Git-model versioning** — `VerMap` provides branching, commits, three-way merge, and rollback over a COW B+ tree with structural sharing; logical cleanup uses reference counting, with best-effort physical reclamation during MMDB compaction
 - **Merkle trie** — `MptCalc` (Merkle Patricia Trie) and `SmtCalc` (Sparse Merkle Tree) as stateless computation layers; `VerMapWithProof` pairs `VerMap` with either back-end for versioned 32-byte Merkle root commitments
 - **Slot-based index** — `SlotDex` for efficient, timestamp-based paged queries via a skip-list-like tier structure
 - **Vector index** — `VecDex` for approximate nearest-neighbor search via a pure-Rust HNSW implementation; supports L2, Cosine, and InnerProduct metrics with filtered search
-- **Namespaces** — anonymous placement groups: independently-rooted engine instances in one process (own dir/volume, shards, WALs, memory budget), with O(1) whole-namespace destroy; plain `new()` is untouched, placement is expressed through the object graph
+- **Namespaces** — anonymous placement groups: independently-rooted engine instances in one process (own dir/volume, shards, WALs, memory budget), with whole-directory destruction without per-key traversal; placement is expressed through handles and creation scopes
 
 ## Quick start
 
@@ -61,7 +61,7 @@ let cold = Namespace::create().unwrap();
 // reads/writes/deserialization always route via the handle itself):
 let mut archive: Mapx<u64, String> = cold.scope(|| Mapx::new());
 
-// Co-location: "put this data together with that data".
+// Same namespace placement (this does not guarantee the same shard).
 let mut index = Mapx::<u64, u64>::new_in(&archive.namespace());
 
 // Recovery rides the identifiers you already persist:
@@ -73,8 +73,8 @@ let restored: Mapx<u64, String> = Mapx::from_meta(id).unwrap();
 // Admin: Namespace::list() / Namespace::destroy(id) / Namespace::relocate(id, path)
 ```
 
-`Mapx::new()` still targets the implicit default namespace — existing
-code needs zero changes. Cross-namespace atomic transactions do not
+`Mapx::new()` targets the current `Namespace::scope`, or the implicit
+default namespace outside a scope. Cross-namespace atomic transactions do not
 exist (separate WALs); a composite structure (`VerMap`, `SlotDex`, …)
 always lives wholly inside one namespace.
 
@@ -108,24 +108,25 @@ snapshots, error/panic behavior, and recovery constraints.
 
 ### Memory sizing
 
-Memory budgets are fixed and predictable: the default namespace uses
-2 GiB, every other namespace 512 MB (per-namespace override via
-`NamespaceOpts { mem_budget_mb, .. }`). vsdb never sizes itself from
-the host's RAM or its cgroup.
+Memory sizing uses a fixed 2 GiB default for the default namespace and
+512 MiB for each non-default namespace. VSDB does not inspect host RAM or
+cgroup limits. `mem_budget_mb` and `VSDB_MEM_BUDGET_MB` use binary MiB.
 
-Applications that can afford more memory should raise the budget of the
-default engine (applied verbatim; configure before the first database
-touch). **A larger budget enlarges the block cache and write buffers,
-which directly improves read and write performance** — give vsdb as much
-memory as the deployment can spare.
+Configure the default engine before the first VSDB access:
 
-```rust,ignore
-// 8 GiB for the default engine
-vsdb_configure(VsdbOptions::new("/data/vsdb").with_mem_budget_mb(8192))?;
+```rust,no_run
+use vsdb::{VsdbOptions, vsdb_configure};
+
+vsdb_configure(VsdbOptions::new("/data/vsdb").with_mem_budget_mb(8192)).unwrap();
 ```
 
-Without an explicit budget, the `VSDB_MEM_BUDGET_MB` environment variable
-is honored (`VSDB_MEM_BUDGET_MB=8192 ./your-app`).
+An explicit nonzero budget takes precedence over `VSDB_MEM_BUDGET_MB`; non-default
+namespaces use `NamespaceOpts::mem_budget_mb`. These are sizing inputs, not
+hard process RSS limits: cache and write-buffer sizes have floors and caps,
+and runtime metadata, pinned blocks, and application allocations need extra
+headroom. More memory may help a cache- or buffer-limited workload; measure
+before changing it. See the [memory design](docs/proposals/shared-mem-pool.md)
+for the current formulas and telemetry.
 
 ## Architecture
 
@@ -172,7 +173,7 @@ vsdb (workspace)
        +----------------+-----------+
 ```
 
-`VerMapWithProof` wraps a `VerMap` and a trie back-end (`MptCalc` or `SmtCalc`). On each `merkle_root()` call it computes an incremental diff from the last sync point and applies it to the trie, avoiding full rebuilds. An optional `save_cache(commit)` checkpoint makes restarts cheaper; construction loads it automatically. Root computation and `Drop` never rewrite the full cache.
+`VerMapWithProof` wraps a `VerMap` and a trie back-end (`MptCalc` or `SmtCalc`). A `merkle_root()` call uses an incremental diff when the previous sync point is still usable, and otherwise rebuilds from the selected state. An optional `save_cache(commit)` checkpoint makes restarts cheaper; construction loads it automatically. Root computation and `Drop` never rewrite the full cache.
 
 `SmtCalc` additionally supports `prove()` / `verify_proof()` for compact (O(log N)-hash, Diem/JMT-style) membership and non-membership proofs.
 
@@ -182,6 +183,8 @@ vsdb (workspace)
 - [Read-only Mode](strata/docs/read-only.md) — configuration, supported operations, locking, and snapshots
 - [Versioned Module — Architecture & Internals](strata/docs/versioned.md)
 - [VecDex — HNSW Vector Index](strata/docs/vecdex.md)
+- [Namespace Design](docs/proposals/namespaces.md) — placement, metadata, recovery, and lifetime
+- [Memory Pools](docs/proposals/shared-mem-pool.md) — current sizing, cache sharing, and deferred extensions
 - [Changelog](CHANGELOG.md)
 
 ## License

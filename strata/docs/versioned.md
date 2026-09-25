@@ -86,11 +86,14 @@ block-beta
 
 ## Core Data Structures
 
+`BranchId` and `CommitId` are distinct serde-transparent `u64` newtypes.
+Persisted component table keys remain `u64` for v16 handle compatibility.
+
 ### Commit
 
 ```
 Commit {
-    id:           CommitId  (u64),
+    id:           CommitId  (transparent u64 newtype),
     root:         NodeId    (B+ tree root snapshot),
     parents:      Vec<CommitId>,
     timestamp_us: u64,
@@ -181,21 +184,22 @@ sequenceDiagram
 
     Note over V: 5. MERGE
     U->>V: merge(feat, main)
-    V->>V: find common ancestor (BFS)
-    V->>T: three-way merge (ancestor, source, target)
+    V->>V: find all lowest common ancestors
+    V->>T: replay union of source diffs from merge bases
     T-->>V: merged_root
     V->>D: store merge Commit{parents: [main.head, feat.head]}
 
     Note over V: 6. GC (automatic)
     Note right of V: Dead commits are hard-deleted<br/>by ref-count cascade during<br/>delete_branch / rollback_to.
-    Note right of T: Dead B+ tree nodes are registered<br/>for deferred deletion (lazy_delete).<br/>MMDB reclaims disk space during<br/>background compaction.
+    Note right of T: Dead B+ tree nodes are registered<br/>for deferred deletion (lazy_delete).<br/>MMDB may reclaim disk space when<br/>compaction rewrites the affected SSTs.
 ```
 
 ---
 
 ## Copy-on-Write & Structural Sharing
 
-Branching is **instantaneous** — no data is physically copied.
+Branching copies only branch metadata and retains existing roots; it does not
+copy entries. The operation still performs writes and a durability sync.
 Both branches point to the **same B+ tree root**. The first mutation
 triggers copy-on-write, allocating only the modified path (~O(log n) nodes).
 
@@ -333,10 +337,11 @@ for a deleted commit even while an existing view still reads its contents.
 ### Overview
 
 `merge(&mut self, source: BranchId, target: BranchId) -> Result<CommitId>`
-finds the common ancestor, then resolves every key across all three versions.
-It rejects self-merge, uncommitted source or target branches, and a source
-branch with no commits.  If the target has no commits, it fast-forwards to the
-source head; otherwise it creates a merge commit on the target.
+finds all lowest common ancestors (merge bases) and replays source changes
+onto the target. It rejects self-merge, uncommitted source or target branches,
+and a source branch with no commits. Equal heads return the existing commit.
+An empty target fast-forwards to the source head; every other successful merge
+creates a two-parent commit, even when it can reuse an existing tree root.
 
 ```mermaid
 graph TB
@@ -351,27 +356,22 @@ graph TB
     T -->|"target-only changes<br/>preserved"| M
 ```
 
-### Fast Paths
+### Tree-root fast paths
 
-Before running the full algorithm, three fast paths are checked:
+For a single merge base, the B+ tree layer can reuse roots as follows. These
+are tree-state shortcuts, not branch-history fast-forwards: the public
+`VerMap::merge` still follows the commit rules above. Multiple merge bases
+use the union of their source diffs.
 
 ```mermaid
 flowchart TD
-    Start(["merge(source, target)"]) --> ChkDirty{"Both branches<br/>committed?<br/>(no dirty state)"}
-    ChkDirty -->|No| Err["Error: uncommitted changes"]
-    ChkDirty -->|Yes| FindAnc["Find common ancestor<br/>(BFS from both heads)"]
-    FindAnc --> FP1{"ancestor_root<br/>== source_root?"}
-    FP1 -->|Yes| KeepT["Return target_root<br/>(source unchanged)"]
-    FP1 -->|No| FP2{"ancestor_root<br/>== target_root?"}
-    FP2 -->|Yes| KeepS["Return source_root<br/>(target unchanged, fast-forward)"]
-    FP2 -->|No| FP3{"source_root<br/>== target_root?"}
-    FP3 -->|Yes| Same["Return source_root<br/>(both converged)"]
-    FP3 -->|No| Full["Full three-way merge"]
-
-    style KeepT fill:#4a9,color:#fff
-    style KeepS fill:#4a9,color:#fff
-    style Same fill:#4a9,color:#fff
-    style Full fill:#c62,color:#fff
+    Start(["Tree merge with one base"]) --> FP1{"base_root == source_root?"}
+    FP1 -->|Yes| KeepT["Reuse target_root: source unchanged"]
+    FP1 -->|No| FP2{"base_root == target_root?"}
+    FP2 -->|Yes| KeepS["Reuse source_root: target unchanged"]
+    FP2 -->|No| FP3{"source_root == target_root?"}
+    FP3 -->|Yes| Same["Reuse common root"]
+    FP3 -->|No| Full["Diff and replay source changes"]
 ```
 
 ### Full Three-Way Merge Process
@@ -394,12 +394,13 @@ flowchart TD
     style MergeCommit fill:#c62,color:#fff
 ```
 
-Cost and memory are proportional to the source-side delta (changed keys ×
-tree depth), not to the size of either branch, and the merged tree shares
-every untouched subtree with the target. All replay steps share one write
-buffer, so intermediate versions are discarded before they reach the
-engine. `diff_commits` / `diff_uncommitted` use the same shared-subtree
-skipping walk.
+Diff skips subtrees with identical NodeIds. With structural sharing, this
+limits work to changed paths; independently built trees can require a full
+walk even when their contents match. Replay updates only the source delta
+(roughly changed keys × tree depth), retaining unaffected subtrees. Finding
+merge bases also walks commit history. All replay steps share one write
+buffer, discarding intermediate versions before they reach the engine.
+`diff_commits` / `diff_uncommitted` use the same shared-subtree skipping walk.
 
 ### Conflict Resolution Matrix
 
@@ -506,12 +507,13 @@ for preparing snapshots that require maintenance recovery.
 
 ## Garbage Collection
 
-**Users do not need to call `gc()` in normal operation.**  Both commit
-cleanup and B+ tree disk reclamation happen automatically.
+**Users do not need to call `gc()` in normal operation.** Commit cleanup and
+node-retirement scheduling are automatic. Physical disk reclamation is
+best-effort and depends on which SSTs MMDB compaction rewrites.
 
 ### How It Works
 
-Lifecycle management is split into two layers, both fully automatic:
+Lifecycle management has two layers:
 
 1. **Commit ref counting** — each `Commit` tracks a `ref_count`
    (branch HEADs + child parent-links).  When a branch is deleted or
@@ -525,11 +527,12 @@ Lifecycle management is split into two layers, both fully automatic:
    preserve these leases. When an owner releases its root and a node's
    count reaches zero, it is:
    - cascade-removed from the in-memory ref map, **and**
-   - registered for deferred disk deletion via the MMDB storage
-     engine's compaction filter (`lazy_delete`).
+   - queued for deferred disk deletion. After the root-removal writes are
+     fenced, the queue registers keys with MMDB `lazy_delete`.
 
-   The underlying MMDB engine reclaims disk space during background
-   compaction — no user action required.
+   Background compaction can reclaim these keys when it rewrites their SSTs.
+   Cold data may remain on disk indefinitely; neither registration nor `gc()`
+   promises prompt physical reclamation.
 
 ```mermaid
 flowchart TD
@@ -539,8 +542,10 @@ flowchart TD
     Del --> Rel["release_node(commit.root)"]
     Rel --> NodeRC["Cascade-decrement<br/>B+ tree node ref_counts"]
     NodeRC --> NodeDead{"node ref_count == 0?"}
-    NodeDead -->|yes| Lazy["lazy_delete(node key)<br/>→ MMDB dead_keys set"]
-    Lazy --> Compact["MMDB background compaction<br/>→ disk space reclaimed"]
+    NodeDead -->|yes| Queue["Queue retired node keys"]
+    Queue --> Fence["Fence root-removal writes"]
+    Fence --> Lazy["lazy_delete(node key)<br/>→ MMDB dead_keys set"]
+    Lazy --> Compact["Compaction rewrites affected SSTs<br/>→ best-effort disk reclamation"]
     Dead -->|no| Done(["Done"])
     NodeDead -->|no| Done
 
@@ -579,9 +584,9 @@ After `delete_branch(feat)`:
   **c3** (ref 1→0).
 - **c1** drops from ref=2 to ref=1 (still alive via c2).
 - B+ tree nodes from c3/c4 with no remaining owner (including live views)
-  are released from the in-memory ref map **and** registered for deferred
-  disk deletion via `lazy_delete`.
-- MMDB background compaction reclaims disk space automatically.
+  are released from the in-memory ref map, then queued and registered for
+  `lazy_delete` after the required durability fence.
+- MMDB can reclaim their disk space when compaction rewrites the affected SSTs.
 
 ---
 
@@ -591,7 +596,10 @@ These APIs support divergent-branch detection.
 
 ### Fork Point
 
-`fork_point(a, b)` finds the **lowest common ancestor** of two commits.
+`fork_point(a, b)` returns one **lowest common ancestor**. If criss-cross
+history has several merge bases, it selects the greatest CommitId among them;
+`merge` itself considers all bases. It returns `None` when no common ancestor
+is found.
 
 ```mermaid
 graph RL
@@ -666,6 +674,6 @@ flowchart LR
 | **Branching** | Copies only a lightweight `BranchState` struct |
 | **Isolation** | Each branch has independent `head` + `dirty_root` |
 | **Structural sharing** | COW B+ tree — mutations allocate ~O(log n) nodes |
-| **Merge** | Three-way with sorted iterators; source wins on conflict |
-| **GC** | Fully automatic — commit ref counting + B+ tree lazy deletion via MMDB compaction; `gc()` is for crash recovery or a forced full B+ tree sweep |
+| **Merge** | All merge bases, shared-subtree diff, and source-delta replay; source wins on conflict |
+| **GC** | Automatic ref-count cleanup and fenced node retirement; physical compaction reclaim is best-effort. `gc()` supports repair/full node sweeps |
 | **Persistence** | All state stored in MMDB via `MapxRaw` |

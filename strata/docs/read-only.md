@@ -90,8 +90,10 @@ effect:
 - fallible mutations on `VerMap`, SlotDex, VecDex, and DAG pruning.
 
 Existing collection APIs such as `Mapx::insert`, `remove`, and `clear` predate
-fallible mutation results. They fail fast with a panic in read-only mode, as
-they do for other fatal engine write failures. Infallible collection
+fallible mutation results. An attempted engine write panics in read-only mode,
+as it does for other fatal write failures. A call that returns before writing
+(for example, removing a byte slice with the wrong array-key length) may be a
+no-op; do not use such calls to probe write capability. Infallible collection
 constructors and the deep-copying `Clone` implementations also panic. Restore an existing
 handle instead, and check the mode before entering code that uses these
 infallible write APIs.
@@ -105,10 +107,9 @@ if vsdb_open_mode() == OpenMode::ReadOnly {
 ```
 
 `vsdb_flush`, `Namespace::flush`, deferred `lazy_delete` registration,
-and `VerMap::gc` are no-ops. Explicit MPT/SMT and `VerMapWithProof`
-cache saves return `VsdbError::ReadOnly`. Root computation and `Drop` do not
-save caches in either mode. These operations are maintenance
-only; skipping them does not change logical read results.
+and `VerMap::gc` are maintenance no-ops; skipping them does not change logical
+read results. Explicit MPT/SMT and `VerMapWithProof` cache saves return
+`VsdbError::ReadOnly`. Root computation and `Drop` do not save caches in either mode.
 
 ## Filesystem and process rules
 
@@ -116,6 +117,9 @@ The database must already be complete. Read-only open never creates a base
 directory, shard, format marker, allocator file, namespace lifecycle record,
 metadata directory, WAL, SST, or cache file. A missing, partial, pending, or
 unsupported dataset is rejected instead of being initialized or repaired.
+A complete, marked dataset may retain a stale initialization sentinel; read-only
+open accepts that completed state and leaves the sentinel untouched. A namespace
+whose lifecycle record is still `Pending` is rejected even if files are present.
 
 On Unix, each MMDB shard takes a shared, non-blocking lock when its existing
 `LOCK` file is present. Multiple read-only processes can coexist, but a

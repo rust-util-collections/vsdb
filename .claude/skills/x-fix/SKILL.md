@@ -32,8 +32,9 @@ Open skips fixes, not the parent's audit, validation, or owed bump.
 ### 1. Triage (CRITICAL → LOW)
 
 Per entry before edit: code/callers/tests + guides (+ `.claude/docs/design-patterns.md`
-if design); reproduce from current code; dedupe root causes; false → Rejected; real and
-disproportionate to fix safely → Won't Fix + reason. A break the user has not
+if design); reproduce from current code; dedupe root causes; disproven → remove
+the entry with refutation evidence; real and disproportionate to fix safely →
+Won't Fix + reason. A break the user has not
 accepted → leave Open; do not ship it. Missing evidence, failed validation, or
 ownership overlap is a blocker, not a disposition: leave Open.
 
@@ -63,4 +64,4 @@ stays for the next run.
 
 ## Output
 
-Dispositions, fixes, Rejected/Won't Fix, validations, compatibility, hashes/subjects, version, baseline left alone.
+Dispositions, fixes, disproven entries removed / Won't Fix, validations, compatibility, hashes/subjects, version, baseline left alone.

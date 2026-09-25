@@ -21,10 +21,11 @@
 //! [0x05]                         -> graph state (postcard)
 //! ```
 //!
-//! Every mutation stages its rows through a read-your-writes overlay and
-//! commits them in a **single atomic engine write batch**, so on-disk
-//! state is always internally consistent: there is no dirty flag, no
-//! reconcile pass, and no rebuild-on-recovery path.
+//! Each mutation or bulk-insert chunk stages its rows through a read-your-writes
+//! overlay and commits one atomic engine batch. Earlier chunks can remain
+//! committed after a later error. Recovery hydrates runtime caches without
+//! rebuilding the graph. Atomicity does not imply an fsync per operation, and
+//! consistency requires the single-active-handle contract below.
 //!
 //! The serialized form of a `VecDex` (its typed handle metadata) is the
 //! raw prefix of the single handle plus the creation-time [`HnswConfig`].
@@ -312,8 +313,10 @@ fn decode_value<T: ValueEnDe>(raw: &[u8]) -> T {
 ///   [`InnerProduct`](distance::InnerProduct)).
 /// - `S`: scalar type for vector components (`f32` or `f64`, default `f32`).
 ///
-/// Every mutation is applied through a single atomic engine write batch,
-/// so a crash can never leave the index internally inconsistent.
+/// Each mutation or bulk-insert chunk uses one atomic engine batch for rows
+/// and graph state. This preserves their consistency across recovery under
+/// the ownership contract below; it does not imply power-loss durability
+/// for every successful call.
 ///
 /// # Handle ownership
 ///
@@ -483,8 +486,9 @@ where
 
     /// Recovers a `VecDex` from previously saved metadata.
     ///
-    /// Every mutation is applied atomically, so the recovered state is
-    /// always internally consistent — there is no rebuild path.
+    /// Hydrates runtime caches from persisted rows and graph state. Each
+    /// mutation or bulk-insert chunk commits those rows together; recovery
+    /// does not rebuild the graph.
     ///
     /// This replaces the active handle; it does not share caches with existing
     /// aliases. The [handle ownership contract](Self#handle-ownership) also

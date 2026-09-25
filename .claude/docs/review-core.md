@@ -99,10 +99,11 @@ meanings: `workflow-policy.md` §5. Decide from current code, not prior entry te
 1. Prune Open proven fixed/obsolete. Narrow scope: in-scope entries only; unrelated
    Open stays unless proven fixed. History → Git/CHANGELOG, never a Resolved section.
 2. Add confirmed findings to Open; dedupe by root cause; order CRITICAL → LOW.
-3. Re-check Won't Fix / Rejected whose code, callers, or assumptions intersect the
-   scope; full audit → all (FP-13).
+3. Re-check Won't Fix entries whose code, callers, or assumptions intersect
+   the scope; full audit → all (FP-13). Prior refutations do not override new evidence.
 4. Real but safe fix disproportionate → Won't Fix + Reason. Material claim
-   disproven → Rejected (no severity). Routine noise → no entry.
+   disproven → remove the entry; keep useful refutation evidence in the review
+   output or Git history. Routine noise → no entry.
 5. No dates, freshness markers, or “last reviewed”. Separate entries with `---`.
 
 ```markdown
@@ -116,10 +117,6 @@ meanings: `workflow-policy.md` §5. Decide from current code, not prior entry te
 ## Won't Fix
 ### [SEVERITY] subsystem: summary
 - **Where** / **What** / **Reason**
-
-## Rejected
-### subsystem: "claim"
-- **Where** / **Claim** / **Reason**
 ```
 
 Severity:

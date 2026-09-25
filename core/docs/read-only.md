@@ -80,6 +80,9 @@ The database must already be complete. Read-only open does not create a base
 directory, shard, format marker, allocator file, lifecycle record, metadata
 directory, WAL, or SST. Missing, partial, pending, and unsupported datasets are
 rejected rather than initialized or repaired.
+A complete, marked dataset may retain a stale initialization sentinel; read-only
+open accepts that completed state and leaves the sentinel untouched. A namespace
+whose lifecycle record is still `Pending` is rejected even if files are present.
 
 On Unix, MMDB takes a shared non-blocking lock for each existing shard `LOCK`
 file. Multiple readers can coexist, while a cooperating writer's exclusive

@@ -70,8 +70,8 @@ sequential. Re-review each fix plus affected callers, failure paths, tests, and
 public/persisted contracts; use the invocation diff to catch interactions.
 
 Won't Fix requires a real defect and a reason the safe fix is disproportionate;
-Rejected requires refutation. Blocked or unverified fixes remain Open with the
-blocker recorded. Continue independent safe units; report remaining Open and
+disproven entries require refutation and are removed. Blocked or unverified
+fixes remain Open with the blocker recorded. Continue independent safe units; report remaining Open and
 coverage gaps honestly. Out-of-scope Open is not fixed or re-disposed.
 
 ## Phase 3 — Gate and version

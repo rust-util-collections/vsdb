@@ -317,7 +317,7 @@ fn namespace_lifecycle() {
         drop(m);
         Namespace::close_by_id(eid).unwrap();
 
-        // destroy composes with close: O(1) bulk reclaim, no restart.
+        // destroy composes with close: whole-directory reclaim, no restart.
         Namespace::destroy(eid).unwrap();
         assert!(!epath.exists());
         assert!(Namespace::open(eid).is_err()); // registry entry gone

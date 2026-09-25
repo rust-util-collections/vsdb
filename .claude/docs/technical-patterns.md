@@ -46,7 +46,14 @@ Hand codecs encode/decode field order match + round-trip tests.
 Typed wrappers compare **decoded** values (NaN/non-canonical). Not raw bytes.
 
 ### 3.5 Borrowed key forms
-`KeyRef` / `OrderedKeyRef` impls must encode byte-identically to the owning key type (`str` ≡ `String`, `[u8]` ≡ `Vec<u8>`), or `get(&q)` silently misses.
+`KeyRef` queries normally need byte-identical owner encoding (`str` ≡ `String`).
+Mapx byte-slice queries are normalized through the owning codec and validated
+against the complete borrowed slice: postcard arrays omit the length prefix
+used by `Vec<u8>` / `Box<[u8]>`. Wrong-length slices must miss, never alias a
+different array. Preserve `get` / `get_mut` / `contains_key` / `remove` symmetry.
+Other custom borrowed forms still require owner-compatible encoding.
+`OrderedKeyRef` must match `KeyEnDeOrdered`; ordered byte arrays/slices use
+raw bytes rather than postcard sequence encoding.
 
 ### 3.6 Handle type tags
 `VSTYPE03` fully qualified type tags; `VSTYPE02` still read with its legacy

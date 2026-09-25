@@ -4,10 +4,11 @@
 //! handle: mutations stage rows into an in-memory map (last write wins)
 //! and the whole set is drained into a **single atomic engine write
 //! batch** on commit.  This is the building block behind the
-//! crash-atomic single-handle structures (SlotDex, VecDex): because
-//! every mutation commits all of its rows atomically, on-disk state is
-//! always internally consistent and no dirty-flag / rebuild-on-recovery
-//! protocol is needed.
+//! crash-atomic single-handle structures (SlotDex, VecDex): each mutation
+//! or bulk-insert chunk commits its related rows together, avoiding a
+//! dirty-flag / persistent-index rebuild protocol. Callers still need
+//! exclusive ownership of mutable index caches. Atomicity is distinct
+//! from power-loss durability, which requires a WAL fence.
 //!
 //! [`wipe`](StagedRows::wipe) extends the model to whole-handle resets:
 //! reads treat the committed store as empty, and the commit opens with

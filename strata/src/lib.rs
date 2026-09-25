@@ -35,12 +35,12 @@
 //!
 //! # Why core collections don't have `len()`
 //!
-//! The underlying LSM-Tree engine (mmdb) does not support atomic
-//! "write data + update count" across different keys.  A process crash
-//! between the two leaves them inconsistent — downstream code that
-//! trusts the count for index arithmetic will panic.  For this reason
-//! [`Mapx`], [`MapxOrd`], and other core primitives intentionally omit
-//! `len()`.
+//! [`Mapx`], [`MapxOrd`], and other core primitives do not maintain durable
+//! count metadata and intentionally omit `len()`. The engine supports atomic
+//! multi-key batches within one collection prefix, but VSDB does not expose
+//! a cross-prefix batch for pairing a map write with a separate counter.
+//! Independently updating such a counter can leave it inconsistent after a
+//! crash; aliases and raw writes would also need to participate in counting.
 //!
 //! Higher-level structures ([`VecDex`], [`SlotDex`]) **do** maintain a
 //! count because they fully control their own insert/remove paths:
