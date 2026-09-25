@@ -23,6 +23,9 @@ foreign registry entries dropped only, never destroyed via foreign walk.
 **DG6 Prune crash order** — destroy branches → atomic whole-mainline merge → flush → re-parent → flush →
 mark `PRUNE_CLEARING_KEY` on consumed nodes → flush → clear → flush → unregister. Retry keys
 off the marker (finishes the clear, never re-folds genesis) — not off field clear order.
+The head marker alone does not prove every intermediate marker landed: retry
+completes and flushes the marker set while the parent chain is still intact.
+A cleared parent link implies the complete marker set was already flushed.
 Both normal and retried clears retain all children registries until every consumed
 node's data/parent clear is flushed; only then may discovery edges be removed.
 In-place genesis enrich. Flushes scoped to DAG ns. Crash at phase boundary keeps value-exact survivors (`prune_crash_*`).

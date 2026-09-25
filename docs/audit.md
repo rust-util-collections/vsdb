@@ -12,14 +12,6 @@
 
 ## Open
 
-### [HIGH] dagmap: prune retry treats a partial clearing-marker set as finished
-- **Where**: `strata/src/dagmap/raw/mod.rs` (`mark_consumed_clearing`, `prune`, `finish_interrupted_clear`, `survivor_ids`)
-- **What**: `mark_consumed_clearing` writes the head marker, then each intermediate, as separate puts. A default put flushes the WAL to the OS before returning, so `kill -9` after the head `set_aux` returns and before the next `set_aux` is issued recovers only the head marker. Parent slots are still intact (clear has not started; the re-parent flush already returned). `prune` then takes `finish_interrupted_clear` and does not mark unmarked ancestors. `clear_marked_reachable` only walks children that already have the marker, so an unmarked intermediate hides the rest of the chain. `survivor_ids` keeps that intermediate because it has no marker and its parent is genesis. `genesis.prune()` is a no-op (parentless, unmarked). The intermediate stays a live child and serves its pre-fold values (`k1=v1` while genesis has `k1=v1x` in `build_prune_fixture`).
-- **Why**: DG6 — once the clearing marker is the retry key, retry must finish the clear. Existing interruption tests cut only `after_clear_step`, which runs after every marker write and the mark flush, so they never enter this window. Writing intermediates first is not enough: `namespace().flush()` syncs shards one at a time, so power loss during that flush can persist the head's shard and drop another. Same-shard program order does not help the `kill -9` window, because the second put was never issued.
-- **Suggested fix**: In `finish_interrupted_clear`, before any clear, walk the parent chain from `self` to the marker genesis (cycle-guarded), `set_aux(PRUNE_CLEARING_KEY)` on every non-genesis ancestor, flush, then the existing clear. If a parent slot is already `None`, clear has started, which is only after a completed mark flush, so every intermediate marker is already durable. Test: after merge and re-parent, set the marker on the head only; `head.prune()` must return genesis, the intermediate must be dead, and `i1.get("k1")` must not be `v1`. Same aux key `&[1]`; no migration.
-
----
-
 ## Won't Fix
 
 ### [MEDIUM] cached indexes: independently restored handles do not share runtime caches

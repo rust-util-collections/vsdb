@@ -784,6 +784,20 @@ impl DagMapRaw {
     /// on the genesis. Marked mainline nodes are cleared; unmarked children
     /// whose parent points at the genesis are kept.
     fn finish_interrupted_clear(mut self, mut genesis: Self) -> Result<DagHead> {
+        // A crash can persist the head marker before some intermediate
+        // markers were even issued (or before their shards were synced).
+        // Complete and fence the marker set while the parent chain still
+        // reaches genesis, before a clear can sever that recovery path.
+        // If the chain ends early, clearing already started, which is only
+        // allowed after the complete marker set was durably flushed.
+        let mut linebuf = self.prune_collect_mainline()?;
+        if linebuf
+            .last()
+            .is_some_and(|node| node.instance_id() == genesis.instance_id())
+        {
+            self.mark_consumed_clearing(&mut linebuf);
+            self.namespace().flush();
+        }
         if !self.no_children() {
             self.prune_reparent_children(&mut genesis);
         }

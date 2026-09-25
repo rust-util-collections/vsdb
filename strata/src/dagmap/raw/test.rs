@@ -592,6 +592,57 @@ fn prepare_marked_clear(head: &mut DagMapRaw) {
     head.mark_consumed_clearing(&mut linebuf);
 }
 
+#[test]
+fn prune_retry_completes_partial_clearing_markers() {
+    // Cover a process crash after only the head marker, as well as
+    // non-contiguous marker sets left by independently recovered shards.
+    for marker_mask in 0..4 {
+        let (genesis, i1, mut previous_head) = build_prune_fixture();
+        let mut head = DagMapRaw::new(Some(&mut previous_head));
+        let head_id = head.save_meta().unwrap();
+        let mut survivor = DagMapRaw::new(Some(&mut head));
+        survivor.insert("survivor", "value");
+
+        let mut linebuf = head.prune_collect_mainline().unwrap();
+        head.prune_merge_into_genesis(&mut linebuf).unwrap();
+        head.namespace().flush();
+        head.prune_reparent_children(linebuf.last_mut().unwrap());
+        head.namespace().flush();
+
+        // SAFETY: only serialized into recovery markers; all accesses
+        // to the fixture and restored aliases are sequential.
+        let marker = Some(unsafe { genesis.shadow() });
+        head.parent.set_aux(PRUNE_CLEARING_KEY, &marker);
+        for (bit, node) in linebuf[..2].iter_mut().enumerate() {
+            if marker_mask & (1 << bit) != 0 {
+                node.parent.set_aux(PRUNE_CLEARING_KEY, &marker);
+            }
+        }
+        head.namespace().flush();
+
+        // Retry must consume every intermediate, including an unmarked
+        // ancestor that otherwise hides the rest of the marked chain.
+        let pruned = DagMapRaw::from_meta(head_id).unwrap().prune().unwrap();
+        assert_eq!(pruned.instance_id(), genesis.instance_id());
+        assert_merged_view(&pruned);
+        for consumed in [&head, &previous_head, &i1] {
+            assert!(consumed.is_dead(), "partial marker set {marker_mask}");
+            assert!(consumed.no_children());
+            assert!(consumed.get("k1").is_none());
+        }
+        assert_merged_view(&survivor);
+        assert_eq!(survivor.get("survivor").as_deref(), Some(&b"value"[..]));
+        assert_eq!(pruned.children.iter().count(), 1);
+
+        // A subsequent retry still resolves to the same surviving root.
+        let retried = DagMapRaw::from_meta(head_id).unwrap().prune().unwrap();
+        assert_eq!(retried.instance_id(), genesis.instance_id());
+        assert_merged_view(&retried);
+        assert_merged_view(&survivor);
+        assert_eq!(retried.children.iter().count(), 1);
+    }
+}
+
 thread_local! {
     static CLEAR_STEPS_LEFT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
