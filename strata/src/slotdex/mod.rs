@@ -16,12 +16,14 @@
 //! ```
 //!
 //! Level `0` holds per-slot entry counts; level `l >= 1` coarsens slots
-//! by `tier_capacity^l` (the tier acceleration stack). Each mutation or
-//! bulk-insert chunk commits related rows in one atomic engine batch.
+//! by `tier_capacity^l` (the tier acceleration stack). Each mutation,
+//! including an entire `insert_batch` call, commits related rows in one
+//! atomic engine batch.
 //! Recovery hydrates runtime caches; it does not rebuild persistent counts.
-//! Earlier chunks can remain committed after a later error. Atomicity does
-//! not imply an fsync per call, and consistency requires the single-active-
-//! handle contract below.
+//! Callers can split large imports across calls to bound temporary memory;
+//! earlier calls remain committed if a later call fails. Atomicity does not
+//! imply an fsync per call, and consistency requires the single-active-handle
+//! contract below.
 //!
 //! The serialized form of a `SlotDex` (its typed handle metadata) is the
 //! raw prefix of the single handle plus the two creation-time constants

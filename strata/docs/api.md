@@ -372,9 +372,11 @@ assert_eq!(db.total(), 5);
 ```
 
 `Order` controls slot order; keys within a slot retain ascending key order.
-SlotDex stores counts and rows together in atomic batches (bulk insertion
-commits one chunk at a time). Restoring through serde or `from_meta` creates
-independent runtime caches: retire the old active handle before mutation and
+SlotDex stores counts and rows together in one atomic batch per mutation,
+including the entire `insert_batch` call. Split large imports across calls
+to bound temporary memory; earlier calls remain committed if a later call
+fails. Restoring through serde or `from_meta` creates independent runtime
+caches: retire the old active handle before mutation and
 route reads/writes through one shared instance. Sequential writes through
 separate restored handles can also invalidate cached state.
 

@@ -11,11 +11,7 @@
 
 ## Open
 
-### [LOW] SlotDex: bulk documentation promises chunked commits
-- **Where**: `strata/src/slotdex/mod.rs` (module documentation), `strata/docs/api.md` (Slotdex)
-- **What**: the overview and API guide describe bulk insertion as chunked, although `insert_batch` stages and commits the entire call in one atomic batch.
-- **Why**: callers receive conflicting guidance about partial completion and temporary memory requirements for large imports.
-- **Suggested fix**: document one batch per call and caller-managed chunking for bounded imports. No behavior or format change.
+None.
 
 ## Won't Fix
 
