@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v17.0.9]
+
+Existing APIs and stored data remain compatible; no data migration is required.
+
+### Fixed
+
+- `BranchId` and `CommitId` implement `KeyEnDeOrdered`, restoring their use as
+  keys in `MapxOrd`, `VerMap`, and `SlotDex`. Ordered key bytes remain identical
+  to v16's `u64` aliases, so existing indexes can be restored and updated while
+  current typed handles continue to distinguish the two ID types.
+
 ## [v17.0.8]
 
 Existing APIs and VSDB storage formats remain compatible; no VSDB data
