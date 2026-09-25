@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v17.0.4]
+
+No storage-format changes; no data migration is required.
+
+### Fixed
+
+- `Mapx` byte-slice queries resolve through the owning key codec. Slices
+  matching fixed-array keys now find, edit and remove the correct entry;
+  wrong-length slices cannot address a different array key. Existing
+  `String`, `Vec<u8>` and `Box<[u8]>` queries remain supported.
+- `DagMap` prune retries complete and flush partial clearing-marker sets
+  before clearing consumed nodes. A crash between marker writes no longer
+  leaves intermediate nodes alive with stale values; surviving children
+  retain the merged view.
+
 ## [v17.0.3]
 
 Pre-release v17 corrections from Hotmint integration testing. No persisted
