@@ -1,4 +1,4 @@
-use criterion::{Criterion, criterion_group};
+use criterion::{BenchmarkId, Criterion, criterion_group};
 use std::hint::black_box;
 use vsdb::trie::{MptCalc, SmtCalc};
 
@@ -70,6 +70,32 @@ fn mpt_remove(c: &mut Criterion) {
             }
         });
     });
+}
+
+fn mpt_prefix_reads(c: &mut Criterion) {
+    let mut group = c.benchmark_group("mpt_prefix_reads");
+    for depth in [32, 256, 1024] {
+        let mut mpt = MptCalc::new();
+        for n in 1..=depth {
+            mpt.insert(&vec![0; n], b"x").unwrap();
+        }
+        let root: [u8; 32] = mpt.root_hash().unwrap().try_into().unwrap();
+        let key = vec![0; depth];
+        let proof = mpt.prove(&key).unwrap();
+
+        group.bench_function(BenchmarkId::new("get", depth), |b| {
+            b.iter(|| black_box(mpt.get(black_box(&key)).unwrap()));
+        });
+        group.bench_function(BenchmarkId::new("prove", depth), |b| {
+            b.iter(|| black_box(mpt.prove(black_box(&key)).unwrap()));
+        });
+        group.bench_function(BenchmarkId::new("verify", depth), |b| {
+            b.iter(|| {
+                black_box(MptCalc::verify_proof(&root, black_box(&key), &proof).unwrap())
+            });
+        });
+    }
+    group.finish();
 }
 
 fn mpt_batch_update(c: &mut Criterion) {
@@ -264,6 +290,7 @@ criterion_group!(
     mpt_insert,
     mpt_root_hash,
     mpt_get,
+    mpt_prefix_reads,
     mpt_remove,
     mpt_batch_update,
     mpt_prove_verify,

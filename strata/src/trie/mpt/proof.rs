@@ -75,7 +75,7 @@ pub fn prove(root: &NodeHandle, key: &[u8]) -> Result<MptProof> {
         });
     }
 
-    let value = prove_walk(root, path, &mut nodes)?;
+    let value = prove_walk(root, path.as_slice(), &mut nodes)?;
     Ok(MptProof {
         key: key.to_vec(),
         value,
@@ -85,7 +85,7 @@ pub fn prove(root: &NodeHandle, key: &[u8]) -> Result<MptProof> {
 
 fn prove_walk(
     mut handle: &NodeHandle,
-    mut path: Nibbles,
+    mut path: &[u8],
     nodes: &mut Vec<Vec<u8>>,
 ) -> Result<Option<Vec<u8>>> {
     loop {
@@ -97,28 +97,25 @@ fn prove_walk(
                 path: leaf_path,
                 value,
             } => {
-                return Ok((*leaf_path == path).then(|| value.clone()));
+                return Ok((leaf_path.as_slice() == path).then(|| value.clone()));
             }
             Node::Extension {
                 path: ext_path,
                 child,
             } => {
-                if !path.starts_with(ext_path) {
+                let Some(remaining) = path.strip_prefix(ext_path.as_slice()) else {
                     return Ok(None);
-                }
-                let (_, remaining) = path.split_at(ext_path.len());
+                };
                 path = remaining;
                 handle = child;
             }
             Node::Branch { children, value } => {
-                if path.is_empty() {
+                let Some((&index, remaining)) = path.split_first() else {
                     return Ok(value.clone());
-                }
-                let index = path.at(0) as usize;
-                let Some(child) = &children[index] else {
+                };
+                let Some(child) = &children[index as usize] else {
                     return Ok(None);
                 };
-                let (_, remaining) = path.split_at(1);
                 path = remaining;
                 handle = child;
             }
@@ -177,7 +174,7 @@ pub fn verify_proof(
 
     // Step 2: walk through proof nodes following the key path.
     let path = Nibbles::from_raw(&proof.key);
-    let mut remaining = path;
+    let mut remaining = path.as_slice();
     let mut node_idx: usize = 0;
 
     loop {
@@ -196,7 +193,7 @@ pub fn verify_proof(
                 path: leaf_path,
                 value,
             } => {
-                if leaf_path == remaining {
+                if leaf_path.as_slice() == remaining {
                     return Ok(proof.value.as_deref() == Some(value.as_slice()));
                 } else {
                     return Ok(proof.value.is_none());
@@ -207,10 +204,9 @@ pub fn verify_proof(
                 path: ext_path,
                 child_hash,
             } => {
-                if !remaining.starts_with(&ext_path) {
+                let Some(rest) = remaining.strip_prefix(ext_path.as_slice()) else {
                     return Ok(proof.value.is_none());
-                }
-                let (_, rest) = remaining.split_at(ext_path.len());
+                };
                 remaining = rest;
                 node_idx += 1;
                 if node_idx >= proof.nodes.len() {
@@ -225,17 +221,15 @@ pub fn verify_proof(
             }
 
             DecodedNode::Branch { children, value } => {
-                if remaining.is_empty() {
+                let Some((&index, rest)) = remaining.split_first() else {
                     return match (&proof.value, &value) {
                         (Some(pv), Some(bv)) => Ok(pv.as_slice() == bv.as_slice()),
                         (None, None) => Ok(true),
                         _ => Ok(false),
                     };
-                }
-                let idx = remaining.at(0) as usize;
-                let (_, rest) = remaining.split_at(1);
+                };
                 remaining = rest;
-                match &children[idx] {
+                match &children[index as usize] {
                     None => {
                         return Ok(proof.value.is_none());
                     }
