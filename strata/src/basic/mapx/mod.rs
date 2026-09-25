@@ -348,6 +348,13 @@ where
     pub fn commit(self) -> Result<()> {
         self.inner.commit()
     }
+
+    /// Atomically publishes the batch after synchronizing its shard WAL.
+    /// An empty batch does not fence earlier writes. Persistence failures can
+    /// be ambiguous after recovery; they must not be retried automatically.
+    pub fn commit_sync(self) -> Result<()> {
+        self.inner.commit_sync()
+    }
 }
 
 /////////////////////////////////////////////////////////////////////////////

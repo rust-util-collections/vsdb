@@ -1243,9 +1243,17 @@ impl MmdbBatch<'_> {
     }
 
     /// Applies every buffered operation atomically. The batch is consumed
-    /// either way: on error nothing was applied.
+    /// either way. A persistence failure may leave recoverable WAL data.
     #[inline(always)]
     pub(crate) fn commit(self) -> VsdbResult<()> {
+        self.commit_with_sync(false)
+    }
+
+    pub(crate) fn commit_sync(self) -> VsdbResult<()> {
+        self.commit_with_sync(true)
+    }
+
+    fn commit_with_sync(self, sync: bool) -> VsdbResult<()> {
         let batch = self.inner;
         if self.engine.read_only {
             return Err(crate::common::error::VsdbError::ReadOnly {
@@ -1254,7 +1262,16 @@ impl MmdbBatch<'_> {
         }
         // `.c(d!())` attaches file/line context; the `?` conversion into
         // `VsdbError` preserves the complete ruc chain.
-        self.engine.shard(&self.meta_prefix).write(batch).c(d!())?;
+        self.engine
+            .shard(&self.meta_prefix)
+            .write_with_options(
+                &WriteOptions {
+                    sync,
+                    ..Default::default()
+                },
+                batch,
+            )
+            .c(d!())?;
         Ok(())
     }
 }
@@ -1521,6 +1538,29 @@ mod tests {
         panic::{AssertUnwindSafe, catch_unwind},
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    #[test]
+    fn synchronous_batch_reports_closed_engine() {
+        let dir = tmp_dir("sync-batch-fault");
+        let db = DB::open(DbOptions::default(), &dir).unwrap();
+        db.close().unwrap();
+        let engine = MmDB {
+            dbs: vec![db].into_boxed_slice(),
+            read_only: false,
+        };
+        let mut batch = engine.batch_begin(42u64.to_le_bytes());
+        batch.insert(b"receipt", b"unacknowledged");
+        assert!(batch.commit_sync().is_err());
+        drop(engine);
+        let db = DB::open(DbOptions::default(), &dir).unwrap();
+        assert!(
+            db.get(&make_full_key(&42u64.to_le_bytes(), b"receipt"))
+                .unwrap()
+                .is_none()
+        );
+        drop(db);
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn streaming_scans_surface_late_block_corruption() {

@@ -4,6 +4,12 @@ This document provides examples for selected public APIs in the `vsdb` crate.
 
 ## Durability fences
 
+`Mapx`, `MapxOrd`, and `MapxOrdRawKey` batches also expose `commit_sync()`.
+This opt-in operation synchronizes the shard WAL before atomic publication;
+ordinary `commit()` keeps its existing asynchronous default. An empty batch is
+not a fence for earlier writes. No cross-collection transaction is implied.
+An I/O failure may have left recoverable WAL data, so avoid automatic retries.
+
 `Mapx`, `MapxOrd`, `MapxOrdRawKey`, and `Orphan` expose `try_sync_wal()`:
 
 ```rust

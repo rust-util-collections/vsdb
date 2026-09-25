@@ -38,6 +38,14 @@ does not create a cross-shard transaction. The call is a no-op in read-only mode
 shards of one namespace; it returns the first error and does not make the
 namespace's collections transactional. Neither form forces a memtable flush.
 
+For atomic publication **after** WAL synchronization, use `batch.commit_sync()`.
+It consumes the same batch as `commit()`, including a `batch_wiped()` batch,
+but synchronizes before making its changes visible. Existing `commit()` keeps
+its asynchronous default. An empty synchronous batch is a no-op, not a fence
+for earlier writes. Persistence failure can be ambiguous after recovery;
+never automatically retry a failed commit as if it certainly wrote nothing.
+This remains a single-collection operation, with no cross-shard transaction.
+
 ## Immutable iteration alongside writes
 
 An immutable `iter` or `range` retains one committed view captured when the

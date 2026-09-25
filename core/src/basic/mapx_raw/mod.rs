@@ -737,12 +737,29 @@ impl MapxRawBatch<'_> {
     ///
     /// # Errors
     ///
-    /// On error none of the operations was applied. Engine-side size
-    /// rejections (keys over 8 MiB, entries over ~64 MiB) and
-    /// [`VsdbError::ReadOnly`] are reported here.
+    /// Engine-side size rejections (keys over 8 MiB, entries over ~64 MiB)
+    /// and [`VsdbError::ReadOnly`] leave the batch unapplied. Persistence
+    /// failures can be ambiguous after recovery and must not be retried
+    /// automatically.
     #[inline(always)]
     pub fn commit(self) -> Result<()> {
         self.inner.commit()
+    }
+
+    /// Atomically publishes this batch after synchronizing its shard WAL.
+    ///
+    /// Unlike `commit` followed by a WAL fence, readers cannot observe this
+    /// batch before its synchronization succeeds. This does not force a
+    /// memtable flush or create a transaction across collections or shards.
+    /// An empty batch is a no-op, not a fence for previous writes.
+    ///
+    /// # Errors
+    ///
+    /// Reports capability, size and persistence errors. After an I/O failure,
+    /// recovery may find WAL data even though this call did not acknowledge
+    /// success; do not automatically retry an ambiguous failed write.
+    pub fn commit_sync(self) -> Result<()> {
+        self.inner.commit_sync()
     }
 }
 
