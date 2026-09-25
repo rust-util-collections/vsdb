@@ -11,7 +11,35 @@
 
 ## Open
 
-None.
+### [HIGH] MPT: accepted prefix keys exceed a default worker stack
+- **Where**: `strata/src/trie/mpt/mutation.rs` (`insert_rec`), related MPT traversal and cache helpers, `strata/src/trie/node/mod.rs`
+- **What**: inserting increasing zero-prefix keys of lengths 1 through 200 on a standard worker thread aborts in a debug build. Every key satisfies the public 1024-byte limit.
+- **Why**: the key limit bounds node depth but not stack bytes. Recursive insertion uses large frames; other traversal, cloning, destruction and cache paths also recurse over the same tree.
+- **Suggested fix**: use explicit traversal stacks throughout the accepted-tree lifecycle. Exercise the 1024-byte boundary on a 2 MiB worker, including updates, proofs, clone/drop and cache round trips. Preserve accepted keys, root hashes and cache encoding; no migration.
+
+---
+
+### [MEDIUM] Orphan: unchanged guards write values with varying encodings
+- **Where**: `strata/src/basic/orphan/mod.rs` (`get_mut`, `ValueMut::drop`)
+- **What**: a valid value codec that emits a fresh serialization tag on each encode makes an untouched guard look modified. Dropping that guard rewrites storage or panics in a read-only process.
+- **Why**: Orphan compares two encodings without the mutable-access and encoding-stability checks already used by its underlying typed map. Value codecs need not be deterministic.
+- **Suggested fix**: delegate to the existing typed-map guard; test unchanged bytes, real edits, interior edits, unwind and read-only access. No API or storage-format change.
+
+---
+
+### [MEDIUM] DagMap: marked registry cycles prevent prune retry from completing
+- **Where**: `strata/src/dagmap/raw/mod.rs` (`clear_marked_reachable`)
+- **What**: the public serde component representation permits adding a self-reference to a consumed head's children registry. Retrying prune repeatedly expands that marked node.
+- **Why**: this recovery traversal has no visited set, unlike other graph walks. The resulting loop retains duplicate handles indefinitely. Ordinary construction and supported crash states do not create this cycle.
+- **Suggested fix**: visit each instance once before expanding marked children; test a consumed head with a repeated registry link and preserve surviving data. This runtime guard needs no migration and does not resolve the separate component-representation limitation below.
+
+---
+
+### [LOW] SlotDex: bulk documentation promises chunked commits
+- **Where**: `strata/src/slotdex/mod.rs` (module documentation), `strata/docs/api.md` (Slotdex)
+- **What**: the overview and API guide describe bulk insertion as chunked, although `insert_batch` stages and commits the entire call in one atomic batch.
+- **Why**: callers receive conflicting guidance about partial completion and temporary memory requirements for large imports.
+- **Suggested fix**: document one batch per call and caller-managed chunking for bounded imports. No behavior or format change.
 
 ## Won't Fix
 
