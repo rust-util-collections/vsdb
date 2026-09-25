@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v17.0.6]
+
+No public API or storage-format changes; no data migration is required.
+
+### Changed
+
+- MPT lookups, proof generation and proof verification borrow the remaining
+  key path instead of copying it at every node, reducing temporary allocations
+  especially for long shared prefixes.
+- `SlotDex` checks whether tier growth is needed before copying cached buckets
+  and examines only pending updates for the top tier. Serial and bulk inserts
+  retain the same promotion cadence and atomic commit behavior.
+- Added MPT prefix-chain and `SlotDex` tier-growth benchmarks, including bounded
+  hot-slot insertion workloads.
+
 ## [v17.0.5]
 
 No public API or storage-format changes; no data migration is required.
