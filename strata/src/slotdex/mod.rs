@@ -790,16 +790,21 @@ where
         let mut newtop = Level::new(new_level_no, &self.tier_capacity);
         if let Some(top) = grown.last().or_else(|| self.levels.last()) {
             let top_idx = n - 1;
+            let pending = bumps.range((top_idx, S::MIN)..=(top_idx, S::MAX));
+            // Only new floors increase the bucket count. Check growth before
+            // cloning the cache, and ignore updates belonging to lower tiers.
+            let added = pending
+                .clone()
+                .filter(|((_, floor), _)| !top.buckets.contains_key(floor))
+                .count();
+            if (top.buckets.len() + added) as i128 <= self.tier_capacity.as_i128() {
+                return None;
+            }
             // Merged view of the top level: committed buckets overlaid
             // with this operation's pending updates.
             let mut view = top.buckets.clone();
-            for ((i, floor), v) in bumps {
-                if *i == top_idx {
-                    view.insert(floor.clone(), *v);
-                }
-            }
-            if view.len() as i128 <= self.tier_capacity.as_i128() {
-                return None;
+            for ((_, floor), v) in pending {
+                view.insert(floor.clone(), *v);
             }
             for (slot, cnt) in view {
                 let floor = slot.floor_align(&newtop.floor_base);

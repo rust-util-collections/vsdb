@@ -1,4 +1,4 @@
-use criterion::{Criterion, criterion_group};
+use criterion::{BenchmarkId, Criterion, criterion_group};
 use rand::random;
 use std::{
     hint::black_box,
@@ -114,8 +114,65 @@ fn slot_write(c: &mut Criterion) {
     group.finish();
 }
 
+fn slot_growth_checks(c: &mut Criterion) {
+    let mut group = c.benchmark_group("vsdb::slotdex / growth_check");
+    group
+        .measurement_time(Duration::from_secs(3))
+        .sample_size(10);
+
+    for capacity in [16u64, 1024] {
+        let mut db = SlotDex64::<u64>::new(capacity, false).unwrap();
+        db.insert_batch((0..=capacity).map(|n| (n * capacity, n)))
+            .unwrap();
+        db.insert(0, capacity + 1).unwrap();
+        // Leave a full top tier without triggering another promotion.
+        db.remove(capacity * capacity, &capacity).unwrap();
+        group.bench_function(BenchmarkId::new("hot_slot_insert", capacity), |b| {
+            b.iter_custom(|iters| {
+                let mut elapsed = Duration::ZERO;
+                let mut remaining = iters;
+                while remaining > 0 {
+                    let count = remaining.min(1_024);
+                    let keys = capacity + 2..capacity + 2 + count;
+                    let start = Instant::now();
+                    for key in keys.clone() {
+                        db.insert(black_box(0), black_box(key)).unwrap();
+                    }
+                    elapsed += start.elapsed();
+                    // Keep the live data bounded; cleanup is not measured.
+                    for key in keys {
+                        db.remove(0, &key).unwrap();
+                    }
+                    remaining -= count;
+                }
+                elapsed
+            });
+        });
+        db.clear().unwrap();
+    }
+
+    for capacity in [16u64, 64] {
+        let mut db = SlotDex64::<u64>::new(capacity, false).unwrap();
+        group.bench_function(BenchmarkId::new("batch_10000_and_clear", capacity), |b| {
+            b.iter(|| {
+                db.insert_batch((0..10_000).map(|n| (n, n))).unwrap();
+                black_box(db.total());
+                db.clear().unwrap();
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
-    benches, slot_64, slot_32, slot_16, slot_8, slot_4, slot_write
+    benches,
+    slot_64,
+    slot_32,
+    slot_16,
+    slot_8,
+    slot_4,
+    slot_write,
+    slot_growth_checks
 );
 
 #[path = "units/legacy_budget.rs"]
