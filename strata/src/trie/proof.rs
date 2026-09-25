@@ -22,6 +22,29 @@ use crate::{
 };
 
 use super::{MptCalc, MptProof, SmtCalc, SmtProof, TrieCalc};
+use serde::{Deserialize, Serialize};
+
+/// A root and proof computed together for one requested versioned state.
+///
+/// The result owns both values and remains unchanged by later map operations.
+/// For a known checkpoint, compare `root_hash` with that checkpoint's root
+/// before verifying the proof. The proof's value uses the map's value codec.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProofWithRoot<P> {
+    /// The computed 32-byte root for the requested state.
+    pub root_hash: [u8; 32],
+    /// Membership or absence proof for the requested key.
+    pub proof: P,
+}
+
+impl<P> ProofWithRoot<P> {
+    fn new(root_hash: Vec<u8>, proof: P) -> Result<Self> {
+        let root_hash = root_hash.try_into().map_err(|_| VsdbError::Trie {
+            detail: "proof root must contain exactly 32 bytes".into(),
+        })?;
+        Ok(Self { root_hash, proof })
+    }
+}
 
 /// A versioned key-value map with Merkle root hash computation.
 ///
@@ -346,12 +369,38 @@ where
     K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
+    /// Synchronizes to `branch` (including uncommitted changes) and returns
+    /// its root together with a proof for the typed `key`.
+    ///
+    /// No prior root query is required. The branch argument selects the view
+    /// regardless of earlier queries or cache checkpoints.
+    pub fn prove_at(
+        &mut self,
+        branch: BranchId,
+        key: &K,
+    ) -> Result<ProofWithRoot<SmtProof>> {
+        let root_hash = self.merkle_root(branch)?;
+        ProofWithRoot::new(root_hash, self.prove_key(key)?)
+    }
+
+    /// Returns the root and typed-key proof for `commit`, excluding dirty
+    /// changes. A missing or reclaimed commit returns `CommitNotFound`.
+    pub fn prove_at_commit(
+        &mut self,
+        commit: CommitId,
+        key: &K,
+    ) -> Result<ProofWithRoot<SmtProof>> {
+        let root_hash = self.merkle_root_at_commit(commit)?;
+        ProofWithRoot::new(root_hash, self.prove_key(key)?)
+    }
+
     /// Generates a Merkle proof for exact ordered-key bytes.
     ///
     /// The trie must be synced (call [`merkle_root`](Self::merkle_root)
     /// first) for proof generation to work. The bytes must be exactly
     /// [`KeyEnDeOrdered::to_bytes`] for the logical key; prefer
-    /// [`prove_key`](Self::prove_key) when a typed key is available.
+    /// [`prove_at`](Self::prove_at) to select and synchronize a branch in
+    /// the same call, or [`prove_key`](Self::prove_key) for an already-synced trie.
     pub fn prove(&self, key: &[u8]) -> Result<SmtProof> {
         self.trie.prove(key)
     }
@@ -390,10 +439,36 @@ where
     K: KeyEnDeOrdered,
     V: ValueEnDe,
 {
+    /// Synchronizes to `branch` (including uncommitted changes) and returns
+    /// its root together with a proof for the typed `key`.
+    ///
+    /// No prior root query is required. Earlier queries and cache checkpoints
+    /// do not determine this call's proof context.
+    pub fn prove_at(
+        &mut self,
+        branch: BranchId,
+        key: &K,
+    ) -> Result<ProofWithRoot<MptProof>> {
+        let root_hash = self.merkle_root(branch)?;
+        ProofWithRoot::new(root_hash, self.prove_mpt(key)?)
+    }
+
+    /// Returns the root and typed-key proof for `commit`, excluding dirty
+    /// changes. A missing or reclaimed commit returns `CommitNotFound`.
+    pub fn prove_at_commit(
+        &mut self,
+        commit: CommitId,
+        key: &K,
+    ) -> Result<ProofWithRoot<MptProof>> {
+        let root_hash = self.merkle_root_at_commit(commit)?;
+        ProofWithRoot::new(root_hash, self.prove_mpt(key)?)
+    }
+
     /// Generates a Merkle proof for the given key.
     ///
     /// The trie must be synced (call [`merkle_root`](Self::merkle_root)
-    /// first) for proof generation to work.
+    /// first) for proof generation to work. Prefer [`prove_at`](Self::prove_at)
+    /// to select and synchronize a branch in the same call.
     pub fn prove_mpt(&self, key: &K) -> Result<MptProof> {
         self.trie.prove(&key.to_bytes())
     }
@@ -408,6 +483,15 @@ where
         proof: &MptProof,
     ) -> Result<bool> {
         MptCalc::verify_proof(root_hash, expected_key, proof)
+    }
+
+    /// Verifies an MPT proof against a typed key using its ordered encoding.
+    pub fn verify_key_proof(
+        root_hash: &[u8; 32],
+        expected_key: &K,
+        proof: &MptProof,
+    ) -> Result<bool> {
+        MptCalc::verify_proof(root_hash, &expected_key.to_bytes(), proof)
     }
 }
 

@@ -363,7 +363,28 @@ formats and are not accepted by these decoders.
 
 ## VerMapWithProof
 
-Integrates `VerMap` with `MptCalc` for versioned Merkle root computation.
+Integrates `VerMap` with MPT or SMT for versioned Merkle root computation.
+Use `prove_at(branch, &key)` to synchronize and return a `ProofWithRoot` in one
+call, including uncommitted changes. `prove_at_commit(commit, &key)` selects
+committed history instead and returns an error for reclaimed commits. Both
+backends use the same method names and ordered key codec.
+
+```rust
+use vsdb::{SmtCalc, VerMapWithProof};
+let mut state = VerMapWithProof::<u64, String, SmtCalc>::new();
+let main = state.map().main_branch();
+state.map_mut().insert(main, &7, &"value".to_owned()).unwrap();
+let result = state.prove_at(main, &7).unwrap();
+assert!(VerMapWithProof::<u64, String, SmtCalc>::verify_key_proof(
+    &result.root_hash, &7, &result.proof,
+).unwrap());
+```
+
+Earlier root queries and `save_cache` calls do not determine these methods'
+proof context. The existing `prove`, `prove_key`, and `prove_mpt` methods still
+use the last synchronized trie; they remain useful when proving several keys
+against a root the caller has already selected. `ProofWithRoot` supports serde;
+its embedded proof uses the versioned representation above.
 
 ```rust
 use vsdb::trie::{MptCalc, VerMapWithProof};

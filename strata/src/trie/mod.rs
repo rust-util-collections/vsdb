@@ -67,7 +67,7 @@ mod test;
 
 pub use error::TrieError;
 pub use mpt::{MAX_MPT_KEY_LEN, MptProof};
-pub use proof::VerMapWithProof;
+pub use proof::{ProofWithRoot, VerMapWithProof};
 pub use smt::SmtProof;
 
 use std::{mem, path::Path};

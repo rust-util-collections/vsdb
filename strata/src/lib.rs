@@ -130,7 +130,9 @@ pub use versioned::{BranchId, Commit, CommitId, DiffEntry, Snapshot, map::VerMap
 pub use dagmap::{DagMapId, raw::DagMapRaw, rawkey::DagMapRawKey};
 
 // Trie
-pub use trie::{MptCalc, MptProof, SmtCalc, SmtProof, TrieCalc, VerMapWithProof};
+pub use trie::{
+    MptCalc, MptProof, ProofWithRoot, SmtCalc, SmtProof, TrieCalc, VerMapWithProof,
+};
 
 // Slotdex — `SlotDex` is the generic struct (`SlotDex<S, K>`); the
 // width-specific aliases pin the slot type.
