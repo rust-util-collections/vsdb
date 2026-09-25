@@ -1,7 +1,13 @@
 # Synchronous batches and ordinary collection read views
 
-Status: candidate design assessment, not an implementation decision.
-Date: 2026-09-25 UTC.
+Status: initial implementation completed after owner authorization, 2026-09-25 UTC.
+
+Implemented scope: `commit_sync()` on raw and ordinary typed batches;
+`MapxRaw::read_view()` and immutable `MapxRawReader`. These preserve storage
+formats, default write behavior and namespace ownership. Typed read-view
+wrappers and broader capabilities below remain design candidates, not shipped
+APIs. No cross-map transaction, owned detached snapshot or service-specific
+policy was added. See [validation evidence](../evaluations/acc-migration-primitives.md).
 Baseline: `8ad80b1ca2649307ef36044630343660bb193147` (VSDB 17.0.7).
 
 ## Purpose and design boundary
@@ -81,7 +87,8 @@ requiring the owner's confirmation before implementation.
 The low-cost `commit_sync` addition can still have independent library value.
 Borrowed read views likewise fit the engine, but should be justified by actual
 multi-query callers rather than demanded as a universal service architecture.
-No implementation is authorized by this assessment itself.
+The subsequent implementation authorization covers the bounded additions
+listed in the status above. It does not approve the structural alternatives.
 
 ## 1. Opt-in synchronous batch commit
 
