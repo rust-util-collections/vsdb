@@ -4,8 +4,8 @@ use crate::common::{
     vsdb_get_base_dir, vsdb_is_read_only,
 };
 use mmdb::{
-    BidiIterator, BlockCachePool, CompressionType, DB, DbOptions, WriteBatch,
-    WriteOptions,
+    BidiIterator, BlockCachePool, CompressionType, DB, DbOptions, ReadOptions, Snapshot,
+    WriteBatch, WriteOptions,
 };
 use parking_lot::{Mutex, RwLock};
 use ruc::*;
@@ -496,6 +496,16 @@ impl MmDB {
     ) -> MmdbIter {
         let db = self.shard(&meta_prefix);
 
+        let snapshot = db.snapshot();
+        Self::range_at(db, meta_prefix, bounds, &snapshot.read_options())
+    }
+
+    fn range_at<'a, R: RangeBounds<Cow<'a, [u8]>>>(
+        db: &DB,
+        meta_prefix: PreBytes,
+        bounds: R,
+        options: &ReadOptions,
+    ) -> MmdbIter {
         let prefixed = |b: &Bound<&Cow<'_, [u8]>>| -> Bound<Vec<u8>> {
             match b {
                 Bound::Included(k) => Bound::Included(make_full_key(&meta_prefix, k)),
@@ -526,15 +536,8 @@ impl MmDB {
             (None, None) => None,
         };
 
-        // The temporary snapshot bridges sequence selection and source capture.
-        // The returned iterator then retains its sources independently.
-        let snapshot = db.snapshot();
         let mut db_iter = db
-            .iter_with_range(
-                &snapshot.read_options(),
-                start_hint.as_deref(),
-                end_hint.as_deref(),
-            )
+            .iter_with_range(options, start_hint.as_deref(), end_hint.as_deref())
             .expect("vsdb: mmdb iter_with_range failed");
 
         if let Bound::Included(ref lo) | Bound::Excluded(ref lo) = lo_full {
@@ -552,6 +555,15 @@ impl MmDB {
         MmdbIter(Box::new(iter))
     }
 
+    pub(crate) fn read_view(&self, prefix: PreBytes) -> MmdbReadView<'_> {
+        let db = self.shard(&prefix);
+        MmdbReadView {
+            db,
+            prefix,
+            snapshot: db.snapshot(),
+        }
+    }
+
     pub(crate) fn batch_begin(&self, meta_prefix: PreBytes) -> MmdbBatch<'_> {
         MmdbBatch::new(meta_prefix, self)
     }
@@ -565,6 +577,30 @@ impl MmDB {
 }
 
 // ---- Iterator ----
+
+pub(crate) struct MmdbReadView<'a> {
+    db: &'a DB,
+    prefix: PreBytes,
+    snapshot: Snapshot<'a>,
+}
+
+impl MmdbReadView<'_> {
+    pub(crate) fn get(&self, key: &[u8]) -> Option<RawValue> {
+        self.db
+            .get_with_options(
+                &self.snapshot.read_options(),
+                &make_full_key(&self.prefix, key),
+            )
+            .expect("vsdb: mmdb snapshot get failed")
+    }
+
+    pub(crate) fn range<'a, R: RangeBounds<Cow<'a, [u8]>>>(
+        &self,
+        bounds: R,
+    ) -> MmdbIter {
+        MmDB::range_at(self.db, self.prefix, bounds, &self.snapshot.read_options())
+    }
+}
 
 // Check before filtering/type erasure: a failed source can coexist with an
 // item from another source, so inspect errors after every advance, not only EOF.

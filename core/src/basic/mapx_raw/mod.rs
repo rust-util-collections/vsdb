@@ -55,6 +55,37 @@ use std::{borrow::Cow, fs, ops::RangeBounds};
 
 /// An iterator over the entries of a `MapxRaw`.
 pub type MapxRawIter<'a> = engine::MapxIter<'a>;
+/// A read-only view whose queries share one captured committed state.
+pub type MapxRawReadView<'a> = engine::MapxReadView<'a>;
+
+/// A read-only handle sharing a map's identity without exposing mutation.
+///
+/// Cloning this reader shares the same map; cloning `MapxRaw` still deep-copies
+/// data. The reader retains namespace ownership, so close is refused while
+/// it remains alive. Views borrow the reader and keep their snapshot registered.
+///
+/// ```compile_fail
+/// use vsdb_core::MapxRaw;
+/// let map = MapxRaw::new();
+/// let mut reader = map.reader();
+/// reader.insert(b"key", b"value"); // No mutable capability.
+/// ```
+#[derive(Clone, Debug)]
+pub struct MapxRawReader {
+    inner: engine::MapxReader,
+}
+
+impl MapxRawReader {
+    /// Reads the latest committed value. Fatal engine errors panic.
+    pub fn get(&self, key: impl AsRef<[u8]>) -> Option<RawValue> {
+        self.inner.get(key.as_ref())
+    }
+
+    /// Captures one committed state for repeated queries.
+    pub fn read_view(&self) -> MapxRawReadView<'_> {
+        self.inner.read_view()
+    }
+}
 /// A mutable iterator over the entries of a `MapxRaw`.
 pub type MapxRawIterMut<'a> = engine::MapxIterMut<'a>;
 /// A mutable reference to a value in a `MapxRaw`.
@@ -104,6 +135,29 @@ impl<'de> Deserialize<'de> for MapxRaw {
 }
 
 impl MapxRaw {
+    /// Creates an immutable reader without introducing a mutable alias.
+    pub fn reader(&self) -> MapxRawReader {
+        MapxRawReader {
+            inner: self.inner.reader(),
+        }
+    }
+
+    /// Captures one state for point and range reads. The view borrows this map.
+    /// Use `reader()` first when the original handle must remain writable.
+    /// Long-lived views retain old versions and can delay reclamation.
+    ///
+    /// ```compile_fail
+    /// use vsdb_core::MapxRaw;
+    /// let view = {
+    ///     let map = MapxRaw::new();
+    ///     map.read_view()
+    /// };
+    /// let _ = view.get(b"key"); // The owner cannot be dropped first.
+    /// ```
+    pub fn read_view(&self) -> MapxRawReadView<'_> {
+        self.inner.read_view()
+    }
+
     /// Creates a "shadow" copy of the `MapxRaw` instance.
     ///
     /// This method creates a new `MapxRaw` that shares the same underlying data source.

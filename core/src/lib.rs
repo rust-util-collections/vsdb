@@ -47,7 +47,7 @@ pub mod common;
 pub mod basic;
 
 /// A raw, high-performance, disk-backed key-value map.
-pub use basic::mapx_raw::MapxRaw;
+pub use basic::mapx_raw::{MapxRaw, MapxRawReadView, MapxRawReader};
 
 /// Commonly used items, re-exported for convenience.
 ///

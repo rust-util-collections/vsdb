@@ -48,6 +48,32 @@ This remains a single-collection operation, with no cross-shard transaction.
 
 ## Immutable iteration alongside writes
 
+For several queries at the same committed state, capture a borrowed
+`MapxRaw::read_view()`. It offers `get`, `contains_key`, `iter` and `range`,
+with ordinary values/iterators and panic on fatal engine faults. It covers
+one collection; independently captured views may see different states.
+The view and its iterators keep the snapshot alive, so release them promptly
+to let compaction reclaim obsolete versions.
+
+An immutable reader permits concurrent publication without a mutable alias:
+
+```rust
+use vsdb_core::MapxRaw;
+let mut map = MapxRaw::new();
+map.insert(b"key", b"before");
+let reader = map.reader();
+let view = reader.read_view();
+map.insert(b"key", b"after");
+assert_eq!(view.get(b"key").unwrap(), b"before");
+assert_eq!(reader.get(b"key").unwrap(), b"after");
+```
+
+`MapxRawReader::clone` shares read-only access, while `MapxRaw::clone` still
+deep-copies. A reader retains namespace ownership; closing that namespace is
+refused until all readers and other owning handles are dropped. Views borrow
+their map/reader, and view iterators borrow the view. These are ordinary-map
+read views, not VerMap history, detached owned snapshots or write transactions.
+
 An immutable `iter` or `range` retains one committed view captured when the
 iterator is created. Writes, clears and flushes through another handle do not
 change that view. Separate queries can see different states. The `shadow`

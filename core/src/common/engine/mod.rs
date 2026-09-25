@@ -7,8 +7,8 @@ mod mmdb;
 /////////////////////////////////////////////////////////////////////////////
 
 pub(crate) use self::mmdb::{
-    EngineSizing, MmDB as Engine, MmdbBatch as Batch, validate_completed_dataset,
-    write_file_durable,
+    EngineSizing, MmDB as Engine, MmdbBatch as Batch, MmdbReadView,
+    validate_completed_dataset, write_file_durable,
 };
 
 type DbIter = self::mmdb::MmdbIter;
@@ -33,6 +33,57 @@ use std::{
 };
 
 const MAPX_META_MAGIC: &[u8; 8] = b"VSMAPX01";
+
+#[derive(Clone, Debug)]
+pub(crate) struct MapxReader {
+    prefix: PreBytes,
+    ns: Namespace,
+}
+
+impl MapxReader {
+    pub(crate) fn get(&self, key: &[u8]) -> Option<RawValue> {
+        self.ns.engine().get(self.prefix, key)
+    }
+
+    pub(crate) fn read_view(&self) -> MapxReadView<'_> {
+        MapxReadView {
+            inner: self.ns.engine().read_view(self.prefix),
+        }
+    }
+}
+
+/// A borrowed immutable view of one ordinary map's committed state.
+pub struct MapxReadView<'a> {
+    inner: MmdbReadView<'a>,
+}
+
+impl MapxReadView<'_> {
+    /// Reads a key at the captured state. Fatal engine errors panic.
+    pub fn get(&self, key: impl AsRef<[u8]>) -> Option<RawValue> {
+        self.inner.get(key.as_ref())
+    }
+
+    /// Whether the captured state contains a key.
+    pub fn contains_key(&self, key: impl AsRef<[u8]>) -> bool {
+        self.get(key).is_some()
+    }
+
+    /// Iterates the captured state, borrowing this view.
+    pub fn iter(&self) -> MapxIter<'_> {
+        self.range(..)
+    }
+
+    /// Iterates a range within the captured state. Fatal engine errors panic.
+    pub fn range<'a, 'b, R: RangeBounds<Cow<'b, [u8]>>>(
+        &'a self,
+        bounds: R,
+    ) -> MapxIter<'a> {
+        MapxIter {
+            db_iter: self.inner.range(bounds),
+            _marker: PhantomData,
+        }
+    }
+}
 /// Meta without the namespace suffix — the pre-v16 wire format,
 /// still written verbatim for default-namespace handles.
 const MAPX_META_LEN: usize = MAPX_META_MAGIC.len() + PREFIX_SIZE;
@@ -184,6 +235,19 @@ impl Mapx {
     #[inline(always)]
     pub(crate) fn get(&self, key: &[u8]) -> Option<RawValue> {
         self.ns.engine().get(self.prefix_bytes(), key)
+    }
+
+    pub(crate) fn reader(&self) -> MapxReader {
+        MapxReader {
+            prefix: self.prefix_bytes(),
+            ns: self.ns.clone(),
+        }
+    }
+
+    pub(crate) fn read_view(&self) -> MapxReadView<'_> {
+        MapxReadView {
+            inner: self.ns.engine().read_view(self.prefix_bytes()),
+        }
     }
 
     #[inline(always)]
