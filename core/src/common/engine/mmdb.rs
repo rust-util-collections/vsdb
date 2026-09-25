@@ -1638,14 +1638,15 @@ mod tests {
                 .into_boxed_slice(),
             read_only: true,
         };
-        for use_range in [false, true] {
+        for mode in 0..3 {
             for reverse in [false, true] {
                 let mut seen = 0;
                 let failure = catch_unwind(AssertUnwindSafe(|| {
-                    let mut iter = if use_range {
-                        engine.range(prefix, ..)
-                    } else {
-                        engine.iter(prefix)
+                    let view = (mode == 2).then(|| engine.read_view(prefix));
+                    let mut iter = match &view {
+                        Some(view) => view.range(..),
+                        None if mode == 1 => engine.range(prefix, ..),
+                        None => engine.iter(prefix),
                     };
                     while if reverse {
                         iter.next_back()
@@ -1668,6 +1669,9 @@ mod tests {
                 assert!(message.contains("vsdb: mmdb iteration failed"), "{message}");
             }
         }
+        let view = engine.read_view(prefix);
+        assert!(catch_unwind(AssertUnwindSafe(|| view.get(&[32]))).is_err());
+        drop(view);
         drop(engine);
         fs::remove_dir_all(dir).unwrap();
     }

@@ -69,6 +69,16 @@ impl MapxReadView<'_> {
     }
 
     /// Iterates the captured state, borrowing this view.
+    ///
+    /// ```compile_fail
+    /// use vsdb_core::MapxRaw;
+    /// let map = MapxRaw::new();
+    /// let iter = {
+    ///     let view = map.read_view();
+    ///     view.iter()
+    /// };
+    /// let _ = iter.count(); // The snapshot must remain alive.
+    /// ```
     pub fn iter(&self) -> MapxIter<'_> {
         self.range(..)
     }
