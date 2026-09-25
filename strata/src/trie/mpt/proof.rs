@@ -19,8 +19,10 @@ use crate::trie::{
 /// key's position.  For membership proofs `value` is `Some(v)`.
 /// For non-membership proofs `value` is `None`.
 ///
-/// Fields are crate-private to prevent external mutation; use the
-/// accessor methods to read them.
+/// Use the accessors to inspect a proof and [`to_bytes`](Self::to_bytes) /
+/// [`from_bytes`](Self::from_bytes) to transport it between processes.
+/// Serde uses the same versioned representation. Decoding does not verify
+/// the proof; verify it against the expected root and key before using it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MptProof {
     /// The original key this proof covers.

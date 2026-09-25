@@ -32,6 +32,10 @@ use super::{
 ///
 /// `siblings[d]` is the sibling hash at depth `d`; the terminal
 /// subtree (lone leaf or empty slot) sits at depth `siblings.len()`.
+///
+/// [`to_bytes`](Self::to_bytes) / [`from_bytes`](Self::from_bytes) and serde
+/// share a versioned representation. Decoding does not verify the proof;
+/// verify it against the expected root and key before using it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SmtProof {
     /// The key hash this proof covers.

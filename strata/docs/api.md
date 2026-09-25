@@ -305,6 +305,28 @@ assert_eq!(proof.value(), None);
 assert!(SmtCalc::verify_proof(&root32, b"charlie", &proof).unwrap());
 ```
 
+### Proof transport
+
+Both `MptProof` and `SmtProof` support serde and a versioned postcard transport:
+
+```rust
+use vsdb::{MptCalc, MptProof};
+let mut trie = MptCalc::new();
+trie.insert(b"account", b"10").unwrap();
+let root: [u8; 32] = trie.root_hash().unwrap().try_into().unwrap();
+let wire = trie.prove(b"account").unwrap().to_bytes().unwrap();
+let received = MptProof::from_bytes(&wire).unwrap();
+assert!(MptCalc::verify_proof(&root, b"account", &received).unwrap());
+```
+
+`to_bytes` is equivalent to `postcard::to_allocvec`; `from_bytes` also rejects
+trailing bytes. Version-1 field order is `(format, key, value, nodes)` for MPT
+and `(format, key_hash, leaf, siblings)` for SMT. The eight-byte format tags are
+`VSMPTP01` and `VSSMTP01`; other kinds or versions are rejected. A successfully
+decoded proof still needs verification against the expected root and key.
+Trie cache files and application-defined older proof encodings are separate
+formats and are not accepted by these decoders.
+
 ## VerMapWithProof
 
 Integrates `VerMap` with `MptCalc` for versioned Merkle root computation.
