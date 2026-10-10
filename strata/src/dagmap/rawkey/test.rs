@@ -6,6 +6,66 @@ macro_rules! s {
 }
 
 #[test]
+fn mutable_guard_persists_interior_edits() {
+    use std::cell::RefCell;
+
+    let mut dag = DagMapRawKey::<RefCell<u32>>::new(None);
+    dag.insert(b"key", &RefCell::new(10));
+    {
+        let guard = dag.get_mut(b"key").unwrap();
+        *guard.borrow_mut() = 20;
+    }
+    assert_eq!(dag.get(b"key").unwrap().into_inner(), 20);
+}
+
+#[test]
+fn mutable_guard_preserves_untouched_variable_encoding() {
+    struct TaggedValue(u32);
+    impl ValueEnDe for TaggedValue {
+        fn try_encode(&self) -> Result<Vec<u8>> {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static TAG: AtomicU32 = AtomicU32::new(0);
+            let mut bytes = self.0.to_le_bytes().to_vec();
+            bytes.extend_from_slice(&TAG.fetch_add(1, Ordering::Relaxed).to_le_bytes());
+            Ok(bytes)
+        }
+
+        fn decode(bytes: &[u8]) -> Result<Self> {
+            Ok(Self(u32::from_le_bytes(bytes[..4].try_into().unwrap())))
+        }
+    }
+
+    let mut dag = DagMapRawKey::<TaggedValue>::new(None);
+    dag.insert(b"key", &TaggedValue(10));
+    let original = dag.inner.get(b"key").unwrap();
+    {
+        let guard = dag.get_mut(b"key").unwrap();
+        assert_eq!(guard.0, 10);
+    }
+    assert_eq!(dag.inner.get(b"key").unwrap(), original);
+    *dag.get_mut(b"key").unwrap() = TaggedValue(20);
+    assert_eq!(dag.get(b"key").unwrap().0, 20);
+}
+
+#[test]
+fn mutable_guard_discards_interrupted_interior_edits() {
+    use std::{
+        cell::RefCell,
+        panic::{AssertUnwindSafe, catch_unwind},
+    };
+
+    let mut dag = DagMapRawKey::<RefCell<u32>>::new(None);
+    dag.insert(b"key", &RefCell::new(10));
+    let interrupted = catch_unwind(AssertUnwindSafe(|| {
+        let guard = dag.get_mut(b"key").unwrap();
+        *guard.borrow_mut() = 20;
+        panic!("interrupted edit");
+    }));
+    assert!(interrupted.is_err());
+    assert_eq!(dag.get(b"key").unwrap().into_inner(), 10);
+}
+
+#[test]
 fn dagmaprawkey_functions() {
     let mut i0: DagMapRawKey<Vec<u8>> = DagMapRawKey::new(None);
     i0.insert("k0", &s!("v0"));

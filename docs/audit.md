@@ -11,14 +11,6 @@
 
 ## Open
 
-### [MEDIUM] dagmap: typed mutable guards discard interior edits
-- **Where**: `strata/src/dagmap/rawkey/mod.rs` (`get_mut`, `ValueMut::drop`)
-- **What**: a `DagMapRawKey<RefCell<u32>>` guard modified through `borrow_mut` never sets the `DerefMut` dirty flag, so dropping it loses the edit.
-- **Why**: the same supported value and edit persist through ordinary typed-map and Orphan guards. A standalone public-API regression returns the original value instead of the changed value.
-- **Suggested fix**: detect stable encoding changes while retaining explicit edits, untouched unstable encodings, tombstone checks and unwind suppression. Add interior-edit and non-mutating guard coverage; no wire change.
-
----
-
 ### [MEDIUM] vecdex: valid neighbor caps can panic before candidate selection
 - **Where**: `strata/src/vecdex/hnsw.rs` (`select_neighbors_heuristic`)
 - **What**: both selection buffers reserve the configured cap before bounding it by candidate count. A valid `m_max0 = usize::MAX` configuration panics on the second insertion although only one candidate exists.

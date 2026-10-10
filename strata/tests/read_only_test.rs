@@ -8,8 +8,8 @@ use std::{
     process::Command,
 };
 use vsdb::{
-    HnswConfig, InstanceId, Mapx, MetricKind, MptCalc, OpenMode, Orphan, SlotDex,
-    VecDexDyn, VecDexL2, VerMap, VerMapWithProof, VsdbError, VsdbOptions,
+    DagMapRawKey, HnswConfig, InstanceId, Mapx, MetricKind, MptCalc, OpenMode, Orphan,
+    SlotDex, VecDexDyn, VecDexL2, VerMap, VerMapWithProof, VsdbError, VsdbOptions,
     vsdb_configure, vsdb_flush, vsdb_get_base_dir, vsdb_open_mode,
 };
 
@@ -120,6 +120,9 @@ fn read_only_writer_helper() {
     map.insert(&7, &"typed-value".to_owned());
     let map_id = map.save_meta().unwrap();
     let orphan_id = Orphan::new(TaggedValue(42)).save_meta().unwrap();
+    let mut dag = DagMapRawKey::<TaggedValue>::new(None);
+    dag.insert(b"key", &TaggedValue(42));
+    let dag_id = dag.save_meta().unwrap();
 
     let mut versioned = VerMap::<u64, String>::new();
     let main = versioned.main_branch();
@@ -142,8 +145,9 @@ fn read_only_writer_helper() {
         fs::remove_file(cache_path).unwrap();
     }
 
-    let state = postcard::to_allocvec(&(map_id, orphan_id, versioned_id, expected_root))
-        .unwrap();
+    let state =
+        postcard::to_allocvec(&(map_id, orphan_id, dag_id, versioned_id, expected_root))
+            .unwrap();
     fs::write(base.join("read-only-strata-state"), state).unwrap();
     vsdb_flush();
 }
@@ -158,7 +162,8 @@ fn read_only_reader_helper() {
     assert_eq!(OpenMode::ReadOnly, vsdb_open_mode());
 
     let state = fs::read(base.join("read-only-strata-state")).unwrap();
-    let (map_id, orphan_id, versioned_id, expected_root): (
+    let (map_id, orphan_id, dag_id, versioned_id, expected_root): (
+        InstanceId,
         InstanceId,
         InstanceId,
         InstanceId,
@@ -176,6 +181,11 @@ fn read_only_reader_helper() {
     orphan.try_sync_wal().unwrap();
     {
         let guard = orphan.get_mut();
+        assert_eq!(guard.0, 42);
+    }
+    let mut dag = DagMapRawKey::<TaggedValue>::from_meta(dag_id).unwrap();
+    {
+        let guard = dag.get_mut(b"key").unwrap();
         assert_eq!(guard.0, 42);
     }
 

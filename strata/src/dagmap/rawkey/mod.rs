@@ -233,13 +233,21 @@ where
     /// Tombstone (empty-value) entries are already filtered by
     /// [`DagMapRaw::get_mut`], so a returned handle always wraps a
     /// real, non-empty encoded value.
+    /// Interior edits persist when repeated encodings are stable; an
+    /// untouched guard preserves the original bytes, including variable
+    /// encodings. A panic that starts during the edit discards it.
     #[inline(always)]
     pub fn get_mut(&mut self, key: impl AsRef<[u8]>) -> Option<ValueMut<'_, V>> {
-        self.inner.get_mut(key.as_ref()).map(|inner| ValueMut {
-            value: <V as ValueEnDe>::decode(&inner).unwrap(),
-            inner,
-            dirty: false,
-            unwind: UnwindMark::new(),
+        self.inner.get_mut(key.as_ref()).map(|inner| {
+            let value = V::decode(&inner).unwrap();
+            let snapshot = value.encode();
+            ValueMut {
+                value,
+                snapshot,
+                inner,
+                dirty: false,
+                unwind: UnwindMark::new(),
+            }
         })
     }
 
@@ -320,6 +328,7 @@ where
     V: ValueEnDe,
 {
     value: V,
+    snapshot: RawBytes,
     inner: raw::ValueMut<'a>,
     dirty: bool,
     unwind: UnwindMark,
@@ -330,8 +339,19 @@ where
     V: ValueEnDe,
 {
     fn drop(&mut self) {
-        if self.dirty && !self.unwind.interrupted() {
-            *self.inner = self.value.encode();
+        if self.unwind.interrupted() {
+            return;
+        }
+        let now = self.value.encode();
+        if now.as_slice() == self.snapshot.as_slice()
+            || now.as_slice() == self.inner.as_slice()
+        {
+            return;
+        }
+        // A stable repeated encoding identifies an interior edit; a
+        // changing encoder alone must not turn reading a guard into a write.
+        if self.dirty || self.value.encode().as_slice() == now.as_slice() {
+            *self.inner = now;
         }
     }
 }
