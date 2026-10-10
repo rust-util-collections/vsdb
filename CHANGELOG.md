@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v17.0.11]
+
+Existing APIs and stored data remain compatible; no data migration is required.
+
+### Fixed
+
+- Metadata saves, namespace/engine initialization and allocator setup now
+  synchronize directory ancestry before publishing durable state. Retries
+  also fence directories created by earlier failed or concurrent attempts.
+- `VerMap` diffs retain both captured roots through comparison, including
+  when a restored writer alias discards working state or reclaims history.
+- `DagMapRawKey` mutable guards persist stable interior edits such as
+  `RefCell` changes, preserve untouched variable encodings, and discard
+  edits interrupted by unwinding.
+- HNSW neighbor-selection buffers reserve only for available candidates,
+  preventing capacity overflow and excessive allocation with large valid caps.
+
+### Changed
+
+- Require MMDB 4.3.5, including upstream write-queue aliasing, snapshot/filter
+  installation, namespace reopen and WAL recovery fixes.
+- Index mutation and node-flush docs distinguish unapplied preflight rejection
+  from persistence errors whose complete WAL data may replay after recovery.
+
 ## [v17.0.10]
 
 Existing APIs and stored data remain compatible; no data migration is required.
