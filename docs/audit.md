@@ -11,14 +11,6 @@
 
 ## Open
 
-### [CRITICAL] engine: the MMDB dependency permits known unsafe group-commit and snapshot failures
-- **Where**: root `Cargo.toml` (`mmdb` workspace dependency), `core/src/common/engine/mmdb.rs`
-- **What**: the current minimum permits MMDB 4.3.1, whose unlocked group-commit fault paths form a whole-request mutable reference while a woken writer can read `done`. Upstream commit `f7fc6cf` fixes this aliasing violation; releases before 4.3.4 also retain snapshot-filter installation and immediate reopen defects relevant to VSDB's views and namespace rotation.
-- **Why**: ordinary writers on separate collections can share the affected shard. VSDB's synchronization and snapshot promises cannot exclude these dependency defects.
-- **Suggested fix**: require an MMDB release containing the upstream fixes, check public and persisted compatibility, and validate concurrent batches, views, close/reopen and existing-data restoration.
-
----
-
 ### [CRITICAL] storage: directory creation is not covered by durable publication
 - **Where**: `core/src/common/mod.rs`, `core/src/common/engine/mmdb.rs`, `core/src/common/namespace.rs`, raw and typed metadata saves
 - **What**: first metadata save and engine/namespace initialization create directories, then synchronize files and their immediate containing directories without synchronizing the ancestors that contain the newly created directory names.
@@ -69,7 +61,7 @@
 ### [LOW] engine: lazy-delete auto-sweep threshold stays disabled
 - **Where**: `core/src/common/engine/mmdb.rs` (`mmdb_open`), mmdb `DbOptions::lazy_delete_compaction_threshold`
 - **What**: keys registered via `lazy_delete` are physically dropped only when organic compaction rewrites their level; registrations resting in cold levels can outlive the process (registrations are memory-only and documented best-effort).
-- **Reason**: mmdb documents the auto-sweep as holding the DB's write-serializing lock for each level's full rewrite — enabling it by default trades unbounded write stalls for space reclaim. Correctness never depends on physical removal (dead B+ tree nodes are unreachable by id), and administrative `compact()` remains available.
+- **Reason**: mmdb documents the auto-sweep as holding the DB mutex for each level's full rewrite, stalling readers and writers; administrative `compact()` additionally holds the write queue for its full call. Enabling it by default trades unbounded stalls for space reclaim. Correctness never depends on physical removal (dead B+ tree nodes are unreachable by id), and administrative `compact()` remains available.
 
 ---
 

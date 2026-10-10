@@ -7,7 +7,7 @@ write-buffer manager remain proposals, not available VSDB options.
 
 The current integration is in
 [core/src/common/engine/mmdb.rs](../../core/src/common/engine/mmdb.rs).
-The MMDB internals described here match the workspace's 4.3.1 resolution;
+The MMDB internals described here match the workspace's 4.3.5 resolution;
 the manifest's compatible dependency range can resolve newer versions.
 Earlier RFC mechanics based on MMDB 4.0.10 are historical.
 
