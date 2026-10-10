@@ -483,8 +483,9 @@ where
     ///
     /// # Errors
     ///
-    /// If the batch commit fails, neither the on-disk state nor the
-    /// in-memory caches are modified.
+    /// Read-only and preflight rejection leave state unchanged. Caches
+    /// update only after commit succeeds. A persistence error can leave
+    /// recoverable WAL data and must not be retried automatically.
     pub fn insert(&mut self, slot: S, k: K) -> Result<()> {
         ensure_writable(&self.namespace(), "slot index insert")?;
         let slot = self.to_storage_slot(slot);
@@ -556,8 +557,9 @@ where
     ///
     /// # Errors
     ///
-    /// If the batch commit fails, neither the on-disk state nor the
-    /// in-memory caches are modified.
+    /// Read-only and preflight rejection leave state unchanged. Caches
+    /// update only after commit succeeds. A persistence error can leave
+    /// recoverable WAL data and must not be retried automatically.
     pub fn insert_batch<I>(&mut self, items: I) -> Result<()>
     where
         I: IntoIterator<Item = (S, K)>,
@@ -657,8 +659,9 @@ where
     /// # Errors
     ///
     /// [`VsdbError::ReadOnly`] in read-only mode, or the batch commit
-    /// error; in both cases neither the on-disk state nor the in-memory
-    /// caches are modified.
+    /// error. Preflight rejection leaves state unchanged; caches update
+    /// only after commit succeeds. A persistence error can leave recoverable
+    /// WAL data and must not be retried automatically.
     pub fn remove(&mut self, slot: S, k: &K) -> Result<()> {
         ensure_writable(&self.namespace(), "slot index remove")?;
         let slot = self.to_storage_slot(slot);
@@ -750,7 +753,9 @@ where
     /// # Errors
     ///
     /// [`VsdbError::ReadOnly`] in read-only mode, or the batch commit
-    /// error; nothing is modified in either case.
+    /// error. Preflight rejection leaves state unchanged; caches update
+    /// only after commit succeeds. A persistence error can leave recoverable
+    /// WAL data and must not be retried automatically.
     pub fn clear(&mut self) -> Result<()> {
         ensure_writable(&self.namespace(), "slot index clear")?;
         self.store.batch_wiped().commit()?;

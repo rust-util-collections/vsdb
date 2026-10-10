@@ -10,6 +10,12 @@ ordinary `commit()` keeps its existing asynchronous default. An empty batch is
 not a fence for earlier writes. No cross-collection transaction is implied.
 An I/O failure may have left recoverable WAL data, so avoid automatic retries.
 
+The same distinction applies to SlotDex and VecDex mutations. Preflight
+rejection leaves that batch unapplied, and runtime caches update only after
+successful commits. A persistence error can still leave a complete WAL batch
+that recovery replays; an error does not establish that recovered disk state
+is unchanged. Related rows recover together as one atomic batch.
+
 `Mapx`, `MapxOrd`, `MapxOrdRawKey`, and `Orphan` expose `try_sync_wal()`:
 
 ```rust

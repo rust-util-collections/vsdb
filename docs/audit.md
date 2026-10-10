@@ -11,11 +11,7 @@
 
 ## Open
 
-### [LOW] indexes: mutation docs promise unchanged recovered state after any error
-- **Where**: `strata/src/slotdex/mod.rs`, `strata/src/vecdex/mod.rs` (mutation error documentation)
-- **What**: these docs say a failed batch never changes disk state, while complete WAL records can survive a persistence error and replay after reopening.
-- **Why**: callers can mistake an ambiguous persistence failure for a safe retry. Cache publication after success does not establish a recovered-disk no-op.
-- **Suggested fix**: distinguish unapplied preflight rejection from ambiguous I/O failure, state cache publication behavior, and discourage automatic retries; align the public guides.
+None.
 
 ## Won't Fix
 

@@ -74,7 +74,12 @@ This also applies to `VecDexDyn`.
 | `from_meta` | `(instance_id: impl Into<InstanceId>) -> Result<Self>` | Recover from saved metadata (a bare `u64` works for default-namespace instances) |
 
 Rows, counters, and graph state for each mutation are committed in one atomic
-engine batch. `insert_batch` commits one chunk at a time: a later error can
+engine batch. Runtime state updates only after successful commits. Validation
+and preflight rejection leave the failing batch unapplied, but a persistence
+error may leave complete WAL data that recovery replays. Do not automatically
+retry an I/O error as though the recovered index were unchanged.
+
+`insert_batch` commits one chunk at a time: a later error can
 leave earlier chunks committed. Recovery rebuilds in-memory caches from the
 durable rows without rebuilding the graph. Atomicity does not imply an fsync
 per operation; power loss can lose an unfenced batch. These guarantees require

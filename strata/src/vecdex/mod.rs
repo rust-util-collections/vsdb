@@ -513,7 +513,9 @@ where
     /// # Errors
     ///
     /// [`VsdbError::ReadOnly`] in read-only mode, or the commit error;
-    /// nothing changes in either case.
+    /// preflight rejection leaves state unchanged. Runtime state updates
+    /// only after commit succeeds. A persistence error can leave recoverable
+    /// WAL data and must not be retried automatically.
     pub fn set_ef_search(&mut self, ef: usize) -> Result<()> {
         ensure_writable(&self.namespace(), "vector index ef update")?;
         let mut txn: Txn<'_, S> = Txn::new(&self.store, self.state.clone());
@@ -580,7 +582,9 @@ where
     /// # Errors
     ///
     /// [`VsdbError::ReadOnly`] in read-only mode, or the commit error;
-    /// nothing changes in either case.
+    /// preflight rejection leaves state unchanged. Runtime state updates
+    /// only after commit succeeds. A persistence error can leave recoverable
+    /// WAL data and must not be retried automatically.
     pub fn clear(&mut self) -> Result<()> {
         ensure_writable(&self.namespace(), "vector index clear")?;
         let mut txn: Txn<'_, S> = Txn::new(
@@ -608,9 +612,10 @@ where
     ///
     /// # Errors
     ///
-    /// If the vector dimension mismatches the index configuration, or if
-    /// the batch commit fails (in which case neither the on-disk state
-    /// nor the in-memory state is modified).
+    /// Returns a dimension/capability error or the batch commit error.
+    /// Validation and preflight rejection leave state unchanged. Runtime
+    /// state updates only after commit succeeds. A persistence error can
+    /// leave recoverable WAL data and must not be retried automatically.
     pub fn insert(&mut self, key: &K, vector: &[S]) -> Result<()> {
         ensure_writable(&self.namespace(), "vector index insert")?;
         if vector.len() != self.config.dim {
@@ -944,8 +949,9 @@ where
     ///
     /// # Errors
     ///
-    /// If the batch commit fails, neither the on-disk state nor the
-    /// in-memory state is modified.
+    /// Read-only and preflight rejection leave state unchanged. Runtime
+    /// state updates only after commit succeeds. A persistence error can
+    /// leave recoverable WAL data and must not be retried automatically.
     pub fn remove(&mut self, key: &K) -> Result<bool> {
         ensure_writable(&self.namespace(), "vector index remove")?;
         let mut txn = Txn::new(&self.store, self.state.clone());

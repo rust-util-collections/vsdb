@@ -536,7 +536,9 @@ impl PersistentBTree {
     /// and mid-`bulk_load` at [`Self::PENDING_FLUSH_THRESHOLD`].  An
     /// engine-level commit failure panics, matching the per-put
     /// failure behavior this replaces (mutating signatures are
-    /// infallible); nothing from the batch lands in that case.
+    /// infallible). Preflight rejection leaves the batch unapplied;
+    /// persistence errors can leave recoverable WAL data, so a panic
+    /// does not prove that the write was rolled back.
     pub(crate) fn flush_pending(&mut self) {
         if self.pending.is_empty() {
             return;
