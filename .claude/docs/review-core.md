@@ -28,7 +28,7 @@ One primary row per Rust file. Unsafe, compatibility, public-doc checks are over
 | DagMap | `strata/.../dagmap/**` | `patterns/dagmap.md` |
 | VecDex | `strata/.../vecdex/**` | `patterns/vecdex.md` |
 | encoding/staged | `strata/.../common/**`, `core/.../error.rs` | `technical-patterns.md`, `compatibility-policy.md` |
-| public/build | both `lib.rs`/`basic/mod.rs`, root+crate `Cargo.toml`, `core/build.rs` | `compatibility-policy.md`, `technical-patterns.md` |
+| public/build | both `lib.rs`/`basic/mod.rs`, root+crate `Cargo.toml` | `compatibility-policy.md`, `technical-patterns.md` |
 
 Guides under `.claude/docs/patterns/`. Tests/benches/CI/README/CHANGELOG/`.claude`
 → map to the behavior they cover.
