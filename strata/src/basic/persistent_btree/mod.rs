@@ -422,10 +422,25 @@ impl PersistentBTree {
         &self,
         resolve: impl FnOnce() -> Result<NodeId>,
     ) -> Result<Arc<RootLease>> {
+        let [lease] = self.lease_roots(|| Ok([resolve()?]))?;
+        Ok(lease)
+    }
+
+    /// Capture related roots under one lock, retaining every state before
+    /// a writer can release any of them. Duplicate roots get distinct leases.
+    pub(crate) fn lease_roots<const N: usize>(
+        &self,
+        resolve: impl FnOnce() -> Result<[NodeId; N]>,
+    ) -> Result<[Arc<RootLease>; N]> {
         let mut refs = self.runtime.refs.lock();
-        let root = resolve()?;
-        if root != EMPTY_ROOT {
+        let roots = resolve()?;
+        // Validate the whole set before changing counts, so a corrupt
+        // later root cannot strand an earlier pin during unwinding.
+        for &root in roots.iter().filter(|&&root| root != EMPTY_ROOT) {
             assert!(refs.ready, "snapshot requires initialized tree references");
+            refs.counts.get(&root).expect("untracked snapshot root");
+        }
+        for &root in roots.iter().filter(|&&root| root != EMPTY_ROOT) {
             refs.counts
                 .get_mut(&root)
                 .expect("untracked snapshot root")
@@ -433,13 +448,15 @@ impl PersistentBTree {
             *refs.pins.entry(root).or_insert(0) += 1;
         }
         drop(refs);
-        Ok(Arc::new(RootLease {
-            root,
-            runtime: Arc::clone(&self.runtime),
-            // SAFETY: this handle only registers deletion of immutable nodes
-            // after their final reference is released. NodeIds are never
-            // reused, and co-located owners defer registration until WAL sync.
-            nodes: unsafe { self.nodes.shadow() },
+        Ok(roots.map(|root| {
+            Arc::new(RootLease {
+                root,
+                runtime: Arc::clone(&self.runtime),
+                // SAFETY: this handle only registers deletion of immutable nodes
+                // after their final reference is released. NodeIds are never
+                // reused, and co-located owners defer registration until WAL sync.
+                nodes: unsafe { self.nodes.shadow() },
+            })
         }))
     }
 

@@ -4361,6 +4361,91 @@ fn assert_tree_owners(m: &VerMap<u32, u32>, leased_roots: &[u64]) {
     m.tree.assert_refs_match_recount(&roots);
 }
 
+thread_local! {
+    static DIFF_BEFORE_TRAVERSAL: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+pub(super) fn before_diff_traversal() {
+    let hook = DIFF_BEFORE_TRAVERSAL.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+#[test]
+fn raw_uncommitted_diff_pins_roots_during_alias_reclamation() {
+    use crate::basic::persistent_btree::TreeDiff;
+
+    let mut reader = VerMap::<u32, u32>::new();
+    let main = reader.main_branch();
+    reader.insert(main, &1, &10).unwrap();
+    let root = reader.get_branch(main).unwrap().dirty_root;
+    let mut writer: VerMap<u32, u32> =
+        postcard::from_bytes(&postcard::to_allocvec(&reader).unwrap()).unwrap();
+    DIFF_BEFORE_TRAVERSAL.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            writer.discard(main).unwrap();
+            writer.commit(main).unwrap();
+            // The captured state has no persistent owners now. The live
+            // diff must retain it before compaction can retire its nodes.
+            assert_tree_owners(&writer, &[root]);
+            writer.gc().unwrap();
+            assert_tree_owners(&writer, &[root]);
+        }));
+    });
+    assert_eq!(
+        reader.raw_diff_uncommitted(main).unwrap(),
+        vec![TreeDiff::Added {
+            key: 1u32.to_be_bytes().to_vec(),
+            value: vec![10],
+        }]
+    );
+    assert_tree_owners(&reader, &[]);
+}
+
+#[test]
+fn raw_commit_diffs_pin_both_roots_during_alias_reclamation() {
+    use crate::basic::persistent_btree::TreeDiff;
+
+    for same_commit in [false, true] {
+        let mut reader = VerMap::<u32, u32>::new();
+        let feature = reader.create_branch("diff", reader.main_branch()).unwrap();
+        reader.insert(feature, &1, &10).unwrap();
+        let from = reader.commit(feature).unwrap();
+        reader.insert(feature, &2, &20).unwrap();
+        let to = if same_commit {
+            from
+        } else {
+            reader.commit(feature).unwrap()
+        };
+        let roots = [
+            reader.get_commit_inner(from).unwrap().root,
+            reader.get_commit_inner(to).unwrap().root,
+        ];
+        let mut writer: VerMap<u32, u32> =
+            postcard::from_bytes(&postcard::to_allocvec(&reader).unwrap()).unwrap();
+        DIFF_BEFORE_TRAVERSAL.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move || {
+                writer.delete_branch(feature).unwrap();
+                assert_tree_owners(&writer, &roots);
+                writer.gc().unwrap();
+                assert_tree_owners(&writer, &roots);
+            }));
+        });
+        let expected = if same_commit {
+            vec![]
+        } else {
+            vec![TreeDiff::Added {
+                key: 2u32.to_be_bytes().to_vec(),
+                value: vec![20],
+            }]
+        };
+        assert_eq!(reader.raw_diff_commits(from, to).unwrap(), expected);
+        assert_tree_owners(&reader, &[]);
+    }
+}
+
 #[test]
 fn snapshot_leases_survive_alias_mutation_and_recounts() {
     let mut original: VerMap<u32, u32> = VerMap::new();

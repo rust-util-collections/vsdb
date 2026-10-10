@@ -356,26 +356,38 @@ impl<K, V> VerMap<K, V> {
     /// [`diff_commits`](VerMap::diff_commits) as stored bytes (keys in
     /// their `KeyEnDeOrdered` encoding, values in their `ValueEnDe`
     /// encoding) — e.g. to update an external hash structure incrementally.
+    /// Both captured states remain retained until comparison finishes.
     pub fn raw_diff_commits(
         &self,
         from: CommitId,
         to: CommitId,
     ) -> Result<Vec<TreeDiff>> {
-        let from_commit = self.get_commit_inner(from)?;
-        let to_commit = self.get_commit_inner(to)?;
-        Ok(self.tree.diff(from_commit.root, to_commit.root))
+        let [from_root, to_root] = self.tree.lease_roots(|| {
+            Ok([
+                self.get_commit_inner(from)?.root,
+                self.get_commit_inner(to)?.root,
+            ])
+        })?;
+        #[cfg(test)]
+        super::test::before_diff_traversal();
+        Ok(self.tree.diff(from_root.root, to_root.root))
     }
 
     /// [`diff_uncommitted`](VerMap::diff_uncommitted) as stored bytes (see
     /// [`raw_diff_commits`](VerMap::raw_diff_commits)).
     pub fn raw_diff_uncommitted(&self, branch: BranchId) -> Result<Vec<TreeDiff>> {
-        let state = self.get_branch(branch)?;
-        let head_root = if state.head == NO_COMMIT {
-            EMPTY_ROOT
-        } else {
-            self.get_commit_inner(state.head)?.root
-        };
-        Ok(self.tree.diff(head_root, state.dirty_root))
+        let [head_root, dirty_root] = self.tree.lease_roots(|| {
+            let state = self.get_branch(branch)?;
+            let head_root = if state.head == NO_COMMIT {
+                EMPTY_ROOT
+            } else {
+                self.get_commit_inner(state.head)?.root
+            };
+            Ok([head_root, state.dirty_root])
+        })?;
+        #[cfg(test)]
+        super::test::before_diff_traversal();
+        Ok(self.tree.diff(head_root.root, dirty_root.root))
     }
 
     pub(crate) fn begin_ref_update(&mut self) {

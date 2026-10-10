@@ -11,14 +11,6 @@
 
 ## Open
 
-### [HIGH] versioned: raw diffs traverse roots without retaining reader ownership
-- **Where**: `strata/src/versioned/map.rs` (`raw_diff_commits`, `raw_diff_uncommitted`)
-- **What**: diffs capture bare tree roots. A restored writer alias can discard working state or delete history, settle retired nodes, and let compaction remove those roots before diff traversal finishes.
-- **Why**: immutable alias reads are supported, but the diff paths omit the root leases used by ordinary snapshots and can panic on a missing node.
-- **Suggested fix**: capture and retain both roots under the shared reference lock through traversal. Add deterministic alias-reclamation regressions and check balanced references; no API or format change.
-
----
-
 ### [MEDIUM] dagmap: typed mutable guards discard interior edits
 - **Where**: `strata/src/dagmap/rawkey/mod.rs` (`get_mut`, `ValueMut::drop`)
 - **What**: a `DagMapRawKey<RefCell<u32>>` guard modified through `borrow_mut` never sets the `DerefMut` dirty flag, so dropping it loses the edit.
