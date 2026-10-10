@@ -473,7 +473,7 @@ impl PersistentBTree {
         let id = self
             .runtime
             .next_id
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |next_id| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |next_id| {
                 next_id.checked_add(1)
             })
             .expect("PersistentBTree: NodeId space exhausted");

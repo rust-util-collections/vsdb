@@ -140,14 +140,13 @@ impl Clone for DagMapRaw {
             // SAFETY: only this handle mutates this fresh node's metadata.
             // Other aliases are serialized into edges, never used to mutate.
             let mut copy = unsafe { copies[id].shadow() };
-            copy.parent
-                .set_value(&source.parent.get_value().map(&remap));
+            copy.parent.set_value(&source.parent.get_value().map(remap));
             for (key, child) in source.children.iter() {
                 copy.children.insert(key, &remap(child));
             }
             for key in [PRUNE_CLEARING_KEY, DESTROY_PARENT_KEY] {
                 if let Some(target) = source.parent.get_aux(key) {
-                    copy.parent.set_aux(key, &target.map(&remap));
+                    copy.parent.set_aux(key, &target.map(remap));
                 }
             }
         }
