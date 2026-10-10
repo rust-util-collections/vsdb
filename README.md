@@ -2,7 +2,7 @@
 [![Crates.io](https://img.shields.io/crates/v/vsdb.svg)](https://crates.io/crates/vsdb)
 [![Docs.rs](https://docs.rs/vsdb/badge.svg)](https://docs.rs/vsdb)
 [![Rust](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml/badge.svg)](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml)
-[![Minimum rustc version](https://img.shields.io/badge/rustc-1.89+-lightgray.svg)](https://github.com/rust-util-collections/vsdb)
+[![Minimum rustc version](https://img.shields.io/badge/rustc-1.96+-lightgray.svg)](https://github.com/rust-util-collections/vsdb)
 
 # vsdb
 

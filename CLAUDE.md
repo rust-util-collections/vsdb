@@ -85,6 +85,11 @@ Additional docs in `docs/`:
 
 ## Conventions
 
+- **Rust toolchains** — keep the minimum supported Rust version three minor
+  releases behind the official latest stable release. Verify the official
+  channel before Rust edits, dependency updates or releases; synchronize both
+  manifests and the README, and validate the minimum plus latest stable.
+  `.claude/docs/compatibility-policy.md` §Rust toolchain policy is the rule's source of truth.
 - All clippy warnings are errors (`#![deny(warnings)]` in lib.rs)
 - **No `#[allow(...)]`** — fix warnings at the source, never suppress them
 - **Prefer imports over inline paths** — avoid `std::foo::Bar::new()` inline in function bodies when the same path appears 3+ times in a file; add `use std::foo;` at file top (or `use std::foo::Bar;`) instead. Function-body `use` statements (scoped imports) are fine and don't count as inline paths. 1-2 inline uses of common `std::` items are acceptable.

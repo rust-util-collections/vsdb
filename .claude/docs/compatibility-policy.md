@@ -13,6 +13,36 @@ layouts, enum discriminants, and metadata envelopes are wire:
 - never trust source enum order for on-disk discriminants;
 - format changes need old-fixture decode + round-trip tests.
 
+## Rust toolchain policy
+
+The owner requires the minimum supported Rust version (MSRV) to stay **three
+minor releases behind the official latest stable release**. For stable
+`1.N.x`, declare `rust-version = "1.(N-3)"`; patch releases do not count.
+For example, stable 1.99 means minimum 1.96, tested with Rust 1.96.0.
+If Rust changes its major version, use the official stable release sequence
+to go back three minor releases.
+
+Before Rust edits, dependency updates or release validation:
+
+1. Verify the official stable version using
+   `https://static.rust-lang.org/dist/channel-rust-stable.toml`. Do not derive
+   it from the locally installed compiler, beta/nightly or model memory.
+2. In writable scope, synchronize `core/Cargo.toml` and `strata/Cargo.toml`
+   `rust-version` with that floor, and update the README badge. Historical
+   CHANGELOG/evaluation baselines retain their original versions. Read-only
+   reviews report a mismatch instead of changing manifests.
+3. Check that dependencies and every used Rust API compile on that minimum.
+   A suggested replacement for a deprecated API must also be available there;
+   fix the implementation without suppressing warnings when it is not.
+4. Run formatting, Clippy and the required workspace tests on official latest
+   stable. Also run `cargo +<minimum>.0 check --workspace --all-targets` and
+   focused compatibility tests for changed APIs on the minimum toolchain.
+   CI must check the declared minimum and latest stable.
+
+This rolling MSRV policy is owner-authorized and uses the normal patch-release
+protocol. Record the compiler requirement in the new CHANGELOG entry. It does
+not authorize public API or persisted-format breaks or automatic major bumps.
+
 ## Typed-handle tags
 
 Typed handles serialize as magic + 8-byte type tag + payload.
