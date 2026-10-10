@@ -11,14 +11,6 @@
 
 ## Open
 
-### [MEDIUM] vecdex: valid neighbor caps can panic before candidate selection
-- **Where**: `strata/src/vecdex/hnsw.rs` (`select_neighbors_heuristic`)
-- **What**: both selection buffers reserve the configured cap before bounding it by candidate count. A valid `m_max0 = usize::MAX` configuration panics on the second insertion although only one candidate exists.
-- **Why**: accepted configuration values cause capacity overflow or excessive allocation without a corresponding workload.
-- **Suggested fix**: reserve at most `min(cap, candidates.len())`, and test extreme accepted caps through insertion and search. Selection semantics and stored bytes stay unchanged.
-
----
-
 ### [LOW] indexes: mutation docs promise unchanged recovered state after any error
 - **Where**: `strata/src/slotdex/mod.rs`, `strata/src/vecdex/mod.rs` (mutation error documentation)
 - **What**: these docs say a failed batch never changes disk state, while complete WAL records can survive a persistence error and replay after reopening.

@@ -236,8 +236,9 @@ pub(crate) fn select_neighbors_heuristic<S: Scalar, D: DistanceMetric<S>>(
     let mut sorted: Vec<_> = candidates.to_vec();
     sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
 
-    let mut selected: Vec<(S, u64)> = Vec::with_capacity(m);
-    let mut selected_vecs: Vec<Rc<Vec<S>>> = Vec::with_capacity(m);
+    let capacity = m.min(candidates.len());
+    let mut selected: Vec<(S, u64)> = Vec::with_capacity(capacity);
+    let mut selected_vecs: Vec<Rc<Vec<S>>> = Vec::with_capacity(capacity);
 
     for &(dist_to_query, cand_id) in &sorted {
         if selected.len() >= m {

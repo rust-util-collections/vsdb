@@ -2,6 +2,29 @@ use super::*;
 use distance::{Cosine, InnerProduct, L2, MetricKind};
 use std::collections::{HashSet, VecDeque};
 
+#[test]
+fn extreme_neighbor_caps_only_allocate_for_available_candidates() {
+    for (m, m_max0) in [(2, usize::MAX), (usize::MAX, usize::MAX)] {
+        let mut index = VecDexL2::<u64>::new(HnswConfig {
+            dim: 1,
+            m,
+            m_max0,
+            ef_construction: 8,
+            ef_search: 8,
+        })
+        .unwrap();
+        for key in 0..3 {
+            index.insert(&key, &[key as f32]).unwrap();
+        }
+        assert_eq!(index.len(), 3);
+        for key in 0..3 {
+            assert_eq!(index.get(&key), Some(vec![key as f32]));
+        }
+        let found = index.search_ef(&[1.0], 3, 3).unwrap();
+        assert_eq!(found.len(), 3);
+        assert_eq!(found[0].0, 1);
+    }
+}
 fn assert_bidirectional<K, D, S>(idx: &VecDex<K, D, S>)
 where
     K: KeyEnDe + ValueEnDe + Clone + Eq,
