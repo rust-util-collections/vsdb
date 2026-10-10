@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v17.0.10]
+
+Existing APIs and stored data remain compatible; no data migration is required.
+
+### Fixed
+
+- Configuration and concurrent first use cannot split the directory tree.
+  `vsdb_configure` publishes options under the base-directory lock, and the
+  default namespace and engine freeze configuration before capturing paths.
+- Concurrent `save_meta` calls use independent, exclusively created staging
+  files. Complete replacements retain file and directory synchronization;
+  occupied staging names are skipped and failed writes clean up their own file.
+
+### Changed
+
+- `make test` runs documentation examples and compile-fail checks. Batch
+  examples use independent temporary directories to avoid stale test data.
+- Removed the unused build script for the former RocksDB backend.
+
 ## [v17.0.9]
 
 Existing APIs and stored data remain compatible; no data migration is required.
