@@ -272,6 +272,9 @@ static OPEN_NAMESPACES: LazyLock<Mutex<HashMap<NsId, Namespace>>> =
 /// never drops, so the default engine lives for the whole process —
 /// which is exactly why the default namespace is not closeable.
 static DEFAULT_NS: LazyLock<Namespace> = LazyLock::new(|| {
+    // Freeze before capturing the path, so configuration cannot change it
+    // between this namespace's identity and its engine initialization.
+    vsdb_freeze_base_dir();
     Namespace(Arc::new(NsInner {
         id: DEFAULT_NS_ID,
         path: vsdb_get_base_dir(),

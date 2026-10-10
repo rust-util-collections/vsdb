@@ -182,12 +182,12 @@ impl MmDB {
     /// Writable opens migrate the pre-v16 allocator ceiling; read-only
     /// opens fold it into memory without modifying the store.
     pub(crate) fn new() -> Result<Self> {
-        let base_dir = vsdb_get_base_dir();
         // Lock in the base dir so later `vsdb_configure` calls fail.
         // Deliberately does NOT mutate the process environment: this runs
         // lazily on the first DB operation, possibly long after worker
         // threads were spawned, where `env::set_var` would be unsound.
         vsdb_freeze_base_dir();
+        let base_dir = vsdb_get_base_dir();
 
         let this =
             Self::open_at(&base_dir, NUM_SHARDS, EngineSizing::from_process_budget())?;

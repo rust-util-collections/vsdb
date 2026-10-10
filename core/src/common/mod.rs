@@ -449,6 +449,10 @@ pub(crate) fn vsdb_freeze_base_dir() {
 /// Returns [`VsdbError::BaseDirFrozen`] if configuration was already selected
 /// or any API that materializes/freezes a VSDB path was used first.
 pub fn vsdb_configure(options: VsdbOptions) -> Result<()> {
+    // Publish all options while holding the lock used by path readers.
+    // A first use either freezes configuration before this swap, or waits
+    // for the selected base directory and options to become visible.
+    let mut base_dir = VSDB_BASE_DIR.lock();
     if BASE_DIR_FROZEN.swap(true, Ordering::AcqRel) {
         return Err(VsdbError::BaseDirFrozen);
     }
@@ -456,7 +460,7 @@ pub fn vsdb_configure(options: VsdbOptions) -> Result<()> {
     OPEN_MODE.store(options.open_mode as u8, Ordering::Release);
     CONFIGURED_MEM_BUDGET_MB
         .store(options.mem_budget_mb.unwrap_or(0), Ordering::Release);
-    *VSDB_BASE_DIR.lock() = options.base_dir;
+    *base_dir = options.base_dir;
     Ok(())
 }
 
