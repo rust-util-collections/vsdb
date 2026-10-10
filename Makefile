@@ -14,6 +14,7 @@ test:
 	cargo test --workspace --release --tests
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
 	cargo test --workspace --tests
+	cargo test --workspace --doc
 
 bench:
 	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
