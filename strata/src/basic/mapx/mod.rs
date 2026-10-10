@@ -229,7 +229,9 @@ where
     /// ```
     /// use vsdb::{Mapx, VsdbOptions, vsdb_configure};
     ///
-    /// vsdb_configure(VsdbOptions::new("/tmp/vsdb_mapx_batch")).unwrap();
+    /// let dir = std::env::temp_dir()
+    ///     .join(format!("vsdb_mapx_batch_{}", rand::random::<u128>()));
+    /// vsdb_configure(VsdbOptions::new(&dir)).unwrap();
     /// let mut map = Mapx::new();
     ///
     /// let mut batch = map.batch();
@@ -239,6 +241,7 @@ where
     ///
     /// assert_eq!(map.get(&1), Some("one".to_string()));
     /// assert_eq!(map.get(&2), Some("two".to_string()));
+    /// # std::fs::remove_dir_all(dir).unwrap();
     /// ```
     #[inline(always)]
     pub fn batch(&mut self) -> MapxBatch<'_, K, V> {

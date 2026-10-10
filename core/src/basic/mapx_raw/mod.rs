@@ -579,7 +579,9 @@ impl MapxRaw {
     /// use vsdb_core::basic::mapx_raw::MapxRaw;
     /// use vsdb_core::{VsdbOptions, vsdb_configure};
     ///
-    /// vsdb_configure(VsdbOptions::new("/tmp/vsdb_core_mapx_raw_batch")).unwrap();
+    /// let dir = std::env::temp_dir()
+    ///     .join(format!("vsdb_core_mapx_raw_batch_{}", rand::random::<u128>()));
+    /// vsdb_configure(VsdbOptions::new(&dir)).unwrap();
     /// let mut map = MapxRaw::new();
     ///
     /// {
@@ -591,6 +593,7 @@ impl MapxRaw {
     ///
     /// assert_eq!(map.get(&[1]), Some(vec![10]));
     /// assert_eq!(map.get(&[2]), Some(vec![20]));
+    /// # std::fs::remove_dir_all(dir).unwrap();
     /// ```
     #[inline(always)]
     pub fn batch(&mut self) -> MapxRawBatch<'_> {
@@ -617,7 +620,9 @@ impl MapxRaw {
     /// use vsdb_core::basic::mapx_raw::MapxRaw;
     /// use vsdb_core::{VsdbOptions, vsdb_configure};
     ///
-    /// vsdb_configure(VsdbOptions::new("/tmp/vsdb_core_mapx_raw_batch_wiped")).unwrap();
+    /// let dir = std::env::temp_dir()
+    ///     .join(format!("vsdb_core_mapx_raw_batch_wiped_{}", rand::random::<u128>()));
+    /// vsdb_configure(VsdbOptions::new(&dir)).unwrap();
     /// let mut map = MapxRaw::new();
     /// map.insert([1], [10]);
     ///
@@ -629,6 +634,7 @@ impl MapxRaw {
     ///
     /// assert_eq!(map.get(&[1]), None);
     /// assert_eq!(map.get(&[2]), Some(vec![20]));
+    /// # std::fs::remove_dir_all(dir).unwrap();
     /// ```
     #[inline(always)]
     pub fn batch_wiped(&mut self) -> MapxRawBatch<'_> {
