@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v17.0.12]
+
+Rust 1.96 or later is required. Public APIs and VSDB storage formats are unchanged.
+
+### Fixed
+
+- Rust 1.99 builds pass the existing deny-warnings gate: the B+ tree allocator
+  uses `try_update`, and DAG cloning passes its remapping closure without
+  unnecessary borrows. The replacement API and existing allocation/clone
+  behavior are verified on the minimum compiler too.
+
+### Changed
+
+- The minimum supported Rust version follows official latest stable minus
+  three minor releases: currently stable 1.99 and minimum 1.96. Both crate
+  manifests and the README declare the same requirement.
+- CI checks every target on the declared minimum compiler in addition to its
+  latest-stable formatting, lint and test job. Shared AI compatibility and
+  release rules require official-channel verification and both toolchains.
+
 ## [v17.0.11]
 
 Existing APIs and stored data remain compatible; no data migration is required.
