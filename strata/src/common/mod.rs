@@ -167,7 +167,7 @@ pub fn save_instance_meta(id: InstanceId, value: &impl Serialize) -> Result<()> 
     };
     ensure_writable(&ns, "metadata save")?;
     let path = ns.meta_path(id.map_id);
-    fs::create_dir_all(path.parent().expect("has parent"))?;
+    create_dir_all_durable(path.parent().expect("has parent"))?;
     let bytes = postcard::to_allocvec(value)?;
     atomic_write_file(&path, &bytes)?;
     Ok(())

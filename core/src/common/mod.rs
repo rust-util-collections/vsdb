@@ -71,7 +71,7 @@ static VSDB_SYSTEM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     let mut d = VSDB_BASE_DIR.lock().clone();
     d.push("__SYSTEM__");
     if !vsdb_is_read_only() {
-        pnk!(fs::create_dir_all(&d));
+        pnk!(create_dir_all_durable(&d));
     }
     d
 });
@@ -80,7 +80,7 @@ static VSDB_META_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     let mut d = VSDB_SYSTEM_DIR.clone();
     d.push("__instance_meta__");
     if !vsdb_is_read_only() {
-        pnk!(fs::create_dir_all(&d));
+        pnk!(create_dir_all_durable(&d));
     }
     d
 });
@@ -94,13 +94,38 @@ static VSDB_CUSTOM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     let mut d = VSDB_BASE_DIR.lock().clone();
     d.push("__CUSTOM__");
     if !vsdb_is_read_only() {
-        pnk!(fs::create_dir_all(&d));
+        pnk!(create_dir_all_durable(&d));
     }
     d
 });
 
 /// Per-process sequence for atomic-write staging files.
 static TMP_WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Creates a directory tree and synchronizes its directory entries.
+///
+/// Used by metadata and engine initialization across the two VSDB crates.
+/// Synchronize existing ancestors too: another caller or an earlier failed
+/// attempt may have created them without completing their durability fence.
+/// Read-only mode returns an error before touching the filesystem.
+#[doc(hidden)]
+pub fn create_dir_all_durable(path: &Path) -> Result<()> {
+    if vsdb_is_read_only() {
+        return Err(VsdbError::ReadOnly {
+            operation: "directory creation",
+        });
+    }
+    fs::create_dir_all(path)?;
+    for ancestor in path.ancestors() {
+        let ancestor = if ancestor.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            ancestor
+        };
+        fs::File::open(ancestor)?.sync_all()?;
+    }
+    Ok(())
+}
 
 /// Atomically and durably replaces the file at `path` with `bytes`.
 ///

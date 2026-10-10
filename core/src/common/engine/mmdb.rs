@@ -1,7 +1,7 @@
 use crate::common::{
     GB, PREFIX_ALLOC_START, PREFIX_SIZE, Pre, PreBytes, RawKey, RawValue, VSDB,
-    configured_mem_budget_mb, error::Result as VsdbResult, vsdb_freeze_base_dir,
-    vsdb_get_base_dir, vsdb_is_read_only,
+    configured_mem_budget_mb, create_dir_all_durable, error::Result as VsdbResult,
+    vsdb_freeze_base_dir, vsdb_get_base_dir, vsdb_is_read_only,
 };
 use mmdb::{
     BidiIterator, BlockCachePool, CompressionType, DB, DbOptions, ReadOptions, Snapshot,
@@ -231,9 +231,9 @@ impl MmDB {
             // marker and exact shard layout validate; readers never unlink it.
             validate_completed_dataset(root, shards, false)?;
         } else {
-            fs::create_dir_all(root).c(d!())?;
+            create_dir_all_durable(root).c(d!())?;
             check_format_version(root).c(d!())?;
-            fs::create_dir_all(&dir).c(d!())?;
+            create_dir_all_durable(&dir).c(d!())?;
 
             let marker_present = root.join(FORMAT_VERSION_REL_PATH).exists();
             let scan = scan_shard_layout(&dir, shards)?;
@@ -244,7 +244,7 @@ impl MmDB {
             // provably a resumable create (see INIT_SENTINEL_REL_PATH).
             if !marker_present && scan.present == 0 && !sentinel_path.exists() {
                 let _g = SYS_META_LOCK.lock();
-                fs::create_dir_all(sentinel_path.parent().expect("has parent"))
+                create_dir_all_durable(sentinel_path.parent().expect("has parent"))
                     .c(d!())?;
                 write_file_durable(&sentinel_path, b"1")?;
             }
@@ -271,7 +271,7 @@ impl MmDB {
         for i in 0..shards {
             let shard_dir = dir.join(format!("shard_{:02}", i));
             if !read_only {
-                fs::create_dir_all(&shard_dir).c(d!())?;
+                create_dir_all_durable(&shard_dir).c(d!())?;
             }
             let db = mmdb_open(&shard_dir, shards, sizing, &pool)?;
             dbs_vec.push(db);
@@ -733,7 +733,7 @@ pub(crate) fn validate_completed_dataset(
 fn migrate_ceiling(base_dir: &Path, legacy: Option<Pre>) -> Result<()> {
     let _g = SYS_META_LOCK.lock();
     let file = base_dir.join(PREFIX_CEILING_REL_PATH);
-    fs::create_dir_all(file.parent().expect("has parent")).c(d!())?;
+    create_dir_all_durable(file.parent().expect("has parent")).c(d!())?;
     let filed = read_ceiling_file(&file)?;
     let ceiling = effective_initial_ceiling(filed, legacy);
     if filed != Some(ceiling) {
@@ -1097,7 +1097,7 @@ fn write_format_marker(base_dir: &Path) -> Result<()> {
     {
         return Ok(());
     }
-    fs::create_dir_all(path.parent().expect("has parent")).c(d!())?;
+    create_dir_all_durable(path.parent().expect("has parent")).c(d!())?;
     write_file_durable(&path, SUPPORTED_FORMAT_VERSION.to_string().as_bytes())
 }
 

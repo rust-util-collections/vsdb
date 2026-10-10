@@ -11,14 +11,6 @@
 
 ## Open
 
-### [CRITICAL] storage: directory creation is not covered by durable publication
-- **Where**: `core/src/common/mod.rs`, `core/src/common/engine/mmdb.rs`, `core/src/common/namespace.rs`, raw and typed metadata saves
-- **What**: first metadata save and engine/namespace initialization create directories, then synchronize files and their immediate containing directories without synchronizing the ancestors that contain the newly created directory names.
-- **Why**: a successful metadata save or established namespace can still lose a directory link on power loss. Syscall traces confirm the missing parent-directory synchronization; no physical power-loss experiment was performed.
-- **Suggested fix**: use durable directory creation before publishing dependent files or completed namespace state, including retries and concurrent creation. Verify syscall ordering and propagation of directory-sync failures; preserve read-only access and all wire formats.
-
----
-
 ### [HIGH] versioned: raw diffs traverse roots without retaining reader ownership
 - **Where**: `strata/src/versioned/map.rs` (`raw_diff_commits`, `raw_diff_uncommitted`)
 - **What**: diffs capture bare tree roots. A restored writer alias can discard working state or delete history, settle retired nodes, and let compaction remove those roots before diff traversal finishes.

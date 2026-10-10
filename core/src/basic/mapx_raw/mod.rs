@@ -726,7 +726,7 @@ impl MapxRaw {
         }
         let id = self.instance_id();
         let path = self.namespace().meta_path(id.map_id);
-        fs::create_dir_all(path.parent().expect("has parent"))?;
+        crate::common::create_dir_all_durable(path.parent().expect("has parent"))?;
         crate::common::atomic_write_file(&path, &self.inner.encode_prefix_meta())?;
         Ok(id)
     }

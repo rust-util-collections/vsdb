@@ -27,6 +27,7 @@
 //!
 
 use crate::common::{
+    create_dir_all_durable,
     engine::{Engine, EngineSizing, validate_completed_dataset, write_file_durable},
     error::{Result, VsdbError},
     vsdb_freeze_base_dir, vsdb_get_base_dir, vsdb_is_read_only,
@@ -313,7 +314,7 @@ fn save_lifecycle(base: &Path, id: NsId, state: NsLifecycleState) -> Result<()> 
         NsLifecycleState::Established => b"E",
     };
     let path = lifecycle_path(base, id);
-    fs::create_dir_all(path.parent().expect("has parent"))?;
+    create_dir_all_durable(path.parent().expect("has parent"))?;
     write_file_durable(&path, byte).map_err(VsdbError::from)
 }
 
@@ -344,7 +345,7 @@ fn load_registry() -> Result<RegistryFile> {
 /// registered namespace root). Caller holds [`REGISTRY_LOCK`].
 fn save_registry(reg: &RegistryFile) -> Result<()> {
     let path = registry_path();
-    fs::create_dir_all(path.parent().expect("has parent"))?;
+    create_dir_all_durable(path.parent().expect("has parent"))?;
     let bytes = postcard::to_allocvec(reg)?;
     write_file_durable(&path, &bytes).map_err(VsdbError::from)
 }
