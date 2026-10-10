@@ -22,7 +22,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         LazyLock,
-        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -99,41 +99,65 @@ static VSDB_CUSTOM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     d
 });
 
+/// Per-process sequence for atomic-write staging files.
+static TMP_WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
+
 /// Atomically and durably replaces the file at `path` with `bytes`.
 ///
-/// Writes to a sibling `*.tmp` file, fsyncs it, renames it over the
+/// Exclusively creates a unique staging sibling, fsyncs it, renames it over the
 /// target, then fsyncs the parent directory — a crash mid-write can never
 /// leave a truncated file at `path` (POSIX `rename` is atomic within a
 /// filesystem), and a returned `Ok` survives power loss (without the
 /// directory fsync the rename itself could be lost, making a freshly saved
-/// instance unreachable). Instance metas are written under the SWMR
-/// contract, so the fixed tmp name cannot race.
+/// instance unreachable). Concurrent calls are supported; each uses its own
+/// staging file and the last rename selects the complete replacement.
 ///
 /// # Errors
 ///
 /// Returns [`VsdbError::ReadOnly`] before touching the filesystem in
-/// read-only mode, or a storage error if the replacement fails.
+/// read-only mode, or a storage error if the replacement fails. A failed
+/// replacement removes its staging file on a best-effort basis.
 pub fn atomic_write_file(path: &Path, bytes: &[u8]) -> Result<()> {
     if vsdb_is_read_only() {
         return Err(VsdbError::ReadOnly {
             operation: "atomic file write",
         });
     }
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
-    {
-        let mut f = fs::File::create(&tmp)?;
+    let (tmp, mut f) = loop {
+        let mut tmp = path.as_os_str().to_owned();
+        tmp.push(format!(
+            ".{}.{}.tmp",
+            std::process::id(),
+            TMP_WRITE_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let tmp = PathBuf::from(tmp);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+        {
+            Ok(f) => break (tmp, f),
+            // A crashed process with a reused pid may have left this name.
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.into()),
+        }
+    };
+    let result: Result<()> = (|| {
         io::Write::write_all(&mut f, bytes)?;
         f.sync_all()?;
+        drop(f);
+        fs::rename(&tmp, path)?;
+        let parent = match path.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p,
+            _ => Path::new("."),
+        };
+        fs::File::open(parent)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
     }
-    fs::rename(&tmp, path)?;
-    let parent = match path.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p,
-        _ => Path::new("."),
-    };
-    fs::File::open(parent)?.sync_all()?;
-    Ok(())
+    result
 }
 
 /// The global instance of the VsDB database.
