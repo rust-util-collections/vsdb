@@ -11,14 +11,6 @@
 
 ## Open
 
-### [MEDIUM] versioning: restoring an alias temporarily hides existing branch names
-- **Where**: `strata/src/versioned/repair.rs` (`rebuild_branch_name_index`), `strata/src/versioned/map.rs` (`branch_id`)
-- **What**: Every writable restore clears the shared branch-name index and reinserts its rows. An immutable reader through an existing alias can query between these writes while the authoritative branch table remains unchanged.
-- **Why**: Writable `branch_id` queries only the derived index and returns `None` for a live branch. The single structural writer requirement does not exclude concurrent immutable readers.
-- **Suggested fix**: Reconcile the index while preserving valid entries, repair missing or incorrect entries, and remove only stale names. Cover concurrent lookup during restoration and stale-name cleanup; no public API or persisted-format change is needed.
-
----
-
 ### [LOW] namespace docs: format-marker rejection is described as fail open
 - **Where**: `docs/proposals/namespaces.md` (format marker compatibility rule)
 - **What**: Unsupported or malformed format markers are described as "fail open", although the implementation rejects them during opening.

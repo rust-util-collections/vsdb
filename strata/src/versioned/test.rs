@@ -3748,10 +3748,49 @@ fn serde_rebuilds_branch_name_index() {
         m.create_branch("feature", main),
         Err(VsdbError::BranchAlreadyExists { .. })
     ));
+    m.branch_names.insert(&"main".to_string(), &feat.0);
+    m.branch_names.insert(&"stale".to_string(), &feat.0);
 
     let bytes = postcard::to_allocvec(&m).unwrap();
     let restored: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
     assert_eq!(restored.branch_id("feature"), Some(feat));
+    assert_eq!(restored.branch_id("main"), Some(main));
+    assert_eq!(restored.branch_id("stale"), None);
+}
+
+#[test]
+fn restoring_alias_preserves_concurrent_branch_lookups() {
+    use std::{sync::Barrier, thread};
+
+    let mut map: VerMap<u32, u32> = VerMap::new();
+    let main = map.main_branch();
+    let mut branches = vec![("main".to_string(), main)];
+    for i in 0..32 {
+        let name = format!("branch_{i}");
+        let id = map.create_branch(&name, main).unwrap();
+        branches.push((name, id));
+    }
+    let bytes = postcard::to_allocvec(&map).unwrap();
+    let start = Barrier::new(2);
+
+    thread::scope(|scope| {
+        let reader = scope.spawn(|| {
+            start.wait();
+            for _ in 0..512 {
+                for (name, id) in &branches {
+                    assert_eq!(map.branch_id(name), Some(*id), "missing {name}");
+                }
+            }
+        });
+        start.wait();
+        // Restoring aliases is the sole structural writer. The original
+        // handle only reads branches whose authoritative rows stay fixed.
+        for _ in 0..8 {
+            let restored: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
+            assert_eq!(restored.branch_id("main"), Some(main));
+        }
+        reader.join().unwrap();
+    });
 }
 
 /// Postcard serde roundtrip: VerMap with data, branches, commits.

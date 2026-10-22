@@ -14,11 +14,22 @@ use super::{CommitId, NO_COMMIT, map::VerMap};
 impl<K, V> VerMap<K, V> {
     pub(crate) fn rebuild_branch_name_index(&mut self) {
         let mut seen = HashSet::new();
-        self.branch_names.clear();
+        // Preserve valid rows so concurrent readers through another handle
+        // never lose a live name while this derived index is reconciled.
         for (id, state) in self.branches.iter() {
-            if seen.insert(state.name.clone()) {
+            if seen.insert(state.name.clone())
+                && self.branch_names.get(&state.name) != Some(id)
+            {
                 self.branch_names.insert(&state.name, &id);
             }
+        }
+        let stale: Vec<_> = self
+            .branch_names
+            .keys()
+            .filter(|name| !seen.contains(name))
+            .collect();
+        for name in stale {
+            self.branch_names.remove(&name);
         }
     }
 
