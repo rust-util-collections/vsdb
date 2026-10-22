@@ -11,7 +11,27 @@
 
 ## Open
 
-None.
+### [HIGH] namespaces: pending creation can block every later derived namespace
+- **Where**: `core/src/common/namespace.rs` (`Namespace::create_with`)
+- **What**: The pending lifecycle sidecar is written before the registry advances `next_id`. An interruption between these writes, or a directory-sync error after the sidecar rename, leaves that sidecar at the still-current allocator ID without a registered namespace.
+- **Why**: Every later derived creation rejects the existing lifecycle state at the same ID. Restart preserves the problem, while `open` and `destroy` cannot address the unregistered record.
+- **Suggested fix**: Durably advance the registry allocator before publishing pending lifecycle state. Add an isolated interruption regression that resumes ordinary creation after the sidecar checkpoint; retain existing lost-registry rejection. The registry and lifecycle formats can stay unchanged. The external storage-error reproduction was blocked by the platform; it has not been validated.
+
+---
+
+### [MEDIUM] versioning: restoring an alias temporarily hides existing branch names
+- **Where**: `strata/src/versioned/repair.rs` (`rebuild_branch_name_index`), `strata/src/versioned/map.rs` (`branch_id`)
+- **What**: Every writable restore clears the shared branch-name index and reinserts its rows. An immutable reader through an existing alias can query between these writes while the authoritative branch table remains unchanged.
+- **Why**: Writable `branch_id` queries only the derived index and returns `None` for a live branch. The single structural writer requirement does not exclude concurrent immutable readers.
+- **Suggested fix**: Reconcile the index while preserving valid entries, repair missing or incorrect entries, and remove only stale names. Cover concurrent lookup during restoration and stale-name cleanup; no public API or persisted-format change is needed.
+
+---
+
+### [LOW] namespace docs: format-marker rejection is described as fail open
+- **Where**: `docs/proposals/namespaces.md` (format marker compatibility rule)
+- **What**: Unsupported or malformed format markers are described as "fail open", although the implementation rejects them during opening.
+- **Why**: The phrase conventionally describes permissive behavior, reversing the documented recovery contract.
+- **Suggested fix**: Say that these markers cause opening to fail; documentation-only, with no format change.
 
 ## Won't Fix
 
