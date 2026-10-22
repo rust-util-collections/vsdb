@@ -1038,13 +1038,45 @@ where
 
         txn.state.node_count = txn.state.node_count.saturating_sub(1);
 
-        if txn.state.entry_point == Some(node_id) || max_layer == txn.state.max_layer {
+        if Self::entry_point_needs_repair(txn, node_id) {
             Self::repair_entry_point(txn, config);
         }
         true
     }
 
+    /// Whether removing `removed` can invalidate the entry point.
+    ///
+    /// A surviving entry point at the global maximum layer needs no
+    /// re-election, and removing another top-layer node cannot lower the
+    /// maximum. Only a lost, missing/mismatched, or base-disconnected entry
+    /// point requires the full scan in [`Self::repair_entry_point`].
+    fn entry_point_needs_repair(txn: &Txn<'_, S>, removed: u64) -> bool {
+        let Some(entry) = txn.state.entry_point else {
+            return true;
+        };
+        if entry == removed {
+            return true;
+        }
+        if txn.get(&node_key(TAG_VEC, entry)).is_none() {
+            return true;
+        }
+        let layer = txn
+            .get(&node_key(TAG_INFO, entry))
+            .map(|raw| decode_value::<u8>(&raw));
+        if layer != Some(txn.state.max_layer) {
+            return true;
+        }
+        if txn.state.node_count <= 1 {
+            return false;
+        }
+        !get_neighbors(txn, 0, entry)
+            .into_iter()
+            .any(|neighbor| txn.get(&node_key(TAG_VEC, neighbor)).is_some())
+    }
+
     fn repair_entry_point(txn: &mut Txn<'_, S>, config: &HnswConfig) {
+        #[cfg(test)]
+        ENTRY_REPAIRS.with(|count| count.set(count.get() + 1));
         let live: Vec<(u64, u8)> = txn
             .rows
             .scan_prefix(txn.store, &[TAG_INFO])
@@ -1164,6 +1196,16 @@ fn _assert_send_sync() {
     require::<VecDex<String, distance::L2, f64>>();
     require::<VecDexDyn<String>>();
     require::<VecDexDyn<String, f64>>();
+}
+
+#[cfg(test)]
+thread_local! {
+    static ENTRY_REPAIRS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn entry_repair_count() -> usize {
+    ENTRY_REPAIRS.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]

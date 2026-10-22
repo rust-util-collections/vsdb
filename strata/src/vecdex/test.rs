@@ -727,6 +727,65 @@ fn saturated_neighbor_pruning_keeps_new_entry_point_reachable() {
     assert_eq!(idx.search(&[0.1, 0.0], 4).unwrap().len(), 4);
 }
 
+#[test]
+fn non_entry_top_layer_remove_skips_entry_repair() {
+    let cfg = HnswConfig {
+        dim: 2,
+        ..Default::default()
+    };
+    let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
+    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state.clone());
+
+    // node 0 is the entry at layer 2; nodes 1 and 3 are other layer-2
+    // nodes; node 2 is a layer-0 helper connected to all of them.
+    for (node_id, key, layer, vector) in [
+        (0u64, 0u32, 2u8, [0.0f32, 0.0]),
+        (1, 1, 2, [1.0, 0.0]),
+        (2, 2, 0, [2.0, 0.0]),
+        (3, 3, 2, [3.0, 0.0]),
+    ] {
+        txn.put_vec(node_id, &vector);
+        txn.rows
+            .put(node_key(TAG_NODE2KEY, node_id).to_vec(), encode_value(&key));
+        txn.rows
+            .put(node_key(TAG_INFO, node_id).to_vec(), encode_value(&layer));
+        txn.rows.put(
+            user_key(&KeyEnDe::encode(&key)),
+            node_id.to_le_bytes().to_vec(),
+        );
+    }
+    txn.set_neighbors(0, 0, &[2]);
+    txn.set_neighbors(0, 1, &[2]);
+    txn.set_neighbors(0, 2, &[0, 1, 3]);
+    txn.set_neighbors(0, 3, &[2]);
+    txn.state.entry_point = Some(0);
+    txn.state.max_layer = 2;
+    txn.state.node_count = 4;
+    txn.state.next_node_id = 4;
+
+    let (rows, state) = txn.finish();
+    rows.commit(&mut idx.store).unwrap();
+    idx.state = state;
+
+    let before = entry_repair_count();
+    idx.remove(&1).unwrap();
+    assert_eq!(
+        entry_repair_count(),
+        before,
+        "removing a non-entry top-layer node must not rescan the graph"
+    );
+    assert_eq!(idx.state.entry_point, Some(0));
+    assert_eq!(idx.state.max_layer, 2);
+
+    idx.remove(&0).unwrap();
+    assert!(
+        entry_repair_count() > before,
+        "removing the entry point must repair it"
+    );
+    assert_eq!(idx.state.entry_point, Some(3));
+    assert_eq!(idx.state.max_layer, 2);
+}
+
 // ---- T-1: Single-node duplicate-key update (regression for stale-metadata fix) ----
 
 #[test]

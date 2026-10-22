@@ -11,12 +11,6 @@
 
 ## Open
 
-### [MEDIUM] vecdex: non-entry top-layer removal triggers a full-graph rescan
-- **Where**: `strata/src/vecdex/mod.rs` (`stage_remove`, `repair_entry_point`)
-- **What**: `stage_remove` calls `repair_entry_point` whenever the removed node's layer equals `state.max_layer`, even when the actual entry point survives. Repair scans every `TAG_INFO` row and vector, making a top-layer delete O(N) (and every delete O(N) when `max_layer == 0`).
-- **Why**: The condition tests the removed node's layer, not whether the entry point was lost or is unhealthy.
-- **Suggested fix**: Repair only when the entry point is removed, missing, has a mismatched layer, or has no live base edge. Regression test with a test-only repair counter, plus entry-point-removal coverage.
-
 ### [MEDIUM] trie: dirty-state synchronization deep-clones the whole trie
 - **Where**: `strata/src/trie/proof.rs` (`sync_to_branch`, `sync_to_commit`); deep clone in `strata/src/trie/node/mod.rs`
 - **What**: Every dirty `merkle_root`/`prove_at` clones the full head trie to restore and re-snapshot the dirty overlay, even when no map write intervened. Repeated proofs on an unchanged dirty branch cost O(total state) in allocations and memory.
