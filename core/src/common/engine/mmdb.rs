@@ -85,12 +85,27 @@ const PREFIX_ALLOC_BATCH: u64 = 8192;
 /// now-gone thread's `LOCAL_NEXT`/`LOCAL_CEIL` could have continued
 /// issuing from it — `GLOBAL_COUNTER` has already moved past the whole
 /// batch), so there is nothing left for `reserve_recovered_prefix` to
-/// protect once the owning thread is gone.
+/// protect once the owning thread is gone. The drop also purges any
+/// recovered-prefix reservations in that un-issued range.
 struct PendingWindowGuard;
 
 impl Drop for PendingWindowGuard {
     fn drop(&mut self) {
-        PENDING_WINDOWS.write().remove(&thread::current().id());
+        let window = PENDING_WINDOWS.write().remove(&thread::current().id());
+        let Some((cursor, end)) = window else {
+            return;
+        };
+        // A reservation in this window's un-issued tail can never be
+        // generated again now that its owner is gone. Purge it so the
+        // reservation set (and the allocator's fast-path flag) does not
+        // live for the rest of the process.
+        let cursor = cursor.load(Ordering::SeqCst);
+        let mut reserved = RECOVERED_PREFIXES.lock();
+        let before = reserved.len();
+        reserved.retain(|prefix| *prefix < cursor || *prefix >= end);
+        if reserved.len() != before && reserved.is_empty() {
+            RECOVERED_NONEMPTY.store(false, Ordering::SeqCst);
+        }
     }
 }
 
@@ -2035,6 +2050,34 @@ mod tests {
                 "allocator issued a prefix that was reserved as recovered"
             );
         }
+    }
+
+    #[test]
+    fn abandoned_window_reservation_is_purged() {
+        let (prefix_tx, prefix_rx) = std::sync::mpsc::channel();
+        let (exit_tx, exit_rx) = std::sync::mpsc::channel();
+        let handle = thread::spawn(move || {
+            let db = VSDB.engine();
+            let prefix = db.alloc_prefix();
+            prefix_tx.send(prefix).unwrap();
+            exit_rx.recv().unwrap();
+        });
+
+        let prefix = prefix_rx.recv().unwrap();
+        let reserved = prefix + 1;
+        let db = VSDB.engine();
+        assert!(
+            db.reserve_recovered_prefix(reserved.to_le_bytes()),
+            "an unissued prefix in a live window must be reserved"
+        );
+        assert!(RECOVERED_PREFIXES.lock().contains(&reserved));
+
+        exit_tx.send(()).unwrap();
+        handle.join().unwrap();
+        assert!(
+            !RECOVERED_PREFIXES.lock().contains(&reserved),
+            "thread exit must purge reservations in its abandoned window"
+        );
     }
 
     /// Per-thread allocations must be strictly increasing — across

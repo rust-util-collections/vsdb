@@ -11,12 +11,6 @@
 
 ## Open
 
-### [LOW] engine: abandoned-window recovered-prefix reservations are never evicted
-- **Where**: `core/src/common/engine/mmdb.rs` (`PendingWindowGuard::drop`, `reserve_recovered_prefix`)
-- **What**: A reservation for a prefix in a thread's still-open window survives that thread's exit. The prefix can never be generated again, so the entry and `RECOVERED_NONEMPTY` persist for the process lifetime, forcing every allocation through the locked path.
-- **Why**: The guard removes only the window entry; it does not purge reservations in `[cursor, end)`.
-- **Suggested fix**: When a window is removed, purge reservations in its un-issued range under the existing lock order and clear `RECOVERED_NONEMPTY` when empty. Regression test with a spawned thread, a reservation, and thread exit.
-
 ### [LOW] docs: release gate omits the doctest step used by the Makefile and CI
 - **Where**: `.claude/docs/commit-protocol.md` (Final workspace gate); `Makefile` (`test`); `.github/workflows/rust.yml`
 - **What**: The prescribed gate runs test and release-test targets but not `cargo test --workspace --doc`, so a doctest/compile-fail regression can reach CI despite a “full gate” release.
