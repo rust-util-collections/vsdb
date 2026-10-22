@@ -11,12 +11,6 @@
 
 ## Open
 
-### [LOW] docs: release gate omits the doctest step used by the Makefile and CI
-- **Where**: `.claude/docs/commit-protocol.md` (Final workspace gate); `Makefile` (`test`); `.github/workflows/rust.yml`
-- **What**: The prescribed gate runs test and release-test targets but not `cargo test --workspace --doc`, so a doctest/compile-fail regression can reach CI despite a “full gate” release.
-- **Why**: The gate list is not aligned with the Makefile/CI test recipe.
-- **Suggested fix**: Add `cargo test --workspace --doc` to the final gate and keep the lists aligned.
-
 ## Won't Fix
 
 ### [MEDIUM] cached indexes: independently restored handles do not share runtime caches

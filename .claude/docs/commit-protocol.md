@@ -57,6 +57,7 @@ After last behavior commit (once per stable code state):
 4. `cargo check --workspace --benches`
 5. `cargo test --workspace --tests`
 6. `cargo test --workspace --release --tests`
+7. `cargo test --workspace --doc`
 
 Regression → new atomic commit, then re-run affected checks. Reuse completed
 checks on the same code/manifest state; do not repeat a gate just because another
