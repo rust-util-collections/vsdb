@@ -86,10 +86,11 @@ Additional docs in `docs/`:
 
 ## Conventions
 
-- **Rust toolchains** — keep the minimum supported Rust version three minor
-  releases behind the official latest stable release. Verify the official
-  channel before Rust edits, dependency updates or releases; synchronize both
-  manifests and the README, and validate the minimum plus latest stable.
+- **Rust toolchains** — keep the minimum supported Rust version equal to the
+  MMDB dependency's `rust-version` (read `../mmdb/Cargo.toml`; currently 1.95).
+  Verify that manifest before Rust edits, dependency updates or releases;
+  synchronize both crate manifests, both crate READMEs and the root README
+  badge, and validate the minimum plus latest stable.
   `.claude/docs/compatibility-policy.md` §Rust toolchain policy is the rule's source of truth.
 - All clippy warnings are errors (`#![deny(warnings)]` in lib.rs)
 - **No `#[allow(...)]`** — fix warnings at the source, never suppress them

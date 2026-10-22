@@ -9,7 +9,7 @@
 
 `vsdb` provides typed, persistent collections backed by [mmdb](https://github.com/rust-util-collections/mmdb), a pure-Rust LSM-Tree engine. The engine and HNSW implementation are Rust; the current compression dependency includes native Zstd (`zstd-sys`), whose bundled build requires a C toolchain.
 
-Requires Rust 1.96 or later.
+Requires Rust 1.95 or later (matching the MMDB dependency).
 
 ## Features
 

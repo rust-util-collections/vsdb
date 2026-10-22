@@ -44,8 +44,8 @@ Never amend a prior commit for a later fix.
 
 ## Final workspace gate
 
-Apply `compatibility-policy.md` §Rust toolchain policy first: verify official
-latest stable, synchronize the rolling MSRV, and check all targets with that
+Apply `compatibility-policy.md` §Rust toolchain policy first: read the MMDB
+minimum, synchronize VSDB's declared MSRV, and check all targets with that
 minimum toolchain. The workspace gate below runs on latest stable, including
 when the local default compiler is older.
 

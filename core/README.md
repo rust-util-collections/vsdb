@@ -13,7 +13,7 @@ This crate contains the foundational components of `vsdb`, including:
 
 Most users should use the `vsdb` crate instead, which provides high-level, typed APIs.
 
-Requires Rust 1.96 or later.
+Requires Rust 1.95 or later (matching the MMDB dependency).
 
 ## Installation
 
