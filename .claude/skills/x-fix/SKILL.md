@@ -1,13 +1,16 @@
 ---
 name: x-fix
-description: Resolve the VSDB audit backlog sequentially, with one finding per validated local commit. Use only when the user explicitly invokes /x-fix.
+description: Fix confirmed VSDB correctness and compatibility defects recorded in docs/audit.md, with one defect per validated local commit. Use only when the user explicitly invokes /x-fix.
 disable-model-invocation: true
 ---
 
-# Fix the VSDB Audit Backlog
+# Fix Recorded VSDB Defects
 
 Clear actionable `docs/audit.md` Open → self-review → local commits. Never push.
 No tag. No autonomous major. User-invoked only. New commits only.
+
+Apply `.claude/docs/pragmatic-engineering.md` §Maintenance scope. Verify each
+recorded defect against the current Rust implementation before changing code.
 
 ## Input
 

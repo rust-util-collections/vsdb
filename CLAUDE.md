@@ -63,6 +63,13 @@ launching Cargo; do not mutate environment variables inside parallel tests.
 Project skills live under `.claude/skills/<name>/SKILL.md` and are
 user-invocable only.
 
+These are local Rust maintenance workflows: review collection results,
+storage durability, concurrency, and public/on-disk compatibility; reproduce
+confirmed defects with focused regression tests; and apply authorized fixes.
+Describe each check in those concrete project terms. Shared scope and evidence
+requirements live in `.claude/docs/pragmatic-engineering.md` and
+`.claude/docs/review-core.md`.
+
 - `/x-review` — regression review. Empty = latest commit. Also: N, `all`, `staged`, `worktree`, hash, range, `--fix`. Code read-only; `docs/audit.md` is the registry exception
 - `/x-fix` — clear `docs/audit.md` Open, one finding per commit; resumable patch bump, no tag
 - `/x-commit` — review worktree (optional pathspecs) → fix → commit. Unfixed defects go to `docs/audit.md`

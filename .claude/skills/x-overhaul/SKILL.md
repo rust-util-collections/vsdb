@@ -1,15 +1,19 @@
 ---
 name: x-overhaul
-description: Audit a VSDB scope (same as /x-review; empty = latest commit), resolve findings safely, and create atomic local commits. Use only when the user explicitly invokes /x-overhaul.
+description: Review and fix VSDB collection correctness, storage durability, and compatibility within a local repository scope, then create atomic local commits. Empty scope = latest commit. Use only when the user explicitly invokes /x-overhaul.
 argument-hint: "[N | all | staged | worktree | <hash> | <hash1>..<hash2>]"
 disable-model-invocation: true
 ---
 
-# VSDB Audit-Fix-Commit Pipeline
+# VSDB Review, Fix, and Commit
 
 Review scope → dispose every confirmed finding → fix actionable → local commits.
 Unlike `/x-review`, always fixes and commits (no `--fix`). Never push. No tag.
 No autonomous major. User-invoked only. New commits only.
+
+Apply `.claude/docs/pragmatic-engineering.md` §Maintenance scope: inspect the
+existing Rust implementation and its documented storage contracts, using focused
+regression tests as evidence. `all` means every tracked subsystem is covered.
 
 ## Input
 
@@ -52,7 +56,8 @@ step 4 do not apply — the phases here replace them.
 Apply the `x-review` evidence and registry protocol without code fixes:
 
 1. Coverage: full ledger (`all`) or diff+callers.
-2. Read-only agents with disjoint ownership when useful; otherwise review directly.
+2. Read-only agents with disjoint file ownership when useful; otherwise review directly.
+   Give each reviewer the concrete subsystem, contracts, files, and expected output.
    `all` → each Rust file once in depth. Record reviewed paths/invariants and any
    coverage gaps; searches and passing tests alone do not establish depth.
 3. Cross-subsystem / design / completeness only for depth gaps.

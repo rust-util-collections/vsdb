@@ -60,6 +60,9 @@ One issue / root cause / behavior change → one commit.
   explicitly asks for one. `make test`, `make all`, and `make bench` use a
   per-invocation scratch `VSDB_BASE_DIR` and remove only that directory; they do
   not delete `$HOME/.vsdb`, `/tmp/vsdb_testing`, or caller-provided data.
+- Storage-failure and restart regressions use focused test doubles or isolated
+  child-process fixtures with invocation-owned temporary data. Describe the
+  exact database operation and expected recovery result before adding a fixture.
 - Unexpected test discovery: check `git ls-files` / `git status` before blame;
   never delete another session’s scratch test.
 - Unit-caused failure → fix before commit. Pre-existing → report with evidence.

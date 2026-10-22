@@ -2,6 +2,10 @@
 
 Match before reporting. Suppress, or say why the rule does not apply.
 
+Rust `unsafe`, proof verification, and storage corruption are technical topics
+in this database. Their presence does not establish a defect or its severity;
+use the actual supported operation and observable result as evidence.
+
 ## FP-1: Safe Rust ownership
 
 **Skip:** UAF/double-free/dangling in safe Rust (no `unsafe`/raw ptr).

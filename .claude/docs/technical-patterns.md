@@ -1,7 +1,11 @@
 # VSDB Technical Bug Patterns
 
 Cross-cutting catalog for VSDB + mmdb integration: every collection sits on these
-engine, unsafe, and encoding contracts. Load before review/debug.
+engine, Rust `unsafe`, and encoding contracts. Load before review/debug.
+
+Use this catalog to check supported local database operations and their
+documented results. Each pattern needs a concrete call sequence and observable
+failure under `review-core.md`; a matching term alone is not a finding.
 
 Subsystem invariants live only in `patterns/{btree,versioning,trie,engine,slotdex,dagmap,vecdex}.md`
 — always load the mapped guide when those paths change; do not restate them here.
@@ -20,7 +24,7 @@ Default one-time init; non-default re-check `OPEN_NAMESPACES` under `REGISTRY_LO
 ### 1.4 Cross-prefix atomicity
 Engine batches are single-prefix. Logical multi-prefix atomicity needs single-handle staging (SlotDex/VecDex), co-location on one shard WAL (program order = crash order) plus dirty-flag recovery and deferred reclamation (VerMap), or per-shard fences (legacy VerMap) — never an assumed shared batch.
 
-## 2. Unsafe
+## 2. Rust `unsafe` and aliasing contracts
 
 ### 2.1 shadow() race
 Same-key concurrent write or overlapping structural multi-key ops violate alias contract. Disjoint plain-map keys OK.

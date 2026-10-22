@@ -1,6 +1,6 @@
 ---
 name: x-commit
-description: Review, fix, validate, and commit VSDB worktree changes as atomic commits. Use only when the user explicitly invokes /x-commit.
+description: Review VSDB worktree changes against Rust correctness and storage contracts, fix confirmed regressions, validate, and create atomic local commits. Use only when the user explicitly invokes /x-commit.
 argument-hint: "[<pathspec>...]"
 disable-model-invocation: true
 ---
@@ -10,6 +10,9 @@ disable-model-invocation: true
 Review owned worktree changes → fix confirmed defects → validate → local commits.
 Never push. No tag. No autonomous major. User-invoked only. New commits only
 (no amend/rebase/force-push).
+
+Apply `.claude/docs/pragmatic-engineering.md` §Maintenance scope. The requested
+work is the owned local diff plus the callers and tests needed to validate it.
 
 ## Input
 

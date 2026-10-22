@@ -3,6 +3,12 @@
 Evidence standard and subsystem map. Apply `pragmatic-engineering.md`: only
 findings/process that remove a concrete failure mode.
 
+This is a correctness review of the local Rust database. State findings in terms
+of collection results, persisted state, resource lifetime, and documented API
+contracts. Review depth describes reading effort; severity describes the
+demonstrated consequence. Neither is an instruction to expand the task beyond
+the selected repository scope.
+
 ## 1. Context
 
 1. Full diff + surrounding functions.
@@ -56,6 +62,12 @@ Depth sets how hard to look. Finding severity comes only from §5 outcomes.
    compatibility reject/misdecode, or **quantified** hot-path cost.
 5. Smallest regression test that fails pre-fix.
 
+Prefer an ordinary API input or operation sequence in the existing test suite.
+For interrupted-write behavior, use a focused storage-error test double or an
+isolated restart fixture. Keep any additional reproduction proportional to the
+specific contract being checked, and record the difference between a traced
+candidate and an actually reproduced failure.
+
 **Boundaries:** empty/single entry, B+ occupancy/split, ancestor/no-op merge,
 proof edges, tier/layer edges, prefix 0/`u64::MAX`, ns shard counts, bad meta,
 partial I/O.
@@ -76,11 +88,13 @@ intentionally. A break needs explicit user acceptance before any major bump.
 **Design:** Locks, ownership, queues, multi-step install, degrade, public/on-disk
 → applicable D-\* in `design-patterns.md`; skip empty families.
 
-**Placeholder (CRITICAL in non-test prod when it ships behavior):**
+**Incomplete implementation:**
 `todo!` / `unimplemented!` / stand-in `unreachable!`; dummy returns where real
 work is required; `// TODO|FIXME|HACK` for unfinished required behavior;
-`if false` / `#[cfg(any())]` around incomplete required paths. Grep before
-calling dead code. Cleanup-only → LOW/skip.
+`if false` / `#[cfg(any())]` around incomplete required paths. Establish that a
+normal supported call reaches the incomplete behavior, then assign severity
+from its actual outcome under §5. A marker or macro name alone is not a defect.
+Grep before calling dead code. Cleanup-only → LOW/skip.
 
 ## 4. Deterministic / style
 

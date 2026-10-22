@@ -1,13 +1,15 @@
 ---
 name: x-review
-description: Deep regression review of VSDB changes or the full repository. Use only when the user explicitly invokes /x-review.
+description: Review VSDB Rust changes or the full repository for collection correctness, storage durability, and compatibility regressions. Use only when the user explicitly invokes /x-review.
 argument-hint: "[N | all | staged | worktree | <hash> | <hash1>..<hash2>] [--fix]"
 disable-model-invocation: true
 ---
 
-# Deep Regression Review for VSDB
+# VSDB Correctness and Regression Review
 
-High-signal review. Code read-only unless `--fix`. `docs/audit.md` is the registry
+Evidence-based review of the local Rust workspace and its documented contracts.
+Apply `.claude/docs/pragmatic-engineering.md` §Maintenance scope.
+Code read-only unless `--fix`. `docs/audit.md` is the registry
 exception: updating it is not a code write. Merge it; do not revert unrelated edits.
 Never commit or push. User-invoked only.
 
@@ -56,7 +58,7 @@ Small single-subsystem → review direct. Agents only if context split helps
 Non-trivial dimensions (minimum sufficient):
 
 - correctness / invariants
-- crash / concurrency / unsafe
+- interrupted writes / concurrency / Rust `unsafe` contracts
 - design shape if locks/resources/bounds/install/failure/API (`design-patterns.md`)
 - API / compatibility / quantified perf / placeholders (`review-core.md`)
 
@@ -69,9 +71,11 @@ Drop style, speculation, FP hits.
 
 ### Phase 3 — Verify
 
-Orchestrator re-reads and tries to **refute**. One independent verifier only if
-still ambiguous. Voting ≠ proof. Keep only code-demonstrable items; merge same
-root cause.
+Re-read each candidate's implementation, callers, and existing tests. Check
+whether normal guards or documented caller obligations already explain the
+result. Use one independent reviewer only when evidence remains ambiguous.
+Agreement is not evidence. Keep only code-demonstrable defects; merge findings
+with the same root cause.
 
 ### Phase 4 — Completeness
 
@@ -89,7 +93,7 @@ Zero → say so + what was covered.
 
 ### Phase 7 — `--fix` only
 
-Sequential fixes; preserve baseline; stop on unsafe overlap. Regression test +
+Sequential fixes; preserve baseline; stop on inseparable ownership overlap. Regression test +
 per-unit checks from `.claude/docs/commit-protocol.md` steps 2–4 per fix (no
 staging); re-review; update audit. No version/commit/push — user runs
 `/x-commit` after inspect.
