@@ -11,11 +11,7 @@
 
 ## Open
 
-### [LOW] namespace docs: format-marker rejection is described as fail open
-- **Where**: `docs/proposals/namespaces.md` (format marker compatibility rule)
-- **What**: Unsupported or malformed format markers are described as "fail open", although the implementation rejects them during opening.
-- **Why**: The phrase conventionally describes permissive behavior, reversing the documented recovery contract.
-- **Suggested fix**: Say that these markers cause opening to fail; documentation-only, with no format change.
+None.
 
 ## Won't Fix
 

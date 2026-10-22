@@ -166,7 +166,8 @@ The v15-to-v16 transition takes the maximum of the old default-shard allocator
 and the new ceiling file before further allocation. That legacy upgrade can
 open the default engine; normal file-backed allocation does not require its
 data path. The engine format marker is currently `16`, independently of the
-crate's v17 API version. Newer unsupported or malformed markers fail open.
+crate's v17 API version. Newer unsupported or malformed markers cause opening
+to fail.
 
 ## Initialization and recovery
 
@@ -180,8 +181,7 @@ lifecycle sidecar, then registers the pending namespace before opening its
 engine. An interrupted reservation can burn an ID without registering a
 namespace; later creations use higher IDs. Existing unregistered lifecycle
 state at the current allocator ID is still refused, preserving the lost-registry
-check. Writable
-recovery may complete a pending create. An established (or legacy unmarked
+check. Writable recovery may complete a pending create. An established (or legacy unmarked
 lifecycle) record must point to a complete marked engine; missing storage is
 an error, never permission to manufacture an empty replacement. Initialization
 uses `__SYSTEM__/__initializing__`; a complete marked dataset can retain a
