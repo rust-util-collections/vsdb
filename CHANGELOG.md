@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v17.0.13]
+
+Existing APIs and stored data remain compatible; no data migration is required.
+Rust 1.96 or later is required.
+
+### Changed
+
+- Runtime dependencies now track their latest stable releases: MMDB 4.3.7,
+  parking_lot 0.13.0, ruc 11.0.1, thiserror 2.0.21, serde 1.0.229 and
+  sha3 0.12.0. MMDB 4.3.7 also builds against parking_lot 0.13.
+  The criterion 0.8.2 and rand 0.10.3 dev-dependencies are aligned as well.
+- VSDB code and tests source synchronization primitives from parking_lot:
+  the remaining `std::sync::Once` initializers use `parking_lot::Once`.
+  Barriers and atomics remain standard-library primitives because
+  parking_lot provides no equivalent.
+
 ## [v17.0.12]
 
 Rust 1.96 or later is required. Public APIs and VSDB storage formats are unchanged.
