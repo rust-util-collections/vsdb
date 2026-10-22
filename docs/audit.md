@@ -11,12 +11,6 @@
 
 ## Open
 
-### [MEDIUM] engine: allocator init trusts a ceiling file that a legacy key has surpassed
-- **Where**: `core/src/common/engine/mmdb.rs` (`ensure_alloc_init`, `migrate_ceiling`, `alloc_prefix_candidate`)
-- **What**: If a non-default namespace allocates first, `ensure_alloc_init` trusts an existing ceiling file without forcing the default-engine legacy take-max fold. A pre-tripwire v15 binary can have advanced the legacy shard-0 ceiling past the file; the live thread window then issues prefixes already owned by legacy collections. Ceiling writes also overwrite from a stale read instead of taking the on-disk max.
-- **Why**: The fold is assumed to have run before allocator state is published; the `Some(file)` arm skips it, and later fold updates do not retract live windows/atomics.
-- **Suggested fix**: When the default `mmdb` root exists, force the default engine open (fold) before publishing allocator atomics, and make ceiling bumps read-max-write under `SYS_META_LOCK`. Subprocess regression: legacy key above the file, non-default allocation first, then default allocation.
-
 ### [MEDIUM] vecdex: non-entry top-layer removal triggers a full-graph rescan
 - **Where**: `strata/src/vecdex/mod.rs` (`stage_remove`, `repair_entry_point`)
 - **What**: `stage_remove` calls `repair_entry_point` whenever the removed node's layer equals `state.max_layer`, even when the actual entry point survives. Repair scans every `TAG_INFO` row and vector, making a top-layer delete O(N) (and every delete O(N) when `max_layer == 0`).

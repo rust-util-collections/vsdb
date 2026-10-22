@@ -823,23 +823,24 @@ fn ensure_alloc_init() {
     }
     let base_dir = vsdb_get_base_dir();
     let file = base_dir.join(PREFIX_CEILING_REL_PATH);
+    let default_exists = base_dir.join("mmdb").exists();
+
+    // A default dataset may carry a pre-v16 legacy ceiling that a
+    // pre-tripwire v15 binary advanced after the last fold. Force the
+    // default open (which runs the take-max fold) before trusting the
+    // ceiling file: a non-default allocation must not publish a window
+    // below that legacy value. Never re-entrant: engine init allocates
+    // nothing, and every other allocating thread is blocked on
+    // `PREFIX_ALLOC_LOCK` (held here) or sees the counter still zero.
+    if default_exists {
+        LazyLock::force(&VSDB);
+    }
+
     let ret =
         match read_ceiling_file(&file).expect("vsdb: allocator ceiling read failed") {
             Some(v) => v,
-            None if base_dir.join("mmdb").exists() => {
-                // A pre-v16 dataset sits at the default base and no v16
-                // open has migrated it yet (we were reached through a
-                // non-default namespace). The authoritative ceiling still
-                // lives in the legacy shard-0 key: force the default
-                // engine open — its init runs the take-max fold exactly
-                // once. Never re-entrant: engine init allocates nothing,
-                // and every other allocating thread is blocked on
-                // `PREFIX_ALLOC_LOCK` (held here) or sees the counter
-                // still zero.
-                LazyLock::force(&VSDB);
-                read_ceiling_file(&file)
-                    .expect("vsdb: allocator ceiling read failed")
-                    .expect("vsdb: default-engine migration must create the ceiling")
+            None if default_exists => {
+                panic!("vsdb: default-engine migration must create the ceiling")
             }
             None => {
                 // Fresh universe: initialize the backing store.
@@ -848,16 +849,28 @@ fn ensure_alloc_init() {
                 PREFIX_ALLOC_START
             }
         };
-    let new_ceil = ret + PREFIX_ALLOC_BATCH;
-    {
+
+    // Read-max-write under `SYS_META_LOCK`: another writer may have
+    // raised the file after the read above (or a fold may have absorbed
+    // a higher legacy value). Starting at the larger value prevents a
+    // window below a durable reservation.
+    let (start, ceiling) = {
         let _g = SYS_META_LOCK.lock();
-        write_file_durable(&file, &new_ceil.to_le_bytes())
-            .expect("vsdb: allocator ceiling write failed");
-    }
-    GLOBAL_FLOOR.store(ret, Ordering::Release);
-    GLOBAL_CEILING.store(new_ceil, Ordering::Release);
+        let current = read_ceiling_file(&file)
+            .expect("vsdb: allocator ceiling read failed")
+            .unwrap_or(0);
+        let start = ret.max(current);
+        let ceiling = start + PREFIX_ALLOC_BATCH;
+        if current < ceiling {
+            write_file_durable(&file, &ceiling.to_le_bytes())
+                .expect("vsdb: allocator ceiling write failed");
+        }
+        (start, ceiling)
+    };
+    GLOBAL_FLOOR.store(start, Ordering::Release);
+    GLOBAL_CEILING.store(ceiling, Ordering::Release);
     // The counter doubles as the init guard — store it last.
-    GLOBAL_COUNTER.store(ret, Ordering::Release);
+    GLOBAL_COUNTER.store(start, Ordering::Release);
 }
 
 fn alloc_prefix_candidate() -> Pre {
@@ -913,10 +926,18 @@ fn alloc_prefix_candidate() -> Pre {
                 let _x = PREFIX_ALLOC_LOCK.lock();
                 let old_ceil2 = GLOBAL_CEILING.load(Ordering::Acquire);
                 if batch_end > old_ceil2 {
-                    let new_ceil = batch_end + PREFIX_ALLOC_BATCH;
                     let _g = SYS_META_LOCK.lock();
-                    write_file_durable(&ceiling_file_path(), &new_ceil.to_le_bytes())
+                    let current = read_ceiling_file(&ceiling_file_path())
+                        .expect("vsdb: allocator ceiling read failed")
+                        .unwrap_or(0);
+                    let new_ceil = (batch_end + PREFIX_ALLOC_BATCH).max(current);
+                    if current < new_ceil {
+                        write_file_durable(
+                            &ceiling_file_path(),
+                            &new_ceil.to_le_bytes(),
+                        )
                         .expect("vsdb: allocator ceiling write failed");
+                    }
                     GLOBAL_CEILING.store(new_ceil, Ordering::Release);
                 }
             }
