@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v17.0.15]
+
+Public APIs and on-disk formats remain compatible; no data migration is
+required. Only the official latest stable Rust toolchain is supported.
+
+### Fixed
+
+- Namespace creation durably advances the ID allocator before publishing
+  pending lifecycle state, so an interruption at that point cannot block
+  every later derived namespace creation. Existing-root and lost-registry
+  checks remain in place.
+- `VerMap` restoration preserves valid branch-name index entries while
+  repairing missing or incorrect mappings and removing stale names.
+  Concurrent immutable readers no longer temporarily miss live branches
+  while another handle is restored.
+- Namespace documentation correctly states that unsupported or malformed
+  format markers cause opening to fail.
+
+### Changed
+
+- Project skill prompts explicitly describe local Rust correctness,
+  durability, concurrency, and compatibility maintenance, with focused
+  regression evidence and severity based on demonstrated outcomes.
+
 ## [v17.0.14]
 
 Existing public APIs and on-disk formats are unchanged; no data migration is
