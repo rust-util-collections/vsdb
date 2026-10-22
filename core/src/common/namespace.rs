@@ -697,11 +697,17 @@ impl Namespace {
             root_preexisted = ensure_root_adoptable(&root)?;
         }
 
-        // Reserve the id and a pending lifecycle record durably BEFORE
-        // opening the engine. Only this state may initialize an absent
-        // root; established records must never silently recreate data.
-        save_lifecycle(&base, id, NsLifecycleState::Pending)?;
+        // Burn the id durably before publishing its lifecycle sidecar.
+        // An interruption or ambiguous sidecar-write error must not leave
+        // pending state at the next id and block every later creation.
         reg.next_id += 1;
+        save_registry(&reg)?;
+
+        // Only a registered pending record may initialize an absent root;
+        // established records must never silently recreate data.
+        save_lifecycle(&base, id, NsLifecycleState::Pending)?;
+        #[cfg(test)]
+        tests::interrupt_creation_after_pending(id);
         reg.entries.push(rec.clone());
         if let Err(e) = save_registry(&reg) {
             let _ = remove_lifecycle(&base, id);
@@ -1252,6 +1258,37 @@ pub(crate) fn flush_all_open() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{cell::Cell, panic::catch_unwind};
+
+    thread_local! {
+        static INTERRUPT_AFTER_PENDING: Cell<bool> = const { Cell::new(false) };
+        static INTERRUPTED_ID: Cell<Option<NsId>> = const { Cell::new(None) };
+    }
+
+    pub(super) fn interrupt_creation_after_pending(id: NsId) {
+        if INTERRUPT_AFTER_PENDING.with(|flag| flag.replace(false)) {
+            INTERRUPTED_ID.with(|slot| slot.set(Some(id)));
+            panic!("interrupted namespace creation after pending lifecycle");
+        }
+    }
+
+    #[test]
+    fn pending_creation_interruption_does_not_block_later_creation() {
+        INTERRUPT_AFTER_PENDING.with(|flag| flag.set(true));
+        assert!(catch_unwind(Namespace::create).is_err());
+        let interrupted = INTERRUPTED_ID.with(|slot| slot.take()).unwrap();
+        let base = vsdb_get_base_dir();
+        assert!(load_lifecycle(&base, interrupted).unwrap().is_some());
+        assert!(Namespace::open(interrupted).is_err());
+
+        let ns =
+            Namespace::create().expect("an interrupted reservation must be skipped");
+        assert!(ns.id() > interrupted);
+        let id = ns.id();
+        ns.close().unwrap();
+        Namespace::destroy(id).unwrap();
+        remove_lifecycle(&base, interrupted).unwrap();
+    }
 
     #[test]
     fn normalize_physical_resolves_unresolvable_parent_dirs() {

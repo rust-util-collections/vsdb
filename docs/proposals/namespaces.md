@@ -175,7 +175,12 @@ database, namespace, or derived-directory APIs; derived path use freezes the
 base. Configuration does not mutate environment variables or configure child
 processes. Pass `VSDB_BASE_DIR` explicitly to a child when needed.
 
-Creation records a pending lifecycle before establishing a namespace. Writable
+Creation durably advances the registry's ID allocator before writing a pending
+lifecycle sidecar, then registers the pending namespace before opening its
+engine. An interrupted reservation can burn an ID without registering a
+namespace; later creations use higher IDs. Existing unregistered lifecycle
+state at the current allocator ID is still refused, preserving the lost-registry
+check. Writable
 recovery may complete a pending create. An established (or legacy unmarked
 lifecycle) record must point to a complete marked engine; missing storage is
 an error, never permission to manufacture an empty replacement. Initialization
