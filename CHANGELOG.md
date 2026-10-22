@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v17.0.14]
+
+Existing public APIs and on-disk formats are unchanged; no data migration is
+required. Only the official latest stable Rust toolchain is supported.
+
+### Fixed
+
+- `VerMap` restore advances `next_commit`/`next_branch` past every stored row
+  and rejects non-older or sentinel parents. Legacy crash residue can no longer
+  reuse an ID, overwrite reachable history, or create a self-parented commit
+  that loops `log()`/`commit_distance()`.
+- Namespace overlap validation absolutizes and lexically resolves `.`/`..`
+  before comparing paths, so a relative or not-yet-existing base cannot be
+  reused as a namespace root.
+- Registry loading validates allocator and entry invariants. Derived namespace
+  creation refuses a surviving lifecycle sidecar or non-empty root instead of
+  adopting or deleting an earlier namespace's data.
+- Allocator initialization folds the legacy shard-0 ceiling before publishing
+  state, and ceiling writes take the on-disk maximum, preventing prefix reuse
+  after a pre-tripwire v15 write.
+- VecDex repairs its entry point only when it is lost or unhealthy, removing an
+  O(N) rescan from non-entry top-layer removals.
+- Trie dirty-state synchronization reverse-applies the previous diff instead of
+  cloning the whole trie, and short-circuits unchanged dirty roots.
+- Abandoned allocator windows purge their recovered-prefix reservations.
+
+### Changed
+
+- `make test`/`make bench` use a per-invocation scratch `VSDB_BASE_DIR` and no
+  longer delete `$HOME/.vsdb`, `/tmp/vsdb_testing`, or caller-provided data.
+- Integration test binaries configure a unique temporary base before touching
+  the engine; the release gate now includes doctests.
+- The declared MSRV floor, minimum-toolchain CI job, README badge, and
+  compatibility-policy synchronization rules were removed. Build, lint and
+  test with the official latest stable Rust; no `rust-version` floor is
+  declared.
+
 ## [v17.0.13]
 
 Existing APIs and stored data remain compatible; no data migration is required.
