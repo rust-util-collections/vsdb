@@ -1,9 +1,9 @@
 # VecDex — Approximate Nearest-Neighbor Vector Index
 
 VecDex is a persistent, disk-backed vector index using the HNSW (Hierarchical
-Navigable Small World) algorithm.  It is built entirely in Rust on top of VSDB's
-storage primitives. The storage backend currently depends on native Zstd
-compression; its bundled `zstd-sys` build requires a C toolchain.
+Navigable Small World) algorithm. The HNSW implementation is Rust and runs on
+VSDB's storage primitives. The storage backend currently uses native Zstd
+compression, whose bundled `zstd-sys` build requires a C toolchain.
 
 Use cases: AI rigs, RAG pipelines, semantic search, recommendation engines,
 embedding-based retrieval.

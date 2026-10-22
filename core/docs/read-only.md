@@ -18,6 +18,7 @@ use vsdb_core::{
 vsdb_configure(VsdbOptions::read_only("/srv/my-app/vsdb"))?;
 assert_eq!(vsdb_open_mode(), OpenMode::ReadOnly);
 
+// Token saved by a writable process (`save_meta`); placeholder value.
 let id: InstanceId = "40960000".parse()?;
 let map = MapxRaw::from_meta(id)?;
 assert!(map.namespace().is_read_only());

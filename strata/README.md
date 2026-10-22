@@ -9,12 +9,16 @@
 
 `vsdb` provides typed, persistent collections backed by [mmdb](https://github.com/rust-util-collections/mmdb), a pure-Rust LSM-Tree engine. The engine and HNSW implementation are Rust; the current compression dependency includes native Zstd (`zstd-sys`), whose bundled build requires a C toolchain.
 
+Requires Rust 1.96 or later.
+
 ## Features
 
 | Collection | Description |
 |-----------|-------------|
 | `Mapx<K, V>` | Persistent `HashMap`-like KV store |
 | `MapxOrd<K, V>` | Persistent `BTreeMap`-like KV store with sorted iteration |
+| `MapxOrdRawKey<V>` | Persistent ordered map with raw byte keys |
+| `Orphan<T>` | Standalone persistent value with its own storage prefix |
 | `VerMap<K, V>` | Git-model versioning: branches, commits, three-way merge, rollback |
 | `MptCalc` / `SmtCalc` | Merkle Patricia Trie and Sparse Merkle Tree for cryptographic state commitments |
 | `VerMapWithProof<K, V, T>` | VerMap + trie integration for versioned Merkle roots |

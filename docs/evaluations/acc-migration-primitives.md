@@ -3,6 +3,10 @@
 Date: 2026-09-25 UTC. Implementation units: `08ec207` (synchronous batches),
 `bb1104f` (borrowed views/readers), `282f642` (fault/lifetime coverage).
 
+This report preserves the recorded baselines and measurements; it is not a
+validation report for the current HEAD. For current behavior, see the
+[API guide](../../strata/docs/api.md) and [changelog](../../CHANGELOG.md).
+
 ## Scope
 
 The consumer needs ordinary durable batches and coherent multi-query reads.

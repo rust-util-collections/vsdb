@@ -11,7 +11,7 @@ VSDB is a high-performance embedded key-value database for Rust that provides:
 - **Vector index** (VecDex) — pure-Rust HNSW for approximate nearest-neighbor search; `VecDexDyn` + `MetricKind` select the distance metric at runtime (enum dispatch, metric persisted in meta)
 - **Namespaces** — anonymous placement groups: independently-rooted engine instances in one process (own dir/volume, shards, WALs, memory budget); namespace placement via `handle.namespace()` + `new_in`/`ns.scope(..)` (not a same-shard guarantee); cross-ns deep copy via `clone_in(&ns)` (MapxRaw and typed wrappers); in-process `close` (engine teardown; detached snapshots may retain sources; consuming `Namespace::close(self)` returns the handle on refusal) and whole-directory destroy without per-key traversal — the epoch-rotation loop needs no restart
 
-Built exclusively on [mmdb](https://github.com/rust-util-collections/mmdb) (pure-Rust LSM-Tree engine). The default namespace uses 16-shard prefix-based routing (pinned); non-default namespaces persist their own creation-time shard count.
+Built exclusively on [mmdb](https://github.com/rust-util-collections/mmdb) (pure-Rust LSM-Tree engine; its bundled Zstd compression backend requires a C toolchain). The default namespace uses 16-shard prefix-based routing (pinned); non-default namespaces persist their own creation-time shard count.
 
 ## Workspace Layout
 
@@ -25,12 +25,12 @@ vsdb/
 
 ```bash
 make all          # fmt + lint + test
-make test         # cargo test --workspace (release + debug, parallel)
+make test         # cargo test --workspace (release + debug + doc tests, parallel)
 make lint         # cargo clippy --workspace + check tests/benches
 make bench        # criterion benches (core: basic + cache_pool; strata: basic, versioned, slotdex, trie_bench, vecdex)
 ```
 
-**Important**: Tests run in PARALLEL (v16.0.2+). Test data stays disjoint via globally-unique prefixes; tests must not assert on cross-test global state (exact allocator values, registry sizes) and must configure the base dir once per binary (`vsdb_configure` is one-shot; put it behind a `Once`).
+**Important**: Tests run in PARALLEL (v16.0.2+). Test data stays disjoint via globally-unique prefixes; tests must not assert on cross-test global state (exact allocator values, registry sizes) and must configure the base dir once per binary (`vsdb_configure` is one-shot; put it behind a `parking_lot::Once`).
 
 `make test` / `make all` / `make bench` are manual/CI convenience targets and
 perform global cleanup. The agent uses bare Cargo unless you explicitly ask for
@@ -81,7 +81,8 @@ Additional docs in `docs/`:
 - `audit.md` — Open / Won't Fix; disproven entries are removed (managed by the four skills; registry writes are not code writes)
 - `proposals/namespaces.md` / `ns-close.md` — current namespace identity, placement, recovery, and teardown contracts
 - `proposals/shared-mem-pool.md` — implemented per-engine cache sharing and explicitly deferred extensions
-- `evaluations/hotmint-v17.md` — historical v17.0.3 integration evidence, not a current-HEAD validation report
+- `proposals/durable-batches-and-read-views.md` — implemented synchronous commits and borrowed read views; typed read-view wrappers remain design candidates
+- `evaluations/acc-migration-primitives.md` / `hotmint-v17.md` — historical validation evidence, not current-HEAD validation reports
 
 ## Conventions
 
@@ -95,7 +96,7 @@ Additional docs in `docs/`:
 - **Prefer imports over inline paths** — avoid `std::foo::Bar::new()` inline in function bodies when the same path appears 3+ times in a file; add `use std::foo;` at file top (or `use std::foo::Bar;`) instead. Function-body `use` statements (scoped imports) are fine and don't count as inline paths. 1-2 inline uses of common `std::` items are acceptable.
 - **Grouped imports** — merge common prefixes: `use std::sync::{Arc, Mutex};`
 - **Doc-code alignment** — public API changes must update corresponding docs
-- `parking_lot` for Mutex (prefix allocator, VSDB_BASE_DIR global, DagMap ID allocation)
+- `parking_lot` for every `Mutex`, `RwLock`, and `Once` in library and test code (prefix allocator, `VSDB_BASE_DIR` global, DagMap ID allocation, one-time test setup); do not mix in `std::sync` lock primitives
 - `VsdbError` (thiserror, defined in `vsdb_core`) is the **only** error type in public APIs of both crates; `ruc` is internal-only for error chaining — boundary conversions preserve the complete chain via `stringify_chain`
 - `postcard` for serialization (replaced serde_cbor_2 in v12)
 - SlotDex/VecDex recovery creates independent runtime caches: retire the old active handle; route all reads/writes during mutation through one shared instance. Sequential writes through independently restored handles are also unsafe for index consistency.

@@ -34,7 +34,7 @@ interrupted prune; never publish intermediate ancestor values during retry.
 
 ## Bugs
 
-**Ceiling late** · Mutex as bottleneck only if concurrent writers claimed · prune clear-before-merge · clear before marker is durable.
+**Ceiling late** · Mutex contention matters only when concurrent writers contend for IDs · prune clear-before-merge · clear before marker is durable.
 
 ## Checklist
 

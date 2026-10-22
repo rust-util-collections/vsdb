@@ -2,7 +2,7 @@ all: fmt lint test
 
 export CARGO_NET_GIT_FETCH_WITH_CLI = true
 
-# ---- Main targets (default: MMDB backend) ----
+# ---- Main targets ----
 
 lint:
 	cargo clippy --workspace

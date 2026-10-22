@@ -145,16 +145,16 @@ remain intact. A later use case must justify each such change independently.
 
 ### Public contract
 
-Add a named read-only view through `map.read_view()`. The initial view supports
-`get`, `contains_key`, `iter` and the corresponding map's existing range
-semantics. It captures one committed state when created; subsequent queries
-through that view use that state. It neither stages writes nor includes an
-uncommitted batch. Missing keys remain `None`; fatal storage faults may panic.
+The raw form ships as `MapxRaw::read_view()`, returning
+`MapxRawReadView<'a>`; typed maps would gain the same entry point. The view
+supports `get`, `contains_key`, `iter` and the corresponding map's existing
+range semantics. It captures one committed state when created; subsequent
+queries through that view use that state. It neither stages writes nor includes
+an uncommitted batch. Missing keys remain `None`; fatal storage faults may panic.
 
-Use map-specific names such as `MapxRawReadView<'a>` and typed equivalents.
-Avoid reusing the existing top-level `Snapshot` name: that type describes
-VerMap's versioned tree state. Proposed names are illustrative, not shipped
-API declarations.
+Typed read-view names are illustrative, not shipped API declarations. Avoid
+reusing the existing top-level `Snapshot` name: that type describes VerMap's
+versioned tree state.
 
 One view covers one map. Two views created separately need not represent the
 same time, including within one namespace or shard. Neither transaction
@@ -296,16 +296,19 @@ included here.
 
 The source review covered `core/src/common/engine/{mod,mmdb}.rs`, raw and typed
 batch wrappers, `strata/src/common/staged.rs`, namespace close ownership, and
-the existing iterator snapshot regression. The local workspace lock resolves
-MMDB 4.3.1; the earlier consumer assessment used its pinned 4.3.0. Both engine
-sources were inspected for synchronous publication and borrowed snapshot
+the existing iterator snapshot regression. The implementation assessment
+inspected MMDB 4.3.1; the earlier consumer assessment pinned 4.3.0. The
+workspace has since moved to MMDB 4.3.7, so the engine-source evidence here
+remains tied to the 4.3.1 inspection. Re-check later engine sources if a
+suspected change touches synchronous publication or borrowed snapshot
 semantics. This does not imply equivalence of all other engine behavior.
 
 In both versions, synchronous write groups sync the WAL before memtable batch
 publication, and `Snapshot` retains a DB borrow plus a registered sequence.
-Those existing capabilities support the proposed local additions. The actual
-new public interfaces, compile-fail cases and fault-injection coverage are not
-implemented or validated by this document.
+Those existing capabilities support the shipped additions. Implementation and
+validation evidence is recorded in
+[the ACC migration report](../evaluations/acc-migration-primitives.md); typed
+read-view wrappers remain design candidates.
 
 Related contracts: [compatibility policy](../../.claude/docs/compatibility-policy.md),
 [namespace close](ns-close.md), [core API](../../core/docs/api.md),

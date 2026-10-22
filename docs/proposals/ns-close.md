@@ -21,7 +21,7 @@ closed flag.
 OPEN_NAMESPACES[id] ──┐
 Namespace clones ────┼── Arc<NsInner>
 collection handles ─┘      └── Engine
-                                └── MmDB { dbs: Box<[DB]> }
+                                └── MmDB { dbs: Box<[DB]>, read_only: bool }
 ```
 
 `NsInner` owns its engine inline; `Namespace::engine()` returns a borrow of

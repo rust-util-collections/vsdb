@@ -17,6 +17,8 @@ the Git-model versioned storage engine in `vsdb`.
 - [Durability and Recovery](#durability-and-recovery)
 - [Garbage Collection](#garbage-collection)
 - [Fork Point & Commit Distance](#fork-point--commit-distance)
+- [Rollback & Discard](#rollback--discard)
+- [Summary](#summary)
 
 ---
 

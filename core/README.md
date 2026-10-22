@@ -13,6 +13,8 @@ This crate contains the foundational components of `vsdb`, including:
 
 Most users should use the `vsdb` crate instead, which provides high-level, typed APIs.
 
+Requires Rust 1.96 or later.
+
 ## Installation
 
 ```bash
@@ -32,7 +34,9 @@ semantics and deployment guidance.
 
 ## Storage Engine
 
-The storage backend is MMDB, a pure-Rust LSM-Tree engine.
+The storage backend is MMDB, a pure-Rust LSM-Tree engine. Its bundled Zstd
+compression backend is built from C sources (`zstd-sys`), so a C toolchain is
+required at build time.
 
 ## License
 

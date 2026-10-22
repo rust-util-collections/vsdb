@@ -143,6 +143,7 @@ use vsdb::{
 vsdb_configure(VsdbOptions::read_only("/srv/my-app/vsdb"))?;
 assert_eq!(vsdb_open_mode(), OpenMode::ReadOnly);
 
+// Tokens saved by the writer (`save_meta`); illustrative values.
 let map_id: InstanceId = "40960000".parse()?;
 let map = Mapx::<String, String>::from_meta(map_id)?;
 assert!(map.namespace().is_read_only());

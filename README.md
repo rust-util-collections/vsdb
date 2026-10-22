@@ -10,7 +10,7 @@ A high-performance, embedded key-value database for Rust with an API that feels 
 
 ## What it does
 
-- **Persistent collections** — `Mapx` (like `HashMap`), `MapxOrd` (like `BTreeMap`), backed by MMDB (pure-Rust LSM-Tree)
+- **Persistent collections** — `Mapx` (like `HashMap`), `MapxOrd` (like `BTreeMap`), backed by MMDB (pure-Rust LSM-Tree engine; its bundled Zstd compression backend requires a C toolchain)
 - **Git-model versioning** — `VerMap` provides branching, commits, three-way merge, and rollback over a COW B+ tree with structural sharing; logical cleanup uses reference counting, with best-effort physical reclamation during MMDB compaction
 - **Merkle trie** — `MptCalc` (Merkle Patricia Trie) and `SmtCalc` (Sparse Merkle Tree) as stateless computation layers; `VerMapWithProof` pairs `VerMap` with either back-end for versioned 32-byte Merkle root commitments
 - **Slot-based index** — `SlotDex` for efficient, timestamp-based paged queries via a skip-list-like tier structure
@@ -146,7 +146,7 @@ vsdb (workspace)
 
 | Module | Key types | Purpose |
 |--------|-----------|---------|
-| [`basic`](strata/src/basic) | `Mapx`, `MapxOrd`, `Orphan`, `PersistentBTree` | Persistent, typed collections + COW B+ tree |
+| [`basic`](strata/src/basic) | `Mapx`, `MapxOrd`, `MapxOrdRawKey`, `Orphan`, `PersistentBTree` | Persistent, typed collections + COW B+ tree |
 | [`versioned`](strata/src/versioned) | `VerMap`, `BranchId`, `CommitId` | Git-model versioned KV store with COW B+ tree |
 | [`trie`](strata/src/trie) | `MptCalc`, `SmtCalc`, `SmtProof`, `VerMapWithProof` | Stateless Merkle tries + VerMap integration |
 | [`slotdex`](strata/src/slotdex) | `SlotDex` | Skip-list-like index for timestamp-based paged queries |
@@ -180,7 +180,9 @@ vsdb (workspace)
 ## Documentation
 
 - [API Examples](strata/docs/api.md) — Mapx, MapxOrd, VerMap, MptCalc/SmtCalc, VerMapWithProof, SlotDex
+- [Core API Examples](core/docs/api.md) — raw `vsdb_core` collections, namespaces, and administration
 - [Read-only Mode](strata/docs/read-only.md) — configuration, supported operations, locking, and snapshots
+- [Synchronous Batches & Read Views](docs/proposals/durable-batches-and-read-views.md) — durable commit fences and borrowed collection views
 - [Versioned Module — Architecture & Internals](strata/docs/versioned.md)
 - [VecDex — HNSW Vector Index](strata/docs/vecdex.md)
 - [Namespace Design](docs/proposals/namespaces.md) — placement, metadata, recovery, and lifetime
