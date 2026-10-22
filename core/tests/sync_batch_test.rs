@@ -9,8 +9,11 @@ use vsdb_core::{
     InstanceId, MapxRaw, Namespace, VsdbError, VsdbOptions, vsdb_configure,
 };
 
+mod common;
+
 #[test]
 fn synchronous_wipe_and_dropped_batch() {
+    common::setup();
     let mut map = MapxRaw::new();
     map.insert(b"old", b"old");
     let mut batch = map.batch_wiped();

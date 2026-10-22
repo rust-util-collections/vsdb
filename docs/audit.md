@@ -11,12 +11,6 @@
 
 ## Open
 
-### [MEDIUM] tests: integration binaries without configuration write the user default universe
-- **Where**: `core/tests/{iterator_snapshot_test,read_view_test,sync_batch_test}.rs`; `strata/tests/{proof_context_test,slotdex_iter_test,trie_cache_lifecycle_test,trie_reclaimed_commit_test}.rs`
-- **What**: These binaries touch the default namespace or create path-derived namespaces without calling `vsdb_configure`, so bare `cargo test` inherits `$HOME/.vsdb` or `VSDB_BASE_DIR`, writes user data, and can contend on engine locks.
-- **Why**: The per-binary one-shot configuration convention is not applied.
-- **Suggested fix**: Add a `parking_lot::Once` setup in each affected binary using a unique temp base dir before any engine access; add a sentinel-directory regression check.
-
 ### [LOW] engine: abandoned-window recovered-prefix reservations are never evicted
 - **Where**: `core/src/common/engine/mmdb.rs` (`PendingWindowGuard::drop`, `reserve_recovered_prefix`)
 - **What**: A reservation for a prefix in a thread's still-open window survives that thread's exit. The prefix can never be generated again, so the entry and `RECOVERED_NONEMPTY` persist for the process lifetime, forcing every allocation through the locked path.

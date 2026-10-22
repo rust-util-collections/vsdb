@@ -1,6 +1,9 @@
 use vsdb::{MptCalc, SmtCalc, TrieCalc, VerMap, VerMapWithProof, VsdbError};
 
+mod common;
+
 fn reclaimed_commit<T: TrieCalc>() {
+    common::setup();
     let mut proof = VerMapWithProof::<u64, u64, T>::new();
     let branch = proof.map().main_branch();
     proof.map_mut().insert(branch, &1, &100).unwrap();

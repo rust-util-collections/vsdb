@@ -1,6 +1,8 @@
 use std::{env, fs, path::PathBuf, process::Command, sync::Barrier};
 use vsdb_core::{MapxRaw, common::atomic_write_file};
 
+mod common;
+
 #[test]
 fn atomic_write_file_preserves_existing_staging_files() {
     const CHILD_ROOT: &str = "VSDB_ATOMIC_WRITE_TEST_ROOT";
@@ -41,6 +43,7 @@ fn atomic_write_file_preserves_existing_staging_files() {
 
 #[test]
 fn concurrent_save_meta_remains_restorable() {
+    common::setup();
     let mut map = MapxRaw::new();
     map.insert(b"key", b"value");
     let id = map.instance_id();

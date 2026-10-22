@@ -1,7 +1,10 @@
 use std::fs;
 use vsdb::{MptCalc, SmtCalc, TrieCalc, VerMap, VerMapWithProof};
 
+mod common;
+
 fn checkpoints<T: TrieCalc>(kind: &str) {
+    common::setup();
     let mut proof = VerMapWithProof::<u64, u64, T>::new();
     let branch = proof.map().main_branch();
     let id = proof.map().save_meta().unwrap();

@@ -1,9 +1,12 @@
 use vsdb::{BranchId, MptCalc, SmtCalc, VerMapWithProof, VsdbError};
 
+mod common;
+
 macro_rules! context_test {
     ($name:ident, $calc:ty) => {
         #[test]
         fn $name() {
+            common::setup();
             type State = VerMapWithProof<u64, String, $calc>;
             let mut state = State::new();
             let main = state.map().main_branch();

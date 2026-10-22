@@ -1,8 +1,11 @@
 use std::ops::{Bound, RangeBounds};
 use vsdb::{SlotDex64, SlotDex128, slotdex::Order};
 
+mod common;
+
 #[test]
 fn stream_matches_slot_and_key_order_for_all_bounds() {
+    common::setup();
     let rows = [
         (0, 5),
         (0, 1),
@@ -51,6 +54,7 @@ fn stream_matches_slot_and_key_order_for_all_bounds() {
 
 #[test]
 fn stream_crosses_page_limit_and_preserves_reopened_u128_index() {
+    common::setup();
     let count = u64::from(u16::MAX) + 1;
     for swap in [false, true] {
         let mut index = SlotDex128::<u64>::new(8, swap).unwrap();

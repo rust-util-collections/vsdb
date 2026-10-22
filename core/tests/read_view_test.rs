@@ -1,8 +1,11 @@
 use std::{borrow::Cow, ops::Bound, thread};
 use vsdb_core::{MapxRaw, Namespace, NamespaceOpts};
 
+mod common;
+
 #[test]
 fn read_view_survives_publication_clear_and_flush() {
+    common::setup();
     let ns = Namespace::create_with(NamespaceOpts {
         shards: 1,
         mem_budget_mb: Some(64),
@@ -65,6 +68,7 @@ fn read_view_survives_publication_clear_and_flush() {
 
 #[test]
 fn independent_views_and_reader_clones_share_identity_not_state() {
+    common::setup();
     let mut map = MapxRaw::new();
     map.insert(b"", b"first");
     let reader = map.reader();

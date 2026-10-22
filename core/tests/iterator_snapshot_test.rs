@@ -5,6 +5,8 @@ use std::{
 };
 use vsdb_core::{MapxRaw, Namespace, NamespaceOpts};
 
+mod common;
+
 fn replace(map: &mut MapxRaw, generation: u64) {
     let mut batch = map.batch_wiped();
     for key in 0u64..128 {
@@ -15,6 +17,7 @@ fn replace(map: &mut MapxRaw, generation: u64) {
 
 #[test]
 fn immutable_views_survive_concurrent_replacements_and_flushes() {
+    common::setup();
     let ns = Namespace::create_with(NamespaceOpts {
         path: None,
         shards: 1,
