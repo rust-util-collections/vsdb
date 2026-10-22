@@ -11,7 +11,65 @@
 
 ## Open
 
-None.
+### [HIGH] versioned: restored maps do not advance commit/branch ID allocators past existing records
+- **Where**: `strata/src/versioned/repair.rs` (`repair_commit_ref_counts_if_needed`, `validate_commit_graph`); `strata/src/versioned/map.rs` (`commit`, `create_branch`)
+- **What**: A legacy (≤16.3.8) crash can persist a commit/branch row while losing its allocator increment. Restore validates only reachable records and never advances `next_commit`/`next_branch` to `max(existing id)+1`. The next `commit()`/`create_branch()` reuses an existing ID, overwrites reachable history, and can create a self-parented commit that makes `log()`/`commit_distance()` loop.
+- **Why**: The graph validator does not enforce `parent < id`; allocator rows are trusted as written. This differs from `PersistentBTree`'s NodeId restore repair.
+- **Suggested fix**: On writable restore, advance both allocators to at least the maximum existing ID + 1 and fence the rows; reject `parent >= id` (and commit-id/key mismatch) in `validate_commit_graph`. Regression tests with stale allocators restored via serde, plus self-parent rejection.
+
+### [HIGH] namespace: base-overlap validation bypassed by relative or `..`-containing base
+- **Where**: `core/src/common/namespace.rs` (`normalize_physical`, `validate_explicit_root`); base selected in `core/src/common/mod.rs` (`vsdb_configure`, `gen_data_dir`)
+- **What**: A relative or not-yet-existing base is compared in its raw spelling against an absolute candidate, so overlap checks miss the same directory (or a parent). A namespace can then be created inside the default base; later default opens see a mismatched shard layout, and namespace destroy can remove the universe base.
+- **Why**: `normalize_physical` falls back to the input when no ancestor exists; only the candidate is required to be absolute.
+- **Suggested fix**: Absolutize and lexically normalize both sides (for example `std::path::absolute`, then canonicalize the deepest existing ancestor) before `path_contains`, including registry-resolved roots. Regression test with a cwd-relative base and an absolute candidate.
+
+### [MEDIUM] namespace: `create_with` trusts `next_id` and derived-root freshness
+- **Where**: `core/src/common/namespace.rs` (`create_with`, `load_registry`, `save_lifecycle`, `cleanup_failed_root`)
+- **What**: A missing/reset registry loads `next_id = 1` without validation. A derived root from an earlier namespace may still hold data; `create_with` neither checks that root nor refuses an existing lifecycle sidecar. Depending on shard count it adopts the old data or `remove_dir_all`s it during rollback.
+- **Why**: Explicit roots get the adoptable check; derived roots do not. Registry IDs/invariants are not validated.
+- **Suggested fix**: Validate `next_id > 0`, unique non-zero entry IDs, `next_id > max(entry id)`, and shard bounds on load. Before reserving an ID, require an absent/empty derived root and no existing lifecycle sidecar; refuse rather than overwrite. Regression test deleting the registry while a root survives.
+
+### [MEDIUM] engine: allocator init trusts a ceiling file that a legacy key has surpassed
+- **Where**: `core/src/common/engine/mmdb.rs` (`ensure_alloc_init`, `migrate_ceiling`, `alloc_prefix_candidate`)
+- **What**: If a non-default namespace allocates first, `ensure_alloc_init` trusts an existing ceiling file without forcing the default-engine legacy take-max fold. A pre-tripwire v15 binary can have advanced the legacy shard-0 ceiling past the file; the live thread window then issues prefixes already owned by legacy collections. Ceiling writes also overwrite from a stale read instead of taking the on-disk max.
+- **Why**: The fold is assumed to have run before allocator state is published; the `Some(file)` arm skips it, and later fold updates do not retract live windows/atomics.
+- **Suggested fix**: When the default `mmdb` root exists, force the default engine open (fold) before publishing allocator atomics, and make ceiling bumps read-max-write under `SYS_META_LOCK`. Subprocess regression: legacy key above the file, non-default allocation first, then default allocation.
+
+### [MEDIUM] vecdex: non-entry top-layer removal triggers a full-graph rescan
+- **Where**: `strata/src/vecdex/mod.rs` (`stage_remove`, `repair_entry_point`)
+- **What**: `stage_remove` calls `repair_entry_point` whenever the removed node's layer equals `state.max_layer`, even when the actual entry point survives. Repair scans every `TAG_INFO` row and vector, making a top-layer delete O(N) (and every delete O(N) when `max_layer == 0`).
+- **Why**: The condition tests the removed node's layer, not whether the entry point was lost or is unhealthy.
+- **Suggested fix**: Repair only when the entry point is removed, missing, has a mismatched layer, or has no live base edge. Regression test with a test-only repair counter, plus entry-point-removal coverage.
+
+### [MEDIUM] trie: dirty-state synchronization deep-clones the whole trie
+- **Where**: `strata/src/trie/proof.rs` (`sync_to_branch`, `sync_to_commit`); deep clone in `strata/src/trie/node/mod.rs`
+- **What**: Every dirty `merkle_root`/`prove_at` clones the full head trie to restore and re-snapshot the dirty overlay, even when no map write intervened. Repeated proofs on an unchanged dirty branch cost O(total state) in allocations and memory.
+- **Why**: The dirty fast path only recognizes a clean HEAD; there is no applied-diff identity or reverse-apply.
+- **Suggested fix**: Store the applied dirty diff and reverse it in O(diff); short-circuit when the branch dirty root/HEAD is unchanged; on reverse/apply failure poison the sync state and full-rebuild. Regression test with a clone-counting trie backend.
+
+### [HIGH] build: `make test`/`make bench` recursively delete user VSDB data
+- **Where**: `Makefile` (`test`, `bench` recipes)
+- **What**: Every cargo invocation is preceded by `rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)`. `$HOME/.vsdb` is the library default universe, and `VSDB_BASE_DIR` is a user-facing database path; the unquoted expansion can also split into unrelated arguments.
+- **Why**: The recipes have no ownership check; CI and humans run them directly.
+- **Suggested fix**: Use a per-invocation `mktemp -d` scratch `VSDB_BASE_DIR` with an EXIT trap; delete only that path. Do not delete `$HOME/.vsdb`, `/tmp/vsdb_testing`, or caller-provided paths. Update the workflow docs and add a dry-run regression check.
+
+### [MEDIUM] tests: integration binaries without configuration write the user default universe
+- **Where**: `core/tests/{iterator_snapshot_test,read_view_test,sync_batch_test}.rs`; `strata/tests/{proof_context_test,slotdex_iter_test,trie_cache_lifecycle_test,trie_reclaimed_commit_test}.rs`
+- **What**: These binaries touch the default namespace or create path-derived namespaces without calling `vsdb_configure`, so bare `cargo test` inherits `$HOME/.vsdb` or `VSDB_BASE_DIR`, writes user data, and can contend on engine locks.
+- **Why**: The per-binary one-shot configuration convention is not applied.
+- **Suggested fix**: Add a `parking_lot::Once` setup in each affected binary using a unique temp base dir before any engine access; add a sentinel-directory regression check.
+
+### [LOW] engine: abandoned-window recovered-prefix reservations are never evicted
+- **Where**: `core/src/common/engine/mmdb.rs` (`PendingWindowGuard::drop`, `reserve_recovered_prefix`)
+- **What**: A reservation for a prefix in a thread's still-open window survives that thread's exit. The prefix can never be generated again, so the entry and `RECOVERED_NONEMPTY` persist for the process lifetime, forcing every allocation through the locked path.
+- **Why**: The guard removes only the window entry; it does not purge reservations in `[cursor, end)`.
+- **Suggested fix**: When a window is removed, purge reservations in its un-issued range under the existing lock order and clear `RECOVERED_NONEMPTY` when empty. Regression test with a spawned thread, a reservation, and thread exit.
+
+### [LOW] docs: release gate omits the doctest step used by the Makefile and CI
+- **Where**: `.claude/docs/commit-protocol.md` (Final workspace gate); `Makefile` (`test`); `.github/workflows/rust.yml`
+- **What**: The prescribed gate runs test and release-test targets but not `cargo test --workspace --doc`, so a doctest/compile-fail regression can reach CI despite a “full gate” release.
+- **Why**: The gate list is not aligned with the Makefile/CI test recipe.
+- **Suggested fix**: Add `cargo test --workspace --doc` to the final gate and keep the lists aligned.
 
 ## Won't Fix
 
@@ -47,3 +105,17 @@ None.
 - **Where**: `core/src/common/engine/mmdb.rs` (`MEM_BUDGET`)
 - **What**: Operators cannot see whether the configured option, environment override or fixed default selected the budget, or the resulting per-shard sizes.
 - **Reason**: `vsdb_core` has no logging facade and is a library; unconditional stderr output from a storage engine is worse than silence. Revisit if a workspace-wide logging facade is adopted.
+
+---
+
+### [LOW] trie: cache decoders materialize a crafted payload before structural validation
+- **Where**: `strata/src/trie/cache.rs` (`deserialize_handle`), `strata/src/trie/smt/cache.rs` (`deserialize_node`)
+- **What**: A checksum-valid but malformed cache file just under `MAX_CACHE_FILE_BYTES` expands into an in-memory node graph before canonicality checks run; a branch-heavy payload can allocate orders of magnitude more than its encoded size.
+- **Reason**: Cache files are local, disposable artifacts behind a checksum and size cap; loading is not a remote input path, and a damaged cache safely falls back to rebuilding from the authoritative map. Adding a decoded-node/memory budget needs a new tuning constant and can reject legitimate large caches; track it with a future cache-format hardening change rather than a patch-release heuristic.
+
+---
+
+### [LOW] benches: fixtures and persisted state are not isolated from measured work
+- **Where**: `core/benches/units/batch_write.rs`, `strata/benches/versioned.rs`, `strata/benches/units/concurrent.rs`
+- **What**: Several timed closures build fixtures (fresh maps, prepopulation, rollback/discard state) or reuse a map that grows across thread-count runs; `gc_bench` measures an already-cleaned graph after warmup. Fresh collections are also never wiped, so storage grows during a run.
+- **Reason**: These affect benchmark interpretation and disk usage, not library correctness or durability. Fixing them is a benchmark-tooling overhaul (Criterion `iter_batched` fixtures, per-sample state reset, and bench-owned directory cleanup) that should be validated separately from this correctness pass; the numbers remain comparable within a single run only with that caveat.
