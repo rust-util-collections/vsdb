@@ -76,9 +76,9 @@ impl<P> ProofWithRoot<P> {
 pub struct VerMapWithProof<K, V, T: TrieCalc> {
     map: VerMap<K, V>,
     trie: T,
-    /// Snapshot of `trie` at the last synced commit (before dirty overlay).
-    /// Used to reset when re-applying dirty changes.
-    trie_at_head: Option<T>,
+    /// Diff currently applied on top of the synced HEAD. Reversing it
+    /// restores the clean HEAD without cloning the whole trie.
+    applied_dirty: Option<Vec<TreeDiff>>,
     /// The commit the trie is currently synced to.
     sync_commit: Option<CommitId>,
     /// The branch the trie is currently synced to.
@@ -104,7 +104,7 @@ where
         let mut this = Self {
             map,
             trie: T::default(),
-            trie_at_head: None,
+            applied_dirty: None,
             sync_commit: None,
             sync_branch: None,
             dirty_applied: false,
@@ -124,7 +124,7 @@ where
         let mut this = Self {
             map,
             trie: T::default(),
-            trie_at_head: None,
+            applied_dirty: None,
             sync_commit: None,
             sync_branch: None,
             dirty_applied: false,
@@ -159,19 +159,24 @@ where
     /// update when possible, falling back to a full rebuild otherwise.
     pub fn merkle_root(&mut self, branch: BranchId) -> Result<Vec<u8>> {
         self.reset_if_map_replaced();
-        // Fast path: same branch, synced to HEAD, no uncommitted changes,
-        // and no dirty overlay currently applied.
-        if self.sync_branch == Some(branch)
-            && !self.dirty_applied
-            && let Some(sync_id) = self.sync_commit
-        {
+        // Fast path: same branch and HEAD as the trie. A clean trie is
+        // already exact; a dirty trie is exact when the applied diff still
+        // matches the branch's current uncommitted diff.
+        if self.sync_branch == Some(branch) {
             let head = self.map.head_commit(branch)?;
             let head_id = head.as_ref().map(|c| c.id);
-            let has_dirty = self.map.has_uncommitted(branch)?;
-
-            if head_id == Some(sync_id) && !has_dirty {
-                // Trie matches the branch HEAD exactly.
-                return self.trie.root_hash();
+            if head_id == self.sync_commit {
+                let has_dirty = self.map.has_uncommitted(branch)?;
+                let unchanged = if has_dirty {
+                    let diff = self.map.raw_diff_uncommitted(branch)?;
+                    self.dirty_applied
+                        && self.applied_dirty.as_deref() == Some(diff.as_slice())
+                } else {
+                    !self.dirty_applied
+                };
+                if unchanged {
+                    return self.trie.root_hash();
+                }
             }
         }
 
@@ -216,13 +221,12 @@ where
         let head = self.map.head_commit(branch)?;
         let head_id = head.as_ref().map(|c| c.id);
 
-        // If dirty changes were previously applied, restore the trie
-        // to the clean HEAD state before re-syncing.
-        if self.dirty_applied {
-            if let Some(ref snapshot) = self.trie_at_head {
-                self.trie = snapshot.clone();
-            }
-            self.dirty_applied = false;
+        // Reverse the previous dirty overlay to restore the clean HEAD.
+        if self.dirty_applied
+            && let Err(e) = self.reverse_dirty()
+        {
+            self.poison();
+            return Err(e);
         }
 
         // Sync to the branch's HEAD commit.
@@ -233,35 +237,67 @@ where
         } else if self.sync_commit.is_some() {
             // Branch has no commits yet but trie was synced elsewhere → reset.
             self.trie = T::default();
-            self.trie_at_head = None;
+            self.applied_dirty = None;
             self.sync_commit = None;
         }
 
         // Then, apply any uncommitted changes.
         if self.map.has_uncommitted(branch)? {
             let diff = self.map.raw_diff_uncommitted(branch)?;
-            let snapshot = self.trie.clone();
             if let Err(e) = self.apply_diff(&diff) {
-                // `batch_update` is not atomic: operations before the
-                // failing one are already applied.  Restore the clean
-                // HEAD snapshot so the trie keeps matching
-                // `sync_commit` — otherwise a later
-                // `merkle_root_at_commit(HEAD)` would short-circuit on
-                // the still-valid bookkeeping and silently serve a
-                // root over the partially applied dirty overlay.
-                self.trie = snapshot;
-                self.trie_at_head = None;
+                // `batch_update` is not atomic: the trie no longer
+                // matches HEAD. Poison the sync state so the next call
+                // performs a full rebuild instead of serving a partial
+                // dirty overlay.
+                self.poison();
                 return Err(e);
             }
-            self.trie_at_head = Some(snapshot);
+            self.applied_dirty = Some(diff);
             self.dirty_applied = true;
         } else {
-            self.trie_at_head = None;
+            self.applied_dirty = None;
             self.dirty_applied = false;
         }
 
         self.sync_branch = Some(branch);
         Ok(())
+    }
+
+    /// Reverses the applied dirty diff, restoring the clean HEAD trie.
+    fn reverse_dirty(&mut self) -> Result<()> {
+        let diff = self.applied_dirty.take();
+        self.dirty_applied = false;
+        match diff {
+            Some(diff) => self.reverse_diff(&diff),
+            None => Ok(()),
+        }
+    }
+
+    /// Applies the inverse of `diff` to the trie.
+    fn reverse_diff(&mut self, diff: &[TreeDiff]) -> Result<()> {
+        let ops: Vec<(&[u8], Option<&[u8]>)> = diff
+            .iter()
+            .map(|entry| match entry {
+                TreeDiff::Added { key, .. } => (key.as_slice(), None),
+                TreeDiff::Removed { key, value } => {
+                    (key.as_slice(), Some(value.as_slice()))
+                }
+                TreeDiff::Modified { key, old_value, .. } => {
+                    (key.as_slice(), Some(old_value.as_slice()))
+                }
+            })
+            .collect();
+        self.trie.batch_update(&ops)
+    }
+
+    /// Discards the in-memory trie and sync bookkeeping after a partial
+    /// apply. The next synchronization performs a full rebuild.
+    fn poison(&mut self) {
+        self.trie = T::default();
+        self.applied_dirty = None;
+        self.sync_commit = None;
+        self.sync_branch = None;
+        self.dirty_applied = false;
     }
 
     /// Synchronizes the trie to a specific commit.
@@ -279,12 +315,11 @@ where
         }
 
         // Restore clean state if dirty overlay was applied.
-        if self.dirty_applied {
-            if let Some(ref snapshot) = self.trie_at_head {
-                self.trie = snapshot.clone();
-            }
-            self.dirty_applied = false;
-            self.trie_at_head = None;
+        if self.dirty_applied
+            && let Err(e) = self.reverse_dirty()
+        {
+            self.poison();
+            return Err(e);
         }
 
         if self.sync_commit == Some(target) {
@@ -308,11 +343,7 @@ where
                             // silently serve a root over the partial
                             // state.  The next sync performs a full
                             // rebuild instead.
-                            self.trie = T::default();
-                            self.trie_at_head = None;
-                            self.sync_commit = None;
-                            self.sync_branch = None;
-                            self.dirty_applied = false;
+                            self.poison();
                             return Err(e);
                         }
                     }
@@ -518,7 +549,7 @@ impl<K, V, T: TrieCalc> VerMapWithProof<K, V, T> {
         let current = self.map.instance_id();
         if current != self.cache_instance {
             self.trie = T::default();
-            self.trie_at_head = None;
+            self.applied_dirty = None;
             self.sync_commit = None;
             self.sync_branch = None;
             self.dirty_applied = false;
@@ -549,7 +580,7 @@ impl<K, V, T: TrieCalc> VerMapWithProof<K, V, T> {
                 return;
             }
             self.trie = trie;
-            self.trie_at_head = None;
+            self.applied_dirty = None;
             self.sync_commit = Some(CommitId::from_raw(sync_tag));
             self.sync_branch = None;
             self.dirty_applied = false;

@@ -2099,3 +2099,32 @@ mod mpt_stack_tests {
         73, 226, 187, 98, 130, 110, 55, 200, 23, 11, 146, 143, 59, 65, 114,
     ];
 }
+
+mod dirty_sync_tests {
+    use crate::trie::{MptCalc, VerMapWithProof, mpt_clone_count};
+
+    #[test]
+    fn repeated_dirty_roots_do_not_clone_the_trie() {
+        let mut proof: VerMapWithProof<u64, Vec<u8>, MptCalc> = VerMapWithProof::new();
+        let main = proof.map().main_branch();
+        proof.map_mut().insert(main, &1, &vec![0u8; 32]).unwrap();
+
+        // First dirty synchronization applies the overlay.
+        proof.merkle_root(main).unwrap();
+        let before = mpt_clone_count();
+
+        let first = proof.merkle_root(main).unwrap();
+        let second = proof.merkle_root(main).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(
+            mpt_clone_count(),
+            before,
+            "repeated dirty root computation must not clone the trie"
+        );
+
+        // A new dirty write still resynchronizes correctly.
+        proof.map_mut().insert(main, &2, &vec![1u8; 32]).unwrap();
+        let third = proof.merkle_root(main).unwrap();
+        assert_ne!(first, third);
+    }
+}

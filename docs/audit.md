@@ -11,12 +11,6 @@
 
 ## Open
 
-### [MEDIUM] trie: dirty-state synchronization deep-clones the whole trie
-- **Where**: `strata/src/trie/proof.rs` (`sync_to_branch`, `sync_to_commit`); deep clone in `strata/src/trie/node/mod.rs`
-- **What**: Every dirty `merkle_root`/`prove_at` clones the full head trie to restore and re-snapshot the dirty overlay, even when no map write intervened. Repeated proofs on an unchanged dirty branch cost O(total state) in allocations and memory.
-- **Why**: The dirty fast path only recognizes a clean HEAD; there is no applied-diff identity or reverse-apply.
-- **Suggested fix**: Store the applied dirty diff and reverse it in O(diff); short-circuit when the branch dirty root/HEAD is unchanged; on reverse/apply failure poison the sync state and full-rebuild. Regression test with a clone-counting trie backend.
-
 ### [HIGH] build: `make test`/`make bench` recursively delete user VSDB data
 - **Where**: `Makefile` (`test`, `bench` recipes)
 - **What**: Every cargo invocation is preceded by `rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)`. `$HOME/.vsdb` is the library default universe, and `VSDB_BASE_DIR` is a user-facing database path; the unquoted expansion can also split into unrelated arguments.

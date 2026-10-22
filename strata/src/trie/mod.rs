@@ -119,9 +119,28 @@ pub trait TrieCalc: Clone + Default {
 /// Unlike a traditional persistent MPT, `MptCalc` does **not** manage
 /// node storage or lifecycle.  All versioning, branching, and persistence
 /// should be handled by an external store.
-#[derive(Clone)]
 pub struct MptCalc {
     root: NodeHandle,
+}
+
+impl Clone for MptCalc {
+    fn clone(&self) -> Self {
+        #[cfg(test)]
+        MPT_CLONES.with(|count| count.set(count.get() + 1));
+        Self {
+            root: self.root.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static MPT_CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn mpt_clone_count() -> usize {
+    MPT_CLONES.with(std::cell::Cell::get)
 }
 
 impl Default for MptCalc {
