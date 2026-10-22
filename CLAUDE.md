@@ -87,12 +87,10 @@ Additional docs in `docs/`:
 
 ## Conventions
 
-- **Rust toolchains** — keep the minimum supported Rust version equal to the
-  MMDB dependency's `rust-version` (read `../mmdb/Cargo.toml`; currently 1.95).
-  Verify that manifest before Rust edits, dependency updates or releases;
-  synchronize both crate manifests, both crate READMEs and the root README
-  badge, and validate the minimum plus latest stable.
-  `.claude/docs/compatibility-policy.md` §Rust toolchain policy is the rule's source of truth.
+- **Rust toolchains** — use the official latest stable Rust for edits,
+  dependency updates, CI and releases. No MSRV floor is declared or validated;
+  do not add `rust-version` fields or older-compiler compatibility shims.
+  `.claude/docs/compatibility-policy.md` §Rust toolchain is the rule's source of truth.
 - All clippy warnings are errors (`#![deny(warnings)]` in lib.rs)
 - **No `#[allow(...)]`** — fix warnings at the source, never suppress them
 - **Prefer imports over inline paths** — avoid `std::foo::Bar::new()` inline in function bodies when the same path appears 3+ times in a file; add `use std::foo;` at file top (or `use std::foo::Bar;`) instead. Function-body `use` statements (scoped imports) are fine and don't count as inline paths. 1-2 inline uses of common `std::` items are acceptable.

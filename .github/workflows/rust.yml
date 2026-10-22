@@ -10,36 +10,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  msrv:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Read minimum supported Rust version
-      id: msrv
-      run: |
-        python3 - <<'PY'
-        import os
-        import tomllib
-
-        versions = []
-        for manifest in ("core/Cargo.toml", "strata/Cargo.toml"):
-            with open(manifest, "rb") as source:
-                versions.append(tomllib.load(source)["package"]["rust-version"])
-        assert versions[0] == versions[1], "Both crates must declare the same MSRV"
-        version = versions[0]
-        if len(version.split(".")) == 2:
-            version += ".0"
-        with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-            output.write(f"version={version}\n")
-        PY
-
-    - name: Install minimum supported Rust toolchain
-      run: rustup toolchain install '${{ steps.msrv.outputs.version }}' --profile minimal
-
-    - name: Check all targets with minimum supported Rust
-      run: cargo +${{ steps.msrv.outputs.version }} check --workspace --all-targets
-
   build:
     runs-on: ubuntu-latest
     steps:
