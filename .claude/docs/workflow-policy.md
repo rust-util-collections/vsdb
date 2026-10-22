@@ -56,10 +56,10 @@ One issue / root cause / behavior change → one commit.
   git worktree remove --force "$wt"
   ```
 - VSDB tests isolate via unique prefixes. The agent uses bare Cargo (`cargo test`,
-  `cargo clippy`, `cargo check`, `cargo fmt`), not `make test` / `make all` /
-  `make bench` / `make lint` / `make fmt`, unless the user explicitly asks for that
-  target. `make test`, `make all`, and `make bench` also delete `$HOME/.vsdb` or
-  shared `/tmp/vsdb_testing`.
+  `cargo clippy`, `cargo check`, `cargo fmt`), not make targets, unless the user
+  explicitly asks for one. `make test`, `make all`, and `make bench` use a
+  per-invocation scratch `VSDB_BASE_DIR` and remove only that directory; they do
+  not delete `$HOME/.vsdb`, `/tmp/vsdb_testing`, or caller-provided data.
 - Unexpected test discovery: check `git ls-files` / `git status` before blame;
   never delete another session’s scratch test.
 - Unit-caused failure → fix before commit. Pre-existing → report with evidence.

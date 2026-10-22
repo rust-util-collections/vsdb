@@ -11,12 +11,6 @@
 
 ## Open
 
-### [HIGH] build: `make test`/`make bench` recursively delete user VSDB data
-- **Where**: `Makefile` (`test`, `bench` recipes)
-- **What**: Every cargo invocation is preceded by `rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)`. `$HOME/.vsdb` is the library default universe, and `VSDB_BASE_DIR` is a user-facing database path; the unquoted expansion can also split into unrelated arguments.
-- **Why**: The recipes have no ownership check; CI and humans run them directly.
-- **Suggested fix**: Use a per-invocation `mktemp -d` scratch `VSDB_BASE_DIR` with an EXIT trap; delete only that path. Do not delete `$HOME/.vsdb`, `/tmp/vsdb_testing`, or caller-provided paths. Update the workflow docs and add a dry-run regression check.
-
 ### [MEDIUM] tests: integration binaries without configuration write the user default universe
 - **Where**: `core/tests/{iterator_snapshot_test,read_view_test,sync_batch_test}.rs`; `strata/tests/{proof_context_test,slotdex_iter_test,trie_cache_lifecycle_test,trie_reclaimed_commit_test}.rs`
 - **What**: These binaries touch the default namespace or create path-derived namespaces without calling `vsdb_configure`, so bare `cargo test` inherits `$HOME/.vsdb` or `VSDB_BASE_DIR`, writes user data, and can contend on engine locks.

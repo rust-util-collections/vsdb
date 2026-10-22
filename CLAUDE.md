@@ -32,12 +32,13 @@ make bench        # criterion benches (core: basic + cache_pool; strata: basic, 
 
 **Important**: Tests run in PARALLEL (v16.0.2+). Test data stays disjoint via globally-unique prefixes; tests must not assert on cross-test global state (exact allocator values, registry sizes) and must configure the base dir once per binary (`vsdb_configure` is one-shot; put it behind a `parking_lot::Once`).
 
-`make test` / `make all` / `make bench` are manual/CI convenience targets and
-perform global cleanup. The agent uses bare Cargo unless you explicitly ask for
-a make target, so it does not delete `$HOME/.vsdb` or shared `/tmp/vsdb_testing`. For an
-isolated run, set `VSDB_BASE_DIR="$(mktemp -d /tmp/vsdb-test.XXXXXX)"` in the
-parent shell when launching Cargo; do not mutate environment variables inside
-parallel tests.
+`make test` / `make all` / `make bench` are manual/CI convenience targets. They
+run under a per-invocation scratch `VSDB_BASE_DIR` and remove only that scratch
+directory; they do not touch `$HOME/.vsdb` or caller-provided data. The agent
+still uses bare Cargo unless you explicitly ask for a make target. For an
+isolated bare-Cargo run, set
+`VSDB_BASE_DIR="$(mktemp -d /tmp/vsdb-test.XXXXXX)"` in the parent shell when
+launching Cargo; do not mutate environment variables inside parallel tests.
 
 ## Architecture
 

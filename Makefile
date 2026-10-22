@@ -8,29 +8,33 @@ lint:
 	cargo clippy --workspace
 	cargo check --workspace --tests
 	cargo check --workspace --benches
+	$(MAKE) check-make-isolation
+
+# Guard the test/bench recipes against deleting user or shared data again.
+check-make-isolation:
+	@if $(MAKE) -n test bench | grep -E '(~/\.vsdb|/tmp/vsdb_testing|rm -rf .*VSDB_BASE_DIR)'; then \
+		echo "make test/bench must not delete user or shared data" >&2; exit 1; \
+	fi
+	@$(MAKE) -n test bench | grep -q 'mktemp -d /tmp/vsdb-' || \
+		(echo "make test/bench must use a per-invocation scratch base" >&2; exit 1)
 
 test:
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo test --workspace --release --tests
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo test --workspace --tests
-	cargo test --workspace --doc
+	@scratch=$$(mktemp -d /tmp/vsdb-test.XXXXXX) || exit 1; \
+	trap 'rm -rf "$$scratch"' EXIT; \
+	VSDB_BASE_DIR="$$scratch" cargo test --workspace --release --tests && \
+	VSDB_BASE_DIR="$$scratch" cargo test --workspace --tests && \
+	VSDB_BASE_DIR="$$scratch" cargo test --workspace --doc
 
 bench:
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench -p vsdb_core --bench basic
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench -p vsdb_core --bench cache_pool
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench -p vsdb --bench basic
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench -p vsdb --bench versioned
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench -p vsdb --bench slotdex
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench -p vsdb --bench trie_bench
-	- rm -rf ~/.vsdb /tmp/.vsdb /tmp/vsdb_testing $(VSDB_BASE_DIR)
-	cargo bench -p vsdb --bench vecdex
+	@scratch=$$(mktemp -d /tmp/vsdb-bench.XXXXXX) || exit 1; \
+	trap 'rm -rf "$$scratch"' EXIT; \
+	VSDB_BASE_DIR="$$scratch" cargo bench -p vsdb_core --bench basic && \
+	VSDB_BASE_DIR="$$scratch" cargo bench -p vsdb_core --bench cache_pool && \
+	VSDB_BASE_DIR="$$scratch" cargo bench -p vsdb --bench basic && \
+	VSDB_BASE_DIR="$$scratch" cargo bench -p vsdb --bench versioned && \
+	VSDB_BASE_DIR="$$scratch" cargo bench -p vsdb --bench slotdex && \
+	VSDB_BASE_DIR="$$scratch" cargo bench -p vsdb --bench trie_bench && \
+	VSDB_BASE_DIR="$$scratch" cargo bench -p vsdb --bench vecdex
 
 # ---- Utilities ----
 
