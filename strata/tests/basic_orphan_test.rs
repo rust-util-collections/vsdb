@@ -5,7 +5,7 @@ use vsdb::{VsdbOptions, basic::orphan::Orphan, vsdb_configure};
 /// first test configures and the rest reuse that dir (data stays disjoint
 /// via globally-unique prefixes).
 fn setup() {
-    use std::sync::Once;
+    use parking_lot::Once;
     static INIT: Once = Once::new();
     INIT.call_once(|| {
         let _ = vsdb_configure(VsdbOptions::new(format!(

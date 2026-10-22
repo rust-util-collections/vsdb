@@ -1,5 +1,5 @@
+use parking_lot::Once;
 use serde::{Deserialize, Serialize};
-use std::sync::Once;
 use vsdb::{Mapx, MapxOrd, VsdbOptions, vsdb_configure};
 
 mod accounting {

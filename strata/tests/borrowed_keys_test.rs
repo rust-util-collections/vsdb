@@ -4,7 +4,7 @@
 use vsdb::{Mapx, MapxOrd, VerMap, VsdbOptions, vsdb_configure};
 
 fn setup() {
-    use std::sync::Once;
+    use parking_lot::Once;
     static INIT: Once = Once::new();
     INIT.call_once(|| {
         let dir = format!("/tmp/vsdb_testing/borrowed_keys_{}", rand::random::<u64>());
