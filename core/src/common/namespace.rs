@@ -365,12 +365,38 @@ fn path_contains(outer: &Path, inner: &Path) -> bool {
     i.len() >= o.len() && i[..o.len()] == o[..]
 }
 
+/// Lexically resolves `.` and `..` components without touching the
+/// filesystem. Used after making a path absolute, so a not-yet-existing
+/// `..` tail cannot hide an overlap from the component check.
+fn lexical_normalize(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in p.components() {
+        match component {
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push(component.as_os_str());
+                }
+            }
+            Component::CurDir => {}
+            _ => out.push(component.as_os_str()),
+        }
+    }
+    out
+}
+
 /// Best-effort physical normalization for overlap checks: canonicalize
 /// the deepest EXISTING ancestor (resolving symlinks), then re-append
-/// the not-yet-existing lexical tail. Falls back to the input when no
-/// ancestor exists (then the lexical check still applies).
+/// the not-yet-existing lexical tail. A relative path is first made
+/// absolute and its `.`/`..` components are resolved lexically, so a
+/// spelling such as `vsdb_data` or `/srv/new/../data` cannot bypass the
+/// overlap check when those prefixes do not exist yet.
 fn normalize_physical(p: &Path) -> PathBuf {
-    let mut existing = p;
+    if let Ok(canonical) = p.canonicalize() {
+        return canonical;
+    }
+    let absolute = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+    let normalized = lexical_normalize(&absolute);
+    let mut existing = normalized.as_path();
     let mut tail: Vec<std::ffi::OsString> = Vec::new();
     loop {
         match existing.canonicalize() {
@@ -385,7 +411,7 @@ fn normalize_physical(p: &Path) -> PathBuf {
                     tail.push(name.to_owned());
                     existing = parent;
                 }
-                _ => return p.to_path_buf(),
+                _ => return normalized,
             },
         }
     }
@@ -1161,5 +1187,31 @@ pub(crate) fn flush_all_open() {
     let handles: Vec<Namespace> = OPEN_NAMESPACES.lock().values().cloned().collect();
     for ns in handles {
         ns.flush();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_physical_resolves_unresolvable_parent_dirs() {
+        let scratch = std::env::temp_dir().join(format!(
+            "vsdb_norm_{}_{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        fs::create_dir_all(&scratch).unwrap();
+
+        let via_parent = scratch.join("missing").join("..").join("target");
+        let direct = scratch.join("target");
+        let normalized = normalize_physical(&via_parent);
+        assert_eq!(normalized, normalize_physical(&direct));
+        assert!(path_contains(
+            &normalized,
+            &normalize_physical(&scratch.join("target").join("child"))
+        ));
+
+        fs::remove_dir_all(&scratch).unwrap();
     }
 }

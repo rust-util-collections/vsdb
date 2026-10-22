@@ -11,12 +11,6 @@
 
 ## Open
 
-### [HIGH] namespace: base-overlap validation bypassed by relative or `..`-containing base
-- **Where**: `core/src/common/namespace.rs` (`normalize_physical`, `validate_explicit_root`); base selected in `core/src/common/mod.rs` (`vsdb_configure`, `gen_data_dir`)
-- **What**: A relative or not-yet-existing base is compared in its raw spelling against an absolute candidate, so overlap checks miss the same directory (or a parent). A namespace can then be created inside the default base; later default opens see a mismatched shard layout, and namespace destroy can remove the universe base.
-- **Why**: `normalize_physical` falls back to the input when no ancestor exists; only the candidate is required to be absolute.
-- **Suggested fix**: Absolutize and lexically normalize both sides (for example `std::path::absolute`, then canonicalize the deepest existing ancestor) before `path_contains`, including registry-resolved roots. Regression test with a cwd-relative base and an absolute candidate.
-
 ### [MEDIUM] namespace: `create_with` trusts `next_id` and derived-root freshness
 - **Where**: `core/src/common/namespace.rs` (`create_with`, `load_registry`, `save_lifecycle`, `cleanup_failed_root`)
 - **What**: A missing/reset registry loads `next_id = 1` without validation. A derived root from an earlier namespace may still hold data; `create_with` neither checks that root nor refuses an existing lifecycle sidecar. Depending on shard count it adopts the old data or `remove_dir_all`s it during rollback.
