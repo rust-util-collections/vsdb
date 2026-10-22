@@ -11,12 +11,6 @@
 
 ## Open
 
-### [MEDIUM] namespace: `create_with` trusts `next_id` and derived-root freshness
-- **Where**: `core/src/common/namespace.rs` (`create_with`, `load_registry`, `save_lifecycle`, `cleanup_failed_root`)
-- **What**: A missing/reset registry loads `next_id = 1` without validation. A derived root from an earlier namespace may still hold data; `create_with` neither checks that root nor refuses an existing lifecycle sidecar. Depending on shard count it adopts the old data or `remove_dir_all`s it during rollback.
-- **Why**: Explicit roots get the adoptable check; derived roots do not. Registry IDs/invariants are not validated.
-- **Suggested fix**: Validate `next_id > 0`, unique non-zero entry IDs, `next_id > max(entry id)`, and shard bounds on load. Before reserving an ID, require an absent/empty derived root and no existing lifecycle sidecar; refuse rather than overwrite. Regression test deleting the registry while a root survives.
-
 ### [MEDIUM] engine: allocator init trusts a ceiling file that a legacy key has surpassed
 - **Where**: `core/src/common/engine/mmdb.rs` (`ensure_alloc_init`, `migrate_ceiling`, `alloc_prefix_candidate`)
 - **What**: If a non-default namespace allocates first, `ensure_alloc_init` trusts an existing ceiling file without forcing the default-engine legacy take-max fold. A pre-tripwire v15 binary can have advanced the legacy shard-0 ceiling past the file; the live thread window then issues prefixes already owned by legacy collections. Ceiling writes also overwrite from a stale read instead of taking the on-disk max.

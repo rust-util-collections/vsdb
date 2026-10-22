@@ -37,7 +37,7 @@ use ruc::pnk;
 use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt, fs, io,
     path::{Component, Path, PathBuf},
     str::FromStr,
@@ -334,10 +334,54 @@ fn remove_lifecycle(base: &Path, id: NsId) -> Result<()> {
 
 fn load_registry() -> Result<RegistryFile> {
     match fs::read(registry_path()) {
-        Ok(bytes) => Ok(postcard::from_bytes(&bytes)?),
+        Ok(bytes) => {
+            let reg: RegistryFile = postcard::from_bytes(&bytes)?;
+            validate_registry(&reg)?;
+            Ok(reg)
+        }
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(RegistryFile::default()),
         Err(e) => Err(e.into()),
     }
+}
+
+/// Rejects a registry whose allocator or entry set cannot describe a
+/// valid universe. A lost/reset registry must not silently reuse ids or
+/// adopt roots from an earlier namespace.
+fn validate_registry(reg: &RegistryFile) -> Result<()> {
+    if reg.next_id == DEFAULT_NS_ID {
+        return Err(ns_err(
+            "registry next_id is zero; the default id is reserved",
+        ));
+    }
+    let mut seen = HashSet::with_capacity(reg.entries.len());
+    let mut max_id = DEFAULT_NS_ID;
+    for rec in &reg.entries {
+        if rec.id == DEFAULT_NS_ID {
+            return Err(ns_err(
+                "registry contains the reserved default namespace id 0",
+            ));
+        }
+        if !seen.insert(rec.id) {
+            return Err(ns_err(format!(
+                "registry contains duplicate namespace id {}",
+                rec.id
+            )));
+        }
+        if !(1u32..=64).contains(&rec.shards) {
+            return Err(ns_err(format!(
+                "registry entry {} has invalid shard count {}",
+                rec.id, rec.shards
+            )));
+        }
+        max_id = max_id.max(rec.id);
+    }
+    if reg.next_id <= max_id {
+        return Err(ns_err(format!(
+            "registry next_id {} does not exceed the largest entry id {}",
+            reg.next_id, max_id
+        )));
+    }
+    Ok(())
 }
 
 /// Persists the registry durably (tmp + fsync + rename + parent-dir
@@ -637,6 +681,21 @@ impl Namespace {
                 .unwrap_or(0),
         };
         let root = resolve_root(&base, &rec);
+
+        // A derived root is supposed to be fresh, but a lost/reset
+        // registry can leave an earlier namespace's root or lifecycle
+        // sidecar at this id. Refuse to overwrite or adopt either one:
+        // the cleanup path would otherwise delete data that this create
+        // did not own, and a matching shard count would alias it.
+        if opts.path.is_none() {
+            if load_lifecycle(&base, id)?.is_some() {
+                return Err(ns_err(format!(
+                    "namespace {id} already has lifecycle state; refusing \
+                     to reuse its derived root"
+                )));
+            }
+            root_preexisted = ensure_root_adoptable(&root)?;
+        }
 
         // Reserve the id and a pending lifecycle record durably BEFORE
         // opening the engine. Only this state may initialize an absent
@@ -1213,5 +1272,41 @@ mod tests {
         ));
 
         fs::remove_dir_all(&scratch).unwrap();
+    }
+
+    fn record(id: NsId, shards: u32) -> NsRecord {
+        NsRecord {
+            id,
+            path: None,
+            shards,
+            mem_budget_mb: None,
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn validate_registry_rejects_bad_allocators_and_entries() {
+        let mut reg = RegistryFile::default();
+        assert!(validate_registry(&reg).is_ok());
+
+        reg.next_id = 0;
+        assert!(validate_registry(&reg).is_err());
+
+        reg = RegistryFile::default();
+        reg.entries.push(record(1, 4));
+        assert!(validate_registry(&reg).is_err());
+        reg.next_id = 2;
+        assert!(validate_registry(&reg).is_ok());
+
+        reg.entries.push(record(1, 4));
+        assert!(validate_registry(&reg).is_err());
+        reg.entries.pop();
+
+        reg.entries[0] = record(0, 4);
+        assert!(validate_registry(&reg).is_err());
+        reg.entries[0] = record(1, 0);
+        assert!(validate_registry(&reg).is_err());
+        reg.entries[0] = record(1, 65);
+        assert!(validate_registry(&reg).is_err());
     }
 }
