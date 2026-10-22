@@ -11,12 +11,6 @@
 
 ## Open
 
-### [HIGH] versioned: restored maps do not advance commit/branch ID allocators past existing records
-- **Where**: `strata/src/versioned/repair.rs` (`repair_commit_ref_counts_if_needed`, `validate_commit_graph`); `strata/src/versioned/map.rs` (`commit`, `create_branch`)
-- **What**: A legacy (≤16.3.8) crash can persist a commit/branch row while losing its allocator increment. Restore validates only reachable records and never advances `next_commit`/`next_branch` to `max(existing id)+1`. The next `commit()`/`create_branch()` reuses an existing ID, overwrites reachable history, and can create a self-parented commit that makes `log()`/`commit_distance()` loop.
-- **Why**: The graph validator does not enforce `parent < id`; allocator rows are trusted as written. This differs from `PersistentBTree`'s NodeId restore repair.
-- **Suggested fix**: On writable restore, advance both allocators to at least the maximum existing ID + 1 and fence the rows; reject `parent >= id` (and commit-id/key mismatch) in `validate_commit_graph`. Regression tests with stale allocators restored via serde, plus self-parent rejection.
-
 ### [HIGH] namespace: base-overlap validation bypassed by relative or `..`-containing base
 - **Where**: `core/src/common/namespace.rs` (`normalize_physical`, `validate_explicit_root`); base selected in `core/src/common/mod.rs` (`vsdb_configure`, `gen_data_dir`)
 - **What**: A relative or not-yet-existing base is compared in its raw spelling against an absolute candidate, so overlap checks miss the same directory (or a parent). A namespace can then be created inside the default base; later default opens see a mismatched shard layout, and namespace destroy can remove the universe base.

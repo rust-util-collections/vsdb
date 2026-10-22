@@ -55,6 +55,13 @@ impl<K, V> VerMap<K, V> {
         if self.namespace().is_read_only() {
             return Ok(());
         }
+        // A legacy crash can persist a commit/branch row while losing the
+        // allocator increment that precedes it. Reusing an existing id would
+        // overwrite reachable history (and can create a self-parented
+        // commit), so advance both allocators past every stored id before
+        // any new id can be issued. Mirrors the NodeId repair in
+        // `PersistentBTree::deserialize`.
+        self.repair_id_allocators();
         self.rebuild_branch_name_index();
         if self.gc_dirty.get_value()
             || self.commits.iter().any(|(_, c)| c.ref_count == 0)
@@ -62,6 +69,46 @@ impl<K, V> VerMap<K, V> {
             self.rebuild_ref_counts()?;
         }
         Ok(())
+    }
+
+    /// Advances the commit/branch id allocators past every stored row.
+    ///
+    /// Writable restores only: read-only callers return before this point.
+    /// The allocator rows are advanced before the repair can return, so a
+    /// subsequent `commit`/`create_branch` cannot reuse an existing id.
+    fn repair_id_allocators(&mut self) {
+        let max_commit = self
+            .commits
+            .iter()
+            .map(|(id, _)| id)
+            .max()
+            .unwrap_or(NO_COMMIT.0);
+        let max_branch = self
+            .branches
+            .iter()
+            .map(|(id, _)| id)
+            .max()
+            .unwrap_or(NO_COMMIT.0);
+
+        let current_commit = self.next_commit.get_value();
+        let current_branch = self.next_branch.get_value();
+        let next_commit = current_commit.max(max_commit.saturating_add(1));
+        let next_branch = current_branch.max(max_branch.saturating_add(1));
+        let commit_changed = next_commit != current_commit;
+        let branch_changed = next_branch != current_branch;
+
+        if commit_changed {
+            *self.next_commit.get_mut() = next_commit;
+        }
+        if branch_changed {
+            *self.next_branch.get_mut() = next_branch;
+        }
+        if commit_changed || branch_changed {
+            self.fence(|m| {
+                m.next_commit.sync_wal();
+                m.next_branch.sync_wal();
+            });
+        }
     }
 
     /// Counts every branch HEAD and reachable parent edge without writing.
@@ -86,11 +133,30 @@ impl<K, V> VerMap<K, V> {
                 .commits
                 .get(&id.0)
                 .ok_or(VsdbError::CommitNotFound { commit_id: id.0 })?;
+            if c.id != id {
+                return Err(VsdbError::Corrupt {
+                    detail: format!("commit row {} carries id {}", id.0, c.id.0),
+                });
+            }
             for &parent in &c.parents {
-                if parent != NO_COMMIT {
-                    *ref_counts.entry(parent).or_insert(0) += 1;
-                    queue.push(parent);
+                if parent == NO_COMMIT {
+                    return Err(VsdbError::Corrupt {
+                        detail: format!(
+                            "commit {} lists the sentinel as a parent",
+                            id.0
+                        ),
+                    });
                 }
+                if parent.0 >= id.0 {
+                    return Err(VsdbError::Corrupt {
+                        detail: format!(
+                            "commit {} lists non-older parent {}",
+                            id.0, parent.0
+                        ),
+                    });
+                }
+                *ref_counts.entry(parent).or_insert(0) += 1;
+                queue.push(parent);
             }
         }
         Ok(ref_counts)

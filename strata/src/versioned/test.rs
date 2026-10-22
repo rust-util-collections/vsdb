@@ -4662,3 +4662,69 @@ fn snapshot_lease_drop_can_race_recount_and_settle() {
         assert_eq!(alias.tree.deferred_reclaims(), 0);
     }
 }
+
+#[test]
+fn restore_advances_stale_commit_allocator() {
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+    m.insert(main, &1, &10).unwrap();
+    let c1 = m.commit(main).unwrap();
+
+    // Simulate a legacy crash that persisted the commit row but lost the
+    // allocator increment that preceded it.
+    *m.next_commit.get_mut() = c1.raw();
+
+    let bytes = postcard::to_allocvec(&m).unwrap();
+    let mut restored: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
+
+    let old = restored.get_commit(c1).unwrap();
+    let c2 = restored.commit(main).unwrap();
+    assert!(c2 > c1, "restored allocator reused {c1:?}");
+    let old_after = restored.get_commit(c1).unwrap();
+    assert_eq!(old_after.root, old.root);
+    assert_eq!(old_after.parents, old.parents);
+    assert_eq!(
+        restored
+            .log(main)
+            .unwrap()
+            .iter()
+            .map(|commit| commit.id)
+            .collect::<Vec<_>>(),
+        vec![c2, c1]
+    );
+}
+
+#[test]
+fn restore_advances_stale_branch_allocator() {
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+    let feat = m.create_branch("feature", main).unwrap();
+
+    *m.next_branch.get_mut() = feat.raw();
+
+    let bytes = postcard::to_allocvec(&m).unwrap();
+    let mut restored: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
+
+    let next = restored.create_branch("next", main).unwrap();
+    assert!(next > feat, "restored allocator reused {feat:?}");
+    assert_eq!(restored.get_branch(feat).unwrap().name, "feature");
+    assert_eq!(restored.branch_id("feature"), Some(feat));
+    assert_eq!(restored.branch_id("next"), Some(next));
+}
+
+#[test]
+fn validate_commit_graph_rejects_a_self_parent() {
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+    m.insert(main, &1, &10).unwrap();
+    let commit = m.commit(main).unwrap();
+
+    let mut row = m.get_commit(commit).unwrap();
+    row.parents = vec![commit];
+    m.commits.insert(&commit.0, &row);
+
+    assert!(matches!(
+        m.validate_commit_graph(),
+        Err(VsdbError::Corrupt { .. })
+    ));
+}
