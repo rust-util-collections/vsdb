@@ -100,8 +100,9 @@ Additional docs in `docs/`:
 ## Conventions
 
 - **Rust toolchains** — use the official latest stable Rust for edits,
-  dependency updates, CI and releases. No MSRV floor is declared or validated;
-  do not add `rust-version` fields or older-compiler compatibility shims.
+  dependency updates, CI and releases. Update/select stable before validation.
+  Define no compatible Rust version range or minimum compiler; do not add
+  `rust-version`, numeric toolchain pins or older-compiler compatibility shims.
   [compatibility-policy.md](docs/ai/compatibility-policy.md) §Rust toolchain is the rule's source of truth.
 - All clippy warnings are errors (`#![deny(warnings)]` in lib.rs)
 - **No `#[allow(...)]`** — fix warnings at the source, never suppress them

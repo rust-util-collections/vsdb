@@ -15,10 +15,14 @@ layouts, enum discriminants, and metadata envelopes are wire:
 
 ## Rust toolchain
 
-Only the official latest stable Rust toolchain is supported. The manifests
-declare no `rust-version` floor, and CI maintains no minimum-version job. Use
-current stable for Rust edits, dependency updates, formatting, Clippy, tests
-and releases; do not add compatibility shims for older compilers.
+Use the official latest stable Rust for edits, dependency updates, formatting,
+Clippy, tests, CI and releases. Run `rustup update stable` before Rust validation
+and select it with `RUSTUP_TOOLCHAIN=stable` or `cargo +stable`; an installed
+channel named `stable` may need updating.
+
+The repository defines no compatible compiler range or minimum Rust version.
+Do not add `rust-version`, numeric toolchain pins, minimum-version CI jobs or
+compatibility shims for older compilers.
 
 Historical CHANGELOG and evaluation baselines retain the toolchain notes
 recorded at the time. This toolchain policy does not authorize public API or

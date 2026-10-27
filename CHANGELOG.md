@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+Compiler requirements below are historical release notes. Current development
+uses the official latest stable Rust, without a declared compatible version
+range or minimum compiler; see [the toolchain policy](docs/ai/compatibility-policy.md#rust-toolchain).
+
 ## [v17.0.15]
 
 Public APIs and on-disk formats remain compatible; no data migration is

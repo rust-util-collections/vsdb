@@ -4,7 +4,7 @@ SSOT safety for `$x-review`, `$x-commit`, `$x-fix`, `$x-overhaul`. Skills must
 not weaken it. See also `pragmatic-engineering.md`.
 
 **Hard rules:** user-invoked only · local commits only (never push) · no history
-rewrite · one independent issue per commit · no auto tag · no autonomous major.
+rewrite · one independent issue per commit · no auto tag or PR · no autonomous major.
 
 ## Skill discovery and invocation
 

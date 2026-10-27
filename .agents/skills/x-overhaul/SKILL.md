@@ -1,96 +1,54 @@
 ---
 name: x-overhaul
-description: Review and fix VSDB collection correctness, storage durability, and compatibility within a local repository scope, then create atomic local commits. Empty scope = latest commit. Use only when the user explicitly invokes $x-overhaul.
+description: Review scoped changes in VSDB, fix confirmed in-scope defects, and create atomic local commits. Invoke explicitly as $x-overhaul; empty scope is the latest commit and all selects the full repository.
 ---
 
-# VSDB Review, Fix, and Commit
+# Review, fix and commit VSDB
 
-Resolve repository paths from the Git root; Markdown links are relative to
-this file. Read invocation arguments from the user prompt.
+Read [the workflow policy](../../../docs/ai/workflow-policy.md) and
+[the review guide](../../../docs/ai/review-core.md). Resolve repository paths from the Git
+root; links above are relative to this file. Read invocation arguments from
+ordinary user prompt text.
 
-Review scope → dispose every confirmed finding → fix actionable → local commits.
-Unlike `$x-review`, always fixes and commits (no `--fix`). Never push. No tag.
-No autonomous major. User-invoked only. New commits only.
+Accept one scope (`N`, `all`, `staged`, `worktree`, commit or `A..B`). Empty
+means the latest commit; only `all` means the full repository. Reject `--fix`,
+multiple scopes and unknown options. This explicit invocation authorizes
+atomic local fix commits. `staged`/`worktree` also authorizes committing the
+intended scoped changes after review.
 
-Apply [pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md) §Maintenance scope: inspect the
-existing Rust implementation and its documented storage contracts, using focused
-regression tests as evidence. `all` means every tracked subsystem is covered.
+1. Record one baseline, starting HEAD, frozen scope and ownership ledger for
+   the whole invocation. Apply the shared scope-resolution rules. For `all`,
+   inventory tracked files and record reviewed paths/invariants and coverage
+   gaps across source/tests, build/CI, tools, docs and agent instructions.
+2. Review with the repository's evidence standard and subsystem guides. Read
+   full implementations, callers, guards and tests; refute each candidate.
+   Historical scopes fix only still-present defects rooted in that diff;
+   callers provide evidence, not unrelated fix scope. Reconcile confirmed
+   findings with the audit without clearing unrelated entries.
+3. For `staged`/`worktree`, review, fix and commit the owned changes under the
+   [x-commit protocol](../x-commit/SKILL.md), using the frozen outer scope.
+   Preserve staged/unstaged boundaries and unrelated baseline. Otherwise leave
+   baseline changes uncommitted. Do not commit a known-defective unit.
+4. Recheck and resolve new findings and still-applicable in-scope Open entries
+   under the [x-fix protocol](../x-fix/SKILL.md). Work sequentially, one root
+   cause per commit with its regression, docs and audit removal. Keep blocked
+   or unverified findings Open; do not relabel them just to clear the list.
+   Continue independent safe units. Registry-only dispositions form a separate
+   documentation commit after fixes when needed.
+5. Re-review the aggregate diff and interactions. Run the final applicable
+   repository gates once on the stable code state; `all` runs the full audit
+   gate even if no fix was needed. Reuse unchanged-state results. Apply the
+   repository's documented version protocol once, only after required checks
+   pass with no in-scope Open findings or coverage gaps. Do not accept a public
+   API or persisted-format break or choose a major bump on the user's behalf.
+6. Report scope, coverage/gaps, dispositions, validation, compatibility, local
+   hashes/subjects, version outcome and preserved baseline. Keep validated
+   commits if later work is blocked. No changes and no owed version step means
+   no empty commit.
 
-## Input
-
-Arguments from the user prompt — same scopes and rev resolution as `$x-review`, without `--fix`.
-Reject `--fix` and any other unknown arg; never guess.
-
-| Input | Scope |
-|-------|-------|
-| *(empty)* | Latest commit |
-| `all` | Full repo |
-| `N` / hash / range | Committed diff |
-| `staged` / `worktree` | Uncommitted diff — owned, see below |
-
-Non-full: fix only still-present findings rooted in that diff. Related callers,
-tests, and contracts are evidence scope, not permission for unrelated fixes.
-
-`staged` / `worktree`: the scoped changes are this invocation’s work to commit.
-Apply `$x-commit` §1 (freeze, unit split, same-hunk overlap → stop); for `staged`,
-a path that also has unstaged hunks is overlap → stop. Defects in them are fixed
-inside their own units before commit, not inventoried; only findings left unfixed
-reach the registry.
-
-## Setup
-
-Preflight ([workflow-policy.md](../../../docs/ai/workflow-policy.md)); read
-[pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md), [x-review](../x-review/SKILL.md) (and
-its Setup docs), [x-fix](../x-fix/SKILL.md), [commit-protocol.md](../../../docs/ai/commit-protocol.md),
-and [compatibility-policy.md](../../../docs/ai/compatibility-policy.md); for `staged` / `worktree` also
-[x-commit](../x-commit/SKILL.md). Ledger before mutations; note whether a patch
-bump is owed.
-
-This skill owns one invocation: one starting HEAD, scope, ownership ledger,
-final gate, and version decision. Reuse the review and fix protocols below;
-do not launch nested standalone workflows or repeat their finalization. The
-composed skills’ read-only / no-commit rules, x-review Phases 6–7, and x-fix
-step 4 do not apply — the phases here replace them.
-
-## Phase 1 — Review
-
-Apply the `x-review` evidence and registry protocol without code fixes:
-
-1. Coverage: full ledger (`all`) or diff+callers.
-2. Read-only agents with disjoint file ownership when useful; otherwise review directly.
-   Give each reviewer the concrete subsystem, contracts, files, and expected output.
-   `all` → each Rust file once in depth. Record reviewed paths/invariants and any
-   coverage gaps; searches and passing tests alone do not establish depth.
-3. Cross-subsystem / design / completeness only for depth gaps.
-4. Verify + dedupe (incl. public/on-disk compatibility).
-5. Update `docs/audit.md` per [review-core.md](../../../docs/ai/review-core.md) §5 (`staged` /
-   `worktree`: skip findings inside the owned units — Phase 2 fixes them in-unit).
-6. If registry changed → docs-only inventory commit before fixes (may list many findings).
-
-## Phase 2 — Resolve
-
-`staged` / `worktree`: first commit the owned units per `$x-commit` §2–3.
-Then apply `x-fix` triage, atomic fix/commit, and self-review to Phase-1 findings and
-still-applicable **in-scope** Open entries. Resolve in severity order; mutations
-sequential. Re-review each fix plus affected callers, failure paths, tests, and
-public/persisted contracts; use the invocation diff to catch interactions.
-
-Won't Fix requires a real defect and a reason the safe fix is disproportionate;
-disproven entries require refutation and are removed. Blocked or unverified
-fixes remain Open with the blocker recorded. Continue independent safe units; report remaining Open and
-coverage gaps honestly. Out-of-scope Open is not fixed or re-disposed.
-
-## Phase 3 — Gate and version
-
-Run the final gate from [commit-protocol.md](../../../docs/ai/commit-protocol.md) once per stable code
-state; an `all` audit runs it even when no Rust fix was needed. Reuse checks
-already passed on the same state. Regressions → new atomic fixes + affected checks again.
-
-Only after required validation passes and no in-scope Open or coverage gap
-remains: the owed bump from [commit-protocol.md](../../../docs/ai/commit-protocol.md). No tag. No autonomous major.
-Incomplete run → preserve validated local commits and report blockers; the owed
-bump stays for the next run. Nothing owed and nothing changed → no empty commit.
-
-## Output
-
-Scope, coverage, dispositions, validations, compatibility/migration, hashes/subjects, version, baseline left alone.
+This composes review/fix/commit procedures under one invocation and ledger;
+do not launch nested standalone workflows or repeat their finalization.
+Standalone read-only/no-commit rules do not suppress this invocation's fixes
+or commits. Language-specific validation and version rules stay in the linked
+repository policy. Never automatically create a branch, tag, push, open a PR,
+publish, deploy or rewrite history.
