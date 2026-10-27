@@ -5,11 +5,11 @@
 //!
 //! | Git         | vsdb                                |
 //! |-------------|-------------------------------------|
-//! | tree object | [`NodeId`](crate::basic::persistent_btree::NodeId) (root of a B+ tree) |
+//! | tree object | `NodeId` (root of a B+ tree)      |
 //! | commit      | [`Commit`]                          |
 //! | ref/branch  | [`BranchId`] → mutable pointer      |
 //! | working dir | uncommitted writes on a branch      |
-//! | `git gc`    | [`VerMap::gc`]                |
+//! | `git gc`    | `VerMap::gc`                |
 //!
 //! A *version* is a complete, self-contained snapshot (a B+ tree root).
 //! Branches are lightweight pointers. Structural sharing keeps storage
@@ -35,10 +35,10 @@
 //!
 //! # Merkle proofs
 //!
-//! [`VerMapWithProof`](crate::trie::VerMapWithProof) wraps a `VerMap<K, V>`
-//! with an [`MptCalc`](crate::trie::MptCalc) (or
-//! [`SmtCalc`](crate::trie::SmtCalc)) to provide a 32-byte Merkle root
-//! commitment over the versioned state.  See the [`trie`](crate::trie)
+//! `VerMapWithProof` wraps a `VerMap<K, V>`
+//! with an `MptCalc` (or
+//! `SmtCalc`) to provide a 32-byte Merkle root
+//! commitment over the versioned state.  See the `trie`
 //! module for details.
 //!
 

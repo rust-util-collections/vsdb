@@ -2,8 +2,8 @@
 //!
 //! [`VecDex`] is a persistent, disk-backed vector index that wraps VSDB's
 //! core storage primitives.  It supports insert, delete, and k-nearest-neighbor
-//! search with configurable distance metrics ([`L2`], [`Cosine`],
-//! [`InnerProduct`]).
+//! search with configurable distance metrics (`L2`, `Cosine`,
+//! `InnerProduct`).
 //!
 //! For detailed documentation see [VecDex docs](../../docs/vecdex.md).
 //!

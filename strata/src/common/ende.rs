@@ -14,13 +14,13 @@
 //! * **Encoding a valid Rust value should never fail.**  The blanket
 //!   implementations delegate to `postcard::to_allocvec`, which can only
 //!   fail if the `Serialize` impl itself is buggy.  Accordingly,
-//!   [`KeyEnDe::encode`](crate::common::ende::KeyEnDe::encode) /
-//!   [`ValueEnDe::encode`](crate::common::ende::ValueEnDe::encode)
+//!   `KeyEnDe::encode` /
+//!   `ValueEnDe::encode`
 //!   **panic** on error —
 //!   a failure here is a programming bug, not a recoverable runtime
 //!   condition.  Use
-//!   [`KeyEnDe::try_encode`](crate::common::ende::KeyEnDe::try_encode) /
-//!   [`ValueEnDe::try_encode`](crate::common::ende::ValueEnDe::try_encode)
+//!   `KeyEnDe::try_encode` /
+//!   `ValueEnDe::try_encode`
 //!   at trust boundaries (e.g. first-time validation of a third-party
 //!   type) where you want a `Result` instead.
 //!
@@ -34,8 +34,8 @@
 //!   [`from_meta`](crate::Mapx::from_meta) reading an on-disk file) use
 //!   `?` to propagate errors normally.
 //!
-//! All fallible methods return [`Result`](crate::common::error::Result)
-//! with the ecosystem-wide [`VsdbError`](crate::common::error::VsdbError),
+//! All fallible methods return [`Result`]
+//! with the ecosystem-wide `VsdbError`,
 //! so implementing these traits for custom types requires no third-party
 //! error dependency.
 //!

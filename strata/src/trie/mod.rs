@@ -7,7 +7,7 @@
 //!   Best for general key-value Merkle commitments.
 //! - **[`SmtCalc`]** — Sparse Merkle Tree (binary, 256-bit key-hash
 //!   paths). Supports compact membership and non-membership proofs.
-//! - **[`VerMapWithProof`]** — Wraps a [`VerMap`](crate::versioned::map::VerMap)
+//! - **[`VerMapWithProof`]** — Wraps a `VerMap`
 //!   with a [`TrieCalc`] back-end to provide versioned Merkle root computation
 //!   with incremental diff-based updates and disposable cache persistence.
 //!
