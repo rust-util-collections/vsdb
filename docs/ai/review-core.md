@@ -36,7 +36,7 @@ One primary row per Rust file. Unsafe, compatibility, public-doc checks are over
 | encoding/staged | `strata/.../common/**`, `core/.../error.rs` | `technical-patterns.md`, `compatibility-policy.md` |
 | public/build | both `lib.rs`/`basic/mod.rs`, root+crate `Cargo.toml` | `compatibility-policy.md`, `technical-patterns.md` |
 
-Guides under `.claude/docs/patterns/`. Tests/benches/CI/README/CHANGELOG/`.claude`
+Guides under `docs/ai/patterns/`. Tests/benches/CI/README/CHANGELOG/`.agents` and `docs/ai`
 → map to the behavior they cover.
 
 ## 2. Review depth (effort, not severity)

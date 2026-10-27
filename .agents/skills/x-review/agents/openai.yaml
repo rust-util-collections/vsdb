@@ -1,0 +1,5 @@
+interface:
+  display_name: "VSDB Review"
+  short_description: "Review VSDB correctness and compatibility"
+policy:
+  allow_implicit_invocation: false

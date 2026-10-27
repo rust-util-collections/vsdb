@@ -1,10 +1,23 @@
 # Workflow Safety and Atomic Commit Policy
 
-SSOT safety for `/x-review`, `/x-commit`, `/x-fix`, `/x-overhaul`. Skills must
+SSOT safety for `$x-review`, `$x-commit`, `$x-fix`, `$x-overhaul`. Skills must
 not weaken it. See also `pragmatic-engineering.md`.
 
 **Hard rules:** user-invoked only · local commits only (never push) · no history
 rewrite · one independent issue per commit · no auto tag · no autonomous major.
+
+## Skill discovery and invocation
+
+[AGENTS.md](../../AGENTS.md) is the shared repository entrypoint. Skills live
+under [`.agents/skills/`](../../.agents/skills/) and are explicitly invoked with
+`$x-review`, `$x-fix`, `$x-commit` or `$x-overhaul`. Each skill's
+`agents/openai.yaml` sets `allow_implicit_invocation: false`. Read arguments from
+the user's invocation text and execute preflight commands explicitly; skill
+files do not substitute arguments or execute embedded shell commands.
+Ordinary tasks do not implicitly invoke a commit or release workflow. These
+instructions describe workflow scope; they do not grant tool permissions or
+replace the runtime's approval controls. An explicit user request to push is
+separate authorization; none of these skills performs that step on its own.
 
 ## 1. Preflight
 
@@ -39,8 +52,9 @@ One issue / root cause / behavior change → one commit.
 - Bundle only its tests, public/migration docs, and audit update.
 - Multiple symptoms only if same root cause.
 - No drive-by cleanup, format churn, or refactors.
-- Stage exact paths/hunks (`git add -A` forbidden). Inspect `git diff --cached` before every commit.
-- New commits only — no amend, rebase, history rewrite, or force-push. No remote push.
+- Stage exact paths/hunks; no broad `git add -A`, `-u`, `.`, or `git commit -a`. Inspect `git diff --cached` before every commit.
+- New commits only — no amend, rebase, history rewrite, or force-push. No remote
+  push or automatic PR. Do not run destructive `make clean_all` as part of a skill.
 
 ## 4. Validation and failure
 

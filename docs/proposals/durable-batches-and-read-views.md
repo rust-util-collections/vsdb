@@ -310,6 +310,6 @@ validation evidence is recorded in
 [the ACC migration report](../evaluations/acc-migration-primitives.md); typed
 read-view wrappers remain design candidates.
 
-Related contracts: [compatibility policy](../../.claude/docs/compatibility-policy.md),
+Related contracts: [compatibility policy](../ai/compatibility-policy.md),
 [namespace close](ns-close.md), [core API](../../core/docs/api.md),
 [versioned storage](../../strata/docs/versioned.md).

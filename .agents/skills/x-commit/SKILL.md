@@ -1,33 +1,34 @@
 ---
 name: x-commit
-description: Review VSDB worktree changes against Rust correctness and storage contracts, fix confirmed regressions, validate, and create atomic local commits. Use only when the user explicitly invokes /x-commit.
-argument-hint: "[<pathspec>...]"
-disable-model-invocation: true
+description: Review VSDB worktree changes against Rust correctness and storage contracts, fix confirmed regressions, validate, and create atomic local commits. Use only when the user explicitly invokes $x-commit.
 ---
 
 # Self-Reviewing Commit for VSDB
+
+Resolve repository paths from the Git root; Markdown links are relative to
+this file. Read invocation arguments from the user prompt.
 
 Review owned worktree changes → fix confirmed defects → validate → local commits.
 Never push. No tag. No autonomous major. User-invoked only. New commits only
 (no amend/rebase/force-push).
 
-Apply `.claude/docs/pragmatic-engineering.md` §Maintenance scope. The requested
+Apply [pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md) §Maintenance scope. The requested
 work is the owned local diff plus the callers and tests needed to validate it.
 
 ## Input
 
-`$ARGUMENTS` — optional Git pathspecs. Given → only matching changes are
+Arguments from the user prompt — optional Git pathspecs. Given → only matching changes are
 candidates; everything else is baseline. Empty → all intended changes. Flags →
 reject; never guess. Pathspecs matching no change → nothing intended (§1.2).
 Pathspecs bound review units, not the owed release (`commit-protocol.md`).
 
 ## Setup
 
-Read `.claude/docs/workflow-policy.md`, `.claude/docs/commit-protocol.md`,
-`.claude/docs/pragmatic-engineering.md`, `.claude/docs/review-core.md`,
-`.claude/docs/technical-patterns.md`, `.claude/docs/false-positive-guide.md`;
-public/persisted → `.claude/docs/compatibility-policy.md`; design-shaped →
-`.claude/docs/design-patterns.md`. Preflight + ledger (incl. **frozen paths** and
+Read [workflow-policy.md](../../../docs/ai/workflow-policy.md), [commit-protocol.md](../../../docs/ai/commit-protocol.md),
+[pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md), [review-core.md](../../../docs/ai/review-core.md),
+[technical-patterns.md](../../../docs/ai/technical-patterns.md), [false-positive-guide.md](../../../docs/ai/false-positive-guide.md);
+public/persisted → [compatibility-policy.md](../../../docs/ai/compatibility-policy.md); design-shaped →
+[design-patterns.md](../../../docs/ai/design-patterns.md). Preflight + ledger (incl. **frozen paths** and
 whether a patch bump is owed).
 
 ## Protocol
@@ -63,12 +64,12 @@ Investigate parallel OK; edit/commit sequential.
 
 ### 3. Validate and commit
 
-`.claude/docs/commit-protocol.md` per unit: format, lint, targeted tests (no `/home` cleanup),
+[commit-protocol.md](../../../docs/ai/commit-protocol.md) per unit: format, lint, targeted tests (no `/home` cleanup),
 exact stage, inspect cached diff, one new commit. Never amend.
 
 ### 4. Final gate and version
 
-`.claude/docs/commit-protocol.md`: full workspace gate, then the owed bump.
+[commit-protocol.md](../../../docs/ai/commit-protocol.md): full workspace gate, then the owed bump.
 Post-commit regression → new focused commit, then the owed bump still applies.
 
 ## Output

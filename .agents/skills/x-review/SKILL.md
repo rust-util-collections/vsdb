@@ -1,29 +1,30 @@
 ---
 name: x-review
-description: Review VSDB Rust changes or the full repository for collection correctness, storage durability, and compatibility regressions. Use only when the user explicitly invokes /x-review.
-argument-hint: "[N | all | staged | worktree | <hash> | <hash1>..<hash2>] [--fix]"
-disable-model-invocation: true
+description: Review VSDB Rust changes or the full repository for collection correctness, storage durability, and compatibility regressions. Use only when the user explicitly invokes $x-review.
 ---
 
 # VSDB Correctness and Regression Review
 
+Resolve repository paths from the Git root; Markdown links are relative to
+this file. Read invocation arguments from the user prompt.
+
 Evidence-based review of the local Rust workspace and its documented contracts.
-Apply `.claude/docs/pragmatic-engineering.md` §Maintenance scope.
+Apply [pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md) §Maintenance scope.
 Code read-only unless `--fix`. `docs/audit.md` is the registry
 exception: updating it is not a code write. Merge it; do not revert unrelated edits.
 Never commit or push. User-invoked only.
 
 ## Setup
 
-Read: `.claude/docs/workflow-policy.md`, `.claude/docs/pragmatic-engineering.md`,
-`.claude/docs/technical-patterns.md`, `.claude/docs/review-core.md` (Subsystem Map),
-`.claude/docs/false-positive-guide.md`. Public/persisted change →
-`.claude/docs/compatibility-policy.md`. Design-shaped / multi-subsystem →
-`.claude/docs/design-patterns.md`.
+Read: [workflow-policy.md](../../../docs/ai/workflow-policy.md), [pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md),
+[technical-patterns.md](../../../docs/ai/technical-patterns.md), [review-core.md](../../../docs/ai/review-core.md) (Subsystem Map),
+[false-positive-guide.md](../../../docs/ai/false-positive-guide.md). Public/persisted change →
+[compatibility-policy.md](../../../docs/ai/compatibility-policy.md). Design-shaped / multi-subsystem →
+[design-patterns.md](../../../docs/ai/design-patterns.md).
 
 ## Input
 
-`$ARGUMENTS` — at most one scope + optional `--fix`:
+Arguments from the user prompt — at most one scope + optional `--fix`:
 
 | Input | Scope | Evidence |
 |-------|-------|----------|
@@ -33,8 +34,9 @@ Read: `.claude/docs/workflow-policy.md`, `.claude/docs/pragmatic-engineering.md`
 | `worktree` | Staged + unstaged + untracked | `git diff HEAD` + `git ls-files --others --exclude-standard` |
 | `all` | Full repo | tracked-file ledger (`git ls-files`) |
 | `<hash>` | One commit | `git show <hash>`; merge → `git diff <hash>^1 <hash>` |
-| `<a>..<b>` | Range | `git log <a>..<b>` + `git diff <a>...<b>` |
+| `<a>..<b>` | Range | `git log <a>..<b>` + `git diff <a> <b>` |
 
+Ranges use the two endpoints consistently; do not substitute a merge-base diff.
 Resolve every rev (incl. `HEAD~N`) with `git rev-parse --verify --quiet '<rev>^{commit}'`.
 An all-digit token is `N`; if it also resolves as a commit, ask. Reject anything
 else; never guess. `--fix`: apply confirmed fixes after the report. Historical
@@ -44,9 +46,9 @@ scope: report only defects still present at HEAD.
 
 ### Phase 1 — Scope
 
-1. Worktree baseline (`.claude/docs/workflow-policy.md`).
+1. Worktree baseline ([workflow-policy.md](../../../docs/ai/workflow-policy.md)).
 2. Changed files + full diff + callers/tests. `worktree` includes untracked.
-   `all` → ledger: both crates’ source/tests/benches, manifests/CI, public docs, `.claude/`.
+   `all` → ledger: both crates’ source/tests/benches, manifests/CI, public docs, `.agents/` and `docs/ai/`.
 3. Map via Subsystem Map; load guides.
 4. Mark generated/vendored/out-of-scope in the ledger — do not silent-drop.
 
@@ -94,6 +96,6 @@ Zero → say so + what was covered.
 ### Phase 7 — `--fix` only
 
 Sequential fixes; preserve baseline; stop on inseparable ownership overlap. Regression test +
-per-unit checks from `.claude/docs/commit-protocol.md` steps 2–4 per fix (no
+per-unit checks from [commit-protocol.md](../../../docs/ai/commit-protocol.md) steps 2–4 per fix (no
 staging); re-review; update audit. No version/commit/push — user runs
-`/x-commit` after inspect.
+`$x-commit` after inspect.

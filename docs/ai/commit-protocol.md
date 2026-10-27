@@ -1,7 +1,7 @@
 # Atomic Commit and Version Protocol
 
-Validate → commit → version for `/x-commit`, `/x-fix`, `/x-overhaul`.
-Use with `.claude/docs/workflow-policy.md` and `.claude/docs/compatibility-policy.md`.
+Validate → commit → version for `$x-commit`, `$x-fix`, `$x-overhaul`.
+Use with `docs/ai/workflow-policy.md` and `docs/ai/compatibility-policy.md`.
 
 ## Invocation ledger
 
@@ -90,7 +90,7 @@ A public/on-disk break is not accepted by the agent. Do not ship that unit unles
 the user explicitly accepted it in this conversation; otherwise leave it
 uncommitted and Open. If they already accepted it, bump `(X+1).0.0` instead of
 the patch, and put the migration in the behavior commits
-(`.claude/docs/compatibility-policy.md`).
+(`docs/ai/compatibility-policy.md`).
 
 Release commit `chore: bump version to X.Y.Z` updates exactly `core/Cargo.toml`,
 `strata/Cargo.toml`, the root `vsdb_core` dep, and `CHANGELOG.md` when

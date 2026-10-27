@@ -1,23 +1,24 @@
 ---
 name: x-overhaul
-description: Review and fix VSDB collection correctness, storage durability, and compatibility within a local repository scope, then create atomic local commits. Empty scope = latest commit. Use only when the user explicitly invokes /x-overhaul.
-argument-hint: "[N | all | staged | worktree | <hash> | <hash1>..<hash2>]"
-disable-model-invocation: true
+description: Review and fix VSDB collection correctness, storage durability, and compatibility within a local repository scope, then create atomic local commits. Empty scope = latest commit. Use only when the user explicitly invokes $x-overhaul.
 ---
 
 # VSDB Review, Fix, and Commit
 
+Resolve repository paths from the Git root; Markdown links are relative to
+this file. Read invocation arguments from the user prompt.
+
 Review scope → dispose every confirmed finding → fix actionable → local commits.
-Unlike `/x-review`, always fixes and commits (no `--fix`). Never push. No tag.
+Unlike `$x-review`, always fixes and commits (no `--fix`). Never push. No tag.
 No autonomous major. User-invoked only. New commits only.
 
-Apply `.claude/docs/pragmatic-engineering.md` §Maintenance scope: inspect the
+Apply [pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md) §Maintenance scope: inspect the
 existing Rust implementation and its documented storage contracts, using focused
 regression tests as evidence. `all` means every tracked subsystem is covered.
 
 ## Input
 
-`$ARGUMENTS` — same scopes and rev resolution as `/x-review`, without `--fix`.
+Arguments from the user prompt — same scopes and rev resolution as `$x-review`, without `--fix`.
 Reject `--fix` and any other unknown arg; never guess.
 
 | Input | Scope |
@@ -31,18 +32,18 @@ Non-full: fix only still-present findings rooted in that diff. Related callers,
 tests, and contracts are evidence scope, not permission for unrelated fixes.
 
 `staged` / `worktree`: the scoped changes are this invocation’s work to commit.
-Apply `/x-commit` §1 (freeze, unit split, same-hunk overlap → stop); for `staged`,
+Apply `$x-commit` §1 (freeze, unit split, same-hunk overlap → stop); for `staged`,
 a path that also has unstaged hunks is overlap → stop. Defects in them are fixed
 inside their own units before commit, not inventoried; only findings left unfixed
 reach the registry.
 
 ## Setup
 
-Preflight (`.claude/docs/workflow-policy.md`); read
-`.claude/docs/pragmatic-engineering.md`, `.claude/skills/x-review/SKILL.md` (and
-its Setup docs), `.claude/skills/x-fix/SKILL.md`, `.claude/docs/commit-protocol.md`,
-and `.claude/docs/compatibility-policy.md`; for `staged` / `worktree` also
-`.claude/skills/x-commit/SKILL.md`. Ledger before mutations; note whether a patch
+Preflight ([workflow-policy.md](../../../docs/ai/workflow-policy.md)); read
+[pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md), [x-review](../x-review/SKILL.md) (and
+its Setup docs), [x-fix](../x-fix/SKILL.md), [commit-protocol.md](../../../docs/ai/commit-protocol.md),
+and [compatibility-policy.md](../../../docs/ai/compatibility-policy.md); for `staged` / `worktree` also
+[x-commit](../x-commit/SKILL.md). Ledger before mutations; note whether a patch
 bump is owed.
 
 This skill owns one invocation: one starting HEAD, scope, ownership ledger,
@@ -62,13 +63,13 @@ Apply the `x-review` evidence and registry protocol without code fixes:
    coverage gaps; searches and passing tests alone do not establish depth.
 3. Cross-subsystem / design / completeness only for depth gaps.
 4. Verify + dedupe (incl. public/on-disk compatibility).
-5. Update `docs/audit.md` per `.claude/docs/review-core.md` §5 (`staged` /
+5. Update `docs/audit.md` per [review-core.md](../../../docs/ai/review-core.md) §5 (`staged` /
    `worktree`: skip findings inside the owned units — Phase 2 fixes them in-unit).
 6. If registry changed → docs-only inventory commit before fixes (may list many findings).
 
 ## Phase 2 — Resolve
 
-`staged` / `worktree`: first commit the owned units per `/x-commit` §2–3.
+`staged` / `worktree`: first commit the owned units per `$x-commit` §2–3.
 Then apply `x-fix` triage, atomic fix/commit, and self-review to Phase-1 findings and
 still-applicable **in-scope** Open entries. Resolve in severity order; mutations
 sequential. Re-review each fix plus affected callers, failure paths, tests, and
@@ -81,12 +82,12 @@ coverage gaps honestly. Out-of-scope Open is not fixed or re-disposed.
 
 ## Phase 3 — Gate and version
 
-Run the final gate from `.claude/docs/commit-protocol.md` once per stable code
+Run the final gate from [commit-protocol.md](../../../docs/ai/commit-protocol.md) once per stable code
 state; an `all` audit runs it even when no Rust fix was needed. Reuse checks
 already passed on the same state. Regressions → new atomic fixes + affected checks again.
 
 Only after required validation passes and no in-scope Open or coverage gap
-remains: the owed bump from `.claude/docs/commit-protocol.md`. No tag. No autonomous major.
+remains: the owed bump from [commit-protocol.md](../../../docs/ai/commit-protocol.md). No tag. No autonomous major.
 Incomplete run → preserve validated local commits and report blockers; the owed
 bump stays for the next run. Nothing owed and nothing changed → no empty commit.
 

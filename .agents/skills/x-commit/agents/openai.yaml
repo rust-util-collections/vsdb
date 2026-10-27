@@ -1,0 +1,5 @@
+interface:
+  display_name: "VSDB Commit"
+  short_description: "Review and commit intended VSDB changes"
+policy:
+  allow_implicit_invocation: false

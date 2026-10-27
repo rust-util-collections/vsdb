@@ -1,0 +1,5 @@
+interface:
+  display_name: "VSDB Overhaul"
+  short_description: "Review and resolve scoped VSDB findings"
+policy:
+  allow_implicit_invocation: false

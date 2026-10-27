@@ -1,0 +1,5 @@
+interface:
+  display_name: "VSDB Fix"
+  short_description: "Fix recorded VSDB findings in local commits"
+policy:
+  allow_implicit_invocation: false
