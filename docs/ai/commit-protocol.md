@@ -26,7 +26,20 @@ Keep the ledger across commits. Stage only freeze set + this-invocation fix/form
      inspect the diff. Do not use `make fmt`.
    - Rust: targeted package lint/check for the affected targets — no `#[allow(...)]`;
      the final gate runs the workspace Cargo lint below. Reuse results on unchanged code.
-3. Smallest proving tests (no global cleanup):
+3. Smallest proving tests (no global cleanup). Launch every `cargo test`
+   with a scratch base in the parent shell, then remove only that directory.
+   Library unit tests and doctests call `Mapx::new` / `MapxRaw::new` without
+   `vsdb_configure`. With `HOME` set and `VSDB_BASE_DIR` unset they open
+   `$HOME/.vsdb`, take its shard locks, and advance the real prefix allocator.
+   Unique prefixes separate collections inside whichever root is already open;
+   they do not choose that root.
+
+   ```bash
+   scratch=$(mktemp -d /tmp/vsdb-test.XXXXXX)
+   VSDB_BASE_DIR="$scratch" cargo test -p vsdb_core <filter>
+   rm -rf "$scratch"
+   ```
+
    - core → `cargo test -p vsdb_core <filter>`;
    - strata → `cargo test -p vsdb <filter>`;
    - cross-crate / public / persisted → package suites or
@@ -53,9 +66,13 @@ After last behavior commit (once per stable code state):
 2. `cargo clippy --workspace`
 3. `cargo check --workspace --tests`
 4. `cargo check --workspace --benches`
-5. `cargo test --workspace --tests`
-6. `cargo test --workspace --release --tests`
-7. `cargo test --workspace --doc`
+5. `VSDB_BASE_DIR="$scratch" cargo test --workspace --tests`
+6. `VSDB_BASE_DIR="$scratch" cargo test --workspace --release --tests`
+7. `VSDB_BASE_DIR="$scratch" cargo test --workspace --doc`
+
+`scratch` is `mktemp -d /tmp/vsdb-test.XXXXXX`, created in the parent shell
+before step 5 and removed after step 7. Steps 1–4 do not open a database.
+One scratch directory covers steps 5–7; do not point them at `$HOME/.vsdb`.
 
 Regression → new atomic commit, then re-run affected checks. Reuse completed
 checks on the same code/manifest state; do not repeat a gate just because another

@@ -66,14 +66,20 @@ One issue / root cause / behavior change → one commit.
   ```bash
   wt=$(mktemp -d /tmp/vsdb-wt.XXXXXX); git worktree add --detach "$wt" HEAD
   git diff HEAD -- <unit paths> | git -C "$wt" apply --index  # copy unit's untracked files too
-  (cd "$wt" && CARGO_TARGET_DIR="$OLDPWD/target" cargo test -p <pkg> <filter>)
+  scratch=$(mktemp -d /tmp/vsdb-test.XXXXXX)
+  (cd "$wt" && CARGO_TARGET_DIR="$OLDPWD/target" VSDB_BASE_DIR="$scratch" cargo test -p <pkg> <filter>)
+  rm -rf "$scratch"
   git worktree remove --force "$wt"
   ```
-- VSDB tests isolate via unique prefixes. The agent uses bare Cargo (`cargo test`,
+- Unique prefixes separate collections inside the open root. They do not keep
+  tests off `$HOME/.vsdb`. The agent uses bare Cargo (`cargo test`,
   `cargo clippy`, `cargo check`, `cargo fmt`), not make targets, unless the user
-  explicitly asks for one. `make test`, `make all`, and `make bench` use a
-  per-invocation scratch `VSDB_BASE_DIR` and remove only that directory; they do
-  not delete `$HOME/.vsdb`, `/tmp/vsdb_testing`, or caller-provided data.
+  explicitly asks for one. Every `cargo test` is launched with
+  `VSDB_BASE_DIR="$(mktemp -d /tmp/vsdb-test.XXXXXX)"` in the parent shell;
+  remove only that directory afterward. Do not set the variable inside a test.
+  `make test`, `make all`, and `make bench` use their own per-invocation scratch
+  `VSDB_BASE_DIR` and remove only that directory; they do not delete
+  `$HOME/.vsdb`, `/tmp/vsdb_testing`, or caller-provided data.
 - Storage-failure and restart regressions use focused test doubles or isolated
   child-process fixtures with invocation-owned temporary data. Describe the
   exact database operation and expected recovery result before adding a fixture.
