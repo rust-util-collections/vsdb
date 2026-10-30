@@ -6,6 +6,29 @@ Compiler requirements below are historical release notes. Current development
 uses the official latest stable Rust, without a declared compatible version
 range or minimum compiler; see [the toolchain policy](docs/ai/compatibility-policy.md#rust-toolchain).
 
+## [v17.0.16]
+
+Public APIs and on-disk formats remain compatible; no data migration is
+required. Only the official latest stable Rust toolchain is supported.
+
+### Fixed
+
+- A missing `__prefix_ceiling__` file on a v16+ universe no longer restarts
+  prefix allocation at the floor. The next open raises the ceiling above
+  prefixes still stored in open engines, saved handle metadata, and
+  registered namespace roots, so a new map cannot overwrite a live key.
+  A fresh universe, and a crash after the format marker but before any
+  prefix is issued, still starts at the allocation floor. If an existing
+  shard cannot be scanned, opening fails instead of guessing low.
+
+### Changed
+
+- Skill and workflow test commands launch `cargo test` with a scratch
+  `VSDB_BASE_DIR`, so unit tests and doctests do not open `$HOME/.vsdb`.
+- Intra-doc links that blocked docs.rs builds use plain type names.
+- Maintenance instructions live in `AGENTS.md` and `docs/ai`. The four
+  project skills stay explicitly invoked.
+
 ## [v17.0.15]
 
 Public APIs and on-disk formats remain compatible; no data migration is
