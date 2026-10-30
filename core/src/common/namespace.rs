@@ -344,6 +344,47 @@ fn load_registry() -> Result<RegistryFile> {
     }
 }
 
+/// Prefixes visible through namespace engines this process already has
+/// open, plus those engines' roots. The allocator scans these handles
+/// instead of opening the shards again while it is still starting.
+pub(crate) fn open_namespace_prefix_snapshot() -> Result<(Option<u64>, Vec<PathBuf>)> {
+    let open = OPEN_NAMESPACES.lock();
+    let mut max: Option<u64> = None;
+    let mut paths = Vec::with_capacity(open.len());
+    for ns in open.values() {
+        paths.push(ns.0.path.clone());
+        if let Some(prefix) =
+            ns.0.engine
+                .observe_issued_prefixes()
+                .map_err(|err| ns_err(err.to_string()))?
+        {
+            max = Some(max.map_or(prefix, |current| current.max(prefix)));
+        }
+    }
+    Ok((max, paths))
+}
+
+/// Registered namespace roots and their shard counts, without opening
+/// an engine. The prefix allocator uses this to see prefixes that live
+/// outside the default dataset when its ceiling file is missing.
+pub(crate) fn registered_namespace_roots(base: &Path) -> Result<Vec<(PathBuf, usize)>> {
+    let path = base.join(NS_REGISTRY_REL_PATH);
+    let reg = match fs::read(&path) {
+        Ok(bytes) => {
+            let reg: RegistryFile = postcard::from_bytes(&bytes)?;
+            validate_registry(&reg)?;
+            reg
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+    Ok(reg
+        .entries
+        .iter()
+        .map(|rec| (resolve_root(base, rec), rec.shards as usize))
+        .collect())
+}
+
 /// Rejects a registry whose allocator or entry set cannot describe a
 /// valid universe. A lost/reset registry must not silently reuse ids or
 /// adopt roots from an earlier namespace.

@@ -215,9 +215,9 @@ impl MmDB {
             .c(d!())?
             .map(|v| crate::common::parse_prefix!(v));
         if this.read_only {
-            initialize_read_only_allocator(&base_dir, legacy)?;
+            initialize_read_only_allocator(&base_dir, legacy, &this.dbs)?;
         } else {
-            migrate_ceiling(&base_dir, legacy)?;
+            migrate_ceiling(&base_dir, legacy, Some(&this.dbs))?;
         }
 
         Ok(this)
@@ -723,17 +723,17 @@ pub(crate) fn validate_completed_dataset(
     validate_shard_anchors(&mmdb_dir, shards)
 }
 
-/// Folds `legacy` (the pre-v16 shard-0 value, when present) and the
-/// allocation floor into the ceiling file — idempotent take-max, run
-/// under [`SYS_META_LOCK`].
+/// Folds `legacy` (the pre-v16 shard-0 value, when present), any prefix
+/// already stored in this universe, and the allocation floor into the
+/// ceiling file — idempotent take-max, run under [`SYS_META_LOCK`].
 ///
 /// Crash-safety around [`MmDB::new`]'s sequence — which is
 /// mark-then-fold: `open_at` writes the format marker before this fold
 /// runs. The order is safe because nothing gates on it: a crash after
 /// the marker but before the fold leaves a marked dataset with no
-/// ceiling file, and every allocation path funnels through
-/// `ensure_alloc_init`, which refuses to issue anything until a fold
-/// has produced the file (re-running it here on the next open, or
+/// ceiling file and no issued prefix, and every allocation path funnels
+/// through `ensure_alloc_init`, which refuses to issue anything until a
+/// fold has produced the file (re-running it here on the next open, or
 /// running it itself for a fresh universe). The legacy shard-0 key is
 /// preserved forever and the fold is idempotent take-max, so repeated
 /// folds never regress (that is also why the fold runs at EVERY open: a
@@ -741,16 +741,30 @@ pub(crate) fn validate_completed_dataset(
 /// re-absorbed instead of causing prefix reuse; post-marker, the v15
 /// tripwire refuses the dataset outright).
 ///
+/// A missing file is not proof that nothing was issued. v16+ universes
+/// do not write the legacy key, so deleting or omitting
+/// `__prefix_ceiling__` from a copy that still holds collection keys
+/// would otherwise rewrite the floor and hand those prefixes out again.
+/// When the file is absent the fold scans open default shards (when the
+/// caller already holds them), on-disk shard dirs, saved handle metas,
+/// and registered namespace roots, and raises the ceiling strictly above
+/// every prefix it finds. A scan that cannot open an existing shard
+/// fails the fold instead of guessing low.
+///
 /// Never races a ceiling bump: bumps require the allocator to be
 /// initialized (`GLOBAL_COUNTER != 0`), and every path that initializes
 /// it either runs this fold first ([`MmDB::new`] → first allocation) or
 /// holds `PREFIX_ALLOC_LOCK` around the fold (`ensure_alloc_init`).
-fn migrate_ceiling(base_dir: &Path, legacy: Option<Pre>) -> Result<()> {
+fn migrate_ceiling(
+    base_dir: &Path,
+    legacy: Option<Pre>,
+    open_default: Option<&[DB]>,
+) -> Result<()> {
     let _g = SYS_META_LOCK.lock();
     let file = base_dir.join(PREFIX_CEILING_REL_PATH);
     create_dir_all_durable(file.parent().expect("has parent")).c(d!())?;
     let filed = read_ceiling_file(&file)?;
-    let ceiling = effective_initial_ceiling(filed, legacy);
+    let ceiling = resolved_ceiling(base_dir, filed, legacy, open_default)?;
     if filed != Some(ceiling) {
         write_file_durable(&file, &ceiling.to_le_bytes())?;
     }
@@ -761,10 +775,14 @@ fn migrate_ceiling(base_dir: &Path, legacy: Option<Pre>) -> Result<()> {
 /// window or modifying the ceiling file. A read-only process never allocates,
 /// so every prefix below the durable ceiling is already outside its candidate
 /// space and can be restored without an in-process reservation.
-fn initialize_read_only_allocator(base_dir: &Path, legacy: Option<Pre>) -> Result<()> {
+fn initialize_read_only_allocator(
+    base_dir: &Path,
+    legacy: Option<Pre>,
+    open_default: &[DB],
+) -> Result<()> {
     let _x = PREFIX_ALLOC_LOCK.lock();
     let filed = read_ceiling_file(&base_dir.join(PREFIX_CEILING_REL_PATH))?;
-    let ceiling = effective_initial_ceiling(filed, legacy)
+    let ceiling = resolved_ceiling(base_dir, filed, legacy, Some(open_default))?
         .max(GLOBAL_CEILING.load(Ordering::Acquire));
     GLOBAL_FLOOR.store(ceiling, Ordering::Release);
     GLOBAL_CEILING.store(ceiling, Ordering::Release);
@@ -830,9 +848,13 @@ fn ensure_alloc_init() {
                 "vsdb: read-only allocator validation state was not initialized"
             );
         } else {
-            GLOBAL_FLOOR.store(PREFIX_ALLOC_START, Ordering::Release);
-            GLOBAL_CEILING.store(PREFIX_ALLOC_START, Ordering::Release);
-            GLOBAL_COUNTER.store(PREFIX_ALLOC_START, Ordering::Release);
+            // No default engine yet. Namespace datasets can still hold
+            // issued prefixes; do not pretend the universe is fresh.
+            let ceiling = resolved_ceiling(&base_dir, None, None, None)
+                .expect("vsdb: allocator ceiling recovery failed");
+            GLOBAL_FLOOR.store(ceiling, Ordering::Release);
+            GLOBAL_CEILING.store(ceiling, Ordering::Release);
+            GLOBAL_COUNTER.store(ceiling, Ordering::Release);
         }
         return;
     }
@@ -858,8 +880,9 @@ fn ensure_alloc_init() {
                 panic!("vsdb: default-engine migration must create the ceiling")
             }
             None => {
-                // Fresh universe: initialize the backing store.
-                migrate_ceiling(&base_dir, None)
+                // No default engine. Still fold namespace datasets so a
+                // missing ceiling cannot restart at the allocation floor.
+                migrate_ceiling(&base_dir, None, None)
                     .expect("vsdb: allocator ceiling init failed");
                 PREFIX_ALLOC_START
             }
@@ -1061,22 +1084,213 @@ pub(crate) fn reserve_recovered_prefix(meta_prefix: PreBytes) -> bool {
 // ---- Batch ----
 
 /// The initial allocator ceiling for this open: the max of the v16 file
-/// value, the pre-v16 legacy shard-0 value, and the allocation floor.
+/// value, the pre-v16 legacy shard-0 value, one past the highest prefix
+/// still stored in the universe, and the allocation floor.
 /// Pure take-max — folding in a stale source can only raise the ceiling
 /// (wasting at most one gap of ids), never lower it below anything
-/// already issued.
-fn effective_initial_ceiling(filed: Option<Pre>, legacy: Option<Pre>) -> Pre {
-    filed
+/// already issued. `observed_max` is `Some` only when the ceiling file
+/// is absent; it is the largest allocator prefix found in shard keys or
+/// saved handle metadata.
+fn effective_initial_ceiling(
+    filed: Option<Pre>,
+    legacy: Option<Pre>,
+    observed_max: Option<Pre>,
+) -> Result<Pre> {
+    let mut ceiling = filed
         .unwrap_or(0)
         .max(legacy.unwrap_or(0))
-        .max(PREFIX_ALLOC_START)
+        .max(PREFIX_ALLOC_START);
+    if let Some(max_issued) = observed_max {
+        let next = max_issued.checked_add(1).ok_or_else(|| {
+            eg!(
+                "allocator ceiling cannot advance past issued prefix {}",
+                Pre::MAX
+            )
+        })?;
+        ceiling = ceiling.max(next);
+    }
+    Ok(ceiling)
+}
+
+/// Ceiling to publish for this open. A present file is authoritative
+/// (together with the legacy key). A missing file is recovered from
+/// data still on disk so the next `alloc_prefix` starts strictly above
+/// every prefix that scan can see.
+fn resolved_ceiling(
+    base_dir: &Path,
+    filed: Option<Pre>,
+    legacy: Option<Pre>,
+    open_default: Option<&[DB]>,
+) -> Result<Pre> {
+    let observed = if filed.is_none() {
+        highest_issued_prefix(open_default, base_dir)?
+    } else {
+        None
+    };
+    effective_initial_ceiling(filed, legacy, observed)
+}
+
+fn note_issued_prefix(max: &mut Option<Pre>, prefix: Pre) {
+    if prefix >= PREFIX_ALLOC_START {
+        *max = Some(max.map_or(prefix, |current| current.max(prefix)));
+    }
+}
+
+fn note_db_prefixes(db: &DB, max: &mut Option<Pre>) -> Result<()> {
+    let mut iter = db.iter().c(d!("scan shard for issued prefixes"))?;
+    for (key, _) in iter.by_ref() {
+        if key.len() >= PREFIX_SIZE {
+            let prefix = Pre::from_le_bytes(key[..PREFIX_SIZE].try_into().unwrap());
+            note_issued_prefix(max, prefix);
+        }
+    }
+    if let Some(error) = iter.error() {
+        return Err(eg!(error));
+    }
+    Ok(())
+}
+
+fn note_meta_bytes(max: &mut Option<Pre>, bytes: &[u8]) {
+    let magic = super::MAPX_META_MAGIC;
+    let mut rest = bytes;
+    while let Some(pos) = rest.windows(magic.len()).position(|window| window == magic) {
+        let start = pos + magic.len();
+        if let Some(raw) = rest.get(start..start + PREFIX_SIZE) {
+            note_issued_prefix(max, Pre::from_le_bytes(raw.try_into().unwrap()));
+        }
+        rest = &rest[pos + 1..];
+    }
+}
+
+fn note_meta_dir(max: &mut Option<Pre>, dir: &Path) -> Result<()> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e).c(d!()),
+    };
+    for entry in entries {
+        let entry = entry.c(d!())?;
+        if !entry.file_type().c(d!())?.is_file() {
+            continue;
+        }
+        let bytes = fs::read(entry.path()).c(d!())?;
+        note_meta_bytes(max, &bytes);
+    }
+    Ok(())
+}
+
+fn note_shard_dir(max: &mut Option<Pre>, shard: &Path) -> Result<()> {
+    if !shard.is_dir() {
+        return Ok(());
+    }
+    // Read-only: recovery must not create a shard or take a write lock
+    // while the caller already holds the default engine.
+    let db = DB::open_read_only_with_options(
+        DbOptions {
+            prefix_len: PREFIX_SIZE,
+            ..DbOptions::default()
+        },
+        shard,
+    )
+    .c(d!(format!(
+        "open {} to recover the prefix ceiling",
+        shard.display()
+    )))?;
+    note_db_prefixes(&db, max)
+}
+
+fn note_engine_tree(max: &mut Option<Pre>, root: &Path) -> Result<()> {
+    note_meta_dir(max, &root.join("__SYSTEM__").join("__instance_meta__"))?;
+    let mmdb_dir = root.join("mmdb");
+    let entries = match fs::read_dir(&mmdb_dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e).c(d!()),
+    };
+    for entry in entries {
+        let entry = entry.c(d!())?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("shard_") {
+            note_shard_dir(max, &entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+impl MmDB {
+    /// Largest allocator prefix visible in this already-open engine.
+    pub(crate) fn observe_issued_prefixes(&self) -> Result<Option<Pre>> {
+        let mut max = None;
+        for db in &self.dbs {
+            note_db_prefixes(db, &mut max)?;
+        }
+        Ok(max)
+    }
+}
+
+fn same_dataset(open: &Path, registered: &Path) -> bool {
+    if open == registered {
+        return true;
+    }
+    match (open.canonicalize(), registered.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+/// Largest allocator prefix still visible in this universe, if any.
+///
+/// `open_default` is the default engine when the caller already has it
+/// open. Those shards, and any namespace engine already open in this
+/// process, are not opened again: a second open fails while the writer
+/// holds the shard lock, including the first allocation inside a
+/// namespace that was just created. Every other dataset is opened
+/// read-only. Saved `VSMAPX01` handle bytes count even when the map
+/// itself is empty, so a prefix that has no key rows is not reused.
+fn highest_issued_prefix(
+    open_default: Option<&[DB]>,
+    base_dir: &Path,
+) -> Result<Option<Pre>> {
+    let mut max = None;
+    if let Some(dbs) = open_default {
+        for db in dbs {
+            note_db_prefixes(db, &mut max)?;
+        }
+        note_meta_dir(
+            &mut max,
+            &base_dir.join("__SYSTEM__").join("__instance_meta__"),
+        )?;
+    } else {
+        note_engine_tree(&mut max, base_dir)?;
+    }
+    let (open_prefix, open_roots) =
+        crate::common::namespace::open_namespace_prefix_snapshot()
+            .map_err(|err| eg!(err.to_string()))?;
+    if let Some(prefix) = open_prefix {
+        note_issued_prefix(&mut max, prefix);
+    }
+    for root in &open_roots {
+        note_meta_dir(&mut max, &root.join("__SYSTEM__").join("__instance_meta__"))?;
+    }
+    let roots = crate::common::namespace::registered_namespace_roots(base_dir)
+        .map_err(|err| eg!(err.to_string()))?;
+    for (root, _) in roots {
+        if open_roots.iter().any(|open| same_dataset(open, &root)) {
+            continue;
+        }
+        note_engine_tree(&mut max, &root)?;
+    }
+    Ok(max)
 }
 
 /// Reads the ceiling file: 8-byte little-endian `u64`.
 ///
-/// `None` when absent (fresh or pre-v16 dataset). Any other read/format
-/// problem is an error — the ceiling guards prefix uniqueness, so a
-/// truncated or padded file must abort the open, never be guessed at.
+/// `None` when absent. Absence is not itself a fresh universe: callers
+/// recover issued prefixes from the datasets before publishing a new
+/// floor. Any other read/format problem is an error — the ceiling
+/// guards prefix uniqueness, so a truncated or padded file must abort
+/// the open, never be guessed at.
 fn read_ceiling_file(path: &Path) -> Result<Option<Pre>> {
     match fs::read(path) {
         Ok(bytes) if bytes.len() == PREFIX_SIZE => {
@@ -1772,13 +1986,16 @@ mod tests {
     #[test]
     fn ceiling_migration_take_max() {
         // Pure fold semantics.
-        assert_eq!(effective_initial_ceiling(None, None), PREFIX_ALLOC_START);
         assert_eq!(
-            effective_initial_ceiling(None, Some(PREFIX_ALLOC_START + 7)),
+            effective_initial_ceiling(None, None, None).unwrap(),
+            PREFIX_ALLOC_START
+        );
+        assert_eq!(
+            effective_initial_ceiling(None, Some(PREFIX_ALLOC_START + 7), None).unwrap(),
             PREFIX_ALLOC_START + 7
         );
         assert_eq!(
-            effective_initial_ceiling(Some(PREFIX_ALLOC_START + 9), None),
+            effective_initial_ceiling(Some(PREFIX_ALLOC_START + 9), None, None).unwrap(),
             PREFIX_ALLOC_START + 9
         );
         // A legacy value above the file value (pre-tripwire v15 binary
@@ -1786,17 +2003,28 @@ mod tests {
         assert_eq!(
             effective_initial_ceiling(
                 Some(PREFIX_ALLOC_START + 100),
-                Some(PREFIX_ALLOC_START + 200)
-            ),
+                Some(PREFIX_ALLOC_START + 200),
+                None
+            )
+            .unwrap(),
             PREFIX_ALLOC_START + 200
         );
         assert_eq!(
             effective_initial_ceiling(
                 Some(PREFIX_ALLOC_START + 200),
-                Some(PREFIX_ALLOC_START + 100)
-            ),
+                Some(PREFIX_ALLOC_START + 100),
+                None
+            )
+            .unwrap(),
             PREFIX_ALLOC_START + 200
         );
+        // A missing file recovers one past the highest prefix still stored.
+        assert_eq!(
+            effective_initial_ceiling(None, None, Some(PREFIX_ALLOC_START + 50))
+                .unwrap(),
+            PREFIX_ALLOC_START + 51
+        );
+        assert!(effective_initial_ceiling(None, None, Some(Pre::MAX)).is_err());
 
         // File round-trip: durable write, exact-size read, corruption
         // and absence both surface correctly.
