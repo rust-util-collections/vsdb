@@ -1272,6 +1272,46 @@ mod smt_tests {
     // =================================================================
 
     #[test]
+    fn smt_cache_bytes_match_v17_0_18_fixture() {
+        use crate::trie::smt::cache;
+        use sha3::{Digest, Sha3_256};
+        use std::io::Cursor;
+
+        let entries = [
+            (b"a".as_slice(), b"one".to_vec()),
+            (b"b".as_slice(), vec![42; 130]),
+            (b"c".as_slice(), b"three".to_vec()),
+        ];
+        let mut trie =
+            SmtCalc::from_entries(entries.iter().map(|(k, v)| (k, v))).unwrap();
+        let hash = trie.root_hash().unwrap();
+        let mut bytes = Vec::new();
+        cache::save(&trie.root, 7, &hash, &mut bytes).unwrap();
+        // Captured from 1978ca4 with the workspace's unchanged Cargo.lock,
+        // before replacing per-subtree buffers with one append buffer.
+        let expected = [
+            0x5b, 0x84, 0xdd, 0xe4, 0x36, 0xd1, 0xef, 0x65, 0x74, 0xfa, 0x2f, 0xd4,
+            0xa5, 0x00, 0xae, 0x0f, 0x67, 0x61, 0xea, 0x1b, 0xc0, 0x46, 0x4d, 0x92,
+            0xa1, 0x2d, 0xe9, 0xd1, 0x60, 0xaf, 0x1e, 0x33,
+        ];
+        let digest: [u8; 32] = Sha3_256::digest(&bytes).into();
+        assert_eq!(bytes.len(), 575);
+        assert_eq!(digest, expected);
+        let (root, tag, saved_hash) = cache::load(&mut Cursor::new(bytes)).unwrap();
+        let mut loaded = SmtCalc { root };
+        assert_eq!(tag, 7);
+        assert_eq!(saved_hash, hash);
+        for (key, value) in &entries {
+            assert_eq!(loaded.get(key).unwrap().as_ref(), Some(value));
+        }
+        loaded.remove(b"a").unwrap();
+        loaded.insert(b"b", b"changed").unwrap();
+        trie.remove(b"a").unwrap();
+        trie.insert(b"b", b"changed").unwrap();
+        assert_eq!(loaded.root_hash().unwrap(), trie.root_hash().unwrap());
+    }
+
+    #[test]
     fn test_smt_cache_roundtrip() {
         let cache_id = 1008;
         let _path = &vsdb_core::Namespace::default_ns()

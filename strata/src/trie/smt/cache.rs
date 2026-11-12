@@ -53,8 +53,7 @@ pub(crate) fn save(
     payload.extend_from_slice(&hash_len.to_le_bytes());
     payload.extend_from_slice(root_hash);
 
-    let tree_data = serialize_handle(root);
-    payload.extend_from_slice(&tree_data);
+    serialize_handle(root, &mut payload);
 
     let checksum = compute_checksum(&payload);
     w.write_all(&payload).map_err(io_err)?;
@@ -151,20 +150,18 @@ const NODE_EMPTY: u8 = 0x00;
 const NODE_LEAF: u8 = 0x01;
 const NODE_INTERNAL: u8 = 0x02;
 
-fn serialize_handle(handle: &SmtHandle) -> Vec<u8> {
-    let mut buf = Vec::new();
+fn serialize_handle(handle: &SmtHandle, buf: &mut Vec<u8>) {
     match handle {
         SmtHandle::InMemory(node) => {
             buf.push(HANDLE_INMEMORY);
-            serialize_node(&mut buf, node);
+            serialize_node(buf, node);
         }
         SmtHandle::Cached(hash, node) => {
             buf.push(HANDLE_CACHED);
-            write_bytes(&mut buf, hash);
-            serialize_node(&mut buf, node);
+            write_bytes(buf, hash);
+            serialize_node(buf, node);
         }
     }
-    buf
 }
 
 fn serialize_node(buf: &mut Vec<u8>, node: &SmtNode) {
@@ -183,10 +180,8 @@ fn serialize_node(buf: &mut Vec<u8>, node: &SmtNode) {
         SmtNode::Internal { path, left, right } => {
             buf.push(NODE_INTERNAL);
             write_bitpath(buf, path);
-            let left_data = serialize_handle(left);
-            buf.extend_from_slice(&left_data);
-            let right_data = serialize_handle(right);
-            buf.extend_from_slice(&right_data);
+            serialize_handle(left, buf);
+            serialize_handle(right, buf);
         }
     }
 }

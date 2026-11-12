@@ -60,8 +60,7 @@ pub(crate) fn save(
     payload.extend_from_slice(&hash_len.to_le_bytes());
     payload.extend_from_slice(root_hash);
 
-    let tree_data = serialize_handle(root);
-    payload.extend_from_slice(&tree_data);
+    serialize_handle(root, &mut payload);
 
     let checksum = compute_checksum(&payload);
     w.write_all(&payload).map_err(io_err)?;
@@ -164,14 +163,13 @@ const NODE_LEAF: u8 = 0x01;
 const NODE_EXT: u8 = 0x02;
 const NODE_BRANCH: u8 = 0x03;
 
-fn serialize_handle(handle: &NodeHandle) -> Vec<u8> {
-    let mut buf = Vec::new();
+fn serialize_handle(handle: &NodeHandle, buf: &mut Vec<u8>) {
     let mut pending = vec![handle];
     while let Some(handle) = pending.pop() {
         match handle.hash() {
             Some(hash) => {
                 buf.push(HANDLE_CACHED);
-                write_bytes(&mut buf, hash);
+                write_bytes(buf, hash);
             }
             None => buf.push(HANDLE_INMEMORY),
         }
@@ -179,12 +177,12 @@ fn serialize_handle(handle: &NodeHandle) -> Vec<u8> {
             Node::Null => buf.push(NODE_NULL),
             Node::Leaf { path, value } => {
                 buf.push(NODE_LEAF);
-                write_nibbles(&mut buf, path);
-                write_bytes(&mut buf, value);
+                write_nibbles(buf, path);
+                write_bytes(buf, value);
             }
             Node::Extension { path, child } => {
                 buf.push(NODE_EXT);
-                write_nibbles(&mut buf, path);
+                write_nibbles(buf, path);
                 pending.push(child);
             }
             Node::Branch { children, value } => {
@@ -199,7 +197,7 @@ fn serialize_handle(handle: &NodeHandle) -> Vec<u8> {
                 match value {
                     Some(value) => {
                         buf.push(1);
-                        write_bytes(&mut buf, value);
+                        write_bytes(buf, value);
                     }
                     None => buf.push(0),
                 }
@@ -207,7 +205,6 @@ fn serialize_handle(handle: &NodeHandle) -> Vec<u8> {
             }
         }
     }
-    buf
 }
 
 // =========================================================================
