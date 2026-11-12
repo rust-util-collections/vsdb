@@ -1165,6 +1165,7 @@ where
         fn mark(
             flags: &mut HashMap<CommitId, u8>,
             heap: &mut BinaryHeap<CommitId>,
+            non_stale_count: &mut usize,
             id: CommitId,
             flag: u8,
         ) {
@@ -1174,22 +1175,33 @@ where
             let slot = flags.entry(id).or_insert(0);
             if *slot == 0 {
                 heap.push(id);
+                if flag & STALE == 0 {
+                    *non_stale_count += 1;
+                }
+            } else if *slot & STALE == 0 && flag & STALE != 0 {
+                // A parent always has a lower id than its child, so it is
+                // still queued when a newly popped child marks it stale.
+                *non_stale_count -= 1;
             }
             *slot |= flag;
         }
 
         let mut flags: HashMap<CommitId, u8> = HashMap::new();
         let mut heap: BinaryHeap<CommitId> = BinaryHeap::new();
+        let mut non_stale_count = 0;
         let mut bases = Vec::new();
 
-        mark(&mut flags, &mut heap, a, FROM_A);
-        mark(&mut flags, &mut heap, b, FROM_B);
+        mark(&mut flags, &mut heap, &mut non_stale_count, a, FROM_A);
+        mark(&mut flags, &mut heap, &mut non_stale_count, b, FROM_B);
 
-        while heap.iter().any(|id| flags[id] & STALE == 0) {
+        while non_stale_count != 0 {
             // The loop guard ensures the heap is nonempty.
             let id = heap.pop().unwrap();
             // Every id pushed onto the heap was first inserted into `flags`.
             let mut f = flags[&id];
+            if f & STALE == 0 {
+                non_stale_count -= 1;
+            }
             if f & BOTH == BOTH {
                 if f & STALE == 0 {
                     bases.push(id);
@@ -1199,7 +1211,7 @@ where
             }
             if let Some(c) = self.commits.get(&id.0) {
                 for &parent in &c.parents {
-                    mark(&mut flags, &mut heap, parent, f);
+                    mark(&mut flags, &mut heap, &mut non_stale_count, parent, f);
                 }
             }
         }
@@ -1476,4 +1488,68 @@ fn now_us() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_micros() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+#[test]
+fn merge_bases_match_full_walk_on_a_wide_dag() {
+    use std::collections::HashSet;
+
+    let mut map = VerMap::<u32, u32>::new();
+    let width = 8u64;
+    let count = width * 7;
+    let mut ancestors = vec![HashSet::<u64>::new()];
+    for id in 1..=count {
+        let parents = if id <= width {
+            Vec::new()
+        } else {
+            let lane = (id - 1) % width;
+            let previous_layer = ((id - 1) / width - 1) * width;
+            vec![
+                CommitId(previous_layer + lane + 1),
+                CommitId(previous_layer + (lane + 1) % width + 1),
+            ]
+        };
+        let mut reachable = HashSet::from([id]);
+        for parent in &parents {
+            reachable.extend(&ancestors[parent.0 as usize]);
+        }
+        ancestors.push(reachable);
+        map.commits.insert(
+            &id,
+            &Commit {
+                id: CommitId(id),
+                root: EMPTY_ROOT,
+                parents,
+                timestamp_us: 0,
+                ref_count: 1,
+            },
+        );
+    }
+
+    let tips: Vec<_> = (count - width + 1..=count)
+        .chain([1, 8, 9, 16, 25])
+        .collect();
+    for &a in &tips {
+        for &b in &tips {
+            let common: HashSet<_> = ancestors[a as usize]
+                .intersection(&ancestors[b as usize])
+                .copied()
+                .collect();
+            let mut expected: Vec<_> = common
+                .iter()
+                .filter(|&&id| {
+                    !common.iter().any(|&other| {
+                        other != id && ancestors[other as usize].contains(&id)
+                    })
+                })
+                .copied()
+                .map(CommitId)
+                .collect();
+            expected.sort_unstable();
+            let mut actual = map.find_merge_bases(CommitId(a), CommitId(b));
+            actual.sort_unstable();
+            assert_eq!(actual, expected, "tips {a}, {b}");
+        }
+    }
 }
