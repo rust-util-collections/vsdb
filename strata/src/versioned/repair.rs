@@ -57,7 +57,7 @@ impl<K, V> VerMap<K, V> {
         // Validate even clean/read-only restores before changing any index or
         // reclaiming anything. Missing HEADs/parents are corruption, not proof
         // that the remaining stored history is unreachable.
-        self.validate_commit_graph()?;
+        let ref_counts = self.validate_commit_graph()?;
 
         // Read-only restores must not rewrite the branch-name index or
         // crash-recovery metadata. Queries use the authoritative branch
@@ -77,7 +77,7 @@ impl<K, V> VerMap<K, V> {
         if self.gc_dirty.get_value()
             || self.commits.iter().any(|(_, c)| c.ref_count == 0)
         {
-            self.rebuild_ref_counts()?;
+            self.apply_ref_count_repair(ref_counts);
         }
         Ok(())
     }
@@ -181,7 +181,13 @@ impl<K, V> VerMap<K, V> {
     /// from pre-ref-count data (`ref_count == 0` on all commits).
     pub(crate) fn rebuild_ref_counts(&mut self) -> Result<()> {
         let ref_counts = self.validate_commit_graph()?;
+        self.apply_ref_count_repair(ref_counts);
+        Ok(())
+    }
 
+    /// Apply a count map validated before any repair or reclamation starts.
+    /// Structural writers are serialized throughout validation and repair.
+    fn apply_ref_count_repair(&mut self, ref_counts: HashMap<CommitId, u32>) {
         // A legacy zero-count repair may begin with a false marker. Pin true
         // before changing counts, and settle the graph before deleting rows.
         self.begin_ref_update();
@@ -215,6 +221,5 @@ impl<K, V> VerMap<K, V> {
         // A durable false marker must never outlive unsynced count repairs.
         self.fence(|m| m.commits.sync_wal());
         self.end_ref_update();
-        Ok(())
     }
 }
