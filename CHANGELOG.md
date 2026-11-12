@@ -6,6 +6,28 @@ Compiler requirements below are historical release notes. Current development
 uses the official latest stable Rust, without a declared compatible version
 range or minimum compiler; see [the toolchain policy](docs/ai/compatibility-policy.md#rust-toolchain).
 
+## [v17.0.18]
+
+Public APIs and on-disk formats remain compatible; no data migration is
+required. Only the official latest stable Rust toolchain is supported.
+
+### Fixed
+
+- Namespace creation refuses reused IDs after registry loss for both derived
+  and explicit placement. Surviving lifecycle state and legacy derived roots
+  without sidecars prevent old handles from routing to a new engine.
+- VecDex resumes underfilled searches from unvisited live nodes when a graph
+  component is exhausted. An unfiltered beam at least as large as the index
+  reaches every vector, including in existing disconnected graphs, without
+  rewriting stored data or adding scans to mutations. Filtered restarts share
+  the existing visit cap; smaller beams remain approximate.
+- SlotDex reverse paging streams tier boundaries lazily, so a short page no
+  longer clones every level-one floor in its slot range.
+- VecDex rejects nonfinite vector and query components before mutation or
+  search, including runtime metric dispatch and batches. Compaction rejects
+  legacy nonfinite rows as corrupt without replacing the graph. Finite inputs
+  can still overflow distance arithmetic.
+
 ## [v17.0.17]
 
 Public APIs and on-disk formats remain compatible; no data migration is
