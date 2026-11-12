@@ -10,9 +10,16 @@ wire tags for metric.
 ## Invariants
 
 **VD1 Entry = global max_layer** — insert promotes; remove of entry rescans true max.
-**VD2 Bidirectional edges** — L edges mutual; remove both sides.
+**VD2 Bidirectional edges** — L edges mutual; remove both sides. Do not
+  take reciprocal pruning or a base-layer connected graph for granted without
+  measuring old-node eviction as well as insertion; keep recall distinct from
+  reachability. See the current Open entry for its concrete disconnected
+  components reproduction and repair scope.
 **VD3 Maps inverse** — key↔node↔info consistent through insert/remove/compact.
-**VD4 Dim** — all vectors and queries == `meta.dim`.
+**VD4 Input** — all vectors and queries == `meta.dim` and finite; mutations
+reject nonfinite inputs before committing. `compact()` rejects legacy nonfinite
+rows as `Corrupt` without rebuilding. Finite inputs can still overflow a
+metric's arithmetic; the input check cannot guarantee finite distances.
 **VD5 Filter traversal** — filter gates results only, not expansion; termination and
 pruning compare against the **passing** results (`ef = max(ef, k)`, no inflation);
 `filter_visit_cap = max(64·ef, 4096)` evaluated nodes bounds near-empty predicates.
@@ -32,7 +39,8 @@ public wire for callers, not the meta format) → append only, never reorder.
 - [ ] Map triple consistency
 - [ ] Dim checks
 - [ ] Filter doesn’t block traversal; low-selectivity recall test still passes
-- [ ] Dimension / config errors are `DimensionMismatch` / `InvalidConfig`, not panics
+- [ ] Dimension checks and finite inputs: reject `NaN`/infinities for vectors and queries, including dynamic-metric dispatch; preserve prior rows on rejection
+- [ ] Legacy nonfinite stored row fails cold `compact()` as `Corrupt` without rewrite
 - [ ] Wire tags frozen/append-only + round-trip pins
 - [ ] Compact single wiped staged commit
 - [ ] Send+Sync; Scalar ops cover metrics

@@ -728,6 +728,105 @@ fn saturated_neighbor_pruning_keeps_new_entry_point_reachable() {
 }
 
 #[test]
+fn rejects_nonfinite_vectors_before_mutating_index() {
+    let mut idx: VecDex<u32, InnerProduct> = VecDex::new(HnswConfig {
+        dim: 1,
+        ef_search: 2,
+        ..Default::default()
+    })
+    .unwrap();
+
+    for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert!(matches!(
+            idx.insert(&1, &[value]),
+            Err(VsdbError::InvalidConfig { .. })
+        ));
+    }
+    assert!(idx.is_empty());
+    assert!(!idx.contains_key(&1));
+    assert_eq!(idx.iter().count(), 0);
+
+    idx.insert(&2, &[1.0]).unwrap();
+    assert_eq!(idx.search(&[1.0], 1).unwrap()[0].0, 2);
+    for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert!(matches!(
+            idx.search(&[value], 1),
+            Err(VsdbError::InvalidConfig { .. })
+        ));
+    }
+    assert_eq!(idx.iter().count(), 1);
+
+    assert!(matches!(
+        idx.insert_batch(&[(2, vec![2.0]), (3, vec![f32::NAN])]),
+        Err(VsdbError::InvalidConfig { .. })
+    ));
+    assert_eq!(idx.get(&2), Some(vec![1.0]));
+    for result in [
+        idx.search_ef(&[f32::NAN], 1, 2),
+        idx.search_with_filter(&[f32::NAN], 1, |_| true),
+        idx.search_ef_with_filter(&[f32::NAN], 1, 2, |_| true),
+    ] {
+        assert!(matches!(result, Err(VsdbError::InvalidConfig { .. })));
+    }
+
+    let mut dynamic: VecDexDyn<u32> =
+        VecDexDyn::new(MetricKind::InnerProduct, idx.config.clone()).unwrap();
+    assert!(matches!(
+        dynamic.insert(&1, &[f32::NAN]),
+        Err(VsdbError::InvalidConfig { .. })
+    ));
+    dynamic.insert(&2, &[1.0]).unwrap();
+    assert!(matches!(
+        dynamic.search(&[f32::NAN], 1),
+        Err(VsdbError::InvalidConfig { .. })
+    ));
+    assert_eq!(dynamic.search(&[1.0], 1).unwrap()[0].0, 2);
+
+    let mut stored: VecDex<u32, InnerProduct> = VecDex::new(idx.config).unwrap();
+    let mut txn: Txn<'_, f32> = Txn::new(&stored.store, stored.state.clone());
+    let node = 7;
+    let vector = [f32::NAN];
+    txn.put_vec(node, &vector);
+    txn.rows.put(
+        user_key(&KeyEnDe::encode(&7u32)),
+        node.to_le_bytes().to_vec(),
+    );
+    txn.rows
+        .put(node_key(TAG_NODE2KEY, node).to_vec(), encode_value(&7u32));
+    let (rows, state) = txn.finish();
+    rows.commit(&mut stored.store).unwrap();
+    stored.state = state;
+    assert!(matches!(stored.compact(), Err(VsdbError::Corrupt { .. })));
+    assert!(stored.get(&7).unwrap()[0].is_nan());
+}
+
+#[test]
+fn nonfinite_validation_preserves_f64_numeric_behavior() {
+    let mut idx: VecDex<u32, InnerProduct, f64> = VecDex::new(HnswConfig {
+        dim: 1,
+        ..Default::default()
+    })
+    .unwrap();
+    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert!(matches!(
+            idx.insert(&1, &[value]),
+            Err(VsdbError::InvalidConfig { .. })
+        ));
+    }
+    assert_eq!(idx.iter().count(), 0);
+    assert!(matches!(
+        idx.insert(&1, &[2.0, 3.0]),
+        Err(VsdbError::DimensionMismatch { .. })
+    ));
+    assert_eq!(idx.iter().count(), 0);
+    idx.insert(&1, &[f64::MAX]).unwrap();
+    assert_eq!(idx.get(&2), None);
+    assert!(idx.insert(&1, &[f64::NAN]).is_err());
+    assert_eq!(idx.get(&1), Some(vec![f64::MAX]));
+    assert_eq!(idx.search(&[f64::MAX], 1).unwrap()[0].0, 1);
+}
+
+#[test]
 fn non_entry_top_layer_remove_skips_entry_repair() {
     let cfg = HnswConfig {
         dim: 2,

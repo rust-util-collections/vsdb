@@ -448,6 +448,21 @@ where
         })
     }
 
+    fn validate_vector(&self, vector: &[S]) -> Result<()> {
+        if vector.len() != self.config.dim {
+            return Err(VsdbError::DimensionMismatch {
+                expected: self.config.dim,
+                found: vector.len(),
+            });
+        }
+        if !vector.iter().all(|component| component.is_finite()) {
+            return Err(VsdbError::InvalidConfig {
+                detail: "VecDex vectors must contain finite components".to_owned(),
+            });
+        }
+        Ok(())
+    }
+
     /// Reconnects to an existing store and reads the persisted graph
     /// state (absent on a never-mutated index).
     fn hydrate(store: MapxRaw, config: HnswConfig) -> Self {
@@ -601,7 +616,7 @@ where
         Ok(())
     }
 
-    /// Inserts a vector associated with a user key.
+    /// Inserts a finite vector associated with a user key.
     ///
     /// If the key already exists, removal of the old node and insertion
     /// of the replacement are staged in the same atomic batch.
@@ -618,12 +633,7 @@ where
     /// leave recoverable WAL data and must not be retried automatically.
     pub fn insert(&mut self, key: &K, vector: &[S]) -> Result<()> {
         ensure_writable(&self.namespace(), "vector index insert")?;
-        if vector.len() != self.config.dim {
-            return Err(VsdbError::DimensionMismatch {
-                expected: self.config.dim,
-                found: vector.len(),
-            });
-        }
+        self.validate_vector(vector)?;
 
         let mut txn = Txn::new(&self.store, self.state.clone());
         Self::stage_remove(&mut txn, &self.config, key);
@@ -674,12 +684,7 @@ where
         const CHUNK: usize = 64;
 
         for (_, vec) in items {
-            if vec.len() != self.config.dim {
-                return Err(VsdbError::DimensionMismatch {
-                    expected: self.config.dim,
-                    found: vec.len(),
-                });
-            }
+            self.validate_vector(vec)?;
         }
 
         // Last occurrence of each key wins (matching the final state of
@@ -861,13 +866,7 @@ where
         ef: usize,
         predicate: Option<&dyn Fn(&K) -> bool>,
     ) -> Result<Vec<(K, S)>> {
-        if query.len() != self.config.dim {
-            return Err(VsdbError::DimensionMismatch {
-                expected: self.config.dim,
-                found: query.len(),
-            });
-        }
-
+        self.validate_vector(query)?;
         let Some(ep) = self.state.entry_point else {
             return Ok(vec![]);
         };
@@ -1160,6 +1159,12 @@ where
         // dimension check, so re-check before rebuilding. An error here
         // (or anywhere before the commit) leaves the store untouched.
         for (_, vec) in &pairs {
+            if !vec.iter().all(|component| component.is_finite()) {
+                return Err(VsdbError::Corrupt {
+                    detail: "compact: stored vector contains nonfinite components"
+                        .to_owned(),
+                });
+            }
             if vec.len() != self.config.dim {
                 return Err(VsdbError::Corrupt {
                     detail: format!(

@@ -11,7 +11,11 @@
 
 ## Open
 
-None.
+### [HIGH] vecdex: pruning can permanently disconnect live vectors at layer 0
+- **Where**: `strata/src/vecdex/mod.rs` (`Txn::prune_and_detach`, `VecDex::link_node`, `VecDex::search_internal`), `strata/src/vecdex/hnsw.rs` (`search_layer`)
+- **What**: ordinary single-handle, insert-only use with finite vectors can leave a stored node disconnected from every base-layer search. Reproduction using the reported levels: `dim=2, m=2, m_max0=2, ef_construction=20`; add `[80145,73111]`, `[55528,77346]`, `[80934,2584]`, `[67147,58415]`; an exhaustive search at `[50000,50000]` returns only keys 0, 1 and 3 while key 2 remains stored. Seeded 160-vector insertions also returned only 4–13 records in five cases. Different random level assignments change which insertion exposes the split, but deletion and independently restored writer caches are not required.
+- **Why**: reciprocal old-node pruning can split existing components even when each new-node link survives. A single greedy upper-layer entry seeds the base search, so increasing `k` or `ef` cannot reach another component. Compaction repeats insertion and cannot guarantee repair.
+- **Suggested fix**: add a connection- or component-aware repair within the same atomic mutation, covering old-node evictions, all selected new-node links, and deletion/compaction. Guard low-degree/path-shaped data with deterministic and seeded exhaustive-reachability tests. Bound and measure the warm mutation cost rather than full component scans per edge. Define how stored graphs are rebuilt rather than silently rewriting old data; preserve the row layout and single-batch mutation model. Protecting every new-node reciprocal edge and repeated component checks were tried and did not resolve this problem within an acceptable mutation budget, so they are not retained as a partial fix.
 
 ## Won't Fix
 

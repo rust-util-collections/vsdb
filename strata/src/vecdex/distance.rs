@@ -28,12 +28,19 @@ pub trait Scalar:
 {
     fn sqrt(self) -> Self;
     fn epsilon() -> Self;
+    fn is_finite(self) -> bool {
+        self * Self::zero() == Self::zero()
+    }
     fn one() -> Self;
     fn zero() -> Self;
     fn total_cmp(&self, other: &Self) -> Ordering;
 }
 
 impl Scalar for f32 {
+    #[inline]
+    fn is_finite(self) -> bool {
+        f32::is_finite(self)
+    }
     #[inline]
     fn sqrt(self) -> Self {
         f32::sqrt(self)
@@ -57,6 +64,10 @@ impl Scalar for f32 {
 }
 
 impl Scalar for f64 {
+    #[inline]
+    fn is_finite(self) -> bool {
+        f64::is_finite(self)
+    }
     #[inline]
     fn sqrt(self) -> Self {
         f64::sqrt(self)

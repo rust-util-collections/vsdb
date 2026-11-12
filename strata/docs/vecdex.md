@@ -48,6 +48,15 @@ This also applies to `VecDexDyn`.
 
 ## API Reference
 
+Vectors and queries must have all finite components. Inserts, batches and
+searches reject NaN and either infinity with `VsdbError::InvalidConfig` when
+the vector passes its dimension check; rejected inserts and batches make no
+changes. Previously accepted nonfinite stored vectors cause `compact()` to
+return `VsdbError::Corrupt` without replacing the persisted graph. Finite
+inputs can still overflow a metric's arithmetic; the existing distance
+behavior is unchanged. Vector bytes, handle metadata, and valid f32/f64 graph
+data remain compatible.
+
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `new` | `(config: HnswConfig) -> Result<Self>` | Create empty index (in the current ambient namespace); `InvalidConfig` on a bad config; `ReadOnly` in read-only mode |
