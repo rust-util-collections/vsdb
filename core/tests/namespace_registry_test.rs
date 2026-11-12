@@ -50,6 +50,21 @@ fn lost_registry_cannot_reuse_a_namespace_id_for_any_root() {
         assert!(!registry.exists(), "rejection must not publish a registry");
         assert!(!explicit.exists(), "rejection must not create a new root");
     }
+    // Legacy namespaces may have no lifecycle sidecar. Their surviving
+    // derived root still proves this id belongs to an earlier engine.
+    fs::remove_file(&lifecycle).unwrap();
+    for path in [None, Some(explicit.clone())] {
+        let error = Namespace::create_with(NamespaceOpts {
+            path,
+            shards: 4,
+            ..Default::default()
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("not empty"), "{error}");
+        assert!(!lifecycle.exists());
+        assert!(!registry.exists());
+        assert!(!explicit.exists());
+    }
     assert!(
         root.join("__SYSTEM__/format_version").exists(),
         "the existing namespace root must not be removed"

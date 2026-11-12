@@ -439,8 +439,12 @@ fn save_registry(reg: &RegistryFile) -> Result<()> {
 fn resolve_root(base: &Path, rec: &NsRecord) -> PathBuf {
     match &rec.path {
         Some(p) => PathBuf::from(p),
-        None => base.join(NS_DERIVED_DIR).join(format!("{:016x}", rec.id)),
+        None => derived_root(base, rec.id),
     }
+}
+
+fn derived_root(base: &Path, id: NsId) -> PathBuf {
+    base.join(NS_DERIVED_DIR).join(format!("{id:016x}"))
 }
 
 /// Lexical is-prefix check on components.
@@ -732,10 +736,11 @@ impl Namespace {
                  to reuse its id"
             )));
         }
-        // Derived roots must also be fresh: cleanup must never remove
-        // another namespace's data or adopt its existing engine.
+        // Legacy namespaces may have no lifecycle sidecar. A surviving
+        // derived root still reserves this id, even for explicit placement.
+        let derived_preexisted = ensure_root_adoptable(&derived_root(&base, id))?;
         if opts.path.is_none() {
-            root_preexisted = ensure_root_adoptable(&root)?;
+            root_preexisted = derived_preexisted;
         }
 
         // Burn the id durably before publishing its lifecycle sidecar.

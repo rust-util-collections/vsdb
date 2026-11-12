@@ -181,9 +181,11 @@ Creation durably advances the registry's ID allocator before writing a pending
 lifecycle sidecar, then registers the pending namespace before opening its
 engine. An interrupted reservation can burn an ID without registering a
 namespace; later creations use higher IDs. Existing unregistered lifecycle
-state at the current allocator ID is still refused, preserving the lost-registry
-check. Writable recovery may complete a pending create. An established (or legacy unmarked
-lifecycle) record must point to a complete marked engine; missing storage is
+state or a nonempty derived root at the current allocator ID is refused for
+both derived and explicit placement, preserving identity after registry loss
+even for legacy namespaces without sidecars. Writable recovery may complete a
+pending create. An established record, including a legacy record without a
+lifecycle sidecar, must point to a complete marked engine; missing storage is
 an error, never permission to manufacture an empty replacement. Initialization
 uses `__SYSTEM__/__initializing__`; a complete marked dataset can retain a
 stale sentinel after interruption. Read-only open accepts that completed state
