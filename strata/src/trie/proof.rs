@@ -368,8 +368,8 @@ where
 
     /// Full rebuild: clear trie and re-insert all entries at `commit`.
     fn full_rebuild_commit(&mut self, commit: CommitId) -> Result<()> {
-        let entries: Vec<_> = self.map.at(commit)?.raw_iter().collect();
-        self.trie = T::from_entries(entries)?;
+        let snapshot = self.map.at(commit)?;
+        self.trie = T::from_entries(snapshot.raw_iter())?;
         Ok(())
     }
 
