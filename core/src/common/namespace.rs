@@ -723,18 +723,18 @@ impl Namespace {
         };
         let root = resolve_root(&base, &rec);
 
-        // A derived root is supposed to be fresh, but a lost/reset
-        // registry can leave an earlier namespace's root or lifecycle
-        // sidecar at this id. Refuse to overwrite or adopt either one:
-        // the cleanup path would otherwise delete data that this create
-        // did not own, and a matching shard count would alias it.
+        // A lost/reset registry can leave an earlier namespace's lifecycle
+        // sidecar at this id, regardless of the newly requested path.
+        // Reusing it would route old handles to a different engine.
+        if load_lifecycle(&base, id)?.is_some() {
+            return Err(ns_err(format!(
+                "namespace {id} already has lifecycle state; refusing \
+                 to reuse its id"
+            )));
+        }
+        // Derived roots must also be fresh: cleanup must never remove
+        // another namespace's data or adopt its existing engine.
         if opts.path.is_none() {
-            if load_lifecycle(&base, id)?.is_some() {
-                return Err(ns_err(format!(
-                    "namespace {id} already has lifecycle state; refusing \
-                     to reuse its derived root"
-                )));
-            }
             root_preexisted = ensure_root_adoptable(&root)?;
         }
 
