@@ -910,39 +910,37 @@ where
         // the floors are thinned so each chunk spans ~32 slots — engine
         // iterator creation dominates tiny chunks, so fewer, larger
         // forward scans win even with the in-memory reversal.
-        let splits: Vec<S> = match self.levels.first() {
-            Some(l1) => {
-                let above_lo = match &lo {
-                    Bound::Included(s) | Bound::Excluded(s) => {
-                        Bound::Excluded(s.clone())
-                    }
-                    Bound::Unbounded => Bound::Unbounded,
-                };
-                // `BTreeMap::range` panics on inverted windows (the engine
-                // ranges below just yield nothing) — guard explicitly.
-                let nonempty = match (&above_lo, &hi) {
-                    (Bound::Unbounded, _) | (_, Bound::Unbounded) => true,
-                    (
-                        Bound::Included(a) | Bound::Excluded(a),
-                        Bound::Included(b) | Bound::Excluded(b),
-                    ) => a < b,
-                };
-                if nonempty {
-                    let stride =
-                        (32 / self.tier_capacity.as_i128()).clamp(1, 32) as usize;
-                    l1.buckets
-                        .range((above_lo, hi.clone()))
-                        .rev()
-                        .map(|(f, _)| f.clone())
-                        .skip(stride - 1)
-                        .step_by(stride)
-                        .collect()
-                } else {
-                    vec![]
-                }
-            }
-            None => vec![],
+        let above_lo = match &lo {
+            Bound::Included(s) | Bound::Excluded(s) => Bound::Excluded(s.clone()),
+            Bound::Unbounded => Bound::Unbounded,
         };
+        // `BTreeMap::range` panics on inverted windows (the engine
+        // ranges below just yield nothing) — guard explicitly.
+        let nonempty = match (&above_lo, &hi) {
+            (Bound::Unbounded, _) | (_, Bound::Unbounded) => true,
+            (
+                Bound::Included(a) | Bound::Excluded(a),
+                Bound::Included(b) | Bound::Excluded(b),
+            ) => a < b,
+        };
+        let stride = (32 / self.tier_capacity.as_i128()).clamp(1, 32) as usize;
+        // Keep the boundary walk lazy so a short page does not clone every
+        // level-1 floor in its range before `visit` can stop it.
+        let splits = self
+            .levels
+            .first()
+            .filter(|_| nonempty)
+            .map(|l1| l1.buckets.range((above_lo, hi.clone())))
+            .into_iter()
+            .flatten()
+            .rev()
+            .map(|(floor, _)| {
+                #[cfg(test)]
+                test::REVERSE_SPLIT_FLOORS.with(|count| count.set(count.get() + 1));
+                floor.clone()
+            })
+            .skip(stride - 1)
+            .step_by(stride);
 
         let mut buf: Vec<(S, EntryCnt)> = vec![];
         let mut upper = hi;

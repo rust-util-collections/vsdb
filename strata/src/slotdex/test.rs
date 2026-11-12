@@ -1,6 +1,30 @@
 use super::*;
 use rand::random;
 
+thread_local! {
+    pub(super) static REVERSE_SPLIT_FLOORS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[test]
+fn first_reverse_page_visits_bounded_tier_floors() {
+    for swap_order in [false, true] {
+        let mut db = SlotDex::<u64, u64>::new(16, swap_order).unwrap();
+        db.insert_batch((0..4096).map(|slot| (slot, slot))).unwrap();
+        let (order, expected) = if swap_order {
+            (Order::Asc, 0)
+        } else {
+            (Order::Desc, 4095)
+        };
+        REVERSE_SPLIT_FLOORS.with(|count| count.set(0));
+        assert_eq!(db.page(.., 1, 0, order), vec![expected]);
+        let visited = REVERSE_SPLIT_FLOORS.with(std::cell::Cell::get);
+        assert!(
+            visited <= 64,
+            "one-key page visited {visited} tier floors (swap_order={swap_order})"
+        );
+    }
+}
+
 #[test]
 fn workflow_normal() {
     [32, 16, 8].into_iter().for_each(|i| {
