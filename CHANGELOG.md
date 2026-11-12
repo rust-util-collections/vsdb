@@ -6,6 +6,34 @@ Compiler requirements below are historical release notes. Current development
 uses the official latest stable Rust, without a declared compatible version
 range or minimum compiler; see [the toolchain policy](docs/ai/compatibility-policy.md#rust-toolchain).
 
+## [v17.0.19]
+
+Public APIs and on-disk formats remain compatible; no data migration is
+required. Only the official latest stable Rust toolchain is supported.
+
+### Changed
+
+- `VerMap` merge-base search keeps a live frontier count instead of scanning
+  the heap on every round. Recovery reuses that commit-graph check when
+  reference counts need repair. Clean and read-only restores still validate
+  the graph before any index or reclamation change.
+- Persistent B+ tree iteration moves entries out of the decoded leaf buffer.
+  Deletion and merge avoid extra key copies and a second lookup. Reference
+  rebuild walks ownership edges without copying page payloads.
+- SlotDex batches count new floors as they appear, so each unique key no
+  longer rescans every pending floor before a tier can grow.
+- Filtered VecDex search keeps at most `k` keys that already passed the
+  predicate and reads any later hit from storage. Unfiltered search,
+  rejected keys, visit limits, and disconnected-graph fallback are unchanged.
+- DagMap maintenance tests membership with a set and scans the root registry
+  once. Stage barriers fence that namespace's WAL instead of flushing its
+  memtables. Phase order is unchanged.
+- Namespace prefix recovery copies open-engine handles and scans them
+  without holding the registry lock for the whole scan.
+- Merkle cache encoding appends nodes into one payload buffer. Byte order,
+  checksums, and load checks are unchanged. A full trie rebuild streams the
+  snapshot instead of collecting every entry before construction.
+
 ## [v17.0.18]
 
 Public APIs and on-disk formats remain compatible; no data migration is
