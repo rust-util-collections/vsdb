@@ -16,19 +16,21 @@ system dir, resolved path-only (`vsdb_get_system_dir`) — never via
 **DG2 Acyclic** — parent exists; no node becomes its own ancestor.
 **DG3 Orphans** — delete refuses children / cascades / documents dangling.
 **DG4 Parent slot ownership** — fresh Orphan per `new()`; shadow parent. `destroy`: save
-parent in `DESTROY_PARENT_KEY` + sync_wal → null own/owned-descendant slots + data → flush →
-clear registries → unregister from parent last, so a retry still unlinks.
+parent in `DESTROY_PARENT_KEY` + sync_wal → null own/owned-descendant slots + data
+→ namespace WAL fence → clear registries → unregister from parent last, so a retry still unlinks.
 **DG5 Registry vs ownership** — walks gate on `child.parent` points back (or None residue);
 foreign registry entries dropped only, never destroyed via foreign walk.
-**DG6 Prune crash order** — destroy branches → atomic whole-mainline merge → flush → re-parent → flush →
-mark `PRUNE_CLEARING_KEY` on consumed nodes → flush → clear → flush → unregister. Retry keys
-off the marker (finishes the clear, never re-folds genesis) — not off field clear order.
+**DG6 Prune crash order** — destroy branches → atomic whole-mainline merge → WAL fence
+→ re-parent → WAL fence → mark `PRUNE_CLEARING_KEY` on consumed nodes → WAL fence
+→ clear → WAL fence → unregister. Retry keys off the marker (finishes the clear, never re-folds genesis) — not off field clear order.
 The head marker alone does not prove every intermediate marker landed: retry
-completes and flushes the marker set while the parent chain is still intact.
-A cleared parent link implies the complete marker set was already flushed.
+completes and fences the marker set while the parent chain is still intact.
+A cleared parent link implies the complete marker set was already fenced.
 Both normal and retried clears retain all children registries until every consumed
-node's data/parent clear is flushed; only then may discovery edges be removed.
-In-place genesis enrich. Flushes scoped to DAG ns. Crash at phase boundary keeps value-exact survivors (`prune_crash_*`).
+node's data/parent clear is fenced; only then may discovery edges be removed.
+In-place genesis enrich. WAL fences scoped to DAG ns; never remove a barrier
+or force unrelated memtables into SSTs as part of this publication ordering.
+Crash at phase boundary keeps value-exact survivors (`prune_crash_*`).
 Merge staging must also preserve children already re-parented by a prior
 interrupted prune; never publish intermediate ancestor values during retry.
 
@@ -43,5 +45,5 @@ interrupted prune; never publish intermediate ancestor values during retry.
 - [ ] Delete child policy explicit
 - [ ] Parent-slot ownership / shadow not Clone
 - [ ] Ownership test before destroy-from-registry
-- [ ] Prune phase order + marker + flushes; destroy retry unlinks
+- [ ] Prune phase order + marker + WAL fences; destroy retry unlinks
 - [ ] Codec round-trip

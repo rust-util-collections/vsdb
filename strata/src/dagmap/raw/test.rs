@@ -1,5 +1,12 @@
 use super::*;
-use std::{thread, time::Duration};
+use crate::{Namespace, NamespaceOpts, VsdbOptions, vsdb_configure};
+use std::{
+    env, fs,
+    path::Path,
+    process::{self, Command},
+    thread,
+    time::Duration,
+};
 
 #[test]
 fn dagmapraw_functions() {
@@ -220,8 +227,8 @@ fn destroy_interrupted_before_unlink_leaves_reclaimable_residue() {
     assert!(parent.no_children());
 }
 
-/// Regression: `prune()`'s crash-safety flush barriers must be scoped to
-/// the DAG's own namespace (`self.namespace().flush()`), not the whole
+/// Regression: `prune()`'s crash-safety WAL barriers must be scoped to
+/// the DAG's own namespace, not the whole
 /// process (the previous `vsdb_flush()` calls flushed the default
 /// namespace plus every other open namespace, so a flush failure in any
 /// unrelated namespace could panic a `prune()` on a perfectly healthy
@@ -605,9 +612,9 @@ fn prune_retry_completes_partial_clearing_markers() {
 
         let mut linebuf = head.prune_collect_mainline().unwrap();
         head.prune_merge_into_genesis(&mut linebuf).unwrap();
-        head.namespace().flush();
+        head.namespace().try_sync_wal().unwrap();
         head.prune_reparent_children(linebuf.last_mut().unwrap());
-        head.namespace().flush();
+        head.namespace().try_sync_wal().unwrap();
 
         // SAFETY: only serialized into recovery markers; all accesses
         // to the fixture and restored aliases are sequential.
@@ -618,7 +625,7 @@ fn prune_retry_completes_partial_clearing_markers() {
                 node.parent.set_aux(PRUNE_CLEARING_KEY, &marker);
             }
         }
-        head.namespace().flush();
+        head.namespace().try_sync_wal().unwrap();
 
         // Retry must consume every intermediate, including an unmarked
         // ancestor that otherwise hides the rest of the marked chain.
@@ -675,7 +682,7 @@ fn prune_cleanup_survives_repeated_interruptions() {
                 prepare_marked_clear(&mut head);
             }
             let head_id = head.save_meta().unwrap();
-            head.namespace().flush();
+            head.namespace().try_sync_wal().unwrap();
 
             // Interrupt normal cleanup or its retry after each data or
             // registry clear, then restore the consumed head.
@@ -683,7 +690,7 @@ fn prune_cleanup_survives_repeated_interruptions() {
             let interrupted = catch_unwind(AssertUnwindSafe(|| head.prune()));
             CLEAR_STEPS_LEFT.with(|steps| steps.set(None));
             assert!(interrupted.is_err(), "cleanup cut {cut} was not reached");
-            ancestors[0].namespace().flush();
+            ancestors[0].namespace().try_sync_wal().unwrap();
 
             if cut < 4 {
                 // No discovery edge may disappear during the data pass.
@@ -942,4 +949,123 @@ fn prune_retry_visits_repeated_marked_nodes_once() {
     assert_eq!(recovered.get(b"head").unwrap(), b"head-value");
     assert_eq!(survivor.get(b"head").unwrap(), b"head-value");
     assert!(children.iter().next().is_none());
+}
+
+fn dag_wal_phase(dir: &Path, stage: &str, action: &str) {
+    vsdb_configure(VsdbOptions::new(dir)).unwrap();
+    let handles_path = dir.join("dag-wal-handles");
+    if action == "seed" {
+        let ns = Namespace::create_with(NamespaceOpts {
+            path: None,
+            shards: 4,
+            mem_budget_mb: Some(64),
+        })
+        .unwrap();
+        let (genesis, intermediate, mut head) = ns.scope(build_prune_fixture);
+        let mut survivor = DagMapRaw::new(Some(&mut head));
+        survivor.insert("survivor", "value");
+        let mut unrelated = MapxRaw::new_in(&ns);
+        unrelated.insert(b"unrelated", b"preserved");
+        let ids = [
+            genesis.save_meta().unwrap(),
+            intermediate.save_meta().unwrap(),
+            head.save_meta().unwrap(),
+            survivor.save_meta().unwrap(),
+            unrelated.save_meta().unwrap(),
+        ];
+        fs::write(&handles_path, postcard::to_allocvec(&ids).unwrap()).unwrap();
+        ns.try_sync_wal().unwrap();
+        let before = ns.shard_properties("stats.flushes_completed");
+        assert!(before.iter().all(Option::is_some));
+
+        if stage == "destroy" {
+            // Exercise the production prune and destroy paths, including
+            // durable range tombstones, without flushing unrelated data.
+            let mut merged = head.prune().unwrap();
+            merged.destroy();
+            ns.try_sync_wal().unwrap();
+        } else {
+            let mut linebuf = head.prune_collect_mainline().unwrap();
+            head.prune_merge_into_genesis(&mut linebuf).unwrap();
+            ns.try_sync_wal().unwrap();
+            if stage != "merge" {
+                head.prune_reparent_children(linebuf.last_mut().unwrap());
+                ns.try_sync_wal().unwrap();
+            }
+            if matches!(stage, "marker" | "clear") {
+                head.mark_consumed_clearing(&mut linebuf);
+                ns.try_sync_wal().unwrap();
+            }
+            if stage == "clear" {
+                head.prune_clear_consumed(&mut linebuf).unwrap();
+                ns.try_sync_wal().unwrap();
+            }
+        }
+        assert_eq!(ns.shard_properties("stats.flushes_completed"), before);
+        // Deliberately skip destructors and their engine flushes. This
+        // tests process-exit recovery after fences, not physical power loss.
+        process::exit(0);
+    }
+
+    let ids: [InstanceId; 5] =
+        postcard::from_bytes(&fs::read(handles_path).unwrap()).unwrap();
+    let genesis = DagMapRaw::from_meta(ids[0]).unwrap();
+    let intermediate = DagMapRaw::from_meta(ids[1]).unwrap();
+    let head = DagMapRaw::from_meta(ids[2]).unwrap();
+    let survivor = DagMapRaw::from_meta(ids[3]).unwrap();
+    let unrelated = MapxRaw::from_meta(ids[4]).unwrap();
+    let ns = genesis.namespace();
+    let before = ns.shard_properties("stats.flushes_completed");
+    assert_eq!(unrelated.get(b"unrelated").unwrap(), b"preserved");
+    if stage == "destroy" {
+        for node in [&genesis, &intermediate, &head, &survivor] {
+            assert!(node.is_dead());
+            assert!(node.get("k0").is_none());
+            assert!(node.get("survivor").is_none());
+        }
+    } else {
+        assert_merged_view(&genesis);
+        assert_merged_view(&survivor);
+        assert_eq!(survivor.get("survivor").unwrap(), b"value");
+        let recovered = head.prune().unwrap();
+        assert_eq!(recovered.instance_id(), genesis.instance_id());
+        assert_merged_view(&recovered);
+        assert_merged_view(&survivor);
+        assert!(intermediate.is_dead());
+        assert!(DagMapRaw::from_meta(ids[2]).unwrap().is_dead());
+        assert_eq!(recovered.children.iter().count(), 1);
+    }
+    assert_eq!(ns.shard_properties("stats.flushes_completed"), before);
+}
+
+#[test]
+fn dag_wal_barriers_survive_process_exit_without_table_flush() {
+    if let Ok(action) = env::var("VSDB_DAG_WAL_PHASE") {
+        dag_wal_phase(
+            Path::new(&env::var_os("VSDB_DAG_WAL_DIR").unwrap()),
+            &env::var("VSDB_DAG_WAL_STAGE").unwrap(),
+            &action,
+        );
+        return;
+    }
+    for stage in ["merge", "reparent", "marker", "clear", "destroy"] {
+        let dir =
+            env::temp_dir().join(format!("vsdb-dag-wal-{}", rand::random::<u128>()));
+        for action in ["seed", "recover"] {
+            let result = Command::new(env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "dagmap::raw::test::dag_wal_barriers_survive_process_exit_without_table_flush",
+                    "--nocapture",
+                ])
+                .env("VSDB_BASE_DIR", &dir)
+                .env("VSDB_DAG_WAL_PHASE", action)
+                .env("VSDB_DAG_WAL_STAGE", stage)
+                .env("VSDB_DAG_WAL_DIR", &dir)
+                .output()
+                .unwrap();
+            assert!(result.status.success(), "{stage}/{action}: {result:?}");
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
 }

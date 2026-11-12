@@ -460,12 +460,12 @@ impl DagMapRaw {
     ///
     /// # Crash safety
     ///
-    /// The prune is ordered as **merge → flush → re-parent → flush → mark
-    /// → flush → clear**. Nothing is cleared before the genesis holds the
-    /// complete merged state, every surviving child has been re-pointed at
-    /// it, and each consumed node durably records that genesis (the
-    /// [`Namespace::flush`](crate::common::Namespace::flush) barriers, scoped
-    /// to this DAG's own namespace, pin that ordering across the engine's
+    /// The prune is ordered as **merge → WAL fence → re-parent → WAL fence
+    /// → mark → WAL fence → clear**. Nothing is cleared before the genesis
+    /// holds the complete merged state, every surviving child points at it,
+    /// and each consumed node durably records that genesis (the
+    /// [`Namespace::try_sync_wal`](crate::common::Namespace::try_sync_wal)
+    /// barriers, scoped to this DAG's own namespace, pin that ordering across
     /// independently-recovered shards). Because overlay reads resolve
     /// top-down, the in-place enrichment of the genesis is invisible through
     /// the head, so a crash (e.g. `kill -9` or power loss) at **any** point
@@ -545,34 +545,35 @@ impl DagMapRaw {
         // Barrier A: the merged genesis must be durable before any child
         // is re-pointed at it. Writes to different shards *within this
         // DAG's namespace* recover independently, so ordering across
-        // prefixes needs an explicit flush — scoped to this namespace
+        // prefixes needs an explicit WAL fence — scoped to this namespace
         // (a DAG never spans namespaces, see `new_in`), not the whole
-        // process: a transient flush failure in some unrelated open
-        // namespace must not be able to panic a prune() on a healthy one.
-        self.namespace().flush();
+        // process: an error in an unrelated open namespace must not fail
+        // a prune() on a healthy one. WAL fences preserve the ordering
+        // without forcing unrelated memtables into SSTs.
+        self.namespace().try_sync_wal()?;
 
         // Phase 3: re-point the head's children at the merged genesis.
         let kept = self.prune_reparent_children(linebuf.last_mut().unwrap());
 
         // Barrier B: all pointer flips must be durable before the old
         // chain is torn down.
-        self.namespace().flush();
+        self.namespace().try_sync_wal()?;
 
         // Name the genesis on every consumed node, then fence that write
         // before any clear. Parent, children, and data are different
         // prefixes; program order across shards is not power-loss order.
         // Retry keys off this marker, not off the parent slot.
         self.mark_consumed_clearing(&mut linebuf);
-        self.namespace().flush();
+        self.namespace().try_sync_wal()?;
 
         // Phases 4-5: clear the consumed nodes (head first, then
         // intermediates newest → oldest).
-        self.prune_clear_consumed(&mut linebuf);
+        self.prune_clear_consumed(&mut linebuf)?;
 
         // Barrier C: the consumed nodes' data/parent clears must be
         // durable before phase 6 removes their last discoverability
         // entries from the genesis registry.
-        self.namespace().flush();
+        self.namespace().try_sync_wal()?;
 
         // Phase 6: drop the now-dead mainline entry from the genesis'
         // children registry (side branches were already destroyed in
@@ -761,19 +762,20 @@ impl DagMapRaw {
     /// Keep every discovery edge until all consumed data is durably gone.
     /// Clearing an ancestor's children earlier can strand a not-yet-cleared
     /// descendant on interruption, even though every node has a marker.
-    fn clear_consumed_nodes(&mut self, others: &mut [Self]) {
+    fn clear_consumed_nodes(&mut self, others: &mut [Self]) -> Result<()> {
         self.clear_consumed_data();
         for node in others.iter_mut() {
             node.clear_consumed_data();
         }
         // Parent/data/children prefixes can recover on different shards.
         // Program order alone cannot keep the discovery edges intact.
-        self.namespace().flush();
+        self.namespace().try_sync_wal()?;
         for node in std::iter::once(self).chain(others.iter_mut()) {
             node.children.clear();
             #[cfg(test)]
             test::after_clear_step();
         }
+        Ok(())
     }
 
     /// Retry path once the clearing marker is durable.
@@ -788,20 +790,20 @@ impl DagMapRaw {
         // Complete and fence the marker set while the parent chain still
         // reaches genesis, before a clear can sever that recovery path.
         // If the chain ends early, clearing already started, which is only
-        // allowed after the complete marker set was durably flushed.
+        // allowed after the complete marker set was durably fenced.
         let mut linebuf = self.prune_collect_mainline()?;
         if linebuf
             .last()
             .is_some_and(|node| node.instance_id() == genesis.instance_id())
         {
             self.mark_consumed_clearing(&mut linebuf);
-            self.namespace().flush();
+            self.namespace().try_sync_wal()?;
         }
         if !self.no_children() {
             self.prune_reparent_children(&mut genesis);
         }
-        self.clear_marked_reachable(&mut genesis);
-        self.namespace().flush();
+        self.clear_marked_reachable(&mut genesis)?;
+        self.namespace().try_sync_wal()?;
         let kept = Self::survivor_ids(&genesis);
         genesis.prune_children_exclude(&kept);
         Ok(genesis)
@@ -826,7 +828,7 @@ impl DagMapRaw {
     /// Clear every marked descendant reachable from `root`'s children
     /// registry, then drop those registry entries. Iterative: a mainline
     /// can be deeper than the stack allows.
-    fn clear_marked_reachable(&mut self, root: &mut Self) {
+    fn clear_marked_reachable(&mut self, root: &mut Self) -> Result<()> {
         let mut frontier: Vec<Self> = root
             .children
             .iter()
@@ -859,13 +861,14 @@ impl DagMapRaw {
         // an interrupted registry pass also keeps its unfinished tail
         // discoverable when writes have survived in program order.
         marked.reverse();
-        self.clear_consumed_nodes(&mut marked);
+        self.clear_consumed_nodes(&mut marked)?;
         for id in drop_from_root {
             root.children.remove(&id);
         }
+        Ok(())
     }
 
-    /// Prune phases 4-5: clear data/parents, flush, then clear registries.
+    /// Prune phases 4-5: clear data/parents, WAL fence, then clear registries.
     ///
     /// The clearing marker (already durable) is what makes a retry safe.
     /// Parent, children, and data live on different prefixes, so their
@@ -873,11 +876,11 @@ impl DagMapRaw {
     /// mechanism. The marker is left in place: a later `prune` on the
     /// consumed head still resolves to the genesis.
     ///
-    /// The caller flushes immediately after this phase, before phase 6
+    /// The caller fences immediately after this phase, before phase 6
     /// unregisters the consumed chain.
-    fn prune_clear_consumed(&mut self, linebuf: &mut [Self]) {
+    fn prune_clear_consumed(&mut self, linebuf: &mut [Self]) -> Result<()> {
         let mid = linebuf.len() - 1;
-        self.clear_consumed_nodes(&mut linebuf[..mid]);
+        self.clear_consumed_nodes(&mut linebuf[..mid])
     }
 
     /// Prunes children that are in the `include_targets` list.
@@ -958,7 +961,7 @@ impl DagMapRaw {
     /// still-intact registry entry, so a retried `destroy()` or a
     /// subsequent `prune()` converges instead of leaking.
     ///
-    /// A namespace flush separates the data/parent pass from registry
+    /// A namespace WAL fence separates the data/parent pass from registry
     /// clearing, making this ordering durable across independent shard WALs.
     ///
     /// The descendant walk follows the children registries but treats each
@@ -1045,7 +1048,9 @@ impl DagMapRaw {
         // registries. Make every destructive clear durable before any
         // registry entry can disappear on a later independently-recovered
         // WAL.
-        self.namespace().flush();
+        self.namespace()
+            .try_sync_wal()
+            .expect("vsdb: DAG destruction WAL synchronization failed");
 
         // Pass 2: every owned descendant's data is already gone, so
         // clearing the children registries in any order — even if

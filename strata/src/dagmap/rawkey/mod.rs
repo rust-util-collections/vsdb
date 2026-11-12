@@ -279,8 +279,9 @@ where
 
     /// Prunes the DAG, merging all nodes in the mainline into the genesis node.
     ///
-    /// Crash-safe by phase ordering (merge → flush → re-parent → flush →
-    /// clear) — see [`DagMapRaw::prune`] for the full contract.
+    /// Crash-safe by phase ordering (merge → WAL fence → re-parent → WAL
+    /// fence → mark → WAL fence → clear) — see [`DagMapRaw::prune`] for
+    /// the full contract.
     #[inline(always)]
     pub fn prune(self) -> Result<DagHead<V>> {
         self.inner.prune().map(|inner| Self {
