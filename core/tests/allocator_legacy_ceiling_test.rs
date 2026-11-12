@@ -184,3 +184,176 @@ fn missing_ceiling_does_not_reuse_live_prefix() {
 
     fs::remove_dir_all(&scratch).unwrap();
 }
+
+const KEYLESS_PHASE: &str = "VSDB_ALLOC_KEYLESS_PHASE";
+const KEYLESS_BASE: &str = "VSDB_ALLOC_KEYLESS_BASE";
+const KEYLESS_PARENT: &str = "VSDB_ALLOC_KEYLESS_PARENT";
+const KEYLESS_VALUE_TEST: &str = "missing_ceiling_does_not_reuse_handle_in_value";
+const KEYLESS_CUSTOM_TEST: &str = "missing_ceiling_does_not_reuse_handle_in_custom_dir";
+
+fn keyless_child(test: &str, phase: &str, base: &Path, parent_file: &Path) -> Output {
+    Command::new(env::current_exe().unwrap())
+        .args(["--exact", test, "--nocapture"])
+        .env(KEYLESS_PHASE, phase)
+        .env(KEYLESS_BASE, base)
+        .env(KEYLESS_PARENT, parent_file)
+        .output()
+        .unwrap()
+}
+
+fn keyless_line<'a>(stdout: &'a str, key: &str) -> &'a str {
+    stdout
+        .lines()
+        .find_map(|line| line.strip_prefix(key))
+        .unwrap_or_else(|| panic!("missing {key} in stdout: {stdout}"))
+        .trim()
+}
+
+/// An empty map whose only durable copy is a `VSMAPX01` value inside
+/// another map has no key of its own. Deleting the ceiling file must
+/// not hand that prefix to the next `MapxRaw::new`.
+#[test]
+fn missing_ceiling_does_not_reuse_handle_in_value() {
+    if let Ok(phase) = env::var(KEYLESS_PHASE) {
+        let base = PathBuf::from(env::var(KEYLESS_BASE).unwrap());
+        vsdb_configure(VsdbOptions::new(&base)).unwrap();
+        match phase.as_str() {
+            "seed" => {
+                // `new` defers allocation until first use. Give the keeper
+                // a key first so the empty child is the highest prefix and
+                // is not covered by the keeper's key prefix.
+                let mut keeper = MapxRaw::new();
+                keeper.insert(b"anchor", b"1");
+                let child = MapxRaw::new();
+                let child_bytes = postcard::to_allocvec(&child).unwrap();
+                keeper.insert(b"child", &child_bytes);
+                let parent_file = PathBuf::from(env::var(KEYLESS_PARENT).unwrap());
+                fs::write(&parent_file, postcard::to_allocvec(&keeper).unwrap())
+                    .unwrap();
+                println!("CHILD={}", child.instance_id().map_id);
+            }
+            "reopen" => {
+                // Allocate before restoring. A same-run reservation would
+                // hide a prefix the scan never observed.
+                let mut fresh = MapxRaw::new();
+                fresh.insert(b"k", b"fresh");
+                let parent_file = PathBuf::from(env::var(KEYLESS_PARENT).unwrap());
+                let parent: MapxRaw =
+                    postcard::from_bytes(&fs::read(&parent_file).unwrap()).unwrap();
+                let child_bytes = parent.get(b"child").unwrap();
+                let mut child: MapxRaw = postcard::from_bytes(&child_bytes).unwrap();
+                child.insert(b"k", b"child");
+                println!("FRESH={}", fresh.instance_id().map_id);
+                println!(
+                    "FRESH_SEES={}",
+                    fresh.get(b"k").as_deref().unwrap().escape_ascii()
+                );
+                println!(
+                    "CHILD_SEES={}",
+                    child.get(b"k").as_deref().unwrap().escape_ascii()
+                );
+            }
+            other => panic!("unknown phase {other}"),
+        }
+        return;
+    }
+
+    let scratch = env::temp_dir().join(format!(
+        "vsdb_alloc_keyless_value_{}_{}",
+        std::process::id(),
+        rand::random::<u128>()
+    ));
+    let base = scratch.join("base");
+    let parent_file = scratch.join("keeper.handle");
+    fs::create_dir_all(&base).unwrap();
+
+    let output = keyless_child(KEYLESS_VALUE_TEST, "seed", &base, &parent_file);
+    assert!(output.status.success(), "seed phase failed: {output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let child: u64 = keyless_line(&stdout, "CHILD=").parse().unwrap();
+
+    fs::remove_file(base.join("__SYSTEM__/__prefix_ceiling__")).unwrap();
+
+    let output = keyless_child(KEYLESS_VALUE_TEST, "reopen", &base, &parent_file);
+    assert!(output.status.success(), "reopen phase failed: {output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let fresh: u64 = keyless_line(&stdout, "FRESH=").parse().unwrap();
+    assert!(
+        fresh > child,
+        "reissued {fresh}, which is not above the keyless handle {child}"
+    );
+    assert_eq!(keyless_line(&stdout, "FRESH_SEES="), "fresh");
+    assert_eq!(keyless_line(&stdout, "CHILD_SEES="), "child");
+
+    fs::remove_dir_all(&scratch).unwrap();
+}
+
+/// The custom directory is the documented bootstrap for top-level
+/// handles. An empty map saved only there must survive ceiling loss.
+#[test]
+fn missing_ceiling_does_not_reuse_handle_in_custom_dir() {
+    if let Ok(phase) = env::var(KEYLESS_PHASE) {
+        let base = PathBuf::from(env::var(KEYLESS_BASE).unwrap());
+        vsdb_configure(VsdbOptions::new(&base)).unwrap();
+        match phase.as_str() {
+            "seed" => {
+                let child = MapxRaw::new();
+                let child_bytes = postcard::to_allocvec(&child).unwrap();
+                let custom = vsdb_core::vsdb_get_custom_dir();
+                fs::create_dir_all(custom).unwrap();
+                fs::write(custom.join("root"), &child_bytes).unwrap();
+                println!("CHILD={}", child.instance_id().map_id);
+            }
+            "reopen" => {
+                // Allocate before restoring. A same-run reservation would
+                // hide a prefix the scan never observed.
+                let mut fresh = MapxRaw::new();
+                fresh.insert(b"k", b"fresh");
+                let custom = vsdb_core::vsdb_get_custom_dir();
+                let mut child: MapxRaw =
+                    postcard::from_bytes(&fs::read(custom.join("root")).unwrap())
+                        .unwrap();
+                child.insert(b"k", b"child");
+                println!("FRESH={}", fresh.instance_id().map_id);
+                println!(
+                    "FRESH_SEES={}",
+                    fresh.get(b"k").as_deref().unwrap().escape_ascii()
+                );
+                println!(
+                    "CHILD_SEES={}",
+                    child.get(b"k").as_deref().unwrap().escape_ascii()
+                );
+            }
+            other => panic!("unknown phase {other}"),
+        }
+        return;
+    }
+
+    let scratch = env::temp_dir().join(format!(
+        "vsdb_alloc_keyless_custom_{}_{}",
+        std::process::id(),
+        rand::random::<u128>()
+    ));
+    let base = scratch.join("base");
+    fs::create_dir_all(&base).unwrap();
+
+    let output = keyless_child(KEYLESS_CUSTOM_TEST, "seed", &base, &base);
+    assert!(output.status.success(), "seed phase failed: {output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let child: u64 = keyless_line(&stdout, "CHILD=").parse().unwrap();
+
+    fs::remove_file(base.join("__SYSTEM__/__prefix_ceiling__")).unwrap();
+
+    let output = keyless_child(KEYLESS_CUSTOM_TEST, "reopen", &base, &base);
+    assert!(output.status.success(), "reopen phase failed: {output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let fresh: u64 = keyless_line(&stdout, "FRESH=").parse().unwrap();
+    assert!(
+        fresh > child,
+        "reissued {fresh}, which is not above the custom-dir handle {child}"
+    );
+    assert_eq!(keyless_line(&stdout, "FRESH_SEES="), "fresh");
+    assert_eq!(keyless_line(&stdout, "CHILD_SEES="), "child");
+
+    fs::remove_dir_all(&scratch).unwrap();
+}

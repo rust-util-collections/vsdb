@@ -746,10 +746,11 @@ pub(crate) fn validate_completed_dataset(
 /// `__prefix_ceiling__` from a copy that still holds collection keys
 /// would otherwise rewrite the floor and hand those prefixes out again.
 /// When the file is absent the fold scans open default shards (when the
-/// caller already holds them), on-disk shard dirs, saved handle metas,
-/// and registered namespace roots, and raises the ceiling strictly above
-/// every prefix it finds. A scan that cannot open an existing shard
-/// fails the fold instead of guessing low.
+/// caller already holds them), on-disk shard dirs, key prefixes and
+/// `VSMAPX01` bytes inside stored values, saved handle metas, the
+/// universe custom directory, and registered namespace roots, and raises
+/// the ceiling strictly above every prefix it finds. A scan that cannot
+/// open an existing shard fails the fold instead of guessing low.
 ///
 /// Never races a ceiling bump: bumps require the allocator to be
 /// initialized (`GLOBAL_COUNTER != 0`), and every path that initializes
@@ -1138,11 +1139,14 @@ fn note_issued_prefix(max: &mut Option<Pre>, prefix: Pre) {
 
 fn note_db_prefixes(db: &DB, max: &mut Option<Pre>) -> Result<()> {
     let mut iter = db.iter().c(d!("scan shard for issued prefixes"))?;
-    for (key, _) in iter.by_ref() {
+    for (key, value) in iter.by_ref() {
         if key.len() >= PREFIX_SIZE {
             let prefix = Pre::from_le_bytes(key[..PREFIX_SIZE].try_into().unwrap());
             note_issued_prefix(max, prefix);
         }
+        // An empty nested handle has no key of its own. Its durable copy
+        // is the `VSMAPX01` prefix inside the parent's value.
+        note_meta_bytes(max, &value);
     }
     if let Some(error) = iter.error() {
         return Err(eg!(error));
@@ -1247,7 +1251,9 @@ fn same_dataset(open: &Path, registered: &Path) -> bool {
 /// holds the shard lock, including the first allocation inside a
 /// namespace that was just created. Every other dataset is opened
 /// read-only. Saved `VSMAPX01` handle bytes count even when the map
-/// itself is empty, so a prefix that has no key rows is not reused.
+/// itself is empty — in shard values, instance metadata, and the
+/// universe `__CUSTOM__` directory — so a prefix that has no key rows
+/// is not reused. A coincidental magic only raises the ceiling.
 fn highest_issued_prefix(
     open_default: Option<&[DB]>,
     base_dir: &Path,
@@ -1281,6 +1287,9 @@ fn highest_issued_prefix(
         }
         note_engine_tree(&mut max, &root)?;
     }
+    // Top-level handles are bootstrapped from `{base}/__CUSTOM__/`
+    // (see `vsdb_get_custom_dir`), often before those maps have keys.
+    note_meta_dir(&mut max, &base_dir.join("__CUSTOM__"))?;
     Ok(max)
 }
 
