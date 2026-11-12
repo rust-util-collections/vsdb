@@ -184,6 +184,9 @@ fn replay(
         tree.acquire_node(next);
         if root != target_root {
             tree.release_buffered(root);
+            // Restored trees have no ref counts yet. Drop this intermediate
+            // from the buffer anyway so the flush writes only `next`.
+            tree.drop_untracked_pending(root, next);
         }
         root = next;
         tree.flush_pending_if_large();

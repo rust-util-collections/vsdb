@@ -795,6 +795,43 @@ impl PersistentBTree {
         }
     }
 
+    /// Drops buffered nodes that belong only to `dead` when ref tracking
+    /// is off. `release_buffered` cannot see those nodes yet: a restored
+    /// tree stays `ready == false` until `rebuild_ref_counts`, and acquire
+    /// / release are no-ops in that mode. On-disk nodes are left in place
+    /// because, without counts, they may still belong to the pre-merge tree.
+    fn drop_untracked_pending(&mut self, dead: NodeId, survivor: NodeId) {
+        if self.runtime.refs.lock().ready {
+            return;
+        }
+        let keep = self.pending_closure(survivor);
+        for id in self.pending_closure(dead) {
+            if !keep.contains(&id) {
+                self.pending.remove(&id);
+            }
+        }
+    }
+
+    /// Pending node ids reachable from `root`. An id that is not buffered
+    /// is recorded but not expanded: its children are already durable and
+    /// cannot point at nodes allocated later in this operation.
+    fn pending_closure(&self, root: NodeId) -> HashSet<NodeId> {
+        let mut seen = HashSet::new();
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            if id == EMPTY_ROOT || !seen.insert(id) {
+                continue;
+            }
+            let Some(raw) = self.pending.get(&id) else {
+                continue;
+            };
+            if let Node::Internal { children, .. } = Node::decode(raw) {
+                stack.extend(children);
+            }
+        }
+        seen
+    }
+
     /// Drops one reference taken with [`acquire_node`](Self::acquire_node)
     /// **without** reclaiming the node at zero: it stays alive as an
     /// unowned fresh root (like a [`bulk_load`](Self::bulk_load) result)

@@ -1059,6 +1059,51 @@ fn test_save_and_from_meta() {
     assert_eq!(restored.get(r, b"bob").unwrap(), b"200");
 }
 
+/// A restored tree has no ref-count map yet. Merge must still drop
+/// superseded intermediates before flush, the same as a live tree.
+#[test]
+fn restored_merge_drops_dead_intermediates() {
+    fn build() -> (PersistentBTree, NodeId, NodeId, NodeId) {
+        let mut tree = PersistentBTree::new();
+        let mut base = EMPTY_ROOT;
+        for i in 0u8..8 {
+            base = tree.insert(base, &[i], &[1]);
+        }
+        let src = {
+            let once = tree.insert(base, &[0], &[2]);
+            tree.insert(once, &[1], &[2])
+        };
+        let tgt = tree.insert(base, &[2], &[3]);
+        (tree, base, src, tgt)
+    }
+
+    let (mut hot, base, src, tgt) = build();
+    let (origin, base2, src2, tgt2) = build();
+    assert_eq!((base, src, tgt), (base2, src2, tgt2));
+    let bytes = postcard::to_allocvec(&origin).unwrap();
+    drop(origin);
+    let mut cold: PersistentBTree = postcard::from_bytes(&bytes).unwrap();
+    assert!(!cold.runtime.refs.lock().ready);
+
+    let hot_before = hot.nodes.iter().count();
+    let cold_before = cold.nodes.iter().count();
+    assert_eq!(hot_before, cold_before);
+
+    let hot_root = hot.merge(&[base], src, tgt);
+    let cold_root = cold.merge(&[base2], src2, tgt2);
+    assert_eq!(
+        hot.iter(hot_root).collect::<Vec<_>>(),
+        cold.iter(cold_root).collect::<Vec<_>>()
+    );
+
+    let hot_written = hot.nodes.iter().count() - hot_before;
+    let cold_written = cold.nodes.iter().count() - cold_before;
+    assert_eq!(
+        cold_written, hot_written,
+        "restored merge persisted {cold_written} nodes, live merge persisted {hot_written}"
+    );
+}
+
 /// Postcard serde roundtrip for PersistentBTree (hand-written tuple serde).
 #[test]
 fn test_serde_roundtrip() {
