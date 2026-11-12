@@ -907,6 +907,11 @@ where
         }
 
         let cache = RefCell::new(HashMap::<u64, Rc<Vec<S>>>::new());
+        // Passing keys have already been read and decoded by the filter.
+        // Retain at most k for result emission: large keys must not grow this
+        // cache with the visited set. Results absent from it are read normally.
+        // Rejected keys and unfiltered searches do not populate this cache.
+        let filtered_keys = RefCell::new(HashMap::<u64, K>::new());
         let get_vec = |id: u64| -> Option<Rc<Vec<S>>> {
             if let Some(v) = cache.borrow().get(&id) {
                 // Cheap refcount bump — no vector data is copied, unlike
@@ -924,8 +929,20 @@ where
 
         let node_filter: Option<Box<dyn Fn(u64) -> bool + '_>> =
             predicate.map(|pred| -> Box<dyn Fn(u64) -> bool + '_> {
+                let filtered_keys = &filtered_keys;
                 Box::new(move |node_id: u64| {
-                    self.node_user_key(node_id).is_some_and(|k| pred(&k))
+                    let Some(key) = self.node_user_key(node_id) else {
+                        return false;
+                    };
+                    if pred(&key) {
+                        let mut keys = filtered_keys.borrow_mut();
+                        if keys.len() < k {
+                            keys.insert(node_id, key);
+                        }
+                        true
+                    } else {
+                        false
+                    }
                 })
             });
         let filter_ref: Option<&dyn Fn(u64) -> bool> =
@@ -962,7 +979,15 @@ where
 
         let mut out = Vec::with_capacity(k.min(results.len()));
         for (dist, node_id) in results.into_iter().take(k) {
-            if let Some(key) = self.node_user_key(node_id) {
+            let key = if predicate.is_some() {
+                filtered_keys
+                    .borrow_mut()
+                    .remove(&node_id)
+                    .or_else(|| self.node_user_key(node_id))
+            } else {
+                self.node_user_key(node_id)
+            };
+            if let Some(key) = key {
                 out.push((key, dist));
             }
         }

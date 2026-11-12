@@ -466,6 +466,91 @@ fn filtered_search_respects_k() {
 }
 
 #[test]
+fn filtered_search_reuses_decoded_result_keys() {
+    use std::cell::Cell;
+
+    thread_local! {
+        static KEY_DECODES: Cell<usize> = const { Cell::new(0) };
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+    struct CountingKey(u64);
+
+    impl<'de> Deserialize<'de> for CountingKey {
+        fn deserialize<De: serde::Deserializer<'de>>(
+            deserializer: De,
+        ) -> std::result::Result<Self, De::Error> {
+            KEY_DECODES.with(|count| count.set(count.get() + 1));
+            u64::deserialize(deserializer).map(Self)
+        }
+    }
+
+    let mut index = VecDex::<CountingKey, L2>::new(HnswConfig {
+        dim: 1,
+        ..Default::default()
+    })
+    .unwrap();
+    for n in 0..32 {
+        index.insert(&CountingKey(n), &[n as f32]).unwrap();
+    }
+
+    // An exhaustive beam also exercises disconnected-component restarts.
+    // Every key is decoded once for the predicate, including rejected keys;
+    // When every passing key fits in the cache, result emission must not
+    // read it again. Smaller result limits may need uncached keys instead.
+    for (k, divisor) in [(32, 1), (7, 2), (1, 32), (4, 100)] {
+        KEY_DECODES.with(|count| count.set(0));
+        let predicate_calls = Cell::new(0);
+        let results = index
+            .search_ef_with_filter(&[0.], k, 32, |key| {
+                predicate_calls.set(predicate_calls.get() + 1);
+                (key.0 + 1).is_multiple_of(divisor)
+            })
+            .unwrap();
+        let expected: Vec<_> = (0u64..32)
+            .filter(|n| (n + 1).is_multiple_of(divisor))
+            .take(k)
+            .collect();
+        assert_eq!(
+            results.iter().map(|(key, _)| key.0).collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(predicate_calls.get(), 32);
+        let decodes = KEY_DECODES.with(Cell::get);
+        assert!((32..=32 + results.len()).contains(&decodes));
+        if k == 32 || divisor >= 32 {
+            assert_eq!(decodes, predicate_calls.get());
+        }
+    }
+
+    KEY_DECODES.with(|count| count.set(0));
+    let results = index.search_ef(&[0.], 7, 32).unwrap();
+    assert_eq!(results.len(), 7);
+    assert_eq!(KEY_DECODES.with(Cell::get), results.len());
+
+    // Only the first passing key fits at k=1. Start in the farthest isolated
+    // component; the closest key discovered by fallback must be read on a
+    // cache miss, without invoking its predicate again or losing the result.
+    let node_ids: Vec<_> = index.node_layers().map(|(id, _)| id).collect();
+    index.state.entry_point = node_ids.iter().copied().max();
+    index.state.max_layer = 0;
+    for id in node_ids {
+        index.store.remove(hnsw::adj_key(0, id));
+    }
+    KEY_DECODES.with(|count| count.set(0));
+    let predicate_calls = Cell::new(0);
+    let results = index
+        .search_ef_with_filter(&[0.], 1, 32, |_| {
+            predicate_calls.set(predicate_calls.get() + 1);
+            true
+        })
+        .unwrap();
+    assert_eq!(results[0].0, CountingKey(0));
+    assert_eq!(predicate_calls.get(), 32);
+    assert_eq!(KEY_DECODES.with(Cell::get), 33);
+}
+
+#[test]
 fn f64_basic() {
     let cfg = HnswConfig {
         dim: 3,
