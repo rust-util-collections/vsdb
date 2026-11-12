@@ -116,14 +116,12 @@ impl PersistentBTree {
         };
         keys.remove(idx);
         values.remove(idx);
-        let nid = self.alloc(&Node::Leaf {
-            keys: keys.clone(),
-            values,
-        });
-        if keys.len() >= MIN_KEYS {
-            RemoveResult::Done(nid)
-        } else {
+        let underflow = keys.len() < MIN_KEYS;
+        let nid = self.alloc(&Node::Leaf { keys, values });
+        if underflow {
             RemoveResult::Underflow(nid)
+        } else {
+            RemoveResult::Done(nid)
         }
     }
 
@@ -170,14 +168,12 @@ impl PersistentBTree {
         // Merge (prefer left).
         let mi = if ci > 0 { ci - 1 } else { ci };
         self.merge_children(&mut keys, &mut children, mi);
-        let nid = self.alloc(&Node::Internal {
-            keys: keys.clone(),
-            children,
-        });
-        if keys.len() >= MIN_KEYS {
-            RemoveResult::Done(nid)
-        } else {
+        let underflow = keys.len() < MIN_KEYS;
+        let nid = self.alloc(&Node::Internal { keys, children });
+        if underflow {
             RemoveResult::Underflow(nid)
+        } else {
+            RemoveResult::Done(nid)
         }
     }
 
