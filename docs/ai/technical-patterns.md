@@ -41,7 +41,7 @@ Require same type, unique prefix ownership, correct namespace; no external untru
 Postcard key bytes must be canonical — `HashMap`/`HashSet`/floats (±0.0, NaN) make lookups silently miss. Ordered maps need `KeyEnDeOrdered`, never postcard order.
 
 ### 3.2 Version incompatibility
-Pin postcard; explicit tags/envelopes + old fixtures. `#[serde(default)]` alone ≠ safe postcard layout change. See `compatibility-policy.md`.
+Postcard uses a compatible requirement, currently 1.1.3. Explicit tags/envelopes + old fixtures. `#[serde(default)]` alone ≠ safe postcard layout change. See `compatibility-policy.md`.
 
 ### 3.3 Node codec asymmetry
 Hand codecs encode/decode field order match + round-trip tests.
