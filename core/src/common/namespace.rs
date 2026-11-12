@@ -348,10 +348,13 @@ fn load_registry() -> Result<RegistryFile> {
 /// open, plus those engines' roots. The allocator scans these handles
 /// instead of opening the shards again while it is still starting.
 pub(crate) fn open_namespace_prefix_snapshot() -> Result<(Option<u64>, Vec<PathBuf>)> {
-    let open = OPEN_NAMESPACES.lock();
+    // Pin the engines while scanning without blocking unrelated namespace
+    // opens and metadata restores on the table lock. These handles also
+    // prevent close/destroy from tearing down a scanned engine.
+    let handles: Vec<Namespace> = OPEN_NAMESPACES.lock().values().cloned().collect();
     let mut max: Option<u64> = None;
-    let mut paths = Vec::with_capacity(open.len());
-    for ns in open.values() {
+    let mut paths = Vec::with_capacity(handles.len());
+    for ns in handles {
         paths.push(ns.0.path.clone());
         if let Some(prefix) =
             ns.0.engine
