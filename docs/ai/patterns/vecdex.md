@@ -11,10 +11,11 @@ wire tags for metric.
 
 **VD1 Entry = global max_layer** — insert promotes; remove of entry rescans true max.
 **VD2 Bidirectional edges** — L edges mutual; remove both sides. Do not
-  take reciprocal pruning or a base-layer connected graph for granted without
-  measuring old-node eviction as well as insertion; keep recall distinct from
-  reachability. See the current Open entry for its concrete disconnected
-  components reproduction and repair scope.
+  assume pruning preserves base-layer connectivity: old-node evictions can split
+  components. Public base searches lazily restart from unvisited live node-info
+  rows when a component is exhausted before filling `ef`. An unfiltered beam
+  at least as large as the index reaches all live vectors, including old graphs;
+  smaller beams remain approximate. Mutation searches keep graph-only linking.
 **VD3 Maps inverse** — key↔node↔info consistent through insert/remove/compact.
 **VD4 Input** — all vectors and queries == `meta.dim` and finite; mutations
 reject nonfinite inputs before committing. `compact()` rejects legacy nonfinite
@@ -23,7 +24,8 @@ metric's arithmetic; the input check cannot guarantee finite distances.
 **VD5 Filter traversal** — filter gates results only, not expansion; termination and
 pruning compare against the **passing** results (`ef = max(ef, k)`, no inflation);
 `filter_visit_cap = max(64·ef, 4096)` evaluated nodes bounds near-empty predicates.
-Recall at low selectivity is tested — a fixed visit budget is the known regression.
+Restart candidates share that cap and visited set. Recall at low selectivity is
+tested — a fixed visit budget is the known regression.
 **VD6 Frozen wire tags** — `WIRE_TAG_*` append-only manual serde; never derive enum order.
 New metric = new tag; unknown tag hard fail. `MetricKind` derives serde (variant index =
 public wire for callers, not the meta format) → append only, never reorder.
@@ -36,6 +38,8 @@ public wire for callers, not the meta format) → append only, never reorder.
 
 - [ ] Entry at global max_layer
 - [ ] Bidirectional edges + prune after insert
+- [ ] Exhaustive search reaches all components after insert, delete, replacement,
+      batch, restore and compact; filtered restarts respect the visit cap
 - [ ] Map triple consistency
 - [ ] Dim checks
 - [ ] Filter doesn’t block traversal; low-selectivity recall test still passes

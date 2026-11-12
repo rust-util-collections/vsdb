@@ -193,6 +193,30 @@ struct Txn<'a, S> {
     vec_cache: RefCell<HashMap<u64, Rc<Vec<S>>>>,
 }
 
+/// Graph reads for public searches, with lazy live-node seeds for disconnected
+/// components. The persistent graph and construction-time searches are unchanged.
+struct SearchRows<'a>(&'a MapxRaw);
+
+impl AdjRead for SearchRows<'_> {
+    fn adj_row(&self, key: &[u8]) -> Option<Vec<u8>> {
+        self.0.get(key)
+    }
+
+    fn fallback_nodes(&self) -> Option<Box<dyn Iterator<Item = u64> + '_>> {
+        use std::{borrow::Cow, ops::Bound};
+        Some(Box::new(
+            self.0
+                .range((
+                    Bound::Included(Cow::Owned(vec![TAG_INFO])),
+                    Bound::Excluded(Cow::Owned(vec![TAG_INFO + 1])),
+                ))
+                .map(|(key, _)| {
+                    u64::from_be_bytes(key[1..9].try_into().expect("node-info key"))
+                }),
+        ))
+    }
+}
+
 impl<S> AdjRead for Txn<'_, S> {
     #[inline]
     fn adj_row(&self, key: &[u8]) -> Option<Vec<u8>> {
@@ -807,6 +831,11 @@ where
     }
 
     /// Searches with a custom `ef` (beam width) for recall/speed tradeoff.
+    ///
+    /// If a graph component is exhausted before filling the beam, resumes
+    /// from unvisited live nodes. An unfiltered beam at least as large as
+    /// [`len`](Self::len) visits every vector, including in older disconnected
+    /// graphs, without rebuilding stored edges. Smaller beams remain approximate.
     pub fn search_ef(&self, query: &[S], k: usize, ef: usize) -> Result<Vec<(K, S)>> {
         self.search_internal(query, k, ef, None)
     }
@@ -820,6 +849,8 @@ where
     /// costs more visited nodes (roughly ∝ 1 / selectivity) rather than
     /// fewer results; a predicate that almost nothing satisfies stops at a
     /// visit cap of `max(64 × max(ef, k), 4096)` evaluated nodes.
+    /// Exhausted components resume from unvisited live nodes; those restart
+    /// candidates count toward the same cap.
     ///
     /// Use [`search_ef_with_filter`](Self::search_ef_with_filter) to trade
     /// recall against work explicitly.
@@ -925,7 +956,7 @@ where
             search_ef,
             0,
             &get_vec,
-            &self.store,
+            &SearchRows(&self.store),
             filter_ref,
         );
 

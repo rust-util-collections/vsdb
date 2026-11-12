@@ -44,6 +44,11 @@ pub(crate) fn random_layer(m: usize) -> u8 {
 /// where reads must observe the operation's own uncommitted writes).
 pub(crate) trait AdjRead {
     fn adj_row(&self, key: &[u8]) -> Option<Vec<u8>>;
+    /// Supplies live-node seeds for a read-only search that exhausts a component.
+    /// Mutation searches retain the ordinary graph-only construction policy.
+    fn fallback_nodes(&self) -> Option<Box<dyn Iterator<Item = u64> + '_>> {
+        None
+    }
 }
 
 impl AdjRead for MapxRaw {
@@ -133,6 +138,9 @@ pub(crate) fn filter_visit_cap(ef: usize) -> usize {
 /// bridge nodes) until it holds `ef` passing nodes and every remaining
 /// candidate is farther than the worst of them — at most
 /// [`filter_visit_cap`] evaluated nodes.
+/// Public base-layer searches can supply lazy fallback seeds: an exhausted
+/// component resumes from an unvisited node while the result set is underfull.
+/// Restarts share the visited set and filter budget with ordinary traversal.
 pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>, A: AdjRead + ?Sized>(
     query: &[S],
     entry_points: &[u64],
@@ -161,7 +169,41 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>, A: AdjRead + ?Sized>
     }
 
     let mut neighbor_buf = Vec::new();
-    'search: while let Some(Reverse((OrdS(c_dist), c_id))) = candidates.pop() {
+    // Most queries fill their beam through graph traversal. Only open the
+    // ordered row scan if a component is exhausted before that happens.
+    let mut fallback = None;
+    let mut fallback_started = false;
+    'search: loop {
+        let next = match candidates.pop() {
+            Some(next) => next,
+            None => {
+                if result.len() >= ef
+                    || visit_cap.is_some_and(|cap| visited.len() >= cap)
+                {
+                    break;
+                }
+                if !fallback_started {
+                    fallback = adj.fallback_nodes();
+                    fallback_started = true;
+                }
+                let Some(id) = fallback
+                    .as_mut()
+                    .and_then(|nodes| nodes.find(|id| !visited.contains(id)))
+                else {
+                    break;
+                };
+                visited.insert(id);
+                let Some(vector) = get_vector(id) else {
+                    continue;
+                };
+                let dist = D::distance(query, &vector);
+                if passes(id) {
+                    result.push((OrdS(dist), id));
+                }
+                Reverse((OrdS(dist), id))
+            }
+        };
+        let Reverse((OrdS(c_dist), c_id)) = next;
         // Stop when the nearest unexpanded candidate is farther than the
         // worst of `ef` results.
         if result.len() >= ef

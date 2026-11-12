@@ -119,6 +119,13 @@ Use the defaults as a starting point and measure recall against an exact
 search on representative vectors. Increasing `ef_search` trades query work
 for recall; `m` and `ef_construction` also affect build cost and graph size.
 
+If traversal exhausts a graph component before filling the beam, search
+lazily scans node-info rows and resumes from unvisited live nodes. An
+unfiltered beam at least as large as `len()` visits every vector, including
+disconnected graphs written by earlier versions. This needs no rebuild or
+stored-data rewrite. Smaller beams remain approximate; a restart scan adds
+work only when ordinary graph traversal cannot fill the beam.
+
 ## Distance Metrics
 
 | Metric | Formula | When to use |
@@ -175,9 +182,9 @@ let results = idx.search_with_filter(&query, 10, |k: &String| {
 
 The search keeps expanding until it holds `max(ef, k)` passing candidates
 and every remaining frontier node is farther than the worst of them, so a
-selective predicate can require visiting more nodes. The frontier can still
-be exhausted before enough matching candidates are found. A predicate that
-almost nothing satisfies is bounded by a visit cap of
+selective predicate can require visiting more nodes. An exhausted component
+resumes from unvisited live nodes, with restart candidates counting toward
+the same visit cap. A predicate that almost nothing satisfies is bounded by
 `max(64 × max(ef, k), 4096)` evaluated nodes;
 beyond it, results can be incomplete — scan the matching keys directly for
 such filters.

@@ -1821,3 +1821,157 @@ fn filtered_search_keeps_recall_under_selective_filters() {
         "filtered recall@{k} = {avg_recall:.2}, expected >= 0.8"
     );
 }
+
+fn insert_at_layer(idx: &mut VecDex<u64, L2>, id: u64, vector: &[f32], layer: u8) {
+    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state.clone());
+    txn.put_vec(id, vector);
+    txn.rows
+        .put(user_key(&KeyEnDe::encode(&id)), id.to_le_bytes().to_vec());
+    txn.rows
+        .put(node_key(TAG_NODE2KEY, id).to_vec(), encode_value(&id));
+    txn.rows
+        .put(node_key(TAG_INFO, id).to_vec(), encode_value(&layer));
+    txn.state.next_node_id = id + 1;
+    txn.state.node_count += 1;
+    VecDex::<u64, L2>::link_node(&mut txn, &idx.config, id, vector, layer);
+    let (rows, state) = txn.finish();
+    rows.commit(&mut idx.store).unwrap();
+    idx.state = state;
+}
+
+#[test]
+fn exhaustive_search_restarts_disconnected_components() {
+    let cfg = HnswConfig {
+        dim: 2,
+        m: 2,
+        m_max0: 2,
+        ef_construction: 20,
+        ef_search: 20,
+    };
+    let mut idx: VecDex<u64, L2> = VecDex::new(cfg).unwrap();
+    for (id, vec) in [
+        [80145., 73111.],
+        [55528., 77346.],
+        [80934., 2584.],
+        [67147., 58415.],
+    ]
+    .iter()
+    .enumerate()
+    {
+        insert_at_layer(&mut idx, id as u64, vec, 0);
+    }
+    let mut visited = HashSet::new();
+    let mut todo = vec![idx.state.entry_point.unwrap()];
+    while let Some(id) = todo.pop() {
+        if visited.insert(id) {
+            todo.extend(hnsw::get_neighbors(&idx.store, 0, id));
+        }
+    }
+    assert_eq!(
+        visited.len(),
+        3,
+        "the stored base graph must reproduce the split"
+    );
+    assert_eq!(idx.search_ef(&[50000., 50000.], 4, 4).unwrap().len(), 4);
+    assert_eq!(
+        idx.search_ef_with_filter(&[50000., 50000.], 4, 4, |_| true)
+            .unwrap()
+            .len(),
+        4
+    );
+    assert_eq!(
+        idx.search_ef_with_filter(&[50000., 50000.], 1, 4, |key| *key == 2)
+            .unwrap()[0]
+            .0,
+        2
+    );
+    assert_eq!(idx.search(&[50000., 50000.], 4).unwrap().len(), 4);
+    // Finite inputs can overflow L2 arithmetic; tied infinite distances
+    // must not stop exhaustive traversal before every node is reached.
+    assert_eq!(idx.search_ef(&[f32::MAX; 2], 4, 4).unwrap().len(), 4);
+}
+
+#[test]
+fn low_degree_search_reaches_all_live_nodes_after_mutations() {
+    for seed in 0..8u64 {
+        let cfg = HnswConfig {
+            dim: 2,
+            m: 2,
+            m_max0: 2,
+            ef_construction: 20,
+            ef_search: 20,
+        };
+        let mut idx: VecDex<u64, L2> = VecDex::new(cfg).unwrap();
+        let mut x = seed + 1;
+        for id in 0..160u64 {
+            x = x.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let v0 = (x >> 40) as f32;
+            x = x.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let v1 = (x >> 40) as f32;
+            insert_at_layer(&mut idx, id, &[v0, v1], (x.trailing_zeros() as u8).min(8));
+        }
+        let query = [5000000., 5000000.];
+        assert_eq!(idx.search_ef(&query, 160, 160).unwrap().len(), 160);
+        let bytes = postcard::to_allocvec(&idx).unwrap();
+        drop(idx);
+        let mut idx: VecDex<u64, L2> = postcard::from_bytes(&bytes).unwrap();
+        for id in (0..160).step_by(3) {
+            idx.remove(&id).unwrap();
+        }
+        let count = idx.len() as usize;
+        assert_eq!(idx.search_ef(&query, count, count).unwrap().len(), count);
+        idx.insert_batch(&[
+            (1000, vec![1., 1.]),
+            (1001, vec![2., 2.]),
+            (1, vec![3., 3.]),
+        ])
+        .unwrap();
+        let count = idx.len() as usize;
+        assert_eq!(idx.search_ef(&query, count, count).unwrap().len(), count);
+        let filtered = idx
+            .search_ef_with_filter(&query, count, count, |k| k % 2 == 0)
+            .unwrap();
+        assert_eq!(filtered.len(), idx.keys().filter(|k| k % 2 == 0).count());
+        idx.compact().unwrap();
+        assert_eq!(idx.search_ef(&query, count, count).unwrap().len(), count);
+    }
+}
+
+#[test]
+fn component_restarts_respect_filtered_visit_cap() {
+    let cfg = HnswConfig {
+        dim: 1,
+        m: 2,
+        m_max0: 2,
+        ef_construction: 20,
+        ef_search: 8,
+    };
+    let mut idx: VecDex<u64, L2> = VecDex::new(cfg).unwrap();
+    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state.clone());
+    let n = 4200u64;
+    for id in 0..n {
+        txn.put_vec(id, &[id as f32]);
+        txn.rows
+            .put(user_key(&KeyEnDe::encode(&id)), id.to_le_bytes().to_vec());
+        txn.rows
+            .put(node_key(TAG_NODE2KEY, id).to_vec(), encode_value(&id));
+        txn.rows
+            .put(node_key(TAG_INFO, id).to_vec(), encode_value(&0u8));
+    }
+    txn.state.next_node_id = n;
+    txn.state.node_count = n;
+    txn.state.entry_point = Some(0);
+    txn.state.max_layer = 0;
+    let (rows, state) = txn.finish();
+    rows.commit(&mut idx.store).unwrap();
+    idx.state = state;
+    let calls = std::cell::Cell::new(0);
+    let found = idx
+        .search_with_filter(&[0.], 8, |_| {
+            calls.set(calls.get() + 1);
+            false
+        })
+        .unwrap();
+    assert!(found.is_empty());
+    assert_eq!(calls.get(), hnsw::filter_visit_cap(8));
+}
