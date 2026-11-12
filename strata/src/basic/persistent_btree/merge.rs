@@ -171,11 +171,15 @@ fn replay(
     for (key, state) in changes {
         // Each key is applied once, so `root` still holds the target
         // state for it.
-        if tree.get(root, &key) == state {
-            continue;
-        }
-        let next = match &state {
-            Some(value) => tree.insert_buffered(root, &key, value),
+        let next = match state {
+            Some(value) => {
+                if tree.get(root, &key).as_deref() == Some(value.as_slice()) {
+                    continue;
+                }
+                tree.insert_buffered(root, &key, &value)
+            }
+            // Removal already returns the original root without allocating
+            // when absent, so it needs no separate lookup first.
             None => tree.remove_buffered(root, &key),
         };
         if next == root {
