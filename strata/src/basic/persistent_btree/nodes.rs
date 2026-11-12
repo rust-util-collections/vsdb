@@ -48,6 +48,14 @@ pub(crate) enum Node {
     },
 }
 
+/// Validated node fields. Metadata-only decoding leaves the payload vectors
+/// empty while retaining the distinction between leaves and internal nodes.
+struct DecodedNode {
+    keys: Vec<Vec<u8>>,
+    values: Vec<Vec<u8>>,
+    children: Option<Vec<NodeId>>,
+}
+
 impl Node {
     pub(crate) fn key_count(&self) -> usize {
         match self {
@@ -88,6 +96,28 @@ impl Node {
     // ---- decode ----
 
     pub(crate) fn decode(data: &[u8]) -> Self {
+        let decoded = Self::decode_parts::<true>(data);
+        match decoded.children {
+            Some(children) => Node::Internal {
+                keys: decoded.keys,
+                children,
+            },
+            None => Node::Leaf {
+                keys: decoded.keys,
+                values: decoded.values,
+            },
+        }
+    }
+
+    /// Decodes ownership edges without copying keys or values. Every field
+    /// still passes through the same structural checks as a full decode.
+    pub(crate) fn decode_children(data: &[u8]) -> Vec<NodeId> {
+        Self::decode_parts::<false>(data)
+            .children
+            .unwrap_or_default()
+    }
+
+    fn decode_parts<const RETAIN_PAYLOAD: bool>(data: &[u8]) -> DecodedNode {
         let len = data.len();
         assert!(
             len >= 5,
@@ -104,8 +134,8 @@ impl Node {
 
         match tag {
             TAG_LEAF => {
-                let mut keys = Vec::with_capacity(n);
-                let mut values = Vec::with_capacity(n);
+                let mut keys = Vec::with_capacity(if RETAIN_PAYLOAD { n } else { 0 });
+                let mut values = Vec::with_capacity(if RETAIN_PAYLOAD { n } else { 0 });
                 for _ in 0..n {
                     assert!(
                         pos + 4 <= len,
@@ -118,7 +148,9 @@ impl Node {
                         pos + klen <= len,
                         "PersistentBTree: truncated leaf key at pos {pos}, klen={klen}"
                     );
-                    keys.push(data[pos..pos + klen].to_vec());
+                    if RETAIN_PAYLOAD {
+                        keys.push(data[pos..pos + klen].to_vec());
+                    }
                     pos += klen;
                     assert!(
                         pos + 4 <= len,
@@ -131,13 +163,19 @@ impl Node {
                         pos + vlen <= len,
                         "PersistentBTree: truncated leaf value at pos {pos}, vlen={vlen}"
                     );
-                    values.push(data[pos..pos + vlen].to_vec());
+                    if RETAIN_PAYLOAD {
+                        values.push(data[pos..pos + vlen].to_vec());
+                    }
                     pos += vlen;
                 }
-                Node::Leaf { keys, values }
+                DecodedNode {
+                    keys,
+                    values,
+                    children: None,
+                }
             }
             TAG_INTERNAL => {
-                let mut keys = Vec::with_capacity(n);
+                let mut keys = Vec::with_capacity(if RETAIN_PAYLOAD { n } else { 0 });
                 for _ in 0..n {
                     assert!(
                         pos + 4 <= len,
@@ -150,7 +188,9 @@ impl Node {
                         pos + klen <= len,
                         "PersistentBTree: truncated internal key at pos {pos}, klen={klen}"
                     );
-                    keys.push(data[pos..pos + klen].to_vec());
+                    if RETAIN_PAYLOAD {
+                        keys.push(data[pos..pos + klen].to_vec());
+                    }
                     pos += klen;
                 }
                 let mut children = Vec::with_capacity(n + 1);
@@ -163,7 +203,11 @@ impl Node {
                     pos += 8;
                     children.push(c);
                 }
-                Node::Internal { keys, children }
+                DecodedNode {
+                    keys,
+                    values: Vec::new(),
+                    children: Some(children),
+                }
             }
             _ => panic!("PersistentBTree: corrupt node tag {tag}"),
         }

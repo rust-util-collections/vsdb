@@ -918,23 +918,17 @@ impl PersistentBTree {
                 continue;
             }
             if let Some(raw) = self.nodes.get(id.to_le_bytes()) {
-                let node = Node::decode(&raw);
-                let children = match &node {
-                    Node::Internal { children, .. } => {
-                        for &child in children {
-                            new_refs
-                                .entry(child)
-                                .or_insert_with(|| NodeRef {
-                                    ref_count: 0,
-                                    children: Vec::new(),
-                                })
-                                .ref_count += 1;
-                            queue.push(child);
-                        }
-                        children.clone()
-                    }
-                    Node::Leaf { .. } => Vec::new(),
-                };
+                let children = Node::decode_children(&raw);
+                for &child in &children {
+                    new_refs
+                        .entry(child)
+                        .or_insert_with(|| NodeRef {
+                            ref_count: 0,
+                            children: Vec::new(),
+                        })
+                        .ref_count += 1;
+                    queue.push(child);
+                }
                 new_refs
                     .entry(id)
                     .or_insert_with(|| NodeRef {

@@ -975,6 +975,46 @@ fn node_large_encode_decode() {
     }
 }
 
+#[test]
+fn node_children_decode_keeps_full_structural_validation() {
+    use std::panic::catch_unwind;
+
+    let fixtures = [
+        Node::Leaf {
+            keys: vec![Vec::new(), b"longer-key".to_vec()],
+            values: vec![Vec::new(), vec![42; 127]],
+        },
+        Node::Internal {
+            keys: vec![b"mid".to_vec(), b"right".to_vec()],
+            children: vec![11, 22, 33],
+        },
+        Node::Leaf {
+            keys: vec![],
+            values: vec![],
+        },
+        Node::Internal {
+            keys: vec![],
+            children: vec![44],
+        },
+    ];
+    for node in fixtures {
+        let encoded = node.encode();
+        let expected = match node {
+            Node::Internal { children, .. } => children,
+            Node::Leaf { .. } => Vec::new(),
+        };
+        assert_eq!(Node::decode_children(&encoded), expected);
+        for end in 0..encoded.len() {
+            let truncated = &encoded[..end];
+            assert!(catch_unwind(|| Node::decode(truncated)).is_err());
+            assert!(catch_unwind(|| Node::decode_children(truncated)).is_err());
+        }
+    }
+    let bad_tag = [2, 0, 0, 0, 0];
+    assert!(catch_unwind(|| Node::decode(&bad_tag)).is_err());
+    assert!(catch_unwind(|| Node::decode_children(&bad_tag)).is_err());
+}
+
 // =====================================================================
 // Default trait
 // =====================================================================
