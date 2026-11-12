@@ -586,8 +586,8 @@ fn prune_crash_mid_reparent_both_children_views_exact() {
 /// of that clear and retry `prune`.
 fn prepare_marked_clear(head: &mut DagMapRaw) {
     let mut linebuf = head.prune_collect_mainline().unwrap();
-    let mainline_ids: Vec<InstanceId> = {
-        let mut ids = vec![head.instance_id()];
+    let mainline_ids: HashSet<InstanceId> = {
+        let mut ids = HashSet::from([head.instance_id()]);
         ids.extend(linebuf.iter().map(|n| n.instance_id()));
         ids
     };
@@ -777,8 +777,8 @@ fn prune_interrupted_before_clear_residue_is_reclaimed_by_next_prune() {
 
     // Crash right after phase 3: merge + re-parent done, clears never ran.
     let mut linebuf = head.prune_collect_mainline().unwrap();
-    let mainline_ids: Vec<InstanceId> = {
-        let mut ids = vec![head.instance_id()];
+    let mainline_ids: HashSet<InstanceId> = {
+        let mut ids = HashSet::from([head.instance_id()]);
         ids.extend(linebuf.iter().map(|n| n.instance_id()));
         ids
     };
@@ -949,6 +949,25 @@ fn prune_retry_visits_repeated_marked_nodes_once() {
     assert_eq!(recovered.get(b"head").unwrap(), b"head-value");
     assert_eq!(survivor.get(b"head").unwrap(), b"head-value");
     assert!(children.iter().next().is_none());
+}
+
+#[test]
+fn prune_retry_removes_all_marked_root_registry_aliases() {
+    let (mut genesis, intermediate, mut head) = build_prune_fixture();
+    let survivor = DagMapRaw::new(Some(&mut head));
+    prepare_marked_clear(&mut head);
+
+    // Repeated registry aliases can survive an interrupted prune. Every
+    // alias must disappear after its marked node has been durably cleared.
+    genesis.children.insert(b"repeat-a", &intermediate);
+    genesis.children.insert(b"repeat-b", &intermediate);
+    let recovered = head.prune().unwrap();
+    assert_eq!(recovered.instance_id(), genesis.instance_id());
+    assert_merged_view(&recovered);
+    assert_merged_view(&survivor);
+    assert!(intermediate.is_dead());
+    assert_eq!(recovered.children.iter().count(), 1);
+    assert!(recovered.child_id(&survivor).is_some());
 }
 
 fn dag_wal_phase(dir: &Path, stage: &str, action: &str) {

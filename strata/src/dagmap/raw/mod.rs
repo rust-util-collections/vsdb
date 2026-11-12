@@ -517,8 +517,8 @@ impl DagMapRaw {
         }
 
         // Instance IDs on the mainline path — must not be destroyed.
-        let mainline_ids: Vec<InstanceId> = {
-            let mut ids = vec![self.instance_id()];
+        let mainline_ids: HashSet<InstanceId> = {
+            let mut ids = HashSet::from([self.instance_id()]);
             ids.extend(linebuf.iter().map(|n| n.instance_id()));
             ids
         };
@@ -623,7 +623,7 @@ impl DagMapRaw {
     /// branch is an intended deletion that the next prune completes.
     fn prune_destroy_side_branches(
         linebuf: &mut [Self],
-        mainline_ids: &[InstanceId],
+        mainline_ids: &HashSet<InstanceId>,
         pending_reparent: &HashSet<RawBytes>,
     ) {
         for node in linebuf.iter_mut() {
@@ -851,9 +851,12 @@ impl DagMapRaw {
         }
         // Match by instance id so a torn parent-null still drops the
         // registry entry. The head is cleared through `self` below.
-        let drop_from_root: Vec<_> = marked
+        // Scan the registry once, including every alias of a marked node.
+        // Repeated child_id lookups would rescan all root children per node.
+        let drop_from_root: Vec<_> = root
+            .children
             .iter()
-            .filter_map(|node| root.child_id(node))
+            .filter_map(|(id, child)| seen.contains(&child.instance_id()).then_some(id))
             .collect();
         let head_id = self.instance_id();
         marked.retain(|node| node.instance_id() != head_id);
