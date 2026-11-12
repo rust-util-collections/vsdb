@@ -670,6 +670,58 @@ fn insert_batch_checks_growth_before_each_unique_key() {
     }
 }
 
+#[test]
+fn batch_growth_tracks_new_floors_across_promotions_and_reopen() {
+    for capacity in [2u64, 16] {
+        for swap_order in [false, true] {
+            let mut serial = SlotDex::<u64, u64>::new(capacity, swap_order).unwrap();
+            let mut bulk = SlotDex::<u64, u64>::new(capacity, swap_order).unwrap();
+            let stride = capacity.pow(3);
+            // Sparse floors force several promotions. Hot-slot updates and
+            // duplicates must not be counted as additional floors.
+            let items: Vec<_> = (0..512)
+                .flat_map(|n| [(n * stride, n), (0, 10_000 + n), (n * stride, n)])
+                .collect();
+            for chunk in items.chunks(193) {
+                for &(slot, key) in chunk {
+                    serial.insert(slot, key).unwrap();
+                }
+                bulk.insert_batch(chunk.iter().copied()).unwrap();
+                assert_eq!(
+                    bulk.store.iter().collect::<Vec<_>>(),
+                    serial.store.iter().collect::<Vec<_>>(),
+                    "capacity={capacity}, swap_order={swap_order}"
+                );
+            }
+            assert!(bulk.levels.len() >= 3);
+
+            let bytes = postcard::to_allocvec(&bulk).unwrap();
+            drop(bulk);
+            let mut restored: SlotDex<u64, u64> = postcard::from_bytes(&bytes).unwrap();
+            let next: Vec<_> = (512..768)
+                .flat_map(|n| [(n * stride, n), (0, 10_000 + n), (n * stride, n)])
+                .collect();
+            for &(slot, key) in &next {
+                serial.insert(slot, key).unwrap();
+            }
+            restored.insert_batch(next).unwrap();
+            assert_eq!(
+                restored.store.iter().collect::<Vec<_>>(),
+                serial.store.iter().collect::<Vec<_>>()
+            );
+            assert_eq!(restored.total(), serial.total());
+            for order in [Order::Asc, Order::Desc] {
+                for page in [0, 3, 40] {
+                    assert_eq!(
+                        restored.page(.., 17, page, order),
+                        serial.page(.., 17, page, order)
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Regression: tiers built inside one `insert_batch` must survive a
 /// `save_meta`/`from_meta` round trip — `hydrate` has no rebuild path,
 /// so a bulk-loaded index that persisted without tier rows would be

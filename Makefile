@@ -33,6 +33,7 @@ bench:
 	VSDB_BASE_DIR="$$scratch" cargo bench -p vsdb --bench basic && \
 	VSDB_BASE_DIR="$$scratch" cargo bench -p vsdb --bench versioned && \
 	VSDB_BASE_DIR="$$scratch" cargo bench -p vsdb --bench slotdex && \
+	VSDB_BASE_DIR="$$scratch" cargo bench -p vsdb --bench slotdex_batch && \
 	VSDB_BASE_DIR="$$scratch" cargo bench -p vsdb --bench trie_bench && \
 	VSDB_BASE_DIR="$$scratch" cargo bench -p vsdb --bench vecdex
 

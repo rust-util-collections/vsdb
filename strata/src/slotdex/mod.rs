@@ -571,6 +571,9 @@ where
         let mut grown: Vec<Level<S>> = vec![];
         // Cache deltas: (level_idx, floor) -> new count, applied on success.
         let mut bumps: BTreeMap<(usize, S), EntryCnt> = BTreeMap::new();
+        // Number of floors introduced by `bumps` beyond each level's cache.
+        // Updating this once per new floor keeps the per-key growth gate O(1).
+        let mut pending_new_floors = vec![0usize; self.levels.len()];
         // Level-0 rows newly staged by earlier groups of this batch:
         // keeps the no-tiers growth gate in step with serial cadence.
         let mut pending_slot_rows: EntryCnt = 0;
@@ -589,9 +592,11 @@ where
                 &mut staged,
                 &grown,
                 &bumps,
+                &pending_new_floors,
                 pending_slot_rows,
             ) {
                 grown.push(lv);
+                pending_new_floors.push(0);
             }
 
             staged.put(ekey, vec![]);
@@ -614,13 +619,14 @@ where
             {
                 let (floor_base, buckets) = lv;
                 let floor = slot.floor_align(floor_base);
-                let v = bumps
-                    .get(&(i, floor.clone()))
-                    .copied()
-                    .unwrap_or_else(|| buckets.get(&floor).copied().unwrap_or(0))
-                    + 1;
-                staged.put(level_key(i as u8 + 1, &floor), encode_cnt(v).to_vec());
-                bumps.insert((i, floor), v);
+                let v = bumps.entry((i, floor.clone())).or_insert_with(|| {
+                    buckets.get(&floor).copied().unwrap_or_else(|| {
+                        pending_new_floors[i] += 1;
+                        0
+                    })
+                });
+                *v += 1;
+                staged.put(level_key(i as u8 + 1, &floor), encode_cnt(*v).to_vec());
             }
             total_added += 1;
         }
@@ -774,11 +780,13 @@ where
     /// stage its rows. Returns the new level's cache; the caller pushes
     /// it onto `self.levels` after the batch commits.
     fn stage_level_growth(&self, staged: &mut StagedRows) -> Option<Level<S>> {
-        self.stage_level_growth_over(staged, &[], &BTreeMap::new(), 0)
+        self.stage_level_growth_over(staged, &[], &BTreeMap::new(), &[], 0)
     }
 
     /// Growth check that also sees levels grown earlier in the same
     /// (not-yet-committed) bulk operation, plus pending bucket updates.
+    /// `pending_new_floors` counts pending floors absent from each cache;
+    /// updates to existing floors do not affect the growth threshold.
     /// `pending_slot_rows` is the number of level-0 rows staged earlier
     /// in the same operation (0 outside `insert_batch`), so a single
     /// bulk load promotes tiers mid-batch exactly like serial inserts.
@@ -787,24 +795,26 @@ where
         staged: &mut StagedRows,
         grown: &[Level<S>],
         bumps: &BTreeMap<(usize, S), EntryCnt>,
+        pending_new_floors: &[usize],
         pending_slot_rows: EntryCnt,
     ) -> Option<Level<S>> {
         let n = self.levels.len() + grown.len();
-        let new_level_no = n as u8 + 1;
+        let top = grown.last().or_else(|| self.levels.last());
+        let rows = if let Some(top) = top {
+            top.buckets.len() as i128
+                + pending_new_floors.get(n - 1).copied().unwrap_or(0) as i128
+        } else {
+            (self.slot_rows + pending_slot_rows) as i128
+        };
+        if rows <= self.tier_capacity.as_i128() {
+            return None;
+        }
 
+        let new_level_no = n as u8 + 1;
         let mut newtop = Level::new(new_level_no, &self.tier_capacity);
-        if let Some(top) = grown.last().or_else(|| self.levels.last()) {
+        if let Some(top) = top {
             let top_idx = n - 1;
             let pending = bumps.range((top_idx, S::MIN)..=(top_idx, S::MAX));
-            // Only new floors increase the bucket count. Check growth before
-            // cloning the cache, and ignore updates belonging to lower tiers.
-            let added = pending
-                .clone()
-                .filter(|((_, floor), _)| !top.buckets.contains_key(floor))
-                .count();
-            if (top.buckets.len() + added) as i128 <= self.tier_capacity.as_i128() {
-                return None;
-            }
             // Merged view of the top level: committed buckets overlaid
             // with this operation's pending updates.
             let mut view = top.buckets.clone();
@@ -816,17 +826,8 @@ where
                 *newtop.buckets.entry(floor).or_insert(0) += cnt;
             }
         } else {
-            // No tiers yet: level 0 acts as the current "top" tier — gate
-            // on ITS row count exactly like the branch above gates on
-            // `view.len()`. The count is O(1): the committed mirror
-            // (`slot_rows`, exact while tier-less) plus the rows staged
-            // earlier in this same operation. On promotion, build the new
-            // level from the merged (committed ⊕ staged) level-0 stream,
-            // so counts staged by a bulk load are folded in correctly.
-            let rows = self.slot_rows + pending_slot_rows;
-            if rows as i128 <= self.tier_capacity.as_i128() {
-                return None;
-            }
+            // No tiers yet: build from the merged (committed ⊕ staged)
+            // level-0 stream so earlier keys in this batch are included.
             for (rk, rv) in staged.scan_prefix(&self.store, &level_prefix(0)) {
                 let (slot, cnt) = decode_level_row::<S>(&rk, &rv);
                 let floor = slot.floor_align(&newtop.floor_base);

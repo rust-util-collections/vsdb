@@ -45,6 +45,10 @@ name = "slotdex"
 harness = false
 
 [[bench]]
+name = "slotdex_batch"
+harness = false
+
+[[bench]]
 name = "trie_bench"
 harness = false
 
