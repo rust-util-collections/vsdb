@@ -2,7 +2,7 @@
 //!
 //! Uses an explicit ancestor stack — no sibling pointers needed.
 
-use std::ops::Bound;
+use std::{mem, ops::Bound};
 
 use super::{EMPTY_ROOT, LeafState, Node, NodeId, PersistentBTree};
 
@@ -41,8 +41,11 @@ impl<'a> BTreeIter<'a> {
         let mut cur = id;
         loop {
             let node = self.tree.node(cur);
-            match &node {
-                Node::Internal { keys, children } => {
+            match node {
+                Node::Internal {
+                    ref keys,
+                    ref children,
+                } => {
                     let ci = match lo {
                         Bound::Unbounded => 0,
                         Bound::Included(k) | Bound::Excluded(k) => {
@@ -70,7 +73,7 @@ impl<'a> BTreeIter<'a> {
                         }
                     };
                     if start < keys.len() {
-                        self.leaf = Some((keys.clone(), values.clone(), start));
+                        self.leaf = Some((keys, values, start));
                     } else {
                         self.advance_leaf();
                     }
@@ -100,8 +103,8 @@ impl<'a> BTreeIter<'a> {
         let mut cur = id;
         loop {
             let node = self.tree.node(cur);
-            match &node {
-                Node::Internal { children, .. } => {
+            match node {
+                Node::Internal { ref children, .. } => {
                     let child = children[0];
                     self.stack.push((node, 1));
                     cur = child;
@@ -110,7 +113,7 @@ impl<'a> BTreeIter<'a> {
                     if keys.is_empty() {
                         self.advance_leaf();
                     } else {
-                        self.leaf = Some((keys.clone(), values.clone(), 0));
+                        self.leaf = Some((keys, values, 0));
                     }
                     return;
                 }
@@ -127,7 +130,7 @@ impl Iterator for BTreeIter<'_> {
             if self.done {
                 return None;
             }
-            if let Some((ref keys, ref values, ref mut pos)) = self.leaf {
+            if let Some((ref mut keys, ref mut values, ref mut pos)) = self.leaf {
                 if *pos < keys.len() {
                     let key = &keys[*pos];
                     let within = match &self.hi {
@@ -139,7 +142,7 @@ impl Iterator for BTreeIter<'_> {
                         self.done = true;
                         return None;
                     }
-                    let kv = (key.clone(), values[*pos].clone());
+                    let kv = (mem::take(&mut keys[*pos]), mem::take(&mut values[*pos]));
                     *pos += 1;
                     return Some(kv);
                 }

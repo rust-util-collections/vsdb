@@ -415,6 +415,48 @@ fn range_iteration() {
 }
 
 #[test]
+fn bounded_iteration_moves_large_values_without_changing_the_tree() {
+    let mut tree = PersistentBTree::new();
+    let entries: Vec<_> = (0u32..96)
+        .map(|i| {
+            let value = if i % 7 == 0 {
+                Vec::new()
+            } else {
+                vec![i as u8; 4096]
+            };
+            (i.to_be_bytes().to_vec(), value)
+        })
+        .collect();
+    let root = tree.bulk_load(entries.clone());
+    let lo_key = 31u32.to_be_bytes();
+    let hi_key = 65u32.to_be_bytes();
+    for lo in [Bound::Included(&lo_key[..]), Bound::Excluded(&lo_key[..])] {
+        for hi in [Bound::Included(&hi_key[..]), Bound::Excluded(&hi_key[..])] {
+            let start = if matches!(lo, Bound::Included(_)) {
+                31
+            } else {
+                32
+            };
+            let end = if matches!(hi, Bound::Included(_)) {
+                66
+            } else {
+                65
+            };
+            let mut iter = tree.range(root, lo, hi);
+            for expected in &entries[start..end] {
+                assert_eq!(iter.next().as_ref(), Some(expected));
+            }
+            assert!(iter.next().is_none());
+            assert!(iter.next().is_none());
+        }
+    }
+    // Independent iterators retain their own buffers, and consuming a
+    // bounded iterator must not change a later scan or point lookup.
+    assert_eq!(tree.iter(root).collect::<Vec<_>>(), entries);
+    assert_eq!(tree.get(root, &hi_key).unwrap(), entries[65].1);
+}
+
+#[test]
 fn range_included_both() {
     let mut tree = PersistentBTree::new();
     let mut r = EMPTY_ROOT;
