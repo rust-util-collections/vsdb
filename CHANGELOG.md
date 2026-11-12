@@ -6,6 +6,21 @@ Compiler requirements below are historical release notes. Current development
 uses the official latest stable Rust, without a declared compatible version
 range or minimum compiler; see [the toolchain policy](docs/ai/compatibility-policy.md#rust-toolchain).
 
+## [v17.0.17]
+
+Public APIs and on-disk formats remain compatible; no data migration is
+required. Only the official latest stable Rust toolchain is supported.
+
+### Fixed
+
+- Missing `__prefix_ceiling__` recovery also counts `VSMAPX01` handles
+  stored in shard values and in the universe `__CUSTOM__` directory. An
+  empty nested map, or a top-level handle saved before it had keys, is no
+  longer reused by the next map allocation.
+- Merging a restored persistent B+ tree before its ref counts are rebuilt
+  no longer writes superseded intermediate nodes. The merged root matches
+  a live tree.
+
 ## [v17.0.16]
 
 Public APIs and on-disk formats remain compatible; no data migration is
