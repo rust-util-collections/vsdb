@@ -97,10 +97,11 @@ Raw handle metadata has two forms:
 | `VSMAPX01` + prefix LE (8 bytes) | 16-byte default-namespace handle |
 | `VSMAPX01` + prefix LE + namespace LE (8 bytes) | 24-byte non-default handle |
 
-Typed wrappers write `VSTYPE03`, including the fully qualified Rust type name
-and generic arguments; they still read `VSTYPE02` with its compatibility
-rules. Type tags are not schema fingerprints: changing a persisted type's
-fields can require an application migration even when its name stays the same.
+Typed wrappers write `VSTYPE03`, tagging a hash of the fully qualified Rust
+type name and its generic arguments; they still read `VSTYPE02` with its
+compatibility rules. Type tags are not schema fingerprints: changing a
+persisted type's fields can require an application migration even when its
+name stays the same.
 Serialized handles identify local storage; they do not export collection data.
 
 ## Roots and registry
