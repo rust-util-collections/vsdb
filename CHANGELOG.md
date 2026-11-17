@@ -6,6 +6,38 @@ Compiler requirements below are historical release notes. Current development
 uses the official latest stable Rust, without a declared compatible version
 range or minimum compiler; see [the toolchain policy](docs/ai/compatibility-policy.md#rust-toolchain).
 
+## [v17.0.20]
+
+Public APIs and on-disk formats remain compatible; no data migration is
+required. Only the official latest stable Rust toolchain is supported.
+
+### Fixed
+
+- Prefix allocation saturates initial and bumped ceilings at `u64::MAX` and
+  bounds allocation windows below `u64::MAX`, preventing ceiling/counter
+  wraparound near `u64::MAX` from rejecting `from_meta` handles or re-issuing
+  live prefixes after restart.
+- `MptCalc::verify_proof` rejects unconsumed trailing `proof.nodes` entries,
+  reuses canonical varint/byte decoding, and validates MPT node encodings,
+  canonical shapes, and the `2 * MAX_MPT_KEY_LEN` nibble budget.
+- `VerMapWithProof` skips disk-cache loading on `new()` and verifies that
+  `sync_tag` refers to a live commit in `from_map`, preventing pre-existing or
+  reclaimed-commit cache files from serving foreign roots or stale proofs.
+- `MmDB::range_at` uses the exact lexicographical key successor (`v || [0x00]`)
+  for `Bound::Included` upper bounds instead of `prefix_successor`, avoiding
+  multi-block reverse scans on empty, `0xFF`, and prefix-key `get_le` queries.
+- `Namespace::relocate` promotes a `Pending` lifecycle sidecar to `Established`
+  once the target dataset is validated as complete, and `Namespace::create_with`
+  guards `next_id` advancement against `u64` overflow.
+- `SlotDex` and `VecDex` / `VecDexDyn` validate `tier_capacity >= 2` and
+  `HnswConfig` invariants during metadata deserialization, matching their
+  constructors.
+
+### Changed
+
+- Workspace dependencies update `mmdb` to `4.3.12` and `ruc` to `11.0.3`, and
+  use a compatible `1.1.3` requirement for `postcard`.
+
 ## [v17.0.19]
 
 Public APIs and on-disk formats remain compatible; no data migration is
