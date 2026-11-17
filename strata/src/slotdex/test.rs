@@ -1045,9 +1045,45 @@ fn restore_after_interleaved_mutations_matches_reference() {
 #[test]
 fn tier_capacity_below_two_is_rejected() {
     assert!(matches!(
+        SlotDex64::<u64>::new(0, false),
+        Err(crate::common::error::VsdbError::InvalidConfig { .. })
+    ));
+    assert!(matches!(
         SlotDex64::<u64>::new(1, false),
         Err(crate::common::error::VsdbError::InvalidConfig { .. })
     ));
+
+    // Malformed or corrupt metadata carrying tier_capacity < 2 must also be
+    // rejected at deserialization rather than panicking on reverse page scans
+    // (division by zero) or overflowing u8 tier levels.
+    struct BadMeta<'a> {
+        store: &'a MapxRaw,
+        cap: u64,
+    }
+    impl Serialize for BadMeta<'_> {
+        fn serialize<Ser: serde::Serializer>(
+            &self,
+            serializer: Ser,
+        ) -> StdResult<Ser::Ok, Ser::Error> {
+            crate::common::serialize_typed_handle_meta::<SlotDex64<u64>, Ser>(
+                &(LAYOUT_VERSION, self.store, &self.cap, &false),
+                serializer,
+            )
+        }
+    }
+    let store = MapxRaw::new();
+    for bad_cap in [0u64, 1] {
+        let bytes = postcard::to_allocvec(&BadMeta {
+            store: &store,
+            cap: bad_cap,
+        })
+        .unwrap();
+        assert!(
+            postcard::from_bytes::<SlotDex64<u64>>(&bytes).is_err(),
+            "SlotDex deserialize must reject tier_capacity={bad_cap}"
+        );
+    }
+
     let mut sd = SlotDex64::<u64>::new(2, false).unwrap();
     sd.insert(1, 10).unwrap();
     sd.remove(1, &10).unwrap();

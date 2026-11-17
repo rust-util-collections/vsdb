@@ -305,6 +305,11 @@ where
                 "SlotDex: unsupported layout version {version} (expected {LAYOUT_VERSION})"
             )));
         }
+        if tier_capacity.as_i128() < 2 {
+            return Err(serde::de::Error::custom(
+                "SlotDex: tier_capacity must be >= 2",
+            ));
+        }
         Ok(Self::hydrate(store, tier_capacity, swap_order))
     }
 }
