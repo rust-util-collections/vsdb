@@ -8,10 +8,14 @@
 use sha3::{Digest, Keccak256};
 
 use crate::trie::{
+    codec_util::{checked_end, read_bytes, read_u8, read_varint},
     error::{Result, TrieError},
+    mpt::MAX_MPT_KEY_LEN,
     nibbles::Nibbles,
     node::{Node, NodeCodec, NodeHandle},
 };
+
+const MAX_TOTAL_NIBBLES: usize = 2 * MAX_MPT_KEY_LEN;
 
 /// A Merkle Patricia Trie proof for a single key.
 ///
@@ -167,8 +171,12 @@ pub fn verify_proof(
     let first_hash: [u8; 32] = Keccak256::digest(&proof.nodes[0]).into();
     if first_hash != *root_hash {
         // Special case: empty trie has all-zero root hash and the proof
-        // node is the encoded Null (0x00).
-        if *root_hash == [0u8; 32] && proof.nodes[0] == [0x00] && proof.value.is_none() {
+        // node is a single encoded Null (0x00).
+        if *root_hash == [0u8; 32]
+            && proof.nodes.len() == 1
+            && proof.nodes[0] == [0x00]
+            && proof.value.is_none()
+        {
             return Ok(true);
         }
         return Ok(false);
@@ -178,6 +186,8 @@ pub fn verify_proof(
     let path = Nibbles::from_raw(&proof.key);
     let mut remaining = path.as_slice();
     let mut node_idx: usize = 0;
+    let mut consumed: usize = 0;
+    let mut expect_branch = false;
 
     loop {
         if node_idx >= proof.nodes.len() {
@@ -185,16 +195,27 @@ pub fn verify_proof(
         }
 
         let decoded = decode_node(&proof.nodes[node_idx])?;
+        if expect_branch && !matches!(decoded, DecodedNode::Branch { .. }) {
+            return Err(TrieError::InvalidState(
+                "non-canonical extension child in MPT proof".into(),
+            ));
+        }
 
         match decoded {
             DecodedNode::Null => {
-                return Ok(proof.value.is_none());
+                return Err(TrieError::InvalidState(
+                    "hashed MPT proof node cannot be Null".into(),
+                ));
             }
 
             DecodedNode::Leaf {
                 path: leaf_path,
                 value,
             } => {
+                check_nibble_budget(consumed, leaf_path.len())?;
+                if node_idx + 1 != proof.nodes.len() {
+                    return Ok(false);
+                }
                 if leaf_path.as_slice() == remaining {
                     return Ok(proof.value.as_deref() == Some(value.as_slice()));
                 } else {
@@ -206,9 +227,15 @@ pub fn verify_proof(
                 path: ext_path,
                 child_hash,
             } => {
+                check_nibble_budget(consumed, ext_path.len())?;
                 let Some(rest) = remaining.strip_prefix(ext_path.as_slice()) else {
+                    if node_idx + 1 != proof.nodes.len() {
+                        return Ok(false);
+                    }
                     return Ok(proof.value.is_none());
                 };
+                consumed += ext_path.len();
+                expect_branch = true;
                 remaining = rest;
                 node_idx += 1;
                 if node_idx >= proof.nodes.len() {
@@ -223,7 +250,11 @@ pub fn verify_proof(
             }
 
             DecodedNode::Branch { children, value } => {
+                check_nibble_budget(consumed, 1)?;
                 let Some((&index, rest)) = remaining.split_first() else {
+                    if node_idx + 1 != proof.nodes.len() {
+                        return Ok(false);
+                    }
                     return match (&proof.value, &value) {
                         (Some(pv), Some(bv)) => Ok(pv.as_slice() == bv.as_slice()),
                         (None, None) => Ok(true),
@@ -233,9 +264,14 @@ pub fn verify_proof(
                 remaining = rest;
                 match &children[index as usize] {
                     None => {
+                        if node_idx + 1 != proof.nodes.len() {
+                            return Ok(false);
+                        }
                         return Ok(proof.value.is_none());
                     }
                     Some(child_hash) => {
+                        consumed += 1;
+                        expect_branch = false;
                         node_idx += 1;
                         if node_idx >= proof.nodes.len() {
                             return Ok(false);
@@ -282,66 +318,71 @@ fn decode_node(data: &[u8]) -> Result<DecodedNode> {
     let mut cursor = 1; // skip tag byte
 
     match data[0] {
-        0x00 => Ok(DecodedNode::Null),
+        0x00 => {
+            ensure_no_trailing(data, cursor)?;
+            Ok(DecodedNode::Null)
+        }
 
         0x01 => {
             // Leaf: tag + path + value
             let path = decode_path(data, &mut cursor)?;
-            let value = decode_bytes(data, &mut cursor)?;
+            let value = read_bytes(data, &mut cursor)?;
+            ensure_no_trailing(data, cursor)?;
             Ok(DecodedNode::Leaf { path, value })
         }
 
         0x02 => {
             // Extension: tag + path + 32-byte child_hash
             let path = decode_path(data, &mut cursor)?;
-            if cursor.checked_add(32).is_none_or(|end| end > data.len()) {
-                return Err(TrieError::InvalidState(
-                    "extension node truncated: missing child hash".into(),
-                ));
+            if path.is_empty() {
+                return Err(TrieError::InvalidState("empty extension path".into()));
             }
+            let end = checked_end(cursor, 32, data.len(), "extension child hash")?;
             let mut child_hash = [0u8; 32];
-            child_hash.copy_from_slice(&data[cursor..cursor + 32]);
+            child_hash.copy_from_slice(&data[cursor..end]);
+            cursor = end;
+            ensure_no_trailing(data, cursor)?;
             Ok(DecodedNode::Extension { path, child_hash })
         }
 
         0x03 => {
             // Branch: tag + u16_le bitmap + has_value + [value] + [child_hashes]
-            if cursor.checked_add(2).is_none_or(|end| end > data.len()) {
-                return Err(TrieError::InvalidState(
-                    "branch node truncated: missing bitmap".into(),
-                ));
-            }
+            let end = checked_end(cursor, 2, data.len(), "branch bitmap")?;
             let bitmap = u16::from_le_bytes([data[cursor], data[cursor + 1]]);
-            cursor += 2;
+            cursor = end;
 
-            if cursor >= data.len() {
-                return Err(TrieError::InvalidState(
-                    "branch node truncated: missing value flag".into(),
-                ));
-            }
-            let has_value = data[cursor] == 1;
-            cursor += 1;
+            let has_value = match read_u8(data, &mut cursor)? {
+                0 => false,
+                1 => true,
+                flag => {
+                    return Err(TrieError::InvalidState(format!(
+                        "invalid branch value flag: {flag}"
+                    )));
+                }
+            };
 
             let value = if has_value {
-                Some(decode_bytes(data, &mut cursor)?)
+                Some(read_bytes(data, &mut cursor)?)
             } else {
                 None
             };
 
+            let child_count = bitmap.count_ones() as usize;
+            if child_count == 0 || (child_count == 1 && value.is_none()) {
+                return Err(TrieError::InvalidState("non-canonical branch node".into()));
+            }
+
             let mut children: [Option<[u8; 32]>; 16] = [None; 16];
             for (i, slot) in children.iter_mut().enumerate() {
                 if bitmap & (1 << i) != 0 {
-                    if cursor.checked_add(32).is_none_or(|end| end > data.len()) {
-                        return Err(TrieError::InvalidState(format!(
-                            "branch node truncated: missing child hash at index {i}"
-                        )));
-                    }
+                    let end = checked_end(cursor, 32, data.len(), "branch child hash")?;
                     let mut h = [0u8; 32];
-                    h.copy_from_slice(&data[cursor..cursor + 32]);
-                    cursor += 32;
+                    h.copy_from_slice(&data[cursor..end]);
+                    cursor = end;
                     *slot = Some(h);
                 }
             }
+            ensure_no_trailing(data, cursor)?;
 
             Ok(DecodedNode::Branch {
                 children: Box::new(children),
@@ -355,37 +396,36 @@ fn decode_node(data: &[u8]) -> Result<DecodedNode> {
     }
 }
 
-fn decode_varint(data: &[u8], cursor: &mut usize) -> Result<usize> {
-    let mut result: usize = 0;
-    let mut shift: u32 = 0;
-    loop {
-        if *cursor >= data.len() {
-            return Err(TrieError::InvalidState("varint truncated".into()));
-        }
-        let byte = data[*cursor];
-        *cursor += 1;
-        result |= ((byte & 0x7F) as usize)
-            .checked_shl(shift)
-            .ok_or_else(|| TrieError::InvalidState("varint overflow".into()))?;
-        if byte & 0x80 == 0 {
-            return Ok(result);
-        }
-        shift += 7;
-        if shift >= usize::BITS {
-            return Err(TrieError::InvalidState("varint overflow".into()));
-        }
+fn ensure_no_trailing(data: &[u8], cursor: usize) -> Result<()> {
+    if cursor != data.len() {
+        return Err(TrieError::InvalidState("trailing bytes in MPT node".into()));
     }
+    Ok(())
+}
+
+fn check_nibble_budget(consumed: usize, additional: usize) -> Result<()> {
+    if consumed.saturating_add(additional) > MAX_TOTAL_NIBBLES {
+        return Err(TrieError::InvalidState(
+            "MPT proof: cumulative path length exceeds MAX_MPT_KEY_LEN".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn decode_path(data: &[u8], cursor: &mut usize) -> Result<Nibbles> {
-    let nibble_count = decode_varint(data, cursor)?;
+    let nibble_count = read_varint(data, cursor)?;
+    if nibble_count > MAX_TOTAL_NIBBLES {
+        return Err(TrieError::InvalidState(
+            "MPT proof: node path length exceeds MAX_MPT_KEY_LEN".into(),
+        ));
+    }
     // Nibbles are packed 2 per byte (high nibble first).
     let byte_count = nibble_count.div_ceil(2);
-    if cursor
-        .checked_add(byte_count)
-        .is_none_or(|end| end > data.len())
-    {
-        return Err(TrieError::InvalidState("path data truncated".into()));
+    let end = checked_end(*cursor, byte_count, data.len(), "path data")?;
+    if nibble_count % 2 == 1 && (data[end - 1] & 0x0F) != 0 {
+        return Err(TrieError::InvalidState(
+            "non-zero odd-nibble padding".into(),
+        ));
     }
     let mut nibbles = Vec::with_capacity(nibble_count);
     for i in 0..nibble_count {
@@ -397,16 +437,6 @@ fn decode_path(data: &[u8], cursor: &mut usize) -> Result<Nibbles> {
         };
         nibbles.push(nibble);
     }
-    *cursor += byte_count;
+    *cursor = end;
     Ok(Nibbles::from_nibbles_unsafe(nibbles))
-}
-
-fn decode_bytes(data: &[u8], cursor: &mut usize) -> Result<Vec<u8>> {
-    let len = decode_varint(data, cursor)?;
-    if cursor.checked_add(len).is_none_or(|end| end > data.len()) {
-        return Err(TrieError::InvalidState("bytes data truncated".into()));
-    }
-    let result = data[*cursor..*cursor + len].to_vec();
-    *cursor += len;
-    Ok(result)
 }

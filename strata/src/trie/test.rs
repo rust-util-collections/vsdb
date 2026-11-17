@@ -1692,6 +1692,189 @@ mod mpt_proof_tests {
         assert!(MptCalc::verify_proof(&root_hash, b"real_key", &proof).unwrap());
         assert!(!MptCalc::verify_proof(&root_hash, b"wrong_key", &proof).unwrap());
     }
+
+    #[test]
+    fn test_mpt_proof_rejects_unconsumed_trailing_nodes() {
+        let empty = MptCalc::new();
+        let mut empty_proof = empty.prove(b"missing").unwrap();
+        empty_proof.nodes.push(b"extra-unauthenticated".to_vec());
+        assert!(!MptCalc::verify_proof(&[0u8; 32], b"missing", &empty_proof).unwrap());
+
+        let mut trie = MptCalc::new();
+        trie.insert(&[0x12, 0x34], b"a").unwrap();
+        trie.insert(&[0x12, 0x35], b"b").unwrap();
+        trie.insert(&[0x12], b"branch_val").unwrap();
+        let root_hash: [u8; 32] = trie.root_hash().unwrap().try_into().unwrap();
+
+        for key in [
+            &[0x12u8, 0x34][..],       // Leaf membership
+            &[0x12u8, 0x34, 0x99][..], // Leaf mismatch non-membership
+            &[0x19u8, 0x34][..],       // Extension divergence non-membership
+            &[0x12u8][..],             // Branch value membership
+            &[0x12u8, 0x99][..],       // Branch empty-slot non-membership
+        ] {
+            let mut proof = trie.prove(key).unwrap();
+            assert!(MptCalc::verify_proof(&root_hash, key, &proof).unwrap());
+            proof.nodes.push(b"trailing-garbage".to_vec());
+            assert!(
+                !MptCalc::verify_proof(&root_hash, key, &proof).unwrap(),
+                "trailing proof nodes must be rejected for key {key:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_mpt_proof_rejects_noncanonical_encodings_and_shapes() {
+        use crate::trie::{
+            MAX_MPT_KEY_LEN, MptProof,
+            nibbles::Nibbles,
+            node::{Node, NodeCodec, NodeHandle},
+        };
+        use sha3::{Digest, Keccak256};
+
+        let hash_of = |bytes: &[u8]| -> [u8; 32] { Keccak256::digest(bytes).into() };
+
+        // 1. Hashed Null root (`Keccak256([0x00])`) is never a valid MPT root.
+        let null_bytes = vec![0x00];
+        let null_root = hash_of(&null_bytes);
+        let null_proof = MptProof {
+            key: b"k".to_vec(),
+            value: None,
+            nodes: vec![null_bytes],
+        };
+        assert!(MptCalc::verify_proof(&null_root, b"k", &null_proof).is_err());
+
+        // 2. 10-byte overflowing varint (2^64 + 2 nibbles) and overlong varint.
+        let overflowing = vec![
+            0x01, 0x82, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02, 0x12,
+            0x01, b'v',
+        ];
+        let over_root = hash_of(&overflowing);
+        let over_proof = MptProof {
+            key: vec![0x12],
+            value: Some(b"v".to_vec()),
+            nodes: vec![overflowing],
+        };
+        assert!(MptCalc::verify_proof(&over_root, &[0x12], &over_proof).is_err());
+
+        let overlong = vec![0x01, 0x80, 0x00, 0x00];
+        let overlong_root = hash_of(&overlong);
+        let overlong_proof = MptProof {
+            key: vec![],
+            value: Some(vec![]),
+            nodes: vec![overlong],
+        };
+        assert!(MptCalc::verify_proof(&overlong_root, b"", &overlong_proof).is_err());
+
+        // 3. Odd-nibble path with non-zero low-nibble padding.
+        let bad_pad = vec![0x01, 0x01, 0x1F, 0x01, b'v'];
+        let bad_pad_root = hash_of(&bad_pad);
+        let bad_pad_proof = MptProof {
+            key: b"x".to_vec(),
+            value: None,
+            nodes: vec![bad_pad],
+        };
+        assert!(MptCalc::verify_proof(&bad_pad_root, b"x", &bad_pad_proof).is_err());
+
+        // 4. Trailing intra-node bytes (Leaf and Extension).
+        let mut leaf_trailing = NodeCodec::encode(&Node::Leaf {
+            path: Nibbles::from_raw(b"k"),
+            value: b"v".to_vec(),
+        });
+        leaf_trailing.push(0xAA);
+        let lt_root = hash_of(&leaf_trailing);
+        let lt_proof = MptProof {
+            key: b"k".to_vec(),
+            value: Some(b"v".to_vec()),
+            nodes: vec![leaf_trailing],
+        };
+        assert!(MptCalc::verify_proof(&lt_root, b"k", &lt_proof).is_err());
+
+        // 5. Invalid branch value flag (`2`) and degenerate 1-child valueless branch.
+        let child_leaf = NodeCodec::encode(&Node::Leaf {
+            path: Nibbles::default(),
+            value: b"v".to_vec(),
+        });
+        let child_hash = hash_of(&child_leaf);
+        let mut bad_flag = vec![0x03, 0x03, 0x00, 0x02];
+        bad_flag.extend_from_slice(&child_hash);
+        bad_flag.extend_from_slice(&child_hash);
+        let bf_root = hash_of(&bad_flag);
+        let bf_proof = MptProof {
+            key: vec![0x90],
+            value: None,
+            nodes: vec![bad_flag],
+        };
+        assert!(MptCalc::verify_proof(&bf_root, &[0x90], &bf_proof).is_err());
+
+        let mut one_child_branch = vec![0x03, 0x01, 0x00, 0x00];
+        one_child_branch.extend_from_slice(&child_hash);
+        let ocb_root = hash_of(&one_child_branch);
+        let ocb_proof = MptProof {
+            key: vec![0x90],
+            value: None,
+            nodes: vec![one_child_branch],
+        };
+        assert!(MptCalc::verify_proof(&ocb_root, &[0x90], &ocb_proof).is_err());
+
+        // 6. Empty-path Extension and Extension -> Leaf (non-Branch child).
+        let mut empty_ext = vec![0x02, 0x00];
+        empty_ext.extend_from_slice(&child_hash);
+        let ee_root = hash_of(&empty_ext);
+        let ee_proof = MptProof {
+            key: b"".to_vec(),
+            value: Some(b"v".to_vec()),
+            nodes: vec![empty_ext, child_leaf.clone()],
+        };
+        assert!(MptCalc::verify_proof(&ee_root, b"", &ee_proof).is_err());
+
+        let ext_to_leaf = NodeCodec::encode(&Node::Extension {
+            path: Nibbles::from_raw(b"k"),
+            child: NodeHandle::Cached(
+                child_hash.to_vec(),
+                Box::new(Node::Leaf {
+                    path: Nibbles::default(),
+                    value: b"v".to_vec(),
+                }),
+            ),
+        });
+        let etl_root = hash_of(&ext_to_leaf);
+        let etl_proof = MptProof {
+            key: b"k".to_vec(),
+            value: Some(b"v".to_vec()),
+            nodes: vec![ext_to_leaf, child_leaf],
+        };
+        assert!(MptCalc::verify_proof(&etl_root, b"k", &etl_proof).is_err());
+
+        // 7. Oversized path (> 2 * MAX_MPT_KEY_LEN nibbles) rejected, while
+        // max-length keys (1024 bytes) and absent keys > 1024 bytes verify.
+        let over_key = vec![0xAB; MAX_MPT_KEY_LEN + 1];
+        let over_leaf = NodeCodec::encode(&Node::Leaf {
+            path: Nibbles::from_raw(&over_key),
+            value: b"v".to_vec(),
+        });
+        let ol_root = hash_of(&over_leaf);
+        let ol_proof = MptProof {
+            key: over_key.clone(),
+            value: Some(b"v".to_vec()),
+            nodes: vec![over_leaf],
+        };
+        assert!(MptCalc::verify_proof(&ol_root, &over_key, &ol_proof).is_err());
+
+        let mut max_trie = MptCalc::new();
+        let mut k1 = vec![0xAA; MAX_MPT_KEY_LEN];
+        let mut k2 = vec![0xAA; MAX_MPT_KEY_LEN];
+        k1[MAX_MPT_KEY_LEN - 1] = 0xA0;
+        k2[MAX_MPT_KEY_LEN - 1] = 0xA1;
+        max_trie.insert(&k1, b"v1").unwrap();
+        max_trie.insert(&k2, b"v2").unwrap();
+        let max_root: [u8; 32] = max_trie.root_hash().unwrap().try_into().unwrap();
+        let p_k1 = max_trie.prove(&k1).unwrap();
+        assert!(MptCalc::verify_proof(&max_root, &k1, &p_k1).unwrap());
+        let p_absent_long = max_trie.prove(&over_key).unwrap();
+        assert_eq!(p_absent_long.value(), None);
+        assert!(MptCalc::verify_proof(&max_root, &over_key, &p_absent_long).unwrap());
+    }
 }
 
 // =====================================================================
