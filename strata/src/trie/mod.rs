@@ -28,7 +28,7 @@
 //!   +-------------+      +-------------+
 //!        |                  |         ^
 //!        |           checkpoint    auto-load
-//!        |           on request   on new/from_map
+//!        |           on request    on from_map
 //!        |                  |         |
 //!        |                +--v--------+-+
 //!        |                | disk cache  | (disposable)
@@ -39,9 +39,10 @@
 //! 2. **`MptCalc` / `SmtCalc`** mirrors the current state as an
 //!    in-memory trie, synchronized via full rebuild or incremental diff.
 //! 3. **`root_hash()`** returns the 32-byte Merkle commitment.
-//! 4. **Disposable cache** — construction attempts to restore a previous
-//!    checkpoint. Call `VerMapWithProof::save_cache(commit)` to save one
-//!    explicitly; root calculations and handle destruction never write it.
+//! 4. **Disposable cache** — [`VerMapWithProof::from_map`] attempts to restore a
+//!    previous live-commit checkpoint. Call `VerMapWithProof::save_cache(commit)`
+//!    to save one explicitly; root calculations and handle destruction never
+//!    write it.
 //!
 //! # SMT proofs
 //!

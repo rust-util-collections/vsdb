@@ -64,9 +64,10 @@ impl<P> ProofWithRoot<P> {
 ///
 /// # Disposable disk cache
 ///
-/// Construction attempts to load an existing cache. A missing, stale, or
-/// corrupt cache is rebuilt from the underlying `VerMap` on the next root
-/// calculation. Root calculation and `Drop` never write cache files.
+/// [`from_map`](Self::from_map) attempts to load an existing cache for a live
+/// commit. A missing, stale, reclaimed-commit, or corrupt cache is rebuilt
+/// from the underlying `VerMap` on the next root calculation. Root calculation
+/// and `Drop` never write cache files.
 ///
 /// Call [`save_cache`](Self::save_cache) with a committed snapshot at an
 /// application-chosen checkpoint. Saving serializes the entire trie, so doing
@@ -101,7 +102,7 @@ where
     pub fn new() -> Self {
         let map = VerMap::new();
         let cache_instance = map.instance_id();
-        let mut this = Self {
+        Self {
             map,
             trie: T::default(),
             applied_dirty: None,
@@ -109,9 +110,7 @@ where
             sync_branch: None,
             dirty_applied: false,
             cache_instance,
-        };
-        this.try_load_cache();
-        this
+        }
     }
 
     /// Wraps an existing `VerMap` and attempts to restore the trie cache.
@@ -541,7 +540,12 @@ where
 // Internal cache identity and loading
 // =================================================================
 
-impl<K, V, T: TrieCalc> VerMapWithProof<K, V, T> {
+impl<K, V, T> VerMapWithProof<K, V, T>
+where
+    K: KeyEnDeOrdered,
+    V: ValueEnDe,
+    T: TrieCalc,
+{
     /// A mutable map reference permits replacing the entire handle. Preserve
     /// incremental synchronization for ordinary edits, but never compare
     /// local branch/commit IDs across different maps.
@@ -561,13 +565,18 @@ impl<K, V, T: TrieCalc> VerMapWithProof<K, V, T> {
     ///
     /// On success, sets `sync_commit` so that the next `merkle_root`
     /// call can do an incremental diff instead of a full rebuild.
-    /// On failure (missing file, corruption, version mismatch), silently
-    /// falls back to the default empty trie.
+    /// On failure (missing file, corruption, version mismatch, or a
+    /// missing/reclaimed commit), silently falls back to the default
+    /// empty trie.
     fn try_load_cache(&mut self) {
         if let Ok((mut trie, sync_tag, saved_hash)) = T::load_cache(
             &self.map.namespace().system_dir(),
             self.cache_instance.map_id,
         ) {
+            let commit = CommitId::from_raw(sync_tag);
+            if self.map.get_commit(commit).is_none() {
+                return;
+            }
             // Consistency check between two fields of the cache file: the
             // header's saved root hash and the root node's stored hash
             // (root_hash() short-circuits on a committed root, so nothing
@@ -581,7 +590,7 @@ impl<K, V, T: TrieCalc> VerMapWithProof<K, V, T> {
             }
             self.trie = trie;
             self.applied_dirty = None;
-            self.sync_commit = Some(CommitId::from_raw(sync_tag));
+            self.sync_commit = Some(commit);
             self.sync_branch = None;
             self.dirty_applied = false;
         }
