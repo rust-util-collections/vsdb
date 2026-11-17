@@ -3,7 +3,9 @@
 日期：2026-11-12。审查输入是工作区本地的
 `docs/proposals/performance-bottlenecks.md`（性能瓶颈建议稿）和
 `docs/proposals/performance-bottlenecks-independent-review.md`（独立审查）。
-这两份原始报告仅保留在本地，不随本次修复提交。
+这两份原始报告未随修复提交；后续已将其中仍然成立的未落地项与延后结构性
+改造整理至 [performance-roadmap.md](../proposals/performance-roadmap.md)，
+两份原始草稿已清理。
 两份输入都是静态分析，不能把其中的预期收益视为实测结论。本次针对
 `1978ca4` 上可确认的重复工作做局部修复；不改变公共 API、磁盘格式、
 默认分片路由、深拷贝语义或查询结果保障。
