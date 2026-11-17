@@ -405,6 +405,7 @@ where
                 "VecDex: unsupported layout version {version} (expected {LAYOUT_VERSION})"
             )));
         }
+        config.validate().map_err(serde::de::Error::custom)?;
         Ok(Self::hydrate(store, config))
     }
 }

@@ -1440,11 +1440,13 @@ fn invalid_configs_are_rejected() {
         ef_construction: 50,
         ef_search: 50,
     };
+    let store = MapxRaw::new();
     for bad in [
         HnswConfig {
             dim: 0,
             ..ok.clone()
         },
+        HnswConfig { m: 0, ..ok.clone() },
         HnswConfig { m: 1, ..ok.clone() },
         HnswConfig {
             m_max0: 1,
@@ -1456,9 +1458,41 @@ fn invalid_configs_are_rejected() {
         },
     ] {
         assert!(matches!(
-            VecDex::<u32, L2>::new(bad),
+            VecDex::<u32, L2>::new(bad.clone()),
             Err(VsdbError::InvalidConfig { .. })
         ));
+
+        // Corrupt or malformed handle metadata must also fail validation at
+        // deserialization (both static VecDex and VecDexDyn).
+        struct BadVecMeta<'a> {
+            store: &'a MapxRaw,
+            cfg: &'a HnswConfig,
+        }
+        impl Serialize for BadVecMeta<'_> {
+            fn serialize<Ser: serde::Serializer>(
+                &self,
+                serializer: Ser,
+            ) -> std::result::Result<Ser::Ok, Ser::Error> {
+                crate::common::serialize_typed_handle_meta::<VecDex<u32, L2>, Ser>(
+                    &(LAYOUT_VERSION, self.store, self.cfg),
+                    serializer,
+                )
+            }
+        }
+        let raw = BadVecMeta {
+            store: &store,
+            cfg: &bad,
+        };
+        let bytes = postcard::to_allocvec(&raw).unwrap();
+        assert!(
+            postcard::from_bytes::<VecDex<u32, L2>>(&bytes).is_err(),
+            "VecDex deserialize must reject {bad:?}"
+        );
+        let dyn_bytes = postcard::to_allocvec(&(0u8, &raw)).unwrap();
+        assert!(
+            postcard::from_bytes::<VecDexDyn<u32>>(&dyn_bytes).is_err(),
+            "VecDexDyn deserialize must reject {bad:?}"
+        );
     }
     let mut idx: VecDex<u32, L2> = VecDex::new(ok).unwrap();
     assert!(matches!(

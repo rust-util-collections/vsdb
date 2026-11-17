@@ -253,7 +253,7 @@ For concurrent read/write access, wrap it in
 | Disk persistence via MMDB | All graph data persisted; survives restarts |
 | save_meta / from_meta | Instance recovery from instance ID |
 | Send + Sync | Safe for multi-threaded use when generic parameters permit |
-| Generic key types | Public methods require `K: KeyEnDe + ValueEnDe + Clone + Eq + Serialize + DeserializeOwned` |
+| Generic key types | Public methods require `K: KeyEnDe + ValueEnDe + Clone + Eq` |
 | Duplicate key handling | Re-insert replaces old vector and rebuilds connections |
 | Runtime metric selection | `VecDexDyn<K, S>` + `MetricKind` — metric chosen at construction, persisted in meta; one enum dispatch per operation, distance loops stay monomorphized |
 | Criterion benchmarks | Insert and search benches at 1K/5K/10K scales |
