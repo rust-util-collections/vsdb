@@ -487,6 +487,47 @@ fn namespace_lifecycle() {
     Namespace::destroy(rid).unwrap();
     assert!(!PathBuf::from(&new_root).exists());
 
+    // ---- relocate promotes a stale Pending lifecycle sidecar ----
+    // A crash right after `Engine::open_at` writes `format_version` leaves
+    // `__namespace_state__/<id>` as `Pending` (`b"P"`) on a completed tree.
+    // Relocating that completed dataset must promote the sidecar to
+    // `Established` so read-only opens succeed and a later missing target
+    // fails loudly instead of silently initializing an empty replacement.
+    let p = Namespace::create_with(NamespaceOpts {
+        shards: 2,
+        ..Default::default()
+    })
+    .unwrap();
+    let pid = p.id();
+    let p_old = p.path().to_path_buf();
+    let mut pm = MapxRaw::new_in(&p);
+    pm.insert(b"k", b"v");
+    let pmid = pm.save_meta().unwrap();
+    drop((pm, p));
+    Namespace::close_by_id(pid).unwrap();
+
+    let p_lifecycle = PathBuf::from(&dir)
+        .join("__SYSTEM__/__namespace_state__")
+        .join(format!("{pid:016x}"));
+    fs::write(&p_lifecycle, b"P").unwrap();
+
+    let p_relocated = format!("{dir}_pending_relocated");
+    let p_missing = format!("{dir}_pending_missing");
+    fs::rename(&p_old, &p_relocated).unwrap();
+    Namespace::relocate(pid, &p_relocated).unwrap();
+    assert_eq!(fs::read(&p_lifecycle).unwrap(), b"E");
+
+    fs::rename(&p_relocated, &p_missing).unwrap();
+    assert!(Namespace::open(pid).is_err());
+    assert!(!PathBuf::from(&p_relocated).exists());
+
+    fs::rename(&p_missing, &p_relocated).unwrap();
+    let pm = MapxRaw::from_meta(pmid).unwrap();
+    assert_eq!(&pm.get(b"k").unwrap()[..], b"v");
+    drop(pm);
+    Namespace::close_by_id(pid).unwrap();
+    Namespace::destroy(pid).unwrap();
+
     fs::remove_dir_all(&dir).ok();
     // Sibling scratch dirs created by the sub-scenarios above.
     fs::remove_dir_all(format!("{dir}_mnt")).ok();

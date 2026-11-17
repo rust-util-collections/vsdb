@@ -749,7 +749,10 @@ impl Namespace {
         // Burn the id durably before publishing its lifecycle sidecar.
         // An interruption or ambiguous sidecar-write error must not leave
         // pending state at the next id and block every later creation.
-        reg.next_id += 1;
+        reg.next_id = reg
+            .next_id
+            .checked_add(1)
+            .ok_or_else(|| ns_err("namespace id space exhausted"))?;
         save_registry(&reg)?;
 
         // Only a registered pending record may initialize an absent root;
@@ -1152,6 +1155,9 @@ impl Namespace {
         // carry no namespace id; that part stays on the operator.)
         validate_completed_dataset(new_path, rec_shards, true)
             .map_err(VsdbError::from)?;
+        if load_lifecycle(&base, id)? != Some(NsLifecycleState::Established) {
+            save_lifecycle(&base, id, NsLifecycleState::Established)?;
+        }
 
         let rec = reg
             .entries
