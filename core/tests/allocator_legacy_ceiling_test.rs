@@ -1,7 +1,8 @@
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{Command, Output, id as process_id},
+    thread,
 };
 use vsdb_core::{MapxRaw, Namespace, VsdbOptions, vsdb_configure};
 
@@ -43,7 +44,7 @@ fn legacy_ceiling_folds_before_non_default_allocation() {
 
     let scratch = env::temp_dir().join(format!(
         "vsdb_alloc_legacy_{}_{}",
-        std::process::id(),
+        process_id(),
         rand::random::<u128>()
     ));
     let base = scratch.join("base");
@@ -139,7 +140,7 @@ fn missing_ceiling_does_not_reuse_live_prefix() {
 
     let scratch = env::temp_dir().join(format!(
         "vsdb_alloc_missing_{}_{}",
-        std::process::id(),
+        process_id(),
         rand::random::<u128>()
     ));
     let base = scratch.join("base");
@@ -260,7 +261,7 @@ fn missing_ceiling_does_not_reuse_handle_in_value() {
 
     let scratch = env::temp_dir().join(format!(
         "vsdb_alloc_keyless_value_{}_{}",
-        std::process::id(),
+        process_id(),
         rand::random::<u128>()
     ));
     let base = scratch.join("base");
@@ -331,7 +332,7 @@ fn missing_ceiling_does_not_reuse_handle_in_custom_dir() {
 
     let scratch = env::temp_dir().join(format!(
         "vsdb_alloc_keyless_custom_{}_{}",
-        std::process::id(),
+        process_id(),
         rand::random::<u128>()
     ));
     let base = scratch.join("base");
@@ -354,6 +355,156 @@ fn missing_ceiling_does_not_reuse_handle_in_custom_dir() {
     );
     assert_eq!(keyless_line(&stdout, "FRESH_SEES="), "fresh");
     assert_eq!(keyless_line(&stdout, "CHILD_SEES="), "child");
+
+    fs::remove_dir_all(&scratch).unwrap();
+}
+
+const NEAR_MAX_PHASE: &str = "VSDB_ALLOC_NEAR_MAX_PHASE";
+const NEAR_MAX_BASE: &str = "VSDB_ALLOC_NEAR_MAX_BASE";
+const NEAR_MAX_ARG: &str = "VSDB_ALLOC_NEAR_MAX_ARG";
+const NEAR_MAX_TEST: &str = "near_u64_max_ceiling_does_not_wrap_or_reissue_prefixes";
+
+fn near_max_child(phase: &str, base: &Path, arg: &str) -> Output {
+    Command::new(env::current_exe().unwrap())
+        .args(["--exact", NEAR_MAX_TEST, "--nocapture"])
+        .env(NEAR_MAX_PHASE, phase)
+        .env(NEAR_MAX_BASE, base)
+        .env(NEAR_MAX_ARG, arg)
+        .output()
+        .unwrap()
+}
+
+/// Regression: ceilings near `u64::MAX` must saturate at `u64::MAX`
+/// without wrapping `GLOBAL_CEILING` or `GLOBAL_COUNTER`, must keep
+/// existing handles restorable, must persist a ceiling strictly above
+/// every issued prefix across multi-thread windows, and must panic
+/// cleanly once `u64::MAX - 1` is exhausted instead of wrapping.
+#[test]
+fn near_u64_max_ceiling_does_not_wrap_or_reissue_prefixes() {
+    if let Ok(phase) = env::var(NEAR_MAX_PHASE) {
+        let base = PathBuf::from(env::var(NEAR_MAX_BASE).unwrap());
+        let arg = env::var(NEAR_MAX_ARG).unwrap();
+        vsdb_configure(VsdbOptions::new(&base)).unwrap();
+        match phase.as_str() {
+            "seed" => {
+                let mut early = MapxRaw::new();
+                early.insert(b"k", b"early");
+                let id = early.save_meta().unwrap();
+                Namespace::default_ns().flush();
+                println!("EARLY={}", id.map_id);
+            }
+            "two_windows" => {
+                let early_id: u64 = arg.parse().unwrap();
+                let early = MapxRaw::from_meta(early_id).unwrap();
+                assert_eq!(early.get(b"k").as_deref(), Some(&b"early"[..]));
+
+                let t1 = thread::spawn(|| {
+                    let mut m = MapxRaw::new();
+                    m.insert(b"k", b"t1");
+                    let id = m.save_meta().unwrap();
+                    assert_eq!(
+                        MapxRaw::from_meta(id).unwrap().get(b"k").as_deref(),
+                        Some(&b"t1"[..])
+                    );
+                    id.map_id
+                });
+                let p1 = t1.join().unwrap();
+                let t2 = thread::spawn(|| {
+                    let mut m = MapxRaw::new();
+                    m.insert(b"k", b"t2");
+                    let id = m.save_meta().unwrap();
+                    assert_eq!(
+                        MapxRaw::from_meta(id).unwrap().get(b"k").as_deref(),
+                        Some(&b"t2"[..])
+                    );
+                    id.map_id
+                });
+                let p2 = t2.join().unwrap();
+                Namespace::default_ns().flush();
+                println!("P1={p1}");
+                println!("P2={p2}");
+            }
+            "after_two_windows" => {
+                let (early_s, rest) = arg.split_once(',').unwrap();
+                let (p1_s, p2_s) = rest.split_once(',').unwrap();
+                let early_id: u64 = early_s.parse().unwrap();
+                let p1: u64 = p1_s.parse().unwrap();
+                let p2: u64 = p2_s.parse().unwrap();
+
+                let early = MapxRaw::from_meta(early_id).unwrap();
+                let m1 = MapxRaw::from_meta(p1).unwrap();
+                let m2 = MapxRaw::from_meta(p2).unwrap();
+                assert_eq!(early.get(b"k").as_deref(), Some(&b"early"[..]));
+                assert_eq!(m1.get(b"k").as_deref(), Some(&b"t1"[..]));
+                assert_eq!(m2.get(b"k").as_deref(), Some(&b"t2"[..]));
+
+                // The persisted ceiling saturated at `u64::MAX`, so the
+                // restarted process must refuse further allocation rather
+                // than re-issuing `p2` or wrapping to reserved ids.
+                let res = std::panic::catch_unwind(|| MapxRaw::new().instance_id());
+                assert!(
+                    res.is_err(),
+                    "restarted process at u64::MAX ceiling must panic"
+                );
+            }
+            "exhaust" => {
+                let early_id: u64 = arg.parse().unwrap();
+                let early = MapxRaw::from_meta(early_id).unwrap();
+                assert_eq!(early.get(b"k").as_deref(), Some(&b"early"[..]));
+
+                // Ceiling was seeded at u64::MAX - 2: prefixes u64::MAX - 2
+                // and u64::MAX - 1 are the final two valid prefixes; u64::MAX
+                // itself is the exclusive ceiling sentinel and must not be issued.
+                let a = MapxRaw::new();
+                let b = MapxRaw::new();
+                assert_eq!(a.instance_id().map_id, u64::MAX - 2);
+                assert_eq!(b.instance_id().map_id, u64::MAX - 1);
+                let _ = a.save_meta().unwrap();
+                let _ = b.save_meta().unwrap();
+                assert!(MapxRaw::from_meta(u64::MAX - 2).is_ok());
+                assert!(MapxRaw::from_meta(u64::MAX - 1).is_ok());
+
+                let res = std::panic::catch_unwind(|| MapxRaw::new().instance_id());
+                assert!(res.is_err(), "allocating at u64::MAX must panic");
+            }
+            other => panic!("unknown phase {other}"),
+        }
+        return;
+    }
+
+    let scratch = env::temp_dir().join(format!(
+        "vsdb_alloc_near_max_{}_{}",
+        process_id(),
+        rand::random::<u128>()
+    ));
+    let base = scratch.join("base");
+    fs::create_dir_all(&base).unwrap();
+
+    let out = near_max_child("seed", &base, "");
+    assert!(out.status.success(), "seed failed: {out:?}");
+    let early = keyless_line(&String::from_utf8_lossy(&out.stdout), "EARLY=").to_owned();
+
+    let ceiling_path = base.join("__SYSTEM__/__prefix_ceiling__");
+    fs::write(&ceiling_path, (u64::MAX - 20_000).to_le_bytes()).unwrap();
+
+    let out = near_max_child("two_windows", &base, &early);
+    assert!(out.status.success(), "two_windows failed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let p1: u64 = keyless_line(&stdout, "P1=").parse().unwrap();
+    let p2: u64 = keyless_line(&stdout, "P2=").parse().unwrap();
+    let persisted =
+        u64::from_le_bytes(fs::read(&ceiling_path).unwrap().try_into().unwrap());
+    assert!(
+        persisted > p1 && persisted > p2,
+        "persisted ceiling {persisted} did not advance above issued {p1}, {p2}"
+    );
+
+    let out = near_max_child("after_two_windows", &base, &format!("{early},{p1},{p2}"));
+    assert!(out.status.success(), "after_two_windows failed: {out:?}");
+
+    fs::write(&ceiling_path, (u64::MAX - 2).to_le_bytes()).unwrap();
+    let out = near_max_child("exhaust", &base, &early);
+    assert!(out.status.success(), "exhaust failed: {out:?}");
 
     fs::remove_dir_all(&scratch).unwrap();
 }

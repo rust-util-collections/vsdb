@@ -899,7 +899,7 @@ fn ensure_alloc_init() {
             .expect("vsdb: allocator ceiling read failed")
             .unwrap_or(0);
         let start = ret.max(current);
-        let ceiling = start + PREFIX_ALLOC_BATCH;
+        let ceiling = start.saturating_add(PREFIX_ALLOC_BATCH);
         if current < ceiling {
             write_file_durable(&file, &ceiling.to_le_bytes())
                 .expect("vsdb: allocator ceiling write failed");
@@ -946,19 +946,17 @@ fn alloc_prefix_candidate() -> Pre {
             // and the registry under the read lock) can never observe
             // the advanced counter without the matching, correctly
             // positioned window.
-            let batch_start = {
+            let (batch_start, batch_end) = {
                 let mut reg = PENDING_WINDOWS.write();
-                let batch_start =
-                    GLOBAL_COUNTER.fetch_add(PREFIX_ALLOC_BATCH, Ordering::AcqRel);
+                let batch_start = GLOBAL_COUNTER.load(Ordering::Acquire);
+                assert!(batch_start < Pre::MAX, "vsdb: prefix allocator exhausted");
+                let batch_end = batch_start.saturating_add(PREFIX_ALLOC_BATCH);
+                GLOBAL_COUNTER.store(batch_end, Ordering::Release);
                 let cursor = LOCAL_CURSOR.with(|c| c.clone());
                 cursor.store(batch_start + 1, Ordering::Release);
-                reg.insert(
-                    thread::current().id(),
-                    (cursor, batch_start + PREFIX_ALLOC_BATCH),
-                );
-                batch_start
+                reg.insert(thread::current().id(), (cursor, batch_end));
+                (batch_start, batch_end)
             };
-            let batch_end = batch_start + PREFIX_ALLOC_BATCH;
 
             let old_ceil = GLOBAL_CEILING.load(Ordering::Acquire);
             if batch_end > old_ceil {
@@ -969,7 +967,8 @@ fn alloc_prefix_candidate() -> Pre {
                     let current = read_ceiling_file(&ceiling_file_path())
                         .expect("vsdb: allocator ceiling read failed")
                         .unwrap_or(0);
-                    let new_ceil = (batch_end + PREFIX_ALLOC_BATCH).max(current);
+                    let new_ceil =
+                        batch_end.saturating_add(PREFIX_ALLOC_BATCH).max(current);
                     if current < new_ceil {
                         write_file_durable(
                             &ceiling_file_path(),
