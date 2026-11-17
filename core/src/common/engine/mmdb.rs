@@ -540,7 +540,16 @@ impl MmDB {
         };
         let prefix_end = prefix_successor(&meta_prefix);
         let requested_end = match &hi_full {
-            Bound::Included(v) => prefix_successor(v).or_else(|| prefix_end.clone()),
+            // In lexicographical byte order, `v || [0x00]` is the exact
+            // immediate successor of `v` (`k <= v` iff `k < v || [0x00]`).
+            // Using `prefix_successor(v)` instead widened `..=v` to every
+            // key prefixed by `v` (up to `prefix_end` for `b""` or `[0xFF]`).
+            Bound::Included(v) => {
+                let mut end = Vec::with_capacity(v.len() + 1);
+                end.extend_from_slice(v);
+                end.push(0);
+                Some(end)
+            }
             Bound::Excluded(v) => Some(v.clone()),
             Bound::Unbounded => prefix_end.clone(),
         };

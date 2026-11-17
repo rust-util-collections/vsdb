@@ -84,3 +84,54 @@ fn immutable_views_survive_concurrent_replacements_and_flushes() {
     assert_eq!(reader.get(0u64.to_be_bytes()).unwrap(), 32u64.to_be_bytes());
     assert_eq!(writer.get(0u64.to_be_bytes()).unwrap(), 32u64.to_be_bytes());
 }
+
+#[test]
+fn inclusive_upper_bound_reverse_seek_reads_bounded_sst_blocks() {
+    common::setup();
+    let ns = Namespace::create_with(NamespaceOpts {
+        path: None,
+        shards: 1,
+        mem_budget_mb: Some(64),
+    })
+    .unwrap();
+
+    let mut map = MapxRaw::new_in(&ns);
+    map.insert(b"", b"empty");
+    map.insert(b"acct", b"root");
+    map.insert([0xFF], b"ff");
+
+    // Incompressible values so the map spans dozens of 16 KiB SST blocks.
+    let mut state = 0x1234_5678_9ABC_DEF0u64;
+    for i in 0..256u32 {
+        let mut val = vec![0u8; 4096];
+        for chunk in val.as_chunks_mut::<8>().0 {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            *chunk = state.to_le_bytes();
+        }
+        map.insert(format!("acct/{i:04}"), &val);
+        map.insert([0xFF, (i & 0xFF) as u8, (i >> 8) as u8], &val);
+    }
+    ns.flush();
+
+    let misses = || -> u64 {
+        ns.shard_properties("stats.block_cache_misses")[0]
+            .as_deref()
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    let before = misses();
+
+    assert_eq!(map.get_le(b"").unwrap(), (b"".to_vec(), b"empty".to_vec()));
+    assert_eq!(
+        map.get_le(b"acct").unwrap(),
+        (b"acct".to_vec(), b"root".to_vec())
+    );
+    assert_eq!(map.get_le([0xFF]).unwrap(), (vec![0xFF], b"ff".to_vec()));
+
+    let read_blocks = misses() - before;
+    assert!(
+        read_blocks <= 12,
+        "get_le inclusive upper bound scanned {read_blocks} SST blocks (expected <= 12)"
+    );
+}
