@@ -19,6 +19,14 @@ fn relative_base_stays_with_the_selected_directory() {
                 .iter()
                 .any(|info| info.id == ns.id())
         );
+        #[cfg(unix)]
+        {
+            fs::remove_dir(env::current_dir().unwrap()).unwrap();
+            assert!(matches!(
+                vsdb_configure(VsdbOptions::new("unused")),
+                Err(VsdbError::BaseDirFrozen)
+            ));
+        }
         return;
     }
 

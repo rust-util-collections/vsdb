@@ -512,8 +512,12 @@ pub fn vsdb_configure(options: VsdbOptions) -> Result<()> {
     // Publish all options while holding the lock used by path readers.
     // A first use either freezes configuration before this swap, or waits
     // for the selected base directory and options to become visible.
-    let selected = absolute_base_dir(&options.base_dir)?;
     let mut base_dir = VSDB_BASE_DIR.lock();
+    if BASE_DIR_FROZEN.load(Ordering::Acquire) {
+        return Err(VsdbError::BaseDirFrozen);
+    }
+    let selected = absolute_base_dir(&options.base_dir)?;
+    // First use can freeze the choice while the relative path is resolving.
     if BASE_DIR_FROZEN.swap(true, Ordering::AcqRel) {
         return Err(VsdbError::BaseDirFrozen);
     }
