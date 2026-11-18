@@ -1771,6 +1771,22 @@ fn has_uncommitted_after_commit_then_modify() {
 }
 
 #[test]
+fn reverted_working_edits_allow_merge_and_rollback() {
+    let mut m = VerMap::<u32, u32>::new();
+    let main = m.main_branch();
+    m.insert(main, &1, &10).unwrap();
+    let head = m.commit(main).unwrap();
+    let fork = m.create_branch("fork", main).unwrap();
+    m.insert(main, &1, &20).unwrap();
+    m.insert(main, &1, &10).unwrap();
+    m.insert(fork, &1, &10).unwrap();
+    assert!(m.raw_diff_uncommitted(main).unwrap().is_empty());
+    assert!(!m.has_uncommitted(main).unwrap());
+    assert_eq!(m.merge(fork, main).unwrap(), head);
+    m.rollback_to(main, head).unwrap();
+}
+
+#[test]
 fn has_uncommitted_after_discard() {
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();

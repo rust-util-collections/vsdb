@@ -492,6 +492,9 @@ is enforced by synchronizing the relevant shard WAL at that boundary (no
 namespace-wide memtable flush). Such maps keep working unchanged; `clone()`
 produces a co-located copy.
 
+A branch whose working keys and values match its committed bytes is clean,
+including after an edit and its reversal. Merge and rollback accept that state.
+
 New maps and deep clones synchronize their initialized component graph before
 returning. A deep clone has independent ownership and does not inherit views of
 the original map.

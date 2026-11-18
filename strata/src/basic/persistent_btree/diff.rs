@@ -2,7 +2,7 @@
 //! subtrees they share.
 
 use super::{EMPTY_ROOT, Node, NodeId, PersistentBTree};
-use std::cmp::Ordering;
+use std::{cmp::Ordering, ops::ControlFlow};
 
 /// A single difference between two tree versions, as stored bytes
 /// (see [`PersistentBTree::diff`]).
@@ -32,6 +32,14 @@ impl PersistentBTree {
         let mut result = Vec::new();
         diff_walk(self, old_root, new_root, |e| result.push(e));
         result
+    }
+
+    /// Shared roots compare in constant time. Stop at the first changed entry.
+    pub(crate) fn differs(&self, old: NodeId, new: NodeId) -> bool {
+        if old == EMPTY_ROOT || new == EMPTY_ROOT {
+            return old != new;
+        }
+        try_diff_walk(self, old, new, |_| ControlFlow::Break(())).is_break()
     }
 }
 
@@ -103,8 +111,20 @@ pub(crate) fn diff_walk(
     new_root: NodeId,
     mut emit: impl FnMut(TreeDiff),
 ) {
+    let _ = try_diff_walk(tree, old_root, new_root, |entry| {
+        emit(entry);
+        ControlFlow::Continue(())
+    });
+}
+
+fn try_diff_walk(
+    tree: &PersistentBTree,
+    old_root: NodeId,
+    new_root: NodeId,
+    mut emit: impl FnMut(TreeDiff) -> ControlFlow<()>,
+) -> ControlFlow<()> {
     if old_root == new_root {
-        return;
+        return ControlFlow::Continue(());
     }
     let mut old = Cursor::new(tree, old_root);
     let mut new = Cursor::new(tree, new_root);
@@ -133,7 +153,7 @@ pub(crate) fn diff_walk(
             }
         };
         match step {
-            Step::Done => break,
+            Step::Done => return ControlFlow::Continue(()),
             Step::SkipShared => {
                 old.0.pop();
                 new.0.pop();
@@ -146,11 +166,11 @@ pub(crate) fn diff_walk(
             }
             Step::Removed | Step::Compare(Ordering::Less) => {
                 let (key, value) = old.pop_entry();
-                emit(TreeDiff::Removed { key, value });
+                emit(TreeDiff::Removed { key, value })?;
             }
             Step::Added | Step::Compare(Ordering::Greater) => {
                 let (key, value) = new.pop_entry();
-                emit(TreeDiff::Added { key, value });
+                emit(TreeDiff::Added { key, value })?;
             }
             Step::Compare(Ordering::Equal) => {
                 let (key, old_value) = old.pop_entry();
@@ -160,7 +180,7 @@ pub(crate) fn diff_walk(
                         key,
                         old_value,
                         new_value,
-                    });
+                    })?;
                 }
             }
         }

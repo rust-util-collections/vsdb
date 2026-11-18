@@ -741,15 +741,11 @@ where
     }
 
     /// Returns `true` if the branch has uncommitted changes (dirty state
-    /// differs from the head commit's snapshot).
+    /// differs from the head commit's snapshot in its stored keys or values).
+    /// Reverting all edits to their committed bytes leaves the branch clean.
     pub fn has_uncommitted(&self, branch: BranchId) -> Result<bool> {
-        let state = self.get_branch(branch)?;
-        if state.head == NO_COMMIT {
-            Ok(state.dirty_root != EMPTY_ROOT)
-        } else {
-            let head_root = self.get_commit_inner(state.head)?.root;
-            Ok(state.dirty_root != head_root)
-        }
+        let roots = self.branch_roots(branch)?;
+        Ok(self.tree.differs(roots.committed.root, roots.working.root))
     }
 
     // Write (working state)
