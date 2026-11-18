@@ -11,6 +11,12 @@
 
 ## Open
 
+### [CRITICAL] slotdex: variable-width custom slots can lose or misread entries
+- **Where**: `strata/src/slotdex/slot_type.rs` (`SlotType`), `strata/src/slotdex/mod.rs` (`entry_key`, `insert`, `decode_entry_row`, `iter`)
+- **What**: An order-preserving custom slot codec may encode different slots with different widths. Layout v2 concatenates slot and key bytes. Iterating an inserted byte-vector key can return part of its slot as a leading key byte. Two distinct slot/key pairs can also encode the same row, making the second insert report success without storing it.
+- **Why**: Readers split every entry at the encoded width of `S::MIN`. When one slot encoding is a prefix of another, even the entry rows, per-slot counts and total together can describe multiple assignments of keys to slots. The built-in `u32`, `u64` and `u128` codecs have fixed widths.
+- **Suggested fix**: Decide the supported custom-slot encoding contract and migration before changing writes or restore behavior. Supporting all order-preserving codecs requires unambiguous component boundaries and slot range ordering. Rejecting variable-width codecs would narrow the public trait contract. Test insertion, paging, iteration, and restoration with custom widths. Reconstructing ambiguous old rows requires an independent application record.
+
 ## Won't Fix
 
 ### [MEDIUM] cached indexes: independently restored handles do not share runtime caches
