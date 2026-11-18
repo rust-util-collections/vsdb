@@ -1190,22 +1190,32 @@ fn note_meta_dir(max: &mut Option<Pre>, dir: &Path) -> Result<()> {
                 pending.push(entry.path());
             } else if ty.is_file() {
                 let mut file = fs::File::open(entry.path()).c(d!())?;
-                let mut carry = 0;
-                loop {
-                    let read = file.read(&mut buf[carry..]).c(d!())?;
-                    if read == 0 {
-                        break;
-                    }
-                    let end = carry + read;
-                    note_meta_bytes(max, &buf[..end]);
-                    // A magic and prefix may straddle two reads.
-                    carry = end.min(super::MAPX_META_MAGIC.len() + PREFIX_SIZE - 1);
-                    buf.copy_within(end - carry..end, 0);
-                }
+                note_meta_stream(max, &mut file, &mut buf).c(d!())?;
             }
         }
     }
     Ok(())
+}
+
+fn note_meta_stream(
+    max: &mut Option<Pre>,
+    reader: &mut impl Read,
+    buf: &mut [u8],
+) -> io::Result<()> {
+    let mut carry = 0;
+    loop {
+        let read = match reader.read(&mut buf[carry..]) {
+            Ok(0) => return Ok(()),
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        let end = carry + read;
+        note_meta_bytes(max, &buf[..end]);
+        // A magic and prefix may straddle two reads.
+        carry = end.min(super::MAPX_META_MAGIC.len() + PREFIX_SIZE - 1);
+        buf.copy_within(end - carry..end, 0);
+    }
 }
 
 fn note_shard_dir(max: &mut Option<Pre>, shard: &Path) -> Result<()> {
@@ -1858,6 +1868,27 @@ mod tests {
         panic::{AssertUnwindSafe, catch_unwind},
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    #[test]
+    fn ceiling_scan_retries_interrupted_reads() {
+        struct InterruptedOnce(bool);
+        impl Read for InterruptedOnce {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                if std::mem::take(&mut self.0) {
+                    Err(io::ErrorKind::Interrupted.into())
+                } else {
+                    Ok(0)
+                }
+            }
+        }
+
+        let map = crate::MapxRaw::new();
+        let bytes = postcard::to_allocvec(&map).unwrap();
+        let mut reader = InterruptedOnce(true).chain(bytes.as_slice());
+        let mut max = None;
+        note_meta_stream(&mut max, &mut reader, &mut [0; 32]).unwrap();
+        assert_eq!(max, Some(map.instance_id().map_id));
+    }
 
     #[test]
     fn ceiling_scan_observes_a_handle_in_a_user_key() {
