@@ -161,7 +161,9 @@ One allocator serves all namespaces, keeping prefixes unique across the whole
 universe. It reserves windows of 8,192 prefixes per thread. The global ceiling
 is persisted under the default base before any prefix in a new window is
 issued. Recovered prefixes advance the floor; IDs are never reused. Unused
-reservations and shard co-location can leave gaps.
+reservations and shard co-location can leave gaps. If a copy lacks the ceiling
+file, recovery scans shard keys and values, saved instance metadata, and
+regular files throughout `__CUSTOM__` for serialized handles before allocating.
 
 The v15-to-v16 transition takes the maximum of the old default-shard allocator
 and the new ceiling file before further allocation. That legacy upgrade can
