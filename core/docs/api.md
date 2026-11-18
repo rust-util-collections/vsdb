@@ -93,7 +93,9 @@ assert_eq!(view.next().unwrap().1, b"before");
 
 ## Utility Functions
 
-Example for getting and setting the base directory.
+A relative base directory is resolved when the process selects it. Later
+changes to the working directory keep open handles and registry operations
+in the same database.
 
 ```rust
 use vsdb_core::{VsdbOptions, vsdb_configure, vsdb_get_base_dir};

@@ -62,13 +62,12 @@ pub const BIGGEST_RESERVED_ID: Pre = PREFIX_ALLOC_START - 1;
 
 const BASE_DIR_VAR: &str = "VSDB_BASE_DIR";
 
-static VSDB_BASE_DIR: LazyLock<Mutex<PathBuf>> =
-    LazyLock::new(|| Mutex::new(gen_data_dir()));
+static VSDB_BASE_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 static VSDB_SYSTEM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     // See VSDB_CUSTOM_DIR: derived paths freeze the base dir.
     vsdb_freeze_base_dir();
-    let mut d = VSDB_BASE_DIR.lock().clone();
+    let mut d = vsdb_get_base_dir();
     d.push("__SYSTEM__");
     if !vsdb_is_read_only() {
         pnk!(create_dir_all_durable(&d));
@@ -91,7 +90,7 @@ static VSDB_CUSTOM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     // fails loudly instead of silently splitting the directory tree
     // across two bases.
     vsdb_freeze_base_dir();
-    let mut d = VSDB_BASE_DIR.lock().clone();
+    let mut d = vsdb_get_base_dir();
     d.push("__CUSTOM__");
     if !vsdb_is_read_only() {
         pnk!(create_dir_all_durable(&d));
@@ -281,9 +280,17 @@ fn gen_data_dir() -> PathBuf {
             );
             s
         });
-    // Resolving the default must not create it: explicit configuration
-    // initializes this lazy value before assigning the selected path.
-    PathBuf::from(d)
+    absolute_base_dir(Path::new(&d))
+        .expect("vsdb: cannot resolve the default base directory")
+}
+
+fn absolute_base_dir(path: &Path) -> io::Result<PathBuf> {
+    // An empty base historically placed the engine's relative paths in ".".
+    std::path::absolute(if path.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        path
+    })
 }
 
 /// Returns the custom directory path for VSDB — the **app-level
@@ -359,7 +366,10 @@ pub fn vsdb_meta_path(instance_id: u64) -> PathBuf {
 /// A `PathBuf` to the base directory.
 #[inline(always)]
 pub fn vsdb_get_base_dir() -> PathBuf {
-    VSDB_BASE_DIR.lock().clone()
+    VSDB_BASE_DIR
+        .lock()
+        .get_or_insert_with(gen_data_dir)
+        .clone()
 }
 
 /// Whether the base directory has been frozen (set manually or locked in
@@ -482,7 +492,8 @@ pub(crate) fn vsdb_freeze_base_dir() {
 /// namespace and every non-default namespace opened through a restored
 /// handle. Call it before any other VSDB API; without it the base directory
 /// comes from the `VSDB_BASE_DIR` environment variable (read, never
-/// written) or defaults to `$HOME/.vsdb`.
+/// written) or defaults to `$HOME/.vsdb`. Relative roots are resolved against
+/// the working directory when selected and stay anchored there.
 ///
 /// Read-only mode opens only complete existing datasets. Reads and in-memory
 /// WAL recovery are supported without filesystem changes. Fallible write
@@ -501,6 +512,7 @@ pub fn vsdb_configure(options: VsdbOptions) -> Result<()> {
     // Publish all options while holding the lock used by path readers.
     // A first use either freezes configuration before this swap, or waits
     // for the selected base directory and options to become visible.
+    let selected = absolute_base_dir(&options.base_dir)?;
     let mut base_dir = VSDB_BASE_DIR.lock();
     if BASE_DIR_FROZEN.swap(true, Ordering::AcqRel) {
         return Err(VsdbError::BaseDirFrozen);
@@ -509,7 +521,7 @@ pub fn vsdb_configure(options: VsdbOptions) -> Result<()> {
     OPEN_MODE.store(options.open_mode as u8, Ordering::Release);
     CONFIGURED_MEM_BUDGET_MB
         .store(options.mem_budget_mb.unwrap_or(0), Ordering::Release);
-    *base_dir = options.base_dir;
+    *base_dir = Some(selected);
     Ok(())
 }
 

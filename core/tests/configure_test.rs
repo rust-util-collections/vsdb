@@ -5,6 +5,45 @@ use vsdb_core::{
 };
 
 #[test]
+fn relative_base_stays_with_the_selected_directory() {
+    const MODE: &str = "VSDB_RELATIVE_BASE_TEST_MODE";
+    if let Some(mode) = env::var_os(MODE) {
+        if mode == "configured" {
+            vsdb_configure(VsdbOptions::new("data")).unwrap();
+        }
+        let ns = Namespace::create().unwrap();
+        env::set_current_dir("other").unwrap();
+        assert!(
+            Namespace::list()
+                .unwrap()
+                .iter()
+                .any(|info| info.id == ns.id())
+        );
+        return;
+    }
+
+    let scratch =
+        env::temp_dir().join(format!("vsdb_relative_{}", rand::random::<u128>()));
+    for mode in ["configured", "environment"] {
+        let cwd = scratch.join(mode);
+        fs::create_dir_all(cwd.join("other")).unwrap();
+        let output = Command::new(env::current_exe().unwrap())
+            .args(["--exact", "relative_base_stays_with_the_selected_directory"])
+            .env(MODE, mode)
+            .env("VSDB_BASE_DIR", "data")
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{mode}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    fs::remove_dir_all(scratch).unwrap();
+}
+
+#[test]
 fn explicit_configuration_ignores_environment_default() {
     const CHILD_ROOT: &str = "VSDB_CONFIGURE_TEST_CHILD_ROOT";
 
