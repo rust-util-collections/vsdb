@@ -74,6 +74,7 @@ pub use smt::SmtProof;
 use std::{mem, path::Path};
 
 use crate::common::{ensure_process_writable, error::Result};
+use codec_util::MAX_CACHE_FILE_BYTES;
 use mpt::{TrieMut, TrieRo};
 use node::NodeHandle;
 use smt::mutation::SmtMut;
@@ -277,7 +278,8 @@ impl MptCalc {
     ///
     /// Returns [`VsdbError::ReadOnly`](vsdb_core::VsdbError::ReadOnly) when
     /// VSDB was configured read-only, or a trie/I/O error if serialization
-    /// fails.
+    /// fails. Checkpoints larger than the 512 MiB load limit return an error
+    /// before replacing the previous file.
     pub fn save_cache(
         &mut self,
         dir: &Path,
@@ -287,7 +289,13 @@ impl MptCalc {
         ensure_process_writable("MPT cache save")?;
         let hash = self.root_hash()?;
         let path = dir.join(format!("mpt_cache_{}.bin", cache_id));
-        Ok(cache::save_to_file(&self.root, sync_tag, &hash, &path)?)
+        Ok(cache::save_to_file(
+            &self.root,
+            sync_tag,
+            &hash,
+            &path,
+            MAX_CACHE_FILE_BYTES,
+        )?)
     }
 
     /// Loads a previously saved trie from a file.
@@ -476,7 +484,8 @@ impl SmtCalc {
     ///
     /// Returns [`VsdbError::ReadOnly`](vsdb_core::VsdbError::ReadOnly) when
     /// VSDB was configured read-only, or a trie/I/O error if serialization
-    /// fails.
+    /// fails. Checkpoints larger than the 512 MiB load limit return an error
+    /// before replacing the previous file.
     pub fn save_cache(
         &mut self,
         dir: &Path,
@@ -487,7 +496,11 @@ impl SmtCalc {
         let hash = self.root_hash()?;
         let path = dir.join(format!("smt_cache_{}.bin", cache_id));
         Ok(smt::cache::save_to_file(
-            &self.root, sync_tag, &hash, &path,
+            &self.root,
+            sync_tag,
+            &hash,
+            &path,
+            MAX_CACHE_FILE_BYTES,
         )?)
     }
 

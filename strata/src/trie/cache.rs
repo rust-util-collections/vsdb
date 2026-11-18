@@ -10,11 +10,13 @@
 //! stale, the caller simply rebuilds from the authoritative store.
 //!
 
+#[cfg(test)]
+use crate::trie::codec_util::write_cache_payload;
 use crate::trie::{
     codec_util::{
         CHECKSUM_LEN, checked_end, compute_checksum, io_err, read_bytes,
         read_cache_bytes, read_u8, read_varint, validate_cache_file_size, write_bytes,
-        write_varint,
+        write_cache_file, write_varint,
     },
     error::{Result, TrieError},
     mpt::MAX_MPT_KEY_LEN,
@@ -22,11 +24,7 @@ use crate::trie::{
     node::{Node, NodeCodec, NodeHandle},
 };
 use sha3::{Digest, Keccak256};
-use std::{
-    fs::File,
-    io::{Read, Write},
-    path::Path,
-};
+use std::{fs::File, io::Read, path::Path};
 
 const MAGIC: &[u8; 4] = b"MPTC";
 const VERSION: u8 = 1;
@@ -45,12 +43,17 @@ const MAX_TOTAL_NIBBLES: usize = 2 * MAX_MPT_KEY_LEN;
 // =========================================================================
 
 /// Saves an `MptCalc` trie to a writer.
+#[cfg(test)]
 pub(crate) fn save(
     root: &NodeHandle,
     sync_tag: u64,
     root_hash: &[u8],
-    w: &mut impl Write,
+    w: &mut impl std::io::Write,
 ) -> Result<()> {
+    write_cache_payload(&encode_payload(root, sync_tag, root_hash), w)
+}
+
+fn encode_payload(root: &NodeHandle, sync_tag: u64, root_hash: &[u8]) -> Vec<u8> {
     let mut payload = Vec::new();
     payload.extend_from_slice(MAGIC);
     payload.push(VERSION);
@@ -62,10 +65,7 @@ pub(crate) fn save(
 
     serialize_handle(root, &mut payload);
 
-    let checksum = compute_checksum(&payload);
-    w.write_all(&payload).map_err(io_err)?;
-    w.write_all(&checksum).map_err(io_err)?;
-    Ok(())
+    payload
 }
 
 /// Loads an `MptCalc` trie from a reader.
@@ -137,9 +137,9 @@ pub(crate) fn save_to_file(
     sync_tag: u64,
     root_hash: &[u8],
     path: &Path,
+    limit: u64,
 ) -> Result<()> {
-    let mut f = File::create(path).map_err(io_err)?;
-    save(root, sync_tag, root_hash, &mut f)
+    write_cache_file(path, &encode_payload(root, sync_tag, root_hash), limit)
 }
 
 /// Convenience: load from a file path.

@@ -159,6 +159,29 @@ mod replacement_tests {
     }
 }
 
+#[test]
+fn oversized_checkpoint_preserves_the_last_loadable_file() {
+    use super::{MptCalc, SmtCalc, cache, smt};
+    let dir = scratch_cache_dir();
+    let path = dir.join("checkpoint");
+    let check = |save: &dyn Fn(u64, u64) -> super::error::Result<()>| {
+        save(1, u64::MAX).unwrap();
+        let size = std::fs::metadata(&path).unwrap().len();
+        save(2, size).unwrap();
+        let previous = std::fs::read(&path).unwrap();
+        assert!(save(3, size - 1).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), previous);
+    };
+    let mut mpt = MptCalc::default();
+    let hash = mpt.root_hash().unwrap();
+    check(&|tag, limit| cache::save_to_file(&mpt.root, tag, &hash, &path, limit));
+    assert_eq!(cache::load_from_file(&path).unwrap().1, 2);
+    let mut smt = SmtCalc::default();
+    let hash = smt.root_hash().unwrap();
+    check(&|tag, limit| smt::cache::save_to_file(&smt.root, tag, &hash, &path, limit));
+    assert_eq!(smt::cache::load_from_file(&path).unwrap().1, 2);
+}
+
 #[cfg(test)]
 mod tests {
     use crate::trie::MptCalc;

@@ -5,19 +5,17 @@
 //! instead of MPT nodes.
 //!
 
+#[cfg(test)]
+use crate::trie::codec_util::write_cache_payload;
 use crate::trie::{
     codec_util::{
         CHECKSUM_LEN, checked_end, compute_checksum, io_err, read_bytes,
         read_cache_bytes, read_u8, read_varint, validate_cache_file_size, write_bytes,
-        write_varint,
+        write_cache_file, write_varint,
     },
     error::{Result, TrieError},
 };
-use std::{
-    fs::File,
-    io::{Read, Write},
-    path::Path,
-};
+use std::{fs::File, io::Read, path::Path};
 
 use super::{
     EMPTY_HASH, SmtHandle, SmtNode,
@@ -38,12 +36,17 @@ const VERSION: u8 = 3;
 // Public API
 // =========================================================================
 
+#[cfg(test)]
 pub(crate) fn save(
     root: &SmtHandle,
     sync_tag: u64,
     root_hash: &[u8],
-    w: &mut impl Write,
+    w: &mut impl std::io::Write,
 ) -> Result<()> {
+    write_cache_payload(&encode_payload(root, sync_tag, root_hash), w)
+}
+
+fn encode_payload(root: &SmtHandle, sync_tag: u64, root_hash: &[u8]) -> Vec<u8> {
     let mut payload = Vec::new();
     payload.extend_from_slice(MAGIC);
     payload.push(VERSION);
@@ -55,10 +58,7 @@ pub(crate) fn save(
 
     serialize_handle(root, &mut payload);
 
-    let checksum = compute_checksum(&payload);
-    w.write_all(&payload).map_err(io_err)?;
-    w.write_all(&checksum).map_err(io_err)?;
-    Ok(())
+    payload
 }
 
 pub(crate) fn load(r: &mut impl Read) -> Result<(SmtHandle, u64, Vec<u8>)> {
@@ -128,9 +128,9 @@ pub(crate) fn save_to_file(
     sync_tag: u64,
     root_hash: &[u8],
     path: &Path,
+    limit: u64,
 ) -> Result<()> {
-    let mut f = File::create(path).map_err(io_err)?;
-    save(root, sync_tag, root_hash, &mut f)
+    write_cache_file(path, &encode_payload(root, sync_tag, root_hash), limit)
 }
 
 pub(crate) fn load_from_file(path: &Path) -> Result<(SmtHandle, u64, Vec<u8>)> {

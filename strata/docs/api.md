@@ -420,6 +420,9 @@ vmp.save_cache(commit).unwrap();
 // are rebuilt/caught up. Root calculation and Drop never save cache files.
 ```
 
+MPT and SMT checkpoints have a 512 MiB encoded size limit, including the
+checksum. An oversized save returns an error and preserves the previous file.
+
 A branch root and its proof use one captured working state, including edits
 that were uncommitted when the query began.
 

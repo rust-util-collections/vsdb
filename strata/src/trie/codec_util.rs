@@ -9,7 +9,11 @@
 
 use crate::trie::error::{Result, TrieError};
 use sha3::{Digest, Keccak256};
-use std::{io::Read, path::Path};
+use std::{
+    fs::File,
+    io::{Read, Write},
+    path::Path,
+};
 
 /// Truncated-Keccak checksum length shared by both cache formats.
 pub(crate) const CHECKSUM_LEN: usize = 8;
@@ -85,12 +89,34 @@ pub(crate) fn checked_end(
 
 pub(crate) fn validate_cache_file_size(path: &Path) -> Result<()> {
     let len = std::fs::metadata(path).map_err(io_err)?.len();
-    if len > MAX_CACHE_FILE_BYTES {
+    validate_cache_size(len, MAX_CACHE_FILE_BYTES)
+}
+
+fn validate_cache_size(len: u64, limit: u64) -> Result<()> {
+    if len > limit {
         return Err(TrieError::InvalidState(format!(
-            "cache file is {len} bytes, above the {MAX_CACHE_FILE_BYTES}-byte limit"
+            "cache file is {len} bytes, above the {limit}-byte limit"
         )));
     }
     Ok(())
+}
+
+pub(crate) fn write_cache_file(path: &Path, payload: &[u8], limit: u64) -> Result<()> {
+    // Check the complete encoded length before replacing a usable checkpoint.
+    validate_cache_size(
+        (payload.len() as u64).saturating_add(CHECKSUM_LEN as u64),
+        limit,
+    )?;
+    write_cache_payload(payload, &mut File::create(path).map_err(io_err)?)
+}
+
+pub(crate) fn write_cache_payload(
+    payload: &[u8],
+    writer: &mut impl Write,
+) -> Result<()> {
+    let checksum = compute_checksum(payload);
+    writer.write_all(payload).map_err(io_err)?;
+    writer.write_all(&checksum).map_err(io_err)
 }
 
 pub(crate) fn read_cache_bytes(r: &mut impl Read) -> Result<Vec<u8>> {
