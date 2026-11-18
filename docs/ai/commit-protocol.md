@@ -1,6 +1,6 @@
 # Atomic Commit and Version Protocol
 
-Validate → commit → version for `$x-commit`, `$x-fix`, `$x-overhaul`.
+Validate → commit → bump version → tag the release for `$x-commit`, `$x-fix`, `$x-overhaul`.
 Use with `docs/ai/workflow-policy.md` and `docs/ai/compatibility-policy.md`.
 
 ## Invocation ledger
@@ -10,7 +10,7 @@ Before first edit, record:
 - start `HEAD`, branch, and the three version locations at that `HEAD` and in the worktree;
 - staged / unstaged / untracked baseline;
 - **frozen owned paths** (sorted) and planned units;
-- whether a patch bump is already owed (below);
+- whether a patch bump or release tag is already owed (below);
 - whether any unit is a public/on-disk break the user has not accepted.
 
 Keep the ledger across commits. Stage only freeze set + this-invocation fix/format paths.
@@ -80,12 +80,12 @@ skill composed this protocol. Docs-only: skip Rust gates unless the caller is
 performing a full audit or a bump is owed — a release always needs the full gate
 passed on its code state. A required failing/blocked check prevents release.
 
-## Lockstep version (no tag)
+## Lockstep version and tag
 
 A patch bump is **owed** when tracked `.rs` changed after the latest commit that
 changed `version = ` in `core/Cargo.toml`, including `.rs` this invocation will
-commit. Docs-only does not owe a bump. Do not create a git tag unless the user
-explicitly asks for one (annotated `vX.Y.Z` on the release commit). Never push.
+commit. Docs-only does not owe a bump. Every version bump requires a local
+annotated `vX.Y.Z` tag on its release commit.
 
 ```bash
 base=$(git log -1 --format=%H -G'^version = ' -- core/Cargo.toml)
@@ -96,11 +96,11 @@ Re-run after the last behavior commit; that result decides, not the ledger’s.
 
 Bump only after the required gate passes and no in-scope Open or coverage gap
 remains. If blocked, keep the validated commits and report; the owed bump stays
-detectable. A later run with nothing else to commit still finishes it — do not
-stop at “nothing to commit”.
+detectable. A later run with nothing else to commit still finishes it.
 
 Compatible only: current agreed `X.Y.Z` → `X.Y.(Z+1)`, once per owed release, from
-the manifests now — not a stale start-HEAD. Already at that target → verify only.
+the current manifests. If the release commit already exists, verify it and
+complete the required tag.
 The three versions must agree. Divergence, or a lower version → report; do not overwrite.
 
 A public/on-disk break is not accepted by the agent. Do not ship that unit unless
@@ -120,7 +120,19 @@ existing section. Then `cargo metadata --no-deps --format-version 1` must show
 both package versions and the workspace dependency. No empty commit. Do not
 force-add `Cargo.lock`.
 
+Check the intended tag name before making the release commit. If the name is
+taken, accept it only when it is an annotated tag on the intended release
+commit. A conflicting tag blocks the release. Report it and preserve it.
+Once the release commit is verified, create any missing tag with
+`git tag -a "$tag" "$release_commit" -m "$tag"`. Confirm that
+`git cat-file -t "refs/tags/$tag"` returns `tag` and
+`git rev-parse "refs/tags/$tag^{commit}"` returns the release commit hash.
+Leave tags local.
+
+If a release commit made under this tagging rule is missing its tag, verify
+that commit and resume tagging even when no Rust changes are pending.
+
 ## Final state
 
-Report hashes/subjects, compatibility, version. No tag. Owned work committed;
+Report hashes/subjects, compatibility, version, and release tag. Owned work committed;
 unrelated baseline untouched.

@@ -9,7 +9,7 @@ Resolve repository paths from the Git root; Markdown links are relative to
 this file. Read invocation arguments from the user prompt.
 
 Clear actionable `docs/audit.md` Open → self-review → local commits. Never push.
-No tag. No autonomous major. User-invoked only. New commits only.
+No autonomous major. User-invoked only. New commits only.
 
 Apply [pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md) §Maintenance scope. Verify each
 recorded defect against the current Rust implementation before changing code.
@@ -24,13 +24,15 @@ Read [workflow-policy.md](../../../docs/ai/workflow-policy.md), [commit-protocol
 [compatibility-policy.md](../../../docs/ai/compatibility-policy.md), [pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md),
 [review-core.md](../../../docs/ai/review-core.md), [technical-patterns.md](../../../docs/ai/technical-patterns.md),
 [false-positive-guide.md](../../../docs/ai/false-positive-guide.md). Preflight + ledger (freeze paths as work
-proceeds; note whether a patch bump is owed). Empty Open and no owed bump →
-“nothing to fix”. Empty Open but an owed bump → skip fixes; standalone continues
-at step 4, and a composed run leaves the bump to the parent.
+proceeds; note whether a patch bump or release tag is owed). Empty Open and
+no owed bump or tag → “nothing to fix”. With no Open entries and an owed bump or
+tag, a standalone run continues at step 4 and a composed run leaves release
+finalization to the parent.
 
 When composed by `x-overhaul`, inherit its scope, starting HEAD, and ledger;
-run steps 1–3 only. The parent owns the final gate and version. Empty in-scope
-Open skips fixes, not the parent's audit, validation, or owed bump.
+run steps 1–3 only. The parent owns the final gate, version bump, and tag.
+When there are no in-scope Open entries, the parent continues with the audit,
+validation, and any owed release steps.
 
 ## Protocol
 
@@ -60,13 +62,15 @@ Review `starting_HEAD..HEAD` + this invocation’s uncommitted paths with
 `review-core.md` §3 evidence and the FP guide; registry per §5.
 New confirmed → Open → same one-finding loop. Stop on no-progress or baseline overlap.
 
-### 4. Final gate and version
+### 4. Final gate, version, and tag
 
-[commit-protocol.md](../../../docs/ai/commit-protocol.md) once. Required checks pass and no in-scope Open
-remains → the owed bump. No tag. No autonomous major.
-Blocked → retain validated local commits and report remaining Open; the owed bump
-stays for the next run.
+[commit-protocol.md](../../../docs/ai/commit-protocol.md) governs the final gate,
+owed bump, and local annotated release tag. Bump after the required checks pass
+and the in-scope Open list is clear. No autonomous major.
+If blocked, retain validated local commits and report remaining Open findings
+and any owed bump or tag.
 
 ## Output
 
-Dispositions, fixes, disproven entries removed / Won't Fix, validations, compatibility, hashes/subjects, version, baseline left alone.
+Dispositions, fixes, disproven entries removed / Won't Fix, validations,
+compatibility, hashes/subjects, version, release tag, baseline left alone.

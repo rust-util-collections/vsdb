@@ -9,7 +9,7 @@ Resolve repository paths from the Git root; Markdown links are relative to
 this file. Read invocation arguments from the user prompt.
 
 Scoped review → fix confirmed in-scope defects → validate → atomic local commits.
-Never automatically create a branch, tag, push, open a PR, publish, deploy, or
+Never automatically create a branch, push, open a PR, publish, deploy, or
 rewrite history. No autonomous major. User-invoked only. New commits only.
 
 Apply [pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md) §Maintenance scope:
@@ -52,7 +52,7 @@ design-shaped, or `all`. Also read the composed protocols in
 
 One invocation owns one baseline, `starting_HEAD`, frozen scope, ownership
 ledger ([commit-protocol.md](../../../docs/ai/commit-protocol.md) §Invocation ledger),
-final gate, and lockstep version step. Do not launch nested standalone skill
+final gate, version bump, and release tag. Do not launch nested standalone skill
 workflows or repeat their finalization; standalone read-only/no-commit rules,
 `x-review` Phases 5–7, `x-commit` §4, and `x-fix` §4 are replaced by the
 protocol below.
@@ -63,15 +63,16 @@ protocol below.
 
 1. Run preflight (`workflow-policy.md` §1): stop on merge/rebase/cherry-pick or
    detached `HEAD`. Separate staged, unstaged, and untracked baseline; freeze
-   owned paths and record whether a lockstep patch bump is already owed.
+   owned paths and record whether a patch bump or release tag is already owed.
 2. Uncommitted-scope guards:
    - `staged`: if any staged path also has unstaged working-tree hunks, stop on
      baseline overlap (`workflow-policy.md` §2) so unstaged edits are never
      swept or tested as staged.
    - `worktree`: ask if an untracked file's intent is unclear.
-   - Empty `staged`/`worktree`: when no bump is owed, report nothing to overhaul
-     and stop; when a bump is owed, skip to Phase 4 if `docs/audit.md` `Open` is
-     empty, or stop and report the `Open` entries blocking release.
+   - Empty `staged`/`worktree`: if a release tag is owed, resume it in Phase 4.
+     Otherwise, when a bump is owed, skip to Phase 4 if `docs/audit.md` `Open` is empty,
+     or report the `Open` entries blocking the bump. Otherwise report nothing
+     to overhaul.
 3. Map scope via `review-core.md` Subsystem Map and load mapped
    `docs/ai/patterns/*.md` guides:
    - Diff scopes: full diff + changed functions, callers, failure/recovery
@@ -136,7 +137,7 @@ cannot be separated safely, leave the baseline untouched, keep the finding
    registry-only changes remain, commit them in one separate `docs` commit after
    code fixes.
 
-### Phase 4 — Final Gate and Version
+### Phase 4 — Final Gate, Version, and Tag
 
 1. Re-review the aggregate `starting_HEAD..HEAD` diff for cross-commit
    interactions, missed callers/error paths, and doc/guide alignment.
@@ -157,11 +158,10 @@ cannot be separated safely, leave the baseline untouched, keep the finding
 3. If aggregate review or a gate check exposes a regression, land a **new**
    focused fix commit (never amend), re-run affected checks, and stop on a
    repeated failure with no progress or baseline overlap.
-4. Apply `commit-protocol.md` §Lockstep version once, only after required checks
-   pass with no in-scope `Open` findings or coverage gaps. Never choose a major
-   bump autonomously. If blocked, retain validated local commits and leave any
-   owed bump for the next run. No changes and no owed version step → no empty
-   commit.
+4. Apply `commit-protocol.md` §Lockstep version and tag once. Bump after the
+   required checks pass with no in-scope `Open` findings or coverage gaps.
+   Never choose a major bump autonomously. If blocked, retain validated local
+   commits and report any owed bump or tag for the next run. Skip empty commits.
 
 ## Output
 
@@ -169,4 +169,4 @@ Report scope and `starting_HEAD`, coverage ledger and any gaps, finding
 dispositions (fixed, pruned as fixed/disproven, `Won't Fix`, remaining `Open`
 with blockers), validation checks run (toolchain + scratch `VSDB_BASE_DIR` /
 worktree isolation), public/on-disk compatibility, local commit hashes and
-subjects, lockstep version outcome, and untouched baseline.
+subjects, version, release tag, and untouched baseline.

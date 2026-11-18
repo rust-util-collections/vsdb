@@ -9,7 +9,7 @@ Resolve repository paths from the Git root; Markdown links are relative to
 this file. Read invocation arguments from the user prompt.
 
 Review owned worktree changes → fix confirmed defects → validate → local commits.
-Never push. No tag. No autonomous major. User-invoked only. New commits only
+Never push. No autonomous major. User-invoked only. New commits only
 (no amend/rebase/force-push).
 
 Apply [pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md) §Maintenance scope. The requested
@@ -29,11 +29,11 @@ Read [workflow-policy.md](../../../docs/ai/workflow-policy.md), [commit-protocol
 [technical-patterns.md](../../../docs/ai/technical-patterns.md), [false-positive-guide.md](../../../docs/ai/false-positive-guide.md);
 public/persisted → [compatibility-policy.md](../../../docs/ai/compatibility-policy.md); design-shaped →
 [design-patterns.md](../../../docs/ai/design-patterns.md). Preflight + ledger (incl. **frozen paths** and
-whether a patch bump is owed).
+whether a patch bump or release tag is owed).
 
 When composed by `x-overhaul` (`staged` / `worktree`), inherit its frozen outer
 scope, starting HEAD, and ledger instead of prompt pathspecs; run steps 1–3
-only. The parent owns the final gate and version.
+only. The parent owns the final gate, version bump, and tag.
 
 ## Protocol
 
@@ -41,8 +41,8 @@ only. The parent owns the final gate and version.
 
 1. `git status --short`, full diffs, intended untracked (`git diff HEAD` misses
    untracked). Unclear whether an untracked file is intended → ask.
-2. Nothing intended and no owed bump → “nothing to commit”, stop. Owed bump only →
-   skip to the final gate.
+2. Nothing intended and no owed bump or tag → “nothing to commit”, stop.
+   Owed bump or tag only → skip to §4.
 3. Freeze owned paths before edit; later stage freeze + this-invocation fix/format only.
 4. Split coherent units: one issue/root cause/behavior each; tests/docs/migration/audit
    stay with the unit; keep pre-staged boundaries unless the user changes them.
@@ -71,11 +71,13 @@ Investigate parallel OK; edit/commit sequential.
 [commit-protocol.md](../../../docs/ai/commit-protocol.md) per unit: format, lint, targeted tests (no `/home` cleanup),
 exact stage, inspect cached diff, one new commit. Never amend.
 
-### 4. Final gate and version
+### 4. Final gate, version, and tag
 
-[commit-protocol.md](../../../docs/ai/commit-protocol.md): full workspace gate, then the owed bump.
+[commit-protocol.md](../../../docs/ai/commit-protocol.md) governs the full
+workspace gate, owed bump, and local annotated release tag.
 Post-commit regression → new focused commit, then the owed bump still applies.
 
 ## Output
 
-Files/subsystems, fixes, validations, compatibility, hashes/subjects, version, untouched baseline.
+Files/subsystems, fixes, validations, compatibility, hashes/subjects, version,
+release tag, untouched baseline.

@@ -74,7 +74,7 @@ requirements live in [pragmatic-engineering.md](docs/ai/pragmatic-engineering.md
 [review-core.md](docs/ai/review-core.md).
 
 - [`$x-review`](.agents/skills/x-review/SKILL.md) — regression review. Empty = latest commit. Also: N, `all`, `staged`, `worktree`, hash, range, `--fix`. Code read-only; `docs/audit.md` is the registry exception
-- [`$x-fix`](.agents/skills/x-fix/SKILL.md) — clear `docs/audit.md` Open, one finding per commit; resumable patch bump, no tag
+- [`$x-fix`](.agents/skills/x-fix/SKILL.md) — clear `docs/audit.md` Open, one finding per commit
 - [`$x-commit`](.agents/skills/x-commit/SKILL.md) — review worktree (optional pathspecs) → fix → commit. Unfixed defects go to `docs/audit.md`
 - [`$x-overhaul`](.agents/skills/x-overhaul/SKILL.md) — same scopes as `$x-review` (empty = latest commit; `all` = full repo; `staged`/`worktree` commit that work), then fix and local commits
 
@@ -82,7 +82,7 @@ Supporting docs (`docs/ai/`):
 
 - [workflow-policy.md](docs/ai/workflow-policy.md) — worktree safety, one-issue-one-commit
 - [pragmatic-engineering.md](docs/ai/pragmatic-engineering.md) — root goal, low variance
-- [commit-protocol.md](docs/ai/commit-protocol.md) — validate → commit → resumable patch bump (no tag, no autonomous major); CHANGELOG written by the release commit
+- [commit-protocol.md](docs/ai/commit-protocol.md) — validate → commit → resumable version bump and local annotated tag for `$x-commit`, `$x-fix`, and `$x-overhaul`. The release commit updates CHANGELOG.
 - [compatibility-policy.md](docs/ai/compatibility-policy.md) — public/on-disk breaks + migration
 - [technical-patterns.md](docs/ai/technical-patterns.md) / [design-patterns.md](docs/ai/design-patterns.md) — bug catalog + D-\* design lens
 - [review-core.md](docs/ai/review-core.md) — evidence standard + Subsystem Map + audit registry rules/shape (SSOT)

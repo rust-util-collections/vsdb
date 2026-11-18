@@ -3,8 +3,11 @@
 SSOT safety for `$x-review`, `$x-commit`, `$x-fix`, `$x-overhaul`. Skills must
 not weaken it. See also `pragmatic-engineering.md`.
 
-**Hard rules:** user-invoked only · local commits only (never push) · no history
-rewrite · one independent issue per commit · no auto tag or PR · no autonomous major.
+**Hard rules:** user-invoked only · local commits and release tags (never push) ·
+no history rewrite · one independent issue per commit · no automatic PR or major bump.
+
+Version bumps require the local annotated release tag defined in
+[commit-protocol.md](commit-protocol.md#lockstep-version-and-tag).
 
 ## Skill discovery and invocation
 
