@@ -6,6 +6,30 @@ Compiler requirements below are historical release notes. Current development
 uses the official latest stable Rust, without a declared compatible version
 range or minimum compiler; see [the toolchain policy](docs/ai/compatibility-policy.md#rust-toolchain).
 
+## [v17.0.21]
+
+Existing databases open in place.
+
+### Fixed
+
+- Relative database roots are resolved when selected and stay anchored after
+  the working directory changes. Attempts to configure a frozen instance
+  still return `BaseDirFrozen` after the working directory is removed.
+- Prefix recovery after loss of the allocator ceiling recognizes empty maps
+  referenced in stored keys or in files nested under `__CUSTOM__`. Reads of
+  those bootstrap files retry after an interruption.
+- DagMap writes a new child's parent link and its registration on the same
+  shard WAL, so crash recovery observes the link before the registration.
+- VerMap validates reachable B+ tree nodes before reclaiming orphans during
+  recovery. Restore fails on missing nodes reachable from working branches or
+  committed snapshots before deleting history.
+- VerMap treats a branch as clean when its working bytes match the committed
+  bytes after edits are reverted, allowing merge and rollback.
+- Branch Merkle roots and proofs use one captured state, including any
+  uncommitted changes in that state.
+- MPT and SMT checkpoint saves reject files over the 512 MiB encoded size
+  limit before truncating the previous checkpoint.
+
 ## [v17.0.20]
 
 Public APIs and on-disk formats remain compatible; no data migration is
