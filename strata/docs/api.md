@@ -420,6 +420,9 @@ vmp.save_cache(commit).unwrap();
 // are rebuilt/caught up. Root calculation and Drop never save cache files.
 ```
 
+A branch root and its proof use one captured working state, including edits
+that were uncommitted when the query began.
+
 `save_cache(commit)` synchronizes proofs to the selected committed state,
 excluding dirty changes. Call `merkle_root(branch)` again before proving the
 branch working state. Historical root queries return `CommitNotFound` for

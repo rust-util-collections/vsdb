@@ -11,7 +11,7 @@
 //! time.  A transparent on-disk cache avoids full rebuilds on restart.
 
 use crate::{
-    basic::persistent_btree::TreeDiff,
+    basic::persistent_btree::{RootLease, TreeDiff},
     common::{
         InstanceId,
         ende::{KeyEnDeOrdered, ValueEnDe},
@@ -158,27 +158,6 @@ where
     /// update when possible, falling back to a full rebuild otherwise.
     pub fn merkle_root(&mut self, branch: BranchId) -> Result<Vec<u8>> {
         self.reset_if_map_replaced();
-        // Fast path: same branch and HEAD as the trie. A clean trie is
-        // already exact; a dirty trie is exact when the applied diff still
-        // matches the branch's current uncommitted diff.
-        if self.sync_branch == Some(branch) {
-            let head = self.map.head_commit(branch)?;
-            let head_id = head.as_ref().map(|c| c.id);
-            if head_id == self.sync_commit {
-                let has_dirty = self.map.has_uncommitted(branch)?;
-                let unchanged = if has_dirty {
-                    let diff = self.map.raw_diff_uncommitted(branch)?;
-                    self.dirty_applied
-                        && self.applied_dirty.as_deref() == Some(diff.as_slice())
-                } else {
-                    !self.dirty_applied
-                };
-                if unchanged {
-                    return self.trie.root_hash();
-                }
-            }
-        }
-
         self.sync_to_branch(branch)?;
         self.trie.root_hash()
     }
@@ -217,8 +196,14 @@ where
     /// Synchronizes the trie to the current state of `branch`
     /// (including uncommitted changes).
     fn sync_to_branch(&mut self, branch: BranchId) -> Result<()> {
-        let head = self.map.head_commit(branch)?;
-        let head_id = head.as_ref().map(|c| c.id);
+        let roots = self.map.branch_roots(branch)?;
+        let diff = self.map.diff_roots(&roots.committed, &roots.working);
+        if self.sync_branch == Some(branch)
+            && self.sync_commit == roots.head
+            && self.applied_dirty.as_deref().unwrap_or_default() == diff
+        {
+            return Ok(());
+        }
 
         // Reverse the previous dirty overlay to restore the clean HEAD.
         if self.dirty_applied
@@ -229,9 +214,9 @@ where
         }
 
         // Sync to the branch's HEAD commit.
-        if let Some(hid) = head_id {
+        if let Some(hid) = roots.head {
             if self.sync_commit != Some(hid) {
-                self.sync_to_commit(hid)?;
+                self.sync_to_root(hid, &roots.committed)?;
             }
         } else if self.sync_commit.is_some() {
             // Branch has no commits yet but trie was synced elsewhere → reset.
@@ -241,8 +226,7 @@ where
         }
 
         // Then, apply any uncommitted changes.
-        if self.map.has_uncommitted(branch)? {
-            let diff = self.map.raw_diff_uncommitted(branch)?;
+        if !diff.is_empty() {
             if let Err(e) = self.apply_diff(&diff) {
                 // `batch_update` is not atomic: the trie no longer
                 // matches HEAD. Poison the sync state so the next call
@@ -302,13 +286,11 @@ where
     /// Synchronizes the trie to a specific commit.
     fn sync_to_commit(&mut self, target: CommitId) -> Result<()> {
         self.reset_if_map_replaced();
-        // A cache is not a retained Snapshot. Rollback or branch deletion can
-        // reclaim its commit, even while the trie (or a disk cache) survives.
-        if self.map.get_commit(target).is_none() {
-            return Err(VsdbError::CommitNotFound {
-                commit_id: target.raw(),
-            });
-        }
+        let root = self.map.commit_root(target)?;
+        self.sync_to_root(target, &root)
+    }
+
+    fn sync_to_root(&mut self, target: CommitId, root: &RootLease) -> Result<()> {
         if self.sync_commit == Some(target) && !self.dirty_applied {
             return Ok(());
         }
@@ -325,50 +307,22 @@ where
             return Ok(());
         }
 
-        match self.sync_commit {
-            Some(current) => {
-                // Try incremental diff.
-                match self.map.raw_diff_commits(current, target) {
-                    Ok(diff) => {
-                        if let Err(e) = self.apply_diff(&diff) {
-                            // `batch_update` is not atomic: operations
-                            // before the failing one remain applied, so
-                            // the trie no longer matches ANY commit.
-                            // Poison the sync state — `sync_commit`
-                            // must never keep claiming `current`, or a
-                            // later `merkle_root_at_commit(current)`
-                            // (or a `merkle_root` after rolling the
-                            // branch back) would short-circuit and
-                            // silently serve a root over the partial
-                            // state.  The next sync performs a full
-                            // rebuild instead.
-                            self.poison();
-                            return Err(e);
-                        }
-                    }
-                    // On a diff failure nothing was applied yet: fall
-                    // back to a full rebuild.  `full_rebuild_commit`
-                    // only assigns `self.trie` on success, so its
-                    // failure leaves the (still `current`-consistent)
-                    // trie and bookkeeping untouched.
-                    Err(_) => self.full_rebuild_commit(target)?,
-                }
+        if let Some(current) = self.sync_commit
+            && let Ok(from) = self.map.commit_root(current)
+        {
+            let diff = self.map.diff_roots(&from, root);
+            if let Err(error) = self.apply_diff(&diff) {
+                self.poison();
+                return Err(error);
             }
-            None => {
-                self.full_rebuild_commit(target)?;
-            }
+        } else {
+            // A reclaimed previous commit cannot supply an incremental base.
+            // The target lease remains readable even if its branch moves.
+            self.trie = T::from_entries(self.map.tree.iter(root.root))?;
         }
-
         self.sync_commit = Some(target);
         self.sync_branch = None;
 
-        Ok(())
-    }
-
-    /// Full rebuild: clear trie and re-insert all entries at `commit`.
-    fn full_rebuild_commit(&mut self, commit: CommitId) -> Result<()> {
-        let snapshot = self.map.at(commit)?;
-        self.trie = T::from_entries(snapshot.raw_iter())?;
         Ok(())
     }
 

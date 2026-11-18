@@ -4446,6 +4446,37 @@ pub(super) fn before_diff_traversal() {
 }
 
 #[test]
+fn merkle_root_uses_one_branch_state_during_alias_writes() {
+    use crate::{MptCalc, VerMapWithProof};
+    let mut reader = VerMapWithProof::<u32, u32, MptCalc>::new();
+    let main = reader.map().main_branch();
+    let base = reader.map_mut().commit(main).unwrap();
+    reader.merkle_root_at_commit(base).unwrap();
+    reader.map_mut().insert(main, &1, &10).unwrap();
+    let head = reader.map_mut().commit(main).unwrap();
+    let expected = MptCalc::from_entries(reader.map().at(head).unwrap().raw_iter())
+        .unwrap()
+        .root_hash()
+        .unwrap();
+    let mut writer: VerMap<u32, u32> =
+        postcard::from_bytes(&postcard::to_allocvec(reader.map()).unwrap()).unwrap();
+    DIFF_BEFORE_TRAVERSAL.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            writer.insert(main, &2, &20).unwrap();
+            writer.commit(main).unwrap();
+            writer.insert(main, &3, &30).unwrap();
+        }));
+    });
+    assert_eq!(reader.merkle_root(main).unwrap(), expected);
+    let latest = MptCalc::from_entries(reader.map().snapshot(main).unwrap().raw_iter())
+        .unwrap()
+        .root_hash()
+        .unwrap();
+    assert_ne!(latest, expected);
+    assert_eq!(reader.merkle_root(main).unwrap(), latest);
+}
+
+#[test]
 fn raw_uncommitted_diff_pins_roots_during_alias_reclamation() {
     use crate::basic::persistent_btree::TreeDiff;
 

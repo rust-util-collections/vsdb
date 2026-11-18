@@ -6,7 +6,9 @@
 use super::{BranchId, Commit, CommitId, NO_COMMIT, diff::DiffEntry};
 use crate::{
     Mapx, MapxOrd, Orphan,
-    basic::persistent_btree::{EMPTY_ROOT, NodeId, PersistentBTree, TreeDiff},
+    basic::persistent_btree::{
+        EMPTY_ROOT, NodeId, PersistentBTree, RootLease, TreeDiff,
+    },
     common::{
         Colocate, InstanceId,
         ende::{KeyEnDeOrdered, OrderedKeyRef, ValueEnDe},
@@ -18,6 +20,7 @@ use std::{
     borrow::Borrow,
     collections::{BinaryHeap, HashMap, HashSet},
     marker::PhantomData,
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -33,6 +36,13 @@ pub(crate) struct BranchState {
     /// B+ tree root of uncommitted (working) state.
     /// Starts as the root of `head`'s commit; mutations update this.
     pub(crate) dirty_root: NodeId,
+}
+
+/// Both sides of a branch's working diff, retained from the same branch row.
+pub(crate) struct BranchRoots {
+    pub(crate) head: Option<CommitId>,
+    pub(crate) committed: Arc<RootLease>,
+    pub(crate) working: Arc<RootLease>,
 }
 
 // =========================================================================
@@ -368,26 +378,43 @@ impl<K, V> VerMap<K, V> {
                 self.get_commit_inner(to)?.root,
             ])
         })?;
-        #[cfg(test)]
-        super::test::before_diff_traversal();
-        Ok(self.tree.diff(from_root.root, to_root.root))
+        Ok(self.diff_roots(&from_root, &to_root))
     }
 
     /// [`diff_uncommitted`](VerMap::diff_uncommitted) as stored bytes (see
     /// [`raw_diff_commits`](VerMap::raw_diff_commits)).
     pub fn raw_diff_uncommitted(&self, branch: BranchId) -> Result<Vec<TreeDiff>> {
-        let [head_root, dirty_root] = self.tree.lease_roots(|| {
-            let state = self.get_branch(branch)?;
-            let head_root = if state.head == NO_COMMIT {
-                EMPTY_ROOT
-            } else {
-                self.get_commit_inner(state.head)?.root
-            };
-            Ok([head_root, state.dirty_root])
-        })?;
+        let roots = self.branch_roots(branch)?;
+        Ok(self.diff_roots(&roots.committed, &roots.working))
+    }
+
+    pub(crate) fn diff_roots(&self, from: &RootLease, to: &RootLease) -> Vec<TreeDiff> {
         #[cfg(test)]
         super::test::before_diff_traversal();
-        Ok(self.tree.diff(head_root.root, dirty_root.root))
+        self.tree.diff(from.root, to.root)
+    }
+
+    pub(crate) fn commit_root(&self, id: CommitId) -> Result<Arc<RootLease>> {
+        self.tree.lease_root(|| Ok(self.get_commit_inner(id)?.root))
+    }
+
+    pub(crate) fn branch_roots(&self, branch: BranchId) -> Result<BranchRoots> {
+        let mut head = None;
+        let [committed, working] = self.tree.lease_roots(|| {
+            let state = self.get_branch(branch)?;
+            let root = if state.head == NO_COMMIT {
+                EMPTY_ROOT
+            } else {
+                head = Some(state.head);
+                self.get_commit_inner(state.head)?.root
+            };
+            Ok([root, state.dirty_root])
+        })?;
+        Ok(BranchRoots {
+            head,
+            committed,
+            working,
+        })
     }
 
     pub(crate) fn begin_ref_update(&mut self) {

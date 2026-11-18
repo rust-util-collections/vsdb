@@ -139,9 +139,7 @@ where
     /// [`VsdbError::CommitNotFound`](crate::VsdbError::CommitNotFound) if the
     /// commit does not exist (it may have been reclaimed).
     pub fn at(&self, commit: CommitId) -> Result<Snapshot<'_, K, V>> {
-        let lease = self
-            .tree
-            .lease_root(|| Ok(self.get_commit_inner(commit)?.root))?;
+        let lease = self.commit_root(commit)?;
         Ok(Snapshot { map: self, lease })
     }
 
