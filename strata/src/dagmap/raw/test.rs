@@ -9,6 +9,34 @@ use std::{
 };
 
 #[test]
+fn child_registration_and_parent_slot_share_a_wal() {
+    let mut root = DagMapRaw::new(None);
+    root.insert(b"ancestor", b"value");
+    let mut parent = DagMapRaw::new(Some(&mut root));
+    let child = DagMapRaw::new(Some(&mut parent));
+    for (owner, descendant) in [(&root, &parent), (&parent, &child)] {
+        assert!(
+            owner
+                .children
+                .raw()
+                .is_colocated_with(descendant.parent.raw())
+        );
+        assert!(
+            owner
+                .children
+                .raw()
+                .is_colocated_with(descendant.children.raw())
+        );
+        let registered = owner.children.iter().next().unwrap().1;
+        assert_eq!(registered.instance_id(), descendant.instance_id());
+        assert_eq!(
+            registered.get(b"ancestor").as_deref(),
+            Some(b"value".as_slice())
+        );
+    }
+}
+
+#[test]
 fn dagmapraw_functions() {
     let mut i0 = DagMapRaw::new(None);
     i0.insert("k0", "v0");

@@ -15,7 +15,9 @@ system dir, resolved path-only (`vsdb_get_system_dir`) — never via
 `Namespace::default_ns()`, which would open the default engine for namespace-only users.
 **DG2 Acyclic** — parent exists; no node becomes its own ancestor.
 **DG3 Orphans** — delete refuses children / cascades / documents dangling.
-**DG4 Parent slot ownership** — fresh Orphan per `new()`; shadow parent. `destroy`: save
+**DG4 Parent slot ownership** — fresh Orphan per `new()`; shadow parent. New children place their parent slot and
+children registry on the same shard as the registry that publishes them, ordering these
+writes across successive attachments on one WAL. `destroy`: save
 parent in `DESTROY_PARENT_KEY` + sync_wal → null own/owned-descendant slots + data
 → namespace WAL fence → clear registries → unregister from parent last, so a retry still unlinks.
 **DG5 Registry vs ownership** — walks gate on `child.parent` points back (or None residue);

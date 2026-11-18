@@ -36,7 +36,7 @@ mod test;
 use crate::{
     DagMapId, MapxOrdRawKey, Orphan,
     common::{
-        InstanceId, UnwindMark, ensure_writable,
+        Colocate, InstanceId, UnwindMark, ensure_writable,
         error::{Result, VsdbError},
         staged::StagedRows,
     },
@@ -262,15 +262,20 @@ impl DagMapRaw {
         // materialize (and immediately discard) a default `parent` Orphan,
         // which eagerly writes an entry under a fresh engine prefix —
         // permanently leaking one storage slot per node creation.
+        let parent_slot = match parent.as_deref() {
+            Some(p) => {
+                // SAFETY: the alias is only serialized into the new slot.
+                let link = unsafe { p.shadow() };
+                Orphan::new_colocated(p.children.raw(), Some(link))
+            }
+            None => Orphan::new(None),
+        };
+        // Registrations and the parent slots they publish share a WAL along
+        // the new chain. Any recovered registration follows its slot write.
         let r = Self {
-            // SAFETY: The shadow is serialized (read-only) into the
-            // node's own parent slot right here; no mutation ever goes
-            // through it (all writes go through the caller's handle),
-            // satisfying the SWMR contract.  Note: `Clone` cannot be
-            // used — it deep-copies the storage instead of aliasing it.
-            parent: Orphan::new(parent.as_deref().map(|p| unsafe { p.shadow() })),
+            children: MapxOrdRawKey::new_colocated(parent_slot.raw()),
+            parent: parent_slot,
             data: MapxRaw::new(),
-            children: MapxOrdRawKey::new(),
         };
 
         if let Some(p) = parent {
