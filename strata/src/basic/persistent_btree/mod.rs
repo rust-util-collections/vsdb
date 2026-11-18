@@ -36,7 +36,10 @@ mod types;
 pub use diff::TreeDiff;
 pub use iter::BTreeIter;
 
-use crate::common::{InstanceId, error::Result};
+use crate::common::{
+    InstanceId,
+    error::{Result, VsdbError},
+};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -879,65 +882,66 @@ impl PersistentBTree {
     ///
     /// Also registers unreachable nodes for deferred disk deletion.
     pub fn rebuild_ref_counts(&mut self, live_roots: &[NodeId]) {
-        // A lease must not appear/disappear between pin seeding and the
-        // sweep/count replacement. Readers of already-leased nodes need no
-        // reference lock and can continue during this maintenance walk.
-        let mut refs = self.runtime.refs.lock();
-        let mut new_refs: HashMap<NodeId, NodeRef> = HashMap::new();
-        let mut visited = HashSet::new();
+        self.finish_ref_counts(HashMap::new(), live_roots);
+    }
 
-        // Seed: each root gets +1.
-        let mut queue: Vec<NodeId> = Vec::new();
-        for &root in live_roots {
-            if root != EMPTY_ROOT {
-                new_refs
-                    .entry(root)
-                    .or_insert_with(|| NodeRef {
-                        ref_count: 0,
-                        children: Vec::new(),
-                    })
-                    .ref_count += 1;
-                queue.push(root);
-            }
-        }
+    /// Trace durable branch and commit roots before any recovery writes.
+    /// Structural writers are excluded during recovery. Reader pins are
+    /// added separately under the pool lock immediately before installation.
+    pub(crate) fn required_node_refs(
+        &self,
+        roots: &[NodeId],
+    ) -> Result<HashMap<NodeId, NodeRef>> {
+        let mut counts = HashMap::new();
+        self.count_nodes(&mut counts, roots.iter().map(|&id| (id, 1)), true)?;
+        Ok(counts)
+    }
 
-        for (&root, &pins) in &refs.pins {
-            new_refs
-                .entry(root)
-                .or_insert_with(|| NodeRef {
-                    ref_count: 0,
-                    children: Vec::new(),
-                })
-                .ref_count += pins;
-            queue.push(root);
-        }
-
-        // BFS: walk all reachable nodes, count parent→child references.
-        while let Some(id) = queue.pop() {
-            if !visited.insert(id) {
+    fn count_nodes(
+        &self,
+        counts: &mut HashMap<NodeId, NodeRef>,
+        roots: impl Iterator<Item = (NodeId, u32)>,
+        require_present: bool,
+    ) -> Result<()> {
+        let mut queue: Vec<_> = roots.filter(|&(id, _)| id != EMPTY_ROOT).collect();
+        while let Some((id, owners)) = queue.pop() {
+            if let Some(node) = counts.get_mut(&id) {
+                node.ref_count += owners;
                 continue;
             }
-            if let Some(raw) = self.nodes.get(id.to_le_bytes()) {
-                let children = Node::decode_children(&raw);
-                for &child in &children {
-                    new_refs
-                        .entry(child)
-                        .or_insert_with(|| NodeRef {
-                            ref_count: 0,
-                            children: Vec::new(),
-                        })
-                        .ref_count += 1;
-                    queue.push(child);
+            let children = match self.nodes.get(id.to_le_bytes()) {
+                Some(bytes) => Node::decode_children(&bytes),
+                None if require_present => {
+                    return Err(VsdbError::Corrupt {
+                        detail: format!("missing reachable B+ tree node {id}"),
+                    });
                 }
-                new_refs
-                    .entry(id)
-                    .or_insert_with(|| NodeRef {
-                        ref_count: 0,
-                        children: Vec::new(),
-                    })
-                    .children = children;
-            }
+                None => Vec::new(),
+            };
+            queue.extend(children.iter().map(|&child| (child, 1)));
+            counts.insert(
+                id,
+                NodeRef {
+                    ref_count: owners,
+                    children,
+                },
+            );
         }
+        Ok(())
+    }
+
+    pub(crate) fn finish_ref_counts(
+        &mut self,
+        mut new_refs: HashMap<NodeId, NodeRef>,
+        other_roots: &[NodeId],
+    ) {
+        let mut refs = self.runtime.refs.lock();
+        let roots = other_roots
+            .iter()
+            .map(|&id| (id, 1))
+            .chain(refs.pins.iter().map(|(&id, &pins)| (id, pins)));
+        self.count_nodes(&mut new_refs, roots, false)
+            .expect("permissive recount accepts missing nodes");
 
         // Register unreachable nodes for deferred disk deletion, and find
         // the maximum stored NodeId.  After crash recovery from a stale
@@ -951,7 +955,7 @@ impl PersistentBTree {
             .filter_map(|(k, _)| {
                 let id = u64::from_le_bytes(k[..8].try_into().unwrap());
                 max_id = max_id.max(id);
-                (!visited.contains(&id)).then_some(k)
+                (!new_refs.contains_key(&id)).then_some(k)
             })
             .collect();
         if !dead_keys.is_empty() {

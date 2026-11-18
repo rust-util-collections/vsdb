@@ -85,7 +85,8 @@ pub(crate) struct BranchState {
 /// boundary instead; [`Clone`] produces a co-located copy.
 /// Reference-count changes carry a dirty marker until their completion.
 /// Restoration validates all reachable commit records before reclaiming any
-/// history; a missing HEAD or parent produces a deserialization error.
+/// history. A missing HEAD, parent commit, or reachable tree node produces a
+/// deserialization error.
 ///
 /// # Read-only mode
 ///
@@ -285,9 +286,8 @@ impl<'de, K, V> Deserialize<'de> for VerMap<K, V> {
         if m.colocated {
             m.tree.defer_reclaim();
         }
-        m.repair_commit_ref_counts_if_needed()
+        m.recover_ref_counts(true)
             .map_err(serde::de::Error::custom)?;
-        m.rebuild_tree_ref_counts();
         Ok(m)
     }
 }
@@ -467,7 +467,7 @@ where
     /// The caller must ensure that the underlying VSDB database still
     /// contains the data referenced by this instance ID.
     pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
-        // Deserialize already calls rebuild_tree_ref_counts().
+        // Deserialization validates history and rebuilds tree references.
         let id = instance_id.into();
         crate::common::load_instance_meta_checked(id, Self::instance_id)
     }
@@ -1383,6 +1383,7 @@ where
     /// [`VsdbError::CommitNotFound`] — before removing anything — if a
     /// reachable HEAD or parent record is missing (the graph is damaged;
     /// deleting "orphans" would destroy older history).
+    /// A missing reachable B+ tree node returns [`VsdbError::Corrupt`] before cleanup.
     ///
     /// # Panics
     ///
@@ -1391,35 +1392,7 @@ where
         if self.namespace().is_read_only() {
             return Ok(());
         }
-        // Validate even a clean graph before any deletion/sweep. A missing
-        // HEAD/parent must not turn older durable history into "orphans".
-        self.validate_commit_graph()?;
-
-        // 1. Crash recovery: rebuild ref counts if the dirty flag is
-        //    set, or if any commit has ref_count == 0 (migration from
-        //    pre-ref-count data).
-        if self.gc_dirty.get_value()
-            || self.commits.iter().any(|(_, c)| c.ref_count == 0)
-        {
-            self.rebuild_ref_counts()?;
-        }
-        self.sync_storage();
-        // Everything released so far is durable now; the sweep below
-        // would find those nodes unreachable anyway.
-        self.tree.register_deferred_reclaims();
-
-        // 2. Collect live roots from all commits + dirty roots.
-        let mut live_roots: Vec<NodeId> =
-            self.commits.iter().map(|(_, c)| c.root).collect();
-        for (_, s) in self.branches.iter() {
-            if s.dirty_root != EMPTY_ROOT {
-                live_roots.push(s.dirty_root);
-            }
-        }
-
-        // 3. GC the B+ tree node pool.
-        self.tree.gc(&live_roots);
-        Ok(())
+        self.recover_ref_counts(false)
     }
 
     // =================================================================

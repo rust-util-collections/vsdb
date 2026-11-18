@@ -4171,6 +4171,39 @@ fn missing_parent_recovery_preserves_durable_history() {
 }
 
 #[test]
+fn recovery_checks_missing_tree_nodes_before_removing_orphans() {
+    use crate::basic::persistent_btree::Node;
+    let mut m = VerMap::<u32, u32>::new();
+    let main = m.main_branch();
+    for key in 0..64 {
+        m.insert(main, &key, &key).unwrap();
+    }
+    let id = m.commit(main).unwrap();
+    let mut orphan = m.get_commit(id).unwrap();
+    let Node::Internal { children, .. } = m.tree.node(orphan.root) else {
+        panic!("expected an internal root");
+    };
+    let missing = children[0];
+    let key = missing.to_le_bytes();
+    let saved = m.tree.nodes.get(key).unwrap();
+    orphan.id = CommitId(id.0 + 1);
+    orphan.ref_count = 0;
+    orphan.root = u64::MAX - 1;
+    m.commits.insert(&orphan.id.0, &orphan);
+    m.tree.nodes.remove(key);
+    let bytes = postcard::to_allocvec(&m).unwrap();
+    assert!(postcard::from_bytes::<VerMap<u32, u32>>(&bytes).is_err());
+    assert!(matches!(m.gc(), Err(VsdbError::Corrupt { .. })));
+    assert!(m.get_commit(orphan.id).is_some());
+
+    // The orphan's absent root is immaterial once all live nodes exist.
+    m.tree.nodes.insert(key, saved);
+    m.gc().unwrap();
+    assert!(m.get_commit(orphan.id).is_none());
+    assert_eq!(m.get(main, &0).unwrap(), Some(0));
+}
+
+#[test]
 fn zero_count_restore_repairs_branch_references() {
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();

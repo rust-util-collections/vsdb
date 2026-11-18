@@ -33,14 +33,10 @@ impl<K, V> VerMap<K, V> {
         }
     }
 
-    /// Rebuilds the B+ tree's in-memory ref-count map from the
-    /// current set of live roots (all commit roots + dirty roots).
-    ///
-    /// Called after every deserialization path (serde, from_meta) because a
-    /// newly restored node-pool runtime starts without reference counts.
+    /// Establishes the deep copy's independent tree owners from its
+    /// copied commits and branches before returning the new map.
     pub(crate) fn rebuild_tree_ref_counts(&mut self) {
         // No old durable pointer may survive a sweep that retires its nodes.
-        // The helper is a no-op for read-only restoration.
         self.sync_storage();
         self.tree.register_deferred_reclaims();
         let mut live_roots: Vec<NodeId> =
@@ -53,32 +49,38 @@ impl<K, V> VerMap<K, V> {
         self.tree.rebuild_ref_counts(&live_roots);
     }
 
-    pub(crate) fn repair_commit_ref_counts_if_needed(&mut self) -> Result<()> {
-        // Validate even clean/read-only restores before changing any index or
-        // reclaiming anything. Missing HEADs/parents are corruption, not proof
-        // that the remaining stored history is unreachable.
+    /// Validate all reachable history and working roots before removing any
+    /// rows. Reuse the traced children to install counts after durable repair.
+    pub(crate) fn recover_ref_counts(&mut self, restoring: bool) -> Result<()> {
         let ref_counts = self.validate_commit_graph()?;
+        let mut required: Vec<_> =
+            self.branches.iter().map(|(_, s)| s.dirty_root).collect();
+        let mut orphan_roots = Vec::new();
+        let mut has_zero_count = false;
+        for (id, commit) in self.commits.iter() {
+            has_zero_count |= commit.ref_count == 0;
+            if ref_counts.contains_key(&CommitId(id)) {
+                required.push(commit.root);
+            } else {
+                orphan_roots.push(commit.root);
+            }
+        }
+        let counts = self.tree.required_node_refs(&required)?;
+        if !self.namespace().is_read_only() {
+            if restoring {
+                self.repair_id_allocators();
+                self.rebuild_branch_name_index();
+            }
+            if has_zero_count || self.gc_dirty.get_value() {
+                self.apply_ref_count_repair(ref_counts);
+                orphan_roots.clear();
+            }
+        }
 
-        // Read-only restores must not rewrite the branch-name index or
-        // crash-recovery metadata. Queries use the authoritative branch
-        // table directly where needed, while tree runtime state is rebuilt
-        // separately below without changing durable data.
-        if self.namespace().is_read_only() {
-            return Ok(());
-        }
-        // A legacy crash can persist a commit/branch row while losing the
-        // allocator increment that precedes it. Reusing an existing id would
-        // overwrite reachable history (and can create a self-parented
-        // commit), so advance both allocators past every stored id before
-        // any new id can be issued. Mirrors the NodeId repair in
-        // `PersistentBTree::deserialize`.
-        self.repair_id_allocators();
-        self.rebuild_branch_name_index();
-        if self.gc_dirty.get_value()
-            || self.commits.iter().any(|(_, c)| c.ref_count == 0)
-        {
-            self.apply_ref_count_repair(ref_counts);
-        }
+        // Commit removals and root publications must be durable before sweep.
+        self.sync_storage();
+        self.tree.finish_ref_counts(counts, &orphan_roots);
+        self.tree.register_deferred_reclaims();
         Ok(())
     }
 
@@ -171,18 +173,6 @@ impl<K, V> VerMap<K, V> {
             }
         }
         Ok(ref_counts)
-    }
-
-    /// Rebuilds all commit ref_counts from scratch by walking all
-    /// live branches. Hard-deletes any unreachable commits only after the
-    /// entire reachable graph has been validated.
-    ///
-    /// Called on crash recovery (`gc_dirty == true`) or when migrating
-    /// from pre-ref-count data (`ref_count == 0` on all commits).
-    pub(crate) fn rebuild_ref_counts(&mut self) -> Result<()> {
-        let ref_counts = self.validate_commit_graph()?;
-        self.apply_ref_count_repair(ref_counts);
-        Ok(())
     }
 
     /// Apply a count map validated before any repair or reclamation starts.

@@ -498,8 +498,8 @@ the original map.
 
 Recovery validates every branch HEAD and reachable commit parent before any
 orphan cleanup, including when the dirty flag is clear. A missing reachable
-commit causes restoration to fail instead of deleting older history as
-unreachable. `gc()` fails before deleting commits on the same incomplete graph.
+commit or B+ tree node in a branch or reachable snapshot causes restoration
+to fail before orphan reclamation. `gc()` fails before deleting commits on the same incomplete graph.
 These checks cannot reconstruct records already lost by older versions: preserve
 a damaged dataset and recover from a complete backup.
 
