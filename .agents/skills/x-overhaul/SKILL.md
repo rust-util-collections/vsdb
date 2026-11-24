@@ -8,165 +8,248 @@ description: Review VSDB changes or the full repository for collection correctne
 Resolve repository paths from the Git root; Markdown links are relative to
 this file. Read invocation arguments from the user prompt.
 
-Scoped review → fix confirmed in-scope defects → validate → atomic local commits.
-Never automatically create a branch, push, open a PR, publish, deploy, or
-rewrite history. No autonomous major. User-invoked only. New commits only.
+One invocation: scoped review → fix confirmed defects → validate → atomic local
+commits → owed patch release. **This file is the complete protocol.** Do not
+invoke or load `x-review`, `x-fix`, or `x-commit`; shared rules live in
+`docs/ai/` and are linked where they apply.
 
-Apply [pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md) §Maintenance scope:
-ground every finding and fix in a named VSDB collection, storage/recovery
-protocol, concurrency/`unsafe` contract, or public/on-disk compatibility rule.
+**Hard rules** ([workflow-policy.md](../../../docs/ai/workflow-policy.md)):
+user-invoked only · local commits and local annotated release tags only — never
+create a branch, push, open a PR, publish, deploy, amend, or rewrite history ·
+one root cause per commit · never touch unowned baseline · never accept a public
+API or persisted-format break or choose a major bump on the user's behalf.
+Ground every finding and fix in a named VSDB collection, storage/recovery
+protocol, concurrency/`unsafe` contract, or public/on-disk compatibility rule
+([pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md) §Maintenance scope).
 
 ## Input
 
-Accept at most one scope from the user prompt — same scope tokens and revision
-verification rules as [x-review §Input](../x-review/SKILL.md#input), **without**
-`--fix`:
+At most one scope token. Reject `--fix`, multiple scopes, unknown options, and
+unresolvable revisions; never guess.
 
-| Input | Scope | Commit & fix boundary |
-|-------|-------|-----------------------|
-| *(empty)* | Latest commit (`HEAD`) | Fix still-present defects rooted in `HEAD` + in-scope `Open` |
-| `N` / `<hash>` / `<a>..<b>` | Committed diff (endpoint diff, never merge-base; merge `<hash>` uses `<hash>^1 <hash>`) | Fix only defects still present at `HEAD` and rooted in that diff + in-scope `Open` |
-| `staged` | Index (`git diff --cached`) | Review, fix in-unit, and commit staged units + resolve in-scope `Open`; unstaged/untracked stay baseline |
-| `worktree` | Staged + unstaged + intended untracked | Review, fix in-unit, and commit intended units + resolve in-scope `Open` |
-| `all` | Full tracked repository (`git ls-files`) | Full-repo audit + resolve all actionable `Open` and confirmed findings |
+| Input | Review evidence | Fix & commit boundary |
+|-------|-----------------|-----------------------|
+| *(empty)* | `git show HEAD` (merge: `git diff HEAD^1 HEAD`) | defects rooted in `HEAD` and still present |
+| `N` | `git log HEAD~N..HEAD` + `git diff HEAD~N HEAD` | defects rooted in that diff and still present at `HEAD` |
+| `<hash>` | `git show <hash>` (merge: `git diff <hash>^1 <hash>`) | same |
+| `<a>..<b>` | `git log <a>..<b>` + `git diff <a> <b>` (endpoints, never merge-base) | same |
+| `staged` | `git diff --cached` | review, fix in-unit, and commit staged units; unstaged/untracked stay baseline |
+| `worktree` | `git diff HEAD` + intended `git ls-files --others --exclude-standard` | review, fix in-unit, and commit intended units |
+| `all` | tracked-file ledger from `git ls-files` | every confirmed finding |
 
-Verify every commit revision with `git rev-parse --verify --quiet '<rev>^{commit}'`.
-An all-digit token is `N`; if it also resolves as a commit, ask. Reject `--fix`,
-multiple scopes, unknown options, or unresolvable revisions; never guess.
-Surrounding callers, tests, and guides provide evidence, not license for
-unrelated fixes or baseline commits.
+Every scope also resolves its **in-scope `Open`**: `docs/audit.md` entries whose
+**Where** paths or subsystem intersect the scope (`all`: every entry).
 
-## Setup
+Verify each revision (including `HEAD~N`) with
+`git rev-parse --verify --quiet '<rev>^{commit}'`. An all-digit token is `N`; if
+it also resolves as a commit, ask. Callers, tests, and guides outside the scope
+are evidence, not license for unrelated fixes or baseline commits.
 
-Read [workflow-policy.md](../../../docs/ai/workflow-policy.md),
-[commit-protocol.md](../../../docs/ai/commit-protocol.md),
-[pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md),
-[review-core.md](../../../docs/ai/review-core.md),
-[technical-patterns.md](../../../docs/ai/technical-patterns.md),
-[false-positive-guide.md](../../../docs/ai/false-positive-guide.md), and
-[compatibility-policy.md](../../../docs/ai/compatibility-policy.md); load
-[design-patterns.md](../../../docs/ai/design-patterns.md) when multi-subsystem,
-design-shaped, or `all`. Also read the composed protocols in
-[x-review](../x-review/SKILL.md), [x-fix](../x-fix/SKILL.md), and (for
-`staged`/`worktree`) [x-commit](../x-commit/SKILL.md).
+## Reading
 
-One invocation owns one baseline, `starting_HEAD`, frozen scope, ownership
-ledger ([commit-protocol.md](../../../docs/ai/commit-protocol.md) §Invocation ledger),
-final gate, version bump, and release tag. Do not launch nested standalone skill
-workflows or repeat their finalization; standalone read-only/no-commit rules,
-`x-review` Phases 5–7, `x-commit` §4, and `x-fix` §4 are replaced by the
-protocol below.
+| When | Read |
+|------|------|
+| Start | [workflow-policy.md](../../../docs/ai/workflow-policy.md), [commit-protocol.md](../../../docs/ai/commit-protocol.md), [review-core.md](../../../docs/ai/review-core.md), [false-positive-guide.md](../../../docs/ai/false-positive-guide.md), [technical-patterns.md](../../../docs/ai/technical-patterns.md), [pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md) |
+| After mapping | each mapped `docs/ai/patterns/*.md` guide |
+| Public API or persisted format in scope | [compatibility-policy.md](../../../docs/ai/compatibility-policy.md) |
+| Multi-subsystem, design-shaped, or `all` | [design-patterns.md](../../../docs/ai/design-patterns.md) |
 
-## Protocol
+## Phase 0 — Preflight and ledger
 
-### Phase 1 — Scope and Ledger
+1. Record `git status --short`, branch, and `starting_HEAD`; separate staged,
+   unstaged, and untracked baseline (`workflow-policy.md` §1).
+2. Determine whether a patch bump or release tag is already owed
+   (`commit-protocol.md` §Lockstep version and tag).
+3. Early exits:
 
-1. Run preflight (`workflow-policy.md` §1): stop on merge/rebase/cherry-pick or
-   detached `HEAD`. Separate staged, unstaged, and untracked baseline; freeze
-   owned paths and record whether a patch bump or release tag is already owed.
-2. Uncommitted-scope guards:
-   - `staged`: if any staged path also has unstaged working-tree hunks, stop on
-     baseline overlap (`workflow-policy.md` §2) so unstaged edits are never
-     swept or tested as staged.
-   - `worktree`: ask if an untracked file's intent is unclear.
-   - Empty `staged`/`worktree`: if a release tag is owed, resume it in Phase 4.
-     Otherwise, when a bump is owed, skip to Phase 4 if `docs/audit.md` `Open` is empty,
-     or report the `Open` entries blocking the bump. Otherwise report nothing
-     to overhaul.
-3. Map scope via `review-core.md` Subsystem Map and load mapped
-   `docs/ai/patterns/*.md` guides:
-   - Diff scopes: full diff + changed functions, callers, failure/recovery
-     paths, and tests.
-   - `all`: build a complete tracked-file ledger (`git ls-files`) across both
-     crates (`core` and `strata`: `src/`, `tests/`, `benches/`, crate `docs/`
-     and `README.md`), build/CI/tools (`Cargo.toml`, `.cargo/config.toml`,
-     `rustfmt.toml`, `Makefile`, `tools/fmt.sh`, `.github/`), live project docs
-     (`README.md`, `CHANGELOG.md`, `docs/audit.md`, implemented contracts vs
-     explicitly deferred candidates in `docs/proposals/`), historical baselines
-     (`docs/evaluations/**` and historical `CHANGELOG.md` notes — classify as
-     point-in-time records, not live drift), and agent governance (`AGENTS.md`,
-     `.agents/skills/`, `docs/ai/`). Never silently drop tracked files.
+   | Situation | Action |
+   |-----------|--------|
+   | merge/rebase/cherry-pick in progress, or detached `HEAD` | stop |
+   | `staged`: a staged path also has unstaged hunks | stop — baseline overlap; unstaged edits must never be swept or tested as staged |
+   | `worktree`: intent of an untracked file unclear | ask |
+   | empty `staged`/`worktree`, release tag owed | Phase 4 step 5 (tag only) |
+   | empty `staged`/`worktree`, bump owed, `docs/audit.md` `Open` empty | Phase 4 |
+   | empty `staged`/`worktree`, bump owed, `Open` non-empty | report the entries blocking the bump |
+   | empty `staged`/`worktree`, nothing owed | report "nothing to overhaul" |
 
-### Phase 2 — Review
+4. Freeze owned paths and start the ledger (`commit-protocol.md` §Invocation
+   ledger) plus: scope, in-scope `Open` entries, and a work queue where each
+   unit/finding has one status — `pending`, `committed <hash>`,
+   `open: <blocker>`, `won't fix`, or `pruned`. For `all`, or any run likely to
+   outlast the context window, keep the ledger in a scratch file outside the
+   worktree (`mktemp /tmp/vsdb-overhaul.XXXXXX`) and update it after every
+   commit. Never write it into the repository.
 
-1. Apply `x-review` Phases 2–4 (`review-core.md` §2–4 + `false-positive-guide.md`):
-   - Small single-subsystem scope → review directly.
-   - Multi-subsystem or `all` → disjoint **read-only** subsystem batches (one
-     primary owner per Rust file; cover cross-module seams such as
-     `persistent_btree/{diff,merge}.rs` ↔ `versioned/` and `core`
-     engine/namespace ↔ `strata` handles explicitly), then cross-subsystem and
-     `design-patterns.md` checks only for gaps. Run `fmt`/`check`/`clippy` via
-     Cargo tools, never review subagents.
-2. Verify every candidate from full implementations, callers, guards, and
-   existing tests; refute via the FP guide and merge findings sharing one root
-   cause. Check public API and persisted compatibility (`VSTYPE03`/`VSTYPE02`,
-   meta/key/wire tags, shard/namespace layout).
-3. Reconcile confirmed findings with `docs/audit.md` **in the ledger**
-   (`review-core.md` §5: intersecting `Open`/`Won't Fix` for narrow scopes; all
-   entries for `all`). Do not write transient `Open` entries to disk for defects
-   that Phase 3 fixes in this run.
+## Phase 1 — Map
 
-### Phase 3 — Resolve and Commit
+Map every in-scope file to one `review-core.md` Subsystem Map row and load its
+guides.
 
-Edits and commits run sequentially on one tree. Register newly discovered fix
-paths in the ledger before editing after checking them against baseline
-(`workflow-policy.md` §1.5). If a needed fix overlaps unowned baseline and
-cannot be separated safely, leave the baseline untouched, keep the finding
-`Open` with the blocker recorded, and continue independent safe units.
+- **Diff scopes:** full diff + whole changed functions, callers,
+  failure/recovery paths, and tests.
+- **`all`:** put every tracked file in exactly one ledger category; never
+  silently drop a file:
+  - Rust — `core/` and `strata/` `src/`, `tests/`, `benches/`;
+  - build/CI — root and crate `Cargo.toml`, `.cargo/config.toml`,
+    `rustfmt.toml`, `Makefile`, `tools/`, `.github/`;
+  - live docs — READMEs, crate `docs/`, `docs/audit.md`, `docs/proposals/`
+    (implemented contract vs explicitly deferred candidate);
+  - historical — `docs/evaluations/**` and past `CHANGELOG.md` sections:
+    point-in-time records, not live drift;
+  - governance — `AGENTS.md`, `.agents/skills/`, `docs/ai/`;
+  - generated/vendored/out of scope — with the reason.
 
-1. **Owned uncommitted work (`staged` / `worktree` only)** — run
-   `x-commit` §1–3 using the frozen outer scope instead of prompt pathspecs.
-   Split coherent atomic units; fix defects inside owned units **in-unit** with
-   regression tests before committing. Never commit a known-defective unit.
-   Preserve staged/unstaged boundaries and unowned baseline (use a disposable
-   worktree per `workflow-policy.md` §4 when dirty baseline could affect
-   per-unit validation).
-2. **Confirmed findings and still-applicable in-scope `Open` entries** — run
-   `x-fix` §1–3 in severity order (`CRITICAL` → `LOW`), one root cause per
-   commit: minimal fix + focused pre-fix-failing regression test (launch every
-   `cargo test` with a parent-shell scratch `VSDB_BASE_DIR`, never `$HOME/.vsdb`)
-   + public/migration docs + removal of any **pre-existing** `docs/audit.md`
-   entry resolved by that commit. Do not accept a public API or persisted-format
-   break on the user's behalf; keep unaccepted breaks, blocked fixes, and
-   unverified candidates `Open` (never relabel them `Won't Fix` to clear the
-   list).
-3. **Registry-only dispositions** — write net remaining `docs/audit.md` updates
-   (unfixed/blocked `Open` entries, justified `Won't Fix` entries, and
-   pre-existing entries proven already fixed or disproven without a code edit),
-   merging without reverting unowned edits in `docs/audit.md`. When owned
-   registry-only changes remain, commit them in one separate `docs` commit after
-   code fixes.
+## Phase 2 — Review
 
-### Phase 4 — Final Gate, Version, and Tag
+1. **Strategy**
+   - One subsystem and a small diff: review directly.
+   - Otherwise: one read-only batch per Subsystem Map row (one owner per Rust
+     file), plus explicit seam batches — `persistent_btree/{diff,merge}.rs` ↔
+     `versioned/`, and `core` engine/namespace ↔ `strata` handles. Run batches
+     as parallel read-only subagents when available, else sequentially. Then
+     run a cross-subsystem / `design-patterns.md` pass only for invariants no
+     batch covered.
+   - `cargo fmt`/`check`/`clippy` run as commands by you, never inside review
+     batches.
+2. **Batch brief** — fill in and send as-is:
 
-1. Re-review the aggregate `starting_HEAD..HEAD` diff for cross-commit
-   interactions, missed callers/error paths, and doc/guide alignment.
-2. Update/select official `stable` Rust (`compatibility-policy.md` §Rust
-   toolchain) and run the applicable final gate from `commit-protocol.md`
-   §Final workspace gate once on the stable code state (parent-shell scratch
-   `VSDB_BASE_DIR` for test steps; if unowned dirty Rust/manifest baseline
-   exists in the live tree, validate `HEAD` in a disposable worktree per
-   `workflow-policy.md` §4):
-   - Full 7-step Cargo workspace gate when `scope` is `all` (even with zero
-     fixes), a version bump is owed, `starting_HEAD..HEAD` touches `.rs`,
-     `Cargo.toml`, `.cargo/config.toml`, or `rustfmt.toml`, or the reviewed
-     scope includes unreleased manifest/toolchain changes.
-   - `git diff --check` plus link/anchor and Markdown/YAML checks when this
-     invocation committed only documentation/registry/governance edits and none
-     of the full-gate conditions above apply.
-   - Reuse checks already passed on the exact unchanged code/manifest state.
-3. If aggregate review or a gate check exposes a regression, land a **new**
-   focused fix commit (never amend), re-run affected checks, and stop on a
-   repeated failure with no progress or baseline overlap.
-4. Apply `commit-protocol.md` §Lockstep version and tag once. Bump after the
-   required checks pass with no in-scope `Open` findings or coverage gaps.
-   Never choose a major bump autonomously. If blocked, retain validated local
-   commits and report any owed bump or tag for the next run. Skip empty commits.
+   ```text
+   Read-only VSDB review. Do not edit files, run cargo, or report style.
+   Files: <list>. Evidence: <diff command | full files>. Seams: <list | none>.
+   Read first: docs/ai/review-core.md §2-3, docs/ai/false-positive-guide.md,
+   <mapped docs/ai/patterns/*.md>.
+   Report each candidate as: path (fn) · invariant · realistic trigger ·
+   wrong outcome · why existing guards fail · smallest failing test ·
+   public/on-disk compatibility impact. Then list files read and files not read.
+   ```
+
+3. **Dimensions** (only those that apply): correctness/invariants; interrupted
+   writes, concurrency, and `unsafe` contracts; design shape when
+   locks/resources/bounds/install/failure/API are involved; compatibility
+   (`VSTYPE03`/`VSTYPE02`, meta/key/wire tags, shard/namespace layout);
+   quantified hot-path cost; incomplete implementations (`review-core.md` §3).
+4. **Verify** every candidate yourself from the full implementation, callers,
+   guards, and existing tests; refute via the FP guide; merge findings that
+   share a root cause. If it is still ambiguous, ask one independent reviewer.
+   Agreement between reviewers is not evidence. Drop speculation and style.
+5. **Completeness** — diff scopes: every changed file, public/persisted
+   contract, failure path, and relevant test. `all`: compare the ledger with
+   each batch's "files read", and review only the gaps. Record any remaining
+   gap; it blocks the release.
+6. **Reconcile** with `docs/audit.md` in the ledger, not on disk
+   (`review-core.md` §5): queue still-present in-scope `Open`; mark entries
+   proven fixed or disproven as `pruned`; re-check intersecting `Won't Fix`
+   (`all`: every entry). Queue confirmed findings CRITICAL → LOW. Do not write
+   `Open` entries for defects this run will fix.
+
+## Phase 3 — Fix and commit
+
+Work the queue sequentially on one tree; only investigation and validation may
+run in parallel. Order: **A** owned units → **B** findings and in-scope `Open`
+(CRITICAL → LOW) → **C** registry-only commit.
+
+Before editing a path not yet owned, check its diff against the baseline and
+register it in the ledger (`workflow-policy.md` §1.5). If a fix overlaps unowned
+baseline (including the same hunk) and cannot be separated safely, leave the
+baseline untouched, mark the item `open: baseline overlap`, and continue with
+independent items.
+
+Launch every `cargo test` with a scratch base created in the parent shell and
+remove only that directory afterward (`commit-protocol.md` §Per-unit validate
+and commit, step 3); never `$HOME/.vsdb`.
+
+### A. Owned units (`staged` / `worktree` only)
+
+1. Split the owned diff into coherent units: one issue/behavior each, with its
+   tests, docs, migration, and audit edits. Keep pre-staged boundaries.
+2. Review each unit as in Phase 2 and fix confirmed defects **inside** the unit
+   with a regression test. Never commit a known-defective unit. A unit that
+   contains an unaccepted public/on-disk break stays uncommitted and `Open`.
+3. Validate and commit per `commit-protocol.md` §Per-unit validate and commit.
+   When other units or dirty baseline could affect the result, validate in a
+   disposable worktree (`workflow-policy.md` §4).
+
+### B. Findings and in-scope `Open` — one root cause per commit
+
+1. **Re-confirm at current `HEAD`**, since earlier commits may have changed the
+   code:
+   - disproven → `pruned`, with the refutation noted for the report;
+   - real, but no safe fix is proportionate → `won't fix` + reason;
+   - needs an unaccepted break, lacks evidence, or failed validation →
+     `open: <blocker>`.
+
+   Never relabel an `Open` entry `Won't Fix` just to clear the list.
+2. **Test first:** write the smallest regression test and watch it fail on the
+   unfixed code. For races or crash timing, use a storage-error test double or
+   an isolated restart fixture (`review-core.md` §3). If it still cannot be
+   reproduced deterministically, say "traced, not reproduced" in the commit
+   message.
+3. **Fix** the root cause minimally. Trace SWMR, COW/ref-count, crash recovery,
+   cleanup, and compatibility. Watch the test pass.
+4. **Same commit:** public/migration docs, plus removal of the pre-existing
+   `docs/audit.md` entry this fix resolves. Leave `CHANGELOG.md` to the
+   release commit.
+5. Validate and commit per `commit-protocol.md` §Per-unit validate and commit,
+   then update the ledger.
+
+### C. Registry-only dispositions
+
+Write the net `docs/audit.md` changes: unfixed/blocked `Open` entries, justified
+`Won't Fix` entries, and entries pruned without a code edit. Shape and severity
+follow `review-core.md` §5. If owned changes remain, commit them once as a
+separate `docs(audit): …` commit after the code fixes. If `docs/audit.md` also
+carries unowned baseline edits, stage only the owned hunks (build a patch and
+use `git apply --cached`). If they cannot be separated, leave the update
+uncommitted and report it. Never revert unowned edits.
+
+## Phase 4 — Final gate and release
+
+1. **Aggregate re-review** of `starting_HEAD..HEAD` (skip if nothing was
+   committed): cross-commit interactions, missed callers/error paths, and
+   alignment with docs and guides.
+2. **Toolchain:** `rustup update stable` (`compatibility-policy.md` §Rust
+   toolchain). If offline, use the installed stable toolchain and report
+   `rustc -V`.
+3. **Gate** — pick the first matching row:
+
+   | Condition | Gate |
+   |-----------|------|
+   | scope `all`; or bump owed; or `starting_HEAD..HEAD` touches `.rs`, `Cargo.toml`, `.cargo/config.toml`, or `rustfmt.toml`; or the scope contains unreleased manifest/toolchain changes | full 7-step `commit-protocol.md` §Final workspace gate |
+   | only docs/registry/governance committed | `git diff --check starting_HEAD HEAD`; every changed relative link and `#anchor` resolves; changed YAML parses |
+   | nothing committed and nothing owed | none |
+
+   Reuse checks that already passed on the identical code/manifest state. If
+   unowned dirty Rust/manifest baseline exists, gate `HEAD` in a disposable
+   worktree (`workflow-policy.md` §4).
+4. **Failures:** a re-review finding or gate failure gets a new focused fix
+   commit (never amend), then re-run the affected checks.
+5. **Release** once, per `commit-protocol.md` §Lockstep version and tag: re-run
+   the owed check, then bump the patch version, update the CHANGELOG, and
+   create the annotated tag. Do this only when the full gate passed on the final
+   code state and no in-scope `Open` entry or coverage gap remains. If blocked,
+   keep the validated commits and report the owed bump/tag; the next run can
+   detect it. Never make an empty commit.
+
+## Stop conditions
+
+- **Stop:** the same failure repeats with no progress; a release file
+  (`core/Cargo.toml`, `strata/Cargo.toml`, root `Cargo.toml`, `CHANGELOG.md`)
+  carries unowned baseline edits; a conflicting release tag exists.
+- **Continue:** a blocked item never stops independent items. Partial progress
+  is a valid outcome — every commit is validated on its own.
+- **Do not ask mid-run** about public/on-disk breaks or contract choices: leave
+  them `Open` and list them under *Decisions needed*.
 
 ## Output
 
-Report scope and `starting_HEAD`, coverage ledger and any gaps, finding
-dispositions (fixed, pruned as fixed/disproven, `Won't Fix`, remaining `Open`
-with blockers), validation checks run (toolchain + scratch `VSDB_BASE_DIR` /
-worktree isolation), public/on-disk compatibility, local commit hashes and
-subjects, version, release tag, and untouched baseline.
+```text
+Scope: <token> · starting_HEAD <hash> · toolchain <rustc -V>
+Coverage: <subsystems / file categories reviewed> · gaps: <none | list>
+Commits: <hash> <subject>   (one per line, in order)
+Findings: fixed <n> · pruned <list> · won't fix <list> · open <list + blocker>
+Decisions needed: <unaccepted breaks, contract choices | none>
+Validation: <checks run> · isolation: <scratch VSDB_BASE_DIR / worktree>
+Compatibility: <public / on-disk impact | none>
+Release: <vX.Y.Z + tag | owed, blocked by … | not owed>
+Baseline untouched: <paths | clean>
+```

@@ -31,10 +31,6 @@ public/persisted → [compatibility-policy.md](../../../docs/ai/compatibility-po
 [design-patterns.md](../../../docs/ai/design-patterns.md). Preflight + ledger (incl. **frozen paths** and
 whether a patch bump or release tag is owed).
 
-When composed by `x-overhaul` (`staged` / `worktree`), inherit its frozen outer
-scope, starting HEAD, and ledger instead of prompt pathspecs; run steps 1–3
-only. The parent owns the final gate, version bump, and tag.
-
 ## Protocol
 
 ### 1. Scope

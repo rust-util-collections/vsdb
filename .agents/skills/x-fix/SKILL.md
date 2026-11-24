@@ -26,13 +26,7 @@ Read [workflow-policy.md](../../../docs/ai/workflow-policy.md), [commit-protocol
 [false-positive-guide.md](../../../docs/ai/false-positive-guide.md). Preflight + ledger (freeze paths as work
 proceeds; note whether a patch bump or release tag is owed). Empty Open and
 no owed bump or tag → “nothing to fix”. With no Open entries and an owed bump or
-tag, a standalone run continues at step 4 and a composed run leaves release
-finalization to the parent.
-
-When composed by `x-overhaul`, inherit its scope, starting HEAD, and ledger;
-run steps 1–3 only. The parent owns the final gate, version bump, and tag.
-When there are no in-scope Open entries, the parent continues with the audit,
-validation, and any owed release steps.
+tag, continue at step 4.
 
 ## Protocol
 
