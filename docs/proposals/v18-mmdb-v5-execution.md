@@ -6,6 +6,33 @@ runtime. It preserves the application-visible handle identity and collection
 formats. Engine comparisons below apply to the indicated storage workload.
 [Joint design](https://github.com/rust-util-collections/mmdb/blob/255015ad0f488f09c7985736a903d3171876bcaf/docs/proposals/mmdb-v5-vsdb-v18-improvements.md) · [v18 format inventory](v18-roadmap.md)
 
+## Implementation record
+
+The runtime selects MMDB v5 at `255015a`; its offline reader alone uses
+registry MMDB 4.3.15. The normal Cargo dependency tree and fresh-clone
+workspace builds verify that split. `stage_universe` stages the universe
+and all registered placements for both supported v4 source versions.
+Physical v18 fixture `40a0a8c` was produced by the real v4-backed runtime:
+scanning the new universe verifies an embedded map, a historical commit,
+a Merkle proof against the original root, a DAG edge, SlotDex order and
+VecDex result distances. The separate WAL fixture forces an unclosed writer.
+[Operator procedure](../../migration/README.md) · [Physical collection fixture](../../migration/tests/collections_generation.rs)
+
+The tests exercise native fences across rotation, both retryable admission
+paths and a malformed write, as well as checked scans, decoder errors and
+a late clone failure after already-committed destination chunks. The
+adapter checks the selected v5 geometry for every anchored shard before
+recovering any writable shard. [Adapter contracts](../../core/tests/v5_adapter_test.rs) · [Admission and fence proofs](../../core/src/common/engine/mmdb/v5_tests.rs)
+
+On the default 16 shards, DagMap child creation dropped from two engine
+submissions to one and improved full-operation p99 by 31.05% against the
+earlier native v5 path and 33.38% against v4-backed v18. Four dependent
+VerMap updates became one submission and improved p99 by 56.18%. For
+operations whose final values are already known, `write_batch` remains the
+direct path. These are independent operations on generated data, with
+matched durability and separate ordinary versus diagnostic builds.
+[Publication runs](../evaluations/v18-publication/README.md) · [Independent review record](reviews/v18-mmdb-v5/README.md)
+
 ## Delivery sequence
 
 | Unit | Change | Observable outcome and acceptance |

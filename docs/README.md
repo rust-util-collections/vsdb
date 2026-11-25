@@ -34,6 +34,16 @@ The initial v18 evaluations compare against v17 code at `da9a325`. Each report
 records the workload and build used for its measurements. Later implementation
 work is tracked in the [roadmap](proposals/v18-roadmap.md).
 
+The MMDB v5 port also has matched v4/v5 application runs. Each report
+identifies its source and the logical workload that its results describe.
+
+- [DagMap publication, dependent VerMap edits and contended foreground writes](evaluations/v18-publication/README.md)
+- [Adapter allocations and 16-shard memory](evaluations/v18-adapter/README.md)
+- [VecDex complete-query latency and pin costs](evaluations/v18-vecdex-v5/README.md)
+- [B+ tree lookups and bounded scans](evaluations/v18-tree-v5/README.md)
+
+The original collection-layout evaluations remain available:
+
 - [Basic map operations](evaluations/v18-basic.md)
 - [SlotDex and DagMap](evaluations/v18-slotdex-dagmap.md)
 - [Merkle tries and VecDex](evaluations/v18-trie-vecdex.md)
