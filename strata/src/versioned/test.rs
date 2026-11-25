@@ -4867,6 +4867,43 @@ fn restore_rejects_stale_allocator_ceiling() {
 }
 
 #[test]
+fn verify_pages_detects_corrupted_cached_internal_page() {
+    use crate::basic::persistent_btree::{Node, object_key};
+
+    let mut map = VerMap::<u32, u32>::new();
+    let main = map.main_branch();
+    for k in 0u32..40 {
+        map.insert(main, &k, &(k * 10)).unwrap();
+    }
+    let commit = map.commit(main).unwrap();
+    let id = map.save_meta().unwrap();
+    // Warm the shared InternalPageCache with the internal root page.
+    assert_eq!(map.get(main, &5).unwrap(), Some(50));
+
+    let root = map.get_commit_inner(commit).unwrap().root;
+    let raw = map.tree.nodes.get(object_key(root)).unwrap();
+    let children = match Node::decode(&raw) {
+        Node::Internal { children, .. } => children,
+        Node::Leaf { .. } => panic!("expected multi-level internal root"),
+    };
+    let corrupted = Node::Internal {
+        keys: vec![u32::MAX.to_be_bytes().to_vec()],
+        children,
+    };
+    map.tree.nodes.insert(object_key(root), corrupted.encode());
+
+    assert!(matches!(
+        VerMap::<u32, u32>::from_meta_verified(id),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert!(matches!(
+        map.verify_and_gc(),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert!(matches!(map.gc(), Err(VsdbError::Corrupt { .. })));
+}
+
+#[test]
 fn validate_commit_graph_rejects_a_self_parent() {
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();

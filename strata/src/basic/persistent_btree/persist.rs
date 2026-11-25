@@ -472,11 +472,11 @@ impl PersistentBTree {
             .collect();
         ids.sort_unstable_by_key(|id| id & !CLASS_MASK);
         for id in ids {
-            let raw = self.object(id);
-            let page = NodeView::open(&raw)?;
             let invalid = || VsdbError::Corrupt {
                 detail: format!("invalid child ordering or occupancy at page {id}"),
             };
+            let raw = self.nodes.get(object_key(id)).ok_or_else(invalid)?;
+            let page = NodeView::open(&raw)?;
             if page.len == 0 {
                 return Err(invalid());
             }
