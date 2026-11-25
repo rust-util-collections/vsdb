@@ -41,9 +41,49 @@ fn preserves_root_and_edges_and_reports_relocated_children() {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, meta).unwrap();
     assert!(DagMapRaw::from_meta(root_id).is_err());
-    let (root, map) = migrate_v17(root_id).unwrap();
+    // The seeding thread owns the first allocation window. Planning on a new
+    // thread needs a durable refill for its first private prefix.
+    let prefix_ceiling = ns.system_dir().join("__prefix_ceiling__");
+    let saved_ceiling = prefix_ceiling.with_extension("saved");
+    std::fs::rename(&prefix_ceiling, &saved_ceiling).unwrap();
+    std::fs::create_dir(&prefix_ceiling).unwrap();
+    let outcome = std::thread::spawn(move || migrate_v17(root_id).map(|_| ())).join();
+    std::fs::remove_dir(&prefix_ceiling).unwrap();
+    std::fs::rename(saved_ceiling, prefix_ceiling).unwrap();
+    assert!(matches!(outcome.unwrap(), Err(vsdb::VsdbError::Io(_))));
+    assert!(
+        !ns.meta_path(root_id.map_id)
+            .with_extension("dag-v17")
+            .exists()
+    );
+    let ceiling_path = vsdb_core::vsdb_get_system_dir().join("dag_id_ceiling");
+    assert!(migrate_v17(root_id).is_err());
+    std::fs::write(&ceiling_path, u128::MAX.to_le_bytes()).unwrap();
+    assert!(migrate_v17(root_id).is_err());
+    std::fs::write(&ceiling_path, 128u128.to_le_bytes()).unwrap();
+    let mut older_counter = MapxRaw::new();
+    older_counter.insert([], postcard::to_allocvec(&256u128).unwrap());
+    std::fs::write(
+        vsdb_core::vsdb_get_system_dir().join("id_num"),
+        postcard::to_allocvec(&older_counter.instance_id().map_id.to_le_bytes().as_slice())
+            .unwrap(),
+    )
+    .unwrap();
+    let (mut root, map) = migrate_v17(root_id).unwrap();
     assert_eq!(root.instance_id(), root_id);
     assert_eq!(root.child_ids(), root_tokens);
+    let retired = root_tokens
+        .iter()
+        .map(|token| u128::from_le_bytes(token.as_slice().try_into().unwrap()))
+        .max()
+        .unwrap()
+        + 1;
+    let fresh = DagMapRaw::new(Some(&mut root));
+    let fresh_token = root.child_id(&fresh).unwrap();
+    assert!(u128::from_le_bytes(fresh_token.as_slice().try_into().unwrap()) > 256);
+    root.prune_children_include(&[retired.to_le_bytes()]);
+    assert_eq!(root.child_id(&fresh), Some(fresh_token.clone()));
+    root.prune_children_include(&[fresh_token]);
     let child = |idx: usize| {
         let id = vsdb::InstanceId::new(ids[idx], ns.id());
         let new = map.get(&id).copied().unwrap_or(id);

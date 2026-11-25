@@ -41,7 +41,9 @@ This major version introduces a distinct storage format. Stop v17 processes and 
   Replace `VecDexDyn::new(metric, config)` with `new_with_metric(metric, config)`.
   Both the index and its read view support typed and encoded-key filters.
 - `vsdb_migrate` supports saved IDs and serialized handle bytes. DAG
-  descendants can be restored with the returned child-ID mapping.
+  descendants can be restored with the returned child-ID mapping. Use
+  `dagmap::DagHandleConverter` to translate serialized handles for members
+  of a converted graph, including children with a different value type.
   [Converter table and upgrade sequence](migration/README.md)
 
 ## [v17.0.21]

@@ -11,7 +11,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs,
     io::ErrorKind,
-    path::Path,
+    path::{Path, PathBuf},
 };
 use vsdb::{
     DagMapRaw, DagMapRawKey, InstanceId, MapxOrdRawKey, Namespace, Orphan, Result, ValueEnDe,
@@ -41,6 +41,7 @@ enum State {
     Child(Parent),
     Clearing { owner: Option<Parent>, genesis: u64 },
     Destroying(Option<Parent>),
+    Destroyed,
 }
 fn edge_key(edge: u64) -> [u8; 9] {
     let mut k = [1; 9];
@@ -106,6 +107,17 @@ enum Record {
         nodes: Vec<Conversion>,
     },
     Done(Remap),
+    Finished {
+        dag_id: u64,
+        members: BTreeMap<u64, Member>,
+    },
+}
+
+#[derive(Serialize, Deserialize)]
+struct Member {
+    target: u64,
+    // Older completed journals retained only relocated primary IDs.
+    components: Option<[u64; 2]>,
 }
 
 // A running conversion can own empty destination/scratch prefixes before
@@ -116,6 +128,14 @@ fn highest_reservation(root: InstanceId, record: &Record) -> [u8; 24] {
         Record::Running { nodes, .. } => nodes
             .iter()
             .flat_map(|n| n.old.into_iter().chain([n.scratch, n.target]))
+            .max(),
+        Record::Finished { members, .. } => members
+            .iter()
+            .flat_map(|(&old, m)| {
+                [old, m.target]
+                    .into_iter()
+                    .chain(m.components.into_iter().flatten())
+            })
             .max(),
         Record::Done(map) => map
             .iter()
@@ -368,17 +388,19 @@ fn plan<T>(ns: &Namespace, root: InstanceId, legacy: Legacy) -> Result<Vec<Conve
         }
         children.push((link.edge, id));
     }
+    let allocate_colocated = || -> Result<u64> {
+        loop {
+            let candidate = MapxRaw::new_in(ns);
+            let id = candidate.try_instance_id()?;
+            if candidate.is_colocated_with(&anchor) {
+                return Ok(id.map_id);
+            }
+        }
+    };
     let mut targets = HashMap::new();
     for &id in sources.keys() {
         let colocated = open_prefix(ns, id)?.is_colocated_with(&anchor);
-        targets.insert(
-            id,
-            if colocated {
-                id
-            } else {
-                anchor.new_colocated().instance_id().map_id
-            },
-        );
+        targets.insert(id, if colocated { id } else { allocate_colocated()? });
     }
     let remap = |mut p: Parent| {
         p.map = targets[&p.map];
@@ -388,6 +410,7 @@ fn plan<T>(ns: &Namespace, root: InstanceId, legacy: Legacy) -> Result<Vec<Conve
     for (id, source) in sources {
         let state = match states[&id] {
             State::Root => State::Root,
+            State::Destroyed => return Err(corrupt("unexpected destroyed v17 DAG node")),
             State::Child(p) => State::Child(remap(p)),
             State::Clearing { owner, genesis } => State::Clearing {
                 owner: owner.map(remap),
@@ -398,7 +421,7 @@ fn plan<T>(ns: &Namespace, root: InstanceId, legacy: Legacy) -> Result<Vec<Conve
         nodes.push(Conversion {
             old: source.parts.map(|p| p.map_id),
             target: targets[&id],
-            scratch: anchor.new_colocated().instance_id().map_id,
+            scratch: allocate_colocated()?,
             tag: saved_tag::<T>(ns, source.parts)?,
             state,
             children: source
@@ -436,13 +459,80 @@ fn copy_rows(source: &MapxRaw, target: &mut MapxRaw, tag: bool) -> Result<()> {
     }
     Ok(())
 }
-fn prepare(ns: &Namespace, nodes: &[Conversion], dag_id: u64) -> Result<()> {
+// v17 reserved 128-bit edge tokens across the entire universe. All migrated
+// parents must start above that ceiling, including parents with no live edges.
+fn next_legacy_edge() -> Result<u64> {
+    let system = vsdb_core::vsdb_get_system_dir();
+    let read = |name| -> Result<Option<Vec<u8>>> {
+        match fs::read(system.join(name)) {
+            Ok(v) => Ok(Some(v)),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    };
+    let mut ceiling = match read("dag_id_ceiling")? {
+        Some(v) => u128::from_le_bytes(
+            v.try_into()
+                .map_err(|_| corrupt("invalid v17 DAG edge ceiling"))?,
+        ),
+        None => 0,
+    };
+    // v17 accepted an older Orphan<u128> counter and folded it into the file
+    // on its first allocation. A universe may be upgraded before that happens.
+    if let Some(v) = read("id_num")? {
+        let prefix: &[u8] = decode(&v)?;
+        let id = u64::from_le_bytes(
+            prefix
+                .try_into()
+                .map_err(|_| corrupt("invalid legacy DAG counter handle"))?,
+        );
+        let counter = raw_map(id.into())?
+            .get([])
+            .ok_or_else(|| corrupt("missing legacy DAG counter"))?;
+        ceiling = ceiling.max(decode(&counter)?);
+    }
+    u64::try_from(ceiling)
+        .ok()
+        .and_then(|n| n.checked_add(1))
+        .ok_or_else(|| corrupt("v17 DAG edge ceiling exhausts v18 tokens"))
+}
+
+fn node_meta(store: &MapxRaw) -> Result<(u64, u64, State)> {
+    let bytes = store
+        .get([0])
+        .ok_or_else(|| corrupt("missing converted DAG node"))?;
+    let (magic, dag, next, state): ([u8; 8], u64, u64, State) = decode(&bytes)?;
+    if magic != *b"VSDAGN01" {
+        return Err(corrupt("unexpected converted DAG node layout"));
+    }
+    Ok((dag, next, state))
+}
+
+fn handle<T: DeserializeOwned>(id: InstanceId, dag_id: u64) -> Result<Vec<u8>> {
+    let mut extra = [1u8; 9];
+    extra[1..].copy_from_slice(&dag_id.to_le_bytes());
+    let bytes = typed_handle::<T>(id, &extra)?;
+    let _: T = decode(&bytes)?;
+    Ok(bytes)
+}
+
+fn source_edge_floor(nodes: &[Conversion]) -> Result<u64> {
+    let floor = next_legacy_edge()?;
+    if floor == 1 && nodes.iter().any(|n| !n.children.is_empty()) {
+        return Err(corrupt(
+            "v17 DAG with registered children lacks its edge allocator ceiling",
+        ));
+    }
+    Ok(floor)
+}
+
+fn prepare(ns: &Namespace, nodes: &[Conversion], dag_id: u64, next: u64) -> Result<()> {
     for n in nodes {
         let source = open_prefix(ns, n.old[0])?;
         let mut scratch = open_prefix(ns, n.scratch)?;
         copy_rows(&source, &mut scratch, true)?;
         let state = n.state;
-        let mut next_edge_id = 1;
+        let mut next_edge_id = next;
         for &(edge, child) in &n.children {
             scratch.insert(edge_key(edge), child.to_le_bytes());
             next_edge_id = next_edge_id.max(edge + 1);
@@ -459,7 +549,12 @@ fn prepare(ns: &Namespace, nodes: &[Conversion], dag_id: u64) -> Result<()> {
 /// Returns the converted root and all changed descendant identities. Retrying
 /// resumes from the journal stored beside the root's instance metadata.
 pub fn migrate_v17(id: impl Into<InstanceId>) -> Result<(DagMapRaw, Remap)> {
-    migrate_with::<DagMapRaw>(id.into(), None, |bytes| decode(bytes), DagMapRaw::from_meta)
+    let root = id.into();
+    let members = migrate_with::<DagMapRaw>(root, None, |b| decode(b))?;
+    Ok((
+        DagMapRaw::from_meta(root)?,
+        members.map_or_else(Remap::new, |m| m.remap()),
+    ))
 }
 
 /// Converts a postcard-serialized v17 `DagMapRaw` root handle (and its
@@ -473,28 +568,18 @@ pub fn migrate_handle_v17(bytes: &[u8]) -> Result<(Vec<u8>, Remap)> {
 pub fn migrate_rawkey_v17<V: ValueEnDe>(
     id: impl Into<InstanceId>,
 ) -> Result<(DagMapRawKey<V>, Remap)> {
-    migrate_with::<DagMapRawKey<V>>(
-        id.into(),
-        None,
-        |bytes| {
-            let frame: &[u8] = decode(bytes)?;
-            decode(legacy_payload::<DagMapRawKey<V>>(frame)?)
-        },
-        DagMapRawKey::from_meta,
-    )
+    let root = id.into();
+    let members = migrate_with::<DagMapRawKey<V>>(root, None, typed_legacy::<V>)?;
+    Ok((
+        DagMapRawKey::from_meta(root)?,
+        members.map_or_else(Remap::new, |m| m.remap()),
+    ))
 }
 
 /// Converts a postcard-serialized v17 `DagMapRawKey<V>` root handle (and its
 /// connected DAG) without requiring a pre-existing `__instance_meta__` file.
 pub fn migrate_rawkey_handle_v17<V: ValueEnDe>(bytes: &[u8]) -> Result<(Vec<u8>, Remap)> {
-    migrate_bytes_with::<DagMapRawKey<V>>(
-        bytes,
-        |b| {
-            let frame: &[u8] = decode(b)?;
-            decode(legacy_payload::<DagMapRawKey<V>>(frame)?)
-        },
-        |d| d.instance_id(),
-    )
+    migrate_bytes_with::<DagMapRawKey<V>>(bytes, typed_legacy::<V>, |d| d.instance_id())
 }
 
 /// Re-tags a migrated `DagMapRawKey<V>` descendant whose saved metadata had a
@@ -537,59 +622,169 @@ pub fn migrate_child_v17<V: ValueEnDe>(id: impl Into<InstanceId>) -> Result<DagM
     atomic_write_file(&path, &target)?;
     Ok(node)
 }
+fn typed_legacy<V: ValueEnDe>(bytes: &[u8]) -> Result<Legacy> {
+    let frame: &[u8] = decode(bytes)?;
+    decode(legacy_payload::<DagMapRawKey<V>>(frame)?)
+}
+
+/// Translates serialized v17 handles for members of a previously converted
+/// graph. Open this once for a group of application records. Each translated
+/// handle keeps its own authenticated value type, independently of saved metadata.
+pub struct DagHandleConverter {
+    root: InstanceId,
+    dag_id: u64,
+    members: BTreeMap<u64, Member>,
+}
+
+impl DagHandleConverter {
+    /// Loads the durable mapping after the root converter succeeds.
+    pub fn open(root: impl Into<InstanceId>) -> Result<Self> {
+        let id = root.into();
+        let root = InstanceId::new(id.map_id, id.ns.unwrap_or_default());
+        let ns = Namespace::open(root.ns.unwrap_or_default())?;
+        let path = journal_path(&ns, root)?;
+        match read_record(&path, root)? {
+            Some(Record::Finished { dag_id, members }) => Ok(Self {
+                root,
+                dag_id,
+                members,
+            }),
+            _ => Err(corrupt("run the v17 DAG root converter first")),
+        }
+    }
+
+    /// Translates a postcard-serialized raw root or child handle.
+    pub fn raw_handle(&self, bytes: &[u8]) -> Result<Vec<u8>> {
+        self.translate::<DagMapRaw>(bytes, |b| decode(b), DagMapRaw::instance_id)
+    }
+
+    /// Translates a postcard-serialized typed-value root or child handle.
+    pub fn rawkey_handle<V: ValueEnDe>(&self, bytes: &[u8]) -> Result<Vec<u8>> {
+        self.translate::<DagMapRawKey<V>>(bytes, typed_legacy::<V>, DagMapRawKey::instance_id)
+    }
+
+    fn translate<T: DeserializeOwned>(
+        &self,
+        bytes: &[u8],
+        parse: impl Fn(&[u8]) -> Result<Legacy>,
+        instance_of: impl Fn(&T) -> InstanceId,
+    ) -> Result<Vec<u8>> {
+        if current_handle(bytes) {
+            let id = instance_of(&decode(bytes)?);
+            if id.ns != self.root.ns || handle::<T>(id, self.dag_id)? != bytes {
+                return Err(corrupt("handle belongs to a different DAG"));
+            }
+            return Ok(bytes.to_vec());
+        }
+        let [data, parent, edges] = parse(bytes)?.ids();
+        if [data, parent, edges].iter().any(|p| p.ns != self.root.ns) {
+            return Err(corrupt("v17 DAG node belongs to another namespace"));
+        }
+        let target = match self.members.get(&data.map_id) {
+            Some(m)
+                if m.components
+                    .is_none_or(|parts| parts == [parent.map_id, edges.map_id]) =>
+            {
+                m.target
+            }
+            Some(_) => return Err(corrupt("v17 DAG node components do not match migration")),
+            None if self
+                .members
+                .get(&self.root.map_id)
+                .is_some_and(|root| root.components.is_none()) =>
+            {
+                // A pre-membership journal lists only relocated IDs. A retained,
+                // now-detached node can still prove its original graph and shard.
+                if !raw_map(self.root)?.is_colocated_with(&raw_map(data)?) {
+                    return Err(corrupt("v17 DAG node belongs to another shard"));
+                }
+                data.map_id
+            }
+            None => return Err(corrupt("unknown v17 DAG node")),
+        };
+        handle::<T>(
+            InstanceId::new(target, self.root.ns.unwrap_or_default()),
+            self.dag_id,
+        )
+    }
+
+    fn remap(&self) -> Remap {
+        let ns = self.root.ns.unwrap_or_default();
+        self.members
+            .iter()
+            .filter(|(old, m)| **old != m.target)
+            .map(|(&old, m)| (InstanceId::new(old, ns), InstanceId::new(m.target, ns)))
+            .collect()
+    }
+}
+
+fn current_handle(bytes: &[u8]) -> bool {
+    matches!(postcard::take_from_bytes::<&[u8]>(bytes), Ok((frame, b"")) if frame.starts_with(b"VSTYPE04"))
+}
+
 fn migrate_bytes_with<T: DeserializeOwned>(
     bytes: &[u8],
     parse: impl Fn(&[u8]) -> Result<Legacy>,
     instance_of: impl Fn(&T) -> InstanceId,
 ) -> Result<(Vec<u8>, Remap)> {
-    if let Ok((frame, b"")) = postcard::take_from_bytes::<&[u8]>(bytes)
-        && frame.starts_with(b"VSTYPE04")
-    {
-        let node: T = decode(bytes)?;
-        let root = instance_of(&node);
-        let root = InstanceId::new(root.map_id, root.ns.unwrap_or_default());
-        let ns = Namespace::open(root.ns.unwrap_or_default())?;
-        if ns.is_read_only() {
-            return Err(VsdbError::ReadOnly {
-                operation: "DAG migration",
-            });
+    let root = if current_handle(bytes) {
+        instance_of(&decode(bytes)?)
+    } else {
+        parse(bytes)?.0.instance_id()
+    };
+    let mapping = migrate_with::<T>(root, Some(bytes), &parse)?;
+    if let Some(mapping) = mapping {
+        let translated = mapping.translate::<T>(bytes, parse, instance_of)?;
+        Ok((translated, mapping.remap()))
+    } else {
+        Ok((bytes.to_vec(), Remap::new()))
+    }
+}
+
+// Older running journals may belong to another serialized flavor of this
+// root, even when an interrupted publish has already wiped its data rows.
+fn legacy_journals(ns: &Namespace, root: InstanceId) -> Result<Vec<PathBuf>> {
+    let entries = match fs::read_dir(ns.meta_dir()) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err.into()),
+    };
+    let prefix = format!("{:016x}.dag-", root.map_id);
+    let mut paths = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        if entry
+            .file_name()
+            .to_str()
+            .and_then(|s| s.strip_prefix(&prefix))
+            .and_then(|s| s.strip_suffix("-v17"))
+            .is_some_and(|tag| tag.len() == 16 && tag.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            paths.push(entry.path());
         }
-        let journal = ns
-            .meta_path(root.map_id)
-            .with_extension(format!("dag-{:016x}-v17", crate::tag(type_name::<T>())));
-        let map = match read_record(&journal, root)? {
-            Some(Record::Done(map)) => map,
-            None => Remap::new(),
-            Some(Record::Running { .. }) => {
-                let (_, map) = migrate_with::<T>(root, None, parse, |id| {
-                    decode(&fs::read(ns.meta_path(id.map_id))?)
-                })?;
-                map
-            }
-        };
-        return Ok((bytes.to_vec(), map));
     }
-    let legacy = parse(bytes)?;
-    let root = legacy.0.instance_id();
-    let ns = Namespace::open(root.ns.unwrap_or_default())?;
-    if ns.is_read_only() {
-        return Err(VsdbError::ReadOnly {
-            operation: "DAG migration",
-        });
+    Ok(paths)
+}
+
+fn journal_path(ns: &Namespace, root: InstanceId) -> Result<PathBuf> {
+    let canonical = ns.meta_path(root.map_id).with_extension("dag-v17");
+    if canonical.try_exists()? {
+        return Ok(canonical);
     }
-    let path = ns.meta_path(root.map_id);
-    let (_, map) = migrate_with::<T>(root, Some(bytes), parse, |id| {
-        decode(&fs::read(ns.meta_path(id.map_id))?)
-    })?;
-    Ok((fs::read(&path)?, map))
+    match &*legacy_journals(ns, root)? {
+        [] => Ok(canonical),
+        [old] => Ok(old.clone()),
+        _ => Err(corrupt(
+            "conflicting legacy migration journals for DAG root",
+        )),
+    }
 }
 
 fn migrate_with<T: DeserializeOwned>(
     root: InstanceId,
     source: Option<&[u8]>,
     parse: impl Fn(&[u8]) -> Result<Legacy>,
-    restore: impl Fn(InstanceId) -> Result<T>,
-) -> Result<(T, Remap)> {
+) -> Result<Option<DagHandleConverter>> {
     let root = InstanceId::new(root.map_id, root.ns.unwrap_or_default());
     let ns = Namespace::open(root.ns.unwrap_or_default())?;
     if ns.is_read_only() {
@@ -598,23 +793,27 @@ fn migrate_with<T: DeserializeOwned>(
         });
     }
     let path = ns.meta_path(root.map_id);
-    vsdb::common::create_dir_all_durable(path.parent().unwrap())?;
-    let journal = path.with_extension(format!("dag-{:016x}-v17", crate::tag(type_name::<T>())));
-    let mut record = match read_record(&journal, root)? {
+    let previous = journal_path(&ns, root)?;
+    let journal = path.with_extension("dag-v17");
+    let mut record = match read_record(&previous, root)? {
         Some(r) => r,
         None => {
-            if let Ok(node) = restore(root) {
-                return Ok((node, Remap::new()));
-            }
             let owned;
-            let raw = match source {
+            let bytes = match source {
                 Some(b) => b,
                 None => {
                     owned = fs::read(&path)?;
                     &owned
                 }
             };
-            let nodes = plan::<T>(&ns, root, parse(raw)?)?;
+            if current_handle(bytes) {
+                let _: T = decode(bytes)?;
+                return Ok(None);
+            }
+            let nodes = plan::<T>(&ns, root, parse(bytes)?)?;
+            if !ns.meta_dir().try_exists()? {
+                vsdb::common::create_dir_all_durable(&ns.meta_dir())?;
+            }
             let r = Record::Running {
                 dag_id: rand::random(),
                 phase: Phase::Prepare,
@@ -624,21 +823,63 @@ fn migrate_with<T: DeserializeOwned>(
             r
         }
     };
+    if let Record::Running { nodes, .. } = &record {
+        let requested = nodes
+            .iter()
+            .find(|n| n.old[0] == root.map_id && n.target == root.map_id)
+            .ok_or_else(|| corrupt("migration journal lacks its root"))?;
+        match source {
+            Some(bytes) if !current_handle(bytes) => {
+                let ids = parse(bytes)?.ids();
+                if ids.iter().any(|id| id.ns != root.ns) || requested.old != ids.map(|id| id.map_id)
+                {
+                    return Err(corrupt(
+                        "root handle differs from the running DAG migration",
+                    ));
+                }
+            }
+            None if requested.tag != crate::tag(type_name::<T>()) => {
+                return Err(corrupt("saved root type differs from requested DAG handle"));
+            }
+            _ => {}
+        }
+    }
+    let floor = if let Record::Running { nodes, .. } = &record {
+        source_edge_floor(nodes)?
+    } else {
+        1
+    };
+    if previous != journal {
+        // Keep the full original plan durable throughout an upgrade of the
+        // old type-specific journal, including a crash during final cleanup.
+        write_record(&journal, root, &record)?;
+    }
     loop {
+        if let Record::Done(map) = &record {
+            if source.is_none() {
+                let _: T = decode(&fs::read(&path)?)?;
+            }
+            record = repair_completed(&ns, root, map)?;
+            write_record(&journal, root, &record)?;
+        }
         let Record::Running {
             dag_id,
             phase,
             nodes,
         } = &mut record
         else {
-            let Record::Done(map) = record else {
+            let Record::Finished { dag_id, members } = record else {
                 unreachable!()
             };
-            return Ok((restore(root)?, map));
+            return Ok(Some(DagHandleConverter {
+                root,
+                dag_id,
+                members,
+            }));
         };
         match phase {
             Phase::Prepare => {
-                prepare(&ns, nodes, *dag_id)?;
+                prepare(&ns, nodes, *dag_id, floor)?;
                 *phase = Phase::Publish;
             }
             Phase::Publish => {
@@ -663,14 +904,27 @@ fn migrate_with<T: DeserializeOwned>(
                 *phase = Phase::Retire;
             }
             Phase::Retire => {
-                let mut map = Remap::new();
+                // Old running journals may have been prepared by an earlier converter.
+                let mut members = BTreeMap::new();
                 for n in nodes.iter() {
-                    if n.target != n.old[0] {
-                        map.insert(
-                            InstanceId::new(n.old[0], ns.id()),
-                            InstanceId::new(n.target, ns.id()),
-                        );
-                    }
+                    let mut target = open_prefix(&ns, n.target)?;
+                    raise_edge_floor(&mut target, *dag_id, floor)?;
+                    members.insert(
+                        n.old[0],
+                        Member {
+                            target: n.target,
+                            components: Some([n.old[1], n.old[2]]),
+                        },
+                    );
+                }
+                let requested = handle::<T>(root, *dag_id)?;
+                if source.is_none() && fs::read(&path)? != requested {
+                    return Err(corrupt(
+                        "published root sidecar differs from requested DAG handle",
+                    ));
+                }
+                open_prefix(&ns, root.map_id)?.try_sync_wal()?;
+                for n in nodes.iter() {
                     for old in n
                         .old
                         .into_iter()
@@ -680,11 +934,104 @@ fn migrate_with<T: DeserializeOwned>(
                         open_prefix(&ns, old)?.batch_wiped().commit_sync()?;
                     }
                 }
-                record = Record::Done(map);
+                // Earlier v18 converters use this record to recover relocated IDs.
+                // Write it before the canonical completion record. An interrupted
+                // retry still has the full plan in the canonical Retire journal.
+                let remap = nodes
+                    .iter()
+                    .filter(|n| n.old[0] != n.target)
+                    .map(|n| {
+                        (
+                            InstanceId::new(n.old[0], ns.id()),
+                            InstanceId::new(n.target, ns.id()),
+                        )
+                    })
+                    .collect();
+                let done = Record::Done(remap);
+                let saved_tag = nodes
+                    .iter()
+                    .find(|n| n.old[0] == root.map_id)
+                    .ok_or_else(|| corrupt("missing migrated root"))?
+                    .tag;
+                let mut compat = legacy_journals(&ns, root)?;
+                for tag in [saved_tag, crate::tag(type_name::<T>())] {
+                    compat.push(path.with_extension(format!("dag-{tag:016x}-v17")));
+                }
+                compat.sort();
+                compat.dedup();
+                for old in compat {
+                    write_record(&old, root, &done)?;
+                }
+                record = Record::Finished {
+                    dag_id: *dag_id,
+                    members,
+                };
             }
         }
         write_record(&journal, root, &record)?;
     }
+}
+
+fn raise_edge_floor(store: &mut MapxRaw, dag_id: u64, floor: u64) -> Result<()> {
+    let (found, next, state) = node_meta(store)?;
+    if found != dag_id {
+        return Err(corrupt("converted DAG identity mismatch"));
+    }
+    if next < floor {
+        let mut batch = store.batch();
+        batch.insert(
+            [0],
+            postcard::to_allocvec(&(*b"VSDAGN01", dag_id, floor, state))?,
+        );
+        batch.commit()?;
+    }
+    Ok(())
+}
+
+fn repair_completed(ns: &Namespace, root: InstanceId, map: &Remap) -> Result<Record> {
+    let anchor = open_prefix(ns, root.map_id)?;
+    let (dag_id, _, _) = node_meta(&anchor)?;
+    let floor = next_legacy_edge()?;
+    let mut members = BTreeMap::new();
+    let reverse: HashMap<_, _> = map
+        .iter()
+        .map(|(old, new)| (new.map_id, old.map_id))
+        .collect();
+    let mut seen = HashSet::new();
+    let mut pending = vec![root.map_id];
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let mut store = open_prefix(ns, id)?;
+        if !store.is_colocated_with(&anchor) {
+            return Err(corrupt("converted DAG routes to another shard"));
+        }
+        raise_edge_floor(&mut store, dag_id, floor)?;
+        members.insert(
+            *reverse.get(&id).unwrap_or(&id),
+            Member {
+                target: id,
+                components: None,
+            },
+        );
+        for (_, value) in store.range([1]..[2]) {
+            pending.push(u64::from_le_bytes(
+                value
+                    .try_into()
+                    .map_err(|_| corrupt("invalid migrated edge"))?,
+            ));
+        }
+    }
+    anchor.try_sync_wal()?;
+    // Moved nodes may have been removed from the graph since migration.
+    for (old, new) in map {
+        members.entry(old.map_id).or_insert(Member {
+            target: new.map_id,
+            components: None,
+        });
+    }
+    Ok(Record::Finished { dag_id, members })
 }
 
 #[cfg(test)]
@@ -704,7 +1051,7 @@ mod test {
     #[test]
     fn resumes_interrupted_migration() {
         let Ok(cut) = env::var("VSDB_TEST_DAG_MIGRATION_CUT") else {
-            for cut in ["prepare", "publish", "retire"] {
+            for cut in ["prepare", "publish", "publish_other", "retire", "done"] {
                 let dir =
                     env::temp_dir().join(format!("vsdb-dag-resume-{}", rand::random::<u128>()));
                 for action in ["seed", "resume"] {
@@ -752,8 +1099,8 @@ mod test {
                         .insert(b"partial", b"scratch");
                     Phase::Prepare
                 }
-                "publish" => {
-                    prepare(&ns, &nodes, dag_id).unwrap();
+                "publish" | "publish_other" => {
+                    prepare(&ns, &nodes, dag_id, 1).unwrap();
                     // Source root already overwritten; its original rows now
                     // survive only in the checkpointed tagged scratch copy.
                     let mut target = open_prefix(&ns, root.map_id).unwrap();
@@ -761,8 +1108,8 @@ mod test {
                     target.insert(b"partial", b"published");
                     Phase::Publish
                 }
-                "retire" => {
-                    prepare(&ns, &nodes, dag_id).unwrap();
+                "retire" | "done" => {
+                    prepare(&ns, &nodes, dag_id, 1).unwrap();
                     for n in &nodes {
                         copy_rows(
                             &open_prefix(&ns, n.scratch).unwrap(),
@@ -789,14 +1136,32 @@ mod test {
                 "dag-{:016x}-v17",
                 crate::tag(type_name::<DagMapRaw>())
             ));
-            write_record(
-                &journal,
-                root,
-                &Record::Running {
+            let record = if cut == "done" {
+                Record::Done(
+                    nodes
+                        .iter()
+                        .filter(|n| n.old[0] != n.target)
+                        .map(|n| {
+                            (
+                                InstanceId::new(n.old[0], ns.id()),
+                                InstanceId::new(n.target, ns.id()),
+                            )
+                        })
+                        .collect(),
+                )
+            } else {
+                Record::Running {
                     dag_id,
                     phase,
                     nodes,
-                },
+                }
+            };
+            write_record(&journal, root, &record).unwrap();
+            // The earlier converter could already have published parents with
+            // next_edge_id below the persisted v17 allocator ceiling.
+            fs::write(
+                vsdb_core::vsdb_get_system_dir().join("dag_id_ceiling"),
+                128u128.to_le_bytes(),
             )
             .unwrap();
             ns.try_sync_wal().unwrap();
@@ -817,7 +1182,42 @@ mod test {
                 .unwrap(),
         );
         assert!(fresh.map_id > expected);
-        let (tree, map) = migrate_v17(root).unwrap();
+        if cut == "publish_other" {
+            let path = ns.meta_path(root.map_id).with_extension(format!(
+                "dag-{:016x}-v17",
+                crate::tag(type_name::<DagMapRaw>())
+            ));
+            assert!(migrate_rawkey_v17::<Vec<u8>>(root).is_err());
+            let Some(Record::Running {
+                dag_id,
+                phase: Phase::Publish,
+                ..
+            }) = read_record(&path, root).unwrap()
+            else {
+                panic!("wrong-flavor ID conversion changed the journal")
+            };
+            let mut frame = b"VSTYPE03".to_vec();
+            frame.extend_from_slice(
+                &crate::legacy_tag_for::<DagMapRawKey<Vec<u8>>>(false).to_le_bytes(),
+            );
+            frame.extend_from_slice(&bytes);
+            let (converted, _) =
+                migrate_rawkey_handle_v17::<Vec<u8>>(&postcard::to_allocvec(&frame).unwrap())
+                    .unwrap();
+            assert_eq!(
+                converted,
+                handle::<DagMapRawKey<Vec<u8>>>(root, dag_id).unwrap()
+            );
+        }
+        let (mut tree, map) = migrate_v17(root).unwrap();
+        // Older v18 tools can still read their original completion record and obtain the remap.
+        let old = ns.meta_path(root.map_id).with_extension(format!(
+            "dag-{:016x}-v17",
+            crate::tag(type_name::<DagMapRaw>())
+        ));
+        assert!(
+            matches!(read_record(&old,root).unwrap(),Some(Record::Done(legacy)) if legacy==map)
+        );
         assert_eq!(tree.child_ids(), root_tokens);
         let old = InstanceId::new(ids[1], ns.id());
         let new = map.get(&old).copied().unwrap_or(old);
@@ -825,5 +1225,11 @@ mod test {
         assert_eq!(a.child_ids(), a_tokens);
         assert_eq!(a.get("local"), Some(b"a".to_vec()));
         assert_eq!(a.get("root"), None);
+        let fresh = DagMapRaw::new(Some(&mut tree));
+        let edge = tree.child_id(&fresh).unwrap();
+        assert!(u128::from_le_bytes(edge.try_into().unwrap()) > 128, "{cut}");
+        let mut a = a;
+        let grandchild = DagMapRaw::new(Some(&mut a));
+        assert!(u128::from_le_bytes(a.child_id(&grandchild).unwrap().try_into().unwrap()) > 128);
     }
 }
