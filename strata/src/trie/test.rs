@@ -2005,3 +2005,62 @@ fn foreign_checkpoint_is_ignored_even_when_commit_numbers_match() {
     let mut reopened = VerMapWithProof::<u32, u32, MptCalc>::from_meta(bid).unwrap();
     assert_eq!(reopened.merkle_root_at_commit(bc).unwrap(), expected);
 }
+
+#[test]
+fn proof_and_map_handle_saves_preserve_each_type_and_legacy_metadata() {
+    use crate::{MptCalc, SmtCalc, VerMap, VerMapWithProof};
+    type Proof = VerMapWithProof<u32, u32, MptCalc>;
+    type Other = VerMapWithProof<u32, u32, SmtCalc>;
+
+    for legacy_wrapper in [Some(false), Some(true), None] {
+        let mut proof = Proof::new();
+        let branch = proof.map().main_branch();
+        proof.map_mut().insert(branch, &1, &7).unwrap();
+        let id = proof.instance_id();
+        let path = proof.namespace().meta_path(id.map_id);
+        // The original v18 implementation used the primary path for both types.
+        let legacy = legacy_wrapper.map(|wrapper| {
+            if wrapper {
+                crate::common::save_instance_meta(id, &proof).unwrap();
+            } else {
+                crate::common::save_instance_meta(id, proof.map()).unwrap();
+            }
+            std::fs::read(&path).unwrap()
+        });
+        let root = proof.merkle_root(branch).unwrap();
+        let start = std::sync::Barrier::new(2);
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                start.wait();
+                proof.save_meta().unwrap();
+            });
+            start.wait();
+            proof.map().save_meta().unwrap();
+        });
+        if let Some(legacy) = legacy {
+            assert_eq!(std::fs::read(path).unwrap(), legacy);
+        }
+        assert!(Other::from_meta(id).is_err());
+        assert!(VerMap::<u64, u32>::from_meta(id).is_err());
+        drop(proof);
+        let map = VerMap::<u32, u32>::from_meta_verified(id).unwrap();
+        assert_eq!(map.get(branch, &1).unwrap(), Some(7));
+        assert_eq!(
+            Proof::from_meta(id).unwrap().merkle_root(branch).unwrap(),
+            root
+        );
+
+        // A second backend can save and reopen its own typed view as well.
+        let mut other = Other::from_map(map);
+        let other_root = other.merkle_root(branch).unwrap();
+        other.save_meta().unwrap();
+        assert_eq!(
+            Other::from_meta(id).unwrap().merkle_root(branch).unwrap(),
+            other_root
+        );
+        assert_eq!(
+            Proof::from_meta(id).unwrap().merkle_root(branch).unwrap(),
+            root
+        );
+    }
+}

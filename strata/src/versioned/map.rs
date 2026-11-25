@@ -5,6 +5,7 @@
 
 use super::store::{
     BranchHead, COMMIT, Edits, HEAD, HEADER, Header, NAME, by_name, corrupt, row,
+    typed_meta_path,
 };
 use super::{BranchId, Commit, CommitId, NO_COMMIT, diff::DiffEntry};
 use crate::{
@@ -21,6 +22,8 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BinaryHeap, HashMap, HashSet},
+    fs,
+    io::ErrorKind,
     marker::PhantomData,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -445,8 +448,26 @@ where
     ///
     /// Returns the `instance_id` that should be passed to `from_meta`.
     pub fn save_meta(&self) -> Result<InstanceId> {
+        self.save_handle_meta(self)
+    }
+
+    pub(crate) fn save_handle_meta<T: Serialize>(
+        &self,
+        handle: &T,
+    ) -> Result<InstanceId> {
+        self.ensure_writable("version store metadata save")?;
         let id = self.instance_id();
-        crate::common::save_instance_meta(id, self)?;
+        let primary = self.namespace().meta_path(id.map_id);
+        let bytes = postcard::to_allocvec(handle)?;
+        let _guard = self.tree.lock_meta_save();
+        let path = match fs::read(&primary) {
+            Ok(saved) if saved != bytes => typed_meta_path::<T>(&primary),
+            Ok(_) => primary,
+            Err(err) if err.kind() == ErrorKind::NotFound => primary,
+            Err(err) => return Err(err.into()),
+        };
+        crate::common::create_dir_all_durable(path.parent().expect("has parent"))?;
+        crate::common::atomic_write_file(&path, &bytes)?;
         Ok(id)
     }
 

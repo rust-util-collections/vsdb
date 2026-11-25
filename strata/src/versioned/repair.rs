@@ -4,7 +4,7 @@ use super::{Commit, CommitId, NO_COMMIT, map::VerMap, store::*};
 use crate::{
     Result,
     basic::persistent_btree::{BLOB, CLASS_MASK, EMPTY_ROOT, NodeView, object_key},
-    common::{InstanceId, PrefixFrame, load_instance_meta, parse_prefix_handle},
+    common::{InstanceId, PrefixFrame, parse_prefix_handle},
 };
 use std::collections::{HashMap, HashSet};
 
@@ -19,7 +19,7 @@ pub struct GcStats {
 impl<K, V> VerMap<K, V> {
     pub(super) fn open_meta(id: InstanceId, deep: bool) -> Result<Self> {
         let id = InstanceId::new(id.map_id, id.ns.unwrap_or_default());
-        let bytes: Vec<u8> = load_instance_meta(id)?;
+        let bytes = load_versioned_meta::<Self>(id)?;
         match parse_prefix_handle::<Self>(&bytes)? {
             PrefixFrame(raw, []) if raw.instance_id() == id => Self::open(raw, deep),
             _ => Err(corrupt("version store metadata identity mismatch")),

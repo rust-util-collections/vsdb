@@ -356,7 +356,11 @@ call, including uncommitted changes. `prove_at_commit(commit, &key)` selects
 committed history instead and returns an error for reclaimed commits. Both
 backends use the same method names and ordered key codec. The wrapper's
 `save_meta` and `from_meta` persist its typed single-prefix handle. The type
-tag binds the trie backend as well as the key and value types. Use `new_in` to
+tag binds the trie backend as well as the key and value types. The wrapper and
+its inner map share an `InstanceId`. Save each handle type you intend to reopen.
+The first saved type keeps the primary metadata file. Additional types use
+separate tagged files in the same namespace metadata directory.
+Use `new_in` to
 select a namespace and `clone_in` to deep-copy the graph and retained history.
 
 ```rust

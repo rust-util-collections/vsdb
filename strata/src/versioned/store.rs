@@ -1,8 +1,16 @@
 //! Wire rows and atomic metadata edits for the single-prefix version store.
 
 use super::{BranchId, Commit, CommitId};
-use crate::{Result, VsdbError, basic::persistent_btree::NodeId};
-use std::collections::BTreeMap;
+use crate::{
+    InstanceId, Namespace, Result, VsdbError,
+    basic::persistent_btree::NodeId,
+    common::{load_meta_file, type_tag},
+};
+use std::{
+    collections::BTreeMap,
+    io::ErrorKind,
+    path::{Path, PathBuf},
+};
 use vsdb_core::MapxRaw;
 
 pub(super) const HEADER: [u8; 1] = [0];
@@ -25,6 +33,21 @@ pub(super) fn by_name(name: &str) -> Vec<u8> {
     key.push(BY_NAME);
     key.extend_from_slice(name.as_bytes());
     key
+}
+
+pub(super) fn typed_meta_path<T>(primary: &Path) -> PathBuf {
+    primary.with_extension(format!("view-{:016x}", type_tag::<T>()))
+}
+
+pub(crate) fn load_versioned_meta<T>(id: InstanceId) -> Result<Vec<u8>> {
+    let ns = Namespace::open(id.ns.unwrap_or_default())?;
+    let primary = ns.meta_path(id.map_id);
+    match load_meta_file(&typed_meta_path::<T>(&primary)) {
+        Err(VsdbError::Io(e)) if e.kind() == ErrorKind::NotFound => {
+            load_meta_file(&primary)
+        }
+        result => result,
+    }
 }
 
 pub(super) fn corrupt(msg: impl Into<String>) -> VsdbError {

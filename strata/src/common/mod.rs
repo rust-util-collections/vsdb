@@ -26,7 +26,7 @@ use vsdb_core::MapxRaw;
 
 use error::{Result, VsdbError};
 use serde::{Serialize, de::DeserializeOwned};
-use std::{any::type_name, fs, thread};
+use std::{any::type_name, fs, path::Path, thread};
 
 const PREFIX_FRAME_MAGIC: &[u8; 8] = b"VSTYPE04";
 
@@ -134,8 +134,11 @@ pub fn save_instance_meta(id: InstanceId, value: &impl Serialize) -> Result<()> 
 /// payload; see `CHANGELOG.md`.
 pub fn load_instance_meta<T: DeserializeOwned>(id: InstanceId) -> Result<T> {
     let ns = Namespace::open(id.ns.unwrap_or(DEFAULT_NS_ID))?;
-    let path = ns.meta_path(id.map_id);
-    let bytes = fs::read(&path)?;
+    load_meta_file(&ns.meta_path(id.map_id))
+}
+
+pub(crate) fn load_meta_file<T: DeserializeOwned>(path: &Path) -> Result<T> {
+    let bytes = fs::read(path)?;
     let (value, rest) = postcard::take_from_bytes(&bytes)?;
     if !rest.is_empty() {
         return Err(VsdbError::Decode {

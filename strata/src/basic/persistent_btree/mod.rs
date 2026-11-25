@@ -548,6 +548,9 @@ fn find_leaf<'a>(
 
 #[derive(Debug)]
 pub(crate) struct TreeRuntime {
+    // The primary instance-meta path belongs to the first handle type saved.
+    // Serialize that choice across aliases, independently of page and pin locks.
+    meta_save: Mutex<()>,
     next_id: AtomicU64,
     refs: Mutex<RefState>,
     pub(crate) page_cache: InternalPageCache,
@@ -571,6 +574,7 @@ fn tree_runtime(
         runtimes.retain(|_, runtime| runtime.strong_count() > 0);
     }
     let runtime = Arc::new(TreeRuntime {
+        meta_save: Mutex::new(()),
         next_id: AtomicU64::new(next_id_floor),
         refs: Mutex::new(initial_refs),
         page_cache: InternalPageCache::from_namespace_budget(ns_budget_bytes),
@@ -793,6 +797,10 @@ impl PersistentBTree {
 
     pub(crate) fn clear_cached_heads(&self) {
         self.runtime.refs.lock().heads.clear();
+    }
+
+    pub(crate) fn lock_meta_save(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.runtime.meta_save.lock()
     }
 
     pub(crate) fn with_pinned_branch<R>(

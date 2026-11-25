@@ -97,6 +97,12 @@ fn converts_retained_versions_and_working_root_at_original_id() {
     assert!(!meta_path.exists());
     let decoded: VerMap<u64, Vec<u8>> = postcard::from_bytes(&handle_bytes).unwrap();
     assert_eq!(decoded.get(main, &42).unwrap(), Some(vec![42]));
+    let wrapper = vsdb::VerMapWithProof::<u64, Vec<u8>, vsdb::MptCalc>::new();
+    let proof_id = wrapper.save_meta().unwrap();
+    assert_eq!(wrapper.map().save_meta().unwrap(), proof_id);
+    let current = migrate_v17::<u64, Vec<u8>>(proof_id).unwrap();
+    assert_eq!(current.instance_id(), proof_id);
+    assert!(vsdb::VerMapWithProof::<u64, Vec<u8>, vsdb::MptCalc>::from_meta(proof_id).is_ok());
     drop(again);
     drop(decoded);
     fs::remove_dir_all(&scratch).unwrap();

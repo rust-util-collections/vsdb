@@ -18,7 +18,7 @@ use crate::{
         ensure_writable,
         error::Result,
     },
-    versioned::{BranchId, CommitId, map::VerMap},
+    versioned::{BranchId, CommitId, map::VerMap, store::load_versioned_meta},
 };
 
 use super::{Checkpoint, TrieCalc};
@@ -134,14 +134,12 @@ where
         Ok(Self::from_map(self.map.clone_in(ns)?))
     }
     pub fn save_meta(&self) -> Result<InstanceId> {
-        let id = self.instance_id();
-        crate::common::save_instance_meta(id, self)?;
-        Ok(id)
+        self.map.save_handle_meta(self)
     }
     pub fn from_meta(id: impl Into<InstanceId>) -> Result<Self> {
         let id = id.into();
         let id = InstanceId::new(id.map_id, id.ns.unwrap_or_default());
-        let frame: Vec<u8> = crate::common::load_instance_meta(id)?;
+        let frame = load_versioned_meta::<Self>(id)?;
         Self::open_frame(
             crate::common::parse_prefix_handle::<Self>(&frame)?,
             Some(id),

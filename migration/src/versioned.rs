@@ -174,6 +174,16 @@ pub fn migrate_v17<K: KeyEnDeOrdered, V: ValueEnDe>(
     let id = InstanceId::new(id.map_id, id.ns.unwrap_or_default());
     let ns = Namespace::open(id.ns.unwrap_or_default())?;
     let bytes = std::fs::read(ns.meta_path(id.map_id))?;
+    if let Ok((frame, b"")) = postcard::take_from_bytes::<&[u8]>(&bytes)
+        && frame.starts_with(b"VSTYPE04")
+    {
+        if ns.is_read_only() {
+            return Err(VsdbError::ReadOnly {
+                operation: "VerMap migration",
+            });
+        }
+        return VerMap::<K, V>::from_meta_verified(id);
+    }
     let (map, converted) = convert_vermap_bytes::<K, V>(&bytes, Some(id))?;
     if bytes != converted {
         save_instance_meta(id, &map)?;
