@@ -172,8 +172,17 @@ impl DagMapRaw {
         }
         Ok(meta)
     }
-    fn set_meta(&mut self, meta: NodeMeta) {
-        self.store.insert(META, meta.bytes());
+    fn set_meta(&mut self, meta: NodeMeta) -> Result<()> {
+        let mut batch = self.store.batch();
+        batch.insert(META, meta.bytes());
+        #[cfg(test)]
+        test::before_meta_commit()?;
+        batch.commit()
+    }
+    fn unlink(&mut self, edge: u64) -> Result<()> {
+        let mut batch = self.store.batch();
+        batch.remove(edge_key(edge));
+        batch.commit()
     }
     fn open_with_meta(&self, id: u64) -> Result<(Self, NodeMeta)> {
         let store = open_prefix(&self.namespace(), id)?;
@@ -243,7 +252,8 @@ impl DagMapRaw {
                         map: p.id(),
                         edge: meta.next_edge_id,
                     }),
-                ));
+                ))
+                .expect("DAG child metadata");
                 p.register(meta, node.id()).expect("DAG child registration");
                 node
             }
@@ -253,7 +263,8 @@ impl DagMapRaw {
                     store: MapxRaw::new(),
                     dag_id,
                 };
-                node.set_meta(NodeMeta::new(dag_id, State::Root));
+                node.set_meta(NodeMeta::new(dag_id, State::Root))
+                    .expect("DAG root metadata");
                 node
             }
         }
@@ -407,7 +418,7 @@ impl DagMapRaw {
             && let Ok(mut p) = self.open(link.map)
             && p.edge_target(link.edge) == Some(self.id())
         {
-            p.store.remove(edge_key(link.edge));
+            p.unlink(link.edge)?;
         }
         self.finish_destroy()
     }
@@ -429,8 +440,7 @@ impl DagMapRaw {
         if let Some(mut node) = self.owned(edge, child) {
             return node.destroy_subtree();
         }
-        self.store.remove(edge_key(edge));
-        Ok(())
+        self.unlink(edge)
     }
     fn prune_children(
         &mut self,
@@ -533,7 +543,7 @@ impl DagMapRaw {
                 map: root.id(),
                 edge,
             });
-            child.set_meta(meta);
+            child.set_meta(meta)?;
         }
         Ok(())
     }
@@ -546,7 +556,7 @@ impl DagMapRaw {
                         owner: Some(p),
                         genesis,
                     };
-                    node.set_meta(meta);
+                    node.set_meta(meta)?;
                 }
                 State::Clearing { genesis: id, .. } if id == genesis => {}
                 _ => return Err(corrupt("invalid consumed mainline")),

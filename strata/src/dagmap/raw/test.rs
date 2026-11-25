@@ -195,7 +195,7 @@ fn destroy_retry_unlinks_and_reclaims_descendants() {
         grandchild.insert("key", "value");
         let mut meta = child.meta().unwrap();
         meta.state = State::Destroying(meta.state.owner());
-        child.set_meta(meta);
+        child.set_meta(meta).unwrap();
         match mode {
             "self" => {
                 child.destroy();
@@ -472,7 +472,7 @@ fn prune_partial_reparent_and_markers_converge() {
                 map: genesis.id(),
                 edge,
             });
-            children[0].set_meta(m);
+            children[0].set_meta(m).unwrap();
         }
         if cut > 1 {
             head.reparent(&mut genesis).unwrap();
@@ -870,9 +870,36 @@ fn get_mut_and_update_reject_consumed_clearing_nodes() {
         owner: meta.state.owner(),
         genesis: typed_root.instance_id().map_id,
     };
-    raw_head.set_meta(meta);
+    raw_head.set_meta(meta).unwrap();
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = typed_head.update(&key, |v| *v = 2);
     }));
     assert!(res.is_err());
+}
+
+thread_local! {
+    static FAIL_META_COMMIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub(super) fn before_meta_commit() -> Result<()> {
+    if FAIL_META_COMMIT.with(|flag| flag.replace(false)) {
+        return Err(std::io::Error::other("injected DAG metadata write failure").into());
+    }
+    Ok(())
+}
+
+#[test]
+fn prune_returns_marker_write_error_and_can_resume() {
+    let mut root = DagMapRaw::new(None);
+    let mut head = DagMapRaw::new(Some(&mut root));
+    head.insert(b"edited", b"value");
+    let saved = head.save_meta().unwrap();
+
+    FAIL_META_COMMIT.with(|flag| flag.set(true));
+    assert!(matches!(head.prune(), Err(VsdbError::Io(_))));
+    let head = DagMapRaw::from_meta(saved).unwrap();
+    assert!(root.child_id(&head).is_some());
+    let merged = head.prune().unwrap();
+    assert_eq!(merged.get(b"edited").as_deref(), Some(b"value".as_slice()));
+    assert!(merged.child_ids().is_empty());
 }
