@@ -231,10 +231,6 @@ impl MmDB {
             let scan = scan_shard_layout(&dir, shards)?;
             validate_shard_layout(&dir, shards, marker_present, &sentinel_path, &scan)?;
 
-            if !marker_present && scan.present > 0 {
-                geometry::check_shards(&dir, shards, false)?;
-            }
-
             // Brand-new root: raise the initialization sentinel durably
             // BEFORE the first shard dir exists, so a crash mid-creation is
             // provably a resumable create (see INIT_SENTINEL_REL_PATH).
@@ -709,6 +705,11 @@ impl DoubleEndedIterator for MmdbIter {
 /// dir (namespace roots never carry allocator state).
 fn ceiling_file_path() -> PathBuf {
     vsdb_get_base_dir().join(PREFIX_CEILING_REL_PATH)
+}
+
+/// Check already-published shard anchors in an interrupted initialization.
+pub(crate) fn validate_pending_shards(root: &Path, shards: usize) -> Result<()> {
+    geometry::check_shards(&root.join("mmdb"), shards, false)
 }
 
 /// Strictly validates a completed dataset without opening or mutating it.

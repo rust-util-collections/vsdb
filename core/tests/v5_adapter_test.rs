@@ -220,6 +220,27 @@ fn acknowledged_native_fence_survives_kill_and_wrong_last_shard_leaves_source_in
             }
         }
     }
+    fn assert_rejected_unchanged(root: &Path) {
+        let mut before = BTreeMap::new();
+        inventory(root, &mut before);
+        for mode in ["reject-ro", "reject-rw"] {
+            let out = command(root, mode).output().unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let mut after = BTreeMap::new();
+            inventory(root, &mut after);
+            assert_eq!(
+                before.keys().collect::<Vec<_>>(),
+                after.keys().collect::<Vec<_>>()
+            );
+            for (path, old) in &before {
+                assert!(old == &after[path], "changed {}", path.display());
+            }
+        }
+    }
     let root =
         std::env::temp_dir().join(format!("vsdb-v5-fence-{}", rand::random::<u128>()));
     let mut child = command(&root, "write")
@@ -254,26 +275,20 @@ fn acknowledged_native_fence_survives_kill_and_wrong_last_shard_leaves_source_in
         .unwrap()
         .close()
         .unwrap();
-        let mut before = BTreeMap::new();
-        inventory(&root, &mut before);
-        for mode in ["reject-ro", "reject-rw"] {
-            let out = command(&root, mode).output().unwrap();
-            assert!(
-                out.status.success(),
-                "{}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-            let mut after = BTreeMap::new();
-            inventory(&root, &mut after);
-            assert_eq!(
-                before.keys().collect::<Vec<_>>(),
-                after.keys().collect::<Vec<_>>()
-            );
-            for (path, old) in &before {
-                assert!(old == &after[path], "changed {}", path.display());
-            }
-        }
+        assert_rejected_unchanged(&root);
     }
+
+    // A partially initialized engine can already own complete shards. Check
+    // their format before a writable retry backfills the old downgrade marker.
+    let system = root.join("__SYSTEM__");
+    fs::rename(
+        root.join("mmdb/__SYSTEM__/engine_header"),
+        system.join("__initializing__"),
+    )
+    .unwrap();
+    fs::remove_file(system.join(".shards_ready")).unwrap();
+    fs::remove_file(system.join("format_version")).unwrap();
+    assert_rejected_unchanged(&root);
     fs::remove_dir_all(root).unwrap();
 }
 

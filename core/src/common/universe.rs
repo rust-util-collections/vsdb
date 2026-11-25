@@ -289,6 +289,7 @@ pub(super) fn validate_ready_engine(
         engine::validate_completed_dataset(root, shards)?;
     } else if pending.try_exists()? {
         check_initializer(&pending, id, ns, shards)?;
+        engine::validate_pending_shards(root, shards)?;
     } else if root.join("mmdb").try_exists()? {
         return Err(corrupt("completed engine has no identity header"));
     }

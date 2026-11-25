@@ -10,7 +10,7 @@ mod mmdb;
 
 pub(crate) use self::mmdb::{
     EngineSizing, MmDB as Engine, MmdbBatch as Batch, MmdbReadView, recover_ceiling,
-    validate_completed_dataset,
+    validate_completed_dataset, validate_pending_shards,
 };
 
 type DbIter = self::mmdb::MmdbIter;
