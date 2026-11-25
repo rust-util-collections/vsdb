@@ -56,6 +56,8 @@ fn generation_process() {
             .unwrap();
             if i == 0 {
                 db.put(&physical(b"sst"), b"old").unwrap();
+                db.put(&physical(b"flushed-only"), b"from immutable table")
+                    .unwrap();
                 db.put(&physical(b"removed"), b"hidden").unwrap();
                 db.flush().unwrap();
                 let mut batch = mmdb_v4::WriteBatch::new();
@@ -82,9 +84,13 @@ fn generation_process() {
     let mut map = MapxRaw::from_meta(InstanceId::new(PREFIX, 1)).unwrap();
     assert_eq!(map.get(b"sst").as_deref(), Some(b"new".as_slice()));
     assert_eq!(map.get(b"empty"), Some(Vec::new()));
+    assert_eq!(
+        map.get(b"flushed-only").as_deref(),
+        Some(b"from immutable table".as_slice())
+    );
     assert_eq!(map.get(b"removed"), None);
     if phase == "first" {
-        assert_eq!(map.iter().count(), 2);
+        assert_eq!(map.iter().count(), 3);
         let next = MapxRaw::new_in(&ns);
         assert!(next.instance_id().map_id >= FLOOR);
         map.insert(b"after", b"v5");
@@ -155,6 +161,16 @@ fn fixture(root: &Path) -> (PathBuf, PathBuf) {
     .unwrap();
     fs::create_dir_all(ext.join("mmdb")).unwrap();
     child("legacy", &ext);
+    let rows = inventory(&ext.join("mmdb/shard_00"));
+    for ext in ["sst", "wal"] {
+        assert!(
+            rows.iter().any(
+                |(path, data)| path.extension().is_some_and(|name| name == ext)
+                    && data.as_ref().is_some_and(|bytes| !bytes.is_empty())
+            ),
+            "missing populated {ext}"
+        );
+    }
     (base, ext)
 }
 
