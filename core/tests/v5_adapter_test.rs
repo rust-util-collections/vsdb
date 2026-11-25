@@ -276,3 +276,29 @@ fn acknowledged_native_fence_survives_kill_and_wrong_last_shard_leaves_source_in
     }
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn named_budget_floor_is_preserved_through_reopen() {
+    common::setup();
+    for mb in [0, 1, 7, 8] {
+        let ns = Namespace::create_with(NamespaceOpts {
+            shards: 2,
+            mem_budget_mb: Some(mb),
+            ..Default::default()
+        })
+        .unwrap();
+        let id = ns.id();
+        let check = |ns: &Namespace| {
+            assert_eq!(ns.mem_budget_bytes(), 8 << 20);
+            let usage = ns.memory_usage();
+            assert_eq!(usage.shards.len(), 2);
+            assert_eq!(usage.pool.segmented_capacity_bytes, 1 << 20);
+            assert_eq!(usage.pool.overflow_capacity_bytes, 1 << 20);
+        };
+        check(&ns);
+        ns.close().unwrap();
+        let reopened = Namespace::open(id).unwrap();
+        check(&reopened);
+        reopened.close().unwrap();
+    }
+}

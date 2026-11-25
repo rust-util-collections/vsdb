@@ -178,6 +178,8 @@ assert_eq!(view.next().unwrap().1, b"before");
 
 The default namespace uses a 2 GiB sizing input unless overridden.
 A nonzero `with_mem_budget_mb` setting takes precedence over `VSDB_MEM_BUDGET_MB`.
+Zero means unset for the default namespace, so the environment may still supply
+the budget. A positive representable default-namespace budget is used as given.
 
 ```rust,no_run
 use vsdb_core::{VsdbOptions, vsdb_configure};
@@ -185,8 +187,10 @@ use vsdb_core::{VsdbOptions, vsdb_configure};
 vsdb_configure(VsdbOptions::new("/data/vsdb").with_mem_budget_mb(8192)).unwrap();
 ```
 
-Non-default namespaces use `NamespaceOpts::mem_budget_mb` and default to
-512 MiB each. All MB-named options use binary MiB. Budgets size caches and
+Non-default namespaces persist `NamespaceOpts::mem_budget_mb` at creation.
+An absent value uses 512 MiB. Explicit values from 0 through 7 use an
+effective 8 MiB minimum in that namespace, including on reopen.
+All MB-named options use binary MiB. Budgets size caches and
 write buffers with floors and caps. Process RSS also includes pinned blocks,
 metadata and application allocations.
 See the [memory design](../../docs/proposals/shared-mem-pool.md).
