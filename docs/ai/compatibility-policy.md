@@ -13,6 +13,12 @@ layouts, enum discriminants, and metadata envelopes are wire:
 - never trust source enum order for on-disk discriminants;
 - format changes need old-fixture decode + round-trip tests.
 
+## Supported architectures
+
+VSDB guarantees correct behavior on `x86_64` and `aarch64`. Other architectures
+carry no testing or correctness guarantee. This support boundary applies to
+the runtime, migration, review and release validation.
+
 ## Rust toolchain
 
 Use the official latest stable Rust for edits, dependency updates, formatting,

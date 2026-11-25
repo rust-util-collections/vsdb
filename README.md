@@ -10,6 +10,9 @@ and specialized indexes. Applications use the `vsdb` crate in `strata/`. The sto
 is MMDB, a Rust LSM tree whose bundled Zstd backend requires a C toolchain.
 [Crate guide](strata/README.md)
 
+VSDB guarantees correct behavior on 64-bit x86 (`x86_64`) and 64-bit Arm
+(`aarch64`). Other architectures carry no testing or correctness guarantee.
+
 **Upgrading from v17?** v18 uses a new storage format. Stop the processes using
 the universe and back it up. In the offline upgrade program, run
 `migrate_universe` first, then configure v18 and convert the saved and embedded

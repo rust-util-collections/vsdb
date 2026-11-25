@@ -21,6 +21,13 @@ map](docs/ai/review-core.md#subsystem-map) links each part of the workspace to
 its implementation and review guide. MMDB's bundled Zstd backend requires a C
 toolchain.
 
+## Supported architectures
+
+The project guarantees correct behavior on 64-bit x86 (`x86_64`) and 64-bit
+Arm (`aarch64`). Limit platform-specific review and validation requirements to
+these architectures. Other targets carry no testing or correctness guarantee.
+[Platform policy](docs/ai/compatibility-policy.md#supported-architectures)
+
 ## Build & Test
 
 ```bash

@@ -13,6 +13,14 @@
 
 ## Won't Fix
 
+### [MEDIUM] platform support: memory-sizing constants overflow on 32-bit targets
+
+- **Where**: `core/src/common/engine/mmdb.rs` (`mmdb_open`) and `core/benches/units/legacy_budget.rs`, `strata/benches/units/legacy_budget.rs` (`cgroup_mem_limit_bytes`).
+- **What**: On i686, `16 * G` exceeds `usize::MAX`, so the engine's 16 GiB threshold fails to compile. Both benchmark helpers also shift a `usize` left by 60 bits. The default i686 GNU build first encountered an MMDB `posix_fadvise` offset-type mismatch. With 64-bit libc file offsets, the build reached the VSDB threshold and confirmed the overflow.
+- **Reason**: VSDB supports `x86_64` and `aarch64`. Both expressions fit on those targets. This finding is marked **Won't Fix** under the current [platform policy](ai/compatibility-policy.md#supported-architectures).
+
+---
+
 ### [LOW] engine: lazy-delete auto-sweep threshold stays disabled
 - **Where**: `core/src/common/engine/mmdb.rs` (`mmdb_open`), mmdb `DbOptions::lazy_delete_compaction_threshold`
 - **What**: keys registered via `lazy_delete` are physically dropped only when organic compaction rewrites their level; registrations resting in cold levels can outlive the process (registrations are memory-only and documented best-effort).

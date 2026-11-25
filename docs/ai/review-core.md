@@ -19,6 +19,8 @@ or a full audit. Apply the [compatibility policy](compatibility-policy.md) to
 public APIs, handles, persistent records and namespace layout. Skills that
 create commits also use the [validation and release protocol](commit-protocol.md).
 
+Assess platform correctness against the [supported architectures](compatibility-policy.md#supported-architectures), 64-bit Arm and x86. Record confirmed issues confined to an unsupported architecture under **Won't Fix** in the [audit registry](../audit.md#wont-fix), with the affected target, observed failure and platform-policy rationale.
+
 ### Subsystem Map
 
 | Subsystem | Implementation | Review guide |
