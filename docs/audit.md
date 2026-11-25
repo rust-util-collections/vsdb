@@ -51,14 +51,6 @@
 
 ---
 
-### [MEDIUM] common/ende: postcard::from_bytes decoders ignore trailing bytes and truncate evolved values on write-back
-- **Where**: `strata/src/common/mod.rs` (`load_instance_meta`), `strata/src/common/ende.rs` (`<T as KeyEnDe>::decode_key`, `<T as ValueEnDe>::decode_value`)
-- **What**: `postcard::from_bytes` deserializes from the prefix of a slice without checking that the remainder is empty. Trailing bytes after a `VSTYPE04` byte-slice frame in `__instance_meta__`, non-canonical trailing bytes in `decode_key`, or appended fields written by a newer value struct version in `decode_value` are silently ignored.
-- **Why**: Appended garbage in `__instance_meta__` goes undetected (unlike `MapxRaw::from_meta`), `KeyEnDe::decode_key` violates canonicality (`u32::decode_key(&[1, 0xFF]) == Ok(1)`), and an older binary calling `get_mut` / `update` on an evolved value struct silently drops trailing fields on `ValueGuard` write-back (violates `compatibility-policy.md`).
-- **Suggested fix**: Decode via `postcard::take_from_bytes` and return `Err(VsdbError::Decode { .. })` when `!rest.is_empty()` in `load_instance_meta`, `decode_key`, and `decode_value`. Add unit tests for trailing-byte rejection on `from_meta`, `decode_key`, and `decode_value`. No migration impact for canonical data.
-
----
-
 ### [MEDIUM] versioned/persistent_btree: aborted >16 MiB staged builds strand STAGE anchors and flushed chunks on disk
 - **Where**: `strata/src/basic/persistent_btree/persist.rs` (`PersistentBTree::{abandon_pending, flush_stage, publish}`), `strata/src/versioned/map.rs` (`VerMap::build_root`)
 - **What**: When `VerMap::bulk_load` or `VerMap::merge` crosses 16 MiB, `flush_stage()` commits `0x10`/`0x12` chunks and `[0x06, root_id]` (`STAGE`) anchors to disk. If the build later errors (e.g. an unsorted key in `bulk_load`) or unwinds, `abandon_pending()` clears `self.stage` in memory without removing or deferring removal of those `[0x06]` anchors or private `0x10`/`0x12` objects.

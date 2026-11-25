@@ -59,6 +59,16 @@ fn postcard_key<T: Serialize + ?Sized, R>(key: &T, f: impl FnOnce(&[u8]) -> R) -
         Err(e) => panic!("vsdb: encode key: {e}"),
     }
 }
+fn decode_exact<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
+    let (value, rest) = postcard::take_from_bytes(bytes)?;
+    if !rest.is_empty() {
+        return Err(VsdbError::Decode {
+            detail: "trailing bytes in postcard payload".into(),
+        });
+    }
+    Ok(value)
+}
+
 impl<T: Serialize + DeserializeOwned + Eq + Hash> KeyEnDe for T {
     fn encode_key_into(&self, dst: &mut Vec<u8>) -> Result<()> {
         postcard::to_io(self, dst)?;
@@ -68,7 +78,7 @@ impl<T: Serialize + DeserializeOwned + Eq + Hash> KeyEnDe for T {
         postcard_key(self, f)
     }
     fn decode_key(bytes: &[u8]) -> Result<Self> {
-        Ok(postcard::from_bytes(bytes)?)
+        decode_exact(bytes)
     }
 }
 impl<T: Serialize + DeserializeOwned> ValueEnDe for T {
@@ -77,7 +87,7 @@ impl<T: Serialize + DeserializeOwned> ValueEnDe for T {
         Ok(())
     }
     fn decode_value(bytes: &[u8]) -> Result<Self> {
-        Ok(postcard::from_bytes(bytes)?)
+        decode_exact(bytes)
     }
 }
 
@@ -380,5 +390,35 @@ mod test {
         assert!(map.contains_key(&key));
         map.remove(&key);
         assert_eq!(map.get(&key), None);
+    }
+
+    #[test]
+    fn decoders_reject_trailing_bytes() {
+        let mut key_bytes = 1u32.encode_key();
+        assert_eq!(u32::decode_key(&key_bytes).unwrap(), 1);
+        key_bytes.push(0xff);
+        assert!(matches!(
+            u32::decode_key(&key_bytes),
+            Err(VsdbError::Decode { .. })
+        ));
+
+        let mut val_bytes = "ok".to_string().encode_value();
+        assert_eq!(String::decode_value(&val_bytes).unwrap(), "ok");
+        val_bytes.push(0x01);
+        assert!(matches!(
+            String::decode_value(&val_bytes),
+            Err(VsdbError::Decode { .. })
+        ));
+
+        let map = Mapx::<u64, u64>::new();
+        let id = map.save_meta().unwrap();
+        let path = map.namespace().meta_path(id.map_id);
+        let mut meta = std::fs::read(&path).unwrap();
+        meta.push(0xaa);
+        std::fs::write(&path, &meta).unwrap();
+        assert!(matches!(
+            Mapx::<u64, u64>::from_meta(id),
+            Err(VsdbError::Decode { .. })
+        ));
     }
 }

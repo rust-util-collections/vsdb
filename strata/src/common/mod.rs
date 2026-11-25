@@ -24,7 +24,7 @@ pub use vsdb_core::common::*;
 
 use vsdb_core::MapxRaw;
 
-use error::Result;
+use error::{Result, VsdbError};
 use serde::{Serialize, de::DeserializeOwned};
 use std::{any::type_name, fs, thread};
 
@@ -136,7 +136,13 @@ pub fn load_instance_meta<T: DeserializeOwned>(id: InstanceId) -> Result<T> {
     let ns = Namespace::open(id.ns.unwrap_or(DEFAULT_NS_ID))?;
     let path = ns.meta_path(id.map_id);
     let bytes = fs::read(&path)?;
-    Ok(postcard::from_bytes(&bytes)?)
+    let (value, rest) = postcard::take_from_bytes(&bytes)?;
+    if !rest.is_empty() {
+        return Err(VsdbError::Decode {
+            detail: "trailing bytes in instance metadata".into(),
+        });
+    }
+    Ok(value)
 }
 
 pub(crate) fn load_instance_meta_checked<T>(
