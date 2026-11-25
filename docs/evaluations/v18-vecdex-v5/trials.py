@@ -8,7 +8,7 @@ p = argparse.ArgumentParser(description=__doc__)
 p.add_argument("bin_dir", type=Path)
 p.add_argument("fixtures", type=Path)
 p.add_argument("output", type=Path)
-p.add_argument("regime", choices=["warm", "device", "singleton", "secondary", "device-width8", "landed", "distance-cache", "width8-repeat"])
+p.add_argument("regime", choices=["warm", "device", "singleton", "secondary", "device-width8", "landed", "distance-cache", "width8-repeat", "final"])
 p.add_argument("--cpus", required=True)
 p.add_argument("--lock", type=Path)
 p.add_argument("--samples", type=int, default=10_000)
@@ -33,6 +33,9 @@ with args.output.open("x") as out:
             pairings = [("AA", "shipped", "shipped"), ("AB", "shipped", "8")]
         if args.regime == "distance-cache":
             pairings = [("AA", "shipped", "shipped"), ("AB", "shipped", "cached")]
+        if args.regime == "final":
+            pairings = [("AA", "final", "final"), ("AB", "shipped", "final"),
+                        ("v4AA", "v4", "v4"), ("upgrade", "v4", "final")]
         if args.regime == "landed":
             pairings = [("AA", "1", "1"), ("AB", "1", "shipped"),
                         ("v4AA", "v4", "v4"), ("upgrade", "v4", "shipped")]

@@ -17,13 +17,16 @@ class EvidenceTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.folder = Path(self.temp.name)
-        for regime in ("warm", "device", "singleton", "secondary", "device-width8", "landed", "distance-cache", "width8-repeat"):
+        for regime in ("warm", "device", "singleton", "secondary", "device-width8", "landed", "distance-cache", "width8-repeat", "final"):
             if regime == "secondary":
                 pairs = [("v4", ("v4", "1")), ("width8", ("1", "8"))]
             elif regime == "width8-repeat":
                 pairs = [("AA", ("shipped","shipped")), ("AB", ("shipped","8"))]
             elif regime == "distance-cache":
                 pairs = [("AA", ("shipped","shipped")), ("AB", ("shipped","cached"))]
+            elif regime == "final":
+                pairs = [("AA", ("final","final")), ("AB", ("shipped","final")),
+                         ("v4AA", ("v4","v4")), ("upgrade", ("v4","final"))]
             elif regime == "landed":
                 pairs = [("AA", ("1","1")), ("AB", ("1","shipped")),
                          ("v4AA", ("v4","v4")), ("upgrade", ("v4","shipped"))]
@@ -39,7 +42,7 @@ class EvidenceTests(unittest.TestCase):
                         samples = 100_000 if regime == "singleton" else 10_000
                         if regime=="width8-repeat":
                             samples = 30_000
-                        seed = 261126 + round_no + (100_000 if regime=="width8-repeat" else 0)
+                        seed = 261126 + round_no + {"width8-repeat":100_000, "final":200_000}.get(regime,0)
                         disk_hits = 9_500 if regime.startswith("device") else 0
                         rows.append(dict(round=round_no, pair=pair, arm=role, order=order,
                                          seed=seed, binary=binary, regime=regime,

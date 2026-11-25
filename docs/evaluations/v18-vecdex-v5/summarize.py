@@ -10,7 +10,7 @@ p.add_argument("folder", type=Path)
 p.add_argument("--seed", type=int, default=261126)
 args = p.parse_args()
 all_trace = {}
-for regime in ("warm", "device", "singleton", "secondary", "device-width8", "landed", "distance-cache", "width8-repeat"):
+for regime in ("warm", "device", "singleton", "secondary", "device-width8", "landed", "distance-cache", "width8-repeat", "final"):
     path = args.folder/(regime+".csv")
     rows = list(csv.DictReader(path.open()))
     pairs = ({"diagnostic-width8": ("8",)} if regime=="device-width8"
@@ -20,6 +20,9 @@ for regime in ("warm", "device", "singleton", "secondary", "device-width8", "lan
         pairs = {"AA": ("shipped","shipped"), "AB": ("shipped","8")}
     if regime == "distance-cache":
         pairs = {"AA": ("shipped","shipped"), "AB": ("shipped","cached")}
+    if regime == "final":
+        pairs = {"AA": ("final","final"), "AB": ("shipped","final"),
+                 "v4AA": ("v4","v4"), "upgrade": ("v4","final")}
     if regime == "landed":
         pairs = {"AA": ("1","1"), "AB": ("1","shipped"),
                  "v4AA": ("v4","v4"), "upgrade": ("v4","shipped")}
@@ -29,7 +32,7 @@ for regime in ("warm", "device", "singleton", "secondary", "device-width8", "lan
         n = int(row["round"])
         seed = int(row["seed"])
         samples = int(row["samples"])
-        expected_seed = args.seed + n + (100_000 if regime == "width8-repeat" else 0)
+        expected_seed = args.seed + n + {"width8-repeat":100_000, "final":200_000}.get(regime,0)
         if row["regime"] != regime or not 1<=n<=5 or seed!=expected_seed or samples<10_000:
             raise ValueError(f"unexpected classification or trace in {path}: {row}")
         if (not 0 < int(row["p50_ns"]) <= int(row["p99_ns"])
