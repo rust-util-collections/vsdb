@@ -178,6 +178,10 @@ fn saved_tag<T>(ns: &Namespace, parts: [InstanceId; 3]) -> Result<u64> {
         let tag = u64::from_le_bytes(frame[8..16].try_into().unwrap());
         let tag = if tag == crate::legacy_tag_for::<T>(vstype02) {
             default
+        } else if !vstype02 && tag == crate::legacy_tag_for::<DagMapRawKey<vsdb::BranchId>>(false) {
+            crate::tag(std::any::type_name::<DagMapRawKey<vsdb::BranchId>>())
+        } else if !vstype02 && tag == crate::legacy_tag_for::<DagMapRawKey<vsdb::CommitId>>(false) {
+            crate::tag(std::any::type_name::<DagMapRawKey<vsdb::CommitId>>())
         } else {
             tag
         };
@@ -470,6 +474,47 @@ pub fn migrate_rawkey_v17<V: ValueEnDe>(
         },
         DagMapRawKey::from_meta,
     )
+}
+
+/// Re-tags a migrated `DagMapRawKey<V>` descendant whose saved metadata had a
+/// different value type `V` from the DAG root and contained a renamed library
+/// type (`BranchId`, `CommitId`, or `VecDexDyn`). Pass the relocated child ID
+/// from `Remap` (or the original child ID if absent from `Remap`).
+pub fn migrate_child_v17<V: ValueEnDe>(id: impl Into<InstanceId>) -> Result<DagMapRawKey<V>> {
+    let id = id.into();
+    let id = InstanceId::new(id.map_id, id.ns.unwrap_or_default());
+    let ns = Namespace::open(id.ns.unwrap_or_default())?;
+    if ns.is_read_only() {
+        return Err(VsdbError::ReadOnly {
+            operation: "DAG child metadata migration",
+        });
+    }
+    let path = ns.meta_path(id.map_id);
+    let bytes = fs::read(&path)?;
+    let frame: &[u8] = decode(&bytes)?;
+    if frame.len() != 45
+        || &frame[..8] != b"VSTYPE04"
+        || u64::from_le_bytes(frame[16..24].try_into().unwrap()) != id.map_id
+        || u64::from_le_bytes(frame[24..32].try_into().unwrap()) != ns.id()
+        || u32::from_le_bytes(frame[32..36].try_into().unwrap()) != 9
+        || frame[36] != 1
+    {
+        return Err(corrupt("invalid migrated DAG child handle"));
+    }
+    let found = u64::from_le_bytes(frame[8..16].try_into().unwrap());
+    let expected = crate::tag(std::any::type_name::<DagMapRawKey<V>>());
+    if found == expected {
+        return DagMapRawKey::<V>::from_meta(id);
+    }
+    if found != crate::legacy_tag_for::<DagMapRawKey<V>>(false)
+        && found != crate::legacy_tag_for::<DagMapRawKey<V>>(true)
+    {
+        return Err(corrupt("saved DAG child type mismatch"));
+    }
+    let target = typed_handle::<DagMapRawKey<V>>(id, &frame[36..45])?;
+    let node: DagMapRawKey<V> = decode(&target)?;
+    atomic_write_file(&path, &target)?;
+    Ok(node)
 }
 fn migrate_with<T: DeserializeOwned>(
     root: InstanceId,

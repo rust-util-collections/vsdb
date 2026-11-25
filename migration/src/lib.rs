@@ -24,44 +24,136 @@ fn tag(name: &str) -> u64 {
     })
 }
 
-pub(crate) fn legacy_tag_for<T>(vstype02: bool) -> u64 {
-    // Renamed library-owned types retain their v16/v17 spellings in legacy tags.
-    let mut name = String::new();
-    let full = type_name::<T>();
-    let mut start = 0;
-    let convert = |path: &str| match path {
-        p if p == type_name::<vsdb::BranchId>() => {
-            if vstype02 {
-                "u64"
-            } else {
-                "vsdb::versioned::BranchId"
-            }
-        }
-        p if p == type_name::<vsdb::CommitId>() => {
-            if vstype02 {
-                "u64"
-            } else {
-                "vsdb::versioned::CommitId"
-            }
-        }
-        _ => "",
-    };
-    for (i, c) in full
-        .char_indices()
-        .chain(std::iter::once((full.len(), '\0')))
-    {
-        if c.is_alphanumeric() || matches!(c, '_' | ':') {
+fn split_generic_args(body: &str) -> Vec<&str> {
+    let mut args = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    let bytes = body.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"->") {
+            i += 2;
             continue;
         }
-        let path = &full[start..i];
-        let mapped = convert(path);
-        name.push_str(if mapped.is_empty() { path } else { mapped });
-        if i != full.len() {
-            name.push(c);
+        match bytes[i] {
+            b'<' | b'(' | b'[' => depth += 1,
+            b'>' | b')' | b']' => depth = depth.saturating_sub(1),
+            b',' if depth == 0 => {
+                args.push(body[start..i].trim());
+                i += 1;
+                while i < bytes.len() && bytes[i] == b' ' {
+                    i += 1;
+                }
+                start = i;
+                continue;
+            }
+            _ => {}
         }
-        start = i + c.len_utf8();
+        i += 1;
     }
-    tag(&name)
+    if start <= body.len() {
+        args.push(body[start..].trim());
+    }
+    args
+}
+
+fn find_matching_angle(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    if bytes.first() != Some(&b'<') {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"->") {
+            i += 2;
+            continue;
+        }
+        match bytes[i] {
+            b'<' => depth += 1,
+            b'>' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+fn legacy_type_name(full: &str, vstype02: bool) -> String {
+    // Renamed library-owned types retain their v16/v17 spellings in legacy tags.
+    let mut out = String::new();
+    let bytes = full.as_bytes();
+    let mut i = 0usize;
+    while i < full.len() {
+        let ch = full[i..].chars().next().unwrap();
+        if ch.is_alphanumeric() || matches!(ch, '_' | ':') {
+            let start = i;
+            i += ch.len_utf8();
+            while i < full.len() {
+                let c = full[i..].chars().next().unwrap();
+                if c.is_alphanumeric() || matches!(c, '_' | ':') {
+                    i += c.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            let path = &full[start..i];
+            if path == type_name::<vsdb::BranchId>() {
+                out.push_str(if vstype02 {
+                    "u64"
+                } else {
+                    "vsdb::versioned::BranchId"
+                });
+            } else if path == type_name::<vsdb::CommitId>() {
+                out.push_str(if vstype02 {
+                    "u64"
+                } else {
+                    "vsdb::versioned::CommitId"
+                });
+            } else if path == "vsdb::vecdex::VecDex"
+                && i < bytes.len()
+                && bytes[i] == b'<'
+                && let Some(close) = find_matching_angle(&full[i..])
+            {
+                let inner = &full[i + 1..i + close];
+                let raw_args = split_generic_args(inner);
+                let mapped: Vec<String> = raw_args
+                    .iter()
+                    .map(|a| legacy_type_name(a, vstype02))
+                    .collect();
+                if matches!(raw_args.len(), 2 | 3) && raw_args[1] == type_name::<vsdb::MetricKind>()
+                {
+                    out.push_str("vsdb::vecdex::dynamic::VecDexDyn<");
+                    out.push_str(&mapped[0]);
+                    if let Some(scalar) = mapped.get(2) {
+                        out.push_str(", ");
+                        out.push_str(scalar);
+                    }
+                    out.push('>');
+                } else {
+                    out.push_str("vsdb::vecdex::VecDex<");
+                    out.push_str(&mapped.join(", "));
+                    out.push('>');
+                }
+                i += close + 1;
+            } else {
+                out.push_str(path);
+            }
+        } else {
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    out
+}
+
+pub(crate) fn legacy_tag_for<T>(vstype02: bool) -> u64 {
+    tag(&legacy_type_name(type_name::<T>(), vstype02))
 }
 
 /// Payload in a v16/v17 typed envelope after checking its nominal tag.

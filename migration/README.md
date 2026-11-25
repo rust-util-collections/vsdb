@@ -14,7 +14,7 @@
 | VecDex, including runtime metrics | `vecdex::migrate_v17::<K, M, S>(id)` |
 | VerMap | `versioned::migrate_v17::<K, V>(id)` |
 | Standalone PersistentBTree | `versioned::migrate_tree_v17(id, &live_roots)` returns the tree and corresponding new root IDs; include every application-owned root |
-| DagMapRaw, DagMapRawKey | `dagmap::migrate_v17(id)`, `dagmap::migrate_rawkey_v17::<V>(id)` |
+| DagMapRaw, DagMapRawKey | `dagmap::migrate_v17(id)`, `dagmap::migrate_rawkey_v17::<V>(id)`, `dagmap::migrate_child_v17::<V>(child_id)` |
 | Trie checkpoints | Rebuild from the converted version store. |
 
 ```rust,no_run

@@ -11,14 +11,6 @@
 
 ## Open
 
-### [HIGH] migration: renamed library types fail legacy_tag and write unopenable VSTYPE04 tags on saved DagMap children
-- **Where**: `migration/src/lib.rs` (`legacy_tag`), `migration/src/dagmap.rs` (`saved_tag`, `migrate_with`)
-- **What**: (1) `VecDexDyn<K, S>` moved from `vsdb::vecdex::dynamic::VecDexDyn<K, S>` (v17 enum) to a type alias for `vsdb::vecdex::VecDex<K, vsdb::vecdex::distance::MetricKind, S>` (v18), which `legacy_tag` does not map. (2) In `dagmap::saved_tag::<T>`, when a saved descendant's type differs from root `T` and uses `BranchId`, `CommitId`, or `VecDexDyn` (e.g. a saved `DagMapRawKey<CommitId>` child under a `DagMapRaw` root), `tag == legacy_tag::<T>()` is false, so `saved_tag` copies the stale v17 `VSTYPE03` hash verbatim into the child's v18 `VSTYPE04` metadata file before `Phase::Retire` wipes the v17 prefixes.
-- **Why**: `migrate_basic` / `basic_handle` rejects valid v17 collections mentioning `VecDexDyn`, and migrated `DagMap` children with renamed library value types fail `from_meta` with type mismatch after their v17 source data has been wiped (violates `compatibility-policy.md` §Typed-handle tags and V8).
-- **Suggested fix**: Map `VecDex<..., MetricKind, ...>` to `vsdb::vecdex::dynamic::VecDexDyn<..., ...>` in `legacy_tag`, translate direct `DagMapRawKey<BranchId>` / `DagMapRawKey<CommitId>` tags in `saved_tag`, and expose a child metadata re-tagging helper in `vsdb_migrate::dagmap` for composite value types `V != T`. Add regression tests in `migration/tests/dagmap_typed.rs` and `basic.rs`. No v18 runtime format change.
-
----
-
 ### [HIGH] migration/universe: migrate_universe rejects valid v17 engines interrupted after mmdb directory creation
 - **Where**: `migration/src/universe.rs` (`Engine::discover`, `Engine::validate`)
 - **What**: `v17.0.21` `MmDB::open_at` always created `{root}/mmdb` before creating `{root}/__SYSTEM__` and staging/renaming `__initializing__.tmp` → `__initializing__`. On a v17 crash in that window (for `ns == 0` or a `Pending` `ns != 0`), `Engine::discover` hits `engine.root.join("mmdb").try_exists()?` and returns `Err(VsdbError::Corrupt { detail: "missing engine initializer" })`.

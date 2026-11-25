@@ -124,6 +124,40 @@ fn migrate_existing_universe_and_nested_values() {
             .raw(),
         77
     );
+    // Verify VecDexDyn<K, S> (renamed from vsdb::vecdex::dynamic::VecDexDyn in
+    // v17 to type alias VecDex<K, MetricKind, S> in v18) translates in legacy_tag
+    // for both defaulted (f32) and explicit (f64) scalar parameters.
+    let check_dyn = |inner_ty: &str, outer_ty: &str| {
+        let dyn_holder_raw = vsdb::MapxRaw::new();
+        let dyn_holder_id = dyn_holder_raw.instance_id();
+        let mut raw_dyn = b"VSMAPX01".to_vec();
+        raw_dyn.extend_from_slice(&dyn_holder_id.map_id.to_le_bytes());
+        let mut inner_dyn = b"VSTYPE03".to_vec();
+        inner_dyn.extend_from_slice(&fnv1a(inner_ty).to_le_bytes());
+        inner_dyn.extend_from_slice(&postcard::to_allocvec(&raw_dyn).unwrap());
+        let mut outer_dyn = b"VSTYPE03".to_vec();
+        outer_dyn.extend_from_slice(&fnv1a(outer_ty).to_le_bytes());
+        outer_dyn.extend_from_slice(&postcard::to_allocvec(&inner_dyn).unwrap());
+        (dyn_holder_id, postcard::to_allocvec(&outer_dyn).unwrap())
+    };
+    let (f32_id, f32_bytes) = check_dyn(
+        "vsdb::basic::mapx_ord_rawkey::MapxOrdRawKey<vsdb::vecdex::dynamic::VecDexDyn<vsdb::versioned::CommitId>>",
+        "vsdb::basic::mapx::Mapx<u64, vsdb::vecdex::dynamic::VecDexDyn<vsdb::versioned::CommitId>>",
+    );
+    let converted_f32 = basic_handle::<Mapx<u64, vsdb::VecDexDyn<CommitId>>>(&f32_bytes).unwrap();
+    let restored_f32: Mapx<u64, vsdb::VecDexDyn<CommitId>> =
+        postcard::from_bytes(&converted_f32).unwrap();
+    assert_eq!(restored_f32.instance_id(), f32_id);
+
+    let (f64_id, f64_bytes) = check_dyn(
+        "vsdb::basic::mapx_ord_rawkey::MapxOrdRawKey<vsdb::vecdex::dynamic::VecDexDyn<vsdb::versioned::CommitId, f64>>",
+        "vsdb::basic::mapx::Mapx<u64, vsdb::vecdex::dynamic::VecDexDyn<vsdb::versioned::CommitId, f64>>",
+    );
+    let converted_f64 =
+        basic_handle::<Mapx<u64, vsdb::VecDexDyn<CommitId, f64>>>(&f64_bytes).unwrap();
+    let restored_f64: Mapx<u64, vsdb::VecDexDyn<CommitId, f64>> =
+        postcard::from_bytes(&converted_f64).unwrap();
+    assert_eq!(restored_f64.instance_id(), f64_id);
     assert_eq!(migrate_basic::<Outer>(outer).unwrap().instance_id(), outer);
     assert!(
         vsdb::MapxRaw::new().instance_id().map_id
