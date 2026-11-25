@@ -166,3 +166,19 @@ reader, lease or restored alias shares the runtime, publication records retired
 roots at tag `05`. Runtime pins retain objects for existing snapshots. Unpinned
 dead objects are queued for a later publication or checkpoint. mmdb can
 reclaim physical disk space during compaction.
+
+### Dependent working edits
+
+Use `VerMap::edit_working(branch, max_bytes, |edit| ...)` when a later edit
+reads an earlier one in the same operation. The callback starts from a
+retained working root. Its `get`, `insert` and `remove` see the overlay in
+call order. Returning an error or unwinding discards the overlay. A successful
+callback publishes the resulting working root once if it changed. Call
+`commit` separately to create a durable history entry. Serialize writers to
+aliases as for other structural operations.
+
+The limit charges the encoded key and current value plus 64 bytes per
+distinct staged key, including a deleted key. Replacing an entry releases
+its old value's charge. Caller allocations, transient encoding and tree
+publication buffers lie outside this overlay budget. Use `write_batch` when
+all values are known before the operation.

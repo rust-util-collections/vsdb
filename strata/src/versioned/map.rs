@@ -151,6 +151,66 @@ pub struct VerMap<K, V> {
     _phantom: PhantomData<(K, V)>,
 }
 
+/// A bounded read-your-writes overlay supplied by [`VerMap::edit_working`].
+pub struct WorkingEdit<'a, K, V> {
+    base: &'a RootLease,
+    changes: BTreeMap<Vec<u8>, Option<Vec<u8>>>,
+    used: usize,
+    limit: usize,
+    types: PhantomData<fn() -> (K, V)>,
+}
+
+impl<K: KeyEnDeOrdered, V: ValueEnDe> WorkingEdit<'_, K, V> {
+    /// Reads the most recent staged change or the captured working root.
+    pub fn get(&self, key: &K) -> Result<Option<V>> {
+        key.with_ordered_bytes(|bytes| match self.changes.get(bytes) {
+            Some(value) => value.as_deref().map(V::decode_value).transpose(),
+            None => self
+                .base
+                .get(bytes)
+                .as_deref()
+                .map(V::decode_value)
+                .transpose(),
+        })
+    }
+
+    /// Stages an insertion or replacement. A rejected edit consumes no budget.
+    pub fn insert(&mut self, key: &K, value: &V) -> Result<()> {
+        self.stage(
+            key,
+            Some(encode_value(value)?.into_boxed_slice().into_vec()),
+        )
+    }
+
+    /// Stages a deletion of the key.
+    pub fn remove(&mut self, key: &K) -> Result<()> {
+        self.stage(key, None)
+    }
+
+    fn stage(&mut self, key: &K, value: Option<Vec<u8>>) -> Result<()> {
+        key.with_ordered_bytes(|bytes| {
+            let size = value.as_ref().map_or(0, Vec::len);
+            let charge = match self.changes.get(bytes) {
+                Some(old) => {
+                    (self.used - old.as_ref().map_or(0, Vec::len)).checked_add(size)
+                }
+                None => self
+                    .used
+                    .checked_add(64)
+                    .and_then(|total| total.checked_add(bytes.len()))
+                    .and_then(|total| total.checked_add(size)),
+            };
+            self.used = charge.filter(|&n| n <= self.limit).ok_or_else(|| {
+                VsdbError::InvalidConfig {
+                    detail: "working edit exceeds its encoded byte budget".into(),
+                }
+            })?;
+            self.changes.insert(bytes.to_vec(), value);
+            Ok(())
+        })
+    }
+}
+
 impl<K, V> Clone for VerMap<K, V> {
     /// Deep-copies all branches, working trees, and retained commits into a
     /// fresh single-prefix store in the same namespace.
@@ -696,9 +756,59 @@ where
                 ))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
+        self.apply_working_changes(branch, state, changes)
+    }
+
+    fn apply_working_changes(
+        &mut self,
+        branch: BranchId,
+        state: BranchHead,
+        changes: BTreeMap<Vec<u8>, Option<Vec<u8>>>,
+    ) -> Result<()> {
         let root = self
             .build_root(|tree| tree.apply_changes(state.dirty_root, changes, false))?;
         self.publish_working(branch, state, root)
+    }
+
+    /// Reads and stages dependent edits on one working branch. A successful
+    /// callback publishes all edits together. Returning an error or unwinding
+    /// discards the overlay. A subsequent history commit retains its ordinary
+    /// durability. Writers to aliases of the branch still require exclusion.
+    ///
+    /// The budget charges the encoded key and value plus 64 bytes per distinct
+    /// edited key, including deletions. Replacements release their previous
+    /// value's charge. Temporary encoding and the tree's publication buffers
+    /// have independent lifetimes.
+    pub fn edit_working<R>(
+        &mut self,
+        branch: BranchId,
+        max_bytes: usize,
+        edit: impl FnOnce(&mut WorkingEdit<'_, K, V>) -> Result<R>,
+    ) -> Result<R> {
+        self.ensure_writable("versioned working edit")?;
+        let lease = self.tree.lease_root(|refs| {
+            Ok(refs
+                .resolve_branch_raw(&self.tree.nodes, branch)?
+                .dirty_root)
+        })?;
+        let mut session = WorkingEdit {
+            base: &lease,
+            changes: BTreeMap::new(),
+            used: 0,
+            limit: max_bytes,
+            types: PhantomData,
+        };
+        let result = edit(&mut session)?;
+        if !session.changes.is_empty() {
+            let state = self.get_branch(branch)?;
+            if state.dirty_root != lease.root {
+                return Err(VsdbError::InvalidConfig {
+                    detail: "branch working root changed during edit".into(),
+                });
+            }
+            self.apply_working_changes(branch, state, session.changes)?;
+        }
+        Ok(result)
     }
 
     /// Removes a key from the working state of `branch`.

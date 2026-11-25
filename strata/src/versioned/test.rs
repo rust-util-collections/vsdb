@@ -5319,3 +5319,93 @@ fn read_only_restore_rejects_inconsistent_name_rows() {
     }
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn dependent_working_edits_publish_once_and_abort_cleanly() {
+    let mut map = VerMap::<u64, u64>::new();
+    let branch = map.main_branch();
+    map.insert(branch, &1, &10).unwrap();
+    let committed = map.commit(branch).unwrap();
+    let old = map.snapshot(branch).unwrap();
+    let generation = || {
+        super::store::Header::get(&map.tree.nodes)
+            .unwrap()
+            .generation
+    };
+    let before = generation();
+    map.edit_working(branch, 512, |edit| {
+        let current = edit.get(&1)?.unwrap();
+        edit.insert(&1, &(current + 3))?;
+        edit.insert(&2, &(edit.get(&1)?.unwrap() * 2))?;
+        edit.remove(&1)?;
+        assert_eq!(edit.get(&1)?, None);
+        edit.insert(&1, &7)
+    })
+    .unwrap();
+    assert_eq!(
+        super::store::Header::get(&map.tree.nodes)
+            .unwrap()
+            .generation,
+        before + 1
+    );
+    assert_eq!(old.get(&1), Some(10));
+    assert_eq!(map.get(branch, &1).unwrap(), Some(7));
+    assert_eq!(map.get(branch, &2).unwrap(), Some(26));
+    assert_eq!(map.head_commit(branch).unwrap().unwrap().id(), committed);
+    let original = super::store::Header::get(&map.tree.nodes)
+        .unwrap()
+        .generation;
+    map.edit_working(branch, 0, |edit| {
+        assert_eq!(edit.get(&1)?, Some(7));
+        Ok(())
+    })
+    .unwrap();
+    let abort = |edit: &mut super::map::WorkingEdit<'_, u64, u64>| {
+        edit.insert(&1, &50)?;
+        Err::<(), _>(std::io::Error::other("abort test edit").into())
+    };
+    assert!(map.edit_working(branch, 512, abort).is_err());
+    assert!(
+        map.edit_working(branch, 80, |edit| {
+            edit.insert(&1, &42)?;
+            edit.remove(&2)
+        })
+        .is_err()
+    );
+    assert_eq!(map.get(branch, &1).unwrap(), Some(7));
+    assert_eq!(
+        super::store::Header::get(&map.tree.nodes)
+            .unwrap()
+            .generation,
+        original
+    );
+    let id = map.save_meta().unwrap();
+    let restored = VerMap::<u64, u64>::from_meta(id).unwrap();
+    assert_eq!(restored.get(branch, &2).unwrap(), Some(26));
+}
+
+#[test]
+fn working_overlay_reuses_its_charge_and_rejects_a_changed_root() {
+    let mut map = VerMap::<u64, u64>::new();
+    let branch = map.main_branch();
+    // Eight encoded key bytes, one postcard value byte, and one entry.
+    map.edit_working(branch, 73, |edit| {
+        edit.insert(&1, &3)?;
+        edit.insert(&1, &4)?;
+        edit.remove(&1)?;
+        edit.insert(&1, &5)
+    })
+    .unwrap();
+    let saved = map.save_meta().unwrap();
+    let mut alias = VerMap::<u64, u64>::from_meta(saved).unwrap();
+    let error = map
+        .edit_working(branch, 512, |edit| {
+            edit.insert(&1, &100)?;
+            alias.insert(branch, &1, &11)?;
+            assert_eq!(edit.get(&1)?, Some(100));
+            Ok(())
+        })
+        .unwrap_err();
+    assert!(matches!(error, crate::VsdbError::InvalidConfig { .. }));
+    assert_eq!(map.get(branch, &1).unwrap(), Some(11));
+}
