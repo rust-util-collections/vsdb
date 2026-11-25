@@ -724,21 +724,38 @@ mod tests {
         let input = tmp.path().join("backup");
         let target = tmp.path().join("generation");
         old_tree(&input);
-        let locks = [
-            input.join("__SYSTEM__/LOCK"),
-            input.join("mmdb/shard_00/LOCK"),
-        ];
-        for path in &locks {
-            fs::write(path, []).unwrap();
-            fs::set_permissions(path, fs::Permissions::from_mode(0o400)).unwrap();
+        for relative in ["__SYSTEM__/LOCK", "mmdb/shard_00/LOCK"] {
+            fs::write(input.join(relative), []).unwrap();
         }
-        stage_universe(&input, &target).unwrap();
-        for path in &locks {
+        let inventory = SourceTree::read(
+            &input,
+            &directory_id(tmp.path()).unwrap(),
+            &mut HashSet::new(),
+        )
+        .unwrap();
+        for file in &inventory.files {
+            fs::set_permissions(input.join(file), fs::Permissions::from_mode(0o444)).unwrap();
+        }
+        for dir in inventory.directories.iter().rev() {
+            fs::set_permissions(input.join(dir), fs::Permissions::from_mode(0o555)).unwrap();
+        }
+        let staged = stage_universe(&input, &target);
+        for dir in &inventory.directories {
+            let dir = input.join(dir);
             assert_eq!(
-                fs::metadata(path).unwrap().permissions().mode() & 0o777,
-                0o400
+                fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+                0o555
+            );
+            // Restore the fixture directories for TempDir's cleanup.
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        for file in &inventory.files {
+            assert_eq!(
+                fs::metadata(input.join(file)).unwrap().permissions().mode() & 0o777,
+                0o444
             );
         }
+        staged.unwrap();
         assert!(
             File::options()
                 .read(true)
@@ -746,6 +763,13 @@ mod tests {
                 .open(target.join("base/__SYSTEM__/LOCK"))
                 .is_ok()
         );
+        let db = mmdb::DB::open(
+            mmdb_shard_format_options().with_create_if_missing(false),
+            target.join("base/mmdb/shard_00"),
+        )
+        .unwrap();
+        db.put(b"after-locked-backup", b"writable").unwrap();
+        db.close().unwrap();
         assert!(target.join("base").join(HEADER).is_file());
     }
 
