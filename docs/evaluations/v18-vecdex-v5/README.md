@@ -66,8 +66,19 @@ SST pin capacity and OS process RSS have separate owners and timing.
 
 ## Warm upgrade comparison
 
-Using the same logical graph and query traces, the actual public release
-build at `1300ad2` took 254.77 µs in median query p99, compared with
+**The final v5-backed code at `3b220e7` had 42.77% higher warm
+end-to-end p99 than v4-backed `6ddaed9` on this graph.** The two arms
+measured 256.62 µs and 180.43 µs respectively. Every paired v5 run was
+slower (39.43–43.72%). Five independent old/old pairs differed by up to
+9.87%, and five new/new pairs by up to 1.99%. This confirmation used
+five new query seeds, 10,000 complete public searches per process, the
+same logical graph and equivalent warm ownership, with identical ordered
+keys, distance bits and zero timed storage reads. In another matched
+pairing on these seeds, `3b220e7` took a median 3.77% longer than the
+previous scalar build at `1300ad2` (3.41–6.71%). [Final stock builds and all paired results](results/final.csv) · [Release build and fixture digests](results/metadata.json)
+
+The earlier, independent public release-build comparison
+at `1300ad2` took 254.77 µs in median query p99, compared with
 187.24 µs for the v18 collections on MMDB 4.3.15 at `6ddaed9`. The
 within-pair median regression was **37.28%** (34.44–42.21%, all five
 pairs). The v4/v4 paired noise was at most 22.75%. Both physical fixtures
