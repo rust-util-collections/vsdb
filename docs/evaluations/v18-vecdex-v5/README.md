@@ -21,7 +21,10 @@ five independent A/A and five A/B pairs. Each process issues 10,000 queries.
 Summarize the median of within-pair p99 gains. Promote the default strategy
 when the primary gain reaches 10%, exceeds the largest absolute A/A difference,
 and at least four of five pairs favor it. Protect ordinary reads and singleton
-lists against a 5% median regression. Record the eight-key-width intermediate
+lists against a 5% median regression. If the first primary comparison has
+a gain of at least 10% but cannot clear control variation, run one longer
+warm comparison with 30,000 queries per process and independent seeds. An
+ambiguous single-key guard can be repeated at 300,000 queries per process. Record the eight-key-width intermediate
 and MMDB v4 adapter as separate comparisons. The application graph and its
 vectors stay identical across preparations; an engine-format conversion is
 unnecessary for this isolated workload. All versioned data migration tests

@@ -7,6 +7,7 @@ from statistics import median
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument("folder", type=Path)
+p.add_argument("--seed", type=int, default=261126)
 args = p.parse_args()
 all_trace = {}
 for regime in ("warm", "device", "singleton", "secondary", "device-width8"):
@@ -21,8 +22,12 @@ for regime in ("warm", "device", "singleton", "secondary", "device-width8"):
         n = int(row["round"])
         seed = int(row["seed"])
         samples = int(row["samples"])
-        if row["regime"] != regime or not 1<=n<=5 or seed!=261126+n or samples<10_000:
+        if row["regime"] != regime or not 1<=n<=5 or seed!=args.seed+n or samples<10_000:
             raise ValueError(f"unexpected classification or trace in {path}: {row}")
+        if (not 0 < int(row["p50_ns"]) <= int(row["p99_ns"])
+                or not 0 <= int(row["nearest"]) <= samples
+                or int(row["logical_bytes"]) <= 0 or int(row["blocks"]) <= 0):
+            raise ValueError(f"unusable query observations: {row}")
         if regime=="singleton" and samples!=100_000:
             raise ValueError("the singleton control requires 100,000 timed queries")
         if regime.startswith("device"):
@@ -41,7 +46,7 @@ for regime in ("warm", "device", "singleton", "secondary", "device-width8"):
     for key,binaries in wanted.items():
         arms=sorted(groups[key],key=lambda row: row["arm"], reverse=True)
         roles=["observation"] if len(binaries)==1 else ["reference","comparison"]
-        if [r["binary"] for r in arms]!=binaries or [r["arm"] for r in arms]!=roles or sorted(int(r["order"]) for r in arms)!=list(range(1,len(binaries)+1)):
+        if len({r["samples"] for r in arms})!=1 or [r["binary"] for r in arms]!=binaries or [r["arm"] for r in arms]!=roles or sorted(int(r["order"]) for r in arms)!=list(range(1,len(binaries)+1)):
             raise ValueError(f"wrong pairing {regime} {key}")
     for pair in pairs:
         matches = [sorted(groups[n,pair],key=lambda r:r["arm"],reverse=True) for n in range(1,6)]
