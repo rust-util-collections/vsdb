@@ -10,8 +10,8 @@ formats. Engine comparisons below apply to the indicated storage workload.
 
 | Unit | Change | Observable outcome and acceptance |
 |---|---|---|
-| 1. Engine adapter | Select the verified v5 git revision and a compatible version in the workspace. Keep a separate exact v4 reader for offline conversion. Use native WAL durability and fences, existence probes, prefixed writes and DB-bound snapshots. Expose retryable admission and typed storage failures. | Ordinary and sync batch commits each append once. An empty fence changes neither sequence nor visible rows. A successful fence covers preceding writes on the same shard, including rotations. Namespace fences retain their existing scoped and read-only behavior. Rejected no-slowdown writes preserve rows and remain distinguishable from malformed requests. |
-| 2. Reads and resources | Decode against a borrowed pin where the value is consumed immediately. Preserve owned reads, detached scans, prefix bounds, typed iterator termination, and public panic/fallible contracts. Expose pool-wide capacities/charges once and member-local pins and memtables by shard. Size with an immutable limit of four and explicit memory reservations. | Compare empty/hit/miss/deleted results and scan bounds at identical snapshots. Hold an iterator through writes, flush and view drop. Under a 2 GiB/16-shard example, evaluate a 30 MiB nominal per-shard buffer allowance (4 immutables × 6 MiB plus active) and 256 MiB per evictable pool store. Account for real RSS, per-tree caches and end-of-run L0 debt separately. Check small budgets, other shard counts and reopen. |
+| 1. Engine adapter | Select the verified v5 git revision and a compatible version in the workspace. Keep a separate exact v4 reader for offline conversion. Use native WAL durability and fences, existence probes, prefixed writes and DB-bound snapshots. Expose retryable admission and typed storage failures. | Each nonempty ordinary or sync batch adds one logical WAL record. Empty ordinary and sync batches make no WAL change. An empty fence changes neither sequence nor visible rows. A successful fence covers preceding writes on the same shard, including rotations. Namespace fences retain their existing scoped and read-only behavior. Rejected no-slowdown writes preserve rows and remain distinguishable from malformed requests. |
+| 2. Reads and resources | Decode against a borrowed pin where the value is consumed immediately. Preserve owned reads, detached scans, prefix bounds, typed iterator termination, and public panic/fallible contracts. Expose pool-wide capacities/charges once and member-local pins and memtables by shard. Size with an immutable limit of four and explicit nominal buffer and pool sizing. | Compare empty/hit/miss/deleted results and scan bounds at identical snapshots. Hold an iterator through writes, flush and view drop. Under a 2 GiB/16-shard example, evaluate a 30 MiB nominal per-shard buffer allowance (4 immutables × 6 MiB plus active) and 256 MiB per evictable pool store. Account for real RSS, per-tree caches and end-of-run L0 debt separately. Check small budgets, other shard counts and reopen. |
 | 3. Offline cutover | Provide an executable or library path to a complete new generation from v18/v4 or v17/v4. Inventory the default and named namespaces, remap absolute placements and protect source/backup paths. Stream visible v4 key/value rows into fresh v5 shards with seven levels and eight-byte prefixes. Retain allocator floor, registry lifecycle, handles and application sidecars. | Compare row counts and a digest of ordered, length-framed keys and values on both sides; check final iterator status and writable v5 reopen with adapter geometry. Exercise real v4 SSTs, residual WAL, deletions, external namespaces, frozen v17 handles and typed readers. Missing established shards, mixed input, corrupt records, overlapping placements or an occupied destination fail before exposing a new generation. Incomplete staging cannot become active. Verify restart, protected source and fresh prefix allocation. |
 | 4. Atomic DagMap child creation | Use one checked, shard-local, two-prefix batch for the child's metadata and the parent's edge plus allocator metadata. Preserve the existing crash-safe prefix allocator and prune recovery. | Snapshot and reopen see the old graph or a complete child with the next edge ID advanced. Reject different namespace or shard before append. Prove one batch per child versus the previous two and compare child throughput/latency. Unused reserved prefixes can remain unused. |
 | 5. Dependent VerMap edits | Offer a bounded working-edit session on one branch and its captured working root under the existing writer-exclusion contract. Reads see earlier edits. On success reuse the existing single working-root publication. The history commit retains its own durability. | Test overwrites, delete/reinsert, an empty edit, user error, size limit, abort and reopen with old snapshots held. Compare repeated dependent edits to individual operations and compare precomputed edits with existing write_batch. Count publications and measure batch latency. |
@@ -40,6 +40,23 @@ source/destination aliasing, an interruption between shards, an interrupted
 or competing publication and failure while verifying the last shard. A
 source snapshot of filenames and contents is the oracle for preservation.
 [Existing logical fixtures and operator responsibilities](../../migration/README.md)
+
+## Clarifications from the independent plan reviews
+
+The two opt-in raw commit operations consume the batch. A caller that
+receives `Busy` reconstructs its logical edits for a later attempt. A failed
+I/O acknowledgement requires outcome reconciliation. Count storage requests
+and working-root publications separately, including the empty case.
+Keep the latest read view's lifetime identical when comparing query
+implementations. Record the maximum pin backing, process RSS and selected
+cache regime separately. The sizing example covers one engine in a
+16-shard process. A legal record may exceed a memtable threshold.
+
+The offline CLI publishes all placements beneath a single new generation.
+The application selector switches only after the command has acknowledged
+durability. A parent-sync error after exclusive rename can leave an entire
+visible generation. Keep the original selector and retry into a fresh
+absent path without replacing the visible generation.
 
 ## Measurement and promotion
 
