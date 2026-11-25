@@ -340,6 +340,10 @@ impl DagMapRaw {
     }
     /// Edits a local value; parent rows and tombstones are excluded.
     pub fn get_mut(&mut self, key: impl AsRef<[u8]>) -> Option<ValueMut<'_>> {
+        assert!(
+            self.meta().expect("DAG metadata").state.live(),
+            "DAG node has been consumed"
+        );
         let key = data_key(key.as_ref());
         let mut val = self.store.get(&key)?;
         value(&val)?;

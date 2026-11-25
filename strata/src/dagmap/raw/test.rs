@@ -844,3 +844,35 @@ fn intermediate_marker_reclaims_marked_descendants_and_preserves_retry_target() 
     mid.destroy();
     assert_eq!(head.prune().unwrap().id(), root.id());
 }
+
+#[test]
+fn get_mut_and_update_reject_consumed_clearing_nodes() {
+    let (_root, _mid, mut head) = build_prune_fixture();
+    prepare_marked_clear(&mut head);
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = head.get_mut("head_only");
+    }));
+    assert!(res.is_err());
+
+    let mut typed_root = crate::DagMap::<String, u64>::new(None);
+    let mut typed_head = crate::DagMap::new(Some(&mut typed_root));
+    let key = "k".to_string();
+    typed_head.insert(&key, &1);
+    let frame: Vec<u8> =
+        crate::common::load_instance_meta(typed_head.save_meta().unwrap()).unwrap();
+    let mut raw_head = DagMapRaw::from_frame(
+        crate::common::parse_prefix_handle::<crate::DagMap<String, u64>>(&frame)
+            .unwrap(),
+    )
+    .unwrap();
+    let mut meta = raw_head.meta().unwrap();
+    meta.state = State::Clearing {
+        owner: meta.state.owner(),
+        genesis: typed_root.instance_id().map_id,
+    };
+    raw_head.set_meta(meta);
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = typed_head.update(&key, |v| *v = 2);
+    }));
+    assert!(res.is_err());
+}

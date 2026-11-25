@@ -51,14 +51,6 @@
 
 ---
 
-### [MEDIUM] dagmap: get_mut and update allow mutating consumed Clearing nodes
-- **Where**: `strata/src/dagmap/raw/mod.rs` (`DagMapRaw::get_mut`), `strata/src/dagmap/rawkey/mod.rs` (`DagMapRawKey::{get_mut, update}`), `strata/src/dagmap/typed.rs` (`DagMap::{get_mut, update}`)
-- **What**: Unlike `DagMapRaw::insert` and `DagMapRaw::remove` (which assert `self.meta().expect("DAG metadata").state.live()`), `DagMapRaw::get_mut` omits the liveness check. After an interrupted `prune()` leaves mainline nodes in `State::Clearing` with unwiped `[DATA..END)` rows, `get_mut` and `update` succeed on the consumed node.
-- **Why**: Edits committed through `get_mut` / `update` on a `State::Clearing` node occur after `fold` into `root` has already completed; retrying `prune()` skips `fold` and silently deletes the accepted write during `clear_line`.
-- **Suggested fix**: Assert `self.meta().expect("DAG metadata").state.live()` in `DagMapRaw::get_mut`. Add a regression test in `strata/src/dagmap/raw/test.rs`. No migration impact.
-
----
-
 ### [MEDIUM] ende: postcard_key panics on Serialize::collect_str keys exceeding 128 bytes
 - **Where**: `strata/src/common/ende.rs` (`postcard_key`)
 - **What**: `postcard_key` encodes into `[0u8; 128]` via `postcard::to_slice` and only falls back to `postcard::to_allocvec` on `Err(postcard::Error::SerializeBufferFull)`. In `postcard`, overflowing a slice inside `Serializer::collect_str` (used by `Display`-backed `Serialize` types) returns `Err(postcard::Error::CollectStrError)` via `core::fmt::Error`, hitting `panic!("vsdb: encode key: {e}")`.
