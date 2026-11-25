@@ -12,6 +12,7 @@ impl PersistentBTree {
         let runtime = tree_runtime(
             nodes.instance_id(),
             next_id,
+            nodes.namespace().mem_budget_bytes(),
             RefState {
                 counts: HashMap::new(),
                 edges: HashMap::new(),
@@ -172,16 +173,18 @@ impl PersistentBTree {
             .map(std::mem::take)
             .unwrap_or_default();
         let previously_dead = dead.len();
+        let mut dead_internal = Vec::new();
         // With a unique runtime, no reader can capture the prior head, so
         // compute its cascade before issuing the single publication batch.
         if !shared {
             let mut refs = self.runtime.refs.lock();
             for &id in retire {
-                dead.extend(
-                    refs.release(id)
-                        .into_iter()
-                        .map(|id| object_key(id).to_vec()),
-                );
+                for dead_id in refs.release(id) {
+                    if dead_id & CLASS_MASK == 0 {
+                        dead_internal.push(dead_id);
+                    }
+                    dead.push(object_key(dead_id).to_vec());
+                }
             }
         }
         let mut batch = self.nodes.batch();
@@ -236,9 +239,14 @@ impl PersistentBTree {
             }
             if shared {
                 for &id in retire.iter().filter(|&&id| id != EMPTY_ROOT) {
-                    let dead = refs.release(id);
+                    let released = refs.release(id);
                     let deferred = refs.deferred.get_or_insert_with(Vec::new);
-                    deferred.extend(dead.into_iter().map(|id| object_key(id).to_vec()));
+                    for dead_id in released {
+                        if dead_id & CLASS_MASK == 0 {
+                            dead_internal.push(dead_id);
+                        }
+                        deferred.push(object_key(dead_id).to_vec());
+                    }
                     if refs.pins.contains_key(&id) {
                         refs.zombies.insert(id);
                     } else {
@@ -248,6 +256,9 @@ impl PersistentBTree {
                     }
                 }
             }
+        }
+        for id in dead_internal {
+            self.runtime.page_cache.remove(id);
         }
         Ok(())
     }

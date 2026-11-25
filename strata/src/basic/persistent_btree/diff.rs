@@ -2,10 +2,10 @@
 //! subtrees they share.
 
 use super::{
-    EMPTY_ROOT, LeafVal, MapxRawReader, Node, NodeId, PersistentBTree, read_object,
+    CLASS_MASK, EMPTY_ROOT, LeafVal, MapxRawReader, NodeId, NodeView, PersistentBTree,
+    TreeRuntime, read_cached_reader_arc, read_object,
 };
-use std::cmp::Ordering;
-use std::marker::PhantomData;
+use std::{cmp::Ordering, marker::PhantomData, sync::Arc};
 
 /// A single difference between two tree versions, as stored bytes
 /// (see [`PersistentBTree::diff`]).
@@ -50,6 +50,7 @@ impl PersistentBTree {
         };
         BTreeDiffIter {
             nodes: self.nodes.reader(),
+            runtime: Arc::clone(&self.runtime),
             borrow: PhantomData,
             old: Cursor::new(self, old),
             new: Cursor::new(self, new),
@@ -85,24 +86,28 @@ impl Cursor {
     }
 
     /// Replaces the front node with its children (or a leaf's entries).
-    fn expand(&mut self, nodes: &MapxRawReader) {
+    fn expand(&mut self, runtime: &TreeRuntime, nodes: &MapxRawReader) {
         let Some(Item::Node(id, h)) = self.0.pop() else {
             unreachable!("expand called on a non-node front");
         };
-        match Node::decode(&read_object(nodes, id)) {
-            Node::Leaf { keys, values } => {
-                self.0.extend(
-                    keys.into_iter()
-                        .zip(values)
-                        .rev()
-                        .map(|(k, v)| Item::Entry(k, v)),
-                );
-            }
-            Node::Internal { children, .. } => {
-                let ch = h.saturating_sub(1);
-                self.0
-                    .extend(children.into_iter().rev().map(|c| Item::Node(c, ch)));
-            }
+        if id & CLASS_MASK == 0 {
+            let raw = read_cached_reader_arc(runtime, nodes, id);
+            let page = NodeView::open(&raw).expect("invalid B+ tree page");
+            page.validate().expect("invalid B+ tree page");
+            debug_assert!(!page.leaf);
+            let ch = h.saturating_sub(1);
+            self.0
+                .extend((0..=page.len).rev().map(|i| Item::Node(page.child(i), ch)));
+        } else {
+            let raw = read_object(nodes, id);
+            let page = NodeView::open(&raw).expect("invalid B+ tree page");
+            page.validate().expect("invalid B+ tree page");
+            debug_assert!(page.leaf);
+            self.0.extend(
+                (0..page.len)
+                    .rev()
+                    .map(|i| Item::Entry(page.key(i).to_vec(), page.leaf_val(i))),
+            );
         }
     }
 
@@ -135,6 +140,7 @@ enum Step {
 /// Ordered streaming diff of two immutable B+ tree roots.
 pub struct BTreeDiffIter<'a> {
     nodes: MapxRawReader,
+    runtime: Arc<TreeRuntime>,
     borrow: PhantomData<&'a PersistentBTree>,
     old: Cursor,
     new: Cursor,
@@ -146,6 +152,7 @@ impl Iterator for BTreeDiffIter<'_> {
         let old = &mut self.old;
         let new = &mut self.new;
         let tree = &self.nodes;
+        let runtime = &self.runtime;
         loop {
             // Identical fronts cover identical key sets (every earlier key is
             // already consumed on both sides), so they are skipped whole.
@@ -175,11 +182,11 @@ impl Iterator for BTreeDiffIter<'_> {
                     old.0.pop();
                     new.0.pop();
                 }
-                Step::ExpandOld => old.expand(tree),
-                Step::ExpandNew => new.expand(tree),
+                Step::ExpandOld => old.expand(runtime, tree),
+                Step::ExpandNew => new.expand(runtime, tree),
                 Step::ExpandBoth => {
-                    old.expand(tree);
-                    new.expand(tree);
+                    old.expand(runtime, tree);
+                    new.expand(runtime, tree);
                 }
                 Step::Removed | Step::Compare(Ordering::Less) => {
                     let (key, val) = old.pop_entry();

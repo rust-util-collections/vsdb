@@ -667,6 +667,12 @@ impl Namespace {
         self.0.engine.is_read_only()
     }
 
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn mem_budget_bytes(&self) -> usize {
+        self.0.engine.mem_budget()
+    }
+
     /// Starts a NEW placement group: a fresh `NsId` on every call, root
     /// derived from the id — collision-free (ids are never reused).
     /// Zero parameters; tuning lives in [`Self::create_with`].

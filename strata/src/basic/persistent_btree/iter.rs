@@ -3,15 +3,19 @@
 use std::{marker::PhantomData, ops::Bound, sync::Arc};
 use vsdb_core::basic::mapx_raw::MapxRawReader;
 
-use super::{EMPTY_ROOT, NodeId, NodeView, PersistentBTree, RootLease, read_object};
+use super::{
+    CLASS_MASK, EMPTY_ROOT, NodeId, NodeView, PersistentBTree, RootLease, TreeRuntime,
+    read_cached_reader_arc, read_object,
+};
 
 /// A forward iterator over entries in a [`PersistentBTree`].
 /// Each level retains one page. The current entry is decoded on demand.
 pub struct BTreeIter<'a> {
     nodes: MapxRawReader,
+    runtime: Arc<TreeRuntime>,
     _borrow: PhantomData<&'a PersistentBTree>,
     _lease: Option<Arc<RootLease>>,
-    stack: Vec<(Vec<u8>, usize)>,
+    stack: Vec<(Arc<[u8]>, usize)>,
     leaf: Option<(Vec<u8>, usize)>,
     hi: Bound<Vec<u8>>,
 }
@@ -19,6 +23,7 @@ pub struct BTreeIter<'a> {
 impl BTreeIter<'_> {
     pub(crate) fn new(
         nodes: MapxRawReader,
+        runtime: Arc<TreeRuntime>,
         root: NodeId,
         lo: Bound<Vec<u8>>,
         hi: Bound<Vec<u8>>,
@@ -26,6 +31,7 @@ impl BTreeIter<'_> {
     ) -> Self {
         let mut it = Self {
             nodes,
+            runtime,
             _borrow: PhantomData,
             _lease: lease,
             stack: Vec::new(),
@@ -40,19 +46,28 @@ impl BTreeIter<'_> {
 
     fn descend(&mut self, mut id: NodeId, lo: &Bound<Vec<u8>>) {
         loop {
-            let raw = read_object(&self.nodes, id);
-            let page = NodeView::open(&raw).expect("invalid B+ tree page");
-            let slot = match lo {
-                Bound::Included(k) => page.lower_bound(k, !page.leaf),
-                Bound::Excluded(k) => page.lower_bound(k, true),
-                Bound::Unbounded => 0,
-            };
-            if page.leaf {
+            if id & CLASS_MASK == 0 {
+                let raw = read_cached_reader_arc(&self.runtime, &self.nodes, id);
+                let page = NodeView::open(&raw).expect("invalid B+ tree page");
+                debug_assert!(!page.leaf);
+                let slot = match lo {
+                    Bound::Included(k) | Bound::Excluded(k) => page.lower_bound(k, true),
+                    Bound::Unbounded => 0,
+                };
+                id = page.child(slot);
+                self.stack.push((raw, slot + 1));
+            } else {
+                let raw = read_object(&self.nodes, id);
+                let page = NodeView::open(&raw).expect("invalid B+ tree page");
+                debug_assert!(page.leaf);
+                let slot = match lo {
+                    Bound::Included(k) => page.lower_bound(k, false),
+                    Bound::Excluded(k) => page.lower_bound(k, true),
+                    Bound::Unbounded => 0,
+                };
                 self.leaf = Some((raw, slot));
                 return;
             }
-            id = page.child(slot);
-            self.stack.push((raw, slot + 1));
         }
     }
 

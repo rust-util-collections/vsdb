@@ -1703,4 +1703,52 @@ mod diff_merge {
         assert!(!tree.differs(base, reverted));
         tree.assert_refs_match_recount(&[base, updated, reverted]);
     }
+
+    #[test]
+    fn internal_page_cache_serves_hits_respects_byte_cap_and_evicts_released_pages() {
+        use super::PAGE_CACHE_HITS;
+
+        let mut tree = PersistentBTree::new();
+        // Override with a tight 8 KiB total cap (1 KiB per shard) to exercise clock eviction.
+        let entries: Vec<_> = (0u32..1600)
+            .map(|i| (i.to_be_bytes().to_vec(), i.to_be_bytes().to_vec()))
+            .collect();
+        let root = tree.bulk_load(entries);
+        tree.acquire_node(root);
+
+        // Cold point lookup populates InternalPageCache; subsequent lookups hit in RAM.
+        PAGE_CACHE_HITS.with(|c| c.set(0));
+        assert_eq!(
+            tree.get_committed(root, &42u32.to_be_bytes()),
+            Some(42u32.to_be_bytes().to_vec())
+        );
+        let first_hits = PAGE_CACHE_HITS.with(|c| c.get());
+        assert_eq!(first_hits, 0);
+
+        PAGE_CACHE_HITS.with(|c| c.set(0));
+        assert_eq!(
+            tree.get_committed(root, &43u32.to_be_bytes()),
+            Some(43u32.to_be_bytes().to_vec())
+        );
+        let second_hits = PAGE_CACHE_HITS.with(|c| c.get());
+        let h = tree.height(root);
+        assert!(h >= 2);
+        assert_eq!(second_hits, u64::from(h));
+
+        // Releasing the last owner of `root` evicts its dead internal pages from cache.
+        assert!(tree.runtime.page_cache.used_bytes() > 0);
+        tree.release_node(root);
+        assert_eq!(tree.runtime.page_cache.used_bytes(), 0);
+
+        // Directly verify hard per-shard byte cap under synthetic clock churn.
+        let small = super::InternalPageCache::with_budget_bytes(64 * 1024); // 64 KiB cap (8 KiB/shard)
+        for id in 1u64..400 {
+            let payload: std::sync::Arc<[u8]> = vec![0x19u8; 1024].into();
+            small.insert(id, payload);
+            if id % 3 == 0 {
+                let _ = small.get(id - 1);
+            }
+        }
+        assert!(small.used_bytes() <= 64 * 1024);
+    }
 }

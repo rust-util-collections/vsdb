@@ -161,12 +161,18 @@ pub struct MmDB {
     /// joining compaction threads, and releasing LOCK files).
     dbs: Box<[DB]>,
     read_only: bool,
+    mem_budget: usize,
 }
 
 impl MmDB {
     #[inline(always)]
     pub(crate) fn is_read_only(&self) -> bool {
         self.read_only
+    }
+
+    #[inline(always)]
+    pub(crate) fn mem_budget(&self) -> usize {
+        self.mem_budget
     }
 
     pub(crate) fn new() -> Result<Self> {
@@ -281,6 +287,7 @@ impl MmDB {
         Ok(MmDB {
             dbs: dbs_vec.into_boxed_slice(),
             read_only,
+            mem_budget: sizing.mem_budget,
         })
     }
 
@@ -1597,6 +1604,7 @@ mod tests {
         let engine = MmDB {
             dbs: vec![db].into_boxed_slice(),
             read_only: false,
+            mem_budget: 8 * 1024 * 1024,
         };
         let mut batch = engine.batch_begin(42u64.to_le_bytes());
         batch.insert(b"receipt", b"unacknowledged");
@@ -1659,6 +1667,7 @@ mod tests {
             dbs: vec![DB::open_read_only_with_options(opts, &dir).unwrap()]
                 .into_boxed_slice(),
             read_only: true,
+            mem_budget: 8 * 1024 * 1024,
         };
         for mode in 0..3 {
             for reverse in [false, true] {

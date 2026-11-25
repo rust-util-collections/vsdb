@@ -52,9 +52,8 @@ use crate::{
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::{
-    borrow::Cow,
     collections::{HashMap, HashSet},
-    ops::Bound,
+    ops::{Bound, Deref},
     result::Result as StdResult,
     sync::{
         Arc, LazyLock, Weak,
@@ -80,6 +79,183 @@ pub(crate) use types::{InsertResult, NodeRef, RemoveResult};
 thread_local! {
     /// Node decodes performed by this thread (test instrumentation).
     pub(crate) static NODE_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// InternalPageCache hits observed by this thread (test instrumentation).
+    pub(crate) static PAGE_CACHE_HITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+const PAGE_CACHE_SHARDS: usize = 8;
+const MIN_PAGE_CACHE_BYTES: usize = 64 << 10;
+const MAX_PAGE_CACHE_BYTES: usize = 16 << 20;
+
+#[derive(Debug)]
+struct CacheEntry {
+    id: NodeId,
+    bytes: Arc<[u8]>,
+    referenced: bool,
+}
+
+#[derive(Debug)]
+struct CacheShard {
+    index: HashMap<NodeId, usize>,
+    ring: Vec<CacheEntry>,
+    hand: usize,
+    used_bytes: usize,
+    cap_bytes: usize,
+}
+
+impl CacheShard {
+    fn new(cap_bytes: usize) -> Self {
+        Self {
+            index: HashMap::new(),
+            ring: Vec::new(),
+            hand: 0,
+            used_bytes: 0,
+            cap_bytes,
+        }
+    }
+
+    fn weight(bytes: &[u8]) -> usize {
+        bytes.len().saturating_add(48)
+    }
+
+    fn get(&mut self, id: NodeId) -> Option<Arc<[u8]>> {
+        let &slot = self.index.get(&id)?;
+        self.ring[slot].referenced = true;
+        #[cfg(test)]
+        PAGE_CACHE_HITS.with(|c| c.set(c.get() + 1));
+        Some(Arc::clone(&self.ring[slot].bytes))
+    }
+
+    fn insert(&mut self, id: NodeId, bytes: Arc<[u8]>) {
+        let w = Self::weight(&bytes);
+        if w > self.cap_bytes || self.index.contains_key(&id) {
+            return;
+        }
+        while self.used_bytes + w > self.cap_bytes && !self.ring.is_empty() {
+            if self.hand >= self.ring.len() {
+                self.hand = 0;
+            }
+            if self.ring[self.hand].referenced {
+                self.ring[self.hand].referenced = false;
+                self.hand += 1;
+            } else {
+                let evicted = self.ring.swap_remove(self.hand);
+                self.index.remove(&evicted.id);
+                self.used_bytes =
+                    self.used_bytes.saturating_sub(Self::weight(&evicted.bytes));
+                if self.hand < self.ring.len() {
+                    let moved_id = self.ring[self.hand].id;
+                    self.index.insert(moved_id, self.hand);
+                }
+            }
+        }
+        let slot = self.ring.len();
+        self.ring.push(CacheEntry {
+            id,
+            bytes,
+            referenced: true,
+        });
+        self.index.insert(id, slot);
+        self.used_bytes += w;
+    }
+
+    fn remove(&mut self, id: NodeId) {
+        if let Some(slot) = self.index.remove(&id) {
+            let evicted = self.ring.swap_remove(slot);
+            self.used_bytes =
+                self.used_bytes.saturating_sub(Self::weight(&evicted.bytes));
+            if slot < self.ring.len() {
+                let moved_id = self.ring[slot].id;
+                self.index.insert(moved_id, slot);
+            }
+            if self.hand > self.ring.len() {
+                self.hand = 0;
+            }
+        }
+    }
+}
+
+/// Byte-bounded 8-way lock-sharded clock cache of committed internal B+ tree
+/// pages (`id & CLASS_MASK == 0`). Internal pages are immutable and `NodeId`
+/// serials are strictly monotonic within a [`TreeRuntime`].
+#[derive(Debug)]
+pub(crate) struct InternalPageCache {
+    shards: [Mutex<CacheShard>; PAGE_CACHE_SHARDS],
+}
+
+impl InternalPageCache {
+    pub(crate) fn from_namespace_budget(ns_budget_bytes: usize) -> Self {
+        let total =
+            (ns_budget_bytes / 64).clamp(MIN_PAGE_CACHE_BYTES, MAX_PAGE_CACHE_BYTES);
+        Self::with_budget_bytes(total)
+    }
+
+    pub(crate) fn with_budget_bytes(total_bytes: usize) -> Self {
+        let per_shard = (total_bytes / PAGE_CACHE_SHARDS).max(1024);
+        Self {
+            shards: std::array::from_fn(|_| Mutex::new(CacheShard::new(per_shard))),
+        }
+    }
+
+    #[inline]
+    fn shard(&self, id: NodeId) -> &Mutex<CacheShard> {
+        let idx = (id.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 61) as usize;
+        &self.shards[idx]
+    }
+
+    pub(crate) fn get(&self, id: NodeId) -> Option<Arc<[u8]>> {
+        self.shard(id).lock().get(id)
+    }
+
+    pub(crate) fn insert(&self, id: NodeId, bytes: Arc<[u8]>) {
+        self.shard(id).lock().insert(id, bytes);
+    }
+
+    pub(crate) fn remove(&self, id: NodeId) {
+        self.shard(id).lock().remove(id);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn used_bytes(&self) -> usize {
+        self.shards.iter().map(|s| s.lock().used_bytes).sum()
+    }
+}
+
+pub(crate) enum PageBytes<'a> {
+    Borrowed(&'a [u8]),
+    Shared(Arc<[u8]>),
+    Owned(Vec<u8>),
+}
+
+impl Deref for PageBytes<'_> {
+    type Target = [u8];
+
+    #[inline]
+    fn deref(&self) -> &[u8] {
+        match self {
+            Self::Borrowed(b) => b,
+            Self::Shared(b) => b,
+            Self::Owned(b) => b,
+        }
+    }
+}
+
+impl AsRef<[u8]> for PageBytes<'_> {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        self
+    }
+}
+
+impl PageBytes<'_> {
+    #[inline]
+    fn into_vec(self) -> Vec<u8> {
+        match self {
+            Self::Borrowed(b) => b.to_vec(),
+            Self::Shared(b) => b.to_vec(),
+            Self::Owned(b) => b,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -154,9 +330,9 @@ impl RefState {
         Ok(head)
     }
 
-    fn unpin(&mut self, root: NodeId) {
+    fn unpin(&mut self, root: NodeId) -> Vec<NodeId> {
         if root == EMPTY_ROOT {
-            return;
+            return Vec::new();
         }
         let pins = self.pins.get_mut(&root).expect("missing snapshot pin");
         *pins -= 1;
@@ -171,9 +347,15 @@ impl RefState {
         // A reader may outlive the writer. A later writer drains these
         // releases after its WAL fence, or recovers them on the next open.
         let dead = self.release(root);
-        self.deferred
-            .get_or_insert_with(Vec::new)
-            .extend(dead.into_iter().map(|id| object_key(id).to_vec()));
+        let mut dead_internal = Vec::new();
+        let deferred = self.deferred.get_or_insert_with(Vec::new);
+        for id in dead {
+            if id & CLASS_MASK == 0 {
+                dead_internal.push(id);
+            }
+            deferred.push(object_key(id).to_vec());
+        }
+        dead_internal
     }
 
     fn release(&mut self, id: NodeId) -> Vec<NodeId> {
@@ -224,13 +406,13 @@ pub(crate) struct RootLease {
 impl RootLease {
     pub(crate) fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
         lookup(self.root, key, |id| {
-            Cow::Owned(read_object(&self.nodes, id))
+            read_cached_reader(&self.runtime, &self.nodes, id)
         })
     }
 
     pub(crate) fn contains_key(&self, key: &[u8]) -> bool {
         find_leaf(self.root, key, |id| {
-            Cow::Owned(read_object(&self.nodes, id))
+            read_cached_reader(&self.runtime, &self.nodes, id)
         })
         .is_some()
     }
@@ -240,7 +422,14 @@ impl RootLease {
         lo: Bound<Vec<u8>>,
         hi: Bound<Vec<u8>>,
     ) -> BTreeIter<'static> {
-        BTreeIter::new(self.nodes.clone(), self.root, lo, hi, Some(self.clone()))
+        BTreeIter::new(
+            self.nodes.clone(),
+            Arc::clone(&self.runtime),
+            self.root,
+            lo,
+            hi,
+            Some(self.clone()),
+        )
     }
 }
 
@@ -249,7 +438,10 @@ impl Drop for RootLease {
         if self.root == EMPTY_ROOT {
             return;
         }
-        self.runtime.refs.lock().unpin(self.root);
+        let dead_internal = self.runtime.refs.lock().unpin(self.root);
+        for id in dead_internal {
+            self.runtime.page_cache.remove(id);
+        }
     }
 }
 
@@ -260,7 +452,10 @@ struct ScopedPin<'a> {
 
 impl Drop for ScopedPin<'_> {
     fn drop(&mut self) {
-        self.runtime.refs.lock().unpin(self.root);
+        let dead_internal = self.runtime.refs.lock().unpin(self.root);
+        for id in dead_internal {
+            self.runtime.page_cache.remove(id);
+        }
     }
 }
 
@@ -280,21 +475,74 @@ fn read_object(nodes: &MapxRawReader, id: NodeId) -> Vec<u8> {
         .unwrap_or_else(|| panic!("PersistentBTree: missing object {id}"))
 }
 
+pub(crate) fn read_cached_reader_arc(
+    runtime: &TreeRuntime,
+    nodes: &MapxRawReader,
+    id: NodeId,
+) -> Arc<[u8]> {
+    debug_assert_eq!(id & CLASS_MASK, 0);
+    #[cfg(test)]
+    NODE_READS.with(|c| c.set(c.get() + 1));
+    if let Some(cached) = runtime.page_cache.get(id) {
+        return cached;
+    }
+    let raw: Arc<[u8]> = nodes
+        .get(object_key(id))
+        .unwrap_or_else(|| panic!("PersistentBTree: missing object {id}"))
+        .into();
+    runtime.page_cache.insert(id, Arc::clone(&raw));
+    raw
+}
+
+fn read_cached_reader<'a>(
+    runtime: &TreeRuntime,
+    nodes: &MapxRawReader,
+    id: NodeId,
+) -> PageBytes<'a> {
+    if id & CLASS_MASK == 0 {
+        PageBytes::Shared(read_cached_reader_arc(runtime, nodes, id))
+    } else {
+        PageBytes::Owned(read_object(nodes, id))
+    }
+}
+
+fn read_cached_map<'a>(
+    runtime: &TreeRuntime,
+    nodes: &MapxRaw,
+    id: NodeId,
+) -> PageBytes<'a> {
+    if id & CLASS_MASK == 0 {
+        #[cfg(test)]
+        NODE_READS.with(|c| c.set(c.get() + 1));
+        if let Some(cached) = runtime.page_cache.get(id) {
+            return PageBytes::Shared(cached);
+        }
+        let raw: Arc<[u8]> = nodes
+            .get(object_key(id))
+            .unwrap_or_else(|| panic!("PersistentBTree: missing object {id}"))
+            .into();
+        runtime.page_cache.insert(id, Arc::clone(&raw));
+        PageBytes::Shared(raw)
+    } else {
+        PageBytes::Owned(read_map_object(nodes, id))
+    }
+}
+
 fn lookup<'a>(
     root: NodeId,
     key: &[u8],
-    object: impl Fn(NodeId) -> Cow<'a, [u8]>,
+    object: impl Fn(NodeId) -> PageBytes<'a>,
 ) -> Option<Vec<u8>> {
     let (raw, i) = find_leaf(root, key, &object)?;
     let page = NodeView::open(&raw).expect("valid leaf");
-    Some(page.value(i, |id| object(id).into_owned()))
+    Some(page.value(i, |id| object(id).into_vec()))
 }
 
 fn find_leaf<'a>(
     mut root: NodeId,
     key: &[u8],
-    object: impl Fn(NodeId) -> Cow<'a, [u8]>,
-) -> Option<(Cow<'a, [u8]>, usize)> {
+    object: impl Fn(NodeId) -> PageBytes<'a>,
+) -> Option<(PageBytes<'a>, usize)> {
     while root != EMPTY_ROOT {
         let raw = object(root);
         let page = NodeView::open(&raw).expect("invalid B+ tree page");
@@ -308,9 +556,10 @@ fn find_leaf<'a>(
 }
 
 #[derive(Debug)]
-struct TreeRuntime {
+pub(crate) struct TreeRuntime {
     next_id: AtomicU64,
     refs: Mutex<RefState>,
+    pub(crate) page_cache: InternalPageCache,
 }
 
 static TREE_RUNTIMES: LazyLock<Mutex<HashMap<InstanceId, Weak<TreeRuntime>>>> =
@@ -319,6 +568,7 @@ static TREE_RUNTIMES: LazyLock<Mutex<HashMap<InstanceId, Weak<TreeRuntime>>>> =
 fn tree_runtime(
     id: InstanceId,
     next_id_floor: NodeId,
+    ns_budget_bytes: usize,
     initial_refs: RefState,
 ) -> Arc<TreeRuntime> {
     let mut runtimes = TREE_RUNTIMES.lock();
@@ -332,6 +582,7 @@ fn tree_runtime(
     let runtime = Arc::new(TreeRuntime {
         next_id: AtomicU64::new(next_id_floor),
         refs: Mutex::new(initial_refs),
+        page_cache: InternalPageCache::from_namespace_budget(ns_budget_bytes),
     });
     runtimes.insert(id, Arc::downgrade(&runtime));
     runtime
@@ -444,6 +695,7 @@ impl<'de> Deserialize<'de> for PersistentBTree {
                 let runtime = tree_runtime(
                     nodes.instance_id(),
                     next_id,
+                    nodes.namespace().mem_budget_bytes(),
                     RefState {
                         counts: HashMap::new(),
                         edges: HashMap::new(),
@@ -511,6 +763,7 @@ impl PersistentBTree {
         let runtime = tree_runtime(
             nodes.instance_id(),
             1,
+            nodes.namespace().mem_budget_bytes(),
             RefState {
                 counts: HashMap::new(),
                 edges: HashMap::new(),
@@ -580,11 +833,16 @@ impl PersistentBTree {
     }
 
     pub(crate) fn get_committed(&self, root: NodeId, key: &[u8]) -> Option<Vec<u8>> {
-        lookup(root, key, |id| Cow::Owned(read_map_object(&self.nodes, id)))
+        lookup(root, key, |id| {
+            read_cached_map(&self.runtime, &self.nodes, id)
+        })
     }
 
     pub(crate) fn contains_committed(&self, root: NodeId, key: &[u8]) -> bool {
-        find_leaf(root, key, |id| Cow::Owned(read_map_object(&self.nodes, id))).is_some()
+        find_leaf(root, key, |id| {
+            read_cached_map(&self.runtime, &self.nodes, id)
+        })
+        .is_some()
     }
 
     /// Capture and retain a published root while releases/recounts are
@@ -661,13 +919,25 @@ impl PersistentBTree {
         self.alloc_object(class, raw, edges)
     }
 
-    fn object(&self, id: NodeId) -> Cow<'_, [u8]> {
+    fn object(&self, id: NodeId) -> PageBytes<'_> {
         #[cfg(test)]
         NODE_READS.with(|c| c.set(c.get() + 1));
         if let Some(raw) = self.pending.get(&id) {
-            return Cow::Borrowed(raw);
+            return PageBytes::Borrowed(raw);
         }
-        Cow::Owned(
+        if id & CLASS_MASK == 0 {
+            if let Some(cached) = self.runtime.page_cache.get(id) {
+                return PageBytes::Shared(cached);
+            }
+            let raw: Arc<[u8]> = self
+                .nodes
+                .get(object_key(id))
+                .unwrap_or_else(|| panic!("missing B+ tree object {id}"))
+                .into();
+            self.runtime.page_cache.insert(id, Arc::clone(&raw));
+            return PageBytes::Shared(raw);
+        }
+        PageBytes::Owned(
             self.nodes
                 .get(object_key(id))
                 .unwrap_or_else(|| panic!("missing B+ tree object {id}")),
@@ -748,6 +1018,7 @@ impl PersistentBTree {
     pub fn iter(&self, root: NodeId) -> BTreeIter<'_> {
         BTreeIter::new(
             self.nodes.reader(),
+            Arc::clone(&self.runtime),
             root,
             Bound::Unbounded,
             Bound::Unbounded,
@@ -772,7 +1043,14 @@ impl PersistentBTree {
             Bound::Excluded(k) => Bound::Excluded(k.to_vec()),
             Bound::Unbounded => Bound::Unbounded,
         };
-        BTreeIter::new(self.nodes.reader(), root, lo, hi, None)
+        BTreeIter::new(
+            self.nodes.reader(),
+            Arc::clone(&self.runtime),
+            root,
+            lo,
+            hi,
+            None,
+        )
     }
 
     // =================================================================
@@ -975,13 +1253,17 @@ impl PersistentBTree {
         if id == EMPTY_ROOT {
             return;
         }
+        let mut dead_internal = Vec::new();
         let immediate = {
             let mut refs = self.runtime.refs.lock();
             let dead_keys = refs
                 .release(id)
                 .into_iter()
-                .filter(|nid| {
-                    if let Some(raw) = self.pending.remove(nid) {
+                .filter(|&nid| {
+                    if nid & CLASS_MASK == 0 {
+                        dead_internal.push(nid);
+                    }
+                    if let Some(raw) = self.pending.remove(&nid) {
                         self.pending_bytes -= 9 + raw.len();
                         false
                     } else {
@@ -992,6 +1274,9 @@ impl PersistentBTree {
                 .collect();
             refs.defer_or_return(dead_keys)
         };
+        for nid in dead_internal {
+            self.runtime.page_cache.remove(nid);
+        }
         if !immediate.is_empty() {
             self.nodes.lazy_delete_batch(immediate);
         }
@@ -1338,6 +1623,7 @@ impl PersistentBTree {
         let runtime = tree_runtime(
             nodes.instance_id(),
             self.runtime.next_id.load(Ordering::Acquire),
+            nodes.namespace().mem_budget_bytes(),
             RefState {
                 counts,
                 edges: refs.edges.clone(),
