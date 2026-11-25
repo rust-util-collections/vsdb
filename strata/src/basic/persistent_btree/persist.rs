@@ -33,6 +33,59 @@ impl PersistentBTree {
         self.stage.as_mut().expect("version store").clear();
     }
 
+    pub(crate) fn abandon_staged(&mut self, start: u64) {
+        self.pending.clear();
+        self.pending_bytes = 0;
+        let staged = std::mem::take(self.stage.as_mut().expect("version store"));
+        if staged.is_empty() {
+            return;
+        }
+        let end = self.next_id();
+        let mut batch = self.nodes.batch();
+        for &id in &staged {
+            batch.remove(row(STAGE, id));
+        }
+        if start < end {
+            for (class, class_end) in [
+                (0, [0x10u8, 0x40, 0, 0, 0, 0, 0, 0, 0].as_slice()),
+                (LEAF, [0x10u8, 0x80, 0, 0, 0, 0, 0, 0, 0].as_slice()),
+                (BLOB_LEAF, [0x10u8, 0xC0, 0, 0, 0, 0, 0, 0, 0].as_slice()),
+                (BLOB, [0x13u8].as_slice()),
+            ] {
+                let lo = object_key(class | start);
+                if end < LEAF {
+                    let hi = object_key(class | end);
+                    batch.delete_range(&lo, &hi);
+                } else {
+                    batch.delete_range(&lo, class_end);
+                }
+            }
+        }
+        if batch.commit().is_err() {
+            let mut deferred: Vec<Vec<u8>> = staged
+                .into_iter()
+                .map(|id| row(STAGE, id).to_vec())
+                .collect();
+            if start < end {
+                for class in [0, LEAF, BLOB_LEAF, BLOB] {
+                    let lo = object_key(class | start);
+                    let hi = object_key(class | end.saturating_sub(1).min(!CLASS_MASK));
+                    deferred.extend(
+                        self.nodes
+                            .range(lo.as_slice()..=hi.as_slice())
+                            .map(|(k, _)| k),
+                    );
+                }
+            }
+            self.runtime
+                .refs
+                .lock()
+                .deferred
+                .get_or_insert_with(Vec::new)
+                .extend(deferred);
+        }
+    }
+
     pub(crate) fn next_id(&self) -> u64 {
         self.runtime.next_id.load(Ordering::Acquire)
     }

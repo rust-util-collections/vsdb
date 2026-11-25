@@ -275,10 +275,11 @@ impl<K, V> VerMap<K, V> {
         build: impl FnOnce(&mut PersistentBTree) -> Result<NodeId>,
     ) -> Result<NodeId> {
         use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+        let start = self.tree.next_id();
         match catch_unwind(AssertUnwindSafe(|| build(&mut self.tree))) {
             Ok(Ok(root)) => Ok(root),
             result => {
-                self.tree.abandon_pending();
+                self.tree.abandon_staged(start);
                 self.restore_visible_refs()?;
                 match result {
                     Ok(result) => result,

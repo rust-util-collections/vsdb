@@ -4833,12 +4833,44 @@ fn invalid_late_bulk_entry_preserves_working_root_and_recovers_staged_pages() {
         map.bulk_load(main, input),
         Err(VsdbError::InvalidConfig { .. })
     ));
-    assert!(map.records(super::store::STAGE).count() > 0);
+    // In-process abort immediately removes flushed >16 MiB STAGE anchors and
+    // private chunks so close() + from_meta() preserves the [0x07] REFS fast path.
+    assert_eq!(map.records(super::store::STAGE).count(), 0);
+    assert_eq!(map.records(0x10).count(), 1);
+    assert_eq!(map.records(0x12).count(), 0);
     assert_eq!(
         map.snapshot(main).unwrap().iter().collect::<Vec<_>>(),
         vec![(1, vec![10])]
     );
-    drop(map);
+    map.close().unwrap();
+
+    let mut reopened = VerMap::<u32, Vec<u8>>::from_meta(id).unwrap();
+    assert!(reopened.tree.nodes.get(super::store::REFS).is_some());
+    assert_eq!(
+        reopened.snapshot(main).unwrap().iter().collect::<Vec<_>>(),
+        vec![(1, vec![10])]
+    );
+
+    // Also verify crash-recovery when a hard process exit leaves STAGE + page rows.
+    let mut hdr = Header::get(&reopened.tree.nodes).unwrap();
+    let orphan_id = crate::basic::persistent_btree::LEAF | hdr.next_id;
+    hdr.next_id += 1;
+    let orphan_page = crate::basic::persistent_btree::Node::Leaf {
+        keys: vec![b"orphan".to_vec()],
+        values: vec![b"v".to_vec()],
+    }
+    .encode();
+    reopened.tree.nodes.insert([0], hdr.bytes());
+    reopened.tree.nodes.insert(
+        crate::basic::persistent_btree::object_key(orphan_id),
+        orphan_page,
+    );
+    reopened
+        .tree
+        .nodes
+        .insert(super::store::row(super::store::STAGE, orphan_id), []);
+    drop(reopened);
+
     let mut recovered = VerMap::<u32, Vec<u8>>::from_meta(id).unwrap();
     assert_eq!(recovered.records(super::store::STAGE).count(), 0);
     let stats = recovered.verify_and_gc().unwrap();

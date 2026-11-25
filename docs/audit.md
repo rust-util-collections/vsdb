@@ -19,14 +19,6 @@
 
 ---
 
-### [MEDIUM] versioned/persistent_btree: aborted >16 MiB staged builds strand STAGE anchors and flushed chunks on disk
-- **Where**: `strata/src/basic/persistent_btree/persist.rs` (`PersistentBTree::{abandon_pending, flush_stage, publish}`), `strata/src/versioned/map.rs` (`VerMap::build_root`)
-- **What**: When `VerMap::bulk_load` or `VerMap::merge` crosses 16 MiB, `flush_stage()` commits `0x10`/`0x12` chunks and `[0x06, root_id]` (`STAGE`) anchors to disk. If the build later errors (e.g. an unsorted key in `bulk_load`) or unwinds, `abandon_pending()` clears `self.stage` in memory without removing or deferring removal of those `[0x06]` anchors or private `0x10`/`0x12` objects.
-- **Why**: Flushed 16 MiB chunks leak on disk for the session, and the stranded `[0x06]` `STAGE` rows force `has_anchors = true` on reopen (`repair.rs`), invalidating `[0x07]` `REFS` checkpoints written by `flush()` / `close()` and forcing a full tree recount (violates V5 / FP-14).
-- **Suggested fix**: Capture `let start = self.tree.next_id();` before `build` in `VerMap::build_root`; on pre-publication error/unwind, queue `row(STAGE, id)` from `self.stage` and flushed private objects with serial `>= start` into `refs.deferred` (or delete them in a cleanup batch). Add a >16 MiB failing `bulk_load` + `close()` + `from_meta()` regression test in `strata/src/versioned/test.rs`. No migration impact.
-
----
-
 ### [LOW] docs/conventions: stale v17 rustdocs, missing v18 breaking-API notes, ValueMut Debug name, and repeated inline std paths
 - **Where**: `strata/src/versioned/map.rs` (`VerMap` rustdoc), `core/src/common/mod.rs` (`vsdb_get_system_dir`), `core/src/basic/mapx_raw/mod.rs` (`MapxRaw::namespace`), `core/src/common/engine/mod.rs` (`ValueMut::fmt`), `CHANGELOG.md`, `migration/src/dagmap.rs`, `core/src/basic/mapx_raw/test.rs`
 - **What**: `VerMap` rustdoc still describes v17 multi-prefix layout, refcount dirty markers, and `lazy_delete`; `vsdb_get_system_dir` still claims `{base_dir}/__SYSTEM__/` holds the removed DagMap ID counter; `MapxRaw::namespace` calls `namespace()` "THE co-location primitive" (contradicting `new_colocated` and `AGENTS.md`); `CHANGELOG.md` `[v18.0.0]` omits concrete signature breaks (`VecDexDyn::new` → `new_with_metric`, `VerMap::sync` removal, `TrieCalc` checkpoint args, `MapxOrdRawKey::entry` enum); `engine::ValueMut::fmt` formats `"ValueIterMut"`; `std::any::type_name` (`migration/src/dagmap.rs`) and `std::path::Path::new` (`core/src/basic/mapx_raw/test.rs`) appear 3+ times inline.
