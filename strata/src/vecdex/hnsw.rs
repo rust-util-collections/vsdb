@@ -136,32 +136,6 @@ pub(crate) fn filter_visit_cap(ef: usize) -> usize {
     ef.saturating_mul(64).max(4096)
 }
 
-/// Computes distances for one ordered expansion. Mutation searches consult
-/// staged vectors individually. A snapshot query can fetch a bounded group
-/// and score each row immediately, keeping heap/filter changes in traversal order.
-pub(super) trait Scores<S: Scalar> {
-    fn one(&mut self, id: u64) -> Result<Option<S>>;
-
-    fn visit(
-        &mut self,
-        ids: impl Iterator<Item = u64>,
-        mut accept: impl FnMut(u64, S) -> Result<()>,
-    ) -> Result<()> {
-        for id in ids {
-            if let Some(score) = self.one(id)? {
-                accept(id, score)?;
-            }
-        }
-        Ok(())
-    }
-}
-
-impl<S: Scalar, F: FnMut(u64) -> Option<S>> Scores<S> for F {
-    fn one(&mut self, id: u64) -> Result<Option<S>> {
-        Ok(self(id))
-    }
-}
-
 /// Greedy search within a single layer, returning the `ef` closest nodes.
 ///
 /// When `filter` is `Some`, only nodes accepted by the predicate enter the
@@ -184,7 +158,7 @@ pub(crate) fn search_layer<S: Scalar, A: AdjRead + ?Sized>(
 ) -> Vec<(S, u64)> {
     let check = |id| Ok(filter.is_none_or(|f| f(id)));
     search_scored_layer(
-        &mut distance_to,
+        |id| Ok(distance_to(id)),
         entry_points,
         ef,
         layer,
@@ -194,8 +168,8 @@ pub(crate) fn search_layer<S: Scalar, A: AdjRead + ?Sized>(
     .expect("VecDex: invalid graph during staged traversal")
 }
 
-pub(super) fn search_scored_layer<S: Scalar, A: AdjRead + ?Sized, T: Scores<S>>(
-    scores: &mut T,
+pub(super) fn search_scored_layer<S: Scalar, A: AdjRead + ?Sized>(
+    mut distance_to: impl FnMut(u64) -> Result<Option<S>>,
     entry_points: &[u64],
     ef: usize,
     layer: u8,
@@ -210,7 +184,7 @@ pub(super) fn search_scored_layer<S: Scalar, A: AdjRead + ?Sized, T: Scores<S>>(
     let visit_cap = filter.map(|_| filter_visit_cap(ef));
 
     for &ep in entry_points {
-        if let Some(dist) = scores.one(ep)? {
+        if let Some(dist) = distance_to(ep)? {
             candidates.push(Reverse((OrdS(dist), ep)));
             if passes(ep)? {
                 result.push((OrdS(dist), ep));
@@ -224,7 +198,7 @@ pub(super) fn search_scored_layer<S: Scalar, A: AdjRead + ?Sized, T: Scores<S>>(
     // ordered row scan if a component is exhausted before that happens.
     let mut fallback = None;
     let mut fallback_started = false;
-    loop {
+    'search: loop {
         let next = match candidates.pop() {
             Some(next) => next,
             None => {
@@ -251,7 +225,7 @@ pub(super) fn search_scored_layer<S: Scalar, A: AdjRead + ?Sized, T: Scores<S>>(
                     break;
                 };
                 visited.insert(id);
-                let Some(dist) = scores.one(id)? else {
+                let Some(dist) = distance_to(id)? else {
                     continue;
                 };
                 if passes(id)? {
@@ -271,20 +245,16 @@ pub(super) fn search_scored_layer<S: Scalar, A: AdjRead + ?Sized, T: Scores<S>>(
         }
 
         adj.neighbors_into(layer, c_id, &mut neighbor_buf)?;
-        let mut reached_cap = false;
-        let eligible = neighbor_buf
-            .iter()
-            .copied()
-            .map_while(|id| {
-                if visit_cap.is_some_and(|cap| visited.len() >= cap) {
-                    reached_cap = true;
-                    None
-                } else {
-                    Some(visited.insert(id).then_some(id))
-                }
-            })
-            .flatten();
-        scores.visit(eligible, |n_id, n_dist| {
+        for &n_id in &neighbor_buf {
+            if visit_cap.is_some_and(|cap| visited.len() >= cap) {
+                break 'search;
+            }
+            if !visited.insert(n_id) {
+                continue;
+            }
+            let Some(n_dist) = distance_to(n_id)? else {
+                continue;
+            };
             // Skip neighbors farther than the worst result once `ef`
             // results are held.
             let worse_than_worst = result.len() >= ef
@@ -292,7 +262,7 @@ pub(super) fn search_scored_layer<S: Scalar, A: AdjRead + ?Sized, T: Scores<S>>(
                     .peek()
                     .is_some_and(|&(OrdS(f), _)| n_dist.total_cmp(&f) != Ordering::Less);
             if worse_than_worst {
-                return Ok(());
+                continue;
             }
 
             candidates.push(Reverse((OrdS(n_dist), n_id)));
@@ -302,10 +272,6 @@ pub(super) fn search_scored_layer<S: Scalar, A: AdjRead + ?Sized, T: Scores<S>>(
                     result.pop();
                 }
             }
-            Ok(())
-        })?;
-        if reached_cap {
-            break;
         }
     }
 

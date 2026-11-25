@@ -2323,7 +2323,7 @@ fn compact_rejects_incomplete_mappings_without_wiping_data() {
 }
 
 #[test]
-fn snapshot_group_scores_keep_filter_and_distance_order_and_skip_missing_rows() {
+fn snapshot_scores_keep_filter_and_distance_order_and_skip_missing_rows() {
     thread_local! {
         static EVENTS: RefCell<Vec<(char, u64)>> = const { RefCell::new(Vec::new()) };
     }
@@ -2335,7 +2335,7 @@ fn snapshot_group_scores_keep_filter_and_distance_order_and_skip_missing_rows() 
             vector[0]
         }
     }
-    fn query<const WIDTH: usize>(view: &MapxRawReadView<'_>) -> Vec<(u64, f32)> {
+    fn query(view: &MapxRawReadView<'_>) -> Vec<(u64, f32)> {
         let filter = |key: &u64| {
             EVENTS.with_borrow_mut(|events| events.push(('f', *key)));
             key.is_multiple_of(2)
@@ -2347,7 +2347,7 @@ fn snapshot_group_scores_keep_filter_and_distance_order_and_skip_missing_rows() 
             ef: Some(60),
             filter: Some(Filter::Typed(&filter)),
         }
-        .run_with_width::<_, WIDTH>(&TraceDistance)
+        .run(&TraceDistance)
         .unwrap()
     }
 
@@ -2371,7 +2371,7 @@ fn snapshot_group_scores_keep_filter_and_distance_order_and_skip_missing_rows() 
 
     let reader = idx.reader();
     let old = reader.read_view();
-    let scalar = query::<1>(&old.raw);
+    let scalar = query(&old.raw);
     let reference = EVENTS.with_borrow_mut(std::mem::take);
     assert!(reference.contains(&('d', 69)));
     assert_eq!(reference.iter().filter(|e| **e == ('d', 41)).count(), 1);
@@ -2381,18 +2381,14 @@ fn snapshot_group_scores_keep_filter_and_distance_order_and_skip_missing_rows() 
             .any(|events| events[0].0 == 'f' && events[1].0 == 'd')
     );
     idx.remove(&4).unwrap();
-    for grouped in [query::<8>(&old.raw), query::<32>(&old.raw)] {
-        assert_eq!(grouped, scalar);
-    }
-    let observed = EVENTS.with_borrow_mut(std::mem::take);
-    assert_eq!(&observed[..reference.len()], &reference);
-    assert_eq!(&observed[reference.len()..], &reference);
+    assert_eq!(query(&old.raw), scalar);
+    assert_eq!(EVENTS.with_borrow_mut(std::mem::take), reference);
     let new = reader.read_view();
-    assert!(query::<32>(&new.raw).iter().all(|(id, _)| *id != 4));
+    assert!(query(&new.raw).iter().all(|(id, _)| *id != 4));
 }
 
 #[test]
-fn search_reports_a_malformed_stored_vector_through_scalar_and_grouped_reads() {
+fn search_reports_a_malformed_stored_vector() {
     let mut idx: VecDex<u64, L2> = VecDex::new(HnswConfig {
         dim: 2,
         ..Default::default()
@@ -2401,20 +2397,8 @@ fn search_reports_a_malformed_stored_vector_through_scalar_and_grouped_reads() {
     insert_at_layer(&mut idx, 0, &[0., 0.], 0);
     insert_at_layer(&mut idx, 1, &[1., 1.], 0);
     idx.store.insert(node_key(TAG_VEC, 1), [0; 3]);
-    let raw = idx.store.read_view();
-    let probe = || Search::<u64, f32> {
-        view: &raw,
-        query: &[0., 0.],
-        k: 2,
-        ef: Some(2),
-        filter: None,
-    };
     assert!(matches!(
-        probe().run_with_width::<_, 1>(&L2),
-        Err(VsdbError::Corrupt { .. })
-    ));
-    assert!(matches!(
-        probe().run_with_width::<_, 32>(&L2),
+        idx.search(&[0., 0.], 2),
         Err(VsdbError::Corrupt { .. })
     ));
 }
@@ -2430,22 +2414,6 @@ fn searches_reject_corrupt_result_keys_adjacency_and_fallback_keys() {
     let assert_corrupt = |idx: &VecDex<u64, L2>, k: usize| {
         assert!(matches!(
             idx.search(&[0., 0.], k),
-            Err(VsdbError::Corrupt { .. })
-        ));
-        let raw = idx.store.read_view();
-        let probe = || Search::<u64, f32> {
-            view: &raw,
-            query: &[0., 0.],
-            k,
-            ef: Some(k),
-            filter: None,
-        };
-        assert!(matches!(
-            probe().run_with_width::<_, 1>(&L2),
-            Err(VsdbError::Corrupt { .. })
-        ));
-        assert!(matches!(
-            probe().run_with_width::<_, 32>(&L2),
             Err(VsdbError::Corrupt { .. })
         ));
     };
