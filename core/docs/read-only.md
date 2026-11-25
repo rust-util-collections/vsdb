@@ -1,102 +1,84 @@
 # Read-only mode
 
-`vsdb_core` can restore existing raw collection handles without changing the
-database tree. The mode is intended for immutable snapshots, offline
-inspection, and processes whose VSDB directory is mounted read-only.
+Use `VsdbOptions::read_only` to query a v18 universe from an immutable
+filesystem snapshot or a read-only mount. One open mode covers the default
+namespace and every namespace restored by the process.
+
+## Save a handle while writable
+
+`save_meta` stores the handle in its owning namespace. Keep the returned
+`InstanceId` with the application. A token identifies rows in that universe.
+
+```rust,no_run
+use vsdb_core::{MapxRaw, VsdbOptions, vsdb_configure};
+
+fn main() -> vsdb_core::Result<()> {
+    vsdb_configure(VsdbOptions::new("/srv/my-app/vsdb"))?;
+    let mut map = MapxRaw::new();
+    map.insert(b"answer", b"42");
+    map.try_sync_wal()?;
+    let id = map.save_meta()?;
+    println!("{id}");
+    Ok(())
+}
+```
 
 ## Open an existing universe
 
-Configure the process before any database, namespace, or derived-directory API
-is used, then restore an `InstanceId` saved by a writable process:
+Start a separate reader process after the writer exits, or give the reader
+a consistent immutable snapshot. Include the base directory and every
+explicitly placed namespace the application uses. Explicit roots are recorded
+as absolute paths and must resolve to the snapshot data in the reader's
+filesystem.
 
 ```rust,no_run
-use vsdb_core::{
-    InstanceId, MapxRaw, OpenMode, VsdbOptions, vsdb_configure, vsdb_open_mode,
-};
+use vsdb_core::{InstanceId, MapxRaw, VsdbOptions, vsdb_configure};
 
-# fn main() -> vsdb_core::Result<()> {
-vsdb_configure(VsdbOptions::read_only("/srv/my-app/vsdb"))?;
-assert_eq!(vsdb_open_mode(), OpenMode::ReadOnly);
-
-// Token saved by a writable process (`save_meta`); placeholder value.
-let id: InstanceId = "40960000".parse()?;
-let map = MapxRaw::from_meta(id)?;
-assert!(map.namespace().is_read_only());
-assert_eq!(map.get(b"answer"), Some(b"42".to_vec()));
-# Ok(())
-# }
+fn main() -> vsdb_core::Result<()> {
+    vsdb_configure(VsdbOptions::read_only("/srv/my-app/vsdb"))?;
+    let token = std::env::args().nth(1).expect("pass the writer's InstanceId");
+    let map = MapxRaw::from_meta(token.parse::<InstanceId>()?)?;
+    assert!(map.namespace().is_read_only());
+    assert_eq!(map.get(b"answer"), Some(b"42".to_vec()));
+    Ok(())
+}
 ```
 
-`vsdb_configure` is one-shot and process-wide. It covers the default namespace
-and every non-default namespace restored in that process. Different modes need
-separate processes; writable programs configure with
-`vsdb_configure(VsdbOptions::new(path))`.
-
-Call it before any other VSDB API. It never touches the process environment.
-
-## Prepare the handle while writable
-
-```rust,no_run
-use vsdb_core::{MapxRaw, VsdbOptions, vsdb_configure, vsdb_flush};
-
-# fn main() -> vsdb_core::Result<()> {
-vsdb_configure(VsdbOptions::new("/srv/my-app/vsdb"))?;
-let mut map = MapxRaw::new();
-map.insert(b"answer", b"42");
-let id = map.save_meta()?;
-println!("{id}");
-vsdb_flush();
-# Ok(())
-# }
-```
-
-A reader restores existing handles with `from_meta` or serde. It must not call
-collection constructors.
+Configure before opening a collection or requesting a VSDB directory.
+`from_meta` opens the namespace named by the token. Serde deserialization
+can also restore a previously serialized handle.
 
 ## Operation behavior
 
-Point reads, ranges, iterators, namespace inspection, and in-memory recovery of
-committed residual MMDB WAL records are supported. Opening a saved handle whose
-`InstanceId` names a non-default namespace automatically opens that namespace
-read-only.
+| Operation | Read-only behavior |
+| --- | --- |
+| Point reads, ranges, read views, shard properties, namespace open/list/close | Available on existing data. Close applies to non-default namespaces. |
+| `save_meta`, `clone_in`, `clone_colocated`, batch `commit` and `commit_sync` | Return `VsdbError::ReadOnly`. |
+| Namespace creation, destruction, relocation and VSDB atomic file writes | Return `VsdbError::ReadOnly`. |
+| Constructors, deep-copying `Clone`, direct `insert`, `remove` and `clear` | Panic on the attempted creation or write. |
+| WAL fences, flushes and deferred-delete registration | Perform no writes. |
 
-Fallible write operations reject the request before side effects:
-
-- `save_meta`, `clone_in`, and batch `commit` return
-  `VsdbError::ReadOnly`;
-- namespace creation, destruction, and relocation return the same error;
-- raw VSDB-managed atomic file writes return the same error.
-
-Legacy direct mutations such as `MapxRaw::insert`, `remove`, and `clear` are
-infallible APIs, so they panic in read-only mode. Creating a collection and its
-deep-copying `Clone` implementation also panic. Check `vsdb_open_mode()` or
-`Namespace::is_read_only()` before entering generic code that uses them.
-
-`vsdb_flush`, `Namespace::flush`, and deferred `lazy_delete` registration are
-no-ops because they are maintenance operations.
+For a reader that must follow a live writer **inside the same process**, use
+`MapxRaw::reader()` in read-write mode. It shares the original map's identity.
+See [immutable iteration alongside writes](api.md#immutable-iteration-alongside-writes).
 
 ## Snapshot and locking rules
 
-The database must already be complete. Read-only open does not create a base
-directory, shard, format marker, allocator file, lifecycle record, metadata
-directory, WAL, or SST. Missing, partial, pending, and unsupported datasets are
-rejected rather than initialized or repaired.
-A complete, marked dataset may retain a stale initialization sentinel; read-only
-open accepts that completed state and leaves the sentinel untouched. A namespace
-whose lifecycle record is still `Pending` is rejected even if files are present.
+VSDB takes a shared, non-blocking lock on an existing `__SYSTEM__/LOCK`
+for the process lifetime. Several readers can hold it together. A writer
+requires exclusive access, including for namespace administration. On Unix,
+MMDB also takes a shared lock on each existing shard `LOCK` as it opens
+that shard. An immutable copy may omit lock files. Keep such a copy
+byte-stable until all readers exit.
 
-A process configured read-only takes a shared non-blocking lock on the existing
-`__SYSTEM__/LOCK` for its lifetime. Other read-only processes can coexist.
-A writer requires the exclusive universe lock, including for namespace
-destruction and relocation. Stop readers before opening that universe writable.
-On Unix, MMDB also takes a shared non-blocking lock on each existing shard
-`LOCK` file as it opens the shard.
+Read-only engine open checks the universe and engine identities, shard-ready
+marker and per-shard layout. A completed dataset may retain a stale
+initialization sentinel. A namespace registered as `Pending` requires a
+writable recovery step before a reader can open it.
 
-An immutable filesystem copy may omit lock files. Read-only mode leaves
-those files absent. Keep the copy byte-stable until all readers exit.
-
-MMDB can replay valid residual WAL data in memory. VSDB format markers,
-allocator migrations, namespace lifecycle metadata, and other durable repair
-state are never changed by a read-only open. If a dataset needs migration or
-repair, perform one writable open on a backup or staging copy and take a fresh
-immutable snapshot afterward.
+MMDB replays committed residual WAL records in memory. VSDB can also
+reconstruct a missing prefix allocator ceiling in memory. Neither operation
+changes the copy. For an interrupted v18 initialization, finish recovery on a
+writable staging copy with the explicit namespace roots available there.
+For v17 data, run the [offline v18 migration](../../migration/README.md)
+before taking the snapshot for readers.

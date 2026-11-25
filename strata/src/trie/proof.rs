@@ -6,9 +6,9 @@
 //! or [`super::SmtCalc`]) to provide cryptographic commitments
 //! over versioned state.
 //!
-//! The trie is treated as a disposable computation layer: it holds an
-//! in-memory trie that can be rebuilt from any VerMap snapshot at any
-//! time.  A transparent on-disk cache avoids full rebuilds on restart.
+//! The in-memory trie can be rebuilt from a retained map root. An explicit
+//! [`VerMapWithProof::save_cache`] saves a checkpoint for a commit. Opening
+//! the wrapper can reuse a checkpoint after checking its binding to the map.
 
 use crate::{
     basic::persistent_btree::{EMPTY_ROOT, RootLease, TreeDiff},
@@ -43,8 +43,8 @@ pub struct ProofWithRoot<P> {
 /// A versioned key-value map with Merkle root hash computation.
 ///
 /// Wraps a [`VerMap<K, V>`] and a [`TrieCalc`] back-end `T` to provide
-/// a [`merkle_root`](Self::merkle_root) method that lazily computes
-/// the 32-byte Merkle root hash for any branch or commit.
+/// a 32-byte root for a branch via [`merkle_root`](Self::merkle_root) or a
+/// retained commit via [`merkle_root_at_commit`](Self::merkle_root_at_commit).
 ///
 /// # Incremental updates
 ///

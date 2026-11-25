@@ -176,9 +176,7 @@ retain the recorded checksums and summaries.
 
 ## Reproducing the core checks
 
-Apply `hotmint-v17/hotmint.patch` to the Hotmint baseline above, with VSDB as
-its sibling directory. Set a fresh `VSDB_BASE_DIR` and a scratch
-`CARGO_TARGET_DIR`; raise the file descriptor limit to 10240. Then:
+Apply the patch to the Hotmint baseline `132f785` with a sibling VSDB checkout at `df268d7` (17.0.3). Run the Hotmint workspace commands below from that patched checkout. Set a fresh `VSDB_BASE_DIR`, use a scratch `CARGO_TARGET_DIR`, and raise the file descriptor limit to 10240. [Hotmint patch](hotmint-v17/hotmint.patch)
 
 ```sh
 cargo test --workspace --tests
@@ -198,7 +196,7 @@ read-only phase. Select cross-version phases through `HOTMINT_VSDB_PHASE` and
 `HOTMINT_VSDB_DIR`; the history probe also takes `VSDB_BASE_DIR=<dir>/db`.
 Build each version separately and retain its test executable before rebuilding.
 
-The new VSDB regressions run with:
+Run the VSDB regression tests from the sibling v17.0.3 checkout.
 
 ```sh
 cargo test -p vsdb --test trie_reclaimed_commit_test \

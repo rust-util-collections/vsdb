@@ -1,6 +1,8 @@
 # v18 basic collections
 
-Criterion ran the workspace's `basic` bench on stable Rust 1.100.0 with mmdb 4.3.15, using separate data directories. The v17 build used commit `da9a325`. The two optimized binaries ran consecutively on the same logical CPU with 3 seconds of warmup and 10 samples per case. The v17 ordered-map benchmark used a native 64-bit integer on this host. The v18 version uses an explicit `u64`.
+This comparison was recorded at `cc2f41c` against the v17.0.21 code at `da9a325`. Later implementation changes are tracked in the [v18 design record](../proposals/v18-roadmap.md#10-post-implementation-structural-performance-evaluation-and-follow-up-designs).
+
+Criterion ran the workspace's `basic` bench on stable Rust 1.100.0 with mmdb 4.3.15, using separate data directories. The two optimized binaries ran consecutively on the same logical CPU with 3 seconds of warmup and 10 samples per case. The v17 ordered-map benchmark used a native 64-bit integer on this host. The v18 version uses an explicit `u64`.
 
 | Operation | v17 estimate (95% interval) | v18 estimate (95% interval) |
 | --- | --- | --- |

@@ -2,13 +2,13 @@
 //!
 //! `vsdb` is a high-performance, embedded database designed to feel like using
 //! Rust's standard collections. It provides persistent, disk-backed data
-//! structures — [`Mapx`] (a `HashMap`-like map), [`MapxOrd`] (a `BTreeMap`-like
-//! ordered map), [`VerMap`]
-//! (Git-model versioned storage with branching, commits, and merge),
-//! [`MptCalc`] / [`SmtCalc`] (stateless Merkle trie implementations),
-//! [`VerMapWithProof`] (versioned storage with Merkle root computation),
-//! [`SlotDex`] (skip-list-like index for paged queries),
-//! and [`VecDex`] (approximate nearest-neighbor vector index via HNSW).
+//! structures including [`Mapx`] for exact lookups, [`MapxOrd`] for ordered
+//! ranges, [`MapxOrdRawKey`] for byte keys and [`Orphan`] for single values.
+//! [`VerMap`] adds branch history and snapshots, while [`DagMap`] provides
+//! single-parent overlays. [`MptCalc`] and [`SmtCalc`] compute in-memory
+//! Merkle commitments and proofs. [`VerMapWithProof`] connects either trie to
+//! versioned storage. [`SlotDex`] indexes keys by slot for pagination and
+//! counts, and [`VecDex`] provides nearest-neighbor vector search.
 //!
 //! This crate is the primary entry point for most users.
 //!
@@ -33,58 +33,11 @@
 //! Query APIs and in-memory WAL recovery leave the database tree unchanged;
 //! creation and mutation are unavailable.
 //!
-//! # Why core collections don't have `len()`
+//! # Counting entries
 //!
-//! [`Mapx`], [`MapxOrd`], and other core primitives do not maintain durable
-//! count metadata and intentionally omit `len()`. The engine supports atomic
-//! multi-key batches within one collection prefix, but VSDB does not expose
-//! a cross-prefix batch for pairing a map write with a separate counter.
-//! Independently updating such a counter can leave it inconsistent after a
-//! crash; aliases and raw writes would also need to participate in counting.
-//!
-//! Higher-level structures ([`VecDex`], [`SlotDex`]) **do** maintain a
-//! count because they fully control their own insert/remove paths:
-//! every mutation stages data and the durable count into one atomic
-//! engine write batch (`StagedRows`), so on-disk state stays consistent
-//! across crashes. Hydrate rebuilds only in-memory caches from those
-//! durable rows — there is no dirty-flag rebuild-on-recovery path.
-//!
-//! ## Application-layer counting
-//!
-//! If you need a count over a core collection, maintain it yourself:
-//!
-//! ```rust,ignore
-//! use vsdb::MapxOrd;
-//! use vsdb::{KeyEnDe, KeyEnDeOrdered, ValueEnDe};
-//!
-//! struct CountedMap<K: KeyEnDe + KeyEnDeOrdered, V: ValueEnDe> {
-//!     map: MapxOrd<K, V>,
-//!     count: usize,  // in-memory; rebuild on restart
-//! }
-//!
-//! impl<K: KeyEnDe + KeyEnDeOrdered + Ord, V: ValueEnDe> CountedMap<K, V> {
-//!     fn insert(&mut self, key: &K, value: &V) {
-//!         if !self.map.contains_key(key) {
-//!             self.count += 1;
-//!         }
-//!         self.map.insert(key, value);
-//!     }
-//!
-//!     fn remove(&mut self, key: &K) {
-//!         if self.map.contains_key(key) {
-//!             self.count -= 1;
-//!         }
-//!         self.map.remove(key);
-//!     }
-//!
-//!     fn len(&self) -> usize { self.count }
-//!
-//!     /// Rebuild from disk after an unclean shutdown.
-//!     fn rebuild_count(&mut self) {
-//!         self.count = self.map.iter().count();
-//!     }
-//! }
-//! ```
+//! The basic maps expose `iter().count()`, which scans their entries.
+//! [`SlotDex::total`] and [`VecDex::len`] read stored counts. Each index
+//! updates its count and data rows in the same shard write batch.
 
 #![deny(warnings)]
 #![recursion_limit = "512"]
@@ -98,10 +51,10 @@ pub mod dagmap;
 /// Git-model versioned storage: branches, commits, merge, and history.
 pub mod versioned;
 
-/// Skip-list-like index for efficient, timestamp-based paged queries.
+/// Fixed-width slot index with tiered counts and paged queries.
 pub mod slotdex;
 
-/// Lightweight, stateless Merkle trie implementations (MPT + SMT).
+/// In-memory Merkle trie implementations (MPT and SMT) and versioned proofs.
 pub mod trie;
 
 /// Approximate nearest-neighbor vector index (HNSW algorithm).

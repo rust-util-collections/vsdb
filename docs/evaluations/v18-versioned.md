@@ -1,6 +1,8 @@
 # VerMap v18 reference persistence and benchmark results
 
-The release uses Mode B, compact in-memory counts with a verified checkpoint. On a retained million-key tree, persisting sparse refcount changes pushed a 1,000-key block beyond the proposal's 10% throughput tolerance. The v17 comparison used commit `da9a325`, MMDB 4.3.15, Rust stable 1.100.0 and release optimization on an x86-64 Linux host with an AMD EPYC 9474F. Each mode used a separate database.
+This comparison was recorded at `cc2f41c` against the v17.0.21 code at `da9a325`. Later implementation changes are tracked in the [v18 design record](../proposals/v18-roadmap.md#10-post-implementation-structural-performance-evaluation-and-follow-up-designs).
+
+The initial v18 implementation uses Mode B, compact in-memory counts with a verified checkpoint. On a retained million-key tree, persisting sparse refcount changes pushed a 1,000-key block beyond the proposal's 10% throughput tolerance. The comparison used MMDB 4.3.15, Rust stable 1.100.0 and release optimization on an x86-64 Linux host with an AMD EPYC 9474F. Each mode used a separate database.
 
 ## Block workload
 

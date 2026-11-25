@@ -1,7 +1,9 @@
 # v18 trie and VecDex measurements
 
+This comparison was recorded at `cc2f41c` against the v17.0.21 code at `da9a325`. Later implementation changes are tracked in the [v18 design record](../proposals/v18-roadmap.md#10-post-implementation-structural-performance-evaluation-and-follow-up-designs).
+
 Measured on x86-64 Linux with an AMD EPYC 9474F, Rust stable 1.100.0
-and mmdb 4.3.15. The reference checkout was `da9a325` (v17.0.21 code).
+and mmdb 4.3.15.
 Each database run used a fresh directory. Criterion ran the public APIs in
 release mode. Results include changes to the underlying VSDB engine.
 These are local measurements on a shared host.

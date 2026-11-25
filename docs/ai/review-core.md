@@ -1,7 +1,6 @@
 # VSDB Review Core
 
-Evidence standard and subsystem map. Apply `pragmatic-engineering.md`: only
-findings/process that remove a concrete failure mode.
+Shared evidence standard and source map for the four project skills.
 
 This is a correctness review of the local Rust database. State findings in terms
 of collection results, persisted state, resource lifetime, and documented API
@@ -11,34 +10,47 @@ the selected repository scope.
 
 ## 1. Context
 
-1. Full diff + surrounding functions.
-2. Map each changed code file via Subsystem Map; load guides, callers, tests.
-3. Design-shaped / multi-subsystem diffs → also `design-patterns.md`.
-4. Public API / serialized meta / durable KRT / ns layout / format markers →
-   `compatibility-policy.md`.
-5. Full audit → tracked-file ledger first (no static/size guesses).
+Start with the [maintenance scope](pragmatic-engineering.md), [worktree
+policy](workflow-policy.md), [cross-cutting checks](technical-patterns.md) and
+[false positive guide](false-positive-guide.md). For each in-scope change, read
+the full diff, surrounding code, callers, tests and the mapped guide. Use the
+[design checks](design-patterns.md) for multi-subsystem changes, design changes
+or a full audit. Apply the [compatibility policy](compatibility-policy.md) to
+public APIs, handles, persistent records and namespace layout. Skills that
+create commits also use the [validation and release protocol](commit-protocol.md).
 
 ### Subsystem Map
 
-One primary row per Rust file. Unsafe, compatibility, public-doc checks are overlays.
+| Subsystem | Implementation | Review guide |
+| --- | --- | --- |
+| Engine, universe and prefix allocator | [Engine and MMDB backend](../../core/src/common/engine), [universe headers and locks](../../core/src/common/universe.rs), [configuration, IDs and range bounds](../../core/src/common) | [Engine](patterns/engine.md) |
+| Namespace lifecycle | [Registry, routing and teardown](../../core/src/common/namespace.rs) | [Engine](patterns/engine.md) · [Compatibility](compatibility-policy.md) |
+| Raw and typed collections | [MapxRaw](../../core/src/basic/mapx_raw), [Mapx](../../strata/src/basic/mapx), [MapxOrd](../../strata/src/basic/mapx_ord), [raw-key maps](../../strata/src/basic/mapx_ord_rawkey), [Orphan](../../strata/src/basic/orphan) | [Engine](patterns/engine.md) · [Encoding and guards](technical-patterns.md) |
+| Persistent B+ tree | [Pages, blobs, COW, diff, merge and runtime caches](../../strata/src/basic/persistent_btree) | [B+ tree](patterns/btree.md) |
+| Versioning | [VerMap, snapshots, history, publications and repair](../../strata/src/versioned) | [Versioning](patterns/versioning.md) · [B+ tree](patterns/btree.md) |
+| Merkle tries | [MPT, SMT, proofs, checkpoints and VerMap integration](../../strata/src/trie) | [Tries](patterns/trie.md) |
+| SlotDex | [Slot codec, tier counts and pagination](../../strata/src/slotdex) | [SlotDex](patterns/slotdex.md) |
+| DagMap | [Typed, raw-key and raw overlay maps](../../strata/src/dagmap) | [DagMap](patterns/dagmap.md) |
+| VecDex | [HNSW, metric dispatch and read views](../../strata/src/vecdex) | [VecDex](patterns/vecdex.md) |
+| Shared codecs, frames, readers, guards and staged writes | [Typed infrastructure](../../strata/src/common), [error types](../../core/src/common/error.rs) | [Technical checks](technical-patterns.md) · [Compatibility](compatibility-policy.md) |
+| Offline migration | [Converters](../../migration/src), [fixtures and tests](../../migration/tests), [upgrade instructions](../../migration/README.md) | [Migration](patterns/migration.md) · [Compatibility](compatibility-policy.md) |
+| Public exports and build | [Core exports](../../core/src/lib.rs), [typed exports](../../strata/src/lib.rs), [workspace and crate manifests](../../Cargo.toml) | [Compatibility](compatibility-policy.md) |
 
-| Subsystem | Files | Guides |
-|-----------|-------|--------|
-| engine/universe/prefix | `core/.../engine/**`, `core/src/common/{mod,universe,ids,range}.rs`, `core/.../mapx_raw/**` | `patterns/engine.md`, `technical-patterns.md` |
-| namespaces | `core/.../namespace.rs` | `patterns/engine.md`, `compatibility-policy.md` |
-| typed collections | `strata/.../mapx/**`, `mapx_ord/**`, `mapx_ord_rawkey/**`, `orphan/**` | `patterns/engine.md`, `technical-patterns.md` |
-| B+ tree | `strata/.../persistent_btree/**` (`nodes`, `persist`, `iter`, `diff`, `merge`) | `patterns/btree.md` |
-| versioning | `strata/.../versioned/**` (`store`, `map`, `read`, `repair`, `diff`) | `patterns/versioning.md`, `patterns/btree.md` (diff/merge) |
-| tries | `strata/.../trie/**` (`shared`, `cache`, `proof`, `transport`, `mpt/**`, `smt/**`, `node/**`) | `patterns/trie.md` |
-| SlotDex | `strata/.../slotdex/**` (`mod`, `query`, `slot_type`) | `patterns/slotdex.md` |
-| DagMap | `strata/.../dagmap/**` (`typed`, `raw/**`, `rawkey/**`) | `patterns/dagmap.md` |
-| VecDex | `strata/.../vecdex/**` (`mod`, `hnsw`, `distance`, `reader`) | `patterns/vecdex.md` |
-| encoding/frames/guards/staged | `strata/.../common/{mod,ende,frame,guard,macros,reader,staged}.rs`, `core/.../error.rs` | `technical-patterns.md`, `compatibility-policy.md` |
-| migration (`vsdb_migrate`) | `migration/src/**`, `migration/tests/**`, `migration/README.md` | `patterns/migration.md`, `compatibility-policy.md` |
-| public/build | `core`, `strata`, `migration` `lib.rs`/`basic/mod.rs`, root+crate `Cargo.toml` | `compatibility-policy.md`, `technical-patterns.md` |
+### Full-repository coverage
 
-Guides under `docs/ai/patterns/`. Tests/benches/CI/README/CHANGELOG/`.agents` and `docs/ai`
-→ map to the behavior they cover.
+Start the ledger from `git ls-files` and assign **every tracked file** one
+primary category: workspace source/tests/benches, build/CI, live documentation,
+historical records, maintenance workflows, or generated/excluded with a reason.
+Assign each Rust file one primary subsystem and map its tests and benches to the
+behavior they exercise. Include all three crates, `AGENTS.md`, `docs/ai/`, and
+each skill's `SKILL.md` and `agents/openai.yaml`.
+
+Use the [documentation index](../README.md) to locate current API guides,
+implemented design and historical evidence. Check the active v18 changelog
+section against code. Within design records, distinguish implemented contracts,
+measurements at named revisions and deferred proposals. Preserve the recorded
+revision and workload when referencing an evaluation. For skill changes,
+check the explicit invocation policy and the references used by that workflow.
 
 ## 2. Review depth (effort, not severity)
 
@@ -76,8 +88,13 @@ partial I/O.
 **Concurrency/unsafe:** Derive SWMR/locks from code. `// SAFETY:` is a claim.
 Check alias life, write exclusion, process-global env, allocator, lifecycle serialize.
 
-**Crash:** Do not mix recovery models —
-VerMap single-prefix atomic/synced batches + `[0x05]` `RETIRED` / `[0x06]` `STAGE` anchors + generation-bound `[0x07]` `REFS` checkpoint; SlotDex/VecDex one staged batch (`[total, generation]` / monotonic `GraphState`); DagMap single-shard co-located WAL order (`fold`+`reparent` before `Clearing`, `[0x01]` discovery edges kept until `[0x02]` wipe finishes + 1-shard `try_sync_wal`); standalone B+ `bulk_load` flushes unreferenced chunks before root returns; universe/ns/allocator/trie-cache use advisory `LOCK` + atomic temp-sync-rename-dirsync order (`VSUNI018` published last); `vsdb_migrate` validates target headers/ceilings before wiping legacy keys.
+**Crash recovery.** Trace publication, synchronization and reopen across the
+affected rows. VerMap uses one prefix with retirement and staging anchors.
+SlotDex commits a batch of entries and tier counts together. VecDex can publish
+several mutation chunks during one call. DagMap orders changes to co-located
+node prefixes on one shard. The mapped guides describe each protocol and
+its failure boundaries. For filesystem metadata, check the lock scope and the
+order of file sync, rename and directory sync.
 
 **Compatibility:** `compatibility-policy.md`. Old data preserve/reject/migrate
 intentionally. A break needs explicit user acceptance before any major bump.

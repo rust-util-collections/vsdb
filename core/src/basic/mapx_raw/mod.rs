@@ -670,9 +670,8 @@ impl MapxRaw {
     }
 
     /// Returns the complete public identity of this `MapxRaw`:
-    /// `{ map_id, ns }` — the same shape as the persisted meta bytes
-    /// (`ns: None` ⇔ default namespace).  A pre-v16 bare `u64` id equals
-    /// `InstanceId::from(u64)`.
+    /// The token contains the map prefix and owning namespace. It uses
+    /// `ns: None` for a map in the default namespace.
     pub fn instance_id(&self) -> InstanceId {
         self.inner.instance_id()
     }
@@ -716,11 +715,9 @@ impl MapxRaw {
 
     /// Recovers a `MapxRaw` instance from previously saved metadata.
     ///
-    /// Accepts anything convertible into an [`InstanceId`] — including a
-    /// bare pre-v16 `u64` (⇒ default namespace). Resolution is
-    /// deterministic, never a search: the token's `ns` names the meta
-    /// directory (`None` ⇒ the default namespace's — its id is a fixed
-    /// constant, there is nothing to look up); a miss is a clean error.
+    /// Accepts anything convertible into an [`InstanceId`]. A bare `u64`
+    /// selects the default namespace. The token determines which namespace's
+    /// metadata directory is read. The metadata must be in the v18 raw format.
     ///
     /// The caller must ensure that the underlying VSDB database still
     /// contains the data referenced by this instance ID.

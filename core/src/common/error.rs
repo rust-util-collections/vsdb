@@ -1,9 +1,8 @@
 //!
 //! Structured error types for the VSDB public API.
 //!
-//! This is the **single error vocabulary** for the whole VSDB ecosystem:
-//! every public API in `vsdb_core` and `vsdb` returns
-//! [`Result<T>`](Result) with [`VsdbError`].
+//! Fallible storage operations in `vsdb_core` and `vsdb` report [`VsdbError`].
+//! Collection APIs such as `MapxRaw::insert` panic on fatal storage failures.
 //!
 use thiserror::Error;
 

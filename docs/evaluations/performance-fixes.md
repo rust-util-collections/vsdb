@@ -1,6 +1,8 @@
-# 两份性能报告的代码核验与修复
+# v17.0.18 性能建议的核验与修复记录
 
-日期：2026-11-12。审查输入是工作区本地的
+本报告记录在 v17.0.18 基线（`1978ca4`）上核验的性能问题和当时的测量结果。v18 实现及后续优化见 [v18 设计记录](../proposals/v18-roadmap.md)。
+
+2026-11-12 的审查输入是工作区本地的
 `docs/proposals/performance-bottlenecks.md`（性能瓶颈建议稿）和
 `docs/proposals/performance-bottlenecks-independent-review.md`（独立审查）。
 这两份原始报告未随修复提交；后续已将其中仍然成立的未落地项与延后结构性

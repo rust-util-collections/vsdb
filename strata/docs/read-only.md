@@ -18,20 +18,20 @@ use vsdb::{
     InstanceId, Mapx, OpenMode, VsdbOptions, vsdb_configure, vsdb_open_mode,
 };
 
-# fn main() -> vsdb::Result<()> {
-vsdb_configure(VsdbOptions::read_only("/srv/my-app/vsdb"))?;
-assert_eq!(vsdb_open_mode(), OpenMode::ReadOnly);
+fn main() -> vsdb::Result<()> {
+    vsdb_configure(VsdbOptions::read_only("/srv/my-app/vsdb"))?;
+    assert_eq!(vsdb_open_mode(), OpenMode::ReadOnly);
 
-// Persist this token in the writer process with `map.save_meta()`.
-let id: InstanceId = "40960000".parse()?;
-let map = Mapx::<String, String>::from_meta(id)?;
+    // Persist this token in the writer process with `map.save_meta()`.
+    let id: InstanceId = "40960000".parse()?;
+    let map = Mapx::<String, String>::from_meta(id)?;
 
-assert!(map.namespace().is_read_only());
-for (key, value) in map.iter() {
-    println!("{key}: {value}");
+    assert!(map.namespace().is_read_only());
+    for (key, value) in map.iter() {
+        println!("{key}: {value}");
+    }
+    Ok(())
 }
-# Ok(())
-# }
 ```
 
 Normal writable programs configure with `vsdb_configure(VsdbOptions::new(path))`.
@@ -45,119 +45,57 @@ Read-only processes open existing handles; they do not create collections or
 save new metadata. Create and save each application root while writable:
 
 ```rust,no_run
-use vsdb::{Mapx, VsdbOptions, vsdb_configure, vsdb_flush};
+use vsdb::{Mapx, VsdbOptions, vsdb_configure};
 
-# fn main() -> vsdb::Result<()> {
-vsdb_configure(VsdbOptions::new("/srv/my-app/vsdb"))?;
+fn main() -> vsdb::Result<()> {
+    vsdb_configure(VsdbOptions::new("/srv/my-app/vsdb"))?;
 
-let mut map = Mapx::<String, String>::new();
-map.insert(&"answer".into(), &"42".into());
-let id = map.save_meta()?;
+    let mut map = Mapx::<String, String>::new();
+    map.insert(&"answer".into(), &"42".into());
+    let id = map.save_meta()?;
 
-// Store `id` in application configuration or another bootstrap record.
-println!("{id}");
-vsdb_flush();
-# Ok(())
-# }
+    // Store `id` in application configuration or another bootstrap record.
+    map.try_sync_wal()?;
+    println!("{id}");
+    Ok(())
+}
 ```
 
 An `InstanceId` includes the owning namespace. `from_meta` and serde handle
 deserialization automatically open that namespace in the process-wide mode, so
 no separate read-only namespace option is needed.
 
-## What is supported
+## Collection behavior
 
-Read-only mode supports:
+| Request in read-only mode | Outcome |
+|---|---|
+| Restore an existing handle with `from_meta` or serde | Opens the owning namespace in read-only mode. |
+| Read maps, snapshots, history, slot pages or vectors | Point, range and index queries run normally. |
+| Compute a Merkle root or proof | `VerMapWithProof` can rebuild its trie in memory. Explicit checkpoint saves return `VsdbError::ReadOnly`. |
+| Save metadata, clone persistent data with `clone_in`, or commit a nonempty write batch | Returns `VsdbError::ReadOnly`. |
+| Create a valid SlotDex or VecDex, mutate a VerMap, or prune a DagMap | Fallible write operations return `VsdbError::ReadOnly`. |
+| Use infallible collection creation or mutation | A constructor, deep-copying `Clone`, or attempted engine write panics. A call that exits before writing can be a no-op. |
+| Call `vsdb_flush`, `Namespace::flush` or `VerMap::gc` | Skips maintenance writes. Deferred `lazy_delete` registration is also skipped. |
 
-- restoring saved raw and typed collection handles with `from_meta` or serde;
-- point reads, iteration, ranges, version/history queries, SlotDex queries, and
-  VecDex searches;
-- opening and listing existing namespaces, reading shard properties, and
-  closing non-default namespaces;
-- computing Merkle roots and proofs. `VerMapWithProof` rebuilds a missing or
-  stale trie cache in memory and does not save it;
-- MMDB WAL recovery in memory, so committed records that have not reached an
-  SST remain readable without rotating, truncating, or flushing the WAL.
+Use `collection.namespace().is_read_only()` or `vsdb_open_mode()` when
+dispatching requests that can reach an infallible write API.
 
-The following fallible operations return `VsdbError::ReadOnly` before a side
-effect:
+## Opening an existing universe
 
-- metadata saves and raw atomic file writes managed by VSDB;
-- explicit MPT/SMT cache saves;
-- namespace create, destroy, and relocate;
-- engine batch commits and `clone_in`;
-- fallible `SlotDex`, `VecDex`, and `VecDexDyn` constructors (`new` / `new_in`);
-- fallible mutations on `VerMap`, SlotDex, VecDex, and DAG pruning.
+Preserve the whole v18 base directory and any externally rooted namespaces
+your saved handles reference. Read-only open can
+replay residual shard WAL records in memory. VerMap can likewise validate its
+reference graph in memory. `VerMap::verify_and_gc()` can verify pages in this
+mode, while `VerMap::flush()` requests a writable checkpoint and returns
+`VsdbError::ReadOnly`.
 
-Existing collection APIs such as `Mapx::insert`, `remove`, and `clear` predate
-fallible mutation results. An attempted engine write panics in read-only mode,
-as it does for other fatal write failures. A call that returns before writing
-(for example, removing a byte slice with the wrong array-key length) may be a
-no-op; do not use such calls to probe write capability. Infallible collection
-constructors and the deep-copying `Clone` implementations also panic. Restore an existing
-handle instead, and check the mode before entering code that uses these
-infallible write APIs.
+Readers take shared locks where lock files exist. A writer needs exclusive
+access to the universe. When reading an immutable filesystem copy that omits
+lock files, keep the copy byte-stable for the readers' lifetime. The core guide
+describes the universe and shard locks, initialization checks and WAL recovery.
+[Core read-only mode](../../core/docs/read-only.md)
 
-```rust,no_run
-use vsdb::{OpenMode, vsdb_open_mode};
-
-if vsdb_open_mode() == OpenMode::ReadOnly {
-    // Route this request to read-only behavior.
-}
-```
-
-`vsdb_flush`, `Namespace::flush`, deferred `lazy_delete` registration,
-and `VerMap::gc` are maintenance no-ops; skipping them does not change logical
-read results. Explicit MPT/SMT and `VerMapWithProof` cache saves return
-`VsdbError::ReadOnly`. Root computation and `Drop` do not save caches in either mode.
-
-## Filesystem and process rules
-
-The database must already be complete. Read-only open never creates a base
-directory, shard, format marker, allocator file, namespace lifecycle record,
-metadata directory, WAL, SST, or cache file. A missing, partial, pending, or
-unsupported dataset is rejected instead of being initialized or repaired.
-A complete, marked dataset may retain a stale initialization sentinel; read-only
-open accepts that completed state and leaves the sentinel untouched. A namespace
-whose lifecycle record is still `Pending` is rejected even if files are present.
-
-A process configured read-only takes a shared non-blocking lock on the existing
-`__SYSTEM__/LOCK` for its lifetime. Other read-only processes can coexist.
-A writer requires the exclusive universe lock, including for namespace
-destruction and relocation. Stop readers before opening that universe writable.
-On Unix, MMDB also takes a shared non-blocking lock on each existing shard
-`LOCK` file as it opens the shard.
-
-An immutable filesystem copy may omit lock files. Read-only mode leaves
-those files absent. Keep the copy byte-stable until all readers exit.
-
-Mounting the tree read-only or applying read-only permissions is supported and
-recommended when operationally convenient. The process still needs ordinary
-read and directory-traversal permission.
-
-## Recovery and upgrades
-
-Read-only MMDB recovery replays valid residual WAL records into memory without
-changing disk. VSDB-level migrations and durable repair passes are different:
-they require a writable open and are not performed in read-only mode. In
-particular, read-only mode does not write format markers, allocator migrations,
-namespace lifecycle sidecars, versioned-map reference-count repairs, or
-garbage-collection registrations.
-
-After an upgrade or a crash that left VSDB maintenance metadata pending, open a
-backup or staging copy writable once, let normal recovery finish, validate it,
-then take the immutable snapshot used by readers. Never make the only copy of a
-dataset the target of an untested migration.
-
-## Operational checklist
-
-1. Stop the writer or take a storage-level consistent snapshot.
-2. Preserve the whole default base directory and every explicitly rooted
-   namespace referenced by saved handles.
-3. Start a separate process and call
-   `vsdb_configure(VsdbOptions::read_only(path))` before any other VSDB API.
-4. Restore existing `InstanceId` values or serialized handles; do not call
-   collection constructors.
-5. Treat `VsdbError::ReadOnly` as a capability error, not a retryable I/O
-   failure.
-6. Keep unlocked snapshots immutable until all readers close.
+For v17 data, convert a backup or staging copy offline with `vsdb_migrate`,
+including saved collection handles and any application-owned embedded handles.
+Validate the converted data before taking the v18 snapshot for readers.
+[Migration from v17](../../migration/README.md)

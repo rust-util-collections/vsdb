@@ -21,7 +21,12 @@ Keep the ledger across commits. Stage only freeze set + this-invocation fix/form
    Agent-written units leave `CHANGELOG.md` to the release commit; a user’s own
    CHANGELOG edit stays with the unit it documents.
 2. Checks:
-   - Docs/config only: `git diff --check` + structure sanity; skip Rust gates.
+   - Docs/config only: run `git diff --check` and resolve changed local links
+     and anchors. For a project skill, check its frontmatter, references and
+     `agents/openai.yaml` invocation policy. For changed Rust examples, use
+     the documented crate. Standalone Markdown examples need an explicit
+     doctest harness or example build; Cargo's workspace doctests cover the
+     examples included in Rust documentation.
    - Rust: `cargo fmt --all -- --check`; if needed, format only owned files and
      inspect the diff. Do not use `make fmt`.
    - Rust: targeted package lint/check for the affected targets — no `#[allow(...)]`;

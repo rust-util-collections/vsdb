@@ -5,7 +5,9 @@
 //! search with configurable distance metrics (`L2`, `Cosine`,
 //! `InnerProduct`).
 //!
-//! For detailed documentation see [VecDex docs](../../docs/vecdex.md).
+//! [`VecDexDyn`] accepts a runtime [`crate::MetricKind`].
+//! Serialize writers that share an index. [`VecDex::reader`] provides a
+//! cloneable handle for concurrent queries against captured read views.
 //!
 //! # Storage model (single-handle, crash-atomic)
 //!
@@ -24,8 +26,8 @@
 //!
 //! Each mutation or bulk-insert chunk stages its rows through a read-your-writes
 //! overlay and commits one atomic engine batch. Earlier chunks can remain
-//! committed after a later error. Recovery verifies the schema and reads the committed graph state. Atomicity does not imply an fsync per operation, and
-//! consistency requires the single-writer contract below.
+//! committed after a later error. Recovery verifies the schema and reads the
+//! committed graph state. Power-loss durability requires a shard WAL fence.
 //!
 //! The serialized form of a `VecDex` (its typed handle metadata) is the
 //! single handle prefix, layout version and immutable schema digest.

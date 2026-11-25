@@ -1,57 +1,18 @@
-//! Lightweight, stateless Merkle trie implementations.
+//! In-memory Merkle commitments and membership or absence proofs.
 //!
-//! This module provides two in-memory Merkle data structures plus a
-//! versioned-store integration layer:
+//! [`MptCalc`] uses a 16-way Patricia trie over key nibbles, with keys up
+//! to [`crate::trie::MAX_MPT_KEY_LEN`] bytes. [`SmtCalc`] uses a sparse binary trie
+//! over 256-bit key hashes. Both implement [`TrieCalc`], share immutable
+//! subtrees across clones, and expose `root_hash`, `prove` and `verify_proof`.
+//! An SMT proof carries sibling hashes down to the terminal leaf or empty
+//! subtree. Verification checks the proof against a supplied key and root.
 //!
-//! - **[`MptCalc`]** — Merkle Patricia Trie (16-ary, nibble-based).
-//!   Best for general key-value Merkle commitments.
-//! - **[`SmtCalc`]** — Sparse Merkle Tree (binary, 256-bit key-hash
-//!   paths). Supports compact membership and non-membership proofs.
-//! - **[`VerMapWithProof`]** — Wraps a `VerMap`
-//!   with a [`TrieCalc`] back-end to provide versioned Merkle root computation
-//!   with incremental diff-based updates and disposable cache persistence.
-//!
-//! Both `MptCalc` and `SmtCalc` are designed as **stateless computation
-//! layers** on top of a versioned store (e.g. `VerMap`): the trie is
-//! ephemeral and all persistence is handled by the underlying store.
-//!
-//! # Architecture: Trie + VerMap
-//!
-//! ```text
-//!   VerMap<K,V>          MptCalc / SmtCalc
-//!   (persistence)        (computation)
-//!   +-------------+      +-------------+
-//!   | branch/     |      | in-memory   |
-//!   | commit/     | diff | trie nodes  |  root_hash()
-//!   | merge/      |----->| (ephemeral) |-------------> [u8; 32]
-//!   | rollback    |      |             |
-//!   +-------------+      +-------------+
-//!        |                  |         ^
-//!        |           checkpoint    auto-load
-//!        |           on request    on from_map
-//!        |                  |         |
-//!        |                +--v--------+-+
-//!        |                | disk cache  | (disposable)
-//!        +----------------+-------------+
-//! ```
-//!
-//! 1. **`VerMap`** handles persistence, branching, commits, merges.
-//! 2. **`MptCalc` / `SmtCalc`** mirrors the current state as an
-//!    in-memory trie, synchronized via full rebuild or incremental diff.
-//! 3. **`root_hash()`** returns the 32-byte Merkle commitment.
-//! 4. **Disposable cache** — [`VerMapWithProof::from_map`] attempts to restore a
-//!    previous live-commit checkpoint. Call `VerMapWithProof::save_cache(commit)`
-//!    to save one explicitly; root calculations and handle destruction never
-//!    write it.
-//!
-//! # SMT proofs
-//!
-//! [`SmtCalc`] additionally supports [`prove`](SmtCalc::prove) and
-//! [`verify_proof`](SmtCalc::verify_proof) for Merkle inclusion and
-//! exclusion proofs.  Proofs are compact (Diem/JMT style): sibling
-//! hashes only down to the terminal lone-leaf or empty subtree on the
-//! key's path — O(log N) hashes for N keys — and verification folds
-//! the root in as many hash operations.
+//! [`VerMapWithProof`] uses either backend to prove the working state of a
+//! branch or a retained commit. Its [`crate::VerMap`] stores the
+//! authoritative data. The wrapper synchronizes its trie from the captured
+//! tree state using a diff or rebuild. [`VerMapWithProof::save_cache`] saves
+//! a checkpoint for a named commit. [`VerMapWithProof::from_map`] can reuse
+//! it when the universe, map, commit and tree root match.
 
 mod cache;
 mod codec_util;
@@ -97,7 +58,7 @@ impl Checkpoint {
     }
 }
 
-/// Stateless in-memory commitment and proof engine. Failed updates leave the
+/// In-memory commitment and proof engine. Failed updates leave the
 /// previous root accessible, including across unwinding.
 pub trait TrieCalc: Clone + Default {
     type Proof;

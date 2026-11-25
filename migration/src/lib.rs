@@ -1,6 +1,7 @@
-//! Offline v17 → v18 conversion. Stop writers, call [`migrate_universe`],
-//! configure v18 at that root and convert the saved collection handles.
-//! Embedded handles and application sidecars require their application's schema.
+//! Offline v17 → v18 conversion. Stop every process using the universe,
+//! including its explicitly placed namespaces. Call [`migrate_universe`]
+//! before configuring v18 at that root, then convert saved and embedded
+//! collection handles using the application's schema.
 #![deny(warnings)]
 
 use serde::{Deserialize, Deserializer, de};

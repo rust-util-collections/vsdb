@@ -1,177 +1,12 @@
-# vsdb API Examples
+# Collection examples
 
-This document provides examples for selected public APIs in the `vsdb` crate.
-
-## Durability fences
-
-`Mapx`, `MapxOrd`, and `MapxOrdRawKey` batches also expose `commit_sync()`.
-This opt-in operation synchronizes the shard WAL before atomic publication;
-ordinary `commit()` keeps its existing asynchronous default. An empty batch is
-not a fence for earlier writes. No cross-collection transaction is implied.
-An I/O failure may have left recoverable WAL data, so avoid automatic retries.
-
-The same distinction applies to SlotDex and VecDex mutations. Preflight
-rejection leaves that batch unapplied, and runtime caches update only after
-successful commits. A persistence error can still leave a complete WAL batch
-that recovery replays; an error does not establish that recovered disk state
-is unchanged. Related rows recover together as one atomic batch.
-
-`Mapx`, `MapxOrd`, `MapxOrdRawKey`, and `Orphan` expose `try_sync_wal()`:
-
-```rust
-use vsdb::MapxOrd;
-# fn main() -> vsdb::Result<()> {
-let mut state = MapxOrd::<u64, String>::new();
-state.insert(&1, &"accepted".to_owned());
-state.try_sync_wal()?;
-# Ok(())
-# }
-```
-
-The fence makes prior successful writes on the collection's shard durable
-without forcing a memtable flush; it returns synchronization errors. Other
-shards need their own fences. Use `collection.namespace().try_sync_wal()?` to
-cover every shard of that namespace, including composite indexes such as
-`SlotDex`. Shards synchronize sequentially, so an error can leave earlier
-shards synchronized. These calls do not provide cross-collection transactions.
-They are no-ops in read-only mode. The collection-level `sync_wal()` form
-panics on errors; ordinary inserts and batch commits do not fsync individually.
-
-## Basic collection read views
-
-Obtain a cheap, cloneable `MapReader` with `map.reader()`. A reader retains the namespace independently of the writer. Call `reader.read_view()` or `map.read_view()` to capture a single sequence for point queries and iteration. The ordered views also support ranges. An `OrphanReader` reads its latest value with `get()`.
-
-```rust
-use vsdb::MapxOrd;
-let mut m = MapxOrd::<String, u64>::new();
-m.insert(&"balance".to_owned(), &5);
-let reader = m.reader();
-let before = reader.read_view();
-m.update("balance", |v| *v += 2).unwrap();
-assert_eq!(before.get("balance"), Some(5));
-assert_eq!(reader.read_view().get("balance"), Some(7));
-```
-
-Mutable value guards write back after a mutable dereference or a vacant insertion. Use `update` or `guard.commit()` to receive encoding and storage errors. Mutate a `RefCell` via the guard's mutable dereference. Debug builds diagnose interior changes made through a shared dereference.
-
-## Namespaces
-
-Persistent collections support namespaces — independently-rooted engine instances
-for physical placement and whole-directory removal without per-key traversal.
-In-memory `MptCalc` / `SmtCalc` need no namespace; `VerMapWithProof` inherits
-placement from its wrapped `VerMap`. Everyday constructors stay parameterless.
-
-```rust,no_run
-use vsdb::{Namespace, NamespaceOpts, basic::mapx::Mapx, basic::mapx_ord::MapxOrd};
-
-// ---- Everyday tier: zero parameters, no names, no paths ----
-
-let cold = Namespace::create().unwrap();
-
-// Ambient placement: ordinary new() calls inside scope() use `cold`.
-// Explicit new_in() and DagMap children use their explicit/parent namespace.
-let archive: Mapx<u64, String> = cold.scope(|| Mapx::new());
-
-// Same namespace placement (not necessarily the same shard).
-let index = Mapx::<u64, u64>::new_in(&archive.namespace());
-assert_eq!(archive.namespace().id(), index.namespace().id());
-
-// ---- Persist and recover via InstanceId ----
-
-let id = archive.save_meta().unwrap();
-// id.to_string() => "42@1"  (map 42 in namespace 1)
-let restored: Mapx<u64, String> = Mapx::from_meta(id).unwrap();
-
-// Bare u64 from pre-namespace code still works for default-namespace maps.
-let legacy: Mapx<u64, String> = Mapx::new();
-let old_id = legacy.save_meta().unwrap().map_id;
-let from_old: Mapx<u64, String> = Mapx::from_meta(old_id).unwrap();
-
-// ---- Advanced tier (opt-in): explicit volume, shards, budget ----
-
-let fast = Namespace::create_with(NamespaceOpts {
-    path: Some("/mnt/nvme/vsdb".into()),
-    shards: 8,
-    mem_budget_mb: Some(2048),
-}).unwrap();
-let hot: MapxOrd<i32, String> = MapxOrd::new_in(&fast);
-
-// ---- Cross-namespace copy: `clone_in` (the `Clone` counterpart) ----
-
-// Deep-copies into a brand-new instance placed in the target namespace
-// (chunked; never whole-map in memory). Available on MapxRaw, Mapx,
-// MapxOrd, MapxOrdRawKey, and Orphan.
-let archive_copy = archive.clone_in(&Namespace::default_ns()).unwrap();
-
-// Admin functions (from vsdb_core, re-exported by vsdb):
-//   Namespace::list() -> Result<Vec<NsInfo>>
-//   Namespace::close_by_id(id) -> Result<()>
-//   ns.close()       -> consuming form; refusal returns the handle
-//   Namespace::destroy(id) -> Result<()>
-//   Namespace::relocate(id, new_path) -> Result<()>
-```
-
-Typed handles restored by serde or `from_meta` check a tag of the fully
-qualified Rust type name, including generic parameters. Unrelated types with
-the same short name are rejected. Moving or renaming a persisted type requires
-an explicit migration; a type alias referring to the original type is fine.
-Application field changes under the same name require explicit schema versioning. v18 uses `VSTYPE04` throughout. Convert old handles offline with `vsdb_migrate`.
-
-Key rules:
-- `Mapx::new()` uses the current creation scope, or the default namespace outside one.
-- Two `new_in(&ns)` calls can route to different shards; namespace placement alone does not provide a shared WAL.
-- A composite structure (`VerMap`, `SlotDex`, …) always lives wholly inside one namespace.
-- Cross-namespace atomic transactions do not exist (separate WALs).
-- Reads, writes, and deserialization always route via the handle's own namespace —
-  ambient scope affects creation only.
-- Memory sizing defaults to 2 GiB for the default namespace and 512 MiB for
-  each non-default namespace, without host-RAM/cgroup detection.
-  A nonzero `VsdbOptions::with_mem_budget_mb` (then `VSDB_MEM_BUDGET_MB`) configures the
-  default engine; `NamespaceOpts::mem_budget_mb` configures others. Units are
-  binary MiB. These inputs are not hard RSS limits: floors, caps, pinned
-  blocks, and runtime metadata affect actual memory use. See the
-  [memory design](../../docs/proposals/shared-mem-pool.md).
-
-## Read-only mode
-
-Configure read-only access once at process startup, then restore handles saved
-by an earlier writer:
-
-```rust,no_run
-use vsdb::{
-    InstanceId, Mapx, OpenMode, VerMap, VsdbError, VsdbOptions,
-    vsdb_configure, vsdb_open_mode,
-};
-
-# fn main() -> vsdb::Result<()> {
-vsdb_configure(VsdbOptions::read_only("/srv/my-app/vsdb"))?;
-assert_eq!(vsdb_open_mode(), OpenMode::ReadOnly);
-
-// Tokens saved by the writer (`save_meta`); illustrative values.
-let map_id: InstanceId = "40960000".parse()?;
-let map = Mapx::<String, String>::from_meta(map_id)?;
-assert!(map.namespace().is_read_only());
-let _ = map.get(&"key".to_owned());
-
-let versioned_id: InstanceId = "40960001".parse()?;
-let mut history = VerMap::<u64, String>::from_meta(versioned_id)?;
-let main = history.branch_id("main").unwrap();
-let _ = history.get(main, &7)?;
-assert!(matches!(
-    history.insert(main, &8, &"blocked".to_owned()),
-    Err(VsdbError::ReadOnly { .. })
-));
-# Ok(())
-# }
-```
-
-The setting covers every namespace opened by the process. Query APIs and
-in-memory WAL recovery are supported without filesystem changes. Fallible
-write APIs return `VsdbError::ReadOnly`, infallible collection mutations panic,
-maintenance-only flush/GC writes are skipped, and explicit
-trie-cache saves return the capability error. See the
-[read-only mode guide](read-only.md) for the full operation matrix,
-locking and snapshot rules, and recovery constraints.
+| Task | Examples |
+|---|---|
+| Store and edit typed data | [Mapx](#mapx), [MapxOrd](#mapxord), [single values and byte keys](#single-values-and-byte-keys) |
+| Share or place collections | [Read views](#basic-collection-read-views), [namespaces](#namespaces), [read-only processes](read-only.md) |
+| Make writes durable | [Batch commits and WAL fences](#durability-fences) |
+| Track versions and prove state | [VerMap](#vermap), [Merkle tries](#mptcalc--smtcalc-merkle-trie), [VerMapWithProof](#vermapwithproof) |
+| Index slots, overlays or vectors | [SlotDex](#slotdex), [DagMap](#dagmap), [VecDex](vecdex.md) |
 
 ## Mapx
 
@@ -215,7 +50,10 @@ assert_eq!(map.get(&[1, 0][..]), Some(7));
 assert_eq!(map.get(&[0][..]), None);
 ```
 
-Implement `KeyLookup<Q>` or `OrderedKeyLookup<Q>` on the owning key type to add a borrowed exact-match form. Equality keys require canonical bytes. The serde blanket requires `Eq + Hash`. Ordered scalar and integer-sequence keys use explicit widths. String maps accept string-slice bounds such as `map.range("a".."z")`.
+Implement `KeyLookup<Q>` or `OrderedKeyLookup<Q>` on the owning key type to
+add a borrowed exact-match form. Equal keys must have a canonical encoding. The
+serde blanket for equality keys requires `Eq + Hash`. Ordered maps with string
+keys accept string-slice bounds such as `map.range("a".."z")`.
 
 ## MapxOrd
 
@@ -244,11 +82,147 @@ assert_eq!(map.first(), Some((1, "one".to_string())));
 assert_eq!(map.last(), Some((3, "three".to_string())));
 ```
 
+## Single values and byte keys
+
+Use `Orphan<T>` for a standalone value and `MapxOrdRawKey<V>` for a typed
+value indexed by ordered application-defined bytes.
+
+```rust
+use vsdb::{MapxOrdRawKey, Orphan};
+
+let mut latest = Orphan::new(40_u64);
+latest.update(|v| *v += 2).unwrap();
+let mut by_path = MapxOrdRawKey::<u64>::new();
+by_path.insert(b"/index", &latest.get_value());
+assert_eq!(by_path.get(b"/index"), Some(42));
+```
+
+## Basic collection read views
+
+Obtain a cheap, cloneable `MapReader` with `map.reader()`. A reader retains the namespace independently of the writer. Call `reader.read_view()` or `map.read_view()` to capture a single sequence for point queries and iteration. The ordered views also support ranges. An `OrphanReader` reads its latest value with `get()`.
+
+```rust
+use vsdb::MapxOrd;
+let mut m = MapxOrd::<String, u64>::new();
+m.insert(&"balance".to_owned(), &5);
+let reader = m.reader();
+let before = reader.read_view();
+m.update("balance", |v| *v += 2).unwrap();
+assert_eq!(before.get("balance"), Some(5));
+assert_eq!(reader.read_view().get("balance"), Some(7));
+```
+
+Mutable value guards write back after a mutable dereference or a vacant insertion. Use `update` or `guard.commit()` to receive encoding and storage errors. Mutate a `RefCell` via the guard's mutable dereference. Debug builds diagnose interior changes made through a shared dereference.
+
+## Namespaces
+
+Persistent collections support namespaces — independently-rooted engine instances
+for physical placement and whole-directory removal without per-key traversal.
+In-memory `MptCalc` / `SmtCalc` need no namespace; `VerMapWithProof` inherits
+placement from its wrapped `VerMap`. A creation scope selects a namespace for ordinary constructors.
+
+```rust,no_run
+use vsdb::{Mapx, MapxOrd, Namespace, NamespaceOpts};
+
+let cold = Namespace::create().unwrap();
+
+// Ambient placement: ordinary new() calls inside scope() use `cold`.
+// Explicit new_in() and DagMap children use their explicit/parent namespace.
+let archive: Mapx<u64, String> = cold.scope(|| Mapx::new());
+
+// Same namespace placement (not necessarily the same shard).
+let index = Mapx::<u64, u64>::new_in(&archive.namespace());
+assert_eq!(archive.namespace().id(), index.namespace().id());
+
+// Save the handle and restore the same collection.
+
+let id = archive.save_meta().unwrap();
+// The token displays as "<map_id>@<namespace_id>" for this namespace.
+let restored: Mapx<u64, String> = Mapx::from_meta(id).unwrap();
+
+// A default-namespace v18 handle can also be looked up by its numeric map ID.
+let local: Mapx<u64, String> = Mapx::new();
+let numeric_id = local.save_meta().unwrap().map_id;
+let from_id: Mapx<u64, String> = Mapx::from_meta(numeric_id).unwrap();
+
+// Place this namespace on an explicit volume with its own shard count and budget.
+
+let fast = Namespace::create_with(NamespaceOpts {
+    path: Some("/mnt/nvme/vsdb".into()),
+    shards: 8,
+    mem_budget_mb: Some(2048),
+}).unwrap();
+let hot: MapxOrd<i32, String> = MapxOrd::new_in(&fast);
+
+// Deep-copy the entries into a fresh instance in the default namespace.
+let archive_copy = archive.clone_in(&Namespace::default_ns()).unwrap();
+```
+
+Typed handles restored by serde or `from_meta` check a tag of the fully
+qualified Rust type name, including generic parameters. Unrelated types with
+the same short name are rejected. Moving or renaming a persisted type requires
+an explicit migration; a type alias referring to the original type is fine.
+Application field changes under the same name require explicit schema versioning.
+v18 typed handles use `VSTYPE04`. Convert v17 handles offline using the
+[migration guide](../../migration/README.md).
+
+### Placement and memory
+
+- `Mapx::new()` uses the current creation scope, or the default namespace outside one.
+- Two `new_in(&ns)` calls can route to different shards; namespace placement alone does not provide a shared WAL.
+- A composite structure (`VerMap`, `SlotDex`, …) always lives wholly inside one namespace.
+- Cross-namespace atomic transactions do not exist (separate WALs).
+- Reads, writes, and deserialization always route via the handle's own namespace —
+  ambient scope affects creation only.
+- Memory sizing defaults to 2 GiB for the default namespace and 512 MiB for
+  each non-default namespace, without host-RAM/cgroup detection.
+  A nonzero `VsdbOptions::with_mem_budget_mb` (then `VSDB_MEM_BUDGET_MB`) configures the
+  default engine; `NamespaceOpts::mem_budget_mb` configures others. Units are
+  binary MiB. These inputs are not hard RSS limits: floors, caps, pinned
+  blocks, and runtime metadata affect actual memory use. See the
+  [memory design](../../docs/proposals/shared-mem-pool.md).
+
+## Durability fences
+
+`Mapx`, `MapxOrd`, and `MapxOrdRawKey` batches also expose `commit_sync()`.
+This opt-in operation synchronizes the shard WAL before atomic publication;
+ordinary `commit()` keeps its existing asynchronous default. An empty batch is
+not a fence for earlier writes. No cross-collection transaction is implied.
+An I/O failure may have left recoverable WAL data, so avoid automatic retries.
+
+SlotDex and VecDex use ordinary shard batches for mutations. Preflight
+rejection leaves that batch unapplied, and runtime caches update only after
+successful commits. A persistence error can still leave a complete WAL batch
+that recovery replays; an error does not establish that recovered disk state
+is unchanged. Related rows recover together as one atomic batch.
+
+`Mapx`, `MapxOrd`, `MapxOrdRawKey`, and `Orphan` expose `try_sync_wal()`:
+
+```rust
+use vsdb::MapxOrd;
+fn main() -> vsdb::Result<()> {
+    let mut state = MapxOrd::<u64, String>::new();
+    state.insert(&1, &"accepted".to_owned());
+    state.try_sync_wal()?;
+    Ok(())
+}
+```
+
+The fence makes prior successful writes on the collection's shard durable
+without forcing a memtable flush; it returns synchronization errors. Other
+shards need their own fences. Use `collection.namespace().try_sync_wal()?` to
+cover every shard of that namespace, including composite indexes such as
+`SlotDex`. Shards synchronize sequentially, so an error can leave earlier
+shards synchronized. These calls do not provide cross-collection transactions.
+They are no-ops in read-only mode. The collection-level `sync_wal()` form
+panics on errors; ordinary inserts and batch commits do not fsync individually.
+
 ## VerMap
 
 `VerMap` provides Git-style versioned storage with branching, commits, merge, and rollback (`rollback_to`).
 
-For a detailed architecture guide with diagrams, see [Versioned Module — Architecture & Internals](versioned.md).
+The version-store guide explains working roots, merge rules and durable publication.
+[VerMap architecture and recovery](versioned.md)
 
 ```rust
 use vsdb::versioned::map::VerMap;
@@ -284,9 +258,9 @@ m.delete_branch(feat).unwrap();
 
 ## MptCalc / SmtCalc (Merkle Trie)
 
-`MptCalc` and `SmtCalc` are stateless, in-memory Merkle trie implementations:
-they hold an ephemeral trie for root computation while all persistence and
-versioning is handled by an external store (e.g. `VerMap`).
+`MptCalc` and `SmtCalc` hold their trie nodes in memory. Applications can use them
+to compute a root or prove a key. `VerMapWithProof` connects either backend to
+a persistent, versioned data set.
 
 ```rust
 use vsdb::trie::MptCalc;
@@ -316,10 +290,10 @@ mpt.batch_update(&[
     (b"k2".as_ref(), None),  // remove
 ]).unwrap();
 
-// Disposable cache (low-level API, used internally by VerMapWithProof):
+// Save and restore a standalone trie cache.
 let cache_root = std::env::temp_dir().join(format!("vsdb-trie-example-{}", std::process::id()));
 let cache_dir = cache_root.as_path();
-std::fs::create_dir_all(cache_dir).unwrap();
+std::fs::create_dir(cache_dir).unwrap();
 let cache_id = 1;
 let sync_tag = 0;
 mpt.save_cache(cache_dir, cache_id, sync_tag).unwrap();
@@ -424,7 +398,7 @@ vmp.save_cache(commit).unwrap();
 
 Trie clones share immutable subtrees. Each batch publishes its candidate root
 after all operations succeed. Hashes and proofs can be computed through a
-shared reference. Both the commitment and proof wire bytes match v17.
+shared reference. v18 preserves the v17 commitment and proof wire formats.
 
 MPTC v2 and SMTC v4 checkpoints stream post-order nodes and omit cached
 node hashes. Loading verifies the checksum, canonical tree shape, root
@@ -440,9 +414,10 @@ excluding dirty changes. Call `merkle_root(branch)` again before proving the
 branch working state. Historical root queries return `CommitNotFound` for
 reclaimed commits, even if a matching trie cache remains.
 
-## Slotdex
+## SlotDex
 
-`SlotDex` (in the `slotdex` module) is a skip-list-like index for efficient, timestamp-based paged queries.
+`SlotDex<S, K>` indexes unique (slot, key) pairs and maintains tiered counts for
+offset pagination across slot ranges. A timestamp can serve as the slot.
 
 ```rust
 use vsdb::{SlotDex64, slotdex::Order};  // SlotDex<u64, K> alias — slot type is u64
@@ -503,7 +478,8 @@ writers across aliases. A stale writer returns an error, including on `clear`.
 Deserialize a fresh handle to resume writing. `clone` and `clone_in` deep-copy
 the index to an independent prefix.
 
-The offline `vsdb_migrate::slotdex::migrate_v17` converter keeps the prefix
+For built-in v17 coordinates (`u32`, `u64`, `u128`), the offline
+`vsdb_migrate::slotdex::migrate_v17` converter keeps the prefix
 and index rows and upgrades the total and handle metadata. Legacy capacities
 must fit in `u32`. For a custom fixed-width codec, `migrate_custom_v17` checks
 the supplied capacity and every entry and tier count. A variable-width custom
@@ -529,8 +505,9 @@ assert_eq!(root.get(&1).as_deref(), Some("edited"));
 ```
 
 Serialize structural changes to each connected graph. Every node has one
-tagged map on the root's shard. A successful prune folds the mainline,
-reparents surviving head children, clears consumed nodes and fences that
+tagged map on the root's shard. A successful prune removes ancestor side branches, folds the mainline,
+reparents surviving head children,
+clears consumed nodes and fences that
 shard's WAL. Retrying on the consumed head finishes any interrupted cleanup.
 `clone` copies the connected graph. `clone_in` places the copy in another
 namespace and preserves each parent's child tokens.

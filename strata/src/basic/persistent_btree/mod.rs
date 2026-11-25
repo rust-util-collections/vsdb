@@ -1,26 +1,16 @@
 //!
 //! Persistent B+ Tree with copy-on-write structural sharing.
 //!
-//! Every mutation returns a new root [`NodeId`], leaving previous versions
-//! intact. Nodes live in a flat pool backed by [`MapxRaw`], so unchanged
-//! subtrees are shared across versions at the node level.
+//! A [`NodeId`] identifies a root in this tree's [`MapxRaw`] node pool.
+//! A point update copies the modified path and shares unaffected subtrees.
+//! Non-root pages hold 16 to 32 keys. Leaf values larger than 1 KiB use
+//! separate blob rows.
 //!
-//! This data structure is analogous to Git's *tree object*: a single
-//! [`NodeId`] is a complete, self-contained snapshot of an ordered map.
-//!
-//! # Design
-//!
-//! * **Branching factor** — each node holds between `B` and `2B` keys
-//!   (except the root which may hold fewer). The default `B = 16` gives
-//!   nodes of 16..32 keys and a tree depth of ~4 for 1 million entries.
-//! * **Path copying** — inserting or removing a single key allocates at
-//!   most `O(depth)` new nodes (~4), sharing all others.
-//! * **Garbage collection** — nodes released via [`PersistentBTree::release_node`]
-//!   are automatically registered for deferred deletion when their
-//!   reference count reaches zero.  Call [`PersistentBTree::gc`] for
-//!   crash recovery or to sweep nodes that became unreachable through
-//!   internal mutation paths.
-//!
+//! [`crate::VerMap`] records the branch and commit roots it owns.
+//! With a standalone tree the caller retains the root IDs. Pass every live
+//! root to [`PersistentBTree::rebuild_ref_counts`] after reopening a
+//! standalone store or to [`PersistentBTree::gc`] for a full sweep. An
+//! omitted root can leave its pages eligible for reclamation.
 
 #![forbid(unsafe_code)]
 

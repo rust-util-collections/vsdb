@@ -20,13 +20,7 @@ None. Non-empty argument text → reject; never guess a filter.
 
 ## Setup
 
-Read [workflow-policy.md](../../../docs/ai/workflow-policy.md), [commit-protocol.md](../../../docs/ai/commit-protocol.md),
-[compatibility-policy.md](../../../docs/ai/compatibility-policy.md), [pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md),
-[review-core.md](../../../docs/ai/review-core.md), [technical-patterns.md](../../../docs/ai/technical-patterns.md),
-[false-positive-guide.md](../../../docs/ai/false-positive-guide.md). Preflight + ledger (freeze paths as work
-proceeds; note whether a patch bump or release tag is owed). Empty Open and
-no owed bump or tag → “nothing to fix”. With no Open entries and an owed bump or
-tag, continue at step 4.
+Run the [worktree preflight](../../../docs/ai/workflow-policy.md#1-preflight) and start the [invocation ledger](../../../docs/ai/commit-protocol.md#invocation-ledger). Apply the [review core](../../../docs/ai/review-core.md#1-context) and the [compatibility policy](../../../docs/ai/compatibility-policy.md) to each Open entry. Freeze paths as work proceeds. When Open is empty, continue at step 4 if a bump or tag is owed. With neither pending, report “nothing to fix”.
 
 ## Protocol
 

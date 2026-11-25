@@ -63,10 +63,7 @@ policy; VSDB does not impose a global service restart mechanism.
 
 ## Reproduce the syscall experiment
 
-Run in this checkout on Linux with a dynamically linked Rust toolchain, Cargo,
-`cc`, and `awk`. The probe only creates fresh temporary data. Pinning MMDB here
-makes this variant reproducible; the 4.3.0 run used the consumer's existing
-lockfile because a fresh exact resolution of that version was rejected as yanked.
+Run the following from the repository root of a checkout at `0be7d61`, the v17 revision containing both the tested API and this probe. Its manifest permits the historical MMDB 4.3.5 pin. The v18 manifest requires a later MMDB release. The probe uses Linux, a dynamically linked Rust toolchain, Cargo, `cc`, `awk` and fresh temporary data. The separate 4.3.0 run used the consumer's existing lockfile.
 
 ```bash
 probe_dir=$(mktemp -d /tmp/vsdb-fsync-order.XXXXXX)

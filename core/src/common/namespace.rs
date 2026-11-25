@@ -20,10 +20,9 @@
 //!   registry; omitted, it derives from the id under
 //!   `{default_base}/__NAMESPACES__/{ns_id:016x}` and is recorded as
 //!   derived (`None`), so the whole universe stays movable as one tree.
-//! * **One writable process per universe**: registry and allocator mutation
-//!   use in-process locks. Multiple read-only processes can inspect an
-//!   immutable universe; Unix shard locks are shared for readers and
-//!   exclusive for a writer when a LOCK file is present.
+//! * **One writable process per universe.** The writer holds an exclusive
+//!   universe lock. Readers take a shared lock when the lock file exists.
+//!   On Unix, MMDB also locks existing shard lock files in the same mode.
 //!
 
 use crate::common::{
@@ -75,10 +74,10 @@ const DEFAULT_NS_BUDGET_MB: usize = 512;
 
 /////////////////////////////////////////////////////////////////////////////
 
-/// The complete public identity of a collection instance — the same
-/// shape at every layer: in-memory comparison, the persisted meta bytes,
-/// and this token. `ns: None` ⇔ default namespace ⇔ the 16-byte meta
-/// form; a bare `u64` converts losslessly (`From<u64>` ⇒ `ns: None`).
+/// Identifies a collection by its map prefix and namespace within a universe.
+/// A bare `u64` selects the default namespace (`ns: None`). The v18
+/// `VSMAPX02` raw handle stores both IDs in a fixed 24-byte frame,
+/// encoding the default namespace as zero.
 ///
 /// `Display`/`FromStr` round-trip as `"42"` (default ns) or `"42@7"`
 /// (ns 7) — config/log friendly.
@@ -942,8 +941,9 @@ impl Namespace {
     /// full contract — flush-first teardown, registry untouched,
     /// re-openable afterwards).
     ///
-    /// `self` must be the *last* live handle: every collection handle,
-    /// iterator, and other `Namespace` clone must already be dropped.
+    /// `self` must be the last owning handle. Drop collection handles,
+    /// readers and other `Namespace` clones first. Detached snapshot
+    /// iterators can outlive the close and retain their sources.
     /// The consumed `self` itself is accounted for — unlike
     /// `Namespace::close_by_id(id)`, no separate `drop(ns)` is needed first.
     ///
@@ -1183,11 +1183,9 @@ impl Namespace {
     /// memtables are flushed and the WALs synced first (errors surface
     /// here, unlike a plain drop).
     ///
-    /// Refused unless every handle is gone: all collection handles,
-    /// iterators, and `Namespace` clones must be dropped first — `close`
-    /// either reclaims a provably-unreferenced namespace or returns an
-    /// error naming the live-handle count; it never invalidates a live
-    /// handle. Refused for the default namespace.
+    /// Drop every owning collection handle, reader and `Namespace`
+    /// clone first. A refusal reports the number of remaining owners.
+    /// The default namespace stays open for the life of the process.
     ///
     /// The registry entry is untouched: a closed namespace can be re-opened
     /// via [`Namespace::open`] (restart-equivalent recovery) or reclaimed

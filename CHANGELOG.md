@@ -14,13 +14,33 @@ This major version introduces a distinct storage format. Stop v17 processes and 
 - Typed maps gain borrowed key lookups, safe occupied/vacant entries, fallible value updates and immutable readers. Ordered integer keys use explicit widths. A mutable dereference marks a guarded value for persistence.
 - VerMap publishes working and history changes under one prefix. Its slotted B+ tree supports owned snapshots, checked recovery and batched edits. Trie roots use copy-on-write nodes and map-bound checkpoints.
 - SlotDex uses fixed-width slot codecs and detects stale writers. DagMap stores each node under one co-located prefix and supports typed keys and empty values. VecDex reads persisted graph state, uses snapshots for search and supports stored metric parameters.
-- **Public API migration notes**:
-  - `Entry<'a>` (`MapxRaw`, `Mapx`, `MapxOrd`, `MapxOrdRawKey`) is now an `Occupied` / `Vacant` enum; `ValueGuard` marks values dirty on `DerefMut`; `update` takes a fallible closure.
-  - `KeyEnDe` / `ValueEnDe` add `encode_*_into` and borrowed `KeyLookup` / `OrderedKeyLookup`; `KeyEnDeOrdered` encodes integer keys in fixed-width big-endian bytes instead of `postcard` varints.
-  - `VerMap` returns owned `'static` `Snapshot<K, V>` handles and adds `flush`, `close`, `from_meta_verified`, `verify_and_gc`, `write_batch`, `bulk_load`, and `reader` (`VerMapWithProof` likewise adds `flush` and `close`).
-  - `TrieCalc` returns `[u8; 32]` roots directly, adds associated `Proof` (`prove` / `verify_proof`), and replaces `save_cache` / `load_cache` with map-bound `save_checkpoint` / `load_checkpoint` (`Checkpoint`).
-  - `SlotDex::new(tier_capacity: u32, swap_order: bool)` narrows `tier_capacity` to `u32` (`>= 2`) and returns `Result<Self>`; `DagMapRawKey::new(parent: Option<&mut Self>)` co-locates children onto the parent's shard; `VecDexDyn::new_with_metric(metric, config)` replaces `VecDexDyn::new` (`VecDexDyn<K, S> = VecDex<K, MetricKind, S>`), and `VecDex` / `VecDexReadView` add filtered view queries and `search_with_raw_filter` / `search_ef_with_raw_filter`.
-  - `vsdb_migrate` provides both saved-ID converters and byte-slice handle converters (`migrate_*_handle_v17`, `dagmap::migrate_child_v17`).
+
+### Public API migration notes
+
+- Raw and typed map entries have `Occupied` and `Vacant` variants. A typed
+  value guard tracks mutable dereferences. Map `update` takes a closure
+  returning `R` and returns `Result<Option<R>>` to report write-back errors.
+- `KeyEnDe` and `ValueEnDe` support encoding into an existing buffer.
+  `KeyLookup` and `OrderedKeyLookup` support borrowed lookups. The built-in
+  ordered integer codecs retain big-endian ordering and require explicit
+  widths. Applications using `usize` or `isize` as ordered keys must choose
+  a fixed-width representation.
+- `VerMap` returns owned `Snapshot<K, V>` handles. Its v18 API includes
+  `reader`, `write_batch`, `bulk_load`, `from_meta_verified`, `verify_and_gc`,
+  `flush` and `close`. `VerMapWithProof` also exposes `flush` and `close`.
+- `TrieCalc::root_hash(&self)` returns `[u8; 32]`. Both backends implement the
+  associated `Proof` type, `prove`, `verify_proof` and the checkpoint methods
+  `save_checkpoint` and `load_checkpoint`. The standalone `save_cache` and
+  `load_cache` helpers delegate to those methods.
+- `SlotDex::new` takes a `u32` tier capacity of at least two. The slot's
+  encoded bytes have a fixed width. `DagMap<K, V>` adds typed keys, and
+  child nodes in all DAG variants share their parent's shard.
+- `VecDexDyn<K, S>` is now an alias for `VecDex<K, MetricKind, S>`.
+  Replace `VecDexDyn::new(metric, config)` with `new_with_metric(metric, config)`.
+  Both the index and its read view support typed and encoded-key filters.
+- `vsdb_migrate` supports saved IDs and serialized handle bytes. DAG
+  descendants can be restored with the returned child-ID mapping.
+  [Converter table and upgrade sequence](migration/README.md)
 
 ## [v17.0.21]
 

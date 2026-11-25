@@ -1,8 +1,10 @@
 # DagMap Review Patterns
 
-**Files:** `dagmap/{mod,typed}.rs`, `dagmap/raw/{mod,test}.rs`, `dagmap/rawkey/{mod,test}.rs`.
+[Single-parent overlay maps](../../../strata/src/dagmap)
 
 `#![forbid(unsafe_code)]` on `dagmap::raw`. Each node owns one co-located `MapxRaw`. The root creates a `dag_id` token; children share the root's namespace and shard (`new_colocated`). Row `00` holds `VSDAGN01` `NodeMeta`, `01` indexes local child edges, and `02` prefixes user keys (`[0x01 | val]` live vs `[0x00]` tombstone, so empty `[]`/`()` values round-trip).
+
+## Node ownership and recovery
 
 - **Consumed-node guard:** Every local mutator (`insert`, `remove`, `get_mut`, `update`, and `new(Some(parent))`) must enforce `meta.state.live()`, rejecting `Clearing | Destroying | Destroyed` nodes even when unwiped `[02..03)` rows remain from an interrupted cleanup.
 - Check node magic, `dag_id`, shard co-location and the child's recorded
@@ -22,5 +24,7 @@
   destroy can use the owner saved in its destroying state.
 - Use iterative traversal on deep graphs. A clone remaps every copied parent,
   child and recovery link into the copied graph and retains local edge tokens.
-- The offline migration crate owns old tuple decoders, the durable conversion
-  journal and the relocation map for external child IDs.
+
+## Migration
+
+The offline converter decodes the old node tuples and journals conversion. Check external references against the returned child-ID mapping. [DAG converter](../../../migration/src/dagmap.rs) · [Migration checks](migration.md)

@@ -1,12 +1,9 @@
 # VecDex — Approximate Nearest-Neighbor Vector Index
 
 VecDex is a persistent, disk-backed vector index using the HNSW (Hierarchical
-Navigable Small World) algorithm. The HNSW implementation is Rust and runs on
-VSDB's storage primitives. The storage backend currently uses native Zstd
-compression, whose bundled `zstd-sys` build requires a C toolchain.
-
-Use cases: AI rigs, RAG pipelines, semantic search, recommendation engines,
-embedding-based retrieval.
+Navigable Small World) algorithm. Each index stores vectors, the search graph and its
+configuration in one shard. Choose a compile-time metric with `VecDex` or a
+runtime metric with `VecDexDyn`.
 
 ## Quick start
 
@@ -45,19 +42,17 @@ for every mutation or batch chunk. Concurrent readers can use `reader()`
 to share the graph. A reader's `read_view()` captures a snapshot for several
 queries. Cloning the mutable index deep-copies the graph into a fresh prefix.
 
-## API Reference
+## API reference
 
-Vectors and queries must have all finite components. Inserts, batches and
-searches reject NaN and either infinity with `VsdbError::InvalidConfig` when
-the vector passes its dimension check; rejected inserts and batches make no
-changes. Previously accepted nonfinite stored vectors cause `compact()` to
-return `VsdbError::Corrupt` without replacing the persisted graph. Finite
-inputs can still overflow a metric's arithmetic; the existing distance
-behavior is unchanged.
+Vectors and queries must match the configured dimension and contain only
+finite components. `insert_batch` checks every vector before it writes the
+first chunk. Nonfinite components in existing vectors cause `compact()` to
+return `VsdbError::Corrupt` before replacing the graph.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `new` | `(config: HnswConfig) -> Result<Self>` | Create empty index (in the current ambient namespace); `InvalidConfig` on a bad config; `ReadOnly` in read-only mode |
+| `new_with_metric` / `new_with_metric_in` | `(metric, config)` / `(ns, metric, config) -> Result<Self>` | Create an index using the supplied metric value |
 | `new_in` | `(ns: &Namespace, config: HnswConfig) -> Result<Self>` | Create empty index placed in `ns` |
 | `namespace` | `(&self) -> Namespace` | The namespace this index lives in |
 | `instance_id` | `(&self) -> InstanceId` | Complete persistent identity (`map_id` + owning namespace) |
@@ -67,6 +62,7 @@ behavior is unchanged.
 | `search_ef` | `(&self, query: &[S], k: usize, ef: usize) -> Result<Vec<(K, S)>>` | Search with custom beam width |
 | `search_with_filter` | `(&self, query: &[S], k: usize, predicate: impl Fn(&K) -> bool) -> Result<Vec<(K, S)>>` | k-NN search with key predicate |
 | `search_ef_with_filter` | `(&self, query: &[S], k: usize, ef: usize, predicate: impl Fn(&K) -> bool) -> Result<Vec<(K, S)>>` | Filtered search with custom beam width |
+| `search_with_raw_filter` / `search_ef_with_raw_filter` | Same arguments as typed filters with `predicate: impl Fn(&[u8]) -> bool` | Test encoded keys during traversal |
 | `remove` | `(&mut self, key: &K) -> Result<bool>` | Delete by key |
 | `get` | `(&self, key: &K) -> Option<Vec<S>>` | Fetch vector by key |
 | `contains_key` | `(&self, key: &K) -> bool` | Whether a key exists |
@@ -75,21 +71,19 @@ behavior is unchanged.
 | `len` | `(&self) -> u64` | Number of indexed vectors |
 | `is_empty` | `(&self) -> bool` | Whether index is empty |
 | `set_ef_search` | `(&mut self, ef: usize) -> Result<()>` | Update the default search beam width |
+| `reader` / `read_view` | `(&self)` | Share the same index, or capture one engine sequence for several queries |
+| `clone_in` | `(&self, ns: &Namespace) -> Result<Self>` | Deep-copy the graph into the selected namespace |
 | `clear` | `(&mut self) -> Result<()>` | Remove all data |
 | `compact` | `(&mut self) -> Result<()>` | Rebuild graph from existing vectors |
 | `save_meta` | `(&self) -> Result<InstanceId>` | Persist metadata for later recovery (create-time constant; saving once after creation suffices) |
 | `from_meta` | `(instance_id: impl Into<InstanceId>) -> Result<Self>` | Recover from saved metadata (a bare `u64` works for default-namespace instances) |
 
-Rows, counters, and graph state for each mutation are committed in one atomic
-engine batch. Runtime state updates only after successful commits. Validation
-and preflight rejection leave the failing batch unapplied, but a persistence
-error may leave complete WAL data that recovery replays. Do not automatically
-retry an I/O error as though the recovered index were unchanged.
-
-`insert_batch` commits one chunk at a time: a later error can
-leave earlier chunks committed. Recovery reads the committed state directly. Atomicity does not imply an fsync
-per operation; power loss can lose an unfenced batch. These guarantees require
-the single-writer ownership rule above and intact storage.
+Rows, counters and graph state for each mutation commit in one shard batch.
+`insert_batch` keeps the last occurrence of each key and commits up to 64
+surviving items per chunk. A later storage failure can leave earlier chunks
+committed. An I/O error during a commit can leave recoverable WAL data, so
+inspect the recovered state before retrying. For power-loss durability after
+a successful mutation, fence the namespace with `idx.namespace().try_sync_wal()?`.
 
 ## Configuration
 
@@ -123,13 +117,13 @@ disconnected graphs written by earlier versions. This needs no rebuild or
 stored-data rewrite. Smaller beams remain approximate; a restart scan adds
 work only when ordinary graph traversal cannot fill the beam.
 
-## Distance Metrics
+## Distance metrics
 
 | Metric | Formula | When to use |
 |--------|---------|-------------|
 | `L2` | `sum((a-b)^2)` | General-purpose, geometric distance |
-| `Cosine` | `1 - cos(a,b)` | Text embeddings, normalized vectors (most LLM APIs) |
-| `InnerProduct` | `-(a . b)` | Maximum inner product search, pre-normalized data |
+| `Cosine` | `1 - cos(a,b)` | Angular similarity (a zero vector has distance 1) |
+| `InnerProduct` | `-(a . b)` | Maximum inner product search |
 
 Custom metrics can be implemented via the `DistanceMetric<S>` trait.
 
@@ -152,7 +146,7 @@ once on the stored metric and uses one reusable vector buffer across visited
 nodes. Custom parameterized metrics implement `distance(&self, a, b)` and
 provide a deterministic serde encoding for their parameters.
 
-## Filtered Search
+## Filtered search
 
 `search_with_filter` evaluates a predicate on each candidate's key *during*
 the HNSW beam search, not as a post-filter.  Non-matching nodes still
@@ -183,7 +177,13 @@ the same visit cap. A predicate that almost nothing satisfies is bounded by
 beyond it, results can be incomplete — scan the matching keys directly for
 such filters.
 
-## Storage Architecture
+For predicates over the stored representation, `search_with_raw_filter` and
+`search_ef_with_raw_filter` receive the bytes produced by `K::encode_key`.
+Only the winning keys need decoding. With postcard, a string's length comes
+before its contents and integers use varints. For a string prefix such as
+`"session-42"`, the typed predicate above compares the decoded text directly.
+
+## Storage architecture
 
 All persistent state lives in **one** `MapxRaw` handle, namespaced by a
 leading tag byte:
@@ -213,16 +213,13 @@ Compaction still stages the full replacement graph in memory.
 
 ### Upgrading a v17 index
 
-The separate `vsdb_migrate` crate provides
-`vecdex::migrate_v17::<K, D, S>(id)`. After upgrading the universe, run this
-converter with exclusive access. Set `D = MetricKind` for v17 runtime metrics.
-The converter validates the old type envelope, vector framing, node mappings and graph state. It rewrites the vector framing in
-bounded chunks, then commits the new schema and fixed-width state with a WAL
-fence before replacing the handle metadata. A retry continues from a cursor
-committed with its vector rows. The prefix, node IDs and adjacency lists are
-preserved, so searches on the converted graph retain their original neighbors.
+After converting the universe, run `vsdb_migrate::vecdex::migrate_v17::<K, D, S>(id)`
+with exclusive access. Use `D = MetricKind` for a v17 runtime metric. The
+converter rewrites vector rows in resumable chunks and preserves node IDs and
+adjacency lists. The migration guide also covers handles embedded in
+application records. [Migration from v17](../../migration/README.md)
 
-## Type Aliases
+## Type aliases
 
 ```rust
 use vsdb::vecdex::{VecDex, distance::{L2, Cosine}};
@@ -236,42 +233,9 @@ pub type VecDexL2F64<K> = VecDex<K, L2, f64>;
 pub type VecDexCosineF64<K> = VecDex<K, Cosine, f64>;
 ```
 
-## Thread Safety
+## Thread safety
 
-VecDex is `Send + Sync` when its generic parameters (`K`, `D`, `S`) are —
-true for all provided metrics and scalar types.
-For concurrent read/write access, wrap it in
-`parking_lot::RwLock<VecDex<K, D>>`.
-
----
-
-## Feature Status
-
-### Implemented
-
-| Feature | Notes |
-|---------|-------|
-| HNSW insert / search / delete | Full algorithm with layer assignment and bidirectional edges |
-| L2, Cosine, InnerProduct metrics | Extensible via `DistanceMetric<S>` trait |
-| f32 / f64 scalar support | `VecDex<K, D, S = f32>` generic over `Scalar` trait |
-| Filtered search | `search_with_filter` — predicate evaluated during beam search, not post-filter |
-| Bulk insert | `insert_batch(&[(K, Vec<S>)])` for batch loading |
-| Connectivity-aware neighbor selection | HNSW paper Algorithm 4 heuristic for diverse neighbors |
-| Index compaction | `compact()` rebuilds graph from existing vectors after heavy churn |
-| Configurable M, m_max0, ef_construction, ef_search | Per-index config, ef overridable per-query |
-| Disk persistence via MMDB | All graph data persisted; survives restarts |
-| save_meta / from_meta | Instance recovery from instance ID |
-| Send + Sync | Safe for multi-threaded use when generic parameters permit |
-| Generic key types | Public methods require `K: KeyEnDe` |
-| Duplicate key handling | Re-insert replaces old vector and rebuilds connections |
-| Runtime metric selection | `VecDexDyn<K, S>` + `MetricKind` — metric chosen at construction, persisted in meta; one enum dispatch per search, distance loops stay monomorphized |
-| Criterion benchmarks | Insert and search benches at 1K/5K/10K scales |
-
-### Planned (not yet implemented)
-
-| Feature | Priority | Description |
-|---------|----------|-------------|
-| SIMD-optimized distance | P2 | Architecture-specific SIMD for distance computation |
-| f16 / i8 quantized vectors | P3 | Reduced storage and faster distance for large indices |
-| Multi-vector per key | P3 | Store multiple embeddings per key (e.g., chunked documents) |
-| VerMap integration | P3 | Versioned vector index with branching and merge |
+A `VecDex` is `Send + Sync` when its generic parameters permit it. One writer
+can own the mutable index while other threads clone its `reader()` and acquire
+read views. Multiple writers, including writers restored from the same saved
+handle, require external serialization.

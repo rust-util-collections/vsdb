@@ -78,29 +78,29 @@ pub(crate) struct BranchRoots {
 /// crash-recovery anchors, and the `[0x07]` reference checkpoint — lives under
 /// **one** [`MapxRaw`] prefix on a single engine shard WAL:
 ///
-/// - Working-state edits (`insert`, `remove`, `write_batch`, `bulk_load`,
-///   `discard`) commit atomically without an `fsync`.
-/// - History operations (`commit`, `merge`, branch create/delete,
-///   `rollback_to`, `set_main_branch`) end with a synchronous WAL commit
-///   (`commit_sync`) and are durable when they return.
-/// - When concurrent [`Snapshot`](super::Snapshot) leases or reader handles
-///   share the runtime, retired roots record `[0x05]` `RETIRED` anchors and
-///   defer physical deletion until the next synced publication; multi-chunk
-///   `> 16 MiB` builds record `[0x06]` `STAGE` anchors until published.
-/// - [`flush`](Self::flush) and [`close`](Self::close) write a checksummed,
-///   generation-bound `[0x07]` `REFS` checkpoint for fast reopening without a
-///   full object walk.
-/// - Writable reopen validates the commit graph and reachable roots before
-///   reclaiming unpublished or retired objects; missing HEADs, parents, or
-///   reachable tree pages fail with [`VsdbError::Corrupt`].
+/// - `insert`, `remove`, `write_batch` and `discard` publish working-root
+///   changes in an ordinary atomic batch, without forcing a WAL sync.
+/// - `bulk_load` and history changes (`commit`, `merge`, branch create/delete,
+///   `rollback_to` and `set_main_branch`) publish the root or metadata in a
+///   synchronous batch. A no-op can return without issuing a batch.
+/// - Large merges and bulk loads write unpublished pages with `[0x06]`
+///   staging markers before the final synchronous publication.
+/// - With readers or restored handles sharing the runtime, publication records
+///   `[0x05]` markers for retired roots. Snapshot pins keep pages live.
+///   Unreachable pages can be removed in a later publication or checkpoint.
+/// - On a writable store, [`flush`](Self::flush) and [`close`](Self::close)
+///   save a checksummed, generation-bound `[0x07]` reference checkpoint.
+///   Ordinary reopen checks the commit graph, root page headers and ID
+///   ceilings. A valid checkpoint without retirement or staging markers can
+///   supply the object reference counts. Otherwise reopen recounts them.
+///   Use [`from_meta_verified`](Self::from_meta_verified) for deep validation.
 ///
 /// # Read-only mode
 ///
-/// A restored `VerMap` remains fully queryable in process-wide read-only
-/// mode, including branch lookup, historical reads, diffs, and logs. Mutating
-/// methods that return `Result` fail with [`VsdbError::ReadOnly`], and
-/// [`gc`](Self::gc) becomes a no-op because it cannot persist repairs or
-/// object deletions.
+/// A restored `VerMap` supports branch lookup, snapshots, diffs and logs.
+/// Writes and explicit `flush` return [`VsdbError::ReadOnly`]. [`gc`](Self::gc)
+/// skips maintenance, [`verify_and_gc`](Self::verify_and_gc) validates in memory
+/// and [`close`](Self::close) consumes the handle without a checkpoint.
 ///
 /// # Quick start
 ///
@@ -557,8 +557,8 @@ where
     /// reaches zero, the commit is hard-deleted and the decrement
     /// cascades to its parents.
     ///
-    /// B+ tree nodes are reclaimed inline through the same ref-count
-    /// cascade; [`gc`](Self::gc) is only needed to recover from a crash.
+    /// Unreachable tree objects are reclaimed at publication or queued until
+    /// their last reader releases them and a later batch drains the queue.
     pub fn delete_branch(&mut self, branch: BranchId) -> Result<()> {
         self.ensure_writable("branch deletion")?;
         if branch == self.main_branch() {

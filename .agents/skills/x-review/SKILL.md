@@ -16,11 +16,7 @@ Never commit or push. User-invoked only.
 
 ## Setup
 
-Read: [workflow-policy.md](../../../docs/ai/workflow-policy.md), [pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md),
-[technical-patterns.md](../../../docs/ai/technical-patterns.md), [review-core.md](../../../docs/ai/review-core.md) (Subsystem Map),
-[false-positive-guide.md](../../../docs/ai/false-positive-guide.md). Public/persisted change →
-[compatibility-policy.md](../../../docs/ai/compatibility-policy.md). Design-shaped / multi-subsystem →
-[design-patterns.md](../../../docs/ai/design-patterns.md).
+Run the [worktree preflight](../../../docs/ai/workflow-policy.md#1-preflight). Follow the [review core](../../../docs/ai/review-core.md#1-context) for common checks and the guide for each affected subsystem.
 
 ## Input
 
@@ -48,7 +44,7 @@ scope: report only defects still present at HEAD.
 
 1. Worktree baseline ([workflow-policy.md](../../../docs/ai/workflow-policy.md)).
 2. Changed files + full diff + callers/tests. `worktree` includes untracked.
-   `all` → ledger: all three workspace crates’ (`core/`, `strata/`, `migration/`) source/tests/benches, manifests/CI, public docs, `.agents/` and `docs/ai/`.
+   For `all`, build the tracked-file ledger using [full-repository coverage](../../../docs/ai/review-core.md#full-repository-coverage).
 3. Map via Subsystem Map; load guides.
 4. Mark generated/vendored/out-of-scope in the ledger — do not silent-drop.
 

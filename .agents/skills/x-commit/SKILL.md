@@ -24,12 +24,7 @@ Pathspecs bound review units, not the owed release (`commit-protocol.md`).
 
 ## Setup
 
-Read [workflow-policy.md](../../../docs/ai/workflow-policy.md), [commit-protocol.md](../../../docs/ai/commit-protocol.md),
-[pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md), [review-core.md](../../../docs/ai/review-core.md),
-[technical-patterns.md](../../../docs/ai/technical-patterns.md), [false-positive-guide.md](../../../docs/ai/false-positive-guide.md);
-public/persisted → [compatibility-policy.md](../../../docs/ai/compatibility-policy.md); design-shaped →
-[design-patterns.md](../../../docs/ai/design-patterns.md). Preflight + ledger (incl. **frozen paths** and
-whether a patch bump or release tag is owed).
+Run the [worktree preflight](../../../docs/ai/workflow-policy.md#1-preflight) and freeze the intended paths in the [invocation ledger](../../../docs/ai/commit-protocol.md#invocation-ledger), including any owed bump or tag. Use the [review core](../../../docs/ai/review-core.md#1-context) to select the shared and subsystem-specific checks for each unit.
 
 ## Protocol
 

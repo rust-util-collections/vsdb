@@ -1,9 +1,9 @@
 # Namespaces — current design
 
 Namespaces shipped in v16.0.0; in-process close in v16.1.0, cross-namespace
-copy in v16.2.0, per-engine cache pooling in v16.3.0, and `VSUNI018`/`VSENG018`/`VSNREG02` headers in v18.0.0. This document
-describes the current v18 implementation, including configuration and handle
-APIs. Earlier RFC revisions and implementation plans remain in Git history.
+copy in v16.2.0, and per-engine cache pooling in v16.3.0.
+The v18 implementation adds the universe and engine headers and the
+`VSNREG02` registry. Earlier RFC revisions and implementation plans remain in Git history.
 
 Source of truth: [namespace.rs](../../core/src/common/namespace.rs),
 [universe.rs](../../core/src/common/universe.rs),
@@ -25,9 +25,7 @@ atomic transaction, and VSDB engine batches are single-prefix.
 
 The registry and prefix allocator are shared across the universe. Writable
 access requires one process per universe, including when processes intend to
-use disjoint namespaces: the writer holds an OS advisory lock on `__SYSTEM__/LOCK` for the life of the universe. Multiple
-read-only processes may inspect a complete immutable universe; see the
-[read-only guide](../../core/docs/read-only.md) for shard locking and snapshots.
+use disjoint namespaces: the writer holds an OS advisory lock on `__SYSTEM__/LOCK` for the life of the universe. Read-only opens take a shared universe lock before reading the header when the lock file exists. Multiple readers can inspect a complete immutable universe. Lockless immutable copies require external exclusion of writers. [Read-only guide](../../core/docs/read-only.md)
 
 ## Creation and placement
 
@@ -59,9 +57,9 @@ assert_eq!(restored.namespace().id(), ns.id());
   DagMap children inherit their parent's namespace, even inside another scope.
 - A composite collection remains within one namespace. In-memory `MptCalc`
   and `SmtCalc` have no namespace constructor; use
-  `VerMapWithProof::from_map(VerMap::new_in(&ns))` for a placed proof wrapper.
+  `VerMapWithProof::new_in(&ns)` for a placed proof wrapper.
 
-`clone_in(&ns)` deep-copies `MapxRaw`, `Mapx`, `MapxOrd`, `MapxOrdRawKey`, `Orphan`, `VerMap`, `VerMapWithProof`, `SlotDex`, `DagMap*`, or `VecDex*`
+`clone_in(&ns)` deep-copies `MapxRaw`, `Mapx`, `MapxOrd`, `MapxOrdRawKey`, `Orphan`, `PersistentBTree`, `VerMap`, `VerMapWithProof`, `SlotDex`, `DagMap*`, or `VecDex*`
 into a fresh instance in the requested namespace. Map copies use bounded
 chunks; the operation is not a cross-engine transaction. Ordinary `Clone`
 deep-copies into the original namespace; unsafe `shadow()` aliases storage
@@ -96,7 +94,7 @@ A raw handle stores `VSMAPX02 | prefix_le | ns_le` in 24 bytes. Typed handles us
 ```text
 <base>/
   __SYSTEM__/
-    LOCK                        exclusive writable universe lock
+    LOCK                        exclusive writer or shared read-only owners
     universe_header             VSUNI018, format version, universe ID
     __namespaces__              VSNREG02, next ID, namespace records
     __prefix_ceiling__          durable prefix reservation ceiling
@@ -106,6 +104,7 @@ A raw handle stores `VSMAPX02 | prefix_le | ns_le` in 24 bytes. Typed handles us
   mmdb/shard_00/ ...            default shards, created on first use
   __NAMESPACES__/<id in hex>/   derived namespace root
     __SYSTEM__/engine_header    VSENG018, universe ID, namespace ID, shards
+    __SYSTEM__/.shards_ready    published after engine identity and shards
     mmdb/shard_00/ ...          namespace shards
 ```
 

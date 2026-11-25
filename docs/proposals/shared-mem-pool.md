@@ -7,9 +7,7 @@ write-buffer manager remain proposals, not available VSDB options.
 
 The current integration is in
 [core/src/common/engine/mmdb.rs](../../core/src/common/engine/mmdb.rs).
-The MMDB internals described here match the workspace's 4.3.7 resolution;
-the manifest's compatible dependency range can resolve newer versions.
-Earlier RFC mechanics based on MMDB 4.0.10 are historical.
+The v18 lockfile resolves MMDB 4.3.15. The formulas and write path below apply to that implementation. [Workspace lockfile](../../Cargo.lock)
 
 ## Why share within an engine?
 
@@ -48,10 +46,18 @@ legacy_write   = min(if B > 16 GiB { B / 4 / S } else { 1 GiB / S }, 512 MiB)
 write_buffer   = max(min(legacy_write, B / 8 / S), 4 MiB)
 ```
 
-Each shard retains an active write buffer and may have up to four immutable
-memtables awaiting flush. Before floors/caps, that allows roughly `5B/8` for
-memtables and `B/8` for the evictable block cache. Floors can exceed that split
-for small budgets; large budgets encounter the write-buffer cap.
+MMDB 4.3.15 freezes and flushes a full memtable synchronously on the write leader.
+The write path can hold an active and a flushing table per shard. The configured
+`max_immutable_memtables = 4` does not create a queue of four more tables on
+this path. Where the `B / 8 / S` term determines the buffer size, simultaneous
+flushes across all shards can account for roughly `2B/8` of memtable capacity,
+alongside `B/8` for the evictable block cache. Floors and caps change these
+ratios at small and large budgets. [Write-buffer experiment](v18-roadmap.md#107-engine-write-buffer-sizing)
+
+Each active B+ tree runtime can also cache immutable internal pages. Its page-byte
+budget is `clamp(B / 64, 64 KiB, 16 MiB)`, divided across eight cache shards.
+Handles sharing a tree runtime share this cache. Separate trees can each consume
+their own budget. [Tree runtime](../../strata/src/basic/persistent_btree/mod.rs)
 
 These inputs do not impose a hard RSS limit. Pinned blocks, table metadata,
 reverse indexes, in-flight reads, staged mutations, and application allocations

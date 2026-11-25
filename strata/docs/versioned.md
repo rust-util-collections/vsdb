@@ -1,290 +1,31 @@
-# Versioned Module — Architecture & Internals
+# VerMap architecture and recovery
 
-This document explains the design, data flow, and internal mechanisms of `VerMap`,
-the Git-model versioned storage engine in `vsdb`.
+`VerMap<K, V>` stores ordered keys in a copy-on-write B+ tree. A branch owns a
+working root and points to its latest commit. Each commit records a tree root
+and up to two parents. The working tree, commit graph and their metadata live
+in one `MapxRaw` prefix on one shard. For a runnable branch-and-merge example,
+see the [collection guide](api.md#vermap).
 
----
+## Branches, commits and snapshots
 
-## Table of Contents
-
-- [Architecture Overview](#architecture-overview)
-- [Layer Architecture](#layer-architecture)
-- [Core Data Structures](#core-data-structures)
-- [Lifecycle: Create → Write → Commit → Branch → Merge](#lifecycle)
-- [Copy-on-Write & Structural Sharing](#copy-on-write--structural-sharing)
-- [Commit DAG](#commit-dag)
-- [Three-Way Merge Algorithm](#three-way-merge-algorithm)
-- [Durability and Recovery](#durability-and-recovery)
-- [Garbage Collection](#garbage-collection)
-- [Fork Point & Commit Distance](#fork-point--commit-distance)
-- [Rollback & Discard](#rollback--discard)
-- [Summary](#summary)
-
----
-
-## Architecture Overview
-
-```mermaid
-graph TB
-    subgraph "User API"
-        VM["VerMap&lt;K, V&gt;"]
-    end
-
-    subgraph "Version Control"
-        BR["BranchHead<br/>(head, dirty_root)"]
-        CM["Commit<br/>(id, root, parents, timestamp_us, ref_count)"]
-    end
-
-    subgraph "Storage Engine"
-        BT["PersistentBTree<br/>(COW B+ Tree)"]
-        ND["Nodes<br/>(Leaf / Internal)"]
-    end
-
-    subgraph "Persistence"
-        MR["MapxRaw<br/>(MMDB)"]
-    end
-
-    VM -->|"branch/commit/merge"| BR
-    VM -->|"commit metadata"| CM
-    VM -->|"insert/remove/get"| BT
-    BT -->|"allocate/read nodes"| ND
-    ND -->|"persisted as bytes"| MR
-    BR -->|"stored in"| MR
-    CM -->|"stored in"| MR
-```
-
----
-
-## Layer Architecture
-
-```mermaid
-block-beta
-    columns 1
-    block:L1["Layer 1 — User-Facing API"]
-        A["VerMap&lt;K, V&gt;<br/>branch / commit / merge / rollback_to / gc"]
-    end
-    block:L2["Layer 2 — Persistent B+ Tree"]
-        B["PersistentBTree<br/>insert / remove / iter / range / bulk_load / gc<br/>Copy-on-Write, structural sharing"]
-    end
-    block:L3["Layer 3 — Raw KV Storage"]
-        C["MapxRaw<br/>Single MMDB prefix"]
-    end
-```
-
-Each `VerMap` persists its state in a single `MapxRaw` prefix.
-
-| Key tag | Contents |
+| Operation | Effect |
 |---|---|
-| `00` | Format, monotonic ID ceilings, main branch, generation |
-| `01`, `02`, `03` | Branch head and working root, branch name by ID, reverse lookup by name |
-| `04` | Immutable commit state plus mutable reference count |
-| `05`, `06` | Retired roots and unpublished staged subtrees |
-| `07` | Checksummed reference-count checkpoint |
-| `10`, `12` | Slotted B+ tree pages and value blobs |
+| `new()` | Creates an empty `main` branch. Zero denotes an empty tree root or an absent head in the corresponding field. |
+| `insert`, `remove`, `write_batch` | Edits the branch's working tree. A batch sorts edits by encoded key and the last edit for each key wins. |
+| `bulk_load` | Replaces the working tree from ascending encoded keys. Duplicate keys keep their final value. |
+| `commit` | Records the working root, advances the branch head and links to the prior head when one exists. |
+| `create_branch` | Inherits the source head and working root, including pending changes. The metadata update retains the shared roots. |
+| `discard` | Resets the working tree to the head's root, or the empty root on a branch without commits. |
+| `rollback_to` | Requires a clean branch and a retained commit reachable from its head. Resets head and working root to that commit. |
+| `delete_branch` | Removes an ordinary branch and releases its references. Use `set_main_branch` to change which branch is protected. |
 
----
-
-## Core Data Structures
-
-`BranchId` and `CommitId` are distinct serde-transparent `u64` newtypes.
-Both implement `KeyEnDeOrdered`, so they can key `MapxOrd`, `VerMap`, and
-`SlotDex` with the same big-endian key encoding as their former `u64` aliases.
-Branch and commit keys contain their big-endian numeric IDs.
-
-### Commit
-
-```
-Commit {
-    id:           CommitId  (transparent u64 newtype),
-    root:         NodeId    (B+ tree root snapshot),
-    parents:      Vec<CommitId>,
-    timestamp_us: u64,
-    ref_count:    u32,       // branch HEADs + child parent-links
-}
-```
-
-- `parents.len() == 0` → initial commit
-- `parents.len() == 1` → normal linear commit
-- `parents.len() == 2` → merge commit `[target_head, source_head]`
-
-### BranchHead
-
-```
-BranchHead {
-    head:       CommitId,   // latest committed snapshot (0 = no commits yet)
-    dirty_root: NodeId,     // uncommitted working-tree root
-}
-```
-
-### B+ Tree Node (B = 16, max 32 keys per node)
-
-```mermaid
-graph TB
-    subgraph "Internal Node"
-        I["keys: [k1, k2, ..., kN]<br/>children: [c0, c1, c2, ..., cN]"]
-    end
-    subgraph "Leaf Node"
-        L["keys:   [k1, k2, ..., kN]<br/>values: [v1, v2, ..., vN]"]
-    end
-
-    I -->|"child pointers"| L
-```
-
-A `NodeId` combines a monotonically allocated 62-bit serial with a two-bit class.
-The classes distinguish internal nodes, inline leaves, leaves with blobs and blobs.
-Leaf values over 1024 encoded bytes use separate blobs. A point lookup
-binary-searches borrowed keys inside each fetched page. The forward iterator
-retains the current leaf page and reads only the selected values.
-`EMPTY_ROOT = 0` is the sentinel for an empty tree.
-
----
-
-## Lifecycle
-
-### Overview
-
-```mermaid
-graph LR
-    A(["Create"]) --> B(["Write"])
-    B --> C(["Commit"])
-    C --> B
-    C --> D(["Branch"])
-    D --> B
-    C --> E(["Merge"])
-    E --> C
-```
-
-Typical flow: **create → write → commit → branch → merge**
-(GC is automatic — no explicit step needed)
-
-### Detailed Step-by-Step
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant V as VerMap
-    participant T as PersistentBTree
-    participant D as Disk (MMDB)
-
-    Note over V: 1. CREATE
-    U->>V: VerMap::new()
-    V->>D: allocate main branch (head=0, dirty_root=0)
-
-    Note over V: 2. WRITE (uncommitted)
-    U->>V: insert(main, key, val)
-    V->>T: tree.insert(dirty_root, key, val)
-    T-->>V: new_root (COW)
-    V->>V: dirty_root = new_root
-
-    Note over V: 3. COMMIT
-    U->>V: commit(main)
-    V->>V: alloc CommitId
-    V->>D: store Commit{root: dirty_root, parents: [] or [head], ref_count: 1}
-    V->>V: head = new CommitId
-
-    Note over V: 4. BRANCH
-    U->>V: create_branch("feat", main)
-    V->>D: store BranchHead{head: main.head, dirty_root: main.dirty_root}
-    Note right of V: No data copied! Both share same tree root.
-
-    Note over V: 5. MERGE
-    U->>V: merge(feat, main)
-    V->>V: find all lowest common ancestors
-    V->>T: replay union of source diffs from merge bases
-    T-->>V: merged_root
-    V->>D: store merge Commit{parents: [main.head, feat.head]}
-
-    Note over V: 6. GC (automatic)
-    Note right of V: Dead commits are hard-deleted<br/>by ref-count cascade during<br/>delete_branch / rollback_to.
-    Note right of T: Retire dead roots after publication.<br/>Readers retain pinned roots.
-```
-
----
-
-## Copy-on-Write & Structural Sharing
-
-Branching copies only branch metadata and retains existing roots; it does not
-copy entries. The operation still performs writes and a durability sync.
-Both branches point to the **same B+ tree root**. The first mutation
-triggers copy-on-write, allocating only the modified path (~O(log n) nodes).
-
-```mermaid
-graph TB
-    subgraph "Before mutation (shared)"
-        R1["Root (r1)"]
-        I1["Internal A"]
-        I2["Internal B"]
-        L1["Leaf 1"]
-        L2["Leaf 2"]
-        L3["Leaf 3"]
-        L4["Leaf 4"]
-
-        R1 --> I1
-        R1 --> I2
-        I1 --> L1
-        I1 --> L2
-        I2 --> L3
-        I2 --> L4
-    end
-
-    MH["main.dirty_root"] -.-> R1
-    FH["feat.dirty_root"] -.-> R1
-
-    style MH fill:#4a9,color:#fff
-    style FH fill:#49a,color:#fff
-```
-
-After `feat.insert(key_in_leaf3, new_val)`:
-
-```mermaid
-graph TB
-    subgraph "Shared nodes (unchanged)"
-        I1["Internal A"]
-        L1["Leaf 1"]
-        L2["Leaf 2"]
-        L4["Leaf 4"]
-        I1 --> L1
-        I1 --> L2
-    end
-
-    subgraph "main's view"
-        R1["Root r1"]
-        I2["Internal B"]
-        L3["Leaf 3"]
-        R1 --> I1
-        R1 --> I2
-        I2 --> L3
-        I2 --> L4
-    end
-
-    subgraph "feat's new nodes (COW)"
-        R2["Root r2 (new)"]
-        I3["Internal B' (new)"]
-        L5["Leaf 3' (new)"]
-        R2 --> I1
-        R2 --> I3
-        I3 --> L5
-        I3 --> L4
-    end
-
-    MH["main.dirty_root"] -.-> R1
-    FH["feat.dirty_root"] -.-> R2
-
-    style R2 fill:#c62,color:#fff
-    style I3 fill:#c62,color:#fff
-    style L5 fill:#c62,color:#fff
-    style MH fill:#4a9,color:#fff
-    style FH fill:#49a,color:#fff
-```
-
-> Only 3 new nodes allocated (red). The 4 shared nodes (Internal A, Leaf 1, Leaf 2, Leaf 4) are referenced by both versions simultaneously.
-
----
-
-## Commit DAG
-
-Commits form a **Directed Acyclic Graph** via parent pointers.
-Linear commits have one parent; merge commits have two.
+Updating a leaf allocates new pages along its path and keeps unaffected
+subtrees shared. Splits and underflow repair can also touch neighboring pages.
+A branch is clean when its stored keys and values match its head. Editing a
+value and then restoring its original bytes makes the branch clean again.
+`BranchId` and `CommitId` are distinct serde-transparent `u64` types with
+ordered key encodings. Commit IDs increase with allocation. The wall-clock
+timestamp is informational.
 
 ```mermaid
 gitGraph
@@ -299,142 +40,28 @@ gitGraph
     commit id: "c7"
 ```
 
-### Commit Parent Relationships
+Use `snapshot(branch)` for the working state, including pending changes, and
+`at(commit)` for a retained commit. Either returns an owned, cloneable
+`Snapshot<K, V>`. It pins the captured root. Its ordered iterators share the
+pin and can outlive the snapshot, reader and source map. A rollback or branch
+deletion may reclaim the commit record while an existing snapshot continues
+to read its tree. A new `at(commit)` then returns `CommitNotFound`.
 
-```mermaid
-graph RL
-    c1["c1<br/>parents: []"]
-    c2["c2<br/>parents: [c1]"]
-    c5["c5<br/>parents: [c2]"]
-    c3["c3<br/>parents: [c2]"]
-    c4["c4<br/>parents: [c3]"]
-    c6["c6 (merge)<br/>parents: [c5, c4]"]
-    c7["c7<br/>parents: [c6]"]
+Use `reader()` to acquire snapshots alongside an active writer. Serialize
+writers and writable restores through aliases of the same store. Mutable
+`clone()` and `clone_in(&namespace)` deep-copy branches, retained commits and
+working trees into an independent store.
 
-    c2 --> c1
-    c3 --> c2
-    c4 --> c3
-    c5 --> c2
-    c6 --> c5
-    c6 --> c4
-    c7 --> c6
+## Three-way merge algorithm
 
-    style c6 fill:#c62,color:#fff
-```
+`merge(source, target)` requires different, clean branches and a source with
+a commit. Equal heads return that commit. An empty target advances to the
+source head. For other successful merges, the target receives a new commit
+with parents `[target_head, source_head]`, even when it can reuse a tree root.
 
-Each commit's `root` field is a **snapshot** — an immutable B+ tree root that
-captures the full state of the map at that point in time.
-
-`at(commit)` and `snapshot(branch)` return a read-only view that retains its
-captured tree root. Later changes through a restored alias, including rollback
-and branch deletion, do not change the view. Its iterators share that retention
-and can outlive the view itself. Capturing a view updates only runtime ownership;
-it does not write persistent state or copy entries. Iteration remains streaming.
-
-A view keeps its tree nodes alive until it and all its iterators are dropped. It
-does not keep the commit record or branch alive, so a later `at(commit)` can fail
-for a deleted commit even while an existing view still reads its contents.
-
----
-
-## Three-Way Merge Algorithm
-
-### Overview
-
-`merge(&mut self, source: BranchId, target: BranchId) -> Result<CommitId>`
-finds all lowest common ancestors (merge bases) and replays source changes
-onto the target. It rejects self-merge, uncommitted source or target branches,
-and a source branch with no commits. Equal heads return the existing commit.
-An empty target fast-forwards to the source head; every other successful merge
-creates a two-parent commit, even when it can reuse an existing tree root.
-
-```mermaid
-graph TB
-    A["Ancestor<br/>(common base)"]
-    S["Source branch<br/>(incoming changes)"]
-    T["Target branch<br/>(receiving changes)"]
-    M["Merged result"]
-
-    A -->|"what changed<br/>in source?"| S
-    A -->|"what changed<br/>in target?"| T
-    S -->|"source wins<br/>on conflict"| M
-    T -->|"target-only changes<br/>preserved"| M
-```
-
-### Tree-root fast paths
-
-For a single merge base, the B+ tree layer can reuse roots as follows. These
-are tree-state shortcuts, not branch-history fast-forwards: the public
-`VerMap::merge` still follows the commit rules above. Multiple merge bases
-use the union of their source diffs.
-
-```mermaid
-flowchart TD
-    Start(["Tree merge with one base"]) --> FP1{"base_root == source_root?"}
-    FP1 -->|Yes| KeepT["Reuse target_root: source unchanged"]
-    FP1 -->|No| FP2{"base_root == target_root?"}
-    FP2 -->|Yes| KeepS["Reuse source_root: target unchanged"]
-    FP2 -->|No| FP3{"source_root == target_root?"}
-    FP3 -->|Yes| Same["Reuse common root"]
-    FP3 -->|No| Full["Diff and replay source changes"]
-```
-
-### Full Three-Way Merge Process
-
-Every row of the conflict matrix below reduces to one rule: a key whose
-source state differs from the ancestor takes the source state; every other
-key keeps the target state. The merge therefore replays the source-side
-delta onto the target tree instead of rebuilding it:
-
-```mermaid
-flowchart TD
-    Start(["Full three-way merge"]) --> Diff["diff(ancestor → source)<br/>(one per merge base; union)<br/>skips shared subtrees"]
-    Diff --> Loop{"More changed keys?"}
-    Loop -->|Yes| Same{"target already<br/>has source state?"}
-    Same -->|Yes| Loop
-    Same -->|No| Apply["COW insert / remove<br/>on the running root"]
-    Apply --> Loop
-    Loop -->|No| MergeCommit["Create merge commit<br/>parents: [target.head, source.head]"]
-
-    style MergeCommit fill:#c62,color:#fff
-```
-
-Diff skips subtrees with identical NodeIds. With structural sharing, this
-limits work to changed paths; independently built trees can require a full
-walk even when their contents match. Replay updates only the source delta
-(roughly changed keys × tree depth), retaining unaffected subtrees. Finding
-merge bases also walks commit history. All replay steps share one write
-buffer, discarding intermediate versions before they reach the engine.
-`diff_commits` / `diff_uncommitted` use the same shared-subtree skipping walk.
-
-### Conflict Resolution Matrix
-
-> **Rule: Source wins on conflict.**
-
-```mermaid
-graph LR
-    subgraph "No conflict"
-        NC1["Only source changed → use source"]
-        NC2["Only target changed → use target"]
-        NC3["Neither changed → keep as-is"]
-        NC4["Both changed to same value → keep"]
-        NC5["Both deleted → delete"]
-    end
-
-    subgraph "Conflict (source wins)"
-        C1["Source=S, Target=T → S"]
-        C2["Source=deleted, Target=T → deleted"]
-        C3["Source=S, Target=deleted → S"]
-        C4["Both added different values → source"]
-    end
-
-    style C1 fill:#c62,color:#fff
-    style C2 fill:#c62,color:#fff
-    style C3 fill:#c62,color:#fff
-    style C4 fill:#c62,color:#fff
-```
-
-Full table:
+The merge walks parent links to find all lowest common ancestors. With one
+base, a key takes the source value (or deletion) when the source changed
+relative to the base. Other keys keep the target state.
 
 | Ancestor | Source | Target | Result | Type |
 |:---------|:-------|:-------|:-------|:-----|
@@ -453,139 +80,81 @@ Full table:
 | _absent_ | **S** | **S** | **S** | both added same |
 | _absent_ | **S** | **T** | **S** | conflict → source wins |
 
-The caller controls priority by choosing which branch to pass as `source` vs `target`.
+With several merge bases, a source change relative to *any* base counts.
+With no common ancestor the merge uses the empty tree as its base. A
+comparison can reuse identical roots and skip subtrees with equal node IDs.
+Independently built trees can require a full diff. Sorted source changes
+for the same target leaf are applied together, and copy-on-write retains
+unaffected target subtrees.
 
----
+`fork_point(a, b)` returns the greatest commit ID among the lowest common
+ancestors, or `None` if there is none. `commit_distance(from, ancestor)`
+counts first-parent hops only. For the merge above, `commit_distance(c6,
+c5)` is one, while `c4` is reachable through the second parent.
 
-## Durability and Recovery
+## Storage layout
 
-Working edits publish the new pages, allocator ceiling and 16-byte branch head in one atomic write batch. `write_batch(branch, edits)` sorts edits by encoded key, retains the last edit for duplicates and applies runs that share a leaf together. An ordinary insert or removal does not force a WAL sync.
+| Key tag (hex) | Contents |
+|---|---|
+| `00` | Format, monotonic ID ceilings, main branch and generation |
+| `01`, `02`, `03` | Branch head and working root (16 bytes), name by branch ID, reverse lookup by name |
+| `04` | Commit root, parents, timestamp and reference count |
+| `05`, `06` | Retired root markers and unpublished staged subtree markers |
+| `07` | Checksummed reference-count checkpoint |
+| `10`, `12` | Slotted B+ tree pages and value blobs |
 
-History changes, including commits, branch management, rollback and merge, publish one synchronous batch. Readers observe the complete result after the WAL sync succeeds. An oversized merge or sorted `bulk_load` writes unpublished pages in approximately 16 MiB chunks. Each intermediate batch records the subtree roots at tag `06`. The final synchronous batch publishes the new root and removes its staging markers. An interrupted build leaves the previous branch state available.
+A node ID combines a 62-bit serial and a two-bit class for internal pages,
+inline leaves, leaves with blobs, or blobs. Pages hold up to 32 keys. Leaf
+values over 1 KiB of encoded data use separate blobs. A point lookup
+binary-searches borrowed keys inside each fetched page. Forward iteration
+retains the current leaf page and reads selected values.
 
-An owned `Snapshot<K, V>` supports cloning and can move to another thread. `VerMap::reader()` shares the same namespace and pin table. The reader can take snapshots independently of the writer. Snapshot iterators retain their leases after the view or source map is dropped. Mutable `VerMap::clone()` and `clone_in(&namespace)` create independent stores, including all retained commits and working roots.
+Standalone `PersistentBTree` uses the same page and blob layouts. It stores
+its allocator ceiling at tag `09` alongside each allocation batch. Both the
+standalone and version-store handles carry a 36-byte `VSTYPE04` frame.
+Converting standalone trees from v17 requires all externally held roots and
+produces a mapping to their v18 IDs. [Migration guide](../../migration/README.md)
 
-`flush()` and consuming `close()` checkpoint reference counts. A checkpoint includes the instance ID, the header generation and a Keccak256 digest. Open verifies branch heads and reachable parent links, checks root page headers and probes the ceiling of each object class. It accepts a matching checkpoint after validating its reference graph. A missing, stale or damaged checkpoint, or an unpublished or retired root marker, triggers a full recount. Read-only opens validate without writing repairs. Writable recovery mutates the store and requires the same writer exclusion as other structural changes. Use `reader()` alongside an active writer.
+## Durability and recovery
 
-`from_meta_verified(id)` also checks every reachable slotted page, blob reference, separator, child height and occupancy. `verify_and_gc()` runs that verification on an open map and returns live object and commit counts and the number of removed orphan commits. Verification rejects missing reachable history and truncated allocator ceilings before reclamation.
+`insert`, `remove`, `write_batch` and `discard` publish working-root changes
+in one ordinary shard batch. This includes the new pages and allocator
+ceiling. A successful edit is visible immediately and needs a WAL fence for
+power-loss durability. Commits, branch administration, rollback, merge and
+`bulk_load` publish changes using a synchronous batch. An operation that
+returns early, such as merging equal heads, provides no additional fence.
 
-Standalone `PersistentBTree` stores its allocator ceiling at tag `09` in the same batch as the pages it allocates. Both the versioned and standalone handles carry a fixed 36-byte typed frame. For offline conversion of external standalone root IDs, supply every root to `vsdb_migrate::versioned::migrate_tree_v17` and retain the returned ID mapping. [Migration guide](../../migration/README.md)
+Large merges and bulk loads may write unpublished pages first. Each staging
+batch records its subtree roots at tag `06`. These batches target 16 MiB per
+chunk, with larger individual blobs written alone. The final synchronous batch
+publishes the root and removes the markers. An interruption before publication
+leaves the previous branch state reachable. An I/O error during publication
+can leave a complete recoverable WAL record.
 
-## Garbage Collection
+Reopen validates the header, allocator ceilings, branches, reachable commit
+graph and root page headers. Writable `flush()` and consuming `close()`
+checkpoint reference counts with the map ID, header generation and a Keccak256
+digest. If the checkpoint matches and its reference graph validates, ordinary
+reopen can skip a full object walk. A missing, stale or invalid checkpoint, or
+any staged or retired marker, triggers a recount. Writable recovery can repair
+derived metadata and remove unreachable objects. Read-only recovery validates
+in memory.
 
-Commits count branch-head and commit-parent references. Deleting a branch or rolling it back cascades through commits that lose their last owner. B+ tree objects count incoming edges and root owners. The runtime stores counts as `u32` and retains child lists only for objects with outgoing edges.
+`from_meta_verified(id)` and `verify_and_gc()` also verify reachable pages,
+blob references, separators, child heights and occupancy. The latter reports live object
+and commit counts and identified orphan commits. [Recovery implementation](../src/versioned/repair.rs)
 
-A unique writer includes the dead object keys in its publication batch. With readers or restored aliases present, the writer records retired roots at tag `05`. A successful publication withdraws ownership and queues unpinned objects for the next batch or checkpoint. Readers can pin the old root during a synchronous publication. The last snapshot lease releases its pin and queues any objects that have become unreachable. Engine compaction reclaims physical disk space.
+## Garbage collection
 
-### Example
+A commit counts the branches that point to it and the child commits that name
+it as a parent. Deleting or rewinding a branch releases the old head.
+Dropping the last reference deletes the commit and releases each parent in
+turn. Merged history can therefore remain reachable after the source branch
+is deleted.
 
-```mermaid
-graph RL
-    subgraph "Before delete_branch(feat)"
-        c1["c1 (ref=2)"] --> c0["c0 (ref=1)"]
-        c2["c2 (ref=1)"] --> c1
-        c3["c3 (ref=1)"] --> c1
-        c4["c4 (ref=1)"] --> c3
-    end
-
-    MAIN["main.head"] -.-> c2
-    FEAT["feat.head"] -.-> c4
-```
-
-After `delete_branch(feat)`:
-- Ref-count cascade immediately deletes **c4** (ref 1→0) and
-  **c3** (ref 1→0).
-- **c1** drops from ref=2 to ref=1 (still alive via c2).
-- B+ tree nodes from c3/c4 with no remaining owner (including live views)
-  are deleted with publication or queued for reclamation after the last reader releases them.
-- MMDB can reclaim their disk space when compaction rewrites the affected SSTs.
-
----
-
-## Fork Point & Commit Distance
-
-These APIs support divergent-branch detection.
-
-### Fork Point
-
-`fork_point(a, b)` returns one **lowest common ancestor**. If criss-cross
-history has several merge bases, it selects the greatest CommitId among them;
-`merge` itself considers all bases. It returns `None` when no common ancestor
-is found.
-
-```mermaid
-graph RL
-    c0["c0"]
-    c1["c1"] --> c0
-    c2["c2"] --> c1
-    c3["c3"] --> c2
-    f1["f1"] --> c1
-    f2["f2"] --> f1
-    f3["f3"] --> f2
-
-    LCA["fork_point(c3, f3) = c1"]
-
-    style c1 fill:#f90,color:#fff
-    style LCA fill:#f90,color:#fff
-```
-
-### Commit Distance
-
-`commit_distance(from, ancestor)` counts hops on the **first-parent chain** only.
-
-```mermaid
-graph RL
-    c0["c0"]
-    c1["c1<br/>(ancestor)"] --> c0
-    c2["c2"] --> c1
-    c3["c3<br/>(from)"] --> c2
-
-    style c1 fill:#f90,color:#fff
-    style c3 fill:#49a,color:#fff
-```
-
-```
-commit_distance(c3, c1) = 2    (c3 → c2 → c1, two hops)
-```
-
-Combined example:
-
-```
-Main:    c0 → c1 → c2 → c3
-Fork:    c0 → c1 → f1 → f2 → f3 → f4
-
-fork_point(c3, f4)       = c1
-commit_distance(c3, c1)  = 2
-commit_distance(f4, c1)  = 4
-```
-
----
-
-## Rollback & Discard
-
-```mermaid
-flowchart LR
-    subgraph "rollback_to(branch, target_commit)"
-        R1["Verify target is ancestor of head"] --> R2["head = target_commit"]
-        R2 --> R3["dirty_root = target_commit.root"]
-        R3 --> R4["Abandoned commits auto-deleted<br/>via ref-count cascade"]
-    end
-
-    subgraph "discard(branch)"
-        D1["dirty_root = head.root"] --> D2["All uncommitted<br/>changes lost"]
-    end
-```
-
----
-
-## Summary
-
-| Concept | Mechanism |
-|:--------|:----------|
-| **Versioning** | Each commit snapshots a B+ tree root |
-| **Branching** | Copies only a 16-byte `BranchHead` |
-| **Isolation** | Each branch has independent `head` + `dirty_root` |
-| **Structural sharing** | COW B+ tree — mutations allocate ~O(log n) nodes |
-| **Merge** | All merge bases, shared-subtree diff, and source-delta replay; source wins on conflict |
-| **GC** | Automatic ref-count cleanup and fenced node retirement; physical compaction reclaim is best-effort. `gc()` supports repair/full node sweeps |
-| **Persistence** | All state stored in MMDB via `MapxRaw` |
+Tree objects count incoming edges and roots. A writer with exclusive runtime
+ownership can include newly dead object keys in its publication batch. When a
+reader, lease or restored alias shares the runtime, publication records retired
+roots at tag `05`. Runtime pins retain objects for existing snapshots. Unpinned
+dead objects are queued for a later publication or checkpoint. mmdb can
+reclaim physical disk space during compaction.

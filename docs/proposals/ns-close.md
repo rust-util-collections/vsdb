@@ -21,12 +21,11 @@ closed flag.
 OPEN_NAMESPACES[id] ──┐
 Namespace clones ────┼── Arc<NsInner>
 collection handles ─┘      └── Engine
-                                └── MmDB { dbs: Box<[DB]>, read_only: bool }
+                                └── MmDB → owned shard DBs
 ```
 
 `NsInner` owns its engine inline; `Namespace::engine()` returns a borrow of
-that handle. Shard DBs are owned, not leaked. Iterators that need namespace
-liveness borrow a handle or retain a namespace clone. The default namespace
+that handle. Shard DBs are owned, not leaked. Independent collection readers, owned VerMap snapshots and collection handles keep the namespace alive. Ordinary borrowed iterators keep their source handle borrowed. The default namespace
 uses the same ownership shape behind a static `OnceLock` and lives for the
 process lifetime once opened; closing it is refused.
 

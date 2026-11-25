@@ -47,12 +47,7 @@ are evidence, not license for unrelated fixes or baseline commits.
 
 ## Reading
 
-| When | Read |
-|------|------|
-| Start | [workflow-policy.md](../../../docs/ai/workflow-policy.md), [commit-protocol.md](../../../docs/ai/commit-protocol.md), [review-core.md](../../../docs/ai/review-core.md), [false-positive-guide.md](../../../docs/ai/false-positive-guide.md), [technical-patterns.md](../../../docs/ai/technical-patterns.md), [pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md) |
-| After mapping | each mapped `docs/ai/patterns/*.md` guide |
-| Public API or persisted format in scope | [compatibility-policy.md](../../../docs/ai/compatibility-policy.md) |
-| Multi-subsystem, design-shaped, or `all` | [design-patterns.md](../../../docs/ai/design-patterns.md) |
+Use the [review core](../../../docs/ai/review-core.md#1-context) for shared checks, subsystem guides and compatibility. Run the [worktree preflight](../../../docs/ai/workflow-policy.md#1-preflight) and track owned paths, validation, versions and tags in the [invocation ledger](../../../docs/ai/commit-protocol.md#invocation-ledger).
 
 ## Phase 0 — Preflight and ledger
 
@@ -87,17 +82,7 @@ guides.
 
 - **Diff scopes:** full diff + whole changed functions, callers,
   failure/recovery paths, and tests.
-- **`all`:** put every tracked file in exactly one ledger category; never
-  silently drop a file:
-  - Rust — `core/`, `strata/`, and `migration/` `src/`, `tests/`, `benches/`;
-  - build/CI — root and crate `Cargo.toml`, `.cargo/config.toml`,
-    `rustfmt.toml`, `Makefile`, `tools/`, `.github/`;
-  - live docs — READMEs, crate `docs/`, `docs/audit.md`, `docs/proposals/`
-    (implemented contract vs explicitly deferred candidate);
-  - historical — `docs/evaluations/**` and past `CHANGELOG.md` sections:
-    point-in-time records, not live drift;
-  - governance — `AGENTS.md`, `.agents/skills/`, `docs/ai/`;
-  - generated/vendored/out of scope — with the reason.
+- **`all`:** follow the [full-repository coverage](../../../docs/ai/review-core.md#full-repository-coverage) ledger, including historical measurements and the shared skill guidance.
 
 ## Phase 2 — Review
 
@@ -126,7 +111,7 @@ guides.
 3. **Dimensions** (only those that apply): correctness/invariants; interrupted
    writes, concurrency, and `unsafe` contracts; design shape when
    locks/resources/bounds/install/failure/API are involved; compatibility
-   (`VSUNI018`/`VSENG018`/`VSNREG02`/`VSMAPX02`/`VSTYPE04`, `vsdb_migrate` `VSMAPX01`/`VSTYPE02`/`VSTYPE03` + `legacy_tag`, `take_from_bytes` EOF, shard/namespace layout);
+   ([runtime wire formats and historical decoders](../../../docs/ai/compatibility-policy.md#typed-handle-tags-and-wire-decoders));
    quantified hot-path cost; incomplete implementations (`review-core.md` §3).
 4. **Verify** every candidate yourself from the full implementation, callers,
    guards, and existing tests; refute via the FP guide; merge findings that

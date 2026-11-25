@@ -11,7 +11,7 @@
 //! | working dir | uncommitted writes on a branch      |
 //! | `git gc`    | `VerMap::gc`                |
 //!
-//! A *version* is a complete, self-contained snapshot (a B+ tree root).
+//! A commit identifies a complete map state through its B+ tree root.
 //! Branches are lightweight pointers. Structural sharing keeps storage
 //! costs proportional to the number of *changes*, not the dataset size.
 //!
@@ -28,9 +28,7 @@
 //!                                       │
 //!                                       ▼
 //!                                   merge()  ──►  delete_branch()
-//!                                                    (ref-count GC)
-//!                                                       │
-//!                                                   gc() (B+ tree nodes)
+//!                                                    (release roots)
 //! ```
 //!
 //! # Merkle proofs

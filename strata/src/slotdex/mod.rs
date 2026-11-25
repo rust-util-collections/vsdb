@@ -1,8 +1,8 @@
-//! Slot-based index for efficient, timestamp-based paged queries.
+//! Paged queries and counts over ordered slot ranges.
 //!
-//! [`SlotDex`] is a skip-list-like data structure ideal for indexing and
-//! querying large datasets where entries are associated with a slot
-//! (e.g., a timestamp or sequence number).
+//! [`SlotDex`] indexes unique (slot, key) pairs. Per-slot counts and coarser
+//! tier counts let `page` skip to an offset. `Order` controls slot order and
+//! keys within each slot remain ascending.
 //!
 //! # Storage model (single-handle, crash-atomic)
 //!
@@ -25,8 +25,8 @@
 //! imply an fsync per call. Writers must be externally serialized.
 //!
 //! The serialized form of a `SlotDex` (its typed handle metadata) is the
-//! raw prefix of the single handle plus the two creation-time constants
-//! `tier_capacity` and `swap_order`. It is **create-time constant**:
+//! `VSTYPE04` frame containing its identity, layout version, `tier_capacity`
+//! and `swap_order`. It is **create-time constant**:
 //! growing or shrinking the tier stack only writes ordinary data rows,
 //! never new handles, so the metadata saved once at creation stays valid
 //! for the lifetime of the instance.

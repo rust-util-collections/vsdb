@@ -1,8 +1,10 @@
 # SlotDex and DagMap v18 validation
 
+This comparison was recorded at `cc2f41c` against the v17.0.21 code at `da9a325`. Later implementation changes are tracked in the [v18 design record](../proposals/v18-roadmap.md#10-post-implementation-structural-performance-evaluation-and-follow-up-designs).
+
 Measured on an AMD EPYC 9474F with stable Rust 1.100.0, mmdb 4.3.15, optimized
 Cargo builds and separate scratch universes. Both revisions used the same
-benchmark bodies. The v17 baseline came from `da9a325`. Runs used four pinned
+benchmark bodies. Runs used four pinned
 logical CPUs (82–85) and the default 16-shard namespace. Criterion used ten
 samples, a one-second warm-up and a three-second target measurement window.
 

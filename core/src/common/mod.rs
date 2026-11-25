@@ -296,9 +296,9 @@ pub fn vsdb_get_system_dir() -> &'static Path {
 
 /// Returns the base directory path for VSDB.
 ///
-/// This function returns the path of the base directory, which is determined
-/// by the `VSDB_BASE_DIR` environment variable, the `HOME` environment variable
-/// (`$HOME/.vsdb`), or a process-private temporary directory as a last resort.
+/// Returns the directory selected by [`vsdb_configure`]. Without explicit
+/// configuration, it uses `VSDB_BASE_DIR`, then `$HOME/.vsdb`, then a
+/// per-process temporary directory.
 /// Calling it freezes configuration so a subsequent [`vsdb_configure`] call
 /// returns [`VsdbError::BaseDirFrozen`].
 ///

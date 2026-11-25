@@ -5,37 +5,38 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
 [![Rust](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml/badge.svg)](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml)
 
-> `vsdb_core` provides the low-level building blocks for `vsdb`.
-
-This crate contains the foundational components of `vsdb`, including:
-- **Raw Data Structures**: Untyped, high-performance data structures like `MapxRaw` that operate on raw bytes.
-- **Utilities**: Process-wide database path/mode configuration, namespaces, and storage maintenance. Configuration does not change environment variables.
-
-Most users should use the `vsdb` crate instead, which provides high-level, typed APIs.
+`vsdb_core` provides the byte-oriented storage API for VSDB. Use it directly
+for `MapxRaw`, process configuration and namespace administration. For typed
+collections, indexes, tries and version history, see the [vsdb crate](../strata/README.md).
 
 ## Installation
 
+From an application using a local v18 checkout:
+
 ```bash
-cargo add vsdb_core
+cargo add vsdb_core --path /path/to/vsdb/core
 ```
 
-For detailed API examples, see [API Examples](docs/api.md).
+VSDB stores data in MMDB, a Rust LSM-tree engine. Building its bundled Zstd
+compression library requires a C toolchain.
 
-## Read-only access
+## Storage model
 
-Call `vsdb_configure(VsdbOptions::read_only(path))` before any other VSDB API,
-then restore existing `MapxRaw` handles with `from_meta` or serde. The setting
-is one-shot and process-wide, including every namespace. Reads and in-memory
-WAL recovery leave the database tree unchanged; creation and mutation are
-unavailable. See the [read-only mode guide](docs/read-only.md) for complete
-semantics and deployment guidance.
+One process selects one **universe** (base directory and open mode). Its default
+namespace uses 16 shards. Each additional namespace has its own root, MMDB
+shards, WALs and memory sizing. The universe owns the namespace registry
+and allocates collection prefixes across all its namespaces.
 
-## Storage Engine
+Each raw map stores byte keys and values under one prefix on one shard.
+`InstanceId` identifies the map within the universe. Persist it with
+`save_meta` and use `from_meta` to reopen the same rows.
 
-The storage backend is MMDB, a pure-Rust LSM-Tree engine. Its bundled Zstd
-compression backend is built from C sources (`zstd-sys`), so a C toolchain is
-required at build time.
+## Guides
+
+- [Raw maps and namespaces](docs/api.md) covers configuration, handle restoration, atomic writes, snapshot reads and namespace placement.
+- [Read-only mode](docs/read-only.md) covers immutable snapshots, process locking and recovery.
+- [v17 to v18 migration](../migration/README.md) covers offline conversion of an existing universe and its handles.
 
 ## License
 
-This project is licensed under the **MIT** license.
+[MIT](../LICENSE)

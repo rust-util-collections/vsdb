@@ -1,465 +1,71 @@
-# VSDB v18 Structural Refactoring Roadmap
-
-**Implementation amendment.** v18 opens only the current data format. The independent workspace crate `vsdb_migrate` owns all v17 decoding and conversion, including raw and typed envelopes, root metadata, old index state and application-embedded handles. This supersedes the original backward-reader and lazy-upgrade design throughout this proposal. The migration guide documents the callable entry points. [Migration guide](../../migration/README.md)
-
-Baseline: `4fc5b88` (`v17.0.21`), verified against `mmdb 4.3.14`/`4.3.15` (`>= 4.3.12` in `Cargo.toml`).
-
-The subsystem measurements cover [basic maps](../evaluations/v18-basic.md), [SlotDex and DagMap](../evaluations/v18-slotdex-dagmap.md), [VerMap reference persistence](../evaluations/v18-versioned.md), and [tries and VecDex](../evaluations/v18-trie-vecdex.md). Those initial reports validated the primary happy-path wins, but left critical workload regimes — `> 1 KiB` `BLOB_LEAF` mutations/diffs, deep-tree `VerMap` read/reopen scaling, incremental working-state `VerMapWithProof` syncs, `VecDex` construction/selective-filter/compaction paths, `SlotDex` hot-bucket batch staging, and single-shard `mmdb 4.3.15` memtable flush stalls — unevaluated or partially realized; [§10](#10-post-implementation-structural-performance-evaluation-and-follow-up-designs) records the post-implementation audit, empirical measurements on `cc2f41c`, and concrete follow-up designs. The initial v18 design and its rationale follow.
-
-## Purpose, release boundary, and pre-v18 (`v17.x`) split
-
-`v16` and `v17` introduced namespaces, in-process engine teardown, per-engine block-cache pools, single-handle crash-atomic `SlotDex` and `VecDex` layouts, `PersistentBTree` versioning, synchronous batches, and raw read views — while preserving backward compatibility with `v15`/`v16` shims, multi-handle composite payloads, and unconstrained trait bounds.
-
-Following [compatibility-policy.md](../ai/compatibility-policy.md) (*break only when necessary or compatibility cost is disproportionate; keep reading older handle envelopes where data rows are unchanged*) and the benchmark-before-freeze discipline ([§10.8](#108-cross-cutting-guardrails-deferred-v19-candidates-and-landing-sequence)), work is split into two tracks:
-
-### Immediate `v17.x` non-breaking track (do not hold for `v18.0.0`)
-
-1. **`[CRITICAL]` `SlotDex` runtime width guard:** Check `slot.to_bytes().len() == self.slot_wire_len` (`S::MIN.to_bytes().len()`) in `insert`, `insert_batch`, and `remove`, turning silent custom-slot corruption ([audit.md](../audit.md#L14-L18)) into `Err(VsdbError::...)` for one integer comparison before v18 makes variable-width slots unrepresentable at compile time.
-2. **`MmDB::range_at` prefix-Bloom & single-seek fix:** Switch `MmDB::range_at` from `db.iter_with_range` + redundant `db_iter.seek` to `db.iter_with_prefix` with `ReadOptions` bounds.
-3. **`VecDex` per-operation `[TAG_STATE]` load:** Re-read the existing `[0x05]` state row on operations so sequentially restored `v17` handles stop clobbering `next_node_id`.
-4. **Atomic trie checkpoint writes:** Route `MptCalc`/`SmtCalc` checkpoint saves through `atomic_write_file` (temp file + `sync_all` + `rename` + parent-dir `sync_all`) instead of `File::create` in-place truncation.
-5. **`DagMapRaw` `data` co-location:** Co-locate `DagMapRaw.data` with `parent` (`new_colocated` / `clone_colocated`) in `build()` and `Clone`.
-6. **Format-neutral `VerMap` / `PersistentBTree` additions:** Ship `VerMap::write_batch`, single-descent `merge::replay`, streaming `bulk_load`, and `MapxRawReader`-backed owned `'static` `Snapshot` without altering node or commit wire formats.
-
-### `v18.0.0` major-version scope
-
-`v18.0.0` reserves breaking API and on-disk changes for structural debts that cannot be cleanly solved in `v17.x`, while **preserving existing prefixes (`InstanceId`) and continuing to read `VSMAPX01`/`VSTYPE03` envelopes** wherever underlying KV data rows are byte-identical:
-
-| # | Subsystem | Planned v18 refactoring | Audit / legacy debt closed | Primary win | Break scope |
-|---|-----------|-------------------------|----------------------------|-------------|-------------|
-| 1 | `SlotDex` | Sealed `[u8; N]` `SlotType::Bytes`, `tier_capacity: u32`, bounded forward-chunked `iter`, `[total, generation]` check | Closes `[CRITICAL] slotdex` ([audit.md](../audit.md)) at compile time | Variable-width bug unrepresentable; 0 temp slot allocs; bounded-memory reverse iter | Public API + meta upgrade |
-| 2 | `ende` + `Mapx*` | 2-trait `KeyEnDe`/`ValueEnDe` (`Eq + Hash` key blanket), stack `with_encoded_key`/`with_ordered_bytes`, `(K, Q)` lookup traits, stack `with_full_key` | Removes `Mapx::query_bytes` 4-alloc shim, `usize`/`isize` non-portability, `f32`/`f64`/`HashMap` key footguns | 0 temporary VSDB key allocs on short keys (`<= 120B`); compile-time rejection of float/`HashMap` keys | Public API + `usize` keys |
-| 3 | `Engine` (`mmdb`) | Unbox `MmdbIter`, in-place prefix strip, conflict-free `RawRangeBounds` / `OrderedRangeBounds<K>`, `MapxRawBatch::delete_range` | Eliminates `Box<dyn>` vtable + per-row key `Vec` realloc + `Cow` bound friction | 0 `Box<dyn>` / key reallocs; `map.range(1u64..10)`, `map.range("a".."z")`, `map.range(..)` all compile | Public API |
-| 4 | Basic collections | Safe `enum Entry`, `DerefMut`-only `ValueMut` (with debug interior-mutability assert) + `update`, minimal `*Reader` + `*ReadView`, dead `pub unsafe` removal | Completes [durable-batches-and-read-views.md](durable-batches-and-read-views.md) §2; removes all `Entry` + `PersistentBTree` `unsafe` | 0 upfront clones/encodes on `get_mut`/`iter_mut`; `#![forbid(unsafe_code)]` on B+ tree & versioning | Public API |
-| 5 | `core` / envelopes / errors | Atomic `VSUNI018` universe header + per-engine `.shards_ready` + `LOCK`, unified `VSTYPE04` header (keeping `VSMAPX01`/`VSTYPE03` readers), fail-closed `VSNREG02`, lazy `DEFAULT_NS`, drop `ruc` | Removes `VSTYPE02`, v15 allocator fold, `__namespace_state__` sidecars, public `RucError` SemVer leak | Eliminates intermediate handle allocs; `4 → 2` registry writes on `Namespace::create`; wrong-root `relocate` guard | Public API + root metadata |
-| 6 | `VerMap` + `PersistentBTree` | Single-handle big-endian tagged store, slotted `NodeView`, benchmark-gated ref persistence (`[0x11]` sparse `extra_refs` vs verified checkpoint), lock-free-across-fsync snapshot retirement | Removes 8-prefix `VerMapPayload`, `gc_dirty`, ~128 sibling `Vec` allocs per `get()` | **1 batch** on working edits / **1 `commit_sync()`** on commits; **0 sibling `Vec` allocs**; keeps `PersistentBTree` public | Public API + `VerMap` layout |
-| 7 | `MptCalc` + `SmtCalc` | `Arc`-COW nodes + inline `OnceLock<[u8; 32]>`, POPCNT branches, inline-64 + heap `Nibbles`, map-bound streaming checkpoints, unified `TrieCalc` | Eliminates `VerMapWithProof::poison()`; closes `[LOW] trie` cache amplification ([audit.md](../audit.md)) | $O(1)$ `Clone` & atomic batch rollback; ~1.2–1.9× lower MPT RAM; ~34B/node smaller crash-safe checkpoints | Public API + cache files |
-| 8 | `DagMap` | 1 co-located `MapxRaw` per node, `dag_id`-authenticated `NodeMeta` + local `edge_id`s, fold-before-`Clearing` crash order, typed `DagMap<K, V>` | Closes `[MEDIUM] dagmap` serde decomposition ([audit.md](../audit.md)); deletes all **7 `unsafe` blocks** + `DagIdAllocator` | `80 → 1` single-shard WAL sync on `prune()`; preserves `child_ids` across `Clone`; supports empty `[]`/`()` | Public API + `DagMap` layout |
-| 9 | `VecDex` | Stateless handle over `[TAG_META]` + monotonic 34B `[TAG_STATE]`, lock-free `get` + snapshot-consistent `search`/`iter`, `&self` `DistanceMetric` (merging `VecDexDyn`), LE float slices | Closes `[MEDIUM] cached indexes` ([audit.md](../audit.md)) for `VecDex`; deletes 392-line `dynamic.rs` | Coherent restored handles & lock-free `get` across `clear()`; 0 per-node `Rc<Vec<S>>` search allocs; drops `K: ValueEnDe` | Public API + `VecDex` transcode |
-
----
-
-## 1. `SlotDex`: compile-time fixed-width `SlotType` (`[u8; N]`), `tier_capacity: u32`, and bounded reverse scans
-
-Source: [slot_type.rs](../../strata/src/slotdex/slot_type.rs), [slotdex/mod.rs](../../strata/src/slotdex/mod.rs), [audit.md](../audit.md).
-
-### Current defects and structural friction
-
-1. **Variable-width custom slot corruption (`[CRITICAL]` in `audit.md`, mitigated in `v17.x`, eliminated in `v18`):**
-   [`SlotType`](../../strata/src/slotdex/slot_type.rs#L13-L51) requires [`KeyEnDeOrdered`](../../strata/src/common/ende.rs#L321-L337) (`to_bytes(&self) -> Vec<u8>`), allowing variable-width encodings. [`entry_key`](../../strata/src/slotdex/mod.rs#L155-L163) concatenates `[0x00 | slot.to_bytes() | k.to_bytes()]` without framing, while [`decode_entry_row`](../../strata/src/slotdex/mod.rs#L248-L255) and [`iter`](../../strata/src/slotdex/mod.rs#L1462-L1465) slice at `S::MIN.to_bytes().len()`, and [`entry_lower_bound`](../../strata/src/slotdex/mod.rs#L203-L226) / [`entry_upper_bound`](../../strata/src/slotdex/mod.rs#L229-L246) use fixed-width `prefix_successor`. Variable-width `SlotType` implementations silently drop colliding `(slot, key)` pairs, misread or panic on decoded keys, and bleed across prefix-related slot bounds.
-2. **Why variable-width byte-stuffing is the wrong v18 design:**
-   Order-preserving escaping (`0x00 -> 0x00 0xFF` + `0x00 0x00` terminator) inflates big-endian integer slots by `2 + count(0x00)` bytes (+24–59% larger entry keys on `SlotDex64<u64>`, up to +18B on `u128` across WAL, memtable, and uncompressed `BlockCachePool` pages) and forces per-row delimiter scans. Genuinely variable-length types (`String`, `Vec<u8>`) cannot satisfy `SlotType`'s uniform `cap^level` bucket division (`floor_align`) or bitwise complement (`!slot`) anyway — composite string indexing belongs in `MapxOrd`.
-3. **Conflated `tier_capacity: S` and dead trait methods:**
-   `tier_capacity` ([slotdex/mod.rs](../../strata/src/slotdex/mod.rs#L108)) is a dimensionless tree fan-out (`>= 2`), not a slot coordinate. Typing it as `S` forced `checked_pow` and `as_i128` onto `SlotType` (all 4 `as_i128` callers in `mod.rs` inspect `tier_capacity`, never a slot), while `max_val`, `saturating_add`, and `as_u64` ([slot_type.rs](../../strata/src/slotdex/slot_type.rs#L35-L45)) have **zero callers** in the workspace. Missing `Copy` also forces 25+ `.clone()` calls on slot scalars.
-4. **Hot-path `Vec<u8>` churn:**
-   Because `KeyEnDeOrdered::to_bytes` allocates a `Vec<u8>`, a single 3-tier `insert` allocates 6 temporary slot `Vec<u8>`s; [`slot_entry_cnt`](../../strata/src/slotdex/mod.rs#L890-L895) allocates 2 `Vec<u8>`s to read an 8-byte counter; and [`decode_entry_row`](../../strata/src/slotdex/mod.rs#L248-L255) allocates **3 `Vec<u8>`s per paged entry** (`S::MIN.to_bytes()`, `slot` decoded and discarded via `.1`, and `key` `.to_vec()` instead of `K::from_slice`).
-5. **Physical-reverse `iter` overhead and unbounded `level0_walk_desc` chunk buffering:**
-   As noted at [`level0_walk_desc`](../../strata/src/slotdex/mod.rs#L897-L900), an `mmdb` reverse iterator costs ~two orders of magnitude more per iterator than forward streaming: [`SlotDex::iter`](../../strata/src/slotdex/mod.rs#L1446-L1459) opens one reverse `level0_range` iterator (`next_back()` per populated slot) plus a separate forward `entry_range(slot..=slot)` iterator for every populated slot whenever `(order == Order::Desc) ^ swap_order` is true. Meanwhile, `page()`'s [`level0_walk_desc`](../../strata/src/slotdex/mod.rs#L967-L975) buffers an entire level-1 bucket's L0 rows in memory — which for a large `tier_capacity` (e.g. `1_000_000`) with no level 1 yet can buffer hundreds of thousands of count rows on a small page query — and [`entry_cnt_within_two_slots`](../../strata/src/slotdex/mod.rs#L1338-L1354) walks from `S::MIN` twice using signed `i128`.
-
-### v18 design
-
-1. **Compile-time fixed-width `SlotType` over sealed `[u8; N]`:**
-
-   ```rust
-   mod sealed {
-       pub trait SlotBytes: Copy + Eq + Ord + AsRef<[u8]> + AsMut<[u8]> + 'static {
-           const LEN: usize;
-           fn zeroed() -> Self;
-       }
-       impl<const N: usize> SlotBytes for [u8; N] {
-           const LEN: usize = N;
-           #[inline(always)]
-           fn zeroed() -> Self { [0u8; N] }
-       }
-   }
-
-   pub trait SlotType:
-       Copy + Ord + fmt::Debug + Not<Output = Self>
-       + Serialize + de::DeserializeOwned + Send + Sync + 'static
-   {
-       /// Fixed-width big-endian (strictly order-preserving, injective) bytes.
-       type Bytes: sealed::SlotBytes;
-
-       const MIN: Self;
-       const MAX: Self;
-
-       fn to_bytes(self) -> Self::Bytes;
-       fn from_bytes(bytes: Self::Bytes) -> Result<Self>;
-
-       /// Bucket width `tier_capacity^level`, or `None` when a single
-       /// whole-domain bucket anchored at `Self::MIN` covers all slots.
-       fn tier_stride(tier_capacity: u32, level: u8) -> Option<Self>;
-       /// Floor-align `self` in unsigned rank space anchored at `Self::MIN`:
-       /// `MIN + ((self - MIN) / stride) * stride`.
-       fn floor_align(self, stride: Self) -> Self;
-       fn checked_succ(self) -> Option<Self>;
-       fn checked_pred(self) -> Option<Self>;
-   }
-   ```
-
-   - **Required trait laws** (tested on both `swap_order` modes and endpoints `MIN`/`MAX`): `to_bytes` is injective and strictly order-preserving (`a < b ⇔ a.to_bytes() < b.to_bytes()`); `!slot` is an order-reversing involution (`a < b ⇔ !b < !a`, `!MIN == MAX`); and `floor_align` aligns in unsigned offset space anchored at `Self::MIN` (never signed `div_euclid` around `0`, which would underflow `i64::MIN` for stride `3` — instead `rank = (self as u64) ^ (1 << 63)`, `aligned = (rank / stride) * stride`, returning `(aligned ^ (1 << 63)) as i64`). When `tier_stride` returns `None` (stride overflow), every slot aligns to `Self::MIN` (one top-level bucket, terminating tier growth cleanly).
-   - Variable-width `SlotType` becomes **impossible to express at compile time** (`to_bytes` returns `[u8; N]`).
-   - Change `tier_capacity` in `SlotDex::new` / `new_in` / persisted `VSTYPE04` handle metadata (`LAYOUT_VERSION = 3`) to `u32` (`>= 2`). Delete `max_val`, `saturating_add`, `as_u64`, `as_i128`, and `checked_pow`.
-2. **Single storage path and zero-allocation slot/key helpers:**
-   - Entry rows stay byte-identical to `v17` (`[0x00 | slot: [u8; N] | key_be]`) with zero escaping and zero runtime width checks.
-   - Replace `decode_entry_row` across `page` and `iter` with `K::from_slice(&raw_key[1 + S::Bytes::LEN..])`; encode `level_prefix` as `[u8; 2]` on the stack; look up `slot_entry_cnt` via a `[u8; 34]` stack slice when `S::Bytes::LEN <= 32`; and decode `decode_level_row` into `S::Bytes::zeroed()` on the stack.
-3. **Bounded-memory physical-reverse `page` / `iter` and common-ancestor `count`:**
-   - Select the forward vs descending engine path by **physical** storage order (`(order == Order::Desc) ^ self.swap_order`).
-   - Bound `level0_walk_desc` so both descending `page` and descending `iter` split oversized L1 spans into sub-ranges rather than buffering unbounded L0 rows when `tier_capacity` is large or level 1 is absent, and coalesce contiguous slots into a single forward `entry_range` scan **only while both `sum(cnt) <= 256` and buffered raw key bytes `<= 16 KiB`**, streaming larger slots individually so `.take(k)` has a hard memory cap regardless of `tier_capacity` or key size.
-   - Compute `count(slots)` from the lowest unshared tier bucket between `lo` and `hi` using unsigned `u64` arithmetic, and inline the 4 legacy `pub(crate)` `get_entries_by_page*` / `total_by_slot` / `entry_cnt_within_two_slots` helpers.
-4. **Generation-checked sequential alias detection + snapshot-consistent reads:**
-   - Store `[total: u64 LE, generation: u64 LE]` (16 bytes) at `[TAG_TOTAL]` (continuing to accept legacy 8-byte `[total]` rows from in-place `v17` datasets as `generation = 0` until the first `v18` write upgrades the row to 16 bytes). Increment `generation` (`checked_add`, erroring on `u64::MAX`) on every committed mutation batch — **including `clear()`**, which stages `put(TOTAL_KEY, [0, gen + 1])` inside its `batch_wiped()` commit rather than deleting `TOTAL_KEY`.
-   - Keep single-active-writer (`&mut SlotDex`) ownership (no hidden cross-handle mutable cache, per [§10.8](#108-cross-cutting-guardrails-deferred-v19-candidates-and-landing-sequence)): `hydrate`, `page`, `count`, and `iter` each capture one `MapxRawReadView` (stored by value inside `SlotDexIter<'a, S, K>` alongside `MmdbIter`; note under `mmdb 4.x` acquiring `db.snapshot()` briefly locks `DB::inner`, see §9.1). Before staging a write or serving a cached read, verify `[TAG_TOTAL]`'s `generation == self.generation`: a stale sequential writer returns `VsdbError` rather than corrupting counts, while a stale reader re-hydrates from its captured `MapxRawReadView`. Add deep-copy `Clone` (resetting `generation = 0` on the fresh copy) and `clone_in(&ns)`.
-
----
-
-## 2. Codec and key pipeline: stack key encoding and `(K, Q)` lookup traits
-
-Source: [ende.rs](../../strata/src/common/ende.rs), [mapx/mod.rs](../../strata/src/basic/mapx/mod.rs#L184-L215), [mapx_ord/mod.rs](../../strata/src/basic/mapx_ord/mod.rs#L81-L135), [mmdb.rs](../../core/src/common/engine/mmdb.rs#L1612-L1617).
-
-### Current defects and costs
-
-1. **2–4 temporary VSDB key allocations per point read or write:**
-   `KeyEnDeOrdered::to_bytes` ([ende.rs](../../strata/src/common/ende.rs#L323)), `OrderedKeyRef::ordered_key_bytes` ([ende.rs](../../strata/src/common/ende.rs#L285)), and `KeyEn::encode_key` ([ende.rs](../../strata/src/common/ende.rs#L85)) always allocate a `Vec<u8>` — even for `&str`/`&[u8]` (already contiguous ordered bytes) and scalar integers (`u64::to_be_bytes().to_vec()`). `MmDB` then calls `make_full_key(&meta_prefix, key)` ([mmdb.rs](../../core/src/common/engine/mmdb.rs#L1612)), allocating another `Vec<u8>` (`8 + key.len()`) just to pass `&[u8]` to `mmdb`.
-2. **`Mapx::query_bytes` 4-allocation workaround and ambiguous `MapxOrd` slice probes:**
-   Because `KeyRef` / `OrderedKeyRef` ([ende.rs](../../strata/src/common/ende.rs#L240-L307)) are traits on `Q` alone without knowing `K`, `[u8]` cannot tell `Vec<u8>` (varint-prefixed in postcard) apart from `[u8; N]` (unprefixed tuple in postcard). [`Mapx::query_bytes`](../../strata/src/basic/mapx/mod.rs#L194-L215) works around this on every `&[u8]` lookup by running up to **4 heap allocations + 2 postcard decodes + 2 postcard encodes**.
-3. **Float/`HashMap` key footguns, non-portable `usize`/`isize` families, and 6-trait collisions:**
-   - `impl<T: Serialize> KeyEn for T` ([ende.rs](../../strata/src/common/ende.rs#L176-L180)) lets `Mapx<f64, V>` and `Mapx<HashMap<A, B>, V>` compile cleanly and silently lose entries across restarts (`SipHash` randomization) or `-0.0`/`NaN`.
-   - `usize`/`isize` `KeyEnDeOrdered` ([ende.rs](../../strata/src/common/ende.rs#L531-L575)) — across scalars, `Vec<usize>`, `Box<[usize]>`, and `[usize; N]` — writes platform-dependent 4B vs 8B keys; `Box<[$int]>::to_bytes` ([ende.rs](../../strata/src/common/ende.rs#L462)) double-allocates via `self.to_vec()`; `impl_array!(1..=128)` ([ende.rs](../../strata/src/common/ende.rs#L541-L575)) expands 1,536 impl blocks; and splitting `KeyEn`/`KeyDe`/`KeyEnDe` + `ValueEn`/`ValueDe`/`ValueEnDe` causes `encode`/`decode` method name collisions (`E0034`).
-
-### v18 design
-
-1. **Two traits (`KeyEnDe`, `ValueEnDe`) with `Eq + Hash` key bounds and stack/buffer paths:**
-   - Collapse the 6 traits into `pub trait KeyEnDe: Eq + Sized` (`encode_key_into`, `with_encoded_key`, `encode_key`, `decode_key`) and `pub trait ValueEnDe: Sized` (`encode_value_into`, `encode_value`, `decode_value`). **Explicitly removed public items:** `KeyEn`, `KeyDe`, `ValueEn`, `ValueDe`, `KeyRef`, `OrderedKeyRef`, and `try_encode*` (`KeyEn::try_encode_key`, `ValueEn::try_encode_value`).
-   - Tighten the blanket impl to `impl<T: Serialize + DeserializeOwned + Eq + Hash> KeyEnDe for T`. Because `f32`, `f64`, `HashMap`, and `HashSet` do not implement `Eq + Hash`, standard float/hash-collection keys fail at compile time while ergonomic derived key structs keep working out of the box. Document the remaining canonical-byte law (`a == b ⇔ encode_key(a) == encode_key(b)`) for types with custom `PartialEq` or `Serialize` logic.
-   - Implement `with_encoded_key` using `postcard::to_slice` into a `[u8; 128]` stack buffer (including varint-prefixed borrowed `str`/`[u8]` lookups up to ~120B), falling back to `postcard::to_allocvec` only on `SerializeBufferFull`.
-   - On `KeyEnDeOrdered`, require `encode_ordered_into(&self, dst: &mut Vec<u8>)` and `with_ordered_bytes<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R` (passing `&[u8]` zero-copy for `String`/`Vec<u8>`/`Box<[u8]>` and stack `[u8; size_of::<T>()]` for scalars). Remove `usize` and `isize` across scalars, `Vec`, `Box<[_]>`, and `[_; N]`, fix `Box<[$int]>`, and replace `impl_array!(1..=128)` with const-generic `impl<const N: usize> KeyEnDeOrdered for [$int; N]` blocks.
-2. **Separate unordered `KeyLookup<Q>` (`Mapx`) and ordered `OrderedKeyLookup<Q>` (`MapxOrd`):**
-   - `Mapx<K, V>` (`K: KeyEnDe`) bounds exact point operations (`get`, `get_mut`, `contains_key`, `remove`, `entry`) on **`K: KeyLookup<Q>`** (`Q: ?Sized`), whereas `MapxOrd<K, V>` (`K: KeyEnDeOrdered` — which intentionally does **not** require `K: KeyEnDe`, e.g. `[u8; 64]`) bounds exact point operations, `get_le`, and `get_ge` on **`K: OrderedKeyLookup<Q>`**.
-   - Provide blanket `K: KeyLookup<K>` and `K: OrderedKeyLookup<K>`, plus `(String, str)`, `(Box<str>, str)`, `(Vec<u8>, [u8])`, and `(Box<[u8]>, [u8])`.
-   - For fixed-size byte arrays `[u8; N]`: implement `KeyLookup<[u8]>` on `[u8; N]` (`where [u8; N]: KeyEnDe`, i.e. `N <= 32`) and exact-match `OrderedKeyLookup<[u8]>` on `[u8; N]` (returning `None` in $O(1)$ without engine I/O when `q.len() != N` on `get`/`get_mut`/`contains_key`/`remove`), while ordered boundary methods (`get_le`, `get_ge`, `range`) use `OrderedBoundEndpoint<E>` (§3.3) which accepts `[u8; N]` and `&[u8; N]` (rejecting unsized `&[u8]` so short prefix slices cannot be confused with full keys; raw prefix bounds remain explicit on `MapxOrdRawKey`). Delete `KeyRef::as_byte_slice` and `Mapx::query_bytes`.
-3. **Stack `with_full_key` in `mmdb.rs`:**
-   - Replace transient `make_full_key` calls in `MmDB::{get, insert, remove, lazy_delete}`, `MmdbReadView::get`, and `MmdbBatch::{insert, remove}` with a `[u8; 128]` stack buffer (`8 + key.len() <= 128`, heap fallback for longer keys). This eliminates **all temporary VSDB key-encoding and prefix-concatenation heap allocations** for keys `<= 120` bytes (`mmdb::DB::get` still allocates the returned value `Vec<u8>` on hits, and `mmdb::DB::delete` copies the key into its internal `WriteBatch`).
-
----
-
-## 3. Engine scan path: prefix-Bloom range unification, unboxed `MmdbIter`, and coherence-safe bounds
-
-Source: [mmdb.rs](../../core/src/common/engine/mmdb.rs#L452-L681), [engine/mod.rs](../../core/src/common/engine/mod.rs#L82-L96), [staged.rs](../../strata/src/common/staged.rs#L72-L185).
-
-### Current defects and costs
-
-1. **SST prefix Bloom filter bypassed on every `range`, `get_le`, `get_ge`, and `MapxReadView::iter` (shippable in `v17.x`):**
-   [`mmdb_open`](../../core/src/common/engine/mmdb.rs#L1821) configures an 8-byte prefix extractor (`prefix_len: PREFIX_SIZE`), which `mmdb::DB::iter_with_prefix` uses to prune L0 SSTs via prefix Bloom filters and pass prefix/range hints to higher levels. Yet [`MmDB::range_at`](../../core/src/common/engine/mmdb.rs#L563-L569) calls `db.iter_with_range(...)` — skipping prefix Bloom filters — and calls `db_iter.seek(lo)` a **second** time after `iter_with_range` already sought all sources.
-2. **Heap-boxed `dyn DoubleEndedIterator` and per-row `Vec<u8>` reallocation:**
-   Every `iter`, `range`, `get_le`, and `get_ge` boxes `MmdbIter(Box::new(iter))` ([mmdb.rs](../../core/src/common/engine/mmdb.rs#L466)), dispatches every item through a vtable, re-runs `.filter(...)` on top of `DBIterator` bounds, and allocates a fresh `Vec<u8>` via `k[PREFIX_SIZE..].to_vec()` ([mmdb.rs](../../core/src/common/engine/mmdb.rs#L577)) even though `k` is already an owned `Vec<u8>`.
-3. **`RangeBounds<Cow<'a, [u8]>>` friction and wasted overlay lookahead clones:**
-   Callers of `MapxRaw::range` and `MapxOrdRawKey::range` cannot write `map.range(b"a"..b"z")` without `Cow` wrappers; `MapxOrd<String, V>::range` ([mapx_ord/mod.rs](../../strata/src/basic/mapx_ord/mod.rs#L209)) rejects `"a".."z"`; and [`StagedRows::scan_prefix`](../../strata/src/common/staged.rs#L95-L102) maps `(k.clone(), v.clone())` over `self.rows.range(..)` before `MergeScan` filters out staged `None` tombstones.
-
-### v18 design
-
-1. **Unify all prefix scans onto `db.iter_with_prefix(&meta_prefix, &opts)` + expose sub-prefix `delete_range`:**
-   - Set `ReadOptions::{iterate_lower_bound, iterate_upper_bound}` with `Bound::Excluded(lo)` converted to inclusive `lo || [0x00]` (mirroring `Bound::Included(hi)` → `hi || [0x00]` at [mmdb.rs](../../core/src/common/engine/mmdb.rs#L547-L551)). Verified in `mmdb 4.3.14` (`db.rs:2136-2326`), `iter_with_prefix` intersects caller bounds with `[meta_prefix, prefix_end)`, applies **both** range and **prefix Bloom** SST pruning, installs bounds on `DBIterator`, and seeks once. Preserve captured snapshot `ReadOptions` and [`CheckedBidiIter`](../../core/src/common/engine/mmdb.rs#L631-L657)'s error check after **every** `next()` and `next_back()`.
-   - Add `pub(crate)` / `MapxRawBatch::delete_range(&mut self, start: &[u8], end: &[u8])` wrapping `mmdb::WriteBatch::delete_range(&full_start, &full_end)` (`db.rs:1691`) so composite single-prefix stores (`DagMapRaw` `[0x02]..[0x03]`) can range-wipe user data without wiping `[0x00]`/`[0x01]` metadata rows.
-2. **Concrete `MmdbIter` and in-place prefix stripping:**
-   Replace `Box<dyn DoubleEndedIterator<...>>` with a concrete `pub struct MmdbIter { inner: CheckedBidiIter }` and strip the 8-byte prefix in place via `k.drain(..PREFIX_SIZE)` (avoiding a second `Vec<u8>` heap allocation per yielded forward/backward item).
-3. **Compiler-verified `RawRangeBounds`, `OrderedRangeBounds<K>`, and zero-tombstone-clone `MergeScan`:**
-   Naively implementing `OrderedRangeBounds<K>` for both `Range<K>` and `Range<&Q>` triggers Rust coherence error `E0119` (since `&LocalType` is fundamental and could overlap `K`). Instead, parameterize endpoint encoding **on `K`** via `pub trait OrderedBoundEndpoint<E>: KeyEnDeOrdered`:
-   - `impl<K: KeyEnDeOrdered> OrderedBoundEndpoint<K> for K` (owned endpoints, e.g. `1u64..10u64`, `[0u8; 64]..=[1u8; 64]`);
-   - `impl<K: KeyEnDeOrdered> OrderedBoundEndpoint<&K> for K` (borrowed `&K` endpoints — provably disjoint from `K` because `K = &K` is an infinite type);
-   - concrete unsized-slice impls `OrderedBoundEndpoint<&str>` for `String` / `Box<str>` and `OrderedBoundEndpoint<&[u8]>` for `Vec<u8>` / `Box<[u8]>`;
-   - plus a dedicated `impl<K: KeyEnDeOrdered> OrderedRangeBounds<K> for RangeFull` carrying **no endpoint type parameter `E`**, and `impl<K: OrderedBoundEndpoint<E>, E> OrderedRangeBounds<K>` for `Range<E>`, `RangeInclusive<E>`, `RangeFrom<E>`, `RangeTo<E>`, `RangeToInclusive<E>`, and `(Bound<E>, Bound<E>)` (likewise on `get_le<E>` / `get_ge<E>`).
-   Verified with `rustc 1.100.0 --edition=2024`, `map.range(..)`, `map.range(1u64..10)`, `map.range(&1u64..&10)`, `str_map.range("a".."z")`, `str_map.range(String..String)`, `arr_map.range([0u8; 64]..=[1u8; 64])`, and `arr_map.range(&[0u8; 64]..=&[1u8; 64])` all compile without turbofish or coherence conflicts. In `StagedRows::MergeScan`, borrow `btree_map::Range<'a, Vec<u8>, Option<Vec<u8>>>` directly and clone `(k, v)` only when emitting a live `Some(v)` overlay entry.
-
----
-
-## 4. Basic collections: safe `Entry` enum, `DerefMut`-only `ValueMut`, minimal `Reader`/`ReadView`, and `unsafe` cleanup
-
-Source: [macros.rs](../../strata/src/common/macros.rs#L57-L183), [mapx_ord_rawkey/mod.rs](../../strata/src/basic/mapx_ord_rawkey/mod.rs#L92-L124), [orphan/mod.rs](../../strata/src/basic/orphan/mod.rs#L91-L208), [mapx_raw/mod.rs](../../core/src/basic/mapx_raw/mod.rs#L74-L185).
-
-### Current defects and costs
-
-1. **2 upfront clones/encodes + up to 2 `Drop` re-encodes on every `get_mut` / `iter_mut` / `Orphan +=`:**
-   [`MapxOrdRawKey::get_mut`](../../strata/src/basic/mapx_ord_rawkey/mod.rs#L92-L106) and `ValueIterMut` eagerly serialize `snapshot = value.encode()` **and** clone `original = inner.as_slice().to_vec()` (duplicating bytes already held inside `self.inner`), then re-encode up to twice on `Drop` when `!self.dirty` — solely to auto-persist `RefCell<T>` interior mutability through shared `&V` `Deref` ([mapx/test.rs](../../strata/src/basic/mapx/test.rs#L333-L343)). Meanwhile `ValueMut`, `ValueIterMut`, `mapx::ValueIterMut`, `orphan::ValueMut`, and `dagmap::rawkey::ValueMut` duplicate the guard boilerplate.
-2. **Raw-pointer `unsafe` in `Entry` APIs + dead `pub unsafe` surface:**
-   `entry_or_insert_via_mock!` ([macros.rs](../../strata/src/common/macros.rs#L282-L298), which only exposes `or_insert(V)`) and `MapxRaw::Entry` ([mapx_raw/mod.rs](../../core/src/basic/mapx_raw/mod.rs#L846-L880), which exposes `or_insert` and `or_insert_with`) cast `&mut Hdr` to `*mut Hdr` to work around borrow lifetimes. `MapxOrd::insert_encoded_value` ([mapx_ord/mod.rs](../../strata/src/basic/mapx_ord/mod.rs#L156)) and `MapxOrdRawKey::insert_encoded_value` have **zero external callers**; `MapxRaw::from_bytes_in` and `engine::Mapx::from_prefix_slice_in` have only **one legacy caller** (`DagIdAllocator::read_legacy_counter`); `define_map_wrapper!` ([macros.rs](../../strata/src/common/macros.rs#L176-L183)) decodes `self.as_bytes()` manually instead of calling `self.inner.instance_id()`; and `Orphan::{is_uninitialized, initialize_if_empty}` are dead relics.
-3. **Missing typed `Reader` / `ReadView`:**
-   While `&Mapx<K, V>` already permits shared reads when no writer holds `&mut Mapx<K, V>`, retaining an independent read handle alongside an active single writer currently forces typed-map callers into `unsafe { map.shadow() }`.
-
-### v18 design
-
-1. **Explicit `DerefMut` write-back on `ValueMut` / `ValueIterMut`, debug upgrade check, and fallible `update`:**
-   - **Intentional v18 contract change:** `ValueMut` and `ValueIterMut` persist changes strictly when `DerefMut` (`&mut V`) was called (`dirty == true`) or when initialized by a vacant `Entry` (`is_mock == true`, so `map.entry(&k).or_insert(v);` inserts even if the returned guard is dropped without dereferencing). Interior mutability through shared `&V` (`RefCell`) is no longer auto-persisted.
-   - **Upgrade safety check (`#[cfg(debug_assertions)]`):** Because dropping `RefCell`-via-`&V` persistence causes no compile error, debug/test builds record `initial_encode = value.encode_value()` on guard creation and `debug_assert_eq!(self.value.encode_value(), initial_encode, ...)` on non-unwinding `Drop` when `!self.dirty && !self.is_mock` — catching un-migrated interior-mutability mutations immediately in tests with **zero release-build cost** (0 upfront encodes, 0 `original` clones, and 0 `Drop` encodes on untouched release guards).
-   - Retain [`UnwindMark::interrupted()`](../../strata/src/common/mod.rs#L39-L52) (`!panicking_at_entry && thread::panicking()`, NOT bare `!thread::panicking()`, so a guard created inside a `Drop` during an active unwind still behaves normally while a panic starting mid-guard suppresses half-mutated write-back). When `!self.unwind.interrupted() && (self.is_mock || self.dirty)`, encode `self.value` **once** on `Drop` and write back iff `self.is_mock || encoded.as_slice() != self.inner.as_slice()`.
-   - Add `ValueMut::commit(self) -> Result<()>` and `map.update(&k, |v: &mut V| ...)` for deterministic fallible write-back. Unify `ValueMut<'a, V>` and `ValueIterMut<'a, V>` over one internal `RawValueSlot` trait and delete `Orphan::{is_uninitialized, initialize_if_empty}`.
-2. **100% safe `enum Entry<'a, V> { Occupied, Vacant }` and `pub unsafe` pruning:**
-   Read the raw value inside `entry(key)` before constructing `OccupiedEntry` or `VacantEntry` holding `&'a mut Self` — deleting all `Entry` raw-pointer `unsafe` while providing `or_insert`, `or_insert_with`, `or_default`, `and_modify`, `OccupiedEntry::{get, get_mut, insert, remove}`, and `VacantEntry::insert`. **Explicitly removed public items:** `MapxOrd::insert_encoded_value`, `MapxOrdRawKey::insert_encoded_value`, `MapxRaw::{from_bytes_in, as_bytes}`, `engine::Mapx::from_prefix_slice_in`, and `Orphan::shadow` (demoted to `pub(crate)`).
-3. **Minimal view-factory `Reader` + typed `ReadView` (per [durable-batches-and-read-views.md](durable-batches-and-read-views.md#L216-L219)):**
-   Rather than duplicating ~15 collection methods across a parallel hierarchy of 9 reader structs, ship **one generic immutable handle `MapReader<M>`** (exposing `read_view(&self)`, `instance_id(&self)`, and `namespace(&self)`, while owning a `Namespace` clone that prevents premature `Namespace::close`) paired with borrowed `MapxReadView<'a, K, V>`, `MapxOrdReadView<'a, K, V>`, `MapxOrdRawKeyReadView<'a, V>`, and `OrphanReader<T>::get(&self) -> T` (plus completing `MapxRawReader`).
-
----
-
-## 5. Universe header, unified `VSTYPE04` handle frames, fail-closed `VSNREG02`, and `ruc`-free `VsdbError`
-
-Source: [strata/src/common/mod.rs](../../strata/src/common/mod.rs), [core/src/common/mod.rs](../../core/src/common/mod.rs), [namespace.rs](../../core/src/common/namespace.rs), [error.rs](../../core/src/common/error.rs), [mmdb.rs](../../core/src/common/engine/mmdb.rs#L871-L1521).
-
-### Current defects and recovery subtleties
-
-1. **Format marker conflates universe version with default-shard readiness, and roots lack identity:**
-   [`check_format_version`](../../core/src/common/engine/mmdb.rs#L1700-L1725) treats `NotFound` as pre-v16 OK and only rejects `ver > SUPPORTED_FORMAT_VERSION`, while [`validate_shard_layout`](../../core/src/common/engine/mmdb.rs#L1488-L1499) treats `format_version` present + `0` shard dirs as a damaged default engine. In addition, writable single-process exclusion relies only on in-process mutexes ([namespaces.md](namespaces.md#L27-L30)), and [`Namespace::relocate`](../../docs/proposals/namespaces.md#L219-L222) cannot detect an operator pointing namespace `A` at namespace `B`'s directory because engine roots carry no `(universe_id, ns_id)`.
-2. **Triple-nested handle envelopes + `note_meta_bytes` prefix-recovery coupling:**
-   Serializing a `Mapx<K, V>` wraps `VSMAPX01` → `MapxOrdRawKey` `VSTYPE03` → `Mapx` `VSTYPE03` (intermediate `Vec<u8>` allocations and 3 `postcard` passes on nested-map reads), plus `VSTYPE02` / `legacy_type_name` shims ([strata/src/common/mod.rs](../../strata/src/common/mod.rs#L106-L152)). Missing-ceiling prefix recovery ([`note_meta_bytes`](../../core/src/common/engine/mmdb.rs#L1165-L1219)) scans shard values, `__instance_meta__`, and `__CUSTOM__` for raw handle magic so even **empty** saved maps do not have their prefix reissued — any new typed frame must place `prefix_le` at a single unambiguous offset across **all** typed collections.
-3. **`__namespace_state__` sidecars (4 durable registry writes per `Namespace::create`) and missing-registry reuse protection:**
-   [`Namespace::create_with`](../../core/src/common/namespace.rs#L733-L767) writes `__namespace_state__/<id>` sidecars separately from `__namespaces__` (4 atomic file writes across creation, alongside initial directory `fsync`s in `create_dir_all_durable`). [`load_registry`](../../core/src/common/namespace.rs#L335-L345) treats a missing `__namespaces__` file as `RegistryFile::default()` (`next_id = 1`), relying on surviving sidecars to block ID reuse for explicit-path namespaces if `__namespaces__` was lost.
-4. **Default-engine initialization on `vsdb_flush()` and v15 allocator fold:**
-   `ensure_alloc_init` ([mmdb.rs](../../core/src/common/engine/mmdb.rs#L882-L884)) forces `LazyLock::force(&VSDB)` whenever `<base>/mmdb` exists to fold pre-v16 shard-0 counters, and `vsdb_flush()` ([core/src/common/mod.rs](../../core/src/common/mod.rs#L544)) unconditionally initializes `DEFAULT_NS` (2 GiB sizing input = 256 MiB `BlockCachePool` + 16 shards/compaction workers) even when `<base>/mmdb` never existed.
-5. **`ruc` SemVer leak and flattened `VsdbError::Other`:**
-   `impl From<Box<dyn ruc::err::RucError>> for VsdbError` ([error.rs](../../core/src/common/error.rs#L154)) leaks `ruc` into public SemVer, while `mmdb.rs` flattens `std::io::Error` and `mmdb::ErrorKind` into `VsdbError::Other { detail: String }` (`source() == None`).
-
-### v18 design
-
-1. **Decoupled atomic `VSUNI018` universe commit point + per-engine `.shards_ready` + OS advisory `LOCK`:**
-   - Separate **universe identity** from **per-engine shard readiness**:
-     - `<base>/__SYSTEM__/universe_header` (`VSUNI018`, `format_version = 18`, `universe_id: u128`) is the **single atomic bootstrap commit point** of a fresh `<base>`: bootstrap acquires `<base>/__SYSTEM__/LOCK` (OS advisory lock in writable mode), writes initial `VSNREG02` `__namespaces__` and `__prefix_ceiling__` via `atomic_write_file`, and writes `universe_header` **last** via `atomic_write_file`. If a crash occurs before `universe_header` lands, an uncommitted `<base>` (containing only `__SYSTEM__` pre-commit files and no `mmdb/` or `namespaces/`) resumes bootstrap idempotently instead of bricking.
-     - Each engine root (`<base>/mmdb` when `DEFAULT_NS` is first opened, and `<ns_root>` for non-default namespaces) writes its own `<engine_root>/__SYSTEM__/engine_header` (`VSENG018`, `universe_id: u128`, `ns_id: u64`, `shards: u32`) **only after** all `shard_00..shard_{N-1}` directories exist (preserving `.initializing` resumability on mid-create crashes). Lazy `DEFAULT_NS` therefore has `universe_header` present and `<base>/mmdb` absent (`0` shards, no `engine_header`) without triggering `validate_shard_layout`'s damaged-shard check, while deleting shard directories after `engine_header` exists still fails closed.
-   - **Error channels:** `vsdb_configure` and `Namespace::{open, create, relocate}` validate headers and return `Result<_, VsdbError>` (never panicking on `v16`/`v17` or mismatched `(universe_id, ns_id)` roots). Calling infallible constructors like `Mapx::new()` without prior `vsdb_configure` on an unmigrated `v17` or damaged `<base>` panics with the underlying `VsdbError` message (matching `LazyLock::force(&VSDB)` today).
-2. **Fail-closed `VSNREG02` inline lifecycle + lazy `DEFAULT_NS`:**
-   - Embed `state: NsLifecycleState` directly in `NsRecord` under `VSNREG02` (`__namespaces__`), deleting `__namespace_state__` sidecars and reducing `Namespace::create()` registry saves from **4 atomic file writes to 2** (initial directory creation `fsync`s remain unchanged). Once `universe_header` exists, a missing `__namespaces__` **fails closed (`VsdbError::Corrupt`)** instead of resetting `next_id` to `1`.
-   - Delete v15 `META_KEY_PREFIX_ALLOCATOR` migration, `struct VsDB`, and `vsdb_meta_path(u64)` / `vsdb_get_meta_dir()`; hold `DEFAULT_NS` in a `OnceLock<Namespace>` so `vsdb_flush()` only flushes `DEFAULT_NS.get()` when open; and unify `write_file_durable` onto `atomic_write_file`.
-3. **Unified single-prefix handle frames (`VSMAPX02` & `VSTYPE04`) + backward-read of `VSMAPX01` / `VSTYPE03`:**
-   - `MapxRaw`: fixed 24-byte stack frame `b"VSMAPX02" | prefix_le:8 | ns_id_le:8` (`0` = default), **continuing to read 16-byte `VSMAPX01`** (`ns_id = 0` or ambient scope) so existing raw handles open in place.
-   - **All** single-prefix typed collections (`Mapx`, `MapxOrd`, `MapxOrdRawKey`, `Orphan`, `PersistentBTree`, `SlotDex`, `VecDex`, `VerMap`, `VerMapWithProof`, `DagMapRaw`, `DagMapRawKey`, `DagMap`) share **one** canonical `VSTYPE04` header layout:
-
-     ```text
-     b"VSTYPE04" (8B) | type_tag_le (8B) | prefix_le (8B) | ns_id_le (8B) | meta_len_le (4B) | extra_meta (meta_len B)
-     ```
-
-     - For `Mapx*`, `Orphan`, `PersistentBTree`, and `VerMap`, `meta_len_le == 0` (exact **36-byte stack frame `[u8; 36]`**, zero heap allocations during serde).
-     - For `SlotDex` (`ver=3, tier_capacity: u32, swap_order: bool`), `VecDex` (`ver=2`), `DagMap*` (`ver=1, dag_id: u64`), and `VerMapWithProof`, `extra_meta` carries the compact collection header **after** fixed offset `36` — so **`prefix_le` is unconditionally at bytes `16..24` of every `VSTYPE04` frame** and never collides with `extra_meta`.
-     - `type_tag_le` is `fnv1a64(std::any::type_name::<Self>().as_bytes()).to_le_bytes()` (matching `VSTYPE03` at [strata/src/common/mod.rs](../../strata/src/common/mod.rs#L98-L104)), documented explicitly as a best-effort local nominal guard against opening a handle under the wrong Rust wrapper/type — **not** a cross-module-rename or struct-field schema hash.
-     - Keep `VSTYPE03` reader support on `Mapx*`, `Orphan`, and `SlotDex` (deleting `VSTYPE02` and `legacy_type_name`), and update [`note_meta_bytes`](../../core/src/common/engine/mmdb.rs#L1165) to scan `VSMAPX01` (`+8..+16`), `VSMAPX02` (`+8..+16`), and `VSTYPE04` (`+16..+24`) with a 23-byte `note_meta_stream` carry window so both in-place `v17` and `v18` handles always reserve their prefixes on missing-ceiling recovery.
-4. **Drop `ruc` without leaking `mmdb::Error` into public SemVer:**
-   - Remove `ruc` (and public `From<Box<dyn RucError>>`) from both crates and convert `mmdb.rs` to `crate::Result<T>`.
-   - Map `mmdb::Error` via a **crate-private** `pub(crate) fn from_mmdb_err(...) -> VsdbError` (never a public `From<mmdb::Error>`), preserving `Error::source()` across `Io`, `Corruption`, `ReadOnly`, `InvalidArgument`, `DbClosed`, `Background`, and `#[non_exhaustive]` fallback. Move `BranchId(u64)` / `CommitId(u64)` to `vsdb_core::common` for typed `VsdbError` variants.
-
----
-
-## 6. `VerMap` and `PersistentBTree`: single-handle big-endian store, slotted `NodeView`, benchmark-gated ref persistence, and lock-free-across-fsync snapshots
-
-Source: [versioned/map.rs](../../strata/src/versioned/map.rs), [versioned/repair.rs](../../strata/src/versioned/repair.rs), [versioned/read.rs](../../strata/src/versioned/read.rs), [persistent_btree/mod.rs](../../strata/src/basic/persistent_btree/mod.rs), [persistent_btree/nodes.rs](../../strata/src/basic/persistent_btree/nodes.rs), [persistent_btree/merge.rs](../../strata/src/basic/persistent_btree/merge.rs).
-
-### Current defects and costs
-
-1. **8-prefix non-atomic `VerMapPayload` + `gc_dirty` + `BranchState` churn:**
-   `VerMap` persists 8 separate handles ([versioned/map.rs](../../strata/src/versioned/map.rs#L244-L253)). Although v17 co-locates newly created maps onto one shard (avoiding inter-step WAL fences on working edits), engine batches remain single-prefix: every working `VerMap::insert`/`remove` commits 2 separate prefixes (`tree.nodes` + `branches`, cloning `BranchState.name: String`), `commit()` executes **6 separate prefix writes + `gc_dirty` toggles** before its final WAL sync, and `new_with_main` burns ~112 prefixes to co-locate 8 handles on 16 shards.
-2. **`RefState` RAM growth under retained history and full-DB `from_meta()` scans:**
-   Every live node's refcount and child list live only in volatile `RefState.counts: HashMap<NodeId, NodeRef>` ([persistent_btree/mod.rs](../../strata/src/basic/persistent_btree/mod.rs#L72)). Every `VerMap::from_meta()` runs **2 full `nodes.iter()` scans + random `nodes.get` across every reachable node** (reading ~96% leaf pages off disk just to discover `children.is_empty()`) — plus a WAL `fsync` in writable mode. At ~70–90 B per `RefState` entry (`B = 16`, ~24 keys/leaf), a single-version 5M-key tree uses ~17 MiB, while workloads retaining thousands of historical block commits (2M+ distinct COW nodes) permanently pin **>150 MiB** of RAM.
-3. **~128 sibling `Vec<u8>` allocations per depth-4 `get()` and borrowed `Snapshot<'a>`:**
-   Sequential `Node::decode` ([nodes.rs](../../strata/src/basic/persistent_btree/nodes.rs#L114-L138)) allocates `Vec<Vec<u8>>` for all ~24 sibling keys at every internal level and all ~24 keys **and values** at the leaf before returning 1 value. `Snapshot<'a, K, V>` ([versioned/read.rs](../../strata/src/versioned/read.rs#L37-L40)) borrows `&'a VerMap`, blocking concurrent `&mut VerMap` mutations even though `RootLease` pins the root, and `PersistentBTree` carries the subsystem's sole `unsafe` (`self.nodes.shadow()` at [persistent_btree/mod.rs](../../strata/src/basic/persistent_btree/mod.rs#L461)).
-
-### v18 design
-
-1. **Single-handle big-endian tagged `VerMap` store (`1 MapxRaw`, preserving `PersistentBTree` as `pub`):**
-   Keep standalone `PersistentBTree` **`pub`** (avoiding API whiplash after `v17.0.0` moved callers onto `PersistentBTree::{diff, merge}`; [CHANGELOG.md](../../CHANGELOG.md#L513-L517)) while consolidating `VerMap` onto one `MapxRaw` with **big-endian** object keys so top-2-bit tag classes (`0b00` internal, `0b01` inline leaf, `0b10` blob leaf, `0b11` blob) cluster physically in SST blocks and expose each class's maximum allocated ID via one $O(1)$ reverse seek:
-
-   ```text
-   [0x00]                   -> Header { ver: u8, next_id: u64, next_commit: u64, next_branch: u64, main_branch: u64 }
-   [0x01 | branch_id_be:8]  -> BranchHead { head: u64, dirty_root: u64 }   // fixed 16B, separated from String name
-   [0x02 | branch_id_be:8]  -> branch_name UTF-8 bytes
-   [0x03 | branch_name]     -> branch_id_le:8
-   [0x04 | commit_id_be:8]  -> Commit { root: u64, timestamp_us: u64, ref_count: u32, parents: [u64] }
-   [0x05 | root_id_be:8]    -> []                  // retired roots awaiting deferred/pinned reclamation
-   [0x06 | stage_root_be:8] -> []                  // unpublished chunked bulk_load / large-merge subtrees
-   [0x10 | node_id_be:8]    -> Slotted B+ tree node page (0b00 internal | 0b01 inline leaf | 0b10 blob leaf)
-   [0x11 | obj_id_be:8]     -> extra_refs: u32     (Mode A)  OR  [0x07] Verified RefState checkpoint (Mode B)
-   [0x12 | blob_id_be:8]    -> Separated large value bytes (> 1 KiB, tag 0b11)
-   ```
-
-   - Working edits (`insert`, `remove`, `write_batch`, `discard`) commit node/blob pages + `Header` + `BranchHead` in **1 atomic `batch.commit()`** (collapsing `2 → 1` batches and `0` `String` clones).
-   - Ordinary history operations (`commit`, `create_branch`, `delete_branch`, `rollback_to`, `set_main_branch`, and merges within the ~16 MiB batch budget) commit in **1 atomic `batch.commit_sync()`** (`6 writes + gc_dirty → 1 WAL record`).
-   - **Multi-chunk `bulk_load` and oversized `merge` (>16 MiB):** Flush newly allocated unpublished subtrees in ~16 MiB batches anchored by **`[0x06 | stage_root_be] -> []`**, then publish the final `BranchHead`/`Commit` and delete the `[0x06]` anchors in **1 final atomic `commit_sync()`**. If a crash interrupts staging before final publication, writable `from_meta()` cascade-reclaims `[0x06]` orphan roots without touching live branches.
-2. **Benchmark-gated reference persistence (Stage 0 gate — acknowledging `mmdb 4.x` read-modify-write cost):**
-   Because `mmdb 4.x` has no merge operator, persisted sparse `[0x11]` `extra_refs` (**Mode A**) turns every non-canceling refcount change on an already-persisted node into a point `get` + batch `put/delete` (~72 `[0x11]` updates on the first edit after `commit()` on a depth-4 `B = 16` tree, and ~20 per updated key in a 1,000-key block over a 1M-key tree with retained history, vs. 0 I/O in RAM today). Stage 0 benchmarks Mode A head-to-head against **Mode B (Verified `RefState` Checkpoint)**:
-   - **Mode A (Sparse `[0x11]` `extra_refs`):** Chosen iff Stage 0 block-commit throughput stays within 10% of `v17` (or if paired with optional `mmdb v5` delta-merge operands). `0b01` inline leaves and `0b11` blobs have 0 outgoing pointers and are never read on delete.
-   - **Mode B (Compact `u32` internal-only `RefState` + verified `[0x07]` checkpoint):** Keeps write-path ref updates 100% in memory (0 extra read/write I/O), omits `0b01` inline-leaf child lists from RAM (shrinking per-node RAM ~3×), and writes a checksummed `[0x07]` refcount snapshot bound to `Header` generation on clean `flush`/`close`/checkpoint so normal `from_meta()` loads sequentially without scanning `[0x10]` pages, falling back to full tree scan only after an uncheckpointed crash.
-3. **Open-time verification contract (`strata/docs/versioned.md` alignment):**
-   - Preserve fail-closed metadata & ceiling validation on every `VerMap::from_meta()` **before** any reclamation: validate `Header`, verify every `BranchHead` (`dirty_root` and `head`) and reachable `Commit` DAG row exists with valid root page headers, and verify via **4 $O(1)$ big-endian reverse seeks** on `[0x10]`/`[0x12]` that the highest persisted ID in each 2-bit tag class is `< Header.next_id`. Missing commits, dangling branch roots, or truncated `next_id` still return `Err(VsdbError::Corrupt)` at open time ([versioned.md](../../strata/docs/versioned.md#L502-L507)).
-   - Provide `VerMap::from_meta_verified()` and `VerMap::verify_and_gc() -> Result<GcStats>` for full leaf-level scan + refcount rebuild/self-healing prior to reclamation, and update `versioned.md` explicitly to distinguish default metadata/root open verification from deep leaf verification.
-4. **Shared `TREE_RUNTIMES` and lock-free-across-`fsync` `Snapshot` retirement:**
-   - Retain `TREE_RUNTIMES: Mutex<HashMap<InstanceId, Weak<TreeRuntime>>>` so restored in-process aliases and `VerMapReader`s share `next_id`, `pins`, and `zombie_roots`; back `RootLease` with safe `MapxRawReader` (`#![forbid(unsafe_code)]` across `persistent_btree` and `versioned`) and make `Snapshot<K, V>` **owned (`'static + Clone + Send + Sync`)**.
-   - **Never hold the pin lock across WAL `fsync`:**
-     - When `Arc::strong_count(&self.runtime) == 1` (single handle, no live `Snapshot`/`VerMapReader`/alias), Rust's `&mut self` guarantees zero concurrent `snapshot()` calls, so retired roots reclaim inline.
-     - Whenever aliases, `VerMapReader`s, or `Snapshot`s share `TreeRuntime` (`strong_count > 1`), retiring root `R` stages `[0x05 | R_be] -> []` in the `commit_sync()` batch **without deleting `R`'s pages yet** — so concurrent `snapshot()` readers acquire `TreeRuntime`'s in-memory `Mutex` in nanoseconds (never waiting on writer `fsync`), keep reading `R` safely throughout `fsync` (and if `commit_sync()` fails, `R` was never deleted), and `R` is cascade-reclaimed **after** commit once `pin_count(R) == 0` (or on the next writable op / writable `from_meta()` after a crash).
-5. **Slotted `NodeView<'a>(&'a [u8])`, owned-leaf `BTreeIter`, and range-grouped `write_batch`:**
-   - Encode `u32` key end-offsets and `u64` value/blob descriptors at the head of each node page so `NodeView` binary-searches `&[u8]` slices inside the single owned `RawValue` (`Vec<u8>`) returned per level by `mmdb` — eliminating all **~128 per-sibling key/value `Vec` allocations** on a depth-4 `get()`. `BTreeIter` holds the current leaf's `RawValue` buffer and decodes `(K, V)` on demand.
-   - Drop `K: Clone, V: Clone` from `VerMap::clone()`, add `VerMap::clone_in(&ns)`, share a single-pass sorted range-grouped COW applier across `VerMap::write_batch` and `merge::replay`, and make `bulk_load` and `BTreeDiffIter` $O(\text{height})$ streaming.
-
----
-
-## 7. Merkle tries (`MptCalc` and `SmtCalc`): `Arc`-COW nodes, map-bound streaming checkpoints, and unified `TrieCalc`
-
-Source: [trie/mod.rs](../../strata/src/trie/mod.rs), [trie/node/mod.rs](../../strata/src/trie/node/mod.rs), [trie/nibbles.rs](../../strata/src/trie/nibbles.rs), [trie/mpt/mutation.rs](../../strata/src/trie/mpt/mutation.rs), [trie/smt/mutation.rs](../../strata/src/trie/smt/mutation.rs), [trie/cache.rs](../../strata/src/trie/cache.rs), [trie/codec_util.rs](../../strata/src/trie/codec_util.rs), [trie/proof.rs](../../strata/src/trie/proof.rs), [audit.md](../audit.md).
-
-### Current defects and costs
-
-1. **`Box` + `mem::take` ownership churn, partial `batch_update`, and `VerMapWithProof::poison()`:**
-   While single-op `TrieMut::insert` validates `MAX_MPT_KEY_LEN` (`1024` bytes = 2,048 nibbles) before `mem::take(&mut self.root)` ([mpt/mutation.rs](../../strata/src/trie/mpt/mutation.rs#L28-L36)), `mem::take` still empties `self.root` across any panic/unwind, and `batch_update` ([trie/mod.rs](../../strata/src/trie/mod.rs#L223-L238)) leaves earlier items applied when a later item fails — forcing `VerMapWithProof` to `poison()` and discard the entire cached trie ([trie/proof.rs](../../strata/src/trie/proof.rs#L235)). $O(N)$ `Clone` also forces `VerMapWithProof::sync_to_branch` to recompute B+ tree diffs on repeated `merkle_root` calls and run `reverse_dirty()` undo passes.
-2. **Per-node heap bloat and 256-deep SMT recursion:**
-   `Cached(Vec<u8>, Box<Node>)` allocates a separate 32B `Vec<u8>` per hashed node; `Node::Branch` allocates `Box<[Option<NodeHandle>; 16]>` (256+ bytes) even for 2 children; `Nibbles(Vec<u8>)` allocates on the heap and allocates 2 `Vec<u8>`s on every `split_at`; `NodeCodec::encode` allocates a `Vec<u8>` per hashed node; and `SmtCalc` uses recursive `Drop` and 256-frame recursive walks.
-3. **Non-atomic checkpoint writes, unbound pre-validation memory (`[LOW]` in `audit.md`), and weak map binding:**
-   [`write_cache_file`](../../strata/src/trie/codec_util.rs#L104-L111) truncates the live cache in place via `File::create`, buffers up to 512 MiB in RAM, stores redundant 34B per-node hashes, and materializes the full graph before structural validation ([audit.md](../audit.md#L57-L60)). [`VerMapWithProof::try_load_cache`](../../strata/src/trie/proof.rs#L525-L551) also checks only that `CommitId` exists on `self.map`, so a checkpoint copied from another map with the same numerical `CommitId` would be accepted.
-
-### v18 design
-
-1. **Candidate-root `Arc`-COW nodes + inline `OnceLock<[u8; 32]>` (preserving identical Keccak256 preimages & proof wire bytes):**
-   - `Clone` becomes $O(1)$ (`Arc::clone`). Single and batch mutations clone `let mut candidate = self.root.clone();`, edit via `Arc::make_mut` + `hash.take()`, and assign `self.root = candidate;` **only on `Ok`** — making every update **100% atomic across both `Err` and panic/unwind**, and deleting `mem::take`, `TrieMut`/`SmtMut`, `reverse_dirty()`, and `poison()`.
-   - **Acknowledged COW update tradeoff:** When a snapshot or `committed_trie` retains a second reference (`Arc::strong_count >= 2`), the first mutation along a shared branch path-copies $O(\text{depth})$ compact nodes via `Arc::make_mut` (~6–8 nodes on typical MPTs; subsequent edits in the same `batch_update` mutate unshared `strong_count == 1` nodes in place), trading small path clones on the first dirty touch against eliminating `v17`'s `reverse_dirty()` double-mutation + re-hashing on every `merkle_root()` call.
-   - Keep **iterative last-owner (`Arc::try_unwrap`) drop stacks** on **both** `MptNode::drop` and `SmtNode::drop` (plus iterative SMT walks) so dropping deep uniquely-owned chains never overflows the stack.
-   - Compact `MptNode::Branch` to `(bitmap: u16, children: Box<[Arc<MptNode>]>, value: Option<Box<[u8]>>)` via POPCNT indexing (~3–4× smaller branch nodes, **~1.2–1.9× lower whole-trie RAM** depending on branching density and value size); pack `Nibbles` inline up to 64 nibbles (32-byte keys) **with a `Box<[u8]>` heap fallback up to 2,048 nibbles (`MAX_MPT_KEY_LEN = 1024` bytes)**; and stream `NodeCodec` directly into `Keccak256::update`.
-   - `VerMapWithProof` retains `committed_trie: T` and forks `working_trie` in $O(1)$ only when `working.root != synced_working_root`.
-2. **Durable, budget-gated, map-bound post-order checkpoints (`MPTC v2` / `SMTC v4`):**
-   - Stream via `BufWriter` to sibling temp file → `BufWriter::flush` → `File::sync_all` → atomic `fs::rename` → parent-dir `sync_all`, omitting redundant per-node cached hashes (**saving ~34 bytes per serialized node** — ~45% on 32B values, ranging from ~3–5% on multi-KB values to ~85% on empty/tiny values). Old disposable `v17` caches simply miss version check and rebuild cleanly.
-   - Bind the checkpoint header to `(universe_id, map_instance_id, commit_id, btree_root_id)` so foreign checkpoints cannot match by `CommitId` coincidence.
-   - Enforce `max_nodes`, `max_pending_stack`, `max_value_len`, and cumulative `decoded_bytes` budgets **before** each allocation during `BufReader` parsing, plus online canonicality and ancestor-consistent SMT bit-length checks (closing [audit.md](../audit.md#L57-L60)).
-3. **Unified `TrieCalc` and `VerMapWithProof` lifecycle:**
-   - Add `type Proof` + `prove` / `verify_proof` on `TrieCalc`, return infallible `[u8; 32]` from `TrieCalc::root_hash(&self)` while **keeping `VerMapWithProof::merkle_root(&mut self, branch: BranchId) -> Result<[u8; 32]>` fallible** (as branch lookup or lazy `> MAX_MPT_KEY_LEN` sync can error), unify `VerMapWithProof` proof methods into one generic `impl<K, V, T: TrieCalc>`, and add `new_in`, `clone_in`, `save_meta`, `from_meta`, `instance_id`, and `namespace`.
-
----
-
-## 8. `DagMap`: shard-colocated single-handle nodes, fold-before-`Clearing` crash transitions, and typed `DagMap<K, V>`
-
-Source: [dagmap/mod.rs](../../strata/src/dagmap/mod.rs), [dagmap/raw/mod.rs](../../strata/src/dagmap/raw/mod.rs), [dagmap/rawkey/mod.rs](../../strata/src/dagmap/rawkey/mod.rs), [audit.md](../audit.md).
-
-### Current defects and hazards
-
-1. **Scattered 3-handle nodes and full-namespace WAL syncs:**
-   [`DagMapRaw`](../../strata/src/dagmap/raw/mod.rs#L86-L96) holds `{ data: MapxRaw, parent: Orphan<Option<DagMapRaw>>, children: MapxOrdRawKey<DagMapRaw> }`. `build()` leaves `data` un-colocated ([raw/mod.rs](../../strata/src/dagmap/raw/mod.rs#L278)) and `Clone` drops co-location completely, forcing `prune_mainline` to issue **5 full-namespace `try_sync_wal()` fences** (`5 × shard_count` = 80 shard WAL syncs in the 16-shard default namespace) and `destroy()` to issue 2 fences (32 shard syncs).
-2. **Serde tuple decomposition + root-wipe debt (`[MEDIUM]` in `audit.md`), 7 `unsafe` blocks, and `DagIdAllocator`:**
-   Bare 3-tuple serialization allows safe callers to deserialize and mutate `parent` into a cycle or plant a live root (`parent == None`) into `children` where `owned_or_residue` ([raw/mod.rs](../../strata/src/dagmap/raw/mod.rs#L669-L674)) wipes it. Storing `DagMapRaw` inside `Orphan`/`MapxOrdRawKey` requires **7 internal `unsafe` blocks**, a global `DagIdAllocator` (`dag_id_ceiling`), $O(\text{siblings})$ registry scans on `destroy()`, and 3 handle decodes per ancestor hop on `get()`.
-3. **Empty-value `[]` panics and broken typed surface:**
-   Using `[]` as deletion tombstone causes `insert(k, [])` and `DagMapRawKey<()>::insert` to panic; `DagMapRawKey<V>::new(Option<&mut DagMapRaw>)` ([rawkey/mod.rs](../../strata/src/dagmap/rawkey/mod.rs#L103)) forces callers into `into_inner()` or `unsafe { shadow_inner() }`; and typed `DagMap<K, V>` is missing.
-
-### v18 design
-
-1. **One shard-colocated `MapxRaw` per node with `dag_id` authentication and node-local `edge_id`s:**
-   Keeping one `MapxRaw` per node preserves per-node `InstanceId` / `save_meta()`, while creating every child via **`parent.store.new_colocated()`** places the entire connected DAG onto **one shard WAL**:
-
-   ```text
-   [0x00]                   -> NodeMeta {
-                                 dag_id: u64,          // random per-DAG token generated at root creation
-                                 next_edge_id: u64,    // node-local monotonic child edge counter
-                                 state: Root
-                                      | Child { parent_map: u64, parent_edge: u64 }
-                                      | Clearing { owner_parent: Option<u64>, parent_edge: Option<u64>, genesis_map: u64 }
-                                      | Destroying { parent_map: Option<u64>, parent_edge: Option<u64> }
-                                      | Destroyed
-                               }
-   [0x01 | edge_id_be:8]    -> child_map_id_le:8
-   [0x02 | user_key]        -> [0x01 | val] | [0x00]   // live value vs deletion tombstone
-   ```
-
-   - **Preserves `child_ids()` across `Clone` without `DagIdAllocator`:** Keying `[0x01]` by the parent's local `edge_id` (and storing `parent_edge` in the child's `NodeMeta`) preserves logical child edge tokens across `Clone` / `clone_in(&ns)` ([dagmap/raw/test.rs](../../strata/src/dagmap/raw/test.rs#L914-L923)) while keeping `child_id(&child)` and parent unlink **$O(1)$** and deleting global `DagIdAllocator` / `dag_id_ceiling`.
-   - **Acknowledged single-shard tradeoffs:** Placing a connected DAG on one shard concentrates all nodes of that DAG onto 1 shard's write buffer (16 MiB in the default 16-shard namespace) and 1 background compaction worker, and `new_colocated()` skips `shard_count - 1` prefixes (~16 prefix IDs per child in default 16-shard space — zero extra I/O inside the 8,192 pre-reserved window and negligible in $2^{64}$ prefix space). Write-heavy DAGs should use a dedicated `shards = 1` namespace with an appropriate `mem_budget_mb` ([§10.7](#107-engine-mmdb-4315-recalibrating-wr_buffer_size-for-single-shard-vermap-and-dagmap)).
-2. **Crash-ordered single-shard state transitions + sub-prefix `[0x02]..[0x03]` range wipe + 1-shard final sync:**
-   Because co-located prefixes share one WAL (program order = crash replay order), inter-phase cross-shard WAL fences disappear, while `MapxRawBatch::delete_range(&[0x02], &[0x03])` (§3.1) wipes user data in $O(1)$ without touching `[0x00]` `NodeMeta` or `[0x01]` discovery edges:
-   - **`prune()` (fold & reparent *before* `Clearing`, matching [dagmap/raw/mod.rs](../../strata/src/dagmap/raw/mod.rs#L510-L573)):**
-     1. Destroy non-mainline side branches while the mainline is intact;
-     2. Fold net mainline overlay into `genesis_map` (single atomic batch on `genesis_map`) and reparent surviving head children to `genesis_map` (idempotent and value-exact on crash);
-     3. **Only after fold + reparent have been written**, transition consumed mainline nodes (head + intermediates, never `genesis_map`) to `Clearing { owner_parent, parent_edge, genesis_map }` in `[0x00]` — so a retry that observes `Clearing` jumps straight to finishing teardown without ever re-applying a half-wiped ancestor over `genesis_map`;
-     4. Range-delete `[0x02]..[0x03]` on consumed nodes while keeping `[0x00]` `Clearing` (so repeated `prune()` on a consumed handle still resolves `genesis_map`) and `[0x01]` discovery edges, then delete consumed `[0x01]` edges, prune non-survivor entries on `genesis_map`, and issue **1 single-shard `sync_wal()`** (preserving `prune()`'s return-time durability for **1 shard sync instead of 80**).
-   - **`destroy()`:** (a) transition target from `Child { p, e }` / `Root` to `Destroying { p, e }` and range-delete its `[0x02]..[0x03]` data; (b) pass 1 marks/wipes owned descendants' `[0x02]..[0x03]` data while keeping `[0x01]` discovery edges intact; (c) pass 2 deletes `[0x01]..[0x02]` edges on descendants and marks them `Destroyed`; (d) delete `[0x01 | e]` from `p`, write `Destroyed` on target, and issue **1 single-shard `sync_wal()`** (1 shard sync instead of 32).
-3. **Crate-private reconstruction, `dag_id` ownership check, and complete typed hierarchy:**
-   - Keep `open_colocated_prefix(map_id)` **crate-private** (preserving prefix capability isolation), and serialize `DagMapRaw` via the unified `VSTYPE04` frame (`extra_meta = (LAYOUT_VERSION, dag_id)`). Every traversal/cleanup verifies `[0x00]` `NodeMeta` magic, matching `dag_id`, and `owner_parent == Some(self_id)` (never wiping `Root` or another DAG's `Clearing` node — closing [audit.md](../audit.md#L36-L40)).
-   - Delete **all 7 `unsafe` blocks**; check local `self.store.get` before allocating cycle-detection state; support empty `[]` / `()` values natively; fix `DagMapRawKey<V>::new(parent: Option<&mut Self>)`; add `clone_in(&ns)`; and ship **`DagMap<K, V>`** (`K: KeyEnDe, V: ValueEnDe`).
-
----
-
-## 9. `VecDex`: unified stateless handles, lock-free `get` + snapshot-consistent `search`/`iter`, and zero-allocation search
-
-Source: [vecdex/mod.rs](../../strata/src/vecdex/mod.rs), [vecdex/dynamic.rs](../../strata/src/vecdex/dynamic.rs), [vecdex/hnsw.rs](../../strata/src/vecdex/hnsw.rs), [vecdex/distance.rs](../../strata/src/vecdex/distance.rs), [audit.md](../audit.md).
-
-### Current defects and costs
-
-1. **Stale 34-byte `GraphState` corruption (`[MEDIUM]` in `audit.md`) and torn `get` / `search` / `iter` reads:**
-   [`VecDex`](../../strata/src/vecdex/mod.rs#L364) caches `GraphState` (5 scalars, 34 bytes) by value, so an independently restored handle holds a stale `next_node_id` and overwrites live nodes on sequential writes. On the read path, [`get`](../../strata/src/vecdex/mod.rs#L570-L575) (`k -> node_id`, then `node_id -> vec`), [`iter`](../../strata/src/vecdex/mod.rs#L590-L601), and [`search_internal`](../../strata/src/vecdex/mod.rs#L902-L996) issue separate uncoordinated `self.store.get` calls without a `MapxRawReadView` — a concurrent `clear()` (which resets `next_node_id` to `0` at [vecdex/mod.rs](../../strata/src/vecdex/mod.rs#L630-L635)) followed by an insert can make `get(k1)` return **`k2`'s vector**!
-2. **392 lines of duplicated `VecDexDyn` (`dynamic.rs`):**
-   [`DistanceMetric::distance(a, b)`](../../strata/src/vecdex/distance.rs#L101) lacks `&self`, preventing `MetricKind` (and parameterized metrics like `Lp(p)`) from implementing `DistanceMetric` and forcing [`dynamic.rs`](../../strata/src/vecdex/dynamic.rs) to duplicate the entire `VecDex` API.
-3. **Per-visited-node `Rc<Vec<S>>` + `HashMap` search allocations and redundant `K: ValueEnDe`:**
-   `search_internal` allocates `Vec<S>` + `Rc<Vec<S>>` into a `HashMap` for every visited node (up to `max(4096, 64 * ef)` in filtered search; $O(\text{ef} \cdot \log N)$ in unfiltered search) even though `visited: HashSet<u64>` evaluates each layer-0 node at most once. Meanwhile `TAG_NODE2KEY` encodes `K` via `ValueEnDe` instead of `KeyEnDe` (forcing `K: KeyEnDe + ValueEnDe`), and unbounded `Txn::vec_cache` adds a 3rd in-memory copy of all vectors during `insert_batch` and `compact()`.
-
-### v18 design
-
-1. **Persisted `[TAG_META]` + monotonic 34-byte `[TAG_STATE]` + lock-free `get` / snapshot `search` & `iter`:**
-   - Persist immutable schema (`dim: u32`, `scalar_tag: u8`, `hnsw_config`, `metric_tag_and_params`) at `[TAG_META]` and validate it on `from_meta` / `Deserialize` so mismatched metrics (e.g. `L2` vs `Cosine` under `VecDexDyn`, `Lp(2)` vs `Lp(3)`, `f32` vs `f64`) fail closed on open.
-   - Persist mutable `GraphState` (`entry_point`, `max_layer`, `node_count`, `next_node_id`, default `ef_search` updated by `set_ef_search`) as a fixed 34-byte LE record at `[TAG_STATE]`, **preserving strictly monotonic `next_node_id` across `clear()`** rather than resetting to `0`.
-   - **Read isolation vs `mmdb 4.x` snapshot lock cost:**
-     - **`VecDex::get` stays 100% lock-free (no `db.snapshot()`):** Because `next_node_id` is strictly monotonic across both `remove()` and `clear()`, and `[TAG_VEC | node_id_be]` is immutable once written for a `node_id`, the two lock-free `DB::get` calls (`k -> node_id`, `node_id -> vec`) can **never** observe another key's vector (if a concurrent `remove`/`clear` lands in between, step 2 returns `None`, linearizing right after the delete without ever acquiring `DB::inner`).
-     - **`search`, `search_with_filter`, `iter`, and `compact` capture one `MapxRawReadView` per call:** Multi-hop graph traversal and full iteration pin one snapshot so `[TAG_STATE]`, `[TAG_ADJ]`, and `[TAG_VEC]` come from one consistent LSM sequence. **Acknowledged `mmdb 4.x` cost:** `db.snapshot()` (`mmdb/src/db.rs:2444`) briefly locks `DB::inner`, which queues behind an in-flight `commit_sync()` WAL `fsync` on the same shard (amortized once per whole HNSW query rather than per visited node, and eliminated automatically if `mmdb` decouples `snapshot_seq` or WAL `fsync` from `DB::inner`).
-   - Restored handles become coherent for sequential writers and concurrent readers (closing [audit.md](../audit.md#L22-L26) for `VecDex`; concurrent writers still require `&mut` exclusion), unlocking deep-copy `Clone`, `clone_in(&ns)`, and `MapReader<VecDex<...>>`.
-2. **Unify `VecDex` and `VecDexDyn` via `&self` on `DistanceMetric<S>` without inner-loop branch regression:**
-   - Change `DistanceMetric<S>::distance(&self, a: &[S], b: &[S]) -> S` to take `&self` (plus a default `dispatch_search` hook specialized once per query by `MetricKind` so dynamic metrics hoist the enum match **outside** `search_layer`), delete `dynamic.rs`, and define `pub type VecDexDyn<K, S = f32> = VecDex<K, MetricKind, S>;`.
-3. **Sealed IEEE-754 LE vector bytes, zero-alloc distance scratch, `KeyEnDe`-only `TAG_NODE2KEY`, and bounded `insert_batch` cache:**
-   - Seal `Scalar`'s wire format to IEEE-754 `f32` and `f64`, storing raw `dim * size_of::<S>()` LE bytes at `[TAG_VEC | node_id_be]` (saving `postcard`'s length-varint framing while **keeping `TAG_VEC` separate from `TAG_ADJ`** so `2 × m_max0 = 64` neighbor updates per `insert` never rewrite multi-KB vectors).
-   - Decode unaligned `&[u8]` chunks via `as_chunks::<4>()` / `as_chunks::<8>()` (`from_le_bytes`) into one reusable `dim`-element scratch slice in `search_layer`, eliminating all per-visited-node `Vec<S>` / `Rc<Vec<S>>` / `HashMap` allocations (`mmdb` still returns one owned `RawValue` `Vec<u8>` per fetched vector).
-   - Encode `TAG_NODE2KEY` with `KeyEnDe::encode_key(&k)` (dropping the redundant `K: ValueEnDe` bound while keeping 1-byte `TAG_INFO` separate so disconnected-graph ID fallback scans never read large user keys). Bound `Txn::vec_cache` (e.g. 32 MiB) to cap `insert_batch` RAM; document that whole-index `compact()` still stages the rebuilt graph in memory unless paired with a fresh-prefix swap.
-
----
-
-## Migration and preserved invariants
-
-### Offline v17 to v18 conversion
-
-The v18 runtime requires the current headers and row layouts. The independent `vsdb_migrate` crate converts source universes, saved raw and typed handles, single-handle indexes, version stores, standalone B+ trees and DAGs. See the migration guide for the functions, retry behavior, external root mappings and application-owned data. [Migration guide](../../migration/README.md)
-
-### Preserved architectural invariants
-
-- **Shard routing and universe model:** Default namespace stays at 16 shards (`NUM_SHARDS`); writable access remains single-process per universe (enforced by `__SYSTEM__/LOCK` as well as in-process `parking_lot` locks).
-- **`Clone` on mutable collections vs immutable readers/snapshots:** `Clone` on every mutable collection handle (`Mapx*`, `Orphan`, `VerMap`, `DagMap*`, `SlotDex`, `VecDex`) deep-copies storage into a fresh prefix (`MptCalc`/`SmtCalc` `Arc`-COW `Clone` preserves identical isolated value semantics in memory). Cheap reference-counted read sharing uses explicit immutable types (`MapReader<M>`, `Snapshot<K, V>`), each retaining a `Namespace` clone (blocking `Namespace::close` until dropped; `mmdb` `range_detached` snapshots retain their documented source-refcount behavior in [ns-close.md](ns-close.md#L33-L38)).
-- **Cryptographic wire parity:** `MptCalc` and `SmtCalc` node encodings, Keccak256 preimages, root hashes, and proof transport bytes remain bit-for-bit identical to v17 (verified against frozen non-empty membership/absence, odd-nibble, and compressed-path v17 fixtures).
-- **Non-goals:** No cross-namespace or arbitrary cross-collection interactive transactions; no implicit per-insert `fsync` on ordinary writes.
-
----
-
-## Recommended implementation sequence
-
-1. **Pre-v18 (`v17.x` patch series — ship immediately, zero breaks):** Land the `[CRITICAL]` `SlotDex` runtime slot-width guard, `MmDB::range_at` `iter_with_prefix` + single-seek fix, `VecDex` per-op `[TAG_STATE]` reload, `atomic_write_file` trie checkpoints, `DagMapRaw` `data` co-location, and format-neutral `VerMap::write_batch` / single-descent `merge::replay` / streaming `bulk_load` / `'static` `Snapshot`.
-2. **Stage 0 — Baseline & A/B benchmarks + golden `v17` fixtures (before format/API freeze):** Capture isolated Criterion baselines ([performance-fixes.md](../evaluations/performance-fixes.md), [audit.md](../audit.md#L171-L174)) and run an A/B prototype benchmark of §6 Mode A (persisted `[0x11]` `extra_refs` RMW) vs Mode B (compact internal-only `RefState` + verified `[0x07]` checkpoint) on cold/warm `from_meta()` latency, RSS, and 1,000-key block commit throughput over retained history. Freeze golden `v17` datasets for in-place/converter migration tests.
-3. **Stage 1 — `vsdb_core` engine & error foundations:** Drop `ruc` (`pub(crate)` `mmdb::Error` mapping + typed `BranchId`/`CommitId` in `VsdbError`), unbox `MmdbIter` + in-place prefix strip + stack `with_full_key` + `RawRangeBounds` + `MapxRawBatch::delete_range`, and complete `MapxRawReader`.
-4. **Stage 2 — Universe/engine headers, `VSTYPE04` envelopes, codecs, and basic collections:** Land decoupled atomic `VSUNI018` + `VSENG018` + `LOCK` + fail-closed `VSNREG02` + lazy `OnceLock` `DEFAULT_NS`, unified `VSTYPE04` + `VSMAPX02` (preserving `VSMAPX01`/`VSTYPE03` readers and updating `note_meta_bytes` + 23-byte `note_meta_stream` carry), 2-trait `KeyEnDe`/`ValueEnDe` + `KeyLookup`/`OrderedKeyLookup` + coherence-verified `OrderedRangeBounds`, `DerefMut`-only `ValueMut` (with `#[cfg(debug_assertions)]` interior-mutability detector) + `update`, safe `enum Entry`, dead `pub unsafe` pruning, and minimal `MapReader<M>` + `*ReadView`.
-5. **Stage 3 — `SlotDex`:** Land `[u8; N]` `SlotType::Bytes` (with rank-space `floor_align`), `tier_capacity: u32`, zero-alloc stack helpers, bounded forward-chunked descending `page`/`iter`, common-ancestor `count`, and 16B `[total, generation]` (accepting 8B `v17` rows on read and preserving `generation` across `clear()`). Close `[CRITICAL] slotdex` in [audit.md](../audit.md).
-6. **Stage 4 — `DagMap`:** Land single-handle shard-colocated `DagMapRaw` with `dag_id` + local `edge_id`s, fold-before-`Clearing` crash transitions using `[0x02]..[0x03]` `delete_range` + 1-shard final `sync_wal()`, `DagMapRaw::migrate_v17`, removal of `DagIdAllocator` / `from_bytes_in` / all 7 `unsafe` blocks, fixed `DagMapRawKey::new`, and typed `DagMap<K, V>`. Close `[MEDIUM] dagmap` in [audit.md](../audit.md).
-7. **Stage 5 — `VecDex`:** Land `[TAG_META]` + monotonic 34B `[TAG_STATE]`, lock-free `get` + `MapxRawReadView` `search`/`iter`/`compact`, `&self` `DistanceMetric` unifying `VecDexDyn`, IEEE-754 LE vector slices + zero-alloc search scratch, `KeyEnDe`-only `TAG_NODE2KEY`, bounded `Txn::vec_cache`, and graph-preserving `VecDex::migrate_v17`. Update `[MEDIUM] cached indexes` in [audit.md](../audit.md).
-8. **Stage 6 — `PersistentBTree` + `VerMap`:** Keep `PersistentBTree` `pub` with slotted `NodeView` + `#![forbid(unsafe_code)]`, land the single-handle big-endian `VerMap` store with the Stage 0 winner for ref persistence, `[0x05]` lock-free-across-`fsync` snapshot retirement + `[0x06]` multi-chunk staging anchors, open-time header/commit/ceiling verification (`versioned.md`), and prefix-preserving `VerMap::migrate_v17`.
-9. **Stage 7 — `TrieCalc` + `VerMapWithProof` & release validation:** Land candidate-root `Arc`-COW `MptCalc`/`SmtCalc` + iterative `Drop` + POPCNT branches + inline-64/heap `Nibbles`, map-bound durable streaming checkpoints (`MPTC v2` / `SMTC v4`), unified `TrieCalc::Proof` + fallible `VerMapWithProof::merkle_root`, close `[LOW] trie` in [audit.md](../audit.md), and validate all `vsdb::migrate` paths against frozen `v17` fixtures and Criterion regression gates.
-
----
+# VSDB v18 design and implementation status
+
+The workspace implements the v18 format. The changelog lists v18.0.0 as unreleased. This record uses the original subsystem numbers so that the design decisions and measurements in §10 can be read together. [Release notes](../../CHANGELOG.md)
+
+**Upgrade boundary.** Stop v17 processes and convert the universe offline. The runtime opens current-format storage. The independent `vsdb_migrate` library converts legacy envelopes, row layouts, saved metadata and serialized handles. Applications identify handles embedded in their own schemas. Converters preserve primary collection identities and return a remapping for relocated DAG children. [Migration procedure and converter table](../../migration/README.md)
+
+The original proposal compared alternatives on v17.0.21, including in-place readers, lazy upgrades and sparse persisted reference counts. The full proposal and its original validation gates are preserved at their historical revision, also available locally with `git show fba65bb:docs/proposals/v18-roadmap.md`. [Original roadmap at `fba65bb`](https://github.com/rust-util-collections/vsdb/blob/fba65bb8becf8f3aa3917b0d20ada5fedb6ed7d3/docs/proposals/v18-roadmap.md)
+
+## Implemented design
+
+### 1. SlotDex
+
+Each slot has a fixed-width, order-preserving byte representation. Entry rows concatenate slot and key bytes, so the index knows their boundary without delimiters. Tier capacity is a separate `u32` of at least two. Queries capture a read view for counts, tiers and entries. Physical descending iteration groups bounded runs and streams oversized slots individually. Keys within a slot stay in ascending order. [Slot codec](../../strata/src/slotdex/slot_type.rs) · [Query implementation](../../strata/src/slotdex/query.rs)
+
+The total row stores the total and writer generation. An edit checks the stored generation before staging its batch. A stale handle can read by reconstructing tiers from its captured view. Applications serialize writers to the same index. [Mutation and hydration](../../strata/src/slotdex/mod.rs)
+
+### 2. Key and value codecs
+
+`KeyEnDe` and `ValueEnDe` support encoding into a caller's buffer. The blanket postcard key implementation requires equality and hashing. Stored key equality must match encoded byte equality. Exact probes use `KeyLookup<Q>` or `OrderedKeyLookup<Q>`, so the stored type selects the encoding for a borrowed probe. Ordered integer keys use fixed-width types and order-preserving big-endian bytes with a sign adjustment for signed integers. Converting legacy ordered pointer-width keys requires knowing the source architecture. [Codecs and bounds](../../strata/src/common/ende.rs) · [Migration guide](../../migration/README.md)
+
+### 3. Prefix routing and scans
+
+Each raw map has a universe-wide prefix and routes to one shard. The default namespace uses 16 shards. Other namespaces persist their creation-time count. Short engine keys fit the prefix and encoded user key in a stack buffer. Ranges capture a sequence, apply prefix and caller bounds in MMDB, and strip the prefix from each owned result in place. Raw batches can delete a half-open range within their prefix. [MMDB integration](../../core/src/common/engine/mmdb.rs) · [Raw batch](../../core/src/basic/mapx_raw/mod.rs)
+
+### 4. Basic collection access
+
+Occupied and vacant entries borrow the collection safely. A typed value guard marks a mutable dereference for write-back. A vacant value also persists when the guard completes. Use `update` for a fallible edit. Readers share the collection identity, and a read view captures one state for repeated queries. `OrphanReader::get` reads the single stored value. [Value guards](../../strata/src/common/guard.rs) · [Batch and reader contracts](durable-batches-and-read-views.md)
+
+### 5. Universe, engine identity and handles
+
+`VSUNI018` is the universe bootstrap commit point. `VSNREG02` tracks the registry's next namespace ID and pending or established records. Each ready engine has a `VSENG018` header binding its universe, namespace and shard count. A universe-level advisory lock covers explicitly placed namespaces and the default engine. [Namespace design and directory layout](namespaces.md)
+
+`VSMAPX02` carries a prefix and namespace ID. `VSTYPE04` adds a nominal type tag and collection-specific metadata. Both formats place the prefix at a fixed offset so missing-ceiling recovery can recognize embedded handles. Public storage errors use `VsdbError`. Engine failures carry a stable classification and source. [Typed frame](../../strata/src/common/frame.rs) · [Error definitions](../../core/src/common/error.rs)
+
+### 6. VerMap and PersistentBTree
+
+Version metadata and immutable tree objects share one prefix. Slotted pages live under `0x10`, with values larger than 1 KiB in separate `0x12` blobs. Owned snapshots pin their roots independently of the writer. Working edits publish a new root, and history operations use synchronous batches. Large builds can stage chunks before publication. Recovery uses retired-root records (`0x05`), staging records (`0x06`) and verified reference checkpoints (`0x07`). [Durability and recovery](../../strata/docs/versioned.md#durability-and-recovery) · [Tag definitions](../../strata/src/versioned/store.rs)
+
+The selected reference model uses in-memory counts and a verified checkpoint (Mode B). Persisting per-object reference changes on each commit added too much cost in the retained-history workload. Clean reopen pays to load and validate the checkpoint. [Reference persistence experiment](../evaluations/v18-versioned.md)
+
+### 7. Merkle tries
+
+`MptCalc` and `SmtCalc` use copy-on-write nodes with shared cached hashes. Roots and proof transport retain their v17 cryptographic encodings. Map-bound checkpoints (`MPTC` v2 and `SMTC` v4) identify the universe, map, commit and tree root. Applications rebuild disposable checkpoints from the version store after conversion. `VerMapWithProof::save_cache` explicitly persists a checkpoint for a committed state. [Checkpoint codecs](../../strata/src/trie/cache.rs) · [Proof wrapper](../../strata/src/trie/proof.rs)
+
+### 8. DAG overlays
+
+Each node owns a raw prefix on the graph's shard. Its metadata binds a DAG identity and local edge IDs to its parent and children. Separate tags identify metadata, edges and user data, including empty values. Pruning folds data and reparents surviving children before marking consumed nodes for clearing. Co-location preserves phase ordering on the shard WAL. [DAG lifecycle](../../strata/src/dagmap/raw/mod.rs) · [Typed wrapper](../../strata/src/dagmap/typed.rs)
+
+### 9. VecDex
+
+The HNSW graph stores little-endian vectors, adjacency lists, key mappings, a 34-byte state row and a schema binding under one prefix. Graph operations read persisted state, including the next node ID, which survives clear and advances as compaction rebuilds nodes. A search uses one snapshot for traversal and result keys. `VecDexDyn` is the runtime-metric specialization of `VecDex`, with the selected metric persisted in metadata. [VecDex guide](../../strata/docs/vecdex.md) · [Graph storage](../../strata/src/vecdex/mod.rs)
 
 ## 10. Post-Implementation Structural Performance Evaluation and Follow-Up Designs
 
-Auditing the shipped `v18.0.0` (`cc2f41c`) implementation against the four validation reports ([v18-basic.md](../evaluations/v18-basic.md), [v18-slotdex-dagmap.md](../evaluations/v18-slotdex-dagmap.md), [v18-versioned.md](../evaluations/v18-versioned.md), [v18-trie-vecdex.md](../evaluations/v18-trie-vecdex.md)) shows that **the structural performance improvements were only partially evaluated** prior to code freeze. Several high-leverage structural wins were confirmed, while six follow-up gaps across subsystems were either omitted from the initial evaluation reports or stopped halfway in implementation — leaving avoidable write/read amplification or flush-stall sensitivity on realistic workloads.
+The first v18 comparison used the v17.0.21 code at `da9a325`. Its four reports were recorded in `cc2f41c`. Supplementary measurements below also used `cc2f41c`, isolated universes, release builds, Rust 1.100.0 and MMDB 4.3.15. Later commits changed several measured paths. The figures apply to the earlier implementation.
 
-All supplementary measurements below were collected via standalone release-mode harnesses (`rustc 1.100.0`, `mmdb 4.3.15`) on `cc2f41c` using isolated universes; landing each follow-up item should commit a repeatable Criterion benchmark alongside its regression tests (§10.8).
+### 10.1 Initial benchmark coverage
 
-### 10.1 Coverage audit of v18 structural performance goals
+| Report | Workloads measured |
+| --- | --- |
+| [Basic maps](../evaluations/v18-basic.md) | Point hits, range scans, key allocations and untouched value guards |
+| [SlotDex and DagMap](../evaluations/v18-slotdex-dagmap.md) | Descending pages and iterators, batch growth, DAG prune and destroy |
+| [VerMap](../evaluations/v18-versioned.md) | Retained-history blocks, checkpoint reopen, point reads and branch operations |
+| [Tries and VecDex](../evaluations/v18-trie-vecdex.md) | Root hashing, batch updates, checkpoint size, RSS and unfiltered vector search |
 
-| Subsystem & mechanism | Evaluated in `evaluations/v18-*.md` | Uncovered gap or regression found on `cc2f41c` | Follow-up track |
-|---|---|---|---|
-| **Basic maps & codecs** (§2–4): stack `with_encoded_key` / `with_full_key`, unboxed `MmdbIter`, `DerefMut` `ValueGuard` | Point hits (`Mapx` `-6.5%`, `MapxOrd` `-13.7%`), short-key allocs (`6 → 1`), untouched 64 KiB guard allocs (`35 → 3`, `-82%` bytes) | Range scan throughput unchanged (`77.6 µs` vs `78.1 µs` on 1k keys: `mmdb` still allocates `(RawKey, RawValue)` per row) | Upstream `mmdb` borrowed-slice cursor (`v19+`) |
-| **`PersistentBTree` slotted `NodeView` & `[0x12]` `BLOB` split** (§6.1, §6.5) | Small-value (`<= 128 B`) `VerMap` point hit (`2.33 µs → 1.10 µs`, `-53%`) and 1M-key `u64` block commit (`24.54 ms`) | **`> 1 KiB` values (`BLOB_LEAF`) never benchmarked**; COW mutators, `height()`, and `BTreeDiffIter` eagerly read and re-allocate up to 32 sibling blobs on every leaf edit (up to `32×` blob I/O & versioned space amplification); write path still allocates `Vec<Vec<u8>>` per level | **§10.2** (format-preserving `v18.x` fix) |
-| **`VerMap` single-prefix store & Mode B `[0x07]` `REFS`** (§6.1–6.4) | Mode B (`22.5 ms`) vs Mode A (`60.4 ms`) 1k-key block; warm reopen `30.19 ms` vs Mode A `0.30 ms`; branch lifecycle regressed `11.72 ms → 16.02 ms` (`+36.7%`) | `VerMap::get` re-reads `[HEAD \| branch]` from `mmdb` and acquires/drops a `RootLease` on every lookup (`+176–480 ns` over `Snapshot::get`); `create_branch` runs a redundant $O(\text{branches})$ `records(NAME)` scan on every non-duplicate call; `[0x07]` stores `counts` for all unique `0b01`/`0b11` leaf/blob objects; internal pages re-copied from `mmdb` on every descent | **§10.3** (`v18.x` caches + `v19` `Mode B+` shared-only refs) |
-| **Tries & `VerMapWithProof`** (§7) | 1k-key `MPT`/`SMT` cold/warm hash (`-96%` warm), `batch_update` (`-32%` / `-18%`), 100k-entry `MPT` RSS (`-43%`) & checkpoint size (`-51%` / `-38%`) | **`VerMapWithProof` sync paths not benchmarked**: working-state `merkle_root(branch)` re-diffs all $K$ dirty keys from `committed_root` on every single edit ($O(K^2)$ cumulative work); `sync_committed` materializes full `Vec<TreeDiff>` even when `100%` of keys changed | **§10.4** (format-preserving `v18.x` fix) |
-| **`VecDex` LE vectors, scratch buffer & unified `MetricKind`** (§9) | Unfiltered L2 `search` at `N = 1,000, dim = 128` (`503.55 µs → 304.47 µs`, `-39%`) | **`insert_batch`, `compact()`, and `<= 1%` filters omitted from `v18-trie-vecdex.md`** (`benches/vecdex.rs` covers `50%`/`10%` only): `search_with_filter` slows **32.8×** at `1%` selectivity (`N = 2,000`) due to full-graph fallback visits + per-node `TAG_NODE2KEY` reads and `K::decode_key`; `insert_batch` drops `Txn::vec_cache` every 64 vectors and double-decodes neighbor lists; `compact()` holds the entire rebuilt graph in RAM | **§10.5** (`v18.x` + `v19` shadow-generation compact) |
-| **`SlotDex` fixed-width slots & forward-chunked `iter`** (§1) | Descending `iter` (`6.0–6.3×` faster) and descending `page` (`1.5–3.2×` faster); `wide_then_hot` batch shifted `65.15 ms → 79.15 ms` | `insert_batch` calls `staged.put(level_key(i + 1, &floor), ...)` and `staged.put(level_key(0, &slot), ...)` inside the per-item loop (`~21,000` redundant `StagedRows` overwrites and `~42,000` `Vec` allocs on 12,049-item `wide_then_hot`) even though `stage_level_growth_over` reads `bumps` for `level >= 1` | **§10.6** (format-preserving `v18.x` fix) |
-| **`DagMap` single-shard co-location & engine memtable sizing** (§8, `mmdb_open`) | `prune` (`669.28 ms → 6.00 ms`, `111×` faster) and `destroy` (`34.33 ms → 7.33 ms`) under concurrent unrelated-map traffic | Concentrating an entire `VerMap` or `DagMap` onto **1 shard** hits `mmdb_open`'s `16 MiB` per-shard write buffer (`mem_budget / 8 / shards`, sized for an obsolete `1 + 4` immutable-memtable model unused in `mmdb 4.3.15`), causing **26.6 ms synchronous flush stalls** once a shard's active memtable fills | **§10.7** (`mmdb_open` calibration + placement guidance) |
+### 10.2 Large B+ tree values
 
----
-
-### 10.2 `PersistentBTree`: descriptor-preserving `BLOB_LEAF` COW, $O(1)$-blob diff pruning, and slotted splice writes
-
-#### Empirical diagnosis (`cc2f41c`, 1,024-key tree, `B = 16`)
-
-While `NodeView` eliminated sibling `Vec` allocations on `get` and `BTreeIter`, every COW mutator (`insert_rec`, `remove_rec`, `shrink_root`, `fix_underflow`, `apply_leaf_run`), `PersistentBTree::height` (`mod.rs:944-957`, called on both roots by `Cursor::new` on every `diff` / `differs` / `has_uncommitted`), and `BTreeDiffIter` (`Cursor::expand`, `diff.rs:90` via `Node::decode_with(&read_object(nodes, id), ...)`) still calls `NodeView::materialize`, which eagerly reads **every** `[0x12]` `BLOB` referenced by a `BLOB_LEAF` into `Node::Leaf { values: Vec<Vec<u8>> }`. `self.alloc` then allocates **brand-new `[0x12]` `BLOB` IDs** for all `> 1,024 B` entries in the leaf (up to `MAX_KEYS = 32`) — even when 31 of the 32 entries were untouched. Furthermore, `fix_underflow` (`remove.rs:174, 180`) calls `self.node(sibling).key_count()`, reading up to 32 blobs of a sibling leaf off disk solely to inspect `raw[1]`, and reads both sibling and child pages a second time inside `borrow_left` / `borrow_right` / `merge_children`.
+On the original 1,024-key tree, a copy-on-write edit materialized and rewrote unchanged sibling blobs. The boundary between inline bytes and blob descriptors explains the jump from 1,024 to 1,025 bytes.
 
 | Value size | Leaf class | `VerMap::insert` median (p99) | 40-edit `diff_commits` | `BTree` 1-key overwrite | `BTree` 1-key `diff` | Underflow `remove` |
 |---:|---|---:|---:|---:|---:|---:|
@@ -468,38 +74,11 @@ While `NodeView` eliminated sibling `Vec` allocations on `get` and `BTreeIter`, 
 | `16,384 B` | `BLOB_LEAF` (`0b10`) | `583.9 µs` (`16,641.4 µs`) | `4,467.1 µs` | `982.7 µs` | `209.1 µs` | `229.2 µs` |
 | `65,536 B` | `BLOB_LEAF` (`0b10`) | `2,049.4 µs` (`53,275.9 µs`) | `55,968.7 µs` | `2,028.7 µs` | `439.7 µs` | `891.8 µs` |
 
-Crossing `1,024 B → 1,025 B` (+1 byte) adds +54% write latency and 2.6× diff latency; at `64 KiB`, 40 single-key working edits write `~80 MiB` of duplicate `[0x12]` rows instead of `~2.5 MiB`, triggering five synchronous `16 MiB` memtable flushes (`53.3 ms` p99 on an unsynced working `insert`) and forfeiting cross-commit structural sharing of unchanged sibling blobs.
+`9b3b709` introduced descriptor-preserving edits and diffs. Equal blob IDs can be skipped. Different IDs still need byte comparison so reverting a value compares cleanly. Page-header reads handle height and occupancy without loading sibling values. Direct splicing of encoded page slots on single-key edits remains a proposal. [Leaf layout](../../strata/src/basic/persistent_btree/nodes.rs) · [Diff implementation](../../strata/src/basic/persistent_btree/diff.rs)
 
-#### Design specification (zero on-disk format change; `v18.x`-compatible)
+### 10.3 VerMap point reads and reference state
 
-Because leaf slot descriptors are already typed per slot (`desc & CLASS_MASK == BLOB` vs `u32` inline end offset at `nodes.rs:81, 116, 143`), `LEAF` vs `BLOB_LEAF` is derived solely from `!edges.is_empty()` (`mod.rs:541-542`), and `count_nodes` / `ref_checkpoint` / `load_refs` / `recover` count blob references by parent multiplicity without assuming `ref_count == 1`, reusing unchanged `[0x12]` `BLOB` IDs requires **zero on-disk format or `[0x07]` codec change** (stores written with shared blobs remain readable by `v18.0.0`):
-
-1. **Descriptor-preserving leaf entries (`LeafVal`):**
-   Replace `values: Vec<Vec<u8>>` in internal COW paths with:
-   ```rust
-   pub(crate) enum LeafVal {
-       Bytes(Vec<u8>), // encoded inline when <= 1024 B, or allocated as a fresh [0x12] BLOB when > 1024 B
-       Blob(NodeId),   // reused existing [0x12 | id_be] object; immutable by COW contract
-   }
-   ```
-   - `NodeView::materialize_shallow(&self)` decodes `[0x10]` slot descriptors without reading `[0x12]` blobs (`desc & CLASS_MASK == BLOB` becomes `LeafVal::Blob(desc)`).
-   - On `insert_leaf` / `apply_leaf_run` (`Ok(i)` overwrite): if `new_val.len() <= 1024` and old slot is `LeafVal::Blob(_)`, their lengths differ under the `> 1,024 B` blob invariant so they cannot be equal — replace with `LeafVal::Bytes(new_val)` without reading the old blob. Only read `self.object(blob_id)` when `new_val.len() > 1024` to check byte equality (`Unchanged`).
-   - In `PersistentBTree::alloc`: `LeafVal::Blob(existing_id)` writes `existing_id` directly into the new leaf's 8-byte slot descriptor and pushes `existing_id` into `edges` (incrementing `refs.counts[existing_id]` under `refs.ready`, and automatically demoting `BLOB_LEAF → LEAF` if the last blob slot became inline), while `LeafVal::Bytes(v)` allocates a fresh `[0x12]` object only when `v.len() > 1024`. Single-key edits on a full `BLOB_LEAF` drop from up to `32` blob reads + `32` blob writes to **`<= 1` blob read + `1` blob write**, and retained `VerMap` commits share untouched `[0x12]` blobs.
-   - **Reclamation & unwind invariants:** Keep blob reuse out of bottom-up `bulk_load` (whose unwind at `mod.rs:678-679` retains `counts` by `serial < start`). In `discard_node` (`remove.rs:80-101`), route released non-pending blobs through `refs.defer_or_return` (or assert `serial >= op_start` so shared committed blobs never bypass the `VerMap` WAL fence), and when `!refs.ready` on a restored standalone tree, retain pending blobs still reachable from the surviving child/sibling (`pending_closure`). Update `#[cfg(test)] assert_refs_match_recount` (`mod.rs:1127-1156`) to traverse `BLOB_LEAF` edges.
-2. **Header-only `height()`, `shrink_root`, and sibling occupancy in `fix_underflow`:**
-   Walk `NodeView::open(&self.object(cur))` (`page.leaf` / `page.child(0)` / `page.len`) in `height()` and `shrink_root` without materializing keys or blobs, and pass opened shallow sibling/child pages into `borrow_left` / `borrow_right` / `merge_children` so each page is fetched once with **0 blob reads** (`self.object(sib)` still allocates 1 page `Vec<u8>` on an uncached durable read).
-3. **Descriptor-equality pruning with byte fallback in `BTreeDiffIter`:**
-   Carry `LeafVal` in `diff::Item::Entry`. When `Step::Compare(Ordering::Equal)` compares two `Blob(a)` and `Blob(b)` entries:
-   - If `a == b`, skip both in $O(1)$ with **zero `[0x12]` reads**;
-   - If `a != b`, read both `[0x12]` blobs and emit `TreeDiff::Modified` **only when `old_bytes != new_bytes`** (preserving `has_uncommitted` cleanliness when a key is reverted to an identical >1 KiB value stored under a newer `NodeId`). Materialize single-sided blobs only when emitting `Added` or `Removed`.
-4. **Slotted page splice (`NodeView::splice`, optional Stage 2):**
-   For single-key `insert` / `remove` without split/merge, serialize the new `[0x10]` page directly from `(old_page: NodeView<'_>, idx, op)` into one pre-sized `Vec<u8>`, rewriting the shifted 12-byte slot descriptor table (offsets are absolute from byte 0, so `2 + 12 * len` shifts `key_end` and inline value `end` while `BLOB` descriptors copy verbatim) and copying the prefix/suffix payload slices without allocating up to `32` temporary `Vec<u8>` key/value buffers per tree level.
-
----
-
-### 10.3 `VerMap`: `BranchHead` / `InternalPageCache` acceleration and `Mode B+` shared-only reference state
-
-#### Empirical diagnosis (`cc2f41c`, `VerMap<u64, u64>`)
+The baseline point-read path fetched a branch head and allocated a root lease per lookup. This experiment compared it with reads on an already-open snapshot.
 
 | Tree keys (`N`) | Height | `Snapshot::get` | `VerMap::get` | Per-lookup head + lease overhead | `flush()` (`[0x07]`) | Warm `from_meta` |
 |---:|---:|---:|---:|---:|---:|---:|
@@ -507,32 +86,13 @@ Because leaf slot descriptors are already typed per slot (`desc & CLASS_MASK == 
 | `100,000` | 3 | `885.2 ns` | `1,313.2 ns` | `+428.0 ns` (`+48%`) | `2.18 ms` | `0.70 ms` |
 | `500,000` | 4 | `1,178.5 ns` | `1,657.8 ns` | `+479.3 ns` (`+41%`) | `4.04 ms` | `3.20 ms` |
 
-1. **Per-read `[HEAD | branch]` lookup, transient `RootLease` churn, & redundant `create_branch` scan:**
-   `VerMap::get` and `contains_key` (`read.rs:143-158`) call `self.snapshot(branch)`, adding `176–480 ns` (+39–48%) over `Snapshot::get`. That delta combines two per-call costs: (a) `self.get_branch(branch)` (`mmdb::DB::get([HEAD | branch])` + `BranchHead::decode`) and (b) constructing and immediately dropping `Arc<RootLease>` (`2 × refs.lock()` acquisitions, `counts`/`pins` `HashMap` updates, `Arc` allocation, and `MapxRawReader` / `Namespace` clone at `persistent_btree/mod.rs:173-200, 1217-1246`). Separately, `VerMap::create_branch` (`map.rs:495-499`) evaluates `self.branch_id(name).is_some() || self.records(NAME).any(...)` — opening a full `[0x02..0x03)` range scan over every branch (and deleted-branch tombstones) whenever `name` is new, even though `VerMap::recover` (`repair.rs:88-128`) already enforces 1-to-1 `NAME` ↔ `BY_NAME` parity on every writable open and every branch mutation updates both atomically. (In [v18-versioned.md](../evaluations/v18-versioned.md#L44), the `11.72 ms → 16.02 ms` branch-lifecycle benchmark runs on the same `VerMap` right after `create_branch` left ~1,500–3,000 branches in `[NAME]`; isolating that scan from per-insert single-prefix `Header`/`HEAD` reads, `has_uncommitted` leases, and the 4 `commit_sync()` WAL `fsync`s requires a dedicated breakdown benchmark.)
-2. **Internal-page re-reads and `Vec<u8>` page copies:**
-   Each B+ tree level above the leaf costs `~300–400 ns` (`mmdb::DB::get` + fresh `Vec<u8>` copy of the 400–1,200 B internal page), even though internal pages (`id & CLASS_MASK == 0`) are **immutable forever** and all internal pages of a 1,000,000-key tree (`~1,050` pages) total **`~450 KiB`**.
-3. **`Mode B` `RefState` footprint under blob-heavy or deep-history workloads:**
-   `RefState.counts` currently inserts a `HashMap<NodeId, u32>` entry for **every** live object — including unique `0b01` inline leaves and `0b11` blobs (`ref_count == 1`). At 1M inline keys (`~32k` leaves), warm `from_meta()` spends `30.19 ms` (`24.7–34.0 MiB` RSS) deserializing and degree-checking `[0x07]`; at 10M+ blob-backed keys (`~10M` `[0x12]` IDs + `edges`) or thousands of retained large-diff commits (`~8M+` live objects; ~13–22 MiB at 10M inline-only single-branch keys), `counts` + `edges` grows past `150–250 MiB` and warm reopen scales linearly into hundreds of milliseconds.
+`da21703` added synchronized branch-head caching, stack-pinned one-shot reads and branch creation using the name index. `71588f2` added an eight-shard clock cache for immutable internal pages. Its page-byte budget per tree runtime is the namespace budget divided by 64, clamped to 64 KiB–16 MiB. Multiple active trees can each have a cache. [Point reads](../../strata/src/versioned/read.rs) · [Tree runtime](../../strata/src/basic/persistent_btree/mod.rs)
 
-#### Design specification
+A shared-only refcount representation (Mode B+) and persisted `0x08` delta log remain proposals. They need a way to distinguish live singly-owned objects from dead or newly unowned objects and an explicit format boundary for a different checkpoint representation.
 
-1. **`RefState`-synchronized `BranchHead` cache, stack-pinned one-shot reads, & $O(1)$ `create_branch` (`v18.x`, no format change):**
-   - Remove the redundant `|| self.records(NAME).any(...)` fallback from writable `create_branch` (relying on the verified `[0x03 | name]` `BY_NAME` index).
-   - Store `heads: HashMap<BranchId, Option<BranchHead>>` inside `RefState` on the shared `TreeRuntime` (all in-process handles and `VerMapReader`s for an `InstanceId` already share one `TreeRuntime` via `TREE_RUNTIMES`; never re-read `HEADER` on lookup). Populate lazily on miss while holding `refs.lock()`, update `heads` inside `PersistentBTree::publish` under the **same `refs.lock()` critical section** that releases/zombies retired roots after `batch.commit` succeeds (preventing any reader from resolving a released root before `heads` advances), and `heads.clear()` on any `publish` error (ambiguous `commit_sync` outcome) or `recover`.
-   - For one-shot `VerMap::get` / `contains_key`, pair the cached head lookup with a stack-borrowed root-pin guard (`&TreeRuntime` + `&MapxRaw`) to avoid `Arc<RootLease>` allocation and `MapxRawReader` / `Namespace` cloning while preserving concurrent alias safety.
-2. **Byte-bounded immutable `InternalPageCache` on `TreeRuntime` (`v18.x`, no format change):**
-   - Add an 8-way lock-sharded clock cache `NodeId -> Arc<[u8]>` on `TreeRuntime` for committed internal pages (`id & CLASS_MASK == 0`), bounded by bytes (default `min(ns_budget / 64, 16 MiB)`). Document that this decoded/uncompressed slice cache sits alongside `BlockCachePool` (`mem_budget / 8`; [shared-mem-pool.md](shared-mem-pool.md)), consuming at most `1.56%` of `mem_budget` per active `TreeRuntime` to bypass `mmdb` block-cache lock + `Vec<u8>` copy overhead on upper-level descents.
-   - **Correctness & lifecycle:** Within a `TreeRuntime` (keyed by non-reusable `InstanceId`; offline `vsdb_migrate` requires exclusive access when no runtime exists), `NodeId` serials are strictly monotonic across all operations (no `clear()`, and unwinds never decrement `next_id`) and COW pages never mutate in place, so cached `Arc<[u8]>` slices are valid across all branches, commits, rollbacks, and `Snapshot`s with **zero invalidation races**. `TreeRuntime` lives behind `Weak` in `TREE_RUNTIMES`, freeing the cache when the map and its snapshots drop, and `release` / `gc` may opportunistically evict dead internal IDs.
-3. **`Mode B+`: Shared-only (`extra_refs`) `RefState` + `[0x08]` ref-delta log (`v19` format extension; optional RAM-only translation in `v18.x`):**
-   - **Liveness invariant (mandatory before omitting `count == 1` entries):** Current `RefState` treats absence from `counts` as dead/untracked (`lease` at `mod.rs:1228`, `acquire_node` at `:822`, `release` at `:112`, `discard_node` at `remove.rs:73`). Replacing `counts` with `extra_refs: HashMap<NodeId, NonZeroU32>` (`ref_count - 1` for `ref_count >= 2`) MUST track freshly allocated uncommitted `count == 0` nodes in an explicit `unowned: HashSet<NodeId>` ($O(\text{pending})$) and validate root liveness on `lease` / `acquire_node` (via tracked branch/commit roots or `nodes.contains_key(object_key(root))`) so dead IDs can never be silently resurrected and parent-cascade `release` transitions `extra_refs == None` cleanly from `1 → 0`.
-   - **Sizing & §10.2 interaction:** On a 1M-key single-branch inline tree, `extra_refs` holds `0` entries before the first commit and **`1` entry** after `commit(main)` (`dirty_root == head.root` has `ref_count == 2`). Note that once §10.2 shares untouched `[0x12]` blobs across `BLOB_LEAF` edits, retained commits touching a `BLOB_LEAF` promote its `<= 31` shared sibling blobs to `ref_count >= 2` (entering `extra_refs`), while unedited subtrees and single-tip trees keep `ref_count == 1`.
-   - **Compatibility boundary ([compatibility-policy.md](../ai/compatibility-policy.md)):** `[0x07]` `REFS` tag semantics and `load_refs`'s full-set degree check (`persist.rs:291-306`) are frozen in `v18.x` (`v18.x` could only translate `[0x07]` into `extra_refs` in RAM after `load_refs`, which saves steady-state RAM without shrinking `[0x07]` or warm reopen latency). Persisting a sparse checkpoint or appending generation-bound `(NodeId, i32)` net ref-delta frames at `[0x08 | generation_be]` inside `publish` (**0 point `get`s** on commit, bounding crash recount to `<= 64` delta frames) requires an explicit new checkpoint tag/version + frozen `v18.0` fixture decode tests in **`v19`** (ensuring `v18.0` binaries never misread new tags and stale `[0x08]` rows are generation-pruned).
+### 10.4 Working-state Merkle roots
 
----
-
-### 10.4 `VerMapWithProof`: incremental working-branch cursor and adaptive streaming rebuild
-
-#### Empirical diagnosis (`cc2f41c`, `N = 20,000` keys, 32 B values)
+The baseline used 20,000 keys and 32-byte values. Repeated edits on a dirty branch repeatedly diffed from the committed state.
 
 | Workload | Measured time (`cc2f41c`) | Behavior & bottleneck |
 |---|---:|---|
@@ -542,98 +102,44 @@ Because leaf slot descriptors are already typed per slot (`desc & CLASS_MASK == 
 | `merkle_root_at_commit` incremental diff: `100%` (`20,000` keys) | `16.17 ms` | Slower than `from_entries` **and** materializes all `20,000` `TreeDiff` + `ops` slices in RAM |
 | Working-state `1 insert + merkle_root(br)` with `2,000` prior dirty keys | `1.69 ms / step` | Clones `committed_trie` and **re-diffs all `2,001` dirty keys on every call** ($O(K^2)$ across a block) |
 
-#### Design specification (`v18.x`, zero format change)
+`8a05514` added a working-branch cursor, streaming diff chunks of at most 4,096 entries and a full rebuild when accumulated diffs exceed `max(estimated target entries / 2, 512)`. The wrapper releases its working lease before `flush` or `close` so the lease does not hold up retirement during checkpointing. [Root synchronization](../../strata/src/trie/proof.rs)
 
-1. **Incremental working-state cursor with explicit `RootLease` lifecycle:**
-   - Because `TrieCalc` is history-independent and all `VerMap` mutations flow through `map_mut()` (`proof.rs:188-190`), `VerMapWithProof` can retain `working_lease: Option<Arc<RootLease>>` **only when `working_root` is an uncommitted dirty root** (`roots.working.root != roots.committed.root`). On the next `merkle_root(branch)`, if `let Some(prev) = &self.working_lease` (or `self.working_root == Some(roots.committed.root)`), diff **`prev -> &roots.working`** and apply only the delta onto a candidate clone of `self.working_trie` ($O(\Delta)$ per call instead of $O(K)$ — reducing 2,000 sequential `1 insert + merkle_root` steps from multi-second $O(K^2)$ total to `~50–120 ms` across 2,000 `branch_roots` + path-hash calls). Reverts to committed values, removals, branch switches, or `discard` / `commit` / `rollback_to` via `map_mut()` are handled automatically by root comparison (clearing `working_lease = None` whenever `roots.working.root == roots.committed.root`, in `merkle_root_at_commit`, and in `save_cache`).
-   - **Mandatory `shared`-publish & `[0x07]` checkpoint interaction:** Retaining `Arc<RootLease>` raises `Arc::strong_count(&runtime) > 1`, routing subsequent working edits through `PersistentBTree::publish`'s `shared` path (`persist.rs:104, 145-189`: writes `[0x05]` `RETIRED` anchors and defers dead-page deletion by one publish). If `working_lease` remained alive across a final `map.flush()` or process exit, left-over `[0x05]` `RETIRED` rows would set `has_anchors = true` on reopen (`repair.rs:162-179`), invalidating `[0x07]` `REFS` and forcing a full recount. Expose `VerMapWithProof::flush(&mut self)` / `close(self)` (and clear `working_lease` before `self.map.flush()`) so clean shutdowns drain deferred retirements and preserve fast `[0x07]` reopen.
-2. **Chunked streaming diff & adaptive full-rebuild fallback:**
-   - Replace eager `self.map.diff_roots(...)` (`Vec<TreeDiff>` at `proof.rs:214, 262`) with streaming consumption of `BTreeDiffIter` in bounded chunks (e.g. `4,096` entries per `batch_update`), eliminating unbounded `Vec<TreeDiff>` + `Vec<(&[u8], Option<&[u8]>)>` peak memory on multi-million-key commits.
-   - Note that `sync_committed` (`proof.rs:261-266`) already runs `T::from_entries` when `sync_commit` is `None` (initial `bulk_load` + `commit`). Add a `from.root == EMPTY_ROOT` fast path to cover uncommitted branches (`roots.head == None`) and commits advancing from an empty commit, plus an adaptive threshold (e.g. switching to `T::from_entries` when streamed diff volume exceeds a fraction of tree size or root fanout) for high-churn commits from a non-empty base.
+### 10.5 Vector construction, filtering and compaction
 
----
+On 2,000 128-dimensional `f32` vectors with L2 distance, serial insertion took 818.5 ms and batched insertion 566.4 ms. Compacting 1,500 live vectors took 341.6 ms. With `k = 10` and `ef_search = 50`, search took 140.7 µs unfiltered, 277.1 µs at 50% selectivity, 1,131.4 µs at 10%, and 4,610.0 µs at 1%. Each result comes from the baseline graph.
 
-### 10.5 `VecDex`: cross-chunk build cache, raw-key filter fast path, and bounded-memory compaction
+`b31360a` carried the bounded vector cache across 64-item build chunks and removed an extra adjacency read on neighbor append. `5b4f4cb` added typed and raw filters on read views and raw filters on the index. Raw predicates see encoded key bytes and avoid decoding rejected keys. Selective predicates can still visit much of the graph. [Construction](../../strata/src/vecdex/mod.rs) · [Read-view queries](../../strata/src/vecdex/reader.rs)
 
-#### Empirical diagnosis (`cc2f41c`, `N = 2,000`, `dim = 128`, `f32`, `L2`, `ef_search = 50`)
+In-place `compact()` still stages the rebuilt graph for one atomic replacement. An application can build a separate index in chunks, durably publish its new identity, then retire the old index. An internal generation switch with crash cleanup would require a new graph layout. [Compaction guidance](../../strata/docs/vecdex.md)
 
-- **Construction & compaction:** Serial `insert`: `409.2 µs/vec` (`818.5 ms` total); `insert_batch` (`CHUNK = 64`): `283.2 µs/vec` (`566.4 ms` total); `compact()` (`1,500` live vectors): `341.6 ms`.
-- **Filtered search degradation (`k = 10`):** Unfiltered `140.7 µs` → `50%` filter `277.1 µs` (`2.0×`) → `10%` filter `1,131.4 µs` (`8.0×`) → `1%` filter `4,610.0 µs` (**`32.8×`**).
+### 10.6 SlotDex batch growth
 
-Three structural bottlenecks explain these numbers:
-1. `insert_batch` (`vecdex/mod.rs:865-874`) instantiates a fresh `Txn` every 64 vectors (to keep each chunk's `StagedRows` batch crash-atomic and release `&self.store` for `rows.commit(&mut self.store)`), dropping `Txn::vec_cache` at every chunk boundary so upper-layer navigation hubs are repeatedly fetched and decoded from `mmdb`. Meanwhile, `link_node` (`mod.rs:938-947`) decodes, re-encodes, and **re-reads/re-decodes** each neighbor's adjacency list inside `prune_selection` (`hnsw.rs:337-340`), and when a layer-0 neighbor overflows `m_max0 = 32`, `select_neighbors_heuristic` computes up to $33 \times 32 / 2 = 528$ pairwise distances (`<= 136` on upper layers with `m = 16`).
-2. Under `<= 1%` filter selectivity at `N = 2,000` (`20 < ef(50)` total matching nodes in the graph), `result.len() < ef` holds throughout traversal and `filter_visit_cap(50) = 4,096 > N` falls back to scanning the entire graph (`hnsw.rs:178-192`), evaluating `TAG_VEC` + distance **and** `passes(n_id)` (`MapxRawReadView::get(TAG_NODE2KEY)` + `K::decode_key`) on every node.
-3. `compact()` rebuilds the entire index inside one `Txn` + one `StagedRows` batch (staging `pairs` + vectors + adjacency rows + engine commit batch in RAM, while `vec_cache` itself is capped at 32 MiB).
+The early `wide_then_hot` benchmark grew 1,025 distinct slots and repeatedly touched the same buckets. The v17 and initial v18 estimates were 65.15 ms and 79.15 ms, with substantial variance (`p = 0.06`). `f87ad4c` subsequently coalesced level-zero and tier counts during staging. Tier promotion sees the counts accumulated so far and the batch still publishes atomically. [Baseline and methodology](../evaluations/v18-slotdex-dagmap.md) · [Batch implementation](../../strata/src/slotdex/mod.rs)
 
-#### Design specification
+### 10.7 Engine write-buffer sizing
 
-1. **Cross-chunk `vec_cache` handoff & single-read adjacency update in `insert_batch` (`v18.x`, no format change):**
-   Pass the entry-capped `(32 << 20) / (payload + 96)` `HashMap<u64, Rc<Vec<S>>>` cache (`mod.rs:350-358`) into `Txn` and return `(StagedRows, VecCache<S>)` from `Txn::finish()` across the `dedup.chunks(64)` loop — safe because `next_node_id` is strictly monotonic across `remove`, `clear`, and `compact`, vector rows are write-once, `del_vec` evicts overwritten keys' old IDs, and the cache lives strictly within one `&mut self` `insert_batch` call (discarded on commit error). In `link_node`, inspect `raw.len() / 8` before `m_max`: when `< m_max`, append `node_id.to_le_bytes()` directly to the raw adjacency slice without a second `get_neighbors` read/decode inside `prune_selection` (which already skips distance work when `len <= m_max`).
-2. **Additive filtered read-view methods & `search_with_raw_filter` (`v18.x` additive API):**
-   Add `search_with_filter` to `VecDexReadView` (which currently exposes only unfiltered `search` at `reader.rs:78`) alongside `search_with_raw_filter(&self, query: &[S], k: usize, pred: impl Fn(&[u8]) -> bool)` on both `VecDex` and `VecDexReadView`. Document two explicit constraints: (a) raw predicates avoid heap-heavy `K::decode_key` allocations on rejected candidates, while `TAG_VEC` + `TAG_NODE2KEY` `get`s and visit counts remain unchanged when matching nodes `< ef` (callers facing ultra-selective predicates can already bound worst-case visits today by lowering `ef` via `search_ef_with_filter`, since `filter_visit_cap(ef) = max(64 * ef, 4096)`); (b) `TAG_NODE2KEY` stores `KeyEnDe::encode_key` bytes (blanket `postcard` varint/length-prefixed encoding in `common/ende.rs:62-72`), so raw prefix checks apply only to self-delimiting leading fields or custom fixed-width `KeyEnDe` implementations, not bytewise range comparisons on `postcard` integers or strings. An explicit `FallbackPolicy` + query visit/read counters remain an optional `v19+` extension (preserving exhaustive disconnected-component fallback by default).
-3. **Bounded-memory `compact()` (`v18.x` application swap vs `v19` shadow-generation layout):**
-   Single-prefix crash-atomic `compact()` cannot split its `batch_wiped()` commit across multiple batches without leaving a half-built index on crash. For `v18.x`, document the transient memory footprint of in-place `compact()` and recommend chunked `iter()` into `fresh.insert_batch(&chunk)` on a fresh `VecDex` (new `InstanceId`) followed by an atomic **application-level** pointer/`InstanceId` metadata swap before dropping the old index. For `v19`, a versioned `[STATE_KEY]` (`0x05`, extended beyond the fixed 34B `GraphState` to carry active `gen` + inactive build state) paired with a generation byte on all 5 data tags (`[tag | gen | ...]` for `0x00..=0x04`) allows `compact()` to stream 64-node chunks into `gen ^ 1`, flip `[STATE_KEY]` atomically, and issue 5 sub-prefix `delete_range`s on `gen` (with open-time cleanup of interrupted `gen ^ 1` builds) in $O(\text{chunk})$ RAM.
-
----
-
-### 10.6 `SlotDex`: coalescing tier-bucket updates in `insert_batch`
-
-#### Diagnosis & design (`v18.x`, zero format change)
-
-In `SlotDex::insert_batch` (`slotdex/mod.rs:597-625`), every input item writes `staged.put(level_key(0, &slot), ...)` and loops over all `i in 0..num_tiers` calling `staged.put(level_key(i as u8 + 1, &floor), encode_cnt(*v).to_vec())`. On the 12,049-item `wide_then_hot` benchmark (`capacity = 1,024`, 1 tier after item 1,025; `11.6 ms` warm standalone / `79.15 ms` Criterion in `benches/slotdex_batch.rs`, which already excludes `clear()` from timing), this performs `~21,000` redundant `StagedRows` `BTreeMap` overwrites (`~10,000` at level 1 across 1,024 floors + `~11,024` at level 0 across 1,025 slots) and `~42,000` redundant key/value `Vec<u8>` allocations (`2` per `staged.put`) — even though `stage_level_growth_over` (`mod.rs:818-830`) reads **`bumps`**, never `staged`, for `level >= 1`.
-
-- **Fix:**
-  1. Remove `staged.put(level_key(i as u8 + 1, &floor), ...)` from the per-item loop and emit one `staged.put` per `((i, floor), v)` in `bumps` **after the loop and before `staged.commit(&mut self.store)?`** (between `mod.rs:631` and `:637`, prior to the post-commit `self.levels` cache update at `640–643`).
-  2. Track pending `level 0` slot counts in a typed `BTreeMap<S, EntryCnt>` (fixed-width `S` keys, 0 `Vec<u8>` key/value allocs per update), resolving per-item `slot_cnt` from that `BTreeMap` with fallback to committed `self.store` on miss (preserving read-your-writes without `staged.get_over`), and flushing pending `level 0` rows into `staged` **before** `stage_level_growth_over`'s `0 → 1` `scan_prefix` (`mod.rs:834`, at most once per batch) and once before `staged.commit`. All persisted bytes and tier-promotion boundaries remain bit-for-bit identical.
-
----
-
-### 10.7 Engine (`mmdb 4.3.15`): recalibrating `wr_buffer_size` for single-shard `VerMap` and `DagMap`
-
-#### Empirical diagnosis (`cc2f41c`, 60 MiB burst = 1,500 × 40 KiB batches into one prefix)
+This baseline wrote 1,500 batches of 40 KiB into one prefix. The dedicated namespace's buffer held the entire burst. A sustained workload that fills that buffer also pays for its synchronous flush and WAL replay on reopen.
 
 | Placement | Per-shard `write_buffer_size` | Flushes triggered during 60 MiB burst | Total time | Median batch | p99 batch | Max batch latency |
 |---|---:|---:|---:|---:|---:|---:|
 | Default namespace (`16` shards, `2 GiB` budget) | `16 MiB` | `3–4` sync flushes | `127.4 ms` | `42.0 µs` | `110.8 µs` | **`26,624.9 µs` (`26.6 ms`)** |
 | Dedicated namespace (`1` shard, `2 GiB` budget) | `256 MiB` | `0` (stays in active memtable) | `87.4 ms` (`-31%`) | `53.9 µs` | `216.9 µs` | **`306.0 µs` (`0.31 ms`)** |
 
-In `mmdb_open` ([mmdb.rs](../../core/src/common/engine/mmdb.rs#L1425-L1451)), `wr_buffer_size` is clamped to `mem_budget / 8 / shards` (`16 MiB` per shard under the namespace-wide `2 GiB` default budget across `16` shards, and `16 MiB` at non-default `512 MiB / 4` shards) based on the comment that each shard holds `1 + max_immutable_memtables (4) = 5×` memtables in RAM. In `mmdb 4.3.15`, `max_immutable_memtables` is unused: when the active memtable fills, the write leader synchronously runs `freeze_memtable_sync` + `flush_frozen_memtable` (`db.rs:3684-3700`, `<= 2×` memtable residency per shard while releasing `DB::inner` during SST I/O; L0 enters write slowdown at `8` files under 1 compaction worker per shard with L0–L1 LZ4 / L2+ Zstd). Because v18 consolidated all 8 `VerMap` components onto **1 prefix** and all connected `DagMap` nodes onto **1 co-located shard**, a single hot `VerMap` or `DagMap` in `DEFAULT_NS` uses only `1/16` of the namespace's memtable budget and hits synchronous `16 MiB` flush stalls (`26.6 ms`) every ~16 MiB of writes.
+`8d15889` corrected the sizing rationale for MMDB 4.3. The write leader freezes and flushes a full memtable synchronously. Default and non-default engines still use the same per-shard sizing formula. Changing the default remains subject to a sustained ingest comparison across one and 16 shards over at least three buffer capacities. The original gate calls for p99 and maximum flush stalls, reopen latency, L0 file counts, cache counters and peak RSS under cgroup pressure. [Sizing and memory accounting](shared-mem-pool.md)
 
-> **Benchmark caveat:** In the `60 MiB` burst above, the `1`-shard `256 MiB` memtable never filled (`0` flushes), so the `0.31 ms` max latency measures pure memtable ingest rather than steady-state flush latency. Once sustained writes exceed `256 MiB`, a `256 MiB` buffer flushes `16×` less often (improving L0 amortization) but incurs a correspondingly larger synchronous SST flush on the write leader and longer WAL replay on reopen.
+### 10.8 Deferred designs
 
-#### Design & operational guidance
+The remaining proposals have different compatibility and measurement requirements.
 
-1. **Immediate operational patterns (zero code change):**
-   - **Single-prefix / co-located collections (`VerMap`, `DagMap`, `SlotDex`, `VecDex`):** Place write-intensive instances in a dedicated `Namespace::create_with(NamespaceOpts { path: None, shards: 1, mem_budget_mb: Some(B) })` sized to balance flush frequency against single-flush stall duration and reopen WAL replay, without altering `DEFAULT_NS`'s pinned 16-shard routing. Keep `DagMap` mainlines bounded via periodic `prune()`, checkpoint `VerMapWithProof::save_cache` at block intervals rather than per block, and keep `mmdb`'s `lazy_delete_compaction_threshold = 0` ([audit.md](../audit.md#L150-L154)).
-   - **Oversized plain KV tables (`Mapx` / `MapxOrd`):** Because consecutive `Mapx::new()` prefixes increment monotonically and route via `prefix % 16`, 16 consecutive `Mapx` handles spread evenly across all 16 shards of `DEFAULT_NS`; callers can hash-bucket hot logical tables across 16 `Mapx` instances and merge range scans at the application layer.
-2. **Engine sizing & SST parameter recalibration (`v18.x` tuning & compatibility gate):** Update the obsolete `5×` memtable comment in `mmdb_open` and run a sustained (`>= 3×` buffer capacity, e.g. `>= 1 GiB`) 1-shard and 16-shard ingest benchmark — explicitly reproducing the cgroup `memory.high` / multi-shard burst-reclaim scenario noted in `mmdb_open` (`mmdb.rs:1433-1438`), accounting for `BlockCachePool` (`12.5%`) + `InternalPageCache` (§10.3.2), and recording `Namespace::shard_properties` (`stats.block_cache_hits` / `stats.block_cache_misses`, L0 file counts, RSS) — before deciding under [compatibility-policy.md](../ai/compatibility-policy.md) whether to raise `mem_budget / 8 / shards` (`16 MiB` default) to `mem_budget / 4 / shards` (`32 MiB` default) or expose compaction/16 KiB block-size tuning. Do not alter `NUM_SHARDS = 16`.
+| Candidate | Proposed change and evidence needed |
+| --- | --- |
+| B+ tree slotted page splice | For a single-key edit that fits one page, copy payload slices into a new page and adjust the shifted slot offsets. Preserve blob IDs and compare the bytes and allocations with the existing COW path. This uses the v18 page format. |
+| Shared-only references (Mode B+) | Store extra owners in memory and track newly allocated, unowned nodes separately. A sparse on-disk checkpoint or generation-bound `0x08` delta log needs a new format. Verify liveness on reopen, including shared blobs, and bound replay before adopting the format. |
+| Generation-based VecDex compaction | Proposed v19 layout: build into an inactive generation, switch the state row atomically, then delete the old generation's ranges. Recovery would need to find interrupted builds. v18 compaction publishes a single replacement batch. |
+| SlotDex paged tier hydration and cursor pagination | Measure tier-cache memory on large histories before introducing on-demand bucket reads. Cursor pagination would require a separate public query contract. |
+| VerMap sweeping and working transactions | Stream unreachable-object deletion if retaining all dead keys during recount becomes a memory bottleneck. A working transaction would group read-modify-write operations before one branch-head publication. |
+| Disk-backed Merkle nodes | Measure retained tries that exceed the current in-memory COW representation before designing persistent node storage. |
+| MMDB extensions | Borrowed scan rows could reduce allocations. A native shard WAL fence could replace the reserved fence key. Per-shard prefix reservations or SST prefix ceilings would need crash-safe allocator recovery. |
+| Broader memory pooling | Measure cache and write-buffer contention across engines before sharing their budgets. [Memory pool proposals](shared-mem-pool.md) |
 
----
-
-### 10.8 Cross-cutting guardrails, deferred v19 candidates, and landing sequence
-
-#### Non-negotiable correctness & compatibility guardrails
-
-- **Routing & wire stability:** `DEFAULT_NS` stays pinned at `NUM_SHARDS = 16`. `v18.x` patches must not alter any published on-disk key/page layout, `VSTYPE04` / `VSMAPX02` envelope, or enum discriminant; any format, public API, or default-sizing change requires benchmark evidence and review under [compatibility-policy.md](../ai/compatibility-policy.md).
-- **Crash atomicity & recovery anchors:** Never split `SlotDex` batches, `VecDex::compact` commits, or `DagMap` phase transitions (fold + reparent before `Clearing`, data wipe before `[0x01]` edge unlink, trailing single-shard `try_sync_wal`) without an explicit persisted recovery protocol, and never elide `VerMap`'s `[0x05]` `RETIRED` / `[0x06]` `STAGE` anchors.
-- **Cache safety & handle isolation:** Never introduce hidden cross-handle mutable caches on `SlotDex` or `VecDex` (preserving single-active-writer `&mut` semantics); any shared runtime cache (`TreeRuntime::InternalPageCache`, `RefState.heads`) must rest on monotonic immutable `NodeId`s or `RefState` lock discipline with hard byte caps, mutable `Clone` stays a deep copy, and `MptCalc` / `SmtCalc` optimizations must preserve bit-exact Keccak256 preimages and proof encodings.
-
-#### Long-horizon (`v19+`) deferred architectural candidates
-
-- **`SlotDex` paged tier-bucket hydration & cursor pagination:** Evictable/on-demand bucket pages if ultra-fine slot histories ever outgrow in-memory `BTreeMap` hydration, plus optional public cursor pagination.
-- **`VerMap` streaming dead-key sweeps & explicit working-tree `WriteTxn`:** Stream unreachable-object deletion batches inside `finish_ref_counts` instead of collecting `dead_keys: Vec<Vec<u8>>` (`persistent_btree/mod.rs:1070-1078`), and evaluate an explicit `WriteTxn` / `BranchTxn` overlay if callers need multi-read-modify-write batching before a single `HEAD` publication.
-- **Disk-backed Merkle node store:** Standalone design only if real workloads outgrow in-memory `Arc`-COW `MptCalc` / `SmtCalc` capacity.
-- **Upstream `mmdb` & engine extensions:** Borrowed-slice iterators (eliminating per-row `(RawKey, RawValue)` `Vec` allocations), native `sync_wal` (retiring `META_KEY_WAL_FENCE` dummy-delete writes), multi-range shared `ReadView`s with bounded SST/WAL pinning windows, and crash-safe per-shard prefix reservation / SST `max_issued_prefix` checkpoints (cross-namespace write-buffer sharing and tiny-namespace profiles remain tracked in [shared-mem-pool.md](shared-mem-pool.md)).
-
-#### Recommended landing sequence and validation gates
-
-Each step ships as an independent commit with Criterion coverage and targeted correctness/recovery tests:
-
-1. **Step 1 — `SlotDex::insert_batch` tier coalescing (§10.6, `v18.x`):** Pre-commit `bumps` + typed `BTreeMap<S, EntryCnt>` L0 flush. *Gate:* bit-identical on-disk rows across mid-batch `0 → 1 → 2` tier promotions and measurable `slotdex/batch_growth/wide_then_hot` speedup.
-2. **Step 2 — `VerMap::create_branch` $O(1)$ uniqueness check (§10.3.1, `v18.x`):** Drop redundant `records(NAME)` scan. *Gate:* existing recovery/duplicate-name tests + isolated `branching` Criterion check.
-3. **Step 3 — `PersistentBTree` `LeafVal` blob reuse, header-only `height`/underflow, & byte-checked diff pruning (§10.2, `v18.x`):** Closes `[HIGH] persistent_btree` in [audit.md](../audit.md#L46-L51). *Gate:* `NODE_READS` and `next_id` allocation-count assertions on `> 1 KiB` updates/diffs, reverted-blob `has_uncommitted` cleanliness, `assert_refs_match_recount` with `BLOB_LEAF` traversal, and crash/reopen `[0x07]` `load_refs` + `verify_and_gc` tests with multi-parent blobs.
-4. **Step 4 — `VecDex::insert_batch` cross-chunk `vec_cache` & single-read neighbor append (§10.5.1–2, `v18.x`):** *Gate:* recall/graph parity, error-unwind cache drop test, and `insert_batch` / filtered `VecDexReadView` Criterion benchmarks.
-5. **Step 5 — `VerMapWithProof` incremental working cursor & chunked streaming diff (§10.4, `v18.x`):** *Gate:* `merkle_root` equivalence across interleaved edits/reverts/discards/commits, clean `VerMapWithProof::flush` preserving `[0x07]` reopen (`has_anchors == false`), and bounded-memory streaming diff + sequential block-building Criterion benchmark.
-6. **Step 6 — `TreeRuntime` `BranchHead` cache, stack-pinned `get`, & bounded `InternalPageCache` (§10.3.1–2, `v18.x`):** *Gate:* multi-thread reader/writer `Snapshot` linearizability stress test (including simulated `commit_sync` failures) and `VerMap::get` vs `Snapshot::get` Criterion benchmark.
-7. **Step 7 — `mmdb_open` write-buffer comment update & sustained-ingest calibration (§10.7, `v18.x`):** *Gate:* `>= 1 GiB` sustained 1-shard and 16-shard p99/max stall, WAL reopen latency, `shard_properties` cache/L0 stats, and `memory.high` peak-RSS report before any default-sizing change.
-8. **Step 8 — `v19` format-evolving candidates (§10.3.3 `Mode B+` / `[0x08]`, §10.5.3 shadow-generation `compact()`):** Defer to `v19` behind explicit new tags/layout versions, `unowned` liveness tracking, and frozen `v18.0` fixture compatibility tests.
+Changes to persistent formats follow the compatibility policy. The original roadmap records the proposed validation gates and candidate v19 layouts. [Compatibility policy](../ai/compatibility-policy.md) · [Deferred memory designs](shared-mem-pool.md) · [Historical specification](https://github.com/rust-util-collections/vsdb/blob/fba65bb8becf8f3aa3917b0d20ada5fedb6ed7d3/docs/proposals/v18-roadmap.md)
