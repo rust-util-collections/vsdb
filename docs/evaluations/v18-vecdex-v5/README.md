@@ -20,6 +20,19 @@ keys, distance bits and 868 first-place self matches. These byte counts
 describe the graph query's vector reads. They exclude other query
 allocations and the engine's evictable cache charge. [Scalar pin diagnostics](results/pins-1.txt) · [Grouped pin diagnostics](results/pins-32.txt)
 
+## Verified storage reads
+
+All 200,000 queries in the five scalar/scalar and five scalar/grouped
+pairs charged at least 4 KiB of Linux storage reads per request. The
+full-request median p99 was 9.815 ms for scalar pinned reads and 8.960 ms
+for width 32. The paired median gain was 8.65% (2.93–13.99%, five favorable
+pairs), below the 10% target and the 26.30% maximum A/A difference.
+Acquisitions fell from 309.56 to 170.99 per query while kernel-accounted
+read bytes averaged 1,197,844 and 1,233,076 per query respectively (median
+over the five A/B runs of each arm). Grouping reduced repeated probes,
+with a similar amount of physical data transferred on this fixture.
+[All physical-read pairs](results/device.csv)
+
 ## Warm upgrade comparison
 
 Using the same logical graph and query traces, the actual public release
