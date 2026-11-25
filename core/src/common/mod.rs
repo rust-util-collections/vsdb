@@ -299,16 +299,17 @@ pub fn vsdb_get_system_dir() -> &'static Path {
 /// This function returns the path of the base directory, which is determined
 /// by the `VSDB_BASE_DIR` environment variable, the `HOME` environment variable
 /// (`$HOME/.vsdb`), or a process-private temporary directory as a last resort.
+/// Calling it freezes configuration so a subsequent [`vsdb_configure`] call
+/// returns [`VsdbError::BaseDirFrozen`].
 ///
 /// # Returns
 ///
 /// A `PathBuf` to the base directory.
 #[inline(always)]
 pub fn vsdb_get_base_dir() -> PathBuf {
-    VSDB_BASE_DIR
-        .lock()
-        .get_or_insert_with(gen_data_dir)
-        .clone()
+    let mut base_dir = VSDB_BASE_DIR.lock();
+    vsdb_freeze_base_dir();
+    base_dir.get_or_insert_with(gen_data_dir).clone()
 }
 
 /// Whether the base directory has been frozen (set manually or locked in

@@ -51,14 +51,6 @@
 
 ---
 
-### [MEDIUM] core/config: vsdb_get_base_dir materializes VSDB_BASE_DIR without freezing configuration
-- **Where**: `core/src/common/mod.rs` (`vsdb_get_base_dir`, `vsdb_configure`)
-- **What**: Direct calls to `vsdb_get_base_dir()` populate `VSDB_BASE_DIR` via `gen_data_dir()` without setting `BASE_DIR_FROZEN`, allowing a subsequent or racing `vsdb_configure(VsdbOptions::new(chosen))` to overwrite `VSDB_BASE_DIR` and return `Ok(())` instead of `Err(VsdbError::BaseDirFrozen)`.
-- **Why**: Violates the documented one-shot freeze contract on `vsdb_configure`; `vsdb_get_base_dir()` returns two different paths within the same process, splitting callers or child workers that consumed the initial path.
-- **Suggested fix**: Call `vsdb_freeze_base_dir()` inside `vsdb_get_base_dir()` while holding `VSDB_BASE_DIR.lock()`. Add sequential and `"base"` race cases in `core/tests/configure_test.rs`. No migration impact.
-
----
-
 ### [MEDIUM] core/universe: read-only initialize reads universe_header before acquiring shared LOCK
 - **Where**: `core/src/common/universe.rs` (`initialize`)
 - **What**: When `writable == false`, `universe::initialize` calls `read_header(&base.join(HEADER))` (line 102) before `read_lock(base)` (line 117). If another process holds exclusive `flock` on `<base>/__SYSTEM__/LOCK` during initial universe bootstrap or `vsdb_migrate::migrate_universe(base)` before publishing `universe_header` last, a concurrent `VsdbOptions::read_only(base)` open sees `None` and returns `VsdbError::Corrupt`.

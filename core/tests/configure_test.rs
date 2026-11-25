@@ -106,6 +106,7 @@ fn configure_racing_first_use_never_splits_bases() {
             let reader = s.spawn(move || {
                 barrier.wait();
                 match first_use.as_str() {
+                    "base" => vsdb_get_base_dir(),
                     "meta" => vsdb_core::Namespace::default_ns().meta_dir(),
                     "custom" => vsdb_get_custom_dir().to_path_buf(),
                     "engine" => {
@@ -147,7 +148,7 @@ fn configure_racing_first_use_never_splits_bases() {
 
     let scratch =
         env::temp_dir().join(format!("vsdb_configure_race_{}", rand::random::<u128>()));
-    for first_use in ["meta", "custom", "engine"] {
+    for first_use in ["base", "meta", "custom", "engine"] {
         for round in 0..32 {
             let root = scratch.join(format!("{first_use}_{round}"));
             let output = Command::new(env::current_exe().unwrap())
@@ -170,4 +171,43 @@ fn configure_racing_first_use_never_splits_bases() {
         }
     }
     fs::remove_dir_all(&scratch).unwrap();
+}
+
+#[test]
+fn get_base_dir_freezes_subsequent_configure() {
+    const CHILD_CHOSEN: &str = "VSDB_BASE_DIR_FREEZE_CHOSEN";
+
+    if let Some(chosen) = env::var_os(CHILD_CHOSEN) {
+        let initial = vsdb_get_base_dir();
+        assert_eq!(
+            initial,
+            PathBuf::from(env::var_os("VSDB_BASE_DIR").unwrap())
+        );
+        assert!(matches!(
+            vsdb_configure(VsdbOptions::new(chosen)),
+            Err(VsdbError::BaseDirFrozen)
+        ));
+        assert_eq!(vsdb_get_base_dir(), initial);
+        return;
+    }
+
+    let scratch =
+        env::temp_dir().join(format!("vsdb_base_freeze_{}", rand::random::<u128>()));
+    let output = Command::new(env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "get_base_dir_freezes_subsequent_configure",
+            "--nocapture",
+        ])
+        .env(CHILD_CHOSEN, scratch.join("chosen"))
+        .env("VSDB_BASE_DIR", scratch.join("default"))
+        .output()
+        .unwrap();
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(
+        output.status.success(),
+        "child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
 }
