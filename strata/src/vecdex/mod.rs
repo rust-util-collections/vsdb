@@ -65,8 +65,9 @@ use crate::common::{
 };
 use distance::{DistanceMetric, MetricSearch, Scalar};
 use hnsw::{
-    AdjRead, adj_key, encode_neighbors, get_neighbors, prune_selection, random_layer,
-    search_layer, select_neighbors_heuristic,
+    AdjRead, adj_key, decode_neighbors, encode_neighbors, get_neighbors,
+    prune_neighbors, prune_selection, random_layer, search_layer,
+    select_neighbors_heuristic,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -278,16 +279,19 @@ fn decode_node_id(raw: &[u8]) -> u64 {
 // Mutation transaction
 // =========================================================================
 
+type VecCache<S> = HashMap<u64, Rc<Vec<S>>>;
+
 /// One mutation's staged rows plus a working copy of the graph state.
 /// Reads observe the operation's own uncommitted writes.
 struct Txn<'a, S> {
     store: &'a MapxRaw,
     rows: StagedRows,
     state: GraphState,
-    /// Per-transaction decoded-vector cache: HNSW linking re-reads the
-    /// same vectors many times across layers/heuristics; decoding each
-    /// row once per transaction removes the dominant redundant cost.
-    vec_cache: RefCell<HashMap<u64, Rc<Vec<S>>>>,
+    /// Per-operation decoded-vector cache: HNSW linking re-reads the
+    /// same vectors many times across layers/heuristics (and across 64-item
+    /// chunks inside `insert_batch`); decoding each row once removes the
+    /// dominant redundant cost while remaining bounded at 32 MiB.
+    vec_cache: RefCell<VecCache<S>>,
 }
 
 /// Graph reads for public searches, with lazy live-node seeds for disconnected
@@ -315,11 +319,15 @@ impl<S> AdjRead for Txn<'_, S> {
 
 impl<'a, S: Scalar> Txn<'a, S> {
     fn new(store: &'a MapxRaw, state: GraphState) -> Self {
+        Self::with_cache(store, state, HashMap::new())
+    }
+
+    fn with_cache(store: &'a MapxRaw, state: GraphState, cache: VecCache<S>) -> Self {
         Self {
             store,
             rows: StagedRows::new(),
             state,
-            vec_cache: RefCell::new(HashMap::new()),
+            vec_cache: RefCell::new(cache),
         }
     }
 
@@ -376,26 +384,14 @@ impl<'a, S: Scalar> Txn<'a, S> {
         self.rows.del(adj_key(layer, node_id).to_vec());
     }
 
-    /// Applies the pruning result of
-    /// [`prune_selection`](hnsw::prune_selection) for `(node, layer)` and
-    /// detaches the evicted back-edges, mirroring the insert-time
-    /// neighbor-eviction protocol. When `keep` is present, it is retained
-    /// by displacing the heuristic's last choice if necessary.
-    fn prune_and_detach<D: DistanceMetric<S>>(
+    fn apply_pruned_selection(
         &mut self,
-        metric: &D,
         node_id: u64,
         layer: u8,
-        m_max: usize,
+        mut pruned: Vec<u64>,
+        mut evicted: Vec<u64>,
         keep: Option<u64>,
     ) -> bool {
-        let pruned = {
-            let gv = |id: u64| self.read_vec(id);
-            prune_selection::<S, D, Self>(metric, node_id, layer, m_max, self, &gv)
-        };
-        let Some((mut pruned, mut evicted)) = pruned else {
-            return true;
-        };
         if let Some(keep_id) = keep
             && evicted.contains(&keep_id)
             && let Some(pos) = pruned.iter().rposition(|&id| id != keep_id)
@@ -416,11 +412,70 @@ impl<'a, S: Scalar> Txn<'a, S> {
         kept
     }
 
-    /// Stages the state row and hands the parts back for commit.
-    fn finish(mut self) -> StagedRows {
+    /// Applies the pruning result of
+    /// [`prune_selection`](hnsw::prune_selection) for `(node, layer)` and
+    /// detaches the evicted back-edges, mirroring the insert-time
+    /// neighbor-eviction protocol. When `keep` is present, it is retained
+    /// by displacing the heuristic's last choice if necessary.
+    fn prune_and_detach<D: DistanceMetric<S>>(
+        &mut self,
+        metric: &D,
+        node_id: u64,
+        layer: u8,
+        m_max: usize,
+        keep: Option<u64>,
+    ) -> bool {
+        let pruned = {
+            let gv = |id: u64| self.read_vec(id);
+            prune_selection::<S, D, Self>(metric, node_id, layer, m_max, self, &gv)
+        };
+        let Some((pruned, evicted)) = pruned else {
+            return true;
+        };
+        self.apply_pruned_selection(node_id, layer, pruned, evicted, keep)
+    }
+
+    /// Appends `added` to `(neighbor, layer)` in a single adjacency read,
+    /// bypassing decode/prune when the list stays within `m_max`.
+    fn append_neighbor_and_prune<D: DistanceMetric<S>>(
+        &mut self,
+        metric: &D,
+        neighbor: u64,
+        added: u64,
+        layer: u8,
+        m_max: usize,
+        keep: Option<u64>,
+    ) {
+        let key = adj_key(layer, neighbor);
+        let mut raw = self.adj_row(&key).unwrap_or_default();
+        if raw.len() / 8 < m_max {
+            raw.extend_from_slice(&added.to_le_bytes());
+            self.rows.put(key.to_vec(), raw);
+            return;
+        }
+        let mut neighbors = decode_neighbors(&raw);
+        neighbors.push(added);
+        let pruned = {
+            let gv = |id: u64| self.read_vec(id);
+            prune_neighbors::<S, D>(metric, neighbor, &neighbors, m_max, &gv)
+        };
+        if let Some((pruned, evicted)) = pruned {
+            self.apply_pruned_selection(neighbor, layer, pruned, evicted, keep);
+        } else {
+            self.set_neighbors(layer, neighbor, &neighbors);
+        }
+    }
+
+    /// Stages the state row and hands back `(rows, vec_cache)` for chunked batching.
+    fn finish_with_cache(mut self) -> (StagedRows, VecCache<S>) {
         self.rows
             .put(STATE_KEY.to_vec(), self.state.encode().to_vec());
-        self.rows
+        (self.rows, self.vec_cache.into_inner())
+    }
+
+    /// Stages the state row and hands the parts back for commit.
+    fn finish(self) -> StagedRows {
+        self.finish_with_cache().0
     }
 }
 
@@ -862,15 +917,20 @@ where
         }
         dedup.reverse();
 
+        let mut vec_cache = VecCache::new();
         for chunk in dedup.chunks(CHUNK) {
-            let mut txn =
-                Txn::new(&self.store, GraphState::read(self.store.get(STATE_KEY))?);
+            let mut txn = Txn::with_cache(
+                &self.store,
+                GraphState::read(self.store.get(STATE_KEY))?,
+                vec_cache,
+            );
             for (key, vec) in chunk {
                 Self::stage_remove(&self.metric, &mut txn, &self.config, key);
                 Self::stage_insert(&self.metric, &mut txn, &self.config, key, vec)?;
             }
-            let rows = txn.finish();
+            let (rows, next_cache) = txn.finish_with_cache();
             rows.commit(&mut self.store)?;
+            vec_cache = next_cache;
         }
         Ok(())
     }
@@ -936,14 +996,11 @@ where
             txn.set_neighbors(l, node_id, &selected);
 
             for (i, &neighbor) in selected.iter().enumerate() {
-                let mut n_neighbors = get_neighbors(txn, l, neighbor);
-                n_neighbors.push(node_id);
-                txn.set_neighbors(l, neighbor, &n_neighbors);
                 // At least one reciprocal edge per linked layer must
                 // survive pruning; otherwise every neighbor can evict the
                 // new node and commit an unreachable entry point.
                 let keep = (i == 0).then_some(node_id);
-                txn.prune_and_detach(metric, neighbor, l, m_max, keep);
+                txn.append_neighbor_and_prune(metric, neighbor, node_id, l, m_max, keep);
             }
 
             cur_ep = neighbor_pool.iter().map(|&(_, id)| id).collect();

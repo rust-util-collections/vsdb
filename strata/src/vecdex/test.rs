@@ -2145,3 +2145,44 @@ fn schema_checks_parameterized_metric_at_open() {
     let wrong = postcard::to_allocvec(&index).unwrap();
     assert!(postcard::from_bytes::<VecDex<u32, Weighted>>(&wrong).is_err());
 }
+
+#[test]
+fn insert_batch_cross_chunk_cache_evicts_overwrites_and_preserves_recall() {
+    let dim = 8;
+    let cfg = HnswConfig {
+        dim,
+        m: 8,
+        m_max0: 16,
+        ef_construction: 64,
+        ef_search: 64,
+    };
+    let mut idx = VecDex::<u64, L2>::new(cfg).unwrap();
+
+    // First batch spans >3 chunks (200 > 3 * 64) to exercise cross-chunk vec_cache handoff.
+    let batch1: Vec<(u64, Vec<f32>)> = (0..200u64)
+        .map(|i| {
+            let v: Vec<f32> = (0..dim).map(|d| (i as f32) * 10.0 + d as f32).collect();
+            (i, v)
+        })
+        .collect();
+    idx.insert_batch(&batch1).unwrap();
+    assert_bidirectional(&idx);
+
+    // Second batch overwrites keys across multiple chunks and adds new keys across chunks.
+    let mut batch2: Vec<(u64, Vec<f32>)> = (0..150u64)
+        .map(|i| {
+            let key = if i < 80 { i * 2 } else { 200 + i };
+            let v: Vec<f32> =
+                (0..dim).map(|d| -((key as f32) * 5.0 + d as f32)).collect();
+            (key, v)
+        })
+        .collect();
+    // Duplicate key across chunks: last occurrence must win.
+    batch2.push((0, vec![9999.0; dim]));
+    idx.insert_batch(&batch2).unwrap();
+
+    assert_bidirectional(&idx);
+    assert_eq!(idx.get(&0).unwrap(), vec![9999.0; dim]);
+    let hit = idx.search(&vec![9999.0; dim], 1).unwrap();
+    assert_eq!(hit[0].0, 0);
+}
