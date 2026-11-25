@@ -127,6 +127,9 @@ impl<K, V> VerMap<K, V> {
                 edits.rows.insert(k, Some(raw.to_vec()));
             }
         }
+        if self.namespace().is_read_only() && !edits.rows.is_empty() {
+            return Err(corrupt("branch name index requires writable repair"));
+        }
         let mut removed_commits = 0;
         for record in self.commit_rows() {
             let (id, mut commit) = record?;

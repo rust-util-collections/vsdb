@@ -140,7 +140,8 @@ digest. If the checkpoint matches and its reference graph validates, ordinary
 reopen can skip a full object walk. A missing, stale or invalid checkpoint, or
 any staged or retired marker, triggers a recount. Writable recovery can repair
 derived metadata and remove unreachable objects. Read-only recovery validates
-in memory.
+in memory and returns `VsdbError::Corrupt` if the branch-name index requires
+repair. A writable reopen rebuilds that index from the branch records.
 
 `from_meta_verified(id)` and `verify_and_gc()` also verify reachable pages,
 blob references, separators, child heights and occupancy. The latter reports live object

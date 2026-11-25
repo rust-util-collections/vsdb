@@ -5111,3 +5111,54 @@ fn concurrent_readers_and_failed_publish_keep_cached_heads_linearizable() {
     }
     assert_eq!(alias.get(main, &0).unwrap(), Some(60));
 }
+
+#[test]
+fn read_only_restore_rejects_inconsistent_name_rows() {
+    use std::{env, fs, path::PathBuf, process::Command};
+
+    const PROBE: &str = "VSDB_READ_ONLY_BRANCH_INDEX_TEST";
+    if let Some(mode) = env::var_os(PROBE) {
+        let root = PathBuf::from(env::var_os("VSDB_BASE_DIR").unwrap());
+        let token = root.join("token");
+        if mode == "write" {
+            crate::vsdb_configure(crate::VsdbOptions::new(&root)).unwrap();
+            let mut map = VerMap::<u32, u32>::new();
+            let branch = map.create_branch("side", map.main_branch()).unwrap();
+            let id = map.save_meta().unwrap();
+            map.tree
+                .nodes
+                .insert(by_name("main"), branch.raw().to_le_bytes());
+            map.tree.nodes.remove(by_name("side"));
+            map.tree.nodes.try_sync_wal().unwrap();
+            fs::write(token, id.to_string()).unwrap();
+        } else {
+            crate::vsdb_configure(crate::VsdbOptions::read_only(&root)).unwrap();
+            let id: crate::InstanceId =
+                fs::read_to_string(token).unwrap().parse().unwrap();
+            assert!(matches!(
+                VerMap::<u32, u32>::from_meta(id),
+                Err(VsdbError::Corrupt { .. })
+            ));
+        }
+        return;
+    }
+    let root =
+        env::temp_dir().join(format!("vsdb-readonly-names-{}", rand::random::<u128>()));
+    for mode in ["write", "read"] {
+        let out = Command::new(env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "versioned::test::read_only_restore_rejects_inconsistent_name_rows",
+            ])
+            .env(PROBE, mode)
+            .env("VSDB_BASE_DIR", &root)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+    fs::remove_dir_all(root).unwrap();
+}

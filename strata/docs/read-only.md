@@ -85,7 +85,9 @@ dispatching requests that can reach an infallible write API.
 Preserve the whole v18 base directory and any externally rooted namespaces
 your saved handles reference. Read-only open can
 replay residual shard WAL records in memory. VerMap can likewise validate its
-reference graph in memory. `VerMap::verify_and_gc()` can verify pages in this
+reference graph in memory. A branch-name index that requires writable repair
+causes read-only restoration to return `VsdbError::Corrupt`.
+`VerMap::verify_and_gc()` can verify pages in this
 mode, while `VerMap::flush()` requests a writable checkpoint and returns
 `VsdbError::ReadOnly`.
 
