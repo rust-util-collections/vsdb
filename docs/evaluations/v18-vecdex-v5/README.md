@@ -20,6 +20,36 @@ keys, distance bits and 868 first-place self matches. These byte counts
 describe the graph query's vector reads. They exclude other query
 allocations and the engine's evictable cache charge. [Scalar pin diagnostics](results/pins-1.txt) · [Grouped pin diagnostics](results/pins-32.txt)
 
+## Warm upgrade comparison
+
+Using the same logical graph and query traces, the actual public release
+build at `1300ad2` took 254.77 µs in median query p99, compared with
+187.24 µs for the v18 collections on MMDB 4.3.15 at `6ddaed9`. The
+within-pair median regression was **37.28%** (34.44–42.21%, all five
+pairs). The v4/v4 paired noise was at most 22.75%. Both physical fixtures
+had one SST, the same configured 16 KiB block target, compression policy
+and 512 MiB namespace sizing input. Both reported zero Linux storage reads
+during the timed queries. Each run returned exactly the same ID/distance
+digest and known-nearest count as its counterpart. Scalar/scalar v5
+controls had a largest paired difference of 7.87%. The two v5 scalar
+implementations differed by a paired median of 0.46% in this series.
+[Actual v4 and v5 release comparisons](results/landed.csv)
+
+The block counters reported 154.78 acquisitions per v4 query and 309.56
+per retained v5 query. The v4 SST reader loads its index when opening the
+file. V5 lookups acquire both an index leaf and a data block. These
+counter definitions and the differing SST encodings limit comparisons
+of work per acquisition. The query timing includes all read and compute
+steps, and this measurement does not isolate the time of the format change.
+A separate width-eight run showed a 10.42% paired gain against the
+experimental pinned-scalar control. A fresh 30,000-query repeat compares
+that intermediate width with the retained production source before any
+adoption decision. [Intermediate-width and upgrade observations](results/secondary.csv)
+
+On a singleton graph, five independent pairs with 100,000 queries per
+process gave a −0.50% paired change for the width-32 candidate, with a
+1.68% maximum A/A difference. [Singleton controls](results/singleton.csv)
+
 ## Query and decision rule
 
 The primary workload is an ordinary warm `VecDex<u64, L2>::search` requesting
