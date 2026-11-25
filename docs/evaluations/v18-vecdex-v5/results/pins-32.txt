@@ -1,0 +1,2 @@
+peak_retained_sst_bytes=535627 projected_vector_bytes=49426944
+samples=1000 p50_ns=150879 p99_ns=282529 digest=79cd052cb06e923c nearest=868 blocks=169031 logical_bytes=55523263 storage_bytes=0 io_positive=0

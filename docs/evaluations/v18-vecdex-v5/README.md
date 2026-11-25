@@ -1,5 +1,25 @@
 # VecDex v18 search on MMDB v5
 
+**Retain scalar pinned scoring for HNSW queries.** On the warm primary
+graph, fetching up to 32 neighbor vectors together reduced block
+acquisitions per query from 309.56 to 170.99. The median run p99 was
+262.95 µs for scalar pinned reads and 281.00 µs for the grouped trial.
+The median paired gain was −5.75%, with two of five pairs favoring the
+grouped candidate (range −51.64% to +14.63%). The largest scalar/scalar
+difference was 239.94%. Those results support deferring the grouped
+strategy on this workload. The host variation limits estimates of its
+absolute cost. The selected implementation checks graph rows and storage
+errors, and decodes vector and adjacency bytes directly while each pin
+is live. [Warm paired runs](results/warm.csv) · [Binary and fixture identities](results/metadata.json)
+
+Separate instrumented runs projected 49,426,944 bytes of vector payload in
+1,000 queries for both strategies. The maximum distinct backing SST
+capacity retained by a vector lookup rose from 16,739 bytes for a scalar
+lookup to 535,627 bytes for a group. Both runs returned the same ordered
+keys, distance bits and 868 first-place self matches. These byte counts
+describe the graph query's vector reads. They exclude other query
+allocations and the engine's evictable cache charge. [Scalar pin diagnostics](results/pins-1.txt) · [Grouped pin diagnostics](results/pins-32.txt)
+
 ## Query and decision rule
 
 The primary workload is an ordinary warm `VecDex<u64, L2>::search` requesting

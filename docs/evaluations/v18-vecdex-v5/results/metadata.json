@@ -1,0 +1,150 @@
+{
+  "v4_revision": "6ddaed901901910537d0cf280141218380c5665d",
+  "v5_revision": "dd07a00f57bc07c07ac17c70f86f2db931a736e1",
+  "cpu_model": "AMD Ryzen 9 5900X 12-Core Processor",
+  "cpu_affinity": "4",
+  "architecture": "x86_64",
+  "kernel": "7.0.0-44-generic",
+  "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0\nLLVM version: 23.1.5",
+  "filesystems": "/dev/nvme1n1 btrfs rw,noatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvolid=5,subvol=/",
+  "directory_compression": "compression=none",
+  "graph_rows_sha256": "a144fbb938994919a18b2c19211d193595ee1294d7eb2d78221fb43dac2ef786",
+  "graph_rows_bytes": 5669195,
+  "graph_counts_by_tag": {
+    "0x0": 8192,
+    "0x1": 8723,
+    "0x2": 8192,
+    "0x3": 8192,
+    "0x4": 8192,
+    "0x5": 1,
+    "0x6": 1
+  },
+  "fixtures": {
+    "v4-warm": [
+      {
+        "path": "__NAMESPACES__/0000000000000001/mmdb/shard_00/000004.sst",
+        "bytes": 4356017,
+        "sha256": "cf025c955d36a176beaac1c6854ec31bcd8b9a0924536324e3e94f70fec95335"
+      }
+    ],
+    "v5-warm": [
+      {
+        "path": "__NAMESPACES__/0000000000000001/mmdb/shard_00/000004.sst",
+        "bytes": 4428811,
+        "sha256": "03293e4f7dae23cc76038d0cb88fc7375427b557a71f373a7e8110df574fe534"
+      }
+    ],
+    "v5-device": [
+      {
+        "path": "__NAMESPACES__/0000000000000001/mmdb/shard_00/000042.sst",
+        "bytes": 121004,
+        "sha256": "5cd19d4c8e3b4c5bd3ed15d9e2f376dd0ac4e76dad9e603e21f50d35c039e9ad"
+      },
+      {
+        "path": "__NAMESPACES__/0000000000000001/mmdb/shard_00/000043.sst",
+        "bytes": 3754832,
+        "sha256": "91fb7ee2dd4d1d6a010be18b41d0fe73ab481f26c5ba52a70617f20e54227b3e"
+      },
+      {
+        "path": "__NAMESPACES__/0000000000000001/mmdb/shard_00/000045.sst",
+        "bytes": 116569,
+        "sha256": "f576e04dac2032f0e656e914853a2459a5168516942b1fe8c765610dd0448b9f"
+      },
+      {
+        "path": "__NAMESPACES__/0000000000000001/mmdb/shard_00/000047.sst",
+        "bytes": 115341,
+        "sha256": "00d8e05f2ab0f262d44c019dcb33888c9f2ef12062522d5b96d140965be8b045"
+      },
+      {
+        "path": "__NAMESPACES__/0000000000000001/mmdb/shard_00/000049.sst",
+        "bytes": 62480,
+        "sha256": "d5a333e846b7c8f6987581e6da73661212f981ff0620d1666ebba940219f5a8c"
+      },
+      {
+        "path": "__NAMESPACES__/0000000000000001/mmdb/shard_00/000051.sst",
+        "bytes": 61373,
+        "sha256": "ea02b27283a6a396eb400151daefcc1e974c0f2c5357e5a2bc98bea1e2b3936a"
+      },
+      {
+        "path": "__NAMESPACES__/0000000000000001/mmdb/shard_00/000052.sst",
+        "bytes": 62140,
+        "sha256": "cd79f42e1520a686570a5736b50ec901cad9e7da1ff2e461d5e09475f1d287dd"
+      },
+      {
+        "path": "__NAMESPACES__/0000000000000001/mmdb/shard_00/000053.sst",
+        "bytes": 55783,
+        "sha256": "f1b2c6f2236da171bfd7089311a877125e3bedab3e5665a81ef8f2ef7d5c24e9"
+      },
+      {
+        "path": "__NAMESPACES__/0000000000000001/mmdb/shard_00/000054.sst",
+        "bytes": 2708931,
+        "sha256": "578cb5e7f8978770e45cb8fbef490fdbd8ec37663c45f143fb78480e0e54f4ef"
+      },
+      {
+        "path": "__NAMESPACES__/0000000000000001/mmdb/shard_00/000057.sst",
+        "bytes": 46398,
+        "sha256": "3d7c899d1308f26dea1ce0e93894ff282c8b39350fe224b52a64507c24b62686"
+      },
+      {
+        "path": "__NAMESPACES__/0000000000000001/mmdb/shard_00/000058.sst",
+        "bytes": 16203,
+        "sha256": "4e7c9c72a60c2db6131b2be66c004a9afb5210647cbe9a2fbde6246f7aee22ab"
+      }
+    ],
+    "v5-singleton": [
+      {
+        "path": "__NAMESPACES__/0000000000000001/mmdb/shard_00/000004.sst",
+        "bytes": 920,
+        "sha256": "72e036bcc3138d576c66643652e50941b8ff4c76f2d713b3761847923632167d"
+      }
+    ]
+  },
+  "binaries": {
+    "1": {
+      "sha256": "9e4e4b1a8cd8caf9e832a7090b6d538be8bf50e83e1dd5ce963c960c6a996ed4",
+      "cargo_lock_sha256": "020375283d43a260ed6facaa533043f7d417b5dba82c24414f324062936e90c1"
+    },
+    "8": {
+      "sha256": "d9288b469ef14dbc7a8496e5d5733440a2cced3abf3343357089ba8364618eb0",
+      "cargo_lock_sha256": "020375283d43a260ed6facaa533043f7d417b5dba82c24414f324062936e90c1"
+    },
+    "32": {
+      "sha256": "0a520352c1846519186b97f0372c6876f6ad1a662924b30b6bf8eafb35a628be",
+      "cargo_lock_sha256": "020375283d43a260ed6facaa533043f7d417b5dba82c24414f324062936e90c1"
+    },
+    "1-pins": {
+      "sha256": "d6f5b7ab5493695959e8fb3efc42b15183514c413937a597b6ebb7a0c206ef31",
+      "cargo_lock_sha256": "020375283d43a260ed6facaa533043f7d417b5dba82c24414f324062936e90c1"
+    },
+    "32-pins": {
+      "sha256": "e1647c7440f6e00a275a2c5c167b112d9f119c712956f5edd2c411b8b9130bfd",
+      "cargo_lock_sha256": "020375283d43a260ed6facaa533043f7d417b5dba82c24414f324062936e90c1"
+    },
+    "v4": {
+      "sha256": "86e7707a8fddf8e6f809c07a831179727d728bc58686a245d8cc4a47a13044dd",
+      "cargo_lock_sha256": "7ed19d204660374f9701b96f986db3cc4716096d97902f60360377be58a44083"
+    },
+    "shipped": {
+      "sha256": "b0b5a86468886263feda978177a596eec1b48bf9e692be12003eb3819ea1198b",
+      "cargo_lock_sha256": "a803ec0647b5e696e47c9fb45675422eef912ba093db77da22e92abb8648ab4a"
+    }
+  },
+  "base_degree": {
+    "min": 5,
+    "mean": 26.090576171875,
+    "max": 32
+  },
+  "shipped_revision": "1300ad2dd802d88c1cffbfa8dfed0a74c737644f",
+  "trial_harness": "d84eb24; landed suite db8c72a",
+  "normal_arms": [
+    "v4",
+    "1",
+    "8",
+    "32",
+    "shipped"
+  ],
+  "pin_diagnostic_arms": [
+    "1-pins",
+    "32-pins"
+  ]
+}
