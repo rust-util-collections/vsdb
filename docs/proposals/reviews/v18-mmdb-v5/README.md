@@ -43,3 +43,34 @@ completed the workspace dependency transition in `6d594d5`.
 | Ordinary live-map existence still copied the value. Facade error and telemetry types were missing. | The public live and captured views now use native existence checks. The top-level VSDB crate re-exports the documented types. Separate large-value measurements check allocations on each public route. [Adapter measurements](../../../evaluations/v18-adapter/README.md) |
 | A fence after an asynchronous write must cover rotation; both transient pressure paths must remain retryable. | A child writes across rotation, fences, and exits without closing. Reopen verifies the sealed and residual rows. A real three-file L0 and a parked immutable flush each return typed Busy without changes to WAL, sequence or rows; reconstructing the batch succeeds once after pressure clears. [Native pressure tests](../../../../core/src/common/engine/mmdb/v5_tests.rs) |
 | Scope of first-use allocation, grouped backing retention, named budget floors and root leases. | A raw map already allocates its prefix on first use, including a read; an untouched WAL fence has no assigned shard. Group size bounds slots; distinct block or arena backing can remain live for the visit. Default and named engine budgets retain their documented distinct input normalization. The working-session lease is released before root publication. [API guide](../../../../core/docs/api.md) · [Working-edit tests](../../../../strata/src/versioned/test.rs) |
+
+## Collection operations
+
+The [four collection reviews](collections.json.gz) examined the concrete
+DagMap, VerMap and VecDex candidates at `0ecb57d`. Succession from a
+single-root writer through publication was checked independently of later
+candidate latency measurements.
+
+- The edit callback retained a temporary root lease through publication.
+  The regression observed a retired-root marker with a sole writer, then
+  zero after the private lease was dropped. External snapshots retain their
+  previous values. Changing the root through an alias during a callback
+  now returns `WorkingRootChanged`; the byte budget has a distinct error.
+  The edit API preserves the existing exclusion of conflicting writers.
+  [Working-root tests](../../../../strata/src/versioned/test.rs)
+- The three DagMap records now commit in one batch. A child-process fixture
+  checks the parent's previous snapshot, its advanced edge ID, the child's
+  ownership and a subsequent registration after fence/exit/reopen. Aliases
+  of the same raw map use documented `here` then `there` order. Cross-shard
+  and cross-namespace pairs fail before any row is written.
+  [DAG test](../../../../strata/src/dagmap/raw/test.rs) · [Raw tests](../../../../core/tests/colocated.rs)
+- A VecDex traversal could unwind on malformed key, state or adjacency
+  data, silently drop a hit missing its reverse key, or fetch another
+  adjacency after reaching the visit cap. Real fixtures verify typed
+  failures, cap boundaries after a neighbor or component restart, and
+  seed deduplication. Slot visits preserve filter order on success; an
+  error can terminate a query after some callbacks. The ordinary query
+  uses checked scalar pins. The grouped experiments report peak backing
+  capacity and end-to-end query p99. [Traversal fixtures](../../../../strata/src/vecdex/test.rs) · [Published query controls](../../../evaluations/v18-vecdex-v5/README.md)
+- The ordinary live-map existence check was routed through the v5 native
+  probe, as was the captured-view check. [Allocation evidence](../../../evaluations/v18-adapter/README.md)
