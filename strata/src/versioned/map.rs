@@ -802,9 +802,7 @@ where
         if !session.changes.is_empty() {
             let state = self.get_branch(branch)?;
             if state.dirty_root != lease.root {
-                return Err(VsdbError::InvalidConfig {
-                    detail: "branch working root changed during edit".into(),
-                });
+                return Err(VsdbError::WorkingRootChanged { branch_id: branch });
             }
             let changes = session.changes;
             drop(lease);

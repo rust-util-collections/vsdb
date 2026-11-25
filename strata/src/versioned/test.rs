@@ -5406,7 +5406,9 @@ fn working_overlay_reuses_its_charge_and_rejects_a_changed_root() {
             Ok(())
         })
         .unwrap_err();
-    assert!(matches!(error, crate::VsdbError::InvalidConfig { .. }));
+    assert!(
+        matches!(error, crate::VsdbError::WorkingRootChanged { branch_id } if branch_id == branch)
+    );
     assert_eq!(map.get(branch, &1).unwrap(), Some(11));
 }
 

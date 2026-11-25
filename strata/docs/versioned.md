@@ -175,7 +175,9 @@ retained working root. Its `get`, `insert` and `remove` see the overlay in
 call order. Returning an error or unwinding discards the overlay. A successful
 callback publishes the resulting working root once if it changed. Call
 `commit` separately to create a durable history entry. Serialize writers to
-aliases as for other structural operations.
+aliases as for other structural operations. If a callback changes the
+working root through another alias, publishing the original overlay reports
+`VsdbError::WorkingRootChanged`. A budget violation reports `InvalidConfig`.
 
 The limit charges the encoded key and current value plus 64 bytes per
 distinct staged key, including a deleted key. Replacing an entry releases

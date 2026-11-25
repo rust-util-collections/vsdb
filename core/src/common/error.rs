@@ -11,6 +11,9 @@ use thiserror::Error;
 #[non_exhaustive]
 #[derive(Error, Debug)]
 pub enum VsdbError {
+    /// Another alias changed the working root during a bounded branch edit.
+    #[error("branch {branch_id} working root changed during edit")]
+    WorkingRootChanged { branch_id: super::BranchId },
     /// The specified branch does not exist.
     #[error("branch not found: {branch_id}")]
     BranchNotFound {
