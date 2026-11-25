@@ -89,7 +89,7 @@ guides.
   failure/recovery paths, and tests.
 - **`all`:** put every tracked file in exactly one ledger category; never
   silently drop a file:
-  - Rust — `core/` and `strata/` `src/`, `tests/`, `benches/`;
+  - Rust — `core/`, `strata/`, and `migration/` `src/`, `tests/`, `benches/`;
   - build/CI — root and crate `Cargo.toml`, `.cargo/config.toml`,
     `rustfmt.toml`, `Makefile`, `tools/`, `.github/`;
   - live docs — READMEs, crate `docs/`, `docs/audit.md`, `docs/proposals/`
@@ -104,8 +104,8 @@ guides.
 1. **Strategy**
    - One subsystem and a small diff: review directly.
    - Otherwise: one read-only batch per Subsystem Map row (one owner per Rust
-     file), plus explicit seam batches — `persistent_btree/{diff,merge}.rs` ↔
-     `versioned/`, and `core` engine/namespace ↔ `strata` handles. Run batches
+     file), plus explicit seam batches — `persistent_btree/{diff,merge,persist}.rs` ↔
+     `versioned/`, `core` engine/universe/namespace ↔ `strata` handles, and `core`/`strata` wire formats ↔ `migration/` (`vsdb_migrate`). Run batches
      as parallel read-only subagents when available, else sequentially. Then
      run a cross-subsystem / `design-patterns.md` pass only for invariants no
      batch covered.
@@ -126,7 +126,7 @@ guides.
 3. **Dimensions** (only those that apply): correctness/invariants; interrupted
    writes, concurrency, and `unsafe` contracts; design shape when
    locks/resources/bounds/install/failure/API are involved; compatibility
-   (`VSTYPE03`/`VSTYPE02`, meta/key/wire tags, shard/namespace layout);
+   (`VSUNI018`/`VSENG018`/`VSNREG02`/`VSMAPX02`/`VSTYPE04`, `vsdb_migrate` `VSMAPX01`/`VSTYPE02`/`VSTYPE03` + `legacy_tag`, `take_from_bytes` EOF, shard/namespace layout);
    quantified hot-path cost; incomplete implementations (`review-core.md` §3).
 4. **Verify** every candidate yourself from the full implementation, callers,
    guards, and existing tests; refute via the FP guide; merge findings that
@@ -233,7 +233,7 @@ uncommitted and report it. Never revert unowned edits.
 ## Stop conditions
 
 - **Stop:** the same failure repeats with no progress; a release file
-  (`core/Cargo.toml`, `strata/Cargo.toml`, root `Cargo.toml`, `CHANGELOG.md`)
+  (`core/Cargo.toml`, `strata/Cargo.toml`, `migration/Cargo.toml`, root `Cargo.toml`, `CHANGELOG.md`)
   carries unowned baseline edits; a conflicting release tag exists.
 - **Continue:** a blocked item never stops independent items. Partial progress
   is a valid outcome — every commit is validated on its own.

@@ -55,9 +55,10 @@ GC, init. Perf only on hot/warm with evidence (benches under `*/benches/`).
 ## FP-10: COW alloc by design
 
 New node on mutation is required. Remove’s underflow path re-allocates a leaf it
-just copied (borrow/merge) and discards the first copy; merge rebuilds via
-`bulk_load` without sharing — both by design. **Keep:** in-place mutate (no new
-NodeId), or a superseded intra-op node that is never discarded.
+just copied (borrow/merge) and discards the first copy; merge rebuilds unshared runs —
+both by design. **Keep:** in-place mutate (no new NodeId), a superseded intra-op
+node or pending `[0x12]` `BLOB` child not dropped by `discard_node` (including on cold
+`!refs.ready` trees), or `BLOB_LEAF` COW re-allocating unchanged sibling blobs.
 
 ## FP-11: Ref-count wrong granularity
 
@@ -97,11 +98,11 @@ D-\* labels need trigger + outcome. Prefer subsystem guides when they already ca
 A `Snapshot` (`at` / `snapshot`) reads the root captured at creation; not seeing
 later writes is the contract. **Keep:** a snapshot that changes under it.
 
-## FP-19: Working-state durability on co-located VerMaps
+## FP-19: Working-state vs history durability on VerMap
 
-`insert` / `remove` / `discard` do not fsync; history ops end with one WAL sync.
+`insert` / `remove` / `write_batch` / `discard` commit one unsynced atomic batch; history ops and `bulk_load` end with `commit_sync()`.
 Losing unsynced working state on power loss is by design. **Keep:** a crash
-leaving inconsistent state, or a history op returning before its sync.
+leaving inconsistent state or stranded `[0x06]` `STAGE` anchors on aborted builds, or a history op returning before its sync.
 
 ## FP-20: Typed-handle identity is not schema reflection
 

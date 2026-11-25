@@ -24,17 +24,18 @@ One primary row per Rust file. Unsafe, compatibility, public-doc checks are over
 
 | Subsystem | Files | Guides |
 |-----------|-------|--------|
-| engine/shard/prefix | `core/.../engine/**`, `core/src/common/mod.rs`, `core/.../mapx_raw/**` | `patterns/engine.md`, `technical-patterns.md` |
+| engine/universe/prefix | `core/.../engine/**`, `core/src/common/{mod,universe,ids,range}.rs`, `core/.../mapx_raw/**` | `patterns/engine.md`, `technical-patterns.md` |
 | namespaces | `core/.../namespace.rs` | `patterns/engine.md`, `compatibility-policy.md` |
 | typed collections | `strata/.../mapx/**`, `mapx_ord/**`, `mapx_ord_rawkey/**`, `orphan/**` | `patterns/engine.md`, `technical-patterns.md` |
-| B+ tree | `strata/.../persistent_btree/**` | `patterns/btree.md` |
-| versioning | `strata/.../versioned/**` | `patterns/versioning.md`, `patterns/btree.md` (diff/merge) |
-| tries | `strata/.../trie/**` | `patterns/trie.md` |
-| SlotDex | `strata/.../slotdex/**` | `patterns/slotdex.md` |
-| DagMap | `strata/.../dagmap/**` | `patterns/dagmap.md` |
-| VecDex | `strata/.../vecdex/**` | `patterns/vecdex.md` |
-| encoding/staged | `strata/.../common/**`, `core/.../error.rs` | `technical-patterns.md`, `compatibility-policy.md` |
-| public/build | both `lib.rs`/`basic/mod.rs`, root+crate `Cargo.toml` | `compatibility-policy.md`, `technical-patterns.md` |
+| B+ tree | `strata/.../persistent_btree/**` (`nodes`, `persist`, `iter`, `diff`, `merge`) | `patterns/btree.md` |
+| versioning | `strata/.../versioned/**` (`store`, `map`, `read`, `repair`, `diff`) | `patterns/versioning.md`, `patterns/btree.md` (diff/merge) |
+| tries | `strata/.../trie/**` (`shared`, `cache`, `proof`, `transport`, `mpt/**`, `smt/**`, `node/**`) | `patterns/trie.md` |
+| SlotDex | `strata/.../slotdex/**` (`mod`, `query`, `slot_type`) | `patterns/slotdex.md` |
+| DagMap | `strata/.../dagmap/**` (`typed`, `raw/**`, `rawkey/**`) | `patterns/dagmap.md` |
+| VecDex | `strata/.../vecdex/**` (`mod`, `hnsw`, `distance`, `reader`) | `patterns/vecdex.md` |
+| encoding/frames/guards/staged | `strata/.../common/{mod,ende,frame,guard,macros,reader,staged}.rs`, `core/.../error.rs` | `technical-patterns.md`, `compatibility-policy.md` |
+| migration (`vsdb_migrate`) | `migration/src/**`, `migration/tests/**`, `migration/README.md` | `patterns/migration.md`, `compatibility-policy.md` |
+| public/build | `core`, `strata`, `migration` `lib.rs`/`basic/mod.rs`, root+crate `Cargo.toml` | `compatibility-policy.md`, `technical-patterns.md` |
 
 Guides under `docs/ai/patterns/`. Tests/benches/CI/README/CHANGELOG/`.agents` and `docs/ai`
 → map to the behavior they cover.
@@ -76,9 +77,7 @@ partial I/O.
 Check alias life, write exclusion, process-global env, allocator, lifecycle serialize.
 
 **Crash:** Do not mix recovery models —
-VerMap dirty flag; SlotDex/VecDex one staged batch; B+ bulk_load may flush internal
-batches (no root escapes while nodes buffered); ns/allocator need documented
-sync/rename order.
+VerMap single-prefix atomic/synced batches + `[0x05]` `RETIRED` / `[0x06]` `STAGE` anchors + generation-bound `[0x07]` `REFS` checkpoint; SlotDex/VecDex one staged batch (`[total, generation]` / monotonic `GraphState`); DagMap single-shard co-located WAL order (`fold`+`reparent` before `Clearing`, `[0x01]` discovery edges kept until `[0x02]` wipe finishes + 1-shard `try_sync_wal`); standalone B+ `bulk_load` flushes unreferenced chunks before root returns; universe/ns/allocator/trie-cache use advisory `LOCK` + atomic temp-sync-rename-dirsync order (`VSUNI018` published last); `vsdb_migrate` validates target headers/ceilings before wiping legacy keys.
 
 **Compatibility:** `compatibility-policy.md`. Old data preserve/reject/migrate
 intentionally. A break needs explicit user acceptance before any major bump.

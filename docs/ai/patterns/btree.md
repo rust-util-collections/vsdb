@@ -1,22 +1,17 @@
 # B+ Tree Review Patterns
 
-**Files:** `strata/src/basic/persistent_btree/` (`diff.rs` / `merge.rs`: version diff
-and three-way merge, also used by VerMap).
+**Files:** `strata/src/basic/persistent_btree/{mod,types,nodes,persist,insert,remove,iter,diff,merge,test}.rs` (`diff.rs` / `merge.rs` also back `VerMap`).
 
-**Arch:** B=16 (max 32 keys); COW new NodeId every mutate; structural sharing;
-on MapxRaw. `pending` write buffer: public mutators flush before return;
-`bulk_load` and merge replay may flush intermediate at threshold — root never
-escapes while referenced nodes buffered. `*_buffered` ops are the non-flushing
-crate-internal forms for multi-step operations.
+**Arch:** `#![forbid(unsafe_code)]`; `B = 16` (`MAX_KEYS = 32`); slotted `NodeView` (`0x18` leaf, `0x19` internal); 2-bit `CLASS_MASK` (`0` internal, `LEAF`, `BLOB_LEAF`, `BLOB`). `[0x10 | id_be]` stores slotted pages and `[0x12 | id_be]` stores separated `> 1024 B` blobs; standalone ceiling at `[9]` (verified via 4 reverse seeks per class). `pending` write buffer: public mutators flush before return; `bulk_load` and large `VerMap` builds flush intermediate chunks (`[0x06]` `STAGE` in `VerMap`) — root never escapes while referenced nodes are buffered.
 
 ## Invariants
 
-**BT1 COW** — every mutate path new NodeId up to root; no write to old id.
-**BT2 Order** — in-node increasing; parent-child `child[i] < key[i] ≤ child[i+1]`.
-**BT3 Occupancy** — non-root `B..=2B` keys; internal children = keys+1; root min exempt.
-**BT4 Sharing** — other versions keep old nodes intact.
-**BT5 Reclaim** — `release_node` ref-0 cascade lazy-deletes; `gc()` = full rebuild; live set = **all** commit roots + branch `dirty_root`s + runtime snapshot leases.
-**BT6 pending** — empty between ops; every return flushes finals; bulk intermediate flush does not publish unfinal root; `node()` prefers buffer; `discard_node` ref-0 only: buffered → dropped, flushed → lazy-deleted.
+**BT1 COW** — every mutate path allocates a new `NodeId` up to root; no write to an existing ID.
+**BT2 Order** — in-node strictly increasing; parent-child `child[i] < key[i] ≤ child[i+1]`.
+**BT3 Occupancy** — non-root `B..=2B` keys; internal children = `keys + 1`; root min exempt (`len == 0` allowed only on transient pre-`shrink_root` pending nodes, rejected by `verify_pages`).
+**BT4 Sharing & `BLOB_LEAF` edges** — versions share unchanged subtrees and `[0x12]` `BLOB` objects (`BLOB_LEAF` outgoing `BLOB` IDs are tracked in `RefState.edges` alongside `Internal` children; avoid re-allocating unchanged sibling blobs on leaf COW or materializing sibling blobs just to read `NodeView::len`).
+**BT5 Reclaim & recount** — `release_node` ref-0 cascade lazy-deletes (standalone) or batches removal (`VerMap`); `finish_ref_counts` propagates `Err(VsdbError::Corrupt)` via `?` (never `.expect`) on corrupt pinned/ancillary pages; live set = **all** commit roots + branch `dirty_root`s + runtime snapshot leases (`refs.pins`).
+**BT6 pending** — empty between ops; `object()` prefers `pending`; `discard_node` acts on ref-0 only and must drop outgoing pending `[0x12]` `BLOB` children even on cold (`!refs.ready`) restored standalone trees (`pending_bytes` kept exact).
 
 **BT7 Diff** — skip a front pair only when both are the **same NodeId** (identical key
 set); otherwise expand the taller side (height hints affect speed only); entries compare

@@ -41,8 +41,8 @@ Skip documented SWMR single-writer paths unless multi-writer convoy is shown.
 
 ## D-STATE
 
-- **1** Multi-step durable transition not atomic (VerMap dirty cascade; staged
-  batch; prune phasing; namespace open vs marker).
+- **1** Multi-step durable transition not atomic (VerMap `[0x05]` `RETIRED` / `[0x06]` `STAGE` anchors; staged
+  batch; DagMap fold-before-`Clearing` & `[0x01]` discovery-edge order; `VSUNI018`/`VSENG018` headers; `vsdb_migrate` journals).
 - **2** Dual write without single owner (parent slot vs registry; key↔node maps).
 - **3** Illegal DAG/ref-count/COW transition (cycle, premature free, in-place mutate).
 - **4** TOCTOU outside serializing lock (namespace open, prefix alloc).

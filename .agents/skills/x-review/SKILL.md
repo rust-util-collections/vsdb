@@ -48,7 +48,7 @@ scope: report only defects still present at HEAD.
 
 1. Worktree baseline ([workflow-policy.md](../../../docs/ai/workflow-policy.md)).
 2. Changed files + full diff + callers/tests. `worktree` includes untracked.
-   `all` → ledger: both crates’ source/tests/benches, manifests/CI, public docs, `.agents/` and `docs/ai/`.
+   `all` → ledger: all three workspace crates’ (`core/`, `strata/`, `migration/`) source/tests/benches, manifests/CI, public docs, `.agents/` and `docs/ai/`.
 3. Map via Subsystem Map; load guides.
 4. Mark generated/vendored/out-of-scope in the ledger — do not silent-drop.
 

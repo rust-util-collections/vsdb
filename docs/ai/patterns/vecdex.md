@@ -25,9 +25,7 @@ pruning compare against the **passing** results (`ef = max(ef, k)`, no inflation
 `filter_visit_cap = max(64·ef, 4096)` evaluated nodes bounds near-empty predicates.
 Restart candidates share that cap and visited set. Recall at low selectivity is
 tested — a fixed visit budget is the known regression.
-**VD6 Schema** — persisted configuration includes dimension, scalar width, metric type
-and parameters. The typed envelope and immutable schema row must agree. Keep
-`MetricKind` discriminants stable and reject unknown metric tags.
+**VD6 Schema** — persisted configuration (`[0x06]` `META_KEY`, bound into `VSTYPE04` via 8-byte Keccak256) includes dimension, scalar width, nominal `type_tag`, `HnswConfig`, and metric parameters. `VecDexDyn` selects runtime metrics via `VecDexDyn::new_with_metric`; keep `MetricKind` discriminants (`0 = L2, 1 = Cosine, 2 = InnerProduct`, pinned in `dyn_wire_tags_are_frozen`) frozen/append-only and reject unknown tags or trailing schema bytes.
 
 ## Bugs
 

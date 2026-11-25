@@ -45,19 +45,20 @@ launching Cargo; do not mutate environment variables inside parallel tests.
 
 | Subsystem | Key files | Purpose |
 |-----------|-----------|---------|
-| Engine | `core/src/common/engine/mod.rs`, `mmdb.rs` | Mapx, single-prefix batches, GLOBAL prefix alloc (all namespaces), shard co-location (`new_colocated`), per-ns shard routing, per-engine block-cache pool (shards share one `BlockCachePool`), VSUNI018 / VSENG018 headers |
-| Namespaces | `core/src/common/namespace.rs` | Namespace handle, registry, InstanceId, ambient scope, lifecycle (create/open/close/destroy/relocate); engines owned by `Arc<NsInner>`, no leak |
-| MapxRaw | `core/src/basic/mapx_raw/` | Untyped raw KV, prefix isolation |
-| Typed Collections | `strata/src/basic/mapx/`, `mapx_ord/`, `mapx_ord_rawkey/`, `orphan/` | Mapx<K,V>, MapxOrd<K,V>, MapxOrdRawKey<V>, Orphan<T> |
-| Persistent B+ Tree | `strata/src/basic/persistent_btree/` | COW B+ tree, structural sharing, shared-subtree diff + delta-replay three-way merge, deferred reclamation |
-| Versioning | `strata/src/versioned/` | VerMap (single-prefix tagged store), Snapshot views, typed ids/diffs, commit DAG |
-| Error types | `core/src/common/error.rs` (re-exported via `vsdb::common::error`) | VsdbError enum (thiserror-based), unified across both crates |
-| Merkle Tries | `strata/src/trie/` | MPT (16-ary) + SMT (binary 256-bit); explicit cache checkpoints, automatic load, in-memory fallback |
-| Slot Index | `strata/src/slotdex/` | Fixed-width coordinates, tiered counts, generation-checked writes and snapshot reads |
-| DAG Collections | `strata/src/dagmap/` | Single-shard overlay trees (`DagMap`, `DagMapRawKey`, `DagMapRaw`). Child reads fall back to ancestors. Prune folds a mainline. |
-| Vector Index | `strata/src/vecdex/` | VecDex + VecDexDyn (runtime `MetricKind`), HNSW ANN search, distance metrics (single-handle, crash-atomic) |
-| Encoding | `strata/src/common/ende.rs`, `common/mod.rs` | postcard-based KeyEnDe/ValueEnDe, borrowed-key `KeyLookup`/`OrderedKeyLookup`, typed-handle envelope (`VSTYPE04`) |
-| Staged mutation | `strata/src/common/staged.rs` | read-your-writes overlay + one atomic write batch per mutation/chunk (SlotDex/VecDex) |
+| Engine & Universe | `core/src/common/universe.rs`, `engine/mod.rs`, `mmdb.rs`, `common/{mod,ids,range}.rs` | `VSUNI018`/`VSENG018` headers, advisory `LOCK`, Mapx, single-prefix batches, GLOBAL prefix alloc, shard co-location (`new_colocated`), per-ns shard routing, per-engine `BlockCachePool` |
+| Namespaces | `core/src/common/namespace.rs` | Namespace handle (`OnceLock` default), `VSNREG02` registry, `InstanceId`, ambient scope, lifecycle (create/open/close/destroy/relocate); engines owned by `Arc<NsInner>`, no leak |
+| MapxRaw | `core/src/basic/mapx_raw/` | Untyped raw KV (`VSMAPX02`), prefix isolation, safe `Entry`, `MapxRawReader` / `MapxRawReadView` |
+| Typed Collections | `strata/src/basic/mapx/`, `mapx_ord/`, `mapx_ord_rawkey/`, `orphan/` | `Mapx<K,V>`, `MapxOrd<K,V>`, `MapxOrdRawKey<V>`, `Orphan<T>`, `MapReader` / `*ReadView`, fallible `update` |
+| Persistent B+ Tree | `strata/src/basic/persistent_btree/` (`nodes.rs`, `persist.rs`) | `#![forbid(unsafe_code)]` slotted `NodeView`, `[0x10]` pages + `[0x12]` `> 1 KiB` blobs, shared-subtree diff, range-grouped three-way merge, `[0x07]` `REFS` checkpoint |
+| Versioning | `strata/src/versioned/` (`store.rs`, `map.rs`, `read.rs`, `repair.rs`) | `#![forbid(unsafe_code)]` single-prefix `VerMap`, owned `'static` `Snapshot`, `[0x05]` `RETIRED` / `[0x06]` `STAGE` / `[0x07]` `REFS`, commit DAG |
+| Error types | `core/src/common/error.rs` (re-exported via `vsdb::common::error`) | `VsdbError` + `StorageErrorKind` (thiserror-based, `ruc`-free), unified across all workspace crates |
+| Merkle Tries | `strata/src/trie/` (`shared.rs`, `cache.rs`, `proof.rs`, `transport.rs`) | `Arc`-COW MPT (16-ary POPCNT) + SMT (binary 256-bit); map-bound `MPTC`/`SMTC` streaming checkpoints, `VerMapWithProof` |
+| Slot Index | `strata/src/slotdex/` (`mod.rs`, `query.rs`, `slot_type.rs`) | Sealed `[u8; N]` fixed-width `SlotType`, tiered counts, `[total, generation]`-checked writes, forward-chunked descending queries |
+| DAG Collections | `strata/src/dagmap/` (`typed.rs`, `raw/`, `rawkey/`) | `#![forbid(unsafe_code)]` single-shard co-located overlay trees (`DagMap<K,V>`, `DagMapRawKey<V>`, `DagMapRaw`) with `dag_id` + local edges |
+| Vector Index | `strata/src/vecdex/` (`mod.rs`, `hnsw.rs`, `distance.rs`, `reader.rs`) | `VecDex` + `VecDexDyn` (`MetricKind`), LE vector slices, `[META_KEY]` schema binding, monotonic 34B `GraphState`, snapshot search |
+| Encoding & Guards | `strata/src/common/{ende,frame,guard,macros,reader,mod}.rs` | `KeyEnDe`/`ValueEnDe`, borrowed `KeyLookup`/`OrderedKeyLookup`, `DerefMut` `ValueGuard`, `VSTYPE04` frame |
+| Staged mutation | `strata/src/common/staged.rs` | Read-your-writes overlay + one atomic write batch per mutation/chunk (`SlotDex`/`VecDex`/`DagMap`) |
+| Migration | `migration/src/{lib,universe,slotdex,vecdex,versioned,dagmap}.rs` | Independent `vsdb_migrate` crate: offline `v17 → v18` universe, handle, B+ tree, `VerMap`, `SlotDex`, `VecDex`, and 3-phase `DagMap` converters + frozen v17 fixtures |
 
 ## Skills
 
@@ -93,10 +94,12 @@ Supporting docs (`docs/ai/`):
 Additional docs in `docs/`:
 
 - `audit.md` — Open / Won't Fix; disproven entries are removed (managed by the four skills; registry writes are not code writes)
+- `proposals/v18-roadmap.md` / `proposals/performance-roadmap.md` — v18 structural architecture, post-implementation performance audit (§10), and follow-up `v18.x`/`v19` designs
 - `proposals/namespaces.md` / `ns-close.md` — current namespace identity, placement, recovery, and teardown contracts
 - `proposals/shared-mem-pool.md` — implemented per-engine cache sharing and explicitly deferred extensions
-- `proposals/durable-batches-and-read-views.md` — implemented synchronous commits and borrowed read views; typed read views are available on the basic collections
-- `evaluations/acc-migration-primitives.md` / `hotmint-v17.md` — historical validation evidence, not current-HEAD validation reports
+- `proposals/durable-batches-and-read-views.md` — implemented synchronous commits and borrowed read views; typed read views are available on the basic collections and `VecDex`
+- `evaluations/v18-{basic,slotdex-dagmap,trie-vecdex,versioned}.md` — v18 Criterion/RSS validation baselines against `v17.0.21` (`da9a325`)
+- `evaluations/acc-migration-primitives.md` / `hotmint-v17.md` / `performance-fixes.md` — historical validation evidence, not current-HEAD validation reports
 
 ## Conventions
 

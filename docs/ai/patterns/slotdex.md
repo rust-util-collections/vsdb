@@ -1,11 +1,8 @@
 # SlotDex Review Patterns
 
-**Files:** `slotdex/{mod,slot_type,test}.rs`.
+**Files:** `slotdex/{mod,query,slot_type,test}.rs`.
 
-**Arch:** Tier index for slot/time queries. One MapxRaw: entries `0x00|slot|key`,
-counts `0x01|level|floor`, total `0x02`. One staged atomic batch per mutation/chunk
-(no dirty flag). Tiers ≥1 memory-cached; L0 on disk. `slot_rows` O(1) mirror when
-tier-less; bulk uses `pending_slot_rows`.
+**Arch:** Tier index over sealed fixed-width `[u8; N]` `SlotType::Bytes` (`tier_capacity: u32 >= 2`). One `MapxRaw`: entries `0x00|slot|key`, counts `0x01|level|floor`, total/generation `0x02` (16B `[total, generation]`, incremented across `clear()` too). One staged atomic batch per mutation/chunk (no dirty flag). Tiers ≥1 memory-cached; L0 on disk. `slot_rows` O(1) mirror when tier-less; bulk uses `pending_slot_rows`.
 
 ## Invariants
 

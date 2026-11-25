@@ -1,9 +1,8 @@
 # Merkle Trie Review Patterns
 
-**Files:** `trie/{mod,cache,codec_util,error,nibbles,proof,shared,test}.rs` (`cache` = shared streaming checkpoints; `proof` = `VerMapWithProof`), `trie/{mpt,smt,node}/**`.
+**Files:** `trie/{mod,cache,codec_util,nibbles,proof,shared,transport,test}.rs` (`cache` = shared `MPTC\x02`/`SMTC\x04` streaming checkpoints; `proof` = `VerMapWithProof`), `trie/{mpt,smt,node}/**`.
 
-**Arch:** MPT 16-ary nibble; SMT binary 256-bit, JMT-compressed, single `EMPTY_HASH`;
-stateless compute + disk cache; VerMapWithProof integration.
+**Arch:** MPT 16-ary nibble (POPCNT `u16` bitmap `Children`, inline-64/heap `Nibbles`); SMT binary 256-bit, JMT-compressed, single `EMPTY_HASH`; `Arc`-COW `Handle` (`edit` = `Arc::make_mut` + `OnceLock::take()`, `try_update` candidate-root rollback on `Err`/unwind, iterative `Record::drop`); `VerMapWithProof` integration.
 
 ## Invariants
 

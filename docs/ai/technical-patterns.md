@@ -7,7 +7,7 @@ Use this catalog to check supported local database operations and their
 documented results. Each pattern needs a concrete call sequence and observable
 failure under `review-core.md`; a matching term alone is not a finding.
 
-Subsystem invariants live only in `patterns/{btree,versioning,trie,engine,slotdex,dagmap,vecdex}.md`
+Subsystem invariants live only in `patterns/{btree,versioning,trie,engine,slotdex,dagmap,vecdex,migration}.md`
 — always load the mapped guide when those paths change; do not restate them here.
 
 ## 1. Prefix / engine
@@ -29,17 +29,19 @@ Engine batches are single-prefix. SlotDex, VecDex and VerMap place each atomic m
 ### 2.1 shadow() race
 Same-key concurrent write or overlapping structural multi-key ops violate alias contract. Disjoint plain-map keys OK.
 
-### 2.2 Entry ownership
+### 2.2 Entry and ValueGuard ownership
 
-Occupied and vacant entries retain exclusive map access. Guard drops discard edits interrupted by unwinding.
+Occupied and vacant `enum Entry` variants retain exclusive `&mut` map access without raw pointers. `ValueGuard` (`guard.rs`) writes back only when `DerefMut` was invoked (`dirty == true`) or the entry was vacant (`vacant == true`), checking un-persisted interior mutability via `debug_assert_eq!` in debug builds. `UnwindMark::interrupted()` (`!panicking_at_entry && thread::panicking()`) discards edits interrupted by a mid-guard unwind while preserving guards created inside `Drop`.
 
 ## 3. Encoding
 
 ### 3.1 Non-canonical keys
-Postcard key bytes must be canonical — `HashMap`/`HashSet`/floats (±0.0, NaN) make lookups silently miss. Ordered maps need `KeyEnDeOrdered`, never postcard order.
+Postcard key bytes must be canonical (`Eq + Hash` blanket bound rejects floats and `HashMap`/`HashSet`). Ordered maps need `KeyEnDeOrdered` (explicit integer widths; `usize`/`isize` excluded), never postcard order.
 
-### 3.2 Version incompatibility
+### 3.2 Version incompatibility and postcard traps
 Postcard uses a compatible requirement, currently 1.1.3. Explicit tags/envelopes + old fixtures. `#[serde(default)]` alone ≠ safe postcard layout change. See `compatibility-policy.md`.
+- **EOF / trailing bytes:** `postcard::from_bytes` ignores trailing bytes; use `postcard::take_from_bytes` and reject `!rest.is_empty()` on metadata, frames, canonical keys, and values so truncated/evolved payloads never silently misread or drop fields on write-back.
+- **Stack-slice `collect_str` overflow:** `postcard::to_slice` into a fixed stack buffer returns `Err(postcard::Error::CollectStrError)` (not `SerializeBufferFull`) when `Serializer::collect_str` overflows the slice; stack-buffer encoders (`postcard_key`) must fall back to `postcard::to_allocvec` on `CollectStrError` as well.
 
 ### 3.3 Node codec asymmetry
 Hand codecs encode/decode field order match + round-trip tests.

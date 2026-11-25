@@ -7,7 +7,7 @@ Use with `docs/ai/workflow-policy.md` and `docs/ai/compatibility-policy.md`.
 
 Before first edit, record:
 
-- start `HEAD`, branch, and the three version locations at that `HEAD` and in the worktree;
+- start `HEAD`, branch, and the four version locations (`core/Cargo.toml`, `strata/Cargo.toml`, `migration/Cargo.toml`, root `Cargo.toml` `vsdb_core` dep) at that `HEAD` and in the worktree;
 - staged / unstaged / untracked baseline;
 - **frozen owned paths** (sorted) and planned units;
 - whether a patch bump or release tag is already owed (below);
@@ -42,6 +42,7 @@ Keep the ledger across commits. Stage only freeze set + this-invocation fix/form
 
    - core → `cargo test -p vsdb_core <filter>`;
    - strata → `cargo test -p vsdb <filter>`;
+   - migration → `cargo test -p vsdb_migrate <filter>`;
    - cross-crate / public / persisted → package suites or
      `cargo test --workspace --tests`.
 4. On fail: fix if unit-caused; else report pre-existing with evidence.
@@ -101,23 +102,23 @@ detectable. A later run with nothing else to commit still finishes it.
 Compatible only: current agreed `X.Y.Z` → `X.Y.(Z+1)`, once per owed release, from
 the current manifests. If the release commit already exists, verify it and
 complete the required tag.
-The three versions must agree. Divergence, or a lower version → report; do not overwrite.
+The four versions must agree (`migration/Cargo.toml`'s `vsdb` path dependency major version must also match). Divergence, or a lower version → report; do not overwrite.
 
 A public/on-disk break is not accepted by the agent. Do not ship that unit unless
 the user explicitly accepted it in this conversation; otherwise leave it
 uncommitted and Open. If they already accepted it, bump `(X+1).0.0` instead of
-the patch, and put the migration in the behavior commits
+the patch (including `migration/Cargo.toml`'s `vsdb` dependency), and put the migration in the behavior commits
 (`docs/ai/compatibility-policy.md`).
 
 Release commit `chore: bump version to X.Y.Z` updates exactly `core/Cargo.toml`,
-`strata/Cargo.toml`, the root `vsdb_core` dep, and `CHANGELOG.md` when
+`strata/Cargo.toml`, `migration/Cargo.toml`, the root `vsdb_core` dep, and `CHANGELOG.md` when
 `## [vX.Y.Z]` is missing at HEAD (an owned uncommitted draft is completed, not
 duplicated). Any of those files with unowned baseline edits → stop and report;
 never sweep them. The section summarizes user-visible changes in
 `git log "$base"..HEAD`, grouped under the `###` headings prior sections use
 (Fixed / Changed / Added / Breaking …); do not invent entries or duplicate an
 existing section. Then `cargo metadata --no-deps --format-version 1` must show
-both package versions and the workspace dependency. No empty commit. Do not
+all three workspace package versions (`vsdb_core`, `vsdb`, `vsdb_migrate`) and matching path dependencies. No empty commit. Do not
 force-add `Cargo.lock`.
 
 Check the intended tag name before making the release commit. If the name is
