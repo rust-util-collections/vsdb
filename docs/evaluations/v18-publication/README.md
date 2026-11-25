@@ -66,6 +66,22 @@ batch each made 1,000. Use a working session for dependent updates. A
 caller with precomputed edits already has the same publication count and
 can continue using `write_batch`.
 
+For the one-shard child trial, A/A uses the first control as the
+denominator. Calling the faster control the denominator in every pair
+(`max(a, b) / min(a, b) - 1`) gives a 34.02% maximum spread, above the
+31.38% measured gain. The independent default 16-shard trial gives 7.41%
+under either convention. Its 31.05% gain clears both spreads in five favorable
+pairs. The two-to-one submission count is independent of this timing
+sensitivity. [One-shard pairs](results/trials.csv) · [Default-shard pairs](results/default-namespace/trials.csv)
+
+Service time starts when `MapxRaw::insert` begins. Recomputing the same
+five placement pairs from `service_ns` gives median run p99 of 22.24 µs
+on one shard and 14.51 µs on split shards, a 32.25% median paired gain
+with four favorable pairs. Its A/A maximum was 99.31%. The primary
+arrival-to-acknowledgement measure below also includes time waiting for
+the scheduled foreground call to run. Both comparisons have substantial
+control variation. [Per-process arrival and service observations](results/trials.csv)
+
 All small puts and bulk operations met the matched-load screens for the
 mixed workload. Routing a foreground map away from VerMap reduced median
 run p99 from 1,075.88 to 79.54 µs on v5. The 85.71% median paired gain
