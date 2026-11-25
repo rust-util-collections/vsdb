@@ -39,6 +39,28 @@
 //! [`SlotDex::total`] and [`VecDex::len`] read stored counts. Each index
 //! updates its count and data rows in the same shard write batch.
 
+//!
+//! A raw batch can opt into retryable admission when a shard is under write
+//! pressure. A `Busy` result consumes no sequence and stores no rows.
+//!
+//! ```no_run
+//! use vsdb::{MapxRaw, NamespaceMemoryUsage, StorageErrorKind, VsdbError};
+//!
+//! # fn send(map: &mut MapxRaw) -> vsdb::Result<bool> {
+//! let usage: NamespaceMemoryUsage = map.namespace().memory_usage();
+//! let _evictable_bytes = usage.pool.segmented_weighted_bytes + usage.pool.overflow_weighted_bytes;
+//! let mut batch = map.batch();
+//! batch.insert(b"job", b"ready");
+//! match batch.commit_no_slowdown() {
+//!     Err(VsdbError::Storage { kind: StorageErrorKind::Busy, .. }) => {
+//!         // The caller can reschedule the original logical operation.
+//!         Ok(false)
+//!     }
+//!     outcome => outcome.map(|()| true),
+//! }
+//! # }
+//! ```
+
 #![deny(warnings)]
 #![recursion_limit = "512"]
 
@@ -108,9 +130,11 @@ pub use vecdex::{
 // Re-export vsdb_core crate for advanced users, plus the user-facing
 // environment management functions.
 pub use vsdb_core::{
-    self, DEFAULT_NS_ID, InstanceId, MapxRaw, MapxRawReadView, MapxRawReader, Namespace,
-    NamespaceOpts, NsId, NsInfo, OpenMode, VsdbOptions, vsdb_configure, vsdb_flush,
-    vsdb_get_base_dir, vsdb_get_custom_dir, vsdb_open_mode,
+    self, BlockCachePoolUsage, DEFAULT_NS_ID, InstanceId, MAX_GROUPED_READ_KEYS,
+    MapxRaw, MapxRawReadView, MapxRawReader, Namespace, NamespaceMemoryUsage,
+    NamespaceOpts, NsId, NsInfo, OpenMode, ShardMemoryUsage, StorageErrorKind,
+    VsdbOptions, vsdb_configure, vsdb_flush, vsdb_get_base_dir, vsdb_get_custom_dir,
+    vsdb_open_mode,
 };
 
 // Persistent B+ tree (moved from vsdb_core).

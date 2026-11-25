@@ -399,10 +399,12 @@ impl MapxRaw {
     /// `true` if the map contains the key, `false` otherwise.
     #[inline(always)]
     pub fn contains_key(&self, key: impl AsRef<[u8]>) -> bool {
-        self.get(key.as_ref()).is_some()
+        self.try_contains_key(key)
+            .expect("vsdb: mmdb existence check failed")
     }
 
-    #[doc(hidden)]
+    /// Check the latest committed state without materializing a copy of the value.
+    /// Storage failures retain their original source and classification.
     pub fn try_contains_key(&self, key: impl AsRef<[u8]>) -> Result<bool> {
         self.inner.try_contains_key(key.as_ref())
     }
