@@ -30,7 +30,8 @@ before the application's first v5 write.
 
    The command copies regular files and directories into a private staging
    directory. It rejects symlinks within the copied trees and special
-   files. The target needs space for the working copy and the verified v5
+   files. The preflight checks directory identities across source placements
+   and the destination parent, including aliases through mount points. The target needs space for the working copy and the verified v5
    shards. The v4 data remains available for a retry. The tool takes shared
    locks on existing universe and shard locks; immutable snapshots may omit
    those files. Quiescence also covers external application files.
@@ -44,7 +45,7 @@ before the application's first v5 write.
 
 3. The converter checks established and initializing shard layouts. Empty
    or uncreated pending shards retain their lifecycle. For each anchored
-   shard, a v4 read-only scan includes recovered WAL rows and their deletions.
+   shard, a v4 read-only scan of that same private copy includes recovered WAL rows and their deletions.
    The tool ingests the sorted visible rows into fresh v5 SSTs, checks both
    iterators for errors and compares row counts and Keccak-256 digests of
    length-framed keys and values after a writable reopen with seven levels

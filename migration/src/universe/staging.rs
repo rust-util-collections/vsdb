@@ -7,6 +7,7 @@ use super::{
 use crate::corrupt;
 use sha3::{Digest, Keccak256};
 use std::{
+    collections::HashSet,
     fs::{self, File},
     io,
     path::{Path, PathBuf},
@@ -76,14 +77,14 @@ fn engine_file(name: &str) -> bool {
         || name.strip_suffix(".sst").is_some_and(numbered)
 }
 
-fn export_shard(source: &Path, staged_copy: &Path) -> Result<()> {
+fn export_shard(staged_copy: &Path) -> Result<()> {
     let v4 = mmdb_v4::DB::open_read_only_with_options(
         mmdb_v4::DbOptions {
             num_levels: 7,
             prefix_len: 8,
             ..Default::default()
         },
-        source,
+        staged_copy,
     )
     .map_err(mmdb_err)?;
     let temp = tempfile::tempdir_in(staged_copy.parent().expect("a shard has a parent"))?;
@@ -103,6 +104,7 @@ fn export_shard(source: &Path, staged_copy: &Path) -> Result<()> {
     }
     drop(stream);
     v4.close().map_err(mmdb_err)?;
+    drop(v4);
     target.close().map_err(v5_error)?;
     drop(target);
 
@@ -126,7 +128,7 @@ fn export_shard(source: &Path, staged_copy: &Path) -> Result<()> {
     {
         return Err(corrupt(format!(
             "row verification failed at {}",
-            source.display()
+            staged_copy.display()
         )));
     }
 
@@ -191,39 +193,138 @@ fn bind_placements(base: &Path, generation: &Path, plan: &mut Plan) -> Result<()
     atomic_write_file(&path, &bytes)
 }
 
-fn lock_existing(path: &Path, locks: &mut Vec<File>) -> Result<()> {
-    let lock = match File::open(path) {
-        Ok(lock) => lock,
+// Canonical names resolve symlinks. File identities also recognize multiple
+// mount paths for the same directory. Unix stores only device/inode pairs.
+#[cfg(unix)]
+type DirectoryId = (u64, u64);
+#[cfg(not(unix))]
+type DirectoryId = same_file::Handle;
+
+fn directory_id(path: &Path) -> io::Result<DirectoryId> {
+    let meta = fs::metadata(path)?;
+    if !meta.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotADirectory,
+            path.display().to_string(),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok((meta.dev(), meta.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        same_file::Handle::from_path(path)
+    }
+}
+
+// Two pending roots can have different absolute names and still project
+// onto the same missing suffix underneath aliases of an existing directory.
+fn location(path: &Path) -> Result<Vec<(DirectoryId, PathBuf)>> {
+    let mut locations = Vec::new();
+    for ancestor in path.ancestors() {
+        match directory_id(ancestor) {
+            Ok(id) => locations.push((
+                id,
+                path.strip_prefix(ancestor).expect("ancestor").to_owned(),
+            )),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(locations)
+}
+
+fn overlap(left: &[(DirectoryId, PathBuf)], right: &[(DirectoryId, PathBuf)]) -> bool {
+    left.iter().any(|(id, a)| {
+        right
+            .iter()
+            .any(|(other, b)| id == other && (a.starts_with(b) || b.starts_with(a)))
+    })
+}
+
+fn lock_existing_file(path: &Path, locks: &mut Vec<File>) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_file() => {}
+        Ok(_) => {
+            return Err(corrupt(format!(
+                "invalid storage lock file: {}",
+                path.display()
+            )));
+        }
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e.into()),
-    };
+    }
+    let lock = File::open(path)?;
     lock.try_lock_shared().map_err(io::Error::from)?;
     locks.push(lock);
     Ok(())
 }
 
-fn copy_tree(source: &Path, target: &Path) -> Result<()> {
-    fs::create_dir(target)?;
-    let mut dirs = vec![(source.to_owned(), target.to_owned())];
-    while let Some((src, dst)) = dirs.pop() {
-        for entry in fs::read_dir(src)? {
-            let entry = entry?;
-            let kind = entry.file_type()?;
-            let path = dst.join(entry.file_name());
-            if kind.is_dir() {
-                fs::create_dir(&path)?;
-                dirs.push((entry.path(), path));
-            } else if kind.is_file() {
-                fs::copy(entry.path(), path)?;
-            } else {
+struct SourceTree {
+    root: PathBuf,
+    directories: Vec<PathBuf>,
+    files: Vec<PathBuf>,
+}
+
+impl SourceTree {
+    // Inventory before creating the tempdir or reading potentially special
+    // metadata files. Copying this finite list cannot descend into new output.
+    fn read(root: &Path, parent: &DirectoryId, visited: &mut HashSet<DirectoryId>) -> Result<Self> {
+        let mut dirs = vec![PathBuf::new()];
+        let mut files = Vec::new();
+        let mut i = 0;
+        while i < dirs.len() {
+            let relative = dirs[i].clone();
+            let path = root.join(&relative);
+            let id = directory_id(&path)?;
+            if &id == parent || !visited.insert(id) {
                 return Err(corrupt(format!(
-                    "stage requires regular files and directories: {}",
-                    entry.path().display()
+                    "generation parent or repeated source directory: {}",
+                    path.display()
                 )));
             }
+            for entry in fs::read_dir(path)? {
+                let entry = entry?;
+                let kind = entry.file_type()?;
+                let relative = relative.join(entry.file_name());
+                if kind.is_dir() {
+                    dirs.push(relative);
+                } else if kind.is_file() {
+                    files.push(relative);
+                } else {
+                    return Err(corrupt(format!(
+                        "stage requires regular files and directories: {}",
+                        entry.path().display()
+                    )));
+                }
+            }
+            i += 1;
         }
+        Ok(Self {
+            root: root.to_owned(),
+            directories: dirs,
+            files,
+        })
     }
-    Ok(())
+
+    fn copy_to(&self, target: &Path) -> Result<()> {
+        for relative in &self.directories {
+            fs::create_dir(target.join(relative))?;
+        }
+        for relative in &self.files {
+            let source = self.root.join(relative);
+            if !fs::symlink_metadata(&source)?.is_file() {
+                return Err(corrupt(format!(
+                    "source file changed during staging: {}",
+                    source.display()
+                )));
+            }
+            fs::copy(source, target.join(relative))?;
+        }
+        Ok(())
+    }
 }
 
 fn sync_generation(root: &Path) -> Result<()> {
@@ -244,10 +345,6 @@ fn sync_generation(root: &Path) -> Result<()> {
         File::open(dir)?.sync_all()?;
     }
     Ok(())
-}
-
-fn overlaps(a: &Path, b: &Path) -> bool {
-    a.starts_with(b) || b.starts_with(a)
 }
 
 fn reset_unanchored_copy(path: &Path) -> Result<()> {
@@ -283,6 +380,7 @@ pub fn stage_universe(source: impl AsRef<Path>, destination: impl AsRef<Path>) -
 
 #[derive(Clone, Copy)]
 enum Step {
+    Copied,
     Shard,
     Publish,
     Renamed,
@@ -314,14 +412,26 @@ fn stage(
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(e.into()),
     }
-    let mut locks = Vec::new();
-    lock_existing(&source, &mut locks)?;
-    lock_existing(&source.join("__SYSTEM__/LOCK"), &mut locks)?;
+    let parent_id = directory_id(&parent)?;
+    directory_id(&source)?;
+    let root_lock = File::open(&source)?;
+    root_lock.try_lock_shared().map_err(io::Error::from)?;
+    let mut locks = vec![root_lock];
+    let mut visited = HashSet::new();
+    let base_files = SourceTree::read(&source, &parent_id, &mut visited)?;
+    lock_existing_file(&source.join("__SYSTEM__/LOCK"), &mut locks)?;
     let mut plan = registry(
         &source,
         read_id(&source.join(HEADER))?.is_some(),
         read_id(&source.join(PROGRESS))?.is_some(),
     )?;
+    let target_location = location(&destination)?;
+    let base_location = location(&source)?;
+    if overlap(&base_location, &target_location) {
+        return Err(corrupt("source and destination generation overlap"));
+    }
+    let mut placements = vec![target_location, base_location];
+    let mut external_files = Vec::new();
     let mut roots = vec![(source.clone(), PathBuf::from("base"), 16u32)];
     for (record, state) in &plan.entries {
         let root = physical_path(&namespace_path(&source, record))?;
@@ -332,6 +442,19 @@ fn stage(
             )));
         }
         let relative = if record.path.is_some() {
+            let place = location(&root)?;
+            if placements.iter().any(|other| overlap(other, &place)) {
+                return Err(corrupt(
+                    "explicit placement overlaps the source, generation or another namespace",
+                ));
+            }
+            placements.push(place);
+            if root.try_exists()? {
+                external_files.push((
+                    record.id,
+                    SourceTree::read(&root, &parent_id, &mut visited)?,
+                ));
+            }
             staged_placement(Path::new(""), record.id)
         } else {
             namespace_path(Path::new("base"), record)
@@ -339,11 +462,8 @@ fn stage(
         roots.push((root, relative, record.shards));
     }
     for (root, _, shards) in &roots {
-        if overlaps(root, &destination) {
-            return Err(corrupt("source and destination generation overlap"));
-        }
         for i in 0..*shards {
-            lock_existing(&root.join(format!("mmdb/shard_{i:02}/LOCK")), &mut locks)?;
+            lock_existing_file(&root.join(format!("mmdb/shard_{i:02}/LOCK")), &mut locks)?;
         }
     }
     let mut staging = tempfile::Builder::new();
@@ -355,26 +475,23 @@ fn stage(
     }
     let temp = staging.tempdir_in(&parent)?;
     let base = temp.path().join("base");
-    copy_tree(&source, &base)?;
-    for (record, _) in &plan.entries {
-        if record.path.is_some() {
-            let src = namespace_path(&source, record);
-            let placements = temp.path().join("placements");
-            fs::create_dir_all(placements)?;
-            if src.try_exists()? {
-                copy_tree(&src, &staged_placement(temp.path(), record.id))?;
-            }
-        }
+    base_files.copy_to(&base)?;
+    if plan.entries.iter().any(|(r, _)| r.path.is_some()) {
+        fs::create_dir(temp.path().join("placements"))?;
     }
+    for (id, files) in external_files {
+        files.copy_to(&staged_placement(temp.path(), id))?;
+    }
+    completed(Step::Copied)?;
     bind_placements(&base, temp.path(), &mut plan)?;
     migrate_universe(&base)?;
-    for (src, relative, shards) in &roots {
+    for (_, relative, shards) in &roots {
         let dst = temp.path().join(relative);
         for n in 0..*shards {
             let relative = format!("mmdb/shard_{n:02}");
             let copy = dst.join(&relative);
             if copy.join("CURRENT").is_file() {
-                export_shard(&src.join(relative), &copy)?;
+                export_shard(&copy)?;
                 completed(Step::Shard)?;
             } else if copy.try_exists()? {
                 reset_unanchored_copy(&copy)?;
@@ -446,6 +563,64 @@ mod tests {
             b"checkpoint"
         );
         assert!(!source.join(HEADER).exists());
+    }
+
+    #[test]
+    fn export_uses_the_same_frozen_copy_as_allocator_reconstruction() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let parked = tmp.path().join("parked");
+        let generation = tmp.path().join("generation");
+        old_tree(&source);
+        fs::remove_file(source.join(super::super::CEILING)).unwrap();
+        stage(&source, &generation, |step| {
+            if matches!(step, Step::Copied) {
+                // Simulate the backup being unmounted after its private copy.
+                fs::rename(&source, &parked)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert!(generation.join("base").join(HEADER).is_file());
+        assert!(!parked.join(HEADER).exists());
+        assert!(!parked.join(super::super::CEILING).exists());
+    }
+
+    #[test]
+    fn inventory_rejects_repeated_directory_identity_and_generation_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let input = tmp.path().join("input");
+        let child = input.join("subdir");
+        fs::create_dir_all(&child).unwrap();
+        let mut seen = HashSet::new();
+        let parent_id = directory_id(tmp.path()).unwrap();
+        SourceTree::read(&input, &parent_id, &mut seen).unwrap();
+        assert!(SourceTree::read(&child, &parent_id, &mut seen).is_err());
+        let result = SourceTree::read(&input, &directory_id(&child).unwrap(), &mut HashSet::new());
+        assert!(result.is_err());
+        assert!(overlap(
+            &location(&child.join("new")).unwrap(),
+            &location(&child.join("new/child")).unwrap()
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preflight_rejects_special_files_before_opening_a_lock_or_header() {
+        use std::os::unix::net::UnixListener;
+        let tmp = tempfile::tempdir().unwrap();
+        let input = tmp.path().join("input");
+        let generation = tmp.path().join("output");
+        fs::create_dir_all(input.join("__SYSTEM__")).unwrap();
+        for file in ["LOCK", "universe_header", "__namespaces__"] {
+            let path = input.join("__SYSTEM__").join(file);
+            let socket = UnixListener::bind(&path).unwrap();
+            let error = stage_universe(&input, &generation).unwrap_err();
+            assert!(error.to_string().contains("stage requires regular files"));
+            assert!(!generation.exists());
+            drop(socket);
+            fs::remove_file(path).unwrap();
+        }
     }
 
     #[test]
