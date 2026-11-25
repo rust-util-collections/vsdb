@@ -1162,6 +1162,7 @@ impl Namespace {
             id,
             rec_shards,
         )?;
+        super::universe::check_format_marker(new_path, false)?;
         let rec = reg
             .entries
             .iter_mut()

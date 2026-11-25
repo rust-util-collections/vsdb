@@ -287,6 +287,7 @@ impl Engine {
         shards: u32,
         established: bool,
         current: bool,
+        upgrade_id: Option<u128>,
     ) -> Result<Option<Self>> {
         let mut engine = Self {
             root,
@@ -300,6 +301,9 @@ impl Engine {
             Err(e) if e.kind() == io::ErrorKind::NotFound => None,
             Err(e) => return Err(e.into()),
         };
+        if current && version.as_deref().is_some_and(|v| v != "18") {
+            return Err(corrupt("conflicting v18 downgrade marker"));
+        }
         let completed = engine.header_path().try_exists()?
             || system.join(".shards_ready").try_exists()?
             || version.as_deref().is_some_and(|s| s.trim() == "16");
@@ -313,10 +317,18 @@ impl Engine {
             engine.initializing = true;
             return Ok(Some(engine));
         }
+        let mmdb = engine.root.join("mmdb");
         if version.is_some() {
+            // The universe marker also guards a default engine that has never been opened.
+            if ns == 0
+                && (current || upgrade_id.is_some())
+                && version.as_deref() == Some("18")
+                && !mmdb.try_exists()?
+            {
+                return Ok(None);
+            }
             return Err(corrupt("missing engine initializer"));
         }
-        let mmdb = engine.root.join("mmdb");
         if mmdb.try_exists()? {
             if current
                 || !fs::symlink_metadata(&mmdb)?.is_dir()
@@ -354,7 +366,7 @@ impl Engine {
                     }
                     // A current-format create can have published only its
                     // staging sibling. The engine will resume it on open.
-                    if current
+                    if (current || upgrade_id.is_some())
                         && name
                             .strip_prefix("__initializing__.")
                             .and_then(|tail| tail.strip_suffix(".tmp"))
@@ -363,6 +375,16 @@ impl Engine {
                                 pid.parse::<u32>().is_ok() && n.parse::<u64>().is_ok()
                             })
                     {
+                        if let Some(id) = upgrade_id {
+                            let expected = engine.bytes(id);
+                            if inner.metadata()?.len() > expected.len() as u64
+                                || !expected.starts_with(&fs::read(inner.path())?)
+                            {
+                                return Err(corrupt(
+                                    "staged initializer disagrees with upgrade journal",
+                                ));
+                            }
+                        }
                         continue;
                     }
                     if current || name != "__initializing__.tmp" {
@@ -531,12 +553,39 @@ impl Engine {
     }
 }
 
+// v17 persisted the empty mmdb directory before creating __SYSTEM__.
+// The caller holds the root directory lock while recognizing this layout.
+fn ensure_bootstrap_system(base: &Path, system: &Path) -> Result<()> {
+    if system.try_exists()? {
+        return Ok(());
+    }
+    let mut entries = fs::read_dir(base)?;
+    let engine = entries.next().transpose()?;
+    if !matches!(engine, Some(ref e) if e.file_name() == "mmdb" && e.file_type()?.is_dir())
+        || entries.next().transpose()?.is_some()
+        || fs::read_dir(base.join("mmdb"))?
+            .next()
+            .transpose()?
+            .is_some()
+    {
+        return Err(corrupt("unrecognized v17 bootstrap directory"));
+    }
+    create_dir_all_durable(system)
+}
+
 /// Converts the universe metadata before calling v18's `vsdb_configure`.
 /// Stop every process accessing this v17 database first, including processes
 /// using explicitly placed namespaces. A retry resumes the same conversion.
 pub fn migrate_universe(base: impl AsRef<Path>) -> Result<()> {
     let base = base.as_ref().canonicalize()?;
     let system = base.join("__SYSTEM__");
+    if !system.try_exists()? {
+        let adoption = File::open(&base)?;
+        adoption.try_lock().map_err(io::Error::from)?;
+        let result = ensure_bootstrap_system(&base, &system);
+        adoption.unlock()?;
+        result?;
+    }
     let lock = File::options()
         .read(true)
         .write(true)
@@ -553,7 +602,7 @@ pub fn migrate_universe(base: impl AsRef<Path>) -> Result<()> {
     let id = committed.or(journal).unwrap_or_else(rand::random);
     let plan = registry(&base, committed.is_some(), journal.is_some())?;
     let mut engines = Vec::new();
-    if let Some(engine) = Engine::discover(base.clone(), 0, 16, false, current)? {
+    if let Some(engine) = Engine::discover(base.clone(), 0, 16, false, current, journal)? {
         engines.push(engine);
     }
     if engines.is_empty() && !base.join(REG).try_exists()? {
@@ -564,9 +613,14 @@ pub fn migrate_universe(base: impl AsRef<Path>) -> Result<()> {
             Some(p) => PathBuf::from(p),
             None => base.join("__NAMESPACES__").join(format!("{:016x}", r.id)),
         };
-        if let Some(engine) =
-            Engine::discover(root, r.id, r.shards, *state == State::Established, current)?
-        {
+        if let Some(engine) = Engine::discover(
+            root,
+            r.id,
+            r.shards,
+            *state == State::Established,
+            current,
+            journal,
+        )? {
             engines.push(engine)
         }
     }
@@ -602,15 +656,32 @@ pub fn migrate_universe(base: impl AsRef<Path>) -> Result<()> {
                 .ok_or_else(|| corrupt("prefix ceiling exhausted"))?,
         );
     }
+    let protection = system.join("format_version");
     if current {
+        for root in
+            std::iter::once(&base).chain(engines.iter().filter(|e| e.ns != 0).map(|e| &e.root))
+        {
+            let marker = root.join("__SYSTEM__/format_version");
+            if marker.try_exists()? {
+                // A previous rename may have succeeded while its directory
+                // sync failed. Fence the visible marker before acknowledging a retry.
+                File::open(root.join("__SYSTEM__"))?.sync_all()?;
+            } else {
+                atomic_write_file(&marker, b"18")?;
+            }
+        }
         if stored != Some(ceiling) {
             atomic_write_file(&base.join(CEILING), &ceiling.to_le_bytes())?;
         }
         return Ok(());
     }
     atomic_write_file(&base.join(PROGRESS), &header(id))?;
+    let has_default = engines.iter().any(|e| e.ns == 0);
     for e in engines {
         e.install(id)?;
+    }
+    if !has_default {
+        atomic_write_file(&protection, b"18")?;
     }
     let mut reg = b"VSNREG02".to_vec();
     postcard::to_io(&plan, &mut reg)?;

@@ -1,5 +1,8 @@
 use std::{fs, path::PathBuf, process::Command, thread};
-use vsdb_core::{MapxRaw, Namespace, VsdbError, VsdbOptions, vsdb_configure, vsdb_flush};
+use vsdb_core::{
+    MapxRaw, Namespace, NamespaceOpts, VsdbError, VsdbOptions, vsdb_configure,
+    vsdb_flush,
+};
 
 #[test]
 fn resumes_bootstrap_and_excludes_a_second_writer_before_opening_any_shard() {
@@ -13,7 +16,8 @@ fn resumes_bootstrap_and_excludes_a_second_writer_before_opening_any_shard() {
         .join(format!("vsdb-v18-bootstrap-{}", rand::random::<u128>()));
     let system = root.join("__SYSTEM__");
     fs::create_dir_all(&system).unwrap();
-    // Crash after the registry commit and before the ceiling/header.
+    // Crash after the downgrade marker and registry, before the ceiling/header.
+    fs::write(system.join("format_version"), b"18").unwrap();
     fs::write(system.join("__namespaces__"), b"VSNREG02\x01\x00").unwrap();
     vsdb_configure(VsdbOptions::new(&root)).unwrap();
     assert_eq!(
@@ -41,7 +45,7 @@ fn read_only_universe_lock_covers_namespace_admin() {
     const CASE: &str = "VSDB_V18_READ_LOCK_CASE";
     const BASE: &str = "VSDB_V18_READ_LOCK_BASE";
     let dir = std::env::var_os(BASE)
-        .map(std::path::PathBuf::from)
+        .map(PathBuf::from)
         .unwrap_or_else(|| {
             std::env::temp_dir()
                 .join(format!("vsdb-v18-read-lock-{}", rand::random::<u128>()))
@@ -132,6 +136,91 @@ fn read_only_open_reports_lock_contention_before_header_publish() {
     drop(lock_file);
     fs::remove_dir_all(&root).unwrap();
     assert!(out.status.success(), "{out:?}");
+}
+
+#[test]
+fn legacy_writer_marker_covers_the_universe_and_placed_engines() {
+    const PHASE: &str = "VSDB_V18_FORMAT_MARKER_PHASE";
+    const BASE: &str = "VSDB_V18_FORMAT_MARKER_BASE";
+    const MARKER: &str = "__SYSTEM__/format_version";
+    let scratch = std::env::var_os(BASE)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::temp_dir()
+                .join(format!("vsdb-format-marker-{}", rand::random::<u128>()))
+        });
+    let base = scratch.join("base");
+    let placed = scratch.join("placed");
+    match std::env::var(PHASE).as_deref() {
+        Ok("create") => {
+            vsdb_configure(VsdbOptions::new(&base)).unwrap();
+            assert!(!base.join("mmdb").exists());
+            assert_eq!(fs::read(base.join(MARKER)).unwrap(), b"18");
+            let ns = Namespace::create_with(NamespaceOpts {
+                path: Some(placed.clone()),
+                ..Default::default()
+            })
+            .unwrap();
+            assert_eq!(ns.id(), 1);
+            assert_eq!(fs::read(placed.join(MARKER)).unwrap(), b"18");
+            Namespace::open(0).unwrap();
+            assert_eq!(fs::read(base.join(MARKER)).unwrap(), b"18");
+        }
+        Ok("read") => {
+            vsdb_configure(VsdbOptions::read_only(&base)).unwrap();
+            Namespace::open(0).unwrap();
+            Namespace::open(1).unwrap();
+            assert!(!base.join(MARKER).exists());
+            assert!(!placed.join(MARKER).exists());
+        }
+        Ok("backfill") => {
+            vsdb_configure(VsdbOptions::new(&base)).unwrap();
+            Namespace::open(1).unwrap();
+            assert_eq!(fs::read(placed.join(MARKER)).unwrap(), b"18");
+            assert_eq!(fs::read(base.join(MARKER)).unwrap(), b"18");
+        }
+        Ok("relocate") => {
+            vsdb_configure(VsdbOptions::new(&base)).unwrap();
+            let new_root = scratch.join("moved");
+            fs::rename(placed, &new_root).unwrap();
+            fs::write(new_root.join(MARKER), b"19").unwrap();
+            assert!(Namespace::relocate(1, &new_root).is_err());
+            fs::write(new_root.join(MARKER), b"18").unwrap();
+            Namespace::relocate(1, &new_root).unwrap();
+            Namespace::open(1).unwrap();
+        }
+        Ok("reject") => {
+            let before = fs::read(base.join(MARKER)).unwrap();
+            assert!(vsdb_configure(VsdbOptions::new(&base)).is_err());
+            assert_eq!(fs::read(base.join(MARKER)).unwrap(), before);
+        }
+        _ => {
+            let run = |phase| {
+                let out = Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "legacy_writer_marker_covers_the_universe_and_placed_engines",
+                        "--nocapture",
+                    ])
+                    .env(PHASE, phase)
+                    .env(BASE, &scratch)
+                    .output()
+                    .unwrap();
+                assert!(out.status.success(), "{phase}: {out:?}");
+            };
+            run("create");
+            fs::remove_file(base.join(MARKER)).unwrap();
+            fs::remove_file(placed.join(MARKER)).unwrap();
+            run("read");
+            run("backfill");
+            run("relocate");
+            for incompatible in [b"16", b"19"] {
+                fs::write(base.join(MARKER), incompatible).unwrap();
+                run("reject");
+            }
+            fs::remove_dir_all(scratch).unwrap();
+        }
+    }
 }
 
 #[test]

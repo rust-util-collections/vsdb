@@ -22,6 +22,15 @@ If neither variable is available, VSDB falls back to a per-process temporary
 path. For an existing read-only dataset, use
 `VsdbOptions::read_only(path)`. See the [read-only deployment guide](read-only.md).
 
+Writable configuration protects the universe from v17 writers by publishing
+`__SYSTEM__/format_version` with value `18` before first use, including when
+only non-default namespaces will be opened. Placed engines publish the same
+marker before creating shards. Writable reopen backfills an absent marker on
+an existing v18 root. Keep v17 processes offline while reopening an early v18
+dataset with a missing marker. A conflicting marker (including one written by
+an older writer) requires investigation against a trusted backup. Read-only
+reopen preserves the original files.
+
 ## MapxRaw
 
 Raw maps store arbitrary byte strings. Iteration uses lexicographic key order.

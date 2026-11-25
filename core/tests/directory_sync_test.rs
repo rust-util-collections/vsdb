@@ -7,7 +7,7 @@ use std::{
     thread,
 };
 use vsdb_core::{
-    InstanceId, MapxRaw, VsdbError, VsdbOptions, vsdb_configure,
+    InstanceId, MapxRaw, Namespace, VsdbError, VsdbOptions, vsdb_configure,
 };
 
 const EIO: i32 = 5;
@@ -45,6 +45,24 @@ fn prefix_directory_sync_retries(root: &Path) {
     assert_eq!(refill().unwrap().map_id, visible);
 }
 
+fn marker_directory_sync_retries(root: &Path) {
+    let ns = Namespace::create().unwrap();
+    let id = ns.id();
+    let marker = ns.system_dir().join("format_version");
+    ns.close().unwrap();
+    fs::remove_file(&marker).unwrap();
+    let arm = root.join("arm");
+    fs::write(&arm, b"1").unwrap();
+    for _ in 0..2 {
+        assert!(
+            matches!(Namespace::open(id), Err(VsdbError::Io(e)) if e.raw_os_error() == Some(EIO))
+        );
+        assert_eq!(fs::read(&marker).unwrap(), b"18");
+    }
+    fs::remove_file(arm).unwrap();
+    Namespace::open(id).unwrap();
+}
+
 /// Exercise the real parent-directory fsync, rather than a simulated crash.
 /// An EIO there must prevent success, including when retrying an existing
 /// directory created by the failed attempt.
@@ -56,6 +74,7 @@ fn directory_sync_failure_prevents_metadata_publication() {
         vsdb_configure(VsdbOptions::new(&root)).unwrap();
         match env::var("VSDB_DIRECTORY_SYNC_CASE").unwrap().as_str() {
             "prefix" => return prefix_directory_sync_retries(&root),
+            "marker" => return marker_directory_sync_retries(&root),
             "metadata" => {}
             case => panic!("unknown directory sync case: {case}"),
         }
@@ -134,9 +153,13 @@ int fsync(int fd) {
         "failed to build fsync interposer: {}",
         String::from_utf8_lossy(&compiled.stderr),
     );
-    for case in ["metadata", "prefix"] {
+    for case in ["metadata", "prefix", "marker"] {
         let data = root.join(case);
-        let target = data.join("__SYSTEM__");
+        let target = if case == "marker" {
+            data.join("__NAMESPACES__/0000000000000001/__SYSTEM__")
+        } else {
+            data.join("__SYSTEM__")
+        };
         let output = Command::new(env::current_exe().unwrap())
             .args([
                 "--exact",

@@ -218,6 +218,9 @@ impl MmDB {
             // sentinel removal. A leftover sentinel is advisory once the
             // marker and exact shard layout validate; readers never unlink it.
             crate::common::universe::verify_engine(root, universe_id, ns_id, shards)?;
+            if ns_id != 0 {
+                crate::common::universe::check_format_marker(root, false)?;
+            }
         } else {
             create_dir_all_durable(root)?;
             crate::common::universe::validate_ready_engine(
@@ -241,6 +244,11 @@ impl MmDB {
                     &sentinel_path,
                     &crate::common::universe::engine_bytes(universe_id, ns_id, shards),
                 )?;
+            }
+            if ns_id != 0 {
+                // The initializer proves ownership across a crash while the
+                // marker is installed. The base was protected at bootstrap.
+                crate::common::universe::check_format_marker(root, true)?;
             }
             create_dir_all_durable(&dir)?;
         }
@@ -273,9 +281,6 @@ impl MmDB {
         }
 
         if !read_only {
-            // Mark the root's on-disk format so an older binary pointed at
-            // it (base dir or namespace root alike) refuses to open.
-
             crate::common::universe::install_engine(root, universe_id, ns_id, shards)?;
             // Initialization is complete and durably marked: retire the
             // sentinel best-effort. Marker-present validation never consults

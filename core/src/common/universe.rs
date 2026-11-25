@@ -86,6 +86,33 @@ pub(crate) fn active() -> Result<&'static Universe> {
     initialize(&vsdb_get_base_dir(), vsdb_open_mode())
 }
 
+/// Older engines check this file before opening their first shard. Early v18
+/// roots may lack it, so writable opens backfill it under the root lock.
+pub(super) fn check_format_marker(root: &Path, writable: bool) -> Result<()> {
+    let path = root.join("__SYSTEM__/format_version");
+    match fs::read(&path) {
+        Ok(bytes) if bytes == b"18" => {
+            if writable {
+                // A previous attempt may have renamed the marker before its
+                // directory fsync failed. Reopening must confirm the fence.
+                File::open(path.parent().expect("marker has a parent"))?.sync_all()?;
+            }
+            Ok(())
+        }
+        Ok(_) => Err(corrupt(format!(
+            "incompatible format marker at {}",
+            path.display()
+        ))),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            if writable {
+                atomic_write_file(&path, b"18")?;
+            }
+            Ok(())
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 pub(crate) fn initialize(base: &Path, mode: OpenMode) -> Result<&'static Universe> {
     let _guard = INIT.lock();
     if let Some(universe) = OPEN.get() {
@@ -104,13 +131,20 @@ pub(crate) fn initialize(base: &Path, mode: OpenMode) -> Result<&'static Univers
         read_lock(base)?
     };
     let id = match read_header(&base.join(HEADER))? {
-        Some(id) => id,
+        Some(id) => {
+            namespace::check_registry_at(base)?;
+            // A universe can contain only non-default engines.
+            validate_ready_engine(base, id, 0, 16)?;
+            check_format_marker(base, writable)?;
+            id
+        }
         None => {
             if !writable || !fresh_or_interrupted(base)? {
                 return Err(corrupt(
                     "missing VSUNI018 header in an existing database directory",
                 ));
             }
+            check_format_marker(base, true)?;
             namespace::bootstrap_registry(base)?;
             atomic_write_file(&base.join(CEILING), &PREFIX_ALLOC_START.to_le_bytes())?;
             let id = rand::random();
@@ -118,10 +152,6 @@ pub(crate) fn initialize(base: &Path, mode: OpenMode) -> Result<&'static Univers
             id
         }
     };
-    namespace::check_registry_at(base)?;
-    // A durable ready marker outside mmdb/ also detects loss of the entire
-    // default engine directory. A fresh namespace-only universe has neither.
-    validate_ready_engine(base, id, 0, 16)?;
     let ceiling = engine::recover_ceiling(base, id, writable)?;
     Ok(OPEN.get_or_init(|| Universe {
         id,
@@ -141,8 +171,10 @@ fn fresh_or_interrupted(base: &Path) -> Result<bool> {
         let Some(name) = name.to_str() else {
             return Ok(false);
         };
-        if !matches!(name, "LOCK" | "__namespaces__" | "__prefix_ceiling__")
-            && !name.ends_with(".tmp")
+        if !matches!(
+            name,
+            "LOCK" | "format_version" | "__namespaces__" | "__prefix_ceiling__"
+        ) && !name.ends_with(".tmp")
         {
             return Ok(false);
         }

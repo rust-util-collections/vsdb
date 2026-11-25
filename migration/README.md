@@ -4,7 +4,7 @@
 
 ## Upgrade order
 
-1. Stop all processes using the v17 universe. Back up the base directory, explicitly placed namespace directories and application-owned handle files together. Explicit namespace paths in a staging copy must point to the staged data. For rollback, restore that complete backup and run the v17 binary on the restored path. A v17 binary can open the shards of a fresh v18 default engine and damage its contents.
+1. Stop all processes using the v17 universe. Back up the base directory, explicitly placed namespace directories and application-owned handle files together. Explicit namespace paths in a staging copy must point to the staged data. For rollback, restore that complete backup and run the v17 binary on the restored path. Current v18 writers and the converter install a format marker that v17 checks. Earlier v18 roots may lack it until reopened writable.
 2. Run `migrate_universe(base)` before configuring VSDB in the upgrade process. It checks shard locks and lifecycle records, binds each engine to its namespace and universe, and preserves the prefix allocator floor. A retry uses the durable upgrade identifier.
 3. Call `vsdb_configure(VsdbOptions::new(base))` and convert each saved or embedded collection handle with its original types. Record converted tree roots and DAG child IDs, update application records, and verify they reopen before resuming traffic.
 

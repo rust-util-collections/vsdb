@@ -397,3 +397,76 @@ fn slotdex_and_dagmap_converters_return_err_without_default_engine() {
     }
     fs::remove_dir_all(&root).unwrap();
 }
+
+#[test]
+fn default_bootstrap_before_the_system_directory() {
+    let base = std::env::temp_dir().join(format!("vsdb-first-default-{}", rand::random::<u128>()));
+    fs::create_dir_all(base.join("mmdb")).unwrap();
+    fs::write(base.join("unrelated"), b"keep").unwrap();
+    assert!(migrate_universe(&base).is_err());
+    assert!(!base.join("__SYSTEM__").exists());
+    fs::remove_file(base.join("unrelated")).unwrap();
+    migrate_universe(&base).unwrap();
+    assert!(base.join("__SYSTEM__/universe_header").is_file());
+    assert!(base.join("__SYSTEM__/__initializing__").is_file());
+    migrate_universe(&base).unwrap();
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn resumes_namespace_only_upgrade_from_initializer_staging_file() {
+    let base =
+        std::env::temp_dir().join(format!("vsdb-migrate-pending-{}", rand::random::<u128>()));
+    let system = base.join("__SYSTEM__");
+    let child = base.join("__NAMESPACES__/0000000000000001");
+    fs::create_dir_all(system.join("__namespace_state__")).unwrap();
+    fs::create_dir_all(child.join("mmdb")).unwrap();
+    fs::create_dir_all(child.join("__SYSTEM__")).unwrap();
+    let record = (
+        1u64,
+        Option::<String>::None,
+        2u32,
+        Option::<u64>::None,
+        0u64,
+    );
+    fs::write(
+        system.join("__namespaces__"),
+        postcard::to_allocvec(&(2u64, vec![record])).unwrap(),
+    )
+    .unwrap();
+    fs::write(system.join("__namespace_state__/0000000000000001"), b"P").unwrap();
+    let id = 42u128;
+    let bound = [
+        b"VSENG018".as_slice(),
+        &id.to_le_bytes(),
+        &1u64.to_le_bytes(),
+        &2u32.to_le_bytes(),
+    ]
+    .concat();
+    let scratch = child.join("__SYSTEM__/__initializing__.123.0.tmp");
+    fs::write(&scratch, &bound[..16]).unwrap();
+    assert!(migrate_universe(&base).is_err());
+    let header = [
+        b"VSUNI018".as_slice(),
+        &18u32.to_le_bytes(),
+        &id.to_le_bytes(),
+    ]
+    .concat();
+    fs::write(system.join("upgrade_v18"), &header).unwrap();
+    fs::write(&scratch, b"other namespace").unwrap();
+    assert!(migrate_universe(&base).is_err());
+    fs::write(&scratch, &bound[..16]).unwrap();
+    migrate_universe(&base).unwrap();
+    assert_eq!(
+        fs::read(child.join("__SYSTEM__/__initializing__")).unwrap(),
+        bound
+    );
+    assert_eq!(fs::read(system.join("format_version")).unwrap(), b"18");
+    assert!(!base.join("mmdb").exists());
+    migrate_universe(&base).unwrap();
+    // Retry after the default downgrade marker but before publishing the universe header.
+    fs::rename(system.join("universe_header"), system.join("upgrade_v18")).unwrap();
+    migrate_universe(&base).unwrap();
+    assert_eq!(fs::read(system.join("universe_header")).unwrap(), header);
+    fs::remove_dir_all(base).unwrap();
+}
