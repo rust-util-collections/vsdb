@@ -94,7 +94,7 @@ Supporting docs (`docs/ai/`):
 Additional docs in `docs/`:
 
 - `audit.md` — Open / Won't Fix; disproven entries are removed (managed by the four skills; registry writes are not code writes)
-- `proposals/v18-roadmap.md` / `proposals/performance-roadmap.md` — v18 structural architecture, post-implementation performance audit (§10), and follow-up `v18.x`/`v19` designs
+- `proposals/v18-roadmap.md` — v18 structural architecture, post-implementation performance audit (§10), and follow-up `v18.x`/`v19` designs
 - `proposals/namespaces.md` / `ns-close.md` — current namespace identity, placement, recovery, and teardown contracts
 - `proposals/shared-mem-pool.md` — implemented per-engine cache sharing and explicitly deferred extensions
 - `proposals/durable-batches-and-read-views.md` — implemented synchronous commits and borrowed read views; typed read views are available on the basic collections and `VecDex`
