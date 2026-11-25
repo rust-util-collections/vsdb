@@ -1429,21 +1429,24 @@ fn mmdb_open(
 
     // Per-shard sizes: divide totals by the shard count.
     //
-    // The write-buffer term scales with the requested budget (subject
-    // to the floor below): each shard can hold one active memtable plus
-    // `max_immutable_memtables` frozen ones awaiting flush, so the
-    // worst-case memtable footprint is wr_buffer_size *
-    // (1 + max_immutable) * shards. budget/8 across all shards keeps
-    // that worst case (5x active) at ~5/8 of budget, leaving the rest
-    // for the block cache (budget/8) and per-connection transients —
-    // sizing memtables above the budget instead pins anonymous memory
-    // at the memory line during ingest bursts, and the reclaim
-    // pressure slows the very flush threads that are the only way out
-    // (observed as a service wedged at memory.high with tens of
-    // thousands of memory.events:high). The first term keeps the
-    // historical shape (G/shards, opening to budget/4/shards past
-    // 16 G, capped at 512 MB) so large explicit budgets size exactly
-    // like the old host-derived path.
+    // In `mmdb 4.3`, `max_immutable_memtables` is unused: when a shard's
+    // active memtable fills, the write leader synchronously runs
+    // `freeze_memtable_sync` + `flush_frozen_memtable`, bounding per-shard
+    // memtable residency to <= 2x `wr_buffer_size` (active + one flushing
+    // table) while releasing `DB::inner` during SST I/O. Keeping the total
+    // active budget at `mem_budget / 8` across all shards (<= 2/8 of budget
+    // at peak multi-shard flush, alongside `mem_budget / 8` for
+    // `BlockCachePool`, `<= 1.56%` per active `InternalPageCache`, and
+    // compaction/query transients) avoids pinning anonymous memory at
+    // cgroup `memory.high` during multi-shard ingest bursts, where reclaim
+    // pressure stalls the flush writers that are the only way out
+    // (previously observed as tens of thousands of `memory.events:high`).
+    // Write-intensive single-prefix (`VerMap`) or co-located (`DagMap`)
+    // workloads can place hot instances in a dedicated 1-shard `Namespace`
+    // before any default `wr_buffer_size` recalibration (see
+    // `docs/proposals/v18-roadmap.md` §10.7). The first term preserves the
+    // historical shape (`G / shards`, opening to `budget / 4 / shards` past
+    // 16 GiB, capped at 512 MiB) for large explicit budgets.
     let legacy_wr = cmp::min(
         if mem_budget > 16 * G {
             mem_budget / 4 / shards
