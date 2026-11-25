@@ -53,7 +53,7 @@ fn postcard_key<T: Serialize + ?Sized, R>(key: &T, f: impl FnOnce(&[u8]) -> R) -
     let mut buf = [0; 128];
     match postcard::to_slice(key, &mut buf) {
         Ok(bytes) => f(bytes),
-        Err(postcard::Error::SerializeBufferFull) => {
+        Err(postcard::Error::SerializeBufferFull | postcard::Error::CollectStrError) => {
             f(&postcard::to_allocvec(key).expect("vsdb: encode key"))
         }
         Err(e) => panic!("vsdb: encode key: {e}"),
@@ -353,3 +353,32 @@ ordered_ranges!(
     RangeToInclusive<E>,
     (Bound<E>, Bound<E>)
 );
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::Mapx;
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Deserialize)]
+    struct CollectStrKey(String);
+
+    impl Serialize for CollectStrKey {
+        fn serialize<S: serde::Serializer>(
+            &self,
+            serializer: S,
+        ) -> std::result::Result<S::Ok, S::Error> {
+            serializer.collect_str(&format_args!("{}", self.0))
+        }
+    }
+
+    #[test]
+    fn collect_str_key_over_128_bytes_falls_back_to_heap() {
+        let key = CollectStrKey("x".repeat(200));
+        let mut map = Mapx::<CollectStrKey, u64>::new();
+        map.insert(&key, &42);
+        assert_eq!(map.get(&key), Some(42));
+        assert!(map.contains_key(&key));
+        map.remove(&key);
+        assert_eq!(map.get(&key), None);
+    }
+}

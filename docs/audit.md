@@ -51,14 +51,6 @@
 
 ---
 
-### [MEDIUM] ende: postcard_key panics on Serialize::collect_str keys exceeding 128 bytes
-- **Where**: `strata/src/common/ende.rs` (`postcard_key`)
-- **What**: `postcard_key` encodes into `[0u8; 128]` via `postcard::to_slice` and only falls back to `postcard::to_allocvec` on `Err(postcard::Error::SerializeBufferFull)`. In `postcard`, overflowing a slice inside `Serializer::collect_str` (used by `Display`-backed `Serialize` types) returns `Err(postcard::Error::CollectStrError)` via `core::fmt::Error`, hitting `panic!("vsdb: encode key: {e}")`.
-- **Why**: Valid `KeyEnDe` keys using `collect_str` with encoded length `> 128` bytes panic on `Mapx` point/batch operations even though `encode_key()` (`postcard::to_io`) succeeds.
-- **Suggested fix**: Fall back to `postcard::to_allocvec(key).expect("vsdb: encode key")` on `CollectStrError` (or any `to_slice` error). Add a unit test in `strata/src/common/ende.rs` with a 200-byte `collect_str` key on `Mapx`. No migration impact.
-
----
-
 ### [MEDIUM] common/ende: postcard::from_bytes decoders ignore trailing bytes and truncate evolved values on write-back
 - **Where**: `strata/src/common/mod.rs` (`load_instance_meta`), `strata/src/common/ende.rs` (`<T as KeyEnDe>::decode_key`, `<T as ValueEnDe>::decode_value`)
 - **What**: `postcard::from_bytes` deserializes from the prefix of a slice without checking that the remainder is empty. Trailing bytes after a `VSTYPE04` byte-slice frame in `__instance_meta__`, non-canonical trailing bytes in `decode_key`, or appended fields written by a newer value struct version in `decode_value` are silently ignored.
