@@ -32,7 +32,10 @@ pub(crate) fn serialize_prefix_handle<T, S: Serializer>(
     serializer.serialize_bytes(&frame)
 }
 
-pub(crate) fn parse_prefix_handle<T>(bytes: &[u8]) -> Result<PrefixFrame<'_>> {
+pub(crate) fn parse_prefix_header<T>(
+    bytes: &[u8],
+    expected: Option<InstanceId>,
+) -> Result<(InstanceId, &[u8])> {
     let invalid = || VsdbError::Decode {
         detail: format!("invalid {} handle", std::any::type_name::<T>()),
     };
@@ -50,7 +53,28 @@ pub(crate) fn parse_prefix_handle<T>(bytes: &[u8]) -> Result<PrefixFrame<'_>> {
         u64::from_le_bytes(bytes[16..24].try_into().unwrap()),
         u64::from_le_bytes(bytes[24..32].try_into().unwrap()),
     );
-    Ok(PrefixFrame(open_raw(id)?, &bytes[36..]))
+    if let Some(expected) = expected
+        && id != expected
+    {
+        return Err(VsdbError::Decode {
+            detail: format!(
+                "metadata identity mismatch: requested {expected}, payload names {id}"
+            ),
+        });
+    }
+    Ok((id, &bytes[36..]))
+}
+
+pub(crate) fn parse_prefix_handle_checked<T>(
+    bytes: &[u8],
+    expected: Option<InstanceId>,
+) -> Result<PrefixFrame<'_>> {
+    let (id, extra) = parse_prefix_header::<T>(bytes, expected)?;
+    Ok(PrefixFrame(open_raw(id)?, extra))
+}
+
+pub(crate) fn parse_prefix_handle<T>(bytes: &[u8]) -> Result<PrefixFrame<'_>> {
+    parse_prefix_handle_checked::<T>(bytes, None)
 }
 
 /// Restores a validated raw handle inside a collection decoder.

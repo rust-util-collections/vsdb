@@ -75,9 +75,13 @@ impl<'de, T> Deserialize<'de> for Orphan<T> {
         D: serde::Deserializer<'de>,
     {
         crate::common::deserialize_prefix_handle::<Self, _, _>(deserializer, |frame| {
-            Ok(Self {
-                inner: crate::common::basic_inner(frame)?,
-            })
+            let inner: MapxOrdRawKey<T> = crate::common::basic_inner(frame)?;
+            if !SingleMap::raw(&inner).try_contains_key([])? {
+                return Err(crate::VsdbError::Corrupt {
+                    detail: "missing orphan value".into(),
+                });
+            }
+            Ok(Self { inner })
         })
     }
 }
@@ -124,6 +128,11 @@ where
     ///
     /// If an engine-level write fails.
     pub fn clone_in(&self, ns: &Namespace) -> Result<Self> {
+        if !self.raw().try_contains_key([])? {
+            return Err(crate::VsdbError::Corrupt {
+                detail: "missing orphan value".into(),
+            });
+        }
         Ok(Self {
             inner: self.inner.clone_in(ns)?,
         })
@@ -151,7 +160,14 @@ where
     }
 
     pub fn update<R>(&mut self, f: impl FnOnce(&mut T) -> R) -> Result<R> {
-        let mut guard = self.get_mut();
+        crate::common::ensure_writable(&self.namespace(), "value update")?;
+        let inner = self
+            .inner
+            .get_mut([])
+            .ok_or_else(|| crate::VsdbError::Corrupt {
+                detail: "missing orphan value".into(),
+            })?;
+        let mut guard = ValueMut { inner };
         let result = f(&mut guard);
         guard.commit()?;
         Ok(result)
@@ -200,7 +216,7 @@ where
     ///
     /// Returns the `instance_id` that should be passed to `from_meta`.
     pub fn save_meta(&self) -> Result<InstanceId> {
-        let id = self.instance_id();
+        let id = self.raw().try_instance_id()?;
         crate::common::save_instance_meta(id, self)?;
         Ok(id)
     }
@@ -215,7 +231,17 @@ where
     /// independently owned immutable handle.
     pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
         let id = instance_id.into();
-        crate::common::load_instance_meta_checked(id, Self::instance_id)
+        let id = InstanceId::new(id.map_id, id.ns.unwrap_or_default());
+        let bytes: Vec<u8> = crate::common::load_instance_meta(id)?;
+        let frame =
+            crate::common::parse_prefix_handle_checked::<Self>(&bytes, Some(id))?;
+        let inner: MapxOrdRawKey<T> = crate::common::basic_inner(frame)?;
+        if !SingleMap::raw(&inner).try_contains_key([])? {
+            return Err(crate::VsdbError::Corrupt {
+                detail: "missing orphan value".into(),
+            });
+        }
+        Ok(Self { inner })
     }
 }
 

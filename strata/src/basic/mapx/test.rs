@@ -114,12 +114,22 @@ fn test_save_and_from_meta() {
 
 #[test]
 fn test_from_meta_rejects_misaddressed_typed_payload() {
-    let a: Mapx<u32, String> = Mapx::new();
-    let b: Mapx<u32, String> = Mapx::new();
+    let ns1 = crate::common::Namespace::create().unwrap();
+    let ns2 = crate::common::Namespace::create().unwrap();
+    let ns2_id = ns2.id();
+    let a: Mapx<u32, String> = Mapx::new_in(&ns1);
+    let b: Mapx<u32, String> = Mapx::new_in(&ns2);
     let id = a.instance_id();
     crate::common::save_instance_meta(id, &b).unwrap();
+    drop(b);
+    ns2.close().unwrap();
 
-    assert!(Mapx::<u32, String>::from_meta(id).is_err());
+    assert!(matches!(
+        Mapx::<u32, String>::from_meta(id),
+        Err(crate::VsdbError::Decode { .. })
+    ));
+    // Rejecting a misaddressed handle must not reopen or leak the foreign namespace.
+    crate::common::Namespace::destroy(ns2_id).unwrap();
 }
 
 #[test]

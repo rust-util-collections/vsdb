@@ -109,6 +109,7 @@ where
     where
         K: OrderedKeyLookup<Q>,
     {
+        crate::common::ensure_writable(&self.namespace(), "value update")?;
         let Some(mut guard) = self.get_mut(key) else {
             return Ok(None);
         };

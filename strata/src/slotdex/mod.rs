@@ -487,12 +487,8 @@ where
         let id = instance_id.into();
         let id = InstanceId::new(id.map_id, id.ns.unwrap_or_default());
         let bytes: Vec<u8> = crate::common::load_instance_meta(id)?;
-        let frame = crate::common::parse_prefix_handle::<Self>(&bytes)?;
-        if frame.0.instance_id() != id {
-            return Err(VsdbError::Decode {
-                detail: "SlotDex metadata identity mismatch".into(),
-            });
-        }
+        let frame =
+            crate::common::parse_prefix_handle_checked::<Self>(&bytes, Some(id))?;
         Self::open_frame(frame)
     }
 

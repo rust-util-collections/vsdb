@@ -141,7 +141,7 @@ where
         let id = InstanceId::new(id.map_id, id.ns.unwrap_or_default());
         let frame = load_versioned_meta::<Self>(id)?;
         Self::open_frame(
-            crate::common::parse_prefix_handle::<Self>(&frame)?,
+            crate::common::parse_prefix_handle_checked::<Self>(&frame, Some(id))?,
             Some(id),
         )
     }

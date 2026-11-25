@@ -213,6 +213,7 @@ where
         key: impl AsRef<[u8]>,
         edit: impl FnOnce(&mut V) -> R,
     ) -> Result<Option<R>> {
+        crate::common::ensure_writable(&self.namespace(), "value update")?;
         let Some(mut guard) = self.get_mut(key) else {
             return Ok(None);
         };

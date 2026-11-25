@@ -168,20 +168,40 @@ fn read_only_reader_helper() {
         [u8; 32],
     ) = postcard::from_bytes(&state).unwrap();
 
-    let map = Mapx::<u64, String>::from_meta(map_id).unwrap();
+    let mut map = Mapx::<u64, String>::from_meta(map_id).unwrap();
     assert!(map.namespace().is_read_only());
     assert_eq!(Some("typed-value".to_owned()), map.get(&7));
     map.try_sync_wal().unwrap();
     map.namespace().try_sync_wal().unwrap();
     assert!(matches!(map.save_meta(), Err(VsdbError::ReadOnly { .. })));
+    assert!(matches!(
+        map.update(&999, |_| panic!("callback must not run")),
+        Err(VsdbError::ReadOnly { .. })
+    ));
+    assert!(matches!(
+        map.update(&7, |_| panic!("callback must not run")),
+        Err(VsdbError::ReadOnly { .. })
+    ));
 
     let mut orphan = Orphan::<TaggedValue>::from_meta(orphan_id).unwrap();
     orphan.try_sync_wal().unwrap();
+    assert!(matches!(
+        orphan.update(|_| panic!("callback must not run")),
+        Err(VsdbError::ReadOnly { .. })
+    ));
     {
         let guard = orphan.get_mut();
         assert_eq!(guard.0, 42);
     }
     let mut dag = DagMapRawKey::<TaggedValue>::from_meta(dag_id).unwrap();
+    assert!(matches!(
+        dag.update(b"missing", |_| panic!("callback must not run")),
+        Err(VsdbError::ReadOnly { .. })
+    ));
+    assert!(matches!(
+        dag.update(b"key", |_| panic!("callback must not run")),
+        Err(VsdbError::ReadOnly { .. })
+    ));
     {
         let guard = dag.get_mut(b"key").unwrap();
         assert_eq!(guard.0, 42);

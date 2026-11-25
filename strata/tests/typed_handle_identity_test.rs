@@ -103,10 +103,21 @@ fn saving_an_empty_typed_map_propagates_prefix_io_errors() {
         let base = std::path::Path::new(&path);
         vsdb::vsdb_configure(vsdb::VsdbOptions::new(base)).unwrap();
         let map = MapxOrd::<u64, u64>::new();
+        let mut raw_batch_map = vsdb::vsdb_core::MapxRaw::new();
         let ceiling = base.join("__SYSTEM__/__prefix_ceiling__");
         let saved = fs::read(&ceiling).unwrap();
         fs::remove_file(&ceiling).unwrap();
         fs::create_dir(&ceiling).unwrap();
+        // Untouched sync_wal is a no-op and must not force prefix allocation.
+        vsdb::vsdb_core::MapxRaw::new().sync_wal();
+        // Fallible batch and SlotDex construction propagate allocator I/O errors.
+        let mut batch = raw_batch_map.batch();
+        batch.insert(b"k", b"v");
+        assert!(matches!(batch.commit(), Err(vsdb::VsdbError::Io(_))));
+        assert!(matches!(
+            vsdb::SlotDex::<u64, u64>::new(64, false),
+            Err(vsdb::VsdbError::Io(_))
+        ));
         assert!(matches!(map.save_meta(), Err(vsdb::VsdbError::Io(_))));
         assert!(postcard::to_allocvec(&map).is_err());
         fs::remove_dir(&ceiling).unwrap();

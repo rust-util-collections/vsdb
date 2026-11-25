@@ -216,3 +216,25 @@ fn unchanged_guard_preserves_non_idempotent_encoding() {
     value.get_mut().0 = 8;
     assert_eq!(value.get_value().0, 8);
 }
+
+#[test]
+fn restore_rejects_missing_value_row() {
+    let mut o = Orphan::new(42u64);
+    let id = o.save_meta().unwrap();
+    let encoded = postcard::to_allocvec(&o).unwrap();
+    o.inner.remove([]);
+
+    assert!(matches!(
+        Orphan::<u64>::from_meta(id),
+        Err(crate::VsdbError::Corrupt { .. })
+    ));
+    assert!(matches!(
+        o.update(|v| *v += 1),
+        Err(crate::VsdbError::Corrupt { .. })
+    ));
+    assert!(matches!(
+        o.clone_in(&o.namespace()),
+        Err(crate::VsdbError::Corrupt { .. })
+    ));
+    assert!(postcard::from_bytes::<Orphan<u64>>(&encoded).is_err());
+}

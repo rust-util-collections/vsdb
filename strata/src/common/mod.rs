@@ -12,9 +12,11 @@ pub mod ende;
 mod frame;
 pub(crate) mod guard;
 mod reader;
+#[cfg(test)]
+pub(crate) use frame::parse_prefix_handle;
 pub(crate) use frame::{
-    PrefixFrame, basic_inner, deserialize_prefix_handle, open_raw, parse_prefix_handle,
-    serialize_prefix_handle,
+    PrefixFrame, basic_inner, deserialize_prefix_handle, open_raw,
+    parse_prefix_handle_checked, serialize_prefix_handle,
 };
 pub use reader::*;
 pub(crate) mod macros;
@@ -156,7 +158,21 @@ where
     T: DeserializeOwned,
 {
     let id = InstanceId::new(id.map_id, id.ns.unwrap_or(DEFAULT_NS_ID));
-    let value = load_instance_meta(id)?;
+    let ns = Namespace::open(id.ns.unwrap_or(DEFAULT_NS_ID))?;
+    let bytes = fs::read(ns.meta_path(id.map_id))?;
+    let (raw_frame, rest): (&[u8], _) = postcard::take_from_bytes(&bytes)?;
+    if !rest.is_empty() {
+        return Err(VsdbError::Decode {
+            detail: "trailing bytes in instance metadata".into(),
+        });
+    }
+    frame::parse_prefix_header::<T>(raw_frame, Some(id))?;
+    let (value, rest) = postcard::take_from_bytes(&bytes)?;
+    if !rest.is_empty() {
+        return Err(VsdbError::Decode {
+            detail: "trailing bytes in instance metadata".into(),
+        });
+    }
     let found = instance_id(&value);
     if found != id {
         return Err(error::VsdbError::Decode {
