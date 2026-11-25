@@ -4,11 +4,12 @@ use crate::common::{
     PREFIX_ALLOC_START, PREFIX_SIZE, Pre, PreBytes, RawKey, RawRangeBounds, RawValue,
     atomic_write_file, configured_mem_budget_mb, create_dir_all_durable,
     error::{Result, VsdbError, corrupt, from_mmdb_err},
-    vsdb_freeze_base_dir, vsdb_get_base_dir, vsdb_is_read_only,
+    mmdb_shard_format_options, vsdb_freeze_base_dir, vsdb_get_base_dir,
+    vsdb_is_read_only,
 };
 use mmdb::{
-    BidiIterator, BlockCachePool, CompressionType, DB, DbOptions, DurabilityMode,
-    ReadOptions, Snapshot, WriteBatch, WriteOptions,
+    BidiIterator, BlockCachePool, DB, DbOptions, DurabilityMode, ReadOptions, Snapshot,
+    WriteBatch, WriteOptions,
 };
 use parking_lot::{Mutex, RwLock};
 use smallvec::SmallVec;
@@ -1529,23 +1530,11 @@ fn mmdb_open(
     pool: &Arc<BlockCachePool>,
 ) -> Result<DB> {
     let read_only = vsdb_is_read_only();
-    let opts = DbOptions::default()
+    let opts = mmdb_shard_format_options()
         .with_create_if_missing(!read_only)
-        .with_num_levels(7)
-        .with_prefix_len(PREFIX_SIZE)
-        .with_compression_per_level(vec![
-            CompressionType::Lz4,
-            CompressionType::Lz4,
-            CompressionType::Zstd,
-            CompressionType::Zstd,
-            CompressionType::Zstd,
-            CompressionType::Zstd,
-            CompressionType::Zstd,
-        ])
         .with_write_buffer_size(sizing.write_buffer_size(shards))
         .with_max_immutable_memtables(IMMUTABLE_LIMIT)
         .with_block_cache(Some(Arc::clone(pool)))
-        .with_block_size(16 * 1024)
         .with_l0_compaction_trigger(4)
         .with_max_subcompactions(4)
         .with_max_background_compactions(1);
@@ -1688,7 +1677,7 @@ mod tests {
             .with_block_size(1024)
             .with_block_cache_capacity(0)
             .with_pin_l0_first_block_and_warm_index(false)
-            .with_compression(CompressionType::None);
+            .with_compression(mmdb::CompressionType::None);
         let db = DB::open(opts.clone(), &dir).unwrap();
         for i in 0..64u8 {
             db.put(&make_full_key(&prefix, &[i]), &[i; 256]).unwrap();

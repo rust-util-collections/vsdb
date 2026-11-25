@@ -1,6 +1,7 @@
 //! Cheap preflight for the pinned MMDB v5 format before any shard can recover
 //! writable. MMDB revalidates the full MANIFEST, WALs and SSTs during open.
 use super::{PREFIX_SIZE, Path, Read, Result, corrupt, fs, io};
+use crate::common::MMDB_SHARD_LEVELS;
 
 pub(super) fn check_shards(dir: &Path, shards: usize, complete: bool) -> Result<()> {
     for n in 0..shards {
@@ -66,7 +67,7 @@ pub(super) fn check_shards(dir: &Path, shards: usize, complete: bool) -> Result<
                 manifest.display()
             )));
         }
-        if header[15..19] != 7u32.to_le_bytes()
+        if header[15..19] != (MMDB_SHARD_LEVELS as u32).to_le_bytes()
             || header[19..] != (PREFIX_SIZE as u32).to_le_bytes()
         {
             return Err(corrupt(format!(

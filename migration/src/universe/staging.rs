@@ -16,6 +16,7 @@ use vsdb::{
     Result, VsdbError,
     common::{atomic_write_file, error::StorageErrorKind},
 };
+use vsdb_core::common::mmdb_shard_format_options;
 
 fn v5_error(error: mmdb::Error) -> VsdbError {
     use mmdb::ErrorKind;
@@ -33,12 +34,6 @@ fn v5_error(error: mmdb::Error) -> VsdbError {
         kind,
         source: Box::new(error),
     }
-}
-
-fn shard_options() -> mmdb::DbOptions {
-    mmdb::DbOptions::default()
-        .with_num_levels(7)
-        .with_prefix_len(8)
 }
 
 // Hash the logical stream in sorted order. Separate lengths distinguish
@@ -88,7 +83,7 @@ fn export_shard(staged_copy: &Path) -> Result<()> {
     )
     .map_err(mmdb_err)?;
     let temp = tempfile::tempdir_in(staged_copy.parent().expect("a shard has a parent"))?;
-    let target = mmdb::DB::open(shard_options(), temp.path()).map_err(v5_error)?;
+    let target = mmdb::DB::open(mmdb_shard_format_options(), temp.path()).map_err(v5_error)?;
     let mut expected = Rows::default();
     let mut stream = v4
         .iter_with_options(&mmdb_v4::ReadOptions {
@@ -110,10 +105,15 @@ fn export_shard(staged_copy: &Path) -> Result<()> {
 
     // The read-only v5 opener adopts the geometry stored in the MANIFEST.
     // Writable reopen checks the levels and prefix actually used by VSDB.
-    let reopened = mmdb::DB::open(shard_options().with_create_if_missing(false), temp.path())
-        .map_err(v5_error)?;
+    let reopened = mmdb::DB::open(
+        mmdb_shard_format_options().with_create_if_missing(false),
+        temp.path(),
+    )
+    .map_err(v5_error)?;
     let mut actual = Rows::default();
-    let mut check = reopened.iter().map_err(v5_error)?;
+    let mut check = reopened
+        .iter_with_options(&mmdb::ReadOptions::default().with_fill_cache(false))
+        .map_err(v5_error)?;
     for (key, value) in check.by_ref() {
         actual.observe(&key, &value);
     }
@@ -605,6 +605,56 @@ mod tests {
     }
 
     #[test]
+    fn exported_bottom_level_uses_the_runtime_compression() {
+        let tmp = tempfile::tempdir().unwrap();
+        let shard = tmp.path().join("shard");
+        let old = mmdb_v4::DB::open(
+            mmdb_v4::DbOptions {
+                prefix_len: 8,
+                ..Default::default()
+            },
+            &shard,
+        )
+        .unwrap();
+        let value = [0xc5; 2048];
+        for index in 0u64..512 {
+            old.put(&index.to_be_bytes(), &value).unwrap();
+        }
+        old.close().unwrap();
+        drop(old);
+        export_shard(&shard).unwrap();
+        let size: u64 = fs::read_dir(&shard)
+            .unwrap()
+            .filter_map(|entry| {
+                let entry = entry.unwrap();
+                (entry
+                    .path()
+                    .extension()
+                    .is_some_and(|suffix| suffix == "sst"))
+                .then(|| entry.metadata().unwrap().len())
+            })
+            .sum();
+        let db = mmdb::DB::open(
+            mmdb_shard_format_options().with_create_if_missing(false),
+            &shard,
+        )
+        .unwrap();
+        assert!(
+            db.get_property("num-files-at-level6")
+                .unwrap()
+                .parse::<usize>()
+                .unwrap()
+                > 0
+        );
+        assert_eq!(db.get(&511u64.to_be_bytes()).unwrap().unwrap(), value);
+        assert!(
+            size > 0 && size < (512 * value.len() / 4) as u64,
+            "staged SST bytes: {size}"
+        );
+        db.close().unwrap();
+    }
+
+    #[test]
     fn inventory_rejects_repeated_directory_identity_and_generation_parent() {
         let tmp = tempfile::tempdir().unwrap();
         let input = tmp.path().join("input");
@@ -714,7 +764,11 @@ mod tests {
         assert!(published.join("base").join(HEADER).is_file());
         assert!(stage_universe(&source, &published).is_err());
         let shard = published.join("base/mmdb/shard_00");
-        let db = mmdb::DB::open(shard_options().with_create_if_missing(false), shard).unwrap();
+        let db = mmdb::DB::open(
+            mmdb_shard_format_options().with_create_if_missing(false),
+            shard,
+        )
+        .unwrap();
         db.close().unwrap();
         assert!(!source.join(HEADER).exists());
     }
