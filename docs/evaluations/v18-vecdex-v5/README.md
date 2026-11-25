@@ -42,9 +42,8 @@ counter definitions and the differing SST encodings limit comparisons
 of work per acquisition. The query timing includes all read and compute
 steps, and this measurement does not isolate the time of the format change.
 A separate width-eight run showed a 10.42% paired gain against the
-experimental pinned-scalar control. A fresh 30,000-query repeat compares
-that intermediate width with the retained production source before any
-adoption decision. [Intermediate-width and upgrade observations](results/secondary.csv)
+experimental pinned-scalar control. The independent confirmation below uses the retained production scalar
+source as its reference. [Intermediate-width and upgrade observations](results/secondary.csv)
 
 On a singleton graph, five independent pairs with 100,000 queries per
 process gave a −0.50% paired change for the width-32 candidate, with a
@@ -94,10 +93,13 @@ and a paired median gain of −0.48% (−1.49% to +0.57%, two favorable pairs,
 per query and did not reach the latency threshold. Keep the ordinary
 single-view scoring path. [Distance-cache comparison](results/distance-cache.csv)
 
-The targeted width-eight comparison uses a fresh set of seeds (361127–361131)
-and compares the candidate against the retained production scalar path, with
-its own five independent A/A pairs. Use the same 10% minimum, variation and
-direction rules for its 30,000-query runs.
+The width-eight confirmation used fresh seeds 361127–361131, 30,000
+queries per process, the retained production scalar reference and five
+independent A/A pairs. All five A/B pairs improved. Median run p99 was
+253.18 µs for scalar and 230.11 µs for width eight. The 9.15% paired
+median gain (5.18–14.63%) fell below the 10% target and the 19.29%
+maximum A/A difference. Peak backing capacity for one vector group
+was 133,911 bytes. Retain scalar reads for this release. [Confirmation trials](results/width8-repeat.csv) · [Width-eight pin diagnostics](results/pins-8.txt)
 
 ## Reproduction on Linux
 
@@ -137,12 +139,22 @@ for regime in warm secondary device device-width8 landed distance-cache; do
 done
 python3 "$d/trials.py" "$s/bin" "$s" "$s/results/singleton.csv" singleton --samples 100000 --cpus 4
 python3 "$d/trials.py" "$s/bin" "$s" "$s/results/width8-repeat.csv" width8-repeat --samples 30000 --seed 361126 --cpus 4
+python3 "$d/rss.py" "$s/bin" "$s" "$s/results/rss.csv" --cpus 4 --lock "$s/timing.lock"
 python3 "$d/summarize.py" "$s/results"
 for width in 1 8 32; do
     python3 "$d/build.py" . "$s/bin" dd07a00 "$width" --pin-diagnostics
     taskset -c 4 "$s/bin/$width-pins" run "$s/v5-warm" warm 261127 1000
 done
 ```
+
+The separate RSS runs launch the same release executables and fixtures
+under GNU time. It records maximum resident set size in KiB for the
+whole process lifetime. The collector polls the probe's own `VmHWM` as
+a second kernel observation, independent of the cold-arm advisory helper.
+These shorter resource traces use three separate seeds, 1,000 warm or
+500 cold queries each. RSS includes the database, cache, harness, query
+materialization and warm-up. Returned SST allocation capacity has its
+own diagnostic runs.
 
 The warm-up performs scalar lookups over every graph row. Result digests
 include the ordered keys and IEEE-754 distance bits, and nearest-self counts
