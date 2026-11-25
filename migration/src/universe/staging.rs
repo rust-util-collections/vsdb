@@ -655,6 +655,50 @@ mod tests {
     }
 
     #[test]
+    fn explicit_namespace_rejects_nonempty_stale_derived_placement() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("base");
+        let old_root = base.join("__NAMESPACES__/0000000000000001");
+        let generation = tmp.path().join("new");
+        fs::create_dir_all(base.join("__SYSTEM__")).unwrap();
+        fs::create_dir_all(&old_root).unwrap();
+        fs::write(base.join(HEADER), super::super::header(401)).unwrap();
+        fs::write(base.join("__SYSTEM__/format_version"), b"18").unwrap();
+        fs::write(
+            base.join(super::super::CEILING),
+            super::super::FLOOR.to_le_bytes(),
+        )
+        .unwrap();
+        let record = Record {
+            id: 1,
+            path: Some(tmp.path().join("other").to_str().unwrap().to_string()),
+            shards: 2,
+            mem_budget_mb: None,
+            created_at: 0,
+        };
+        let mut bytes = b"VSNREG02".to_vec();
+        postcard::to_io(
+            &Registry {
+                next_id: 2,
+                entries: vec![(record, State::Pending)],
+            },
+            &mut bytes,
+        )
+        .unwrap();
+        fs::write(base.join(REG), bytes).unwrap();
+        fs::write(old_root.join("unconverted-sidecar"), b"protected").unwrap();
+        assert!(stage_universe(&base, &generation).is_err());
+        assert!(!generation.exists());
+        assert_eq!(
+            fs::read(old_root.join("unconverted-sidecar")).unwrap(),
+            b"protected"
+        );
+        fs::remove_file(old_root.join("unconverted-sidecar")).unwrap();
+        stage_universe(&base, &generation).unwrap();
+        assert!(!generation.join("placements/0000000000000001").exists());
+    }
+
+    #[test]
     fn inventory_rejects_repeated_directory_identity_and_generation_parent() {
         let tmp = tempfile::tempdir().unwrap();
         let input = tmp.path().join("input");

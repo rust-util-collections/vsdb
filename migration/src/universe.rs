@@ -202,6 +202,12 @@ fn validate_placement(base: &Path, reg: &Plan) -> Result<()> {
 
 fn validate_namespace_residue(base: &Path, reg: &Plan) -> Result<()> {
     let registered: HashSet<_> = reg.entries.iter().map(|(r, _)| r.id).collect();
+    let derived: HashSet<_> = reg
+        .entries
+        .iter()
+        .filter(|(rec, _)| rec.path.is_none())
+        .map(|(rec, _)| rec.id)
+        .collect();
     for (dir, sidecars) in [
         (base.join(STATES), true),
         (base.join("__NAMESPACES__"), false),
@@ -235,7 +241,14 @@ fn validate_namespace_residue(base: &Path, reg: &Plan) -> Result<()> {
             if (sidecars && !ty.is_file()) || (!sidecars && !ty.is_dir()) {
                 return Err(corrupt("unexpected namespace artifact type"));
             }
-            if !registered.contains(&id) {
+            // A relocated explicit namespace may have an empty placeholder
+            // at its old derived path. A second populated tree is ambiguous.
+            let owned = if sidecars {
+                registered.contains(&id)
+            } else {
+                derived.contains(&id)
+            };
+            if !owned {
                 // Publishing the burnt ID precedes publishing a pending record
                 // in v17. A lone P can therefore be a normal interrupted create.
                 // A live tree or an established orphan cannot be distinguished
