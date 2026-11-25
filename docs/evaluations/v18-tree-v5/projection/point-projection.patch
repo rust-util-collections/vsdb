@@ -1,0 +1,220 @@
+diff --git a/strata/src/basic/persistent_btree/mod.rs b/strata/src/basic/persistent_btree/mod.rs
+index 0027ccf..8a489f3 100644
+--- a/strata/src/basic/persistent_btree/mod.rs
++++ b/strata/src/basic/persistent_btree/mod.rs
+@@ -450,15 +450,22 @@ pub(crate) struct RootLease {
+
+ impl RootLease {
+     pub(crate) fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
+-        lookup(self.root, key, |id| {
+-            read_cached_reader(&self.runtime, &self.nodes, id)
+-        })
++        lookup(
++            self.root,
++            key,
++            |id| read_cached_reader(&self.runtime, &self.nodes, id),
++            LeafStore::Reader(&self.nodes),
++        )
+     }
+
+     pub(crate) fn contains_key(&self, key: &[u8]) -> bool {
+-        find_leaf(self.root, key, |id| {
+-            read_cached_reader(&self.runtime, &self.nodes, id)
+-        })
++        project_leaf(
++            self.root,
++            key,
++            |id| read_cached_reader(&self.runtime, &self.nodes, id),
++            LeafStore::Reader(&self.nodes),
++            |_, _| (),
++        )
+         .is_some()
+     }
+
+@@ -573,31 +580,71 @@ fn read_cached_map<'a>(
+     }
+ }
+
++// Disk leaves need only the selected slot. The decoder finishes while the
++// MMDB backing remains pinned. A writer can also own an unpublished page.
++enum LeafStore<'a> {
++    Map(&'a MapxRaw, Option<&'a HashMap<NodeId, Vec<u8>>>),
++    Reader(&'a MapxRawReader),
++}
++
++impl LeafStore<'_> {
++    fn project<T>(self, id: NodeId, read: impl FnOnce(&[u8]) -> T) -> T {
++        #[cfg(test)]
++        NODE_READS.with(|c| c.set(c.get() + 1));
++        if let Self::Map(_, Some(pending)) = &self
++            && let Some(bytes) = pending.get(&id)
++        {
++            return read(bytes);
++        }
++        let key = object_key(id);
++        let decode = |raw: &[u8]| Ok(read(raw));
++        match self {
++            Self::Map(nodes, _) => nodes.try_get_with(key, decode),
++            Self::Reader(nodes) => nodes.try_get_with(key, decode),
++        }
++        .unwrap_or_else(|error| {
++            panic!("PersistentBTree: failed to read leaf {id}: {error}")
++        })
++        .unwrap_or_else(|| panic!("PersistentBTree: missing object {id}"))
++    }
++}
++
+ fn lookup<'a>(
+     root: NodeId,
+     key: &[u8],
+     object: impl Fn(NodeId) -> PageBytes<'a>,
++    leaves: LeafStore<'_>,
+ ) -> Option<Vec<u8>> {
+-    let (raw, i) = find_leaf(root, key, &object)?;
+-    let page = NodeView::open(&raw).expect("valid leaf");
+-    Some(page.value(i, |id| object(id).into_vec()))
++    let value = project_leaf(root, key, &object, leaves, |page, i| page.leaf_val(i))?;
++    // Release the leaf pin before loading a separate overflow object.
++    Some(match value {
++        LeafVal::Bytes(bytes) => bytes,
++        LeafVal::Blob(id) => object(id).into_vec(),
++    })
+ }
+
+-fn find_leaf<'a>(
+-    mut root: NodeId,
++fn project_leaf<'a, T>(
++    mut id: NodeId,
+     key: &[u8],
+     object: impl Fn(NodeId) -> PageBytes<'a>,
+-) -> Option<(PageBytes<'a>, usize)> {
+-    while root != EMPTY_ROOT {
+-        let raw = object(root);
++    leaves: LeafStore<'_>,
++    hit: impl FnOnce(NodeView<'_>, usize) -> T,
++) -> Option<T> {
++    if id == EMPTY_ROOT {
++        return None;
++    }
++    while id & CLASS_MASK == 0 {
++        let raw = object(id);
+         let page = NodeView::open(&raw).expect("invalid B+ tree page");
+-        let i = page.lower_bound(key, !page.leaf);
+-        if page.leaf {
+-            return (i < page.len && page.key(i) == key).then_some((raw, i));
+-        }
+-        root = page.child(i);
+-    }
+-    None
++        assert!(!page.leaf, "invalid internal B+ tree page");
++        id = page.child(page.lower_bound(key, true));
++    }
++    leaves.project(id, |raw| {
++        let page = NodeView::open(raw).expect("invalid B+ tree page");
++        assert!(page.leaf, "invalid B+ tree leaf");
++        let i = page.lower_bound(key, false);
++        (i < page.len && page.key(i) == key).then(|| hit(page, i))
++    })
+ }
+
+ #[derive(Debug)]
+@@ -949,15 +996,22 @@ impl PersistentBTree {
+     }
+
+     pub(crate) fn get_committed(&self, root: NodeId, key: &[u8]) -> Option<Vec<u8>> {
+-        lookup(root, key, |id| {
+-            read_cached_map(&self.runtime, &self.nodes, id)
+-        })
++        lookup(
++            root,
++            key,
++            |id| read_cached_map(&self.runtime, &self.nodes, id),
++            LeafStore::Map(&self.nodes, None),
++        )
+     }
+
+     pub(crate) fn contains_committed(&self, root: NodeId, key: &[u8]) -> bool {
+-        find_leaf(root, key, |id| {
+-            read_cached_map(&self.runtime, &self.nodes, id)
+-        })
++        project_leaf(
++            root,
++            key,
++            |id| read_cached_map(&self.runtime, &self.nodes, id),
++            LeafStore::Map(&self.nodes, None),
++            |_, _| (),
++        )
+         .is_some()
+     }
+
+@@ -1117,13 +1171,25 @@ impl PersistentBTree {
+     ///
+     /// Returns `None` if the tree is empty or the key is absent.
+     pub fn get(&self, root: NodeId, key: &[u8]) -> Option<Vec<u8>> {
+-        lookup(root, key, |id| self.object(id))
++        lookup(
++            root,
++            key,
++            |id| self.object(id),
++            LeafStore::Map(&self.nodes, Some(&self.pending)),
++        )
+     }
+
+     /// Returns `true` if `key` exists in the tree rooted at `root`.
+     #[inline]
+     pub fn contains_key(&self, root: NodeId, key: &[u8]) -> bool {
+-        find_leaf(root, key, |id| self.object(id)).is_some()
++        project_leaf(
++            root,
++            key,
++            |id| self.object(id),
++            LeafStore::Map(&self.nodes, Some(&self.pending)),
++            |_, _| (),
++        )
++        .is_some()
+     }
+
+     // =================================================================
+diff --git a/strata/src/basic/persistent_btree/test.rs b/strata/src/basic/persistent_btree/test.rs
+index c94b90d..9075915 100644
+--- a/strata/src/basic/persistent_btree/test.rs
++++ b/strata/src/basic/persistent_btree/test.rs
+@@ -1815,3 +1815,38 @@ mod diff_merge {
+         assert!(small.used_bytes() <= 64 * 1024);
+     }
+ }
++
++#[test]
++fn projected_leaf_preserves_pending_pages_blobs_and_owned_results() {
++    let mut tree = PersistentBTree::new();
++    let payload = vec![0x5c; 4096];
++    let blob = tree.alloc_object(BLOB, payload.clone(), Vec::new());
++    let root = tree.alloc(&Node::Leaf {
++        keys: vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()],
++        values: vec![
++            LeafVal::Bytes(Vec::new()),
++            LeafVal::Blob(blob),
++            LeafVal::Bytes(b"inline".to_vec()),
++        ],
++    });
++    assert!(tree.pending.contains_key(&root) && tree.pending.contains_key(&blob));
++    for _ in 0..2 {
++        assert_eq!(tree.get(root, b"a").as_deref(), Some(&[][..]));
++        assert_eq!(tree.get(root, b"b"), Some(payload.clone()));
++        let owned = tree.get(root, b"c").unwrap();
++        assert!(tree.contains_key(root, b"b"));
++        assert!(!tree.contains_key(root, b"no"));
++        assert!(tree.get(root, b"no").is_none());
++        tree.flush_pending();
++        assert_eq!(owned, b"inline");
++        assert!(!tree.pending.contains_key(&root));
++    }
++    assert_eq!(tree.get_committed(root, b"b"), Some(payload.clone()));
++    assert!(tree.contains_committed(root, b"a"));
++    tree.acquire_node(root);
++    let lease = tree.lease_root(|_| Ok(root)).unwrap();
++    tree.release_node(root);
++    assert_eq!(lease.get(b"b"), Some(payload));
++    assert!(lease.contains_key(b"a"));
++    assert!(!lease.contains_key(b"no"));
++}

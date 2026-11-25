@@ -7,6 +7,10 @@ the 28.66% maximum difference between matched control runs. The source
 and mechanism oracle are preserved as patches for future workload-specific
 evaluation.
 
+A separate [borrowed leaf projection experiment](projection/README.md)
+tested the actual point-read regression with 250,000 calls per class per
+process and a separate allocator probe. It retained the production iterator.
+
 The candidate keeps a leaf's checked slot count and type with the
 immutable page bytes in a range iterator. A point hit consumes its value
 before returning from the lookup, while the already-checked leaf view is

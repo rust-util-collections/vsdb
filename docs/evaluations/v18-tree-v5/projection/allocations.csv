@@ -1,0 +1,13 @@
+binary,class,calls,alloc_or_reallocs,requested_bytes,checksum
+v4,get-hit,8192,41033,14673624,1040384
+v4,get-miss,8192,32857,14446680,0
+v4,contains-hit,8192,32844,14419744,8192
+v4,contains-miss,8192,32857,14446680,0
+control,get-hit,8192,16557,14268472,1040384
+control,get-miss,8192,8371,14018760,0
+control,contains-hit,8192,8359,13993896,8192
+control,contains-miss,8192,8365,14006328,0
+candidate,get-hit,8192,8370,630960,1040384
+candidate,get-miss,8192,185,383320,0
+candidate,contains-hit,8192,172,356384,8192
+candidate,contains-miss,8192,176,364672,0

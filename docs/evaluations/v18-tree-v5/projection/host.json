@@ -1,0 +1,37 @@
+{
+  "date": "2026-11-26",
+  "kernel": "7.0.0-44-generic",
+  "architecture": "x86_64",
+  "cpu_model": "AMD Ryzen 9 5900X 12-Core Processor",
+  "affinity": "4",
+  "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0\nLLVM version: 23.1.5",
+  "filesystem": "/dev/nvme1n1 btrfs rw,noatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvolid=5,subvol=/",
+  "compression_property": "inherits mount setting",
+  "rows": 32768,
+  "value_bytes": 32,
+  "key_bytes": 8,
+  "point_queries_per_process_per_class": 250000,
+  "scan_queries_per_process": 10000,
+  "scan_rows": 128,
+  "budget_mib": 2048,
+  "shards": 16,
+  "v5_engine_revision": "255015ad0f488f09c7985736a903d3171876bcaf",
+  "v4_engine": "4.3.15",
+  "v5_base": "8ce01f07ad48503f20ceba15b90ba8c4116b6747",
+  "v4_base": "6ddaed901901910537d0cf280141218380c5665d",
+  "binary_sha256": {
+    "control": "67fca534b8bcd4c76330b6123e2dcb73bdde11158b2d7213c3f3cf67295078ee",
+    "candidate": "c675cc9b2084eca4118dc611fa155f78fd1721ef427449ce6c99f63931ef2bf5",
+    "v4": "db2120ff7a090eed23d9fd6bc0708710569ddd34990e66ea7eb945990bf3920b"
+  },
+  "input_sha256": "ca91e94bd993e70f0dfd3240519fa37280f7b3f0b46bb1386be30da88c0a280d",
+  "candidate": "9e0c6db4ea7af99400c7f3088b50a1eb212de7ca",
+  "point_classes": [
+    "get hit",
+    "get miss",
+    "contains hit",
+    "contains miss"
+  ],
+  "point_queries_in_extension_if_needed": 1000000,
+  "allocation_calls_per_class": 8192
+}
