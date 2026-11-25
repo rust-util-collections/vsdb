@@ -9,10 +9,30 @@ budget, a 256 MiB limit in each evictable pool store, and VSDB's normal
 16 KiB SST blocks with per-level LZ4/Zstd. Both v5 builds use an immutable
 limit of four. The v4 writer flushes synchronously.
 
+## Allocation results
+
+The final live/snapshot allocation comparison uses VSDB `d9f00f4`. Each
+cell is the median of five fresh-process per-call readings for a 4 KiB
+value. Callers kept the same data and returned the same checksums in all
+arms. [Raw runs](allocations.jsonl.gz) · [Counts and requested bytes](allocations.csv) · [Binary and source fingerprints](builds.json)
+
+| Operation | v4 requested bytes/call | v5 requested bytes/call |
+|---|---:|---:|
+| Live existence | 4,189.6 | 42.5 |
+| Live borrowed decode | 4,191.0 | 44.6 |
+| Snapshot existence | 4,185.6 | 40.6 |
+| Snapshot borrowed decode | 4,185.3 | 40.6 |
+| Snapshot owned hit | 4,191.6 | 4,140.5 |
+| Snapshot scan, consuming each row | 4,127.6 | 7.5 |
+
+V5 removes the intermediate value copy from both existence checks and
+both immediate decoders. Each owned hit still allocates space for the
+result. The v5 scan lends the current key and value until it advances.
+
 ## Workloads
 
 The allocation probe warms 2,048 existing 4,096-byte values, then counts
-successful operations on that same snapshot. Five fresh processes per adapter
+successful live and snapshot operations against the same unchanged rows. Five fresh processes per adapter
 report caller-thread allocation requests and requested bytes. The counted
 work includes lookup and result consumption. The scan includes cursor
 construction. Existence returns a boolean, decode consumes one byte and the
@@ -77,4 +97,8 @@ python3 "$d/build.py" /tmp/adapter-v4 "$work/build-v4-alloc" "$work/bin/v4-alloc
 python3 "$d/build.py" /tmp/adapter-v5 "$work/build-v5-alloc" "$work/bin/v5-alloc" --v5 --allocations
 python3 "$d/run.py" "$work/bin" "$work/runs.jsonl.gz" --scratch "$work/scratch" --lock "$work/timing.lock" --cpus 4-7
 python3 "$d/summarize.py" "$work/runs.jsonl.gz" > "$work/summary.csv"
+git worktree add --detach /tmp/adapter-v5-live d9f00f4
+python3 "$d/build.py" /tmp/adapter-v5-live "$work/build-v5-live-alloc" "$work/bin/v5-alloc" --v5 --allocations
+python3 "$d/run.py" "$work/bin" "$work/allocations.jsonl.gz" --scratch "$work/scratch" --lock "$work/timing.lock" --allocations-only
+python3 "$d/summarize.py" "$work/allocations.jsonl.gz" --allocations-only
 ```

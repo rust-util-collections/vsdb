@@ -1,0 +1,13 @@
+operation,binary,processes,calls_per_process,allocations_per_call,requested_bytes_per_call
+decode,v4-alloc,5,2048,4.012,4185.3
+decode,v5-alloc,5,2048,0.022,40.6
+exists,v4-alloc,5,2048,4.027,4185.6
+exists,v5-alloc,5,2048,0.026,40.6
+live-decode,v4-alloc,5,2048,4.09,4191.0
+live-decode,v5-alloc,5,2048,0.109,44.6
+live-exists,v4-alloc,5,2048,4.149,4189.6
+live-exists,v5-alloc,5,2048,0.144,42.5
+owned-hit,v4-alloc,5,2048,4.019,4191.6
+owned-hit,v5-alloc,5,2048,1.025,4140.5
+scan,v4-alloc,5,2048,2.01,4127.6
+scan,v5-alloc,5,2048,0.012,7.5

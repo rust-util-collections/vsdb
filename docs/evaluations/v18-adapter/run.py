@@ -21,6 +21,7 @@ p.add_argument("--cpus", default="4-7")
 p.add_argument("--repetitions", type=int, default=5)
 p.add_argument("--ops", type=int, default=10_000)
 p.add_argument("--seconds", type=int, default=4)
+p.add_argument("--allocations-only", action="store_true", help="repeat only the live and snapshot allocation comparisons")
 a = p.parse_args()
 if a.repetitions < 5 or a.ops < 10_000 or a.ops % 8 or a.seconds < 1:
     p.error("use at least five independent repetitions, 10,000 foreground operations (multiple of eight) and a positive duration")
@@ -75,6 +76,8 @@ with gzip.open(a.output, "xt") as out:
     for i in range(5):
         for binary in (["v4-alloc","v5-alloc"] if i%2==0 else ["v5-alloc","v4-alloc"]):
             trial(binary,["allocations"],"allocations",round=i+1)
+    if a.allocations_only:
+        raise SystemExit(0)
     rates={}
     for placement in ["hot","all"]:
         pilot=[trial(b,["memory",placement,20261126,0,4096,2000],"calibration",placement=placement) for b in ["v5-16m","v5","v4"]]

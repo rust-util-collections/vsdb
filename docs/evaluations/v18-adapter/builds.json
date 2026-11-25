@@ -1,0 +1,65 @@
+{
+  "v4": {
+    "vsdb_revision": "6ddaed901901910537d0cf280141218380c5665d",
+    "mmdb": "4.3.15",
+    "binary_sha256": "ee77f36159d43ea7b0ff4ff95df73eaf898f69cdc5f44236e4dc131e554261f1",
+    "cargo_lock_sha256": "f77848997a78716bbe1bc014d85f0baa09a14a706e4b6d3019a12a9137526b1b",
+    "driver_sha256": "e5ec48da961e8f1eb2902dbd08c158cc39e7710ce0dd74c71de5e46a26397244",
+    "allocation_module_sha256": null,
+    "patch_sha256": null
+  },
+  "v5": {
+    "vsdb_revision": "b5f3153a191decd2f8895f39336a0910d6e735d1",
+    "mmdb": "255015ad0f488f09c7985736a903d3171876bcaf",
+    "binary_sha256": "1786f70ada92244109cdb9e5d7d21d4a0bf1508812d73b83459fb94146e6bd6b",
+    "cargo_lock_sha256": "fe240aadd6b019b1c11438c73f94a7d6d37961c9c7b796215a6105c6a49799e7",
+    "driver_sha256": "e5ec48da961e8f1eb2902dbd08c158cc39e7710ce0dd74c71de5e46a26397244",
+    "allocation_module_sha256": null,
+    "patch_sha256": null
+  },
+  "v5-16m": {
+    "vsdb_revision": "b5f3153a191decd2f8895f39336a0910d6e735d1",
+    "mmdb": "255015ad0f488f09c7985736a903d3171876bcaf",
+    "binary_sha256": "adeea8751bd63c9a52d58f3fc71cbfb39ab194b64268352f34f66b4fc834cf65",
+    "cargo_lock_sha256": "fe240aadd6b019b1c11438c73f94a7d6d37961c9c7b796215a6105c6a49799e7",
+    "driver_sha256": "e5ec48da961e8f1eb2902dbd08c158cc39e7710ce0dd74c71de5e46a26397244",
+    "allocation_module_sha256": null,
+    "patch_sha256": "48905856a4fe80b87a1d2cc2990142817bac37ab18e39a5afd2742a51703dfec"
+  },
+  "v4-alloc": {
+    "vsdb_revision": "6ddaed901901910537d0cf280141218380c5665d",
+    "mmdb": "4.3.15",
+    "binary_sha256": "dc71c99972bf0140025ac5b1ad7af25a47eb4ac72576d6f6dff2662f388704d4",
+    "cargo_lock_sha256": "f77848997a78716bbe1bc014d85f0baa09a14a706e4b6d3019a12a9137526b1b",
+    "driver_sha256": "e5ec48da961e8f1eb2902dbd08c158cc39e7710ce0dd74c71de5e46a26397244",
+    "allocation_module_sha256": "69eae0e548ce6c6ba22b97cf5dc02306d1ec0df7bebac9613f20f0d7e07654d3",
+    "patch_sha256": null
+  },
+  "v5-alloc": {
+    "vsdb_revision": "b5f3153a191decd2f8895f39336a0910d6e735d1",
+    "mmdb": "255015ad0f488f09c7985736a903d3171876bcaf",
+    "binary_sha256": "f7f6854066cdf4bc594c239796b72b409f99678cdfa3c3141b1ea3eca95f39ce",
+    "cargo_lock_sha256": "fe240aadd6b019b1c11438c73f94a7d6d37961c9c7b796215a6105c6a49799e7",
+    "driver_sha256": "e5ec48da961e8f1eb2902dbd08c158cc39e7710ce0dd74c71de5e46a26397244",
+    "allocation_module_sha256": "69eae0e548ce6c6ba22b97cf5dc02306d1ec0df7bebac9613f20f0d7e07654d3",
+    "patch_sha256": null
+  },
+  "v4-live-alloc": {
+    "vsdb_revision": "6ddaed901901910537d0cf280141218380c5665d",
+    "mmdb": "4.3.15",
+    "binary_sha256": "a235dc31cccfc52630c07f9aea1186cb6f280023850a3b2c3d6edcb83f0c918a",
+    "cargo_lock_sha256": "f77848997a78716bbe1bc014d85f0baa09a14a706e4b6d3019a12a9137526b1b",
+    "driver_sha256": "e5ec48da961e8f1eb2902dbd08c158cc39e7710ce0dd74c71de5e46a26397244",
+    "allocation_module_sha256": "bc33b7b0b7d6c28178994b5ed1232606642fdbd1809f0500170c0985b538b0b2",
+    "patch_sha256": null
+  },
+  "v5-live-alloc": {
+    "vsdb_revision": "d9f00f4ba74edb58e1705c20d6ca9714b7e29319",
+    "mmdb": "255015ad0f488f09c7985736a903d3171876bcaf",
+    "binary_sha256": "b50acb2334cc8acd0200efb806c5212345614aabec79a171aec55a551a5eccf7",
+    "cargo_lock_sha256": "245470626e6d335a7d248814837e82fc7852f55c7ccee3c7c7baeb32ba19f1ef",
+    "driver_sha256": "e5ec48da961e8f1eb2902dbd08c158cc39e7710ce0dd74c71de5e46a26397244",
+    "allocation_module_sha256": "bc33b7b0b7d6c28178994b5ed1232606642fdbd1809f0500170c0985b538b0b2",
+    "patch_sha256": null
+  }
+}

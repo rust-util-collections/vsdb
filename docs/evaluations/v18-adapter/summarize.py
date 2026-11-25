@@ -17,6 +17,40 @@ def load_ok(r):
     return all(r[f"{op}_{when}_debt"] <= max(floor, 2, r[op]//100)
                for op, floor in (("small", 1), ("bulk", 16)) for when in ("half", "end"))
 
+def allocation_table(records):
+    runs = [row for row in records if row["section"] == "allocations"]
+    expected = {(i, binary) for i in range(1, 6) for binary in ("v4-alloc", "v5-alloc")}
+    require(len(runs) == 10 and {(r["round"], r["binary"]) for r in runs} == expected, "missing allocation trial")
+    sample_sets = set()
+    by_case = defaultdict(list)
+    for r in runs:
+        ops = {v["case"]: v for v in r["operations"]}
+        # The original packet predates the extra live-map controls.
+        required = {"exists", "scan", "owned-hit", "decode"}
+        require(set(ops) in (required, required | {"live-exists", "live-decode"}), "missing operation")
+        require(len(ops) == len(r["operations"]), "duplicate operation")
+        sample_sets.add(frozenset(ops))
+        checksums = {"exists": 2048, "owned-hit": 261120, "decode": 261120, "scan": 277504,
+                     "live-exists": 2048, "live-decode": 261120}
+        for key, op in ops.items():
+            require(op["calls"] == 2048 and op["checksum"] == checksums[key], "changed allocation fixture")
+            by_case[key, r["binary"]].append((op["count"] / op["calls"], op["bytes"] / op["calls"]))
+    require(len(sample_sets) == 1, "source operations differ between allocation runs")
+    return by_case
+
+def display_allocations(path, output):
+    with gzip.open(path, "rt") as f:
+        rows = [json.loads(line) for line in f]
+    require(rows[0]["section"] == "metadata" and all(r["section"] == "allocations" for r in rows[1:]),
+            "unexpected allocation packet sections")
+    data = allocation_table(rows[1:])
+    require(("live-exists", "v5-alloc") in data, "expected the final live-map comparisons")
+    table = csv.writer(output, lineterminator="\n")
+    table.writerow(["operation", "binary", "processes", "calls_per_process", "allocations_per_call", "requested_bytes_per_call"])
+    for (case, binary), samples in sorted(data.items()):
+        table.writerow([case, binary, len(samples), 2048, round(median(x for x, _ in samples), 3),
+                        round(median(x for _, x in samples), 1)])
+
 def summarize(path, output):
     with gzip.open(path, "rt") as f:
         meta=json.loads(next(f))
@@ -25,15 +59,7 @@ def summarize(path, output):
     require(meta["section"]=="metadata" and count>=5 and meta["ops"]>=10_000, "insufficient paired trace")
     require(set(meta["sha256"])=={"v4","v5","v5-16m","v4-alloc","v5-alloc"},"missing binary fingerprint")
 
-    allocations=[r for r in records if r["section"]=="allocations"]
-    require(len(allocations)==10 and len({(r["round"],r["binary"]) for r in allocations})==10,
-            "missing allocation runs")
-    for r in allocations:
-        ops={v["case"]:v for v in r["operations"]}
-        require(set(ops)=={"exists","scan","owned-hit","decode"}, "missing operation")
-        expect={"exists":2048,"owned-hit":261120,"decode":261120,"scan":277504}
-        require(all(ops[k]["calls"]==2048 and ops[k]["checksum"]==val for k,val in expect.items()),
-                "changed allocation-fixture result")
+    allocation_table(records)
     offers={r["placement"]:r for r in records if r["section"]=="offer"}
     require(set(offers)=={"all","hot"}, "missing calibrated placement")
     for place,o in offers.items():
@@ -102,4 +128,9 @@ def summarize(path, output):
 if __name__=="__main__":
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("raw")
-    summarize(parser.parse_args().raw,sys.stdout)
+    parser.add_argument("--allocations-only", action="store_true")
+    args=parser.parse_args()
+    if args.allocations_only:
+        display_allocations(args.raw,sys.stdout)
+    else:
+        summarize(args.raw,sys.stdout)

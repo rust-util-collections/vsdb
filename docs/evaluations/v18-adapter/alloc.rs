@@ -58,6 +58,26 @@ pub(super) fn run(ns: &Namespace) {
     for n in 0..ROWS {
         assert!(view.get((n as u64).to_be_bytes()).is_some());
     }
+    capture("live-exists", ROWS, || {
+        (0..ROWS)
+            .map(|n| usize::from(black_box(map.contains_key((n as u64).to_be_bytes()))))
+            .sum()
+    });
+    capture("live-decode", ROWS, || {
+        (0..ROWS)
+            .map(|n| {
+                let key = (n as u64).to_be_bytes();
+                #[cfg(feature = "v5")]
+                let v = map
+                    .try_get_with(key, |bytes| Ok(usize::from(black_box(bytes)[0])))
+                    .unwrap()
+                    .unwrap();
+                #[cfg(not(feature = "v5"))]
+                let v = usize::from(black_box(map.get(key).unwrap())[0]);
+                v
+            })
+            .sum()
+    });
     capture("exists", ROWS, || {
         (0..ROWS)
             .map(|n| usize::from(black_box(view.contains_key((n as u64).to_be_bytes()))))
