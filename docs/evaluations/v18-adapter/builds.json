@@ -61,5 +61,25 @@
     "driver_sha256": "e5ec48da961e8f1eb2902dbd08c158cc39e7710ce0dd74c71de5e46a26397244",
     "allocation_module_sha256": "bc33b7b0b7d6c28178994b5ed1232606642fdbd1809f0500170c0985b538b0b2",
     "patch_sha256": null
+  },
+  "warm-cache-6MiB": {
+    "vsdb_revision": "b5f3153a191decd2f8895f39336a0910d6e735d1",
+    "mmdb": "255015ad0f488f09c7985736a903d3171876bcaf",
+    "binary_sha256": "f07b69ff2e3b52155947694ff1d58903961a1df872d8e3a25678226baaef0b26",
+    "cargo_lock_sha256": "fe240aadd6b019b1c11438c73f94a7d6d37961c9c7b796215a6105c6a49799e7",
+    "driver_sha256": "1af4dede62d690b37b90a026d0a9cc5009d99fa30d75a2cbd545d518ceccea1e",
+    "allocation_module_sha256": null,
+    "patch_sha256": null,
+    "cache_module_sha256": "b3fd5d06f26b2165ad2f05c7079b4d69982bc67024bc8d74383e2f96a65c15e6"
+  },
+  "warm-cache-16MiB": {
+    "vsdb_revision": "b5f3153a191decd2f8895f39336a0910d6e735d1",
+    "mmdb": "255015ad0f488f09c7985736a903d3171876bcaf",
+    "binary_sha256": "e2e3825624a79e9e91ce4f37a064f57aba1f8b9360c285a4c04b095d6535af36",
+    "cargo_lock_sha256": "fe240aadd6b019b1c11438c73f94a7d6d37961c9c7b796215a6105c6a49799e7",
+    "driver_sha256": "1af4dede62d690b37b90a026d0a9cc5009d99fa30d75a2cbd545d518ceccea1e",
+    "allocation_module_sha256": null,
+    "patch_sha256": "48905856a4fe80b87a1d2cc2990142817bac37ab18e39a5afd2742a51703dfec",
+    "cache_module_sha256": "b3fd5d06f26b2165ad2f05c7079b4d69982bc67024bc8d74383e2f96a65c15e6"
   }
 }

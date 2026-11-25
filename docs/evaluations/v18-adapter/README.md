@@ -110,6 +110,26 @@ lowest sampled segmented charge, whole-process RSS and remaining L0 and
 immutable generations. The separate 1 GiB resource check uses every process
 high-water mark. This short study does not qualify a query latency gain.
 
+All six processes completed the 10,000 reads, 10,000 puts and 20,000
+batches at the specified offers. All passed the writer backlog screen and
+stayed below 1 GiB RSS. The following maxima and charge ranges come from the
+three processes for each profile. Component maxima can occur at different
+times. [Full process records](warm-cache.jsonl.gz) · [Per-process summary](warm-cache.csv)
+
+| Buffer / shard | Initial segmented MiB | Lowest sampled segmented MiB | Max peak RSS MiB | Max active / immutable MiB | L0 start → end | End immutable |
+|---|---:|---:|---:|---:|---:|---:|
+| 6 MiB | 247.17–248.44 | 15.44 | 518.44 | 106.94 / 104.94 | 45 → 33 | 0 |
+| 16 MiB | 248.20–249.46 | 248.20 | 588.08 | 241.94 / 254.94 | 32 → 48 | 0 |
+
+Every 6 MiB trial completed 48 flushes and 15 compactions during the trace.
+Its shared segmented store ended at 76–77 MiB. The 16 MiB arm completed
+16 flushes and zero compactions, retaining 252–253 MiB of evictable charge.
+The latter saved foreground work in this finite window while leaving more
+L0 files for later compaction. Peak sampled overflow charge was zero in both.
+Component and process observations describe the measured data, read mix
+and write schedule. Higher occupancy in the independent overflow store,
+caller-held pins, old views or application page caches changes the budget.
+
 ## Reproduce
 
 Use a full VSDB clone on Linux and separate worktrees. The scripts require
