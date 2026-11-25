@@ -101,7 +101,12 @@ order of file sync, rename and directory sync.
 **Compatibility:** `compatibility-policy.md`. Old data preserve/reject/migrate
 intentionally. A break needs explicit user acceptance before any major bump.
 
-**Perf:** Hot/warm only; quantify. Cold init micro-opts are not findings.
+**Performance.** Preserve correctness and minimize latency and throughput regressions
+on foreground database paths. Compare the same workload against the baseline,
+including a contended run when synchronization changes. Extra time on necessary
+background cleanup can be acceptable when foreground latency, throughput and
+resource use remain bounded. Include time spent holding locks or delaying a writer
+when evaluating a maintenance job.
 
 **Design:** Locks, ownership, queues, multi-step install, degrade, public/on-disk
 → applicable D-\* in `design-patterns.md`; skip empty families.

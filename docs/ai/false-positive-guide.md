@@ -50,7 +50,7 @@ Read `// SAFETY:`. **Keep:** broken prereqs, invalidated assumptions, missing/va
 **Hot:** get/contains, insert/remove/batch, iter/range next, B+ lookup, HNSW search,
 SlotDex page, trie hash. **Warm:** commit, merge loop, split/merge, HNSW insert,
 prove/verify, trie batch update. **Cold:** branch create/delete, rollback, discard,
-GC, init. Perf only on hot/warm with evidence (benches under `*/benches/`).
+GC, init. Measure hot and warm paths against the baseline. For background work, trace any effect on foreground latency, throughput or resource limits before reporting a regression. [Review criteria](review-core.md#3-evidence)
 
 ## FP-10: COW alloc by design
 

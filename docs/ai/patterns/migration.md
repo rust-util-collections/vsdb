@@ -4,6 +4,11 @@
 
 **Arch:** Standalone offline `v17 → v18` converter crate. Runtime `vsdb_core` and `vsdb` accept only v18 formats (`VSUNI018`, `VSENG018`, `VSNREG02`, `VSMAPX02`, `VSTYPE04`); all historical envelope/row decoders and resumable conversion journals live exclusively in `vsdb_migrate`.
 
+Evaluate offline conversion by recoverability, data integrity, and feasible time and
+memory use on real datasets. Keep legacy decoders, journals and migration-specific
+optimizations in `vsdb_migrate`. Changes to runtime collection or engine paths
+need an independent runtime requirement.
+
 ## Invariants
 
 **M1 Source intact until target validates** — never wipe legacy rows or retire component prefixes (`remove_old_nodes`, `batch_wiped`, `Phase::Retire`) until the target ceiling, header, and v18 handle deserialize and pass structural validation. Clear pre-publication staging keys (`[0x10]..[0x13]`, scratch prefixes) before retrying an uncommitted conversion.
