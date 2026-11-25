@@ -15,7 +15,7 @@ pub(crate) fn serialize_prefix_handle<T, S: Serializer>(
     extra: &[u8],
     serializer: S,
 ) -> StdResult<S::Ok, S::Error> {
-    let id = map.instance_id();
+    let id = map.try_instance_id().map_err(ser::Error::custom)?;
     let len = u32::try_from(extra.len()).map_err(ser::Error::custom)?;
     let mut header = [0u8; 36];
     header[..8].copy_from_slice(PREFIX_FRAME_MAGIC);

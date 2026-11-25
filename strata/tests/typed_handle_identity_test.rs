@@ -1,6 +1,7 @@
 mod common;
 
 use serde::{Deserialize, Serialize};
+use std::fs;
 use vsdb::{Mapx, MapxOrd};
 
 mod accounting {
@@ -93,4 +94,39 @@ fn handles_nested_inside_values_reject_the_wrong_type() {
     let restored: Mapx<u64, MapxOrd<u64, accounting::Record>> =
         postcard::from_bytes(&bytes).unwrap();
     assert_eq!(restored.get(&1).unwrap().get(&7).unwrap().amount, 1);
+}
+
+#[test]
+fn saving_an_empty_typed_map_propagates_prefix_io_errors() {
+    const PROBE: &str = "VSDB_TYPED_PREFIX_IO_PROBE";
+    if let Some(path) = std::env::var_os(PROBE) {
+        let base = std::path::Path::new(&path);
+        vsdb::vsdb_configure(vsdb::VsdbOptions::new(base)).unwrap();
+        let map = MapxOrd::<u64, u64>::new();
+        let ceiling = base.join("__SYSTEM__/__prefix_ceiling__");
+        let saved = fs::read(&ceiling).unwrap();
+        fs::remove_file(&ceiling).unwrap();
+        fs::create_dir(&ceiling).unwrap();
+        assert!(matches!(map.save_meta(), Err(vsdb::VsdbError::Io(_))));
+        assert!(postcard::to_allocvec(&map).is_err());
+        fs::remove_dir(&ceiling).unwrap();
+        fs::write(ceiling, saved).unwrap();
+        let id = map.save_meta().unwrap();
+        let restored = MapxOrd::<u64, u64>::from_meta(id).unwrap();
+        assert_eq!(restored.instance_id(), id);
+        return;
+    }
+    let scratch = std::env::temp_dir()
+        .join(format!("vsdb-typed-prefix-{}", rand::random::<u128>()));
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "saving_an_empty_typed_map_propagates_prefix_io_errors",
+            "--nocapture",
+        ])
+        .env(PROBE, &scratch)
+        .output()
+        .unwrap();
+    fs::remove_dir_all(scratch).unwrap();
+    assert!(out.status.success(), "{out:?}");
 }

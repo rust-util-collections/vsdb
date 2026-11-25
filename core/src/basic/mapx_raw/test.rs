@@ -534,3 +534,22 @@ fn batch_range_delete_respects_endpoints_and_order() {
     assert_eq!(before.range(b"a"..b"c").count(), 3);
     assert_eq!(map.last().unwrap().0, b"c");
 }
+
+#[test]
+fn concurrent_first_access_observes_one_map_identity() {
+    let map = MapxRaw::new();
+    let start = std::sync::Barrier::new(8);
+    std::thread::scope(|s| {
+        let handles = (0..8)
+            .map(|_| {
+                s.spawn(|| {
+                    start.wait();
+                    map.try_instance_id().unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            assert_eq!(handle.join().unwrap(), map.instance_id());
+        }
+    });
+}

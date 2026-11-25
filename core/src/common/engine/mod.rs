@@ -17,17 +17,18 @@ type DbIter = self::mmdb::MmdbIter;
 /////////////////////////////////////////////////////////////////////////////
 
 use crate::common::{
-    PreBytes, RawKey, RawRangeBounds, RawValue,
+    Pre, PreBytes, RawKey, RawRangeBounds, RawValue,
     error::{Result, VsdbError},
     namespace::Namespace,
 };
-use serde::{Deserialize, Serialize, de};
+use parking_lot::Mutex;
+use serde::{Deserialize, Serialize, de, ser};
 use std::{
     fmt,
     marker::PhantomData,
     ops::{Deref, DerefMut},
     result::Result as StdResult,
-    sync::OnceLock,
+    sync::atomic::{AtomicU64, Ordering},
     thread,
 };
 
@@ -140,46 +141,48 @@ impl UnwindMark {
 
 #[derive(Debug)]
 pub(crate) struct Mapx {
-    // the unique ID of each instance (within its namespace's engine;
-    // prefixes are globally unique across namespaces by construction)
-    prefix: Prefix,
-    // the owning namespace, captured eagerly at creation (ambient
-    // scope must be read at creation time, never at first use)
+    // Zero until the first use reserves an ID in the process-wide allocator.
+    prefix: AtomicU64,
+    // Serializes only the first assignment. Failed allocations can be retried.
+    prefix_init: Mutex<()>,
     ns: Namespace,
 }
 
-#[derive(Debug)]
-enum Prefix {
-    Recovered(PreBytes),
-    /// Allocation is deferred to first use so that constructing an
-    /// empty handle never burns an id; the id itself comes from the
-    /// process-global allocator (namespace-independent).
-    Created(OnceLock<PreBytes>),
-}
-
 impl Mapx {
-    #[inline(always)]
-    fn prefix_bytes(&self) -> PreBytes {
-        match &self.prefix {
-            Prefix::Recovered(bytes) => *bytes,
-            Prefix::Created(cell) => *cell.get_or_init(|| {
-                let prefix = self.ns.engine().alloc_prefix();
-                let prefix_bytes = prefix.to_le_bytes();
-                debug_assert!(self.ns.engine().iter(prefix_bytes).next().is_none());
-                prefix_bytes
-            }),
+    fn with_prefix(ns: Namespace, prefix: Pre) -> Self {
+        Self {
+            prefix: AtomicU64::new(prefix),
+            prefix_init: Mutex::new(()),
+            ns,
         }
     }
 
-    /// Force the prefix to be materialized (if lazily created)
-    /// and return the bytes. Converts `Created` → `Recovered`
-    /// so subsequent calls take the branch-free path.
-    fn materialize(&mut self) -> PreBytes {
-        let b = self.prefix_bytes();
-        if matches!(self.prefix, Prefix::Created(_)) {
-            self.prefix = Prefix::Recovered(b);
+    #[inline(always)]
+    fn prefix_bytes(&self) -> PreBytes {
+        self.try_prefix()
+            .expect("vsdb: prefix allocation failed")
+            .to_le_bytes()
+    }
+
+    #[inline]
+    fn try_prefix(&self) -> Result<Pre> {
+        let id = self.prefix.load(Ordering::Acquire);
+        if id == 0 {
+            self.assign_prefix()
+        } else {
+            Ok(id)
         }
-        b
+    }
+
+    fn assign_prefix(&self) -> Result<Pre> {
+        let _init = self.prefix_init.lock();
+        let mut id = self.prefix.load(Ordering::Relaxed);
+        if id == 0 {
+            id = self.ns.engine().alloc_prefix()?;
+            debug_assert!(self.ns.engine().iter(id.to_le_bytes()).next().is_none());
+            self.prefix.store(id, Ordering::Release);
+        }
+        Ok(id)
     }
 }
 
@@ -198,10 +201,7 @@ impl Mapx {
     // iterator retains one committed view; separate reads can see newer views.
     // Mutable iteration is a write and follows the same key exclusion rule.
     pub(crate) unsafe fn shadow(&self) -> Self {
-        Self {
-            prefix: Prefix::Recovered(self.prefix_bytes()),
-            ns: self.ns.clone(),
-        }
+        Self::with_prefix(self.ns.clone(), self.instance_id().map_id)
     }
 
     #[inline(always)]
@@ -215,10 +215,7 @@ impl Mapx {
             !ns.is_read_only(),
             "vsdb: cannot create a collection in read-only mode"
         );
-        Self {
-            prefix: Prefix::Created(OnceLock::new()),
-            ns: ns.clone(),
-        }
+        Self::with_prefix(ns.clone(), 0)
     }
 
     /// The owning namespace (cheap `Arc` clone).
@@ -239,14 +236,11 @@ impl Mapx {
         }
         // An untouched handle has no writes or assigned shard to fence.
         // Do not turn this fallible operation into an infallible prefix allocation.
-        let prefix = match &self.prefix {
-            Prefix::Recovered(bytes) => Some(*bytes),
-            Prefix::Created(cell) => cell.get().copied(),
-        };
-        match prefix {
-            Some(prefix) => self.ns.engine().try_sync_wal(prefix),
-            None => Ok(()),
+        let prefix = self.prefix.load(Ordering::Acquire);
+        if prefix == 0 {
+            return Ok(());
         }
+        self.ns.engine().try_sync_wal(prefix.to_le_bytes())
     }
 
     #[inline(always)]
@@ -269,7 +263,7 @@ impl Mapx {
 
     #[inline(always)]
     pub(crate) fn get_mut(&mut self, key: &[u8]) -> Option<ValueMut<'_>> {
-        let prefix = self.materialize();
+        let prefix = self.prefix_bytes();
         let v = self.ns.engine().get(prefix, key)?;
 
         Some(self.value_slot(key.to_vec(), v, false))
@@ -302,7 +296,7 @@ impl Mapx {
 
     #[inline(always)]
     pub(crate) fn iter_mut(&mut self) -> MapxIterMut<'_> {
-        let prefix = self.materialize();
+        let prefix = self.prefix_bytes();
         MapxIterMut {
             db_iter: self.ns.engine().iter(prefix),
             hdr: self,
@@ -333,7 +327,7 @@ impl Mapx {
         &'a mut self,
         bounds: R,
     ) -> MapxIterMut<'a> {
-        let prefix = self.materialize();
+        let prefix = self.prefix_bytes();
         MapxIterMut {
             db_iter: self.ns.engine().range(prefix, bounds),
             hdr: self,
@@ -342,13 +336,13 @@ impl Mapx {
 
     #[inline(always)]
     pub(crate) fn insert(&mut self, key: &[u8], value: &[u8]) {
-        let prefix = self.materialize();
+        let prefix = self.prefix_bytes();
         self.ns.engine().insert(prefix, key, value);
     }
 
     #[inline(always)]
     pub(crate) fn remove(&mut self, key: &[u8]) {
-        let prefix = self.materialize();
+        let prefix = self.prefix_bytes();
         self.ns.engine().remove(prefix, key);
     }
 
@@ -380,7 +374,7 @@ impl Mapx {
 
     #[inline(always)]
     pub(crate) fn batch_begin(&mut self) -> Batch<'_> {
-        let prefix = self.materialize();
+        let prefix = self.prefix_bytes();
         self.ns.engine().batch_begin(prefix)
     }
 
@@ -390,7 +384,7 @@ impl Mapx {
     /// included — commits in one atomic engine write batch.
     #[inline(always)]
     pub(crate) fn batch_begin_wiped(&mut self) -> Batch<'_> {
-        let prefix = self.materialize();
+        let prefix = self.prefix_bytes();
         self.ns.engine().batch_begin_wiped(prefix)
     }
 
@@ -409,7 +403,7 @@ impl Mapx {
         let id = Self::decode_prefix_meta(meta)?;
         let prefix = id.map_id.to_le_bytes();
         let ns = Namespace::open(id.ns.unwrap_or_default())?;
-        if !ns.engine().reserve_recovered_prefix(prefix) {
+        if !ns.engine().reserve_recovered_prefix(prefix)? {
             return Err(VsdbError::Decode {
                 detail: format!(
                     "Mapx metadata prefix {} is outside the allocator-issued \
@@ -418,19 +412,16 @@ impl Mapx {
                 ),
             });
         }
-        Ok(Self {
-            prefix: Prefix::Recovered(prefix),
-            ns,
-        })
+        Ok(Self::with_prefix(ns, id.map_id))
     }
 
     /// Fixed-size raw handle. All integer fields are little-endian.
-    pub(crate) fn encode_prefix_meta(&self) -> [u8; MAPX_META_NS_LEN] {
+    pub(crate) fn encode_prefix_meta(&self) -> Result<[u8; MAPX_META_NS_LEN]> {
         let mut frame = [0; MAPX_META_NS_LEN];
         frame[..8].copy_from_slice(MAPX_META_MAGIC);
-        frame[8..16].copy_from_slice(&self.prefix_bytes());
+        frame[8..16].copy_from_slice(&self.try_prefix()?.to_le_bytes());
         frame[16..].copy_from_slice(&self.ns.id().to_le_bytes());
-        frame
+        Ok(frame)
     }
 
     pub(crate) fn decode_prefix_meta(meta: &[u8]) -> Result<crate::InstanceId> {
@@ -447,7 +438,12 @@ impl Mapx {
 
     #[inline(always)]
     pub(crate) fn instance_id(&self) -> crate::InstanceId {
-        crate::InstanceId::new(u64::from_le_bytes(self.prefix_bytes()), self.ns.id())
+        self.try_instance_id()
+            .expect("vsdb: prefix allocation failed")
+    }
+
+    pub(crate) fn try_instance_id(&self) -> Result<crate::InstanceId> {
+        Ok(crate::InstanceId::new(self.try_prefix()?, self.ns.id()))
     }
 
     #[inline(always)]
@@ -493,7 +489,7 @@ impl Mapx {
                 operation: "collection clone",
             });
         }
-        self.copy_into(anchor.new_colocated())
+        self.copy_into(anchor.try_new_colocated()?)
     }
 
     /// A fresh, empty map in `self`'s namespace whose prefix routes to
@@ -501,16 +497,18 @@ impl Mapx {
     /// WAL. Prefixes skipped while searching for that shard are simply
     /// never used (they are never reissued either).
     pub(crate) fn new_colocated(&self) -> Self {
-        let anchor = self.prefix_bytes();
+        self.try_new_colocated()
+            .expect("vsdb: co-located prefix allocation failed")
+    }
+
+    fn try_new_colocated(&self) -> Result<Self> {
+        let anchor = self.try_prefix()?.to_le_bytes();
         let engine = self.ns.engine();
         let shard = engine.shard_of(&anchor);
         loop {
-            let prefix = engine.alloc_prefix().to_le_bytes();
-            if engine.shard_of(&prefix) == shard {
-                return Self {
-                    prefix: Prefix::Recovered(prefix),
-                    ns: self.ns.clone(),
-                };
+            let prefix = engine.alloc_prefix()?;
+            if engine.shard_of(&prefix.to_le_bytes()) == shard {
+                return Ok(Self::with_prefix(self.ns.clone(), prefix));
             }
         }
     }
@@ -527,11 +525,13 @@ impl Mapx {
         const CLONE_CHUNK: usize = 4096;
         const CLONE_CHUNK_BYTES: usize = 16 * 1024 * 1024;
 
+        self.try_prefix()?;
         let mut it = self.iter();
         // Pull the chunk's first pair before opening a batch, so an
         // exhausted iterator ends the loop without staging an empty
         // batch just to drop it.
         while let Some((k, v)) = it.next() {
+            new_instance.try_prefix()?;
             let mut batch = new_instance.batch_begin();
             let mut entries = 1usize;
             let mut bytes = k.len() + v.len();
@@ -658,7 +658,8 @@ impl Serialize for Mapx {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_bytes(&self.encode_prefix_meta())
+        serializer
+            .serialize_bytes(&self.encode_prefix_meta().map_err(ser::Error::custom)?)
     }
 }
 

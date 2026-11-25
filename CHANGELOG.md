@@ -20,6 +20,8 @@ This major version introduces a distinct storage format. Stop v17 processes and 
 - Raw and typed map entries have `Occupied` and `Vacant` variants. A typed
   value guard tracks mutable dereferences. Map `update` takes a closure
   returning `R` and returns `Result<Option<R>>` to report write-back errors.
+  `MapxRaw::try_instance_id()` returns allocator I/O errors when a new map
+  first acquires a prefix.
 - `KeyEnDe` and `ValueEnDe` support encoding into an existing buffer.
   `KeyLookup` and `OrderedKeyLookup` support borrowed lookups. The built-in
   ordered integer codecs retain big-endian ordering and require explicit

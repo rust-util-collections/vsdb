@@ -48,6 +48,10 @@ token selects the namespace and the metadata file. Both `from_meta` and
 serde deserialization restore access to the original rows. Coordinate writes
 through multiple restored handles to exclude simultaneous writes to the same key.
 
+A new raw map reserves its prefix on first use. `try_instance_id()` returns
+that identity and reports allocator I/O errors. `save_meta()` also propagates
+reservation errors, including on an empty map.
+
 ## Atomic batches and durability
 
 Ordinary writes use the shard WAL and may become visible before synchronization.

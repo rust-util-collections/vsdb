@@ -1,5 +1,5 @@
-use std::{fs, process::Command};
-use vsdb_core::{Namespace, VsdbOptions, vsdb_configure, vsdb_flush};
+use std::{fs, path::PathBuf, process::Command, thread};
+use vsdb_core::{MapxRaw, Namespace, VsdbError, VsdbOptions, vsdb_configure, vsdb_flush};
 
 #[test]
 fn resumes_bootstrap_and_excludes_a_second_writer_before_opening_any_shard() {
@@ -132,4 +132,83 @@ fn read_only_open_reports_lock_contention_before_header_publish() {
     drop(lock_file);
     fs::remove_dir_all(&root).unwrap();
     assert!(out.status.success(), "{out:?}");
+}
+
+#[test]
+fn empty_map_metadata_reports_allocator_errors_and_retries() {
+    const PROBE: &str = "VSDB_V18_PREFIX_IO_PROBE";
+    if let Some(base) = std::env::var_os(PROBE) {
+        let base = PathBuf::from(base);
+        vsdb_configure(VsdbOptions::new(&base)).unwrap();
+        let map = MapxRaw::new();
+        let token = base.join("saved-token");
+        if !token.exists() {
+            fs::write(token, map.save_meta().unwrap().to_string()).unwrap();
+            return;
+        }
+        let saved_id: vsdb_core::InstanceId =
+            fs::read_to_string(token).unwrap().parse().unwrap();
+        let ceiling = base.join("__SYSTEM__/__prefix_ceiling__");
+        let fail_read = || {
+            let saved = fs::read(&ceiling).unwrap();
+            fs::remove_file(&ceiling).unwrap();
+            fs::create_dir(&ceiling).unwrap();
+            saved
+        };
+        let restore = |saved| {
+            fs::remove_dir(&ceiling).unwrap();
+            fs::write(&ceiling, saved).unwrap();
+        };
+        let saved = fail_read();
+        assert!(matches!(
+            MapxRaw::from_meta(saved_id),
+            Err(VsdbError::Io(_))
+        ));
+        assert!(matches!(map.save_meta(), Err(VsdbError::Io(_))));
+        assert!(postcard::to_allocvec(&map).is_err());
+        restore(saved);
+        let id = map.save_meta().unwrap();
+        assert_eq!(MapxRaw::from_meta(id).unwrap().instance_id(), id);
+        assert_eq!(
+            MapxRaw::from_meta(saved_id).unwrap().instance_id(),
+            saved_id
+        );
+
+        // The next thread needs the last allocator window. A failed refill
+        // must leave that window available for a retry on another thread.
+        let saved = fail_read();
+        let allocate = || MapxRaw::new().try_instance_id();
+        assert!(matches!(
+            thread::spawn(allocate).join().unwrap(),
+            Err(VsdbError::Io(_))
+        ));
+        restore(saved);
+        assert_eq!(
+            thread::spawn(allocate).join().unwrap().unwrap().map_id,
+            u64::MAX - 2
+        );
+        return;
+    }
+    let root =
+        std::env::temp_dir().join(format!("vsdb-prefix-io-{}", rand::random::<u128>()));
+    let run = || {
+        let out = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "empty_map_metadata_reports_allocator_errors_and_retries",
+                "--nocapture",
+            ])
+            .env(PROBE, &root)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    };
+    run();
+    fs::write(
+        root.join("__SYSTEM__/__prefix_ceiling__"),
+        (u64::MAX - 8194).to_le_bytes(),
+    )
+    .unwrap();
+    run();
+    fs::remove_dir_all(root).unwrap();
 }

@@ -1,7 +1,7 @@
 use crate::common::{
     GB, PREFIX_ALLOC_START, PREFIX_SIZE, Pre, PreBytes, RawKey, RawRangeBounds,
     RawValue, atomic_write_file, configured_mem_budget_mb, create_dir_all_durable,
-    error::{Result, corrupt, from_mmdb_err},
+    error::{Result, VsdbError, corrupt, from_mmdb_err},
     vsdb_freeze_base_dir, vsdb_get_base_dir, vsdb_is_read_only,
 };
 use mmdb::{
@@ -327,17 +327,21 @@ impl MmDB {
     /// See the module-level [`alloc_prefix`] — kept as a method so the
     /// typed layer keeps calling through its engine handle.
     #[inline(always)]
-    pub(crate) fn alloc_prefix(&self) -> Pre {
-        assert!(
-            !self.read_only,
-            "vsdb: cannot allocate a collection prefix in read-only mode"
-        );
+    pub(crate) fn alloc_prefix(&self) -> Result<Pre> {
+        if self.read_only {
+            return Err(VsdbError::ReadOnly {
+                operation: "prefix allocation",
+            });
+        }
         alloc_prefix()
     }
 
     /// See the module-level [`reserve_recovered_prefix`].
     #[inline(always)]
-    pub(crate) fn reserve_recovered_prefix(&self, meta_prefix: PreBytes) -> bool {
+    pub(crate) fn reserve_recovered_prefix(
+        &self,
+        meta_prefix: PreBytes,
+    ) -> Result<bool> {
         reserve_recovered_prefix(meta_prefix)
     }
 
@@ -671,13 +675,9 @@ pub(crate) fn recover_ceiling(
 }
 
 /// Allocates a fresh, never-before-issued prefix.
-pub(crate) fn alloc_prefix() -> Pre {
-    assert!(
-        !vsdb_is_read_only(),
-        "vsdb: cannot allocate a collection prefix in read-only mode"
-    );
+fn alloc_prefix() -> Result<Pre> {
     loop {
-        let candidate = alloc_prefix_candidate();
+        let candidate = alloc_prefix_candidate()?;
         // Normal operation records no reservations, so allocation
         // stays lock-free here. `SeqCst` pairs with the `SeqCst`
         // cursor store in `alloc_prefix_candidate` and the flag
@@ -687,11 +687,11 @@ pub(crate) fn alloc_prefix() -> Pre {
         // reservation is either checked against the set here or its
         // cursor advance is caught by the reserver's verify step.
         if !RECOVERED_NONEMPTY.load(Ordering::SeqCst) {
-            return candidate;
+            return Ok(candidate);
         }
         let mut reserved = RECOVERED_PREFIXES.lock();
         if !reserved.remove(&candidate) {
-            return candidate;
+            return Ok(candidate);
         }
         if reserved.is_empty() {
             RECOVERED_NONEMPTY.store(false, Ordering::SeqCst);
@@ -702,45 +702,29 @@ pub(crate) fn alloc_prefix() -> Pre {
 /// Loads the persisted allocator state into the process-wide atomics
 /// (idempotent). `GLOBAL_FLOOR` snapshots the persisted value at
 /// initialization: every prefix below it was issued by a previous run.
-fn ensure_alloc_init() {
+fn ensure_alloc_init() -> Result<()> {
     if GLOBAL_COUNTER.load(Ordering::Acquire) != 0 {
-        return;
+        return Ok(());
     }
     let _x = PREFIX_ALLOC_LOCK.lock();
     if GLOBAL_COUNTER.load(Ordering::Acquire) != 0 {
-        return;
+        return Ok(());
     }
-    let ret = crate::common::universe::active()
-        .expect("vsdb: universe initialization")
-        .ceiling;
-    if vsdb_is_read_only() {
-        GLOBAL_FLOOR.store(ret, Ordering::Release);
-        GLOBAL_CEILING.store(ret, Ordering::Release);
-        GLOBAL_COUNTER.store(ret, Ordering::Release);
-        return;
-    }
-    let file = ceiling_file_path();
-    // Reserve the first window before publishing its in-process cursor.
-    let (start, ceiling) = {
+    let mut start = crate::common::universe::active()?.ceiling;
+    if !vsdb_is_read_only() {
         let _g = SYS_META_LOCK.lock();
-        let current = read_ceiling_file(&file)
-            .expect("vsdb: allocator ceiling read failed")
-            .unwrap_or(0);
-        let start = ret.max(current);
-        let ceiling = start.saturating_add(PREFIX_ALLOC_BATCH);
-        if current < ceiling {
-            atomic_write_file(&file, &ceiling.to_le_bytes())
-                .expect("vsdb: allocator ceiling write failed");
-        }
-        (start, ceiling)
-    };
+        start = start.max(read_ceiling_file(&ceiling_file_path())?.unwrap_or(0));
+    }
+    // Publish only the existing floor. The first thread reserves its window
+    // through the same durable refill path as every subsequent thread.
     GLOBAL_FLOOR.store(start, Ordering::Release);
-    GLOBAL_CEILING.store(ceiling, Ordering::Release);
+    GLOBAL_CEILING.store(start, Ordering::Release);
     // The counter doubles as the init guard — store it last.
     GLOBAL_COUNTER.store(start, Ordering::Release);
+    Ok(())
 }
 
-fn alloc_prefix_candidate() -> Pre {
+fn alloc_prefix_candidate() -> Result<Pre> {
     LOCAL_NEXT.with(|next_cell| {
         LOCAL_CEIL.with(|ceil_cell| {
             let next = next_cell.get();
@@ -754,10 +738,10 @@ fn alloc_prefix_candidate() -> Pre {
                 // and the flag store + cursor loads in
                 // `reserve_recovered_prefix` (see `alloc_prefix`).
                 LOCAL_CURSOR.with(|cursor| cursor.store(next + 1, Ordering::SeqCst));
-                return next;
+                return Ok(next);
             }
 
-            ensure_alloc_init();
+            ensure_alloc_init()?;
 
             // Ensure this thread's cleanup guard is registered
             // before taking a batch, so the corresponding
@@ -767,47 +751,48 @@ fn alloc_prefix_candidate() -> Pre {
             // thread that ever allocated a prefix).
             PENDING_WINDOW_GUARD.with(|_| {});
 
-            // Claim the next batch and register it — cursor already
-            // advanced past `batch_start`, which is issued below — as
-            // this thread's pending window in one exclusive section, so
-            // that `reserve_recovered_prefix` (which reads the counter
-            // and the registry under the read lock) can never observe
-            // the advanced counter without the matching, correctly
-            // positioned window.
-            let (batch_start, batch_end) = {
+            // Serialize refills so a failed durable reservation leaves the
+            // batch available to retry, even at the end of the ID space.
+            let _refill = PREFIX_ALLOC_LOCK.lock();
+            let batch_start = GLOBAL_COUNTER.load(Ordering::Acquire);
+            if batch_start == Pre::MAX {
+                return Err(VsdbError::Other {
+                    detail: "prefix allocator exhausted".into(),
+                });
+            }
+            let batch_end = batch_start.saturating_add(PREFIX_ALLOC_BATCH);
+            if batch_end > GLOBAL_CEILING.load(Ordering::Acquire) {
+                let _g = SYS_META_LOCK.lock();
+                let file = ceiling_file_path();
+                let current = read_ceiling_file(&file)?.unwrap_or(0);
+                let reserve = if batch_start == GLOBAL_FLOOR.load(Ordering::Relaxed) {
+                    batch_end
+                } else {
+                    batch_end.saturating_add(PREFIX_ALLOC_BATCH)
+                };
+                let new_ceil = reserve.max(current);
+                if current < new_ceil {
+                    atomic_write_file(&file, &new_ceil.to_le_bytes())?;
+                } else {
+                    // A failed directory sync leaves the previous attempt's
+                    // rename visible. Fence it before issuing any prefix.
+                    fs::File::open(file.parent().expect("ceiling has a parent"))?
+                        .sync_all()?;
+                }
+                GLOBAL_CEILING.store(new_ceil, Ordering::Release);
+            }
+            // Publish the counter and live cursor together so a concurrent
+            // handle restore cannot miss this thread's reservable range.
+            {
                 let mut reg = PENDING_WINDOWS.write();
-                let batch_start = GLOBAL_COUNTER.load(Ordering::Acquire);
-                assert!(batch_start < Pre::MAX, "vsdb: prefix allocator exhausted");
-                let batch_end = batch_start.saturating_add(PREFIX_ALLOC_BATCH);
                 GLOBAL_COUNTER.store(batch_end, Ordering::Release);
-                let cursor = LOCAL_CURSOR.with(|c| c.clone());
+                let cursor = LOCAL_CURSOR.with(Arc::clone);
                 cursor.store(batch_start + 1, Ordering::Release);
                 reg.insert(thread::current().id(), (cursor, batch_end));
-                (batch_start, batch_end)
-            };
-
-            let old_ceil = GLOBAL_CEILING.load(Ordering::Acquire);
-            if batch_end > old_ceil {
-                let _x = PREFIX_ALLOC_LOCK.lock();
-                let old_ceil2 = GLOBAL_CEILING.load(Ordering::Acquire);
-                if batch_end > old_ceil2 {
-                    let _g = SYS_META_LOCK.lock();
-                    let current = read_ceiling_file(&ceiling_file_path())
-                        .expect("vsdb: allocator ceiling read failed")
-                        .unwrap_or(0);
-                    let new_ceil =
-                        batch_end.saturating_add(PREFIX_ALLOC_BATCH).max(current);
-                    if current < new_ceil {
-                        atomic_write_file(&ceiling_file_path(), &new_ceil.to_le_bytes())
-                            .expect("vsdb: allocator ceiling write failed");
-                    }
-                    GLOBAL_CEILING.store(new_ceil, Ordering::Release);
-                }
             }
-
             next_cell.set(batch_start + 1);
             ceil_cell.set(batch_end);
-            batch_start
+            Ok(batch_start)
         })
     })
 }
@@ -854,19 +839,19 @@ fn alloc_prefix_candidate() -> Pre {
 /// without having seen the reservation — the dead entry is evicted
 /// and the restore rejected. The `SeqCst` pairing described in
 /// [`alloc_prefix`] guarantees the two sides cannot miss each other.
-pub(crate) fn reserve_recovered_prefix(meta_prefix: PreBytes) -> bool {
+fn reserve_recovered_prefix(meta_prefix: PreBytes) -> Result<bool> {
     let prefix = Pre::from_le_bytes(meta_prefix);
     if prefix < PREFIX_ALLOC_START {
-        return false;
+        return Ok(false);
     }
-    ensure_alloc_init();
+    ensure_alloc_init()?;
 
     if prefix >= GLOBAL_CEILING.load(Ordering::Acquire) {
-        return false;
+        return Ok(false);
     }
     if prefix < GLOBAL_FLOOR.load(Ordering::Acquire) {
         // Issued by a previous run — can never be issued again.
-        return true;
+        return Ok(true);
     }
 
     let reg = PENDING_WINDOWS.read();
@@ -884,15 +869,23 @@ pub(crate) fn reserve_recovered_prefix(meta_prefix: PreBytes) -> bool {
         // Already issued in this run — the same-run save/restore flow.
         // The allocator can never produce it again, so no reservation
         // is needed (recording one would leak the entry permanently).
-        return true;
+        return Ok(true);
     }
 
     let mut reserved = RECOVERED_PREFIXES.lock();
-    reserved.insert(prefix);
+    #[cfg(test)]
+    if let Some(advance_cursor) = tests::AFTER_RESERVATION_LOCK.take() {
+        advance_cursor();
+    }
+    if !reserved.insert(prefix) {
+        // A prior restore already owns this reservation. If the allocator's
+        // cursor advances now, it must still consume and skip that candidate.
+        return Ok(true);
+    }
     RECOVERED_NONEMPTY.store(true, Ordering::SeqCst);
 
     if unissued() {
-        return true;
+        return Ok(true);
     }
     // A live window's fast path issued `prefix` to a fresh instance
     // before the reservation landed (it cannot have *consumed* the
@@ -903,7 +896,7 @@ pub(crate) fn reserve_recovered_prefix(meta_prefix: PreBytes) -> bool {
     if reserved.is_empty() {
         RECOVERED_NONEMPTY.store(false, Ordering::SeqCst);
     }
-    false
+    Ok(false)
 }
 
 // ---- Batch ----
@@ -1980,10 +1973,10 @@ mod tests {
     fn reserve_recovered_prefix_ignores_already_issued_in_window_value() {
         let ns = crate::Namespace::default_ns();
         let db = ns.engine();
-        let issued = db.alloc_prefix();
+        let issued = db.alloc_prefix().unwrap();
 
         assert!(
-            db.reserve_recovered_prefix(issued.to_le_bytes()),
+            db.reserve_recovered_prefix(issued.to_le_bytes()).unwrap(),
             "an in-range prefix must still validate as accepted"
         );
         assert!(
@@ -2007,20 +2000,57 @@ mod tests {
     fn reserve_recovered_prefix_diverts_allocator_around_reservation() {
         let ns = crate::Namespace::default_ns();
         let db = ns.engine();
-        let p0 = db.alloc_prefix();
+        let p0 = db.alloc_prefix().unwrap();
         let future = p0 + 3;
 
         assert!(
-            db.reserve_recovered_prefix(future.to_le_bytes()),
+            db.reserve_recovered_prefix(future.to_le_bytes()).unwrap(),
             "an in-range, un-issued prefix must be accepted and reserved"
         );
         for _ in 0..8 {
-            let p = db.alloc_prefix();
+            let p = db.alloc_prefix().unwrap();
             assert_ne!(
                 p, future,
                 "allocator issued a prefix that was reserved as recovered"
             );
         }
+    }
+
+    thread_local! {
+        pub(super) static AFTER_RESERVATION_LOCK: Cell<Option<Box<dyn FnOnce()>>> = const { Cell::new(None) };
+    }
+
+    #[test]
+    fn duplicate_restore_preserves_an_earlier_reservation_as_the_cursor_advances() {
+        use std::sync::mpsc;
+
+        let (window_tx, window_rx) = mpsc::channel();
+        let (issue_tx, issue_rx) = mpsc::channel();
+        let allocator = thread::spawn(move || {
+            let ns = crate::Namespace::default_ns();
+            let db = ns.engine();
+            let first = db.alloc_prefix().unwrap();
+            window_tx
+                .send((first + 1, LOCAL_CURSOR.with(Arc::clone)))
+                .unwrap();
+            issue_rx.recv().unwrap();
+            db.alloc_prefix().unwrap()
+        });
+        let (target, cursor) = window_rx.recv().unwrap();
+        let ns = crate::Namespace::default_ns();
+        let db = ns.engine();
+        assert!(db.reserve_recovered_prefix(target.to_le_bytes()).unwrap());
+        AFTER_RESERVATION_LOCK.set(Some(Box::new(move || {
+            issue_tx.send(()).unwrap();
+            // The allocator has selected the target but is waiting for the
+            // second restore to release the reservation mutex.
+            while cursor.load(Ordering::SeqCst) <= target {
+                thread::yield_now();
+            }
+        })));
+        let restored = db.reserve_recovered_prefix(target.to_le_bytes()).unwrap();
+        assert_ne!(allocator.join().unwrap(), target);
+        assert!(restored);
     }
 
     #[test]
@@ -2030,7 +2060,7 @@ mod tests {
         let handle = thread::spawn(move || {
             let ns = crate::Namespace::default_ns();
             let db = ns.engine();
-            let prefix = db.alloc_prefix();
+            let prefix = db.alloc_prefix().unwrap();
             prefix_tx.send(prefix).unwrap();
             exit_rx.recv().unwrap();
         });
@@ -2040,7 +2070,7 @@ mod tests {
         let ns = crate::Namespace::default_ns();
         let db = ns.engine();
         assert!(
-            db.reserve_recovered_prefix(reserved.to_le_bytes()),
+            db.reserve_recovered_prefix(reserved.to_le_bytes()).unwrap(),
             "an unissued prefix in a live window must be reserved"
         );
         assert!(RECOVERED_PREFIXES.lock().contains(&reserved));
@@ -2061,10 +2091,10 @@ mod tests {
     fn prefix_allocator_unique_and_monotonic_per_thread() {
         let ns = crate::Namespace::default_ns();
         let db = ns.engine();
-        let mut prev = db.alloc_prefix();
+        let mut prev = db.alloc_prefix().unwrap();
         assert!(prev >= PREFIX_ALLOC_START);
         for _ in 0..(2 * PREFIX_ALLOC_BATCH + 8) {
-            let next = db.alloc_prefix();
+            let next = db.alloc_prefix().unwrap();
             assert!(next > prev, "allocator regressed: {next} after {prev}");
             prev = next;
         }
@@ -2084,7 +2114,7 @@ mod tests {
                     let ns = crate::Namespace::default_ns();
                     let db = ns.engine();
                     (0..per_thread)
-                        .map(|_| db.alloc_prefix())
+                        .map(|_| db.alloc_prefix().unwrap())
                         .collect::<Vec<_>>()
                 })
             })
@@ -2125,7 +2155,7 @@ mod tests {
         // fast path within an already-covered window.
         let mut my_max = 0;
         for _ in 0..(PREFIX_ALLOC_BATCH + 16) {
-            let p = db.alloc_prefix();
+            let p = db.alloc_prefix().unwrap();
             my_max = my_max.max(p);
             let ceil = GLOBAL_CEILING.load(Ordering::Acquire);
             assert!(ceil > p, "in-memory ceiling {ceil} not above issued {p}");

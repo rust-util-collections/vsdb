@@ -190,7 +190,7 @@ macro_rules! define_map_wrapper {
             /// in read-only mode, or an I/O/encoding error if the metadata
             /// cannot be written.
             pub fn save_meta(&self) -> $crate::common::error::Result<$crate::common::InstanceId> {
-                let id = self.instance_id();
+                let id = $crate::common::SingleMap::raw(self).try_instance_id()?;
                 $crate::common::save_instance_meta(id, self)?;
                 Ok(id)
             }

@@ -1,7 +1,49 @@
 #![cfg(target_os = "linux")]
 
-use std::{env, fs, path::PathBuf, process::Command};
-use vsdb_core::{MapxRaw, VsdbOptions, vsdb_configure};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process::Command,
+    thread,
+};
+use vsdb_core::{
+    InstanceId, MapxRaw, VsdbError, VsdbOptions, vsdb_configure,
+};
+
+const EIO: i32 = 5;
+
+fn prefix_directory_sync_retries(root: &Path) {
+    let map = MapxRaw::new();
+    let path = root.join("__SYSTEM__/__prefix_ceiling__");
+    let ceiling = || u64::from_le_bytes(fs::read(&path).unwrap().try_into().unwrap());
+    let arm = root.join("arm");
+    let start = ceiling();
+    fs::write(&arm, b"1").unwrap();
+    let fails = |r: vsdb_core::Result<InstanceId>| {
+        assert!(matches!(r, Err(VsdbError::Io(e)) if e.raw_os_error() == Some(EIO)));
+    };
+    fails(map.try_instance_id());
+    let visible = ceiling();
+    assert!(visible > start);
+    fails(map.try_instance_id());
+    assert_eq!(ceiling(), visible);
+    fs::remove_file(&arm).unwrap();
+    assert_eq!(map.try_instance_id().unwrap().map_id, start);
+
+    // Each new thread must claim a window. The first failed refill leaves
+    // the renamed ceiling visible. Neither attempt may publish that window.
+    fs::write(&arm, b"1").unwrap();
+    let refill = || {
+        thread::spawn(|| MapxRaw::new().try_instance_id())
+            .join()
+            .unwrap()
+    };
+    fails(refill());
+    assert!(ceiling() > visible);
+    fails(refill());
+    fs::remove_file(arm).unwrap();
+    assert_eq!(refill().unwrap().map_id, visible);
+}
 
 /// Exercise the real parent-directory fsync, rather than a simulated crash.
 /// An EIO there must prevent success, including when retrying an existing
@@ -12,6 +54,11 @@ fn directory_sync_failure_prevents_metadata_publication() {
     if let Some(root) = env::var_os(CHILD_ROOT) {
         let root = PathBuf::from(root);
         vsdb_configure(VsdbOptions::new(&root)).unwrap();
+        match env::var("VSDB_DIRECTORY_SYNC_CASE").unwrap().as_str() {
+            "prefix" => return prefix_directory_sync_retries(&root),
+            "metadata" => {}
+            case => panic!("unknown directory sync case: {case}"),
+        }
         let mut map = MapxRaw::new();
         map.insert(b"key", b"value");
         let id = map.instance_id();
@@ -87,24 +134,23 @@ int fsync(int fd) {
         "failed to build fsync interposer: {}",
         String::from_utf8_lossy(&compiled.stderr),
     );
-    let data = root.join("data");
-    let output = Command::new(env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "directory_sync_failure_prevents_metadata_publication",
-            "--nocapture",
-        ])
-        .env(CHILD_ROOT, &data)
-        .env("LD_PRELOAD", &shim)
-        .env("VSDB_DIRECTORY_SYNC_TARGET", data.join("__SYSTEM__"))
-        .env("VSDB_DIRECTORY_SYNC_ARM", data.join("arm"))
-        .output()
-        .unwrap();
+    for case in ["metadata", "prefix"] {
+        let data = root.join(case);
+        let target = data.join("__SYSTEM__");
+        let output = Command::new(env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "directory_sync_failure_prevents_metadata_publication",
+                "--nocapture",
+            ])
+            .env(CHILD_ROOT, &data)
+            .env("LD_PRELOAD", &shim)
+            .env("VSDB_DIRECTORY_SYNC_TARGET", target)
+            .env("VSDB_DIRECTORY_SYNC_ARM", data.join("arm"))
+            .env("VSDB_DIRECTORY_SYNC_CASE", case)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{case} failed: {output:?}");
+    }
     fs::remove_dir_all(root).unwrap();
-    assert!(
-        output.status.success(),
-        "child failed:\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
 }

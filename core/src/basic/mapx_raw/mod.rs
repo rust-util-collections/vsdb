@@ -676,6 +676,12 @@ impl MapxRaw {
         self.inner.instance_id()
     }
 
+    /// Returns the map's identity, propagating errors from the first durable
+    /// prefix reservation for a newly created map.
+    pub fn try_instance_id(&self) -> Result<InstanceId> {
+        self.inner.try_instance_id()
+    }
+
     /// Checks if this `MapxRaw` instance is the same as another.
     ///
     /// # Arguments
@@ -706,10 +712,10 @@ impl MapxRaw {
                 operation: "metadata save",
             });
         }
-        let id = self.instance_id();
+        let id = self.try_instance_id()?;
         let path = self.namespace().meta_path(id.map_id);
         crate::common::create_dir_all_durable(path.parent().expect("has parent"))?;
-        crate::common::atomic_write_file(&path, &self.inner.encode_prefix_meta())?;
+        crate::common::atomic_write_file(&path, &self.inner.encode_prefix_meta()?)?;
         Ok(id)
     }
 
