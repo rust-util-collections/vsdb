@@ -17,6 +17,13 @@ This major version introduces a distinct storage format. Stop v17 processes and 
 - VerMap publishes working and history changes under one prefix. Its slotted B+ tree supports owned snapshots, checked recovery and batched edits. Trie roots use copy-on-write nodes and map-bound checkpoints.
 - SlotDex uses fixed-width slot codecs and detects stale writers. DagMap stores each node under one co-located prefix and supports typed keys and empty values. VecDex reads persisted graph state, uses snapshots for search and supports stored metric parameters.
 
+On the measured Linux/x86_64 workload, v18/v5 reduced default-namespace
+DagMap child p99 by 33.38% versus v18/v4. The same-graph warm VecDex
+upgrade comparison at `1300ad2` had 37.28% higher p99. Warm B+ tree
+point and bounded scan p99 also increased in the original matched fixture.
+The reports give control variation, request sizes, and later candidate trials.
+[Publication measurements](docs/evaluations/v18-publication/README.md) · [VecDex queries](docs/evaluations/v18-vecdex-v5/README.md) · [B+ tree controls](docs/evaluations/v18-tree-v5/README.md)
+
 ### Public API migration notes
 
 - Raw and typed map entries have `Occupied` and `Vacant` variants. A typed
