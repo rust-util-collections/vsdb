@@ -22,7 +22,7 @@ runs in a separate upgrade program. [Migrating from v17](../migration/README.md)
 | Topic | What the document covers |
 | --- | --- |
 | [v18 roadmap](proposals/v18-roadmap.md) | Storage design by subsystem, the initial performance evaluation, and the status of follow-up work |
-| [Joint MMDB v5 and VSDB v18 proposal](https://github.com/rust-util-collections/mmdb/blob/master/docs/proposals/mmdb-v5-vsdb-v18-improvements.md) | Shard-local publication, batched graph reads, rebuilds, memory budgets and the engine/collection upgrade sequence. In sibling checkouts, open `../mmdb/docs/proposals/mmdb-v5-vsdb-v18-improvements.md` from the VSDB repository root. |
+| [Joint MMDB v5 and VSDB v18 proposal](https://github.com/rust-util-collections/mmdb/blob/master/docs/proposals/mmdb-v5-vsdb-v18-improvements.md) | Shard-local publication, graph reads, memory budgets and the upgrade sequence. The [MMDB execution record](https://github.com/rust-util-collections/mmdb/blob/master/docs/proposals/mmdb-v5-execution-plan.md) tracks engine implementation and tests ahead of the VSDB adapter port. Both documents are in `../mmdb/docs/proposals/` in sibling checkouts. |
 | [Namespaces](proposals/namespaces.md) | Placement, universe and engine identities, prefix allocation and recovery |
 | [Namespace close](proposals/ns-close.md) | Engine ownership, close refusal and in-process teardown |
 | [Memory sizing](proposals/shared-mem-pool.md) | Per-engine block cache, per-shard buffers, telemetry and proposed extensions |
