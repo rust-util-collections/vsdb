@@ -292,3 +292,73 @@ fn interrupted_namespace_and_default_engine_initializers_resume_in_v18() {
     assert!(probe.status.success(), "{probe:?}");
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn interrupted_v17_empty_mmdb_dirs_migrate_and_resume_in_v18() {
+    if let Some(root) = std::env::var_os("VSDB_EMPTY_MMDB_MIGRATION_PROBE") {
+        vsdb_configure(VsdbOptions::new(PathBuf::from(root))).unwrap();
+        assert_eq!(vsdb::Namespace::default_ns().id(), 0);
+        assert_eq!(vsdb::Namespace::open(1).unwrap().id(), 1);
+        assert_eq!(vsdb::Namespace::open(2).unwrap().id(), 2);
+        return;
+    }
+    let root = std::env::temp_dir().join(format!(
+        "vsdb-empty-mmdb-migration-{}",
+        rand::random::<u128>()
+    ));
+    let system = root.join("__SYSTEM__");
+    let child1 = root.join("__NAMESPACES__/0000000000000001");
+    let child2 = root.join("__NAMESPACES__/0000000000000002");
+    fs::create_dir_all(system.join("__namespace_state__")).unwrap();
+    // Default engine crashed after creating mmdb/ and __initializing__.tmp.
+    fs::create_dir_all(root.join("mmdb")).unwrap();
+    fs::write(system.join("__initializing__.tmp"), b"1").unwrap();
+    // Namespace 1 crashed right after creating mmdb/, before __SYSTEM__.
+    fs::create_dir_all(child1.join("mmdb")).unwrap();
+    fs::write(system.join("__namespace_state__/0000000000000001"), b"P").unwrap();
+    // Namespace 2 crashed after creating mmdb/ and __SYSTEM__/__initializing__.tmp.
+    fs::create_dir_all(child2.join("mmdb")).unwrap();
+    fs::create_dir_all(child2.join("__SYSTEM__")).unwrap();
+    fs::write(child2.join("__SYSTEM__/__initializing__.tmp"), b"1").unwrap();
+    fs::write(system.join("__namespace_state__/0000000000000002"), b"P").unwrap();
+
+    let rec1 = (
+        1u64,
+        Option::<String>::None,
+        2u32,
+        Option::<u64>::None,
+        1u64,
+    );
+    let rec2 = (
+        2u64,
+        Option::<String>::None,
+        4u32,
+        Option::<u64>::None,
+        2u64,
+    );
+    fs::write(
+        system.join("__namespaces__"),
+        postcard::to_allocvec(&(3u64, vec![rec1, rec2])).unwrap(),
+    )
+    .unwrap();
+
+    // Non-empty mmdb/ without __initializing__ must still fail closed.
+    fs::create_dir_all(child1.join("mmdb/shard_00")).unwrap();
+    assert!(migrate_universe(&root).is_err());
+    fs::remove_dir_all(child1.join("mmdb/shard_00")).unwrap();
+
+    migrate_universe(&root).unwrap();
+    assert!(!system.join("__initializing__.tmp").exists());
+    assert!(!child2.join("__SYSTEM__/__initializing__.tmp").exists());
+
+    let probe = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "interrupted_v17_empty_mmdb_dirs_migrate_and_resume_in_v18",
+        ])
+        .env("VSDB_EMPTY_MMDB_MIGRATION_PROBE", &root)
+        .output()
+        .unwrap();
+    fs::remove_dir_all(&root).unwrap();
+    assert!(probe.status.success(), "{probe:?}");
+}

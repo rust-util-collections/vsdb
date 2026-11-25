@@ -313,12 +313,35 @@ impl Engine {
             engine.initializing = true;
             return Ok(Some(engine));
         }
-        if engine.root.join("mmdb").try_exists()? || version.is_some() {
+        if version.is_some() {
             return Err(corrupt("missing engine initializer"));
+        }
+        let mmdb = engine.root.join("mmdb");
+        if mmdb.try_exists()? {
+            if current
+                || !fs::symlink_metadata(&mmdb)?.is_dir()
+                || fs::read_dir(&mmdb)?.next().transpose()?.is_some()
+            {
+                return Err(corrupt("missing engine initializer"));
+            }
+            // v17 MmDB::open_at created mmdb/ before __SYSTEM__ and __initializing__.
+            engine.initializing = true;
+        }
+        if ns == 0 && !current {
+            let tmp = system.join("__initializing__.tmp");
+            if tmp.try_exists()? {
+                if !fs::symlink_metadata(&tmp)?.is_file() {
+                    return Err(corrupt("invalid pending engine initializer"));
+                }
+                engine.initializing = true;
+            }
         }
         if ns != 0 && engine.root.try_exists()? {
             for entry in fs::read_dir(&engine.root)? {
                 let e = entry?;
+                if !current && e.file_name() == "mmdb" && e.file_type()?.is_dir() {
+                    continue;
+                }
                 if e.file_name() != "__SYSTEM__" || !e.file_type()?.is_dir() {
                     return Err(corrupt("foreign pending namespace contents"));
                 }
@@ -387,10 +410,7 @@ impl Engine {
             let sentinel = self.root.join(INIT);
             match fs::read(sentinel) {
                 Ok(bytes) if bytes == self.bytes(id) || !current && bytes == b"1" => {}
-                Err(e)
-                    if !current
-                        && e.kind() == io::ErrorKind::NotFound
-                        && self.root.join("__SYSTEM__/__initializing__.tmp").is_file() => {}
+                Err(e) if !current && e.kind() == io::ErrorKind::NotFound => {}
                 _ => return Err(corrupt("pending engine initializer identity mismatch")),
             }
         } else if current {
@@ -493,7 +513,13 @@ impl Engine {
     }
     fn install(&self, id: u128) -> Result<()> {
         if self.initializing {
+            create_dir_all_durable(&self.root.join("__SYSTEM__"))?;
             atomic_write_file(&self.root.join(INIT), &self.bytes(id))?;
+            match fs::remove_file(self.root.join("__SYSTEM__/__initializing__.tmp")) {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
             return atomic_write_file(&self.root.join("__SYSTEM__/format_version"), b"18");
         }
         let path = self.header_path();

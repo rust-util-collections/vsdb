@@ -11,14 +11,6 @@
 
 ## Open
 
-### [HIGH] migration/universe: migrate_universe rejects valid v17 engines interrupted after mmdb directory creation
-- **Where**: `migration/src/universe.rs` (`Engine::discover`, `Engine::validate`)
-- **What**: `v17.0.21` `MmDB::open_at` always created `{root}/mmdb` before creating `{root}/__SYSTEM__` and staging/renaming `__initializing__.tmp` → `__initializing__`. On a v17 crash in that window (for `ns == 0` or a `Pending` `ns != 0`), `Engine::discover` hits `engine.root.join("mmdb").try_exists()?` and returns `Err(VsdbError::Corrupt { detail: "missing engine initializer" })`.
-- **Why**: Valid interrupted v17 engine initializations cannot be migrated (`migrate_universe` fails closed), and the `__initializing__.tmp` recovery branch in `Engine::discover` is unreachable for real v17 crashes because `mmdb/` already exists (violates E8 and `migration/README.md`).
-- **Suggested fix**: When `!established && !completed && !INIT.exists() && version.is_none()` and `mmdb/` is an empty directory (with at most `__initializing__.tmp` under `__SYSTEM__`), mark `engine.initializing = true` for both `ns == 0` and `Pending` `ns != 0` and allow missing `INIT` in `Engine::validate` so `Engine::install` writes the `VSENG018` `__initializing__` sentinel. Add a regression test in `migration/tests/basic.rs`. No v18 runtime format change.
-
----
-
 ### [HIGH] persistent_btree: BLOB_LEAF mutations and diffs re-read and re-allocate all unchanged >1 KiB sibling blobs
 - **Where**: `strata/src/basic/persistent_btree/mod.rs` (`PersistentBTree::{alloc, node}`), `nodes.rs` (`NodeView::materialize`, `Node::encode_with`), `insert.rs` (`insert_rec`), `remove.rs` (`remove_rec`, `fix_underflow`), `merge.rs` (`apply_leaf_run`), `diff.rs` (`Cursor::expand`)
 - **What**: `self.node(id)` eagerly reads all up to 32 `[0x12]` `BLOB` objects of a `BLOB_LEAF` into `Node::Leaf { values: Vec<Vec<u8>> }`, and `self.alloc` unconditionally allocates fresh `BLOB` IDs for every value `> 1024` bytes instead of preserving unchanged `BLOB` descriptors (`desc & CLASS_MASK == BLOB`). `fix_underflow` also calls `self.node(sibling).key_count()`, reading all 32 sibling blobs just to inspect `raw[1]`, and `BTreeDiffIter` reads all 32 blobs on both sides of a modified `BLOB_LEAF` before comparing entries.
