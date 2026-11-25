@@ -117,3 +117,82 @@ fn namespace_budget_counts_all_five_possible_generations_and_both_stores() {
         512 << 20
     );
 }
+
+#[test]
+fn full_immutable_queue_returns_busy_without_writing_the_refused_batch() {
+    use std::{sync::mpsc, time::Duration};
+
+    type Signals = Arc<Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>>;
+    struct ParkFirstFlush(Signals);
+    impl mmdb::BlockPropertyCollector for ParkFirstFlush {
+        fn add(&mut self, _: &[u8]) {
+            if let Some((entered, release)) = self.0.lock().take() {
+                entered.send(()).unwrap();
+                release.recv_timeout(Duration::from_secs(10)).unwrap();
+            }
+        }
+        fn finish_block(&mut self) -> Vec<u8> {
+            Vec::new()
+        }
+        fn name(&self) -> &str {
+            "vsdb-admission-test"
+        }
+    }
+
+    let dir = std::env::temp_dir()
+        .join(format!("vsdb-v5-immutables-{}", rand::random::<u128>()));
+    let (enter_tx, enter_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let signals = Arc::new(Mutex::new(Some((enter_tx, release_rx))));
+    let options = DbOptions::default()
+        .with_prefix_len(PREFIX_SIZE)
+        .with_write_buffer_size(1024)
+        .with_max_immutable_memtables(1)
+        .with_block_property_collectors(vec![Arc::new(move || {
+            Box::new(ParkFirstFlush(Arc::clone(&signals)))
+        })]);
+    let engine = MmDB {
+        dbs: vec![DB::open(options, &dir).unwrap()].into_boxed_slice(),
+        read_only: false,
+        mem_budget: 8 << 20,
+    };
+    let prefix = 42u64.to_le_bytes();
+    let mut accepted = engine.batch_begin(Ok(prefix));
+    accepted.insert(b"older", &[9; 4096]);
+    accepted.commit().unwrap();
+    enter_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    let db = engine.shard(&prefix);
+    let usage = db.memory_usage();
+    let sequence = db.snapshot().sequence();
+    let logs = wal_files(&dir);
+    let mut refused = engine.batch_begin(Ok(prefix));
+    refused.insert(b"newer", b"row");
+    let result = refused.commit_no_slowdown(true);
+    let after = db.snapshot().sequence();
+    let after_logs = wal_files(&dir);
+    let visible = engine.get(prefix, b"newer");
+    release_tx.send(()).unwrap();
+    assert_eq!(usage.immutable_memtable_count, 1);
+    assert!(usage.immutable_memtable_bytes > 0);
+    assert!(matches!(
+        result,
+        Err(VsdbError::Storage {
+            kind: StorageErrorKind::Busy,
+            ..
+        })
+    ));
+    assert_eq!(after, sequence);
+    assert_eq!(after_logs, logs);
+    assert_eq!(visible, None);
+    db.flush().unwrap();
+    let mut retry = engine.batch_begin(Ok(prefix));
+    retry.insert(b"newer", b"row");
+    retry.commit_no_slowdown(true).unwrap();
+    assert_eq!(db.snapshot().sequence(), sequence + 1);
+    assert_eq!(
+        engine.get(prefix, b"newer").as_deref(),
+        Some(b"row".as_slice())
+    );
+    engine.close().unwrap();
+    fs::remove_dir_all(dir).unwrap();
+}
