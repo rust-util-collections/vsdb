@@ -1,6 +1,6 @@
 use criterion::{BenchmarkId, Criterion, criterion_group};
 use std::hint::black_box;
-use vsdb::trie::{MptCalc, SmtCalc};
+use vsdb::trie::{MptCalc, SmtCalc, VerMapWithProof};
 
 fn mpt_insert(c: &mut Criterion) {
     c.bench_function("mpt_insert_100", |b| {
@@ -301,6 +301,29 @@ fn smt_prove_verify(c: &mut Criterion) {
     });
 }
 
+fn vermap_proof_block_building(c: &mut Criterion) {
+    let mut proof = VerMapWithProof::<u64, [u8; 32], MptCalc>::new();
+    let main = proof.map().main_branch();
+    proof
+        .map_mut()
+        .bulk_load(main, (0u64..10_000).map(|i| (i, [0x11; 32])))
+        .unwrap();
+    proof.map_mut().commit(main).unwrap();
+    proof.merkle_root(main).unwrap();
+
+    c.bench_function("vermap_proof_dirty_steps_64", |b| {
+        b.iter(|| {
+            for step in 0u64..64 {
+                let k = 100_000 + step;
+                proof.map_mut().insert(main, &k, &[0x22; 32]).unwrap();
+                black_box(proof.merkle_root(main).unwrap());
+            }
+            proof.map_mut().discard(main).unwrap();
+            black_box(proof.merkle_root(main).unwrap());
+        });
+    });
+}
+
 criterion_group!(
     benches,
     mpt_insert,
@@ -316,6 +339,7 @@ criterion_group!(
     smt_remove,
     smt_batch_update,
     smt_prove_verify,
+    vermap_proof_block_building,
 );
 
 #[path = "units/legacy_budget.rs"]

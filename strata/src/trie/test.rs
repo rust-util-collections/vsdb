@@ -1814,7 +1814,10 @@ mod mpt_stack_tests {
 }
 
 mod dirty_sync_tests {
-    use crate::trie::{MptCalc, VerMapWithProof};
+    use crate::{
+        trie::{MptCalc, SmtCalc, VerMapWithProof},
+        versioned::store::RETIRED,
+    };
 
     #[test]
     fn repeated_dirty_roots_do_not_clone_the_trie() {
@@ -1832,6 +1835,114 @@ mod dirty_sync_tests {
         proof.map_mut().insert(main, &2, &vec![1u8; 32]).unwrap();
         let third = proof.merkle_root(main).unwrap();
         assert_ne!(first, third);
+    }
+
+    #[test]
+    fn incremental_working_cursor_adaptive_rebuild_and_clean_flush() {
+        let mut proof: VerMapWithProof<u32, Vec<u8>, MptCalc> = VerMapWithProof::new();
+        let main = proof.map().main_branch();
+
+        // Seed 1,200 committed keys.
+        proof
+            .map_mut()
+            .bulk_load(main, (0u32..1200).map(|i| (i, vec![(i & 0xff) as u8; 24])))
+            .unwrap();
+        let c1 = proof.map_mut().commit(main).unwrap();
+        let r_c1 = proof.merkle_root(main).unwrap();
+
+        // Sequential uncommitted working edits advance incrementally via working_lease.
+        let mut last = r_c1;
+        for step in 0u32..40 {
+            let k = 10_000 + step;
+            proof.map_mut().insert(main, &k, &vec![0x5a; 24]).unwrap();
+            let r = proof.merkle_root(main).unwrap();
+            assert_ne!(r, last);
+            last = r;
+        }
+
+        // Verify parity against a fresh rebuild over the current working snapshot.
+        let fresh_working =
+            MptCalc::from_entries(proof.map().snapshot(main).unwrap().raw_iter())
+                .unwrap()
+                .root_hash();
+        assert_eq!(last, fresh_working);
+
+        // Reverting one key and discarding uncommitted edits return to r_c1.
+        proof.map_mut().remove(main, &10_039).unwrap();
+        let after_remove = proof.merkle_root(main).unwrap();
+        assert_ne!(after_remove, last);
+        proof.map_mut().discard(main).unwrap();
+        assert_eq!(proof.merkle_root(main).unwrap(), r_c1);
+
+        // Re-dirty main across multiple working steps (creating deferred [0x05]
+        // RETIRED markers under the pinned working_lease), then verify flush()/close()
+        // drains every RETIRED marker so [0x07] REFS loads cleanly on reopen.
+        proof.map_mut().insert(main, &1, &vec![0xaa; 24]).unwrap();
+        proof.merkle_root(main).unwrap();
+        proof.map_mut().insert(main, &2, &vec![0xbb; 24]).unwrap();
+        let dirty_root = proof.merkle_root(main).unwrap();
+        proof.map_mut().insert(main, &3, &vec![0xcc; 24]).unwrap();
+
+        // High-churn branch (>50% modified keys) exercises adaptive from_entries fallback.
+        let feat = proof.map_mut().create_branch("feat", main).unwrap();
+        proof
+            .map_mut()
+            .bulk_load(
+                feat,
+                (0u32..1200).map(|i| (i, vec![((i + 7) & 0xff) as u8; 24])),
+            )
+            .unwrap();
+        let c_feat = proof.map_mut().commit(feat).unwrap();
+        let r_feat = proof.merkle_root_at_commit(c_feat).unwrap();
+        let expected_feat =
+            MptCalc::from_entries(proof.map().at(c_feat).unwrap().raw_iter())
+                .unwrap()
+                .root_hash();
+        assert_eq!(r_feat, expected_feat);
+
+        // Re-sync main's dirty state (1, 2, 3), flush, and assert zero [0x05] RETIRED rows!
+        let r_main_dirty = proof.merkle_root(main).unwrap();
+        assert_ne!(r_main_dirty, dirty_root);
+        proof.flush().unwrap();
+        assert_eq!(
+            proof
+                .map()
+                .tree
+                .nodes
+                .range([RETIRED].as_slice()..[RETIRED + 1].as_slice())
+                .count(),
+            0,
+            "flush() must release working_lease and drain [0x05] RETIRED markers"
+        );
+
+        let id = proof.save_meta().unwrap();
+        proof.close().unwrap();
+        let mut reopened: VerMapWithProof<u32, Vec<u8>, MptCalc> =
+            VerMapWithProof::from_meta(id).unwrap();
+        assert_eq!(reopened.merkle_root_at_commit(c1).unwrap(), r_c1);
+        assert_eq!(reopened.merkle_root(main).unwrap(), r_main_dirty);
+
+        // Also check SMT parity over chunked (>4096) streaming diff.
+        let mut smt_proof: VerMapWithProof<u32, u32, SmtCalc> = VerMapWithProof::new();
+        let sm = smt_proof.map().main_branch();
+        smt_proof
+            .map_mut()
+            .bulk_load(sm, (0u32..12_000).map(|i| (i, i)))
+            .unwrap();
+        let sc1 = smt_proof.map_mut().commit(sm).unwrap();
+        smt_proof.merkle_root_at_commit(sc1).unwrap();
+        // Modify 5,000 keys (< 6,000 threshold, > 4,096 chunk size -> 2 streamed chunks).
+        smt_proof
+            .map_mut()
+            .write_batch(sm, (0u32..5_000).map(|i| (i, Some(i + 1_000_000))))
+            .unwrap();
+        let sc2 = smt_proof.map_mut().commit(sm).unwrap();
+        let got_smt = smt_proof.merkle_root_at_commit(sc2).unwrap();
+        let want_smt =
+            SmtCalc::from_entries(smt_proof.map().at(sc2).unwrap().raw_iter())
+                .unwrap()
+                .root_hash();
+        assert_eq!(got_smt, want_smt);
     }
 }
 

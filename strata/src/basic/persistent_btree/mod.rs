@@ -963,6 +963,25 @@ impl PersistentBTree {
         h
     }
 
+    /// Estimates entry count in `O(height)` leftmost-spine page-header reads
+    /// without reading sibling subtrees or `[0x12]` blobs.
+    pub(crate) fn estimate_entries(&self, root: NodeId) -> usize {
+        if root == EMPTY_ROOT {
+            return 0;
+        }
+        let mut factor = 1usize;
+        let mut cur = root;
+        loop {
+            let raw = self.object(cur);
+            let page = NodeView::open(&raw).expect("invalid B+ tree page");
+            if page.leaf {
+                return factor.saturating_mul(page.len);
+            }
+            factor = factor.saturating_mul(page.len + 1);
+            cur = page.child(0);
+        }
+    }
+
     /// Rebuilds the in-memory reference-count map from scratch by
     /// walking all nodes reachable from `live_roots` and live snapshot leases.
     ///

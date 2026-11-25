@@ -349,9 +349,17 @@ impl<K, V> VerMap<K, V> {
     }
 
     pub(crate) fn diff_roots(&self, from: &RootLease, to: &RootLease) -> Vec<TreeDiff> {
+        self.diff_roots_iter(from, to).collect()
+    }
+
+    pub(crate) fn diff_roots_iter(
+        &self,
+        from: &RootLease,
+        to: &RootLease,
+    ) -> crate::basic::persistent_btree::BTreeDiffIter<'_> {
         #[cfg(test)]
         super::test::before_diff_traversal();
-        self.tree.diff(from.root, to.root)
+        self.tree.diff_iter(from.root, to.root)
     }
 
     pub(crate) fn commit_root(&self, id: CommitId) -> Result<Arc<RootLease>> {

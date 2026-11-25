@@ -11,7 +11,7 @@
 //! time.  A transparent on-disk cache avoids full rebuilds on restart.
 
 use crate::{
-    basic::persistent_btree::{RootLease, TreeDiff},
+    basic::persistent_btree::{EMPTY_ROOT, RootLease, TreeDiff},
     common::{
         InstanceId, Namespace, PrefixFrame,
         ende::{KeyEnDeOrdered, ValueEnDe},
@@ -23,6 +23,9 @@ use crate::{
 
 use super::{Checkpoint, TrieCalc};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+const DIFF_STREAM_CHUNK: usize = 4096;
 
 /// A root and proof computed together for one requested versioned state.
 ///
@@ -45,13 +48,20 @@ pub struct ProofWithRoot<P> {
 ///
 /// # Incremental updates
 ///
-/// The internal trie tracks a *sync point* — the commit it was last
-/// synchronized to.  When `merkle_root` is called:
+/// The internal trie tracks both the last synchronized commit and, when a
+/// branch has uncommitted edits, a cursor lease on its most recently hashed
+/// working root. When `merkle_root` is called:
 ///
 /// 1. If the trie is already synced to the target → return cached hash.
-/// 2. If the target is reachable via diff from the sync point →
-///    apply diff incrementally.
-/// 3. Otherwise → full rebuild from the store's iterator.
+/// 2. If the target advances a dirty working root on the same branch or is
+///    reachable via diff from the committed sync point → stream the B+ tree
+///    diff in bounded chunks (falling back to a streaming rebuild when high
+///    churn makes full construction cheaper).
+/// 3. Otherwise → full streaming rebuild from the target tree's iterator.
+///
+/// Call [`flush`](Self::flush) or [`close`](Self::close) on clean shutdown so
+/// any pinned working-root lease is released before writing the underlying
+/// [`VerMap`]'s `[0x07]` reference checkpoint.
 ///
 /// # Disposable disk cache
 ///
@@ -71,6 +81,8 @@ pub struct VerMapWithProof<K, V, T: TrieCalc> {
     working_trie: T,
     sync_commit: Option<CommitId>,
     working_root: Option<u64>,
+    working_lease: Option<Arc<RootLease>>,
+    working_branch: Option<BranchId>,
     cache_instance: InstanceId,
 }
 
@@ -160,17 +172,20 @@ where
                     && map
                         .get_commit(commit)
                         .is_some_and(|c| c.root == checkpoint.tree_root))
-                .then_some((trie, commit))
+                .then_some((trie, commit, checkpoint.tree_root))
             });
-        let (committed_trie, sync_commit) =
-            restored.map(|(t, c)| (t, Some(c))).unwrap_or_default();
+        let (committed_trie, sync_commit, working_root) = restored
+            .map(|(t, c, root)| (t, Some(c), Some(root)))
+            .unwrap_or_default();
         Self {
             map,
             cache_instance: id,
             working_trie: committed_trie.clone(),
             committed_trie,
             sync_commit,
-            working_root: None,
+            working_root,
+            working_lease: None,
+            working_branch: None,
         }
     }
 
@@ -189,6 +204,21 @@ where
         &mut self.map
     }
 
+    /// Releases any pinned working-root lease and durably checkpoints the
+    /// underlying [`VerMap`] reference graph (`[0x07]`) for fast reopen.
+    pub fn flush(&mut self) -> Result<()> {
+        self.working_lease = None;
+        self.working_branch = None;
+        self.map.flush()
+    }
+
+    /// Releases any pinned working-root lease and closes the underlying [`VerMap`].
+    pub fn close(mut self) -> Result<()> {
+        self.working_lease = None;
+        self.working_branch = None;
+        self.map.close()
+    }
+
     // =================================================================
     // Merkle root computation
     // =================================================================
@@ -200,22 +230,54 @@ where
     pub fn merkle_root(&mut self, branch: BranchId) -> Result<[u8; 32]> {
         self.reset_if_replaced();
         let roots = self.map.branch_roots(branch)?;
-        if self.working_root != Some(roots.working.root) {
+        if self.working_root == Some(roots.working.root) {
+            if roots.working.root == roots.committed.root {
+                self.working_lease = None;
+                self.working_branch = None;
+                if let Some(commit) = roots.head {
+                    self.committed_trie = self.working_trie.clone();
+                    self.sync_commit = Some(commit);
+                } else {
+                    self.committed_trie = T::default();
+                    self.sync_commit = None;
+                }
+            } else if self.working_lease.is_none() {
+                self.working_lease = Some(roots.working);
+                self.working_branch = Some(branch);
+            }
+            return Ok(self.working_trie.root_hash());
+        }
+
+        let candidate = if roots.working.root == roots.committed.root {
             if let Some(commit) = roots.head {
                 self.sync_committed(commit, &roots.committed)?;
             } else {
                 self.committed_trie = T::default();
                 self.sync_commit = None;
             }
-            let mut candidate = self.committed_trie.clone();
-            if roots.working.root != roots.committed.root {
-                Self::apply_diff(
-                    &mut candidate,
-                    &self.map.diff_roots(&roots.committed, &roots.working),
-                )?;
+            self.committed_trie.clone()
+        } else if self.working_branch == Some(branch)
+            && let Some(prev) = self.working_lease.clone()
+        {
+            self.sync_or_rebuild(&self.working_trie, &prev, &roots.working)?
+        } else {
+            if let Some(commit) = roots.head {
+                self.sync_committed(commit, &roots.committed)?;
+            } else {
+                self.committed_trie = T::default();
+                self.sync_commit = None;
             }
-            self.working_root = Some(roots.working.root);
-            self.working_trie = candidate;
+            self.sync_or_rebuild(&self.committed_trie, &roots.committed, &roots.working)?
+        };
+
+        self.working_root = Some(roots.working.root);
+        self.working_trie = candidate;
+        if roots.working.root == roots.committed.root {
+            self.working_lease = None;
+            self.working_branch = None;
+        } else {
+            self.working_lease = Some(roots.working);
+            self.working_branch = Some(branch);
         }
         Ok(self.working_trie.root_hash())
     }
@@ -225,6 +287,8 @@ where
         self.sync_committed(commit, &root)?;
         self.working_trie = self.committed_trie.clone();
         self.working_root = Some(root.root);
+        self.working_lease = None;
+        self.working_branch = None;
         Ok(self.working_trie.root_hash())
     }
     /// Writes a durable checkpoint of the named committed tree.
@@ -235,6 +299,8 @@ where
         self.sync_committed(commit, &root)?;
         self.working_trie = self.committed_trie.clone();
         self.working_root = Some(root.root);
+        self.working_lease = None;
+        self.working_branch = None;
         let id = Checkpoint {
             universe: self.namespace().universe_id(),
             map: self.instance_id(),
@@ -249,6 +315,8 @@ where
         if id != self.cache_instance {
             self.cache_instance = id;
             self.working_root = None;
+            self.working_lease = None;
+            self.working_branch = None;
             self.sync_commit = None;
             self.working_trie = T::default();
             self.committed_trie = T::default();
@@ -258,16 +326,49 @@ where
         if self.sync_commit == Some(commit) {
             return Ok(());
         }
+        if self.working_root == Some(root.root) {
+            self.committed_trie = self.working_trie.clone();
+            self.sync_commit = Some(commit);
+            return Ok(());
+        }
         if let Some(from) = self.sync_commit.and_then(|c| self.map.commit_root(c).ok()) {
-            let diff = self.map.diff_roots(&from, root);
-            Self::apply_diff(&mut self.committed_trie, &diff)?;
+            self.committed_trie =
+                self.sync_or_rebuild(&self.committed_trie, &from, root)?;
         } else {
             self.committed_trie = T::from_entries(self.map.tree.iter(root.root))?;
         }
         self.sync_commit = Some(commit);
         Ok(())
     }
-    /// Apply a diff to the current trie.
+    fn sync_or_rebuild(&self, base: &T, from: &RootLease, to: &RootLease) -> Result<T> {
+        if to.root == EMPTY_ROOT {
+            return Ok(T::default());
+        }
+        if from.root == EMPTY_ROOT {
+            return T::from_entries(self.map.tree.iter(to.root));
+        }
+        let rebuild_threshold = (self.map.tree.estimate_entries(to.root) / 2).max(512);
+        let mut iter = self.map.diff_roots_iter(from, to);
+        let mut candidate = base.clone();
+        let mut total_diffs = 0usize;
+        let mut chunk = Vec::with_capacity(DIFF_STREAM_CHUNK.min(256));
+        loop {
+            chunk.clear();
+            for entry in iter.by_ref().take(DIFF_STREAM_CHUNK) {
+                chunk.push(entry);
+            }
+            if chunk.is_empty() {
+                return Ok(candidate);
+            }
+            total_diffs += chunk.len();
+            if total_diffs > rebuild_threshold {
+                drop(iter);
+                return T::from_entries(self.map.tree.iter(to.root));
+            }
+            Self::apply_diff(&mut candidate, &chunk)?;
+        }
+    }
+    /// Apply a diff chunk to `trie`.
     fn apply_diff(trie: &mut T, diff: &[TreeDiff]) -> Result<()> {
         let ops: Vec<(&[u8], Option<&[u8]>)> = diff
             .iter()
