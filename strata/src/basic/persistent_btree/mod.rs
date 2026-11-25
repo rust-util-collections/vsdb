@@ -35,8 +35,8 @@ use crate::{
         error::{Result, VsdbError},
     },
     versioned::{
-        BranchId,
-        store::{BranchHead, HEAD, RETIRED, row},
+        BranchId, Commit, CommitId,
+        store::{BranchHead, HEAD, Header, RETIRED, row},
     },
 };
 use parking_lot::Mutex;
@@ -48,7 +48,7 @@ use std::{
     result::Result as StdResult,
     sync::{
         Arc, LazyLock, Weak,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering, fence},
     },
 };
 use vsdb_core::basic::mapx_raw::{MapxRaw, MapxRawReader};
@@ -249,6 +249,58 @@ impl PageBytes<'_> {
     }
 }
 
+/// A direct-mapped cache of recent branch tips shared by all readers of a tree.
+/// Only a reader that asks for a nonempty tip allocates its slot table.
+#[derive(Default, Debug)]
+struct TipCache {
+    slots: Vec<TipSlot>,
+}
+
+#[derive(Default, Debug)]
+struct TipSlot {
+    last_request: u64,
+    saved: Option<(u64, Commit)>,
+}
+
+impl TipCache {
+    const SLOTS: usize = (8 * 1024) / size_of::<TipSlot>();
+
+    #[inline]
+    fn probe(
+        &mut self,
+        id: CommitId,
+        sequence: u64,
+        admit: &mut bool,
+    ) -> Option<Commit> {
+        if id.raw() == 0 {
+            return None;
+        }
+        if self.slots.is_empty() {
+            self.slots.resize_with(Self::SLOTS, TipSlot::default);
+        }
+        let slot = &mut self.slots[id.raw() as usize % Self::SLOTS];
+        let repeated = slot.last_request == id.raw();
+        slot.last_request = id.raw();
+        if let Some((epoch, commit)) = &slot.saved
+            && *epoch == (sequence & !1)
+            && commit.id() == id
+        {
+            return Some(commit.clone());
+        }
+        *admit = repeated;
+        None
+    }
+
+    fn remember(&mut self, sequence: u64, commit: &Commit) {
+        let id = commit.id().raw();
+        if let Some(slot) = self.slots.get_mut(id as usize % Self::SLOTS)
+            && slot.last_request == id
+        {
+            slot.saved = Some((sequence & !1, commit.clone()));
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct RefState {
     counts: HashMap<NodeId, u32>,
@@ -259,6 +311,7 @@ pub(crate) struct RefState {
     pins: HashMap<NodeId, u32>,
     /// Live branch head cache synchronized under the same lock as `counts`.
     pub(crate) heads: HashMap<BranchId, BranchHead>,
+    tip_cache: TipCache,
     /// Released keys waiting for a WAL sync, shared by every pool alias.
     deferred: Option<Vec<Vec<u8>>>,
 }
@@ -268,6 +321,7 @@ impl RefState {
         self.counts.clear();
         self.edges.clear();
         self.heads.clear();
+        self.tip_cache = TipCache::default();
         self.counts.reserve(expanded.len());
         for (id, node) in expanded {
             self.counts.insert(id, node.ref_count);
@@ -551,6 +605,10 @@ pub(crate) struct TreeRuntime {
     // The primary instance-meta path belongs to the first handle type saved.
     // Serialize that choice across aliases, independently of page and pin locks.
     meta_save: Mutex<()>,
+    // An odd sequence spans a history publication, through installation of
+    // its branch heads. Working edits only replace dirty roots and tree pages.
+    history_sequence: AtomicU64,
+    history_target_generation: AtomicU64,
     next_id: AtomicU64,
     refs: Mutex<RefState>,
     pub(crate) page_cache: InternalPageCache,
@@ -575,6 +633,8 @@ fn tree_runtime(
     }
     let runtime = Arc::new(TreeRuntime {
         meta_save: Mutex::new(()),
+        history_sequence: AtomicU64::new(0),
+        history_target_generation: AtomicU64::new(0),
         next_id: AtomicU64::new(next_id_floor),
         refs: Mutex::new(initial_refs),
         page_cache: InternalPageCache::from_namespace_budget(ns_budget_bytes),
@@ -697,6 +757,7 @@ impl<'de> Deserialize<'de> for PersistentBTree {
                         zombies: HashSet::new(),
                         pins: HashMap::new(),
                         heads: HashMap::new(),
+                        tip_cache: TipCache::default(),
                         deferred: None,
                         ready: false,
                     },
@@ -766,6 +827,7 @@ impl PersistentBTree {
                 ready: true,
                 pins: HashMap::new(),
                 heads: HashMap::new(),
+                tip_cache: TipCache::default(),
                 deferred: None,
             },
         );
@@ -795,8 +857,63 @@ impl PersistentBTree {
             .resolve_branch_raw(&self.nodes, branch)
     }
 
+    /// Resolve the branch and probe its tip under the same lock as the head
+    /// cache. A rotating set of unrelated commits bypasses cache admission.
+    #[inline]
+    pub(crate) fn branch_tip(
+        &self,
+        branch: BranchId,
+        sequence: u64,
+        admit: &mut bool,
+        load: impl FnOnce(CommitId) -> Result<Option<Commit>>,
+    ) -> Result<Option<Commit>> {
+        let mut refs = self.runtime.refs.lock();
+        let id = refs.resolve_branch_raw(&self.nodes, branch)?.head;
+        if let Some(commit) = refs.tip_cache.probe(id, sequence, admit) {
+            return Ok(Some(commit));
+        }
+        drop(refs);
+        load(id)
+    }
+
+    pub(crate) fn remember_tip(&self, sequence: u64, tip: Option<&Commit>) {
+        if let Some(commit) = tip {
+            self.runtime
+                .refs
+                .lock()
+                .tip_cache
+                .remember(sequence, commit);
+        }
+    }
+
     pub(crate) fn clear_cached_heads(&self) {
         self.runtime.refs.lock().heads.clear();
+    }
+
+    #[inline]
+    pub(crate) fn history_sequence(&self) -> u64 {
+        self.runtime.history_sequence.load(Ordering::Acquire)
+    }
+
+    #[inline]
+    pub(crate) fn history_unchanged(&self, sequence: u64) -> bool {
+        if sequence & 1 != 0 {
+            // A sync may spend most of its time waiting for its WAL fence.
+            // If the old generation is still visible *after* reading the
+            // commits, the cached head and all rows came from the old history.
+            let target = self
+                .runtime
+                .history_target_generation
+                .load(Ordering::Acquire);
+            if !Header::get(&self.nodes)
+                .is_ok_and(|h| h.generation.checked_add(1) == Some(target))
+            {
+                return false;
+            }
+        }
+        // Keep every row and branch-cache read before the final observation.
+        fence(Ordering::Acquire);
+        self.runtime.history_sequence.load(Ordering::Relaxed) == sequence
     }
 
     pub(crate) fn lock_meta_save(&self) -> parking_lot::MutexGuard<'_, ()> {
@@ -1629,6 +1746,7 @@ impl PersistentBTree {
                 ready: refs.ready,
                 pins: HashMap::new(),
                 heads: HashMap::new(),
+                tip_cache: TipCache::default(),
                 deferred: None,
             },
         );

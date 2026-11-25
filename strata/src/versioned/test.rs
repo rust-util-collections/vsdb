@@ -4,6 +4,33 @@ use crate::common::error::VsdbError;
 use std::ops::Bound;
 
 #[test]
+fn commit_serde_preserves_parent_sequence_bytes() {
+    use super::Commit;
+
+    // Prior postcard layout: id=300, root=9, Vec<CommitId>, time=16384, refs=130.
+    for (parents, encoded) in [
+        (&[][..], &[0][..]),
+        (&[128][..], &[1, 0x80, 1][..]),
+        (&[127, 256][..], &[2, 127, 0x80, 2][..]),
+        // External serde values can have more parents than a durable DAG row.
+        (&[1, 2, 127, 256][..], &[4, 1, 2, 127, 0x80, 2][..]),
+    ] {
+        let mut wire = vec![0xac, 2, 9];
+        wire.extend_from_slice(encoded);
+        wire.extend_from_slice(&[0x80, 0x80, 1, 0x82, 1]);
+        let (commit, tail): (Commit, _) = postcard::take_from_bytes(&wire).unwrap();
+        assert!(tail.is_empty());
+        assert_eq!(commit.id().raw(), 300);
+        assert_eq!(commit.root, 9);
+        let ids: &[CommitId] = commit.parents();
+        assert!(ids.iter().map(|id| id.raw()).eq(parents.iter().copied()));
+        assert_eq!(commit.timestamp_us(), 16_384);
+        assert_eq!(commit.ref_count, 130);
+        assert_eq!(postcard::to_allocvec(&commit).unwrap(), wire);
+    }
+}
+
+#[test]
 fn versioning_ids_are_ordered_keys() {
     use crate::KeyEnDeOrdered;
 
@@ -2303,7 +2330,7 @@ fn get_commit_with_parent() {
 
     let commit2 = m.get_commit(c2).unwrap();
     assert_eq!(commit2.id, c2);
-    assert_eq!(commit2.parents, vec![c1]);
+    assert_eq!(commit2.parents(), [c1]);
 }
 
 #[test]
@@ -4270,7 +4297,7 @@ fn deep_clone_preserves_independent_history_and_branch_lifecycle() {
     assert_eq!(restored.main_branch(), fork);
     assert_eq!(restored.branch_id("main"), None);
     assert_eq!(restored.at(c1).map(|s| s.get(&1)).unwrap(), Some(10));
-    assert_eq!(restored.get_commit(c3).unwrap().parents, vec![c2]);
+    assert_eq!(restored.get_commit(c3).unwrap().parents(), [c2]);
     assert_eq!(restored.get(next_branch, &3).unwrap(), Some(30));
 
     assert_eq!(original.main_branch(), main);
@@ -4397,14 +4424,102 @@ fn assert_tree_owners(m: &VerMap<u32, u32>, leased_roots: &[u64]) {
 }
 
 thread_local! {
-    static DIFF_BEFORE_TRAVERSAL: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+    static BEFORE_READ_TRAVERSAL: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
 }
 
-pub(super) fn before_diff_traversal() {
-    let hook = DIFF_BEFORE_TRAVERSAL.with(|slot| slot.borrow_mut().take());
+pub(super) fn before_read_traversal() {
+    let hook = BEFORE_READ_TRAVERSAL.with(|slot| slot.borrow_mut().take());
     if let Some(hook) = hook {
         hook();
+    }
+}
+
+#[test]
+fn cached_history_tip_tracks_alias_refcounts_and_branch_identity() {
+    let mut writer = VerMap::<u64, u64>::new();
+    let main = writer.main_branch();
+    let base = writer.commit(main).unwrap();
+    let reader = VerMap::<u64, u64>::from_meta(writer.save_meta().unwrap()).unwrap();
+    let prior = reader.head_commit(main).unwrap().unwrap().ref_count;
+    // Prime the cached record, then change only its ownership through a fork.
+    assert_eq!(reader.head_commit(main).unwrap().unwrap().ref_count, prior);
+    let side = writer.create_branch("side", main).unwrap();
+    assert_eq!(
+        reader.head_commit(main).unwrap().unwrap().ref_count,
+        prior + 1
+    );
+    let shared = reader.head_commit(side).unwrap().unwrap();
+    assert_eq!(shared.id(), base);
+    assert_eq!(shared.ref_count, prior + 1);
+    writer.insert(side, &1, &2).unwrap();
+    let tip = writer.commit(side).unwrap();
+    assert_eq!(reader.head_commit(side).unwrap().unwrap().id(), tip);
+    assert_eq!(reader.log(main).unwrap()[0].id(), base);
+    writer.delete_branch(side).unwrap();
+    assert_eq!(reader.log(main).unwrap()[0].ref_count, prior);
+    assert!(matches!(
+        reader.head_commit(side),
+        Err(VsdbError::BranchNotFound { .. })
+    ));
+}
+
+#[test]
+fn history_read_during_publication_retries_a_retired_head() {
+    use std::{sync::mpsc, thread, time::Duration};
+    let mut writer = VerMap::<u64, u64>::new();
+    let branch = writer.main_branch();
+    let base = writer.commit(branch).unwrap();
+    writer.insert(branch, &1, &2).unwrap();
+    writer.commit(branch).unwrap();
+    let reader = VerMap::<u64, u64>::from_meta(writer.save_meta().unwrap()).unwrap();
+    let (entered, ready) = mpsc::sync_channel(0);
+    let (release, resume) = mpsc::sync_channel(0);
+    let write = thread::spawn(move || {
+        PUBLICATION_HOOK.set(Some(Box::new(move || {
+            entered.send(()).unwrap();
+            resume.recv_timeout(Duration::from_secs(10)).unwrap();
+            Ok(())
+        })));
+        writer.rollback_to(branch, base).unwrap();
+    });
+    ready.recv_timeout(Duration::from_secs(10)).unwrap();
+    BEFORE_READ_TRAVERSAL.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            release.send(()).unwrap();
+            write.join().unwrap();
+        }));
+    });
+    let log: Vec<_> = reader.log(branch).unwrap().iter().map(|c| c.id()).collect();
+    assert_eq!(log, [base]);
+}
+
+#[test]
+fn history_reads_retain_head_and_parents_across_rollback() {
+    let mut map = VerMap::<u32, u32>::new();
+    let branch = map.main_branch();
+    let base = map.commit(branch).unwrap();
+    for read_log in [false, true] {
+        map.insert(branch, &0, &1).unwrap();
+        let tip = map.commit(branch).unwrap();
+        let bytes = postcard::to_allocvec(&map).unwrap();
+        BEFORE_READ_TRAVERSAL.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move || {
+                // This alias is created and dropped during the read.
+                let mut writer: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
+                writer.rollback_to(branch, base).unwrap();
+            }));
+        });
+        if read_log {
+            let commits: Vec<_> =
+                map.log(branch).unwrap().iter().map(|c| c.id()).collect();
+            assert!(commits == [tip, base] || commits == [base]);
+        } else {
+            assert!(
+                [tip, base].contains(&map.head_commit(branch).unwrap().unwrap().id())
+            );
+        }
+        assert!(map.get_commit(tip).is_none());
     }
 }
 
@@ -4422,7 +4537,7 @@ fn merkle_root_uses_one_branch_state_during_alias_writes() {
         .root_hash();
     let mut writer: VerMap<u32, u32> =
         postcard::from_bytes(&postcard::to_allocvec(reader.map()).unwrap()).unwrap();
-    DIFF_BEFORE_TRAVERSAL.with(|slot| {
+    BEFORE_READ_TRAVERSAL.with(|slot| {
         *slot.borrow_mut() = Some(Box::new(move || {
             writer.insert(main, &2, &20).unwrap();
             writer.commit(main).unwrap();
@@ -4447,7 +4562,7 @@ fn raw_uncommitted_diff_pins_roots_during_alias_reclamation() {
     let root = reader.get_branch(main).unwrap().dirty_root;
     let mut writer: VerMap<u32, u32> =
         postcard::from_bytes(&postcard::to_allocvec(&reader).unwrap()).unwrap();
-    DIFF_BEFORE_TRAVERSAL.with(|slot| {
+    BEFORE_READ_TRAVERSAL.with(|slot| {
         *slot.borrow_mut() = Some(Box::new(move || {
             writer.discard(main).unwrap();
             writer.commit(main).unwrap();
@@ -4489,7 +4604,7 @@ fn raw_commit_diffs_pin_both_roots_during_alias_reclamation() {
         ];
         let mut writer: VerMap<u32, u32> =
             postcard::from_bytes(&postcard::to_allocvec(&reader).unwrap()).unwrap();
-        DIFF_BEFORE_TRAVERSAL.with(|slot| {
+        BEFORE_READ_TRAVERSAL.with(|slot| {
             *slot.borrow_mut() = Some(Box::new(move || {
                 writer.delete_branch(feature).unwrap();
                 assert_tree_owners(&writer, &roots);
@@ -4759,7 +4874,7 @@ fn validate_commit_graph_rejects_a_self_parent() {
     let commit = m.commit(main).unwrap();
 
     let mut row = m.get_commit(commit).unwrap();
-    row.parents = vec![commit];
+    row.parents = smallvec::smallvec![commit];
     m.tree
         .nodes
         .insert(super::store::row(COMMIT, commit.raw()), row.bytes());
@@ -4787,7 +4902,8 @@ fn readers_can_pin_old_roots_during_a_failing_wal_sync() {
     let old = map.commit(main).unwrap();
     let feature = map.create_branch("feature", main).unwrap();
     map.insert(feature, &1, &20).unwrap();
-    map.commit(feature).unwrap();
+    let tip = map.commit(feature).unwrap();
+    let history = VerMap::<u64, u64>::from_meta(map.save_meta().unwrap()).unwrap();
     let reader = map.reader();
     let (entered, entered_rx) = mpsc::sync_channel(0);
     let (release, release_rx) = mpsc::sync_channel(0);
@@ -4806,12 +4922,16 @@ fn readers_can_pin_old_roots_during_a_failing_wal_sync() {
         map
     });
     entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_eq!(history.head_commit(feature).unwrap().unwrap().id(), tip);
+    assert_eq!(history.log(feature).unwrap().len(), 2);
     let snapshot = reader.snapshot(feature).unwrap();
     assert_eq!(snapshot.get(&1), Some(20));
     release.send(()).unwrap();
     let mut map = writer.join().unwrap();
     assert_eq!(map.get(feature, &1).unwrap(), Some(20));
     map.rollback_to(feature, old).unwrap();
+    assert_eq!(history.head_commit(feature).unwrap().unwrap().id(), old);
+    assert_eq!(history.log(feature).unwrap().len(), 1);
     assert_eq!(reader.snapshot(feature).unwrap().get(&1), Some(10));
     assert_eq!(map.records(super::store::RETIRED).count(), 1);
     map.flush().unwrap();

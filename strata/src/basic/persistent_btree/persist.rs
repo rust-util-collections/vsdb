@@ -7,6 +7,30 @@ use crate::versioned::{
 };
 use std::collections::BTreeMap;
 
+/// Structural writers are serialized by the version store's alias contract.
+struct HistoryPublication<'a>(&'a TreeRuntime);
+
+impl<'a> HistoryPublication<'a> {
+    fn begin(runtime: &'a TreeRuntime, target_generation: u64) -> Self {
+        // If a reader observes the next writer's target, it must also
+        // observe the end of the preceding publication on its final check.
+        runtime
+            .history_target_generation
+            .store(target_generation, Ordering::Release);
+        runtime.history_sequence.fetch_add(1, Ordering::AcqRel);
+        Self(runtime)
+    }
+}
+
+impl Drop for HistoryPublication<'_> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.0.refs.lock().heads.clear();
+        }
+        self.0.history_sequence.fetch_add(1, Ordering::Release);
+    }
+}
+
 impl PersistentBTree {
     pub(crate) fn version_store(nodes: MapxRaw, next_id: u64) -> Self {
         let runtime = tree_runtime(
@@ -19,6 +43,7 @@ impl PersistentBTree {
                 zombies: HashSet::new(),
                 pins: HashMap::new(),
                 heads: HashMap::new(),
+                tip_cache: TipCache::default(),
                 deferred: Some(Vec::new()),
                 ready: true,
             },
@@ -158,7 +183,7 @@ impl PersistentBTree {
         head_updates: &[(BranchId, Option<BranchHead>)],
         acquire: &[NodeId],
         retire: &[NodeId],
-        sync: bool,
+        sync_generation: Option<u64>,
     ) -> Result<()> {
         let shared = Arc::strong_count(&self.runtime) > 1;
         for &id in acquire {
@@ -208,8 +233,13 @@ impl PersistentBTree {
                 batch.insert(row(RETIRED, id), []);
             }
         }
+        // Only synchronous publications create, retire, or edit commit records.
+        // Deferred removals in ordinary working batches are tree objects or
+        // retired-root markers. Their branch's committed head remains the same.
+        let _publication = sync_generation
+            .map(|generation| HistoryPublication::begin(&self.runtime, generation));
         let submit = || {
-            if sync {
+            if sync_generation.is_some() {
                 batch.commit_sync()
             } else {
                 batch.commit()
@@ -275,6 +305,7 @@ impl PersistentBTree {
             ready: true,
             pins: HashMap::new(),
             heads: HashMap::new(),
+            tip_cache: TipCache::default(),
             deferred: None,
         };
         // Pin-only roots must not become durable owners.

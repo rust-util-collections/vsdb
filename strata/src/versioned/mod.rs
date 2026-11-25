@@ -61,6 +61,7 @@ use crate::{
     common::{ende::KeyEnDeOrdered, error::Result},
 };
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 
 // =========================================================================
 // ID types
@@ -95,13 +96,22 @@ pub struct Commit {
     pub(crate) id: CommitId,
     /// The B+ tree root that holds the **complete** map state at this point.
     pub(crate) root: NodeId,
-    pub(crate) parents: Vec<CommitId>,
+    #[serde(deserialize_with = "deserialize_parents")]
+    pub(crate) parents: SmallVec<[CommitId; 2]>,
     pub(crate) timestamp_us: u64,
     /// Number of references: branch HEADs pointing at this commit
     /// plus child commits listing it in their `parents` array.
     /// When this reaches zero the commit is automatically deleted.
     #[serde(default)]
     pub(crate) ref_count: u32,
+}
+
+// Public serde values retain Vec's bounded preallocation for sequence hints.
+// The storage row decoder reads the at-most-two durable parents directly.
+fn deserialize_parents<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<SmallVec<[CommitId; 2]>, D::Error> {
+    Vec::<CommitId>::deserialize(d).map(SmallVec::from_vec)
 }
 
 impl Commit {

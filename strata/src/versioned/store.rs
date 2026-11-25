@@ -60,7 +60,7 @@ pub(crate) struct Header {
     pub(super) next_commit: u64,
     pub(super) next_branch: u64,
     pub(super) main_branch: BranchId,
-    pub(super) generation: u64,
+    pub(crate) generation: u64,
 }
 
 impl Header {
@@ -138,6 +138,12 @@ impl BranchHead {
 }
 
 impl Commit {
+    #[inline]
+    pub(super) fn from_row(id: CommitId, bytes: Option<Vec<u8>>) -> Result<Self> {
+        let raw = bytes.ok_or(VsdbError::CommitNotFound { commit_id: id })?;
+        Self::parse(id, &raw)
+    }
+
     pub(super) fn bytes(&self) -> Vec<u8> {
         let mut raw = Vec::with_capacity(20 + 8 * self.parents.len());
         raw.extend_from_slice(&self.root.to_le_bytes());
@@ -152,17 +158,17 @@ impl Commit {
         if !matches!(raw.len(), 20 | 28 | 36) {
             return Err(corrupt("invalid commit length"));
         }
+        let chunks = raw[20..].as_chunks::<8>().0;
+        let mut parents = [CommitId::from_raw(0); 2];
+        for (slot, chunk) in parents.iter_mut().zip(chunks) {
+            *slot = CommitId::from_raw(u64::from_le_bytes(*chunk));
+        }
         Ok(Self {
             id,
             root: u64::from_le_bytes(raw[..8].try_into().unwrap()),
             timestamp_us: u64::from_le_bytes(raw[8..16].try_into().unwrap()),
             ref_count: u32::from_le_bytes(raw[16..20].try_into().unwrap()),
-            parents: raw[20..]
-                .as_chunks::<8>()
-                .0
-                .iter()
-                .map(|p| CommitId::from_raw(u64::from_le_bytes(*p)))
-                .collect(),
+            parents: smallvec::SmallVec::from_buf_and_len(parents, chunks.len()),
         })
     }
 }

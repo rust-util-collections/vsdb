@@ -47,6 +47,11 @@ pin and can outlive the snapshot, reader and source map. A rollback or branch
 deletion may reclaim the commit record while an existing snapshot continues
 to read its tree. A new `at(commit)` then returns `CommitNotFound`.
 
+Each call to `head_commit` or `log` sees a consistent branch history. It
+checks for overlapping publication, including changes to commit reference
+counts. Readers can use the previous generation during a WAL sync. A
+captured engine view bounds retries if history keeps advancing during a read.
+
 Use `reader()` to acquire snapshots alongside an active writer. Serialize
 writers and writable restores through aliases of the same store. Mutable
 `clone()` and `clone_in(&namespace)` deep-copy branches, retained commits and

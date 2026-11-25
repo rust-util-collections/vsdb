@@ -20,6 +20,7 @@ use crate::{
     },
 };
 use serde::{Deserialize, Serialize};
+use smallvec::smallvec;
 use std::{
     collections::{BTreeMap, BinaryHeap, HashMap, HashSet},
     fs,
@@ -229,12 +230,7 @@ impl<K, V> VerMap<K, V> {
     }
 
     pub(crate) fn get_commit_inner(&self, id: CommitId) -> Result<Commit> {
-        let raw = self
-            .tree
-            .nodes
-            .get(row(COMMIT, id.raw()))
-            .ok_or(VsdbError::CommitNotFound { commit_id: id })?;
-        Commit::parse(id, &raw)
+        Commit::from_row(id, self.tree.nodes.get(row(COMMIT, id.raw())))
     }
 
     pub(super) fn publish(
@@ -258,7 +254,7 @@ impl<K, V> VerMap<K, V> {
             &edits.heads,
             &edits.acquire,
             &edits.retire,
-            sync,
+            sync.then_some(generation),
         );
         if result.is_err() {
             self.restore_visible_refs()?;
@@ -368,7 +364,7 @@ impl<K, V> VerMap<K, V> {
         to: &RootLease,
     ) -> crate::basic::persistent_btree::BTreeDiffIter<'_> {
         #[cfg(test)]
-        super::test::before_diff_traversal();
+        super::test::before_read_traversal();
         self.tree.diff_iter(from.root, to.root)
     }
 
@@ -377,7 +373,7 @@ impl<K, V> VerMap<K, V> {
         root: &RootLease,
     ) -> crate::basic::persistent_btree::BTreeIter<'_> {
         #[cfg(test)]
-        super::test::before_diff_traversal();
+        super::test::before_read_traversal();
         self.tree.iter(root.root)
     }
 
@@ -758,9 +754,9 @@ where
             .checked_add(1)
             .ok_or_else(|| corrupt("commit IDs exhausted"))?;
         let parents = if state.head == NO_COMMIT {
-            vec![]
+            smallvec![]
         } else {
-            vec![state.head]
+            smallvec![state.head]
         };
 
         // ref_count accounting for this operation:
@@ -991,7 +987,7 @@ where
         edits.write_commit(&Commit {
             id,
             root: merged_root,
-            parents: vec![tgt.head, src.head],
+            parents: smallvec![tgt.head, src.head],
             timestamp_us: now_us(),
             ref_count: 1,
         });
@@ -1151,33 +1147,84 @@ where
         self.get_commit_inner(commit_id).ok()
     }
 
-    /// Returns the commit at the head of `branch`.
-    pub fn head_commit(&self, branch: BranchId) -> Result<Option<Commit>> {
-        let state = self.get_branch(branch)?;
-        if state.head == NO_COMMIT {
-            Ok(None)
-        } else {
-            Ok(self.get_commit(state.head))
+    /// Use ordinary point reads while a history writer may be waiting for fsync.
+    /// The header generation and all changed history rows publish atomically.
+    /// A snapshot bounds retries when writes keep advancing during a long log.
+    #[cold]
+    fn overlapping_history<R>(
+        &self,
+        branch: BranchId,
+        read: impl Fn(CommitId, &dyn Fn(CommitId) -> Result<Commit>) -> Result<R>,
+    ) -> Result<R> {
+        let nodes = &self.tree.nodes;
+        let head_key = row(HEAD, branch.raw());
+        let head = |bytes: Option<Vec<u8>>| {
+            let bytes = bytes.ok_or(VsdbError::BranchNotFound { branch_id: branch })?;
+            Ok(BranchHead::decode(&bytes)?.head)
+        };
+        for _ in 0..2 {
+            let generation = Header::get(nodes)?.generation;
+            // The branch cache may still contain the head from before the
+            // write, so select it directly from the same store as the commits.
+            let result = head(nodes.get(head_key))
+                .and_then(|tip| read(tip, &|id| self.get_commit_inner(id)));
+            if Header::get(nodes)?.generation == generation {
+                return result;
+            }
         }
+        let view = nodes.read_view();
+        read(head(view.get(head_key))?, &|id| {
+            Commit::from_row(id, view.get(row(COMMIT, id.raw())))
+        })
     }
 
-    /// Walks the first-parent commit history of `branch` from head to root.
+    fn branch_tip(
+        &self,
+        branch: BranchId,
+        sequence: u64,
+        admit: &mut bool,
+    ) -> Result<Option<Commit>> {
+        self.tree.branch_tip(branch, sequence, admit, |head| {
+            read_tip(head, |id| self.get_commit_inner(id))
+        })
+    }
+
+    /// Returns the commit at the head of `branch` in one consistent state.
+    pub fn head_commit(&self, branch: BranchId) -> Result<Option<Commit>> {
+        let seq = self.tree.history_sequence();
+        let mut admit = false;
+        let result = self.branch_tip(branch, seq, &mut admit);
+        if self.tree.history_unchanged(seq) {
+            let tip = result?;
+            if admit {
+                self.tree.remember_tip(seq, tip.as_ref());
+            }
+            return Ok(tip);
+        }
+        self.overlapping_history(branch, |head, fetch| read_tip(head, fetch))
+    }
+
+    /// Walks the first-parent commit history of `branch` from head to root
+    /// in one consistent state.
     ///
     /// For merge commits, only the first parent (the target branch at merge
     /// time) is followed — analogous to `git log --first-parent`.
     pub fn log(&self, branch: BranchId) -> Result<Vec<Commit>> {
-        let state = self.get_branch(branch)?;
-        let mut result = Vec::new();
-        let mut cur = state.head;
-        while cur != NO_COMMIT {
-            if let Some(c) = self.get_commit(cur) {
-                cur = c.parents.first().copied().unwrap_or(NO_COMMIT);
-                result.push(c);
-            } else {
-                break;
+        let seq = self.tree.history_sequence();
+        let mut admit = false;
+        let result = self
+            .branch_tip(branch, seq, &mut admit)
+            .and_then(|tip| read_log(tip, |id| self.get_commit_inner(id)));
+        if self.tree.history_unchanged(seq) {
+            let log = result?;
+            if admit {
+                self.tree.remember_tip(seq, log.first());
             }
+            return Ok(log);
         }
-        Ok(result)
+        self.overlapping_history(branch, |head, fetch| {
+            read_log(read_tip(head, fetch)?, fetch)
+        })
     }
 
     // =================================================================
@@ -1235,6 +1282,33 @@ where
     }
 }
 
+#[inline]
+fn read_tip(
+    head: CommitId,
+    fetch: impl FnOnce(CommitId) -> Result<Commit>,
+) -> Result<Option<Commit>> {
+    #[cfg(test)]
+    super::test::before_read_traversal();
+    if head == NO_COMMIT {
+        Ok(None)
+    } else {
+        fetch(head).map(Some)
+    }
+}
+
+fn read_log(
+    mut tip: Option<Commit>,
+    fetch: impl Fn(CommitId) -> Result<Commit>,
+) -> Result<Vec<Commit>> {
+    let mut result = Vec::new();
+    while let Some(commit) = tip {
+        let parent = commit.parents.first().copied();
+        result.push(commit);
+        tip = parent.map(&fetch).transpose()?;
+    }
+    Ok(result)
+}
+
 fn encode_value(value: &impl ValueEnDe) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     value.encode_value_into(&mut bytes)?;
@@ -1278,7 +1352,7 @@ fn merge_bases_match_full_walk_on_a_wide_dag() {
             Commit {
                 id: CommitId::from_raw(id),
                 root: EMPTY_ROOT,
-                parents,
+                parents: parents.into(),
                 timestamp_us: 0,
                 ref_count: 1,
             }

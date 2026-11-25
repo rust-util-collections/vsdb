@@ -5,6 +5,58 @@ use super::*;
 // =====================================================================
 
 #[test]
+fn tip_cache_bounds_admission_and_keeps_collisions_epoch_scoped() {
+    let mut cache = TipCache::default();
+    let capacity = TipCache::SLOTS as u64;
+    let zero = CommitId::from_raw(0);
+    let original = Commit {
+        id: CommitId::from_raw(1),
+        root: EMPTY_ROOT,
+        parents: Default::default(),
+        timestamp_us: 0,
+        ref_count: 1,
+    };
+    let mut collision = original.clone();
+    collision.id = CommitId::from_raw(original.id.raw() + capacity);
+    let mut admit = false;
+    assert!(cache.probe(zero, 2, &mut admit).is_none());
+    assert!(cache.slots.is_empty());
+
+    // A scan larger than the table never admits a one-off lookup.
+    for _ in 0..3 {
+        for id in capacity + 1..=capacity * 3 {
+            assert!(cache.probe(CommitId::from_raw(id), 2, &mut admit).is_none());
+            assert!(!admit);
+        }
+    }
+    assert_eq!(cache.slots.len(), TipCache::SLOTS);
+    assert!(cache.slots.iter().all(|slot| slot.saved.is_none()));
+    assert!(cache.probe(original.id, 2, &mut admit).is_none());
+    assert!(!admit);
+    assert!(cache.probe(original.id, 2, &mut admit).is_none());
+    assert!(admit);
+    cache.remember(2, &original);
+    assert!(cache.probe(collision.id, 2, &mut admit).is_none());
+    assert!(!admit);
+    assert_eq!(
+        cache.probe(original.id, 2, &mut admit).unwrap().id(),
+        original.id()
+    );
+
+    assert!(cache.probe(collision.id, 2, &mut admit).is_none());
+    assert!(!admit);
+    assert!(cache.probe(collision.id, 2, &mut admit).is_none());
+    assert!(admit);
+    cache.remember(2, &collision);
+    // A delayed fill for the evicted ID cannot overwrite the new occupant.
+    cache.remember(2, &original);
+    assert!(cache.probe(collision.id, 3, &mut admit).is_some());
+    assert!(cache.probe(original.id, 2, &mut admit).is_none());
+    // A new publication can change the reference count on the same commit.
+    assert!(cache.probe(collision.id, 4, &mut admit).is_none());
+}
+
+#[test]
 fn empty_tree() {
     let tree = PersistentBTree::new();
     assert!(tree.get(EMPTY_ROOT, b"x").is_none());

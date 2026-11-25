@@ -16,6 +16,7 @@ license = "MIT"
 [dependencies]
 serde = { workspace = true }
 parking_lot = { workspace = true }
+smallvec = { workspace = true }
 
 postcard = { workspace = true }
 
