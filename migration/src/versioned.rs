@@ -458,7 +458,7 @@ fn validate_published_store(store: &MapxRaw) -> Result<(Header, HashSet<Vec<u8>>
         }
         match k.as_slice() {
             [0] | [7] => {}
-            [3, rest @ ..] if !rest.is_empty() => {}
+            [3, ..] => {}
             [tag @ (HEAD | NAME | COMMIT | 5 | 6), rest @ ..] if rest.len() == 8 => {
                 let id = u64::from_be_bytes(rest.try_into().unwrap());
                 match *tag {

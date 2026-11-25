@@ -49,7 +49,23 @@ fn converts_retained_versions_and_working_root_at_original_id() {
     assert!(store.get(1u64.to_le_bytes()).is_some());
     next_commit_raw.insert([], saved_next_commit);
 
+    // v17 accepted the empty string as a branch name. Preserve the same
+    // encoded branch row the legacy public API emits for an empty main name.
+    let mut branch_rows = vsdb_migrate::raw_map(components[2].into()).unwrap();
+    let key = 1u64.to_be_bytes();
+    let (old_name, head, dirty): (String, u64, u64) =
+        postcard::from_bytes(&branch_rows.get(key).unwrap()).unwrap();
+    assert_eq!(old_name, "main");
+    branch_rows.insert(key, postcard::to_allocvec(&("", head, dirty)).unwrap());
+    let mut names = vsdb_migrate::raw_map(components[3].into()).unwrap();
+    names.remove(postcard::to_allocvec(&old_name).unwrap());
+    names.insert(
+        postcard::to_allocvec("").unwrap(),
+        postcard::to_allocvec(&1u64).unwrap(),
+    );
+
     let map = migrate_v17::<u64, Vec<u8>>(ID).unwrap();
+    assert_eq!(map.branch_id(""), Some(map.main_branch()));
     for &id in &components[1..] {
         assert!(
             vsdb_migrate::raw_map(id.into())
@@ -65,6 +81,7 @@ fn converts_retained_versions_and_working_root_at_original_id() {
     fs::write(&meta_path, &old_metadata).unwrap();
     let mut map = migrate_v17::<u64, Vec<u8>>(ID).unwrap();
     let main = map.main_branch();
+    assert_eq!(map.branch_id(""), Some(main));
     let side = map.branch_id("side").unwrap();
     let base = CommitId::from_raw(1);
     let tip = CommitId::from_raw(2);
