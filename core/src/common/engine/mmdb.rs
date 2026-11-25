@@ -1530,6 +1530,9 @@ fn mmdb_open(
 }
 
 #[cfg(test)]
+mod v5_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::{
