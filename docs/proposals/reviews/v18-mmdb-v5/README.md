@@ -94,3 +94,32 @@ The original files survive interruption, a racing publisher and a late
 verification error. A successful exclusive rename followed by a failed
 parent directory sync can leave a visible directory. Retry into another
 absent path with the previous generation still selected. [Publication protocol](../../../../migration/README.md)
+
+## Performance measurement tools
+
+The four reviewers inspected the benchmark drivers and interpretation at
+`cb6ca9d`. Later observations and corrections have their own source and
+binary identifiers. [Four assessments and the English brief](measurements.json.gz)
+
+| Finding | Checked outcome |
+|---|---|
+| A missed offered load or a burst of batch completions can make a candidate appear eligible. | The analyzer reports descriptive values for every process and withholds a decision gain when any matched block fails the schedule. It reports scalar and batch rates and the capacity to complete the prescribed 1:2 demand mix. Standalone v4/v4 controls assess v4 repeatability. Synthetic tests cover insufficient foreground completions, a favorable p99 with excessive backlog and a mismatched reference executable. [Adapter evidence tests](../../../evaluations/v18-adapter/test_evidence.py) |
+| The publication tail includes dispatch delay, and one-shard DagMap sensitivity depends on the A/A denominator. | Arrival-to-ack was the predeclared foreground outcome. In-call service p99 on the same placement pairs gave 22.24 versus 14.51 µs, with a 32.25% paired gain and 99.31% A/A variation. For DagMap the one-shard 31.38% result clears a 25.39% directed band but falls within a 34.02% symmetric band. The default 16-shard gain of 31.05% clears 7.41% under either convention. A separate 1,000-empty-session diagnostic measured zero submissions, including fences. [Publication measurements](../../../evaluations/v18-publication/README.md) |
+| RSS can include preload and caller allocations; block capacity retained by a query describes a different resource. | The shard budget applies to the observed process high-water mark. Endpoint gauges separately report current memtables, pins and both stores in the shared pool. One-hot and all-active runs have the same caller budget; the 16 and 6 MiB settings deliberately compare different per-shard buffering. VecDex measures per-process RSS separately from distinct simultaneously retained SST capacity, validates comparable arms, and requires qualifying per-request storage reads for the device regime. [Memory protocol](../../../evaluations/v18-adapter/README.md) · [VecDex resource checks](../../../evaluations/v18-vecdex-v5/summarize.py) |
+| VecDex width eight and the tree prototypes needed independent controls. | The longer VecDex trial directly paired the shipped scalar path with width eight and calibrated shipped/shipped variation. The 9.15% paired gain fell below the 10% target and the 19.29% A/A spread. The first tree comparison reported its inherited Btrfs compression and used one v4 reference per seed. The later borrowed-leaf comparison includes a separate v4/v4 pair and shares the same filesystem settings within every pair. Neither trial attributes its latency to Btrfs. The two tree candidates have independent v5 controls, raw traces and binary identities. The scan-header and point-projection results support retaining the current tree. [VecDex trials](../../../evaluations/v18-vecdex-v5/README.md) · [Tree observations](../../../evaluations/v18-tree-v5/README.md) |
+
+
+The adapter's original 17-writer workload measures the hot and all-active
+write schedules. It neither populates a working set through application
+reads nor establishes a general read/write RSS bound. Flushes and
+compactions can themselves charge the pool. Later measurements under
+ordinary cache reads and sustained writes are a separate stress test.
+The original workload does not measure all cache stores at capacity or
+the higher-level per-tree caches.
+The whole-process ceiling includes preload as specified. [Adapter workloads and result coverage](../../../evaluations/v18-adapter/README.md)
+
+The allocation packet's two probe hashes match the live allocation entries
+in the build manifest. The v5 `contains_key` measurements used `d9f00f4`
+and the memory timing binary used `b5f3153`. The reproduction instructions
+build the later v5 allocation executable separately. These revisions represent
+different measured source paths. [Binary and driver fingerprints](../../../evaluations/v18-adapter/builds.json)
