@@ -80,6 +80,20 @@ vectors stay identical across preparations; an engine-format conversion is
 unnecessary for this isolated workload. All versioned data migration tests
 remain independent of the benchmark.
 
+## Two targeted follow-ups
+
+After observing the warm upgrade regression, a query-local cache trial
+stored up to 128 (node ID, distance) entries. Reuse applied only to the
+three built-in metrics. It could avoid rereading a vector revisited at a
+different level. All entries expired at the end of the query and custom
+metrics continued to receive every callback. The same 10%/A/A/four-of-five
+rule applies to this separate [prototype at the retained revision](distance-cache.patch).
+
+The targeted width-eight comparison uses a fresh set of seeds (361127–361131)
+and compares the candidate against the retained production scalar path, with
+its own five independent A/A pairs. Use the same 10% minimum, variation and
+direction rules for its 30,000-query runs.
+
 ## Reproduction on Linux
 
 Use an empty scratch area on the target filesystem. Each build command
@@ -107,17 +121,19 @@ mkdir "$s/results"
 python3 "$d/build.py" . "$s/bin" 6ddaed9 v4
 for width in 1 8 32; do python3 "$d/build.py" . "$s/bin" dd07a00 "$width"; done
 python3 "$d/build.py" . "$s/bin" 1300ad2 shipped
+python3 "$d/build.py" . "$s/bin" 1300ad2 cached
 "$s/bin/v4" create "$s/builder" "$s/graph.rows"
 "$s/bin/v4" import "$s/v4-warm" "$s/graph.rows" 512
 "$s/bin/32" import "$s/v5-warm" "$s/graph.rows" 512
 "$s/bin/32" import "$s/v5-device" "$s/graph.rows" 8
 "$s/bin/1" singleton "$s/v5-singleton"
-for regime in warm secondary device device-width8 landed; do
+for regime in warm secondary device device-width8 landed distance-cache; do
     python3 "$d/trials.py" "$s/bin" "$s" "$s/results/$regime.csv" "$regime" --cpus 4
 done
 python3 "$d/trials.py" "$s/bin" "$s" "$s/results/singleton.csv" singleton --samples 100000 --cpus 4
+python3 "$d/trials.py" "$s/bin" "$s" "$s/results/width8-repeat.csv" width8-repeat --samples 30000 --seed 361126 --cpus 4
 python3 "$d/summarize.py" "$s/results"
-for width in 1 32; do
+for width in 1 8 32; do
     python3 "$d/build.py" . "$s/bin" dd07a00 "$width" --pin-diagnostics
     taskset -c 4 "$s/bin/$width-pins" run "$s/v5-warm" warm 261127 1000
 done

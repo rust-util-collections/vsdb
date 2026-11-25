@@ -1,0 +1,45 @@
+diff --git a/strata/src/vecdex/mod.rs b/strata/src/vecdex/mod.rs
+index b1aaeec..81eea66 100644
+--- a/strata/src/vecdex/mod.rs
++++ b/strata/src/vecdex/mod.rs
+@@ -1494,9 +1494,26 @@ impl<K: KeyEnDe, S: Scalar> MetricSearch<S> for Search<'_, '_, K, S> {
+         if self.k == 0 {
+             return Ok(Vec::new());
+         }
++        // HNSW can revisit a node at a different layer of the same query. Only
++        // the built-in metrics have a guaranteed side-effect-free distance.
++        let metric_type = std::any::TypeId::of::<D>();
++        let reuse = [
++            std::any::TypeId::of::<distance::L2>(),
++            std::any::TypeId::of::<distance::Cosine>(),
++            std::any::TypeId::of::<distance::InnerProduct>(),
++        ]
++        .contains(&metric_type);
++        let mut prior: [Option<(u64, S)>; 128] = [None; 128];
+         let mut scratch = Vec::with_capacity(self.query.len());
+         let mut distance_to = |id| {
+-            self.view.try_get_with(node_key(TAG_VEC, id), |bytes| {
++            let slot = id as usize % prior.len();
++            if reuse
++                && let Some((saved, score)) = prior[slot]
++                && saved == id
++            {
++                return Ok(Some(score));
++            }
++            let score = self.view.try_get_with(node_key(TAG_VEC, id), |bytes| {
+                 if bytes.len() != size_of_val(self.query) {
+                     return Err(corrupt(
+                         "VecDex: vector length differs from graph dimensions",
+@@ -1504,7 +1521,11 @@ impl<K: KeyEnDe, S: Scalar> MetricSearch<S> for Search<'_, '_, K, S> {
+                 }
+                 S::decode_into(bytes, &mut scratch);
+                 Ok(metric.distance(self.query, &scratch))
+-            })
++            })?;
++            if reuse && let Some(value) = score {
++                prior[slot] = Some((id, value));
++            }
++            Ok(score)
+         };
+         let key_for = |id| {
+             self.view.try_get_with(node_key(TAG_NODE2KEY, id), |bytes| {

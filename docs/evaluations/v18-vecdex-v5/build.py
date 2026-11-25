@@ -10,7 +10,7 @@ p = argparse.ArgumentParser(description=__doc__)
 p.add_argument("repository", type=Path)
 p.add_argument("scratch", type=Path)
 p.add_argument("revision")
-p.add_argument("arm", choices=["v4", "1", "8", "32", "shipped"])
+p.add_argument("arm", choices=["v4", "1", "8", "32", "shipped", "cached"])
 p.add_argument("--pin-diagnostics", action="store_true")
 args = p.parse_args()
 store = args.scratch.resolve()
@@ -38,6 +38,8 @@ if args.arm == "v4":
     v = (v ^ (v >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     v = (v ^ (v >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
     let r = ((v ^ (v >> 31)) >> 11) as f64 / (1u64 << 53) as f64;""")
+elif args.arm == "cached":
+    subprocess.run(["git", "-C", work, "apply", "--", here/"distance-cache.patch"], check=True)
 elif args.arm in ("1", "8"):
     replace(work / "strata/src/vecdex/mod.rs",
             "self.run_with_width::<D, MAX_GROUPED_READ_KEYS>(metric)",

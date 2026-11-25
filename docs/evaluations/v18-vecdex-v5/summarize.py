@@ -10,12 +10,16 @@ p.add_argument("folder", type=Path)
 p.add_argument("--seed", type=int, default=261126)
 args = p.parse_args()
 all_trace = {}
-for regime in ("warm", "device", "singleton", "secondary", "device-width8", "landed"):
+for regime in ("warm", "device", "singleton", "secondary", "device-width8", "landed", "distance-cache", "width8-repeat"):
     path = args.folder/(regime+".csv")
     rows = list(csv.DictReader(path.open()))
     pairs = ({"diagnostic-width8": ("8",)} if regime=="device-width8"
              else {"v4": ("v4","1"), "width8": ("1","8")} if regime=="secondary"
              else {"AA": ("1","1"),"AB": ("1","32")})
+    if regime == "width8-repeat":
+        pairs = {"AA": ("shipped","shipped"), "AB": ("shipped","8")}
+    if regime == "distance-cache":
+        pairs = {"AA": ("shipped","shipped"), "AB": ("shipped","cached")}
     if regime == "landed":
         pairs = {"AA": ("1","1"), "AB": ("1","shipped"),
                  "v4AA": ("v4","v4"), "upgrade": ("v4","shipped")}
@@ -25,12 +29,15 @@ for regime in ("warm", "device", "singleton", "secondary", "device-width8", "lan
         n = int(row["round"])
         seed = int(row["seed"])
         samples = int(row["samples"])
-        if row["regime"] != regime or not 1<=n<=5 or seed!=args.seed+n or samples<10_000:
+        expected_seed = args.seed + n + (100_000 if regime == "width8-repeat" else 0)
+        if row["regime"] != regime or not 1<=n<=5 or seed!=expected_seed or samples<10_000:
             raise ValueError(f"unexpected classification or trace in {path}: {row}")
         if (not 0 < int(row["p50_ns"]) <= int(row["p99_ns"])
                 or not 0 <= int(row["nearest"]) <= samples
                 or int(row["logical_bytes"]) <= 0 or int(row["blocks"]) <= 0):
             raise ValueError(f"unusable query observations: {row}")
+        if regime=="width8-repeat" and samples!=30_000:
+            raise ValueError("width-eight confirmation requires 30,000 completed queries")
         if regime=="singleton" and samples!=100_000:
             raise ValueError("the singleton control requires 100,000 timed queries")
         if regime.startswith("device"):
