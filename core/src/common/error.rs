@@ -138,6 +138,8 @@ pub type Result<T> = std::result::Result<T, VsdbError>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum StorageErrorKind {
+    /// Transient write pressure. A refused no-slowdown batch has no storage effects.
+    Busy,
     Io,
     Corruption,
     ReadOnly,
@@ -154,6 +156,7 @@ impl std::fmt::Display for StorageErrorKind {
 pub(crate) fn from_mmdb_err(error: mmdb::Error) -> VsdbError {
     use mmdb::ErrorKind;
     let kind = match error.kind() {
+        ErrorKind::Busy => StorageErrorKind::Busy,
         ErrorKind::Io => StorageErrorKind::Io,
         ErrorKind::Corruption => StorageErrorKind::Corruption,
         ErrorKind::ReadOnly => StorageErrorKind::ReadOnly,

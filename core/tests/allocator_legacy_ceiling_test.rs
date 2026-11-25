@@ -85,10 +85,7 @@ fn missing_ceiling_does_not_reuse_live_prefix() {
         .join("mmdb")
         .join(format!("shard_{:02}", prefix % shards));
     let db = mmdb::DB::open_read_only_with_options(
-        mmdb::DbOptions {
-            prefix_len: 8,
-            ..Default::default()
-        },
+        mmdb::DbOptions::default().with_prefix_len(8),
         &shard,
     )
     .unwrap();

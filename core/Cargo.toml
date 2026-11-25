@@ -17,6 +17,7 @@ parking_lot = { workspace = true }
 thiserror = { workspace = true }
 postcard = { workspace = true }
 
+smallvec = { workspace = true }
 mmdb = { workspace = true }
 
 [features]

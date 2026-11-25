@@ -31,6 +31,22 @@ dataset with a missing marker. A conflicting marker (including one written by
 an older writer) requires investigation against a trusted backup. Read-only
 reopen preserves the original files.
 
+## Engine memory
+
+`Namespace::memory_usage()` reports two separate evictable stores in one
+shared pool and an ordered vector of member gauges. Count the pool's
+segmented and overflow charges once per namespace. Each shard reports
+active and immutable memtable estimates, its number of immutable generations,
+and L0 pin payload. These observations exclude caller-held pins, retired
+views and collection page caches. They do not sum to process RSS.
+
+With namespace budget `B` bytes and `S` shards, each pool store has capacity
+`B / 8`. A shard's write buffer uses `3 × floor(B / 64) / S`, clamped
+between 64 KiB and 512 MiB. Four immutable buffers plus one active buffer are
+possible on each shard. Thus 2 GiB and 16 shards gives 6 MiB per buffer and
+256 MiB per evictable store. Large batches can overshoot the thresholds and
+the minimum buffer size can dominate a small budget.
+
 ## MapxRaw
 
 Raw maps store arbitrary byte strings. Iteration uses lexicographic key order.
@@ -91,12 +107,28 @@ batch.commit_sync().unwrap();
 assert_eq!(map.get(b"status").as_deref(), Some(&b"ready"[..]));
 ```
 
+A valid `commit_no_slowdown()` or `commit_sync_no_slowdown()` can refuse a
+write when L0 pressure or immutable-buffer capacity would stall admission.
+Match `VsdbError::Storage { kind: StorageErrorKind::Busy, .. }` to rebuild
+and retry that batch. The refusal consumes no WAL record or sequence.
+An admitted synchronous batch still uses one WAL-synchronized write.
+
 ## Immutable iteration alongside writes
 
 Use `MapxRaw::read_view()` for several queries against one committed state of
 a map. It supports `get`, `contains_key`, `iter` and `range`. A fatal engine
 error panics. Each independently captured view may see a different state.
 Release views and iterators when done so compaction can reclaim old versions.
+
+Use `try_get_with(key, decode)` on a map, reader or captured view to decode
+from borrowed bytes while MMDB holds the backing allocation. The decoder
+runs for a stored empty value and is skipped for a missing or deleted key.
+A view's `try_visit_many(keys, visit)` resolves up to 32 keys at the same
+snapshot, then visits every input slot in order, including duplicates and
+misses. A storage failure precedes the first callback; a visitor error stops
+later callbacks. `try_range` and its cursor's `try_step_next` and
+`try_step_prev` expose typed storage errors at open or during iteration.
+Each step lends the raw key suffix and value until the next cursor operation.
 
 To continue writing while a view is alive, capture it through a reader.
 

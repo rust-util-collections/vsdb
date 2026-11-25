@@ -62,4 +62,10 @@ pub use common::{
 };
 
 /// The unified, structured error type of the VSDB ecosystem.
-pub use common::error::{Result, VsdbError};
+pub use common::error::{Result, StorageErrorKind, VsdbError};
+pub use common::namespace::{
+    BlockCachePoolUsage, NamespaceMemoryUsage, ShardMemoryUsage,
+};
+
+/// Maximum number of input slots in a single snapshot-bound grouped lookup.
+pub const MAX_GROUPED_READ_KEYS: usize = mmdb::MAX_GROUPED_READ_KEYS;

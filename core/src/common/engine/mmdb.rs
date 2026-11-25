@@ -1,17 +1,17 @@
 use crate::common::{
-    GB, PREFIX_ALLOC_START, PREFIX_SIZE, Pre, PreBytes, RawKey, RawRangeBounds,
-    RawValue, atomic_write_file, configured_mem_budget_mb, create_dir_all_durable,
+    PREFIX_ALLOC_START, PREFIX_SIZE, Pre, PreBytes, RawKey, RawRangeBounds, RawValue,
+    atomic_write_file, configured_mem_budget_mb, create_dir_all_durable,
     error::{Result, VsdbError, corrupt, from_mmdb_err},
     vsdb_freeze_base_dir, vsdb_get_base_dir, vsdb_is_read_only,
 };
 use mmdb::{
-    BidiIterator, BlockCachePool, CompressionType, DB, DbOptions, ReadOptions, Snapshot,
-    WriteBatch, WriteOptions,
+    BidiIterator, BlockCachePool, CompressionType, DB, DbOptions, DurabilityMode,
+    ReadOptions, Snapshot, WriteBatch, WriteOptions,
 };
 use parking_lot::{Mutex, RwLock};
+use smallvec::SmallVec;
 use std::{
     cell::Cell,
-    cmp,
     collections::{HashMap, HashSet},
     fs,
     io::{self, Read},
@@ -23,11 +23,6 @@ use std::{
     },
     thread::{self, ThreadId},
 };
-
-/// A synchronous deletion of this reserved system key fences a shard's WAL.
-/// Collection keys include an eight-byte prefix, so this one-byte key cannot
-/// overlap user data, including entries with empty user keys.
-const META_KEY_WAL_FENCE: [u8; 1] = [1];
 
 /// v16+ location of the prefix-allocator ceiling, relative to the VSDB
 /// base dir: an 8-byte little-endian `u64`, written durably via
@@ -261,18 +256,7 @@ impl MmDB {
         // every already-opened shard (flushing its WAL and joining its
         // compaction thread) via the `?` early return — the same Drop
         // glue that later powers `MmDB::close`.
-        //
-        // One block-cache pool per ENGINE, shared by its shards
-        // (shared-mem-pool RFC tier (i)): the shards are one tenant —
-        // same dataset, same budget — so pooling their cache slice
-        // trades no isolation, while a hot shard (one collection lives
-        // entirely inside one shard: `prefix % shards` routing) can now
-        // use the whole slice instead of `1/shards` of it. The capacity
-        // is exactly the sum of the per-shard capacities of the static
-        // split, so engine totals are unchanged.
-        let pool = Arc::new(BlockCachePool::new(
-            shards as u64 * per_shard_block_cache_size(&sizing, shards),
-        ));
+        let pool = Arc::new(BlockCachePool::new(sizing.pool_store_capacity()));
         let mut dbs_vec: Vec<DB> = Vec::with_capacity(shards);
         for i in 0..shards {
             let shard_dir = dir.join(format!("shard_{:02}", i));
@@ -362,6 +346,18 @@ impl MmDB {
         }
     }
 
+    pub(crate) fn memory_usage(&self) -> crate::NamespaceMemoryUsage {
+        crate::NamespaceMemoryUsage {
+            pool: self.dbs[0].block_cache_pool().usage(),
+            shards: self.dbs.iter().map(DB::memory_usage).collect(),
+            write_buffer_bytes_per_shard: EngineSizing {
+                mem_budget: self.mem_budget,
+            }
+            .write_buffer_size(self.dbs.len()),
+            immutable_limit_per_shard: IMMUTABLE_LIMIT,
+        }
+    }
+
     /// One engine-property reading per shard, in shard order
     /// (measurement pre-work of the shared-mem-pool RFC, step 0).
     ///
@@ -380,14 +376,26 @@ impl MmDB {
             .expect("vsdb: mmdb get failed")
     }
 
+    pub(crate) fn try_get_with<T>(
+        &self,
+        prefix: PreBytes,
+        key: &[u8],
+        decode: impl FnOnce(&[u8]) -> Result<T>,
+    ) -> Result<Option<T>> {
+        let pin = with_full_key(&prefix, key, |k| self.shard(&prefix).get_pinned(k))
+            .map_err(from_mmdb_err)?;
+        pin.as_deref().map(decode).transpose()
+    }
+
     pub(crate) fn try_contains_key(
         &self,
         meta_prefix: PreBytes,
         key: &[u8],
     ) -> Result<bool> {
-        with_full_key(&meta_prefix, key, |k| self.shard(&meta_prefix).get(k))
-            .map(|v| v.is_some())
-            .map_err(from_mmdb_err)
+        with_full_key(&meta_prefix, key, |k| {
+            self.shard(&meta_prefix).contains_key(k)
+        })
+        .map_err(from_mmdb_err)
     }
 
     pub(crate) fn insert(&self, meta_prefix: PreBytes, key: &[u8], value: &[u8]) {
@@ -476,20 +484,7 @@ impl MmDB {
     }
 
     fn sync_db_wal(db: &DB) -> Result<()> {
-        // mmdb has no standalone WAL-sync API and skips empty batches.
-        // A real synchronous deletion syncs prior successful writes on this
-        // shard without forcing the active memtable into an SST. Earlier
-        // rotated WALs have already been durably installed as SSTs before
-        // their successful write requests return.
-        db.delete_with_options(
-            &WriteOptions {
-                sync: true,
-                ..WriteOptions::default()
-            },
-            &META_KEY_WAL_FENCE,
-        )
-        .map_err(from_mmdb_err)?;
-        Ok(())
+        db.sync_wal().map_err(from_mmdb_err)
     }
 
     pub(crate) fn range<R: RawRangeBounds>(
@@ -497,18 +492,24 @@ impl MmDB {
         meta_prefix: PreBytes,
         bounds: R,
     ) -> MmdbIter {
-        let db = self.shard(&meta_prefix);
-
-        let snapshot = db.snapshot();
-        Self::range_at(db, meta_prefix, bounds, snapshot.read_options())
+        self.try_range(meta_prefix, bounds)
+            .expect("vsdb: mmdb prefix range failed")
     }
 
-    fn range_at<R: RawRangeBounds>(
+    pub(crate) fn try_range<R: RawRangeBounds>(
+        &self,
+        prefix: PreBytes,
+        bounds: R,
+    ) -> Result<MmdbIter> {
+        Self::try_range_at(self.shard(&prefix), prefix, bounds, ReadOptions::default())
+    }
+
+    fn try_range_at<R: RawRangeBounds>(
         db: &DB,
         meta_prefix: PreBytes,
         bounds: R,
-        mut options: ReadOptions,
-    ) -> MmdbIter {
+        mut options: ReadOptions<'_>,
+    ) -> Result<MmdbIter> {
         // mmdb intersects these bounds with the prefix and performs the seek.
         // In byte order the immediate successor of a key is key || 0.
         let endpoint = |bound: Bound<&[u8]>, lower: bool| {
@@ -524,12 +525,16 @@ impl MmDB {
             Some(bytes)
         };
         let (lo, hi) = bounds.raw_bounds();
-        options.iterate_lower_bound = endpoint(lo, true);
-        options.iterate_upper_bound = endpoint(hi, false);
+        if let Some(lower) = endpoint(lo, true) {
+            options = options.with_iterate_lower_bound(lower);
+        }
+        if let Some(upper) = endpoint(hi, false) {
+            options = options.with_iterate_upper_bound(upper);
+        }
         let iter = db
             .iter_with_prefix(&meta_prefix, &options)
-            .expect("vsdb: mmdb prefix range failed");
-        MmdbIter(CheckedBidiIter(BidiIterator::lazy(iter)))
+            .map_err(from_mmdb_err)?;
+        Ok(MmdbIter(BidiIterator::lazy(iter)))
     }
 
     pub(crate) fn read_view(&self, prefix: PreBytes) -> MmdbReadView<'_> {
@@ -566,68 +571,103 @@ pub(crate) struct MmdbReadView<'a> {
 
 impl MmdbReadView<'_> {
     pub(crate) fn get(&self, key: &[u8]) -> Option<RawValue> {
-        with_full_key(&self.prefix, key, |k| {
-            self.db.get_with_options(&self.snapshot.read_options(), k)
-        })
-        .expect("vsdb: mmdb snapshot get failed")
+        with_full_key(&self.prefix, key, |k| self.snapshot.get(k))
+            .expect("vsdb: mmdb snapshot get failed")
+    }
+
+    pub(crate) fn try_get_with<T>(
+        &self,
+        key: &[u8],
+        decode: impl FnOnce(&[u8]) -> Result<T>,
+    ) -> Result<Option<T>> {
+        let pin = with_full_key(&self.prefix, key, |k| self.snapshot.get_pinned(k))
+            .map_err(from_mmdb_err)?;
+        pin.as_deref().map(decode).transpose()
+    }
+
+    pub(crate) fn try_contains_key(&self, key: &[u8]) -> Result<bool> {
+        with_full_key(&self.prefix, key, |k| self.snapshot.contains_key(k))
+            .map_err(from_mmdb_err)
+    }
+
+    pub(crate) fn try_visit_many(
+        &self,
+        keys: &[&[u8]],
+        mut visit: impl FnMut(usize, Option<&[u8]>) -> Result<()>,
+    ) -> Result<()> {
+        if keys.len() > mmdb::MAX_GROUPED_READ_KEYS {
+            return Err(from_mmdb_err(mmdb::Error::invalid_argument(
+                "too many keys for a grouped read",
+            )));
+        }
+        let full_keys: SmallVec<[SmallVec<[u8; 32]>; 32]> = keys
+            .iter()
+            .map(|key| {
+                let mut full = SmallVec::from_slice(&self.prefix);
+                full.extend_from_slice(key);
+                full
+            })
+            .collect();
+        let keys: SmallVec<[&[u8]; 32]> =
+            full_keys.iter().map(SmallVec::as_slice).collect();
+        let pins = self
+            .db
+            .get_many_pinned_with_options(&self.snapshot.read_options(), &keys)
+            .map_err(from_mmdb_err)?;
+        for (slot, pin) in pins.iter().enumerate() {
+            visit(slot, pin.as_deref())?;
+        }
+        Ok(())
     }
 
     pub(crate) fn range<R: RawRangeBounds>(&self, bounds: R) -> MmdbIter {
-        MmDB::range_at(self.db, self.prefix, bounds, self.snapshot.read_options())
+        self.try_range(bounds)
+            .expect("vsdb: mmdb prefix range failed")
+    }
+
+    pub(crate) fn try_range<R: RawRangeBounds>(&self, bounds: R) -> Result<MmdbIter> {
+        MmDB::try_range_at(self.db, self.prefix, bounds, self.snapshot.read_options())
     }
 }
 
-// Check before filtering/type erasure: a failed source can coexist with an
-// item from another source, so inspect errors after every advance, not only EOF.
-struct CheckedBidiIter(BidiIterator);
+/// A streaming, bidirectional cursor over one map prefix.
+pub struct MmdbIter(BidiIterator);
 
-impl CheckedBidiIter {
-    fn check_error(&self) {
-        if let Some(error) = self.0.error() {
-            panic!("vsdb: mmdb iteration failed: {error}");
-        }
+impl MmdbIter {
+    pub(crate) fn try_step_next(&mut self) -> Result<Option<(&[u8], &[u8])>> {
+        self.0
+            .step_next()
+            .map(|row| row.map(strip_prefix))
+            .map_err(from_mmdb_err)
+    }
+
+    pub(crate) fn try_step_prev(&mut self) -> Result<Option<(&[u8], &[u8])>> {
+        self.0
+            .step_prev()
+            .map(|row| row.map(strip_prefix))
+            .map_err(from_mmdb_err)
     }
 }
 
-impl Iterator for CheckedBidiIter {
-    type Item = (RawKey, RawValue);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let item = self.0.next();
-        self.check_error();
-        item
-    }
-}
-
-impl DoubleEndedIterator for CheckedBidiIter {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        let item = self.0.next_back();
-        self.check_error();
-        item
-    }
-}
-
-/// A lazy, bidirectional iterator over key-value pairs in a single prefix range.
-pub struct MmdbIter(CheckedBidiIter);
-
-fn strip_prefix((mut key, value): (RawKey, RawValue)) -> (RawKey, RawValue) {
-    key.drain(..PREFIX_SIZE);
-    (key, value)
+fn strip_prefix<'a, 'b>((key, value): (&'a [u8], &'b [u8])) -> (&'a [u8], &'b [u8]) {
+    (&key[PREFIX_SIZE..], value)
 }
 
 impl Iterator for MmdbIter {
     type Item = (RawKey, RawValue);
 
-    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().map(strip_prefix)
+        self.try_step_next()
+            .expect("vsdb: mmdb iteration failed")
+            .map(|(k, v)| (k.to_vec(), v.to_vec()))
     }
 }
 
 impl DoubleEndedIterator for MmdbIter {
-    #[inline(always)]
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.0.next_back().map(strip_prefix)
+        self.try_step_prev()
+            .expect("vsdb: mmdb iteration failed")
+            .map(|(k, v)| (k.to_vec(), v.to_vec()))
     }
 }
 
@@ -930,17 +970,14 @@ fn note_issued_prefix(max: &mut Option<Pre>, prefix: Pre) {
 
 fn note_db_prefixes(db: &DB, max: &mut Option<Pre>) -> Result<()> {
     let mut iter = db.iter().map_err(from_mmdb_err)?;
-    for (key, value) in iter.by_ref() {
+    while let Some((key, value)) = iter.step_next().map_err(from_mmdb_err)? {
         if key.len() >= PREFIX_SIZE {
             let prefix = Pre::from_le_bytes(key[..PREFIX_SIZE].try_into().unwrap());
             note_issued_prefix(max, prefix);
             note_meta_bytes(max, &key[PREFIX_SIZE..]);
         }
         // Either side of a stored pair may carry the only handle to an empty map.
-        note_meta_bytes(max, &value);
-    }
-    if let Some(error) = iter.error() {
-        return Err(corrupt(error));
+        note_meta_bytes(max, value);
     }
     Ok(())
 }
@@ -1019,10 +1056,7 @@ fn note_shard_dir(max: &mut Option<Pre>, shard: &Path) -> Result<()> {
     // Read-only: recovery must not create a shard or take a write lock
     // while the caller already holds the default engine.
     let db = DB::open_read_only_with_options(
-        DbOptions {
-            prefix_len: PREFIX_SIZE,
-            ..DbOptions::default()
-        },
+        DbOptions::default().with_prefix_len(PREFIX_SIZE),
         shard,
     )
     .map_err(|e| {
@@ -1281,7 +1315,7 @@ impl MmdbBatch<'_> {
         if self.prefix_err.is_some() {
             return;
         }
-        with_full_key(&self.meta_prefix, key, |k| self.inner.put(k, value));
+        self.inner.put_prefixed(&self.meta_prefix, key, value);
     }
 
     #[inline(always)]
@@ -1289,7 +1323,7 @@ impl MmdbBatch<'_> {
         if self.prefix_err.is_some() {
             return;
         }
-        with_full_key(&self.meta_prefix, key, |k| self.inner.delete(k));
+        self.inner.delete_prefixed(&self.meta_prefix, key);
     }
 
     pub(crate) fn delete_range(&mut self, start: &[u8], end: &[u8]) {
@@ -1297,11 +1331,8 @@ impl MmdbBatch<'_> {
             return;
         }
         if start < end {
-            with_full_key(&self.meta_prefix, start, |lo| {
-                with_full_key(&self.meta_prefix, end, |hi| {
-                    self.inner.delete_range(lo, hi)
-                })
-            });
+            self.inner
+                .delete_range_prefixed(&self.meta_prefix, start, end);
         }
     }
 
@@ -1309,14 +1340,29 @@ impl MmdbBatch<'_> {
     /// either way. A persistence failure may leave recoverable WAL data.
     #[inline(always)]
     pub(crate) fn commit(self) -> Result<()> {
-        self.commit_with_sync(false)
+        self.commit_with_options(WriteOptions::default())
     }
 
     pub(crate) fn commit_sync(self) -> Result<()> {
-        self.commit_with_sync(true)
+        self.commit_with_options(
+            WriteOptions::default().with_durability(DurabilityMode::WalSync),
+        )
     }
 
-    fn commit_with_sync(self, sync: bool) -> Result<()> {
+    pub(crate) fn commit_no_slowdown(self, sync: bool) -> Result<()> {
+        let mode = if sync {
+            DurabilityMode::WalSync
+        } else {
+            DurabilityMode::WalAsync
+        };
+        self.commit_with_options(
+            WriteOptions::default()
+                .with_no_slowdown(true)
+                .with_durability(mode),
+        )
+    }
+
+    fn commit_with_options(self, options: WriteOptions) -> Result<()> {
         let batch = self.inner;
         if self.engine.read_only {
             return Err(crate::common::error::VsdbError::ReadOnly {
@@ -1328,13 +1374,7 @@ impl MmdbBatch<'_> {
         }
         self.engine
             .shard(&self.meta_prefix)
-            .write_with_options(
-                &WriteOptions {
-                    sync,
-                    ..Default::default()
-                },
-                batch,
-            )
+            .write_with_options(&options, batch)
             .map_err(from_mmdb_err)?;
         Ok(())
     }
@@ -1375,7 +1415,8 @@ fn prefix_successor(prefix: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
-const G: usize = GB as usize;
+#[cfg(test)]
+const G: usize = crate::GB as usize;
 
 /// Default memory budget for the DEFAULT namespace, in MB: a fixed
 /// 2 GiB. vsdb deliberately does NOT size itself from the host's RAM
@@ -1386,6 +1427,7 @@ const G: usize = GB as usize;
 /// `VSDB_MEM_BUDGET_MB`. Floors/caps and allocations outside those caches
 /// mean it is not a hard RSS limit; performance depends on the workload.
 const DEFAULT_MEM_BUDGET_MB: usize = 2048;
+const IMMUTABLE_LIMIT: usize = 4;
 
 /// Resolve the effective DEFAULT-namespace budget in bytes.
 ///
@@ -1438,20 +1480,18 @@ impl EngineSizing {
     }
 }
 
-/// Per-shard block-cache capacity under the static split — kept as its
-/// own function because the engine-level pool (tier (i)) must size
-/// itself to exactly `shards ×` this value so pooling changes cache
-/// *allocation*, never engine totals.
-///
-/// Floored alongside the write-buffer floor in `mmdb_open`: a
-/// degenerate budget must degrade to a small-but-functional cache,
-/// never to `block_cache_capacity: 0`, which mmdb treats as "caching
-/// disabled entirely".
-fn per_shard_block_cache_size(sizing: &EngineSizing, shards: usize) -> u64 {
-    cmp::max(
-        (sizing.mem_budget as u64) / 8 / shards as u64,
-        4 * 1024 * 1024,
-    )
+impl EngineSizing {
+    // Both evictable stores independently accept this budget. The caller and
+    // the background workers share the remaining process memory.
+    fn pool_store_capacity(&self) -> u64 {
+        (self.mem_budget / 8) as u64
+    }
+
+    fn write_buffer_size(&self, shards: usize) -> usize {
+        // Five generations per shard reserve 15/64 of the process budget.
+        // The 64 KiB floor keeps tiny budgets usable and can exceed that fraction.
+        (self.mem_budget / 64 * 3 / shards).clamp(64 * 1024, 512 * 1024 * 1024)
+    }
 }
 
 fn mmdb_open(
@@ -1460,87 +1500,27 @@ fn mmdb_open(
     sizing: EngineSizing,
     pool: &Arc<BlockCachePool>,
 ) -> Result<DB> {
-    let EngineSizing { mem_budget } = sizing;
     let read_only = vsdb_is_read_only();
-
-    // Per-shard sizes: divide totals by the shard count.
-    //
-    // In `mmdb 4.3`, `max_immutable_memtables` is unused: when a shard's
-    // active memtable fills, the write leader synchronously runs
-    // `freeze_memtable_sync` + `flush_frozen_memtable`, bounding per-shard
-    // memtable residency to <= 2x `wr_buffer_size` (active + one flushing
-    // table) while releasing `DB::inner` during SST I/O. Keeping the total
-    // active budget at `mem_budget / 8` across all shards (<= 2/8 of budget
-    // at peak multi-shard flush, alongside `mem_budget / 8` for
-    // `BlockCachePool`, `<= 1.56%` per active `InternalPageCache`, and
-    // compaction/query transients) avoids pinning anonymous memory at
-    // cgroup `memory.high` during multi-shard ingest bursts, where reclaim
-    // pressure stalls the flush writers that are the only way out
-    // (previously observed as tens of thousands of `memory.events:high`).
-    // Write-intensive single-prefix (`VerMap`) or co-located (`DagMap`)
-    // workloads can place hot instances in a dedicated 1-shard `Namespace`
-    // before any default `wr_buffer_size` recalibration (see
-    // `docs/proposals/v18-roadmap.md` §10.7). The first term preserves the
-    // historical shape (`G / shards`, opening to `budget / 4 / shards` past
-    // 16 GiB, capped at 512 MiB) for large explicit budgets.
-    let legacy_wr = cmp::min(
-        if mem_budget > 16 * G {
-            mem_budget / 4 / shards
-        } else {
-            G / shards
-        },
-        512 * 1024 * 1024,
-    );
-    let wr_buffer_size = cmp::max(
-        cmp::min(legacy_wr, mem_budget / 8 / shards),
-        4 * 1024 * 1024,
-    );
-
-    // Per-shard capacity of the static split — retained in the options
-    // as belt-and-braces (mmdb documents it as IGNORED when a shared
-    // pool is attached; if the pool wiring were ever removed, each
-    // shard would fall back to exactly this private capacity).
-    let block_cache_size = per_shard_block_cache_size(&sizing, shards);
-
-    // Writable opens use one compaction thread per shard. MMDB's native
-    // read-only open overrides this to zero and starts no background worker.
-    let opts = DbOptions {
-        create_if_missing: !read_only,
-        prefix_len: PREFIX_SIZE,
-
-        // Per-level compression: LZ4 for L0-L1, ZSTD for L2+
-        compression_per_level: vec![
-            CompressionType::Lz4,  // L0
-            CompressionType::Lz4,  // L1
-            CompressionType::Zstd, // L2
-            CompressionType::Zstd, // L3
-            CompressionType::Zstd, // L4
-            CompressionType::Zstd, // L5
-            CompressionType::Zstd, // L6
-        ],
-
-        // Write buffer (per-shard)
-        write_buffer_size: wr_buffer_size,
-        max_immutable_memtables: 4,
-
-        // Block cache: one pool per engine, shared by its shards (the
-        // per-shard capacity above is documentation/fallback only).
-        block_cache: Some(pool.clone()),
-        block_cache_capacity: block_cache_size,
-        block_size: 16 * 1024, // 16 KB
-
-        // Compaction tuning. Keep the compaction trigger well below mmdb's
-        // write-slowdown trigger (8): with both at 8, the instant L0 becomes
-        // compactable every write already pays the slowdown penalty — no
-        // buffer zone for background compaction to work in.
-        l0_compaction_trigger: 4,
-        max_subcompactions: 4,
-
-        // Single compaction thread per shard — shard fan-out gives natural parallelism
-        max_background_compactions: 1,
-
-        ..DbOptions::default()
-    };
+    let opts = DbOptions::default()
+        .with_create_if_missing(!read_only)
+        .with_num_levels(7)
+        .with_prefix_len(PREFIX_SIZE)
+        .with_compression_per_level(vec![
+            CompressionType::Lz4,
+            CompressionType::Lz4,
+            CompressionType::Zstd,
+            CompressionType::Zstd,
+            CompressionType::Zstd,
+            CompressionType::Zstd,
+            CompressionType::Zstd,
+        ])
+        .with_write_buffer_size(sizing.write_buffer_size(shards))
+        .with_max_immutable_memtables(IMMUTABLE_LIMIT)
+        .with_block_cache(Some(Arc::clone(pool)))
+        .with_block_size(16 * 1024)
+        .with_l0_compaction_trigger(4)
+        .with_max_subcompactions(4)
+        .with_max_background_compactions(1);
 
     if read_only {
         DB::open_read_only_with_options(opts, dir).map_err(from_mmdb_err)
@@ -1671,15 +1651,13 @@ mod tests {
     fn streaming_scans_surface_late_block_corruption() {
         let dir = tmp_dir("iterator-corruption");
         let prefix = 42u64.to_be_bytes();
-        let opts = DbOptions {
-            create_if_missing: true,
-            prefix_len: PREFIX_SIZE,
-            block_size: 1024,
-            block_cache_capacity: 0,
-            pin_l0_filter_and_index_blocks_in_cache: false,
-            compression: CompressionType::None,
-            ..DbOptions::default()
-        };
+        let opts = DbOptions::default()
+            .with_create_if_missing(true)
+            .with_prefix_len(PREFIX_SIZE)
+            .with_block_size(1024)
+            .with_block_cache_capacity(0)
+            .with_pin_l0_first_block_and_warm_index(false)
+            .with_compression(CompressionType::None);
         let db = DB::open(opts.clone(), &dir).unwrap();
         for i in 0..64u8 {
             db.put(&make_full_key(&prefix, &[i]), &[i; 256]).unwrap();

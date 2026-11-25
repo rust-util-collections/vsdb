@@ -46,6 +46,28 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+/// Byte charges in the two independently bounded evictable cache stores.
+pub use mmdb::BlockCachePoolUsage;
+/// Memory attributed to a shard's current memtables and its L0 block pins.
+pub use mmdb::DbMemoryUsage as ShardMemoryUsage;
+
+/// Engine-side memory observations for one namespace. Shard order matches
+/// [`Namespace::shard_properties`]. Gauges are sampled independently.
+/// Caller-retained pins, old read views and collection caches can retain
+/// additional memory outside these charges.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct NamespaceMemoryUsage {
+    /// The shared evictable pool, counted once for all shards.
+    pub pool: BlockCachePoolUsage,
+    /// Member-local observations, one per shard.
+    pub shards: Vec<ShardMemoryUsage>,
+    /// The active write-buffer freeze threshold on each shard, in bytes.
+    pub write_buffer_bytes_per_shard: usize,
+    /// Maximum queued immutable generations on each writable shard.
+    pub immutable_limit_per_shard: usize,
+}
+
 /// A namespace identifier: small, stable, allocated once at creation,
 /// never reused.
 pub type NsId = u64;
@@ -982,6 +1004,12 @@ impl Namespace {
     /// ```
     pub fn shard_properties(&self, name: &str) -> Vec<Option<String>> {
         self.0.engine.shard_properties(name)
+    }
+
+    /// Samples the shared pool once and the current memtables and L0 pins on each
+    /// shard. Sizes are estimates. Configured thresholds can be exceeded by a batch.
+    pub fn memory_usage(&self) -> NamespaceMemoryUsage {
+        self.0.engine.memory_usage()
     }
 
     /// The engine backing this namespace (crate-internal routing).

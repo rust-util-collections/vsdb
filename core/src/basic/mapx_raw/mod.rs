@@ -91,6 +91,16 @@ impl MapxRawReader {
         self.inner.get(key.as_ref())
     }
 
+    /// Decode a visible value from pinned engine bytes. The decoder receives
+    /// empty values as an empty slice and is skipped when the key is absent.
+    pub fn try_get_with<T>(
+        &self,
+        key: impl AsRef<[u8]>,
+        decode: impl FnOnce(&[u8]) -> Result<T>,
+    ) -> Result<Option<T>> {
+        self.inner.try_get_with(key.as_ref(), decode)
+    }
+
     /// Captures one committed state for repeated queries.
     pub fn read_view(&self) -> MapxRawReadView<'_> {
         self.inner.read_view()
@@ -308,6 +318,16 @@ impl MapxRaw {
         self.inner.get(key.as_ref())
     }
 
+    /// Decode a visible value from pinned engine bytes. The decoder receives
+    /// empty values as an empty slice and is skipped when the key is absent.
+    pub fn try_get_with<T>(
+        &self,
+        key: impl AsRef<[u8]>,
+        decode: impl FnOnce(&[u8]) -> Result<T>,
+    ) -> Result<Option<T>> {
+        self.inner.try_get_with(key.as_ref(), decode)
+    }
+
     /// Retrieves a mutable reference to a value in the map.
     ///
     /// # Arguments
@@ -440,6 +460,12 @@ impl MapxRaw {
     #[inline(always)]
     pub fn range<'a, R: RawRangeBounds>(&'a self, bounds: R) -> MapxRawIter<'a> {
         self.inner.range(bounds)
+    }
+
+    /// Opens a fallible cursor over the given bounds. Use its lending steps
+    /// to propagate late storage errors while streaming each borrowed row.
+    pub fn try_range<R: RawRangeBounds>(&self, bounds: R) -> Result<MapxRawIter<'_>> {
+        self.inner.try_range(bounds)
     }
 
     /// Returns a detached iterator over a range of entries in the map.
@@ -817,6 +843,20 @@ impl MapxRawBatch<'_> {
     /// success; do not automatically retry an ambiguous failed write.
     pub fn commit_sync(self) -> Result<()> {
         self.inner.commit_sync()
+    }
+
+    /// Commit once with ordinary WAL durability. If admission would stall at
+    /// L0 or the immutable queue, return [`crate::StorageErrorKind::Busy`].
+    /// A busy batch wrote no rows or WAL records and may be rebuilt and retried.
+    /// Group commit and file I/O can still take time.
+    pub fn commit_no_slowdown(self) -> Result<()> {
+        self.inner.commit_no_slowdown(false)
+    }
+
+    /// Apply the same admission rule as [`Self::commit_no_slowdown`] and
+    /// synchronize a single accepted batch before acknowledging it.
+    pub fn commit_sync_no_slowdown(self) -> Result<()> {
+        self.inner.commit_no_slowdown(true)
     }
 }
 

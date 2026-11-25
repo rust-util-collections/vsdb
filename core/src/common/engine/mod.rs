@@ -53,6 +53,14 @@ impl MapxReader {
         self.ns.engine().get(self.prefix, key)
     }
 
+    pub(crate) fn try_get_with<T>(
+        &self,
+        key: &[u8],
+        decode: impl FnOnce(&[u8]) -> Result<T>,
+    ) -> Result<Option<T>> {
+        self.ns.engine().try_get_with(self.prefix, key, decode)
+    }
+
     pub(crate) fn read_view(&self) -> MapxReadView<'_> {
         MapxReadView {
             inner: self.ns.engine().read_view(self.prefix),
@@ -71,9 +79,36 @@ impl MapxReadView<'_> {
         self.inner.get(key.as_ref())
     }
 
+    /// Decode a single value directly from its pinned bytes at this snapshot.
+    pub fn try_get_with<T>(
+        &self,
+        key: impl AsRef<[u8]>,
+        decode: impl FnOnce(&[u8]) -> Result<T>,
+    ) -> Result<Option<T>> {
+        self.inner.try_get_with(key.as_ref(), decode)
+    }
+
+    /// Resolve up to [`crate::MAX_GROUPED_READ_KEYS`] slots at this snapshot.
+    /// The visitor runs in input order, including duplicates and misses. All
+    /// storage reads succeed before the first callback. A visitor error stops
+    /// the remaining callbacks. Returned slices are borrowed only for each call.
+    pub fn try_visit_many(
+        &self,
+        keys: &[&[u8]],
+        visit: impl FnMut(usize, Option<&[u8]>) -> Result<()>,
+    ) -> Result<()> {
+        self.inner.try_visit_many(keys, visit)
+    }
+
     /// Whether the captured state contains a key.
     pub fn contains_key(&self, key: impl AsRef<[u8]>) -> bool {
-        self.get(key).is_some()
+        self.try_contains_key(key)
+            .expect("vsdb: mmdb snapshot existence check failed")
+    }
+
+    /// Fallible snapshot existence check, without copying the value.
+    pub fn try_contains_key(&self, key: impl AsRef<[u8]>) -> Result<bool> {
+        self.inner.try_contains_key(key.as_ref())
     }
 
     /// Iterates the captured state, borrowing this view.
@@ -98,6 +133,14 @@ impl MapxReadView<'_> {
             db_iter: self.inner.range(bounds),
             _marker: PhantomData,
         }
+    }
+
+    /// Opens a bounded cursor at this snapshot and preserves storage errors.
+    pub fn try_range<R: RawRangeBounds>(&self, bounds: R) -> Result<MapxIter<'_>> {
+        Ok(MapxIter {
+            db_iter: self.inner.try_range(bounds)?,
+            _marker: PhantomData,
+        })
     }
 
     /// Iterates a range within the captured state. Fatal engine errors panic.
@@ -249,6 +292,29 @@ impl Mapx {
     #[inline(always)]
     pub(crate) fn get(&self, key: &[u8]) -> Option<RawValue> {
         self.ns.engine().get(self.prefix_bytes(), key)
+    }
+
+    pub(crate) fn try_get_with<T>(
+        &self,
+        key: &[u8],
+        decode: impl FnOnce(&[u8]) -> Result<T>,
+    ) -> Result<Option<T>> {
+        self.ns
+            .engine()
+            .try_get_with(self.try_prefix()?.to_le_bytes(), key, decode)
+    }
+
+    pub(crate) fn try_range<R: RawRangeBounds>(
+        &self,
+        bounds: R,
+    ) -> Result<MapxIter<'_>> {
+        Ok(MapxIter {
+            db_iter: self
+                .ns
+                .engine()
+                .try_range(self.try_prefix()?.to_le_bytes(), bounds)?,
+            _marker: PhantomData,
+        })
     }
 
     pub(crate) fn try_contains_key(&self, key: &[u8]) -> Result<bool> {
@@ -692,6 +758,19 @@ impl<'de> Deserialize<'de> for Mapx {
 pub struct MapxIter<'a> {
     db_iter: DbIter,
     _marker: PhantomData<&'a ()>,
+}
+
+impl MapxIter<'_> {
+    /// Advance from the front and borrow the unprefixed key and value until
+    /// the next cursor operation. Storage errors retain their classification.
+    pub fn try_step_next(&mut self) -> Result<Option<(&[u8], &[u8])>> {
+        self.db_iter.try_step_next()
+    }
+
+    /// Advance from the back and borrow the unprefixed key and value.
+    pub fn try_step_prev(&mut self) -> Result<Option<(&[u8], &[u8])>> {
+        self.db_iter.try_step_prev()
+    }
 }
 
 impl fmt::Debug for MapxIter<'_> {
