@@ -1,7 +1,10 @@
 //! Converts the allocator and namespace bootstrap metadata while the database
 //! is offline. The journal retains the universe ID across interrupted upgrades.
 use crate::{corrupt, exactly};
+use mmdb_v4 as mmdb;
+mod staging;
 use serde::{Deserialize, Serialize};
+pub use staging::stage_universe;
 use std::{
     collections::HashSet,
     fs::{self, File},
@@ -601,7 +604,9 @@ fn ensure_bootstrap_system(base: &Path, system: &Path) -> Result<()> {
     create_dir_all_durable(system)
 }
 
-/// Converts the universe metadata before calling v18's `vsdb_configure`.
+/// Upgrade VSDB metadata on an offline v4-backed working copy. This low-level
+/// step leaves existing v4 shards intact. Use [`stage_universe`] to build
+/// the generation that the v5-backed runtime can open.
 /// Stop every process accessing this v17 database first, including processes
 /// using explicitly placed namespaces. A retry resumes the same conversion.
 pub fn migrate_universe(base: impl AsRef<Path>) -> Result<()> {

@@ -1,7 +1,6 @@
-//! Offline v17 → v18 conversion. Stop every process using the universe,
-//! including its explicitly placed namespaces. Call [`migrate_universe`]
-//! before configuring v18 at that root, then convert saved and embedded
-//! collection handles using the application's schema.
+//! Offline conversion to VSDB v18 on MMDB v5. Stop all writers and
+//! [stage a fresh generation](stage_universe), then convert saved and embedded
+//! legacy collection handles using the application's schema.
 #![deny(warnings)]
 
 use serde::{Deserialize, Deserializer, de};
@@ -12,7 +11,7 @@ pub mod slotdex;
 mod universe;
 pub mod vecdex;
 pub mod versioned;
-pub use universe::migrate_universe;
+pub use universe::{migrate_universe, stage_universe};
 
 fn corrupt(detail: impl Into<String>) -> VsdbError {
     VsdbError::Corrupt {

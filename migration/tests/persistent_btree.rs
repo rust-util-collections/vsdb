@@ -2,7 +2,7 @@
 use std::fs;
 use vsdb::{PersistentBTree, VsdbOptions, vsdb_configure};
 use vsdb_migrate::{
-    migrate_universe,
+    stage_universe,
     versioned::{migrate_tree_handle_v17, migrate_tree_v17},
 };
 
@@ -18,8 +18,10 @@ fn preserves_the_primary_prefix_and_maps_external_roots() {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, contents).unwrap();
     }
-    migrate_universe(&scratch).unwrap();
-    vsdb_configure(VsdbOptions::new(&scratch)).unwrap();
+    let staging = tempfile::tempdir().unwrap();
+    let generation = staging.path().join("converted");
+    stage_universe(&scratch, &generation).unwrap();
+    vsdb_configure(VsdbOptions::new(generation.join("base"))).unwrap();
     const ID: u64 = 40_960_000;
     let path = vsdb::Namespace::default_ns().meta_path(ID);
     let old = fs::read(&path).unwrap();

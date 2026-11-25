@@ -3,7 +3,7 @@
 use std::{fs, path::Path};
 use vsdb::{BranchId, CommitId, VerMap, VsdbOptions, vsdb_configure};
 use vsdb_migrate::{
-    migrate_universe,
+    stage_universe,
     versioned::{migrate_handle_v17, migrate_v17},
 };
 
@@ -19,8 +19,10 @@ fn converts_retained_versions_and_working_root_at_original_id() {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, contents).unwrap();
     }
-    migrate_universe(&scratch).unwrap();
-    vsdb_configure(VsdbOptions::new(&scratch)).unwrap();
+    let staging = tempfile::tempdir().unwrap();
+    let generation = staging.path().join("converted");
+    stage_universe(&scratch, &generation).unwrap();
+    vsdb_configure(VsdbOptions::new(generation.join("base"))).unwrap();
     const ID: u64 = 40_960_000;
     let meta_path = vsdb::Namespace::default_ns().meta_path(ID);
     let old_metadata = fs::read(&meta_path).unwrap();

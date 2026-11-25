@@ -42,7 +42,10 @@ fn migrate_existing_universe_and_nested_values() {
         hdr,
         fs::read(root.join("__SYSTEM__/universe_header")).unwrap()
     );
-    vsdb_configure(VsdbOptions::new(&root)).unwrap();
+    let staging = tempfile::tempdir().unwrap();
+    let generation = staging.path().join("converted");
+    vsdb_migrate::stage_universe(&root, &generation).unwrap();
+    vsdb_configure(VsdbOptions::new(generation.join("base"))).unwrap();
     assert!(Outer::from_meta(outer).is_err());
     assert!(Orphan::<CommitId>::from_meta(token).is_err());
     let map = migrate_basic::<Outer>(outer).unwrap();
@@ -203,8 +206,8 @@ fn upgrade_preserves_reserved_ids_and_rejects_reset_registry() {
     fs::write(&ceiling, 1u64.to_le_bytes()).unwrap();
     assert!(migrate_universe(&root).is_err());
     let historic = old + 12345;
-    let db = mmdb::DB::open(
-        mmdb::DbOptions {
+    let db = mmdb_v4::DB::open(
+        mmdb_v4::DbOptions {
             prefix_len: 8,
             ..Default::default()
         },

@@ -1,25 +1,104 @@
-# Migrating a v17 database
+# Offline migration to VSDB v18 and MMDB v5
 
-`vsdb_migrate` is a separate Rust library. Applications running v18 normally depend on `vsdb`. Link `vsdb_migrate` in the offline upgrade program.
+The runtime opens v18 collection data on MMDB v5. The separate
+`vsdb_migrate` crate reads MMDB 4.3.15 and can stage an entire universe
+before the application's first v5 write.
 
-## Upgrade order
+| Source | Operation |
+|---|---|
+| Fresh database | Configure v18 with a new base directory. |
+| v18 collections on v4 shards | Stage the source with `vsdb-stage-v5`. Verify the application can reopen its existing handles. |
+| v17 collections on v4 shards | Stage with the same command. Then apply the typed v17 conversions below to the new base and the matching application-owned handles. |
+| v18 collections on v5 shards | Configure v18 against the existing complete generation. |
 
-1. Stop all processes using the v17 universe. Back up the base directory, explicitly placed namespace directories and application-owned handle files together. Explicit namespace paths in a staging copy must point to the staged data. For rollback, restore that complete backup and run the v17 binary on the restored path. Current v18 writers and the converter install a format marker that v17 checks. Earlier v18 roots may lack it until reopened writable.
-2. Run `migrate_universe(base)` before configuring VSDB in the upgrade process. It checks shard locks and lifecycle records, binds each engine to its namespace and universe, and preserves the prefix allocator floor. A retry uses the durable upgrade identifier.
-3. Call `vsdb_configure(VsdbOptions::new(base))` and convert each saved or embedded collection handle with its original types. Record converted tree roots and DAG child IDs, update application records, and verify they reopen before resuming traffic.
+## Stage the engine generation
+
+1. Stop processes using the base, its explicitly placed namespaces, and
+   external application state. Take one consistent backup of all of these
+   paths. An offline copy of a registry with absolute paths still refers
+   to the original namespace directories. Supply the quiesced, internally
+   consistent source tree and keep its referenced placements available
+   for the full conversion.
+2. Run the command from the workspace, with an existing destination parent
+   and an absent final generation. The destination and every source root
+   must be disjoint. Place the destination on a filesystem supporting an
+   exclusive directory rename and directory fsync.
+
+   ```sh
+   cargo +stable run --release -p vsdb_migrate --bin vsdb-stage-v5 -- /data/old /archive/generation-v5
+   ```
+
+   The command copies regular files and directories into a private staging
+   directory. It rejects symlinks within the copied trees and special
+   files. The target needs space for the working copy and the verified v5
+   shards. The v4 data remains available for a retry. The tool takes shared
+   locks on existing universe and shard locks; immutable snapshots may omit
+   those files. Quiescence also covers external application files.
+
+   The new base is `/archive/generation-v5/base`. Derived namespace paths
+   stay relative to that base. Explicit placements become siblings under
+   `/archive/generation-v5/placements/<16-hex-namespace-id>`. Source
+   placements can span filesystems. The generated placements and base
+   publish together on the destination filesystem. Keep the published
+   generation at its chosen absolute path so its registry remains valid.
+
+3. The converter checks established and initializing shard layouts. Empty
+   or uncreated pending shards retain their lifecycle. For each anchored
+   shard, a v4 read-only scan includes recovered WAL rows and their deletions.
+   The tool ingests the sorted visible rows into fresh v5 SSTs, checks both
+   iterators for errors and compares row counts and Keccak-256 digests of
+   length-framed keys and values after a writable reopen with seven levels
+   and eight-byte prefixes. A new v5 sequence history starts at export.
+   Non-shard metadata, allocator floors, saved handles and the contents of
+   `__CUSTOM__` travel with their universe. Separately stage any application
+   files outside these trees.
+4. If v17 schemas are present, run the conversions below on a copy of your
+   application state configured with the new base. Verify externally saved
+   handles, embedded values, branch and tree roots, DAG descendants, proofs
+   and vector queries before switching traffic. On success, select the
+   complete new generation and its application files together. Before new
+   writes, rollback selects the original files and their matching binary.
+   After accepting writes, rollback requires replay or reconciliation.
+
+A failure before the exclusive rename leaves the final name available,
+unless another process claimed it. A killed process can leave a private
+`.vsdb-stage-*` sibling. Retry from the protected source using an absent
+destination. If the final parent-directory sync fails after the rename,
+the complete directory can already be visible, with durability unconfirmed.
+A retry preserves any existing destination. Stage to another absent name
+and verify the returned generation before selecting it.
+
+The library entry point is `vsdb_migrate::stage_universe(source, generation)`.
+Run it in the offline program before configuring VSDB. Its output can be used
+for application-specific conversions:
 
 ```rust,no_run
+use std::path::Path;
 use vsdb::{InstanceId, Mapx, VsdbOptions, vsdb_configure};
-use vsdb_migrate::{migrate_basic, migrate_universe};
+use vsdb_migrate::{migrate_basic, stage_universe};
 
-fn upgrade(base: &std::path::Path, saved: InstanceId) -> vsdb::Result<()> {
-    migrate_universe(base)?;
-    vsdb_configure(VsdbOptions::new(base))?;
+fn upgrade(source: &Path, generation: &Path, saved: InstanceId) -> vsdb::Result<()> {
+    stage_universe(source, generation)?;
+    vsdb_configure(VsdbOptions::new(generation.join("base")))?;
     let map = migrate_basic::<Mapx<String, u64>>(saved)?;
     assert_eq!(map.instance_id(), saved);
     Ok(())
 }
 ```
+
+## Existing v4 logical conversion programs
+
+A program that converts v17 collection rows on MMDB v4 first can still
+build the complete v4-backed converter. Check out VSDB commit
+`6ddaed901901910537d0cf280141218380c5665d` separately and link the
+application's offline converter against that checkout's `vsdb_migrate`.
+On an isolated **working copy** with external paths rebound to its working
+placements, run its `migrate_universe`, configure that checkout's v18/v4
+runtime there, complete typed conversions, verify them and close the process.
+Then pass the resulting v18/v4 universe to the staging command above. In
+the current crate `migrate_universe` still upgrades VSDB metadata on a v4
+working copy. It leaves anchored shards in v4 format.
+[Frozen v4-backed migration guide](https://github.com/rust-util-collections/vsdb/blob/6ddaed901901910537d0cf280141218380c5665d/migration/README.md)
 
 ## Choose a converter
 
