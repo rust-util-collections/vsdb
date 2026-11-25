@@ -27,11 +27,17 @@ pub(crate) fn object_id(key: &[u8]) -> Option<NodeId> {
     Some(NodeId::from_be_bytes(key[1..].try_into().unwrap()))
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum LeafVal {
+    Bytes(Vec<u8>),
+    Blob(NodeId),
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum Node {
     Leaf {
         keys: Vec<Vec<u8>>,
-        values: Vec<Vec<u8>>,
+        values: Vec<LeafVal>,
     },
     Internal {
         keys: Vec<Vec<u8>>,
@@ -170,12 +176,20 @@ impl<'a> NodeView<'a> {
             (0..=self.len).map(|i| self.child(i)).collect()
         }
     }
-    fn materialize(&self, blob: impl Fn(NodeId) -> Vec<u8>) -> Node {
+    pub(crate) fn leaf_val(&self, i: usize) -> LeafVal {
+        let desc = self.desc(i);
+        if desc & CLASS_MASK == BLOB {
+            LeafVal::Blob(desc)
+        } else {
+            LeafVal::Bytes(self.raw[self.key_end(i)..self.end(i)].to_vec())
+        }
+    }
+    fn materialize(&self) -> Node {
         let keys = (0..self.len).map(|i| self.key(i).to_vec()).collect();
         if self.leaf {
             Node::Leaf {
                 keys,
-                values: (0..self.len).map(|i| self.value(i, &blob)).collect(),
+                values: (0..self.len).map(|i| self.leaf_val(i)).collect(),
             }
         } else {
             Node::Internal {
@@ -193,7 +207,11 @@ impl Node {
         }
     }
 
-    pub(crate) fn encode_with(&self, mut blob: impl FnMut(&[u8]) -> NodeId) -> Vec<u8> {
+    pub(crate) fn encode_with(
+        &self,
+        edges: &mut Vec<NodeId>,
+        mut alloc_blob: impl FnMut(&[u8]) -> NodeId,
+    ) -> Vec<u8> {
         let n = self.key_count();
         let leaf = matches!(self, Self::Leaf { .. });
         let keys = match self {
@@ -208,34 +226,42 @@ impl Node {
             let end = u32::try_from(raw.len()).expect("B+ tree page offset overflow");
             raw[p..p + 4].copy_from_slice(&end.to_le_bytes());
             let desc = match self {
-                Self::Leaf { values, .. } if values[i].len() > 1024 => blob(&values[i]),
-                Self::Leaf { values, .. } => {
-                    raw.extend_from_slice(&values[i]);
-                    raw.len() as u64
-                }
+                Self::Leaf { values, .. } => match &values[i] {
+                    LeafVal::Blob(id) => {
+                        edges.push(*id);
+                        *id
+                    }
+                    LeafVal::Bytes(v) if v.len() > 1024 => {
+                        let blob = alloc_blob(v);
+                        edges.push(blob);
+                        blob
+                    }
+                    LeafVal::Bytes(v) => {
+                        raw.extend_from_slice(v);
+                        raw.len() as u64
+                    }
+                },
                 Self::Internal { children, .. } => children[i],
             };
             raw[p + 4..p + 12].copy_from_slice(&desc.to_le_bytes());
         }
         if let Self::Internal { children, .. } = self {
             raw[2 + 12 * n..10 + 12 * n].copy_from_slice(&children[n].to_le_bytes());
+            edges.extend_from_slice(children);
         }
         raw
     }
 
-    pub(crate) fn decode_with(raw: &[u8], blob: impl Fn(NodeId) -> Vec<u8>) -> Self {
+    pub(crate) fn decode(raw: &[u8]) -> Self {
         let page = NodeView::open(raw).expect("invalid B+ tree page header");
         page.validate().expect("invalid B+ tree page");
-        page.materialize(blob)
+        page.materialize()
     }
 
     #[cfg(test)]
     pub(crate) fn encode(&self) -> Vec<u8> {
-        self.encode_with(|_| panic!("test page requires blob store"))
-    }
-    #[cfg(test)]
-    pub(crate) fn decode(raw: &[u8]) -> Self {
-        Self::decode_with(raw, |_| panic!("test page requires blob store"))
+        let mut edges = Vec::new();
+        self.encode_with(&mut edges, |_| panic!("test page requires blob store"))
     }
     pub(crate) fn decode_children(raw: &[u8]) -> Vec<NodeId> {
         let page = NodeView::open(raw).expect("invalid B+ tree page header");

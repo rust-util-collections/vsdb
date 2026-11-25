@@ -4,7 +4,9 @@
 //! with underflow handled via borrow-left, borrow-right, and merge.
 //! Previous versions are left intact (copy-on-write).
 
-use super::{EMPTY_ROOT, MIN_KEYS, Node, NodeId, PersistentBTree, RemoveResult};
+use super::{
+    EMPTY_ROOT, LeafVal, MIN_KEYS, Node, NodeId, NodeView, PersistentBTree, RemoveResult,
+};
 use std::collections::HashSet;
 
 impl PersistentBTree {
@@ -32,20 +34,22 @@ impl PersistentBTree {
     }
 
     pub(super) fn shrink_root(&mut self, root: NodeId) -> NodeId {
-        match self.node(root) {
-            Node::Leaf { ref keys, .. } if keys.is_empty() => {
-                self.discard_node(root, &[]);
-                EMPTY_ROOT
-            }
-            Node::Internal {
-                ref keys,
-                ref children,
-            } if keys.is_empty() => {
-                let child = children[0];
-                self.discard_node(root, &[child]);
-                child
-            }
-            _ => root,
+        let (leaf, len, first_child) = {
+            let raw = self.object(root);
+            let page = NodeView::open(&raw).expect("invalid B+ tree page");
+            let child = (!page.leaf && page.len == 0).then(|| page.child(0));
+            (page.leaf, page.len, child)
+        };
+        if len != 0 {
+            return root;
+        }
+        if leaf {
+            self.discard_node(root, &[]);
+            EMPTY_ROOT
+        } else {
+            let child = first_child.unwrap();
+            self.discard_node(root, &[child]);
+            child
         }
     }
 
@@ -139,7 +143,7 @@ impl PersistentBTree {
     fn remove_leaf(
         &mut self,
         mut keys: Vec<Vec<u8>>,
-        mut values: Vec<Vec<u8>>,
+        mut values: Vec<LeafVal>,
         key: &[u8],
     ) -> RemoveResult {
         let idx = match keys.binary_search_by(|k| k.as_slice().cmp(key)) {
@@ -184,18 +188,31 @@ impl PersistentBTree {
         mut children: Vec<NodeId>,
         ci: usize,
     ) -> RemoveResult {
-        // Try borrow from left sibling.
-        if ci > 0 && self.node(children[ci - 1]).key_count() > MIN_KEYS {
-            self.borrow_left(&mut keys, &mut children, ci);
-            let nid = self.alloc(&Node::Internal { keys, children });
-            return RemoveResult::Done(nid);
+        // Try borrow from left sibling using a header-only occupancy probe.
+        if ci > 0 {
+            let left_donor = {
+                let raw = self.object(children[ci - 1]);
+                let page = NodeView::open(&raw).expect("invalid B+ tree page");
+                (page.len > MIN_KEYS).then(|| Node::decode(&raw))
+            };
+            if let Some(left) = left_donor {
+                self.borrow_left(left, &mut keys, &mut children, ci);
+                let nid = self.alloc(&Node::Internal { keys, children });
+                return RemoveResult::Done(nid);
+            }
         }
-        // Try borrow from right sibling.
-        if ci + 1 < children.len() && self.node(children[ci + 1]).key_count() > MIN_KEYS
-        {
-            self.borrow_right(&mut keys, &mut children, ci);
-            let nid = self.alloc(&Node::Internal { keys, children });
-            return RemoveResult::Done(nid);
+        // Try borrow from right sibling using a header-only occupancy probe.
+        if ci + 1 < children.len() {
+            let right_donor = {
+                let raw = self.object(children[ci + 1]);
+                let page = NodeView::open(&raw).expect("invalid B+ tree page");
+                (page.len > MIN_KEYS).then(|| Node::decode(&raw))
+            };
+            if let Some(right) = right_donor {
+                self.borrow_right(right, &mut keys, &mut children, ci);
+                let nid = self.alloc(&Node::Internal { keys, children });
+                return RemoveResult::Done(nid);
+            }
         }
         // Merge (prefer left).
         let mi = if ci > 0 { ci - 1 } else { ci };
@@ -211,11 +228,16 @@ impl PersistentBTree {
 
     // ----- borrow / merge -----
 
-    fn borrow_left(&mut self, pk: &mut [Vec<u8>], pc: &mut [NodeId], ci: usize) {
+    fn borrow_left(
+        &mut self,
+        left: Node,
+        pk: &mut [Vec<u8>],
+        pc: &mut [NodeId],
+        ci: usize,
+    ) {
         let si = ci - 1;
         let old_si = pc[si];
         let old_ci = pc[ci];
-        let left = self.node(old_si);
         let child = self.node(old_ci);
         match (left, child) {
             (
@@ -269,12 +291,17 @@ impl PersistentBTree {
         self.discard_node(old_ci, &surv);
     }
 
-    fn borrow_right(&mut self, pk: &mut [Vec<u8>], pc: &mut [NodeId], ci: usize) {
+    fn borrow_right(
+        &mut self,
+        right: Node,
+        pk: &mut [Vec<u8>],
+        pc: &mut [NodeId],
+        ci: usize,
+    ) {
         let ri = ci + 1;
         let old_ci = pc[ci];
         let old_ri = pc[ri];
         let child = self.node(old_ci);
-        let right = self.node(old_ri);
         match (child, right) {
             (
                 Node::Leaf {

@@ -58,8 +58,8 @@ use std::{
 use vsdb_core::basic::mapx_raw::{MapxRaw, MapxRawReader};
 
 pub(crate) use nodes::{
-    BLOB, BLOB_LEAF, CLASS_MASK, LEAF, MAX_KEYS, MIN_KEYS, Node, NodeView, object_id,
-    object_key,
+    BLOB, BLOB_LEAF, CLASS_MASK, LEAF, LeafVal, MAX_KEYS, MIN_KEYS, Node, NodeView,
+    object_id, object_key,
 };
 
 pub use types::{EMPTY_ROOT, NodeId};
@@ -528,16 +528,11 @@ impl PersistentBTree {
 
     fn alloc(&mut self, node: &Node) -> NodeId {
         let mut edges = Vec::new();
-        let raw = node.encode_with(|v| {
-            let blob = self.alloc_object(BLOB, v.to_vec(), Vec::new());
-            edges.push(blob);
-            blob
+        let raw = node.encode_with(&mut edges, |v| {
+            self.alloc_object(BLOB, v.to_vec(), Vec::new())
         });
         let class = match node {
-            Node::Internal { children, .. } => {
-                edges.extend_from_slice(children);
-                0
-            }
+            Node::Internal { .. } => 0,
             Node::Leaf { .. } if edges.is_empty() => LEAF,
             Node::Leaf { .. } => BLOB_LEAF,
         };
@@ -558,7 +553,16 @@ impl PersistentBTree {
     }
 
     pub(crate) fn node(&self, id: NodeId) -> Node {
-        Node::decode_with(&self.object(id), |blob| self.object(blob).into_owned())
+        Node::decode(&self.object(id))
+    }
+
+    pub(crate) fn leaf_val_eq(&self, existing: &LeafVal, new_bytes: &[u8]) -> bool {
+        match existing {
+            LeafVal::Bytes(b) => b.as_slice() == new_bytes,
+            LeafVal::Blob(id) => {
+                new_bytes.len() > 1024 && self.object(*id).as_ref() == new_bytes
+            }
+        }
     }
 
     /// Drains the write buffer into a single engine write batch.
@@ -761,7 +765,10 @@ impl PersistentBTree {
         entries: Vec<(Vec<u8>, Vec<u8>)>,
     ) -> Result<(Vec<u8>, NodeId)> {
         let first = entries[0].0.clone();
-        let (keys, values) = entries.into_iter().unzip();
+        let (keys, values) = entries
+            .into_iter()
+            .map(|(k, v)| (k, LeafVal::Bytes(v)))
+            .unzip();
         let id = self.alloc(&Node::Leaf { keys, values });
         self.flush_pending_if_large()?;
         Ok((first, id))
@@ -945,13 +952,13 @@ impl PersistentBTree {
         let mut h = 0;
         let mut cur = root;
         while cur != EMPTY_ROOT {
-            match self.node(cur) {
-                Node::Leaf { .. } => break,
-                Node::Internal { children, .. } => {
-                    h += 1;
-                    cur = children[0];
-                }
+            let raw = self.object(cur);
+            let page = NodeView::open(&raw).expect("invalid B+ tree page");
+            if page.leaf {
+                break;
             }
+            h += 1;
+            cur = page.child(0);
         }
         h
     }

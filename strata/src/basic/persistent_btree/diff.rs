@@ -1,7 +1,9 @@
 //! Two-way diff between persistent B+ tree versions, skipping the
 //! subtrees they share.
 
-use super::{EMPTY_ROOT, MapxRawReader, Node, NodeId, PersistentBTree, read_object};
+use super::{
+    EMPTY_ROOT, LeafVal, MapxRawReader, Node, NodeId, PersistentBTree, read_object,
+};
 use std::cmp::Ordering;
 use std::marker::PhantomData;
 
@@ -67,7 +69,7 @@ impl PersistentBTree {
 enum Item {
     /// An unexpanded subtree and its height (0 = leaf).
     Node(NodeId, u32),
-    Entry(Vec<u8>, Vec<u8>),
+    Entry(Vec<u8>, LeafVal),
 }
 
 /// A snapshot's pending items, smallest key last (a stack).
@@ -87,8 +89,7 @@ impl Cursor {
         let Some(Item::Node(id, h)) = self.0.pop() else {
             unreachable!("expand called on a non-node front");
         };
-        match Node::decode_with(&read_object(nodes, id), |blob| read_object(nodes, blob))
-        {
+        match Node::decode(&read_object(nodes, id)) {
             Node::Leaf { keys, values } => {
                 self.0.extend(
                     keys.into_iter()
@@ -105,11 +106,18 @@ impl Cursor {
         }
     }
 
-    fn pop_entry(&mut self) -> (Vec<u8>, Vec<u8>) {
+    fn pop_entry(&mut self) -> (Vec<u8>, LeafVal) {
         match self.0.pop() {
             Some(Item::Entry(k, v)) => (k, v),
             _ => unreachable!("pop_entry called on a non-entry front"),
         }
+    }
+}
+
+fn materialize_val(val: LeafVal, nodes: &MapxRawReader) -> Vec<u8> {
+    match val {
+        LeafVal::Bytes(bytes) => bytes,
+        LeafVal::Blob(id) => read_object(nodes, id),
     }
 }
 
@@ -174,16 +182,29 @@ impl Iterator for BTreeDiffIter<'_> {
                     new.expand(tree);
                 }
                 Step::Removed | Step::Compare(Ordering::Less) => {
-                    let (key, value) = old.pop_entry();
-                    return Some(TreeDiff::Removed { key, value });
+                    let (key, val) = old.pop_entry();
+                    return Some(TreeDiff::Removed {
+                        key,
+                        value: materialize_val(val, tree),
+                    });
                 }
                 Step::Added | Step::Compare(Ordering::Greater) => {
-                    let (key, value) = new.pop_entry();
-                    return Some(TreeDiff::Added { key, value });
+                    let (key, val) = new.pop_entry();
+                    return Some(TreeDiff::Added {
+                        key,
+                        value: materialize_val(val, tree),
+                    });
                 }
                 Step::Compare(Ordering::Equal) => {
-                    let (key, old_value) = old.pop_entry();
-                    let (_, new_value) = new.pop_entry();
+                    let (key, old_val) = old.pop_entry();
+                    let (_, new_val) = new.pop_entry();
+                    if let (LeafVal::Blob(a), LeafVal::Blob(b)) = (&old_val, &new_val)
+                        && a == b
+                    {
+                        continue;
+                    }
+                    let old_value = materialize_val(old_val, tree);
+                    let new_value = materialize_val(new_val, tree);
                     if old_value != new_value {
                         return Some(TreeDiff::Modified {
                             key,

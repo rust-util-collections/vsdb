@@ -4857,7 +4857,9 @@ fn invalid_late_bulk_entry_preserves_working_root_and_recovers_staged_pages() {
     hdr.next_id += 1;
     let orphan_page = crate::basic::persistent_btree::Node::Leaf {
         keys: vec![b"orphan".to_vec()],
-        values: vec![b"v".to_vec()],
+        values: vec![crate::basic::persistent_btree::LeafVal::Bytes(
+            b"v".to_vec(),
+        )],
     }
     .encode();
     reopened.tree.nodes.insert([0], hdr.bytes());
@@ -4930,4 +4932,42 @@ fn gc_returns_corrupt_on_damaged_pinned_snapshot_child_page() {
     map.tree.nodes.insert(child_key, vec![0xff, 0xff]);
     assert!(matches!(map.gc(), Err(VsdbError::Corrupt { .. })));
     drop(snap);
+}
+
+#[test]
+fn vermap_blob_leaf_shares_blobs_across_commits_reopen_and_revert() {
+    let mut map = VerMap::<u32, Vec<u8>>::new();
+    let main = map.main_branch();
+    map.bulk_load(main, (0..64).map(|k| (k, vec![k as u8; 2048])))
+        .unwrap();
+    let c1 = map.commit(main).unwrap();
+    let blobs_c1 = map.records(0x12).count();
+    assert_eq!(blobs_c1, 64);
+
+    // Updating 1 key in a 32-key BLOB_LEAF adds only 1 new [0x12] blob while
+    // retaining c1's blob, sharing the other 31 sibling blobs across c1 and c2.
+    map.insert(main, &5, &vec![0xaa; 2048]).unwrap();
+    assert!(map.has_uncommitted(main).unwrap());
+    let c2 = map.commit(main).unwrap();
+    assert_eq!(map.records(0x12).count(), 65);
+
+    // Reverting back to c2's bytes on working state leaves the branch clean.
+    map.insert(main, &5, &vec![0xbb; 2048]).unwrap();
+    assert!(map.has_uncommitted(main).unwrap());
+    map.insert(main, &5, &vec![0xaa; 2048]).unwrap();
+    assert!(!map.has_uncommitted(main).unwrap());
+
+    // [0x07] REFS checkpoint + reopen + verify_and_gc preserve shared blobs.
+    let id = map.save_meta().unwrap();
+    map.close().unwrap();
+    let mut reopened = VerMap::<u32, Vec<u8>>::from_meta(id).unwrap();
+    assert_eq!(reopened.at(c1).unwrap().get(&5), Some(vec![5; 2048]));
+    assert_eq!(reopened.at(c2).unwrap().get(&5), Some(vec![0xaa; 2048]));
+    assert_eq!(reopened.at(c1).unwrap().get(&6), Some(vec![6; 2048]));
+    assert_eq!(reopened.at(c2).unwrap().get(&6), Some(vec![6; 2048]));
+    let stats = reopened.verify_and_gc().unwrap();
+    assert!(stats.live_objects >= 66);
+    assert_eq!(reopened.records(0x12).count(), 66);
+    reopened.discard(main).unwrap();
+    assert_eq!(reopened.records(0x12).count(), 65);
 }

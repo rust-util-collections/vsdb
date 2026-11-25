@@ -952,14 +952,23 @@ fn gc_large_tree_with_diverged_versions() {
 fn node_leaf_encode_decode_roundtrip() {
     let node = Node::Leaf {
         keys: vec![b"hello".to_vec(), b"world".to_vec()],
-        values: vec![b"val1".to_vec(), b"val2".to_vec()],
+        values: vec![
+            LeafVal::Bytes(b"val1".to_vec()),
+            LeafVal::Bytes(b"val2".to_vec()),
+        ],
     };
     let encoded = node.encode();
     let decoded = Node::decode(&encoded);
     match decoded {
         Node::Leaf { keys, values } => {
             assert_eq!(keys, vec![b"hello".to_vec(), b"world".to_vec()]);
-            assert_eq!(values, vec![b"val1".to_vec(), b"val2".to_vec()]);
+            assert_eq!(
+                values,
+                vec![
+                    LeafVal::Bytes(b"val1".to_vec()),
+                    LeafVal::Bytes(b"val2".to_vec()),
+                ]
+            );
         }
         _ => panic!("expected Leaf"),
     }
@@ -998,7 +1007,9 @@ fn node_large_encode_decode() {
     let keys: Vec<Vec<u8>> = (0u32..MAX_KEYS as u32)
         .map(|i| i.to_be_bytes().to_vec())
         .collect();
-    let values: Vec<Vec<u8>> = (0..MAX_KEYS).map(|i| vec![i as u8; 100]).collect();
+    let values: Vec<LeafVal> = (0..MAX_KEYS)
+        .map(|i| LeafVal::Bytes(vec![i as u8; 100]))
+        .collect();
     let node = Node::Leaf {
         keys: keys.clone(),
         values: values.clone(),
@@ -1024,7 +1035,7 @@ fn node_children_decode_keeps_full_structural_validation() {
     let fixtures = [
         Node::Leaf {
             keys: vec![Vec::new(), b"longer-key".to_vec()],
-            values: vec![Vec::new(), vec![42; 127]],
+            values: vec![LeafVal::Bytes(Vec::new()), LeafVal::Bytes(vec![42; 127])],
         },
         Node::Internal {
             keys: vec![b"mid".to_vec(), b"right".to_vec()],
@@ -1642,5 +1653,54 @@ mod diff_merge {
             "wrote {written} nodes"
         );
         tree.assert_refs_match_recount(&[base, src, tgt, merged]);
+    }
+
+    #[test]
+    fn blob_leaf_cow_reuses_untouched_blobs_and_prunes_diff() {
+        let mut tree = PersistentBTree::new();
+        let entries: Vec<_> = (0u32..1200)
+            .map(|i| (i.to_be_bytes().to_vec(), vec![(i & 0xff) as u8; 2048]))
+            .collect();
+        let base = tree.bulk_load(entries);
+        tree.acquire_node(base);
+        let h = tree.height(base);
+        assert!(h >= 2);
+
+        // Overwriting 1 key in a 32-key BLOB_LEAF must allocate only 1 new BLOB
+        // plus (h + 1) path pages — never 32 duplicate sibling blobs.
+        let before_id = tree.runtime.next_id.load(Ordering::Acquire);
+        NODE_READS.with(|c| c.set(0));
+        let updated = tree.insert(base, &500u32.to_be_bytes(), &vec![0xfe; 2048]);
+        let insert_reads = NODE_READS.with(|c| c.get());
+        let allocated = tree.runtime.next_id.load(Ordering::Acquire) - before_id;
+        tree.acquire_node(updated);
+        assert_eq!(allocated, u64::from(h) + 2, "allocated {allocated} objects");
+        // Descent reads (h + 1) pages plus 1 overwritten blob for equality check.
+        assert_eq!(insert_reads, u64::from(h) + 2, "insert read {insert_reads}");
+        tree.assert_refs_match_recount(&[base, updated]);
+
+        // Diffing base -> updated skips all 31 shared sibling Blob(NodeId) slots
+        // with zero [0x12] reads, reading only the 2 changed blobs + path/height pages.
+        NODE_READS.with(|c| c.set(0));
+        let diffs = tree.diff(base, updated);
+        let diff_reads = NODE_READS.with(|c| c.get());
+        assert_eq!(diffs.len(), 1);
+        assert!(
+            diff_reads <= 4 * (u64::from(h) + 2),
+            "diff read {diff_reads} objects"
+        );
+
+        // Reverting key 500 to identical >1 KiB bytes allocates a distinct Blob
+        // NodeId, and diff must still compare bytes and emit zero changes.
+        let reverted = tree.insert(
+            updated,
+            &500u32.to_be_bytes(),
+            &vec![(500 & 0xff) as u8; 2048],
+        );
+        tree.acquire_node(reverted);
+        assert_ne!(reverted, base);
+        assert!(tree.diff(base, reverted).is_empty());
+        assert!(!tree.differs(base, reverted));
+        tree.assert_refs_match_recount(&[base, updated, reverted]);
     }
 }

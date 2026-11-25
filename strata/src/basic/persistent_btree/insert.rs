@@ -3,7 +3,9 @@
 //! Every insertion allocates new nodes along the path from leaf to root,
 //! leaving previous versions intact (copy-on-write).
 
-use super::{EMPTY_ROOT, InsertResult, MAX_KEYS, Node, NodeId, PersistentBTree};
+use super::{
+    EMPTY_ROOT, InsertResult, LeafVal, MAX_KEYS, Node, NodeId, PersistentBTree,
+};
 
 impl PersistentBTree {
     /// Inserts `(key, value)`, returning the **new root**.
@@ -29,7 +31,7 @@ impl PersistentBTree {
         if root == EMPTY_ROOT {
             self.alloc(&Node::Leaf {
                 keys: vec![key.to_vec()],
-                values: vec![value.to_vec()],
+                values: vec![LeafVal::Bytes(value.to_vec())],
             })
         } else {
             match self.insert_rec(root, key, value) {
@@ -57,19 +59,19 @@ impl PersistentBTree {
     fn insert_leaf(
         &mut self,
         mut keys: Vec<Vec<u8>>,
-        mut values: Vec<Vec<u8>>,
+        mut values: Vec<LeafVal>,
         key: &[u8],
         value: &[u8],
     ) -> InsertResult {
         match keys.binary_search_by(|k| k.as_slice().cmp(key)) {
-            Ok(i) if values[i] == value => InsertResult::Unchanged,
+            Ok(i) if self.leaf_val_eq(&values[i], value) => InsertResult::Unchanged,
             Ok(i) => {
-                values[i] = value.to_vec();
+                values[i] = LeafVal::Bytes(value.to_vec());
                 InsertResult::Updated(self.alloc(&Node::Leaf { keys, values }))
             }
             Err(i) => {
                 keys.insert(i, key.to_vec());
-                values.insert(i, value.to_vec());
+                values.insert(i, LeafVal::Bytes(value.to_vec()));
                 if keys.len() <= MAX_KEYS {
                     InsertResult::Updated(self.alloc(&Node::Leaf { keys, values }))
                 } else {
@@ -82,7 +84,7 @@ impl PersistentBTree {
     pub(super) fn split_leaf(
         &mut self,
         mut keys: Vec<Vec<u8>>,
-        mut values: Vec<Vec<u8>>,
+        mut values: Vec<LeafVal>,
     ) -> InsertResult {
         let mid = keys.len() / 2;
         let rk = keys.split_off(mid);

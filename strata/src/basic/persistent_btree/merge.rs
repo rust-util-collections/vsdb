@@ -246,13 +246,13 @@ impl PersistentBTree {
             };
             let at = keys.binary_search(&key);
             match (at, value) {
-                (Ok(i), Some(v)) if values[i] != v => {
-                    values[i] = v;
+                (Ok(i), Some(v)) if !self.leaf_val_eq(&values[i], &v) => {
+                    values[i] = super::LeafVal::Bytes(v);
                     changed = true;
                 }
                 (Err(i), Some(v)) => {
                     keys.insert(i, key);
-                    values.insert(i, v);
+                    values.insert(i, super::LeafVal::Bytes(v));
                     changed = true;
                 }
                 (Ok(i), None) => {
