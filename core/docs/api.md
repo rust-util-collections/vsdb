@@ -131,8 +131,12 @@ from borrowed bytes while MMDB holds the backing allocation. The decoder
 runs for a stored empty value and is skipped for a missing or deleted key.
 A view's `try_visit_many(keys, visit)` resolves up to 32 keys at the same
 snapshot, then visits every input slot in order, including duplicates and
-misses. A storage failure precedes the first callback; a visitor error stops
-later callbacks. `try_range` and its cursor's `try_step_next` and
+misses. All returned backing allocations stay pinned until visiting ends,
+including early return on a visitor error. The limit of 32 counts keys;
+different SST blocks or memtable arenas can keep substantially more memory
+alive than the requested value bytes. A storage failure precedes the first
+callback. A first read of a fresh raw map can reserve its identity and
+return a prefix-allocation error. `try_range` and its cursor's `try_step_next` and
 `try_step_prev` expose typed storage errors at open or during iteration.
 Each step lends the raw key suffix and value until the next cursor operation.
 

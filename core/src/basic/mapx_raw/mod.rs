@@ -346,6 +346,7 @@ impl MapxRaw {
 
     /// Decode a visible value from pinned engine bytes. The decoder receives
     /// empty values as an empty slice and is skipped when the key is absent.
+    /// First use of a fresh map can reserve its prefix and return an allocator error.
     pub fn try_get_with<T>(
         &self,
         key: impl AsRef<[u8]>,
@@ -404,7 +405,8 @@ impl MapxRaw {
     }
 
     /// Check the latest committed state without materializing a copy of the value.
-    /// Storage failures retain their original source and classification.
+    /// First use can reserve this map's prefix. Allocation and storage failures
+    /// retain their source and classification.
     pub fn try_contains_key(&self, key: impl AsRef<[u8]>) -> Result<bool> {
         self.inner.try_contains_key(key.as_ref())
     }

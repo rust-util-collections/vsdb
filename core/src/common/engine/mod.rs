@@ -93,7 +93,10 @@ impl MapxReadView<'_> {
     /// Resolve up to [`crate::MAX_GROUPED_READ_KEYS`] slots at this snapshot.
     /// The visitor runs in input order, including duplicates and misses. All
     /// storage reads succeed before the first callback. A visitor error stops
-    /// the remaining callbacks. Returned slices are borrowed only for each call.
+    /// the remaining callbacks. Each slice is borrowed for one callback. The
+    /// group retains all returned values until visiting finishes or returns an
+    /// error. The key-count limit does not bound bytes: distinct SST blocks or
+    /// memtable arenas can stay alive together.
     pub fn try_visit_many(
         &self,
         keys: &[&[u8]],
