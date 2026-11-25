@@ -11,14 +11,6 @@
 
 ## Open
 
-### [CRITICAL] migration/versioned: stale converted objects and premature old-node deletion lose source pages on retry
-- **Where**: `migration/src/versioned.rs` (`convert_objects`, `migrate_tree_v17`, `migrate_v17`)
-- **What**: `convert_objects` flushes `[0x10]`/`[0x12]` chunks at 16 MiB without clearing prior pre-publication `[0x10]..[0x13]` objects, and both `migrate_tree_v17` and `migrate_v17` execute `remove_old_nodes` (`commit_sync`ing deletion of 8-byte v17 B+ tree pages) before validating the target `PersistentBTree` / `VerMap` handle and ceiling. Triggered when a >16 MiB `migrate_tree_v17` crashes or fails on a later root after flushing objects (e.g. serials `1..=8000`) before writing `{id:016x}.v17-roots` and is retried with a smaller root set (e.g. `next = 4001`), or when `migrate_v17` converts a commit-less store with a damaged `next_commit == 0` `Orphan`.
-- **Why**: `remove_old_nodes` permanently deletes the original v17 B+ tree pages, `remap_file` / `HEADER` persists the smaller or invalid ceiling, and the subsequent `PersistentBTree` / `VerMap` deserialization fails `check_ceiling` or `Header::get` (`VsdbError::Corrupt`), leaving both `from_meta` and future migration retries permanently broken (violates BT5 / V7).
-- **Suggested fix**: Delete `[0x10]..[0x13]` via `batch.delete_range(&[0x10], &[0x13])` at the start of `convert_objects` (before `HEADER` or `remap_file` exists), validate `Header` invariants before writing `HEADER`, and deserialize/validate `PersistentBTree` / `VerMap` before calling `remove_old_nodes` (which touches only 8-byte keys). Add retry regression tests in `migration/tests/{persistent_btree,versioned}.rs`. No v18 on-disk format change.
-
----
-
 ### [HIGH] migration: typed handle converters reject v16 VSTYPE02 envelopes valid in v17 datasets
 - **Where**: `migration/src/lib.rs` (`legacy_payload`), `migration/src/vecdex.rs` (`legacy_handle`), `migration/src/versioned.rs` (`component::checked`), `migration/src/dagmap.rs` (`Legacy::deserialize`, `saved_tag`, `migrate_rawkey_v17`)
 - **What**: Every typed converter hardcodes `b"VSTYPE03"`, rejecting `b"VSTYPE02"` envelopes created in `v14.0.3..=v16.3.11` and opened/mutated in place by `v17.0.0..=v17.0.21` (where `save_meta()` and `DagMapRaw`'s inner `Orphan`/`MapxOrdRawKey` handles remain create-time `VSTYPE02`).

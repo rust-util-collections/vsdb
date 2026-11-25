@@ -29,6 +29,23 @@ fn converts_retained_versions_and_working_root_at_original_id() {
     assert_eq!(components.len(), 8);
     assert!(VerMap::<u64, Vec<u8>>::from_meta(ID).is_err());
     assert!(migrate_v17::<u64, String>(ID).is_err());
+    // Seed a stale pre-publication 9-byte blob above the target ceiling and a
+    // damaged next_commit == 0 on a temporary commit-less copy test first:
+    // verify stale 9-byte objects are cleared and damaged headers fail before
+    // deleting 8-byte source pages.
+    let mut store = vsdb_migrate::raw_map(ID.into()).unwrap();
+    let mut stale_blob = [0x12u8; 9];
+    stale_blob[1..].copy_from_slice(&((3u64 << 62) | 5000).to_be_bytes());
+    store.insert(stale_blob, vec![0xee; 1500]);
+
+    let mut next_commit_raw = vsdb_migrate::raw_map(components[4].into()).unwrap();
+    let saved_next_commit = next_commit_raw.get([]).unwrap();
+    next_commit_raw.insert([], postcard::to_allocvec(&0u64).unwrap());
+    assert!(migrate_v17::<u64, Vec<u8>>(ID).is_err());
+    assert!(store.get([0]).is_none());
+    assert!(store.get(1u64.to_le_bytes()).is_some());
+    next_commit_raw.insert([], saved_next_commit);
+
     let map = migrate_v17::<u64, Vec<u8>>(ID).unwrap();
     for &id in &components[1..] {
         assert!(

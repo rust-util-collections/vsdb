@@ -242,9 +242,7 @@ pub fn migrate_v17<K: KeyEnDeOrdered, V: ValueEnDe>(
     if store.get(HEADER).is_none() {
         let [commits, branches, _, next_commit, next_branch, main, _] = &retired;
         let scalar = |v: &MapxRaw| -> Result<u64> {
-            Ok(postcard::from_bytes(
-                &v.get([]).ok_or_else(|| corrupt("missing v17 allocator"))?,
-            )?)
+            crate::exactly(&v.get([]).ok_or_else(|| corrupt("missing v17 allocator"))?)
         };
         let mut hdr = Header {
             next_id: 1,
@@ -253,11 +251,14 @@ pub fn migrate_v17<K: KeyEnDeOrdered, V: ValueEnDe>(
             main_branch: BranchId::from_raw(scalar(main)?),
             generation: 0,
         };
+        if hdr.next_commit == 0 || hdr.main_branch.raw() == 0 {
+            return Err(corrupt("invalid v17 version store header scalars"));
+        }
         let mut branch_rows = BTreeMap::new();
         let mut unique_names = HashSet::new();
         for (k, v) in branches.iter() {
             let branch = legacy_id(&k)?;
-            let state: BranchState = postcard::from_bytes(&v)?;
+            let state: BranchState = crate::exactly(&v)?;
             if branch == 0 || !unique_names.insert(state.name.clone()) {
                 return Err(corrupt("invalid v17 branch table"));
             }
@@ -268,7 +269,9 @@ pub fn migrate_v17<K: KeyEnDeOrdered, V: ValueEnDe>(
             );
             branch_rows.insert(branch, state);
         }
-        if !branch_rows.contains_key(&hdr.main_branch.raw()) {
+        if !branch_rows.contains_key(&hdr.main_branch.raw())
+            || hdr.main_branch.raw() >= hdr.next_branch
+        {
             return Err(corrupt("missing v17 main branch"));
         }
         let mut live = BTreeMap::new();
@@ -289,7 +292,7 @@ pub fn migrate_v17<K: KeyEnDeOrdered, V: ValueEnDe>(
             let raw = commits
                 .get(id.raw().to_be_bytes())
                 .ok_or_else(|| corrupt("missing v17 commit"))?;
-            let c: Commit = postcard::from_bytes(&raw)?;
+            let c: Commit = crate::exactly(&raw)?;
             if c.id != id
                 || c.parents.len() > 2
                 || c.parents.iter().any(|p| *p == NO_COMMIT || *p >= id)
@@ -334,20 +337,15 @@ pub fn migrate_v17<K: KeyEnDeOrdered, V: ValueEnDe>(
         batch.commit_sync()?;
     }
 
-    // Old keys are untagged u64s; a v18 branch-name lookup can also be
-    // eight bytes. Protect all live reverse-index keys during cleanup.
-    let protected: HashSet<_> = store
-        .range([NAME].as_slice()..[NAME + 1].as_slice())
-        .filter(|(k, _)| k.len() == 9)
-        .map(|(_, name)| {
-            String::from_utf8(name)
-                .map(|s| by_name(&s))
-                .map_err(|_| corrupt("invalid migrated branch name"))
-        })
-        .collect::<Result<_>>()?;
+    // Validate the published v18 header, branch/commit metadata, object
+    // ceiling, and reachable 9-byte B+ tree pages before deleting 8-byte v17
+    // source pages (8-byte v17 keys starting with 0x01..0x06 would otherwise
+    // trip VerMap::recover's 9-byte record_id check if decoded earlier).
+    let (hdr, protected, roots) = validate_published_store(&store)?;
+    verify_converted_objects(&store, hdr.next_id, &roots)?;
     remove_old_nodes(&mut store, &protected)?;
     let meta = typed_handle::<VerMap<K, V>>(id, &[])?;
-    let mut map: VerMap<K, V> = postcard::from_bytes(&meta)?;
+    let mut map: VerMap<K, V> = crate::exactly(&meta)?;
     map.verify_and_gc()?;
     for raw in &mut retired {
         raw.batch_wiped().commit_sync()?;
@@ -356,11 +354,273 @@ pub fn migrate_v17<K: KeyEnDeOrdered, V: ValueEnDe>(
     Ok(map)
 }
 
+fn clear_pre_publication_objects(store: &mut MapxRaw) -> Result<()> {
+    // v17 B+ tree pools store pages exclusively under 8-byte LE keys (so node
+    // IDs with id % 256 in 0x10..=0x12 also start with 0x10..=0x12). Delete
+    // only 9-byte converted [0x10]/[0x12] objects left by an interrupted chunk
+    // flush, and reject any unexpected non-8-byte row before touching storage.
+    let mut stale = Vec::new();
+    for (k, _) in store.iter() {
+        if k.len() == 8 {
+            continue;
+        }
+        if k.len() == 9 && matches!(k[0], 0x10 | 0x12) {
+            stale.push(k);
+        } else {
+            return Err(corrupt("unexpected pre-migration row in B+ tree pool"));
+        }
+    }
+    for group in stale.chunks(8192) {
+        let mut batch = store.batch();
+        for key in group {
+            batch.remove(key);
+        }
+        batch.commit_sync()?;
+    }
+    Ok(())
+}
+
+fn parse_v18_header(raw: &[u8]) -> Result<Header> {
+    if raw.len() != 41 || raw[0] != 18 {
+        return Err(corrupt("invalid migrated version store header"));
+    }
+    let word = |off: usize| u64::from_le_bytes(raw[off..off + 8].try_into().unwrap());
+    let hdr = Header {
+        next_id: word(1),
+        next_commit: word(9),
+        next_branch: word(17),
+        main_branch: BranchId::from_raw(word(25)),
+        generation: word(33),
+    };
+    if hdr.next_id == 0
+        || hdr.next_id > LEAF
+        || hdr.next_commit == 0
+        || hdr.main_branch.raw() == 0
+        || hdr.main_branch.raw() >= hdr.next_branch
+    {
+        return Err(corrupt("invalid migrated version store header bounds"));
+    }
+    Ok(hdr)
+}
+
+fn validate_published_store(store: &MapxRaw) -> Result<(Header, HashSet<Vec<u8>>, Vec<u64>)> {
+    let hdr_bytes = store
+        .get(HEADER)
+        .ok_or_else(|| corrupt("missing migrated version store header"))?;
+    let hdr = parse_v18_header(&hdr_bytes)?;
+    let mut heads = BTreeMap::new();
+    let mut names = BTreeMap::new();
+    let mut commits = BTreeMap::new();
+    for (k, v) in store.iter() {
+        if k.len() == 8 {
+            continue;
+        }
+        match k.as_slice() {
+            [0] | [7] => {}
+            [3, rest @ ..] if !rest.is_empty() => {}
+            [tag @ (HEAD | NAME | COMMIT | 5 | 6), rest @ ..] if rest.len() == 8 => {
+                let id = u64::from_be_bytes(rest.try_into().unwrap());
+                match *tag {
+                    HEAD => {
+                        if id == 0 || id >= hdr.next_branch || v.len() != 16 {
+                            return Err(corrupt("invalid migrated branch head"));
+                        }
+                        let head =
+                            CommitId::from_raw(u64::from_le_bytes(v[..8].try_into().unwrap()));
+                        let dirty_root = u64::from_le_bytes(v[8..16].try_into().unwrap());
+                        heads.insert(id, (head, dirty_root));
+                    }
+                    NAME => {
+                        let s = String::from_utf8(v)
+                            .map_err(|_| corrupt("invalid migrated branch name"))?;
+                        names.insert(id, s);
+                    }
+                    COMMIT => {
+                        if id == 0
+                            || id >= hdr.next_commit
+                            || v.len() < 20
+                            || !(v.len() - 20).is_multiple_of(8)
+                        {
+                            return Err(corrupt("invalid migrated commit record"));
+                        }
+                        let root = u64::from_le_bytes(v[..8].try_into().unwrap());
+                        let parents: Vec<u64> = v[20..]
+                            .as_chunks::<8>()
+                            .0
+                            .iter()
+                            .map(|p| u64::from_le_bytes(*p))
+                            .collect();
+                        if parents.len() > 2
+                            || parents.iter().any(|&p| p == 0 || p >= id)
+                            || (parents.len() == 2 && parents[0] == parents[1])
+                        {
+                            return Err(corrupt("invalid migrated commit parents"));
+                        }
+                        commits.insert(id, (root, parents));
+                    }
+                    _ => {}
+                }
+            }
+            [0x10 | 0x12, rest @ ..] if rest.len() == 8 => {}
+            _ => return Err(corrupt("unexpected key in migrated version store")),
+        }
+    }
+    if !heads.contains_key(&hdr.main_branch.raw()) {
+        return Err(corrupt("missing migrated main branch"));
+    }
+    let mut protected = HashSet::new();
+    let mut seen_names = HashSet::new();
+    for (&id, &(head, _)) in &heads {
+        let Some(name) = names.get(&id) else {
+            return Err(corrupt("missing migrated branch name"));
+        };
+        if !seen_names.insert(name.as_str()) {
+            return Err(corrupt("duplicate migrated branch name"));
+        }
+        protected.insert(by_name(name));
+        if head != NO_COMMIT && !commits.contains_key(&head.raw()) {
+            return Err(corrupt("missing migrated head commit"));
+        }
+    }
+    for (_, parents) in commits.values() {
+        if parents.iter().any(|p| !commits.contains_key(p)) {
+            return Err(corrupt("missing migrated ancestor commit"));
+        }
+    }
+    let roots = heads
+        .values()
+        .map(|&(_, dirty)| dirty)
+        .chain(commits.values().map(|&(root, _)| root))
+        .collect();
+    Ok((hdr, protected, roots))
+}
+
+fn verify_converted_objects(store: &MapxRaw, next_id: u64, roots: &[u64]) -> Result<()> {
+    if next_id == 0 || next_id > LEAF {
+        return Err(corrupt("invalid converted B+ tree allocation ceiling"));
+    }
+    for (k, _) in store.range([0x10].as_slice()..[0x13].as_slice()) {
+        if k.len() != 9 {
+            continue;
+        }
+        if !matches!(k[0], 0x10 | 0x12) {
+            return Err(corrupt("unexpected 9-byte object tag"));
+        }
+        let id = u64::from_be_bytes(k[1..9].try_into().unwrap());
+        let serial = id & !BLOB;
+        if (id & BLOB == BLOB) != (k[0] == 0x12) || serial == 0 || serial >= next_id {
+            return Err(corrupt("converted object ID exceeds allocation ceiling"));
+        }
+    }
+    let mut seen = HashSet::new();
+    let mut work = Vec::new();
+    for &r in roots {
+        if r == 0 {
+            continue;
+        }
+        if r & BLOB == BLOB {
+            return Err(corrupt("root ID refers to a blob"));
+        }
+        work.push(r);
+    }
+    while let Some(id) = work.pop() {
+        if id == 0 || !seen.insert(id) {
+            continue;
+        }
+        let serial = id & !BLOB;
+        if serial == 0 || serial >= next_id {
+            return Err(corrupt("reachable object ID out of bounds"));
+        }
+        let raw = store
+            .get(object_key(id))
+            .ok_or_else(|| corrupt("missing converted B+ tree object"))?;
+        if id & BLOB == BLOB {
+            continue;
+        }
+        let [tag, count, ..] = raw.as_slice() else {
+            return Err(corrupt("truncated converted B+ tree page"));
+        };
+        let n = usize::from(*count);
+        let leaf = match *tag {
+            0x18 => true,
+            0x19 => false,
+            _ => return Err(corrupt("invalid converted B+ tree page tag")),
+        };
+        let payload_start = 2 + 12 * n + if leaf { 0 } else { 8 };
+        if n > MAX_KEYS || payload_start > raw.len() {
+            return Err(corrupt("invalid converted B+ tree page header"));
+        }
+        let mut pos = payload_start;
+        let mut prev_key: Option<&[u8]> = None;
+        let mut edges = Vec::new();
+        for i in 0..n {
+            let p = 2 + 12 * i;
+            let key_end = u32::from_le_bytes(raw[p..p + 4].try_into().unwrap()) as usize;
+            let desc = u64::from_le_bytes(raw[p + 4..p + 12].try_into().unwrap());
+            if key_end < pos || key_end > raw.len() {
+                return Err(corrupt("invalid converted B+ tree key offset"));
+            }
+            let key = &raw[pos..key_end];
+            if prev_key.is_some_and(|prev| prev >= key) {
+                return Err(corrupt("unsorted converted B+ tree keys"));
+            }
+            prev_key = Some(key);
+            let end = if leaf {
+                if desc & BLOB == BLOB {
+                    edges.push(desc);
+                    key_end
+                } else {
+                    usize::try_from(desc)
+                        .ok()
+                        .filter(|&e| u32::try_from(desc).is_ok() && e >= key_end && e <= raw.len())
+                        .ok_or_else(|| corrupt("invalid converted inline value offset"))?
+                }
+            } else {
+                if desc == 0 || desc & BLOB == BLOB {
+                    return Err(corrupt("invalid converted internal child"));
+                }
+                edges.push(desc);
+                key_end
+            };
+            pos = end;
+        }
+        if pos != raw.len() {
+            return Err(corrupt("trailing bytes in converted B+ tree page"));
+        }
+        if !leaf {
+            let last = u64::from_le_bytes(raw[2 + 12 * n..10 + 12 * n].try_into().unwrap());
+            if last == 0 || last & BLOB == BLOB {
+                return Err(corrupt("invalid converted rightmost child"));
+            }
+            edges.push(last);
+        }
+        let expected_class = if !leaf {
+            0
+        } else if edges.is_empty() {
+            LEAF
+        } else {
+            BLOB_LEAF
+        };
+        if (id & BLOB) != expected_class
+            || edges
+                .iter()
+                .any(|&c| (c & !BLOB) == 0 || (c & !BLOB) >= serial)
+        {
+            return Err(corrupt(
+                "invalid converted B+ tree page class or child serial",
+            ));
+        }
+        work.extend(edges);
+    }
+    Ok(())
+}
+
 fn convert_objects(
     store: &mut MapxRaw,
     roots: &[u64],
     next_id: &mut u64,
 ) -> Result<HashMap<u64, u64>> {
+    clear_pre_publication_objects(store)?;
     let mut needed = HashSet::new();
     let mut work = roots.to_vec();
     while let Some(id) = work.pop() {
@@ -436,15 +696,31 @@ fn convert_objects(
             Node::Leaf { values, .. } if values.iter().any(|v| v.len() > 1024) => BLOB_LEAF,
             Node::Leaf { .. } => LEAF,
         };
-        let bytes = node.encode_with(|val| {
-            let id = *next_id | BLOB;
+        let mut alloc_serial = |class: u64| -> Result<u64> {
+            if *next_id >= LEAF {
+                return Err(corrupt("B+ tree object IDs exhausted"));
+            }
+            let id = *next_id | class;
             *next_id += 1;
+            Ok(id)
+        };
+        let mut overflow = false;
+        let bytes = node.encode_with(|val| {
+            let id = match alloc_serial(BLOB) {
+                Ok(id) => id,
+                Err(_) => {
+                    overflow = true;
+                    BLOB
+                }
+            };
             size += val.len() + 9;
             objects.push((object_key(id), val.to_vec()));
             id
         });
-        let id = *next_id | class;
-        *next_id += 1;
+        if overflow {
+            return Err(corrupt("B+ tree object IDs exhausted"));
+        }
+        let id = alloc_serial(class)?;
         converted.insert(old, id);
         size += bytes.len() + 9;
         objects.push((object_key(id), bytes));
@@ -577,12 +853,18 @@ pub fn migrate_tree_v17(
     if modern {
         return Ok((PersistentBTree::from_meta(id)?, remapped));
     }
-    remove_old_nodes(&mut raw, &HashSet::new())?;
+    for (k, _) in raw.iter() {
+        if k.len() != 8 && k.as_slice() != [9] && !(k.len() == 9 && matches!(k[0], 0x10 | 0x12)) {
+            return Err(corrupt("unexpected row in standalone tree pool"));
+        }
+    }
+    verify_converted_objects(&raw, next, &mapping.converted)?;
     let mut batch = raw.batch();
     batch.insert([9], next.to_le_bytes());
     batch.commit_sync()?;
+    remove_old_nodes(&mut raw, &HashSet::new())?;
     let bytes = typed_handle::<PersistentBTree>(id, &[])?;
-    let mut tree: PersistentBTree = postcard::from_bytes(&bytes)?;
+    let mut tree: PersistentBTree = crate::exactly(&bytes)?;
     tree.rebuild_ref_counts(&mapping.converted);
     tree.save_meta()?;
     Ok((tree, remapped))
