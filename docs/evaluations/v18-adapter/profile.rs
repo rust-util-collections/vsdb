@@ -284,6 +284,8 @@ fn memory(ns: &Namespace, args: &[String]) {
 
 #[cfg(feature = "allocations")]
 mod alloc;
+#[cfg(feature = "v5")]
+mod cache;
 
 fn main() {
     let args: Vec<_> = env::args().skip(1).collect();
@@ -292,6 +294,8 @@ fn main() {
     let ns = Namespace::default_ns();
     match args[0].as_str() {
         "memory" => memory(&ns, &args[1..]),
+        #[cfg(feature = "v5")]
+        "memory-cache" => cache::run(&ns, &args[1..]),
         #[cfg(feature = "allocations")]
         "allocations" => alloc::run(&ns),
         _ => panic!("unknown case"),

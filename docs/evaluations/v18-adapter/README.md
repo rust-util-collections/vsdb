@@ -90,6 +90,26 @@ Compare L0 files, outstanding generations, flushes and compactions alongside
 throughput. Whole-process RSS includes the harness. A raw-map trial
 does not instantiate the higher-level per-tree page caches.
 
+## Populated shared-cache pressure check
+
+The write-only matrix exercises memtables and compaction. Its observed RSS
+does not include a heavily populated evictable store or reads from a
+collection page cache. A separate all-active check preloads distinct
+32,768-row maps on all 16 shards (512-byte values), then flushes and warms
+the shared store through actual raw-map reads. Each process must begin
+with at least 128 MiB of segmented charge. It retains 16 read handles and
+issues 10,000 scheduled reads across those shards against known, unmodified
+values while replaying the same 10,000 small and 20,000 batch writes.
+
+The three interleaved 6 MiB/16 MiB pairs use identical traces and a
+50 ms sampler for active/immutable memory, L0 pins and both evictable
+stores. Raw start/end member lists contain active bytes, immutable count,
+immutable bytes and pin bytes in shard order. A sample across shards and
+the separate file-count observations need not be simultaneous. Report the
+lowest sampled segmented charge, whole-process RSS and remaining L0 and
+immutable generations. The separate 1 GiB resource check uses every process
+high-water mark. This short study does not qualify a query latency gain.
+
 ## Reproduce
 
 Use a full VSDB clone on Linux and separate worktrees. The scripts require
@@ -118,4 +138,6 @@ git worktree add --detach /tmp/adapter-v5-live d9f00f4
 python3 "$d/build.py" /tmp/adapter-v5-live "$work/build-v5-live-alloc" "$work/bin/v5-alloc" --v5 --allocations
 python3 "$d/run.py" "$work/bin" "$work/allocations.jsonl.gz" --scratch "$work/scratch" --lock "$work/timing.lock" --allocations-only
 python3 "$d/summarize.py" "$work/allocations.jsonl.gz" --allocations-only
+python3 "$d/cache_trials.py" run "$work/warm-cache.jsonl.gz" --small "$work/bin/v5" --large "$work/bin/v5-16m" --rate 4928 --revision b5f3153 --scratch "$work/scratch" --lock "$work/timing.lock" --cpus 4-7
+python3 "$d/cache_trials.py" summarize "$work/warm-cache.jsonl.gz" --summary "$work/warm-cache.csv"
 ```

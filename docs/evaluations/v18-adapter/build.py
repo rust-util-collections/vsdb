@@ -15,7 +15,7 @@ a=p.parse_args()
 a.workdir.mkdir(parents=True,exist_ok=True)
 a.output.parent.mkdir(parents=True,exist_ok=True)
 here=Path(__file__).resolve().parent
-for source in ("profile.rs","alloc.rs"):
+for source in ("profile.rs","alloc.rs","cache.rs"):
     shutil.copyfile(here/source,a.workdir/source)
 (a.workdir/"Cargo.toml").write_text(f"""[package]
 name = "shard-adapter-profile"
