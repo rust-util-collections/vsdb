@@ -33,6 +33,18 @@ fn mmdb_err(error: mmdb::Error) -> VsdbError {
     }
 }
 
+fn v4_iterator_status(stream: &mmdb::DBIterator) -> Result<()> {
+    // MMDB 4.3.15 exposes only the terminal diagnostic string. Its
+    // originating I/O or data-corruption kind cannot be recovered.
+    if let Some(message) = stream.error() {
+        return Err(VsdbError::Storage {
+            kind: StorageErrorKind::Other,
+            source: message.into(),
+        });
+    }
+    Ok(())
+}
+
 const REG: &str = "__SYSTEM__/__namespaces__";
 const STATES: &str = "__SYSTEM__/__namespace_state__";
 const HEADER: &str = "__SYSTEM__/universe_header";
@@ -512,7 +524,11 @@ impl Engine {
             let owned = if ready.try_exists()? {
                 read_metadata(ready)? == b"18"
             } else {
-                read_metadata(self.root.join(INIT))? == self.bytes(id)
+                match read_metadata(self.root.join(INIT)) {
+                    Ok(bytes) => bytes == self.bytes(id),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+                    Err(error) => return Err(error.into()),
+                }
             };
             if !has_header || !owned {
                 return Err(corrupt("incomplete v18 engine identity"));
@@ -589,9 +605,7 @@ impl Engine {
                     }
                     observe(&val, max);
                 }
-                if let Some(e) = rows.error() {
-                    return Err(corrupt(e));
-                }
+                v4_iterator_status(&rows)?;
             }
         }
         if scan && self.ns != 0 {

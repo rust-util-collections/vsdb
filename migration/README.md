@@ -42,6 +42,10 @@ before the application's first v5 write.
    placements can span filesystems. The generated placements and base
    publish together on the destination filesystem. Keep the published
    generation at its chosen absolute path so its registry remains valid.
+   On Unix the generation directory is private (mode 0700). Stage as the
+   intended service account, or have the operator arrange ownership and
+   access for that account before selecting the new generation. Source
+   roots and external namespaces can have different access policies.
    When the destination parent is a symlink, the CLI prints the resolved
    physical base and the registry binds the corresponding physical placements.
 
@@ -52,7 +56,10 @@ before the application's first v5 write.
    using the live adapter's 16 KiB blocks and Zstd compression. It checks both
    iterators for errors and compares row counts and Keccak-256 digests of
    length-framed keys and values after a writable reopen with seven levels
-   and eight-byte prefixes. A new v5 sequence history starts at export.
+   and eight-byte prefixes. A v5 verification error retains its typed cause.
+   MMDB 4.3.15 exposes terminal iterator failures as diagnostic strings;
+   these carry the VSDB storage classification `Other`. A new v5 sequence
+   history starts at export.
    Non-shard metadata, allocator floors, saved handles and the contents of
    `__CUSTOM__` travel with their universe. Separately stage any application
    files outside these trees.

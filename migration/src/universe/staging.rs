@@ -1,5 +1,6 @@
 //! Offline physical conversion. The only public rename publishes a complete
 //! directory containing the base and all explicitly placed namespace roots.
+use super::v4_iterator_status;
 use super::{
     HEADER, PROGRESS, Plan, REG, Record, Registry, State, check_regular, migrate_universe,
     mmdb_err, physical_path, read_id, registry,
@@ -94,9 +95,7 @@ fn export_shard(staged_copy: &Path) -> Result<()> {
     let ingested = target
         .ingest_sorted(stream.by_ref().inspect(|(k, v)| expected.observe(k, v)))
         .map_err(v5_error)?;
-    if let Some(error) = stream.error() {
-        return Err(corrupt(error));
-    }
+    v4_iterator_status(&stream)?;
     drop(stream);
     v4.close().map_err(mmdb_err)?;
     drop(v4);
@@ -110,17 +109,11 @@ fn export_shard(staged_copy: &Path) -> Result<()> {
         temp.path(),
     )
     .map_err(v5_error)?;
-    let mut actual = Rows::default();
-    let mut check = reopened
-        .iter_with_options(&mmdb::ReadOptions::default().with_fill_cache(false))
-        .map_err(v5_error)?;
-    for (key, value) in check.by_ref() {
-        actual.observe(&key, &value);
-    }
-    if let Some(error) = check.error() {
-        return Err(corrupt(error.to_string()));
-    }
-    drop(check);
+    let actual = verification_rows(
+        reopened
+            .iter_with_options(&mmdb::ReadOptions::default().with_fill_cache(false))
+            .map_err(v5_error)?,
+    )?;
     reopened.close().map_err(v5_error)?;
     if ingested != expected.count
         || actual.count != expected.count
@@ -147,6 +140,17 @@ fn export_shard(staged_copy: &Path) -> Result<()> {
     fs::rename(temp.path(), staged_copy)?;
     let _ = temp.keep();
     Ok(())
+}
+
+fn verification_rows(mut stream: mmdb::DBIterator) -> Result<Rows> {
+    let mut rows = Rows::default();
+    for (key, value) in stream.by_ref() {
+        rows.observe(&key, &value);
+    }
+    if let Some(error) = stream.error() {
+        return Err(v5_error(error.clone()));
+    }
+    Ok(rows)
 }
 
 fn namespace_path(base: &Path, record: &Record) -> PathBuf {
@@ -602,6 +606,105 @@ mod tests {
         assert!(generation.join("base").join(HEADER).is_file());
         assert!(!parked.join(HEADER).exists());
         assert!(!parked.join(super::super::CEILING).exists());
+    }
+
+    #[test]
+    fn committed_engine_missing_both_lifecycle_markers_is_corrupt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("v4");
+        let destination = tmp.path().join("new");
+        old_tree(&source);
+        migrate_universe(&source).unwrap();
+        fs::remove_file(source.join("__SYSTEM__/.shards_ready")).unwrap();
+        assert!(source.join("mmdb/__SYSTEM__/engine_header").is_file());
+        assert!(!source.join(super::super::INIT).exists());
+        assert!(matches!(
+            stage_universe(&source, &destination),
+            Err(VsdbError::Corrupt { .. })
+        ));
+        assert!(!destination.exists());
+    }
+
+    #[test]
+    fn terminal_v5_verification_io_error_retains_its_typed_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = mmdb::DB::open(mmdb_shard_format_options(), tmp.path()).unwrap();
+        db.ingest_sorted((0u64..4096).map(|i| (i.to_be_bytes(), vec![i as u8; 128])))
+            .unwrap();
+        db.close().unwrap();
+        drop(db);
+        let db = mmdb::DB::open(
+            mmdb_shard_format_options().with_create_if_missing(false),
+            tmp.path(),
+        )
+        .unwrap();
+        let mut stream = db
+            .iter_with_options(&mmdb::ReadOptions::default().with_fill_cache(false))
+            .unwrap();
+        assert!(stream.next().is_some());
+        truncate_sst(tmp.path());
+        match verification_rows(stream) {
+            Err(VsdbError::Storage {
+                kind: StorageErrorKind::Io,
+                source,
+            }) => {
+                assert_eq!(
+                    source.downcast_ref::<mmdb::Error>().unwrap().kind(),
+                    mmdb::ErrorKind::Io
+                );
+            }
+            _ => panic!("expected the original verification I/O error"),
+        }
+    }
+
+    fn truncate_sst(root: &Path) {
+        let file = fs::read_dir(root)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.extension().is_some_and(|ext| ext == "sst"))
+            .unwrap();
+        File::options()
+            .write(true)
+            .open(file)
+            .unwrap()
+            .set_len(0)
+            .unwrap();
+    }
+
+    #[test]
+    fn terminal_v4_scan_retains_the_legacy_diagnostic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let opts = mmdb_v4::DbOptions {
+            prefix_len: 8,
+            ..Default::default()
+        };
+        let db = mmdb_v4::DB::open(opts.clone(), tmp.path()).unwrap();
+        for i in 0u64..2048 {
+            db.put(&i.to_be_bytes(), &[i as u8; 128]).unwrap();
+        }
+        db.flush().unwrap();
+        db.close().unwrap();
+        drop(db);
+        let db = mmdb_v4::DB::open_read_only_with_options(opts, tmp.path()).unwrap();
+        let mut stream = db
+            .iter_with_options(&mmdb_v4::ReadOptions {
+                fill_cache: false,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(stream.next().is_some());
+        truncate_sst(tmp.path());
+        for _ in stream.by_ref() {}
+        let diag = stream
+            .error()
+            .expect("v4 reports its terminal read failure");
+        match v4_iterator_status(&stream) {
+            Err(VsdbError::Storage {
+                kind: StorageErrorKind::Other,
+                source,
+            }) => assert_eq!(source.to_string(), diag),
+            _ => panic!("expected a v4 terminal string with unavailable classification"),
+        }
     }
 
     #[test]
