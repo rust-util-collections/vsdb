@@ -74,3 +74,23 @@ candidate latency measurements.
   capacity and end-to-end query p99. [Traversal fixtures](../../../../strata/src/vecdex/test.rs) · [Published query controls](../../../evaluations/v18-vecdex-v5/README.md)
 - The ordinary live-map existence check was routed through the v5 native
   probe, as was the captured-view check. [Allocation evidence](../../../evaluations/v18-adapter/README.md)
+
+## Offline generation conversion
+
+[All four migration reports](migration.json.gz) cover `a04e8e0`. The
+protected input can span volumes. A successful operation publishes one
+self-contained generation with absolute external placements bound to its
+canonical path. The saved evidence includes these checks:
+
+| Finding or hypothesis | Result |
+|---|---|
+| A mount alias or a recursive copy could put temporary output inside the source. A changed external alias could separate the checked and exported images. | Inventory stores physical directory identities, rejects overlaps and repeated directories before creating staging, and copies a finite set of files. Export and allocator validation read the same private image. Regular-file checks precede opening data or lock files. A local Linux mount-alias check rejected an aliased descendant. [Staging implementation and tests](../../../../migration/src/universe/staging.rs) |
+| Protected backups may contain read-only locks. A different service account may lack access to a published owner-private generation. | Only private working lock files are recreated. A backup with files mode 0444 and directories 0555 staged successfully, and its new shard accepted a sync write. The operator guide explains preparing access for a different service account before the application selects the generation. [Upgrade guide](../../../../migration/README.md) |
+| A lexical path comparison can fail through a symlinked destination parent, including an OS temporary directory. | Registry bindings and the CLI use the canonical path. The regression first failed its lexical comparison, then passed when the writable adapter reopened the same namespace through both aliases. [Generation fixture](../../../../migration/tests/staged_generation.rs) |
+| Export used general MMDB defaults and the initial fixture lacked an untouched SST row. | Live opens and export share the same persistent format options, including the 16 KiB block target and bottom-level Zstd. A compressible export exercised that policy. A distinct fixture requires an SST-only row, a residual WAL replacement, an empty value and a deletion through both writable opens. [Integration tests](../../../../migration/tests/staged_generation.rs) |
+| A relocated namespace could leave an unreferenced populated derived tree; a missing initializer could be misclassified. | The converter rejects ambiguous populated residue while accepting an empty placeholder. A header with neither an initializer nor a ready marker reports corruption. Truncating the second readable block demonstrates that the v5 scan preserves typed I/O, while v4's iterator only supplies its original text. [Frozen logical and physical upgrade tests](../../../../migration/tests/) |
+
+The original files survive interruption, a racing publisher and a late
+verification error. A successful exclusive rename followed by a failed
+parent directory sync can leave a visible directory. Retry into another
+absent path with the previous generation still selected. [Publication protocol](../../../../migration/README.md)
