@@ -18,7 +18,6 @@ fn lost_registry_cannot_reuse_a_namespace_id_for_any_root() {
         ..Default::default()
     })
     .unwrap();
-    let id = ns.id();
     let root = ns.path().to_path_buf();
     let mut map = MapxRaw::new_in(&ns);
     map.insert(b"key", b"value");
@@ -28,10 +27,6 @@ fn lost_registry_cannot_reuse_a_namespace_id_for_any_root() {
 
     // Simulate a lost/reset registry while the derived root survives.
     let registry = vsdb_get_base_dir().join("__SYSTEM__/__namespaces__");
-    let lifecycle = vsdb_get_base_dir()
-        .join("__SYSTEM__/__namespace_state__")
-        .join(format!("{id:016x}"));
-    let established = fs::read(&lifecycle).unwrap();
     fs::remove_file(&registry).unwrap();
 
     let explicit = scratch.join("explicit");
@@ -43,30 +38,15 @@ fn lost_registry_cannot_reuse_a_namespace_id_for_any_root() {
         })
         .unwrap_err();
         assert!(
-            error.to_string().contains("lifecycle"),
+            matches!(error, vsdb_core::VsdbError::Corrupt { .. }),
             "unexpected error: {error}"
         );
-        assert_eq!(fs::read(&lifecycle).unwrap(), established);
+
         assert!(!registry.exists(), "rejection must not publish a registry");
         assert!(!explicit.exists(), "rejection must not create a new root");
     }
-    // Legacy namespaces may have no lifecycle sidecar. Their surviving
-    // derived root still proves this id belongs to an earlier engine.
-    fs::remove_file(&lifecycle).unwrap();
-    for path in [None, Some(explicit.clone())] {
-        let error = Namespace::create_with(NamespaceOpts {
-            path,
-            shards: 4,
-            ..Default::default()
-        })
-        .unwrap_err();
-        assert!(error.to_string().contains("not empty"), "{error}");
-        assert!(!lifecycle.exists());
-        assert!(!registry.exists());
-        assert!(!explicit.exists());
-    }
     assert!(
-        root.join("__SYSTEM__/format_version").exists(),
+        root.join("__SYSTEM__/.shards_ready").exists(),
         "the existing namespace root must not be removed"
     );
 

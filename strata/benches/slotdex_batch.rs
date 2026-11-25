@@ -3,7 +3,7 @@ use std::{
     hint::black_box,
     time::{Duration, Instant},
 };
-use vsdb::SlotDex64;
+use vsdb::{SlotDex64, slotdex::Order};
 
 fn batch_growth(c: &mut Criterion) {
     let mut group = c.benchmark_group("slotdex/batch_growth");
@@ -48,7 +48,37 @@ fn batch_growth(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, batch_growth);
+fn descending_queries(c: &mut Criterion) {
+    let mut group = c.benchmark_group("slotdex/descending");
+    group
+        .warm_up_time(Duration::from_secs(1))
+        .measurement_time(Duration::from_secs(3))
+        .sample_size(10);
+    for (label, step, per_slot) in
+        [("dense", 1, 1), ("sparse", 1_000_000, 1), ("hot", 1, 128)]
+    {
+        let mut db = SlotDex64::new(16, false).unwrap();
+        db.insert_batch((0..8192u64).map(|k| (k / per_slot * step, k)))
+            .unwrap();
+        group.throughput(Throughput::Elements(128));
+        group.bench_function(label, |b| {
+            b.iter(|| {
+                black_box(
+                    db.iter(.., Order::Desc)
+                        .take(128)
+                        .fold(0u64, |sum, k| sum.wrapping_add(k)),
+                )
+            });
+        });
+        group.bench_function(format!("page_{label}"), |b| {
+            b.iter(|| black_box(db.page(.., 128, 16, Order::Desc)));
+        });
+        db.clear().unwrap();
+    }
+    group.finish();
+}
+
+criterion_group!(benches, batch_growth, descending_queries);
 
 #[path = "units/legacy_budget.rs"]
 mod legacy_budget;

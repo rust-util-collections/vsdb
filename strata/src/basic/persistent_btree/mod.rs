@@ -22,6 +22,8 @@
 //!   internal mutation paths.
 //!
 
+#![forbid(unsafe_code)]
+
 #[cfg(test)]
 mod test;
 
@@ -30,10 +32,11 @@ mod insert;
 mod iter;
 mod merge;
 mod nodes;
+mod persist;
 mod remove;
 mod types;
 
-pub use diff::TreeDiff;
+pub use diff::{BTreeDiffIter, TreeDiff};
 pub use iter::BTreeIter;
 
 use crate::common::{
@@ -43,8 +46,8 @@ use crate::common::{
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet},
-    fmt,
     ops::Bound,
     result::Result as StdResult,
     sync::{
@@ -52,11 +55,16 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-use vsdb_core::basic::mapx_raw::MapxRaw;
+use vsdb_core::basic::mapx_raw::{MapxRaw, MapxRawReader};
 
-pub(crate) use nodes::{MAX_KEYS, MIN_KEYS, Node};
+pub(crate) use nodes::{
+    BLOB, BLOB_LEAF, CLASS_MASK, LEAF, MAX_KEYS, MIN_KEYS, Node, NodeView, object_id,
+    object_key,
+};
+
 pub use types::{EMPTY_ROOT, NodeId};
-pub(crate) use types::{InsertResult, LeafState, NodeRef, RemoveResult};
+const STANDALONE_ALLOCATOR: [u8; 1] = [9];
+pub(crate) use types::{InsertResult, NodeRef, RemoveResult};
 
 // =========================================================================
 // PersistentBTree
@@ -70,7 +78,9 @@ thread_local! {
 
 #[derive(Debug)]
 struct RefState {
-    counts: HashMap<NodeId, NodeRef>,
+    counts: HashMap<NodeId, u32>,
+    edges: HashMap<NodeId, Box<[NodeId]>>,
+    zombies: HashSet<NodeId>,
     ready: bool,
     /// One reference per live snapshot lease, shared by its iterators.
     pins: HashMap<NodeId, u32>,
@@ -79,6 +89,19 @@ struct RefState {
 }
 
 impl RefState {
+    fn install(&mut self, expanded: HashMap<NodeId, NodeRef>) {
+        self.counts.clear();
+        self.edges.clear();
+        self.counts.reserve(expanded.len());
+        for (id, node) in expanded {
+            self.counts.insert(id, node.ref_count);
+            if !node.children.is_empty() {
+                self.edges.insert(id, node.children.into_boxed_slice());
+            }
+        }
+        self.ready = true;
+    }
+
     fn release(&mut self, id: NodeId) -> Vec<NodeId> {
         let mut dead = Vec::new();
         if id == EMPTY_ROOT || !self.ready {
@@ -89,13 +112,15 @@ impl RefState {
             let Some(nr) = self.counts.get_mut(&nid) else {
                 continue;
             };
-            debug_assert!(nr.ref_count > 0, "release of unowned node {nid}");
-            if nr.ref_count == 0 {
+            debug_assert!(*nr > 0, "release of unowned node {nid}");
+            if *nr == 0 {
                 continue;
             }
-            nr.ref_count -= 1;
-            if nr.ref_count == 0 {
-                work.extend(std::mem::take(&mut nr.children));
+            *nr -= 1;
+            if *nr == 0 {
+                if let Some(children) = self.edges.remove(&nid) {
+                    work.extend(Vec::from(children));
+                }
                 self.counts.remove(&nid);
                 dead.push(nid);
             }
@@ -114,13 +139,35 @@ impl RefState {
     }
 }
 
-/// Owns a captured root independently of the map borrow. Keeping this type
-/// lifetime-free preserves last-use borrowing of Snapshot.
-/// Its Arc is shared by the snapshot and every iterator derived from it.
+/// Retains an immutable root independently of the source handle.
+/// The snapshot and its derived iterators share this lease.
 pub(crate) struct RootLease {
     pub(crate) root: NodeId,
     runtime: Arc<TreeRuntime>,
-    nodes: MapxRaw,
+    nodes: MapxRawReader,
+}
+
+impl RootLease {
+    pub(crate) fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
+        lookup(self.root, key, |id| {
+            Cow::Owned(read_object(&self.nodes, id))
+        })
+    }
+
+    pub(crate) fn contains_key(&self, key: &[u8]) -> bool {
+        find_leaf(self.root, key, |id| {
+            Cow::Owned(read_object(&self.nodes, id))
+        })
+        .is_some()
+    }
+
+    pub(crate) fn range(
+        self: &Arc<Self>,
+        lo: Bound<Vec<u8>>,
+        hi: Bound<Vec<u8>>,
+    ) -> BTreeIter<'static> {
+        BTreeIter::new(self.nodes.clone(), self.root, lo, hi, Some(self.clone()))
+    }
 }
 
 impl Drop for RootLease {
@@ -128,26 +175,63 @@ impl Drop for RootLease {
         if self.root == EMPTY_ROOT {
             return;
         }
-        let immediate = {
-            let mut refs = self.runtime.refs.lock();
-            let pins = refs.pins.get_mut(&self.root).expect("missing snapshot pin");
-            *pins -= 1;
-            if *pins == 0 {
-                refs.pins.remove(&self.root);
+        let mut refs = self.runtime.refs.lock();
+        let pins = refs.pins.get_mut(&self.root).expect("missing snapshot pin");
+        *pins -= 1;
+        if *pins == 0 {
+            refs.pins.remove(&self.root);
+            if refs.zombies.remove(&self.root) {
+                refs.deferred.get_or_insert_with(Vec::new).push(
+                    crate::versioned::store::row(
+                        crate::versioned::store::RETIRED,
+                        self.root,
+                    )
+                    .to_vec(),
+                );
             }
-            // A captured root only reaches published, already-flushed nodes;
-            // unlike release_buffered, this path has no pending entries.
-            let dead = refs
-                .release(self.root)
-                .into_iter()
-                .map(|id| id.to_le_bytes().to_vec())
-                .collect();
-            refs.defer_or_return(dead)
-        };
-        if !immediate.is_empty() {
-            self.nodes.lazy_delete_batch(immediate);
         }
+        // A reader may outlive the writer. A later writer drains these
+        // releases after its WAL fence, or recovers them on the next open.
+        let dead = refs.release(self.root);
+        refs.deferred
+            .get_or_insert_with(Vec::new)
+            .extend(dead.into_iter().map(|id| object_key(id).to_vec()));
     }
+}
+
+fn read_object(nodes: &MapxRawReader, id: NodeId) -> Vec<u8> {
+    #[cfg(test)]
+    NODE_READS.with(|c| c.set(c.get() + 1));
+    nodes
+        .get(object_key(id))
+        .unwrap_or_else(|| panic!("PersistentBTree: missing object {id}"))
+}
+
+fn lookup<'a>(
+    root: NodeId,
+    key: &[u8],
+    object: impl Fn(NodeId) -> Cow<'a, [u8]>,
+) -> Option<Vec<u8>> {
+    let (raw, i) = find_leaf(root, key, &object)?;
+    let page = NodeView::open(&raw).expect("valid leaf");
+    Some(page.value(i, |id| object(id).into_owned()))
+}
+
+fn find_leaf<'a>(
+    mut root: NodeId,
+    key: &[u8],
+    object: impl Fn(NodeId) -> Cow<'a, [u8]>,
+) -> Option<(Cow<'a, [u8]>, usize)> {
+    while root != EMPTY_ROOT {
+        let raw = object(root);
+        let page = NodeView::open(&raw).expect("invalid B+ tree page");
+        let i = page.lower_bound(key, !page.leaf);
+        if page.leaf {
+            return (i < page.len && page.key(i) == key).then_some((raw, i));
+        }
+        root = page.child(i);
+    }
+    None
 }
 
 #[derive(Debug)]
@@ -214,7 +298,7 @@ fn tree_runtime(
 /// ```
 #[derive(Debug)]
 pub struct PersistentBTree {
-    /// Flat node pool.  Key = little-endian NodeId, Value = encoded Node.
+    /// Flat pool of slotted pages and large-value blobs, keyed by tag and big-endian ID.
     pub(crate) nodes: MapxRaw,
     /// Process-local allocator and reference-count state shared by every
     /// alias of this node pool.
@@ -238,6 +322,8 @@ pub struct PersistentBTree {
     /// concurrently with a `&mut self` operation) never observes
     /// buffered nodes, and `Clone` only ever copies an empty map.
     pending: HashMap<NodeId, Vec<u8>>,
+    pending_bytes: usize,
+    stage: Option<Vec<NodeId>>,
 }
 
 impl Serialize for PersistentBTree {
@@ -253,68 +339,56 @@ impl Serialize for PersistentBTree {
             self.pending.is_empty(),
             "PersistentBTree serialized with a non-empty write buffer"
         );
-        use serde::ser::SerializeTuple;
-        let mut t = serializer.serialize_tuple(2)?;
-        t.serialize_element(&self.nodes)?;
-        t.serialize_element(&self.runtime.next_id.load(Ordering::Acquire))?;
-        t.end()
+        crate::common::serialize_prefix_handle::<Self, _>(&self.nodes, &[], serializer)
     }
 }
 
 impl<'de> Deserialize<'de> for PersistentBTree {
-    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        struct Vis;
-        impl<'de> serde::de::Visitor<'de> for Vis {
-            type Value = PersistentBTree;
-            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str("PersistentBTree")
-            }
-            fn visit_seq<A: serde::de::SeqAccess<'de>>(
-                self,
-                mut seq: A,
-            ) -> StdResult<PersistentBTree, A::Error> {
-                let nodes: MapxRaw = seq
-                    .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
-                let stored_next_id: NodeId = seq
-                    .next_element()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
-                // Defensively recover `next_id` against a stale snapshot.
-                // If the meta was saved before later allocations were
-                // flushed to the shared node pool, `stored_next_id` may lag
-                // the highest on-disk NodeId.  Allocating over those ids
-                // would overwrite live (or pending lazy-delete) nodes in
-                // place and corrupt shared snapshots (INV-BT1).  Dead ids
-                // are left as a safe gap and reclaimed by a later `gc`.
-                // VerMap recomputes this again in rebuild_ref_counts, but
-                // standalone PersistentBTree users may mutate before any
-                // rebuild, so the floor must be safe immediately.
-                let mut next_id = stored_next_id;
-                for (k, _) in nodes.iter() {
-                    let id = NodeId::from_le_bytes(k[..8].try_into().unwrap());
-                    next_id = next_id.max(id.saturating_add(1));
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> StdResult<Self, D::Error> {
+        crate::common::deserialize_prefix_handle(
+            d,
+            |crate::common::PrefixFrame(nodes, extra)| {
+                let invalid = || VsdbError::Corrupt {
+                    detail: "invalid standalone tree allocator".into(),
+                };
+                if !extra.is_empty() || nodes.contains_key([0]) {
+                    return Err(invalid());
+                }
+                let raw = nodes.get(STANDALONE_ALLOCATOR).ok_or_else(invalid)?;
+                let next_id = u64::from_le_bytes(raw.try_into().map_err(|_| invalid())?);
+                if next_id == 0 || next_id > LEAF {
+                    return Err(invalid());
+                }
+                for class in [0, LEAF, BLOB_LEAF, BLOB] {
+                    if let Some((k, _)) = nodes.get_le(object_key(class | !CLASS_MASK))
+                        && let Some(id) = object_id(&k)
+                        && id & CLASS_MASK == class
+                        && id & !CLASS_MASK >= next_id
+                    {
+                        return Err(invalid());
+                    }
                 }
                 let runtime = tree_runtime(
                     nodes.instance_id(),
                     next_id,
                     RefState {
                         counts: HashMap::new(),
-                        ready: false,
+                        edges: HashMap::new(),
+                        zombies: HashSet::new(),
                         pins: HashMap::new(),
                         deferred: None,
+                        ready: false,
                     },
                 );
-                Ok(PersistentBTree {
+                Ok(Self {
                     nodes,
                     runtime,
-                    pending: Default::default(),
+                    pending: HashMap::new(),
+                    pending_bytes: 0,
+                    stage: None,
                 })
-            }
-        }
-        deserializer.deserialize_tuple(2, Vis)
+            },
+        )
     }
 }
 
@@ -354,12 +428,19 @@ impl PersistentBTree {
     }
 
     pub fn new() -> Self {
-        let nodes = MapxRaw::new();
+        let mut nodes = MapxRaw::new();
+        let mut batch = nodes.batch();
+        batch.insert(STANDALONE_ALLOCATOR, 1u64.to_le_bytes());
+        batch
+            .commit_sync()
+            .expect("failed to create standalone B+ tree");
         let runtime = tree_runtime(
             nodes.instance_id(),
             1,
             RefState {
                 counts: HashMap::new(),
+                edges: HashMap::new(),
+                zombies: HashSet::new(),
                 ready: true,
                 pins: HashMap::new(),
                 deferred: None,
@@ -369,30 +450,12 @@ impl PersistentBTree {
             nodes,
             runtime,
             pending: HashMap::new(),
+            pending_bytes: 0,
+            stage: None,
         }
     }
 
-    /// Switches this node pool, including every alias and snapshot lease,
-    /// to deferred reclamation.
-    ///
-    /// By default a node whose last reference is released is registered
-    /// for physical deletion immediately, which is only safe once the
-    /// write that dropped that reference is durable — a caller that fences
-    /// its own WAL first (or never publishes roots) needs nothing else.
-    /// An owner that does *not* sync before releasing opts in here and
-    /// calls [`register_deferred_reclaims`](Self::register_deferred_reclaims)
-    /// after each of its WAL syncs.  Unregistered keys are not a leak:
-    /// the next [`rebuild_ref_counts`](Self::rebuild_ref_counts) sweeps
-    /// every unreachable node.
-    pub(crate) fn defer_reclaim(&mut self) {
-        self.runtime
-            .refs
-            .lock()
-            .deferred
-            .get_or_insert_with(Vec::new);
-    }
-
-    /// Number of released nodes waiting for registration.
+    #[cfg(test)]
     pub(crate) fn deferred_reclaims(&self) -> usize {
         self.runtime
             .refs
@@ -400,22 +463,6 @@ impl PersistentBTree {
             .deferred
             .as_ref()
             .map_or(0, Vec::len)
-    }
-
-    /// Registers the queued nodes for physical deletion. Call only after
-    /// the writes that released them are durable.
-    pub(crate) fn register_deferred_reclaims(&mut self) {
-        let keys = self
-            .runtime
-            .refs
-            .lock()
-            .deferred
-            .as_mut()
-            .map(std::mem::take)
-            .unwrap_or_default();
-        if !keys.is_empty() {
-            self.nodes.lazy_delete_batch(keys);
-        }
     }
 
     /// Capture and retain a published root while releases/recounts are
@@ -435,34 +482,12 @@ impl PersistentBTree {
         &self,
         resolve: impl FnOnce() -> Result<[NodeId; N]>,
     ) -> Result<[Arc<RootLease>; N]> {
-        let mut refs = self.runtime.refs.lock();
-        let roots = resolve()?;
-        // Validate the whole set before changing counts, so a corrupt
-        // later root cannot strand an earlier pin during unwinding.
-        for &root in roots.iter().filter(|&&root| root != EMPTY_ROOT) {
-            assert!(refs.ready, "snapshot requires initialized tree references");
-            refs.counts.get(&root).expect("untracked snapshot root");
-        }
-        for &root in roots.iter().filter(|&&root| root != EMPTY_ROOT) {
-            refs.counts
-                .get_mut(&root)
-                .expect("untracked snapshot root")
-                .ref_count += 1;
-            *refs.pins.entry(root).or_insert(0) += 1;
-        }
-        drop(refs);
-        Ok(roots.map(|root| {
-            Arc::new(RootLease {
-                root,
-                runtime: Arc::clone(&self.runtime),
-                // SAFETY: this handle only registers deletion of immutable nodes
-                // after their final reference is released. NodeIds are never
-                // reused, and co-located owners defer registration until WAL sync.
-                nodes: unsafe { self.nodes.shadow() },
-            })
-        }))
+        self.read_state().lease(&self.nodes.reader(), resolve)
     }
 
+    pub(crate) fn read_state(&self) -> TreeReadState {
+        TreeReadState(Arc::clone(&self.runtime))
+    }
     // ----- low-level helpers -----
 
     /// Number of buffered nodes above which `bulk_load` flushes
@@ -472,65 +497,68 @@ impl PersistentBTree {
     /// below this — they buffer O(depth) nodes.
     const PENDING_FLUSH_THRESHOLD: usize = 1024;
 
-    fn alloc(&mut self, node: &Node) -> NodeId {
-        let id = self
+    fn alloc_object(
+        &mut self,
+        class: u64,
+        raw: Vec<u8>,
+        children: Vec<NodeId>,
+    ) -> NodeId {
+        let serial = self
             .runtime
             .next_id
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |next_id| {
-                next_id.checked_add(1)
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |next| {
+                (next < LEAF).then_some(next + 1)
             })
-            .expect("PersistentBTree: NodeId space exhausted");
-        debug_assert!(
-            !self.pending.contains_key(&id)
-                && self.nodes.get(id.to_le_bytes()).is_none(),
-            "PersistentBTree: NodeId {id} already occupied — allocator regression"
-        );
-        self.pending.insert(id, node.encode());
-
-        // Populate in-memory ref tracking.
+            .expect("B+ tree object IDs exhausted");
+        let id = class | serial;
+        self.pending_bytes += raw.len() + 9;
+        self.pending.insert(id, raw);
         let mut refs = self.runtime.refs.lock();
         if refs.ready {
-            let children = match node {
-                Node::Internal { children, .. } => {
-                    for &child in children {
-                        if let Some(cr) = refs.counts.get_mut(&child) {
-                            cr.ref_count += 1;
-                        }
-                    }
-                    children.clone()
-                }
-                Node::Leaf { .. } => Vec::new(),
-            };
-            refs.counts.insert(
-                id,
-                NodeRef {
-                    ref_count: 0,
-                    children,
-                },
-            );
+            for child in &children {
+                *refs.counts.get_mut(child).expect("untracked child") += 1;
+            }
+            refs.counts.insert(id, 0);
+            if !children.is_empty() {
+                refs.edges.insert(id, children.into_boxed_slice());
+            }
         }
-
         id
     }
 
-    pub(crate) fn node(&self, id: NodeId) -> Node {
+    fn alloc(&mut self, node: &Node) -> NodeId {
+        let mut edges = Vec::new();
+        let raw = node.encode_with(|v| {
+            let blob = self.alloc_object(BLOB, v.to_vec(), Vec::new());
+            edges.push(blob);
+            blob
+        });
+        let class = match node {
+            Node::Internal { children, .. } => {
+                edges.extend_from_slice(children);
+                0
+            }
+            Node::Leaf { .. } if edges.is_empty() => LEAF,
+            Node::Leaf { .. } => BLOB_LEAF,
+        };
+        self.alloc_object(class, raw, edges)
+    }
+
+    fn object(&self, id: NodeId) -> Cow<'_, [u8]> {
         #[cfg(test)]
         NODE_READS.with(|c| c.set(c.get() + 1));
-        // Read-through for nodes allocated earlier in the operation in
-        // flight (remove's underflow repair and bulk_load's first_key
-        // descend into them).  The emptiness guard keeps the read-only
-        // hot path (get / iter) at a single branch — the buffer is only
-        // non-empty inside a mutating operation.
-        if !self.pending.is_empty()
-            && let Some(raw) = self.pending.get(&id)
-        {
-            return Node::decode(raw);
+        if let Some(raw) = self.pending.get(&id) {
+            return Cow::Borrowed(raw);
         }
-        let raw = self
-            .nodes
-            .get(id.to_le_bytes())
-            .unwrap_or_else(|| panic!("PersistentBTree: missing node {id}"));
-        Node::decode(&raw)
+        Cow::Owned(
+            self.nodes
+                .get(object_key(id))
+                .unwrap_or_else(|| panic!("missing B+ tree object {id}")),
+        )
+    }
+
+    pub(crate) fn node(&self, id: NodeId) -> Node {
+        Node::decode_with(&self.object(id), |blob| self.object(blob).into_owned())
     }
 
     /// Drains the write buffer into a single engine write batch.
@@ -543,12 +571,18 @@ impl PersistentBTree {
     /// persistence errors can leave recoverable WAL data, so a panic
     /// does not prove that the write was rolled back.
     pub(crate) fn flush_pending(&mut self) {
+        if self.stage.is_some() {
+            return;
+        }
+        self.pending_bytes = 0;
         if self.pending.is_empty() {
             return;
         }
+        let next = self.next_id();
         let mut batch = self.nodes.batch();
+        batch.insert(STANDALONE_ALLOCATOR, next.to_le_bytes());
         for (id, raw) in self.pending.drain() {
-            batch.insert(id.to_le_bytes(), &raw);
+            batch.insert(object_key(id), &raw);
         }
         batch
             .commit()
@@ -571,29 +605,13 @@ impl PersistentBTree {
     ///
     /// Returns `None` if the tree is empty or the key is absent.
     pub fn get(&self, root: NodeId, key: &[u8]) -> Option<Vec<u8>> {
-        if root == EMPTY_ROOT {
-            return None;
-        }
-        let mut cur = root;
-        loop {
-            match self.node(cur) {
-                Node::Leaf { keys, values } => {
-                    return match keys.binary_search_by(|k| k.as_slice().cmp(key)) {
-                        Ok(i) => Some(values[i].clone()),
-                        Err(_) => None,
-                    };
-                }
-                Node::Internal { keys, children } => {
-                    cur = children[Self::child_index(&keys, key)];
-                }
-            }
-        }
+        lookup(root, key, |id| self.object(id))
     }
 
     /// Returns `true` if `key` exists in the tree rooted at `root`.
     #[inline]
     pub fn contains_key(&self, root: NodeId, key: &[u8]) -> bool {
-        self.get(root, key).is_some()
+        find_leaf(root, key, |id| self.object(id)).is_some()
     }
 
     // =================================================================
@@ -602,7 +620,13 @@ impl PersistentBTree {
 
     /// Returns an iterator over **all** entries in ascending key order.
     pub fn iter(&self, root: NodeId) -> BTreeIter<'_> {
-        BTreeIter::new(self, root, Bound::Unbounded, Bound::Unbounded)
+        BTreeIter::new(
+            self.nodes.reader(),
+            root,
+            Bound::Unbounded,
+            Bound::Unbounded,
+            None,
+        )
     }
 
     /// Returns an iterator over the given key range.
@@ -622,7 +646,7 @@ impl PersistentBTree {
             Bound::Excluded(k) => Bound::Excluded(k.to_vec()),
             Bound::Unbounded => Bound::Unbounded,
         };
-        BTreeIter::new(self, root, lo, hi)
+        BTreeIter::new(self.nodes.reader(), root, lo, hi, None)
     }
 
     // =================================================================
@@ -634,112 +658,151 @@ impl PersistentBTree {
     /// Much faster than inserting one-by-one, and produces an optimally
     /// packed tree.
     ///
-    /// The whole input is collected into memory first (validated and
-    /// deduplicated), so peak memory is proportional to the total size
-    /// of `entries`.
+    /// Retains at most two groups per level, plus a bounded write batch.
+    /// Adjacent duplicate keys keep the last supplied value.
     pub fn bulk_load(
         &mut self,
         entries: impl IntoIterator<Item = (Vec<u8>, Vec<u8>)>,
     ) -> NodeId {
-        let entries: Vec<_> = entries.into_iter().fold(
-            Vec::<(Vec<u8>, Vec<u8>)>::new(),
-            |mut acc, (k, v)| {
-                if let Some((last_k, last_v)) = acc.last_mut() {
-                    if k == *last_k {
-                        *last_v = v;
-                        return acc;
-                    }
-                    assert!(
-                        k > *last_k,
-                        "PersistentBTree::bulk_load entries must be sorted by key"
-                    );
+        use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+        let start = self.next_id();
+        let result = catch_unwind(AssertUnwindSafe(|| self.try_bulk_load(entries)));
+        match result {
+            Ok(Ok(root)) => root,
+            failed => {
+                // All nodes in a bottom-up build are private to that build.
+                // Keep any pre-existing external root and its counts intact.
+                self.pending.clear();
+                self.pending_bytes = 0;
+                let mut refs = self.runtime.refs.lock();
+                refs.counts.retain(|id, _| id & !CLASS_MASK < start);
+                refs.edges.retain(|id, _| id & !CLASS_MASK < start);
+                drop(refs);
+                let abandoned = self
+                    .nodes
+                    .iter()
+                    .filter_map(|(key, _)| {
+                        object_id(&key)
+                            .filter(|id| id & !CLASS_MASK >= start)
+                            .map(|_| key)
+                    })
+                    .collect::<Vec<_>>();
+                self.nodes.lazy_delete_batch(abandoned);
+                match failed {
+                    Ok(Err(err)) => panic!("{err}"),
+                    Err(payload) => resume_unwind(payload),
+                    Ok(Ok(_)) => unreachable!(),
                 }
-                acc.push((k, v));
-                acc
-            },
-        );
-        if entries.is_empty() {
-            return EMPTY_ROOT;
-        }
-        // Split `total` items into chunks of at most `cap`, rebalancing the
-        // trailing pair so no chunk falls below `min` (single-chunk results
-        // are exempt — they become the root, which has no minimum).
-        // `min <= (cap + 1) / 2` guarantees the rebalanced halves fit.
-        fn chunk_sizes(total: usize, cap: usize, min: usize) -> Vec<usize> {
-            debug_assert!(min <= cap.div_ceil(2));
-            let mut sizes = Vec::with_capacity(total.div_ceil(cap));
-            let mut remaining = total;
-            while remaining > cap {
-                sizes.push(cap);
-                remaining -= cap;
-            }
-            if remaining > 0 {
-                sizes.push(remaining);
-            }
-            let n = sizes.len();
-            if n >= 2 && sizes[n - 1] < min {
-                // Merge the trailing chunk with its left sibling and split
-                // evenly: both halves land in `[min, cap]`.
-                let merged = sizes[n - 2] + sizes[n - 1];
-                sizes[n - 2] = merged.div_ceil(2);
-                sizes[n - 1] = merged / 2;
-            }
-            sizes
-        }
-
-        // 1. Pack into leaves (each `MIN_KEYS..=MAX_KEYS`, INV-BT3).
-        let mut leaf_ids = Vec::new();
-        let mut off = 0;
-        for size in chunk_sizes(entries.len(), MAX_KEYS, MIN_KEYS) {
-            let chunk = &entries[off..off + size];
-            off += size;
-            let keys = chunk.iter().map(|(k, _)| k.clone()).collect();
-            let values = chunk.iter().map(|(_, v)| v.clone()).collect();
-            leaf_ids.push(self.alloc(&Node::Leaf { keys, values }));
-            // Bound the write buffer on larger-than-RAM loads; flushed
-            // nodes stay readable through the engine, so `first_key`'s
-            // read-back below works across flush boundaries.
-            if self.pending.len() >= Self::PENDING_FLUSH_THRESHOLD {
-                self.flush_pending();
             }
         }
-        // 2. Build internal levels bottom-up. Each internal node gets
-        //    `MIN_KEYS + 1 ..= MAX_KEYS + 1` children (uniform height —
-        //    a lone or undersized trailing group would either panic later
-        //    in remove()'s borrow/merge or violate minimum occupancy).
-        let mut level = leaf_ids;
-        while level.len() > 1 {
-            let mut next = Vec::new();
-            let mut i = 0;
-            for take in chunk_sizes(level.len(), MAX_KEYS + 1, MIN_KEYS + 1) {
-                let chunk = &level[i..i + take];
-                let mut keys = Vec::with_capacity(chunk.len() - 1);
-                for &cid in &chunk[1..] {
-                    keys.push(self.first_key(cid));
-                }
-                next.push(self.alloc(&Node::Internal {
-                    keys,
-                    children: chunk.to_vec(),
-                }));
-                if self.pending.len() >= Self::PENDING_FLUSH_THRESHOLD {
-                    self.flush_pending();
-                }
-                i += take;
-            }
-            level = next;
-        }
-        self.flush_pending();
-        level[0]
     }
 
-    /// Returns the smallest key reachable from node `id`.
-    fn first_key(&self, id: NodeId) -> Vec<u8> {
-        let mut cur = id;
-        loop {
-            match self.node(cur) {
-                Node::Leaf { keys, .. } => return keys[0].clone(),
-                Node::Internal { children, .. } => cur = children[0],
+    pub(crate) fn try_bulk_load(
+        &mut self,
+        entries: impl IntoIterator<Item = (Vec<u8>, Vec<u8>)>,
+    ) -> Result<NodeId> {
+        let mut leaves = Vec::new();
+        let mut levels = Vec::new();
+        let mut input = entries.into_iter().peekable();
+        while let Some((k, v)) = input.next() {
+            if let Some((next, _)) = input.peek() {
+                if next < &k {
+                    return Err(VsdbError::InvalidConfig {
+                        detail:
+                            "PersistentBTree::bulk_load entries must be sorted by key"
+                                .into(),
+                    });
+                }
+                if next == &k {
+                    continue;
+                }
             }
+            leaves.push((k, v));
+            if leaves.len() == MAX_KEYS + MIN_KEYS {
+                let tail = leaves.split_off(MAX_KEYS);
+                let child = self.bulk_leaf(std::mem::replace(&mut leaves, tail))?;
+                self.push_bulk_child(&mut levels, 0, child)?;
+            }
+        }
+        if leaves.is_empty() {
+            return Ok(EMPTY_ROOT);
+        }
+        let tail = if leaves.len() > MAX_KEYS {
+            leaves.split_off(leaves.len().div_ceil(2))
+        } else {
+            Vec::new()
+        };
+        for group in [leaves, tail].into_iter().filter(|g| !g.is_empty()) {
+            let child = self.bulk_leaf(group)?;
+            self.push_bulk_child(&mut levels, 0, child)?;
+        }
+        let mut level = 0;
+        loop {
+            let mut children = std::mem::take(&mut levels[level]);
+            if children.len() == 1 && level + 1 == levels.len() {
+                self.flush_pending();
+                return Ok(children[0].1);
+            }
+            let tail = if children.len() > MAX_KEYS + 1 {
+                children.split_off(children.len().div_ceil(2))
+            } else {
+                Vec::new()
+            };
+            for group in [children, tail].into_iter().filter(|g| !g.is_empty()) {
+                let parent = self.bulk_internal(group)?;
+                self.push_bulk_child(&mut levels, level + 1, parent)?;
+            }
+            level += 1;
+        }
+    }
+
+    fn bulk_leaf(
+        &mut self,
+        entries: Vec<(Vec<u8>, Vec<u8>)>,
+    ) -> Result<(Vec<u8>, NodeId)> {
+        let first = entries[0].0.clone();
+        let (keys, values) = entries.into_iter().unzip();
+        let id = self.alloc(&Node::Leaf { keys, values });
+        self.flush_pending_if_large()?;
+        Ok((first, id))
+    }
+
+    fn bulk_internal(
+        &mut self,
+        entries: Vec<(Vec<u8>, NodeId)>,
+    ) -> Result<(Vec<u8>, NodeId)> {
+        let mut entries = entries.into_iter();
+        let (first, left) = entries.next().unwrap();
+        let mut keys = Vec::with_capacity(entries.len());
+        let mut children = Vec::with_capacity(entries.len() + 1);
+        children.push(left);
+        for (separator, child) in entries {
+            keys.push(separator);
+            children.push(child);
+        }
+        let id = self.alloc(&Node::Internal { keys, children });
+        self.flush_pending_if_large()?;
+        Ok((first, id))
+    }
+
+    fn push_bulk_child(
+        &mut self,
+        levels: &mut Vec<Vec<(Vec<u8>, NodeId)>>,
+        mut level: usize,
+        mut child: (Vec<u8>, NodeId),
+    ) -> Result<()> {
+        loop {
+            if level == levels.len() {
+                levels.push(Vec::new());
+            }
+            let group = &mut levels[level];
+            group.push(child);
+            if group.len() < MAX_KEYS + MIN_KEYS + 2 {
+                return Ok(());
+            }
+            let tail = group.split_off(MAX_KEYS + 1);
+            child = self.bulk_internal(std::mem::replace(group, tail))?;
+            level += 1;
         }
     }
 
@@ -757,7 +820,7 @@ impl PersistentBTree {
             return;
         }
         if let Some(nr) = refs.counts.get_mut(&id) {
-            nr.ref_count += 1;
+            *nr += 1;
         }
     }
 
@@ -788,8 +851,15 @@ impl PersistentBTree {
             let dead_keys = refs
                 .release(id)
                 .into_iter()
-                .filter(|nid| self.pending.remove(nid).is_none())
-                .map(|nid| nid.to_le_bytes().to_vec())
+                .filter(|nid| {
+                    if let Some(raw) = self.pending.remove(nid) {
+                        self.pending_bytes -= 9 + raw.len();
+                        false
+                    } else {
+                        true
+                    }
+                })
+                .map(|nid| object_key(nid).to_vec())
                 .collect();
             refs.defer_or_return(dead_keys)
         };
@@ -809,8 +879,10 @@ impl PersistentBTree {
         }
         let keep = self.pending_closure(survivor);
         for id in self.pending_closure(dead) {
-            if !keep.contains(&id) {
-                self.pending.remove(&id);
+            if !keep.contains(&id)
+                && let Some(raw) = self.pending.remove(&id)
+            {
+                self.pending_bytes -= raw.len() + 9;
             }
         }
     }
@@ -828,8 +900,8 @@ impl PersistentBTree {
             let Some(raw) = self.pending.get(&id) else {
                 continue;
             };
-            if let Node::Internal { children, .. } = Node::decode(raw) {
-                stack.extend(children);
+            if id & CLASS_MASK != BLOB {
+                stack.extend(Node::decode_children(raw));
             }
         }
         seen
@@ -848,17 +920,24 @@ impl PersistentBTree {
             return;
         }
         if let Some(nr) = refs.counts.get_mut(&id) {
-            debug_assert!(nr.ref_count > 0, "disown_node on unowned node {id}");
-            nr.ref_count = nr.ref_count.saturating_sub(1);
+            debug_assert!(*nr > 0, "disown_node on unowned node {id}");
+            *nr = nr.saturating_sub(1);
         }
     }
 
     /// Flushes the write buffer once it reaches the bulk threshold, bounding
     /// memory during a buffered multi-step operation.
-    pub(crate) fn flush_pending_if_large(&mut self) {
-        if self.pending.len() >= Self::PENDING_FLUSH_THRESHOLD {
+    pub(crate) fn flush_pending_if_large(&mut self) -> Result<()> {
+        if self.stage.is_some() {
+            if self.pending_bytes >= 16 << 20 {
+                self.flush_stage()?;
+            }
+        } else if self.pending.len() >= Self::PENDING_FLUSH_THRESHOLD
+            || self.pending_bytes >= 16 << 20
+        {
             self.flush_pending();
         }
+        Ok(())
     }
 
     /// Number of internal levels above the leaves (0 for a leaf root).
@@ -882,7 +961,8 @@ impl PersistentBTree {
     ///
     /// Also registers unreachable nodes for deferred disk deletion.
     pub fn rebuild_ref_counts(&mut self, live_roots: &[NodeId]) {
-        self.finish_ref_counts(HashMap::new(), live_roots);
+        self.finish_ref_counts(HashMap::new(), live_roots)
+            .expect("B+ tree recovery failed");
     }
 
     /// Trace durable branch and commit roots before any recovery writes.
@@ -897,6 +977,17 @@ impl PersistentBTree {
         Ok(counts)
     }
 
+    pub(crate) fn restore_runtime_refs(&self, roots: &[NodeId]) -> Result<()> {
+        let mut counts = self.required_node_refs(roots)?;
+        let mut refs = self.runtime.refs.lock();
+        self.count_nodes(
+            &mut counts,
+            refs.pins.iter().map(|(&root, &pins)| (root, pins)),
+            true,
+        )?;
+        refs.install(counts);
+        Ok(())
+    }
     fn count_nodes(
         &self,
         counts: &mut HashMap<NodeId, NodeRef>,
@@ -906,11 +997,38 @@ impl PersistentBTree {
         let mut queue: Vec<_> = roots.filter(|&(id, _)| id != EMPTY_ROOT).collect();
         while let Some((id, owners)) = queue.pop() {
             if let Some(node) = counts.get_mut(&id) {
-                node.ref_count += owners;
+                node.ref_count =
+                    node.ref_count.checked_add(owners).ok_or_else(|| {
+                        VsdbError::Corrupt {
+                            detail: "B+ tree reference count overflow".into(),
+                        }
+                    })?;
                 continue;
             }
-            let children = match self.nodes.get(id.to_le_bytes()) {
-                Some(bytes) => Node::decode_children(&bytes),
+            let children = match self.nodes.get(object_key(id)) {
+                Some(_) if id & CLASS_MASK == BLOB => Vec::new(),
+                Some(bytes) => {
+                    let page = NodeView::open(&bytes)?;
+                    page.validate()?;
+                    let children = page.edges();
+                    let class = if !page.leaf {
+                        0
+                    } else if children.is_empty() {
+                        LEAF
+                    } else {
+                        BLOB_LEAF
+                    };
+                    if class != id & CLASS_MASK
+                        || children.iter().any(|&c| {
+                            c & !CLASS_MASK >= id & !CLASS_MASK || c & !CLASS_MASK == 0
+                        })
+                    {
+                        return Err(VsdbError::Corrupt {
+                            detail: format!("invalid child or class on page {id}"),
+                        });
+                    }
+                    children
+                }
                 None if require_present => {
                     return Err(VsdbError::Corrupt {
                         detail: format!("missing reachable B+ tree node {id}"),
@@ -934,7 +1052,7 @@ impl PersistentBTree {
         &mut self,
         mut new_refs: HashMap<NodeId, NodeRef>,
         other_roots: &[NodeId],
-    ) {
+    ) -> Result<()> {
         let mut refs = self.runtime.refs.lock();
         let roots = other_roots
             .iter()
@@ -953,14 +1071,12 @@ impl PersistentBTree {
             .nodes
             .iter()
             .filter_map(|(k, _)| {
-                let id = u64::from_le_bytes(k[..8].try_into().unwrap());
-                max_id = max_id.max(id);
+                let id = object_id(&k)?;
+                max_id = max_id.max(id & !CLASS_MASK);
                 (!new_refs.contains_key(&id)).then_some(k)
             })
             .collect();
-        if !dead_keys.is_empty() {
-            self.nodes.lazy_delete_batch(dead_keys);
-        }
+
         self.runtime.next_id.fetch_max(
             max_id
                 .checked_add(1)
@@ -968,8 +1084,20 @@ impl PersistentBTree {
             Ordering::AcqRel,
         );
 
-        refs.counts = new_refs;
-        refs.ready = true;
+        refs.install(new_refs);
+        drop(refs);
+        if self.stage.is_some() && !self.namespace().is_read_only() {
+            for group in dead_keys.chunks(8192) {
+                let mut batch = self.nodes.batch();
+                for key in group {
+                    batch.remove(key);
+                }
+                batch.commit_sync()?;
+            }
+        } else if !dead_keys.is_empty() {
+            self.nodes.lazy_delete_batch(dead_keys);
+        }
+        Ok(())
     }
 
     // =================================================================
@@ -1019,11 +1147,8 @@ impl PersistentBTree {
         }
         let refs = self.runtime.refs.lock();
         assert!(refs.ready);
-        let actual: HashMap<NodeId, u32> = refs
-            .counts
-            .iter()
-            .map(|(&id, nr)| (id, nr.ref_count))
-            .collect();
+        let actual: HashMap<NodeId, u32> =
+            refs.counts.iter().map(|(&id, &nr)| (id, nr)).collect();
         assert_eq!(
             actual, expected,
             "incremental ref counts diverge from recount"
@@ -1039,18 +1164,26 @@ impl Default for PersistentBTree {
 
 impl Clone for PersistentBTree {
     fn clone(&self) -> Self {
+        self.clone_in(&self.namespace())
+            .expect("vsdb: PersistentBTree clone failed")
+    }
+}
+
+impl PersistentBTree {
+    /// Deep-copies this node pool into a fresh prefix in `ns`.
+    pub fn clone_in(&self, ns: &crate::common::Namespace) -> Result<Self> {
         debug_assert!(
             self.pending.is_empty(),
             "PersistentBTree cloned with a non-empty write buffer"
         );
-        let nodes = self.nodes.clone();
+        let nodes = self.nodes.clone_in(ns)?;
         let refs = self.runtime.refs.lock();
         let mut counts = refs.counts.clone();
         // Reader leases belong to the original pool. Any resulting zero-ref
         // root remains unowned, as with standalone mutation results; VerMap's
         // clone recounts from its copied persistent graph before returning.
         for (&root, &pins) in &refs.pins {
-            let count = &mut counts.get_mut(&root).expect("untracked pin").ref_count;
+            let count = counts.get_mut(&root).expect("untracked pin");
             *count = count
                 .checked_sub(pins)
                 .expect("pin count exceeds references");
@@ -1060,15 +1193,55 @@ impl Clone for PersistentBTree {
             self.runtime.next_id.load(Ordering::Acquire),
             RefState {
                 counts,
+                edges: refs.edges.clone(),
+                zombies: HashSet::new(),
                 ready: refs.ready,
                 pins: HashMap::new(),
                 deferred: None,
             },
         );
-        Self {
+        Ok(Self {
             nodes,
             runtime,
             pending: HashMap::new(),
+            pending_bytes: 0,
+            stage: None,
+        })
+    }
+}
+
+/// Opaque reference-count state retained by version store readers.
+#[derive(Clone, Debug)]
+pub struct TreeReadState(Arc<TreeRuntime>);
+impl TreeReadState {
+    pub(crate) fn lease<const N: usize>(
+        &self,
+        nodes: &MapxRawReader,
+        resolve: impl FnOnce() -> Result<[NodeId; N]>,
+    ) -> Result<[Arc<RootLease>; N]> {
+        let mut refs = self.0.refs.lock();
+        let roots = resolve()?;
+        // Validate the whole set before changing counts, so a corrupt
+        // later root cannot strand an earlier pin during unwinding.
+        for &root in roots.iter().filter(|&&root| root != EMPTY_ROOT) {
+            assert!(refs.ready, "snapshot requires initialized tree references");
+            if !refs.counts.contains_key(&root) {
+                return Err(VsdbError::Corrupt {
+                    detail: format!("untracked snapshot root {root}"),
+                });
+            }
         }
+        for &root in roots.iter().filter(|&&root| root != EMPTY_ROOT) {
+            *refs.counts.get_mut(&root).expect("untracked snapshot root") += 1;
+            *refs.pins.entry(root).or_insert(0) += 1;
+        }
+        drop(refs);
+        Ok(roots.map(|root| {
+            Arc::new(RootLease {
+                root,
+                runtime: Arc::clone(&self.0),
+                nodes: nodes.clone(),
+            })
+        }))
     }
 }

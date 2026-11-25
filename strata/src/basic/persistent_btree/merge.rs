@@ -54,12 +54,11 @@
 //! subtrees of the target remain shared where the COW paths permit it.
 //!
 
-use std::collections::BTreeMap;
-
 use super::{
-    EMPTY_ROOT, NodeId, PersistentBTree,
-    diff::{TreeDiff, diff_walk},
+    EMPTY_ROOT, InsertResult, MAX_KEYS, MIN_KEYS, Node, NodeId, PersistentBTree,
+    RemoveResult, diff::TreeDiff,
 };
+use crate::Result;
 
 /// Performs a three-way merge.
 ///
@@ -77,23 +76,23 @@ fn three_way_merge(
     ancestor_root: NodeId,
     source_root: NodeId,
     target_root: NodeId,
-) -> NodeId {
+) -> Result<NodeId> {
     // Fast paths.
     if ancestor_root == source_root {
         // Source made no changes — result is target.
-        return target_root;
+        return Ok(target_root);
     }
     if ancestor_root == target_root {
         // Target made no changes — fast-forward to source.
-        return source_root;
+        return Ok(source_root);
     }
     if source_root == target_root {
         // Both sides converged to the same state.
-        return source_root;
+        return Ok(source_root);
     }
 
     let changes = source_changes(tree, &[ancestor_root], source_root);
-    replay(tree, target_root, changes)
+    tree.apply_changes(target_root, changes, true)
 }
 
 /// Performs a three-way merge against one or more merge bases.
@@ -110,7 +109,7 @@ fn three_way_merge_many_bases(
     ancestor_roots: &[NodeId],
     source_root: NodeId,
     target_root: NodeId,
-) -> NodeId {
+) -> Result<NodeId> {
     if ancestor_roots.len() <= 1 {
         return three_way_merge(
             tree,
@@ -121,11 +120,11 @@ fn three_way_merge_many_bases(
     }
 
     if source_root == target_root {
-        return source_root;
+        return Ok(source_root);
     }
 
     let changes = source_changes(tree, ancestor_roots, source_root);
-    replay(tree, target_root, changes)
+    tree.apply_changes(target_root, changes, true)
 }
 
 /// Every key where `source` differs from any of `bases`, mapped to the
@@ -134,24 +133,38 @@ fn source_changes(
     tree: &PersistentBTree,
     bases: &[NodeId],
     source: NodeId,
-) -> BTreeMap<Vec<u8>, Option<Vec<u8>>> {
-    let mut changes = BTreeMap::new();
-    for &base in bases {
-        diff_walk(tree, base, source, |entry| match entry {
-            TreeDiff::Added { key, value }
-            | TreeDiff::Modified {
-                key,
-                new_value: value,
-                ..
-            } => {
-                changes.insert(key, Some(value));
+) -> impl Iterator<Item = (Vec<u8>, Option<Vec<u8>>)> + use<> {
+    let mut streams: Vec<_> = bases
+        .iter()
+        .map(|&base| {
+            tree.owned_diff(base, source)
+                .map(|entry| match entry {
+                    TreeDiff::Added { key, value }
+                    | TreeDiff::Modified {
+                        key,
+                        new_value: value,
+                        ..
+                    } => (key, Some(value)),
+                    TreeDiff::Removed { key, .. } => (key, None),
+                })
+                .peekable()
+        })
+        .collect();
+    std::iter::from_fn(move || {
+        let index = streams
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(i, s)| s.peek().map(|(k, _)| (i, k)))
+            .min_by(|(_, a), (_, b)| a.cmp(b))
+            .map(|(i, _)| i)?;
+        let edit = streams[index].next().unwrap();
+        for (i, s) in streams.iter_mut().enumerate() {
+            if i != index {
+                s.next_if(|(k, _)| k == &edit.0);
             }
-            TreeDiff::Removed { key, .. } => {
-                changes.insert(key, None);
-            }
-        });
-    }
-    changes
+        }
+        Some(edit)
+    })
 }
 
 /// Applies `changes` to `target_root` by copy-on-write and returns the
@@ -162,47 +175,149 @@ fn source_changes(
 /// only until the next one exists, and its superseded nodes are dropped
 /// from the buffer before they reach the engine — only nodes reachable
 /// from the final root are written.
-fn replay(
-    tree: &mut PersistentBTree,
-    target_root: NodeId,
-    changes: BTreeMap<Vec<u8>, Option<Vec<u8>>>,
-) -> NodeId {
-    let mut root = target_root;
-    for (key, state) in changes {
-        // Each key is applied once, so `root` still holds the target
-        // state for it.
-        let next = match state {
-            Some(value) => {
-                if tree.get(root, &key).as_deref() == Some(value.as_slice()) {
-                    continue;
-                }
-                tree.insert_buffered(root, &key, &value)
-            }
-            // Removal already returns the original root without allocating
-            // when absent, so it needs no separate lookup first.
-            None => tree.remove_buffered(root, &key),
-        };
-        if next == root {
-            continue;
-        }
-        tree.acquire_node(next);
-        if root != target_root {
-            tree.release_buffered(root);
-            // Restored trees have no ref counts yet. Drop this intermediate
-            // from the buffer anyway so the flush writes only `next`.
-            tree.drop_untracked_pending(root, next);
-        }
-        root = next;
-        tree.flush_pending_if_large();
-    }
-    tree.flush_pending();
-    if root != target_root {
-        tree.disown_node(root);
-    }
-    root
-}
-
 impl PersistentBTree {
+    pub(crate) fn apply_changes(
+        &mut self,
+        target_root: NodeId,
+        changes: impl IntoIterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
+        chunked: bool,
+    ) -> Result<NodeId> {
+        let mut root = target_root;
+        let mut changes = changes.into_iter().peekable();
+        while changes.peek().is_some() {
+            let next = self.apply_leaf_run(root, &mut changes);
+            if next == root {
+                continue;
+            }
+            self.acquire_node(next);
+            if root != target_root {
+                self.release_buffered(root);
+                // Restored trees have no ref counts yet. Drop this intermediate
+                // from the buffer anyway so the flush writes only `next`.
+                self.drop_untracked_pending(root, next);
+            }
+            root = next;
+            if chunked {
+                self.flush_pending_if_large()?;
+            }
+        }
+        self.flush_pending();
+        if root != target_root {
+            self.disown_node(root);
+        }
+        Ok(root)
+    }
+
+    /// Descend once for the sorted edits in a leaf's routing interval.
+    /// Rebalance immediately when a removal crosses minimum occupancy.
+    fn apply_leaf_run(
+        &mut self,
+        root: NodeId,
+        changes: &mut std::iter::Peekable<
+            impl Iterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
+        >,
+    ) -> NodeId {
+        let first = &changes.peek().unwrap().0;
+        let mut path = Vec::new();
+        let mut upper = None;
+        let mut id = root;
+        let (mut keys, mut values) = loop {
+            if id == EMPTY_ROOT {
+                break (Vec::new(), Vec::new());
+            }
+            match self.node(id) {
+                Node::Leaf { keys, values } => break (keys, values),
+                Node::Internal { keys, children } => {
+                    let ci = Self::child_index(&keys, first);
+                    if let Some(end) = keys.get(ci) {
+                        upper = Some(end.clone());
+                    }
+                    id = children[ci];
+                    path.push((keys, children, ci));
+                }
+            }
+        };
+        let mut changed = false;
+        for _ in 0..MAX_KEYS {
+            let Some((key, value)) =
+                changes.next_if(|(k, _)| upper.as_ref().is_none_or(|end| k < end))
+            else {
+                break;
+            };
+            let at = keys.binary_search(&key);
+            match (at, value) {
+                (Ok(i), Some(v)) if values[i] != v => {
+                    values[i] = v;
+                    changed = true;
+                }
+                (Err(i), Some(v)) => {
+                    keys.insert(i, key);
+                    values.insert(i, v);
+                    changed = true;
+                }
+                (Ok(i), None) => {
+                    keys.remove(i);
+                    values.remove(i);
+                    changed = true;
+                    if !path.is_empty() && keys.len() < MIN_KEYS {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !changed {
+            return root;
+        }
+        if keys.is_empty() && path.is_empty() {
+            return EMPTY_ROOT;
+        }
+        let mut underfull = keys.len() < MIN_KEYS;
+        let mut change = if keys.len() > MAX_KEYS {
+            self.split_leaf(keys, values)
+        } else {
+            InsertResult::Updated(self.alloc(&Node::Leaf { keys, values }))
+        };
+        while let Some((mut keys, mut children, ci)) = path.pop() {
+            match change {
+                InsertResult::Unchanged => unreachable!(),
+                InsertResult::Updated(child) => {
+                    children[ci] = child;
+                    if underfull {
+                        let (nid, short) = match self.fix_underflow(keys, children, ci) {
+                            RemoveResult::Underflow(nid) => (nid, true),
+                            RemoveResult::Done(nid) => (nid, false),
+                            RemoveResult::NotFound => unreachable!(),
+                        };
+                        underfull = short;
+                        change = InsertResult::Updated(nid);
+                        continue;
+                    }
+                }
+                InsertResult::Split { left, sep, right } => {
+                    children[ci] = left;
+                    keys.insert(ci, sep);
+                    children.insert(ci + 1, right);
+                }
+            }
+            underfull = false;
+            change = if keys.len() > MAX_KEYS {
+                self.split_internal(keys, children)
+            } else {
+                InsertResult::Updated(self.alloc(&Node::Internal { keys, children }))
+            };
+        }
+        match change {
+            InsertResult::Updated(id) if underfull => self.shrink_root(id),
+            InsertResult::Updated(id) => id,
+            InsertResult::Split { left, sep, right } => self.alloc(&Node::Internal {
+                keys: vec![sep],
+                children: vec![left, right],
+            }),
+            InsertResult::Unchanged => unreachable!(),
+        }
+    }
+
     /// Three-way merge of `source` into `target` against one or more merge
     /// bases, **source wins** on conflicts (a deletion counts as a change;
     /// see [`VerMap::merge`](crate::versioned::map::VerMap::merge) for the
@@ -216,6 +331,16 @@ impl PersistentBTree {
     /// [`acquire_node`](Self::acquire_node); when nothing changes, an
     /// existing root (`target` or `source`) is returned as is.
     pub fn merge(&mut self, bases: &[NodeId], source: NodeId, target: NodeId) -> NodeId {
+        self.try_merge(bases, source, target)
+            .expect("B+ tree merge failed")
+    }
+
+    pub(crate) fn try_merge(
+        &mut self,
+        bases: &[NodeId],
+        source: NodeId,
+        target: NodeId,
+    ) -> Result<NodeId> {
         three_way_merge_many_bases(self, bases, source, target)
     }
 }

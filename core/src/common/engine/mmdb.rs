@@ -1,6 +1,7 @@
 use crate::common::{
-    GB, PREFIX_ALLOC_START, PREFIX_SIZE, Pre, PreBytes, RawKey, RawValue, VSDB,
-    configured_mem_budget_mb, create_dir_all_durable, error::Result as VsdbResult,
+    GB, PREFIX_ALLOC_START, PREFIX_SIZE, Pre, PreBytes, RawKey, RawRangeBounds,
+    RawValue, atomic_write_file, configured_mem_budget_mb, create_dir_all_durable,
+    error::{Result, corrupt, from_mmdb_err},
     vsdb_freeze_base_dir, vsdb_get_base_dir, vsdb_is_read_only,
 };
 use mmdb::{
@@ -8,15 +9,13 @@ use mmdb::{
     WriteBatch, WriteOptions,
 };
 use parking_lot::{Mutex, RwLock};
-use ruc::*;
 use std::{
-    borrow::Cow,
     cell::Cell,
     cmp,
     collections::{HashMap, HashSet},
     fs,
-    io::{self, Read, Write},
-    ops::{Bound, RangeBounds},
+    io::{self, Read},
+    ops::Bound,
     path::{Path, PathBuf},
     sync::{
         Arc, LazyLock,
@@ -25,14 +24,9 @@ use std::{
     thread::{self, ThreadId},
 };
 
-/// Legacy (pre-v16) location of the prefix-allocator ceiling: a meta key
-/// in shard 0. Read once at open for the take-max migration; never
-/// written again (v16+ persists the ceiling in [`PREFIX_CEILING_REL_PATH`]).
-const META_KEY_PREFIX_ALLOCATOR: [u8; 1] = [u8::MIN];
-
 /// A synchronous deletion of this reserved system key fences a shard's WAL.
 /// Collection keys include an eight-byte prefix, so this one-byte key cannot
-/// overlap user data (including an empty user key) or the legacy allocator.
+/// overlap user data, including entries with empty user keys.
 const META_KEY_WAL_FENCE: [u8; 1] = [1];
 
 /// v16+ location of the prefix-allocator ceiling, relative to the VSDB
@@ -42,20 +36,8 @@ const META_KEY_WAL_FENCE: [u8; 1] = [1];
 /// a prerequisite for namespaces sharing one global allocator.
 const PREFIX_CEILING_REL_PATH: &str = "__SYSTEM__/__prefix_ceiling__";
 
-/// On-disk format-version marker, relative to the VSDB base dir
-/// (ASCII decimal).
-///
-/// Format 16 relocated the prefix-allocator ceiling out of shard 0; the
-/// marker is written durably at open, *before* the file-based allocator
-/// can issue anything, so a v15.0.2+ binary pointed at this dataset
-/// refuses to open instead of reading the stale shard-0 ceiling and
-/// re-issuing prefixes already used by the new layout (silent data
-/// corruption). Absence of the marker means a pre-v16 dataset.
-const FORMAT_VERSION_REL_PATH: &str = "__SYSTEM__/format_version";
-
-/// The on-disk format this binary reads and writes. Anything newer is
-/// refused at open (downgrade is unsupported by policy — fail loudly).
-const SUPPORTED_FORMAT_VERSION: u64 = 16;
+/// Records that all shard directories have been created and synced.
+const READY_PATH: &str = "__SYSTEM__/.shards_ready";
 
 /// Initialization sentinel, relative to an engine root.
 ///
@@ -169,20 +151,14 @@ static RECOVERED_NONEMPTY: AtomicBool = AtomicBool::new(false);
 /// in the namespace registry.
 const NUM_SHARDS: usize = 16;
 
-/// Serializes writers of the small `__SYSTEM__` meta files (allocator
-/// ceiling, format marker). `write_file_durable` stages through a fixed
-/// sibling `*.tmp` name, so two concurrent writers of the same path
-/// could interleave create/truncate/rename into a torn result; every
-/// writer takes this lock first. Lock order: `PREFIX_ALLOC_LOCK` (if
-/// held at all) strictly before this one.
+/// Serializes durable allocator read-modify-write operations. When both
+/// locks are needed, acquire PREFIX_ALLOC_LOCK before this lock.
 static SYS_META_LOCK: Mutex<()> = Mutex::new(());
 
 pub struct MmDB {
     /// Sharded DB handlers (`shards` of them), owned by this engine —
     /// dropping the engine closes every shard (flushing writable state,
-    /// joining compaction threads, and releasing LOCK files). In the
-    /// default namespace, shard 0 additionally holds the legacy allocator
-    /// key from pre-v16 datasets.
+    /// joining compaction threads, and releasing LOCK files).
     dbs: Box<[DB]>,
     read_only: bool,
 }
@@ -193,64 +169,59 @@ impl MmDB {
         self.read_only
     }
 
-    /// Opens the DEFAULT-namespace engine rooted at the global base dir.
-    /// Writable opens migrate the pre-v16 allocator ceiling; read-only
-    /// opens fold it into memory without modifying the store.
     pub(crate) fn new() -> Result<Self> {
-        // Lock in the base dir so later `vsdb_configure` calls fail.
-        // Deliberately does NOT mutate the process environment: this runs
-        // lazily on the first DB operation, possibly long after worker
-        // threads were spawned, where `env::set_var` would be unsound.
         vsdb_freeze_base_dir();
-        let base_dir = vsdb_get_base_dir();
-
-        let this =
-            Self::open_at(&base_dir, NUM_SHARDS, EngineSizing::from_process_budget())?;
-
-        // Absorb a pre-v16 ceiling (legacy shard-0 key) into the ceiling
-        // file — see `migrate_ceiling` for the crash-safety argument.
-        // The legacy key itself is never written again.
-        let legacy = this.dbs[0]
-            .get(&META_KEY_PREFIX_ALLOCATOR)
-            .c(d!())?
-            .map(|v| crate::common::parse_prefix!(v));
-        if this.read_only {
-            initialize_read_only_allocator(&base_dir, legacy, &this.dbs)?;
-        } else {
-            migrate_ceiling(&base_dir, legacy, Some(&this.dbs))?;
-        }
-
-        Ok(this)
+        Self::open_at(
+            &vsdb_get_base_dir(),
+            NUM_SHARDS,
+            EngineSizing::from_process_budget(),
+            0,
+        )
     }
 
     /// Opens an engine instance rooted at `root` with `shards` shards.
     ///
-    /// Namespace-generic: refuses datasets marked with a newer on-disk
-    /// format, validates the persisted shard layout (a mismatched count
-    /// would silently re-route every prefix), and writes the format
-    /// marker on writable opens. Does NOT perform the legacy shard-0
-    /// migration — only the default namespace can carry pre-v16 state
-    /// (see [`MmDB::new`]). Read-only opens only validate existing state.
+    /// Shard readiness and universe identity are verified before any writable
+    /// shard is opened. An interrupted initialization retains its sentinel.
     pub(crate) fn open_at(
         root: &Path,
         shards: usize,
         sizing: EngineSizing,
+        ns_id: u64,
     ) -> Result<Self> {
         debug_assert!((1..=64).contains(&shards));
+        let universe_id = crate::common::universe::active()?.id;
         let read_only = vsdb_is_read_only();
         let dir = root.join("mmdb");
         let sentinel_path = root.join(INIT_SENTINEL_REL_PATH);
+        let _adoption = if !read_only && ns_id != 0 {
+            create_dir_all_durable(root)?;
+            let guard = crate::common::universe::lock_root_dir(root)?;
+            crate::common::universe::validate_pending_root(
+                root,
+                universe_id,
+                ns_id,
+                shards,
+            )?;
+            Some(guard)
+        } else {
+            None
+        };
         if read_only {
             // The completion marker is published durably before best-effort
             // sentinel removal. A leftover sentinel is advisory once the
             // marker and exact shard layout validate; readers never unlink it.
-            validate_completed_dataset(root, shards, false)?;
+            crate::common::universe::verify_engine(root, universe_id, ns_id, shards)?;
         } else {
-            create_dir_all_durable(root).c(d!())?;
-            check_format_version(root).c(d!())?;
-            create_dir_all_durable(&dir).c(d!())?;
+            create_dir_all_durable(root)?;
+            crate::common::universe::validate_ready_engine(
+                root,
+                universe_id,
+                ns_id,
+                shards,
+            )?;
 
-            let marker_present = root.join(FORMAT_VERSION_REL_PATH).exists();
+            let marker_present = root.join(READY_PATH).exists();
             let scan = scan_shard_layout(&dir, shards)?;
             validate_shard_layout(&dir, shards, marker_present, &sentinel_path, &scan)?;
 
@@ -259,10 +230,13 @@ impl MmDB {
             // provably a resumable create (see INIT_SENTINEL_REL_PATH).
             if !marker_present && scan.present == 0 && !sentinel_path.exists() {
                 let _g = SYS_META_LOCK.lock();
-                create_dir_all_durable(sentinel_path.parent().expect("has parent"))
-                    .c(d!())?;
-                write_file_durable(&sentinel_path, b"1")?;
+                create_dir_all_durable(sentinel_path.parent().expect("has parent"))?;
+                atomic_write_file(
+                    &sentinel_path,
+                    &crate::common::universe::engine_bytes(universe_id, ns_id, shards),
+                )?;
             }
+            create_dir_all_durable(&dir)?;
         }
 
         // Shards are owned all the way through: if a later shard (or any
@@ -286,7 +260,7 @@ impl MmDB {
         for i in 0..shards {
             let shard_dir = dir.join(format!("shard_{:02}", i));
             if !read_only {
-                create_dir_all_durable(&shard_dir).c(d!())?;
+                create_dir_all_durable(&shard_dir)?;
             }
             let db = mmdb_open(&shard_dir, shards, sizing, &pool)?;
             dbs_vec.push(db);
@@ -295,7 +269,8 @@ impl MmDB {
         if !read_only {
             // Mark the root's on-disk format so an older binary pointed at
             // it (base dir or namespace root alike) refuses to open.
-            write_format_marker(root)?;
+
+            crate::common::universe::install_engine(root, universe_id, ns_id, shards)?;
             // Initialization is complete and durably marked: retire the
             // sentinel best-effort. Marker-present validation never consults
             // it, so a stuck/unremovable sentinel must not brick reopen of an
@@ -323,7 +298,7 @@ impl MmDB {
             if let Err(e) = db.close()
                 && ret.is_ok()
             {
-                ret = Err(e).c(d!());
+                ret = Err(from_mmdb_err(e));
             }
         }
         ret
@@ -382,9 +357,7 @@ impl MmDB {
     }
 
     pub(crate) fn get(&self, meta_prefix: PreBytes, key: &[u8]) -> Option<RawValue> {
-        let full_key = make_full_key(&meta_prefix, key);
-        self.shard(&meta_prefix)
-            .get(&full_key)
+        with_full_key(&meta_prefix, key, |k| self.shard(&meta_prefix).get(k))
             .expect("vsdb: mmdb get failed")
     }
 
@@ -393,10 +366,10 @@ impl MmDB {
             !self.read_only,
             "vsdb: insert is unavailable in read-only mode"
         );
-        let full_key = make_full_key(&meta_prefix, key);
-        self.shard(&meta_prefix)
-            .put(&full_key, value)
-            .expect("vsdb: mmdb put failed");
+        with_full_key(&meta_prefix, key, |k| {
+            self.shard(&meta_prefix).put(k, value)
+        })
+        .expect("vsdb: mmdb put failed");
     }
 
     pub(crate) fn remove(&self, meta_prefix: PreBytes, key: &[u8]) {
@@ -404,9 +377,7 @@ impl MmDB {
             !self.read_only,
             "vsdb: remove is unavailable in read-only mode"
         );
-        let full_key = make_full_key(&meta_prefix, key);
-        self.shard(&meta_prefix)
-            .delete(&full_key)
+        with_full_key(&meta_prefix, key, |k| self.shard(&meta_prefix).delete(k))
             .expect("vsdb: mmdb delete failed");
     }
 
@@ -424,8 +395,9 @@ impl MmDB {
         if self.read_only {
             return;
         }
-        let full_key = make_full_key(&meta_prefix, key);
-        self.shard(&meta_prefix).lazy_delete(&full_key);
+        with_full_key(&meta_prefix, key, |k| {
+            self.shard(&meta_prefix).lazy_delete(k)
+        });
     }
 
     /// Batch version of [`lazy_delete`](Self::lazy_delete).
@@ -450,20 +422,7 @@ impl MmDB {
     }
 
     pub(crate) fn iter(&self, meta_prefix: PreBytes) -> MmdbIter {
-        let db = self.shard(&meta_prefix);
-        // Pin the sequence while capturing iterator sources. Compaction must
-        // retain this view until the iterator owns its memtables/table readers.
-        let snapshot = db.snapshot();
-        let db_iter = db
-            .iter_with_prefix(&meta_prefix, &snapshot.read_options())
-            .expect("vsdb: mmdb iter_with_prefix failed");
-        // Defense-in-depth prefix bound (parity with `range`): never surface
-        // keys from an adjacent prefix in the same shard, even if the
-        // engine's prefix iterator were to over-scan its upper boundary.
-        let iter = CheckedBidiIter(BidiIterator::lazy(db_iter))
-            .filter(move |(k, _)| k.starts_with(&meta_prefix))
-            .map(|(k, v)| (k[PREFIX_SIZE..].to_vec(), v));
-        MmdbIter(Box::new(iter))
+        self.range(meta_prefix, ..)
     }
 
     pub(crate) fn sync_wal(&self, meta_prefix: PreBytes) {
@@ -471,14 +430,14 @@ impl MmDB {
             .expect("vsdb: mmdb WAL synchronization failed");
     }
 
-    pub(crate) fn try_sync_wal(&self, meta_prefix: PreBytes) -> VsdbResult<()> {
+    pub(crate) fn try_sync_wal(&self, meta_prefix: PreBytes) -> Result<()> {
         if self.read_only {
             return Ok(());
         }
         Self::sync_db_wal(self.shard(&meta_prefix))
     }
 
-    pub(crate) fn try_sync_all_wals(&self) -> VsdbResult<()> {
+    pub(crate) fn try_sync_all_wals(&self) -> Result<()> {
         if !self.read_only {
             for db in &self.dbs {
                 Self::sync_db_wal(db)?;
@@ -487,7 +446,7 @@ impl MmDB {
         Ok(())
     }
 
-    fn sync_db_wal(db: &DB) -> VsdbResult<()> {
+    fn sync_db_wal(db: &DB) -> Result<()> {
         // mmdb has no standalone WAL-sync API and skips empty batches.
         // A real synchronous deletion syncs prior successful writes on this
         // shard without forcing the active memtable into an SST. Earlier
@@ -500,11 +459,11 @@ impl MmDB {
             },
             &META_KEY_WAL_FENCE,
         )
-        .c(d!("synchronize shard WAL"))?;
+        .map_err(from_mmdb_err)?;
         Ok(())
     }
 
-    pub(crate) fn range<'a, R: RangeBounds<Cow<'a, [u8]>>>(
+    pub(crate) fn range<R: RawRangeBounds>(
         &self,
         meta_prefix: PreBytes,
         bounds: R,
@@ -512,71 +471,36 @@ impl MmDB {
         let db = self.shard(&meta_prefix);
 
         let snapshot = db.snapshot();
-        Self::range_at(db, meta_prefix, bounds, &snapshot.read_options())
+        Self::range_at(db, meta_prefix, bounds, snapshot.read_options())
     }
 
-    fn range_at<'a, R: RangeBounds<Cow<'a, [u8]>>>(
+    fn range_at<R: RawRangeBounds>(
         db: &DB,
         meta_prefix: PreBytes,
         bounds: R,
-        options: &ReadOptions,
+        mut options: ReadOptions,
     ) -> MmdbIter {
-        let prefixed = |b: &Bound<&Cow<'_, [u8]>>| -> Bound<Vec<u8>> {
-            match b {
-                Bound::Included(k) => Bound::Included(make_full_key(&meta_prefix, k)),
-                Bound::Excluded(k) => Bound::Excluded(make_full_key(&meta_prefix, k)),
-                Bound::Unbounded => Bound::Unbounded,
+        // mmdb intersects these bounds with the prefix and performs the seek.
+        // In byte order the immediate successor of a key is key || 0.
+        let endpoint = |bound: Bound<&[u8]>, lower: bool| {
+            let (key, advance) = match bound {
+                Bound::Included(key) => (key, !lower),
+                Bound::Excluded(key) => (key, lower),
+                Bound::Unbounded => return None,
+            };
+            let mut bytes = make_full_key(&meta_prefix, key);
+            if advance {
+                bytes.push(0);
             }
+            Some(bytes)
         };
-
-        let lo_full = prefixed(&bounds.start_bound());
-        let hi_full = prefixed(&bounds.end_bound());
-
-        // SST-level pruning hints: start from lo or prefix start, end at
-        // the requested upper bound capped by the prefix boundary.
-        let start_hint: Option<Vec<u8>> = match &lo_full {
-            Bound::Included(v) | Bound::Excluded(v) => Some(v.clone()),
-            Bound::Unbounded => Some(meta_prefix.to_vec()),
-        };
-        let prefix_end = prefix_successor(&meta_prefix);
-        let requested_end = match &hi_full {
-            // In lexicographical byte order, `v || [0x00]` is the exact
-            // immediate successor of `v` (`k <= v` iff `k < v || [0x00]`).
-            // Using `prefix_successor(v)` instead widened `..=v` to every
-            // key prefixed by `v` (up to `prefix_end` for `b""` or `[0xFF]`).
-            Bound::Included(v) => {
-                let mut end = Vec::with_capacity(v.len() + 1);
-                end.extend_from_slice(v);
-                end.push(0);
-                Some(end)
-            }
-            Bound::Excluded(v) => Some(v.clone()),
-            Bound::Unbounded => prefix_end.clone(),
-        };
-        let end_hint = match (requested_end, prefix_end) {
-            (Some(end), Some(prefix_end)) => Some(cmp::min(end, prefix_end)),
-            (Some(end), None) => Some(end),
-            (None, Some(prefix_end)) => Some(prefix_end),
-            (None, None) => None,
-        };
-
-        let mut db_iter = db
-            .iter_with_range(options, start_hint.as_deref(), end_hint.as_deref())
-            .expect("vsdb: mmdb iter_with_range failed");
-
-        if let Bound::Included(ref lo) | Bound::Excluded(ref lo) = lo_full {
-            db_iter.seek(lo);
-        }
-
-        let iter = CheckedBidiIter(BidiIterator::lazy(db_iter))
-            .filter(move |(k, _)| {
-                k.starts_with(&meta_prefix)
-                    && check_bound_lo(k.as_slice(), &lo_full)
-                    && check_bound_hi(k.as_slice(), &hi_full)
-            })
-            .map(|(k, v)| (k[PREFIX_SIZE..].to_vec(), v));
-
-        MmdbIter(Box::new(iter))
+        let (lo, hi) = bounds.raw_bounds();
+        options.iterate_lower_bound = endpoint(lo, true);
+        options.iterate_upper_bound = endpoint(hi, false);
+        let iter = db
+            .iter_with_prefix(&meta_prefix, &options)
+            .expect("vsdb: mmdb prefix range failed");
+        MmdbIter(CheckedBidiIter(BidiIterator::lazy(iter)))
     }
 
     pub(crate) fn read_view(&self, prefix: PreBytes) -> MmdbReadView<'_> {
@@ -610,19 +534,14 @@ pub(crate) struct MmdbReadView<'a> {
 
 impl MmdbReadView<'_> {
     pub(crate) fn get(&self, key: &[u8]) -> Option<RawValue> {
-        self.db
-            .get_with_options(
-                &self.snapshot.read_options(),
-                &make_full_key(&self.prefix, key),
-            )
-            .expect("vsdb: mmdb snapshot get failed")
+        with_full_key(&self.prefix, key, |k| {
+            self.db.get_with_options(&self.snapshot.read_options(), k)
+        })
+        .expect("vsdb: mmdb snapshot get failed")
     }
 
-    pub(crate) fn range<'a, R: RangeBounds<Cow<'a, [u8]>>>(
-        &self,
-        bounds: R,
-    ) -> MmdbIter {
-        MmDB::range_at(self.db, self.prefix, bounds, &self.snapshot.read_options())
+    pub(crate) fn range<R: RawRangeBounds>(&self, bounds: R) -> MmdbIter {
+        MmDB::range_at(self.db, self.prefix, bounds, self.snapshot.read_options())
     }
 }
 
@@ -657,26 +576,26 @@ impl DoubleEndedIterator for CheckedBidiIter {
 }
 
 /// A lazy, bidirectional iterator over key-value pairs in a single prefix range.
-///
-/// Wraps a boxed `DoubleEndedIterator` so that the concrete streaming type
-/// (e.g. `Map<Filter<CheckedBidiIter, _>, _>`) is hidden behind a stable ABI.
-/// No entries are collected into memory upfront; data flows from mmdb's
-/// streaming SST/memtable sources one item at a time.
-pub struct MmdbIter(Box<dyn DoubleEndedIterator<Item = (RawKey, RawValue)>>);
+pub struct MmdbIter(CheckedBidiIter);
+
+fn strip_prefix((mut key, value): (RawKey, RawValue)) -> (RawKey, RawValue) {
+    key.drain(..PREFIX_SIZE);
+    (key, value)
+}
 
 impl Iterator for MmdbIter {
     type Item = (RawKey, RawValue);
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.next()
+        self.0.next().map(strip_prefix)
     }
 }
 
 impl DoubleEndedIterator for MmdbIter {
     #[inline(always)]
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.0.next_back()
+        self.0.next_back().map(strip_prefix)
     }
 }
 
@@ -699,30 +618,18 @@ fn ceiling_file_path() -> PathBuf {
 /// would make `DB::open` silently create an empty shard. Exact shard names,
 /// marker compatibility, and every anchor must therefore agree before a
 /// completed root is adopted or accepted as a relocation target.
-pub(crate) fn validate_completed_dataset(
-    root: &Path,
-    shards: usize,
-    require_marker: bool,
-) -> Result<()> {
-    check_format_version(root)?;
-    let marker_present = root.join(FORMAT_VERSION_REL_PATH).is_file();
-    if require_marker && !marker_present {
-        return Err(eg!(format!(
-            "dataset at {} has no format marker",
-            root.display()
-        )));
-    }
+pub(crate) fn validate_completed_dataset(root: &Path, shards: usize) -> Result<()> {
     let mmdb_dir = root.join("mmdb");
     let scan = scan_shard_layout(&mmdb_dir, shards)?;
     validate_shard_layout(
         &mmdb_dir,
         shards,
-        marker_present,
+        true,
         &root.join(INIT_SENTINEL_REL_PATH),
         &scan,
     )?;
     if scan.present != shards {
-        return Err(eg!(format!(
+        return Err(corrupt(format!(
             "dataset at {} is not complete: found {} of {} shard dirs",
             root.display(),
             scan.present,
@@ -732,72 +639,28 @@ pub(crate) fn validate_completed_dataset(
     validate_shard_anchors(&mmdb_dir, shards)
 }
 
-/// Folds `legacy` (the pre-v16 shard-0 value, when present), any prefix
-/// already stored in this universe, and the allocation floor into the
-/// ceiling file — idempotent take-max, run under [`SYS_META_LOCK`].
-///
-/// Crash-safety around [`MmDB::new`]'s sequence — which is
-/// mark-then-fold: `open_at` writes the format marker before this fold
-/// runs. The order is safe because nothing gates on it: a crash after
-/// the marker but before the fold leaves a marked dataset with no
-/// ceiling file and no issued prefix, and every allocation path funnels
-/// through `ensure_alloc_init`, which refuses to issue anything until a
-/// fold has produced the file (re-running it here on the next open, or
-/// running it itself for a fresh universe). The legacy shard-0 key is
-/// preserved forever and the fold is idempotent take-max, so repeated
-/// folds never regress (that is also why the fold runs at EVERY open: a
-/// pre-tripwire v15 binary advancing the legacy key after migration is
-/// re-absorbed instead of causing prefix reuse; post-marker, the v15
-/// tripwire refuses the dataset outright).
-///
-/// A missing file is not proof that nothing was issued. v16+ universes
-/// do not write the legacy key, so deleting or omitting
-/// `__prefix_ceiling__` from a copy that still holds collection keys
-/// would otherwise rewrite the floor and hand those prefixes out again.
-/// When the file is absent the fold scans open default shards (when the
-/// caller already holds them), on-disk shard dirs, key prefixes and
-/// `VSMAPX01` bytes inside stored keys and values, saved handle metas, the
-/// universe custom directory, and registered namespace roots, and raises
-/// the ceiling strictly above every prefix it finds. A scan that cannot
-/// open an existing shard fails the fold instead of guessing low.
-///
-/// Never races a ceiling bump: bumps require the allocator to be
-/// initialized (`GLOBAL_COUNTER != 0`), and every path that initializes
-/// it either runs this fold first ([`MmDB::new`] → first allocation) or
-/// holds `PREFIX_ALLOC_LOCK` around the fold (`ensure_alloc_init`).
-fn migrate_ceiling(
-    base_dir: &Path,
-    legacy: Option<Pre>,
-    open_default: Option<&[DB]>,
-) -> Result<()> {
-    let _g = SYS_META_LOCK.lock();
-    let file = base_dir.join(PREFIX_CEILING_REL_PATH);
-    create_dir_all_durable(file.parent().expect("has parent")).c(d!())?;
-    let filed = read_ceiling_file(&file)?;
-    let ceiling = resolved_ceiling(base_dir, filed, legacy, open_default)?;
-    if filed != Some(ceiling) {
-        write_file_durable(&file, &ceiling.to_le_bytes())?;
+/// Computes the floor before opening any engines. Recovery scans all issued
+/// prefixes, including empty maps whose only evidence is an embedded handle.
+pub(crate) fn recover_ceiling(
+    base: &Path,
+    universe: u128,
+    writable: bool,
+) -> Result<u64> {
+    let file = base.join(PREFIX_CEILING_REL_PATH);
+    if let Some(floor) = read_ceiling_file(&file)? {
+        return Ok(floor);
     }
-    Ok(())
-}
-
-/// Initializes allocator validation state without reserving a new allocation
-/// window or modifying the ceiling file. A read-only process never allocates,
-/// so every prefix below the durable ceiling is already outside its candidate
-/// space and can be restored without an in-process reservation.
-fn initialize_read_only_allocator(
-    base_dir: &Path,
-    legacy: Option<Pre>,
-    open_default: &[DB],
-) -> Result<()> {
-    let _x = PREFIX_ALLOC_LOCK.lock();
-    let filed = read_ceiling_file(&base_dir.join(PREFIX_CEILING_REL_PATH))?;
-    let ceiling = resolved_ceiling(base_dir, filed, legacy, Some(open_default))?
-        .max(GLOBAL_CEILING.load(Ordering::Acquire));
-    GLOBAL_FLOOR.store(ceiling, Ordering::Release);
-    GLOBAL_CEILING.store(ceiling, Ordering::Release);
-    GLOBAL_COUNTER.store(ceiling, Ordering::Release);
-    Ok(())
+    let max = highest_issued_prefix(base, universe)?;
+    let floor = match max {
+        Some(id) => id
+            .checked_add(1)
+            .ok_or_else(|| corrupt("prefix space exhausted"))?,
+        None => PREFIX_ALLOC_START,
+    };
+    if writable {
+        atomic_write_file(&file, &floor.to_le_bytes())?;
+    }
+    Ok(floor)
 }
 
 /// Allocates a fresh, never-before-issued prefix.
@@ -840,68 +703,17 @@ fn ensure_alloc_init() {
     if GLOBAL_COUNTER.load(Ordering::Acquire) != 0 {
         return;
     }
+    let ret = crate::common::universe::active()
+        .expect("vsdb: universe initialization")
+        .ceiling;
     if vsdb_is_read_only() {
-        let base_dir = vsdb_get_base_dir();
-        let filed = read_ceiling_file(&base_dir.join(PREFIX_CEILING_REL_PATH))
-            .expect("vsdb: allocator ceiling read failed");
-        if let Some(ceiling) = filed {
-            let ceiling = ceiling.max(PREFIX_ALLOC_START);
-            GLOBAL_FLOOR.store(ceiling, Ordering::Release);
-            GLOBAL_CEILING.store(ceiling, Ordering::Release);
-            GLOBAL_COUNTER.store(ceiling, Ordering::Release);
-        } else if base_dir.join("mmdb").exists() {
-            drop(_x);
-            LazyLock::force(&VSDB);
-            assert_ne!(
-                GLOBAL_COUNTER.load(Ordering::Acquire),
-                0,
-                "vsdb: read-only allocator validation state was not initialized"
-            );
-        } else {
-            // No default engine yet. Namespace datasets can still hold
-            // issued prefixes; do not pretend the universe is fresh.
-            let ceiling = resolved_ceiling(&base_dir, None, None, None)
-                .expect("vsdb: allocator ceiling recovery failed");
-            GLOBAL_FLOOR.store(ceiling, Ordering::Release);
-            GLOBAL_CEILING.store(ceiling, Ordering::Release);
-            GLOBAL_COUNTER.store(ceiling, Ordering::Release);
-        }
+        GLOBAL_FLOOR.store(ret, Ordering::Release);
+        GLOBAL_CEILING.store(ret, Ordering::Release);
+        GLOBAL_COUNTER.store(ret, Ordering::Release);
         return;
     }
-    let base_dir = vsdb_get_base_dir();
-    let file = base_dir.join(PREFIX_CEILING_REL_PATH);
-    let default_exists = base_dir.join("mmdb").exists();
-
-    // A default dataset may carry a pre-v16 legacy ceiling that a
-    // pre-tripwire v15 binary advanced after the last fold. Force the
-    // default open (which runs the take-max fold) before trusting the
-    // ceiling file: a non-default allocation must not publish a window
-    // below that legacy value. Never re-entrant: engine init allocates
-    // nothing, and every other allocating thread is blocked on
-    // `PREFIX_ALLOC_LOCK` (held here) or sees the counter still zero.
-    if default_exists {
-        LazyLock::force(&VSDB);
-    }
-
-    let ret =
-        match read_ceiling_file(&file).expect("vsdb: allocator ceiling read failed") {
-            Some(v) => v,
-            None if default_exists => {
-                panic!("vsdb: default-engine migration must create the ceiling")
-            }
-            None => {
-                // No default engine. Still fold namespace datasets so a
-                // missing ceiling cannot restart at the allocation floor.
-                migrate_ceiling(&base_dir, None, None)
-                    .expect("vsdb: allocator ceiling init failed");
-                PREFIX_ALLOC_START
-            }
-        };
-
-    // Read-max-write under `SYS_META_LOCK`: another writer may have
-    // raised the file after the read above (or a fold may have absorbed
-    // a higher legacy value). Starting at the larger value prevents a
-    // window below a durable reservation.
+    let file = ceiling_file_path();
+    // Reserve the first window before publishing its in-process cursor.
     let (start, ceiling) = {
         let _g = SYS_META_LOCK.lock();
         let current = read_ceiling_file(&file)
@@ -910,7 +722,7 @@ fn ensure_alloc_init() {
         let start = ret.max(current);
         let ceiling = start.saturating_add(PREFIX_ALLOC_BATCH);
         if current < ceiling {
-            write_file_durable(&file, &ceiling.to_le_bytes())
+            atomic_write_file(&file, &ceiling.to_le_bytes())
                 .expect("vsdb: allocator ceiling write failed");
         }
         (start, ceiling)
@@ -979,11 +791,8 @@ fn alloc_prefix_candidate() -> Pre {
                     let new_ceil =
                         batch_end.saturating_add(PREFIX_ALLOC_BATCH).max(current);
                     if current < new_ceil {
-                        write_file_durable(
-                            &ceiling_file_path(),
-                            &new_ceil.to_le_bytes(),
-                        )
-                        .expect("vsdb: allocator ceiling write failed");
+                        atomic_write_file(&ceiling_file_path(), &new_ceil.to_le_bytes())
+                            .expect("vsdb: allocator ceiling write failed");
                     }
                     GLOBAL_CEILING.store(new_ceil, Ordering::Release);
                 }
@@ -1092,53 +901,6 @@ pub(crate) fn reserve_recovered_prefix(meta_prefix: PreBytes) -> bool {
 
 // ---- Batch ----
 
-/// The initial allocator ceiling for this open: the max of the v16 file
-/// value, the pre-v16 legacy shard-0 value, one past the highest prefix
-/// still stored in the universe, and the allocation floor.
-/// Pure take-max — folding in a stale source can only raise the ceiling
-/// (wasting at most one gap of ids), never lower it below anything
-/// already issued. `observed_max` is `Some` only when the ceiling file
-/// is absent; it is the largest allocator prefix found in shard keys or
-/// saved handle metadata.
-fn effective_initial_ceiling(
-    filed: Option<Pre>,
-    legacy: Option<Pre>,
-    observed_max: Option<Pre>,
-) -> Result<Pre> {
-    let mut ceiling = filed
-        .unwrap_or(0)
-        .max(legacy.unwrap_or(0))
-        .max(PREFIX_ALLOC_START);
-    if let Some(max_issued) = observed_max {
-        let next = max_issued.checked_add(1).ok_or_else(|| {
-            eg!(
-                "allocator ceiling cannot advance past issued prefix {}",
-                Pre::MAX
-            )
-        })?;
-        ceiling = ceiling.max(next);
-    }
-    Ok(ceiling)
-}
-
-/// Ceiling to publish for this open. A present file is authoritative
-/// (together with the legacy key). A missing file is recovered from
-/// data still on disk so the next `alloc_prefix` starts strictly above
-/// every prefix that scan can see.
-fn resolved_ceiling(
-    base_dir: &Path,
-    filed: Option<Pre>,
-    legacy: Option<Pre>,
-    open_default: Option<&[DB]>,
-) -> Result<Pre> {
-    let observed = if filed.is_none() {
-        highest_issued_prefix(open_default, base_dir)?
-    } else {
-        None
-    };
-    effective_initial_ceiling(filed, legacy, observed)
-}
-
 fn note_issued_prefix(max: &mut Option<Pre>, prefix: Pre) {
     if prefix >= PREFIX_ALLOC_START {
         *max = Some(max.map_or(prefix, |current| current.max(prefix)));
@@ -1146,7 +908,7 @@ fn note_issued_prefix(max: &mut Option<Pre>, prefix: Pre) {
 }
 
 fn note_db_prefixes(db: &DB, max: &mut Option<Pre>) -> Result<()> {
-    let mut iter = db.iter().c(d!("scan shard for issued prefixes"))?;
+    let mut iter = db.iter().map_err(from_mmdb_err)?;
     for (key, value) in iter.by_ref() {
         if key.len() >= PREFIX_SIZE {
             let prefix = Pre::from_le_bytes(key[..PREFIX_SIZE].try_into().unwrap());
@@ -1157,40 +919,51 @@ fn note_db_prefixes(db: &DB, max: &mut Option<Pre>) -> Result<()> {
         note_meta_bytes(max, &value);
     }
     if let Some(error) = iter.error() {
-        return Err(eg!(error));
+        return Err(corrupt(error));
     }
     Ok(())
 }
 
 fn note_meta_bytes(max: &mut Option<Pre>, bytes: &[u8]) {
-    let magic = super::MAPX_META_MAGIC;
-    let mut rest = bytes;
-    while let Some(pos) = rest.windows(magic.len()).position(|window| window == magic) {
-        let start = pos + magic.len();
-        if let Some(raw) = rest.get(start..start + PREFIX_SIZE) {
+    for (pos, magic) in bytes.windows(8).enumerate() {
+        let offset = match magic {
+            b"VSMAPX02" => 8,
+            b"VSTYPE04" => 16,
+            _ => continue,
+        };
+        if let Some(raw) = bytes.get(pos + offset..pos + offset + PREFIX_SIZE) {
             note_issued_prefix(max, Pre::from_le_bytes(raw.try_into().unwrap()));
         }
-        rest = &rest[pos + 1..];
     }
 }
 
-fn note_meta_dir(max: &mut Option<Pre>, dir: &Path) -> Result<()> {
+fn note_meta_dir(max: &mut Option<Pre>, dir: &Path, instance_meta: bool) -> Result<()> {
     let mut pending = vec![dir.to_owned()];
     let mut buf = vec![0; 64 * 1024];
     while let Some(path) = pending.pop() {
         let entries = match fs::read_dir(&path) {
             Ok(entries) => entries,
             Err(e) if path == dir && e.kind() == io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(e).c(d!()),
+            Err(e) => return Err(e.into()),
         };
         for entry in entries {
-            let entry = entry.c(d!())?;
-            let ty = entry.file_type().c(d!())?;
+            let entry = entry?;
+            let ty = entry.file_type()?;
             if ty.is_dir() {
                 pending.push(entry.path());
             } else if ty.is_file() {
-                let mut file = fs::File::open(entry.path()).c(d!())?;
-                note_meta_stream(max, &mut file, &mut buf).c(d!())?;
+                // Application metadata may be opaque. The filename itself
+                // reserves the ID, even for an empty instance.
+                if instance_meta
+                    && path == dir
+                    && let Some(name) = entry.file_name().to_str()
+                    && name.len() == 16
+                    && let Ok(id) = Pre::from_str_radix(name, 16)
+                {
+                    note_issued_prefix(max, id);
+                }
+                let mut file = fs::File::open(entry.path())?;
+                note_meta_stream(max, &mut file, &mut buf)?;
             }
         }
     }
@@ -1213,7 +986,7 @@ fn note_meta_stream(
         let end = carry + read;
         note_meta_bytes(max, &buf[..end]);
         // A magic and prefix may straddle two reads.
-        carry = end.min(super::MAPX_META_MAGIC.len() + PREFIX_SIZE - 1);
+        carry = end.min(16 + PREFIX_SIZE - 1);
         buf.copy_within(end - carry..end, 0);
     }
 }
@@ -1231,23 +1004,28 @@ fn note_shard_dir(max: &mut Option<Pre>, shard: &Path) -> Result<()> {
         },
         shard,
     )
-    .c(d!(format!(
-        "open {} to recover the prefix ceiling",
-        shard.display()
-    )))?;
+    .map_err(|e| {
+        from_mmdb_err(
+            e.context(format!("recover prefix ceiling at {}", shard.display())),
+        )
+    })?;
     note_db_prefixes(&db, max)
 }
 
 fn note_engine_tree(max: &mut Option<Pre>, root: &Path) -> Result<()> {
-    note_meta_dir(max, &root.join("__SYSTEM__").join("__instance_meta__"))?;
+    note_meta_dir(
+        max,
+        &root.join("__SYSTEM__").join("__instance_meta__"),
+        true,
+    )?;
     let mmdb_dir = root.join("mmdb");
     let entries = match fs::read_dir(&mmdb_dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e).c(d!()),
+        Err(e) => return Err(e.into()),
     };
     for entry in entries {
-        let entry = entry.c(d!())?;
+        let entry = entry?;
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if name.starts_with("shard_") {
@@ -1257,74 +1035,29 @@ fn note_engine_tree(max: &mut Option<Pre>, root: &Path) -> Result<()> {
     Ok(())
 }
 
-impl MmDB {
-    /// Largest allocator prefix visible in this already-open engine.
-    pub(crate) fn observe_issued_prefixes(&self) -> Result<Option<Pre>> {
-        let mut max = None;
-        for db in &self.dbs {
-            note_db_prefixes(db, &mut max)?;
-        }
-        Ok(max)
-    }
-}
-
-fn same_dataset(open: &Path, registered: &Path) -> bool {
-    if open == registered {
-        return true;
-    }
-    match (open.canonicalize(), registered.canonicalize()) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => false,
-    }
-}
-
-/// Largest allocator prefix still visible in this universe, if any.
-///
-/// `open_default` is the default engine when the caller already has it
-/// open. Those shards, and any namespace engine already open in this
-/// process, are not opened again: a second open fails while the writer
-/// holds the shard lock, including the first allocation inside a
-/// namespace that was just created. Every other dataset is opened
-/// read-only. Saved `VSMAPX01` handle bytes count even when the map
-/// itself is empty — in shard keys and values, instance metadata, and the
-/// universe `__CUSTOM__` directory — so a prefix that has no key rows
-/// is not reused. A coincidental magic only raises the ceiling.
-fn highest_issued_prefix(
-    open_default: Option<&[DB]>,
-    base_dir: &Path,
-) -> Result<Option<Pre>> {
+/// Called under universe initialization, before any engine is open.
+fn highest_issued_prefix(base_dir: &Path, universe: u128) -> Result<Option<Pre>> {
     let mut max = None;
-    if let Some(dbs) = open_default {
-        for db in dbs {
-            note_db_prefixes(db, &mut max)?;
-        }
+    if base_dir.join(READY_PATH).try_exists()?
+        || base_dir
+            .join("mmdb/__SYSTEM__/engine_header")
+            .try_exists()?
+    {
+        note_engine_tree(&mut max, base_dir)?;
+    } else {
+        // An incomplete default engine has never served a writable map.
         note_meta_dir(
             &mut max,
-            &base_dir.join("__SYSTEM__").join("__instance_meta__"),
+            &base_dir.join("__SYSTEM__/__instance_meta__"),
+            true,
         )?;
-    } else {
-        note_engine_tree(&mut max, base_dir)?;
     }
-    let (open_prefix, open_roots) =
-        crate::common::namespace::open_namespace_prefix_snapshot()
-            .map_err(|err| eg!(err.to_string()))?;
-    if let Some(prefix) = open_prefix {
-        note_issued_prefix(&mut max, prefix);
-    }
-    for root in &open_roots {
-        note_meta_dir(&mut max, &root.join("__SYSTEM__").join("__instance_meta__"))?;
-    }
-    let roots = crate::common::namespace::registered_namespace_roots(base_dir)
-        .map_err(|err| eg!(err.to_string()))?;
-    for (root, _) in roots {
-        if open_roots.iter().any(|open| same_dataset(open, &root)) {
-            continue;
-        }
+    for root in crate::common::namespace::recovery_roots(base_dir, universe)? {
         note_engine_tree(&mut max, &root)?;
     }
     // Top-level handles are bootstrapped from `{base}/__CUSTOM__/`
     // (see `vsdb_get_custom_dir`), often before those maps have keys.
-    note_meta_dir(&mut max, &base_dir.join("__CUSTOM__"))?;
+    note_meta_dir(&mut max, &base_dir.join("__CUSTOM__"), false)?;
     Ok(max)
 }
 
@@ -1338,61 +1071,21 @@ fn highest_issued_prefix(
 fn read_ceiling_file(path: &Path) -> Result<Option<Pre>> {
     match fs::read(path) {
         Ok(bytes) if bytes.len() == PREFIX_SIZE => {
-            Ok(Some(crate::common::parse_prefix!(bytes)))
+            let ceiling = crate::common::parse_prefix!(bytes);
+            if ceiling < PREFIX_ALLOC_START {
+                return Err(corrupt("allocator ceiling below the allocation floor"));
+            }
+            Ok(Some(ceiling))
         }
-        Ok(bytes) => Err(eg!(format!(
+        Ok(bytes) => Err(corrupt(format!(
             "corrupt allocator ceiling file {} ({} bytes, expected {})",
             path.display(),
             bytes.len(),
             PREFIX_SIZE
         ))),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e).c(d!()),
+        Err(e) => Err(e.into()),
     }
-}
-
-/// Durable file replacement: tmp, fsync, rename, then parent-dir fsync.
-///
-/// **Locking contract**: staging goes through a fixed sibling `*.tmp`
-/// name, so concurrent writers of the SAME path would interleave
-/// create/truncate/rename into a torn result — every caller must hold
-/// the lock guarding that file's class first ([`SYS_META_LOCK`] for
-/// allocator/marker/sentinel files, `REGISTRY_LOCK` for the namespace
-/// registry). Not taken here: several callers already hold their lock
-/// (parking_lot mutexes are non-reentrant).
-///
-/// The parent-dir fsync matters: without it a power loss can drop the
-/// rename itself, and a regressed allocator ceiling means prefix reuse —
-/// silent data corruption. (The public `atomic_write_file` used for
-/// instance metas performs the same dir fsync.)
-pub(crate) fn write_file_durable(path: &Path, bytes: &[u8]) -> Result<()> {
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
-    {
-        let mut f = fs::File::create(&tmp).c(d!())?;
-        f.write_all(bytes).c(d!())?;
-        f.sync_all().c(d!())?;
-    }
-    fs::rename(&tmp, path).c(d!())?;
-    if let Some(parent) = path.parent() {
-        fs::File::open(parent).c(d!())?.sync_all().c(d!())?;
-    }
-    Ok(())
-}
-
-/// Marks the dataset as [`SUPPORTED_FORMAT_VERSION`] (idempotent,
-/// serialized by [`SYS_META_LOCK`]).
-fn write_format_marker(base_dir: &Path) -> Result<()> {
-    let _g = SYS_META_LOCK.lock();
-    let path = base_dir.join(FORMAT_VERSION_REL_PATH);
-    if let Ok(s) = fs::read_to_string(&path)
-        && s.trim().parse::<u64>() == Ok(SUPPORTED_FORMAT_VERSION)
-    {
-        return Ok(());
-    }
-    create_dir_all_durable(path.parent().expect("has parent")).c(d!())?;
-    write_file_durable(&path, SUPPORTED_FORMAT_VERSION.to_string().as_bytes())
 }
 
 /// Exact shard-set scan of `mmdb_dir` for an expected count of
@@ -1413,7 +1106,7 @@ fn scan_shard_layout(mmdb_dir: &Path, shards: usize) -> Result<ShardScan> {
     match fs::read_dir(mmdb_dir) {
         Ok(entries) => {
             for e in entries {
-                let e = e.c(d!())?;
+                let e = e?;
                 let name = e.file_name().to_string_lossy().into_owned();
                 if !name.starts_with("shard_") {
                     continue;
@@ -1427,7 +1120,7 @@ fn scan_shard_layout(mmdb_dir: &Path, shards: usize) -> Result<ShardScan> {
             }
         }
         Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-        Err(err) => return Err(err).c(d!()),
+        Err(err) => return Err(err.into()),
     }
     Ok(ShardScan {
         present,
@@ -1439,7 +1132,7 @@ fn validate_shard_anchors(mmdb_dir: &Path, shards: usize) -> Result<()> {
     for i in 0..shards {
         let current = mmdb_dir.join(format!("shard_{i:02}")).join("CURRENT");
         if !current.is_file() {
-            return Err(eg!(format!(
+            return Err(corrupt(format!(
                 "damaged dataset at {}: shard_{i:02} has no MMDB CURRENT \
                  anchor — refusing to recreate it as an empty shard",
                 mmdb_dir.display()
@@ -1464,11 +1157,7 @@ fn validate_shard_anchors(mmdb_dir: &Path, shards: usize) -> Result<()> {
 /// * **Sentinel present (no marker)** ⇒ provably a create that crashed
 ///   mid-way; no allocation ever targeted the root ⇒ resumable: the
 ///   missing shard dirs are created idempotently by the caller.
-/// * **Neither** ⇒ only two shapes are legitimate: a brand-new root
-///   (zero shards) or a complete pre-v16/pre-sentinel dataset (exact
-///   set, e.g. a legacy 16/16 default base awaiting migration). A
-///   partial set here is a damaged dataset — missing shard dirs mean
-///   silent data loss if "resumed" — and is refused.
+/// * **Neither** permits a fresh root without shard directories.
 fn validate_shard_layout(
     mmdb_dir: &Path,
     shards: usize,
@@ -1477,7 +1166,7 @@ fn validate_shard_layout(
     scan: &ShardScan,
 ) -> Result<()> {
     if let Some(name) = &scan.unexpected {
-        return Err(eg!(format!(
+        return Err(corrupt(format!(
             "unexpected shard entry {:?} at {} (expected exactly \
              shard_00..shard_{:02})",
             name,
@@ -1487,7 +1176,7 @@ fn validate_shard_layout(
     }
     if marker_present {
         if scan.present != shards {
-            return Err(eg!(format!(
+            return Err(corrupt(format!(
                 "damaged dataset at {}: initialization completed (format \
                  marker present) but only {} of {} shard dirs exist — \
                  refusing to reinitialize over it",
@@ -1506,14 +1195,10 @@ fn validate_shard_layout(
     if scan.present == 0 {
         return Ok(());
     }
-    if scan.present == shards {
-        return validate_shard_anchors(mmdb_dir, shards);
-    }
-    Err(eg!(format!(
+    Err(corrupt(format!(
         "damaged dataset at {}: {} of {} shard dirs exist with no \
          initialization sentinel — missing shards would mean silent \
-         data loss; refusing to open (an interrupted pre-16.0.2 create \
-         can be reclaimed via Namespace::destroy)",
+         data loss; refusing to open",
         mmdb_dir.display(),
         scan.present,
         shards
@@ -1562,36 +1247,42 @@ impl<'a> MmdbBatch<'a> {
 impl MmdbBatch<'_> {
     #[inline(always)]
     pub(crate) fn insert(&mut self, key: &[u8], value: &[u8]) {
-        let full_key = make_full_key(&self.meta_prefix, key);
-        self.inner.put(&full_key, value);
+        with_full_key(&self.meta_prefix, key, |k| self.inner.put(k, value));
     }
 
     #[inline(always)]
     pub(crate) fn remove(&mut self, key: &[u8]) {
-        let full_key = make_full_key(&self.meta_prefix, key);
-        self.inner.delete(&full_key);
+        with_full_key(&self.meta_prefix, key, |k| self.inner.delete(k));
+    }
+
+    pub(crate) fn delete_range(&mut self, start: &[u8], end: &[u8]) {
+        if start < end {
+            with_full_key(&self.meta_prefix, start, |lo| {
+                with_full_key(&self.meta_prefix, end, |hi| {
+                    self.inner.delete_range(lo, hi)
+                })
+            });
+        }
     }
 
     /// Applies every buffered operation atomically. The batch is consumed
     /// either way. A persistence failure may leave recoverable WAL data.
     #[inline(always)]
-    pub(crate) fn commit(self) -> VsdbResult<()> {
+    pub(crate) fn commit(self) -> Result<()> {
         self.commit_with_sync(false)
     }
 
-    pub(crate) fn commit_sync(self) -> VsdbResult<()> {
+    pub(crate) fn commit_sync(self) -> Result<()> {
         self.commit_with_sync(true)
     }
 
-    fn commit_with_sync(self, sync: bool) -> VsdbResult<()> {
+    fn commit_with_sync(self, sync: bool) -> Result<()> {
         let batch = self.inner;
         if self.engine.read_only {
             return Err(crate::common::error::VsdbError::ReadOnly {
                 operation: "batch commit",
             });
         }
-        // `.c(d!())` attaches file/line context; the `?` conversion into
-        // `VsdbError` preserves the complete ruc chain.
         self.engine
             .shard(&self.meta_prefix)
             .write_with_options(
@@ -1601,12 +1292,23 @@ impl MmdbBatch<'_> {
                 },
                 batch,
             )
-            .c(d!())?;
+            .map_err(from_mmdb_err)?;
         Ok(())
     }
 }
 
 // ---- Helpers ----
+
+fn with_full_key<R>(prefix: &PreBytes, key: &[u8], f: impl FnOnce(&[u8]) -> R) -> R {
+    let mut buf = [0u8; 128];
+    if key.len() > buf.len() - PREFIX_SIZE {
+        return f(&make_full_key(prefix, key));
+    }
+    let len = PREFIX_SIZE + key.len();
+    buf[..PREFIX_SIZE].copy_from_slice(prefix);
+    buf[PREFIX_SIZE..len].copy_from_slice(key);
+    f(&buf[..len])
+}
 
 #[inline(always)]
 fn make_full_key(meta_prefix: &[u8], key: &[u8]) -> Vec<u8> {
@@ -1628,24 +1330,6 @@ fn prefix_successor(prefix: &[u8]) -> Option<Vec<u8>> {
         }
     }
     None
-}
-
-#[inline(always)]
-fn check_bound_lo(full_key: &[u8], bound: &Bound<Vec<u8>>) -> bool {
-    match bound {
-        Bound::Unbounded => true,
-        Bound::Included(l) => full_key >= l.as_slice(),
-        Bound::Excluded(l) => full_key > l.as_slice(),
-    }
-}
-
-#[inline(always)]
-fn check_bound_hi(full_key: &[u8], bound: &Bound<Vec<u8>>) -> bool {
-    match bound {
-        Bound::Unbounded => true,
-        Bound::Included(u) => full_key <= u.as_slice(),
-        Bound::Excluded(u) => full_key < u.as_slice(),
-    }
 }
 
 const G: usize = GB as usize;
@@ -1690,48 +1374,6 @@ static MEM_BUDGET: LazyLock<usize> = LazyLock::new(|| {
     effective_mem_budget(budget_mb)
 });
 
-/// Refuses to open a dataset marked with a newer on-disk format.
-///
-/// Absent marker ⇒ pre-v16 layout ⇒ proceed (the take-max migration in
-/// [`MmDB::new`] handles it). A marker naming a format above
-/// [`SUPPORTED_FORMAT_VERSION`] — or an unreadable one (conservative:
-/// the marker guards against silent corruption, so garbage aborts) —
-/// fails the open with a descriptive error.
-fn check_format_version(base_dir: &Path) -> Result<()> {
-    let path = base_dir.join(FORMAT_VERSION_REL_PATH);
-    let raw = match fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e).c(d!()),
-    };
-    let ver = raw.trim().parse::<u64>().map_err(|_| {
-        eg!(format!(
-            "unreadable format marker {} (content: {:?}); refusing to open",
-            path.display(),
-            raw
-        ))
-    })?;
-    if ver > SUPPORTED_FORMAT_VERSION {
-        return Err(eg!(format!(
-            "this dataset uses on-disk format {} (marker: {}), but this \
-             binary supports at most format {}; downgrade is not supported — \
-             export the data with the newer release instead",
-            ver,
-            path.display(),
-            SUPPORTED_FORMAT_VERSION
-        )));
-    }
-    Ok(())
-}
-
-/// Engine memory sizing, resolved before shards open.
-///
-/// The default namespace sizes from [`MEM_BUDGET`]
-/// (`VSDB_MEM_BUDGET_MB` override / fixed 2 GiB default). Non-default
-/// namespaces use their own input (512 MiB by default), so each new engine
-/// adds a bounded sizing allowance rather than a host-sized one. Every
-/// budget is a sizing input with floors/caps; nothing sizes from the host
-/// or its cgroup, and total RSS is not bounded by this input.
 #[derive(Clone, Copy)]
 pub(crate) struct EngineSizing {
     mem_budget: usize,
@@ -1855,9 +1497,9 @@ fn mmdb_open(
     };
 
     if read_only {
-        DB::open_read_only_with_options(opts, dir).c(d!())
+        DB::open_read_only_with_options(opts, dir).map_err(from_mmdb_err)
     } else {
-        DB::open(opts, dir).c(d!())
+        DB::open(opts, dir).map_err(from_mmdb_err)
     }
 }
 
@@ -1891,6 +1533,19 @@ mod tests {
     }
 
     #[test]
+    fn ceiling_scan_carries_the_full_typed_prefix_across_reads() {
+        for split in 1..24 {
+            let mut data = vec![0; 64 - split];
+            data.extend_from_slice(b"VSTYPE04");
+            data.extend_from_slice(&[0xab; 8]);
+            data.extend_from_slice(&(PREFIX_ALLOC_START + 42).to_le_bytes());
+            let mut max = None;
+            note_meta_stream(&mut max, &mut data.as_slice(), &mut [0; 64]).unwrap();
+            assert_eq!(max, Some(PREFIX_ALLOC_START + 42));
+        }
+    }
+
+    #[test]
     fn ceiling_scan_observes_a_handle_in_a_user_key() {
         let handle = crate::MapxRaw::new();
         let bytes = postcard::to_allocvec(&handle).unwrap();
@@ -1907,6 +1562,18 @@ mod tests {
     }
 
     #[test]
+    fn opaque_instance_metadata_reserves_its_filename() {
+        let dir = tmp_dir("opaque-meta");
+        fs::create_dir_all(&dir).unwrap();
+        let id = PREFIX_ALLOC_START + 3;
+        fs::write(dir.join(format!("{id:016x}")), b"opaque").unwrap();
+        let mut max = None;
+        note_meta_dir(&mut max, &dir, true).unwrap();
+        assert_eq!(max, Some(id));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn ceiling_scan_observes_a_handle_in_a_nested_bootstrap_file() {
         let handle = crate::MapxRaw::new();
         let bytes = postcard::to_allocvec(&handle).unwrap();
@@ -1917,7 +1584,7 @@ mod tests {
         file.extend_from_slice(&bytes);
         fs::write(app.join("root"), file).unwrap();
         let mut max = None;
-        note_meta_dir(&mut max, &dir).unwrap();
+        note_meta_dir(&mut max, &dir, false).unwrap();
         fs::remove_dir_all(dir).unwrap();
         assert_eq!(max, Some(handle.instance_id().map_id));
     }
@@ -1933,7 +1600,15 @@ mod tests {
         };
         let mut batch = engine.batch_begin(42u64.to_le_bytes());
         batch.insert(b"receipt", b"unacknowledged");
-        assert!(batch.commit_sync().is_err());
+        let error = batch.commit_sync().unwrap_err();
+        assert!(matches!(
+            error,
+            crate::VsdbError::Storage {
+                kind: crate::common::error::StorageErrorKind::DbClosed,
+                ..
+            }
+        ));
+        assert!(std::error::Error::source(&error).is_some());
         drop(engine);
         let db = DB::open(DbOptions::default(), &dir).unwrap();
         assert!(
@@ -2042,98 +1717,18 @@ mod tests {
     }
 
     #[test]
-    fn format_version_tripwire() {
-        let base = tmp_dir("format-ver");
-        fs::create_dir_all(&base).unwrap();
-
-        // Absent marker = pre-v16 dataset: accepted (migration path).
-        assert!(check_format_version(&base).is_ok());
-
-        fs::create_dir_all(base.join("__SYSTEM__")).unwrap();
-        let marker = base.join(FORMAT_VERSION_REL_PATH);
-
-        // Current-or-older format numbers: accepted.
-        fs::write(&marker, "16").unwrap();
-        assert!(check_format_version(&base).is_ok());
-        fs::write(&marker, "15\n").unwrap();
-        assert!(check_format_version(&base).is_ok());
-
-        // Newer format: refused loudly.
-        fs::write(&marker, "17").unwrap();
-        assert!(check_format_version(&base).is_err());
-
-        // Unreadable marker: refused (conservative).
-        fs::write(&marker, "garbage").unwrap();
-        assert!(check_format_version(&base).is_err());
-
-        // The writer marks exactly the supported version, idempotently,
-        // and the result round-trips through the checker.
-        fs::remove_file(&marker).unwrap();
-        write_format_marker(&base).unwrap();
-        write_format_marker(&base).unwrap();
-        assert_eq!(
-            fs::read_to_string(&marker).unwrap(),
-            SUPPORTED_FORMAT_VERSION.to_string()
-        );
-        assert!(check_format_version(&base).is_ok());
-
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn ceiling_migration_take_max() {
-        // Pure fold semantics.
-        assert_eq!(
-            effective_initial_ceiling(None, None, None).unwrap(),
-            PREFIX_ALLOC_START
-        );
-        assert_eq!(
-            effective_initial_ceiling(None, Some(PREFIX_ALLOC_START + 7), None).unwrap(),
-            PREFIX_ALLOC_START + 7
-        );
-        assert_eq!(
-            effective_initial_ceiling(Some(PREFIX_ALLOC_START + 9), None, None).unwrap(),
-            PREFIX_ALLOC_START + 9
-        );
-        // A legacy value above the file value (pre-tripwire v15 binary
-        // ran after migration) is re-absorbed, never ignored.
-        assert_eq!(
-            effective_initial_ceiling(
-                Some(PREFIX_ALLOC_START + 100),
-                Some(PREFIX_ALLOC_START + 200),
-                None
-            )
-            .unwrap(),
-            PREFIX_ALLOC_START + 200
-        );
-        assert_eq!(
-            effective_initial_ceiling(
-                Some(PREFIX_ALLOC_START + 200),
-                Some(PREFIX_ALLOC_START + 100),
-                None
-            )
-            .unwrap(),
-            PREFIX_ALLOC_START + 200
-        );
-        // A missing file recovers one past the highest prefix still stored.
-        assert_eq!(
-            effective_initial_ceiling(None, None, Some(PREFIX_ALLOC_START + 50))
-                .unwrap(),
-            PREFIX_ALLOC_START + 51
-        );
-        assert!(effective_initial_ceiling(None, None, Some(Pre::MAX)).is_err());
-
-        // File round-trip: durable write, exact-size read, corruption
-        // and absence both surface correctly.
-        let base = tmp_dir("ceiling-file");
+    fn ceiling_file_requires_exact_width() {
+        let base = tmp_dir("ceiling");
         fs::create_dir_all(&base).unwrap();
         let f = base.join("__prefix_ceiling__");
         assert_eq!(read_ceiling_file(&f).unwrap(), None);
-        write_file_durable(&f, &(PREFIX_ALLOC_START + 42).to_le_bytes()).unwrap();
+        atomic_write_file(&f, &(PREFIX_ALLOC_START + 42).to_le_bytes()).unwrap();
         assert_eq!(
             read_ceiling_file(&f).unwrap(),
             Some(PREFIX_ALLOC_START + 42)
         );
+        fs::write(&f, (PREFIX_ALLOC_START - 1).to_le_bytes()).unwrap();
+        assert!(read_ceiling_file(&f).is_err());
         fs::write(&f, [0u8; 3]).unwrap();
         assert!(read_ceiling_file(&f).is_err());
         let _ = fs::remove_dir_all(&base);
@@ -2148,7 +1743,7 @@ mod tests {
         let root = tmp_dir("stuck-sentinel");
         let shards = 2;
         let sizing = EngineSizing::from_budget_mb(64);
-        let db = MmDB::open_at(&root, shards, sizing).unwrap();
+        let db = MmDB::open_at(&root, shards, sizing, 1).unwrap();
         let prefix = 1u64.to_le_bytes();
         db.insert(prefix, b"k", b"v");
         db.close().unwrap();
@@ -2156,10 +1751,47 @@ mod tests {
         let sentinel = root.join(INIT_SENTINEL_REL_PATH);
         fs::create_dir_all(&sentinel).unwrap();
 
-        let db = MmDB::open_at(&root, shards, sizing).unwrap();
+        let db = MmDB::open_at(&root, shards, sizing, 1).unwrap();
         assert_eq!(db.get(prefix, b"k").as_deref(), Some(&b"v"[..]));
         db.close().unwrap();
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn engine_header_before_ready_resumes_with_matching_initializer() {
+        let root = tmp_dir("header-before-ready");
+        let shards = 1;
+        let ns = 1;
+        let open = || MmDB::open_at(&root, shards, EngineSizing::from_budget_mb(64), ns);
+        let db = open().unwrap();
+        db.insert(PREFIX_ALLOC_START.to_le_bytes(), b"k", b"preserved");
+        db.close().unwrap();
+        let marker = root.join(READY_PATH);
+        let sentinel = root.join(INIT_SENTINEL_REL_PATH);
+        fs::write(&marker, b"torn").unwrap();
+        assert!(open().is_err());
+        fs::remove_file(&marker).unwrap();
+        assert!(open().is_err());
+        let id = crate::common::universe::active().unwrap().id;
+        fs::write(
+            &sentinel,
+            crate::common::universe::engine_bytes(id, ns + 1, shards),
+        )
+        .unwrap();
+        assert!(open().is_err());
+        fs::write(
+            &sentinel,
+            crate::common::universe::engine_bytes(id, ns, shards),
+        )
+        .unwrap();
+        let db = open().unwrap();
+        assert_eq!(
+            db.get(PREFIX_ALLOC_START.to_le_bytes(), b"k").as_deref(),
+            Some(b"preserved".as_slice())
+        );
+        assert_eq!(fs::read(marker).unwrap(), b"18");
+        db.close().unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -2196,7 +1828,7 @@ mod tests {
         fs::create_dir_all(mmdb_dir.join("shard_01")).unwrap();
         fs::write(mmdb_dir.join("shard_00/CURRENT"), "MANIFEST-000001").unwrap();
         fs::write(mmdb_dir.join("shard_01/CURRENT"), "MANIFEST-000001").unwrap();
-        assert!(check(2, false).is_ok());
+        assert!(check(2, false).is_err());
         assert!(check(2, true).is_ok());
         fs::remove_file(mmdb_dir.join("shard_01/CURRENT")).unwrap();
         assert!(check(2, false).is_err());
@@ -2334,7 +1966,8 @@ mod tests {
     /// to the mutex+hashset slow path forever.
     #[test]
     fn reserve_recovered_prefix_ignores_already_issued_in_window_value() {
-        let db = VSDB.engine();
+        let ns = crate::Namespace::default_ns();
+        let db = ns.engine();
         let issued = db.alloc_prefix();
 
         assert!(
@@ -2360,7 +1993,8 @@ mod tests {
     /// `future` and the assertion stays vacuously true.
     #[test]
     fn reserve_recovered_prefix_diverts_allocator_around_reservation() {
-        let db = VSDB.engine();
+        let ns = crate::Namespace::default_ns();
+        let db = ns.engine();
         let p0 = db.alloc_prefix();
         let future = p0 + 3;
 
@@ -2382,7 +2016,8 @@ mod tests {
         let (prefix_tx, prefix_rx) = std::sync::mpsc::channel();
         let (exit_tx, exit_rx) = std::sync::mpsc::channel();
         let handle = thread::spawn(move || {
-            let db = VSDB.engine();
+            let ns = crate::Namespace::default_ns();
+            let db = ns.engine();
             let prefix = db.alloc_prefix();
             prefix_tx.send(prefix).unwrap();
             exit_rx.recv().unwrap();
@@ -2390,7 +2025,8 @@ mod tests {
 
         let prefix = prefix_rx.recv().unwrap();
         let reserved = prefix + 1;
-        let db = VSDB.engine();
+        let ns = crate::Namespace::default_ns();
+        let db = ns.engine();
         assert!(
             db.reserve_recovered_prefix(reserved.to_le_bytes()),
             "an unissued prefix in a live window must be reserved"
@@ -2411,7 +2047,8 @@ mod tests {
     /// alias two instances' key ranges.
     #[test]
     fn prefix_allocator_unique_and_monotonic_per_thread() {
-        let db = VSDB.engine();
+        let ns = crate::Namespace::default_ns();
+        let db = ns.engine();
         let mut prev = db.alloc_prefix();
         assert!(prev >= PREFIX_ALLOC_START);
         for _ in 0..(2 * PREFIX_ALLOC_BATCH + 8) {
@@ -2432,7 +2069,8 @@ mod tests {
         let handles: Vec<_> = (0..THREADS)
             .map(|_| {
                 thread::spawn(move || {
-                    let db = VSDB.engine();
+                    let ns = crate::Namespace::default_ns();
+                    let db = ns.engine();
                     (0..per_thread)
                         .map(|_| db.alloc_prefix())
                         .collect::<Vec<_>>()
@@ -2462,7 +2100,8 @@ mod tests {
     /// exact equality between snapshots.
     #[test]
     fn prefix_allocator_persisted_ceiling_covers_issued() {
-        let db = VSDB.engine();
+        let ns = crate::Namespace::default_ns();
+        let db = ns.engine();
         let persisted_ceiling = || -> Pre {
             read_ceiling_file(&ceiling_file_path())
                 .expect("ceiling read failed")

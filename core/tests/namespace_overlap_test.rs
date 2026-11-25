@@ -26,8 +26,8 @@ fn relative_base_cannot_be_reused_as_a_namespace_root() {
         "unexpected error: {error}"
     );
     assert!(
-        !candidate.exists(),
-        "a rejected create must not write the root"
+        !candidate.join("mmdb").exists(),
+        "a rejected create must not initialize an engine"
     );
 
     env::set_current_dir(original).unwrap();

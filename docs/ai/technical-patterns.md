@@ -22,18 +22,16 @@ Read/write/delete/iter use owning engine’s `dbs.len()`, never hardcoded defaul
 Default one-time init; non-default re-check `OPEN_NAMESPACES` under `REGISTRY_LOCK`.
 
 ### 1.4 Cross-prefix atomicity
-Engine batches are single-prefix. Logical multi-prefix atomicity needs single-handle staging (SlotDex/VecDex), co-location on one shard WAL (program order = crash order) plus dirty-flag recovery and deferred reclamation (VerMap), or per-shard fences (legacy VerMap) — never an assumed shared batch.
+Engine batches are single-prefix. SlotDex, VecDex and VerMap place each atomic mutation under one prefix. DagMap relies on co-location and recoverable ordering between node prefixes.
 
 ## 2. Rust `unsafe` and aliasing contracts
 
 ### 2.1 shadow() race
 Same-key concurrent write or overlapping structural multi-key ops violate alias contract. Disjoint plain-map keys OK.
 
-### 2.2 MapxRaw::from_bytes_in untrusted
-Require same type, unique prefix ownership, correct namespace; no external untrusted bytes.
+### 2.2 Entry ownership
 
-### 2.3 Entry API cast
-`*mut` cast only from the Entry's `&'a mut` handle; the two derefs sit in exclusive match arms and never coexist. A cast from a shared ref is UB.
+Occupied and vacant entries retain exclusive map access. Guard drops discard edits interrupted by unwinding.
 
 ## 3. Encoding
 
@@ -50,16 +48,8 @@ Hand codecs encode/decode field order match + round-trip tests.
 Typed wrappers compare **decoded** values (NaN/non-canonical). Not raw bytes.
 
 ### 3.5 Borrowed key forms
-`KeyRef` queries normally need byte-identical owner encoding (`str` ≡ `String`).
-Mapx byte-slice queries are normalized through the owning codec and validated
-against the complete borrowed slice: postcard arrays omit the length prefix
-used by `Vec<u8>` / `Box<[u8]>`. Wrong-length slices must miss, never alias a
-different array. Preserve `get` / `get_mut` / `contains_key` / `remove` symmetry.
-Other custom borrowed forms still require owner-compatible encoding.
-`OrderedKeyRef` must match `KeyEnDeOrdered`; ordered byte arrays/slices use
-raw bytes rather than postcard sequence encoding.
+The owning type implements `KeyLookup<Q>` or `OrderedKeyLookup<Q>`. Postcard arrays omit the length prefix used by byte vectors. A wrong-length slice misses a fixed-array exact lookup. Verify the same rule on point reads and writes.
 
 ### 3.6 Handle type tags
-`VSTYPE03` fully qualified type tags; `VSTYPE02` still read with its legacy
-full-path tags and versioning-id aliases. Type identity is not a schema
-fingerprint — see `compatibility-policy.md`.
+
+`VSTYPE04` tags hash the full Rust type name. Applications own their value schemas. Old-format handling belongs in the offline migration library.

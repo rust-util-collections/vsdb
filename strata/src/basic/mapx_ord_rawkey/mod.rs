@@ -46,16 +46,9 @@
 mod test;
 
 use crate::common::{
-    RawKey, UnwindMark,
-    ende::ValueEnDe,
-    error::Result,
-    macros::{define_map_wrapper, entry_or_insert_via_mock},
+    RawKey, RawRangeBounds, ende::ValueEnDe, error::Result, macros::define_map_wrapper,
 };
-use std::{
-    borrow::Cow,
-    marker::PhantomData,
-    ops::{Deref, DerefMut, RangeBounds},
-};
+use std::marker::PhantomData;
 use vsdb_core::basic::mapx_raw::{self, MapxRaw, MapxRawIter};
 
 define_map_wrapper! {
@@ -78,49 +71,28 @@ where
     pub fn get(&self, key: impl AsRef<[u8]>) -> Option<V> {
         self.inner
             .get(key.as_ref())
-            .map(|v| <V as ValueEnDe>::decode(&v).unwrap())
+            .map(|v| <V as ValueEnDe>::decode_value(&v).unwrap())
     }
 
     /// Retrieves a mutable reference to a value in the map.
     ///
-    /// Dropping the guard does not rewrite storage unless the value changed.
-    /// A `DerefMut` edit always persists. An interior edit (for example
-    /// through `RefCell`) persists when the stored encoding round-trips;
-    /// a non-mutating guard over a non-round-trip encoding such as `HashMap`
-    /// leaves the bytes unchanged and does not panic in read-only mode.
-    #[inline(always)]
+    /// A mutable dereference marks the value for write-back. A shared
+    /// dereference is read-only, including for interior-mutable values.
     pub fn get_mut(&mut self, key: impl AsRef<[u8]>) -> Option<ValueMut<'_, V>> {
-        self.inner.get_mut(key.as_ref()).map(|inner| {
-            let value = <V as ValueEnDe>::decode(&inner).unwrap();
-            // Snapshot this instance's encoding. A later encode of the same
-            // instance matches unless the value changed; comparing against
-            // the stored bytes does not, because decode builds a new
-            // `HashMap` with a different iteration order.
-            let snapshot = value.encode();
-            let original = Some(inner.as_slice().to_vec());
-            ValueMut {
-                value,
-                inner,
-                original,
-                snapshot,
-                dirty: false,
-                unwind: UnwindMark::new(),
-            }
-        })
+        self.inner.get_mut(key).map(ValueMut::occupied)
     }
 
-    /// Mocks a mutable value for a given key.
-    #[inline(always)]
-    pub(crate) fn mock_value_mut(&mut self, key: RawKey, value: V) -> ValueMut<'_, V> {
-        let v = value.encode();
-        ValueMut {
-            value,
-            inner: self.inner.mock_value_mut(key, v),
-            original: None,
-            snapshot: Vec::new(),
-            dirty: true,
-            unwind: UnwindMark::new(),
-        }
+    pub fn update<R>(
+        &mut self,
+        key: impl AsRef<[u8]>,
+        f: impl FnOnce(&mut V) -> R,
+    ) -> Result<Option<R>> {
+        let Some(mut guard) = self.get_mut(key) else {
+            return Ok(None);
+        };
+        let result = f(&mut guard);
+        guard.commit()?;
+        Ok(Some(result))
     }
 
     /// Checks if the map contains a value for the specified key.
@@ -134,7 +106,7 @@ where
     pub fn get_le(&self, key: impl AsRef<[u8]>) -> Option<(RawKey, V)> {
         self.inner
             .get_le(key.as_ref())
-            .map(|(k, v)| (k, <V as ValueEnDe>::decode(&v).unwrap()))
+            .map(|(k, v)| (k, <V as ValueEnDe>::decode_value(&v).unwrap()))
     }
 
     /// Retrieves the first entry with a key greater than or equal to the given key.
@@ -142,7 +114,7 @@ where
     pub fn get_ge(&self, key: impl AsRef<[u8]>) -> Option<(RawKey, V)> {
         self.inner
             .get_ge(key.as_ref())
-            .map(|(k, v)| (k, <V as ValueEnDe>::decode(&v).unwrap()))
+            .map(|(k, v)| (k, <V as ValueEnDe>::decode_value(&v).unwrap()))
     }
 
     /// Inserts a key-value pair into the map.
@@ -150,32 +122,18 @@ where
     /// Does not return the old value for performance reasons.
     #[inline(always)]
     pub fn insert(&mut self, key: impl AsRef<[u8]>, value: &V) {
-        self.inner.insert(key.as_ref(), value.encode())
-    }
-
-    /// Inserts a key with an already encoded value.
-    ///
-    /// # Safety
-    ///
-    /// `value` must be the bytes produced by `<V as ValueEnDe>::encode(v)`
-    /// for a valid `v` of the same type and code version.  Any other byte
-    /// content will cause `decode()` to panic or silently return garbage
-    /// on the next read of this key.  Intended only for the versioned
-    /// layer that stores pre-encoded values to avoid a redundant
-    /// encode-decode round trip.
-    #[inline(always)]
-    pub unsafe fn insert_encoded_value(
-        &mut self,
-        key: impl AsRef<[u8]>,
-        value: impl AsRef<[u8]>,
-    ) {
-        self.inner.insert(key.as_ref(), value.as_ref())
+        self.inner.insert(key.as_ref(), value.encode_value())
     }
 
     /// Gets an entry for a given key, allowing for in-place modification.
     #[inline(always)]
-    pub fn entry<'a>(&'a mut self, key: &'a [u8]) -> Entry<'a, V> {
-        Entry { key, hdr: self }
+    pub fn entry(&mut self, key: &[u8]) -> Entry<'_, V> {
+        match self.inner.entry(key) {
+            mapx_raw::Entry::Occupied(e) => {
+                Entry::Occupied(OccupiedEntry(ValueMut::occupied(e.into_mut())))
+            }
+            mapx_raw::Entry::Vacant(e) => Entry::Vacant(VacantEntry(e, PhantomData)),
+        }
     }
 
     /// Returns an iterator over the map's entries.
@@ -210,7 +168,7 @@ where
 
     /// Returns an iterator over a range of entries in the map.
     #[inline(always)]
-    pub fn range<'a, R: RangeBounds<Cow<'a, [u8]>>>(
+    pub fn range<'a, R: RawRangeBounds>(
         &'a self,
         bounds: R,
     ) -> MapxOrdRawKeyIter<'a, V> {
@@ -222,7 +180,7 @@ where
 
     /// Returns a mutable iterator over a range of entries in the map.
     #[inline(always)]
-    pub fn range_mut<'a, R: RangeBounds<Cow<'a, [u8]>>>(
+    pub fn range_mut<'a, R: RawRangeBounds>(
         &'a mut self,
         bounds: R,
     ) -> MapxOrdRawKeyIterMut<'a, V> {
@@ -331,7 +289,7 @@ where
 {
     /// Insert a key-value pair into the batch.
     pub fn insert(&mut self, key: impl AsRef<[u8]>, value: &V) {
-        self.inner.insert(key.as_ref(), value.encode());
+        self.inner.insert(key.as_ref(), value.encode_value());
     }
 
     /// Remove a key in the batch.
@@ -355,123 +313,62 @@ where
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
-/// A mutable reference to a value in a `MapxOrdRawKey`.
-///
-/// Edits are written back when the guard drops. A panic that starts while
-/// the guard is alive discards the edit instead of persisting a half-done
-/// value.
-#[derive(Debug)]
-pub struct ValueMut<'a, V>
-where
-    V: ValueEnDe,
-{
-    value: V,
-    inner: mapx_raw::ValueMut<'a>,
-    /// Stored bytes. `None` is a mocked insert and must be written.
-    original: Option<Vec<u8>>,
-    /// `encode()` of `value` at guard creation. Same-instance encodes match
-    /// unless the value changed, even when they differ from `original`.
-    snapshot: Vec<u8>,
-    dirty: bool,
-    unwind: UnwindMark,
-}
+/// Typed point and iterator edits share the same write-back semantics.
+pub type ValueMut<'a, V> = crate::common::guard::ValueGuard<V, mapx_raw::ValueMut<'a>>;
 
-impl<V> ValueMut<'_, V>
-where
-    V: ValueEnDe,
-{
-    /// Bytes to write, or `None` when the guard must not touch storage.
-    fn replacement(&mut self) -> Option<Vec<u8>> {
-        let now = self.value.encode();
-        let Some(original) = self.original.as_deref() else {
-            return Some(now);
-        };
-        if now.as_slice() == self.snapshot.as_slice() {
-            // This instance still encodes as it did at creation. Do not
-            // replace stored bytes that were produced by a different
-            // instance (unstable `HashMap` order).
-            return None;
-        }
-        if self.dirty {
-            return (now.as_slice() != original).then_some(now);
-        }
-        // Not a `DerefMut` edit. A second encode that matches `now` means
-        // the value changed and the encoder is idempotent (interior
-        // mutation). A second encode that differs is a non-idempotent
-        // encoder, not a value change.
-        let again = self.value.encode();
-        if again.as_slice() == now.as_slice() && now.as_slice() != original {
-            Some(now)
-        } else {
-            None
-        }
+pub enum Entry<'a, V: ValueEnDe> {
+    Occupied(OccupiedEntry<'a, V>),
+    Vacant(VacantEntry<'a, V>),
+}
+pub struct OccupiedEntry<'a, V: ValueEnDe>(ValueMut<'a, V>);
+pub struct VacantEntry<'a, V: ValueEnDe>(mapx_raw::VacantEntry<'a>, PhantomData<V>);
+impl<'a, V: ValueEnDe> OccupiedEntry<'a, V> {
+    pub fn get(&self) -> &V {
+        &self.0
+    }
+    pub fn get_mut(&mut self) -> &mut V {
+        &mut self.0
+    }
+    pub fn insert(&mut self, value: V) -> V {
+        std::mem::replace(&mut *self.0, value)
+    }
+    pub fn into_mut(self) -> ValueMut<'a, V> {
+        self.0
+    }
+    pub fn remove(self) -> V {
+        let (slot, value) = self.0.into_parts();
+        slot.remove();
+        value
     }
 }
-
-impl<V> Drop for ValueMut<'_, V>
-where
-    V: ValueEnDe,
-{
-    fn drop(&mut self) {
-        if self.unwind.interrupted() {
-            return;
+impl<'a, V: ValueEnDe> VacantEntry<'a, V> {
+    pub fn insert(self, value: V) -> ValueMut<'a, V> {
+        ValueMut::new(self.0.into_slot(), value, true)
+    }
+}
+impl<'a, V: ValueEnDe> Entry<'a, V> {
+    pub fn or_insert(self, value: V) -> ValueMut<'a, V> {
+        self.or_insert_with(|| value)
+    }
+    pub fn or_insert_with(self, f: impl FnOnce() -> V) -> ValueMut<'a, V> {
+        match self {
+            Self::Occupied(e) => e.into_mut(),
+            Self::Vacant(e) => e.insert(f()),
         }
-        if let Some(encoded) = self.replacement() {
-            *self.inner = encoded;
+    }
+    pub fn or_default(self) -> ValueMut<'a, V>
+    where
+        V: Default,
+    {
+        self.or_insert_with(V::default)
+    }
+    pub fn and_modify(mut self, f: impl FnOnce(&mut V)) -> Self {
+        if let Self::Occupied(e) = &mut self {
+            f(e.get_mut());
         }
+        self
     }
 }
-
-impl<V> Deref for ValueMut<'_, V>
-where
-    V: ValueEnDe,
-{
-    type Target = V;
-    fn deref(&self) -> &Self::Target {
-        &self.value
-    }
-}
-
-impl<V> DerefMut for ValueMut<'_, V>
-where
-    V: ValueEnDe,
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.dirty = true;
-        &mut self.value
-    }
-}
-
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////
-
-/// A view into a single entry in a map, which may either be vacant or occupied.
-pub struct Entry<'a, V>
-where
-    V: ValueEnDe,
-{
-    key: &'a [u8],
-    hdr: &'a mut MapxOrdRawKey<V>,
-}
-
-impl<'a, V> Entry<'a, V>
-where
-    V: ValueEnDe,
-{
-    /// Ensures a value is in the entry by inserting the default if empty,
-    /// and returns a mutable reference to the value.
-    pub fn or_insert(self, default: V) -> ValueMut<'a, V> {
-        entry_or_insert_via_mock!(
-            self,
-            MapxOrdRawKey<V>,
-            get_mut(self.key),
-            mock_value_mut(self.key.to_vec(), default)
-        )
-    }
-}
-
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////
 
 /// An iterator over the entries of a `MapxOrdRawKey`.
 pub struct MapxOrdRawKeyIter<'a, V> {
@@ -487,7 +384,7 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         self.inner
             .next()
-            .map(|(k, v)| (k, <V as ValueEnDe>::decode(&v).unwrap()))
+            .map(|(k, v)| (k, <V as ValueEnDe>::decode_value(&v).unwrap()))
     }
 }
 
@@ -498,7 +395,7 @@ where
     fn next_back(&mut self) -> Option<Self::Item> {
         self.inner
             .next_back()
-            .map(|(k, v)| (k, <V as ValueEnDe>::decode(&v).unwrap()))
+            .map(|(k, v)| (k, <V as ValueEnDe>::decode_value(&v).unwrap()))
     }
 }
 
@@ -517,22 +414,7 @@ where
 {
     type Item = (RawKey, ValueIterMut<'a, V>);
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|(k, v)| {
-            let value = <V as ValueEnDe>::decode(&v).unwrap();
-            let original = v.as_slice().to_vec();
-            let snapshot = value.encode();
-            (
-                k,
-                ValueIterMut {
-                    value,
-                    inner: v,
-                    original,
-                    snapshot,
-                    dirty: false,
-                    unwind: UnwindMark::new(),
-                },
-            )
-        })
+        self.inner.next().map(|(k, v)| (k, ValueMut::occupied(v)))
     }
 }
 
@@ -541,89 +423,10 @@ where
     V: ValueEnDe,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.inner.next_back().map(|(k, v)| {
-            let value = <V as ValueEnDe>::decode(&v).unwrap();
-            let original = v.as_slice().to_vec();
-            let snapshot = value.encode();
-            (
-                k,
-                ValueIterMut {
-                    value,
-                    inner: v,
-                    original,
-                    snapshot,
-                    dirty: false,
-                    unwind: UnwindMark::new(),
-                },
-            )
-        })
+        self.inner
+            .next_back()
+            .map(|(k, v)| (k, ValueMut::occupied(v)))
     }
 }
 
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////
-
-/// A mutable reference to a value in a `MapxOrdRawKey` iterator.
-///
-/// Same write-back rule as [`ValueMut`]: a panic during the edit discards it.
-#[derive(Debug)]
-pub struct ValueIterMut<'a, V>
-where
-    V: ValueEnDe,
-{
-    /// The decoded value.
-    pub(crate) value: V,
-    /// The inner mutable reference to the raw value.
-    pub(crate) inner: mapx_raw::ValueIterMut<'a>,
-    original: Vec<u8>,
-    snapshot: Vec<u8>,
-    dirty: bool,
-    unwind: UnwindMark,
-}
-
-impl<V> Drop for ValueIterMut<'_, V>
-where
-    V: ValueEnDe,
-{
-    fn drop(&mut self) {
-        if self.unwind.interrupted() {
-            return;
-        }
-        let now = self.value.encode();
-        if now.as_slice() == self.snapshot.as_slice() {
-            return;
-        }
-        if self.dirty {
-            if now.as_slice() != self.original.as_slice() {
-                *self.inner = now;
-            }
-            return;
-        }
-        let again = self.value.encode();
-        if again.as_slice() == now.as_slice()
-            && now.as_slice() != self.original.as_slice()
-        {
-            *self.inner = now;
-        }
-    }
-}
-
-impl<V> Deref for ValueIterMut<'_, V>
-where
-    V: ValueEnDe,
-{
-    type Target = V;
-    fn deref(&self) -> &Self::Target {
-        &self.value
-    }
-}
-
-impl<V> DerefMut for ValueIterMut<'_, V>
-where
-    V: ValueEnDe,
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.dirty = true;
-        &mut self.value
-    }
-}
+pub type ValueIterMut<'a, V> = ValueMut<'a, V>;

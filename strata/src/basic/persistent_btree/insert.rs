@@ -33,6 +33,7 @@ impl PersistentBTree {
             })
         } else {
             match self.insert_rec(root, key, value) {
+                InsertResult::Unchanged => root,
                 InsertResult::Updated(r) => r,
                 InsertResult::Split { left, sep, right } => {
                     self.alloc(&Node::Internal {
@@ -61,6 +62,7 @@ impl PersistentBTree {
         value: &[u8],
     ) -> InsertResult {
         match keys.binary_search_by(|k| k.as_slice().cmp(key)) {
+            Ok(i) if values[i] == value => InsertResult::Unchanged,
             Ok(i) => {
                 values[i] = value.to_vec();
                 InsertResult::Updated(self.alloc(&Node::Leaf { keys, values }))
@@ -77,7 +79,7 @@ impl PersistentBTree {
         }
     }
 
-    fn split_leaf(
+    pub(super) fn split_leaf(
         &mut self,
         mut keys: Vec<Vec<u8>>,
         mut values: Vec<Vec<u8>>,
@@ -105,6 +107,7 @@ impl PersistentBTree {
     ) -> InsertResult {
         let ci = Self::child_index(&keys, key);
         match self.insert_rec(children[ci], key, value) {
+            InsertResult::Unchanged => InsertResult::Unchanged,
             InsertResult::Updated(nc) => {
                 children[ci] = nc;
                 InsertResult::Updated(self.alloc(&Node::Internal { keys, children }))
@@ -122,7 +125,7 @@ impl PersistentBTree {
         }
     }
 
-    fn split_internal(
+    pub(super) fn split_internal(
         &mut self,
         mut keys: Vec<Vec<u8>>,
         mut children: Vec<NodeId>,

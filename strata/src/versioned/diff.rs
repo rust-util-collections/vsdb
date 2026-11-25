@@ -29,7 +29,7 @@ impl<K: KeyEnDeOrdered, V: ValueEnDe> DiffEntry<K, V> {
     /// typed read (see the [encode/decode trust model](crate::common::ende)).
     pub(crate) fn decode(raw: TreeDiff) -> Self {
         let k = |b: Vec<u8>| K::from_bytes(b).unwrap();
-        let v = |b: Vec<u8>| V::decode(&b).unwrap();
+        let v = |b: Vec<u8>| V::decode_value(&b).unwrap();
         match raw {
             TreeDiff::Added { key, value } => Self::Added {
                 key: k(key),

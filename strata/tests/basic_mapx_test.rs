@@ -1,4 +1,3 @@
-use ruc::*;
 use serde::{Deserialize, Serialize};
 use vsdb::{Mapx, ValueEnDe, VsdbOptions, vsdb_configure};
 
@@ -18,10 +17,11 @@ fn gen_sample(idx: usize) -> SampleBlock {
 #[test]
 fn basic_cases() {
     let cnt = 200;
-    info_omit!(vsdb_configure(VsdbOptions::new(format!(
+    vsdb_configure(VsdbOptions::new(format!(
         "/tmp/vsdb_testing/{}",
         rand::random::<u64>()
-    ))));
+    )))
+    .unwrap();
 
     let hdr = {
         let mut hdr_i = Mapx::new();
@@ -32,25 +32,26 @@ fn basic_cases() {
 
         (0..cnt).map(|i| (i, gen_sample(i))).for_each(|(i, b)| {
             hdr_i.entry(&i).or_insert(b.clone());
-            assert_eq!(pnk!(hdr_i.get(&i)).idx, i);
+            assert_eq!(hdr_i.get(&i).unwrap().idx, i);
             hdr_i.remove(&i);
             assert!(hdr_i.get(&i).is_none());
             hdr_i.insert(&i, &b);
             hdr_i.insert(&i, &b);
         });
 
-        <Mapx<usize, SampleBlock> as ValueEnDe>::encode(&hdr_i)
+        <Mapx<usize, SampleBlock> as ValueEnDe>::encode_value(&hdr_i)
     };
 
-    let mut reloaded = pnk!(<Mapx<usize, SampleBlock> as ValueEnDe>::decode(&hdr));
+    let mut reloaded =
+        <Mapx<usize, SampleBlock> as ValueEnDe>::decode_value(&hdr).unwrap();
 
     (0..cnt).for_each(|i| {
         assert_eq!(i, reloaded.get(&i).unwrap().idx);
     });
 
     (1..cnt).for_each(|i| {
-        pnk!(reloaded.get_mut(&i)).idx = 1 + i;
-        assert_eq!(pnk!(reloaded.get(&i)).idx, 1 + i);
+        reloaded.get_mut(&i).unwrap().idx = 1 + i;
+        assert_eq!(reloaded.get(&i).unwrap().idx, 1 + i);
         assert!(reloaded.contains_key(&i));
         reloaded.remove(&i);
         assert!(!reloaded.contains_key(&i));

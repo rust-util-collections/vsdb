@@ -42,89 +42,50 @@
 //! module for details.
 //!
 
+#![forbid(unsafe_code)]
+
 pub(crate) mod diff;
 pub mod map;
 
 mod read;
 mod repair;
+pub(crate) mod store;
+pub use repair::GcStats;
 
 pub use diff::DiffEntry;
-pub use read::Snapshot;
+pub use read::{Snapshot, VerMapReader};
 
 #[cfg(test)]
-mod test;
+pub(crate) mod test;
 
 use crate::{
     basic::persistent_btree::NodeId,
-    common::{RawBytes, ende::KeyEnDeOrdered, error::Result},
+    common::{ende::KeyEnDeOrdered, error::Result},
 };
 use serde::{Deserialize, Serialize};
-use std::fmt;
 
 // =========================================================================
 // ID types
 // =========================================================================
 
-macro_rules! define_id {
-    ($(#[$doc:meta])* $name:ident) => {
-        $(#[$doc])*
-        #[derive(
-            Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-        )]
-        #[serde(transparent)]
-        pub struct $name(u64);
+pub use vsdb_core::common::{BranchId, CommitId};
 
-        impl $name {
-            /// Rebuilds an id from [`raw`](Self::raw) (e.g. one persisted
-            /// by the application). Lookups reject ids that do not exist.
-            pub const fn from_raw(raw: u64) -> Self {
-                Self(raw)
+macro_rules! ordered_id {
+    ($id:ty) => {
+        impl KeyEnDeOrdered for $id {
+            fn with_ordered_bytes<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
+                self.raw().with_ordered_bytes(f)
             }
-
-            /// The numeric value, stable across restarts.
-            pub const fn raw(self) -> u64 {
-                self.0
-            }
-        }
-
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                fmt::Display::fmt(&self.0, f)
-            }
-        }
-
-        impl KeyEnDeOrdered for $name {
-            fn to_bytes(&self) -> RawBytes {
-                self.0.to_bytes()
-            }
-
             fn from_slice(bytes: &[u8]) -> Result<Self> {
-                u64::from_slice(bytes).map(Self)
+                u64::from_slice(bytes).map(Self::from_raw)
             }
         }
     };
 }
-
-define_id! {
-    /// Identifies a commit in the history DAG.
-    ///
-    /// A distinct type from [`BranchId`], so the two cannot be swapped;
-    /// persisted exactly like the `u64` it wraps. As an ordered collection
-    /// key, it uses the same big-endian encoding as `u64`.
-    CommitId
-}
-
-define_id! {
-    /// Identifies a branch.
-    ///
-    /// A distinct type from [`CommitId`], so the two cannot be swapped;
-    /// persisted exactly like the `u64` it wraps. As an ordered collection
-    /// key, it uses the same big-endian encoding as `u64`.
-    BranchId
-}
-
+ordered_id!(BranchId);
+ordered_id!(CommitId);
 /// Sentinel: no commit yet.
-pub(crate) const NO_COMMIT: CommitId = CommitId(0);
+pub(crate) const NO_COMMIT: CommitId = CommitId::from_raw(0);
 
 // =========================================================================
 // Commit

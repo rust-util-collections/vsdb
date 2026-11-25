@@ -77,14 +77,11 @@ impl StagedRows {
         let lo = prefix.to_vec();
         let hi = prefix_successor(prefix);
         let disk_hi = match &hi {
-            Some(h) => Bound::Excluded(std::borrow::Cow::Owned(h.clone())),
+            Some(h) => Bound::Excluded(h.clone()),
             None => Bound::Unbounded,
         };
         let disk = store
-            .range((
-                Bound::Included(std::borrow::Cow::Owned(lo.clone())),
-                disk_hi,
-            ))
+            .range((Bound::Included(lo.clone()), disk_hi))
             // A wiped overlay sees the committed store as empty; take(0)
             // never polls (and thus never decodes) the disk stream.
             .take(if self.wiped { 0 } else { usize::MAX });
@@ -92,10 +89,7 @@ impl StagedRows {
             Some(h) => Bound::Excluded(h.clone()),
             None => Bound::Unbounded,
         };
-        let over = self
-            .rows
-            .range((Bound::Included(lo), over_hi))
-            .map(|(k, v)| (k.clone(), v.clone()));
+        let over = self.rows.range((Bound::Included(lo), over_hi));
         MergeScan {
             disk: disk.peekable(),
             over: over.peekable(),
@@ -143,19 +137,19 @@ pub(crate) fn prefix_successor(prefix: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// Ordered merge of the committed stream with the overlay stream.
-struct MergeScan<D, O>
+struct MergeScan<'a, D>
 where
     D: Iterator<Item = (Vec<u8>, Vec<u8>)>,
-    O: Iterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
 {
     disk: std::iter::Peekable<D>,
-    over: std::iter::Peekable<O>,
+    over: std::iter::Peekable<
+        std::collections::btree_map::Range<'a, Vec<u8>, Option<Vec<u8>>>,
+    >,
 }
 
-impl<D, O> Iterator for MergeScan<D, O>
+impl<D> Iterator for MergeScan<'_, D>
 where
     D: Iterator<Item = (Vec<u8>, Vec<u8>)>,
-    O: Iterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
 {
     type Item = (Vec<u8>, Vec<u8>);
 
@@ -165,16 +159,16 @@ where
                 (None, None) => return None,
                 (Some(_), None) => false,
                 (None, Some(_)) => true,
-                (Some((dk, _)), Some((ok, _))) => ok <= dk,
+                (Some((dk, _)), Some((ok, _))) => *ok <= dk,
             };
             if take_over {
                 let (ok, ov) = self.over.next().expect("peeked");
                 // The overlay shadows the committed row with the same key.
-                if self.disk.peek().is_some_and(|(dk, _)| *dk == ok) {
+                if self.disk.peek().is_some_and(|(dk, _)| dk == ok) {
                     self.disk.next();
                 }
                 match ov {
-                    Some(v) => return Some((ok, v)),
+                    Some(v) => return Some((ok.clone(), v.clone())),
                     None => continue, // staged delete
                 }
             } else {

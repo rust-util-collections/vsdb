@@ -3,7 +3,6 @@ use crate::{
     DEFAULT_NS_ID, InstanceId,
     basic::{mapx_ord::MapxOrd, orphan::Orphan},
 };
-use ruc::*;
 use std::{cell::RefCell, fs};
 
 #[test]
@@ -16,7 +15,7 @@ fn test_insert() {
             assert!(hdr.get(&key).is_none());
             hdr.insert(&key, &value);
             assert!(hdr.contains_key(&key));
-            assert_eq!(pnk!(hdr.get(&key)), value);
+            assert_eq!(hdr.get(&key).unwrap(), value);
             hdr.remove(&key);
             assert!(hdr.get(&key).is_none());
         });
@@ -34,9 +33,9 @@ fn xx_test_valueende() {
         (0..cnt).map(|i: usize| (i, i)).for_each(|(key, value)| {
             hdr.insert(&key, &value);
         });
-        hdr.encode()
+        hdr.encode_value()
     };
-    let reloaded = pnk!(<Mapx<usize, usize> as ValueEnDe>::decode(&dehdr));
+    let reloaded = <Mapx<usize, usize> as ValueEnDe>::decode_value(&dehdr).unwrap();
     (0..cnt).map(|i: usize| i).for_each(|i| {
         assert_eq!(i, reloaded.get(&i).unwrap());
     });
@@ -62,12 +61,12 @@ fn test_first_last() {
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
         hdr.insert(&key, &value);
     });
-    let (key, value) = pnk!(hdr.iter().next());
+    let (key, value) = hdr.iter().next().unwrap();
     assert_eq!(key, value);
     // order is not guaranteed in Mapx
     // assert_eq!(0, key);
 
-    let (key, value) = pnk!(hdr.iter().next_back());
+    let (key, value) = hdr.iter().next_back().unwrap();
     assert_eq!(key, value);
     // assert_eq!(max - 1, key);
 }
@@ -91,10 +90,10 @@ fn test_values_first_last() {
     (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
         hdr.insert(&key, &value);
     });
-    let _value = pnk!(hdr.values().next());
+    let _value = hdr.values().next().unwrap();
     // assert_eq!(0, value);
 
-    let _value = pnk!(hdr.values().next_back());
+    let _value = hdr.values().next_back().unwrap();
     // assert_eq!(max - 1, value);
 }
 
@@ -104,10 +103,10 @@ fn test_save_and_from_meta() {
     hdr.insert(&1, &"hello".to_string());
     hdr.insert(&2, &"world".to_string());
 
-    let id = pnk!(hdr.save_meta());
+    let id = hdr.save_meta().unwrap();
     assert_eq!(id, hdr.instance_id());
 
-    let restored: Mapx<usize, String> = pnk!(Mapx::from_meta(id));
+    let restored: Mapx<usize, String> = Mapx::from_meta(id).unwrap();
     assert_eq!(restored.get(&1), Some("hello".to_string()));
     assert_eq!(restored.get(&2), Some("world".to_string()));
     assert!(restored.is_the_same_instance(&hdr));
@@ -148,7 +147,9 @@ fn test_from_meta_rejects_legacy_prefix_payload() {
     hdr.insert(&1, &"legacy".to_string());
 
     let id = hdr.instance_id();
-    let legacy_payload = postcard::to_allocvec(&hdr.as_bytes()).unwrap();
+    let legacy_payload =
+        postcard::to_allocvec(hdr.instance_id().map_id.to_le_bytes().as_slice())
+            .unwrap();
     let path = crate::common::Namespace::default_ns().meta_path(id.map_id);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, legacy_payload).unwrap();
@@ -193,10 +194,10 @@ fn test_nested_mapx_of_mapxord() {
     outer.insert(&"second".to_string(), &inner2);
 
     // Save only the outermost instance
-    let id = pnk!(outer.save_meta());
+    let id = outer.save_meta().unwrap();
 
     // Restore and verify the full nested structure
-    let restored: Mapx<String, MapxOrd<u32, String>> = pnk!(Mapx::from_meta(id));
+    let restored: Mapx<String, MapxOrd<u32, String>> = Mapx::from_meta(id).unwrap();
 
     let r1 = restored.get(&"first".to_string()).unwrap();
     assert_eq!(r1.get(&1), Some("a".to_string()));
@@ -221,10 +222,10 @@ fn test_nested_orphan_of_mapx_of_mapxord() {
 
     let outer: Orphan<Mapx<String, MapxOrd<u32, String>>> = Orphan::new(mid);
 
-    let id = pnk!(outer.save_meta());
+    let id = outer.save_meta().unwrap();
 
     let restored: Orphan<Mapx<String, MapxOrd<u32, String>>> =
-        pnk!(Orphan::from_meta(id));
+        Orphan::from_meta(id).unwrap();
     let restored_mid = restored.get_value();
     let restored_inner = restored_mid.get(&"data".to_string()).unwrap();
     assert_eq!(restored_inner.get(&1), Some("hello".to_string()));
@@ -270,8 +271,8 @@ fn test_meta_restore_then_mutate() {
     hdr.insert(&1, &100);
     hdr.insert(&2, &200);
 
-    let id = pnk!(hdr.save_meta());
-    let mut restored: Mapx<u32, u32> = pnk!(Mapx::from_meta(id));
+    let id = hdr.save_meta().unwrap();
+    let mut restored: Mapx<u32, u32> = Mapx::from_meta(id).unwrap();
 
     restored.insert(&3, &300);
     restored.remove(&1);
@@ -289,8 +290,8 @@ fn test_valueende_roundtrip() {
     inner.insert(&10, &"ten".into());
     inner.insert(&20, &"twenty".into());
 
-    let encoded = inner.encode();
-    let decoded: Mapx<u32, String> = Mapx::decode(&encoded).unwrap();
+    let encoded = inner.encode_value();
+    let decoded: Mapx<u32, String> = Mapx::decode_value(&encoded).unwrap();
 
     assert!(decoded.is_the_same_instance(&inner));
     assert_eq!(decoded.get(&10), Some("ten".into()));
@@ -330,15 +331,15 @@ fn test_into_iter_mut() {
 }
 
 #[test]
-fn test_get_mut_persists_interior_mutability_change() {
+fn shared_guard_edits_require_a_mutable_dereference() {
     let mut hdr: Mapx<u32, RefCell<u32>> = Mapx::new();
     hdr.insert(&1, &RefCell::new(10));
-
-    {
-        let value = hdr.get_mut(&1).unwrap();
-        *value.borrow_mut() = 20;
-    }
-
+    let edit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        *hdr.get_mut(&1).unwrap().borrow_mut() = 20;
+    }));
+    assert_eq!(edit.is_err(), cfg!(debug_assertions));
+    assert_eq!(*hdr.get(&1).unwrap().borrow(), 10);
+    hdr.update(&1, |cell| *cell.get_mut() = 20).unwrap();
     assert_eq!(*hdr.get(&1).unwrap().borrow(), 20);
 }
 
@@ -377,8 +378,9 @@ fn test_deep_triple_nesting() {
     let mut outer: Mapx<String, Mapx<String, Mapx<u32, u64>>> = Mapx::new();
     outer.insert(&"top".into(), &mid);
 
-    let id = pnk!(outer.save_meta());
-    let restored: Mapx<String, Mapx<String, Mapx<u32, u64>>> = pnk!(Mapx::from_meta(id));
+    let id = outer.save_meta().unwrap();
+    let restored: Mapx<String, Mapx<String, Mapx<u32, u64>>> =
+        Mapx::from_meta(id).unwrap();
 
     let r_mid = restored.get("top").unwrap();
     let r_inner = r_mid.get("a").unwrap();

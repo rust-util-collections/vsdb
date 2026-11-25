@@ -30,7 +30,7 @@ impl PersistentBTree {
         }
     }
 
-    fn shrink_root(&mut self, root: NodeId) -> NodeId {
+    pub(super) fn shrink_root(&mut self, root: NodeId) -> NodeId {
         match self.node(root) {
             Node::Leaf { ref keys, .. } if keys.is_empty() => {
                 self.discard_node(root);
@@ -62,25 +62,41 @@ impl PersistentBTree {
             // Even without a reconstructed on-disk ownership map, a
             // pending entry is known to have been allocated by this
             // operation and can be dropped safely before it is flushed.
-            self.pending.remove(&nid);
+            if let Some(raw) = self.pending.remove(&nid) {
+                self.pending_bytes -= 9 + raw.len();
+            }
             return;
         }
         // Guard: only discard truly unreferenced nodes.  In merge
         // paths the discarded NodeId may be a shared sibling from a
         // prior version (ref_count > 0) — leave those alone.
         match refs.counts.get(&nid) {
-            Some(nr) if nr.ref_count > 0 => return,
+            Some(nr) if *nr > 0 => return,
             None => return,
             _ => {}
         }
-        let nr = refs.counts.remove(&nid).unwrap();
-        for &child in &nr.children {
+        refs.counts.remove(&nid).unwrap();
+        let edges = refs.edges.remove(&nid).unwrap_or_default();
+        let mut blobs = Vec::new();
+        for &child in &edges {
+            if child & super::CLASS_MASK == super::BLOB {
+                blobs.extend(refs.release(child));
+                continue;
+            }
             if let Some(cr) = refs.counts.get_mut(&child) {
                 debug_assert!(
-                    cr.ref_count > 0,
+                    *cr > 0,
                     "discard_node: child {child} already at ref_count=0"
                 );
-                cr.ref_count = cr.ref_count.saturating_sub(1);
+                *cr = cr.saturating_sub(1);
+            }
+        }
+        drop(refs);
+        for blob in blobs {
+            if let Some(raw) = self.pending.remove(&blob) {
+                self.pending_bytes -= 9 + raw.len();
+            } else {
+                self.nodes.lazy_delete(super::object_key(blob));
             }
         }
         // Intra-operation churn (split/borrow/merge intermediates) is
@@ -89,9 +105,11 @@ impl PersistentBTree {
         // in bulk_load) are on disk and go through the usual deferred
         // deletion.  NodeIds are never reused, so a lazy-delete
         // registration can never shadow a future write of the same key.
-        if self.pending.remove(&nid).is_none() {
+        if let Some(raw) = self.pending.remove(&nid) {
+            self.pending_bytes -= 9 + raw.len();
+        } else {
             self.nodes
-                .lazy_delete_batch(vec![nid.to_le_bytes().to_vec()]);
+                .lazy_delete_batch(vec![super::object_key(nid).to_vec()]);
         }
     }
 
@@ -146,7 +164,7 @@ impl PersistentBTree {
         }
     }
 
-    fn fix_underflow(
+    pub(super) fn fix_underflow(
         &mut self,
         mut keys: Vec<Vec<u8>>,
         mut children: Vec<NodeId>,

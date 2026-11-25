@@ -121,15 +121,15 @@ A complete, marked dataset may retain a stale initialization sentinel; read-only
 open accepts that completed state and leaves the sentinel untouched. A namespace
 whose lifecycle record is still `Pending` is rejected even if files are present.
 
-On Unix, each MMDB shard takes a shared, non-blocking lock when its existing
-`LOCK` file is present. Multiple read-only processes can coexist, but a
-cooperating writable process holds the exclusive lock and makes read-only open
-fail. Stop the writer before opening the same live tree read-only.
+A process configured read-only takes a shared non-blocking lock on the existing
+`__SYSTEM__/LOCK` for its lifetime. Other read-only processes can coexist.
+A writer requires the exclusive universe lock, including for namespace
+destruction and relocation. Stop readers before opening that universe writable.
+On Unix, MMDB also takes a shared non-blocking lock on each existing shard
+`LOCK` file as it opens the shard.
 
-An immutable filesystem snapshot may omit `LOCK`; MMDB then opens it unlocked.
-Keep such a snapshot byte-stable for the lifetime of every reader. Platforms
-without Unix `flock` must also be treated as unlocked. Never point an unlocked
-reader at files that a writer can change concurrently.
+An immutable filesystem copy may omit lock files. Read-only mode leaves
+those files absent. Keep the copy byte-stable until all readers exit.
 
 Mounting the tree read-only or applying read-only permissions is supported and
 recommended when operationally convenient. The process still needs ordinary

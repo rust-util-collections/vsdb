@@ -18,6 +18,7 @@ pub const EMPTY_ROOT: NodeId = 0;
 // =========================================================================
 
 pub(crate) enum InsertResult {
+    Unchanged,
     Updated(NodeId),
     Split {
         left: NodeId,
@@ -43,10 +44,3 @@ pub(crate) struct NodeRef {
     /// Child NodeIds (empty for leaf nodes).
     pub(crate) children: Vec<NodeId>,
 }
-
-// =========================================================================
-// BTreeIter state types
-// =========================================================================
-
-/// Keys, values, and current index within a leaf node.
-pub(crate) type LeafState = (Vec<Vec<u8>>, Vec<Vec<u8>>, usize);

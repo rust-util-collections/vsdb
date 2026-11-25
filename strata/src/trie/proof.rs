@@ -2,8 +2,8 @@
 //! [`VerMapWithProof`] — a versioned KV map with Merkle root computation.
 //!
 //! Combines [`VerMap`] (versioning, branching, merging) with a
-//! [`TrieCalc`] back-end (e.g. [`MptCalc`]
-//! or [`SmtCalc`]) to provide cryptographic commitments
+//! [`TrieCalc`] back-end (e.g. [`super::MptCalc`]
+//! or [`super::SmtCalc`]) to provide cryptographic commitments
 //! over versioned state.
 //!
 //! The trie is treated as a disposable computation layer: it holds an
@@ -13,15 +13,15 @@
 use crate::{
     basic::persistent_btree::{RootLease, TreeDiff},
     common::{
-        InstanceId,
+        InstanceId, Namespace, PrefixFrame,
         ende::{KeyEnDeOrdered, ValueEnDe},
         ensure_writable,
-        error::{Result, VsdbError},
+        error::Result,
     },
     versioned::{BranchId, CommitId, map::VerMap},
 };
 
-use super::{MptCalc, MptProof, SmtCalc, SmtProof, TrieCalc};
+use super::{Checkpoint, TrieCalc};
 use serde::{Deserialize, Serialize};
 
 /// A root and proof computed together for one requested versioned state.
@@ -35,15 +35,6 @@ pub struct ProofWithRoot<P> {
     pub root_hash: [u8; 32],
     /// Membership or absence proof for the requested key.
     pub proof: P,
-}
-
-impl<P> ProofWithRoot<P> {
-    fn new(root_hash: Vec<u8>, proof: P) -> Result<Self> {
-        let root_hash = root_hash.try_into().map_err(|_| VsdbError::Trie {
-            detail: "proof root must contain exactly 32 bytes".into(),
-        })?;
-        Ok(Self { root_hash, proof })
-    }
 }
 
 /// A versioned key-value map with Merkle root hash computation.
@@ -76,20 +67,35 @@ impl<P> ProofWithRoot<P> {
 /// data remains in `VerMap` and does not depend on a successful cache save.
 pub struct VerMapWithProof<K, V, T: TrieCalc> {
     map: VerMap<K, V>,
-    trie: T,
-    /// Diff currently applied on top of the synced HEAD. Reversing it
-    /// restores the clean HEAD without cloning the whole trie.
-    applied_dirty: Option<Vec<TreeDiff>>,
-    /// The commit the trie is currently synced to.
+    committed_trie: T,
+    working_trie: T,
     sync_commit: Option<CommitId>,
-    /// The branch the trie is currently synced to.
-    sync_branch: Option<BranchId>,
-    /// Whether uncommitted (dirty) changes have been applied on top of HEAD.
-    dirty_applied: bool,
-    /// Map identity owning all trie and synchronization state. Commit and
-    /// branch IDs are only unique within this instance. Also supplies the
-    /// cache filename, provided the underlying map has not been replaced.
+    working_root: Option<u64>,
     cache_instance: InstanceId,
+}
+
+impl<K, V, T: TrieCalc> Serialize for VerMapWithProof<K, V, T> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        crate::common::serialize_prefix_handle::<Self, _>(
+            &self.map.tree.nodes,
+            &[],
+            serializer,
+        )
+    }
+}
+impl<'de, K: KeyEnDeOrdered, V: ValueEnDe, T: TrieCalc> Deserialize<'de>
+    for VerMapWithProof<K, V, T>
+{
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        crate::common::deserialize_prefix_handle(deserializer, |frame| {
+            Self::open_frame(frame, None)
+        })
+    }
 }
 
 impl<K, V, T> VerMapWithProof<K, V, T>
@@ -100,37 +106,72 @@ where
 {
     /// Creates a new `VerMapWithProof` with a fresh VerMap.
     pub fn new() -> Self {
-        let map = VerMap::new();
-        let cache_instance = map.instance_id();
-        Self {
-            map,
-            trie: T::default(),
-            applied_dirty: None,
-            sync_commit: None,
-            sync_branch: None,
-            dirty_applied: false,
-            cache_instance,
-        }
+        Self::from_map(VerMap::new())
     }
 
-    /// Wraps an existing `VerMap` and attempts to restore the trie cache.
-    ///
-    /// A `VerMap` handle is already recovered (restoring one repairs an
-    /// interrupted ref-count cascade and rebuilds node references), so
-    /// no extra sweep runs here.
+    pub fn new_in(ns: &Namespace) -> Self {
+        Self::from_map(VerMap::new_in(ns))
+    }
+    pub fn namespace(&self) -> Namespace {
+        self.map.namespace()
+    }
+    pub fn instance_id(&self) -> InstanceId {
+        self.map.instance_id()
+    }
+    pub fn clone_in(&self, ns: &Namespace) -> Result<Self> {
+        Ok(Self::from_map(self.map.clone_in(ns)?))
+    }
+    pub fn save_meta(&self) -> Result<InstanceId> {
+        let id = self.instance_id();
+        crate::common::save_instance_meta(id, self)?;
+        Ok(id)
+    }
+    pub fn from_meta(id: impl Into<InstanceId>) -> Result<Self> {
+        let id = id.into();
+        let id = InstanceId::new(id.map_id, id.ns.unwrap_or_default());
+        let frame: Vec<u8> = crate::common::load_instance_meta(id)?;
+        Self::open_frame(
+            crate::common::parse_prefix_handle::<Self>(&frame)?,
+            Some(id),
+        )
+    }
+
+    fn open_frame(frame: PrefixFrame<'_>, expected: Option<InstanceId>) -> Result<Self> {
+        let PrefixFrame(raw, extra) = frame;
+        if !extra.is_empty() || expected.is_some_and(|id| id != raw.instance_id()) {
+            return Err(crate::VsdbError::Decode {
+                detail: "invalid versioned proof handle".into(),
+            });
+        }
+        Ok(Self::from_map(VerMap::open(raw, false)?))
+    }
+
+    /// Restores a checkpoint when its universe, map, commit and tree root
+    /// match the supplied map. A disposable-cache miss leaves lazy rebuilding
+    /// to the next query.
     pub fn from_map(map: VerMap<K, V>) -> Self {
-        let cache_instance = map.instance_id();
-        let mut this = Self {
+        let id = map.instance_id();
+        let restored = T::load_checkpoint(&map.namespace().system_dir(), id.map_id)
+            .ok()
+            .and_then(|(trie, checkpoint)| {
+                let commit = CommitId::from_raw(checkpoint.commit);
+                (checkpoint.map == id
+                    && checkpoint.universe == map.namespace().universe_id()
+                    && map
+                        .get_commit(commit)
+                        .is_some_and(|c| c.root == checkpoint.tree_root))
+                .then_some((trie, commit))
+            });
+        let (committed_trie, sync_commit) =
+            restored.map(|(t, c)| (t, Some(c))).unwrap_or_default();
+        Self {
             map,
-            trie: T::default(),
-            applied_dirty: None,
-            sync_commit: None,
-            sync_branch: None,
-            dirty_applied: false,
-            cache_instance,
-        };
-        this.try_load_cache();
-        this
+            cache_instance: id,
+            working_trie: committed_trie.clone(),
+            committed_trie,
+            sync_commit,
+            working_root: None,
+        }
     }
 
     /// Returns a reference to the underlying VerMap.
@@ -156,178 +197,78 @@ where
     ///
     /// Includes uncommitted changes.  Performs an incremental diff
     /// update when possible, falling back to a full rebuild otherwise.
-    pub fn merkle_root(&mut self, branch: BranchId) -> Result<Vec<u8>> {
-        self.reset_if_map_replaced();
-        self.sync_to_branch(branch)?;
-        self.trie.root_hash()
-    }
-
-    /// Computes the Merkle root hash for a specific historical commit.
-    pub fn merkle_root_at_commit(&mut self, commit: CommitId) -> Result<Vec<u8>> {
-        self.sync_to_commit(commit)?;
-        self.trie.root_hash()
-    }
-
-    /// Saves the trie for `commit` as a disposable restart cache.
-    ///
-    /// Synchronizes to that historical commit first, so subsequent proof
-    /// calls describe `commit`, without any uncommitted overlay. Call
-    /// [`merkle_root`](Self::merkle_root) again to prove a branch's working
-    /// state. Saving costs O(total state); choose checkpoints according to
-    /// the acceptable restart/rebuild cost, rather than saving every block.
-    ///
-    /// Cache I/O errors are returned. Losing or skipping this cache never
-    /// loses map data. Returns [`VsdbError::ReadOnly`] in read-only mode and
-    /// [`VsdbError::CommitNotFound`] if the commit has been reclaimed.
-    pub fn save_cache(&mut self, commit: CommitId) -> Result<()> {
-        ensure_writable(&self.map.namespace(), "versioned trie cache save")?;
-        self.sync_to_commit(commit)?;
-        self.trie.save_cache(
-            &self.map.namespace().system_dir(),
-            self.cache_instance.map_id,
-            commit.raw(),
-        )
-    }
-
-    // =================================================================
-    // Internal sync logic
-    // =================================================================
-
-    /// Synchronizes the trie to the current state of `branch`
-    /// (including uncommitted changes).
-    fn sync_to_branch(&mut self, branch: BranchId) -> Result<()> {
+    pub fn merkle_root(&mut self, branch: BranchId) -> Result<[u8; 32]> {
+        self.reset_if_replaced();
         let roots = self.map.branch_roots(branch)?;
-        let diff = self.map.diff_roots(&roots.committed, &roots.working);
-        if self.sync_branch == Some(branch)
-            && self.sync_commit == roots.head
-            && self.applied_dirty.as_deref().unwrap_or_default() == diff
-        {
-            return Ok(());
-        }
-
-        // Reverse the previous dirty overlay to restore the clean HEAD.
-        if self.dirty_applied
-            && let Err(e) = self.reverse_dirty()
-        {
-            self.poison();
-            return Err(e);
-        }
-
-        // Sync to the branch's HEAD commit.
-        if let Some(hid) = roots.head {
-            if self.sync_commit != Some(hid) {
-                self.sync_to_root(hid, &roots.committed)?;
+        if self.working_root != Some(roots.working.root) {
+            if let Some(commit) = roots.head {
+                self.sync_committed(commit, &roots.committed)?;
+            } else {
+                self.committed_trie = T::default();
+                self.sync_commit = None;
             }
-        } else if self.sync_commit.is_some() {
-            // Branch has no commits yet but trie was synced elsewhere → reset.
-            self.trie = T::default();
-            self.applied_dirty = None;
+            let mut candidate = self.committed_trie.clone();
+            if roots.working.root != roots.committed.root {
+                Self::apply_diff(
+                    &mut candidate,
+                    &self.map.diff_roots(&roots.committed, &roots.working),
+                )?;
+            }
+            self.working_root = Some(roots.working.root);
+            self.working_trie = candidate;
+        }
+        Ok(self.working_trie.root_hash())
+    }
+    pub fn merkle_root_at_commit(&mut self, commit: CommitId) -> Result<[u8; 32]> {
+        self.reset_if_replaced();
+        let root = self.map.commit_root(commit)?;
+        self.sync_committed(commit, &root)?;
+        self.working_trie = self.committed_trie.clone();
+        self.working_root = Some(root.root);
+        Ok(self.working_trie.root_hash())
+    }
+    /// Writes a durable checkpoint of the named committed tree.
+    pub fn save_cache(&mut self, commit: CommitId) -> Result<()> {
+        ensure_writable(&self.namespace(), "versioned trie cache save")?;
+        self.reset_if_replaced();
+        let root = self.map.commit_root(commit)?;
+        self.sync_committed(commit, &root)?;
+        self.working_trie = self.committed_trie.clone();
+        self.working_root = Some(root.root);
+        let id = Checkpoint {
+            universe: self.namespace().universe_id(),
+            map: self.instance_id(),
+            commit: commit.raw(),
+            tree_root: root.root,
+        };
+        self.committed_trie
+            .save_checkpoint(&self.namespace().system_dir(), id)
+    }
+    fn reset_if_replaced(&mut self) {
+        let id = self.instance_id();
+        if id != self.cache_instance {
+            self.cache_instance = id;
+            self.working_root = None;
             self.sync_commit = None;
-        }
-
-        // Then, apply any uncommitted changes.
-        if !diff.is_empty() {
-            if let Err(e) = self.apply_diff(&diff) {
-                // `batch_update` is not atomic: the trie no longer
-                // matches HEAD. Poison the sync state so the next call
-                // performs a full rebuild instead of serving a partial
-                // dirty overlay.
-                self.poison();
-                return Err(e);
-            }
-            self.applied_dirty = Some(diff);
-            self.dirty_applied = true;
-        } else {
-            self.applied_dirty = None;
-            self.dirty_applied = false;
-        }
-
-        self.sync_branch = Some(branch);
-        Ok(())
-    }
-
-    /// Reverses the applied dirty diff, restoring the clean HEAD trie.
-    fn reverse_dirty(&mut self) -> Result<()> {
-        let diff = self.applied_dirty.take();
-        self.dirty_applied = false;
-        match diff {
-            Some(diff) => self.reverse_diff(&diff),
-            None => Ok(()),
+            self.working_trie = T::default();
+            self.committed_trie = T::default();
         }
     }
-
-    /// Applies the inverse of `diff` to the trie.
-    fn reverse_diff(&mut self, diff: &[TreeDiff]) -> Result<()> {
-        let ops: Vec<(&[u8], Option<&[u8]>)> = diff
-            .iter()
-            .map(|entry| match entry {
-                TreeDiff::Added { key, .. } => (key.as_slice(), None),
-                TreeDiff::Removed { key, value } => {
-                    (key.as_slice(), Some(value.as_slice()))
-                }
-                TreeDiff::Modified { key, old_value, .. } => {
-                    (key.as_slice(), Some(old_value.as_slice()))
-                }
-            })
-            .collect();
-        self.trie.batch_update(&ops)
-    }
-
-    /// Discards the in-memory trie and sync bookkeeping after a partial
-    /// apply. The next synchronization performs a full rebuild.
-    fn poison(&mut self) {
-        self.trie = T::default();
-        self.applied_dirty = None;
-        self.sync_commit = None;
-        self.sync_branch = None;
-        self.dirty_applied = false;
-    }
-
-    /// Synchronizes the trie to a specific commit.
-    fn sync_to_commit(&mut self, target: CommitId) -> Result<()> {
-        self.reset_if_map_replaced();
-        let root = self.map.commit_root(target)?;
-        self.sync_to_root(target, &root)
-    }
-
-    fn sync_to_root(&mut self, target: CommitId, root: &RootLease) -> Result<()> {
-        if self.sync_commit == Some(target) && !self.dirty_applied {
+    fn sync_committed(&mut self, commit: CommitId, root: &RootLease) -> Result<()> {
+        if self.sync_commit == Some(commit) {
             return Ok(());
         }
-
-        // Restore clean state if dirty overlay was applied.
-        if self.dirty_applied
-            && let Err(e) = self.reverse_dirty()
-        {
-            self.poison();
-            return Err(e);
-        }
-
-        if self.sync_commit == Some(target) {
-            return Ok(());
-        }
-
-        if let Some(current) = self.sync_commit
-            && let Ok(from) = self.map.commit_root(current)
-        {
+        if let Some(from) = self.sync_commit.and_then(|c| self.map.commit_root(c).ok()) {
             let diff = self.map.diff_roots(&from, root);
-            if let Err(error) = self.apply_diff(&diff) {
-                self.poison();
-                return Err(error);
-            }
+            Self::apply_diff(&mut self.committed_trie, &diff)?;
         } else {
-            // A reclaimed previous commit cannot supply an incremental base.
-            // The target lease remains readable even if its branch moves.
-            self.trie = T::from_entries(self.map.tree.iter(root.root))?;
+            self.committed_trie = T::from_entries(self.map.tree.iter(root.root))?;
         }
-        self.sync_commit = Some(target);
-        self.sync_branch = None;
-
+        self.sync_commit = Some(commit);
         Ok(())
     }
-
     /// Apply a diff to the current trie.
-    fn apply_diff(&mut self, diff: &[TreeDiff]) -> Result<()> {
+    fn apply_diff(trie: &mut T, diff: &[TreeDiff]) -> Result<()> {
         let ops: Vec<(&[u8], Option<&[u8]>)> = diff
             .iter()
             .map(|entry| match entry {
@@ -340,142 +281,50 @@ where
                 }
             })
             .collect();
-        self.trie.batch_update(&ops)
+        trie.batch_update(&ops)
     }
 }
 
 // =================================================================
-// SMT-specific proof API
-// =================================================================
+// Proofs over the most recently synchronized view.
 
-impl<K, V> VerMapWithProof<K, V, SmtCalc>
-where
-    K: KeyEnDeOrdered,
-    V: ValueEnDe,
-{
-    /// Synchronizes to `branch` (including uncommitted changes) and returns
-    /// its root together with a proof for the typed `key`.
-    ///
-    /// No prior root query is required. The branch argument selects the view
-    /// regardless of earlier queries or cache checkpoints.
+impl<K: KeyEnDeOrdered, V: ValueEnDe, T: TrieCalc> VerMapWithProof<K, V, T> {
     pub fn prove_at(
         &mut self,
         branch: BranchId,
         key: &K,
-    ) -> Result<ProofWithRoot<SmtProof>> {
-        let root_hash = self.merkle_root(branch)?;
-        ProofWithRoot::new(root_hash, self.prove_key(key)?)
+    ) -> Result<ProofWithRoot<T::Proof>> {
+        Ok(ProofWithRoot {
+            root_hash: self.merkle_root(branch)?,
+            proof: self.prove_key(key)?,
+        })
     }
-
-    /// Returns the root and typed-key proof for `commit`, excluding dirty
-    /// changes. A missing or reclaimed commit returns `CommitNotFound`.
     pub fn prove_at_commit(
         &mut self,
         commit: CommitId,
         key: &K,
-    ) -> Result<ProofWithRoot<SmtProof>> {
-        let root_hash = self.merkle_root_at_commit(commit)?;
-        ProofWithRoot::new(root_hash, self.prove_key(key)?)
+    ) -> Result<ProofWithRoot<T::Proof>> {
+        Ok(ProofWithRoot {
+            root_hash: self.merkle_root_at_commit(commit)?,
+            proof: self.prove_key(key)?,
+        })
     }
-
-    /// Generates a Merkle proof for exact ordered-key bytes.
-    ///
-    /// The trie must be synced (call [`merkle_root`](Self::merkle_root)
-    /// first) for proof generation to work. The bytes must be exactly
-    /// [`KeyEnDeOrdered::to_bytes`] for the logical key; prefer
-    /// [`prove_at`](Self::prove_at) to select and synchronize a branch in
-    /// the same call, or [`prove_key`](Self::prove_key) for an already-synced trie.
-    pub fn prove(&self, key: &[u8]) -> Result<SmtProof> {
-        self.trie.prove(key)
+    pub fn prove(&self, key: &[u8]) -> Result<T::Proof> {
+        self.working_trie.prove(key)
     }
-
-    /// Generates a Merkle proof for a typed key using the same ordered
-    /// encoding committed by the underlying `VerMap`.
-    pub fn prove_key(&self, key: &K) -> Result<SmtProof> {
-        self.trie.prove(&key.to_bytes())
+    pub fn prove_key(&self, key: &K) -> Result<T::Proof> {
+        key.with_ordered_bytes(|b| self.prove(b))
     }
-
-    /// Verifies a proof against a root hash and exact ordered-key bytes.
-    pub fn verify_proof(
-        root_hash: &[u8; 32],
-        expected_key: &[u8],
-        proof: &SmtProof,
-    ) -> Result<bool> {
-        SmtCalc::verify_proof(root_hash, expected_key, proof)
+    pub fn verify_proof(root: &[u8; 32], key: &[u8], proof: &T::Proof) -> Result<bool> {
+        T::verify_proof(root, key, proof)
     }
-
-    /// Verifies a proof against a typed key using its ordered encoding.
-    pub fn verify_key_proof(
-        root_hash: &[u8; 32],
-        expected_key: &K,
-        proof: &SmtProof,
-    ) -> Result<bool> {
-        SmtCalc::verify_proof(root_hash, &expected_key.to_bytes(), proof)
+    pub fn verify_key_proof(root: &[u8; 32], key: &K, proof: &T::Proof) -> Result<bool> {
+        key.with_ordered_bytes(|bytes| T::verify_proof(root, bytes, proof))
     }
 }
-
-// =================================================================
-// MPT-specific proof API
-// =================================================================
-
-impl<K, V> VerMapWithProof<K, V, MptCalc>
-where
-    K: KeyEnDeOrdered,
-    V: ValueEnDe,
-{
-    /// Synchronizes to `branch` (including uncommitted changes) and returns
-    /// its root together with a proof for the typed `key`.
-    ///
-    /// No prior root query is required. Earlier queries and cache checkpoints
-    /// do not determine this call's proof context.
-    pub fn prove_at(
-        &mut self,
-        branch: BranchId,
-        key: &K,
-    ) -> Result<ProofWithRoot<MptProof>> {
-        let root_hash = self.merkle_root(branch)?;
-        ProofWithRoot::new(root_hash, self.prove_mpt(key)?)
-    }
-
-    /// Returns the root and typed-key proof for `commit`, excluding dirty
-    /// changes. A missing or reclaimed commit returns `CommitNotFound`.
-    pub fn prove_at_commit(
-        &mut self,
-        commit: CommitId,
-        key: &K,
-    ) -> Result<ProofWithRoot<MptProof>> {
-        let root_hash = self.merkle_root_at_commit(commit)?;
-        ProofWithRoot::new(root_hash, self.prove_mpt(key)?)
-    }
-
-    /// Generates a Merkle proof for the given key.
-    ///
-    /// The trie must be synced (call [`merkle_root`](Self::merkle_root)
-    /// first) for proof generation to work. Prefer [`prove_at`](Self::prove_at)
-    /// to select and synchronize a branch in the same call.
-    pub fn prove_mpt(&self, key: &K) -> Result<MptProof> {
-        self.trie.prove(&key.to_bytes())
-    }
-
-    /// Verifies an MPT proof against a root hash for a specific key.
-    ///
-    /// `expected_key` is the raw-byte key the caller expects this proof
-    /// to cover.
-    pub fn verify_mpt_proof(
-        root_hash: &[u8; 32],
-        expected_key: &[u8],
-        proof: &MptProof,
-    ) -> Result<bool> {
-        MptCalc::verify_proof(root_hash, expected_key, proof)
-    }
-
-    /// Verifies an MPT proof against a typed key using its ordered encoding.
-    pub fn verify_key_proof(
-        root_hash: &[u8; 32],
-        expected_key: &K,
-        proof: &MptProof,
-    ) -> Result<bool> {
-        MptCalc::verify_proof(root_hash, &expected_key.to_bytes(), proof)
+impl<K: KeyEnDeOrdered, V: ValueEnDe, T: TrieCalc> Clone for VerMapWithProof<K, V, T> {
+    fn clone(&self) -> Self {
+        Self::from_map(self.map.clone())
     }
 }
 
@@ -487,66 +336,5 @@ where
 {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-// =================================================================
-// Internal cache identity and loading
-// =================================================================
-
-impl<K, V, T> VerMapWithProof<K, V, T>
-where
-    K: KeyEnDeOrdered,
-    V: ValueEnDe,
-    T: TrieCalc,
-{
-    /// A mutable map reference permits replacing the entire handle. Preserve
-    /// incremental synchronization for ordinary edits, but never compare
-    /// local branch/commit IDs across different maps.
-    fn reset_if_map_replaced(&mut self) {
-        let current = self.map.instance_id();
-        if current != self.cache_instance {
-            self.trie = T::default();
-            self.applied_dirty = None;
-            self.sync_commit = None;
-            self.sync_branch = None;
-            self.dirty_applied = false;
-            self.cache_instance = current;
-        }
-    }
-
-    /// Attempts to restore a previously saved trie from disk.
-    ///
-    /// On success, sets `sync_commit` so that the next `merkle_root`
-    /// call can do an incremental diff instead of a full rebuild.
-    /// On failure (missing file, corruption, version mismatch, or a
-    /// missing/reclaimed commit), silently falls back to the default
-    /// empty trie.
-    fn try_load_cache(&mut self) {
-        if let Ok((mut trie, sync_tag, saved_hash)) = T::load_cache(
-            &self.map.namespace().system_dir(),
-            self.cache_instance.map_id,
-        ) {
-            let commit = CommitId::from_raw(sync_tag);
-            if self.map.get_commit(commit).is_none() {
-                return;
-            }
-            // Consistency check between two fields of the cache file: the
-            // header's saved root hash and the root node's stored hash
-            // (root_hash() short-circuits on a committed root, so nothing
-            // is recomputed here).  This catches header/payload mix-ups,
-            // not tampering — a self-attesting file cannot prove its own
-            // integrity; accidental corruption is already rejected by the
-            // file checksum inside load_cache().
-            let ok = trie.root_hash().map(|h| h == saved_hash).unwrap_or(false);
-            if !ok {
-                return;
-            }
-            self.trie = trie;
-            self.applied_dirty = None;
-            self.sync_commit = Some(commit);
-            self.sync_branch = None;
-            self.dirty_applied = false;
-        }
     }
 }

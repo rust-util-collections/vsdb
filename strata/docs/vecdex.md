@@ -34,17 +34,16 @@ let results = idx.search_with_filter(&query_vec, 10, |k| k.starts_with("doc-"))
 
 // Persist and reload
 let id = idx.save_meta().unwrap();
-drop(idx); // Recovery replaces the active handle.
+drop(idx);
 let restored: VecDex<String, Cosine> = VecDex::from_meta(id).unwrap();
 ```
 
-Recovery through serde or `from_meta` creates independent in-memory caches over
-the same storage. Retire the previous active handle before mutating a restored
-one. During mutation, route all reads and writes through one shared instance
-(e.g. behind a `Mutex` or `RwLock`); alternating writes through separate restored
-handles can corrupt index state even without concurrent calls. Multiple
-independent handles are supported for reads only while the index is immutable.
-This also applies to `VecDexDyn`.
+Recovery through serde or `from_meta` verifies the stored schema and returns a
+handle onto the same graph. Serialize writers, including writers using
+separately restored handles. Sequential writers reload the committed state
+for every mutation or batch chunk. Concurrent readers can use `reader()`
+to share the graph. A reader's `read_view()` captures a snapshot for several
+queries. Cloning the mutable index deep-copies the graph into a fresh prefix.
 
 ## API Reference
 
@@ -54,8 +53,7 @@ the vector passes its dimension check; rejected inserts and batches make no
 changes. Previously accepted nonfinite stored vectors cause `compact()` to
 return `VsdbError::Corrupt` without replacing the persisted graph. Finite
 inputs can still overflow a metric's arithmetic; the existing distance
-behavior is unchanged. Vector bytes, handle metadata, and valid f32/f64 graph
-data remain compatible.
+behavior is unchanged.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
@@ -89,10 +87,9 @@ error may leave complete WAL data that recovery replays. Do not automatically
 retry an I/O error as though the recovered index were unchanged.
 
 `insert_batch` commits one chunk at a time: a later error can
-leave earlier chunks committed. Recovery rebuilds in-memory caches from the
-durable rows without rebuilding the graph. Atomicity does not imply an fsync
+leave earlier chunks committed. Recovery reads the committed state directly. Atomicity does not imply an fsync
 per operation; power loss can lose an unfenced batch. These guarantees require
-the single-active-handle ownership rule above and intact storage.
+the single-writer ownership rule above and intact storage.
 
 ## Configuration
 
@@ -145,18 +142,15 @@ at compile time, use `VecDexDyn<K, S>` with `MetricKind`:
 use vsdb::vecdex::{VecDexDyn, HnswConfig, distance::MetricKind};
 
 let cfg = HnswConfig { dim: 4, ..Default::default() };
-let mut idx: VecDexDyn<String> = VecDexDyn::new(MetricKind::Cosine, cfg).unwrap();
+let mut idx: VecDexDyn<String> = VecDexDyn::new_with_metric(MetricKind::Cosine, cfg).unwrap();
 idx.insert(&"doc-a".into(), &[0.1, 0.2, 0.3, 0.4]).unwrap();
 assert_eq!(idx.metric(), MetricKind::Cosine);
 ```
 
-`VecDexDyn` mirrors the full `VecDex` API one-to-one and persists the
-metric choice inside its metadata, so `from_meta` restores it without
-the caller re-stating it.  Cost: one enum dispatch per public
-operation; the distance loops remain statically monomorphized. Benchmark
-the selected workload if dispatch overhead matters.
-The meta formats are deliberately distinct: a `VecDex<K, D, S>` meta
-does not load as `VecDexDyn<K, S>` or vice versa.
+`VecDexDyn<K, S>` is an alias for `VecDex<K, MetricKind, S>`. Search dispatches
+once on the stored metric and uses one reusable vector buffer across visited
+nodes. Custom parameterized metrics implement `distance(&self, a, b)` and
+provide a deterministic serde encoding for their parameters.
 
 ## Filtered Search
 
@@ -196,22 +190,37 @@ leading tag byte:
 
 ```text
 VecDex<K, D, S = f32>
-  [0x00 | node_id BE]          -> vector data (postcard Vec<S>)
+  [0x00 | node_id BE]          -> IEEE-754 f32/f64 components, little endian
   [0x01 | layer | node_id BE]  -> neighbor ids (packed u64 LE)
   [0x02 | key bytes]           -> node_id (u64 LE)
   [0x03 | node_id BE]          -> user key bytes
   [0x04 | node_id BE]          -> node max layer
-  [0x05]                       -> graph state (entry point, counters, ef_search)
+  [0x05]                       -> 34-byte graph state
+  [0x06]                       -> immutable creation config, scalar and metric
 ```
 
-Each mutation or bulk-insert chunk stages related rows in one atomic batch.
-There is no dirty flag or graph-rebuild recovery path; runtime caches are
-hydrated on open. The ownership and durability limits above still apply.
-The serialized handle metadata (single prefix + creation `HnswConfig`)
-is create-time constant.
+A VSTYPE04 handle carries a nine-byte extension containing layout version 2
+and the first eight bytes of Keccak256 of the schema row. Opening the handle
+checks this binding, then decodes the dimension, construction settings, scalar
+type and metric parameters from the stored schema.
 
-All data is persisted to MMDB (LSM-Tree); a single-handle index lives in
-one shard, which is what makes the whole-mutation write batch atomic.
+Each mutation or bulk-insert chunk stages related rows in one atomic batch.
+Node IDs increase across clear, compaction and key replacement. A point
+lookup can therefore read the key mapping and immutable vector with two
+ordinary reads. Traversals capture the graph at one engine sequence number.
+Construction caches at most 32 MiB of decoded vectors per transaction.
+Compaction still stages the full replacement graph in memory.
+
+### Upgrading a v17 index
+
+The separate `vsdb_migrate` crate provides
+`vecdex::migrate_v17::<K, D, S>(id)`. After upgrading the universe, run this
+converter with exclusive access. Set `D = MetricKind` for v17 runtime metrics.
+The converter validates the old type envelope, vector framing, node mappings and graph state. It rewrites the vector framing in
+bounded chunks, then commits the new schema and fixed-width state with a WAL
+fence before replacing the handle metadata. A retry continues from a cursor
+committed with its vector rows. The prefix, node IDs and adjacency lists are
+preserved, so searches on the converted graph retain their original neighbors.
 
 ## Type Aliases
 
@@ -253,9 +262,9 @@ For concurrent read/write access, wrap it in
 | Disk persistence via MMDB | All graph data persisted; survives restarts |
 | save_meta / from_meta | Instance recovery from instance ID |
 | Send + Sync | Safe for multi-threaded use when generic parameters permit |
-| Generic key types | Public methods require `K: KeyEnDe + ValueEnDe + Clone + Eq` |
+| Generic key types | Public methods require `K: KeyEnDe` |
 | Duplicate key handling | Re-insert replaces old vector and rebuilds connections |
-| Runtime metric selection | `VecDexDyn<K, S>` + `MetricKind` — metric chosen at construction, persisted in meta; one enum dispatch per operation, distance loops stay monomorphized |
+| Runtime metric selection | `VecDexDyn<K, S>` + `MetricKind` — metric chosen at construction, persisted in meta; one enum dispatch per search, distance loops stay monomorphized |
 | Criterion benchmarks | Insert and search benches at 1K/5K/10K scales |
 
 ### Planned (not yet implemented)

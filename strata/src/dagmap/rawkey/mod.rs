@@ -23,8 +23,7 @@
 //! assert_eq!(dag.get(&[1]), Some("hello".to_string()));
 //!
 //! // Create a child
-//! let mut raw = dag.into_inner();
-//! let child: DagMapRawKey<String> = DagMapRawKey::new(Some(&mut raw));
+//! let child = DagMapRawKey::new(Some(&mut dag));
 //! assert_eq!(child.get(&[1]), Some("hello".to_string()));
 //!
 //! // Clean up the directory
@@ -36,14 +35,11 @@ mod test;
 
 use crate::{
     DagMapId, DagMapRaw, ValueEnDe,
-    common::{InstanceId, UnwindMark, error::Result},
+    common::{InstanceId, error::Result},
     dagmap::raw,
 };
 use serde::{Deserialize, Serialize};
-use std::{
-    marker::PhantomData,
-    ops::{Deref, DerefMut},
-};
+use std::marker::PhantomData;
 use vsdb_core::common::RawBytes;
 
 type DagHead<V> = DagMapRawKey<V>;
@@ -57,10 +53,19 @@ type DagHead<V> = DagMapRawKey<V>;
 /// orphaned on-disk state invisibly. Use [`Self::new`] explicitly.
 /// [`Clone`] copies the complete connected graph independently, as described
 /// by [`DagMapRaw`].
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct DagMapRawKey<V> {
-    inner: DagMapRaw,
-    _p: PhantomData<V>,
+    pub(super) inner: DagMapRaw,
+    pub(super) _p: PhantomData<V>,
+}
+
+impl<V> Clone for DagMapRawKey<V> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            _p: PhantomData,
+        }
+    }
 }
 
 impl<V> Serialize for DagMapRawKey<V> {
@@ -71,7 +76,7 @@ impl<V> Serialize for DagMapRawKey<V> {
         // `V` is phantom-only, so the typed-handle envelope (tagged with
         // `DagMapRawKey<V>`) is the only guard against restoring the map
         // under a different value type.
-        crate::common::serialize_typed_handle_meta::<Self, S>(&self.inner, serializer)
+        self.inner.serialize_as::<Self, _>(serializer)
     }
 }
 
@@ -80,11 +85,12 @@ impl<'de, V> Deserialize<'de> for DagMapRawKey<V> {
     where
         D: serde::Deserializer<'de>,
     {
-        crate::common::deserialize_typed_handle_meta::<Self, DagMapRaw, D>(deserializer)
-            .map(|inner| Self {
-                inner,
+        crate::common::deserialize_prefix_handle::<Self, _, _>(deserializer, |frame| {
+            Ok(Self {
+                inner: DagMapRaw::from_frame(frame)?,
                 _p: PhantomData,
             })
+        })
     }
 }
 
@@ -98,11 +104,8 @@ where
     /// With a parent, the child ALWAYS inherits the parent's namespace
     /// (see [`DagMapRaw::new`]); a mismatched `ns` is a caller bug
     /// (`debug_assert`ed, ignored in release).
-    pub fn new_in(
-        ns: &crate::common::Namespace,
-        raw_parent: Option<&mut DagMapRaw>,
-    ) -> Self {
-        if let Some(p) = &raw_parent {
+    pub fn new_in(ns: &crate::common::Namespace, parent: Option<&mut Self>) -> Self {
+        if let Some(p) = &parent {
             debug_assert_eq!(
                 ns.id(),
                 p.namespace().id(),
@@ -110,7 +113,7 @@ where
                  parent's namespace"
             );
         }
-        ns.scope(|| Self::new(raw_parent))
+        ns.scope(|| Self::new(parent))
     }
 
     /// The namespace this structure lives in.
@@ -118,14 +121,14 @@ where
         self.inner.namespace()
     }
 
-    /// Creates a new `DagMapRawKey`, optionally attached under `raw_parent`.
+    /// Creates a new `DagMapRawKey`, optionally attached under `parent`.
     ///
     /// See [`DagMapRaw::new`] for the parent-linking semantics
     /// (parented construction inherits the parent's namespace).
     #[inline(always)]
-    pub fn new(raw_parent: Option<&mut DagMapRaw>) -> Self {
+    pub fn new(parent: Option<&mut Self>) -> Self {
         Self {
-            inner: DagMapRaw::new(raw_parent),
+            inner: DagMapRaw::new(parent.map(|p| &mut p.inner)),
             _p: PhantomData,
         }
     }
@@ -136,43 +139,12 @@ where
         self.inner
     }
 
-    /// Creates a "shadow" copy of the inner `DagMapRaw`.
-    ///
-    /// # Safety
-    ///
-    /// This API breaks Rust's semantic safety guarantees. The caller must
-    /// ensure no concurrent writes to the same key through any handle.
-    /// Multiple writers on disjoint keys are safe. Structural mutations
-    /// (`destroy`, `prune`, reparenting) have cross-key side effects —
-    /// only one such operation at a time.
-    #[inline(always)]
-    pub unsafe fn shadow_inner(&self) -> DagMapRaw {
-        // SAFETY: forwards this fn's `unsafe` contract — the caller
-        // guarantees no concurrent writes to the same key, and only one
-        // structural mutation at a time.
-        unsafe { self.inner.shadow() }
-    }
-
-    /// Creates a "shadow" copy of the `DagMapRawKey` instance.
-    ///
-    /// # Safety
-    ///
-    /// This API breaks Rust's semantic safety guarantees. The caller must
-    /// ensure no concurrent writes to the same key through any handle.
-    /// Multiple writers on disjoint keys are safe. Structural mutations
-    /// (`destroy`, `prune`, reparenting) have cross-key side effects —
-    /// only one such operation at a time.
-    #[inline(always)]
-    pub unsafe fn shadow(&self) -> DagMapRawKey<V> {
-        // SAFETY: forwards this fn's `unsafe` contract — the caller
-        // guarantees no concurrent writes to the same key, and only one
-        // structural mutation at a time.
-        unsafe {
-            Self {
-                inner: self.shadow_inner(),
-                _p: PhantomData,
-            }
-        }
+    /// Deep-copies the connected graph into the target namespace.
+    pub fn clone_in(&self, ns: &crate::Namespace) -> Result<Self> {
+        Ok(Self {
+            inner: self.inner.clone_in(ns)?,
+            _p: PhantomData,
+        })
     }
 
     /// Returns the unique instance ID of this `DagMapRawKey`.
@@ -225,48 +197,37 @@ where
     /// Retrieves a value from the DAG map.
     #[inline(always)]
     pub fn get(&self, key: impl AsRef<[u8]>) -> Option<V> {
-        self.inner.get(key).map(|v| V::decode(&v).unwrap())
+        self.inner.get(key).map(|v| V::decode_value(&v).unwrap())
     }
 
     /// Retrieves a mutable reference to a value in the DAG map.
     ///
-    /// Tombstone (empty-value) entries are already filtered by
-    /// [`DagMapRaw::get_mut`], so a returned handle always wraps a
-    /// real, non-empty encoded value.
-    /// Interior edits persist when repeated encodings are stable; an
-    /// untouched guard preserves the original bytes, including variable
-    /// encodings. A panic that starts during the edit discards it.
-    #[inline(always)]
+    /// Tombstones are excluded. Empty encodings are valid values.
+    /// Mutable dereferences mark the value for write-back.
     pub fn get_mut(&mut self, key: impl AsRef<[u8]>) -> Option<ValueMut<'_, V>> {
-        self.inner.get_mut(key.as_ref()).map(|inner| {
-            let value = V::decode(&inner).unwrap();
-            let snapshot = value.encode();
-            ValueMut {
-                value,
-                snapshot,
-                inner,
-                dirty: false,
-                unwind: UnwindMark::new(),
-            }
-        })
+        self.inner.get_mut(key).map(ValueMut::occupied)
+    }
+    /// Edits a present local override and reports encoding or storage errors.
+    pub fn update<R>(
+        &mut self,
+        key: impl AsRef<[u8]>,
+        edit: impl FnOnce(&mut V) -> R,
+    ) -> Result<Option<R>> {
+        let Some(mut guard) = self.get_mut(key) else {
+            return Ok(None);
+        };
+        let result = edit(&mut guard);
+        guard.commit()?;
+        Ok(Some(result))
     }
 
     /// Inserts a key-value pair into the DAG map.
     ///
     /// Does not return the old value for performance reasons.
     ///
-    /// # Panics
-    ///
-    /// Panics if `value` encodes to an empty byte slice, which is reserved
-    /// internally as the deletion tombstone.
     #[inline(always)]
     pub fn insert(&mut self, key: impl AsRef<[u8]>, value: &V) {
-        let encoded = value.encode();
-        assert!(
-            !encoded.is_empty(),
-            "empty encoded value is a tombstone; call remove() instead"
-        );
-        self.inner.insert(key, encoded)
+        self.inner.insert(key, value.encode_value())
     }
 
     /// Removes a key-value pair from the DAG map.
@@ -279,8 +240,7 @@ where
 
     /// Prunes the DAG, merging all nodes in the mainline into the genesis node.
     ///
-    /// Crash-safe by phase ordering (merge → WAL fence → re-parent → WAL
-    /// fence → mark → WAL fence → clear) — see [`DagMapRaw::prune`] for
+    /// All phases share one shard WAL. See [`DagMapRaw::prune`] for
     /// the full contract.
     #[inline(always)]
     pub fn prune(self) -> Result<DagHead<V>> {
@@ -304,8 +264,7 @@ where
 
     /// Destroys the DAG map and all its children, unlinking it from its parent.
     ///
-    /// The unlink is persisted in this node's parent slot and is visible to
-    /// pre-existing shadows and handles restored from metadata — see
+    /// Restored handles observe the persisted unlink. See
     /// [`DagMapRaw::destroy`] for the full semantics.
     #[inline(always)]
     pub fn destroy(&mut self) {
@@ -323,56 +282,4 @@ where
 /////////////////////////////////////////////////////////////////////////////
 
 /// A mutable reference to a value in a `DagMapRawKey`.
-#[derive(Debug)]
-pub struct ValueMut<'a, V>
-where
-    V: ValueEnDe,
-{
-    value: V,
-    snapshot: RawBytes,
-    inner: raw::ValueMut<'a>,
-    dirty: bool,
-    unwind: UnwindMark,
-}
-
-impl<V> Drop for ValueMut<'_, V>
-where
-    V: ValueEnDe,
-{
-    fn drop(&mut self) {
-        if self.unwind.interrupted() {
-            return;
-        }
-        let now = self.value.encode();
-        if now.as_slice() == self.snapshot.as_slice()
-            || now.as_slice() == self.inner.as_slice()
-        {
-            return;
-        }
-        // A stable repeated encoding identifies an interior edit; a
-        // changing encoder alone must not turn reading a guard into a write.
-        if self.dirty || self.value.encode().as_slice() == now.as_slice() {
-            *self.inner = now;
-        }
-    }
-}
-
-impl<V> Deref for ValueMut<'_, V>
-where
-    V: ValueEnDe,
-{
-    type Target = V;
-    fn deref(&self) -> &Self::Target {
-        &self.value
-    }
-}
-
-impl<V> DerefMut for ValueMut<'_, V>
-where
-    V: ValueEnDe,
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.dirty = true;
-        &mut self.value
-    }
-}
+pub type ValueMut<'a, V> = crate::common::guard::ValueGuard<V, raw::ValueMut<'a>>;

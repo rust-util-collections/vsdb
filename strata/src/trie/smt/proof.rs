@@ -20,7 +20,7 @@
 //! path bits in `siblings.len()` hash operations.
 //!
 
-use crate::trie::error::{Result, TrieError};
+use crate::trie::{Result, invalid_state};
 
 use super::{
     EMPTY_HASH, SmtHandle, SmtNode, TREE_DEPTH,
@@ -69,6 +69,7 @@ impl SmtProof {
 ///
 /// The tree must have been committed (all nodes hashed) before calling.
 pub fn prove(root: &SmtHandle, key_hash: &[u8; 32]) -> Result<SmtProof> {
+    root.root_hash();
     let key_path = BitPath::from_hash(key_hash);
     let mut siblings: Vec<[u8; 32]> = Vec::new();
     let mut handle = root;
@@ -111,8 +112,8 @@ pub fn prove(root: &SmtHandle, key_hash: &[u8; 32]) -> Result<SmtProof> {
                     let common = key_path.common_prefix_from(depth, path);
                     siblings.resize(depth + common, EMPTY_HASH);
 
-                    let left_h = to_hash32(left.expect_hash()?)?;
-                    let right_h = to_hash32(right.expect_hash()?)?;
+                    let left_h = *left.hash().unwrap();
+                    let right_h = *right.hash().unwrap();
                     let internal_h = hash_internal(&left_h, &right_h);
                     let suffix = path.slice(common + 1, path.len());
                     siblings.push(wrap_hash(internal_h, &suffix));
@@ -128,9 +129,7 @@ pub fn prove(root: &SmtHandle, key_hash: &[u8; 32]) -> Result<SmtProof> {
                 // siblings, then the split contributes the other child.
                 let split_depth = depth + path.len();
                 if split_depth >= TREE_DEPTH {
-                    return Err(TrieError::InvalidState(
-                        "SMT depth exceeded 256 bits".into(),
-                    ));
+                    return Err(invalid_state("SMT depth exceeded 256 bits".into()));
                 }
                 siblings.resize(split_depth, EMPTY_HASH);
 
@@ -140,7 +139,7 @@ pub fn prove(root: &SmtHandle, key_hash: &[u8; 32]) -> Result<SmtProof> {
                 } else {
                     (right, left)
                 };
-                siblings.push(to_hash32(other.expect_hash()?)?);
+                siblings.push(*other.hash().unwrap());
 
                 handle = next;
                 depth = split_depth + 1;
@@ -166,7 +165,7 @@ pub fn verify_proof(
     }
 
     if proof.siblings.len() > TREE_DEPTH {
-        return Err(TrieError::InvalidState(format!(
+        return Err(invalid_state(format!(
             "proof must have at most {} siblings, got {}",
             TREE_DEPTH,
             proof.siblings.len()
@@ -204,10 +203,4 @@ pub fn verify_proof(
     }
 
     Ok(current == *root_hash)
-}
-
-fn to_hash32(slice: &[u8]) -> Result<[u8; 32]> {
-    slice
-        .try_into()
-        .map_err(|_| TrieError::InvalidState("expected 32-byte hash".into()))
 }

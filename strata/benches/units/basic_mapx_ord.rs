@@ -3,7 +3,7 @@ use rand::RngExt;
 use std::{
     hint::black_box,
     ops::Bound,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
 use vsdb::basic::mapx_ord::MapxOrd;
@@ -16,8 +16,8 @@ fn read_write(c: &mut Criterion) {
         .measurement_time(Duration::from_secs(3))
         .sample_size(10);
 
-    let i = AtomicUsize::new(0);
-    let mut db: MapxOrd<usize, usize> = MapxOrd::new();
+    let i = AtomicU64::new(0);
+    let mut db: MapxOrd<u64, u64> = MapxOrd::new();
 
     group.bench_function(" write ", |b| {
         b.iter(|| {
@@ -26,11 +26,11 @@ fn read_write(c: &mut Criterion) {
         })
     });
 
-    let mut read_db: MapxOrd<usize, usize> = MapxOrd::new();
-    for n in 0..5000usize {
+    let mut read_db: MapxOrd<u64, u64> = MapxOrd::new();
+    for n in 0..5000u64 {
         read_db.insert(&n, &n);
     }
-    let mut read_n = 0usize;
+    let mut read_n = 0u64;
     group.bench_function(" read (hit) ", |b| {
         b.iter(|| {
             let n = read_n;
@@ -40,12 +40,12 @@ fn read_write(c: &mut Criterion) {
     });
 
     group.bench_function(" remove (hit) ", |b| {
-        let mut remove_db: MapxOrd<usize, usize> = MapxOrd::new();
+        let mut remove_db: MapxOrd<u64, u64> = MapxOrd::new();
         b.iter_custom(|iters| {
             let mut elapsed = Duration::ZERO;
             let mut remaining = iters;
             while remaining > 0 {
-                let count = remaining.min(REMOVE_BATCH_SIZE) as usize;
+                let count = remaining.min(REMOVE_BATCH_SIZE);
                 for n in 0..count {
                     remove_db.insert(&n, &n);
                 }
@@ -54,7 +54,7 @@ fn read_write(c: &mut Criterion) {
                     remove_db.remove(black_box(&n));
                 }
                 elapsed += start.elapsed();
-                remaining -= count as u64;
+                remaining -= count;
             }
             elapsed
         })
@@ -70,19 +70,19 @@ fn random_read_write(c: &mut Criterion) {
         .sample_size(10);
 
     let mut rng = rand::rng();
-    let mut db: MapxOrd<usize, usize> = MapxOrd::new();
+    let mut db: MapxOrd<u64, u64> = MapxOrd::new();
     group.bench_function(" random write ", |b| {
         b.iter(|| {
-            let n = rng.random::<u64>() as usize;
+            let n = rng.random::<u64>();
             db.insert(&n, &n);
         })
     });
 
     group.bench_function(" random read ", |b| {
-        let mut read_db: MapxOrd<usize, usize> = MapxOrd::new();
+        let mut read_db: MapxOrd<u64, u64> = MapxOrd::new();
         let keys: Vec<_> = (0..5000)
             .map(|_| {
-                let n = rng.random::<u64>() as usize;
+                let n = rng.random::<u64>();
                 read_db.insert(&n, &n);
                 n
             })
@@ -103,14 +103,14 @@ fn ordered_ops(c: &mut Criterion) {
         .sample_size(10);
 
     // Pre-populate with 10000 sparse keys (0, 3, 6, 9, ...)
-    let mut db: MapxOrd<usize, usize> = MapxOrd::new();
-    for n in 0..10_000usize {
+    let mut db: MapxOrd<u64, u64> = MapxOrd::new();
+    for n in 0..10_000u64 {
         let key_val = n * 3;
         db.insert(&key_val, &key_val);
     }
 
     group.bench_function(" get_le ", |b| {
-        let mut i = 1usize;
+        let mut i = 1u64;
         b.iter(|| {
             // Query keys that fall between sparse entries
             i = (i + 7) % 30_000;
@@ -119,7 +119,7 @@ fn ordered_ops(c: &mut Criterion) {
     });
 
     group.bench_function(" get_ge ", |b| {
-        let mut i = 1usize;
+        let mut i = 1u64;
         b.iter(|| {
             i = (i + 7) % 30_000;
             black_box(db.get_ge(&i));
@@ -127,8 +127,8 @@ fn ordered_ops(c: &mut Criterion) {
     });
 
     group.bench_function(" range [1000, 2000) (1k keys) ", |b| {
-        let lo = 3000usize; // key_val 3000 => index 1000
-        let hi = 6000usize; // key_val 6000 => index 2000
+        let lo = 3000u64; // key_val 3000 => index 1000
+        let hi = 6000u64; // key_val 6000 => index 2000
         assert_eq!(
             db.range((Bound::Included(lo), Bound::Excluded(hi))).count(),
             1000

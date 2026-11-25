@@ -1,6 +1,4 @@
-//! A process that only uses non-default namespaces must not open the
-//! default namespace's engine just to allocate DagMap ids (the id ceiling
-//! lives in the default system dir, which is path-only state).
+//! A DAG in a secondary namespace only opens its own engine.
 
 use vsdb::{DagMapRaw, Namespace, VsdbOptions, vsdb_configure, vsdb_get_base_dir};
 

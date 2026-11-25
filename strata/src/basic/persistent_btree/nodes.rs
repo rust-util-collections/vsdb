@@ -1,40 +1,31 @@
-//! B+ tree node type, codec, and layout constants.
-//!
-//! The wire format is hand-written (no external codec dependency) so that
-//! node serialisation is deterministic and version-independent.
+//! Slotted B+ tree pages. Each slot holds its key's exclusive end offset
+//! followed by an inline value end offset, a blob ID or a child ID. Offsets
+//! are relative to the start of the page.
 
 use super::types::NodeId;
+use crate::{Result, VsdbError};
 
-// =========================================================================
-// Constants
-// =========================================================================
-
-/// Half the maximum fan-out. Non-root nodes hold `B..=2B` keys.
 pub(crate) const B: usize = 16;
-/// Maximum keys per node.
 pub(crate) const MAX_KEYS: usize = 2 * B;
-/// Minimum keys for a non-root node.
 pub(crate) const MIN_KEYS: usize = B;
+pub(crate) const CLASS_MASK: u64 = 3 << 62;
+pub(crate) const LEAF: u64 = 1 << 62;
+pub(crate) const BLOB_LEAF: u64 = 2 << 62;
+pub(crate) const BLOB: u64 = 3 << 62;
 
-// =========================================================================
-// Wire-format tags
-// =========================================================================
+pub(crate) fn object_key(id: NodeId) -> [u8; 9] {
+    let mut key = [0u8; 9];
+    key[0] = if id & CLASS_MASK == BLOB { 0x12 } else { 0x10 };
+    key[1..].copy_from_slice(&id.to_be_bytes());
+    key
+}
 
-// Wire format (all multi-byte integers are little-endian):
-//
-//   tag: u8          0 = Leaf, 1 = Internal
-//   n:   u32         number of keys
-//
-// Leaf   (tag=0):  for i in 0..n { key_len:u32 key:[u8] val_len:u32 val:[u8] }
-// Internal(tag=1): for i in 0..n { key_len:u32 key:[u8] }
-//                  for i in 0..=n { child:u64 }
-
-pub(crate) const TAG_LEAF: u8 = 0;
-pub(crate) const TAG_INTERNAL: u8 = 1;
-
-// =========================================================================
-// Node
-// =========================================================================
+pub(crate) fn object_id(key: &[u8]) -> Option<NodeId> {
+    if key.len() != 9 || !matches!(key[0], 0x10 | 0x12) {
+        return None;
+    }
+    Some(NodeId::from_be_bytes(key[1..].try_into().unwrap()))
+}
 
 #[derive(Clone, Debug)]
 pub(crate) enum Node {
@@ -48,168 +39,207 @@ pub(crate) enum Node {
     },
 }
 
-/// Validated node fields. Metadata-only decoding leaves the payload vectors
-/// empty while retaining the distinction between leaves and internal nodes.
-struct DecodedNode {
-    keys: Vec<Vec<u8>>,
-    values: Vec<Vec<u8>>,
-    children: Option<Vec<NodeId>>,
+#[derive(Clone, Copy)]
+pub(crate) struct NodeView<'a> {
+    raw: &'a [u8],
+    pub(crate) len: usize,
+    pub(crate) leaf: bool,
+}
+
+impl<'a> NodeView<'a> {
+    pub(crate) fn open(raw: &'a [u8]) -> Result<Self> {
+        let corrupt = || VsdbError::Corrupt {
+            detail: "invalid slotted B+ tree page".into(),
+        };
+        let [tag, count, ..] = *raw else {
+            return Err(corrupt());
+        };
+        let len = usize::from(count);
+        let leaf = match tag {
+            0x18 => true,
+            0x19 => false,
+            _ => return Err(corrupt()),
+        };
+        let page = Self { raw, len, leaf };
+        if len > MAX_KEYS || page.payload_start() > raw.len() {
+            return Err(corrupt());
+        }
+        Ok(page)
+    }
+
+    pub(crate) fn validate(&self) -> Result<()> {
+        let invalid = || VsdbError::Corrupt {
+            detail: "invalid B+ tree slot offset, key order or child".into(),
+        };
+        let mut pos = self.payload_start();
+        for i in 0..self.len {
+            let key_end = self.key_end(i);
+            if key_end < pos || key_end > self.raw.len() {
+                return Err(invalid());
+            }
+            let desc = self.desc(i);
+            if self.leaf && desc & CLASS_MASK != BLOB && u32::try_from(desc).is_err() {
+                return Err(invalid());
+            }
+            let end = self.end(i);
+            if end < key_end
+                || end > self.raw.len()
+                || (i > 0 && self.key(i - 1) >= self.key(i))
+            {
+                return Err(invalid());
+            }
+            pos = end;
+        }
+        if pos != self.raw.len()
+            || (!self.leaf
+                && (0..=self.len)
+                    .any(|i| self.child(i) == 0 || self.child(i) & CLASS_MASK == BLOB))
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
+    fn payload_start(&self) -> usize {
+        2 + 12 * self.len + if self.leaf { 0 } else { 8 }
+    }
+    fn key_end(&self, i: usize) -> usize {
+        let p = 2 + 12 * i;
+        u32::from_le_bytes(self.raw[p..p + 4].try_into().unwrap()) as usize
+    }
+    fn desc(&self, i: usize) -> u64 {
+        let p = 6 + 12 * i;
+        u64::from_le_bytes(self.raw[p..p + 8].try_into().unwrap())
+    }
+    fn end(&self, i: usize) -> usize {
+        let desc = self.desc(i);
+        if self.leaf && desc & CLASS_MASK != BLOB {
+            desc as usize
+        } else {
+            self.key_end(i)
+        }
+    }
+    pub(crate) fn key(&self, i: usize) -> &'a [u8] {
+        let start = if i == 0 {
+            self.payload_start()
+        } else {
+            self.end(i - 1)
+        };
+        &self.raw[start..self.key_end(i)]
+    }
+    pub(crate) fn child(&self, i: usize) -> NodeId {
+        if i < self.len {
+            self.desc(i)
+        } else {
+            let p = 2 + 12 * self.len;
+            u64::from_le_bytes(self.raw[p..p + 8].try_into().unwrap())
+        }
+    }
+    pub(crate) fn value(
+        &self,
+        i: usize,
+        blob: impl FnOnce(NodeId) -> Vec<u8>,
+    ) -> Vec<u8> {
+        if self.desc(i) & CLASS_MASK == BLOB {
+            blob(self.desc(i))
+        } else {
+            self.raw[self.key_end(i)..self.end(i)].to_vec()
+        }
+    }
+    pub(crate) fn lower_bound(&self, key: &[u8], exclusive: bool) -> usize {
+        let mut lo = 0;
+        let mut hi = self.len;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let k = self.key(mid);
+            if k < key || (exclusive && k == key) {
+                lo = mid + 1
+            } else {
+                hi = mid
+            }
+        }
+        lo
+    }
+    pub(crate) fn edges(&self) -> Vec<NodeId> {
+        if self.leaf {
+            (0..self.len)
+                .map(|i| self.desc(i))
+                .filter(|&id| id & CLASS_MASK == BLOB)
+                .collect()
+        } else {
+            (0..=self.len).map(|i| self.child(i)).collect()
+        }
+    }
+    fn materialize(&self, blob: impl Fn(NodeId) -> Vec<u8>) -> Node {
+        let keys = (0..self.len).map(|i| self.key(i).to_vec()).collect();
+        if self.leaf {
+            Node::Leaf {
+                keys,
+                values: (0..self.len).map(|i| self.value(i, &blob)).collect(),
+            }
+        } else {
+            Node::Internal {
+                keys,
+                children: self.edges(),
+            }
+        }
+    }
 }
 
 impl Node {
     pub(crate) fn key_count(&self) -> usize {
         match self {
-            Node::Leaf { keys, .. } | Node::Internal { keys, .. } => keys.len(),
+            Self::Leaf { keys, .. } | Self::Internal { keys, .. } => keys.len(),
         }
     }
 
-    // ---- encode ----
+    pub(crate) fn encode_with(&self, mut blob: impl FnMut(&[u8]) -> NodeId) -> Vec<u8> {
+        let n = self.key_count();
+        let leaf = matches!(self, Self::Leaf { .. });
+        let keys = match self {
+            Self::Leaf { keys, .. } | Self::Internal { keys, .. } => keys,
+        };
+        let mut raw = vec![0; 2 + 12 * n + if leaf { 0 } else { 8 }];
+        raw[0] = if leaf { 0x18 } else { 0x19 };
+        raw[1] = n.try_into().expect("B+ tree page fanout overflow");
+        for (i, key) in keys.iter().enumerate() {
+            let p = 2 + 12 * i;
+            raw.extend_from_slice(key);
+            let end = u32::try_from(raw.len()).expect("B+ tree page offset overflow");
+            raw[p..p + 4].copy_from_slice(&end.to_le_bytes());
+            let desc = match self {
+                Self::Leaf { values, .. } if values[i].len() > 1024 => blob(&values[i]),
+                Self::Leaf { values, .. } => {
+                    raw.extend_from_slice(&values[i]);
+                    raw.len() as u64
+                }
+                Self::Internal { children, .. } => children[i],
+            };
+            raw[p + 4..p + 12].copy_from_slice(&desc.to_le_bytes());
+        }
+        if let Self::Internal { children, .. } = self {
+            raw[2 + 12 * n..10 + 12 * n].copy_from_slice(&children[n].to_le_bytes());
+        }
+        raw
+    }
 
+    pub(crate) fn decode_with(raw: &[u8], blob: impl Fn(NodeId) -> Vec<u8>) -> Self {
+        let page = NodeView::open(raw).expect("invalid B+ tree page header");
+        page.validate().expect("invalid B+ tree page");
+        page.materialize(blob)
+    }
+
+    #[cfg(test)]
     pub(crate) fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(256);
-        match self {
-            Node::Leaf { keys, values } => {
-                buf.push(TAG_LEAF);
-                buf.extend_from_slice(&(keys.len() as u32).to_le_bytes());
-                for i in 0..keys.len() {
-                    buf.extend_from_slice(&(keys[i].len() as u32).to_le_bytes());
-                    buf.extend_from_slice(&keys[i]);
-                    buf.extend_from_slice(&(values[i].len() as u32).to_le_bytes());
-                    buf.extend_from_slice(&values[i]);
-                }
-            }
-            Node::Internal { keys, children } => {
-                buf.push(TAG_INTERNAL);
-                buf.extend_from_slice(&(keys.len() as u32).to_le_bytes());
-                for k in keys {
-                    buf.extend_from_slice(&(k.len() as u32).to_le_bytes());
-                    buf.extend_from_slice(k);
-                }
-                for c in children {
-                    buf.extend_from_slice(&c.to_le_bytes());
-                }
-            }
-        }
-        buf
+        self.encode_with(|_| panic!("test page requires blob store"))
     }
-
-    // ---- decode ----
-
-    pub(crate) fn decode(data: &[u8]) -> Self {
-        let decoded = Self::decode_parts::<true>(data);
-        match decoded.children {
-            Some(children) => Node::Internal {
-                keys: decoded.keys,
-                children,
-            },
-            None => Node::Leaf {
-                keys: decoded.keys,
-                values: decoded.values,
-            },
-        }
+    #[cfg(test)]
+    pub(crate) fn decode(raw: &[u8]) -> Self {
+        Self::decode_with(raw, |_| panic!("test page requires blob store"))
     }
-
-    /// Decodes ownership edges without copying keys or values. Every field
-    /// still passes through the same structural checks as a full decode.
-    pub(crate) fn decode_children(data: &[u8]) -> Vec<NodeId> {
-        Self::decode_parts::<false>(data)
-            .children
-            .unwrap_or_default()
-    }
-
-    fn decode_parts<const RETAIN_PAYLOAD: bool>(data: &[u8]) -> DecodedNode {
-        let len = data.len();
-        assert!(
-            len >= 5,
-            "PersistentBTree: node data too short ({len} bytes)"
-        );
-
-        let mut pos = 0;
-
-        let tag = data[pos];
-        pos += 1;
-
-        let n = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
-        pos += 4;
-
-        match tag {
-            TAG_LEAF => {
-                let mut keys = Vec::with_capacity(if RETAIN_PAYLOAD { n } else { 0 });
-                let mut values = Vec::with_capacity(if RETAIN_PAYLOAD { n } else { 0 });
-                for _ in 0..n {
-                    assert!(
-                        pos + 4 <= len,
-                        "PersistentBTree: truncated leaf key length at pos {pos}"
-                    );
-                    let klen = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap())
-                        as usize;
-                    pos += 4;
-                    assert!(
-                        pos + klen <= len,
-                        "PersistentBTree: truncated leaf key at pos {pos}, klen={klen}"
-                    );
-                    if RETAIN_PAYLOAD {
-                        keys.push(data[pos..pos + klen].to_vec());
-                    }
-                    pos += klen;
-                    assert!(
-                        pos + 4 <= len,
-                        "PersistentBTree: truncated leaf value length at pos {pos}"
-                    );
-                    let vlen = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap())
-                        as usize;
-                    pos += 4;
-                    assert!(
-                        pos + vlen <= len,
-                        "PersistentBTree: truncated leaf value at pos {pos}, vlen={vlen}"
-                    );
-                    if RETAIN_PAYLOAD {
-                        values.push(data[pos..pos + vlen].to_vec());
-                    }
-                    pos += vlen;
-                }
-                DecodedNode {
-                    keys,
-                    values,
-                    children: None,
-                }
-            }
-            TAG_INTERNAL => {
-                let mut keys = Vec::with_capacity(if RETAIN_PAYLOAD { n } else { 0 });
-                for _ in 0..n {
-                    assert!(
-                        pos + 4 <= len,
-                        "PersistentBTree: truncated internal key length at pos {pos}"
-                    );
-                    let klen = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap())
-                        as usize;
-                    pos += 4;
-                    assert!(
-                        pos + klen <= len,
-                        "PersistentBTree: truncated internal key at pos {pos}, klen={klen}"
-                    );
-                    if RETAIN_PAYLOAD {
-                        keys.push(data[pos..pos + klen].to_vec());
-                    }
-                    pos += klen;
-                }
-                let mut children = Vec::with_capacity(n + 1);
-                for _ in 0..=n {
-                    assert!(
-                        pos + 8 <= len,
-                        "PersistentBTree: truncated child id at pos {pos}"
-                    );
-                    let c = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap());
-                    pos += 8;
-                    children.push(c);
-                }
-                DecodedNode {
-                    keys,
-                    values: Vec::new(),
-                    children: Some(children),
-                }
-            }
-            _ => panic!("PersistentBTree: corrupt node tag {tag}"),
-        }
+    pub(crate) fn decode_children(raw: &[u8]) -> Vec<NodeId> {
+        let page = NodeView::open(raw).expect("invalid B+ tree page header");
+        page.validate().expect("invalid B+ tree page");
+        page.edges()
     }
 }

@@ -13,7 +13,6 @@
 //!
 
 pub(crate) mod bitpath;
-pub(crate) mod cache;
 pub(crate) mod codec;
 pub(crate) mod mutation;
 pub(crate) mod proof;
@@ -22,9 +21,8 @@ pub(crate) mod query;
 pub(crate) use bitpath::BitPath;
 pub use proof::SmtProof;
 
-use crate::trie::error::{Result, TrieError};
+use super::shared::{Handle, TreeNode};
 use std::fmt;
-
 /// The fixed depth of the sparse Merkle tree (256-bit key hash).
 pub const TREE_DEPTH: usize = 256;
 
@@ -35,65 +33,32 @@ pub const EMPTY_HASH: [u8; 32] = [0u8; 32];
 // SmtNodeHandle
 // =========================================================================
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SmtHandle {
-    /// A node that lives only in memory (not yet hashed).
-    InMemory(Box<SmtNode>),
-    /// A node with its precomputed hash (after `commit`).
-    Cached(Vec<u8>, Box<SmtNode>),
-}
-
-impl Default for SmtHandle {
-    fn default() -> Self {
-        SmtHandle::InMemory(Box::new(SmtNode::Empty))
-    }
-}
-
-impl SmtHandle {
-    pub fn node(&self) -> &SmtNode {
-        match self {
-            SmtHandle::InMemory(n) | SmtHandle::Cached(_, n) => n,
+pub(crate) type SmtHandle = Handle<SmtNode>;
+impl TreeNode for SmtNode {
+    fn children<'a>(&'a self, mut visit: impl FnMut(&'a SmtHandle)) {
+        if let Self::Internal { left, right, .. } = self {
+            visit(left);
+            visit(right)
         }
     }
-
-    pub fn into_node(self) -> SmtNode {
-        match self {
-            SmtHandle::InMemory(n) | SmtHandle::Cached(_, n) => *n,
+    fn into_children(self, pending: &mut Vec<SmtHandle>) {
+        if let Self::Internal { left, right, .. } = self {
+            pending.extend([left, right]);
         }
     }
-
-    /// Returns the precomputed hash, if any (`None` for an in-memory,
-    /// not-yet-hashed node). Used to preserve a node's `Cached` status
-    /// across a no-op mutation (see `remove_rec`'s use of `rewrap`).
-    pub fn hash(&self) -> Option<&[u8]> {
+    fn digest(&self) -> [u8; 32] {
         match self {
-            SmtHandle::Cached(h, _) => Some(h),
-            SmtHandle::InMemory(_) => None,
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        matches!(self.node(), SmtNode::Empty)
-    }
-
-    /// Returns the hash if cached, or `EMPTY_HASH` if the node is empty.
-    /// Returns `Err` if the node is a non-empty InMemory (must call
-    /// `root_hash()` first to compute hashes).
-    pub(crate) fn expect_hash(&self) -> Result<&[u8]> {
-        match self {
-            SmtHandle::Cached(h, _) => Ok(h),
-            SmtHandle::InMemory(n) if **n == SmtNode::Empty => Ok(&EMPTY_HASH),
-            _ => Err(TrieError::InvalidState(
-                "unhashed non-empty node — call root_hash() first".into(),
-            )),
+            Self::Empty => EMPTY_HASH,
+            Self::Leaf {
+                key_hash, value, ..
+            } => codec::hash_leaf(key_hash, value),
+            Self::Internal { path, left, right } => codec::wrap_hash(
+                codec::hash_internal(left.hash().unwrap(), right.hash().unwrap()),
+                path,
+            ),
         }
     }
 }
-
-// =========================================================================
-// SmtNode
-// =========================================================================
-
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum SmtNode {
     /// An empty subtree.

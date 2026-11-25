@@ -13,22 +13,22 @@
 //! by a leading tag byte:
 //!
 //! ```text
-//! [0x00 | node_id BE]            -> vector (postcard Vec<S>)
+//! [0x00 | node_id BE]            -> unframed IEEE-754 LE components
 //! [0x01 | layer | node_id BE]    -> packed u64 LE neighbor list
 //! [0x02 | key bytes]             -> node_id u64 LE
 //! [0x03 | node_id BE]            -> key bytes
 //! [0x04 | node_id BE]            -> node max_layer (postcard)
-//! [0x05]                         -> graph state (postcard)
+//! [0x05]                         -> graph state (34 bytes)
+//! [0x06]                         -> immutable schema
 //! ```
 //!
 //! Each mutation or bulk-insert chunk stages its rows through a read-your-writes
 //! overlay and commits one atomic engine batch. Earlier chunks can remain
-//! committed after a later error. Recovery hydrates runtime caches without
-//! rebuilding the graph. Atomicity does not imply an fsync per operation, and
-//! consistency requires the single-active-handle contract below.
+//! committed after a later error. Recovery verifies the schema and reads the committed graph state. Atomicity does not imply an fsync per operation, and
+//! consistency requires the single-writer contract below.
 //!
 //! The serialized form of a `VecDex` (its typed handle metadata) is the
-//! raw prefix of the single handle plus the creation-time [`HnswConfig`].
+//! single handle prefix, layout version and immutable schema digest.
 //! It is **create-time constant**: graph growth only writes ordinary
 //! data rows, so metadata saved once at creation stays valid for the
 //! lifetime of the instance.
@@ -49,10 +49,12 @@
 //! ```
 
 pub mod distance;
-mod dynamic;
+mod reader;
+pub use reader::VecDexReadView;
 mod hnsw;
 
-pub use dynamic::VecDexDyn;
+/// An index with a runtime-selected, persisted distance metric.
+pub type VecDexDyn<K, S = f32> = VecDex<K, distance::MetricKind, S>;
 
 use crate::common::{
     InstanceId,
@@ -61,7 +63,7 @@ use crate::common::{
     error::{Result, VsdbError},
     staged::StagedRows,
 };
-use distance::{DistanceMetric, Scalar};
+use distance::{DistanceMetric, MetricSearch, Scalar};
 use hnsw::{
     AdjRead, adj_key, encode_neighbors, get_neighbors, prune_selection, random_layer,
     search_layer, select_neighbors_heuristic,
@@ -73,7 +75,7 @@ use std::{
     marker::PhantomData,
     rc::Rc,
 };
-use vsdb_core::basic::mapx_raw::MapxRaw;
+use vsdb_core::basic::mapx_raw::{MapxRaw, MapxRawReadView};
 
 // Namespace tags (first key byte).
 const TAG_VEC: u8 = 0x00;
@@ -88,6 +90,7 @@ const STATE_KEY: [u8; 1] = [TAG_STATE];
 /// Serialized-payload layout version. Guards against positionally
 /// decoding metadata written by the pre-single-handle layout.
 const LAYOUT_VERSION: u8 = 2;
+const META_KEY: [u8; 1] = [0x06];
 
 /// Configuration for a [`VecDex`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -106,12 +109,15 @@ pub struct HnswConfig {
 
 impl HnswConfig {
     /// Rejects configurations under which the graph cannot work.
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         let invalid = |detail: &str| {
             Err(VsdbError::InvalidConfig {
                 detail: format!("VecDex: {detail}"),
             })
         };
+        if self.dim > u32::MAX as usize {
+            return invalid("dim exceeds u32::MAX");
+        }
         if self.dim == 0 {
             return invalid("dim must be > 0");
         }
@@ -140,10 +146,8 @@ impl Default for HnswConfig {
     }
 }
 
-/// Mutable graph state, persisted as an ordinary data row and mirrored
-/// in memory.  `node_count` is a plain count — crash consistency comes
-/// from atomic mutation batches, not from a dirty flag.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+/// Mutable graph state, loaded from one fixed-width row per operation.
+#[derive(Debug, Default)]
 struct GraphState {
     entry_point: Option<u64>,
     max_layer: u8,
@@ -152,6 +156,99 @@ struct GraphState {
     ef_search: usize,
 }
 
+#[derive(Serialize, Deserialize)]
+struct SchemaHeader {
+    version: u8,
+    scalar: u8,
+    type_tag: u64,
+    dim: u32,
+    m: usize,
+    m_max0: usize,
+    ef_construction: usize,
+    ef_search: usize,
+}
+
+/// The handle carries only a version and a truncated schema digest. A
+/// parameter change invalidates an existing handle even for custom metrics.
+fn schema_binding(bytes: &[u8]) -> [u8; 9] {
+    use sha3::{Digest, Keccak256};
+    let mut binding = [LAYOUT_VERSION; 9];
+    binding[1..].copy_from_slice(&Keccak256::digest(bytes)[..8]);
+    binding
+}
+
+fn corrupt(detail: impl Into<String>) -> VsdbError {
+    VsdbError::Corrupt {
+        detail: detail.into(),
+    }
+}
+
+impl GraphState {
+    fn encode(&self) -> [u8; 34] {
+        let mut bytes = [0; 34];
+        bytes[0] = u8::from(self.entry_point.is_some());
+        bytes[1] = self.max_layer;
+        bytes[2..10].copy_from_slice(&self.entry_point.unwrap_or(0).to_le_bytes());
+        bytes[10..18].copy_from_slice(&self.node_count.to_le_bytes());
+        bytes[18..26].copy_from_slice(&self.next_node_id.to_le_bytes());
+        bytes[26..].copy_from_slice(&(self.ef_search as u64).to_le_bytes());
+        bytes
+    }
+
+    fn read(bytes: Option<Vec<u8>>) -> Result<Self> {
+        let bytes = bytes.ok_or_else(|| corrupt("missing VecDex state"))?;
+        if bytes.len() != 34 || bytes[0] > 1 {
+            return Err(corrupt("invalid VecDex state record"));
+        }
+        let read = |i: usize| u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
+        let state = Self {
+            entry_point: (bytes[0] == 1).then(|| read(2)),
+            max_layer: bytes[1],
+            node_count: read(10),
+            next_node_id: read(18),
+            ef_search: usize::try_from(read(26))
+                .map_err(|_| corrupt("invalid ef_search"))?,
+        };
+        if state.max_layer > 32
+            || (state.entry_point.is_none() && (read(2) != 0 || state.max_layer != 0))
+            || state.node_count > state.next_node_id
+            || state.entry_point.is_some() != (state.node_count > 0)
+            || state.entry_point.is_some_and(|ep| ep >= state.next_node_id)
+        {
+            return Err(corrupt("inconsistent VecDex graph state"));
+        }
+        Ok(state)
+    }
+
+    fn cleared(&self) -> Self {
+        Self {
+            next_node_id: self.next_node_id,
+            ef_search: self.ef_search,
+            ..Self::default()
+        }
+    }
+}
+
+fn validate_vector<S: Scalar>(dim: usize, vector: &[S]) -> Result<()> {
+    if vector.len() != dim {
+        return Err(VsdbError::DimensionMismatch {
+            expected: dim,
+            found: vector.len(),
+        });
+    }
+    if !vector.iter().all(|component| component.is_finite()) {
+        return Err(VsdbError::InvalidConfig {
+            detail: "VecDex vectors must contain finite components".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn decode_vector<S: Scalar>(raw: &[u8]) -> Vec<S> {
+    let mut vector = Vec::with_capacity(raw.len() / size_of::<S>());
+    S::decode_into(raw, &mut vector);
+    vector
+}
 // =========================================================================
 // Key codecs
 // =========================================================================
@@ -195,25 +292,17 @@ struct Txn<'a, S> {
 
 /// Graph reads for public searches, with lazy live-node seeds for disconnected
 /// components. The persistent graph and construction-time searches are unchanged.
-struct SearchRows<'a>(&'a MapxRaw);
+struct SearchRows<'a, 'db>(&'a MapxRawReadView<'db>);
 
-impl AdjRead for SearchRows<'_> {
+impl AdjRead for SearchRows<'_, '_> {
     fn adj_row(&self, key: &[u8]) -> Option<Vec<u8>> {
         self.0.get(key)
     }
 
     fn fallback_nodes(&self) -> Option<Box<dyn Iterator<Item = u64> + '_>> {
-        use std::{borrow::Cow, ops::Bound};
-        Some(Box::new(
-            self.0
-                .range((
-                    Bound::Included(Cow::Owned(vec![TAG_INFO])),
-                    Bound::Excluded(Cow::Owned(vec![TAG_INFO + 1])),
-                ))
-                .map(|(key, _)| {
-                    u64::from_be_bytes(key[1..9].try_into().expect("node-info key"))
-                }),
-        ))
+        Some(Box::new(self.0.range(tag_bounds(TAG_INFO)).map(
+            |(key, _)| u64::from_be_bytes(key[1..9].try_into().expect("node-info key")),
+        )))
     }
 }
 
@@ -243,17 +332,30 @@ impl<'a, S: Scalar> Txn<'a, S> {
             return Some(Rc::clone(v));
         }
         let raw = self.get(&node_key(TAG_VEC, node_id))?;
-        let v = Rc::new(decode_value::<Vec<S>>(&raw));
-        self.vec_cache.borrow_mut().insert(node_id, Rc::clone(&v));
+        let v = Rc::new(decode_vector::<S>(&raw));
+        self.cache(node_id, &v);
         Some(v)
     }
 
     /// Stages a vector row and pre-warms the decode cache.
     fn put_vec(&mut self, node_id: u64, vector: &[S]) {
-        let v: Vec<S> = vector.to_vec();
         self.rows
-            .put(node_key(TAG_VEC, node_id).to_vec(), encode_value(&v));
-        self.vec_cache.get_mut().insert(node_id, Rc::new(v));
+            .put(node_key(TAG_VEC, node_id).to_vec(), S::encode_slice(vector));
+        self.cache(node_id, &Rc::new(vector.to_vec()));
+    }
+
+    fn cache(&self, node_id: u64, vector: &Rc<Vec<S>>) {
+        // Every vector has the same validated dimension. Account for the
+        // payload plus map entry, Rc and Vec header; never cache an oversized row.
+        let bytes_per_entry = size_of_val(vector.as_slice()).saturating_add(96);
+        let max_entries = (32 << 20) / bytes_per_entry;
+        let mut cache = self.vec_cache.borrow_mut();
+        if max_entries != 0 {
+            if cache.len() >= max_entries {
+                cache.clear();
+            }
+            cache.insert(node_id, Rc::clone(vector));
+        }
     }
 
     fn del_vec(&mut self, node_id: u64) {
@@ -281,6 +383,7 @@ impl<'a, S: Scalar> Txn<'a, S> {
     /// by displacing the heuristic's last choice if necessary.
     fn prune_and_detach<D: DistanceMetric<S>>(
         &mut self,
+        metric: &D,
         node_id: u64,
         layer: u8,
         m_max: usize,
@@ -288,7 +391,7 @@ impl<'a, S: Scalar> Txn<'a, S> {
     ) -> bool {
         let pruned = {
             let gv = |id: u64| self.read_vec(id);
-            prune_selection::<S, D, Self>(node_id, layer, m_max, self, &gv)
+            prune_selection::<S, D, Self>(metric, node_id, layer, m_max, self, &gv)
         };
         let Some((mut pruned, mut evicted)) = pruned else {
             return true;
@@ -314,18 +417,19 @@ impl<'a, S: Scalar> Txn<'a, S> {
     }
 
     /// Stages the state row and hands the parts back for commit.
-    fn finish(mut self) -> (StagedRows, GraphState) {
-        self.rows.put(STATE_KEY.to_vec(), encode_value(&self.state));
-        (self.rows, self.state)
+    fn finish(mut self) -> StagedRows {
+        self.rows
+            .put(STATE_KEY.to_vec(), self.state.encode().to_vec());
+        self.rows
     }
 }
 
 fn encode_value<T: ValueEnDe>(v: &T) -> Vec<u8> {
-    v.encode()
+    v.encode_value()
 }
 
 fn decode_value<T: ValueEnDe>(raw: &[u8]) -> T {
-    T::decode(raw).expect("VecDex: corrupt row payload")
+    T::decode_value(raw).expect("VecDex: corrupt row payload")
 }
 
 /// A persistent, disk-backed approximate nearest-neighbor index
@@ -345,29 +449,26 @@ fn decode_value<T: ValueEnDe>(raw: &[u8]) -> T {
 /// # Handle ownership
 ///
 /// Serde deserialization and [`from_meta`](Self::from_meta) restore a handle
-/// to the same storage, with independent in-memory caches. Recovery replaces
-/// the active handle: retire the previous handle before using the restored one
-/// for mutations. Alternating writes through restored aliases can corrupt
-/// counters or index state, even when those writes are serialized.
-///
-/// While mutations occur, route every read and write through one live instance
-/// (for example, share it behind a `Mutex` or `RwLock`). Multiple independent
-/// handles may read the same index only while no handle mutates it.
+/// onto the same graph. Serialize all writers to that graph, including
+/// writers using distinct restored handles. Sequential writers see each
+/// other's committed state. Readers can query while a writer runs.
+/// Searches and iteration use a single engine snapshot. Point lookups use
+/// never-reused node IDs and can return `None` if a concurrent write removes
+/// the referenced vector.
 pub struct VecDex<K, D, S: Scalar = f32>
 where
-    K: KeyEnDe + ValueEnDe + Clone + Eq,
+    K: KeyEnDe,
     D: DistanceMetric<S>,
 {
     store: MapxRaw,
     config: HnswConfig,
-    /// In-memory mirror of the persisted graph-state row.
-    state: GraphState,
-    _p: PhantomData<(K, D, S)>,
+    metric: D,
+    _p: PhantomData<(K, S)>,
 }
 
 impl<K, D, S> Serialize for VecDex<K, D, S>
 where
-    K: KeyEnDe + ValueEnDe + Clone + Eq,
+    K: KeyEnDe,
     D: DistanceMetric<S>,
     S: Scalar,
 {
@@ -375,11 +476,11 @@ where
     where
         Ser: serde::Serializer,
     {
-        // The distance metric `D` occurs in no field type, so the
-        // typed-handle envelope (tagged with `VecDex<K, D, S>`) is the
-        // only guard against restoring an index under a different metric.
-        crate::common::serialize_typed_handle_meta::<Self, Ser>(
-            &(LAYOUT_VERSION, &self.store, &self.config),
+        let schema = self.schema().map_err(serde::ser::Error::custom)?;
+        let extra = schema_binding(&schema);
+        crate::common::serialize_prefix_handle::<Self, _>(
+            &self.store,
+            &extra,
             serializer,
         )
     }
@@ -387,7 +488,7 @@ where
 
 impl<'de, K, D, S> Deserialize<'de> for VecDex<K, D, S>
 where
-    K: KeyEnDe + ValueEnDe + Clone + Eq,
+    K: KeyEnDe,
     D: DistanceMetric<S>,
     S: Scalar,
 {
@@ -395,32 +496,25 @@ where
     where
         De: serde::Deserializer<'de>,
     {
-        let (version, store, config) = crate::common::deserialize_typed_handle_meta::<
-            Self,
-            (u8, MapxRaw, HnswConfig),
-            De,
-        >(deserializer)?;
-        if version != LAYOUT_VERSION {
-            return Err(serde::de::Error::custom(format!(
-                "VecDex: unsupported layout version {version} (expected {LAYOUT_VERSION})"
-            )));
-        }
-        config.validate().map_err(serde::de::Error::custom)?;
-        Ok(Self::hydrate(store, config))
+        use crate::common::PrefixFrame;
+        crate::common::deserialize_prefix_handle::<Self, _, _>(deserializer, |frame| {
+            let PrefixFrame(store, extra) = frame;
+            Self::hydrate(store, extra)
+        })
     }
 }
 
 impl<K, D, S> std::fmt::Debug for VecDex<K, D, S>
 where
-    K: KeyEnDe + ValueEnDe + Clone + Eq,
+    K: KeyEnDe,
     D: DistanceMetric<S>,
     S: Scalar,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("VecDex")
-            .field("node_count", &self.state.node_count)
+            .field("node_count", &self.len())
             .field("dim", &self.config.dim)
-            .field("max_layer", &self.state.max_layer)
+            .field("max_layer", &self.state().max_layer)
             .finish()
     }
 }
@@ -435,7 +529,7 @@ pub type VecDexCosineF64<K> = VecDex<K, distance::Cosine, f64>;
 
 impl<K, D, S> VecDex<K, D, S>
 where
-    K: KeyEnDe + ValueEnDe + Clone + Eq,
+    K: KeyEnDe,
     D: DistanceMetric<S>,
     S: Scalar,
 {
@@ -459,51 +553,102 @@ where
     /// unreachable) and `ef_construction > 0` (else a layer search returns
     /// no candidates). [`VsdbError::ReadOnly`] in read-only mode.
     pub fn new(config: HnswConfig) -> Result<Self> {
+        Self::new_with_metric(D::default(), config)
+    }
+
+    /// Creates an index with the supplied metric and its persisted parameters.
+    pub fn new_with_metric(metric: D, config: HnswConfig) -> Result<Self> {
         config.validate()?;
         ensure_process_writable("vector index new")?;
         let state = GraphState {
             ef_search: config.ef_search,
             ..GraphState::default()
         };
-        Ok(Self {
+        let mut index = Self {
             store: MapxRaw::new(),
             config,
-            state,
+            metric,
+            _p: PhantomData,
+        };
+        let schema = index.schema()?;
+        let mut batch = index.store.batch();
+        batch.insert(META_KEY, schema);
+        batch.insert(STATE_KEY, state.encode());
+        batch.commit()?;
+        Ok(index)
+    }
+
+    /// Creates an index in the specified namespace with a configured metric.
+    pub fn new_with_metric_in(
+        ns: &crate::Namespace,
+        metric: D,
+        config: HnswConfig,
+    ) -> Result<Self> {
+        ns.scope(|| Self::new_with_metric(metric, config))
+    }
+
+    /// Returns the configured metric and its parameters.
+    pub fn metric(&self) -> D {
+        self.metric.clone()
+    }
+
+    fn schema(&self) -> Result<Vec<u8>> {
+        let header = SchemaHeader {
+            version: LAYOUT_VERSION,
+            scalar: size_of::<S>() as u8,
+            type_tag: crate::common::type_tag::<Self>(),
+            dim: self.config.dim as u32,
+            m: self.config.m,
+            m_max0: self.config.m_max0,
+            ef_construction: self.config.ef_construction,
+            ef_search: self.config.ef_search,
+        };
+        Ok(postcard::to_allocvec(&(header, &self.metric))?)
+    }
+
+    fn hydrate(store: MapxRaw, binding: &[u8]) -> Result<Self> {
+        let schema = store
+            .get(META_KEY)
+            .ok_or_else(|| corrupt("missing VecDex schema"))?;
+        if binding != schema_binding(&schema) {
+            return Err(corrupt("VecDex schema binding mismatch"));
+        }
+        let (header, parameters): (SchemaHeader, _) =
+            postcard::take_from_bytes(&schema)?;
+        if header.version != LAYOUT_VERSION
+            || header.scalar != size_of::<S>() as u8
+            || header.type_tag != crate::common::type_tag::<Self>()
+        {
+            return Err(corrupt("VecDex schema type mismatch"));
+        }
+        let (metric, tail) = postcard::take_from_bytes(parameters)?;
+        if !tail.is_empty() {
+            return Err(corrupt("trailing VecDex schema parameters"));
+        }
+        let config = HnswConfig {
+            dim: header.dim as usize,
+            m: header.m,
+            m_max0: header.m_max0,
+            ef_construction: header.ef_construction,
+            ef_search: header.ef_search,
+        };
+        config.validate()?;
+        GraphState::read(store.get(STATE_KEY))?;
+        Ok(Self {
+            store,
+            config,
+            metric,
             _p: PhantomData,
         })
     }
 
-    fn validate_vector(&self, vector: &[S]) -> Result<()> {
-        if vector.len() != self.config.dim {
-            return Err(VsdbError::DimensionMismatch {
-                expected: self.config.dim,
-                found: vector.len(),
-            });
-        }
-        if !vector.iter().all(|component| component.is_finite()) {
-            return Err(VsdbError::InvalidConfig {
-                detail: "VecDex vectors must contain finite components".to_owned(),
-            });
-        }
-        Ok(())
+    fn state(&self) -> GraphState {
+        GraphState::read(self.store.get(STATE_KEY)).expect("VecDex: corrupt graph state")
     }
 
-    /// Reconnects to an existing store and reads the persisted graph
-    /// state (absent on a never-mutated index).
-    fn hydrate(store: MapxRaw, config: HnswConfig) -> Self {
-        let state = store
-            .get(STATE_KEY)
-            .map(|raw| decode_value::<GraphState>(&raw))
-            .unwrap_or_else(|| GraphState {
-                ef_search: config.ef_search,
-                ..GraphState::default()
-            });
-        Self {
-            store,
-            config,
-            state,
-            _p: PhantomData,
-        }
+    /// Deep-copies the entire index, preserving its graph, into a fresh prefix.
+    pub fn clone_in(&self, ns: &crate::Namespace) -> Result<Self> {
+        Self::hydrate(self.store.clone_in(ns)?, &schema_binding(&self.schema()?))
     }
 
     /// Returns the unique instance ID.
@@ -526,13 +671,8 @@ where
 
     /// Recovers a `VecDex` from previously saved metadata.
     ///
-    /// Hydrates runtime caches from persisted rows and graph state. Each
-    /// mutation or bulk-insert chunk commits those rows together; recovery
-    /// does not rebuild the graph.
-    ///
-    /// This replaces the active handle; it does not share caches with existing
-    /// aliases. The [handle ownership contract](Self#handle-ownership) also
-    /// applies to direct serde deserialization.
+    /// Verifies the metric parameters, scalar width and creation-time schema
+    /// against the index's immutable schema row before serving any reads.
     pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
         let id = instance_id.into();
         crate::common::load_instance_meta_checked(id, Self::instance_id)
@@ -540,7 +680,7 @@ where
 
     /// Returns the number of indexed vectors.
     pub fn len(&self) -> u64 {
-        self.state.node_count
+        self.state().node_count
     }
 
     /// Returns `true` if the index contains no vectors.
@@ -558,46 +698,39 @@ where
     /// WAL data and must not be retried automatically.
     pub fn set_ef_search(&mut self, ef: usize) -> Result<()> {
         ensure_writable(&self.namespace(), "vector index ef update")?;
-        let mut txn: Txn<'_, S> = Txn::new(&self.store, self.state.clone());
+        let mut txn: Txn<'_, S> =
+            Txn::new(&self.store, GraphState::read(self.store.get(STATE_KEY))?);
         txn.state.ef_search = ef;
-        let (rows, state) = txn.finish();
+        let rows = txn.finish();
         rows.commit(&mut self.store)?;
-        self.state = state;
         Ok(())
     }
 
     /// Returns the vector associated with the given key, if it exists.
     pub fn get(&self, key: &K) -> Option<Vec<S>> {
-        let node_id = decode_node_id(&self.store.get(user_key(&KeyEnDe::encode(key)))?);
+        let node_id = decode_node_id(&self.store.get(user_key(&key.encode_key()))?);
         self.store
             .get(node_key(TAG_VEC, node_id))
-            .map(|raw| decode_value::<Vec<S>>(&raw))
+            .map(|raw| decode_vector::<S>(&raw))
     }
 
     /// Returns `true` if the index contains the given key.
     pub fn contains_key(&self, key: &K) -> bool {
-        self.store.contains_key(user_key(&KeyEnDe::encode(key)))
+        self.store.contains_key(user_key(&key.encode_key()))
     }
 
     /// Returns an iterator over all indexed keys.
     pub fn keys(&self) -> impl Iterator<Item = K> + '_ {
         self.scan_tag(TAG_KEY2NODE).map(|(raw_key, _)| {
-            <K as KeyEnDe>::decode(&raw_key[1..]).expect("VecDex: corrupt key bytes")
+            K::decode_key(&raw_key[1..]).expect("VecDex: corrupt key bytes")
         })
     }
 
     /// Returns an iterator over all (key, vector) pairs.
     pub fn iter(&self) -> impl Iterator<Item = (K, Vec<S>)> + '_ {
-        self.scan_tag(TAG_NODE2KEY)
-            .filter_map(|(raw_key, raw_val)| {
-                let mut b = [0u8; 8];
-                b.copy_from_slice(&raw_key[1..9]);
-                let node_id = u64::from_be_bytes(b);
-                let key = decode_value::<K>(&raw_val);
-                self.store
-                    .get(node_key(TAG_VEC, node_id))
-                    .map(|raw| (key, decode_value::<Vec<S>>(&raw)))
-            })
+        let view = self.store.read_view();
+        let rows = view.range_detached(tag_bounds(TAG_NODE2KEY));
+        rows.map(move |(key, value)| reader::decode_pair(&view, &key, &value))
     }
 
     fn scan_tag(
@@ -605,11 +738,7 @@ where
         tag: u8,
     ) -> impl Iterator<Item = (vsdb_core::common::RawKey, vsdb_core::common::RawValue)> + '_
     {
-        use std::{borrow::Cow, ops::Bound};
-        self.store.range((
-            Bound::Included(Cow::Owned(vec![tag])),
-            Bound::Excluded(Cow::Owned(vec![tag + 1])),
-        ))
+        self.store.range(tag_bounds(tag))
     }
 
     /// Clears all indexed data.
@@ -629,15 +758,17 @@ where
         ensure_writable(&self.namespace(), "vector index clear")?;
         let mut txn: Txn<'_, S> = Txn::new(
             &self.store,
-            GraphState {
-                ef_search: self.state.ef_search,
-                ..GraphState::default()
-            },
+            GraphState::read(self.store.get(STATE_KEY))?.cleared(),
         );
         txn.rows.wipe();
-        let (rows, state) = txn.finish();
+        txn.rows.put(
+            META_KEY.to_vec(),
+            self.store
+                .get(META_KEY)
+                .ok_or_else(|| corrupt("missing VecDex schema"))?,
+        );
+        let rows = txn.finish();
         rows.commit(&mut self.store)?;
-        self.state = state;
         Ok(())
     }
 
@@ -658,38 +789,46 @@ where
     /// leave recoverable WAL data and must not be retried automatically.
     pub fn insert(&mut self, key: &K, vector: &[S]) -> Result<()> {
         ensure_writable(&self.namespace(), "vector index insert")?;
-        self.validate_vector(vector)?;
+        validate_vector(self.config.dim, vector)?;
 
-        let mut txn = Txn::new(&self.store, self.state.clone());
-        Self::stage_remove(&mut txn, &self.config, key);
-        Self::stage_insert(&mut txn, &self.config, key, vector);
-        let (rows, state) = txn.finish();
+        let mut txn =
+            Txn::new(&self.store, GraphState::read(self.store.get(STATE_KEY))?);
+        Self::stage_remove(&self.metric, &mut txn, &self.config, key);
+        Self::stage_insert(&self.metric, &mut txn, &self.config, key, vector)?;
+        let rows = txn.finish();
         rows.commit(&mut self.store)?;
-        self.state = state;
         Ok(())
     }
 
     /// Stages one whole insert (rows + graph linking) into `txn`.
-    fn stage_insert(txn: &mut Txn<'_, S>, config: &HnswConfig, key: &K, vector: &[S]) {
+    fn stage_insert(
+        metric: &D,
+        txn: &mut Txn<'_, S>,
+        config: &HnswConfig,
+        key: &K,
+        vector: &[S],
+    ) -> Result<()> {
         let node_id = txn.state.next_node_id;
         let node_layer = random_layer(config.m);
 
+        let encoded_key = key.encode_key();
         txn.put_vec(node_id, vector);
-        txn.rows.put(
-            user_key(&KeyEnDe::encode(key)),
-            node_id.to_le_bytes().to_vec(),
-        );
         txn.rows
-            .put(node_key(TAG_NODE2KEY, node_id).to_vec(), encode_value(key));
+            .put(user_key(&encoded_key), node_id.to_le_bytes().to_vec());
+        txn.rows
+            .put(node_key(TAG_NODE2KEY, node_id).to_vec(), encoded_key);
         txn.rows.put(
             node_key(TAG_INFO, node_id).to_vec(),
             encode_value(&node_layer),
         );
 
-        txn.state.next_node_id = node_id + 1;
+        txn.state.next_node_id = node_id
+            .checked_add(1)
+            .ok_or_else(|| corrupt("VecDex node ID exhausted"))?;
         txn.state.node_count += 1;
 
-        Self::link_node(txn, config, node_id, vector, node_layer);
+        Self::link_node(metric, txn, config, node_id, vector, node_layer);
+        Ok(())
     }
 
     /// Inserts a batch of (key, vector) pairs.
@@ -709,7 +848,7 @@ where
         const CHUNK: usize = 64;
 
         for (_, vec) in items {
-            self.validate_vector(vec)?;
+            validate_vector(self.config.dim, vec)?;
         }
 
         // Last occurrence of each key wins (matching the final state of
@@ -717,21 +856,21 @@ where
         let mut seen: HashSet<Vec<u8>> = HashSet::with_capacity(items.len());
         let mut dedup: Vec<&(K, Vec<S>)> = Vec::with_capacity(items.len());
         for item in items.iter().rev() {
-            if seen.insert(KeyEnDe::encode(&item.0)) {
+            if seen.insert(item.0.encode_key()) {
                 dedup.push(item);
             }
         }
         dedup.reverse();
 
         for chunk in dedup.chunks(CHUNK) {
-            let mut txn = Txn::new(&self.store, self.state.clone());
+            let mut txn =
+                Txn::new(&self.store, GraphState::read(self.store.get(STATE_KEY))?);
             for (key, vec) in chunk {
-                Self::stage_remove(&mut txn, &self.config, key);
-                Self::stage_insert(&mut txn, &self.config, key, vec);
+                Self::stage_remove(&self.metric, &mut txn, &self.config, key);
+                Self::stage_insert(&self.metric, &mut txn, &self.config, key, vec)?;
             }
-            let (rows, state) = txn.finish();
+            let rows = txn.finish();
             rows.commit(&mut self.store)?;
-            self.state = state;
         }
         Ok(())
     }
@@ -744,6 +883,7 @@ where
     ///
     /// All reads observe the transaction's own staged writes.
     fn link_node(
+        metric: &D,
         txn: &mut Txn<'_, S>,
         config: &HnswConfig,
         node_id: u64,
@@ -765,8 +905,8 @@ where
         let mut cur_ep = vec![ep];
         for l in (node_layer.saturating_add(1)..=cur_max).rev() {
             let res = {
-                let gv = |id: u64| txn.read_vec(id);
-                search_layer::<S, D, _>(vector, &cur_ep, 1, l, &gv, txn, None)
+                let dist = |id| txn.read_vec(id).map(|v| metric.distance(vector, &v));
+                search_layer(dist, &cur_ep, 1, l, txn, None)
             };
             if let Some(&(_, id)) = res.iter().find(|&&(_, id)| id != node_id) {
                 cur_ep = vec![id];
@@ -779,16 +919,8 @@ where
             let m_max = if l == 0 { config.m_max0 } else { config.m };
 
             let candidates = {
-                let gv = |id: u64| txn.read_vec(id);
-                search_layer::<S, D, _>(
-                    vector,
-                    &cur_ep,
-                    config.ef_construction,
-                    l,
-                    &gv,
-                    txn,
-                    None,
-                )
+                let dist = |id| txn.read_vec(id).map(|v| metric.distance(vector, &v));
+                search_layer(dist, &cur_ep, config.ef_construction, l, txn, None)
             };
             let neighbor_pool: Vec<(S, u64)> = candidates
                 .iter()
@@ -798,7 +930,7 @@ where
 
             let selected = {
                 let gv = |id: u64| txn.read_vec(id);
-                select_neighbors_heuristic::<S, D>(&neighbor_pool, m_max, &gv)
+                select_neighbors_heuristic::<S, D>(metric, &neighbor_pool, m_max, &gv)
             };
 
             txn.set_neighbors(l, node_id, &selected);
@@ -811,7 +943,7 @@ where
                 // survive pruning; otherwise every neighbor can evict the
                 // new node and commit an unreachable entry point.
                 let keep = (i == 0).then_some(node_id);
-                txn.prune_and_detach::<D>(neighbor, l, m_max, keep);
+                txn.prune_and_detach(metric, neighbor, l, m_max, keep);
             }
 
             cur_ep = neighbor_pool.iter().map(|&(_, id)| id).collect();
@@ -828,7 +960,7 @@ where
 
     /// Searches for the `k` nearest neighbors of the query vector.
     pub fn search(&self, query: &[S], k: usize) -> Result<Vec<(K, S)>> {
-        self.search_internal(query, k, self.state.ef_search, None)
+        self.search_internal(query, k, None, None)
     }
 
     /// Searches with a custom `ef` (beam width) for recall/speed tradeoff.
@@ -838,7 +970,7 @@ where
     /// [`len`](Self::len) visits every vector, including in older disconnected
     /// graphs, without rebuilding stored edges. Smaller beams remain approximate.
     pub fn search_ef(&self, query: &[S], k: usize, ef: usize) -> Result<Vec<(K, S)>> {
-        self.search_internal(query, k, ef, None)
+        self.search_internal(query, k, Some(ef), None)
     }
 
     /// Searches with a key predicate evaluated during beam search.
@@ -861,7 +993,7 @@ where
         k: usize,
         predicate: impl Fn(&K) -> bool,
     ) -> Result<Vec<(K, S)>> {
-        self.search_internal(query, k, self.state.ef_search, Some(&predicate))
+        self.search_internal(query, k, None, Some(&predicate))
     }
 
     /// Filtered search with a custom `ef` (beam width).
@@ -872,13 +1004,7 @@ where
         ef: usize,
         predicate: impl Fn(&K) -> bool,
     ) -> Result<Vec<(K, S)>> {
-        self.search_internal(query, k, ef, Some(&predicate))
-    }
-
-    fn node_user_key(&self, node_id: u64) -> Option<K> {
-        self.store
-            .get(node_key(TAG_NODE2KEY, node_id))
-            .map(|raw| decode_value::<K>(&raw))
+        self.search_internal(query, k, Some(ef), Some(&predicate))
     }
 
     /// Iterates `(node_id, max_layer)` over the committed node-info rows.
@@ -895,105 +1021,10 @@ where
         &self,
         query: &[S],
         k: usize,
-        ef: usize,
+        ef: Option<usize>,
         predicate: Option<&dyn Fn(&K) -> bool>,
     ) -> Result<Vec<(K, S)>> {
-        self.validate_vector(query)?;
-        let Some(ep) = self.state.entry_point else {
-            return Ok(vec![]);
-        };
-
-        if k == 0 {
-            return Ok(vec![]);
-        }
-
-        let cache = RefCell::new(HashMap::<u64, Rc<Vec<S>>>::new());
-        // Passing keys have already been read and decoded by the filter.
-        // Retain at most k for result emission: large keys must not grow this
-        // cache with the visited set. Results absent from it are read normally.
-        // Rejected keys and unfiltered searches do not populate this cache.
-        let filtered_keys = RefCell::new(HashMap::<u64, K>::new());
-        let get_vec = |id: u64| -> Option<Rc<Vec<S>>> {
-            if let Some(v) = cache.borrow().get(&id) {
-                // Cheap refcount bump — no vector data is copied, unlike
-                // the pre-Rc version's full-vector `.clone()` on every
-                // cache hit (this closure's entry point is looked up
-                // repeatedly per query, e.g. once as the layer-0 entry
-                // point right after the layer-descent loop ends).
-                return Some(Rc::clone(v));
-            }
-            let raw = self.store.get(node_key(TAG_VEC, id))?;
-            let v = Rc::new(decode_value::<Vec<S>>(&raw));
-            cache.borrow_mut().insert(id, Rc::clone(&v));
-            Some(v)
-        };
-
-        let node_filter: Option<Box<dyn Fn(u64) -> bool + '_>> =
-            predicate.map(|pred| -> Box<dyn Fn(u64) -> bool + '_> {
-                let filtered_keys = &filtered_keys;
-                Box::new(move |node_id: u64| {
-                    let Some(key) = self.node_user_key(node_id) else {
-                        return false;
-                    };
-                    if pred(&key) {
-                        let mut keys = filtered_keys.borrow_mut();
-                        if keys.len() < k {
-                            keys.insert(node_id, key);
-                        }
-                        true
-                    } else {
-                        false
-                    }
-                })
-            });
-        let filter_ref: Option<&dyn Fn(u64) -> bool> =
-            node_filter.as_ref().map(|f| f.as_ref());
-
-        let mut cur_ep = vec![ep];
-        for l in (1..=self.state.max_layer).rev() {
-            let res = search_layer::<S, D, _>(
-                query,
-                &cur_ep,
-                1,
-                l,
-                &get_vec,
-                &self.store,
-                None,
-            );
-            if let Some(&(_, id)) = res.first() {
-                cur_ep = vec![id];
-            }
-        }
-
-        // A filter needs no beam inflation: the layer search keeps
-        // expanding until it holds `search_ef` *passing* results.
-        let search_ef = ef.max(k);
-        let results = search_layer::<S, D, _>(
-            query,
-            &cur_ep,
-            search_ef,
-            0,
-            &get_vec,
-            &SearchRows(&self.store),
-            filter_ref,
-        );
-
-        let mut out = Vec::with_capacity(k.min(results.len()));
-        for (dist, node_id) in results.into_iter().take(k) {
-            let key = if predicate.is_some() {
-                filtered_keys
-                    .borrow_mut()
-                    .remove(&node_id)
-                    .or_else(|| self.node_user_key(node_id))
-            } else {
-                self.node_user_key(node_id)
-            };
-            if let Some(key) = key {
-                out.push((key, dist));
-            }
-        }
-
-        Ok(out)
+        self.read_view().search_internal(query, k, ef, predicate)
     }
 
     /// Removes a vector by user key. Returns `true` if the key existed.
@@ -1010,18 +1041,23 @@ where
     /// leave recoverable WAL data and must not be retried automatically.
     pub fn remove(&mut self, key: &K) -> Result<bool> {
         ensure_writable(&self.namespace(), "vector index remove")?;
-        let mut txn = Txn::new(&self.store, self.state.clone());
-        if !Self::stage_remove(&mut txn, &self.config, key) {
+        let mut txn =
+            Txn::new(&self.store, GraphState::read(self.store.get(STATE_KEY))?);
+        if !Self::stage_remove(&self.metric, &mut txn, &self.config, key) {
             return Ok(false);
         }
-        let (rows, state) = txn.finish();
+        let rows = txn.finish();
         rows.commit(&mut self.store)?;
-        self.state = state;
         Ok(true)
     }
 
-    fn stage_remove(txn: &mut Txn<'_, S>, config: &HnswConfig, key: &K) -> bool {
-        let encoded_key = KeyEnDe::encode(key);
+    fn stage_remove(
+        metric: &D,
+        txn: &mut Txn<'_, S>,
+        config: &HnswConfig,
+        key: &K,
+    ) -> bool {
+        let encoded_key = key.encode_key();
         let Some(raw) = txn.get(&user_key(&encoded_key)) else {
             return false;
         };
@@ -1075,13 +1111,13 @@ where
                     c_list.push(n);
                     txn.set_neighbors(l, candidate, &c_list);
 
-                    if txn.prune_and_detach::<D>(candidate, l, m_max, Some(n)) {
+                    if txn.prune_and_detach(metric, candidate, l, m_max, Some(n)) {
                         keep.get_or_insert(candidate);
                         added += 1;
                     }
                 }
                 if added > 0 {
-                    txn.prune_and_detach::<D>(n, l, m_max, keep);
+                    txn.prune_and_detach(metric, n, l, m_max, keep);
                 }
             }
         }
@@ -1095,7 +1131,7 @@ where
         txn.state.node_count = txn.state.node_count.saturating_sub(1);
 
         if Self::entry_point_needs_repair(txn, node_id) {
-            Self::repair_entry_point(txn, config);
+            Self::repair_entry_point(metric, txn, config);
         }
         true
     }
@@ -1130,7 +1166,7 @@ where
             .any(|neighbor| txn.get(&node_key(TAG_VEC, neighbor)).is_some())
     }
 
-    fn repair_entry_point(txn: &mut Txn<'_, S>, config: &HnswConfig) {
+    fn repair_entry_point(metric: &D, txn: &mut Txn<'_, S>, config: &HnswConfig) {
         #[cfg(test)]
         ENTRY_REPAIRS.with(|count| count.set(count.get() + 1));
         let live: Vec<(u64, u8)> = txn
@@ -1172,7 +1208,7 @@ where
                 .filter(|(id, _)| *id != new_ep)
                 .filter_map(|(id, _)| {
                     txn.read_vec(*id)
-                        .map(|vector| (D::distance(&ep_vec, &vector), *id))
+                        .map(|vector| (metric.distance(&ep_vec, &vector), *id))
                 })
                 .min_by(|a, b| a.0.total_cmp(&b.0))
                 .map(|(_, id)| id);
@@ -1183,7 +1219,7 @@ where
                     reverse.push(new_ep);
                     txn.set_neighbors(0, neighbor, &reverse);
                 }
-                txn.prune_and_detach::<D>(neighbor, 0, config.m_max0, Some(new_ep));
+                txn.prune_and_detach(metric, neighbor, 0, config.m_max0, Some(new_ep));
             }
         }
 
@@ -1207,7 +1243,10 @@ where
         ensure_writable(&self.namespace(), "vector index compaction")?;
         use rand::seq::SliceRandom;
 
-        let mut pairs: Vec<(K, Vec<S>)> = self.iter().collect();
+        let view = self.read_view();
+        let mut pairs: Vec<(K, Vec<S>)> = view.iter().collect();
+        let cleared = GraphState::read(view.raw.get(STATE_KEY))?.cleared();
+        drop(view);
 
         pairs.shuffle(&mut rand::rng());
 
@@ -1233,22 +1272,110 @@ where
             }
         }
 
-        let mut txn = Txn::new(
-            &self.store,
-            GraphState {
-                ef_search: self.state.ef_search,
-                ..GraphState::default()
-            },
-        );
+        let mut txn = Txn::new(&self.store, cleared);
         txn.rows.wipe();
+        txn.rows.put(
+            META_KEY.to_vec(),
+            self.store
+                .get(META_KEY)
+                .ok_or_else(|| corrupt("missing VecDex schema"))?,
+        );
         for (key, vec) in &pairs {
-            Self::stage_insert(&mut txn, &self.config, key, vec);
+            Self::stage_insert(&self.metric, &mut txn, &self.config, key, vec)?;
         }
-        let (rows, state) = txn.finish();
+        let rows = txn.finish();
         rows.commit(&mut self.store)?;
-        self.state = state;
 
         Ok(())
+    }
+}
+
+impl<K: KeyEnDe, D: DistanceMetric<S>, S: Scalar> Clone for VecDex<K, D, S> {
+    fn clone(&self) -> Self {
+        self.clone_in(&self.namespace())
+            .expect("VecDex: deep clone failed")
+    }
+}
+
+fn tag_bounds(tag: u8) -> std::ops::Range<[u8; 1]> {
+    [tag]..[tag + 1]
+}
+
+struct Search<'a, 'db, K, S> {
+    view: &'a MapxRawReadView<'db>,
+    query: &'a [S],
+    k: usize,
+    ef: Option<usize>,
+    predicate: Option<&'a dyn Fn(&K) -> bool>,
+}
+
+impl<K: KeyEnDe, S: Scalar> MetricSearch<S> for Search<'_, '_, K, S> {
+    type Output = Result<Vec<(K, S)>>;
+    fn run<D: DistanceMetric<S>>(self, metric: &D) -> Self::Output {
+        let state = GraphState::read(self.view.get(STATE_KEY))?;
+        let Some(mut ep) = state.entry_point else {
+            return Ok(Vec::new());
+        };
+        if self.k == 0 {
+            return Ok(Vec::new());
+        }
+        let mut scratch = Vec::with_capacity(self.query.len());
+        let mut distance_to = |id| {
+            let raw = self.view.get(node_key(TAG_VEC, id))?;
+            S::decode_into(&raw, &mut scratch);
+            Some(metric.distance(self.query, &scratch))
+        };
+        let key_for = |id| {
+            let raw = self.view.get(node_key(TAG_NODE2KEY, id))?;
+            Some(K::decode_key(&raw).expect("VecDex: corrupt key bytes"))
+        };
+        let filtered_keys = RefCell::new(HashMap::new());
+        let filter = self.predicate.map(|predicate| {
+            |id| {
+                let Some(key) = key_for(id) else { return false };
+                if !predicate(&key) {
+                    return false;
+                }
+                let mut keys = filtered_keys.borrow_mut();
+                if keys.len() < self.k {
+                    keys.insert(id, key);
+                }
+                true
+            }
+        });
+        let graph = SearchRows(self.view);
+        for layer in (1..=state.max_layer).rev() {
+            if let Some((_, next)) =
+                search_layer(&mut distance_to, &[ep], 1, layer, self.view, None).first()
+            {
+                ep = *next;
+            }
+        }
+        let ef = self.ef.unwrap_or(state.ef_search).max(self.k);
+        let results = search_layer(
+            distance_to,
+            &[ep],
+            ef,
+            0,
+            &graph,
+            filter.as_ref().map(|f| f as &dyn Fn(u64) -> bool),
+        );
+        let mut keys = filtered_keys.into_inner();
+        Ok(results
+            .into_iter()
+            .take(self.k)
+            .filter_map(|(dist, id)| {
+                keys.remove(&id)
+                    .or_else(|| key_for(id))
+                    .map(|key| (key, dist))
+            })
+            .collect())
+    }
+}
+
+impl AdjRead for MapxRawReadView<'_> {
+    fn adj_row(&self, key: &[u8]) -> Option<Vec<u8>> {
+        self.get(key)
     }
 }
 

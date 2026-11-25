@@ -1211,7 +1211,8 @@ fn test_serde_roundtrip() {
 fn test_serde_size() {
     let tree = PersistentBTree::new();
     let bytes = postcard::to_allocvec(&tree).unwrap();
-    assert!(bytes.len() <= 24, "expected ≤24 bytes, got {}", bytes.len());
+    assert_eq!(bytes.len(), 37);
+    assert_eq!(&bytes[1..9], b"VSTYPE04");
 }
 
 /// from_meta nonexistent.

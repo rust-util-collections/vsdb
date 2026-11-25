@@ -416,20 +416,11 @@ fn namespace_lifecycle() {
     let d = expect_refused(Namespace::default_ns().close());
     assert_eq!(d.id(), DEFAULT_NS_ID);
 
-    // ---- legacy registry records migrate to established sidecars ----
-    let legacy = Namespace::create().unwrap();
-    let legacy_id = legacy.id();
-    let lifecycle = PathBuf::from(&dir)
-        .join("__SYSTEM__/__namespace_state__")
-        .join(format!("{legacy_id:016x}"));
-    assert!(lifecycle.is_file());
-    legacy.close().unwrap();
-    fs::remove_file(&lifecycle).unwrap();
-    let legacy = Namespace::open(legacy_id).unwrap();
-    assert!(lifecycle.is_file());
-    legacy.close().unwrap();
-    Namespace::destroy(legacy_id).unwrap();
-    assert!(!lifecycle.exists());
+    assert!(
+        !PathBuf::from(&dir)
+            .join("__SYSTEM__/__namespace_state__")
+            .exists()
+    );
 
     // ---- relocate refuses an unpopulated target ----
     // (write → close → relocate-to-empty-dir must FAIL: repointing the
@@ -457,7 +448,7 @@ fn namespace_lifecycle() {
     // e.g. a provisioning script "prepared" the volume, or a copy was
     // interrupted before any shard content landed): still refused.
     fs::create_dir_all(format!("{new_root}/__SYSTEM__")).unwrap();
-    fs::write(format!("{new_root}/__SYSTEM__/format_version"), "16").unwrap();
+    fs::write(format!("{new_root}/__SYSTEM__/.shards_ready"), "18").unwrap();
     fs::create_dir_all(format!("{new_root}/mmdb/shard_00")).unwrap();
     fs::create_dir_all(format!("{new_root}/mmdb/shard_01")).unwrap();
     assert!(Namespace::relocate(rid, &new_root).is_err());
@@ -476,9 +467,13 @@ fn namespace_lifecycle() {
     .unwrap();
     assert!(Namespace::relocate(rid, &new_root).is_err());
     fs::remove_dir_all(format!("{new_root}/mmdb/shard_02")).unwrap();
-    fs::write(format!("{new_root}/__SYSTEM__/format_version"), "17").unwrap();
+    let header = PathBuf::from(&new_root).join("__SYSTEM__/engine_header");
+    let valid = fs::read(&header).unwrap();
+    let mut wrong = valid.clone();
+    wrong[24..32].copy_from_slice(&(rid + 1).to_le_bytes());
+    fs::write(&header, wrong).unwrap();
     assert!(Namespace::relocate(rid, &new_root).is_err());
-    fs::write(format!("{new_root}/__SYSTEM__/format_version"), "16").unwrap();
+    fs::write(header, valid).unwrap();
     Namespace::relocate(rid, &new_root).unwrap();
     let rm = MapxRaw::from_meta(rmid).unwrap();
     assert_eq!(&rm.get(b"moved").unwrap()[..], b"yes");
@@ -487,12 +482,7 @@ fn namespace_lifecycle() {
     Namespace::destroy(rid).unwrap();
     assert!(!PathBuf::from(&new_root).exists());
 
-    // ---- relocate promotes a stale Pending lifecycle sidecar ----
-    // A crash right after `Engine::open_at` writes `format_version` leaves
-    // `__namespace_state__/<id>` as `Pending` (`b"P"`) on a completed tree.
-    // Relocating that completed dataset must promote the sidecar to
-    // `Established` so read-only opens succeed and a later missing target
-    // fails loudly instead of silently initializing an empty replacement.
+    // Relocate verifies universe and namespace identity even for complete targets.
     let p = Namespace::create_with(NamespaceOpts {
         shards: 2,
         ..Default::default()
@@ -506,16 +496,10 @@ fn namespace_lifecycle() {
     drop((pm, p));
     Namespace::close_by_id(pid).unwrap();
 
-    let p_lifecycle = PathBuf::from(&dir)
-        .join("__SYSTEM__/__namespace_state__")
-        .join(format!("{pid:016x}"));
-    fs::write(&p_lifecycle, b"P").unwrap();
-
     let p_relocated = format!("{dir}_pending_relocated");
     let p_missing = format!("{dir}_pending_missing");
     fs::rename(&p_old, &p_relocated).unwrap();
     Namespace::relocate(pid, &p_relocated).unwrap();
-    assert_eq!(fs::read(&p_lifecycle).unwrap(), b"E");
 
     fs::rename(&p_relocated, &p_missing).unwrap();
     assert!(Namespace::open(pid).is_err());

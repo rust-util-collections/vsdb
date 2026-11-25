@@ -1,1128 +1,782 @@
-//!
-//! A raw, disk-based, directed acyclic graph (DAG) map.
-//!
-//! `DagMapRaw` provides a map-like interface where each instance can have a parent
-//! and multiple children, forming a directed acyclic graph. This is useful for
-//! representing versioned or hierarchical data.
-//!
-//! # Examples
-//!
-//! ```
-//! use vsdb::DagMapRaw;
-//! use vsdb::{VsdbOptions, vsdb_configure, vsdb_get_base_dir};
-//! use std::fs;
-//!
-//! // It's recommended to use a temporary directory for testing
-//! let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
-//! vsdb_configure(VsdbOptions::new(&dir)).unwrap();
-//!
-//! let mut dag = DagMapRaw::new(None);
-//!
-//! // Insert a value
-//! dag.insert(&[1], &[10]);
-//! assert_eq!(dag.get(&[1]), Some(vec![10]));
-//!
-//! // Create a child
-//! let child = DagMapRaw::new(Some(&mut dag));
-//! assert_eq!(child.get(&[1]), Some(vec![10]));
-//!
-//! // Clean up the directory
-//! fs::remove_dir_all(vsdb_get_base_dir()).unwrap();
-//! ```
+//! Persistent raw-key and raw-value overlays on a single shard.
+#![forbid(unsafe_code)]
 
 #[cfg(test)]
 mod test;
 
 use crate::{
-    DagMapId, MapxOrdRawKey, Orphan,
+    DagMapId, Namespace,
     common::{
-        Colocate, InstanceId, UnwindMark, ensure_writable,
+        InstanceId, PrefixFrame, UnwindMark, ensure_writable,
         error::{Result, VsdbError},
         staged::StagedRows,
     },
 };
-use serde::{Deserialize, Serialize, de};
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    fmt,
     ops::{Deref, DerefMut},
     result::Result as StdResult,
 };
-use vsdb_core::{
-    basic::mapx_raw::{self, MapxRaw},
-    common::RawBytes,
-};
+use vsdb_core::{MapxRaw, common::RawBytes};
 
-type DagHead = DagMapRaw;
+const META: [u8; 1] = [0];
+const EDGE: [u8; 1] = [1];
+const DATA: [u8; 1] = [2];
+const END: [u8; 1] = [3];
+const MAGIC: [u8; 8] = *b"VSDAGN01";
+const LAYOUT: u8 = 1;
 
-/// Side key in a consumed node's parent `Orphan`. Invisible to
-/// `get_value` (which reads `[]`). Written only after merge and reparent
-/// are durable, and names the genesis so a retry can finish the clear
-/// without re-folding. Old readers ignore the extra key.
-const PRUNE_CLEARING_KEY: &[u8] = &[1];
-
-/// Side key in the parent `Orphan` holding the parent handle across a
-/// `destroy` that has already nulled the value slot. Old readers ignore it.
-const DESTROY_PARENT_KEY: &[u8] = &[2];
-
-/// A raw, disk-based, directed acyclic graph (DAG) map.
-///
-/// Deliberately does **not** implement [`Default`]: every `DagMapRaw`
-/// is a real, disk-backed structure — `Orphan::new()`'s eager write for
-/// the `parent` slot means construction always allocates engine
-/// prefixes and performs a disk write.  A derived or `new(None)`-backed
-/// `Default` would make that cost invisible at every call site that
-/// generically constructs "an empty value" (`Option::unwrap_or_default()`,
-/// `HashMap::entry().or_default()`, and especially `std::mem::take`,
-/// whose entire idiom relies on `Default` being a cheap, side-effect-free
-/// placeholder) — silently creating orphaned, unreachable disk state one
-/// call at a time. Use [`Self::new`] explicitly instead.
-///
-/// [`Clone`] deep-copies the connected graph, including ancestors, siblings,
-/// descendants, and recovery links, into fresh storage in the same namespace.
-/// Structural operations on the copy never affect the original graph. Its
-/// cost is proportional to that graph's retained data and nodes.
-#[derive(Debug)]
-pub struct DagMapRaw {
-    data: MapxRaw,
-
-    // Owned by this node.  Holds an aliasing handle of the parent node
-    // (or `None` for a root), so `destroy()` can unlink persistently
-    // without affecting siblings.
-    parent: Orphan<Option<DagMapRaw>>,
-
-    // child id --> child instance
-    children: MapxOrdRawKey<DagMapRaw>,
+fn corrupt(message: &str) -> VsdbError {
+    VsdbError::Corrupt {
+        detail: message.into(),
+    }
 }
 
-impl Clone for DagMapRaw {
-    fn clone(&self) -> Self {
-        let requested = self.instance_id();
-        let mut sources = HashMap::new();
-        // SAFETY: this alias is only read while discovering the source graph.
-        // All writes below target newly allocated, independent prefixes.
-        let mut pending = vec![unsafe { self.shadow() }];
-        while let Some(node) = pending.pop() {
-            let id = node.instance_id();
-            if sources.contains_key(&id) {
-                continue;
-            }
-            pending.extend(node.parent.get_value());
-            pending.extend(node.children.iter().map(|(_, child)| child));
-            for key in [PRUNE_CLEARING_KEY, DESTROY_PARENT_KEY] {
-                pending.extend(node.parent.get_aux(key).flatten());
-            }
-            sources.insert(id, node);
-        }
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct Parent {
+    map: u64,
+    edge: u64,
+}
 
-        // Allocate every identity before copying edges. Recovery can leave
-        // duplicate discovery links or links back to an already visited node.
-        let mut copies: HashMap<_, _> = sources
-            .iter()
-            .map(|(&id, source)| {
-                let ns = source.namespace();
-                (
-                    id,
-                    Self {
-                        data: source.data.clone(),
-                        parent: Orphan::new_in(&ns, None),
-                        children: MapxOrdRawKey::new_in(&ns),
-                    },
-                )
-            })
-            .collect();
-        let remap = |node: Self| {
-            // SAFETY: remapped aliases are serialized as graph edges only;
-            // no writes occur through these temporary handles.
-            unsafe { copies[&node.instance_id()].shadow() }
-        };
-        for (id, source) in &sources {
-            // SAFETY: only this handle mutates this fresh node's metadata.
-            // Other aliases are serialized into edges, never used to mutate.
-            let mut copy = unsafe { copies[id].shadow() };
-            copy.parent.set_value(&source.parent.get_value().map(remap));
-            for (key, child) in source.children.iter() {
-                copy.children.insert(key, &remap(child));
-            }
-            for key in [PRUNE_CLEARING_KEY, DESTROY_PARENT_KEY] {
-                if let Some(target) = source.parent.get_aux(key) {
-                    copy.parent.set_aux(key, &target.map(remap));
-                }
-            }
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+enum State {
+    Root,
+    Child(Parent),
+    Clearing { owner: Option<Parent>, genesis: u64 },
+    Destroying(Option<Parent>),
+    Destroyed,
+}
+
+impl State {
+    fn owner(self) -> Option<Parent> {
+        match self {
+            Self::Child(owner) => Some(owner),
+            Self::Clearing { owner, .. } | Self::Destroying(owner) => owner,
+            Self::Root | Self::Destroyed => None,
         }
-        copies.remove(&requested).expect("source node was copied")
     }
+    fn live(self) -> bool {
+        matches!(self, Self::Root | Self::Child(_))
+    }
+}
+
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+struct NodeMeta {
+    magic: [u8; 8],
+    dag_id: u64,
+    next_edge_id: u64,
+    state: State,
+}
+
+impl NodeMeta {
+    fn new(dag_id: u64, state: State) -> Self {
+        Self {
+            magic: MAGIC,
+            dag_id,
+            next_edge_id: 1,
+            state,
+        }
+    }
+    fn bytes(self) -> Vec<u8> {
+        postcard::to_allocvec(&self).expect("DAG metadata encoding")
+    }
+}
+
+fn edge_key(edge: u64) -> [u8; 9] {
+    let mut key = [1; 9];
+    key[1..].copy_from_slice(&edge.to_be_bytes());
+    key
+}
+
+fn data_key(key: &[u8]) -> Vec<u8> {
+    let mut row = Vec::with_capacity(key.len() + 1);
+    row.push(DATA[0]);
+    row.extend_from_slice(key);
+    row
+}
+fn live_bytes(bytes: &[u8]) -> Vec<u8> {
+    let mut tagged = Vec::with_capacity(bytes.len() + 1);
+    tagged.push(1);
+    tagged.extend_from_slice(bytes);
+    tagged
+}
+fn value(bytes: &[u8]) -> Option<&[u8]> {
+    match bytes {
+        [0] => None,
+        [1, value @ ..] => Some(value),
+        _ => panic!("invalid DAG data row"),
+    }
+}
+
+// External edge tokens are 128-bit little-endian integers.
+fn token(edge: u64) -> Vec<u8> {
+    u128::from(edge).to_le_bytes().to_vec()
+}
+
+fn open_prefix(ns: &Namespace, id: u64) -> Result<MapxRaw> {
+    crate::common::open_raw(InstanceId::new(id, ns.id()))
+}
+
+/// A node in a persistent overlay tree. Child lookups fall back to their
+/// parent. Serialize structural changes to a connected tree externally.
+/// Cloning deep-copies its connected component, including recovery links.
+#[derive(Debug)]
+pub struct DagMapRaw {
+    store: MapxRaw,
+    dag_id: u64,
 }
 
 impl Serialize for DagMapRaw {
-    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeTuple;
-        let mut t = serializer.serialize_tuple(3)?;
-        t.serialize_element(&self.data)?;
-        t.serialize_element(&self.parent)?;
-        t.serialize_element(&self.children)?;
-        t.end()
+    fn serialize<S: serde::Serializer>(&self, s: S) -> StdResult<S::Ok, S::Error> {
+        self.serialize_as::<Self, _>(s)
     }
 }
-
 impl<'de> Deserialize<'de> for DagMapRaw {
-    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        struct Vis;
-        impl<'de> de::Visitor<'de> for Vis {
-            type Value = DagMapRaw;
-            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str("DagMapRaw")
-            }
-            fn visit_seq<A: de::SeqAccess<'de>>(
-                self,
-                mut seq: A,
-            ) -> StdResult<DagMapRaw, A::Error> {
-                let data: MapxRaw = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
-                let parent: Orphan<Option<DagMapRaw>> = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                let children: MapxOrdRawKey<DagMapRaw> = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                let ns = data.namespace().id();
-                if parent.namespace().id() != ns || children.namespace().id() != ns {
-                    return Err(de::Error::custom(
-                        "DagMapRaw components belong to different namespaces",
-                    ));
-                }
-                Ok(DagMapRaw {
-                    data,
-                    parent,
-                    children,
-                })
-            }
-        }
-        deserializer.deserialize_tuple(3, Vis)
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> StdResult<Self, D::Error> {
+        crate::common::deserialize_prefix_handle::<Self, _, _>(d, Self::from_frame)
     }
 }
 
 impl DagMapRaw {
-    /// [`new`](Self::new) placed in `ns` — every internal component
-    /// lands in the same namespace (a composite never spans namespaces).
-    ///
-    /// With a parent, the child ALWAYS inherits the parent's namespace
-    /// (one DAG = one namespace); passing a different `ns` here is a
-    /// caller bug (`debug_assert`ed, ignored in release).
-    pub fn new_in(ns: &crate::common::Namespace, parent: Option<&mut Self>) -> Self {
-        if let Some(p) = &parent {
-            debug_assert_eq!(
-                ns.id(),
-                p.namespace().id(),
-                "a DAG never spans namespaces: child must live in its \
-                 parent's namespace"
-            );
+    pub(super) fn serialize_as<T, S: serde::Serializer>(
+        &self,
+        s: S,
+    ) -> StdResult<S::Ok, S::Error> {
+        let mut extra = [0; 9];
+        extra[0] = LAYOUT;
+        extra[1..].copy_from_slice(&self.dag_id.to_le_bytes());
+        crate::common::serialize_prefix_handle::<T, _>(&self.store, &extra, s)
+    }
+    pub(super) fn from_frame(frame: PrefixFrame<'_>) -> Result<Self> {
+        let PrefixFrame(store, [LAYOUT, dag_id @ ..]) = frame else {
+            return Err(corrupt("unsupported DAG layout"));
+        };
+        let dag_id = u64::from_le_bytes(
+            dag_id
+                .try_into()
+                .map_err(|_| corrupt("invalid DAG token"))?,
+        );
+        let node = Self { store, dag_id };
+        node.meta()?;
+        Ok(node)
+    }
+    fn meta(&self) -> Result<NodeMeta> {
+        let raw = self
+            .store
+            .get(META)
+            .ok_or_else(|| corrupt("missing DAG node metadata"))?;
+        let (meta, rest) = postcard::take_from_bytes::<NodeMeta>(&raw)?;
+        if !rest.is_empty() || meta.magic != MAGIC || meta.dag_id != self.dag_id {
+            return Err(corrupt("DAG node identity mismatch"));
         }
-        ns.scope(|| Self::new(parent))
+        Ok(meta)
     }
-
-    /// The namespace this structure lives in.
-    pub fn namespace(&self) -> crate::common::Namespace {
-        self.data.namespace()
+    fn set_meta(&mut self, meta: NodeMeta) {
+        self.store.insert(META, meta.bytes());
     }
-
-    /// Creates a new `DagMapRaw`, optionally attached under `parent`.
-    ///
-    /// The node stores an aliasing handle of the parent node in its own
-    /// (per-node) parent slot: later mutations of the parent's data are
-    /// visible to this node when resolving inherited reads.  Do not
-    /// attach a node under one of its own descendants — parent chains
-    /// are cycle-guarded, so lookups on such a graph degrade to `None`
-    /// (and `prune` reports an error) instead of hanging, but the graph
-    /// itself is logically invalid.
-    ///
-    /// Parented construction inherits the **parent's namespace**,
-    /// overriding any ambient scope: one DAG never spans namespaces
-    /// (destroying/relocating either side would otherwise leave
-    /// dangling cross-engine references).
+    fn open_with_meta(&self, id: u64) -> Result<(Self, NodeMeta)> {
+        let store = open_prefix(&self.namespace(), id)?;
+        if !self.store.is_colocated_with(&store) {
+            return Err(corrupt("DAG node routes to another shard"));
+        }
+        let node = Self {
+            store,
+            dag_id: self.dag_id,
+        };
+        let meta = node.meta()?;
+        Ok((node, meta))
+    }
+    fn open(&self, id: u64) -> Result<Self> {
+        self.open_with_meta(id).map(|(node, _)| node)
+    }
+    fn id(&self) -> u64 {
+        self.instance_id().map_id
+    }
+    fn links(&self) -> impl Iterator<Item = (u64, u64)> + '_ {
+        self.store.range(EDGE..DATA).map(|(k, v)| {
+            let edge =
+                u64::from_be_bytes(k[1..].try_into().expect("invalid DAG edge key"));
+            let map = u64::from_le_bytes(v.try_into().expect("invalid DAG child id"));
+            (edge, map)
+        })
+    }
+    fn edge_target(&self, edge: u64) -> Option<u64> {
+        self.store
+            .get(edge_key(edge))
+            .map(|v| u64::from_le_bytes(v.try_into().expect("invalid DAG child id")))
+    }
+    fn owned(&self, edge: u64, id: u64) -> Option<Self> {
+        let (child, meta) = self.open_with_meta(id).ok()?;
+        (meta.state.owner()
+            == Some(Parent {
+                map: self.id(),
+                edge,
+            }))
+        .then_some(child)
+    }
+    fn register(&mut self, mut meta: NodeMeta, child: u64) -> Result<u64> {
+        let edge = meta.next_edge_id;
+        meta.next_edge_id = edge
+            .checked_add(1)
+            .ok_or_else(|| corrupt("DAG edge id exhausted"))?;
+        let mut batch = self.store.batch();
+        batch.insert(META, meta.bytes());
+        batch.insert(edge_key(edge), child.to_le_bytes());
+        batch.commit()?;
+        Ok(edge)
+    }
+    /// Creates a root or attaches a child on its parent's shard.
     pub fn new(parent: Option<&mut Self>) -> Self {
         match parent {
             Some(p) => {
-                let ns = p.namespace();
-                ns.scope(|| Self::build(Some(p)))
+                let meta = p.meta().expect("invalid DAG parent");
+                assert!(meta.state.live(), "DAG parent has been consumed");
+                assert_ne!(meta.next_edge_id, u64::MAX, "DAG edge id exhausted");
+                let mut node = Self {
+                    store: p.store.new_colocated(),
+                    dag_id: p.dag_id,
+                };
+                node.set_meta(NodeMeta::new(
+                    p.dag_id,
+                    State::Child(Parent {
+                        map: p.id(),
+                        edge: meta.next_edge_id,
+                    }),
+                ));
+                p.register(meta, node.id()).expect("DAG child registration");
+                node
             }
-            None => Self::build(None),
-        }
-    }
-
-    fn build(parent: Option<&mut Self>) -> Self {
-        // Fields are constructed explicitly: `..Default::default()` would
-        // materialize (and immediately discard) a default `parent` Orphan,
-        // which eagerly writes an entry under a fresh engine prefix —
-        // permanently leaking one storage slot per node creation.
-        let parent_slot = match parent.as_deref() {
-            Some(p) => {
-                // SAFETY: the alias is only serialized into the new slot.
-                let link = unsafe { p.shadow() };
-                Orphan::new_colocated(p.children.raw(), Some(link))
-            }
-            None => Orphan::new(None),
-        };
-        // Registrations and the parent slots they publish share a WAL along
-        // the new chain. Any recovered registration follows its slot write.
-        let r = Self {
-            children: MapxOrdRawKey::new_colocated(parent_slot.raw()),
-            parent: parent_slot,
-            data: MapxRaw::new(),
-        };
-
-        if let Some(p) = parent {
-            let child_id = super::gen_dag_map_id_num().to_le_bytes();
-            // gen_dag_map_id_num() is monotonically increasing, so
-            // duplicate IDs are impossible under normal operation.
-            // The assertion guards against ID counter corruption
-            // (e.g. crash-induced rollback).
-            debug_assert!(
-                p.children.get(child_id).is_none(),
-                "Child ID already exists — possible ID counter rollback"
-            );
-            p.children.insert(child_id, &r);
-        }
-
-        r
-    }
-
-    /// Creates a second handle to the same underlying storage.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure no concurrent writes to the same key
-    /// through any handle.  Multiple writers on disjoint keys are safe.
-    /// Note: structural mutations (`destroy`, reparenting) have
-    /// cross-key side effects — only one such operation at a time.
-    #[inline(always)]
-    pub unsafe fn shadow(&self) -> Self {
-        // SAFETY: forwards this fn's `unsafe` contract — the caller
-        // guarantees no concurrent writes to the same key (and only one
-        // structural mutation at a time), per the doc comment above.
-        unsafe {
-            Self {
-                data: self.data.shadow(),
-                parent: self.parent.shadow(),
-                children: self.children.shadow(),
+            None => {
+                let dag_id = rand::random();
+                let mut node = Self {
+                    store: MapxRaw::new(),
+                    dag_id,
+                };
+                node.set_meta(NodeMeta::new(dag_id, State::Root));
+                node
             }
         }
     }
-
-    /// Returns the unique instance ID of this `DagMapRaw`.
-    #[inline(always)]
+    /// Creates a root in this namespace, or attaches a child to its parent.
+    pub fn new_in(ns: &Namespace, parent: Option<&mut Self>) -> Self {
+        if let Some(p) = parent.as_ref() {
+            debug_assert_eq!(ns.id(), p.namespace().id());
+        }
+        ns.scope(|| Self::new(parent))
+    }
+    /// Owning namespace.
+    pub fn namespace(&self) -> Namespace {
+        self.store.namespace()
+    }
+    /// Stable prefix identity.
     pub fn instance_id(&self) -> InstanceId {
-        self.data.instance_id()
+        self.store.instance_id()
     }
-
-    /// Persists this instance's metadata to disk so that it can be
-    /// recovered later via [`from_meta`](Self::from_meta).
-    ///
-    /// Returns the `instance_id` that should be passed to `from_meta`.
+    /// Persists the typed handle for later recovery.
     pub fn save_meta(&self) -> Result<InstanceId> {
         let id = self.instance_id();
         crate::common::save_instance_meta(id, self)?;
         Ok(id)
     }
-
-    /// Recovers a `DagMapRaw` instance from previously saved metadata.
-    ///
-    /// The caller must ensure that the underlying VSDB database still
-    /// contains the data referenced by this instance ID.
-    pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
-        let id = instance_id.into();
-        crate::common::load_instance_meta_checked(id, Self::instance_id)
+    /// Restores a saved node and verifies its graph token.
+    pub fn from_meta(id: impl Into<InstanceId>) -> Result<Self> {
+        crate::common::load_instance_meta_checked(id.into(), Self::instance_id)
     }
-
-    /// Checks if the DAG map is dead (i.e., has no live data, parent, or children).
-    ///
-    /// `remove()` writes an empty-value tombstone rather than deleting
-    /// the entry outright (see [`Self::insert`]'s doc comment), so a
-    /// plain "is the backing store empty" check would incorrectly
-    /// return `false` for a node whose only key was removed. This
-    /// matches [`Self::get`]/[`Self::get_mut`]'s convention of treating
-    /// an empty value as absent.
-    #[inline(always)]
+    /// Whether these handles identify the same node.
+    pub fn is_the_same_instance(&self, other: &Self) -> bool {
+        self.instance_id() == other.instance_id() && self.dag_id == other.dag_id
+    }
+    /// Whether the node has no parent, children, or live local entries.
     pub fn is_dead(&self) -> bool {
-        self.data.iter().all(|(_, v)| v.is_empty())
-            && self.parent.get_value().is_none()
+        !matches!(self.meta().expect("DAG metadata").state, State::Child(_))
             && self.no_children()
+            && self
+                .store
+                .range(DATA..END)
+                .all(|(_, v)| value(&v).is_none())
     }
-
-    /// Checks if the DAG map has no children.
-    #[inline(always)]
+    /// Whether the child registry is empty.
     pub fn no_children(&self) -> bool {
-        self.children.inner.iter().next().is_none()
+        self.links().next().is_none()
     }
-
-    /// Returns the internal registry IDs of all direct children.
-    ///
-    /// These are the IDs accepted by
-    /// [`prune_children_include`](Self::prune_children_include) and
-    /// [`prune_children_exclude`](Self::prune_children_exclude); they are
-    /// distinct from each child's storage [`InstanceId`].
+    /// Registry tokens accepted by the selective prune methods.
     pub fn child_ids(&self) -> Vec<RawBytes> {
-        self.children.keys().collect()
+        self.links().map(|(e, _)| token(e)).collect()
     }
-
-    /// Returns this parent's registry ID for `child`, if it is currently
-    /// registered as a direct child.
+    /// Returns a direct child's registry token in constant time.
     pub fn child_id(&self, child: &Self) -> Option<RawBytes> {
-        let child = child.instance_id();
-        self.children
-            .iter()
-            .find_map(|(id, entry)| (entry.instance_id() == child).then_some(id))
-    }
-
-    /// Retrieves a value from the DAG map, traversing up to the parent if necessary.
-    ///
-    /// The traversal tracks visited instance IDs to avoid looping forever
-    /// if on-disk metadata is corrupt and contains a parent cycle.
-    pub fn get(&self, key: impl AsRef<[u8]>) -> Option<RawBytes> {
-        let key = key.as_ref();
-
-        let mut hdr = self;
-        let mut hdr_owned;
-        let mut seen = HashSet::new();
-
-        loop {
-            if !seen.insert(hdr.instance_id()) {
-                return None;
-            }
-            if let Some(v) = hdr.data.get(key) {
-                return if v.is_empty() { None } else { Some(v) };
-            }
-            match hdr.parent.get_value() {
-                Some(p) => {
-                    hdr_owned = p;
-                    hdr = &hdr_owned;
-                }
-                _ => {
-                    return None;
-                }
-            }
+        if self.dag_id != child.dag_id || !self.store.is_colocated_with(&child.store) {
+            return None;
         }
+        let owner = child.meta().ok()?.state.owner()?;
+        (owner.map == self.id() && self.edge_target(owner.edge) == Some(child.id()))
+            .then(|| token(owner.edge))
     }
-
-    /// Retrieves a mutable reference to a value in this node's local data.
-    ///
-    /// Unlike [`get`](Self::get), this does **not** traverse parent links.
-    /// Returns `None` if the key is not in this node's own storage, even if
-    /// a parent would return it via `get`.
-    #[inline(always)]
-    pub fn get_mut(&mut self, key: impl AsRef<[u8]>) -> Option<ValueMut<'_>> {
-        self.data.get_mut(key.as_ref()).and_then(|inner| {
-            if inner.is_empty() {
+    /// Reads the closest override in the parent chain.
+    pub fn get(&self, key: impl AsRef<[u8]>) -> Option<RawBytes> {
+        let key = data_key(key.as_ref());
+        if let Some(v) = self.store.get(&key) {
+            return value(&v).map(<[u8]>::to_vec);
+        }
+        let mut seen = HashSet::new();
+        let mut id = self.id();
+        let mut state = self.meta().ok()?.state;
+        while let State::Child(owner) = state {
+            if !seen.insert(id) {
                 return None;
             }
-            Some(ValueMut {
-                value: inner.clone(),
-                inner,
-                dirty: false,
-                unwind: UnwindMark::new(),
-            })
+            let (p, meta) = self.open_with_meta(owner.map).ok()?;
+            if p.edge_target(owner.edge) != Some(id) {
+                return None;
+            }
+            if let Some(v) = p.store.get(&key) {
+                return value(&v).map(<[u8]>::to_vec);
+            }
+            id = p.id();
+            state = meta.state;
+        }
+        None
+    }
+    /// Edits a local value; parent rows and tombstones are excluded.
+    pub fn get_mut(&mut self, key: impl AsRef<[u8]>) -> Option<ValueMut<'_>> {
+        let key = data_key(key.as_ref());
+        let mut val = self.store.get(&key)?;
+        value(&val)?;
+        val.remove(0);
+        Some(ValueMut {
+            value: val,
+            store: &mut self.store,
+            key,
+            dirty: false,
+            unwind: UnwindMark::new(),
         })
     }
-
-    /// Inserts a key-value pair into the DAG map.
-    ///
-    /// Does not return the old value for performance reasons.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `value` is empty — an empty byte slice is used
-    /// internally as a deletion tombstone.  Use [`remove`](Self::remove)
-    /// to delete a key instead.
-    #[inline(always)]
-    pub fn insert(&mut self, key: impl AsRef<[u8]>, value: impl AsRef<[u8]>) {
+    /// Stores a local override, including an empty byte string.
+    pub fn insert(&mut self, key: impl AsRef<[u8]>, v: impl AsRef<[u8]>) {
         assert!(
-            !value.as_ref().is_empty(),
-            "empty value is a tombstone; call remove() instead"
+            self.meta().expect("DAG metadata").state.live(),
+            "DAG node has been consumed"
         );
-        self.data.insert(key.as_ref(), value)
+        self.store
+            .insert(data_key(key.as_ref()), live_bytes(v.as_ref()));
     }
-
-    /// Removes a key-value pair from the DAG map.
-    ///
-    /// Does not return the old value for performance reasons.
-    #[inline(always)]
+    /// Hides the key locally and during fallback.
     pub fn remove(&mut self, key: impl AsRef<[u8]>) {
-        self.data.insert(key.as_ref(), [])
-    }
-
-    /// Prunes the DAG, merging all nodes in the mainline into the genesis node.
-    ///
-    /// Returns the new head of the mainline — the genesis node, which keeps
-    /// its instance ID, so metadata saved for the genesis *before* the prune
-    /// still resolves to the merged result afterwards.
-    ///
-    /// # Crash safety
-    ///
-    /// The prune is ordered as **merge → WAL fence → re-parent → WAL fence
-    /// → mark → WAL fence → clear**. Nothing is cleared before the genesis
-    /// holds the complete merged state, every surviving child points at it,
-    /// and each consumed node durably records that genesis (the
-    /// [`Namespace::try_sync_wal`](crate::common::Namespace::try_sync_wal)
-    /// barriers, scoped to this DAG's own namespace, pin that ordering across
-    /// independently-recovered shards). Because overlay reads resolve
-    /// top-down, the in-place enrichment of the genesis is invisible through
-    /// the head, so a crash (e.g. `kill -9` or power loss) at **any** point
-    /// leaves the canonical access paths — the returned head / the genesis
-    /// (including its pre-prune metadata) and the head's children —
-    /// value-exact: they observe either the complete pre-prune state or the
-    /// complete post-prune state, never a torn mix.
-    ///
-    /// The head and the intermediate mainline nodes are *consumed* by the
-    /// prune (this is the ordinary, non-crash contract as well). A retry of
-    /// `prune` on a consumed head whose clearing marker is durable does not
-    /// re-fold and does not destroy survivors; it finishes the clear and
-    /// returns the genesis. Reads through a consumed handle during the clear
-    /// may observe a partially cleared node — prefer the genesis id. A
-    /// parentless node with no marker is already a genesis and is returned
-    /// unchanged. Storage left behind by an interrupted prune remains
-    /// reachable through the genesis' children registry and is reclaimed by
-    /// the retry or by the next prune's side-branch destruction.
-    ///
-    /// The complete mainline fold is staged in memory and published as one
-    /// atomic batch. Temporary memory is proportional to the distinct keys
-    /// changed by the consumed mainline nodes. This also keeps children
-    /// already re-parented by an interrupted prune on a complete snapshot
-    /// while a retry is being prepared.
-    #[inline(always)]
-    pub fn prune(self) -> Result<DagHead> {
-        ensure_writable(&self.namespace(), "DAG pruning")?;
-        self.prune_mainline()
-    }
-
-    // Return the new head of mainline (the genesis node).
-    //
-    // The phases below are deliberately ordered so that every crash point
-    // leaves the canonical view (genesis + surviving children) value-exact;
-    // see `prune` for the externally visible contract and each phase
-    // method for the per-phase argument.
-    fn prune_mainline(mut self) -> Result<DagHead> {
-        // A durable clearing marker means merge + reparent already
-        // committed. Finish the teardown; do not re-fold a possibly
-        // half-cleared head over the genesis.
-        if let Some(genesis) = self.prune_clearing_target() {
-            return self.finish_interrupted_clear(genesis);
-        }
-
-        // Phase 0 (read-only): collect the mainline chain.
-        let mut linebuf = self.prune_collect_mainline()?;
-        if linebuf.is_empty() {
-            return Ok(self);
-        }
-
-        // Instance IDs on the mainline path — must not be destroyed.
-        let mainline_ids: HashSet<InstanceId> = {
-            let mut ids = HashSet::from([self.instance_id()]);
-            ids.extend(linebuf.iter().map(|n| n.instance_id()));
-            ids
-        };
-
-        // The head's children are survivors (re-parented in phase 3).
-        // An earlier interrupted prune may have left them
-        // double-registered under the genesis already — phase 1 must
-        // not mistake those registry copies for genesis side branches.
-        let pending_reparent: HashSet<RawBytes> =
-            self.children.iter().map(|(id, _)| id).collect();
-
-        // Phase 1: side branches are doomed by the prune contract — kill
-        // them while the mainline is still fully intact.
-        Self::prune_destroy_side_branches(
-            &mut linebuf,
-            &mainline_ids,
-            &pending_reparent,
+        assert!(
+            self.meta().expect("DAG metadata").state.live(),
+            "DAG node has been consumed"
         );
-
-        // Phase 2: fold the whole mainline into the genesis WITHOUT
-        // clearing anything (read-transparent, idempotent).
-        self.prune_merge_into_genesis(&mut linebuf)?;
-
-        // Barrier A: the merged genesis must be durable before any child
-        // is re-pointed at it. Writes to different shards *within this
-        // DAG's namespace* recover independently, so ordering across
-        // prefixes needs an explicit WAL fence — scoped to this namespace
-        // (a DAG never spans namespaces, see `new_in`), not the whole
-        // process: an error in an unrelated open namespace must not fail
-        // a prune() on a healthy one. WAL fences preserve the ordering
-        // without forcing unrelated memtables into SSTs.
-        self.namespace().try_sync_wal()?;
-
-        // Phase 3: re-point the head's children at the merged genesis.
-        let kept = self.prune_reparent_children(linebuf.last_mut().unwrap());
-
-        // Barrier B: all pointer flips must be durable before the old
-        // chain is torn down.
-        self.namespace().try_sync_wal()?;
-
-        // Name the genesis on every consumed node, then fence that write
-        // before any clear. Parent, children, and data are different
-        // prefixes; program order across shards is not power-loss order.
-        // Retry keys off this marker, not off the parent slot.
-        self.mark_consumed_clearing(&mut linebuf);
-        self.namespace().try_sync_wal()?;
-
-        // Phases 4-5: clear the consumed nodes (head first, then
-        // intermediates newest → oldest).
-        self.prune_clear_consumed(&mut linebuf)?;
-
-        // Barrier C: the consumed nodes' data/parent clears must be
-        // durable before phase 6 removes their last discoverability
-        // entries from the genesis registry.
-        self.namespace().try_sync_wal()?;
-
-        // Phase 6: drop the now-dead mainline entry from the genesis'
-        // children registry (side branches were already destroyed in
-        // phase 1; the ownership check inside skips foreign residue).
-        let mut genesis = linebuf.pop().unwrap();
-        genesis.prune_children_exclude(&kept);
-
-        Ok(genesis)
+        self.store.insert(data_key(key.as_ref()), [0]);
     }
 
-    /// Prune phase 0 (read-only): walk the parent chain and return
-    /// `[parent, grandparent, ..., genesis]`, or an empty vector when
-    /// `self` is parentless.  Fails on parent cycles.
-    fn prune_collect_mainline(&self) -> Result<Vec<Self>> {
-        let p = match self.parent.get_value() {
-            Some(p) => p,
-            _ => return Ok(vec![]),
-        };
-
+    fn destroy_subtree(&mut self) -> Result<()> {
+        let owner = self.meta()?.state.owner();
+        let mut pending = vec![self.open(self.id())?];
+        let mut marked = Vec::new();
         let mut seen = HashSet::new();
-        seen.insert(self.instance_id());
-        let mut linebuf = vec![p];
+        while let Some(mut node) = pending.pop() {
+            if !seen.insert(node.id()) {
+                continue;
+            }
+            let mut meta = node.meta()?;
+            if meta.state == State::Destroyed {
+                continue;
+            }
+            pending.extend(node.links().filter_map(|(edge, id)| node.owned(edge, id)));
+            meta.state = State::Destroying(meta.state.owner());
+            let mut batch = node.store.batch();
+            batch.insert(META, meta.bytes());
+            batch.delete_range(&DATA, &END);
+            batch.commit()?;
+            marked.push(node);
+        }
+        // Descendants are finalized before removing their discovery edge.
+        // The target retains its owner through unlink, including on retry.
+        for mut node in marked.into_iter().rev() {
+            if node.id() == self.id() {
+                continue;
+            }
+            node.finish_destroy()?;
+        }
+        if let Some(link) = owner
+            && let Ok(mut p) = self.open(link.map)
+            && p.edge_target(link.edge) == Some(self.id())
+        {
+            p.store.remove(edge_key(link.edge));
+        }
+        self.finish_destroy()
+    }
+    fn finish_destroy(&mut self) -> Result<()> {
+        let mut meta = self.meta()?;
+        meta.state = State::Destroyed;
+        let mut batch = self.store.batch();
+        batch.delete_range(&EDGE, &DATA);
+        batch.insert(META, meta.bytes());
+        batch.commit()
+    }
+    /// Destroys the owned subtree and durably unlinks it from its parent.
+    pub fn destroy(&mut self) {
+        self.destroy_subtree()
+            .and_then(|()| self.store.try_sync_wal())
+            .expect("DAG destruction")
+    }
+    fn remove_branch(&mut self, edge: u64, child: u64) -> Result<()> {
+        if let Some(mut node) = self.owned(edge, child) {
+            return node.destroy_subtree();
+        }
+        self.store.remove(edge_key(edge));
+        Ok(())
+    }
+    fn prune_children(
+        &mut self,
+        targets: &[impl AsRef<DagMapId>],
+        include: bool,
+    ) -> Result<()> {
+        let set: HashSet<_> = targets.iter().map(AsRef::as_ref).collect();
+        for (e, id) in self.links().collect::<Vec<_>>() {
+            if set.contains(token(e).as_slice()) == include {
+                self.remove_branch(e, id)?
+            }
+        }
+        self.store.try_sync_wal()
+    }
+    /// Removes children with a listed registry token.
+    pub fn prune_children_include(&mut self, targets: &[impl AsRef<DagMapId>]) {
+        self.prune_children(targets, true).expect("DAG child prune");
+    }
+    /// Removes children whose tokens are absent from the list.
+    pub fn prune_children_exclude(&mut self, targets: &[impl AsRef<DagMapId>]) {
+        self.prune_children(targets, false)
+            .expect("DAG child prune");
+    }
+
+    // Head first; the root is returned separately. Clearing nodes retain
+    // their original owner link so an interrupted marker pass can resume.
+    fn mainline(self) -> Result<(Vec<Self>, Self)> {
+        let mut line = Vec::new();
+        let mut seen = HashSet::new();
+        let mut node = self;
         loop {
-            let current_id = linebuf.last().unwrap().instance_id();
-            if !seen.insert(current_id) {
-                return Err(VsdbError::Corrupt {
-                    detail: "DAG mainline contains a parent cycle".to_owned(),
-                });
+            if !seen.insert(node.id()) {
+                return Err(corrupt("DAG parent cycle"));
             }
-            match linebuf.last().unwrap().parent.get_value() {
-                Some(p) => linebuf.push(p),
-                None => break,
-            }
-        }
-        Ok(linebuf)
-    }
-
-    /// Prune phase 1: destroy every non-mainline child (side branch) of
-    /// every chain node, genesis included.
-    ///
-    /// This must happen **before** the genesis is enriched in phase 2: a
-    /// live branch forked below the topmost holder of a key would observe
-    /// the in-place merge.  Destroying branches first keeps every read
-    /// exact until the branch dies — and dying is the prune contract.
-    ///
-    /// Crash mid-phase: the mainline is untouched; a partially destroyed
-    /// branch is an intended deletion that the next prune completes.
-    fn prune_destroy_side_branches(
-        linebuf: &mut [Self],
-        mainline_ids: &HashSet<InstanceId>,
-        pending_reparent: &HashSet<RawBytes>,
-    ) {
-        for node in linebuf.iter_mut() {
-            let node_id = node.instance_id();
-            // Collect first — destroy() unlinks entries from
-            // `node.children` while we would be iterating it.
-            let doomed: Vec<_> = node
-                .children
-                .iter()
-                .filter(|(id, child)| {
-                    !mainline_ids.contains(&child.instance_id())
-                        && !pending_reparent.contains(id)
-                })
-                .collect();
-            for (id, mut child) in doomed {
-                // Registry entries are only an index; the child's own
-                // parent slot is the ownership truth.  A child owned by a
-                // *different* live parent (e.g. one already re-pointed at
-                // the genesis by an interrupted prune, still listed under
-                // the old head) must not be destroyed through the stale
-                // registry copy — only the index entry is dropped.
-                if Self::owned_or_residue(node_id, &child) {
-                    child.destroy();
+            let state = node.meta()?.state;
+            let owner = match state {
+                State::Root => return Ok((line, node)),
+                State::Child(p) | State::Clearing { owner: Some(p), .. } => p,
+                _ => return Err(corrupt("mainline does not reach a live root")),
+            };
+            let p = node.open(owner.map)?;
+            if p.edge_target(owner.edge) != Some(node.id()) {
+                match (state, p.meta()?.state) {
+                    (State::Clearing { genesis, .. }, State::Root)
+                        if genesis == p.id() => {}
+                    (
+                        State::Clearing { genesis, .. },
+                        State::Clearing { genesis: other, .. },
+                    ) if genesis == other => {}
+                    (
+                        State::Clearing { genesis, .. },
+                        State::Destroyed | State::Destroying(_),
+                    ) => {
+                        let root = node.open(genesis)?;
+                        if root.meta()?.state != State::Root {
+                            return Err(corrupt("invalid clearing target"));
+                        }
+                        line.push(node);
+                        return Ok((line, root));
+                    }
+                    _ => return Err(corrupt("mainline owner mismatch")),
                 }
-                node.children.remove(&id);
+            }
+            line.push(node);
+            node = p;
+        }
+    }
+    fn fold(line: &[Self], root: &mut Self) -> Result<()> {
+        let mut rows = StagedRows::new();
+        for node in line.iter().rev() {
+            for (k, v) in node.store.range(DATA..END) {
+                if value(&v).is_none() {
+                    rows.del(k)
+                } else {
+                    rows.put(k, v)
+                }
             }
         }
+        rows.commit(&mut root.store)
     }
-
-    // Ownership test used by every registry-driven destruction walk.
-    //
-    // `child` may be destroyed on behalf of the node whose instance ID is
-    // `owner_id` iff its own parent slot still points back at that node
-    // (owned), or is `None` (residue of an interrupted clear — live roots
-    // are never listed in any children registry, so a parentless entry is
-    // always reclaimable).  A child owned by a *different* live parent is
-    // foreign: its registry entry is a stale index copy.
-    fn owned_or_residue(owner_id: InstanceId, child: &Self) -> bool {
-        match child.parent.get_value() {
-            None => true,
-            Some(p) => p.instance_id() == owner_id,
+    fn reparent(&self, root: &mut Self) -> Result<()> {
+        let registered: HashMap<_, _> = root.links().map(|(e, id)| (id, e)).collect();
+        for (e, id) in self.links() {
+            let Some(mut child) = self.owned(e, id) else {
+                continue;
+            };
+            let mut meta = child.meta()?;
+            if !meta.state.live() {
+                continue;
+            }
+            let edge = match registered.get(&id) {
+                Some(&edge) => edge,
+                None => root.register(root.meta()?, id)?,
+            };
+            meta.state = State::Child(Parent {
+                map: root.id(),
+                edge,
+            });
+            child.set_meta(meta);
         }
+        Ok(())
     }
-
-    /// Prune phase 2: fold every mainline node's data into the genesis,
-    /// oldest → newest, clearing **nothing**.
-    ///
-    /// Publish the whole fold atomically: a child already re-parented by
-    /// an interrupted prune reads directly through the genesis, so a retry
-    /// must never expose older ancestor values before the head overrides
-    /// them. Tombstones become deletes because the genesis is parentless.
-    fn prune_merge_into_genesis(&self, linebuf: &mut [Self]) -> Result<()> {
-        let mid = linebuf.len() - 1;
-        let (others, genesis) = linebuf.split_at_mut(mid);
-        let genesis = &mut genesis[0];
-
-        let mut staged = StagedRows::new();
-        for i in others.iter().rev() {
-            Self::prune_fold_node(&mut staged, i);
-        }
-        Self::prune_fold_node(&mut staged, self);
-        staged.commit(&mut genesis.data)
-    }
-
-    // Stage one node in oldest-to-newest order; the latest value wins.
-    fn prune_fold_node(staged: &mut StagedRows, src: &Self) {
-        for (k, v) in src.data.iter() {
-            // The genesis node is parentless, so a tombstone there is
-            // equivalent to the key being absent — drop tombstones
-            // instead of accumulating dead entries forever.
-            if v.is_empty() {
-                staged.del(k);
-            } else {
-                staged.put(k, v);
+    fn mark(line: &mut [Self], genesis: u64) -> Result<()> {
+        for node in line {
+            let mut meta = node.meta()?;
+            match meta.state {
+                State::Child(p) => {
+                    meta.state = State::Clearing {
+                        owner: Some(p),
+                        genesis,
+                    };
+                    node.set_meta(meta);
+                }
+                State::Clearing { genesis: id, .. } if id == genesis => {}
+                _ => return Err(corrupt("invalid consumed mainline")),
             }
         }
+        Ok(())
     }
-
-    /// Prune phase 3: re-point every child of the head at the (fully
-    /// merged) genesis and register it there.
-    ///
-    /// Each flip is a single-slot write and is value-exact on both sides:
-    /// `child → old chain` and `child → merged genesis` resolve every key
-    /// identically because phase 2 completed first.  A crash between
-    /// flips therefore leaves every child on a correct view, and the
-    /// whole phase is idempotent.
-    ///
-    /// Returns the IDs of the re-parented children (the survivors of the
-    /// genesis' children registry).
-    fn prune_reparent_children(&mut self, genesis: &mut Self) -> Vec<RawBytes> {
-        let mut kept = vec![];
-        for (id, mut child) in self.children.iter_mut() {
-            // Reparent: the child's owned parent slot now aliases the
-            // genesis node.
-            // SAFETY: The shadow is serialized (read-only) immediately in
-            // the following two insert calls; no mutation occurs through
-            // it (all writes go through `genesis`), satisfying the SWMR
-            // contract.  `Clone` cannot be used — it deep-copies the
-            // storage instead of aliasing it.
-            *child.parent.get_mut() = Some(unsafe { genesis.shadow() });
-            genesis.children.insert(&id, &child);
-            kept.push(id);
+    // A retry through an intermediate marker can start below the original
+    // head. Follow remaining discovery edges before clearing any registry.
+    // An interrupted pass has already retained these edges until every
+    // consumed data row was wiped.
+    fn collect_marked(line: &mut Vec<Self>, root: &Self) -> Result<()> {
+        let mut seen: HashSet<_> = line.iter().map(Self::id).collect();
+        let mut i = 0;
+        while i <= line.len() {
+            let owner = if i == 0 { root } else { &line[i - 1] };
+            let mut found = Vec::new();
+            for (edge, id) in owner.links() {
+                if seen.contains(&id) {
+                    continue;
+                }
+                let Some(node) = owner.owned(edge, id) else {
+                    continue;
+                };
+                if matches!(node.meta()?.state, State::Clearing{genesis,..} if genesis==root.id())
+                {
+                    seen.insert(id);
+                    found.push(node);
+                }
+            }
+            line.extend(found);
+            i += 1;
         }
-        kept
+        Ok(())
     }
-
-    /// The genesis named by this node's durable clearing marker, if any.
-    fn prune_clearing_target(&self) -> Option<Self> {
-        self.parent.get_aux(PRUNE_CLEARING_KEY).flatten()
-    }
-
-    /// Record the genesis on the head and every intermediate. The genesis
-    /// itself is not marked — a parentless unmarked node is a real root.
-    fn mark_consumed_clearing(&mut self, linebuf: &mut [Self]) {
-        let genesis = linebuf.last().unwrap();
-        let marker = {
-            // SAFETY: the shadow is encoded into consumed nodes' parent
-            // slots as a handle alias and only read on retry. No write
-            // goes through it. `Clone` would deep-copy genesis storage.
-            Some(unsafe { genesis.shadow() })
-        };
-        self.parent.set_aux(PRUNE_CLEARING_KEY, &marker);
-        let last = linebuf.len() - 1;
-        for node in &mut linebuf[..last] {
-            node.parent.set_aux(PRUNE_CLEARING_KEY, &marker);
-        }
-    }
-
-    fn clear_consumed_data(&mut self) {
-        *self.parent.get_mut() = None;
-        self.data.clear();
-        #[cfg(test)]
-        test::after_clear_step();
-    }
-
-    /// Keep every discovery edge until all consumed data is durably gone.
-    /// Clearing an ancestor's children earlier can strand a not-yet-cleared
-    /// descendant on interruption, even though every node has a marker.
-    fn clear_consumed_nodes(&mut self, others: &mut [Self]) -> Result<()> {
-        self.clear_consumed_data();
-        for node in others.iter_mut() {
-            node.clear_consumed_data();
-        }
-        // Parent/data/children prefixes can recover on different shards.
-        // Program order alone cannot keep the discovery edges intact.
-        self.namespace().try_sync_wal()?;
-        for node in std::iter::once(self).chain(others.iter_mut()) {
-            node.children.clear();
+    fn clear_line(line: &mut [Self], root: &mut Self) -> Result<()> {
+        for node in line.iter_mut() {
+            let mut batch = node.store.batch();
+            batch.delete_range(&DATA, &END);
+            batch.commit()?;
             #[cfg(test)]
             test::after_clear_step();
         }
-        Ok(())
-    }
-
-    /// Retry path once the clearing marker is durable.
-    ///
-    /// Does not re-fold and does not run side-branch destruction: the head's
-    /// children registry may already be empty, and survivors are registered
-    /// on the genesis. Marked mainline nodes are cleared; unmarked children
-    /// whose parent points at the genesis are kept.
-    fn finish_interrupted_clear(mut self, mut genesis: Self) -> Result<DagHead> {
-        // A crash can persist the head marker before some intermediate
-        // markers were even issued (or before their shards were synced).
-        // Complete and fence the marker set while the parent chain still
-        // reaches genesis, before a clear can sever that recovery path.
-        // If the chain ends early, clearing already started, which is only
-        // allowed after the complete marker set was durably fenced.
-        let mut linebuf = self.prune_collect_mainline()?;
-        if linebuf
-            .last()
-            .is_some_and(|node| node.instance_id() == genesis.instance_id())
-        {
-            self.mark_consumed_clearing(&mut linebuf);
-            self.namespace().try_sync_wal()?;
+        for node in line.iter_mut() {
+            let mut batch = node.store.batch();
+            batch.delete_range(&EDGE, &DATA);
+            batch.commit()?;
+            #[cfg(test)]
+            test::after_clear_step();
         }
-        if !self.no_children() {
-            self.prune_reparent_children(&mut genesis);
-        }
-        self.clear_marked_reachable(&mut genesis)?;
-        self.namespace().try_sync_wal()?;
-        let kept = Self::survivor_ids(&genesis);
-        genesis.prune_children_exclude(&kept);
-        Ok(genesis)
-    }
-
-    fn survivor_ids(genesis: &Self) -> Vec<RawBytes> {
-        let genesis_id = genesis.instance_id();
-        genesis
-            .children
-            .iter()
-            .filter(|(_, child)| {
-                !child.parent.has_aux(PRUNE_CLEARING_KEY)
-                    && child
-                        .parent
-                        .get_value()
-                        .is_some_and(|p| p.instance_id() == genesis_id)
-            })
-            .map(|(id, _)| id)
-            .collect()
-    }
-
-    /// Clear every marked descendant reachable from `root`'s children
-    /// registry, then drop those registry entries. Iterative: a mainline
-    /// can be deeper than the stack allows.
-    fn clear_marked_reachable(&mut self, root: &mut Self) -> Result<()> {
-        let mut frontier: Vec<Self> = root
-            .children
-            .iter()
-            .filter(|(_, child)| child.parent.has_aux(PRUNE_CLEARING_KEY))
-            .map(|(_, child)| child)
+        let consumed: HashSet<_> = line.iter().map(Self::id).collect();
+        let stale: Vec<_> = root
+            .links()
+            .filter(|(_, id)| consumed.contains(id))
+            .map(|(edge, _)| edge)
             .collect();
-        let mut marked = Vec::new();
-        let mut seen = HashSet::new();
-        while let Some(node) = frontier.pop() {
-            if !seen.insert(node.instance_id()) {
-                continue;
+        if !stale.is_empty() {
+            let mut batch = root.store.batch();
+            for edge in stale {
+                batch.remove(edge_key(edge));
             }
-            frontier.extend(
-                node.children
-                    .iter()
-                    .filter(|(_, child)| child.parent.has_aux(PRUNE_CLEARING_KEY))
-                    .map(|(_, child)| child),
-            );
-            marked.push(node);
-        }
-        // Match by instance id so a torn parent-null still drops the
-        // registry entry. The head is cleared through `self` below.
-        // Scan the registry once, including every alias of a marked node.
-        // Repeated child_id lookups would rescan all root children per node.
-        let drop_from_root: Vec<_> = root
-            .children
-            .iter()
-            .filter_map(|(id, child)| seen.contains(&child.instance_id()).then_some(id))
-            .collect();
-        let head_id = self.instance_id();
-        marked.retain(|node| node.instance_id() != head_id);
-        // Descendants before ancestors, as in prune_clear_consumed, so
-        // an interrupted registry pass also keeps its unfinished tail
-        // discoverable when writes have survived in program order.
-        marked.reverse();
-        self.clear_consumed_nodes(&mut marked)?;
-        for id in drop_from_root {
-            root.children.remove(&id);
+            batch.commit()?;
         }
         Ok(())
     }
-
-    /// Prune phases 4-5: clear data/parents, WAL fence, then clear registries.
-    ///
-    /// The clearing marker (already durable) is what makes a retry safe.
-    /// Parent, children, and data live on different prefixes, so their
-    /// write order is not a power-loss order and must not be the safety
-    /// mechanism. The marker is left in place: a later `prune` on the
-    /// consumed head still resolves to the genesis.
-    ///
-    /// The caller fences immediately after this phase, before phase 6
-    /// unregisters the consumed chain.
-    fn prune_clear_consumed(&mut self, linebuf: &mut [Self]) -> Result<()> {
-        let mid = linebuf.len() - 1;
-        self.clear_consumed_nodes(&mut linebuf[..mid])
-    }
-
-    /// Prunes children that are in the `include_targets` list.
-    #[inline(always)]
-    pub fn prune_children_include(&mut self, include_targets: &[impl AsRef<DagMapId>]) {
-        self.prune_children(include_targets, false);
-    }
-
-    /// Prunes children that are not in the `exclude_targets` list.
-    #[inline(always)]
-    pub fn prune_children_exclude(&mut self, exclude_targets: &[impl AsRef<DagMapId>]) {
-        self.prune_children(exclude_targets, true);
-    }
-
-    fn prune_children(&mut self, targets: &[impl AsRef<DagMapId>], exclude_mode: bool) {
-        let self_id = self.instance_id();
-        let targets = targets.iter().map(|i| i.as_ref()).collect::<HashSet<_>>();
-
-        let dropped_children = if exclude_mode {
-            self.children
-                .iter()
-                .filter(|(id, _)| !targets.contains(&id.as_slice()))
-                .collect::<Vec<_>>()
-        } else {
-            self.children
-                .iter()
-                .filter(|(id, _)| targets.contains(&id.as_slice()))
-                .collect::<Vec<_>>()
-        };
-
-        // Destroy each owned child fully — `destroy()` clears it (and its
-        // descendants) before removing its own registry entry — and only
-        // THEN drop the index entry here. Removing every entry upfront
-        // (the previous ordering) let a crash strand not-yet-destroyed
-        // children with fully intact data and no registry path back to
-        // them; per-child destroy-then-drop keeps every not-yet-processed
-        // entry discoverable through this still-intact registry.
-        for (id, mut child) in dropped_children.into_iter() {
-            // Only destroy children this node actually owns (or parentless
-            // residue); an entry whose child now lives under a different
-            // parent is a stale index copy left by an interrupted
-            // multi-step operation — dropping the entry below suffices.
-            if Self::owned_or_residue(self_id, &child) {
-                child.destroy();
+    /// Atomically folds the mainline overlay into the original root, reparents
+    /// the head's live children, then clears consumed rows. A clearing marker
+    /// means the fold and reparenting are already recorded in the shared WAL.
+    /// Returns after one shard WAL fence. Retry on the original head.
+    pub fn prune(self) -> Result<Self> {
+        ensure_writable(&self.namespace(), "DAG pruning")?;
+        let (mut line, mut root) = self.mainline()?;
+        if let Some((head, ancestors)) = line.split_first_mut() {
+            if head.meta()?.state.live() {
+                let protected: HashSet<_> = std::iter::once(head.id())
+                    .chain(ancestors.iter().map(Self::id))
+                    .chain(head.links().map(|(_, id)| id))
+                    .collect();
+                for node in ancestors.iter_mut().chain(std::iter::once(&mut root)) {
+                    let doomed = node
+                        .links()
+                        .filter(|(_, id)| !protected.contains(id))
+                        .collect::<Vec<_>>();
+                    for (e, id) in doomed {
+                        node.remove_branch(e, id)?;
+                    }
+                }
+                Self::fold(&line, &mut root)?;
+                line[0].reparent(&mut root)?;
+            } else {
+                Self::collect_marked(&mut line, &root)?;
             }
-            self.children.remove(&id);
+            Self::mark(&mut line, root.id())?;
+            Self::clear_line(&mut line, &mut root)?;
         }
+        root.store.try_sync_wal()?;
+        Ok(root)
     }
 
-    /// Destroys this node and all its **owned** descendant children,
-    /// clearing all data.
-    ///
-    /// If this node is attached to a parent, it persistently nulls its own
-    /// parent slot and clears its data and descendants **first**, and only
-    /// as the **last** step removes its own child entry from the parent's
-    /// `children` collection. Because both the data clearing and the
-    /// parent unlink are persisted, **every** handle of this node —
-    /// including shadows taken earlier and handles later restored via
-    /// [`from_meta`](Self::from_meta) — observes the destroyed state and
-    /// can no longer resolve inherited reads through the parent chain.
-    ///
-    /// # Crash safety
-    ///
-    /// This ordering mirrors `prune_clear_consumed`'s
-    /// self-healing pattern: nothing is unregistered from the parent's
-    /// registry until this node (and everything beneath it) is already
-    /// fully cleared. Each step is an independent write to a different
-    /// engine prefix that can recover independently after a crash — if the
-    /// registry removal happened *first* (the previous, unsafe ordering),
-    /// a crash right after it becomes durable but before the data/parent
-    /// clearing lands would make this node permanently unreachable via any
-    /// registry-driven walk while its storage remained fully allocated on
-    /// disk (a leak with no recovery path, since discovery is entirely
-    /// registry-driven). With the registry entry removed last, a crash at
-    /// any earlier point still leaves this node discoverable — and safely
-    /// reclaimable, since `owned_or_residue`'s
-    /// residue arm accepts a `None` parent slot — through the parent's
-    /// still-intact registry entry, so a retried `destroy()` or a
-    /// subsequent `prune()` converges instead of leaking.
-    ///
-    /// A namespace WAL fence separates the data/parent pass from registry
-    /// clearing, making this ordering durable across independent shard WALs.
-    ///
-    /// The descendant walk follows the children registries but treats each
-    /// child's own parent slot as the ownership truth: an entry whose child
-    /// meanwhile lives under a different parent (a stale index copy left by
-    /// an interrupted multi-step operation such as [`prune`](Self::prune))
-    /// is skipped, never destroyed through the stale path.
-    #[inline(always)]
-    pub fn destroy(&mut self) {
-        let self_id = self.instance_id();
-
-        // The in-memory parent handle does not survive a crash. Persist
-        // it under a side key and fence that write before nulling the
-        // value slot, so a retry can still unlink. `get_value` decodes a
-        // handle alias; `Clone` would deep-copy the parent.
-        if let Some(parent) = self.parent.get_value() {
-            self.parent.set_aux(DESTROY_PARENT_KEY, &Some(parent));
-            self.parent.sync_wal();
-        }
-        let parent = self
-            .parent
-            .get_aux(DESTROY_PARENT_KEY)
-            .flatten()
-            .or_else(|| self.parent.get_value());
-
-        // The parent slot is owned by this node (never shared with
-        // siblings), so nulling it is a persistent, node-local unlink.
-        *self.parent.get_mut() = None;
-        self.data.clear();
-
-        // Clear all owned descendants iteratively. A recursive walk
-        // overflows the stack on deep DAGs; mirror the iterative,
-        // cycle-guarded design used by `get()` and `prune_mainline`.
-        // Each stack entry carries the instance ID of the registry owner
-        // it was discovered under, for the ownership check on pop.
-        //
-        // Two passes, in this order, are required for the same crash
-        // safety reason as above: pass 1 clears every owned descendant's
-        // `data`/`parent` but leaves every `children` registry (including
-        // `self.children`) untouched, so the not-yet-visited tail of
-        // `stack` stays fully discoverable through its immediate
-        // ancestor's still-intact registry for the whole pass. Only once
-        // EVERY descendant's data is already gone does pass 2 clear the
-        // (by then purely cosmetic — no live data can be lost through
-        // them any more) children registries; interrupting pass 2 can
-        // leave stale-but-harmless entries pointing at already-empty
-        // nodes, never a loss. The previous single-pass version cleared
-        // each node's `children` immediately after reading it, so a
-        // crash between that clear and the next stack pop orphaned
-        // still-intact grandchildren with no recovery path.
-        let mut seen = HashSet::new();
-        seen.insert(self_id);
-        let mut stack = self
-            .children
-            .iter()
-            .map(|(_, c)| (self_id, c))
-            .collect::<Vec<_>>();
-
-        let mut owned = Vec::new();
-        while let Some((owner_id, mut node)) = stack.pop() {
-            // Ownership FIRST, duplicate-suppression second: a foreign
-            // entry (stale index copy owned by a different live parent)
-            // must not poison `seen` — otherwise the true owned entry
-            // for the same node, popped later, would be skipped and the
-            // node would survive destruction (INV-DG5).
-            if !Self::owned_or_residue(owner_id, &node) {
-                // Foreign entry — not ours to destroy.
+    /// Copies all reachable nodes and links, including pending recovery links,
+    /// to fresh prefixes on a single shard in the destination namespace.
+    pub fn clone_in(&self, ns: &Namespace) -> Result<Self> {
+        ensure_writable(ns, "DAG clone")?;
+        let mut pending = vec![self.open(self.id())?];
+        let mut sources = HashMap::new();
+        while let Some(node) = pending.pop() {
+            if sources.contains_key(&node.id()) {
                 continue;
             }
-            if !seen.insert(node.instance_id()) {
-                continue;
+            let meta = node.meta()?;
+            if let Some(p) = meta.state.owner() {
+                let parent = node.open(p.map)?;
+                if matches!(meta.state, State::Child(_))
+                    && parent.edge_target(p.edge) != Some(node.id())
+                {
+                    return Err(corrupt("DAG clone owner mismatch"));
+                }
+                pending.push(parent);
             }
-            let node_id = node.instance_id();
-            node.data.clear();
-            // Break the upward traversal link so a handle to any
-            // descendant cannot walk through the cleared node to
-            // ancestors above the destroyed subtree.
-            *node.parent.get_mut() = None;
-            stack.extend(node.children.iter().map(|(_, c)| (node_id, c)));
-            owned.push(node);
-        }
-
-        // Data and parent slots may live on different shards from their
-        // registries. Make every destructive clear durable before any
-        // registry entry can disappear on a later independently-recovered
-        // WAL.
-        self.namespace()
-            .try_sync_wal()
-            .expect("vsdb: DAG destruction WAL synchronization failed");
-
-        // Pass 2: every owned descendant's data is already gone, so
-        // clearing the children registries in any order — even if
-        // interrupted — can no longer lose live data.
-        self.children.clear();
-        for mut node in owned {
-            node.children.clear();
-        }
-
-        // Only now — after `self` and everything beneath it is fully
-        // cleared — unregister `self` from the parent's registry.
-        if let Some(mut parent) = parent {
-            let child_ids = parent
-                .children
-                .iter()
-                .filter_map(|(id, child)| (child.instance_id() == self_id).then_some(id))
-                .collect::<Vec<_>>();
-            for id in child_ids {
-                parent.children.remove(id);
+            if let State::Clearing { genesis, .. } = meta.state {
+                let root = node.open(genesis)?;
+                if root.meta()?.state != State::Root {
+                    return Err(corrupt("DAG clone clearing target mismatch"));
+                }
+                pending.push(root);
             }
+            for (e, id) in node.links() {
+                if let Some(child) = node.owned(e, id) {
+                    pending.push(child)
+                }
+            }
+            sources.insert(node.id(), node);
         }
-    }
-
-    /// Checks if this `DagMapRaw` instance is the same as another.
-    #[inline(always)]
-    pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
-        self.data.is_the_same_instance(&other_hdr.data)
+        let dag_id = rand::random();
+        let mut copies = HashMap::<u64, Self>::new();
+        let copy_graph = (|| -> Result<()> {
+            for (&id, node) in &sources {
+                let store = match copies.values().next() {
+                    None => node.store.clone_in(ns)?,
+                    Some(anchor) => node.store.clone_colocated(&anchor.store)?,
+                };
+                copies.insert(id, Self { store, dag_id });
+            }
+            let ids: HashMap<_, _> =
+                copies.iter().map(|(old, new)| (*old, new.id())).collect();
+            for (id, node) in sources {
+                let mut meta = node.meta()?;
+                meta.dag_id = dag_id;
+                let remap = |mut p: Parent| {
+                    p.map = ids[&p.map];
+                    p
+                };
+                meta.state = match meta.state {
+                    State::Child(p) => State::Child(remap(p)),
+                    State::Clearing { owner, genesis } => State::Clearing {
+                        owner: owner.map(remap),
+                        genesis: ids[&genesis],
+                    },
+                    State::Destroying(owner) => State::Destroying(owner.map(remap)),
+                    s => s,
+                };
+                let copy = copies.get_mut(&id).expect("allocated");
+                // All user rows have already been copied in bounded batches.
+                // Remap structural links in place on the unpublished graph.
+                for (edge, child) in node.links() {
+                    let mut batch = copy.store.batch();
+                    if let Some(target) = ids.get(&child) {
+                        batch.insert(edge_key(edge), target.to_le_bytes());
+                    } else {
+                        batch.remove(edge_key(edge));
+                    }
+                    batch.commit()?;
+                }
+                let mut batch = copy.store.batch();
+                batch.insert(META, meta.bytes());
+                batch.commit()?;
+            }
+            Ok(())
+        })();
+        if let Err(err) = copy_graph {
+            for node in copies.values_mut() {
+                let _ = node.store.batch_wiped().commit();
+            }
+            return Err(err);
+        }
+        Ok(copies.remove(&self.id()).expect("allocated"))
     }
 }
 
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////
+impl Clone for DagMapRaw {
+    fn clone(&self) -> Self {
+        self.clone_in(&self.namespace()).expect("DAG deep clone")
+    }
+}
 
-/// A mutable reference to a value in a `DagMapRaw`.
+/// A buffered edit of this node's local data.
 #[derive(Debug)]
 pub struct ValueMut<'a> {
     value: RawBytes,
-    inner: mapx_raw::ValueMut<'a>,
+    store: &'a mut MapxRaw,
+    key: Vec<u8>,
     dirty: bool,
     unwind: UnwindMark,
 }
-
+impl ValueMut<'_> {
+    fn write(&mut self) -> Result<()> {
+        if self.dirty {
+            self.dirty = false;
+            self.value.insert(0, 1);
+            let mut batch = self.store.batch();
+            batch.insert(&self.key, &self.value);
+            batch.commit()?;
+        }
+        Ok(())
+    }
+    /// Publishes a local edit and returns any storage error.
+    pub fn commit(mut self) -> Result<()> {
+        self.write()
+    }
+}
+impl crate::common::guard::RawValueSlot for ValueMut<'_> {
+    fn commit(self) -> Result<()> {
+        self.commit()
+    }
+}
 impl Drop for ValueMut<'_> {
     fn drop(&mut self) {
-        if self.dirty && !self.unwind.interrupted() {
-            // Same invariant as `insert()`: the empty byte string is the
-            // internal deletion tombstone and must not be produced through
-            // the mutable-reference path either.
-            assert!(
-                !self.value.is_empty(),
-                "empty value is a tombstone; call remove() instead"
-            );
-            self.inner.clone_from(&self.value);
+        if !self.unwind.interrupted() {
+            self.write().expect("DAG value write-back failed");
         }
     }
 }
-
 impl Deref for ValueMut<'_> {
     type Target = RawBytes;
     fn deref(&self) -> &Self::Target {
         &self.value
     }
 }
-
 impl DerefMut for ValueMut<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.dirty = true;

@@ -137,13 +137,10 @@ fn test_meta_restore_then_mutate() {
 }
 
 #[test]
-fn test_get_mut_persists_interior_mutability_change() {
+fn test_update_persists_interior_mutable_value() {
     let mut o = Orphan::new(RefCell::new(10u32));
 
-    {
-        let value = o.get_mut();
-        *value.borrow_mut() = 20;
-    }
+    o.update(|value| *value.get_mut() = 20).unwrap();
 
     assert_eq!(*o.get_value().borrow(), 20);
 }
@@ -152,8 +149,8 @@ fn test_get_mut_persists_interior_mutability_change() {
 #[test]
 fn test_valueende_roundtrip() {
     let o = Orphan::new("hello".to_string());
-    let encoded = o.encode();
-    let decoded: Orphan<String> = Orphan::decode(&encoded).unwrap();
+    let encoded = o.encode_value();
+    let decoded: Orphan<String> = Orphan::decode_value(&encoded).unwrap();
     assert!(decoded.is_the_same_instance(&o));
     assert_eq!(decoded.get_value(), "hello".to_string());
 }
@@ -198,14 +195,12 @@ fn unchanged_guard_preserves_non_idempotent_encoding() {
 
     struct Drift(u32);
     impl ValueEnDe for Drift {
-        fn try_encode(&self) -> Result<Vec<u8>> {
+        fn encode_value_into(&self, dst: &mut Vec<u8>) -> Result<()> {
             static TAG: AtomicU32 = AtomicU32::new(0);
-            Ok(postcard::to_allocvec(&(
-                self.0,
-                TAG.fetch_add(1, Ordering::Relaxed),
-            ))?)
+            postcard::to_io(&(self.0, TAG.fetch_add(1, Ordering::Relaxed)), dst)?;
+            Ok(())
         }
-        fn decode(bytes: &[u8]) -> Result<Self> {
+        fn decode_value(bytes: &[u8]) -> Result<Self> {
             let (value, _tag): (u32, u32) = postcard::from_bytes(bytes)?;
             Ok(Self(value))
         }

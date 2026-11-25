@@ -1,7 +1,7 @@
 use std::{env, fs, path::PathBuf, process::Command};
 use vsdb_core::{
     MapxRaw, Namespace, VsdbError, VsdbOptions, vsdb_configure, vsdb_get_base_dir,
-    vsdb_get_custom_dir, vsdb_get_meta_dir, vsdb_get_system_dir,
+    vsdb_get_custom_dir, vsdb_get_system_dir,
 };
 
 #[test]
@@ -106,7 +106,7 @@ fn configure_racing_first_use_never_splits_bases() {
             let reader = s.spawn(move || {
                 barrier.wait();
                 match first_use.as_str() {
-                    "meta" => vsdb_get_meta_dir().to_path_buf(),
+                    "meta" => vsdb_core::Namespace::default_ns().meta_dir(),
                     "custom" => vsdb_get_custom_dir().to_path_buf(),
                     "engine" => {
                         let ns = Namespace::default_ns();
@@ -133,7 +133,7 @@ fn configure_racing_first_use_never_splits_bases() {
             assert!(materialized.starts_with(&base));
             assert_eq!(vsdb_get_system_dir(), base.join("__SYSTEM__"));
             assert_eq!(
-                vsdb_get_meta_dir(),
+                vsdb_core::Namespace::default_ns().meta_dir(),
                 base.join("__SYSTEM__/__instance_meta__")
             );
             assert_eq!(vsdb_get_custom_dir(), base.join("__CUSTOM__"));

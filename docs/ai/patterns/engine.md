@@ -5,9 +5,9 @@
 **Arch:** One engine per namespace = N MMDB shards (default pinned 16; others
 creation-persisted). One process-global prefix allocator
 (`{base}/__SYSTEM__/__prefix_ceiling__`). Key = `[prefix_u64][user]`; reserved
-1-byte system keys `[0]` (legacy ceiling) / `[1]` (WAL fence) cannot collide.
+the one-byte WAL fence key cannot collide.
 Handles own `Namespace` Arc — ambient scope is read at create only, never by
-ops/serde/`from_meta`/`from_bytes_in`. Engines in `Arc<NsInner>`
+ops/serde/`from_meta`. Engines in `Arc<NsInner>`
 (no leak); close under lifecycle locks. Format marker after shards complete.
 One `BlockCachePool` per engine. A WriteBatch is bound to one prefix (⇒ one shard).
 
@@ -20,8 +20,8 @@ One `BlockCachePool` per engine. A WriteBatch is bound to one prefix (⇒ one sh
 **E5 Batch scope** — one batch = one prefix; no multi-prefix batch exists. Cross-prefix atomicity needs single-handle staging or dirty-flag/root-last recovery.
 **E6 Iter prefix bound** — stop at prefix end (incl. `u64::MAX` upper-bound care).
 **E7 Lifecycle exclusion** — open/create/destroy/relocate/close serialize properly; table lock released before slow teardown.
-**E8 Format/shards** — marked root = exact shard set + CURRENT anchors. No marker: 0 shards, exact set + CURRENT, or partial only with the `__SYSTEM__/__initializing__` sentinel; stray `shard_*` refused.
-**E9 Identity** — route via owned Namespace; meta ns suffix absent ⇔ default; no ambient redirect of existing handles.
+**E8 Format/shards** — marked root = exact shard set + CURRENT anchors. No marker: 0 shards, or an interrupted create with the `__SYSTEM__/__initializing__` sentinel; stray `shard_*` refused.
+**E9 Identity** — route via owned Namespace; ns ID zero selects default; no ambient redirect of existing handles.
 **E10 Cache pool** — all shards of one engine share one pool; engines do not
 share pools or identity. Memory inputs size buffers/caches with floors/caps,
 not hard RSS limits. `block-cache-usage` repeats the pool-wide entry count
@@ -32,7 +32,7 @@ plus each shard's pinned entries; do not sum it as per-shard byte usage.
 (skipped prefixes are burned, never reissued); `is_colocated_with` = same ns + same shard.
 A composite may drop cross-component fences only when **every** component is
 co-located, re-checked on restore; otherwise keep the per-shard fences.
-**E14 Path-only helpers** — `vsdb_get_{base,custom,system,meta}_dir` / `vsdb_meta_path`
+**E14 Path-only helpers** — `vsdb_get_{base,custom,system}_dir`
 resolve paths without opening an engine; `Namespace::default_ns()` opens the default
 engine — never use it just for a path. `vsdb_configure` never mutates the environment;
 default budget = nonzero `VsdbOptions::mem_budget_mb` > `VSDB_MEM_BUDGET_MB` > 2 GiB.

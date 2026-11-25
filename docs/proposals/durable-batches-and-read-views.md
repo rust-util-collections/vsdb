@@ -2,12 +2,8 @@
 
 Status: initial implementation completed after owner authorization, 2026-09-25 UTC.
 
-Implemented scope: `commit_sync()` on raw and ordinary typed batches;
-`MapxRaw::read_view()` and immutable `MapxRawReader`. These preserve storage
-formats, default write behavior and namespace ownership. Typed read-view
-wrappers and broader capabilities below remain design candidates, not shipped
-APIs. No cross-map transaction, owned detached snapshot or service-specific
-policy was added. See [validation evidence](../evaluations/acc-migration-primitives.md).
+The v17 implementation introduced `commit_sync()` on raw and ordinary typed batches, `MapxRaw::read_view()`, and `MapxRawReader`. v18 extends this API to typed basic maps and Orphan readers. [Current API](../../strata/docs/api.md#basic-collection-read-views)
+
 Baseline: `8ad80b1ca2649307ef36044630343660bb193147` (VSDB 17.0.7).
 
 ## Purpose and design boundary
@@ -307,8 +303,7 @@ In both versions, synchronous write groups sync the WAL before memtable batch
 publication, and `Snapshot` retains a DB borrow plus a registered sequence.
 Those existing capabilities support the shipped additions. Implementation and
 validation evidence is recorded in
-[the ACC migration report](../evaluations/acc-migration-primitives.md); typed
-read-view wrappers remain design candidates.
+[the ACC migration report](../evaluations/acc-migration-primitives.md); v18 adds typed views and independent readers for basic collections.
 
 Related contracts: [compatibility policy](../ai/compatibility-policy.md),
 [namespace close](ns-close.md), [core API](../../core/docs/api.md),

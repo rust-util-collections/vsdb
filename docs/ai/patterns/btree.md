@@ -27,11 +27,7 @@ results must equal a full-scan diff.
 source-wins matrix); each step acquires the new root and `release_buffered`s the previous
 **intermediate** (never the target); the final root is `disown_node`d → returned unowned;
 dead intermediates drop from `pending` before reaching the engine.
-**BT9 Deferred reclaim** — after `defer_reclaim()`, released keys queue instead of
-lazy-deleting; the queue and mode are shared by pool aliases and reader leases. The
-owner drains it only after its WAL sync; a later lease drop waits for the next drain.
-Default (standalone tree) stays immediate. Unregistered keys are swept by the next
-`rebuild_ref_counts`.
+**BT9 Retired roots** — a shared version store writes retirement markers before releasing its prior owners. Last-pin release queues object keys and marker removal for the next batch. Standalone pools retain their lazy-delete behavior.
 **BT10 Reader ownership** — capture the published root and acquire its pin under the
 shared ref lock; the snapshot and derived iterators share one owned lease. Last drop
 cascades through the same deferred queue. Recount holds the lock through pin seeding,

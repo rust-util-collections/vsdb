@@ -5,26 +5,10 @@
 //! every public API in `vsdb_core` and `vsdb` returns
 //! [`Result<T>`](Result) with [`VsdbError`].
 //!
-//! # Relationship to `ruc`
-//!
-//! Internally VSDB uses `ruc` for error chaining (file/line context per
-//! frame).  At the public boundary those chains are converted into
-//! [`VsdbError`] via [`From<Box<dyn ruc::err::RucError>>`], which
-//! preserves the **complete chain** (every frame, including file/line
-//! annotations) in the `detail` field — no diagnostic information is
-//! lost.  Compared to exposing `ruc::Result` directly, `VsdbError`
-//! additionally offers structured, matchable variants, implements
-//! [`std::error::Error`] (with `source()` for wrapped I/O and codec
-//! errors), and is `Send + Sync`.
-
 use thiserror::Error;
 
 /// Structured error type for all VSDB public API operations.
 ///
-/// Each variant carries enough context for callers to handle errors
-/// programmatically (e.g. retry on a different branch) while the
-/// `String` fields preserve the full error chain from the underlying
-/// `ruc` layer so that no diagnostic information is lost.
 #[non_exhaustive]
 #[derive(Error, Debug)]
 pub enum VsdbError {
@@ -32,13 +16,13 @@ pub enum VsdbError {
     #[error("branch not found: {branch_id}")]
     BranchNotFound {
         /// The branch ID that was looked up.
-        branch_id: u64,
+        branch_id: super::BranchId,
     },
     /// The specified commit does not exist.
     #[error("commit not found: {commit_id}")]
     CommitNotFound {
         /// The commit ID that was looked up.
-        commit_id: u64,
+        commit_id: super::CommitId,
     },
     /// A branch with this name already exists.
     #[error("branch already exists: {name}")]
@@ -54,27 +38,27 @@ pub enum VsdbError {
     #[error("branch {branch_id} has uncommitted changes")]
     UncommittedChanges {
         /// The branch ID that has dirty state.
-        branch_id: u64,
+        branch_id: super::BranchId,
     },
     /// The target commit is not an ancestor of the branch head.
     #[error("commit {commit_id} is not an ancestor of branch {branch_id}")]
     NotAncestor {
         /// The requested target commit.
-        commit_id: u64,
+        commit_id: super::CommitId,
         /// The branch whose history was searched.
-        branch_id: u64,
+        branch_id: super::BranchId,
     },
     /// A branch was merged into itself.
     #[error("cannot merge branch {branch_id} into itself")]
     SelfMerge {
         /// The branch passed as both source and target.
-        branch_id: u64,
+        branch_id: super::BranchId,
     },
     /// The operation needs a branch with at least one commit.
     #[error("branch {branch_id} has no commits")]
     NoCommits {
         /// The branch without history.
-        branch_id: u64,
+        branch_id: super::BranchId,
     },
     /// A vector's length differs from the index dimension.
     #[error("dimension mismatch: expected {expected}, got {found}")]
@@ -133,10 +117,14 @@ pub enum VsdbError {
         /// Detailed error chain.
         detail: String,
     },
+    /// Underlying storage engine failure, retaining its original source chain.
+    #[error("{kind}: {source}")]
+    Storage {
+        kind: StorageErrorKind,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     /// Catch-all for errors not covered by specific variants.
-    ///
-    /// The `detail` field carries the full `ruc` error chain so that
-    /// no context is lost.
     #[error("{detail}")]
     Other {
         /// Detailed error chain.
@@ -147,16 +135,41 @@ pub enum VsdbError {
 /// Alias for `std::result::Result<T, VsdbError>`.
 pub type Result<T> = std::result::Result<T, VsdbError>;
 
-// ---------------------------------------------------------------
-// Conversion helpers
-// ---------------------------------------------------------------
-
-impl From<Box<dyn ruc::err::RucError>> for VsdbError {
-    /// Converts an internal `ruc` error chain, preserving **every**
-    /// frame (message + file/line context) via `stringify_chain`.
-    fn from(e: Box<dyn ruc::err::RucError>) -> Self {
-        Self::Other {
-            detail: e.stringify_chain(None),
-        }
+/// Stable classifications for engine failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StorageErrorKind {
+    Io,
+    Corruption,
+    ReadOnly,
+    InvalidArgument,
+    DbClosed,
+    Background,
+    Other,
+}
+impl std::fmt::Display for StorageErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+pub(crate) fn from_mmdb_err(error: mmdb::Error) -> VsdbError {
+    use mmdb::ErrorKind;
+    let kind = match error.kind() {
+        ErrorKind::Io => StorageErrorKind::Io,
+        ErrorKind::Corruption => StorageErrorKind::Corruption,
+        ErrorKind::ReadOnly => StorageErrorKind::ReadOnly,
+        ErrorKind::InvalidArgument => StorageErrorKind::InvalidArgument,
+        ErrorKind::DbClosed => StorageErrorKind::DbClosed,
+        ErrorKind::Background => StorageErrorKind::Background,
+        _ => StorageErrorKind::Other,
+    };
+    VsdbError::Storage {
+        kind,
+        source: Box::new(error),
+    }
+}
+pub(crate) fn corrupt(detail: impl Into<String>) -> VsdbError {
+    VsdbError::Corrupt {
+        detail: detail.into(),
     }
 }

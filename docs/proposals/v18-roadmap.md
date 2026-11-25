@@ -1,7 +1,10 @@
 # VSDB v18 Structural Refactoring Roadmap
 
-Status: proposed major-release design (`v18.0.0`), 2026-11-24. Not yet implemented; current `v17` contracts remain active until v18 development begins.
+**Implementation amendment.** v18 opens only the current data format. The independent workspace crate `vsdb_migrate` owns all v17 decoding and conversion, including raw and typed envelopes, root metadata, old index state and application-embedded handles. This supersedes the original backward-reader and lazy-upgrade design throughout this proposal. The migration guide documents the callable entry points. [Migration guide](../../migration/README.md)
+
 Baseline: `4fc5b88` (`v17.0.21`), verified against `mmdb 4.3.14`/`4.3.15` (`>= 4.3.12` in `Cargo.toml`).
+
+The subsystem measurements cover [basic maps](../evaluations/v18-basic.md), [SlotDex and DagMap](../evaluations/v18-slotdex-dagmap.md), [VerMap reference persistence](../evaluations/v18-versioned.md), and [tries and VecDex](../evaluations/v18-trie-vecdex.md). The historical design and its rationale follow.
 
 ## Purpose, release boundary, and pre-v18 (`v17.x`) split
 
@@ -405,19 +408,9 @@ Source: [vecdex/mod.rs](../../strata/src/vecdex/mod.rs), [vecdex/dynamic.rs](../
 
 ## Migration and preserved invariants
 
-### Tiered, prefix-preserving `v17 → v18` migration (`vsdb::migrate` shipped in `v18`)
+### Offline v17 to v18 conversion
 
-Universal logical export/import with generic `InstanceId` remapping is both disproportionate — most `v17` data rows are byte-identical on disk — and unsound for nested handles embedded inside opaque user values or 64-bit map IDs persisted in application sidecars ([hotmint-v17.md](../evaluations/hotmint-v17.md#L49-L50)). Instead, **`v18` ships an offline `vsdb::migrate` module directly** (no separate `v17` exporter binary required) that **preserves existing prefixes (`InstanceId`)** wherever possible:
-
-| Subsystem | What changes on disk | `v17 → v18` path (shipped in `v18`) |
-|-----------|----------------------|-------------------------------------|
-| `Mapx`, `MapxOrd`, `MapxOrdRawKey`, `Orphan`, `MapxRaw` | **Nothing in shard data rows** (except rejected `usize`/`isize`/`f64`/`HashMap` keys); only outer handle envelopes | **Zero-copy in place:** keep prefixes untouched; `v18` continues reading `VSMAPX01` and `VSTYPE03` envelopes (including nested handles inside user values) |
-| Universe & namespace metadata | `VSUNI018` / `VSENG018` headers, `VSNREG02` `__namespaces__`, removal of `__namespace_state__` sidecars | **One-shot root upgrade (`migrate_universe`):** folds sidecar lifecycle states into `VSNREG02` and writes `VSUNI018` / `VSENG018` markers atomically |
-| `SlotDex` (`u32` / `u64` / `u128` / `i*`) | Entry & tier-bucket rows are **byte-identical**; `[TAG_TOTAL]` grows `8B → 16B`; handle meta `tier_capacity: S → u32` | **In-place lazy upgrade:** `v18` reads `VSTYPE03` `SlotDex` meta and 8B `[TAG_TOTAL]` (`generation = 0`), upgrading `[TAG_TOTAL]` to 16B on first write (custom variable-width `SlotType`s must rebuild from source) |
-| `VecDex` / `VecDexDyn` | `[TAG_VEC]` drops `postcard` length varint; new `[TAG_META]` + 34B `[TAG_STATE]` (`TAG_ADJ` HNSW graph & `TAG_NODE2KEY` postcard bytes unchanged) | **Graph-preserving in-place transcode (`VecDex::<K, M, S>::migrate_v17`):** keeps prefix, `node_id`s, `entry_point`, `max_layer`, and HNSW graph edges untouched (no random HNSW rebuild, preserving exact ANN results); strips `[TAG_VEC]` varint prefix and writes `[TAG_META]` + `[TAG_STATE]` |
-| `VerMap` / `PersistentBTree` | Node pages become slotted `NodeView`; 2-bit tagged big-endian IDs; 8 prefixes collapse into 1 | **Prefix-preserving converter (`VerMap::<K, V>::migrate_v17`):** reads the `v17` 8-prefix layout, writes the converted `v18` single-handle store back into the **same primary `InstanceId` (`tree.nodes` prefix)**, wipes the 7 retired component prefixes, and updates `__instance_meta__` |
-| `DagMapRaw` / `DagMapRawKey` | 3 prefixes per node collapse into 1 co-located `MapxRaw`; `[0x02]` values gain `0x01`/`0x00` tag | **Root-prefix-preserving converter (`DagMapRaw::migrate_v17`):** converts root in place on its existing `InstanceId`, co-locates children onto the root's shard while preserving `child_ids`, and returns an `old_child_id -> new_child_id` map for any off-shard child handle saved externally |
-| `MptCalc` / `SmtCalc` caches | Checkpoint file format (`MPTC v2` / `SMTC v4`) | **Disposable:** old cache files are ignored and rebuilt automatically |
+The v18 runtime requires the current headers and row layouts. The independent `vsdb_migrate` crate converts source universes, saved raw and typed handles, single-handle indexes, version stores, standalone B+ trees and DAGs. See the migration guide for the functions, retry behavior, external root mappings and application-owned data. [Migration guide](../../migration/README.md)
 
 ### Preserved architectural invariants
 

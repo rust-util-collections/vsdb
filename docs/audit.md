@@ -11,32 +11,12 @@
 
 ## Open
 
-### [CRITICAL] slotdex: variable-width custom slots can lose or misread entries
-- **Where**: `strata/src/slotdex/slot_type.rs` (`SlotType`), `strata/src/slotdex/mod.rs` (`entry_key`, `insert`, `decode_entry_row`, `iter`)
-- **What**: An order-preserving custom slot codec may encode different slots with different widths. Layout v2 concatenates slot and key bytes. Iterating an inserted byte-vector key can return part of its slot as a leading key byte. Two distinct slot/key pairs can also encode the same row, making the second insert report success without storing it.
-- **Why**: Readers split every entry at the encoded width of `S::MIN`. When one slot encoding is a prefix of another, even the entry rows, per-slot counts and total together can describe multiple assignments of keys to slots. The built-in `u32`, `u64` and `u128` codecs have fixed widths.
-- **Suggested fix**: Decide the supported custom-slot encoding contract and migration before changing writes or restore behavior. Supporting all order-preserving codecs requires unambiguous component boundaries and slot range ordering. Rejecting variable-width codecs would narrow the public trait contract. Test insertion, paging, iteration, and restoration with custom widths. Reconstructing ambiguous old rows requires an independent application record.
-
 ## Won't Fix
-
-### [MEDIUM] cached indexes: independently restored handles do not share runtime caches
-- **Where**: `strata/src/slotdex/mod.rs`, `strata/src/vecdex/mod.rs`, `strata/src/vecdex/dynamic.rs`
-- **What**: serde/from_meta restores the same backing store with separate cached totals, tiers or graph state. Alternating writes through those handles can overwrite counters or node IDs; independent readers can observe stale cached state after another handle mutates.
-- **Reason**: sharing or invalidating all generic cached state requires a runtime ownership/cache redesign, or reloading index state on ordinary operations with material cost. Recovery is intended to replace the active handle. Public struct and recovery docs now require all access during mutation to use one live instance (shared behind a lock when needed); multiple independent immutable readers remain supported. This documents the current limitation rather than claiming alias coherence is fixed.
-
----
 
 ### [LOW] engine: lazy-delete auto-sweep threshold stays disabled
 - **Where**: `core/src/common/engine/mmdb.rs` (`mmdb_open`), mmdb `DbOptions::lazy_delete_compaction_threshold`
 - **What**: keys registered via `lazy_delete` are physically dropped only when organic compaction rewrites their level; registrations resting in cold levels can outlive the process (registrations are memory-only and documented best-effort).
 - **Reason**: mmdb documents the auto-sweep as holding the DB mutex for each level's full rewrite, stalling readers and writers; administrative `compact()` additionally holds the write queue for its full call. Enabling it by default trades unbounded stalls for space reclaim. Correctness never depends on physical removal (dead B+ tree nodes are unreachable by id), and administrative `compact()` remains available.
-
----
-
-### [MEDIUM] dagmap: serde decomposition can expose the private parent slot
-- **Where**: `strata/src/dagmap/raw/mod.rs`, `strata/src/basic/orphan/mod.rs`
-- **What**: callers can deserialize `DagMapRaw`'s public tuple representation into its public component types, retain an alias to the private parent `Orphan`, and later create a parent cycle through safe APIs. The same deliberate decomposition can also plant a foreign registry entry that `owned_or_residue`'s `None`-parent residue arm treats as reclaimable, so a later destroy/prune walk can wipe a live root (`parent == None`) — value loss under representation abuse, not hang/UB.
-- **Reason**: stopping deliberate decomposition requires a handle format that old bytes cannot decode into the public component types. A tombstone that treats `None` as residue only when present would stop the planted-root wipe, but a crash on the current build can already have `parent == None` with data still intact and no tombstone; requiring the tombstone would skip that residue and, if the registry entry is then dropped, make it unreachable. That recovery regression is not an acceptable silent patch. Casual misuse still cannot hang or cause memory unsafety. Keep the debt until a DagMap format redesign.
 
 ---
 
@@ -51,13 +31,6 @@
 - **Where**: `core/src/common/engine/mmdb.rs` (`MEM_BUDGET`)
 - **What**: Operators cannot see whether the configured option, environment override or fixed default selected the budget, or the resulting per-shard sizes.
 - **Reason**: `vsdb_core` has no logging facade and is a library; unconditional stderr output from a storage engine is worse than silence. Revisit if a workspace-wide logging facade is adopted.
-
----
-
-### [LOW] trie: cache decoders materialize a crafted payload before structural validation
-- **Where**: `strata/src/trie/cache.rs` (`deserialize_handle`), `strata/src/trie/smt/cache.rs` (`deserialize_node`)
-- **What**: A checksum-valid but malformed cache file just under `MAX_CACHE_FILE_BYTES` expands into an in-memory node graph before canonicality checks run; a branch-heavy payload can allocate orders of magnitude more than its encoded size.
-- **Reason**: Cache files are local, disposable artifacts behind a checksum and size cap; loading is not a remote input path, and a damaged cache safely falls back to rebuilding from the authoritative map. Adding a decoded-node/memory budget needs a new tuning constant and can reject legitimate large caches; track it with a future cache-format hardening change rather than a patch-release heuristic.
 
 ---
 

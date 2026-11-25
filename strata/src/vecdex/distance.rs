@@ -7,11 +7,18 @@ use std::{
     ops::{Add, Div, Mul, Neg, Sub},
 };
 
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for f32 {}
+    impl Sealed for f64 {}
+}
+
 /// A floating-point scalar suitable for vector components.
 ///
 /// Implemented for `f32` and `f64`.
 pub trait Scalar:
-    Copy
+    sealed::Sealed
+    + Copy
     + Default
     + PartialOrd
     + Add<Output = Self>
@@ -26,6 +33,10 @@ pub trait Scalar:
     + Sync
     + 'static
 {
+    /// Writes unframed IEEE-754 little-endian vector data.
+    fn encode_slice(vector: &[Self]) -> Vec<u8>;
+    /// Fills a reusable buffer from unaligned IEEE-754 little-endian bytes.
+    fn decode_into(bytes: &[u8], vector: &mut Vec<Self>);
     fn sqrt(self) -> Self;
     fn epsilon() -> Self;
     fn is_finite(self) -> bool {
@@ -37,6 +48,19 @@ pub trait Scalar:
 }
 
 impl Scalar for f32 {
+    fn encode_slice(vector: &[Self]) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(size_of_val(vector));
+        for value in vector {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        bytes
+    }
+    fn decode_into(bytes: &[u8], vector: &mut Vec<Self>) {
+        let (chunks, tail) = bytes.as_chunks::<4>();
+        assert!(tail.is_empty(), "VecDex: corrupt vector width");
+        vector.clear();
+        vector.extend(chunks.iter().map(|chunk| Self::from_le_bytes(*chunk)));
+    }
     #[inline]
     fn is_finite(self) -> bool {
         f32::is_finite(self)
@@ -64,6 +88,19 @@ impl Scalar for f32 {
 }
 
 impl Scalar for f64 {
+    fn encode_slice(vector: &[Self]) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(size_of_val(vector));
+        for value in vector {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        bytes
+    }
+    fn decode_into(bytes: &[u8], vector: &mut Vec<Self>) {
+        let (chunks, tail) = bytes.as_chunks::<8>();
+        assert!(tail.is_empty(), "VecDex: corrupt vector width");
+        vector.clear();
+        vector.extend(chunks.iter().map(|chunk| Self::from_le_bytes(*chunk)));
+    }
     #[inline]
     fn is_finite(self) -> bool {
         f64::is_finite(self)
@@ -93,30 +130,61 @@ impl Scalar for f64 {
 /// Trait for computing distance between two vectors.
 ///
 /// Lower distance means more similar.  Generic over [`Scalar`] so the
-/// same metric works for both `f32` and `f64` vectors.
+/// same metric works for both `f32` and `f64` vectors. The parameters
+/// affecting distance must remain fixed over the index lifetime. Serialize
+/// these parameters canonically and exclude temporary counters or caches.
 pub trait DistanceMetric<S: Scalar = f32>:
     Clone + Default + Serialize + de::DeserializeOwned + Send + Sync + 'static
 {
     /// Compute the distance between two vectors of equal length.
-    fn distance(a: &[S], b: &[S]) -> S;
+    fn distance(&self, a: &[S], b: &[S]) -> S;
+
+    /// Chooses a monomorphic search implementation once per query.
+    fn dispatch_search<Q: MetricSearch<S>>(&self, query: Q) -> Q::Output {
+        query.run(self)
+    }
+}
+
+/// A query dispatched once before entering the graph traversal loops.
+pub trait MetricSearch<S: Scalar> {
+    type Output;
+    fn run<D: DistanceMetric<S>>(self, metric: &D) -> Self::Output;
 }
 
 /// A runtime-selected distance metric — the value-level counterpart of
 /// the compile-time [`DistanceMetric`] types, consumed by
 /// [`VecDexDyn`](super::VecDexDyn).
 ///
-/// Selecting through `MetricKind` costs one enum dispatch per public
-/// operation; the distance loops themselves stay the statically
+/// Selecting through `MetricKind` costs one enum dispatch per public search; the distance loops themselves stay the statically
 /// monomorphized implementations of [`L2`], [`Cosine`], and
 /// [`InnerProduct`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MetricKind {
     /// Euclidean (L2) squared distance — [`L2`].
+    #[default]
     L2,
     /// Cosine distance — [`Cosine`].
     Cosine,
     /// Negated inner product — [`InnerProduct`].
     InnerProduct,
+}
+
+impl<S: Scalar> DistanceMetric<S> for MetricKind {
+    fn distance(&self, a: &[S], b: &[S]) -> S {
+        match self {
+            Self::L2 => L2.distance(a, b),
+            Self::Cosine => Cosine.distance(a, b),
+            Self::InnerProduct => InnerProduct.distance(a, b),
+        }
+    }
+
+    fn dispatch_search<Q: MetricSearch<S>>(&self, query: Q) -> Q::Output {
+        match self {
+            Self::L2 => query.run(&L2),
+            Self::Cosine => query.run(&Cosine),
+            Self::InnerProduct => query.run(&InnerProduct),
+        }
+    }
 }
 
 /// Euclidean (L2) squared distance.
@@ -125,7 +193,7 @@ pub struct L2;
 
 impl<S: Scalar> DistanceMetric<S> for L2 {
     #[inline]
-    fn distance(a: &[S], b: &[S]) -> S {
+    fn distance(&self, a: &[S], b: &[S]) -> S {
         debug_assert_eq!(a.len(), b.len());
         let (mut s0, mut s1, mut s2, mut s3) =
             (S::zero(), S::zero(), S::zero(), S::zero());
@@ -156,7 +224,7 @@ pub struct Cosine;
 
 impl<S: Scalar> DistanceMetric<S> for Cosine {
     #[inline]
-    fn distance(a: &[S], b: &[S]) -> S {
+    fn distance(&self, a: &[S], b: &[S]) -> S {
         debug_assert_eq!(a.len(), b.len());
         let (mut d0, mut d1, mut d2, mut d3) =
             (S::zero(), S::zero(), S::zero(), S::zero());
@@ -263,7 +331,7 @@ pub struct InnerProduct;
 
 impl<S: Scalar> DistanceMetric<S> for InnerProduct {
     #[inline]
-    fn distance(a: &[S], b: &[S]) -> S {
+    fn distance(&self, a: &[S], b: &[S]) -> S {
         debug_assert_eq!(a.len(), b.len());
         let (mut s0, mut s1, mut s2, mut s3) =
             (S::zero(), S::zero(), S::zero(), S::zero());

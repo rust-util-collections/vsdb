@@ -32,8 +32,7 @@ fn reclaimed_commit<T: TrieCalc>() {
     ));
     let expected = T::from_entries(reopened.map().at(first).unwrap().raw_iter())
         .unwrap()
-        .root_hash()
-        .unwrap();
+        .root_hash();
     assert_eq!(reopened.merkle_root(branch).unwrap(), expected);
 }
 
@@ -61,8 +60,7 @@ fn nonexistent_cached_commit_is_ignored<T: TrieCalc>() {
 
     let expected_c1 = T::from_entries(wrapper.map().at(c1).unwrap().raw_iter())
         .unwrap()
-        .root_hash()
-        .unwrap();
+        .root_hash();
     assert_eq!(wrapper.merkle_root_at_commit(c1).unwrap(), expected_c1);
     assert_eq!(wrapper.merkle_root(main).unwrap(), expected_c1);
 
@@ -71,8 +69,7 @@ fn nonexistent_cached_commit_is_ignored<T: TrieCalc>() {
     let c2 = wrapper.map_mut().commit(main).unwrap();
     let expected_c2 = T::from_entries(wrapper.map().at(c2).unwrap().raw_iter())
         .unwrap()
-        .root_hash()
-        .unwrap();
+        .root_hash();
     assert_eq!(wrapper.merkle_root(main).unwrap(), expected_c2);
 }
 

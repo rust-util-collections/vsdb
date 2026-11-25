@@ -1,5 +1,4 @@
 use super::*;
-use ruc::*;
 use std::cell::RefCell;
 
 #[test]
@@ -14,7 +13,7 @@ fn test_insert() {
             hdr.entry(&key[..]).or_insert(value);
             hdr.insert(&key[..], &value);
             assert!(hdr.contains_key(&key[..]));
-            assert_eq!(pnk!(hdr.get(&key[..])), value);
+            assert_eq!(hdr.get(&key[..]).unwrap(), value);
             hdr.remove(&key[..]);
             assert!(hdr.get(&key[..]).is_none());
             hdr.insert(&key[..], &value);
@@ -35,9 +34,9 @@ fn test_valueende() {
             .for_each(|(key, value)| {
                 hdr.insert(&key[..], &value);
             });
-        <MapxOrdRawKey<usize> as ValueEnDe>::encode(&hdr)
+        <MapxOrdRawKey<usize> as ValueEnDe>::encode_value(&hdr)
     };
-    let reloaded = pnk!(<MapxOrdRawKey<usize> as ValueEnDe>::decode(&dehdr));
+    let reloaded = <MapxOrdRawKey<usize> as ValueEnDe>::decode_value(&dehdr).unwrap();
     (0..cnt).map(|i: usize| i).for_each(|i| {
         assert_eq!(i, reloaded.get(i.to_be_bytes()).unwrap());
     });
@@ -79,10 +78,10 @@ fn test_first_last() {
         .for_each(|(key, value)| {
             hdr.insert(&key[..], &value);
         });
-    let (_, value) = pnk!(hdr.first());
+    let (_, value) = hdr.first().unwrap();
     assert_eq!(0, value);
 
-    let (_, value) = pnk!(hdr.last());
+    let (_, value) = hdr.last().unwrap();
     assert_eq!(max - 1, value);
 }
 
@@ -109,10 +108,10 @@ fn test_values_first_last() {
         .for_each(|(key, value)| {
             hdr.insert(&key[..], &value);
         });
-    let (_, value) = pnk!(hdr.iter().next());
+    let (_, value) = hdr.iter().next().unwrap();
     assert_eq!(0, value);
 
-    let (_, value) = pnk!(hdr.iter().next_back());
+    let (_, value) = hdr.iter().next_back().unwrap();
     assert_eq!(max - 1, value);
 }
 
@@ -122,10 +121,10 @@ fn test_save_and_from_meta() {
     hdr.insert([1u8], &"hello".to_string());
     hdr.insert([2u8], &"world".to_string());
 
-    let id = pnk!(hdr.save_meta());
+    let id = hdr.save_meta().unwrap();
     assert_eq!(id, hdr.instance_id());
 
-    let restored: MapxOrdRawKey<String> = pnk!(MapxOrdRawKey::from_meta(id));
+    let restored: MapxOrdRawKey<String> = MapxOrdRawKey::from_meta(id).unwrap();
     assert_eq!(restored.get([1u8]), Some("hello".to_string()));
     assert_eq!(restored.get([2u8]), Some("world".to_string()));
     assert!(restored.is_the_same_instance(&hdr));
@@ -158,22 +157,19 @@ fn test_meta_restore_then_mutate() {
     let mut hdr: MapxOrdRawKey<u64> = MapxOrdRawKey::new();
     hdr.insert([1u8], &100);
 
-    let id = pnk!(hdr.save_meta());
-    let mut restored: MapxOrdRawKey<u64> = pnk!(MapxOrdRawKey::from_meta(id));
+    let id = hdr.save_meta().unwrap();
+    let mut restored: MapxOrdRawKey<u64> = MapxOrdRawKey::from_meta(id).unwrap();
     restored.insert([2u8], &200);
 
     assert_eq!(hdr.get([2u8]), Some(200));
 }
 
 #[test]
-fn test_get_mut_persists_interior_mutability_change() {
+fn test_update_persists_interior_mutable_value() {
     let mut hdr: MapxOrdRawKey<RefCell<u32>> = MapxOrdRawKey::new();
     hdr.insert([1u8], &RefCell::new(10));
 
-    {
-        let value = hdr.get_mut([1u8]).unwrap();
-        *value.borrow_mut() = 20;
-    }
+    hdr.update([1u8], |value| *value.get_mut() = 20).unwrap();
 
     assert_eq!(*hdr.get([1u8]).unwrap().borrow(), 20);
 }
@@ -219,15 +215,14 @@ fn test_partial_eq_nan_values_are_never_equal() {
 
 struct Drift(u32);
 
-impl crate::common::ende::ValueEn for Drift {
-    fn try_encode_value(&self) -> crate::common::error::Result<Vec<u8>> {
+impl crate::common::ende::ValueEnDe for Drift {
+    fn encode_value_into(&self, dst: &mut Vec<u8>) -> crate::common::error::Result<()> {
         static TAG: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
         let tag = TAG.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(postcard::to_allocvec(&(self.0, tag))?)
+        postcard::to_io(&(self.0, tag), dst)?;
+        Ok(())
     }
-}
 
-impl crate::common::ende::ValueDe for Drift {
     fn decode_value(bytes: &[u8]) -> crate::common::error::Result<Self> {
         let (n, _tag): (u32, u32) = postcard::from_bytes(bytes)?;
         Ok(Drift(n))
@@ -277,9 +272,9 @@ fn get_mut_does_not_rewrite_hashmap_encoding() {
         let key = seed.to_be_bytes();
         map.insert(key, &value);
         let before = map.inner.get(key).unwrap();
-        let round_trip = <HashMap<u32, u32> as ValueEnDe>::decode(&before)
+        let round_trip = <HashMap<u32, u32> as ValueEnDe>::decode_value(&before)
             .unwrap()
-            .encode();
+            .encode_value();
         if round_trip != before {
             saw_unstable = true;
         }

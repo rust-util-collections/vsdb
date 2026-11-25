@@ -44,19 +44,22 @@
 #[cfg(test)]
 mod test;
 
+pub use super::mapx_ord_rawkey::{Entry, OccupiedEntry, VacantEntry};
 use crate::{
     basic::mapx_ord_rawkey::{
         MapxOrdRawKey, MapxOrdRawKeyBatch, MapxOrdRawKeyIter, MapxOrdRawKeyIterMut,
         ValueIterMut, ValueMut,
     },
     common::{
-        RawKey,
-        ende::{KeyEnDeOrdered, OrderedKeyRef, ValueEnDe},
+        ende::{
+            KeyEnDeOrdered, OrderedBoundEndpoint, OrderedKeyLookup, OrderedRangeBounds,
+            ValueEnDe,
+        },
         error::Result,
-        macros::{cow_bytes_bounds, define_map_wrapper, entry_or_insert_via_mock},
+        macros::define_map_wrapper,
     },
 };
-use std::{borrow::Borrow, marker::PhantomData, ops::RangeBounds};
+use std::marker::PhantomData;
 define_map_wrapper! {
     #[doc = "A disk-based, `BTreeMap`-like data structure with typed, ordered keys and values."]
     #[doc = ""]
@@ -80,10 +83,10 @@ where
     #[inline(always)]
     pub fn get<Q>(&self, key: &Q) -> Option<V>
     where
-        K: Borrow<Q>,
-        Q: OrderedKeyRef + ?Sized,
+        K: OrderedKeyLookup<Q>,
+        Q: ?Sized,
     {
-        self.inner.get(key.ordered_key_bytes())
+        K::with_ordered_lookup(key, |bytes| self.inner.get(bytes)).flatten()
     }
 
     /// Retrieves a mutable reference to a value in the map (borrowed key
@@ -91,10 +94,27 @@ where
     #[inline(always)]
     pub fn get_mut<Q>(&mut self, key: &Q) -> Option<ValueMut<'_, V>>
     where
-        K: Borrow<Q>,
-        Q: OrderedKeyRef + ?Sized,
+        K: OrderedKeyLookup<Q>,
+        Q: ?Sized,
     {
-        self.inner.get_mut(key.ordered_key_bytes())
+        K::with_ordered_lookup(key, |bytes| self.inner.get_mut(bytes)).flatten()
+    }
+
+    /// Edits a present value and returns any encoding or storage error.
+    pub fn update<Q: ?Sized, R>(
+        &mut self,
+        key: &Q,
+        f: impl FnOnce(&mut V) -> R,
+    ) -> Result<Option<R>>
+    where
+        K: OrderedKeyLookup<Q>,
+    {
+        let Some(mut guard) = self.get_mut(key) else {
+            return Ok(None);
+        };
+        let result = f(&mut guard);
+        guard.commit()?;
+        Ok(Some(result))
     }
 
     /// Checks if the map contains a value for the specified key (borrowed
@@ -102,35 +122,37 @@ where
     #[inline(always)]
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
-        K: Borrow<Q>,
-        Q: OrderedKeyRef + ?Sized,
+        K: OrderedKeyLookup<Q>,
+        Q: ?Sized,
     {
-        self.inner.contains_key(key.ordered_key_bytes())
+        K::with_ordered_lookup(key, |bytes| self.inner.contains_key(bytes))
+            .unwrap_or(false)
     }
 
     /// Retrieves the last entry with a key less than or equal to the given
     /// key (borrowed key forms as in [`get`](Self::get)).
+    ///
+    /// ```compile_fail
+    /// let map = vsdb::MapxOrd::<[u8; 64], u64>::new();
+    /// map.get_le(&[0u8; 4][..]); // An array boundary needs the full width.
+    /// ```
     #[inline(always)]
-    pub fn get_le<Q>(&self, key: &Q) -> Option<(K, V)>
+    pub fn get_le<E>(&self, key: E) -> Option<(K, V)>
     where
-        K: Borrow<Q>,
-        Q: OrderedKeyRef + ?Sized,
+        K: OrderedBoundEndpoint<E>,
     {
-        self.inner
-            .get_le(key.ordered_key_bytes())
+        K::with_endpoint(&key, |bytes| self.inner.get_le(bytes))
             .map(|(k, v)| (K::from_bytes(k).unwrap(), v))
     }
 
     /// Retrieves the first entry with a key greater than or equal to the
     /// given key (borrowed key forms as in [`get`](Self::get)).
     #[inline(always)]
-    pub fn get_ge<Q>(&self, key: &Q) -> Option<(K, V)>
+    pub fn get_ge<E>(&self, key: E) -> Option<(K, V)>
     where
-        K: Borrow<Q>,
-        Q: OrderedKeyRef + ?Sized,
+        K: OrderedBoundEndpoint<E>,
     {
-        self.inner
-            .get_ge(key.ordered_key_bytes())
+        K::with_endpoint(&key, |bytes| self.inner.get_ge(bytes))
             .map(|(k, v)| (K::from_bytes(k).unwrap(), v))
     }
 
@@ -139,34 +161,20 @@ where
     /// Does not return the old value for performance reasons.
     #[inline(always)]
     pub fn insert(&mut self, key: &K, value: &V) {
-        self.inner.insert(key.to_bytes(), value)
-    }
-
-    /// Inserts a key with an already encoded value.
-    ///
-    /// # Safety
-    ///
-    /// `value` must be the bytes produced by `<V as ValueEnDe>::encode(v)`
-    /// for a valid `v` of the same type and code version.  Any other byte
-    /// content will cause `decode()` to panic or silently return garbage
-    /// on the next read of this key.  Intended only for the versioned
-    /// layer that stores pre-encoded values to avoid a redundant
-    /// encode-decode round trip.
-    #[inline(always)]
-    pub unsafe fn insert_encoded_value(&mut self, key: &K, value: impl AsRef<[u8]>) {
-        // SAFETY: forwards this fn's `unsafe` contract — the caller
-        // guarantees `value` is the exact `ValueEnDe::encode` output for
-        // this value type.
-        unsafe { self.inner.insert_encoded_value(key.to_bytes(), value) }
+        key.with_ordered_bytes(|k| self.inner.insert(k, value))
     }
 
     /// Gets an entry for a given key, allowing for in-place modification.
+    ///
+    /// # Panics
+    /// A slice addressing a fixed-array key must have the array's exact length.
     #[inline(always)]
-    pub fn entry(&mut self, key: &K) -> Entry<'_, V> {
-        Entry {
-            key: key.to_bytes(),
-            hdr: &mut self.inner,
-        }
+    pub fn entry<Q: ?Sized>(&mut self, key: &Q) -> Entry<'_, V>
+    where
+        K: OrderedKeyLookup<Q>,
+    {
+        K::with_ordered_lookup(key, |bytes| self.inner.entry(bytes))
+            .expect("invalid key length")
     }
 
     /// Returns an iterator over the map's entries.
@@ -206,8 +214,8 @@ where
 
     /// Returns an iterator over a range of entries in the map.
     #[inline(always)]
-    pub fn range<R: RangeBounds<K>>(&self, bounds: R) -> MapxOrdIter<'_, K, V> {
-        let (l, h) = cow_bytes_bounds!(bounds);
+    pub fn range<R: OrderedRangeBounds<K>>(&self, bounds: R) -> MapxOrdIter<'_, K, V> {
+        let (l, h) = bounds.ordered_bounds();
 
         MapxOrdIter {
             inner: self.inner.range((l, h)),
@@ -217,11 +225,11 @@ where
 
     /// Returns a mutable iterator over a range of entries in the map.
     #[inline(always)]
-    pub fn range_mut<R: RangeBounds<K>>(
+    pub fn range_mut<R: OrderedRangeBounds<K>>(
         &mut self,
         bounds: R,
     ) -> MapxOrdIterMut<'_, K, V> {
-        let (l, h) = cow_bytes_bounds!(bounds);
+        let (l, h) = bounds.ordered_bounds();
 
         MapxOrdIterMut {
             inner: self.inner.range_mut((l, h)),
@@ -248,10 +256,10 @@ where
     #[inline(always)]
     pub fn remove<Q>(&mut self, key: &Q)
     where
-        K: Borrow<Q>,
-        Q: OrderedKeyRef + ?Sized,
+        K: OrderedKeyLookup<Q>,
+        Q: ?Sized,
     {
-        self.inner.remove(key.ordered_key_bytes())
+        K::with_ordered_lookup(key, |bytes| self.inner.remove(bytes));
     }
 
     /// Start a batch operation.
@@ -381,12 +389,12 @@ where
 {
     /// Insert a key-value pair into the batch.
     pub fn insert(&mut self, key: &K, value: &V) {
-        self.inner.insert(key.to_bytes(), value);
+        key.with_ordered_bytes(|k| self.inner.insert(k, value));
     }
 
     /// Remove a key in the batch.
     pub fn remove(&mut self, key: &K) {
-        self.inner.remove(key.to_bytes());
+        key.with_ordered_bytes(|k| self.inner.remove(k));
     }
 
     /// Commit the batch.
@@ -537,36 +545,6 @@ where
         self.inner
             .next_back()
             .map(|(k, v)| (<K as KeyEnDeOrdered>::from_bytes(k).unwrap(), v))
-    }
-}
-
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////
-
-/// A view into a single entry in a map, which may either be vacant or occupied.
-pub struct Entry<'a, V>
-where
-    V: ValueEnDe,
-{
-    /// The raw key of the entry.
-    pub(crate) key: RawKey,
-    /// A mutable reference to the map's header.
-    pub(crate) hdr: &'a mut MapxOrdRawKey<V>,
-}
-
-impl<'a, V> Entry<'a, V>
-where
-    V: ValueEnDe,
-{
-    /// Ensures a value is in the entry by inserting the default if empty,
-    /// and returns a mutable reference to the value.
-    pub fn or_insert(self, default: V) -> ValueMut<'a, V> {
-        entry_or_insert_via_mock!(
-            self,
-            MapxOrdRawKey<V>,
-            get_mut(&self.key),
-            mock_value_mut(self.key, default)
-        )
     }
 }
 

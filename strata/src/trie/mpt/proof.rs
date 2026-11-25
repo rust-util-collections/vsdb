@@ -8,11 +8,12 @@
 use sha3::{Digest, Keccak256};
 
 use crate::trie::{
+    Result,
     codec_util::{checked_end, read_bytes, read_u8, read_varint},
-    error::{Result, TrieError},
+    invalid_state,
     mpt::MAX_MPT_KEY_LEN,
     nibbles::Nibbles,
-    node::{Node, NodeCodec, NodeHandle},
+    node::{NodeCodec, NodeHandle},
 };
 
 const MAX_TOTAL_NIBBLES: usize = 2 * MAX_MPT_KEY_LEN;
@@ -66,87 +67,15 @@ impl MptProof {
 /// The trie must have been committed (all nodes hashed via `root_hash()`)
 /// before calling.
 pub fn prove(root: &NodeHandle, key: &[u8]) -> Result<MptProof> {
-    let path = Nibbles::from_raw(key);
+    root.root_hash();
     let mut nodes = Vec::new();
-
-    // Special case: empty trie — root is InMemory(Null).
-    if let NodeHandle::InMemory(n) = root
-        && **n == Node::Null
-    {
-        nodes.push(NodeCodec::encode(&Node::Null));
-        return Ok(MptProof {
-            key: key.to_vec(),
-            value: None,
-            nodes,
-        });
-    }
-
-    let value = prove_walk(root, path.as_slice(), &mut nodes)?;
+    let value = super::query::lookup(root, key, |n| nodes.push(NodeCodec::encode(n)));
     Ok(MptProof {
-        key: key.to_vec(),
+        key: key.into(),
         value,
         nodes,
     })
 }
-
-fn prove_walk(
-    mut handle: &NodeHandle,
-    mut path: &[u8],
-    nodes: &mut Vec<Vec<u8>>,
-) -> Result<Option<Vec<u8>>> {
-    loop {
-        let node = resolve(handle)?;
-        nodes.push(NodeCodec::encode(node));
-        match node {
-            Node::Null => return Ok(None),
-            Node::Leaf {
-                path: leaf_path,
-                value,
-            } => {
-                return Ok((leaf_path.as_slice() == path).then(|| value.clone()));
-            }
-            Node::Extension {
-                path: ext_path,
-                child,
-            } => {
-                let Some(remaining) = path.strip_prefix(ext_path.as_slice()) else {
-                    return Ok(None);
-                };
-                path = remaining;
-                handle = child;
-            }
-            Node::Branch { children, value } => {
-                let Some((&index, remaining)) = path.split_first() else {
-                    return Ok(value.clone());
-                };
-                let Some(child) = &children[index as usize] else {
-                    return Ok(None);
-                };
-                path = remaining;
-                handle = child;
-            }
-        }
-    }
-}
-
-fn resolve(handle: &NodeHandle) -> Result<&Node> {
-    match handle {
-        NodeHandle::InMemory(n) => {
-            if **n == Node::Null {
-                Ok(n)
-            } else {
-                Err(TrieError::InvalidState(
-                    "prove() requires a committed trie — call root_hash() first".into(),
-                ))
-            }
-        }
-        NodeHandle::Cached(_, n) => Ok(n),
-    }
-}
-
-// =========================================================================
-// Proof verification
-// =========================================================================
 
 /// Verifies an MPT proof against a root hash for a specific key.
 ///
@@ -184,7 +113,6 @@ pub fn verify_proof(
 
     // Step 2: walk through proof nodes following the key path.
     let path = Nibbles::from_raw(&proof.key);
-    let mut remaining = path.as_slice();
     let mut node_idx: usize = 0;
     let mut consumed: usize = 0;
     let mut expect_branch = false;
@@ -196,14 +124,14 @@ pub fn verify_proof(
 
         let decoded = decode_node(&proof.nodes[node_idx])?;
         if expect_branch && !matches!(decoded, DecodedNode::Branch { .. }) {
-            return Err(TrieError::InvalidState(
+            return Err(invalid_state(
                 "non-canonical extension child in MPT proof".into(),
             ));
         }
 
         match decoded {
             DecodedNode::Null => {
-                return Err(TrieError::InvalidState(
+                return Err(invalid_state(
                     "hashed MPT proof node cannot be Null".into(),
                 ));
             }
@@ -216,7 +144,9 @@ pub fn verify_proof(
                 if node_idx + 1 != proof.nodes.len() {
                     return Ok(false);
                 }
-                if leaf_path.as_slice() == remaining {
+                if path.len() - consumed == leaf_path.len()
+                    && path.matches_at(consumed, &leaf_path)
+                {
                     return Ok(proof.value.as_deref() == Some(value.as_slice()));
                 } else {
                     return Ok(proof.value.is_none());
@@ -228,7 +158,7 @@ pub fn verify_proof(
                 child_hash,
             } => {
                 check_nibble_budget(consumed, ext_path.len())?;
-                let Some(rest) = remaining.strip_prefix(ext_path.as_slice()) else {
+                if !path.matches_at(consumed, &ext_path) {
                     if node_idx + 1 != proof.nodes.len() {
                         return Ok(false);
                     }
@@ -236,7 +166,6 @@ pub fn verify_proof(
                 };
                 consumed += ext_path.len();
                 expect_branch = true;
-                remaining = rest;
                 node_idx += 1;
                 if node_idx >= proof.nodes.len() {
                     return Ok(false);
@@ -251,7 +180,7 @@ pub fn verify_proof(
 
             DecodedNode::Branch { children, value } => {
                 check_nibble_budget(consumed, 1)?;
-                let Some((&index, rest)) = remaining.split_first() else {
+                if consumed == path.len() {
                     if node_idx + 1 != proof.nodes.len() {
                         return Ok(false);
                     }
@@ -261,8 +190,7 @@ pub fn verify_proof(
                         _ => Ok(false),
                     };
                 };
-                remaining = rest;
-                match &children[index as usize] {
+                match &children[path.at(consumed) as usize] {
                     None => {
                         if node_idx + 1 != proof.nodes.len() {
                             return Ok(false);
@@ -312,7 +240,7 @@ enum DecodedNode {
 
 fn decode_node(data: &[u8]) -> Result<DecodedNode> {
     if data.is_empty() {
-        return Err(TrieError::InvalidState("empty node data".into()));
+        return Err(invalid_state("empty node data".into()));
     }
 
     let mut cursor = 1; // skip tag byte
@@ -335,7 +263,7 @@ fn decode_node(data: &[u8]) -> Result<DecodedNode> {
             // Extension: tag + path + 32-byte child_hash
             let path = decode_path(data, &mut cursor)?;
             if path.is_empty() {
-                return Err(TrieError::InvalidState("empty extension path".into()));
+                return Err(invalid_state("empty extension path".into()));
             }
             let end = checked_end(cursor, 32, data.len(), "extension child hash")?;
             let mut child_hash = [0u8; 32];
@@ -355,7 +283,7 @@ fn decode_node(data: &[u8]) -> Result<DecodedNode> {
                 0 => false,
                 1 => true,
                 flag => {
-                    return Err(TrieError::InvalidState(format!(
+                    return Err(invalid_state(format!(
                         "invalid branch value flag: {flag}"
                     )));
                 }
@@ -369,7 +297,7 @@ fn decode_node(data: &[u8]) -> Result<DecodedNode> {
 
             let child_count = bitmap.count_ones() as usize;
             if child_count == 0 || (child_count == 1 && value.is_none()) {
-                return Err(TrieError::InvalidState("non-canonical branch node".into()));
+                return Err(invalid_state("non-canonical branch node".into()));
             }
 
             let mut children: [Option<[u8; 32]>; 16] = [None; 16];
@@ -390,22 +318,20 @@ fn decode_node(data: &[u8]) -> Result<DecodedNode> {
             })
         }
 
-        tag => Err(TrieError::InvalidState(format!(
-            "unknown node tag: 0x{tag:02x}"
-        ))),
+        tag => Err(invalid_state(format!("unknown node tag: 0x{tag:02x}"))),
     }
 }
 
 fn ensure_no_trailing(data: &[u8], cursor: usize) -> Result<()> {
     if cursor != data.len() {
-        return Err(TrieError::InvalidState("trailing bytes in MPT node".into()));
+        return Err(invalid_state("trailing bytes in MPT node".into()));
     }
     Ok(())
 }
 
 fn check_nibble_budget(consumed: usize, additional: usize) -> Result<()> {
     if consumed.saturating_add(additional) > MAX_TOTAL_NIBBLES {
-        return Err(TrieError::InvalidState(
+        return Err(invalid_state(
             "MPT proof: cumulative path length exceeds MAX_MPT_KEY_LEN".into(),
         ));
     }
@@ -415,7 +341,7 @@ fn check_nibble_budget(consumed: usize, additional: usize) -> Result<()> {
 fn decode_path(data: &[u8], cursor: &mut usize) -> Result<Nibbles> {
     let nibble_count = read_varint(data, cursor)?;
     if nibble_count > MAX_TOTAL_NIBBLES {
-        return Err(TrieError::InvalidState(
+        return Err(invalid_state(
             "MPT proof: node path length exceeds MAX_MPT_KEY_LEN".into(),
         ));
     }
@@ -423,20 +349,9 @@ fn decode_path(data: &[u8], cursor: &mut usize) -> Result<Nibbles> {
     let byte_count = nibble_count.div_ceil(2);
     let end = checked_end(*cursor, byte_count, data.len(), "path data")?;
     if nibble_count % 2 == 1 && (data[end - 1] & 0x0F) != 0 {
-        return Err(TrieError::InvalidState(
-            "non-zero odd-nibble padding".into(),
-        ));
+        return Err(invalid_state("non-zero odd-nibble padding".into()));
     }
-    let mut nibbles = Vec::with_capacity(nibble_count);
-    for i in 0..nibble_count {
-        let byte_idx = *cursor + i / 2;
-        let nibble = if i % 2 == 0 {
-            data[byte_idx] >> 4
-        } else {
-            data[byte_idx] & 0x0F
-        };
-        nibbles.push(nibble);
-    }
+    let path = Nibbles::packed(nibble_count, &data[*cursor..end]);
     *cursor = end;
-    Ok(Nibbles::from_nibbles_unsafe(nibbles))
+    Ok(path)
 }

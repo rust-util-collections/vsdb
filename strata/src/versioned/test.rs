@@ -1,3 +1,4 @@
+use super::store::{COMMIT, HEAD, HEADER, Header, by_name, row};
 use super::{BranchId, CommitId, DiffEntry, NO_COMMIT, map::VerMap};
 use crate::common::error::VsdbError;
 use std::ops::Bound;
@@ -1457,30 +1458,31 @@ fn ref_counts_match_ground_truth_recount() {
         use std::collections::HashMap;
 
         let mut expected: HashMap<u64, u32> = HashMap::new();
-        for (_, s) in m.branches.iter() {
+        for (id, _) in m.list_branches() {
+            let s = m.get_branch(id).unwrap();
             if s.head != NO_COMMIT {
-                *expected.entry(s.head.0).or_insert(0) += 1;
+                *expected.entry(s.head.raw()).or_insert(0) += 1;
             }
         }
-        for (_, c) in m.commits.iter() {
+        for (_, c) in m.commit_rows().map(Result::unwrap) {
             for &p in &c.parents {
                 if p != NO_COMMIT {
-                    *expected.entry(p.0).or_insert(0) += 1;
+                    *expected.entry(p.raw()).or_insert(0) += 1;
                 }
             }
         }
 
-        for (id, c) in m.commits.iter() {
+        for (id, c) in m.commit_rows().map(Result::unwrap) {
             assert_eq!(
                 c.ref_count,
-                *expected.get(&id).unwrap_or(&0),
+                *expected.get(&id.raw()).unwrap_or(&0),
                 "commit {id}: stored ref_count diverges from recount"
             );
         }
         // Every referenced commit must still exist (no dangling refs).
         for (id, n) in expected {
             assert!(
-                n == 0 || m.commits.get(&id).is_some(),
+                n == 0 || m.get_commit(CommitId::from_raw(id)).is_some(),
                 "dangling reference to deleted commit {id}"
             );
         }
@@ -3557,7 +3559,7 @@ mod proof_tests {
         let proof = vp.prove_key(&1).unwrap();
         assert!(proof.value().is_some());
 
-        let root_arr: [u8; 32] = root.try_into().unwrap();
+        let root_arr = root;
         let ok = VpSmt::verify_key_proof(&root_arr, &1, &proof).unwrap();
         assert!(ok);
 
@@ -3579,7 +3581,7 @@ mod proof_tests {
         vp.map_mut().insert(main, &-1, &"negative".into()).unwrap();
         vp.map_mut().commit(main).unwrap();
 
-        let root: [u8; 32] = vp.merkle_root(main).unwrap().try_into().unwrap();
+        let root: [u8; 32] = vp.merkle_root(main).unwrap();
         let proof = vp.prove_key(&-1).unwrap();
         assert!(proof.value().is_some());
         assert!(VpSmt::verify_key_proof(&root, &-1, &proof).unwrap());
@@ -3658,12 +3660,12 @@ mod proof_tests {
         // trie encoding exactly.
         use crate::common::ende::ValueEnDe;
         reference
-            .insert(&[1u8], &String::from("a").try_encode().unwrap())
+            .insert(&[1u8], &String::from("a").encode_value())
             .unwrap();
         reference
-            .insert(&[0u8], &String::from("z").try_encode().unwrap())
+            .insert(&[0u8], &String::from("z").encode_value())
             .unwrap();
-        assert_eq!(dirty_root, reference.root_hash().unwrap());
+        assert_eq!(dirty_root, reference.root_hash());
     }
 }
 
@@ -3758,14 +3760,18 @@ fn serde_rebuilds_branch_name_index() {
     let main = m.main_branch();
     let feat = m.create_branch("feature", main).unwrap();
 
-    m.branch_names.remove(&"feature".to_string());
+    m.tree.nodes.remove(by_name("feature"));
     assert_eq!(m.branch_id("feature"), None);
     assert!(matches!(
         m.create_branch("feature", main),
         Err(VsdbError::BranchAlreadyExists { .. })
     ));
-    m.branch_names.insert(&"main".to_string(), &feat.0);
-    m.branch_names.insert(&"stale".to_string(), &feat.0);
+    m.tree
+        .nodes
+        .insert(by_name("main"), feat.raw().to_le_bytes());
+    m.tree
+        .nodes
+        .insert(by_name("stale"), feat.raw().to_le_bytes());
 
     let bytes = postcard::to_allocvec(&m).unwrap();
     let restored: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
@@ -3948,7 +3954,7 @@ fn error_branch_not_found() {
     let m: VerMap<u32, u32> = VerMap::new();
     let err = m.get(BranchId::from_raw(9999), &1).unwrap_err();
     assert!(
-        matches!(err, VsdbError::BranchNotFound { branch_id: 9999 }),
+        matches!(err, VsdbError::BranchNotFound { branch_id } if branch_id.raw()==9999),
         "expected BranchNotFound, got: {err:?}"
     );
 }
@@ -3961,7 +3967,7 @@ fn error_commit_not_found() {
         .map(|s| s.get(&1))
         .unwrap_err();
     assert!(
-        matches!(err, VsdbError::CommitNotFound { commit_id: 9999 }),
+        matches!(err, VsdbError::CommitNotFound { commit_id } if commit_id.raw()==9999),
         "expected CommitNotFound, got: {err:?}"
     );
 }
@@ -4080,11 +4086,11 @@ fn views_of_missing_ids_are_typed_errors() {
     let m: VerMap<u32, u32> = VerMap::new();
     assert!(matches!(
         m.at(CommitId::from_raw(42)),
-        Err(VsdbError::CommitNotFound { commit_id: 42 })
+        Err(VsdbError::CommitNotFound { commit_id }) if commit_id.raw()==42
     ));
     assert!(matches!(
         m.snapshot(BranchId::from_raw(42)),
-        Err(VsdbError::BranchNotFound { branch_id: 42 })
+        Err(VsdbError::BranchNotFound { branch_id }) if branch_id.raw()==42
     ));
 }
 
@@ -4122,7 +4128,7 @@ fn typed_diff_decodes_keys_and_values() {
 
 #[test]
 fn missing_head_recovery_preserves_durable_history() {
-    for dirty in [false, true] {
+    {
         let mut m: VerMap<u32, u32> = VerMap::new();
         let main = m.main_branch();
         m.insert(main, &1, &10).unwrap();
@@ -4130,23 +4136,20 @@ fn missing_head_recovery_preserves_durable_history() {
         m.namespace().flush();
 
         let missing = CommitId::from_raw(c1.raw() + 10_000);
-        let mut state = m.branches.get(&main.0).unwrap();
+        let mut state = m.get_branch(main).unwrap();
         state.head = missing;
-        m.branches.insert(&main.0, &state);
-        *m.gc_dirty.get_mut() = dirty;
+        m.tree.nodes.insert(row(HEAD, main.raw()), state.bytes());
         let bytes = postcard::to_allocvec(&m).unwrap();
 
         assert!(matches!(
             m.validate_commit_graph(),
-            Err(VsdbError::CommitNotFound { commit_id }) if commit_id == missing.0
+            Err(VsdbError::CommitNotFound { commit_id }) if commit_id == missing
         ));
         assert!(postcard::from_bytes::<VerMap<u32, u32>>(&bytes).is_err());
         assert_eq!(m.at(c1).map(|s| s.get(&1)).unwrap(), Some(10));
-        assert_eq!(m.gc_dirty.get_value(), dirty);
 
-        assert!(matches!(m.gc(), Err(VsdbError::CommitNotFound { .. })));
+        assert!(matches!(m.gc(), Err(VsdbError::Corrupt { .. })));
         assert_eq!(m.at(c1).map(|s| s.get(&1)).unwrap(), Some(10));
-        assert_eq!(m.gc_dirty.get_value(), dirty);
     }
 }
 
@@ -4154,7 +4157,7 @@ fn missing_head_recovery_preserves_durable_history() {
 /// look like orphaned history when restoration or explicit GC walks it.
 #[test]
 fn missing_parent_recovery_preserves_durable_history() {
-    for dirty in [false, true] {
+    {
         let mut m: VerMap<u32, u32> = VerMap::new();
         let main = m.main_branch();
         m.insert(main, &1, &10).unwrap();
@@ -4166,23 +4169,20 @@ fn missing_parent_recovery_preserves_durable_history() {
         m.namespace().flush();
 
         // Model a recovered shard with the reachable c2 record absent.
-        m.commits.remove(&c2.0);
-        *m.gc_dirty.get_mut() = dirty;
+        m.tree.nodes.remove(row(COMMIT, c2.raw()));
         let bytes = postcard::to_allocvec(&m).unwrap();
 
         assert!(matches!(
             m.validate_commit_graph(),
-            Err(VsdbError::CommitNotFound { commit_id }) if commit_id == c2.0
+            Err(VsdbError::CommitNotFound { commit_id }) if commit_id == c2
         ));
         assert!(postcard::from_bytes::<VerMap<u32, u32>>(&bytes).is_err());
         assert_eq!(m.at(c1).map(|s| s.get(&1)).unwrap(), Some(10));
         assert_eq!(m.at(c3).map(|s| s.get(&3)).unwrap(), Some(30));
-        assert_eq!(m.gc_dirty.get_value(), dirty);
 
-        assert!(matches!(m.gc(), Err(VsdbError::CommitNotFound { .. })));
+        assert!(matches!(m.gc(), Err(VsdbError::Corrupt { .. })));
         assert_eq!(m.at(c1).map(|s| s.get(&1)).unwrap(), Some(10));
         assert_eq!(m.at(c3).map(|s| s.get(&3)).unwrap(), Some(30));
-        assert_eq!(m.gc_dirty.get_value(), dirty);
     }
 }
 
@@ -4200,12 +4200,17 @@ fn recovery_checks_missing_tree_nodes_before_removing_orphans() {
         panic!("expected an internal root");
     };
     let missing = children[0];
-    let key = missing.to_le_bytes();
+    let key = crate::basic::persistent_btree::object_key(missing);
     let saved = m.tree.nodes.get(key).unwrap();
-    orphan.id = CommitId(id.0 + 1);
+    orphan.id = CommitId::from_raw(id.raw() + 1);
     orphan.ref_count = 0;
     orphan.root = u64::MAX - 1;
-    m.commits.insert(&orphan.id.0, &orphan);
+    m.tree
+        .nodes
+        .insert(row(COMMIT, orphan.id.raw()), orphan.bytes());
+    let mut hdr = Header::get(&m.tree.nodes).unwrap();
+    hdr.next_commit = orphan.id.raw() + 1;
+    m.tree.nodes.insert(HEADER, hdr.bytes());
     m.tree.nodes.remove(key);
     let bytes = postcard::to_allocvec(&m).unwrap();
     assert!(postcard::from_bytes::<VerMap<u32, u32>>(&bytes).is_err());
@@ -4228,13 +4233,13 @@ fn zero_count_restore_repairs_branch_references() {
     let fork = m.create_branch("fork", main).unwrap();
     let mut row = m.get_commit(commit).unwrap();
     row.ref_count = 0;
-    m.commits.insert(&commit.0, &row);
-    assert!(!m.gc_dirty.get_value());
+    m.tree
+        .nodes
+        .insert(super::store::row(COMMIT, commit.raw()), row.bytes());
 
     let bytes = postcard::to_allocvec(&m).unwrap();
     let restored: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
     assert_eq!(restored.get_commit(commit).unwrap().ref_count, 2);
-    assert!(!restored.gc_dirty.get_value());
     assert_eq!(restored.get(main, &1).unwrap(), Some(10));
     assert_eq!(restored.get(fork, &1).unwrap(), Some(10));
 }
@@ -4278,89 +4283,23 @@ fn deep_clone_preserves_independent_history_and_branch_lifecycle() {
 // Co-located layout (one WAL for every component)
 // =====================================================================
 
-fn components_colocated<K, V>(m: &VerMap<K, V>) -> bool {
-    use crate::common::Colocate;
-    let anchor = &m.tree.nodes;
-    [
-        m.commits.raw(),
-        m.branches.raw(),
-        m.branch_names.raw(),
-        m.next_commit.raw(),
-        m.next_branch.raw(),
-        m.main_branch.raw(),
-        m.gc_dirty.raw(),
-    ]
-    .into_iter()
-    .all(|c| c.is_colocated_with(anchor))
-}
-
 #[test]
-fn new_map_is_colocated_and_restores_colocated() {
-    let mut m: VerMap<u32, u32> = VerMap::new();
-    assert!(m.colocated && components_colocated(&m));
-    let main = m.main_branch();
-    m.insert(main, &1, &1).unwrap();
-    m.commit(main).unwrap();
-
-    let bytes = postcard::to_allocvec(&m).unwrap();
-    let r: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
-    assert!(r.colocated);
-    assert_eq!(r.get(main, &1).unwrap(), Some(1));
-}
-
-#[test]
-fn working_state_reclaims_wait_for_the_next_settle() {
-    let mut m: VerMap<u32, u32> = VerMap::new();
-    let main = m.main_branch();
-    for i in 0..64 {
-        m.insert(main, &i, &i).unwrap();
-    }
-    // Overwrites release the previous working roots; without a sync their
-    // nodes must not be registered for physical deletion yet.
-    m.insert(main, &0, &100).unwrap();
-    assert!(m.tree.deferred_reclaims() > 0);
-    m.commit(main).unwrap();
-    assert_eq!(m.tree.deferred_reclaims(), 0);
-    assert_eq!(m.get(main, &0).unwrap(), Some(100));
-}
-
-#[test]
-fn legacy_layout_keeps_per_shard_fences_and_clone_upgrades_it() {
-    let mut m: VerMap<u32, u32> = VerMap::with_legacy_layout();
-    assert!(!m.colocated && !components_colocated(&m));
-    let main = m.main_branch();
-    for i in 0..50 {
-        m.insert(main, &i, &i).unwrap();
-    }
-    let c1 = m.commit(main).unwrap();
-    let feat = m.create_branch("feat", main).unwrap();
-    m.insert(feat, &7, &70).unwrap();
-    m.remove(feat, &8).unwrap();
-    m.commit(feat).unwrap();
-    m.insert(main, &9, &90).unwrap();
-    m.commit(main).unwrap();
-    m.merge(feat, main).unwrap();
-    // Immediate reclamation: every step was fenced.
-    assert_eq!(m.tree.deferred_reclaims(), 0);
-
-    // Restoring keeps the legacy layout (and its fences).
-    let bytes = postcard::to_allocvec(&m).unwrap();
-    let mut r: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
-    assert!(!r.colocated);
-    assert_eq!(r.get(main, &7).unwrap(), Some(70));
-    assert_eq!(r.get(main, &8).unwrap(), None);
-    assert_eq!(r.get(main, &9).unwrap(), Some(90));
-    r.delete_branch(feat).unwrap();
-    r.rollback_to(main, c1).unwrap();
-    assert_eq!(r.get(main, &7).unwrap(), Some(7));
-
-    // A deep copy is always co-located.
-    let c = r.clone();
-    assert!(c.colocated && components_colocated(&c));
-    assert_eq!(c.get(main, &7).unwrap(), Some(7));
-    let bytes = postcard::to_allocvec(&c).unwrap();
-    let c2: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
-    assert!(c2.colocated);
+fn working_edits_publish_slotted_objects_and_reclaim_old_root() {
+    use crate::basic::persistent_btree::object_key;
+    let mut map = VerMap::<u64, Vec<u8>>::new();
+    let main = map.main_branch();
+    map.insert(main, &1, &vec![1; 8192]).unwrap();
+    let old = map.get_branch(main).unwrap().dirty_root;
+    map.write_batch(main, [(1, Some(vec![])), (9, Some(vec![2])), (9, None)])
+        .unwrap();
+    assert!(map.tree.nodes.get(object_key(old)).is_none());
+    assert_eq!(map.get(main, &1).unwrap(), Some(vec![]));
+    assert_eq!(map.get(main, &9).unwrap(), None);
+    map.commit(main).unwrap();
+    let bytes = postcard::to_allocvec(&map).unwrap();
+    assert!(bytes.windows(8).any(|window| window == b"VSTYPE04"));
+    let reopened: VerMap<u64, Vec<u8>> = postcard::from_bytes(&bytes).unwrap();
+    assert_eq!(reopened.get(main, &1).unwrap(), Some(vec![]));
 }
 
 #[test]
@@ -4371,11 +4310,11 @@ fn history_errors_are_matchable() {
     // Neither branch has a commit yet.
     assert!(matches!(
         m.merge(feat, main),
-        Err(VsdbError::NoCommits { branch_id }) if branch_id == feat.raw()
+        Err(VsdbError::NoCommits { branch_id }) if branch_id == feat
     ));
     assert!(matches!(
         m.merge(main, main),
-        Err(VsdbError::SelfMerge { branch_id }) if branch_id == main.raw()
+        Err(VsdbError::SelfMerge { branch_id }) if branch_id == main
     ));
     m.insert(feat, &1, &1).unwrap();
     let on_feat = m.commit(feat).unwrap();
@@ -4384,7 +4323,7 @@ fn history_errors_are_matchable() {
     assert!(matches!(
         m.rollback_to(main, on_feat),
         Err(VsdbError::NotAncestor { commit_id, branch_id })
-            if commit_id == on_feat.raw() && branch_id == main.raw()
+            if commit_id == on_feat && branch_id == main
     ));
 }
 
@@ -4400,8 +4339,8 @@ fn raw_iter_yields_the_stored_encodings() {
     assert_eq!(
         raw,
         vec![
-            (1u32.to_bytes(), "a".to_string().encode()),
-            (2u32.to_bytes(), "b".to_string().encode()),
+            (1u32.to_bytes(), "a".to_string().encode_value()),
+            (2u32.to_bytes(), "b".to_string().encode_value()),
         ]
     );
     assert_eq!(m.snapshot(main).unwrap().raw_iter().count(), 2);
@@ -4411,7 +4350,7 @@ fn raw_iter_yields_the_stored_encodings() {
         m.raw_diff_uncommitted(main).unwrap(),
         vec![crate::basic::persistent_btree::TreeDiff::Added {
             key: 3u32.to_bytes(),
-            value: "c".to_string().encode()
+            value: "c".to_string().encode_value()
         }]
     );
     let c2 = m.commit(main).unwrap();
@@ -4443,8 +4382,16 @@ fn standalone_tree_diff_and_merge_are_public() {
 
 // Snapshot roots are runtime owners, including readers restored as aliases.
 fn assert_tree_owners(m: &VerMap<u32, u32>, leased_roots: &[u64]) {
-    let mut roots: Vec<_> = m.commits.iter().map(|(_, c)| c.root).collect();
-    roots.extend(m.branches.iter().map(|(_, b)| b.dirty_root));
+    let mut roots: Vec<_> = m
+        .commit_rows()
+        .map(Result::unwrap)
+        .map(|(_, c)| c.root)
+        .collect();
+    roots.extend(
+        m.list_branches()
+            .into_iter()
+            .map(|(id, _)| m.get_branch(id).unwrap().dirty_root),
+    );
     roots.extend_from_slice(leased_roots);
     m.tree.assert_refs_match_recount(&roots);
 }
@@ -4472,8 +4419,7 @@ fn merkle_root_uses_one_branch_state_during_alias_writes() {
     let head = reader.map_mut().commit(main).unwrap();
     let expected = MptCalc::from_entries(reader.map().at(head).unwrap().raw_iter())
         .unwrap()
-        .root_hash()
-        .unwrap();
+        .root_hash();
     let mut writer: VerMap<u32, u32> =
         postcard::from_bytes(&postcard::to_allocvec(reader.map()).unwrap()).unwrap();
     DIFF_BEFORE_TRAVERSAL.with(|slot| {
@@ -4486,8 +4432,7 @@ fn merkle_root_uses_one_branch_state_during_alias_writes() {
     assert_eq!(reader.merkle_root(main).unwrap(), expected);
     let latest = MptCalc::from_entries(reader.map().snapshot(main).unwrap().raw_iter())
         .unwrap()
-        .root_hash()
-        .unwrap();
+        .root_hash();
     assert_ne!(latest, expected);
     assert_eq!(reader.merkle_root(main).unwrap(), latest);
 }
@@ -4659,15 +4604,15 @@ fn snapshot_releases_use_the_alias_shared_deferred_queue() {
         let mut alias: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
         let view = original.snapshot(main).unwrap();
         alias.remove(main, &1).unwrap();
-        assert_eq!(alias.tree.deferred_reclaims(), 0);
+        assert_eq!(view.get(&1), Some(10));
         if settle_before_drop {
-            alias.settle();
+            alias.flush().unwrap();
         }
         drop(view);
         assert_tree_owners(&alias, &[]);
-        assert_eq!(original.tree.deferred_reclaims(), 1);
-        assert_eq!(alias.tree.deferred_reclaims(), 1);
-        alias.settle();
+        assert!(original.tree.deferred_reclaims() >= 1);
+        assert!(alias.tree.deferred_reclaims() >= 1);
+        alias.flush().unwrap();
         assert_eq!(original.tree.deferred_reclaims(), 0);
     }
 }
@@ -4768,7 +4713,7 @@ fn snapshot_lease_drop_can_race_recount_and_settle() {
             });
             start.wait();
             alias.gc().unwrap();
-            alias.settle();
+            alias.flush().unwrap();
         });
         if let Some(second) = second {
             assert_tree_owners(&alias, &[root]);
@@ -4777,58 +4722,33 @@ fn snapshot_lease_drop_can_race_recount_and_settle() {
             assert!(alias.tree.deferred_reclaims() > 0);
         }
         assert_tree_owners(&alias, &[]);
-        alias.settle();
+        alias.flush().unwrap();
         assert_eq!(alias.tree.deferred_reclaims(), 0);
     }
 }
 
 #[test]
-fn restore_advances_stale_commit_allocator() {
-    let mut m: VerMap<u32, u32> = VerMap::new();
-    let main = m.main_branch();
-    m.insert(main, &1, &10).unwrap();
-    let c1 = m.commit(main).unwrap();
-
-    // Simulate a legacy crash that persisted the commit row but lost the
-    // allocator increment that preceded it.
-    *m.next_commit.get_mut() = c1.raw();
-
-    let bytes = postcard::to_allocvec(&m).unwrap();
-    let mut restored: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
-
-    let old = restored.get_commit(c1).unwrap();
-    let c2 = restored.commit(main).unwrap();
-    assert!(c2 > c1, "restored allocator reused {c1:?}");
-    let old_after = restored.get_commit(c1).unwrap();
-    assert_eq!(old_after.root, old.root);
-    assert_eq!(old_after.parents, old.parents);
-    assert_eq!(
-        restored
-            .log(main)
-            .unwrap()
-            .iter()
-            .map(|commit| commit.id)
-            .collect::<Vec<_>>(),
-        vec![c2, c1]
-    );
-}
-
-#[test]
-fn restore_advances_stale_branch_allocator() {
-    let mut m: VerMap<u32, u32> = VerMap::new();
-    let main = m.main_branch();
-    let feat = m.create_branch("feature", main).unwrap();
-
-    *m.next_branch.get_mut() = feat.raw();
-
-    let bytes = postcard::to_allocvec(&m).unwrap();
-    let mut restored: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
-
-    let next = restored.create_branch("next", main).unwrap();
-    assert!(next > feat, "restored allocator reused {feat:?}");
-    assert_eq!(restored.get_branch(feat).unwrap().name, "feature");
-    assert_eq!(restored.branch_id("feature"), Some(feat));
-    assert_eq!(restored.branch_id("next"), Some(next));
+fn restore_rejects_stale_allocator_ceiling() {
+    for field in [0, 1, 2] {
+        let mut m = VerMap::<u32, u32>::new();
+        let br = m.main_branch();
+        m.insert(br, &7, &9).unwrap();
+        let commit = m.commit(br).unwrap();
+        let side = m.create_branch("feature", br).unwrap();
+        let id = m.save_meta().unwrap();
+        let mut hdr = Header::get(&m.tree.nodes).unwrap();
+        match field {
+            0 => hdr.next_id = 1,
+            1 => hdr.next_commit = commit.raw(),
+            _ => hdr.next_branch = side.raw(),
+        }
+        m.tree.nodes.insert(HEADER, hdr.bytes());
+        assert!(matches!(
+            VerMap::<u32, u32>::from_meta(id),
+            Err(VsdbError::Corrupt { .. })
+        ));
+        assert_eq!(m.get(br, &7).unwrap(), Some(9));
+    }
 }
 
 #[test]
@@ -4840,10 +4760,118 @@ fn validate_commit_graph_rejects_a_self_parent() {
 
     let mut row = m.get_commit(commit).unwrap();
     row.parents = vec![commit];
-    m.commits.insert(&commit.0, &row);
+    m.tree
+        .nodes
+        .insert(super::store::row(COMMIT, commit.raw()), row.bytes());
 
     assert!(matches!(
         m.validate_commit_graph(),
         Err(VsdbError::Corrupt { .. })
     ));
+}
+
+type PublicationHook = Box<dyn FnOnce() -> crate::Result<()>>;
+thread_local! {
+    static PUBLICATION_HOOK: std::cell::RefCell<Option<PublicationHook>>=const{std::cell::RefCell::new(None)};
+}
+pub(crate) fn before_tree_publication() -> crate::Result<()> {
+    PUBLICATION_HOOK.take().map_or(Ok(()), |hook| hook())
+}
+
+#[test]
+fn readers_can_pin_old_roots_during_a_failing_wal_sync() {
+    use std::{sync::mpsc, thread, time::Duration};
+    let mut map = VerMap::<u64, u64>::new();
+    let main = map.main_branch();
+    map.insert(main, &1, &10).unwrap();
+    let old = map.commit(main).unwrap();
+    let feature = map.create_branch("feature", main).unwrap();
+    map.insert(feature, &1, &20).unwrap();
+    map.commit(feature).unwrap();
+    let reader = map.reader();
+    let (entered, entered_rx) = mpsc::sync_channel(0);
+    let (release, release_rx) = mpsc::sync_channel(0);
+    let writer = thread::spawn(move || {
+        PUBLICATION_HOOK.set(Some(Box::new(move || {
+            entered.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            Err(VsdbError::Io(std::io::Error::other(
+                "injected WAL sync failure",
+            )))
+        })));
+        assert!(matches!(
+            map.rollback_to(feature, old),
+            Err(VsdbError::Io(_))
+        ));
+        map
+    });
+    entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    let snapshot = reader.snapshot(feature).unwrap();
+    assert_eq!(snapshot.get(&1), Some(20));
+    release.send(()).unwrap();
+    let mut map = writer.join().unwrap();
+    assert_eq!(map.get(feature, &1).unwrap(), Some(20));
+    map.rollback_to(feature, old).unwrap();
+    assert_eq!(reader.snapshot(feature).unwrap().get(&1), Some(10));
+    assert_eq!(map.records(super::store::RETIRED).count(), 1);
+    map.flush().unwrap();
+    drop(map);
+    drop(reader);
+    assert_eq!(snapshot.clone().get(&1), Some(20));
+}
+
+#[test]
+fn invalid_late_bulk_entry_preserves_working_root_and_recovers_staged_pages() {
+    let mut map = VerMap::<u32, Vec<u8>>::new();
+    let main = map.main_branch();
+    map.insert(main, &1, &vec![10]).unwrap();
+    let id = map.save_meta().unwrap();
+    let input = (0..1100)
+        .map(|i| (i, vec![i as u8; 16384]))
+        .chain([(0, vec![99])]);
+    assert!(matches!(
+        map.bulk_load(main, input),
+        Err(VsdbError::InvalidConfig { .. })
+    ));
+    assert!(map.records(super::store::STAGE).count() > 0);
+    assert_eq!(
+        map.snapshot(main).unwrap().iter().collect::<Vec<_>>(),
+        vec![(1, vec![10])]
+    );
+    drop(map);
+    let mut recovered = VerMap::<u32, Vec<u8>>::from_meta(id).unwrap();
+    assert_eq!(recovered.records(super::store::STAGE).count(), 0);
+    let stats = recovered.verify_and_gc().unwrap();
+    assert_eq!(stats.live_objects, 1);
+    assert_eq!(recovered.records(0x10).count(), 1);
+    assert_eq!(recovered.records(0x12).count(), 0);
+}
+
+#[test]
+fn reference_checkpoint_falls_back_to_verified_recount_on_checksum_or_generation_mismatch()
+ {
+    let mut map = VerMap::<u32, u32>::new();
+    let main = map.main_branch();
+    map.bulk_load(main, (0..1024).map(|x| (x, x))).unwrap();
+    map.commit(main).unwrap();
+    map.flush().unwrap();
+    let id = map.save_meta().unwrap();
+    let good = map.tree.nodes.get(super::store::REFS).unwrap();
+    let mut bad = good.clone();
+    *bad.last_mut().unwrap() ^= 1;
+    map.tree.nodes.insert(super::store::REFS, bad);
+    drop(map);
+    let mut map = VerMap::<u32, u32>::from_meta(id).unwrap();
+    map.insert(main, &0, &999).unwrap();
+    map.tree.nodes.insert(super::store::REFS, good);
+    drop(map);
+    let mut map = VerMap::<u32, u32>::from_meta(id).unwrap();
+    assert_eq!(map.get(main, &0).unwrap(), Some(999));
+    map.flush().unwrap();
+    let header = Header::get(&map.tree.nodes).unwrap();
+    let bytes = map.tree.nodes.get(super::store::REFS).unwrap();
+    assert_eq!(
+        u64::from_le_bytes(bytes[..8].try_into().unwrap()),
+        header.generation
+    );
 }

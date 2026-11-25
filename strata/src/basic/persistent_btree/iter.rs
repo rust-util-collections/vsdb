@@ -1,157 +1,98 @@
-//! Forward iterator over entries in a persistent B+ tree.
-//!
-//! Uses an explicit ancestor stack — no sibling pointers needed.
+//! Forward leaf cursor over immutable, slotted pages.
 
-use std::{mem, ops::Bound};
+use std::{marker::PhantomData, ops::Bound, sync::Arc};
+use vsdb_core::basic::mapx_raw::MapxRawReader;
 
-use super::{EMPTY_ROOT, LeafState, Node, NodeId, PersistentBTree};
+use super::{EMPTY_ROOT, NodeId, NodeView, PersistentBTree, RootLease, read_object};
 
 /// A forward iterator over entries in a [`PersistentBTree`].
-///
-/// Uses an explicit ancestor stack — no sibling pointers needed.
+/// Each level retains one page. The current entry is decoded on demand.
 pub struct BTreeIter<'a> {
-    tree: &'a PersistentBTree,
-    stack: Vec<(Node, usize)>,
-    leaf: Option<LeafState>,
+    nodes: MapxRawReader,
+    _borrow: PhantomData<&'a PersistentBTree>,
+    _lease: Option<Arc<RootLease>>,
+    stack: Vec<(Vec<u8>, usize)>,
+    leaf: Option<(Vec<u8>, usize)>,
     hi: Bound<Vec<u8>>,
-    done: bool,
 }
 
-impl<'a> BTreeIter<'a> {
+impl BTreeIter<'_> {
     pub(crate) fn new(
-        tree: &'a PersistentBTree,
+        nodes: MapxRawReader,
         root: NodeId,
         lo: Bound<Vec<u8>>,
         hi: Bound<Vec<u8>>,
+        lease: Option<Arc<RootLease>>,
     ) -> Self {
         let mut it = Self {
-            tree,
-            stack: Vec::with_capacity(8),
+            nodes,
+            _borrow: PhantomData,
+            _lease: lease,
+            stack: Vec::new(),
             leaf: None,
             hi,
-            done: root == EMPTY_ROOT,
         };
-        if !it.done {
-            it.seek(root, &lo);
+        if root != EMPTY_ROOT {
+            it.descend(root, &lo);
         }
         it
     }
 
-    fn seek(&mut self, id: NodeId, lo: &Bound<Vec<u8>>) {
-        let mut cur = id;
+    fn descend(&mut self, mut id: NodeId, lo: &Bound<Vec<u8>>) {
         loop {
-            let node = self.tree.node(cur);
-            match node {
-                Node::Internal {
-                    ref keys,
-                    ref children,
-                } => {
-                    let ci = match lo {
-                        Bound::Unbounded => 0,
-                        Bound::Included(k) | Bound::Excluded(k) => {
-                            match keys.binary_search_by(|x| x.as_slice().cmp(k)) {
-                                Ok(i) => i + 1,
-                                Err(i) => i,
-                            }
-                        }
-                    };
-                    let child = children[ci];
-                    self.stack.push((node, ci + 1));
-                    cur = child;
-                }
-                Node::Leaf { keys, values } => {
-                    let start = match lo {
-                        Bound::Unbounded => 0,
-                        Bound::Included(k) => keys
-                            .binary_search_by(|x| x.as_slice().cmp(k))
-                            .unwrap_or_else(|i| i),
-                        Bound::Excluded(k) => {
-                            match keys.binary_search_by(|x| x.as_slice().cmp(k)) {
-                                Ok(i) => i + 1,
-                                Err(i) => i,
-                            }
-                        }
-                    };
-                    if start < keys.len() {
-                        self.leaf = Some((keys, values, start));
-                    } else {
-                        self.advance_leaf();
-                    }
-                    return;
-                }
+            let raw = read_object(&self.nodes, id);
+            let page = NodeView::open(&raw).expect("invalid B+ tree page");
+            let slot = match lo {
+                Bound::Included(k) => page.lower_bound(k, !page.leaf),
+                Bound::Excluded(k) => page.lower_bound(k, true),
+                Bound::Unbounded => 0,
+            };
+            if page.leaf {
+                self.leaf = Some((raw, slot));
+                return;
             }
+            id = page.child(slot);
+            self.stack.push((raw, slot + 1));
         }
     }
 
-    fn advance_leaf(&mut self) {
+    fn advance(&mut self) {
         self.leaf = None;
-        while let Some((node, next_ci)) = self.stack.last_mut() {
-            if let Node::Internal { children, .. } = node
-                && *next_ci < children.len()
-            {
-                let child_id = children[*next_ci];
-                *next_ci += 1;
-                self.descend_leftmost(child_id);
+        while let Some((raw, slot)) = self.stack.last_mut() {
+            let page = NodeView::open(raw).expect("invalid B+ tree page");
+            if *slot <= page.len {
+                let id = page.child(*slot);
+                *slot += 1;
+                self.descend(id, &Bound::Unbounded);
                 return;
             }
             self.stack.pop();
-        }
-        self.done = true;
-    }
-
-    fn descend_leftmost(&mut self, id: NodeId) {
-        let mut cur = id;
-        loop {
-            let node = self.tree.node(cur);
-            match node {
-                Node::Internal { ref children, .. } => {
-                    let child = children[0];
-                    self.stack.push((node, 1));
-                    cur = child;
-                }
-                Node::Leaf { keys, values } => {
-                    if keys.is_empty() {
-                        self.advance_leaf();
-                    } else {
-                        self.leaf = Some((keys, values, 0));
-                    }
-                    return;
-                }
-            }
         }
     }
 }
 
 impl Iterator for BTreeIter<'_> {
     type Item = (Vec<u8>, Vec<u8>);
-
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            if self.done {
+            let (raw, slot) = self.leaf.as_mut()?;
+            let page = NodeView::open(raw).expect("invalid B+ tree page");
+            if *slot >= page.len {
+                self.advance();
+                continue;
+            }
+            let key = page.key(*slot);
+            if match &self.hi {
+                Bound::Included(hi) => key > hi.as_slice(),
+                Bound::Excluded(hi) => key >= hi.as_slice(),
+                Bound::Unbounded => false,
+            } {
+                self.leaf = None;
                 return None;
             }
-            if let Some((ref mut keys, ref mut values, ref mut pos)) = self.leaf {
-                if *pos < keys.len() {
-                    let key = &keys[*pos];
-                    let within = match &self.hi {
-                        Bound::Unbounded => true,
-                        Bound::Included(h) => key.as_slice() <= h.as_slice(),
-                        Bound::Excluded(h) => key.as_slice() < h.as_slice(),
-                    };
-                    if !within {
-                        self.done = true;
-                        return None;
-                    }
-                    let kv = (mem::take(&mut keys[*pos]), mem::take(&mut values[*pos]));
-                    *pos += 1;
-                    return Some(kv);
-                }
-            } else {
-                self.done = true;
-                return None;
-            }
-            // Leaf exhausted — advance.
-            self.advance_leaf();
+            let val = page.value(*slot, |blob| read_object(&self.nodes, blob));
+            *slot += 1;
+            return Some((key.to_vec(), val));
         }
     }
 }

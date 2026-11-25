@@ -114,10 +114,15 @@ pub use basic::{
     mapx::Mapx, mapx_ord::MapxOrd, mapx_ord_rawkey::MapxOrdRawKey, orphan::Orphan,
 };
 
-// Common traits and types — only the three user-facing encoding traits
-// are re-exported.  `KeyEn`/`KeyDe`/`ValueEn`/`ValueDe` remain accessible
-// via `vsdb::common::ende::*` for advanced use cases.
-pub use common::ende::{KeyEnDe, KeyEnDeOrdered, ValueEnDe};
+// Key codecs, borrowed lookups and typed read views.
+pub use common::ende::{
+    KeyEnDe, KeyEnDeOrdered, KeyLookup, OrderedBoundEndpoint, OrderedKeyLookup,
+    OrderedRangeBounds, ValueEnDe,
+};
+pub use common::{
+    MapReader, MapxOrdRawKeyReadView, MapxOrdReadView, MapxReadView, OrphanReader,
+    RawRangeBounds,
+};
 
 // The unified, structured error type of the whole VSDB ecosystem
 // (defined in `vsdb_core`, shared by both crates).
@@ -127,7 +132,7 @@ pub use common::error::{Result, VsdbError};
 pub use versioned::{BranchId, Commit, CommitId, DiffEntry, Snapshot, map::VerMap};
 
 // DAG-related structures
-pub use dagmap::{DagMapId, raw::DagMapRaw, rawkey::DagMapRawKey};
+pub use dagmap::{DagMap, DagMapId, raw::DagMapRaw, rawkey::DagMapRawKey};
 
 // Trie
 pub use trie::{
@@ -147,9 +152,9 @@ pub use vecdex::{
 // Re-export vsdb_core crate for advanced users, plus the user-facing
 // environment management functions.
 pub use vsdb_core::{
-    self, DEFAULT_NS_ID, InstanceId, Namespace, NamespaceOpts, NsId, NsInfo, OpenMode,
-    VsdbOptions, vsdb_configure, vsdb_flush, vsdb_get_base_dir, vsdb_get_custom_dir,
-    vsdb_open_mode,
+    self, DEFAULT_NS_ID, InstanceId, MapxRaw, MapxRawReadView, MapxRawReader, Namespace,
+    NamespaceOpts, NsId, NsInfo, OpenMode, VsdbOptions, vsdb_configure, vsdb_flush,
+    vsdb_get_base_dir, vsdb_get_custom_dir, vsdb_open_mode,
 };
 
 // Persistent B+ tree (moved from vsdb_core).

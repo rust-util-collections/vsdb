@@ -9,17 +9,17 @@ tier-less; bulk uses `pending_slot_rows`.
 
 ## Invariants
 
-**SD1 Tier map pure** — bucket = `slot.floor_align(floor_base)`, `floor_base = cap^level` via saturating `floor_base_of`; no hidden state.
+**SD1 Tier map pure** — bucket = `slot.floor_align(floor_base)`, `floor_base = cap^level` in unsigned rank space anchored at `MIN`. An overflowing stride means one bucket at `MIN`.
 **SD2 Cross-tier query** — spans all intersected tiers.
 **SD3 Boundaries** — each slot in exactly one bucket per level (insert bumps every level); consistent half-open.
-**SD4 Pagination** — offset-based by design (`page*size`); internal consistency per call; cross-call stability under concurrent mut is **not** required (documented). Reverse paging reverses slot groups only, preserving ascending keys within each slot. Consume planned quotas without scanning unused boundary tails; use one entry range, or two when a partial lowest boundary precedes other contributing slots.
+**SD4 Pagination** — offset-based by design (`page*size`); internal consistency per call; cross-call stability under concurrent mut is **not** required (documented). Reverse paging reverses slot groups only, preserving ascending keys within each slot. A page seeks to its slot and skips the local offset. Forward-chunked descending traversals group at most 256 entries and 16 KiB of raw keys at a time; oversized slots stream individually.
 **SD5 swap_order** — layout only; logical results byte-equal true↔false.
 **SD6 Tier-less growth** — empty `levels` ⇒ `slot_rows` exact L0 count; may be stale once tiers exist (unused). Bulk adds pending; promote merges committed+staged. Hydrate/trunc re-seed mirror only re-entering tier-less. Serial/bulk/reopen same growth cadence.
 
 **SD7 Range API** — `page(slots, size, idx, Order)` / `count(slots)` map `RangeBounds` to
 inclusive `Option` bounds: `Excluded` via `checked_succ` / `checked_pred` (overflow ⇒
 empty), `Unbounded` ⇒ `None` (never `MIN`/`MAX`: `swap_order` transforms bounds),
-inverted ⇒ empty. Results must equal the inclusive internal API.
+inverted ⇒ empty. Counts and pages must agree with the logical slot and key order.
 
 ## Bugs
 
@@ -39,7 +39,4 @@ inverted ⇒ empty. Results must equal the inclusive internal API.
 ## Restored-handle ownership
 
 Serde / `from_meta` rebuild independent runtime caches over the same rows.
-Retire the prior active handle before mutation and route all reads/writes
-through one shared instance while mutable. Alternating writes through separate
-restored handles can corrupt state even when calls are sequential. Independent
-read handles are supported only while the underlying index stays immutable.
+Serialize writers across restored handles. Every write verifies the generation in the total row. Stale writers return an error. A stale reader loads fresh tier caches from its own captured read view. Clone copies storage and resets the new generation to zero.

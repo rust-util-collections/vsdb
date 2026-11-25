@@ -16,6 +16,10 @@ A high-performance, embedded key-value database for Rust with an API that feels 
 - **Vector index** — `VecDex` for approximate nearest-neighbor search via a pure-Rust HNSW implementation; supports L2, Cosine, and InnerProduct metrics with filtered search
 - **Namespaces** — anonymous placement groups: independently-rooted engine instances in one process (own dir/volume, shards, WALs, memory budget), with whole-directory destruction without per-key traversal; placement is expressed through handles and creation scopes
 
+## v18 storage and upgrades
+
+The runtime opens v18 universes and collection handles. The independent `vsdb_migrate` library converts v17 metadata, indexes and application-selected embedded handles offline. [Migration guide](migration/README.md)
+
 ## Quick start
 
 ```bash
@@ -137,7 +141,7 @@ vsdb (workspace)
      +-- versioned/      VerMap (branch, commit, merge, diff)
      +-- trie/           MptCalc, SmtCalc, VerMapWithProof
      +-- slotdex/        SlotDex
-     +-- dagmap/         DagMapRaw, DagMapRawKey
+     +-- dagmap/         DagMap, DagMapRaw, DagMapRawKey
      +-- vecdex/         VecDex (HNSW vector index)
 ```
 
@@ -148,8 +152,8 @@ vsdb (workspace)
 | [`basic`](strata/src/basic) | `Mapx`, `MapxOrd`, `MapxOrdRawKey`, `Orphan`, `PersistentBTree` | Persistent, typed collections + COW B+ tree |
 | [`versioned`](strata/src/versioned) | `VerMap`, `BranchId`, `CommitId` | Git-model versioned KV store with COW B+ tree |
 | [`trie`](strata/src/trie) | `MptCalc`, `SmtCalc`, `SmtProof`, `VerMapWithProof` | Stateless Merkle tries + VerMap integration |
-| [`slotdex`](strata/src/slotdex) | `SlotDex` | Skip-list-like index for timestamp-based paged queries |
-| [`dagmap`](strata/src/dagmap) | `DagMapRaw`, `DagMapRawKey` | DAG-based collections |
+| [`slotdex`](strata/src/slotdex) | `SlotDex` | Fixed-width slot coordinates, tiered counts and snapshot-consistent pages |
+| [`dagmap`](strata/src/dagmap) | `DagMap`, `DagMapRawKey`, `DagMapRaw` | Single-shard parent overlays with durable pruning |
 | [`vecdex`](strata/src/vecdex) | `VecDex`, `VecDexDyn`, `HnswConfig` | Approximate nearest-neighbor vector index (HNSW); metric compile-time or runtime-selected |
 
 ### Trie + VerMap integration

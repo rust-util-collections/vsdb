@@ -4,10 +4,9 @@
 diff / three-way merge they call live in `persistent_btree/{diff,merge}.rs` (`patterns/btree.md`).
 
 **Arch:** Git-model branches→commits DAG; commits immutable; source-wins 3-way
-merge (`tree.merge` replays the source delta onto the target); ref-counts + dirty
-flag for cascade crash recover. Reads go through a `Snapshot` (leased root):
-`at(commit)` / `snapshot(branch)`; branch-id reads delegate to it. `BranchId` /
-`CommitId` are serde-transparent newtypes; component tables keep `u64` keys.
+merge replays the sorted source delta onto the target. Tagged rows share one raw
+prefix and one WAL. Owned snapshots pin immutable B+ tree roots. The version
+store header tracks the allocation ceilings and checkpoint generation.
 
 ## Invariants
 
@@ -15,20 +14,14 @@ flag for cascade crash recover. Reads go through a `Snapshot` (leased root):
 **V2 Acyclic** — parents earlier existing commits.
 **V3 Source-wins** — both modified since **every merge base** (all LCAs) → source value; bases disagree on a key → source.
 **V4 Rollback** — only this branch’s ref contributions; other branches untouched. Inc target **before** dec old HEAD.
-**V5 Dirty** — durably true before non-idempotent ref cascade (commit/merge/branch±/rollback), durably false after all participating shards are fenced; recovery recounts only after validating every reachable commit. `gc()` idempotent; its recount (dirty **or** any ref 0) brackets itself with the flag.
+**V5 Publication** — history changes commit all metadata, page writes and root retirement in a synchronous batch. Working edits publish one atomic batch. Staged pages are anchored until final publication.
 **V6 Commit immutable** after create — id/root/parents/timestamp; only `ref_count` is rewritten.
-**V7 Durable references** — order nodes before publishing roots; commits before publishing HEAD; branch/commit rewrite or removal before retiring old roots; allocator advancement before returning an ID; main-branch changes before deleting the old main. Co-located maps (one shard, one WAL): program order provides this — `fence()` is a no-op, history ops `settle()` with one sync, and released nodes are registered only after a sync (deferred queue). Per-shard (legacy) maps: program order across shard WALs is insufficient — every `fence()` syncs.
+**V7 Recovery** — validate branch heads, commit ancestry, reachable root headers and the highest object ID in each class before reclamation. Only trust a checksummed checkpoint bound to the matching map and generation. Deep verification also checks child pages and values.
 
-**V8 Handle compat** — v16 VSTYPE02 metas embed component handles tagged by their
-**full** type paths: `PersistentBTree`, `MapxOrd<u64, Commit>`,
-`MapxOrd<u64, BranchState>`, `Mapx<String, u64>`, `Orphan<u64>`, `Orphan<bool>`, and
-the paths of `versioned::Commit` / `versioned::map::BranchState`, are frozen (no key
-newtypes, no moves/renames). Field types may change only if the serde encoding stays
-identical (`#[serde(transparent)]`).
+**V8 Handle** — current-format single-prefix metadata preserves instance identity. Offline conversion, including v17 wire structures, lives under `migration/`.
 
 **V9 Snapshot lifetime** — snapshot/iterator leases retain tree roots across alias
-mutation, rollback, branch deletion and recount. Leases own no borrowed lifetime, so
-Snapshot keeps last-use borrow compatibility; derived iterators retain the lease after
+mutation, rollback, branch deletion and recount. Snapshots and leases own their handles; derived iterators retain the lease after
 the view drops. Pins are runtime-only, do not retain commit records, and are excluded
 from deep copies. Reclamation after final drop uses the pool-shared deferred queue.
 
@@ -48,12 +41,12 @@ publishing either row, so a reader lease cannot drop an otherwise unowned result
 - [ ] Merge diffs from every merge base
 - [ ] Source-wins on conflicts
 - [ ] Rollback multi-path uncommitted guard
-- [ ] Dirty brackets cascades; gc stays idempotent
+- [ ] Atomic publication and idempotent GC
 - [ ] Incomplete reachable history fails before destructive repair, even when clean
 - [ ] Publication/reclamation fences include construction, deep clone and restore
-- [ ] New components co-located with the node pool; no lazy-delete before a sync on co-located maps
+- [ ] Publication and retired-root markers share the node prefix
 - [ ] No post-create commit mutate except `ref_count`
-- [ ] Component type params / type paths unchanged (V8); ids stay transparent newtypes
+- [ ] Typed frame and standalone migration fixture preserve identity (V8)
 - [ ] Errors typed (`NotAncestor` / `SelfMerge` / `NoCommits` / `CommitNotFound`); `gc()` returns them, never panics on a damaged graph
 - [ ] Merge shapes: same head → no-op; FF only into empty target; target-ancestor → 2-parent commit
 - [ ] Snapshot and iterator roots survive alias writes/GC/restore; final drop releases once

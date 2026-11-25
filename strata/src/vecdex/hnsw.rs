@@ -141,12 +141,11 @@ pub(crate) fn filter_visit_cap(ef: usize) -> usize {
 /// Public base-layer searches can supply lazy fallback seeds: an exhausted
 /// component resumes from an unvisited node while the result set is underfull.
 /// Restarts share the visited set and filter budget with ordinary traversal.
-pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>, A: AdjRead + ?Sized>(
-    query: &[S],
+pub(crate) fn search_layer<S: Scalar, A: AdjRead + ?Sized>(
+    mut distance_to: impl FnMut(u64) -> Option<S>,
     entry_points: &[u64],
     ef: usize,
     layer: u8,
-    get_vector: &dyn Fn(u64) -> Option<Rc<Vec<S>>>,
     adj: &A,
     filter: Option<&dyn Fn(u64) -> bool>,
 ) -> Vec<(S, u64)> {
@@ -158,8 +157,7 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>, A: AdjRead + ?Sized>
     let visit_cap = filter.map(|_| filter_visit_cap(ef));
 
     for &ep in entry_points {
-        if let Some(vec) = get_vector(ep) {
-            let dist = D::distance(query, &vec);
+        if let Some(dist) = distance_to(ep) {
             candidates.push(Reverse((OrdS(dist), ep)));
             if passes(ep) {
                 result.push((OrdS(dist), ep));
@@ -193,10 +191,9 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>, A: AdjRead + ?Sized>
                     break;
                 };
                 visited.insert(id);
-                let Some(vector) = get_vector(id) else {
+                let Some(dist) = distance_to(id) else {
                     continue;
                 };
-                let dist = D::distance(query, &vector);
                 if passes(id) {
                     result.push((OrdS(dist), id));
                 }
@@ -221,10 +218,9 @@ pub(crate) fn search_layer<S: Scalar, D: DistanceMetric<S>, A: AdjRead + ?Sized>
             if !visited.insert(n_id) {
                 continue;
             }
-            let Some(n_vec) = get_vector(n_id) else {
+            let Some(n_dist) = distance_to(n_id) else {
                 continue;
             };
-            let n_dist = D::distance(query, &n_vec);
 
             // Skip neighbors farther than the worst result once `ef`
             // results are held.
@@ -271,6 +267,7 @@ pub(crate) fn select_neighbors_simple<S: Scalar>(
 /// For each candidate (in distance order), it is selected only if it is
 /// closer to the query than to any already-selected neighbor.
 pub(crate) fn select_neighbors_heuristic<S: Scalar, D: DistanceMetric<S>>(
+    metric: &D,
     candidates: &[(S, u64)],
     m: usize,
     get_vector: &dyn Fn(u64) -> Option<Rc<Vec<S>>>,
@@ -293,7 +290,7 @@ pub(crate) fn select_neighbors_heuristic<S: Scalar, D: DistanceMetric<S>>(
         // Check: is this candidate closer to query than to any selected neighbor?
         let mut is_diverse = true;
         for sel_vec in &selected_vecs {
-            let dist_to_sel = D::distance(&cand_vec, sel_vec);
+            let dist_to_sel = metric.distance(&cand_vec, sel_vec);
             if dist_to_sel.total_cmp(&dist_to_query) == Ordering::Less {
                 is_diverse = false;
                 break;
@@ -330,6 +327,7 @@ pub(crate) fn select_neighbors_heuristic<S: Scalar, D: DistanceMetric<S>>(
 /// Pure computation: returns `None` when nothing needs pruning, else
 /// `(pruned_list, evicted_ids)` for the caller to write back.
 pub(crate) fn prune_selection<S: Scalar, D: DistanceMetric<S>, A: AdjRead + ?Sized>(
+    metric: &D,
     node_id: u64,
     layer: u8,
     m_max: usize,
@@ -343,9 +341,9 @@ pub(crate) fn prune_selection<S: Scalar, D: DistanceMetric<S>, A: AdjRead + ?Siz
     let node_vec = get_vector(node_id)?;
     let scored: Vec<(S, u64)> = neighbors
         .iter()
-        .filter_map(|&n| get_vector(n).map(|v| (D::distance(&node_vec, &v), n)))
+        .filter_map(|&n| get_vector(n).map(|v| (metric.distance(&node_vec, &v), n)))
         .collect();
-    let pruned = select_neighbors_heuristic::<S, D>(&scored, m_max, get_vector);
+    let pruned = select_neighbors_heuristic::<S, D>(metric, &scored, m_max, get_vector);
     let evicted = neighbors
         .into_iter()
         .filter(|n| !pruned.contains(n))

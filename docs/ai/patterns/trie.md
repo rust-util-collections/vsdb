@@ -1,7 +1,6 @@
 # Merkle Trie Review Patterns
 
-**Files:** `trie/{mod,cache,codec_util,error,nibbles,proof,test}.rs` (`cache` = MPT
-disk cache; `proof` = `VerMapWithProof`), `trie/{mpt,smt,node}/**`.
+**Files:** `trie/{mod,cache,codec_util,error,nibbles,proof,shared,test}.rs` (`cache` = shared streaming checkpoints; `proof` = `VerMapWithProof`), `trie/{mpt,smt,node}/**`.
 
 **Arch:** MPT 16-ary nibble; SMT binary 256-bit, JMT-compressed, single `EMPTY_HASH`;
 stateless compute + disk cache; VerMapWithProof integration.
@@ -12,12 +11,17 @@ stateless compute + disk cache; VerMapWithProof integration.
 **T2 MPT nibbles** — high `>>4`, low `&0x0F`; path len 2×bytes; consistent all ops.
 **T3 SMT defaults** — JMT-style compressed tree: every empty subtree is `EMPTY_HASH = [0; 32]`, at every depth; `hash_internal(EMPTY_HASH, EMPTY_HASH)` returns `EMPTY_HASH`. Construction and proof folding must use the same rule.
 **T4 Hash det** — same logical state → same root; extensions max-compressed.
-**T5 Cache version** — one file per map (`{mpt,smt}_cache_<map_id>.bin`) stamped with the synced CommitId; in-memory sync point = (owning InstanceId, branch, commit, dirty applied). Map replacement invalidates all cached state before sync shortcuts; a cached historical root still requires a live commit. `save_cache(commit)` is the only wrapper cache-write boundary; root calculation and Drop never save implicitly. Stamp/root mismatch or diff failure → rebuild, never silent stale.
+**T5 Cache binding** — check universe, map identity, commit and B+ tree root.
+Keep independent committed and working candidate roots. Changing map identity
+invalidates both cached states. Verify a historical commit is still live before
+serving it. Save only when explicitly checkpointing.
+
 **T6 Non-exist proofs** — MPT: empty slot, leaf-path mismatch, or divergent extension. SMT: empty subtree or a foreign lone leaf sharing the proven prefix.
-**T7 Cache trust boundary** — loaders validate whole-tree shape (depth/nibble budget,
-leaf placement, hash len), recompute cached hashes, reject trailing/mixed/oversize;
-checksum ≠ structure guarantee. Walker assumptions need matching deserialize checks.
-Failed sync must not leave take’d root unrestored / false commit bookkeeping.
+**T7 Cache trust boundary** — parse post-order records with file, node,
+value, decoded memory and pending-subtree limits. Check canonical shapes,
+including the side of each SMT branch against its descendant key hashes.
+Recompute the commitment and verify the checksum before returning the tree.
+Failed mutations preserve the original root.
 
 ## Bugs
 

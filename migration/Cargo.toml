@@ -1,0 +1,16 @@
+[package]
+name = "vsdb_migrate"
+version = "18.0.0"
+edition = "2024"
+license = "MIT"
+description = "Offline v17 to v18 migration tools for VSDB"
+repository = "https://github.com/rust-util-collections/vsdb"
+
+[dependencies]
+vsdb = { path = "../strata", version = "18" }
+vsdb_core = { workspace = true }
+serde = { workspace = true }
+postcard = { workspace = true }
+rand = { workspace = true }
+mmdb = { workspace = true }
+sha3 = { workspace = true }

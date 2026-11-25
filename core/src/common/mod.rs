@@ -9,13 +9,17 @@
 pub(crate) mod engine;
 /// Structured error types for the VSDB public API.
 pub mod error;
+mod ids;
+pub use ids::{BranchId, CommitId};
+mod range;
+pub use range::RawRangeBounds;
 /// Namespaces: anonymous placement groups (independent engine instances).
 pub mod namespace;
+mod universe;
 
 use error::{Result, VsdbError};
 pub use namespace::{DEFAULT_NS_ID, InstanceId, Namespace, NamespaceOpts, NsId, NsInfo};
 use parking_lot::Mutex;
-use ruc::*;
 use std::{
     env, fs, io,
     mem::size_of,
@@ -67,19 +71,11 @@ static VSDB_BASE_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 static VSDB_SYSTEM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     // See VSDB_CUSTOM_DIR: derived paths freeze the base dir.
     vsdb_freeze_base_dir();
+    universe::active().expect("vsdb: universe initialization failed");
     let mut d = vsdb_get_base_dir();
     d.push("__SYSTEM__");
     if !vsdb_is_read_only() {
-        pnk!(create_dir_all_durable(&d));
-    }
-    d
-});
-
-static VSDB_META_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
-    let mut d = VSDB_SYSTEM_DIR.clone();
-    d.push("__instance_meta__");
-    if !vsdb_is_read_only() {
-        pnk!(create_dir_all_durable(&d));
+        create_dir_all_durable(&d).unwrap();
     }
     d
 });
@@ -90,10 +86,11 @@ static VSDB_CUSTOM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     // fails loudly instead of silently splitting the directory tree
     // across two bases.
     vsdb_freeze_base_dir();
+    universe::active().expect("vsdb: universe initialization failed");
     let mut d = vsdb_get_base_dir();
     d.push("__CUSTOM__");
     if !vsdb_is_read_only() {
-        pnk!(create_dir_all_durable(&d));
+        create_dir_all_durable(&d).unwrap();
     }
     d
 });
@@ -142,6 +139,15 @@ pub fn create_dir_all_durable(path: &Path) -> Result<()> {
 /// read-only mode, or a storage error if the replacement fails. A failed
 /// replacement removes its staging file on a best-effort basis.
 pub fn atomic_write_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    atomic_write_file_with(path, |file| Ok(io::Write::write_all(file, bytes)?))
+}
+
+/// Streams a replacement into a unique sibling file, then syncs, renames
+/// and syncs the parent directory. A writer error preserves the old file.
+pub fn atomic_write_file_with(
+    path: &Path,
+    write: impl FnOnce(&mut fs::File) -> Result<()>,
+) -> Result<()> {
     if vsdb_is_read_only() {
         return Err(VsdbError::ReadOnly {
             operation: "atomic file write",
@@ -167,7 +173,7 @@ pub fn atomic_write_file(path: &Path, bytes: &[u8]) -> Result<()> {
         }
     };
     let result: Result<()> = (|| {
-        io::Write::write_all(&mut f, bytes)?;
+        write(&mut f)?;
         f.sync_all()?;
         drop(f);
         fs::rename(&tmp, path)?;
@@ -183,15 +189,6 @@ pub fn atomic_write_file(path: &Path, bytes: &[u8]) -> Result<()> {
     }
     result
 }
-
-/// The global instance of the VsDB database.
-///
-/// This static variable is lazily initialized and provides a single point of
-/// access to the underlying database.
-pub(crate) static VSDB: LazyLock<VsDB> = LazyLock::new(|| pnk!(VsDB::new()));
-
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////
 
 /// A macro to parse a byte slice into a specified integer type.
 ///
@@ -226,41 +223,6 @@ macro_rules! parse_prefix {
     };
 }
 pub(crate) use parse_prefix;
-
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////
-
-/// A struct representing the VsDB database.
-///
-/// This struct provides a high-level interface for interacting with the
-/// database. It is a thin delegate over the default namespace, which
-/// owns the actual default engine (see `namespace::DEFAULT_NS`).
-///
-/// The storage engine is MMDB, a pure-Rust LSM-Tree engine.
-pub(crate) struct VsDB {
-    ns: namespace::Namespace,
-}
-
-impl VsDB {
-    #[inline(always)]
-    fn new() -> Result<Self> {
-        Ok(Self {
-            ns: namespace::Namespace::default_ns(),
-        })
-    }
-
-    #[inline(always)]
-    fn flush(&self) {
-        self.ns.flush()
-    }
-
-    /// The default engine (test-only: the allocator tests exercise
-    /// engine-handle allocation through the process-global singleton).
-    #[cfg(test)]
-    pub(crate) fn engine(&self) -> &engine::Engine {
-        self.ns.engine()
-    }
-}
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -330,29 +292,6 @@ pub fn vsdb_get_custom_dir() -> &'static Path {
 #[inline(always)]
 pub fn vsdb_get_system_dir() -> &'static Path {
     VSDB_SYSTEM_DIR.as_path()
-}
-
-/// Returns the instance-meta directory path of the **default namespace**
-/// (`{system_dir}/__instance_meta__/`; non-default namespaces keep their
-/// metas under their own roots — see [`Namespace::meta_dir`]).
-///
-/// Holds lightweight metadata (serialized handles) keyed by map id. Like
-/// [`vsdb_get_system_dir`], this never opens the default engine; in
-/// read-only mode it returns the path without creating the directory.
-#[inline(always)]
-pub fn vsdb_get_meta_dir() -> &'static Path {
-    VSDB_META_DIR.as_path()
-}
-
-/// Returns the **default-namespace** meta file path for a given map id (a
-/// bare `u64` can only ever address a default-namespace instance;
-/// namespace-resident metas live under [`Namespace::meta_dir`]). Never
-/// opens the default engine.
-#[inline(always)]
-pub fn vsdb_meta_path(instance_id: u64) -> PathBuf {
-    let mut p = VSDB_META_DIR.clone();
-    p.push(format!("{:016x}", instance_id));
-    p
 }
 
 /// Returns the base directory path for VSDB.
@@ -525,7 +464,8 @@ pub fn vsdb_configure(options: VsdbOptions) -> Result<()> {
     OPEN_MODE.store(options.open_mode as u8, Ordering::Release);
     CONFIGURED_MEM_BUDGET_MB
         .store(options.mem_budget_mb.unwrap_or(0), Ordering::Release);
-    *base_dir = Some(selected);
+    *base_dir = Some(selected.clone());
+    universe::initialize(&selected, options.open_mode)?;
     Ok(())
 }
 
@@ -541,6 +481,5 @@ pub fn vsdb_flush() {
     if vsdb_is_read_only() {
         return;
     }
-    VSDB.flush();
     namespace::flush_all_open();
 }

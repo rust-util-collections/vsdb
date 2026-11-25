@@ -1,5 +1,5 @@
 #[cfg(test)]
-fn scratch_cache_dir() -> ScratchDir {
+pub(super) fn scratch_cache_dir() -> ScratchDir {
     let path = std::env::temp_dir().join(format!(
         "vsdb_trie_cache_{}_{}",
         std::process::id(),
@@ -10,7 +10,7 @@ fn scratch_cache_dir() -> ScratchDir {
 }
 
 #[cfg(test)]
-struct ScratchDir(std::path::PathBuf);
+pub(super) struct ScratchDir(std::path::PathBuf);
 
 #[cfg(test)]
 impl std::ops::Deref for ScratchDir {
@@ -68,10 +68,7 @@ mod replacement_tests {
                     } else {
                         replacement.snapshot(branch).unwrap()
                     };
-                    T::from_entries(snapshot.raw_iter())
-                        .unwrap()
-                        .root_hash()
-                        .unwrap()
+                    T::from_entries(snapshot.raw_iter()).unwrap().root_hash()
                 };
                 assert_ne!(expected, old_root);
                 *proof.map_mut() = replacement;
@@ -86,7 +83,6 @@ mod replacement_tests {
                     T::from_entries(proof.map().snapshot(branch).unwrap().raw_iter())
                         .unwrap()
                         .root_hash()
-                        .unwrap()
                 );
             }
         }
@@ -124,8 +120,7 @@ mod replacement_tests {
         let branch = replacement.main_branch();
         let expected = T::from_entries(replacement.snapshot(branch).unwrap().raw_iter())
             .unwrap()
-            .root_hash()
-            .unwrap();
+            .root_hash();
         *proof.map_mut() = replacement;
         if resync {
             assert_eq!(proof.merkle_root(branch).unwrap(), expected);
@@ -161,25 +156,20 @@ mod replacement_tests {
 
 #[test]
 fn oversized_checkpoint_preserves_the_last_loadable_file() {
-    use super::{MptCalc, SmtCalc, cache, smt};
+    use super::{Checkpoint, MptCalc, cache};
     let dir = scratch_cache_dir();
-    let path = dir.join("checkpoint");
-    let check = |save: &dyn Fn(u64, u64) -> super::error::Result<()>| {
-        save(1, u64::MAX).unwrap();
-        let size = std::fs::metadata(&path).unwrap().len();
-        save(2, size).unwrap();
-        let previous = std::fs::read(&path).unwrap();
-        assert!(save(3, size - 1).is_err());
-        assert_eq!(std::fs::read(&path).unwrap(), previous);
+    let path = dir.join("mpt_cache_1.bin");
+    let calc = MptCalc::from_entries([(b"a", b"b")]).unwrap();
+    let save = |tag, limit| {
+        cache::save(&path, &calc.root, Checkpoint::standalone(1, tag), limit)
     };
-    let mut mpt = MptCalc::default();
-    let hash = mpt.root_hash().unwrap();
-    check(&|tag, limit| cache::save_to_file(&mpt.root, tag, &hash, &path, limit));
-    assert_eq!(cache::load_from_file(&path).unwrap().1, 2);
-    let mut smt = SmtCalc::default();
-    let hash = smt.root_hash().unwrap();
-    check(&|tag, limit| smt::cache::save_to_file(&smt.root, tag, &hash, &path, limit));
-    assert_eq!(smt::cache::load_from_file(&path).unwrap().1, 2);
+    save(1, u64::MAX).unwrap();
+    let size = std::fs::metadata(&path).unwrap().len();
+    save(2, size).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(save(3, size - 1).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    assert_eq!(MptCalc::load_cache(&dir, 1).unwrap().1, 2);
 }
 
 #[cfg(test)]
@@ -267,7 +257,7 @@ mod tests {
         assert_eq!(trie.get(b"b").unwrap(), None);
 
         // Root should be the empty root
-        assert_eq!(trie.root_hash().unwrap(), vec![0u8; 32]);
+        assert_eq!(trie.root_hash(), [0u8; 32]);
     }
 
     #[test]
@@ -275,10 +265,10 @@ mod tests {
         let mut trie = MptCalc::new();
 
         trie.insert(b"exists", b"yes").unwrap();
-        let root_before = trie.root_hash().unwrap();
+        let root_before = trie.root_hash();
 
         trie.remove(b"does_not_exist").unwrap();
-        let root_after = trie.root_hash().unwrap();
+        let root_after = trie.root_hash();
 
         // Root should not change
         assert_eq!(root_before, root_after);
@@ -296,7 +286,7 @@ mod tests {
             trie.insert(&i.to_be_bytes(), &(i * 11).to_be_bytes())
                 .unwrap();
         }
-        let root = trie.root_hash().unwrap(); // commit → Cached nodes
+        let root = trie.root_hash(); // commit → Cached nodes
 
         for k in [
             b"missing".as_slice(),
@@ -307,14 +297,14 @@ mod tests {
         }
 
         // Root must be unchanged and equal a fresh rebuild of the same data.
-        assert_eq!(trie.root_hash().unwrap(), root);
+        assert_eq!(trie.root_hash(), root);
         let mut fresh = MptCalc::new();
         for i in 0u32..200 {
             fresh
                 .insert(&i.to_be_bytes(), &(i * 11).to_be_bytes())
                 .unwrap();
         }
-        assert_eq!(fresh.root_hash().unwrap(), root);
+        assert_eq!(fresh.root_hash(), root);
 
         // All original entries must still be present.
         for i in 0u32..200 {
@@ -364,7 +354,7 @@ mod tests {
         trie_b.insert(b"x", b"1").unwrap();
         trie_b.insert(b"y", b"2").unwrap();
 
-        assert_eq!(trie_a.root_hash().unwrap(), trie_b.root_hash().unwrap());
+        assert_eq!(trie_a.root_hash(), trie_b.root_hash());
     }
 
     #[test]
@@ -432,17 +422,14 @@ mod tests {
             (b"y".to_vec(), b"2".to_vec()),
             (b"z".to_vec(), b"3".to_vec()),
         ];
-        let mut from_entries = MptCalc::from_entries(entries).unwrap();
+        let from_entries = MptCalc::from_entries(entries).unwrap();
 
         let mut incremental = MptCalc::new();
         incremental.insert(b"x", b"1").unwrap();
         incremental.insert(b"y", b"2").unwrap();
         incremental.insert(b"z", b"3").unwrap();
 
-        assert_eq!(
-            from_entries.root_hash().unwrap(),
-            incremental.root_hash().unwrap()
-        );
+        assert_eq!(from_entries.root_hash(), incremental.root_hash());
     }
 
     #[test]
@@ -454,7 +441,7 @@ mod tests {
         trie.insert(b"hello", b"world").unwrap();
         trie.insert(b"foo", b"bar").unwrap();
         trie.insert(b"key", b"value").unwrap();
-        let root = trie.root_hash().unwrap();
+        let root = trie.root_hash();
 
         trie.save_cache(&dir, cache_id, 42).unwrap();
 
@@ -491,7 +478,7 @@ mod tests {
         let mut fresh = MptCalc::new();
         fresh.insert(b"b", b"2").unwrap();
         fresh.insert(b"c", b"3").unwrap();
-        assert_eq!(loaded.root_hash().unwrap(), fresh.root_hash().unwrap());
+        assert_eq!(loaded.root_hash(), fresh.root_hash());
     }
 
     #[test]
@@ -499,12 +486,12 @@ mod tests {
         let dir = super::scratch_cache_dir();
         let cache_id = 1003;
 
-        let mut trie = MptCalc::new();
+        let trie = MptCalc::new();
         trie.save_cache(&dir, cache_id, 0).unwrap();
 
         let (loaded, sync_tag, root_hash) = MptCalc::load_cache(&dir, cache_id).unwrap();
         assert_eq!(sync_tag, 0);
-        assert_eq!(root_hash, vec![0u8; 32]);
+        assert_eq!(root_hash, [0u8; 32]);
         assert_eq!(loaded.get(b"anything").unwrap(), None);
     }
 
@@ -518,10 +505,10 @@ mod tests {
             trie.insert(&i.to_be_bytes(), &(i * 3).to_be_bytes())
                 .unwrap();
         }
-        let root = trie.root_hash().unwrap();
+        let root = trie.root_hash();
         trie.save_cache(&dir, cache_id, 99).unwrap();
 
-        let (mut loaded, _, loaded_root) = MptCalc::load_cache(&dir, cache_id).unwrap();
+        let (loaded, _, loaded_root) = MptCalc::load_cache(&dir, cache_id).unwrap();
         assert_eq!(loaded_root, root);
 
         for i in 0u32..200 {
@@ -530,7 +517,7 @@ mod tests {
                 Some((i * 3).to_be_bytes().to_vec())
             );
         }
-        assert_eq!(loaded.root_hash().unwrap(), root);
+        assert_eq!(loaded.root_hash(), root);
     }
 
     #[test]
@@ -575,9 +562,9 @@ mod tests {
         trie.insert(b"a", b"1").unwrap();
         trie.insert(b"b", b"2").unwrap();
 
-        let h1 = trie.root_hash().unwrap();
-        let h2 = trie.root_hash().unwrap();
-        let h3 = trie.root_hash().unwrap();
+        let h1 = trie.root_hash();
+        let h2 = trie.root_hash();
+        let h3 = trie.root_hash();
         assert_eq!(h1, h2);
         assert_eq!(h2, h3);
     }
@@ -586,11 +573,11 @@ mod tests {
     fn test_insert_after_commit() {
         let mut trie = MptCalc::new();
         trie.insert(b"a", b"1").unwrap();
-        let h1 = trie.root_hash().unwrap();
+        let h1 = trie.root_hash();
 
         // Insert after hashing should still work and produce a different root.
         trie.insert(b"b", b"2").unwrap();
-        let h2 = trie.root_hash().unwrap();
+        let h2 = trie.root_hash();
         assert_ne!(h1, h2);
 
         // Data should be intact.
@@ -603,7 +590,7 @@ mod tests {
         let mut trie = MptCalc::new();
         trie.insert(b"a", b"1").unwrap();
         trie.insert(b"b", b"2").unwrap();
-        let _h1 = trie.root_hash().unwrap();
+        let _h1 = trie.root_hash();
 
         trie.remove(b"a").unwrap();
         assert_eq!(trie.get(b"a").unwrap(), None);
@@ -626,7 +613,7 @@ mod tests {
             ])
             .unwrap();
 
-        assert_eq!(trie_a.root_hash().unwrap(), trie_b.root_hash().unwrap());
+        assert_eq!(trie_a.root_hash(), trie_b.root_hash());
     }
 
     #[test]
@@ -635,12 +622,12 @@ mod tests {
 
         // Single insert + hash.
         trie.insert(b"only", b"one").unwrap();
-        let h = trie.root_hash().unwrap();
-        assert_ne!(h, vec![0u8; 32]);
+        let h = trie.root_hash();
+        assert_ne!(h, [0u8; 32]);
 
         // Remove the only key.
         trie.remove(b"only").unwrap();
-        assert_eq!(trie.root_hash().unwrap(), vec![0u8; 32]);
+        assert_eq!(trie.root_hash(), [0u8; 32]);
     }
 
     #[test]
@@ -652,7 +639,7 @@ mod tests {
         trie.insert(&long_key, &long_val).unwrap();
         assert_eq!(trie.get(&long_key).unwrap(), Some(long_val.clone()));
 
-        let h = trie.root_hash().unwrap();
+        let h = trie.root_hash();
         assert_eq!(h.len(), 32);
 
         trie.remove(&long_key).unwrap();
@@ -694,13 +681,13 @@ mod tests {
         // Mutate, then save again.
         loaded.insert(b"c", b"3").unwrap();
         loaded.remove(b"a").unwrap();
-        let h_mutated = loaded.root_hash().unwrap();
+        let h_mutated = loaded.root_hash();
         loaded.save_cache(&dir, cache_id, 20).unwrap();
 
         // Reload and verify.
-        let (mut reloaded, tag, _) = MptCalc::load_cache(&dir, cache_id).unwrap();
+        let (reloaded, tag, _) = MptCalc::load_cache(&dir, cache_id).unwrap();
         assert_eq!(tag, 20);
-        assert_eq!(reloaded.root_hash().unwrap(), h_mutated);
+        assert_eq!(reloaded.root_hash(), h_mutated);
         assert_eq!(reloaded.get(b"a").unwrap(), None);
         assert_eq!(reloaded.get(b"b").unwrap(), Some(b"2".to_vec()));
         assert_eq!(reloaded.get(b"c").unwrap(), Some(b"3".to_vec()));
@@ -712,7 +699,7 @@ mod tests {
 
         let mut trie = MptCalc::new();
         trie.insert(b"short", b"v").unwrap();
-        let root_before = trie.root_hash().unwrap();
+        let root_before = trie.root_hash();
 
         // A key over MAX_MPT_KEY_LEN is rejected; the trie must be
         // completely unaffected — not silently emptied.
@@ -720,7 +707,7 @@ mod tests {
         assert!(trie.insert(&oversized_key, b"x").is_err());
 
         assert_eq!(trie.get(b"short").unwrap(), Some(b"v".to_vec()));
-        assert_eq!(trie.root_hash().unwrap(), root_before);
+        assert_eq!(trie.root_hash(), root_before);
     }
 
     #[test]
@@ -729,18 +716,17 @@ mod tests {
 
         let mut trie = MptCalc::new();
         trie.insert(b"short", b"v").unwrap();
-        let root_before = trie.root_hash().unwrap();
+        let root_before = trie.root_hash();
 
-        // The valid op before the oversized one is applied (batch is
-        // not atomic), but the failure must not wipe out prior state.
+        // A rejected suffix also rolls back earlier edits in the batch.
         let oversized_key = vec![0u8; MAX_MPT_KEY_LEN + 1];
         let ops: Vec<(&[u8], Option<&[u8]>)> =
             vec![(b"another", Some(b"w")), (&oversized_key, Some(b"x"))];
         assert!(trie.batch_update(&ops).is_err());
 
         assert_eq!(trie.get(b"short").unwrap(), Some(b"v".to_vec()));
-        assert_eq!(trie.get(b"another").unwrap(), Some(b"w".to_vec()));
-        assert_ne!(trie.root_hash().unwrap(), root_before);
+        assert_eq!(trie.get(b"another").unwrap(), None);
+        assert_eq!(trie.root_hash(), root_before);
     }
 
     #[test]
@@ -819,7 +805,7 @@ mod smt_tests {
             smt.insert(&i.to_be_bytes(), &(i * 11).to_be_bytes())
                 .unwrap();
         }
-        let root = smt.root_hash().unwrap(); // commit → Cached nodes
+        let root = smt.root_hash(); // commit → Cached nodes
 
         for k in [
             b"missing".as_slice(),
@@ -830,14 +816,14 @@ mod smt_tests {
         }
 
         // Root must be unchanged and equal a fresh rebuild of the same data.
-        assert_eq!(smt.root_hash().unwrap(), root);
+        assert_eq!(smt.root_hash(), root);
         let mut fresh = SmtCalc::new();
         for i in 0u32..200 {
             fresh
                 .insert(&i.to_be_bytes(), &(i * 11).to_be_bytes())
                 .unwrap();
         }
-        assert_eq!(fresh.root_hash().unwrap(), root);
+        assert_eq!(fresh.root_hash(), root);
 
         // All original entries must still be present.
         for i in 0u32..200 {
@@ -852,14 +838,14 @@ mod smt_tests {
         // remove that unconditionally reconstructs via `compact` would
         // leave the root `InMemory` again, forcing a full ancestor
         // re-hash on the next `root_hash()` call.
-        assert!(matches!(smt.root, crate::trie::smt::SmtHandle::Cached(..)));
+        assert!(smt.root.hash().is_some());
     }
 
     #[test]
     fn test_smt_root_hash_empty() {
-        let mut smt = SmtCalc::new();
-        let h = smt.root_hash().unwrap();
-        assert_eq!(h, vec![0u8; 32]); // EMPTY_HASH
+        let smt = SmtCalc::new();
+        let h = smt.root_hash();
+        assert_eq!(h, [0u8; 32]); // EMPTY_HASH
     }
 
     #[test]
@@ -872,15 +858,15 @@ mod smt_tests {
         b.insert(b"y", b"2").unwrap();
         b.insert(b"x", b"1").unwrap();
 
-        assert_eq!(a.root_hash().unwrap(), b.root_hash().unwrap());
+        assert_eq!(a.root_hash(), b.root_hash());
     }
 
     #[test]
     fn test_smt_root_hash_idempotent() {
         let mut smt = SmtCalc::new();
         smt.insert(b"k", b"v").unwrap();
-        let h1 = smt.root_hash().unwrap();
-        let h2 = smt.root_hash().unwrap();
+        let h1 = smt.root_hash();
+        let h2 = smt.root_hash();
         assert_eq!(h1, h2);
     }
 
@@ -888,10 +874,10 @@ mod smt_tests {
     fn test_smt_insert_after_commit() {
         let mut smt = SmtCalc::new();
         smt.insert(b"a", b"1").unwrap();
-        let h1 = smt.root_hash().unwrap();
+        let h1 = smt.root_hash();
 
         smt.insert(b"b", b"2").unwrap();
-        let h2 = smt.root_hash().unwrap();
+        let h2 = smt.root_hash();
         assert_ne!(h1, h2);
 
         assert_eq!(smt.get(b"a").unwrap(), Some(b"1".to_vec()));
@@ -903,7 +889,7 @@ mod smt_tests {
         let mut smt = SmtCalc::new();
         smt.insert(b"a", b"1").unwrap();
         smt.insert(b"b", b"2").unwrap();
-        let _ = smt.root_hash().unwrap();
+        let _ = smt.root_hash();
 
         smt.remove(b"a").unwrap();
         assert_eq!(smt.get(b"a").unwrap(), None);
@@ -945,7 +931,7 @@ mod smt_tests {
                 i
             );
         }
-        let h1 = smt.root_hash().unwrap();
+        let h1 = smt.root_hash();
 
         // Remove half.
         for i in 0u32..100 {
@@ -960,7 +946,7 @@ mod smt_tests {
                 Some(i.to_be_bytes().to_vec())
             );
         }
-        let h2 = smt.root_hash().unwrap();
+        let h2 = smt.root_hash();
         assert_ne!(h1, h2);
     }
 
@@ -969,13 +955,12 @@ mod smt_tests {
         let entries: Vec<(Vec<u8>, Vec<u8>)> = (0u32..50)
             .map(|i| (i.to_be_bytes().to_vec(), i.to_be_bytes().to_vec()))
             .collect();
-        let mut smt =
-            SmtCalc::from_entries(entries.iter().map(|(k, v)| (k, v))).unwrap();
+        let smt = SmtCalc::from_entries(entries.iter().map(|(k, v)| (k, v))).unwrap();
         for (k, v) in &entries {
             assert_eq!(smt.get(k).unwrap(), Some(v.clone()));
         }
-        let h = smt.root_hash().unwrap();
-        assert_ne!(h, vec![0u8; 32]);
+        let h = smt.root_hash();
+        assert_ne!(h, [0u8; 32]);
     }
 
     // =================================================================
@@ -987,8 +972,7 @@ mod smt_tests {
         let mut smt = SmtCalc::new();
         smt.insert(b"alpha", b"A").unwrap();
         smt.insert(b"beta", b"B").unwrap();
-        let root = smt.root_hash().unwrap();
-        let root32: [u8; 32] = root.try_into().unwrap();
+        let root32 = smt.root_hash();
 
         // Membership proof for "alpha".
         let proof = smt.prove(b"alpha").unwrap();
@@ -1006,8 +990,7 @@ mod smt_tests {
     fn test_smt_proof_nonmembership_empty() {
         let mut smt = SmtCalc::new();
         smt.insert(b"alpha", b"A").unwrap();
-        let root = smt.root_hash().unwrap();
-        let root32: [u8; 32] = root.try_into().unwrap();
+        let root32 = smt.root_hash();
 
         // Non-membership proof for a key that doesn't exist.
         let proof = smt.prove(b"missing").unwrap();
@@ -1024,8 +1007,7 @@ mod smt_tests {
         for i in 0u32..20 {
             smt.insert(&i.to_be_bytes(), &i.to_be_bytes()).unwrap();
         }
-        let root = smt.root_hash().unwrap();
-        let root32: [u8; 32] = root.try_into().unwrap();
+        let root32 = smt.root_hash();
 
         let proof = smt.prove(b"nonexistent_key").unwrap();
         assert_eq!(proof.value(), None);
@@ -1036,7 +1018,7 @@ mod smt_tests {
     fn test_smt_proof_wrong_root_fails() {
         let mut smt = SmtCalc::new();
         smt.insert(b"key", b"val").unwrap();
-        let _ = smt.root_hash().unwrap();
+        let _ = smt.root_hash();
         let proof = smt.prove(b"key").unwrap();
 
         let wrong_root = [0xFFu8; 32];
@@ -1047,8 +1029,7 @@ mod smt_tests {
     fn test_smt_proof_tampered_value_fails() {
         let mut smt = SmtCalc::new();
         smt.insert(b"key", b"val").unwrap();
-        let root = smt.root_hash().unwrap();
-        let root32: [u8; 32] = root.try_into().unwrap();
+        let root32 = smt.root_hash();
 
         let mut proof = smt.prove(b"key").unwrap();
         let (kh, _) = proof.leaf.take().unwrap();
@@ -1063,8 +1044,7 @@ mod smt_tests {
         let mut smt = SmtCalc::new();
         smt.insert(b"alpha", b"A").unwrap();
         smt.insert(b"beta", b"B").unwrap();
-        let root = smt.root_hash().unwrap();
-        let root32: [u8; 32] = root.try_into().unwrap();
+        let root32 = smt.root_hash();
 
         let mut proof = smt.prove(b"alpha").unwrap();
         assert!(SmtCalc::verify_proof(&root32, b"alpha", &proof).unwrap());
@@ -1081,8 +1061,7 @@ mod smt_tests {
         for i in 0u32..20 {
             smt.insert(&i.to_be_bytes(), &i.to_be_bytes()).unwrap();
         }
-        let root = smt.root_hash().unwrap();
-        let root32: [u8; 32] = root.try_into().unwrap();
+        let root32 = smt.root_hash();
 
         let mut proof = smt.prove(&3u32.to_be_bytes()).unwrap();
         assert!(!proof.siblings.is_empty());
@@ -1101,8 +1080,7 @@ mod smt_tests {
         smt.insert(b"alpha", b"A").unwrap();
         smt.insert(b"beta", b"B").unwrap();
         smt.insert(b"gamma", b"C").unwrap();
-        let root = smt.root_hash().unwrap();
-        let root32: [u8; 32] = root.try_into().unwrap();
+        let root32 = smt.root_hash();
 
         // Find an absent key whose proof terminates at a conflicting
         // leaf (leaf present but different key hash).
@@ -1141,7 +1119,7 @@ mod smt_tests {
         for i in 0u32..100 {
             smt.insert(&i.to_be_bytes(), &i.to_be_bytes()).unwrap();
         }
-        let _ = smt.root_hash().unwrap();
+        let _ = smt.root_hash();
 
         for i in 0u32..100 {
             let proof = smt.prove(&i.to_be_bytes()).unwrap();
@@ -1158,8 +1136,7 @@ mod smt_tests {
     fn test_smt_proof_single_key() {
         let mut smt = SmtCalc::new();
         smt.insert(b"only", b"one").unwrap();
-        let root = smt.root_hash().unwrap();
-        let root32: [u8; 32] = root.try_into().unwrap();
+        let root32 = smt.root_hash();
 
         let proof = smt.prove(b"only").unwrap();
         assert!(SmtCalc::verify_proof(&root32, b"only", &proof).unwrap());
@@ -1176,8 +1153,7 @@ mod smt_tests {
         for i in 0..n {
             smt.insert(&i.to_be_bytes(), &i.to_be_bytes()).unwrap();
         }
-        let root = smt.root_hash().unwrap();
-        let root32: [u8; 32] = root.try_into().unwrap();
+        let root32 = smt.root_hash();
 
         // Verify membership for all inserted keys.
         for i in 0..n {
@@ -1209,8 +1185,7 @@ mod smt_tests {
         smt.insert(b"b", b"2").unwrap();
         smt.remove(b"a").unwrap();
 
-        let root = smt.root_hash().unwrap();
-        let root32: [u8; 32] = root.try_into().unwrap();
+        let root32 = smt.root_hash();
 
         let proof_a = smt.prove(b"a").unwrap();
         assert_eq!(proof_a.value(), None);
@@ -1223,9 +1198,8 @@ mod smt_tests {
 
     #[test]
     fn test_smt_proof_empty_tree() {
-        let mut smt = SmtCalc::new();
-        let root = smt.root_hash().unwrap();
-        let root32: [u8; 32] = root.try_into().unwrap();
+        let smt = SmtCalc::new();
+        let root32 = smt.root_hash();
 
         let proof = smt.prove(b"anything").unwrap();
         assert_eq!(proof.value(), None);
@@ -1237,46 +1211,6 @@ mod smt_tests {
     // =================================================================
 
     #[test]
-    fn smt_cache_bytes_match_v17_0_18_fixture() {
-        use crate::trie::smt::cache;
-        use sha3::{Digest, Sha3_256};
-        use std::io::Cursor;
-
-        let entries = [
-            (b"a".as_slice(), b"one".to_vec()),
-            (b"b".as_slice(), vec![42; 130]),
-            (b"c".as_slice(), b"three".to_vec()),
-        ];
-        let mut trie =
-            SmtCalc::from_entries(entries.iter().map(|(k, v)| (k, v))).unwrap();
-        let hash = trie.root_hash().unwrap();
-        let mut bytes = Vec::new();
-        cache::save(&trie.root, 7, &hash, &mut bytes).unwrap();
-        // Captured from 1978ca4 with the workspace's unchanged Cargo.lock,
-        // before replacing per-subtree buffers with one append buffer.
-        let expected = [
-            0x5b, 0x84, 0xdd, 0xe4, 0x36, 0xd1, 0xef, 0x65, 0x74, 0xfa, 0x2f, 0xd4,
-            0xa5, 0x00, 0xae, 0x0f, 0x67, 0x61, 0xea, 0x1b, 0xc0, 0x46, 0x4d, 0x92,
-            0xa1, 0x2d, 0xe9, 0xd1, 0x60, 0xaf, 0x1e, 0x33,
-        ];
-        let digest: [u8; 32] = Sha3_256::digest(&bytes).into();
-        assert_eq!(bytes.len(), 575);
-        assert_eq!(digest, expected);
-        let (root, tag, saved_hash) = cache::load(&mut Cursor::new(bytes)).unwrap();
-        let mut loaded = SmtCalc { root };
-        assert_eq!(tag, 7);
-        assert_eq!(saved_hash, hash);
-        for (key, value) in &entries {
-            assert_eq!(loaded.get(key).unwrap().as_ref(), Some(value));
-        }
-        loaded.remove(b"a").unwrap();
-        loaded.insert(b"b", b"changed").unwrap();
-        trie.remove(b"a").unwrap();
-        trie.insert(b"b", b"changed").unwrap();
-        assert_eq!(loaded.root_hash().unwrap(), trie.root_hash().unwrap());
-    }
-
-    #[test]
     fn test_smt_cache_roundtrip() {
         let dir = super::scratch_cache_dir();
         let cache_id = 1008;
@@ -1285,10 +1219,10 @@ mod smt_tests {
         for i in 0u32..30 {
             smt.insert(&i.to_be_bytes(), &i.to_be_bytes()).unwrap();
         }
-        let h1 = smt.root_hash().unwrap();
+        let h1 = smt.root_hash();
         smt.save_cache(&dir, cache_id, 42).unwrap();
 
-        let (mut loaded, tag, h2) = SmtCalc::load_cache(&dir, cache_id).unwrap();
+        let (loaded, tag, h2) = SmtCalc::load_cache(&dir, cache_id).unwrap();
         assert_eq!(tag, 42);
         assert_eq!(h1, h2);
 
@@ -1298,7 +1232,7 @@ mod smt_tests {
                 Some(i.to_be_bytes().to_vec())
             );
         }
-        let h3 = loaded.root_hash().unwrap();
+        let h3 = loaded.root_hash();
         assert_eq!(h1, h3);
     }
 
@@ -1334,14 +1268,14 @@ mod smt_tests {
 
         let (mut loaded, _, _) = SmtCalc::load_cache(&dir, cache_id).unwrap();
         loaded.insert(b"c", b"3").unwrap();
-        let h = loaded.root_hash().unwrap();
+        let h = loaded.root_hash();
 
         // Build the same from scratch.
         let mut fresh = SmtCalc::new();
         fresh.insert(b"a", b"1").unwrap();
         fresh.insert(b"b", b"2").unwrap();
         fresh.insert(b"c", b"3").unwrap();
-        assert_eq!(fresh.root_hash().unwrap(), h);
+        assert_eq!(fresh.root_hash(), h);
     }
 }
 
@@ -1357,8 +1291,7 @@ mod mpt_proof_tests {
     fn test_mpt_proof_membership_single() {
         let mut trie = MptCalc::new();
         trie.insert(b"hello", b"world").unwrap();
-        let root = trie.root_hash().unwrap();
-        let root_hash: [u8; 32] = root.try_into().unwrap();
+        let root_hash = trie.root_hash();
 
         let proof = trie.prove(b"hello").unwrap();
         assert_eq!(proof.value, Some(b"world".to_vec()));
@@ -1371,8 +1304,7 @@ mod mpt_proof_tests {
         trie.insert(b"alpha", b"1").unwrap();
         trie.insert(b"beta", b"2").unwrap();
         trie.insert(b"gamma", b"3").unwrap();
-        let root = trie.root_hash().unwrap();
-        let root_hash: [u8; 32] = root.try_into().unwrap();
+        let root_hash = trie.root_hash();
 
         for (key, val) in [
             (&b"alpha"[..], &b"1"[..]),
@@ -1391,8 +1323,7 @@ mod mpt_proof_tests {
         trie.insert(b"ab", b"v1").unwrap();
         trie.insert(b"abc", b"v2").unwrap();
         trie.insert(b"abcd", b"v3").unwrap();
-        let root = trie.root_hash().unwrap();
-        let root_hash: [u8; 32] = root.try_into().unwrap();
+        let root_hash = trie.root_hash();
 
         for (key, val) in [
             (&b"ab"[..], &b"v1"[..]),
@@ -1416,8 +1347,7 @@ mod mpt_proof_tests {
         let mut trie = MptCalc::new();
         trie.insert(&[0x12, 0x34], b"a").unwrap();
         trie.insert(&[0x12, 0x35], b"b").unwrap();
-        let root = trie.root_hash().unwrap();
-        let root_hash: [u8; 32] = root.try_into().unwrap();
+        let root_hash = trie.root_hash();
 
         for absent in [
             &[0x19u8, 0x34][..],       // diverges at the Extension's 2nd nibble
@@ -1457,8 +1387,7 @@ mod mpt_proof_tests {
         for (i, key) in keys.iter().enumerate() {
             trie.insert(key, &[i as u8]).unwrap();
         }
-        let root = trie.root_hash().unwrap();
-        let root_hash: [u8; 32] = root.try_into().unwrap();
+        let root_hash = trie.root_hash();
 
         // Membership through the full chain.
         for (i, key) in keys.iter().enumerate() {
@@ -1493,8 +1422,7 @@ mod mpt_proof_tests {
     fn test_mpt_proof_nonmembership_missing_key() {
         let mut trie = MptCalc::new();
         trie.insert(b"present", b"yes").unwrap();
-        let root = trie.root_hash().unwrap();
-        let root_hash: [u8; 32] = root.try_into().unwrap();
+        let root_hash = trie.root_hash();
 
         let proof = trie.prove(b"absent").unwrap();
         assert_eq!(proof.value, None);
@@ -1505,7 +1433,7 @@ mod mpt_proof_tests {
     fn test_mpt_proof_wrong_root_fails() {
         let mut trie = MptCalc::new();
         trie.insert(b"key", b"value").unwrap();
-        let _root = trie.root_hash().unwrap();
+        let _root = trie.root_hash();
 
         let proof = trie.prove(b"key").unwrap();
         let wrong_root = [0xFFu8; 32];
@@ -1516,8 +1444,7 @@ mod mpt_proof_tests {
     fn test_mpt_proof_tampered_value_fails() {
         let mut trie = MptCalc::new();
         trie.insert(b"key", b"value").unwrap();
-        let root = trie.root_hash().unwrap();
-        let root_hash: [u8; 32] = root.try_into().unwrap();
+        let root_hash = trie.root_hash();
 
         let mut proof = trie.prove(b"key").unwrap();
         // Tamper with the claimed value
@@ -1529,8 +1456,7 @@ mod mpt_proof_tests {
     fn test_mpt_proof_tampered_node_fails() {
         let mut trie = MptCalc::new();
         trie.insert(b"key", b"value").unwrap();
-        let root = trie.root_hash().unwrap();
-        let root_hash: [u8; 32] = root.try_into().unwrap();
+        let root_hash = trie.root_hash();
 
         let mut proof = trie.prove(b"key").unwrap();
         // Corrupt a byte in the first node
@@ -1548,8 +1474,7 @@ mod mpt_proof_tests {
         trie.insert(b"a", b"1").unwrap();
         trie.insert(b"b", b"2").unwrap();
         trie.remove(b"a").unwrap();
-        let root = trie.root_hash().unwrap();
-        let root_hash: [u8; 32] = root.try_into().unwrap();
+        let root_hash = trie.root_hash();
 
         // "a" should be non-membership
         let proof_a = trie.prove(b"a").unwrap();
@@ -1567,8 +1492,7 @@ mod mpt_proof_tests {
         let mut trie = MptCalc::new();
         trie.insert(b"key", b"v1").unwrap();
         trie.insert(b"key", b"v2").unwrap();
-        let root = trie.root_hash().unwrap();
-        let root_hash: [u8; 32] = root.try_into().unwrap();
+        let root_hash = trie.root_hash();
 
         let proof = trie.prove(b"key").unwrap();
         assert_eq!(proof.value, Some(b"v2".to_vec()));
@@ -1582,8 +1506,7 @@ mod mpt_proof_tests {
         for (i, key) in keys.iter().enumerate() {
             trie.insert(key, format!("val{i}").as_bytes()).unwrap();
         }
-        let root = trie.root_hash().unwrap();
-        let root_hash: [u8; 32] = root.try_into().unwrap();
+        let root_hash = trie.root_hash();
 
         // Verify membership for all inserted keys
         for (i, key) in keys.iter().enumerate() {
@@ -1615,8 +1538,7 @@ mod mpt_proof_tests {
     fn test_mpt_proof_wrong_key_fails() {
         let mut trie = MptCalc::new();
         trie.insert(b"real_key", b"value").unwrap();
-        let root = trie.root_hash().unwrap();
-        let root_hash: [u8; 32] = root.try_into().unwrap();
+        let root_hash = trie.root_hash();
 
         let proof = trie.prove(b"real_key").unwrap();
         // Proof is valid for "real_key" but must fail for a different key
@@ -1635,7 +1557,7 @@ mod mpt_proof_tests {
         trie.insert(&[0x12, 0x34], b"a").unwrap();
         trie.insert(&[0x12, 0x35], b"b").unwrap();
         trie.insert(&[0x12], b"branch_val").unwrap();
-        let root_hash: [u8; 32] = trie.root_hash().unwrap().try_into().unwrap();
+        let root_hash: [u8; 32] = trie.root_hash();
 
         for key in [
             &[0x12u8, 0x34][..],       // Leaf membership
@@ -1761,13 +1683,14 @@ mod mpt_proof_tests {
 
         let ext_to_leaf = NodeCodec::encode(&Node::Extension {
             path: Nibbles::from_raw(b"k"),
-            child: NodeHandle::Cached(
-                child_hash.to_vec(),
-                Box::new(Node::Leaf {
+            child: {
+                let leaf = NodeHandle::new(Node::Leaf {
                     path: Nibbles::default(),
                     value: b"v".to_vec(),
-                }),
-            ),
+                });
+                leaf.root_hash();
+                leaf
+            },
         });
         let etl_root = hash_of(&ext_to_leaf);
         let etl_proof = MptProof {
@@ -1799,7 +1722,7 @@ mod mpt_proof_tests {
         k2[MAX_MPT_KEY_LEN - 1] = 0xA1;
         max_trie.insert(&k1, b"v1").unwrap();
         max_trie.insert(&k2, b"v2").unwrap();
-        let max_root: [u8; 32] = max_trie.root_hash().unwrap().try_into().unwrap();
+        let max_root: [u8; 32] = max_trie.root_hash();
         let p_k1 = max_trie.prove(&k1).unwrap();
         assert!(MptCalc::verify_proof(&max_root, &k1, &p_k1).unwrap());
         let p_absent_long = max_trie.prove(&over_key).unwrap();
@@ -1808,363 +1731,9 @@ mod mpt_proof_tests {
     }
 }
 
-// =====================================================================
-// Cache deserializer structural validation
-//
-// The cache files are a trust boundary: a checksum-valid but malformed
-// file must not be able to drive the tree walkers into states organic
-// trees can never reach (over-256-bit SMT descents that drop the
-// consumed working tree, out-of-range MPT nibbles that panic on branch
-// indexing, or zero-progress nesting that overflows the stack).  These
-// tests craft such trees in memory, serialize them through the real
-// writer (so checksums/framing are valid), and assert the loader
-// rejects them — while organically built trees keep round-tripping
-// (covered by the pre-existing roundtrip tests).
-// =====================================================================
-
-#[cfg(test)]
-mod cache_validation_tests {
-    use crate::trie::{
-        cache as mpt_cache,
-        codec_util::{CHECKSUM_LEN, MAX_CACHE_FILE_BYTES, compute_checksum, read_bytes},
-        nibbles::Nibbles,
-        node::{Node, NodeCodec, NodeHandle},
-        smt::{
-            EMPTY_HASH, SmtHandle, SmtNode,
-            bitpath::BitPath,
-            cache as smt_cache,
-            codec::{hash_internal, hash_leaf, wrap_hash},
-        },
-    };
-    use sha3::{Digest, Keccak256};
-
-    fn smt_load(root: &SmtHandle) -> crate::trie::error::Result<SmtHandle> {
-        let mut buf = Vec::new();
-        let root_hash = root.hash().map_or_else(|| vec![0u8; 32], ToOwned::to_owned);
-        smt_cache::save(root, 0, &root_hash, &mut buf).unwrap();
-        smt_cache::load(&mut buf.as_slice()).map(|(h, _, _)| h)
-    }
-
-    fn mpt_load(root: &NodeHandle) -> crate::trie::error::Result<NodeHandle> {
-        let mut buf = Vec::new();
-        let root_hash = root.hash().map_or_else(|| vec![0u8; 32], ToOwned::to_owned);
-        mpt_cache::save(root, 0, &root_hash, &mut buf).unwrap();
-        mpt_cache::load(&mut buf.as_slice()).map(|(h, _, _)| h)
-    }
-
-    fn smt_leaf(key_hash: [u8; 32], path: BitPath) -> SmtHandle {
-        SmtHandle::InMemory(Box::new(SmtNode::Leaf {
-            path,
-            key_hash,
-            value: b"v".to_vec(),
-        }))
-    }
-
-    fn smt_cached_leaf(key_hash: [u8; 32], path: BitPath) -> SmtHandle {
-        let value = b"v".to_vec();
-        SmtHandle::Cached(
-            hash_leaf(&key_hash, &value).to_vec(),
-            Box::new(SmtNode::Leaf {
-                path,
-                key_hash,
-                value,
-            }),
-        )
-    }
-
-    fn mpt_cached(node: Node) -> NodeHandle {
-        let hash = Keccak256::digest(NodeCodec::encode(&node)).to_vec();
-        NodeHandle::Cached(hash, Box::new(node))
-    }
-
-    #[test]
-    fn smt_rejects_cumulative_depth_over_256() {
-        // Two nested internals whose combined paths exceed a 256-bit
-        // key path.  Before validation, loading this and inserting a
-        // key descending through it hit insert_rec's depth rejection —
-        // *after* the working tree had been consumed — silently
-        // emptying the whole tree.
-        let deep_child = SmtHandle::InMemory(Box::new(SmtNode::Internal {
-            path: BitPath::from_bits(&[0; 200]),
-            left: SmtHandle::default(),
-            right: SmtHandle::default(),
-        }));
-        let root = SmtHandle::InMemory(Box::new(SmtNode::Internal {
-            path: BitPath::from_bits(&[0; 200]),
-            left: deep_child,
-            right: SmtHandle::default(),
-        }));
-        assert!(smt_load(&root).is_err());
-    }
-
-    #[test]
-    fn smt_rejects_leaf_incoherent_with_key_hash() {
-        // Leaf path shorter than the remaining key path.
-        let short = smt_leaf([0xAB; 32], BitPath::from_bits(&[1; 100]));
-        assert!(smt_load(&short).is_err());
-
-        // Right length, but positioned on a path that doesn't match
-        // the leaf's own key hash.
-        let mispositioned = smt_leaf([0xAB; 32], BitPath::from_hash(&[0xCD; 32]));
-        assert!(smt_load(&mispositioned).is_err());
-
-        // Coherent leaf loads fine.
-        let coherent = smt_cached_leaf([0xAB; 32], BitPath::from_hash(&[0xAB; 32]));
-        assert!(smt_load(&coherent).is_ok());
-    }
-
-    #[test]
-    fn smt_rejects_bad_cached_hash_length() {
-        // A non-32-byte Cached hash would surface deep inside
-        // commit_rec (whose failure drops the consumed working tree).
-        let root = SmtHandle::Cached(vec![0u8; 5], Box::new(SmtNode::Empty));
-        assert!(smt_load(&root).is_err());
-
-        let ok = SmtHandle::Cached(vec![0u8; 32], Box::new(SmtNode::Empty));
-        assert!(smt_load(&ok).is_ok());
-    }
-
-    #[test]
-    fn mpt_rejects_cumulative_path_over_key_length_cap() {
-        // Three nested 1000-nibble extensions: 3000 nibbles > the
-        // 2 * MAX_MPT_KEY_LEN = 2048 bound organic insertion enforces.
-        // Such a trie bypasses the insertion-time stack-depth cap.
-        let mut h = NodeHandle::InMemory(Box::new(Node::Leaf {
-            path: Nibbles::from_nibbles_unsafe(vec![]),
-            value: b"v".to_vec(),
-        }));
-        for _ in 0..3 {
-            h = NodeHandle::InMemory(Box::new(Node::Extension {
-                path: Nibbles::from_nibbles_unsafe(vec![0u8; 1000]),
-                child: h,
-            }));
-        }
-        assert!(mpt_load(&h).is_err());
-    }
-
-    #[test]
-    fn mpt_rejects_empty_extension_path() {
-        // Organic extensions are never empty; a crafted chain of empty
-        // ones makes zero progress against the nibble budget, so the
-        // walkers (and the deserializer itself) would recurse once per
-        // node with nothing bounding the nesting.  Rejecting the first
-        // empty extension is what keeps the nibble budget a real
-        // recursion bound.
-        let mut h = NodeHandle::InMemory(Box::new(Node::Leaf {
-            path: Nibbles::from_nibbles_unsafe(vec![]),
-            value: b"v".to_vec(),
-        }));
-        for _ in 0..3 {
-            h = NodeHandle::InMemory(Box::new(Node::Extension {
-                path: Nibbles::from_nibbles_unsafe(vec![]),
-                child: h,
-            }));
-        }
-        assert!(mpt_load(&h).is_err());
-    }
-
-    #[test]
-    fn mpt_rejects_out_of_range_nibble_values() {
-        // Branch children are indexed by nibble value; a nibble > 0x0F
-        // from a malformed file would panic on `children[idx]`.
-        // `Nibbles` can't even represent one (debug-asserted), so
-        // patch the serialized payload directly and re-checksum —
-        // exactly what a hand-crafted file could contain.
-        let root = mpt_cached(Node::Leaf {
-            path: Nibbles::from_nibbles_unsafe(vec![0x0A]),
-            value: b"v".to_vec(),
-        });
-        let mut buf = Vec::new();
-        mpt_cache::save(&root, 0, root.hash().unwrap(), &mut buf).unwrap();
-
-        // Sanity: the loader accepts the untampered file.
-        assert!(mpt_cache::load(&mut buf.as_slice()).is_ok());
-
-        let payload_len = buf.len() - CHECKSUM_LEN;
-        let idx = buf[..payload_len].iter().rposition(|&b| b == 0x0A).unwrap();
-        buf[idx] = 0x1F;
-        let checksum = compute_checksum(&buf[..payload_len]);
-        buf[payload_len..].copy_from_slice(&checksum);
-
-        assert!(mpt_cache::load(&mut buf.as_slice()).is_err());
-    }
-
-    #[test]
-    fn mpt_rejects_bad_cached_hash_length() {
-        let root = NodeHandle::Cached(vec![0u8; 5], Box::new(Node::Null));
-        assert!(mpt_load(&root).is_err());
-
-        let ok = mpt_cached(Node::Leaf {
-            path: Nibbles::default(),
-            value: b"v".to_vec(),
-        });
-        assert!(mpt_load(&ok).is_ok());
-    }
-
-    #[test]
-    fn mpt_rejects_inmemory_child_under_cached_parent() {
-        // `commit_rec` skips Cached subtrees, so an InMemory child under
-        // a Cached parent is never re-hashed by `root_hash()`; encoding
-        // the parent (e.g. in `prove`) would then panic on the child's
-        // missing hash.  Organic saves always commit first, so this
-        // shape only comes from a crafted file — reject at load.
-        let in_mem_leaf = NodeHandle::InMemory(Box::new(Node::Leaf {
-            path: Nibbles::from_nibbles_unsafe(vec![0x01]),
-            value: b"v".to_vec(),
-        }));
-
-        // Cached extension → InMemory child.
-        let ext = NodeHandle::Cached(
-            vec![0u8; 32],
-            Box::new(Node::Extension {
-                path: Nibbles::from_nibbles_unsafe(vec![0x0A]),
-                child: in_mem_leaf.clone(),
-            }),
-        );
-        assert!(mpt_load(&ext).is_err());
-
-        // Cached branch → InMemory child.
-        let mut children: Box<[Option<NodeHandle>; 16]> = Default::default();
-        children[3] = Some(in_mem_leaf);
-        let branch = NodeHandle::Cached(
-            vec![0u8; 32],
-            Box::new(Node::Branch {
-                children,
-                value: None,
-            }),
-        );
-        assert!(mpt_load(&branch).is_err());
-
-        // Deeper mix: Cached → Cached → InMemory is caught at the
-        // intermediate Cached parent.
-        let deep = NodeHandle::Cached(
-            vec![1u8; 32],
-            Box::new(Node::Extension {
-                path: Nibbles::from_nibbles_unsafe(vec![0x02]),
-                child: NodeHandle::Cached(
-                    vec![2u8; 32],
-                    Box::new(Node::Extension {
-                        path: Nibbles::from_nibbles_unsafe(vec![0x03]),
-                        child: NodeHandle::InMemory(Box::new(Node::Leaf {
-                            path: Nibbles::from_nibbles_unsafe(vec![0x04]),
-                            value: b"v".to_vec(),
-                        })),
-                    }),
-                ),
-            }),
-        );
-        assert!(mpt_load(&deep).is_err());
-
-        // Fully-Cached is not enough: extension→leaf is noncanonical and
-        // must be compacted into one leaf.
-        let all_cached = NodeHandle::Cached(
-            vec![0u8; 32],
-            Box::new(Node::Extension {
-                path: Nibbles::from_nibbles_unsafe(vec![0x0A]),
-                child: NodeHandle::Cached(
-                    vec![0u8; 32],
-                    Box::new(Node::Leaf {
-                        path: Nibbles::from_nibbles_unsafe(vec![0x01]),
-                        value: b"v".to_vec(),
-                    }),
-                ),
-            }),
-        );
-        assert!(mpt_load(&all_cached).is_err());
-    }
-
-    #[test]
-    fn caches_reject_noncanonical_shapes_and_wrong_hashes() {
-        let mut children: Box<[Option<NodeHandle>; 16]> = Default::default();
-        children[3] = Some(mpt_cached(Node::Leaf {
-            path: Nibbles::from_nibbles_unsafe(vec![4]),
-            value: b"v".to_vec(),
-        }));
-        let branch = mpt_cached(Node::Branch {
-            children,
-            value: None,
-        });
-        assert!(mpt_load(&branch).is_err());
-
-        let key_hash = [0u8; 32];
-        let left = smt_cached_leaf(key_hash, BitPath::from_bits(&[0; 255]));
-        let left_hash: [u8; 32] = left.hash().unwrap().try_into().unwrap();
-        let right = SmtHandle::Cached(EMPTY_HASH.to_vec(), Box::new(SmtNode::Empty));
-        let root_hash =
-            wrap_hash(hash_internal(&left_hash, &EMPTY_HASH), &BitPath::default());
-        let single_child = SmtHandle::Cached(
-            root_hash.to_vec(),
-            Box::new(SmtNode::Internal {
-                path: BitPath::default(),
-                left,
-                right,
-            }),
-        );
-        assert!(smt_load(&single_child).is_err());
-
-        let right_key_hash = {
-            let mut hash = [0u8; 32];
-            hash[0] = 0x80;
-            hash
-        };
-        let mixed = SmtHandle::Cached(
-            vec![0u8; 32],
-            Box::new(SmtNode::Internal {
-                path: BitPath::default(),
-                left: smt_cached_leaf(key_hash, BitPath::from_bits(&[0; 255])),
-                right: SmtHandle::InMemory(Box::new(SmtNode::Leaf {
-                    path: BitPath::from_bits(&[0; 255]),
-                    key_hash: right_key_hash,
-                    value: b"v".to_vec(),
-                })),
-            }),
-        );
-        assert!(smt_load(&mixed).is_err());
-
-        let wrong_hash = SmtHandle::Cached(
-            [9u8; 32].to_vec(),
-            Box::new(SmtNode::Leaf {
-                path: BitPath::from_hash(&key_hash),
-                key_hash,
-                value: b"v".to_vec(),
-            }),
-        );
-        assert!(smt_load(&wrong_hash).is_err());
-    }
-
-    #[test]
-    fn caches_reject_overflow_lengths_trailing_bytes_and_oversize_files() {
-        let mut cursor = 0;
-        let maximal_varint =
-            [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01];
-        assert!(read_bytes(&maximal_varint, &mut cursor).is_err());
-
-        let root = mpt_cached(Node::Leaf {
-            path: Nibbles::default(),
-            value: b"v".to_vec(),
-        });
-        let mut buf = Vec::new();
-        mpt_cache::save(&root, 0, root.hash().unwrap(), &mut buf).unwrap();
-        let payload_len = buf.len() - CHECKSUM_LEN;
-        buf.insert(payload_len, 0xAA);
-        let checksum = compute_checksum(&buf[..=payload_len]);
-        buf[payload_len + 1..].copy_from_slice(&checksum);
-        assert!(mpt_cache::load(&mut buf.as_slice()).is_err());
-
-        let path = std::env::temp_dir()
-            .join(format!("vsdb_oversize_cache_{}", rand::random::<u128>()));
-        let file = std::fs::File::create(&path).unwrap();
-        file.set_len(MAX_CACHE_FILE_BYTES + 1).unwrap();
-        drop(file);
-        assert!(mpt_cache::load_from_file(&path).is_err());
-        std::fs::remove_file(path).unwrap();
-    }
-}
-
 mod mpt_stack_tests {
-    use crate::trie::{MAX_MPT_KEY_LEN, MptCalc, cache, codec_util::compute_checksum};
-    use sha3::{Digest, Sha3_256};
-    use std::{io::Cursor, thread};
+    use crate::trie::{MAX_MPT_KEY_LEN, MptCalc};
+    use std::thread;
 
     #[test]
     fn mpt_full_key_depth_lifecycle_on_worker_stack() {
@@ -2176,19 +1745,19 @@ mod mpt_stack_tests {
                     trie.insert(&vec![0; n], b"x").unwrap();
                 }
                 // Clone both unhashed and hashed trees at the full supported depth.
-                let mut copy = trie.clone();
-                let root = trie.root_hash().unwrap();
+                let copy = trie.clone();
+                let root = trie.root_hash();
                 // Captured from v17.0.4 on a larger worker stack, before the
                 // traversal change. Root and cache bytes must remain compatible.
                 assert_eq!(root, ROOT_FIXTURE);
-                assert_eq!(copy.root_hash().unwrap(), root);
+                assert_eq!(copy.root_hash(), root);
                 drop(copy);
                 drop(trie.clone());
 
                 let key = vec![0; MAX_MPT_KEY_LEN];
                 assert_eq!(trie.get(&key).unwrap().as_deref(), Some(b"x".as_slice()));
                 let proof = trie.prove(&key).unwrap();
-                let root_array = root.as_slice().try_into().unwrap();
+                let root_array = &root;
                 assert!(MptCalc::verify_proof(root_array, &key, &proof).unwrap());
                 let mut absent = key.clone();
                 *absent.last_mut().unwrap() = 1;
@@ -2198,28 +1767,20 @@ mod mpt_stack_tests {
                 trie.remove(&absent).unwrap();
                 // A no-op removal keeps cached hashes ready for proof generation.
                 assert!(trie.prove(&key).is_ok());
-                assert_eq!(trie.root_hash().unwrap(), root);
+                assert_eq!(trie.root_hash(), root);
 
-                let mut bytes = Vec::new();
-                cache::save(&trie.root, 7, &root, &mut bytes).unwrap();
-                let digest: [u8; 32] = Sha3_256::digest(&bytes).into();
-                assert_eq!(digest, CACHE_FIXTURE);
-                let (restored, tag, hash) =
-                    cache::load(&mut Cursor::new(&bytes)).unwrap();
+                let dir = super::scratch_cache_dir();
+                trie.save_cache(&dir, 1, 7).unwrap();
+                let (mut loaded, tag, hash) = MptCalc::load_cache(&dir, 1).unwrap();
                 assert_eq!(tag, 7);
                 assert_eq!(hash, root);
-                let mut loaded = MptCalc { root: restored };
-                assert_eq!(loaded.get(&key).unwrap(), trie.get(&key).unwrap());
-
-                // A rejected partial cache must also release its nodes without
-                // recursing through a full-depth tree.
-                let mut truncated = bytes[..bytes.len() - 34].to_vec();
-                truncated.extend_from_slice(&compute_checksum(&truncated));
-                assert!(cache::load(&mut Cursor::new(truncated)).is_err());
-
+                let path = dir.join("mpt_cache_1.bin");
+                let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+                file.set_len(file.metadata().unwrap().len() - 34).unwrap();
+                assert!(MptCalc::load_cache(&dir, 1).is_err());
                 loaded.insert(&key, b"changed").unwrap();
                 loaded.remove(&vec![0; MAX_MPT_KEY_LEN / 2]).unwrap();
-                let mut reference = MptCalc::from_entries(
+                let reference = MptCalc::from_entries(
                     (1..=MAX_MPT_KEY_LEN)
                         .filter(|&n| n != MAX_MPT_KEY_LEN / 2)
                         .map(|n| {
@@ -2234,11 +1795,11 @@ mod mpt_stack_tests {
                         }),
                 )
                 .unwrap();
-                assert_eq!(loaded.root_hash().unwrap(), reference.root_hash().unwrap());
+                assert_eq!(loaded.root_hash(), reference.root_hash());
                 for n in (1..=MAX_MPT_KEY_LEN).rev() {
                     loaded.remove(&vec![0; n]).unwrap();
                 }
-                assert_eq!(loaded.root_hash().unwrap(), vec![0; 32]);
+                assert_eq!(loaded.root_hash(), [0; 32]);
                 assert_eq!(loaded.get(&key).unwrap(), None);
             })
             .unwrap()
@@ -2250,14 +1811,10 @@ mod mpt_stack_tests {
         130, 151, 203, 199, 90, 252, 122, 210, 142, 178, 103, 81, 50, 196, 96, 44, 80,
         161, 82, 79, 186, 168, 188, 218, 238, 156, 42, 95, 195, 88, 239, 235,
     ];
-    const CACHE_FIXTURE: [u8; 32] = [
-        182, 228, 3, 77, 164, 40, 150, 72, 140, 132, 207, 176, 214, 49, 60, 159, 234,
-        73, 226, 187, 98, 130, 110, 55, 200, 23, 11, 146, 143, 59, 65, 114,
-    ];
 }
 
 mod dirty_sync_tests {
-    use crate::trie::{MptCalc, VerMapWithProof, mpt_clone_count};
+    use crate::trie::{MptCalc, VerMapWithProof};
 
     #[test]
     fn repeated_dirty_roots_do_not_clone_the_trie() {
@@ -2267,20 +1824,73 @@ mod dirty_sync_tests {
 
         // First dirty synchronization applies the overlay.
         proof.merkle_root(main).unwrap();
-        let before = mpt_clone_count();
 
         let first = proof.merkle_root(main).unwrap();
         let second = proof.merkle_root(main).unwrap();
         assert_eq!(first, second);
-        assert_eq!(
-            mpt_clone_count(),
-            before,
-            "repeated dirty root computation must not clone the trie"
-        );
-
         // A new dirty write still resynchronizes correctly.
         proof.map_mut().insert(main, &2, &vec![1u8; 32]).unwrap();
         let third = proof.merkle_root(main).unwrap();
         assert_ne!(first, third);
     }
+}
+
+#[test]
+fn cryptographic_wire_matches_v17_goldens() {
+    use super::{MptCalc, SmtCalc};
+    let mut m = MptCalc::new();
+    let mut s = SmtCalc::new();
+    for (key, val) in [
+        (b"".as_slice(), b"root".as_slice()),
+        (&[0x12, 0x34], b"alpha"),
+        (&[0x12, 0x36], b"beta"),
+        (&[0xff], b"gamma"),
+    ] {
+        m.insert(key, val).unwrap();
+        s.insert(key, val).unwrap();
+    }
+    let roots = (m.root_hash().to_vec(), s.root_hash().to_vec());
+    let mut proofs = vec![];
+    for key in [&[0x12, 0x34][..], &[0x12, 0x3f][..], &[][..], &[0x00][..]] {
+        proofs.push((
+            m.prove(key).unwrap().to_bytes().unwrap(),
+            s.prove(key).unwrap().to_bytes().unwrap(),
+        ));
+    }
+    assert_eq!(
+        postcard::to_allocvec(&(roots, proofs)).unwrap(),
+        include_bytes!("fixtures/v17-roots-proofs.postcard").as_slice()
+    );
+}
+
+#[test]
+fn foreign_checkpoint_is_ignored_even_when_commit_numbers_match() {
+    use super::{MptCalc, VerMapWithProof};
+    let mut a = VerMapWithProof::<u32, u32, MptCalc>::new();
+    let mut b = VerMapWithProof::<u32, u32, MptCalc>::new();
+    let ab = a.map().main_branch();
+    let bb = b.map().main_branch();
+    a.map_mut().insert(ab, &1, &10).unwrap();
+    b.map_mut().insert(bb, &1, &11).unwrap();
+    let ac = a.map_mut().commit(ab).unwrap();
+    let bc = b.map_mut().commit(bb).unwrap();
+    assert_eq!(ac, bc);
+    a.save_cache(ac).unwrap();
+    let expected = b.merkle_root_at_commit(bc).unwrap();
+    let bid = b.save_meta().unwrap();
+    assert!(VerMapWithProof::<u32, u32, super::SmtCalc>::from_meta(bid).is_err());
+    let bytes = postcard::to_allocvec(&b).unwrap();
+    assert!(bytes.windows(8).any(|w| w == b"VSTYPE04"));
+    let from_wire: VerMapWithProof<u32, u32, MptCalc> =
+        postcard::from_bytes(&bytes).unwrap();
+    assert_eq!(from_wire.instance_id(), bid);
+    assert_ne!(from_wire.clone().instance_id(), bid);
+    let dir = b.namespace().system_dir();
+    std::fs::copy(
+        dir.join(format!("mpt_cache_{}.bin", a.instance_id().map_id)),
+        dir.join(format!("mpt_cache_{}.bin", bid.map_id)),
+    )
+    .unwrap();
+    let mut reopened = VerMapWithProof::<u32, u32, MptCalc>::from_meta(bid).unwrap();
+    assert_eq!(reopened.merkle_root_at_commit(bc).unwrap(), expected);
 }

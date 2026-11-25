@@ -1,595 +1,355 @@
-//!
-//! # EnDe (Encode/Decode)
-//!
-//! This module provides traits for encoding and decoding keys and values.
-//! These traits are used by the various data structures in `vsdb` to serialize
-//! and deserialize data for storage.
-//!
-//! # Trust model
-//!
-//! VSDB operates a **closed data loop**: every byte sequence stored on disk
-//! was produced by the same encode path in the same process (or a prior run
-//! of the same binary).  This has two implications for error handling:
-//!
-//! * **Encoding a valid Rust value should never fail.**  The blanket
-//!   implementations delegate to `postcard::to_allocvec`, which can only
-//!   fail if the `Serialize` impl itself is buggy.  Accordingly,
-//!   `KeyEnDe::encode` /
-//!   `ValueEnDe::encode`
-//!   **panic** on error —
-//!   a failure here is a programming bug, not a recoverable runtime
-//!   condition.  Use
-//!   `KeyEnDe::try_encode` /
-//!   `ValueEnDe::try_encode`
-//!   at trust boundaries (e.g. first-time validation of a third-party
-//!   type) where you want a `Result` instead.
-//!
-//! * **Decoding VSDB-written data should never fail.**  VSDB collections
-//!   (`Mapx`, `MapxOrd`, `VerMap`, …) use assert-style `.unwrap()` on
-//!   `decode` calls for data they wrote themselves.  A decode failure in
-//!   this context indicates data corruption or a schema-incompatible code
-//!   change — neither is automatically recoverable.  The `decode` method
-//!   returns `Result` at the **trait level** because the trait cannot
-//!   assume the byte source is trusted; callers at boundaries (e.g.
-//!   [`from_meta`](crate::Mapx::from_meta) reading an on-disk file) use
-//!   `?` to propagate errors normally.
-//!
-//! All fallible methods return [`Result`]
-//! with the ecosystem-wide `VsdbError`,
-//! so implementing these traits for custom types requires no third-party
-//! error dependency.
-//!
+//! Key and value codecs used by the persistent collections.
 
 use super::{
     RawBytes,
     error::{Result, VsdbError},
 };
-use std::{fmt, mem::size_of};
-
 use serde::{Serialize, de::DeserializeOwned};
+use std::{
+    fmt,
+    hash::Hash,
+    ops::{
+        Bound, Range, RangeBounds, RangeFrom, RangeFull, RangeInclusive, RangeTo,
+        RangeToInclusive,
+    },
+};
 
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////
-
-/// A trait for encoding keys.
+/// An equality key must encode canonically: two keys compare equal exactly
+/// when their encodings are identical. The serde blanket requires `Eq + Hash`.
 ///
-/// # Warning
-///
-/// The blanket implementation covers **all** types that implement
-/// [`serde::Serialize`], so it also covers types whose serialization is
-/// **non-deterministic** or **non-canonical**.  Using such a type as a
-/// VSDB key causes lookups to silently miss.
-///
-/// Only use types with **deterministic, canonical** serialization as
-/// keys: integer primitives, `Vec`, `BTreeMap`, `BTreeSet`, tuples,
-/// `String`, and fixed-size arrays are safe.  The following are **not**
-/// safe as key types:
-///
-/// * `HashMap`, `HashSet`, and any wrapper containing them — iteration
-///   order depends on the random `SipHash` seed, so the encoding differs
-///   across process restarts.
-/// * Floating-point types (`f32` / `f64`) and any type containing them —
-///   `+0.0` and `-0.0` are `PartialEq`-equal but encode to different
-///   bytes, and `NaN` never compares equal to itself, so a stored entry
-///   can become unreachable.
-pub trait KeyEn: Sized {
-    /// Attempts to encode the key.  Returns `Err` only if the
-    /// `Serialize` implementation is broken — see [module-level trust
-    /// model](self) for details.
-    fn try_encode_key(&self) -> Result<RawBytes>;
-
-    /// Encodes the key, **panicking** on failure.
-    ///
-    /// This is the normal path inside VSDB collections.  A panic here
-    /// means the type's `Serialize` impl has a bug.
+/// ```compile_fail
+/// let m = vsdb::Mapx::<f64, String>::new();
+/// ```
+/// ```compile_fail
+/// let m = vsdb::Mapx::<std::collections::HashMap<u32, u32>, String>::new();
+/// ```
+pub trait KeyEnDe: Eq + Sized {
+    /// Appends the key encoding to a reusable destination.
+    fn encode_key_into(&self, dst: &mut Vec<u8>) -> Result<()>;
     fn encode_key(&self) -> RawBytes {
-        self.try_encode_key().unwrap()
+        let mut dst = Vec::new();
+        self.encode_key_into(&mut dst).expect("vsdb: encode key");
+        dst
     }
-}
-
-/// A trait for decoding keys.
-pub trait KeyDe: Sized {
-    /// Decodes a key from a byte slice.
-    ///
-    /// Returns `Err` when the bytes are invalid.  VSDB collections use
-    /// assert-style unwraps on this internally because data they wrote is always
-    /// trusted — see [module-level trust model](self).
+    fn with_encoded_key<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
+        f(&self.encode_key())
+    }
     fn decode_key(bytes: &[u8]) -> Result<Self>;
 }
 
-/// A trait for both encoding and decoding keys.
-///
-/// # Warning
-///
-/// Key types must serialize **deterministically and canonically**; see
-/// [`KeyEn`] for the list of unsupported types (`HashMap`, `HashSet`,
-/// floats).  For *ordered* collections the key encoding must additionally
-/// be order-preserving — use [`KeyEnDeOrdered`] there.
-pub trait KeyEnDe: Sized {
-    /// Attempts to encode the key.  Prefer [`encode`](Self::encode) for
-    /// internal VSDB paths; use this at trust boundaries where a `Result`
-    /// is needed.
-    fn try_encode(&self) -> Result<RawBytes>;
-
-    /// Encodes the key, **panicking** on failure.
-    ///
-    /// See [`try_encode`](Self::try_encode) for the fallible variant.
-    fn encode(&self) -> RawBytes {
-        self.try_encode().unwrap()
-    }
-
-    /// Decodes a key from a byte slice.
-    ///
-    /// Returns `Err` when the bytes are invalid.  VSDB collections use
-    /// assert-style unwraps on this internally for data they wrote
-    /// themselves.
-    fn decode(bytes: &[u8]) -> Result<Self>;
-}
-
-/// A trait for encoding values.
-pub trait ValueEn: Sized {
-    /// Attempts to encode the value.  Returns `Err` only if the
-    /// `Serialize` implementation is broken.
-    fn try_encode_value(&self) -> Result<RawBytes>;
-
-    /// Encodes the value, **panicking** on failure.
-    ///
-    /// This is the normal path inside VSDB collections.  A panic here
-    /// means the type's `Serialize` impl has a bug.
+/// Codec for persisted values. Encoding into a caller-supplied buffer is fallible.
+pub trait ValueEnDe: Sized {
+    fn encode_value_into(&self, dst: &mut Vec<u8>) -> Result<()>;
     fn encode_value(&self) -> RawBytes {
-        self.try_encode_value().unwrap()
+        let mut dst = Vec::new();
+        self.encode_value_into(&mut dst)
+            .expect("vsdb: encode value");
+        dst
     }
-}
-
-/// A trait for decoding values.
-pub trait ValueDe: Sized {
-    /// Decodes a value from a byte slice.
-    ///
-    /// Returns `Err` when the bytes are invalid.  VSDB collections use
-    /// assert-style unwraps on this internally because data they wrote is always
-    /// trusted.
     fn decode_value(bytes: &[u8]) -> Result<Self>;
 }
 
-/// A trait for both encoding and decoding values.
-pub trait ValueEnDe: Sized {
-    /// Attempts to encode the value.  Prefer [`encode`](Self::encode) for
-    /// internal VSDB paths; use this at trust boundaries where a `Result`
-    /// is needed.
-    fn try_encode(&self) -> Result<RawBytes>;
-
-    /// Encodes the value, **panicking** on failure.
-    ///
-    /// See [`try_encode`](Self::try_encode) for the fallible variant.
-    fn encode(&self) -> RawBytes {
-        self.try_encode().unwrap()
-    }
-
-    /// Decodes a value from a byte slice.
-    ///
-    /// Returns `Err` when the bytes are invalid.  VSDB collections use
-    /// assert-style unwraps on this internally for data they wrote
-    /// themselves.
-    fn decode(bytes: &[u8]) -> Result<Self>;
-}
-
-impl<T: Serialize> KeyEn for T {
-    fn try_encode_key(&self) -> Result<RawBytes> {
-        Ok(postcard::to_allocvec(self)?)
+fn postcard_key<T: Serialize + ?Sized, R>(key: &T, f: impl FnOnce(&[u8]) -> R) -> R {
+    let mut buf = [0; 128];
+    match postcard::to_slice(key, &mut buf) {
+        Ok(bytes) => f(bytes),
+        Err(postcard::Error::SerializeBufferFull) => {
+            f(&postcard::to_allocvec(key).expect("vsdb: encode key"))
+        }
+        Err(e) => panic!("vsdb: encode key: {e}"),
     }
 }
-
-impl<T: DeserializeOwned> KeyDe for T {
+impl<T: Serialize + DeserializeOwned + Eq + Hash> KeyEnDe for T {
+    fn encode_key_into(&self, dst: &mut Vec<u8>) -> Result<()> {
+        postcard::to_io(self, dst)?;
+        Ok(())
+    }
+    fn with_encoded_key<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
+        postcard_key(self, f)
+    }
     fn decode_key(bytes: &[u8]) -> Result<Self> {
         Ok(postcard::from_bytes(bytes)?)
     }
 }
-
-impl<T: Serialize> ValueEn for T {
-    fn try_encode_value(&self) -> Result<RawBytes> {
-        Ok(postcard::to_allocvec(self)?)
+impl<T: Serialize + DeserializeOwned> ValueEnDe for T {
+    fn encode_value_into(&self, dst: &mut Vec<u8>) -> Result<()> {
+        postcard::to_io(self, dst)?;
+        Ok(())
     }
-}
-
-impl<T: DeserializeOwned> ValueDe for T {
     fn decode_value(bytes: &[u8]) -> Result<Self> {
         Ok(postcard::from_bytes(bytes)?)
     }
 }
 
-impl<T: KeyEn + KeyDe> KeyEnDe for T {
-    fn try_encode(&self) -> Result<RawBytes> {
-        <Self as KeyEn>::try_encode_key(self)
+/// Resolves an exact query using its owning key's encoding. An invalid
+/// fixed-array length returns `None` before calling the storage operation.
+pub trait KeyLookup<Q: ?Sized>: KeyEnDe {
+    fn with_lookup<R>(query: &Q, f: impl FnOnce(&[u8]) -> R) -> Option<R>;
+}
+pub trait OrderedKeyLookup<Q: ?Sized>: KeyEnDeOrdered {
+    fn with_ordered_lookup<R>(query: &Q, f: impl FnOnce(&[u8]) -> R) -> Option<R>;
+}
+impl<K: KeyEnDe> KeyLookup<K> for K {
+    fn with_lookup<R>(query: &K, f: impl FnOnce(&[u8]) -> R) -> Option<R> {
+        Some(query.with_encoded_key(f))
     }
-
-    fn encode(&self) -> RawBytes {
-        <Self as KeyEn>::encode_key(self)
+}
+impl<K: KeyEnDeOrdered> OrderedKeyLookup<K> for K {
+    fn with_ordered_lookup<R>(query: &K, f: impl FnOnce(&[u8]) -> R) -> Option<R> {
+        Some(query.with_ordered_bytes(f))
     }
+}
+macro_rules! borrowed_keys {
+    ($owner:ty, $query:ty) => {
+        impl KeyLookup<$query> for $owner {
+            fn with_lookup<R>(query: &$query, f: impl FnOnce(&[u8]) -> R) -> Option<R> {
+                Some(postcard_key(query, f))
+            }
+        }
+        impl OrderedKeyLookup<$query> for $owner {
+            fn with_ordered_lookup<R>(
+                query: &$query,
+                f: impl FnOnce(&[u8]) -> R,
+            ) -> Option<R> {
+                Some(f(query.as_ref()))
+            }
+        }
+        impl OrderedBoundEndpoint<&$query> for $owner {
+            fn with_endpoint<R>(e: &&$query, f: impl FnOnce(&[u8]) -> R) -> R {
+                f(e.as_ref())
+            }
+        }
+    };
+}
+borrowed_keys!(String, str);
+borrowed_keys!(Box<str>, str);
+borrowed_keys!(Vec<u8>, [u8]);
+borrowed_keys!(Box<[u8]>, [u8]);
 
-    fn decode(bytes: &[u8]) -> Result<Self> {
-        <Self as KeyDe>::decode_key(bytes)
+impl<const N: usize> KeyLookup<[u8]> for [u8; N]
+where
+    Self: KeyEnDe,
+{
+    fn with_lookup<R>(q: &[u8], f: impl FnOnce(&[u8]) -> R) -> Option<R> {
+        (q.len() == N).then(|| f(q))
+    }
+}
+impl<const N: usize> OrderedKeyLookup<[u8]> for [u8; N] {
+    fn with_ordered_lookup<R>(q: &[u8], f: impl FnOnce(&[u8]) -> R) -> Option<R> {
+        (q.len() == N).then(|| f(q))
     }
 }
 
-impl<T: ValueEn + ValueDe> ValueEnDe for T {
-    fn try_encode(&self) -> Result<RawBytes> {
-        <Self as ValueEn>::try_encode_value(self)
-    }
-
-    fn encode(&self) -> RawBytes {
-        <Self as ValueEn>::encode_value(self)
-    }
-
-    fn decode(bytes: &[u8]) -> Result<Self> {
-        <Self as ValueDe>::decode_value(bytes)
-    }
-}
-
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////
-
-/// Encoding of a borrowed key form for lookups in maps with [`KeyEnDe`]
-/// keys — `map.get(&q)` where `K: Borrow<Q>`, like `HashMap::get`.
+/// Ordered key bytes compare lexicographically in the same order as the keys.
+/// Persist integers with explicit widths.
 ///
-/// Implemented for every `KeyEnDe` type (encoding itself) and for `str`
-/// and `[u8]`, whose encodings are byte-identical to `String`'s and
-/// `Vec<u8>`'s. Byte slices also expose their contents so `Mapx` can resolve
-/// them against the owning key codec (fixed arrays have no length prefix).
-/// An implementation for another borrowed form must encode exactly as its
-/// owner does, or lookups can miss or address another key.
-pub trait KeyRef {
-    /// The stored-key bytes this value addresses.
-    fn key_bytes(&self) -> RawBytes;
-
-    /// Byte-slice contents, when this is a borrowed byte-slice query.
-    ///
-    /// Unlike [`key_bytes`](Self::key_bytes), these bytes have no length
-    /// prefix. Maps validate them against the owning key before encoding it.
-    /// Other borrowed forms use the default encoding contract above.
-    fn as_byte_slice(&self) -> Option<&[u8]> {
-        None
-    }
-}
-
-impl<T: KeyEnDe> KeyRef for T {
-    #[inline(always)]
-    fn key_bytes(&self) -> RawBytes {
-        self.encode()
-    }
-}
-
-impl KeyRef for str {
-    #[inline(always)]
-    fn key_bytes(&self) -> RawBytes {
-        postcard::to_allocvec(self).unwrap()
-    }
-}
-
-impl KeyRef for [u8] {
-    #[inline(always)]
-    fn key_bytes(&self) -> RawBytes {
-        postcard::to_allocvec(self).unwrap()
-    }
-
-    #[inline(always)]
-    fn as_byte_slice(&self) -> Option<&[u8]> {
-        Some(self)
-    }
-}
-
-/// [`KeyRef`] for maps with [`KeyEnDeOrdered`] keys (`MapxOrd`,
-/// `VerMap`): every `KeyEnDeOrdered` type, plus `str` and `[u8]`, whose
-/// ordered encodings equal `String`'s and `Vec<u8>`'s.
-pub trait OrderedKeyRef {
-    /// The stored-key bytes this value addresses.
-    fn ordered_key_bytes(&self) -> RawBytes;
-}
-
-impl<T: KeyEnDeOrdered> OrderedKeyRef for T {
-    #[inline(always)]
-    fn ordered_key_bytes(&self) -> RawBytes {
-        self.to_bytes()
-    }
-}
-
-impl OrderedKeyRef for str {
-    #[inline(always)]
-    fn ordered_key_bytes(&self) -> RawBytes {
-        self.as_bytes().to_vec()
-    }
-}
-
-impl OrderedKeyRef for [u8] {
-    #[inline(always)]
-    fn ordered_key_bytes(&self) -> RawBytes {
-        self.to_vec()
-    }
-}
-
-/// A trait for keys that maintain their order when serialized.
-///
-/// This trait is crucial for ordered data structures like `MapxOrd`, ensuring that
-/// operations like range queries work correctly.
-///
-/// All built-in implementations (`u32`, `i64`, `String`, etc.) also
-/// implement [`KeyEnDe`] (via serde blanket), so they can be used
-/// as keys in both [`MapxOrd`](crate::MapxOrd) and [`Mapx`](crate::Mapx).
-///
-/// **Note**: `usize` and `isize` use platform-dependent encoding widths
-/// (4 bytes on 32-bit, 8 bytes on 64-bit). Databases written with these
-/// key types are not portable across platforms with different pointer sizes.
+/// ```compile_fail
+/// let map = vsdb::MapxOrd::<usize, u64>::new();
+/// ```
+/// ```compile_fail
+/// let map = vsdb::MapxOrd::<Vec<isize>, u64>::new();
+/// ```
 pub trait KeyEnDeOrdered: Clone + Eq + Ord + fmt::Debug {
-    /// Encodes the key into a byte vector.
-    fn to_bytes(&self) -> RawBytes;
-
-    /// Consumes the key and encodes it into a byte vector.
+    fn with_ordered_bytes<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R;
+    fn encode_ordered_into(&self, dst: &mut Vec<u8>) {
+        self.with_ordered_bytes(|bytes| dst.extend_from_slice(bytes))
+    }
+    fn to_bytes(&self) -> RawBytes {
+        let mut bytes = Vec::new();
+        self.encode_ordered_into(&mut bytes);
+        bytes
+    }
     fn into_bytes(self) -> RawBytes {
         self.to_bytes()
     }
-
-    /// Decodes a key from a byte slice.
     fn from_slice(b: &[u8]) -> Result<Self>;
-
-    /// Consumes a byte vector and decodes it into a key.
     fn from_bytes(b: RawBytes) -> Result<Self> {
         Self::from_slice(&b)
     }
 }
 
-impl KeyEnDeOrdered for RawBytes {
-    #[inline(always)]
-    fn to_bytes(&self) -> RawBytes {
-        self.clone()
+macro_rules! contiguous_key {
+    ($ty:ty, $decode:expr, $take:expr) => {
+        impl KeyEnDeOrdered for $ty {
+            fn with_ordered_bytes<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
+                f(self.as_ref())
+            }
+            fn from_slice(b: &[u8]) -> Result<Self> {
+                Self::from_bytes(b.to_vec())
+            }
+            fn from_bytes(b: RawBytes) -> Result<Self> {
+                $decode(b)
+            }
+            fn into_bytes(self) -> RawBytes {
+                $take(self)
+            }
+        }
+    };
+}
+contiguous_key!(Vec<u8>, Ok, std::convert::identity);
+contiguous_key!(Box<[u8]>, |v: Vec<u8>| Ok(v.into_boxed_slice()), Vec::from);
+fn text(bytes: Vec<u8>) -> Result<String> {
+    String::from_utf8(bytes).map_err(|e| VsdbError::Decode {
+        detail: e.to_string(),
+    })
+}
+contiguous_key!(String, text, String::into_bytes);
+impl KeyEnDeOrdered for Box<str> {
+    fn with_ordered_bytes<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
+        f(self.as_bytes())
     }
-
-    #[inline(always)]
-    fn into_bytes(self) -> RawBytes {
-        self
+    fn from_slice(bytes: &[u8]) -> Result<Self> {
+        Self::from_bytes(bytes.to_vec())
     }
-
-    #[inline(always)]
-    fn from_slice(b: &[u8]) -> Result<Self> {
-        Ok(b.to_vec())
+    fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
+        text(bytes).map(String::into_boxed_str)
     }
-
-    #[inline(always)]
-    fn from_bytes(b: RawBytes) -> Result<Self> {
-        Ok(b)
+    fn into_bytes(self) -> Vec<u8> {
+        String::from(self).into_bytes()
+    }
+}
+impl<const N: usize> KeyEnDeOrdered for [u8; N] {
+    fn with_ordered_bytes<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
+        f(self)
+    }
+    fn from_slice(bytes: &[u8]) -> Result<Self> {
+        bytes.try_into().map_err(|_| bad_len())
+    }
+}
+fn bad_len() -> VsdbError {
+    VsdbError::Decode {
+        detail: "invalid ordered key width".into(),
     }
 }
 
-impl KeyEnDeOrdered for Box<[u8]> {
-    #[inline(always)]
-    fn to_bytes(&self) -> RawBytes {
-        self.to_vec()
-    }
-
-    #[inline(always)]
-    fn into_bytes(self) -> RawBytes {
-        self.into_vec()
-    }
-
-    #[inline(always)]
-    fn from_slice(b: &[u8]) -> Result<Self> {
-        Ok(b.to_vec().into())
-    }
-
-    #[inline(always)]
-    fn from_bytes(b: RawBytes) -> Result<Self> {
-        Ok(b.into())
-    }
-}
-
-impl KeyEnDeOrdered for String {
-    #[inline(always)]
-    fn to_bytes(&self) -> RawBytes {
-        self.as_bytes().to_vec()
-    }
-
-    #[inline(always)]
-    fn into_bytes(self) -> RawBytes {
-        // Qualified call: the inherent `String::into_bytes` is intended
-        // here, not this trait method (which would recurse).
-        String::into_bytes(self)
-    }
-
-    #[inline(always)]
-    fn from_slice(b: &[u8]) -> Result<Self> {
-        String::from_utf8(b.to_owned()).map_err(|e| VsdbError::Decode {
-            detail: e.to_string(),
-        })
-    }
-
-    #[inline(always)]
-    fn from_bytes(b: RawBytes) -> Result<Self> {
-        String::from_utf8(b).map_err(|e| VsdbError::Decode {
-            detail: e.to_string(),
-        })
-    }
-}
-
-macro_rules! impl_type {
-    ($int: ty) => {
+macro_rules! scalar_keys {
+    ($($int:ty),+) => {$(
         impl KeyEnDeOrdered for $int {
-            #[inline(always)]
-            fn to_bytes(&self) -> RawBytes {
-                self.wrapping_sub(<$int>::MIN).to_be_bytes().to_vec()
+            fn with_ordered_bytes<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
+                f(&self.wrapping_sub(Self::MIN).to_be_bytes())
             }
-            #[inline(always)]
-            fn from_slice(b: &[u8]) -> Result<Self> {
-                <[u8; size_of::<$int>()]>::try_from(b)
-                    .map_err(|e| VsdbError::Decode {
-                        detail: e.to_string(),
-                    })
-                    .map(|bytes| <$int>::from_be_bytes(bytes).wrapping_add(<$int>::MIN))
+            fn from_slice(bytes: &[u8]) -> Result<Self> {
+                let raw = bytes.try_into().map_err(|_| bad_len())?;
+                Ok(Self::from_be_bytes(raw).wrapping_add(Self::MIN))
             }
         }
-    };
-    (@$int: ty) => {
-        impl KeyEnDeOrdered for Vec<$int> {
-            #[inline(always)]
-            fn to_bytes(&self) -> RawBytes {
-                self.iter()
-                    .map(|i| i.wrapping_sub(<$int>::MIN).to_be_bytes())
-                    .flatten()
-                    .collect::<Vec<_>>()
-            }
-            #[inline(always)]
-            fn from_slice(b: &[u8]) -> Result<Self> {
-                if 0 != b.len() % size_of::<$int>() {
-                    return Err(VsdbError::Decode {
-                        detail: "invalid byte length".to_owned(),
-                    });
-                }
-                b.chunks(size_of::<$int>())
-                    .map(|i| {
-                        <[u8; size_of::<$int>()]>::try_from(i)
-                            .map_err(|e| VsdbError::Decode {
-                                detail: e.to_string(),
-                            })
-                            .map(|bytes| {
-                                <$int>::from_be_bytes(bytes).wrapping_add(<$int>::MIN)
-                            })
-                    })
-                    .collect()
-            }
-        }
-    };
-    (^$int: ty) => {
-        impl KeyEnDeOrdered for Box<[$int]> {
-            #[inline(always)]
-            fn to_bytes(&self) -> RawBytes {
-                KeyEnDeOrdered::to_bytes(&self.to_vec())
-            }
-            #[inline(always)]
-            fn from_slice(b: &[u8]) -> Result<Self> {
-                <Vec<$int> as KeyEnDeOrdered>::from_slice(b).map(|b| b.into())
-            }
-        }
-    };
-    ($int: ty, $siz: expr) => {
-        impl KeyEnDeOrdered for [$int; $siz] {
-            #[inline(always)]
-            fn to_bytes(&self) -> RawBytes {
-                self.iter()
-                    .map(|i| i.wrapping_sub(<$int>::MIN).to_be_bytes())
-                    .flatten()
-                    .collect::<Vec<_>>()
-            }
-            #[inline(always)]
-            fn from_slice(b: &[u8]) -> Result<Self> {
-                if 0 != b.len() % size_of::<$int>() {
-                    return Err(VsdbError::Decode {
-                        detail: "invalid byte length".to_owned(),
-                    });
-                }
-                if $siz != b.len() / size_of::<$int>() {
-                    return Err(VsdbError::Decode {
-                        detail: "invalid element count".to_owned(),
-                    });
-                }
-                let mut res = [0; $siz];
-                b.chunks(size_of::<$int>())
-                    .enumerate()
-                    .for_each(|(idx, i)| {
-                        res[idx] = <[u8; size_of::<$int>()]>::try_from(i)
-                            .map(|bytes| {
-                                <$int>::from_be_bytes(bytes).wrapping_add(<$int>::MIN)
-                            })
-                            .unwrap();
-                    });
-                Ok(res)
-            }
-        }
-    };
+    )+};
 }
+scalar_keys!(u8, u16, u32, u64, u128, i8, i16, i32, i64, i128);
 
-macro_rules! impl_all {
-    ($t: ty) => {
-        impl_type!($t);
-    };
-    ($t: ty, $($tt: ty),+) => {
-        impl_all!($t);
-        impl_all!($($tt), +);
-    };
-    (@$t: ty) => {
-        impl_type!(@$t);
-    };
-    (@$t: ty, $(@$tt: ty),+) => {
-        impl_all!(@$t);
-        impl_all!($(@$tt), +);
-    };
-    (^$t: ty) => {
-        impl_type!(^$t);
-    };
-    (^$t: ty, $(^$tt: ty),+) => {
-        impl_all!(^$t);
-        impl_all!($(^$tt), +);
-    };
-}
-
-impl_all!(
-    i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
-);
-impl_all!(
-    @i8, @i16, @i32, @i64, @i128, @isize, @u16, @u32, @u64, @u128, @usize
-);
-impl_all!(
-    ^i8, ^i16, ^i32, ^i64, ^i128, ^isize, ^u16, ^u32, ^u64, ^u128, ^usize
-);
-
-macro_rules! impl_array {
-    ($i: expr) => {
-        impl_type!(i8, $i);
-        impl_type!(i16, $i);
-        impl_type!(i32, $i);
-        impl_type!(i64, $i);
-        impl_type!(i128, $i);
-        impl_type!(isize, $i);
-        impl_type!(u8, $i);
-        impl_type!(u16, $i);
-        impl_type!(u32, $i);
-        impl_type!(u64, $i);
-        impl_type!(u128, $i);
-        impl_type!(usize, $i);
-    };
-    ($i: expr, $($ii: expr),+) => {
-        impl_array!($i);
-        impl_array!($($ii), +);
-    };
-}
-
-// Sizes 1-32: serde provides Serialize/Deserialize, so the blanket
-// impl gives them KeyEnDe automatically.
-impl_array!(
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-    24, 25, 26, 27, 28, 29, 30, 31, 32
-);
-
-impl_array!(
-    33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53,
-    54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74,
-    75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95,
-    96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112,
-    113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128
-);
-
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////
-
-#[cfg(test)]
-mod borrowed_key_test {
-    use super::*;
-
-    #[test]
-    fn borrowed_forms_encode_like_their_owners() {
-        let s = String::from("héllo");
-        assert_eq!(s.key_bytes(), "héllo".key_bytes());
-        assert_eq!(s.ordered_key_bytes(), "héllo".ordered_key_bytes());
-        let v: Vec<u8> = vec![0, 1, 200, 255];
-        assert_eq!(v.key_bytes(), v[..].key_bytes());
-        assert_eq!(v.ordered_key_bytes(), v[..].ordered_key_bytes());
-        let b: Box<[u8]> = v.clone().into_boxed_slice();
-        assert_eq!(b.ordered_key_bytes(), v[..].ordered_key_bytes());
+fn append_items<I: KeyEnDeOrdered>(items: &[I], dst: &mut Vec<u8>) {
+    dst.reserve(std::mem::size_of_val(items));
+    for item in items {
+        item.encode_ordered_into(dst);
     }
 }
+fn decode_items<I: KeyEnDeOrdered>(bytes: &[u8]) -> Result<Vec<I>> {
+    let chunks = bytes.chunks_exact(size_of::<I>());
+    if !chunks.remainder().is_empty() {
+        return Err(bad_len());
+    }
+    chunks.map(I::from_slice).collect()
+}
+// Scalar implementations above emit exactly size_of::<I>() ordered bytes.
+fn with_integer_bytes<I: KeyEnDeOrdered, R>(
+    items: &[I],
+    f: impl FnOnce(&[u8]) -> R,
+) -> R {
+    let mut stack = [0u8; 128];
+    let len = std::mem::size_of_val(items);
+    if len > stack.len() {
+        let mut bytes = Vec::with_capacity(len);
+        append_items(items, &mut bytes);
+        return f(&bytes);
+    }
+    for (item, out) in items
+        .iter()
+        .zip(stack[..len].chunks_exact_mut(size_of::<I>()))
+    {
+        item.with_ordered_bytes(|bytes| out.copy_from_slice(bytes));
+    }
+    f(&stack[..len])
+}
+macro_rules! sequence_methods {
+    () => {
+        fn with_ordered_bytes<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
+            with_integer_bytes(self, f)
+        }
+        fn encode_ordered_into(&self, dst: &mut Vec<u8>) {
+            append_items(self, dst)
+        }
+    };
+}
+macro_rules! integer_sequences {
+    ($($int:ty),+) => {$(
+        impl KeyEnDeOrdered for Vec<$int> {
+            sequence_methods!();
+            fn from_slice(bytes: &[u8]) -> Result<Self> {
+                decode_items(bytes)
+            }
+        }
+        impl KeyEnDeOrdered for Box<[$int]> {
+            sequence_methods!();
+            fn from_slice(bytes: &[u8]) -> Result<Self> {
+                Ok(decode_items(bytes)?.into_boxed_slice())
+            }
+        }
+        impl<const N: usize> KeyEnDeOrdered for [$int; N] {
+            sequence_methods!();
+            fn from_slice(bytes: &[u8]) -> Result<Self> {
+                if bytes.len() != size_of::<Self>() {
+                    return Err(bad_len());
+                }
+                let mut out = [0; N];
+                for (value, bytes) in out.iter_mut().zip(bytes.chunks_exact(size_of::<$int>())) {
+                    *value = <$int>::from_slice(bytes)?;
+                }
+                Ok(out)
+            }
+        }
+    )+};
+}
+integer_sequences!(u16, u32, u64, u128, i8, i16, i32, i64, i128);
+
+/// Encoding of a valid boundary for an ordered key.
+pub trait OrderedBoundEndpoint<E>: KeyEnDeOrdered {
+    fn with_endpoint<R>(e: &E, f: impl FnOnce(&[u8]) -> R) -> R;
+}
+impl<K: KeyEnDeOrdered> OrderedBoundEndpoint<K> for K {
+    fn with_endpoint<R>(e: &K, f: impl FnOnce(&[u8]) -> R) -> R {
+        e.with_ordered_bytes(f)
+    }
+}
+impl<K: KeyEnDeOrdered> OrderedBoundEndpoint<&K> for K {
+    fn with_endpoint<R>(e: &&K, f: impl FnOnce(&[u8]) -> R) -> R {
+        e.with_ordered_bytes(f)
+    }
+}
+pub trait OrderedRangeBounds<K> {
+    fn ordered_bounds(&self) -> (Bound<Vec<u8>>, Bound<Vec<u8>>);
+}
+impl<K> OrderedRangeBounds<K> for RangeFull {
+    fn ordered_bounds(&self) -> (Bound<Vec<u8>>, Bound<Vec<u8>>) {
+        (Bound::Unbounded, Bound::Unbounded)
+    }
+}
+macro_rules! ordered_ranges {
+    ($($range:ty),+) => {$(
+        impl<E, K: OrderedBoundEndpoint<E>> OrderedRangeBounds<K> for $range {
+            fn ordered_bounds(&self) -> (Bound<Vec<u8>>, Bound<Vec<u8>>) {
+                let encode = |endpoint: &E| K::with_endpoint(endpoint, <[u8]>::to_vec);
+                let lo = RangeBounds::<E>::start_bound(self).map(encode);
+                let hi = RangeBounds::<E>::end_bound(self).map(encode);
+                (lo, hi)
+            }
+        }
+    )+};
+}
+ordered_ranges!(
+    Range<E>,
+    RangeInclusive<E>,
+    RangeFrom<E>,
+    RangeTo<E>,
+    RangeToInclusive<E>,
+    (Bound<E>, Bound<E>)
+);

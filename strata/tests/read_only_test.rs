@@ -20,16 +20,14 @@ const HELPER_BASE: &str = "VSDB_STRATA_READ_ONLY_HELPER_BASE";
 struct TaggedValue(u32);
 
 impl vsdb::ValueEnDe for TaggedValue {
-    fn try_encode(&self) -> vsdb::Result<Vec<u8>> {
+    fn encode_value_into(&self, dst: &mut Vec<u8>) -> vsdb::Result<()> {
         use std::sync::atomic::{AtomicU32, Ordering};
         static TAG: AtomicU32 = AtomicU32::new(0);
-        Ok(postcard::to_allocvec(&(
-            self.0,
-            TAG.fetch_add(1, Ordering::Relaxed),
-        ))?)
+        postcard::to_io(&(self.0, TAG.fetch_add(1, Ordering::Relaxed)), dst)?;
+        Ok(())
     }
 
-    fn decode(bytes: &[u8]) -> vsdb::Result<Self> {
+    fn decode_value(bytes: &[u8]) -> vsdb::Result<Self> {
         let (value, _tag): (u32, u32) = postcard::from_bytes(bytes)?;
         Ok(Self(value))
     }
@@ -167,7 +165,7 @@ fn read_only_reader_helper() {
         InstanceId,
         InstanceId,
         InstanceId,
-        Vec<u8>,
+        [u8; 32],
     ) = postcard::from_bytes(&state).unwrap();
 
     let map = Mapx::<u64, String>::from_meta(map_id).unwrap();
@@ -214,16 +212,16 @@ fn read_only_reader_helper() {
     ));
     for metric in [MetricKind::L2, MetricKind::Cosine, MetricKind::InnerProduct] {
         assert!(matches!(
-            VecDexDyn::<u64>::new(metric, config.clone()),
+            VecDexDyn::<u64>::new_with_metric(metric, config.clone()),
             Err(VsdbError::ReadOnly { .. })
         ));
         assert!(matches!(
-            VecDexDyn::<u64>::new_in(&ns, metric, config.clone()),
+            VecDexDyn::<u64>::new_with_metric_in(&ns, metric, config.clone()),
             Err(VsdbError::ReadOnly { .. })
         ));
     }
 
-    let mut standalone_trie = MptCalc::new();
+    let standalone_trie = MptCalc::new();
     assert!(matches!(
         standalone_trie.save_cache(&base, 1, 1),
         Err(VsdbError::ReadOnly { .. })

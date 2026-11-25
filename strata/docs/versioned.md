@@ -31,7 +31,7 @@ graph TB
     end
 
     subgraph "Version Control"
-        BR["BranchState<br/>(name, head, dirty_root)"]
+        BR["BranchHead<br/>(head, dirty_root)"]
         CM["Commit<br/>(id, root, parents, timestamp_us, ref_count)"]
     end
 
@@ -67,22 +67,20 @@ block-beta
         B["PersistentBTree<br/>insert / remove / iter / range / bulk_load / gc<br/>Copy-on-Write, structural sharing"]
     end
     block:L3["Layer 3 — Raw KV Storage"]
-        C["MapxRaw / MapxOrd / Mapx<br/>MMDB-backed byte storage"]
+        C["MapxRaw<br/>Single MMDB prefix"]
     end
 ```
 
-**VerMap** holds the following persistent state:
+Each `VerMap` persists its state in a single `MapxRaw` prefix.
 
-| Field | Type | Purpose |
-|:------|:-----|:--------|
-| `tree` | `PersistentBTree` | Shared node pool for all versions |
-| `commits` | `MapxOrd<u64, Commit>` | CommitId → Commit metadata |
-| `branches` | `MapxOrd<u64, BranchState>` | BranchId → branch state |
-| `branch_names` | `Mapx<String, u64>` | name → BranchId lookup |
-| `next_commit` | `Orphan<u64>` | monotonic CommitId allocator |
-| `next_branch` | `Orphan<u64>` | monotonic BranchId allocator |
-| `main_branch` | `Orphan<u64>` | protected main branch ID |
-| `gc_dirty` | `Orphan<bool>` | crash-recovery/ref-count repair flag |
+| Key tag | Contents |
+|---|---|
+| `00` | Format, monotonic ID ceilings, main branch, generation |
+| `01`, `02`, `03` | Branch head and working root, branch name by ID, reverse lookup by name |
+| `04` | Immutable commit state plus mutable reference count |
+| `05`, `06` | Retired roots and unpublished staged subtrees |
+| `07` | Checksummed reference-count checkpoint |
+| `10`, `12` | Slotted B+ tree pages and value blobs |
 
 ---
 
@@ -91,7 +89,7 @@ block-beta
 `BranchId` and `CommitId` are distinct serde-transparent `u64` newtypes.
 Both implement `KeyEnDeOrdered`, so they can key `MapxOrd`, `VerMap`, and
 `SlotDex` with the same big-endian key encoding as their former `u64` aliases.
-Persisted component table keys remain `u64` for v16 handle compatibility.
+Branch and commit keys contain their big-endian numeric IDs.
 
 ### Commit
 
@@ -109,11 +107,10 @@ Commit {
 - `parents.len() == 1` → normal linear commit
 - `parents.len() == 2` → merge commit `[target_head, source_head]`
 
-### BranchState
+### BranchHead
 
 ```
-BranchState {
-    name:       String,
+BranchHead {
     head:       CommitId,   // latest committed snapshot (0 = no commits yet)
     dirty_root: NodeId,     // uncommitted working-tree root
 }
@@ -133,7 +130,11 @@ graph TB
     I -->|"child pointers"| L
 ```
 
-Each `NodeId` is a `u64`, monotonically allocated and never reused.
+A `NodeId` combines a monotonically allocated 62-bit serial with a two-bit class.
+The classes distinguish internal nodes, inline leaves, leaves with blobs and blobs.
+Leaf values over 1024 encoded bytes use separate blobs. A point lookup
+binary-searches borrowed keys inside each fetched page. The forward iterator
+retains the current leaf page and reads only the selected values.
 `EMPTY_ROOT = 0` is the sentinel for an empty tree.
 
 ---
@@ -183,7 +184,7 @@ sequenceDiagram
 
     Note over V: 4. BRANCH
     U->>V: create_branch("feat", main)
-    V->>D: store BranchState{head: main.head, dirty_root: main.dirty_root}
+    V->>D: store BranchHead{head: main.head, dirty_root: main.dirty_root}
     Note right of V: No data copied! Both share same tree root.
 
     Note over V: 5. MERGE
@@ -195,7 +196,7 @@ sequenceDiagram
 
     Note over V: 6. GC (automatic)
     Note right of V: Dead commits are hard-deleted<br/>by ref-count cascade during<br/>delete_branch / rollback_to.
-    Note right of T: Dead B+ tree nodes are registered<br/>for deferred deletion (lazy_delete).<br/>MMDB may reclaim disk space when<br/>compaction rewrites the affected SSTs.
+    Note right of T: Retire dead roots after publication.<br/>Readers retain pinned roots.
 ```
 
 ---
@@ -458,118 +459,23 @@ The caller controls priority by choosing which branch to pass as `source` vs `ta
 
 ## Durability and Recovery
 
-A VerMap is eight components (node pool, commits, branches, branch names,
-two ID allocators, the main pointer, and the `gc_dirty` flag). The ordering
-rules below keep every crash state recoverable:
+Working edits publish the new pages, allocator ceiling and 16-byte branch head in one atomic write batch. `write_batch(branch, edits)` sorts edits by encoded key, retains the last edit for duplicates and applies runs that share a leaf together. An ordinary insert or removal does not force a WAL sync.
 
-1. Advance an ID allocator before publishing its new ID.
-2. Write new tree nodes before publishing a root in a commit or branch.
-3. Write a new commit record before publishing a branch HEAD that names it.
-4. Remove branch/commit references before their tree roots become eligible
-   for physical reclamation.
-5. Set `gc_dirty = true` before count changes, and clear it only after the
-   completed metadata changes.
+History changes, including commits, branch management, rollback and merge, publish one synchronous batch. Readers observe the complete result after the WAL sync succeeds. An oversized merge or sorted `bulk_load` writes unpublished pages in approximately 16 MiB chunks. Each intermediate batch records the subtree roots at tag `06`. The final synchronous batch publishes the new root and removes its staging markers. An interrupted build leaves the previous branch state available.
 
-**Co-located layout (maps created by v16.3.11+, and every deep clone).** All
-components are allocated on the node pool's engine shard, so they share one
-WAL: its program order *is* the crash order (a crash keeps a prefix), and
-rules 1–5 need no fsync. Working-state operations (`insert`, `remove`,
-`discard`) issue no sync at all; history operations (`commit`, `merge`,
-`create_branch`, `delete_branch`, `rollback_to`, `set_main_branch`) end with
-one WAL sync, so they are durable when they return. Nodes released by an
-operation are registered for physical deletion only after the next such sync
-(or once the release queue grows large), so compaction can never delete nodes
-that a not-yet-durable operation stopped referencing. An unregistered release
-is not a leak: the next restore's sweep reclaims every unreachable node. The
-release queue is shared by restored aliases and their live views. Dropping the
-last view or iterator can queue more nodes; those entries wait for the next
-sync and registration, or a later recovery sweep.
+An owned `Snapshot<K, V>` supports cloning and can move to another thread. `VerMap::reader()` shares the same namespace and pin table. The reader can take snapshots independently of the writer. Snapshot iterators retain their leases after the view or source map is dropped. Mutable `VerMap::clone()` and `clone_in(&namespace)` create independent stores, including all retained commits and working roots.
 
-**Per-shard layout (maps created by earlier versions).** Components occupy
-different shards, each with its own WAL, so an atomic node batch alone does
-not order its durability against a branch or commit record. Every rule above
-is enforced by synchronizing the relevant shard WAL at that boundary (no
-namespace-wide memtable flush). Such maps keep working unchanged; `clone()`
-produces a co-located copy.
+`flush()` and consuming `close()` checkpoint reference counts. A checkpoint includes the instance ID, the header generation and a Keccak256 digest. Open verifies branch heads and reachable parent links, checks root page headers and probes the ceiling of each object class. It accepts a matching checkpoint after validating its reference graph. A missing, stale or damaged checkpoint, or an unpublished or retired root marker, triggers a full recount. Read-only opens validate without writing repairs. Writable recovery mutates the store and requires the same writer exclusion as other structural changes. Use `reader()` alongside an active writer.
 
-A branch whose working keys and values match its committed bytes is clean,
-including after an edit and its reversal. Merge and rollback accept that state.
+`from_meta_verified(id)` also checks every reachable slotted page, blob reference, separator, child height and occupancy. `verify_and_gc()` runs that verification on an open map and returns live object and commit counts and the number of removed orphan commits. Verification rejects missing reachable history and truncated allocator ceilings before reclamation.
 
-New maps and deep clones synchronize their initialized component graph before
-returning. A deep clone has independent ownership and does not inherit views of
-the original map.
-
-Recovery validates every branch HEAD and reachable commit parent before any
-orphan cleanup, including when the dirty flag is clear. A missing reachable
-commit or B+ tree node in a branch or reachable snapshot causes restoration
-to fail before orphan reclamation. `gc()` fails before deleting commits on the same incomplete graph.
-These checks cannot reconstruct records already lost by older versions: preserve
-a damaged dataset and recover from a complete backup.
-
-Read-only restoration performs the validation and rebuilds runtime state without
-writing WAL fences or repair metadata. See the [read-only guide](read-only.md)
-for preparing snapshots that require maintenance recovery.
-
----
+Standalone `PersistentBTree` stores its allocator ceiling at tag `09` in the same batch as the pages it allocates. Both the versioned and standalone handles carry a fixed 36-byte typed frame. For offline conversion of external standalone root IDs, supply every root to `vsdb_migrate::versioned::migrate_tree_v17` and retain the returned ID mapping. [Migration guide](../../migration/README.md)
 
 ## Garbage Collection
 
-**Users do not need to call `gc()` in normal operation.** Commit cleanup and
-node-retirement scheduling are automatic. Physical disk reclamation is
-best-effort and depends on which SSTs MMDB compaction rewrites.
+Commits count branch-head and commit-parent references. Deleting a branch or rolling it back cascades through commits that lose their last owner. B+ tree objects count incoming edges and root owners. The runtime stores counts as `u32` and retains child lists only for objects with outgoing edges.
 
-### How It Works
-
-Lifecycle management has two layers:
-
-1. **Commit ref counting** — each `Commit` tracks a `ref_count`
-   (branch HEADs + child parent-links).  When a branch is deleted or
-   rolled back, commits whose `ref_count` drops to zero are
-   **immediately hard-deleted** via cascading decrement.
-
-2. **B+ tree node ref counting + lazy deletion** — `PersistentBTree`
-   maintains an in-memory `HashMap<NodeId, NodeRef>` that tracks
-   per-node reference counts shared by aliases. Roots are owned by commits,
-   branch working states, and live view leases. Both recovery and `gc()`
-   preserve these leases. When an owner releases its root and a node's
-   count reaches zero, it is:
-   - cascade-removed from the in-memory ref map, **and**
-   - queued for deferred disk deletion. After the root-removal writes are
-     fenced, the queue registers keys with MMDB `lazy_delete`.
-
-   Background compaction can reclaim these keys when it rewrites their SSTs.
-   Cold data may remain on disk indefinitely; neither registration nor `gc()`
-   promises prompt physical reclamation.
-
-```mermaid
-flowchart TD
-    Start(["delete_branch / rollback_to"]) --> RC["Decrement commit ref_count"]
-    RC --> Dead{"ref_count == 0?"}
-    Dead -->|yes| Del["Hard-delete commit"]
-    Del --> Rel["release_node(commit.root)"]
-    Rel --> NodeRC["Cascade-decrement<br/>B+ tree node ref_counts"]
-    NodeRC --> NodeDead{"node ref_count == 0?"}
-    NodeDead -->|yes| Queue["Queue retired node keys"]
-    Queue --> Fence["Fence root-removal writes"]
-    Fence --> Lazy["lazy_delete(node key)<br/>→ MMDB dead_keys set"]
-    Lazy --> Compact["Compaction rewrites affected SSTs<br/>→ best-effort disk reclamation"]
-    Dead -->|no| Done(["Done"])
-    NodeDead -->|no| Done
-
-    style Del fill:#4a9,color:#fff
-    style Lazy fill:#4a9,color:#fff
-    style Compact fill:#4a9,color:#fff
-```
-
-### When to Call `gc()` Explicitly
-
-`gc()` is still available for two edge cases:
-
-- **Crash recovery** — if a ref-count cascade was interrupted
-  (`gc_dirty` flag set), `gc()` rebuilds all commit ref counts from
-  scratch and removes orphaned commits.
-- **Forced full sweep** — guarantees every unreachable node is
-  registered for compaction, even if a prior cascade was incomplete.
+A unique writer includes the dead object keys in its publication batch. With readers or restored aliases present, the writer records retired roots at tag `05`. A successful publication withdraws ownership and queues unpinned objects for the next batch or checkpoint. Readers can pin the old root during a synchronous publication. The last snapshot lease releases its pin and queues any objects that have become unreachable. Engine compaction reclaims physical disk space.
 
 ### Example
 
@@ -591,8 +497,7 @@ After `delete_branch(feat)`:
   **c3** (ref 1→0).
 - **c1** drops from ref=2 to ref=1 (still alive via c2).
 - B+ tree nodes from c3/c4 with no remaining owner (including live views)
-  are released from the in-memory ref map, then queued and registered for
-  `lazy_delete` after the required durability fence.
+  are deleted with publication or queued for reclamation after the last reader releases them.
 - MMDB can reclaim their disk space when compaction rewrites the affected SSTs.
 
 ---
@@ -678,7 +583,7 @@ flowchart LR
 | Concept | Mechanism |
 |:--------|:----------|
 | **Versioning** | Each commit snapshots a B+ tree root |
-| **Branching** | Copies only a lightweight `BranchState` struct |
+| **Branching** | Copies only a 16-byte `BranchHead` |
 | **Isolation** | Each branch has independent `head` + `dirty_root` |
 | **Structural sharing** | COW B+ tree — mutations allocate ~O(log n) nodes |
 | **Merge** | All merge bases, shared-subtree diff, and source-delta replay; source wins on conflict |

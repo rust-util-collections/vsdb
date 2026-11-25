@@ -1,14 +1,14 @@
-use ruc::*;
 use std::borrow::Cow;
 use vsdb_core::{MapxRaw, VsdbOptions, vsdb_configure};
 
 #[test]
 fn basic_cases() {
     let cnt = 200;
-    info_omit!(vsdb_configure(VsdbOptions::new(format!(
+    vsdb_configure(VsdbOptions::new(format!(
         "/tmp/vsdb_testing/{}",
         rand::random::<u64>()
-    ))));
+    )))
+    .unwrap();
 
     let hdr = {
         let mut hdr_i = MapxRaw::new();
@@ -37,10 +37,10 @@ fn basic_cases() {
                 assert!(hdr_i.contains_key(i));
             });
 
-        pnk!(postcard::to_allocvec(&hdr_i))
+        postcard::to_allocvec(&hdr_i).unwrap()
     };
 
-    let mut reloaded = pnk!(postcard::from_bytes::<MapxRaw>(&hdr));
+    let mut reloaded = postcard::from_bytes::<MapxRaw>(&hdr).unwrap();
 
     (0..cnt).map(|i: usize| i.to_be_bytes()).for_each(|i| {
         assert_eq!(&i[..], &reloaded.get(i).unwrap()[..]);

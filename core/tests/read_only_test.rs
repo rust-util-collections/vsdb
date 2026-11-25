@@ -10,8 +10,7 @@ use std::{
 };
 use vsdb_core::{
     InstanceId, MapxRaw, Namespace, OpenMode, VsdbError, VsdbOptions, vsdb_configure,
-    vsdb_flush, vsdb_get_base_dir, vsdb_get_custom_dir, vsdb_get_meta_dir,
-    vsdb_get_system_dir, vsdb_open_mode,
+    vsdb_flush, vsdb_get_custom_dir, vsdb_open_mode,
 };
 
 const HELPER_BASE: &str = "VSDB_READ_ONLY_HELPER_BASE";
@@ -117,7 +116,7 @@ fn read_only_completed_datasets_accept_stale_initialization_sentinels() {
     run_helper("read_only_writer_helper", &base);
     let markers: Vec<_> = tree_contents(&base)
         .into_keys()
-        .filter(|path| path.ends_with("__SYSTEM__/format_version"))
+        .filter(|path| path.ends_with("__SYSTEM__/.shards_ready"))
         .collect();
     assert_eq!(markers.len(), 2, "cover default and non-default roots");
     for marker in markers {
@@ -138,16 +137,7 @@ fn read_only_missing_dataset_helper() {
     let Some(base) = helper_base() else {
         return;
     };
-    vsdb_configure(VsdbOptions::read_only(&base)).unwrap();
-
-    // Resolving derived paths must not create them in read-only mode.
-    assert_eq!(vsdb_get_base_dir(), base);
-    assert_eq!(vsdb_get_custom_dir(), base.join("__CUSTOM__"));
-    assert_eq!(vsdb_get_system_dir(), base.join("__SYSTEM__"));
-    assert_eq!(
-        vsdb_get_meta_dir(),
-        base.join("__SYSTEM__/__instance_meta__")
-    );
+    assert!(vsdb_configure(VsdbOptions::read_only(&base)).is_err());
     assert!(!base.exists());
 
     let open = catch_unwind(Namespace::default_ns);

@@ -46,6 +46,8 @@ for earlier writes. Persistence failure can be ambiguous after recovery;
 never automatically retry a failed commit as if it certainly wrote nothing.
 This remains a single-collection operation, with no cross-shard transaction.
 
+Raw ranges accept owned and borrowed byte-string endpoints. `map.range(b"a"..b"z")` and `map.range(..)` work on the live map and on its read view. `batch.delete_range(start, end)` stages a half-open range deletion under the map's prefix. Inserts staged later in that batch take precedence.
+
 ## Immutable iteration alongside writes
 
 For several queries at the same committed state, capture a borrowed

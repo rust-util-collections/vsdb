@@ -4,8 +4,6 @@ use std::{
     env, fs,
     path::Path,
     process::{self, Command},
-    thread,
-    time::Duration,
 };
 
 #[test]
@@ -15,19 +13,9 @@ fn child_registration_and_parent_slot_share_a_wal() {
     let mut parent = DagMapRaw::new(Some(&mut root));
     let child = DagMapRaw::new(Some(&mut parent));
     for (owner, descendant) in [(&root, &parent), (&parent, &child)] {
-        assert!(
-            owner
-                .children
-                .raw()
-                .is_colocated_with(descendant.parent.raw())
-        );
-        assert!(
-            owner
-                .children
-                .raw()
-                .is_colocated_with(descendant.children.raw())
-        );
-        let registered = owner.children.iter().next().unwrap().1;
+        assert!(owner.store.is_colocated_with(&descendant.store));
+        let (e, id) = owner.links().next().unwrap();
+        let registered = owner.owned(e, id).unwrap();
         assert_eq!(registered.instance_id(), descendant.instance_id());
         assert_eq!(
             registered.get(b"ancestor").as_deref(),
@@ -78,7 +66,6 @@ fn dagmapraw_functions() {
     // The original owned handles alias the same storage and observe the
     // post-prune state (`Clone` would deep-copy instead).
     let mut head = i2.prune().unwrap();
-    thread::sleep(Duration::from_millis(1000));
 
     assert_eq!(head.get("k2").unwrap().as_slice(), "v2x".as_bytes());
     assert_eq!(head.get("k1").unwrap().as_slice(), "v1x".as_bytes());
@@ -96,9 +83,8 @@ fn dagmapraw_functions() {
     }
 
     let mut head = head.prune().unwrap();
-    thread::sleep(Duration::from_millis(1000));
-    assert!(head.parent.get_value().is_none());
-    assert!(head.children.iter().next().is_none());
+    assert!(head.meta().unwrap().state == State::Root);
+    assert!(head.no_children());
 
     for i in 10u8..=255 {
         assert_eq!(
@@ -170,6 +156,7 @@ fn test_meta_restore_then_mutate() {
 fn serde_rejects_mixed_namespace_components() {
     let ns = crate::Namespace::create().unwrap();
     let data = MapxRaw::new();
+    use crate::{MapxOrdRawKey, Orphan};
     let parent: Orphan<Option<DagMapRaw>> = Orphan::new_in(&ns, None);
     let children: MapxOrdRawKey<DagMapRaw> = MapxOrdRawKey::new();
     let bytes = postcard::to_allocvec(&(data, parent, children)).unwrap();
@@ -178,10 +165,10 @@ fn serde_rejects_mixed_namespace_components() {
 }
 
 #[test]
-#[should_panic(expected = "empty value is a tombstone")]
-fn insert_empty_value_panics() {
+fn empty_value_roundtrip() {
     let mut dag = DagMapRaw::new(None);
     dag.insert("empty", []);
+    assert_eq!(dag.get("empty"), Some(Vec::new()));
 }
 
 #[test]
@@ -194,65 +181,25 @@ fn destroy_unlinks_from_parent() {
     assert!(parent.no_children());
 }
 
-/// Regression: `destroy()` must clear a node's own data/parent (and all
-/// owned descendants) BEFORE unregistering it from the parent's
-/// registry — never the other way around (the previous ordering removed
-/// the registry entry first, so a crash right after that write, but
-/// before data/parent clearing landed, permanently orphaned the node's
-/// still-intact storage with no registry path back to it).
-///
-/// This manually replicates only the "clear data + null parent" half of
-/// `destroy()`'s new ordering (simulating a crash before the final
-/// parent-registry unlink runs) and confirms the node remains
-/// discoverable through the parent's still-intact registry entry, and is
-/// recognized as reclaimable residue (`owned_or_residue`'s `None`-parent
-/// arm) rather than becoming a permanently unreachable leak.
 #[test]
-fn destroy_retry_after_parent_null_unlinks() {
-    let mut parent = DagMapRaw::new(None);
-    let mut child = DagMapRaw::new(Some(&mut parent));
-    child.insert("k", "v");
-
-    // Crash after the side key is durable and the slot is nulled, before
-    // the parent registry unlink.
-    let linked = child.parent.get_value().unwrap();
-    child
-        .parent
-        .set_aux(super::DESTROY_PARENT_KEY, &Some(linked));
-    *child.parent.get_mut() = None;
-    child.data.clear();
-    assert!(!parent.no_children());
-
-    child.destroy();
-    assert!(parent.no_children());
-    assert!(child.get("k").is_none());
-}
-
-#[test]
-fn destroy_interrupted_before_unlink_leaves_reclaimable_residue() {
-    let mut parent = DagMapRaw::new(None);
-    let mut child = DagMapRaw::new(Some(&mut parent));
-    child.insert("k", "v");
-
-    assert!(!parent.no_children());
-
-    // Simulate a crash after data/parent clearing but before the final
-    // parent-registry unlink step (mirrors `destroy()`'s internal order).
-    *child.parent.get_mut() = None;
-    child.data.clear();
-
-    // The registry entry must still exist (not yet removed) ...
-    assert!(!parent.no_children());
-    // ... and must be recognized as reclaimable residue, not foreign.
-    let (_, residue) = parent.children.iter().next().unwrap();
-    assert!(DagMapRaw::owned_or_residue(parent.instance_id(), &residue));
-
-    // A subsequent prune sweep (the same registry-driven mechanism
-    // `prune` itself uses) reclaims the residue, exactly as it would
-    // after a real crash-then-restart.
-    let empty: &[RawBytes] = &[];
-    parent.prune_children_exclude(empty);
-    assert!(parent.no_children());
+fn destroy_retry_unlinks_and_reclaims_descendants() {
+    for finish_from_parent in [false, true] {
+        let mut parent = DagMapRaw::new(None);
+        let mut child = DagMapRaw::new(Some(&mut parent));
+        let mut grandchild = DagMapRaw::new(Some(&mut child));
+        grandchild.insert("key", "value");
+        let mut meta = child.meta().unwrap();
+        meta.state = State::Destroying(meta.state.owner());
+        child.set_meta(meta);
+        if finish_from_parent {
+            parent.prune_children_exclude(&[] as &[Vec<u8>]);
+        } else {
+            child.destroy();
+        }
+        assert!(parent.no_children());
+        assert!(grandchild.is_dead());
+        assert!(child.is_dead());
+    }
 }
 
 /// Regression: `prune()`'s crash-safety WAL barriers must be scoped to
@@ -394,9 +341,9 @@ fn destroyed_node_does_not_serve_inherited_reads() {
     assert_eq!(child.get("k").unwrap().as_slice(), b"v");
 
     // A shadow (aliasing handle) taken BEFORE the destroy call.
-    // SAFETY: used strictly after the destroy completes; accesses are
+    // used strictly after the destroy completes; accesses are
     // sequential on one thread, satisfying SWMR.
-    let stale_alias = unsafe { child.shadow() };
+    let stale_alias = child.open(child.id()).unwrap();
 
     child.destroy();
     // Neither the destroying handle nor the stale alias serves
@@ -434,10 +381,10 @@ fn destroy_deep_child_chain_does_not_overflow_stack() {
     let mut genesis = DagMapRaw::new(None);
     genesis.insert("root", "value");
 
-    // SAFETY: the shadow is only used as an attachment cursor while
+    // the shadow is only used as an attachment cursor while
     // building the chain; all accesses are sequential on one thread,
     // satisfying SWMR.
-    let mut cur = unsafe { genesis.shadow() };
+    let mut cur = genesis.open(genesis.id()).unwrap();
     for _ in 0..5000 {
         cur = DagMapRaw::new(Some(&mut cur));
     }
@@ -485,196 +432,48 @@ fn assert_merged_view(h: &DagMapRaw) {
     assert!(h.get("kg").is_none());
 }
 
-#[test]
-fn prune_crash_mid_merge_head_view_is_exact_and_rerun_converges() {
-    let (genesis, i1, head) = build_prune_fixture();
-
-    // Simulate a crash in the middle of phase 2: only the oldest
-    // mainline node (i1) has been staged; nothing
-    // cleared, children not yet re-parented.
-    let linebuf = head.prune_collect_mainline().unwrap();
-    assert_eq!(linebuf.len(), 2); // [i1, genesis]
-    let mut staged = StagedRows::new();
-    DagMapRaw::prune_fold_node(&mut staged, &linebuf[0]);
-
-    // The head's view must be exactly the pre-prune view: overlay
-    // resolution stops above the genesis for every folded key.
-    assert_merged_view(&head); // (pre-prune view == merged view by construction)
-    // Before publication the genesis retains its complete original view.
-    assert_eq!(genesis.get("kg").as_deref(), Some(b"doomed".as_slice()));
-    assert!(genesis.get("k1").is_none());
-    drop(staged); // abandoned batch: no durable changes
-    assert!(head.get("kg").is_none());
-    // … and non-folded nodes still hold their own data.
-    assert_eq!(i1.data.get("k1").unwrap().as_slice(), b"v1");
-
-    // Recovery: the chain is fully intact, so simply re-running the
-    // prune converges to the complete merged state.
-    let pruned = head.prune().unwrap();
-    assert_merged_view(&pruned);
-    assert!(pruned.parent.get_value().is_none());
-    assert!(i1.is_dead());
-}
-
-#[test]
-fn prune_crash_after_merge_genesis_meta_sees_merged_state() {
-    let (genesis, _i1, head) = build_prune_fixture();
-    let genesis_id = genesis.save_meta().unwrap();
-
-    // Freeze right after phase 2 (merge complete, nothing cleared,
-    // children not yet re-parented).
-    let mut linebuf = head.prune_collect_mainline().unwrap();
-    head.prune_merge_into_genesis(&mut linebuf).unwrap();
-
-    // The genesis — under its pre-prune instance ID — already serves the
-    // complete merged view; the head still serves its exact view too.
-    let restored = DagMapRaw::from_meta(genesis_id).unwrap();
-    assert_merged_view(&restored);
-    assert_merged_view(&head);
-
-    // Re-run converges and keeps the genesis identity.
-    let pruned = head.prune().unwrap();
-    assert_eq!(pruned.instance_id(), genesis_id);
-    assert_merged_view(&DagMapRaw::from_meta(genesis_id).unwrap());
-}
-
-#[test]
-fn prune_retry_does_not_regress_reparented_child() {
-    let (_genesis, _i1, mut head) = build_prune_fixture();
-    let mut child = DagMapRaw::new(Some(&mut head));
-    let child_id = head.child_id(&child).unwrap();
-    let mut linebuf = head.prune_collect_mainline().unwrap();
-    head.prune_merge_into_genesis(&mut linebuf).unwrap();
-    let genesis = linebuf.last_mut().unwrap();
-    // SAFETY: serialized immediately; all accesses are sequential.
-    *child.parent.get_mut() = Some(unsafe { genesis.shadow() });
-    genesis.children.insert(child_id, &child);
-    assert_merged_view(&child);
-
-    // A second interruption while retrying the oldest part of the fold
-    // must not roll back values already visible through the new parent.
-    let mut staged = StagedRows::new();
-    DagMapRaw::prune_fold_node(&mut staged, &linebuf[0]);
-    assert_merged_view(&child);
-    drop(staged);
-    assert_merged_view(&head.prune().unwrap());
-    assert_merged_view(&child);
-}
-
-#[test]
-fn prune_crash_mid_reparent_both_children_views_exact() {
-    let (_genesis, _i1, mut head) = build_prune_fixture();
-
-    let mut c1 = DagMapRaw::new(Some(&mut head));
-    c1.insert("c1", "w1");
-    let mut c2 = DagMapRaw::new(Some(&mut head));
-    c2.insert("c2", "w2");
-
-    // Phases 0-2, then flip ONLY c1 (simulated crash inside phase 3).
-    let mut linebuf = head.prune_collect_mainline().unwrap();
-    head.prune_merge_into_genesis(&mut linebuf).unwrap();
-    let genesis = linebuf.last_mut().unwrap();
-    // Exactly what phase 3 does for one child: re-point the parent slot
-    // and re-register under the genesis with the child's REAL registry id.
-    let c1_reg_id = head
-        .children
-        .iter()
-        .find(|(_, c)| c.instance_id() == c1.instance_id())
-        .unwrap()
-        .0;
-    // SAFETY: the shadow is written into c1's parent slot and only read
-    // afterwards; all accesses are sequential on one thread (SWMR).
-    *c1.parent.get_mut() = Some(unsafe { genesis.shadow() });
-    genesis.children.insert(&c1_reg_id, &c1);
-
-    // Both routes — via the merged genesis (c1) and via the intact old
-    // chain (c2) — must resolve every key identically.
-    for c in [&c1, &c2] {
-        assert_eq!(c.get("k0").unwrap().as_slice(), b"v0");
-        assert_eq!(c.get("k1").unwrap().as_slice(), b"v1x");
-        assert_eq!(c.get("k2").unwrap().as_slice(), b"v2");
-        assert!(c.get("kg").is_none());
-    }
-    assert_eq!(c1.get("c1").unwrap().as_slice(), b"w1");
-    assert_eq!(c2.get("c2").unwrap().as_slice(), b"w2");
-
-    // Recovery re-run: the already-flipped child is double-registered
-    // under the genesis; phase 1 must NOT destroy it (pending_reparent
-    // guard), and phase 3 re-flips it idempotently.
-    let pruned = head.prune().unwrap();
-    assert_merged_view(&pruned);
-    assert_eq!(c1.get("c1").unwrap().as_slice(), b"w1");
-    assert_eq!(c2.get("c2").unwrap().as_slice(), b"w2");
-    assert_eq!(c1.get("k1").unwrap().as_slice(), b"v1x");
-    assert_eq!(c2.get("k1").unwrap().as_slice(), b"v1x");
-}
-
-/// Run prune through reparent, then write the clearing marker the
-/// production path fences before any clear. Tests then tear one side
-/// of that clear and retry `prune`.
 fn prepare_marked_clear(head: &mut DagMapRaw) {
-    let mut linebuf = head.prune_collect_mainline().unwrap();
-    let mainline_ids: HashSet<InstanceId> = {
-        let mut ids = HashSet::from([head.instance_id()]);
-        ids.extend(linebuf.iter().map(|n| n.instance_id()));
-        ids
-    };
-    let pending: std::collections::HashSet<vsdb_core::common::RawBytes> =
-        head.children.iter().map(|(id, _)| id).collect();
-    DagMapRaw::prune_destroy_side_branches(&mut linebuf, &mainline_ids, &pending);
-    head.prune_merge_into_genesis(&mut linebuf).unwrap();
-    head.prune_reparent_children(linebuf.last_mut().unwrap());
-    head.mark_consumed_clearing(&mut linebuf);
+    let (mut line, mut root) = head.open(head.id()).unwrap().mainline().unwrap();
+    DagMapRaw::fold(&line, &mut root).unwrap();
+    line[0].reparent(&mut root).unwrap();
+    DagMapRaw::mark(&mut line, root.id()).unwrap();
 }
 
 #[test]
-fn prune_retry_completes_partial_clearing_markers() {
-    // Cover a process crash after only the head marker, as well as
-    // non-contiguous marker sets left by independently recovered shards.
-    for marker_mask in 0..4 {
-        let (genesis, i1, mut previous_head) = build_prune_fixture();
-        let mut head = DagMapRaw::new(Some(&mut previous_head));
-        let head_id = head.save_meta().unwrap();
-        let mut survivor = DagMapRaw::new(Some(&mut head));
-        survivor.insert("survivor", "value");
-
-        let mut linebuf = head.prune_collect_mainline().unwrap();
-        head.prune_merge_into_genesis(&mut linebuf).unwrap();
-        head.namespace().try_sync_wal().unwrap();
-        head.prune_reparent_children(linebuf.last_mut().unwrap());
-        head.namespace().try_sync_wal().unwrap();
-
-        // SAFETY: only serialized into recovery markers; all accesses
-        // to the fixture and restored aliases are sequential.
-        let marker = Some(unsafe { genesis.shadow() });
-        head.parent.set_aux(PRUNE_CLEARING_KEY, &marker);
-        for (bit, node) in linebuf[..2].iter_mut().enumerate() {
-            if marker_mask & (1 << bit) != 0 {
-                node.parent.set_aux(PRUNE_CLEARING_KEY, &marker);
-            }
+fn prune_partial_reparent_and_markers_converge() {
+    for cut in 0..4 {
+        let (root, mid, mut head) = build_prune_fixture();
+        let mut children = [
+            DagMapRaw::new(Some(&mut head)),
+            DagMapRaw::new(Some(&mut head)),
+        ];
+        let (mut line, mut genesis) = head.open(head.id()).unwrap().mainline().unwrap();
+        DagMapRaw::fold(&line, &mut genesis).unwrap();
+        let id = children[0].id();
+        let edge = genesis.register(genesis.meta().unwrap(), id).unwrap();
+        if cut > 0 {
+            let mut m = children[0].meta().unwrap();
+            m.state = State::Child(Parent {
+                map: genesis.id(),
+                edge,
+            });
+            children[0].set_meta(m);
         }
-        head.namespace().try_sync_wal().unwrap();
-
-        // Retry must consume every intermediate, including an unmarked
-        // ancestor that otherwise hides the rest of the marked chain.
-        let pruned = DagMapRaw::from_meta(head_id).unwrap().prune().unwrap();
-        assert_eq!(pruned.instance_id(), genesis.instance_id());
-        assert_merged_view(&pruned);
-        for consumed in [&head, &previous_head, &i1] {
-            assert!(consumed.is_dead(), "partial marker set {marker_mask}");
-            assert!(consumed.no_children());
-            assert!(consumed.get("k1").is_none());
+        if cut > 1 {
+            head.reparent(&mut genesis).unwrap();
+            DagMapRaw::mark(&mut line[..cut - 1], root.id()).unwrap();
         }
-        assert_merged_view(&survivor);
-        assert_eq!(survivor.get("survivor").as_deref(), Some(&b"value"[..]));
-        assert_eq!(pruned.children.iter().count(), 1);
-
-        // A subsequent retry still resolves to the same surviving root.
-        let retried = DagMapRaw::from_meta(head_id).unwrap().prune().unwrap();
-        assert_eq!(retried.instance_id(), genesis.instance_id());
-        assert_merged_view(&retried);
-        assert_merged_view(&survivor);
-        assert_eq!(retried.children.iter().count(), 1);
+        for c in &children {
+            assert_merged_view(c);
+        }
+        let recovered = head.prune().unwrap();
+        assert_eq!(recovered.id(), root.id());
+        assert!(mid.is_dead());
+        assert_eq!(recovered.child_ids().len(), 2);
+        for c in &children {
+            assert_merged_view(c);
+            assert!(recovered.child_id(c).is_some());
+        }
     }
 }
 
@@ -729,8 +528,11 @@ fn prune_cleanup_survives_repeated_interruptions() {
                 // Once registry removal starts, even a different shard's
                 // early unlink cannot strand any user data.
                 for node in &ancestors[1..] {
-                    assert!(node.data.iter().next().is_none());
-                    assert!(node.parent.get_value().is_none());
+                    assert!(node.store.range(DATA..END).next().is_none());
+                    assert!(matches!(
+                        node.meta().unwrap().state,
+                        State::Clearing { .. }
+                    ));
                 }
             }
 
@@ -751,112 +553,26 @@ fn prune_cleanup_survives_repeated_interruptions() {
             let head = DagMapRaw::from_meta(head_id).unwrap();
             assert!(head.is_dead());
             assert!(head.no_children());
-            assert_eq!(recovered.children.iter().count(), 1);
+            assert_eq!(recovered.child_ids().len(), 1);
         }
     }
 }
 
 #[test]
-fn prune_retry_after_parent_null_returns_genesis() {
-    let (genesis, i1, mut head) = build_prune_fixture();
-    let genesis_id = genesis.instance_id();
-    let mut child = DagMapRaw::new(Some(&mut head));
-    child.insert("c", "cv");
-    prepare_marked_clear(&mut head);
-
-    // Parent-null landed; children and data did not.
-    *head.parent.get_mut() = None;
-
-    let pruned = head.prune().unwrap();
-    assert_eq!(pruned.instance_id(), genesis_id);
-    assert_merged_view(&pruned);
-    assert_eq!(child.get("c").unwrap().as_slice(), b"cv");
-    assert_eq!(child.get("k2").unwrap().as_slice(), b"v2");
-    assert!(i1.is_dead());
-}
-
-#[test]
-fn prune_retry_after_data_clear_does_not_regress_genesis() {
-    let (genesis, i1, mut head) = build_prune_fixture();
-    let genesis_id = genesis.instance_id();
-    let mut child = DagMapRaw::new(Some(&mut head));
-    child.insert("c", "cv");
-    prepare_marked_clear(&mut head);
-
-    // Inverse tear: data and children clears landed, parent-null did not.
-    head.children.clear();
-    head.data.clear();
-
-    let pruned = head.prune().unwrap();
-    assert_eq!(pruned.instance_id(), genesis_id);
-    assert_merged_view(&pruned);
-    assert_merged_view(&child);
-    assert_eq!(child.get("c").unwrap().as_slice(), b"cv");
-    assert!(i1.is_dead());
-}
-
-#[test]
-fn prune_interrupted_before_clear_residue_is_reclaimed_by_next_prune() {
-    let (genesis, i1, mut head) = build_prune_fixture();
-    head.insert("k_head_only", "hv");
-
-    let mut child = DagMapRaw::new(Some(&mut head));
-    child.insert("c", "cv");
-
-    // Crash right after phase 3: merge + re-parent done, clears never ran.
-    let mut linebuf = head.prune_collect_mainline().unwrap();
-    let mainline_ids: HashSet<InstanceId> = {
-        let mut ids = HashSet::from([head.instance_id()]);
-        ids.extend(linebuf.iter().map(|n| n.instance_id()));
-        ids
-    };
-    let pending: std::collections::HashSet<vsdb_core::common::RawBytes> =
-        head.children.iter().map(|(id, _)| id).collect();
-    DagMapRaw::prune_destroy_side_branches(&mut linebuf, &mainline_ids, &pending);
-    head.prune_merge_into_genesis(&mut linebuf).unwrap();
-    head.prune_reparent_children(linebuf.last_mut().unwrap());
-
-    // Canonical recovery point: the surviving child (now under genesis).
-    assert_eq!(child.get("c").unwrap().as_slice(), b"cv");
-    assert_eq!(child.get("k_head_only").unwrap().as_slice(), b"hv");
-
-    // The old head/intermediate still hold residue data (leak, not
-    // corruption).  The NEXT prune — from the surviving child — must
-    // reclaim them: they are side branches of the new mainline now.
-    assert!(head.data.iter().next().is_some());
-    let pruned2 = child.prune().unwrap();
-    assert_eq!(pruned2.instance_id(), genesis.instance_id());
-
-    assert!(head.is_dead());
-    assert!(i1.is_dead());
-    assert_eq!(pruned2.get("c").unwrap().as_slice(), b"cv");
-    assert_eq!(pruned2.get("k_head_only").unwrap().as_slice(), b"hv");
-    assert_eq!(pruned2.get("k1").unwrap().as_slice(), b"v1x");
-}
-
-#[test]
-fn destroy_does_not_follow_stale_foreign_registry_entries() {
-    // The children registry is an index, not ownership: destroying a node
-    // must not clear a child whose own parent slot points elsewhere
-    // (a stale double-registration left by an interrupted prune).
-    let mut real_parent = DagMapRaw::new(None);
-    real_parent.insert("p", "pv");
-    let mut child = DagMapRaw::new(Some(&mut real_parent));
-    child.insert("c", "cv");
-
-    let mut stranger = DagMapRaw::new(None);
-    stranger.insert("s", "sv");
-    // Stale registration of `child` under `stranger` WITHOUT re-pointing
-    // the child's parent slot.
-    stranger.children.insert([0xffu8; 16], &child);
-
-    stranger.destroy();
-
-    // The stranger died; the foreign child survived untouched.
-    assert!(stranger.is_dead());
-    assert_eq!(child.get("c").unwrap().as_slice(), b"cv");
-    assert_eq!(child.get("p").unwrap().as_slice(), b"pv");
-    assert!(!real_parent.no_children());
+fn registry_entries_cannot_destroy_foreign_nodes_or_live_roots() {
+    let mut root = DagMapRaw::new(None);
+    root.insert("root", "v");
+    let mut a = DagMapRaw::new(Some(&mut root));
+    let b = DagMapRaw::new(Some(&mut root));
+    let mut foreign = DagMapRaw::new(None);
+    foreign.insert("foreign", "v");
+    for (id, e) in [(root.id(), 11), (b.id(), 12), (foreign.id(), 13)] {
+        a.store.insert(edge_key(e), id.to_le_bytes());
+    }
+    a.destroy();
+    assert_eq!(root.get("root"), Some(b"v".to_vec()));
+    assert_eq!(foreign.get("foreign"), Some(b"v".to_vec()));
+    assert_eq!(b.get("root"), Some(b"v".to_vec()));
 }
 
 #[test]
@@ -918,7 +634,8 @@ fn clone_prune_preserves_original_graph() {
     assert_eq!(copy.namespace().id(), head.namespace().id());
     assert_eq!(copy.get(b"inherited"), Some(b"root".to_vec()));
     assert_eq!(copy.child_ids(), vec![child_id.clone()]);
-    let copied_child = copy.children.get(&child_id).unwrap();
+    let (e, id) = copy.links().next().unwrap();
+    let copied_child = copy.owned(e, id).unwrap();
     assert_ne!(copied_child.instance_id(), child.instance_id());
 
     let mut copied_root = copy.prune().unwrap();
@@ -948,54 +665,6 @@ fn clone_remaps_prune_recovery_markers() {
     assert_ne!(copied_root.instance_id(), original_root.instance_id());
     assert_eq!(copied_root.get(b"key"), Some(b"value".to_vec()));
     assert_eq!(original_root.get(b"key"), Some(b"value".to_vec()));
-}
-
-#[test]
-fn prune_retry_visits_repeated_marked_nodes_once() {
-    let mut genesis = DagMapRaw::new(None);
-    genesis.insert(b"base", b"base-value");
-    let mut head = DagMapRaw::new(Some(&mut genesis));
-    head.insert(b"head", b"head-value");
-    let survivor = DagMapRaw::new(Some(&mut head));
-    let bytes = postcard::to_allocvec(&head).unwrap();
-    let expected = head.prune().unwrap().instance_id();
-
-    // Component deserialization can retain a registry alias. A repeated
-    // marked entry must not prevent an already-completed prune from retrying.
-    let consumed: DagMapRaw = postcard::from_bytes(&bytes).unwrap();
-    let (_, _, mut children): (
-        MapxRaw,
-        Orphan<Option<DagMapRaw>>,
-        MapxOrdRawKey<DagMapRaw>,
-    ) = postcard::from_bytes(&bytes).unwrap();
-    children.insert(b"repeat-a", &consumed);
-    children.insert(b"repeat-b", &consumed);
-
-    let recovered = consumed.prune().unwrap();
-    assert_eq!(recovered.instance_id(), expected);
-    assert_eq!(recovered.get(b"base").unwrap(), b"base-value");
-    assert_eq!(recovered.get(b"head").unwrap(), b"head-value");
-    assert_eq!(survivor.get(b"head").unwrap(), b"head-value");
-    assert!(children.iter().next().is_none());
-}
-
-#[test]
-fn prune_retry_removes_all_marked_root_registry_aliases() {
-    let (mut genesis, intermediate, mut head) = build_prune_fixture();
-    let survivor = DagMapRaw::new(Some(&mut head));
-    prepare_marked_clear(&mut head);
-
-    // Repeated registry aliases can survive an interrupted prune. Every
-    // alias must disappear after its marked node has been durably cleared.
-    genesis.children.insert(b"repeat-a", &intermediate);
-    genesis.children.insert(b"repeat-b", &intermediate);
-    let recovered = head.prune().unwrap();
-    assert_eq!(recovered.instance_id(), genesis.instance_id());
-    assert_merged_view(&recovered);
-    assert_merged_view(&survivor);
-    assert!(intermediate.is_dead());
-    assert_eq!(recovered.children.iter().count(), 1);
-    assert!(recovered.child_id(&survivor).is_some());
 }
 
 fn dag_wal_phase(dir: &Path, stage: &str, action: &str) {
@@ -1032,21 +701,18 @@ fn dag_wal_phase(dir: &Path, stage: &str, action: &str) {
             merged.destroy();
             ns.try_sync_wal().unwrap();
         } else {
-            let mut linebuf = head.prune_collect_mainline().unwrap();
-            head.prune_merge_into_genesis(&mut linebuf).unwrap();
-            ns.try_sync_wal().unwrap();
+            let (mut line, mut root) = head.mainline().unwrap();
+            DagMapRaw::fold(&line, &mut root).unwrap();
             if stage != "merge" {
-                head.prune_reparent_children(linebuf.last_mut().unwrap());
-                ns.try_sync_wal().unwrap();
+                line[0].reparent(&mut root).unwrap();
             }
             if matches!(stage, "marker" | "clear") {
-                head.mark_consumed_clearing(&mut linebuf);
-                ns.try_sync_wal().unwrap();
+                DagMapRaw::mark(&mut line, root.id()).unwrap();
             }
             if stage == "clear" {
-                head.prune_clear_consumed(&mut linebuf).unwrap();
-                ns.try_sync_wal().unwrap();
+                DagMapRaw::clear_line(&mut line, &mut root).unwrap();
             }
+            root.store.try_sync_wal().unwrap();
         }
         assert_eq!(ns.shard_properties("stats.flushes_completed"), before);
         // Deliberately skip destructors and their engine flushes. This
@@ -1080,7 +746,7 @@ fn dag_wal_phase(dir: &Path, stage: &str, action: &str) {
         assert_merged_view(&survivor);
         assert!(intermediate.is_dead());
         assert!(DagMapRaw::from_meta(ids[2]).unwrap().is_dead());
-        assert_eq!(recovered.children.iter().count(), 1);
+        assert_eq!(recovered.child_ids().len(), 1);
     }
     assert_eq!(ns.shard_properties("stats.flushes_completed"), before);
 }
@@ -1115,4 +781,51 @@ fn dag_wal_barriers_survive_process_exit_without_table_flush() {
         }
         fs::remove_dir_all(dir).unwrap();
     }
+}
+
+#[test]
+fn typed_graph_copy_is_independent_across_namespaces() {
+    let mut root = crate::DagMap::<String, ()>::new(None);
+    let key = "key".to_string();
+    root.insert(&key, &());
+    let mut child = crate::DagMap::new(Some(&mut root));
+    assert_eq!(child.get(&key), Some(()));
+    child.remove(&key);
+    let ns = crate::Namespace::create().unwrap();
+    let mut copy = root.clone_in(&ns).unwrap();
+    assert_eq!(copy.namespace().id(), ns.id());
+    assert_eq!(copy.child_ids(), root.child_ids());
+    copy.destroy();
+    assert_eq!(root.get(&key), Some(()));
+    assert_eq!(child.get(&key), None);
+    let restored =
+        crate::DagMap::<String, ()>::from_meta(root.save_meta().unwrap()).unwrap();
+    assert!(restored.is_the_same_instance(&root));
+    assert!(crate::DagMap::<u64, ()>::from_meta(root.instance_id()).is_err());
+}
+
+#[test]
+fn clearing_retry_removes_duplicate_discovery_edges() {
+    let (mut root, mid, mut head) = build_prune_fixture();
+    let survivor = DagMapRaw::new(Some(&mut head));
+    prepare_marked_clear(&mut head);
+    root.store.insert(edge_key(987), mid.id().to_le_bytes());
+    let recovered = head.prune().unwrap();
+    assert!(mid.is_dead());
+    assert_eq!(
+        recovered.child_ids(),
+        [recovered.child_id(&survivor).unwrap()]
+    );
+}
+
+#[test]
+fn intermediate_marker_reclaims_marked_descendants_and_preserves_retry_target() {
+    let (root, mut mid, mut head) = build_prune_fixture();
+    let survivor = DagMapRaw::new(Some(&mut head));
+    prepare_marked_clear(&mut head);
+    assert_eq!(mid.open(mid.id()).unwrap().prune().unwrap().id(), root.id());
+    assert!(head.is_dead());
+    assert_merged_view(&survivor);
+    mid.destroy();
+    assert_eq!(head.prune().unwrap().id(), root.id());
 }

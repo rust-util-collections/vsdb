@@ -29,17 +29,25 @@ fn mpt_root_hash(c: &mut Criterion) {
     }
 
     c.bench_function("mpt_root_hash_1000_cold", |b| {
-        b.iter(|| {
-            let mut m = mpt.clone();
-            m.root_hash().unwrap()
-        });
+        // COW clones share OnceLock hashes, so rebuild an independent cold
+        // tree outside the timed routine for every measured call.
+        b.iter_batched_ref(
+            || {
+                MptCalc::from_entries(
+                    (0u32..1000).map(|i| (i.to_be_bytes(), i.to_be_bytes())),
+                )
+                .unwrap()
+            },
+            |trie| trie.root_hash(),
+            criterion::BatchSize::SmallInput,
+        );
     });
 
     // Warm: after first hash, subsequent calls should be cheap.
-    let mut warm = mpt.clone();
-    warm.root_hash().unwrap();
+    let warm = mpt.clone();
+    warm.root_hash();
     c.bench_function("mpt_root_hash_1000_warm", |b| {
-        b.iter(|| warm.root_hash().unwrap());
+        b.iter(|| warm.root_hash());
     });
 }
 
@@ -79,7 +87,7 @@ fn mpt_prefix_reads(c: &mut Criterion) {
         for n in 1..=depth {
             mpt.insert(&vec![0; n], b"x").unwrap();
         }
-        let root: [u8; 32] = mpt.root_hash().unwrap().try_into().unwrap();
+        let root: [u8; 32] = mpt.root_hash();
         let key = vec![0; depth];
         let proof = mpt.prove(&key).unwrap();
 
@@ -155,16 +163,24 @@ fn smt_root_hash(c: &mut Criterion) {
     }
 
     c.bench_function("smt_root_hash_1000_cold", |b| {
-        b.iter(|| {
-            let mut s = smt.clone();
-            s.root_hash().unwrap()
-        });
+        // COW clones share OnceLock hashes, so rebuild an independent cold
+        // tree outside the timed routine for every measured call.
+        b.iter_batched_ref(
+            || {
+                SmtCalc::from_entries(
+                    (0u32..1000).map(|i| (i.to_be_bytes(), i.to_be_bytes())),
+                )
+                .unwrap()
+            },
+            |trie| trie.root_hash(),
+            criterion::BatchSize::SmallInput,
+        );
     });
 
-    let mut warm = smt.clone();
-    warm.root_hash().unwrap();
+    let warm = smt.clone();
+    warm.root_hash();
     c.bench_function("smt_root_hash_1000_warm", |b| {
-        b.iter(|| warm.root_hash().unwrap());
+        b.iter(|| warm.root_hash());
     });
 }
 
@@ -232,8 +248,8 @@ fn mpt_prove_verify(c: &mut Criterion) {
     for i in 0u32..100 {
         mpt.insert(&i.to_be_bytes(), &i.to_be_bytes()).unwrap();
     }
-    let root = mpt.root_hash().unwrap();
-    let root32: [u8; 32] = root.try_into().unwrap();
+    let root = mpt.root_hash();
+    let root32 = root;
 
     c.bench_function("mpt_prove_100", |b| {
         b.iter(|| {
@@ -261,8 +277,8 @@ fn smt_prove_verify(c: &mut Criterion) {
     for i in 0u32..100 {
         smt.insert(&i.to_be_bytes(), &i.to_be_bytes()).unwrap();
     }
-    let root = smt.root_hash().unwrap();
-    let root32: [u8; 32] = root.try_into().unwrap();
+    let root = smt.root_hash();
+    let root32 = root;
 
     c.bench_function("smt_prove_100", |b| {
         b.iter(|| {

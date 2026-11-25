@@ -24,7 +24,8 @@ macro_rules! define_map_wrapper {
             where
                 S: serde::Serializer,
             {
-                $crate::common::serialize_typed_handle_meta::<Self, S>(&self.inner, serializer)
+                let raw = $crate::common::SingleMap::raw(self);
+                $crate::common::serialize_prefix_handle::<Self, S>(raw, &[], serializer)
             }
         }
 
@@ -33,8 +34,12 @@ macro_rules! define_map_wrapper {
             where
                 D: serde::Deserializer<'de>,
             {
-                $crate::common::deserialize_typed_handle_meta::<Self, $inner_type, D>(deserializer)
-                    .map(|inner| Self { inner, $phantom_field: std::marker::PhantomData })
+                $crate::common::deserialize_prefix_handle(deserializer, |frame| {
+                    Ok(Self {
+                        inner: $crate::common::basic_inner(frame)?,
+                        $phantom_field: std::marker::PhantomData,
+                    })
+                })
             }
         }
 
@@ -62,11 +67,6 @@ macro_rules! define_map_wrapper {
                     inner: unsafe { self.inner.shadow() },
                     $phantom_field: std::marker::PhantomData,
                 }
-            }
-
-            #[inline(always)]
-            pub(crate) fn as_bytes(&self) -> &[u8] {
-                self.inner.as_bytes()
             }
 
             /// Creates a new instance in the current ambient namespace
@@ -174,12 +174,7 @@ macro_rules! define_map_wrapper {
             /// pre-v16 bare `u64` id equals `InstanceId::from(u64)`.
             #[inline(always)]
             pub fn instance_id(&self) -> $crate::common::InstanceId {
-                let mut bytes = [0u8; 8];
-                bytes.copy_from_slice(self.as_bytes());
-                $crate::common::InstanceId::new(
-                    u64::from_le_bytes(bytes),
-                    self.namespace().id(),
-                )
+                self.inner.instance_id()
             }
 
             /// Persists this instance's metadata to disk (in its owning
@@ -231,30 +226,20 @@ macro_rules! define_map_wrapper {
             }
         }
 
-        impl<$($wrapper_generics),*> $crate::common::Colocate for $wrapper_name<$($wrapper_generics),*>
+        impl<$($wrapper_generics),*> $crate::common::SingleMap for $wrapper_name<$($wrapper_generics),*>
         {
-            #[inline(always)]
-            fn new_colocated(anchor: &vsdb_core::MapxRaw) -> Self {
+            fn from_raw(raw: vsdb_core::MapxRaw) -> Self {
                 Self {
-                    inner: <$inner_type as $crate::common::Colocate>::new_colocated(anchor),
+                    inner: $crate::common::SingleMap::from_raw(raw),
                     $phantom_field: std::marker::PhantomData,
                 }
             }
 
             #[inline(always)]
             fn raw(&self) -> &vsdb_core::MapxRaw {
-                $crate::common::Colocate::raw(&self.inner)
+                $crate::common::SingleMap::raw(&self.inner)
             }
 
-            fn clone_colocated(
-                &self,
-                anchor: &vsdb_core::MapxRaw,
-            ) -> $crate::common::error::Result<Self> {
-                Ok(Self {
-                    inner: $crate::common::Colocate::clone_colocated(&self.inner, anchor)?,
-                    $phantom_field: std::marker::PhantomData,
-                })
-            }
         }
 
         impl<$($wrapper_generics),*> Clone for $wrapper_name<$($wrapper_generics),*>
@@ -278,54 +263,3 @@ macro_rules! define_map_wrapper {
     };
 }
 pub(crate) use define_map_wrapper;
-
-macro_rules! entry_or_insert_via_mock {
-    ($slf:expr, $hdr_ty:ty, $get_mut_call:ident($($get_mut_args:expr),*), $mock_call:ident($($mock_args:expr),*)) => {{
-        let hdr = $slf.hdr as *mut $hdr_ty;
-        // SAFETY: `hdr` is cast straight from `$slf.hdr: &'a mut $hdr_ty`,
-        // so it is non-null, aligned, and carries that exclusive
-        // borrow's provenance for the full lifetime `'a`; nothing else
-        // touches `$slf.hdr` between the cast and the last use below.
-        // The two dereferences are in mutually exclusive match arms and
-        // never coexist; each reborrows exclusively within `'a`, so no
-        // aliasing occurs.
-        match unsafe { &mut *hdr }.$get_mut_call($($get_mut_args),*) {
-            Some(v) => v,
-            _ => unsafe { &mut *hdr }.$mock_call($($mock_args),*),
-        }
-    }};
-}
-pub(crate) use entry_or_insert_via_mock;
-
-macro_rules! cow_bytes_bounds {
-    ($bounds:expr) => {{
-        use std::{borrow::Cow, ops::Bound};
-
-        // Bind once: evaluating `$bounds` twice could yield inconsistent
-        // start/end bounds for non-idempotent expressions.
-        let b = &($bounds);
-
-        let l = match b.start_bound() {
-            Bound::Included(lo) => Bound::Included(Cow::Owned(
-                $crate::common::ende::KeyEnDeOrdered::to_bytes(lo),
-            )),
-            Bound::Excluded(lo) => Bound::Excluded(Cow::Owned(
-                $crate::common::ende::KeyEnDeOrdered::to_bytes(lo),
-            )),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-
-        let h = match b.end_bound() {
-            Bound::Included(hi) => Bound::Included(Cow::Owned(
-                $crate::common::ende::KeyEnDeOrdered::to_bytes(hi),
-            )),
-            Bound::Excluded(hi) => Bound::Excluded(Cow::Owned(
-                $crate::common::ende::KeyEnDeOrdered::to_bytes(hi),
-            )),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-
-        (l, h)
-    }};
-}
-pub(crate) use cow_bytes_bounds;

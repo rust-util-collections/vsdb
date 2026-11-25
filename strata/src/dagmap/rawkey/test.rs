@@ -6,15 +6,12 @@ macro_rules! s {
 }
 
 #[test]
-fn mutable_guard_persists_interior_edits() {
+fn update_persists_interior_mutable_values() {
     use std::cell::RefCell;
 
     let mut dag = DagMapRawKey::<RefCell<u32>>::new(None);
     dag.insert(b"key", &RefCell::new(10));
-    {
-        let guard = dag.get_mut(b"key").unwrap();
-        *guard.borrow_mut() = 20;
-    }
+    dag.update(b"key", |v| *v.get_mut() = 20).unwrap();
     assert_eq!(dag.get(b"key").unwrap().into_inner(), 20);
 }
 
@@ -22,15 +19,15 @@ fn mutable_guard_persists_interior_edits() {
 fn mutable_guard_preserves_untouched_variable_encoding() {
     struct TaggedValue(u32);
     impl ValueEnDe for TaggedValue {
-        fn try_encode(&self) -> Result<Vec<u8>> {
+        fn encode_value_into(&self, dst: &mut Vec<u8>) -> Result<()> {
             use std::sync::atomic::{AtomicU32, Ordering};
             static TAG: AtomicU32 = AtomicU32::new(0);
-            let mut bytes = self.0.to_le_bytes().to_vec();
-            bytes.extend_from_slice(&TAG.fetch_add(1, Ordering::Relaxed).to_le_bytes());
-            Ok(bytes)
+            dst.extend_from_slice(&self.0.to_le_bytes());
+            dst.extend_from_slice(&TAG.fetch_add(1, Ordering::Relaxed).to_le_bytes());
+            Ok(())
         }
 
-        fn decode(bytes: &[u8]) -> Result<Self> {
+        fn decode_value(bytes: &[u8]) -> Result<Self> {
             Ok(Self(u32::from_le_bytes(bytes[..4].try_into().unwrap())))
         }
     }
@@ -71,15 +68,13 @@ fn dagmaprawkey_functions() {
     i0.insert("k0", &s!("v0"));
     assert_eq!(i0.get("k0").unwrap(), s!("v0"));
     assert!(i0.get("k1").is_none());
-    let mut i0_raw = i0.into_inner();
 
-    let mut i1: DagMapRawKey<Vec<u8>> = DagMapRawKey::new(Some(&mut i0_raw));
+    let mut i1: DagMapRawKey<Vec<u8>> = DagMapRawKey::new(Some(&mut i0));
     i1.insert("k1", &s!("v1"));
     assert_eq!(i1.get("k1").unwrap(), s!("v1"));
     assert_eq!(i1.get("k0").unwrap(), s!("v0"));
-    let mut i1_raw = i1.into_inner();
 
-    let mut i2: DagMapRawKey<Vec<u8>> = DagMapRawKey::new(Some(&mut i1_raw));
+    let mut i2: DagMapRawKey<Vec<u8>> = DagMapRawKey::new(Some(&mut i1));
     i2.insert("k2", &s!("v2"));
     assert_eq!(i2.get("k2").unwrap(), s!("v2"));
     assert_eq!(i2.get("k1").unwrap(), s!("v1"));
@@ -98,13 +93,13 @@ fn dagmaprawkey_functions() {
     assert_eq!(i2.get("k0").unwrap(), s!("v0x"));
 
     // Overlay isolation: parents never see descendant writes.
-    assert!(i1_raw.get("k2").is_none());
-    assert_eq!(i1_raw.get("k1").unwrap(), s!("v1").encode());
-    assert_eq!(i1_raw.get("k0").unwrap(), s!("v0").encode());
+    assert!(i1.get("k2").is_none());
+    assert_eq!(i1.get("k1").unwrap(), s!("v1"));
+    assert_eq!(i1.get("k0").unwrap(), s!("v0"));
 
-    assert!(i0_raw.get("k2").is_none());
-    assert!(i0_raw.get("k1").is_none());
-    assert_eq!(i0_raw.get("k0").unwrap(), s!("v0").encode());
+    assert!(i0.get("k2").is_none());
+    assert!(i0.get("k1").is_none());
+    assert_eq!(i0.get("k0").unwrap(), s!("v0"));
 
     // The original owned handles alias the same storage and observe the
     // post-prune state (`Clone` would deep-copy instead).
@@ -116,15 +111,14 @@ fn dagmaprawkey_functions() {
     assert_eq!(head.get("k0").unwrap(), s!("v0x"));
 
     // The intermediate mainline node was merged into genesis and cleared.
-    assert!(i1_raw.is_dead());
+    assert!(i1.is_dead());
     // The genesis handle sees the merged result (same storage as `head`).
-    assert_eq!(i0_raw.get("k2").unwrap(), s!("v2x").encode());
+    assert_eq!(i0.get("k2").unwrap(), s!("v2x"));
 
     // prune with deep stack
     for i in 10u8..=255 {
         head.insert(i.to_be_bytes(), &i.to_be_bytes().to_vec());
-        let mut raw = head.into_inner();
-        head = DagMapRawKey::new(Some(&mut raw));
+        head = DagMapRawKey::new(Some(&mut head));
     }
 
     let mut head = head.prune().unwrap();
@@ -186,10 +180,10 @@ fn test_serde_roundtrip() {
 }
 
 #[test]
-#[should_panic(expected = "empty encoded value is a tombstone")]
-fn typed_empty_encoding_panics() {
+fn typed_empty_encoding_round_trips() {
     let mut dag: DagMapRawKey<()> = DagMapRawKey::new(None);
     dag.insert("unit", &());
+    assert_eq!(dag.get("unit"), Some(()));
 }
 
 /// from_meta nonexistent.
@@ -204,8 +198,7 @@ fn test_meta_with_parent_child() {
     let mut p = DagMapRawKey::<Vec<u8>>::new(None);
     p.insert("pk", &s!("pv"));
 
-    let mut p_raw = p.into_inner();
-    let mut c = DagMapRawKey::<Vec<u8>>::new(Some(&mut p_raw));
+    let mut c = DagMapRawKey::<Vec<u8>>::new(Some(&mut p));
     c.insert("ck", &s!("cv"));
 
     let id = c.save_meta().unwrap();

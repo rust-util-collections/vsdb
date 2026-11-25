@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_core"
-version = "17.0.21"
+version = "18.0.0"
 authors = ["hui.fan@mail.ru"]
 edition = "2024"
 description = "A std-collection-like database"
@@ -11,7 +11,7 @@ categories = ["database-implementations", "data-structures", "algorithms", "cach
 license = "MIT"
 
 [dependencies]
-ruc = { workspace = true }
+rand = { workspace = true }
 serde = { workspace = true }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
@@ -23,7 +23,6 @@ mmdb = { workspace = true }
 default = []
 
 [dev-dependencies]
-rand = { workspace = true }
 criterion = { workspace = true }
 
 [[bench]]

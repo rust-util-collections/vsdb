@@ -47,11 +47,11 @@
 mod test;
 
 use crate::common::{
-    DEFAULT_NS_ID, InstanceId, Namespace, PreBytes, RawKey, RawValue, engine,
+    DEFAULT_NS_ID, InstanceId, Namespace, RawKey, RawRangeBounds, RawValue, engine,
     error::{Result, VsdbError},
 };
 use serde::{Deserialize, Serialize};
-use std::{borrow::Cow, fs, ops::RangeBounds};
+use std::{borrow::Cow, fs};
 
 /// An iterator over the entries of a `MapxRaw`.
 pub type MapxRawIter<'a> = engine::MapxIter<'a>;
@@ -76,6 +76,16 @@ pub struct MapxRawReader {
 }
 
 impl MapxRawReader {
+    /// Identity shared with the writable map.
+    pub fn instance_id(&self) -> InstanceId {
+        self.inner.instance_id()
+    }
+
+    /// Owning namespace, retained for the lifetime of the reader.
+    pub fn namespace(&self) -> Namespace {
+        self.inner.namespace()
+    }
+
     /// Reads the latest committed value. Fatal engine errors panic.
     pub fn get(&self, key: impl AsRef<[u8]>) -> Option<RawValue> {
         self.inner.get(key.as_ref())
@@ -312,20 +322,18 @@ impl MapxRaw {
         self.inner.get_mut(key.as_ref())
     }
 
-    /// Mocks a mutable value, typically for use in scenarios where you need to
-    /// create a `ValueMut` without actually inserting the value into the map yet.
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - The key associated with the value.
-    /// * `value` - The value to be mocked.
-    ///
-    /// # Returns
-    ///
-    /// A `ValueMut` instance.
-    #[inline(always)]
-    pub fn mock_value_mut(&mut self, key: RawValue, value: RawValue) -> ValueMut<'_> {
-        self.inner.mock_value_mut(key, value)
+    /// Edits a present value and reports any storage error during write-back.
+    pub fn update<R>(
+        &mut self,
+        key: impl AsRef<[u8]>,
+        edit: impl FnOnce(&mut RawValue) -> R,
+    ) -> Result<Option<R>> {
+        let Some(mut guard) = self.get_mut(key) else {
+            return Ok(None);
+        };
+        let result = edit(&mut guard);
+        guard.commit()?;
+        Ok(Some(result))
     }
 
     /// Checks if the map contains a value for the specified key.
@@ -380,8 +388,18 @@ impl MapxRaw {
     ///
     /// An `Entry` that allows for operations on the value.
     #[inline(always)]
-    pub fn entry<'a>(&'a mut self, key: &'a [u8]) -> Entry<'a> {
-        Entry { key, hdr: self }
+    pub fn entry(&mut self, key: &[u8]) -> Entry<'_> {
+        match self.get(key) {
+            Some(value) => Entry::Occupied(OccupiedEntry(self.inner.value_slot(
+                key.to_vec(),
+                value,
+                false,
+            ))),
+            None => Entry::Vacant(VacantEntry {
+                key: key.to_vec(),
+                hdr: self,
+            }),
+        }
     }
 
     /// Returns an iterator over the map's entries.
@@ -409,10 +427,7 @@ impl MapxRaw {
     ///
     /// A `MapxRawIter` that iterates over the key-value pairs in the specified range.
     #[inline(always)]
-    pub fn range<'a, R: RangeBounds<Cow<'a, [u8]>>>(
-        &'a self,
-        bounds: R,
-    ) -> MapxRawIter<'a> {
+    pub fn range<'a, R: RawRangeBounds>(&'a self, bounds: R) -> MapxRawIter<'a> {
         self.inner.range(bounds)
     }
 
@@ -429,10 +444,7 @@ impl MapxRaw {
     ///
     /// A `MapxRawIter` that iterates over the key-value pairs in the specified range.
     #[inline(always)]
-    pub fn range_detached<'a, R: RangeBounds<Cow<'a, [u8]>>>(
-        &self,
-        bounds: R,
-    ) -> MapxRawIter<'a> {
+    pub fn range_detached<'a, R: RawRangeBounds>(&self, bounds: R) -> MapxRawIter<'a> {
         self.inner.range_detached(bounds)
     }
 
@@ -456,7 +468,7 @@ impl MapxRaw {
     ///
     /// A `MapxRawIterMut` that allows for mutable iteration over the key-value pairs in the specified range.
     #[inline(always)]
-    pub fn range_mut<'a, R: RangeBounds<Cow<'a, [u8]>>>(
+    pub fn range_mut<'a, R: RawRangeBounds>(
         &'a mut self,
         bounds: R,
     ) -> MapxRawIterMut<'a> {
@@ -656,42 +668,12 @@ impl MapxRaw {
         self.inner.clear();
     }
 
-    /// Reconstructs a `MapxRaw` in `ns` from the 8-byte prefix previously
-    /// obtained via [`as_bytes`](Self::as_bytes).
-    ///
-    /// Prefer [`from_meta`](Self::from_meta) or serde: both validate the
-    /// payload and reserve the prefix against reallocation. This raw form
-    /// exists for layered crates migrating their own legacy formats.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `s` encodes a prefix they have unique
-    /// ownership of, issued by this universe's allocator, and that `ns`'s
-    /// engine still contains the data for it. Arbitrary bytes can alias
-    /// another collection's storage.
-    #[inline(always)]
-    pub unsafe fn from_bytes_in(ns: &Namespace, s: impl AsRef<[u8]>) -> Self {
-        Self {
-            // SAFETY: forwards this fn's `unsafe` contract.
-            inner: unsafe { engine::Mapx::from_prefix_slice_in(ns, s) },
-        }
-    }
-
-    /// Returns the 8-byte prefix that uniquely identifies this map's
-    /// storage prefix range.
-    #[inline(always)]
-    pub fn as_bytes(&self) -> &PreBytes {
-        self.inner.as_prefix_slice()
-    }
-
     /// Returns the complete public identity of this `MapxRaw`:
     /// `{ map_id, ns }` — the same shape as the persisted meta bytes
     /// (`ns: None` ⇔ default namespace).  A pre-v16 bare `u64` id equals
     /// `InstanceId::from(u64)`.
     pub fn instance_id(&self) -> InstanceId {
-        let mut bytes = [0u8; 8];
-        bytes.copy_from_slice(self.as_bytes());
-        InstanceId::new(u64::from_le_bytes(bytes), self.inner.namespace().id())
+        self.inner.instance_id()
     }
 
     /// Checks if this `MapxRaw` instance is the same as another.
@@ -744,16 +726,9 @@ impl MapxRaw {
     pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
         let id = instance_id.into();
         let id = InstanceId::new(id.map_id, id.ns.unwrap_or(DEFAULT_NS_ID));
-        let ns = match id.ns {
-            None => Namespace::default_ns(),
-            Some(n) => Namespace::open(n)?,
-        };
+        let ns = Namespace::open(id.ns.unwrap_or(DEFAULT_NS_ID))?;
         let bytes = fs::read(ns.meta_path(id.map_id))?;
-        let (prefix, embedded_ns) = engine::Mapx::decode_prefix_meta(&bytes)?;
-        let found = InstanceId::new(
-            u64::from_le_bytes(prefix),
-            embedded_ns.unwrap_or(DEFAULT_NS_ID),
-        );
+        let found = engine::Mapx::decode_prefix_meta(&bytes)?;
         if found != id {
             return Err(VsdbError::Decode {
                 detail: format!(
@@ -783,6 +758,12 @@ pub struct MapxRawBatch<'a> {
 }
 
 impl MapxRawBatch<'_> {
+    /// Deletes keys in the half-open byte range `[start, end)` in this batch.
+    /// Later inserts in the same batch take precedence.
+    pub fn delete_range(&mut self, start: &[u8], end: &[u8]) {
+        self.inner.delete_range(start, end);
+    }
+
     /// Buffers an insert.
     #[inline(always)]
     pub fn insert(&mut self, key: impl AsRef<[u8]>, value: impl AsRef<[u8]>) {
@@ -826,56 +807,61 @@ impl MapxRawBatch<'_> {
 }
 
 /// A view into a single entry in a map, which may either be vacant or occupied.
-pub struct Entry<'a> {
-    key: &'a [u8],
-    hdr: &'a mut MapxRaw,
+pub enum Entry<'a> {
+    Occupied(OccupiedEntry<'a>),
+    Vacant(VacantEntry<'a>),
 }
 
+pub struct OccupiedEntry<'a>(ValueMut<'a>);
+impl<'a> OccupiedEntry<'a> {
+    pub fn get(&self) -> &RawValue {
+        &self.0
+    }
+    pub fn get_mut(&mut self) -> &mut RawValue {
+        &mut self.0
+    }
+    pub fn into_mut(self) -> ValueMut<'a> {
+        self.0
+    }
+    pub fn insert(&mut self, value: RawValue) -> RawValue {
+        std::mem::replace(&mut *self.0, value)
+    }
+    pub fn remove(self) -> RawValue {
+        self.0.remove()
+    }
+}
+
+pub struct VacantEntry<'a> {
+    key: RawKey,
+    hdr: &'a mut MapxRaw,
+}
+impl<'a> VacantEntry<'a> {
+    pub fn insert(self, value: RawValue) -> ValueMut<'a> {
+        self.hdr.inner.value_slot(self.key, value, true)
+    }
+    /// An uninitialized guard for a layered codec. Dropping this guard
+    /// before assigning a value leaves the entry vacant.
+    pub fn into_slot(self) -> ValueMut<'a> {
+        self.hdr.inner.value_slot(self.key, Vec::new(), false)
+    }
+}
 impl<'a> Entry<'a> {
-    /// Ensures a value is in the entry by inserting the default if empty, and returns
-    /// a mutable reference to the value.
-    ///
-    /// # Arguments
-    ///
-    /// * `default` - The default value to insert if the entry is empty.
-    ///
-    /// # Returns
-    ///
-    /// A `ValueMut` to the value in the entry.
-    pub fn or_insert(self, default: &'a [u8]) -> ValueMut<'a> {
-        let hdr = self.hdr as *mut MapxRaw;
-        // SAFETY: `hdr` is derived from `self.hdr: &'a mut MapxRaw`.
-        // The two dereferences are in mutually exclusive match arms and
-        // never coexist; no aliasing occurs.
-        match unsafe { &mut *hdr }.get_mut(self.key) {
-            Some(v) => v,
-            _ => {
-                unsafe { &mut *hdr }.mock_value_mut(self.key.to_vec(), default.to_vec())
-            }
+    pub fn or_insert(self, default: &[u8]) -> ValueMut<'a> {
+        self.or_insert_with(|| default.to_vec())
+    }
+    pub fn or_insert_with(self, f: impl FnOnce() -> RawValue) -> ValueMut<'a> {
+        match self {
+            Self::Occupied(e) => e.into_mut(),
+            Self::Vacant(e) => e.insert(f()),
         }
     }
-
-    /// Ensures a value is in the entry by inserting the result of a function if empty,
-    /// and returns a mutable reference to the value.
-    ///
-    /// # Arguments
-    ///
-    /// * `f` - A closure that returns the default value to insert if the entry is empty.
-    ///
-    /// # Returns
-    ///
-    /// A `ValueMut` to the value in the entry.
-    pub fn or_insert_with<F>(self, f: F) -> ValueMut<'a>
-    where
-        F: FnOnce() -> RawValue,
-    {
-        let hdr = self.hdr as *mut MapxRaw;
-        // SAFETY: `hdr` is derived from `self.hdr: &'a mut MapxRaw`.
-        // The two dereferences are in mutually exclusive match arms and
-        // never coexist; no aliasing occurs.
-        match unsafe { &mut *hdr }.get_mut(self.key) {
-            Some(v) => v,
-            _ => unsafe { &mut *hdr }.mock_value_mut(self.key.to_vec(), f()),
+    pub fn or_default(self) -> ValueMut<'a> {
+        self.or_insert_with(Vec::new)
+    }
+    pub fn and_modify(mut self, f: impl FnOnce(&mut RawValue)) -> Self {
+        if let Self::Occupied(e) = &mut self {
+            f(e.get_mut());
         }
+        self
     }
 }

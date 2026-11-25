@@ -380,6 +380,46 @@ fn gc_bench(c: &mut Criterion) {
     group.finish();
 }
 
+/// Keep the same million-key tree and sixteen retained blocks throughout
+/// the measurement. Rollback and fixture setup are outside the timed block.
+fn retained_blocks(c: &mut Criterion) {
+    fn edits(block: u64) -> impl Iterator<Item = (u64, Option<u64>)> {
+        (0..1_000).map(move |j| {
+            let key = ((1_000 * block + j) * 48_271) % 1_000_000;
+            (key, Some(key + block))
+        })
+    }
+    let mut fixture = None;
+    let mut group = c.benchmark_group("vsdb::versioned / retained");
+    group.sample_size(10);
+    group.bench_function("1000-key block", |b| {
+        let (map, branch, tip) = fixture.get_or_insert_with(|| {
+            let mut map = VerMap::<u64, u64>::new();
+            let branch = map.main_branch();
+            map.bulk_load(branch, (0..1_000_000).map(|i| (i, i)))
+                .unwrap();
+            let mut tip = map.commit(branch).unwrap();
+            for block in 1..=16 {
+                map.write_batch(branch, edits(block)).unwrap();
+                tip = map.commit(branch).unwrap();
+            }
+            (map, branch, tip)
+        });
+        b.iter_custom(|iters| {
+            let mut total = Duration::ZERO;
+            for _ in 0..iters {
+                let start = Instant::now();
+                map.write_batch(*branch, edits(17)).unwrap();
+                black_box(map.commit(*branch).unwrap());
+                total += start.elapsed();
+                map.rollback_to(*branch, *tip).unwrap();
+            }
+            total
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     single_branch_crud,
@@ -389,6 +429,7 @@ criterion_group!(
     historical,
     merge_bench,
     gc_bench,
+    retained_blocks,
 );
 
 #[path = "units/legacy_budget.rs"]

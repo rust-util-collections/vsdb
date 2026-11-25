@@ -78,7 +78,7 @@ fn composites_in_namespaces() {
     assert_eq!(o_copy.get_value(), 42);
 
     // ---- runtime-metric VecDex placed via new_in ----
-    let mut vd: VecDexDyn<String> = VecDexDyn::new_in(
+    let mut vd: VecDexDyn<String> = VecDexDyn::new_with_metric_in(
         &ns,
         MetricKind::Cosine,
         HnswConfig {

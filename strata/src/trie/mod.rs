@@ -55,497 +55,229 @@
 
 mod cache;
 mod codec_util;
-mod error;
 mod mpt;
 mod nibbles;
 mod node;
 pub mod proof;
+mod shared;
 mod smt;
 mod transport;
 
 #[cfg(test)]
 mod test;
 
-pub use error::TrieError;
 pub use mpt::{MAX_MPT_KEY_LEN, MptProof};
 pub use proof::{ProofWithRoot, VerMapWithProof};
 pub use smt::SmtProof;
 
-use std::{mem, path::Path};
+use crate::{InstanceId, Result};
+use cache::CacheNode;
+use std::path::Path;
 
-use crate::common::{ensure_process_writable, error::Result};
-use codec_util::MAX_CACHE_FILE_BYTES;
-use mpt::{TrieMut, TrieRo};
-use node::NodeHandle;
-use smt::mutation::SmtMut;
+fn invalid_state(detail: String) -> crate::VsdbError {
+    crate::VsdbError::Trie { detail }
+}
 
-/// Common interface for stateless, in-memory Merkle trie engines.
-///
-/// Implemented by [`MptCalc`] and [`SmtCalc`].  Used as the trie
-/// back-end in [`VerMapWithProof`].
+/// Binding of a disposable checkpoint to the exact committed tree it represents.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Checkpoint {
+    pub universe: u128,
+    pub map: InstanceId,
+    pub commit: u64,
+    pub tree_root: u64,
+}
+impl Checkpoint {
+    fn standalone(cache_id: u64, tag: u64) -> Self {
+        Self {
+            universe: 0,
+            map: cache_id.into(),
+            commit: tag,
+            tree_root: 0,
+        }
+    }
+}
+
+/// Stateless in-memory commitment and proof engine. Failed updates leave the
+/// previous root accessible, including across unwinding.
 pub trait TrieCalc: Clone + Default {
-    /// Builds a trie from key-value pairs.
+    type Proof;
     fn from_entries(
         kvs: impl IntoIterator<Item = (impl AsRef<[u8]>, impl AsRef<[u8]>)>,
     ) -> Result<Self>;
-
-    /// Looks up a value by key.
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>>;
-
-    /// Inserts a key-value pair.
     fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()>;
-
-    /// Removes a key.
     fn remove(&mut self, key: &[u8]) -> Result<()>;
-
-    /// Computes the 32-byte Merkle root hash.
-    fn root_hash(&mut self) -> Result<Vec<u8>>;
-
-    /// Applies a batch of insert/remove operations.
     fn batch_update(&mut self, ops: &[(&[u8], Option<&[u8]>)]) -> Result<()>;
-
-    /// Saves the trie to a file under `dir` for fast restoration.
-    fn save_cache(&mut self, dir: &Path, cache_id: u64, sync_tag: u64) -> Result<()>;
-
-    /// Loads a previously saved trie from a file under `dir`.
-    fn load_cache(dir: &Path, cache_id: u64) -> Result<(Self, u64, Vec<u8>)>;
+    fn root_hash(&self) -> [u8; 32];
+    fn prove(&self, key: &[u8]) -> Result<Self::Proof>;
+    fn verify_proof(root: &[u8; 32], key: &[u8], proof: &Self::Proof) -> Result<bool>;
+    fn save_checkpoint(&self, dir: &Path, id: Checkpoint) -> Result<()>;
+    fn load_checkpoint(dir: &Path, cache_id: u64) -> Result<(Self, Checkpoint)>;
+    fn save_cache(&self, dir: &Path, cache_id: u64, tag: u64) -> Result<()> {
+        self.save_checkpoint(dir, Checkpoint::standalone(cache_id, tag))
+    }
+    fn load_cache(dir: &Path, cache_id: u64) -> Result<(Self, u64, [u8; 32])> {
+        let (calc, id) = Self::load_checkpoint(dir, cache_id)?;
+        let hash = calc.root_hash();
+        Ok((calc, id.commit, hash))
+    }
 }
 
-/// A stateless, in-memory Merkle Patricia Trie.
-///
-/// `MptCalc` holds an in-memory trie that can be incrementally updated
-/// with [`insert`](Self::insert) / [`remove`](Self::remove) /
-/// [`batch_update`](Self::batch_update), queried with [`get`](Self::get),
-/// and hashed with [`root_hash`](Self::root_hash).
-///
-/// Unlike a traditional persistent MPT, `MptCalc` does **not** manage
-/// node storage or lifecycle.  All versioning, branching, and persistence
-/// should be handled by an external store.
+/// An in-memory Merkle Patricia Trie with shared immutable subtrees.
+#[derive(Clone, Default)]
 pub struct MptCalc {
-    root: NodeHandle,
+    root: node::NodeHandle,
 }
-
-impl Clone for MptCalc {
-    fn clone(&self) -> Self {
-        #[cfg(test)]
-        MPT_CLONES.with(|count| count.set(count.get() + 1));
-        Self {
-            root: self.root.clone(),
-        }
-    }
-}
-
-#[cfg(test)]
-thread_local! {
-    static MPT_CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) fn mpt_clone_count() -> usize {
-    MPT_CLONES.with(std::cell::Cell::get)
-}
-
-impl Default for MptCalc {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl MptCalc {
-    /// Creates an empty trie.
-    pub fn new() -> Self {
-        Self {
-            root: NodeHandle::default(),
-        }
-    }
-
-    /// Builds a trie by inserting all key-value pairs from an iterator.
-    pub fn from_entries(
-        kvs: impl IntoIterator<Item = (impl AsRef<[u8]>, impl AsRef<[u8]>)>,
-    ) -> Result<Self> {
-        let mut calc = Self::new();
-        for (k, v) in kvs {
-            calc.insert(k.as_ref(), v.as_ref())?;
-        }
-        Ok(calc)
-    }
-
-    /// Looks up a value by key.
-    pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
-        let trie = TrieRo::new(&self.root);
-        Ok(trie.get(key)?)
-    }
-
-    /// Inserts a key-value pair into the trie.
-    ///
-    /// Returns an error if `key` is longer than [`MAX_MPT_KEY_LEN`] —
-    /// the same path-length bound is enforced when loading caches.
-    /// Traversals use explicit work stacks. `self`'s root is always restored
-    /// before returning, so a rejected insert never loses trie data.
-    pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
-        let mut trie = TrieMut::new(mem::take(&mut self.root));
-        let result = trie.insert(key, value);
-        self.root = trie.into_root();
-        Ok(result?)
-    }
-
-    /// Removes a key from the trie.
-    ///
-    /// `self`'s root is always restored before returning, so a rejected
-    /// remove never loses trie data.
-    pub fn remove(&mut self, key: &[u8]) -> Result<()> {
-        let mut trie = TrieMut::new(mem::take(&mut self.root));
-        let result = trie.remove(key);
-        self.root = trie.into_root();
-        Ok(result?)
-    }
-
-    /// Computes and returns the 32-byte Merkle root hash.
-    ///
-    /// Internally caches node hashes so that a subsequent call without
-    /// intervening mutations is essentially free.  `self`'s root is
-    /// always restored before returning, so a rejected commit never
-    /// loses trie data.
-    pub fn root_hash(&mut self) -> Result<Vec<u8>> {
-        let mut trie = TrieMut::new(mem::take(&mut self.root));
-        let hash = trie.commit();
-        self.root = trie.into_root();
-        Ok(hash?)
-    }
-
-    /// Applies a batch of insert/remove operations.
-    ///
-    /// Each entry is `(key, Some(value))` for insert or `(key, None)` for remove.
-    /// `self`'s root is always restored before returning — even if an
-    /// operation partway through the batch fails — so a rejected batch
-    /// never loses trie data (the batch is not atomic: operations before
-    /// the failure remain applied).
-    pub fn batch_update(&mut self, ops: &[(&[u8], Option<&[u8]>)]) -> Result<()> {
-        let mut trie = TrieMut::new(mem::take(&mut self.root));
-        let mut result = Ok(());
-        for (key, val) in ops {
-            result = if let Some(v) = val {
-                trie.insert(key, v)
-            } else {
-                trie.remove(key)
-            };
-            if result.is_err() {
-                break;
-            }
-        }
-        self.root = trie.into_root();
-        Ok(result?)
-    }
-
-    // =================================================================
-    // Proofs
-    // =================================================================
-
-    /// Generates a Merkle proof for the given key.
-    ///
-    /// The tree must be committed (call [`root_hash`](Self::root_hash)
-    /// first) for proof generation to work.
-    pub fn prove(&self, key: &[u8]) -> Result<MptProof> {
-        Ok(mpt::proof::prove(&self.root, key)?)
-    }
-
-    /// Verifies an MPT proof against a root hash for a specific key.
-    ///
-    /// `expected_key` is the key the caller expects this proof to cover.
-    pub fn verify_proof(
-        root_hash: &[u8; 32],
-        expected_key: &[u8],
-        proof: &MptProof,
-    ) -> Result<bool> {
-        Ok(mpt::proof::verify_proof(root_hash, expected_key, proof)?)
-    }
-
-    // =================================================================
-    // Cache (disposable persistence)
-    // =================================================================
-
-    /// Saves the trie to a file for fast restoration on restart.
-    ///
-    /// `sync_tag` is an opaque identifier (e.g. a `CommitId`) that the
-    /// caller can use to determine whether the cache is still current.
-    /// Call [`root_hash`](Self::root_hash) before saving to ensure node
-    /// hashes are computed.
-    ///
-    /// The cache is **disposable**: if the file is lost or corrupted,
-    /// the trie can always be rebuilt from the authoritative store.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`VsdbError::ReadOnly`](vsdb_core::VsdbError::ReadOnly) when
-    /// VSDB was configured read-only, or a trie/I/O error if serialization
-    /// fails. Checkpoints larger than the 512 MiB load limit return an error
-    /// before replacing the previous file.
-    pub fn save_cache(
-        &mut self,
-        dir: &Path,
-        cache_id: u64,
-        sync_tag: u64,
-    ) -> Result<()> {
-        ensure_process_writable("MPT cache save")?;
-        let hash = self.root_hash()?;
-        let path = dir.join(format!("mpt_cache_{}.bin", cache_id));
-        Ok(cache::save_to_file(
-            &self.root,
-            sync_tag,
-            &hash,
-            &path,
-            MAX_CACHE_FILE_BYTES,
-        )?)
-    }
-
-    /// Loads a previously saved trie from a file.
-    ///
-    /// Returns `(MptCalc, sync_tag, root_hash)`.  The caller should
-    /// compare `sync_tag` with the current store head and apply any
-    /// diff via [`insert`](Self::insert)/[`remove`](Self::remove).
-    pub fn load_cache(dir: &Path, cache_id: u64) -> Result<(Self, u64, Vec<u8>)> {
-        let path = dir.join(format!("mpt_cache_{}.bin", cache_id));
-        let (root, sync_tag, root_hash) = cache::load_from_file(&path)?;
-        Ok((Self { root }, sync_tag, root_hash))
-    }
-}
-
-impl TrieCalc for MptCalc {
-    fn from_entries(
-        kvs: impl IntoIterator<Item = (impl AsRef<[u8]>, impl AsRef<[u8]>)>,
-    ) -> Result<Self> {
-        Self::from_entries(kvs)
-    }
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
-        self.get(key)
-    }
-    fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
-        self.insert(key, value)
-    }
-    fn remove(&mut self, key: &[u8]) -> Result<()> {
-        self.remove(key)
-    }
-    fn root_hash(&mut self) -> Result<Vec<u8>> {
-        self.root_hash()
-    }
-    fn batch_update(&mut self, ops: &[(&[u8], Option<&[u8]>)]) -> Result<()> {
-        self.batch_update(ops)
-    }
-    fn save_cache(&mut self, dir: &Path, cache_id: u64, sync_tag: u64) -> Result<()> {
-        self.save_cache(dir, cache_id, sync_tag)
-    }
-    fn load_cache(dir: &Path, cache_id: u64) -> Result<(Self, u64, Vec<u8>)> {
-        Self::load_cache(dir, cache_id)
-    }
-}
-
-// =====================================================================
-// SmtCalc — Sparse Merkle Tree
-// =====================================================================
-
-/// A stateless, in-memory Sparse Merkle Tree.
-///
-/// Keys are hashed with Keccak256 to produce 256-bit paths.
-/// The tree is a binary trie with compressed paths, fixed logical
-/// depth of 256, and deterministic hashing.
-///
-/// API mirrors [`MptCalc`]: insert/remove/batch_update/get/root_hash,
-/// plus [`prove`](Self::prove) and [`verify_proof`](Self::verify_proof)
-/// for Merkle inclusion/exclusion proofs.
-#[derive(Clone)]
+/// An in-memory compressed sparse Merkle tree with shared immutable subtrees.
+#[derive(Clone, Default)]
 pub struct SmtCalc {
     root: smt::SmtHandle,
 }
 
-impl Default for SmtCalc {
-    fn default() -> Self {
-        Self::new()
+impl MptCalc {
+    fn edit(
+        root: &mut node::NodeHandle,
+        key: &[u8],
+        value: Option<&[u8]>,
+    ) -> Result<()> {
+        if let Some(v) = value {
+            mpt::mutation::insert(root, key, v)?
+        } else {
+            *root = mpt::mutation::remove(root, key)
+        }
+        Ok(())
+    }
+    pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        Ok(mpt::query::lookup(&self.root, key, |_| {}))
+    }
+    pub fn prove(&self, key: &[u8]) -> Result<MptProof> {
+        mpt::proof::prove(&self.root, key)
+    }
+    pub fn verify_proof(root: &[u8; 32], key: &[u8], proof: &MptProof) -> Result<bool> {
+        mpt::proof::verify_proof(root, key, proof)
     }
 }
-
 impl SmtCalc {
-    /// Creates an empty SMT.
-    pub fn new() -> Self {
-        Self {
-            root: smt::SmtHandle::default(),
-        }
-    }
-
-    /// Builds an SMT from key-value pairs.
-    ///
-    /// Keys are hashed internally via Keccak256.
-    pub fn from_entries(
-        kvs: impl IntoIterator<Item = (impl AsRef<[u8]>, impl AsRef<[u8]>)>,
-    ) -> Result<Self> {
-        let mut calc = Self::new();
-        for (k, v) in kvs {
-            calc.insert(k.as_ref(), v.as_ref())?;
-        }
-        Ok(calc)
-    }
-
-    /// Looks up a value by key.
-    pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
-        let key_hash = Self::hash_key(key);
-        let ro = smt::query::SmtRo::new(&self.root);
-        Ok(ro.get(&key_hash)?)
-    }
-
-    /// Inserts a key-value pair.
-    ///
-    /// `self`'s root is always restored before returning, so a rejected
-    /// insert never loses tree data.
-    pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
-        let key_hash = Self::hash_key(key);
-        let mut m = SmtMut::new(mem::take(&mut self.root));
-        let result = m.insert(&key_hash, value);
-        self.root = m.into_root();
-        Ok(result?)
-    }
-
-    /// Removes a key.
-    ///
-    /// `self`'s root is always restored before returning, so a rejected
-    /// remove never loses tree data.
-    pub fn remove(&mut self, key: &[u8]) -> Result<()> {
-        let key_hash = Self::hash_key(key);
-        let mut m = SmtMut::new(mem::take(&mut self.root));
-        let result = m.remove(&key_hash);
-        self.root = m.into_root();
-        Ok(result?)
-    }
-
-    /// Computes the 32-byte Merkle root hash.
-    ///
-    /// Caches node hashes so repeated calls without mutations are free.
-    /// `self`'s root is always restored before returning, so a rejected
-    /// commit never loses tree data.
-    pub fn root_hash(&mut self) -> Result<Vec<u8>> {
-        let mut m = SmtMut::new(mem::take(&mut self.root));
-        let hash = m.commit();
-        self.root = m.into_root();
-        Ok(hash?)
-    }
-
-    /// Applies a batch of insert/remove operations.
-    ///
-    /// `self`'s root is always restored before returning — even if an
-    /// operation partway through the batch fails — so a rejected batch
-    /// never loses tree data (the batch is not atomic: operations before
-    /// the failure remain applied).
-    pub fn batch_update(&mut self, ops: &[(&[u8], Option<&[u8]>)]) -> Result<()> {
-        let mut m = SmtMut::new(mem::take(&mut self.root));
-        let mut result = Ok(());
-        for (key, val) in ops {
-            let key_hash = Self::hash_key(key);
-            result = if let Some(v) = val {
-                m.insert(&key_hash, v)
-            } else {
-                m.remove(&key_hash)
-            };
-            if result.is_err() {
-                break;
-            }
-        }
-        self.root = m.into_root();
-        Ok(result?)
-    }
-
-    /// Generates a Merkle proof for the given key.
-    ///
-    /// The tree must be committed (call [`root_hash`](Self::root_hash)
-    /// first) for proof generation to work.
-    pub fn prove(&self, key: &[u8]) -> Result<SmtProof> {
-        let key_hash = Self::hash_key(key);
-        Ok(smt::proof::prove(&self.root, &key_hash)?)
-    }
-
-    /// Verifies a proof against a root hash and expected key.
-    pub fn verify_proof(
-        root_hash: &[u8; 32],
-        expected_key: &[u8],
-        proof: &SmtProof,
-    ) -> Result<bool> {
-        let expected_key_hash = Self::hash_key(expected_key);
-        Ok(smt::proof::verify_proof(
-            root_hash,
-            &expected_key_hash,
-            proof,
-        )?)
-    }
-
-    // =================================================================
-    // Cache
-    // =================================================================
-
-    /// Saves the SMT to a file for fast restoration.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`VsdbError::ReadOnly`](vsdb_core::VsdbError::ReadOnly) when
-    /// VSDB was configured read-only, or a trie/I/O error if serialization
-    /// fails. Checkpoints larger than the 512 MiB load limit return an error
-    /// before replacing the previous file.
-    pub fn save_cache(
-        &mut self,
-        dir: &Path,
-        cache_id: u64,
-        sync_tag: u64,
-    ) -> Result<()> {
-        ensure_process_writable("SMT cache save")?;
-        let hash = self.root_hash()?;
-        let path = dir.join(format!("smt_cache_{}.bin", cache_id));
-        Ok(smt::cache::save_to_file(
-            &self.root,
-            sync_tag,
-            &hash,
-            &path,
-            MAX_CACHE_FILE_BYTES,
-        )?)
-    }
-
-    /// Loads a previously saved SMT from a file.
-    pub fn load_cache(dir: &Path, cache_id: u64) -> Result<(Self, u64, Vec<u8>)> {
-        let path = dir.join(format!("smt_cache_{}.bin", cache_id));
-        let (root, sync_tag, root_hash) = smt::cache::load_from_file(&path)?;
-        Ok((Self { root }, sync_tag, root_hash))
-    }
-
-    // =================================================================
-    // Internal
-    // =================================================================
-
     fn hash_key(key: &[u8]) -> [u8; 32] {
         use sha3::{Digest, Keccak256};
         Keccak256::digest(key).into()
     }
+    fn edit(root: &mut smt::SmtHandle, key: &[u8], value: Option<&[u8]>) -> Result<()> {
+        let hash = Self::hash_key(key);
+        if let Some(v) = value {
+            smt::mutation::insert(root, hash, v)
+        } else {
+            *root = smt::mutation::remove(root, &hash)
+        }
+        Ok(())
+    }
+    pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        Ok(smt::query::get(&self.root, &Self::hash_key(key)))
+    }
+    pub fn prove(&self, key: &[u8]) -> Result<SmtProof> {
+        smt::proof::prove(&self.root, &Self::hash_key(key))
+    }
+    pub fn verify_proof(root: &[u8; 32], key: &[u8], proof: &SmtProof) -> Result<bool> {
+        smt::proof::verify_proof(root, &Self::hash_key(key), proof)
+    }
 }
 
-impl TrieCalc for SmtCalc {
-    fn from_entries(
-        kvs: impl IntoIterator<Item = (impl AsRef<[u8]>, impl AsRef<[u8]>)>,
-    ) -> Result<Self> {
-        Self::from_entries(kvs)
-    }
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
-        self.get(key)
-    }
-    fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
-        self.insert(key, value)
-    }
-    fn remove(&mut self, key: &[u8]) -> Result<()> {
-        self.remove(key)
-    }
-    fn root_hash(&mut self) -> Result<Vec<u8>> {
-        self.root_hash()
-    }
-    fn batch_update(&mut self, ops: &[(&[u8], Option<&[u8]>)]) -> Result<()> {
-        self.batch_update(ops)
-    }
-    fn save_cache(&mut self, dir: &Path, cache_id: u64, sync_tag: u64) -> Result<()> {
-        self.save_cache(dir, cache_id, sync_tag)
-    }
-    fn load_cache(dir: &Path, cache_id: u64) -> Result<(Self, u64, Vec<u8>)> {
-        Self::load_cache(dir, cache_id)
-    }
+macro_rules! trie_calc {
+    ($calc:ident,$node:ty,$proof:ty) => {
+        impl $calc {
+            pub fn new() -> Self {
+                Self::default()
+            }
+            pub fn from_entries(
+                kvs: impl IntoIterator<Item = (impl AsRef<[u8]>, impl AsRef<[u8]>)>,
+            ) -> Result<Self> {
+                let mut calc = Self::new();
+                for (k, v) in kvs {
+                    Self::edit(&mut calc.root, k.as_ref(), Some(v.as_ref()))?
+                }
+                Ok(calc)
+            }
+            pub fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
+                self.batch_update(&[(key, Some(value))])
+            }
+            pub fn remove(&mut self, key: &[u8]) -> Result<()> {
+                self.batch_update(&[(key, None)])
+            }
+            /// Applies all operations to a candidate root before publishing it.
+            pub fn batch_update(
+                &mut self,
+                ops: &[(&[u8], Option<&[u8]>)],
+            ) -> Result<()> {
+                self.root.try_update(|candidate| {
+                    for &(key, value) in ops {
+                        Self::edit(candidate, key, value)?
+                    }
+                    Ok(())
+                })
+            }
+            /// Returns the root commitment, caching each node's hash in place.
+            pub fn root_hash(&self) -> [u8; 32] {
+                self.root.root_hash()
+            }
+            pub fn save_cache(&self, dir: &Path, cache_id: u64, tag: u64) -> Result<()> {
+                TrieCalc::save_cache(self, dir, cache_id, tag)
+            }
+            pub fn load_cache(
+                dir: &Path,
+                cache_id: u64,
+            ) -> Result<(Self, u64, [u8; 32])> {
+                <Self as TrieCalc>::load_cache(dir, cache_id)
+            }
+        }
+        impl TrieCalc for $calc {
+            type Proof = $proof;
+            fn from_entries(
+                kvs: impl IntoIterator<Item = (impl AsRef<[u8]>, impl AsRef<[u8]>)>,
+            ) -> Result<Self> {
+                Self::from_entries(kvs)
+            }
+            fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+                self.get(key)
+            }
+            fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
+                self.insert(key, value)
+            }
+            fn remove(&mut self, key: &[u8]) -> Result<()> {
+                self.remove(key)
+            }
+            fn batch_update(&mut self, ops: &[(&[u8], Option<&[u8]>)]) -> Result<()> {
+                self.batch_update(ops)
+            }
+            fn root_hash(&self) -> [u8; 32] {
+                self.root_hash()
+            }
+            fn prove(&self, key: &[u8]) -> Result<Self::Proof> {
+                self.prove(key)
+            }
+            fn verify_proof(
+                root: &[u8; 32],
+                key: &[u8],
+                proof: &Self::Proof,
+            ) -> Result<bool> {
+                Self::verify_proof(root, key, proof)
+            }
+            fn save_checkpoint(&self, dir: &Path, id: Checkpoint) -> Result<()> {
+                let path =
+                    dir.join(format!("{}_cache_{}.bin", <$node>::NAME, id.map.map_id));
+                cache::save(&path, &self.root, id, cache::MAX_FILE)
+            }
+            fn load_checkpoint(dir: &Path, cache_id: u64) -> Result<(Self, Checkpoint)> {
+                let path = dir.join(format!("{}_cache_{}.bin", <$node>::NAME, cache_id));
+                let (root, id) = cache::load(&path)?;
+                if id.map.map_id != cache_id {
+                    return Err(crate::VsdbError::Trie {
+                        detail: "wrong cache instance".into(),
+                    });
+                }
+                Ok((Self { root }, id))
+            }
+        }
+    };
 }
+trie_calc!(MptCalc, node::Node, MptProof);
+trie_calc!(SmtCalc, smt::SmtNode, SmtProof);

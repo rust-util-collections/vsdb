@@ -1,5 +1,4 @@
 use super::*;
-use ruc::*;
 use std::{fs, mem::size_of};
 
 #[test]
@@ -32,7 +31,7 @@ fn test_insert() {
 
             // After inserting, should exist
             assert!(hdr.contains_key(key));
-            assert_eq!(&pnk!(hdr.get(key))[..], &value[..]);
+            assert_eq!(&hdr.get(key).unwrap()[..], &value[..]);
 
             // Remove it
             hdr.remove(key);
@@ -78,11 +77,11 @@ fn test_first_last() {
             hdr.insert(key, value);
         });
 
-    let (_, value) = pnk!(hdr.iter().next());
+    let (_, value) = hdr.iter().next().unwrap();
     let val = to_u64(&value);
     assert_eq!(0, val);
 
-    let (_, value) = pnk!(hdr.iter().next_back());
+    let (_, value) = hdr.iter().next_back().unwrap();
     let val = to_u64(&value);
     assert_eq!(max - 1, val);
 }
@@ -105,7 +104,7 @@ fn test_batch() {
     for i in 0..max {
         let key = to_bytes(i);
         let value = to_bytes(max + i);
-        assert_eq!(&pnk!(hdr.get(key))[..], &value[..]);
+        assert_eq!(&hdr.get(key).unwrap()[..], &value[..]);
     }
 
     {
@@ -142,8 +141,8 @@ fn test_batch_wiped() {
     }
 
     assert_eq!(hdr.iter().count(), 2);
-    assert_eq!(&pnk!(hdr.get(to_bytes(7)))[..], &to_bytes(70)[..]);
-    assert_eq!(&pnk!(hdr.get(to_bytes(max + 1)))[..], &to_bytes(71)[..]);
+    assert_eq!(&hdr.get(to_bytes(7)).unwrap()[..], &to_bytes(70)[..]);
+    assert_eq!(&hdr.get(to_bytes(max + 1)).unwrap()[..], &to_bytes(71)[..]);
     for i in (0..max).filter(|&i| i != 7) {
         assert!(hdr.get(to_bytes(i)).is_none());
     }
@@ -154,7 +153,7 @@ fn test_batch_wiped() {
 
     // The map remains fully usable afterwards.
     hdr.insert(to_bytes(1), to_bytes(2));
-    assert_eq!(&pnk!(hdr.get(to_bytes(1)))[..], &to_bytes(2)[..]);
+    assert_eq!(&hdr.get(to_bytes(1)).unwrap()[..], &to_bytes(2)[..]);
 }
 
 #[test]
@@ -176,7 +175,7 @@ fn test_clear_large() {
     // than the tombstone).
     hdr.insert(to_bytes(3), to_bytes(4));
     assert_eq!(hdr.iter().count(), 1);
-    assert_eq!(&pnk!(hdr.get(to_bytes(3)))[..], &to_bytes(4)[..]);
+    assert_eq!(&hdr.get(to_bytes(3)).unwrap()[..], &to_bytes(4)[..]);
 }
 
 fn to_u64(bytes: &[u8]) -> u64 {
@@ -193,10 +192,10 @@ fn test_save_and_from_meta() {
     hdr.insert([1], [10]);
     hdr.insert([2], [20]);
 
-    let id = pnk!(hdr.save_meta());
+    let id = hdr.save_meta().unwrap();
     assert_eq!(id, hdr.instance_id());
 
-    let restored = pnk!(MapxRaw::from_meta(id));
+    let restored = MapxRaw::from_meta(id).unwrap();
     assert_eq!(restored.get([1]), Some(vec![10]));
     assert_eq!(restored.get([2]), Some(vec![20]));
     assert!(restored.is_the_same_instance(&hdr));
@@ -241,13 +240,13 @@ fn test_from_meta_rejects_legacy_prefix_metadata() {
     let id = hdr.instance_id();
     let path = crate::common::Namespace::default_ns().meta_path(id.map_id);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(path, hdr.as_bytes()).unwrap();
+    fs::write(path, hdr.instance_id().map_id.to_le_bytes()).unwrap();
 
     assert!(MapxRaw::from_meta(id).is_err());
 
     // Re-saving under the current (magic-tagged) format restores access.
-    let id = pnk!(hdr.save_meta());
-    let restored = pnk!(MapxRaw::from_meta(id));
+    let id = hdr.save_meta().unwrap();
+    let restored = MapxRaw::from_meta(id).unwrap();
     assert_eq!(restored.get([1]), Some(vec![10]));
     assert!(restored.is_the_same_instance(&hdr));
 }
@@ -283,13 +282,17 @@ fn test_serde_size() {
     let hdr = MapxRaw::new();
     let bytes = postcard::to_allocvec(&hdr).unwrap();
     // engine::Mapx hand-written serde: magic + 8-byte prefix as a byte string.
-    assert!(bytes.len() <= 20, "expected ≤20 bytes, got {}", bytes.len());
+    assert_eq!(bytes.len(), 25);
+    assert_eq!(&bytes[1..9], b"VSMAPX02");
 }
 
 #[test]
 fn test_serde_rejects_raw_prefix_bytes() {
     let hdr = MapxRaw::new();
-    assert!(postcard::from_bytes::<MapxRaw>(hdr.as_bytes()).is_err());
+    assert!(
+        postcard::from_bytes::<MapxRaw>(&hdr.instance_id().map_id.to_le_bytes())
+            .is_err()
+    );
 }
 
 #[test]
@@ -298,15 +301,18 @@ fn test_serde_rejects_legacy_prefix_payload() {
     // A pre-magic (v13 legacy) payload is a bare 8-byte prefix; it must
     // be rejected unconditionally — the legacy acceptance path was
     // removed in v14.
-    let legacy_payload = postcard::to_allocvec(hdr.as_bytes().as_slice()).unwrap();
+    let legacy_payload =
+        postcard::to_allocvec(&hdr.instance_id().map_id.to_le_bytes().as_slice())
+            .unwrap();
     assert!(postcard::from_bytes::<MapxRaw>(&legacy_payload).is_err());
 }
 
 #[test]
 fn test_serde_rejects_allocator_future_prefix() {
     let mut meta = Vec::new();
-    meta.extend_from_slice(b"VSMAPX01");
+    meta.extend_from_slice(b"VSMAPX02");
     meta.extend_from_slice(&u64::MAX.to_le_bytes());
+    meta.extend_from_slice(&0u64.to_le_bytes());
 
     let payload = postcard::to_allocvec(meta.as_slice()).unwrap();
     assert!(postcard::from_bytes::<MapxRaw>(&payload).is_err());
@@ -318,8 +324,9 @@ fn test_serde_reserves_recovered_future_prefix() {
     let future = hdr.instance_id().map_id + 1;
 
     let mut meta = Vec::new();
-    meta.extend_from_slice(b"VSMAPX01");
+    meta.extend_from_slice(b"VSMAPX02");
     meta.extend_from_slice(&future.to_le_bytes());
+    meta.extend_from_slice(&0u64.to_le_bytes());
     let payload = postcard::to_allocvec(meta.as_slice()).unwrap();
 
     let mut recovered: MapxRaw = postcard::from_bytes(&payload).unwrap();
@@ -339,8 +346,8 @@ fn test_meta_restore_then_mutate() {
     let mut hdr = MapxRaw::new();
     hdr.insert(b"k1", b"v1");
 
-    let id = pnk!(hdr.save_meta());
-    let mut restored = pnk!(MapxRaw::from_meta(id));
+    let id = hdr.save_meta().unwrap();
+    let mut restored = MapxRaw::from_meta(id).unwrap();
 
     // Mutate through the restored handle
     restored.insert(b"k2", b"v2");
@@ -369,8 +376,8 @@ fn test_prefix_isolation_between_instances() {
         b.insert(to_bytes(i), to_bytes(i + 1000));
     }
     for i in 0u64..100 {
-        assert_eq!(to_u64(&pnk!(a.get(to_bytes(i)))), i);
-        assert_eq!(to_u64(&pnk!(b.get(to_bytes(i)))), i + 1000);
+        assert_eq!(to_u64(&a.get(to_bytes(i)).unwrap()), i);
+        assert_eq!(to_u64(&b.get(to_bytes(i)).unwrap()), i + 1000);
     }
 
     // A key present in only one instance is invisible to the other.
@@ -380,7 +387,7 @@ fn test_prefix_isolation_between_instances() {
     // Removal through one handle never affects the other.
     a.remove(to_bytes(0));
     assert!(a.get(to_bytes(0)).is_none());
-    assert_eq!(to_u64(&pnk!(b.get(to_bytes(0)))), 1000);
+    assert_eq!(to_u64(&b.get(to_bytes(0)).unwrap()), 1000);
 
     // Iteration is scoped: each handle sees exactly its own entries.
     assert_eq!(a.iter().count(), 100); // 1..=99 plus key 500
@@ -393,7 +400,7 @@ fn test_prefix_isolation_between_instances() {
     b.clear();
     assert!(b.iter().next().is_none());
     assert_eq!(a.iter().count(), 100);
-    assert_eq!(to_u64(&pnk!(a.get(to_bytes(1)))), 1);
+    assert_eq!(to_u64(&a.get(to_bytes(1)).unwrap()), 1);
 }
 
 #[test]
@@ -506,4 +513,25 @@ fn atomic_write_file_removes_staging_file_after_rename_failure() {
     assert!(path.is_dir());
     assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
     fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn batch_range_delete_respects_endpoints_and_order() {
+    let mut map = MapxRaw::new();
+    for key in [b"a".as_slice(), b"a\0", b"b", b"c"] {
+        map.insert(key, key);
+    }
+    let r = map.reader();
+    let before = r.read_view();
+    let mut batch = map.batch();
+    batch.delete_range(b"a", b"c");
+    batch.insert(b"b", b"x");
+    batch.delete_range(b"z", b"c");
+    batch.commit().unwrap();
+    assert_eq!(
+        map.range(b"a"..b"c").collect::<Vec<_>>(),
+        [(b"b".to_vec(), b"x".to_vec())]
+    );
+    assert_eq!(before.range(b"a"..b"c").count(), 3);
+    assert_eq!(map.last().unwrap().0, b"c");
 }

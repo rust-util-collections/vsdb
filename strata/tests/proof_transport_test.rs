@@ -42,8 +42,8 @@ fn proof_transport_across_processes() {
         mpt.insert(key, b"value\0bytes").unwrap();
         smt.insert(key, b"value\0bytes").unwrap();
     }
-    fs::write(dir.join("mpt.root"), mpt.root_hash().unwrap()).unwrap();
-    fs::write(dir.join("smt.root"), smt.root_hash().unwrap()).unwrap();
+    fs::write(dir.join("mpt.root"), mpt.root_hash()).unwrap();
+    fs::write(dir.join("smt.root"), smt.root_hash()).unwrap();
     for (key, exists) in [(b"alice".as_slice(), true), (b"carol", false)] {
         let mpt = mpt.prove(key).unwrap();
         let smt = smt.prove(key).unwrap();

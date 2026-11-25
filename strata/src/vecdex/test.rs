@@ -27,7 +27,7 @@ fn extreme_neighbor_caps_only_allocate_for_available_candidates() {
 }
 fn assert_bidirectional<K, D, S>(idx: &VecDex<K, D, S>)
 where
-    K: KeyEnDe + ValueEnDe + Clone + Eq,
+    K: KeyEnDe,
     D: DistanceMetric<S>,
     S: Scalar,
 {
@@ -184,27 +184,26 @@ fn replacement_is_staged_without_mutating_committed_state() {
     idx.insert(&7, &[1.0, 1.0]).unwrap();
     let old_node = decode_node_id(
         &idx.store
-            .get(user_key(&KeyEnDe::encode(&7u32)))
+            .get(user_key(&KeyEnDe::encode_key(&7u32)))
             .expect("old key mapping"),
     );
 
-    let mut txn = Txn::new(&idx.store, idx.state.clone());
-    assert!(VecDex::<u32, L2>::stage_remove(&mut txn, &cfg, &7));
-    VecDex::<u32, L2>::stage_insert(&mut txn, &cfg, &7, &[9.0, 9.0]);
+    let mut txn = Txn::new(&idx.store, idx.state());
+    assert!(VecDex::<u32, L2>::stage_remove(&L2, &mut txn, &cfg, &7));
+    VecDex::<u32, L2>::stage_insert(&L2, &mut txn, &cfg, &7, &[9.0, 9.0]).unwrap();
 
     assert_eq!(
         decode_node_id(
             &idx.store
-                .get(user_key(&KeyEnDe::encode(&7u32)))
+                .get(user_key(&KeyEnDe::encode_key(&7u32)))
                 .expect("committed mapping remains visible"),
         ),
         old_node
     );
     assert_eq!(idx.get(&7), Some(vec![1.0, 1.0]));
 
-    let (rows, state) = txn.finish();
+    let rows = txn.finish();
     rows.commit(&mut idx.store).unwrap();
-    idx.state = state;
     assert_eq!(idx.get(&7), Some(vec![9.0, 9.0]));
     assert_eq!(idx.len(), 1);
 }
@@ -282,14 +281,14 @@ fn clear_preserves_ef_search_across_restore() {
     idx.set_ef_search(123).unwrap();
     idx.clear().unwrap();
     assert!(idx.is_empty());
-    assert_eq!(idx.state.ef_search, 123);
+    assert_eq!(idx.state().ef_search, 123);
     drop(idx);
 
     // The cleared state row (including the live ef_search) is part of
     // the same atomic batch as the wipe, so a restore observes it.
     let mut restored: VecDex<u32, L2> = VecDex::from_meta(id).unwrap();
     assert!(restored.is_empty());
-    assert_eq!(restored.state.ef_search, 123);
+    assert_eq!(restored.state().ef_search, 123);
     assert!(restored.search(&[0.0, 0.0], 1).unwrap().is_empty());
 
     // Fully usable after clear + restore.
@@ -328,7 +327,7 @@ fn recall_random_vectors() {
         // Brute-force ground truth.
         let mut dists: Vec<(f32, u64)> = all_vecs
             .iter()
-            .map(|(id, v)| (L2::distance(&query, v), *id))
+            .map(|(id, v)| (L2.distance(&query, v), *id))
             .collect();
         dists.sort_by(|a, b| a.0.total_cmp(&b.0));
         let gt: HashSet<u64> = dists.iter().take(k).map(|&(_, id)| id).collect();
@@ -422,12 +421,11 @@ fn filtered_search_layer_caps_visits() {
         false
     };
 
-    let results = hnsw::search_layer::<f32, L2, _>(
-        &[0.0],
+    let results = hnsw::search_layer(
+        |id| get_vec(id).map(|v| L2.distance(&[0.0], &v)),
         &[0],
         8,
         0,
-        &get_vec,
         &adjacency,
         Some(&reject_all),
     );
@@ -473,7 +471,7 @@ fn filtered_search_reuses_decoded_result_keys() {
         static KEY_DECODES: Cell<usize> = const { Cell::new(0) };
     }
 
-    #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+    #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
     struct CountingKey(u64);
 
     impl<'de> Deserialize<'de> for CountingKey {
@@ -532,8 +530,10 @@ fn filtered_search_reuses_decoded_result_keys() {
     // component; the closest key discovered by fallback must be read on a
     // cache miss, without invoking its predicate again or losing the result.
     let node_ids: Vec<_> = index.node_layers().map(|(id, _)| id).collect();
-    index.state.entry_point = node_ids.iter().copied().max();
-    index.state.max_layer = 0;
+    let mut state = index.state();
+    state.entry_point = node_ids.iter().copied().max();
+    state.max_layer = 0;
+    index.store.insert(STATE_KEY, state.encode());
     for id in node_ids {
         index.store.remove(hnsw::adj_key(0, id));
     }
@@ -660,12 +660,12 @@ fn remove_entry_point_preserves_max_layer() {
     }
 
     // Record the entry point and remove it.
-    let meta_before = idx.state.clone();
+    let meta_before = idx.state();
     let ep = meta_before.entry_point.unwrap();
     idx.remove(&(ep as u32)).unwrap();
 
     // After removal, max_layer should still reflect the true global max.
-    let meta_after = idx.state.clone();
+    let meta_after = idx.state();
     let actual_max = idx.node_layers().map(|(_, l)| l).max().unwrap_or(0);
     assert_eq!(
         meta_after.max_layer, actual_max,
@@ -696,7 +696,7 @@ fn remove_entry_point_reconnects_isolated_true_max_node() {
     // node 2 "helper": layer 0, linked to node 1 at layer 0.
     // node 3 "ep": layer 5, current entry point (isolated; its own
     // connectivity doesn't matter since it's the one being removed).
-    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state.clone());
+    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state());
     for (node_id, key, layer, vec) in [
         (0u64, 0u32, 4u8, [0.0f32, 0.0]),
         (1, 1, 1, [1.0, 0.0]),
@@ -709,7 +709,7 @@ fn remove_entry_point_reconnects_isolated_true_max_node() {
         txn.rows
             .put(node_key(TAG_INFO, node_id).to_vec(), encode_value(&layer));
         txn.rows.put(
-            user_key(&KeyEnDe::encode(&key)),
+            user_key(&KeyEnDe::encode_key(&key)),
             node_id.to_le_bytes().to_vec(),
         );
     }
@@ -722,9 +722,8 @@ fn remove_entry_point_reconnects_isolated_true_max_node() {
     txn.state.node_count = 4;
     txn.state.next_node_id = 4;
 
-    let (rows, state) = txn.finish();
+    let rows = txn.finish();
     rows.commit(&mut idx.store).unwrap();
-    idx.state = state;
 
     // Sanity: the constructed graph matches the intended shape before
     // removal.
@@ -738,10 +737,11 @@ fn remove_entry_point_reconnects_isolated_true_max_node() {
         "sanity: node 0 (\"hi\") must survive at layer 4"
     );
     assert_eq!(
-        idx.state.max_layer, true_max,
+        idx.state().max_layer,
+        true_max,
         "max_layer must reflect the true global max"
     );
-    assert_eq!(idx.state.entry_point, Some(0));
+    assert_eq!(idx.state().entry_point, Some(0));
     assert!(!hnsw::get_neighbors(&idx.store, 0, 0).is_empty());
     assert_bidirectional(&idx);
     assert_eq!(idx.search(&[1.0, 0.0], 3).unwrap().len(), 3);
@@ -757,7 +757,7 @@ fn saturated_neighbor_pruning_keeps_new_entry_point_reachable() {
         ef_search: 20,
     };
     let mut idx: VecDex<u32, L2> = VecDex::new(cfg.clone()).unwrap();
-    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state.clone());
+    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state());
 
     for (node_id, value) in [(0, [0.0, 0.0]), (1, [0.1, 0.0]), (2, [0.2, 0.0])] {
         txn.put_vec(node_id, &value);
@@ -768,7 +768,7 @@ fn saturated_neighbor_pruning_keeps_new_entry_point_reachable() {
         txn.rows
             .put(node_key(TAG_INFO, node_id).to_vec(), encode_value(&0u8));
         txn.rows.put(
-            user_key(&KeyEnDe::encode(&(node_id as u32))),
+            user_key(&KeyEnDe::encode_key(&(node_id as u32))),
             node_id.to_le_bytes().to_vec(),
         );
     }
@@ -791,19 +791,18 @@ fn saturated_neighbor_pruning_keeps_new_entry_point_reachable() {
     txn.rows
         .put(node_key(TAG_INFO, new_id).to_vec(), encode_value(&1u8));
     txn.rows.put(
-        user_key(&KeyEnDe::encode(&new_key)),
+        user_key(&KeyEnDe::encode_key(&new_key)),
         new_id.to_le_bytes().to_vec(),
     );
     txn.state.node_count += 1;
     txn.state.next_node_id += 1;
-    VecDex::<u32, L2>::link_node(&mut txn, &cfg, new_id, &new_vec, 1);
+    VecDex::<u32, L2>::link_node(&L2, &mut txn, &cfg, new_id, &new_vec, 1);
 
-    let (rows, state) = txn.finish();
+    let rows = txn.finish();
     rows.commit(&mut idx.store).unwrap();
-    idx.state = state;
 
-    assert_eq!(idx.state.entry_point, Some(new_id));
-    assert_eq!(idx.state.max_layer, 1);
+    assert_eq!(idx.state().entry_point, Some(new_id));
+    assert_eq!(idx.state().max_layer, 1);
     assert!(
         !hnsw::get_neighbors(&idx.store, 0, new_id).is_empty(),
         "the promoted node must retain a reciprocal base-layer edge"
@@ -855,7 +854,8 @@ fn rejects_nonfinite_vectors_before_mutating_index() {
     }
 
     let mut dynamic: VecDexDyn<u32> =
-        VecDexDyn::new(MetricKind::InnerProduct, idx.config.clone()).unwrap();
+        VecDexDyn::new_with_metric(MetricKind::InnerProduct, idx.config.clone())
+            .unwrap();
     assert!(matches!(
         dynamic.insert(&1, &[f32::NAN]),
         Err(VsdbError::InvalidConfig { .. })
@@ -868,19 +868,18 @@ fn rejects_nonfinite_vectors_before_mutating_index() {
     assert_eq!(dynamic.search(&[1.0], 1).unwrap()[0].0, 2);
 
     let mut stored: VecDex<u32, InnerProduct> = VecDex::new(idx.config).unwrap();
-    let mut txn: Txn<'_, f32> = Txn::new(&stored.store, stored.state.clone());
+    let mut txn: Txn<'_, f32> = Txn::new(&stored.store, stored.state());
     let node = 7;
     let vector = [f32::NAN];
     txn.put_vec(node, &vector);
     txn.rows.put(
-        user_key(&KeyEnDe::encode(&7u32)),
+        user_key(&KeyEnDe::encode_key(&7u32)),
         node.to_le_bytes().to_vec(),
     );
     txn.rows
         .put(node_key(TAG_NODE2KEY, node).to_vec(), encode_value(&7u32));
-    let (rows, state) = txn.finish();
+    let rows = txn.finish();
     rows.commit(&mut stored.store).unwrap();
-    stored.state = state;
     assert!(matches!(stored.compact(), Err(VsdbError::Corrupt { .. })));
     assert!(stored.get(&7).unwrap()[0].is_nan());
 }
@@ -918,7 +917,7 @@ fn non_entry_top_layer_remove_skips_entry_repair() {
         ..Default::default()
     };
     let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
-    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state.clone());
+    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state());
 
     // node 0 is the entry at layer 2; nodes 1 and 3 are other layer-2
     // nodes; node 2 is a layer-0 helper connected to all of them.
@@ -934,7 +933,7 @@ fn non_entry_top_layer_remove_skips_entry_repair() {
         txn.rows
             .put(node_key(TAG_INFO, node_id).to_vec(), encode_value(&layer));
         txn.rows.put(
-            user_key(&KeyEnDe::encode(&key)),
+            user_key(&KeyEnDe::encode_key(&key)),
             node_id.to_le_bytes().to_vec(),
         );
     }
@@ -947,9 +946,8 @@ fn non_entry_top_layer_remove_skips_entry_repair() {
     txn.state.node_count = 4;
     txn.state.next_node_id = 4;
 
-    let (rows, state) = txn.finish();
+    let rows = txn.finish();
     rows.commit(&mut idx.store).unwrap();
-    idx.state = state;
 
     let before = entry_repair_count();
     idx.remove(&1).unwrap();
@@ -958,16 +956,16 @@ fn non_entry_top_layer_remove_skips_entry_repair() {
         before,
         "removing a non-entry top-layer node must not rescan the graph"
     );
-    assert_eq!(idx.state.entry_point, Some(0));
-    assert_eq!(idx.state.max_layer, 2);
+    assert_eq!(idx.state().entry_point, Some(0));
+    assert_eq!(idx.state().max_layer, 2);
 
     idx.remove(&0).unwrap();
     assert!(
         entry_repair_count() > before,
         "removing the entry point must repair it"
     );
-    assert_eq!(idx.state.entry_point, Some(3));
-    assert_eq!(idx.state.max_layer, 2);
+    assert_eq!(idx.state().entry_point, Some(3));
+    assert_eq!(idx.state().max_layer, 2);
 }
 
 // ---- T-1: Single-node duplicate-key update (regression for stale-metadata fix) ----
@@ -1007,7 +1005,7 @@ fn update_entry_point_vector() {
         idx.insert(&i, &[i as f32, 0.0]).unwrap();
     }
 
-    let ep = idx.state.entry_point.unwrap();
+    let ep = idx.state().entry_point.unwrap();
     // Re-insert the entry point with a far-away vector.
     idx.insert(&(ep as u32), &[100.0, 100.0]).unwrap();
     assert_eq!(idx.len(), 10);
@@ -1036,14 +1034,14 @@ fn consecutive_entry_point_removals() {
 
     // Repeatedly remove the entry point.
     for _ in 0..10 {
-        let meta = idx.state.clone();
+        let meta = idx.state();
         if meta.entry_point.is_none() {
             break;
         }
         let ep = meta.entry_point.unwrap();
         idx.remove(&(ep as u32)).unwrap();
 
-        let after = idx.state.clone();
+        let after = idx.state();
         let actual_max = idx.node_layers().map(|(_, l)| l).max().unwrap_or(0);
         assert_eq!(after.max_layer, actual_max);
     }
@@ -1096,7 +1094,7 @@ fn graph_connectivity_after_deletions() {
     assert_bidirectional(&idx);
 
     // Remove 10 nodes that are NOT the entry point.
-    let ep = idx.state.entry_point.unwrap();
+    let ep = idx.state().entry_point.unwrap();
     let mut removed = 0;
     for i in 0..50u32 {
         if i as u64 == ep {
@@ -1112,7 +1110,7 @@ fn graph_connectivity_after_deletions() {
     let remaining = idx.len() as usize;
 
     // BFS from entry point at layer 0.
-    let ep = idx.state.entry_point.unwrap();
+    let ep = idx.state().entry_point.unwrap();
     let mut visited = HashSet::new();
     let mut queue = VecDeque::new();
     queue.push_back(ep);
@@ -1169,7 +1167,7 @@ fn compact_improves_or_maintains_recall() {
             let query: Vec<f32> = (0..dim).map(|_| rand::random::<f32>()).collect();
             let mut dists: Vec<(f32, u32)> = live
                 .iter()
-                .map(|(id, v)| (L2::distance(&query, v), *id))
+                .map(|(id, v)| (L2.distance(&query, v), *id))
                 .collect();
             dists.sort_by(|a, b| a.0.total_cmp(&b.0));
             let gt: HashSet<u32> = dists.iter().take(k).map(|&(_, id)| id).collect();
@@ -1220,7 +1218,7 @@ fn recall_large_scale() {
         let query: Vec<f32> = (0..dim).map(|_| rand::random::<f32>()).collect();
         let mut dists: Vec<(f32, u64)> = all_vecs
             .iter()
-            .map(|(id, v)| (L2::distance(&query, v), *id))
+            .map(|(id, v)| (L2.distance(&query, v), *id))
             .collect();
         dists.sort_by(|a, b| a.0.total_cmp(&b.0));
         let gt: HashSet<u64> = dists.iter().take(k).map(|&(_, id)| id).collect();
@@ -1285,7 +1283,7 @@ fn cosine_zero_vector() {
 #[test]
 fn cosine_finite_extreme_scales_f32() {
     let assert_distance = |a: &[f32], b: &[f32], expected: f32| {
-        let distance = Cosine::distance(a, b);
+        let distance = Cosine.distance(a, b);
         assert!(
             distance.is_finite() && (distance - expected).abs() <= 1e-6,
             "cosine({a:?}, {b:?}) = {distance}, expected {expected}"
@@ -1342,7 +1340,7 @@ fn cosine_finite_extreme_scales_f32() {
 #[test]
 fn cosine_finite_extreme_scales_f64() {
     let assert_distance = |a: &[f64], b: &[f64], expected: f64| {
-        let distance = Cosine::distance(a, b);
+        let distance = Cosine.distance(a, b);
         assert!(
             distance.is_finite() && (distance - expected).abs() <= 1e-12,
             "cosine({a:?}, {b:?}) = {distance}, expected {expected}"
@@ -1440,7 +1438,9 @@ fn invalid_configs_are_rejected() {
         ef_construction: 50,
         ef_search: 50,
     };
-    let store = MapxRaw::new();
+    let mut static_index = VecDexL2::<u32>::new(ok.clone()).unwrap();
+    let mut dynamic_index =
+        VecDexDyn::<u32>::new_with_metric(MetricKind::Cosine, ok.clone()).unwrap();
     for bad in [
         HnswConfig {
             dim: 0,
@@ -1462,36 +1462,19 @@ fn invalid_configs_are_rejected() {
             Err(VsdbError::InvalidConfig { .. })
         ));
 
-        // Corrupt or malformed handle metadata must also fail validation at
-        // deserialization (both static VecDex and VecDexDyn).
-        struct BadVecMeta<'a> {
-            store: &'a MapxRaw,
-            cfg: &'a HnswConfig,
-        }
-        impl Serialize for BadVecMeta<'_> {
-            fn serialize<Ser: serde::Serializer>(
-                &self,
-                serializer: Ser,
-            ) -> std::result::Result<Ser::Ok, Ser::Error> {
-                crate::common::serialize_typed_handle_meta::<VecDex<u32, L2>, Ser>(
-                    &(LAYOUT_VERSION, self.store, self.cfg),
-                    serializer,
-                )
-            }
-        }
-        let raw = BadVecMeta {
-            store: &store,
-            cfg: &bad,
-        };
-        let bytes = postcard::to_allocvec(&raw).unwrap();
+        static_index.config = bad.clone();
+        dynamic_index.config = bad;
         assert!(
-            postcard::from_bytes::<VecDex<u32, L2>>(&bytes).is_err(),
-            "VecDex deserialize must reject {bad:?}"
+            postcard::from_bytes::<VecDexL2<u32>>(
+                &postcard::to_allocvec(&static_index).unwrap()
+            )
+            .is_err()
         );
-        let dyn_bytes = postcard::to_allocvec(&(0u8, &raw)).unwrap();
         assert!(
-            postcard::from_bytes::<VecDexDyn<u32>>(&dyn_bytes).is_err(),
-            "VecDexDyn deserialize must reject {bad:?}"
+            postcard::from_bytes::<VecDexDyn<u32>>(
+                &postcard::to_allocvec(&dynamic_index).unwrap()
+            )
+            .is_err()
         );
     }
     let mut idx: VecDex<u32, L2> = VecDex::new(ok).unwrap();
@@ -1621,8 +1604,8 @@ fn restore_without_explicit_save_is_consistent() {
 
     let restored: VecDex<u32, L2> = VecDex::from_meta(id).unwrap();
     assert_eq!(restored.len(), 7);
-    assert_eq!(restored.state.next_node_id, idx.state.next_node_id);
-    assert_eq!(restored.state.entry_point, idx.state.entry_point);
+    assert_eq!(restored.state().next_node_id, idx.state().next_node_id);
+    assert_eq!(restored.state().entry_point, idx.state().entry_point);
     let results = restored.search(&[3.0, 0.0], 3).unwrap();
     assert_eq!(results.len(), 3);
     assert_eq!(results[0].0, 3);
@@ -1668,9 +1651,9 @@ fn serde_roundtrip_preserves_graph_state() {
     let restored: VecDex<u32, L2> = postcard::from_bytes(&bytes).unwrap();
 
     assert_eq!(restored.len(), 11);
-    assert_eq!(restored.state.entry_point, idx.state.entry_point);
-    assert_eq!(restored.state.max_layer, idx.state.max_layer);
-    assert_eq!(restored.state.next_node_id, idx.state.next_node_id);
+    assert_eq!(restored.state().entry_point, idx.state().entry_point);
+    assert_eq!(restored.state().max_layer, idx.state().max_layer);
+    assert_eq!(restored.state().next_node_id, idx.state().next_node_id);
     assert_bidirectional(&restored);
     let results = restored.search(&[7.0, 1.0], 2).unwrap();
     assert_eq!(results[0].0, 7);
@@ -1686,15 +1669,15 @@ fn node_ids_are_never_reused_across_restores() {
     for i in 0..6u32 {
         idx.insert(&i, &[i as f32, 0.0]).unwrap();
     }
-    let next_before = idx.state.next_node_id;
+    let next_before = idx.state().next_node_id;
     idx.remove(&5).unwrap();
 
     let bytes = postcard::to_allocvec(&idx).unwrap();
     let mut restored: VecDex<u32, L2> = postcard::from_bytes(&bytes).unwrap();
-    assert_eq!(restored.state.next_node_id, next_before);
+    assert_eq!(restored.state().next_node_id, next_before);
 
     restored.insert(&100, &[100.0, 0.0]).unwrap();
-    assert!(restored.state.next_node_id > next_before);
+    assert!(restored.state().next_node_id > next_before);
 }
 
 // =========================================================================
@@ -1709,7 +1692,7 @@ fn dyn_metric_semantics_match_static() {
     };
 
     // L2: nearest by squared euclidean distance.
-    let mut idx = VecDexDyn::<String>::new(MetricKind::L2, cfg()).unwrap();
+    let mut idx = VecDexDyn::<String>::new_with_metric(MetricKind::L2, cfg()).unwrap();
     assert_eq!(idx.metric(), MetricKind::L2);
     idx.insert(&"near".into(), &[1.0, 0.0, 0.0]).unwrap();
     idx.insert(&"far".into(), &[3.0, 0.0, 0.0]).unwrap();
@@ -1719,7 +1702,8 @@ fn dyn_metric_semantics_match_static() {
     assert_eq!(r[1].1, 9.0);
 
     // Cosine: alignment beats magnitude.
-    let mut idx = VecDexDyn::<String>::new(MetricKind::Cosine, cfg()).unwrap();
+    let mut idx =
+        VecDexDyn::<String>::new_with_metric(MetricKind::Cosine, cfg()).unwrap();
     assert_eq!(idx.metric(), MetricKind::Cosine);
     idx.insert(&"aligned".into(), &[5.0, 0.0, 0.0]).unwrap();
     idx.insert(&"orthogonal".into(), &[0.0, 1.0, 0.0]).unwrap();
@@ -1728,7 +1712,8 @@ fn dyn_metric_semantics_match_static() {
     assert!(r[0].1.abs() < 1e-6);
 
     // InnerProduct: larger dot product ranks first.
-    let mut idx = VecDexDyn::<String>::new(MetricKind::InnerProduct, cfg()).unwrap();
+    let mut idx =
+        VecDexDyn::<String>::new_with_metric(MetricKind::InnerProduct, cfg()).unwrap();
     assert_eq!(idx.metric(), MetricKind::InnerProduct);
     idx.insert(&"big".into(), &[5.0, 0.0, 0.0]).unwrap();
     idx.insert(&"small".into(), &[1.0, 0.0, 0.0]).unwrap();
@@ -1743,7 +1728,8 @@ fn dyn_full_api_delegation() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDexDyn<u32> = VecDexDyn::new(MetricKind::L2, cfg).unwrap();
+    let mut idx: VecDexDyn<u32> =
+        VecDexDyn::new_with_metric(MetricKind::L2, cfg).unwrap();
     assert!(idx.is_empty());
 
     idx.insert_batch(&[
@@ -1790,7 +1776,8 @@ fn dyn_save_meta_restores_metric() {
         dim: 2,
         ..Default::default()
     };
-    let mut idx: VecDexDyn<u32> = VecDexDyn::new(MetricKind::InnerProduct, cfg).unwrap();
+    let mut idx: VecDexDyn<u32> =
+        VecDexDyn::new_with_metric(MetricKind::InnerProduct, cfg).unwrap();
     idx.insert(&1, &[1.0, 2.0]).unwrap();
     idx.insert(&2, &[3.0, 4.0]).unwrap();
     let id = idx.save_meta().unwrap();
@@ -1825,10 +1812,7 @@ fn dyn_rejects_static_meta() {
 
 #[test]
 fn dyn_wire_tags_are_frozen() {
-    // The first meta byte is the metric's frozen wire tag: the on-disk
-    // discriminant is pinned by explicit constants, never by enum
-    // source order. Reordering variants must fail THIS test, not
-    // silently re-interpret persisted metas.
+    // The metric discriminator in the handle and schema is part of the wire format.
     let cfg = || HnswConfig {
         dim: 2,
         ..Default::default()
@@ -1838,9 +1822,9 @@ fn dyn_wire_tags_are_frozen() {
         (MetricKind::Cosine, 1),
         (MetricKind::InnerProduct, 2),
     ] {
-        let idx = VecDexDyn::<u32>::new(metric, cfg()).unwrap();
+        let idx = VecDexDyn::<u32>::new_with_metric(metric, cfg()).unwrap();
         let bytes = postcard::to_allocvec(&idx).unwrap();
-        assert_eq!(bytes[0], tag, "wire tag drifted for {metric:?}");
+        assert_eq!(postcard::to_allocvec(&metric).unwrap(), [tag]);
         let restored: VecDexDyn<u32> = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(restored.metric(), metric);
     }
@@ -1860,7 +1844,7 @@ fn dyn_f64_end_to_end() {
     // Cosine on f64 exercises the norm computations through the
     // dispatch layer with the non-default scalar.
     let mut idx: VecDexDyn<String, f64> =
-        VecDexDyn::new(MetricKind::Cosine, cfg).unwrap();
+        VecDexDyn::new_with_metric(MetricKind::Cosine, cfg).unwrap();
     idx.insert(&"aligned".into(), &[10.0_f64, 0.0, 0.0])
         .unwrap();
     idx.insert(&"orthogonal".into(), &[0.0_f64, 3.0, 0.0])
@@ -1919,7 +1903,7 @@ fn filtered_search_keeps_recall_under_selective_filters() {
         let mut gt: Vec<(f32, u64)> = vecs
             .iter()
             .filter(|(key, _)| passes(key))
-            .map(|(key, v)| (L2::distance(&query, v), *key))
+            .map(|(key, v)| (L2.distance(&query, v), *key))
             .collect();
         gt.sort_by(|a, b| a.0.total_cmp(&b.0));
         let gt: HashSet<u64> = gt.iter().take(k).map(|&(_, key)| key).collect();
@@ -1942,20 +1926,21 @@ fn filtered_search_keeps_recall_under_selective_filters() {
 }
 
 fn insert_at_layer(idx: &mut VecDex<u64, L2>, id: u64, vector: &[f32], layer: u8) {
-    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state.clone());
+    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state());
     txn.put_vec(id, vector);
-    txn.rows
-        .put(user_key(&KeyEnDe::encode(&id)), id.to_le_bytes().to_vec());
+    txn.rows.put(
+        user_key(&KeyEnDe::encode_key(&id)),
+        id.to_le_bytes().to_vec(),
+    );
     txn.rows
         .put(node_key(TAG_NODE2KEY, id).to_vec(), encode_value(&id));
     txn.rows
         .put(node_key(TAG_INFO, id).to_vec(), encode_value(&layer));
     txn.state.next_node_id = id + 1;
     txn.state.node_count += 1;
-    VecDex::<u64, L2>::link_node(&mut txn, &idx.config, id, vector, layer);
-    let (rows, state) = txn.finish();
+    VecDex::<u64, L2>::link_node(&L2, &mut txn, &idx.config, id, vector, layer);
+    let rows = txn.finish();
     rows.commit(&mut idx.store).unwrap();
-    idx.state = state;
 }
 
 #[test]
@@ -1980,7 +1965,7 @@ fn exhaustive_search_restarts_disconnected_components() {
         insert_at_layer(&mut idx, id as u64, vec, 0);
     }
     let mut visited = HashSet::new();
-    let mut todo = vec![idx.state.entry_point.unwrap()];
+    let mut todo = vec![idx.state().entry_point.unwrap()];
     while let Some(id) = todo.pop() {
         if visited.insert(id) {
             todo.extend(hnsw::get_neighbors(&idx.store, 0, id));
@@ -2066,12 +2051,14 @@ fn component_restarts_respect_filtered_visit_cap() {
         ef_search: 8,
     };
     let mut idx: VecDex<u64, L2> = VecDex::new(cfg).unwrap();
-    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state.clone());
+    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state());
     let n = 4200u64;
     for id in 0..n {
         txn.put_vec(id, &[id as f32]);
-        txn.rows
-            .put(user_key(&KeyEnDe::encode(&id)), id.to_le_bytes().to_vec());
+        txn.rows.put(
+            user_key(&KeyEnDe::encode_key(&id)),
+            id.to_le_bytes().to_vec(),
+        );
         txn.rows
             .put(node_key(TAG_NODE2KEY, id).to_vec(), encode_value(&id));
         txn.rows
@@ -2081,9 +2068,8 @@ fn component_restarts_respect_filtered_visit_cap() {
     txn.state.node_count = n;
     txn.state.entry_point = Some(0);
     txn.state.max_layer = 0;
-    let (rows, state) = txn.finish();
+    let rows = txn.finish();
     rows.commit(&mut idx.store).unwrap();
-    idx.state = state;
     let calls = std::cell::Cell::new(0);
     let found = idx
         .search_with_filter(&[0.], 8, |_| {
@@ -2093,4 +2079,69 @@ fn component_restarts_respect_filtered_visit_cap() {
         .unwrap();
     assert!(found.is_empty());
     assert_eq!(calls.get(), hnsw::filter_visit_cap(8));
+}
+
+#[test]
+fn shared_handles_keep_ids_and_snapshot_queries_coherent() {
+    let mut index = VecDexL2::<u32>::new(HnswConfig {
+        dim: 2,
+        ..Default::default()
+    })
+    .unwrap();
+    let mut alias = VecDexL2::<u32>::from_meta(index.save_meta().unwrap()).unwrap();
+    index.insert(&1, &[1.0, 2.0]).unwrap();
+    alias.insert(&2, &[3.0, 4.0]).unwrap();
+    assert_eq!(index.len(), 2);
+    let old_id = decode_node_id(&index.store.get(user_key(&1u32.encode_key())).unwrap());
+    let reader = index.reader();
+    let view = reader.read_view();
+    let pairs = index.iter();
+    alias.clear().unwrap();
+    alias.insert(&3, &[9.0, 8.0]).unwrap();
+    alias.compact().unwrap();
+    assert_eq!(index.get(&1), None);
+    assert!(index.store.get(node_key(TAG_VEC, old_id)).is_none());
+    assert_eq!(pairs.count(), 2);
+    assert_eq!(view.get(&1), Some(vec![1.0, 2.0]));
+    assert_eq!(view.search(&[1.0, 2.0], 1).unwrap()[0], (1, 0.0));
+    assert_eq!(index.search(&[9.0, 8.0], 1).unwrap(), vec![(3, 0.0)]);
+    let clone = index.clone();
+    alias.clear().unwrap();
+    assert_ne!(index.instance_id(), clone.instance_id());
+    assert_eq!(clone.get(&3), Some(vec![9.0, 8.0]));
+}
+
+#[test]
+fn schema_checks_parameterized_metric_at_open() {
+    #[derive(Clone, Default, Serialize, Deserialize)]
+    struct Weighted(f32);
+    impl DistanceMetric for Weighted {
+        fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
+            self.0 * L2.distance(a, b)
+        }
+    }
+    let mut index = VecDex::<u32, Weighted>::new_with_metric(
+        Weighted(3.),
+        HnswConfig {
+            dim: 1,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    index.insert(&1, &[2.]).unwrap();
+    let bytes = postcard::to_allocvec(&index).unwrap();
+    assert_eq!(
+        postcard::from_bytes::<VecDex<u32, Weighted>>(&bytes)
+            .unwrap()
+            .search(&[1.], 1)
+            .unwrap(),
+        [(1, 3.)]
+    );
+    let frame: &[u8] = postcard::from_bytes(&bytes).unwrap();
+    assert_eq!(&frame[..8], b"VSTYPE04");
+    assert_eq!(frame.len(), 36 + 9);
+    assert_eq!(frame[36], 2);
+    index.metric = Weighted(2.);
+    let wrong = postcard::to_allocvec(&index).unwrap();
+    assert!(postcard::from_bytes::<VecDex<u32, Weighted>>(&wrong).is_err());
 }

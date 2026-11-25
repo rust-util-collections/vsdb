@@ -45,24 +45,19 @@ mod test;
 
 use crate::{
     basic::{
-        mapx_ord::{Entry, MapxOrdValues, MapxOrdValuesMut},
+        mapx_ord::{MapxOrdValues, MapxOrdValuesMut},
         mapx_ord_rawkey::{
-            self, MapxOrdRawKey, MapxOrdRawKeyBatch, MapxOrdRawKeyIter,
-            MapxOrdRawKeyIterMut, ValueMut,
+            MapxOrdRawKey, MapxOrdRawKeyBatch, MapxOrdRawKeyIter, MapxOrdRawKeyIterMut,
+            ValueMut,
         },
     },
     common::{
-        RawBytes,
-        ende::{KeyEnDe, KeyRef, ValueEnDe},
+        ende::{KeyEnDe, KeyLookup, ValueEnDe},
         error::Result,
         macros::define_map_wrapper,
     },
 };
-use std::{
-    borrow::Borrow,
-    marker::PhantomData,
-    ops::{Deref, DerefMut},
-};
+use std::marker::PhantomData;
 
 define_map_wrapper! {
     #[doc = "A disk-based, `HashMap`-like data structure with typed keys and values."]
@@ -91,15 +86,15 @@ where
     ///
     /// Supports `&str` for `String` keys and `&[u8]` for `Vec<u8>`,
     /// `Box<[u8]>`, or `[u8; N]` keys. Array queries must have length `N`;
-    /// other lengths miss. Other borrowed forms must satisfy [`KeyRef`]'s
+    /// other lengths miss. Other borrowed forms must satisfy [`KeyLookup`]'s
     /// encoding contract.
     #[inline(always)]
     pub fn get<Q>(&self, key: &Q) -> Option<V>
     where
-        K: Borrow<Q>,
-        Q: KeyRef + ?Sized,
+        K: KeyLookup<Q>,
+        Q: ?Sized,
     {
-        self.inner.get(Self::query_bytes(key)?)
+        K::with_lookup(key, |bytes| self.inner.get(bytes)).flatten()
     }
 
     /// Retrieves a mutable reference to a value in the map (borrowed key
@@ -107,10 +102,27 @@ where
     #[inline(always)]
     pub fn get_mut<Q>(&mut self, key: &Q) -> Option<ValueMut<'_, V>>
     where
-        K: Borrow<Q>,
-        Q: KeyRef + ?Sized,
+        K: KeyLookup<Q>,
+        Q: ?Sized,
     {
-        self.inner.get_mut(Self::query_bytes(key)?)
+        K::with_lookup(key, |bytes| self.inner.get_mut(bytes)).flatten()
+    }
+
+    /// Edits a present value and returns any encoding or storage error.
+    pub fn update<Q: ?Sized, R>(
+        &mut self,
+        key: &Q,
+        f: impl FnOnce(&mut V) -> R,
+    ) -> Result<Option<R>>
+    where
+        K: KeyLookup<Q>,
+    {
+        let Some(mut guard) = self.get_mut(key) else {
+            return Ok(None);
+        };
+        let result = f(&mut guard);
+        guard.commit()?;
+        Ok(Some(result))
     }
 
     /// Checks if the map contains a value for the specified key (borrowed
@@ -118,10 +130,10 @@ where
     #[inline(always)]
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
-        K: Borrow<Q>,
-        Q: KeyRef + ?Sized,
+        K: KeyLookup<Q>,
+        Q: ?Sized,
     {
-        Self::query_bytes(key).is_some_and(|bytes| self.inner.contains_key(bytes))
+        K::with_lookup(key, |bytes| self.inner.contains_key(bytes)).unwrap_or(false)
     }
 
     /// Inserts a key-value pair into the map.
@@ -129,16 +141,19 @@ where
     /// Does not return the old value for performance reasons.
     #[inline(always)]
     pub fn insert(&mut self, key: &K, value: &V) {
-        self.inner.insert(key.encode(), value)
+        key.with_encoded_key(|k| self.inner.insert(k, value))
     }
 
     /// Gets an entry for a given key, allowing for in-place modification.
+    ///
+    /// # Panics
+    /// A slice addressing a fixed-array key must have the array's exact length.
     #[inline(always)]
-    pub fn entry(&mut self, key: &K) -> Entry<'_, V> {
-        Entry {
-            key: key.encode(),
-            hdr: &mut self.inner,
-        }
+    pub fn entry<Q: ?Sized>(&mut self, key: &Q) -> Entry<'_, V>
+    where
+        K: KeyLookup<Q>,
+    {
+        K::with_lookup(key, |bytes| self.inner.entry(bytes)).expect("invalid key length")
     }
 
     /// Returns an iterator over the map's entries.
@@ -183,35 +198,10 @@ where
     #[inline(always)]
     pub fn remove<Q>(&mut self, key: &Q)
     where
-        K: Borrow<Q>,
-        Q: KeyRef + ?Sized,
+        K: KeyLookup<Q>,
+        Q: ?Sized,
     {
-        if let Some(bytes) = Self::query_bytes(key) {
-            self.inner.remove(bytes);
-        }
-    }
-
-    fn query_bytes<Q>(key: &Q) -> Option<RawBytes>
-    where
-        K: Borrow<Q>,
-        Q: KeyRef + ?Sized,
-    {
-        let Some(slice) = key.as_byte_slice() else {
-            return Some(key.key_bytes());
-        };
-        // Borrow alone does not imply identical encodings: arrays encode
-        // as tuples, while Vec/Box slices encode with a length prefix.
-        // Resolve through K and verify its borrowed contents before any
-        // storage access. Decoders may accept trailing bytes, so successful
-        // decoding alone cannot establish that this is the requested key.
-        let matches = |owned: &K| owned.borrow().as_byte_slice() == Some(slice);
-        if let Ok(owned) = K::decode(slice)
-            && matches(&owned)
-        {
-            return Some(owned.encode());
-        }
-        let owned = K::decode(&key.key_bytes()).ok()?;
-        matches(&owned).then(|| owned.encode())
+        K::with_lookup(key, |bytes| self.inner.remove(bytes));
     }
 
     /// Start a batch operation.
@@ -259,7 +249,7 @@ where
     /// nested-VSDB-collection value types).
     #[inline(always)]
     pub fn keys(&self) -> impl DoubleEndedIterator<Item = K> + '_ {
-        self.inner.keys().map(|k| K::decode(&k).unwrap())
+        self.inner.keys().map(|k| K::decode_key(&k).unwrap())
     }
 }
 
@@ -340,12 +330,12 @@ where
 {
     /// Insert a key-value pair into the batch.
     pub fn insert(&mut self, key: &K, value: &V) {
-        self.inner.insert(key.encode(), value);
+        key.with_encoded_key(|k| self.inner.insert(k, value));
     }
 
     /// Remove a key in the batch.
     pub fn remove(&mut self, key: &K) {
-        self.inner.remove(key.encode());
+        key.with_encoded_key(|k| self.inner.remove(k));
     }
 
     /// Commit the batch.
@@ -383,7 +373,7 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         self.iter
             .next()
-            .map(|(k, v)| (<K as KeyEnDe>::decode(&k).unwrap(), v))
+            .map(|(k, v)| (<K as KeyEnDe>::decode_key(&k).unwrap(), v))
     }
 }
 
@@ -395,7 +385,7 @@ where
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter
             .next_back()
-            .map(|(k, v)| (<K as KeyEnDe>::decode(&k).unwrap(), v))
+            .map(|(k, v)| (<K as KeyEnDe>::decode_key(&k).unwrap(), v))
     }
 }
 
@@ -419,12 +409,9 @@ where
 {
     type Item = (K, ValueIterMut<'a, V>);
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|(k, v)| {
-            (
-                <K as KeyEnDe>::decode(&k).unwrap(),
-                ValueIterMut { inner: v },
-            )
-        })
+        self.inner
+            .next()
+            .map(|(k, v)| (<K as KeyEnDe>::decode_key(&k).unwrap(), v))
     }
 }
 
@@ -434,12 +421,9 @@ where
     V: ValueEnDe,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.inner.next_back().map(|(k, v)| {
-            (
-                <K as KeyEnDe>::decode(&k).unwrap(),
-                ValueIterMut { inner: v },
-            )
-        })
+        self.inner
+            .next_back()
+            .map(|(k, v)| (<K as KeyEnDe>::decode_key(&k).unwrap(), v))
     }
 }
 
@@ -449,31 +433,4 @@ where
 type MapxValues<'a, V> = MapxOrdValues<'a, V>;
 type MapxValuesMut<'a, V> = MapxOrdValuesMut<'a, V>;
 
-/// A mutable reference to a value in a `Mapx` iterator.
-#[derive(Debug)]
-pub struct ValueIterMut<'a, V>
-where
-    V: ValueEnDe,
-{
-    /// The inner mutable reference to the value.
-    pub(crate) inner: mapx_ord_rawkey::ValueIterMut<'a, V>,
-}
-
-impl<V> Deref for ValueIterMut<'_, V>
-where
-    V: ValueEnDe,
-{
-    type Target = V;
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl<V> DerefMut for ValueIterMut<'_, V>
-where
-    V: ValueEnDe,
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
-    }
-}
+pub use super::mapx_ord_rawkey::{Entry, OccupiedEntry, VacantEntry, ValueIterMut};

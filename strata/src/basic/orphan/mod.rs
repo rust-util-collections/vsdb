@@ -32,7 +32,7 @@ mod test;
 use crate::{
     ValueEnDe,
     basic::mapx_ord_rawkey::{self, MapxOrdRawKey},
-    common::{Colocate, InstanceId, Namespace, error::Result},
+    common::{InstanceId, Namespace, SingleMap, error::Result},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -61,7 +61,11 @@ impl<T> Serialize for Orphan<T> {
     where
         S: serde::Serializer,
     {
-        crate::common::serialize_typed_handle_meta::<Self, S>(&self.inner, serializer)
+        crate::common::serialize_prefix_handle::<Self, S>(
+            crate::common::SingleMap::raw(&self.inner),
+            &[],
+            serializer,
+        )
     }
 }
 
@@ -70,10 +74,11 @@ impl<'de, T> Deserialize<'de> for Orphan<T> {
     where
         D: serde::Deserializer<'de>,
     {
-        crate::common::deserialize_typed_handle_meta::<Self, MapxOrdRawKey<T>, D>(
-            deserializer,
-        )
-        .map(|inner| Self { inner })
+        crate::common::deserialize_prefix_handle::<Self, _, _>(deserializer, |frame| {
+            Ok(Self {
+                inner: crate::common::basic_inner(frame)?,
+            })
+        })
     }
 }
 
@@ -84,22 +89,6 @@ impl<T> Orphan<T>
 where
     T: ValueEnDe,
 {
-    /// Creates a second handle to the same underlying storage.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure no concurrent writes to the same key
-    /// through any handle.  Multiple writers on disjoint keys are safe.
-    #[inline(always)]
-    pub unsafe fn shadow(&self) -> Self {
-        Self {
-            // SAFETY: forwards this fn's `unsafe` contract — the caller
-            // guarantees no concurrent writes to the same key through
-            // any handle.
-            inner: unsafe { self.inner.shadow() },
-        }
-    }
-
     /// [`new`](Self::new) placed in `ns`.
     pub fn new_in(ns: &Namespace, v: T) -> Self {
         ns.scope(|| Self::new(v))
@@ -147,23 +136,8 @@ where
         Self { inner: hdr }
     }
 
-    /// [`new`](Self::new) on the same engine shard as `anchor`.
-    pub(crate) fn new_colocated(anchor: &MapxRaw, v: T) -> Self {
-        let mut hdr: MapxOrdRawKey<T> = Colocate::new_colocated(anchor);
-        hdr.insert([], &v);
-        Self { inner: hdr }
-    }
-
-    /// A deep copy on the same engine shard as `anchor`.
-    pub(crate) fn clone_colocated(&self, anchor: &MapxRaw) -> Result<Self> {
-        Ok(Self {
-            inner: Colocate::clone_colocated(&self.inner, anchor)?,
-        })
-    }
-
-    /// The underlying raw map.
     pub(crate) fn raw(&self) -> &MapxRaw {
-        Colocate::raw(&self.inner)
+        SingleMap::raw(&self.inner)
     }
 
     /// Retrieves a clone of the inner value.
@@ -176,35 +150,11 @@ where
         self.inner.insert([], v);
     }
 
-    /// Reads a side key. The value slot is `[]`; aux keys must be non-empty
-    /// so old readers of [`get_value`](Self::get_value) ignore them.
-    pub(crate) fn get_aux(&self, key: &[u8]) -> Option<T> {
-        debug_assert!(!key.is_empty());
-        self.inner.get(key)
-    }
-
-    /// Whether `key` is present. Does not decode the value.
-    pub(crate) fn has_aux(&self, key: &[u8]) -> bool {
-        debug_assert!(!key.is_empty());
-        self.inner.contains_key(key)
-    }
-
-    /// Writes a side key. See [`get_aux`](Self::get_aux).
-    pub(crate) fn set_aux(&mut self, key: &[u8], value: &T) {
-        debug_assert!(!key.is_empty());
-        self.inner.insert(key, value);
-    }
-
-    /// Checks if the `Orphan` is uninitialized.
-    pub fn is_uninitialized(&self) -> bool {
-        self.inner.get([]).is_none()
-    }
-
-    /// Initializes the `Orphan` with a value if it is currently empty.
-    pub fn initialize_if_empty(&mut self, v: T) {
-        if self.is_uninitialized() {
-            self.set_value(&v)
-        }
+    pub fn update<R>(&mut self, f: impl FnOnce(&mut T) -> R) -> Result<R> {
+        let mut guard = self.get_mut();
+        let result = f(&mut guard);
+        guard.commit()?;
+        Ok(result)
     }
 
     /// Retrieves a mutable handler for the value.
@@ -260,21 +210,9 @@ where
     /// The caller must ensure that the underlying VSDB database still
     /// contains the data referenced by this instance ID.
     ///
-    /// # Aliasing warning
-    ///
-    /// The returned handle is a **full alias** of the original instance,
-    /// not an independent copy — it addresses the exact same underlying
-    /// key range (this is how [`instance_id`](Self::instance_id) is
-    /// recovered: it *is* the raw prefix). If the original handle that
-    /// produced this `instance_id` (or another `from_meta`/`shadow`
-    /// restore of it) is still alive in-process, the same
-    /// no-concurrent-writes-to-the-same-key discipline documented on
-    /// [`shadow`](Self::shadow) applies across **every** live alias: no
-    /// concurrent writes to the same key through any handle. `from_meta` is intended to restore a handle after
-    /// the original has gone out of scope (e.g. across a process
-    /// restart); calling it while the original is still live requires
-    /// the same care as `shadow()`, even though this function is safe
-    /// Rust.
+    /// The recovered handle addresses the same value slot. Serialize writes
+    /// across all restored handles, or use [`reader`](Self::reader) for an
+    /// independently owned immutable handle.
     pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
         let id = instance_id.into();
         crate::common::load_instance_meta_checked(id, Self::instance_id)
@@ -442,6 +380,12 @@ where
     T: ValueEnDe,
 {
     inner: mapx_ord_rawkey::ValueMut<'a, T>,
+}
+
+impl<T: ValueEnDe> ValueMut<'_, T> {
+    pub fn commit(self) -> Result<()> {
+        self.inner.commit()
+    }
 }
 
 impl<T> Deref for ValueMut<'_, T>

@@ -7,8 +7,8 @@ mod mmdb;
 /////////////////////////////////////////////////////////////////////////////
 
 pub(crate) use self::mmdb::{
-    EngineSizing, MmDB as Engine, MmdbBatch as Batch, MmdbReadView,
-    validate_completed_dataset, write_file_durable,
+    EngineSizing, MmDB as Engine, MmdbBatch as Batch, MmdbReadView, recover_ceiling,
+    validate_completed_dataset,
 };
 
 type DbIter = self::mmdb::MmdbIter;
@@ -17,22 +17,21 @@ type DbIter = self::mmdb::MmdbIter;
 /////////////////////////////////////////////////////////////////////////////
 
 use crate::common::{
-    PREFIX_SIZE, PreBytes, RawKey, RawValue,
+    PreBytes, RawKey, RawRangeBounds, RawValue,
     error::{Result, VsdbError},
-    namespace::{DEFAULT_NS_ID, Namespace},
+    namespace::Namespace,
 };
 use serde::{Deserialize, Serialize, de};
 use std::{
-    borrow::Cow,
     fmt,
     marker::PhantomData,
-    ops::{Deref, DerefMut, RangeBounds},
+    ops::{Deref, DerefMut},
     result::Result as StdResult,
     sync::OnceLock,
     thread,
 };
 
-const MAPX_META_MAGIC: &[u8; 8] = b"VSMAPX01";
+const MAPX_META_MAGIC: &[u8; 8] = b"VSMAPX02";
 
 #[derive(Clone, Debug)]
 pub(crate) struct MapxReader {
@@ -41,6 +40,14 @@ pub(crate) struct MapxReader {
 }
 
 impl MapxReader {
+    pub(crate) fn namespace(&self) -> Namespace {
+        self.ns.clone()
+    }
+
+    pub(crate) fn instance_id(&self) -> crate::InstanceId {
+        crate::InstanceId::new(u64::from_le_bytes(self.prefix), self.ns.id())
+    }
+
     pub(crate) fn get(&self, key: &[u8]) -> Option<RawValue> {
         self.ns.engine().get(self.prefix, key)
     }
@@ -83,24 +90,24 @@ impl MapxReadView<'_> {
         self.range(..)
     }
 
+    /// Captures the source iterators at this view's sequence. The iterator
+    /// retains those sources independently of the view.
+    pub fn range_detached<R: RawRangeBounds>(&self, bounds: R) -> MapxIter<'static> {
+        MapxIter {
+            db_iter: self.inner.range(bounds),
+            _marker: PhantomData,
+        }
+    }
+
     /// Iterates a range within the captured state. Fatal engine errors panic.
-    pub fn range<'a, 'b, R: RangeBounds<Cow<'b, [u8]>>>(
-        &'a self,
-        bounds: R,
-    ) -> MapxIter<'a> {
+    pub fn range<'a, R: RawRangeBounds>(&'a self, bounds: R) -> MapxIter<'a> {
         MapxIter {
             db_iter: self.inner.range(bounds),
             _marker: PhantomData,
         }
     }
 }
-/// Meta without the namespace suffix — the pre-v16 wire format,
-/// still written verbatim for default-namespace handles.
-const MAPX_META_LEN: usize = MAPX_META_MAGIC.len() + PREFIX_SIZE;
-/// Meta with the trailing `ns_id` (non-default namespaces only).
-/// The suffix *is* an `Option<NsId>` encoded by presence: absent ⇔
-/// `None` ⇔ default namespace.
-const MAPX_META_NS_LEN: usize = MAPX_META_LEN + size_of::<u64>();
+const MAPX_META_NS_LEN: usize = 24;
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -265,27 +272,23 @@ impl Mapx {
         let prefix = self.materialize();
         let v = self.ns.engine().get(prefix, key)?;
 
-        Some(ValueMut {
-            key: key.to_vec(),
-            value: v,
-            dirty: false,
-            unwind: UnwindMark::new(),
-            hdr: self,
-        })
+        Some(self.value_slot(key.to_vec(), v, false))
     }
 
-    #[inline(always)]
-    pub(crate) fn mock_value_mut(
+    pub(crate) fn value_slot(
         &mut self,
-        key: RawValue,
+        key: RawKey,
         value: RawValue,
+        dirty: bool,
     ) -> ValueMut<'_> {
         ValueMut {
+            ns: self.ns.clone(),
+            prefix: self.prefix_bytes(),
             key,
             value,
-            dirty: true,
+            dirty,
             unwind: UnwindMark::new(),
-            hdr: self,
+            _marker: PhantomData,
         }
     }
 
@@ -307,10 +310,7 @@ impl Mapx {
     }
 
     #[inline(always)]
-    pub(crate) fn range<'a, R: RangeBounds<Cow<'a, [u8]>>>(
-        &'a self,
-        bounds: R,
-    ) -> MapxIter<'a> {
+    pub(crate) fn range<'a, R: RawRangeBounds>(&'a self, bounds: R) -> MapxIter<'a> {
         MapxIter {
             db_iter: self.ns.engine().range(self.prefix_bytes(), bounds),
             _marker: PhantomData,
@@ -318,7 +318,7 @@ impl Mapx {
     }
 
     #[inline(always)]
-    pub(crate) fn range_detached<'a, R: RangeBounds<Cow<'a, [u8]>>>(
+    pub(crate) fn range_detached<'a, R: RawRangeBounds>(
         &self,
         bounds: R,
     ) -> MapxIter<'a> {
@@ -329,7 +329,7 @@ impl Mapx {
     }
 
     #[inline(always)]
-    pub(crate) fn range_mut<'a, R: RangeBounds<Cow<'a, [u8]>>>(
+    pub(crate) fn range_mut<'a, R: RawRangeBounds>(
         &'a mut self,
         bounds: R,
     ) -> MapxIterMut<'a> {
@@ -405,46 +405,10 @@ impl Mapx {
             .expect("vsdb: batch delete failed during clear");
     }
 
-    /// # Safety
-    ///
-    /// `s` must be exactly [`PREFIX_SIZE`] bytes encoding a `u64` prefix
-    /// (little-endian) that the caller is entitled to treat as uniquely
-    /// owned — i.e. produced by [`as_prefix_slice`](Self::as_prefix_slice)
-    /// (or equivalent) on a valid instance, with no other live handle
-    /// concurrently using the same prefix. Passing a prefix that is
-    /// still owned by another live handle causes two independently
-    /// type-checked handles to alias the same underlying key range — a
-    /// logical data race indistinguishable from [`shadow`](Self::shadow)
-    /// misuse, even though this function performs no memory-unsafe
-    /// operation itself (a length mismatch panics via `copy_from_slice`,
-    /// it never reads out of bounds).
-    ///
-    /// The handle is bound to `ns`; the caller must additionally
-    /// guarantee the prefix's data lives in that namespace's engine (a
-    /// raw prefix carries no namespace information of its own).
-    #[inline(always)]
-    pub(crate) unsafe fn from_prefix_slice_in(
-        ns: &Namespace,
-        s: impl AsRef<[u8]>,
-    ) -> Self {
-        debug_assert_eq!(s.as_ref().len(), PREFIX_SIZE);
-        let mut prefix = PreBytes::default();
-        prefix.copy_from_slice(s.as_ref());
-        Self {
-            prefix: Prefix::Recovered(prefix),
-            ns: ns.clone(),
-        }
-    }
-
     pub(crate) fn from_prefix_meta(meta: &[u8]) -> Result<Self> {
-        let (prefix, ns_id) = Self::decode_prefix_meta(meta)?;
-        // Resolve the owning namespace first (auto-opens it through the
-        // registry); prefix recovery then reserves on the one global
-        // allocator, exactly as pre-v16.
-        let ns = match ns_id {
-            None => Namespace::default_ns(),
-            Some(id) => Namespace::open(id)?,
-        };
+        let id = Self::decode_prefix_meta(meta)?;
+        let prefix = id.map_id.to_le_bytes();
+        let ns = Namespace::open(id.ns.unwrap_or_default())?;
         if !ns.engine().reserve_recovered_prefix(prefix) {
             return Err(VsdbError::Decode {
                 detail: format!(
@@ -460,60 +424,30 @@ impl Mapx {
         })
     }
 
-    /// `"VSMAPX01" ‖ prefix_le(8)` for default-namespace handles —
-    /// byte-identical to the pre-v16 format — with the owning `ns_id`
-    /// appended (8 bytes LE) for non-default namespaces.
-    #[inline(always)]
-    pub(crate) fn encode_prefix_meta(&self) -> Vec<u8> {
-        let mut meta = Vec::with_capacity(MAPX_META_NS_LEN);
-        meta.extend_from_slice(MAPX_META_MAGIC);
-        meta.extend_from_slice(&self.prefix_bytes());
-        let ns_id = self.ns.id();
-        if ns_id != DEFAULT_NS_ID {
-            meta.extend_from_slice(&ns_id.to_le_bytes());
-        }
-        meta
+    /// Fixed-size raw handle. All integer fields are little-endian.
+    pub(crate) fn encode_prefix_meta(&self) -> [u8; MAPX_META_NS_LEN] {
+        let mut frame = [0; MAPX_META_NS_LEN];
+        frame[..8].copy_from_slice(MAPX_META_MAGIC);
+        frame[8..16].copy_from_slice(&self.prefix_bytes());
+        frame[16..].copy_from_slice(&self.ns.id().to_le_bytes());
+        frame
     }
 
-    /// Decodes the meta into `(prefix, Option<ns_id>)` — the suffix is
-    /// an `Option` encoded by presence: 16 bytes ⇒ `None` (default
-    /// namespace, the pre-v16 wire format verbatim), 24 bytes ⇒
-    /// `Some(ns_id)`, anything else ⇒ error.
-    pub(crate) fn decode_prefix_meta(meta: &[u8]) -> Result<(PreBytes, Option<u64>)> {
-        if meta.len() != MAPX_META_LEN && meta.len() != MAPX_META_NS_LEN {
+    pub(crate) fn decode_prefix_meta(meta: &[u8]) -> Result<crate::InstanceId> {
+        if meta.len() != MAPX_META_NS_LEN || &meta[..8] != MAPX_META_MAGIC {
             return Err(VsdbError::Decode {
-                detail: format!(
-                    "invalid Mapx metadata length: expected {} or {}, got {}",
-                    MAPX_META_LEN,
-                    MAPX_META_NS_LEN,
-                    meta.len()
-                ),
+                detail: "invalid raw map handle".into(),
             });
         }
-        if &meta[..MAPX_META_MAGIC.len()] != MAPX_META_MAGIC {
-            return Err(VsdbError::Decode {
-                detail: "invalid Mapx metadata magic".to_owned(),
-            });
-        }
-        let mut prefix = PreBytes::default();
-        prefix.copy_from_slice(&meta[MAPX_META_MAGIC.len()..MAPX_META_LEN]);
-        let ns_id = (meta.len() == MAPX_META_NS_LEN).then(|| {
-            let mut b = [0u8; 8];
-            b.copy_from_slice(&meta[MAPX_META_LEN..]);
-            u64::from_le_bytes(b)
-        });
-        Ok((prefix, ns_id))
+        Ok(crate::InstanceId::new(
+            u64::from_le_bytes(meta[8..16].try_into().unwrap()),
+            u64::from_le_bytes(meta[16..24].try_into().unwrap()),
+        ))
     }
 
     #[inline(always)]
-    pub(crate) fn as_prefix_slice(&self) -> &PreBytes {
-        match &self.prefix {
-            Prefix::Recovered(bytes) => bytes,
-            Prefix::Created(cell) => {
-                self.prefix_bytes();
-                cell.get().expect("just initialized")
-            }
-        }
+    pub(crate) fn instance_id(&self) -> crate::InstanceId {
+        crate::InstanceId::new(u64::from_le_bytes(self.prefix_bytes()), self.ns.id())
     }
 
     #[inline(always)]
@@ -659,10 +593,10 @@ impl Eq for Mapx {}
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
-pub(crate) struct SimpleVisitor;
+struct SimpleVisitor;
 
 impl<'de> de::Visitor<'de> for SimpleVisitor {
-    type Value = Vec<u8>;
+    type Value = Mapx;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         formatter.write_str("bytes")
@@ -672,28 +606,28 @@ impl<'de> de::Visitor<'de> for SimpleVisitor {
     where
         E: de::Error,
     {
-        Ok(v.as_bytes().to_vec())
+        self.visit_bytes(v.as_bytes())
     }
 
     fn visit_string<E>(self, v: String) -> StdResult<Self::Value, E>
     where
         E: de::Error,
     {
-        Ok(v.into_bytes())
+        self.visit_bytes(v.as_bytes())
     }
 
     fn visit_bytes<E>(self, v: &[u8]) -> StdResult<Self::Value, E>
     where
         E: de::Error,
     {
-        Ok(v.to_vec())
+        Mapx::from_prefix_meta(v).map_err(E::custom)
     }
 
     fn visit_byte_buf<E>(self, v: Vec<u8>) -> StdResult<Self::Value, E>
     where
         E: de::Error,
     {
-        Ok(v)
+        self.visit_bytes(&v)
     }
 
     fn visit_seq<A>(self, mut seq: A) -> StdResult<Self::Value, A::Error>
@@ -715,7 +649,7 @@ impl<'de> de::Visitor<'de> for SimpleVisitor {
                 }
             }
         }
-        Ok(ret)
+        self.visit_bytes(&ret)
     }
 }
 
@@ -739,9 +673,7 @@ impl<'de> Deserialize<'de> for Mapx {
     where
         D: serde::Deserializer<'de>,
     {
-        deserializer
-            .deserialize_byte_buf(SimpleVisitor)
-            .and_then(|meta| Self::from_prefix_meta(&meta).map_err(de::Error::custom))
+        deserializer.deserialize_bytes(SimpleVisitor)
     }
 }
 
@@ -821,7 +753,7 @@ impl<'a> DoubleEndedIterator for MapxIterMut<'a> {
     }
 }
 
-pub struct ValueIterMut<'a> {
+pub struct ValueMut<'a> {
     // The owning namespace (an `Arc` clone), not a bare engine
     // reference: engines are owned by their `NsInner` (no leak), so a
     // stored reference must ride with its anchor.
@@ -834,7 +766,7 @@ pub struct ValueIterMut<'a> {
     _marker: PhantomData<&'a mut ()>,
 }
 
-impl fmt::Debug for ValueIterMut<'_> {
+impl fmt::Debug for ValueMut<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ValueIterMut")
             .field("prefix", &self.prefix)
@@ -845,44 +777,10 @@ impl fmt::Debug for ValueIterMut<'_> {
     }
 }
 
-impl Drop for ValueIterMut<'_> {
-    fn drop(&mut self) {
-        if self.dirty && !self.unwind.interrupted() {
-            self.ns.engine().insert(self.prefix, &self.key, &self.value);
-        }
-    }
-}
-
-impl Deref for ValueIterMut<'_> {
-    type Target = RawValue;
-    fn deref(&self) -> &Self::Target {
-        &self.value
-    }
-}
-
-impl DerefMut for ValueIterMut<'_> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.dirty = true;
-        &mut self.value
-    }
-}
-
-/////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////
-
-#[derive(Debug)]
-pub struct ValueMut<'a> {
-    key: RawKey,
-    value: RawValue,
-    dirty: bool,
-    unwind: UnwindMark,
-    hdr: &'a mut Mapx,
-}
-
 impl Drop for ValueMut<'_> {
     fn drop(&mut self) {
         if self.dirty && !self.unwind.interrupted() {
-            self.hdr.insert(&self.key[..], &self.value[..]);
+            self.flush().expect("vsdb: value write-back failed");
         }
     }
 }
@@ -903,3 +801,26 @@ impl DerefMut for ValueMut<'_> {
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
+
+pub type ValueIterMut<'a> = ValueMut<'a>;
+
+impl ValueMut<'_> {
+    fn flush(&mut self) -> Result<()> {
+        self.dirty = false;
+        let mut batch = self.ns.engine().batch_begin(self.prefix);
+        batch.insert(&self.key, &self.value);
+        batch.commit()
+    }
+
+    /// Finishes this edit and returns a storage error to the caller.
+    pub fn commit(mut self) -> Result<()> {
+        if self.dirty { self.flush() } else { Ok(()) }
+    }
+
+    /// Removes the entry, returning its buffered value.
+    pub fn remove(mut self) -> RawValue {
+        self.dirty = false;
+        self.ns.engine().remove(self.prefix, &self.key);
+        std::mem::take(&mut self.value)
+    }
+}

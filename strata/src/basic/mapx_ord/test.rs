@@ -1,22 +1,21 @@
 use super::*;
-use ruc::*;
 
 #[test]
 fn test_insert() {
-    let mut hdr: MapxOrd<usize, usize> = MapxOrd::new();
+    let mut hdr: MapxOrd<u64, u64> = MapxOrd::new();
     let max = 100;
     (0..max)
-        .map(|i: usize| (i, (max + i)))
+        .map(|i: u64| (i, (max + i)))
         .for_each(|(key, value)| {
             assert!(hdr.get(&key).is_none());
             hdr.insert(&key, &value);
             assert!(hdr.contains_key(&key));
-            assert_eq!(pnk!(hdr.get(&key)), value);
+            assert_eq!(hdr.get(&key).unwrap(), value);
             hdr.remove(&key);
             assert!(hdr.get(&key).is_none());
         });
     hdr.clear();
-    (0..max).map(|i: usize| i).for_each(|key| {
+    (0..max).map(|i: u64| i).for_each(|key| {
         assert!(hdr.get(&key).is_none());
     });
 }
@@ -25,23 +24,23 @@ fn test_insert() {
 fn test_valueende() {
     let cnt = 100;
     let dehdr = {
-        let mut hdr: MapxOrd<usize, usize> = MapxOrd::new();
-        (0..cnt).map(|i: usize| (i, i)).for_each(|(key, value)| {
+        let mut hdr: MapxOrd<u64, u64> = MapxOrd::new();
+        (0..cnt).map(|i: u64| (i, i)).for_each(|(key, value)| {
             hdr.insert(&key, &value);
         });
-        <MapxOrd<usize, usize> as ValueEnDe>::encode(&hdr)
+        <MapxOrd<u64, u64> as ValueEnDe>::encode_value(&hdr)
     };
-    let reloaded = pnk!(<MapxOrd<usize, usize> as ValueEnDe>::decode(&dehdr));
-    (0..cnt).map(|i: usize| i).for_each(|i| {
+    let reloaded = <MapxOrd<u64, u64> as ValueEnDe>::decode_value(&dehdr).unwrap();
+    (0..cnt).map(|i: u64| i).for_each(|i| {
         assert_eq!(i, reloaded.get(&i).unwrap());
     });
 }
 
 #[test]
 fn test_iter() {
-    let mut hdr: MapxOrd<usize, usize> = MapxOrd::new();
+    let mut hdr: MapxOrd<u64, u64> = MapxOrd::new();
     let max = 100;
-    (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
+    (0..max).map(|i: u64| (i, i)).for_each(|(key, value)| {
         hdr.insert(&key, &value);
     });
     for (key, value) in hdr.iter().collect::<Vec<_>>().into_iter() {
@@ -52,43 +51,43 @@ fn test_iter() {
 
 #[test]
 fn test_first_last() {
-    let mut hdr: MapxOrd<usize, usize> = MapxOrd::new();
+    let mut hdr: MapxOrd<u64, u64> = MapxOrd::new();
     let max = 100;
-    (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
+    (0..max).map(|i: u64| (i, i)).for_each(|(key, value)| {
         hdr.insert(&key, &value);
     });
-    let (key, value) = pnk!(hdr.first());
+    let (key, value) = hdr.first().unwrap();
     assert_eq!(key, value);
     assert_eq!(0, key);
 
-    let (key, value) = pnk!(hdr.last());
+    let (key, value) = hdr.last().unwrap();
     assert_eq!(key, value);
     assert_eq!(max - 1, key);
 }
 
 #[test]
 fn test_values() {
-    let mut hdr: MapxOrd<usize, usize> = MapxOrd::new();
+    let mut hdr: MapxOrd<u64, u64> = MapxOrd::new();
     let max = 100;
-    (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
+    (0..max).map(|i: u64| (i, i)).for_each(|(key, value)| {
         hdr.insert(&key, &value);
     });
     for (i, it) in hdr.values().enumerate() {
-        assert_eq!(i, it);
+        assert_eq!(i as u64, it);
     }
 }
 
 #[test]
 fn test_values_first_last() {
-    let mut hdr: MapxOrd<usize, usize> = MapxOrd::new();
+    let mut hdr: MapxOrd<u64, u64> = MapxOrd::new();
     let max = 100;
-    (0..max).map(|i: usize| (i, i)).for_each(|(key, value)| {
+    (0..max).map(|i: u64| (i, i)).for_each(|(key, value)| {
         hdr.insert(&key, &value);
     });
-    let value = pnk!(hdr.values().next());
+    let value = hdr.values().next().unwrap();
     assert_eq!(0, value);
 
-    let value = pnk!(hdr.values().next_back());
+    let value = hdr.values().next_back().unwrap();
     assert_eq!(max - 1, value);
 }
 
@@ -98,10 +97,10 @@ fn test_save_and_from_meta() {
     hdr.insert(&1, &"hello".to_string());
     hdr.insert(&2, &"world".to_string());
 
-    let id = pnk!(hdr.save_meta());
+    let id = hdr.save_meta().unwrap();
     assert_eq!(id, hdr.instance_id());
 
-    let restored: MapxOrd<u32, String> = pnk!(MapxOrd::from_meta(id));
+    let restored: MapxOrd<u32, String> = MapxOrd::from_meta(id).unwrap();
     assert_eq!(restored.get(&1), Some("hello".to_string()));
     assert_eq!(restored.get(&2), Some("world".to_string()));
     assert_eq!(restored.first(), Some((1, "hello".to_string())));
@@ -140,8 +139,8 @@ fn test_meta_restore_then_mutate() {
     let mut hdr: MapxOrd<u32, String> = MapxOrd::new();
     hdr.insert(&1, &"a".into());
 
-    let id = pnk!(hdr.save_meta());
-    let mut restored: MapxOrd<u32, String> = pnk!(MapxOrd::from_meta(id));
+    let id = hdr.save_meta().unwrap();
+    let mut restored: MapxOrd<u32, String> = MapxOrd::from_meta(id).unwrap();
     restored.insert(&2, &"b".into());
 
     assert_eq!(hdr.get(&2), Some("b".into()));
@@ -206,10 +205,14 @@ fn test_keys_never_decodes_values() {
     struct PanicsOnDecode(u32);
 
     impl crate::common::ende::ValueEnDe for PanicsOnDecode {
-        fn try_encode(&self) -> crate::common::error::Result<Vec<u8>> {
-            Ok(self.0.to_le_bytes().to_vec())
+        fn encode_value_into(
+            &self,
+            dst: &mut Vec<u8>,
+        ) -> crate::common::error::Result<()> {
+            dst.extend_from_slice(&self.0.to_le_bytes());
+            Ok(())
         }
-        fn decode(_bytes: &[u8]) -> crate::common::error::Result<Self> {
+        fn decode_value(_bytes: &[u8]) -> crate::common::error::Result<Self> {
             panic!("keys() must never decode values");
         }
     }
@@ -242,8 +245,8 @@ fn test_valueende_roundtrip() {
     m.insert(&5, &"five".into());
     m.insert(&10, &"ten".into());
 
-    let encoded = m.encode();
-    let decoded: MapxOrd<u32, String> = MapxOrd::decode(&encoded).unwrap();
+    let encoded = m.encode_value();
+    let decoded: MapxOrd<u32, String> = MapxOrd::decode_value(&encoded).unwrap();
     assert!(decoded.is_the_same_instance(&m));
     assert_eq!(decoded.get(&5), Some("five".into()));
 }

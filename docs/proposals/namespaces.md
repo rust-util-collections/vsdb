@@ -19,14 +19,12 @@ still costs filesystem work proportional to the files/directories removed.
 
 Namespace placement and shard placement are different. `new_in(&ns)` selects
 an engine; a collection prefix routes to one shard via `prefix % shard_count`.
-Two collections in that namespace need not share a shard or WAL. New VerMap
-instances explicitly co-locate their component prefixes on one shard; SlotDex
-and VecDex stage related rows under one prefix. There is no cross-namespace
+Two collections in that namespace need not share a shard or WAL. VerMap, SlotDex and VecDex each stage related rows under one prefix. There is no cross-namespace
 atomic transaction, and VSDB engine batches are single-prefix.
 
 The registry and prefix allocator are shared across the universe. Writable
 access requires one process per universe, including when processes intend to
-use disjoint namespaces: these metadata locks are process-local. Multiple
+use disjoint namespaces: the writer holds an OS advisory lock on `__SYSTEM__/LOCK` for the life of the universe. Multiple
 read-only processes may inspect a complete immutable universe; see the
 [read-only guide](../../core/docs/read-only.md) for shard locking and snapshots.
 
@@ -90,41 +88,27 @@ namespace. Constructors/parsing/deserialization canonicalize default routing
 to `ns: None`; manually constructing `Some(0)` routes to default but should be
 avoided when comparing tokens.
 
-Raw handle metadata has two forms:
-
-| Bytes | Meaning |
-|-------|---------|
-| `VSMAPX01` + prefix LE (8 bytes) | 16-byte default-namespace handle |
-| `VSMAPX01` + prefix LE + namespace LE (8 bytes) | 24-byte non-default handle |
-
-Typed wrappers write `VSTYPE03`, tagging a hash of the fully qualified Rust
-type name and its generic arguments; they still read `VSTYPE02` with its
-compatibility rules. Type tags are not schema fingerprints: changing a
-persisted type's fields can require an application migration even when its
-name stays the same.
-Serialized handles identify local storage; they do not export collection data.
+A raw handle stores `VSMAPX02 | prefix_le | ns_le` in 24 bytes. Typed handles use `VSTYPE04 | type_tag_le | prefix_le | ns_le | meta_len_le | extra_meta`. The type tag hashes the fully qualified Rust name including its generic arguments. Applications version their persisted value schemas separately.
 
 ## Roots and registry
 
 ```text
 <base>/
   __SYSTEM__/
-    __namespaces__              registry: next_id + records
-    __namespace_state__/<id>    P (pending) or E (established)
-    __prefix_ceiling__          global durable prefix reservation ceiling
-    format_version             engine format marker
-    __instance_meta__/         default-namespace saved handles
-    ...                        other universe/default metadata
-  __NAMESPACES__/<id in hex>/   derived non-default root
-    __SYSTEM__/                own marker, saved handles, trie caches
-    ...                        that namespace's engine shards
-  ...                          default engine shards
+    LOCK                        exclusive writable universe lock
+    universe_header             VSUNI018, format version, universe ID
+    __namespaces__              VSNREG02, next ID, namespace records
+    __prefix_ceiling__          durable prefix reservation ceiling
+    __instance_meta__/          saved default-namespace handles
+    .shards_ready               published after default shards exist
+  mmdb/__SYSTEM__/engine_header default engine identity
+  mmdb/shard_00/ ...            default shards, created on first use
+  __NAMESPACES__/<id in hex>/   derived namespace root
+    __SYSTEM__/engine_header    VSENG018, universe ID, namespace ID, shards
+    mmdb/shard_00/ ...          namespace shards
 ```
 
-Explicit roots may be on other volumes. `NsRecord` persists, in postcard field
-order: `id`, optional UTF-8 `path`, `shards`, optional `mem_budget_mb`, and
-`created_at`. The registry is positional; adding serde defaults alone does not
-make layout changes compatible. Lifecycle sidecars avoid changing that format.
+Each namespace record persists its ID, optional explicit path, shard count, optional memory budget, creation time, and lifecycle state.
 
 Explicit creation roots must be absent or empty and must not overlap the
 default base or another registered root. Validation checks lexical components
@@ -136,8 +120,8 @@ universe's allocator.
 Derived roots move with the default base; explicit paths stay pinned until
 `relocate`. Backups must preserve the default base and all explicitly rooted
 namespaces referenced by saved handles. Per-namespace instance metadata and
-trie checkpoints live with the owning engine; the namespace registry, prefix
-allocator, and DagMap ID allocation remain universe-wide.
+trie checkpoints live with the owning engine; the namespace registry
+and prefix allocator remain universe-wide.
 
 ## Shards and memory
 
@@ -165,13 +149,6 @@ reservations and shard co-location can leave gaps. If a copy lacks the ceiling
 file, recovery scans shard keys and values, saved instance metadata, and
 regular files throughout `__CUSTOM__` for serialized handles before allocating.
 
-The v15-to-v16 transition takes the maximum of the old default-shard allocator
-and the new ceiling file before further allocation. That legacy upgrade can
-open the default engine; normal file-backed allocation does not require its
-data path. The engine format marker is currently `16`, independently of the
-crate's v17 API version. Newer unsupported or malformed markers cause opening
-to fail.
-
 ## Initialization and recovery
 
 `vsdb_configure(VsdbOptions)` is process-wide and one-shot. Call it before
@@ -179,19 +156,7 @@ database, namespace, or derived-directory APIs; derived path use freezes the
 base. Configuration does not mutate environment variables or configure child
 processes. Pass `VSDB_BASE_DIR` explicitly to a child when needed.
 
-Creation durably advances the registry's ID allocator before writing a pending
-lifecycle sidecar, then registers the pending namespace before opening its
-engine. An interrupted reservation can burn an ID without registering a
-namespace; later creations use higher IDs. Existing unregistered lifecycle
-state or a nonempty derived root at the current allocator ID is refused for
-both derived and explicit placement, preserving identity after registry loss
-even for legacy namespaces without sidecars. Writable recovery may complete a
-pending create. An established record, including a legacy record without a
-lifecycle sidecar, must point to a complete marked engine; missing storage is
-an error, never permission to manufacture an empty replacement. Initialization
-uses `__SYSTEM__/__initializing__`; a complete marked dataset can retain a
-stale sentinel after interruption. Read-only open accepts that completed state
-without removing the sentinel, but refuses a `Pending` namespace lifecycle.
+Bootstrap durably publishes the registry and prefix ceiling before the universe header. A committed universe requires a valid registry. Namespace creation saves its pending record and advances the ID together, creates and validates the engine, then marks the record established in a second registry commit. An initialization sentinel permits a writable process to finish interrupted shard creation. Established engines must match their recorded identity and shard set. Flush visits engines that have already opened.
 
 Read-only mode is inherited by every namespace opened in that process. It
 replays valid WAL records in memory and does not create storage, rewrite
@@ -218,16 +183,11 @@ repeated destroy is not an automatic filesystem-cleanup retry.
 
 Relocation does not move files. Close the namespace, move its data, then call
 `relocate` and reopen; a process restart is not required. The destination is
-checked for a completed engine with the recorded shard count, but roots do not
-carry namespace IDs, so operators must select the correct dataset.
+checked for the recorded universe ID, namespace ID, shard count and complete shard set.
 
-## Compatibility and deferred work
+## Format conversion and deferred work
 
-v16 introduced `InstanceId` and namespace routing; default raw handle bytes
-remain compatible with the old 16-byte form. v17 changed public configuration
-and namespace administration names and strengthened typed-handle tags. Use
-the [changelog](../../CHANGELOG.md) for migration details, not the original RFC
-API sketches.
+Upgrade v17 data offline with the standalone migration library. [Migration guide](../../migration/README.md)
 
 Foreign-root adoption, whole-namespace merge, live data relocation, automatic
 splitting, and cross-namespace transactions are not implemented. Per-map

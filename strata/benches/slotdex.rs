@@ -11,7 +11,7 @@ const REMOVE_BATCH_SIZE: u64 = 1_024;
 
 type V = Vec<u8>;
 
-fn slot_db_custom(mn: u64) -> SlotDex64<V> {
+fn slot_db_custom(mn: u32) -> SlotDex64<V> {
     let mut db = SlotDex64::new(mn, false).unwrap();
 
     (0..DATA_SIZE).for_each(|i| {
@@ -31,7 +31,7 @@ fn query_reverse(db: &SlotDex64<V>, page_size: u16) {
     db.page(.., page_size, page_number, Order::Desc);
 }
 
-fn slot_query(c: &mut Criterion, tier: u64) {
+fn slot_query(c: &mut Criterion, tier: u32) {
     let mut db = slot_db_custom(tier);
     let name = format!("vsdb::slotdex / tier_{tier}");
     let mut group = c.benchmark_group(&name);
@@ -120,8 +120,9 @@ fn slot_growth_checks(c: &mut Criterion) {
         .measurement_time(Duration::from_secs(3))
         .sample_size(10);
 
-    for capacity in [16u64, 1024] {
+    for capacity in [16u32, 1024] {
         let mut db = SlotDex64::<u64>::new(capacity, false).unwrap();
+        let capacity = u64::from(capacity);
         db.insert_batch((0..=capacity).map(|n| (n * capacity, n)))
             .unwrap();
         db.insert(0, capacity + 1).unwrap();
@@ -151,7 +152,7 @@ fn slot_growth_checks(c: &mut Criterion) {
         db.clear().unwrap();
     }
 
-    for capacity in [16u64, 64] {
+    for capacity in [16u32, 64] {
         let mut db = SlotDex64::<u64>::new(capacity, false).unwrap();
         group.bench_function(BenchmarkId::new("batch_10000_and_clear", capacity), |b| {
             b.iter(|| {

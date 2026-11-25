@@ -1,11 +1,10 @@
 # VecDex Review Patterns
 
-**Files:** `vecdex/{mod,hnsw,distance,dynamic,test}.rs`.
+**Files:** `vecdex/{mod,hnsw,distance,reader,test}.rs`.
 
-**Arch:** HNSW multi-layer; one MapxRaw tags `0x00`..`0x05`; staged overlay + one
+**Arch:** HNSW multi-layer; one MapxRaw tags `0x00`..`0x06`; staged overlay + one
 atomic batch per mutation/chunk. Adj key `[TAG][layer u8][node u64 BE]`. LE u64 neighbor
-packs. Alg-4 heuristic prune. Generic Scalar/Distance/K. `VecDexDyn` + manual
-wire tags for metric.
+packs. Alg-4 heuristic prune. Sealed f32/f64 scalar encodings. `VecDexDyn` is a type alias with the metric stored in the schema row.
 
 ## Invariants
 
@@ -26,9 +25,9 @@ pruning compare against the **passing** results (`ef = max(ef, k)`, no inflation
 `filter_visit_cap = max(64·ef, 4096)` evaluated nodes bounds near-empty predicates.
 Restart candidates share that cap and visited set. Recall at low selectivity is
 tested — a fixed visit budget is the known regression.
-**VD6 Frozen wire tags** — `WIRE_TAG_*` append-only manual serde; never derive enum order.
-New metric = new tag; unknown tag hard fail. `MetricKind` derives serde (variant index =
-public wire for callers, not the meta format) → append only, never reorder.
+**VD6 Schema** — persisted configuration includes dimension, scalar width, metric type
+and parameters. The typed envelope and immutable schema row must agree. Keep
+`MetricKind` discriminants stable and reject unknown metric tags.
 
 ## Bugs
 
@@ -51,8 +50,8 @@ public wire for callers, not the meta format) → append only, never reorder.
 
 ## Restored-handle ownership
 
-Serde / `from_meta` rebuild independent runtime caches over the same rows.
-Retire the prior active handle before mutation and route all reads/writes
-through one shared instance while mutable. Alternating writes through separate
-restored handles can corrupt state even when calls are sequential. Independent
-read handles are supported only while the underlying index stays immutable.
+Serialize writers across aliases. Each mutation chunk reloads the committed state.
+Use one snapshot for multi-row queries and compaction. Preserve the allocation
+ceiling across clear and compaction so ordinary point reads cannot observe a
+different key's vector. Deep-cloning a mutable handle and cloning an immutable
+reader have distinct storage identities.

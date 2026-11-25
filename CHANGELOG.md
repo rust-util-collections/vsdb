@@ -6,6 +6,15 @@ Compiler requirements below are historical release notes. Current development
 uses the official latest stable Rust, without a declared compatible version
 range or minimum compiler; see [the toolchain policy](docs/ai/compatibility-policy.md#rust-toolchain).
 
+## [v18.0.0] (unreleased)
+
+This major version introduces a distinct storage format. Stop v17 processes and convert existing universes with the independent `vsdb_migrate` library. Its converters preserve primary collection IDs. Applications supply the schema for embedded handles and retain the mapping for relocated DAG children. [Upgrade guide](migration/README.md)
+
+- Universe and engine headers bind storage to a universe, namespace and shard count. A process-wide writer lock covers namespaces on separate volumes. The registry records the pending or established state of each namespace.
+- Typed maps gain borrowed key lookups, safe occupied/vacant entries, fallible value updates and immutable readers. Ordered integer keys use explicit widths. A mutable dereference marks a guarded value for persistence.
+- VerMap publishes working and history changes under one prefix. Its slotted B+ tree supports owned snapshots, checked recovery and batched edits. Trie roots use copy-on-write nodes and map-bound checkpoints.
+- SlotDex uses fixed-width slot codecs and detects stale writers. DagMap stores each node under one co-located prefix and supports typed keys and empty values. VecDex reads persisted graph state, uses snapshots for search and supports stored metric parameters.
+
 ## [v17.0.21]
 
 Existing databases open in place.

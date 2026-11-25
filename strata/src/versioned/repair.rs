@@ -1,215 +1,234 @@
-//! Reference-count recovery for the commit DAG and B+ tree node pool.
-//!
-//! Called after deserialisation and on crash recovery.
+//! Validate the published graph before repairing any row or reclaiming pages.
 
+use super::{Commit, CommitId, NO_COMMIT, map::VerMap, store::*};
+use crate::{
+    Result,
+    basic::persistent_btree::{BLOB, CLASS_MASK, EMPTY_ROOT, NodeView, object_key},
+    common::{InstanceId, PrefixFrame, load_instance_meta, parse_prefix_handle},
+};
 use std::collections::{HashMap, HashSet};
 
-use crate::{
-    basic::persistent_btree::{EMPTY_ROOT, NodeId},
-    common::error::{Result, VsdbError},
-};
-
-use super::{CommitId, NO_COMMIT, map::VerMap};
+/// Counts from a complete version-store verification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GcStats {
+    pub live_objects: usize,
+    pub live_commits: usize,
+    pub removed_commits: usize,
+}
 
 impl<K, V> VerMap<K, V> {
-    pub(crate) fn rebuild_branch_name_index(&mut self) {
-        let mut seen = HashSet::new();
-        // Preserve valid rows so concurrent readers through another handle
-        // never lose a live name while this derived index is reconciled.
-        for (id, state) in self.branches.iter() {
-            if seen.insert(state.name.clone())
-                && self.branch_names.get(&state.name) != Some(id)
+    pub(super) fn open_meta(id: InstanceId, deep: bool) -> Result<Self> {
+        let id = InstanceId::new(id.map_id, id.ns.unwrap_or_default());
+        let bytes: Vec<u8> = load_instance_meta(id)?;
+        match parse_prefix_handle::<Self>(&bytes)? {
+            PrefixFrame(raw, []) if raw.instance_id() == id => Self::open(raw, deep),
+            _ => Err(corrupt("version store metadata identity mismatch")),
+        }
+    }
+
+    /// Opens a saved handle and verifies every reachable page and blob.
+    pub fn from_meta_verified(id: impl Into<InstanceId>) -> Result<Self> {
+        Self::open_meta(id.into(), true)
+    }
+
+    pub(super) fn records(&self, tag: u8) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> {
+        self.tree
+            .nodes
+            .range([tag].as_slice()..[tag + 1].as_slice())
+    }
+
+    pub(super) fn commit_rows(
+        &self,
+    ) -> impl Iterator<Item = Result<(CommitId, Commit)>> {
+        self.records(COMMIT).map(|(k, v)| {
+            let id = CommitId::from_raw(record_id(&k)?);
+            Ok((id, Commit::parse(id, &v)?))
+        })
+    }
+
+    pub(super) fn validate_commit_graph(&self) -> Result<HashMap<CommitId, u32>> {
+        let mut refs = HashMap::<CommitId, u32>::new();
+        let mut work = Vec::new();
+        for (key, v) in self.records(HEAD) {
+            record_id(&key)?;
+            let head = BranchHead::decode(&v)?.head;
+            if head != NO_COMMIT {
+                work.push(head);
+            }
+        }
+        while let Some(id) = work.pop() {
+            let count = refs.entry(id).or_default();
+            *count = count
+                .checked_add(1)
+                .ok_or_else(|| corrupt("commit reference count overflow"))?;
+            if *count == 1 {
+                let commit = self.get_commit_inner(id)?;
+                let mut seen = HashSet::new();
+                for p in commit.parents {
+                    if p == NO_COMMIT || p >= id || !seen.insert(p) {
+                        return Err(corrupt("invalid commit parent list"));
+                    }
+                    work.push(p);
+                }
+            }
+        }
+        Ok(refs)
+    }
+
+    pub(super) fn recover(&mut self, deep: bool) -> Result<GcStats> {
+        let hdr = Header::get(&self.tree.nodes)?;
+        self.tree.check_ceiling(hdr.next_id)?;
+        let counts = self
+            .validate_commit_graph()
+            .map_err(|err| corrupt(err.to_string()))?;
+        let mut roots = Vec::new();
+        let mut names = HashMap::new();
+        let mut edits = Edits::default();
+        let mut main_found = false;
+        for (key, v) in self.records(HEAD) {
+            let id = record_id(&key)?;
+            if id == 0 || id >= hdr.next_branch {
+                return Err(corrupt("invalid branch ID ceiling"));
+            }
+            main_found |= id == hdr.main_branch.raw();
+            let name = self
+                .tree
+                .nodes
+                .get(row(NAME, id))
+                .ok_or_else(|| corrupt("missing branch name"))?;
+            let name =
+                String::from_utf8(name).map_err(|_| corrupt("invalid branch name"))?;
+            if names.insert(by_name(&name), id).is_some() {
+                return Err(corrupt("duplicate branch name"));
+            }
+            roots.push(BranchHead::decode(&v)?.dirty_root);
+        }
+        if !main_found {
+            return Err(corrupt("missing main branch"));
+        }
+        for (key, _) in self.records(NAME) {
+            let id = record_id(&key)?;
+            if !self.tree.nodes.contains_key(row(HEAD, id)) {
+                edits.rows.insert(key, None);
+            }
+        }
+        for (key, v) in self.records(BY_NAME) {
+            if names
+                .get(&key)
+                .is_none_or(|n| n.to_le_bytes().as_slice() != v)
             {
-                self.branch_names.insert(&state.name, &id);
+                edits.rows.insert(key, None);
             }
         }
-        let stale: Vec<_> = self
-            .branch_names
-            .keys()
-            .filter(|name| !seen.contains(name))
-            .collect();
-        for name in stale {
-            self.branch_names.remove(&name);
-        }
-    }
-
-    /// Establishes the deep copy's independent tree owners from its
-    /// copied commits and branches before returning the new map.
-    pub(crate) fn rebuild_tree_ref_counts(&mut self) {
-        // No old durable pointer may survive a sweep that retires its nodes.
-        self.sync_storage();
-        self.tree.register_deferred_reclaims();
-        let mut live_roots: Vec<NodeId> =
-            self.commits.iter().map(|(_, c)| c.root).collect();
-        for (_, s) in self.branches.iter() {
-            if s.dirty_root != EMPTY_ROOT {
-                live_roots.push(s.dirty_root);
+        for (k, id) in names {
+            let raw = id.to_le_bytes();
+            if self.tree.nodes.get(&k).as_deref() != Some(&raw) {
+                edits.rows.insert(k, Some(raw.to_vec()));
             }
         }
-        self.tree.rebuild_ref_counts(&live_roots);
-    }
-
-    /// Validate all reachable history and working roots before removing any
-    /// rows. Reuse the traced children to install counts after durable repair.
-    pub(crate) fn recover_ref_counts(&mut self, restoring: bool) -> Result<()> {
-        let ref_counts = self.validate_commit_graph()?;
-        let mut required: Vec<_> =
-            self.branches.iter().map(|(_, s)| s.dirty_root).collect();
-        let mut orphan_roots = Vec::new();
-        let mut has_zero_count = false;
-        for (id, commit) in self.commits.iter() {
-            has_zero_count |= commit.ref_count == 0;
-            if ref_counts.contains_key(&CommitId(id)) {
-                required.push(commit.root);
+        let mut removed_commits = 0;
+        for record in self.commit_rows() {
+            let (id, mut commit) = record?;
+            if id == NO_COMMIT || id.raw() >= hdr.next_commit {
+                return Err(corrupt("invalid commit ID ceiling"));
+            }
+            if let Some(&owners) = counts.get(&id) {
+                roots.push(commit.root);
+                if owners != commit.ref_count {
+                    commit.ref_count = owners;
+                    edits.write_commit(&commit);
+                }
             } else {
-                orphan_roots.push(commit.root);
+                edits.rows.insert(row(COMMIT, id.raw()).to_vec(), None);
+                removed_commits += 1;
             }
         }
-        let counts = self.tree.required_node_refs(&required)?;
-        if !self.namespace().is_read_only() {
-            if restoring {
-                self.repair_id_allocators();
-                self.rebuild_branch_name_index();
-            }
-            if has_zero_count || self.gc_dirty.get_value() {
-                self.apply_ref_count_repair(ref_counts);
-                orphan_roots.clear();
+        for root in roots
+            .iter()
+            .copied()
+            .filter(|r| *r != EMPTY_ROOT)
+            .collect::<HashSet<_>>()
+        {
+            let bytes = self
+                .tree
+                .nodes
+                .get(object_key(root))
+                .ok_or_else(|| corrupt(format!("missing reachable root {root}")))?;
+            let page = NodeView::open(&bytes)?;
+            if root & CLASS_MASK == BLOB || (root & CLASS_MASK == 0) == page.leaf {
+                return Err(corrupt("invalid root page class"));
             }
         }
+        let mut has_anchors = false;
+        for tag in [RETIRED, STAGE] {
+            for (k, _) in self.records(tag) {
+                let id = record_id(&k)?;
+                has_anchors = true;
+                if tag != RETIRED || !self.tree.keep_pin_marker(id) {
+                    edits.rows.insert(k, None);
+                }
+            }
+        }
+        let cached = if deep || has_anchors {
+            None
+        } else {
+            self.tree
+                .nodes
+                .get(REFS)
+                .and_then(|bytes| self.tree.load_refs(&bytes, hdr.generation, &roots))
+        };
+        let live_objects = match cached {
+            Some(n) => n,
+            None => {
+                let refs = self.tree.required_node_refs(&roots)?;
+                let n = refs.len();
+                if deep {
+                    self.tree.verify_pages(&refs)?;
+                }
+                if !self.namespace().is_read_only() {
+                    self.tree.nodes.try_sync_wal()?;
+                }
+                self.tree.finish_ref_counts(refs, &[])?;
+                n
+            }
+        };
+        if !self.namespace().is_read_only() && !edits.rows.is_empty() {
+            self.publish(hdr, edits, true)?;
+        }
+        Ok(GcStats {
+            live_objects,
+            live_commits: counts.len(),
+            removed_commits,
+        })
+    }
 
-        // Commit removals and root publications must be durable before sweep.
-        self.sync_storage();
-        self.tree.finish_ref_counts(counts, &orphan_roots);
-        self.tree.register_deferred_reclaims();
+    /// Verifies every reachable page, repairs reference counts and sweeps
+    /// unreachable objects. Read-only opens perform validation in memory.
+    pub fn verify_and_gc(&mut self) -> Result<GcStats> {
+        self.recover(true)
+    }
+
+    /// Checkpoints a writable store and consumes this handle.
+    pub fn close(mut self) -> Result<()> {
+        if !self.namespace().is_read_only() {
+            self.flush()?;
+        }
         Ok(())
     }
 
-    /// Advances the commit/branch id allocators past every stored row.
-    ///
-    /// Writable restores only: read-only callers return before this point.
-    /// The allocator rows are advanced before the repair can return, so a
-    /// subsequent `commit`/`create_branch` cannot reuse an existing id.
-    fn repair_id_allocators(&mut self) {
-        let max_commit = self
-            .commits
-            .iter()
-            .map(|(id, _)| id)
-            .max()
-            .unwrap_or(NO_COMMIT.0);
-        let max_branch = self
-            .branches
-            .iter()
-            .map(|(id, _)| id)
-            .max()
-            .unwrap_or(NO_COMMIT.0);
-
-        let current_commit = self.next_commit.get_value();
-        let current_branch = self.next_branch.get_value();
-        let next_commit = current_commit.max(max_commit.saturating_add(1));
-        let next_branch = current_branch.max(max_branch.saturating_add(1));
-        let commit_changed = next_commit != current_commit;
-        let branch_changed = next_branch != current_branch;
-
-        if commit_changed {
-            *self.next_commit.get_mut() = next_commit;
-        }
-        if branch_changed {
-            *self.next_branch.get_mut() = next_branch;
-        }
-        if commit_changed || branch_changed {
-            self.fence(|m| {
-                m.next_commit.sync_wal();
-                m.next_branch.sync_wal();
-            });
-        }
+    /// Durably checkpoints the current reference graph for fast reopening.
+    pub fn flush(&mut self) -> Result<()> {
+        self.ensure_writable("version store checkpoint")?;
+        let hdr = Header::get(&self.tree.nodes)?;
+        let bytes = self.tree.ref_checkpoint(hdr.generation)?;
+        self.tree.flush_refs(&REFS, bytes)
     }
+}
 
-    /// Counts every branch HEAD and reachable parent edge without writing.
-    /// A missing reachable record must be reported before any orphan cleanup.
-    pub(crate) fn validate_commit_graph(&self) -> Result<HashMap<CommitId, u32>> {
-        let mut visited = HashSet::new();
-        let mut ref_counts: HashMap<CommitId, u32> = HashMap::new();
-        let mut queue: Vec<CommitId> = Vec::new();
-
-        for (_, s) in self.branches.iter() {
-            if s.head != NO_COMMIT {
-                *ref_counts.entry(s.head).or_insert(0) += 1;
-                queue.push(s.head);
-            }
-        }
-
-        while let Some(id) = queue.pop() {
-            if !visited.insert(id) {
-                continue;
-            }
-            let c = self
-                .commits
-                .get(&id.0)
-                .ok_or(VsdbError::CommitNotFound { commit_id: id.0 })?;
-            if c.id != id {
-                return Err(VsdbError::Corrupt {
-                    detail: format!("commit row {} carries id {}", id.0, c.id.0),
-                });
-            }
-            for &parent in &c.parents {
-                if parent == NO_COMMIT {
-                    return Err(VsdbError::Corrupt {
-                        detail: format!(
-                            "commit {} lists the sentinel as a parent",
-                            id.0
-                        ),
-                    });
-                }
-                if parent.0 >= id.0 {
-                    return Err(VsdbError::Corrupt {
-                        detail: format!(
-                            "commit {} lists non-older parent {}",
-                            id.0, parent.0
-                        ),
-                    });
-                }
-                *ref_counts.entry(parent).or_insert(0) += 1;
-                queue.push(parent);
-            }
-        }
-        Ok(ref_counts)
-    }
-
-    /// Apply a count map validated before any repair or reclamation starts.
-    /// Structural writers are serialized throughout validation and repair.
-    fn apply_ref_count_repair(&mut self, ref_counts: HashMap<CommitId, u32>) {
-        // A legacy zero-count repair may begin with a false marker. Pin true
-        // before changing counts, and settle the graph before deleting rows.
-        self.begin_ref_update();
-        self.fence(|m| {
-            m.tree.nodes.sync_wal();
-            m.commits.sync_wal();
-            m.branches.sync_wal();
-        });
-
-        for (&id, &correct) in &ref_counts {
-            // The full graph was validated above and structural writers are
-            // serialized, so every reachable commit still exists.
-            let mut c = self
-                .commits
-                .get(&id.0)
-                .expect("validated commit disappeared");
-            if c.ref_count != correct {
-                c.ref_count = correct;
-                self.commits.insert(&id.0, &c);
-            }
-        }
-
-        let all_ids: Vec<CommitId> =
-            self.commits.iter().map(|(id, _)| CommitId(id)).collect();
-        for id in all_ids {
-            if !ref_counts.contains_key(&id) {
-                self.commits.remove(&id.0);
-            }
-        }
-
-        // A durable false marker must never outlive unsynced count repairs.
-        self.fence(|m| m.commits.sync_wal());
-        self.end_ref_update();
-    }
+fn record_id(k: &[u8]) -> Result<u64> {
+    let bytes = k
+        .get(1..)
+        .and_then(|v| v.try_into().ok())
+        .ok_or_else(|| corrupt("invalid version store key length"))?;
+    Ok(u64::from_be_bytes(bytes))
 }

@@ -39,14 +39,20 @@ panics on errors; ordinary inserts and batch commits do not fsync individually.
 
 ## Basic collection read views
 
-Immutable `iter` and `range` on `Mapx`, `MapxOrd` and `MapxOrdRawKey` retain a
-committed view captured at iterator creation. A read-only use of a `shadow`
-handle may therefore keep a range iterator while the sole writer updates the
-map. Later writes, clears and flushes do not alter that iterator's results.
-Separate point reads or iterators can observe different views; this does not
-give a shared snapshot across collections. Mutable iteration still requires
-coordination with every other writer to its keys. Composite indexes retain
-their single-active-handle contract described below.
+Obtain a cheap, cloneable `MapReader` with `map.reader()`. A reader retains the namespace independently of the writer. Call `reader.read_view()` or `map.read_view()` to capture a single sequence for point queries and iteration. The ordered views also support ranges. An `OrphanReader` reads its latest value with `get()`.
+
+```rust
+use vsdb::MapxOrd;
+let mut m = MapxOrd::<String, u64>::new();
+m.insert(&"balance".to_owned(), &5);
+let reader = m.reader();
+let before = reader.read_view();
+m.update("balance", |v| *v += 2).unwrap();
+assert_eq!(before.get("balance"), Some(5));
+assert_eq!(reader.read_view().get("balance"), Some(7));
+```
+
+Mutable value guards write back after a mutable dereference or a vacant insertion. Use `update` or `guard.commit()` to receive encoding and storage errors. Mutate a `RefCell` via the guard's mutable dereference. Debug builds diagnose interior changes made through a shared dereference.
 
 ## Namespaces
 
@@ -109,9 +115,7 @@ Typed handles restored by serde or `from_meta` check a tag of the fully
 qualified Rust type name, including generic parameters. Unrelated types with
 the same short name are rejected. Moving or renaming a persisted type requires
 an explicit migration; a type alias referring to the original type is fine.
-This check is not a schema fingerprint: changing fields under the same type
-name still requires application schema versioning and conversion. v16
-`VSTYPE02` handles remain readable; new handles use `VSTYPE03`.
+Application field changes under the same name require explicit schema versioning. v18 uses `VSTYPE04` throughout. Convert old handles offline with `vsdb_migrate`.
 
 Key rules:
 - `Mapx::new()` uses the current creation scope, or the default namespace outside one.
@@ -211,10 +215,7 @@ assert_eq!(map.get(&[1, 0][..]), Some(7));
 assert_eq!(map.get(&[0][..]), None);
 ```
 
-Mapx normalizes byte-slice queries through the owning key codec because
-postcard encodes arrays differently from variable-length byte sequences.
-Other custom `KeyRef` forms must encode identically to their owning type.
-Ordered maps instead use `OrderedKeyRef` / `KeyEnDeOrdered` encodings.
+Implement `KeyLookup<Q>` or `OrderedKeyLookup<Q>` on the owning key type to add a borrowed exact-match form. Equality keys require canonical bytes. The serde blanket requires `Eq + Hash`. Ordered scalar and integer-sequence keys use explicit widths. String maps accept string-slice bounds such as `map.range("a".."z")`.
 
 ## MapxOrd
 
@@ -299,7 +300,7 @@ mpt.insert(b"key2", b"value2").unwrap();
 // SMT keys are hashed to a fixed 256-bit path and have no length limit.
 
 // Compute the 32-byte Merkle root hash
-let root = mpt.root_hash().unwrap();
+let root = mpt.root_hash();
 assert_eq!(root.len(), 32);
 
 // Lookup
@@ -322,9 +323,9 @@ std::fs::create_dir_all(cache_dir).unwrap();
 let cache_id = 1;
 let sync_tag = 0;
 mpt.save_cache(cache_dir, cache_id, sync_tag).unwrap();
-let (mut loaded, tag, hash) = MptCalc::load_cache(cache_dir, cache_id).unwrap();
+let (loaded, tag, hash) = MptCalc::load_cache(cache_dir, cache_id).unwrap();
 assert_eq!(tag, sync_tag);
-assert_eq!(loaded.root_hash().unwrap(), hash);
+assert_eq!(loaded.root_hash(), hash);
 // VerMapWithProof loads a cache automatically; saving requires save_cache(commit).
 std::fs::remove_dir_all(cache_dir).unwrap();
 ```
@@ -338,8 +339,7 @@ let mut smt = SmtCalc::new();
 smt.insert(b"alice", b"100").unwrap();
 smt.insert(b"bob", b"200").unwrap();
 
-let root = smt.root_hash().unwrap();
-let root32: [u8; 32] = root.try_into().unwrap();
+let root32 = smt.root_hash();
 
 // Membership proof
 let proof = smt.prove(b"alice").unwrap();
@@ -360,7 +360,7 @@ Both `MptProof` and `SmtProof` support serde and a versioned postcard transport:
 use vsdb::{MptCalc, MptProof};
 let mut trie = MptCalc::new();
 trie.insert(b"account", b"10").unwrap();
-let root: [u8; 32] = trie.root_hash().unwrap().try_into().unwrap();
+let root: [u8; 32] = trie.root_hash();
 let wire = trie.prove(b"account").unwrap().to_bytes().unwrap();
 let received = MptProof::from_bytes(&wire).unwrap();
 assert!(MptCalc::verify_proof(&root, b"account", &received).unwrap());
@@ -380,7 +380,10 @@ Integrates `VerMap` with MPT or SMT for versioned Merkle root computation.
 Use `prove_at(branch, &key)` to synchronize and return a `ProofWithRoot` in one
 call, including uncommitted changes. `prove_at_commit(commit, &key)` selects
 committed history instead and returns an error for reclaimed commits. Both
-backends use the same method names and ordered key codec.
+backends use the same method names and ordered key codec. The wrapper's
+`save_meta` and `from_meta` persist its typed single-prefix handle. The type
+tag binds the trie backend as well as the key and value types. Use `new_in` to
+select a namespace and `clone_in` to deep-copy the graph and retained history.
 
 ```rust
 use vsdb::{SmtCalc, VerMapWithProof};
@@ -394,8 +397,7 @@ assert!(VerMapWithProof::<u64, String, SmtCalc>::verify_key_proof(
 ```
 
 Earlier root queries and `save_cache` calls do not determine these methods'
-proof context. The existing `prove`, `prove_key`, and `prove_mpt` methods still
-use the last synchronized trie; they remain useful when proving several keys
+proof context. The `prove` and `prove_key` methods use the last synchronized trie; they remain useful when proving several keys
 against a root the caller has already selected. `ProofWithRoot` supports serde;
 its embedded proof uses the versioned representation above.
 
@@ -420,8 +422,15 @@ vmp.save_cache(commit).unwrap();
 // are rebuilt/caught up. Root calculation and Drop never save cache files.
 ```
 
-MPT and SMT checkpoints have a 512 MiB encoded size limit, including the
-checksum. An oversized save returns an error and preserves the previous file.
+Trie clones share immutable subtrees. Each batch publishes its candidate root
+after all operations succeed. Hashes and proofs can be computed through a
+shared reference. Both the commitment and proof wire bytes match v17.
+
+MPTC v2 and SMTC v4 checkpoints stream post-order nodes and omit cached
+node hashes. Loading verifies the checksum, canonical tree shape, root
+commitment, and, for versioned maps, the universe, map, commit and B+ tree
+root IDs. The loader bounds node count, pending subtrees, value sizes, and
+total decoded memory. The encoded size limit is 512 MiB including the checksum. An oversized save returns an error and preserves the previous file.
 
 A branch root and its proof use one captured working state, including edits
 that were uncommitted when the query began.
@@ -438,7 +447,7 @@ reclaimed commits, even if a matching trie cache remains.
 ```rust
 use vsdb::{SlotDex64, slotdex::Order};  // SlotDex<u64, K> alias — slot type is u64
 
-let mut db = SlotDex64::<String>::new(10u64, false).unwrap(); // tier_capacity must be >= 2
+let mut db = SlotDex64::<String>::new(10u32, false).unwrap(); // tier_capacity must be >= 2
 
 // Insert entries into slots (e.g., timestamps)
 db.insert(100, "entry_a".to_string()).unwrap();
@@ -479,19 +488,57 @@ let first_ten: Vec<_> = index.iter(.., Order::Desc).take(10).collect();
 assert_eq!(first_ten, (0..10).collect::<Vec<_>>());
 ```
 
-The iterator decodes keys on demand and has no `u16` page-size ceiling. It keeps
-ascending keys within each slot in both slot orders. Keep the index's single
-active handle for the entire iteration; restored aliases must not mutate it.
-Use `page` when seeking directly to an offset, and `count` for a row count that
-does not need to decode the keys.
+Each iterator reads one committed snapshot and decodes keys on demand. A
+descending scan buffers up to 256 keys and 16 KiB of raw key data across
+adjacent slots. Larger groups stream in ascending key order within the slot.
+Use `page` to seek to an offset and `count` to sum a slot range.
 
-SlotDex stores counts and rows together in one atomic batch per mutation,
-including the entire `insert_batch` call. Split large imports across calls
-to bound temporary memory; earlier calls remain committed if a later call
-fails. Restoring through serde or `from_meta` creates independent runtime
-caches: retire the old active handle before mutation and
-route reads/writes through one shared instance. Sequential writes through
-separate restored handles can also invalidate cached state.
+Coordinates implement `SlotType` with a fixed byte array encoding. Built-in
+signed coordinates align tier buckets relative to their minimum value. The
+fan-out is a `u32` with a minimum of two.
+
+Each mutation commits entries, counts and a writer generation in one engine
+batch. Readers through restored handles can run concurrently. Serialize all
+writers across aliases. A stale writer returns an error, including on `clear`.
+Deserialize a fresh handle to resume writing. `clone` and `clone_in` deep-copy
+the index to an independent prefix.
+
+The offline `vsdb_migrate::slotdex::migrate_v17` converter keeps the prefix
+and index rows and upgrades the total and handle metadata. Legacy capacities
+must fit in `u32`. For a custom fixed-width codec, `migrate_custom_v17` checks
+the supplied capacity and every entry and tier count. A variable-width custom
+slot needs to rebuild its index from application records.
+
+## DagMap
+
+`DagMap<K, V>` stores local overrides in a single-parent tree. Reads walk up
+to the first matching override. Removing a key masks the inherited value.
+`DagMapRawKey<V>` accepts byte keys and `DagMapRaw` stores bytes for both keys
+and values. Empty byte strings and unit values round-trip.
+
+```rust
+use vsdb::DagMap;
+let mut root = DagMap::<u64, String>::new(None);
+root.insert(&1, &"original".into());
+let mut edit = DagMap::new(Some(&mut root));
+edit.insert(&1, &"edited".into());
+assert_eq!(root.get(&1).as_deref(), Some("original"));
+let merged = edit.prune().unwrap();
+assert_eq!(merged.instance_id(), root.instance_id());
+assert_eq!(root.get(&1).as_deref(), Some("edited"));
+```
+
+Serialize structural changes to each connected graph. Every node has one
+tagged map on the root's shard. A successful prune folds the mainline,
+reparents surviving head children, clears consumed nodes and fences that
+shard's WAL. Retrying on the consumed head finishes any interrupted cleanup.
+`clone` copies the connected graph. `clone_in` places the copy in another
+namespace and preserves each parent's child tokens.
+
+The offline converters `vsdb_migrate::dagmap::migrate_v17` and
+`migrate_rawkey_v17::<V>` preserve the root ID. They return the converted
+root and the mapping for children that needed a new co-located prefix.
+Update any saved application-side child IDs with that mapping.
 
 ## VecDex
 

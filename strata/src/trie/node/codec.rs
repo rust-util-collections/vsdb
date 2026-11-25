@@ -1,81 +1,59 @@
 use super::Node;
-use crate::trie::nibbles::Nibbles;
-
+use sha3::{Digest, Keccak256};
 pub struct NodeCodec;
-
 impl NodeCodec {
-    /// Encodes a node into bytes for hashing.
-    ///
-    /// All children must have been hashed (via `commit`) before encoding.
     pub fn encode(node: &Node) -> Vec<u8> {
-        let mut buf = Vec::new();
-        match node {
-            Node::Null => {
-                buf.push(0x00);
+        let mut out = Vec::new();
+        Self::stream(node, |b| out.extend_from_slice(b));
+        out
+    }
+    pub fn hash(node: &Node) -> [u8; 32] {
+        if matches!(node, Node::Null) {
+            return [0; 32];
+        }
+        let mut hash = Keccak256::new();
+        Self::stream(node, |bytes| hash.update(bytes));
+        hash.finalize().into()
+    }
+    fn stream(node: &Node, mut emit: impl FnMut(&[u8])) {
+        fn len(mut n: usize, mut emit: impl FnMut(&[u8])) {
+            let mut bytes = [0; 10];
+            let mut used = 0;
+            while n >= 128 {
+                bytes[used] = (n as u8) | 128;
+                used += 1;
+                n >>= 7
             }
+            bytes[used] = n as u8;
+            emit(&bytes[..=used]);
+        }
+        match node {
+            Node::Null => emit(&[0]),
             Node::Leaf { path, value } => {
-                buf.push(0x01);
-                encode_path(&mut buf, path);
-                encode_bytes(&mut buf, value);
+                emit(&[1]);
+                len(path.len(), &mut emit);
+                emit(path.bytes());
+                len(value.len(), &mut emit);
+                emit(value);
             }
             Node::Extension { path, child } => {
-                buf.push(0x02);
-                encode_path(&mut buf, path);
-                let hash = child
-                    .hash()
-                    .expect("Child must be hashed before encoding extension");
-                buf.extend_from_slice(hash);
+                emit(&[2]);
+                len(path.len(), &mut emit);
+                emit(path.bytes());
+                emit(child.hash().unwrap());
             }
             Node::Branch { children, value } => {
-                buf.push(0x03);
-
-                let mut bitmap: u16 = 0;
-                for (i, child) in children.iter().enumerate() {
-                    if child.is_some() {
-                        bitmap |= 1 << i;
-                    }
-                }
-                buf.extend_from_slice(&bitmap.to_le_bytes());
-
+                emit(&[3]);
+                emit(&children.bitmap.to_le_bytes());
+                emit(&[u8::from(value.is_some())]);
                 if let Some(v) = value {
-                    buf.push(1);
-                    encode_bytes(&mut buf, v);
-                } else {
-                    buf.push(0);
+                    len(v.len(), &mut emit);
+                    emit(v)
                 }
-
-                for child in children.iter().flatten() {
-                    let hash = child
-                        .hash()
-                        .expect("Child must be hashed before encoding branch");
-                    buf.extend_from_slice(hash);
+                for c in &children.nodes {
+                    emit(c.hash().unwrap())
                 }
             }
         }
-        buf
     }
-}
-
-fn encode_varint(buf: &mut Vec<u8>, mut n: usize) {
-    while n >= 0x80 {
-        buf.push(((n as u8) & 0x7F) | 0x80);
-        n >>= 7;
-    }
-    buf.push(n as u8);
-}
-
-fn encode_path(buf: &mut Vec<u8>, path: &Nibbles) {
-    let len = path.len();
-    encode_varint(buf, len);
-    let nibbles = path.as_slice();
-    for i in (0..len).step_by(2) {
-        let n1 = nibbles[i];
-        let n2 = if i + 1 < len { nibbles[i + 1] } else { 0 };
-        buf.push((n1 << 4) | n2);
-    }
-}
-
-fn encode_bytes(buf: &mut Vec<u8>, bytes: &[u8]) {
-    encode_varint(buf, bytes.len());
-    buf.extend_from_slice(bytes);
 }

@@ -1,51 +1,26 @@
 # DagMap Review Patterns
 
-**Files:** `dagmap/mod.rs`, `dagmap/{raw,rawkey}/{mod,test}.rs`.
+Each node owns one raw map. The root creates a graph token. Children share
+the root's namespace and shard. The row at `00` holds node metadata, `01`
+indexes local child edges, and `02` prefixes user keys. Values carry a live
+or tombstone tag, so zero-length application encodings are valid.
 
-**Arch:** Single-parent node tree: data `MapxRaw`, children `MapxOrdRawKey<DagMapRaw>`,
-parent slot `Orphan<Option<DagMapRaw>>` held via **shadow** (not Clone). IDs:
-parking_lot Mutex + crash-safe global `dag_id_ceiling` file (system dir; folds legacy
-`id_num`). Children registry is index; parent slot is ownership truth.
-
-## Invariants
-
-**DG1 IDs** — monotonic, never reuse; mutex covers full alloc; ceiling before issue
-(tmp→fsync→rename→dir fsync). Gaps ≤ batch OK. The ceiling lives in the default
-system dir, resolved path-only (`vsdb_get_system_dir`) — never via
-`Namespace::default_ns()`, which would open the default engine for namespace-only users.
-**DG2 Acyclic** — parent exists; no node becomes its own ancestor.
-**DG3 Orphans** — delete refuses children / cascades / documents dangling.
-**DG4 Parent slot ownership** — fresh Orphan per `new()`; shadow parent. New children place their parent slot and
-children registry on the same shard as the registry that publishes them, ordering these
-writes across successive attachments on one WAL. `destroy`: save
-parent in `DESTROY_PARENT_KEY` + sync_wal → null own/owned-descendant slots + data
-→ namespace WAL fence → clear registries → unregister from parent last, so a retry still unlinks.
-**DG5 Registry vs ownership** — walks gate on `child.parent` points back (or None residue);
-foreign registry entries dropped only, never destroyed via foreign walk.
-**DG6 Prune crash order** — destroy branches → atomic whole-mainline merge → WAL fence
-→ re-parent → WAL fence → mark `PRUNE_CLEARING_KEY` on consumed nodes → WAL fence
-→ clear → WAL fence → unregister. Retry keys off the marker (finishes the clear, never re-folds genesis) — not off field clear order.
-The head marker alone does not prove every intermediate marker landed: retry
-completes and fences the marker set while the parent chain is still intact.
-A cleared parent link implies the complete marker set was already fenced.
-Both normal and retried clears retain all children registries until every consumed
-node's data/parent clear is fenced; only then may discovery edges be removed.
-In-place genesis enrich. WAL fences scoped to DAG ns; never remove a barrier
-or force unrelated memtables into SSTs as part of this publication ordering.
-Crash at phase boundary keeps value-exact survivors (`prune_crash_*`).
-Merge staging must also preserve children already re-parented by a prior
-interrupted prune; never publish intermediate ancestor values during retry.
-
-## Bugs
-
-**Ceiling late** · Mutex contention matters only when concurrent writers contend for IDs · prune clear-before-merge · clear before marker is durable.
-
-## Checklist
-
-- [ ] Atomic monotonic ID + durable ceiling
-- [ ] Valid parent; no cycle
-- [ ] Delete child policy explicit
-- [ ] Parent-slot ownership / shadow not Clone
-- [ ] Ownership test before destroy-from-registry
-- [ ] Prune phase order + marker + WAL fences; destroy retry unlinks
-- [ ] Codec round-trip
+- Check node magic, graph identity, shard placement and the child's recorded
+  parent and edge before clearing storage reached through a registry entry.
+  A stale index entry may be removed locally. Parentless roots and nodes
+  owned by another parent keep their data.
+- Allocate child edges monotonically within each parent. Publish the child's
+  initial metadata before its index entry. Authenticate fallback reads and
+  guard parent chains against cycles.
+- Prune destroys side branches, folds the mainline atomically into the root
+  and reparents survivors before writing any clearing marker. The marker
+  retains the original owner and root identities. Retrying on the head
+  completes marker publication before wiping local data. Keep discovery
+  edges until the data pass completes. Fence the single shard before return.
+- Destroy marks and wipes owned descendants with discovery edges intact.
+  Finish descendant registries before unlinking the target. A retried
+  destroy can use the owner saved in its destroying state.
+- Use iterative traversal on deep graphs. A clone remaps every copied parent,
+  child and recovery link into the copied graph and retains local edge tokens.
+- The offline migration crate owns old tuple decoders, the durable conversion
+  journal and the relocation map for external child IDs.

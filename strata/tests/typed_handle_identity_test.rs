@@ -8,7 +8,7 @@ mod accounting {
         pub amount: u64,
     }
 
-    #[derive(super::Serialize, super::Deserialize)]
+    #[derive(super::Serialize, super::Deserialize, PartialEq, Eq, Hash)]
     pub struct Key(pub u64);
 }
 
@@ -18,7 +18,7 @@ mod access {
         pub enabled: bool,
     }
 
-    #[derive(super::Serialize, super::Deserialize)]
+    #[derive(super::Serialize, super::Deserialize, PartialEq, Eq, Hash)]
     pub struct Key(pub u64);
 }
 

@@ -1,121 +1,49 @@
 mod codec;
+use super::{
+    nibbles::Nibbles,
+    shared::{Handle, TreeNode},
+};
 pub use codec::NodeCodec;
 
-use crate::trie::nibbles::Nibbles;
-use std::mem;
+pub(crate) type NodeHandle = Handle<Node>;
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum NodeHandle {
-    /// A node that lives only in memory (not yet hashed).
-    InMemory(Box<Node>),
-    /// A node with its precomputed hash (after `commit`).
-    Cached(Vec<u8>, Box<Node>),
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Children {
+    pub bitmap: u16,
+    pub nodes: Box<[NodeHandle]>,
 }
-
-impl Default for NodeHandle {
-    fn default() -> Self {
-        NodeHandle::InMemory(Box::new(Node::Null))
+impl Children {
+    fn rank(&self, i: usize) -> usize {
+        (self.bitmap & ((1 << i) - 1)).count_ones() as usize
     }
-}
-
-impl NodeHandle {
-    pub fn node(&self) -> &Node {
-        match self {
-            Self::InMemory(node) | Self::Cached(_, node) => node,
-        }
+    pub fn get(&self, i: usize) -> Option<&NodeHandle> {
+        (self.bitmap & (1 << i) != 0).then(|| &self.nodes[self.rank(i)])
     }
-
-    fn node_mut(&mut self) -> &mut Node {
-        match self {
-            Self::InMemory(node) | Self::Cached(_, node) => node,
-        }
+    pub fn get_mut(&mut self, i: usize) -> Option<&mut NodeHandle> {
+        let rank = self.rank(i);
+        (self.bitmap & (1 << i) != 0).then(|| &mut self.nodes[rank])
     }
-
-    pub fn hash(&self) -> Option<&[u8]> {
-        match self {
-            NodeHandle::Cached(h, _) => Some(h),
-            NodeHandle::InMemory(_) => None,
-        }
-    }
-
-    /// Consumes the handle, returning the owned `Node` by move (no clone).
-    pub fn into_node(mut self) -> Node {
-        mem::take(self.node_mut())
-    }
-}
-
-impl Clone for NodeHandle {
-    fn clone(&self) -> Self {
-        let mut pending = vec![(self, false)];
-        let mut ready = Vec::new();
-        while let Some((handle, visited)) = pending.pop() {
-            if !visited {
-                pending.push((handle, true));
-                match handle.node() {
-                    Node::Extension { child, .. } => pending.push((child, false)),
-                    Node::Branch { children, .. } => {
-                        pending
-                            .extend(children.iter().rev().flatten().map(|c| (c, false)));
-                    }
-                    _ => {}
-                }
-                continue;
+    pub fn set(&mut self, i: usize, value: Option<NodeHandle>) {
+        let rank = self.rank(i);
+        if self.bitmap & (1 << i) != 0 {
+            if let Some(new) = value {
+                self.nodes[rank] = new;
+                return;
             }
-            let node = match handle.node() {
-                Node::Null => Node::Null,
-                Node::Leaf { path, value } => Node::Leaf {
-                    path: path.clone(),
-                    value: value.clone(),
-                },
-                Node::Extension { path, .. } => Node::Extension {
-                    path: path.clone(),
-                    child: ready.pop().expect("visited child"),
-                },
-                Node::Branch { children, value } => {
-                    let mut copied = Box::new(std::array::from_fn(|_| None));
-                    for (i, child) in children.iter().enumerate().rev() {
-                        if child.is_some() {
-                            copied[i] = Some(ready.pop().expect("visited child"));
-                        }
-                    }
-                    Node::Branch {
-                        children: copied,
-                        value: value.clone(),
-                    }
-                }
-            };
-            ready.push(match handle.hash() {
-                Some(hash) => Self::Cached(hash.to_vec(), Box::new(node)),
-                None => Self::InMemory(Box::new(node)),
-            });
-        }
-        ready.pop().expect("visited root")
-    }
-}
-
-impl Drop for NodeHandle {
-    fn drop(&mut self) {
-        // Detach descendants before dropping each box. This also covers
-        // partial trees discarded by mutation or cache decoding errors.
-        fn detach(node: Node, pending: &mut Vec<NodeHandle>) {
-            match node {
-                Node::Extension { child, .. } => pending.push(child),
-                Node::Branch { children, .. } => {
-                    pending.extend(children.into_iter().flatten())
-                }
-                _ => {}
-            }
-        }
-        let mut pending = Vec::new();
-        detach(mem::take(self.node_mut()), &mut pending);
-        while let Some(mut child) = pending.pop() {
-            detach(mem::take(child.node_mut()), &mut pending);
+            self.bitmap &= !(1 << i);
+            let mut nodes = std::mem::take(&mut self.nodes).into_vec();
+            nodes.remove(rank);
+            self.nodes = nodes.into_boxed_slice();
+        } else if let Some(new) = value {
+            self.bitmap |= 1 << i;
+            let mut nodes = std::mem::take(&mut self.nodes).into_vec();
+            nodes.insert(rank, new);
+            self.nodes = nodes.into_boxed_slice();
         }
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub enum Node {
+pub(crate) enum Node {
     #[default]
     Null,
     Leaf {
@@ -127,7 +55,26 @@ pub enum Node {
         child: NodeHandle,
     },
     Branch {
-        children: Box<[Option<NodeHandle>; 16]>,
-        value: Option<Vec<u8>>,
+        children: Children,
+        value: Option<Box<[u8]>>,
     },
+}
+impl TreeNode for Node {
+    fn children<'a>(&'a self, mut visit: impl FnMut(&'a NodeHandle)) {
+        match self {
+            Self::Extension { child, .. } => visit(child),
+            Self::Branch { children, .. } => children.nodes.iter().for_each(visit),
+            _ => {}
+        }
+    }
+    fn into_children(self, pending: &mut Vec<NodeHandle>) {
+        match self {
+            Self::Extension { child, .. } => pending.push(child),
+            Self::Branch { children, .. } => pending.extend(children.nodes),
+            _ => {}
+        }
+    }
+    fn digest(&self) -> [u8; 32] {
+        NodeCodec::hash(self)
+    }
 }

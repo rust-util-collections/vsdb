@@ -39,7 +39,7 @@ fn workflow_swap_order() {
     });
 }
 
-fn slot_db(mn: u64, swap_order: bool) {
+fn slot_db(mn: u32, swap_order: bool) {
     let mut db = SlotDex::new(mn, swap_order).unwrap();
     let mut test_db = testdb::TestDB::default();
 
@@ -70,8 +70,8 @@ fn slot_db(mn: u64, swap_order: bool) {
 
     db.clear().unwrap();
     assert_eq!(0, db.total());
-    assert!(db.get_entries_by_page(10, 0, true).is_empty());
-    assert!(db.get_entries_by_page(10, 0, false).is_empty());
+    assert!(db.page(.., 10, 0, Order::Desc).is_empty());
+    assert!(db.page(.., 10, 0, Order::Asc).is_empty());
 }
 
 fn assert_queryable(
@@ -98,7 +98,7 @@ fn assert_queryable(
             page_number as u32,
             true,
         );
-        let b = db.get_entries_by_page(page_size as u16, page_number as u32, true);
+        let b = db.page(.., page_size as u16, page_number as u32, Order::Desc);
         assert_eq!(a, b);
 
         let a = test_db.get_entries_by_page_slot(
@@ -108,7 +108,7 @@ fn assert_queryable(
             page_number as u32,
             false,
         );
-        let b = db.get_entries_by_page(page_size as u16, page_number as u32, false);
+        let b = db.page(.., page_size as u16, page_number as u32, Order::Asc);
         assert_eq!(a, b);
 
         //////////////////////////////////
@@ -129,12 +129,11 @@ fn assert_queryable(
             true,
         );
 
-        let b = db.get_entries_by_page_slot(
-            Some(smin),
-            Some(smax),
+        let b = db.page(
+            smin..=smax,
             page_size as u16,
             page_number as u32,
-            true,
+            Order::Desc,
         );
         assert_eq!(a, b);
 
@@ -146,12 +145,11 @@ fn assert_queryable(
             false,
         );
 
-        let b = db.get_entries_by_page_slot(
-            Some(smin),
-            Some(smax),
+        let b = db.page(
+            smin..=smax,
             page_size as u16,
             page_number as u32,
-            false,
+            Order::Asc,
         );
         assert_eq!(a, b);
     }
@@ -175,7 +173,7 @@ fn single_handle_rows() {
 
     assert_eq!(db.total(), 100);
     // One slot holding 100 entries: within-slot order is ascending key order.
-    let all = db.get_entries_by_page(200, 0, false);
+    let all = db.page(.., 200, 0, Order::Asc);
     assert_eq!(all.len(), 100);
     assert_eq!(all.first().copied().unwrap(), 0);
     assert_eq!(all.last().copied().unwrap(), 99);
@@ -188,7 +186,10 @@ fn single_handle_rows() {
 
     db.clear().unwrap();
     assert_eq!(db.total(), 0);
-    assert!(db.store.iter().next().is_none());
+    assert_eq!(
+        db.store.iter().collect::<Vec<_>>(),
+        vec![(TOTAL_KEY.to_vec(), total_record(0, 101).to_vec())]
+    );
 }
 
 #[test]
@@ -207,27 +208,18 @@ fn reverse_paging_reverses_slots_only_not_within_slot() {
         }
 
         // Ascending: (slot asc, key asc).
-        assert_eq!(
-            db.get_entries_by_page(10, 0, false),
-            vec![10, 20, 30, 40, 50]
-        );
+        assert_eq!(db.page(.., 10, 0, Order::Asc), vec![10, 20, 30, 40, 50]);
 
         // Reverse: (slot desc, key asc within slot).
-        assert_eq!(
-            db.get_entries_by_page(10, 0, true),
-            vec![40, 50, 10, 20, 30]
-        );
+        assert_eq!(db.page(.., 10, 0, Order::Desc), vec![40, 50, 10, 20, 30]);
 
         // A single full slot in reverse keeps its within-slot ascending order.
-        assert_eq!(
-            db.get_entries_by_page_slot(Some(5), Some(5), 10, 0, true),
-            vec![10, 20, 30]
-        );
+        assert_eq!(db.page(5..=5, 10, 0, Order::Desc), vec![10, 20, 30]);
 
         // Reverse pagination membership across the slot boundary.
-        assert_eq!(db.get_entries_by_page(2, 0, true), vec![40, 50]);
-        assert_eq!(db.get_entries_by_page(2, 1, true), vec![10, 20]);
-        assert_eq!(db.get_entries_by_page(2, 2, true), vec![30]);
+        assert_eq!(db.page(.., 2, 0, Order::Desc), vec![40, 50]);
+        assert_eq!(db.page(.., 2, 1, Order::Desc), vec![10, 20]);
+        assert_eq!(db.page(.., 2, 2, Order::Desc), vec![30]);
     }
 }
 
@@ -264,11 +256,11 @@ fn hdr_meta_is_create_time_constant() {
 fn empty_db_queries() {
     let db: SlotDex<u64, u64> = SlotDex::new(8, false).unwrap();
     assert_eq!(db.total(), 0);
-    assert!(db.get_entries_by_page(10, 0, false).is_empty());
-    assert!(db.get_entries_by_page(10, 0, true).is_empty());
-    assert!(db.get_entries_by_page(0, 0, false).is_empty());
-    assert_eq!(db.entry_cnt_within_two_slots(0, 100), 0);
-    assert_eq!(db.total_by_slot(Some(0), Some(100)), 0);
+    assert!(db.page(.., 10, 0, Order::Asc).is_empty());
+    assert!(db.page(.., 10, 0, Order::Desc).is_empty());
+    assert!(db.page(.., 0, 0, Order::Asc).is_empty());
+    assert_eq!(db.count(0..=100), 0);
+    assert_eq!(db.count(0..=100), 0);
 }
 
 #[test]
@@ -277,13 +269,13 @@ fn single_entry() {
     db.insert(42, 100).unwrap();
 
     assert_eq!(db.total(), 1);
-    assert_eq!(db.get_entries_by_page(10, 0, false), vec![100]);
-    assert_eq!(db.get_entries_by_page(10, 0, true), vec![100]);
+    assert_eq!(db.page(.., 10, 0, Order::Asc), vec![100]);
+    assert_eq!(db.page(.., 10, 0, Order::Desc), vec![100]);
     // Page 1 should be empty
-    assert!(db.get_entries_by_page(10, 1, false).is_empty());
+    assert!(db.page(.., 10, 1, Order::Asc).is_empty());
     // page_size=1
-    assert_eq!(db.get_entries_by_page(1, 0, false), vec![100]);
-    assert!(db.get_entries_by_page(1, 1, false).is_empty());
+    assert_eq!(db.page(.., 1, 0, Order::Asc), vec![100]);
+    assert!(db.page(.., 1, 1, Order::Asc).is_empty());
 }
 
 #[test]
@@ -295,16 +287,16 @@ fn insert_remove_reinsert() {
 
     db.remove(0, &10).unwrap();
     assert_eq!(db.total(), 1);
-    assert_eq!(db.get_entries_by_page(10, 0, false), vec![20]);
+    assert_eq!(db.page(.., 10, 0, Order::Asc), vec![20]);
 
     db.remove(0, &20).unwrap();
     assert_eq!(db.total(), 0);
-    assert!(db.get_entries_by_page(10, 0, false).is_empty());
+    assert!(db.page(.., 10, 0, Order::Asc).is_empty());
 
     // Reinsert
     db.insert(0, 30).unwrap();
     assert_eq!(db.total(), 1);
-    assert_eq!(db.get_entries_by_page(10, 0, false), vec![30]);
+    assert_eq!(db.page(.., 10, 0, Order::Asc), vec![30]);
 }
 
 #[test]
@@ -335,21 +327,15 @@ fn page_boundaries_exact() {
     assert_eq!(db.total(), 20);
 
     // page_size=5: should have 4 pages
-    assert_eq!(db.get_entries_by_page(5, 0, false), vec![0, 1, 2, 3, 4]);
-    assert_eq!(db.get_entries_by_page(5, 1, false), vec![5, 6, 7, 8, 9]);
-    assert_eq!(
-        db.get_entries_by_page(5, 2, false),
-        vec![10, 11, 12, 13, 14]
-    );
-    assert_eq!(
-        db.get_entries_by_page(5, 3, false),
-        vec![15, 16, 17, 18, 19]
-    );
-    assert!(db.get_entries_by_page(5, 4, false).is_empty());
+    assert_eq!(db.page(.., 5, 0, Order::Asc), vec![0, 1, 2, 3, 4]);
+    assert_eq!(db.page(.., 5, 1, Order::Asc), vec![5, 6, 7, 8, 9]);
+    assert_eq!(db.page(.., 5, 2, Order::Asc), vec![10, 11, 12, 13, 14]);
+    assert_eq!(db.page(.., 5, 3, Order::Asc), vec![15, 16, 17, 18, 19]);
+    assert!(db.page(.., 5, 4, Order::Asc).is_empty());
 
     // Reverse
-    assert_eq!(db.get_entries_by_page(5, 0, true), vec![19, 18, 17, 16, 15]);
-    assert_eq!(db.get_entries_by_page(5, 3, true), vec![4, 3, 2, 1, 0]);
+    assert_eq!(db.page(.., 5, 0, Order::Desc), vec![19, 18, 17, 16, 15]);
+    assert_eq!(db.page(.., 5, 3, Order::Desc), vec![4, 3, 2, 1, 0]);
 }
 
 #[test]
@@ -358,10 +344,10 @@ fn page_size_larger_than_total() {
     for i in 0u64..3 {
         db.insert(i, i).unwrap();
     }
-    let result = db.get_entries_by_page(100, 0, false);
+    let result = db.page(.., 100, 0, Order::Asc);
     assert_eq!(result, vec![0, 1, 2]);
 
-    let result = db.get_entries_by_page(100, 0, true);
+    let result = db.page(.., 100, 0, Order::Desc);
     assert_eq!(result, vec![2, 1, 0]);
 }
 
@@ -373,12 +359,12 @@ fn slot_range_query() {
     }
 
     // Query only slots [10, 20)
-    let result = db.get_entries_by_page_slot(Some(10), Some(19), 100, 0, false);
+    let result = db.page(10..=19, 100, 0, Order::Asc);
     assert_eq!(result.len(), 10);
     assert_eq!(result[0], 10);
     assert_eq!(result[9], 19);
 
-    let result = db.get_entries_by_page_slot(Some(10), Some(19), 100, 0, true);
+    let result = db.page(10..=19, 100, 0, Order::Desc);
     assert_eq!(result.len(), 10);
     assert_eq!(result[0], 19);
     assert_eq!(result[9], 10);
@@ -391,11 +377,11 @@ fn entry_cnt_within_range() {
         db.insert(i, i).unwrap();
     }
 
-    assert_eq!(db.entry_cnt_within_two_slots(0, 99), 100);
-    assert_eq!(db.entry_cnt_within_two_slots(10, 19), 10);
-    assert_eq!(db.entry_cnt_within_two_slots(50, 50), 1);
+    assert_eq!(db.count(0..=99), 100);
+    assert_eq!(db.count(10..=19), 10);
+    assert_eq!(db.count(50..=50), 1);
     // Out of range
-    assert_eq!(db.entry_cnt_within_two_slots(200, 300), 0);
+    assert_eq!(db.count(200..=300), 0);
 }
 
 #[test]
@@ -411,13 +397,13 @@ fn multiple_entries_per_slot() {
     assert_eq!(db.total(), 8);
 
     // Forward page: first 5 from slot 0, then 3 from slot 1
-    let result = db.get_entries_by_page(10, 0, false);
+    let result = db.page(.., 10, 0, Order::Asc);
     assert_eq!(result.len(), 8);
     assert_eq!(&result[..5], &[0, 1, 2, 3, 4]);
     assert_eq!(&result[5..], &[10, 11, 12]);
 
     // Page that spans two slots
-    let result = db.get_entries_by_page(4, 1, false);
+    let result = db.page(.., 4, 1, Order::Asc);
     assert_eq!(result, vec![4, 10, 11, 12]);
 }
 
@@ -433,7 +419,7 @@ fn tier_growth_and_shrink() {
 
     // Verify queries still work
     assert_eq!(
-        db.get_entries_by_page(10, 0, false),
+        db.page(.., 10, 0, Order::Asc),
         (0u64..10).collect::<Vec<_>>()
     );
 
@@ -443,7 +429,7 @@ fn tier_growth_and_shrink() {
     }
     assert_eq!(db.total(), 5);
     assert_eq!(
-        db.get_entries_by_page(10, 0, false),
+        db.page(.., 10, 0, Order::Asc),
         (95u64..100).collect::<Vec<_>>()
     );
 }
@@ -457,10 +443,10 @@ fn swap_order_basic() {
     assert_eq!(db.total(), 10);
 
     // With swap_order, forward should still return logical order
-    let fwd = db.get_entries_by_page(10, 0, false);
+    let fwd = db.page(.., 10, 0, Order::Asc);
     assert_eq!(fwd, (0u64..10).collect::<Vec<_>>());
 
-    let rev = db.get_entries_by_page(10, 0, true);
+    let rev = db.page(.., 10, 0, Order::Desc);
     assert_eq!(rev, (0u64..10).rev().collect::<Vec<_>>());
 }
 
@@ -474,7 +460,7 @@ fn clear_and_reuse() {
 
     db.clear().unwrap();
     assert_eq!(db.total(), 0);
-    assert!(db.get_entries_by_page(10, 0, false).is_empty());
+    assert!(db.page(.., 10, 0, Order::Asc).is_empty());
 
     // Reuse after clear
     for i in 100u64..105 {
@@ -482,7 +468,7 @@ fn clear_and_reuse() {
     }
     assert_eq!(db.total(), 5);
     assert_eq!(
-        db.get_entries_by_page(10, 0, false),
+        db.page(.., 10, 0, Order::Asc),
         (100u64..105).collect::<Vec<_>>()
     );
 }
@@ -496,10 +482,10 @@ fn large_tier_capacity() {
     // With capacity 64, 200 entries should create at least 1 tier
     assert!(!db.levels.is_empty());
 
-    let page = db.get_entries_by_page(20, 5, false);
+    let page = db.page(.., 20, 5, Order::Asc);
     assert_eq!(page, (100u64..120).collect::<Vec<_>>());
 
-    let page = db.get_entries_by_page(20, 5, true);
+    let page = db.page(.., 20, 5, Order::Desc);
     assert_eq!(page, (80u64..100).rev().collect::<Vec<_>>());
 }
 
@@ -521,10 +507,10 @@ fn sparse_slots() {
         "should not promote a tier below capacity"
     );
 
-    let result = db.get_entries_by_page(10, 0, false);
+    let result = db.page(.., 10, 0, Order::Asc);
     assert_eq!(result, vec![0, 1, 2, 3, 4]);
 
-    let result = db.get_entries_by_page(2, 1, false);
+    let result = db.page(.., 2, 1, Order::Asc);
     assert_eq!(result, vec![2, 3]);
 }
 
@@ -602,34 +588,42 @@ fn insert_batch_equivalence_with_serial() {
             let mut off = 0u32;
             while u64::from(off) * 50 < total {
                 assert_eq!(
-                    serial.get_entries_by_page(50, off, reverse),
-                    batched.get_entries_by_page(50, off, reverse),
+                    serial.page(
+                        ..,
+                        50,
+                        off,
+                        if reverse { Order::Desc } else { Order::Asc }
+                    ),
+                    batched.page(
+                        ..,
+                        50,
+                        off,
+                        if reverse { Order::Desc } else { Order::Asc }
+                    ),
                     "page {off} reverse={reverse} swap_order={swap_order}"
                 );
                 assert_eq!(
-                    serial.get_entries_by_page(50, off, reverse),
-                    bulk.get_entries_by_page(50, off, reverse),
+                    serial.page(
+                        ..,
+                        50,
+                        off,
+                        if reverse { Order::Desc } else { Order::Asc }
+                    ),
+                    bulk.page(
+                        ..,
+                        50,
+                        off,
+                        if reverse { Order::Desc } else { Order::Asc }
+                    ),
                     "bulk page {off} reverse={reverse} swap_order={swap_order}"
                 );
                 off += 1;
             }
         }
-        assert_eq!(
-            serial.total_by_slot(Some(2), Some(5)),
-            batched.total_by_slot(Some(2), Some(5))
-        );
-        assert_eq!(
-            serial.entry_cnt_within_two_slots(0, 150),
-            batched.entry_cnt_within_two_slots(0, 150)
-        );
-        assert_eq!(
-            serial.total_by_slot(Some(2), Some(5)),
-            bulk.total_by_slot(Some(2), Some(5))
-        );
-        assert_eq!(
-            serial.entry_cnt_within_two_slots(0, 150),
-            bulk.entry_cnt_within_two_slots(0, 150)
-        );
+        assert_eq!(serial.count(2..=5), batched.count(2..=5));
+        assert_eq!(serial.count(0..=150), batched.count(0..=150));
+        assert_eq!(serial.count(2..=5), bulk.count(2..=5));
+        assert_eq!(serial.count(0..=150), bulk.count(0..=150));
     }
 }
 
@@ -656,27 +650,27 @@ fn insert_batch_checks_growth_before_each_unique_key() {
         assert_eq!(bulk.levels.len(), serial.levels.len());
         assert_eq!(chunked.levels.len(), serial.levels.len());
         assert_eq!(
-            bulk.get_entries_by_page(16, 0, false),
-            serial.get_entries_by_page(16, 0, false)
+            bulk.page(.., 16, 0, Order::Asc),
+            serial.page(.., 16, 0, Order::Asc)
         );
 
         let bytes = postcard::to_allocvec(&bulk).unwrap();
         let reopened: SlotDex<u64, u64> = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(reopened.levels.len(), serial.levels.len());
         assert_eq!(
-            reopened.get_entries_by_page(16, 0, false),
-            serial.get_entries_by_page(16, 0, false)
+            reopened.page(.., 16, 0, Order::Asc),
+            serial.page(.., 16, 0, Order::Asc)
         );
     }
 }
 
 #[test]
 fn batch_growth_tracks_new_floors_across_promotions_and_reopen() {
-    for capacity in [2u64, 16] {
+    for capacity in [2u32, 16] {
         for swap_order in [false, true] {
             let mut serial = SlotDex::<u64, u64>::new(capacity, swap_order).unwrap();
             let mut bulk = SlotDex::<u64, u64>::new(capacity, swap_order).unwrap();
-            let stride = capacity.pow(3);
+            let stride = u64::from(capacity).pow(3);
             // Sparse floors force several promotions. Hot-slot updates and
             // duplicates must not be counted as additional floors.
             let items: Vec<_> = (0..512)
@@ -688,8 +682,15 @@ fn batch_growth_tracks_new_floors_across_promotions_and_reopen() {
                 }
                 bulk.insert_batch(chunk.iter().copied()).unwrap();
                 assert_eq!(
-                    bulk.store.iter().collect::<Vec<_>>(),
-                    serial.store.iter().collect::<Vec<_>>(),
+                    bulk.store
+                        .iter()
+                        .filter(|(k, _)| k.as_slice() != TOTAL_KEY)
+                        .collect::<Vec<_>>(),
+                    serial
+                        .store
+                        .iter()
+                        .filter(|(k, _)| k.as_slice() != TOTAL_KEY)
+                        .collect::<Vec<_>>(),
                     "capacity={capacity}, swap_order={swap_order}"
                 );
             }
@@ -706,8 +707,16 @@ fn batch_growth_tracks_new_floors_across_promotions_and_reopen() {
             }
             restored.insert_batch(next).unwrap();
             assert_eq!(
-                restored.store.iter().collect::<Vec<_>>(),
-                serial.store.iter().collect::<Vec<_>>()
+                restored
+                    .store
+                    .iter()
+                    .filter(|(k, _)| k.as_slice() != TOTAL_KEY)
+                    .collect::<Vec<_>>(),
+                serial
+                    .store
+                    .iter()
+                    .filter(|(k, _)| k.as_slice() != TOTAL_KEY)
+                    .collect::<Vec<_>>()
             );
             assert_eq!(restored.total(), serial.total());
             for order in [Order::Asc, Order::Desc] {
@@ -738,7 +747,7 @@ fn bulk_load_tiers_persist_across_reopen() {
     assert_eq!(db2.levels.len(), levels);
     assert_eq!(db2.total(), 100);
     assert_eq!(
-        db2.get_entries_by_page(10, 3, false),
+        db2.page(.., 10, 3, Order::Asc),
         (30u64..40).collect::<Vec<_>>()
     );
 }
@@ -770,7 +779,7 @@ fn growth_gate_survives_tier_truncation() {
     }
     assert!(!db.levels.is_empty(), "growth gate must re-arm");
     assert_eq!(
-        db.get_entries_by_page(30, 0, false),
+        db.page(.., 30, 0, Order::Asc),
         (100u64..120).collect::<Vec<_>>()
     );
 }
@@ -787,7 +796,7 @@ fn insert_batch_empty_and_all_duplicates() {
     // Re-inserting the same pairs must be a no-op for the total.
     db.insert_batch([(0u64, 1u64), (0, 2)]).unwrap();
     assert_eq!(db.total(), 2);
-    assert_eq!(db.get_entries_by_page(10, 0, false), vec![1, 2]);
+    assert_eq!(db.page(.., 10, 0, Order::Asc), vec![1, 2]);
 }
 
 #[test]
@@ -810,7 +819,7 @@ fn insert_batch_interleaved_with_serial_ops() {
     assert_eq!(db.total(), reference.total());
     let mut page = 0u32;
     loop {
-        let got = db.get_entries_by_page(16, page, false);
+        let got = db.page(.., 16, page, Order::Asc);
         let want = reference.get_entries_by_page_slot(None, None, 16, page, false);
         assert_eq!(got, want, "page {page}");
         if got.is_empty() {
@@ -928,7 +937,7 @@ fn test_serde_roundtrip() {
     assert_eq!(restored.total(), 50);
 
     // Verify paging still works
-    let entries = restored.get_entries_by_page(10, 0, false);
+    let entries = restored.page(.., 10, 0, Order::Asc);
     assert_eq!(entries.len(), 10);
 }
 
@@ -952,10 +961,10 @@ fn test_meta_restore_with_data() {
     assert_eq!(restored.total(), 100);
 
     // Verify page queries produce correct results
-    let entries = restored.get_entries_by_page(20, 0, false);
+    let entries = restored.page(.., 20, 0, Order::Asc);
     assert_eq!(entries.len(), 20);
 
-    let entries_p4 = restored.get_entries_by_page(20, 4, false);
+    let entries_p4 = restored.page(.., 20, 4, Order::Asc);
     assert_eq!(entries_p4.len(), 20);
 }
 
@@ -1011,11 +1020,11 @@ fn restore_keeps_tier_acceleration() {
     // are tier-accelerated immediately after restore.
     assert!(!restored.levels.is_empty());
     assert_eq!(
-        restored.get_entries_by_page_slot(Some(90), Some(99), 20, 0, false),
+        restored.page(90..=99, 20, 0, Order::Asc),
         (90u64..100).collect::<Vec<_>>()
     );
     assert_eq!(
-        restored.get_entries_by_page_slot(Some(0), Some(499), 20, 0, true),
+        restored.page(0..=499, 20, 0, Order::Desc),
         (480u64..500).rev().collect::<Vec<_>>()
     );
 }
@@ -1038,7 +1047,7 @@ fn restore_after_interleaved_mutations_matches_reference() {
     let restored: SlotDex<u64, u64> = postcard::from_bytes(&bytes).unwrap();
 
     assert_eq!(restored.total(), reference.len() as u64);
-    let all = restored.get_entries_by_page(u16::MAX, 0, false);
+    let all = restored.page(.., u16::MAX, 0, Order::Asc);
     assert_eq!(all, reference.iter().map(|(_, k)| *k).collect::<Vec<_>>());
 }
 
@@ -1065,8 +1074,9 @@ fn tier_capacity_below_two_is_rejected() {
             &self,
             serializer: Ser,
         ) -> StdResult<Ser::Ok, Ser::Error> {
-            crate::common::serialize_typed_handle_meta::<SlotDex64<u64>, Ser>(
-                &(LAYOUT_VERSION, self.store, &self.cap, &false),
+            crate::common::serialize_prefix_handle::<SlotDex64<u64>, Ser>(
+                self.store,
+                &postcard::to_allocvec(&(LAYOUT_VERSION, self.cap, false)).unwrap(),
                 serializer,
             )
         }
@@ -1102,24 +1112,18 @@ fn range_queries_match_the_inclusive_api() {
             sd.insert(i / 3, i).unwrap();
         }
         for order in [Order::Asc, Order::Desc] {
-            let desc = order == Order::Desc;
             for idx in 0..4 {
-                assert_eq!(
-                    sd.page(.., 25, idx, order),
-                    sd.get_entries_by_page(25, idx, desc)
-                );
-                assert_eq!(
-                    sd.page(10..=40, 7, idx, order),
-                    sd.get_entries_by_page_slot(Some(10), Some(40), 7, idx, desc)
-                );
-                assert_eq!(
-                    sd.page(10..40, 7, idx, order),
-                    sd.get_entries_by_page_slot(Some(10), Some(39), 7, idx, desc)
-                );
-                assert_eq!(
-                    sd.page(90.., 7, idx, order),
-                    sd.get_entries_by_page_slot(Some(90), None, 7, idx, desc)
-                );
+                let slots: Vec<_> = match order {
+                    Order::Asc => (10..40).collect(),
+                    Order::Desc => (10..40).rev().collect(),
+                };
+                let expected = slots
+                    .into_iter()
+                    .flat_map(|s| s * 3..s * 3 + 3)
+                    .skip(idx as usize * 7)
+                    .take(7)
+                    .collect::<Vec<_>>();
+                assert_eq!(sd.page(10..40, 7, idx, order), expected);
             }
         }
         assert_eq!(sd.count(..), 300);
@@ -1157,8 +1161,8 @@ fn reverse_paging_bounds_hot_slot_decoding() {
     struct CountingKey(u64);
 
     impl KeyEnDeOrdered for CountingKey {
-        fn to_bytes(&self) -> Vec<u8> {
-            self.0.to_be_bytes().to_vec()
+        fn with_ordered_bytes<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
+            f(&self.0.to_be_bytes())
         }
 
         fn from_slice(bytes: &[u8]) -> Result<Self> {
@@ -1233,4 +1237,94 @@ fn reverse_paging_bounds_hot_slot_decoding() {
             }
         }
     }
+}
+
+#[test]
+fn independent_aliases_read_consistent_snapshots_and_reject_obsolete_writes() {
+    for swap in [false, true] {
+        let mut writer = SlotDex64::<u64>::new(3, swap).unwrap();
+        writer.insert_batch((0..70).map(|i| (i, i))).unwrap();
+        let bytes = postcard::to_allocvec(&writer).unwrap();
+        let mut other: SlotDex64<u64> = postcard::from_bytes(&bytes).unwrap();
+        let outstanding = other.iter(.., Order::Desc);
+        writer.clear().unwrap();
+        writer.insert_batch([(8, 10), (8, 11), (12, 15)]).unwrap();
+        assert_eq!(other.total(), 3);
+        assert_eq!(other.count(8..=8), 2);
+        assert_eq!(other.page(.., 2, 0, Order::Desc), [15, 10]);
+        assert_eq!(
+            outstanding.collect::<Vec<_>>(),
+            (0..70).rev().collect::<Vec<_>>()
+        );
+        assert!(other.insert(7, 5).is_err());
+        assert!(other.remove(8, &10).is_err());
+        assert!(other.insert_batch([(2, 3)]).is_err());
+        assert!(other.clear().is_err());
+        let mut independent = other.clone();
+        assert_ne!(other.instance_id(), independent.instance_id());
+        assert_eq!(independent.generation, 0);
+        independent.clear().unwrap();
+        assert_eq!(other.total(), 3);
+        assert_eq!(writer.generation, 3);
+    }
+}
+
+#[test]
+fn generation_overflow_preserves_rows() {
+    let mut db = SlotDex64::<u64>::new(3, false).unwrap();
+    db.insert(1, 2).unwrap();
+    db.store.insert(TOTAL_KEY, total_record(1, u64::MAX));
+    let mut db: SlotDex64<u64> =
+        postcard::from_bytes(&postcard::to_allocvec(&db).unwrap()).unwrap();
+    assert!(db.clear().is_err());
+    assert!(db.insert(2, 3).is_err());
+    assert!(db.remove(1, &2).is_err());
+    assert!(db.insert_batch([(3, 3)]).is_err());
+    assert_eq!(db.iter(.., Order::Asc).collect::<Vec<_>>(), [2]);
+}
+
+#[test]
+fn odd_signed_strides_and_extremes() {
+    assert_eq!(i64::MIN.floor_align(3), i64::MIN);
+    assert_eq!((i64::MIN + 2).floor_align(3), i64::MIN);
+    assert_eq!(i64::tier_stride(2, 64), None);
+    for a in i8::MIN..i8::MAX {
+        let b = a + 1;
+        assert!(SlotType::to_bytes(a) < SlotType::to_bytes(b));
+        assert!(!b < !a);
+        assert_eq!(
+            <i8 as SlotType>::from_bytes(SlotType::to_bytes(a)).unwrap(),
+            a
+        );
+    }
+    for swap in [false, true] {
+        let mut db = SlotDex::<i8, i16>::new(3, swap).unwrap();
+        db.insert_batch((i8::MIN..=i8::MAX).map(|slot| (slot, i16::from(slot))))
+            .unwrap();
+        for lo in [-128i8, -93, -1, 0, 1, 47, 126, 127] {
+            for hi in [lo, lo.saturating_add(3), i8::MAX] {
+                let range = i16::from(lo)..=i16::from(hi);
+                assert_eq!(db.count(lo..=hi), range.clone().count() as u64);
+                assert!(db.iter(lo..=hi, Order::Desc).eq(range.clone().rev()));
+                assert!(db.iter(lo..=hi, Order::Asc).eq(range.clone()));
+                assert_eq!(
+                    db.page(lo..=hi, 3, 2, Order::Desc),
+                    range.rev().skip(6).take(3).collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn large_keys_and_tierless_reverse_chunks() {
+    let mut db = SlotDex::<u64, Vec<u8>>::new(1_000_000, false).unwrap();
+    db.insert_batch((0..1024u64).map(|slot| (slot, slot.to_be_bytes().to_vec())))
+        .unwrap();
+    db.insert(900, vec![0xff; 64 * 1024]).unwrap();
+    let expected = (0..1024u64).rev().flat_map(|slot| {
+        let small = slot.to_be_bytes().to_vec();
+        std::iter::once(small).chain((slot == 900).then(|| vec![0xff; 64 * 1024]))
+    });
+    assert!(db.iter(.., Order::Desc).eq(expected));
 }

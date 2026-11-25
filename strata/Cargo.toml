@@ -1,6 +1,6 @@
 [package]
 name = "vsdb"
-version = "17.0.21"
+version = "18.0.0"
 authors = ["hui.fan@mail.ru"]
 edition = "2024"
 description = "A std-collection-like database"
@@ -19,11 +19,9 @@ parking_lot = { workspace = true }
 
 postcard = { workspace = true }
 
-ruc = { workspace = true }
 vsdb_core = { workspace = true }
 
 sha3 = { workspace = true }
-thiserror = { workspace = true }
 rand = { workspace = true }
 
 [dev-dependencies]
@@ -54,4 +52,8 @@ harness = false
 
 [[bench]]
 name = "vecdex"
+harness = false
+
+[[bench]]
+name = "dagmap"
 harness = false

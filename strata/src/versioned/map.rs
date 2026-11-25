@@ -3,40 +3,28 @@
 //! merge support, modelled after Git semantics.
 //!
 
+use super::store::{
+    BranchHead, COMMIT, Edits, HEAD, HEADER, Header, NAME, by_name, corrupt, row,
+};
 use super::{BranchId, Commit, CommitId, NO_COMMIT, diff::DiffEntry};
 use crate::{
-    Mapx, MapxOrd, Orphan,
+    MapxRaw,
     basic::persistent_btree::{
         EMPTY_ROOT, NodeId, PersistentBTree, RootLease, TreeDiff,
     },
     common::{
-        Colocate, InstanceId,
-        ende::{KeyEnDeOrdered, OrderedKeyRef, ValueEnDe},
+        InstanceId, PrefixFrame,
+        ende::{KeyEnDeOrdered, OrderedKeyLookup, ValueEnDe},
         error::{Result, VsdbError},
     },
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    borrow::Borrow,
     collections::{BinaryHeap, HashMap, HashSet},
     marker::PhantomData,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
-
-// =========================================================================
-// BranchState
-// =========================================================================
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct BranchState {
-    pub(crate) name: String,
-    /// The latest commit on this branch.
-    pub(crate) head: CommitId,
-    /// B+ tree root of uncommitted (working) state.
-    /// Starts as the root of `head`'s commit; mutations update this.
-    pub(crate) dirty_root: NodeId,
-}
 
 /// Both sides of a branch's working diff, retained from the same branch row.
 pub(crate) struct BranchRoots {
@@ -148,160 +136,55 @@ pub struct VerMap<K, V> {
     /// The underlying persistent B+ tree (shared node pool).
     pub(crate) tree: PersistentBTree,
 
-    /// CommitId → Commit
-    pub(crate) commits: MapxOrd<u64, Commit>,
-
-    /// BranchId → BranchState
-    pub(crate) branches: MapxOrd<u64, BranchState>,
-
-    /// branch name → BranchId
-    pub(crate) branch_names: Mapx<String, u64>,
-
-    /// ID allocators
-    pub(crate) next_commit: Orphan<u64>,
-    pub(crate) next_branch: Orphan<u64>,
-
-    /// The branch currently designated as "main" (protected from deletion).
-    pub(crate) main_branch: Orphan<u64>,
-
-    /// Set `true` before a ref-count cascade, `false` after.
-    /// If `true` on startup → run `rebuild_ref_counts()` to repair.
-    pub(crate) gc_dirty: Orphan<bool>,
-
-    /// Every component routes to the node pool's engine shard, so one WAL
-    /// orders all of their writes (runtime property, recomputed on
-    /// restore; maps created before co-location keep per-shard fences).
-    pub(crate) colocated: bool,
-
     _phantom: PhantomData<(K, V)>,
 }
 
-/// Released nodes queued before a working-state operation forces a WAL
-/// sync to register them (bounds the queue when no commit comes).
-const RECLAIM_BACKLOG: usize = 16 * 1024;
-
-// Keep the same K/V bounds as the former derived Clone implementation.
-impl<K: Clone, V: Clone> Clone for VerMap<K, V> {
+impl<K, V> Clone for VerMap<K, V> {
     /// Deep copy. The copy is always co-located (one WAL for all of its
     /// components), including a copy of a map created before co-location.
     fn clone(&self) -> Self {
-        let mut tree = self.tree.clone();
-        tree.defer_reclaim();
-        let anchor = &tree.nodes;
-        fn copy<T>(r: Result<T>) -> T {
-            r.expect("vsdb: clone failed — I/O error")
-        }
-        let commits = copy(self.commits.clone_colocated(anchor));
-        let branches = copy(self.branches.clone_colocated(anchor));
-        let branch_names = copy(self.branch_names.clone_colocated(anchor));
-        let next_commit = copy(self.next_commit.clone_colocated(anchor));
-        let next_branch = copy(self.next_branch.clone_colocated(anchor));
-        let main_branch = copy(self.main_branch.clone_colocated(anchor));
-        let gc_dirty = copy(self.gc_dirty.clone_colocated(anchor));
-        let mut cloned = Self {
-            tree,
-            commits,
-            branches,
-            branch_names,
-            next_commit,
-            next_branch,
-            main_branch,
-            gc_dirty,
-            colocated: true,
-            _phantom: PhantomData,
-        };
-        // Establish the copy's durable graph and exclude reader leases that
-        // belong only to the original map before the new handle escapes.
-        cloned.rebuild_tree_ref_counts();
-        cloned
+        self.clone_in(&self.namespace())
+            .expect("vsdb: VerMap clone failed")
     }
 }
 
-impl<K, V> Serialize for VerMap<K, V> {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        // The K/V type parameters do not occur in any field type, so the
-        // typed-handle envelope (tagged with `VerMap<K, V>`) is the only
-        // guard against restoring this map under different K/V.
-        crate::common::serialize_typed_handle_meta::<Self, S>(
-            &(
-                &self.tree,
-                &self.commits,
-                &self.branches,
-                &self.branch_names,
-                &self.next_commit,
-                &self.next_branch,
-                &self.main_branch,
-                &self.gc_dirty,
-            ),
-            serializer,
-        )
+impl<K, V> VerMap<K, V> {
+    /// Deep-copies the complete working state and retained history into `ns`.
+    pub fn clone_in(&self, ns: &crate::common::Namespace) -> Result<Self> {
+        Self::open(self.tree.nodes.clone_in(ns)?, true)
     }
-}
 
-type VerMapPayload = (
-    PersistentBTree,
-    MapxOrd<u64, Commit>,
-    MapxOrd<u64, BranchState>,
-    Mapx<String, u64>,
-    Orphan<u64>,
-    Orphan<u64>,
-    Orphan<u64>,
-    Orphan<bool>,
-);
-
-impl<'de, K, V> Deserialize<'de> for VerMap<K, V> {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let (
+    pub(crate) fn open(store: MapxRaw, deep: bool) -> Result<Self> {
+        let header = Header::get(&store)?;
+        let tree = PersistentBTree::version_store(store, header.next_id);
+        let mut m = Self {
             tree,
-            commits,
-            branches,
-            branch_names,
-            next_commit,
-            next_branch,
-            main_branch,
-            gc_dirty,
-        ) = crate::common::deserialize_typed_handle_meta::<Self, VerMapPayload, D>(
-            deserializer,
-        )?;
-        let mut m = VerMap {
-            tree,
-            commits,
-            branches,
-            branch_names,
-            next_commit,
-            next_branch,
-            main_branch,
-            gc_dirty,
-            colocated: false,
             _phantom: PhantomData,
         };
-        let anchor = &m.tree.nodes;
-        m.colocated = [
-            m.commits.raw(),
-            m.branches.raw(),
-            m.branch_names.raw(),
-            m.next_commit.raw(),
-            m.next_branch.raw(),
-            m.main_branch.raw(),
-            m.gc_dirty.raw(),
-        ]
-        .into_iter()
-        .all(|component| component.is_colocated_with(anchor));
-        if m.colocated {
-            m.tree.defer_reclaim();
-        }
-        m.recover_ref_counts(true)
-            .map_err(serde::de::Error::custom)?;
+        m.recover(deep)?;
         Ok(m)
     }
 }
 
+impl<K, V> Serialize for VerMap<K, V> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        s: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        crate::common::serialize_prefix_handle::<Self, _>(&self.tree.nodes, &[], s)
+    }
+}
+
+impl<'de, K, V> Deserialize<'de> for VerMap<K, V> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        d: D,
+    ) -> std::result::Result<Self, D::Error> {
+        crate::common::deserialize_prefix_handle(d, |frame| match frame {
+            PrefixFrame(raw, []) => Self::open(raw, false),
+            PrefixFrame(_, _) => Err(corrupt("invalid version store handle")),
+        })
+    }
+}
 // Separate impl block without K/V trait bounds so that the
 // Deserialize visitor (which has no trait bounds on K/V) can call it.
 
@@ -326,41 +209,117 @@ impl<K, V> VerMap<K, V> {
         self.tree.namespace()
     }
 
-    fn ensure_writable(&self, operation: &'static str) -> Result<()> {
+    pub(super) fn ensure_writable(&self, operation: &'static str) -> Result<()> {
         crate::common::ensure_writable(&self.namespace(), operation)
     }
 
-    /// Establishes the component graph before a new/restored handle escapes
-    /// or a full node sweep can retire storage. These are WAL fences, not
-    /// namespace-wide memtable flushes. Read-only restoration never writes.
-    pub(crate) fn sync_storage(&self) {
-        if self.namespace().is_read_only() {
-            return;
-        }
-        self.tree.nodes.sync_wal();
-        if self.colocated {
-            // One shard, one WAL: the sync above covers every component.
-            return;
-        }
-        self.next_commit.sync_wal();
-        self.next_branch.sync_wal();
-        self.commits.sync_wal();
-        self.branches.sync_wal();
-        self.branch_names.sync_wal();
-        self.main_branch.sync_wal();
-        self.gc_dirty.sync_wal();
-    }
-
-    pub(crate) fn get_branch(&self, id: BranchId) -> Result<BranchState> {
-        self.branches
-            .get(&id.0)
-            .ok_or(VsdbError::BranchNotFound { branch_id: id.0 })
+    pub(super) fn get_branch(&self, id: BranchId) -> Result<BranchHead> {
+        let bytes = self
+            .tree
+            .nodes
+            .get(row(HEAD, id.raw()))
+            .ok_or(VsdbError::BranchNotFound { branch_id: id })?;
+        BranchHead::decode(&bytes)
     }
 
     pub(crate) fn get_commit_inner(&self, id: CommitId) -> Result<Commit> {
-        self.commits
-            .get(&id.0)
-            .ok_or(VsdbError::CommitNotFound { commit_id: id.0 })
+        let raw = self
+            .tree
+            .nodes
+            .get(row(COMMIT, id.raw()))
+            .ok_or(VsdbError::CommitNotFound { commit_id: id })?;
+        Commit::parse(id, &raw)
+    }
+
+    pub(super) fn publish(
+        &mut self,
+        mut hdr: Header,
+        mut edits: Edits,
+        sync: bool,
+    ) -> Result<()> {
+        let Some(generation) = hdr.generation.checked_add(1) else {
+            self.tree.abandon_pending();
+            self.restore_visible_refs()?;
+            return Err(corrupt("version store generation exhausted"));
+        };
+        hdr.generation = generation;
+        hdr.next_id = self.tree.next_id();
+        edits
+            .rows
+            .insert(HEADER.to_vec(), Some(hdr.bytes().to_vec()));
+        let result = self
+            .tree
+            .publish(edits.rows, &edits.acquire, &edits.retire, sync);
+        if result.is_err() {
+            self.restore_visible_refs()?;
+        }
+        result
+    }
+
+    fn restore_visible_refs(&self) -> Result<()> {
+        // A failed WAL sync can have an ambiguous durable outcome. Restore
+        // in-memory counts against the visible graph without issuing writes.
+
+        let mut roots = self
+            .records(HEAD)
+            .map(|(_, row)| BranchHead::decode(&row).map(|h| h.dirty_root))
+            .collect::<Result<Vec<_>>>()?;
+        for record in self.commit_rows() {
+            roots.push(record?.1.root);
+        }
+        self.tree.restore_runtime_refs(&roots)
+    }
+
+    fn build_root(
+        &mut self,
+        build: impl FnOnce(&mut PersistentBTree) -> Result<NodeId>,
+    ) -> Result<NodeId> {
+        use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+        match catch_unwind(AssertUnwindSafe(|| build(&mut self.tree))) {
+            Ok(Ok(root)) => Ok(root),
+            result => {
+                self.tree.abandon_pending();
+                self.restore_visible_refs()?;
+                match result {
+                    Ok(result) => result,
+                    Err(payload) => resume_unwind(payload),
+                }
+            }
+        }
+    }
+
+    fn adjust_commit(
+        &self,
+        edits: &mut Edits,
+        id: CommitId,
+        increment: bool,
+    ) -> Result<()> {
+        let mut work = vec![(id, increment)];
+        while let Some((id, inc)) = work.pop() {
+            if id == NO_COMMIT {
+                continue;
+            }
+            let key = row(COMMIT, id.raw());
+            let mut c = match edits.rows.get(key.as_slice()) {
+                Some(Some(raw)) => Commit::parse(id, raw)?,
+                Some(None) => return Err(corrupt("inconsistent commit ownership")),
+                None => self.get_commit_inner(id)?,
+            };
+            c.ref_count = if inc {
+                c.ref_count.checked_add(1)
+            } else {
+                c.ref_count.checked_sub(1)
+            }
+            .ok_or_else(|| corrupt("commit refcount overflow or underflow"))?;
+            if c.ref_count == 0 {
+                edits.rows.insert(key.to_vec(), None);
+                edits.retire.push(c.root);
+                work.extend(c.parents.into_iter().map(|p| (p, false)));
+            } else {
+                edits.write_commit(&c);
+            }
+        }
+        Ok(())
     }
 
     /// [`diff_commits`](VerMap::diff_commits) as stored bytes (keys in
@@ -401,62 +360,31 @@ impl<K, V> VerMap<K, V> {
     pub(crate) fn branch_roots(&self, branch: BranchId) -> Result<BranchRoots> {
         let mut head = None;
         let [committed, working] = self.tree.lease_roots(|| {
-            let state = self.get_branch(branch)?;
-            let root = if state.head == NO_COMMIT {
-                EMPTY_ROOT
-            } else {
-                head = Some(state.head);
-                self.get_commit_inner(state.head)?.root
-            };
-            Ok([root, state.dirty_root])
+            loop {
+                let state = self.get_branch(branch)?;
+                if state.head == NO_COMMIT {
+                    return Ok([EMPTY_ROOT, state.dirty_root]);
+                }
+                match self.get_commit_inner(state.head) {
+                    Ok(commit) => {
+                        head = Some(state.head);
+                        return Ok([commit.root, state.dirty_root]);
+                    }
+                    Err(VsdbError::CommitNotFound { .. })
+                        if self.get_branch(branch)?.head != state.head =>
+                    {
+                        // A complete rollback can land between these two point
+                        // reads. Resolve again while the pin lock protects old roots.
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
         })?;
         Ok(BranchRoots {
             head,
             committed,
             working,
         })
-    }
-
-    pub(crate) fn begin_ref_update(&mut self) {
-        *self.gc_dirty.get_mut() = true;
-        self.fence(|m| m.gc_dirty.sync_wal());
-    }
-
-    /// Call only after every changed branch/commit row is ordered before
-    /// it and all reference withdrawals preceded any physical node
-    /// retirement.
-    pub(crate) fn end_ref_update(&mut self) {
-        *self.gc_dirty.get_mut() = false;
-        self.fence(|m| m.gc_dirty.sync_wal());
-    }
-
-    /// Orders every write issued so far to one component before any later
-    /// write to another. Co-located components share one WAL, whose
-    /// program order already provides that (a crash keeps a prefix of
-    /// it); otherwise the component's own shard WAL must be synced.
-    #[inline]
-    pub(crate) fn fence(&self, sync: impl FnOnce(&Self)) {
-        if !self.colocated {
-            sync(self);
-        }
-    }
-
-    /// Ends a history-changing operation: makes it durable (one WAL sync
-    /// when co-located; per-shard layouts fenced every step already), then
-    /// registers the nodes it released for physical deletion.
-    pub(crate) fn settle(&mut self) {
-        if self.colocated && !self.namespace().is_read_only() {
-            self.tree.nodes.sync_wal();
-            self.tree.register_deferred_reclaims();
-        }
-    }
-
-    /// Working-state operations skip the sync; their released nodes wait
-    /// for the next [`settle`](Self::settle) unless the queue grows large.
-    fn settle_if_backlogged(&mut self) {
-        if self.tree.deferred_reclaims() >= RECLAIM_BACKLOG {
-            self.settle();
-        }
     }
 }
 
@@ -493,10 +421,11 @@ where
     ///
     /// The caller must ensure that the underlying VSDB database still
     /// contains the data referenced by this instance ID.
+    /// Writable recovery can repair indexes and reclaim unpublished pages.
+    /// Serialize recovery with other writers to this instance. Use an
+    /// independent [`reader`](Self::reader) for concurrent snapshot access.
     pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
-        // Deserialization validates history and rebuilds tree references.
-        let id = instance_id.into();
-        crate::common::load_instance_meta_checked(id, Self::instance_id)
+        Self::open_meta(instance_id.into(), false)
     }
 
     /// Creates a new, empty versioned map whose initial branch has the
@@ -506,103 +435,35 @@ where
     /// and cannot be deleted until another branch is promoted via
     /// [`set_main_branch`](Self::set_main_branch).
     pub fn new_with_main(name: &str) -> Self {
-        // Every component shares the node pool's shard (one WAL), so
-        // operations need no fence between components.
-        let mut tree = PersistentBTree::new();
-        tree.defer_reclaim();
-        let anchor = &tree.nodes;
-        let mut branches: MapxOrd<u64, BranchState> = Colocate::new_colocated(anchor);
-        let mut branch_names: Mapx<String, u64> = Colocate::new_colocated(anchor);
-
-        let initial_id = BranchId(1);
-
-        let main = BranchState {
-            name: name.into(),
-            head: NO_COMMIT,
-            dirty_root: EMPTY_ROOT,
-        };
-        branches.insert(&initial_id.0, &main);
-        branch_names.insert(&name.to_string(), &initial_id.0);
-
-        let commits = Colocate::new_colocated(anchor);
-        let next_commit = Orphan::new_colocated(anchor, NO_COMMIT.0 + 1);
-        let next_branch = Orphan::new_colocated(anchor, initial_id.0 + 1);
-        let main_branch = Orphan::new_colocated(anchor, initial_id.0);
-        let gc_dirty = Orphan::new_colocated(anchor, false);
-        let map = Self {
-            tree,
-            commits,
-            branches,
-            branch_names,
-            next_commit,
-            next_branch,
-            main_branch,
-            gc_dirty,
-            colocated: true,
-            _phantom: PhantomData,
-        };
-        // Initial Orphan slots and branch metadata must survive alongside
-        // metadata saved immediately after construction.
-        map.sync_storage();
-        map
-    }
-
-    /// A map in the pre-co-location layout: every component on its own
-    /// prefix, generally on different shards (pinned by tests of the
-    /// per-shard fence path and of `clone` upgrading it).
-    #[cfg(test)]
-    pub(crate) fn with_legacy_layout() -> Self {
-        let tree = PersistentBTree::new();
-        let anchor = tree.nodes.clone();
-        // Force at least one component onto another shard.
-        let commits = loop {
-            let c: MapxOrd<u64, Commit> = MapxOrd::new();
-            if !c.raw().is_colocated_with(&anchor) {
-                break c;
-            }
-        };
-        let mut branches: MapxOrd<u64, BranchState> = MapxOrd::new();
-        let mut branch_names: Mapx<String, u64> = Mapx::new();
-        branches.insert(
-            &1,
-            &BranchState {
-                name: "main".into(),
+        let mut tree = PersistentBTree::version_store(MapxRaw::new(), 1);
+        let hdr = Header::initial();
+        let mut batch = tree.nodes.batch();
+        batch.insert(HEADER, hdr.bytes());
+        batch.insert(
+            row(HEAD, 1),
+            BranchHead {
                 head: NO_COMMIT,
                 dirty_root: EMPTY_ROOT,
-            },
+            }
+            .bytes(),
         );
-        branch_names.insert(&"main".to_string(), &1);
-        let map = Self {
+        batch.insert(row(NAME, 1), name.as_bytes());
+        batch.insert(by_name(name), 1u64.to_le_bytes());
+        batch.commit_sync().expect("failed to create VerMap");
+        Self {
             tree,
-            commits,
-            branches,
-            branch_names,
-            next_commit: Orphan::new(1),
-            next_branch: Orphan::new(2),
-            main_branch: Orphan::new(1),
-            gc_dirty: Orphan::new(false),
-            colocated: false,
             _phantom: PhantomData,
-        };
-        map.sync_storage();
-        map
+        }
     }
 
-    // =================================================================
-    // Internal helpers
-    // =================================================================
-
-    fn branch_name_exists(&self, name: &str) -> bool {
-        self.branches.iter().any(|(_, state)| state.name == name)
-    }
-
-    // =================================================================
     // Main branch
     // =================================================================
 
     /// Returns the [`BranchId`] of the current main branch.
     pub fn main_branch(&self) -> BranchId {
-        BranchId(self.main_branch.get_value())
+        Header::get(&self.tree.nodes)
+            .expect("invalid version store header")
+            .main_branch
     }
 
     /// Designates `branch` as the new main branch.
@@ -612,12 +473,9 @@ where
     pub fn set_main_branch(&mut self, branch: BranchId) -> Result<()> {
         self.ensure_writable("main branch update")?;
         self.get_branch(branch)?;
-        *self.main_branch.get_mut() = branch.0;
-        // A later delete of the old main must not leave the durable main
-        // pointer referring to that deleted branch.
-        self.fence(|m| m.main_branch.sync_wal());
-        self.settle();
-        Ok(())
+        let mut hdr = Header::get(&self.tree.nodes)?;
+        hdr.main_branch = branch;
+        self.publish(hdr, Edits::default(), true)
     }
 
     // =================================================================
@@ -634,44 +492,33 @@ where
         source_branch: BranchId,
     ) -> Result<BranchId> {
         self.ensure_writable("branch creation")?;
-        if self.branch_name_exists(name) {
+        if self.branch_id(name).is_some()
+            || self
+                .records(NAME)
+                .any(|(_, existing)| existing == name.as_bytes())
+        {
             return Err(VsdbError::BranchAlreadyExists {
-                name: name.to_string(),
+                name: name.to_owned(),
             });
         }
         let src = self.get_branch(source_branch)?;
-
-        // Mark dirty before any ref-count mutation so a crash mid-update is
-        // repaired by rebuild_ref_counts on recovery (matches commit/merge/
-        // rollback). increment_ref does not touch gc_dirty itself.
-        self.begin_ref_update();
-
-        let id = BranchId(self.next_branch.get_value());
-        *self.next_branch.get_mut() = id.0 + 1;
-        // Persist the allocator before a row can make this ID observable.
-        self.fence(|m| m.next_branch.sync_wal());
-
-        let state = BranchState {
-            name: name.into(),
-            head: src.head,
-            dirty_root: src.dirty_root,
-        };
-        self.branches.insert(&id.0, &state);
-        self.branch_names.insert(&name.to_string(), &id.0);
-
-        // New branch HEAD adds a reference to the shared commit.
-        self.increment_ref(src.head);
-        // New branch's dirty_root references the shared tree root.
-        self.tree.acquire_node(src.dirty_root);
-
-        self.fence(|m| {
-            m.commits.sync_wal();
-            m.branches.sync_wal();
-            m.branch_names.sync_wal();
-        });
-        self.end_ref_update();
-        self.settle();
-
+        let mut hdr = Header::get(&self.tree.nodes)?;
+        let id = BranchId::from_raw(hdr.next_branch);
+        hdr.next_branch = id
+            .raw()
+            .checked_add(1)
+            .ok_or_else(|| corrupt("branch IDs exhausted"))?;
+        let mut edits = Edits::default();
+        edits.write_head(id, src);
+        edits
+            .rows
+            .insert(row(NAME, id.raw()).to_vec(), Some(name.as_bytes().to_vec()));
+        edits
+            .rows
+            .insert(by_name(name), Some(id.raw().to_le_bytes().to_vec()));
+        edits.acquire.push(src.dirty_root);
+        self.adjust_commit(&mut edits, src.head, true)?;
+        self.publish(hdr, edits, true)?;
         Ok(id)
     }
 
@@ -689,55 +536,49 @@ where
             return Err(VsdbError::CannotDeleteMainBranch);
         }
         let state = self.get_branch(branch)?;
-        let dead_head = state.head;
-        let dead_dirty = state.dirty_root;
-
-        // Mark dirty before removing the branch tables so a crash before the
-        // ref-count cascade is repaired on recovery. decrement_ref is
-        // reentrant-safe (its already_dirty guard won't clear our flag).
-        self.begin_ref_update();
-
-        self.branch_names.remove(&state.name);
-        self.branches.remove(&branch.0);
-        // Old roots cannot be retired while the durable branch still owns them.
-        self.fence(|m| {
-            m.branches.sync_wal();
-            m.branch_names.sync_wal();
-        });
-
-        // Release tree root ref from the branch's dirty_root.
-        self.tree.release_node(dead_dirty);
-        // Cascade commit ref counting (may also release commit.root refs).
-        self.decrement_ref(dead_head);
-
-        self.end_ref_update();
-        self.settle();
-
-        Ok(())
+        let name = self
+            .branch_name(branch)
+            .ok_or_else(|| corrupt("missing branch name"))?;
+        let mut edits = Edits::default();
+        edits.rows.insert(row(HEAD, branch.raw()).to_vec(), None);
+        edits.rows.insert(row(NAME, branch.raw()).to_vec(), None);
+        edits.rows.insert(by_name(&name), None);
+        edits.retire.push(state.dirty_root);
+        self.adjust_commit(&mut edits, state.head, false)?;
+        self.publish(Header::get(&self.tree.nodes)?, edits, true)
     }
 
     /// Lists all branches as `(BranchId, name)`.
     pub fn list_branches(&self) -> Vec<(BranchId, String)> {
-        self.branches
-            .iter()
-            .map(|(id, s)| (BranchId(id), s.name))
+        self.tree
+            .nodes
+            .range([NAME].as_slice()..[NAME + 1].as_slice())
+            .map(|(k, v)| {
+                (
+                    BranchId::from_raw(u64::from_be_bytes(
+                        k[1..].try_into().expect("invalid branch name key"),
+                    )),
+                    String::from_utf8(v).expect("invalid branch name"),
+                )
+            })
             .collect()
     }
 
     /// Looks up a branch by name, returning its ID if it exists.
     pub fn branch_id(&self, name: &str) -> Option<BranchId> {
-        if self.namespace().is_read_only() {
-            self.branches
-                .iter()
-                .find_map(|(id, state)| (state.name == name).then_some(BranchId(id)))
-        } else {
-            self.branch_names.get(&name.to_string()).map(BranchId)
-        }
+        self.tree.nodes.get(by_name(name)).map(|v| {
+            BranchId::from_raw(u64::from_le_bytes(
+                v.try_into().expect("invalid reverse branch row"),
+            ))
+        })
     }
 
     /// Returns the name of a branch given its ID.
     pub fn branch_name(&self, branch: BranchId) -> Option<String> {
-        self.branches.get(&branch.0).map(|s| s.name)
+        self.tree
+            .nodes
+            .get(row(NAME, branch.raw()))
+            .map(|v| String::from_utf8(v).expect("invalid branch name"))
     }
 
     /// Returns `true` if the branch has uncommitted changes (dirty state
@@ -754,48 +595,96 @@ where
     /// Inserts a key-value pair into the working state of `branch`.
     pub fn insert(&mut self, branch: BranchId, key: &K, value: &V) -> Result<()> {
         self.ensure_writable("versioned map insert")?;
-        let mut state = self.get_branch(branch)?;
-        let old_root = state.dirty_root;
-        state.dirty_root = self.tree.insert(old_root, &key.to_bytes(), &value.encode());
-        // The node batch is atomic, but it must be ordered before the
-        // branch row that publishes the new root.
-        self.fence(|m| m.tree.nodes.sync_wal());
-        self.tree.acquire_node(state.dirty_root);
-        // Persist the branch pointer BEFORE retiring the old root: a
-        // crash must never leave the durable branch state pointing at
-        // deleted nodes (co-located maps defer the physical-deletion
-        // registration to the next sync instead).  Crash before the
-        // insert below only leaks the new nodes, which the next recovery
-        // sweep (`rebuild_tree_ref_counts`) registers for deletion.
-        self.branches.insert(&branch.0, &state);
-        self.fence(|m| m.branches.sync_wal());
-        self.tree.release_node(old_root);
-        self.settle_if_backlogged();
-        Ok(())
+        let state = self.get_branch(branch)?;
+        let mut bytes = Vec::new();
+        value.encode_value_into(&mut bytes)?;
+        let root = key.with_ordered_bytes(|k| {
+            self.tree.insert_buffered(state.dirty_root, k, &bytes)
+        });
+        self.publish_working(branch, state, root)
+    }
+
+    /// Replaces the working state with entries in ascending encoded-key order.
+    /// Duplicate keys keep the final value. Large inputs publish their root
+    /// after the unpublished page batches are durable.
+    pub fn bulk_load(
+        &mut self,
+        branch: BranchId,
+        entries: impl IntoIterator<Item = (K, V)>,
+    ) -> Result<()> {
+        self.ensure_writable("version store bulk load")?;
+        let state = self.get_branch(branch)?;
+        let root = self.build_root(|tree| {
+            tree.try_bulk_load(
+                entries
+                    .into_iter()
+                    .map(|(k, v)| (k.to_bytes(), v.encode_value())),
+            )
+        })?;
+        let mut edits = Edits::default();
+        edits.replace_root(state.dirty_root, root);
+        edits.write_head(
+            branch,
+            BranchHead {
+                dirty_root: root,
+                ..state
+            },
+        );
+        self.publish(Header::get(&self.tree.nodes)?, edits, true)
+    }
+    /// Applies a group of working-state edits with one branch-root publication.
+    /// A `Some` value inserts or replaces and `None` removes the key.
+    /// Duplicate keys keep their last supplied edit.
+    pub fn write_batch(
+        &mut self,
+        branch: BranchId,
+        edits: impl IntoIterator<Item = (K, Option<V>)>,
+    ) -> Result<()> {
+        self.ensure_writable("versioned map batch")?;
+        let state = self.get_branch(branch)?;
+        let changes: std::collections::BTreeMap<_, _> = edits
+            .into_iter()
+            .map(|(k, v)| (k.to_bytes(), v.map(|v| v.encode_value())))
+            .collect();
+        let root = self
+            .build_root(|tree| tree.apply_changes(state.dirty_root, changes, false))?;
+        self.publish_working(branch, state, root)
     }
 
     /// Removes a key from the working state of `branch`.
     pub fn remove<Q>(&mut self, branch: BranchId, key: &Q) -> Result<()>
     where
-        K: Borrow<Q>,
-        Q: OrderedKeyRef + ?Sized,
+        K: OrderedKeyLookup<Q>,
+        Q: ?Sized,
     {
         self.ensure_writable("versioned map remove")?;
-        let mut state = self.get_branch(branch)?;
-        let old_root = state.dirty_root;
-        state.dirty_root = self.tree.remove(old_root, &key.ordered_key_bytes());
-        if state.dirty_root == old_root {
+        let state = self.get_branch(branch)?;
+        let root = K::with_ordered_lookup(key, |bytes| {
+            self.tree.remove_buffered(state.dirty_root, bytes)
+        })
+        .unwrap_or(state.dirty_root);
+        self.publish_working(branch, state, root)
+    }
+
+    fn publish_working(
+        &mut self,
+        branch: BranchId,
+        state: BranchHead,
+        root: NodeId,
+    ) -> Result<()> {
+        if state.dirty_root == root {
             return Ok(());
         }
-        self.fence(|m| m.tree.nodes.sync_wal());
-        self.tree.acquire_node(state.dirty_root);
-        // Persist before release — see `insert` for the crash-ordering
-        // rationale.
-        self.branches.insert(&branch.0, &state);
-        self.fence(|m| m.branches.sync_wal());
-        self.tree.release_node(old_root);
-        self.settle_if_backlogged();
-        Ok(())
+        let mut edits = Edits::default();
+        edits.replace_root(state.dirty_root, root);
+        edits.write_head(
+            branch,
+            BranchHead {
+                dirty_root: root,
+                ..state
+            },
+        );
+        self.publish(Header::get(&self.tree.nodes)?, edits, false)
     }
 
     // =================================================================
@@ -808,15 +697,12 @@ where
         self.ensure_writable("versioned map commit")?;
         let state = self.get_branch(branch)?;
 
-        // Mark dirty before any structural mutation so that crash
-        // recovery (gc → rebuild_ref_counts) will repair orphaned
-        // commits or imbalanced ref-counts.
-        self.begin_ref_update();
-
-        let id = CommitId(self.next_commit.get_value());
-        *self.next_commit.get_mut() = id.0 + 1;
-        self.fence(|m| m.next_commit.sync_wal());
-
+        let mut hdr = Header::get(&self.tree.nodes)?;
+        let id = CommitId::from_raw(hdr.next_commit);
+        hdr.next_commit = id
+            .raw()
+            .checked_add(1)
+            .ok_or_else(|| corrupt("commit IDs exhausted"))?;
         let parents = if state.head == NO_COMMIT {
             vec![]
         } else {
@@ -840,21 +726,11 @@ where
             timestamp_us: now_us(),
             ref_count: 1,
         };
-        self.commits.insert(&id.0, &commit);
-        // A durable branch HEAD must never name a missing commit record.
-        self.fence(|m| m.commits.sync_wal());
-
-        // commit.root now also references dirty_root → acquire.
-        self.tree.acquire_node(state.dirty_root);
-
-        // Update branch head; dirty_root stays the same (it IS the snapshot).
-        let new_state = BranchState { head: id, ..state };
-        self.branches.insert(&branch.0, &new_state);
-        self.fence(|m| m.branches.sync_wal());
-
-        self.end_ref_update();
-        self.settle();
-
+        let mut edits = Edits::default();
+        edits.write_commit(&commit);
+        edits.acquire.push(state.dirty_root);
+        edits.write_head(branch, BranchHead { head: id, ..state });
+        self.publish(hdr, edits, true)?;
         Ok(id)
     }
 
@@ -863,24 +739,12 @@ where
     pub fn discard(&mut self, branch: BranchId) -> Result<()> {
         self.ensure_writable("working-state discard")?;
         let state = self.get_branch(branch)?;
-        let old_dirty = state.dirty_root;
         let root = if state.head == NO_COMMIT {
             EMPTY_ROOT
         } else {
             self.get_commit_inner(state.head)?.root
         };
-        let new_state = BranchState {
-            dirty_root: root,
-            ..state
-        };
-        self.tree.acquire_node(root);
-        // Persist before release — see `insert` for the crash-ordering
-        // rationale.
-        self.branches.insert(&branch.0, &new_state);
-        self.fence(|m| m.branches.sync_wal());
-        self.tree.release_node(old_dirty);
-        self.settle_if_backlogged();
-        Ok(())
+        self.publish_working(branch, state, root)
     }
 
     /// Rolls back `branch` to a previous commit, discarding all commits
@@ -902,8 +766,8 @@ where
         // branch's history.
         if state.head == NO_COMMIT {
             return Err(VsdbError::NotAncestor {
-                commit_id: target.0,
-                branch_id: branch.0,
+                commit_id: target,
+                branch_id: branch,
             });
         }
 
@@ -915,17 +779,13 @@ where
         // target-vs-head branching below, not just the `target ==
         // state.head` arm — an ancestor target must not bypass it.
         if self.has_uncommitted(branch)? {
-            return Err(VsdbError::UncommittedChanges {
-                branch_id: branch.0,
-            });
+            return Err(VsdbError::UncommittedChanges { branch_id: branch });
         }
 
         if target == state.head {
             // target == head with a clean working state (uncommitted
             // changes are already ruled out above): a complete no-op.
-            // Return before the mutation path below — setting gc_dirty
-            // and rewriting identical state would only widen the
-            // crash-recovery window for zero effect.
+            // Avoid writing an identical branch head.
             return Ok(());
         }
 
@@ -942,47 +802,31 @@ where
                     found = true;
                     break;
                 }
-                if let Some(c) = self.commits.get(&cur.0) {
+                if let Some(c) = self.get_commit(cur) {
                     queue.extend_from_slice(&c.parents);
                 }
             }
             if !found {
                 return Err(VsdbError::NotAncestor {
-                    commit_id: target.0,
-                    branch_id: branch.0,
+                    commit_id: target,
+                    branch_id: branch,
                 });
             }
         }
 
-        // Mark dirty before any structural mutation so that crash
-        // recovery (gc → rebuild_ref_counts) will repair orphaned
-        // commits or imbalanced ref-counts.
-        self.begin_ref_update();
-
         let commit = self.get_commit_inner(target)?;
-        let old_head = state.head;
-        let old_dirty = state.dirty_root;
-        let new_state = BranchState {
-            name: state.name,
-            head: target,
-            dirty_root: commit.root,
-        };
-        self.branches.insert(&branch.0, &new_state);
-        self.fence(|m| m.branches.sync_wal());
-
-        // Tree root: dirty_root changes to commit.root.
-        self.tree.acquire_node(commit.root);
-        self.tree.release_node(old_dirty);
-
-        // Commit ref counts: target gains a branch-HEAD, old head
-        // loses one.  Increment FIRST to protect target from cascade.
-        self.increment_ref(target);
-        self.decrement_ref(old_head);
-
-        self.end_ref_update();
-        self.settle();
-
-        Ok(())
+        let mut edits = Edits::default();
+        edits.write_head(
+            branch,
+            BranchHead {
+                head: target,
+                dirty_root: commit.root,
+            },
+        );
+        edits.replace_root(state.dirty_root, commit.root);
+        self.adjust_commit(&mut edits, target, true)?;
+        self.adjust_commit(&mut edits, state.head, false)?;
+        self.publish(Header::get(&self.tree.nodes)?, edits, true)
     }
 
     // =================================================================
@@ -1026,30 +870,22 @@ where
     pub fn merge(&mut self, source: BranchId, target: BranchId) -> Result<CommitId> {
         self.ensure_writable("branch merge")?;
         if source == target {
-            return Err(VsdbError::SelfMerge {
-                branch_id: source.0,
-            });
+            return Err(VsdbError::SelfMerge { branch_id: source });
         }
 
         // Reject if either branch has uncommitted changes.
         if self.has_uncommitted(source)? {
-            return Err(VsdbError::UncommittedChanges {
-                branch_id: source.0,
-            });
+            return Err(VsdbError::UncommittedChanges { branch_id: source });
         }
         if self.has_uncommitted(target)? {
-            return Err(VsdbError::UncommittedChanges {
-                branch_id: target.0,
-            });
+            return Err(VsdbError::UncommittedChanges { branch_id: target });
         }
 
         let src = self.get_branch(source)?;
         let tgt = self.get_branch(target)?;
 
         if src.head == NO_COMMIT {
-            return Err(VsdbError::NoCommits {
-                branch_id: source.0,
-            });
+            return Err(VsdbError::NoCommits { branch_id: source });
         }
 
         // Both branches point to the same commit — nothing to merge.
@@ -1060,42 +896,22 @@ where
             return Ok(tgt.head);
         }
 
-        // Mark dirty before any structural mutation so that crash
-        // recovery (gc → rebuild_ref_counts) will repair orphaned
-        // commits or imbalanced ref-counts.
-        self.begin_ref_update();
-
+        let mut hdr = Header::get(&self.tree.nodes)?;
+        let mut edits = Edits::default();
+        self.adjust_commit(&mut edits, src.head, true)?;
         if tgt.head == NO_COMMIT {
-            // Target is empty — just fast-forward.
-            //
-            // Precondition: `head == NO_COMMIT` ⟺ the branch has never
-            // committed.  Branch creation copies the source's head (so a
-            // NO_COMMIT head is only inherited from another never-committed
-            // branch), `commit` moves the head onto a real commit and never
-            // back, and `rollback_to` rejects NO_COMMIT heads outright.
-            // The target therefore has NO history at all, so adopting the
-            // source's chain wholesale cannot discard or cross-link any
-            // target history (INV-V2); `get_commit_inner` just above
-            // guarantees the adopted head is a real commit.
-            let src_commit = self.get_commit_inner(src.head)?;
-            let new_state = BranchState {
-                head: src.head,
-                dirty_root: src_commit.root,
-                ..tgt
-            };
-            self.branches.insert(&target.0, &new_state);
-            self.fence(|m| m.branches.sync_wal());
-            // Target branch HEAD now points to src.head → +1 ref.
-            self.increment_ref(src.head);
-            // Tree root: dirty_root changes to src_commit.root.
-            self.tree.acquire_node(src_commit.root);
-            self.tree.release_node(tgt.dirty_root);
-            self.fence(|m| m.commits.sync_wal());
-            self.end_ref_update();
-            self.settle();
+            let commit = self.get_commit_inner(src.head)?;
+            edits.replace_root(tgt.dirty_root, commit.root);
+            edits.write_head(
+                target,
+                BranchHead {
+                    head: src.head,
+                    dirty_root: commit.root,
+                },
+            );
+            self.publish(hdr, edits, true)?;
             return Ok(src.head);
         }
-
         let src_commit = self.get_commit_inner(src.head)?;
         let tgt_commit = self.get_commit_inner(tgt.head)?;
 
@@ -1110,51 +926,31 @@ where
             ancestor_roots
         };
 
-        let merged_root =
-            self.tree
-                .merge(&ancestor_roots, src_commit.root, tgt_commit.root);
-
-        // Order the complete merged tree before publishing its root.
-        self.fence(|m| m.tree.nodes.sync_wal());
-
-        // Acquire both owners before readers can observe either published
-        // root. A short-lived snapshot must not release an unowned merge
-        // result back to zero while publication is still in progress.
-        self.tree.acquire_node(merged_root); // commit.root
-        self.tree.acquire_node(merged_root); // dirty_root
-
-        // Create merge commit.
-        let id = CommitId(self.next_commit.get_value());
-        *self.next_commit.get_mut() = id.0 + 1;
-        self.fence(|m| m.next_commit.sync_wal());
-
-        // ref_count = 1: the target branch HEAD.
-        // tgt.head: net 0 (loses branch-HEAD, gains parent-link).
-        // src.head: +1 (gains parent-link from merge commit).
-        let commit = Commit {
+        let id = CommitId::from_raw(hdr.next_commit);
+        hdr.next_commit = id
+            .raw()
+            .checked_add(1)
+            .ok_or_else(|| corrupt("commit IDs exhausted"))?;
+        let merged_root = self.build_root(|tree| {
+            tree.try_merge(&ancestor_roots, src_commit.root, tgt_commit.root)
+        })?;
+        edits.write_commit(&Commit {
             id,
             root: merged_root,
             parents: vec![tgt.head, src.head],
             timestamp_us: now_us(),
             ref_count: 1,
-        };
-        self.commits.insert(&id.0, &commit);
-        self.increment_ref(src.head);
-        self.fence(|m| m.commits.sync_wal());
-
-        let new_state = BranchState {
-            head: id,
-            dirty_root: merged_root,
-            ..tgt
-        };
-        self.branches.insert(&target.0, &new_state);
-        self.fence(|m| m.branches.sync_wal());
-
-        self.tree.release_node(tgt.dirty_root); // old target dirty
-
-        self.end_ref_update();
-        self.settle();
-
+        });
+        edits.acquire.push(merged_root);
+        edits.replace_root(tgt.dirty_root, merged_root);
+        edits.write_head(
+            target,
+            BranchHead {
+                head: id,
+                dirty_root: merged_root,
+            },
+        );
+        self.publish(hdr, edits, true)?;
         Ok(id)
     }
 
@@ -1181,7 +977,7 @@ where
         // Nonexistent IDs are not DAG nodes; without this guard,
         // `find_merge_bases(x, x)` would report a nonexistent `x`
         // as its own merge base.
-        if self.commits.get(&a.0).is_none() || self.commits.get(&b.0).is_none() {
+        if self.get_commit(a).is_none() || self.get_commit(b).is_none() {
             return vec![];
         }
 
@@ -1232,7 +1028,7 @@ where
                 // Everything below a common commit is dominated.
                 f |= STALE;
             }
-            if let Some(c) = self.commits.get(&id.0) {
+            if let Some(c) = self.get_commit(id) {
                 for &parent in &c.parents {
                     mark(&mut flags, &mut heap, &mut non_stale_count, parent, f);
                 }
@@ -1281,15 +1077,15 @@ where
         // Both endpoints must be real commits; otherwise
         // `commit_distance(x, x)` would report distance 0 for a
         // nonexistent `x`.
-        self.commits.get(&from.0)?;
-        self.commits.get(&ancestor.0)?;
+        self.get_commit(from)?;
+        self.get_commit(ancestor)?;
         let mut cur = from;
         let mut count = 0u64;
         while cur != ancestor {
             if cur == NO_COMMIT {
                 return None;
             }
-            let c = self.commits.get(&cur.0)?;
+            let c = self.get_commit(cur)?;
             cur = c.parents.first().copied().unwrap_or(NO_COMMIT);
             count += 1;
         }
@@ -1298,7 +1094,7 @@ where
 
     /// Retrieves a commit by its ID.
     pub fn get_commit(&self, commit_id: CommitId) -> Option<Commit> {
-        self.commits.get(&commit_id.0)
+        self.get_commit_inner(commit_id).ok()
     }
 
     /// Returns the commit at the head of `branch`.
@@ -1307,7 +1103,7 @@ where
         if state.head == NO_COMMIT {
             Ok(None)
         } else {
-            Ok(self.commits.get(&state.head.0))
+            Ok(self.get_commit(state.head))
         }
     }
 
@@ -1320,7 +1116,7 @@ where
         let mut result = Vec::new();
         let mut cur = state.head;
         while cur != NO_COMMIT {
-            if let Some(c) = self.commits.get(&cur.0) {
+            if let Some(c) = self.get_commit(cur) {
                 cur = c.parents.first().copied().unwrap_or(NO_COMMIT);
                 result.push(c);
             } else {
@@ -1373,109 +1169,15 @@ where
     // GC
     // =================================================================
 
-    /// Performs crash recovery and a full B+ tree node sweep.
-    ///
-    /// In normal operation **you do not need to call this method**.
-    /// Both commit cleanup and B+ tree node cleanup happen
-    /// automatically:
-    ///
-    /// - **Commits** are immediately hard-deleted when their reference
-    ///   count reaches zero (via
-    ///   [`delete_branch`](Self::delete_branch) /
-    ///   [`rollback_to`](Self::rollback_to)).
-    /// - **B+ tree nodes** are registered for deferred disk deletion
-    ///   via the storage engine's compaction filter when
-    ///   [`PersistentBTree::release_node`] drops their reference count
-    ///   to zero.  The underlying MMDB engine reclaims disk space
-    ///   during background compaction — no user action required.
-    ///
-    /// This method is still useful in two scenarios:
-    ///
-    /// 1. **Crash recovery** — if a ref-count cascade was interrupted
-    ///    (`gc_dirty` flag), rebuilds all commit ref counts from
-    ///    scratch and removes orphaned commits.
-    /// 2. **Forced full sweep** — guarantees that every unreachable
-    ///    B+ tree node is registered for compaction, even if a prior
-    ///    cascade was incomplete.
-    ///
-    /// This is a no-op in read-only mode: recovery metadata cannot be
-    /// rewritten and deferred deletions cannot be registered there.
-    ///
-    /// # Errors
-    ///
-    /// [`VsdbError::CommitNotFound`] — before removing anything — if a
-    /// reachable HEAD or parent record is missing (the graph is damaged;
-    /// deleting "orphans" would destroy older history).
-    /// A missing reachable B+ tree node returns [`VsdbError::Corrupt`] before cleanup.
-    ///
-    /// # Panics
-    ///
-    /// Storage synchronization failures panic.
+    /// Validates the commit graph and all reachable objects, then sweeps
+    /// unowned pages. Read-only handles skip this maintenance operation.
+    /// Use [`verify_and_gc`](Self::verify_and_gc) for read-only validation
+    /// and detailed counts.
     pub fn gc(&mut self) -> Result<()> {
         if self.namespace().is_read_only() {
             return Ok(());
         }
-        self.recover_ref_counts(false)
-    }
-
-    // =================================================================
-    // Reference counting
-    // =================================================================
-
-    /// Increments the ref_count of the given commit by 1.
-    fn increment_ref(&mut self, commit_id: CommitId) {
-        if commit_id == NO_COMMIT {
-            return;
-        }
-        if let Some(mut c) = self.commits.get(&commit_id.0) {
-            c.ref_count += 1;
-            self.commits.insert(&commit_id.0, &c);
-        }
-    }
-
-    /// Decrements the ref_count of the given commit by 1.
-    /// If it reaches zero, hard-deletes the commit and cascades
-    /// to each parent.
-    fn decrement_ref(&mut self, commit_id: CommitId) {
-        if commit_id == NO_COMMIT {
-            return;
-        }
-
-        let already_dirty = self.gc_dirty.get_value();
-        if !already_dirty {
-            self.begin_ref_update();
-        }
-
-        let mut dead_roots = Vec::new();
-        let mut work = vec![commit_id];
-        while let Some(id) = work.pop() {
-            if id == NO_COMMIT {
-                continue;
-            }
-            let Some(mut c) = self.commits.get(&id.0) else {
-                continue; // already deleted (crash recovery case)
-            };
-            c.ref_count = c.ref_count.saturating_sub(1);
-            if c.ref_count == 0 {
-                let parents = c.parents.clone();
-                // Retire roots only after the whole commit cascade is durable.
-                // One fence per cascade avoids one fsync per deleted commit.
-                dead_roots.push(c.root);
-                self.commits.remove(&id.0);
-                work.extend(parents);
-            } else {
-                self.commits.insert(&id.0, &c);
-            }
-        }
-
-        self.fence(|m| m.commits.sync_wal());
-        for root in dead_roots {
-            self.tree.release_node(root);
-        }
-
-        if !already_dirty {
-            self.end_ref_update();
-        }
+        self.verify_and_gc().map(|_| ())
     }
 }
 
@@ -1502,24 +1204,25 @@ fn merge_bases_match_full_walk_on_a_wide_dag() {
             let lane = (id - 1) % width;
             let previous_layer = ((id - 1) / width - 1) * width;
             vec![
-                CommitId(previous_layer + lane + 1),
-                CommitId(previous_layer + (lane + 1) % width + 1),
+                CommitId::from_raw(previous_layer + lane + 1),
+                CommitId::from_raw(previous_layer + (lane + 1) % width + 1),
             ]
         };
         let mut reachable = HashSet::from([id]);
         for parent in &parents {
-            reachable.extend(&ancestors[parent.0 as usize]);
+            reachable.extend(&ancestors[parent.raw() as usize]);
         }
         ancestors.push(reachable);
-        map.commits.insert(
-            &id,
-            &Commit {
-                id: CommitId(id),
+        map.tree.nodes.insert(
+            row(COMMIT, id),
+            Commit {
+                id: CommitId::from_raw(id),
                 root: EMPTY_ROOT,
                 parents,
                 timestamp_us: 0,
                 ref_count: 1,
-            },
+            }
+            .bytes(),
         );
     }
 
@@ -1540,10 +1243,11 @@ fn merge_bases_match_full_walk_on_a_wide_dag() {
                     })
                 })
                 .copied()
-                .map(CommitId)
+                .map(CommitId::from_raw)
                 .collect();
             expected.sort_unstable();
-            let mut actual = map.find_merge_bases(CommitId(a), CommitId(b));
+            let mut actual =
+                map.find_merge_bases(CommitId::from_raw(a), CommitId::from_raw(b));
             actual.sort_unstable();
             assert_eq!(actual, expected, "tips {a}, {b}");
         }

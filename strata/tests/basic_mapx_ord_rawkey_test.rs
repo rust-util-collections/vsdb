@@ -1,4 +1,3 @@
-use ruc::*;
 use serde::{Deserialize, Serialize};
 use vsdb::{
     ValueEnDe, VsdbOptions, basic::mapx_ord_rawkey::MapxOrdRawKey, vsdb_configure,
@@ -18,10 +17,11 @@ fn gen_sample(bytes: &[u8]) -> SampleBlock {
 #[test]
 fn basic_cases() {
     let cnt = 200;
-    info_omit!(vsdb_configure(VsdbOptions::new(format!(
+    vsdb_configure(VsdbOptions::new(format!(
         "/tmp/vsdb_testing/{}",
         rand::random::<u64>()
-    ))));
+    )))
+    .unwrap();
 
     let hdr = {
         let mut hdr_i = MapxOrdRawKey::new();
@@ -42,10 +42,11 @@ fn basic_cases() {
                 hdr_i.insert(i, &b);
             });
 
-        <MapxOrdRawKey<SampleBlock> as ValueEnDe>::encode(&hdr_i)
+        <MapxOrdRawKey<SampleBlock> as ValueEnDe>::encode_value(&hdr_i)
     };
 
-    let mut reloaded = pnk!(<MapxOrdRawKey<SampleBlock> as ValueEnDe>::decode(&hdr));
+    let mut reloaded =
+        <MapxOrdRawKey<SampleBlock> as ValueEnDe>::decode_value(&hdr).unwrap();
 
     (0usize..cnt).map(|i| i.to_be_bytes()).for_each(|i| {
         assert_eq!(&i[..], &reloaded.get(i).unwrap().data);

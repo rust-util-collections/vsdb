@@ -1,8 +1,9 @@
 //! Two-way diff between persistent B+ tree versions, skipping the
 //! subtrees they share.
 
-use super::{EMPTY_ROOT, Node, NodeId, PersistentBTree};
-use std::{cmp::Ordering, ops::ControlFlow};
+use super::{EMPTY_ROOT, MapxRawReader, Node, NodeId, PersistentBTree, read_object};
+use std::cmp::Ordering;
+use std::marker::PhantomData;
 
 /// A single difference between two tree versions, as stored bytes
 /// (see [`PersistentBTree::diff`]).
@@ -29,9 +30,28 @@ impl PersistentBTree {
     /// unshared paths; independently built equal-content trees can still
     /// require a full walk. The output contains only changed keys.
     pub fn diff(&self, old_root: NodeId, new_root: NodeId) -> Vec<TreeDiff> {
-        let mut result = Vec::new();
-        diff_walk(self, old_root, new_root, |e| result.push(e));
-        result
+        self.diff_iter(old_root, new_root).collect()
+    }
+
+    /// Streams the differences in ascending key order while pruning shared subtrees.
+    /// Traversal retains at most a page of keys per level on each side.
+    pub fn diff_iter(&self, old: NodeId, new: NodeId) -> BTreeDiffIter<'_> {
+        self.owned_diff(old, new)
+    }
+
+    // Internal merge keeps all source roots live while it builds its result.
+    pub(super) fn owned_diff(&self, old: NodeId, new: NodeId) -> BTreeDiffIter<'static> {
+        let (old, new) = if old == new {
+            (EMPTY_ROOT, EMPTY_ROOT)
+        } else {
+            (old, new)
+        };
+        BTreeDiffIter {
+            nodes: self.nodes.reader(),
+            borrow: PhantomData,
+            old: Cursor::new(self, old),
+            new: Cursor::new(self, new),
+        }
     }
 
     /// Shared roots compare in constant time. Stop at the first changed entry.
@@ -39,7 +59,7 @@ impl PersistentBTree {
         if old == EMPTY_ROOT || new == EMPTY_ROOT {
             return old != new;
         }
-        try_diff_walk(self, old, new, |_| ControlFlow::Break(())).is_break()
+        self.diff_iter(old, new).next().is_some()
     }
 }
 
@@ -63,11 +83,12 @@ impl Cursor {
     }
 
     /// Replaces the front node with its children (or a leaf's entries).
-    fn expand(&mut self, tree: &PersistentBTree) {
+    fn expand(&mut self, nodes: &MapxRawReader) {
         let Some(Item::Node(id, h)) = self.0.pop() else {
             unreachable!("expand called on a non-node front");
         };
-        match tree.node(id) {
+        match Node::decode_with(&read_object(nodes, id), |blob| read_object(nodes, blob))
+        {
             Node::Leaf { keys, values } => {
                 self.0.extend(
                     keys.into_iter()
@@ -103,84 +124,73 @@ enum Step {
     Compare(Ordering),
 }
 
-/// Streams the diff between two snapshots to `emit`, in ascending key
-/// order, skipping every subtree the snapshots share.
-pub(crate) fn diff_walk(
-    tree: &PersistentBTree,
-    old_root: NodeId,
-    new_root: NodeId,
-    mut emit: impl FnMut(TreeDiff),
-) {
-    let _ = try_diff_walk(tree, old_root, new_root, |entry| {
-        emit(entry);
-        ControlFlow::Continue(())
-    });
+/// Ordered streaming diff of two immutable B+ tree roots.
+pub struct BTreeDiffIter<'a> {
+    nodes: MapxRawReader,
+    borrow: PhantomData<&'a PersistentBTree>,
+    old: Cursor,
+    new: Cursor,
 }
 
-fn try_diff_walk(
-    tree: &PersistentBTree,
-    old_root: NodeId,
-    new_root: NodeId,
-    mut emit: impl FnMut(TreeDiff) -> ControlFlow<()>,
-) -> ControlFlow<()> {
-    if old_root == new_root {
-        return ControlFlow::Continue(());
-    }
-    let mut old = Cursor::new(tree, old_root);
-    let mut new = Cursor::new(tree, new_root);
-
-    loop {
-        // Identical fronts cover identical key sets (every earlier key is
-        // already consumed on both sides), so they are skipped whole.
-        // Otherwise the taller subtree is expanded first so both sides
-        // descend in step and shared subtrees line up.
-        let step = match (old.0.last(), new.0.last()) {
-            (None, None) => Step::Done,
-            (Some(Item::Node(a, _)), Some(Item::Node(b, _))) if a == b => {
-                Step::SkipShared
-            }
-            (Some(Item::Node(_, ha)), Some(Item::Node(_, hb))) => match ha.cmp(hb) {
-                Ordering::Greater => Step::ExpandOld,
-                Ordering::Less => Step::ExpandNew,
-                Ordering::Equal => Step::ExpandBoth,
-            },
-            (Some(Item::Node(..)), _) => Step::ExpandOld,
-            (_, Some(Item::Node(..))) => Step::ExpandNew,
-            (Some(Item::Entry(..)), None) => Step::Removed,
-            (None, Some(Item::Entry(..))) => Step::Added,
-            (Some(Item::Entry(ka, _)), Some(Item::Entry(kb, _))) => {
-                Step::Compare(ka.cmp(kb))
-            }
-        };
-        match step {
-            Step::Done => return ControlFlow::Continue(()),
-            Step::SkipShared => {
-                old.0.pop();
-                new.0.pop();
-            }
-            Step::ExpandOld => old.expand(tree),
-            Step::ExpandNew => new.expand(tree),
-            Step::ExpandBoth => {
-                old.expand(tree);
-                new.expand(tree);
-            }
-            Step::Removed | Step::Compare(Ordering::Less) => {
-                let (key, value) = old.pop_entry();
-                emit(TreeDiff::Removed { key, value })?;
-            }
-            Step::Added | Step::Compare(Ordering::Greater) => {
-                let (key, value) = new.pop_entry();
-                emit(TreeDiff::Added { key, value })?;
-            }
-            Step::Compare(Ordering::Equal) => {
-                let (key, old_value) = old.pop_entry();
-                let (_, new_value) = new.pop_entry();
-                if old_value != new_value {
-                    emit(TreeDiff::Modified {
-                        key,
-                        old_value,
-                        new_value,
-                    })?;
+impl Iterator for BTreeDiffIter<'_> {
+    type Item = TreeDiff;
+    fn next(&mut self) -> Option<TreeDiff> {
+        let old = &mut self.old;
+        let new = &mut self.new;
+        let tree = &self.nodes;
+        loop {
+            // Identical fronts cover identical key sets (every earlier key is
+            // already consumed on both sides), so they are skipped whole.
+            // Otherwise the taller subtree is expanded first so both sides
+            // descend in step and shared subtrees line up.
+            let step = match (old.0.last(), new.0.last()) {
+                (None, None) => Step::Done,
+                (Some(Item::Node(a, _)), Some(Item::Node(b, _))) if a == b => {
+                    Step::SkipShared
+                }
+                (Some(Item::Node(_, ha)), Some(Item::Node(_, hb))) => match ha.cmp(hb) {
+                    Ordering::Greater => Step::ExpandOld,
+                    Ordering::Less => Step::ExpandNew,
+                    Ordering::Equal => Step::ExpandBoth,
+                },
+                (Some(Item::Node(..)), _) => Step::ExpandOld,
+                (_, Some(Item::Node(..))) => Step::ExpandNew,
+                (Some(Item::Entry(..)), None) => Step::Removed,
+                (None, Some(Item::Entry(..))) => Step::Added,
+                (Some(Item::Entry(ka, _)), Some(Item::Entry(kb, _))) => {
+                    Step::Compare(ka.cmp(kb))
+                }
+            };
+            match step {
+                Step::Done => return None,
+                Step::SkipShared => {
+                    old.0.pop();
+                    new.0.pop();
+                }
+                Step::ExpandOld => old.expand(tree),
+                Step::ExpandNew => new.expand(tree),
+                Step::ExpandBoth => {
+                    old.expand(tree);
+                    new.expand(tree);
+                }
+                Step::Removed | Step::Compare(Ordering::Less) => {
+                    let (key, value) = old.pop_entry();
+                    return Some(TreeDiff::Removed { key, value });
+                }
+                Step::Added | Step::Compare(Ordering::Greater) => {
+                    let (key, value) = new.pop_entry();
+                    return Some(TreeDiff::Added { key, value });
+                }
+                Step::Compare(Ordering::Equal) => {
+                    let (key, old_value) = old.pop_entry();
+                    let (_, new_value) = new.pop_entry();
+                    if old_value != new_value {
+                        return Some(TreeDiff::Modified {
+                            key,
+                            old_value,
+                            new_value,
+                        });
+                    }
                 }
             }
         }

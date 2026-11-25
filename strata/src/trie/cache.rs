@@ -1,422 +1,530 @@
-//!
-//! Disposable cache for the in-memory trie.
-//!
-//! After [`MptCalc::root_hash`] is called, the trie nodes carry their
-//! precomputed hashes.  This module can save that state to a file so
-//! that a future process can reload and apply only the diff since the
-//! last snapshot, instead of rebuilding the entire trie.
-//!
-//! The cache is **disposable**: if the file is missing, corrupted, or
-//! stale, the caller simply rebuilds from the authoritative store.
-//!
-
-#[cfg(test)]
-use crate::trie::codec_util::write_cache_payload;
-use crate::trie::{
-    codec_util::{
-        CHECKSUM_LEN, checked_end, compute_checksum, io_err, read_bytes,
-        read_cache_bytes, read_u8, read_varint, validate_cache_file_size, write_bytes,
-        write_cache_file, write_varint,
-    },
-    error::{Result, TrieError},
-    mpt::MAX_MPT_KEY_LEN,
+//! Post-order checkpoint records. The decoder retains only completed
+//! subtrees and validates each parent before joining it to its children.
+use super::{
+    Checkpoint, MAX_MPT_KEY_LEN,
     nibbles::Nibbles,
-    node::{Node, NodeCodec, NodeHandle},
+    node::{Children, Node},
+    shared::{Handle, TreeNode},
+    smt::{BitPath, SmtNode},
 };
+use crate::{InstanceId, Result, VsdbError, common::atomic_write_file_with};
 use sha3::{Digest, Keccak256};
-use std::{fs::File, io::Read, path::Path};
+use std::{
+    fs::File,
+    io::{self, BufReader, BufWriter, Read, Write},
+    path::Path,
+};
 
-const MAGIC: &[u8; 4] = b"MPTC";
-const VERSION: u8 = 1;
+pub(super) const MAX_FILE: u64 = 512 << 20;
+const MAX_DECODED: usize = 512 << 20;
+const MAX_VALUE: usize = 64 << 20;
+const MAX_NODES: usize = 2_000_000;
+const MAX_PENDING: usize = 15 * 2 * MAX_MPT_KEY_LEN + 1;
+const END: u8 = 0xff;
 
-/// Maximum cumulative nibbles consumed from the root down to any node —
-/// the deepest position an organic trie can reach, since insertion
-/// rejects keys over [`MAX_MPT_KEY_LEN`] bytes (2 nibbles per byte).
-///
-/// The decoder tracks this budget explicitly while parsing iteratively.
-/// Accepted cache paths therefore match the public insertion limit without
-/// placing one call frame on the worker stack for every node.
-const MAX_TOTAL_NIBBLES: usize = 2 * MAX_MPT_KEY_LEN;
-
-// =========================================================================
-// Public API (called from MptCalc)
-// =========================================================================
-
-/// Saves an `MptCalc` trie to a writer.
-#[cfg(test)]
-pub(crate) fn save(
-    root: &NodeHandle,
-    sync_tag: u64,
-    root_hash: &[u8],
-    w: &mut impl std::io::Write,
-) -> Result<()> {
-    write_cache_payload(&encode_payload(root, sync_tag, root_hash), w)
+fn invalid(message: &str) -> VsdbError {
+    VsdbError::Trie {
+        detail: format!("invalid trie checkpoint: {message}"),
+    }
 }
-
-fn encode_payload(root: &NodeHandle, sync_tag: u64, root_hash: &[u8]) -> Vec<u8> {
-    let mut payload = Vec::new();
-    payload.extend_from_slice(MAGIC);
-    payload.push(VERSION);
-    payload.extend_from_slice(&sync_tag.to_le_bytes());
-
-    let hash_len = root_hash.len() as u32;
-    payload.extend_from_slice(&hash_len.to_le_bytes());
-    payload.extend_from_slice(root_hash);
-
-    serialize_handle(root, &mut payload);
-
-    payload
+struct Output<W> {
+    writer: W,
+    hash: Keccak256,
+    left: u64,
 }
-
-/// Loads an `MptCalc` trie from a reader.
-///
-/// Returns `(root_handle, sync_tag, root_hash)`.
-pub(crate) fn load(r: &mut impl Read) -> Result<(NodeHandle, u64, Vec<u8>)> {
-    let all_data = read_cache_bytes(r)?;
-
-    if all_data.len() < CHECKSUM_LEN {
-        return Err(TrieError::InvalidState("cache file too short".into()));
-    }
-
-    let (payload, stored_checksum) = all_data.split_at(all_data.len() - CHECKSUM_LEN);
-    let expected = compute_checksum(payload);
-    if stored_checksum != expected {
-        return Err(TrieError::InvalidState("cache checksum mismatch".into()));
-    }
-
-    if payload.len() < 5 {
-        return Err(TrieError::InvalidState("cache header too short".into()));
-    }
-    if &payload[0..4] != MAGIC {
-        return Err(TrieError::InvalidState("invalid cache magic".into()));
-    }
-    if payload[4] != VERSION {
-        return Err(TrieError::InvalidState(format!(
-            "unsupported cache version {}",
-            payload[4]
-        )));
-    }
-
-    let mut cursor = 5;
-
-    let end = checked_end(cursor, 8, payload.len(), "sync_tag")?;
-    let sync_tag = u64::from_le_bytes(payload[cursor..end].try_into().unwrap());
-    cursor = end;
-
-    let end = checked_end(cursor, 4, payload.len(), "hash_len")?;
-    let hash_len = u32::from_le_bytes(payload[cursor..end].try_into().unwrap()) as usize;
-    cursor = end;
-    if hash_len != 32 {
-        return Err(TrieError::InvalidState(format!(
-            "cache root hash length {hash_len} != 32"
-        )));
-    }
-
-    let end = checked_end(cursor, hash_len, payload.len(), "root_hash")?;
-    let root_hash = payload[cursor..end].to_vec();
-    cursor = end;
-
-    let root = deserialize_handle(payload, &mut cursor, 0)?;
-    if cursor != payload.len() {
-        return Err(TrieError::InvalidState(
-            "trailing bytes after MPT cache root".into(),
-        ));
-    }
-    let computed = validate_cached_handle(&root, true)?;
-    if root_hash.as_slice() != computed {
-        return Err(TrieError::InvalidState(
-            "MPT cache root hash does not match the tree".into(),
-        ));
-    }
-    Ok((root, sync_tag, root_hash))
-}
-
-/// Convenience: save to a file path.
-pub(crate) fn save_to_file(
-    root: &NodeHandle,
-    sync_tag: u64,
-    root_hash: &[u8],
-    path: &Path,
-    limit: u64,
-) -> Result<()> {
-    write_cache_file(path, &encode_payload(root, sync_tag, root_hash), limit)
-}
-
-/// Convenience: load from a file path.
-pub(crate) fn load_from_file(path: &Path) -> Result<(NodeHandle, u64, Vec<u8>)> {
-    validate_cache_file_size(path)?;
-    let mut f = File::open(path).map_err(io_err)?;
-    load(&mut f)
-}
-
-// =========================================================================
-// Serialization
-// =========================================================================
-
-// NodeHandle tag bytes
-const HANDLE_INMEMORY: u8 = 0x00;
-const HANDLE_CACHED: u8 = 0x01;
-
-// Node type tag bytes
-const NODE_NULL: u8 = 0x00;
-const NODE_LEAF: u8 = 0x01;
-const NODE_EXT: u8 = 0x02;
-const NODE_BRANCH: u8 = 0x03;
-
-fn serialize_handle(handle: &NodeHandle, buf: &mut Vec<u8>) {
-    let mut pending = vec![handle];
-    while let Some(handle) = pending.pop() {
-        match handle.hash() {
-            Some(hash) => {
-                buf.push(HANDLE_CACHED);
-                write_bytes(buf, hash);
-            }
-            None => buf.push(HANDLE_INMEMORY),
+impl<W: Write> Write for Output<W> {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        if data.len() as u64 > self.left {
+            return Err(io::Error::other("checkpoint exceeds size limit"));
         }
-        match handle.node() {
-            Node::Null => buf.push(NODE_NULL),
-            Node::Leaf { path, value } => {
-                buf.push(NODE_LEAF);
-                write_nibbles(buf, path);
-                write_bytes(buf, value);
-            }
-            Node::Extension { path, child } => {
-                buf.push(NODE_EXT);
-                write_nibbles(buf, path);
-                pending.push(child);
-            }
-            Node::Branch { children, value } => {
-                buf.push(NODE_BRANCH);
-                let mut bitmap: u16 = 0;
-                for (i, child) in children.iter().enumerate() {
-                    if child.is_some() {
-                        bitmap |= 1 << i;
-                    }
-                }
-                buf.extend_from_slice(&bitmap.to_le_bytes());
-                match value {
-                    Some(value) => {
-                        buf.push(1);
-                        write_bytes(buf, value);
-                    }
-                    None => buf.push(0),
-                }
-                pending.extend(children.iter().rev().flatten());
+        let n = self.writer.write(data)?;
+        self.hash.update(&data[..n]);
+        self.left -= n as u64;
+        Ok(n)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
+}
+pub(super) struct Input<R> {
+    reader: R,
+    hash: Keccak256,
+    left: u64,
+    budget: usize,
+}
+impl<R: Read> Input<R> {
+    fn take(&mut self, bytes: &mut [u8]) -> Result<()> {
+        self.left = self
+            .left
+            .checked_sub(bytes.len() as u64)
+            .ok_or_else(|| invalid("truncated payload"))?;
+        self.reader.read_exact(bytes)?;
+        self.hash.update(&*bytes);
+        Ok(())
+    }
+    fn fixed<const N: usize>(&mut self) -> Result<[u8; N]> {
+        let mut b = [0; N];
+        self.take(&mut b)?;
+        Ok(b)
+    }
+    fn u8(&mut self) -> Result<u8> {
+        Ok(self.fixed::<1>()?[0])
+    }
+    fn u16(&mut self) -> Result<u16> {
+        Ok(u16::from_le_bytes(self.fixed()?))
+    }
+    fn reserve(&mut self, n: usize) -> Result<()> {
+        self.budget = self
+            .budget
+            .checked_sub(n)
+            .ok_or_else(|| invalid("decoded memory limit"))?;
+        Ok(())
+    }
+    fn value(&mut self) -> Result<Vec<u8>> {
+        let len = u32::from_le_bytes(self.fixed()?) as usize;
+        if len > MAX_VALUE || len as u64 > self.left {
+            return Err(invalid("invalid value length"));
+        }
+        self.reserve(len)?;
+        let mut value = vec![0; len];
+        self.take(&mut value)?;
+        Ok(value)
+    }
+    fn packed(&mut self, max: usize, bits_per_byte: usize) -> Result<(usize, Vec<u8>)> {
+        let len = self.u16()? as usize;
+        if len > max {
+            return Err(invalid("oversize path"));
+        }
+        let count = len.div_ceil(bits_per_byte);
+        self.reserve(count)?;
+        let mut bytes = vec![0; count];
+        self.take(&mut bytes)?;
+        let pad = (count * bits_per_byte - len) * (8 / bits_per_byte);
+        if bytes.last().is_some_and(|b| *b & ((1 << pad) - 1) != 0) {
+            return Err(invalid("nonzero path padding"));
+        }
+        Ok((len, bytes))
+    }
+}
+fn packed(w: &mut impl Write, len: usize, data: &[u8]) -> Result<()> {
+    w.write_all(
+        &u16::try_from(len)
+            .map_err(|_| invalid("oversize path"))?
+            .to_le_bytes(),
+    )?;
+    w.write_all(data)?;
+    Ok(())
+}
+fn value(w: &mut impl Write, v: &[u8]) -> Result<()> {
+    if v.len() > MAX_VALUE {
+        return Err(invalid("oversize value"));
+    }
+    w.write_all(&(v.len() as u32).to_le_bytes())?;
+    w.write_all(v)?;
+    Ok(())
+}
+pub(super) trait CacheNode: TreeNode {
+    const MAGIC: [u8; 5];
+    const NAME: &'static str;
+    type Summary;
+    /// Variable allocations charged by the loader, excluding the fixed node record.
+    fn variable_bytes(&self) -> usize;
+    fn write_body(&self, w: &mut impl Write) -> Result<()>;
+    fn read_body(
+        tag: u8,
+        r: &mut Input<impl Read>,
+        stack: &mut Vec<(Handle<Self>, Self::Summary)>,
+    ) -> Result<(Self, Self::Summary)>;
+    fn validate_root(summary: &Self::Summary) -> bool;
+}
+impl CacheNode for Node {
+    const MAGIC: [u8; 5] = *b"MPTC\x02";
+    const NAME: &'static str = "mpt";
+    // Furthest leaf/value in nibbles. All terminal lengths in this subtree
+    // have the same parity, checked when a branch combines its children.
+    type Summary = usize;
+    fn variable_bytes(&self) -> usize {
+        match self {
+            Self::Null => 0,
+            Self::Leaf { path, value } => path.bytes().len() * 2 + value.len(),
+            Self::Extension { path, .. } => path.bytes().len() * 2,
+            Self::Branch { children, value } => {
+                size_of_val(&*children.nodes) + value.as_deref().map_or(0, <[u8]>::len)
             }
         }
     }
-}
-
-// =========================================================================
-// Deserialization
-// =========================================================================
-
-/// Parses the preorder wire format into shallow nodes, then attaches each
-/// child to its parent in reverse order. No recursive decoder or recursive
-/// cleanup is needed, including for incomplete or invalid trees.
-fn deserialize_handle(
-    data: &[u8],
-    cursor: &mut usize,
-    consumed: usize,
-) -> Result<NodeHandle> {
-    struct Decoded {
-        hash: Option<Vec<u8>>,
-        node: Node,
-        parent: Option<(usize, usize)>,
-    }
-    let mut pending = vec![(None, consumed)];
-    let mut decoded: Vec<Decoded> = Vec::new();
-    while let Some((parent, consumed)) = pending.pop() {
-        let tag = read_u8(data, cursor)?;
-        let hash = match tag {
-            HANDLE_INMEMORY => None,
-            HANDLE_CACHED => {
-                let hash = read_bytes(data, cursor)?;
-                if hash.len() != 32 {
-                    return Err(TrieError::InvalidState(format!(
-                        "MPT cache: cached hash length {} != 32",
-                        hash.len()
-                    )));
-                }
-                Some(hash)
+    fn write_body(&self, w: &mut impl Write) -> Result<()> {
+        match self {
+            Self::Null => w.write_all(&[0])?,
+            Self::Leaf { path, value: v } => {
+                w.write_all(&[1])?;
+                packed(w, path.len(), path.bytes())?;
+                value(w, v)?
             }
-            _ => {
-                return Err(TrieError::InvalidState(format!(
-                    "invalid handle tag: {tag}"
-                )));
+            Self::Extension { path, .. } => {
+                w.write_all(&[2])?;
+                packed(w, path.len(), path.bytes())?
+            }
+            Self::Branch { children, value: v } => {
+                w.write_all(&[3])?;
+                w.write_all(&children.bitmap.to_le_bytes())?;
+                w.write_all(&[u8::from(v.is_some())])?;
+                if let Some(v) = v {
+                    value(w, v)?
+                }
             }
         };
-        let index = decoded.len();
-        let node = match read_u8(data, cursor)? {
-            NODE_NULL => Node::Null,
-            NODE_LEAF => {
-                let path = read_nibbles(data, cursor)?;
-                check_nibble_budget(consumed, path.len())?;
-                Node::Leaf {
-                    path,
-                    value: read_bytes(data, cursor)?,
-                }
-            }
-            NODE_EXT => {
-                let path = read_nibbles(data, cursor)?;
-                if path.is_empty() {
-                    return Err(TrieError::InvalidState(
-                        "MPT cache: empty extension path".into(),
+        Ok(())
+    }
+    fn read_body(
+        tag: u8,
+        r: &mut Input<impl Read>,
+        stack: &mut Vec<(Handle<Self>, usize)>,
+    ) -> Result<(Self, usize)> {
+        let max = 2 * MAX_MPT_KEY_LEN;
+        match tag {
+            0 => Ok((Self::Null, 0)),
+            1 | 2 => {
+                let (len, bytes) = r.packed(max, 2)?;
+                r.reserve(bytes.len())?;
+                let path = Nibbles::packed(len, &bytes);
+                if tag == 1 {
+                    return Ok((
+                        Self::Leaf {
+                            path,
+                            value: r.value()?,
+                        },
+                        len,
                     ));
                 }
-                check_nibble_budget(consumed, path.len())?;
-                pending.push((Some((index, 0)), consumed + path.len()));
-                Node::Extension {
-                    path,
-                    child: NodeHandle::default(),
+                let (child, depth) = stack
+                    .pop()
+                    .ok_or_else(|| invalid("missing extension child"))?;
+                if len == 0
+                    || depth + len > max
+                    || !matches!(child.node(), Self::Branch { .. })
+                {
+                    return Err(invalid("noncanonical extension"));
                 }
+                Ok((Self::Extension { path, child }, len + depth))
             }
-            NODE_BRANCH => {
-                let end = checked_end(*cursor, 2, data.len(), "branch bitmap")?;
-                let bitmap = u16::from_le_bytes(data[*cursor..end].try_into().unwrap());
-                *cursor = end;
-                let value = if read_u8(data, cursor)? == 1 {
-                    Some(read_bytes(data, cursor)?)
+            3 => {
+                let bitmap = r.u16()?;
+                let count = bitmap.count_ones() as usize;
+                let flag = r.u8()?;
+                if count == 0
+                    || flag > 1
+                    || count + usize::from(flag) < 2
+                    || count > stack.len()
+                {
+                    return Err(invalid("invalid branch"));
+                }
+                let v = if flag == 1 {
+                    Some(r.value()?.into_boxed_slice())
                 } else {
                     None
                 };
-                check_nibble_budget(consumed, 1)?;
-                for i in (0..16).rev() {
-                    if bitmap & (1 << i) != 0 {
-                        pending.push((Some((index, i)), consumed + 1));
+                r.reserve(count * size_of::<Handle<Node>>())?;
+                let mut nodes = Vec::with_capacity(count);
+                let mut depth = 0;
+                let mut parity = v.as_ref().map(|_| 0);
+                for (node, d) in stack.drain(stack.len() - count..) {
+                    if matches!(node.node(), Node::Null)
+                        || d + 1 > max
+                        || parity.is_some_and(|p| p != (d + 1) % 2)
+                    {
+                        return Err(invalid("invalid branch child"));
                     }
+                    depth = depth.max(d + 1);
+                    parity = Some((d + 1) % 2);
+                    nodes.push(node);
                 }
-                Node::Branch {
-                    children: Box::new(std::array::from_fn(|_| None)),
-                    value,
-                }
+                // Children were visited last-to-first by the post-order stack.
+                nodes.reverse();
+                Ok((
+                    Self::Branch {
+                        children: Children {
+                            bitmap,
+                            nodes: nodes.into_boxed_slice(),
+                        },
+                        value: v,
+                    },
+                    depth,
+                ))
             }
-            tag => {
-                return Err(TrieError::InvalidState(format!("invalid node tag: {tag}")));
-            }
-        };
-        decoded.push(Decoded { hash, node, parent });
-    }
-    while let Some(Decoded { hash, node, parent }) = decoded.pop() {
-        // Cached subtrees are skipped by the hasher, so an unhashed child
-        // under a cached parent must still be rejected at this boundary.
-        let mixed = match &node {
-            Node::Extension { child, .. } => child.hash().is_none(),
-            Node::Branch { children, .. } => {
-                children.iter().flatten().any(|c| c.hash().is_none())
-            }
-            _ => false,
-        };
-        let handle = match hash {
-            Some(_) if mixed => {
-                return Err(TrieError::InvalidState(
-                    "MPT cache: unhashed (InMemory) child under a Cached parent".into(),
-                ));
-            }
-            Some(hash) => NodeHandle::Cached(hash, Box::new(node)),
-            None => NodeHandle::InMemory(Box::new(node)),
-        };
-        let Some((index, slot)) = parent else {
-            return Ok(handle);
-        };
-        match &mut decoded[index].node {
-            Node::Extension { child, .. } => *child = handle,
-            Node::Branch { children, .. } => children[slot] = Some(handle),
-            _ => unreachable!("only extensions and branches schedule children"),
+            _ => Err(invalid("unknown MPT node")),
         }
     }
-    unreachable!("the parser always schedules a root")
+    fn validate_root(depth: &usize) -> bool {
+        depth.is_multiple_of(2)
+    }
 }
-
-fn validate_cached_handle(handle: &NodeHandle, is_root: bool) -> Result<[u8; 32]> {
-    let mut pending = vec![(handle, is_root)];
-    let mut root_hash = [0u8; 32];
-    while let Some((handle, is_root)) = pending.pop() {
-        let (stored, node) = match handle {
-            NodeHandle::InMemory(node) if is_root && **node == Node::Null => continue,
-            NodeHandle::InMemory(_) => {
-                return Err(TrieError::InvalidState(
-                    "MPT cache contains an unhashed node".into(),
-                ));
+impl CacheNode for SmtNode {
+    const MAGIC: [u8; 5] = *b"SMTC\x04";
+    const NAME: &'static str = "smt";
+    // Starting bit offset and representative leaf. Children already proved
+    // that all their leaves agree on earlier ancestor bits.
+    type Summary = (usize, [u8; 32]);
+    fn variable_bytes(&self) -> usize {
+        match self {
+            Self::Empty => 0,
+            Self::Leaf { path, value, .. } => path.as_packed().len() + value.len(),
+            Self::Internal { path, .. } => path.as_packed().len(),
+        }
+    }
+    fn write_body(&self, w: &mut impl Write) -> Result<()> {
+        match self {
+            Self::Empty => w.write_all(&[0])?,
+            Self::Leaf {
+                path,
+                key_hash,
+                value: v,
+            } => {
+                w.write_all(&[1])?;
+                packed(w, path.len(), path.as_packed())?;
+                w.write_all(key_hash)?;
+                value(w, v)?
             }
-            NodeHandle::Cached(stored, node) => (stored, node),
+            Self::Internal { path, .. } => {
+                w.write_all(&[2])?;
+                packed(w, path.len(), path.as_packed())?
+            }
         };
-        let stored: [u8; 32] = stored.as_slice().try_into().map_err(|_| {
-            TrieError::InvalidState("MPT cache has a bad hash length".into())
-        })?;
-        match node.as_ref() {
-            Node::Null => {
-                return Err(TrieError::InvalidState(if is_root {
-                    "MPT cache contains a non-canonical cached empty root".into()
-                } else {
-                    "MPT cache contains a nested Null node".into()
-                }));
+        Ok(())
+    }
+    fn read_body(
+        tag: u8,
+        r: &mut Input<impl Read>,
+        stack: &mut Vec<(Handle<Self>, Self::Summary)>,
+    ) -> Result<(Self, Self::Summary)> {
+        if tag == 0 {
+            return Ok((Self::Empty, (0, [0; 32])));
+        }
+        let (len, bytes) = r.packed(256, 8)?;
+        let path = BitPath::from_packed(&bytes, len);
+        match tag {
+            1 => {
+                let key = r.fixed()?;
+                let start = 256 - len;
+                if !BitPath::from_hash(&key).starts_with_from(start, &path) {
+                    return Err(invalid("SMT leaf path disagrees with key"));
+                }
+                Ok((
+                    Self::Leaf {
+                        path,
+                        key_hash: key,
+                        value: r.value()?,
+                    },
+                    (start, key),
+                ))
             }
-            Node::Leaf { .. } => {}
-            Node::Extension { child, .. } => {
-                if !matches!(child, NodeHandle::Cached(_, child) if matches!(child.as_ref(), Node::Branch { .. }))
+            2 => {
+                let (left, (ld, lk)) =
+                    stack.pop().ok_or_else(|| invalid("missing left child"))?;
+                let (right, (rd, rk)) =
+                    stack.pop().ok_or_else(|| invalid("missing right child"))?;
+                if ld != rd || ld <= len {
+                    return Err(invalid("inconsistent SMT depths"));
+                }
+                let start = ld - len - 1;
+                let l = BitPath::from_hash(&lk);
+                let rr = BitPath::from_hash(&rk);
+                if l.common_prefix(&rr) != ld - 1
+                    || l.bit_at(ld - 1) != 0
+                    || !l.starts_with_from(start, &path)
                 {
-                    return Err(TrieError::InvalidState(
-                        "MPT cache contains a non-canonical extension child".into(),
-                    ));
+                    return Err(invalid("SMT child outside parent path"));
                 }
-                pending.push((child, false));
+                Ok((Self::Internal { path, left, right }, (start, lk)))
             }
-            Node::Branch { children, value } => {
-                let count = children.iter().flatten().count();
-                if count == 0 || (count == 1 && value.is_none()) {
-                    return Err(TrieError::InvalidState(
-                        "MPT cache contains a non-canonical branch".into(),
-                    ));
+            _ => Err(invalid("unknown SMT node")),
+        }
+    }
+    fn validate_root((depth, _): &Self::Summary) -> bool {
+        *depth == 0
+    }
+}
+pub(super) fn save<N: CacheNode>(
+    path: &Path,
+    root: &Handle<N>,
+    id: Checkpoint,
+    limit: u64,
+) -> Result<()> {
+    atomic_write_file_with(path, |file| {
+        let mut out = Output {
+            writer: BufWriter::new(file),
+            hash: Keccak256::new(),
+            left: limit
+                .min(MAX_FILE)
+                .checked_sub(8)
+                .ok_or_else(|| invalid("size limit"))?,
+        };
+        out.write_all(&N::MAGIC)?;
+        out.write_all(&id.universe.to_le_bytes())?;
+        for n in [
+            id.map.map_id,
+            id.map.ns.unwrap_or_default(),
+            id.commit,
+            id.tree_root,
+        ] {
+            out.write_all(&n.to_le_bytes())?;
+        }
+        out.write_all(&root.root_hash())?;
+        let mut work = vec![(root, false)];
+        let mut count = 0;
+        let mut remaining_budget = MAX_DECODED;
+        while let Some((node, visited)) = work.pop() {
+            if visited {
+                node.node().write_body(&mut out)?;
+            } else {
+                count += 1;
+                remaining_budget = remaining_budget
+                    .checked_sub(
+                        node.node().variable_bytes()
+                            + size_of::<N>()
+                            + size_of::<N::Summary>()
+                            + 96,
+                    )
+                    .ok_or_else(|| invalid("decoded memory limit"))?;
+                if count > MAX_NODES {
+                    return Err(invalid("node limit"));
                 }
-                pending.extend(children.iter().flatten().map(|c| (c, false)));
+                work.push((node, true));
+                node.node().children(|ch| work.push((ch, false)));
             }
         }
-        let computed: [u8; 32] = Keccak256::digest(NodeCodec::encode(node)).into();
-        if stored != computed {
-            return Err(TrieError::InvalidState(
-                "MPT cache contains an incorrect cached hash".into(),
-            ));
+        out.write_all(&[END])?;
+        out.writer.write_all(&out.hash.finalize()[..8])?;
+        out.writer.flush()?;
+        Ok(())
+    })
+}
+pub(super) fn load<N: CacheNode>(path: &Path) -> Result<(Handle<N>, Checkpoint)> {
+    let file = File::open(path)?;
+    let len = file.metadata()?.len();
+    if !(8..=MAX_FILE).contains(&len) {
+        return Err(invalid("size limit"));
+    }
+    let mut r = Input {
+        reader: BufReader::new(file),
+        hash: Keccak256::new(),
+        left: len - 8,
+        budget: MAX_DECODED,
+    };
+    if r.fixed::<5>()? != N::MAGIC {
+        return Err(invalid("version"));
+    }
+    let universe = u128::from_le_bytes(r.fixed()?);
+    let map = InstanceId::new(
+        u64::from_le_bytes(r.fixed()?),
+        u64::from_le_bytes(r.fixed()?),
+    );
+    let commit = u64::from_le_bytes(r.fixed()?);
+    let tree_root = u64::from_le_bytes(r.fixed()?);
+    let expected = r.fixed::<32>()?;
+    let mut stack = Vec::new();
+    let mut count = 0;
+    loop {
+        let tag = r.u8()?;
+        if tag == END {
+            break;
         }
-        if is_root {
-            root_hash = computed;
+        // Empty/leaf records push without popping any completed children.
+        // Refuse an overfull frontier before allocating their path or value.
+        if tag <= 1 && stack.len() >= MAX_PENDING {
+            return Err(invalid("pending subtree limit"));
         }
+        count += 1;
+        if count > MAX_NODES {
+            return Err(invalid("node limit"));
+        }
+        r.reserve(size_of::<N>() + size_of::<N::Summary>() + 96)?;
+        let (node, summary) = N::read_body(tag, &mut r, &mut stack)?;
+        if stack.len() >= MAX_PENDING {
+            return Err(invalid("pending subtree limit"));
+        }
+        let node = Handle::new(node);
+        node.root_hash();
+        stack.push((node, summary));
     }
-    Ok(root_hash)
+    let (node, summary) = stack.pop().ok_or_else(|| invalid("empty checkpoint"))?;
+    if !stack.is_empty()
+        || r.left != 0
+        || !N::validate_root(&summary)
+        || node.root_hash() != expected
+    {
+        return Err(invalid("inconsistent trie root"));
+    }
+    let mut stored = [0; 8];
+    r.reader.read_exact(&mut stored)?;
+    if stored != r.hash.finalize()[..8] {
+        return Err(invalid("checksum"));
+    }
+    Ok((
+        node,
+        Checkpoint {
+            universe,
+            map,
+            commit,
+            tree_root,
+        },
+    ))
 }
 
-/// Rejects a node whose path would push the cumulative consumed-nibble
-/// count past what any organically inserted key can reach.
-fn check_nibble_budget(consumed: usize, additional: usize) -> Result<()> {
-    if consumed + additional > MAX_TOTAL_NIBBLES {
-        return Err(TrieError::InvalidState(
-            "MPT cache: cumulative path length exceeds MAX_MPT_KEY_LEN".into(),
-        ));
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::trie::{MptCalc, SmtCalc};
+
+    fn reject<N: CacheNode>(template: &[u8], records: &[u8], reason: &str) {
+        let dir = super::super::test::scratch_cache_dir();
+        let path = dir.join("index");
+        let mut wire = template[..85].to_vec();
+        wire.extend_from_slice(records);
+        wire.push(END);
+        let digest = Keccak256::digest(&wire);
+        wire.extend_from_slice(&digest[..8]);
+        std::fs::write(&path, wire).unwrap();
+        assert!(
+            load::<N>(&path)
+                .err()
+                .expect("invalid checkpoint accepted")
+                .to_string()
+                .contains(reason)
+        );
     }
-    Ok(())
-}
 
-// =========================================================================
-// Primitive helpers
-// =========================================================================
-
-fn write_nibbles(buf: &mut Vec<u8>, nibbles: &Nibbles) {
-    let raw = nibbles.as_slice();
-    write_varint(buf, raw.len());
-    buf.extend_from_slice(raw);
-}
-
-fn read_nibbles(data: &[u8], cursor: &mut usize) -> Result<Nibbles> {
-    let len = read_varint(data, cursor)?;
-    let end = checked_end(*cursor, len, data.len(), "nibbles")?;
-    let raw = data[*cursor..end].to_vec();
-    *cursor = end;
-    // Branch children are indexed by nibble value — an out-of-range
-    // nibble from a malformed file would panic on `children[idx]`.
-    if raw.iter().any(|&n| n > 0x0F) {
-        return Err(TrieError::InvalidState(
-            "MPT cache: nibble value out of range".into(),
-        ));
+    #[test]
+    fn validates_untrusted_postorder_shapes_before_building_parents() {
+        let dir = super::super::test::scratch_cache_dir();
+        MptCalc::new().save_cache(&dir, 1, 0).unwrap();
+        SmtCalc::new().save_cache(&dir, 1, 0).unwrap();
+        let mpt = std::fs::read(dir.join("mpt_cache_1.bin")).unwrap();
+        let smt = std::fs::read(dir.join("smt_cache_1.bin")).unwrap();
+        reject::<Node>(&mpt, &[1, 1, 0, 0x0f], "padding");
+        reject::<Node>(&mpt, &[1, 0, 0, 255, 255, 255, 255], "value length");
+        reject::<Node>(
+            &mpt,
+            &[1, 0, 0, 0, 0, 0, 0, 2, 1, 0, 0],
+            "noncanonical extension",
+        );
+        reject::<Node>(&mpt, &[3, 1, 0, 0], "invalid branch");
+        reject::<Node>(&mpt, &[1, 1, 8], "oversize path");
+        reject::<Node>(&mpt, &vec![0; MAX_PENDING + 1], "pending subtree limit");
+        let mut incoherent_leaf = vec![1, 1, 0, 128];
+        incoherent_leaf.extend([0; 32]);
+        reject::<SmtNode>(&smt, &incoherent_leaf, "disagrees with key");
+        reject::<SmtNode>(&smt, &[0, 0, 2, 0, 0], "inconsistent SMT depths");
+        // Two leaf suffixes of length 255 have compatible depths but share
+        // the same leading bit; a binary parent cannot own both.
+        let mut leaves = Vec::new();
+        for _ in 0..2 {
+            leaves.extend([1, 255, 0]);
+            leaves.extend([0; 32]);
+            leaves.extend([0; 32]);
+            leaves.extend([0; 4]);
+        }
+        leaves.extend([2, 0, 0]);
+        reject::<SmtNode>(&smt, &leaves, "outside parent path");
     }
-    Ok(Nibbles::from_nibbles_unsafe(raw))
 }
