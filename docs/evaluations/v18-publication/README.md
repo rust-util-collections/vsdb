@@ -76,3 +76,18 @@ a reason to change persistent shard routing. The CSV retains the individual
 arrival/service p99s, L0 debt, bulk row counts and RSS. On equivalent
 individual VerMap calls and precomputed batches, v4/v5 median p99 changes
 also stayed inside control variation.
+
+### Default 16-shard namespace
+
+A separate repeat placed the DagMap parent in the actual default namespace.
+The native before/after p99 was **13.30 / 9.17 µs**, a median within-pair
+gain of **31.05%** (28.27–36.55%; A/A 7.41%). Against v18 on MMDB v4,
+the paired gain was 33.38% (29.59–36.42%; A/A 7.68%). All five pairs
+favored the new write shape in both comparisons. The two diagnostic runs
+again counted two versus one engine submission per child. With these
+sequentially issued IDs, every 10,000-child run advanced the global prefix
+by 160,000. Preserving co-location consumes prefix space; the current
+allocator still met the observed child-operation improvement without a new
+reservation format. Rebuild the same five binaries with the current driver
+and pass `--default-dag` to both the runner and summarizer to reproduce
+this repeat. [Default-namespace runs](results/default-namespace/trials.csv) · [Matched summary](results/default-namespace/summary.csv) · [Binary digests](results/default-namespace/host.txt)

@@ -42,11 +42,15 @@ fn rss_kib() -> u64 {
 }
 
 fn publication(kind: &str, n: u64, seed: u64) {
-    let ns = Namespace::create_with(NamespaceOpts {
-        shards: 1,
-        ..Default::default()
-    })
-    .unwrap();
+    let ns = if kind == "dag16" {
+        Namespace::default_ns()
+    } else {
+        Namespace::create_with(NamespaceOpts {
+            shards: 1,
+            ..Default::default()
+        })
+        .unwrap()
+    };
     let mut dag = DagMapRaw::new_in(&ns, None);
     let mut m = VerMap::<u64, u64>::new_in(&ns);
     let branch = m.main_branch();
@@ -63,7 +67,7 @@ fn publication(kind: &str, n: u64, seed: u64) {
         let b = a + 64;
         let clock = Instant::now();
         match kind {
-            "dag" => last = Some(black_box(DagMapRaw::new(Some(&mut dag)))),
+            "dag" | "dag16" => last = Some(black_box(DagMapRaw::new(Some(&mut dag)))),
             "individual" => {
                 for key in [a, b, a, b] {
                     let k = key as u64;
@@ -97,8 +101,12 @@ fn publication(kind: &str, n: u64, seed: u64) {
         expected[b] += 2;
     }
     let elapsed = start.elapsed();
+    if kind == "dag16" {
+        let last_id = last.as_ref().unwrap().instance_id().map_id;
+        print!("prefix_advance={} ", last_id - dag.instance_id().map_id);
+    }
     let issued = submissions();
-    if kind == "dag" {
+    if matches!(kind, "dag" | "dag16") {
         assert!(dag.child_id(last.as_ref().unwrap()).is_some());
         assert_eq!(dag.child_ids().len(), n as usize);
     } else {

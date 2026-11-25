@@ -17,6 +17,7 @@ parser.add_argument("--scratch", required=True, type=Path)
 parser.add_argument("--lock", required=True, type=Path)
 parser.add_argument("--cpus", default="4-7")
 parser.add_argument("--rate", type=int, default=3000)
+parser.add_argument("--default-dag", action="store_true", help="repeat only the child comparisons in the default 16-shard namespace")
 args = parser.parse_args()
 # Each tuple selects the control executable and operation, then the comparison.
 cases = {
@@ -30,9 +31,14 @@ cases = {
     "v4-hot": ("v4", "mixed-hot", "v5-pinned", "mixed-hot"),
     "v4-split": ("v4", "mixed-split", "v5-pinned", "mixed-split"),
 }
+if args.default_dag:
+    cases = {
+        "default-child": ("v5-previous", "dag16", "v5-pinned", "dag16"),
+        "default-v4-child": ("v4", "dag16", "v5-pinned", "dag16"),
+    }
 columns = ("case round pair order arm binary algorithm ops seed rate p99_ns p50_ns service_ns "
            "bulk_batches bulk_rows elapsed_ns pending_half pending_end bulk_half bulk_end "
-           "before_l0 after_l0 submissions counted rss_kib").split()
+           "before_l0 after_l0 submissions counted rss_kib prefix_advance").split()
 args.scratch.mkdir(parents=True, exist_ok=True)
 args.output.mkdir(parents=True, exist_ok=True)
 def digest(path):
@@ -77,8 +83,10 @@ with args.lock.open("a") as lock, (args.output/"trials.csv").open("x") as f:
                     observe(arm,spec,10000,20261126+iteration,case=name,round=iteration,pair=pair,order=order)
             finally:fcntl.flock(lock,fcntl.LOCK_UN)
         print("completed round",iteration,flush=True)
-    for label, mode in [("diag-previous","dag"),("diag-pinned","dag"),("diag-pinned","individual"),
-                        ("diag-pinned","overlay"),("diag-pinned","batch")]:
+    diagnostics = ([("diag-previous","dag16"),("diag-pinned","dag16")] if args.default_dag else
+                   [("diag-previous","dag"),("diag-pinned","dag"),("diag-pinned","individual"),
+                    ("diag-pinned","overlay"),("diag-pinned","batch")])
+    for label, mode in diagnostics:
         fcntl.flock(lock,fcntl.LOCK_EX)
         try:observe("diagnostic",(label,mode),1000,20261127,case="submissions",round=0,pair="diagnostic",order=1)
         finally:fcntl.flock(lock,fcntl.LOCK_UN)

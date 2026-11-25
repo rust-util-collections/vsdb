@@ -1,0 +1,3 @@
+case,control_p99_us,compared_p99_us,paired_gain_pct,min_gain_pct,max_gain_pct,max_aa_pct,favorable_pairs,qualified_pairs,control_median_ops_s,compared_median_ops_s
+default-child,13.3,9.17,31.053,28.273,36.553,7.407,5,5,110240,169293
+default-v4-child,13.48,9.13,33.383,29.59,36.421,7.682,5,5,109854,168970
