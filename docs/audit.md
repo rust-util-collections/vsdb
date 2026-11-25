@@ -43,14 +43,6 @@
 
 ---
 
-### [MEDIUM] migration: slotdex and dagmap converters panic via Namespace::default_ns when opening default engine fails
-- **Where**: `migration/src/slotdex.rs` (`convert`), `migration/src/dagmap.rs` (`migrate_with`)
-- **What**: Both functions resolve `id.ns == None` via `Namespace::default_ns()` (`try_default_ns().expect(...)`) instead of `Namespace::open(DEFAULT_NS_ID)?` before checking `ns.is_read_only()`.
-- **Why**: Calling `slotdex::migrate_v17` or `dagmap::migrate_v17` in a read-only namespace-only universe (where `{base}/mmdb` is absent) or against an unmigrated/locked default base panics instead of returning `Err(VsdbError)` like `migrate_basic`, `vecdex::migrate_v17`, and `versioned::migrate_v17`.
-- **Suggested fix**: Replace `match id.ns { None => Namespace::default_ns(), ... }` with `let ns = Namespace::open(id.ns.unwrap_or_default())?;`. Add read-only / invalid-default tests in `migration/tests/`. No migration format impact.
-
----
-
 ### [MEDIUM] migration: composite handles serialized via serde outside __instance_meta__ lack byte-slice converters
 - **Where**: `migration/src/lib.rs` (`basic_handle`), `migration/src/{slotdex,vecdex,versioned,dagmap}.rs`
 - **What**: Applications that persisted v17 composite handles (`VerMap`, `SlotDex`, `VecDex` / `VecDexDyn`, `PersistentBTree`, `DagMap*`) via `postcard` in `__CUSTOM__/` or inside parent collection values without `save_meta()` have no public converter: `basic_handle` supports only `Mapx*`/`Orphan`, while `*::migrate_v17` reads `__instance_meta__/{id:016x}` (`Io(NotFound)`) and keeps v17 frame decoders private.

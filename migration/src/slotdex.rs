@@ -36,10 +36,7 @@ fn convert<S: SlotType, K: KeyEnDeOrdered>(
     requested: Option<u32>,
 ) -> Result<SlotDex<S, K>> {
     let id = InstanceId::new(id.map_id, id.ns.unwrap_or_default());
-    let ns = match id.ns {
-        None => Namespace::default_ns(),
-        Some(n) => Namespace::open(n)?,
-    };
+    let ns = Namespace::open(id.ns.unwrap_or_default())?;
     if ns.is_read_only() {
         return Err(VsdbError::ReadOnly {
             operation: "SlotDex migration",

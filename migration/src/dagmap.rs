@@ -522,10 +522,7 @@ fn migrate_with<T: DeserializeOwned>(
     restore: impl Fn(InstanceId) -> Result<T>,
 ) -> Result<(T, Remap)> {
     let root = InstanceId::new(root.map_id, root.ns.unwrap_or_default());
-    let ns = match root.ns {
-        Some(n) => Namespace::open(n)?,
-        None => Namespace::default_ns(),
-    };
+    let ns = Namespace::open(root.ns.unwrap_or_default())?;
     if ns.is_read_only() {
         return Err(VsdbError::ReadOnly {
             operation: "DAG migration",

@@ -362,3 +362,38 @@ fn interrupted_v17_empty_mmdb_dirs_migrate_and_resume_in_v18() {
     fs::remove_dir_all(&root).unwrap();
     assert!(probe.status.success(), "{probe:?}");
 }
+
+#[test]
+fn slotdex_and_dagmap_converters_return_err_without_default_engine() {
+    if let Some(mode) = std::env::var_os("VSDB_NO_DEFAULT_NS_PROBE") {
+        let dir = PathBuf::from(std::env::var_os("VSDB_NO_DEFAULT_NS_DIR").unwrap());
+        if mode == "seed" {
+            vsdb_configure(VsdbOptions::new(&dir)).unwrap();
+            let _ns = vsdb::Namespace::create().unwrap();
+            return;
+        }
+        vsdb_configure(VsdbOptions::read_only(&dir)).unwrap();
+        assert!(vsdb_migrate::slotdex::migrate_v17::<u64, u64>(40_960_000).is_err());
+        assert!(vsdb_migrate::dagmap::migrate_v17(40_960_000).is_err());
+        return;
+    }
+
+    let root = std::env::temp_dir().join(format!(
+        "vsdb-no-default-migrate-{}",
+        rand::random::<u128>()
+    ));
+    for mode in ["seed", "ro"] {
+        let out = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "slotdex_and_dagmap_converters_return_err_without_default_engine",
+                "--nocapture",
+            ])
+            .env("VSDB_NO_DEFAULT_NS_PROBE", mode)
+            .env("VSDB_NO_DEFAULT_NS_DIR", &root)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{mode}: {out:?}");
+    }
+    fs::remove_dir_all(&root).unwrap();
+}
