@@ -1,20 +1,13 @@
 //! Lookups accept borrowed key forms (`&str` for `String`, `&[u8]` for
 //! `Vec<u8>`), like `HashMap::get` / `BTreeMap::get`.
 
-use vsdb::{Mapx, MapxOrd, VerMap, VsdbOptions, vsdb_configure};
+mod common;
 
-fn setup() {
-    use parking_lot::Once;
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        let dir = format!("/tmp/vsdb_testing/borrowed_keys_{}", rand::random::<u64>());
-        vsdb_configure(VsdbOptions::new(dir)).unwrap();
-    });
-}
+use vsdb::{Mapx, MapxOrd, VerMap};
 
 #[test]
 fn mapx_accepts_str_and_byte_slices() {
-    setup();
+    common::setup();
     let mut m: Mapx<String, u32> = Mapx::new();
     m.insert(&"alpha".to_string(), &1);
     m.insert(&"beta".to_string(), &2);
@@ -34,7 +27,7 @@ fn mapx_accepts_str_and_byte_slices() {
 
 #[test]
 fn mapx_array_slice_queries_use_array_encoding() {
-    setup();
+    common::setup();
     let mut map: Mapx<[u8; 2], u32> = Mapx::new();
     let key = [1, 0];
     map.insert(&key, &7);
@@ -49,7 +42,7 @@ fn mapx_array_slice_queries_use_array_encoding() {
 
 #[test]
 fn mapx_wrong_length_slices_cannot_address_array_keys() {
-    setup();
+    common::setup();
     let mut map: Mapx<[u8; 2], u32> = Mapx::new();
     // Postcard encodes the slice [0] as [1, 0], the stored array key.
     let key = [1, 0];
@@ -65,7 +58,7 @@ fn mapx_wrong_length_slices_cannot_address_array_keys() {
 
 #[test]
 fn mapx_empty_array_slice_queries() {
-    setup();
+    common::setup();
     let mut map: Mapx<[u8; 0], u32> = Mapx::new();
     map.insert(&[], &7);
     assert_eq!(map.get(&[][..]), Some(7));
@@ -80,7 +73,7 @@ fn mapx_empty_array_slice_queries() {
 
 #[test]
 fn mapx_vec_and_box_slice_queries_keep_length_prefixes() {
-    setup();
+    common::setup();
     let mut vec_map: Mapx<Vec<u8>, u32> = Mapx::new();
     let mut box_map: Mapx<Box<[u8]>, u32> = Mapx::new();
     for key in [vec![], vec![0], vec![1, 0], vec![255; 128]] {
@@ -104,7 +97,7 @@ fn mapx_vec_and_box_slice_queries_keep_length_prefixes() {
 
 #[test]
 fn mapx_ord_accepts_str_for_point_and_neighbor_lookups() {
-    setup();
+    common::setup();
     let mut m: MapxOrd<String, u32> = MapxOrd::new();
     for (i, k) in ["a", "c", "e"].into_iter().enumerate() {
         m.insert(&k.to_string(), &(i as u32));
@@ -118,7 +111,7 @@ fn mapx_ord_accepts_str_for_point_and_neighbor_lookups() {
 
 #[test]
 fn vermap_accepts_str_keys() {
-    setup();
+    common::setup();
     let mut m: VerMap<String, u32> = VerMap::new();
     let main = m.main_branch();
     m.insert(main, &"k".to_string(), &1).unwrap();

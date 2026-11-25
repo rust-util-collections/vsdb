@@ -1,23 +1,11 @@
-use serde::{Deserialize, Serialize};
-use vsdb::{VsdbOptions, basic::orphan::Orphan, vsdb_configure};
+mod common;
 
-/// One process-wide base-dir pick: `vsdb_configure` is one-shot, so the
-/// first test configures and the rest reuse that dir (data stays disjoint
-/// via globally-unique prefixes).
-fn setup() {
-    use parking_lot::Once;
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        let _ = vsdb_configure(VsdbOptions::new(format!(
-            "/tmp/vsdb_testing/{}",
-            rand::random::<u64>()
-        )));
-    });
-}
+use serde::{Deserialize, Serialize};
+use vsdb::basic::orphan::Orphan;
 
 #[test]
 fn basic_cases() {
-    setup();
+    common::setup();
 
     assert_eq!(Orphan::new(0), 0);
     assert!(Orphan::new(111) > 0);
@@ -88,7 +76,7 @@ fn basic_cases() {
 
 #[test]
 fn custom_types() {
-    setup();
+    common::setup();
     #[derive(
         Default, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize,
     )]

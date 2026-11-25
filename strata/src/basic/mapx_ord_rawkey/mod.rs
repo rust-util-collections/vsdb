@@ -14,7 +14,7 @@
 //! use std::fs;
 //!
 //! // It's recommended to use a temporary directory for testing
-//! let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
+//! let dir = std::env::temp_dir().join(format!("vsdb-{}", rand::random::<u128>()));
 //! vsdb_configure(VsdbOptions::new(&dir)).unwrap();
 //!
 //! let mut m: MapxOrdRawKey<String> = MapxOrdRawKey::new();

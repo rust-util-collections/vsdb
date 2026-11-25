@@ -1,6 +1,7 @@
-use parking_lot::Once;
+mod common;
+
 use serde::{Deserialize, Serialize};
-use vsdb::{Mapx, MapxOrd, VsdbOptions, vsdb_configure};
+use vsdb::{Mapx, MapxOrd};
 
 mod accounting {
     #[derive(super::Serialize, super::Deserialize)]
@@ -22,20 +23,9 @@ mod access {
     pub struct Key(pub u64);
 }
 
-fn setup() {
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        vsdb_configure(VsdbOptions::new(format!(
-            "/tmp/vsdb_testing/typed-identity-{}",
-            rand::random::<u128>()
-        )))
-        .unwrap();
-    });
-}
-
 #[test]
 fn same_named_value_cannot_restore_or_rewrite_another_schema() {
-    setup();
+    common::setup();
     let mut original = MapxOrd::<u64, accounting::Record>::new();
     original.insert(&7, &accounting::Record { amount: 1 });
     let id = original.save_meta().unwrap();
@@ -54,7 +44,7 @@ fn same_named_value_cannot_restore_or_rewrite_another_schema() {
 
 #[test]
 fn same_named_keys_and_nested_values_keep_their_identity() {
-    setup();
+    common::setup();
     let mut original = Mapx::<accounting::Key, Vec<Option<accounting::Record>>>::new();
     original.insert(
         &accounting::Key(7),
@@ -88,7 +78,7 @@ fn same_named_keys_and_nested_values_keep_their_identity() {
 
 #[test]
 fn handles_nested_inside_values_reject_the_wrong_type() {
-    setup();
+    common::setup();
     let mut inner = MapxOrd::<u64, accounting::Record>::new();
     inner.insert(&7, &accounting::Record { amount: 1 });
     let mut outer = Mapx::<u64, MapxOrd<u64, accounting::Record>>::new();

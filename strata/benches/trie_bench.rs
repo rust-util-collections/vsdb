@@ -1,3 +1,6 @@
+#[path = "../tests/common/scratch.rs"]
+mod scratch;
+
 use criterion::{BenchmarkId, Criterion, criterion_group};
 use std::hint::black_box;
 use vsdb::trie::{MptCalc, SmtCalc, VerMapWithProof};
@@ -349,7 +352,7 @@ mod legacy_budget;
 // dynamic budget must be configured before the first engine touch.
 fn main() {
     // Isolate from $HOME/.vsdb before the first engine touch.
-    let dir = format!("/tmp/vsdb_bench_trie_{}", rand::random::<u128>());
+    let dir = scratch::database_dir();
     let mut opts = vsdb::VsdbOptions::new(&dir);
     if let Some(mb) = legacy_budget::budget_mb() {
         opts = opts.with_mem_budget_mb(mb);

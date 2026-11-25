@@ -1,12 +1,10 @@
-use vsdb::{Mapx, MapxOrd, MapxOrdRawKey, VsdbOptions, vsdb_configure};
+mod common;
+
+use vsdb::{Mapx, MapxOrd, MapxOrdRawKey};
 
 #[test]
 fn test_batch_basic() {
-    let dir = format!(
-        "/tmp/vsdb_testing/batch_api_test_{}",
-        rand::random::<u128>()
-    );
-    vsdb_configure(VsdbOptions::new(&dir)).unwrap();
+    common::setup();
 
     let mut map = Mapx::new();
 

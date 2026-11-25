@@ -1,6 +1,9 @@
 //! Golden metadata and raw rows produced by v17.0.21 (da9a325) for a
 //! SlotDex64<u64> with capacity 3. Run in an isolated universe so the
 //! original captured prefix can be retained verbatim.
+#[path = "common/scratch.rs"]
+mod scratch;
+
 use vsdb::{SlotDex64, slotdex::Order};
 use vsdb_core::MapxRaw;
 use vsdb_migrate::{
@@ -12,8 +15,7 @@ type Rows = Vec<(Vec<u8>, Vec<u8>)>;
 
 #[test]
 fn recovers_and_upgrades_v17_in_place() {
-    let dir =
-        std::env::temp_dir().join(format!("vsdb-slotdex-migration-{}", rand::random::<u128>()));
+    let dir = scratch::database_dir();
     vsdb::vsdb_configure(vsdb::VsdbOptions::new(dir)).unwrap();
     // Reserve the fixture prefix as a newly issued map in this empty universe.
     let issued = MapxRaw::new().instance_id();

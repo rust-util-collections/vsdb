@@ -3,6 +3,9 @@
 //! Single `#[test]`: sub-scenarios share the process-global registry
 //! and base-dir freeze, so they run sequentially inside one body.
 
+#[path = "common/scratch.rs"]
+mod scratch;
+
 use vsdb::{
     DEFAULT_NS_ID, HnswConfig, MapxOrd, MetricKind, Namespace, Orphan, SlotDex,
     VecDexDyn, VerMap, VsdbOptions, basic::mapx::Mapx, vsdb_configure,
@@ -10,7 +13,7 @@ use vsdb::{
 
 #[test]
 fn composites_in_namespaces() {
-    let dir = format!("/tmp/vsdb_testing/ns_strata_{}", rand::random::<u128>());
+    let dir = scratch::database_dir();
     vsdb_configure(VsdbOptions::new(&dir)).unwrap();
 
     let ns = Namespace::create().unwrap();

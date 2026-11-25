@@ -1,3 +1,6 @@
+#[path = "../tests/common/scratch.rs"]
+mod scratch;
+
 use criterion::{BenchmarkId, Criterion, criterion_group};
 use rand::random;
 use std::{hint::black_box, time::Duration};
@@ -185,7 +188,7 @@ mod legacy_budget;
 // dynamic budget must be configured before the first engine touch.
 fn main() {
     // Isolate from $HOME/.vsdb before the first engine touch.
-    let dir = format!("/tmp/vsdb_bench_vecdex_{}", rand::random::<u128>());
+    let dir = scratch::database_dir();
     let mut opts = vsdb::VsdbOptions::new(&dir);
     if let Some(mb) = legacy_budget::budget_mb() {
         opts = opts.with_mem_budget_mb(mb);

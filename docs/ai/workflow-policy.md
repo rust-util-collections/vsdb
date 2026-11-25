@@ -81,8 +81,7 @@ One issue / root cause / behavior change → one commit.
   `VSDB_BASE_DIR="$(mktemp -d /tmp/vsdb-test.XXXXXX)"` in the parent shell;
   remove only that directory afterward. Do not set the variable inside a test.
   `make test`, `make all`, and `make bench` use their own per-invocation scratch
-  `VSDB_BASE_DIR` and remove only that directory; they do not delete
-  `$HOME/.vsdb`, `/tmp/vsdb_testing`, or caller-provided data.
+  root for their database and temporary files. Cleanup removes only that root.
 - Storage-failure and restart regressions use focused test doubles or isolated
   child-process fixtures with invocation-owned temporary data. Describe the
   exact database operation and expected recovery result before adding a fixture.

@@ -591,7 +591,7 @@ fn tree_runtime(
 /// use vsdb::{VsdbOptions, vsdb_configure};
 /// use std::fs;
 ///
-/// let dir = format!("/tmp/vsdb_testing/{}", rand::random::<u128>());
+/// let dir = std::env::temp_dir().join(format!("vsdb-{}", rand::random::<u128>()));
 /// vsdb_configure(VsdbOptions::new(&dir)).unwrap();
 ///
 /// let mut tree = PersistentBTree::new();

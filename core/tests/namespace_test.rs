@@ -5,6 +5,9 @@
 //! sub-scenarios run sequentially inside one body (same pattern as the
 //! other integration tests).
 
+#[path = "common/scratch.rs"]
+mod scratch;
+
 use std::{fs, path::PathBuf};
 use vsdb_core::{
     DEFAULT_NS_ID, InstanceId, Namespace, NamespaceOpts, basic::mapx_raw::MapxRaw,
@@ -12,7 +15,7 @@ use vsdb_core::{
 
 #[test]
 fn namespace_lifecycle() {
-    let dir = format!("/tmp/vsdb_testing/ns_lifecycle_{}", rand::random::<u128>());
+    let dir = scratch::database_dir();
     vsdb_core::vsdb_configure(vsdb_core::VsdbOptions::new(&dir)).unwrap();
 
     // ---- default namespace: fixed id, zero ceremony ----
@@ -175,7 +178,7 @@ fn namespace_lifecycle() {
     // Explicit-path validation: overlapping the base dir is rejected.
     assert!(
         Namespace::create_with(NamespaceOpts {
-            path: Some(PathBuf::from(&dir)),
+            path: Some(dir.clone()),
             ..Default::default()
         })
         .is_err()
@@ -191,12 +194,12 @@ fn namespace_lifecycle() {
 
     // Failed-create, pre-registry path: a FILE at the root path fails
     // the adoptable check before anything is persisted.
-    let blocker = format!("{dir}_blocker");
+    let blocker = dir.with_extension("blocker");
     fs::write(&blocker, b"x").unwrap();
     let before: Vec<_> = Namespace::list().unwrap().iter().map(|i| i.id).collect();
     assert!(
         Namespace::create_with(NamespaceOpts {
-            path: Some(PathBuf::from(&blocker)),
+            path: Some(blocker.clone()),
             ..Default::default()
         })
         .is_err()
@@ -213,13 +216,13 @@ fn namespace_lifecycle() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let ro_parent = format!("{dir}_ro_parent");
+        let ro_parent = dir.with_extension("ro_parent");
         fs::create_dir_all(&ro_parent).unwrap();
         fs::set_permissions(&ro_parent, fs::Permissions::from_mode(0o555)).unwrap();
-        let target = format!("{ro_parent}/ns_root");
+        let target = ro_parent.join("ns_root");
         let before: Vec<_> = Namespace::list().unwrap().iter().map(|i| i.id).collect();
         let attempt = Namespace::create_with(NamespaceOpts {
-            path: Some(PathBuf::from(&target)),
+            path: Some(target.clone()),
             shards: 1,
             ..Default::default()
         });
@@ -229,11 +232,11 @@ fn namespace_lifecycle() {
             let after: Vec<_> =
                 Namespace::list().unwrap().iter().map(|i| i.id).collect();
             assert_eq!(before, after, "failed create must roll back");
-            assert!(!PathBuf::from(&target).exists(), "root left clean");
+            assert!(!target.exists(), "root left clean");
             // Retry succeeds once the parent is writable again.
             fs::set_permissions(&ro_parent, fs::Permissions::from_mode(0o755)).unwrap();
             let retried = Namespace::create_with(NamespaceOpts {
-                path: Some(PathBuf::from(&target)),
+                path: Some(target.clone()),
                 shards: 1,
                 ..Default::default()
             })
@@ -247,20 +250,20 @@ fn namespace_lifecycle() {
     // Adopting an existing non-empty dir as an explicit root is refused
     // (foreign prefixes have unknown provenance; destroy would take the
     // dir's other contents with it).
-    let occupied = format!("{dir}_occupied");
-    fs::create_dir_all(format!("{occupied}/stuff")).unwrap();
+    let occupied = dir.with_extension("occupied");
+    fs::create_dir_all(occupied.join("stuff")).unwrap();
     assert!(
         Namespace::create_with(NamespaceOpts {
-            path: Some(PathBuf::from(&occupied)),
+            path: Some(occupied.clone()),
             ..Default::default()
         })
         .is_err()
     );
     // An existing but EMPTY dir is fine (e.g. a fresh mount point).
-    let empty_mnt = format!("{dir}_mnt");
+    let empty_mnt = dir.with_extension("mnt");
     fs::create_dir_all(&empty_mnt).unwrap();
     let mnt_ns = Namespace::create_with(NamespaceOpts {
-        path: Some(PathBuf::from(&empty_mnt)),
+        path: Some(empty_mnt.clone()),
         shards: 1,
         ..Default::default()
     })
@@ -269,7 +272,7 @@ fn namespace_lifecycle() {
     // Paths containing `..` are rejected outright.
     assert!(
         Namespace::create_with(NamespaceOpts {
-            path: Some(PathBuf::from(format!("{empty_mnt}/../sneaky"))),
+            path: Some(empty_mnt.join("../sneaky")),
             ..Default::default()
         })
         .is_err()
@@ -416,11 +419,7 @@ fn namespace_lifecycle() {
     let d = expect_refused(Namespace::default_ns().close());
     assert_eq!(d.id(), DEFAULT_NS_ID);
 
-    assert!(
-        !PathBuf::from(&dir)
-            .join("__SYSTEM__/__namespace_state__")
-            .exists()
-    );
+    assert!(!dir.join("__SYSTEM__/__namespace_state__").exists());
 
     // ---- relocate refuses an unpopulated target ----
     // (write → close → relocate-to-empty-dir must FAIL: repointing the
@@ -440,17 +439,17 @@ fn namespace_lifecycle() {
     drop((rm, r));
     Namespace::close_by_id(rid).unwrap();
 
-    let new_root = format!("{dir}_relocated");
+    let new_root = dir.with_extension("relocated");
     fs::create_dir_all(&new_root).unwrap();
     // Empty target: refused (the data has not been moved).
     assert!(Namespace::relocate(rid, &new_root).is_err());
     // Bare skeleton (marker + empty shard dirs, no engine anchors —
     // e.g. a provisioning script "prepared" the volume, or a copy was
     // interrupted before any shard content landed): still refused.
-    fs::create_dir_all(format!("{new_root}/__SYSTEM__")).unwrap();
-    fs::write(format!("{new_root}/__SYSTEM__/.shards_ready"), "18").unwrap();
-    fs::create_dir_all(format!("{new_root}/mmdb/shard_00")).unwrap();
-    fs::create_dir_all(format!("{new_root}/mmdb/shard_01")).unwrap();
+    fs::create_dir_all(new_root.join("__SYSTEM__")).unwrap();
+    fs::write(new_root.join("__SYSTEM__/.shards_ready"), "18").unwrap();
+    fs::create_dir_all(new_root.join("mmdb/shard_00")).unwrap();
+    fs::create_dir_all(new_root.join("mmdb/shard_01")).unwrap();
     assert!(Namespace::relocate(rid, &new_root).is_err());
     // Move the tree for real, then relocate: accepted.
     fs::remove_dir_all(&new_root).unwrap();
@@ -459,15 +458,11 @@ fn namespace_lifecycle() {
     // An established namespace must fail instead of recreating it empty.
     assert!(Namespace::open(rid).is_err());
     assert!(!old_root.exists());
-    fs::create_dir_all(format!("{new_root}/mmdb/shard_02")).unwrap();
-    fs::write(
-        format!("{new_root}/mmdb/shard_02/CURRENT"),
-        "MANIFEST-000001",
-    )
-    .unwrap();
+    fs::create_dir_all(new_root.join("mmdb/shard_02")).unwrap();
+    fs::write(new_root.join("mmdb/shard_02/CURRENT"), "MANIFEST-000001").unwrap();
     assert!(Namespace::relocate(rid, &new_root).is_err());
-    fs::remove_dir_all(format!("{new_root}/mmdb/shard_02")).unwrap();
-    let header = PathBuf::from(&new_root).join("__SYSTEM__/engine_header");
+    fs::remove_dir_all(new_root.join("mmdb/shard_02")).unwrap();
+    let header = new_root.join("__SYSTEM__/engine_header");
     let valid = fs::read(&header).unwrap();
     let mut wrong = valid.clone();
     wrong[24..32].copy_from_slice(&(rid + 1).to_le_bytes());
@@ -480,7 +475,7 @@ fn namespace_lifecycle() {
     drop(rm);
     Namespace::close_by_id(rid).unwrap();
     Namespace::destroy(rid).unwrap();
-    assert!(!PathBuf::from(&new_root).exists());
+    assert!(!new_root.exists());
 
     // Relocate verifies universe and namespace identity even for complete targets.
     let p = Namespace::create_with(NamespaceOpts {
@@ -496,14 +491,14 @@ fn namespace_lifecycle() {
     drop((pm, p));
     Namespace::close_by_id(pid).unwrap();
 
-    let p_relocated = format!("{dir}_pending_relocated");
-    let p_missing = format!("{dir}_pending_missing");
+    let p_relocated = dir.with_extension("pending_relocated");
+    let p_missing = dir.with_extension("pending_missing");
     fs::rename(&p_old, &p_relocated).unwrap();
     Namespace::relocate(pid, &p_relocated).unwrap();
 
     fs::rename(&p_relocated, &p_missing).unwrap();
     assert!(Namespace::open(pid).is_err());
-    assert!(!PathBuf::from(&p_relocated).exists());
+    assert!(!p_relocated.exists());
 
     fs::rename(&p_missing, &p_relocated).unwrap();
     let pm = MapxRaw::from_meta(pmid).unwrap();
@@ -514,6 +509,6 @@ fn namespace_lifecycle() {
 
     fs::remove_dir_all(&dir).ok();
     // Sibling scratch dirs created by the sub-scenarios above.
-    fs::remove_dir_all(format!("{dir}_mnt")).ok();
-    fs::remove_dir_all(format!("{dir}_ro_parent")).ok();
+    fs::remove_dir_all(dir.with_extension("mnt")).ok();
+    fs::remove_dir_all(dir.with_extension("ro_parent")).ok();
 }

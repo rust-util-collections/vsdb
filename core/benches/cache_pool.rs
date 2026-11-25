@@ -16,6 +16,9 @@
 //!   2. restore `block_cache: Some(pool.clone())`, run
 //!      `cargo bench -p vsdb_core --bench cache_pool -- --baseline private`
 
+#[path = "../tests/common/scratch.rs"]
+mod scratch;
+
 use criterion::{Criterion, criterion_group, criterion_main};
 use rand::RngExt;
 use std::{hint::black_box, thread, time::Duration};
@@ -32,7 +35,7 @@ const READS: usize = 8_192;
 fn setup() -> (MapxRaw, Vec<MapxRaw>) {
     // Pin the budget so cache capacity is the differentiator, not the
     // host's RAM.
-    let dir = format!("/tmp/vsdb_bench_cache_pool_{}", rand::rng().random::<u64>());
+    let dir = scratch::database_dir();
     vsdb_core::vsdb_configure(vsdb_core::VsdbOptions::new(&dir).with_mem_budget_mb(64))
         .unwrap();
 

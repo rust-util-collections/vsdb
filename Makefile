@@ -21,22 +21,26 @@ check-make-isolation:
 test:
 	@scratch=$$(mktemp -d /tmp/vsdb-test.XXXXXX) || exit 1; \
 	trap 'rm -rf "$$scratch"' EXIT; \
-	VSDB_BASE_DIR="$$scratch" cargo test --workspace --release --tests && \
-	VSDB_BASE_DIR="$$scratch" cargo test --workspace --tests && \
-	VSDB_BASE_DIR="$$scratch" cargo test --workspace --doc
+	mkdir "$$scratch/tmp" || exit 1; \
+	export TMPDIR="$$scratch/tmp" VSDB_BASE_DIR="$$scratch/universe"; \
+	cargo test --workspace --release --tests && \
+	cargo test --workspace --tests && \
+	cargo test --workspace --doc
 
 bench:
 	@scratch=$$(mktemp -d /tmp/vsdb-bench.XXXXXX) || exit 1; \
 	trap 'rm -rf "$$scratch"' EXIT; \
-	VSDB_BASE_DIR="$$scratch" cargo bench -p vsdb_core --bench basic && \
-	VSDB_BASE_DIR="$$scratch" cargo bench -p vsdb_core --bench cache_pool && \
-	VSDB_BASE_DIR="$$scratch" cargo bench -p vsdb --bench basic && \
-	VSDB_BASE_DIR="$$scratch" cargo bench -p vsdb --bench versioned && \
-	VSDB_BASE_DIR="$$scratch" cargo bench -p vsdb --bench slotdex && \
-	VSDB_BASE_DIR="$$scratch" cargo bench -p vsdb --bench slotdex_batch && \
-	VSDB_BASE_DIR="$$scratch" cargo bench -p vsdb --bench dagmap && \
-	VSDB_BASE_DIR="$$scratch" cargo bench -p vsdb --bench trie_bench && \
-	VSDB_BASE_DIR="$$scratch" cargo bench -p vsdb --bench vecdex
+	mkdir "$$scratch/tmp" || exit 1; \
+	export TMPDIR="$$scratch/tmp" VSDB_BASE_DIR="$$scratch/universe"; \
+	cargo bench -p vsdb_core --bench basic && \
+	cargo bench -p vsdb_core --bench cache_pool && \
+	cargo bench -p vsdb --bench basic && \
+	cargo bench -p vsdb --bench versioned && \
+	cargo bench -p vsdb --bench slotdex && \
+	cargo bench -p vsdb --bench slotdex_batch && \
+	cargo bench -p vsdb --bench dagmap && \
+	cargo bench -p vsdb --bench trie_bench && \
+	cargo bench -p vsdb --bench vecdex
 
 # ---- Utilities ----
 

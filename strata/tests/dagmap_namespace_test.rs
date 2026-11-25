@@ -1,11 +1,12 @@
 //! A DAG in a secondary namespace only opens its own engine.
 
-use vsdb::{DagMapRaw, Namespace, VsdbOptions, vsdb_configure, vsdb_get_base_dir};
+mod common;
+
+use vsdb::{DagMapRaw, Namespace, vsdb_get_base_dir};
 
 #[test]
 fn dagmap_in_a_namespace_leaves_the_default_engine_closed() {
-    let dir = format!("/tmp/vsdb_testing/dagmap_ns_only_{}", rand::random::<u64>());
-    vsdb_configure(VsdbOptions::new(&dir)).unwrap();
+    common::setup();
     let ns = Namespace::create().unwrap();
     let mut root = DagMapRaw::new_in(&ns, None);
     root.insert("k", "v");

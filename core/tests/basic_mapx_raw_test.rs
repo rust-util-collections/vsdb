@@ -1,14 +1,12 @@
+mod common;
+
 use std::borrow::Cow;
-use vsdb_core::{MapxRaw, VsdbOptions, vsdb_configure};
+use vsdb_core::MapxRaw;
 
 #[test]
 fn basic_cases() {
     let cnt = 200;
-    vsdb_configure(VsdbOptions::new(format!(
-        "/tmp/vsdb_testing/{}",
-        rand::random::<u64>()
-    )))
-    .unwrap();
+    common::setup();
 
     let hdr = {
         let mut hdr_i = MapxRaw::new();

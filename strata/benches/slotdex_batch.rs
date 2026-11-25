@@ -1,3 +1,6 @@
+#[path = "../tests/common/scratch.rs"]
+mod scratch;
+
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group};
 use std::{
     hint::black_box,
@@ -84,7 +87,7 @@ criterion_group!(benches, batch_growth, descending_queries);
 mod legacy_budget;
 
 fn main() {
-    let dir = format!("/tmp/vsdb_bench_slotdex_batch_{}", rand::random::<u128>());
+    let dir = scratch::database_dir();
     let mut opts = vsdb::VsdbOptions::new(&dir);
     if let Some(mb) = legacy_budget::budget_mb() {
         opts = opts.with_mem_budget_mb(mb);

@@ -1,5 +1,8 @@
 //! Time structural operations after initializing each graph. A background
 //! writer uses an unrelated prefix in the same namespace.
+#[path = "../tests/common/scratch.rs"]
+mod scratch;
+
 use criterion::{Criterion, criterion_group};
 use std::{
     hint::black_box,
@@ -65,10 +68,7 @@ fn structural(c: &mut Criterion) {
 }
 criterion_group!(benches, structural);
 fn main() {
-    let base = std::env::var_os("VSDB_BASE_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    let dir = base.join(format!("vsdb-dagmap-bench-{}", rand::random::<u128>()));
+    let dir = scratch::database_dir();
     vsdb::vsdb_configure(vsdb::VsdbOptions::new(dir)).unwrap();
     benches();
     Criterion::default().configure_from_args().final_summary();

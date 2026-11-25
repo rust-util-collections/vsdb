@@ -1,6 +1,8 @@
+mod common;
+
 use serde::{Deserialize, Serialize};
 use std::ops::Bound;
-use vsdb::{MapxOrd, ValueEnDe, VsdbOptions, vsdb_configure};
+use vsdb::{MapxOrd, ValueEnDe};
 
 #[derive(Serialize, Deserialize, Default, Debug, Eq, PartialEq, Clone)]
 struct SampleBlock {
@@ -15,24 +17,9 @@ fn gen_sample(idx: u64) -> SampleBlock {
     }
 }
 
-/// One process-wide base-dir pick: `vsdb_configure` is one-shot, so the
-/// first test configures and the rest reuse that dir (data stays disjoint
-/// via globally-unique prefixes).
-fn setup() {
-    use parking_lot::Once;
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        vsdb_configure(VsdbOptions::new(format!(
-            "/tmp/vsdb_testing/{}",
-            rand::random::<u64>()
-        )))
-        .unwrap();
-    });
-}
-
 #[test]
 fn basic_cases() {
-    setup();
+    common::setup();
     let cnt = 200;
 
     let hdr = {
@@ -98,7 +85,7 @@ fn basic_cases() {
 
 #[test]
 fn negative_int_range() {
-    setup();
+    common::setup();
     macro_rules! run {
         ($int: ty) => {
             let mut hdr = MapxOrd::<$int, $int>::new();

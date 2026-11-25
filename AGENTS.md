@@ -40,8 +40,8 @@ make bench        # criterion benches (core: basic + cache_pool; strata: basic, 
 Tests run in parallel. Use globally unique prefixes for collection isolation and race-tolerant assertions about shared state. If tests configure a base directory, do so once per binary with `parking_lot::Once`.
 
 `make test` / `make all` / `make bench` are manual/CI convenience targets. They
-run under a per-invocation scratch `VSDB_BASE_DIR` and remove only that scratch
-directory; they do not touch `$HOME/.vsdb` or caller-provided data. The agent
+keep the database and temporary files in separate directories under one
+per-invocation scratch root and remove only that root; they do not touch `$HOME/.vsdb` or caller-provided data. The agent
 still uses bare Cargo unless you explicitly ask for a make target. For an
 isolated bare-Cargo run, set
 `VSDB_BASE_DIR="$(mktemp -d /tmp/vsdb-test.XXXXXX)"` in the parent shell when
@@ -84,6 +84,6 @@ selection with `allow_implicit_invocation: false`.
 - Fallible storage APIs use `VsdbError`. Engine errors retain their source and a stable classification. Preserve documented panic behavior on infallible convenience APIs.
 - Use postcard for handle and application serialization. Keep old-format parsers and converters in the independent `vsdb_migrate` crate.
 - Serialize writes through aliases of one composite index. SlotDex detects stale writer generations. VecDex reads graph state per operation and uses snapshots for graph queries.
-- Tests run in parallel; isolation comes from globally-unique prefixes (plus `tempdir`/`/tmp/vsdb_testing` for file-level scratch); global-state assertions must be race-tolerant
+- Tests run in parallel; isolation comes from globally unique prefixes and per-invocation directories for file-level scratch; global-state assertions must be race-tolerant
 - Derive the live unsafe inventory during review. A raw or typed map `shadow()` requires exclusion of concurrent writes to the same key. Structural multi-key edits require the collection's documented writer exclusion. Mutable collection `Clone` performs a deep copy.
 - **No Co-Authored-By in commits** — never add `Co-Authored-By:` or similar trailers to commit messages; project commits are authored only by the human contributor

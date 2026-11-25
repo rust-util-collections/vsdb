@@ -1,5 +1,7 @@
+mod common;
+
 use serde::{Deserialize, Serialize};
-use vsdb::{Mapx, ValueEnDe, VsdbOptions, vsdb_configure};
+use vsdb::{Mapx, ValueEnDe};
 
 #[derive(Serialize, Deserialize, Default, Debug, Eq, PartialEq, Clone)]
 struct SampleBlock {
@@ -17,11 +19,7 @@ fn gen_sample(idx: usize) -> SampleBlock {
 #[test]
 fn basic_cases() {
     let cnt = 200;
-    vsdb_configure(VsdbOptions::new(format!(
-        "/tmp/vsdb_testing/{}",
-        rand::random::<u64>()
-    )))
-    .unwrap();
+    common::setup();
 
     let hdr = {
         let mut hdr_i = Mapx::new();

@@ -1,5 +1,8 @@
 //! The fixture contains the three v17 prefixes of four DAG nodes and the
 //! unmodified root metadata. One child masks an inherited value.
+#[path = "common/scratch.rs"]
+mod scratch;
+
 use vsdb::{DagMapRaw, Namespace, VsdbOptions, vsdb_configure};
 use vsdb_core::MapxRaw;
 use vsdb_migrate::{
@@ -19,7 +22,7 @@ struct Fixture(
 
 #[test]
 fn preserves_root_and_edges_and_reports_relocated_children() {
-    let dir = std::env::temp_dir().join(format!("vsdb-dag-migration-{}", rand::random::<u128>()));
+    let dir = scratch::database_dir();
     vsdb_configure(VsdbOptions::new(dir)).unwrap();
     let Fixture(meta, root_tokens, a_tokens, ids, components) =
         postcard::from_bytes(include_bytes!("fixtures/dagmap-v17.postcard")).unwrap();

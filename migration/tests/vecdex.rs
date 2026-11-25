@@ -1,3 +1,6 @@
+#[path = "common/scratch.rs"]
+mod scratch;
+
 use vsdb::{L2, MapxRaw, MetricKind};
 use vsdb_migrate::vecdex::{migrate_handle_v17, migrate_v17};
 #[test]
@@ -7,10 +10,7 @@ fn migrate_frozen_v17_graph_preserves_rows_ids_and_ann_results() {
     type Fixture = (Vec<u8>, Vec<(Vec<u8>, Vec<u8>)>, Vec<(u32, f32)>);
     let (meta, rows, hits): Fixture =
         postcard::from_bytes(include_bytes!("fixtures/vecdex-v17.postcard")).unwrap();
-    vsdb::vsdb_configure(vsdb::VsdbOptions::new(
-        std::env::temp_dir().join(format!("vsdb-vec-migrate-{}", rand::random::<u128>())),
-    ))
-    .unwrap();
+    vsdb::vsdb_configure(vsdb::VsdbOptions::new(scratch::database_dir())).unwrap();
     for dynamic in [false, true] {
         let mut store = MapxRaw::new();
         let id = store.instance_id();

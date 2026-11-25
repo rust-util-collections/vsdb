@@ -1,4 +1,7 @@
 //! A v17 typed root could contain saved children with a different value codec.
+#[path = "common/scratch.rs"]
+mod scratch;
+
 use vsdb::{CommitId, DagMapRawKey, InstanceId, MapxRaw, Namespace, VsdbOptions, vsdb_configure};
 use vsdb_migrate::{
     LegacyRaw,
@@ -10,10 +13,7 @@ struct Fixture(Vec<u8>, Vec<u8>, [u64; 2], Vec<(Vec<u8>, Rows)>);
 
 #[test]
 fn migrates_mixed_saved_types() {
-    vsdb_configure(VsdbOptions::new(
-        std::env::temp_dir().join(format!("vsdb-dag-typed-{}", rand::random::<u128>())),
-    ))
-    .unwrap();
+    vsdb_configure(VsdbOptions::new(scratch::database_dir())).unwrap();
     let Fixture(root_meta, child_meta, [r, c], parts) =
         postcard::from_bytes(include_bytes!("fixtures/dag-mixed-v17.postcard")).unwrap();
     let _issued = MapxRaw::new().instance_id();
