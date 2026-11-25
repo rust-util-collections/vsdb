@@ -1,6 +1,8 @@
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
+#[cfg(test)]
+mod clone_tests;
 mod mmdb;
 
 /////////////////////////////////////////////////////////////////////////////
@@ -599,29 +601,33 @@ impl Mapx {
         const CLONE_CHUNK: usize = 4096;
         const CLONE_CHUNK_BYTES: usize = 16 * 1024 * 1024;
 
-        self.try_prefix()?;
-        let mut it = self.iter();
-        // Pull the chunk's first pair before opening a batch, so an
-        // exhausted iterator ends the loop without staging an empty
-        // batch just to drop it.
-        while let Some((k, v)) = it.next() {
-            new_instance.try_prefix()?;
-            let mut batch = new_instance.batch_begin();
-            let mut entries = 1usize;
-            let mut bytes = k.len() + v.len();
-            batch.insert(&k, &v);
-            while entries < CLONE_CHUNK && bytes < CLONE_CHUNK_BYTES {
-                let Some((k, v)) = it.next() else { break };
-                entries += 1;
-                bytes += k.len() + v.len();
-                batch.insert(&k, &v);
+        let mut it = self.try_range(..)?;
+        let result = (|| {
+            while let Some((k, v)) = it.try_step_next()? {
+                new_instance.try_prefix()?;
+                let mut batch = new_instance.batch_begin();
+                let mut entries = 1usize;
+                let mut bytes = k.len() + v.len();
+                batch.insert(k, v);
+                while entries < CLONE_CHUNK && bytes < CLONE_CHUNK_BYTES {
+                    let Some((k, v)) = it.try_step_next()? else {
+                        break;
+                    };
+                    entries += 1;
+                    bytes += k.len() + v.len();
+                    batch.insert(k, v);
+                }
+                batch.commit()?;
             }
-            if let Err(e) = batch.commit() {
-                // Reclaim the committed chunks; a wipe failure changes
-                // nothing for the caller — the original error wins.
+            Ok(())
+        })();
+        if let Err(error) = result {
+            // Earlier chunks may have committed before a source read or a
+            // destination write failed. Preserve the original typed error.
+            if new_instance.prefix.load(Ordering::Relaxed) != 0 {
                 let _ = new_instance.batch_begin_wiped().commit();
-                return Err(e);
             }
+            return Err(error);
         }
         Ok(new_instance)
     }
