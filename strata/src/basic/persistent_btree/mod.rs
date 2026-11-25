@@ -1058,8 +1058,7 @@ impl PersistentBTree {
             .iter()
             .map(|&id| (id, 1))
             .chain(refs.pins.iter().map(|(&id, &pins)| (id, pins)));
-        self.count_nodes(&mut new_refs, roots, false)
-            .expect("permissive recount accepts missing nodes");
+        self.count_nodes(&mut new_refs, roots, false)?;
 
         // Register unreachable nodes for deferred disk deletion, and find
         // the maximum stored NodeId.  After crash recovery from a stale

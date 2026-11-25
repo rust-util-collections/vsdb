@@ -4875,3 +4875,27 @@ fn reference_checkpoint_falls_back_to_verified_recount_on_checksum_or_generation
         header.generation
     );
 }
+
+#[test]
+fn gc_returns_corrupt_on_damaged_pinned_snapshot_child_page() {
+    let mut map = VerMap::<u32, u32>::new();
+    let main = map.main_branch();
+    let fork = map.create_branch("fork", main).unwrap();
+    for i in 0..80 {
+        map.insert(fork, &i, &i).unwrap();
+    }
+    let commit = map.commit(fork).unwrap();
+    let root = map.get_commit(commit).unwrap().root;
+    let snap = map.at(commit).unwrap();
+    map.delete_branch(fork).unwrap();
+    let root_bytes = map
+        .tree
+        .nodes
+        .get(crate::basic::persistent_btree::object_key(root))
+        .unwrap();
+    let children = crate::basic::persistent_btree::Node::decode_children(&root_bytes);
+    let child_key = crate::basic::persistent_btree::object_key(children[0]);
+    map.tree.nodes.insert(child_key, vec![0xff, 0xff]);
+    assert!(matches!(map.gc(), Err(VsdbError::Corrupt { .. })));
+    drop(snap);
+}

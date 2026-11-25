@@ -35,14 +35,6 @@
 
 ---
 
-### [MEDIUM] persistent_btree: finish_ref_counts panics on corrupt pinned snapshot pages during VerMap GC
-- **Where**: `strata/src/basic/persistent_btree/mod.rs` (`PersistentBTree::finish_ref_counts`)
-- **What**: `finish_ref_counts` returns `Result<()>` yet calls `self.count_nodes(&mut new_refs, roots, false).expect("permissive recount accepts missing nodes")`. While `require_present = false` tolerates missing objects, `count_nodes` still returns `Err(VsdbError::Corrupt)` on corrupt headers, slot offsets, key order, child classes, or refcount overflow.
-- **Why**: If a commit retained solely via an in-memory `Snapshot` (`refs.pins`) after branch deletion has a corrupt non-root page, fallible `VerMap::gc()` / `verify_and_gc()` panics at `.expect(...)` instead of returning `Err(VsdbError::Corrupt)` (violates `patterns/versioning.md` checklist).
-- **Suggested fix**: Replace `.expect(...)` at `finish_ref_counts` with `?`. Add a regression test in `strata/src/versioned/test.rs` corrupting a child page of a pin-only snapshot root and asserting `gc()` returns `Err(VsdbError::Corrupt)`. No migration impact.
-
----
-
 ### [LOW] docs/conventions: stale v17 rustdocs, missing v18 breaking-API notes, ValueMut Debug name, and repeated inline std paths
 - **Where**: `strata/src/versioned/map.rs` (`VerMap` rustdoc), `core/src/common/mod.rs` (`vsdb_get_system_dir`), `core/src/basic/mapx_raw/mod.rs` (`MapxRaw::namespace`), `core/src/common/engine/mod.rs` (`ValueMut::fmt`), `CHANGELOG.md`, `migration/src/dagmap.rs`, `core/src/basic/mapx_raw/test.rs`
 - **What**: `VerMap` rustdoc still describes v17 multi-prefix layout, refcount dirty markers, and `lazy_delete`; `vsdb_get_system_dir` still claims `{base_dir}/__SYSTEM__/` holds the removed DagMap ID counter; `MapxRaw::namespace` calls `namespace()` "THE co-location primitive" (contradicting `new_colocated` and `AGENTS.md`); `CHANGELOG.md` `[v18.0.0]` omits concrete signature breaks (`VecDexDyn::new` → `new_with_metric`, `VerMap::sync` removal, `TrieCalc` checkpoint args, `MapxOrdRawKey::entry` enum); `engine::ValueMut::fmt` formats `"ValueIterMut"`; `std::any::type_name` (`migration/src/dagmap.rs`) and `std::path::Path::new` (`core/src/basic/mapx_raw/test.rs`) appear 3+ times inline.
