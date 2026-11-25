@@ -72,3 +72,38 @@ for regime in ("warm", "device", "singleton", "secondary", "device-width8", "lan
               "median_gain",round(median(gains),2),"gain_range",[round(min(gains),2),round(max(gains),2)],
               "max_abs_gain",round(max(map(abs,gains)),2),"positive",sum(g>0 for g in gains),
               "median_blocks_per_query",*[round(median(int(r["blocks"])/int(r["samples"]) for r in arm),2) for arm in (a,b)])
+
+# RSS is a shorter, independent diagnostic. These rows never enter a p99
+# comparison. Each arm must complete all three seeds in each measured regime.
+resource_digests = {}
+for filename, arms in (("rss.csv", ["1","8","32","shipped","v4"]), ("rss-final.csv", ["final"])):
+    resource = defaultdict(list)
+    expected_keys = {(i, regime, arm) for i in range(1,4)
+                     for regime in ("warm","device") for arm in arms
+                     if (regime,arm) != ("device","v4")}
+    with (args.folder/filename).open() as f:
+        for row in csv.DictReader(f):
+            i, regime, arm = int(row["round"]), row["regime"], row["arm"]
+            key = i, regime, arm
+            if key not in expected_keys:
+                raise ValueError(f"duplicate or unexpected RSS observation: {key}")
+            expected_keys.remove(key)
+            samples = 1000 if regime=="warm" else 500
+            seed = 741126+i
+            peak = int(row["gnu_time_peak_kib"])
+            observed = int(row["sampled_process_vmhwm_kib"])
+            io, hits = int(row["storage_bytes"]), int(row["io_positive"])
+            if int(row["seed"])!=seed or int(row["samples"])!=samples or min(peak,observed)<=0:
+                raise ValueError(f"invalid RSS sample: {row}")
+            if (regime=="warm" and (io or hits)) or (regime=="device" and
+                    (not 0 < hits <= samples or hits*100 < samples*95 or io < hits*4096)):
+                raise ValueError(f"unqualified RSS regime: {row}")
+            result = row["digest"],row["nearest"]
+            if resource_digests.setdefault((regime,seed),result)!=result:
+                raise ValueError(f"different RSS query results on same trace: {row}")
+            resource[regime,arm].append((peak,observed))
+    if expected_keys:
+        raise ValueError(f"missing RSS observations: {sorted(expected_keys)}")
+    for (regime,arm), values in sorted(resource.items()):
+        print("RSS",regime,arm,"max_gnu_peak_kib",max(a for a,b in values),
+              "max_sampled_probe_vmhwm_kib",max(b for a,b in values))

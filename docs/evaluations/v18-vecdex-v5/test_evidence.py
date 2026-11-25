@@ -51,6 +51,23 @@ class EvidenceTests(unittest.TestCase):
                                          storage_bytes=4096 * disk_hits, io_positive=disk_hits))
             self.save(regime, rows)
 
+        for filename, arms in (("rss.csv", ("1","8","32","shipped","v4")), ("rss-final.csv", ("final",))):
+            rows = []
+            for n in range(1,4):
+                for regime in ("warm","device"):
+                    for arm in arms:
+                        if arm == "v4" and regime == "device":
+                            continue
+                        samples = 1000 if regime == "warm" else 500
+                        hits = 0 if regime == "warm" else samples
+                        rows.append(dict(round=n,regime=regime,arm=arm,seed=741126+n,
+                                         samples=samples,gnu_time_peak_kib=12345,sampled_process_vmhwm_kib=12462,
+                                         storage_bytes=4096*hits,io_positive=hits,digest="sample",nearest=samples))
+            with (self.folder/filename).open("w") as f:
+                writer=csv.DictWriter(f, fieldnames=list(rows[0]))
+                writer.writeheader()
+                writer.writerows(rows)
+
     def save(self, regime, rows):
         with (self.folder / (regime + ".csv")).open("w") as f:
             writer = csv.DictWriter(f, fieldnames=FIELDS)
@@ -85,4 +102,16 @@ class EvidenceTests(unittest.TestCase):
 
     def test_timing_denominator_is_completed_queries(self):
         self.mutate("device", lambda rows: rows[0].update(samples=9999))
+        self.assertNotEqual(self.summarize().returncode, 0)
+
+
+    def test_missing_process_peak_rejected(self):
+        path = self.folder / "rss-final.csv"
+        with path.open() as f:
+            rows = list(csv.DictReader(f))
+        rows[0]["gnu_time_peak_kib"] = "0"
+        with path.open("w") as f:
+            writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
         self.assertNotEqual(self.summarize().returncode, 0)
