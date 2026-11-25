@@ -109,3 +109,34 @@ final code. Reproduce or check each material finding against source or tests
 and record the disposition. Publish MMDB v5 to the registry before
 publishing VSDB v18 crates; use its exact reachable Git revision during
 joint development. Version 18 remains unreleased through this work.
+
+## Native ARM macOS handoff
+
+Run this from the VSDB checkout on the target Mac. Use local writable
+storage supporting advisory locks, directory sync and exclusive rename.
+The host gate here uses Linux/x86_64. The following run produces the
+separate macOS/AArch64 correctness evidence.
+
+```sh
+uname -sm
+rustc +stable -Vv
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/vsdb-v18.XXXXXX")
+export VSDB_BASE_DIR="$scratch/db"
+mkdir -p "$VSDB_BASE_DIR"
+cargo +stable fmt --all -- --check
+cargo +stable clippy --workspace
+cargo +stable check --workspace --tests
+cargo +stable check --workspace --benches
+cargo +stable test --workspace --tests
+cargo +stable test --workspace --release --tests
+cargo +stable test --workspace --doc
+```
+
+The migration integration tests must publish a fresh generation exclusively,
+preserve both an SST-only value and a residual WAL value, and open the
+external namespace writable. A competing destination must survive a retry.
+The adapter tests exercise read-only lock behavior, a native fence across
+WAL rotation and an error in a later shard before any earlier shard is
+recovered. The grouped-read device evidence in the Linux benchmarks uses
+Linux process I/O counters. These native correctness tests work independently
+of those counters. [Staged generation](../../migration/tests/staged_generation.rs) · [Adapter](../../core/tests/v5_adapter_test.rs)
