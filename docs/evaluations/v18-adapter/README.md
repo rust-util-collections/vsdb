@@ -29,6 +29,10 @@ V5 removes the intermediate value copy from both existence checks and
 both immediate decoders. Each owned hit still allocates space for the
 result. The v5 scan lends the current key and value until it advances.
 
+To verify the archived packet against the saved build fingerprints, run
+`python3 summarize.py allocations.jsonl.gz --allocations-only --builds builds.json`
+from this directory. A local rebuild can supply its own receipt for that check.
+
 ## Workloads
 
 The allocation probe warms 2,048 existing 4,096-byte values, then counts

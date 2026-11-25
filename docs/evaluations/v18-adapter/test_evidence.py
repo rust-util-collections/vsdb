@@ -5,7 +5,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 
-from summarize import load_ok, qualify, throughput
+from summarize import check_fingerprints, load_ok, qualify, throughput
 from upgrade import digest, summarize
 
 class ThroughputEvidence(unittest.TestCase):
@@ -19,6 +19,18 @@ class ThroughputEvidence(unittest.TestCase):
         self.assertGreater(candidate["successful_batches_s"],control["successful_batches_s"])
         self.assertEqual(candidate["successful_small_puts_s"],50)
         self.assertEqual(candidate["matched_mix_mib_s"],control["matched_mix_mib_s"]/2)
+
+    def test_live_allocations_require_the_reviewed_executable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            receipt=Path(tmp)/"builds.json"
+            names=("v4", "v5", "v5-16m", "v4-alloc", "v5-alloc", "v4-live-alloc", "v5-live-alloc")
+            receipt.write_text(json.dumps({name:{"binary_sha256":name} for name in names}))
+            historical={"sha256":{name:name for name in names[:5]}}
+            check_fingerprints(historical,receipt)
+            with self.assertRaisesRegex(ValueError,"fingerprints"):
+                check_fingerprints(historical,receipt,live=True)
+            live={"sha256":{**historical["sha256"],"v4-alloc":"v4-live-alloc","v5-alloc":"v5-live-alloc"}}
+            check_fingerprints(live,receipt,live=True)
 
     def test_late_backlog_cannot_qualify_a_favorable_latency(self):
         good = dict(load="paced", small=10000, bulk=20000, small_half_debt=0,

@@ -38,11 +38,22 @@ def allocation_table(records):
     require(len(sample_sets) == 1, "source operations differ between allocation runs")
     return by_case
 
-def display_allocations(path, output):
+def check_fingerprints(metadata, builds, live=False):
+    with open(builds) as source:
+        receipts=json.load(source)
+    names={"v4":"v4", "v5":"v5", "v5-16m":"v5-16m",
+           "v4-alloc":"v4-live-alloc" if live else "v4-alloc",
+           "v5-alloc":"v5-live-alloc" if live else "v5-alloc"}
+    expected={role:receipts[name]["binary_sha256"] for role,name in names.items()}
+    require(metadata["sha256"]==expected,"raw binary fingerprints differ from trusted build receipts")
+
+def display_allocations(path, output, builds=None):
     with gzip.open(path, "rt") as f:
         rows = [json.loads(line) for line in f]
     require(rows[0]["section"] == "metadata" and all(r["section"] == "allocations" for r in rows[1:]),
             "unexpected allocation packet sections")
+    if builds is not None:
+        check_fingerprints(rows[0], builds, live=True)
     data = allocation_table(rows[1:])
     require(("live-exists", "v5-alloc") in data, "expected the final live-map comparisons")
     table = csv.writer(output, lineterminator="\n")
@@ -77,10 +88,12 @@ def throughput(row):
             "successful_small_puts_s": small, "successful_batches_s": bulk,
             "matched_mix_mib_s": matched * (136 + 2 * 32 * 520) / (1 << 20)}
 
-def summarize(path, output):
+def summarize(path, output, builds=None):
     with gzip.open(path, "rt") as f:
         meta=json.loads(next(f))
         records=[json.loads(s) for s in f]
+    if builds is not None:
+        check_fingerprints(meta, builds)
     count=meta["repetitions"]
     require(meta["section"]=="metadata" and count>=5 and meta["ops"]>=10_000, "insufficient paired trace")
     require(set(meta["sha256"])=={"v4","v5","v5-16m","v4-alloc","v5-alloc"},"missing binary fingerprint")
@@ -166,8 +179,9 @@ if __name__=="__main__":
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("raw")
     parser.add_argument("--allocations-only", action="store_true")
+    parser.add_argument("--builds", help="check raw fingerprints against independently supplied build receipts")
     args=parser.parse_args()
     if args.allocations_only:
-        display_allocations(args.raw,sys.stdout)
+        display_allocations(args.raw,sys.stdout,args.builds)
     else:
-        summarize(args.raw,sys.stdout)
+        summarize(args.raw,sys.stdout,args.builds)
