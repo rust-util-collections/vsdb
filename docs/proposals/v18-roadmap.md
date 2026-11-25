@@ -4,7 +4,7 @@
 
 Baseline: `4fc5b88` (`v17.0.21`), verified against `mmdb 4.3.14`/`4.3.15` (`>= 4.3.12` in `Cargo.toml`).
 
-The subsystem measurements cover [basic maps](../evaluations/v18-basic.md), [SlotDex and DagMap](../evaluations/v18-slotdex-dagmap.md), [VerMap reference persistence](../evaluations/v18-versioned.md), and [tries and VecDex](../evaluations/v18-trie-vecdex.md). The historical design and its rationale follow.
+The subsystem measurements cover [basic maps](../evaluations/v18-basic.md), [SlotDex and DagMap](../evaluations/v18-slotdex-dagmap.md), [VerMap reference persistence](../evaluations/v18-versioned.md), and [tries and VecDex](../evaluations/v18-trie-vecdex.md). Those initial reports validated the primary happy-path wins, but left critical workload regimes — `> 1 KiB` `BLOB_LEAF` mutations/diffs, deep-tree `VerMap` read/reopen scaling, incremental working-state `VerMapWithProof` syncs, `VecDex` construction/selective-filter/compaction paths, `SlotDex` hot-bucket batch staging, and single-shard `mmdb 4.3.15` memtable flush stalls — unevaluated or partially realized; [§10](#10-post-implementation-structural-performance-evaluation-and-follow-up-designs) records the post-implementation audit, empirical measurements on `cc2f41c`, and concrete follow-up designs. The initial v18 design and its rationale follow.
 
 ## Purpose, release boundary, and pre-v18 (`v17.x`) split
 
@@ -432,3 +432,166 @@ The v18 runtime requires the current headers and row layouts. The independent `v
 7. **Stage 5 — `VecDex`:** Land `[TAG_META]` + monotonic 34B `[TAG_STATE]`, lock-free `get` + `MapxRawReadView` `search`/`iter`/`compact`, `&self` `DistanceMetric` unifying `VecDexDyn`, IEEE-754 LE vector slices + zero-alloc search scratch, `KeyEnDe`-only `TAG_NODE2KEY`, bounded `Txn::vec_cache`, and graph-preserving `VecDex::migrate_v17`. Update `[MEDIUM] cached indexes` in [audit.md](../audit.md).
 8. **Stage 6 — `PersistentBTree` + `VerMap`:** Keep `PersistentBTree` `pub` with slotted `NodeView` + `#![forbid(unsafe_code)]`, land the single-handle big-endian `VerMap` store with the Stage 0 winner for ref persistence, `[0x05]` lock-free-across-`fsync` snapshot retirement + `[0x06]` multi-chunk staging anchors, open-time header/commit/ceiling verification (`versioned.md`), and prefix-preserving `VerMap::migrate_v17`.
 9. **Stage 7 — `TrieCalc` + `VerMapWithProof` & release validation:** Land candidate-root `Arc`-COW `MptCalc`/`SmtCalc` + iterative `Drop` + POPCNT branches + inline-64/heap `Nibbles`, map-bound durable streaming checkpoints (`MPTC v2` / `SMTC v4`), unified `TrieCalc::Proof` + fallible `VerMapWithProof::merkle_root`, close `[LOW] trie` in [audit.md](../audit.md), and validate all `vsdb::migrate` paths against frozen `v17` fixtures and Criterion regression gates.
+
+---
+
+## 10. Post-Implementation Structural Performance Evaluation and Follow-Up Designs
+
+Auditing the shipped `v18.0.0` (`cc2f41c`) implementation against the four validation reports ([v18-basic.md](../evaluations/v18-basic.md), [v18-slotdex-dagmap.md](../evaluations/v18-slotdex-dagmap.md), [v18-versioned.md](../evaluations/v18-versioned.md), [v18-trie-vecdex.md](../evaluations/v18-trie-vecdex.md)) shows that **the structural performance improvements were only partially evaluated** prior to code freeze. Several high-leverage structural wins were confirmed, while six major workload regimes were either untested in the initial benchmarks or stopped halfway in implementation — leaving severe write/read amplification or tail-latency stalls on realistic workloads.
+
+All supplementary measurements below were collected in release mode (`rustc 1.100.0`, `mmdb 4.3.15`) on `cc2f41c` using isolated universes.
+
+### 10.1 Coverage audit of v18 structural performance goals
+
+| Subsystem & mechanism | Evaluated in `evaluations/v18-*.md` | Uncovered gap or regression found on `cc2f41c` | Follow-up track |
+|---|---|---|---|
+| **Basic maps & codecs** (§2–4): stack `with_encoded_key` / `with_full_key`, unboxed `MmdbIter`, `DerefMut` `ValueGuard` | Point hits (`Mapx` `-6.5%`, `MapxOrd` `-13.7%`), short-key allocs (`6 → 1`), untouched 64 KiB guard allocs (`35 → 3`, `-82%` bytes) | Range scan throughput unchanged (`77.6 µs` vs `78.1 µs` on 1k keys: `mmdb` still allocates `(RawKey, RawValue)` per row) | Upstream `mmdb` borrowed-slice cursor (`v19+`) |
+| **`PersistentBTree` slotted `NodeView` & `[0x12]` `BLOB` split** (§6.1, §6.5) | Small-value (`<= 128 B`) `VerMap` point hit (`2.33 µs → 1.10 µs`, `-53%`) and 1M-key `u64` block commit (`24.54 ms`) | **`> 1 KiB` values (`BLOB_LEAF`) never benchmarked**; `self.node()` + `self.alloc()` re-reads and re-allocates all up to 32 sibling blobs on every leaf edit (`32×` blob I/O & versioned space amplification); write path still allocates `Vec<Vec<u8>>` per level | **§10.2** (format-preserving `v18.x` fix) |
+| **`VerMap` single-prefix store & Mode B `[0x07]` `REFS`** (§6.1–6.4) | Mode B (`22.5 ms`) vs Mode A (`60.4 ms`) 1k-key block; warm reopen `30.19 ms` vs Mode A `0.30 ms`; branch lifecycle regressed `11.72 ms → 16.02 ms` (`+36.7%`) | `VerMap::get` re-reads `[HEAD \| branch]` from `mmdb` on every lookup (`+176–480 ns` over `Snapshot::get`); `create_branch` runs a redundant $O(\text{branches})$ `records(NAME)` scan on every non-duplicate call; `[0x07]` stores `counts` for all unique `0b01`/`0b11` leaf/blob objects; internal pages re-copied from `mmdb` on every descent | **§10.3** (`v18.x` caches + `Mode B+` shared-only refs) |
+| **Tries & `VerMapWithProof`** (§7) | 1k-key `MPT`/`SMT` cold/warm hash (`-96%` warm), `batch_update` (`-32%` / `-18%`), 100k-entry `MPT` RSS (`-43%`) & checkpoint size (`-51%` / `-38%`) | **`VerMapWithProof` sync paths not benchmarked**: working-state `merkle_root(branch)` re-diffs all $K$ dirty keys from `committed_root` on every single edit ($O(K^2)$ cumulative work); `sync_committed` materializes full `Vec<TreeDiff>` even when `100%` of keys changed | **§10.4** (format-preserving `v18.x` fix) |
+| **`VecDex` LE vectors, scratch buffer & unified `MetricKind`** (§9) | Unfiltered L2 `search` at `N = 1,000, dim = 128` (`503.55 µs → 304.47 µs`, `-39%`) | **Construction, selective filters, and `compact()` unmeasured**: `search_with_filter` slows **32.8×** at `1%` selectivity due to per-node `TAG_NODE2KEY` reads + `K::decode_key`; `insert_batch` drops `Txn::vec_cache` every 64 vectors and recomputes $O(M^2)$ pruning distances per neighbor; `compact()` holds the entire rebuilt graph in RAM | **§10.5** (`v18.x` + `v19` shadow-prefix compact) |
+| **`SlotDex` fixed-width slots & forward-chunked `iter`** (§1) | Descending `iter` (`6.0–6.3×` faster) and descending `page` (`1.5–3.2×` faster); `wide_then_hot` batch shifted `65.15 ms → 79.15 ms` | `insert_batch` calls `staged.put(level_key(i + 1, &floor), ...)` inside the per-item loop (`> 30,000` redundant `Vec` allocs + `BTreeMap` probes on 12k hot-bucket items) even though `stage_level_growth_over` reads `bumps` | **§10.6** (format-preserving `v18.x` fix) |
+| **`DagMap` single-shard co-location & engine memtable sizing** (§8, `mmdb_open`) | `prune` (`669.28 ms → 6.00 ms`, `111×` faster) and `destroy` (`34.33 ms → 7.33 ms`) under concurrent unrelated-map traffic | Concentrating an entire `VerMap` or `DagMap` onto **1 shard** hits `mmdb_open`'s `16 MiB` per-shard write buffer (`mem_budget / 8 / shards`, sized for an obsolete `1 + 4` immutable-memtable model unused in `mmdb 4.3.15`), causing **26.6 ms synchronous flush stalls** (`634×` median) | **§10.7** (`mmdb_open` calibration + placement guidance) |
+
+---
+
+### 10.2 `PersistentBTree`: descriptor-preserving `BLOB_LEAF` COW, $O(1)$-blob diff pruning, and slotted splice writes
+
+#### Empirical diagnosis (`cc2f41c`, 1,024-key tree, `B = 16`)
+
+While `NodeView` eliminated sibling `Vec` allocations on `get` and `BTreeIter`, every mutator (`insert_rec`, `remove_rec`, `fix_underflow`, `apply_leaf_run`) and `BTreeDiffIter` (`Cursor::expand`) still calls `self.node(id)` → `NodeView::materialize`, which eagerly reads **every** `[0x12]` `BLOB` referenced by a `BLOB_LEAF` into `Node::Leaf { values: Vec<Vec<u8>> }`. `self.alloc` then allocates **brand-new `[0x12]` `BLOB` IDs** for all `<= 32` entries in the leaf — even when 31 of the 32 entries were untouched. Furthermore, `fix_underflow` (`remove.rs:174, 180`) calls `self.node(sibling).key_count()`, reading all 32 blobs of a sibling leaf off disk solely to inspect `raw[1]`, and reads them a second time inside `borrow_left` / `borrow_right`.
+
+| Value size | Leaf class | `VerMap::insert` median (p99) | 40-edit `diff_commits` | `BTree` 1-key overwrite | `BTree` 1-key `diff` | Underflow `remove` |
+|---:|---|---:|---:|---:|---:|---:|
+| `1,024 B` | Inline `LEAF` (`0b01`) | `66.1 µs` (`95.5 µs`) | `440.1 µs` | `48.8 µs` | `19.9 µs` | `30.3 µs` |
+| `1,025 B` | `BLOB_LEAF` (`0b10`) | `101.8 µs` (`131.1 µs`) | `742.3 µs` | `85.7 µs` | `51.9 µs` | `28.2 µs` |
+| `16,384 B` | `BLOB_LEAF` (`0b10`) | `583.9 µs` (`16,641.4 µs`) | `4,467.1 µs` | `982.7 µs` | `209.1 µs` | `229.2 µs` |
+| `65,536 B` | `BLOB_LEAF` (`0b10`) | `2,049.4 µs` (`53,275.9 µs`) | `55,968.7 µs` | `2,028.7 µs` | `439.7 µs` | `891.8 µs` |
+
+Crossing `1,024 B → 1,025 B` (+1 byte) adds +54% write latency and 2.6× diff latency; at `64 KiB`, 40 single-key working edits write `~80 MiB` of duplicate `[0x12]` rows instead of `~2.5 MiB`, triggering five synchronous `16 MiB` memtable flushes (`53.3 ms` p99 on an unsynced working `insert`) and forfeiting cross-commit structural sharing of unchanged sibling blobs.
+
+#### Design specification (zero on-disk format change; `v18.x`-compatible)
+
+1. **Descriptor-preserving leaf entries (`LeafVal`):**
+   Replace `values: Vec<Vec<u8>>` in internal COW paths with:
+   ```rust
+   pub(crate) enum LeafVal {
+       Inline(Vec<u8>),
+       Blob(NodeId), // existing [0x12 | id_be] object; immutable by COW contract
+   }
+   ```
+   - `NodeView::materialize_shallow(&self)` decodes `[0x10]` slot descriptors without reading `[0x12]` blobs (`desc & CLASS_MASK == BLOB` becomes `LeafVal::Blob(desc)`).
+   - On `insert_leaf` / `apply_leaf_run` (`Ok(i)` overwrite): if `new_val.len() <= 1024` and old slot is `LeafVal::Blob(_)`, their lengths differ so they cannot be equal — replace with `LeafVal::Inline(new_val)` without reading the old blob! Only read `self.object(blob_id)` when `new_val.len() > 1024` to check byte equality (`Unchanged`).
+   - In `PersistentBTree::alloc`: `LeafVal::Blob(existing_id)` writes `existing_id` directly into the new leaf's 8-byte slot descriptor and pushes `existing_id` into `edges` (incrementing `refs.counts[existing_id]` under `refs.ready`), allocating a fresh `[0x12]` object **only** for `LeafVal::Inline(v)` where `v.len() > 1024` (or `LeafVal::NewBlob(Vec<u8>)`). Single-key `BLOB_LEAF` edits drop from `32` blob reads + `32` blob writes to **`<= 1` blob read + `1` blob write**, and retained `VerMap` commits share all 31 untouched `[0x12]` blobs.
+2. **Header-only sibling occupancy check in `fix_underflow`:**
+   Add `PersistentBTree::key_count(&self, id: NodeId) -> usize` reading `NodeView::open(&self.object(id)).expect(...).len` (`O(1)` slice header read, 0 `Vec` allocations, 0 blob reads).
+3. **Descriptor-equality pruning in `BTreeDiffIter`:**
+   Carry `LazyVal { Inline(Vec<u8>), Blob(NodeId) }` in `diff::Item::Entry`. When `Step::Compare(Ordering::Equal)` compares two `Blob(a)` and `Blob(b)` entries with `a == b`, skip both in $O(1)$ with **zero `[0x12]` reads**; materialize blob bytes via `read_object` only when emitting `Added`, `Removed`, or `Modified` (`a != b`).
+4. **Slotted page splice (`NodeView::splice`, optional Stage 2):**
+   For single-key `insert` / `remove` without split/merge, serialize the new `[0x10]` page directly from `(old_page: NodeView<'_>, idx, op)` into one pre-sized `Vec<u8>` (`raw.len() ± delta`), copying the prefix and suffix payload slices in two `extend_from_slice` calls instead of allocating up to `32` temporary `Vec<u8>` key/value buffers at every tree level.
+
+---
+
+### 10.3 `VerMap`: `BranchHead` / `InternalPageCache` acceleration and `Mode B+` shared-only reference state
+
+#### Empirical diagnosis (`cc2f41c`, `VerMap<u64, u64>`)
+
+| Tree keys (`N`) | Height | `Snapshot::get` | `VerMap::get` | Per-lookup `[HEAD]` overhead | `flush()` (`[0x07]`) | Warm `from_meta` |
+|---:|---:|---:|---:|---:|---:|---:|
+| `5,000` | 2 | `452.4 ns` | `628.5 ns` | `+176.1 ns` (`+39%`) | `1.95 ms` | `0.20 ms` |
+| `100,000` | 3 | `885.2 ns` | `1,313.2 ns` | `+428.0 ns` (`+48%`) | `2.18 ms` | `0.70 ms` |
+| `500,000` | 4 | `1,178.5 ns` | `1,657.8 ns` | `+479.3 ns` (`+41%`) | `4.04 ms` | `3.20 ms` |
+
+1. **Per-read `[HEAD | branch]` lookup & redundant `create_branch` scan:**
+   `VerMap::get` and `contains_key` call `self.get_branch(branch)` (`mmdb::DB::get`) on every call, adding `176–480 ns` (+39–48%) over `Snapshot::get`. Separately, `VerMap::create_branch` (`map.rs:495-499`) evaluates `self.branch_id(name).is_some() || self.records(NAME).any(...)` — opening a full `[0x02..0x03)` range iterator over every branch whenever `name` is new, even though `VerMap::recover` already enforces 1-to-1 `NAME` ↔ `BY_NAME` parity on open and every writable branch op updates both in one atomic batch. (Combined with 4 synchronous `commit_sync()` WAL `fsync`s at `~2.0 ms` each, this accounts for the `11.72 ms → 16.02 ms` branch-lifecycle timing in [v18-versioned.md](../evaluations/v18-versioned.md#L44) where the preceding benchmark populated ~1,500 branches on the same map.)
+2. **Internal-page re-reads and `Vec<u8>` page copies:**
+   Each B+ tree level above the leaf costs `~300–400 ns` (`mmdb::DB::get` + fresh `Vec<u8>` copy of the 400–1,200 B internal page), even though internal pages (`id & CLASS_MASK == 0`) are **immutable forever** and all internal pages of a 1,000,000-key tree (`~1,050` pages) total **`~450 KiB`**.
+3. **`Mode B` `RefState` footprint under single-tip and deep-history workloads:**
+   `RefState.counts` currently inserts a `HashMap<NodeId, u32>` entry for **every** live object — including unique `0b01` inline leaves and `0b11` blobs (`ref_count == 1`), which make up `> 96%` of objects on single-branch or recent-window trees. At 1M keys (`~32k` leaves), warm `from_meta()` spends `30.19 ms` (`24.7–34.0 MiB` RSS) deserializing and degree-checking `[0x07]`; at 10M+ keys or thousands of retained commits, `counts` + `edges` grows past `150 MiB` and warm reopen scales linearly into hundreds of milliseconds.
+
+#### Design specification
+
+1. **Generation-stamped `BranchHead` table & $O(1)$ `create_branch` check (`v18.x`, no format change):**
+   - Remove the redundant `|| self.records(NAME).any(...)` fallback from writable `create_branch` (relying on the verified `[0x03 | name]` `BY_NAME` index).
+   - Cache `(generation: u64, heads: HashMap<BranchId, BranchHead>)` under `TreeRuntime` (updated on `publish` / invalidated if `Header.generation` advances via an alias), eliminating the extra `DB::get` on `VerMap::get` / `contains_key`.
+2. **Byte-bounded immutable `InternalPageCache` on `TreeRuntime` (`v18.x`, no format change):**
+   - Add an 8-way lock-sharded clock cache `NodeId -> Arc<[u8]>` on `TreeRuntime` for committed internal pages (`id & CLASS_MASK == 0`), bounded by bytes (default `min(ns_budget / 64, 16 MiB)`).
+   - **Correctness & lifecycle:** Because `NodeId` serials are strictly monotonic and COW pages never mutate in place, cached `Arc<[u8]>` slices are valid for all branches, commits, rollbacks, and `Snapshot`s with **zero invalidation races**; `TreeRuntime` lives behind `Weak` in `TREE_RUNTIMES`, so dropping the map and its snapshots frees the cache automatically, and `release_node` / `gc` may opportunistically evict dead internal IDs. `lookup` borrows `&[u8]` from the cache hit without calling `mmdb::DB::get` or allocating a `Vec<u8>`, reducing warm tree lookups to **1 leaf read**.
+3. **`Mode B+`: Shared-only (`extra_refs`) `RefState` + optional `[0x08]` ref-delta log (`v18.x` / `v19`):**
+   - **Shared-only RAM representation (`v18.x`-compatible if `[0x07]` codec bumped or translated):** Every reachable object in a live tree has `ref_count >= 1`. Store only `extra_refs: HashMap<NodeId, NonZeroU32>` (`ref_count - 1` for nodes with `ref_count >= 2`) plus `edges: HashMap<NodeId, Box<[NodeId]>>` for internal/`BLOB_LEAF` nodes (or read `NodeView::edges` on disk only when a `ref_count == 1` internal/`BLOB_LEAF` page is retired). On a 1M-key single-branch tree, `extra_refs` shrinks from `~33,000` entries to **`0` entries** (and after 16 retained 1,000-key blocks, only shared interior/boundary nodes carry `extra_refs > 0`), cutting `RefState` RAM and `[0x07]` checkpoint size by **5–15×**.
+   - **Bounded `[0x08 | gen_be]` ref-delta log (`v19` format extension):** Between periodic `[0x07]` base checkpoints (e.g. every 64 history commits or `flush()`), append compact `(NodeId, i32)` net ref-delta records at `[0x08 | generation_be]` inside the **existing** `publish` batch (**0 point `get`s** on commit, avoiding Mode A's 23,000-read penalty while bounding post-crash recount work to replaying `<= 64` delta frames).
+
+---
+
+### 10.4 `VerMapWithProof`: incremental working-branch cursor and adaptive streaming rebuild
+
+#### Empirical diagnosis (`cc2f41c`, `N = 20,000` keys, 32 B values)
+
+| Workload | Measured time (`cc2f41c`) | Behavior & bottleneck |
+|---|---:|---|
+| Full streaming `MptCalc::from_entries` + `root_hash` (`20,000` keys) | `15.49 ms` | $O(\text{height})$ B+ tree cursor memory; single bottom-up hash pass |
+| `merkle_root_at_commit` incremental diff: `0.5%` (`100` keys) | `1.01 ms` | `15.3×` faster than full rebuild |
+| `merkle_root_at_commit` incremental diff: `20%` (`4,000` keys) | `11.37 ms` | Approaches full-rebuild cost while allocating `Vec<TreeDiff>` |
+| `merkle_root_at_commit` incremental diff: `100%` (`20,000` keys) | `16.17 ms` | Slower than `from_entries` **and** materializes all `20,000` `TreeDiff` + `ops` slices in RAM |
+| Working-state `1 insert + merkle_root(br)` with `2,000` prior dirty keys | `1.69 ms / step` | Clones `committed_trie` and **re-diffs all `2,001` dirty keys on every call** ($O(K^2)$ across a block) |
+
+#### Design specification (`v18.x`, zero format change)
+
+1. **Incremental working-state cursor `(working_branch, working_base_commit, working_root)`:**
+   In `VerMapWithProof`, store `working_branch: Option<BranchId>` and `working_base: Option<CommitId>` alongside `working_root: Option<u64>`:
+   - When `merkle_root(branch)` observes `self.working_branch == Some(branch)`, `self.working_base == roots.head`, and `let Some(prev_working) = self.working_root` (provided `prev_working` is still leased via a retained `Arc<RootLease>`!), diff **`prev_working -> roots.working`** and apply only the newly edited keys directly onto a candidate clone of `self.working_trie` ($O(\Delta)$ per call instead of $O(K)$, turning 2,000 sequential `insert + merkle_root` steps from `~1.7 s` into `~15 ms`).
+   - On `discard`, `rollback_to`, branch switch, or `commit`, fall back cleanly to `committed_trie.clone()`.
+2. **Chunked streaming diff & adaptive full-rebuild fallback:**
+   - Replace `let diff: Vec<TreeDiff> = self.map.diff_roots(...)` (`proof.rs:214, 262`) with streaming consumption of `BTreeDiffIter` in bounded chunks (e.g. `4,096` entries per `batch_update`), eliminating unbounded `Vec<TreeDiff>` + `Vec<(&[u8], Option<&[u8]>)>` peak memory on multi-million-key `bulk_load` commits.
+   - When `from.root == EMPTY_ROOT` (initial `bulk_load` commit), immediately run `T::from_entries(self.map.tree.iter(root.root))` instead of diffing against an empty root.
+
+---
+
+### 10.5 `VecDex`: cross-chunk build cache, raw-key filter fast path, and bounded-memory compaction
+
+#### Empirical diagnosis (`cc2f41c`, `N = 2,000`, `dim = 128`, `f32`, `L2`, `ef_search = 50`)
+
+- **Construction & compaction:** Serial `insert`: `409.2 µs/vec` (`818.5 ms` total); `insert_batch` (`CHUNK = 64`): `283.2 µs/vec` (`566.4 ms` total); `compact()` (`1,500` live vectors): `341.6 ms`.
+- **Filtered search degradation (`k = 10`):** Unfiltered `140.7 µs` → `50%` filter `277.1 µs` (`2.0×`) → `10%` filter `1,131.4 µs` (`8.0×`) → `1%` filter `4,610.0 µs` (**`32.8×`**).
+
+Three structural bottlenecks explain these numbers:
+1. `insert_batch` (`vecdex/mod.rs:865-874`) instantiates a fresh `Txn` every 64 vectors, dropping `Txn::vec_cache` (up to 32 MiB) at every chunk boundary so upper-layer navigation hubs are repeatedly fetched and decoded from `mmdb`. Meanwhile, `link_node` runs `prune_selection` (`select_neighbors_heuristic`, up to $33 \times 32 / 2 = 528$ pairwise distances) for every neighbor that overflows `m_max`.
+2. Under `<= 1%` filter selectivity (`< ef` total matching nodes in the graph), `result.len() < ef` holds throughout traversal, so `search_layer` evaluates `passes(n_id)` — issuing a `MapxRawReadView::get(TAG_NODE2KEY)` **and** `K::decode_key` — on every visited node up to `filter_visit_cap(ef)`.
+3. `compact()` rebuilds the entire index inside one `Txn` + one `StagedRows` batch (`~3 × N × dim × sizeof(S)` peak RAM).
+
+#### Design specification
+
+1. **Cross-chunk `vec_cache` retention & lazy degree check in `insert_batch` (`v18.x`, no format change):**
+   Lift the 32 MiB `HashMap<u64, Rc<Vec<S>>>` cache above the `for chunk in dedup.chunks(64)` loop (evicting only on byte-cap overflow; `node_id`s are monotonic and immutable!). In `link_node`, read neighbor count (`raw.len() / 8`) before allocating `Vec<u64>` when `< m_max`, and skip `prune_selection` whenever `n_neighbors.len() <= m_max`.
+2. **Zero-decode `search_with_raw_filter` & predicate ordering (`v18.x` additive API):**
+   Add `search_with_raw_filter(&self, query: &[S], k: usize, pred: impl Fn(&[u8]) -> bool)` (and `VecDexReadView` equivalent) inspecting raw `TAG_NODE2KEY` bytes without `K::decode_key` heap allocation for prefix/tenant/range filters, while keeping `K::decode_key` only for the final `<= k` winners.
+3. **Bounded-memory shadow-prefix `compact()` (`v19` handle indirection or documented operational pattern):**
+   Single-prefix crash-atomic `compact()` cannot split its `batch_wiped()` commit across multiple batches without leaving a half-built index on crash. For `v18.x`, document the `~3 × raw_vector_bytes` RAM ceiling on in-place `compact()` and recommend streaming `iter()` into a fresh `VecDex::insert_batch` + atomic `save_meta` swap for multi-million-vector indexes; for `v19`, an optional 1-byte active-generation prefix tag (`[0x00 | gen | ...]` vs `[0x05]` active `gen`) allows `compact()` to stream 64-node chunks into `gen ^ 1`, flip `[STATE_KEY]` atomically, and `delete_range` old `gen` afterward with $O(\text{chunk})$ RAM.
+
+---
+
+### 10.6 `SlotDex`: coalescing tier-bucket updates in `insert_batch`
+
+#### Diagnosis & design (`v18.x`, zero format change)
+
+In `SlotDex::insert_batch` (`slotdex/mod.rs:607-624`), every input item loops over all `i in 0..num_tiers` and executes `staged.put(level_key(i as u8 + 1, &floor), encode_cnt(*v).to_vec())` — performing `N × num_tiers` `Vec<u8>` allocations and $O(\log N)$ `StagedRows` `BTreeMap` updates (`> 30,000` redundant updates on the 12,049-item `wide_then_hot` benchmark, `11.6 ms` warm / `79.15 ms` Criterion with `clear`), even though `stage_level_growth_over` (`mod.rs:818-830`) reads **`bumps`**, never `staged`, for `level >= 1`!
+
+- **Fix:** Remove `staged.put(level_key(i as u8 + 1, &floor), ...)` from the per-item loop and emit one `staged.put` per distinct `((i, floor), v)` in `bumps` after the loop (lines 641–643). Similarly, track pending `level 0` slot counts in a typed `BTreeMap<S, EntryCnt>` (`stack`-sized `S` keys, 0 `Vec<u8>` allocs) and flush `level 0` rows into `staged` once at `tier 0 → 1` promotion (if any) and once at batch end. All persisted bytes and tier-promotion boundaries remain bit-for-bit identical.
+
+---
+
+### 10.7 Engine (`mmdb 4.3.15`): recalibrating `wr_buffer_size` for single-shard `VerMap` and `DagMap`
+
+#### Empirical diagnosis (`cc2f41c`, 60 MiB sustained write = 1,500 × 40 KiB batches into one prefix)
+
+| Placement | Per-shard `write_buffer_size` | Total time | Median batch | p99 batch | Max batch stall |
+|---|---:|---:|---:|---:|---:|
+| Default namespace (`16` shards, `2 GiB` budget) | `16 MiB` | `127.4 ms` | `42.0 µs` | `110.8 µs` | **`26,624.9 µs` (`26.6 ms`)** |
+| Dedicated namespace (`1` shard, `2 GiB` budget) | `256 MiB` | `87.4 ms` (`-31%`) | `53.9 µs` | `216.9 µs` | **`306.0 µs` (`0.31 ms`, `87×` lower)** |
+
+In `mmdb_open` ([mmdb.rs](../../core/src/common/engine/mmdb.rs#L1425-L1451)), `wr_buffer_size` is clamped to `mem_budget / 8 / shards` (`16 MiB` at default `2 GiB / 16` shards, and `16 MiB` at non-default `512 MiB / 4` shards) based on the comment that each shard holds `1 + max_immutable_memtables (4) = 5×` memtables in RAM. In `mmdb 4.3.15`, `max_immutable_memtables` is unused: when the active memtable fills, the write leader synchronously runs `freeze_memtable_sync` + `flush_frozen_memtable` (`<= 2×` memtable residency during flush). Because v18 consolidated all 8 `VerMap` components onto **1 prefix** and all connected `DagMap` nodes onto **1 co-located shard**, a single hot `VerMap` or `DagMap` in the default namespace hits synchronous `16 MiB` flush stalls (`26.6 ms` max latency spike) 16× earlier than its `2 GiB` budget suggests.
+
+#### Design & operational guidance
+
+1. **Immediate operational pattern (zero code change):** Place write-intensive `VerMap`, `DagMap`, `SlotDex`, or `VecDex` instances in a dedicated `Namespace::create_with(NamespaceOpts { path: None, shards: 1, mem_budget_mb: Some(B) })` so the collection receives the full namespace write buffer and compaction worker without altering `DEFAULT_NS`'s pinned 16-shard routing.
+2. **Engine sizing recalibration (`v18.x` tuning gate):** Update the obsolete `5×` memtable comment in `mmdb_open` and run a multi-shard peak-RSS + L0-stall validation comparing `mem_budget / 8 / shards` (`16 MiB` default) against `mem_budget / 4 / shards` (`32 MiB` default, `<= 50%` worst-case active+flushing memtable footprint across all 16 shards simultaneously, leaving `12.5%` for `BlockCachePool` and `37.5%` for compaction/allocator headroom). Do not alter `NUM_SHARDS = 16`.

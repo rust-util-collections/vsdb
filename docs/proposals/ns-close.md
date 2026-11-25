@@ -27,8 +27,8 @@ collection handles ─┘      └── Engine
 `NsInner` owns its engine inline; `Namespace::engine()` returns a borrow of
 that handle. Shard DBs are owned, not leaked. Iterators that need namespace
 liveness borrow a handle or retain a namespace clone. The default namespace
-uses the same ownership shape behind a static `LazyLock` and lives for the
-process lifetime; closing it is refused.
+uses the same ownership shape behind a static `OnceLock` and lives for the
+process lifetime once opened; closing it is refused.
 
 MMDB detached snapshot iterators own their sources through internal refcounts.
 They do not retain a namespace reference and may outlive close, yielding a

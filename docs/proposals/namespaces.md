@@ -1,11 +1,12 @@
 # Namespaces — current design
 
 Namespaces shipped in v16.0.0; in-process close in v16.1.0, cross-namespace
-copy in v16.2.0, and per-engine cache pooling in v16.3.0. This document
-describes the current implementation, including v17 configuration and handle
+copy in v16.2.0, per-engine cache pooling in v16.3.0, and `VSUNI018`/`VSENG018`/`VSNREG02` headers in v18.0.0. This document
+describes the current v18 implementation, including configuration and handle
 APIs. Earlier RFC revisions and implementation plans remain in Git history.
 
 Source of truth: [namespace.rs](../../core/src/common/namespace.rs),
+[universe.rs](../../core/src/common/universe.rs),
 [engine metadata](../../core/src/common/engine/mod.rs), and
 [MMDB integration](../../core/src/common/engine/mmdb.rs).
 
@@ -60,7 +61,7 @@ assert_eq!(restored.namespace().id(), ns.id());
   and `SmtCalc` have no namespace constructor; use
   `VerMapWithProof::from_map(VerMap::new_in(&ns))` for a placed proof wrapper.
 
-`clone_in(&ns)` deep-copies MapxRaw, Mapx, MapxOrd, MapxOrdRawKey, or Orphan
+`clone_in(&ns)` deep-copies `MapxRaw`, `Mapx`, `MapxOrd`, `MapxOrdRawKey`, `Orphan`, `VerMap`, `VerMapWithProof`, `SlotDex`, `DagMap*`, or `VecDex*`
 into a fresh instance in the requested namespace. Map copies use bounded
 chunks; the operation is not a cross-engine transaction. Ordinary `Clone`
 deep-copies into the original namespace; unsafe `shadow()` aliases storage
