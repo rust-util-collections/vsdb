@@ -42,3 +42,37 @@ the complete operation loop. An idle or empty working edit is covered by
 the generation-unchanged unit test. Root generation is checked directly
 by the versioned tests; the separately instrumented submissions measure
 calls actually received by the engine.
+
+## Results on x86_64 Linux
+
+The Ryzen 9 5900X runs used four pinned cores on NVMe with Btrfs
+compression disabled in the benchmark directory. All 180 timed processes
+completed and the five diagnostics verified the engine submission counts.
+The source worktrees and binary fingerprints are retained with the trials.
+[Host and executables](results/host.txt) · [All process observations](results/trials.csv) · [Paired statistics](results/summary.csv)
+
+| Logical operation | Control p99 | Compared p99 | Median paired improvement | Largest A/A change | Favorable pairs |
+|---|---:|---:|---:|---:|---:|
+| DagMap child, v5 two writes versus one atomic batch | 12.79 µs | 8.28 µs | 31.38% | 25.39% | 5/5 |
+| Four dependent VerMap edits, individual versus working session | 63.67 µs | 26.13 µs | 56.18% | 26.95% | 5/5 |
+| Two known final values, write_batch versus a session performing four reads and edits | 23.76 µs | 26.35 µs | −5.64% | 14.45% | 0/5 |
+| DagMap child, v4-backed v18 versus v5-backed v18 | 13.13 µs | 9.09 µs | 34.19% | 11.41% | 5/5 |
+
+Column medians describe the individual arms. The gain is calculated inside
+each matched pair. The new DagMap path made 1,000 engine submissions for
+1,000 children; the previous v5 implementation made 2,000. Individual
+VerMap updates made 4,000 submissions, the working overlay and precomputed
+batch each made 1,000. Use a working session for dependent updates. A
+caller with precomputed edits already has the same publication count and
+can continue using `write_batch`.
+
+All small puts and bulk operations met the matched-load screens for the
+mixed workload. Routing a foreground map away from VerMap reduced median
+run p99 from 1,075.88 to 79.54 µs on v5. The 85.71% median paired gain
+was smaller than the 240.50% control variation, with four favorable pairs.
+The v4/v5 same-shard and split-shard comparisons also had wide control
+variation. This trace establishes neither a guaranteed tail reduction nor
+a reason to change persistent shard routing. The CSV retains the individual
+arrival/service p99s, L0 debt, bulk row counts and RSS. On equivalent
+individual VerMap calls and precomputed batches, v4/v5 median p99 changes
+also stayed inside control variation.
