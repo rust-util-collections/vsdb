@@ -4911,6 +4911,27 @@ fn reference_checkpoint_falls_back_to_verified_recount_on_checksum_or_generation
 }
 
 #[test]
+fn missing_pinned_leaf_aborts_gc_before_sweeping_its_blobs() {
+    let mut map = VerMap::<u32, Vec<u8>>::new();
+    let fork = map.create_branch("fork", map.main_branch()).unwrap();
+    map.bulk_load(fork, (0..10).map(|i| (i, vec![i as u8; 2048])))
+        .unwrap();
+    let root = map.get_branch(fork).unwrap().dirty_root;
+    let snap = map.snapshot(fork).unwrap();
+    map.delete_branch(fork).unwrap();
+    map.tree
+        .nodes
+        .remove(crate::basic::persistent_btree::object_key(root));
+    assert_eq!(map.records(0x12).count(), 10);
+    assert!(matches!(
+        map.verify_and_gc(),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert_eq!(map.records(0x12).count(), 10);
+    drop(snap);
+}
+
+#[test]
 fn gc_returns_corrupt_on_damaged_pinned_snapshot_child_page() {
     let mut map = VerMap::<u32, u32>::new();
     let main = map.main_branch();

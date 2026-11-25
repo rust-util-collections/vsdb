@@ -1396,7 +1396,7 @@ impl PersistentBTree {
         roots: &[NodeId],
     ) -> Result<HashMap<NodeId, NodeRef>> {
         let mut counts = HashMap::new();
-        self.count_nodes(&mut counts, roots.iter().map(|&id| (id, 1)), true)?;
+        self.count_nodes(&mut counts, roots.iter().map(|&id| (id, 1)))?;
         Ok(counts)
     }
 
@@ -1406,7 +1406,6 @@ impl PersistentBTree {
         self.count_nodes(
             &mut counts,
             refs.pins.iter().map(|(&root, &pins)| (root, pins)),
-            true,
         )?;
         refs.install(counts);
         Ok(())
@@ -1415,7 +1414,6 @@ impl PersistentBTree {
         &self,
         counts: &mut HashMap<NodeId, NodeRef>,
         roots: impl Iterator<Item = (NodeId, u32)>,
-        require_present: bool,
     ) -> Result<()> {
         let mut queue: Vec<_> = roots.filter(|&(id, _)| id != EMPTY_ROOT).collect();
         while let Some((id, owners)) = queue.pop() {
@@ -1452,12 +1450,11 @@ impl PersistentBTree {
                     }
                     children
                 }
-                None if require_present => {
+                None => {
                     return Err(VsdbError::Corrupt {
                         detail: format!("missing reachable B+ tree node {id}"),
                     });
                 }
-                None => Vec::new(),
             };
             queue.extend(children.iter().map(|&child| (child, 1)));
             counts.insert(
@@ -1481,7 +1478,7 @@ impl PersistentBTree {
             .iter()
             .map(|&id| (id, 1))
             .chain(refs.pins.iter().map(|(&id, &pins)| (id, pins)));
-        self.count_nodes(&mut new_refs, roots, false)?;
+        self.count_nodes(&mut new_refs, roots)?;
 
         // Register unreachable nodes for deferred disk deletion, and find
         // the maximum stored NodeId.  After crash recovery from a stale

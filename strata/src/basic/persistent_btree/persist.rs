@@ -380,12 +380,8 @@ impl PersistentBTree {
         }
         let n = counts.len();
         let mut refs = self.runtime.refs.lock();
-        self.count_nodes(
-            &mut counts,
-            refs.pins.iter().map(|(&id, &pins)| (id, pins)),
-            true,
-        )
-        .ok()?;
+        self.count_nodes(&mut counts, refs.pins.iter().map(|(&id, &pins)| (id, pins)))
+            .ok()?;
         refs.install(counts);
         Some(n)
     }
