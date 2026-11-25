@@ -329,6 +329,11 @@ impl MapxRaw {
         key: impl AsRef<[u8]>,
         edit: impl FnOnce(&mut RawValue) -> R,
     ) -> Result<Option<R>> {
+        if self.namespace().is_read_only() {
+            return Err(VsdbError::ReadOnly {
+                operation: "value update",
+            });
+        }
         let Some(mut guard) = self.get_mut(key) else {
             return Ok(None);
         };
@@ -349,6 +354,11 @@ impl MapxRaw {
     #[inline(always)]
     pub fn contains_key(&self, key: impl AsRef<[u8]>) -> bool {
         self.get(key.as_ref()).is_some()
+    }
+
+    #[doc(hidden)]
+    pub fn try_contains_key(&self, key: impl AsRef<[u8]>) -> Result<bool> {
+        self.inner.try_contains_key(key.as_ref())
     }
 
     /// Retrieves the last entry with a key less than or equal to the given key.

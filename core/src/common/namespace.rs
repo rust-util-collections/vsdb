@@ -39,7 +39,10 @@ use std::{
     fmt, fs, io,
     path::{Component, Path, PathBuf},
     str::FromStr,
-    sync::{Arc, LazyLock, OnceLock},
+    sync::{
+        Arc, LazyLock, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -269,6 +272,7 @@ static OPEN_NAMESPACES: LazyLock<Mutex<HashMap<NsId, Namespace>>> =
 /// which is exactly why the default namespace is not closeable.
 static DEFAULT_NS: OnceLock<Namespace> = OnceLock::new();
 static DEFAULT_INIT: Mutex<()> = Mutex::new(());
+static REGISTRY_DIR_UNSYNCED: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     /// The ambient-placement stack driven by [`Namespace::scope`].
@@ -298,7 +302,12 @@ fn read_registry(base: &Path) -> Result<RegistryFile> {
 
 fn load_registry() -> Result<RegistryFile> {
     super::universe::active()?;
-    read_registry(&vsdb_get_base_dir())
+    let base = vsdb_get_base_dir();
+    if !vsdb_is_read_only() && REGISTRY_DIR_UNSYNCED.load(Ordering::Acquire) {
+        fs::File::open(base.join("__SYSTEM__"))?.sync_all()?;
+        REGISTRY_DIR_UNSYNCED.store(false, Ordering::Release);
+    }
+    read_registry(&base)
 }
 pub(super) fn check_registry_at(base: &Path) -> Result<()> {
     read_registry(base).map(drop)
@@ -590,6 +599,52 @@ fn cleanup_failed_root(root: &Path, preexisted: bool) {
     }
 }
 
+/// Reclaims a non-empty explicit root left behind when an earlier failed
+/// creation rolled back its registry entry, after `load_registry` has durably
+/// synchronized `__SYSTEM__` and confirmed the burnt ID is absent.
+fn reclaim_unregistered_owned_root(root: &Path, reg: &RegistryFile) -> Result<()> {
+    let mut entries = match fs::read_dir(root) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Ok(entries) => entries,
+        Err(e) => return Err(e.into()),
+    };
+    if entries.next().is_none() {
+        return Ok(());
+    }
+    let Ok(_guard) = super::universe::lock_root_dir(root) else {
+        return Ok(());
+    };
+    let universe_id = super::universe::active()?.id;
+    let is_unregistered_burnt = |id: NsId| {
+        id != DEFAULT_NS_ID && id < reg.next_id && reg.entries.iter().all(|r| r.id != id)
+    };
+    let parse_owned = |path: &Path| -> Option<(NsId, usize)> {
+        let bytes = fs::read(path).ok()?;
+        if bytes.len() != 36 || &bytes[..8] != b"VSENG018" {
+            return None;
+        }
+        let uid = u128::from_le_bytes(bytes[8..24].try_into().unwrap());
+        let ns = u64::from_le_bytes(bytes[24..32].try_into().unwrap());
+        let shards = u32::from_le_bytes(bytes[32..36].try_into().unwrap()) as usize;
+        (uid == universe_id && (1..=64).contains(&shards)).then_some((ns, shards))
+    };
+    let header = root.join("__SYSTEM__/engine_header");
+    let sentinel = root.join("__SYSTEM__/__initializing__");
+    let owned = if let Some((ns, _)) = parse_owned(&header) {
+        is_unregistered_burnt(ns)
+    } else if let Some((ns, _)) = parse_owned(&sentinel) {
+        is_unregistered_burnt(ns)
+    } else {
+        !header.exists()
+            && !sentinel.exists()
+            && super::universe::validate_pending_root(root, universe_id, 1, 1).is_ok()
+    };
+    if owned {
+        cleanup_failed_root(root, true);
+    }
+    Ok(())
+}
+
 fn sizing_for(mem_budget_mb: Option<usize>) -> EngineSizing {
     EngineSizing::from_budget_mb(mem_budget_mb.unwrap_or(DEFAULT_NS_BUDGET_MB))
 }
@@ -710,6 +765,7 @@ impl Namespace {
         let mut root_preexisted = false;
         if let Some(p) = &opts.path {
             validate_explicit_root(&base, &reg, p)?;
+            reclaim_unregistered_owned_root(p, &reg)?;
             root_preexisted = ensure_root_adoptable(p)?;
         }
 
@@ -757,20 +813,22 @@ impl Namespace {
                 // visible in `Namespace::list()`, re-openable via `open`
                 // and reclaimable via `destroy`.
                 reg.entries.retain(|r| r.id != rec.id);
-                if save_registry(&reg).is_ok() {
+                // Delete the root only after the rollback registry write AND its
+                // parent-directory fsync succeed. If that fence fails, keep the
+                // root intact until a later registry load completes the fence.
+                if save_registry(&reg).is_ok()
+                    && let Ok(_guard) = super::universe::lock_root_dir(&root)
+                    && super::universe::validate_pending_root(
+                        &root,
+                        super::universe::active()?.id,
+                        id,
+                        shards,
+                    )
+                    .is_ok()
+                {
                     // A second universe can race for the same explicit root.
                     // Only reclaim empty residue or our own initializer/header.
-                    if let Ok(_guard) = super::universe::lock_root_dir(&root)
-                        && super::universe::validate_pending_root(
-                            &root,
-                            super::universe::active()?.id,
-                            id,
-                            shards,
-                        )
-                        .is_ok()
-                    {
-                        cleanup_failed_root(&root, root_preexisted);
-                    }
+                    cleanup_failed_root(&root, root_preexisted);
                 }
                 Err(e)
             }
@@ -1081,18 +1139,28 @@ impl Namespace {
         };
         let root = resolve_root(&base, &reg.entries[pos]);
         let rec = &reg.entries[pos];
-        let root_lease = if root.try_exists()? {
-            let lease = super::universe::lock_root_dir(&root)?;
+        let link_meta = match fs::symlink_metadata(&root) {
+            Ok(meta) => Some(meta),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e.into()),
+        };
+        let target = if root.try_exists()? {
+            Some(root.canonicalize()?)
+        } else {
+            None
+        };
+        let root_lease = if let Some(target) = &target {
+            let lease = super::universe::lock_root_dir(target)?;
             let universe = super::universe::active()?.id;
             match rec.state {
                 NsLifecycleState::Established => super::universe::check_identity(
-                    &root,
+                    target,
                     universe,
                     id,
                     rec.shards as usize,
                 )?,
                 NsLifecycleState::Pending => super::universe::validate_pending_root(
-                    &root,
+                    target,
                     universe,
                     id,
                     rec.shards as usize,
@@ -1104,10 +1172,18 @@ impl Namespace {
         };
         reg.entries.remove(pos);
         save_registry(&reg)?;
-        if root_lease.is_none() {
-            return Ok(());
+        if link_meta.is_some_and(|m| m.file_type().is_symlink()) {
+            match fs::remove_file(&root) {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
         }
-        match fs::remove_dir_all(&root) {
+        let Some(target) = target else {
+            return Ok(());
+        };
+        let _keep_lease = root_lease;
+        match fs::remove_dir_all(&target) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e.into()),
@@ -1290,7 +1366,10 @@ impl RegistryFile {
     pub(super) fn save(&self, base: &Path) -> Result<()> {
         let mut bytes = REGISTRY_MAGIC.to_vec();
         postcard::to_io(self, &mut bytes)?;
-        atomic_write_file(&base.join(NS_REGISTRY_REL_PATH), &bytes)
+        REGISTRY_DIR_UNSYNCED.store(true, Ordering::Release);
+        atomic_write_file(&base.join(NS_REGISTRY_REL_PATH), &bytes)?;
+        REGISTRY_DIR_UNSYNCED.store(false, Ordering::Release);
+        Ok(())
     }
     fn clone_without(&self, id: NsId) -> RegistryFile {
         RegistryFile {

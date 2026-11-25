@@ -215,6 +215,14 @@ fn read_only_reader_helper() {
         Err(VsdbError::ReadOnly { .. })
     ));
     assert!(matches!(
+        default_map.update(b"absent-key", |_| panic!("callback must not run")),
+        Err(VsdbError::ReadOnly { .. })
+    ));
+    assert!(matches!(
+        default_map.update(b"default-key", |_| panic!("callback must not run")),
+        Err(VsdbError::ReadOnly { .. })
+    ));
+    assert!(matches!(
         Namespace::create(),
         Err(VsdbError::ReadOnly { .. })
     ));

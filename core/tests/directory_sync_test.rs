@@ -7,10 +7,80 @@ use std::{
     thread,
 };
 use vsdb_core::{
-    InstanceId, MapxRaw, Namespace, VsdbError, VsdbOptions, vsdb_configure,
+    DEFAULT_NS_ID, InstanceId, MapxRaw, Namespace, NamespaceOpts, VsdbError,
+    VsdbOptions, vsdb_configure,
 };
 
 const EIO: i32 = 5;
+
+fn engine_init_directory_sync_retries(root: &Path) {
+    let sentinel = root.join("__SYSTEM__/__initializing__");
+    let mmdb = root.join("mmdb");
+    let arm = root.join("arm");
+    fs::write(&arm, b"1").unwrap();
+    for _ in 0..2 {
+        assert!(
+            matches!(Namespace::open(DEFAULT_NS_ID), Err(VsdbError::Io(e)) if e.raw_os_error() == Some(EIO))
+        );
+        assert!(sentinel.exists());
+        assert!(!mmdb.exists());
+    }
+    fs::remove_file(arm).unwrap();
+    Namespace::open(DEFAULT_NS_ID).unwrap();
+    assert!(!sentinel.exists());
+    assert!(mmdb.is_dir());
+}
+
+fn engine_ready_directory_sync_retries(root: &Path) {
+    let sentinel = root.join("__SYSTEM__/__initializing__");
+    let ready = root.join("__SYSTEM__/.shards_ready");
+    let arm = root.join("arm");
+    fs::write(&arm, b"1").unwrap();
+    for _ in 0..2 {
+        assert!(
+            matches!(Namespace::open(DEFAULT_NS_ID), Err(VsdbError::Io(e)) if e.raw_os_error() == Some(EIO))
+        );
+        assert_eq!(fs::read(&ready).unwrap(), b"18");
+        assert!(sentinel.exists());
+    }
+    fs::remove_file(arm).unwrap();
+    Namespace::open(DEFAULT_NS_ID).unwrap();
+    assert!(!sentinel.exists());
+}
+
+fn registry_directory_sync_retries(root: &Path) {
+    let explicit = root.parent().unwrap().join("explicit_ns");
+    fs::create_dir_all(&explicit).unwrap();
+    let arm = root.join("arm");
+    fs::write(&arm, b"1").unwrap();
+
+    // Once the explicit engine finishes `.shards_ready`, the trigger activates
+    // and both the Established commit and rollback save fail on directory fsync.
+    // While the registry directory remains unsynced, the explicit root MUST stay
+    // intact so a power loss cannot strand a recovered registry entry.
+    assert!(matches!(
+        Namespace::create_with(NamespaceOpts {
+            path: Some(explicit.clone()),
+            shards: 1,
+            mem_budget_mb: Some(16),
+        }),
+        Err(VsdbError::Io(e)) if e.raw_os_error() == Some(EIO)
+    ));
+    assert!(explicit.join("__SYSTEM__/.shards_ready").exists());
+    // Subsequent registry loads must still enforce the pending directory fence.
+    assert!(
+        matches!(Namespace::list(), Err(VsdbError::Io(e)) if e.raw_os_error() == Some(EIO))
+    );
+    fs::remove_file(&arm).unwrap();
+    assert!(Namespace::list().unwrap().is_empty());
+    let created = Namespace::create_with(NamespaceOpts {
+        path: Some(explicit),
+        shards: 1,
+        mem_budget_mb: Some(16),
+    })
+    .unwrap();
+    created.close().unwrap();
+}
 
 fn prefix_directory_sync_retries(root: &Path) {
     let map = MapxRaw::new();
@@ -75,6 +145,9 @@ fn directory_sync_failure_prevents_metadata_publication() {
         match env::var("VSDB_DIRECTORY_SYNC_CASE").unwrap().as_str() {
             "prefix" => return prefix_directory_sync_retries(&root),
             "marker" => return marker_directory_sync_retries(&root),
+            "engine_init" => return engine_init_directory_sync_retries(&root),
+            "engine_ready" => return engine_ready_directory_sync_retries(&root),
+            "registry" => return registry_directory_sync_retries(&root),
             "metadata" => {}
             case => panic!("unknown directory sync case: {case}"),
         }
@@ -126,7 +199,12 @@ int fsync(int fd) {
     int (*real_fsync)(int) = dlsym(RTLD_NEXT, "fsync");
     const char *target = getenv("VSDB_DIRECTORY_SYNC_TARGET");
     const char *arm = getenv("VSDB_DIRECTORY_SYNC_ARM");
-    if (target && arm && access(arm, F_OK) == 0) {
+    const char *trigger = getenv("VSDB_DIRECTORY_SYNC_TRIGGER");
+    static int latched = 0;
+    if (trigger && access(trigger, F_OK) == 0) {
+        latched = 1;
+    }
+    if (target && arm && access(arm, F_OK) == 0 && (!trigger || latched)) {
         char link[64], path[4096];
         snprintf(link, sizeof(link), "/proc/self/fd/%d", fd);
         ssize_t len = readlink(link, path, sizeof(path) - 1);
@@ -153,26 +231,48 @@ int fsync(int fd) {
         "failed to build fsync interposer: {}",
         String::from_utf8_lossy(&compiled.stderr),
     );
-    for case in ["metadata", "prefix", "marker"] {
+    for case in [
+        "metadata",
+        "prefix",
+        "marker",
+        "engine_init",
+        "engine_ready",
+        "registry",
+    ] {
         let data = root.join(case);
         let target = if case == "marker" {
             data.join("__NAMESPACES__/0000000000000001/__SYSTEM__")
         } else {
             data.join("__SYSTEM__")
         };
-        let output = Command::new(env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "directory_sync_failure_prevents_metadata_publication",
-                "--nocapture",
-            ])
-            .env(CHILD_ROOT, &data)
-            .env("LD_PRELOAD", &shim)
-            .env("VSDB_DIRECTORY_SYNC_TARGET", target)
-            .env("VSDB_DIRECTORY_SYNC_ARM", data.join("arm"))
-            .env("VSDB_DIRECTORY_SYNC_CASE", case)
-            .output()
-            .unwrap();
+        let mut cmd = Command::new(env::current_exe().unwrap());
+        cmd.args([
+            "--exact",
+            "directory_sync_failure_prevents_metadata_publication",
+            "--nocapture",
+        ])
+        .env(CHILD_ROOT, &data)
+        .env("LD_PRELOAD", &shim)
+        .env("VSDB_DIRECTORY_SYNC_TARGET", target)
+        .env("VSDB_DIRECTORY_SYNC_ARM", data.join("arm"))
+        .env("VSDB_DIRECTORY_SYNC_CASE", case);
+        if case == "engine_init" {
+            cmd.env(
+                "VSDB_DIRECTORY_SYNC_TRIGGER",
+                data.join("__SYSTEM__/__initializing__"),
+            );
+        } else if case == "engine_ready" {
+            cmd.env(
+                "VSDB_DIRECTORY_SYNC_TRIGGER",
+                data.join("mmdb/__SYSTEM__/engine_header"),
+            );
+        } else if case == "registry" {
+            cmd.env(
+                "VSDB_DIRECTORY_SYNC_TRIGGER",
+                root.join("explicit_ns/__SYSTEM__/.shards_ready"),
+            );
+        }
+        let output = cmd.output().unwrap();
         assert!(output.status.success(), "{case} failed: {output:?}");
     }
     fs::remove_dir_all(root).unwrap();

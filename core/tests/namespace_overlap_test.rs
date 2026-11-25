@@ -30,6 +30,26 @@ fn relative_base_cannot_be_reused_as_a_namespace_root() {
         "a rejected create must not initialize an engine"
     );
 
+    #[cfg(unix)]
+    {
+        let real_dir = scratch.join("real_ns");
+        let link_dir = scratch.join("link_ns");
+        fs::create_dir_all(&real_dir).unwrap();
+        std::os::unix::fs::symlink(&real_dir, &link_dir).unwrap();
+        let ns = Namespace::create_with(NamespaceOpts {
+            path: Some(link_dir.clone()),
+            shards: 1,
+            mem_budget_mb: Some(16),
+        })
+        .unwrap();
+        let ns_id = ns.id();
+        assert!(real_dir.join("mmdb").is_dir());
+        ns.close().unwrap();
+        Namespace::destroy(ns_id).unwrap();
+        assert!(fs::symlink_metadata(&link_dir).is_err());
+        assert!(!real_dir.exists());
+    }
+
     env::set_current_dir(original).unwrap();
     fs::remove_dir_all(&scratch).unwrap();
 }

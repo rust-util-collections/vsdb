@@ -303,7 +303,9 @@ pub(crate) fn install_engine(
     let path = engine_header(root, ns);
     let expected = engine_bytes(id, ns, shards);
     match fs::read(&path) {
-        Ok(bytes) if bytes == expected => {}
+        Ok(bytes) if bytes == expected => {
+            File::open(path.parent().expect("header has a parent"))?.sync_all()?;
+        }
         Ok(_) => return Err(corrupt("refused to replace another engine's identity")),
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             create_dir_all_durable(path.parent().unwrap())?;
@@ -312,8 +314,15 @@ pub(crate) fn install_engine(
         Err(e) => return Err(e.into()),
     }
     let ready = root.join("__SYSTEM__/.shards_ready");
-    if !ready.try_exists()? {
-        atomic_write_file(&ready, b"18")?;
+    match fs::read(&ready) {
+        Ok(bytes) if bytes == b"18" => {
+            File::open(ready.parent().expect("marker has a parent"))?.sync_all()?;
+        }
+        Ok(_) => return Err(corrupt("invalid shard-ready marker")),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            atomic_write_file(&ready, b"18")?;
+        }
+        Err(e) => return Err(e.into()),
     }
     Ok(())
 }

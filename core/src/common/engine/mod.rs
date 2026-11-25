@@ -226,7 +226,10 @@ impl Mapx {
 
     pub(crate) fn sync_wal(&self) {
         if !self.ns.is_read_only() {
-            self.ns.engine().sync_wal(self.prefix_bytes());
+            let prefix = self.prefix.load(Ordering::Acquire);
+            if prefix != 0 {
+                self.ns.engine().sync_wal(prefix.to_le_bytes());
+            }
         }
     }
 
@@ -246,6 +249,11 @@ impl Mapx {
     #[inline(always)]
     pub(crate) fn get(&self, key: &[u8]) -> Option<RawValue> {
         self.ns.engine().get(self.prefix_bytes(), key)
+    }
+
+    pub(crate) fn try_contains_key(&self, key: &[u8]) -> Result<bool> {
+        let prefix = self.try_prefix()?.to_le_bytes();
+        self.ns.engine().try_contains_key(prefix, key)
     }
 
     pub(crate) fn reader(&self) -> MapxReader {
@@ -374,7 +382,7 @@ impl Mapx {
 
     #[inline(always)]
     pub(crate) fn batch_begin(&mut self) -> Batch<'_> {
-        let prefix = self.prefix_bytes();
+        let prefix = self.try_prefix().map(Pre::to_le_bytes);
         self.ns.engine().batch_begin(prefix)
     }
 
@@ -384,7 +392,7 @@ impl Mapx {
     /// included — commits in one atomic engine write batch.
     #[inline(always)]
     pub(crate) fn batch_begin_wiped(&mut self) -> Batch<'_> {
-        let prefix = self.prefix_bytes();
+        let prefix = self.try_prefix().map(Pre::to_le_bytes);
         self.ns.engine().batch_begin_wiped(prefix)
     }
 
@@ -808,7 +816,7 @@ pub type ValueIterMut<'a> = ValueMut<'a>;
 impl ValueMut<'_> {
     fn flush(&mut self) -> Result<()> {
         self.dirty = false;
-        let mut batch = self.ns.engine().batch_begin(self.prefix);
+        let mut batch = self.ns.engine().batch_begin(Ok(self.prefix));
         batch.insert(&self.key, &self.value);
         batch.commit()
     }

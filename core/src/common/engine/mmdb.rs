@@ -244,6 +244,9 @@ impl MmDB {
                     &sentinel_path,
                     &crate::common::universe::engine_bytes(universe_id, ns_id, shards),
                 )?;
+            } else if !marker_present && sentinel_path.exists() {
+                fs::File::open(sentinel_path.parent().expect("has parent"))?
+                    .sync_all()?;
             }
             if ns_id != 0 {
                 // The initializer proves ownership across a crash while the
@@ -375,6 +378,16 @@ impl MmDB {
     pub(crate) fn get(&self, meta_prefix: PreBytes, key: &[u8]) -> Option<RawValue> {
         with_full_key(&meta_prefix, key, |k| self.shard(&meta_prefix).get(k))
             .expect("vsdb: mmdb get failed")
+    }
+
+    pub(crate) fn try_contains_key(
+        &self,
+        meta_prefix: PreBytes,
+        key: &[u8],
+    ) -> Result<bool> {
+        with_full_key(&meta_prefix, key, |k| self.shard(&meta_prefix).get(k))
+            .map(|v| v.is_some())
+            .map_err(from_mmdb_err)
     }
 
     pub(crate) fn insert(&self, meta_prefix: PreBytes, key: &[u8], value: &[u8]) {
@@ -528,14 +541,17 @@ impl MmDB {
         }
     }
 
-    pub(crate) fn batch_begin(&self, meta_prefix: PreBytes) -> MmdbBatch<'_> {
+    pub(crate) fn batch_begin(&self, meta_prefix: Result<PreBytes>) -> MmdbBatch<'_> {
         MmdbBatch::new(meta_prefix, self)
     }
 
     /// Like [`batch_begin`](Self::batch_begin), but the batch is
     /// pre-staged with the removal of every existing key of the prefix
     /// (one range tombstone). See `MmdbBatch::new_wiped`.
-    pub(crate) fn batch_begin_wiped(&self, meta_prefix: PreBytes) -> MmdbBatch<'_> {
+    pub(crate) fn batch_begin_wiped(
+        &self,
+        meta_prefix: Result<PreBytes>,
+    ) -> MmdbBatch<'_> {
         MmdbBatch::new_wiped(meta_prefix, self)
     }
 }
@@ -1214,14 +1230,20 @@ fn validate_shard_layout(
 pub(crate) struct MmdbBatch<'a> {
     inner: WriteBatch,
     meta_prefix: PreBytes,
+    prefix_err: Option<VsdbError>,
     engine: &'a MmDB,
 }
 
 impl<'a> MmdbBatch<'a> {
-    fn new(meta_prefix: PreBytes, engine: &'a MmDB) -> Self {
+    fn new(meta_prefix: Result<PreBytes>, engine: &'a MmDB) -> Self {
+        let (meta_prefix, prefix_err) = match meta_prefix {
+            Ok(prefix) => (prefix, None),
+            Err(err) => ([0; PREFIX_SIZE], Some(err)),
+        };
         Self {
             inner: WriteBatch::new(),
             meta_prefix,
+            prefix_err,
             engine,
         }
     }
@@ -1230,8 +1252,12 @@ impl<'a> MmdbBatch<'a> {
     /// prefix range. Entries within one batch carry position-based
     /// sequence numbers, so operations added afterwards apply on top of
     /// the wipe, and the whole set commits atomically.
-    fn new_wiped(meta_prefix: PreBytes, engine: &'a MmDB) -> Self {
+    fn new_wiped(meta_prefix: Result<PreBytes>, engine: &'a MmDB) -> Self {
         let mut b = Self::new(meta_prefix, engine);
+        if b.prefix_err.is_some() {
+            return b;
+        }
+        let meta_prefix = b.meta_prefix;
         match prefix_successor(&meta_prefix) {
             Some(end) => b.inner.delete_range(&meta_prefix, &end),
             None => {
@@ -1252,15 +1278,24 @@ impl<'a> MmdbBatch<'a> {
 impl MmdbBatch<'_> {
     #[inline(always)]
     pub(crate) fn insert(&mut self, key: &[u8], value: &[u8]) {
+        if self.prefix_err.is_some() {
+            return;
+        }
         with_full_key(&self.meta_prefix, key, |k| self.inner.put(k, value));
     }
 
     #[inline(always)]
     pub(crate) fn remove(&mut self, key: &[u8]) {
+        if self.prefix_err.is_some() {
+            return;
+        }
         with_full_key(&self.meta_prefix, key, |k| self.inner.delete(k));
     }
 
     pub(crate) fn delete_range(&mut self, start: &[u8], end: &[u8]) {
+        if self.prefix_err.is_some() {
+            return;
+        }
         if start < end {
             with_full_key(&self.meta_prefix, start, |lo| {
                 with_full_key(&self.meta_prefix, end, |hi| {
@@ -1287,6 +1322,9 @@ impl MmdbBatch<'_> {
             return Err(crate::common::error::VsdbError::ReadOnly {
                 operation: "batch commit",
             });
+        }
+        if let Some(err) = self.prefix_err {
+            return Err(err);
         }
         self.engine
             .shard(&self.meta_prefix)
@@ -1607,7 +1645,7 @@ mod tests {
             read_only: false,
             mem_budget: 8 * 1024 * 1024,
         };
-        let mut batch = engine.batch_begin(42u64.to_le_bytes());
+        let mut batch = engine.batch_begin(Ok(42u64.to_le_bytes()));
         batch.insert(b"receipt", b"unacknowledged");
         let error = batch.commit_sync().unwrap_err();
         assert!(matches!(
