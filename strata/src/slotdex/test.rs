@@ -1328,3 +1328,58 @@ fn large_keys_and_tierless_reverse_chunks() {
     });
     assert!(db.iter(.., Order::Desc).eq(expected));
 }
+
+#[test]
+fn insert_batch_coalescing_matches_serial_rows_across_multi_tier_promotions() {
+    for swap in [false, true] {
+        let mut batch_db = SlotDex::<u64, u64>::new(4, swap).unwrap();
+        let mut serial_db = SlotDex::<u64, u64>::new(4, swap).unwrap();
+
+        // Pre-seed a few slots before the batch so both existing-slot reads
+        // and fresh-slot promotions are exercised.
+        for (slot, key) in [(0u64, 1000u64), (3, 1003), (12, 1012)] {
+            batch_db.insert(slot, key).unwrap();
+            serial_db.insert(slot, key).unwrap();
+        }
+
+        // 0 -> 1 -> 2 -> 3 mid-batch promotions, hot-slot repeats, and duplicates.
+        let mut items = Vec::new();
+        for i in 0..160u64 {
+            items.push((i / 2, i));
+            if i % 5 == 0 {
+                // Repeat hot slots (both pre-existing and newly created) + duplicate pair.
+                items.push((0, 2000 + i));
+                items.push((i / 2, i));
+            }
+        }
+
+        batch_db.insert_batch(items.iter().copied()).unwrap();
+        for (slot, key) in items {
+            serial_db.insert(slot, key).unwrap();
+        }
+
+        assert!(batch_db.levels.len() >= 3);
+        assert_eq!(batch_db.levels.len(), serial_db.levels.len());
+        for (a, b) in batch_db.levels.iter().zip(serial_db.levels.iter()) {
+            assert_eq!(a.floor_base, b.floor_base);
+            assert_eq!(a.buckets, b.buckets);
+        }
+        assert_eq!(batch_db.slot_rows, serial_db.slot_rows);
+        assert_eq!(batch_db.total(), serial_db.total());
+
+        // Compare every persisted [0x00] entry and [0x01] level-0 / tier row byte-for-bit
+        // (ignoring only [0x02] TOTAL_KEY's generation counter, which advances once per batch
+        // vs once per serial insert).
+        let batch_rows: Vec<_> = batch_db
+            .store
+            .iter()
+            .filter(|(k, _)| k.as_slice() != TOTAL_KEY)
+            .collect();
+        let serial_rows: Vec<_> = serial_db
+            .store
+            .iter()
+            .filter(|(k, _)| k.as_slice() != TOTAL_KEY)
+            .collect();
+        assert_eq!(batch_rows, serial_rows, "swap={swap}");
+    }
+}

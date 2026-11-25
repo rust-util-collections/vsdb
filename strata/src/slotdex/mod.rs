@@ -565,6 +565,9 @@ where
         let mut grown: Vec<Level<S>> = vec![];
         // Cache deltas: (level_idx, floor) -> new count, applied on success.
         let mut bumps: BTreeMap<(usize, S), EntryCnt> = BTreeMap::new();
+        // Per-slot level-0 count deltas: flushed once before commit (and once
+        // into `staged` if a tier-less index promotes 0 -> 1 mid-batch).
+        let mut l0_bumps: BTreeMap<S, EntryCnt> = BTreeMap::new();
         // Number of floors introduced by `bumps` beyond each level's cache.
         // Updating this once per new floor keeps the per-key growth gate O(1).
         let mut pending_new_floors = vec![0usize; self.levels.len()];
@@ -578,6 +581,17 @@ where
             let ekey = entry_key(&slot, &k);
             if staged.get_over(&self.store, &ekey).is_some() {
                 continue;
+            }
+
+            // Materialize pending level-0 updates before the one-shot 0 -> 1
+            // promotion scan so earlier keys in this batch are included.
+            if self.levels.is_empty()
+                && grown.is_empty()
+                && self.slot_rows + pending_slot_rows > u64::from(self.tier_capacity)
+            {
+                for (&s, &cnt) in &l0_bumps {
+                    staged.put(level_key(0, &s), encode_cnt(cnt).to_vec());
+                }
             }
 
             // Match serial `insert` exactly: each unique key observes the
@@ -594,15 +608,14 @@ where
             }
 
             staged.put(ekey, vec![]);
-            let slot_key = level_key(0, &slot);
-            let slot_cnt = staged
-                .get_over(&self.store, &slot_key)
-                .map(|raw| decode_cnt(&raw))
-                .unwrap_or(0);
-            staged.put(slot_key, encode_cnt(slot_cnt + 1).to_vec());
-            if 0 == slot_cnt {
-                pending_slot_rows += 1;
-            }
+            let slot_cnt = l0_bumps.entry(slot).or_insert_with(|| {
+                let prev = slot_entry_cnt(slot, |k| self.store.get(k));
+                if 0 == prev {
+                    pending_slot_rows += 1;
+                }
+                prev
+            });
+            *slot_cnt += 1;
 
             for (i, lv) in self
                 .levels
@@ -620,13 +633,19 @@ where
                     })
                 });
                 *v += 1;
-                staged.put(level_key(i as u8 + 1, &floor), encode_cnt(*v).to_vec());
             }
             total_added += 1;
         }
 
         if 0 == total_added {
             return Ok(());
+        }
+
+        for (slot, cnt) in l0_bumps {
+            staged.put(level_key(0, &slot), encode_cnt(cnt).to_vec());
+        }
+        for (&(i, floor), &cnt) in &bumps {
+            staged.put(level_key(i as u8 + 1, &floor), encode_cnt(cnt).to_vec());
         }
 
         let generation = self.next_generation()?;
