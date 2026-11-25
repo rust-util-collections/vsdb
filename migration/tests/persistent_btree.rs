@@ -85,6 +85,59 @@ fn preserves_the_primary_prefix_and_maps_external_roots() {
         decoded_tree.get(mapped_roots[0], b"z"),
         Some(b"16".to_vec())
     );
+
+    // Resumed conversion must reject corrupted 9-byte internal separator spans
+    // before deleting 8-byte v17 source pages.
+    let mut corrupt_pool = vsdb::MapxRaw::new_in(&ns);
+    let encode_v17_leaf = |entries: &[(&[u8], &[u8])]| {
+        let mut out = vec![0u8];
+        out.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+        for (k, v) in entries {
+            out.extend_from_slice(&(k.len() as u32).to_le_bytes());
+            out.extend_from_slice(k);
+            out.extend_from_slice(&(v.len() as u32).to_le_bytes());
+            out.extend_from_slice(v);
+        }
+        out
+    };
+    let left_entries: Vec<(Vec<u8>, Vec<u8>)> = (0u8..16).map(|i| (vec![i], vec![i])).collect();
+    let right_entries: Vec<(Vec<u8>, Vec<u8>)> = (16u8..32).map(|i| (vec![i], vec![i])).collect();
+    let left_refs: Vec<(&[u8], &[u8])> = left_entries
+        .iter()
+        .map(|(k, v)| (k.as_slice(), v.as_slice()))
+        .collect();
+    let right_refs: Vec<(&[u8], &[u8])> = right_entries
+        .iter()
+        .map(|(k, v)| (k.as_slice(), v.as_slice()))
+        .collect();
+    corrupt_pool.insert(1u64.to_le_bytes(), encode_v17_leaf(&left_refs));
+    corrupt_pool.insert(2u64.to_le_bytes(), encode_v17_leaf(&right_refs));
+    let mut internal_v17 = vec![1u8];
+    internal_v17.extend_from_slice(&1u32.to_le_bytes());
+    internal_v17.extend_from_slice(&1u32.to_le_bytes());
+    internal_v17.push(16u8);
+    internal_v17.extend_from_slice(&1u64.to_le_bytes());
+    internal_v17.extend_from_slice(&2u64.to_le_bytes());
+    corrupt_pool.insert(3u64.to_le_bytes(), &internal_v17);
+    let mut bad_raw = b"VSMAPX01".to_vec();
+    bad_raw.extend_from_slice(&corrupt_pool.instance_id().map_id.to_le_bytes());
+    bad_raw.extend_from_slice(&ns.id().to_le_bytes());
+    let bad_handle = postcard::to_allocvec(&(bad_raw, 4u64)).unwrap();
+    let (_, bad_roots) = migrate_tree_handle_v17(&bad_handle, &[3]).unwrap();
+    // Re-insert the 8-byte v17 source pages to simulate a crash before remove_old_nodes,
+    // and corrupt the persisted 9-byte internal root's separator to 0xff (> right.first).
+    corrupt_pool.insert(1u64.to_le_bytes(), encode_v17_leaf(&left_refs));
+    corrupt_pool.insert(2u64.to_le_bytes(), encode_v17_leaf(&right_refs));
+    corrupt_pool.insert(3u64.to_le_bytes(), &internal_v17);
+    let mut root_key = [0u8; 9];
+    root_key[0] = 0x10;
+    root_key[1..].copy_from_slice(&bad_roots[0].to_be_bytes());
+    let mut root_bytes = corrupt_pool.get(root_key).unwrap();
+    *root_bytes.last_mut().unwrap() = 0xff;
+    corrupt_pool.insert(root_key, root_bytes);
+    assert!(migrate_tree_handle_v17(&bad_handle, &[3]).is_err());
+    assert!(corrupt_pool.get(3u64.to_le_bytes()).is_some());
+
     drop(reopened);
     drop(decoded_tree);
     fs::remove_dir_all(scratch).unwrap();

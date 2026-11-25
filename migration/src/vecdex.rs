@@ -67,6 +67,8 @@ pub fn migrate_v17<K: KeyEnDe, D: DistanceMetric<S>, S: Scalar>(
     let (index, target) = convert_bytes::<K, D, S>(&bytes, Some(id))?;
     if bytes != target {
         vsdb::common::atomic_write_file(&path, &target)?;
+    } else {
+        crate::sync_parent(&path)?;
     }
     Ok(index)
 }

@@ -199,4 +199,44 @@ fn migrates_mixed_saved_types() {
             .get("cids"),
         Some(vec![CommitId::from_raw(3), CommitId::from_raw(4)])
     );
+
+    // A VSTYPE02 DagMapRawKey<u64> child under a DagMapRawKey<BranchId> root
+    // must keep its u64 tag instead of colliding with v16 BranchId -> u64.
+    let ((mut brd, mut brp, mut brch), br_ids, br_raw) = mk_node();
+    let ((mut u64d, mut u64p, _), u64_ids, u64_raw) = mk_node();
+    brp.insert([], [0]);
+    brd.insert(
+        b"head",
+        postcard::to_allocvec(&vsdb::BranchId::from_raw(1)).unwrap(),
+    );
+    u64p.insert([], [&[1][..], &br_raw].concat());
+    brch.insert(4u128.to_le_bytes(), &u64_raw);
+    u64d.insert(b"plain", postcard::to_allocvec(&42u64).unwrap());
+    std::fs::write(
+        ns.meta_path(br_ids[0]),
+        wrap_child(
+            "vsdb::dagmap::rawkey::DagMapRawKey<vsdb::versioned::BranchId>",
+            &br_raw,
+        ),
+    )
+    .unwrap();
+    let mut v02_child = b"VSTYPE02".to_vec();
+    v02_child.extend_from_slice(&fnv1a("vsdb::dagmap::rawkey::DagMapRawKey<u64>").to_le_bytes());
+    v02_child.extend_from_slice(&u64_raw);
+    std::fs::write(
+        ns.meta_path(u64_ids[0]),
+        postcard::to_allocvec(&v02_child).unwrap(),
+    )
+    .unwrap();
+    let (migrated_br, br_remap) =
+        vsdb_migrate::dagmap::migrate_rawkey_v17::<vsdb::BranchId>(br_ids[0]).unwrap();
+    assert_eq!(migrated_br.get(b"head"), Some(vsdb::BranchId::from_raw(1)));
+    let u64_target = InstanceId::new(u64_ids[0], ns.id());
+    let u64_target = *br_remap.get(&u64_target).unwrap_or(&u64_target);
+    assert_eq!(
+        DagMapRawKey::<u64>::from_meta(u64_target)
+            .unwrap()
+            .get(b"plain"),
+        Some(42u64)
+    );
 }

@@ -175,7 +175,7 @@ fn read_record(path: &Path, root: InstanceId) -> Result<Option<Record>> {
     Ok(Some(record))
 }
 
-fn saved_tag<T>(ns: &Namespace, parts: [InstanceId; 3]) -> Result<u64> {
+fn saved_tag<T>(ns: &Namespace, parts: [InstanceId; 3], is_root: bool) -> Result<u64> {
     let default = crate::tag(type_name::<T>());
     let bytes = match fs::read(ns.meta_path(parts[0].map_id)) {
         Ok(v) => v,
@@ -196,8 +196,10 @@ fn saved_tag<T>(ns: &Namespace, parts: [InstanceId; 3]) -> Result<u64> {
             return Err(corrupt("invalid saved child metadata"));
         }
         let vstype02 = magic == b"VSTYPE02";
+        let ambiguous_v02 =
+            vstype02 && crate::legacy_tag_for::<T>(true) != crate::legacy_tag_for::<T>(false);
         let tag = u64::from_le_bytes(frame[8..16].try_into().unwrap());
-        let tag = if tag == crate::legacy_tag_for::<T>(vstype02) {
+        let tag = if tag == crate::legacy_tag_for::<T>(vstype02) && (is_root || !ambiguous_v02) {
             default
         } else if !vstype02 && tag == crate::legacy_tag_for::<DagMapRawKey<vsdb::BranchId>>(false) {
             crate::tag(type_name::<DagMapRawKey<vsdb::BranchId>>())
@@ -422,7 +424,7 @@ fn plan<T>(ns: &Namespace, root: InstanceId, legacy: Legacy) -> Result<Vec<Conve
             old: source.parts.map(|p| p.map_id),
             target: targets[&id],
             scratch: allocate_colocated()?,
-            tag: saved_tag::<T>(ns, source.parts)?,
+            tag: saved_tag::<T>(ns, source.parts, id == root.map_id)?,
             state,
             children: source
                 .children
@@ -533,14 +535,20 @@ fn prepare(ns: &Namespace, nodes: &[Conversion], dag_id: u64, next: u64) -> Resu
         copy_rows(&source, &mut scratch, true)?;
         let state = n.state;
         let mut next_edge_id = next;
-        for &(edge, child) in &n.children {
-            scratch.insert(edge_key(edge), child.to_le_bytes());
-            next_edge_id = next_edge_id.max(edge + 1);
+        for chunk in n.children.chunks(4096) {
+            let mut batch = scratch.batch();
+            for &(edge, child) in chunk {
+                batch.insert(edge_key(edge), child.to_le_bytes());
+                next_edge_id = next_edge_id.max(edge + 1);
+            }
+            batch.commit()?;
         }
-        scratch.insert(
+        let mut batch = scratch.batch();
+        batch.insert(
             [0],
             postcard::to_allocvec(&(*b"VSDAGN01", dag_id, next_edge_id, state))?,
         );
+        batch.commit()?;
     }
     open_prefix(ns, nodes[0].scratch)?.try_sync_wal()
 }
@@ -610,6 +618,7 @@ pub fn migrate_child_v17<V: ValueEnDe>(id: impl Into<InstanceId>) -> Result<DagM
     let found = u64::from_le_bytes(frame[8..16].try_into().unwrap());
     let expected = crate::tag(type_name::<DagMapRawKey<V>>());
     if found == expected {
+        crate::sync_parent(&path)?;
         return DagMapRawKey::<V>::from_meta(id);
     }
     if found != crate::legacy_tag_for::<DagMapRawKey<V>>(false)
@@ -796,7 +805,10 @@ fn migrate_with<T: DeserializeOwned>(
     let previous = journal_path(&ns, root)?;
     let journal = path.with_extension("dag-v17");
     let mut record = match read_record(&previous, root)? {
-        Some(r) => r,
+        Some(r) => {
+            crate::sync_parent(&previous)?;
+            r
+        }
         None => {
             let owned;
             let bytes = match source {
@@ -808,12 +820,13 @@ fn migrate_with<T: DeserializeOwned>(
             };
             if current_handle(bytes) {
                 let _: T = decode(bytes)?;
+                if source.is_none() {
+                    crate::sync_parent(&path)?;
+                }
                 return Ok(None);
             }
             let nodes = plan::<T>(&ns, root, parse(bytes)?)?;
-            if !ns.meta_dir().try_exists()? {
-                vsdb::common::create_dir_all_durable(&ns.meta_dir())?;
-            }
+            vsdb::common::create_dir_all_durable(&ns.meta_dir())?;
             let r = Record::Running {
                 dag_id: rand::random(),
                 phase: Phase::Prepare,

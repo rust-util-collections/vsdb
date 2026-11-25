@@ -62,6 +62,8 @@ fn convert<S: SlotType, K: KeyEnDeOrdered>(
     let (dex, handle) = convert_bytes::<S, K>(&bytes, Some(id), requested)?;
     if bytes != handle {
         atomic_write_file(&path, &handle)?;
+    } else {
+        crate::sync_parent(&path)?;
     }
     Ok(dex)
 }

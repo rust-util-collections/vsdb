@@ -173,7 +173,8 @@ pub fn migrate_v17<K: KeyEnDeOrdered, V: ValueEnDe>(
     let id = id.into();
     let id = InstanceId::new(id.map_id, id.ns.unwrap_or_default());
     let ns = Namespace::open(id.ns.unwrap_or_default())?;
-    let bytes = std::fs::read(ns.meta_path(id.map_id))?;
+    let path = ns.meta_path(id.map_id);
+    let bytes = std::fs::read(&path)?;
     if let Ok((frame, b"")) = postcard::take_from_bytes::<&[u8]>(&bytes)
         && frame.starts_with(b"VSTYPE04")
     {
@@ -182,11 +183,14 @@ pub fn migrate_v17<K: KeyEnDeOrdered, V: ValueEnDe>(
                 operation: "VerMap migration",
             });
         }
+        crate::sync_parent(&path)?;
         return VerMap::<K, V>::from_meta_verified(id);
     }
     let (map, converted) = convert_vermap_bytes::<K, V>(&bytes, Some(id))?;
     if bytes != converted {
         save_instance_meta(id, &map)?;
+    } else {
+        crate::sync_parent(&path)?;
     }
     Ok(map)
 }
@@ -553,6 +557,18 @@ fn verify_converted_objects(store: &MapxRaw, next_id: u64, roots: &[u64]) -> Res
             return Err(corrupt("converted object ID exceeds allocation ceiling"));
         }
     }
+    enum PageKind {
+        Leaf {
+            first: Vec<u8>,
+            last: Vec<u8>,
+            len: usize,
+        },
+        Internal {
+            keys: Vec<Vec<u8>>,
+            children: Vec<u64>,
+        },
+    }
+    let mut pages = HashMap::<u64, PageKind>::new();
     let mut seen = HashSet::new();
     let mut work = Vec::new();
     for &r in roots {
@@ -588,11 +604,18 @@ fn verify_converted_objects(store: &MapxRaw, next_id: u64, roots: &[u64]) -> Res
             _ => return Err(corrupt("invalid converted B+ tree page tag")),
         };
         let payload_start = 2 + 12 * n + if leaf { 0 } else { 8 };
-        if n > MAX_KEYS || payload_start > raw.len() {
+        if n == 0 || n > MAX_KEYS || payload_start > raw.len() {
             return Err(corrupt("invalid converted B+ tree page header"));
         }
         let mut pos = payload_start;
         let mut prev_key: Option<&[u8]> = None;
+        let mut page_keys = if leaf {
+            Vec::new()
+        } else {
+            Vec::with_capacity(n)
+        };
+        let mut first_key = None;
+        let mut last_key = None;
         let mut edges = Vec::new();
         for i in 0..n {
             let p = 2 + 12 * i;
@@ -606,6 +629,16 @@ fn verify_converted_objects(store: &MapxRaw, next_id: u64, roots: &[u64]) -> Res
                 return Err(corrupt("unsorted converted B+ tree keys"));
             }
             prev_key = Some(key);
+            if leaf {
+                if first_key.is_none() {
+                    first_key = Some(key.to_vec());
+                }
+                if i + 1 == n {
+                    last_key = Some(key.to_vec());
+                }
+            } else {
+                page_keys.push(key.to_vec());
+            }
             let end = if leaf {
                 if desc & BLOB == BLOB {
                     edges.push(desc);
@@ -651,7 +684,50 @@ fn verify_converted_objects(store: &MapxRaw, next_id: u64, roots: &[u64]) -> Res
                 "invalid converted B+ tree page class or child serial",
             ));
         }
+        let kind = if leaf {
+            PageKind::Leaf {
+                first: first_key.expect("non-empty leaf"),
+                last: last_key.expect("non-empty leaf"),
+                len: n,
+            }
+        } else {
+            PageKind::Internal {
+                keys: page_keys,
+                children: edges.clone(),
+            }
+        };
+        pages.insert(id, kind);
         work.extend(edges);
+    }
+    let mut ids: Vec<_> = pages.keys().copied().collect();
+    ids.sort_unstable_by_key(|id| id & !BLOB);
+    let mut spans = HashMap::<u64, (Vec<u8>, Vec<u8>, u32, usize)>::with_capacity(ids.len());
+    for id in ids {
+        let span = match &pages[&id] {
+            PageKind::Leaf { first, last, len } => (first.clone(), last.clone(), 0, *len),
+            PageKind::Internal { keys, children } => {
+                let first = spans
+                    .get(&children[0])
+                    .ok_or_else(|| corrupt("missing converted child span"))?;
+                let mut prev = first;
+                for (sep, child_id) in keys.iter().zip(&children[1..]) {
+                    let right = spans
+                        .get(child_id)
+                        .ok_or_else(|| corrupt("missing converted child span"))?;
+                    if right.2 != first.2
+                        || prev.3 < MAX_KEYS / 2
+                        || right.3 < MAX_KEYS / 2
+                        || prev.1.as_slice() >= sep.as_slice()
+                        || right.0.as_slice() < sep.as_slice()
+                    {
+                        return Err(corrupt("invalid converted child span"));
+                    }
+                    prev = right;
+                }
+                (first.0.clone(), prev.1.clone(), first.2 + 1, keys.len())
+            }
+        };
+        spans.insert(id, span);
     }
     Ok(())
 }
@@ -790,11 +866,15 @@ fn remove_old_nodes(store: &mut MapxRaw, protected: &HashSet<Vec<u8>>) -> Result
             batch.commit()?;
         }
     }
-    let mut batch = store.batch();
-    for key in old {
-        batch.remove(key);
+    if !old.is_empty() {
+        let mut batch = store.batch();
+        for key in old {
+            batch.remove(key);
+        }
+        batch.commit_sync()?;
+    } else {
+        store.try_sync_wal()?;
     }
-    batch.commit_sync()?;
 
     Ok(())
 }
@@ -820,6 +900,8 @@ pub fn migrate_tree_v17(
     let (tree, handle, remapped) = convert_tree_bytes(&frame_bytes, Some(id), roots)?;
     if frame_bytes != handle {
         tree.save_meta()?;
+    } else {
+        crate::sync_parent(&path)?;
     }
     Ok((tree, remapped))
 }
@@ -886,6 +968,7 @@ fn convert_tree_bytes(
         if mapping.instance != id || mapping.original.len() != mapping.converted.len() {
             return Err(corrupt("root mapping identity mismatch"));
         }
+        crate::sync_parent(&remap_file)?;
         mapping
     } else {
         if modern {

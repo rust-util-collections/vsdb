@@ -5,7 +5,7 @@
 #![deny(warnings)]
 
 use serde::{Deserialize, Deserializer, de};
-use std::{any::type_name, fs};
+use std::{any::type_name, fs, path::Path};
 use vsdb::{InstanceId, MapxRaw, Namespace, Result, VsdbError};
 pub mod dagmap;
 pub mod slotdex;
@@ -18,6 +18,14 @@ fn corrupt(detail: impl Into<String>) -> VsdbError {
     VsdbError::Corrupt {
         detail: detail.into(),
     }
+}
+pub(crate) fn sync_parent(path: &Path) -> Result<()> {
+    let parent = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    fs::File::open(parent)?.sync_all()?;
+    Ok(())
 }
 fn tag(name: &str) -> u64 {
     name.bytes().fold(0xcbf29ce484222325, |hash, b| {
@@ -301,6 +309,11 @@ nested_basic!(vsdb::Orphan<V>, V:vsdb::ValueEnDe);
 pub fn migrate_basic<T: BasicHandle + de::DeserializeOwned>(id: InstanceId) -> Result<T> {
     let id = InstanceId::new(id.map_id, id.ns.unwrap_or_default());
     let ns = Namespace::open(id.ns.unwrap_or_default())?;
+    if ns.is_read_only() {
+        return Err(VsdbError::ReadOnly {
+            operation: "basic metadata migration",
+        });
+    }
     let path = ns.meta_path(id.map_id);
     let bytes = fs::read(&path)?;
     let frame: &[u8] = exactly(&bytes)?;
@@ -309,6 +322,7 @@ pub fn migrate_basic<T: BasicHandle + de::DeserializeOwned>(id: InstanceId) -> R
         if bytes != expected {
             return Err(corrupt("basic metadata identity mismatch"));
         }
+        sync_parent(&path)?;
         return exactly(&bytes);
     }
     if T::v17_id(frame)? != id {
@@ -323,9 +337,16 @@ pub fn migrate_basic<T: BasicHandle + de::DeserializeOwned>(id: InstanceId) -> R
 /// Upgrades a raw map's saved metadata in place.
 pub fn migrate_raw(id: InstanceId) -> Result<MapxRaw> {
     let id = InstanceId::new(id.map_id, id.ns.unwrap_or_default());
-    let path = Namespace::open(id.ns.unwrap_or_default())?.meta_path(id.map_id);
+    let ns = Namespace::open(id.ns.unwrap_or_default())?;
+    if ns.is_read_only() {
+        return Err(VsdbError::ReadOnly {
+            operation: "raw metadata migration",
+        });
+    }
+    let path = ns.meta_path(id.map_id);
     let bytes = fs::read(&path)?;
     if bytes == raw_frame(id) {
+        sync_parent(&path)?;
         return raw_map(id);
     }
     if raw_id(&bytes)? != id {

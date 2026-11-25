@@ -369,10 +369,31 @@ fn slotdex_and_dagmap_converters_return_err_without_default_engine() {
         let dir = PathBuf::from(std::env::var_os("VSDB_NO_DEFAULT_NS_DIR").unwrap());
         if mode == "seed" {
             vsdb_configure(VsdbOptions::new(&dir)).unwrap();
-            let _ns = vsdb::Namespace::create().unwrap();
+            let ns = vsdb::Namespace::create().unwrap();
+            let typed = Mapx::<u64, u64>::new_in(&ns).save_meta().unwrap();
+            let raw = vsdb::MapxRaw::new_in(&ns).save_meta().unwrap();
+            fs::write(
+                dir.join("ro-ids"),
+                postcard::to_allocvec(&(typed, raw)).unwrap(),
+            )
+            .unwrap();
             return;
         }
         vsdb_configure(VsdbOptions::read_only(&dir)).unwrap();
+        let (typed, raw): (InstanceId, InstanceId) =
+            postcard::from_bytes(&fs::read(dir.join("ro-ids")).unwrap()).unwrap();
+        assert!(matches!(
+            migrate_universe(&dir),
+            Err(vsdb::VsdbError::ReadOnly { .. })
+        ));
+        assert!(matches!(
+            migrate_basic::<Mapx<u64, u64>>(typed),
+            Err(vsdb::VsdbError::ReadOnly { .. })
+        ));
+        assert!(matches!(
+            vsdb_migrate::migrate_raw(raw),
+            Err(vsdb::VsdbError::ReadOnly { .. })
+        ));
         assert!(vsdb_migrate::slotdex::migrate_v17::<u64, u64>(40_960_000).is_err());
         assert!(vsdb_migrate::dagmap::migrate_v17(40_960_000).is_err());
         return;
@@ -406,9 +427,12 @@ fn default_bootstrap_before_the_system_directory() {
     assert!(migrate_universe(&base).is_err());
     assert!(!base.join("__SYSTEM__").exists());
     fs::remove_file(base.join("unrelated")).unwrap();
+    fs::create_dir_all(base.join("__CUSTOM__")).unwrap();
+    fs::write(base.join("__CUSTOM__/app"), b"state").unwrap();
     migrate_universe(&base).unwrap();
     assert!(base.join("__SYSTEM__/universe_header").is_file());
     assert!(base.join("__SYSTEM__/__initializing__").is_file());
+    assert_eq!(fs::read(base.join("__CUSTOM__/app")).unwrap(), b"state");
     migrate_universe(&base).unwrap();
     fs::remove_dir_all(base).unwrap();
 }

@@ -9,9 +9,26 @@ use std::{
     path::{Path, PathBuf},
 };
 use vsdb::{
-    Result,
-    common::{atomic_write_file, create_dir_all_durable},
+    Result, VsdbError,
+    common::{atomic_write_file, create_dir_all_durable, error::StorageErrorKind},
 };
+
+fn mmdb_err(error: mmdb::Error) -> VsdbError {
+    use mmdb::ErrorKind;
+    let kind = match error.kind() {
+        ErrorKind::Io => StorageErrorKind::Io,
+        ErrorKind::Corruption => StorageErrorKind::Corruption,
+        ErrorKind::ReadOnly => StorageErrorKind::ReadOnly,
+        ErrorKind::InvalidArgument => StorageErrorKind::InvalidArgument,
+        ErrorKind::DbClosed => StorageErrorKind::DbClosed,
+        ErrorKind::Background => StorageErrorKind::Background,
+        _ => StorageErrorKind::Other,
+    };
+    VsdbError::Storage {
+        kind,
+        source: Box::new(error),
+    }
+}
 
 const REG: &str = "__SYSTEM__/__namespaces__";
 const STATES: &str = "__SYSTEM__/__namespace_state__";
@@ -75,8 +92,9 @@ fn registry(base: &Path, converted: bool, upgrading: bool) -> Result<Plan> {
             let state = match fs::read(path) {
                 Ok(bytes) if bytes == b"P" => State::Pending,
                 Ok(bytes) if bytes == b"E" => State::Established,
+                Ok(_) => return Err(corrupt("invalid namespace lifecycle record")),
                 Err(e) if e.kind() == io::ErrorKind::NotFound => State::Established,
-                _ => return Err(corrupt("invalid namespace lifecycle record")),
+                Err(e) => return Err(e.into()),
             };
             entries.push((r, state));
         }
@@ -432,8 +450,12 @@ impl Engine {
             let sentinel = self.root.join(INIT);
             match fs::read(sentinel) {
                 Ok(bytes) if bytes == self.bytes(id) || !current && bytes == b"1" => {}
+                Ok(_) => return Err(corrupt("pending engine initializer identity mismatch")),
                 Err(e) if !current && e.kind() == io::ErrorKind::NotFound => {}
-                _ => return Err(corrupt("pending engine initializer identity mismatch")),
+                Err(e) if current && e.kind() == io::ErrorKind::NotFound => {
+                    return Err(corrupt("pending engine initializer identity mismatch"));
+                }
+                Err(e) => return Err(e.into()),
             }
         } else if current {
             let ready = self.root.join("__SYSTEM__/.shards_ready");
@@ -500,10 +522,8 @@ impl Engine {
                     },
                     dir,
                 )
-                .map_err(|e| corrupt(e.to_string()))?;
-                if default_first
-                    && let Some(bytes) = db.get(&[0]).map_err(|e| corrupt(e.to_string()))?
-                {
+                .map_err(mmdb_err)?;
+                if default_first && let Some(bytes) = db.get(&[0]).map_err(mmdb_err)? {
                     // A v17 universe can retain its pre-file allocator value.
                     // It is an exclusive ceiling, not an issued prefix.
                     *ceiling = (*ceiling).max(u64::from_le_bytes(
@@ -515,7 +535,7 @@ impl Engine {
                 if !scan {
                     continue;
                 }
-                let mut rows = db.iter().map_err(|e| corrupt(e.to_string()))?;
+                let mut rows = db.iter().map_err(mmdb_err)?;
                 for (key, val) in rows.by_ref() {
                     if let Some(prefix) = key.get(..8) {
                         *max = (*max).max(u64::from_le_bytes(prefix.try_into().unwrap()));
@@ -554,15 +574,23 @@ impl Engine {
 }
 
 // v17 persisted the empty mmdb directory before creating __SYSTEM__.
+// `__CUSTOM__` may also pre-exist if `vsdb_get_custom_dir()` ran first.
 // The caller holds the root directory lock while recognizing this layout.
 fn ensure_bootstrap_system(base: &Path, system: &Path) -> Result<()> {
     if system.try_exists()? {
         return Ok(());
     }
-    let mut entries = fs::read_dir(base)?;
-    let engine = entries.next().transpose()?;
-    if !matches!(engine, Some(ref e) if e.file_name() == "mmdb" && e.file_type()?.is_dir())
-        || entries.next().transpose()?.is_some()
+    let mut has_mmdb = false;
+    for entry in fs::read_dir(base)? {
+        let e = entry?;
+        let is_dir = e.file_type()?.is_dir();
+        if e.file_name() == "mmdb" && is_dir {
+            has_mmdb = true;
+        } else if !(e.file_name() == "__CUSTOM__" && is_dir) {
+            return Err(corrupt("unrecognized v17 bootstrap directory"));
+        }
+    }
+    if !has_mmdb
         || fs::read_dir(base.join("mmdb"))?
             .next()
             .transpose()?
@@ -577,6 +605,11 @@ fn ensure_bootstrap_system(base: &Path, system: &Path) -> Result<()> {
 /// Stop every process accessing this v17 database first, including processes
 /// using explicitly placed namespaces. A retry resumes the same conversion.
 pub fn migrate_universe(base: impl AsRef<Path>) -> Result<()> {
+    if vsdb::vsdb_open_mode() == vsdb::OpenMode::ReadOnly {
+        return Err(vsdb::VsdbError::ReadOnly {
+            operation: "universe migration",
+        });
+    }
     let base = base.as_ref().canonicalize()?;
     let system = base.join("__SYSTEM__");
     if !system.try_exists()? {
