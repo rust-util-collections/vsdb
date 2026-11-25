@@ -92,3 +92,44 @@ fn read_only_universe_lock_covers_namespace_admin() {
         }
     }
 }
+
+#[test]
+fn read_only_open_reports_lock_contention_before_header_publish() {
+    const PROBE: &str = "VSDB_V18_RO_CONTENTION_PROBE";
+    if let Some(dir) = std::env::var_os(PROBE) {
+        let err = vsdb_configure(VsdbOptions::read_only(dir)).unwrap_err();
+        match err {
+            vsdb_core::VsdbError::Io(source) => {
+                assert_eq!(source.kind(), std::io::ErrorKind::WouldBlock);
+            }
+            other => panic!("expected WouldBlock Io error, got {other:?}"),
+        }
+        return;
+    }
+
+    let root = std::env::temp_dir()
+        .join(format!("vsdb-v18-ro-contention-{}", rand::random::<u128>()));
+    let system = root.join("__SYSTEM__");
+    fs::create_dir_all(&system).unwrap();
+    let lock_file = fs::File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(system.join("LOCK"))
+        .unwrap();
+    lock_file.try_lock().unwrap();
+
+    let out = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "read_only_open_reports_lock_contention_before_header_publish",
+            "--nocapture",
+        ])
+        .env(PROBE, &root)
+        .output()
+        .unwrap();
+    drop(lock_file);
+    fs::remove_dir_all(&root).unwrap();
+    assert!(out.status.success(), "{out:?}");
+}

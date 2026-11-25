@@ -51,14 +51,6 @@
 
 ---
 
-### [MEDIUM] core/universe: read-only initialize reads universe_header before acquiring shared LOCK
-- **Where**: `core/src/common/universe.rs` (`initialize`)
-- **What**: When `writable == false`, `universe::initialize` calls `read_header(&base.join(HEADER))` (line 102) before `read_lock(base)` (line 117). If another process holds exclusive `flock` on `<base>/__SYSTEM__/LOCK` during initial universe bootstrap or `vsdb_migrate::migrate_universe(base)` before publishing `universe_header` last, a concurrent `VsdbOptions::read_only(base)` open sees `None` and returns `VsdbError::Corrupt`.
-- **Why**: Misclassifies transient writer/migration lock contention as fatal database corruption instead of `VsdbError::Io(WouldBlock)` (violates E15 / D-FAIL-4).
-- **Suggested fix**: Acquire `let lease = if writable { Some(lock(base)?) } else { read_lock(base)? };` before `read_header` (`read_lock` already maps `ErrorKind::NotFound` to `Ok(None)`). Add an `flock` contention test in `core/tests/universe_header.rs`. No migration impact.
-
----
-
 ### [MEDIUM] dagmap: prune skips Destroying head children during reparent and orphans live descendants
 - **Where**: `strata/src/dagmap/raw/mod.rs` (`DagMapRaw::reparent`, `DagMapRaw::clear_line`, `DagMapRaw::prune`)
 - **What**: During `head.prune()`, `remove_branch` runs only on `ancestors` and `root`, while `head.reparent(&mut root)` skips owned children of `head` where `!meta.state.live()` (such as a child `c` left in `State::Destroying` by an earlier interrupted `c.destroy()` before `c`'s grandchild `gc` was visited). `clear_line` then deletes `head`'s `[EDGE..DATA)` discovery edges.

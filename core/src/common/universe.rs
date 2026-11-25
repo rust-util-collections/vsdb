@@ -98,7 +98,11 @@ pub(crate) fn initialize(base: &Path, mode: OpenMode) -> Result<&'static Univers
     } else {
         None
     };
-    let lease = writable.then(|| lock(base)).transpose()?;
+    let lease = if writable {
+        Some(lock(base)?)
+    } else {
+        read_lock(base)?
+    };
     let id = match read_header(&base.join(HEADER))? {
         Some(id) => id,
         None => {
@@ -114,7 +118,6 @@ pub(crate) fn initialize(base: &Path, mode: OpenMode) -> Result<&'static Univers
             id
         }
     };
-    let lease = if writable { lease } else { read_lock(base)? };
     namespace::check_registry_at(base)?;
     // A durable ready marker outside mmdb/ also detects loss of the entire
     // default engine directory. A fresh namespace-only universe has neither.
