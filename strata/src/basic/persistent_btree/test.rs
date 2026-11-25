@@ -773,6 +773,17 @@ fn bulk_load_coalesces_duplicate_keys() {
 }
 
 #[test]
+fn bulk_load_keeps_last_duplicate_at_leaf_flush_boundaries() {
+    let mut tree = PersistentBTree::new();
+    let rows = (0..160u16).flat_map(|key| {
+        [0, 1, 2].map(move |value| (key.to_be_bytes().to_vec(), vec![value]))
+    });
+    let root = tree.bulk_load(rows);
+    let expected = (0..160u16).map(|key| (key.to_be_bytes().to_vec(), vec![2]));
+    assert!(tree.iter(root).eq(expected));
+}
+
+#[test]
 #[should_panic(expected = "PersistentBTree::bulk_load entries must be sorted by key")]
 fn bulk_load_rejects_unsorted_keys() {
     let mut tree = PersistentBTree::new();

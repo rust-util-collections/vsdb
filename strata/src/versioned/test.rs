@@ -4821,6 +4821,55 @@ fn readers_can_pin_old_roots_during_a_failing_wal_sync() {
 }
 
 #[test]
+fn bulk_writes_return_codec_errors_and_clean_up_staged_rows() {
+    use crate::{Result, ValueEnDe};
+    struct Value(Vec<u8>);
+    impl ValueEnDe for Value {
+        fn encode_value_into(&self, dst: &mut Vec<u8>) -> Result<()> {
+            if self.0.is_empty() {
+                return Err(VsdbError::InvalidConfig {
+                    detail: "empty value".into(),
+                });
+            }
+            dst.extend_from_slice(&self.0);
+            Ok(())
+        }
+        fn decode_value(bytes: &[u8]) -> Result<Self> {
+            Ok(Self(bytes.to_vec()))
+        }
+    }
+    let mut map = VerMap::<u32, Value>::new();
+    let branch = map.main_branch();
+    map.insert(branch, &0, &Value(vec![7])).unwrap();
+    let id = map.save_meta().unwrap();
+    let edits = [
+        (0, None),
+        (1, Some(Value(vec![8]))),
+        (2, Some(Value(vec![]))),
+    ];
+    assert!(matches!(
+        map.write_batch(branch, edits),
+        Err(VsdbError::InvalidConfig { .. })
+    ));
+    // Trigger a staging flush before the last item fails to encode.
+    let entries = (1..=1_100)
+        .map(|k| (k, Value(vec![5; 16_384])))
+        .chain([(1_101, Value(vec![]))]);
+    assert!(matches!(
+        map.bulk_load(branch, entries),
+        Err(VsdbError::InvalidConfig { .. })
+    ));
+    assert_eq!(map.records(super::store::STAGE).count(), 0);
+    assert_eq!(map.records(0x12).count(), 0);
+    assert_eq!(map.records(0x10).count(), 1);
+    map.close().unwrap();
+    let mut map = VerMap::<u32, Value>::from_meta_verified(id).unwrap();
+    assert_eq!(map.get(branch, &0).unwrap().unwrap().0, [7]);
+    assert!(map.get(branch, &1).unwrap().is_none());
+    map.commit(branch).unwrap();
+}
+
+#[test]
 fn invalid_late_bulk_entry_preserves_working_root_and_recovers_staged_pages() {
     let mut map = VerMap::<u32, Vec<u8>>::new();
     let main = map.main_branch();

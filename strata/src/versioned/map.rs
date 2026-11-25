@@ -20,7 +20,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BinaryHeap, HashMap, HashSet},
+    collections::{BTreeMap, BinaryHeap, HashMap, HashSet},
     marker::PhantomData,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -625,8 +625,7 @@ where
     pub fn insert(&mut self, branch: BranchId, key: &K, value: &V) -> Result<()> {
         self.ensure_writable("versioned map insert")?;
         let state = self.get_branch(branch)?;
-        let mut bytes = Vec::new();
-        value.encode_value_into(&mut bytes)?;
+        let bytes = encode_value(value)?;
         let root = key.with_ordered_bytes(|k| {
             self.tree.insert_buffered(state.dirty_root, k, &bytes)
         });
@@ -647,7 +646,7 @@ where
             tree.try_bulk_load(
                 entries
                     .into_iter()
-                    .map(|(k, v)| (k.to_bytes(), v.encode_value())),
+                    .map(|(k, v)| Ok((k.into_bytes(), encode_value(&v)?))),
             )
         })?;
         let mut edits = Edits::default();
@@ -671,10 +670,15 @@ where
     ) -> Result<()> {
         self.ensure_writable("versioned map batch")?;
         let state = self.get_branch(branch)?;
-        let changes: std::collections::BTreeMap<_, _> = edits
+        let changes = edits
             .into_iter()
-            .map(|(k, v)| (k.to_bytes(), v.map(|v| v.encode_value())))
-            .collect();
+            .map(|(key, value)| {
+                Ok((
+                    key.into_bytes(),
+                    value.as_ref().map(encode_value).transpose()?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
         let root = self
             .build_root(|tree| tree.apply_changes(state.dirty_root, changes, false))?;
         self.publish_working(branch, state, root)
@@ -1208,6 +1212,12 @@ where
         }
         self.verify_and_gc().map(|_| ())
     }
+}
+
+fn encode_value(value: &impl ValueEnDe) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    value.encode_value_into(&mut bytes)?;
+    Ok(bytes)
 }
 
 fn now_us() -> u64 {

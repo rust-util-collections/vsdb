@@ -124,7 +124,9 @@ power-loss durability. Commits, branch administration, rollback, merge and
 `bulk_load` publish changes using a synchronous batch. An operation that
 returns early, such as merging equal heads, provides no additional fence.
 
-Large merges and bulk loads may write unpublished pages first. Each staging
+A value encoding error from `write_batch` or `bulk_load` returns to the caller
+and preserves the previous working root. Large merges and bulk loads may write
+unpublished pages first. Each staging
 batch records its subtree roots at tag `06`. These batches target 16 MiB per
 chunk, with larger individual blobs written alone. The final synchronous batch
 publishes the root and removes the markers. An interruption before publication

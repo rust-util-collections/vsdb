@@ -42,6 +42,7 @@ use crate::{
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::{
+    cmp::Ordering as KeyOrdering,
     collections::{HashMap, HashSet},
     ops::{Bound, Deref},
     result::Result as StdResult,
@@ -1060,7 +1061,9 @@ impl PersistentBTree {
     ) -> NodeId {
         use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
         let start = self.next_id();
-        let result = catch_unwind(AssertUnwindSafe(|| self.try_bulk_load(entries)));
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            self.try_bulk_load(entries.into_iter().map(Ok))
+        }));
         match result {
             Ok(Ok(root)) => root,
             failed => {
@@ -1093,28 +1096,30 @@ impl PersistentBTree {
 
     pub(crate) fn try_bulk_load(
         &mut self,
-        entries: impl IntoIterator<Item = (Vec<u8>, Vec<u8>)>,
+        entries: impl IntoIterator<Item = Result<(Vec<u8>, Vec<u8>)>>,
     ) -> Result<NodeId> {
         let mut leaves = Vec::new();
         let mut levels = Vec::new();
-        let mut input = entries.into_iter().peekable();
-        while let Some((k, v)) = input.next() {
-            if let Some((next, _)) = input.peek() {
-                if next < &k {
-                    return Err(VsdbError::InvalidConfig {
+        for entry in entries {
+            let (k, v) = entry?;
+            // The last key stays in the retained leaf tail across every flush.
+            if let Some((previous, value)) = leaves.last_mut() {
+                match k.cmp(previous) {
+                    KeyOrdering::Less => return Err(VsdbError::InvalidConfig {
                         detail:
                             "PersistentBTree::bulk_load entries must be sorted by key"
                                 .into(),
-                    });
-                }
-                if next == &k {
-                    continue;
+                    }),
+                    KeyOrdering::Equal => {
+                        *value = v;
+                        continue;
+                    }
+                    KeyOrdering::Greater => {}
                 }
             }
             leaves.push((k, v));
             if leaves.len() == MAX_KEYS + MIN_KEYS {
-                let tail = leaves.split_off(MAX_KEYS);
-                let child = self.bulk_leaf(std::mem::replace(&mut leaves, tail))?;
+                let child = self.bulk_leaf(leaves.drain(..MAX_KEYS))?;
                 self.push_bulk_child(&mut levels, 0, child)?;
             }
         }
@@ -1127,7 +1132,7 @@ impl PersistentBTree {
             Vec::new()
         };
         for group in [leaves, tail].into_iter().filter(|g| !g.is_empty()) {
-            let child = self.bulk_leaf(group)?;
+            let child = self.bulk_leaf(group.into_iter())?;
             self.push_bulk_child(&mut levels, 0, child)?;
         }
         let mut level = 0;
@@ -1152,13 +1157,11 @@ impl PersistentBTree {
 
     fn bulk_leaf(
         &mut self,
-        entries: Vec<(Vec<u8>, Vec<u8>)>,
+        entries: impl Iterator<Item = (Vec<u8>, Vec<u8>)>,
     ) -> Result<(Vec<u8>, NodeId)> {
-        let first = entries[0].0.clone();
-        let (keys, values) = entries
-            .into_iter()
-            .map(|(k, v)| (k, LeafVal::Bytes(v)))
-            .unzip();
+        let (keys, values): (Vec<_>, Vec<_>) =
+            entries.map(|(k, v)| (k, LeafVal::Bytes(v))).unzip();
+        let first = keys[0].clone();
         let id = self.alloc(&Node::Leaf { keys, values });
         self.flush_pending_if_large()?;
         Ok((first, id))
