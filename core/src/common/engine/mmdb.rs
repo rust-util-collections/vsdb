@@ -1,3 +1,5 @@
+mod geometry;
+
 use crate::common::{
     PREFIX_ALLOC_START, PREFIX_SIZE, Pre, PreBytes, RawKey, RawRangeBounds, RawValue,
     atomic_write_file, configured_mem_budget_mb, create_dir_all_durable,
@@ -228,6 +230,10 @@ impl MmDB {
             let marker_present = root.join(READY_PATH).exists();
             let scan = scan_shard_layout(&dir, shards)?;
             validate_shard_layout(&dir, shards, marker_present, &sentinel_path, &scan)?;
+
+            if !marker_present && scan.present > 0 {
+                geometry::check_shards(&dir, shards, false)?;
+            }
 
             // Brand-new root: raise the initialization sentinel durably
             // BEFORE the first shard dir exists, so a crash mid-creation is
@@ -729,7 +735,7 @@ pub(crate) fn validate_completed_dataset(root: &Path, shards: usize) -> Result<(
             shards
         )));
     }
-    validate_shard_anchors(&mmdb_dir, shards)
+    geometry::check_shards(&mmdb_dir, shards, true)
 }
 
 /// Computes the floor before opening any engines. Recovery scans all issued

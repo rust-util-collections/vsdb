@@ -17,6 +17,7 @@ parking_lot = { workspace = true }
 thiserror = { workspace = true }
 postcard = { workspace = true }
 
+crc32fast = "1.5.6"
 smallvec = { workspace = true }
 mmdb = { workspace = true }
 

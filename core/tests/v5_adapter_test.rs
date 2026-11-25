@@ -137,3 +137,140 @@ fn namespace_reports_one_pool_and_each_members_own_memtables() {
             < before_flush.shards[shard].active_memtable_bytes
     );
 }
+
+#[test]
+fn fence_and_geometry_child() {
+    use std::io::Write;
+    let Ok(mode) = std::env::var("VSDB_V5_ADAPTER_CHILD") else {
+        return;
+    };
+    let root = std::env::var_os("VSDB_V5_ADAPTER_ROOT").unwrap();
+    let read_only = mode == "read" || mode == "reject-ro";
+    let opts = if read_only {
+        vsdb_core::VsdbOptions::read_only(&root)
+    } else {
+        vsdb_core::VsdbOptions::new(&root)
+    };
+    if mode.starts_with("reject-") {
+        let error = vsdb_core::vsdb_configure(opts).unwrap_err();
+        assert!(matches!(error, VsdbError::Corrupt { .. }), "{error}");
+        return;
+    }
+    vsdb_core::vsdb_configure(opts).unwrap();
+    if mode == "read" {
+        let saved = std::env::var("VSDB_V5_ADAPTER_ID")
+            .unwrap()
+            .parse::<vsdb_core::InstanceId>()
+            .unwrap();
+        let map = MapxRaw::from_meta(saved).unwrap();
+        for i in [0u64, 511, 1023, 1535] {
+            assert_eq!(map.get(i.to_be_bytes()).unwrap(), vec![i as u8; 8192]);
+        }
+        assert_eq!(map.get(b"residual"), Some(b"after rotation".to_vec()));
+        map.try_sync_wal().unwrap();
+        return;
+    }
+    let mut map = MapxRaw::new();
+    let id = map.save_meta().unwrap();
+    let ns = map.namespace();
+    let shard = id.map_id as usize % 16;
+    for i in 0..1536u64 {
+        map.insert(i.to_be_bytes(), vec![i as u8; 8192]);
+    }
+    let start = std::time::Instant::now();
+    while ns.shard_properties("stats.flushes_completed")[shard].as_deref() == Some("0") {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(30),
+            "automatic rotation/flush did not finish"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    map.insert(b"residual", b"after rotation");
+    map.try_sync_wal().unwrap();
+    println!("FENCED {id}");
+    std::io::stdout().flush().unwrap();
+    loop {
+        std::thread::park();
+    }
+}
+
+#[test]
+fn acknowledged_native_fence_survives_kill_and_wrong_last_shard_leaves_source_intact() {
+    use std::{
+        collections::BTreeMap,
+        fs,
+        io::{BufRead, BufReader},
+        path::{Path, PathBuf},
+        process::{Command, Stdio},
+    };
+    fn command(root: &Path, mode: &str) -> Command {
+        let mut cmd = Command::new(std::env::current_exe().unwrap());
+        cmd.args(["--exact", "fence_and_geometry_child", "--nocapture"])
+            .env("VSDB_V5_ADAPTER_CHILD", mode)
+            .env("VSDB_V5_ADAPTER_ROOT", root);
+        cmd
+    }
+    fn inventory(dir: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {
+        for item in fs::read_dir(dir).unwrap() {
+            let path = item.unwrap().path();
+            if path.is_dir() {
+                inventory(&path, files);
+            } else {
+                files.insert(path.clone(), fs::read(path).unwrap());
+            }
+        }
+    }
+    let root =
+        std::env::temp_dir().join(format!("vsdb-v5-fence-{}", rand::random::<u128>()));
+    let mut child = command(&root, "write")
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let id = BufReader::new(child.stdout.take().unwrap())
+        .lines()
+        .map(|row| row.unwrap())
+        .find_map(|row| row.strip_prefix("FENCED ").map(str::to_owned))
+        .expect("native WAL fence acknowledgment");
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let out = command(&root, "read")
+        .env("VSDB_V5_ADAPTER_ID", id)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let last = root.join("mmdb/shard_15");
+    fs::remove_dir_all(&last).unwrap();
+    mmdb::DB::open(
+        mmdb::DbOptions::default()
+            .with_num_levels(4)
+            .with_prefix_len(8),
+        &last,
+    )
+    .unwrap()
+    .close()
+    .unwrap();
+    let mut before = BTreeMap::new();
+    inventory(&root, &mut before);
+    for mode in ["reject-ro", "reject-rw"] {
+        let out = command(&root, mode).output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let mut after = BTreeMap::new();
+        inventory(&root, &mut after);
+        assert_eq!(
+            before.keys().collect::<Vec<_>>(),
+            after.keys().collect::<Vec<_>>()
+        );
+        for (path, old) in &before {
+            assert!(old == &after[path], "changed {}", path.display());
+        }
+    }
+    fs::remove_dir_all(root).unwrap();
+}
