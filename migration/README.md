@@ -42,11 +42,14 @@ before the application's first v5 write.
    placements can span filesystems. The generated placements and base
    publish together on the destination filesystem. Keep the published
    generation at its chosen absolute path so its registry remains valid.
+   When the destination parent is a symlink, the CLI prints the resolved
+   physical base and the registry binds the corresponding physical placements.
 
 3. The converter checks established and initializing shard layouts. Empty
    or uncreated pending shards retain their lifecycle. For each anchored
    shard, a v4 read-only scan of that same private copy includes recovered WAL rows and their deletions.
-   The tool ingests the sorted visible rows into fresh v5 SSTs, checks both
+   The tool ingests the sorted visible rows into fresh bottom-level v5 SSTs
+   using the live adapter's 16 KiB blocks and Zstd compression. It checks both
    iterators for errors and compares row counts and Keccak-256 digests of
    length-framed keys and values after a writable reopen with seven levels
    and eight-byte prefixes. A new v5 sequence history starts at export.

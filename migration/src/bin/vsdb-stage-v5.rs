@@ -7,6 +7,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("usage: vsdb-stage-v5 SOURCE GENERATION".into());
     };
     vsdb_migrate::stage_universe(source, destination)?;
-    println!("Verified VSDB base: {}", destination.join("base").display());
+    println!(
+        "Verified VSDB base: {}",
+        destination.canonicalize()?.join("base").display()
+    );
     Ok(())
 }
