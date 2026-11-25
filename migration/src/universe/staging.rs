@@ -255,6 +255,20 @@ fn lock_existing_file(path: &Path, locks: &mut Vec<File>) -> Result<()> {
     Ok(())
 }
 
+// Offline copies can have their lock files marked read-only. A file lock
+// carries no persistent rows or identifiers. Recreate it in private staging
+// with normal writable permissions before either runtime opens the copy.
+fn reset_working_lock(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => {
+            File::create_new(path)?;
+            Ok(())
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
 struct SourceTree {
     root: PathBuf,
     directories: Vec<PathBuf>,
@@ -475,6 +489,17 @@ fn stage(
     for (id, files) in external_files {
         files.copy_to(&staged_placement(temp.path(), id))?;
     }
+    reset_working_lock(&base.join("__SYSTEM__/LOCK"))?;
+    for (_, relative, shards) in &roots {
+        for n in 0..*shards {
+            reset_working_lock(
+                &temp
+                    .path()
+                    .join(relative)
+                    .join(format!("mmdb/shard_{n:02}/LOCK")),
+            )?;
+        }
+    }
     completed(Step::Copied)?;
     bind_placements(&base, temp.path(), &mut plan)?;
     migrate_universe(&base)?;
@@ -595,6 +620,39 @@ mod tests {
             &location(&child.join("new")).unwrap(),
             &location(&child.join("new/child")).unwrap()
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_backup_lock_permissions_survive_staging() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let input = tmp.path().join("backup");
+        let target = tmp.path().join("generation");
+        old_tree(&input);
+        let locks = [
+            input.join("__SYSTEM__/LOCK"),
+            input.join("mmdb/shard_00/LOCK"),
+        ];
+        for path in &locks {
+            fs::write(path, []).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o400)).unwrap();
+        }
+        stage_universe(&input, &target).unwrap();
+        for path in &locks {
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o400
+            );
+        }
+        assert!(
+            File::options()
+                .read(true)
+                .write(true)
+                .open(target.join("base/__SYSTEM__/LOCK"))
+                .is_ok()
+        );
+        assert!(target.join("base").join(HEADER).is_file());
     }
 
     #[cfg(unix)]
