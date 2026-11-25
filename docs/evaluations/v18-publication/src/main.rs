@@ -83,6 +83,13 @@ fn publication(kind: &str, n: u64, seed: u64) {
                 m.write_batch(branch, edits).unwrap();
             }
             #[cfg(feature = "working-edit")]
+            "empty" => {
+                let value = m
+                    .edit_working(branch, 0, |edit| edit.get(&(a as u64)))
+                    .unwrap();
+                assert_eq!(value, Some(0));
+            }
+            #[cfg(feature = "working-edit")]
             "overlay" => {
                 m.edit_working(branch, 512, |edit| {
                     for key in [a, b, a, b] {
@@ -97,8 +104,10 @@ fn publication(kind: &str, n: u64, seed: u64) {
             _ => panic!("unknown profile {kind}"),
         }
         times.push(clock.elapsed().as_nanos() as u64);
-        expected[a] += 2;
-        expected[b] += 2;
+        if kind != "empty" {
+            expected[a] += 2;
+            expected[b] += 2;
+        }
     }
     let elapsed = start.elapsed();
     if kind == "dag16" {
@@ -106,6 +115,12 @@ fn publication(kind: &str, n: u64, seed: u64) {
         print!("prefix_advance={} ", last_id - dag.instance_id().map_id);
     }
     let issued = submissions();
+    if cfg!(feature = "counters") && kind == "empty" {
+        assert_eq!(
+            issued, 0,
+            "a read-only working edit submitted a write or fence"
+        );
+    }
     if matches!(kind, "dag" | "dag16") {
         assert!(dag.child_id(last.as_ref().unwrap()).is_some());
         assert_eq!(dag.child_ids().len(), n as usize);

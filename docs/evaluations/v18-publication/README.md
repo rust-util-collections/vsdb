@@ -91,3 +91,11 @@ allocator still met the observed child-operation improvement without a new
 reservation format. Rebuild the same five binaries with the current driver
 and pass `--default-dag` to both the runner and summarizer to reproduce
 this repeat. [Default-namespace runs](results/default-namespace/trials.csv) · [Matched summary](results/default-namespace/summary.csv) · [Binary digests](results/default-namespace/host.txt)
+
+The separate `empty` diagnostic ran 1,000 read-only working callbacks on a
+nonempty branch and recorded **zero** native engine submissions, including
+fences. The test in the versioned suite checks that an empty successful
+callback leaves the branch generation unchanged. To repeat the diagnostic,
+build the candidate with `--features working-edit,counters` and run
+`publication-profile empty 1000 20261127` with a fresh `VSDB_BASE_DIR`.
+[Diagnostic observation](results/empty-working.txt)
