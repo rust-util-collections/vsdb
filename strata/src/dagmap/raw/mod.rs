@@ -509,12 +509,16 @@ impl DagMapRaw {
     }
     fn reparent(&self, root: &mut Self) -> Result<()> {
         let registered: HashMap<_, _> = root.links().map(|(e, id)| (id, e)).collect();
-        for (e, id) in self.links() {
+        for (e, id) in self.links().collect::<Vec<_>>() {
             let Some(mut child) = self.owned(e, id) else {
                 continue;
             };
             let mut meta = child.meta()?;
             if !meta.state.live() {
+                if !matches!(meta.state, State::Clearing { genesis, .. } if genesis == root.id())
+                {
+                    child.destroy_subtree()?;
+                }
                 continue;
             }
             let edge = match registered.get(&id) {
@@ -628,9 +632,8 @@ impl DagMapRaw {
                 }
                 Self::fold(&line, &mut root)?;
                 line[0].reparent(&mut root)?;
-            } else {
-                Self::collect_marked(&mut line, &root)?;
             }
+            Self::collect_marked(&mut line, &root)?;
             Self::mark(&mut line, root.id())?;
             Self::clear_line(&mut line, &mut root)?;
         }

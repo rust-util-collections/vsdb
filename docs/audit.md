@@ -51,14 +51,6 @@
 
 ---
 
-### [MEDIUM] dagmap: prune skips Destroying head children during reparent and orphans live descendants
-- **Where**: `strata/src/dagmap/raw/mod.rs` (`DagMapRaw::reparent`, `DagMapRaw::clear_line`, `DagMapRaw::prune`)
-- **What**: During `head.prune()`, `remove_branch` runs only on `ancestors` and `root`, while `head.reparent(&mut root)` skips owned children of `head` where `!meta.state.live()` (such as a child `c` left in `State::Destroying` by an earlier interrupted `c.destroy()` before `c`'s grandchild `gc` was visited). `clear_line` then deletes `head`'s `[EDGE..DATA)` discovery edges.
-- **Why**: `c` is permanently stranded in `State::Destroying`, and its unvisited descendant `gc` remains in `State::Child` (`!gc.is_dead()`), continuing to serve local reads/writes and leaking `[DATA..END)` rows on disk even after `pruned_root.destroy()`.
-- **Suggested fix**: In `DagMapRaw::reparent`, call `child.destroy_subtree()?; continue;` when `!meta.state.live()`. Extend `destroy_retry_unlinks_and_reclaims_descendants` in `strata/src/dagmap/raw/test.rs` to cover `head.prune()`. No migration impact.
-
----
-
 ### [MEDIUM] dagmap: get_mut and update allow mutating consumed Clearing nodes
 - **Where**: `strata/src/dagmap/raw/mod.rs` (`DagMapRaw::get_mut`), `strata/src/dagmap/rawkey/mod.rs` (`DagMapRawKey::{get_mut, update}`), `strata/src/dagmap/typed.rs` (`DagMap::{get_mut, update}`)
 - **What**: Unlike `DagMapRaw::insert` and `DagMapRaw::remove` (which assert `self.meta().expect("DAG metadata").state.live()`), `DagMapRaw::get_mut` omits the liveness check. After an interrupted `prune()` leaves mainline nodes in `State::Clearing` with unwiped `[DATA..END)` rows, `get_mut` and `update` succeed on the consumed node.

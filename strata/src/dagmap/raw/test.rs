@@ -183,22 +183,37 @@ fn destroy_unlinks_from_parent() {
 
 #[test]
 fn destroy_retry_unlinks_and_reclaims_descendants() {
-    for finish_from_parent in [false, true] {
-        let mut parent = DagMapRaw::new(None);
+    for mode in ["self", "prune_children", "prune_head"] {
+        let mut root = DagMapRaw::new(None);
+        let mut parent = if mode == "prune_head" {
+            DagMapRaw::new(Some(&mut root))
+        } else {
+            DagMapRaw::new(None)
+        };
         let mut child = DagMapRaw::new(Some(&mut parent));
         let mut grandchild = DagMapRaw::new(Some(&mut child));
         grandchild.insert("key", "value");
         let mut meta = child.meta().unwrap();
         meta.state = State::Destroying(meta.state.owner());
         child.set_meta(meta);
-        if finish_from_parent {
-            parent.prune_children_exclude(&[] as &[Vec<u8>]);
-        } else {
-            child.destroy();
+        match mode {
+            "self" => {
+                child.destroy();
+                assert!(parent.no_children());
+            }
+            "prune_children" => {
+                parent.prune_children_exclude(&[] as &[Vec<u8>]);
+                assert!(parent.no_children());
+            }
+            "prune_head" => {
+                let pruned = parent.prune().unwrap();
+                assert!(pruned.no_children());
+            }
+            _ => unreachable!(),
         }
-        assert!(parent.no_children());
         assert!(grandchild.is_dead());
         assert!(child.is_dead());
+        assert_eq!(grandchild.store.range(DATA..END).count(), 0);
     }
 }
 
