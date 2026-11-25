@@ -2433,3 +2433,97 @@ fn searches_reject_corrupt_result_keys_adjacency_and_fallback_keys() {
     idx.store.insert([TAG_INFO], [0]);
     assert_corrupt(&idx, 2);
 }
+
+#[test]
+fn filtered_visit_limit_skips_the_final_adjacency_read_and_bounds_initial_seeds() {
+    use std::cell::Cell;
+    struct CapRows {
+        fallback: bool,
+        expanded: Cell<usize>,
+        cap: u64,
+    }
+    impl AdjRead for CapRows {
+        fn adj_row(&self, _: &[u8]) -> Option<Vec<u8>> {
+            None
+        }
+        fn neighbors_into(&self, _: u8, node: u64, out: &mut Vec<u64>) -> Result<()> {
+            assert!(node < self.cap);
+            self.expanded.set(self.expanded.get() + 1);
+            if node + 1 == self.cap {
+                return Err(corrupt("unneeded final adjacency"));
+            }
+            out.clear();
+            if !self.fallback {
+                out.push(node + 1);
+            }
+            Ok(())
+        }
+        fn fallback_nodes(&self) -> Result<Option<hnsw::NodeSeeds<'_>>> {
+            Ok(self
+                .fallback
+                .then(|| Box::new((0..=self.cap).map(Ok)) as hnsw::NodeSeeds<'_>))
+        }
+    }
+    let cap = hnsw::filter_visit_cap(1) as u64;
+    for fallback in [false, true] {
+        let graph = CapRows {
+            fallback,
+            expanded: Cell::new(0),
+            cap,
+        };
+        let scores = Cell::new(0);
+        let values = hnsw::search_scored_layer(
+            |id| {
+                scores.set(scores.get() + 1);
+                Ok(Some(id as f32))
+            },
+            &[0],
+            1,
+            0,
+            &graph,
+            Some(&|_| Ok(false)),
+        )
+        .unwrap();
+        assert!(values.is_empty());
+        assert_eq!(scores.get(), cap);
+        assert_eq!(graph.expanded.get(), cap as usize - 1);
+    }
+    let graph = CapRows {
+        fallback: true,
+        expanded: Cell::new(0),
+        cap,
+    };
+    let mut visits = Vec::new();
+    let values = hnsw::search_scored_layer(
+        |id| {
+            visits.push(id);
+            Ok(Some(id as f32))
+        },
+        &[1, 0, 1, 2],
+        2,
+        0,
+        &graph,
+        None,
+    )
+    .unwrap();
+    assert_eq!(visits, [1, 0, 2]);
+    assert_eq!(values, [(0., 0), (1., 1)]);
+}
+
+#[test]
+fn scored_vectors_require_their_reverse_key_for_results_and_filters() {
+    let mut idx: VecDex<u64, L2> = VecDex::new(HnswConfig {
+        dim: 2,
+        ..Default::default()
+    })
+    .unwrap();
+    insert_at_layer(&mut idx, 0, &[0., 0.], 0);
+    idx.store.remove(node_key(TAG_NODE2KEY, 0));
+    for result in [
+        idx.search(&[0., 0.], 1),
+        idx.search_with_filter(&[0., 0.], 1, |_| true),
+        idx.search_with_raw_filter(&[0., 0.], 1, |_| true),
+    ] {
+        assert!(matches!(result, Err(VsdbError::Corrupt { .. })));
+    }
+}

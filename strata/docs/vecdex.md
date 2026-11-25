@@ -8,7 +8,9 @@ runtime metric with `VecDexDyn`.
 A successful public search evaluates distance and filter callbacks in graph
 traversal order at a single snapshot. Stored-row or engine errors return
 `Err`. On a failed search a filter may already have run on some candidates;
-discard any partial result collected by a callback.
+discard any partial result collected by a callback. A scored live vector
+must have its reverse-key row. Filtered traversal stops before reading
+another adjacency row once it exhausts its visit limit.
 
 
 ## Quick start

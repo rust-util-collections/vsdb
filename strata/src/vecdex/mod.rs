@@ -1506,20 +1506,21 @@ impl<K: KeyEnDe, S: Scalar> MetricSearch<S> for Search<'_, '_, K, S> {
                 Ok(metric.distance(self.query, &scratch))
             })
         };
+        let missing_key = || corrupt("missing VecDex reverse key for a live vector");
         let key_for = |id| {
-            self.view.try_get_with(node_key(TAG_NODE2KEY, id), |bytes| {
-                K::decode_key(bytes).map_err(|error| {
-                    corrupt(format!("invalid VecDex result key: {error}"))
-                })
-            })
+            self.view
+                .try_get_with(node_key(TAG_NODE2KEY, id), |bytes| {
+                    K::decode_key(bytes).map_err(|error| {
+                        corrupt(format!("invalid VecDex result key: {error}"))
+                    })
+                })?
+                .ok_or_else(missing_key)
         };
         let filtered_keys = RefCell::new(HashMap::new());
         let filter = self.filter.as_ref().map(|f| {
             |id| match *f {
                 Filter::Typed(predicate) => {
-                    let Some(key) = key_for(id)? else {
-                        return Ok(false);
-                    };
+                    let key = key_for(id)?;
                     if !predicate(&key) {
                         return Ok(false);
                     }
@@ -1529,10 +1530,10 @@ impl<K: KeyEnDe, S: Scalar> MetricSearch<S> for Search<'_, '_, K, S> {
                     }
                     Ok(true)
                 }
-                Filter::Raw(predicate) => Ok(self
+                Filter::Raw(predicate) => self
                     .view
                     .try_get_with(node_key(TAG_NODE2KEY, id), |raw| Ok(predicate(raw)))?
-                    .unwrap_or(false)),
+                    .ok_or_else(missing_key),
             }
         });
         let graph = SearchRows(self.view);
@@ -1557,12 +1558,10 @@ impl<K: KeyEnDe, S: Scalar> MetricSearch<S> for Search<'_, '_, K, S> {
         let mut out = Vec::with_capacity(self.k.min(results.len()));
         for (dist, id) in results.into_iter().take(self.k) {
             let key = match keys.remove(&id) {
-                Some(key) => Some(key),
+                Some(key) => key,
                 None => key_for(id)?,
             };
-            if let Some(key) = key {
-                out.push((key, dist));
-            }
+            out.push((key, dist));
         }
         Ok(out)
     }

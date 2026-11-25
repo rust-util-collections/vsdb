@@ -184,12 +184,20 @@ pub(super) fn search_scored_layer<S: Scalar, A: AdjRead + ?Sized>(
     let visit_cap = filter.map(|_| filter_visit_cap(ef));
 
     for &ep in entry_points {
+        if visit_cap.is_some_and(|cap| visited.len() >= cap) {
+            break;
+        }
+        if !visited.insert(ep) {
+            continue;
+        }
         if let Some(dist) = distance_to(ep)? {
             candidates.push(Reverse((OrdS(dist), ep)));
             if passes(ep)? {
                 result.push((OrdS(dist), ep));
+                if result.len() > ef {
+                    result.pop();
+                }
             }
-            visited.insert(ep);
         }
     }
 
@@ -244,6 +252,9 @@ pub(super) fn search_scored_layer<S: Scalar, A: AdjRead + ?Sized>(
             break;
         }
 
+        if visit_cap.is_some_and(|cap| visited.len() >= cap) {
+            break;
+        }
         adj.neighbors_into(layer, c_id, &mut neighbor_buf)?;
         for &n_id in &neighbor_buf {
             if visit_cap.is_some_and(|cap| visited.len() >= cap) {
