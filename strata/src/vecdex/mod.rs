@@ -1050,7 +1050,7 @@ where
         k: usize,
         predicate: impl Fn(&K) -> bool,
     ) -> Result<Vec<(K, S)>> {
-        self.search_internal(query, k, None, Some(&predicate))
+        self.search_internal(query, k, None, Some(Filter::Typed(&predicate)))
     }
 
     /// Filtered search with a custom `ef` (beam width).
@@ -1061,7 +1061,48 @@ where
         ef: usize,
         predicate: impl Fn(&K) -> bool,
     ) -> Result<Vec<(K, S)>> {
-        self.search_internal(query, k, Some(ef), Some(&predicate))
+        self.search_internal(query, k, Some(ef), Some(Filter::Typed(&predicate)))
+    }
+
+    /// Searches with a predicate evaluated directly against encoded key bytes.
+    ///
+    /// Rejected candidates do not invoke [`KeyEnDe::decode_key`] (avoiding
+    /// heap key allocations during beam expansion); only the final `<= k`
+    /// winners are decoded into `K`.
+    ///
+    /// # Encoded-key & visit-bound contract
+    ///
+    /// - The slice passed to `predicate` is the exact output of
+    ///   [`KeyEnDe::encode_key`]. Under the blanket `postcard` implementation,
+    ///   integers use varint encoding and variable-length containers carry a
+    ///   leading length varint — raw prefix checks apply only to
+    ///   self-delimiting leading fields or custom fixed-width [`KeyEnDe`]
+    ///   implementations, not bytewise range comparisons on `postcard` numbers.
+    /// - Graph traversal visits and row reads match [`search_with_filter`](Self::search_with_filter)
+    ///   (stopping at `max(64 × max(ef, k), 4096)` evaluated nodes); use
+    ///   [`search_ef_with_raw_filter`](Self::search_ef_with_raw_filter) to tune
+    ///   `ef` explicitly for ultra-selective predicates.
+    pub fn search_with_raw_filter(
+        &self,
+        query: &[S],
+        k: usize,
+        predicate: impl Fn(&[u8]) -> bool,
+    ) -> Result<Vec<(K, S)>> {
+        self.search_internal(query, k, None, Some(Filter::Raw(&predicate)))
+    }
+
+    /// Raw encoded-key filtered search with a custom `ef` (beam width).
+    ///
+    /// See [`search_with_raw_filter`](Self::search_with_raw_filter) for the
+    /// encoded-byte contract.
+    pub fn search_ef_with_raw_filter(
+        &self,
+        query: &[S],
+        k: usize,
+        ef: usize,
+        predicate: impl Fn(&[u8]) -> bool,
+    ) -> Result<Vec<(K, S)>> {
+        self.search_internal(query, k, Some(ef), Some(Filter::Raw(&predicate)))
     }
 
     /// Iterates `(node_id, max_layer)` over the committed node-info rows.
@@ -1079,9 +1120,9 @@ where
         query: &[S],
         k: usize,
         ef: Option<usize>,
-        predicate: Option<&dyn Fn(&K) -> bool>,
+        filter: Option<Filter<'_, K>>,
     ) -> Result<Vec<(K, S)>> {
-        self.read_view().search_internal(query, k, ef, predicate)
+        self.read_view().search_internal(query, k, ef, filter)
     }
 
     /// Removes a vector by user key. Returns `true` if the key existed.
@@ -1293,9 +1334,14 @@ where
     /// range tombstone and every row of the new graph commit in a
     /// **single atomic engine write batch**, so a crash (or an error
     /// return) leaves either the old graph or the new one — never
-    /// anything in between.  This is a cold maintenance API: the new
-    /// graph is staged in memory before the commit, so expect transient
-    /// memory proportional to the index size.
+    /// anything in between.  This is a cold maintenance API: materialized
+    /// `(K, Vec<S>)` pairs, staged graph rows, and the atomic engine batch
+    /// coexist in RAM before commit (roughly ~3× the serialized index size,
+    /// while the vector decode cache stays capped at 32 MiB). To rebuild a
+    /// very large index under bounded memory, stream [`iter`](Self::iter) in
+    /// chunks into [`insert_batch`](Self::insert_batch) on a fresh [`VecDex`]
+    /// (new [`InstanceId`]) and atomically swap the application's persisted
+    /// handle/ID reference before dropping the old index.
     pub fn compact(&mut self) -> Result<()> {
         ensure_writable(&self.namespace(), "vector index compaction")?;
         use rand::seq::SliceRandom;
@@ -1358,12 +1404,25 @@ fn tag_bounds(tag: u8) -> std::ops::Range<[u8; 1]> {
     [tag]..[tag + 1]
 }
 
+pub(super) enum Filter<'a, K> {
+    Typed(&'a dyn Fn(&K) -> bool),
+    Raw(&'a dyn Fn(&[u8]) -> bool),
+}
+
+impl<K> Clone for Filter<'_, K> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<K> Copy for Filter<'_, K> {}
+
 struct Search<'a, 'db, K, S> {
     view: &'a MapxRawReadView<'db>,
     query: &'a [S],
     k: usize,
     ef: Option<usize>,
-    predicate: Option<&'a dyn Fn(&K) -> bool>,
+    filter: Option<Filter<'a, K>>,
 }
 
 impl<K: KeyEnDe, S: Scalar> MetricSearch<S> for Search<'_, '_, K, S> {
@@ -1382,22 +1441,31 @@ impl<K: KeyEnDe, S: Scalar> MetricSearch<S> for Search<'_, '_, K, S> {
             S::decode_into(&raw, &mut scratch);
             Some(metric.distance(self.query, &scratch))
         };
+        let raw_key_for = |id| self.view.get(node_key(TAG_NODE2KEY, id));
         let key_for = |id| {
-            let raw = self.view.get(node_key(TAG_NODE2KEY, id))?;
+            let raw = raw_key_for(id)?;
             Some(K::decode_key(&raw).expect("VecDex: corrupt key bytes"))
         };
         let filtered_keys = RefCell::new(HashMap::new());
-        let filter = self.predicate.map(|predicate| {
-            |id| {
-                let Some(key) = key_for(id) else { return false };
-                if !predicate(&key) {
-                    return false;
+        let filter = self.filter.as_ref().map(|f| {
+            |id| match *f {
+                Filter::Typed(predicate) => {
+                    let Some(key) = key_for(id) else { return false };
+                    if !predicate(&key) {
+                        return false;
+                    }
+                    let mut keys = filtered_keys.borrow_mut();
+                    if keys.len() < self.k {
+                        keys.insert(id, key);
+                    }
+                    true
                 }
-                let mut keys = filtered_keys.borrow_mut();
-                if keys.len() < self.k {
-                    keys.insert(id, key);
+                Filter::Raw(predicate) => {
+                    let Some(raw) = raw_key_for(id) else {
+                        return false;
+                    };
+                    predicate(&raw)
                 }
-                true
             }
         });
         let graph = SearchRows(self.view);

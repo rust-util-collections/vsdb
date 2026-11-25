@@ -79,12 +79,67 @@ impl<K: KeyEnDe, D: DistanceMetric<S>, S: Scalar> VecDexReadView<'_, K, D, S> {
         self.search_internal(query, k, None, None)
     }
 
+    /// Searches the captured graph with a custom `ef` (beam width).
+    pub fn search_ef(&self, query: &[S], k: usize, ef: usize) -> Result<Vec<(K, S)>> {
+        self.search_internal(query, k, Some(ef), None)
+    }
+
+    /// Searches the captured graph with a decoded-key predicate.
+    ///
+    /// Semantics and visit bounds match [`VecDex::search_with_filter`].
+    pub fn search_with_filter(
+        &self,
+        query: &[S],
+        k: usize,
+        predicate: impl Fn(&K) -> bool,
+    ) -> Result<Vec<(K, S)>> {
+        self.search_internal(query, k, None, Some(Filter::Typed(&predicate)))
+    }
+
+    /// Searches the captured graph with a custom `ef` and decoded-key predicate.
+    pub fn search_ef_with_filter(
+        &self,
+        query: &[S],
+        k: usize,
+        ef: usize,
+        predicate: impl Fn(&K) -> bool,
+    ) -> Result<Vec<(K, S)>> {
+        self.search_internal(query, k, Some(ef), Some(Filter::Typed(&predicate)))
+    }
+
+    /// Searches the captured graph with a predicate over encoded key bytes.
+    ///
+    /// Avoids `K::decode_key` allocations on rejected candidates during
+    /// traversal; only the final `<= k` results are decoded into `K`.
+    /// See [`VecDex::search_with_raw_filter`] for the encoded-byte contract.
+    pub fn search_with_raw_filter(
+        &self,
+        query: &[S],
+        k: usize,
+        predicate: impl Fn(&[u8]) -> bool,
+    ) -> Result<Vec<(K, S)>> {
+        self.search_internal(query, k, None, Some(Filter::Raw(&predicate)))
+    }
+
+    /// Searches the captured graph with a custom `ef` and raw encoded-key predicate.
+    ///
+    /// See [`VecDex::search_with_raw_filter`] for the encoded-byte contract.
+    pub fn search_ef_with_raw_filter(
+        &self,
+        query: &[S],
+        k: usize,
+        ef: usize,
+        predicate: impl Fn(&[u8]) -> bool,
+    ) -> Result<Vec<(K, S)>> {
+        self.search_internal(query, k, Some(ef), Some(Filter::Raw(&predicate)))
+    }
+
     pub(super) fn search_internal(
         &self,
         query: &[S],
         k: usize,
         ef: Option<usize>,
-        predicate: Option<&dyn Fn(&K) -> bool>,
+        filter: Option<Filter<'_, K>>,
     ) -> Result<Vec<(K, S)>> {
         validate_vector(self.dim, query)?;
         self.metric.dispatch_search(Search {
@@ -92,7 +147,7 @@ impl<K: KeyEnDe, D: DistanceMetric<S>, S: Scalar> VecDexReadView<'_, K, D, S> {
             query,
             k,
             ef,
-            predicate,
+            filter,
         })
     }
 }

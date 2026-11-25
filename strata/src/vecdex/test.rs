@@ -2186,3 +2186,105 @@ fn insert_batch_cross_chunk_cache_evicts_overwrites_and_preserves_recall() {
     let hit = idx.search(&vec![9999.0; dim], 1).unwrap();
     assert_eq!(hit[0].0, 0);
 }
+
+#[test]
+fn raw_filter_and_read_view_filters_skip_rejected_key_decodes() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static KEY_DECODES: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct TaggedKey {
+        tenant: u8,
+        id: u64,
+    }
+
+    impl KeyEnDe for TaggedKey {
+        fn encode_key_into(&self, dst: &mut Vec<u8>) -> Result<()> {
+            dst.push(self.tenant);
+            dst.extend_from_slice(&self.id.to_be_bytes());
+            Ok(())
+        }
+
+        fn decode_key(bytes: &[u8]) -> Result<Self> {
+            KEY_DECODES.fetch_add(1, Ordering::Relaxed);
+            if bytes.len() != 9 {
+                return Err(VsdbError::Decode {
+                    detail: "invalid TaggedKey length".into(),
+                });
+            }
+            Ok(Self {
+                tenant: bytes[0],
+                id: u64::from_be_bytes(bytes[1..9].try_into().unwrap()),
+            })
+        }
+    }
+
+    let cfg = HnswConfig {
+        dim: 4,
+        m: 8,
+        m_max0: 16,
+        ef_construction: 64,
+        ef_search: 32,
+    };
+    let mut idx = VecDex::<TaggedKey, L2>::new(cfg).unwrap();
+    let items: Vec<(TaggedKey, Vec<f32>)> = (0..300u64)
+        .map(|i| {
+            let tenant = (i % 20) as u8;
+            let key = TaggedKey { tenant, id: i };
+            let v = vec![i as f32, (i % 7) as f32, (i % 13) as f32, 1.0];
+            (key, v)
+        })
+        .collect();
+    idx.insert_batch(&items).unwrap();
+
+    let query = [120.0f32, 1.0, 3.0, 1.0];
+    let k = 5;
+
+    KEY_DECODES.store(0, Ordering::Relaxed);
+    let typed = idx
+        .search_with_filter(&query, k, |key| key.tenant == 3)
+        .unwrap();
+    let typed_decodes = KEY_DECODES.load(Ordering::Relaxed);
+    assert_eq!(typed.len(), k);
+    assert!(typed_decodes > k);
+
+    KEY_DECODES.store(0, Ordering::Relaxed);
+    let raw = idx
+        .search_with_raw_filter(&query, k, |bytes| bytes.first() == Some(&3))
+        .unwrap();
+    let raw_decodes = KEY_DECODES.load(Ordering::Relaxed);
+    assert_eq!(raw, typed);
+    assert_eq!(raw_decodes, k);
+
+    // Hold a detached reader's read view across a writer mutation and verify
+    // both typed and raw view filters observe the frozen snapshot state.
+    let reader = idx.reader();
+    let view = reader.read_view();
+    idx.remove(&typed[0].0).unwrap();
+
+    assert_eq!(
+        view.search_with_filter(&query, k, |key| key.tenant == 3)
+            .unwrap(),
+        typed
+    );
+    KEY_DECODES.store(0, Ordering::Relaxed);
+    assert_eq!(
+        view.search_with_raw_filter(&query, k, |bytes| bytes.first() == Some(&3))
+            .unwrap(),
+        typed
+    );
+    assert_eq!(KEY_DECODES.load(Ordering::Relaxed), k);
+    assert_eq!(
+        view.search_ef_with_filter(&query, k, 48, |key| key.tenant == 3)
+            .unwrap(),
+        view.search_ef_with_raw_filter(&query, k, 48, |bytes| bytes.first() == Some(&3))
+            .unwrap()
+    );
+    assert_eq!(
+        idx.search_ef_with_filter(&query, k, 48, |key| key.tenant == 3)
+            .unwrap(),
+        idx.search_ef_with_raw_filter(&query, k, 48, |bytes| bytes.first() == Some(&3))
+            .unwrap()
+    );
+}

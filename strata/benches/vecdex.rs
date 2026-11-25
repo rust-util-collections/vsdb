@@ -1,7 +1,10 @@
 use criterion::{BenchmarkId, Criterion, criterion_group};
 use rand::random;
 use std::{hint::black_box, time::Duration};
-use vsdb::vecdex::{HnswConfig, VecDex, distance::L2};
+use vsdb::{
+    KeyEnDe,
+    vecdex::{HnswConfig, VecDex, distance::L2},
+};
 
 const DIM: usize = 128;
 
@@ -47,6 +50,37 @@ fn bench_insert(c: &mut Criterion) {
                     for i in 0..n {
                         idx.insert(&i, &random_vec()).unwrap();
                     }
+                    idx.clear().unwrap();
+                },
+            );
+        });
+    }
+
+    group.finish();
+}
+
+fn bench_insert_batch(c: &mut Criterion) {
+    let mut group = c.benchmark_group("vecdex/insert_batch");
+    group
+        .measurement_time(Duration::from_secs(5))
+        .sample_size(10);
+
+    for &n in &[1_000u64, 5_000] {
+        let items: Vec<(u64, Vec<f32>)> = (0..n).map(|i| (i, random_vec())).collect();
+        group.bench_with_input(BenchmarkId::from_parameter(n), &items, |b, items| {
+            b.iter_with_setup(
+                || {
+                    let cfg = HnswConfig {
+                        dim: DIM,
+                        m: 16,
+                        m_max0: 32,
+                        ef_construction: 100,
+                        ef_search: 50,
+                    };
+                    VecDex::<u64, L2>::new(cfg).unwrap()
+                },
+                |mut idx| {
+                    idx.insert_batch(items).unwrap();
                     idx.clear().unwrap();
                 },
             );
@@ -108,11 +142,41 @@ fn bench_filtered_search(c: &mut Criterion) {
             );
         });
     });
+    // 1% selectivity (read view + raw filter comparison)
+    let view = idx.read_view();
+    group.bench_function("n=5000,k=10,1%,view_typed", |b| {
+        b.iter(|| {
+            let q = random_vec();
+            black_box(
+                view.search_with_filter(&q, 10, |k: &u64| k.is_multiple_of(100))
+                    .unwrap(),
+            );
+        });
+    });
+    group.bench_function("n=5000,k=10,1%,view_raw", |b| {
+        b.iter(|| {
+            let q = random_vec();
+            black_box(
+                view.search_with_raw_filter(&q, 10, |raw| {
+                    u64::decode_key(raw)
+                        .map(|k| k.is_multiple_of(100))
+                        .unwrap_or(false)
+                })
+                .unwrap(),
+            );
+        });
+    });
 
     group.finish();
 }
 
-criterion_group!(benches, bench_insert, bench_search, bench_filtered_search);
+criterion_group!(
+    benches,
+    bench_insert,
+    bench_insert_batch,
+    bench_search,
+    bench_filtered_search
+);
 
 #[path = "units/legacy_budget.rs"]
 mod legacy_budget;
