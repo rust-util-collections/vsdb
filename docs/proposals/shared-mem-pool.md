@@ -9,6 +9,13 @@ The current integration is in
 [core/src/common/engine/mmdb.rs](../../core/src/common/engine/mmdb.rs).
 The workspace manifest specifies `mmdb = "4.3.15"`. The formulas and write path below apply to that implementation. [Workspace manifest](../../Cargo.toml)
 
+The MMDB v5 port changes the write path to queued immutable memtables.
+Its `BlockCachePool::usage()` reports the segmented and overflow stores'
+separate capacities and approximate charges. `DB::memory_usage()` reports
+the current DB's memtables and L0 pin payload. Use v5 measurements when
+choosing a ported profile. The v4 results below remain the baseline for
+the current workspace dependency. [MMDB v5 engine profiles](https://github.com/rust-util-collections/mmdb/blob/master/docs/benchmarks/engine-profile/README.md)
+
 ## Why share within an engine?
 
 Prefix routing puts all entries of one collection on one shard. Under the old

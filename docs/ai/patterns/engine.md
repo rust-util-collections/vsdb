@@ -27,7 +27,9 @@
 **E10 Cache pool** — all shards of one engine share one pool; engines do not
 share pools or identity. Memory inputs size buffers/caches with floors/caps,
 not hard RSS limits. `block-cache-usage` repeats the pool-wide entry count
-plus each shard's pinned entries; do not sum it as per-shard byte usage.
+plus each shard's pinned entries; do not sum it as per-shard byte usage. During a backend
+upgrade, verify the linked MMDB version's queue and cache-charge semantics
+before reusing a v4 sizing estimate. [Sizing and version scope](../../proposals/shared-mem-pool.md)
 
 **E11 clone_in** — fresh unobservable prefix; bounded independent batches; failed chunk best-effort wipe target without masking primary Err.
 
