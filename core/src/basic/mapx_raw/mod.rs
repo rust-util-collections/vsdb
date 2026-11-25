@@ -292,7 +292,8 @@ impl MapxRaw {
     /// Inserts rows in two maps with one asynchronous WAL batch. The maps
     /// must belong to the same open engine and route to the same shard.
     /// Keys are local to their respective map. Repeated keys take the value
-    /// of the last put. A rejected placement writes no rows.
+    /// of the last put. When two handles name the same map, all `here` puts
+    /// precede all `there` puts in that prefix. A rejected placement writes no rows.
     pub fn insert_colocated(
         &mut self,
         other: &mut Self,

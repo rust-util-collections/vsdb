@@ -18,7 +18,7 @@
   A stale index entry may be removed locally. Parentless roots and nodes
   owned by another parent keep their data.
 - Allocate child edges monotonically within each parent. Publish the child's
-  initial metadata before its index entry. Authenticate fallback reads and
+  initial metadata, its index entry and the next edge ID in one batch. Authenticate fallback reads and
   guard parent chains against cycles.
 - Prune destroys side branches, folds the mainline atomically into the root
   and reparents live head children — while finishing `destroy_subtree()` on any owned `!state.live()` (`Destroying`) child of the head — before writing any clearing marker or wiping the head's `[01..02)` discovery edges. The marker

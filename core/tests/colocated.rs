@@ -24,6 +24,10 @@ fn rejected_placement_does_not_modify_either_map() {
             break candidate;
         }
     };
+    let mut alias = MapxRaw::from_meta(a.save_meta().unwrap()).unwrap();
+    a.insert_colocated(&mut alias, &[(b"same", b"first")], &[(b"same", b"last")])
+        .unwrap();
+    assert_eq!(a.get(b"same").as_deref(), Some(b"last".as_slice()));
     let mut other = MapxRaw::new_in(&Namespace::create().unwrap());
     for target in [&mut b, &mut other] {
         assert!(matches!(

@@ -684,6 +684,47 @@ fn clone_remaps_prune_recovery_markers() {
 
 fn dag_wal_phase(dir: &Path, stage: &str, action: &str) {
     vsdb_configure(VsdbOptions::new(dir)).unwrap();
+    if stage == "register" {
+        let handles = dir.join("registered-child");
+        if action == "seed" {
+            let mut parent = DagMapRaw::new(None);
+            let sequence = parent.meta().unwrap().next_edge_id;
+            let reader = parent.store.reader();
+            let before = reader.read_view();
+            let child = DagMapRaw::new(Some(&mut parent));
+            let previous: NodeMeta =
+                postcard::from_bytes(&before.get(META).unwrap()).unwrap();
+            assert_eq!(previous.next_edge_id, sequence);
+            assert!(!before.contains_key(edge_key(sequence)));
+            assert_eq!(parent.meta().unwrap().next_edge_id, sequence + 1);
+            assert_eq!(parent.edge_target(sequence), Some(child.id()));
+            assert_eq!(
+                child.meta().unwrap().state.owner(),
+                Some(Parent {
+                    map: parent.id(),
+                    edge: sequence
+                })
+            );
+            let saved = (
+                parent.save_meta().unwrap(),
+                child.save_meta().unwrap(),
+                sequence,
+            );
+            fs::write(handles, postcard::to_allocvec(&saved).unwrap()).unwrap();
+            parent.namespace().try_sync_wal().unwrap();
+            process::exit(0);
+        }
+        let (parent, child, edge): (InstanceId, InstanceId, u64) =
+            postcard::from_bytes(&fs::read(handles).unwrap()).unwrap();
+        let mut parent = DagMapRaw::from_meta(parent).unwrap();
+        let child = DagMapRaw::from_meta(child).unwrap();
+        assert_eq!(parent.child_id(&child), Some(token(edge)));
+        assert_eq!(parent.meta().unwrap().next_edge_id, edge + 1);
+        let next = DagMapRaw::new(Some(&mut parent));
+        assert_eq!(parent.child_id(&next), Some(token(edge + 1)));
+        assert_eq!(parent.child_id(&child), Some(token(edge)));
+        return;
+    }
     let handles_path = dir.join("dag-wal-handles");
     if action == "seed" {
         let ns = Namespace::create_with(NamespaceOpts {
@@ -776,7 +817,9 @@ fn dag_wal_barriers_survive_process_exit_without_table_flush() {
         );
         return;
     }
-    for stage in ["merge", "reparent", "marker", "clear", "destroy"] {
+    for stage in [
+        "register", "merge", "reparent", "marker", "clear", "destroy",
+    ] {
         let dir =
             env::temp_dir().join(format!("vsdb-dag-wal-{}", rand::random::<u128>()));
         for action in ["seed", "recover"] {
