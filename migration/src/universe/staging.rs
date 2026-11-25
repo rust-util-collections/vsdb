@@ -1,8 +1,8 @@
 //! Offline physical conversion. The only public rename publishes a complete
 //! directory containing the base and all explicitly placed namespace roots.
 use super::{
-    HEADER, PROGRESS, Plan, REG, Record, Registry, State, migrate_universe, mmdb_err,
-    physical_path, read_id, registry,
+    HEADER, PROGRESS, Plan, REG, Record, Registry, State, check_regular, migrate_universe,
+    mmdb_err, physical_path, read_id, registry,
 };
 use crate::corrupt;
 use sha3::{Digest, Keccak256};
@@ -245,16 +245,9 @@ fn overlap(left: &[(DirectoryId, PathBuf)], right: &[(DirectoryId, PathBuf)]) ->
 }
 
 fn lock_existing_file(path: &Path, locks: &mut Vec<File>) -> Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(meta) if meta.is_file() => {}
-        Ok(_) => {
-            return Err(corrupt(format!(
-                "invalid storage lock file: {}",
-                path.display()
-            )));
-        }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e.into()),
+    match check_regular(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        result => result?,
     }
     let lock = File::open(path)?;
     lock.try_lock_shared().map_err(io::Error::from)?;
@@ -618,6 +611,16 @@ mod tests {
             let error = stage_universe(&input, &generation).unwrap_err();
             assert!(error.to_string().contains("stage requires regular files"));
             assert!(!generation.exists());
+            assert_eq!(
+                super::super::read_metadata(&path).unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+            if file == "LOCK" {
+                assert_eq!(
+                    super::super::working_lock(&path).unwrap_err().kind(),
+                    io::ErrorKind::InvalidData
+                );
+            }
             drop(socket);
             fs::remove_file(path).unwrap();
         }

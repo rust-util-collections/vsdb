@@ -61,8 +61,42 @@ enum State {
 }
 type Plan = Registry<(Record, State)>;
 
+fn check_regular(path: &Path) -> io::Result<()> {
+    if !fs::symlink_metadata(path)?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("expected regular file: {}", path.display()),
+        ));
+    }
+    Ok(())
+}
+
+fn read_metadata(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
+    let path = path.as_ref();
+    check_regular(path)?;
+    fs::read(path)
+}
+
+fn read_metadata_text(path: impl AsRef<Path>) -> io::Result<String> {
+    String::from_utf8(read_metadata(path)?)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
+
+fn working_lock(path: &Path) -> io::Result<File> {
+    match check_regular(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        result => result?,
+    }
+    File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+}
+
 fn registry(base: &Path, converted: bool, upgrading: bool) -> Result<Plan> {
-    let bytes = match fs::read(base.join(REG)) {
+    let bytes = match read_metadata(base.join(REG)) {
         Ok(b) => b,
         Err(e)
             if e.kind() == io::ErrorKind::NotFound
@@ -92,7 +126,7 @@ fn registry(base: &Path, converted: bool, upgrading: bool) -> Result<Plan> {
         let mut entries = Vec::with_capacity(old.entries.len());
         for r in old.entries {
             let path = base.join(STATES).join(format!("{:016x}", r.id));
-            let state = match fs::read(path) {
+            let state = match read_metadata(path) {
                 Ok(bytes) if bytes == b"P" => State::Pending,
                 Ok(bytes) if bytes == b"E" => State::Established,
                 Ok(_) => return Err(corrupt("invalid namespace lifecycle record")),
@@ -207,7 +241,7 @@ fn validate_namespace_residue(base: &Path, reg: &Plan) -> Result<()> {
                 // A live tree or an established orphan cannot be distinguished
                 // from a partially lost registry, especially on another volume.
                 if !sidecars && fs::read_dir(entry.path())?.next().transpose()?.is_some()
-                    || sidecars && !name.ends_with(".tmp") && fs::read(entry.path())? != b"P"
+                    || sidecars && !name.ends_with(".tmp") && read_metadata(entry.path())? != b"P"
                 {
                     return Err(corrupt(
                         "unregistered namespace engine or established lifecycle record",
@@ -228,7 +262,7 @@ fn header(id: u128) -> Vec<u8> {
     .concat()
 }
 fn read_id(path: &Path) -> Result<Option<u128>> {
-    match fs::read(path) {
+    match read_metadata(path) {
         Ok(b) if b.len() == 28 && b[..12] == header(0)[..12] => {
             Ok(Some(u128::from_le_bytes(b[12..].try_into().unwrap())))
         }
@@ -317,7 +351,7 @@ impl Engine {
             initializing: false,
         };
         let system = engine.root.join("__SYSTEM__");
-        let version = match fs::read_to_string(system.join("format_version")) {
+        let version = match read_metadata_text(system.join("format_version")) {
             Ok(s) => Some(s),
             Err(e) if e.kind() == io::ErrorKind::NotFound => None,
             Err(e) => return Err(e.into()),
@@ -399,7 +433,7 @@ impl Engine {
                         if let Some(id) = upgrade_id {
                             let expected = engine.bytes(id);
                             if inner.metadata()?.len() > expected.len() as u64
-                                || !expected.starts_with(&fs::read(inner.path())?)
+                                || !expected.starts_with(&read_metadata(inner.path())?)
                             {
                                 return Err(corrupt(
                                     "staged initializer disagrees with upgrade journal",
@@ -451,7 +485,7 @@ impl Engine {
         }
         if self.initializing {
             let sentinel = self.root.join(INIT);
-            match fs::read(sentinel) {
+            match read_metadata(sentinel) {
                 Ok(bytes) if bytes == self.bytes(id) || !current && bytes == b"1" => {}
                 Ok(_) => return Err(corrupt("pending engine initializer identity mismatch")),
                 Err(e) if !current && e.kind() == io::ErrorKind::NotFound => {}
@@ -463,20 +497,21 @@ impl Engine {
         } else if current {
             let ready = self.root.join("__SYSTEM__/.shards_ready");
             let owned = if ready.try_exists()? {
-                fs::read(ready)? == b"18"
+                read_metadata(ready)? == b"18"
             } else {
-                fs::read(self.root.join(INIT))? == self.bytes(id)
+                read_metadata(self.root.join(INIT))? == self.bytes(id)
             };
             if !has_header || !owned {
                 return Err(corrupt("incomplete v18 engine identity"));
             }
         } else {
-            let version = fs::read_to_string(self.root.join("__SYSTEM__/format_version"))?;
+            let version = read_metadata_text(self.root.join("__SYSTEM__/format_version"))?;
             if version.trim() != "16" && !(version.trim() == "18" && has_header) {
                 return Err(corrupt("unsupported v17 engine marker"));
             }
         }
-        if self.header_path().try_exists()? && fs::read(self.header_path())? != self.bytes(id) {
+        if self.header_path().try_exists()? && read_metadata(self.header_path())? != self.bytes(id)
+        {
             return Err(corrupt("engine identity disagrees with upgrade journal"));
         }
         let shards = self.root.join("mmdb");
@@ -508,12 +543,7 @@ impl Engine {
             // The universe LOCK did not exist in v17. Keep shared shard locks
             // through publication, including when the ceiling makes a full scan
             // unnecessary. A writable old process takes the exclusive mmdb lock.
-            let shard_lock = File::options()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .open(dir.join("LOCK"))?;
+            let shard_lock = working_lock(&dir.join("LOCK"))?;
             shard_lock.try_lock_shared().map_err(io::Error::from)?;
             locks.push(shard_lock);
             let default_first = self.ns == 0 && n == 0;
@@ -616,6 +646,9 @@ pub fn migrate_universe(base: impl AsRef<Path>) -> Result<()> {
         });
     }
     let base = base.as_ref().canonicalize()?;
+    if !base.is_dir() {
+        return Err(corrupt("universe source must be a directory"));
+    }
     let system = base.join("__SYSTEM__");
     if !system.try_exists()? {
         let adoption = File::open(&base)?;
@@ -624,12 +657,7 @@ pub fn migrate_universe(base: impl AsRef<Path>) -> Result<()> {
         adoption.unlock()?;
         result?;
     }
-    let lock = File::options()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(system.join("LOCK"))?;
+    let lock = working_lock(&system.join("LOCK"))?;
     lock.try_lock().map_err(io::Error::from)?;
     let committed = read_id(&base.join(HEADER))?;
     let journal = read_id(&base.join(PROGRESS))?;
@@ -662,7 +690,7 @@ pub fn migrate_universe(base: impl AsRef<Path>) -> Result<()> {
             engines.push(engine)
         }
     }
-    let stored = match fs::read(base.join(CEILING)) {
+    let stored = match read_metadata(base.join(CEILING)) {
         Ok(v) => Some(u64::from_le_bytes(
             v.try_into()
                 .map_err(|_| corrupt("invalid prefix ceiling"))?,
