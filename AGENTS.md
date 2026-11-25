@@ -1,5 +1,12 @@
 # Working on VSDB
 
+## Repository language
+
+Write all human-readable text in this repository in English. This includes
+documentation, source comments, rustdoc, examples, test and benchmark
+descriptions, diagnostics, user-facing messages, and all agent and skill
+instructions.
+
 ## Workspace layout
 
 | Crate | Responsibility |

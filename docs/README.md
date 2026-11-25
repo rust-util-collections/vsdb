@@ -38,9 +38,8 @@ work is tracked in the [roadmap](proposals/v18-roadmap.md).
 - [Merkle tries and VecDex](evaluations/v18-trie-vecdex.md)
 - [VerMap and reference-count persistence](evaluations/v18-versioned.md)
 
-Earlier records cover [ACC migration primitives](evaluations/acc-migration-primitives.md),
-[Hotmint integration on v17](evaluations/hotmint-v17.md) and
-[v17 performance fixes](evaluations/performance-fixes.md).
+Earlier records cover [ACC migration primitives](evaluations/acc-migration-primitives.md)
+and [Hotmint integration on v17](evaluations/hotmint-v17.md).
 
 ## Maintaining the workspace
 
