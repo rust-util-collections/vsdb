@@ -2,7 +2,10 @@
 //! its own universe, including the original allocator ceiling and WAL.
 use std::{fs, path::Path};
 use vsdb::{BranchId, CommitId, VerMap, VsdbOptions, vsdb_configure};
-use vsdb_migrate::{migrate_universe, versioned::migrate_v17};
+use vsdb_migrate::{
+    migrate_universe,
+    versioned::{migrate_handle_v17, migrate_v17},
+};
 
 #[test]
 fn converts_retained_versions_and_working_root_at_original_id() {
@@ -81,5 +84,20 @@ fn converts_retained_versions_and_working_root_at_original_id() {
     drop(map);
     let again = migrate_v17::<u64, Vec<u8>>(ID).unwrap();
     assert_eq!(again.get(main, &42).unwrap(), Some(vec![42]));
+    let handle_bytes = fs::read(&meta_path).unwrap();
+    fs::remove_file(&meta_path).unwrap();
+    assert_eq!(
+        migrate_handle_v17::<u64, Vec<u8>>(&old_metadata).unwrap(),
+        handle_bytes
+    );
+    assert_eq!(
+        migrate_handle_v17::<u64, Vec<u8>>(&handle_bytes).unwrap(),
+        handle_bytes
+    );
+    assert!(!meta_path.exists());
+    let decoded: VerMap<u64, Vec<u8>> = postcard::from_bytes(&handle_bytes).unwrap();
+    assert_eq!(decoded.get(main, &42).unwrap(), Some(vec![42]));
+    drop(again);
+    drop(decoded);
     fs::remove_dir_all(&scratch).unwrap();
 }

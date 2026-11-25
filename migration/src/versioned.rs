@@ -3,8 +3,8 @@ use crate::{LegacyRaw, corrupt, legacy_payload, tag, typed_handle};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use vsdb::{
-    BranchId, CommitId, InstanceId, KeyEnDeOrdered, MapxRaw, Result, ValueEnDe, VerMap, VsdbError,
-    common::{load_instance_meta, save_instance_meta},
+    BranchId, CommitId, InstanceId, KeyEnDeOrdered, MapxRaw, Namespace, Result, ValueEnDe, VerMap,
+    VsdbError, common::save_instance_meta,
 };
 
 #[derive(Deserialize)]
@@ -172,11 +172,40 @@ pub fn migrate_v17<K: KeyEnDeOrdered, V: ValueEnDe>(
 ) -> Result<VerMap<K, V>> {
     let id = id.into();
     let id = InstanceId::new(id.map_id, id.ns.unwrap_or_default());
-    let frame: Vec<u8> = load_instance_meta(id)?;
-    if frame.starts_with(b"VSTYPE04") {
-        return VerMap::<K, V>::from_meta_verified(id);
+    let ns = Namespace::open(id.ns.unwrap_or_default())?;
+    let bytes = std::fs::read(ns.meta_path(id.map_id))?;
+    let (map, converted) = convert_vermap_bytes::<K, V>(&bytes, Some(id))?;
+    if bytes != converted {
+        save_instance_meta(id, &map)?;
     }
-    let bytes = legacy_payload::<VerMap<K, V>>(&frame)?;
+    Ok(map)
+}
+
+/// Converts a postcard-serialized v17 `VerMap` handle (and its underlying
+/// version store) without requiring an `__instance_meta__` file.
+pub fn migrate_handle_v17<K: KeyEnDeOrdered, V: ValueEnDe>(bytes: &[u8]) -> Result<Vec<u8>> {
+    convert_vermap_bytes::<K, V>(bytes, None).map(|(_, h)| h)
+}
+
+fn convert_vermap_bytes<K: KeyEnDeOrdered, V: ValueEnDe>(
+    raw_bytes: &[u8],
+    expected: Option<InstanceId>,
+) -> Result<(VerMap<K, V>, Vec<u8>)> {
+    let frame: &[u8] = crate::exactly(raw_bytes)?;
+    if frame.starts_with(b"VSTYPE04") {
+        let mut map: VerMap<K, V> = crate::exactly(raw_bytes)?;
+        if map.namespace().is_read_only() {
+            return Err(VsdbError::ReadOnly {
+                operation: "VerMap migration",
+            });
+        }
+        if expected.is_some_and(|e| map.instance_id() != e) {
+            return Err(corrupt("invalid v18 version store handle"));
+        }
+        map.verify_and_gc()?;
+        return Ok((map, raw_bytes.to_vec()));
+    }
+    let bytes = legacy_payload::<VerMap<K, V>>(frame)?;
     let (
         Components(
             (LegacyRaw(mut store), _),
@@ -190,7 +219,8 @@ pub fn migrate_v17<K: KeyEnDeOrdered, V: ValueEnDe>(
         ),
         tail,
     ) = postcard::take_from_bytes(bytes)?;
-    if !tail.is_empty() || store.instance_id() != id {
+    let id = store.instance_id();
+    if !tail.is_empty() || expected.is_some_and(|e| id != e) {
         return Err(corrupt("invalid v17 version store handle"));
     }
     if store.namespace().is_read_only() {
@@ -352,8 +382,7 @@ pub fn migrate_v17<K: KeyEnDeOrdered, V: ValueEnDe>(
     for raw in &mut retired {
         raw.batch_wiped().commit_sync()?;
     }
-    save_instance_meta(id, &map)?;
-    Ok(map)
+    Ok((map, meta))
 }
 
 fn clear_pre_publication_objects(store: &mut MapxRaw) -> Result<()> {
@@ -768,10 +797,53 @@ pub fn migrate_tree_v17(
     id: impl Into<InstanceId>,
     roots: &[u64],
 ) -> Result<(vsdb::PersistentBTree, Vec<u64>)> {
-    use vsdb::PersistentBTree;
-
     let id = id.into();
     let id = InstanceId::new(id.map_id, id.ns.unwrap_or_default());
+    let ns = Namespace::open(id.ns.unwrap_or_default())?;
+    if ns.is_read_only() {
+        return Err(VsdbError::ReadOnly {
+            operation: "standalone tree migration",
+        });
+    }
+    let path = ns.meta_path(id.map_id);
+    let frame_bytes = std::fs::read(&path)?;
+    let (tree, handle, remapped) = convert_tree_bytes(&frame_bytes, Some(id), roots)?;
+    if frame_bytes != handle {
+        tree.save_meta()?;
+    }
+    Ok((tree, remapped))
+}
+
+/// Converts a postcard-serialized standalone v17 `PersistentBTree` handle (and
+/// its underlying node pool) without requiring an `__instance_meta__` file.
+pub fn migrate_tree_handle_v17(bytes: &[u8], roots: &[u64]) -> Result<(Vec<u8>, Vec<u64>)> {
+    convert_tree_bytes(bytes, None, roots).map(|(_, h, r)| (h, r))
+}
+
+fn convert_tree_bytes(
+    frame_bytes: &[u8],
+    expected: Option<InstanceId>,
+    roots: &[u64],
+) -> Result<(vsdb::PersistentBTree, Vec<u8>, Vec<u64>)> {
+    use vsdb::PersistentBTree;
+
+    let modern = postcard::take_from_bytes::<&[u8]>(frame_bytes)
+        .ok()
+        .is_some_and(|(frame, tail)| tail.is_empty() && frame.starts_with(b"VSTYPE04"));
+    let id = if modern {
+        let tree: PersistentBTree = crate::exactly(frame_bytes)?;
+        tree.instance_id()
+    } else {
+        let ((LegacyRaw(pool), _next), tail): ((LegacyRaw, u64), _) =
+            postcard::take_from_bytes(frame_bytes)?;
+        if !tail.is_empty() {
+            return Err(corrupt("invalid standalone tree metadata"));
+        }
+        pool.instance_id()
+    };
+    if expected.is_some_and(|e| id != e) {
+        return Err(corrupt("invalid standalone tree metadata"));
+    }
     let mut raw = crate::raw_map(id)?;
     if raw.namespace().is_read_only() {
         return Err(VsdbError::ReadOnly {
@@ -780,17 +852,6 @@ pub fn migrate_tree_v17(
     }
     let path = raw.namespace().meta_path(id.map_id);
     let remap_file = path.with_extension("v17-roots");
-    let frame_bytes = std::fs::read(&path)?;
-    let modern = postcard::take_from_bytes::<&[u8]>(&frame_bytes)
-        .ok()
-        .is_some_and(|(frame, tail)| tail.is_empty() && frame.starts_with(b"VSTYPE04"));
-    if !modern {
-        let ((LegacyRaw(pool), _next), tail): ((LegacyRaw, u64), _) =
-            postcard::take_from_bytes(&frame_bytes)?;
-        if !tail.is_empty() || pool.instance_id() != id {
-            return Err(corrupt("invalid standalone tree metadata"));
-        }
-    }
     let saved_mapping = match std::fs::read(&remap_file) {
         Ok(bytes) => Some(bytes),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
@@ -833,6 +894,7 @@ pub fn migrate_tree_v17(
         let mut payload = postcard::to_allocvec(&mapping)?;
         let checksum = Keccak256::digest(&payload);
         payload.extend_from_slice(&checksum);
+        vsdb::common::create_dir_all_durable(remap_file.parent().unwrap())?;
         vsdb::common::atomic_write_file(&remap_file, &payload)?;
         mapping
     };
@@ -852,8 +914,10 @@ pub fn migrate_tree_v17(
         })
         .collect::<Result<Vec<_>>>()?;
     let next = mapping.next;
+    let bytes = typed_handle::<PersistentBTree>(id, &[])?;
     if modern {
-        return Ok((PersistentBTree::from_meta(id)?, remapped));
+        let tree: PersistentBTree = crate::exactly(frame_bytes)?;
+        return Ok((tree, frame_bytes.to_vec(), remapped));
     }
     for (k, _) in raw.iter() {
         if k.len() != 8 && k.as_slice() != [9] && !(k.len() == 9 && matches!(k[0], 0x10 | 0x12)) {
@@ -865,11 +929,9 @@ pub fn migrate_tree_v17(
     batch.insert([9], next.to_le_bytes());
     batch.commit_sync()?;
     remove_old_nodes(&mut raw, &HashSet::new())?;
-    let bytes = typed_handle::<PersistentBTree>(id, &[])?;
     let mut tree: PersistentBTree = crate::exactly(&bytes)?;
     tree.rebuild_ref_counts(&mapping.converted);
-    tree.save_meta()?;
-    Ok((tree, remapped))
+    Ok((tree, bytes, remapped))
 }
 
 fn write_objects(store: &mut MapxRaw, objects: &mut Vec<([u8; 9], Vec<u8>)>) -> Result<()> {

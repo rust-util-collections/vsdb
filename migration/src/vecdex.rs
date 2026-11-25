@@ -64,15 +64,50 @@ pub fn migrate_v17<K: KeyEnDe, D: DistanceMetric<S>, S: Scalar>(
     }
     let path = ns.meta_path(id.map_id);
     let bytes = fs::read(&path)?;
-    if let Ok(index) = VecDex::<K, D, S>::from_meta(id) {
-        return Ok(index);
+    let (index, target) = convert_bytes::<K, D, S>(&bytes, Some(id))?;
+    if bytes != target {
+        vsdb::common::atomic_write_file(&path, &target)?;
     }
-    let (source, config, metric) = legacy_handle::<K, D, S>(&bytes)?;
-    if source != id {
+    Ok(index)
+}
+
+/// Converts a postcard-serialized v17 `VecDex` or `VecDexDyn` handle (and its
+/// underlying vector rows) without requiring an `__instance_meta__` file.
+pub fn migrate_handle_v17<K: KeyEnDe, D: DistanceMetric<S>, S: Scalar>(
+    bytes: &[u8],
+) -> Result<Vec<u8>> {
+    convert_bytes::<K, D, S>(bytes, None).map(|(_, h)| h)
+}
+
+fn convert_bytes<K: KeyEnDe, D: DistanceMetric<S>, S: Scalar>(
+    bytes: &[u8],
+    expected: Option<InstanceId>,
+) -> Result<(VecDex<K, D, S>, Vec<u8>)> {
+    if let Ok((frame, b"")) = postcard::take_from_bytes::<&[u8]>(bytes)
+        && frame.starts_with(b"VSTYPE04")
+    {
+        let index: VecDex<K, D, S> = exactly(bytes)?;
+        if index.namespace().is_read_only() {
+            return Err(vsdb::VsdbError::ReadOnly {
+                operation: "index migration",
+            });
+        }
+        if expected.is_some_and(|e| index.instance_id() != e) {
+            return Err(corrupt("VecDex metadata identity mismatch"));
+        }
+        return Ok((index, bytes.to_vec()));
+    }
+    let (id, config, metric) = legacy_handle::<K, D, S>(bytes)?;
+    if expected.is_some_and(|e| id != e) {
         return Err(corrupt("VecDex metadata identity mismatch"));
     }
     config.validate()?;
     let mut store = raw_map(id)?;
+    if store.namespace().is_read_only() {
+        return Err(vsdb::VsdbError::ReadOnly {
+            operation: "index migration",
+        });
+    }
     let version = 2u8;
     let schema = postcard::to_allocvec(&(
         version,
@@ -95,8 +130,7 @@ pub fn migrate_v17<K: KeyEnDe, D: DistanceMetric<S>, S: Scalar>(
     extra[1..].copy_from_slice(&Keccak256::digest(schema)[..8]);
     let target = typed_handle::<VecDex<K, D, S>>(id, &extra)?;
     let index = exactly(&target)?;
-    vsdb::common::atomic_write_file(&path, &target)?;
-    Ok(index)
+    Ok((index, target))
 }
 
 fn legacy_handle<K: KeyEnDe, D: DistanceMetric<S>, S: Scalar>(

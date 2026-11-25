@@ -1,7 +1,10 @@
 //! Standalone v17 tree with two application-owned roots (1 and 2).
 use std::fs;
 use vsdb::{PersistentBTree, VsdbOptions, vsdb_configure};
-use vsdb_migrate::{migrate_universe, versioned::migrate_tree_v17};
+use vsdb_migrate::{
+    migrate_universe,
+    versioned::{migrate_tree_handle_v17, migrate_tree_v17},
+};
 
 #[test]
 fn preserves_the_primary_prefix_and_maps_external_roots() {
@@ -62,5 +65,27 @@ fn preserves_the_primary_prefix_and_maps_external_roots() {
     assert_eq!(remapped, vec![roots[1], roots[0], roots[2]]);
     assert_eq!(reopened.get(remapped[0], b"a"), Some(b"first".to_vec()));
     assert_eq!(reopened.get(remapped[2], b"z"), Some(b"16".to_vec()));
+
+    // Byte-slice tree handle conversion in a fresh namespace without __instance_meta__.
+    let ns = vsdb::Namespace::create().unwrap();
+    let mut pool = vsdb::MapxRaw::new_in(&ns);
+    pool.insert(1u64.to_le_bytes(), &leaf16);
+    let mut raw_v17 = b"VSMAPX01".to_vec();
+    raw_v17.extend_from_slice(&pool.instance_id().map_id.to_le_bytes());
+    raw_v17.extend_from_slice(&ns.id().to_le_bytes());
+    let handle_v17 = postcard::to_allocvec(&(raw_v17, 2u64)).unwrap();
+    let (handle_v18, mapped_roots) = migrate_tree_handle_v17(&handle_v17, &[1]).unwrap();
+    assert!(!ns.meta_path(pool.instance_id().map_id).exists());
+    assert_eq!(
+        migrate_tree_handle_v17(&handle_v18, &[1]).unwrap(),
+        (handle_v18.clone(), mapped_roots.clone())
+    );
+    let decoded_tree: PersistentBTree = postcard::from_bytes(&handle_v18).unwrap();
+    assert_eq!(
+        decoded_tree.get(mapped_roots[0], b"z"),
+        Some(b"16".to_vec())
+    );
+    drop(reopened);
+    drop(decoded_tree);
     fs::remove_dir_all(scratch).unwrap();
 }

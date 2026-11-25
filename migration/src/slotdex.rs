@@ -31,6 +31,21 @@ pub fn migrate_custom_v17<S: SlotType, K: KeyEnDeOrdered>(
     convert(id.into(), Some(capacity))
 }
 
+/// Converts a postcard-serialized v17 `SlotDex` handle (and its underlying
+/// eight-byte total row) without requiring an `__instance_meta__` file.
+pub fn migrate_handle_v17<S: SlotType, K: KeyEnDeOrdered>(bytes: &[u8]) -> Result<Vec<u8>> {
+    convert_bytes::<S, K>(bytes, None, None).map(|(_, h)| h)
+}
+
+/// [`migrate_custom_v17`] for a postcard-serialized `SlotDex` handle stored
+/// outside `__instance_meta__`.
+pub fn migrate_custom_handle_v17<S: SlotType, K: KeyEnDeOrdered>(
+    bytes: &[u8],
+    capacity: u32,
+) -> Result<Vec<u8>> {
+    convert_bytes::<S, K>(bytes, None, Some(capacity)).map(|(_, h)| h)
+}
+
 fn convert<S: SlotType, K: KeyEnDeOrdered>(
     id: InstanceId,
     requested: Option<u32>,
@@ -42,8 +57,35 @@ fn convert<S: SlotType, K: KeyEnDeOrdered>(
             operation: "SlotDex migration",
         });
     }
-    if let Ok(done) = SlotDex::from_meta(id) {
-        return Ok(done);
+    let path = ns.meta_path(id.map_id);
+    let bytes = fs::read(&path)?;
+    let (dex, handle) = convert_bytes::<S, K>(&bytes, Some(id), requested)?;
+    if bytes != handle {
+        atomic_write_file(&path, &handle)?;
+    }
+    Ok(dex)
+}
+
+fn convert_bytes<S: SlotType, K: KeyEnDeOrdered>(
+    bytes: &[u8],
+    expected: Option<InstanceId>,
+    requested: Option<u32>,
+) -> Result<(SlotDex<S, K>, Vec<u8>)> {
+    let (frame, tail) = postcard::take_from_bytes::<&[u8]>(bytes)?;
+    if !tail.is_empty() {
+        return Err(invalid("trailing SlotDex metadata"));
+    }
+    if frame.starts_with(b"VSTYPE04") {
+        let dex: SlotDex<S, K> = crate::exactly(bytes)?;
+        if dex.namespace().is_read_only() {
+            return Err(VsdbError::ReadOnly {
+                operation: "SlotDex migration",
+            });
+        }
+        if expected.is_some_and(|e| dex.instance_id() != e) {
+            return Err(invalid("invalid v18 SlotDex identity"));
+        }
+        return Ok((dex, bytes.to_vec()));
     }
     if requested.is_none()
         && ![
@@ -57,15 +99,15 @@ fn convert<S: SlotType, K: KeyEnDeOrdered>(
             "custom v17 slots require application verification of their encoding and bucket alignment",
         ));
     }
-    let path = ns.meta_path(id.map_id);
-    let bytes = fs::read(&path)?;
-    let (frame, tail) = postcard::take_from_bytes::<&[u8]>(&bytes)?;
-    if !tail.is_empty() {
-        return Err(invalid("trailing SlotDex metadata"));
-    }
     let payload = legacy_payload::<SlotDex<S, K>>(frame)?;
     let ((version, LegacyRaw(mut store)), rest) =
         postcard::take_from_bytes::<(u8, LegacyRaw)>(payload)?;
+    if store.namespace().is_read_only() {
+        return Err(VsdbError::ReadOnly {
+            operation: "SlotDex migration",
+        });
+    }
+    let id = store.instance_id();
     let (capacity, swap, tail) = if let Some(capacity) = requested {
         let ((old, swap), tail) = postcard::take_from_bytes::<(S, bool)>(rest)?;
         if S::tier_stride(capacity, 1) != Some(old) {
@@ -77,7 +119,7 @@ fn convert<S: SlotType, K: KeyEnDeOrdered>(
         let cap = u32::try_from(cap).map_err(|_| invalid("v17 SlotDex capacity exceeds u32"))?;
         (cap, swap, tail)
     };
-    if !tail.is_empty() || version != 2 || capacity < 2 || store.instance_id() != id {
+    if !tail.is_empty() || version != 2 || capacity < 2 || expected.is_some_and(|e| id != e) {
         return Err(invalid("invalid v17 SlotDex configuration or identity"));
     }
     let total = match store.get([2]).as_deref() {
@@ -96,8 +138,8 @@ fn convert<S: SlotType, K: KeyEnDeOrdered>(
     let mut batch = store.batch();
     batch.insert([2], [total.to_le_bytes(), [0; 8]].concat());
     batch.commit_sync()?;
-    atomic_write_file(&path, &handle)?;
-    SlotDex::from_meta(id)
+    let dex: SlotDex<S, K> = crate::exactly(&handle)?;
+    Ok((dex, handle))
 }
 
 fn coordinate<S: SlotType>(raw: &[u8]) -> Result<S> {

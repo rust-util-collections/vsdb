@@ -43,14 +43,6 @@
 
 ---
 
-### [MEDIUM] migration: composite handles serialized via serde outside __instance_meta__ lack byte-slice converters
-- **Where**: `migration/src/lib.rs` (`basic_handle`), `migration/src/{slotdex,vecdex,versioned,dagmap}.rs`
-- **What**: Applications that persisted v17 composite handles (`VerMap`, `SlotDex`, `VecDex` / `VecDexDyn`, `PersistentBTree`, `DagMap*`) via `postcard` in `__CUSTOM__/` or inside parent collection values without `save_meta()` have no public converter: `basic_handle` supports only `Mapx*`/`Orphan`, while `*::migrate_v17` reads `__instance_meta__/{id:016x}` (`Io(NotFound)`) and keeps v17 frame decoders private.
-- **Why**: Blocks offline migration of serde-persisted composite handles without reimplementing v17 wire parsers externally (violates `compatibility-policy.md`).
-- **Suggested fix**: Expose public byte-slice handle converters (`migrate_handle_v17`) alongside the `InstanceId`-based `__instance_meta__` entry points and document them in `migration/README.md`.
-
----
-
 ### [LOW] docs/conventions: stale v17 rustdocs, missing v18 breaking-API notes, ValueMut Debug name, and repeated inline std paths
 - **Where**: `strata/src/versioned/map.rs` (`VerMap` rustdoc), `core/src/common/mod.rs` (`vsdb_get_system_dir`), `core/src/basic/mapx_raw/mod.rs` (`MapxRaw::namespace`), `core/src/common/engine/mod.rs` (`ValueMut::fmt`), `CHANGELOG.md`, `migration/src/dagmap.rs`, `core/src/basic/mapx_raw/test.rs`
 - **What**: `VerMap` rustdoc still describes v17 multi-prefix layout, refcount dirty markers, and `lazy_delete`; `vsdb_get_system_dir` still claims `{base_dir}/__SYSTEM__/` holds the removed DagMap ID counter; `MapxRaw::namespace` calls `namespace()` "THE co-location primitive" (contradicting `new_colocated` and `AGENTS.md`); `CHANGELOG.md` `[v18.0.0]` omits concrete signature breaks (`VecDexDyn::new` → `new_with_metric`, `VerMap::sync` removal, `TrieCalc` checkpoint args, `MapxOrdRawKey::entry` enum); `engine::ValueMut::fmt` formats `"ValueIterMut"`; `std::any::type_name` (`migration/src/dagmap.rs`) and `std::path::Path::new` (`core/src/basic/mapx_raw/test.rs`) appear 3+ times inline.

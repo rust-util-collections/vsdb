@@ -458,7 +458,13 @@ fn prepare(ns: &Namespace, nodes: &[Conversion], dag_id: u64) -> Result<()> {
 /// Returns the converted root and all changed descendant identities. Retrying
 /// resumes from the journal stored beside the root's instance metadata.
 pub fn migrate_v17(id: impl Into<InstanceId>) -> Result<(DagMapRaw, Remap)> {
-    migrate_with::<DagMapRaw>(id.into(), |bytes| decode(bytes), DagMapRaw::from_meta)
+    migrate_with::<DagMapRaw>(id.into(), None, |bytes| decode(bytes), DagMapRaw::from_meta)
+}
+
+/// Converts a postcard-serialized v17 `DagMapRaw` root handle (and its
+/// connected DAG) without requiring a pre-existing `__instance_meta__` file.
+pub fn migrate_handle_v17(bytes: &[u8]) -> Result<(Vec<u8>, Remap)> {
+    migrate_bytes_with::<DagMapRaw>(bytes, |b| decode(b), |d| d.instance_id())
 }
 
 /// Converts a v17 typed-value DAG. Previously saved child metadata retains
@@ -468,11 +474,25 @@ pub fn migrate_rawkey_v17<V: ValueEnDe>(
 ) -> Result<(DagMapRawKey<V>, Remap)> {
     migrate_with::<DagMapRawKey<V>>(
         id.into(),
+        None,
         |bytes| {
             let frame: &[u8] = decode(bytes)?;
             decode(legacy_payload::<DagMapRawKey<V>>(frame)?)
         },
         DagMapRawKey::from_meta,
+    )
+}
+
+/// Converts a postcard-serialized v17 `DagMapRawKey<V>` root handle (and its
+/// connected DAG) without requiring a pre-existing `__instance_meta__` file.
+pub fn migrate_rawkey_handle_v17<V: ValueEnDe>(bytes: &[u8]) -> Result<(Vec<u8>, Remap)> {
+    migrate_bytes_with::<DagMapRawKey<V>>(
+        bytes,
+        |b| {
+            let frame: &[u8] = decode(b)?;
+            decode(legacy_payload::<DagMapRawKey<V>>(frame)?)
+        },
+        |d| d.instance_id(),
     )
 }
 
@@ -516,8 +536,57 @@ pub fn migrate_child_v17<V: ValueEnDe>(id: impl Into<InstanceId>) -> Result<DagM
     atomic_write_file(&path, &target)?;
     Ok(node)
 }
+fn migrate_bytes_with<T: DeserializeOwned>(
+    bytes: &[u8],
+    parse: impl Fn(&[u8]) -> Result<Legacy>,
+    instance_of: impl Fn(&T) -> InstanceId,
+) -> Result<(Vec<u8>, Remap)> {
+    if let Ok((frame, b"")) = postcard::take_from_bytes::<&[u8]>(bytes)
+        && frame.starts_with(b"VSTYPE04")
+    {
+        let node: T = decode(bytes)?;
+        let root = instance_of(&node);
+        let root = InstanceId::new(root.map_id, root.ns.unwrap_or_default());
+        let ns = Namespace::open(root.ns.unwrap_or_default())?;
+        if ns.is_read_only() {
+            return Err(VsdbError::ReadOnly {
+                operation: "DAG migration",
+            });
+        }
+        let journal = ns.meta_path(root.map_id).with_extension(format!(
+            "dag-{:016x}-v17",
+            crate::tag(std::any::type_name::<T>())
+        ));
+        let map = match read_record(&journal, root)? {
+            Some(Record::Done(map)) => map,
+            None => Remap::new(),
+            Some(Record::Running { .. }) => {
+                let (_, map) = migrate_with::<T>(root, None, parse, |id| {
+                    decode(&fs::read(ns.meta_path(id.map_id))?)
+                })?;
+                map
+            }
+        };
+        return Ok((bytes.to_vec(), map));
+    }
+    let legacy = parse(bytes)?;
+    let root = legacy.0.instance_id();
+    let ns = Namespace::open(root.ns.unwrap_or_default())?;
+    if ns.is_read_only() {
+        return Err(VsdbError::ReadOnly {
+            operation: "DAG migration",
+        });
+    }
+    let path = ns.meta_path(root.map_id);
+    let (_, map) = migrate_with::<T>(root, Some(bytes), parse, |id| {
+        decode(&fs::read(ns.meta_path(id.map_id))?)
+    })?;
+    Ok((fs::read(&path)?, map))
+}
+
 fn migrate_with<T: DeserializeOwned>(
     root: InstanceId,
+    source: Option<&[u8]>,
     parse: impl Fn(&[u8]) -> Result<Legacy>,
     restore: impl Fn(InstanceId) -> Result<T>,
 ) -> Result<(T, Remap)> {
@@ -529,6 +598,7 @@ fn migrate_with<T: DeserializeOwned>(
         });
     }
     let path = ns.meta_path(root.map_id);
+    vsdb::common::create_dir_all_durable(path.parent().unwrap())?;
     let journal = path.with_extension(format!(
         "dag-{:016x}-v17",
         crate::tag(std::any::type_name::<T>())
@@ -539,7 +609,15 @@ fn migrate_with<T: DeserializeOwned>(
             if let Ok(node) = restore(root) {
                 return Ok((node, Remap::new()));
             }
-            let nodes = plan::<T>(&ns, root, parse(&fs::read(&path)?)?)?;
+            let owned;
+            let raw = match source {
+                Some(b) => b,
+                None => {
+                    owned = fs::read(&path)?;
+                    &owned
+                }
+            };
+            let nodes = plan::<T>(&ns, root, parse(raw)?)?;
             let r = Record::Running {
                 dag_id: rand::random(),
                 phase: Phase::Prepare,

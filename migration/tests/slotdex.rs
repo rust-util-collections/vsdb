@@ -5,7 +5,7 @@ use vsdb::{SlotDex64, slotdex::Order};
 use vsdb_core::MapxRaw;
 use vsdb_migrate::{
     LegacyRaw,
-    slotdex::{migrate_custom_v17, migrate_v17},
+    slotdex::{migrate_custom_handle_v17, migrate_custom_v17, migrate_handle_v17, migrate_v17},
 };
 
 type Rows = Vec<(Vec<u8>, Vec<u8>)>;
@@ -60,4 +60,23 @@ fn recovers_and_upgrades_v17_in_place() {
         saved.iter(.., Order::Asc).collect::<Vec<_>>(),
         [9, 10, 11, 12, 13, 15, 14]
     );
+
+    // Byte-slice handle conversion without an __instance_meta__ file.
+    let mut store2 = MapxRaw::new();
+    let id2 = store2.instance_id();
+    let mut meta2 = meta;
+    let off = meta2.windows(8).position(|w| w == b"VSMAPX01").unwrap() + 8;
+    meta2[off..off + 8].copy_from_slice(&id2.map_id.to_le_bytes());
+    for (k, v) in &rows {
+        store2.insert(k, v);
+    }
+    let upgraded = migrate_handle_v17::<u64, u64>(&meta2).unwrap();
+    assert!(!store2.namespace().meta_path(id2.map_id).exists());
+    assert_eq!(
+        migrate_custom_handle_v17::<u64, u64>(&upgraded, 3).unwrap(),
+        upgraded
+    );
+    assert_eq!(migrate_handle_v17::<u64, u64>(&meta2).unwrap(), upgraded);
+    let restored: SlotDex64<u64> = postcard::from_bytes(&upgraded).unwrap();
+    assert_eq!(restored.total(), 6);
 }
