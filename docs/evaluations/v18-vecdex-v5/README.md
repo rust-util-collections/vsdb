@@ -33,6 +33,37 @@ over the five A/B runs of each arm). Grouping reduced repeated probes,
 with a similar amount of physical data transferred on this fixture.
 [All physical-read pairs](results/device.csv)
 
+A separate five-process width-eight diagnostic returned the same trace
+and finished all 50,000 queries with observed storage reads. Median
+run p99 was 8.838 ms, with 184.01 acquisitions per query. This arm has
+independent process timings and no paired storage-latency promotion
+decision. [Width-eight disk observations](results/device-width8.csv)
+
+## Process memory
+
+Each cell is the largest of three independent resource runs in KiB.
+The first value is GNU time's OS maximum for the command. The second
+is the largest directly observed high-water mark in the VecDex process's
+`/proc/PID/status`. The cold command includes a Python file-advisory helper;
+its peak can exceed the probe process's. These are process-lifetime
+observations on the fixture, and include allocation outside the query window.
+
+| Release arm | Warm GNU max / probe VmHWM (KiB) | Device GNU max / probe VmHWM (KiB) |
+|---|---:|---:|
+| v4 stock (`6ddaed9`) | 13,096 / 13,060 | — |
+| v5 scalar pinned (`dd07a00`) | 13,128 / 13,300 | 12,076 / 7,244 |
+| v5 width eight (`dd07a00`) | 13,280 / 13,376 | 12,080 / 7,472 |
+| v5 width 32 (`dd07a00`) | 13,148 / 13,336 | 12,148 / 7,444 |
+| v5 retained scalar (`1300ad2`) | 13,088 / 13,324 | 12,080 / 7,304 |
+| v5 final corrected scalar (`3b220e7`) | 13,228 / 13,312 | 12,084 / 7,268 |
+
+The warm processes each ran 1,000 queries after warming the larger
+engine cache. Each device process ran 500 on the smaller cache with file
+eviction, including a qualifying storage read on every query. The paired
+latency datasets above use the longer 10,000-query traces. Returned
+SST pin capacity and OS process RSS have separate owners and timing.
+[27 original RSS processes](results/rss.csv) · [Six final-process RSS observations](results/rss-final.csv)
+
 ## Warm upgrade comparison
 
 Using the same logical graph and query traces, the actual public release
