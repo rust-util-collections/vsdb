@@ -2321,3 +2321,100 @@ fn compact_rejects_incomplete_mappings_without_wiping_data() {
         }
     }
 }
+
+#[test]
+fn snapshot_group_scores_keep_filter_and_distance_order_and_skip_missing_rows() {
+    thread_local! {
+        static EVENTS: RefCell<Vec<(char, u64)>> = const { RefCell::new(Vec::new()) };
+    }
+    #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+    struct TraceDistance;
+    impl DistanceMetric<f32> for TraceDistance {
+        fn distance(&self, _: &[f32], vector: &[f32]) -> f32 {
+            EVENTS.with_borrow_mut(|events| events.push(('d', vector[1] as u64)));
+            vector[0]
+        }
+    }
+    fn query<const WIDTH: usize>(view: &MapxRawReadView<'_>) -> Vec<(u64, f32)> {
+        let filter = |key: &u64| {
+            EVENTS.with_borrow_mut(|events| events.push(('f', *key)));
+            key.is_multiple_of(2)
+        };
+        Search {
+            view,
+            query: &[0., 0.],
+            k: 12,
+            ef: Some(60),
+            filter: Some(Filter::Typed(&filter)),
+        }
+        .run_with_width::<_, WIDTH>(&TraceDistance)
+        .unwrap()
+    }
+
+    let cfg = HnswConfig {
+        dim: 2,
+        m: 2,
+        m_max0: 100,
+        ef_search: 60,
+        ef_construction: 8,
+    };
+    let mut idx: VecDex<u64, L2> = VecDex::new(cfg).unwrap();
+    for id in 0..70 {
+        insert_at_layer(&mut idx, id, &[(id % 8) as f32, id as f32], 0);
+    }
+    let mut txn = Txn::<f32>::new(&idx.store, idx.state());
+    let mut neighbors = vec![0, 101, 41];
+    neighbors.extend((1..70).rev());
+    txn.set_neighbors(0, 0, &neighbors);
+    txn.state.entry_point = Some(0);
+    txn.finish().commit(&mut idx.store).unwrap();
+
+    let reader = idx.reader();
+    let old = reader.read_view();
+    let scalar = query::<1>(&old.raw);
+    let reference = EVENTS.with_borrow_mut(std::mem::take);
+    assert!(reference.contains(&('d', 69)));
+    assert_eq!(reference.iter().filter(|e| **e == ('d', 41)).count(), 1);
+    assert!(
+        reference
+            .windows(2)
+            .any(|events| events[0].0 == 'f' && events[1].0 == 'd')
+    );
+    idx.remove(&4).unwrap();
+    for grouped in [query::<8>(&old.raw), query::<32>(&old.raw)] {
+        assert_eq!(grouped, scalar);
+    }
+    let observed = EVENTS.with_borrow_mut(std::mem::take);
+    assert_eq!(&observed[..reference.len()], &reference);
+    assert_eq!(&observed[reference.len()..], &reference);
+    let new = reader.read_view();
+    assert!(query::<32>(&new.raw).iter().all(|(id, _)| *id != 4));
+}
+
+#[test]
+fn search_reports_a_malformed_stored_vector_through_scalar_and_grouped_reads() {
+    let mut idx: VecDex<u64, L2> = VecDex::new(HnswConfig {
+        dim: 2,
+        ..Default::default()
+    })
+    .unwrap();
+    insert_at_layer(&mut idx, 0, &[0., 0.], 0);
+    insert_at_layer(&mut idx, 1, &[1., 1.], 0);
+    idx.store.insert(node_key(TAG_VEC, 1), [0; 3]);
+    let raw = idx.store.read_view();
+    let probe = || Search::<u64, f32> {
+        view: &raw,
+        query: &[0., 0.],
+        k: 2,
+        ef: Some(2),
+        filter: None,
+    };
+    assert!(matches!(
+        probe().run_with_width::<_, 1>(&L2),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert!(matches!(
+        probe().run_with_width::<_, 32>(&L2),
+        Err(VsdbError::Corrupt { .. })
+    ));
+}

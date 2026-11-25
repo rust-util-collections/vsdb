@@ -67,17 +67,19 @@ use crate::common::{
 };
 use distance::{DistanceMetric, MetricSearch, Scalar};
 use hnsw::{
-    AdjRead, adj_key, decode_neighbors, encode_neighbors, get_neighbors,
-    prune_neighbors, prune_selection, random_layer, search_layer,
+    AdjRead, Scores, adj_key, decode_neighbors, encode_neighbors, get_neighbors,
+    prune_neighbors, prune_selection, random_layer, search_layer, search_scored_layer,
     select_neighbors_heuristic,
 };
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     marker::PhantomData,
     rc::Rc,
 };
+use vsdb_core::MAX_GROUPED_READ_KEYS;
 use vsdb_core::basic::mapx_raw::{MapxRaw, MapxRawReadView};
 
 // Namespace tags (first key byte).
@@ -1460,9 +1462,102 @@ struct Search<'a, 'db, K, S> {
     filter: Option<Filter<'a, K>>,
 }
 
+struct SnapshotScores<'a, 'db, S, D, const WIDTH: usize> {
+    view: &'a MapxRawReadView<'db>,
+    query: &'a [S],
+    metric: &'a D,
+    scratch: Vec<S>,
+}
+
+fn score_bytes<S: Scalar, D: DistanceMetric<S>>(
+    raw: &[u8],
+    query: &[S],
+    metric: &D,
+    scratch: &mut Vec<S>,
+) -> Result<S> {
+    if raw.len() != size_of_val(query) {
+        return Err(corrupt(
+            "VecDex: vector length differs from graph dimensions",
+        ));
+    }
+    S::decode_into(raw, scratch);
+    Ok(metric.distance(query, scratch))
+}
+
+impl<S: Scalar, D: DistanceMetric<S>, const WIDTH: usize> Scores<S>
+    for SnapshotScores<'_, '_, S, D, WIDTH>
+{
+    type Error = VsdbError;
+
+    fn one(&mut self, id: u64) -> Result<Option<S>> {
+        self.view.try_get_with(node_key(TAG_VEC, id), |bytes| {
+            score_bytes(bytes, self.query, self.metric, &mut self.scratch)
+        })
+    }
+
+    fn visit(
+        &mut self,
+        mut ids: impl Iterator<Item = u64>,
+        mut accept: impl FnMut(u64, S),
+    ) -> Result<()> {
+        const { assert!(WIDTH > 0 && WIDTH <= MAX_GROUPED_READ_KEYS) };
+        if WIDTH == 1 {
+            for id in ids {
+                if let Some(score) = self.one(id)? {
+                    accept(id, score);
+                }
+            }
+            return Ok(());
+        }
+        loop {
+            let chunk: SmallVec<[u64; MAX_GROUPED_READ_KEYS]> =
+                ids.by_ref().take(WIDTH).collect();
+            if chunk.is_empty() {
+                return Ok(());
+            }
+            if let [id] = chunk.as_slice() {
+                if let Some(score) = self.one(*id)? {
+                    accept(*id, score);
+                }
+            } else {
+                let keys: SmallVec<[[u8; 9]; MAX_GROUPED_READ_KEYS]> =
+                    chunk.iter().map(|&id| node_key(TAG_VEC, id)).collect();
+                let refs: SmallVec<[&[u8]; MAX_GROUPED_READ_KEYS]> =
+                    keys.iter().map(<[_; 9]>::as_slice).collect();
+                self.view.try_visit_many(&refs, |i, row| {
+                    if let Some(bytes) = row {
+                        accept(
+                            chunk[i],
+                            score_bytes(
+                                bytes,
+                                self.query,
+                                self.metric,
+                                &mut self.scratch,
+                            )?,
+                        );
+                    }
+                    Ok(())
+                })?;
+            }
+            if chunk.len() < WIDTH {
+                return Ok(());
+            }
+        }
+    }
+}
+
 impl<K: KeyEnDe, S: Scalar> MetricSearch<S> for Search<'_, '_, K, S> {
     type Output = Result<Vec<(K, S)>>;
     fn run<D: DistanceMetric<S>>(self, metric: &D) -> Self::Output {
+        self.run_with_width::<D, MAX_GROUPED_READ_KEYS>(metric)
+    }
+}
+
+impl<K: KeyEnDe, S: Scalar> Search<'_, '_, K, S> {
+    fn run_with_width<D: DistanceMetric<S>, const WIDTH: usize>(
+        self,
+        metric: &D,
+    ) -> Result<Vec<(K, S)>> {
         let state = GraphState::read(self.view.get(STATE_KEY))?;
         let Some(mut ep) = state.entry_point else {
             return Ok(Vec::new());
@@ -1470,11 +1565,11 @@ impl<K: KeyEnDe, S: Scalar> MetricSearch<S> for Search<'_, '_, K, S> {
         if self.k == 0 {
             return Ok(Vec::new());
         }
-        let mut scratch = Vec::with_capacity(self.query.len());
-        let mut distance_to = |id| {
-            let raw = self.view.get(node_key(TAG_VEC, id))?;
-            S::decode_into(&raw, &mut scratch);
-            Some(metric.distance(self.query, &scratch))
+        let mut scores = SnapshotScores::<S, D, WIDTH> {
+            view: self.view,
+            query: self.query,
+            metric,
+            scratch: Vec::with_capacity(self.query.len()),
         };
         let raw_key_for = |id| self.view.get(node_key(TAG_NODE2KEY, id));
         let key_for = |id| {
@@ -1506,20 +1601,21 @@ impl<K: KeyEnDe, S: Scalar> MetricSearch<S> for Search<'_, '_, K, S> {
         let graph = SearchRows(self.view);
         for layer in (1..=state.max_layer).rev() {
             if let Some((_, next)) =
-                search_layer(&mut distance_to, &[ep], 1, layer, self.view, None).first()
+                search_scored_layer(&mut scores, &[ep], 1, layer, self.view, None)?
+                    .first()
             {
                 ep = *next;
             }
         }
         let ef = self.ef.unwrap_or(state.ef_search).max(self.k);
-        let results = search_layer(
-            distance_to,
+        let results = search_scored_layer(
+            &mut scores,
             &[ep],
             ef,
             0,
             &graph,
             filter.as_ref().map(|f| f as &dyn Fn(u64) -> bool),
-        );
+        )?;
         let mut keys = filtered_keys.into_inner();
         Ok(results
             .into_iter()
