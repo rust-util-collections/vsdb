@@ -1,0 +1,16 @@
+[package]
+name = "publication-profile"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+vsdb = { path = "../../../strata" }
+vsdb_core = { path = "../../../core" }
+mmdb = { git = "https://github.com/rust-util-collections/mmdb", rev = "255015ad0f488f09c7985736a903d3171876bcaf", optional = true, features = ["bench-metrics"] }
+
+[features]
+working-edit = []
+counters = ["dep:mmdb"]
