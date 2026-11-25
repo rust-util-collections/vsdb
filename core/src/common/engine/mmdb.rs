@@ -1710,6 +1710,30 @@ mod tests {
             read_only: true,
             mem_budget: 8 * 1024 * 1024,
         };
+        for reverse in [false, true] {
+            let view = engine.read_view(prefix);
+            let mut cursor = view.try_range(..).unwrap();
+            let mut seen = 0;
+            loop {
+                let next = if reverse {
+                    cursor.try_step_prev()
+                } else {
+                    cursor.try_step_next()
+                };
+                match next {
+                    Ok(Some(_)) => seen += 1,
+                    Err(VsdbError::Storage {
+                        kind: crate::StorageErrorKind::Corruption,
+                        source,
+                    }) => {
+                        assert!(source.downcast_ref::<mmdb::Error>().is_some());
+                        break;
+                    }
+                    other => panic!("expected a late checksum error, got {other:?}"),
+                }
+            }
+            assert!((1..64).contains(&seen));
+        }
         for mode in 0..3 {
             for reverse in [false, true] {
                 let mut seen = 0;
