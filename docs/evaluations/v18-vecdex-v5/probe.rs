@@ -2,9 +2,9 @@
 use std::{
     env, fs,
     hint::black_box,
-    io::{BufReader, BufWriter, Read, Write},
+    io::{BufRead, BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     time::Instant,
 };
 use vsdb::{
@@ -158,16 +158,40 @@ fn read_bytes() -> u64 {
         .unwrap()
 }
 
-fn evict(base: &Path) {
-    let script = "import os,sys\nfrom pathlib import Path\nfiles=list(Path(sys.argv[1]).rglob('*.sst'))\nassert files\nfor path in files:\n with path.open('rb') as f: os.posix_fadvise(f.fileno(),0,0,os.POSIX_FADV_DONTNEED)";
-    assert!(
-        Command::new("python3")
+// Advisories target this fixed fixture only. The helper stays alive across
+// queries so process startup is outside both the batch and query timings.
+struct Eviction {
+    child: Child,
+    input: Option<ChildStdin>,
+    ack: BufReader<ChildStdout>,
+}
+
+impl Eviction {
+    fn connect(base: &Path) -> Self {
+        let script = "import os,sys\nfrom pathlib import Path\nfiles=[p.open('rb') for p in Path(sys.argv[1]).rglob('*.sst')]\nassert files\nfor _ in sys.stdin:\n for f in files: os.posix_fadvise(f.fileno(),0,0,os.POSIX_FADV_DONTNEED)\n print('ready',flush=True)";
+        let mut child = Command::new("python3")
             .args(["-c", script])
             .arg(base)
-            .status()
-            .unwrap()
-            .success()
-    );
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let input = child.stdin.take();
+        let ack = BufReader::new(child.stdout.take().unwrap());
+        Self { child, input, ack }
+    }
+    fn evict(&mut self) {
+        self.input.as_mut().unwrap().write_all(b"evict\n").unwrap();
+        let mut reply = String::new();
+        self.ack.read_line(&mut reply).unwrap();
+        assert_eq!(reply, "ready\n");
+    }
+}
+impl Drop for Eviction {
+    fn drop(&mut self) {
+        drop(self.input.take());
+        assert!(self.child.wait().unwrap().success());
+    }
 }
 
 fn property(ns: &Namespace, name: &str) -> u64 {
@@ -180,6 +204,8 @@ fn run(base: &Path, cold: bool, seed: u64, samples: usize) {
     vsdb_configure(VsdbOptions::read_only(base)).unwrap();
     let index = Graph::from_meta(graph_id(base)).unwrap();
     let ns = index.namespace();
+    let k = K.min(index.len() as usize);
+    let mut eviction = cold.then(|| Eviction::connect(base));
     let queries: Vec<_> = (0..samples as u64)
         .map(|n| {
             let id = mix(0x2611_2026 + n + seed * 100_000) % NODES;
@@ -206,15 +232,15 @@ fn run(base: &Path, cold: bool, seed: u64, samples: usize) {
     let mut latencies = Vec::with_capacity(samples);
     let mut true_nearest = 0;
     let mut hash = 0u64;
-    for (n, (id, q)) in queries.iter().enumerate() {
-        if cold && n % 32 == 0 {
-            evict(base);
+    for (id, q) in &queries {
+        if let Some(helper) = &mut eviction {
+            helper.evict();
             before_io = read_bytes();
         }
         let start = Instant::now();
-        let hits = black_box(index.search(q, K).unwrap());
+        let hits = black_box(index.search(q, k).unwrap());
         latencies.push(start.elapsed().as_nanos() as u64);
-        assert_eq!(hits.len(), K);
+        assert_eq!(hits.len(), k);
         true_nearest += usize::from(hits[0].0 == *id && hits[0].1 == 0.0);
         for (key, score) in hits {
             hash = hash.rotate_left(7).wrapping_mul(37) ^ key ^ u64::from(score.to_bits());
@@ -246,6 +272,14 @@ fn main() {
     let base = PathBuf::from(&args[2]);
     match args[1].as_str() {
         "create" => create(&base, Path::new(&args[3])),
+        "singleton" => {
+            vsdb_configure(VsdbOptions::new(&base)).unwrap();
+            let ns = namespace(512);
+            let mut index = graph(&ns);
+            index.insert(&0, &vector(0)).unwrap();
+            save_id(&base, index.save_meta().unwrap());
+            ns.flush();
+        }
         "import" => import(&base, Path::new(&args[3]), args[4].parse().unwrap()),
         "run" => run(
             &base,
