@@ -10,12 +10,15 @@ p.add_argument("folder", type=Path)
 p.add_argument("--seed", type=int, default=261126)
 args = p.parse_args()
 all_trace = {}
-for regime in ("warm", "device", "singleton", "secondary", "device-width8"):
+for regime in ("warm", "device", "singleton", "secondary", "device-width8", "landed"):
     path = args.folder/(regime+".csv")
     rows = list(csv.DictReader(path.open()))
     pairs = ({"diagnostic-width8": ("8",)} if regime=="device-width8"
              else {"v4": ("v4","1"), "width8": ("1","8")} if regime=="secondary"
              else {"AA": ("1","1"),"AB": ("1","32")})
+    if regime == "landed":
+        pairs = {"AA": ("1","1"), "AB": ("1","shipped"),
+                 "v4AA": ("v4","v4"), "upgrade": ("v4","shipped")}
     wanted = {(r,pair): list(binaries) for pair,binaries in pairs.items() for r in range(1,6)}
     groups = defaultdict(list)
     for row in rows:

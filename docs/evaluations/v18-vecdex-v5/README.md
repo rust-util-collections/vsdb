@@ -56,12 +56,13 @@ s=$(mktemp -d /tmp/vsdb-vecdex.XXXXXXXX)
 mkdir "$s/results"
 python3 "$d/build.py" . "$s/bin" 6ddaed9 v4
 for width in 1 8 32; do python3 "$d/build.py" . "$s/bin" dd07a00 "$width"; done
+python3 "$d/build.py" . "$s/bin" 1300ad2 shipped
 "$s/bin/v4" create "$s/builder" "$s/graph.rows"
 "$s/bin/v4" import "$s/v4-warm" "$s/graph.rows" 512
 "$s/bin/32" import "$s/v5-warm" "$s/graph.rows" 512
 "$s/bin/32" import "$s/v5-device" "$s/graph.rows" 8
 "$s/bin/1" singleton "$s/v5-singleton"
-for regime in warm secondary device device-width8; do
+for regime in warm secondary device device-width8 landed; do
     python3 "$d/trials.py" "$s/bin" "$s" "$s/results/$regime.csv" "$regime" --cpus 4
 done
 python3 "$d/trials.py" "$s/bin" "$s" "$s/results/singleton.csv" singleton --samples 100000 --cpus 4

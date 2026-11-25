@@ -17,9 +17,12 @@ class EvidenceTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.folder = Path(self.temp.name)
-        for regime in ("warm", "device", "singleton", "secondary", "device-width8"):
+        for regime in ("warm", "device", "singleton", "secondary", "device-width8", "landed"):
             if regime == "secondary":
                 pairs = [("v4", ("v4", "1")), ("width8", ("1", "8"))]
+            elif regime == "landed":
+                pairs = [("AA", ("1","1")), ("AB", ("1","shipped")),
+                         ("v4AA", ("v4","v4")), ("upgrade", ("v4","shipped"))]
             elif regime == "device-width8":
                 pairs = [("diagnostic-width8", ("8",))]
             else:
