@@ -281,14 +281,14 @@ pub fn vsdb_get_custom_dir() -> &'static Path {
 /// Returns the internal system directory path of the **default
 /// namespace** (`{base_dir}/__SYSTEM__/`; each namespace has its own
 /// `__SYSTEM__` under its root — see [`Namespace::system_dir`]). Also home
-/// to the registry-wide state that deliberately stays global: the
-/// namespace registry, the prefix allocator ceiling, and the DagMap ID
-/// counter.
+/// to the universe-wide state that deliberately stays global: the
+/// namespace registry and the prefix allocator ceiling.
 ///
-/// Reserved for VSDB internal use (instance metadata, trie caches, ID
-/// counters). Unlike `Namespace::default_ns().system_dir()`, this only
-/// resolves the path: it never opens the default engine. In read-only mode
-/// it returns the path without creating the directory.
+/// Reserved for VSDB internal use (universe/engine headers, instance
+/// metadata, and disposable trie checkpoints). Unlike
+/// `Namespace::default_ns().system_dir()`, this only resolves the path: it
+/// never opens the default engine. In read-only mode it returns the path
+/// without creating the directory.
 #[inline(always)]
 pub fn vsdb_get_system_dir() -> &'static Path {
     VSDB_SYSTEM_DIR.as_path()

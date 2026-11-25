@@ -223,9 +223,10 @@ impl MapxRaw {
         }
     }
 
-    /// The namespace this map lives in — THE co-location primitive:
-    /// `MapxRaw::new_in(&existing.namespace())` places new data
-    /// together with `existing`.
+    /// The namespace (engine placement group) this map lives in:
+    /// `MapxRaw::new_in(&existing.namespace())` places a new map in the
+    /// same namespace as `existing` (use [`new_colocated`](Self::new_colocated)
+    /// when two maps must also share one shard WAL).
     #[inline(always)]
     pub fn namespace(&self) -> Namespace {
         self.inner.namespace()

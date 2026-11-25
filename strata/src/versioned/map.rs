@@ -65,26 +65,34 @@ pub(crate) struct BranchRoots {
 ///    `discard` throws away uncommitted changes.
 /// 7. **History** — `log`, and [`at`](Self::at) snapshots of any commit, let you
 ///    inspect any historical snapshot.
-/// 8. **GC** — garbage collection is automatic: commits are deleted via
-///    reference counting and dead B+ tree nodes are reclaimed by the
-///    storage engine's background compaction.  [`gc`](Self::gc) is only
-///    needed for crash recovery or a forced full sweep.
+/// 8. **GC** — garbage collection is automatic: orphaned commits cascade
+///    through reference counting and unpinned dead B+ tree objects are deleted
+///    via engine batch tombstones. [`gc`](Self::gc) /
+///    [`verify_and_gc`](Self::verify_and_gc) are only needed for crash
+///    recovery or deep integrity verification.
 ///
 /// # Durability and recovery
 ///
-/// Every component of a map created by this version shares one engine
-/// shard, so one WAL orders all of its writes: working-state changes
-/// (`insert`, `remove`, `discard`) issue no fsync, and history operations
-/// (`commit`, `merge`, branch create/delete, `rollback_to`,
-/// `set_main_branch`) end with a single WAL sync — they are durable when they
-/// return. Released tree nodes are registered for physical deletion only
-/// after the next sync. Maps created by earlier versions keep their
-/// per-shard layout and synchronize each shard WAL at every publication
-/// boundary instead; [`Clone`] produces a co-located copy.
-/// Reference-count changes carry a dirty marker until their completion.
-/// Restoration validates all reachable commit records before reclaiming any
-/// history. A missing HEAD, parent commit, or reachable tree node produces a
-/// deserialization error.
+/// Every component of a `VerMap` — header, branch heads/names, commit DAG,
+/// `[0x10]` slotted B+ tree pages, `[0x12]` large-value blobs, `[0x05]`/`[0x06]`
+/// crash-recovery anchors, and the `[0x07]` reference checkpoint — lives under
+/// **one** [`MapxRaw`] prefix on a single engine shard WAL:
+///
+/// - Working-state edits (`insert`, `remove`, `write_batch`, `bulk_load`,
+///   `discard`) commit atomically without an `fsync`.
+/// - History operations (`commit`, `merge`, branch create/delete,
+///   `rollback_to`, `set_main_branch`) end with a synchronous WAL commit
+///   (`commit_sync`) and are durable when they return.
+/// - When concurrent [`Snapshot`](super::Snapshot) leases or reader handles
+///   share the runtime, retired roots record `[0x05]` `RETIRED` anchors and
+///   defer physical deletion until the next synced publication; multi-chunk
+///   `> 16 MiB` builds record `[0x06]` `STAGE` anchors until published.
+/// - [`flush`](Self::flush) and [`close`](Self::close) write a checksummed,
+///   generation-bound `[0x07]` `REFS` checkpoint for fast reopening without a
+///   full object walk.
+/// - Writable reopen validates the commit graph and reachable roots before
+///   reclaiming unpublished or retired objects; missing HEADs, parents, or
+///   reachable tree pages fail with [`VsdbError::Corrupt`].
 ///
 /// # Read-only mode
 ///
@@ -92,7 +100,7 @@ pub(crate) struct BranchRoots {
 /// mode, including branch lookup, historical reads, diffs, and logs. Mutating
 /// methods that return `Result` fail with [`VsdbError::ReadOnly`], and
 /// [`gc`](Self::gc) becomes a no-op because it cannot persist repairs or
-/// deferred-deletion registrations.
+/// object deletions.
 ///
 /// # Quick start
 ///
@@ -140,8 +148,8 @@ pub struct VerMap<K, V> {
 }
 
 impl<K, V> Clone for VerMap<K, V> {
-    /// Deep copy. The copy is always co-located (one WAL for all of its
-    /// components), including a copy of a map created before co-location.
+    /// Deep-copies all branches, working trees, and retained commits into a
+    /// fresh single-prefix store in the same namespace.
     fn clone(&self) -> Self {
         self.clone_in(&self.namespace())
             .expect("vsdb: VerMap clone failed")

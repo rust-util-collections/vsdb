@@ -99,9 +99,9 @@ macro_rules! define_map_wrapper {
                 }
             }
 
-            /// The namespace this structure lives in — the co-location
-            /// primitive: `new_in(&existing.namespace())` places new
-            /// data together with `existing`.
+            /// The namespace (engine placement group) this structure lives in:
+            /// `new_in(&existing.namespace())` places new data in the same
+            /// namespace as `existing`.
             #[inline(always)]
             pub fn namespace(&self) -> $crate::common::Namespace {
                 self.inner.namespace()

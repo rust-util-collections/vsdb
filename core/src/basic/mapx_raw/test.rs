@@ -1,5 +1,5 @@
 use super::*;
-use std::{fs, mem::size_of};
+use std::{fs, mem::size_of, path::Path};
 
 #[test]
 fn wal_sync_preserves_empty_keys_and_prefix_isolation() {
@@ -462,7 +462,7 @@ fn guard_created_while_unwinding_still_writes() {
 fn atomic_write_file_replaces_without_leftovers() {
     let dir = format!("/tmp/vsdb_testing/atomic_write_{}", rand::random::<u64>());
     fs::create_dir_all(&dir).unwrap();
-    let path = std::path::Path::new(&dir).join("meta.bin");
+    let path = Path::new(&dir).join("meta.bin");
     crate::common::atomic_write_file(&path, b"first").unwrap();
     crate::common::atomic_write_file(&path, b"second").unwrap();
     assert_eq!(fs::read(&path).unwrap(), b"second");
@@ -477,7 +477,7 @@ fn concurrent_atomic_write_file_never_fails_or_trims_target() {
         rand::random::<u64>()
     );
     fs::create_dir_all(&dir).unwrap();
-    let path = std::path::Path::new(&dir).join("meta.bin");
+    let path = Path::new(&dir).join("meta.bin");
     let payloads: Vec<_> = (1..=8).map(|i| vec![i; usize::from(i) * 4096]).collect();
     crate::common::atomic_write_file(&path, &payloads[0]).unwrap();
     let start = std::sync::Barrier::new(payloads.len());
@@ -507,7 +507,7 @@ fn atomic_write_file_removes_staging_file_after_rename_failure() {
         "/tmp/vsdb_testing/atomic_write_failure_{}",
         rand::random::<u64>()
     );
-    let path = std::path::Path::new(&dir).join("meta.bin");
+    let path = Path::new(&dir).join("meta.bin");
     fs::create_dir_all(&path).unwrap();
     assert!(crate::common::atomic_write_file(&path, b"replacement").is_err());
     assert!(path.is_dir());

@@ -7,6 +7,7 @@ use serde::{
 };
 use sha3::{Digest, Sha3_256};
 use std::{
+    any::type_name,
     collections::{BTreeMap, HashMap, HashSet},
     fs,
     io::ErrorKind,
@@ -155,7 +156,7 @@ fn read_record(path: &Path, root: InstanceId) -> Result<Option<Record>> {
 }
 
 fn saved_tag<T>(ns: &Namespace, parts: [InstanceId; 3]) -> Result<u64> {
-    let default = crate::tag(std::any::type_name::<T>());
+    let default = crate::tag(type_name::<T>());
     let bytes = match fs::read(ns.meta_path(parts[0].map_id)) {
         Ok(v) => v,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(default),
@@ -165,7 +166,7 @@ fn saved_tag<T>(ns: &Namespace, parts: [InstanceId; 3]) -> Result<u64> {
     // Preserve each saved envelope's value type, even when the root has a
     // different type. Authenticate its inner three handles before rewriting.
     let (saved, tag) = if let Ok(node) = decode::<Legacy>(&bytes) {
-        (node, crate::tag(std::any::type_name::<DagMapRaw>()))
+        (node, crate::tag(type_name::<DagMapRaw>()))
     } else {
         let frame: &[u8] = decode(&bytes)?;
         let Some(magic @ (b"VSTYPE02" | b"VSTYPE03")) = frame.get(..8) else {
@@ -179,9 +180,9 @@ fn saved_tag<T>(ns: &Namespace, parts: [InstanceId; 3]) -> Result<u64> {
         let tag = if tag == crate::legacy_tag_for::<T>(vstype02) {
             default
         } else if !vstype02 && tag == crate::legacy_tag_for::<DagMapRawKey<vsdb::BranchId>>(false) {
-            crate::tag(std::any::type_name::<DagMapRawKey<vsdb::BranchId>>())
+            crate::tag(type_name::<DagMapRawKey<vsdb::BranchId>>())
         } else if !vstype02 && tag == crate::legacy_tag_for::<DagMapRawKey<vsdb::CommitId>>(false) {
-            crate::tag(std::any::type_name::<DagMapRawKey<vsdb::CommitId>>())
+            crate::tag(type_name::<DagMapRawKey<vsdb::CommitId>>())
         } else {
             tag
         };
@@ -522,7 +523,7 @@ pub fn migrate_child_v17<V: ValueEnDe>(id: impl Into<InstanceId>) -> Result<DagM
         return Err(corrupt("invalid migrated DAG child handle"));
     }
     let found = u64::from_le_bytes(frame[8..16].try_into().unwrap());
-    let expected = crate::tag(std::any::type_name::<DagMapRawKey<V>>());
+    let expected = crate::tag(type_name::<DagMapRawKey<V>>());
     if found == expected {
         return DagMapRawKey::<V>::from_meta(id);
     }
@@ -553,10 +554,9 @@ fn migrate_bytes_with<T: DeserializeOwned>(
                 operation: "DAG migration",
             });
         }
-        let journal = ns.meta_path(root.map_id).with_extension(format!(
-            "dag-{:016x}-v17",
-            crate::tag(std::any::type_name::<T>())
-        ));
+        let journal = ns
+            .meta_path(root.map_id)
+            .with_extension(format!("dag-{:016x}-v17", crate::tag(type_name::<T>())));
         let map = match read_record(&journal, root)? {
             Some(Record::Done(map)) => map,
             None => Remap::new(),
@@ -599,10 +599,7 @@ fn migrate_with<T: DeserializeOwned>(
     }
     let path = ns.meta_path(root.map_id);
     vsdb::common::create_dir_all_durable(path.parent().unwrap())?;
-    let journal = path.with_extension(format!(
-        "dag-{:016x}-v17",
-        crate::tag(std::any::type_name::<T>())
-    ));
+    let journal = path.with_extension(format!("dag-{:016x}-v17", crate::tag(type_name::<T>())));
     let mut record = match read_record(&journal, root)? {
         Some(r) => r,
         None => {
@@ -790,7 +787,7 @@ mod test {
             };
             let journal = path.with_extension(format!(
                 "dag-{:016x}-v17",
-                crate::tag(std::any::type_name::<DagMapRaw>())
+                crate::tag(type_name::<DagMapRaw>())
             ));
             write_record(
                 &journal,

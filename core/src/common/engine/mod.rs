@@ -768,7 +768,7 @@ pub struct ValueMut<'a> {
 
 impl fmt::Debug for ValueMut<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ValueIterMut")
+        f.debug_struct("ValueMut")
             .field("prefix", &self.prefix)
             .field("key", &self.key)
             .field("value", &self.value)
