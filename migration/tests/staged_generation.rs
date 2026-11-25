@@ -80,7 +80,12 @@ fn generation_process() {
     }
     vsdb_configure(VsdbOptions::new(path.join("base"))).unwrap();
     let ns = Namespace::open(1).unwrap();
-    assert_eq!(ns.path(), path.join("placements/0000000000000001"));
+    assert_eq!(
+        ns.path(),
+        path.join("placements/0000000000000001")
+            .canonicalize()
+            .unwrap()
+    );
     let mut map = MapxRaw::from_meta(InstanceId::new(PREFIX, 1)).unwrap();
     assert_eq!(map.get(b"sst").as_deref(), Some(b"new".as_slice()));
     assert_eq!(map.get(b"empty"), Some(Vec::new()));
@@ -240,4 +245,18 @@ fn an_unhealthy_established_generation_cannot_be_published() {
     fs::write(shard.join("CURRENT"), b"damaged\n").unwrap();
     assert!(stage_universe(&base, &output).is_err());
     assert!(!output.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn destination_parent_alias_opens_the_same_registered_namespace() {
+    let temp = tempfile::tempdir().unwrap();
+    let (source, _) = fixture(temp.path());
+    let real = temp.path().join("volume");
+    let alias = temp.path().join("local-volume");
+    fs::create_dir(&real).unwrap();
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    stage_universe(&source, alias.join("v5")).unwrap();
+    child("first", &alias.join("v5"));
+    child("reopen", &real.join("v5"));
 }
