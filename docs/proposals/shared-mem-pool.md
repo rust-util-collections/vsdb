@@ -7,7 +7,7 @@ write-buffer manager remain proposals, not available VSDB options.
 
 The current integration is in
 [core/src/common/engine/mmdb.rs](../../core/src/common/engine/mmdb.rs).
-The workspace manifest specifies `mmdb = "4.3.12"` (resolving MMDB 4.3.15). The formulas and write path below apply to that implementation. [Workspace manifest](../../Cargo.toml)
+The workspace manifest specifies `mmdb = "4.3.15"`. The formulas and write path below apply to that implementation. [Workspace manifest](../../Cargo.toml)
 
 ## Why share within an engine?
 
