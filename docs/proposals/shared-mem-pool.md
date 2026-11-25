@@ -16,6 +16,27 @@ the current DB's memtables and L0 pin payload. Use v5 measurements when
 choosing a ported profile. The v4 results below remain the baseline for
 the current workspace dependency. [MMDB v5 engine profiles](https://github.com/rust-util-collections/mmdb/blob/master/docs/benchmarks/engine-profile/README.md)
 
+### Starting profiles for the v5 port
+
+For a 16-shard deployment with a 2 GiB process budget, the v5 engine
+trial reserved 1 GiB for MMDB and used a shared pool with a 256 MiB
+cap on each evictable store. At a fixed 16 MiB write-buffer size, an
+immutable limit of two lost 5.69% of all-active saturation throughput
+against a limit of four, below the required 95% floor. A limit of one
+also raised foreground p99 in both placements.
+
+Under a tighter 30 MiB per-shard nominal write-buffer allowance, use
+four immutables at 6 MiB as the reference for an adapter trial. Two
+immutables at 10 MiB raised saturation throughput by 53.19% with one
+hot shard and by 9.33% with all shards active. In the one-hot saturation
+window it left 24 L0 files against 15 for the reference. The repeated
+foreground controls varied by more than the 5% latency margin. Keep the
+2 × 10 MiB choice as a workload-specific candidate. Measure actual
+collection arrival-to-ack p99, pool and process memory, and background
+work left at the end before selecting a VSDB configuration. The v4
+sizing policy below continues to describe the current adapter.
+[Engine measurements and reproduction](https://github.com/rust-util-collections/mmdb/blob/master/docs/benchmarks/engine-profile/results.md)
+
 ## Why share within an engine?
 
 Prefix routing puts all entries of one collection on one shard. Under the old
