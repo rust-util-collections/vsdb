@@ -243,33 +243,35 @@ fn acknowledged_native_fence_survives_kill_and_wrong_last_shard_leaves_source_in
         String::from_utf8_lossy(&out.stderr)
     );
     let last = root.join("mmdb/shard_15");
-    fs::remove_dir_all(&last).unwrap();
-    mmdb::DB::open(
-        mmdb::DbOptions::default()
-            .with_num_levels(4)
-            .with_prefix_len(8),
-        &last,
-    )
-    .unwrap()
-    .close()
-    .unwrap();
-    let mut before = BTreeMap::new();
-    inventory(&root, &mut before);
-    for mode in ["reject-ro", "reject-rw"] {
-        let out = command(&root, mode).output().unwrap();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        let mut after = BTreeMap::new();
-        inventory(&root, &mut after);
-        assert_eq!(
-            before.keys().collect::<Vec<_>>(),
-            after.keys().collect::<Vec<_>>()
-        );
-        for (path, old) in &before {
-            assert!(old == &after[path], "changed {}", path.display());
+    for (levels, prefix) in [(4, 8), (7, 0)] {
+        fs::remove_dir_all(&last).unwrap();
+        mmdb::DB::open(
+            mmdb::DbOptions::default()
+                .with_num_levels(levels)
+                .with_prefix_len(prefix),
+            &last,
+        )
+        .unwrap()
+        .close()
+        .unwrap();
+        let mut before = BTreeMap::new();
+        inventory(&root, &mut before);
+        for mode in ["reject-ro", "reject-rw"] {
+            let out = command(&root, mode).output().unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let mut after = BTreeMap::new();
+            inventory(&root, &mut after);
+            assert_eq!(
+                before.keys().collect::<Vec<_>>(),
+                after.keys().collect::<Vec<_>>()
+            );
+            for (path, old) in &before {
+                assert!(old == &after[path], "changed {}", path.display());
+            }
         }
     }
     fs::remove_dir_all(root).unwrap();

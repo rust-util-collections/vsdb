@@ -31,6 +31,12 @@ dataset with a missing marker. A conflicting marker (including one written by
 an older writer) requires investigation against a trusted backup. Read-only
 reopen preserves the original files.
 
+A namespace verifies each existing shard's `CURRENT` and v5 MANIFEST
+header before it opens any of its shards for writable recovery. Seven
+levels and an eight-byte prefix are required on read-only and writable
+opens. MMDB checks the remaining manifest records, WALs and table files
+as it opens each shard.
+
 ## Engine memory
 
 `Namespace::memory_usage()` reports two separate evictable stores in one
