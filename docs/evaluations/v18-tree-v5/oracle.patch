@@ -1,0 +1,68 @@
+diff --git a/strata/src/basic/persistent_btree/mod.rs b/strata/src/basic/persistent_btree/mod.rs
+index 0027ccf..eb71900 100644
+--- a/strata/src/basic/persistent_btree/mod.rs
++++ b/strata/src/basic/persistent_btree/mod.rs
+@@ -68,6 +68,7 @@ pub(crate) use types::{InsertResult, NodeRef, RemoveResult};
+
+ #[cfg(test)]
+ thread_local! {
++    pub(crate) static LEAF_HEADERS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+     /// Node decodes performed by this thread (test instrumentation).
+     pub(crate) static NODE_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+     /// InternalPageCache hits observed by this thread (test instrumentation).
+diff --git a/strata/src/basic/persistent_btree/nodes.rs b/strata/src/basic/persistent_btree/nodes.rs
+index cf42a68..a8855bd 100644
+--- a/strata/src/basic/persistent_btree/nodes.rs
++++ b/strata/src/basic/persistent_btree/nodes.rs
+@@ -66,6 +66,10 @@ impl<'a> NodeView<'a> {
+             0x19 => false,
+             _ => return Err(corrupt()),
+         };
++        #[cfg(test)]
++        if leaf {
++            super::LEAF_HEADERS.with(|n| n.set(n.get() + 1));
++        }
+         let page = Self { raw, len, leaf };
+         if len > MAX_KEYS || page.payload_start() > raw.len() {
+             return Err(corrupt());
+diff --git a/strata/src/basic/persistent_btree/test.rs b/strata/src/basic/persistent_btree/test.rs
+index c94b90d..a474b4e 100644
+--- a/strata/src/basic/persistent_btree/test.rs
++++ b/strata/src/basic/persistent_btree/test.rs
+@@ -1815,3 +1815,36 @@ mod diff_merge {
+         assert!(small.used_bytes() <= 64 * 1024);
+     }
+ }
++
++#[test]
++fn checked_leaf_header_reused_for_hits_and_cursor_rows() {
++    use std::ops::Bound::{Excluded, Included};
++
++    fn value(n: u8) -> Vec<u8> {
++        if n.is_multiple_of(16) {
++            vec![n; 2048]
++        } else {
++            vec![n; 12]
++        }
++    }
++    let mut tree = PersistentBTree::new();
++    let root = tree.bulk_load((0u8..96).map(|n| (vec![2 * n], value(n))));
++    LEAF_HEADERS.with(|c| c.set(0));
++    assert_eq!(tree.get(root, &[0]), Some(value(0)));
++    let overflow_hit = LEAF_HEADERS.with(|c| c.replace(0));
++    assert_eq!(tree.get(root, &[2]), Some(value(1)));
++    let inline_hit = LEAF_HEADERS.with(|c| c.replace(0));
++    assert_eq!(tree.get(root, &[3]), None);
++    let miss = LEAF_HEADERS.with(|c| c.replace(0));
++    let rows = tree
++        .range(root, Excluded(&[0]), Included(&[190]))
++        .collect::<Vec<_>>();
++    assert_eq!(
++        rows,
++        (1u8..96)
++            .map(|n| (vec![2 * n], value(n)))
++            .collect::<Vec<_>>()
++    );
++    let scan = LEAF_HEADERS.with(|c| c.replace(0));
++    assert_eq!((overflow_hit, inline_hit, miss, scan), (1, 1, 1, 3));
++}

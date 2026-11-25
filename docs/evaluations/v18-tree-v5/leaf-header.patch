@@ -1,0 +1,164 @@
+diff --git a/strata/src/basic/persistent_btree/iter.rs b/strata/src/basic/persistent_btree/iter.rs
+index 69da01c..b90f5c1 100644
+--- a/strata/src/basic/persistent_btree/iter.rs
++++ b/strata/src/basic/persistent_btree/iter.rs
+@@ -3,6 +3,7 @@
+ use std::{marker::PhantomData, ops::Bound, sync::Arc};
+ use vsdb_core::basic::mapx_raw::MapxRawReader;
+
++use super::nodes::OwnedPage;
+ use super::{
+     CLASS_MASK, EMPTY_ROOT, NodeId, NodeView, PersistentBTree, RootLease, TreeRuntime,
+     read_cached_reader_arc, read_object,
+@@ -16,7 +17,7 @@ pub struct BTreeIter<'a> {
+     _borrow: PhantomData<&'a PersistentBTree>,
+     _lease: Option<Arc<RootLease>>,
+     stack: Vec<(Arc<[u8]>, usize)>,
+-    leaf: Option<(Vec<u8>, usize)>,
++    leaf: Option<(OwnedPage, usize)>,
+     hi: Bound<Vec<u8>>,
+ }
+
+@@ -57,15 +58,16 @@ impl BTreeIter<'_> {
+                 id = page.child(slot);
+                 self.stack.push((raw, slot + 1));
+             } else {
+-                let raw = read_object(&self.nodes, id);
+-                let page = NodeView::open(&raw).expect("invalid B+ tree page");
++                let owned = OwnedPage::open(read_object(&self.nodes, id))
++                    .expect("invalid B+ tree page");
++                let page = owned.view();
+                 debug_assert!(page.leaf);
+                 let slot = match lo {
+                     Bound::Included(k) => page.lower_bound(k, false),
+                     Bound::Excluded(k) => page.lower_bound(k, true),
+                     Bound::Unbounded => 0,
+                 };
+-                self.leaf = Some((raw, slot));
++                self.leaf = Some((owned, slot));
+                 return;
+             }
+         }
+@@ -90,8 +92,8 @@ impl Iterator for BTreeIter<'_> {
+     type Item = (Vec<u8>, Vec<u8>);
+     fn next(&mut self) -> Option<Self::Item> {
+         loop {
+-            let (raw, slot) = self.leaf.as_mut()?;
+-            let page = NodeView::open(raw).expect("invalid B+ tree page");
++            let (owned, slot) = self.leaf.as_mut()?;
++            let page = owned.view();
+             if *slot >= page.len {
+                 self.advance();
+                 continue;
+diff --git a/strata/src/basic/persistent_btree/mod.rs b/strata/src/basic/persistent_btree/mod.rs
+index eb71900..cfbcd58 100644
+--- a/strata/src/basic/persistent_btree/mod.rs
++++ b/strata/src/basic/persistent_btree/mod.rs
+@@ -457,9 +457,12 @@ impl RootLease {
+     }
+
+     pub(crate) fn contains_key(&self, key: &[u8]) -> bool {
+-        find_leaf(self.root, key, |id| {
+-            read_cached_reader(&self.runtime, &self.nodes, id)
+-        })
++        find_leaf(
++            self.root,
++            key,
++            |id| read_cached_reader(&self.runtime, &self.nodes, id),
++            |_, _| (),
++        )
+         .is_some()
+     }
+
+@@ -579,22 +582,23 @@ fn lookup<'a>(
+     key: &[u8],
+     object: impl Fn(NodeId) -> PageBytes<'a>,
+ ) -> Option<Vec<u8>> {
+-    let (raw, i) = find_leaf(root, key, &object)?;
+-    let page = NodeView::open(&raw).expect("valid leaf");
+-    Some(page.value(i, |id| object(id).into_vec()))
++    find_leaf(root, key, &object, |page, slot| {
++        page.value(slot, |id| object(id).into_vec())
++    })
+ }
+
+-fn find_leaf<'a>(
++fn find_leaf<'a, R>(
+     mut root: NodeId,
+     key: &[u8],
+     object: impl Fn(NodeId) -> PageBytes<'a>,
+-) -> Option<(PageBytes<'a>, usize)> {
++    hit: impl FnOnce(NodeView<'_>, usize) -> R,
++) -> Option<R> {
+     while root != EMPTY_ROOT {
+         let raw = object(root);
+         let page = NodeView::open(&raw).expect("invalid B+ tree page");
+         let i = page.lower_bound(key, !page.leaf);
+         if page.leaf {
+-            return (i < page.len && page.key(i) == key).then_some((raw, i));
++            return (i < page.len && page.key(i) == key).then(|| hit(page, i));
+         }
+         root = page.child(i);
+     }
+@@ -956,9 +960,12 @@ impl PersistentBTree {
+     }
+
+     pub(crate) fn contains_committed(&self, root: NodeId, key: &[u8]) -> bool {
+-        find_leaf(root, key, |id| {
+-            read_cached_map(&self.runtime, &self.nodes, id)
+-        })
++        find_leaf(
++            root,
++            key,
++            |id| read_cached_map(&self.runtime, &self.nodes, id),
++            |_, _| (),
++        )
+         .is_some()
+     }
+
+@@ -1124,7 +1131,7 @@ impl PersistentBTree {
+     /// Returns `true` if `key` exists in the tree rooted at `root`.
+     #[inline]
+     pub fn contains_key(&self, root: NodeId, key: &[u8]) -> bool {
+-        find_leaf(root, key, |id| self.object(id)).is_some()
++        find_leaf(root, key, |id| self.object(id), |_, _| ()).is_some()
+     }
+
+     // =================================================================
+diff --git a/strata/src/basic/persistent_btree/nodes.rs b/strata/src/basic/persistent_btree/nodes.rs
+index a8855bd..71f2433 100644
+--- a/strata/src/basic/persistent_btree/nodes.rs
++++ b/strata/src/basic/persistent_btree/nodes.rs
+@@ -45,6 +45,32 @@ pub(crate) enum Node {
+     },
+ }
+
++/// Owns an immutable page and the header checked against those exact bytes.
++pub(super) struct OwnedPage {
++    bytes: Vec<u8>,
++    slots: usize,
++    leaf: bool,
++}
++
++impl OwnedPage {
++    pub(super) fn open(bytes: Vec<u8>) -> Result<Self> {
++        let view = NodeView::open(&bytes)?;
++        Ok(Self {
++            slots: view.len,
++            leaf: view.leaf,
++            bytes,
++        })
++    }
++
++    pub(super) fn view(&self) -> NodeView<'_> {
++        NodeView {
++            raw: &self.bytes,
++            len: self.slots,
++            leaf: self.leaf,
++        }
++    }
++}
++
+ #[derive(Clone, Copy)]
+ pub(crate) struct NodeView<'a> {
+     raw: &'a [u8],
