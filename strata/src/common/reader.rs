@@ -80,9 +80,12 @@ impl<K: KeyEnDe, V: ValueEnDe> MapxReadView<'_, K, V> {
     where
         K: KeyLookup<Q>,
     {
-        K::with_lookup(key, |bytes| self.raw.get(bytes))
-            .flatten()
-            .map(decode)
+        K::with_lookup(key, |bytes| {
+            self.raw
+                .try_get_with(bytes, V::decode_value)
+                .expect("vsdb: read and decode value")
+        })
+        .flatten()
     }
     pub fn contains_key<Q: ?Sized>(&self, key: &Q) -> bool
     where
@@ -101,9 +104,12 @@ impl<K: KeyEnDeOrdered, V: ValueEnDe> MapxOrdReadView<'_, K, V> {
     where
         K: OrderedKeyLookup<Q>,
     {
-        K::with_ordered_lookup(key, |bytes| self.raw.get(bytes))
-            .flatten()
-            .map(decode)
+        K::with_ordered_lookup(key, |bytes| {
+            self.raw
+                .try_get_with(bytes, V::decode_value)
+                .expect("vsdb: read and decode value")
+        })
+        .flatten()
     }
     pub fn contains_key<Q: ?Sized>(&self, key: &Q) -> bool
     where
@@ -129,7 +135,9 @@ impl<K: KeyEnDeOrdered, V: ValueEnDe> MapxOrdReadView<'_, K, V> {
 }
 impl<V: ValueEnDe> MapxOrdRawKeyReadView<'_, V> {
     pub fn get(&self, key: impl AsRef<[u8]>) -> Option<V> {
-        self.raw.get(key).map(decode)
+        self.raw
+            .try_get_with(key, V::decode_value)
+            .expect("vsdb: read and decode value")
     }
     pub fn contains_key(&self, key: impl AsRef<[u8]>) -> bool {
         self.raw.contains_key(key)
@@ -156,6 +164,9 @@ impl<T: ValueEnDe> Orphan<T> {
 }
 impl<T: ValueEnDe> OrphanReader<T> {
     pub fn get(&self) -> T {
-        decode(self.raw.get([]).expect("vsdb: missing orphan value"))
+        self.raw
+            .try_get_with([], T::decode_value)
+            .expect("vsdb: read and decode orphan")
+            .expect("vsdb: missing orphan value")
     }
 }

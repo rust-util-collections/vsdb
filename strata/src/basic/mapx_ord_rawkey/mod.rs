@@ -69,9 +69,12 @@ where
     /// Retrieves a value from the map for a given key.
     #[inline(always)]
     pub fn get(&self, key: impl AsRef<[u8]>) -> Option<V> {
-        self.inner
-            .get(key.as_ref())
-            .map(|v| <V as ValueEnDe>::decode_value(&v).unwrap())
+        self.try_get(key).expect("vsdb: read and decode value")
+    }
+
+    /// Decodes directly from pinned backend bytes and propagates read or codec errors.
+    pub fn try_get(&self, key: impl AsRef<[u8]>) -> Result<Option<V>> {
+        self.inner.try_get_with(key, V::decode_value)
     }
 
     /// Retrieves a mutable reference to a value in the map.

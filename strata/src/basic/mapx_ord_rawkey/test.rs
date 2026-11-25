@@ -332,3 +332,15 @@ fn guards_discard_edits_interrupted_by_panic() {
     map.get_mut([1]).unwrap().a = 7;
     assert_eq!(map.get([1]), Some(Acct { a: 7, b: 1 }));
 }
+
+#[test]
+fn try_get_propagates_decode_errors_and_preserves_empty_values() {
+    let mut map = MapxOrdRawKey::<Vec<u8>>::new();
+    map.insert(b"empty", &Vec::new());
+    map.inner.insert(b"bad", [0xff]);
+    assert_eq!(map.try_get(b"empty").unwrap(), Some(Vec::new()));
+    assert_eq!(map.try_get(b"missing").unwrap(), None);
+    assert!(map.try_get(b"bad").is_err());
+    let view = map.read_view();
+    assert_eq!(view.get(b"empty"), Some(Vec::new()));
+}
