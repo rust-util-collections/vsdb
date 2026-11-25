@@ -33,6 +33,24 @@ direct path. These are independent operations on generated data, with
 matched durability and separate ordinary versus diagnostic builds.
 [Publication runs](../evaluations/v18-publication/README.md) · [Independent review record](reviews/v18-mmdb-v5/README.md)
 
+For warm B+ tree lookup the ordinary upgraded path was slower than the
+v4-backed control. The tested header-reuse scan improved p99 by 9.40%;
+the separate borrowed-leaf prototype cut requested allocation from about
+1.7 KiB to under 80 bytes per lookup but improved hit/miss p99 by only
+3.37%/4.36%. Both missed their preregistered latency criteria. Keep the
+current tree implementation. [Tree and upgrade measurements](../evaluations/v18-tree-v5/README.md) · [Leaf projection trial](../evaluations/v18-tree-v5/projection/README.md)
+
+On the measured 8,192-node warm HNSW graph, v4-backed v18 had median
+run p99 of 187.24 µs and the checked scalar v5 implementation at
+`1300ad2` had 254.77 µs, a **37.28% paired regression**. Each of five
+pairs returned identical ordered results. Width 32 acquired fewer blocks
+but missed the complete-query gate. Width eight's larger independent
+repeat gained 9.15%, below the 10% target and its 19.29% control spread.
+The scoring-cache candidate also missed. The ordinary search decodes one
+pinned vector at a time and propagates storage and corrupt-row errors.
+These upgrade costs and the publication gains describe different operations.
+[VecDex results and matched controls](../evaluations/v18-vecdex-v5/README.md)
+
 ## Delivery sequence
 
 | Unit | Change | Observable outcome and acceptance |
