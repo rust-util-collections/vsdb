@@ -1,0 +1,9 @@
+diff --git a/core/src/common/engine/mmdb.rs b/core/src/common/engine/mmdb.rs
+index 85afc43..6915188 100644
+--- a/core/src/common/engine/mmdb.rs
++++ b/core/src/common/engine/mmdb.rs
+@@ -1492,3 +1492,3 @@ impl EngineSizing {
+         // The 64 KiB floor keeps tiny budgets usable and can exceed that fraction.
+-        (self.mem_budget / 64 * 3 / shards).clamp(64 * 1024, 512 * 1024 * 1024)
++        (self.mem_budget / 8 / shards).clamp(64 * 1024, 512 * 1024 * 1024)
+     }
