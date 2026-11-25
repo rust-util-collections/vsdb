@@ -5,6 +5,13 @@ Navigable Small World) algorithm. Each index stores vectors, the search graph an
 configuration in one shard. Choose a compile-time metric with `VecDex` or a
 runtime metric with `VecDexDyn`.
 
+A successful public search evaluates distance and filter callbacks in graph
+traversal order at a single snapshot. Stored-row or engine errors return
+`Err`. On a failed search a filter may already have run on some candidates;
+the length of that prefix can depend on the lookup group. Discard any
+partial result collected by a callback.
+
+
 ## Quick start
 
 ```rust

@@ -2418,3 +2418,50 @@ fn search_reports_a_malformed_stored_vector_through_scalar_and_grouped_reads() {
         Err(VsdbError::Corrupt { .. })
     ));
 }
+
+#[test]
+fn searches_reject_corrupt_result_keys_adjacency_and_fallback_keys() {
+    let mut idx: VecDex<u64, L2> = VecDex::new(HnswConfig {
+        dim: 2,
+        ..Default::default()
+    })
+    .unwrap();
+    insert_at_layer(&mut idx, 0, &[0., 0.], 0);
+    let assert_corrupt = |idx: &VecDex<u64, L2>, k: usize| {
+        assert!(matches!(
+            idx.search(&[0., 0.], k),
+            Err(VsdbError::Corrupt { .. })
+        ));
+        let raw = idx.store.read_view();
+        let probe = || Search::<u64, f32> {
+            view: &raw,
+            query: &[0., 0.],
+            k,
+            ef: Some(k),
+            filter: None,
+        };
+        assert!(matches!(
+            probe().run_with_width::<_, 1>(&L2),
+            Err(VsdbError::Corrupt { .. })
+        ));
+        assert!(matches!(
+            probe().run_with_width::<_, 32>(&L2),
+            Err(VsdbError::Corrupt { .. })
+        ));
+    };
+
+    let mapping = node_key(TAG_NODE2KEY, 0);
+    let original = idx.store.get(mapping).unwrap();
+    idx.store.insert(mapping, [0x80]);
+    assert_corrupt(&idx, 1);
+    assert!(matches!(
+        idx.search_with_filter(&[0., 0.], 1, |_| true),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    idx.store.insert(mapping, original);
+    idx.store.insert(adj_key(0, 0), [1, 2, 3]);
+    assert_corrupt(&idx, 1);
+    idx.store.remove(adj_key(0, 0));
+    idx.store.insert([TAG_INFO], [0]);
+    assert_corrupt(&idx, 2);
+}

@@ -1,6 +1,9 @@
 //! Core HNSW algorithm: layer assignment, graph search, neighbor selection.
 
-use super::distance::{DistanceMetric, Scalar};
+use super::{
+    Result, corrupt,
+    distance::{DistanceMetric, Scalar},
+};
 use std::{
     cmp::{Ordering, Reverse},
     collections::{BinaryHeap, HashSet},
@@ -39,15 +42,25 @@ pub(crate) fn random_layer(m: usize) -> u8 {
 
 // ---- Adjacency read abstraction ------------------------------------------
 
+pub(super) type NodeSeeds<'a> = Box<dyn Iterator<Item = Result<u64>> + 'a>;
+
 /// Read access to adjacency rows.  Implemented by the raw store (for
 /// search paths) and by the staged transaction (for mutation paths,
 /// where reads must observe the operation's own uncommitted writes).
 pub(crate) trait AdjRead {
+    fn neighbors_into(&self, layer: u8, id: u64, out: &mut Vec<u64>) -> Result<()> {
+        out.clear();
+        if let Some(row) = self.adj_row(&adj_key(layer, id)) {
+            extend_neighbors(&row, out)?;
+        }
+        Ok(())
+    }
+
     fn adj_row(&self, key: &[u8]) -> Option<Vec<u8>>;
     /// Supplies live-node seeds for a read-only search that exhausts a component.
     /// Mutation searches retain the ordinary graph-only construction policy.
-    fn fallback_nodes(&self) -> Option<Box<dyn Iterator<Item = u64> + '_>> {
-        None
+    fn fallback_nodes(&self) -> Result<Option<NodeSeeds<'_>>> {
+        Ok(None)
     }
 }
 
@@ -101,20 +114,14 @@ pub(crate) fn get_neighbors<A: AdjRead + ?Sized>(
         .unwrap_or_default()
 }
 
-/// Decode neighbors into a reusable buffer, avoiding allocation on hot paths.
-pub(crate) fn get_neighbors_into<A: AdjRead + ?Sized>(
-    adj: &A,
-    layer: u8,
-    node_id: u64,
-    buf: &mut Vec<u64>,
-) {
-    buf.clear();
-    let key = adj_key(layer, node_id);
-    if let Some(v) = adj.adj_row(&key) {
-        for chunk in v.as_chunks::<8>().0 {
-            buf.push(u64::from_le_bytes(*chunk));
-        }
+/// Appends complete little-endian neighbor IDs to reusable query scratch.
+pub(super) fn extend_neighbors(row: &[u8], out: &mut Vec<u64>) -> Result<()> {
+    let (chunks, tail) = row.as_chunks::<8>();
+    if !tail.is_empty() {
+        return Err(corrupt("invalid VecDex neighbor row width"));
     }
+    out.extend(chunks.iter().map(|bytes| u64::from_le_bytes(*bytes)));
+    Ok(())
 }
 
 // ---- Graph search ------------------------------------------------------
@@ -133,18 +140,16 @@ pub(crate) fn filter_visit_cap(ef: usize) -> usize {
 /// staged vectors individually. A snapshot query can fetch a bounded group
 /// and score each row immediately, keeping heap/filter changes in traversal order.
 pub(super) trait Scores<S: Scalar> {
-    type Error;
-
-    fn one(&mut self, id: u64) -> Result<Option<S>, Self::Error>;
+    fn one(&mut self, id: u64) -> Result<Option<S>>;
 
     fn visit(
         &mut self,
         ids: impl Iterator<Item = u64>,
-        mut accept: impl FnMut(u64, S),
-    ) -> Result<(), Self::Error> {
+        mut accept: impl FnMut(u64, S) -> Result<()>,
+    ) -> Result<()> {
         for id in ids {
             if let Some(score) = self.one(id)? {
-                accept(id, score);
+                accept(id, score)?;
             }
         }
         Ok(())
@@ -152,9 +157,7 @@ pub(super) trait Scores<S: Scalar> {
 }
 
 impl<S: Scalar, F: FnMut(u64) -> Option<S>> Scores<S> for F {
-    type Error = std::convert::Infallible;
-
-    fn one(&mut self, id: u64) -> Result<Option<S>, Self::Error> {
+    fn one(&mut self, id: u64) -> Result<Option<S>> {
         Ok(self(id))
     }
 }
@@ -179,10 +182,16 @@ pub(crate) fn search_layer<S: Scalar, A: AdjRead + ?Sized>(
     adj: &A,
     filter: Option<&dyn Fn(u64) -> bool>,
 ) -> Vec<(S, u64)> {
-    match search_scored_layer(&mut distance_to, entry_points, ef, layer, adj, filter) {
-        Ok(found) => found,
-        Err(never) => match never {},
-    }
+    let check = |id| Ok(filter.is_none_or(|f| f(id)));
+    search_scored_layer(
+        &mut distance_to,
+        entry_points,
+        ef,
+        layer,
+        adj,
+        filter.map(|_| &check as &dyn Fn(u64) -> Result<bool>),
+    )
+    .expect("VecDex: invalid graph during staged traversal")
 }
 
 pub(super) fn search_scored_layer<S: Scalar, A: AdjRead + ?Sized, T: Scores<S>>(
@@ -191,19 +200,19 @@ pub(super) fn search_scored_layer<S: Scalar, A: AdjRead + ?Sized, T: Scores<S>>(
     ef: usize,
     layer: u8,
     adj: &A,
-    filter: Option<&dyn Fn(u64) -> bool>,
-) -> Result<Vec<(S, u64)>, T::Error> {
+    filter: Option<&dyn Fn(u64) -> Result<bool>>,
+) -> Result<Vec<(S, u64)>> {
     let mut candidates: BinaryHeap<Reverse<(OrdS<S>, u64)>> = BinaryHeap::new();
     let mut result: BinaryHeap<(OrdS<S>, u64)> = BinaryHeap::new();
     let mut visited = HashSet::new();
 
-    let passes = |id: u64| -> bool { filter.is_none_or(|f| f(id)) };
+    let passes = |id| filter.map_or(Ok(true), |f| f(id));
     let visit_cap = filter.map(|_| filter_visit_cap(ef));
 
     for &ep in entry_points {
         if let Some(dist) = scores.one(ep)? {
             candidates.push(Reverse((OrdS(dist), ep)));
-            if passes(ep) {
+            if passes(ep)? {
                 result.push((OrdS(dist), ep));
             }
             visited.insert(ep);
@@ -225,20 +234,27 @@ pub(super) fn search_scored_layer<S: Scalar, A: AdjRead + ?Sized, T: Scores<S>>(
                     break;
                 }
                 if !fallback_started {
-                    fallback = adj.fallback_nodes();
+                    fallback = adj.fallback_nodes()?;
                     fallback_started = true;
                 }
-                let Some(id) = fallback
-                    .as_mut()
-                    .and_then(|nodes| nodes.find(|id| !visited.contains(id)))
-                else {
+                let mut next = None;
+                if let Some(nodes) = &mut fallback {
+                    for item in nodes.by_ref() {
+                        let id = item?;
+                        if !visited.contains(&id) {
+                            next = Some(id);
+                            break;
+                        }
+                    }
+                }
+                let Some(id) = next else {
                     break;
                 };
                 visited.insert(id);
                 let Some(dist) = scores.one(id)? else {
                     continue;
                 };
-                if passes(id) {
+                if passes(id)? {
                     result.push((OrdS(dist), id));
                 }
                 Reverse((OrdS(dist), id))
@@ -254,7 +270,7 @@ pub(super) fn search_scored_layer<S: Scalar, A: AdjRead + ?Sized, T: Scores<S>>(
             break;
         }
 
-        get_neighbors_into(adj, layer, c_id, &mut neighbor_buf);
+        adj.neighbors_into(layer, c_id, &mut neighbor_buf)?;
         let mut reached_cap = false;
         let eligible = neighbor_buf
             .iter()
@@ -276,16 +292,17 @@ pub(super) fn search_scored_layer<S: Scalar, A: AdjRead + ?Sized, T: Scores<S>>(
                     .peek()
                     .is_some_and(|&(OrdS(f), _)| n_dist.total_cmp(&f) != Ordering::Less);
             if worse_than_worst {
-                return;
+                return Ok(());
             }
 
             candidates.push(Reverse((OrdS(n_dist), n_id)));
-            if passes(n_id) {
+            if passes(n_id)? {
                 result.push((OrdS(n_dist), n_id));
                 if result.len() > ef {
                     result.pop();
                 }
             }
+            Ok(())
         })?;
         if reached_cap {
             break;

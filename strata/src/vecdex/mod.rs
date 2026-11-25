@@ -7,7 +7,10 @@
 //!
 //! [`VecDexDyn`] accepts a runtime [`crate::MetricKind`].
 //! Serialize writers that share an index. [`VecDex::reader`] provides a
-//! cloneable handle for concurrent queries against captured read views.
+//! cloneable handle for concurrent queries against captured read views. A search
+//! returns the first detected lookup or row-decoding error. Filter calls that
+//! already ran can have side effects. On an error, the number of calls before
+//! failure can depend on the lookup group and callers must discard partial work.
 //!
 //! # Storage model (single-handle, crash-atomic)
 //!
@@ -202,6 +205,10 @@ impl GraphState {
 
     fn read(bytes: Option<Vec<u8>>) -> Result<Self> {
         let bytes = bytes.ok_or_else(|| corrupt("missing VecDex state"))?;
+        Self::decode(&bytes)
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != 34 || bytes[0] > 1 {
             return Err(corrupt("invalid VecDex state record"));
         }
@@ -307,10 +314,23 @@ impl AdjRead for SearchRows<'_, '_> {
         self.0.get(key)
     }
 
-    fn fallback_nodes(&self) -> Option<Box<dyn Iterator<Item = u64> + '_>> {
-        Some(Box::new(self.0.range(tag_bounds(TAG_INFO)).map(
-            |(key, _)| u64::from_be_bytes(key[1..9].try_into().expect("node-info key")),
-        )))
+    fn neighbors_into(&self, layer: u8, id: u64, out: &mut Vec<u64>) -> Result<()> {
+        self.0.neighbors_into(layer, id, out)
+    }
+
+    fn fallback_nodes(&self) -> Result<Option<hnsw::NodeSeeds<'_>>> {
+        let mut rows = self.0.try_range(tag_bounds(TAG_INFO))?;
+        Ok(Some(Box::new(std::iter::from_fn(move || {
+            rows.try_step_next().transpose().map(|row| {
+                let (key, _) = row?;
+                let [TAG_INFO, id @ ..] = key else {
+                    return Err(corrupt("invalid VecDex node-info tag"));
+                };
+                Ok(u64::from_be_bytes(id.try_into().map_err(|_| {
+                    corrupt("invalid VecDex node-info key width")
+                })?))
+            })
+        }))))
     }
 }
 
@@ -1487,8 +1507,6 @@ fn score_bytes<S: Scalar, D: DistanceMetric<S>>(
 impl<S: Scalar, D: DistanceMetric<S>, const WIDTH: usize> Scores<S>
     for SnapshotScores<'_, '_, S, D, WIDTH>
 {
-    type Error = VsdbError;
-
     fn one(&mut self, id: u64) -> Result<Option<S>> {
         self.view.try_get_with(node_key(TAG_VEC, id), |bytes| {
             score_bytes(bytes, self.query, self.metric, &mut self.scratch)
@@ -1498,13 +1516,13 @@ impl<S: Scalar, D: DistanceMetric<S>, const WIDTH: usize> Scores<S>
     fn visit(
         &mut self,
         mut ids: impl Iterator<Item = u64>,
-        mut accept: impl FnMut(u64, S),
+        mut accept: impl FnMut(u64, S) -> Result<()>,
     ) -> Result<()> {
         const { assert!(WIDTH > 0 && WIDTH <= MAX_GROUPED_READ_KEYS) };
         if WIDTH == 1 {
             for id in ids {
                 if let Some(score) = self.one(id)? {
-                    accept(id, score);
+                    accept(id, score)?;
                 }
             }
             return Ok(());
@@ -1517,7 +1535,7 @@ impl<S: Scalar, D: DistanceMetric<S>, const WIDTH: usize> Scores<S>
             }
             if let [id] = chunk.as_slice() {
                 if let Some(score) = self.one(*id)? {
-                    accept(*id, score);
+                    accept(*id, score)?;
                 }
             } else {
                 let keys: SmallVec<[[u8; 9]; MAX_GROUPED_READ_KEYS]> =
@@ -1534,7 +1552,7 @@ impl<S: Scalar, D: DistanceMetric<S>, const WIDTH: usize> Scores<S>
                                 self.metric,
                                 &mut self.scratch,
                             )?,
-                        );
+                        )?;
                     }
                     Ok(())
                 })?;
@@ -1558,7 +1576,10 @@ impl<K: KeyEnDe, S: Scalar> Search<'_, '_, K, S> {
         self,
         metric: &D,
     ) -> Result<Vec<(K, S)>> {
-        let state = GraphState::read(self.view.get(STATE_KEY))?;
+        let state = self
+            .view
+            .try_get_with(STATE_KEY, GraphState::decode)?
+            .ok_or_else(|| corrupt("missing VecDex state"))?;
         let Some(mut ep) = state.entry_point else {
             return Ok(Vec::new());
         };
@@ -1571,31 +1592,33 @@ impl<K: KeyEnDe, S: Scalar> Search<'_, '_, K, S> {
             metric,
             scratch: Vec::with_capacity(self.query.len()),
         };
-        let raw_key_for = |id| self.view.get(node_key(TAG_NODE2KEY, id));
         let key_for = |id| {
-            let raw = raw_key_for(id)?;
-            Some(K::decode_key(&raw).expect("VecDex: corrupt key bytes"))
+            self.view.try_get_with(node_key(TAG_NODE2KEY, id), |bytes| {
+                K::decode_key(bytes).map_err(|error| {
+                    corrupt(format!("invalid VecDex result key: {error}"))
+                })
+            })
         };
         let filtered_keys = RefCell::new(HashMap::new());
         let filter = self.filter.as_ref().map(|f| {
             |id| match *f {
                 Filter::Typed(predicate) => {
-                    let Some(key) = key_for(id) else { return false };
+                    let Some(key) = key_for(id)? else {
+                        return Ok(false);
+                    };
                     if !predicate(&key) {
-                        return false;
+                        return Ok(false);
                     }
                     let mut keys = filtered_keys.borrow_mut();
                     if keys.len() < self.k {
                         keys.insert(id, key);
                     }
-                    true
+                    Ok(true)
                 }
-                Filter::Raw(predicate) => {
-                    let Some(raw) = raw_key_for(id) else {
-                        return false;
-                    };
-                    predicate(&raw)
-                }
+                Filter::Raw(predicate) => Ok(self
+                    .view
+                    .try_get_with(node_key(TAG_NODE2KEY, id), |raw| Ok(predicate(raw)))?
+                    .unwrap_or(false)),
             }
         });
         let graph = SearchRows(self.view);
@@ -1614,22 +1637,30 @@ impl<K: KeyEnDe, S: Scalar> Search<'_, '_, K, S> {
             ef,
             0,
             &graph,
-            filter.as_ref().map(|f| f as &dyn Fn(u64) -> bool),
+            filter.as_ref().map(|f| f as &dyn Fn(u64) -> Result<bool>),
         )?;
         let mut keys = filtered_keys.into_inner();
-        Ok(results
-            .into_iter()
-            .take(self.k)
-            .filter_map(|(dist, id)| {
-                keys.remove(&id)
-                    .or_else(|| key_for(id))
-                    .map(|key| (key, dist))
-            })
-            .collect())
+        let mut out = Vec::with_capacity(self.k.min(results.len()));
+        for (dist, id) in results.into_iter().take(self.k) {
+            let key = match keys.remove(&id) {
+                Some(key) => Some(key),
+                None => key_for(id)?,
+            };
+            if let Some(key) = key {
+                out.push((key, dist));
+            }
+        }
+        Ok(out)
     }
 }
 
 impl AdjRead for MapxRawReadView<'_> {
+    fn neighbors_into(&self, layer: u8, id: u64, out: &mut Vec<u64>) -> Result<()> {
+        out.clear();
+        self.try_get_with(adj_key(layer, id), |raw| hnsw::extend_neighbors(raw, out))?;
+        Ok(())
+    }
+
     fn adj_row(&self, key: &[u8]) -> Option<Vec<u8>> {
         self.get(key)
     }
