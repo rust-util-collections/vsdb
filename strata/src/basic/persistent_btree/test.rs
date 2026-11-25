@@ -1274,6 +1274,50 @@ fn restored_delete_does_not_flush_discarded_pending_nodes() {
     assert_eq!(restored.nodes.iter().count(), stored_before);
 }
 
+#[test]
+fn restored_blob_leaf_underflow_drops_discarded_pending_blobs() {
+    fn build() -> (PersistentBTree, NodeId) {
+        let mut tree = PersistentBTree::new();
+        let mut root = EMPTY_ROOT;
+        // 33 entries split into a 16-key left BLOB_LEAF and a 17-key right BLOB_LEAF.
+        for i in 0u32..33 {
+            let next = tree.insert(root, &i.to_be_bytes(), &vec![i as u8; 1500]);
+            tree.acquire_node(next);
+            if root != EMPTY_ROOT {
+                tree.release_node(root);
+            }
+            root = next;
+        }
+        (tree, root)
+    }
+
+    let (mut hot, hot_root) = build();
+    hot.assert_refs_match_recount(&[hot_root]);
+    let (origin, cold_root) = build();
+    let bytes = postcard::to_allocvec(&origin).unwrap();
+    drop(origin);
+    let mut cold: PersistentBTree = postcard::from_bytes(&bytes).unwrap();
+    assert!(!cold.runtime.refs.lock().ready);
+
+    // Removing key 0 underflows the 16-key left BLOB_LEAF -> 15 keys, triggering
+    // borrow_right from the 17-key right BLOB_LEAF and discarding the 15-key
+    // intermediate BLOB_LEAF in pending.
+    let hot_before = hot.nodes.iter().count();
+    let cold_before = cold.nodes.iter().count();
+    let hot_next = hot.remove(hot_root, &0u32.to_be_bytes());
+    hot.acquire_node(hot_next);
+    hot.assert_refs_match_recount(&[hot_root, hot_next]);
+    let cold_next = cold.remove(cold_root, &0u32.to_be_bytes());
+    assert_eq!(
+        hot.iter(hot_next).collect::<Vec<_>>(),
+        cold.iter(cold_next).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        cold.nodes.iter().count() - cold_before,
+        hot.nodes.iter().count() - hot_before
+    );
+}
+
 /// Serde roundtrip preserves multi-version data:
 /// serialize a tree with diverged versions, deserialize, check both.
 #[test]

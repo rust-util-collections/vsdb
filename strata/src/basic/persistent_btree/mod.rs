@@ -890,7 +890,7 @@ impl PersistentBTree {
     /// Pending node ids reachable from `root`. An id that is not buffered
     /// is recorded but not expanded: its children are already durable and
     /// cannot point at nodes allocated later in this operation.
-    fn pending_closure(&self, root: NodeId) -> HashSet<NodeId> {
+    pub(super) fn pending_closure(&self, root: NodeId) -> HashSet<NodeId> {
         let mut seen = HashSet::new();
         let mut stack = vec![root];
         while let Some(id) = stack.pop() {
@@ -1137,8 +1137,8 @@ impl PersistentBTree {
             if !seen.insert(id) {
                 continue;
             }
-            if let Node::Internal { children, .. } = self.node(id) {
-                for c in children {
+            if id & CLASS_MASK != BLOB {
+                for c in Node::decode_children(&self.object(id)) {
                     *expected.entry(c).or_insert(0) += 1;
                     queue.push(c);
                 }

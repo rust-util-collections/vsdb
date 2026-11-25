@@ -27,14 +27,6 @@
 
 ---
 
-### [MEDIUM] persistent_btree: discard_node on restored standalone tree flushes discarded pending BLOBs on underflow
-- **Where**: `strata/src/basic/persistent_btree/remove.rs` (`PersistentBTree::discard_node`), `strata/src/basic/persistent_btree/mod.rs` (`PersistentBTree::assert_refs_match_recount`)
-- **What**: On a deserialized / `from_meta`-restored standalone `PersistentBTree` (`!refs.ready`), `discard_node(nid)` removes `nid` from `self.pending` without removing `nid`'s outgoing pending `[0x12]` `BLOB` objects when `nid & CLASS_MASK == BLOB_LEAF`. Separately, `#[cfg(test)] assert_refs_match_recount` only traverses `Node::Internal` and ignores `BLOB_LEAF` edges.
-- **Why**: Leaf underflow (`borrow_left` / `borrow_right` / `merge_children`) on a restored standalone tree flushes `MIN_KEYS - 1` (15) unreachable duplicate `BLOB` objects to disk per underflow until `gc()`, and `assert_refs_match_recount` panics if exercised with `> 1024`-byte values (violates BT6 / FP-10).
-- **Suggested fix**: When `!refs.ready` and `nid & CLASS_MASK == BLOB_LEAF`, remove `Node::decode_children(&raw)` entries from `self.pending` (updating `pending_bytes`), and walk `Node::decode_children(&self.object(id))` for `id & CLASS_MASK != BLOB` in `assert_refs_match_recount`. Add a cold-restored `BLOB_LEAF` underflow test in `strata/src/basic/persistent_btree/test.rs`. No migration impact.
-
----
-
 ### [LOW] docs/conventions: stale v17 rustdocs, missing v18 breaking-API notes, ValueMut Debug name, and repeated inline std paths
 - **Where**: `strata/src/versioned/map.rs` (`VerMap` rustdoc), `core/src/common/mod.rs` (`vsdb_get_system_dir`), `core/src/basic/mapx_raw/mod.rs` (`MapxRaw::namespace`), `core/src/common/engine/mod.rs` (`ValueMut::fmt`), `CHANGELOG.md`, `migration/src/dagmap.rs`, `core/src/basic/mapx_raw/test.rs`
 - **What**: `VerMap` rustdoc still describes v17 multi-prefix layout, refcount dirty markers, and `lazy_delete`; `vsdb_get_system_dir` still claims `{base_dir}/__SYSTEM__/` holds the removed DagMap ID counter; `MapxRaw::namespace` calls `namespace()` "THE co-location primitive" (contradicting `new_colocated` and `AGENTS.md`); `CHANGELOG.md` `[v18.0.0]` omits concrete signature breaks (`VecDexDyn::new` → `new_with_metric`, `VerMap::sync` removal, `TrieCalc` checkpoint args, `MapxOrdRawKey::entry` enum); `engine::ValueMut::fmt` formats `"ValueIterMut"`; `std::any::type_name` (`migration/src/dagmap.rs`) and `std::path::Path::new` (`core/src/basic/mapx_raw/test.rs`) appear 3+ times inline.
