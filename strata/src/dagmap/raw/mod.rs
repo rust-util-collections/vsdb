@@ -239,22 +239,25 @@ impl DagMapRaw {
     pub fn new(parent: Option<&mut Self>) -> Self {
         match parent {
             Some(p) => {
-                let meta = p.meta().expect("invalid DAG parent");
+                let mut meta = p.meta().expect("invalid DAG parent");
                 assert!(meta.state.live(), "DAG parent has been consumed");
                 assert_ne!(meta.next_edge_id, u64::MAX, "DAG edge id exhausted");
                 let mut node = Self {
                     store: p.store.new_colocated(),
                     dag_id: p.dag_id,
                 };
-                node.set_meta(NodeMeta::new(
-                    p.dag_id,
-                    State::Child(Parent {
-                        map: p.id(),
-                        edge: meta.next_edge_id,
-                    }),
-                ))
-                .expect("DAG child metadata");
-                p.register(meta, node.id()).expect("DAG child registration");
+                let edge = meta.next_edge_id;
+                meta.next_edge_id += 1;
+                let child_meta =
+                    NodeMeta::new(p.dag_id, State::Child(Parent { map: p.id(), edge }));
+                let child_id = node.id().to_le_bytes();
+                p.store
+                    .insert_colocated(
+                        &mut node.store,
+                        &[(&META, &meta.bytes()), (&edge_key(edge), &child_id)],
+                        &[(&META, &child_meta.bytes())],
+                    )
+                    .expect("DAG child registration");
                 node
             }
             None => {

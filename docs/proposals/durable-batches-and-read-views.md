@@ -35,3 +35,15 @@ A view's ordinary iterators borrow it. A raw view also offers `range_detached()`
 The original consumer needed to acknowledge a durable update to several related keys, and to join related records at one consistent instant. Separate application engines, service acknowledgements and cross-WAL dependencies stay under the application's control. The September 2026 ACC report compares engine topologies and records a paused-fsync experiment that distinguished synchronous publication from an ordinary commit followed by a fence. Its timings and dependency versions belong to that assessment. [ACC validation report](../evaluations/acc-migration-primitives.md)
 
 Workspace tests cover batch visibility, process reopen, read view consistency and namespace ownership. The engine API includes compile-fail lifetime examples. [Synchronous batch tests](../../core/tests/sync_batch_test.rs) · [Read view tests](../../core/tests/read_view_test.rs) · [Iterator snapshot tests](../../core/tests/iterator_snapshot_test.rs)
+
+
+## Publishing a DagMap child
+
+`MapxRaw::insert_colocated` takes mutable handles to two maps. It checks
+their owning engine and resolved shards before submitting one WAL-enabled
+batch. Input keys remain local to their respective maps. A new DagMap child
+uses this operation for its owner metadata, the parent edge and the parent's
+advanced edge allocator. Readers at one snapshot see all three rows together.
+A successful shard fence makes the batch durable; an allocated but unused
+prefix can remain after an interruption before the batch. Large prune and
+destroy operations retain their resumable phases.

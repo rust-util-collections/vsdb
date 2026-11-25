@@ -328,6 +328,27 @@ impl MmDB {
         alloc_prefix()
     }
 
+    pub(crate) fn insert_colocated(
+        &self,
+        first: PreBytes,
+        second: PreBytes,
+        here: &[(&[u8], &[u8])],
+        there: &[(&[u8], &[u8])],
+    ) -> Result<()> {
+        if self.shard_of(&first) != self.shard_of(&second) {
+            return Err(VsdbError::InvalidConfig {
+                detail: "co-located insert requires both prefixes on one shard".into(),
+            });
+        }
+        let mut batch = WriteBatch::new();
+        for (prefix, entries) in [(&first, here), (&second, there)] {
+            for &(key, value) in entries {
+                batch.put_prefixed(prefix, key, value);
+            }
+        }
+        self.shard(&first).write(batch).map_err(from_mmdb_err)
+    }
+
     /// See the module-level [`reserve_recovered_prefix`].
     #[inline(always)]
     pub(crate) fn reserve_recovered_prefix(

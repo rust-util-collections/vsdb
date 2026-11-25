@@ -289,6 +289,32 @@ impl MapxRaw {
         self.inner.is_colocated_with(&other.inner)
     }
 
+    /// Inserts rows in two maps with one asynchronous WAL batch. The maps
+    /// must belong to the same open engine and route to the same shard.
+    /// Keys are local to their respective map. Repeated keys take the value
+    /// of the last put. A rejected placement writes no rows.
+    pub fn insert_colocated(
+        &mut self,
+        other: &mut Self,
+        here: &[(&[u8], &[u8])],
+        there: &[(&[u8], &[u8])],
+    ) -> Result<()> {
+        let ns = self.namespace();
+        if ns.is_read_only() {
+            return Err(VsdbError::ReadOnly {
+                operation: "co-located insert",
+            });
+        }
+        if !std::ptr::eq(ns.engine(), other.namespace().engine()) {
+            return Err(VsdbError::InvalidConfig {
+                detail: "co-located insert requires maps in one namespace".into(),
+            });
+        }
+        let first = self.try_instance_id()?.map_id.to_le_bytes();
+        let second = other.try_instance_id()?.map_id.to_le_bytes();
+        ns.engine().insert_colocated(first, second, here, there)
+    }
+
     /// Deep-copies every entry into a fresh instance co-located with
     /// `anchor` — the co-located form of [`Clone`], with the same chunked
     /// copy and error cleanup as [`clone_in`](Self::clone_in).

@@ -6,6 +6,12 @@
 
 ## Node ownership and recovery
 
+- Child creation checks both raw handles belong to the same engine and
+  shard, then writes the parent metadata, edge, and child metadata in one
+  MMDB batch. A failed placement leaves both maps intact. Check the
+  independent shard fence and process-reopen case; a reserved unused
+  child prefix is harmless.
+
 - **Consumed-node guard:** Every local mutator (`insert`, `remove`, `get_mut`, `update`, and `new(Some(parent))`) must enforce `meta.state.live()`, rejecting `Clearing | Destroying | Destroyed` nodes even when unwiped `[02..03)` rows remain from an interrupted cleanup.
 - Check node magic, `dag_id`, shard co-location and the child's recorded
   parent and edge before clearing storage reached through a registry entry.
