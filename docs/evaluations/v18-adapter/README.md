@@ -65,6 +65,16 @@ in alternating order. Paired effects use the median of the within-seed
 ratios. Check variation using the maximum absolute change between the two
 16 MiB v5 control runs.
 
+The saturation table reports successful scalar puts/s and successful batch
+commits/s alongside total logical MiB/s. To compare the delivered work at
+the same demand ratio, also count `min(scalar/s, batches/s ÷ 2)` complete
+shares of one 136-byte put and two 16,640-byte batches. This discounts work
+in excess of either stream's fixed-mix demand. Saturated workers still
+issue independently. Foreground p99 comes from the separate fixed arrival
+schedule. A gain in aggregate bytes can coincide with fewer foreground
+completions. The synthetic evidence test halves the scalar rate and raises
+the bulk rate to demonstrate that distinction.
+
 The 1 GiB RSS envelope, at least 95% of control byte throughput and at most
 105% of control foreground p99 must hold in both placements for a common
 profile to pass. Retain a numerical outcome as inconclusive if matched

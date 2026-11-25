@@ -51,6 +51,18 @@ def display_allocations(path, output):
         table.writerow([case, binary, len(samples), 2048, round(median(x for x, _ in samples), 3),
                         round(median(x for _, x in samples), 1)])
 
+def throughput(row):
+    """Rates over the same worker window, including its last acknowledgment."""
+    duration = row["wall_ns"] / 1e9
+    small = row["small"] / duration
+    bulk = row["bulk"] / duration
+    # Only count complete shares of the offered mix (one scalar / two batches).
+    # Extra batch traffic cannot make up for a shortage of foreground calls.
+    matched = min(small, bulk / 2)
+    return {"throughput_mib_s": row["logical_bytes"] / duration / (1 << 20),
+            "successful_small_puts_s": small, "successful_batches_s": bulk,
+            "matched_mix_mib_s": matched * (136 + 2 * 32 * 520) / (1 << 20)}
+
 def summarize(path, output):
     with gzip.open(path, "rt") as f:
         meta=json.loads(next(f))
@@ -107,6 +119,9 @@ def summarize(path, output):
                      "end_L0":lambda r:r["after_l0"],
                      "flushes":lambda r:r["after_flushes"]-r["before_flushes"],
                      "compactions":lambda r:r["after_compactions"]-r["before_compactions"]}
+            if load=="saturation":
+                for key in ("successful_small_puts_s", "successful_batches_s", "matched_mix_mib_s"):
+                    metrics[key] = lambda row, field=key: throughput(row)[field]
             if load=="paced":
                 metrics["small_p99_ms"]=lambda r:r["p99_ns"]/1e6
             for pair in ("AB","upgrade"):
@@ -118,8 +133,8 @@ def summarize(path, output):
                     a=[measure(v["reference"]) for v in trials]
                     b=[measure(v["comparison"]) for v in trials]
                     fields=[""]*5
-                    if metric in ("small_p99_ms","throughput_mib_s","peak_rss_mib"):
-                        sign=1 if metric=="throughput_mib_s" else -1
+                    if metric not in ("end_L0", "flushes", "compactions"):
+                        sign = -1 if metric in ("small_p99_ms", "peak_rss_mib") else 1
                         gain=[sign*100*(y/x-1) for x,y in zip(a,b)]
                         spread=max(abs(100*(measure(v["comparison"])/measure(v["reference"])-1)) for v in noise)
                         fields=[round(median(gain),3),round(min(gain),3),round(max(gain),3),sum(v>0 for v in gain),round(spread,3)]
