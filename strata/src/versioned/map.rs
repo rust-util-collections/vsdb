@@ -214,12 +214,7 @@ impl<K, V> VerMap<K, V> {
     }
 
     pub(super) fn get_branch(&self, id: BranchId) -> Result<BranchHead> {
-        let bytes = self
-            .tree
-            .nodes
-            .get(row(HEAD, id.raw()))
-            .ok_or(VsdbError::BranchNotFound { branch_id: id })?;
-        BranchHead::decode(&bytes)
+        self.tree.get_branch_head(id)
     }
 
     pub(crate) fn get_commit_inner(&self, id: CommitId) -> Result<Commit> {
@@ -247,9 +242,13 @@ impl<K, V> VerMap<K, V> {
         edits
             .rows
             .insert(HEADER.to_vec(), Some(hdr.bytes().to_vec()));
-        let result = self
-            .tree
-            .publish(edits.rows, &edits.acquire, &edits.retire, sync);
+        let result = self.tree.publish(
+            edits.rows,
+            &edits.heads,
+            &edits.acquire,
+            &edits.retire,
+            sync,
+        );
         if result.is_err() {
             self.restore_visible_refs()?;
         }
@@ -332,7 +331,7 @@ impl<K, V> VerMap<K, V> {
         from: CommitId,
         to: CommitId,
     ) -> Result<Vec<TreeDiff>> {
-        let [from_root, to_root] = self.tree.lease_roots(|| {
+        let [from_root, to_root] = self.tree.lease_roots(|_| {
             Ok([
                 self.get_commit_inner(from)?.root,
                 self.get_commit_inner(to)?.root,
@@ -362,15 +361,25 @@ impl<K, V> VerMap<K, V> {
         self.tree.diff_iter(from.root, to.root)
     }
 
+    pub(crate) fn iter_leased_root(
+        &self,
+        root: &RootLease,
+    ) -> crate::basic::persistent_btree::BTreeIter<'_> {
+        #[cfg(test)]
+        super::test::before_diff_traversal();
+        self.tree.iter(root.root)
+    }
+
     pub(crate) fn commit_root(&self, id: CommitId) -> Result<Arc<RootLease>> {
-        self.tree.lease_root(|| Ok(self.get_commit_inner(id)?.root))
+        self.tree
+            .lease_root(|_| Ok(self.get_commit_inner(id)?.root))
     }
 
     pub(crate) fn branch_roots(&self, branch: BranchId) -> Result<BranchRoots> {
         let mut head = None;
-        let [committed, working] = self.tree.lease_roots(|| {
+        let [committed, working] = self.tree.lease_roots(|refs| {
             loop {
-                let state = self.get_branch(branch)?;
+                let state = refs.resolve_branch_raw(&self.tree.nodes, branch)?;
                 if state.head == NO_COMMIT {
                     return Ok([EMPTY_ROOT, state.dirty_root]);
                 }
@@ -379,11 +388,18 @@ impl<K, V> VerMap<K, V> {
                         head = Some(state.head);
                         return Ok([commit.root, state.dirty_root]);
                     }
-                    Err(VsdbError::CommitNotFound { .. })
-                        if self.get_branch(branch)?.head != state.head =>
-                    {
-                        // A complete rollback can land between these two point
-                        // reads. Resolve again while the pin lock protects old roots.
+                    Err(VsdbError::CommitNotFound { .. }) => {
+                        // Evict any cached BranchHead in case a concurrent
+                        // rollback deleted old commits in mmdb just before
+                        // updating RefState.heads.
+                        refs.heads.remove(&branch);
+                        if refs.resolve_branch_raw(&self.tree.nodes, branch)?.head
+                            == state.head
+                        {
+                            return Err(VsdbError::CommitNotFound {
+                                commit_id: state.head,
+                            });
+                        }
                     }
                     Err(err) => return Err(err),
                 }
@@ -501,11 +517,7 @@ where
         source_branch: BranchId,
     ) -> Result<BranchId> {
         self.ensure_writable("branch creation")?;
-        if self.branch_id(name).is_some()
-            || self
-                .records(NAME)
-                .any(|(_, existing)| existing == name.as_bytes())
-        {
+        if self.branch_id(name).is_some() {
             return Err(VsdbError::BranchAlreadyExists {
                 name: name.to_owned(),
             });
@@ -549,7 +561,7 @@ where
             .branch_name(branch)
             .ok_or_else(|| corrupt("missing branch name"))?;
         let mut edits = Edits::default();
-        edits.rows.insert(row(HEAD, branch.raw()).to_vec(), None);
+        edits.delete_head(branch);
         edits.rows.insert(row(NAME, branch.raw()).to_vec(), None);
         edits.rows.insert(by_name(&name), None);
         edits.retire.push(state.dirty_root);

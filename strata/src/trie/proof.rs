@@ -342,10 +342,12 @@ where
     }
     fn sync_or_rebuild(&self, base: &T, from: &RootLease, to: &RootLease) -> Result<T> {
         if to.root == EMPTY_ROOT {
+            #[cfg(test)]
+            let _ = self.map.iter_leased_root(to);
             return Ok(T::default());
         }
         if from.root == EMPTY_ROOT {
-            return T::from_entries(self.map.tree.iter(to.root));
+            return T::from_entries(self.map.iter_leased_root(to));
         }
         let rebuild_threshold = (self.map.tree.estimate_entries(to.root) / 2).max(512);
         let mut iter = self.map.diff_roots_iter(from, to);

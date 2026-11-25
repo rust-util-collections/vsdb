@@ -125,9 +125,11 @@ where
     /// [`VsdbError::BranchNotFound`](crate::VsdbError::BranchNotFound) if the
     /// branch does not exist.
     pub fn snapshot(&self, branch: BranchId) -> Result<Snapshot<K, V>> {
-        let lease = self
-            .tree
-            .lease_root(|| Ok(self.get_branch(branch)?.dirty_root))?;
+        let lease = self.tree.lease_root(|refs| {
+            Ok(refs
+                .resolve_branch_raw(&self.tree.nodes, branch)?
+                .dirty_root)
+        })?;
         Ok(Snapshot {
             _types: PhantomData,
             lease,
@@ -145,7 +147,11 @@ where
         K: OrderedKeyLookup<Q>,
         Q: ?Sized,
     {
-        Ok(self.snapshot(branch)?.get(key))
+        self.tree.with_pinned_branch(branch, |root| {
+            K::with_ordered_lookup(key, |bytes| self.tree.get_committed(root, bytes))
+                .flatten()
+                .map(|v| V::decode_value(&v).unwrap())
+        })
     }
 
     /// Checks if `key` exists in the working state of `branch`.
@@ -154,7 +160,12 @@ where
         K: OrderedKeyLookup<Q>,
         Q: ?Sized,
     {
-        Ok(self.snapshot(branch)?.contains_key(key))
+        self.tree.with_pinned_branch(branch, |root| {
+            K::with_ordered_lookup(key, |bytes| {
+                self.tree.contains_committed(root, bytes)
+            })
+            .unwrap_or(false)
+        })
     }
 
     /// Iterates all entries on `branch` in ascending key order.
@@ -205,13 +216,8 @@ impl<K, V> VerMap<K, V> {
 impl<K, V> VerMapReader<K, V> {
     /// Captures the branch's current working root.
     pub fn snapshot(&self, id: BranchId) -> Result<Snapshot<K, V>> {
-        use super::store::{BranchHead, HEAD, row};
-        let [lease] = self.config.lease(&self.raw, || {
-            let raw = self
-                .raw
-                .get(row(HEAD, id.raw()))
-                .ok_or(crate::VsdbError::BranchNotFound { branch_id: id })?;
-            Ok([BranchHead::decode(&raw)?.dirty_root])
+        let [lease] = self.config.lease(&self.raw, |refs| {
+            Ok([refs.resolve_branch_reader(&self.raw, id)?.dirty_root])
         })?;
         Ok(Snapshot {
             lease,
@@ -222,7 +228,7 @@ impl<K, V> VerMapReader<K, V> {
     /// Captures the immutable root of a retained commit.
     pub fn at(&self, id: CommitId) -> Result<Snapshot<K, V>> {
         use super::store::{COMMIT, row};
-        let [lease] = self.config.lease(&self.raw, || {
+        let [lease] = self.config.lease(&self.raw, |_| {
             let raw = self
                 .raw
                 .get(row(COMMIT, id.raw()))

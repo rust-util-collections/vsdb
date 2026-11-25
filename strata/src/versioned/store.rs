@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use vsdb_core::MapxRaw;
 
 pub(super) const HEADER: [u8; 1] = [0];
-pub(super) const HEAD: u8 = 1;
+pub(crate) const HEAD: u8 = 1;
 pub(super) const NAME: u8 = 2;
 pub(super) const BY_NAME: u8 = 3;
 pub(super) const COMMIT: u8 = 4;
@@ -94,13 +94,13 @@ impl Header {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(super) struct BranchHead {
-    pub(super) head: CommitId,
-    pub(super) dirty_root: NodeId,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BranchHead {
+    pub(crate) head: CommitId,
+    pub(crate) dirty_root: NodeId,
 }
 impl BranchHead {
-    pub(super) fn decode(bytes: &[u8]) -> Result<Self> {
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != 16 {
             return Err(corrupt("invalid branch head length"));
         }
@@ -109,7 +109,7 @@ impl BranchHead {
             dirty_root: u64::from_le_bytes(bytes[8..].try_into().unwrap()),
         })
     }
-    pub(super) fn bytes(self) -> Vec<u8> {
+    pub(crate) fn bytes(self) -> Vec<u8> {
         [self.head.raw().to_le_bytes(), self.dirty_root.to_le_bytes()].concat()
     }
 }
@@ -147,6 +147,7 @@ impl Commit {
 #[derive(Default)]
 pub(super) struct Edits {
     pub(super) rows: BTreeMap<Vec<u8>, Option<Vec<u8>>>,
+    pub(super) heads: Vec<(BranchId, Option<BranchHead>)>,
     pub(super) acquire: Vec<NodeId>,
     pub(super) retire: Vec<NodeId>,
 }
@@ -154,6 +155,11 @@ impl Edits {
     pub(super) fn write_head(&mut self, branch: BranchId, head: BranchHead) {
         self.rows
             .insert(row(HEAD, branch.raw()).to_vec(), Some(head.bytes()));
+        self.heads.push((branch, Some(head)));
+    }
+    pub(super) fn delete_head(&mut self, branch: BranchId) {
+        self.rows.insert(row(HEAD, branch.raw()).to_vec(), None);
+        self.heads.push((branch, None));
     }
     pub(super) fn write_commit(&mut self, c: &Commit) {
         self.rows

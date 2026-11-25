@@ -76,6 +76,7 @@ impl<K, V> VerMap<K, V> {
     }
 
     pub(super) fn recover(&mut self, deep: bool) -> Result<GcStats> {
+        self.tree.clear_cached_heads();
         let hdr = Header::get(&self.tree.nodes)?;
         self.tree.check_ceiling(hdr.next_id)?;
         let counts = self

@@ -45,6 +45,15 @@ fn single_branch_crud(c: &mut Criterion) {
         })
     });
 
+    let read_snap = read_map.snapshot(read_main).unwrap();
+    group.bench_function("snapshot_get (hit)", |b| {
+        let mut i = 0u64;
+        b.iter(|| {
+            i = (i + 1) % READ_ENTRIES;
+            black_box(read_snap.get(&i));
+        })
+    });
+
     group.bench_function("get (miss)", |b| {
         let mut i = 0u64;
         b.iter(|| {

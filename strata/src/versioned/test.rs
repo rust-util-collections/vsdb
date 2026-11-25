@@ -3762,10 +3762,6 @@ fn serde_rebuilds_branch_name_index() {
 
     m.tree.nodes.remove(by_name("feature"));
     assert_eq!(m.branch_id("feature"), None);
-    assert!(matches!(
-        m.create_branch("feature", main),
-        Err(VsdbError::BranchAlreadyExists { .. })
-    ));
     m.tree
         .nodes
         .insert(by_name("main"), feat.raw().to_le_bytes());
@@ -3774,10 +3770,14 @@ fn serde_rebuilds_branch_name_index() {
         .insert(by_name("stale"), feat.raw().to_le_bytes());
 
     let bytes = postcard::to_allocvec(&m).unwrap();
-    let restored: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
+    let mut restored: VerMap<u32, u32> = postcard::from_bytes(&bytes).unwrap();
     assert_eq!(restored.branch_id("feature"), Some(feat));
     assert_eq!(restored.branch_id("main"), Some(main));
     assert_eq!(restored.branch_id("stale"), None);
+    assert!(matches!(
+        restored.create_branch("feature", main),
+        Err(VsdbError::BranchAlreadyExists { .. })
+    ));
 }
 
 #[test]
@@ -4970,4 +4970,74 @@ fn vermap_blob_leaf_shares_blobs_across_commits_reopen_and_revert() {
     assert_eq!(reopened.records(0x12).count(), 66);
     reopened.discard(main).unwrap();
     assert_eq!(reopened.records(0x12).count(), 65);
+}
+
+#[test]
+fn concurrent_readers_and_failed_publish_keep_cached_heads_linearizable() {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        thread,
+    };
+
+    let mut writer: VerMap<u32, u32> = VerMap::new();
+    let main = writer.main_branch();
+    for k in 0u32..64 {
+        writer.insert(main, &k, &0).unwrap();
+    }
+    writer.commit(main).unwrap();
+
+    // Prime RefState.heads and verify a simulated publish failure clears the cache
+    // without exposing uncommitted heads.
+    assert_eq!(writer.get(main, &0).unwrap(), Some(0));
+    PUBLICATION_HOOK.set(Some(Box::new(|| {
+        Err(VsdbError::Io(std::io::Error::other(
+            "injected publish failure",
+        )))
+    })));
+    assert!(writer.insert(main, &0, &999).is_err());
+    assert_eq!(writer.get(main, &0).unwrap(), Some(0));
+
+    let reader = writer.reader();
+    let alias: Arc<VerMap<u32, u32>> = Arc::new(
+        postcard::from_bytes(&postcard::to_allocvec(&writer).unwrap()).unwrap(),
+    );
+    let stop = Arc::new(AtomicBool::new(false));
+
+    let mut handles = Vec::new();
+    for tid in 0..4u32 {
+        let r = reader.clone();
+        let a = Arc::clone(&alias);
+        let stop_flag = Arc::clone(&stop);
+        handles.push(thread::spawn(move || {
+            let mut checks = 0u64;
+            while !stop_flag.load(Ordering::Acquire) || checks < 64 {
+                let snap = r.snapshot(main).unwrap();
+                let v0 = snap.get(&0).unwrap();
+                // Every key in a batch write is updated atomically to the same epoch.
+                assert_eq!(snap.get(&63), Some(v0));
+                let direct = a.get(main, &(tid * 13)).unwrap().unwrap();
+                assert!(direct <= 60);
+                assert!(a.contains_key(main, &(tid * 13)).unwrap());
+                assert!(!a.contains_key(main, &10_000).unwrap());
+                checks += 1;
+            }
+        }));
+    }
+
+    for epoch in 1u32..=60 {
+        writer
+            .write_batch(main, (0u32..64).map(|k| (k, Some(epoch))))
+            .unwrap();
+        if epoch % 10 == 0 {
+            writer.commit(main).unwrap();
+        }
+    }
+    stop.store(true, Ordering::Release);
+    for h in handles {
+        h.join().unwrap();
+    }
+    assert_eq!(alias.get(main, &0).unwrap(), Some(60));
 }

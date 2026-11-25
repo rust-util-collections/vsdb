@@ -39,9 +39,15 @@ mod types;
 pub use diff::{BTreeDiffIter, TreeDiff};
 pub use iter::BTreeIter;
 
-use crate::common::{
-    InstanceId,
-    error::{Result, VsdbError},
+use crate::{
+    common::{
+        InstanceId,
+        error::{Result, VsdbError},
+    },
+    versioned::{
+        BranchId,
+        store::{BranchHead, HEAD, RETIRED, row},
+    },
 };
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -77,13 +83,15 @@ thread_local! {
 }
 
 #[derive(Debug)]
-struct RefState {
+pub(crate) struct RefState {
     counts: HashMap<NodeId, u32>,
     edges: HashMap<NodeId, Box<[NodeId]>>,
     zombies: HashSet<NodeId>,
     ready: bool,
     /// One reference per live snapshot lease, shared by its iterators.
     pins: HashMap<NodeId, u32>,
+    /// Live branch head cache synchronized under the same lock as `counts`.
+    pub(crate) heads: HashMap<BranchId, BranchHead>,
     /// Released keys waiting for a WAL sync, shared by every pool alias.
     deferred: Option<Vec<Vec<u8>>>,
 }
@@ -92,6 +100,7 @@ impl RefState {
     fn install(&mut self, expanded: HashMap<NodeId, NodeRef>) {
         self.counts.clear();
         self.edges.clear();
+        self.heads.clear();
         self.counts.reserve(expanded.len());
         for (id, node) in expanded {
             self.counts.insert(id, node.ref_count);
@@ -100,6 +109,71 @@ impl RefState {
             }
         }
         self.ready = true;
+    }
+
+    pub(crate) fn set_head(&mut self, branch: BranchId, head: Option<BranchHead>) {
+        match head {
+            Some(head) => {
+                self.heads.insert(branch, head);
+            }
+            None => {
+                self.heads.remove(&branch);
+            }
+        }
+    }
+
+    pub(crate) fn resolve_branch_raw(
+        &mut self,
+        nodes: &MapxRaw,
+        branch: BranchId,
+    ) -> Result<BranchHead> {
+        if let Some(&head) = self.heads.get(&branch) {
+            return Ok(head);
+        }
+        let bytes = nodes
+            .get(row(HEAD, branch.raw()))
+            .ok_or(VsdbError::BranchNotFound { branch_id: branch })?;
+        let head = BranchHead::decode(&bytes)?;
+        self.heads.insert(branch, head);
+        Ok(head)
+    }
+
+    pub(crate) fn resolve_branch_reader(
+        &mut self,
+        nodes: &MapxRawReader,
+        branch: BranchId,
+    ) -> Result<BranchHead> {
+        if let Some(&head) = self.heads.get(&branch) {
+            return Ok(head);
+        }
+        let bytes = nodes
+            .get(row(HEAD, branch.raw()))
+            .ok_or(VsdbError::BranchNotFound { branch_id: branch })?;
+        let head = BranchHead::decode(&bytes)?;
+        self.heads.insert(branch, head);
+        Ok(head)
+    }
+
+    fn unpin(&mut self, root: NodeId) {
+        if root == EMPTY_ROOT {
+            return;
+        }
+        let pins = self.pins.get_mut(&root).expect("missing snapshot pin");
+        *pins -= 1;
+        if *pins == 0 {
+            self.pins.remove(&root);
+            if self.zombies.remove(&root) {
+                self.deferred
+                    .get_or_insert_with(Vec::new)
+                    .push(row(RETIRED, root).to_vec());
+            }
+        }
+        // A reader may outlive the writer. A later writer drains these
+        // releases after its WAL fence, or recovers them on the next open.
+        let dead = self.release(root);
+        self.deferred
+            .get_or_insert_with(Vec::new)
+            .extend(dead.into_iter().map(|id| object_key(id).to_vec()));
     }
 
     fn release(&mut self, id: NodeId) -> Vec<NodeId> {
@@ -175,28 +249,27 @@ impl Drop for RootLease {
         if self.root == EMPTY_ROOT {
             return;
         }
-        let mut refs = self.runtime.refs.lock();
-        let pins = refs.pins.get_mut(&self.root).expect("missing snapshot pin");
-        *pins -= 1;
-        if *pins == 0 {
-            refs.pins.remove(&self.root);
-            if refs.zombies.remove(&self.root) {
-                refs.deferred.get_or_insert_with(Vec::new).push(
-                    crate::versioned::store::row(
-                        crate::versioned::store::RETIRED,
-                        self.root,
-                    )
-                    .to_vec(),
-                );
-            }
-        }
-        // A reader may outlive the writer. A later writer drains these
-        // releases after its WAL fence, or recovers them on the next open.
-        let dead = refs.release(self.root);
-        refs.deferred
-            .get_or_insert_with(Vec::new)
-            .extend(dead.into_iter().map(|id| object_key(id).to_vec()));
+        self.runtime.refs.lock().unpin(self.root);
     }
+}
+
+struct ScopedPin<'a> {
+    root: NodeId,
+    runtime: &'a TreeRuntime,
+}
+
+impl Drop for ScopedPin<'_> {
+    fn drop(&mut self) {
+        self.runtime.refs.lock().unpin(self.root);
+    }
+}
+
+fn read_map_object(nodes: &MapxRaw, id: NodeId) -> Vec<u8> {
+    #[cfg(test)]
+    NODE_READS.with(|c| c.set(c.get() + 1));
+    nodes
+        .get(object_key(id))
+        .unwrap_or_else(|| panic!("PersistentBTree: missing object {id}"))
 }
 
 fn read_object(nodes: &MapxRawReader, id: NodeId) -> Vec<u8> {
@@ -376,6 +449,7 @@ impl<'de> Deserialize<'de> for PersistentBTree {
                         edges: HashMap::new(),
                         zombies: HashSet::new(),
                         pins: HashMap::new(),
+                        heads: HashMap::new(),
                         deferred: None,
                         ready: false,
                     },
@@ -443,6 +517,7 @@ impl PersistentBTree {
                 zombies: HashSet::new(),
                 ready: true,
                 pins: HashMap::new(),
+                heads: HashMap::new(),
                 deferred: None,
             },
         );
@@ -465,14 +540,61 @@ impl PersistentBTree {
             .map_or(0, Vec::len)
     }
 
+    pub(crate) fn get_branch_head(&self, branch: BranchId) -> Result<BranchHead> {
+        self.runtime
+            .refs
+            .lock()
+            .resolve_branch_raw(&self.nodes, branch)
+    }
+
+    pub(crate) fn clear_cached_heads(&self) {
+        self.runtime.refs.lock().heads.clear();
+    }
+
+    pub(crate) fn with_pinned_branch<R>(
+        &self,
+        branch: BranchId,
+        f: impl FnOnce(NodeId) -> R,
+    ) -> Result<R> {
+        let root = {
+            let mut refs = self.runtime.refs.lock();
+            let root = refs.resolve_branch_raw(&self.nodes, branch)?.dirty_root;
+            if root != EMPTY_ROOT {
+                assert!(refs.ready, "lookup requires initialized tree references");
+                let count =
+                    refs.counts
+                        .get_mut(&root)
+                        .ok_or_else(|| VsdbError::Corrupt {
+                            detail: format!("untracked branch root {root}"),
+                        })?;
+                *count += 1;
+                *refs.pins.entry(root).or_insert(0) += 1;
+            }
+            root
+        };
+        let _pin = (root != EMPTY_ROOT).then_some(ScopedPin {
+            root,
+            runtime: &self.runtime,
+        });
+        Ok(f(root))
+    }
+
+    pub(crate) fn get_committed(&self, root: NodeId, key: &[u8]) -> Option<Vec<u8>> {
+        lookup(root, key, |id| Cow::Owned(read_map_object(&self.nodes, id)))
+    }
+
+    pub(crate) fn contains_committed(&self, root: NodeId, key: &[u8]) -> bool {
+        find_leaf(root, key, |id| Cow::Owned(read_map_object(&self.nodes, id))).is_some()
+    }
+
     /// Capture and retain a published root while releases/recounts are
     /// excluded. Reading the owning row under this lock closes the gap
     /// between observing its root and acquiring the reader reference.
     pub(crate) fn lease_root(
         &self,
-        resolve: impl FnOnce() -> Result<NodeId>,
+        resolve: impl FnOnce(&mut RefState) -> Result<NodeId>,
     ) -> Result<Arc<RootLease>> {
-        let [lease] = self.lease_roots(|| Ok([resolve()?]))?;
+        let [lease] = self.lease_roots(|refs| Ok([resolve(refs)?]))?;
         Ok(lease)
     }
 
@@ -480,7 +602,7 @@ impl PersistentBTree {
     /// a writer can release any of them. Duplicate roots get distinct leases.
     pub(crate) fn lease_roots<const N: usize>(
         &self,
-        resolve: impl FnOnce() -> Result<[NodeId; N]>,
+        resolve: impl FnOnce(&mut RefState) -> Result<[NodeId; N]>,
     ) -> Result<[Arc<RootLease>; N]> {
         self.read_state().lease(&self.nodes.reader(), resolve)
     }
@@ -1222,6 +1344,7 @@ impl PersistentBTree {
                 zombies: HashSet::new(),
                 ready: refs.ready,
                 pins: HashMap::new(),
+                heads: HashMap::new(),
                 deferred: None,
             },
         );
@@ -1242,10 +1365,10 @@ impl TreeReadState {
     pub(crate) fn lease<const N: usize>(
         &self,
         nodes: &MapxRawReader,
-        resolve: impl FnOnce() -> Result<[NodeId; N]>,
+        resolve: impl FnOnce(&mut RefState) -> Result<[NodeId; N]>,
     ) -> Result<[Arc<RootLease>; N]> {
         let mut refs = self.0.refs.lock();
-        let roots = resolve()?;
+        let roots = resolve(&mut refs)?;
         // Validate the whole set before changing counts, so a corrupt
         // later root cannot strand an earlier pin during unwinding.
         for &root in roots.iter().filter(|&&root| root != EMPTY_ROOT) {

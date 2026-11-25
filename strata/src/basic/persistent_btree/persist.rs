@@ -1,7 +1,10 @@
 //! Version-store publication and verified reference checkpoints.
 
 use super::*;
-use crate::versioned::store::{Header, RETIRED, STAGE, row};
+use crate::versioned::{
+    BranchId,
+    store::{BranchHead, Header, RETIRED, STAGE, row},
+};
 use std::collections::BTreeMap;
 
 impl PersistentBTree {
@@ -14,6 +17,7 @@ impl PersistentBTree {
                 edges: HashMap::new(),
                 zombies: HashSet::new(),
                 pins: HashMap::new(),
+                heads: HashMap::new(),
                 deferred: Some(Vec::new()),
                 ready: true,
             },
@@ -150,6 +154,7 @@ impl PersistentBTree {
     pub(crate) fn publish(
         &mut self,
         rows: BTreeMap<Vec<u8>, Option<Vec<u8>>>,
+        head_updates: &[(BranchId, Option<BranchHead>)],
         acquire: &[NodeId],
         retire: &[NodeId],
         sync: bool,
@@ -216,27 +221,31 @@ impl PersistentBTree {
         self.pending_bytes = 0;
         self.stage.as_mut().unwrap().clear();
         if let Err(err) = result {
-            self.runtime
-                .refs
-                .lock()
-                .deferred
+            let mut refs = self.runtime.refs.lock();
+            refs.heads.clear();
+            refs.deferred
                 .get_or_insert_with(Vec::new)
                 .extend(dead.into_iter().take(previously_dead));
             return Err(err);
         }
 
-        if shared {
+        if shared || !head_updates.is_empty() {
             let mut refs = self.runtime.refs.lock();
-            for &id in retire.iter().filter(|&&id| id != EMPTY_ROOT) {
-                let dead = refs.release(id);
-                let deferred = refs.deferred.get_or_insert_with(Vec::new);
-                deferred.extend(dead.into_iter().map(|id| object_key(id).to_vec()));
-                if refs.pins.contains_key(&id) {
-                    refs.zombies.insert(id);
-                } else {
-                    refs.deferred
-                        .get_or_insert_with(Vec::new)
-                        .push(row(RETIRED, id).to_vec());
+            for &(branch, head) in head_updates {
+                refs.set_head(branch, head);
+            }
+            if shared {
+                for &id in retire.iter().filter(|&&id| id != EMPTY_ROOT) {
+                    let dead = refs.release(id);
+                    let deferred = refs.deferred.get_or_insert_with(Vec::new);
+                    deferred.extend(dead.into_iter().map(|id| object_key(id).to_vec()));
+                    if refs.pins.contains_key(&id) {
+                        refs.zombies.insert(id);
+                    } else {
+                        refs.deferred
+                            .get_or_insert_with(Vec::new)
+                            .push(row(RETIRED, id).to_vec());
+                    }
                 }
             }
         }
@@ -254,6 +263,7 @@ impl PersistentBTree {
             zombies: HashSet::new(),
             ready: true,
             pins: HashMap::new(),
+            heads: HashMap::new(),
             deferred: None,
         };
         // Pin-only roots must not become durable owners.
