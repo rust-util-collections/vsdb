@@ -5409,3 +5409,18 @@ fn working_overlay_reuses_its_charge_and_rejects_a_changed_root() {
     assert!(matches!(error, crate::VsdbError::InvalidConfig { .. }));
     assert_eq!(map.get(branch, &1).unwrap(), Some(11));
 }
+
+#[test]
+fn working_edit_releases_its_temporary_read_lease_before_root_publication() {
+    let mut map = VerMap::<u64, u64>::new();
+    let branch = map.main_branch();
+    map.insert(branch, &1, &7).unwrap();
+    map.edit_working(branch, 256, |edit| edit.insert(&1, &8))
+        .unwrap();
+    assert_eq!(map.records(super::store::RETIRED).count(), 0);
+    let pinned = map.snapshot(branch).unwrap();
+    map.edit_working(branch, 256, |edit| edit.insert(&1, &9))
+        .unwrap();
+    assert_eq!(pinned.get(&1), Some(8));
+    assert_eq!(map.get(branch, &1).unwrap(), Some(9));
+}

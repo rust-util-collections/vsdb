@@ -806,7 +806,9 @@ where
                     detail: "branch working root changed during edit".into(),
                 });
             }
-            self.apply_working_changes(branch, state, session.changes)?;
+            let changes = session.changes;
+            drop(lease);
+            self.apply_working_changes(branch, state, changes)?;
         }
         Ok(result)
     }
