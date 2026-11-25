@@ -1383,3 +1383,103 @@ fn insert_batch_coalescing_matches_serial_rows_across_multi_tier_promotions() {
         assert_eq!(batch_rows, serial_rows, "swap={swap}");
     }
 }
+
+#[test]
+fn restore_rejects_invalid_tier_rows_without_mutating_storage() {
+    for tier in [0u8, 1] {
+        let mut index = SlotDex64::<u64>::new(2, false).unwrap();
+        let n = if tier == 0 { 1 } else { 10 };
+        index.insert_batch((0..n).map(|k| (k, k))).unwrap();
+        let id = index.save_meta().unwrap();
+        let key = level_key(tier, &0u64);
+        let original = index.store.get(&key).unwrap();
+        for (k, v) in [
+            (key.clone(), vec![1]),
+            (key.clone(), vec![0; 9]),
+            (key[..3].to_vec(), original.clone()),
+        ] {
+            index.store.insert(&k, &v);
+            assert!(matches!(
+                SlotDex64::<u64>::from_meta(id),
+                Err(VsdbError::Corrupt { .. })
+            ));
+            assert_eq!(index.store.get(&k), Some(v));
+            index.store.remove(&k);
+            index.store.insert(&key, &original);
+        }
+        assert_eq!(SlotDex64::<u64>::from_meta(id).unwrap().total(), n);
+    }
+}
+
+#[test]
+fn restore_propagates_a_custom_slot_decode_error() {
+    #[derive(
+        Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
+    )]
+    struct Slot(u8);
+    impl std::ops::Not for Slot {
+        type Output = Self;
+        fn not(self) -> Self {
+            Self(!self.0)
+        }
+    }
+    impl SlotType for Slot {
+        type Bytes = [u8; 2];
+        const MIN: Self = Self(0);
+        const MAX: Self = Self(u8::MAX);
+        fn to_bytes(self) -> Self::Bytes {
+            [0, self.0]
+        }
+        fn from_bytes(bytes: Self::Bytes) -> Result<Self> {
+            match bytes {
+                [0, value] => Ok(Self(value)),
+                _ => Err(VsdbError::Decode {
+                    detail: "invalid slot tag".into(),
+                }),
+            }
+        }
+        fn tier_stride(capacity: u32, level: u8) -> Option<Self> {
+            u8::tier_stride(capacity, level).map(Self)
+        }
+        fn floor_align(self, stride: Self) -> Self {
+            Self(self.0.floor_align(stride.0))
+        }
+        fn checked_succ(self) -> Option<Self> {
+            self.0.checked_succ().map(Self)
+        }
+        fn checked_pred(self) -> Option<Self> {
+            self.0.checked_pred().map(Self)
+        }
+    }
+    let mut index = SlotDex::<Slot, u64>::new(2, false).unwrap();
+    index
+        .insert_batch((0..10).map(|i| (Slot(i), u64::from(i))))
+        .unwrap();
+    let id = index.save_meta().unwrap();
+    index.store.insert([TAG_LEVEL, 1, 3, 0], 1u64.to_le_bytes());
+    assert!(
+        matches!(SlotDex::<Slot, u64>::from_meta(id), Err(VsdbError::Decode { detail }) if detail == "invalid slot tag")
+    );
+    let handle = postcard::to_allocvec(&index).unwrap();
+    assert!(postcard::from_bytes::<SlotDex<Slot, u64>>(&handle).is_err());
+}
+
+#[test]
+fn large_tier_restore_checks_the_streamed_tail() {
+    let mut index = SlotDex64::<u64>::new(2, false).unwrap();
+    index
+        .insert_batch((0..5000).map(|key| (2 * key, key)))
+        .unwrap();
+    let id = index.save_meta().unwrap();
+    let reopened = SlotDex64::<u64>::from_meta(id).unwrap();
+    assert_eq!(reopened.levels[0].buckets.len(), 5000);
+    assert_eq!(reopened.page(9998.., 1, 0, Order::Asc), [4999]);
+
+    let last = level_key(1, &9998u64);
+    index.store.insert(&last, [1]);
+    assert!(matches!(
+        SlotDex64::<u64>::from_meta(id),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert_eq!(index.store.get(last), Some(vec![1]));
+}

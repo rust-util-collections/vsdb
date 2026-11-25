@@ -479,7 +479,7 @@ fan-out is a `u32` with a minimum of two.
 Each mutation commits entries, counts and a writer generation in one engine
 batch. Readers through restored handles can run concurrently. Serialize all
 writers across aliases. A stale writer returns an error, including on `clear`.
-Deserialize a fresh handle to resume writing. `clone` and `clone_in` deep-copy
+Deserialize a fresh handle to resume writing. Reopen checks the widths and slot encodings of tier rows as it loads them into memory. `clone` and `clone_in` deep-copy
 the index to an independent prefix.
 
 For built-in v17 coordinates (`u32`, `u64`, `u128`), the offline

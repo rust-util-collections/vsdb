@@ -170,9 +170,7 @@ fn encode_cnt(v: EntryCnt) -> [u8; 8] {
 }
 
 fn decode_cnt(raw: &[u8]) -> EntryCnt {
-    let mut b = [0u8; 8];
-    b.copy_from_slice(&raw[..8]);
-    EntryCnt::from_le_bytes(b)
+    EntryCnt::from_le_bytes(raw.try_into().expect("SlotDex: corrupt count width"))
 }
 
 fn decode_slot<S: SlotType>(raw: &[u8]) -> S {
@@ -181,8 +179,29 @@ fn decode_slot<S: SlotType>(raw: &[u8]) -> S {
     S::from_bytes(bytes).expect("SlotDex: corrupt slot bytes")
 }
 
+fn checked_level_row<S: SlotType>(key: &[u8], value: &[u8]) -> Result<(S, EntryCnt)> {
+    let mut bytes = S::Bytes::zeroed();
+    if key.len() != 2 + S::Bytes::LEN {
+        return Err(VsdbError::Corrupt {
+            detail: "invalid SlotDex tier key width".into(),
+        });
+    }
+    bytes.as_mut().copy_from_slice(&key[2..]);
+    let slot = S::from_bytes(bytes)?;
+    let count =
+        u64::from_le_bytes(value.try_into().map_err(|_| VsdbError::Corrupt {
+            detail: "invalid SlotDex tier count width".into(),
+        })?);
+    if count == 0 {
+        return Err(VsdbError::Corrupt {
+            detail: "empty SlotDex tier bucket".into(),
+        });
+    }
+    Ok((slot, count))
+}
+
 fn decode_level_row<S: SlotType>(key: &[u8], value: &[u8]) -> (S, EntryCnt) {
-    (decode_slot(&key[2..]), decode_cnt(value))
+    checked_level_row(key, value).expect("SlotDex: corrupt tier row")
 }
 
 fn slot_entry_cnt<S: SlotType>(
@@ -209,7 +228,9 @@ fn total_record(total: u64, generation: u64) -> [u8; 16] {
 
 fn read_total(row: Option<Vec<u8>>) -> Result<(u64, u64)> {
     match row.as_deref() {
-        Some(raw) if raw.len() == 16 => Ok((decode_cnt(raw), decode_cnt(&raw[8..]))),
+        Some(raw) if raw.len() == 16 => {
+            Ok((decode_cnt(&raw[..8]), decode_cnt(&raw[8..])))
+        }
         _ => Err(VsdbError::Corrupt {
             detail: "SlotDex: invalid total row length".into(),
         }),
@@ -248,18 +269,10 @@ where
     where
         D: serde::Deserializer<'de>,
     {
-        crate::common::deserialize_prefix_handle::<Self, _, _>(deserializer, |frame| {
-            let PrefixFrame(store, extra) = frame;
-            let ((version, capacity, swap), tail) =
-                postcard::take_from_bytes::<(u8, u32, bool)>(extra)?;
-            if version != LAYOUT_VERSION || !tail.is_empty() {
-                return Err(VsdbError::Decode {
-                    detail: format!("unsupported SlotDex layout {version}"),
-                });
-            }
-            Self::check_capacity(capacity)?;
-            Self::hydrate(store, capacity, swap)
-        })
+        crate::common::deserialize_prefix_handle::<Self, _, _>(
+            deserializer,
+            Self::open_frame,
+        )
     }
 }
 
@@ -344,12 +357,24 @@ where
         Ok(())
     }
 
+    fn open_frame(PrefixFrame(store, extra): PrefixFrame<'_>) -> Result<Self> {
+        let ((version, capacity, swap), tail) =
+            postcard::take_from_bytes::<(u8, u32, bool)>(extra)?;
+        if version != LAYOUT_VERSION || !tail.is_empty() {
+            return Err(VsdbError::Decode {
+                detail: format!("unsupported SlotDex layout {version}"),
+            });
+        }
+        Self::check_capacity(capacity)?;
+        Self::hydrate(store, capacity, swap)
+    }
     fn hydrate(store: MapxRaw, tier_capacity: u32, swap_order: bool) -> Result<Self> {
         let view = store.read_view();
         let (total_cache, generation) = read_total(view.get(TOTAL_KEY))?;
-        let levels = Self::load_levels(&view, tier_capacity);
+        let levels = Self::load_levels(&view, tier_capacity)?;
         let slot_rows = if levels.is_empty() {
-            level0_range(&view, S::MIN, S::MAX).count() as u64
+            view.range(level_prefix(0)..level_prefix(1))
+                .try_fold(0, |n, (k, v)| checked_level_row::<S>(&k, &v).map(|_| n + 1))?
         } else {
             0
         };
@@ -366,30 +391,37 @@ where
         })
     }
 
-    fn load_levels(view: &MapxRawReadView<'_>, tier_capacity: u32) -> Vec<Level<S>> {
-        // Levels are contiguous from 1 by construction; stop at the first
-        // level with no rows.
-        let mut levels = vec![];
-        for level in 1..=u8::MAX {
-            let prefix = level_prefix(level);
-            let lo = Bound::Included(prefix.to_vec());
-            let hi = Bound::Excluded(
-                prefix_successor(&prefix).expect("level prefix below 0xff"),
-            );
-            let mut cache = Level::new(level, tier_capacity);
-            let mut empty = true;
-            for (rk, rv) in view.range((lo, hi)) {
-                let (floor, cnt) = decode_level_row::<S>(&rk, &rv);
-                cache.buckets.insert(floor, cnt);
-                empty = false;
+    fn load_levels(
+        view: &MapxRawReadView<'_>,
+        tier_capacity: u32,
+    ) -> Result<Vec<Level<S>>> {
+        let mut rows = view
+            .range(level_prefix(1).as_slice()..TOTAL_KEY.as_slice())
+            .peekable();
+        let mut levels = Vec::new();
+        while let Some((key, _)) = rows.peek() {
+            let level = key[1];
+            if usize::from(level) != levels.len() + 1 {
+                return Err(VsdbError::Corrupt {
+                    detail: "missing SlotDex tier".into(),
+                });
             }
-            if empty {
-                break;
+            let mut cache = Level::new(level, tier_capacity);
+            let mut buckets =
+                std::iter::from_fn(|| rows.next_if(|(key, _)| key[1] == level))
+                    .map(|(key, value)| checked_level_row::<S>(&key, &value));
+            // Tier rows arrive in slot order. Bulk-building a BTreeMap avoids
+            // a search per initial bucket. Bound the number collected at once
+            // so opening a large tier does not require a second full copy.
+            let initial = (64 * 1024 / size_of::<(S, EntryCnt)>()).max(1);
+            cache.buckets = buckets.by_ref().take(initial).collect::<Result<_>>()?;
+            for bucket in buckets {
+                let (floor, count) = bucket?;
+                cache.buckets.insert(floor, count);
             }
             levels.push(cache);
         }
-
-        levels
+        Ok(levels)
     }
 
     /// Deep-copies the captured state into a fresh prefix in `ns`.
@@ -453,7 +485,15 @@ where
     /// restoring a fresh handle gives it the latest writer generation.
     pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
         let id = instance_id.into();
-        crate::common::load_instance_meta_checked(id, Self::instance_id)
+        let id = InstanceId::new(id.map_id, id.ns.unwrap_or_default());
+        let bytes: Vec<u8> = crate::common::load_instance_meta(id)?;
+        let frame = crate::common::parse_prefix_handle::<Self>(&bytes)?;
+        if frame.0.instance_id() != id {
+            return Err(VsdbError::Decode {
+                detail: "SlotDex metadata identity mismatch".into(),
+            });
+        }
+        Self::open_frame(frame)
     }
 
     // =====================================================================
@@ -874,7 +914,10 @@ where
         let levels = if generation == self.generation {
             Cow::Borrowed(self.levels.as_slice())
         } else {
-            Cow::Owned(Self::load_levels(&view, self.tier_capacity))
+            Cow::Owned(
+                Self::load_levels(&view, self.tier_capacity)
+                    .expect("corrupt SlotDex tiers"),
+            )
         };
         Query {
             view,
