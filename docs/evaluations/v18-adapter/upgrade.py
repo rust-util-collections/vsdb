@@ -12,7 +12,7 @@ from statistics import median
 import subprocess
 import tempfile
 
-from summarize import load_ok, require, throughput
+from summarize import load_ok, qualify, require, throughput
 
 def read(path):
     with gzip.open(path, "rt") as f:
@@ -94,7 +94,8 @@ def summarize(a):
         writer=csv.writer(f,lineterminator="\n")
         writer.writerow(["placement","load","metric","v4_median","selected_median","paired_gain_pct","low_gain_pct",
                          "high_gain_pct","positive_pairs","v4_aa_max_pct","load_kept_pairs",
-                         "v4_peak_max_kib","selected_peak_max_kib","v4_end_l0_median","selected_end_l0_median"])
+                         "v4_peak_max_kib","selected_peak_max_kib","v4_end_l0_median","selected_end_l0_median",
+                         "eligible_gain_pct","guard_status","observed_rss_within_1gib"])
         for placement in ("hot","all"):
             for load in ("paced","saturation"):
                 observed=[pairs[placement,load,i,"AB"] for i in range(1,6)]
@@ -112,7 +113,8 @@ def summarize(a):
                           sum(g>0 for g in gains),aa,eligible,max(r["peak_kib"] for r in v4+[
                               r for n in noise for r in n.values()]),max(r["peak_kib"] for r in sel),
                           median(r["after_l0"] for r in v4),median(r["after_l0"] for r in sel)]
-                    writer.writerow([placement,load,metric,*[round(v,3) for v in vals]])
+                    guard = qualify(gains, aa, eligible, 5, vals[8:10])
+                    writer.writerow([placement,load,metric,*[round(v,3) for v in vals],*guard])
 
 if __name__=="__main__":
     parser=argparse.ArgumentParser(description=__doc__)

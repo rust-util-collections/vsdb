@@ -78,8 +78,11 @@ the bulk rate to demonstrate that distinction.
 The 1 GiB RSS envelope, at least 95% of control byte throughput and at most
 105% of control foreground p99 must hold in both placements for a common
 profile to pass. Retain a numerical outcome as inconclusive if matched
-load fails or the control spread obscures the latency margin. Compare L0
-files, outstanding generations, flushes and compactions alongside
+load fails or the control spread obscures the latency margin. Keep all recorded pairs in the descriptive medians and ranges. The decision
+gain is empty when any scheduled-load pair fails. All observed process
+high-water marks still contribute to the independent absolute RSS ceiling.
+A matched control spread greater than 5% leaves the guard inconclusive.
+Compare L0 files, outstanding generations, flushes and compactions alongside
 throughput. Whole-process RSS includes the harness. A raw-map trial
 does not instantiate the higher-level per-tree page caches.
 

@@ -51,6 +51,20 @@ def display_allocations(path, output):
         table.writerow([case, binary, len(samples), 2048, round(median(x for x, _ in samples), 3),
                         round(median(x for _, x in samples), 1)])
 
+def qualify(gains, noise, qualified_pairs, planned, peaks, matching_reference=True):
+    """Keep raw outcomes descriptive unless every independent matched pair is eligible."""
+    within_rss = max(peaks) <= 1024 * 1024
+    if qualified_pairs != planned:
+        return "", "offered-load-unqualified", within_rss
+    if not matching_reference:
+        return "", "separate-reference-required", within_rss
+    if not within_rss:
+        return "", "over-RSS-ceiling", within_rss
+    gain = median(gains)
+    if noise > 5:
+        return round(gain, 3), "guard-inconclusive-AA", within_rss
+    return round(gain, 3), ("guard-regression" if gain < -5 else "guard-met"), within_rss
+
 def throughput(row):
     """Rates over the same worker window, including its last acknowledgment."""
     duration = row["wall_ns"] / 1e9
@@ -111,7 +125,7 @@ def summarize(path, output):
     table=csv.writer(output,lineterminator="\n")
     table.writerow(["placement","load","pair","metric","reference_median","comparison_median","paired_gain_pct",
                     "low_gain_pct","high_gain_pct","favorable_pairs","v5_16m_aa_max_abs_pct","matched_load_pairs",
-                    "reference_max_rss_kib","comparison_max_rss_kib"])
+                    "reference_max_rss_kib","comparison_max_rss_kib","eligible_gain_pct","guard_status","observed_rss_within_1gib"])
     for place in ("hot","all"):
         for load in ("paced","saturation"):
             metrics={"throughput_mib_s":lambda r:r["logical_bytes"]*(1e9/(1<<20))/r["wall_ns"],
@@ -128,7 +142,10 @@ def summarize(path, output):
                 trials=[groups[place,load,pair,i] for i in range(1,count+1)]
                 noise=[groups[place,load,"AA",i] for i in range(1,count+1)]
                 kept=sum(all(load_ok(x) for d in (v,n) for x in d.values()) for v,n in zip(trials,noise))
-                peaks=[max(v[a]["peak_kib"] for v in trials) for a in ("reference","comparison")]
+                references = [r["reference"] for r in trials]
+                if pair == "AB":
+                    references.extend(r for n in noise for r in n.values())
+                peaks = [max(r["peak_kib"] for r in references), max(v["comparison"]["peak_kib"] for v in trials)]
                 for metric,measure in metrics.items():
                     a=[measure(v["reference"]) for v in trials]
                     b=[measure(v["comparison"]) for v in trials]
@@ -138,7 +155,12 @@ def summarize(path, output):
                         gain=[sign*100*(y/x-1) for x,y in zip(a,b)]
                         spread=max(abs(100*(measure(v["comparison"])/measure(v["reference"])-1)) for v in noise)
                         fields=[round(median(gain),3),round(min(gain),3),round(max(gain),3),sum(v>0 for v in gain),round(spread,3)]
-                    table.writerow([place,load,pair,metric,round(median(a),3),round(median(b),3),*fields,kept,*peaks])
+                    applies = (load == "paced" and metric == "small_p99_ms") or (
+                        load == "saturation" and metric in ("throughput_mib_s", "matched_mix_mib_s",
+                                                            "successful_small_puts_s", "successful_batches_s"))
+                    guard = (qualify(gain, spread, kept, count, peaks, pair == "AB") if applies else
+                             ("", "descriptive", max(peaks) <= 1024 * 1024))
+                    table.writerow([place,load,pair,metric,round(median(a),3),round(median(b),3),*fields,kept,*peaks,*guard])
 
 if __name__=="__main__":
     parser=argparse.ArgumentParser(description=__doc__)

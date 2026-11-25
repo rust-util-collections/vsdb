@@ -5,7 +5,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 
-from summarize import throughput
+from summarize import load_ok, qualify, throughput
 from upgrade import digest, summarize
 
 class ThroughputEvidence(unittest.TestCase):
@@ -19,6 +19,23 @@ class ThroughputEvidence(unittest.TestCase):
         self.assertGreater(candidate["successful_batches_s"],control["successful_batches_s"])
         self.assertEqual(candidate["successful_small_puts_s"],50)
         self.assertEqual(candidate["matched_mix_mib_s"],control["matched_mix_mib_s"]/2)
+
+    def test_late_backlog_cannot_qualify_a_favorable_latency(self):
+        good = dict(load="paced", small=10000, bulk=20000, small_half_debt=0,
+                    small_end_debt=0, bulk_half_debt=16, bulk_end_debt=16)
+        late = dict(good, small_end_debt=101)
+        pairs = [[good]*4 for _ in range(4)] + [[good, good, late, good]]
+        count = sum(all(load_ok(row) for row in pair) for pair in pairs)
+        self.assertEqual(count, 4)
+        gains = [21] * 5
+        self.assertEqual(qualify(gains,1.0,count,5,[90000,80000]),
+                         ("","offered-load-unqualified",True))
+        self.assertEqual(qualify(gains,1.0,count,5,[90000,2**20+1]),
+                         ("","offered-load-unqualified",False))
+        self.assertEqual(qualify(gains,1.0,5,5,[90000,80000]),
+                         (21,"guard-met",True))
+        self.assertEqual(qualify(gains,1.0,5,5,[90000,80000],False)[1],
+                         "separate-reference-required")
 
     def test_upgrade_noise_uses_the_frozen_v4_executable(self):
         with tempfile.TemporaryDirectory() as tmp:
