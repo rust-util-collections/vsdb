@@ -1,7 +1,7 @@
 //! Offline conversion of a single v17 HNSW index. The progress row shares
 //! the batch and WAL with its vector chunk, so a retry never decodes LE
 //! components as a postcard vector, or skips an unconverted row.
-use crate::{corrupt, exactly, legacy_tag, raw_id, raw_map, tag, typed_handle};
+use crate::{corrupt, exactly, legacy_payload, raw_id, raw_map, tag, typed_handle};
 use serde::Deserialize;
 use std::{
     any::{TypeId, type_name},
@@ -104,33 +104,24 @@ fn legacy_handle<K: KeyEnDe, D: DistanceMetric<S>, S: Scalar>(
 ) -> Result<(InstanceId, HnswConfig, D)> {
     // v17 dynamic handles were a discriminator followed by a complete
     // typed static handle. Check both the tag and the inner type.
-    let (payload, tag, metric) = if TypeId::of::<D>() == TypeId::of::<MetricKind>() {
+    let (inner, metric) = if TypeId::of::<D>() == TypeId::of::<MetricKind>() {
         let (wire, payload) = bytes
             .split_first()
             .ok_or_else(|| corrupt("empty VecDex metadata"))?;
-        let tag = match wire {
-            0 => legacy_tag::<VecDex<K, L2, S>>(),
-            1 => legacy_tag::<VecDex<K, Cosine, S>>(),
-            2 => legacy_tag::<VecDex<K, InnerProduct, S>>(),
+        let frame: &[u8] = exactly(payload)?;
+        let inner = match wire {
+            0 => legacy_payload::<VecDex<K, L2, S>>(frame)?,
+            1 => legacy_payload::<VecDex<K, Cosine, S>>(frame)?,
+            2 => legacy_payload::<VecDex<K, InnerProduct, S>>(frame)?,
             _ => return Err(corrupt("unknown v17 metric")),
         };
-        (
-            payload,
-            tag,
-            postcard::from_bytes(std::slice::from_ref(wire))?,
-        )
+        (inner, postcard::from_bytes(std::slice::from_ref(wire))?)
     } else {
-        (bytes, legacy_tag::<VecDex<K, D, S>>(), D::default())
+        let frame: &[u8] = exactly(bytes)?;
+        (legacy_payload::<VecDex<K, D, S>>(frame)?, D::default())
     };
-    let (frame, tail): (&[u8], _) = postcard::take_from_bytes(payload)?;
-    if !tail.is_empty()
-        || frame.get(..8) != Some(b"VSTYPE03")
-        || frame.get(8..16) != Some(&tag.to_le_bytes())
-    {
-        return Err(corrupt("incorrect v17 VecDex type or envelope"));
-    }
     let ((version, store, config), tail): ((u8, &[u8], HnswConfig), _) =
-        postcard::take_from_bytes(&frame[16..])?;
+        postcard::take_from_bytes(inner)?;
     if !tail.is_empty() || version != 2 {
         return Err(corrupt("unsupported v17 VecDex layout"));
     }

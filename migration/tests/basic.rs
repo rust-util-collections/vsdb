@@ -91,6 +91,39 @@ fn migrate_existing_universe_and_nested_values() {
             .raw(),
         99
     );
+    // Upgrade a v16-created VSTYPE02 Orphan<CommitId> envelope (where CommitId
+    // hashed as "u64" in v16/v17 legacy_type_name) preserved inside a v17 store.
+    let v16_raw = vsdb::MapxRaw::new();
+    let v16_id = v16_raw.instance_id();
+    let mut v16_raw_mut = vsdb_migrate::raw_map(v16_id).unwrap();
+    v16_raw_mut.insert([], postcard::to_allocvec(&77u64).unwrap());
+    let fnv1a = |s: &str| {
+        s.bytes().fold(0xcbf29ce484222325u64, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
+        })
+    };
+    let mut raw_v17 = b"VSMAPX01".to_vec();
+    raw_v17.extend_from_slice(&v16_id.map_id.to_le_bytes());
+    let mut inner_v02 = b"VSTYPE02".to_vec();
+    inner_v02.extend_from_slice(
+        &fnv1a("vsdb::basic::mapx_ord_rawkey::MapxOrdRawKey<u64>").to_le_bytes(),
+    );
+    inner_v02.extend_from_slice(&postcard::to_allocvec(&raw_v17).unwrap());
+    let mut outer_v02 = b"VSTYPE02".to_vec();
+    outer_v02.extend_from_slice(&fnv1a("vsdb::basic::orphan::Orphan<u64>").to_le_bytes());
+    outer_v02.extend_from_slice(&postcard::to_allocvec(&inner_v02).unwrap());
+    let v02_bytes = postcard::to_allocvec(&outer_v02).unwrap();
+    let converted_v02 = basic_handle::<Orphan<CommitId>>(&v02_bytes).unwrap();
+    let restored_v02: Orphan<CommitId> = postcard::from_bytes(&converted_v02).unwrap();
+    assert_eq!(restored_v02.get_value().raw(), 77);
+    std::fs::write(v16_raw.namespace().meta_path(v16_id.map_id), &v02_bytes).unwrap();
+    assert_eq!(
+        migrate_basic::<Orphan<CommitId>>(v16_id)
+            .unwrap()
+            .get_value()
+            .raw(),
+        77
+    );
     assert_eq!(migrate_basic::<Outer>(outer).unwrap().instance_id(), outer);
     assert!(
         vsdb::MapxRaw::new().instance_id().map_id

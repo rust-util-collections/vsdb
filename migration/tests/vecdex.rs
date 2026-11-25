@@ -20,6 +20,8 @@ fn migrate_frozen_v17_graph_preserves_rows_ids_and_ann_results() {
         let offset = meta.windows(8).position(|w| w == b"VSMAPX01").unwrap() + 8;
         meta[offset..offset + 8].copy_from_slice(&id.map_id.to_le_bytes());
         if dynamic {
+            let magic = meta.windows(8).position(|w| w == b"VSTYPE03").unwrap();
+            meta[magic..magic + 8].copy_from_slice(b"VSTYPE02");
             meta.insert(0, 0);
         }
         let mut batch = store.batch();

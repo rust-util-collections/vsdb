@@ -11,14 +11,6 @@
 
 ## Open
 
-### [HIGH] migration: typed handle converters reject v16 VSTYPE02 envelopes valid in v17 datasets
-- **Where**: `migration/src/lib.rs` (`legacy_payload`), `migration/src/vecdex.rs` (`legacy_handle`), `migration/src/versioned.rs` (`component::checked`), `migration/src/dagmap.rs` (`Legacy::deserialize`, `saved_tag`, `migrate_rawkey_v17`)
-- **What**: Every typed converter hardcodes `b"VSTYPE03"`, rejecting `b"VSTYPE02"` envelopes created in `v14.0.3..=v16.3.11` and opened/mutated in place by `v17.0.0..=v17.0.21` (where `save_meta()` and `DagMapRaw`'s inner `Orphan`/`MapxOrdRawKey` handles remain create-time `VSTYPE02`).
-- **Why**: Live `v17.0.21` databases upgraded zero-copy from v16 fail conversion across `migrate_basic`, `basic_handle`, `slotdex::migrate_v17`, `vecdex::migrate_v17`, `versioned::migrate_v17`, `dagmap::migrate_v17`, and `dagmap::migrate_rawkey_v17` with `VsdbError::Corrupt` (violates `compatibility-policy.md` §Typed-handle tags).
-- **Suggested fix**: Accept `b"VSTYPE02"` alongside `b"VSTYPE03"` in `vsdb_migrate`, checking `VSTYPE02` tags with `BranchId`/`CommitId` mapped to `"u64"` (matching `v17.0.21` `legacy_type_name`). Add frozen `VSTYPE02` handle fixtures in `migration/tests/`. No v18 runtime format change.
-
----
-
 ### [HIGH] migration: renamed library types fail legacy_tag and write unopenable VSTYPE04 tags on saved DagMap children
 - **Where**: `migration/src/lib.rs` (`legacy_tag`), `migration/src/dagmap.rs` (`saved_tag`, `migrate_with`)
 - **What**: (1) `VecDexDyn<K, S>` moved from `vsdb::vecdex::dynamic::VecDexDyn<K, S>` (v17 enum) to a type alias for `vsdb::vecdex::VecDex<K, vsdb::vecdex::distance::MetricKind, S>` (v18), which `legacy_tag` does not map. (2) In `dagmap::saved_tag::<T>`, when a saved descendant's type differs from root `T` and uses `BranchId`, `CommitId`, or `VecDexDyn` (e.g. a saved `DagMapRawKey<CommitId>` child under a `DagMapRaw` root), `tag == legacy_tag::<T>()` is false, so `saved_tag` copies the stale v17 `VSTYPE03` hash verbatim into the child's v18 `VSTYPE04` metadata file before `Phase::Retire` wipes the v17 prefixes.

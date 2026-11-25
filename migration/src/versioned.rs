@@ -46,7 +46,9 @@ struct Components<'a>(
 fn component(frame: &[u8], outer: &str, inner: &str) -> Result<MapxRaw> {
     fn checked<'a>(bytes: &'a [u8], name: &str) -> Result<&'a [u8]> {
         let hash = tag(name);
-        if bytes.get(..8) != Some(b"VSTYPE03") || bytes.get(8..16) != Some(&hash.to_le_bytes()) {
+        if !matches!(bytes.get(..8), Some(b"VSTYPE02" | b"VSTYPE03"))
+            || bytes.get(8..16) != Some(&hash.to_le_bytes())
+        {
             return Err(corrupt("unexpected v17 component type"));
         }
         Ok(&bytes[16..])

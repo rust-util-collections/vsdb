@@ -168,11 +168,15 @@ fn saved_tag<T>(ns: &Namespace, parts: [InstanceId; 3]) -> Result<u64> {
         (node, crate::tag(std::any::type_name::<DagMapRaw>()))
     } else {
         let frame: &[u8] = decode(&bytes)?;
-        if frame.get(..8) != Some(b"VSTYPE03") || frame.len() < 16 {
+        let Some(magic @ (b"VSTYPE02" | b"VSTYPE03")) = frame.get(..8) else {
+            return Err(corrupt("invalid saved child metadata"));
+        };
+        if frame.len() < 16 {
             return Err(corrupt("invalid saved child metadata"));
         }
+        let vstype02 = magic == b"VSTYPE02";
         let tag = u64::from_le_bytes(frame[8..16].try_into().unwrap());
-        let tag = if tag == crate::legacy_tag::<T>() {
+        let tag = if tag == crate::legacy_tag_for::<T>(vstype02) {
             default
         } else {
             tag

@@ -24,14 +24,26 @@ fn tag(name: &str) -> u64 {
     })
 }
 
-fn legacy_tag<T>() -> u64 {
-    // Renamed library-owned types retain their v17 spellings in legacy tags.
+pub(crate) fn legacy_tag_for<T>(vstype02: bool) -> u64 {
+    // Renamed library-owned types retain their v16/v17 spellings in legacy tags.
     let mut name = String::new();
     let full = type_name::<T>();
     let mut start = 0;
     let convert = |path: &str| match path {
-        p if p == type_name::<vsdb::BranchId>() => "vsdb::versioned::BranchId",
-        p if p == type_name::<vsdb::CommitId>() => "vsdb::versioned::CommitId",
+        p if p == type_name::<vsdb::BranchId>() => {
+            if vstype02 {
+                "u64"
+            } else {
+                "vsdb::versioned::BranchId"
+            }
+        }
+        p if p == type_name::<vsdb::CommitId>() => {
+            if vstype02 {
+                "u64"
+            } else {
+                "vsdb::versioned::CommitId"
+            }
+        }
         _ => "",
     };
     for (i, c) in full
@@ -51,11 +63,17 @@ fn legacy_tag<T>() -> u64 {
     }
     tag(&name)
 }
-/// Payload in a v17 typed envelope after checking its nominal tag.
+
+/// Payload in a v16/v17 typed envelope after checking its nominal tag.
 pub fn legacy_payload<T>(frame: &[u8]) -> Result<&[u8]> {
-    if frame.get(..8) != Some(b"VSTYPE03")
-        || frame.get(8..16) != Some(&legacy_tag::<T>().to_le_bytes())
-    {
+    let vstype02 = match frame.get(..8) {
+        Some(b"VSTYPE03") => false,
+        Some(b"VSTYPE02") => true,
+        _ => {
+            return Err(corrupt(format!("invalid v17 {} handle", type_name::<T>())));
+        }
+    };
+    if frame.get(8..16) != Some(&legacy_tag_for::<T>(vstype02).to_le_bytes()) {
         return Err(corrupt(format!("invalid v17 {} handle", type_name::<T>())));
     }
     Ok(&frame[16..])
