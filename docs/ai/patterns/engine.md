@@ -2,7 +2,7 @@
 
 [Engine and metadata](../../../core/src/common) · [Raw map](../../../core/src/basic/mapx_raw)
 
-**Arch:** One universe (`{base}/__SYSTEM__/universe_header` `VSUNI018`, advisory `LOCK`, `VSNREG02` `__namespaces__`, `__prefix_ceiling__`). One engine per namespace = N MMDB shards (default pinned 16 behind lazy `OnceLock`; others creation-persisted), bound by `VSENG018` `engine_header` + `.shards_ready == b"18"`. Key = `[prefix_u64][user]`; 1-byte WAL fence key `[1]` cannot collide. Handles own `Namespace` `Arc` — ambient scope is read at create only, never by ops/serde/`from_meta`. Engines in `Arc<NsInner>` (no leak); close under lifecycle locks. One `BlockCachePool` per engine. A `WriteBatch` is bound to one prefix (⇒ one shard).
+**Arch:** One universe (`{base}/__SYSTEM__/universe_header` `VSUNI018`, advisory `LOCK`, `VSNREG02` `__namespaces__`, `__prefix_ceiling__`). One engine per namespace = N MMDB shards (default pinned 16 behind lazy `OnceLock`; others creation-persisted), bound by `VSENG018` `engine_header` + `.shards_ready == b"18"`. Key = `[prefix_u64][user]`; a native shard WAL fence writes no data key or sequence. Handles own `Namespace` `Arc` — ambient scope is read at create only, never by ops/serde/`from_meta`. Engines in `Arc<NsInner>` (no leak); close under lifecycle locks. One `BlockCachePool` per engine. A raw batch binds one prefix. A checked co-located insert binds two prefixes on one shard.
 
 ## Invariants
 
@@ -14,7 +14,7 @@
 
 **E4 Engine uniqueness** — default once; non-default id ≤ one open under REGISTRY_LOCK + OPEN re-check.
 
-**E5 Batch scope** — one batch = one prefix; no multi-prefix batch exists. Multi-prefix protocols such as DagMap order their writes on the shared shard and retain recovery records until cleanup finishes.
+**E5 Batch scope** — Ordinary batches bind one prefix. `insert_colocated` validates both engine identity and shard before appending any row. DagMap child creation publishes three rows at once. Pruning keeps recovery records until cleanup finishes.
 
 **E6 Iter prefix bound** — stop at prefix end (incl. `u64::MAX` upper-bound care).
 
@@ -24,12 +24,12 @@
 
 **E9 Identity** — route via owned Namespace; ns ID zero selects default; no ambient redirect of existing handles. Missing-ceiling recovery (`note_meta_bytes` + 23-byte `note_meta_stream` carry) scans keys, values, `__instance_meta__`, and `__CUSTOM__` for `VSMAPX02` (`+8..+16`) and `VSTYPE04` (`+16..+24`).
 
-**E10 Cache pool** — all shards of one engine share one pool; engines do not
-share pools or identity. Memory inputs size buffers/caches with floors/caps,
-not hard RSS limits. `block-cache-usage` repeats the pool-wide entry count
-plus each shard's pinned entries; do not sum it as per-shard byte usage. During a backend
-upgrade, verify the linked MMDB version's queue and cache-charge semantics
-before reusing a v4 sizing estimate. [Sizing and version scope](../../proposals/shared-mem-pool.md)
+**E10 Cache pool** — `Namespace::memory_usage()` counts one pool with
+separate segmented and overflow capacities per engine. The shard entries
+track current memtables and L0 pins. Compare caller-held pins, per-tree
+caches, RSS and compaction debt separately. The string property
+`block-cache-usage` measures entries and repeats the shared component on
+each shard. [Sizing and units](../../proposals/shared-mem-pool.md)
 
 **E11 clone_in** — fresh unobservable prefix; bounded independent batches; failed chunk best-effort wipe target without masking primary Err.
 

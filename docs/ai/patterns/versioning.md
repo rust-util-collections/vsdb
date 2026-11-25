@@ -60,3 +60,13 @@ publishing either row, so a reader lease cannot drop an otherwise unowned result
 - [ ] Merge shapes: same head → no-op; FF only into empty target; target-ancestor → 2-parent commit
 - [ ] Snapshot and iterator roots survive alias writes/GC/restore; final drop releases once
 - [ ] Recount preserves all live pins; clone owns only its copied persistent graph
+
+
+## Dependent working edits
+
+Trace `edit_working` from its leased working root through the overlay,
+budget and commit. Replacing a staged value releases its previous charge.
+Callback error or panic discards the overlay. Drop the private lease before
+publishing; a genuine external snapshot retains the necessary old nodes.
+Count engine submissions and root generations separately. Reopen saved
+metadata and check that working edits leave the history head intact.

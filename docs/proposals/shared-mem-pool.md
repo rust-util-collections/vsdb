@@ -5,16 +5,11 @@ Per-engine block-cache sharing shipped in VSDB v16.3.0, using MMDB's
 including the default namespace. Cross-namespace pooling and a shared
 write-buffer manager remain proposals, not available VSDB options.
 
-The current integration is in
-[core/src/common/engine/mmdb.rs](../../core/src/common/engine/mmdb.rs).
-The workspace manifest specifies `mmdb = "4.3.15"`. The formulas and write path below apply to that implementation. [Workspace manifest](../../Cargo.toml)
-
-The MMDB v5 port changes the write path to queued immutable memtables.
-Its `BlockCachePool::usage()` reports the segmented and overflow stores'
-separate capacities and approximate charges. `DB::memory_usage()` reports
-the current DB's memtables and L0 pin payload. Use v5 measurements when
-choosing a ported profile. The v4 results below remain the baseline for
-the current workspace dependency. [MMDB v5 engine profiles](https://github.com/rust-util-collections/mmdb/blob/master/docs/benchmarks/engine-profile/README.md)
+The VSDB v18 runtime uses MMDB v5. `Namespace::memory_usage()` reports
+the shared pool once, with separate segmented and overflow charges, and
+observations for every member's active and immutable memtables and L0
+pins. The offline converter retains a separate MMDB 4.3.15 reader.
+[Adapter](../../core/src/common/engine/mmdb.rs) · [Workspace dependencies](../../Cargo.toml)
 
 ### Starting profiles for the v5 port
 
@@ -35,8 +30,7 @@ by a paired median of 5.60%. Its all-active p99 improvement of 35.17%
 was smaller than the 73.98% variation between control runs. Keep depth
 two with 10 MiB buffers as a workload-specific candidate. Measure actual
 collection arrival-to-ack p99, pool and process memory, and background
-work left at the end before selecting a VSDB configuration. The v4
-sizing policy below continues to describe the current adapter.
+work left at the end before selecting a VSDB configuration. The sizing formula below implements the v5 reference.
 [Engine measurements and reproduction](https://github.com/rust-util-collections/mmdb/blob/master/docs/benchmarks/engine-profile/results.md)
 
 ## Why share within an engine?
@@ -69,20 +63,18 @@ conversion saturates and the effective input is floored at 8 MiB.
 With effective input `B` bytes and `S` shards, integer division applies:
 
 ```text
-per_shard_cache = max(B / 8 / S, 4 MiB)
-engine_pool    = S * per_shard_cache
-
-legacy_write   = min(if B > 16 GiB { B / 4 / S } else { 1 GiB / S }, 512 MiB)
-write_buffer   = max(min(legacy_write, B / 8 / S), 4 MiB)
+capacity of each pool store = B / 8
+write_buffer_per_shard = clamp((B / 64) * 3 / S, 64 KiB, 512 MiB)
+max_immutable_memtables = 4
 ```
 
-MMDB 4.3.15 freezes and flushes a full memtable synchronously on the write leader.
-The write path can hold an active and a flushing table per shard. The configured
-`max_immutable_memtables = 4` does not create a queue of four more tables on
-this path. Where the `B / 8 / S` term determines the buffer size, simultaneous
-flushes across all shards can account for roughly `2B/8` of memtable capacity,
-alongside `B/8` for the evictable block cache. Floors and caps change these
-ratios at small and large budgets. [Write-buffer experiment](v18-roadmap.md#107-engine-write-buffer-sizing)
+One active and up to four undurable generations per shard give a nominal
+buffer allowance near 15B/64 across the namespace before floors, caps
+and individual batch overshoot. A full queue can block normal writers;
+a no-slowdown commit returns a typed Busy refusal. The previous v4-backed
+adapter sized each buffer from B/8/S and flushed synchronously. Its
+recorded workload remains available as historical context.
+[Earlier write-buffer experiment](v18-roadmap.md#107-engine-write-buffer-sizing)
 
 Each active B+ tree runtime can also cache immutable internal pages. Its page-byte
 budget is `clamp(B / 64, 64 KiB, 16 MiB)`, divided across eight cache shards.
@@ -95,23 +87,21 @@ need additional headroom. Moka capacity is weighted cached value size, not total
 allocator overhead. Increasing a budget can help a constrained workload, but
 does not guarantee higher throughput or lower latency.
 
-Pooling preserves the cache capacity derived by the former static split. The
-per-shard `block_cache_capacity` option remains a fallback; MMDB ignores it
-when an explicit shared pool is attached. Write buffers are still private to
-each shard and cannot borrow a sibling's unused allowance.
+Each pool store takes the same independent capacity. A small namespace can
+therefore have less cached capacity than the old 4 MiB per-shard floor.
+Write buffers remain private to each shard.
 
 ## MMDB pool mechanics
 
-The implemented injection point is `DbOptions::block_cache:
-Option<Arc<BlockCachePool>>`. There is no current `write_buffer_manager` field.
+The adapter supplies the shared pool using `DbOptions::with_block_cache`. There is no current `write_buffer_manager` field.
 VSDB constructs one pool in `MmDB::open_at` and passes it to all shard opens.
 
 - A member view assigns each DB a pool-unique member ID. Cache keys are
   `(member_id, sst_file_number, block_offset)`, so identical SST numbers in
   different shards cannot alias.
-- The evictable store is `moka::sync::SegmentedCache`, with up to 64 segments.
-  Smaller capacities use fewer segments to retain useful admission capacity;
-  a block still has to fit its hashed segment. It is not a global exact LRU.
+- The primary evictable store uses Moka segments. Smaller configurations
+  use fewer segments. A block too large for its hashed segment can enter
+  the separate overflow store within that store's configured capacity.
 - Pinned entries remain member-local, outside the evictable capacity. Their
   byte counters and locks are also local.
 - A 16-way reverse index maps `(member, file)` to cached offsets. Eviction
@@ -130,7 +120,10 @@ that would silently couple otherwise independent users of the dependency.
 ## Telemetry and measurement
 
 `Namespace::shard_properties(name)` returns one reading per shard, in shard
-order. Useful MMDB property names include:
+order. For byte estimates, `Namespace::memory_usage()` gives both pool
+charges once, their capacities, per-shard active and immutable bytes, and
+member-local pin payload. Caller-held read pins can extend beyond those
+observations. Useful MMDB property names include:
 
 | Property | Meaning under a shared pool |
 |----------|-----------------------------|

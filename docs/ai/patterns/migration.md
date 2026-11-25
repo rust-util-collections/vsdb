@@ -2,7 +2,7 @@
 
 [Offline converters](../../../migration/src) · [Migration tests and fixtures](../../../migration/tests) · [Upgrade guide](../../../migration/README.md)
 
-**Arch:** Standalone offline `v17 → v18` converter crate. Runtime `vsdb_core` and `vsdb` accept only v18 formats (`VSUNI018`, `VSENG018`, `VSNREG02`, `VSMAPX02`, `VSTYPE04`); all historical envelope/row decoders and resumable conversion journals live exclusively in `vsdb_migrate`.
+**Arch:** Standalone offline generation staging for v17/v4 and v18/v4, plus v17 collection converters. Check staged external paths, a complete ordered-row digest, writable geometry, source preservation and exclusive publication. Runtime `vsdb_core` and `vsdb` accept only v18 formats (`VSUNI018`, `VSENG018`, `VSNREG02`, `VSMAPX02`, `VSTYPE04`); all historical envelope/row decoders and resumable conversion journals live exclusively in `vsdb_migrate`.
 
 Evaluate offline conversion by recoverability, data integrity, and feasible time and
 memory use on real datasets. Keep legacy decoders, journals and migration-specific
@@ -40,3 +40,11 @@ need an independent runtime requirement.
 - [ ] Journals expose highest scratch/target prefix to ceiling recovery and verify checksums
 - [ ] `Namespace::open` used (no `default_ns()` panic); read-only rejected cleanly
 - [ ] Frozen v17 fixtures + interrupted subprocess/retry tests verify data and identity preservation
+
+
+For a physical cutover, keep all v4 operations inside the offline tool.
+Check the real SST-only key, residual WAL replacement/deletion, staged
+external namespace paths, allocator floor and writable v5 reopen.
+A failed sync after exclusive rename can leave a visible complete
+destination. The application selector stays on the protected source until
+durability is acknowledged. [Generation fixture](../../../migration/tests/staged_generation.rs)

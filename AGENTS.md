@@ -12,8 +12,8 @@ instructions.
 | Crate | Responsibility |
 | --- | --- |
 | [vsdb](strata/README.md) | Typed maps and values, persistent B+ trees, VerMap, Merkle tries, SlotDex, DagMap and VecDex |
-| [vsdb_core](core/README.md) | MMDB integration, universe and namespace lifecycle, prefix allocation, raw maps and single-prefix batches |
-| [vsdb_migrate](migration/README.md) | Offline v17 → v18 conversion, including saved and embedded handles, with frozen v17 fixtures |
+| [vsdb_core](core/README.md) | MMDB v5 integration, namespace memory, raw maps, prefix batches and co-located publication |
+| [vsdb_migrate](migration/README.md) | Offline v4-shard generation staging and v17 → v18 collection conversion, including saved and embedded handles |
 
 Start at the [v18 documentation index](docs/README.md) for public guides, design
 records and historical measurements. For a code change, the [subsystem

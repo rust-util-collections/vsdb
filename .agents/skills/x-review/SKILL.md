@@ -45,7 +45,7 @@ scope: report only defects still present at HEAD.
 1. Worktree baseline ([workflow-policy.md](../../../docs/ai/workflow-policy.md)).
 2. Changed files + full diff + callers/tests. `worktree` includes untracked.
    For `all`, build the tracked-file ledger using [full-repository coverage](../../../docs/ai/review-core.md#full-repository-coverage).
-3. Map via Subsystem Map; load guides.
+3. Map via Subsystem Map; load guides. For storage changes trace the v5 runtime and v4 offline reader separately, from physical shard selection through writable reopen.
 4. Mark generated/vendored/out-of-scope in the ledger — do not silent-drop.
 
 ### Phase 2 — Evidence

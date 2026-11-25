@@ -10,6 +10,8 @@ range or minimum compiler; see [the toolchain policy](docs/ai/compatibility-poli
 
 This major version introduces a distinct storage format. Stop v17 processes and convert existing universes with the independent `vsdb_migrate` library. Its converters preserve primary collection IDs. Applications supply the schema for embedded handles and retain the mapping for relocated DAG children. [Upgrade guide](migration/README.md)
 
+- The runtime uses MMDB v5. Native shard WAL fences, retryable nonblocking batches, typed cursor errors and per-namespace memory gauges are available. Existing v18 development stores on MMDB v4 require offline generation staging.
+- DagMap creates a child and registers its parent edge in one shard batch. VerMap can express dependent edits with one working-root publication through `edit_working`.
 - Universe and engine headers bind storage to a universe, namespace and shard count. A process-wide writer lock covers namespaces on separate volumes. The registry records the pending or established state of each namespace.
 - Typed maps gain borrowed key lookups, safe occupied/vacant entries, fallible value updates and immutable readers. Ordered integer keys use explicit widths. A mutable dereference marks a guarded value for persistence.
 - VerMap publishes working and history changes under one prefix. Its slotted B+ tree supports owned snapshots, checked recovery and batched edits. Trie roots use copy-on-write nodes and map-bound checkpoints.

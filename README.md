@@ -13,10 +13,11 @@ is MMDB, a Rust LSM tree whose bundled Zstd backend requires a C toolchain.
 VSDB guarantees correct behavior on 64-bit x86 (`x86_64`) and 64-bit Arm
 (`aarch64`). Other architectures carry no testing or correctness guarantee.
 
-**Upgrading from v17?** v18 uses a new storage format. Stop the processes using
-the universe and back it up. In the offline upgrade program, run
-`migrate_universe` first, then configure v18 and convert the saved and embedded
-handles before resuming application traffic. [Migration guide](migration/README.md)
+**Upgrading an existing store?** VSDB v18 now uses MMDB v5. With all
+processes stopped, stage a v17/v4 or v18/v4 universe with `vsdb-stage-v5`.
+Select the verified generation's `base` path. For v17 data, also convert
+saved and embedded collection handles before resuming writes. Fresh v18/v5
+universes can be created directly. [Migration guide](migration/README.md)
 
 ## Quick start
 

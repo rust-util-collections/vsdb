@@ -21,7 +21,7 @@ Read/write/delete/iter use owning engine’s `dbs.len()`, never hardcoded defaul
 Default one-time init; non-default re-check `OPEN_NAMESPACES` under `REGISTRY_LOCK`.
 
 ### 1.4 Cross-prefix atomicity
-Engine batches are single-prefix. SlotDex, VecDex and VerMap place each atomic mutation under one prefix. DagMap relies on co-location and recoverable ordering between node prefixes.
+Ordinary raw batches bind one map prefix. SlotDex, VecDex and VerMap publish on one prefix. DagMap inserts the parent edge, edge allocator and child metadata together through a checked two-prefix operation on one shard. Pruning retains its recoverable phases.
 
 ## 2. Rust `unsafe` and aliasing contracts
 

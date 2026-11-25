@@ -90,7 +90,7 @@ guides.
    - One subsystem and a small diff: review directly.
    - Otherwise: one read-only batch per Subsystem Map row (one owner per Rust
      file), plus explicit seam batches — `persistent_btree/{diff,merge,persist}.rs` ↔
-     `versioned/`, `core` engine/universe/namespace ↔ `strata` handles, and `core`/`strata` wire formats ↔ `migration/` (`vsdb_migrate`). Run batches
+     `versioned/`, `core` engine/universe/namespace ↔ `strata` handles, and `core`/`strata` wire formats ↔ `migration/` (v4 physical export, v5 writable reopen, and logical v17 handles). Run batches
      as parallel read-only subagents when available, else sequentially. Then
      run a cross-subsystem / `design-patterns.md` pass only for invariants no
      batch covered.

@@ -93,10 +93,12 @@ Check alias life, write exclusion, process-global env, allocator, lifecycle seri
 **Crash recovery.** Trace publication, synchronization and reopen across the
 affected rows. VerMap uses one prefix with retirement and staging anchors.
 SlotDex commits a batch of entries and tier counts together. VecDex can publish
-several mutation chunks during one call. DagMap orders changes to co-located
-node prefixes on one shard. The mapped guides describe each protocol and
+several mutation chunks during one call. DagMap child creation uses one
+checked two-prefix batch; prune/reparent still has ordered recovery phases. The mapped guides describe each protocol and
 its failure boundaries. For filesystem metadata, check the lock scope and the
-order of file sync, rename and directory sync.
+order of file sync, rename and directory sync. For a backend change, trace
+both the runtime v5 adapter and the offline v4 reader, including the
+[real SST and residual-WAL fixture](../../migration/tests/staged_generation.rs).
 
 **Compatibility:** `compatibility-policy.md`. Old data preserve/reject/migrate
 intentionally. A break needs explicit user acceptance before any major bump.

@@ -15,14 +15,14 @@ runs in a separate upgrade program. [Migrating from v17](../migration/README.md)
 | Open an existing dataset read-only | [Application operations](../strata/docs/read-only.md) · [Engine locking and recovery](../core/docs/read-only.md) |
 | Use branches, snapshots, merges and reference checkpoints | [Versioned storage](../strata/docs/versioned.md) |
 | Build an HNSW index or search a consistent view | [VecDex](../strata/docs/vecdex.md) |
-| Upgrade a v17 application and its data | [Public API changes](../CHANGELOG.md) · [Offline conversion procedure and supported handles](../migration/README.md) |
+| Upgrade v17 or a v18 development universe built on MMDB v4 | [Public API changes](../CHANGELOG.md) · [Offline conversion procedure and supported handles](../migration/README.md) |
 
 ## Storage design
 
 | Topic | What the document covers |
 | --- | --- |
 | [v18 roadmap](proposals/v18-roadmap.md) | Storage design by subsystem, the initial performance evaluation, and the status of follow-up work |
-| [Joint MMDB v5 and VSDB v18 proposal](https://github.com/rust-util-collections/mmdb/blob/master/docs/proposals/mmdb-v5-vsdb-v18-improvements.md) | Shard-local publication, graph reads, memory budgets and the upgrade sequence. The [MMDB execution record](https://github.com/rust-util-collections/mmdb/blob/master/docs/proposals/mmdb-v5-execution-plan.md) tracks engine implementation and tests ahead of the VSDB adapter port. Both documents are in `../mmdb/docs/proposals/` in sibling checkouts. |
+| [Joint MMDB v5 and VSDB v18 proposal](https://github.com/rust-util-collections/mmdb/blob/master/docs/proposals/mmdb-v5-vsdb-v18-improvements.md) | Shard-local publication, graph reads, memory budgets and the upgrade sequence. The [MMDB execution record](https://github.com/rust-util-collections/mmdb/blob/master/docs/proposals/mmdb-v5-execution-plan.md) records the engine decisions. The [VSDB port and verification](proposals/v18-mmdb-v5-execution.md) covers the actual adapter, collections and offline migration. Both documents are in `../mmdb/docs/proposals/` in sibling checkouts. |
 | [Namespaces](proposals/namespaces.md) | Placement, universe and engine identities, prefix allocation and recovery |
 | [Namespace close](proposals/ns-close.md) | Engine ownership, close refusal and in-process teardown |
 | [Memory sizing](proposals/shared-mem-pool.md) | Per-engine block cache, per-shard buffers, telemetry and proposed extensions |

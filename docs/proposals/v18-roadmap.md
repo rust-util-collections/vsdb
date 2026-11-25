@@ -127,6 +127,16 @@ This baseline wrote 1,500 batches of 40 KiB into one prefix. The dedicated names
 
 `8d15889` corrected the sizing rationale for MMDB 4.3. The write leader freezes and flushes a full memtable synchronously. Default and non-default engines still use the same per-shard sizing formula. Changing the default remains subject to a sustained ingest comparison across one and 16 shards over at least three buffer capacities. The original gate calls for p99 and maximum flush stalls, reopen latency, L0 file counts, cache counters and peak RSS under cgroup pressure. [Sizing and memory accounting](shared-mem-pool.md)
 
+### MMDB v5 integration
+
+The runtime uses the native WAL fence, prefixed writes, pinned decoding,
+checked snapshot reads and pool/member gauges. Co-located child creation
+submits one shard batch. The offline converter stages a complete v4
+universe and checks each converted shard through writable v5 reopen.
+A bounded VerMap working edit reads its own changes and publishes one
+working root. The global allocator retains its durable reservation rules.
+[Execution record](v18-mmdb-v5-execution.md) · [Upgrade procedure](../../migration/README.md)
+
 ### 10.8 Deferred designs
 
 The remaining proposals have different compatibility and measurement requirements.
@@ -137,9 +147,8 @@ The remaining proposals have different compatibility and measurement requirement
 | Shared-only references (Mode B+) | Store extra owners in memory and track newly allocated, unowned nodes separately. A sparse on-disk checkpoint or generation-bound `0x08` delta log needs a new format. Verify liveness on reopen, including shared blobs, and bound replay before adopting the format. |
 | Generation-based VecDex compaction | Proposed v19 layout: build into an inactive generation, switch the state row atomically, then delete the old generation's ranges. Recovery would need to find interrupted builds. v18 compaction publishes a single replacement batch. |
 | SlotDex paged tier hydration and cursor pagination | Measure tier-cache memory on large histories before introducing on-demand bucket reads. Cursor pagination would require a separate public query contract. |
-| VerMap sweeping and working transactions | Stream unreachable-object deletion if retaining all dead keys during recount becomes a memory bottleneck. A working transaction would group read-modify-write operations before one branch-head publication. |
+| VerMap sweeping and working transactions | Stream unreachable-object deletion if retaining all dead keys during recount becomes a memory bottleneck. `VerMap::edit_working` provides bounded dependent edits and one working-root publication. |
 | Disk-backed Merkle nodes | Measure retained tries that exceed the current in-memory COW representation before designing persistent node storage. |
-| MMDB v5 adapter port | The v5 engine now supplies a native WAL fence, pinned and bounded grouped reads, prefixed batch mutations and pool/member memory gauges. Adopting them in this v4-backed workspace requires the staged shard conversion and caller-level validation. Per-shard prefix reservations still require crash-safe allocator recovery. [MMDB implementation and evidence](https://github.com/rust-util-collections/mmdb/blob/master/docs/proposals/mmdb-v5-execution-plan.md) |
 | Broader memory pooling | Measure cache and write-buffer contention across engines before sharing their budgets. [Memory pool proposals](shared-mem-pool.md) |
 
 Changes to persistent formats follow the compatibility policy. The original roadmap records the proposed validation gates and candidate v19 layouts. [Compatibility policy](../ai/compatibility-policy.md) · [Deferred memory designs](shared-mem-pool.md) · [Historical specification](https://github.com/rust-util-collections/vsdb/blob/fba65bb8becf8f3aa3917b0d20ada5fedb6ed7d3/docs/proposals/v18-roadmap.md)

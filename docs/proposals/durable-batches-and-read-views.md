@@ -12,7 +12,7 @@ A batch publishes several edits to one collection together. A read view lets a c
 | `commit_sync()` | All edits become visible together after the shard WAL sync succeeds | A successful nonempty commit acknowledges synchronized WAL data |
 | `try_sync_wal()` on the map | Previously published edits can already be observed | Fences prior writes on the map's shard |
 
-The engine submits one MMDB write batch with the requested sync option. Colocated maps share the shard WAL, but a VSDB batch addresses one map prefix. An empty ordinary batch performs capability checks and is a no-op. A wiped batch includes a prefix deletion even when the caller adds no entries. [Raw batch implementation](../../core/src/basic/mapx_raw/mod.rs) · [MMDB integration](../../core/src/common/engine/mmdb.rs)
+The engine submits one MMDB write batch with the requested sync option. Colocated maps share the shard WAL, and ordinary raw batches address one map prefix. The two-map publication operation below validates both placements. An empty ordinary batch performs capability checks and is a no-op. A wiped batch includes a prefix deletion even when the caller adds no entries. [Raw batch implementation](../../core/src/basic/mapx_raw/mod.rs) · [MMDB integration](../../core/src/common/engine/mmdb.rs)
 
 A capability or preflight size rejection leaves the batch unapplied. An I/O error after the WAL write starts has an ambiguous recovery outcome. The caller must establish the outcome before repeating an operation that would have a second effect. The collection error retains the storage cause. [Error types](../../core/src/common/error.rs)
 
