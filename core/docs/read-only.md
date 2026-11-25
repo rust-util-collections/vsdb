@@ -4,6 +4,11 @@ Use `VsdbOptions::read_only` to query a v18 universe from an immutable
 filesystem snapshot or a read-only mount. One open mode covers the default
 namespace and every namespace restored by the process.
 
+A v18-on-v4 development universe needs offline physical conversion before
+opening with this runtime, including read-only use. The runtime preflights
+the v5 level count and eight-byte prefix of every existing anchored shard.
+A read-only MMDB open by itself adopts the stored geometry. [Upgrade guide](../../migration/README.md)
+
 ## Save a handle while writable
 
 `save_meta` stores the handle in its owning namespace. Keep the returned

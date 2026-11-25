@@ -38,6 +38,17 @@ on the same captured view, including after the writer changes the live index.
 
 **Entry downgrade on remove** · wire-tag drift (derive/reorder) · missing prune after bi-edge · compact torn write outside one wiped staged commit.
 
+## MMDB v5 query boundary
+
+Resolve each query against one read view. Validate vector dimensions, reverse
+key mappings, adjacency byte lengths and fallback-node key widths on the
+fallible path. Reaching the visit cap on the last admitted neighbor or on a
+component restart must stop further adjacency access. For a candidate read
+optimization compare complete ordered result keys, distance bits, callbacks
+and visit caps on exactly the same graph. Separate logical block acquisitions,
+distinct retained data allocations, process RSS and verified storage requests.
+[Query protocol and evidence](../../evaluations/v18-vecdex-v5/README.md)
+
 ## Checklist
 
 - [ ] Entry at global max_layer
