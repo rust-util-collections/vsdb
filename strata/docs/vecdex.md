@@ -46,8 +46,12 @@ queries. Cloning the mutable index deep-copies the graph into a fresh prefix.
 
 Vectors and queries must match the configured dimension and contain only
 finite components. `insert_batch` checks every vector before it writes the
-first chunk. Nonfinite components in existing vectors cause `compact()` to
-return `VsdbError::Corrupt` before replacing the graph.
+first chunk.
+
+Before replacing a graph, `compact()` checks vector dimensions and finiteness,
+the live count, and the correspondence between vectors and both key mappings.
+If an index is missing a reverse mapping, it returns `VsdbError::Corrupt` and
+preserves the previously readable vectors.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|

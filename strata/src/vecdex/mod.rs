@@ -851,7 +851,13 @@ where
         let mut txn =
             Txn::new(&self.store, GraphState::read(self.store.get(STATE_KEY))?);
         Self::stage_remove(&self.metric, &mut txn, &self.config, key);
-        Self::stage_insert(&self.metric, &mut txn, &self.config, key, vector)?;
+        Self::stage_insert(
+            &self.metric,
+            &mut txn,
+            &self.config,
+            key.encode_key(),
+            vector,
+        )?;
         let rows = txn.finish();
         rows.commit(&mut self.store)?;
         Ok(())
@@ -862,13 +868,12 @@ where
         metric: &D,
         txn: &mut Txn<'_, S>,
         config: &HnswConfig,
-        key: &K,
+        encoded_key: Vec<u8>,
         vector: &[S],
     ) -> Result<()> {
         let node_id = txn.state.next_node_id;
         let node_layer = random_layer(config.m);
 
-        let encoded_key = key.encode_key();
         txn.put_vec(node_id, vector);
         txn.rows
             .put(user_key(&encoded_key), node_id.to_le_bytes().to_vec());
@@ -928,7 +933,13 @@ where
             );
             for (key, vec) in chunk {
                 Self::stage_remove(&self.metric, &mut txn, &self.config, key);
-                Self::stage_insert(&self.metric, &mut txn, &self.config, key, vec)?;
+                Self::stage_insert(
+                    &self.metric,
+                    &mut txn,
+                    &self.config,
+                    key.encode_key(),
+                    vec,
+                )?;
             }
             let (rows, next_cache) = txn.finish_with_cache();
             rows.commit(&mut self.store)?;
@@ -1332,14 +1343,18 @@ where
     /// Useful after many deletions to restore graph quality and recall.
     /// Vectors are re-inserted in random order for better graph quality.
     ///
+    /// The rebuild checks vector rows and both key mappings against the captured
+    /// graph state before it stages a replacement. Malformed or incomplete
+    /// mappings leave the original rows intact.
+    ///
     /// The whole rebuild is staged through one wiped transaction: the
     /// range tombstone and every row of the new graph commit in a
     /// **single atomic engine write batch**, so a crash (or an error
     /// return) leaves either the old graph or the new one — never
     /// anything in between.  This is a cold maintenance API: materialized
-    /// `(K, Vec<S>)` pairs, staged graph rows, and the atomic engine batch
-    /// coexist in RAM before commit (roughly ~3× the serialized index size,
-    /// while the vector decode cache stays capped at 32 MiB). To rebuild a
+    /// keys and vectors are consumed as the replacement graph is built. Staged
+    /// graph rows and the engine write batch both need memory before commit,
+    /// alongside a decoded vector cache capped at 32 MiB. To rebuild a
     /// very large index under bounded memory, stream [`iter`](Self::iter) in
     /// chunks into [`insert_batch`](Self::insert_batch) on a fresh [`VecDex`]
     /// (new [`InstanceId`]) and atomically swap the application's persisted
@@ -1348,36 +1363,54 @@ where
         ensure_writable(&self.namespace(), "vector index compaction")?;
         use rand::seq::SliceRandom;
 
-        let view = self.read_view();
-        let mut pairs: Vec<(K, Vec<S>)> = view.iter().collect();
-        let cleared = GraphState::read(view.raw.get(STATE_KEY))?.cleared();
+        let view = self.store.read_view();
+        let state = GraphState::read(view.get(STATE_KEY))?;
+        let mut pairs = Vec::new();
+        let mut vectors = view.range(tag_bounds(TAG_VEC));
+        let mut canonical_key = Vec::new();
+        // Vector and reverse-map rows share the same big-endian node ID order.
+        for (reverse_key, key) in view.range(tag_bounds(TAG_NODE2KEY)) {
+            let id = u64::from_be_bytes(
+                reverse_key[1..]
+                    .try_into()
+                    .map_err(|_| corrupt("compact: invalid reverse mapping ID"))?,
+            );
+            let (vector_key, raw) = vectors
+                .next()
+                .ok_or_else(|| corrupt("compact: missing vector"))?;
+            if vector_key != node_key(TAG_VEC, id) || id >= state.next_node_id {
+                return Err(corrupt("compact: vector and reverse mapping disagree"));
+            }
+            if view.get(user_key(&key)).as_deref() != Some(&id.to_le_bytes()) {
+                return Err(corrupt("compact: forward and reverse mappings disagree"));
+            }
+            canonical_key.clear();
+            K::decode_key(&key)?.encode_key_into(&mut canonical_key)?;
+            if canonical_key != key {
+                return Err(corrupt("compact: noncanonical key"));
+            }
+            if raw.len() != self.config.dim * size_of::<S>() {
+                return Err(corrupt("compact: incorrect vector byte length"));
+            }
+            let vector = decode_vector::<S>(&raw);
+            if !vector.iter().all(|component| component.is_finite()) {
+                return Err(corrupt(
+                    "compact: stored vector contains nonfinite components",
+                ));
+            }
+            pairs.push((key, vector));
+        }
+        if vectors.next().is_some()
+            || pairs.len() as u64 != state.node_count
+            || view.range(tag_bounds(TAG_KEY2NODE)).count() != pairs.len()
+        {
+            return Err(corrupt("compact: inconsistent vector or mapping count"));
+        }
+        drop(vectors);
         drop(view);
-
         pairs.shuffle(&mut rand::rng());
 
-        // Defense-in-depth: impossible for vectors that passed insert
-        // validation, but `stage_insert` below performs no per-insert
-        // dimension check, so re-check before rebuilding. An error here
-        // (or anywhere before the commit) leaves the store untouched.
-        for (_, vec) in &pairs {
-            if !vec.iter().all(|component| component.is_finite()) {
-                return Err(VsdbError::Corrupt {
-                    detail: "compact: stored vector contains nonfinite components"
-                        .to_owned(),
-                });
-            }
-            if vec.len() != self.config.dim {
-                return Err(VsdbError::Corrupt {
-                    detail: format!(
-                        "compact: stored vector dimension {} != index dimension {}",
-                        vec.len(),
-                        self.config.dim
-                    ),
-                });
-            }
-        }
-
-        let mut txn = Txn::new(&self.store, cleared);
+        let mut txn = Txn::new(&self.store, state.cleared());
         txn.rows.wipe();
         txn.rows.put(
             META_KEY.to_vec(),
@@ -1385,8 +1418,8 @@ where
                 .get(META_KEY)
                 .ok_or_else(|| corrupt("missing VecDex schema"))?,
         );
-        for (key, vec) in &pairs {
-            Self::stage_insert(&self.metric, &mut txn, &self.config, key, vec)?;
+        for (key, vec) in pairs {
+            Self::stage_insert(&self.metric, &mut txn, &self.config, key, &vec)?;
         }
         let rows = txn.finish();
         rows.commit(&mut self.store)?;

@@ -190,7 +190,8 @@ fn replacement_is_staged_without_mutating_committed_state() {
 
     let mut txn = Txn::new(&idx.store, idx.state());
     assert!(VecDex::<u32, L2>::stage_remove(&L2, &mut txn, &cfg, &7));
-    VecDex::<u32, L2>::stage_insert(&L2, &mut txn, &cfg, &7, &[9.0, 9.0]).unwrap();
+    VecDex::<u32, L2>::stage_insert(&L2, &mut txn, &cfg, 7u32.encode_key(), &[9.0, 9.0])
+        .unwrap();
 
     assert_eq!(
         decode_node_id(
@@ -868,18 +869,11 @@ fn rejects_nonfinite_vectors_before_mutating_index() {
     assert_eq!(dynamic.search(&[1.0], 1).unwrap()[0].0, 2);
 
     let mut stored: VecDex<u32, InnerProduct> = VecDex::new(idx.config).unwrap();
-    let mut txn: Txn<'_, f32> = Txn::new(&stored.store, stored.state());
-    let node = 7;
-    let vector = [f32::NAN];
-    txn.put_vec(node, &vector);
-    txn.rows.put(
-        user_key(&KeyEnDe::encode_key(&7u32)),
-        node.to_le_bytes().to_vec(),
-    );
-    txn.rows
-        .put(node_key(TAG_NODE2KEY, node).to_vec(), encode_value(&7u32));
-    let rows = txn.finish();
-    rows.commit(&mut stored.store).unwrap();
+    stored.insert(&7, &[1.0]).unwrap();
+    let node = decode_node_id(&stored.store.get(user_key(&7u32.encode_key())).unwrap());
+    stored
+        .store
+        .insert(node_key(TAG_VEC, node), f32::NAN.to_le_bytes());
     assert!(matches!(stored.compact(), Err(VsdbError::Corrupt { .. })));
     assert!(stored.get(&7).unwrap()[0].is_nan());
 }
@@ -2287,4 +2281,43 @@ fn raw_filter_and_read_view_filters_skip_rejected_key_decodes() {
         idx.search_ef_with_raw_filter(&query, k, 48, |bytes| bytes.first() == Some(&3))
             .unwrap()
     );
+}
+
+#[test]
+fn compact_rejects_incomplete_mappings_without_wiping_data() {
+    for damage in [
+        "missing reverse",
+        "extra forward",
+        "swapped forward",
+        "bad vector",
+    ] {
+        let mut index = VecDexL2::<u32>::new(HnswConfig {
+            dim: 2,
+            ..Default::default()
+        })
+        .unwrap();
+        index.insert(&10, &[1., 2.]).unwrap();
+        index.insert(&11, &[3., 4.]).unwrap();
+        let key = user_key(&10u32.encode_key());
+        let id = decode_node_id(&index.store.get(&key).unwrap());
+        match damage {
+            "missing reverse" => index.store.remove(node_key(TAG_NODE2KEY, id)),
+            "extra forward" => index
+                .store
+                .insert(user_key(&12u32.encode_key()), id.to_le_bytes()),
+            "swapped forward" => index
+                .store
+                .insert(user_key(&11u32.encode_key()), id.to_le_bytes()),
+            _ => index.store.insert(node_key(TAG_VEC, id), [1]),
+        }
+        let before: Vec<_> = index.store.iter().collect();
+        assert!(
+            matches!(index.compact(), Err(VsdbError::Corrupt { .. })),
+            "{damage}"
+        );
+        assert_eq!(index.store.iter().collect::<Vec<_>>(), before);
+        if damage == "missing reverse" {
+            assert_eq!(index.get(&10), Some(vec![1., 2.]));
+        }
+    }
 }
