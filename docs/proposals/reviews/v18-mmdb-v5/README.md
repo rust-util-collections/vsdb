@@ -28,3 +28,18 @@ Read an assessment directly from this directory:
 ```sh
 python3 -c 'import gzip,json; print(json.load(gzip.open("plan.json.gz","rt"))["reports"]["grok"])'
 ```
+
+## Engine adapter
+
+At `b5f3153`, the new core's native write/read paths compiled and passed
+their focused tests. The concurrently developed migration port subsequently
+completed the workspace dependency transition in `6d594d5`.
+[All four adapter reports](adapter.json.gz) · [v4-capable migration crate](../../../../migration/Cargo.toml)
+
+| Observation | Verified disposition |
+|---|---|
+| Writable opening an early valid shard could recover it before rejecting a late incompatible shard; a read-only open adopts persisted geometry. | The adapter now inspects all existing v5 shard headers and CRCs before mutable recovery or initialization backfill. Ready and pending roots, wrong levels, wrong prefixes and untouched earlier files have dedicated tests. [Geometry preflight](../../../../core/src/common/engine/mmdb/geometry.rs) · [Reopen tests](../../../../core/tests/v5_adapter_test.rs) |
+| A late scan failure during fallible cloning could unwind and skip cleanup. | The clone uses checked lending steps, propagates the original storage error and cleans already-written chunks. The regression creates a source corruption after 4,096 destination rows have been written. [Clone tests](../../../../core/src/common/engine/clone_tests.rs) |
+| Ordinary live-map existence still copied the value. Facade error and telemetry types were missing. | The public live and captured views now use native existence checks. The top-level VSDB crate re-exports the documented types. Separate large-value measurements check allocations on each public route. [Adapter measurements](../../../evaluations/v18-adapter/README.md) |
+| A fence after an asynchronous write must cover rotation; both transient pressure paths must remain retryable. | A child writes across rotation, fences, and exits without closing. Reopen verifies the sealed and residual rows. A real three-file L0 and a parked immutable flush each return typed Busy without changes to WAL, sequence or rows; reconstructing the batch succeeds once after pressure clears. [Native pressure tests](../../../../core/src/common/engine/mmdb/v5_tests.rs) |
+| Scope of first-use allocation, grouped backing retention, named budget floors and root leases. | A raw map already allocates its prefix on first use, including a read; an untouched WAL fence has no assigned shard. Group size bounds slots; distinct block or arena backing can remain live for the visit. Default and named engine budgets retain their documented distinct input normalization. The working-session lease is released before root publication. [API guide](../../../../core/docs/api.md) · [Working-edit tests](../../../../strata/src/versioned/test.rs) |
