@@ -88,6 +88,11 @@ three built-in metrics. It could avoid rereading a vector revisited at a
 different level. All entries expired at the end of the query and custom
 metrics continued to receive every callback. The same 10%/A/A/four-of-five
 rule applies to this separate [prototype at the retained revision](distance-cache.patch).
+Its five matched pairs measured 254.14 µs versus 257.00 µs median run p99
+and a paired median gain of −0.48% (−1.49% to +0.57%, two favorable pairs,
+7.75% maximum A/A difference). It cut acquisitions from 309.56 to 302.26
+per query and did not reach the latency threshold. Keep the ordinary
+single-view scoring path. [Distance-cache comparison](results/distance-cache.csv)
 
 The targeted width-eight comparison uses a fresh set of seeds (361127–361131)
 and compares the candidate against the retained production scalar path, with

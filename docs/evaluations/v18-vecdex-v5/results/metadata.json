@@ -127,6 +127,14 @@
     "shipped": {
       "sha256": "b0b5a86468886263feda978177a596eec1b48bf9e692be12003eb3819ea1198b",
       "cargo_lock_sha256": "a803ec0647b5e696e47c9fb45675422eef912ba093db77da22e92abb8648ab4a"
+    },
+    "8-pins": {
+      "sha256": "b9c754e70213a97ef5af512c6f09e3ca2be53d52453970fd73bcf706d5117c3f",
+      "cargo_lock_sha256": "020375283d43a260ed6facaa533043f7d417b5dba82c24414f324062936e90c1"
+    },
+    "cached": {
+      "sha256": "83702568547136e80e2c63080ef055bd14ce36ccf9ff77a7e16124a08d65ac9a",
+      "cargo_lock_sha256": "a803ec0647b5e696e47c9fb45675422eef912ba093db77da22e92abb8648ab4a"
     }
   },
   "base_degree": {
@@ -141,10 +149,13 @@
     "1",
     "8",
     "32",
-    "shipped"
+    "shipped",
+    "cached"
   ],
   "pin_diagnostic_arms": [
     "1-pins",
+    "8-pins",
     "32-pins"
-  ]
+  ],
+  "distance_cache_patch_sha256": "e2c0a3eb39a9a1027ed7b682b3b67cf575b626a90857dd86642f264b35f29f63"
 }
