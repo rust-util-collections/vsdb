@@ -29,9 +29,11 @@ Under a tighter 30 MiB per-shard nominal write-buffer allowance, use
 four immutables at 6 MiB as the reference for an adapter trial. Two
 immutables at 10 MiB raised saturation throughput by 53.19% with one
 hot shard and by 9.33% with all shards active. In the one-hot saturation
-window it left 24 L0 files against 15 for the reference. The repeated
-foreground controls varied by more than the 5% latency margin. Keep the
-2 × 10 MiB choice as a workload-specific candidate. Measure actual
+window it left 24 L0 files against 15 for the reference. In a separate
+20,000-operation foreground repeat, its hot p99 rose in all five pairs,
+by a paired median of 5.60%. Its all-active p99 improvement of 35.17%
+was smaller than the 73.98% variation between control runs. Keep depth
+two with 10 MiB buffers as a workload-specific candidate. Measure actual
 collection arrival-to-ack p99, pool and process memory, and background
 work left at the end before selecting a VSDB configuration. The v4
 sizing policy below continues to describe the current adapter.
