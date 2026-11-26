@@ -5509,7 +5509,7 @@ fn working_read_detects_wrong_leaf_class_and_an_out_of_bounds_slot() {
         values: vec![LeafVal::Blob(blob)],
     }
     .encode();
-    for damaged in [invalid_slot, contradictory] {
+    for damaged in [vec![0x18, 0], invalid_slot, contradictory] {
         map.tree.nodes.insert(key, damaged);
         let result = map.edit_working(branch, 512, |edit| {
             edit.insert(&20, &vec![0])?;

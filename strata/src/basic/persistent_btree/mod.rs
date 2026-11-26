@@ -480,9 +480,11 @@ impl RootLease {
                         return decode(bytes).map(|v| Found::Value(Some(v)));
                     }
                     let page = NodeView::open(bytes)?;
-                    if page.validated_class()? != id & CLASS_MASK {
+                    // An empty committed tree is represented by EMPTY_ROOT.
+                    // Zero-slot pages may exist only while a removal is being built.
+                    if page.len == 0 || page.validated_class()? != id & CLASS_MASK {
                         return Err(VsdbError::Corrupt {
-                            detail: format!("incorrect tree page class for {id}"),
+                            detail: format!("invalid committed tree page {id}"),
                         });
                     }
                     let slot = page.lower_bound(key, !page.leaf);
