@@ -10,6 +10,15 @@ use std::collections::BTreeMap;
 /// Structural writers are serialized by the version store's alias contract.
 struct HistoryPublication<'a>(&'a TreeRuntime);
 
+pub(crate) enum FailedPublish {
+    Unpublished,
+    AmbiguousStaged {
+        staged: Vec<NodeId>,
+        start: u64,
+        end: u64,
+    },
+}
+
 impl<'a> HistoryPublication<'a> {
     fn begin(runtime: &'a TreeRuntime, target_generation: u64) -> Self {
         // If a reader observes the next writer's target, it must also
@@ -54,22 +63,25 @@ impl PersistentBTree {
             pending: HashMap::new(),
             pending_bytes: 0,
             stage: Some(Vec::new()),
+            staged_start: None,
         }
     }
 
-    pub(crate) fn abandon_pending(&mut self) {
-        self.pending.clear();
-        self.pending_bytes = 0;
-        self.stage.as_mut().expect("version store").clear();
+    pub(crate) fn begin_staged_build(&mut self) {
+        debug_assert!(self.pending.is_empty());
+        debug_assert!(self.stage.as_ref().is_some_and(Vec::is_empty));
+        self.staged_start = Some(self.next_id());
     }
 
-    pub(crate) fn abandon_staged(&mut self, start: u64) {
+    pub(crate) fn abandon_staged(&mut self) {
         self.pending.clear();
         self.pending_bytes = 0;
+        let start = self.staged_start.take();
         let staged = std::mem::take(self.stage.as_mut().expect("version store"));
         if staged.is_empty() {
             return;
         }
+        let start = start.expect("staged rows require a recorded build start");
         let end = self.next_id();
         let mut batch = self.nodes.batch();
         for &id in &staged {
@@ -92,28 +104,41 @@ impl PersistentBTree {
             }
         }
         if batch.commit().is_err() {
-            let mut deferred: Vec<Vec<u8>> = staged
-                .into_iter()
-                .map(|id| row(STAGE, id).to_vec())
-                .collect();
-            if start < end {
-                for class in [0, LEAF, BLOB_LEAF, BLOB] {
-                    let lo = object_key(class | start);
-                    let hi = object_key(class | end.saturating_sub(1).min(!CLASS_MASK));
-                    deferred.extend(
-                        self.nodes
-                            .range(lo.as_slice()..=hi.as_slice())
-                            .map(|(k, _)| k),
-                    );
+            self.defer_ambiguous_staged(staged, start, end, false);
+        }
+    }
+
+    pub(crate) fn defer_ambiguous_staged(
+        &self,
+        staged: Vec<NodeId>,
+        start: u64,
+        end: u64,
+        check_unowned: bool,
+    ) {
+        let mut refs = self.runtime.refs.lock();
+        let mut deferred: Vec<Vec<u8>> = staged
+            .into_iter()
+            .map(|id| row(STAGE, id).to_vec())
+            .collect();
+        if start < end && (!check_unowned || refs.ready) {
+            for class in [0, LEAF, BLOB_LEAF, BLOB] {
+                let lo = object_key(class | start);
+                let hi = object_key(class | end.saturating_sub(1).min(!CLASS_MASK));
+                if let Ok(mut cursor) =
+                    self.nodes.try_range(lo.as_slice()..=hi.as_slice())
+                {
+                    while let Ok(Some((k, _))) = cursor.try_step_next() {
+                        let unowned = !check_unowned
+                            || object_id(k)
+                                .is_none_or(|id| !refs.counts.contains_key(&id));
+                        if unowned {
+                            deferred.push(k.to_vec());
+                        }
+                    }
                 }
             }
-            self.runtime
-                .refs
-                .lock()
-                .deferred
-                .get_or_insert_with(Vec::new)
-                .extend(deferred);
         }
+        refs.deferred.get_or_insert_with(Vec::new).extend(deferred);
     }
 
     pub(crate) fn next_id(&self) -> u64 {
@@ -184,7 +209,7 @@ impl PersistentBTree {
         acquire: &[NodeId],
         retire: &[NodeId],
         sync_generation: Option<u64>,
-    ) -> Result<()> {
+    ) -> StdResult<(), (VsdbError, FailedPublish)> {
         let shared = Arc::strong_count(&self.runtime) > 1;
         for &id in acquire {
             self.acquire_node(id);
@@ -238,7 +263,9 @@ impl PersistentBTree {
         // retired-root markers. Their branch's committed head remains the same.
         let _publication = sync_generation
             .map(|generation| HistoryPublication::begin(&self.runtime, generation));
+        let mut submitted = false;
         let submit = || {
+            submitted = true;
             if sync_generation.is_some() {
                 batch.commit_sync()
             } else {
@@ -250,17 +277,48 @@ impl PersistentBTree {
             crate::versioned::test::before_tree_publication().and_then(|()| submit());
         #[cfg(not(test))]
         let result = submit();
+        if let Err(err) = result {
+            {
+                let mut refs = self.runtime.refs.lock();
+                refs.heads.clear();
+                refs.deferred
+                    .get_or_insert_with(Vec::new)
+                    .extend(dead.into_iter().take(previously_dead));
+            }
+            drop(_publication);
+            let ambiguous = submitted
+                && matches!(
+                    err,
+                    VsdbError::Storage {
+                        kind: vsdb_core::StorageErrorKind::Io,
+                        ..
+                    } | VsdbError::Io(_)
+                );
+            let cleanup = if ambiguous {
+                self.pending.clear();
+                self.pending_bytes = 0;
+                let start = self.staged_start.take();
+                let staged = std::mem::take(self.stage.as_mut().expect("version store"));
+                match start {
+                    Some(start) if !staged.is_empty() => {
+                        FailedPublish::AmbiguousStaged {
+                            staged,
+                            start,
+                            end: self.next_id(),
+                        }
+                    }
+                    _ => FailedPublish::Unpublished,
+                }
+            } else {
+                self.abandon_staged();
+                FailedPublish::Unpublished
+            };
+            return Err((err, cleanup));
+        }
         self.pending.clear();
         self.pending_bytes = 0;
+        self.staged_start = None;
         self.stage.as_mut().unwrap().clear();
-        if let Err(err) = result {
-            let mut refs = self.runtime.refs.lock();
-            refs.heads.clear();
-            refs.deferred
-                .get_or_insert_with(Vec::new)
-                .extend(dead.into_iter().take(previously_dead));
-            return Err(err);
-        }
 
         if shared || !head_updates.is_empty() {
             let mut refs = self.runtime.refs.lock();

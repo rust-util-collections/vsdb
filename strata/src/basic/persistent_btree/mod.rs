@@ -60,6 +60,7 @@ pub(crate) use nodes::{
 
 pub use types::{EMPTY_ROOT, NodeId};
 const STANDALONE_ALLOCATOR: [u8; 1] = [9];
+pub(crate) use persist::FailedPublish;
 pub(crate) use types::{InsertResult, NodeRef, RemoveResult};
 
 // =========================================================================
@@ -773,6 +774,7 @@ pub struct PersistentBTree {
     pending: HashMap<NodeId, Vec<u8>>,
     pending_bytes: usize,
     stage: Option<Vec<NodeId>>,
+    staged_start: Option<u64>,
 }
 
 impl Serialize for PersistentBTree {
@@ -838,6 +840,7 @@ impl<'de> Deserialize<'de> for PersistentBTree {
                     pending: HashMap::new(),
                     pending_bytes: 0,
                     stage: None,
+                    staged_start: None,
                 })
             },
         )
@@ -907,6 +910,7 @@ impl PersistentBTree {
             pending: HashMap::new(),
             pending_bytes: 0,
             stage: None,
+            staged_start: None,
         }
     }
 
@@ -1853,6 +1857,7 @@ impl PersistentBTree {
             pending: HashMap::new(),
             pending_bytes: 0,
             stage: None,
+            staged_start: None,
         })
     }
 }

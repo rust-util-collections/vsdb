@@ -11,7 +11,7 @@ use super::{BranchId, Commit, CommitId, NO_COMMIT, diff::DiffEntry};
 use crate::{
     MapxRaw,
     basic::persistent_btree::{
-        EMPTY_ROOT, NodeId, PersistentBTree, RootLease, TreeDiff,
+        EMPTY_ROOT, FailedPublish, NodeId, PersistentBTree, RootLease, TreeDiff,
     },
     common::{
         InstanceId, PrefixFrame,
@@ -307,6 +307,18 @@ impl<K, V> VerMap<K, V> {
         Commit::from_row(id, self.tree.nodes.get(row(COMMIT, id.raw())))
     }
 
+    pub(super) fn publish_edits(&mut self, edits: Edits, sync: bool) -> Result<()> {
+        let hdr = match Header::get(&self.tree.nodes) {
+            Ok(hdr) => hdr,
+            Err(err) => {
+                self.tree.abandon_staged();
+                let _ = self.restore_visible_refs();
+                return Err(err);
+            }
+        };
+        self.publish(hdr, edits, sync)
+    }
+
     pub(super) fn publish(
         &mut self,
         mut hdr: Header,
@@ -314,7 +326,7 @@ impl<K, V> VerMap<K, V> {
         sync: bool,
     ) -> Result<()> {
         let Some(generation) = hdr.generation.checked_add(1) else {
-            self.tree.abandon_pending();
+            self.tree.abandon_staged();
             self.restore_visible_refs()?;
             return Err(corrupt("version store generation exhausted"));
         };
@@ -323,17 +335,22 @@ impl<K, V> VerMap<K, V> {
         edits
             .rows
             .insert(HEADER.to_vec(), Some(hdr.bytes().to_vec()));
-        let result = self.tree.publish(
+        if let Err((err, cleanup)) = self.tree.publish(
             edits.rows,
             &edits.heads,
             &edits.acquire,
             &edits.retire,
             sync.then_some(generation),
-        );
-        if result.is_err() {
-            self.restore_visible_refs()?;
+        ) {
+            let restored = self.restore_visible_refs();
+            if let FailedPublish::AmbiguousStaged { staged, start, end } = cleanup {
+                self.tree
+                    .defer_ambiguous_staged(staged, start, end, restored.is_ok());
+            }
+            restored?;
+            return Err(err);
         }
-        result
+        Ok(())
     }
 
     fn restore_visible_refs(&self) -> Result<()> {
@@ -355,11 +372,11 @@ impl<K, V> VerMap<K, V> {
         build: impl FnOnce(&mut PersistentBTree) -> Result<NodeId>,
     ) -> Result<NodeId> {
         use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-        let start = self.tree.next_id();
+        self.tree.begin_staged_build();
         match catch_unwind(AssertUnwindSafe(|| build(&mut self.tree))) {
             Ok(Ok(root)) => Ok(root),
             result => {
-                self.tree.abandon_staged(start);
+                self.tree.abandon_staged();
                 self.restore_visible_refs()?;
                 match result {
                     Ok(result) => result,
@@ -749,7 +766,7 @@ where
                 ..state
             },
         );
-        self.publish(Header::get(&self.tree.nodes)?, edits, true)
+        self.publish_edits(edits, true)
     }
     /// Applies a group of working-state edits with one branch-root publication.
     /// A `Some` value inserts or replaces and `None` removes the key.
@@ -847,6 +864,7 @@ where
         root: NodeId,
     ) -> Result<()> {
         if state.dirty_root == root {
+            self.tree.abandon_staged();
             return Ok(());
         }
         let mut edits = Edits::default();
@@ -858,7 +876,7 @@ where
                 ..state
             },
         );
-        self.publish(Header::get(&self.tree.nodes)?, edits, false)
+        self.publish_edits(edits, false)
     }
 
     // =================================================================

@@ -5577,3 +5577,80 @@ fn failed_clone_in_wipes_copied_destination_prefix() {
     crate::Namespace::close_by_id(dst_id).unwrap();
     crate::Namespace::destroy(dst_id).unwrap();
 }
+
+#[test]
+fn rejected_final_publication_reclaims_spilled_stage_markers_and_blobs() {
+    let mut map = VerMap::<u32, Vec<u8>>::new();
+    let main = map.main_branch();
+    map.insert(main, &0, &vec![7]).unwrap();
+    let id = map.save_meta().unwrap();
+
+    // Case 1: final publication fails after >16 MiB of staged pages and blobs
+    // have already been flushed with [0x06] STAGE anchors.
+    PUBLICATION_HOOK.set(Some(Box::new(|| {
+        Err(VsdbError::Io(std::io::Error::other(
+            "injected final publish rejection",
+        )))
+    })));
+    assert!(matches!(
+        map.bulk_load(main, (1..=1_100).map(|k| (k, vec![5u8; 16_384]))),
+        Err(VsdbError::Io(_))
+    ));
+    assert_eq!(map.records(super::store::STAGE).count(), 0);
+    assert_eq!(map.records(0x12).count(), 0);
+    assert_eq!(map.records(0x10).count(), 1);
+    assert_eq!(map.get(main, &0).unwrap(), Some(vec![7]));
+
+    // Subsequent edit + flush() must neither strand objects nor leave anchors.
+    map.insert(main, &9_999, &vec![9]).unwrap();
+    map.flush().unwrap();
+    assert_eq!(map.records(super::store::STAGE).count(), 0);
+    assert_eq!(map.records(0x12).count(), 0);
+
+    // Case 2: generation overflow in VerMap::publish after staging spill.
+    let mut hdr = super::store::Header::get(&map.tree.nodes).unwrap();
+    let saved_gen = hdr.generation;
+    hdr.generation = u64::MAX;
+    map.tree.nodes.insert(super::store::HEADER, hdr.bytes());
+    assert!(matches!(
+        map.bulk_load(main, (1..=1_100).map(|k| (k, vec![6u8; 16_384]))),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert_eq!(map.records(super::store::STAGE).count(), 0);
+    assert_eq!(map.records(0x12).count(), 0);
+    hdr.generation = saved_gen;
+    hdr.next_id = map.tree.next_id();
+    map.tree.nodes.insert(super::store::HEADER, hdr.bytes());
+
+    // Case 3: ambiguous WAL I/O queuing defers unowned staged objects and
+    // STAGE markers until the next successful publication + flush().
+    let ambig_start = map.tree.next_id();
+    let blob_id = crate::basic::persistent_btree::BLOB | ambig_start;
+    let leaf_id = crate::basic::persistent_btree::BLOB_LEAF | (ambig_start + 1);
+    let mut hdr = super::store::Header::get(&map.tree.nodes).unwrap();
+    hdr.next_id = ambig_start + 2;
+    map.tree.nodes.insert(super::store::HEADER, hdr.bytes());
+    map.tree.nodes.insert(
+        crate::basic::persistent_btree::object_key(blob_id),
+        vec![0xab; 2048],
+    );
+    map.tree
+        .nodes
+        .insert(super::store::row(super::store::STAGE, leaf_id), []);
+    map.tree
+        .defer_ambiguous_staged(vec![leaf_id], ambig_start, ambig_start + 2, true);
+    assert_eq!(map.records(super::store::STAGE).count(), 1);
+    assert_eq!(map.records(0x12).count(), 1);
+    map.insert(main, &10_000, &vec![11]).unwrap();
+    map.flush().unwrap();
+    assert_eq!(map.records(super::store::STAGE).count(), 0);
+    assert_eq!(map.records(0x12).count(), 0);
+
+    map.close().unwrap();
+    let mut reopened = VerMap::<u32, Vec<u8>>::from_meta_verified(id).unwrap();
+    assert_eq!(reopened.get(main, &0).unwrap(), Some(vec![7]));
+    assert_eq!(reopened.get(main, &9_999).unwrap(), Some(vec![9]));
+    assert_eq!(reopened.get(main, &10_000).unwrap(), Some(vec![11]));
+    let stats = reopened.verify_and_gc().unwrap();
+    assert_eq!(stats.live_objects, 1);
+}
