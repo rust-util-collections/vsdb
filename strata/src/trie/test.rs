@@ -1747,8 +1747,7 @@ mod mpt_stack_tests {
                 // Clone both unhashed and hashed trees at the full supported depth.
                 let copy = trie.clone();
                 let root = trie.root_hash();
-                // Captured from v17.0.4 on a larger worker stack, before the
-                // traversal change. Root and cache bytes must remain compatible.
+                // The full-depth root was independently reproduced with v18.0.3.
                 assert_eq!(root, ROOT_FIXTURE);
                 assert_eq!(copy.root_hash(), root);
                 drop(copy);
@@ -1947,7 +1946,7 @@ mod dirty_sync_tests {
 }
 
 #[test]
-fn cryptographic_wire_matches_v17_goldens() {
+fn cryptographic_wire_matches_v18_goldens() {
     use super::{MptCalc, SmtCalc};
     let mut m = MptCalc::new();
     let mut s = SmtCalc::new();
@@ -1970,7 +1969,7 @@ fn cryptographic_wire_matches_v17_goldens() {
     }
     assert_eq!(
         postcard::to_allocvec(&(roots, proofs)).unwrap(),
-        include_bytes!("fixtures/v17-roots-proofs.postcard").as_slice()
+        include_bytes!("fixtures/v18-roots-proofs.postcard").as_slice()
     );
 }
 

@@ -86,9 +86,8 @@ One issue / root cause / behavior change → one commit.
   rm -rf "$scratch"
   git worktree remove --force "$wt"
   ```
-- Give independently built revisions separate Cargo target directories. The
-  v4 adapter, the selected v5 adapter and prototype patches may carry the same
-  VSDB package version. Record the executable digest when a comparison depends
+- Give independently built revisions separate Cargo target directories. Prototype patches may
+  carry the same VSDB package version. Record the executable digest when a comparison depends
   on which code was built. [B+ tree reproduction](../evaluations/v18-tree-v5/README.md)
 - Unique prefixes separate collections inside the open root. They do not keep
   tests off `$HOME/.vsdb`. The agent uses bare Cargo (`cargo test`,

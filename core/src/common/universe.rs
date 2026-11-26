@@ -86,8 +86,8 @@ pub(crate) fn active() -> Result<&'static Universe> {
     initialize(&vsdb_get_base_dir(), vsdb_open_mode())
 }
 
-/// Older engines check this file before opening their first shard. Early v18
-/// roots may lack it, so writable opens backfill it under the root lock.
+/// Validate the root format marker. A writable open fills in a missing marker
+/// under the root lock, including on early format-18 roots.
 pub(super) fn check_format_marker(root: &Path, writable: bool) -> Result<()> {
     let path = root.join("__SYSTEM__/format_version");
     match fs::read(&path) {

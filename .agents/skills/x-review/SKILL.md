@@ -47,8 +47,7 @@ scope: report only defects still present at HEAD.
    For `all`, build the tracked-file ledger using [full-repository coverage](../../../docs/ai/review-core.md#full-repository-coverage).
 3. Use the [subsystem map](../../../docs/ai/review-core.md#subsystem-map) to
    select the source and proof for the change. For example, a native shard
-   fence needs the write/rotation/reopen path, while a generation export
-   needs the v4 source, v5 destination and collection handles.
+   fence needs the write, rotation and reopen path.
 4. Mark generated/vendored/out-of-scope in the ledger — do not silent-drop.
 
 ### Phase 2 — Evidence

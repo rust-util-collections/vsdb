@@ -45,9 +45,8 @@ Run the [worktree preflight](../../../docs/ai/workflow-policy.md#1-preflight) an
 1. Map the unit to its [source, callers and proof](../../../docs/ai/review-core.md#subsystem-map).
    Read full changed functions and their failure paths.
 2. Check the affected invariants. A v5 adapter change can affect both raw
-   and typed callers. A change to shared shard format options can also affect
-   v4-to-v5 export. Include the applicable tests, public guide and migration
-   contract in the same unit.
+   and typed callers. Include the applicable tests, public guide and
+   on-disk contract in the same unit.
 3. Classify public/on-disk compatibility. Never hide a break in a patch; a break
    the user has not accepted stays uncommitted and Open.
 4. Try to refute each candidate via the FP guide.

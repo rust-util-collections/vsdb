@@ -7,7 +7,7 @@ Use with `docs/ai/workflow-policy.md` and `docs/ai/compatibility-policy.md`.
 
 Before first edit, record:
 
-- start `HEAD`, branch, and the four version locations (`core/Cargo.toml`, `strata/Cargo.toml`, `migration/Cargo.toml`, root `Cargo.toml` `vsdb_core` dep) at that `HEAD` and in the worktree;
+- start `HEAD`, branch, and the three version locations (`core/Cargo.toml`, `strata/Cargo.toml`, root `Cargo.toml` `vsdb_core` dep) at that `HEAD` and in the worktree;
 - staged / unstaged / untracked baseline;
 - **frozen owned paths** (sorted) and planned units;
 - whether a patch bump or release tag is already owed (below);
@@ -53,13 +53,10 @@ Keep the ledger across commits. Stage only freeze set + this-invocation fix/form
    | Core read views, fences, memory gauges or shard preflight | `cargo test -p vsdb_core --test v5_adapter_test`. The internal admission fixtures run with `cargo test -p vsdb_core --lib mmdb::v5_tests`. |
    | Co-located insert or child placement | `cargo test -p vsdb_core --test colocated` and the affected DagMap unit tests or `cargo test -p vsdb --test dagmap_namespace_test`. |
    | VerMap working edits or VecDex traversal/publication | Use `cargo test -p vsdb --lib <filter>` on the affected root, snapshot or staged mutation case. |
-   | v4 shard export and writable v5 reopen | `cargo test -p vsdb_migrate --test staged_generation` and `cargo test -p vsdb_migrate --test collections_generation`. For logical v17 changes, select the affected collection fixture. |
    | Other subsystem or cross-crate change | Select the relevant package suite or `cargo test --workspace --tests`. |
 
-   On MMDB dependency changes, inspect the normal dependency trees for `vsdb`
-   and `vsdb_migrate`. The runtime resolves v5. The offline tool resolves v5
-   and the separately aliased v4 reader. Compare against the workspace and
-   migration manifests. For edits to a standalone profile or its verifier,
+   On MMDB dependency changes, check the runtime version in the workspace manifest
+   against `cargo tree -p vsdb -e normal`. For edits to a standalone profile or its verifier,
    run its documented entry point from the [evaluation index](../evaluations/README.md);
    these programs have their own build or replay procedures.
 4. On fail: fix if unit-caused; else report pre-existing with evidence.
@@ -132,23 +129,23 @@ detectable. A later run with nothing else to commit still finishes it.
 Compatible only: current agreed `X.Y.Z` → `X.Y.(Z+1)`, once per owed release, from
 the current manifests. If the release commit already exists, verify it and
 complete the required tag.
-The four versions must agree (`migration/Cargo.toml`'s `vsdb` path dependency major version must also match). Divergence, or a lower version → report; do not overwrite.
+The three versions must agree. Divergence, or a lower version → report; do not overwrite.
 
 A public/on-disk break is not accepted by the agent. Do not ship that unit unless
 the user explicitly accepted it in this conversation; otherwise leave it
 uncommitted and Open. If they already accepted it, bump `(X+1).0.0` instead of
-the patch (including `migration/Cargo.toml`'s `vsdb` dependency), and put the migration in the behavior commits
+the patch, and document the upgrade in the behavior commits
 (`docs/ai/compatibility-policy.md`).
 
 Release commit `chore: bump version to X.Y.Z` updates exactly `core/Cargo.toml`,
-`strata/Cargo.toml`, `migration/Cargo.toml`, the root `vsdb_core` dep, and `CHANGELOG.md` when
+`strata/Cargo.toml`, the root `vsdb_core` dep, and `CHANGELOG.md` when
 `## [vX.Y.Z]` is missing at HEAD (an owned uncommitted draft is completed, not
 duplicated). Any of those files with unowned baseline edits → stop and report;
 never sweep them. The section summarizes user-visible changes in
 `git log "$base"..HEAD`, grouped under the `###` headings prior sections use
 (Fixed / Changed / Added / Breaking …); do not invent entries or duplicate an
 existing section. Then `cargo metadata --no-deps --format-version 1` must show
-all three workspace package versions (`vsdb_core`, `vsdb`, `vsdb_migrate`) and matching path dependencies. No empty commit. Do not
+both workspace package versions (`vsdb_core`, `vsdb`) and the matching path dependency. No empty commit. Do not
 force-add `Cargo.lock`.
 
 Check the intended tag name before making the release commit. If the name is

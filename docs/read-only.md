@@ -1,6 +1,6 @@
 # Open a VSDB universe read-only
 
-Use `VsdbOptions::read_only(path)` to query an existing v18/v5 universe.
+Use `VsdbOptions::read_only(path)` to query an existing VSDB universe.
 The setting applies to every namespace opened by the process. Configure it
 once, before opening a collection or requesting a VSDB directory.
 `vsdb_configure` leaves the process environment intact.
@@ -93,7 +93,7 @@ writable recovery step before a reader can open it.
 
 MMDB replays committed residual WAL records in memory. VSDB can also
 reconstruct a missing prefix allocator ceiling in memory. Neither operation
-changes the copy. For an interrupted v18 initialization, finish recovery on a
+changes the copy. For an interrupted initialization, finish recovery on a
 writable staging copy with the explicit namespace roots available there.
 An established engine whose identity header survives but whose ready marker
 and initializer are both absent reports `VsdbError::Corrupt` with the
@@ -105,7 +105,3 @@ VSDB preflights every existing anchored shard's v5 header for seven levels
 and an eight-byte prefix. VerMap can validate its reference graph in memory
 with `verify_and_gc()`. Restoring a branch-name index that needs writable
 repair returns `VsdbError::Corrupt`.
-
-For a v18/v4 universe, stage the physical conversion before opening the
-read-only snapshot. For v17/v4, also convert saved and application-embedded
-handles and validate them. [Offline migration](../migration/README.md)

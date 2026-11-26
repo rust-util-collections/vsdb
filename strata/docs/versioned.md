@@ -117,8 +117,6 @@ retains the current leaf page and reads selected values.
 Standalone `PersistentBTree` uses the same page and blob layouts. It stores
 its allocator ceiling at tag `09` alongside each allocation batch. Both the
 standalone and version-store handles carry a 36-byte `VSTYPE04` frame.
-Converting standalone trees from v17 requires all externally held roots and
-produces a mapping to their v18 IDs. [Migration guide](../../migration/README.md)
 
 ## Durability and recovery
 

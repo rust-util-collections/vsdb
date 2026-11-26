@@ -93,9 +93,7 @@ build files, skills and evidence using the full-repository coverage rules.
      subsystem map. Give each Rust file one owner. Trace each changed operation
      across the relevant boundary: a VerMap edit through its leased tree root
      and publication, a DagMap child through the checked two-prefix batch,
-     a VecDex mutation through staged adjacency and chunk commit, or a
-     generation cutover through the v4 source, v5 shard format and restored
-     collection. Run independent batches in parallel when available. Use the
+     or a VecDex mutation through staged adjacency and chunk commit. Run independent batches in parallel when available. Use the
      cross-subsystem design pass for remaining gaps.
    - `cargo fmt`/`check`/`clippy` run as commands by you, never inside review
      batches.
@@ -114,7 +112,7 @@ build files, skills and evidence using the full-repository coverage rules.
 3. **Dimensions** (only those that apply): correctness/invariants; interrupted
    writes, concurrency, and `unsafe` contracts; design shape when
    locks/resources/bounds/install/failure/API are involved; compatibility
-   ([runtime wire formats and historical decoders](../../../docs/ai/compatibility-policy.md#typed-handle-tags-and-wire-decoders));
+   ([runtime wire formats and typed-handle tags](../../../docs/ai/compatibility-policy.md#typed-handle-tags-and-wire-decoders));
    quantified hot-path cost; incomplete implementations (`review-core.md` §3).
 4. **Verify** every candidate yourself from the full implementation, callers,
    guards, and existing tests; refute via the FP guide; merge findings that
@@ -221,7 +219,7 @@ uncommitted and report it. Never revert unowned edits.
 ## Stop conditions
 
 - **Stop:** the same failure repeats with no progress; a release file
-  (`core/Cargo.toml`, `strata/Cargo.toml`, `migration/Cargo.toml`, root `Cargo.toml`, `CHANGELOG.md`)
+  (`core/Cargo.toml`, `strata/Cargo.toml`, root `Cargo.toml`, `CHANGELOG.md`)
   carries unowned baseline edits; a conflicting release tag exists.
 - **Continue:** a blocked item never stops independent items. Partial progress
   is a valid outcome — every commit is validated on its own.

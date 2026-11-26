@@ -21,7 +21,7 @@ merge replays sorted source deltas onto target via range-grouped `apply_leaf_run
 
 **V7 Recovery** — validate branch heads, commit ancestry, reachable root headers and the highest object ID in each class before reclamation. Only trust a checksummed checkpoint bound to the matching map and generation. Deep verification also walks reachable blobs and checks child heights, separators and occupancy.
 
-**V8 Handle** — current-format single-prefix metadata preserves instance identity. Offline conversion, including v17 wire structures, lives under `migration/`.
+**V8 Handle** — current-format single-prefix metadata preserves instance identity.
 
 **V9 Snapshot lifetime** — snapshot/iterator leases retain tree roots across alias
 mutation, rollback, branch deletion and recount. Snapshots and leases own their handles; derived iterators retain the lease after
@@ -66,7 +66,7 @@ publishing either row, so a reader lease cannot drop an otherwise unowned result
 - [ ] Publication/reclamation fences include construction, deep clone and restore
 - [ ] Publication and retired-root markers share the node prefix
 - [ ] No post-create commit mutate except `ref_count`
-- [ ] Typed frame and standalone migration fixture preserve identity (V8)
+- [ ] Restoring a typed frame preserves instance identity (V8)
 - [ ] Merge, rollback and historical lookups return the documented branch or commit errors. Writable `gc()` propagates verification errors from the reachable graph.
 - [ ] Merge shapes: same head → no-op; FF only into empty target; target-ancestor → 2-parent commit
 - [ ] Snapshot and iterator roots survive alias writes/GC/restore; final drop releases once

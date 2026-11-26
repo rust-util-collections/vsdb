@@ -23,7 +23,7 @@
 
 ### [LOW] engine: lazy-delete auto-sweep threshold stays disabled
 - **Where**: `core/src/common/engine/mmdb.rs` (`mmdb_open`), mmdb `DbOptions::lazy_delete_compaction_threshold`
-- **What**: The default threshold is zero, and VSDB v18 exposes no explicit compaction trigger (`Namespace::flush()` flushes memtables only). Registered keys are reclaimed during organic level compaction while the process remains open; a restart loses registrations for rows that compaction has yet to rewrite.
+- **What**: The default threshold is zero, and VSDB exposes no explicit compaction trigger (`Namespace::flush()` flushes memtables only). Registered keys are reclaimed during organic level compaction while the process remains open; a restart loses registrations for rows that compaction has yet to rewrite.
 - **Reason**: Enabling automatic sweeps rewrites populated levels and consumes I/O even on a store with no organic compaction debt. MMDB releases the DB mutex while building SSTs. Unreachable B+ tree pages do not affect reads and are dropped as subsequent writes trigger normal compaction. [MMDB sweep semantics](https://github.com/rust-util-collections/mmdb/blob/e61902fd5c89510a86e42414ae14bc2d54f0af0c/src/db.rs#L2545-L2569)
 
 ---

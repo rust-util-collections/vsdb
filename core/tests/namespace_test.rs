@@ -74,8 +74,7 @@ fn namespace_lifecycle() {
     let m1r: MapxRaw = postcard::from_bytes(&blob).unwrap();
     assert_eq!(m1r.namespace().id(), ns.id());
     assert_eq!(&m1r.get(b"k").unwrap()[..], b"ns");
-    // Default-ns meta stays byte-identical to the pre-v16 form (16 B
-    // inner meta ⇒ no ns suffix).
+    // The raw handle frame encodes namespace zero for the default namespace.
     let blob0 = postcard::to_allocvec(&m0).unwrap();
     let m0r: MapxRaw = postcard::from_bytes(&blob0).unwrap();
     assert_eq!(m0r.namespace().id(), DEFAULT_NS_ID);
@@ -86,7 +85,7 @@ fn namespace_lifecycle() {
     let m1m = MapxRaw::from_meta(id1).unwrap();
     assert_eq!(&m1m.get(b"k").unwrap()[..], b"ns");
     let id0 = m0.save_meta().unwrap();
-    // Bare u64 (pre-v16 style) is a complete default-ns address.
+    // A bare u64 is a complete default-ns address.
     let m0m = MapxRaw::from_meta(id0.map_id).unwrap();
     assert_eq!(&m0m.get(b"k").unwrap()[..], b"default");
     // InstanceId string round-trip.

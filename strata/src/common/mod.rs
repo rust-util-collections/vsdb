@@ -132,8 +132,7 @@ pub fn save_instance_meta(id: InstanceId, value: &impl Serialize) -> Result<()> 
 /// itself require the typed-handle magic or type tag. Those gates run
 /// when `T` is a collection handle (`from_meta` / `Deserialize`). A
 /// non-handle payload written by [`save_instance_meta`] is returned as
-/// postcard decodes it. Typed-handle restore rejects a legacy prefix
-/// payload; see `CHANGELOG.md`.
+/// postcard decodes it.
 pub fn load_instance_meta<T: DeserializeOwned>(id: InstanceId) -> Result<T> {
     let ns = Namespace::open(id.ns.unwrap_or(DEFAULT_NS_ID))?;
     load_meta_file(&ns.meta_path(id.map_id))

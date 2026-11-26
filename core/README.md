@@ -11,7 +11,7 @@ collections, indexes, tries and version history, see the [vsdb crate](../strata/
 
 ## Installation
 
-From an application using a local v18 checkout:
+From an application using a local checkout:
 
 ```bash
 cargo add vsdb_core --path /path/to/vsdb/core
@@ -39,7 +39,7 @@ co-located inserts can publish rows under two map prefixes in one batch.
 
 - [Raw map examples](docs/api.md) cover configuration, handle restoration, batch writes and snapshot reads. See [namespace administration](../docs/namespaces.md) for placement and relocation.
 - [Read-only mode](../docs/read-only.md) covers immutable snapshots, process locking and recovery.
-- [v17 to v18 migration](../migration/README.md) covers offline conversion of an existing universe and its handles.
+- [Upgrade an existing universe](../docs/README.md#upgrade-an-existing-universe) covers reopening native v18 data.
 
 ## License
 

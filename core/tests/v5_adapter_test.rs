@@ -279,7 +279,7 @@ fn acknowledged_native_fence_survives_kill_and_wrong_last_shard_leaves_source_in
     }
 
     // A partially initialized engine can already own complete shards. Check
-    // their format before a writable retry backfills the old downgrade marker.
+    // their format before a writable retry backfills the format marker.
     let system = root.join("__SYSTEM__");
     fs::rename(
         root.join("mmdb/__SYSTEM__/engine_header"),
