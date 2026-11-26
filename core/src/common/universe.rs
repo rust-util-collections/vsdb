@@ -196,6 +196,20 @@ pub(super) fn engine_bytes(id: u128, ns: u64, shards: usize) -> [u8; 36] {
     bytes[32..].copy_from_slice(&(shards as u32).to_le_bytes());
     bytes
 }
+// The caller has already established that this particular lifecycle record
+// is required. A genuinely absent pending initializer remains a separate
+// cold-start state in validate_ready_engine.
+fn require_engine_record(path: &Path, expected: &[u8], name: &str) -> Result<()> {
+    match fs::read(path) {
+        Ok(bytes) if bytes == expected => Ok(()),
+        Ok(_) => Err(corrupt(format!("invalid {name} at {}", path.display()))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Err(corrupt(format!("missing {name} at {}", path.display())))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
 pub(crate) fn verify_engine(
     root: &Path,
     id: u128,
@@ -203,9 +217,11 @@ pub(crate) fn verify_engine(
     shards: usize,
 ) -> Result<()> {
     check_identity(root, id, ns, shards)?;
-    if fs::read(root.join("__SYSTEM__/.shards_ready"))? != b"18" {
-        return Err(corrupt("invalid shard-ready marker"));
-    }
+    require_engine_record(
+        &root.join("__SYSTEM__/.shards_ready"),
+        b"18",
+        "shard-ready marker",
+    )?;
     engine::validate_completed_dataset(root, shards)
 }
 pub(super) fn check_identity(
@@ -214,14 +230,11 @@ pub(super) fn check_identity(
     ns: u64,
     shards: usize,
 ) -> Result<()> {
-    let expected = engine_bytes(id, ns, shards);
-    if fs::read(engine_header(root, ns))? != expected {
-        return Err(corrupt(format!(
-            "engine identity mismatch at {}",
-            root.display()
-        )));
-    }
-    Ok(())
+    require_engine_record(
+        &engine_header(root, ns),
+        &engine_bytes(id, ns, shards),
+        "engine identity",
+    )
 }
 /// Check a registry claim before opening or deleting this pending root.
 pub(super) fn validate_pending_root(
@@ -266,10 +279,7 @@ pub(super) fn validate_pending_root(
     Ok(())
 }
 fn check_initializer(path: &Path, id: u128, ns: u64, shards: usize) -> Result<()> {
-    if fs::read(path)? != engine_bytes(id, ns, shards) {
-        return Err(corrupt("engine initializer identity mismatch"));
-    }
-    Ok(())
+    require_engine_record(path, &engine_bytes(id, ns, shards), "engine initializer")
 }
 pub(super) fn validate_ready_engine(
     root: &Path,

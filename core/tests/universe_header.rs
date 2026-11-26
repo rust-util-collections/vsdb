@@ -301,3 +301,83 @@ fn empty_map_metadata_reports_allocator_errors_and_retries() {
     run();
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn required_engine_marker_loss_reports_corrupt_in_both_open_modes() {
+    const ROOT: &str = "VSDB_MARKER_CLASSIFICATION_ROOT";
+    const PHASE: &str = "VSDB_MARKER_CLASSIFICATION_PHASE";
+    if let Some(base) = std::env::var_os(ROOT) {
+        let phase = std::env::var(PHASE).unwrap();
+        let base = PathBuf::from(base);
+        if phase == "create" {
+            vsdb_configure(VsdbOptions::new(&base)).unwrap();
+            Namespace::open(0).unwrap();
+            assert_eq!(
+                Namespace::create_with(NamespaceOpts {
+                    shards: 1,
+                    ..Default::default()
+                })
+                .unwrap()
+                .id(),
+                1
+            );
+            vsdb_flush();
+            return;
+        }
+        let (mode, which) = phase.split_once('-').unwrap();
+        let options = if mode == "read" {
+            VsdbOptions::read_only(&base)
+        } else {
+            VsdbOptions::new(&base)
+        };
+        let id = u64::from(which == "named");
+        let result = vsdb_configure(options).and_then(|_| Namespace::open(id).map(drop));
+        let error = result.unwrap_err();
+        assert!(
+            matches!(error, VsdbError::Corrupt { .. }),
+            "{phase}: {error}"
+        );
+        assert!(error.to_string().contains("__SYSTEM__"), "{error}");
+        return;
+    }
+    let dir = std::env::temp_dir()
+        .join(format!("vsdb-required-markers-{}", rand::random::<u128>()));
+    let run = |phase: &str| {
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "required_engine_marker_loss_reports_corrupt_in_both_open_modes",
+            ])
+            .env(ROOT, &dir)
+            .env(PHASE, phase)
+            .output()
+            .unwrap();
+        assert!(
+            child.status.success(),
+            "{phase}: {} {}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+    };
+    run("create");
+    for (system, which) in [
+        (dir.join("__SYSTEM__"), "default"),
+        (
+            dir.join("__NAMESPACES__/0000000000000001/__SYSTEM__"),
+            "named",
+        ),
+    ] {
+        let ready = system.join(".shards_ready");
+        let init = system.join("__initializing__");
+        if init.exists() {
+            fs::remove_file(&init).unwrap();
+        }
+        fs::remove_file(&ready).unwrap();
+        for mode in ["read", "write"] {
+            run(&format!("{mode}-{which}"));
+            assert!(!ready.exists() && !init.exists());
+        }
+        fs::write(&ready, b"18").unwrap();
+    }
+    fs::remove_dir_all(dir).unwrap();
+}

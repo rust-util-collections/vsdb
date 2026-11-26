@@ -85,5 +85,11 @@ MMDB replays committed residual WAL records in memory. VSDB can also
 reconstruct a missing prefix allocator ceiling in memory. Neither operation
 changes the copy. For an interrupted v18 initialization, finish recovery on a
 writable staging copy with the explicit namespace roots available there.
+An established engine whose identity header survives but whose ready marker
+and initializer are both absent reports `VsdbError::Corrupt` with the
+required record's path. A matching initializer can allow writable
+initialization to resume. Once the ready marker is durable and its engine
+layout is valid, the initializer is optional.
+
 For v17 data, run the [offline v18 migration](../../migration/README.md)
 before taking the snapshot for readers.
