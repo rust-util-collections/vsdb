@@ -320,3 +320,70 @@ fn non_utf8_environment_paths_select_requested_directories() {
 
     fs::remove_dir_all(&scratch).unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn traverse_only_ancestor_does_not_block_durable_dir_creation() {
+    use std::os::unix::fs::PermissionsExt;
+
+    const CHILD_DB: &str = "VSDB_TRAVERSE_ONLY_ANCESTOR_DB";
+
+    if let Some(db) = env::var_os(CHILD_DB) {
+        let db = PathBuf::from(db);
+        vsdb_configure(VsdbOptions::new(&db)).unwrap();
+        let mut map = MapxRaw::new();
+        map.insert(b"k", b"v");
+        let id = map.save_meta().unwrap();
+        assert_eq!(
+            MapxRaw::from_meta(id).unwrap().get(b"k"),
+            Some(b"v".to_vec())
+        );
+        let ns = Namespace::create().unwrap();
+        let ns_id = ns.id();
+        let mut ns_map = MapxRaw::new_in(&ns);
+        ns_map.insert(b"nk", b"nv");
+        let ns_map_id = ns_map.save_meta().unwrap();
+        drop(ns_map);
+        ns.close().unwrap();
+        let reopened = MapxRaw::from_meta(ns_map_id).unwrap();
+        assert_eq!(reopened.get(b"nk"), Some(b"nv".to_vec()));
+        drop(reopened);
+        Namespace::close_by_id(ns_id).unwrap();
+        Namespace::destroy(ns_id).unwrap();
+        return;
+    }
+
+    let scratch =
+        env::temp_dir().join(format!("vsdb_traverse_only_{}", rand::random::<u128>()));
+    let restricted = scratch.join("restricted");
+    let user_home = restricted.join("user");
+    fs::create_dir_all(&user_home).unwrap();
+    fs::set_permissions(&restricted, fs::Permissions::from_mode(0o111)).unwrap();
+
+    // Skip only when running with elevated DAC bypass (e.g. root), where
+    // opening a 0o111 directory succeeds unconditionally.
+    if fs::File::open(&restricted).is_err() {
+        let db = user_home.join("vsdb_data");
+        for attempt in 0..2 {
+            let out = Command::new(env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "traverse_only_ancestor_does_not_block_durable_dir_creation",
+                    "--nocapture",
+                ])
+                .env(CHILD_DB, &db)
+                .env_remove("VSDB_BASE_DIR")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "attempt {attempt} under traverse-only ancestor failed:\n{}\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr),
+            );
+        }
+    }
+
+    fs::set_permissions(&restricted, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::remove_dir_all(&scratch).unwrap();
+}

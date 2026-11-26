@@ -124,9 +124,12 @@ static TMP_WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
 /// Creates a directory tree and synchronizes its directory entries.
 ///
 /// Used by metadata and engine initialization across the two VSDB crates.
-/// Synchronize existing ancestors too: another caller or an earlier failed
-/// attempt may have created them without completing their durability fence.
-/// Read-only mode returns an error before touching the filesystem.
+/// Synchronize existing ancestors on the same filesystem too: another caller
+/// or an earlier failed attempt may have created them without completing their
+/// durability fence. Ancestors strictly above the deepest pre-existing
+/// directory stop at mount boundaries, traverse-only (`0o111`/`0o711`)
+/// parents, and read-only parent mounts. Read-only mode returns an error
+/// before touching the filesystem.
 #[doc(hidden)]
 pub fn create_dir_all_durable(path: &Path) -> Result<()> {
     if vsdb_is_read_only() {
@@ -134,14 +137,63 @@ pub fn create_dir_all_durable(path: &Path) -> Result<()> {
             operation: "directory creation",
         });
     }
-    fs::create_dir_all(path)?;
-    for ancestor in path.ancestors() {
-        let ancestor = if ancestor.as_os_str().is_empty() {
+    fn normalize_dir(p: &Path) -> &Path {
+        if p.as_os_str().is_empty() {
             Path::new(".")
         } else {
-            ancestor
+            p
+        }
+    }
+    let target = normalize_dir(path);
+    let first_existing = target
+        .ancestors()
+        .map(normalize_dir)
+        .find(|ancestor| fs::symlink_metadata(ancestor).is_ok());
+    fs::create_dir_all(path)?;
+    #[cfg(unix)]
+    let target_dev = {
+        use std::os::unix::fs::MetadataExt;
+        fs::symlink_metadata(target)?.dev()
+    };
+    let mut passed_first_existing = false;
+    for raw_ancestor in target.ancestors() {
+        let ancestor = normalize_dir(raw_ancestor);
+        if !passed_first_existing {
+            fs::File::open(ancestor)?.sync_all()?;
+            if Some(ancestor) == first_existing {
+                passed_first_existing = true;
+            }
+            continue;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            match fs::symlink_metadata(ancestor) {
+                Ok(meta) if meta.dev() != target_dev => break,
+                Ok(_) => {}
+                Err(e) if e.kind() == io::ErrorKind::PermissionDenied => break,
+                Err(e) => return Err(e.into()),
+            }
+        }
+        let dir = match fs::File::open(ancestor) {
+            Ok(dir) => dir,
+            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => break,
+            Err(e) => return Err(e.into()),
         };
-        fs::File::open(ancestor)?.sync_all()?;
+        match dir.sync_all() {
+            Ok(()) => {}
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::PermissionDenied
+                        | io::ErrorKind::InvalidInput
+                        | io::ErrorKind::ReadOnlyFilesystem
+                ) =>
+            {
+                break;
+            }
+            Err(e) => return Err(e.into()),
+        }
     }
     Ok(())
 }
