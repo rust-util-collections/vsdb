@@ -2834,3 +2834,52 @@ fn failed_clone_in_wipes_copied_destination_prefix() {
     crate::Namespace::close_by_id(dst_id).unwrap();
     crate::Namespace::destroy(dst_id).unwrap();
 }
+
+#[test]
+fn remove_rejects_missing_node_rows_and_inconsistent_zero_count_entry_point() {
+    let mut idx = VecDex::<u64, L2>::new(HnswConfig {
+        dim: 2,
+        ..Default::default()
+    })
+    .unwrap();
+    idx.insert(&1, &[1.0, 0.0]).unwrap();
+    idx.insert(&2, &[0.0, 1.0]).unwrap();
+
+    // Case 1: missing TAG_INFO on target node must return Corrupt instead of
+    // silently falling back to global max_layer and mutating STATE_KEY.
+    let raw_id1 = idx.store.get(user_key(&1u64.encode_key())).unwrap();
+    let id1 = decode_node_id(&raw_id1).unwrap();
+    let info_key1 = node_key(TAG_INFO, id1);
+    let saved_info1 = idx.store.get(info_key1).unwrap();
+    idx.store.remove(info_key1);
+    assert!(matches!(idx.remove(&1), Err(VsdbError::Corrupt { .. })));
+    assert_eq!(idx.len(), 2);
+    idx.store.insert(info_key1, saved_info1);
+
+    // Case 2: missing or malformed TAG_VEC on target node must return Corrupt.
+    let vec_key1 = node_key(TAG_VEC, id1);
+    let saved_vec1 = idx.store.get(vec_key1).unwrap();
+    idx.store.remove(vec_key1);
+    assert!(matches!(idx.remove(&1), Err(VsdbError::Corrupt { .. })));
+    assert_eq!(idx.len(), 2);
+    idx.store.insert(vec_key1, saved_vec1);
+
+    // Case 3: if STATE_KEY undercounted live nodes (node_count == 1 while both
+    // nodes 1 and 2 exist and entry_point is node 2), removing node 1 drops
+    // node_count to 0 while entry_point != removed; must detect corruption
+    // before committing an illegal (node_count = 0, entry_point = Some) state.
+    let raw_id2 = idx.store.get(user_key(&2u64.encode_key())).unwrap();
+    let id2 = decode_node_id(&raw_id2).unwrap();
+    let saved_state = idx.store.get(STATE_KEY).unwrap();
+    let mut bad_state = GraphState::read(Some(saved_state.clone())).unwrap();
+    bad_state.node_count = 1;
+    bad_state.entry_point = Some(id2);
+    idx.store.insert(STATE_KEY, bad_state.encode());
+    assert!(matches!(idx.remove(&1), Err(VsdbError::Corrupt { .. })));
+    // STATE_KEY was not overwritten with an unreadable (0, Some(id2)) row.
+    assert!(GraphState::read(idx.store.get(STATE_KEY)).is_ok());
+
+    idx.store.insert(STATE_KEY, saved_state);
+    assert!(idx.remove(&1).unwrap());
+    assert_eq!(idx.len(), 1);
+}

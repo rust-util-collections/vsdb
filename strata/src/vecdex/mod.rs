@@ -1318,12 +1318,16 @@ where
         {
             return Err(corrupt("VecDex forward and reverse mappings disagree"));
         }
-        let max_layer = txn
+        if txn.read_vec(node_id)?.is_none() {
+            return Err(corrupt("missing VecDex vector for live node"));
+        }
+        let raw_info = txn
             .get(&node_key(TAG_INFO, node_id))
-            .as_deref()
-            .map(decode_layer)
-            .transpose()?
-            .unwrap_or(txn.state.max_layer);
+            .ok_or_else(|| corrupt("missing VecDex node info"))?;
+        let max_layer = decode_layer(&raw_info)?;
+        if max_layer > txn.state.max_layer {
+            return Err(corrupt("VecDex node layer exceeds graph maximum"));
+        }
 
         // Phase 1: Remove edges and collect former neighbors per layer.
         let mut former_neighbors: Vec<Vec<u64>> =
@@ -1386,7 +1390,11 @@ where
         txn.rows.del(node_key(TAG_NODE2KEY, node_id).to_vec());
         txn.rows.del(node_key(TAG_INFO, node_id).to_vec());
 
-        txn.state.node_count = txn.state.node_count.saturating_sub(1);
+        txn.state.node_count = txn
+            .state
+            .node_count
+            .checked_sub(1)
+            .ok_or_else(|| corrupt("inconsistent VecDex node count"))?;
 
         if Self::entry_point_needs_repair(txn, node_id)? {
             Self::repair_entry_point(metric, txn, config)?;
@@ -1401,6 +1409,9 @@ where
     /// maximum. Only a lost, missing/mismatched, or base-disconnected entry
     /// point requires the full scan in [`Self::repair_entry_point`].
     fn entry_point_needs_repair(txn: &Txn<'_, S>, removed: u64) -> Result<bool> {
+        if txn.state.node_count == 0 {
+            return Ok(true);
+        }
         let Some(entry) = txn.state.entry_point else {
             return Ok(true);
         };
