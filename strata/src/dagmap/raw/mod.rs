@@ -63,7 +63,9 @@ impl State {
 // What a prune entering at a live node finds among its owned descendants.
 enum BelowHead {
     Clean,
-    Marked,
+    // The deepest marked descendant on its line: an earlier release marked
+    // that line only in part.
+    Marked(DagMapRaw),
     // A descendant whose line was folded and whose children were reparented
     // by an earlier release before any marker was written.
     Interrupted(DagMapRaw),
@@ -635,9 +637,13 @@ impl DagMapRaw {
         }
         Ok(())
     }
-    // One co-located batch publishes the folded rows, the head's surviving
-    // children and a clearing marker on every mainline node, so no folded
-    // node stays live. Non-live head children are finished beforehand.
+    // One co-located batch publishes the folded rows, the surviving children
+    // and a clearing marker on every mainline node, so no folded node stays
+    // live. A fresh prune has already removed the ancestors' side branches,
+    // so only the head has children to keep. When finishing a line that an
+    // earlier release marked only in part, children created under its
+    // unmarked nodes since then are kept as well. Non-live children are
+    // finished beforehand.
     fn fold_and_mark(line: &mut [Self], root: &mut Self) -> Result<()> {
         let genesis = root.id();
         let mut root_rows = BTreeMap::new();
@@ -655,37 +661,43 @@ impl DagMapRaw {
             .collect();
         let mut root_meta = root.meta()?;
         let first_edge = root_meta.next_edge_id;
+        let members: HashSet<_> = line.iter().map(Self::id).collect();
         let mut survivors = Vec::new();
         let mut survivor_meta = Vec::new();
-        for (e, id) in line[0].try_links()? {
-            let Some(mut child) = line[0].try_owned(e, id)? else {
-                continue;
-            };
-            let mut meta = child.meta()?;
-            if !meta.state.live() {
-                if !matches!(meta.state, State::Clearing { genesis: g, .. } if g == genesis)
-                {
-                    child.destroy_subtree()?;
+        for node in line.iter() {
+            for (e, id) in node.try_links()? {
+                if members.contains(&id) {
+                    continue;
                 }
-                continue;
+                let Some(mut child) = node.try_owned(e, id)? else {
+                    continue;
+                };
+                let mut meta = child.meta()?;
+                if !meta.state.live() {
+                    if !matches!(meta.state, State::Clearing { genesis: g, .. } if g == genesis)
+                    {
+                        child.destroy_subtree()?;
+                    }
+                    continue;
+                }
+                let edge = match registered.get(&id) {
+                    Some(&edge) => edge,
+                    None => {
+                        let edge = root_meta.next_edge_id;
+                        root_meta.next_edge_id = edge
+                            .checked_add(1)
+                            .ok_or_else(|| corrupt("DAG edge id exhausted"))?;
+                        root_rows.insert(
+                            edge_key(edge).to_vec(),
+                            Some(id.to_le_bytes().to_vec()),
+                        );
+                        edge
+                    }
+                };
+                meta.state = State::Child(Parent { map: genesis, edge });
+                survivors.push(child);
+                survivor_meta.push(meta.bytes());
             }
-            let edge = match registered.get(&id) {
-                Some(&edge) => edge,
-                None => {
-                    let edge = root_meta.next_edge_id;
-                    root_meta.next_edge_id = edge
-                        .checked_add(1)
-                        .ok_or_else(|| corrupt("DAG edge id exhausted"))?;
-                    root_rows.insert(
-                        edge_key(edge).to_vec(),
-                        Some(id.to_le_bytes().to_vec()),
-                    );
-                    edge
-                }
-            };
-            meta.state = State::Child(Parent { map: genesis, edge });
-            survivors.push(child);
-            survivor_meta.push(meta.bytes());
         }
         if root_meta.next_edge_id != first_edge {
             root_rows.insert(META.to_vec(), Some(root_meta.bytes()));
@@ -787,6 +799,14 @@ impl DagMapRaw {
         }
         Ok(())
     }
+    fn any_live(line: &[Self]) -> Result<bool> {
+        for node in line {
+            if node.meta()?.state.live() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
     // Whether `id`, reached through one of this node's discovery edges, is
     // now a live child of the root.
     fn reparented_to(&self, id: u64, genesis: u64) -> Result<bool> {
@@ -799,31 +819,25 @@ impl DagMapRaw {
             Err(_) => Ok(false),
         }
     }
-    // Keeps every owned descendant that is marked or has a marked
-    // descendant, children before their parents. The walk uses an explicit
-    // stack because a head can own an arbitrarily deep chain.
-    fn collect_marked_below_head(
-        line: &mut Vec<Self>,
-        genesis: u64,
-    ) -> Result<BelowHead> {
+    // Looks below a live prune entry for the state an interrupted prune by
+    // an earlier release left: a marked descendant, or a live descendant
+    // whose children were already moved to the root. The walk uses an
+    // explicit stack because a head can own an arbitrarily deep chain.
+    fn inspect_below_head(line: &[Self], genesis: u64) -> Result<BelowHead> {
         struct Frame {
             // `None` stands for the head, which stays in `line`.
             node: Option<DagMapRaw>,
             links: std::vec::IntoIter<(u64, u64)>,
             live: bool,
             marked: bool,
-            below: bool,
         }
 
         let mut seen: HashSet<_> = line.iter().map(Self::id).collect();
-        let mut extra = Vec::new();
-        let mut found = false;
         let mut stack = vec![Frame {
             node: None,
             links: line[0].try_links()?.into_iter(),
             live: true,
             marked: false,
-            below: false,
         }];
         while let Some(frame) = stack.last_mut() {
             if let Some((edge, id)) = frame.links.next() {
@@ -855,31 +869,21 @@ impl DagMapRaw {
                     links,
                     live: state.live(),
                     marked,
-                    below: false,
                 });
                 continue;
             }
-            let Frame {
-                node,
-                marked,
-                below,
+            // Children leave the stack before their parents, so the first
+            // marked node found is the deepest one on its line.
+            if let Frame {
+                node: Some(node),
+                marked: true,
                 ..
-            } = stack.pop().expect("nonempty walk stack");
-            match (node, stack.last_mut()) {
-                (Some(node), Some(parent)) if marked || below => {
-                    extra.push(node);
-                    parent.below = true;
-                }
-                (None, _) => found = below,
-                _ => {}
+            } = stack.pop().expect("nonempty walk stack")
+            {
+                return Ok(BelowHead::Marked(node));
             }
         }
-        line.extend(extra);
-        Ok(if found {
-            BelowHead::Marked
-        } else {
-            BelowHead::Clean
-        })
+        Ok(BelowHead::Clean)
     }
     fn clear_line(line: &mut [Self], root: &mut Self) -> Result<()> {
         for node in line.iter_mut() {
@@ -925,15 +929,14 @@ impl DagMapRaw {
         let (mut line, mut root) = self.mainline()?;
         if !line.is_empty() {
             let head_live = line[0].meta()?.state.live();
-            let below = if head_live {
-                Self::collect_marked_below_head(&mut line, root.id())?
-            } else {
-                BelowHead::Clean
-            };
-            if let BelowHead::Interrupted(head) = below {
-                return head.prune();
-            }
-            if head_live && matches!(below, BelowHead::Clean) {
+            if head_live {
+                match Self::inspect_below_head(&line, root.id())? {
+                    // Finish the interrupted line from its own head.
+                    BelowHead::Marked(head) | BelowHead::Interrupted(head) => {
+                        return head.prune();
+                    }
+                    BelowHead::Clean => {}
+                }
                 let (head, ancestors) = line.split_first_mut().unwrap();
                 let head_links = head.try_links()?;
                 let protected: HashSet<_> = std::iter::once(head.id())
@@ -950,6 +953,11 @@ impl DagMapRaw {
                         node.remove_branch(e, id)?;
                     }
                 }
+                Self::fold_and_mark(&mut line, &mut root)?;
+            } else if Self::any_live(&line)? {
+                // An earlier release marked only part of this line, so no
+                // row has been wiped yet. Fold it again to keep edits and
+                // children added to its unmarked nodes since then.
                 Self::fold_and_mark(&mut line, &mut root)?;
             }
             Self::collect_marked(&mut line, &root)?;

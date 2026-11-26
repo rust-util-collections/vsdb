@@ -11,16 +11,6 @@
 
 ## Open
 
-### [MEDIUM] dagmap: partial prunes left by earlier releases can still lose later edits
-- **Where**: `strata/src/dagmap/raw/mod.rs` (`prune`, `collect_marked_below_head`, `mark`)
-- **What**: Releases before the single-batch prune publication wrote the fold, each reparented child and each clearing marker in separate batches, so a crash could stop between them. Two such on-disk states still lose data:
-  - An earlier release marked the head but not every ancestor. The unmarked ancestor still accepts `insert` and new children. A retry from the head, or a prune entering at that ancestor, marks and wipes it without re-folding, so the later edit is lost and the later child loses its parent.
-  - An earlier release folded the line without marking it, and the head had no live children to reparent. Nothing reveals the interrupted prune, so a prune entering at an ancestor re-folds that ancestor's stale rows over the root.
-- **Why**: Both cases lose data or leave a merged root that no complete prune produces, after a crash under an earlier release followed by these operations. New prunes publish every marker together with the fold, so they cannot create either state. Retrying on the original head before editing its ancestors recovers both.
-- **Suggested fix**: When a resumed line still contains a live node, nothing has been wiped yet. Re-fold the line, and reparent live children created under its nodes, in the same co-located batch as the remaining markers. The unmarked fold without children leaves no on-disk evidence, so document the retry requirement or move it to Won't Fix. Regression tests: rebuild each legacy state with the test-only `fold`, `reparent` and `mark` helpers.
-
----
-
 ### [MEDIUM] dagmap: get reports unreadable node metadata as an absent key
 - **Where**: `strata/src/dagmap/raw/mod.rs` (`get`, `child_id`)
 - **What**: `get` maps any error from its own `meta()` or from a parent's `open_with_meta` to `None` with `.ok()?`. That includes `VsdbError::Storage` and `Io` from a failed metadata block read, while edge and data reads in the same loop panic. `child_id` does the same.
@@ -137,6 +127,13 @@
 - **Suggested fix**: Name `SlotType::tier_stride` and `floor_align` instead.
 
 ## Won't Fix
+
+### [MEDIUM] dagmap: an unmarked fold left by earlier releases without children is undetectable
+- **Where**: `strata/src/dagmap/raw/mod.rs` (`prune`, `inspect_below_head`)
+- **What**: Releases before the single-batch prune publication could stop after folding a line into the root and before writing any clearing marker. If the head had no live children to reparent, nothing on disk records that fold. A later prune entering at an ancestor treats the line as unfolded and folds that ancestor's rows over the root, so keys the head had overridden revert to the ancestor's values.
+- **Reason**: The state leaves no evidence to detect it, and new prunes publish their markers together with the fold, so they cannot create it. Retrying the original head, the documented recovery, folds the full line again. Detecting old cases would need a migration that compares every root with its lines, which is disproportionate for a crash window in earlier releases.
+
+---
 
 ### [MEDIUM] platform support: memory-sizing constants overflow on 32-bit targets
 

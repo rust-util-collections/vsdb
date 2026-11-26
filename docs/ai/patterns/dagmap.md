@@ -29,7 +29,9 @@
   discovery edges until the data pass completes. Fence the single shard
   before return. A prune entering at a live ancestor resumes an unmarked
   prune left by earlier releases when a live descendant's edge names a
-  child of the root.
+  child of the root. A line that an earlier release marked only in part is
+  finished from its deepest marked node and folded again in the same kind
+  of batch, keeping edits and children added to its unmarked nodes.
 - Destroy marks and wipes owned descendants with discovery edges intact.
   Finish descendant registries before unlinking the target. A retried
   destroy can use the owner saved in its destroying state.

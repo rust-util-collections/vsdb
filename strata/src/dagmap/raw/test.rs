@@ -1018,6 +1018,39 @@ fn failed_prune_publication_folds_nothing_and_keeps_the_line_live() {
 }
 
 #[test]
+fn partial_markers_left_by_earlier_releases_keep_later_ancestor_edits() {
+    for enter_at_head in [true, false] {
+        let (root, mut mid, mut head) = build_prune_fixture();
+        let survivor = DagMapRaw::new(Some(&mut head));
+        {
+            // Earlier releases published the fold, the reparented children
+            // and each marker separately. This prune stopped after the head.
+            let (mut line, mut genesis) =
+                head.open(head.id()).unwrap().mainline().unwrap();
+            DagMapRaw::fold(&line, &mut genesis).unwrap();
+            line[0].reparent(&mut genesis).unwrap();
+            DagMapRaw::mark(&mut line[..1], root.id()).unwrap();
+        }
+        mid.insert("late", "edit");
+        let mut late = DagMapRaw::new(Some(&mut mid));
+        late.insert("own", "value");
+        let recovered = if enter_at_head {
+            head.prune().unwrap()
+        } else {
+            mid.open(mid.id()).unwrap().prune().unwrap()
+        };
+        assert_eq!(recovered.id(), root.id());
+        assert_merged_view(&recovered);
+        assert_merged_view(&survivor);
+        assert_eq!(recovered.get("late").as_deref(), Some(b"edit".as_slice()));
+        assert!(recovered.child_id(&late).is_some());
+        assert_eq!(late.get("own").as_deref(), Some(b"value".as_slice()));
+        assert_eq!(late.get("k0").as_deref(), Some(b"v0".as_slice()));
+        assert!(mid.is_dead());
+    }
+}
+
+#[test]
 fn ancestor_prune_resumes_an_unmarked_prune_left_by_earlier_releases() {
     let (root, mid, mut head) = build_prune_fixture();
     let mut survivor = DagMapRaw::new(Some(&mut head));
