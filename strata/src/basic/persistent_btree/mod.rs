@@ -340,6 +340,9 @@ pub(crate) struct RefState {
     zombies: HashSet<NodeId>,
     ready: bool,
     pub(crate) poisoned: bool,
+    /// Advances on every poisoning and installation. A recount installs its
+    /// result only if neither happened since it captured this value.
+    epoch: u64,
     pub(crate) ambiguous_staged: Vec<(Vec<NodeId>, u64, u64)>,
     /// One reference per live snapshot lease, shared by its iterators.
     pins: HashMap<NodeId, u32>,
@@ -365,6 +368,15 @@ impl RefState {
         }
         self.ready = true;
         self.poisoned = false;
+        self.epoch = self.epoch.wrapping_add(1);
+    }
+
+    /// Invalidates the graph until a recount that starts afterwards installs.
+    pub(crate) fn poison(&mut self) {
+        self.poisoned = true;
+        self.heads.clear();
+        self.tip_cache = TipCache::default();
+        self.epoch = self.epoch.wrapping_add(1);
     }
 
     pub(crate) fn set_head(&mut self, branch: BranchId, head: Option<BranchHead>) {
@@ -879,6 +891,7 @@ impl PersistentBTree {
                 deferred: None,
                 ready: false,
                 poisoned: false,
+                epoch: 0,
                 ambiguous_staged: Vec::new(),
             },
         );
@@ -947,6 +960,7 @@ impl PersistentBTree {
                 zombies: HashSet::new(),
                 ready: true,
                 poisoned: false,
+                epoch: 0,
                 ambiguous_staged: Vec::new(),
                 pins: HashMap::new(),
                 heads: HashMap::new(),
@@ -1928,6 +1942,7 @@ impl PersistentBTree {
                 zombies: HashSet::new(),
                 ready: refs.ready,
                 poisoned: refs.poisoned,
+                epoch: 0,
                 ambiguous_staged: Vec::new(),
                 pins: HashMap::new(),
                 heads: HashMap::new(),

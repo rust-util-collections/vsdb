@@ -1898,3 +1898,75 @@ mod diff_merge {
         assert_eq!(tree.runtime.page_cache.used_bytes(), 0);
     }
 }
+
+type RecountGate = (
+    std::sync::mpsc::SyncSender<()>,
+    std::sync::mpsc::Receiver<()>,
+);
+
+thread_local! {
+    static RECOUNT_GATE: std::cell::RefCell<Option<RecountGate>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Pauses this thread's next recount after it counts its view and before
+/// it takes the reference lock to install the result.
+pub(super) fn before_recount_install() {
+    if let Some((entered, release)) = RECOUNT_GATE.take() {
+        entered.send(()).unwrap();
+        release.recv().unwrap();
+    }
+}
+
+#[test]
+fn late_reader_recount_keeps_the_writer_state_installed_after_it() {
+    use crate::{VerMap, VsdbError};
+    use std::{sync::mpsc, thread};
+
+    let mut map = VerMap::<u32, u32>::new();
+    let main = map.main_branch();
+    map.bulk_load(main, (0..4096u32).map(|k| (k, k))).unwrap();
+    let reader = map.reader();
+
+    let (writer_entered, writer_waits) = mpsc::sync_channel(0);
+    let (release_writer, writer_release) = mpsc::sync_channel(0);
+    let (inserted, writer_inserted) = mpsc::sync_channel(0);
+    let (resume_writer, writer_resume) = mpsc::sync_channel(0);
+    let writer = thread::spawn(move || {
+        RECOUNT_GATE.set(Some((writer_entered, writer_release)));
+        // Unsorted input fails inside the build and poisons the shared state.
+        assert!(matches!(
+            map.bulk_load(main, [(2u32, 2u32), (1, 1)]),
+            Err(VsdbError::InvalidConfig { .. })
+        ));
+        map.insert(main, &5_000, &1).unwrap();
+        inserted.send(()).unwrap();
+        writer_resume.recv().unwrap();
+        let read = map.get(main, &17);
+        map.insert(main, &6_000, &2).unwrap();
+        map.commit(main).unwrap();
+        (read, map.verify_and_gc().map(|_| ()), map)
+    });
+
+    // The writer has counted its view and waits before installing it.
+    writer_waits.recv().unwrap();
+    let (reader_entered, reader_waits) = mpsc::sync_channel(0);
+    let (release_reader, reader_release) = mpsc::sync_channel(0);
+    let snapshot = thread::spawn(move || {
+        RECOUNT_GATE.set(Some((reader_entered, reader_release)));
+        reader.snapshot(main).map(|s| (s.get(&17), s.get(&5_000)))
+    });
+    // The reader saw the poisoned state and counted the old head.
+    reader_waits.recv().unwrap();
+    release_writer.send(()).unwrap();
+    // The writer installed its recount and published a new working root.
+    writer_inserted.recv().unwrap();
+    release_reader.send(()).unwrap();
+    assert_eq!(snapshot.join().unwrap().unwrap(), (Some(17), Some(1)));
+    resume_writer.send(()).unwrap();
+
+    let (read, verified, map) = writer.join().unwrap();
+    assert_eq!(read.unwrap(), Some(17));
+    verified.unwrap();
+    assert_eq!(map.get(main, &6_000).unwrap(), Some(2));
+}

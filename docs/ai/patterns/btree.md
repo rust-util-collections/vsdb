@@ -35,7 +35,9 @@ in earlier chunks. Preserve shared subtrees and every pre-merge root.
 **BT10 Reader ownership** — capture the published root and acquire its pin under the
 shared ref lock; the snapshot and derived iterators share one owned lease. Last drop
 cascades through the same deferred queue. Recount holds the lock through pin seeding,
-sweep and count replacement; each independent lease adds one root reference. Deep
+sweep and count replacement; each independent lease adds one root reference.
+A recount of poisoned state counts its view outside the lock and installs only
+if no other installation or poisoning happened since it began. Deep
 copies exclude source leases; VerMap then recounts its copied persistent roots.
 
 **BT11 Internal page cache** — `TreeRuntime` shares a byte-bounded, eight-shard clock

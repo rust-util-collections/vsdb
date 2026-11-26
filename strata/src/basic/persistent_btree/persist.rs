@@ -57,6 +57,7 @@ impl PersistentBTree {
                 deferred: Some(Vec::new()),
                 ready: true,
                 poisoned: false,
+                epoch: 0,
                 ambiguous_staged: Vec::new(),
             },
         );
@@ -113,10 +114,7 @@ impl PersistentBTree {
     }
 
     pub(crate) fn mark_refs_poisoned(&self) {
-        let mut refs = self.runtime.refs.lock();
-        refs.poisoned = true;
-        refs.heads.clear();
-        refs.tip_cache = TipCache::default();
+        self.runtime.refs.lock().poison();
     }
 
     pub(crate) fn ensure_healthy_refs(&self) -> Result<()> {
@@ -150,9 +148,7 @@ impl PersistentBTree {
                 }
                 return;
             }
-            refs.poisoned = true;
-            refs.heads.clear();
-            refs.tip_cache = TipCache::default();
+            refs.poison();
         }
         refs.ambiguous_staged.push((staged, start, end));
     }
@@ -287,9 +283,7 @@ impl PersistentBTree {
         if let Err(err) = result {
             {
                 let mut refs = self.runtime.refs.lock();
-                refs.poisoned = true;
-                refs.heads.clear();
-                refs.tip_cache = TipCache::default();
+                refs.poison();
                 refs.deferred
                     .get_or_insert_with(Vec::new)
                     .extend(dead.into_iter().take(previously_dead));
@@ -371,6 +365,7 @@ impl PersistentBTree {
             zombies: HashSet::new(),
             ready: true,
             poisoned: false,
+            epoch: 0,
             ambiguous_staged: Vec::new(),
             pins: HashMap::new(),
             heads: HashMap::new(),
@@ -627,6 +622,17 @@ impl TreeRuntime {
     }
 
     pub(crate) fn restore_visible_refs(&self, nodes: &MapxRawReader) -> Result<()> {
+        // The view is counted outside the lock. Another caller may install
+        // first, after which the writer can allocate and publish; a later
+        // failure can poison again. Only the state this recount started
+        // from may be replaced.
+        let epoch = {
+            let refs = self.refs.lock();
+            if !refs.poisoned {
+                return Ok(());
+            }
+            refs.epoch
+        };
         let view = nodes.read_view();
         let mut roots = Vec::new();
         let mut heads = view.try_range([HEAD].as_slice()..[HEAD + 1].as_slice())?;
@@ -655,7 +661,12 @@ impl TreeRuntime {
         let mut counts = HashMap::new();
         count_nodes_in_view(&view, &mut counts, roots.into_iter().map(|id| (id, 1)))?;
 
+        #[cfg(test)]
+        super::test::before_recount_install();
         let mut refs = self.refs.lock();
+        if refs.epoch != epoch {
+            return Ok(());
+        }
         count_nodes_in_view(
             &view,
             &mut counts,
