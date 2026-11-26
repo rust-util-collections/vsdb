@@ -217,27 +217,37 @@ fn destroy_retry_unlinks_and_reclaims_descendants() {
     }
 }
 
-/// Regression: `prune()`'s crash-safety WAL barriers must be scoped to
-/// the DAG's own namespace, not the whole
-/// process (the previous `vsdb_flush()` calls flushed the default
-/// namespace plus every other open namespace, so a flush failure in any
-/// unrelated namespace could panic a `prune()` on a perfectly healthy
-/// one). Exercising `prune()` end-to-end on a DAG placed in an explicit
-/// non-default namespace only compiles and behaves correctly if the
-/// barriers are genuinely namespace-scoped.
+/// Regression: `prune()`'s WAL fence must be scoped to the DAG's own
+/// namespace, not the whole process (the previous `vsdb_flush()` calls
+/// flushed the default namespace plus every other open namespace, so a
+/// flush failure in any unrelated namespace could panic a `prune()` on a
+/// perfectly healthy one). The pruned head has a parent, so the fold,
+/// the reparenting and the fence all run in an explicit non-default
+/// namespace.
 #[test]
 fn prune_works_in_a_non_default_namespace() {
     let ns = crate::common::Namespace::create().unwrap();
-    let mut head = DagMapRaw::new_in(&ns, None);
-    head.insert("root", "value");
+    let mut root = DagMapRaw::new_in(&ns, None);
+    root.insert("root", "value");
+    root.insert("shadowed", "root");
 
-    let mut child = DagMapRaw::new_in(&ns, Some(&mut head));
-    child.insert("leaf", "cv");
+    let mut head = DagMapRaw::new_in(&ns, Some(&mut root));
+    head.insert("leaf", "hv");
+    head.insert("shadowed", "head");
+    let mut survivor = DagMapRaw::new_in(&ns, Some(&mut head));
+    survivor.insert("own", "sv");
+    let consumed = head.open(head.id()).unwrap();
 
-    let pruned = head.prune().unwrap();
-    assert_eq!(pruned.get("root").unwrap().as_slice(), b"value");
-    assert_eq!(child.get("root").unwrap().as_slice(), b"value");
-    assert_eq!(child.get("leaf").unwrap().as_slice(), b"cv");
+    let merged = head.prune().unwrap();
+    assert_eq!(merged.id(), root.id());
+    assert_eq!(merged.namespace().id(), ns.id());
+    assert_eq!(merged.get("root").unwrap().as_slice(), b"value");
+    assert_eq!(merged.get("leaf").unwrap().as_slice(), b"hv");
+    assert_eq!(merged.get("shadowed").unwrap().as_slice(), b"head");
+    assert!(consumed.is_dead());
+    assert!(merged.child_id(&survivor).is_some());
+    assert_eq!(survivor.get("leaf").unwrap().as_slice(), b"hv");
+    assert_eq!(survivor.get("own").unwrap().as_slice(), b"sv");
 }
 
 #[test]
@@ -1117,10 +1127,23 @@ fn partial_markers_and_intermediate_destroy_preserve_merged_state_and_retry() {
 }
 
 #[test]
-fn fallible_dagmap_operations_propagate_corrupt_rows_and_sst_errors() {
+fn fallible_dagmap_operations_propagate_corrupt_rows_and_storage_errors() {
     let mut root = DagMapRaw::new(None);
     let mut head = DagMapRaw::new(Some(&mut root));
     let head_id = head.save_meta().unwrap();
+
+    // A storage failure reading node metadata is returned as is and leaves
+    // the DAG untouched.
+    let dst = Namespace::create().unwrap();
+    let dst_id = dst.id();
+    let retry = DagMapRaw::from_meta(head_id).unwrap();
+    FAIL_META_READ.with(|target| target.set(Some(head.id())));
+    let cloned = head.clone_in(&dst);
+    let pruned = retry.prune();
+    FAIL_META_READ.with(|target| target.set(None));
+    assert!(matches!(cloned, Err(VsdbError::Io(_))));
+    assert!(matches!(pruned, Err(VsdbError::Io(_))));
+    assert!(root.child_id(&head).is_some());
 
     // Malformed data row tag (neither [0] nor [1, ..]) returns Corrupt on prune.
     head.store.insert([2, b'k'], [9, b'v']);
@@ -1130,8 +1153,6 @@ fn fallible_dagmap_operations_propagate_corrupt_rows_and_sst_errors() {
     let mut head = DagMapRaw::from_meta(head_id).unwrap();
     head.store.remove([2, b'k']);
     head.store.insert(edge_key(77), [1, 2, 3]);
-    let dst = Namespace::create().unwrap();
-    let dst_id = dst.id();
     assert!(matches!(
         head.clone_in(&dst),
         Err(VsdbError::Corrupt { .. })

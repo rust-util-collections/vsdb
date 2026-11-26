@@ -11,14 +11,6 @@
 
 ## Open
 
-### [LOW] dagmap tests: two tests do not exercise their stated cases
-- **Where**: `strata/src/dagmap/raw/test.rs` (`prune_works_in_a_non_default_namespace`, `fallible_dagmap_operations_propagate_corrupt_rows_and_sst_errors`)
-- **What**: The first test prunes `head`, which is a root, so `prune` only fences and every assertion would hold without any prune. The second injects malformed rows but no SST or storage error.
-- **Why**: Prune publication in a non-default namespace and storage-error propagation lack the coverage the test names and comments claim.
-- **Suggested fix**: In the first test, prune `child` and assert on the merged root and the consumed child. Add an SST-corruption case to the second test, or rename it. Test-only change.
-
----
-
 ### [LOW] versioning docs: Commit::parents misdescribes a branch's first commit
 - **Where**: `strata/src/versioned/mod.rs` (`Commit::parents`)
 - **What**: The rustdoc says the parent list is empty for a branch's first commit. `create_branch` copies the source head, though, so the first commit on a fork names that head as its parent. Only a commit on a branch with no head has no parents.
