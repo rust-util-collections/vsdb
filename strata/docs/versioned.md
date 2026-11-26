@@ -179,6 +179,11 @@ aliases as for other structural operations. If a callback changes the
 working root through another alias, publishing the original overlay reports
 `VsdbError::WorkingRootChanged`. A budget violation reports `InvalidConfig`.
 
+When the key has no staged edit, the callback checks its path from the captured
+root. An absent key returns `None`; a missing referenced page or blob and a
+malformed page return `Corrupt`. An underlying read failure preserves its
+storage error. Returning such an error from the callback discards earlier edits.
+
 The limit charges the encoded key and current value plus 64 bytes per
 distinct staged key, including a deleted key. Replacing an entry releases
 its old value's charge. Caller allocations, transient encoding and tree

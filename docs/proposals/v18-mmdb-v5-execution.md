@@ -27,7 +27,8 @@ recovering any writable shard. [Adapter contracts](../../core/tests/v5_adapter_t
 On the default 16 shards, DagMap child creation dropped from two engine
 submissions to one and improved full-operation p99 by 31.05% against the
 earlier native v5 path and 33.38% against v4-backed v18. Four dependent
-VerMap updates became one submission and improved p99 by 56.18%. For
+VerMap updates became one submission. After adding checked working-root
+reads, the final five-pair repeat showed p99 improving by 57.31%. For
 operations whose final values are already known, `write_batch` remains the
 direct path. These are independent operations on generated data, with
 matched durability and separate ordinary versus diagnostic builds.

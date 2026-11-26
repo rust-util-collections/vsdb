@@ -16,7 +16,8 @@ with open(sys.argv[1]) as fp:
         assert r["arm"] not in pair
         pair[r["arm"]]=r
 default_dag = len(sys.argv)==3 and sys.argv[2]=="--default-dag"
-expected = ({"default-child","default-v4-child"} if default_dag else
+final_edits = len(sys.argv)==3 and sys.argv[2]=="--final-edits"
+expected = ({"final-dependent","final-precomputed"} if final_edits else {"default-child","default-v4-child"} if default_dag else
             {"child","dependent","precomputed","v4-child","v4-individual","v4-batch","placement","v4-hot","v4-split"})
 assert set(cases)==expected
 writer=csv.writer(sys.stdout,lineterminator="\n")
@@ -34,7 +35,11 @@ for name, trials in sorted(cases.items()):
             pair=trials[str(i),kind]
             assert set(pair)=={"control","comparison"}
             a,b=pair["control"],pair["comparison"]
-            assert a["seed"]==b["seed"]==str(20261126+i) and a["order"]!=b["order"]
+            assert a["seed"]==b["seed"]==str((20661126 if final_edits else 20261126)+i) and a["order"]!=b["order"]
+            if final_edits:
+                before_algorithm = "individual" if name=="final-dependent" else "batch"
+                assert a["binary"]==b["binary"]=="v5-final" and a["algorithm"]==before_algorithm
+                assert b["algorithm"]==(before_algorithm if kind=="AA" else "overlay")
             if default_dag:
                 assert all(int(r["prefix_advance"]) == 16*int(r["ops"]) for r in (a,b))
             if kind=="AA":
@@ -51,6 +56,9 @@ for name, trials in sorted(cases.items()):
                      sum(g>0 for g in ab),qualified,round(median(ta)),round(median(tb))])
 counts={(r["binary"],r["algorithm"]):int(r["submissions"])/int(r["ops"]) for r in diag}
 assert all(r["counted"]=="true" for r in diag)
+if final_edits:
+    assert len(diag)==4 and counts=={("diag-final","individual"):4,("diag-final","overlay"):1,("diag-final","batch"):1,("diag-final","empty"):0}
+    sys.exit(0)
 if default_dag:
     assert len(diag)==2 and counts=={("diag-previous","dag16"):2,("diag-pinned","dag16"):1}
     sys.exit(0)

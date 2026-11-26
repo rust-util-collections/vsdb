@@ -115,3 +115,22 @@ callback leaves the branch generation unchanged. To repeat the diagnostic,
 build the candidate with `--features working-edit,counters` and run
 `publication-profile empty 1000 20261127` with a fresh `VSDB_BASE_DIR`.
 [Diagnostic observation](results/empty-working.txt)
+
+### Checked working-root reads
+
+The integrated working-edit path at `470b462` handles missing tree objects
+and invalid pages through typed errors. The callback-abort test verifies
+that a late failed read publishes nothing. A separate five-seed comparison
+on this implementation repeated the full callback sequence. Individual
+calls versus the working edit measured p99 **66.33 / 26.52 µs**, with a
+57.31% median paired improvement (53.26–65.15%, 5/5, maximum A/A 29.72%).
+With known final values, the precomputed batch remained faster than the
+callback doing four dependent reads and writes (−6.55% median paired
+improvement, maximum A/A 20.78%). Each group of four individual updates
+used four engine submissions. The overlay and precomputed batch used one
+each, and an empty callback used zero.
+
+Build ordinary and counter binaries at `470b462` as described above,
+named `v5-final` and `diag-final`. Pass `--final-edits` to `run.py`
+and `summarize.py`. Output covers 40 ordinary processes and four diagnostics.
+[Raw data](results/checked-working/trials.csv) · [Paired statistics](results/checked-working/summary.csv) · [Binary digests and host](results/checked-working/host.txt)
