@@ -76,13 +76,7 @@ impl<K, V> VerMap<K, V> {
                 .ok_or_else(|| corrupt("commit reference count overflow"))?;
             if *count == 1 {
                 let commit = self.get_commit_inner(id)?;
-                let mut seen = HashSet::new();
-                for p in commit.parents {
-                    if p == NO_COMMIT || p >= id || !seen.insert(p) {
-                        return Err(corrupt("invalid commit parent list"));
-                    }
-                    work.push(p);
-                }
+                work.extend(commit.parents);
             }
         }
         Ok(refs)
@@ -164,7 +158,9 @@ impl<K, V> VerMap<K, V> {
         let mut commit_rows = self.try_tag_range(COMMIT)?;
         while let Some((k, v)) = commit_rows.try_step_next()? {
             let id = CommitId::from_raw(record_id(k)?);
-            let mut commit = Commit::parse(id, v)?;
+            // Reachable parents were checked above. An unreachable row can be
+            // reclaimed even when its parent links are stale.
+            let mut commit = Commit::decode_row(id, v)?;
             if id == NO_COMMIT || id.raw() >= hdr.next_commit {
                 return Err(corrupt("invalid commit ID ceiling"));
             }

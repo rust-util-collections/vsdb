@@ -1,6 +1,6 @@
 //! Wire rows and atomic metadata edits for the single-prefix version store.
 
-use super::{BranchId, Commit, CommitId};
+use super::{BranchId, Commit, CommitId, NO_COMMIT};
 use crate::{
     InstanceId, Namespace, Result, VsdbError,
     basic::persistent_btree::NodeId,
@@ -159,6 +159,18 @@ impl Commit {
         raw
     }
     pub(crate) fn parse(id: CommitId, raw: &[u8]) -> Result<Self> {
+        let commit = Self::decode_row(id, raw)?;
+        let parents = commit.parents.as_slice();
+        if parents.iter().any(|p| *p == NO_COMMIT || *p >= id)
+            || matches!(parents, [a, b] if a == b)
+        {
+            return Err(corrupt("invalid commit parent list"));
+        }
+        Ok(commit)
+    }
+
+    /// Decodes a row without checking its parent links against the history.
+    pub(crate) fn decode_row(id: CommitId, raw: &[u8]) -> Result<Self> {
         if !matches!(raw.len(), 20 | 28 | 36) {
             return Err(corrupt("invalid commit length"));
         }
@@ -203,5 +215,64 @@ impl Edits {
             self.acquire.push(new);
             self.retire.push(old);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::VerMap;
+
+    #[test]
+    fn history_reads_reject_invalid_commit_parents() {
+        let mut map = VerMap::<u32, u32>::new();
+        let branch = map.main_branch();
+        map.insert(branch, &1, &10).unwrap();
+        let first = map.commit(branch).unwrap();
+        map.insert(branch, &2, &20).unwrap();
+        let second = map.commit(branch).unwrap();
+        let key = row(COMMIT, second.raw());
+        let saved = map.tree.nodes.get(key).unwrap();
+        let reader = map.reader();
+        for parents in [
+            vec![NO_COMMIT],
+            vec![second],
+            vec![CommitId::from_raw(second.raw() + 1)],
+            vec![first, first],
+        ] {
+            let mut bytes = saved[..20].to_vec();
+            for parent in parents {
+                bytes.extend_from_slice(&parent.raw().to_le_bytes());
+            }
+            map.tree.nodes.insert(key, bytes);
+            assert!(matches!(reader.at(second), Err(VsdbError::Corrupt { .. })));
+        }
+        map.tree.nodes.insert(key, saved);
+        assert_eq!(reader.at(second).unwrap().get(&1), Some(10));
+    }
+
+    #[test]
+    fn recovery_reclaims_an_unreachable_commit_with_invalid_parents() {
+        let mut map = VerMap::<u32, u32>::new();
+        let branch = map.main_branch();
+        map.insert(branch, &1, &10).unwrap();
+        let id = map.commit(branch).unwrap();
+        let orphan_id = CommitId::from_raw(id.raw() + 1);
+        let mut orphan = map.get_commit(id).unwrap();
+        orphan.ref_count = 0;
+        orphan.parents = smallvec::smallvec![orphan_id];
+        map.tree
+            .nodes
+            .insert(row(COMMIT, orphan_id.raw()), orphan.bytes());
+        let mut hdr = Header::get(&map.tree.nodes).unwrap();
+        hdr.next_commit = orphan_id.raw() + 1;
+        map.tree.nodes.insert(HEADER, hdr.bytes());
+
+        // A recount only needs roots, so the stale row cannot block readers.
+        map.tree.mark_refs_poisoned();
+        assert_eq!(map.reader().at(id).unwrap().get(&1), Some(10));
+        assert_eq!(map.verify_and_gc().unwrap().removed_commits, 1);
+        assert!(!map.tree.nodes.contains_key(row(COMMIT, orphan_id.raw())));
+        assert_eq!(map.get(branch, &1).unwrap(), Some(10));
     }
 }

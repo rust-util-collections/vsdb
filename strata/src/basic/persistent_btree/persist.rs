@@ -646,7 +646,9 @@ impl TreeRuntime {
             view.try_range([COMMIT].as_slice()..[COMMIT + 1].as_slice())?;
         while let Some((k, v)) = commits.try_step_next()? {
             let id = CommitId::from_raw(record_id(k)?);
-            roots.push(Commit::parse(id, v)?.root);
+            // Only roots matter here. Recovery reclaims unreachable rows
+            // whose parent links are stale.
+            roots.push(Commit::decode_row(id, v)?.root);
         }
         drop(commits);
 
