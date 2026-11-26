@@ -310,6 +310,14 @@ impl<K, V> VerMap<K, V> {
             .ok_or(VsdbError::CommitNotFound { commit_id: id })
     }
 
+    fn get_history_commit(&self, id: CommitId) -> Result<Commit> {
+        match self.get_commit_inner(id) {
+            Ok(commit) => Ok(commit),
+            Err(err @ VsdbError::CommitNotFound { .. }) => Err(corrupt(err.to_string())),
+            Err(err) => Err(err),
+        }
+    }
+
     pub(super) fn publish_edits(&mut self, edits: Edits, sync: bool) -> Result<()> {
         let hdr = match Header::get(&self.tree.nodes) {
             Ok(hdr) => hdr,
@@ -999,9 +1007,8 @@ where
                     found = true;
                     break;
                 }
-                if let Some(c) = self.get_commit(cur) {
-                    queue.extend_from_slice(&c.parents);
-                }
+                let c = self.get_history_commit(cur)?;
+                queue.extend_from_slice(&c.parents);
             }
             if !found {
                 return Err(VsdbError::NotAncestor {
@@ -1113,9 +1120,9 @@ where
         let tgt_commit = self.get_commit_inner(tgt.head)?;
 
         let ancestor_roots: Vec<NodeId> = self
-            .find_merge_bases(src.head, tgt.head)
+            .try_find_merge_bases(src.head, tgt.head)?
             .into_iter()
-            .map(|aid| self.get_commit_inner(aid).map(|c| c.root))
+            .map(|aid| self.get_history_commit(aid).map(|c| c.root))
             .collect::<Result<_>>()?;
         let ancestor_roots = if ancestor_roots.is_empty() {
             vec![EMPTY_ROOT]
@@ -1166,6 +1173,11 @@ where
     /// reported.  The walk ends when the frontier holds only stale entries,
     /// bounding the cost to the fork region instead of the full history.
     fn find_merge_bases(&self, a: CommitId, b: CommitId) -> Vec<CommitId> {
+        self.try_find_merge_bases(a, b)
+            .expect("vsdb: commit history read failed")
+    }
+
+    fn try_find_merge_bases(&self, a: CommitId, b: CommitId) -> Result<Vec<CommitId>> {
         const FROM_A: u8 = 0b001;
         const FROM_B: u8 = 0b010;
         const BOTH: u8 = FROM_A | FROM_B;
@@ -1174,8 +1186,15 @@ where
         // Nonexistent IDs are not DAG nodes; without this guard,
         // `find_merge_bases(x, x)` would report a nonexistent `x`
         // as its own merge base.
-        if self.get_commit(a).is_none() || self.get_commit(b).is_none() {
-            return vec![];
+        match (self.get_commit_inner(a), self.get_commit_inner(b)) {
+            (Ok(_), Ok(_)) => {}
+            (Err(VsdbError::CommitNotFound { .. }), Ok(_))
+            | (Ok(_), Err(VsdbError::CommitNotFound { .. }))
+            | (
+                Err(VsdbError::CommitNotFound { .. }),
+                Err(VsdbError::CommitNotFound { .. }),
+            ) => return Ok(vec![]),
+            (Err(err), _) | (_, Err(err)) => return Err(err),
         }
 
         fn mark(
@@ -1225,14 +1244,13 @@ where
                 // Everything below a common commit is dominated.
                 f |= STALE;
             }
-            if let Some(c) = self.get_commit(id) {
-                for &parent in &c.parents {
-                    mark(&mut flags, &mut heap, &mut non_stale_count, parent, f);
-                }
+            let c = self.get_history_commit(id)?;
+            for &parent in &c.parents {
+                mark(&mut flags, &mut heap, &mut non_stale_count, parent, f);
             }
         }
 
-        bases
+        Ok(bases)
     }
 
     /// Finds one lowest (most-recent) common ancestor of two commits.
@@ -1251,6 +1269,10 @@ where
     /// Useful for branching scenarios: given two divergent tips, this finds
     /// the commit where they diverged.  Returns `None` only if the two
     /// commits share no common history.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a stored commit record is corrupt or unreadable.
     pub fn fork_point(&self, a: CommitId, b: CommitId) -> Option<CommitId> {
         self.find_common_ancestor(a, b)
     }
@@ -1261,6 +1283,10 @@ where
     /// Walks the first-parent chain starting at `from` until `ancestor`
     /// is reached.  Returns `None` if `ancestor` is not a first-parent
     /// ancestor of `from`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a stored commit record is corrupt or unreadable.
     ///
     /// # Example — comparing fork lengths
     ///
@@ -1282,7 +1308,9 @@ where
             if cur == NO_COMMIT {
                 return None;
             }
-            let c = self.get_commit(cur)?;
+            let c = self
+                .get_history_commit(cur)
+                .expect("vsdb: commit history read failed");
             cur = c.parents.first().copied().unwrap_or(NO_COMMIT);
             count += 1;
         }
@@ -1290,8 +1318,16 @@ where
     }
 
     /// Retrieves a commit by its ID.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the stored commit record is corrupt or unreadable.
     pub fn get_commit(&self, commit_id: CommitId) -> Option<Commit> {
-        self.get_commit_inner(commit_id).ok()
+        match self.get_commit_inner(commit_id) {
+            Ok(commit) => Some(commit),
+            Err(VsdbError::CommitNotFound { .. }) => None,
+            Err(err) => panic!("vsdb: commit read failed: {err}"),
+        }
     }
 
     /// Use ordinary point reads while a history writer may be waiting for fsync.
@@ -1449,9 +1485,19 @@ fn read_log(
 ) -> Result<Vec<Commit>> {
     let mut result = Vec::new();
     while let Some(commit) = tip {
-        let parent = commit.parents.first().copied();
+        let parent = commit
+            .parents
+            .first()
+            .copied()
+            .filter(|&id| id != NO_COMMIT);
         result.push(commit);
-        tip = parent.map(&fetch).transpose()?;
+        tip = match parent.map(&fetch).transpose() {
+            Ok(next) => next,
+            Err(err @ VsdbError::CommitNotFound { .. }) => {
+                return Err(corrupt(err.to_string()));
+            }
+            Err(err) => return Err(err),
+        };
     }
     Ok(result)
 }

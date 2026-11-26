@@ -5719,3 +5719,93 @@ fn verify_and_gc_propagates_sst_corruption_without_panicking() {
     crate::Namespace::close_by_id(ns_id).unwrap();
     crate::Namespace::destroy(ns_id).unwrap();
 }
+
+#[test]
+fn commit_ancestry_propagates_corrupt_or_missing_parent_instead_of_mismerging() {
+    let mut map = VerMap::<u32, u32>::new();
+    let main = map.main_branch();
+    map.insert(main, &1, &10).unwrap();
+    map.insert(main, &2, &20).unwrap();
+    let c1 = map.commit(main).unwrap();
+
+    let feat = map.create_branch("feat", main).unwrap();
+    map.insert(feat, &3, &30).unwrap();
+    let _f1 = map.commit(feat).unwrap();
+
+    // Advance main twice (c1 -> c2 -> c3) so c2 is a strict intermediate
+    // parent between main's tip c3 and the common ancestor c1.
+    map.insert(main, &1, &99).unwrap();
+    map.remove(main, &2).unwrap();
+    let c2 = map.commit(main).unwrap();
+    map.insert(main, &4, &40).unwrap();
+    let c3 = map.commit(main).unwrap();
+    let c3_head = map.get_branch(main).unwrap();
+
+    let c2_key = super::store::row(COMMIT, c2.raw());
+    let saved_c2 = map.tree.nodes.get(c2_key).unwrap();
+
+    // Case 1: malformed intermediate commit row c2 must abort merge and
+    // rollback_to(main, c1) with VsdbError::Corrupt rather than dropping the
+    // common ancestor c1 and replaying feat from EMPTY_ROOT.
+    map.tree.nodes.insert(c2_key, [0xff; 7]);
+    assert!(matches!(
+        map.merge(feat, main),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert!(matches!(
+        map.rollback_to(main, c1),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert_eq!(map.get_branch(main).unwrap(), c3_head);
+    assert_eq!(map.get(main, &1).unwrap(), Some(99));
+    assert_eq!(map.get(main, &2).unwrap(), None);
+
+    // Case 2: missing intermediate parent row c2 (broken parent link) must
+    // also report VsdbError::Corrupt on merge, rollback_to, and log.
+    map.tree.nodes.remove(c2_key);
+    assert!(matches!(
+        map.merge(feat, main),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert!(matches!(
+        map.rollback_to(main, c1),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert!(matches!(map.log(main), Err(VsdbError::Corrupt { .. })));
+    assert_eq!(map.get_branch(main).unwrap(), c3_head);
+
+    // Restore c2; normal merge must preserve target's key 1 update, key 2
+    // deletion, and key 4 insertion alongside feat's key 3 insertion.
+    map.tree.nodes.insert(c2_key, saved_c2);
+    let merged = map.merge(feat, main).unwrap();
+    assert_ne!(merged, c3);
+    assert_eq!(map.get(main, &1).unwrap(), Some(99));
+    assert_eq!(map.get(main, &2).unwrap(), None);
+    assert_eq!(map.get(main, &3).unwrap(), Some(30));
+    assert_eq!(map.get(main, &4).unwrap(), Some(40));
+}
+
+#[test]
+fn convenience_commit_queries_panic_on_corrupt_or_missing_parent_commits() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let mut map = VerMap::<u32, u32>::new();
+    let main = map.main_branch();
+    map.insert(main, &1, &10).unwrap();
+    let c1 = map.commit(main).unwrap();
+    map.insert(main, &2, &20).unwrap();
+    let c2 = map.commit(main).unwrap();
+    map.insert(main, &3, &30).unwrap();
+    let c3 = map.commit(main).unwrap();
+
+    let c2_key = super::store::row(COMMIT, c2.raw());
+    map.tree.nodes.insert(c2_key, [0xff; 5]);
+
+    assert!(catch_unwind(AssertUnwindSafe(|| map.get_commit(c2))).is_err());
+    assert!(catch_unwind(AssertUnwindSafe(|| map.fork_point(c3, c1))).is_err());
+    assert!(catch_unwind(AssertUnwindSafe(|| map.commit_distance(c3, c1))).is_err());
+
+    map.tree.nodes.remove(c2_key);
+    assert!(catch_unwind(AssertUnwindSafe(|| map.fork_point(c3, c1))).is_err());
+    assert!(catch_unwind(AssertUnwindSafe(|| map.commit_distance(c3, c1))).is_err());
+}
