@@ -840,57 +840,58 @@ impl Serialize for PersistentBTree {
 
 impl<'de> Deserialize<'de> for PersistentBTree {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> StdResult<Self, D::Error> {
-        crate::common::deserialize_prefix_handle(
-            d,
-            |crate::common::PrefixFrame(nodes, extra)| {
-                let invalid = || VsdbError::Corrupt {
-                    detail: "invalid standalone tree allocator".into(),
-                };
-                if !extra.is_empty() || nodes.try_contains_key([0])? {
-                    return Err(invalid());
-                }
-                let next_id = nodes
-                    .try_get_with(STANDALONE_ALLOCATOR, |raw| {
-                        raw.try_into()
-                            .map(u64::from_le_bytes)
-                            .map_err(|_| invalid())
-                    })?
-                    .ok_or_else(invalid)?;
-                if next_id == 0 || next_id > LEAF {
-                    return Err(invalid());
-                }
-                persist::check_nodes_ceiling(&nodes, next_id, |_| invalid())?;
-                let runtime = tree_runtime(
-                    nodes.instance_id(),
-                    next_id,
-                    nodes.namespace().mem_budget_bytes(),
-                    RefState {
-                        counts: HashMap::new(),
-                        edges: HashMap::new(),
-                        zombies: HashSet::new(),
-                        pins: HashMap::new(),
-                        heads: HashMap::new(),
-                        tip_cache: TipCache::default(),
-                        deferred: None,
-                        ready: false,
-                        poisoned: false,
-                        ambiguous_staged: Vec::new(),
-                    },
-                );
-                Ok(Self {
-                    nodes,
-                    runtime,
-                    pending: HashMap::new(),
-                    pending_bytes: 0,
-                    stage: None,
-                    staged_start: None,
-                })
-            },
-        )
+        crate::common::deserialize_prefix_handle(d, Self::open_frame)
     }
 }
 
 impl PersistentBTree {
+    fn open_frame(
+        crate::common::PrefixFrame(nodes, extra): crate::common::PrefixFrame<'_>,
+    ) -> Result<Self> {
+        let invalid = || VsdbError::Corrupt {
+            detail: "invalid standalone tree allocator".into(),
+        };
+        if !extra.is_empty() || nodes.try_contains_key([0])? {
+            return Err(invalid());
+        }
+        let next_id = nodes
+            .try_get_with(STANDALONE_ALLOCATOR, |raw| {
+                raw.try_into()
+                    .map(u64::from_le_bytes)
+                    .map_err(|_| invalid())
+            })?
+            .ok_or_else(invalid)?;
+        if next_id == 0 || next_id > LEAF {
+            return Err(invalid());
+        }
+        persist::check_nodes_ceiling(&nodes, next_id, |_| invalid())?;
+        let runtime = tree_runtime(
+            nodes.instance_id(),
+            next_id,
+            nodes.namespace().mem_budget_bytes(),
+            RefState {
+                counts: HashMap::new(),
+                edges: HashMap::new(),
+                zombies: HashSet::new(),
+                pins: HashMap::new(),
+                heads: HashMap::new(),
+                tip_cache: TipCache::default(),
+                deferred: None,
+                ready: false,
+                poisoned: false,
+                ambiguous_staged: Vec::new(),
+            },
+        );
+        Ok(Self {
+            nodes,
+            runtime,
+            pending: HashMap::new(),
+            pending_bytes: 0,
+            stage: None,
+            staged_start: None,
+        })
+    }
+
     /// Returns the unique instance ID of this `PersistentBTree`.
     pub fn instance_id(&self) -> InstanceId {
         self.nodes.instance_id()
@@ -912,7 +913,11 @@ impl PersistentBTree {
     /// contains the data referenced by this instance ID.
     pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
         let id = instance_id.into();
-        crate::common::load_instance_meta_checked(id, Self::instance_id)
+        crate::common::load_instance_meta_checked(
+            id,
+            Self::open_frame,
+            Self::instance_id,
+        )
     }
 
     /// Creates a new, empty persistent B+ tree.

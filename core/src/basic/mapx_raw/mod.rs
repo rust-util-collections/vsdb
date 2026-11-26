@@ -815,7 +815,12 @@ impl MapxRaw {
                 ),
             });
         }
-        engine::Mapx::from_prefix_meta(&bytes).map(|inner| Self { inner })
+        Self::from_prefix_meta(&bytes)
+    }
+
+    #[doc(hidden)]
+    pub fn from_prefix_meta(bytes: &[u8]) -> Result<Self> {
+        engine::Mapx::from_prefix_meta(bytes).map(|inner| Self { inner })
     }
 }
 

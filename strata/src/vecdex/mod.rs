@@ -847,7 +847,11 @@ where
     /// against the index's immutable schema row before serving any reads.
     pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
         let id = instance_id.into();
-        crate::common::load_instance_meta_checked(id, Self::instance_id)
+        crate::common::load_instance_meta_checked(
+            id,
+            |crate::common::PrefixFrame(store, extra)| Self::hydrate(store, extra),
+            Self::instance_id,
+        )
     }
 
     /// Returns the number of indexed vectors.

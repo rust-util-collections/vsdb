@@ -90,7 +90,18 @@ impl<K: KeyEnDe, V: ValueEnDe> DagMap<K, V> {
     }
     /// Opens a saved typed handle.
     pub fn from_meta(id: impl Into<InstanceId>) -> Result<Self> {
-        crate::common::load_instance_meta_checked(id.into(), Self::instance_id)
+        crate::common::load_instance_meta_checked(
+            id.into(),
+            |frame| {
+                DagMapRaw::from_frame(frame).map(|inner| {
+                    Self::wrap(DagMapRawKey {
+                        inner,
+                        _p: PhantomData,
+                    })
+                })
+            },
+            Self::instance_id,
+        )
     }
     /// Copies the connected graph to fresh storage in another namespace.
     pub fn clone_in(&self, ns: &Namespace) -> Result<Self> {

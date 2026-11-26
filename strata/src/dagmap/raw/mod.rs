@@ -296,7 +296,11 @@ impl DagMapRaw {
     }
     /// Restores a saved node and verifies its graph token.
     pub fn from_meta(id: impl Into<InstanceId>) -> Result<Self> {
-        crate::common::load_instance_meta_checked(id.into(), Self::instance_id)
+        crate::common::load_instance_meta_checked(
+            id.into(),
+            Self::from_frame,
+            Self::instance_id,
+        )
     }
     /// Whether these handles identify the same node.
     pub fn is_the_same_instance(&self, other: &Self) -> bool {

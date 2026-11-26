@@ -3,7 +3,7 @@
 
 use super::{PREFIX_FRAME_MAGIC, SingleMap, type_tag};
 use crate::{InstanceId, Result, VsdbError};
-use serde::{Deserialize, Deserializer, Serializer, de, ser};
+use serde::{Deserializer, Serializer, de, ser};
 use std::{fmt, marker::PhantomData, result::Result as StdResult};
 use vsdb_core::MapxRaw;
 
@@ -83,10 +83,7 @@ pub(crate) fn open_raw(id: InstanceId) -> Result<MapxRaw> {
     raw[..8].copy_from_slice(b"VSMAPX02");
     raw[8..16].copy_from_slice(&id.map_id.to_le_bytes());
     raw[16..].copy_from_slice(&id.ns.unwrap_or_default().to_le_bytes());
-    MapxRaw::deserialize(de::value::BytesDeserializer::<de::value::Error>::new(&raw))
-        .map_err(|e| VsdbError::Decode {
-            detail: e.to_string(),
-        })
+    MapxRaw::from_prefix_meta(&raw)
 }
 
 pub(crate) fn deserialize_prefix_handle<'de, T, D, F>(

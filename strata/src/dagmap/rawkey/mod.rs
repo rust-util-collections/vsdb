@@ -159,7 +159,16 @@ where
     /// contains the data referenced by this instance ID.
     pub fn from_meta(instance_id: impl Into<InstanceId>) -> Result<Self> {
         let id = instance_id.into();
-        crate::common::load_instance_meta_checked(id, Self::instance_id)
+        crate::common::load_instance_meta_checked(
+            id,
+            |frame| {
+                Ok(Self {
+                    inner: DagMapRaw::from_frame(frame)?,
+                    _p: PhantomData,
+                })
+            },
+            Self::instance_id,
+        )
     }
 
     /// Checks if the DAG map is dead.

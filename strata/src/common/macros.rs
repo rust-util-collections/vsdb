@@ -222,7 +222,16 @@ macro_rules! define_map_wrapper {
                 instance_id: impl Into<$crate::common::InstanceId>,
             ) -> $crate::common::error::Result<Self> {
                 let id = instance_id.into();
-                $crate::common::load_instance_meta_checked(id, Self::instance_id)
+                $crate::common::load_instance_meta_checked(
+                    id,
+                    |frame| {
+                        Ok(Self {
+                            inner: $crate::common::basic_inner(frame)?,
+                            $phantom_field: std::marker::PhantomData,
+                        })
+                    },
+                    Self::instance_id,
+                )
             }
         }
 

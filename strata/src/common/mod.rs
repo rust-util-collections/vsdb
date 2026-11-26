@@ -152,11 +152,9 @@ pub(crate) fn load_meta_file<T: DeserializeOwned>(path: &Path) -> Result<T> {
 
 pub(crate) fn load_instance_meta_checked<T>(
     id: InstanceId,
+    open: impl FnOnce(PrefixFrame<'_>) -> Result<T>,
     instance_id: impl FnOnce(&T) -> InstanceId,
-) -> Result<T>
-where
-    T: DeserializeOwned,
-{
+) -> Result<T> {
     let id = InstanceId::new(id.map_id, id.ns.unwrap_or(DEFAULT_NS_ID));
     let ns = Namespace::open(id.ns.unwrap_or(DEFAULT_NS_ID))?;
     let bytes = fs::read(ns.meta_path(id.map_id))?;
@@ -166,13 +164,8 @@ where
             detail: "trailing bytes in instance metadata".into(),
         });
     }
-    frame::parse_prefix_header::<T>(raw_frame, Some(id))?;
-    let (value, rest) = postcard::take_from_bytes(&bytes)?;
-    if !rest.is_empty() {
-        return Err(VsdbError::Decode {
-            detail: "trailing bytes in instance metadata".into(),
-        });
-    }
+    let frame = frame::parse_prefix_handle_checked::<T>(raw_frame, Some(id))?;
+    let value = open(frame)?;
     let found = instance_id(&value);
     if found != id {
         return Err(error::VsdbError::Decode {
