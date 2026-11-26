@@ -1225,6 +1225,13 @@ impl Namespace {
 
     /// Flushes this namespace's engine to disk. This is a no-op for a
     /// read-only namespace.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a shard fails to flush, for example on an I/O error or
+    /// after the engine has stopped on an earlier write or background error.
+    /// Later shards are then left unflushed. For a durability fence that
+    /// returns engine errors, use [`Namespace::try_sync_wal`].
     pub fn flush(&self) {
         if !self.is_read_only() {
             self.0.engine.flush()

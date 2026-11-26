@@ -11,14 +11,6 @@
 
 ## Open
 
-### [LOW] engine: flush panics on shard errors without documenting it
-- **Where**: `core/src/common/engine/mmdb.rs` (`MmDB::flush`), `core/src/common/namespace.rs` (`Namespace::flush`, `flush_all_open`), `core/src/common/mod.rs` (`vsdb_flush`)
-- **What**: `MmDB::flush` calls `db.flush().expect(..)`. mmdb returns an error when a fail-stop error has latched, when a shard is closed, or when flush I/O fails.
-- **Why**: After such an error, `Namespace::flush` and `vsdb_flush` panic. `flush_all_open` then skips the remaining namespaces, and a flush in a destructor during unwinding aborts the process. Neither public API documents a panic or offers a fallible form, while AGENTS.md requires infallible APIs to document their panics. Acknowledged writes remain WAL-durable.
-- **Suggested fix**: Add `# Panics` sections, and optionally a `try_flush` that returns the first shard error. Regression test: flushing a closed shard surfaces the error.
-
----
-
 ### [LOW] VecDex tests: schema rejection guards have no effective test
 - **Where**: `strata/src/vecdex/test.rs` (`dyn_wire_tags_are_frozen`, `invalid_configs_are_rejected`); the guards are in `strata/src/vecdex/mod.rs` (`validate_store`)
 - **What**:

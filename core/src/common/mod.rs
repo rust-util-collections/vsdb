@@ -546,6 +546,11 @@ pub fn vsdb_configure(options: VsdbOptions) -> Result<()> {
 /// ensuring that all pending writes are persisted to disk. This operation
 /// may take a long time to complete, depending on the amount of data to be flushed.
 /// It is a no-op when [`vsdb_open_mode`] is [`OpenMode::ReadOnly`].
+///
+/// # Panics
+///
+/// Panics on the first engine that fails to flush (see
+/// [`Namespace::flush`]). Namespaces after it are left unflushed.
 #[inline(always)]
 pub fn vsdb_flush() {
     if vsdb_is_read_only() {
