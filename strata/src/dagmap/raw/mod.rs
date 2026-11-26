@@ -668,37 +668,64 @@ impl DagMapRaw {
         }
         Ok(())
     }
+    // Keeps every owned descendant that is marked or has a marked
+    // descendant, children before their parents. The walk uses an explicit
+    // stack because a head can own an arbitrarily deep chain.
     fn collect_marked_below_head(line: &mut Vec<Self>, genesis: u64) -> Result<bool> {
-        fn dfs(
-            node: &DagMapRaw,
-            genesis: u64,
-            seen: &mut HashSet<u64>,
-            out: &mut Vec<DagMapRaw>,
-        ) -> Result<bool> {
-            let mut has_marked = false;
-            for (edge, id) in node.try_links()? {
-                if !seen.insert(id) {
-                    continue;
-                }
-                let Some(child) = node.try_owned(edge, id)? else {
-                    continue;
-                };
-                let child_marked = matches!(
-                    child.meta()?.state,
-                    State::Clearing { genesis: g, .. } if g == genesis
-                );
-                let sub_marked = dfs(&child, genesis, seen, out)?;
-                if child_marked || sub_marked {
-                    out.push(child);
-                    has_marked = true;
-                }
-            }
-            Ok(has_marked)
+        struct Frame {
+            // `None` stands for the head, which stays in `line`.
+            node: Option<DagMapRaw>,
+            links: std::vec::IntoIter<(u64, u64)>,
+            marked: bool,
+            below: bool,
         }
 
         let mut seen: HashSet<_> = line.iter().map(Self::id).collect();
         let mut extra = Vec::new();
-        let found = dfs(&line[0], genesis, &mut seen, &mut extra)?;
+        let mut found = false;
+        let mut stack = vec![Frame {
+            node: None,
+            links: line[0].try_links()?.into_iter(),
+            marked: false,
+            below: false,
+        }];
+        while let Some(frame) = stack.last_mut() {
+            if let Some((edge, id)) = frame.links.next() {
+                if !seen.insert(id) {
+                    continue;
+                }
+                let owner = frame.node.as_ref().unwrap_or(&line[0]);
+                let Some(child) = owner.try_owned(edge, id)? else {
+                    continue;
+                };
+                let marked = matches!(
+                    child.meta()?.state,
+                    State::Clearing { genesis: g, .. } if g == genesis
+                );
+                let links = child.try_links()?.into_iter();
+                stack.push(Frame {
+                    node: Some(child),
+                    links,
+                    marked,
+                    below: false,
+                });
+                continue;
+            }
+            let Frame {
+                node,
+                marked,
+                below,
+                ..
+            } = stack.pop().expect("nonempty walk stack");
+            match (node, stack.last_mut()) {
+                (Some(node), Some(parent)) if marked || below => {
+                    extra.push(node);
+                    parent.below = true;
+                }
+                (None, _) => found = below,
+                _ => {}
+            }
+        }
         line.extend(extra);
         Ok(found)
     }

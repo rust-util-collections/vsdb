@@ -254,6 +254,32 @@ fn deep_acyclic_chain_remains_readable_and_prunable() {
     assert_eq!(pruned.get("root").unwrap().as_slice(), b"value");
 }
 
+#[test]
+fn prune_walks_a_deep_descendant_chain_without_recursion() {
+    // A recursive walk needs far more than 1 MiB for this chain in both
+    // debug and release builds.
+    std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(|| {
+            let mut root = DagMapRaw::new(None);
+            root.insert("root", "value");
+            let mut head = DagMapRaw::new(Some(&mut root));
+            head.insert("head", "value");
+            let mut tip = head.open(head.id()).unwrap();
+            for _ in 0..10_000 {
+                tip = DagMapRaw::new(Some(&mut tip));
+            }
+            let merged = head.prune().unwrap();
+            assert_eq!(merged.id(), root.id());
+            assert_eq!(merged.child_ids().len(), 1);
+            assert_eq!(tip.get("head").as_deref(), Some(b"value".as_slice()));
+            assert_eq!(tip.get("root").as_deref(), Some(b"value".as_slice()));
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 /// Save meta of a DagMapRaw with parent-child relationship,
 /// restore, and verify the lineage is intact.
 #[test]

@@ -28,14 +28,6 @@
 
 ---
 
-### [HIGH] dagmap: prune recurses once per descendant generation
-- **Where**: `strata/src/dagmap/raw/mod.rs` (`collect_marked_below_head`, inner `dfs`)
-- **What**: Since 1c1f2e8, every prune that starts at a live node walks the head's whole owned subtree before folding, recursing once per generation.
-- **Why**: Pruning a node that has a deep chain of descendants overflows the stack and aborts the process. Reproduced on a 2 MiB thread at 2,000 descendants in debug and 20,000 in release, and on an 8 MiB stack at 60,000 in release. The DagMap guide requires iterative traversal on deep graphs, and `destroy_subtree` already uses an explicit stack. The existing deep-chain test prunes only a leaf head. Each prune also performs one edge scan and two metadata reads per descendant.
-- **Suggested fix**: Replace the recursion with an explicit stack that records each node's parent, propagating the marked flag in reverse discovery order. Skip the walk when no interrupted prune can exist. Regression test: prune a head with a 20,000-generation descendant chain on a 2 MiB thread. No format change.
-
----
-
 ### [MEDIUM] versioning: history and diff operations panic on unreadable tree pages
 - **Where**: `strata/src/versioned/map.rs` (`has_uncommitted`, `rollback_to`, `merge`, `raw_diff_commits`, `raw_diff_uncommitted`), `strata/src/basic/persistent_btree/diff.rs` (`differs`, `Cursor`, `materialize_val`), `strata/src/basic/persistent_btree/mod.rs` (`object`, `height`), `strata/src/basic/persistent_btree/merge.rs` (`source_changes`)
 - **What**: These `Result`-returning APIs compare trees through the infallible `BTreeDiffIter`, whose page reads `expect` success. A missing, malformed or unreadable page under either compared root causes a panic. `VerMapWithProof` streams the same iterator when it updates a root.
