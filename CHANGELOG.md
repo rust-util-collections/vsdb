@@ -6,6 +6,28 @@ Compiler requirements below are historical release notes. Current development
 uses the official latest stable Rust, without a declared compatible version
 range or minimum compiler; see [the toolchain policy](docs/ai/compatibility-policy.md#rust-toolchain).
 
+## [v18.0.1]
+
+Existing v18 stores open in place.
+
+### Fixed
+
+- Standalone B+ trees reclaim superseded pages when a merge spans multiple
+  write batches after a cold reopen. Roots retained by the caller stay readable.
+- VecDex checks node mappings before removal or replacement and validates
+  node-info keys during entry-point repair. Malformed rows return `Corrupt`
+  before the mutation is published.
+- VecDex checks the dimensions of stored vectors during graph updates. Insert,
+  pruning and entry-point repair reject a malformed vector before publishing
+  new edges.
+- Offline universe migration explicitly unlocks the store on success and error,
+  allowing another caller to acquire it while a duplicate descriptor is open.
+
+### Changed
+
+- The workspace follows the upstream MMDB v5 Git dependency. This release was
+  tested with MMDB 5.0.1 at `e61902f`.
+
 ## [v18.0.0] (unreleased)
 
 This major version introduces a distinct storage format. Stop v17 processes and convert existing universes with the independent `vsdb_migrate` library. Its converters preserve primary collection IDs. Applications supply the schema for embedded handles and retain the mapping for relocated DAG children. [Upgrade guide](migration/README.md)
