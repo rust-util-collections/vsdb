@@ -102,6 +102,33 @@ fn registry_pending_directory_sync_retries(root: &Path) {
     Namespace::destroy(id).unwrap();
 }
 
+fn failed_root_cleanup_retries(root: &Path) {
+    let explicit = root.parent().unwrap().join("cleanup_ns");
+    fs::create_dir(&explicit).unwrap();
+    let opts = NamespaceOpts {
+        path: Some(explicit.clone()),
+        shards: 1,
+        mem_budget_mb: Some(16),
+    };
+    let pending = root.join("__SYSTEM__/__pending_create__");
+    let marker = explicit.join("__SYSTEM__/__initializing__");
+    let arm = root.join("arm");
+    fs::write(&arm, b"1").unwrap();
+    for _ in 0..2 {
+        assert!(
+            matches!(Namespace::create_with(opts.clone()), Err(VsdbError::Io(e)) if e.raw_os_error() == Some(EIO))
+        );
+        assert!(Namespace::list().unwrap().is_empty());
+        assert!(marker.is_file());
+        assert_ne!(fs::read(&pending).unwrap(), b"VSNPCR01\x00");
+    }
+    fs::remove_file(arm).unwrap();
+    let ns = Namespace::create_with(opts).unwrap();
+    assert_eq!(ns.path(), explicit);
+    assert_eq!(fs::read(pending).unwrap(), b"VSNPCR01\x00");
+    ns.close().unwrap();
+}
+
 fn prefix_directory_sync_retries(root: &Path) {
     let mut map = MapxRaw::new();
     let path = root.join("__SYSTEM__/__prefix_ceiling__");
@@ -176,6 +203,7 @@ fn directory_sync_failure_prevents_metadata_publication() {
             "engine_ready" => return engine_ready_directory_sync_retries(&root),
             "registry" => return registry_directory_sync_retries(&root),
             "registry_pending" => return registry_pending_directory_sync_retries(&root),
+            "cleanup" => return failed_root_cleanup_retries(&root),
             "metadata" => {}
             case => panic!("unknown directory sync case: {case}"),
         }
@@ -267,10 +295,13 @@ int fsync(int fd) {
         "engine_ready",
         "registry",
         "registry_pending",
+        "cleanup",
     ] {
         let data = root.join(case);
         let target = if case == "marker" {
             data.join("__NAMESPACES__/0000000000000001/__SYSTEM__")
+        } else if case == "cleanup" {
+            root.join("cleanup_ns/__SYSTEM__")
         } else {
             data.join("__SYSTEM__")
         };
@@ -299,6 +330,11 @@ int fsync(int fd) {
             cmd.env(
                 "VSDB_DIRECTORY_SYNC_TRIGGER",
                 root.join("explicit_ns/__SYSTEM__/.shards_ready"),
+            );
+        } else if case == "cleanup" {
+            cmd.env(
+                "VSDB_DIRECTORY_SYNC_TRIGGER",
+                root.join("cleanup_ns/__SYSTEM__/__initializing__"),
             );
         }
         let output = cmd.output().unwrap();

@@ -341,12 +341,28 @@ fn save_pending_creates(base: &Path, entries: &[PendingCreate]) -> Result<()> {
     Ok(())
 }
 
-fn has_nonempty_dir(path: &Path) -> bool {
+/// Fence an empty root or its absence before dropping the last recovery record.
+fn durably_empty_root(path: &Path) -> io::Result<bool> {
     match fs::read_dir(path) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => false,
-        Ok(mut entries) => entries.next().is_some(),
-        Err(_) => true,
+        Ok(mut entries) => {
+            if entries.next().transpose()?.is_some() {
+                return Ok(false);
+            }
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
     }
+    for ancestor in path.ancestors() {
+        match fs::File::open(ancestor) {
+            Ok(dir) => {
+                dir.sync_all()?;
+                return Ok(true);
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(false)
 }
 
 fn record_pending_create(
@@ -363,7 +379,7 @@ fn record_pending_create(
                 .iter()
                 .any(|r| r.id == e.id && r.state == NsLifecycleState::Established)
             && (reg.entries.iter().any(|r| r.id == e.id)
-                || has_nonempty_dir(Path::new(&e.path)))
+                || !durably_empty_root(Path::new(&e.path)).unwrap_or(false))
     });
     list.push(pending);
     save_pending_creates(base, &list)
@@ -672,30 +688,6 @@ fn ensure_root_adoptable(root: &Path) -> Result<bool> {
     }
 }
 
-/// Best-effort removal of a root a failed `create` (partially) filled,
-/// so the same path is immediately retryable and no unregistered
-/// VSDB-owned residue survives. Safe by construction: the adoptable
-/// check proved the root was absent or empty before we touched it —
-/// everything inside is ours. The dir itself is removed only if we
-/// created it (`preexisted == false`), so a user-supplied mount point
-/// is emptied, never deleted.
-fn cleanup_failed_root(root: &Path, preexisted: bool) {
-    if preexisted {
-        if let Ok(entries) = fs::read_dir(root) {
-            for e in entries.flatten() {
-                let p = e.path();
-                let _ = if p.is_dir() {
-                    fs::remove_dir_all(&p)
-                } else {
-                    fs::remove_file(&p)
-                };
-            }
-        }
-    } else {
-        let _ = fs::remove_dir_all(root);
-    }
-}
-
 fn is_atomic_tmp_for(name: &str, prefix: &str) -> bool {
     name.strip_prefix(prefix)
         .and_then(|s| s.strip_suffix(".tmp"))
@@ -734,14 +726,17 @@ fn is_empty_shard_file(entry: &fs::DirEntry) -> Result<bool> {
     Ok(false)
 }
 
-fn is_unpopulated_failed_root(
+/// The caller holds the root lock. Keep an identity file until the removal
+/// of all other engine artifacts is durable, so a partial cleanup is retryable.
+fn cleanup_failed_root(
     root: &Path,
+    preexisted: bool,
     universe_id: u128,
     ns: NsId,
     shards: usize,
 ) -> Result<bool> {
     let expected_identity = super::universe::engine_bytes(universe_id, ns, shards);
-    let mut saw_owned_artifact = false;
+    let mut identity = None;
     for entry in fs::read_dir(root)? {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
@@ -763,7 +758,7 @@ fn is_unpopulated_failed_root(
                         if fs::read(sys.path())? != expected_identity {
                             return Ok(false);
                         }
-                        saw_owned_artifact = true;
+                        identity = Some(sys.path());
                     }
                     ".shards_ready" | "format_version" => {
                         if fs::read(sys.path())? != b"18" {
@@ -782,7 +777,7 @@ fn is_unpopulated_failed_root(
                             return Ok(false);
                         }
                         if staged == expected_identity {
-                            saw_owned_artifact = true;
+                            identity = Some(sys.path());
                         }
                     }
                     other
@@ -820,8 +815,41 @@ fn is_unpopulated_failed_root(
             return Ok(false);
         }
     }
-    Ok(saw_owned_artifact
-        || super::universe::validate_pending_root(root, universe_id, ns, shards).is_ok())
+    if identity.is_none() {
+        match super::universe::validate_pending_root(root, universe_id, ns, shards) {
+            Ok(()) => {}
+            Err(VsdbError::Corrupt { .. }) => return Ok(false),
+            Err(err) => return Err(err),
+        }
+    }
+    let engine = root.join("mmdb");
+    if engine.try_exists()? {
+        fs::remove_dir_all(engine)?;
+    }
+    let root_dir = fs::File::open(root)?;
+    root_dir.sync_all()?;
+    let system = root.join("__SYSTEM__");
+    if system.try_exists()? {
+        for entry in fs::read_dir(&system)? {
+            let path = entry?.path();
+            if identity.as_ref() != Some(&path) {
+                fs::remove_file(path)?;
+            }
+        }
+        if let Some(identity) = identity {
+            fs::File::open(&system)?.sync_all()?;
+            fs::remove_file(identity)?;
+        }
+        fs::remove_dir(system)?;
+    }
+    if preexisted {
+        root_dir.sync_all()?;
+    } else {
+        fs::remove_dir(root)?;
+        fs::File::open(root.parent().expect("namespace root has a parent"))?
+            .sync_all()?;
+    }
+    Ok(true)
 }
 
 /// Reclaims a non-empty explicit root left behind when an earlier failed
@@ -833,39 +861,34 @@ fn reclaim_unregistered_owned_root(
     root: &Path,
     reg: &RegistryFile,
 ) -> Result<()> {
-    let mut entries = match fs::read_dir(root) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Ok(entries) => entries,
-        Err(e) => return Err(e.into()),
-    };
-    if entries.next().is_none() {
-        return Ok(());
-    }
-    let Ok(_guard) = super::universe::lock_root_dir(root) else {
-        return Ok(());
-    };
     let universe_id = super::universe::active()?.id;
     let is_unregistered_burnt = |id: NsId| {
         id != DEFAULT_NS_ID && id < reg.next_id && reg.entries.iter().all(|r| r.id != id)
     };
     let target = normalize_physical(root);
     let pending = read_pending_creates(base)?;
-    let Some(matched) = pending.into_iter().find(|e| {
+    for matched in pending.into_iter().filter(|e| {
         e.universe == universe_id
             && (1..=64).contains(&(e.shards as usize))
             && is_unregistered_burnt(e.id)
             && normalize_physical(Path::new(&e.path)) == target
-    }) else {
-        return Ok(());
-    };
-    if is_unpopulated_failed_root(
-        root,
-        universe_id,
-        matched.id,
-        matched.shards as usize,
-    )? {
-        cleanup_failed_root(root, true);
-        let _ = clear_pending_create(base, matched.id);
+    }) {
+        let cleaned = match super::universe::lock_root_dir(root) {
+            Ok(_guard) => cleanup_failed_root(
+                root,
+                true,
+                universe_id,
+                matched.id,
+                matched.shards as usize,
+            )?,
+            Err(VsdbError::Io(e)) if e.kind() == io::ErrorKind::NotFound => {
+                durably_empty_root(root)?
+            }
+            Err(err) => return Err(err),
+        };
+        if cleaned {
+            clear_pending_create(base, matched.id)?;
+        }
     }
     Ok(())
 }
@@ -1067,26 +1090,25 @@ impl Namespace {
                 if save_registry(&reg).is_ok() {
                     match super::universe::lock_root_dir(&root) {
                         Ok(_guard) => {
-                            if super::universe::validate_pending_root(
+                            if cleanup_failed_root(
                                 &root,
+                                root_preexisted,
                                 super::universe::active()?.id,
                                 id,
                                 shards,
                             )
-                            .is_ok()
+                            .unwrap_or(false)
+                                && rec.path.is_some()
                             {
-                                // A second universe can race for the same explicit root.
-                                // Only reclaim empty residue or our own initializer/header.
-                                cleanup_failed_root(&root, root_preexisted);
-                                if rec.path.is_some() {
-                                    let _ = clear_pending_create(&base, id);
-                                }
+                                let _ = clear_pending_create(&base, id);
                             }
                         }
                         Err(VsdbError::Io(io_err))
                             if io_err.kind() == io::ErrorKind::NotFound =>
                         {
-                            if rec.path.is_some() {
+                            if rec.path.is_some()
+                                && durably_empty_root(&root).unwrap_or(false)
+                            {
                                 let _ = clear_pending_create(&base, id);
                             }
                         }
