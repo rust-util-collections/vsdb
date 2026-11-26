@@ -81,5 +81,15 @@
     "allocation_module_sha256": null,
     "patch_sha256": "48905856a4fe80b87a1d2cc2990142817bac37ab18e39a5afd2742a51703dfec",
     "cache_module_sha256": "b3fd5d06f26b2165ad2f05c7079b4d69982bc67024bc8d74383e2f96a65c15e6"
+  },
+  "selected": {
+    "vsdb_revision": "685427371e5e538592db946b258ead6dce3cc42c",
+    "mmdb": "255015ad0f488f09c7985736a903d3171876bcaf",
+    "binary_sha256": "925210a8f91f1f35c643e4cc15d108a4ac11f757d64ebb43774ed941a2439501",
+    "cargo_lock_sha256": "245470626e6d335a7d248814837e82fc7852f55c7ccee3c7c7baeb32ba19f1ef",
+    "driver_sha256": "1af4dede62d690b37b90a026d0a9cc5009d99fa30d75a2cbd545d518ceccea1e",
+    "cache_module_sha256": "b3fd5d06f26b2165ad2f05c7079b4d69982bc67024bc8d74383e2f96a65c15e6",
+    "allocation_module_sha256": null,
+    "patch_sha256": null
   }
 }

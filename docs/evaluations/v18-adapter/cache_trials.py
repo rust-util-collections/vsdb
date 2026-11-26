@@ -36,10 +36,14 @@ def measure(a):
                 output.flush()
             print("Finished warm-cache resource pair",repeat,flush=True)
 
-def summarize(raw, dest):
+def summarize(raw, dest, builds=None):
     with gzip.open(raw,"rt") as f:
         meta=json.loads(next(f))
         records=[json.loads(s) for s in f]
+    if builds is not None:
+        receipts=json.loads(builds.read_text())
+        expected={key:receipts["warm-cache-"+key]["binary_sha256"] for key in ("6MiB","16MiB")}
+        require(meta["sha256"]==expected,"warm-cache executable fingerprints differ from trusted receipts")
     require(meta["suite"]=="warm-cache-pressure" and meta["rounds"]==3 and len(records)==6,"incomplete cache pressure series")
     require({(r["round"],r["arm"]) for r in records}=={(i,a) for i in range(1,4) for a in ("6MiB","16MiB")},
             "unmatched warm-cache arms")
@@ -80,10 +84,11 @@ if __name__=="__main__":
     p.add_argument("--scratch",type=Path)
     p.add_argument("--cpus",default="4-7")
     p.add_argument("--summary",type=Path)
+    p.add_argument("--builds",type=Path,help="validate the archived executable fingerprints")
     a=p.parse_args()
     if a.action=="run":
         if not all((a.small,a.large,a.rate,a.revision,a.lock,a.scratch)):p.error("run requires two binaries, rate, revision, lock and scratch")
         measure(a)
     else:
         if a.summary is None:p.error("summarize requires --summary")
-        summarize(a.raw,a.summary)
+        summarize(a.raw,a.summary,a.builds)

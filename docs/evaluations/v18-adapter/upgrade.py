@@ -67,6 +67,12 @@ def summarize(a):
     meta=rows[0]
     require(meta["suite"]=="selected-upgrade" and meta["original_packet_sha256"]==digest(a.original),"wrong source matrix")
     require(meta["sha256"]["reference"] == original[0]["sha256"]["v4"], "v4 reference changed")
+    if getattr(a, "builds", None):
+        receipts = json.loads(a.builds.read_text())
+        require(meta["sha256"]["reference"] == receipts["v4"]["binary_sha256"]
+                and meta["sha256"]["comparison"] == receipts["selected"]["binary_sha256"]
+                and meta["selected_revision"] == receipts["selected"]["vsdb_revision"],
+                "selected upgrade disagrees with trusted source or binary receipts")
     pairs={(p,l,i,k):{} for p in ("hot","all") for l in ("paced","saturation")
            for i in range(1,6) for k in ("AA","AB")}
     for r in rows[1:]:
@@ -128,6 +134,7 @@ if __name__=="__main__":
     parser.add_argument("--lock",type=Path)
     parser.add_argument("--scratch",type=Path)
     parser.add_argument("--summary",type=Path)
+    parser.add_argument("--builds", type=Path, help="validate archived source and binary fingerprints")
     a=parser.parse_args()
     if a.action=="run":
         if not all((a.v4,a.selected,a.buffer,a.revision,a.lock,a.scratch)):

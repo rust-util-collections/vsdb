@@ -173,6 +173,16 @@ Component and process observations describe the measured data, read mix
 and write schedule. Higher occupancy in the independent overflow store,
 caller-held pins, old views or application page caches changes the budget.
 
+## Direct comparison with the selected v5 runtime
+
+The final paired upgrade probe uses the normal VSDB runtime at `6854273`
+and the original v4 executable. It reuses the two calibrated offers and
+the same seeds. Each of the five rounds has a fresh v4/v4 pair, independent
+from a v4/selected-v5 pair in the same placement and load. The verifier
+checks the executable fingerprint and actual buffer size in the recorded
+roles. The operations, qualification, nominal budget and endpoint
+definitions are the same as the original matrix.
+
 ## Reproduce
 
 Use a full VSDB clone on Linux and separate worktrees. The scripts require
@@ -203,4 +213,8 @@ python3 "$d/run.py" "$work/bin" "$work/allocations.jsonl.gz" --scratch "$work/sc
 python3 "$d/summarize.py" "$work/allocations.jsonl.gz" --allocations-only
 python3 "$d/cache_trials.py" run "$work/warm-cache.jsonl.gz" --small "$work/bin/v5" --large "$work/bin/v5-16m" --rate 4928 --revision b5f3153 --scratch "$work/scratch" --lock "$work/timing.lock" --cpus 4-7
 python3 "$d/cache_trials.py" summarize "$work/warm-cache.jsonl.gz" --summary "$work/warm-cache.csv"
+git worktree add --detach /tmp/adapter-selected 6854273
+python3 "$d/build.py" /tmp/adapter-selected "$work/build-selected" "$work/bin/selected" --v5
+python3 "$d/upgrade.py" run "$work/runs.jsonl.gz" "$work/upgrade.jsonl.gz" --v4 "$work/bin/v4" --selected "$work/bin/selected" --buffer 16 --revision "$(git -C /tmp/adapter-selected rev-parse HEAD)" --scratch "$work/scratch" --lock "$work/timing.lock"
+python3 "$d/upgrade.py" summarize "$work/runs.jsonl.gz" "$work/upgrade.jsonl.gz" --summary "$work/upgrade.csv"
 ```
